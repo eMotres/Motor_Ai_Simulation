@@ -154,13 +154,48 @@ def _duty_stem(duty: str) -> str:
 
 
 def fields_dir(die: str, cfg: str, duty: str) -> Path:
-    """``<die>/runs/<configuration>/<duty-stem>/fields`` — created on demand."""
+    """``<die>/runs/<configuration>/<duty-stem>/fields`` — created on demand.
+
+    The WRITE location, and since Stage 2 that is always the caller's own
+    workspace: a solve of somebody else's published duty is this workspace's
+    answer, filed beside its own copy of the machine.
+    """
     return (_dies_dir() / str(die) / "runs" / str(cfg)
             / _duty_stem(duty) / "fields")
 
 
+def _runs_roots(die: str, cfg: str) -> List[Path]:
+    """Every folder a stored field may be READ from, workspace first.
+
+    Stage 2 read-through: the workspace, then the published or shared layer the
+    die came out of.  One list, used by :func:`load`, :func:`have` and nothing
+    else — the writers keep pointing at the first entry by construction.
+    """
+    roots = [_dies_dir() / str(die) / "runs" / str(cfg)]
+    try:
+        from motor_ai_sim import workspace as _ws
+        if _ws.layering():
+            src = _ws.source_die_dir(str(die))
+            if src is not None:
+                p = Path(str(src)) / "runs" / str(cfg)
+                if p != roots[0]:
+                    roots.append(p)
+    except Exception:                                       # noqa: BLE001
+        pass
+    return roots
+
+
 def field_path(die: str, cfg: str, duty: str, kind: str) -> Path:
-    return fields_dir(die, cfg, duty) / f"{kind}.npz"
+    """The file a stored field is READ from — the workspace's own copy when
+    there is one, the layer the die came from otherwise."""
+    p = fields_dir(die, cfg, duty) / f"{kind}.npz"
+    if p.is_file():
+        return p
+    for root in _runs_roots(die, cfg)[1:]:
+        q = root / _duty_stem(duty) / "fields" / f"{kind}.npz"
+        if q.is_file():
+            return q
+    return p
 
 
 def _now() -> str:
@@ -502,7 +537,9 @@ def save(die: str, cfg: str, duty: str, kind: str, payload: Dict[str, Any],
         meta["arrays"] = {k: {"shape": list(np.asarray(v).shape),
                               "dtype": str(np.asarray(v).dtype)}
                           for k, v in arrays.items()}
-        p = field_path(die, cfg, duty, kind)
+        # The WRITE path, never `field_path` — that one reads through to the
+        # layer the die came from, and a solve must not land in it.
+        p = fields_dir(die, cfg, duty) / f"{kind}.npz"
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + f".tmp{os.getpid()}")
         # `meta` as a 0-d string array: the file stays loadable with
@@ -571,11 +608,16 @@ def have(die: str, cfg: str) -> Dict[str, List[Dict[str, Any]]]:
     """
     out: Dict[str, List[Dict[str, Any]]] = {}
     try:
-        root = _dies_dir() / str(die) / "runs" / str(cfg)
-        if not root.is_dir():
+        # Deepest layer first so the workspace's own re-solve lands on top of
+        # the published or shared original under the same duty name.
+        roots = [r for r in reversed(_runs_roots(die, cfg)) if r.is_dir()]
+        if not roots:
             return out
         import numpy as np
-        for stem in sorted(root.iterdir()):
+        stems = []
+        for root in roots:
+            stems.extend(sorted(root.iterdir()))
+        for stem in stems:
             fdir = stem / "fields"
             if not fdir.is_dir():
                 continue

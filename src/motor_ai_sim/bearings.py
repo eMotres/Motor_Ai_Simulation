@@ -76,8 +76,39 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _LIB_PATH = Path(__file__).parent.parent.parent / "config" / "bearings_library.yaml"
 
+#: The repo copy, and the value ``_LIB_PATH`` starts at.  Kept separately so
+#: :func:`_lib_path` can tell "nobody moved it" from "a test pointed it
+#: somewhere" — ``tests/test_bearings.py`` monkeypatches ``_LIB_PATH`` and must
+#: keep winning outright.
+_DEFAULT_LIB_PATH = _LIB_PATH
+
+
+def _lib_path() -> Path:
+    """Where the library is read from.
+
+    Migration Stage 2: ``shared/`` owns the libraries — materials, bearings, the
+    fusion map — because they are ONE machine-wide answer that every workspace
+    quotes and no workspace may edit.  So a shared copy wins when there is one.
+    Two deliberate exceptions keep today's installs and the suite intact:
+    a ``_LIB_PATH`` somebody moved wins outright (that is a test pointing at a
+    fixture), and with no shared copy on disk the repo file answers, which is
+    what the pytest sandbox — a tmp dir holding only the machine file — gets.
+    """
+    if _LIB_PATH != _DEFAULT_LIB_PATH:
+        return _LIB_PATH
+    try:
+        from motor_ai_sim.workspace import shared_root
+        p = Path(str(shared_root())) / _DEFAULT_LIB_PATH.name
+        if p.is_file():
+            return p
+    except Exception:                           # noqa: BLE001
+        pass
+    return _LIB_PATH
+
+
 _library: Optional[dict] = None
 _lib_mtime: float = 0.0      # mtime of the YAML the cached copy was parsed from
+_lib_from: str = ""      # which FILE the cached copy came from
 _lib_checked: float = 0.0    # monotonic clock of the last mtime probe
 # Same bargain as materials._load (see materials.py lines 34-77): the cache
 # FOLLOWS the file, so a bearing added or corrected on disk is visible without a
@@ -96,20 +127,21 @@ class UnknownBearingError(KeyError):
 
 def _load() -> dict:
     """Load the bearing library YAML, re-reading it when the file changes."""
-    global _library, _lib_mtime, _lib_checked
+    global _library, _lib_mtime, _lib_checked, _lib_from
     now = time.monotonic()
     if _library is not None and (now - _lib_checked) < _MTIME_PROBE_S:
         return _library
-    if not _LIB_PATH.exists():
+    _p = _lib_path()
+    if not _p.exists():
         if _library is not None:
             return _library          # file vanished mid-session: keep serving it
-        raise FileNotFoundError(f"Bearing library not found: {_LIB_PATH}")
+        raise FileNotFoundError(f"Bearing library not found: {_p}")
     _lib_checked = now
-    mtime = _LIB_PATH.stat().st_mtime
-    if _library is not None and mtime == _lib_mtime:
+    mtime = _p.stat().st_mtime
+    if _library is not None and mtime == _lib_mtime and _lib_from == str(_p):
         return _library
     try:
-        with _LIB_PATH.open("r", encoding="utf-8") as f:
+        with _p.open("r", encoding="utf-8") as f:
             parsed = yaml.safe_load(f)
     except Exception as e:                      # noqa: BLE001
         # Half-written or malformed edit: keep the last good copy rather than
@@ -124,9 +156,10 @@ def _load() -> dict:
             _log.warning("bearings_library.yaml is not a mapping — keeping the "
                          "previously loaded copy")
             return _library
-        raise ValueError(f"{_LIB_PATH} does not parse to a mapping")
+        raise ValueError(f"{_p} does not parse to a mapping")
     _library = parsed
     _lib_mtime = mtime
+    _lib_from = str(_p)
     _CARD_CACHE.clear()          # the dataclasses belong to the OLD file
     _LUBE_CACHE.clear()
     return _library

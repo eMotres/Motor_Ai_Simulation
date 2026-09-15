@@ -66,10 +66,16 @@ from typing import Any, Callable, Dict, Iterator, Optional
 
 __all__ = [
     "Workspace", "WorkspaceState",
-    "workspace", "root", "shared_root", "config_file",
+    "workspace", "root", "shared_root", "published_root", "config_file",
     "use_workspace", "workspace_for_identity", "workspace_for_request",
     "workspace_id", "workspaces_root", "ensure_layout", "process_workspace",
     "WorkspaceMiddleware", "install_workspace_resolver", "module_attrs",
+    # Stage 2 — the three layers
+    "Layer", "layering", "layers", "resolve_die_dir", "resolve_config_file",
+    "iter_dies", "is_admin", "owner_display_name", "published_label",
+    "source_die_dir", "caller", "use_caller",
+    "split_published_label", "write_layer", "use_write_layer",
+    "LAYER_WORKSPACE", "LAYER_PUBLISHED", "LAYER_SHARED",
 ]
 
 log = logging.getLogger(__name__)
@@ -81,6 +87,18 @@ ENV_WORKSPACES_ROOT = "WORKSPACES_ROOT"
 #: The read-only library layer (materials, bearings, fusion map, die templates).
 #: Unset = the process config directory, i.e. where they live today.
 ENV_SHARED_ROOT = "SHARED_ROOT"
+#: The COMMUNITY layer: what one user published for every other registered one.
+#: Unset with ``WORKSPACES_ROOT`` set = ``<WORKSPACES_ROOT>/../published``;
+#: unset with multi-user off = the process config directory, which has no
+#: ``<ws_id>/`` children and is therefore an empty layer.
+ENV_PUBLISHED_ROOT = "PUBLISHED_ROOT"
+
+#: The three layers, outermost (most specific) first.  A name is resolved in
+#: this order and the FIRST hit wins: a workspace copy shadows a published one,
+#: a published one shadows the admin-curated shared catalog.
+LAYER_WORKSPACE = "workspace"
+LAYER_PUBLISHED = "published"
+LAYER_SHARED = "shared"
 
 #: The id of the process workspace.  Never a sha1, so it can never collide with
 #: a real identity's id and a log line says plainly which one answered.
@@ -152,6 +170,42 @@ def workspaces_root() -> Optional[Path]:
 def _shared_root_env() -> Optional[Path]:
     raw = os.environ.get(ENV_SHARED_ROOT, "").strip()
     return Path(raw).expanduser() if raw else None
+
+
+def _published_root_env() -> Optional[Path]:
+    raw = os.environ.get(ENV_PUBLISHED_ROOT, "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
+def published_root() -> Path:
+    """Where PUBLISHED work lives: ``<published_root>/<ws_id>/<die>/…``.
+
+    ``PUBLISHED_ROOT`` wins; otherwise it is the sibling of the workspaces tree
+    (``/srv/motres/published`` beside ``/srv/motres/workspaces``), which is the
+    §2.1 layout.  With multi-user off it is the process config directory — a
+    folder that has no ``<ws_id>`` children, so the layer resolves to nothing
+    and this machine behaves exactly as it does today.
+    """
+    env = _published_root_env()
+    if env is not None:
+        return env
+    base = workspaces_root()
+    if base is not None:
+        return base.parent / "published"
+    return workspace().root
+
+
+def layering() -> bool:
+    """Is the three-layer catalog ACTIVE?
+
+    Only when ``WORKSPACES_ROOT`` is set.  This is the single switch that keeps
+    the promise at the top of this file: with it unset there is one layer — the
+    folder the config path names — and every read-through helper below degrades
+    to the expression it replaced.  It also keeps the pytest sandbox honest: a
+    suite that redirects the catalog to a throwaway tree must not suddenly see
+    the user's real ``config/dies`` through a fall-back.
+    """
+    return workspaces_root() is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -341,6 +395,327 @@ def workspace_for_request(authorization: Optional[str]) -> Workspace:
 #  The app-level resolver
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Stage 2 — the three layers
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# THREE and not two (the user's decision, 2026-09-15):
+#
+#   shared/      the admin-curated catalog.  Read-only for everyone but an
+#                admin, who writes it EXPLICITLY (``?layer=shared``).
+#   published/   the community layer.  A user publishes a die / configuration /
+#                duty out of their own workspace and every registered account
+#                sees it read-only, with the author's name on it.  Namespaced
+#                per owner (``published/<ws_id>/<die>/``) so two people may both
+#                publish "CIANO28 85".
+#   workspaces/  the user's own space.  EVERY write lands here — if the die
+#                being written exists only in published/ or shared/, its yaml
+#                documents (never its results) are copied across first.
+#
+# Read order is workspace → published → shared, first hit wins.  Writing is
+# never a fall-through: a read that found a shared die does not make the shared
+# die writable, it makes the NEXT write a copy-on-write.
+
+@dataclass(frozen=True)
+class Layer:
+    """One place dies may be found, and what it means that they were found there."""
+
+    name: str
+    #: The directory whose immediate children are die folders.
+    dies_dir: Path
+    #: The publishing identity — published layer only.
+    owner: str = ""
+    owner_id: str = ""
+
+    @property
+    def writable(self) -> bool:
+        return self.name == LAYER_WORKSPACE
+
+
+def _ws_dies_dir() -> Path:
+    """The workspace's own die folder, honouring ``family._DIES_DIR``.
+
+    Probed out of ``sys.modules`` rather than imported: this module is reached
+    from the config layer, and importing the catalog router here would make the
+    whole FastAPI surface a dependency of reading a yaml path.  Eight test
+    modules monkeypatch that name and a value in the module dict must keep
+    winning.
+    """
+    import sys
+    fam = sys.modules.get("motor_ai_sim.routes.family")
+    if fam is not None:
+        ov = fam.__dict__.get("_DIES_DIR")
+        if ov is not None:
+            return Path(str(ov))
+    return root() / "dies"
+
+
+def layers() -> list:
+    """``[workspace, published…, shared]`` — the read-through order.
+
+    The published layer expands to ONE entry per owner namespace, because that
+    is what a namespace is: ``published/<ws_id>/`` is a whole little catalog of
+    its own.  The caller's own namespace comes first among them, so publishing
+    a die and then editing it still reads your copy before anyone else's.
+    """
+    out = [Layer(LAYER_WORKSPACE, _ws_dies_dir())]
+    if not layering():
+        return out
+    ws = workspace()
+    pub = published_root()
+    try:
+        owners = sorted(d for d in pub.iterdir() if d.is_dir())
+    except OSError:
+        owners = []
+    mine = [d for d in owners if d.name == ws.id]
+    for d in mine + [d for d in owners if d.name != ws.id]:
+        out.append(Layer(LAYER_PUBLISHED, d, owner=_owner_email(d),
+                         owner_id=d.name))
+    out.append(Layer(LAYER_SHARED, Path(str(shared_root())) / "dies"))
+    return out
+
+
+#: ``published/<ws_id>/.owner.json`` — who this namespace belongs to.  A file
+#: and not a lookup table, because the ws_id is a one-way hash of the e-mail.
+OWNER_FILE = ".owner.json"
+
+
+def _owner_email(ns_dir: Path) -> str:
+    try:
+        import json
+        d = json.loads((ns_dir / OWNER_FILE).read_text(encoding="utf-8"))
+        return str((d or {}).get("email") or "")
+    except Exception:                                       # noqa: BLE001
+        return ""
+
+
+def owner_display_name(email: str) -> str:
+    """The author's name as the community listing prints it.
+
+    The registry's display name when there is one, the local part of the e-mail
+    otherwise, reduced to the catalog's own filename-safe charset — because the
+    label this builds is ALSO a die name the API is addressed by.
+    """
+    name = ""
+    try:
+        from motor_ai_sim import users as _users
+        name = str((_users.get_user(email) or {}).get("name") or "").strip()
+    except Exception:                                       # noqa: BLE001
+        name = ""
+    if not name:
+        name = str(email or "").split("@")[0]
+    import re as _re
+    name = _re.sub(r"[^A-Za-z0-9_.,()#+°·\- ]+", " ", name).strip()
+    name = _re.sub(r"\s{2,}", " ", name)
+    return name or "someone"
+
+
+#: How a published die of ANOTHER account is named everywhere it is addressable.
+#: ``·`` is already a legal die-name character (``family._NAME_RE``; real names
+#: on disk include "100 mm · 24s-28p mid-torque"), so the decorated label is
+#: itself a legal die name and needs no second addressing scheme.
+_BY = " · by "
+
+
+def published_label(die: str, owner: str) -> str:
+    return f"{die}{_BY}{owner_display_name(owner)}"
+
+
+def split_published_label(label: str) -> tuple:
+    """``"CIANO28 85 · by Alice"`` -> ``("CIANO28 85", "Alice")``; else ``(label, "")``."""
+    s = str(label)
+    i = s.rfind(_BY)
+    return (s[:i], s[i + len(_BY):]) if i > 0 else (s, "")
+
+
+def iter_dies() -> list:
+    """Every die this call can SEE, deduplicated, tagged with its layer.
+
+    ``[{"name", "die", "dir", "layer", "owner", "owner_id"}]`` — ``die`` is the
+    name on disk, ``name`` the one the API is addressed by (they differ only for
+    another account's published work).  Deduplicated by ``name`` in read order,
+    so a workspace copy hides the shared original rather than appearing twice.
+
+    Access is NOT decided here: this says what exists, ``motor_access`` and the
+    route say who may see it.
+    """
+    seen = {}
+    ws = workspace()
+    for lay in layers():
+        try:
+            entries = sorted(lay.dies_dir.iterdir())
+        except OSError:
+            continue
+        for dd in entries:
+            if not dd.is_dir() or not (dd / "die.yaml").is_file():
+                continue
+            name = dd.name
+            if lay.name == LAYER_PUBLISHED and lay.owner_id != ws.id:
+                name = published_label(dd.name, lay.owner)
+            if name in seen:
+                continue
+            seen[name] = {"name": name, "die": dd.name, "dir": dd,
+                          "layer": lay.name, "owner": lay.owner,
+                          "owner_id": lay.owner_id}
+    return [seen[k] for k in sorted(seen)]
+
+
+def resolve_die_dir(die: str):
+    """Where the named die is READ from — workspace, then published, then shared.
+
+    ``None`` when no layer has it.  The caller decides what "nowhere" means: the
+    catalog's own readers keep pointing at the workspace path, so a 404 still
+    names the file the user would have created.
+    """
+    want = str(die)
+    ws = workspace()
+    base, by = split_published_label(want)
+    for lay in layers():
+        if lay.name == LAYER_PUBLISHED and lay.owner_id != ws.id:
+            # Another account's namespace answers to the decorated label only —
+            # otherwise B's "CIANO28 85" would silently become A's.
+            if not by or owner_display_name(lay.owner) != by:
+                continue
+            cand = lay.dies_dir / base
+        else:
+            cand = lay.dies_dir / want
+        if (cand / "die.yaml").is_file():
+            return cand
+    return None
+
+
+def source_die_dir(die: str):
+    """The published/shared folder this die ALSO lives in, or ``None``.
+
+    Where a read falls THROUGH to.  Deliberately not ``resolve_die_dir``: after
+    a copy-on-write the resolver answers "workspace", and the results the other
+    layer still holds — somebody else's solved fields, the vendor's runs — must
+    stay readable rather than vanish the moment you rename one duty.
+    """
+    if not layering():
+        return None
+    ws = workspace()
+    base, by = split_published_label(str(die))
+    for lay in layers():
+        if lay.name == LAYER_WORKSPACE:
+            continue
+        if lay.name == LAYER_PUBLISHED and lay.owner_id != ws.id:
+            if not by or owner_display_name(lay.owner) != by:
+                continue
+            cand = lay.dies_dir / base
+        else:
+            cand = lay.dies_dir / str(die)
+        if (cand / "die.yaml").is_file():
+            return cand
+    return None
+
+
+def resolve_config_file(die: str, cfg: str):
+    """``<resolved die dir>/<cfg>.yaml``, or ``None``.
+
+    One die belongs to ONE layer: a copy-on-write copies every configuration of
+    the die across, never just the one being edited, so a half-shadowed die —
+    workspace ``L180`` beside a shared ``L155`` — cannot exist and no reader has
+    to merge two directories.
+    """
+    d = resolve_die_dir(die)
+    if d is None:
+        return None
+    p = d / f"{cfg}.yaml"
+    return p if p.is_file() else None
+
+
+#: The identity the middleware resolved for THIS request, or None outside one.
+#: Set beside the workspace and for the same reason: a write seam deep in the
+#: catalog has no ``Authorization`` header in hand, and re-resolving from
+#: nothing would answer "anonymous" for a signed-in admin.
+_CALLER: "ContextVar[Optional[Dict[str, Any]]]" = ContextVar(
+    "motor_ai_sim_caller", default=None)
+
+
+def caller() -> Optional[Dict[str, Any]]:
+    """``auth.caller_identity``'s answer for this request, or ``None``."""
+    return _CALLER.get()
+
+
+def is_admin(identity=None) -> bool:
+    """Is this caller an admin (``auth.py`` / ``ADMIN_EMAILS``)?
+
+    ``identity`` may be an ``Authorization`` header, a ``caller_identity``
+    mapping, or nothing at all — in which case the identity the middleware
+    resolved for this request answers, falling back to ``caller_identity``'s
+    credential-less verdict outside a request (a CLI run, the migration script,
+    a direct call in a test).
+    """
+    try:
+        from motor_ai_sim.auth import caller_identity
+        if isinstance(identity, dict):
+            return bool(identity.get("is_admin"))
+        if identity is None:
+            who = _CALLER.get()
+            if who is not None:
+                return bool(who.get("is_admin"))
+        who = caller_identity(identity if isinstance(identity, str) else None)
+        return bool(who.get("is_admin"))
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
+@contextmanager
+def use_caller(who: Optional[Dict[str, Any]]) -> Iterator[Optional[Dict[str, Any]]]:
+    """Pin the resolved identity — the middleware, and tests calling in directly."""
+    token = _CALLER.set(who)
+    try:
+        yield who
+    finally:
+        _CALLER.reset(token)
+
+
+# ── which layer this request WRITES to ───────────────────────────────────────
+# ``?layer=shared`` on a family save route, admin-gated at the write site.  Set
+# by the middleware from the query string (so no route signature moves) and by
+# :func:`use_write_layer` for a direct call, the migration script and tests.
+
+_WRITE_LAYER: "ContextVar[Optional[str]]" = ContextVar(
+    "motor_ai_sim_write_layer", default=None)
+
+
+def write_layer() -> Optional[str]:
+    """``"shared"`` when this call asked for the shared layer, else ``None``
+    (= the caller's own workspace, which is where writes belong)."""
+    v = _WRITE_LAYER.get()
+    return v if v in (LAYER_SHARED, LAYER_PUBLISHED) else None
+
+
+@contextmanager
+def use_write_layer(name: Optional[str]) -> Iterator[Optional[str]]:
+    token = _WRITE_LAYER.set(str(name) if name else None)
+    try:
+        yield write_layer()
+    finally:
+        _WRITE_LAYER.reset(token)
+
+
+def _identity_of(auth_hdr: Optional[str]) -> Optional[Dict[str, Any]]:
+    try:
+        from motor_ai_sim.auth import caller_identity
+        return caller_identity(auth_hdr)
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
+def _layer_from_query(scope) -> Optional[str]:
+    raw = scope.get("query_string") or b""
+    if b"layer=" not in raw:
+        return None
+    try:
+        from urllib.parse import parse_qs
+        vals = parse_qs(raw.decode("latin-1")).get("layer") or []
+        return vals[-1].strip().lower() if vals else None
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
 class WorkspaceMiddleware:
     """Set the workspace ContextVar for the duration of one HTTP request.
 
@@ -371,9 +746,16 @@ class WorkspaceMiddleware:
                     auth_hdr = None
                 break
         token = _WS.set(workspace_for_request(auth_hdr))
+        # ``?layer=shared`` rides the request, not the route signature: every
+        # family write funnels through one helper and that helper asks here.
+        # Admin-ness is checked AT THE WRITE, never at the parse.
+        ltok = _WRITE_LAYER.set(_layer_from_query(scope))
+        ctok = _CALLER.set(_identity_of(auth_hdr))
         try:
             await self.app(scope, receive, send)
         finally:
+            _CALLER.reset(ctok)
+            _WRITE_LAYER.reset(ltok)
             _WS.reset(token)
 
 

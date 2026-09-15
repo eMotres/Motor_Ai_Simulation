@@ -31,6 +31,9 @@ from pydantic import BaseModel
 
 from motor_ai_sim.auth import caller_identity, require_admin
 from motor_ai_sim.config import get_config
+from motor_ai_sim import workspace as _WS
+from motor_ai_sim.workspace import layering as _ws_layering
+from motor_ai_sim.workspace import resolve_die_dir as _ws_resolve_die_dir
 from motor_ai_sim.workspace import root as _ws_root_f
 from motor_ai_sim.motor_access import (MODE_ANONYMOUS, MODE_GRANTED,
                                        catalog_access, may_see_die)
@@ -170,7 +173,27 @@ def _check_name(name: str, what: str) -> str:
     return n
 
 
+# ── the three layers (migration Stage 2) ─────────────────────────────────────
+# READS fall through workspace -> published -> shared, first hit wins.  WRITES
+# never fall through: they land in the caller's own workspace, and a die that
+# lives only in published/ or shared/ has its YAML DOCUMENTS (never its results)
+# copied across on the first write — copy-on-write, the same bargain a union
+# filesystem makes.  An admin may aim a write at the curated layer explicitly
+# with ``?layer=shared``.
+#
+# With ``WORKSPACES_ROOT`` unset there is exactly one layer and every function
+# below is the expression it replaced, character for character.
+
 def _die_dir(die: str) -> Path:
+    """Where the named die is READ from.
+
+    Falls back to the workspace path when no layer has it, so a 404 still names
+    the folder the user would have created — the pre-Stage-2 answer exactly.
+    """
+    if _ws_layering():
+        d = _ws_resolve_die_dir(str(die))
+        if d is not None:
+            return d
     return _dies_dir() / die
 
 
@@ -182,6 +205,172 @@ def _cfg_file(die: str, cfg: str) -> Path:
     return _die_dir(die) / f"{cfg}.yaml"
 
 
+def _die_layer(die: str) -> str:
+    """``"workspace"`` | ``"published"`` | ``"shared"`` — where the die is read
+    from right now.  A die that exists nowhere reads as ``"workspace"``: that is
+    where creating it would put it."""
+    if not _ws_layering():
+        return _WS.LAYER_WORKSPACE
+    d = _ws_resolve_die_dir(str(die))
+    return _classify_die_dir(d)[0] if d is not None else _WS.LAYER_WORKSPACE
+
+
+def _classify_die_dir(d: Optional[Path]) -> tuple:
+    """``(layer, addressed-name)`` for a die FOLDER.
+
+    The addressed name is what the API calls this die — the folder name, except
+    for another account's published work, which is addressed by its community
+    label (``"CIANO28 85 · by Alice"``).  Recomputed from the path rather than
+    remembered, so a write started from a read can never disagree with it.
+    """
+    if d is None:
+        return (_WS.LAYER_WORKSPACE, "")
+    d = Path(str(d))
+    name = d.name
+    if not _ws_layering():
+        return (_WS.LAYER_WORKSPACE, name)
+    try:
+        if d.parent == _dies_dir():
+            return (_WS.LAYER_WORKSPACE, name)
+        if d.parent == Path(str(_WS.shared_root())) / "dies":
+            return (_WS.LAYER_SHARED, name)
+        pub = Path(str(_WS.published_root()))
+        if d.parent.parent == pub:
+            ns = d.parent
+            if ns.name == _WS.workspace().id:
+                return (_WS.LAYER_PUBLISHED, name)
+            return (_WS.LAYER_PUBLISHED,
+                    _WS.published_label(name, _WS._owner_email(ns)))
+    except (OSError, ValueError):            # noqa: BLE001 — a path we cannot compare
+        pass
+    return (_WS.LAYER_WORKSPACE, name)
+
+
+def _copy_on_write(src_dir: Path, addressed: str) -> Path:
+    """Bring a published/shared die into the workspace so it can be written.
+
+    The YAML DOCUMENTS only — ``die.yaml`` and every configuration.  Not
+    ``runs/``: those are the OTHER user's (or the vendor's) solved answers, and
+    copying a gigabyte of somebody else's fields because you renamed a duty is
+    not a write, it is a fork.  They stay readable through the read-through;
+    anything this workspace solves from here lands beside its own copy.
+
+    Idempotent, and it never overwrites a file that is already here: a second
+    save of the same die must not undo the first.
+    """
+    dst = _dies_dir() / addressed
+    dst.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for p in sorted(src_dir.glob("*.yaml")):
+        q = dst / p.name
+        if q.exists():
+            continue
+        import shutil as _sh
+        _sh.copy2(p, q)
+        copied += 1
+    if copied:
+        # Rename the die inside its own document when the label became the name.
+        try:
+            import yaml as _y
+            f = dst / "die.yaml"
+            doc = _y.safe_load(f.read_text(encoding="utf-8")) or {}
+            if isinstance(doc, dict) and doc.get("name") != addressed:
+                doc["name"] = addressed
+                f.write_text(_y.safe_dump(doc, sort_keys=False,
+                                          allow_unicode=True), encoding="utf-8")
+        except Exception:                    # noqa: BLE001 — cosmetic, never fatal
+            log.debug("family: could not restamp the copied die name",
+                      exc_info=True)
+        log.info("family: die '%s' copied into the workspace on first write "
+                 "(%d document(s) from %s)", addressed, copied, src_dir)
+    return dst
+
+
+def _write_target(p: Path) -> Path:
+    """The path a catalog document is ACTUALLY written to.
+
+    One choke point, because ``_save_yaml`` is the one writer of every die and
+    configuration file in this router — so "a user's save never touches the
+    shared catalog" is a property of four lines rather than of forty call sites.
+    """
+    if not _ws_layering():
+        return p
+    src_dir = Path(str(p)).parent
+    layer, addressed = _classify_die_dir(src_dir)
+    want = _WS.write_layer()
+    if want == _WS.LAYER_SHARED:
+        if not _WS.is_admin():
+            raise HTTPException(403, detail=(
+                "only an admin may write the shared catalog — drop "
+                "'?layer=shared' and the save lands in your own workspace"))
+        plain = _WS.split_published_label(addressed or src_dir.name)[0]
+        return Path(str(_WS.shared_root())) / "dies" / plain / p.name
+    if layer == _WS.LAYER_WORKSPACE:
+        return p
+    return _copy_on_write(src_dir, addressed) / p.name
+
+
+def _require_writable_die(die: str) -> None:
+    """Structural edits — rename, delete — of a die this caller does not own.
+
+    Copy-on-write answers "may I change this duty?"; it cannot answer "may I
+    RENAME this die?", because renaming a shared die inside a workspace would
+    fork the catalog's identity and delete would ask to remove somebody else's
+    file.  Both are refused, and the message says which layer holds it.
+    """
+    if not _ws_layering():
+        return
+    if _WS.write_layer() == _WS.LAYER_SHARED and _WS.is_admin():
+        return
+    lay = _die_layer(die)
+    if lay == _WS.LAYER_WORKSPACE:
+        return
+    raise HTTPException(403, detail=(
+        f"die '{die}' lives in the {lay} catalog and is read-only here — "
+        "duties and configurations you save on it are copied into your own "
+        "workspace, but renaming or deleting it is the "
+        + ("author's" if lay == _WS.LAYER_PUBLISHED else "vendor's") + " call"))
+
+
+def _ensure_writable_die(die: str) -> Path:
+    """The folder a STRUCTURAL edit of this die must happen in.
+
+    ``_save_yaml`` copies a die across on its own, but deleting or renaming a
+    CONFIGURATION unlinks and moves files directly, and those calls must never
+    be aimed at another layer's file.  So the copy happens first and the caller
+    gets the workspace folder back.
+    """
+    d = _die_dir(die)
+    if not _ws_layering():
+        return d
+    if _WS.write_layer() == _WS.LAYER_SHARED and _WS.is_admin():
+        return d
+    layer, addressed = _classify_die_dir(d)
+    if layer == _WS.LAYER_WORKSPACE:
+        return d
+    return _copy_on_write(d, str(die))
+
+
+def _iter_die_entries() -> list:
+    """Every visible die as ``{"name", "die", "dir", "layer", "owner"}``.
+
+    With layering off this is ``_dies_dir()``'s own listing, so ``catalog_dies``
+    / ``die_names`` / ``tree`` keep answering exactly what they answered.
+    """
+    if _ws_layering():
+        return _WS.iter_dies()
+    out = []
+    d = _dies_dir()
+    if not d.is_dir():
+        return out
+    for dd in sorted(d.iterdir()):
+        if dd.is_dir() and (dd / "die.yaml").is_file():
+            out.append({"name": dd.name, "die": dd.name, "dir": dd,
+                        "layer": _WS.LAYER_WORKSPACE, "owner": "",
+                        "owner_id": ""})
+    return out
+
+
 def _require_die_access(die: str, authorization) -> dict:
     """404 unless the caller may read this die (motor_access.may_see_die).
 
@@ -189,8 +378,21 @@ def _require_die_access(die: str, authorization) -> dict:
     be distinguishable from one that does not exist.  Hiding a die from the
     tree without this guard would be cosmetic — the payload endpoint would
     still hand over the whole machine to anyone who guessed the name.
+
+    Stage 2: grants gate the SHARED catalog and nothing else.  A die in the
+    caller's own workspace is theirs by construction, and a PUBLISHED die is
+    visible to every registered account — that is what publishing means.  An
+    anonymous visitor still sees only the public exhibit.
     """
     acc = catalog_access(authorization)
+    if _ws_layering():
+        lay = _die_layer(die)
+        if lay == _WS.LAYER_WORKSPACE:
+            return acc
+        if lay == _WS.LAYER_PUBLISHED:
+            if acc["mode"] == MODE_ANONYMOUS:
+                raise HTTPException(404, detail=f"die '{die}' not found")
+            return acc
     if not may_see_die(acc, die):
         raise HTTPException(404, detail=f"die '{die}' not found")
     return acc
@@ -200,11 +402,8 @@ def catalog_dies() -> list[dict]:
     """Every die on disk with its configuration and duty counts — the admin
     motor picker's source (unfiltered; the route behind it is admin-only)."""
     out: list[dict] = []
-    if not _dies_dir().is_dir():
-        return out
-    for dd in sorted(_dies_dir().iterdir()):
-        if not dd.is_dir() or not (dd / "die.yaml").is_file():
-            continue
+    for _e in _iter_die_entries():
+        dd = Path(str(_e["dir"]))
         try:
             die = _load_yaml(dd / "die.yaml", "die")
         except HTTPException:      # a broken file must not blank the picker
@@ -220,7 +419,9 @@ def catalog_dies() -> list[dict]:
                 continue
             cfgs.append({"name": cf.stem, "duties": len(c.get("duties") or [])})
         out.append({
-            "name": dd.name,
+            "name": _e["name"],
+            **({"layer": _e["layer"], "owner": _e["owner"] or None}
+               if _ws_layering() else {}),
             "stator_diameter": geo.get("stator_diameter"),
             "slots": geo.get("num_slots"), "poles": geo.get("num_poles"),
             "configs": len(cfgs),
@@ -232,10 +433,7 @@ def catalog_dies() -> list[dict]:
 
 def die_names() -> set[str]:
     """The die names a grant may legally reference."""
-    if not _dies_dir().is_dir():
-        return set()
-    return {dd.name for dd in _dies_dir().iterdir()
-            if dd.is_dir() and (dd / "die.yaml").is_file()}
+    return {str(e["name"]) for e in _iter_die_entries()}
 
 
 def _load_yaml(p: Path, what: str) -> dict:
@@ -252,6 +450,11 @@ def _load_yaml(p: Path, what: str) -> dict:
 
 
 def _save_yaml(p: Path, d: dict) -> None:
+    # Stage 2: THE write seam.  A document resolved out of published/ or shared/
+    # is redirected into the caller's own workspace (copying the die's yaml
+    # documents across on the way), and an admin's ``?layer=shared`` write is
+    # redirected the other way.  With layering off this is a no-op.
+    p = _write_target(p)
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
@@ -560,8 +763,39 @@ def _run_stem(duty: str) -> str:
     return f"{ascii_part}-{h}" if ascii_part else f"duty-{h}"
 
 
+def _w_die_dir(die: str) -> Path:
+    """The WORKSPACE folder of this die, whether or not it is there yet.
+
+    ``die`` is the name the API was addressed with, which for another account's
+    published work is its community label — the same name ``_copy_on_write``
+    gives the copy, so a save and the sidecars it writes always land together.
+    """
+    return _dies_dir() / str(die)
+
+
+def _src_die_dir(die: str) -> Optional[Path]:
+    """The published/shared folder this die also lives in, or ``None``.
+
+    Where a read falls THROUGH to.  Kept separate from ``_die_dir`` because
+    after a copy-on-write the resolver answers "workspace" and the results the
+    other layer still holds would otherwise become unreachable.
+    """
+    return _WS.source_die_dir(str(die))
+
+
+def _under_workspace(p: Path) -> bool:
+    if not _ws_layering():
+        return True
+    try:
+        Path(str(p)).relative_to(_dies_dir())
+        return True
+    except ValueError:
+        return False
+
+
 def _runs_dir(die: str, cfg: str) -> Path:
-    return _die_dir(die) / "runs" / cfg
+    """Where this die's run sidecars are WRITTEN — always the workspace."""
+    return _w_die_dir(die) / "runs" / cfg
 
 
 def _run_rel(cfg: str, duty: str, drive: str) -> str:
@@ -571,7 +805,19 @@ def _run_rel(cfg: str, duty: str, drive: str) -> str:
 
 
 def _run_path(die: str, rel: str) -> Path:
-    return _die_dir(die) / str(rel)
+    """READ path for a stored run: the workspace's own copy, else the layer the
+    die was published or curated in.  Writers call :func:`_run_path_w`."""
+    w = _w_die_dir(die) / str(rel)
+    if w.is_file() or not _ws_layering():
+        return w
+    src = _src_die_dir(die)
+    if src is not None and (src / str(rel)).is_file():
+        return src / str(rel)
+    return w
+
+
+def _run_path_w(die: str, rel: str) -> Path:
+    return _w_die_dir(die) / str(rel)
 
 
 def _strip_run_payload(payload: dict) -> dict:
@@ -586,7 +832,7 @@ def _write_run_payload(die: str, rel: str, duty: str, drive: str,
     not a catalog anyone can repair by hand."""
     import gzip
     import json as _json
-    p = _run_path(die, rel)
+    p = _run_path_w(die, rel)
     p.parent.mkdir(parents=True, exist_ok=True)
     body = _json.dumps({"name": duty, "drive": drive,
                         "recorded_at": datetime.now().isoformat(timespec="seconds"),
@@ -758,12 +1004,15 @@ def _move_duty_runs(die: str, entry: dict, cfg: str, new_duty: str,
         dst_rel = _run_rel(cfg, new_duty, drive)
         if dst_rel == src_rel:
             continue
-        src, dst = _run_path(die, src_rel), _run_path(die, dst_rel)
+        src, dst = _run_path(die, src_rel), _run_path_w(die, dst_rel)
         r["payload_file"] = dst_rel
         if not src.is_file():
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if copy:
+        # A sidecar that still lives in published/ or shared/ is COPIED even on
+        # a rename: this workspace may re-file its own view of somebody else's
+        # duty, it may not move their file out from under them.
+        if copy or not _under_workspace(src):
             shutil.copy2(src, dst)
         else:
             src.replace(dst)
@@ -775,6 +1024,14 @@ def _refile_config_runs(die: str, cfg_doc: dict, old_cfg: str, new_cfg: str,
     (or is copied) with it, and every duty's `payload_file` follows."""
     import shutil
     src, dst = _runs_dir(die, old_cfg), _runs_dir(die, new_cfg)
+    if not src.is_dir():
+        # Renaming a configuration of a die read out of published/ or shared/:
+        # the sidecars are still over there, so the workspace takes a COPY under
+        # the new name rather than leaving the renamed duties pointing at
+        # nothing.  Never a move — the file is not this workspace's to take.
+        _s = _src_die_dir(die)
+        if _s is not None and (_s / "runs" / old_cfg).is_dir():
+            src, copy = _s / "runs" / old_cfg, True
     if src.is_dir():
         dst.parent.mkdir(parents=True, exist_ok=True)
         if copy:
@@ -792,7 +1049,7 @@ def _refile_config_runs(die: str, cfg_doc: dict, old_cfg: str, new_cfg: str,
 def _delete_duty_runs(die: str, entry: dict) -> int:
     n = 0
     for rel in _duty_run_files(entry):
-        p = _run_path(die, rel)
+        p = _run_path_w(die, rel)          # never another layer's file
         try:
             if p.is_file():
                 p.unlink()
@@ -1040,12 +1297,11 @@ def _tree_signature(with_catalog: bool) -> tuple:
     valid for.  ~30 stats, well under a millisecond."""
     sig = []
     try:
-        for dd in sorted(_dies_dir().iterdir()):
-            if not dd.is_dir():
-                continue
+        for _e in _iter_die_entries():
+            dd = Path(str(_e["dir"]))
             for f in sorted(dd.glob("*.yaml")):
                 st = f.stat()
-                sig.append((dd.name, f.name, st.st_mtime_ns, st.st_size))
+                sig.append((_e["name"], f.name, st.st_mtime_ns, st.st_size))
         if with_catalog:
             p = _ws_root_f() / "motor_catalog.json"
             if p.is_file():
@@ -1073,7 +1329,8 @@ def tree(response: Response, authorization: str = Header(default=None)):
     response.headers["Cache-Control"] = "no-store"
     response.headers["Vary"] = "Authorization"
     out = []
-    if not _dies_dir().is_dir():
+    _entries = _iter_die_entries()
+    if not _entries:
         return {"dies": out, "can_write": _can_write}
     # ── Public exhibit: WORKING configurations only (user 2026-08-25) ────────
     # A motor an ANONYMOUS visitor cannot open in Configure (no FEM passport
@@ -1118,8 +1375,13 @@ def tree(response: Response, authorization: str = Header(default=None)):
                 continue
         return False
 
+    # The WORKSPACE is part of the key since Stage 2: two accounts with the
+    # same access mode see two different catalogs, and a memo that could not
+    # tell them apart is precisely the cross-user leak this migration exists to
+    # prevent.  (The signature would usually catch it; "usually" is not a
+    # guarantee worth resting a customer's machine on.)
     _key = (str(_acc["mode"]), tuple(sorted(str(x) for x in (_acc.get("dies") or ()))),
-            _can_write, _client_filter)
+            _can_write, _client_filter, _WS.workspace().id)
     _sig = _tree_signature(_client_filter)
     _hit = _TREE_CACHE.get(_key)
     if _sig and _hit is not None and _hit[0] == _sig:
@@ -1128,12 +1390,19 @@ def tree(response: Response, authorization: str = Header(default=None)):
             res["note"] = "no motors granted yet — ask the vendor"
         return res
 
-    for dd in sorted(_dies_dir().iterdir()):
-        if not dd.is_dir() or not (dd / "die.yaml").is_file():
-            continue
+    for _e in _entries:
+        dd = Path(str(_e["dir"]))
+        _die_name, _layer = str(_e["name"]), str(_e["layer"])
         # A signed-in non-admin sees its granted dies and nothing else — with
         # ALL their configurations and duties, exactly as an admin would.
-        if _acc["mode"] == MODE_GRANTED and dd.name not in _acc["dies"]:
+        # Grants gate the SHARED catalog only: a die in this workspace is the
+        # caller's own, and a PUBLISHED one is open to every registered account.
+        if (_acc["mode"] == MODE_GRANTED and _die_name not in _acc["dies"]
+                and (not _ws_layering() or _layer == _WS.LAYER_SHARED)):
+            continue
+        # The community layer is for people who signed in.  The anonymous
+        # exhibit stays exactly the passport-filtered shared set it always was.
+        if _layer == _WS.LAYER_PUBLISHED and _acc["mode"] == MODE_ANONYMOUS:
             continue
         die = _load_yaml(dd / "die.yaml", "die")
         geo = die.get("geometry") or {}
@@ -1206,7 +1475,15 @@ def tree(response: Response, authorization: str = Header(default=None)):
                 ],
             })
         out.append({
-            "name": dd.name,
+            "name": _die_name,
+            # Which layer answered, and whose work it is — the web tab that
+            # draws a "Community" section is a later stage, but the tree must
+            # already say so or the frontend has to guess from the name.  Only
+            # with multi-user ON: a single-user tree is byte-identical to
+            # Stage 1's, keys included.
+            **({"layer": _layer, "owner": _e["owner"] or None,
+                "read_only": _layer != _WS.LAYER_WORKSPACE}
+               if _ws_layering() else {}),
             "locked": bool(die.get("locked", True)),
             "created": die.get("created"),
             "slots": geo.get("num_slots"), "poles": geo.get("num_poles"),
@@ -1274,8 +1551,11 @@ def rename_die(die: str, req: DieRename, _admin: dict = Depends(require_admin)):
         raise HTTPException(404, detail=f"die '{die}' not found")
     if new == die:
         return {"ok": True, "die": die}
-    dst = _die_dir(new)
-    if dst.exists():
+    _require_writable_die(die)
+    # The rename stays in the layer that holds the die: a workspace die moves
+    # inside the workspace, an admin's ``?layer=shared`` rename inside shared.
+    dst = src.parent / new
+    if dst.exists() or (_ws_layering() and _ws_resolve_die_dir(new) is not None):
         raise HTTPException(409, detail=f"die '{new}' already exists")
     src.rename(dst)
     d = _load_yaml(dst / "die.yaml", "die")
@@ -1306,6 +1586,7 @@ def delete_die(die: str, force: bool = False, _admin: dict = Depends(require_adm
     dd = _die_dir(die)
     if not (dd / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
+    _require_writable_die(die)
     cfgs = [p.stem for p in dd.glob("*.yaml") if p.name != "die.yaml"]
     if cfgs and not force:
         raise HTTPException(409, detail=(
@@ -1427,7 +1708,11 @@ def rename_config(die: str, cfg: str, req: ConfigRename, _admin: dict = Depends(
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
     if new == cfg:
         return {"ok": True, "config": cfg}
-    dst = _cfg_file(die, new)
+    # Copy-on-write BEFORE anything is unlinked or moved: a rename inside a
+    # published or shared die happens on this workspace's own copy of it.
+    _wdir = _ensure_writable_die(die)
+    src = _wdir / src.name
+    dst = _wdir / f"{new}.yaml"
     if dst.exists():
         raise HTTPException(409, detail=f"configuration '{new}' already exists "
                                         f"under die '{die}'")
@@ -1537,6 +1822,11 @@ def delete_config(die: str, cfg: str, _admin: dict = Depends(require_admin)):
     if not p.is_file():
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
     n = len((_load_yaml(p, "configuration").get("duties")) or [])
+    # Copy-on-write first: deleting a configuration of a published or shared die
+    # removes it from THIS workspace's view, never from the layer that holds it.
+    p = _ensure_writable_die(die) / p.name
+    if not p.is_file():
+        raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
     p.unlink()
     _delete_config_runs(die, cfg)          # its duties' stored runs go with it
     log.warning("family: configuration '%s/%s' deleted (%d duty(ies) with it)",
@@ -3329,3 +3619,375 @@ def configuration_history_restore(req: HistoryRestore,
     except Exception:      # noqa: BLE001
         pass
     return {"ok": True, "restored": cand[0].name, "into": dst.name}
+
+
+# ── the community layer: publishing (migration Stage 2) ──────────────────────
+#
+# WHY A THIRD LAYER.  ``shared/`` is the vendor's catalog and ``workspaces/`` is
+# private; between them sits the thing the user actually asked for — *"a user
+# PUBLISHES a die/configuration/duty from their workspace; everyone registered
+# sees it read-only with the author's name"*.  It is not the shared catalog
+# (nobody vetted it) and it is not private (that is the point), so it is its
+# own layer.
+#
+# NAMESPACED PER OWNER — ``published/<ws_id>/<die>/`` — because two accounts may
+# both have a "CIANO28 85" and neither of them is wrong.  Everywhere a published
+# die of ANOTHER account is named, it is named ``"<die> · by <name>"``; ``·`` is
+# already a legal die-name character, so that label is itself a legal die name
+# and every existing route addresses it without a second scheme.
+#
+# WHAT TRAVELS: the yaml documents AND the results — the run sidecars, the field
+# ``.npz`` files and the per-duty result rows.  A published duty with no numbers
+# in it would be a drawing, not an answer, and the report is the reason anyone
+# would publish at all.
+
+class PublishNote(BaseModel):
+    note: Optional[str] = None
+
+
+def _pub_ns(ws_id: Optional[str] = None) -> Path:
+    return Path(str(_WS.published_root())) / str(ws_id or _WS.workspace().id)
+
+
+def _pub_identity(authorization) -> dict:
+    """The caller, refused unless they are a NAMED account.
+
+    Publishing stamps an author onto a document every other account will read;
+    ``anonymous`` is not an author, it is the absence of one.
+    """
+    if not _ws_layering():
+        raise HTTPException(409, detail=(
+            "publishing needs the multi-user layout (WORKSPACES_ROOT) — this "
+            "installation has one workspace and nothing to publish to"))
+    from motor_ai_sim.auth import ADMIN_OWNER, ANON_OWNER
+    who = caller_identity(authorization)
+    ident = str(who.get("id") or "")
+    if not ident or ident in (ANON_OWNER, ADMIN_OWNER):
+        raise HTTPException(401, detail="sign in to publish")
+    return who
+
+
+def _pub_stamp(doc: dict, email: str, note: Optional[str] = None) -> dict:
+    doc = dict(doc)
+    doc["published_by"] = email
+    doc["published_at"] = datetime.now().isoformat(timespec="seconds")
+    if note:
+        doc["published_note"] = str(note)[:400]
+    return doc
+
+
+def _pub_copy_results(die: str, cfg: str, duties: list, dst_die: Path) -> dict:
+    """The run sidecars and field files of the named duties, copied across.
+
+    Best-effort per file and deliberately so: a publish that half-copied is
+    repaired by publishing again, while a publish that 500s on one locked
+    ``.npz`` teaches the user not to publish at all.
+    """
+    import shutil as _sh
+    n_runs = n_fields = 0
+    for entry in duties:
+        if not isinstance(entry, dict):
+            continue
+        for rel in _duty_run_files(entry):
+            src = _run_path(die, rel)
+            if not src.is_file():
+                continue
+            dst = dst_die / str(rel)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                _sh.copy2(src, dst)
+                n_runs += 1
+            except OSError:
+                log.warning("publish: could not copy the run sidecar %s", src)
+        stem = _run_stem(str(entry.get("name") or ""))
+        fsrc = _w_die_dir(die) / "runs" / str(cfg) / stem / "fields"
+        if fsrc.is_dir():
+            fdst = dst_die / "runs" / str(cfg) / stem / "fields"
+            fdst.mkdir(parents=True, exist_ok=True)
+            for f in sorted(fsrc.glob("*.npz")):
+                try:
+                    _sh.copy2(f, fdst / f.name)
+                    n_fields += 1
+                except OSError:
+                    log.warning("publish: could not copy the field file %s", f)
+    return {"runs": n_runs, "fields": n_fields}
+
+
+def _pub_results_store(dst_die: Path, die: str, cfg: Optional[str],
+                       duties: Optional[list]) -> int:
+    """Mirror this die's rows of ``.duty_results.json`` into the published die.
+
+    A per-die file rather than a slice of the workspace store, in the SAME
+    schema, so the read-through in ``duty_results`` is one extra path and not a
+    second format.
+    """
+    try:
+        import json as _json
+        from motor_ai_sim import duty_results as _dr
+        src = (_dr.read_all().get("results") or {}).get(str(die)) or {}
+        keep: Dict[str, Any] = {}
+        for c, node in src.items():
+            if cfg is not None and c != str(cfg):
+                continue
+            if duties is None:
+                keep[c] = node
+            else:
+                names = {str(d.get("name")) for d in duties
+                         if isinstance(d, dict)}
+                sel = {k: v for k, v in (node or {}).items() if k in names}
+                if sel:
+                    keep[c] = sel
+        p = dst_die / ".duty_results.json"
+        prev: Dict[str, Any] = {}
+        if p.is_file():
+            try:
+                prev = ((_json.loads(p.read_text(encoding="utf-8")) or {})
+                        .get("results") or {}).get(str(die)) or {}
+            except Exception:                    # noqa: BLE001
+                prev = {}
+        for c, node in keep.items():
+            prev.setdefault(c, {}).update(node)
+        if not prev:
+            return 0
+        p.write_text(_json.dumps(
+            {"version": _dr.VERSION,
+             "updated_at": datetime.now().isoformat(timespec="seconds"),
+             "results": {str(die): prev}}, ensure_ascii=False, default=str),
+            encoding="utf-8")
+        return sum(len(v) for v in prev.values())
+    except Exception as exc:                     # noqa: BLE001
+        log.warning("publish: duty results not mirrored for %s (%s)", die, exc)
+        return 0
+
+
+def _pub_put(p: Path, doc: dict) -> None:
+    """Write a document INTO the published layer.
+
+    Not through ``_save_yaml``: that function's whole job is to keep writes out
+    of the other layers, and this is the one call that is allowed in.
+    """
+    import yaml as _y
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(_y.safe_dump(doc, sort_keys=False, allow_unicode=True),
+                   encoding="utf-8")
+    tmp.replace(p)
+
+
+def _publish(die: str, cfg: Optional[str], duty: Optional[str],
+             authorization, note: Optional[str] = None) -> dict:
+    who = _pub_identity(authorization)
+    email = str(who["id"])
+    die = _check_name(die, "die")
+    src_die = _w_die_dir(die)
+    if not (src_die / "die.yaml").is_file():
+        raise HTTPException(404, detail=(
+            f"die '{die}' is not in your workspace — you publish your own "
+            "work, not somebody else's"))
+    ns = _pub_ns()
+    ns.mkdir(parents=True, exist_ok=True)
+    import json as _json
+    (ns / _WS.OWNER_FILE).write_text(
+        _json.dumps({"email": email, "name": _WS.owner_display_name(email)}),
+        encoding="utf-8")
+    dst_die = ns / die
+    dst_die.mkdir(parents=True, exist_ok=True)
+    _pub_put(dst_die / "die.yaml",
+             _pub_stamp(_load_yaml(src_die / "die.yaml", "die"), email, note))
+
+    cfg_names = ([_check_name(cfg, "configuration")] if cfg else
+                 [p.stem for p in sorted(src_die.glob("*.yaml"))
+                  if p.name != "die.yaml"])
+    published: Dict[str, Any] = {}
+    for cname in cfg_names:
+        p = src_die / f"{cname}.yaml"
+        if not p.is_file():
+            raise HTTPException(404,
+                                detail=f"configuration '{die}/{cname}' not found")
+        c = _load_yaml(p, "configuration")
+        duties = [d for d in (c.get("duties") or []) if isinstance(d, dict)]
+        if duty is not None:
+            duties = [d for d in duties if str(d.get("name")) == str(duty)]
+            if not duties:
+                raise HTTPException(
+                    404, detail=f"duty '{die}/{cname}/{duty}' not found")
+            # Publishing ONE duty must not retract the others already out
+            # there: the previously published document's duties are kept and
+            # only the named one is replaced.
+            old = dst_die / f"{cname}.yaml"
+            if old.is_file():
+                prev = _load_yaml(old, "configuration")
+                keep = [d for d in (prev.get("duties") or [])
+                        if isinstance(d, dict)
+                        and str(d.get("name")) != str(duty)]
+                duties = keep + duties
+        c["duties"] = duties
+        _pub_put(dst_die / f"{cname}.yaml", _pub_stamp(c, email, note))
+        published[cname] = _pub_copy_results(die, cname, duties, dst_die)
+        published[cname]["duties"] = [str(d.get("name")) for d in duties]
+        _pub_results_store(dst_die, die, cname, duties)
+
+    log.info("family: '%s' published by %s (%d configuration(s))",
+             die, email, len(published))
+    return {"ok": True, "die": die, "owner": email,
+            "label": _WS.published_label(die, email),
+            "configs": published, "root": str(dst_die)}
+
+
+@router.post("/publish/{die}")
+def publish_die(die: str, req: Optional[PublishNote] = None,
+                authorization: str = Header(default=None)):
+    """Publish a whole die — every configuration, duty and stored answer."""
+    return _publish(die, None, None, authorization, (req.note if req else None))
+
+
+@router.post("/publish/{die}/{cfg}")
+def publish_config(die: str, cfg: str, req: Optional[PublishNote] = None,
+                   authorization: str = Header(default=None)):
+    """Publish one configuration of a die."""
+    return _publish(die, cfg, None, authorization, (req.note if req else None))
+
+
+@router.post("/publish/{die}/{cfg}/{duty}")
+def publish_duty(die: str, cfg: str, duty: str,
+                 req: Optional[PublishNote] = None,
+                 authorization: str = Header(default=None)):
+    """Publish ONE duty — the others of the configuration stay as they were."""
+    return _publish(die, cfg, duty, authorization, (req.note if req else None))
+
+
+def _pub_find_ns(die: str, who: dict) -> tuple:
+    """``(namespace dir, die name on disk)`` for something already published."""
+    base, by = _WS.split_published_label(str(die))
+    if not by:
+        return (_pub_ns(), str(die))
+    for lay in _WS.layers():
+        if (lay.name == _WS.LAYER_PUBLISHED
+                and _WS.owner_display_name(lay.owner) == by
+                and (lay.dies_dir / base / "die.yaml").is_file()):
+            return (lay.dies_dir, base)
+    raise HTTPException(404, detail=f"'{die}' is not published")
+
+
+def _unpublish(die: str, cfg: Optional[str], duty: Optional[str],
+               authorization) -> dict:
+    """Take it down.  The AUTHOR or an admin, and nobody else."""
+    who = _pub_identity(authorization)
+    email, is_admin = str(who["id"]), bool(who.get("is_admin"))
+    ns, die = _pub_find_ns(die, who)
+    owner = _WS._owner_email(ns)
+    if not is_admin and ns.name != _WS.workspace().id:
+        raise HTTPException(403, detail=(
+            f"'{die}' was published by {owner or 'another account'} — only its "
+            "author or an admin can change or withdraw it"))
+    dd = ns / str(die)
+    if not (dd / "die.yaml").is_file():
+        raise HTTPException(404, detail=f"'{die}' is not published")
+    import shutil as _sh
+    if cfg is None:
+        _sh.rmtree(dd, ignore_errors=True)
+        log.warning("family: published die '%s' of %s withdrawn by %s",
+                    die, owner or ns.name, email)
+        return {"ok": True, "withdrawn": "die", "die": die}
+    p = dd / f"{_check_name(cfg, 'configuration')}.yaml"
+    if not p.is_file():
+        raise HTTPException(404, detail=f"'{die}/{cfg}' is not published")
+    if duty is None:
+        p.unlink()
+        _sh.rmtree(dd / "runs" / str(cfg), ignore_errors=True)
+        log.warning("family: published '%s/%s' withdrawn by %s", die, cfg, email)
+        return {"ok": True, "withdrawn": "config", "die": die, "config": cfg}
+    c = _load_yaml(p, "configuration")
+    was = len(c.get("duties") or [])
+    rest = [d for d in (c.get("duties") or [])
+            if isinstance(d, dict) and str(d.get("name")) != str(duty)]
+    if len(rest) == was:
+        raise HTTPException(404, detail=f"'{die}/{cfg}/{duty}' is not published")
+    c["duties"] = rest
+    _pub_put(p, c)
+    _sh.rmtree(dd / "runs" / str(cfg) / _run_stem(str(duty)), ignore_errors=True)
+    log.warning("family: published duty '%s/%s/%s' withdrawn by %s",
+                die, cfg, duty, email)
+    return {"ok": True, "withdrawn": "duty", "die": die, "config": cfg,
+            "duty": str(duty)}
+
+
+@router.delete("/publish/{die}")
+def unpublish_die(die: str, authorization: str = Header(default=None)):
+    return _unpublish(die, None, None, authorization)
+
+
+@router.delete("/publish/{die}/{cfg}")
+def unpublish_config(die: str, cfg: str,
+                     authorization: str = Header(default=None)):
+    return _unpublish(die, cfg, None, authorization)
+
+
+@router.delete("/publish/{die}/{cfg}/{duty}")
+def unpublish_duty(die: str, cfg: str, duty: str,
+                   authorization: str = Header(default=None)):
+    return _unpublish(die, cfg, duty, authorization)
+
+
+@router.get("/community")
+def community(response: Response, authorization: str = Header(default=None)):
+    """What other accounts have published — the Community listing.
+
+    Every REGISTERED account sees every published item; an anonymous visitor
+    sees none.  Read-only by construction: nothing here is addressable for
+    writing except through its own author's publish routes.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Vary"] = "Authorization"
+    acc = catalog_access(authorization)
+    if acc["mode"] == MODE_ANONYMOUS or not _ws_layering():
+        return {"items": [], "can_publish": False}
+    me = _WS.workspace().id
+    items = []
+    for lay in _WS.layers():
+        if lay.name != _WS.LAYER_PUBLISHED:
+            continue
+        who = _WS.owner_display_name(lay.owner)
+        try:
+            entries = sorted(lay.dies_dir.iterdir())
+        except OSError:
+            continue
+        for dd in entries:
+            if not dd.is_dir() or not (dd / "die.yaml").is_file():
+                continue
+            try:
+                doc = _load_yaml(dd / "die.yaml", "die")
+            except HTTPException:
+                continue
+            cfgs = []
+            for cf in sorted(dd.glob("*.yaml")):
+                if cf.name == "die.yaml":
+                    continue
+                try:
+                    c = _load_yaml(cf, "configuration")
+                except HTTPException:
+                    continue
+                cfgs.append({"name": cf.stem,
+                             "duties": [str(d.get("name")) for d in
+                                        (c.get("duties") or [])
+                                        if isinstance(d, dict)],
+                             "published_at": c.get("published_at")})
+            geo = doc.get("geometry") or {}
+            items.append({
+                "die": dd.name,
+                # What every other route must be called with.
+                "name": (dd.name if lay.owner_id == me
+                         else _WS.published_label(dd.name, lay.owner)),
+                "label": f"{dd.name} · by {who}",
+                "owner": lay.owner, "owner_name": who,
+                "mine": lay.owner_id == me,
+                "published_by": doc.get("published_by"),
+                "published_at": doc.get("published_at"),
+                "note": doc.get("published_note"),
+                "slots": geo.get("num_slots"), "poles": geo.get("num_poles"),
+                "stator_diameter": geo.get("stator_diameter"),
+                "configs": cfgs,
+                "duties": sum(len(c["duties"]) for c in cfgs),
+            })
+    items.sort(key=lambda r: (not r["mine"], r["owner_name"], r["die"]))
+    return {"items": items, "can_publish": True}

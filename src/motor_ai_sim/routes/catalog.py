@@ -309,10 +309,12 @@ def _family_doc_of_motor(motor: dict,
         return None
     try:
         import yaml as _yaml
-        from motor_ai_sim.workspace import root as _ws_root
-        dies = _ws_root() / "dies"
+        from motor_ai_sim.workspace import iter_dies as _iter_dies
         by_die: dict = {}
-        for f in dies.glob("*/*.yaml"):
+        # Stage 2: every layer, workspace first — a card whose configuration
+        # lives in the shared catalog must still find its document.
+        for f in [q for e in _iter_dies()
+                  for q in sorted(Path(str(e["dir"])).glob("*.yaml"))]:
             if f.name == "die.yaml":
                 continue
             d = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
@@ -356,9 +358,11 @@ def _role_of_motor(motor: dict) -> Optional[str]:
         return None
     try:
         import yaml as _yaml
-        from motor_ai_sim.workspace import root as _ws_root
-        dies = _ws_root() / "dies"
-        for f in dies.glob("*/*.yaml"):
+        from motor_ai_sim.workspace import iter_dies as _iter_dies
+        # Stage 2: every layer, workspace first — a card whose configuration
+        # lives in the shared catalog must still find its document.
+        for f in [q for e in _iter_dies()
+                  for q in sorted(Path(str(e["dir"])).glob("*.yaml"))]:
             if f.name == "die.yaml":
                 continue
             d = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}

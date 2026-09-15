@@ -109,7 +109,57 @@ def _config_dir() -> Path:
 
 
 def store_path() -> Path:
+    """The store this call WRITES — always the caller's own workspace."""
     return _config_dir() / ".duty_results.json"
+
+
+# ---------------------------------------------------------------------------
+# Reading THROUGH the layers (migration Stage 2)
+# ---------------------------------------------------------------------------
+# A die may be read out of the workspace, out of somebody's published work, or
+# out of the shared catalog, and its ANSWERS have to come with it — a published
+# duty whose thermal row stayed behind in the author's workspace is a duty the
+# reader is told was never solved.  So reads fall through:
+#
+#   <ws>/.duty_results.json                     the caller's own
+#   published/<ws_id>/<die>/.duty_results.json  the author's, per die
+#   <shared>/.duty_results.json                 the vendor's
+#
+# first hit wins PER DUTY, and writes never fall through: they go to the
+# workspace store, where this workspace's own answers belong.
+
+
+def _read_store(p: Path) -> Dict[str, Any]:
+    """The ``results`` block of any layer's store, or ``{}``."""
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:                                # noqa: BLE001
+        log.warning("duty_results: %s is unreadable (%s) — treated as empty",
+                    p, exc)
+        return {}
+    res = (d or {}).get("results") if isinstance(d, dict) else None
+    return res if isinstance(res, dict) else {}
+
+
+def _fallback_stores(die: str) -> List[Path]:
+    """The published / shared stores that may answer for this die, DEEPEST first
+    (shared, then published), so a shallower layer overwrites a deeper one."""
+    out: List[Path] = []
+    try:
+        from motor_ai_sim import workspace as _ws
+        if not _ws.layering():
+            return out
+        shared = Path(str(_ws.shared_root())) / ".duty_results.json"
+        if shared.is_file() and shared != store_path():
+            out.append(shared)
+        src = _ws.source_die_dir(str(die))
+        if src is not None and (src / ".duty_results.json").is_file():
+            out.append(src / ".duty_results.json")
+    except Exception:                                       # noqa: BLE001
+        return []
+    return out
 
 
 def _now() -> str:
@@ -323,11 +373,39 @@ def record_alt_carrier(die: str, cfg: str, duty: str, kind: str,
         return False
 
 
-def get(die: str, cfg: str) -> Dict[str, Dict[str, Any]]:
-    """``{duty: {kind: entry}}`` for one configuration.  ``{}`` when unknown."""
+def _node(results: Dict[str, Any], die: str, cfg: str) -> Dict[str, Any]:
+    """This configuration's rows, matched by the name the caller used AND by the
+    plain die name — a published die is addressed as ``"<die> · by <name>"``
+    while its own store, written by its author, knows it as ``<die>``."""
+    for key in (str(die), _plain_die(die)):
+        node = (results.get(key) or {}).get(str(cfg))
+        if isinstance(node, dict) and node:
+            return node
+    return {}
+
+
+def _plain_die(die: str) -> str:
     try:
-        return dict(((read_all().get("results") or {})
-                     .get(str(die)) or {}).get(str(cfg)) or {})
+        from motor_ai_sim import workspace as _ws
+        return _ws.split_published_label(str(die))[0]
+    except Exception:                                       # noqa: BLE001
+        return str(die)
+
+
+def get(die: str, cfg: str) -> Dict[str, Dict[str, Any]]:
+    """``{duty: {kind: entry}}`` for one configuration.  ``{}`` when unknown.
+
+    Reads THROUGH the layers (see above): the shared and published stores are
+    merged in first and the workspace's own rows land on top, so re-solving a
+    published duty in your own workspace shows YOUR answer while the ones you
+    have not re-solved still show the author's.
+    """
+    try:
+        out: Dict[str, Dict[str, Any]] = {}
+        for p in _fallback_stores(die):
+            out.update(_node(_read_store(p), die, cfg))
+        out.update(_node(read_all().get("results") or {}, die, cfg))
+        return out
     except Exception:                                       # noqa: BLE001
         return {}
 

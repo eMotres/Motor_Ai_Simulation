@@ -429,6 +429,42 @@ def _load_presets() -> dict:
     return _read_json(_presets_path(), {}) or {}
 
 
+# ── the shared template layer (migration Stage 2) ────────────────────────────
+# ``shared/motor_presets.json`` is the vendor's seed set: read-only templates
+# every workspace can open, merged into the LISTING only.  Never into
+# ``_load_presets``, which is what every writer reads first — a save that had
+# templates in hand would copy the whole library into the user's own store the
+# first time they renamed one motor.
+
+def _shared_presets() -> dict:
+    """The admin-curated templates, or ``{}``.  Only with multi-user on, and
+    only when the shared file is a different file from the workspace's own."""
+    try:
+        from motor_ai_sim import workspace as _ws
+        if not _ws.layering():
+            return {}
+        p = Path(str(_ws.shared_root())) / "motor_presets.json"
+        if not p.is_file() or p == _presets_path():
+            return {}
+        return _read_json(p, {}) or {}
+    except Exception:                       # noqa: BLE001 — a listing, never a 500
+        return {}
+
+
+def _with_shared(presets: dict) -> dict:
+    """``presets`` on top of the shared templates, tagged with their layer."""
+    shared = _shared_presets()
+    if not shared:
+        return presets
+    out = {}
+    for pid, p in shared.items():
+        if isinstance(p, dict) and pid not in presets:
+            out[pid] = {**p, "layer": "shared", "template": True,
+                        "locked": True}
+    out.update(presets)
+    return out
+
+
 # ── Ownership: who may WRITE a motor ────────────────────────────────────────
 #
 # Every entry carries an `owner` (the identity dialect of `auth.caller_identity`)
@@ -697,7 +733,7 @@ class SettingsPatch(BaseModel):
 def list_presets():
     """List all saved motor presets (sorted by order)."""
     _backfill_owners()
-    presets = _load_presets()
+    presets = _with_shared(_load_presets())
     items = [_summary(p) for p in presets.values()]
     items.sort(key=lambda x: (x["order"], x["name"]))
     return {"presets": items}
@@ -705,7 +741,7 @@ def list_presets():
 
 @router.get("/{preset_id}")
 def get_preset(preset_id: str):
-    p = _load_presets().get(preset_id)
+    p = _with_shared(_load_presets()).get(preset_id)
     if not p:
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
     return p
@@ -721,7 +757,7 @@ def apply_preset(preset_id: str,
     whether you may WRITE to it (`writable`), so the editor can open someone
     else's motor as a read-only working copy instead of auto-saving into it and
     collecting a 403 every 0.9 s."""
-    p = _load_presets().get(preset_id)
+    p = _with_shared(_load_presets()).get(preset_id)
     if not p:
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
 

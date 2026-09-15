@@ -94,6 +94,27 @@ for _env, _real, _name in (("MOTOR_AI_SIM_CONFIG", _REAL_CONFIG, "motor_config.y
             _zero_the_sleeve(_copy)
     os.environ[_env] = str(_copy)
 
+# ── the READ-ONLY libraries (migration Stage 2) ──────────────────────────────
+# Materials, bearings and the fusion map are ONE machine-wide answer that every
+# workspace quotes and no workspace may edit, so Stage 2 gives them to the
+# ``shared/`` layer — and with multi-user off ``workspace.shared_root()`` is the
+# folder the config path names, which in here is this sandbox.  Both library
+# loaders fall back to the repo copy when the shared folder has none, so the
+# suite was never going to lose them; putting the copies here anyway means the
+# sandbox is a COMPLETE little installation rather than one that happens to
+# work by fallback, and it is the shape the server will actually run in.
+#
+# COPIES, not the originals: the "never reach the live machine" guarantee is
+# that nothing under this tree is a path into ``config/``.  They are read-only
+# in practice (no route writes them; admin material edits go to Firestore
+# through ``materials_store``), so a copy costs a few hundred kilobytes once.
+for _lib in ("materials_library.yaml", "bearings_library.yaml",
+             "fusion_param_map.yaml", "end_effect_passports.json",
+             "end_effect_3d.json"):
+    _src = _ROOT / "config" / _lib
+    if _src.is_file() and not (_SANDBOX / _lib).exists():
+        shutil.copy2(_src, _SANDBOX / _lib)
+
 import pytest                                             # noqa: E402
 
 

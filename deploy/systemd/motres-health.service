@@ -1,0 +1,46 @@
+# Readiness probe — the one that can tell a wedged server from a live one.
+#
+# WHY NOT /api/health
+#   /api/health answers unconditionally and is an `async def`: it is served on
+#   the event loop and returns {"status":"healthy"} from a process that has
+#   stopped doing anything useful.  That is the right shape for the container
+#   HEALTHCHECK (is the process up?) and useless as a readiness signal.
+#
+#   /api/me is a SYNC handler — it runs in the threadpool — and it reads
+#   users.json.  A 200 from it means: the loop dispatched, a pool thread was
+#   available, the identity store is readable and parses.  That is the closest
+#   thing this app has to "a real user's next click would work".
+#
+# WHY IT DOES NOT RESTART ANYTHING
+#   Restarts belong to WatchdogSec (motres-api.service), which measures the one
+#   condition with no correct fallback.  This probe measures a broader thing
+#   that has legitimate slow moments — a cold users.json read behind a burst,
+#   an hourly restic run — and a probe that restarted the server for those
+#   would cost more solves than it saved.  It FAILS THE UNIT instead, which is
+#   what an external alert watches:
+#
+#     [Unit] OnFailure=motres-alert@%n.service      (add your notifier)
+#     journalctl -u motres-health.service -p err
+#
+# Alert rule per section 4.4: health failing for more than 300 s.  At 60 s
+# intervals that is five consecutive failed runs.
+
+[Unit]
+Description=motor_ai_sim readiness probe (GET /api/me)
+Documentation=file:///opt/motres/app/deploy/README.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+
+# Through the public edge, not localhost: a probe that skipped nginx and TLS
+# would stay green through exactly the outage the customer is experiencing.
+Environment=MOTRES_HEALTH_URL=https://emotres.com/api/me
+
+# The URL is passed as an ARGUMENT (reaching bash as $0) rather than read from
+# the environment inside the script: systemd expands ${VAR} in an unquoted
+# ExecStart argument, and leaving one expansion to systemd and none to bash is
+# one fewer thing to be wrong about at 3 a.m.
+ExecStart=/bin/bash -c 'body=$(curl -fsS --max-time 20 -H "Accept: application/json" "$0") || { echo "health: GET $0 failed" >&2; exit 1; }; case "$body" in *tier*) echo "health: ok - $body";; *) echo "health: answered but no tier field: $body" >&2; exit 1;; esac' ${MOTRES_HEALTH_URL}
+
+TimeoutStartSec=60

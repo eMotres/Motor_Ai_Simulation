@@ -1,27 +1,100 @@
-# motor_ai_sim — one-node deploy (Hetzner or any docker host).
-# From the repo root:
-#   cp .env.example deploy/.env    # then fill the values
+# motor_ai_sim — one node (Hetzner AX42), three services.
+#
 #   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
+#
+# TWO env files, on purpose:
+#   /etc/motres/api.env   root:root 0600 — RUNTIME secrets and the four roots.
+#                         Never in the repo, never in an image layer.
+#   deploy/.env           BUILD-time interpolation only.  The frontend bakes
+#                         VITE_GOOGLE_CLIENT_ID into its bundle, so that value
+#                         has to exist at `docker build` time; an OAuth client
+#                         id is public by design (the browser sends it), which
+#                         is why this one file may be less guarded — but it is
+#                         still not committed (see scripts/api.env.example).
+#
+# STATE lives on the host under /srv/motres, NOT in a named volume:
+#
+#   /srv/motres/shared       the catalog + libraries   -> mounted READ-ONLY
+#   /srv/motres/published    community publishes       -> rw
+#   /srv/motres/workspaces   one folder per account    -> rw
+#   /srv/motres/identity     users.json .auth_secret .sessions.json -> rw
+#
+# `shared` is read-only in the API container for the reason §2 of the migration
+# plan gives: if the overlay direction is ever wrong, the failure must be a
+# visible EROFS and not a customer's solve quietly rewriting the vendor catalog.
+#
+#   sudo mkdir -p /srv/motres/{shared,published,workspaces,identity}
+#   sudo chown -R 10001:10001 /srv/motres      # the image's `motres` user
+
 services:
+
+  # ── one-shot: build the three-layer tree from a copy of config/ ───────────
+  # Explicit, idempotent, dry-run-by-default — NOT the old "the image's config/
+  # seed is copied into an EMPTY volume on first start" trap, which silently
+  # did nothing the second time and left a server with no catalog.
+  #
+  #   # dry run (prints the plan, writes nothing):
+  #   docker compose -f deploy/docker-compose.yml run --rm motres-seed
+  #   # for real:
+  #   docker compose -f deploy/docker-compose.yml run --rm motres-seed \
+  #       python scripts/migrate_to_workspaces.py \
+  #         --from /seed-src --to /srv/motres --owner "$OWNER_EMAIL" --apply \
+  #         --manifest /srv/motres/.seed_manifest.json
+  #
+  # /seed-src is a COPY of the Windows box's config/, rsync'd to the server
+  # (SEED_SRC in deploy/.env).  Mounted read-only: the script only ever reads
+  # its source, and the mount makes that a property of the deployment rather
+  # than a promise in a docstring.
+  motres-seed:
+    profiles: ["seed"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+      target: api
+    user: "10001:10001"
+    volumes:
+      - ${SEED_SRC:-/srv/motres/seed-src}:/seed-src:ro
+      - /srv/motres/shared:/srv/motres/shared
+      - /srv/motres/published:/srv/motres/published
+      - /srv/motres/workspaces:/srv/motres/workspaces
+      - /srv/motres/identity:/srv/motres/identity
+    command:
+      - python
+      - scripts/migrate_to_workspaces.py
+      - --from=/seed-src
+      - --to=/srv/motres
+      - --owner=${ADMIN_EMAILS:-vadim@motresres.com}
+      - --manifest=/srv/motres/.seed_manifest.json
+    restart: "no"
+
   api:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api
+      target: api
     restart: unless-stopped
-    environment:
-      AUTH_ENFORCE: "1"
-      ADMIN_EMAILS: ${ADMIN_EMAILS:?set in deploy/.env}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      AUTH_SECRET: ${AUTH_SECRET:-}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    # THE env contract.  Documented in deploy/README.md; the file itself is
+    # scripts/api.env.example with the values a server needs.
+    env_file:
+      - /etc/motres/api.env
     volumes:
-      # persistent state: users.json, .auth_secret, motor_config.yaml, the
-      # family catalog (config/dies), materials — survives image updates.
-      - motor_config:/app/config
-    # solver appetite: uncomment to cap
-    # cpus: "12"
-    # mem_limit: 32g
+      # shared READ-ONLY — the catalog and the libraries.  An admin edits it
+      # through the seed one-shot or a maintenance `run`, never through the API.
+      - /srv/motres/shared:/srv/motres/shared:ro
+      - /srv/motres/published:/srv/motres/published
+      - /srv/motres/workspaces:/srv/motres/workspaces
+      # identity/ is also the PROCESS config directory (see README, "the
+      # identity trap"): users.json, .auth_secret and .sessions.json resolve
+      # from MOTOR_AI_SIM_CONFIG's folder.
+      - /srv/motres/identity:/srv/motres/identity
+      - /srv/motres/logs:/app/logs
+    # AX42 (Ryzen 7 PRO 8700GE, 8 c / 16 t, 64 GB).  QUEUE_WORKERS=2 = cores/4
+    # per §2.4; the cpuset leaves 4 threads for nginx, restic and the host.
+    # Re-tune on an AX102: cpuset "0-27", QUEUE_WORKERS=4.
+    cpuset: "0-11"
+    mem_limit: 48g
+    # gmsh/OCP are happy with the default; PARDISO likes a real /dev/shm.
+    shm_size: 2g
 
   web:
     build:
@@ -30,12 +103,14 @@ services:
       args:
         # same-origin default: nginx proxies /api -> api:8001
         VITE_API_URL: ""
-        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+        # BUILD-time (baked into the bundle), from deploy/.env — not from
+        # /etc/motres/api.env, which is a runtime file.
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in deploy/.env}
     restart: unless-stopped
     depends_on:
       - api
     ports:
-      - "80:80"
-
-volumes:
-  motor_config:
+      # host nginx + certbot terminate TLS in front and proxy to 127.0.0.1:8080
+      - "127.0.0.1:8080:80"
+    cpuset: "12-13"
+    mem_limit: 1g

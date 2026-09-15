@@ -115,10 +115,31 @@ from motor_ai_sim.materials import UnknownMaterialError
 from motor_ai_sim import materials_store
 from motor_ai_sim.auth import require_admin
 
+# Boot (migration Stage 6).  Two lines, both no-ops on this workstation:
+# ``run_startup_checks`` refuses the boot only on a case-ambiguous catalog — a
+# condition NTFS cannot even express — and warns about an implicit AUTH_SECRET
+# or a missing report dependency; ``watchdog_notify`` does nothing at all
+# unless systemd set NOTIFY_SOCKET.  See both modules for why.
+from contextlib import asynccontextmanager as _asynccontextmanager
+from motor_ai_sim.startup_checks import run_startup_checks as _run_startup_checks
+from motor_ai_sim import watchdog_notify as _watchdog
+
+
+@_asynccontextmanager
+async def _lifespan(_app):
+    _run_startup_checks()
+    _watchdog.start()
+    try:
+        yield
+    finally:
+        _watchdog.stop()
+
+
 app = FastAPI(
     title="Motor Geometry API",
     description="REST API for electric motor geometry parameters",
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 import os as _os

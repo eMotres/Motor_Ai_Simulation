@@ -1,0 +1,17 @@
+# Hourly incremental.  restic is content-addressed, so an hour in which
+# nothing changed costs a few hundred kB of metadata — the frequency is chosen
+# by "how much work may a user lose", not by transfer cost.
+[Unit]
+Description=Hourly motor_ai_sim restic backup
+Documentation=file:///opt/motres/app/deploy/README.md
+
+[Timer]
+OnCalendar=hourly
+# Spread the load off the hour, and off every other cron on the box.
+RandomizedDelaySec=300
+# A server that was down at :00 still gets its backup when it comes back.
+Persistent=true
+Unit=motres-backup.service
+
+[Install]
+WantedBy=timers.target

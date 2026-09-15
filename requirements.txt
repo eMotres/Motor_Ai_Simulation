@@ -31,4 +31,16 @@ pillow>=10  # PIL.Image domain rasterization for 2D field-map classification (ro
 # MKL PARDISO sparse solver — the FEM transient is several times faster than
 # the SuperLU fallback. Pulls Intel MKL (~200 MB); worth it on any solve node.
 pypardiso>=0.4
-psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d)
+psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d); also the Stage 3 two-workspace soak (tests measure RSS)
+# ── report rendering (migration Stage 6, 2026-09-15) ────────────────────────
+# These three were installed on the workstation but NEVER pinned here, so a
+# fresh server build shipped an API whose report routes 500 on the first call.
+# Versions are the ones the pre-migration freeze recorded (pip_freeze
+# 2026-09-15) — the exact set every report in reports/ was rendered with.
+reportlab==5.0.0  # report.py PDF backend; GET /api/family/report/...?format=pdf 500s without it
+python-docx==1.2.0  # report_docx.py — the DEFAULT report format since 2026-09-09 (routes/report.py)
+# Triangulation fallback for earcut_fallback.py. On Windows it is the ONLY
+# path (App Control blocks mapbox_earcut's .pyd); on Linux the native earcut
+# loads and this is the belt-and-braces second path — it must exist, or the
+# fallback is a second ImportError instead of a fallback.
+triangle==20250106

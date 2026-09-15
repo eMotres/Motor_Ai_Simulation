@@ -1,33 +1,100 @@
-# motor_ai_sim FEM API — self-hosted deploy image.
-# Build from the REPO ROOT:  docker build -f deploy/Dockerfile.api .
-# Only the working backend ships: src/ + config seed. No Firebase, no
-# torch/Modulus, no notebooks/scripts/experiments.
-FROM python:3.11-slim
+# motor_ai_sim FEM API — self-hosted deploy image (migration Stage 6).
+#
+# Build from the REPO ROOT:
+#   docker build -f deploy/Dockerfile.api -t motres-api .          # runtime
+#   docker build -f deploy/Dockerfile.api --target test -t motres-api:test .
+#
+# Only the working backend ships: src/ + the three migration scripts + the
+# catalog SEED.  No notebooks, no experiments, no repo-root scratch.
+#
+# WHAT CHANGED IN STAGE 6
+#   * the three report deps are in requirements.txt now (reportlab,
+#     python-docx, triangle) — the image used to build an API whose default
+#     report format 500s on the first call;
+#   * fonts-dejavu-core as insurance.  report.py takes DejaVu Sans out of
+#     matplotlib's own data path and falls back to the Helvetica base-14 set,
+#     so this is NOT required — but base-14 has no Cyrillic, and duty names
+#     admit Cyrillic deliberately (routes/family.py).  ~1 MB to make the
+#     fallback path render "пик 200" instead of black boxes;
+#   * a non-root user: the API writes /srv/motres/{workspaces,published} and
+#     nothing else, and one mis-aimed path should not be able to write /etc;
+#   * config/ is a SEED at /app/config-seed, never the live state.  The live
+#     tree is built once by the `motres-seed` one-shot (docker-compose.yml) —
+#     the old "the image's config/ is copied into an EMPTY volume on first
+#     start" semantics silently produced an empty catalog the second time.
 
-# gmsh + OCP (cadquery) native runtime libs; libgomp for MKL/OpenMP.
+FROM python:3.11-slim AS base
+
+# gmsh + OCP (cadquery) native runtime libs; libgomp for MKL/OpenMP;
+# fonts-dejavu-core for the reportlab fallback path (see above).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libglu1-mesa libgl1 libxrender1 libxcursor1 libxft2 libxinerama1 \
-        libgomp1 curl \
+        libgomp1 fonts-dejavu-core curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Non-root service account.  Fixed uid/gid so the host bind mounts under
+# /srv/motres can be chowned to a number that does not drift between rebuilds:
+#   sudo chown -R 10001:10001 /srv/motres
+RUN groupadd --gid 10001 motres \
+ && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin motres
 
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ src/
-# Seed config (catalog dies, materials, motor_config). In production mount a
-# VOLUME over /app/config so users.json, .auth_secret and catalog edits persist
-# across image updates (see docker-compose.yml).
-COPY config/ config/
+# The migration + integrity scripts run INSIDE this image (same python, same
+# pins) — that is the whole point of the seed one-shot.
+COPY scripts/migrate_to_workspaces.py \
+     scripts/catalog_manifest.py \
+     scripts/check_case_collisions.py \
+     scripts/
+
+# Catalog SEED — read-only reference material, never the live tree.
+COPY config/ config-seed/
 
 ENV PYTHONPATH=/app/src \
-    PYTHONUNBUFFERED=1
-# Production posture. GOOGLE_CLIENT_ID / ADMIN_EMAILS / AUTH_SECRET /
-# ALLOWED_ORIGINS come from the environment (see ../.env.example).
-ENV AUTH_ENFORCE=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
+# ── test image ──────────────────────────────────────────────────────────────
+# docker build -f deploy/Dockerfile.api --target test -t motres-api:test .
+# docker run --rm motres-api:test                     # full suite (~20 min)
+# See deploy/CONTAINER_TEST.md for the runbook this target exists for.
+FROM base AS test
+RUN pip install --no-cache-dir pytest httpx
+COPY tests/ tests/
+COPY pyproject.toml ./
+# tests/conftest.py resolves the repo root as tests/.. and reads
+# <root>/config/motor_config.yaml as the seed for its sandbox copy, so the
+# suite needs the catalog at the REPO-shaped path and not only at config-seed/.
+# It then redirects MOTOR_AI_SIM_CONFIG into a tmp copy before importing the
+# package — the suite must never write the file it started from — which is why
+# nothing here sets that variable.
+COPY config/ config/
+USER motres
+ENV HOME=/home/motres \
+    MPLBACKEND=Agg
+CMD ["python", "-m", "pytest", "-q"]
+
+# ── runtime image (default target) ──────────────────────────────────────────
+FROM base AS api
+
+# Production posture.  Everything else — GOOGLE_CLIENT_ID, ADMIN_EMAILS,
+# AUTH_SECRET, ALLOWED_ORIGINS, the four roots, QUEUE_WORKERS — comes from
+# /etc/motres/api.env (docker-compose.yml `env_file`).  Nothing secret is baked
+# into a layer.
+ENV AUTH_ENFORCE=1 \
+    MPLBACKEND=Agg \
+    HOME=/home/motres
+
+USER motres
 EXPOSE 8001
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s \
+
+# Liveness only: /api/health answers unconditionally, so it is green while a
+# wedged worker serves nothing (api.py).  The READINESS probe is /api/me and it
+# lives outside the container — deploy/systemd/motres-health.timer.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -sf http://localhost:8001/api/health || exit 1
 
 CMD ["python", "-m", "uvicorn", "motor_ai_sim.api:app", \

@@ -1,0 +1,14 @@
+[Unit]
+Description=motor_ai_sim readiness probe every minute
+Documentation=file:///opt/motres/app/deploy/README.md
+
+[Timer]
+# Every 60 s, starting 2 min after boot — the gmsh/OCP/MKL cold import is ~10 s
+# and a probe that fired into it would flap on every deploy.
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=motres-health.service
+
+[Install]
+WantedBy=timers.target

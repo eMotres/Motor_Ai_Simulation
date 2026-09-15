@@ -133,3 +133,9 @@ config/.jobs.json
 # exact solve parameters, so coming back to an operating point loads it instead
 # of re-solving (2026-09-05).  Reproducible work, not configuration.
 config/.run_ledger/
+
+# runtime environment for scripts/start_api.cmd (and the server's
+# /etc/motres/api.env twin): the OAuth client id and AUTH_SECRET live here, not
+# in a committed .cmd.  Template: scripts/api.env.example  (migration Stage 6)
+scripts/api.env
+deploy/.env

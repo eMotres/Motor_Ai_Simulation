@@ -29,6 +29,7 @@ import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
 
+from motor_ai_sim import auth as _auth
 from motor_ai_sim.auth import caller_identity, require_admin
 from motor_ai_sim.config import get_config
 from motor_ai_sim import workspace as _WS
@@ -396,6 +397,113 @@ def _require_die_access(die: str, authorization) -> dict:
     if not may_see_die(acc, die):
         raise HTTPException(404, detail=f"die '{die}' not found")
     return acc
+
+
+# ── who may WRITE the catalog (migration Stage 5) ────────────────────────────
+# The user's rule, 2026-09-15: *"общий каталог правит пока только админ;
+# пользователи всё сохраняют только в своём пространстве, но могут и делиться
+# со всеми"*.
+#
+# Stage 2 built the machinery for the second half of that sentence — every write
+# in this router funnels through ``_write_target``/``_ensure_writable_die``,
+# which copy a published or shared die into the CALLER'S OWN workspace and
+# cannot aim a non-admin's save at the curated catalog — but all 21 write routes
+# still hung on ``require_admin``, so a registered account was refused before it
+# ever reached that seam and the copy-on-write path was unreachable in
+# production (found in the Stage 5 rehearsal).
+#
+# The gate is therefore two rules, not one:
+#
+#   layering ON  (WORKSPACES_ROOT set) — any REGISTERED account may write, and
+#                the write lands in its own workspace.  ``?layer=shared`` and
+#                the structural edits of somebody else's die stay the admin's.
+#   layering OFF (this workstation, and every test that does not set the env
+#                var) — ``require_admin``, character for character, because
+#                there is exactly one layer and the only place a write could
+#                land IS the shared catalog.
+
+#: The lowest tier that may write its own workspace.  ``free`` is the tier
+#: ``auth._GATED`` already spells for the one other route gated on merely being
+#: signed in (``POST /api/support/chat``): a registered account, anonymous not.
+WRITE_MIN_TIER = "free"
+
+
+def require_catalog_write(authorization: str = Header(default=None)) -> dict:
+    """FastAPI dependency for every family WRITE route.
+
+    Answers ``{"user", "is_admin", "authorization"}`` — the authorization header
+    rides along so a route can ask the SECOND question
+    (:func:`_require_die_write`: may this caller write THIS die?) without a
+    parameter of its own.
+
+    401 for an anonymous caller, 403 for a signed-in one who may not write here:
+    the same two codes ``require_admin`` answers, so nothing downstream of an
+    HTTP client has to learn a new shape.
+    """
+    if not _ws_layering():
+        # Byte-identical to the pre-Stage-5 gate, exceptions included.  Called
+        # through the auth module and not through this module's own name, so
+        # that it stays the very function ``Depends(require_admin)`` used to
+        # capture at import — a test that rebinds ``family.require_admin`` never
+        # reached that dependency either.
+        return {"user": _auth.require_admin(authorization), "is_admin": True,
+                "authorization": authorization}
+    is_admin, user = _auth._is_admin_caller(authorization)
+    if is_admin:
+        return {"user": user or {"uid": "local-dev", "email": None,
+                                 "tier": "admin"},
+                "is_admin": True, "authorization": authorization}
+    # ``?layer=shared`` (and its ``published`` sibling) is the admin's explicit
+    # aim at a curated layer.  ``_write_target`` refuses it too — this is the
+    # early, cheap refusal, so a non-admin never gets as far as loading the
+    # document it would not have been allowed to save.
+    if _WS.write_layer() is not None:
+        raise HTTPException(403, detail=(
+            "only an admin may write the shared catalog — drop "
+            "'?layer=shared' and the save lands in your own workspace"))
+    if user is None:
+        raise HTTPException(401, detail="Sign in required.")
+    tier = str(user.get("tier") or "anon")
+    if _auth._TIER_RANK.get(tier, -1) < _auth._TIER_RANK[WRITE_MIN_TIER]:
+        raise HTTPException(403, detail=(
+            "a registered account is required to save into your workspace."))
+    return {"user": user, "is_admin": False, "authorization": authorization}
+
+
+def _require_die_write(die: str, who: dict) -> None:
+    """May this caller write the named die?  The READ question, deliberately.
+
+    A die in the caller's own workspace is theirs by construction; a PUBLISHED
+    die is readable by every registered account and a save on it is a
+    copy-on-write into the caller's workspace; a SHARED die needs the grant that
+    lets the caller see it at all.  Which is exactly
+    :func:`_require_die_access`'s answer — so write access is read access plus
+    the copy, and there is no second table of rules to drift out of step.
+
+    404 and not 403, for the reason stated there: a motor an account was never
+    granted must not be distinguishable from one that does not exist, and a save
+    is a perfectly good oracle if it answers differently.
+    """
+    if not _ws_layering() or who.get("is_admin"):
+        return
+    _require_die_access(str(die), who.get("authorization"))
+
+
+def _can_write_catalog(who: dict) -> bool:
+    """What the tree / context routes report as ``can_write``.
+
+    The same rule :func:`require_catalog_write` enforces, so the UI never offers
+    a button the API refuses (nor hides one it would accept).  ``who`` is either
+    a ``caller_identity`` mapping or a ``catalog_access`` one.
+    """
+    if who.get("is_admin"):
+        return True
+    if not _ws_layering():
+        return False
+    if who.get("mode") is not None:                      # catalog_access
+        return who.get("mode") != MODE_ANONYMOUS
+    ident = str(who.get("id") or "")
+    return bool(ident) and ident != _auth.ANON_OWNER
 
 
 def catalog_dies() -> list[dict]:
@@ -1325,9 +1433,11 @@ def _tree_signature(with_catalog: bool) -> tuple:
 
 @router.get("/tree")
 def tree(response: Response, authorization: str = Header(default=None)):
-    # Clients read the catalog and LOAD duties; changing it is the vendor's
-    # job.  can_write tells the frontend whether to draw the editing controls —
-    # the mutating endpoints enforce the same rule server-side regardless.
+    # Who may CHANGE the catalog: the vendor alone on a single-layer install,
+    # and — since Stage 5 — any registered account once layering is on, because
+    # then its saves land in its own workspace (`require_catalog_write`).
+    # can_write tells the frontend whether to draw the editing controls; the
+    # mutating endpoints enforce the same rule server-side regardless.
     #
     # WHICH motors are listed is per-account (motor_access): admins and
     # `all`-granted accounts see everything, a signed-in account sees its
@@ -1336,7 +1446,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
     # grant does — it must never be cached (a stale tree is a user reporting
     # "I still don't see my motors" after the vendor granted them).
     _acc = catalog_access(authorization)
-    _can_write = bool(_acc["is_admin"])
+    _can_write = _can_write_catalog(_acc)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Vary"] = "Authorization"
     out = []
@@ -1515,7 +1625,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
 # ── die ──────────────────────────────────────────────────────────────────────
 
 @router.post("/die")
-def create_die(req: DieCreate, _admin: dict = Depends(require_admin)):
+def create_die(req: DieCreate, _w: dict = Depends(require_catalog_write)):
     name = _check_name(req.name, "die")
     if _die_file(name).exists():
         raise HTTPException(409, detail=f"die '{name}' already exists — delete it "
@@ -1552,11 +1662,12 @@ class DieRename(BaseModel):
 
 
 @router.patch("/die/{die}")
-def rename_die(die: str, req: DieRename, _admin: dict = Depends(require_admin)):
+def rename_die(die: str, req: DieRename, _w: dict = Depends(require_catalog_write)):
     """Rename a die: the folder moves, die.yaml and every configuration's
     back-reference are updated."""
     die = _check_name(die, "die")
     new = _check_name(req.name, "die")
+    _require_die_write(die, _w)
     src = _die_dir(die)
     if not (src / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
@@ -1592,8 +1703,9 @@ def rename_die(die: str, req: DieRename, _admin: dict = Depends(require_admin)):
 
 
 @router.delete("/die/{die}")
-def delete_die(die: str, force: bool = False, _admin: dict = Depends(require_admin)):
+def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog_write)):
     die = _check_name(die, "die")
+    _require_die_write(die, _w)
     dd = _die_dir(die)
     if not (dd / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
@@ -1620,9 +1732,10 @@ def delete_die(die: str, force: bool = False, _admin: dict = Depends(require_adm
 # ── configuration ────────────────────────────────────────────────────────────
 
 @router.post("/config")
-def create_config(req: ConfigCreate, _admin: dict = Depends(require_admin)):
+def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     die = _check_name(req.die, "die")
     name = _check_name(req.name, "configuration")
+    _require_die_write(die, _w)
     if not _die_file(die).is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
     if name == "die":
@@ -1708,10 +1821,11 @@ class ConfigRename(BaseModel):
 
 
 @router.patch("/config/{die}/{cfg}")
-def rename_config(die: str, cfg: str, req: ConfigRename, _admin: dict = Depends(require_admin)):
+def rename_config(die: str, cfg: str, req: ConfigRename, _w: dict = Depends(require_catalog_write)):
     """Rename a configuration (its file moves with it; duties ride along)."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     new = _check_name(req.name, "configuration")
+    _require_die_write(die, _w)
     if new == "die":
         raise HTTPException(422, detail="'die' is reserved")
     src = _cfg_file(die, cfg)
@@ -1753,12 +1867,13 @@ class DieDuplicate(BaseModel):
 
 @router.post("/die/{die}/duplicate")
 def duplicate_die(die: str, req: DieDuplicate,
-                  _admin: dict = Depends(require_admin)):
+                  _w: dict = Depends(require_catalog_write)):
     """Copy a WHOLE die: the stamped geometry plus every configuration with
     its duties and recorded results.  The copy starts UNLOCKED (it is a new
     stamp-to-be, free to edit), everything else rides along verbatim."""
     die = _check_name(die, "die")
     new = _check_name(req.name, "die")
+    _require_die_write(die, _w)
     src_dir = _die_dir(die)
     if not (src_dir / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
@@ -1796,7 +1911,7 @@ class ConfigDuplicate(BaseModel):
 
 @router.post("/config/{die}/{cfg}/duplicate")
 def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
-                     _admin: dict = Depends(require_admin)):
+                     _w: dict = Depends(require_catalog_write)):
     """Copy a configuration under the SAME die — build, winding, materials,
     battery and every duty (with its recorded results) ride along.  The copy
     is a starting point for a variant: edit its stack/wire/turns and re-save
@@ -1804,6 +1919,7 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
     on the copy's own build (they carry the ORIGINAL's signature)."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     new = _check_name(req.name, "configuration")
+    _require_die_write(die, _w)
     if new == "die":
         raise HTTPException(422, detail="'die' is reserved")
     src = _cfg_file(die, cfg)
@@ -1827,8 +1943,9 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
 
 
 @router.delete("/config/{die}/{cfg}")
-def delete_config(die: str, cfg: str, _admin: dict = Depends(require_admin)):
+def delete_config(die: str, cfg: str, _w: dict = Depends(require_catalog_write)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w)
     p = _cfg_file(die, cfg)
     if not p.is_file():
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
@@ -1848,10 +1965,11 @@ def delete_config(die: str, cfg: str, _admin: dict = Depends(require_admin)):
 # ── duty ─────────────────────────────────────────────────────────────────────
 
 @router.post("/duty")
-def upsert_duty(req: DutyCreate, _admin: dict = Depends(require_admin)):
+def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     dname = _check_name(req.duty.name, "duty")
+    _require_die_write(die, _w)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     d = req.duty
@@ -2186,12 +2304,13 @@ def upsert_duty(req: DutyCreate, _admin: dict = Depends(require_admin)):
 
 
 @router.post("/duty_result")
-def record_duty_result(req: DutyResult, _admin: dict = Depends(require_admin)):
+def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write)):
     """Attach a finished run's numbers to a duty.  The frontend verifies the
     run WAS at this duty's operating point before calling; this endpoint only
     validates shape and stores."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
+    _require_die_write(die, _w)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     found = next((x for x in (c.get("duties") or [])
@@ -2250,7 +2369,7 @@ def record_duty_result(req: DutyResult, _admin: dict = Depends(require_admin)):
 
 
 @router.post("/duty_run")
-def record_duty_run(req: DutyRunSave, _admin: dict = Depends(require_admin)):
+def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write)):
     """File a finished run's WAVEFORMS under one excitation of one duty.
 
     The yaml keeps a description (when, on which build, with which materials,
@@ -2259,6 +2378,7 @@ def record_duty_run(req: DutyRunSave, _admin: dict = Depends(require_admin)):
     an engineer cannot open in an editor stops being a catalog."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
+    _require_die_write(die, _w)
     drive = _run_drive(req.drive)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
@@ -2377,13 +2497,14 @@ class DutyDuplicate(BaseModel):
 
 @router.post("/duty/{die}/{cfg}/{duty}/duplicate")
 def duplicate_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
-                   _admin: dict = Depends(require_admin)):
+                   _w: dict = Depends(require_catalog_write)):
     """Copy a duty VERBATIM under a new name — operating point, targets, note
     AND the recorded result all ride along (the house rule: a duplicate is a
     full copy, no empty cells).  A duty carries no geometry, so within one
     configuration the copy is exactly as valid as the original; only the
     saved_at stamp is fresh, marking when the copy was made."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w)
     new = str(req.name or "").strip()
     if not new:
         raise HTTPException(422, detail="give the copy a name")
@@ -2417,12 +2538,13 @@ def duplicate_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
 
 @router.patch("/duty/{die}/{cfg}/{duty}")
 def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
-                _admin: dict = Depends(require_admin)):
+                _w: dict = Depends(require_catalog_write)):
     """Rename a duty in place — everything else (operating point, targets,
     note, recorded result) stays untouched.  Born of a live typo ('peal' for
     'peak'): a name slip must be a two-click fix, not delete-and-redo that
     would throw the recorded result away."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w)
     new = str(req.name or "").strip()
     if not new:
         raise HTTPException(422, detail="give the duty a name")
@@ -2461,8 +2583,9 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
 
 
 @router.delete("/duty/{die}/{cfg}/{duty}")
-def delete_duty(die: str, cfg: str, duty: str, _admin: dict = Depends(require_admin)):
+def delete_duty(die: str, cfg: str, duty: str, _w: dict = Depends(require_catalog_write)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     before = c.get("duties") or []
@@ -2664,13 +2787,14 @@ class Activate(BaseModel):
 
 
 @router.post("/activate")
-def activate(req: Activate, _admin: dict = Depends(require_admin)):
+def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
     """Mark die/config/duty as the machine now loaded in the editor.  Admin
     only since multi-user deploy: this stamps the SHARED .family_context.json
     (the owner's live editor state).  An ordinary user's ▶ loads the duty as
     a CLIENT-SIDE copy and never calls this."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
+    _require_die_write(die, _w)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     import json
@@ -2751,7 +2875,7 @@ class Deactivate(BaseModel):
 
 
 @router.post("/deactivate")
-def deactivate(req: Deactivate, _admin: dict = Depends(require_admin)):
+def deactivate(req: Deactivate, _w: dict = Depends(require_catalog_write)):
     """No die is active any more — the editor is about to hold a machine that
     is not a catalog duty (a Compare row, a private "my motor" copy, a preset).
 
@@ -2789,19 +2913,19 @@ def context(response: Response, authorization: str = Header(default=None)):
                         "reason": _raw.get("reason"), "at": _raw.get("at")}
         except Exception:   # noqa: BLE001 — no file, no story
             pass
-        return {"active": False, "can_write": bool(who["is_admin"]), **_rel}
+        return {"active": False, "can_write": _can_write_catalog(who), **_rel}
     die, cfg = str(ctx.get("die") or ""), str(ctx.get("config") or "")
     duty = ctx.get("duty")
     # A die the caller was not granted does not exist for them — including in
     # the "what is loaded" strip, which would otherwise name it and hand out
     # its build and operating point.
     if not may_see_die(catalog_access(authorization), die):
-        return {"active": False, "can_write": bool(who["is_admin"])}
+        return {"active": False, "can_write": _can_write_catalog(who)}
     try:
         d = _load_yaml(_die_file(die), "die")
         c = _load_yaml(_cfg_file(die, cfg), "configuration")
     except HTTPException:
-        return {"active": False, "can_write": bool(who["is_admin"]),
+        return {"active": False, "can_write": _can_write_catalog(who),
                 "note": "context points at a deleted die/configuration"}
     point = None
     if duty:
@@ -2811,7 +2935,7 @@ def context(response: Response, authorization: str = Header(default=None)):
         "active": True, "die": die, "config": cfg, "duty": duty,
         "die_locked": bool(d.get("locked", True)),
         "config_locked": bool(c.get("locked", False)),
-        "can_write": bool(who["is_admin"]),
+        "can_write": _can_write_catalog(who),
         # The keys a die-lock leaves editable — ONE source of truth for the
         # Geometry tab's read-only greying (must match the PUT guard).
         "free_keys": list(EDITABLE_UNDER_DIE_LOCK),
@@ -2844,8 +2968,9 @@ class LockPatch(BaseModel):
 
 
 @router.patch("/die/{die}/lock")
-def lock_die(die: str, req: LockPatch, _admin: dict = Depends(require_admin)):
+def lock_die(die: str, req: LockPatch, _w: dict = Depends(require_catalog_write)):
     die = _check_name(die, "die")
+    _require_die_write(die, _w)
     d = _load_yaml(_die_file(die), "die")
     d["locked"] = bool(req.locked)
     _save_yaml(_die_file(die), d)
@@ -2855,8 +2980,9 @@ def lock_die(die: str, req: LockPatch, _admin: dict = Depends(require_admin)):
 
 @router.patch("/config/{die}/{cfg}/lock")
 def lock_config(die: str, cfg: str, req: LockPatch,
-                _admin: dict = Depends(require_admin)):
+                _w: dict = Depends(require_catalog_write)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w)
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     c["locked"] = bool(req.locked)
     _save_yaml(_cfg_file(die, cfg), c)
@@ -2887,7 +3013,7 @@ class BatteryPatch(BaseModel):
 
 @router.patch("/config/{die}/{cfg}/battery")
 def set_battery(die: str, cfg: str, req: BatteryPatch,
-                _admin: dict = Depends(require_admin)):
+                _w: dict = Depends(require_catalog_write)):
     """The supply the configuration is built to run from — given per CELL
     (chemistry, series count, min/nom/max cell voltage); pack totals are
     derived and stored alongside.  Duties are judged against the pack: the
@@ -2898,6 +3024,7 @@ def set_battery(die: str, cfg: str, req: BatteryPatch,
     through the bridge, V_bus = V_oc + I_charge·R_pack, and the C-rate is the
     number that says whether the pack will accept what the machine can make."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w)
     if not (req.cells >= 1):
         raise HTTPException(422, detail=f"cell count must be >= 1, got {req.cells}")
     if not (req.v_cell_max >= req.v_cell_min > 0):
@@ -2973,7 +3100,7 @@ class BearingsPatch(BaseModel):
 
 @router.patch("/config/{die}/{cfg}/bearings")
 def set_bearings(die: str, cfg: str, req: BearingsPatch,
-                 _admin: dict = Depends(require_admin)):
+                 _w: dict = Depends(require_catalog_write)):
     """The BEARINGS this configuration is built with — the mechanical half of
     its loss picture.
 
@@ -2994,6 +3121,7 @@ def set_bearings(die: str, cfg: str, req: BearingsPatch,
     half-updated pair (a new A against a stale B) is a shaft line nobody drew.
     """
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w)
 
     lub = (req.lubrication or "grease").strip()
     if lub not in ("grease", "oil_air"):

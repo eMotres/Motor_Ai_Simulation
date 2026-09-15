@@ -77,7 +77,7 @@ def _mesh(p: pathlib.Path) -> dict:
 
 
 def test_activating_a_duty_writes_its_mesh_block_server_side(dies, mesh_config):
-    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _admin={})
+    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
     assert out["ok"] is True and out["mesh_synced"] is True
     m = _mesh(mesh_config)
     assert m["n_sectors"] == 2 and m["mesh_size_mm"] == 1.0 and m["gap_layers"] == 1.0
@@ -85,10 +85,10 @@ def test_activating_a_duty_writes_its_mesh_block_server_side(dies, mesh_config):
 
 
 def test_a_duty_without_a_block_leaves_the_server_mesh_alone(dies, mesh_config):
-    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="bare"), _admin={})
+    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="bare"), _w={})
     assert out["ok"] is True and out["mesh_synced"] is False
     assert _mesh(mesh_config)["n_sectors"] == 4
-    out2 = fam.activate(fam.Activate(die=DIE, config=CFG, duty=None), _admin={})
+    out2 = fam.activate(fam.Activate(die=DIE, config=CFG, duty=None), _w={})
     assert out2["mesh_synced"] is False
 
 
@@ -96,5 +96,5 @@ def test_a_mesh_config_that_cannot_be_written_does_not_fail_the_activation(
         dies, mesh_config, monkeypatch):
     from motor_ai_sim import api as api_mod
     monkeypatch.setattr(api_mod, "_CONFIG_PATH", pathlib.Path(mesh_config.parent / "missing" / "x.yaml"))
-    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _admin={})
+    out = fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
     assert out["ok"] is True and out["mesh_synced"] is False

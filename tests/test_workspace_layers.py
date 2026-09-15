@@ -21,7 +21,14 @@ What is under test, in the order the risk sits:
   untouched — the copy-on-write brought the yaml across, the results did not;
 * B does not see A's duty: same die name, two workspaces, two answers;
 * A publishes → B sees it as ``"<die> · by Alice"``, can read the duty AND its
-  stored field, cannot write it and cannot withdraw it;
+  stored field, may FORK it into their own workspace, and cannot withdraw it;
+* a plain REGISTERED account (Stage 5, 2026-09-15) writes the catalog at all —
+  die create, duty save — and every byte of it lands in that account's own
+  workspace: the shared layer, the publication and the other user's workspace
+  all come out untouched.  A die the account may not READ is not writable
+  either (404, never 403), ``?layer=shared`` is still the admin's alone, an
+  anonymous caller is refused, and with ``WORKSPACES_ROOT`` unset the gate is
+  the admin-only one it always was;
 * A unpublishes → it is gone for B the same second;
 * an ADMIN write with ``?layer=shared`` lands in shared and both accounts see
   it (this is the one write that is allowed in, and it is explicit);
@@ -52,6 +59,8 @@ _REAL_USERS = _ROOT / "config" / "users.json"
 _REAL_DIES = _ROOT / "config" / "dies"
 
 DIE = "SHAREDDIE 40"
+#: A second shared die nobody granted B — the one a write must not reach.
+SECRET = "VENDORONLY 30"
 CFG = "L40"
 DUTY = "rated"
 A_DUTY = "A only 200"
@@ -119,6 +128,11 @@ def env(tmp_path, monkeypatch):
                     "current_arms": 85.0, "rpm": 6000.0, "gamma_deg": 12.0,
                     "note": ""}],
     }, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+    # A machine for the workspaces to be seeded from, so a route that reads the
+    # LIVE config (die creation snapshots it) gets a real one and not the
+    # workstation's whatever-is-loaded-right-now.
+    shutil.copy2(_ROOT / "config" / "motor_config.yaml", shared / "motor_config.yaml")
 
     monkeypatch.setenv("WORKSPACES_ROOT", str(works))
     monkeypatch.setenv("SHARED_ROOT", str(shared))
@@ -296,7 +310,7 @@ def test_anonymous_sees_no_community(env):
     assert r.json() == {"items": [], "can_publish": False}
 
 
-def test_b_can_read_a_published_field_but_cannot_write_or_withdraw(
+def test_b_can_read_a_published_field_and_fork_it_but_cannot_withdraw(
         env, shared_is_read_only):
     from motor_ai_sim import duty_fields as DF
     from motor_ai_sim import workspace as W
@@ -317,9 +331,14 @@ def test_b_can_read_a_published_field_but_cannot_write_or_withdraw(
         got = DF.load(label, CFG, A_DUTY, "thermal")
     assert got is not None and "temperature_per_node" in got
 
-    # WRITE: refused.  Catalog writes are admin-only (unchanged by Stage 2) …
+    # WRITE: allowed since Stage 5 — but it is a FORK, not an edit of A's work:
+    # the copy-on-write brings the label's yaml into B's own workspace and the
+    # publication is not touched (the hash below).
     before = _hash_tree(env["published"])
-    assert _save_duty(env["b"], duty="bob tried", die=label).status_code == 403
+    assert _save_duty(env["b"], duty="bob tried", die=label).status_code == 200
+    bdoc = yaml.safe_load((env["works"] / env["ids"][B] / "dies" / label
+                           / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert "bob tried" in [d["name"] for d in bdoc["duties"]]
     # … and withdrawing somebody else's publication is refused by ownership
     rd = client.delete(f"/api/family/publish/{label}", headers=env["b"])
     assert rd.status_code == 403, rd.text
@@ -405,6 +424,118 @@ def test_deleting_a_configuration_of_a_shared_die_only_hides_it_here(
     assert r.status_code == 200, r.text
     assert _duty_names(env["a"]) is None          # gone from A's catalog …
     assert _duty_names(env["b"]) == [DUTY]        # … still the vendor's for B
+
+
+# ── a plain registered account writes its OWN workspace (Stage 5) ────────────
+#
+# Until 2026-09-15 every write route in routes/family.py hung on
+# ``require_admin``, so the copy-on-write seam Stage 2 built was unreachable for
+# the accounts it was built for: a registered user got 403 before it.  The rule
+# the user set that day — *"общий каталог правит пока только админ; пользователи
+# всё сохраняют только в своём пространстве, но могут и делиться со всеми"* — is
+# these five tests.  B is a plain ``free`` account with a grant on ``DIE`` and
+# nothing else.
+
+
+def test_a_registered_user_saves_a_duty_into_their_own_workspace(
+        env, shared_is_read_only):
+    r = _save_duty(env["b"], duty="bob rated")
+    assert r.status_code == 200, r.text
+    doc = yaml.safe_load((_ws_die(env, B) / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert sorted(d["name"] for d in doc["duties"]) == sorted([DUTY, "bob rated"])
+    # …the shared original is byte-identical (the fixture's hash says so) and
+    # nobody else's view moved: A still reads the vendor's single duty.
+    assert sorted(_duty_names(env["b"])) == sorted([DUTY, "bob rated"])
+    assert _duty_names(env["a"]) == [DUTY]
+    assert not _ws_die(env, A).exists(), "B's save reached A's workspace"
+
+
+def test_a_registered_user_creates_a_die_in_their_own_workspace(
+        env, shared_is_read_only):
+    new = "BOBS DIE 30"
+    r = client.post("/api/family/die", headers=env["b"], json={"name": new})
+    assert r.status_code == 200, r.text
+    assert (_ws_die(env, B, die=new) / "die.yaml").is_file()
+    assert not (env["shared"] / "dies" / new).exists()
+    # …and it is B's alone: the admin's catalog does not grow a die B made.
+    names = [d["name"] for d in
+             client.get("/api/family/tree", headers=env["a"]).json()["dies"]]
+    assert new not in names
+
+
+def test_a_die_the_account_cannot_read_cannot_be_written_either(env):
+    """404, never 403 — a save must not be an oracle for "does this exist"."""
+    (env["shared"] / "dies" / SECRET).mkdir()
+    (env["shared"] / "dies" / SECRET / "die.yaml").write_text(yaml.safe_dump({
+        "name": SECRET, "locked": True,
+        "geometry": {"num_slots": 12, "num_poles": 14, "stator_diameter": 30.0},
+    }, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    (env["shared"] / "dies" / SECRET / f"{CFG}.yaml").write_text(yaml.safe_dump({
+        "name": CFG, "die": SECRET, "role": "motor", "duties": [],
+    }, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    before = _hash_tree(env["shared"])
+
+    assert _save_duty(env["b"], die=SECRET).status_code == 404
+    assert client.post("/api/family/config", headers=env["b"],
+                       json={"die": SECRET, "name": "L30",
+                             "role": "motor"}).status_code == 404
+    assert client.delete(f"/api/family/die/{SECRET}",
+                         headers=env["b"]).status_code == 404
+    assert client.patch(f"/api/family/config/{SECRET}/{CFG}/lock",
+                        headers=env["b"], json={"locked": False}).status_code == 404
+    # B is not even told it is there…
+    assert not any(d["name"] == SECRET for d in
+                   client.get("/api/family/tree", headers=env["b"]).json()["dies"])
+    # …and nothing moved, in either layer.
+    assert _hash_tree(env["shared"]) == before
+    assert not (env["works"] / env["ids"][B] / "dies" / SECRET).exists()
+
+
+def test_an_anonymous_caller_may_not_write_at_all(env, shared_is_read_only):
+    r = _save_duty({})
+    assert r.status_code in (401, 403), r.text
+    assert client.post("/api/family/die", json={"name": "ANON 10"}
+                       ).status_code in (401, 403)
+    assert not (env["works"] / "dies").exists()
+
+
+def test_with_no_workspaces_root_a_registered_user_is_refused_as_before(
+        env, monkeypatch, tmp_path):
+    """The promise of the whole migration, at the write gate.
+
+    One layer means the only place a save can land IS the shared catalog, so
+    the gate there is the admin-only one it has always been — and it answers
+    with the same message, from the same dependency, as before Stage 5.
+    """
+    from motor_ai_sim import config as C
+    from motor_ai_sim.routes import family as fam
+
+    # One layer, and it is a throwaway one: with the env var gone every store
+    # follows `config.DEFAULT_CONFIG_PATH`, so point that at tmp rather than at
+    # the workstation's real config/ (which this module must not touch).
+    monkeypatch.delenv("WORKSPACES_ROOT", raising=False)
+    monkeypatch.delenv("SHARED_ROOT", raising=False)
+    monkeypatch.delenv("PUBLISHED_ROOT", raising=False)
+    home = tmp_path / "solo"
+    solo = home / "dies"
+    (solo / DIE).mkdir(parents=True)
+    shutil.copy2(env["shared"] / "motor_config.yaml", home / "motor_config.yaml")
+    shutil.copy2(env["shared"] / "dies" / DIE / "die.yaml", solo / DIE / "die.yaml")
+    shutil.copy2(env["shared"] / "dies" / DIE / f"{CFG}.yaml",
+                 solo / DIE / f"{CFG}.yaml")
+    monkeypatch.setattr(C, "DEFAULT_CONFIG_PATH", str(home / "motor_config.yaml"))
+    C.clear_config_cache()
+    fam._TREE_CACHE.clear()
+    before = _hash_tree(solo)
+
+    r = _save_duty(env["b"], duty="bob rated")
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == "Admin access required."
+    assert _hash_tree(solo) == before
+    # …and the admin still writes it, which is what "unchanged" means.
+    assert _save_duty(env["admin"], duty="vendor rated").status_code == 200
+    doc = yaml.safe_load((solo / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert sorted(d["name"] for d in doc["duties"]) == sorted([DUTY, "vendor rated"])
 
 
 # ── duty results read through the layers ─────────────────────────────────────

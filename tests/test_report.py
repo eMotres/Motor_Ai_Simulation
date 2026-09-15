@@ -3264,9 +3264,12 @@ class TestPwmInfluence:
         from motor_ai_sim import duty_results as dr
 
         assert "pwm" in dr.KINDS
-        # …and it is NOT in the "what has been solved" list, because the user
-        # asked for one new section and no change anywhere else.
-        assert "pwm" not in dr.kinds_present({"pwm": {}, "em": {}})
+        # …and, since 2026-09-15, in the "what has been solved" list too: the
+        # store accepted the kind but no view of it ever said so, which is a
+        # display gap and not the "no change anywhere else" the section was
+        # added under.  It sits beside `em`, whose question it re-asks of a
+        # real bridge.
+        assert dr.kinds_present({"pwm": {}, "em": {}}) == ["em", "pwm"]
 
     # ── the table ───────────────────────────────────────────────────────────
     def test_the_rows_are_the_sinusoid_against_every_carrier(self):

@@ -189,6 +189,52 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     ("POST",   "/api/static3d", "admin"),
 ]
 
+#: The four shared-store writes above that stop being SHARED the moment the
+#: multi-user layering is on: ``presets``, ``catalog``, ``saved-sims`` and the
+#: sweep config all resolve their file through ``workspace.root()``, so with
+#: ``WORKSPACES_ROOT`` set each account writes ITS OWN copy and "owner only" is
+#: the wrong rule — it is the same bargain ``routes/family.py`` makes for the
+#: die catalog (``require_catalog_write``).
+#:
+#: With the env var UNSET — this workstation, and every test that does not set
+#: it — there is one copy of each of these files and it is the owner's, so the
+#: entries above stay ``admin`` character for character.
+_WORKSPACE_STORE_PREFIXES = frozenset({
+    "/api/presets", "/api/catalog", "/api/sims/saved", "/api/sweep/config",
+})
+#: What those writes require instead: a REGISTERED account (anonymous not).
+WORKSPACE_STORE_MIN_TIER = "free"
+
+
+def _layering_on() -> bool:
+    """Is the per-user workspace layering active?  Late import on purpose:
+    ``workspace`` reaches back into this module for the caller's identity."""
+    try:
+        from motor_ai_sim.workspace import layering
+        return bool(layering())
+    except Exception:                                   # noqa: BLE001
+        return False
+
+
+def required_tier(method: str, path: str) -> Optional[str]:
+    """The minimum tier for one request, or ``None`` when the route is open.
+
+    The exact table wins; otherwise the FIRST matching prefix does, with the
+    per-workspace relaxation above applied to the four stores that are the
+    caller's own once layering is on.
+    """
+    need = _GATED.get((method, path))
+    if need is not None:
+        return need
+    for _m, _pfx, _tier in _GATED_PREFIX:
+        if method == _m and path.startswith(_pfx):
+            if (_tier == "admin" and _pfx in _WORKSPACE_STORE_PREFIXES
+                    and _layering_on()):
+                return WORKSPACE_STORE_MIN_TIER
+            return _tier
+    return None
+
+
 _certs: dict = {}
 _certs_exp: float = 0.0
 _lock = threading.Lock()
@@ -490,12 +536,7 @@ class TierGateMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         if AUTH_ENFORCE and request.method != "OPTIONS":
-            need = _GATED.get((request.method, request.url.path))
-            if need is None:
-                for _m, _pfx, _tier in _GATED_PREFIX:
-                    if request.method == _m and request.url.path.startswith(_pfx):
-                        need = _tier
-                        break
+            need = required_tier(request.method, request.url.path)
             if need is not None:
                 user = resolve_user(request.headers.get("authorization"))
                 tier = user["tier"] if user else "anon"

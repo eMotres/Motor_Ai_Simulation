@@ -1218,7 +1218,15 @@ def note_em_pointer(die: str, cfg: str, duty: str,
 
 
 def kinds_present(entry: Dict[str, Any]) -> List[str]:
-    """Which simulations this duty has an answer for, in report order."""
-    return [k for k in ("em", "thermal", "duty_cycle", "coupled",
+    """Which simulations this duty has an answer for, in report order.
+
+    ``pwm`` sits next to ``em`` because it IS the electromagnetic column, asked
+    of a real two-level bridge instead of a sinusoid.  It was left out when the
+    kind was added (2026-09-14: "one new section and no change anywhere else"),
+    which left a display gap — the store accepted a PWM record, ``KINDS`` listed
+    it, and the one view of "what has this duty been solved for"
+    (``GET /api/family/duty_results``) never mentioned it.
+    """
+    return [k for k in ("em", "pwm", "thermal", "duty_cycle", "coupled",
                         "rotor_stress", "critical_speeds", "modes")
             if isinstance((entry or {}).get(k), dict)]

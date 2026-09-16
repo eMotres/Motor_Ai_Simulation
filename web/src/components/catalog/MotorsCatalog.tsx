@@ -17,7 +17,7 @@ import FamilyCatalog from './FamilyCatalog';
 import MyMotorsPanel from './MyMotorsPanel';
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
-import { fetchFamilyTree } from '../../lib/familyTree';
+import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { useScrollMemory } from '../../lib/scrollMemory';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -59,12 +59,16 @@ const MotorsCatalog: React.FC = () => {
             .map(d => Number(d.stator_diameter)).filter(Number.isFinite),
         )).sort((a, b) => a - b));
       })
-      .catch(() => {
+      .catch((e: { status?: number }) => {
+        setDiams([]);
+        // 401 = this server keeps nothing public (PUBLIC_EXHIBIT=0) and nobody
+        // is signed in.  Say so and STOP: retrying every 3 s cannot mint a
+        // session, it just hammers the door while the user reads the message.
+        if (e?.status === 401) { setCanWrite(false); setNote(SIGN_IN_NOTE); return; }
         // Backend away (a restart window): retry instead of freezing a wrong
         // answer — a failed first load left an ADMIN's catalog stripped of
         // its lock/duplicate buttons until a manual F5 (measured live
         // 2026-08-25: "не вижу замочков").
-        setDiams([]);
         setTimeout(() => { void load(true); }, 3000);
       });
   useEffect(() => {

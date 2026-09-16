@@ -33,7 +33,7 @@ import {
 } from '../../lib/dutyLocalApply';
 import { beginDutyApply, endDutyApply } from '../../lib/familyFollow';
 import { downloadExport } from '../../lib/exportDownload';
-import { fetchFamilyTree } from '../../lib/familyTree';
+import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -191,7 +191,17 @@ const FamilyCatalog: React.FC<{
       const c = await (await fetch(`${API}/api/family/context`, { cache: 'no-store' })).json();
       setActive(c?.active ? c : null);
       setLoadFailed(false);
-    } catch (e) { setLoadFailed(true); setMsg(`catalog load failed: ${e}`); }
+    } catch (e) {
+      // 401: the server publishes nothing to anonymous visitors
+      // (PUBLIC_EXHIBIT=0).  That is an answer, not an outage — no retry loop,
+      // no red "load failed", just the line that tells the user to sign in.
+      if ((e as { status?: number })?.status === 401) {
+        setDies([]); setCanWrite(false); setActive(null);
+        setLoadFailed(false); setMsg(null); setNote(SIGN_IN_NOTE);
+        return;
+      }
+      setLoadFailed(true); setMsg(`catalog load failed: ${e}`);
+    }
   };
   useEffect(() => { load(); }, []);
   // Failed load (backend restarting / briefly unreachable): retry every 3 s

@@ -21,6 +21,12 @@
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 const MEMO_MS = 1500;
 
+/** What an anonymous visitor is told on a server that publishes nothing to the
+ *  public (backend `PUBLIC_EXHIBIT=0` → 401 here).  Lives beside the fetch, not
+ *  in one of the two catalog components, so they cannot import each other. */
+export const SIGN_IN_NOTE =
+  'Sign in to see the motor catalog — use the Sign in button above.';
+
 export interface FamilyTree {
   dies: unknown[];
   can_write?: boolean;
@@ -47,7 +53,15 @@ export function fetchFamilyTree(opts: { fresh?: boolean } = {}): Promise<FamilyT
   const gen = generation;
   const promise = fetch(`${API}/api/family/tree`, { cache: 'no-store' })
     .then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        // The STATUS travels with the error: a server with PUBLIC_EXHIBIT=0
+        // answers 401 to an anonymous visitor, and "sign in" is not the same
+        // situation as "the backend is restarting" — one asks the user for
+        // something, the other must retry by itself (callers below).
+        const err = new Error(`HTTP ${r.status}`) as Error & { status?: number };
+        err.status = r.status;
+        throw err;
+      }
       return r.json() as Promise<FamilyTree>;
     })
     .then(v => {

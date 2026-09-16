@@ -20,6 +20,14 @@ user record (motor_ai_sim.users).  Three answers:
                    here — it is the marketing landing, and the one place a
                    follow-up decision may flip (open everything to registered
                    users, or close the exhibit entirely).
+
+That follow-up decision arrived on 2026-09-16, and it was "close it" — but NOT
+here.  An internet-facing deployment sets ``PUBLIC_EXHIBIT=0`` and then no
+anonymous request reaches this module at all: the door is one gate in
+``auth.TierGateMiddleware`` (``auth.public_exhibit`` / ``auth.anonymous_allowed``)
+and it answers 401 before any route runs.  ``MODE_ANONYMOUS`` stays exactly as
+it is because the workstation — where the variable is unset — still uses it, and
+a second copy of the rule per route is how such rules drift apart.
 """
 from __future__ import annotations
 

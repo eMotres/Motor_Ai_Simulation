@@ -65,6 +65,62 @@ ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
 
 _TIER_RANK = {"anon": -1, "free": 0, "pro": 1, "team": 2, "admin": 3}
 
+# ── PUBLIC_EXHIBIT — is there an anonymous audience at all? ──────────────────
+#
+# Until 2026-09-16 an anonymous caller on the public server could read
+# /api/family/tree (the "public exhibit": the dies carrying a passport card),
+# their full geometry and duty payloads, and could BUILD THE REPORT
+# (/api/family/report/...).  That was a deliberate marketing rule written when
+# the app only ever ran on the owner's workstation (motor_access.MODE_ANONYMOUS)
+# — and it is the wrong rule for an internet-facing host, where the standing
+# requirement is that a new visitor sees NOTHING until an account is granted it.
+#
+# `PUBLIC_EXHIBIT=1` (the DEFAULT) is that old behaviour, byte for byte: this
+# workstation and every test that does not set the variable are unaffected.
+# `PUBLIC_EXHIBIT=0` closes it: a caller with no valid credentials gets 401 on
+# every /api route except the three below, whatever AUTH_ENFORCE says — the two
+# switches answer different questions ("which tier may run this?" vs "is anyone
+# allowed in without signing in?") and closing the door must not depend on the
+# tier table being enforced.
+#
+# Read PER CALL (not bound at import) so the server can flip it with a restart
+# of the process only, and so a test can monkeypatch the environment.
+_ENV_PUBLIC_EXHIBIT = "PUBLIC_EXHIBIT"
+
+
+def public_exhibit() -> bool:
+    """Is the anonymous public exhibit open?  Default: yes (today's behaviour)."""
+    return os.environ.get(_ENV_PUBLIC_EXHIBIT, "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+#: The ONLY /api paths an anonymous caller may reach with the exhibit closed.
+#: /api/health is the container's liveness probe; /api/me must answer (with the
+#: anonymous shape) or the SPA cannot tell "not signed in" from "server down"
+#: and never renders its login screen.
+_ANON_OK_PATHS = frozenset({"/api/health", "/api/me"})
+#: …plus the sign-in endpoints themselves: the password login, the Google GIS
+#: token exchange, and logout (which must work for a token we are rejecting).
+#: NOT the rest of routes/auth_local.py — /api/auth/users, /api/auth/sessions and
+#: /api/auth/password are admin/account surface and keep their own require_admin.
+_ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout")
+
+
+def anonymous_allowed(path: str) -> bool:
+    """May a caller WITHOUT credentials reach `path` when the exhibit is closed?
+
+    Everything outside /api passes: the SPA's own HTML/JS/CSS is served by nginx
+    on the server and by the dev server locally, and a login screen nobody can
+    download is not a login screen.
+    """
+    p = (path or "/").rstrip("/") or "/"
+    if not (p == "/api" or p.startswith("/api/")):
+        return True
+    if p in _ANON_OK_PATHS:
+        return True
+    return any(p == pfx or p.startswith(pfx + "/") for pfx in _ANON_OK_PREFIXES)
+
 # (HTTP method, exact path) -> minimum tier required to call it.
 # Everything not listed here (and not matched by _GATED_PREFIX below) is open.
 _GATED: dict[tuple[str, str], str] = {
@@ -529,30 +585,56 @@ def resolve_user(authorization: Optional[str]) -> Optional[dict]:
 
 
 class TierGateMiddleware(BaseHTTPMiddleware):
-    """Block expensive endpoints for users below the required tier.
+    """Two gates, one place, in this order:
 
-    No-op unless AUTH_ENFORCE is on. CORS preflight (OPTIONS) is never gated.
+    1. THE DOOR (``PUBLIC_EXHIBIT=0``): a caller with no valid credentials gets
+       401 on every /api route but health / me / the sign-in endpoints.  Off by
+       default, so with the variable unset this costs one env read per request
+       and nothing else changes.
+    2. THE TIER TABLE (``AUTH_ENFORCE=1``): expensive or shared-store endpoints
+       need the tier ``required_tier`` names.
+
+    The identity is resolved AT MOST ONCE per request, whichever gate asks for
+    it.  CORS preflight (OPTIONS) is never gated by either.
     """
 
     async def dispatch(self, request: Request, call_next):
-        if AUTH_ENFORCE and request.method != "OPTIONS":
-            need = required_tier(request.method, request.url.path)
-            if need is not None:
-                user = resolve_user(request.headers.get("authorization"))
-                tier = user["tier"] if user else "anon"
-                if _TIER_RANK.get(tier, -1) < _TIER_RANK[need]:
+        if request.method != "OPTIONS":
+            path = request.url.path
+            closed = not public_exhibit() and not anonymous_allowed(path)
+            need = required_tier(request.method, path) if AUTH_ENFORCE else None
+            if closed or need is not None:
+                _authz = request.headers.get("authorization")
+                user = resolve_user(_authz)
+                # The static ADMIN_API_TOKEN is a CREDENTIAL, not an anonymous
+                # visitor: a headless agent presenting it is let through the
+                # door and then meets the same require_admin_or_token its route
+                # already carries.  With the variable unset (this workstation,
+                # and the server today) this test is always False.
+                if closed and user is None and not _has_service_token(_authz):
                     return JSONResponse(
-                        status_code=401 if user is None else 403,
+                        status_code=401,
                         content={
-                            "detail": (
-                                "Sign in to use this feature."
-                                if user is None
-                                else f"This feature requires the '{need}' plan."
-                            ),
-                            "required_tier": need,
-                            "your_tier": tier,
+                            "detail": "Sign in to use this server.",
+                            "required_tier": need or "free",
+                            "your_tier": "anon",
                         },
                     )
+                if need is not None:
+                    tier = user["tier"] if user else "anon"
+                    if _TIER_RANK.get(tier, -1) < _TIER_RANK[need]:
+                        return JSONResponse(
+                            status_code=401 if user is None else 403,
+                            content={
+                                "detail": (
+                                    "Sign in to use this feature."
+                                    if user is None
+                                    else f"This feature requires the '{need}' plan."
+                                ),
+                                "required_tier": need,
+                                "your_tier": tier,
+                            },
+                        )
         return await call_next(request)
 
 

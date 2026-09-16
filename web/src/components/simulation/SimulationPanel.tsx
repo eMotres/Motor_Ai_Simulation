@@ -50,6 +50,7 @@ import { MACHINE_CHANGED_EVENT } from '../../lib/dutyLocalApply';
 import { setSolveBusy } from '../../lib/familyFollow';
 import { magnetVariants } from '../../lib/magnetVariants';
 import { effectiveAssignment } from '../../lib/dutyMaterials';
+import { runNoticeFor, type RunNotice } from '../../lib/runNotice';
 import { useMotorAssignments } from '../materials/useMotorAssignments';
 import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
 
@@ -421,6 +422,21 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [targetValue, setTargetValue] = usePersisted<number>('targetValue', 850);
   const [fitBusy, setFitBusy] = useState(false);
   const [fitMsg,  setFitMsg]  = useState<string | null>(null);
+  // Why the last Run did not produce a solve, shown UNDER THE RUN BUTTON.
+  // TransientCharts owns the message but renders it beside the waveforms, far
+  // below the fold; a refusal there is invisible from the rail the user just
+  // clicked.  Live on production 2026-09-16: "Coupled thermal" on + an S3 duty
+  // → `POST /api/coupled/run` 422 with a sentence naming the reason, and on
+  // screen the button simply flicked back to "Re-run Simulation".  The event is
+  // published on every change of that state, so a new run (which clears it)
+  // clears this line too — no separate reset path.
+  const [runNotice, setRunNotice] = useState<RunNotice | null>(null);
+  useEffect(() => {
+    const onNotice = (e: Event) =>
+      setRunNotice(runNoticeFor((e as CustomEvent<{ message?: string | null }>).detail?.message));
+    window.addEventListener('sim:run-notice', onNotice);
+    return () => window.removeEventListener('sim:run-notice', onNotice);
+  }, []);
   // Operating mode.  Generator = the SAME gamma, current shifted 180 deg el —
   // torque brakes, mechanical power flows in, the card's efficiency flips to
   // P_electrical_out / P_mechanical_in (the backend decides by power-flow sign).
@@ -2602,6 +2618,21 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               color: fitMsg.startsWith('✗') ? '#fca5a5' : '#38bdf8' }}>
               {fitMsg}
             </Typography>
+          )}
+          {/* WHY the run did not happen — one line, right under the button that
+              was pressed.  The whole sentence is the tooltip (UI rule: one short
+              line + tooltip, never a wall of text in the rail). */}
+          {runNotice && !simBusy && (
+            <Tooltip placement="top" title={runNotice.full}>
+              <Typography sx={{ fontSize: 10.5, mt: 0.75, px: 1, py: 0.5,
+                borderRadius: 1, cursor: 'help',
+                color: runNotice.kind === 'error' ? '#fca5a5' : '#38bdf8',
+                bgcolor: runNotice.kind === 'error'
+                  ? 'rgba(239,68,68,0.10)' : 'rgba(56,189,248,0.10)',
+                border: `1px solid ${runNotice.kind === 'error' ? '#7f1d1d' : '#0369a1'}` }}>
+                {runNotice.kind === 'error' ? '⚠ not solved — ' : ''}{runNotice.text}
+              </Typography>
+            </Tooltip>
           )}
           {emptyStoreDuty && (
             <Typography component="div" sx={{ fontSize: 11, color: '#fbbf24', textAlign: 'center', mt: 0.75 }}

@@ -1,6 +1,6 @@
 import React, { Suspense, useRef, useEffect } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, OrthographicCamera, Environment, Grid } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, OrthographicCamera, Grid } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { useUIStore, useMotorStore, useBuildTimingStore } from '../../stores/motorStore';
 import * as THREE from 'three';
@@ -272,36 +272,28 @@ const View2dToggle: React.FC = () => {
 };
 
 
-/** The studio HDR gives the metals their reflections, but it is fetched from a
- *  CDN at render time — and a fetch that fails (no network, a blocked host) used
- *  to throw out of the Canvas and take the whole panel down ("This panel hit an
- *  error — Could not load studio_small_03_1k.hdr", 2026-09-07).  A picture
- *  without reflections is a picture; a panel with a stack trace is not.  The
- *  boundary swaps the environment for plain lights. */
-class EnvBoundary extends React.Component<{ intensity: number; children: React.ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
-  componentDidCatch(err: unknown) { console.warn('viewer3d: environment map unavailable, using plain lights', err); }
-  render() {
-    if (this.state.failed) {
-      return (
-        <>
-          <hemisphereLight intensity={0.9 * this.props.intensity} groundColor="#444" />
-          <directionalLight position={[3, 5, 4]} intensity={1.2 * this.props.intensity} />
-          <directionalLight position={[-4, -2, -3]} intensity={0.4 * this.props.intensity} />
-        </>
-      );
-    }
-    return this.props.children;
-  }
-}
-
+/** The lighting rig — three lights, no image-based environment.
+ *
+ *  This used to be drei's `<Environment preset="studio">`, which fetches
+ *  `studio_small_03_1k.hdr` from raw.githack.com at render time.  On
+ *  emotres.com that origin is CORS-blocked, so the fetch failed on EVERY
+ *  viewer mount and threw out of the Canvas; an error boundary caught it and
+ *  rendered exactly these three lights instead.  So the HDR never lit a single
+ *  frame on production — all it did was flood the console with red ("Access to
+ *  fetch … blocked by CORS policy" + "Uncaught: Could not load
+ *  studio_small_03_1k.hdr") on every mount, and earlier (2026-09-07) it took
+ *  the whole panel down.
+ *
+ *  Bundling the HDR locally was the alternative and it is not worth it: the 1k
+ *  studio map is ~1.5 MB, five times the budget for an asset whose only job is
+ *  nicer reflections on the metals.  The rig below is the production look now,
+ *  unconditionally — no network, no boundary, no console noise. */
 const EnvironmentOrLights: React.FC<{ intensity: number }> = ({ intensity }) => (
-  <EnvBoundary intensity={intensity}>
-    <React.Suspense fallback={null}>
-      <Environment preset="studio" background={false} environmentIntensity={intensity} />
-    </React.Suspense>
-  </EnvBoundary>
+  <>
+    <hemisphereLight intensity={0.9 * intensity} groundColor="#444" />
+    <directionalLight position={[3, 5, 4]} intensity={1.2 * intensity} />
+    <directionalLight position={[-4, -2, -3]} intensity={0.4 * intensity} />
+  </>
 );
 
 const MotorScene: React.FC<{ force3d?: boolean }> = ({ force3d }) => {

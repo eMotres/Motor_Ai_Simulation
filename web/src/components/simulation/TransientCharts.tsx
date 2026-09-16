@@ -330,6 +330,17 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   const [data,  setData]  = useState<TransientPayload | null>(null);
   const [busy,  setBusy]  = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  // …and publish every change of it to the Run button.  This panel renders
+  // `error` where the waveforms are — thousands of pixels BELOW the button that
+  // launched the run, so a refused solve (live 2026-09-16: the coupled loop's
+  // 422 on an S3 duty) looked on screen like Run doing nothing at all.  One
+  // event, fired from the single place the state lives, so every path that sets
+  // it — a refusal, a dead backend, a retry, a clear at the start of a run —
+  // reaches the rail without a second set of call sites to keep in sync.
+  // SimulationPanel renders `lib/runNotice.runNoticeFor(message)`.
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('sim:run-notice', { detail: { message: error } }));
+  }, [error]);
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
   // True when the shown result was RESTORED on open but its params differ from
   // the current inputs (the backend flagged it stale) — a hint to press Run.

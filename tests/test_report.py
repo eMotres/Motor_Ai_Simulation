@@ -1379,8 +1379,8 @@ class TestWarningRules:
                       "torque_ripple")["level"] == "red"
         assert _fires({"ripple_pct": RIPPLE_LIMIT_PCT * 0.5},
                       "torque_ripple") is None
-        assert _fires({"thd_pct": THD_LIMIT_PCT + 1.0}, "thd")["level"] == "red"
-        assert _fires({"thd_pct": THD_LIMIT_PCT * 0.5}, "thd") is None
+        assert _fires({"thd_pct": THD_LIMIT_PCT + 1.0}, "line_voltage_thd")["level"] == "red"
+        assert _fires({"thd_pct": THD_LIMIT_PCT * 0.5}, "line_voltage_thd") is None
 
     def test_the_pack_voltage_and_the_runaway_speed(self):
         """Two sides of the same physics: the peak line voltage must stay under
@@ -1428,17 +1428,17 @@ class TestWarningRules:
                     "mod_index": modulation_index(v1_ll * k, v_min)}
 
         # BOTH SIDES of the threshold.
-        over = _fires(_ctx(571.48, 0.9724), "modulation_headroom")
+        over = _fires(_ctx(571.48, 0.9724), "fundamental_vs_modulation")
         assert over["level"] == "red" and over["value"] > ceil
         # the note carries m itself, so a red row can be read without the table
         assert "m = 1.168" in over["note"]
-        assert _fires(_ctx(400.0, 0.9576), "modulation_headroom") is None
-        assert _passes(_ctx(400.0, 0.9576), "modulation_headroom")["level"] \
+        assert _fires(_ctx(400.0, 0.9576), "fundamental_vs_modulation") is None
+        assert _passes(_ctx(400.0, 0.9576), "fundamental_vs_modulation")["level"] \
             == "green"
         # …and the live L155 peak duty, a hair inside the ceiling: amber, not
         # green — the margin is 0.0 %, and that is exactly the number this
         # report exists to print rather than leave to be derived.
-        edge = _fires(_ctx(571.48, 0.9576417702186586), "modulation_headroom")
+        edge = _fires(_ctx(571.48, 0.9576417702186586), "fundamental_vs_modulation")
         assert edge["level"] == "amber"
 
         # THE OLD RULE PASSES THE SAME POINT: the waveform peak (563.4 V here,
@@ -1455,7 +1455,7 @@ class TestWarningRules:
         # A duty with no pack, or a run from before V1_LL_V was stored, raises
         # neither a verdict nor a green line.
         assert _rule(duty_warnings({"duty": "u", "v_line_fund_v": 600.0}),
-                     "modulation_headroom") is None
+                     "fundamental_vs_modulation") is None
 
     def test_the_mechanical_verdicts(self):
         from motor_ai_sim.report import OPEN_FRACTION_LIMIT_PCT
@@ -4855,7 +4855,14 @@ class TestPwmIsTheDutysOperatingCondition:
         # an info row is neither passed nor failed, and it is printed last
         assert R.warning_row(carrier)[0] == "info"
         ordered = R.all_duty_warnings([self._col()], {"peak": ctx})
-        assert ordered[-1]["rule"] == "carrier_ripple"
+        # …after every verdict: the informational rows close the section, and
+        # since 2026-09-15 the bridge's THD and its line amplitude are two more
+        # of them.
+        assert ordered[-1]["level"] == "info"
+        _info = [w["rule"] for w in ordered if w["level"] == "info"]
+        assert "carrier_ripple" in _info
+        assert [w["level"] for w in ordered][:len(ordered) - len(_info)].count(
+            "info") == 0
 
     def test_a_sinusoidal_duty_raises_no_carrier_row(self):
         from motor_ai_sim import report as R
@@ -4877,7 +4884,7 @@ class TestPwmIsTheDutysOperatingCondition:
             ins_note="", cold_k=1.1, cold_note="cold")
         assert ctx["mod_index"] == 0.88
         assert ctx["v_dc_run_v"] == 750.0
-        w = {x["rule"]: x for x in R.duty_warnings(ctx)}["modulation_headroom"]
+        w = {x["rule"]: x for x in R.duty_warnings(ctx)}["fundamental_vs_modulation"]
         assert "m = 0.88" in w["note"] and "750 V link" in w["note"]
 
     # ── the waveforms ───────────────────────────────────────────────────────
@@ -5578,8 +5585,11 @@ class TestBl4NoRowMixesTwoRuns:
 
         for two_d, times_k in (
                 ("Torque, 2-D [N·m]", "Torque × k_3d [N·m]"),
-                ("Line voltage, waveform peak, 2-D [V]",
-                 "Line voltage, waveform peak × k_3d [V]")):
+                # …under the PWM name the row has carried since 2026-09-15:
+                # the model peak of a voltage-fed run is the winding voltage
+                # the field gives back, not a terminal waveform.
+                ("%s, 2-D [V]" % R.PWM_VPK_LABEL,
+                 "%s × k_3d [V]" % R.PWM_VPK_LABEL)):
             a, b = _f(rows[two_d][0]), _f(rows[times_k][0])
             assert abs(b - a * self.K) < 0.01, (
                 "%r is %s where this run's own 2-D value times k_3d is %s"
@@ -5803,3 +5813,328 @@ class TestPwmBridgeVoltageChart:
         sine = {"duty": "rated", "res": {"coupled": {"drive": "sine"}}}
         assert "inverter" not in R._with_inverter({"V_A": [1.0]}, sine)
         assert R._with_inverter({}, col) == {}
+
+
+# ---------------------------------------------------------------------------
+# THE PWM-AWARE VOLTAGE AND THD RULES  (client reviewer, 2026-09-15)
+# ---------------------------------------------------------------------------
+# The L180 gen report failed a machine on the THD of the BRIDGE's pulse train
+# (44.7 % against a 10 % gate written for a back-EMF) and on a "line voltage
+# waveform peak" of 1,208 V that is the star-equivalent circuit's 1.155*V_dc,
+# compared against a pack floor the duty was never solved on.  Both are fixed
+# here, and both stay exactly as they were on a sinusoidal duty.
+
+
+class TestPwmVoltageAndThdRules:
+
+    INV = {"v_dc_V": 799.2, "m": 1.1259, "f_carrier_hz": 24000.0,
+           "thd_ll_pct": 44.74, "thd_i_pct": 8.78}
+    BATT = {"v_min": 749.5, "v_nom": 799.2, "v_max": 1049.8}
+
+    def _col(self, *, v_dc=799.2, bridge_thd=44.74, sine_thd=1.17,
+             m=1.1259, converged=False, warning=None):
+        inv = dict(self.INV, v_dc_V=v_dc, m=m, thd_ll_pct=bridge_thd)
+        coupled = {"drive": "pwm", "inverter": inv, "converged": converged,
+                   "em_runs": 3, "iterations": 3,
+                   "reference_sine": {"em": {"THD_LL_pct": sine_thd,
+                                             "T_ripple_pct": 0.9}},
+                   "warning": warning}
+        return {
+            "duty": "rated", "d": {"name": "rated", "rpm": 20900},
+            "res": {"coupled": coupled},
+            "em": {"rpm": 20900, "THD_LL_pct": bridge_thd,
+                   "THD_I_pct": self.INV["thd_i_pct"],
+                   "T_ripple_pct": 25.7,
+                   # the star-equivalent model's peak: 1.155 x V_dc
+                   "V_line_peak_V": 1.1547 * v_dc,
+                   "V1_LL_V": 900.0,
+                   "end3d": {"k_flux": 0.9576}},
+            "em_sine": {"THD_LL_pct": sine_thd, "T_ripple_pct": 0.9},
+        }
+
+    def _ctx(self, **kw):
+        from motor_ai_sim import report as R
+        col = self._col(**kw)
+        inv = col["res"]["coupled"]["inverter"]
+        return {"duty": "rated", "drive": "pwm",
+                "thd_pct": R.sine_line_thd(col),
+                "bridge_thd_pct": col["em"]["THD_LL_pct"],
+                "carrier_thd_i_pct": col["em"]["THD_I_pct"],
+                "v_pack_min_v": self.BATT["v_min"],
+                "v_pack_nom_v": self.BATT["v_nom"],
+                "v_pack_max_v": self.BATT["v_max"],
+                "v_dc_run_v": inv.get("v_dc_V"),
+                "v_mod_ceiling_v": R.MOD_CEILING_OF_VDC * inv["v_dc_V"],
+                "v_line_fund_v": (inv["m"] * inv["v_dc_V"]
+                                  * (3.0 ** 0.5) / 2.0),
+                "mod_index": inv.get("m")}
+
+    # -- 1 - the THD split --------------------------------------------------
+
+    def test_the_thd_limit_is_the_sine_runs_and_the_bridge_is_a_finding(self):
+        from motor_ai_sim.report import duty_warnings, THD_LIMIT_PCT
+
+        ws = duty_warnings(self._ctx())
+        gate = _rule(ws, "line_voltage_thd")
+        assert gate["value"] == 1.17 and gate["limit"] == THD_LIMIT_PCT
+        assert gate["level"] == "green"
+        assert "sinusoidal run" in gate["quantity"]
+        assert "SINUSOIDAL" in gate["note"]
+
+        bridge = _rule(ws, "bridge_thd")
+        assert bridge["value"] == 44.74 and bridge["limit"] is None
+        assert bridge["level"] == "info"
+        # the current THD is printed beside it, because that is what gets in
+        assert "current THD 8.78 %" in bridge["note"]
+        assert "carrier-band" in bridge["note"]
+
+    def test_a_sine_duty_keeps_the_one_thd_rule_it_always_had(self):
+        from motor_ai_sim.report import duty_warnings, THD_LIMIT_PCT
+
+        ws = duty_warnings({"duty": "u", "drive": "sine",
+                            "thd_pct": THD_LIMIT_PCT + 1.0})
+        assert _rule(ws, "line_voltage_thd")["level"] == "red"
+        assert _rule(ws, "bridge_thd") is None
+        assert _rule(ws, "line_voltage_thd")["quantity"] == "Line voltage THD"
+
+    # -- 2 - the link, the modulation and the insulation --------------------
+
+    def test_the_link_the_duty_was_solved_on_is_judged_against_the_pack(self):
+        from motor_ai_sim.report import duty_warnings, DC_LINK_AMBER_NOTE
+
+        nom = _rule(duty_warnings(self._ctx()), "dc_link_vs_pack")
+        assert nom["level"] == "green" and nom["value"] == 799.2
+        assert "the pack nominal" in nom["note"]
+
+        # ...and the peak duty, solved on the pack MAXIMUM, is amber
+        top = _rule(duty_warnings(self._ctx(v_dc=1049.8, m=0.9515)),
+                    "dc_link_vs_pack")
+        assert top["level"] == "amber"
+        assert DC_LINK_AMBER_NOTE in top["note"]
+        assert "fully charged" in top["note"]
+
+        # a link the pack cannot make at all is red
+        assert _rule(duty_warnings(self._ctx(v_dc=1200.0)),
+                     "dc_link_vs_pack")["level"] == "red"
+
+    def test_the_waveform_peak_rule_is_gone_from_a_pwm_duty(self):
+        from motor_ai_sim.report import duty_warnings
+
+        ws = duty_warnings(self._ctx())
+        assert _rule(ws, "voltage_headroom") is None
+        # ...and it is still there on a sinusoid
+        sine = duty_warnings({"duty": "u", "drive": "sine",
+                              "v_line_peak_v": 700.0, "v_pack_min_v": 640.0})
+        assert _rule(sine, "voltage_headroom")["level"] == "red"
+
+    def test_no_model_peak_of_1_155_times_the_link_is_quoted_anywhere(self):
+        """1.155 x V_dc is a number of the star-equivalent circuit the
+        voltage-fed solve runs in, not of anything on the terminals."""
+        from motor_ai_sim.report import duty_warnings, _fmt
+
+        ghost = _fmt(1.1547 * 799.2, 1)          # "922.8"
+        text = " | ".join(
+            " ".join(str(w.get(k) or "") for k in
+                     ("quantity", "value", "limit", "note", "remedy"))
+            for w in duty_warnings(self._ctx()))
+        assert ghost not in text
+        assert "waveform peak" not in text
+
+    def test_the_bridge_amplitude_row_is_the_dc_link(self):
+        from motor_ai_sim.report import duty_warnings, em_torque_rows
+
+        ins = _rule(duty_warnings(self._ctx()), "insulation_peak")
+        assert ins["value"] == 799.2 and ins["limit"] is None
+        assert ins["level"] == "info"
+
+        # ...and in the per-duty voltage table
+        col = self._col()
+        rows = {r[0]: r[1:] for r in em_torque_rows(
+            col["em"], self.BATT, "pwm", col["em_sine"],
+            col["res"]["coupled"]["inverter"])}
+        assert "Bridge line voltage amplitude [V] = DC link" in rows
+        assert rows["Bridge line voltage amplitude [V] = DC link"][0] == "799.2"
+        # the model peak row is renamed, not deleted - its number is real, its
+        # old name was not
+        assert any(k.startswith("Winding voltage from the field, "
+                                "carrier-averaged peak") for k in rows)
+        assert not any(k.startswith("Line voltage, waveform peak")
+                       for k in rows)
+        # and the modulation index printed is the bridge's own, on its link
+        assert "Modulation index m the bridge ran at" in rows
+
+    def test_the_modulation_ceiling_is_the_runs_link(self):
+        from motor_ai_sim.report import duty_warnings, MOD_CEILING_OF_VDC
+
+        row = _rule(duty_warnings(self._ctx()), "fundamental_vs_modulation")
+        assert row["limit"] == pytest.approx(MOD_CEILING_OF_VDC * 799.2)
+        assert "the DC link this duty was solved on" in row["note"]
+        assert "m = 1.126" in row["note"]
+
+    def test_a_sine_duty_table_is_word_for_word_what_it_was(self):
+        from motor_ai_sim.report import em_torque_rows
+
+        em = {"V_line_peak_V": 403.5, "V_line_rms_V": 291.0,
+              "V1_LL_V": 411.4, "V_phase_peak_V": 233.0,
+              "end3d": {"k_flux": 0.9576}}
+        rows = {r[0]: r[1:] for r in em_torque_rows(em, {"v_min": 549.6})}
+        assert "Line voltage, waveform peak [V]" in rows
+        assert "Phase voltage, waveform peak [V]" in rows
+        assert "Bridge line voltage amplitude [V] = DC link" not in rows
+        assert "Modulation index m at the pack minimum" in rows
+
+    # -- 3 - the rotor bridges ----------------------------------------------
+
+    def test_the_rotor_safety_factor_carries_the_standing_policy(self):
+        from motor_ai_sim.report import duty_warnings, ROTOR_BRIDGE_POLICY
+
+        ctx = {"duty": "rated", "sf_min": 0.24, "sf_min_part": "rotor",
+               "overspeed_factor": 1.0,
+               "part_safety_factors": {"rotor": 0.24, "sleeve": 2.06,
+                                       "magnet": 1.85}}
+        w = _rule(duty_warnings(ctx), "safety_factor")
+        # the number and the red flag stay
+        assert w["value"] == 0.24 and w["level"] == "red"
+        # ...and so does the policy, the sleeve, and the missing overspeed case
+        assert ROTOR_BRIDGE_POLICY in w["note"]
+        assert "sleeve SF 2.06 carries the retention" in w["note"]
+        assert "overspeed 1.2 not solved" in w["note"]
+        assert ROTOR_BRIDGE_POLICY in w["remedy"]
+
+        # the other parts' rows say nothing about bridges
+        for row in duty_warnings(ctx):
+            if row["rule"] == "part_safety_factor":
+                assert ROTOR_BRIDGE_POLICY not in (row["note"] + row["remedy"])
+
+    def test_the_mechanical_caption_says_it_too(self):
+        from motor_ai_sim import report as R
+
+        txt = R.mech_percentile_text(
+            {"sf_min": 0.24, "sf_min_part": "rotor", "sf_min_p05": 0.2,
+             "parts": {"sleeve": {"safety_factor": 2.06}}})
+        # the sentence opens the clause, so only its first letter differs
+        assert R.ROTOR_BRIDGE_POLICY[1:] in txt
+        assert "sleeve SF 2.06" in txt
+        # ...and not on a machine whose worst part is the magnet
+        assert R.ROTOR_BRIDGE_POLICY[1:] not in R.mech_percentile_text(
+            {"sf_min": 1.85, "sf_min_part": "magnet"})
+
+    # -- 4 - why the loop stopped -------------------------------------------
+
+    def test_a_refused_pass_is_named_instead_of_a_bare_no(self):
+        from motor_ai_sim.report import converged_words
+
+        rec = {"converged": False, "em_runs": 3, "iterations": 3,
+               "warning": ("electromagnetic run 4 refused at coil 142.5 C / "
+                           "magnet 171.3 C: compensating the modulator's "
+                           "sampled-reference gain for 14 carriers per period "
+                           "needs m = 1.161, past the 1.15 linear limit - the "
+                           "temperatures above are the last pass that solved")}
+        assert converged_words(rec) == (
+            "pass 4 refused: modulation ceiling - temperatures are the last "
+            "solved pass").replace(" - ", " — ")
+        # the machine-readable code says the same thing on a newer record
+        rec2 = {"converged": False, "em_runs": 4,
+                "warning_code": "point_limited_by_modulation",
+                "warning": "the point is out of INVERTER, not out of iterations"}
+        assert converged_words(rec2).startswith("pass 4 refused: modulation")
+        # a point that simply did not settle is not a refusal
+        rec3 = {"converged": False, "em_runs": 4,
+                "warning_code": "point_not_converged",
+                "warning": "the temperatures settled but the operating point "
+                           "did not"}
+        assert converged_words(rec3) == (
+            "no — the operating point did not settle")
+        assert converged_words({"converged": True}) == "yes"
+        assert converged_words({"runaway": True}).startswith("RUNAWAY")
+
+    # -- 5 - the magnet's limit comes off the card --------------------------
+
+    def test_the_magnet_limit_is_read_from_the_card(self):
+        from motor_ai_sim.report import _magnet_limit
+
+        for grade, lim in (("N52UH_150C", 180.0), ("N52UH_20C", 180.0),
+                           ("N45EH_180C", 200.0), ("F52SH_120C", 150.0),
+                           ("F45SH_120C", 150.0)):
+            v, note = _magnet_limit(grade)
+            assert v == lim, grade
+            assert "ASSUMED" not in note, grade
+            assert "card's own maximum working temperature" in note
+
+    def test_the_loader_fills_the_class_limit_for_a_card_without_one(self):
+        from motor_ai_sim.materials import (_parse_magnet,
+                                            magnet_class_max_temp_c)
+
+        assert _parse_magnet("N45EH_150C", {}).max_working_temp_c == 200.0
+        assert _parse_magnet(
+            "N52UH_150C", {"max_working_temp_c": 175}).max_working_temp_c == 175.0
+        # a research record that is not a graded magnet gets no invented limit
+        assert _parse_magnet("Fe16N2_lab_best", {}).max_working_temp_c is None
+        assert magnet_class_max_temp_c("F52SH_30C") == 150.0
+        assert magnet_class_max_temp_c("N52AH_20C") == 220.0
+
+
+# ---------------------------------------------------------------------------
+# A MAP AND THE TABLE BESIDE IT ARE ONE SOLVE, OR THE CAPTION SAYS SO
+# (client reviewer, 2026-09-15: the L180 gen thermal maps were the sinusoidal
+# solve of 2026-09-13 under tables that were the PWM run of 2026-09-16)
+# ---------------------------------------------------------------------------
+
+
+class TestMapProvenance:
+
+    FIELD = {"computed_at": "2026-09-13T21:37:34+00:00"}
+    REC_PWM = {"computed_at": "2026-09-16T01:06:24+00:00", "drive": "pwm"}
+
+    def test_a_stale_field_under_a_fresh_record_is_named(self):
+        from motor_ai_sim.report import map_provenance_note
+
+        note = map_provenance_note(self.FIELD, self.REC_PWM)
+        assert "map from the sinusoidal solve of 2026-09-13" in note
+        assert "the table beside it is the PWM run of 2026-09-16" in note
+        assert "the numbers in this caption are the MAP's" in note
+
+    def test_one_solve_stored_twice_says_nothing(self):
+        from motor_ai_sim.report import map_provenance_note, same_solve
+
+        same = {"computed_at": "2026-09-13T21:37:59+00:00"}
+        assert map_provenance_note(same, dict(same)) == ""
+        # ...within an hour of slack, and never on a stamp that is missing
+        assert same_solve("2026-09-13T21:37:59+00:00",
+                          "2026-09-13T21:55:00+00:00") is True
+        assert same_solve("2026-09-13T21:37:59+00:00", None) is None
+        assert map_provenance_note(self.FIELD, {}) == ""
+
+    def test_the_duty_reports_only_the_kinds_that_disagree(self):
+        from motor_ai_sim.report import duty_map_provenance
+
+        rec = {"thermal": self.REC_PWM,
+               "rotor_stress": {"computed_at": self.FIELD["computed_at"]},
+               "modes": {"computed_at": self.FIELD["computed_at"]},
+               "coupled": {"drive": "pwm",
+                           "computed_at": "2026-09-16T03:06:22"}}
+        metas = {"thermal": dict(self.FIELD),
+                 "rotor_stress": dict(self.FIELD),
+                 "modes": dict(self.FIELD),
+                 "em": {"computed_at": "2026-09-13T23:37:30"}}
+        prov = duty_map_provenance(rec, metas)
+        assert set(prov) == {"thermal", "em"}
+        assert "PWM run of 2026-09-16" in prov["em"]
+
+    def test_the_caption_carries_it_on_both_shapes_of_figure(self):
+        from motor_ai_sim.report import (caption_with_provenance, pair_caption,
+                                         map_provenance_note)
+
+        note = map_provenance_note(self.FIELD, self.REC_PWM)
+        side = {"duty": "rated", "point": "580 A rms at 20,900 rpm",
+                "prov": {"thermal": note}}
+        one = caption_with_provenance("The temperature map.", side, "thermal")
+        assert one.endswith("MAP's.") and one.startswith("The temperature map;")
+        # ...and nothing at all for a kind that agrees
+        assert caption_with_provenance("The stress map.", side,
+                                       "rotor_stress") == "The stress map."
+        pair = pair_caption("The temperature map.", side, dict(side),
+                            map_kind="thermal")
+        assert "on both sides" in pair
+        assert pair_caption("The temperature map.", side, dict(side),
+                            map_kind="rotor_stress").count("map from") == 0

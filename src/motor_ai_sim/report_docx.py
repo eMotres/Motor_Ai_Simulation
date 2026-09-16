@@ -473,9 +473,13 @@ def _picture_pair(doc, left: Optional[bytes], right: Optional[bytes], *,
 
 def _pair_fig(doc, D: Dict[str, Any], left: Optional[bytes],
               right: Optional[bytes], what: str, *, numbers: str = "",
-              max_cm: Optional[float] = None) -> bool:
+              max_cm: Optional[float] = None, map_kind: str = "") -> bool:
     """One paired figure with its caption: the two pictures, then the sentence
-    that says what they show and which duty is on which side."""
+    that says what they show and which duty is on which side.
+
+    ``map_kind`` names the stored FIELD the pictures were drawn from, so the
+    caption can say when that field and the record its table came from are two
+    different solves (reviewer 2026-09-15)."""
     P = D.get("pair") or {}
     if not _picture_pair(doc, left, right, max_cm=max_cm):
         return False
@@ -483,8 +487,14 @@ def _pair_fig(doc, D: Dict[str, Any], left: Optional[bytes],
         R.fig_no(D.get("fig_n")),
         R.pair_caption(what, P.get("left"), P.get("right"),
                        have=(bool(left), bool(right)), numbers=numbers,
-                       note=P.get("note") or "")))
+                       note=P.get("note") or "", map_kind=map_kind)))
     return True
+
+
+def _prov(D: Dict[str, Any], caption: str, kind: str) -> str:
+    """A single figure's caption with the report duty's provenance sentence."""
+    return R.caption_with_provenance(caption,
+                                     (D.get("pair") or {}).get("left"), kind)
 
 
 def _numbered(D: Dict[str, Any]):
@@ -619,7 +629,7 @@ def _cover(doc, D: Dict[str, Any]) -> None:
     _h(doc, "Battery and the voltage limit", 1)
     if len(_brows) > 1:
         _table(doc, _brows, size=10.5, widths_cm=[5.0, 3.4, 18.0])
-        _p(doc, R.BATTERY_NOTE, size=9.5, italic=True, color=NOTE,
+        _p(doc, R.battery_note(D.get("cols")), size=9.5, italic=True, color=NOTE,
            space_after=8.0)
     else:
         _p(doc, R.BATTERY_NONE, size=9.5, color=NOTE, space_after=8.0)
@@ -793,6 +803,14 @@ def _drive(D: Dict[str, Any]) -> str:
             else "sine")
 
 
+def _inverter(D: Dict[str, Any]) -> Dict[str, Any]:
+    """The bridge that fed the report duty — ``{}`` on a sinusoid.  The voltage
+    table needs it for the DC link, which is what the terminals really see."""
+    col = R._col_of(D.get("cols"),
+                    str((D.get("d_duty") or {}).get("name") or ""))
+    return R.duty_inverter(col or {})
+
+
 def _em_detail(doc, D: Dict[str, Any]) -> None:
     _h(doc, R.section_heading(D.get("sec"), "em"), 1)
     em, d_duty = D["em"], D["d_duty"]
@@ -810,7 +828,7 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
     # The pack rides along so the modulation-index row can be formed (reviewer
     # 2026-09-14 / PWM study §1.7) — it needs the pack's minimum voltage.
     _table(doc, R.em_torque_rows(em, D.get("batt"), _drive(D),
-                                 _em_sine(D)), size=10.5,
+                                 _em_sine(D), _inverter(D)), size=10.5,
            widths_cm=[6.4, 3.6, 12.0])
     # The "both columns are printed" footnote belongs to the TORQUE table,
     # which has two of them (reviewer 2026-09-14, B1).
@@ -905,12 +923,14 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
         _a, _b = maps.get(key), (maps_r or {}).get(key)
         if _R and (_a or _b):
             if _pair_fig(doc, D, _a, _b, cap,
-                         numbers=R.em_map_numbers(key, maps, maps_r)):
+                         numbers=R.em_map_numbers(key, maps, maps_r),
+                         map_kind="em"):
                 n_fig += 1
             continue
         if _picture(doc, _a):
             n_fig += 1
-            _caption(doc, "Fig. %d [%s] — %s" % (n_fig, tag, cap))
+            _caption(doc, "Fig. %d [%s] — %s"
+                     % (n_fig, tag, _prov(D, cap, "em")))
         else:
             _caption(doc, "Fig. — %s." % missing)
     if n_fig == 0:
@@ -1026,15 +1046,17 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
                       R._temp_bars_png(_R.get("th") or {},
                                        _R.get("th_inner") or {}, _lims,
                                        width_cm=PAIR_CM),
-                      R.TEMP_BARS_CAPTION, numbers=_t_num)
+                      R.TEMP_BARS_CAPTION, numbers=_t_num,
+                      map_kind="thermal")
         elif _bars is not None:
             _table(doc, trows, size=10.5, widths_cm=[7.0, 4.2])
             # The caption says which bars the lines apply to (D8): every dashed
             # line spans the whole axis, but only the coloured bars are judged
             # against one — a blue bar has no limit of its own.
             if _picture(doc, _bars, cm=PIC_CM):
-                _caption(doc, R.fig_label(_numbered(D), R.TEMP_BARS_CAPTION,
-                                          _tag_t))
+                _caption(doc, R.fig_label(
+                    _numbered(D), _prov(D, R.TEMP_BARS_CAPTION, "thermal"),
+                    _tag_t))
         else:
             _table(doc, trows, size=10.5, widths_cm=[7.0, 4.2])
     _p(doc, R.thermal_extremes_text(res, inner), size=9.5, italic=True,
@@ -1085,13 +1107,13 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
             (_R.get("src") or {}).get("thermal") or _R.get("th"),
             width_cm=PAIR_CM)
         if not _pair_fig(doc, D, _ml, _mr, R.THERMAL_MAP_CAPTION,
-                         numbers=_t_num):
+                         numbers=_t_num, map_kind="thermal"):
             _p(doc, R.THERMAL_MAP_MISSING, size=9.5, italic=True, color=NOTE)
     elif _picture(doc, R._thermal_map(
             (D.get("detail_src") or {}).get("thermal") or res,
             width_cm=PIC_CM), cm=PIC_CM):
         _caption(doc, R.fig_label(
-            _numbered(D), R.THERMAL_MAP_CAPTION,
+            _numbered(D), _prov(D, R.THERMAL_MAP_CAPTION, "thermal"),
             R._map_tag(map_duty, res.get("rpm", inner.get("rpm")) or map_rpm,
                        map_cur)))
     else:
@@ -1235,13 +1257,15 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
             "highest averaged", R._peak_vm((_L or {}).get("case") or case),
             R._peak_vm((_R or {}).get("case")), 1, "MPa")
         if _R:
-            if not _pair_fig(doc, D, png, png_r, _vm_cap, numbers=_vm_num):
+            if not _pair_fig(doc, D, png, png_r, _vm_cap, numbers=_vm_num,
+                             map_kind="rotor_stress"):
                 _p(doc, R.MECH_MAP_MISSING, size=9.5, italic=True, color=NOTE)
         elif _picture(doc, png):
             _caption(doc, R.fig_label(
-                _numbered(D),
-                "Von Mises stress over the '%s' case, MPa, averaged onto each "
-                "part's own nodes." % case_used, _tag))
+                _numbered(D), _prov(
+                    D, "Von Mises stress over the '%s' case, MPa, averaged "
+                       "onto each part's own nodes." % case_used,
+                    "rotor_stress"), _tag))
         else:
             _p(doc, R.MECH_MAP_MISSING, size=9.5, italic=True, color=NOTE)
         # …and the two the tab shows beside it (user 2026-09-10).
@@ -1251,9 +1275,10 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
         for _k, _cap, _missing in R.mech_extra_captions():
             _a, _b = _extra.get(_k), (_extra_r or {}).get(_k)
             if _R and (_a or _b):
-                _pair_fig(doc, D, _a, _b, _cap)
+                _pair_fig(doc, D, _a, _b, _cap, map_kind="rotor_stress")
             elif _picture(doc, _a):
-                _caption(doc, R.fig_label(_numbered(D), _cap, _tag))
+                _caption(doc, R.fig_label(
+                    _numbered(D), _prov(D, _cap, "rotor_stress"), _tag))
             else:
                 _p(doc, "%s." % _missing, size=9.5, italic=True, color=NOTE)
 
@@ -1316,7 +1341,8 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
                      R.MODES_GALLERY_ROWS * R.MODES_GALLERY_COLS)
             _caption(doc, R.fig_label(
                 _numbered(D),
-                R.MODES_CAPTION % (_n, mres.get("body") or "iron", "6 %"),
+                _prov(D, R.MODES_CAPTION
+                      % (_n, mres.get("body") or "iron", "6 %"), "modes"),
                 R._map_tag(map_duty, mres.get("rpm") or map_rpm)))
         else:
             _p(doc, R.MODES_GALLERY_MISSING, size=9.5, italic=True, color=NOTE)
@@ -1339,7 +1365,7 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
     # line of text instead of an empty axes under a sentence describing curves.
     if _picture(doc, R._campbell_png(crit)):
         _caption(doc, R.fig_label(
-            _numbered(D), R.CAMPBELL_CAPTION,
+            _numbered(D), _prov(D, R.CAMPBELL_CAPTION, "critical_speeds"),
             R._map_tag(map_duty, crit.get("rated_rpm") or map_rpm)))
     else:
         _p(doc, R.CAMPBELL_NOT_STORED, size=9.5, italic=True, color=NOTE)

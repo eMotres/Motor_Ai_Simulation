@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import time
 from dataclasses import dataclass, field, fields as dataclass_fields, replace
 from pathlib import Path
@@ -240,6 +241,16 @@ class MagnetMaterial:
     alpha_br_pct_per_k: Optional[float] = None  # %/K, dBr/dT   (negative: NdFeB)
     beta_hcj_pct_per_k: Optional[float] = None  # %/K, dHcj/dT  (negative: NdFeB,
                                                 #      POSITIVE for Fe16N2)
+
+    # ── THE GRADE'S MAXIMUM WORKING TEMPERATURE (added 2026-09-15) ──────────
+    # NOT ``temperature_c``, which is the temperature this card was MEASURED
+    # at: F52SH_120C is a 150 °C-class magnet whose card happens to be quoted
+    # at 120 °C.  This is the temperature above which the manufacturer does not
+    # warrant the magnet — the number the report's magnet-temperature rule is
+    # judged against.  ``None`` on a card whose grade does not state one (the
+    # Fe16N2 research records), and the report then falls back to the
+    # coercivity class it reads off the name and says that it assumed.
+    max_working_temp_c: Optional[float] = None  # °C
 
     # ── MECHANICAL (added 2026-09-05 for the rotor centrifugal solve) ───────
     # A sintered magnet is brittle: it is checked in TENSION, not against a
@@ -554,8 +565,33 @@ def _parse_steel(name: str, raw: dict) -> SteelMaterial:
     )
 
 
+#: Maximum working temperature by NdFeB coercivity class, °C — the industry's
+#: class definitions (M 100, H 120, SH 150, UH 180, EH 200, AH 220).  The
+#: LOADER's default, used only where a card does not state its own
+#: ``max_working_temp_c``, so that a library entry added tomorrow carries the
+#: right limit without anyone remembering to type it.
+_MAGNET_CLASS_MAX_C: Dict[str, float] = {
+    "M": 100.0, "H": 120.0, "SH": 150.0, "UH": 180.0, "EH": 200.0, "AH": 220.0,
+}
+
+#: Grade names whose letters are not a coercivity class — no class limit is
+#: invented for them (the Fe16N2 research records).
+_MAGNET_GRADE_RE = re.compile(r"^[A-Za-z]{1,2}\d{2,3}([A-Za-z]{0,2})")
+
+
+def magnet_class_max_temp_c(name: str) -> Optional[float]:
+    """The class limit read off a magnet grade name — ``None`` when the name
+    carries no coercivity class ('N52' is plain N, 'Fe16N2_lab_best' is not a
+    graded magnet at all)."""
+    m = _MAGNET_GRADE_RE.match(str(name or "").strip())
+    if not m:
+        return None
+    return _MAGNET_CLASS_MAX_C.get((m.group(1) or "").upper())
+
+
 def _parse_magnet(name: str, raw: dict) -> MagnetMaterial:
     bh = [tuple(p) for p in raw.get("bh_curve", [])]
+    _mw = raw.get("max_working_temp_c")
     return MagnetMaterial(
         name=name,
         description=raw.get("description", ""),
@@ -573,6 +609,8 @@ def _parse_magnet(name: str, raw: dict) -> MagnetMaterial:
                             if raw.get("alpha_br_pct_per_k") is not None else None),
         beta_hcj_pct_per_k=(float(raw["beta_hcj_pct_per_k"])
                             if raw.get("beta_hcj_pct_per_k") is not None else None),
+        max_working_temp_c=(float(_mw) if _mw is not None
+                            else magnet_class_max_temp_c(name)),
         youngs_modulus_gpa=raw.get("youngs_modulus_gpa"),
         poisson_ratio=raw.get("poisson_ratio"),
         tensile_strength_mpa=raw.get("tensile_strength_mpa"),

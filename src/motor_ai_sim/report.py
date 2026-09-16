@@ -1882,10 +1882,47 @@ def mech_case_words(left: Any, right: Any) -> str:
     return "the '%s' case" % (a or b or "—")
 
 
+def map_kind_clause(kind: str, left: Optional[Dict[str, Any]],
+                    right: Optional[Dict[str, Any]]) -> str:
+    """The provenance sentence a two-up MAP caption carries, or ``""``.
+
+    One sentence when both sides tell the same story (they were refiled by the
+    same run, so they usually do), one per side when they do not.
+    """
+    if not kind:
+        return ""
+    l = str(((left or {}).get("prov") or {}).get(kind) or "").strip()
+    r = str(((right or {}).get("prov") or {}).get(kind) or "").strip()
+    if not l and not r:
+        return ""
+    if l and r and l == r:
+        return l + " on both sides"
+    bits = []
+    if l:
+        bits.append("left: %s" % l)
+    if r:
+        bits.append("right: %s" % r)
+    return "; ".join(bits)
+
+
+def caption_with_provenance(caption: str, side: Optional[Dict[str, Any]],
+                            kind: str) -> str:
+    """A SINGLE figure's caption with the provenance sentence appended, or the
+    caption unchanged when the map and its table are one solve."""
+    note = str(((side or {}).get("prov") or {}).get(kind) or "").strip()
+    if not note:
+        return caption
+    txt = (caption or "").rstrip()
+    if txt.endswith("."):
+        txt = txt[:-1]
+    return "%s; %s." % (txt, note)
+
+
 def pair_caption(what: str, left: Optional[Dict[str, Any]],
                  right: Optional[Dict[str, Any]], *,
                  have: Tuple[bool, bool] = (True, True),
-                 numbers: str = "", note: str = "") -> str:
+                 numbers: str = "", note: str = "",
+                 map_kind: str = "") -> str:
     """One caption for a two-up figure.
 
     ``<what it shows>. Left: rated, 562.1 A rms at 14,200 rpm; right: peak,
@@ -1918,7 +1955,7 @@ def pair_caption(what: str, left: Optional[Dict[str, Any]],
                   "this figure" % (_side(one), (other or {}).get("duty") or "—"))
     else:
         clause = "Neither duty has anything stored for this figure"
-    for extra in (numbers, note):
+    for extra in (numbers, note, map_kind_clause(map_kind, left, right)):
         if str(extra or "").strip():
             clause += "; " + str(extra).strip()
     return ((txt + " ") if txt else "") + clause + "."
@@ -3889,6 +3926,20 @@ MAGNET_CLASS_MAX_C: Dict[str, float] = {
     "SH": 150.0, "UH": 180.0, "EH": 200.0, "AH": 230.0,
 }
 
+#: WHAT THE ROTOR BRIDGES ARE FOR, on this die (user 2026-09-15).  A surface
+#: magnet rotor whose poles are joined by thin bridges reads as a failed part
+#: in every centrifugal solve — the bridges yield at speed and the safety
+#: factor on them is well under 1 — and on this machine that is BY DESIGN: the
+#: bridges hold the laminations together for assembly, the sleeve carries the
+#: magnets, and nothing asks the bridge to carry a load once the band is on.
+#: One sentence, printed wherever the rotor's safety factor is.
+ROTOR_BRIDGE_POLICY = (
+    "the bridges between the poles are assembly-only and carry no load in "
+    "operation; the magnets are retained by the sleeve")
+
+#: The parts whose safety factor :data:`ROTOR_BRIDGE_POLICY` is about.
+ROTOR_BRIDGE_PARTS = ("rotor", "rotor_core", "rotor core")
+
 #: Insulation classes, °C — IEC 60085.  The materials library's enamel and liner
 #: cards are thermal-property cards and carry no rating, so the report assumes
 #: the project's own build (200 °C = class N) and says that it did.
@@ -4069,6 +4120,36 @@ RING_MODE_RED_PCT = 2.0
 MOD_INDEX_LIMIT = 1.15
 MOD_CEILING_OF_VDC = MOD_INDEX_LIMIT * math.sqrt(3.0) / 2.0
 
+#: WHAT THE BRIDGE'S OWN THD IS, and why it has no limit (reviewer 2026-09-15).
+#: The 10 % gate is a statement about the machine's back-EMF — a low-order,
+#: sinusoidal-run quantity that a pole arc and a winding factor can change.  A
+#: two-level bridge's line voltage is a pulse train: its THD is tens of per
+#: cent by construction at ANY design, all of it in the carrier band, and the
+#: winding inductance filters it — which is why the number beside it, the
+#: CURRENT THD, is the one that says what reaches the machine.
+BRIDGE_THD_NOTE = (
+    "the THD of the bridge's own pulse train, not of the machine: carrier-band "
+    "content, filtered by the winding inductance — it is the current THD "
+    "printed beside it that says what reaches the copper and the iron. No "
+    "limit: a two-level bridge distorts its line voltage by tens of per cent "
+    "whatever the machine is")
+
+#: The same thing in one clause, for the 10 % row's own note.
+SINE_THD_NOTE = (
+    "10 % is this report's own reference; judged on the SINUSOIDAL run — the "
+    "machine's own back-EMF distortion, which is what a pole arc and a winding "
+    "factor can change. The bridge's pulse-train THD is the informational row "
+    "beside it")
+
+#: A PWM duty is solved on ONE chosen DC link, and that link — not the pack
+#: floor — is the voltage everything about it is judged against (reviewer
+#: 2026-09-15).  Where the chosen link is the pack's MAXIMUM, the duty exists
+#: only while the pack is full, which is a statement a client must not have to
+#: derive from two numbers in two tables.
+DC_LINK_AMBER_NOTE = "reachable only on a fully charged pack"
+
+#: How close ``inverter.v_dc_V`` must sit to a pack level to read as that level.
+DC_LINK_MATCH_V = 1.0
 
 def modulation_index(v1_ll_peak_v: Any, v_dc_v: Any) -> Optional[float]:
     """The two-level bridge's modulation index m = 2·V1_phase,peak / V_dc.
@@ -4085,6 +4166,82 @@ def modulation_index(v1_ll_peak_v: Any, v_dc_v: Any) -> Optional[float]:
     if v is None or vdc is None or vdc <= 0:
         return None
     return 2.0 * (v / math.sqrt(3.0)) / vdc
+
+
+def pack_level_words(v_dc: Any, ctx: Dict[str, Any]) -> str:
+    """Where a chosen DC link sits in the pack's range, in words.
+
+    ``"the pack maximum (fully charged)"``, ``"the pack nominal"``, ``"the pack
+    minimum (fully discharged)"``, or a plain "between" sentence.  The words a
+    client reads to learn whether the duty exists on a half-empty pack.
+    """
+    v = _numf(v_dc)
+    lo, nom, hi = (_numf(ctx.get("v_pack_min_v")), _numf(ctx.get("v_pack_nom_v")),
+                   _numf(ctx.get("v_pack_max_v")))
+    if v is None:
+        return ""
+    for lvl, words in ((hi, "the pack maximum (fully charged)"),
+                       (nom, "the pack nominal"),
+                       (lo, "the pack minimum (fully discharged)")):
+        if lvl is not None and abs(v - float(lvl)) <= DC_LINK_MATCH_V:
+            return words
+    if lo is not None and v < float(lo):
+        return "BELOW the pack minimum"
+    if hi is not None and v > float(hi):
+        return "ABOVE the pack maximum"
+    if nom is not None and v > float(nom):
+        return "between the pack nominal and its maximum"
+    if nom is not None:
+        return "between the pack minimum and its nominal"
+    return "inside the pack's range"
+
+
+def dc_link_vs_pack_rule(ctx: Dict[str, Any], duty: Any) -> Dict[str, Any]:
+    """The PWM duty's own voltage verdict: the link it was SOLVED on, against
+    the pack that has to supply it (reviewer 2026-09-15).
+
+    Green while the link is at or under the pack's nominal — a pack at any
+    state of charge above half can hold it.  AMBER above nominal, because the
+    duty then exists only while the pack is full: the L180 'peak' duty was
+    solved on 1,049.8 V, which is the pack MAXIMUM, and no page of the document
+    said that its 500 kW is a fully-charged-pack number.  Red outside the pack
+    altogether — the duty was solved on a supply this machine does not have.
+    """
+    v = _numf(ctx.get("v_dc_run_v"))
+    lo, nom, hi = (_numf(ctx.get("v_pack_min_v")), _numf(ctx.get("v_pack_nom_v")),
+                   _numf(ctx.get("v_pack_max_v")))
+    words = pack_level_words(v, ctx)
+    level = "green"
+    if v is None or (lo is None and hi is None):
+        level = "info"
+    elif (lo is not None and v < float(lo) - DC_LINK_MATCH_V) or \
+         (hi is not None and v > float(hi) + DC_LINK_MATCH_V):
+        level = "red"
+    elif nom is not None and v > float(nom) + DC_LINK_MATCH_V:
+        level = "amber"
+    note = ("the DC link the coupled run was actually solved on, against this "
+            "pack's range %s … %s (nominal %s)"
+            % (_fmt(lo, 1, "V"), _fmt(hi, 1, "V"), _fmt(nom, 1, "V"))
+            + (("; this link is %s" % words) if words else ""))
+    if level == "amber":
+        note += " — %s" % DC_LINK_AMBER_NOTE
+    # The margin a reader wants here is how much LINK is left: the distance to
+    # the pack's fully-charged top, in per cent of it.  A duty solved at the
+    # maximum reads 0.0 % and says so in the same column as every other rule.
+    margin = (None if (v is None or hi is None or not float(hi))
+              else round(100.0 * (float(hi) - v) / float(hi), 1))
+    return {
+        "rule": "dc_link_vs_pack", "duty": duty, "level": level,
+        "quantity": "DC link this duty was solved on",
+        "value": v, "limit": hi, "unit": "V", "kind": "range",
+        "margin_pct": margin,
+        "remedy": ("Every number of this duty belongs to that link: at a lower "
+                   "state of charge the bridge builds less voltage and the "
+                   "point is not reachable. Bill the duty at the nominal link, "
+                   "or state it as a fully-charged-pack rating."
+                   if level in ("amber", "red") else ""),
+        "note": note}
+
 
 #: A separation joint that has lost this much of its contact is reported even
 #: when the solve did not call it lift-off.
@@ -4212,6 +4369,56 @@ def overspeed_remedy_clause(factor: Any) -> str:
     return (". This solve ran at the duty's own speed only (overspeed factor "
             "1) — re-run the rotor stress at 1.2, the case a band is sized "
             "against")
+
+
+def is_rotor_bridge_part(part: Any) -> bool:
+    """True for the part :data:`ROTOR_BRIDGE_POLICY` is about."""
+    return str(part or "").strip().lower() in ROTOR_BRIDGE_PARTS
+
+
+def sleeve_sf_clause(ctx: Dict[str, Any]) -> str:
+    """``"sleeve SF 2.06 carries the retention"`` — the number that matters
+    where the rotor's own safety factor does not (user 2026-09-15)."""
+    sf = _numf((ctx.get("part_safety_factors") or {}).get("sleeve"))
+    if sf is None and str(ctx.get("sf_min_part") or "").lower() == "sleeve":
+        sf = _numf(ctx.get("sf_min"))
+    if sf is None:
+        return ""
+    return "sleeve SF %s carries the retention" % _fmt(sf, 2)
+
+
+def rotor_bridge_note(part: Any, ctx: Dict[str, Any]) -> str:
+    """The standing policy clause for a rotor safety factor, or ``""``.
+
+    The number and the red flag stay exactly as they are — the bridges really
+    do yield at this speed and the report says so — but a client reading
+    "SF 0.24" with no further word would read a rotor that flies apart.  The
+    sentence says what the bridges are for, and the sleeve's own safety factor
+    beside it says what actually holds the poles on.
+    """
+    if not is_rotor_bridge_part(part):
+        return ""
+    bits = [ROTOR_BRIDGE_POLICY]
+    _sl = sleeve_sf_clause(ctx)
+    if _sl:
+        bits.append(_sl)
+    _f = _numf(ctx.get("overspeed_factor"))
+    if _f is not None and _f <= 1.0 + 1e-9:
+        bits.append("overspeed 1.2 not solved")
+    return ". Standing policy for this rotor (2026-09-15): " + "; ".join(bits)
+
+
+def rotor_bridge_remedy(part: Any, ctx: Dict[str, Any]) -> str:
+    """The same policy, as the remedy's last sentence."""
+    if not is_rotor_bridge_part(part):
+        return ""
+    _sl = sleeve_sf_clause(ctx)
+    _f = _numf(ctx.get("overspeed_factor"))
+    return (" On this rotor, though, %s%s%s."
+            % (ROTOR_BRIDGE_POLICY,
+               ("" if not _sl else " — %s" % _sl),
+               ("" if _f is None or _f > 1.0 + 1e-9
+                else "; overspeed 1.2 not solved")))
 
 
 def overspeed_glossary_text(factor: Any) -> str:
@@ -4380,13 +4587,32 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                      "share at which the %s peak sits exactly on its limit"
                      % str(ctx.get("ed_limiting_part") or "hottest part")
                      + _ed_limit_clause(ctx))})
+    # ── TWO THDs, ONE LIMIT (reviewer 2026-09-15) ───────────────────────────
+    # Split exactly as the torque ripple was: the gate is on the MACHINE's own
+    # line-voltage distortion, which is the sinusoidal run's, and the bridge's
+    # pulse-train THD is an informational row with no limit beside it.
+    _is_pwm = str(ctx.get("drive") or "sine") == "pwm"
     out.append(_warn(
-        "thd", duty, "Terminal voltage THD",
+        "line_voltage_thd", duty,
+        "Line voltage THD" + (" (low-order, sinusoidal run)" if _is_pwm else ""),
         ctx.get("thd_pct"), THD_LIMIT_PCT, "%",
         "A distorted back-EMF costs the current controller headroom: shorten "
         "the magnet arc, check the winding factor for the low harmonics, or "
         "accept it and size the inverter for the harmonic current.",
-        note="10 % is this report's own reference; no standard fixes it"))
+        note=(SINE_THD_NOTE if _is_pwm else
+              "10 % is this report's own reference; no standard fixes it")))
+    _bthd = _numf(ctx.get("bridge_thd_pct"))
+    if _is_pwm and _bthd is not None:
+        _ithd = _numf(ctx.get("carrier_thd_i_pct"))
+        out.append({
+            "rule": "bridge_thd", "level": "info", "duty": duty,
+            "quantity": "Line voltage THD at the bridge (pulse train)",
+            "value": _bthd, "limit": None, "unit": "%", "kind": "info",
+            "margin_pct": None, "remedy": "",
+            "note": (BRIDGE_THD_NOTE
+                     + ("" if _ithd is None
+                        else ("; current THD %s on this duty"
+                              % _fmt(_ithd, 2, "%"))))})
     _cool = str(ctx.get("cooling_kind") or "")
     _open = ctx.get("frame_open")
     _jlim, _jwhy = current_density_limit(_cool, ctx.get("insulation_mats"), _open)
@@ -4400,32 +4626,50 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
               if _jwhy else J_BAND_TEXT)))
 
     # ── the pack ────────────────────────────────────────────────────────────
-    # TWO VOLTAGE ROWS, and they are different questions (reviewer 2026-09-14 /
-    # PWM study §1.7).  This one is the WAVEFORM's peak — harmonics included —
-    # against the pack floor: an insulation and a device-rating statement, and
-    # a rough sanity check on the terminal voltage.  It is NOT the drive's
-    # control limit: on the L155 peak duty it passes by 0.1 % while the
-    # fundamental is 15-20 % past what the bridge can synthesise.
-    out.append(_warn(
-        "voltage_headroom", duty, "Line voltage, waveform peak",
-        ctx.get("v_line_peak_v"), ctx.get("v_pack_min_v"), "V",
-        "The peak of the terminal waveform is what the winding insulation and "
-        "the bridge's devices see: fewer turns, more field weakening at this "
-        "point, or a pack with a higher minimum voltage. Whether the DRIVE can "
-        "hold the current is the modulation row below, not this one.",
-        note="limit = the pack's minimum (fully discharged) voltage; the value "
-             "is the peak of the whole solved line-voltage waveform, 2-D peak "
-             "× k_3d" + ("" if not _numf(ctx.get("k_3d")) else
-                         (" (%s × %s)" % (_fmt(ctx.get("v_line_peak_2d_v"), 1, "V"),
-                                          _fmt(ctx.get("k_3d"), 4))))
-             + " — the same factor the modulation row below uses"))
+    # WHICH VOLTAGE RULES A DUTY GETS DEPENDS ON WHAT FED IT (reviewer
+    # 2026-09-15).
+    #
+    # On a SINUSOIDAL duty nothing is chosen for the machine: the terminal
+    # waveform is what the field makes, and the peak of it against the pack
+    # floor is the insulation and device-rating statement it always was.
+    #
+    # On a PWM duty that rule is wrong twice over.  The "waveform peak" of a
+    # voltage-fed run is the STAR-EQUIVALENT MODEL's peak — 1.155 × V_dc by
+    # construction, a number of the circuit the solver substitutes and not of
+    # anything a probe could touch — and the pack FLOOR is not what the duty
+    # was solved on: it was solved on one chosen DC link.  So the rule set
+    # becomes three questions about that link, and the model peak is never
+    # quoted: where the link sits in the pack (below), whether the bridge can
+    # build the fundamental on it, and what the insulation sees, which is the
+    # link itself and not 1.155 times it.
+    if not _is_pwm:
+        out.append(_warn(
+            "voltage_headroom", duty, "Line voltage, waveform peak",
+            ctx.get("v_line_peak_v"), ctx.get("v_pack_min_v"), "V",
+            "The peak of the terminal waveform is what the winding insulation "
+            "and the bridge's devices see: fewer turns, more field weakening at "
+            "this point, or a pack with a higher minimum voltage. Whether the "
+            "DRIVE can hold the current is the modulation row below, not this "
+            "one.",
+            note="limit = the pack's minimum (fully discharged) voltage; the "
+                 "value is the peak of the whole solved line-voltage waveform, "
+                 "2-D peak × k_3d"
+                 + ("" if not _numf(ctx.get("k_3d")) else
+                    (" (%s × %s)" % (_fmt(ctx.get("v_line_peak_2d_v"), 1, "V"),
+                                     _fmt(ctx.get("k_3d"), 4))))
+                 + " — the same factor the modulation row below uses"))
+    else:
+        out.append(dc_link_vs_pack_rule(ctx, duty))
     # …and THIS is the gate the inverter actually has: the bridge does not have
     # to synthesise the machine's harmonics, it has to synthesise the
     # FUNDAMENTAL, and with zero-sequence injection it reaches
     # V1_LL,peak = 0.9959·V_dc before it leaves linear modulation.
     _m = _numf(ctx.get("mod_index"))
+    _mod_against = ("the DC link this duty was solved on"
+                    if _is_pwm and ctx.get("v_dc_run_v") is not None
+                    else "the pack minimum")
     out.append(_warn(
-        "modulation_headroom", duty,
+        "fundamental_vs_modulation", duty,
         "Line voltage, fundamental vs linear modulation",
         ctx.get("v_line_fund_v"), ctx.get("v_mod_ceiling_v"), "V",
         "Past the ceiling a two-level bridge cannot make this fundamental at "
@@ -4433,17 +4677,36 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         "turns, a pack with a higher minimum voltage, more field weakening at "
         "this point, or a modulation with a higher ceiling (overmodulation up "
         "to six-step, paid for in low-order harmonic current and losses).",
-        note=("limit = %s x the pack minimum (%s), i.e. modulation index "
+        note=("limit = %s x %s (%s), i.e. modulation index "
               "m = 2*V1_phase,peak/V_dc at or under %s with "
               "V1_phase = V1_LL/sqrt(3) in BOTH star and delta%s"
-              % (_fmt(MOD_CEILING_OF_VDC, 4),
-                 _fmt(ctx.get("v_pack_min_v"), 1, "V"),
+              % (_fmt(MOD_CEILING_OF_VDC, 4), _mod_against,
+                 _fmt(ctx.get("v_dc_run_v") if _is_pwm
+                      else ctx.get("v_pack_min_v"), 1, "V"),
                  _fmt(MOD_INDEX_LIMIT, 2),
                  ("; this duty sits at m = %s%s"
                   % (_fmt(_m, 3),
                      (" — " + str(ctx["mod_index_note"]))
                      if ctx.get("mod_index_note") else ""))
                  if _m is not None else ""))))
+    # …and what the INSULATION sees on a bridge: the line-to-line pulse
+    # amplitude, which is the DC link itself.  A two-level inverter swings each
+    # terminal between the rails, so between two terminals the winding sees
+    # ± V_dc — never 1.155 × V_dc, which is an artefact of the star-equivalent
+    # circuit the voltage-fed solve runs in.  No card on this project states a
+    # winding or device voltage rating, so the row is a finding, not a verdict.
+    if _is_pwm and _numf(ctx.get("v_dc_run_v")) is not None:
+        out.append({
+            "rule": "insulation_peak", "duty": duty, "level": "info",
+            "quantity": "Bridge line voltage amplitude (what the insulation sees)",
+            "value": _numf(ctx.get("v_dc_run_v")), "limit": None, "unit": "V",
+            "kind": "info", "margin_pct": None, "remedy": "",
+            "note": ("the two-level bridge's line-to-line pulse amplitude = the "
+                     "DC link; the winding sees ±%s between two terminals, plus "
+                     "whatever the cable reflection adds at the switching edge. "
+                     "No insulation or device voltage rating is stated on this "
+                     "project, so nothing is checked against it"
+                     % _fmt(ctx.get("v_dc_run_v"), 1, "V"))})
     out.append(_warn(
         "runaway_speed", duty, "Runaway speed on cold magnets",
         ctx.get("runaway_rpm"), ctx.get("max_speed_rpm"), "rpm",
@@ -4467,9 +4730,11 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             " (%s)" % ctx["sf_min_part"] if ctx.get("sf_min_part") else ""),
         ctx.get("sf_min"), ctx.get("sf_limit", 2.0), "",
         "Thicken the sleeve or raise its interference, shorten the magnet "
-        "overhang, add material at the bridge root%s."
-        % overspeed_remedy_clause(ctx.get("overspeed_factor")),
-        kind="min", note=_sf_note))
+        "overhang, add material at the bridge root%s.%s"
+        % (overspeed_remedy_clause(ctx.get("overspeed_factor")),
+           rotor_bridge_remedy(ctx.get("sf_min_part"), ctx)),
+        kind="min",
+        note=_sf_note + rotor_bridge_note(ctx.get("sf_min_part"), ctx)))
     # …and every OTHER part beside the worst one.  On the L155 peak duty the
     # magnet's own SF is 2.05 against an acceptance level of 2 — the
     # second-tightest number in the document — and nothing fired on it,
@@ -4481,8 +4746,9 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             "part_safety_factor", duty, "Safety factor (%s)" % _part,
             _sf, ctx.get("sf_limit", 2.0), "",
             "Same levers as the row above: more section, more interference, a "
-            "stronger card, or a lower speed case.",
-            kind="min", note=_sf_note))
+            "stronger card, or a lower speed case."
+            + rotor_bridge_remedy(_part, ctx),
+            kind="min", note=_sf_note + rotor_bridge_note(_part, ctx)))
     out.append(_warn(
         "sleeve_hoop", duty, "Sleeve hoop stress",
         ctx.get("sleeve_hoop_mpa"), ctx.get("sleeve_strength_mpa"), "MPa",
@@ -5052,7 +5318,17 @@ def _duty_map_sources(die: str, cfg: str, duty: Optional[str]) -> Dict[str, Any]
     except Exception:                                        # noqa: BLE001
         return out
 
+    # WHEN EACH MAP WAS SOLVED, kept beside the arrays (reviewer 2026-09-15).
+    # A field and the record the tables beside it are built from are two
+    # different answers, and on the L180 gen report they were two different
+    # SOLVES — a sinusoidal map of 2026-09-13 under a PWM table of 2026-09-16,
+    # with nothing on the page saying so.  The captions compare these.
+    meta: Dict[str, Any] = {}
+    out["_meta"] = meta
+
     em = _df.load(die, cfg, duty, "em")
+    if em is not None:
+        meta["em"] = dict(em.get("meta") or {})
     if em is not None and em.get("vertices") is not None:
         out["em"] = {
             "P_mm": em.get("vertices"), "T": em.get("triangles"),
@@ -5064,6 +5340,8 @@ def _duty_map_sources(die: str, cfg: str, duty: Optional[str]) -> Dict[str, Any]
             "loss_dens_label": (em.get("meta") or {}).get("loss_dens_label") or "",
         }
     th = _df.load(die, cfg, duty, "thermal")
+    if th is not None:
+        meta["thermal"] = dict(th.get("meta") or {})
     if th is not None and th.get("temperature_per_node") is not None:
         out["thermal"] = {"field": {
             "vertices": th.get("vertices"), "triangles": th.get("triangles"),
@@ -5071,6 +5349,8 @@ def _duty_map_sources(die: str, cfg: str, duty: Optional[str]) -> Dict[str, Any]
             "domain_per_tri": th.get("domain_per_tri"),
         }}
     md = _df.load(die, cfg, duty, "modes")
+    if md is not None:
+        meta["modes"] = dict(md.get("meta") or {})
     if md is not None and md.get("u_modes") is not None:
         _mm = md.get("meta") or {}
         out["modes"] = {
@@ -5083,6 +5363,8 @@ def _duty_map_sources(die: str, cfg: str, duty: Optional[str]) -> Dict[str, Any]
             },
         }
     ms = _df.load(die, cfg, duty, "rotor_stress")
+    if ms is not None:
+        meta["rotor_stress"] = dict(ms.get("meta") or {})
     if ms is not None and ms.get("vm_per_tri") is not None:
         case = str((ms.get("meta") or {}).get("case") or "rated")
         out["rotor_stress"] = {
@@ -5099,6 +5381,138 @@ def _duty_map_sources(die: str, cfg: str, duty: Optional[str]) -> Dict[str, Any]
             },
         }
     return out
+
+
+# ---------------------------------------------------------------------------
+# WHERE A PICTURE CAME FROM, AGAINST WHERE THE TABLE BESIDE IT CAME FROM
+# (reviewer 2026-09-15)
+# ---------------------------------------------------------------------------
+# A map is an npz the solve filed; the table beside it is the compact record
+# the same tab filed.  They are normally one answer stored twice — and they are
+# NOT when a later run refreshed the record and not the field.  On the L180 gen
+# report the thermal maps were the sinusoidal solve of 2026-09-13 (hottest
+# solid 153.9 / 168.4 °C) and every table on the page was the PWM run of
+# 2026-09-16 (175.2 / 219.0 °C).  Both are honest numbers of two different
+# machines, and the document mixed them silently.
+#
+# Never again: every map caption compares the two provenances, and where they
+# differ it says which solve the picture is and which run the table is, and
+# labels the caption's own numbers as the MAP's.
+
+#: How far apart two stamps of one solve may sit and still be that solve.
+MAP_PROVENANCE_TOL_S = 3600.0
+
+#: Which stored record each FIELD kind's tables are built from.  ``em`` is the
+#: exception with two answers: on a duty whose coupled run was the inverter's,
+#: the electromagnetic tables are that coupled record's, not the `em` one's.
+_FIELD_RECORD_KIND = {"thermal": "thermal", "rotor_stress": "rotor_stress",
+                      "modes": "modes", "em": "em"}
+
+
+def _when_of(x: Any) -> Optional[Tuple[bool, Any]]:
+    """``(aware, datetime)`` of a stored stamp, or ``None``.
+
+    The stores write both shapes — a UTC-offset ``computed_at`` from the solve
+    routes and a naive local one from the older paths — so the kind travels
+    with the value and only like is compared with like.
+    """
+    s = str(x or "").strip()
+    if not s:
+        return None
+    try:
+        d = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return (d.tzinfo is not None, d)
+
+
+def same_solve(a: Any, b: Any) -> Optional[bool]:
+    """Do these two stamps describe one solve?  ``None`` when it cannot be told.
+
+    Two stamps of the same kind are compared with an hour of slack; a naive
+    stamp against an offset one can differ by the machine's time zone and no
+    more than the DATE is compared, which is what the question is really about.
+    """
+    wa, wb = _when_of(a), _when_of(b)
+    if wa is None or wb is None:
+        return None
+    if wa[0] == wb[0]:
+        return abs((wa[1] - wb[1]).total_seconds()) <= MAP_PROVENANCE_TOL_S
+    return wa[1].date() == wb[1].date()
+
+
+def _solve_words(drive: Any) -> str:
+    """"PWM run" | "sinusoidal solve" — a record with no ``drive`` predates the
+    inverter loop and IS a sinusoid (the same reading as :func:`record_drive`)."""
+    return ("PWM run" if record_drive({"drive": drive}) == "pwm"
+            else "sinusoidal solve")
+
+
+def _day_of(x: Any) -> str:
+    w = _when_of(x)
+    return w[1].date().isoformat() if w else "an unrecorded date"
+
+
+def map_provenance_note(field_meta: Optional[Dict[str, Any]],
+                        record: Optional[Dict[str, Any]]) -> str:
+    """``""`` when the map and the table beside it are one solve; otherwise the
+    sentence that says they are not.
+
+    Nothing is guessed: a field or a record with no stamp cannot be compared
+    and says nothing, which is the same silence the document had before — the
+    sentence appears only where the two stamps really disagree.
+    """
+    if not isinstance(field_meta, dict) or not isinstance(record, dict):
+        return ""
+    fw, rw = field_meta.get("computed_at"), record.get("computed_at")
+    same = same_solve(fw, rw)
+    if same is None or same:
+        return ""
+    return ("map from the %s of %s; the table beside it is the %s of %s — the "
+            "numbers in this caption are the MAP's"
+            % (_solve_words(field_meta.get("drive")), _day_of(fw),
+               _solve_words(record.get("drive")), _day_of(rw)))
+
+
+def duty_map_provenance(rec: Optional[Dict[str, Any]],
+                        metas: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """``{field kind: the caption's provenance sentence}`` for one duty.
+
+    Only kinds whose two stamps actually disagree get an entry, so a caller can
+    ask for any kind and get ``""`` when there is nothing to say.
+    """
+    out: Dict[str, str] = {}
+    if not isinstance(rec, dict) or not isinstance(metas, dict):
+        return out
+    for kind, rkey in _FIELD_RECORD_KIND.items():
+        meta = metas.get(kind)
+        if not isinstance(meta, dict):
+            continue
+        # The electromagnetic tables of a duty solved on the inverter are the
+        # COUPLED record's, so that is the record its field is compared with.
+        r = rec.get(rkey)
+        if kind == "em" and record_drive(rec.get("coupled")) == "pwm":
+            r = rec.get("coupled")
+        note = map_provenance_note(meta, r if isinstance(r, dict) else None)
+        if note:
+            out[kind] = note
+    # The Campbell diagram is drawn from the modal field against the critical
+    # speeds record; where the modal map is already flagged, so is it.
+    if "modes" in out:
+        out.setdefault("critical_speeds", out["modes"])
+    return out
+
+
+def _duty_record(die: str, cfg: str, duty: Optional[str]) -> Dict[str, Any]:
+    """The compact per-duty record every table on these pages is built from."""
+    if not duty:
+        return {}
+    try:
+        from motor_ai_sim import duty_results as _dr
+        rec = (_dr.get(die, cfg) or {}).get(duty)
+    except Exception:                                        # noqa: BLE001
+        return {}
+    return rec if isinstance(rec, dict) else {}
 
 
 def _duty_at_point(duties: List[Dict[str, Any]], rpm: Any, cur: Any) -> Optional[str]:
@@ -5289,6 +5703,26 @@ def duty_inverter(col: Dict[str, Any]) -> Dict[str, Any]:
     rec = (col.get("res") or {}).get("coupled")
     inv = rec.get("inverter") if isinstance(rec, dict) else None
     return dict(inv) if isinstance(inv, dict) else {}
+
+
+def sine_line_thd(col: Dict[str, Any]) -> Optional[float]:
+    """The LINE-voltage THD of this duty's SINUSOIDAL run, or ``None``.
+
+    The 10 % gate is a statement about the machine's own back-EMF, so on a PWM
+    duty it is read here and not from the bridge's pulse train (reviewer
+    2026-09-15).  The coupled record's ``reference_sine`` first — it is the
+    sine solved at the SAME temperatures as the PWM pass — then the duty's own
+    saved sinusoidal summary.
+    """
+    rec = (col.get("res") or {}).get("coupled")
+    ref = (rec.get("reference_sine") if isinstance(rec, dict) else None)
+    em = (ref.get("em") if isinstance(ref, dict)
+          and isinstance(ref.get("em"), dict) else None)
+    v = _numf((em or {}).get("THD_LL_pct") or (em or {}).get("THD_pct"))
+    if v is not None:
+        return v
+    s = col.get("em_sine") if isinstance(col.get("em_sine"), dict) else {}
+    return _numf(s.get("THD_LL_pct") or s.get("THD_pct"))
 
 
 def _with_inverter(wf: Any, col: Any) -> Dict[str, Any]:
@@ -5915,7 +6349,18 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # see, and what the U_AB spectrum chart measures.  `THD_pct` is the
     # winding's: in delta it carries the zero-sequence triplen EMF (6.3 %)
     # that never reaches the terminals (1.2 %) — reviewer 2026-09-13.
+    #
+    # …AND IT SPLITS EXACTLY AS THE RIPPLE DOES (reviewer 2026-09-15).  The
+    # 10 % gate is about the MACHINE's distortion; on a PWM duty `THD_LL_pct`
+    # is the BRIDGE's pulse train — 44.7 % on the L180 rated duty, which failed
+    # a machine whose own back-EMF distorts by 1.17 %.  So the rule reads the
+    # sinusoidal run, and the bridge's figure gets an informational row, with
+    # the current THD beside it because that is what the winding lets through.
     ctx["thd_pct"] = _numf(em.get("THD_LL_pct") or em.get("THD_pct"))
+    if ctx["drive"] == "pwm":
+        ctx["bridge_thd_pct"] = ctx["thd_pct"]
+        ctx["sine_thd_pct"] = sine_line_thd(col)
+        ctx["thd_pct"] = ctx["sine_thd_pct"]
     ctx["j_coil_a_mm2"] = _numf(em.get("J_coil_A_per_mm2")
                                 or rr.get("j_coil_a_mm2"))
     kind, kind_note = _cooling_kind(t)
@@ -5951,6 +6396,11 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     rpm = _numf(em.get("rpm") or col["d"].get("rpm"))
     ctx["v_line_peak_v"], ctx["v_pack_min_v"] = v_peak, v_min
     ctx["v_line_peak_2d_v"], ctx["k_3d"] = v_peak_2d, _k3
+    # The WHOLE pack, not just its floor: a PWM duty is solved on a chosen DC
+    # link and the question about it is where in the pack's range that link
+    # sits (reviewer 2026-09-15).
+    ctx["v_pack_nom_v"] = _numf((batt or {}).get("v_nom"))
+    ctx["v_pack_max_v"] = _numf((batt or {}).get("v_max"))
     # THE RUNAWAY SPEED IS A PROPERTY OF THE MACHINE, not of the duty
     # (reviewer 2026-09-13, item 8: 18 537 vs 18 705 rpm for one machine on
     # the same cold magnets).  An uncontrolled machine carries no load
@@ -6007,12 +6457,26 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         _vdc = _numf(_inv.get("v_dc_V"))
         if _vdc is not None:
             ctx["v_dc_run_v"] = _vdc
+            # THE CEILING IS THE RUN'S LINK, NOT THE PACK FLOOR (reviewer
+            # 2026-09-15).  A PWM duty was solved on one chosen link and the
+            # only ceiling it can be judged against is that link's; comparing
+            # it with the fully-discharged pack failed duties the bridge held
+            # comfortably.
+            ctx["v_mod_ceiling_v"] = MOD_CEILING_OF_VDC * float(_vdc)
         if _m is not None:
             ctx["mod_index"] = _m
             ctx["mod_index_note"] = (
                 "the modulation index the inverter run itself ran at%s"
                 % ((", on a %s V link" % _fmt(_vdc, 0))
                    if _vdc is not None else ""))
+            # …and the fundamental that goes with it, in the SAME convention.
+            # The stored `V1_LL_V` of a voltage-fed run is the star-equivalent
+            # circuit's, which does not divide into the link the bridge really
+            # ran on; the measured m does, so the rule's two halves are both
+            # the bridge's own: V1_LL,peak = m · V_dc · sqrt(3)/2.
+            if _vdc is not None:
+                ctx["v_line_fund_v"] = (float(_m) * float(_vdc)
+                                        * math.sqrt(3.0) / 2.0)
 
     # ── mechanical ──────────────────────────────────────────────────────────
     if ms:
@@ -6608,6 +7072,11 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
                          if _th else None),
             "mech": _me, "case": _side_case(_me),
             "demag": demag_corner_stats(die, cfg, name),
+            # WHERE EACH MAP CAME FROM, against the record its table came from
+            # (reviewer 2026-09-15) — empty when they are one solve, which is
+            # every well-behaved duty.
+            "prov": duty_map_provenance(_duty_record(die, cfg, name),
+                                        (s or {}).get("_meta")),
         }
 
     pair = {
@@ -6756,7 +7225,9 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                                        or SUPPLY_SINE) != SUPPLY_SINE
                              else "sine"),
                       em_sine=(_col_of(cols, str(d_duty.get("name") or ""))
-                               or {}).get("em_sine"))
+                               or {}).get("em_sine"),
+                      inverter=duty_inverter(
+                          _col_of(cols, str(d_duty.get("name") or "")) or {}))
     # From here on a section opens a NEW page only when less than half of the
     # current one is left: with full-width field maps a hard break after each
     # section left a map alone on a page with three quarters of white under it
@@ -7189,7 +7660,7 @@ def _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src, brg,
         out.append(_table([[r[0], r[1], _para(str(r[2]), st["cell"])]
                            for r in _brows],
                           [140, 95, CONTENT_W - 235], header=True, size=8.8))
-        out.append(_para(BATTERY_NOTE, st["note"]))
+        out.append(_para(battery_note(cols), st["note"]))
     else:
         out.append(_para(BATTERY_NONE, st["note"]))
     out.append(Spacer(1, 10))
@@ -8044,11 +8515,33 @@ V1_NOTE_LABEL = "…what V1 is"
 V1_NOTE_TEXT = ("an amplitude, not a waveform peak: a flat-topped wave peaks "
                 "below its fundamental, and the inverter synthesises this one")
 
+#: …and on a PWM duty the row above it is not a terminal waveform at all, so
+#: the sentence says what V1 is against THE BRIDGE rather than against a peak
+#: that belongs to the star-equivalent circuit (reviewer 2026-09-15).
+V1_NOTE_PWM_TEXT = ("an amplitude, and the only part of the voltage the bridge "
+                    "has to synthesise: it is judged against the DC link this "
+                    "duty was solved on, not against the carrier-averaged peak "
+                    "above")
+
+
+#: What the "waveform peak" row is on a PWM duty (reviewer 2026-09-15).  The
+#: voltage-fed solve runs a star-EQUIVALENT circuit and its "line voltage" is
+#: the winding voltage the field gives back, averaged over the carrier — not
+#: the pulse train the bridge puts on the terminals, whose amplitude is the DC
+#: link and which has a row of its own below.
+PWM_VPK_LABEL = "Winding voltage from the field, carrier-averaged peak"
+PWM_VDC_LABEL = "Bridge line voltage amplitude [V] = DC link"
+PWM_VDC_NOTE = ("what the terminals really carry: a two-level bridge swings "
+                "each one between the rails, so the line-to-line pulse "
+                "amplitude IS the DC link — never 1.155 × V_dc, which belongs "
+                "to the star-equivalent circuit the solve runs in")
+
 
 def em_torque_rows(em: Dict[str, Any],
                    batt: Optional[Dict[str, Any]] = None,
                    drive: str = "sine",
-                   em_sine: Optional[Dict[str, Any]] = None) -> List[List[str]]:
+                   em_sine: Optional[Dict[str, Any]] = None,
+                   inverter: Optional[Dict[str, Any]] = None) -> List[List[str]]:
     """Torque, power and voltage, 2-D beside the 3-D-corrected column.  Header
     row included.
 
@@ -8077,9 +8570,16 @@ def em_torque_rows(em: Dict[str, Any],
     def _k(v):
         f = _numf(v)
         return (f * float(k3d)) if (f is not None and k3d) else None
-    tp.append(["Line voltage, waveform peak [V]", _fmt(_g(em, "V_line_peak_V"), 1),
+    tp.append([("%s [V]" % PWM_VPK_LABEL) if _pwm_drive
+               else "Line voltage, waveform peak [V]",
+               _fmt(_g(em, "V_line_peak_V"), 1),
                _fmt(_g(em, "end3d.V_line_peak_corrected_V")
                     or _k(_g(em, "V_line_peak_V")), 1) if k3d else "—"])
+    # …and the number the terminals and the insulation actually see, which is
+    # the link and not the model peak above it (reviewer 2026-09-15).
+    _vdc = _numf((inverter or {}).get("v_dc_V"))
+    if _pwm_drive and _vdc is not None:
+        tp.append([PWM_VDC_LABEL, _fmt(_vdc, 1), PWM_VDC_NOTE])
     tp.append(["Line voltage, rms [V]", _fmt(_g(em, "V_line_rms_V"), 1),
                _fmt(_k(_g(em, "V_line_rms_V")), 1) if k3d else "—"])
     # THE FUNDAMENTAL, beside the waveform peak (reviewer 2026-09-14 / PWM
@@ -8091,8 +8591,11 @@ def em_torque_rows(em: Dict[str, Any],
     tp.append(["Line voltage, fundamental amplitude V1 [V]",
                _fmt(_g(em, "V1_LL_V"), 1),
                _fmt(_k(_g(em, "V1_LL_V")), 1) if k3d else "—"])
-    tp.append([V1_NOTE_LABEL, "", V1_NOTE_TEXT])
-    tp.append(["Phase voltage, waveform peak [V]", _fmt(_g(em, "V_phase_peak_V"), 1),
+    tp.append([V1_NOTE_LABEL, "",
+               V1_NOTE_PWM_TEXT if _pwm_drive else V1_NOTE_TEXT])
+    tp.append([("Winding phase voltage from the field, carrier-averaged peak [V]"
+                if _pwm_drive else "Phase voltage, waveform peak [V]"),
+               _fmt(_g(em, "V_phase_peak_V"), 1),
                _fmt(_k(_g(em, "V_phase_peak_V")), 1) if k3d else "—"])
     tp.append(["Phase voltage, rms [V]", _fmt(_g(em, "V_phase_rms_V"), 1),
                _fmt(_k(_g(em, "V_phase_rms_V")), 1) if k3d else "—"])
@@ -8100,12 +8603,22 @@ def em_torque_rows(em: Dict[str, Any],
     # drive engineer reads: the modulation index at the pack's worst moment.
     _v1 = _k(_g(em, "V1_LL_V")) if k3d else _numf(_g(em, "V1_LL_V"))
     _vmin = _numf((batt or {}).get("v_min"))
-    _m = modulation_index(_v1, _vmin)
-    if _m is not None:
-        tp.append(["Modulation index m at the pack minimum", _fmt(_m, 3),
-                   "m = 2·V1_phase,peak/V_dc, V_dc = the pack minimum %s; a "
-                   "two-level bridge stays linear up to m = %s."
-                   % (_fmt(_vmin, 1, "V"), _fmt(MOD_INDEX_LIMIT, 2))])
+    # ON A PWM DUTY THE BRIDGE MEASURED ITS OWN m (reviewer 2026-09-15), on the
+    # link it really ran on; re-deriving one from the pack floor describes a
+    # run that never happened.
+    _m_run = _numf((inverter or {}).get("m")) if _pwm_drive else None
+    if _m_run is not None and _vdc is not None:
+        tp.append(["Modulation index m the bridge ran at", _fmt(_m_run, 3),
+                   "m = 2·V1_phase,peak/V_dc, V_dc = the %s V link this duty "
+                   "was solved on; a two-level bridge stays linear up to "
+                   "m = %s." % (_fmt(_vdc, 1), _fmt(MOD_INDEX_LIMIT, 2))])
+    else:
+        _m = modulation_index(_v1, _vmin)
+        if _m is not None:
+            tp.append(["Modulation index m at the pack minimum", _fmt(_m, 3),
+                       "m = 2·V1_phase,peak/V_dc, V_dc = the pack minimum %s; a "
+                       "two-level bridge stays linear up to m = %s."
+                       % (_fmt(_vmin, 1, "V"), _fmt(MOD_INDEX_LIMIT, 2))])
     _vp, _vr = _numf(_g(em, "V_line_peak_V")), _numf(_g(em, "V_line_rms_V"))
     if _vp and _vr:
         tp.append(["Crest factor, line", _fmt(_vp / _vr, 3),
@@ -8605,7 +9118,8 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
              pair: Optional[Dict[str, Any]] = None,
              figs: Optional[List[int]] = None,
              drive: str = "sine",
-             em_sine: Optional[Dict[str, Any]] = None) -> List[Any]:
+             em_sine: Optional[Dict[str, Any]] = None,
+             inverter: Optional[Dict[str, Any]] = None) -> List[Any]:
     out: List[Any] = [_para(section_heading(None, "em"), st["h1"])]
     if not em:
         out.append(_para(EM_PAGE_UNSOLVED, st["warn"]))
@@ -8621,7 +9135,8 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
     # The note column WRAPS (a plain string is clipped at the cell edge in
     # reportlab — "…I_line =" on the page, reviewer 2026-09-13).
     out.append(_table([[r[0], r[1], _para(r[2], st["cell"])]
-                       for r in em_torque_rows(em, batt, drive, em_sine)],
+                       for r in em_torque_rows(em, batt, drive, em_sine,
+                                               inverter)],
                       [175, 95, CONTENT_W - 270], header=True, size=8.8))
     # The k_3d footnote belongs to the TORQUE table above, which really has
     # two columns (reviewer 2026-09-14, B1).
@@ -8746,7 +9261,8 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
         if _R:
             _blk = _fig_pair(st, _a, _b, pair_caption(
                     cap, _L, _R, have=(bool(_a), bool(_b)),
-                    numbers=em_map_numbers(key, maps, maps_r), note=_note),
+                    numbers=em_map_numbers(key, maps, maps_r), note=_note,
+                    map_kind="em"),
                 max_height=PAIR_MAX_H, lead=lead, figs=figs)
             if _blk is not None:
                 out.append(_blk)
@@ -8761,7 +9277,9 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
             out.append(_para("Fig. — " + missing + ".", st["note"]))
             continue
         out.append(KeepTogether(lead + [
-            img, _para("Fig. %d [%s] — %s" % (n_fig, tag, cap), st["note"])]))
+            img, _para("Fig. %d [%s] — %s"
+                       % (n_fig, tag, caption_with_provenance(cap, _L, "em")),
+                       st["note"])]))
     if pending_heading is not None:
         out += pending_heading
     if n_fig == 0:
@@ -10699,7 +11217,8 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
                     "hottest solid",
                     thermal_solid_max_c((_L or {}).get("th_inner") or inner),
                     thermal_solid_max_c(_R.get("th_inner") or {}), 1, "°C"),
-                note=_note), max_height=PAIR_MAX_H, figs=figs)
+                note=_note, map_kind="thermal"),
+            max_height=PAIR_MAX_H, figs=figs)
         if _blk is not None:
             out.append(_blk)
     else:
@@ -10708,9 +11227,11 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
                        CONTENT_W, max_height=PAIR_MAX_H)
         if _bars is not None:
             _bars.hAlign = "LEFT"
-            out.append(_KTt([_bars, _para("Fig. [%s] — %s"
-                                          % (_tag_t, TEMP_BARS_CAPTION),
-                                          st["note"])]))
+            out.append(_KTt([_bars, _para(
+                "Fig. [%s] — %s"
+                % (_tag_t, caption_with_provenance(TEMP_BARS_CAPTION, _L,
+                                                   "thermal")),
+                st["note"])]))
 
     # ── the budget and the picture, side by side ────────────────────────────
     # One page, not two.  The temperature map under a full-width heat budget
@@ -10763,7 +11284,8 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
                     "hottest solid",
                     thermal_solid_max_c((_L or {}).get("th_inner") or inner),
                     thermal_solid_max_c(_R.get("th_inner") or {}), 1, "°C"),
-                note=_note), max_height=PAIR_MAX_H, figs=figs)
+                note=_note, map_kind="thermal"),
+            max_height=PAIR_MAX_H, figs=figs)
     img = None if _R else _image(
         _thermal_map(field_src or res, width_cm=MAP_FULL_CM), CONTENT_W,
         max_height=PAIR_MAX_H)
@@ -10793,7 +11315,8 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
             "Fig. [%s] — %s" % (
                 _map_tag(map_duty,
                          res.get("rpm", inner.get("rpm")) or map_rpm, map_cur),
-                THERMAL_MAP_CAPTION), st["note"])]))
+                caption_with_provenance(THERMAL_MAP_CAPTION, _L, "thermal")),
+            st["note"])]))
     else:
         out.append(Spacer(1, 4))
         out.append(budget_t)
@@ -11982,14 +12505,25 @@ def mech_extra_captions() -> List[Tuple[str, str, str]]:
 
 
 def mech_percentile_text(case: Dict[str, Any]) -> str:
+    # …and where the lowest factor is the ROTOR's, the standing policy sentence
+    # rides with it (user 2026-09-15), with the sleeve's own factor beside it:
+    # the bridges are assembly features, the sleeve is the retention.
+    tail = ""
+    if is_rotor_bridge_part(case.get("sf_min_part")):
+        _sl = _numf((((case.get("parts") or {}).get("sleeve")) or {})
+                    .get("safety_factor"))
+        tail = (" %s%s."
+                % (ROTOR_BRIDGE_POLICY[0].upper() + ROTOR_BRIDGE_POLICY[1:],
+                   ("" if _sl is None
+                    else " — sleeve SF %s carries the retention" % _fmt(_sl, 2))))
     return ("Stresses are AVERAGED onto the nodes of each part. SF = strength "
             "over the averaged peak of the 'Criterion' column; the unaveraged "
             "column and p99.5 are singularity gauges, not sizing numbers. "
-            "Lowest safety factor %s on %s (raw element minimum %s)." % (
+            "Lowest safety factor %s on %s (raw element minimum %s).%s" % (
                 _fmt(case.get("sf_min"), 2), case.get("sf_min_part") or "—",
                 _fmt(case.get("sf_min_unaveraged")
                      if case.get("sf_min_unaveraged") is not None
-                     else case.get("sf_min_p05"), 2)))
+                     else case.get("sf_min_p05"), 2), tail))
 
 
 def rotor_inertia_rows(em: Dict[str, Any]) -> List[List[str]]:
@@ -12313,7 +12847,8 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
                         "highest averaged", _peak_vm((_L or {}).get("case")
                                                      or case),
                         _peak_vm(_R.get("case")), 1, "MPa"),
-                    note=_note), max_height=PAIR_MAX_H, figs=figs)
+                    note=_note, map_kind="rotor_stress"),
+                max_height=PAIR_MAX_H, figs=figs)
             if _blk is not None:
                 out.append(_blk)
             else:
@@ -12324,9 +12859,14 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
                 from reportlab.platypus import KeepTogether
                 out.append(fit_t)
                 out.append(KeepTogether([img, _para(
-                    f"Fig. [{_map_tag(map_duty, case.get('rpm', res.get('rpm')) or map_rpm, map_cur)}] "
-                    f"— Von Mises stress over the '{case_used}' case, MPa, "
-                    f"averaged onto each part's own nodes.",
+                    "Fig. [%s] — %s"
+                    % (_map_tag(map_duty,
+                                case.get('rpm', res.get('rpm')) or map_rpm,
+                                map_cur),
+                       caption_with_provenance(
+                           "Von Mises stress over the '%s' case, MPa, averaged "
+                           "onto each part's own nodes." % case_used,
+                           _L, "rotor_stress")),
                     st["note"])]))
             else:
                 out.append(fit_t)
@@ -12340,7 +12880,8 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
             _a, _b = _extra.get(_k), (_extra_r or {}).get(_k)
             if _R and (_a or _b):
                 _blk = _fig_pair(st, _a, _b, pair_caption(
-                        _cap, _L, _R, have=(bool(_a), bool(_b)), note=_note),
+                        _cap, _L, _R, have=(bool(_a), bool(_b)), note=_note,
+                        map_kind="rotor_stress"),
                     max_height=PAIR_MAX_H, figs=figs)
                 if _blk is not None:
                     out.append(_blk)
@@ -12350,8 +12891,10 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
                 from reportlab.platypus import KeepTogether as _KT
                 out.append(_KT([_im, _para(
                     "Fig. [%s] — %s"
-                    % (_map_tag(map_duty, case.get('rpm', res.get('rpm')) or map_rpm,
-                                 map_cur), _cap),
+                    % (_map_tag(map_duty,
+                                case.get('rpm', res.get('rpm')) or map_rpm,
+                                map_cur),
+                       caption_with_provenance(_cap, _L, "rotor_stress")),
                     st["note"])]))
             else:
                 out.append(_para("%s." % _missing, st["note"]))
@@ -12398,8 +12941,9 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
             _n = min(len(mrows) - 1, MODES_GALLERY_ROWS * MODES_GALLERY_COLS)
             out.append(_KT([gal, _para(
                 fig_label(figs,
-                          MODES_CAPTION % (_n, mres.get("body") or "iron",
-                                           "6 %"),
+                          caption_with_provenance(
+                              MODES_CAPTION % (_n, mres.get("body") or "iron",
+                                               "6 %"), _L, "modes"),
                           _map_tag(map_duty, mres.get("rpm") or map_rpm)),
                 st["note"])]))
         else:
@@ -12430,7 +12974,8 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
         if img is not None:
             img.hAlign = "LEFT"
             out.append(_KT([img, _para(
-                fig_label(figs, CAMPBELL_CAPTION,
+                fig_label(figs, caption_with_provenance(
+                              CAMPBELL_CAPTION, _L, "critical_speeds"),
                           _map_tag(map_duty,
                                    crit.get("rated_rpm") or map_rpm)),
                 st["note"])]))
@@ -12828,6 +13373,28 @@ BATTERY_NOTE = (
     "the torque collapses."
 )
 
+#: …AND A PWM DOCUMENT IS JUDGED AGAINST A LINK, NOT A FLOOR (reviewer
+#: 2026-09-15).  A duty solved on the inverter was given one DC link; the
+#: questions about it are where that link sits in this pack and whether the
+#: bridge can build the fundamental on it.  The waveform-peak-vs-floor rule is
+#: not applied to such a duty at all — its "waveform peak" is the
+#: star-equivalent model's, not a terminal voltage.
+BATTERY_NOTE_PWM = (
+    "A duty solved on the inverter is judged against the DC LINK it was solved "
+    "on, not against the pack floor: the warnings section checks where that "
+    "link sits in this pack's range (a link at the pack maximum is reachable "
+    "only on a fully charged pack), the FUNDAMENTAL line voltage against "
+    "0.996 × that link — modulation index m ≤ 1.15 — and prints the bridge's "
+    "line-to-line pulse amplitude, which is the link itself, as what the "
+    "insulation sees. A sinusoidal duty keeps the peak-against-the-pack-minimum "
+    "rule."
+)
+
+
+def battery_note(cols: Optional[List[Dict[str, Any]]] = None) -> str:
+    """Which voltage rules this document's duties are judged by."""
+    return BATTERY_NOTE_PWM if any_pwm(cols) else BATTERY_NOTE
+
 BATTERY_NONE = (
     "No battery is named on this configuration, so no voltage limit is checked."
 )
@@ -13157,7 +13724,15 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # waveform's own peak, its rms, and the amplitude of its FUNDAMENTAL — a
     # flat-topped line wave peaks BELOW its fundamental amplitude, so V1 above
     # the peak is physics, not a contradiction.
-    R("Line voltage, waveform peak, 2-D [V]",
+    # …AND ON A PWM DOCUMENT THE FIRST OF THEM IS NOT THE TERMINAL VOLTAGE
+    # (reviewer 2026-09-15).  A voltage-fed run solves a star-EQUIVALENT
+    # circuit: its "line voltage" is the winding voltage the field gives back,
+    # averaged over the carrier, and its peak is 1.155 × V_dc by construction.
+    # The row is named for what it is, and the pulse train's own amplitude —
+    # the DC link — gets the row under it.
+    _pwm_v = any_pwm(cols)
+    R(("%s, 2-D [V]" % PWM_VPK_LABEL) if _pwm_v
+      else "Line voltage, waveform peak, 2-D [V]",
       lambda c: _e(c, "V_line_peak_V")
       or (c.get("result") or {}).get("v_ll_peak_v"), 1)
 
@@ -13175,7 +13750,12 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
         k = _numf(_e(c, "end3d.k_flux"))
         return (raw * k) if (raw is not None and k) else None
 
-    R("Line voltage, waveform peak × k_3d [V]", _vpk3, 1)
+    R(("%s × k_3d [V]" % PWM_VPK_LABEL) if _pwm_v
+      else "Line voltage, waveform peak × k_3d [V]", _vpk3, 1)
+    if _pwm_v:
+        R(PWM_VDC_LABEL,
+          lambda c: (_numf(duty_inverter(c).get("v_dc_V"))
+                     if duty_drive(c) == "pwm" else None), 1)
     R("Line voltage, rms [V]", lambda c: _e(c, "V_line_rms_V"), 1)
 
     def _v1k(c) -> Optional[float]:
@@ -13195,7 +13775,15 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
         # bridge with zero-sequence injection holds.
         R("Modulation index m at the pack minimum (limit %s)"
           % _fmt(MOD_INDEX_LIMIT, 2),
-          lambda c: modulation_index(_v1k(c), batt.get("v_min")), 3)
+          lambda c: (None if duty_drive(c) == "pwm"
+                     else modulation_index(_v1k(c), batt.get("v_min"))), 3)
+    if _pwm_v:
+        # …and on a PWM column the bridge MEASURED its m, on the link it ran
+        # on; the pack-floor derivation above describes a different run.
+        R("Modulation index m the bridge ran at (limit %s)"
+          % _fmt(MOD_INDEX_LIMIT, 2),
+          lambda c: (_numf(duty_inverter(c).get("m"))
+                     if duty_drive(c) == "pwm" else None), 3)
     R("Torque ripple [%]",
       lambda c: _e(c, "T_ripple_pct")
       or (c.get("result") or {}).get("ripple_pct"), 2)
@@ -13214,7 +13802,16 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # LINE voltage THD (terminal, triplen-free in delta) — the same number the
     # U_AB spectrum chart prints; the winding's own THD_pct is not a terminal
     # quantity (reviewer 2026-09-13: 6.32 % in the table vs 1.2 % on the chart).
-    R("Line voltage THD [%]", lambda c: _e(c, "THD_LL_pct") or _e(c, "THD_pct"), 2)
+    # TWO THDs ON A PWM DOCUMENT, exactly as with the ripple (reviewer
+    # 2026-09-15): the bridge's pulse train is tens of per cent by
+    # construction, the 10 % gate is on the machine's own distortion, and the
+    # rows say which is which rather than leaving one number to be read as both.
+    R(("Line voltage THD at the bridge (pulse train) [%]" if _pwm_v
+       else "Line voltage THD [%]"),
+      lambda c: _e(c, "THD_LL_pct") or _e(c, "THD_pct"), 2)
+    if _pwm_v:
+        R("…of which low-order, sinusoidal run — the 10 % limit's row [%]",
+          lambda c: (sine_line_thd(c) if duty_drive(c) == "pwm" else None), 2)
     # Mean |B| over the air-gap clearance, area-weighted and averaged over the
     # electrical period.  Under LOAD — magnet flux and armature reaction
     # together — so it is not the no-load fundamental a sizing formula asks for.
@@ -13669,6 +14266,15 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
     S("Case", lambda c: (_m(c) or {}).get("case"))
     R("Lowest safety factor", lambda c: (_m(c) or {}).get("sf_min"), 2)
     S("…on part", lambda c: (_m(c) or {}).get("sf_min_part"))
+    # THE ROTOR'S OWN ROW NEEDS ITS SENTENCE (user 2026-09-15).  The bridges
+    # between the poles are assembly features; the factor on them stays, and so
+    # does the flag, but a client must not read "SF 0.22" without being told
+    # what those bridges are for and what holds the magnets.
+    if any(is_rotor_bridge_part((_m(c) or {}).get("sf_min_part")) for c in cols):
+        rows.append(["…what the rotor bridges carry"] + _col_vals(
+            cols, lambda c: (ROTOR_BRIDGE_POLICY
+                             if is_rotor_bridge_part(
+                                 (_m(c) or {}).get("sf_min_part")) else "—")))
     R("Lowest SF on the p05 field", lambda c: (_m(c) or {}).get("sf_min_p05"), 2)
     for part, label in (("rotor_core", "Rotor core"), ("magnet", "Magnets"),
                         ("sleeve", "Sleeve"), ("shaft", "Shaft")):
@@ -13690,6 +14296,13 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
           lambda c, p=part: _p(c, p, "strength_mpa"), 0)
         R(f"{label} safety factor",
           lambda c, p=part: _p(c, p, "safety_factor"), 2)
+        # THE ROTOR'S SAFETY FACTOR NEEDS ITS SENTENCE (user 2026-09-15).  The
+        # bridges between the poles are assembly features; the number stays and
+        # so does the flag on it, but a client must not read "SF 0.24" without
+        # being told what those bridges are for and what holds the magnets.
+        if is_rotor_bridge_part(part):
+            rows.append(["…what the rotor bridges carry"]
+                        + _col_vals(cols, lambda c: ROTOR_BRIDGE_POLICY))
     if any(isinstance(((_m(c) or {}).get("parts") or {}).get("sleeve"), dict)
            for c in cols):
         R("Sleeve hoop stress [MPa]",
@@ -13804,6 +14417,78 @@ def _mech_compare(st, cols: List[Dict[str, Any]]) -> List[Any]:
     return out
 
 
+#: What each of the coupled loop's own refusal codes means, in the four words
+#: a "Converged" cell has room for (`routes.coupled`).
+COUPLED_REFUSAL_WORDS = {
+    "point_limited_by_modulation": "modulation ceiling",
+    "last_pass_dc_unconverged": "unsettled DC in the bridge",
+    "point_not_converged": "the operating point did not settle",
+}
+
+
+def coupled_refusal_reason(rec: Optional[Dict[str, Any]]) -> Tuple[Any, str]:
+    """``(pass number, reason)`` of a coupled run that stopped early.
+
+    The record's ``warning_code`` first; records written before it existed
+    (2026-09-15 and earlier — the L180 gen duties among them) are read from the
+    refusal sentence itself, which is the route's own wording and names both.
+    ``(None, "")`` when the loop simply ran out of iterations.
+    """
+    if not isinstance(rec, dict):
+        return None, ""
+    code = str(rec.get("warning_code") or "").strip()
+    msg = str(rec.get("warning") or "")
+    if not code and not msg:
+        return None, ""
+    n = None
+    m = re.search(r"electromagnetic run (\d+) refused", msg)
+    if m:
+        n = int(m.group(1))
+    elif code == "point_limited_by_modulation" or "out of INVERTER" in msg:
+        runs = _numf(rec.get("em_runs") or rec.get("iterations"))
+        n = int(runs) if runs else None
+    reason = COUPLED_REFUSAL_WORDS.get(code, "")
+    if not reason:
+        low = msg.lower()
+        if ("linear limit" in low or "out of inverter" in low
+                or "modulation" in low or "modulator" in low):
+            reason = "modulation ceiling"
+        elif "unsettled dc" in low:
+            reason = "unsettled DC in the bridge"
+        elif "refused" in low:
+            reason = "the electromagnetic solve refused"
+        elif "operating point did not" in low:
+            reason = "the operating point did not settle"
+    # A code that names a modulation limit beats the prose every time.
+    if code == "last_pass_em_refused" and reason == "":
+        reason = "the electromagnetic solve refused"
+    return n, reason
+
+
+def converged_words(rec: Optional[Dict[str, Any]]) -> str:
+    """The "Converged" cell — ``"yes"``, a runaway, or WHY it is not yes.
+
+    A bare "no" under a table of temperatures says nothing a client can act on
+    (reviewer 2026-09-15): the L180 'rated' duty stopped because the pass after
+    the last one would have needed m = 1.161 on a 799.2 V link, and the
+    temperatures printed above it are the last pass that solved.  That is the
+    sentence, not "no".
+    """
+    if not isinstance(rec, dict):
+        return "—"
+    if rec.get("converged"):
+        return "yes"
+    if rec.get("runaway"):
+        return "RUNAWAY " + FLAG
+    n, reason = coupled_refusal_reason(rec)
+    if n is not None and reason:
+        return ("pass %d refused: %s — temperatures are the last solved pass"
+                % (n, reason))
+    if reason:
+        return "no — %s" % reason
+    return "no"
+
+
 def coupled_compare_rows(cols: List[Dict[str, Any]]
                          ) -> Tuple[str, List[List[Any]]]:
     """The coupled electromagnetic/thermal loop, duty by duty — plain rows."""
@@ -13844,9 +14529,7 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
 
     R("Electromagnetic runs", lambda c: (_c(c) or {}).get("em_runs")
       or (_c(c) or {}).get("iterations"), 0)
-    S("Converged", lambda c: ("yes" if (_c(c) or {}).get("converged")
-                              else ("RUNAWAY " + FLAG if (_c(c) or {}).get("runaway")
-                                    else "no")))
+    S("Converged", lambda c: converged_words(_c(c)))
     R("Winding temperature [°C]", lambda c: (_c(c) or {}).get("coil_temp_c"), 1)
     R("Magnet temperature [°C]", lambda c: (_c(c) or {}).get("magnet_temp_c"), 1)
     R("Magnet temperature, hottest [°C]",
@@ -14061,15 +14744,30 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
          + ("" if not ex.get("bearing_lubricant") else
             " (%s)" % ex["bearing_lubricant"])
          + "; past it the bearing watts are modelled, not qualified"],
-        # TWO ROWS, one question each (reviewer 2026-09-14 / PWM study §1.7).
-        ["Line voltage, waveform peak", _fmt(ex.get("v_pack_min_v"), 1, "V"),
-         "the pack minimum against the solved waveform peak × k_3d — the "
-         "INSULATION and device-rating question"],
+        # TWO ROWS, one question each (reviewer 2026-09-14 / PWM study §1.7) —
+        # and on a PWM duty the first of them is about the LINK the duty was
+        # solved on, not the pack floor (reviewer 2026-09-15).
+        (["DC link this duty was solved on",
+          "%s … %s" % (_fmt(ex.get("v_pack_min_v"), 1, "V"),
+                       _fmt(ex.get("v_pack_max_v"), 1, "V")),
+          "the pack's own range; a link above the nominal %s is amber — %s"
+          % (_fmt(ex.get("v_pack_nom_v"), 1, "V"), DC_LINK_AMBER_NOTE)]
+         if str(ex.get("drive") or "") == "pwm" else
+         ["Line voltage, waveform peak", _fmt(ex.get("v_pack_min_v"), 1, "V"),
+          "the pack minimum against the solved waveform peak × k_3d — the "
+          "INSULATION and device-rating question"]),
         ["Line voltage, fundamental vs linear modulation",
          _fmt(ex.get("v_mod_ceiling_v"), 1, "V"),
-         "%s × the pack minimum — the CONTROL question: modulation index "
+         "%s × %s — the CONTROL question: modulation index "
          "m = 2·V1_phase,peak/V_dc must stay at or under %s"
-         % (_fmt(MOD_CEILING_OF_VDC, 4), _fmt(MOD_INDEX_LIMIT, 2))],
+         % (_fmt(MOD_CEILING_OF_VDC, 4),
+            ("the DC link this duty was solved on"
+             if str(ex.get("drive") or "") == "pwm" else "the pack minimum"),
+            _fmt(MOD_INDEX_LIMIT, 2))],
+        ["Bridge line voltage amplitude", "no limit",
+         "the line-to-line pulse amplitude = the DC link — what the insulation "
+         "sees; no insulation or device voltage rating is stated on this "
+         "project, so nothing is checked against it"],
         ["Runaway speed, cold magnets", _fmt(ex.get("max_speed_rpm"), 0, "rpm"),
          "the fastest duty in this configuration; " +
          str(ex.get("runaway_note") or "no cold-magnet card was available, so a "
@@ -14082,8 +14780,13 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
         ["Torque ripple at the carrier", "no limit",
          CARRIER_RIPPLE_NOTE + " — printed on a PWM duty because the solve "
          "produced it, not because anything is checked against it"],
-        ["Voltage THD", _fmt(THD_LIMIT_PCT, 1, "%"),
-         "this report's own reference"],
+        ["Line voltage THD, low-order", _fmt(THD_LIMIT_PCT, 1, "%"),
+         "this report's own reference, judged on the SINUSOIDAL run — the "
+         "machine's own back-EMF distortion"],
+        ["Line voltage THD at the bridge", "no limit",
+         "a two-level bridge's pulse train distorts by tens of per cent "
+         "whatever the machine is; the winding inductance filters it, so it is "
+         "the CURRENT THD beside it that says what reaches the machine"],
         # Added 2026-09-14 (reviewer): a rotor ring mode on the PWM carrier was
         # in the modal table and in no warning.
         ["Ring mode vs an excitation line",

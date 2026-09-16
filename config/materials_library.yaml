@@ -2535,6 +2535,11 @@ magnet:
     # <grade>_<T>C, no maker prefix — user).  The old name still resolves
     # (materials.MATERIAL_ALIASES), so stored duties and runs keep working.
     grade: N52UH
+    # Maximum working temperature of the UH class (2026-09-15, user):
+    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
+    # and it is NOT this card's `temperature_c`, which is only the
+    # temperature the card was measured at.
+    max_working_temp_c: 180   # degC
     temperature_c: 150   # T_ref of this card — see the section header
     # Reversible temperature coefficients, REFERENCED TO THIS CARD'S 150 C.
     # Derived 2026-09-08 from the library's own N52UH pair (100 C / 150 C),
@@ -2620,6 +2625,11 @@ magnet:
     # in the 3rd quadrant — a cold UH magnet cannot be demagnetised by the
     # machine's own field; the curve carries the knee there for completeness.
     grade: N52UH
+    # Maximum working temperature of the UH class (2026-09-15, user):
+    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
+    # and it is NOT this card's `temperature_c`, which is only the
+    # temperature the card was measured at.
+    max_working_temp_c: 180   # degC
     temperature_c: 20    # T_ref of this card — see the section header
     # Reversible temperature coefficients, REFERENCED TO THIS CARD'S 20 C — the
     # 20 C-referenced values the N52UH_150C comment derives from the 100/150 pair.
@@ -2673,6 +2683,11 @@ magnet:
     description: "Arnold Magnetics N52UH — operating point 100 °C"
     # Renamed from Arnold_N52UH_100C on 2026-09-08 (see N52UH_150C); old name aliased.
     grade: N52UH
+    # Maximum working temperature of the UH class (2026-09-15, user):
+    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
+    # and it is NOT this card's `temperature_c`, which is only the
+    # temperature the card was measured at.
+    max_working_temp_c: 180   # degC
     temperature_c: 100   # T_ref of this card — see the section header
     # Reversible temperature coefficients, REFERENCED TO THIS CARD'S 100 C;
     # same derivation as N52UH_150C (the library's own 100/150 pair), read in
@@ -2734,6 +2749,11 @@ magnet:
   N45EH_150C:
     description: "Sintered NdFeB N45EH (EH grade, Tmax 200 °C, Hcj >= 30 kOe at 20 °C) — operating point 150 °C"
     grade: N45EH
+    # Maximum working temperature of the EH class (2026-09-15, user):
+    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
+    # and it is NOT this card's `temperature_c`, which is only the
+    # temperature the card was measured at.
+    max_working_temp_c: 200   # degC
     temperature_c: 150   # T_ref of this card — see the section header
     # Generic N45EH datasheet values (added 2026-09-08 on request, to compare with the
     # N52UH the machine is drawn with): Br 1.35 T and Hcj 2400 kA/m at 20 °C,
@@ -2801,6 +2821,11 @@ magnet:
   N45EH_180C:
     description: "Sintered NdFeB N45EH (EH grade, Tmax 200 °C, Hcj >= 30 kOe at 20 °C) — operating point 180 °C"
     grade: N45EH
+    # Maximum working temperature of the EH class (2026-09-15, user):
+    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
+    # and it is NOT this card's `temperature_c`, which is only the
+    # temperature the card was measured at.
+    max_working_temp_c: 200   # degC
     temperature_c: 180   # T_ref of this card — see the section header
     # Generic N45EH datasheet values (added 2026-09-08 on request, to compare with the
     # N52UH the machine is drawn with): Br 1.35 T and Hcj 2400 kA/m at 20 °C,
@@ -2953,6 +2978,11 @@ magnet:
   F45SH_120C:
     description: "Sintered NdFeB magnet, F45SH grade — operating point 120 °C"
     grade: F45SH
+    # Maximum working temperature of the SH class (2026-09-15, user):
+    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
+    # and it is NOT this card's `temperature_c`, which is only the
+    # temperature the card was measured at.
+    max_working_temp_c: 150   # degC
     temperature_c: 120   # T_ref of this card — see the section header
     # SH class, 20 C-referenced alpha(Br) = -0.1185 %/K (the factor the F45SH
     # 1.35 -> 1.19 pair pins) and beta(Hcj) = -0.5 %/K — the same pair the
@@ -3038,6 +3068,11 @@ magnet:
       scaled from the N52SH 20 C typical 1.445 T by the SH class factor 0.8815 measured
       on the F45SH record (1.35 -> 1.19). Hc = Br/(mu0*mu_rec).
     grade: F52SH
+    # Maximum working temperature of the SH class (2026-09-15, user):
+    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
+    # and it is NOT this card's `temperature_c`, which is only the
+    # temperature the card was measured at.
+    max_working_temp_c: 150   # degC
     mu_rec: 1.05
     sigma: 6.25e5
     specific_heat: 460
@@ -3090,6 +3125,11 @@ magnet:
       Hcj(20 C) = 1592 kA/m (20 kOe) and beta(Hcj) = -0.5 %/C. Hc = Br/(mu0*mu_rec).
       Datasheet anchors: N52 Br 1.43-1.48 T, SH = Hcj >= 20 kOe, max 150 C.'
     grade: F52SH
+    # Maximum working temperature of the SH class (2026-09-15, user):
+    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
+    # and it is NOT this card's `temperature_c`, which is only the
+    # temperature the card was measured at.
+    max_working_temp_c: 150   # degC
     mu_rec: 1.05
     sigma: 625000.0
     specific_heat: 460
@@ -3142,6 +3182,11 @@ magnet:
       Hcj(20 C) = 1592 kA/m (20 kOe) and beta(Hcj) = -0.5 %/C. Hc = Br/(mu0*mu_rec).
       Datasheet anchors: N52 Br 1.43-1.48 T, SH = Hcj >= 20 kOe, max 150 C.'
     grade: F52SH
+    # Maximum working temperature of the SH class (2026-09-15, user):
+    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
+    # and it is NOT this card's `temperature_c`, which is only the
+    # temperature the card was measured at.
+    max_working_temp_c: 150   # degC
     mu_rec: 1.05
     sigma: 625000.0
     specific_heat: 460

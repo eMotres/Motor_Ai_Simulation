@@ -153,14 +153,24 @@ def _duty_stem(duty: str) -> str:
     return f"{ascii_part}-{h}" if ascii_part else f"duty-{h}"
 
 
-def fields_dir(die: str, cfg: str, duty: str) -> Path:
+def fields_dir(die: str, cfg: str, duty: str, *,
+               root: Optional[Any] = None) -> Path:
     """``<die>/runs/<configuration>/<duty-stem>/fields`` — created on demand.
 
     The WRITE location, and since Stage 2 that is always the caller's own
     workspace: a solve of somebody else's published duty is this workspace's
     answer, filed beside its own copy of the machine.
+
+    ``root`` names a DIFFERENT dies directory for this one call — the seam
+    :mod:`motor_ai_sim.duty_refile` files a sandboxed run's fields through
+    (2026-09-16).  A process whose ``MOTOR_AI_SIM_CONFIG`` points at a temp
+    directory still has to be able to write one duty's maps into the real
+    catalogue, and a module-global monkeypatch to do it would be a race with
+    every other caller.  ``None`` — the only value a solve route ever passes —
+    is the workspace, exactly as before.
     """
-    return (_dies_dir() / str(die) / "runs" / str(cfg)
+    base = Path(str(root)) if root else _dies_dir()
+    return (base / str(die) / "runs" / str(cfg)
             / _duty_stem(duty) / "fields")
 
 
@@ -501,7 +511,9 @@ _PACKERS = {"em": pack_em, "thermal": pack_thermal,
 def save(die: str, cfg: str, duty: str, kind: str, payload: Dict[str, Any],
          *, geometry_fingerprint: Optional[str] = None,
          computed_at: Optional[str] = None,
-         point: Optional[Dict[str, Any]] = None) -> Optional[str]:
+         point: Optional[Dict[str, Any]] = None,
+         root: Optional[Any] = None,
+         extra_meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Pack ONE solve's field under (die, configuration, duty, kind).
 
     ``payload`` is the store entry the tab already keeps — a
@@ -533,13 +545,15 @@ def save(die: str, cfg: str, duty: str, kind: str, payload: Dict[str, Any],
             meta["point"] = {**(meta.get("point") or {}),
                              **{k: _num(v) for k, v in point.items()
                                 if _num(v) is not None}}
+        if extra_meta:
+            meta.update({str(k): v for k, v in extra_meta.items()})
         arrays = packed["arrays"]
         meta["arrays"] = {k: {"shape": list(np.asarray(v).shape),
                               "dtype": str(np.asarray(v).dtype)}
                           for k, v in arrays.items()}
         # The WRITE path, never `field_path` — that one reads through to the
         # layer the die came from, and a solve must not land in it.
-        p = fields_dir(die, cfg, duty) / f"{kind}.npz"
+        p = fields_dir(die, cfg, duty, root=root) / f"{kind}.npz"
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + f".tmp{os.getpid()}")
         # `meta` as a 0-d string array: the file stays loadable with

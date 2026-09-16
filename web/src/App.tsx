@@ -238,11 +238,17 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Not before somebody is signed in: on a server that publishes nothing
+  // (PUBLIC_EXHIBIT=0) these three answer 401 to a visitor, and the retry loop
+  // below would then poll the door every 5 s for as long as the login screen is
+  // open.  `signedIn` is true on an unenforced backend, so local dev boots
+  // exactly as it always did, and flipping it (the sign-in dialog) re-runs this.
   useEffect(() => {
+    if (!signedIn) return;
     fetchGeometryFromApi();
     fetchSchemaFromApi();
     loadServerSweepConfig();
-  }, [fetchGeometryFromApi, fetchSchemaFromApi, loadServerSweepConfig]);
+  }, [signedIn, fetchGeometryFromApi, fetchSchemaFromApi, loadServerSweepConfig]);
 
   // RECONNECT: the boot probe above runs once, and a backend that was merely
   // slow to wake (first request after a restart imports the whole solver
@@ -254,13 +260,13 @@ function App() {
   // pendingGeometryEdits BEFORE adopting the server's geometry — the first
   // successful tick syncs the queue instead of clobbering it.
   useEffect(() => {
-    if (connectedToApi) return;
+    if (connectedToApi || !signedIn) return;
     const t = setInterval(() => {
       fetchGeometryFromApi();
       fetchSchemaFromApi();
     }, 5000);
     return () => clearInterval(t);
-  }, [connectedToApi, fetchGeometryFromApi, fetchSchemaFromApi]);
+  }, [connectedToApi, signedIn, fetchGeometryFromApi, fetchSchemaFromApi]);
 
   // The in-page flight recorder (lib/diag): heap once a minute, main-thread
   // stalls, WebGL context loss — read with `__diag()` after a freeze.

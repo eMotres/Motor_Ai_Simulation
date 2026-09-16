@@ -45,6 +45,26 @@ runs 68.93 to 135.2 degC.  That agreement is the check that the replication is
 faithful — if a rotation were wrong, the scale would move.  **Nothing in
 report.py changes**: the report still prints the half it solved.
 
+THE MESH, AT CARD SIZE (user 2026-09-16: "add the mesh to these pictures").
+`report._map_png` already draws it — `mesh=True` is its default, and every
+builder here takes that default, so the landing has always been showing the
+solved mesh.  At the size a REPORT places a figure, its hairline (0.12 pt,
+alpha 0.35, #2b2b2b) reads as texture over the field; at ~442 px on a card it
+disappears, which is why the first live cards looked like flat colour.
+
+So the weight of that ONE call is lifted for these three pictures, and only for
+them: :func:`mesh_weight` wraps `Axes.triplot` for the duration of a build and
+substitutes :data:`MESH_LW` / :data:`MESH_ALPHA` into it.  Nothing in report.py
+is touched and nothing outside this process changes — the report still prints
+its own hairline.  The thermal map gets the lighter alpha of the two
+(:data:`MESH_ALPHA_THERMAL`): most of it is dark red, and the weight that reads
+as texture over a pale field reads as ink over that one.  `--no-mesh` draws the
+fields bare, which is how the two styles get compared.
+
+Edges do not double on the seam: the replication merges coincident nodes, and
+`triplot` draws a triangulation's UNIQUE edge list, so the joint carries one
+line like every other interior edge.
+
 SIZE.  Each card places a picture at ~442 CSS px and the disc inside the
 1.25:1 box is height-limited to ~354 px, so 1000 device px covers a 2x screen
 with room to spare.  The palette steps down until the file clears
@@ -60,6 +80,7 @@ calls none::
 
     python scripts/landing_images.py            # rewrite web/public/landing/*.png
     python scripts/landing_images.py --check     # redraw elsewhere and compare
+    python scripts/landing_images.py --no-mesh   # the fields with no mesh over them
 
 ``--check`` writes nothing into the repo: it redraws into a temporary directory
 and reports, per file, whether the bytes still match what is committed.  A
@@ -73,8 +94,9 @@ import hashlib
 import io
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -95,6 +117,17 @@ TARGET_BYTES = 255 * 1024
 #: Device pixels across, for a picture placed at ~442 CSS px on a 2x screen.
 CARD_PX = 1000
 
+#: The mesh over the field, in points and alpha — see THE MESH above.  The
+#: report's own values are 0.12 / 0.35, which is right for a figure placed on a
+#: page and invisible on a 442 px card.
+MESH_LW = 0.22
+MESH_ALPHA = 0.55
+#: The temperature map gets its own value.  Its stator is pale and its rotor is
+#: one flat dark red, so the two halves of the picture want opposite things: at
+#: the other maps' 0.55 the stator reads busy, and at 0.38 the mesh vanishes
+#: inside the rotor altogether.  0.50 is where it is legible in both.
+MESH_ALPHA_THERMAL = 0.50
+
 DIE, CFG, DUTY = "CIANO10 200 opt", "L155 motor", "rated 1x9 mm"
 #: The width the figures are PLACED at, in cm.  `report.map_font_pt` sizes the
 #: colour-bar type from it, so one value here is one tick-label size on all
@@ -103,6 +136,38 @@ PLACE_CM = 12.0
 
 
 # ── the mesh ────────────────────────────────────────────────────────────────
+
+@contextmanager
+def mesh_weight(lw: float, alpha: float, on: bool = True) -> Iterator[None]:
+    """Draw `report._map_png`'s mesh at THIS weight, for as long as the block.
+
+    That one call is ``ax.triplot(tri, color="#2b2b2b", linewidth=0.12,
+    alpha=0.35)``, and it is the only `triplot` in the builders this script
+    uses — the mode gallery draws its outlines with a `LineCollection` and the
+    flux lines come from `tricontour`, so wrapping `triplot` reaches the mesh
+    and nothing else.  `on=False` suppresses the mesh entirely (``--no-mesh``).
+
+    A wrapper rather than an argument because `_map_png` does not take one, and
+    teaching it to would put a landing-page concern in the report.
+    """
+    import matplotlib.axes
+    original = matplotlib.axes.Axes.triplot
+
+    def patched(self: Any, *a: Any, **kw: Any) -> Any:
+        # Only the mesh call passes both — leave anything else exactly alone.
+        if "linewidth" in kw and "alpha" in kw:
+            if not on:
+                return []
+            kw["linewidth"], kw["alpha"] = lw, alpha
+        return original(self, *a, **kw)
+
+    matplotlib.axes.Axes.triplot = patched          # type: ignore[assignment]
+    try:
+        yield
+    finally:
+        matplotlib.axes.Axes.triplot = original     # type: ignore[assignment]
+
+
 
 def _xy(v: Any) -> np.ndarray:
     """Vertices as (N, 2), whichever way round the store wrote them."""
@@ -200,7 +265,7 @@ def encode(png: bytes, max_w: int = CARD_PX) -> bytes:
 
 # ── the three pictures ──────────────────────────────────────────────────────
 
-def build() -> Dict[str, bytes]:
+def build(mesh: bool = True) -> Dict[str, bytes]:
     """``{filename: png bytes}`` for the whole set."""
     out: Dict[str, bytes] = {}
 
@@ -210,8 +275,9 @@ def build() -> Dict[str, bytes]:
     print("em           %d sector(s)" % sectors_of(em["vertices"]))
     P, T, _n, tri = to_full(em["vertices"], em["triangles"], {},
                             {"b": em["b_mag_per_tri"], "tags": em["tags"]})
-    maps = report._em_maps({"P_mm": P, "T": T, "tags": tri["tags"],
-                            "b_mag": tri["b"]}, width_cm=PLACE_CM)
+    with mesh_weight(MESH_LW, MESH_ALPHA, on=mesh):
+        maps = report._em_maps({"P_mm": P, "T": T, "tags": tri["tags"],
+                                "b_mag": tri["b"]}, width_cm=PLACE_CM)
     if not maps.get("b"):
         raise SystemExit("the |B| map did not render")
     print("             |B| max %.3f T, bar capped at %.3f T"
@@ -225,10 +291,11 @@ def build() -> Dict[str, bytes]:
     P, T, node, tri = to_full(th["vertices"], th["triangles"],
                               {"t": th["temperature_per_node"]},
                               {"dom": th["domain_per_tri"]})
-    png = report._thermal_map({"field": {
-        "vertices": P, "triangles": T,
-        "temperature_per_node": node["t"], "domain_per_tri": tri["dom"],
-    }}, width_cm=PLACE_CM)
+    with mesh_weight(MESH_LW, MESH_ALPHA_THERMAL, on=mesh):
+        png = report._thermal_map({"field": {
+            "vertices": P, "triangles": T,
+            "temperature_per_node": node["t"], "domain_per_tri": tri["dom"],
+        }}, width_cm=PLACE_CM)
     if not png:
         raise SystemExit("the temperature map did not render")
     out["thermal-map.png"] = encode(png)
@@ -238,7 +305,8 @@ def build() -> Dict[str, bytes]:
     if rs is None:
         raise SystemExit("no rotor_stress field for this duty")
     print("rotor        %d sector(s)" % sectors_of((rs.get("field") or {})["vertices"]))
-    mech = report._mech_extra_maps(rs, width_cm=PLACE_CM)
+    with mesh_weight(MESH_LW, MESH_ALPHA, on=mesh):
+        mech = report._mech_extra_maps(rs, width_cm=PLACE_CM)
     if not mech.get("disp"):
         raise SystemExit("the displacement map did not render "
                          "(this duty stored no u_mag_per_node)")
@@ -249,28 +317,35 @@ def build() -> Dict[str, bytes]:
 
 def main(argv: List[str]) -> int:
     check = "--check" in argv[1:]
-    unknown = [a for a in argv[1:] if a != "--check"]
+    mesh = "--no-mesh" not in argv[1:]
+    unknown = [a for a in argv[1:] if a not in ("--check", "--no-mesh")]
     if unknown:
         raise SystemExit("unknown argument(s): %s" % " ".join(unknown))
 
-    pics = build()
-    dest = Path(tempfile.mkdtemp(prefix="landing-check-")) if check else OUT_DIR
+    pics = build(mesh=mesh)
+    # A bare-field run is a comparison, not the shipped set: it never writes
+    # into the repo, whether or not --check was asked for.
+    dest = (Path(tempfile.mkdtemp(prefix="landing-check-"))
+            if (check or not mesh) else OUT_DIR)
     dest.mkdir(parents=True, exist_ok=True)
 
     same = True
     for name, data in pics.items():
-        (dest / name).write_bytes(data)
+        # READ THE COMMITTED BYTES FIRST.  Writing before comparing made the
+        # write mode report "unchanged" for every file, always — it was
+        # comparing the picture with the copy of itself it had just saved.
         live = OUT_DIR / name
         old = live.read_bytes() if live.exists() else b""
+        (dest / name).write_bytes(data)
         match = (hashlib.sha256(old).digest() == hashlib.sha256(data).digest())
         same = same and match
         print("%-24s %6.0f KB  %s" % (
             name, len(data) / 1024,
             "unchanged" if match else ("DIFFERS from the committed file"
                                        if old else "new")))
-    if check:
+    if dest is not OUT_DIR:
         print("\nredrawn into %s (nothing in the repo was touched)" % dest)
-        return 0 if same else 1
+        return 0 if (same or not mesh) else 1
     return 0
 
 

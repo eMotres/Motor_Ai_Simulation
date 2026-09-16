@@ -45,6 +45,13 @@
  * carry, and the seam nodes are merged so the ring closes with no hairline.
  * Nothing in report.py changes: the report still prints the half it solved.
  *
+ * WITH THE FE MESH OVER THEM (user 2026-09-16: "add the mesh to these
+ * pictures").  `report._map_png` has always drawn it — `mesh=True` is its
+ * default — but at the size a report places a figure its hairline is 0.12 pt at
+ * alpha 0.35, and on a 442 px card that disappears, so the first cards looked
+ * like flat colour.  The generator lifts the weight of that one call for these
+ * three pictures only; report.py still prints its own hairline.
+ *
  * They are drawn on white — the report's own background — and sit on a white
  * tile in both themes, so the figure looks the same here as it does on the page
  * it is printed on.
@@ -79,28 +86,33 @@ export const FEATURES: Feature[] = [
     src: '/landing/em-field.png',
     alt: 'Flux-density map of a permanent-magnet machine: the whole '
       + 'cross-section, twelve slots around ten magnets, coloured by |B| from '
-      + '0 to 2.4 tesla, with the colour bar beside it.',
-    hint: 'Flux density |B| of a 200 mm machine at its rated duty — the solved '
-      + 'half repeated to the full ring, which is the periodicity the solve '
-      + 'itself assumed.',
+      + '0 to 2.4 tesla, the finite-element mesh drawn over it, and the colour '
+      + 'bar beside it.',
+    hint: 'Flux density |B| of a 200 mm machine at its rated duty, with the FE '
+      + 'mesh it was solved on — the solved half repeated to the full ring, '
+      + 'which is the periodicity the solve itself assumed.',
   },
   {
     label: 'Thermal & duty cycle',
     src: '/landing/thermal-map.png',
     alt: 'Temperature map of the same whole cross-section, from 69 °C at the '
-      + 'outer housing to 135 °C in the rotor, with the colour bar beside it.',
-    hint: 'Temperature of the same machine, coupled to the losses of the same '
-      + 'run — the solved half repeated to the full ring, as above.',
+      + 'outer housing to 135 °C in the rotor, the finite-element mesh drawn '
+      + 'over it, and the colour bar beside it.',
+    hint: 'Temperature of the same machine with the FE mesh over it, coupled '
+      + 'to the losses of the same run — the solved half repeated to the full '
+      + 'ring, as above.',
   },
   {
     label: 'Mechanical simulation',
     src: '/landing/rotor-displacement.png',
     alt: 'Deformation map of the same rotor under its retaining sleeve: the '
       + 'whole ring — sleeve, magnets, rotor iron — coloured by how far each '
-      + 'point moves at speed, 7 to 146 micrometres, with the colour bar '
-      + 'beside it and the shape exaggerated so the bending is visible.',
-    hint: 'The rotor and its sleeve at speed, coloured by displacement |u| — '
-      + 'the shape is exaggerated 22x so the bending can be seen.',
+      + 'point moves at speed, 7 to 146 micrometres, the finite-element mesh '
+      + 'drawn over it, the colour bar beside it and the shape exaggerated so '
+      + 'the bending is visible.',
+    hint: 'The rotor and its sleeve at speed with the FE mesh over them, '
+      + 'coloured by displacement |u| — the shape is exaggerated 22x so the '
+      + 'bending can be seen.',
   },
 ];
 

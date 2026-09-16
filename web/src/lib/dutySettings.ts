@@ -502,10 +502,19 @@ export function dutyCycleFromForm(f: DutyCycleForm): DutyCycleBlock {
   return out;
 }
 
-/** PURE.  One duty's cycle as a CHIP: "S1", "S2 25 s", "S3 ED 25 % · 60 s".
+/** PURE.  One duty's cycle as a CHIP: "S2 25 s", "S3 ED 25 % · 60 s".
  *  `null` for a duty with no cycle — which reads as the continuous point every
  *  duty was assumed to be before 2026-09-14, and says nothing rather than
  *  claiming an S1 nobody wrote.
+ *
+ *  …and `null` for an S1 as well, since 2026-09-16.  A continuous duty IS the
+ *  machine sitting at its point, which is what a duty with no block already
+ *  means, and the two were chipped differently for no reason a reader could
+ *  act on: one said "S1" and the other said nothing, about the same machine
+ *  doing the same thing.  The rule the user asked for is the plain one — a
+ *  cycle chip appears when there is a CYCLE (user 2026-09-16: S1 shows nothing
+ *  cycle-related).  The block itself is untouched: `kind: S1` is still written,
+ *  still stored, and still what the coupled loop reads.
  *
  *  Copied verbatim into `lib/__tests__/dutyCycleBlock.test.mjs`. */
 export function dutyCycleChip(block: DutyCycleBlock | null | undefined):
@@ -542,5 +551,5 @@ export function dutyCycleChip(block: DutyCycleBlock | null | undefined):
     const tot = segs.reduce((a: number, s) => a + (n((s as { t_s?: unknown })?.t_s) ?? 0), 0);
     return segs.length ? `${segs.length} segments · ${g(tot)} s` : 'segments';
   }
-  return 'S1';
+  return null;   // S1 — continuous, i.e. no cycle to chip
 }

@@ -209,3 +209,63 @@ export function calibrationIssue(picked: string | null | undefined,
       + 'network comes from that one map.',
   };
 }
+
+/* ── WHAT THE RUN BUTTON WILL DO, in the kind that is chosen ────────────────
+   User 2026-09-16: «Нужен правильный алгоритм расчёта — что и когда нажимать.
+   Если выбран S1 — идёт нормальный каплинг; если выбран S3 — по умолчанию идёт
+   оптимизация времени импульса.»  The flow was real in the backend since
+   `coupled: an S2/S3 duty is solved for its REGIME` and invisible in the UI:
+   the kind picker sat in a panel that said nothing about the Run button three
+   panels away.  One line under the picker says it, and the two sentences
+   behind the ⓘ say why — the standing no-walls-of-text rule. */
+
+/** The kinds this editor OFFERS.  S2 went out with the same message (user:
+ *  «S2, я думаю, нужно выбросить, не знаю ему пока применения») — one pull is
+ *  what the S3 answer already reports as "S2 from cold", so choosing it was
+ *  asking for a number you were being given anyway. */
+export const OFFERED_KINDS = ['S1', 'S3'] as const;
+
+export interface RunModeText {
+  /** the one line under the picker */
+  line: string;
+  /** the ⓘ beside it — two sentences, never more */
+  tip: string;
+}
+
+/** What the COUPLED Run does in this kind.  `null` for a kind the editor no
+ *  longer offers: a stored S2 or segment list is read, not run from here. */
+export function runModeLine(kind: string | null | undefined): RunModeText | null {
+  const k = String(kind ?? '').trim();
+  if (k === 'S1') {
+    return {
+      line: 'Run → the coupled loop, iterated until the temperatures settle.',
+      tip: 'S1 is a point the machine sits at, so the coupled Run iterates the '
+        + 'electromagnetic solve and the thermal solve until neither moves and '
+        + 'reports the machine there. Nothing about a cycle is searched, and '
+        + 'nothing cycle-related is printed.',
+    };
+  }
+  if (k === 'S3') {
+    return {
+      line: 'Run → the coupled loop, and inside it the allowable ED is searched.',
+      tip: 'S3 is a ratio, not a point: every pass of the coupled loop searches '
+        + 'the duty ratio the limits allow at the temperatures that pass '
+        + 'reached, and feeds those temperatures back into the next one. The '
+        + 'Run comes back with the allowable ED — and says "asked for more" '
+        + 'when the ED this duty stores does not fit under it.',
+    };
+  }
+  return null;
+}
+
+/** A kind that is STORED but no longer offered — read, never chosen again. */
+export function retiredKindNote(kind: string | null | undefined): string | null {
+  const k = String(kind ?? '').trim();
+  if (k === 'S2') {
+    return 'S2 is no longer offered; switch to S1 or S3';
+  }
+  if (k === 'segments') {
+    return 'a segment list is no longer offered; switch to S1 or S3';
+  }
+  return null;
+}

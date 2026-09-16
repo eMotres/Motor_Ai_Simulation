@@ -90,7 +90,7 @@ function dutyCycleChip(block) {
     const tot = segs.reduce((a, s) => a + (n(s?.t_s) ?? 0), 0);
     return segs.length ? `${segs.length} segments · ${g(tot)} s` : 'segments';
   }
-  return 'S1';
+  return null;   // S1 — continuous, i.e. no cycle to chip
 }
 
 /* ── the two layers ───────────────────────────────────────────────────────── */
@@ -196,7 +196,6 @@ test('the start temperature and the cycle cap ride only when they are stated', (
 /* ── the catalog chip ─────────────────────────────────────────────────────── */
 
 test('the chip says what the machine does in three words', () => {
-  assert.equal(dutyCycleChip({ kind: 'S1' }), 'S1');
   assert.equal(dutyCycleChip({ kind: 'S2', t_on_s: 25 }), 'S2 25 s');
   assert.equal(dutyCycleChip({ kind: 'S3', ed_pct: 25, cycle_s: 60 }),
                'S3 ED 25 % · 60 s');
@@ -209,6 +208,17 @@ test('a duty with no cycle gets no chip', () => {
   assert.equal(dutyCycleChip(null), null);
   assert.equal(dutyCycleChip(undefined), null);
   assert.equal(dutyCycleChip({}), null);
+});
+
+// 2026-09-16 — S1 IS "no cycle": the machine sits at its point, which is what a
+// duty with no block already means.  Chipping one "S1" and the other nothing,
+// about the same machine doing the same thing, was a distinction the reader
+// could not act on (user: with S1 chosen, nothing cycle-related is shown).
+test('an explicit S1 is a continuous point, so it gets no chip either', () => {
+  assert.equal(dutyCycleChip({ kind: 'S1' }), null);
+  assert.equal(dutyCycleChip({ kind: 'S1', t_start_c: 40 }), null);
+  // …and the BLOCK is untouched: S1 is still written, stored and solved
+  assert.deepEqual(dutyCycleFromForm({ kind: 'S1' }), { kind: 'S1' });
 });
 
 test('the chip survives a half-written block instead of printing NaN', () => {

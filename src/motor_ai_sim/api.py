@@ -602,6 +602,16 @@ def get_materials_library():
                 "temperature_c": getattr(m, "temperature_c", None),
                 "alpha_br_pct_per_k": getattr(m, "alpha_br_pct_per_k", None),
                 "beta_hcj_pct_per_k": getattr(m, "beta_hcj_pct_per_k", None),
+                # The card's MAXIMUM WORKING TEMPERATURE (2026-09-16).  It is
+                # the number the report judges a magnet by
+                # (`report._magnet_limit`) and it was reachable only one card
+                # at a time, through /api/materials/library/magnet/{name} —
+                # so the duty-cycle editor had no default magnet limit and
+                # every cycle was answered with the magnets unjudged unless
+                # somebody typed a temperature.  Absent on a card that does
+                # not state one; the report's coercivity-class fallback stays
+                # where it is, in the report.
+                "max_working_temp_c": getattr(m, "max_working_temp_c", None),
             }
 
         # Conductors

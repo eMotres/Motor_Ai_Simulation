@@ -1060,6 +1060,20 @@ const ThermalPanel: React.FC = () => {
           )}
         </Box>
 
+        {/* ── WHAT THE MACHINE DOES WITH THIS POINT, over TIME ───────────────
+            Right here, under the frame, and always open (user 2026-09-16:
+            «Меню Duty cycle должно быть всегда открыто и находиться вверху,
+            после frame»).  It used to sit at the very bottom of this tab
+            behind a Hide/Show button, which is where the LAST thing goes — and
+            the kind chosen here decides what the Run button three panels away
+            actually does: S1 is the plain coupled loop, S3 makes the coupled
+            loop search the allowable ED.  That is the first decision of a run,
+            so it is read before the mesh and the map, not after them.
+
+            Still inert: nothing in it solves on mount, and its own RUN CYCLE
+            button remains the standalone tool. */}
+        <DutyCycleEditor />
+
         {/* ── where the physics comes from: the Electromagnetic tab, always ──── */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
           <Tooltip {...TIP_PROPS} title="This tab owns the COOLING and nothing else. The current, the current angle, the speed, the coil temperature the losses are computed at and the steps per period are read from the Electromagnetic tab every time you press Solve — a standing rule of this project, so that one operating point describes the machine on every tab instead of each panel inventing its own. Change them there.">
@@ -1353,11 +1367,8 @@ const ThermalPanel: React.FC = () => {
         </>
       )}
 
-      {/* ── what the machine DOES with this point, over TIME ───────────────
-          The steady map above is the temperature after this point has run long
-          enough to stop changing; a robot joint never does that.  Collapsed and
-          inert until asked — nothing here solves on mount. */}
-      <DutyCycleEditor />
+      {/* The duty cycle used to live HERE, at the bottom.  It is at the top of
+          the cooling block now, under the frame — see the note beside it. */}
 
       <CoupledSection />
     </Box>

@@ -33,7 +33,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, CircularProgress, IconButton, MenuItem, Paper, Select,
+  Alert, Box, Button, CircularProgress, MenuItem, Paper, Select,
   TextField, Tooltip, Typography,
 } from '@mui/material';
 import {
@@ -71,12 +71,21 @@ import {
    optional pass/fail chip and the fitted-at guard, all pure (tested by
    `__tests__/dutyCycleRegime.test.mjs`). */
 import {
-  calibrationIssue, checkVerdict, edCycleRows, regimeLine,
+  OFFERED_KINDS, calibrationIssue, checkVerdict, edCycleRows, regimeLine,
+  retiredKindNote, runModeLine,
 } from './dutyCycleRegime';
 /* …and the regime the COUPLED loop found for the same duty (2026-09-16): the
    client is the Electromagnetic tab's, because the answer is that loop's. */
 import { fetchCoupledLast, type CoupledRegime }
   from '../simulation/coupledApi';
+/* THE MAGNET LIMIT'S DEFAULT (2026-09-16): the card's own maximum working
+   temperature, resolved exactly the way the solve resolves the magnet — the
+   machine's assignment with this duty's pick laid over it — so the number in
+   the placeholder belongs to the magnet that will actually be in the machine. */
+import { useMotorAssignments } from '../materials/useMotorAssignments';
+import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
+import { activeDutyMaterials } from '../../lib/dutySettings';
+import { effectiveAssignment } from '../../lib/dutyMaterials';
 /* NO TOOLTIP WRAPS A CONTROL HERE.  A tooltip's popper is drawn above the menu
    a Select opens and takes the pointer, so the kind picker could not be opened
    at all (user 2026-09-15: «всплывающее меню всё закрывает»).  Every hint hangs
@@ -115,11 +124,14 @@ const NODE_INK: [string, string, string][] = [
   ['rotor', 'rotor + shaft', '#34d399'],
 ];
 
+/** The kind picker's words.  Only `S1` and `S3` are OFFERED (see
+ *  `dutyCycleRegime.OFFERED_KINDS`); the other two stay here because a duty
+ *  saved before 2026-09-16 may carry one and it has to be readable. */
 const KIND_LABEL: Record<DutyCycleKind, string> = {
   S1: 'S1 — continuous',
-  S2: 'S2 — one pull',
-  S3: 'S3 — find the ED',
-  segments: 'Segments — explicit list',
+  S2: 'S2 — one pull (retired)',
+  S3: 'S3 — intermittent (ED % of a cycle)',
+  segments: 'Segments — explicit list (retired)',
 };
 
 /** The ED-vs-cycle-length chart's own ink — not a node colour, because it is
@@ -187,7 +199,6 @@ const DutyCycleEditor: React.FC = () => {
   const [restoredAt, setRestoredAt] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [open, setOpen] = useState(false);
   /** the regime the COUPLED loop found for this duty, when it has run one */
   const [coupled, setCoupled] = useState<CoupledRegime | null>(null);
 
@@ -300,6 +311,43 @@ const DutyCycleEditor: React.FC = () => {
   const names = useMemo(() => duties.map((d) => d.name).filter(Boolean), [duties]);
   const rated = useMemo(() => ratedDuty(duties, ctx?.duty ?? ''), [duties, ctx]);
 
+  /* ── THE MAGNET'S OWN LIMIT, as the default (2026-09-16) ───────────────────
+     The field used to start blank, and a blank draws no line and judges
+     nothing: the tool reported an allowable ED that the WINDING could hold
+     while the magnets in it went wherever they went.  Every NdFeB card in the
+     library states `max_working_temp_c` (it is the number the report judges a
+     magnet by, `report._magnet_limit`), so that is the default — as a
+     PLACEHOLDER, not as text in the box, because the user did not type it and
+     a value that looks typed reads as a choice somebody made.  Typing over it
+     wins; clearing the box goes back to the card. */
+  const { assignments: liveAssign } = useMotorAssignments();
+  const { library: matLib } = useMaterialsLibrary();
+  const [dutyMats, setDutyMats] =
+    useState<Record<string, string | null>>(() => activeDutyMaterials());
+  useEffect(() => {
+    // The same events the Electromagnetic tab's magnet badge follows — the
+    // duty's pick is localStorage, written by the catalog and the Materials
+    // tab, and this field must not lag the magnet the solve will use.
+    const EV = ['duty-materials-changed', 'mat-assign-changed',
+                'mat-assign-local-changed', 'sim-settings-restored',
+                'sim-design-applied', 'family-changed'];
+    const sync = () => setDutyMats(activeDutyMaterials());
+    for (const ev of EV) window.addEventListener(ev, sync);
+    return () => { for (const ev of EV) window.removeEventListener(ev, sync); };
+  }, []);
+  /** the magnet the solve will use, and its card's maximum working temperature */
+  const magnetCardLimit = useMemo((): number | null => {
+    const machine = { magnet: liveAssign?.magnet || '' };
+    const name = effectiveAssignment(
+      machine, dutyMats,
+      matLib as unknown as Record<string, Record<string, unknown>>).magnet;
+    if (!name) return null;
+    const card = (matLib?.magnet as Record<string, Record<string, unknown>>
+                  | undefined)?.[name];
+    const v = Number(card?.max_working_temp_c);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }, [liveAssign, dutyMats, matLib]);
+
   /** WHICH duty the network is fitted at — what the picker is showing, and the
    *  backend's own default when it shows nothing. */
   const calibDuty = (form.calibrationDuty ?? '').trim() || rated;
@@ -352,7 +400,11 @@ const DutyCycleEditor: React.FC = () => {
    *  set). */
   const cycleRequest = useCallback((): DutyCycleRequest | null => {
     if (!ctx) return null;
-    const ml = magnetLimit.trim() === '' ? null : Number(magnetLimit);
+    // Blank means the CARD's limit, not "no limit": the magnets are judged by
+    // default (user 2026-09-16), and the placeholder beside the box says which
+    // number that is.  A typed value wins, including a typed 0 — which is the
+    // one way left to ask for a cycle judged on the winding alone.
+    const ml = magnetLimit.trim() === '' ? magnetCardLimit : Number(magnetLimit);
     const op = simOperatingPoint();
     const mesh = meshParams();
     return {
@@ -371,7 +423,7 @@ const DutyCycleEditor: React.FC = () => {
       thermal_settings: thermalPanelBlock() ?? undefined,
       magnet_limit_c: ml != null && Number.isFinite(ml) ? ml : undefined,
     };
-  }, [ctx, block, magnetLimit]);
+  }, [ctx, block, magnetLimit, magnetCardLimit]);
 
   /* ── the ONE refusal this editor can answer, and never silently ───────────
      The calibration map is solved at the CALIBRATION DUTY's own stored point,
@@ -546,6 +598,10 @@ const DutyCycleEditor: React.FC = () => {
   }, [key, form, lim]);
 
   const chip = dutyCycleChip(blockRaw);
+  /** what the coupled Run will do in the chosen kind — one line + a ⓘ */
+  const runMode = useMemo(() => runModeLine(form.kind), [form.kind]);
+  /** a stored kind this editor no longer offers (S2, an explicit segment list) */
+  const retired = useMemo(() => retiredKindNote(form.kind), [form.kind]);
   /** an offer or a run left over from ANOTHER duty — shown as nothing at all */
   const offerStale = offer.phase !== 'idle' && offerKey !== key;
   /** the offer line is on screen */
@@ -574,7 +630,10 @@ const DutyCycleEditor: React.FC = () => {
             Never a second answer to the same question: this one is labelled
             with where it came from, and it is the ratio the electromagnetic
             run beside it was actually solved at. */}
-        {coupled && (
+        {/* …and NOT on an S1: a continuous duty has no ratio to find, so a
+            cycle line there would be the panel answering a question the chosen
+            mode does not ask (user 2026-09-16). */}
+        {coupled && form.kind !== 'S1' && (
           <Tooltip {...TIP_PROPS} title={`The coupled EM ↔ thermal loop found this regime for ${coupled.duty ?? 'this duty'}: on an impulse duty each pass searches the duty ratio the limits allow and feeds back the temperatures AT it, so the electromagnetic run this answer belongs to was solved at the winding and magnet temperatures of THAT cycle. ${regimeLine(coupled)}. ${coupled.note ?? ''}`}>
             <Typography sx={{ ...lbl, cursor: 'help', fontFamily: 'monospace',
               color: coupled.feasible === false || coupled.fits_requested === false
@@ -592,35 +651,70 @@ const DutyCycleEditor: React.FC = () => {
             <Typography sx={warn}>⚠ un-saved — press Save to duty</Typography>
           </Tooltip>
         )}
-        <Button size="small" variant="text" onClick={() => setOpen((v) => !v)}
-          sx={{ ml: 'auto', fontSize: 11 }}>
-          {open ? 'Hide' : (res ? 'Show cycle' : 'Define cycle')}
-        </Button>
       </Box>
 
-      {open && (
-        <>
+      {/* ALWAYS OPEN, since 2026-09-16.  It used to hide behind a Hide/Show
+          button near the bottom of this tab, which made the duty cycle look
+          optional: the user asked for the opposite («Меню Duty cycle должно
+          быть всегда открыто и находиться вверху, после frame»), because
+          choosing S1 or S3 is the first decision of the run, not the last.
+          There is no collapsed state left to persist. */}
+      <>
           {/* ── the profile, one line ───────────────────────────────────── */}
           <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center',
             flexWrap: 'wrap', mt: 1 }}>
             <Box sx={CTRL_ROW}>
+              {/* TWO KINDS are offered (user 2026-09-16: «S2, я думаю, нужно
+                  выбросить, не знаю ему пока применения»).  A duty that still
+                  STORES an S2 or a segment list renders it — disabled, so it
+                  can be read and left but never chosen again — because the
+                  yaml, the backend and the report all still understand one. */}
               <Select size="small" value={form.kind}
                 onChange={(e) => patch({ kind: String(e.target.value) })}
-                sx={{ fontSize: 11, height: 30, minWidth: 186 }}>
-                {(['S1', 'S2', 'S3', 'segments'] as DutyCycleKind[]).map((k) => (
-                  <MenuItem key={k} value={k} sx={{ fontSize: 11 }}>{KIND_LABEL[k]}</MenuItem>
+                sx={{ fontSize: 11, height: 30, minWidth: 220 }}>
+                {[...OFFERED_KINDS].map((k) => (
+                  <MenuItem key={k} value={k} sx={{ fontSize: 11 }}>
+                    {KIND_LABEL[k as DutyCycleKind]}
+                  </MenuItem>
                 ))}
+                {retired && (
+                  <MenuItem key={form.kind} value={form.kind} disabled
+                    sx={{ fontSize: 11 }}>
+                    {KIND_LABEL[form.kind as DutyCycleKind] ?? form.kind}
+                  </MenuItem>
+                )}
               </Select>
-              <HelpTip title="S1 runs for ever, S2 is one pull, S3 is ED % of a repeated cycle, segments is an explicit list." />
+              <HelpTip title="S1 runs this point for ever; S3 runs it for ED % of a repeated cycle and rests the remainder." />
             </Box>
+
+            {/* ONE LINE: what the coupled Run will do in the chosen mode.  The
+                flow has been in the backend since the coupled loop learned to
+                solve an S3 duty for its regime, and it was nowhere on screen —
+                the picker sat in one panel and the Run button in another. */}
+            {runMode && (
+              <Box sx={CTRL_ROW}>
+                <Typography sx={{ ...lbl, fontFamily: 'monospace',
+                  color: 'var(--text-2)' }}>
+                  {runMode.line}
+                </Typography>
+                <HelpTip title={runMode.tip} />
+              </Box>
+            )}
+
+            {/* …and a kind that is stored but no longer offered says so, once. */}
+            {retired && (
+              <Tooltip {...TIP_PROPS} title={`This duty's stored cycle block is a ${form.kind}, and this editor no longer offers that kind — it is shown so the duty can be read and left, not edited into another one. Pick S1 for a point the machine sits at, or S3 for a ratio of a repeated cycle; the block is rewritten on the duty save, and until then nothing in the yaml has changed.`}>
+                <Typography sx={{ ...warn, fontWeight: 700 }}>⚠ {retired}</Typography>
+              </Tooltip>
+            )}
 
             {form.kind === 'S2' && (
               <Box sx={CTRL_ROW}>
                 <TextField label="t_on s" size="small" value={form.tOn ?? ''}
-                  onChange={(e) => patch({ tOn: e.target.value })}
+                  disabled
                   sx={{ width: 96 }} inputProps={{ style: { fontSize: 12 } }}
                   InputLabelProps={{ style: { fontSize: 12 } }} />
-                <HelpTip title="How long the single pull lasts, in seconds." />
+                <HelpTip title="How long the single pull lasts, in seconds — read-only: S2 is no longer offered." />
               </Box>
             )}
 
@@ -656,42 +750,24 @@ const DutyCycleEditor: React.FC = () => {
               </>
             )}
 
+            {/* READ-ONLY, like S2: a stored segment list is shown as it stands
+                so the duty can be understood before it is moved to S1 or S3. */}
             {form.kind === 'segments' && (
               <>
                 {(form.segments ?? []).map((sg, i) => (
                   <Box key={i} sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
-                    <Select size="small" displayEmpty value={sg.duty}
-                      onChange={(e) => {
-                        const segs = [...(form.segments ?? [])];
-                        segs[i] = { ...segs[i], duty: String(e.target.value) };
-                        patch({ segments: segs });
-                      }}
+                    <Select size="small" displayEmpty value={sg.duty} disabled
                       sx={{ fontSize: 11, height: 30, minWidth: 150 }}>
                       <MenuItem value="" sx={{ fontSize: 11 }}>unpowered</MenuItem>
                       {names.map((n) => (
                         <MenuItem key={n} value={n} sx={{ fontSize: 11 }}>{n}</MenuItem>
                       ))}
                     </Select>
-                    <TextField label="s" size="small" value={sg.t_s}
-                      onChange={(e) => {
-                        const segs = [...(form.segments ?? [])];
-                        segs[i] = { ...segs[i], t_s: e.target.value };
-                        patch({ segments: segs });
-                      }}
+                    <TextField label="s" size="small" value={sg.t_s} disabled
                       sx={{ width: 72 }} inputProps={{ style: { fontSize: 12 } }}
                       InputLabelProps={{ style: { fontSize: 12 } }} />
-                    <IconButton size="small" sx={{ fontSize: 12 }}
-                      onClick={() => patch({
-                        segments: (form.segments ?? []).filter((_, j) => j !== i) })}>
-                      ×
-                    </IconButton>
                   </Box>
                 ))}
-                <Button size="small" variant="outlined"
-                  onClick={() => patch({
-                    segments: [...(form.segments ?? []), { duty: '', t_s: '' }] })}>
-                  + segment
-                </Button>
               </>
             )}
           </Box>
@@ -733,9 +809,13 @@ const DutyCycleEditor: React.FC = () => {
             <Box sx={CTRL_ROW}>
               <TextField label="magnet limit °C" size="small" value={magnetLimit}
                 onChange={(e) => setMagnetLimit(e.target.value)}
-                sx={{ width: 132 }} inputProps={{ style: { fontSize: 12 } }}
-                InputLabelProps={{ style: { fontSize: 12 } }} />
-              <HelpTip title="A magnet temperature to judge the cycle against, °C — blank draws no line." />
+                placeholder={magnetCardLimit != null
+                  ? String(magnetCardLimit) : 'none on the card'}
+                sx={{ width: 148 }} inputProps={{ style: { fontSize: 12 } }}
+                InputLabelProps={{ style: { fontSize: 12 }, shrink: true }} />
+              <HelpTip title={magnetCardLimit != null
+                ? `A magnet temperature to judge the cycle against, °C. Blank uses the assigned magnet card's own maximum working temperature, ${magnetCardLimit} °C — so the magnets are judged by default and the line is drawn.`
+                : 'A magnet temperature to judge the cycle against, °C. The assigned magnet card states no maximum working temperature, so a blank draws no line and judges nothing.'} />
             </Box>
 
             <Box sx={CTRL_ROW}>
@@ -1064,8 +1144,7 @@ const DutyCycleEditor: React.FC = () => {
               </Box>
             </>
           )}
-        </>
-      )}
+      </>
     </Paper>
   );
 };

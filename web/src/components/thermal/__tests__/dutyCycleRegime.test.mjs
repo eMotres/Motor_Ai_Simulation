@@ -20,7 +20,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  calibrationIssue, checkVerdict, edCycleRows, regimeLine,
+  OFFERED_KINDS, calibrationIssue, checkVerdict, edCycleRows, regimeLine,
+  retiredKindNote, runModeLine,
 } from '../dutyCycleRegime.ts';
 
 /* The L13 Ø85 robot joint, 2026-09-15: 21.6 % of 60 s, 26.6 s from cold. */
@@ -124,4 +125,48 @@ test('an impulse duty as the calibration point is refused, not warned about', ()
   assert.match(other.text, /not the rated duty/);
   // a name that merely CONTAINS the letters is not an impulse point
   assert.equal(calibrationIssue('speak-up 12A', 'rated').level, 'warn');
+});
+
+/* ── what the Run button will do, per kind (2026-09-16) ─────────────────────
+   «Если выбран S1 — идёт нормальный каплинг; если выбран S3 — по умолчанию идёт
+   оптимизация времени импульса.»  The flow existed in the backend and nowhere
+   on screen.  These two lines are the contract between the kind picker and the
+   Run button, so they are pinned here rather than written inline in the JSX. */
+
+test('the S1 line promises a coupled loop and nothing cyclic', () => {
+  const s1 = runModeLine('S1');
+  assert.ok(s1, 'S1 is an offered kind');
+  assert.match(s1.line, /^Run →/, 'the line names the button');
+  assert.match(s1.line, /coupled loop/);
+  assert.ok(!/ED|duty ratio/.test(s1.line),
+    'S1 says nothing cycle-related — that is the whole point of the split');
+  assert.ok(s1.line.length <= 90, `one line, ${s1.line.length} chars`);
+  assert.match(s1.tip, /Nothing about a cycle is searched/);
+});
+
+test('the S3 line promises the ED search', () => {
+  const s3 = runModeLine('S3');
+  assert.ok(s3, 'S3 is an offered kind');
+  assert.match(s3.line, /^Run →/);
+  assert.match(s3.line, /allowable ED is searched/);
+  assert.ok(s3.line.length <= 90, `one line, ${s3.line.length} chars`);
+  // the tooltip has to name what the coupled answer actually prints back
+  assert.match(s3.tip, /asked for more/);
+});
+
+test('a kind the editor no longer offers has no Run line at all', () => {
+  for (const k of ['S2', 'segments', '', null, undefined, 'S9']) {
+    assert.equal(runModeLine(k), null, String(k));
+  }
+});
+
+test('only S1 and S3 are offered, and a stored S2 says how to leave it', () => {
+  assert.deepEqual([...OFFERED_KINDS], ['S1', 'S3']);
+  assert.equal(retiredKindNote('S2'),
+    'S2 is no longer offered; switch to S1 or S3');
+  assert.match(retiredKindNote('segments'), /switch to S1 or S3/);
+  // an offered kind is not "retired", so nothing is said about it
+  for (const k of ['S1', 'S3', '', null, undefined]) {
+    assert.equal(retiredKindNote(k), null, String(k));
+  }
 });

@@ -36,6 +36,7 @@ import MotorsCatalog from './components/catalog/MotorsCatalog';
 import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
 import AuthButton from './components/auth/AuthButton';
 import { VersionBadge } from './components/VersionBadge';
+import { backendReachable } from './lib/version';
 import { useAuth } from './contexts/AuthContext';
 import AdminPanel from './components/admin/AdminPanel';
 import SupportWidget from './components/support/SupportWidget';
@@ -268,6 +269,22 @@ function App() {
     return () => clearInterval(t);
   }, [connectedToApi, signedIn, fetchGeometryFromApi, fetchSchemaFromApi]);
 
+  // THE HEADER CHIP WHILE SIGNED OUT.  `connectedToApi` is set by the geometry
+  // and schema fetches, and those answer 401 to a visitor on a server that
+  // publishes nothing (PUBLIC_EXHIBIT=0) — so the login screen called a healthy
+  // backend "Local Mode" (live, 2026-09-16).  Ask /api/version instead: open to
+  // anonymous callers by design, and it carries no machine.  Once signed in the
+  // store's own answer takes over again.
+  const [backendUp, setBackendUp] = useState(false);
+  useEffect(() => {
+    if (signedIn) return;
+    let alive = true;
+    const probe = () => { void backendReachable().then(ok => { if (alive) setBackendUp(ok); }); };
+    probe();
+    const t = setInterval(probe, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, [signedIn]);
+
   // The in-page flight recorder (lib/diag): heap once a minute, main-thread
   // stalls, WebGL context loss — read with `__diag()` after a freeze.
   useEffect(() => { installDiag(); }, []);
@@ -473,7 +490,7 @@ function App() {
             <VersionBadge />
 
             {isLoading && <CircularProgress size={18} sx={{ mr: 1 }} />}
-            {connectedToApi ? (
+            {(connectedToApi || (!signedIn && backendUp)) ? (
               <Chip icon={<CloudSyncIcon />} label="Connected" color="success" size="small" />
             ) : (
               <Chip icon={<CloudOffIcon />} label="Local Mode" color="warning" size="small" />

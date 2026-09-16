@@ -22,6 +22,20 @@ export interface VersionCheck {
 
 const majorMinor = (v: string) => v.split('.').slice(0, 2).join('.');
 
+/** Is the backend there at all?
+ *
+ *  `/api/version` is the one engineering-free route that answers an ANONYMOUS
+ *  caller on every deployment (auth.anonymous_allowed), which makes it the only
+ *  honest liveness probe before sign-in: on a closed server (PUBLIC_EXHIBIT=0)
+ *  the geometry/schema fetches that normally set `connectedToApi` all 401, and
+ *  the header would call a perfectly healthy backend "Local Mode".
+ */
+export async function backendReachable(): Promise<boolean> {
+  try {
+    return (await fetch(`${API}/api/version`, { cache: 'no-store' })).ok;
+  } catch { return false; }
+}
+
 export async function checkBackendVersion(): Promise<VersionCheck> {
   try {
     const r = await fetch(`${API}/api/version`, { cache: 'no-store' });

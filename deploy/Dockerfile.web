@@ -9,6 +9,12 @@ WORKDIR /app
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ .
+# The app version is the REPO ROOT's VERSION file: vite.config reads
+# `<cwd>/../VERSION`, and with WORKDIR /app that is exactly /VERSION.  Without
+# it the define falls back to "0.0.0" and every deployed page showed "v0.0.0" in
+# the header while the workstation showed the real number (found live,
+# 2026-09-16 — the build context is the repo root, only `web/` was ever copied).
+COPY VERSION /VERSION
 ARG VITE_API_URL=""
 ARG VITE_GOOGLE_CLIENT_ID=""
 ENV VITE_API_URL=$VITE_API_URL \

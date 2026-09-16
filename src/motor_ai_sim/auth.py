@@ -98,8 +98,16 @@ def public_exhibit() -> bool:
 #: The ONLY /api paths an anonymous caller may reach with the exhibit closed.
 #: /api/health is the container's liveness probe; /api/me must answer (with the
 #: anonymous shape) or the SPA cannot tell "not signed in" from "server down"
-#: and never renders its login screen.
-_ANON_OK_PATHS = frozenset({"/api/health", "/api/me"})
+#: and never renders its login screen; /api/version is the header badge and the
+#: frontend/backend skew check, which run BEFORE sign-in — it returns the app
+#: version, a git sha and a build timestamp, and nothing about a machine.
+#:
+#: Every other pre-sign-in request the SPA makes (geometry, geometry/schema,
+#: config, materials, parts, mesh/config, winding/config, sweep/config, modules,
+#: family/tree, family/context, my_motors …) DOES describe a machine or the
+#: catalog, so it stays closed and the page renders without it (2026-09-16: the
+#: landing was checked against the live network log, not against a guess).
+_ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version"})
 #: …plus the sign-in endpoints themselves: the password login, the Google GIS
 #: token exchange, and logout (which must work for a token we are rejecting).
 #: NOT the rest of routes/auth_local.py — /api/auth/users, /api/auth/sessions and

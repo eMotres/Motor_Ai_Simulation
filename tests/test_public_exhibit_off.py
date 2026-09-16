@@ -69,7 +69,6 @@ CLOSED: list[tuple[str, str]] = [
     ("GET",  "/api/parts"),
     ("GET",  "/api/winding/config"),
     ("GET",  "/api/mesh/config"),
-    ("GET",  "/api/version"),
     ("GET",  "/api/simulation/status"),
     ("GET",  "/api/simulation/physics/fem_transient"),
     ("GET",  "/api/thermal/last"),
@@ -95,7 +94,7 @@ CLOSED: list[tuple[str, str]] = [
 ]
 
 # What stays open with the door closed, and what each must answer.
-OPEN = ["/api/health", "/api/me"]
+OPEN = ["/api/health", "/api/me", "/api/version"]
 
 
 # ── isolation ────────────────────────────────────────────────────────────────
@@ -183,8 +182,8 @@ def test_default_is_the_exhibit_open(monkeypatch):
 
 
 def test_anonymous_allowlist_is_exactly_health_me_and_sign_in():
-    for ok in ("/api/health", "/api/me", "/api/me/", "/api/auth/login",
-               "/api/auth/google", "/api/auth/logout",
+    for ok in ("/api/health", "/api/me", "/api/me/", "/api/version",
+               "/api/auth/login", "/api/auth/google", "/api/auth/logout",
                # everything outside /api is the SPA's own bundle
                "/", "/index.html", "/assets/index-abc.js"):
         assert anonymous_allowed(ok) is True, ok
@@ -207,6 +206,21 @@ def test_anonymous_is_401_everywhere(closed, method, path):
 def test_health_is_open(closed):
     r = client.get("/api/health")
     assert r.status_code == 200 and r.json()["status"] == "healthy"
+
+
+def test_version_is_open(closed):
+    """The header badge and the frontend/backend skew check run before sign-in.
+
+    It carries a version string, a git sha and a build time — nothing about a
+    machine — and without it the SPA's login screen shows "v0.0.0 / Local Mode"
+    as if the server were down (seen live on 2026-09-16).
+    """
+    r = client.get("/api/version")
+    assert r.status_code == 200
+    j = r.json()
+    assert isinstance(j.get("version"), str) and j["version"]
+    # and nothing engineering leaked in beside it
+    assert set(j) <= {"version", "gitSha", "builtAt"}
 
 
 def test_me_answers_anonymous(closed):

@@ -43,6 +43,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ src/
+# GET /api/version reads the repo-root VERSION three parents above api.py, i.e.
+# /app/VERSION — never copied, so the API reported "0.0.0" and the frontend's
+# skew check compared 0.1.9 against it and would have flagged a mismatch on
+# every page (found live, 2026-09-16).
+COPY VERSION ./
 # The migration + integrity scripts run INSIDE this image (same python, same
 # pins) — that is the whole point of the seed one-shot.
 COPY scripts/migrate_to_workspaces.py \

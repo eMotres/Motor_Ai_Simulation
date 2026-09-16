@@ -10,7 +10,7 @@
  * default directly via PATCH, exactly as before.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth, useApiReady } from '../../contexts/AuthContext';
 import { setDutyMaterial } from '../../lib/dutySettings';
 import { useMotorStore } from '../../stores/motorStore';
 
@@ -39,6 +39,11 @@ function readLocalOverlay(): Partial<MotorAssignments> {
 
 export function useMotorAssignments() {
   const { isAdmin, enforced, tier } = useAuth();
+  // GET /api/materials answers 401 to an anonymous caller, and this hook
+  // mounts at the App root (MaterialOverrideSync) — the landing's first paint
+  // knocked on it (live, 2026-09-16).  Same gate as the geometry/schema
+  // probes; signing in re-runs the effect below and fills the assignment.
+  const ready = useApiReady();
   // Ordinary user on an enforced backend → assignments live client-side.
   const localMode = enforced && !isAdmin;
   // Free-tier client → the motor card's materials are read-only (pro/team
@@ -51,6 +56,7 @@ export function useMotorAssignments() {
   const [error, setError]             = useState<string | null>(null);
 
   const refresh = useCallback(() => {
+    if (!ready) return;
     setLoading(true);
     fetch(API, { cache: 'no-store' })
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
@@ -60,7 +66,7 @@ export function useMotorAssignments() {
         setAssignments(merged); setLoading(false);
       })
       .catch(e => { setError(String(e)); setLoading(false); });
-  }, [localMode]);
+  }, [localMode, ready]);
 
   // The part LIST depends on the geometry: a sleeve exists only while
   // sleeve_thickness > 0, and the backend adds/drops the `sleeve` key of the

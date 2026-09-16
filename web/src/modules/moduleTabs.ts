@@ -7,6 +7,7 @@
  * tab definitions — so the shell never breaks if /api/modules is unreachable.
  */
 import { useEffect, useState } from 'react';
+import { useApiReady } from '../contexts/AuthContext';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -14,7 +15,13 @@ export interface PanelInfo { title: string; order: number; }
 
 export function useModulePanels(): Record<string, PanelInfo> {
   const [panels, setPanels] = useState<Record<string, PanelInfo>>({});
+  // The manifest list is gated server-side: to an anonymous visitor this was a
+  // 401 fired from the first paint (live, 2026-09-16).  Nothing before /api/me
+  // has answered and somebody is signed in; until then the static fallback
+  // ({}) is exactly what a failed fetch would have left anyway.
+  const ready = useApiReady();
   useEffect(() => {
+    if (!ready) return;
     let alive = true;
     fetch(`${API}/api/modules`)
       .then((r) => (r.ok ? r.json() : null))
@@ -34,6 +41,6 @@ export function useModulePanels(): Record<string, PanelInfo> {
       })
       .catch(() => { /* keep {} — App uses its static fallback */ });
     return () => { alive = false; };
-  }, []);
+  }, [ready]);
   return panels;
 }

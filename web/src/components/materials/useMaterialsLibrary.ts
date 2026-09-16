@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth, useApiReady } from '../../contexts/AuthContext';
 
 // ─── Types (mirror Python dataclasses) ───────────────────────────────────────
 
@@ -152,6 +152,7 @@ async function readMine(uid: string): Promise<MineLayer> {
 
 export function useMaterialsLibrary() {
   const { user } = useAuth();
+  const ready = useApiReady();
   const uid = user?.uid ?? null;
 
   const [base, setBase] = useState<MaterialsLibrary | null>(null);  // built-in + global
@@ -168,7 +169,15 @@ export function useMaterialsLibrary() {
       .catch(e => { setError(String(e)); setLoading(false); });
   }, []);
 
-  useEffect(() => { reloadBase(); }, [reloadBase]);
+  // NOT before /api/me has answered, and not while nobody is signed in: this
+  // hook mounts at the App ROOT (MaterialOverrideSync), so on an anonymous
+  // visit the library fetch went out with the landing's first paint and came
+  // back 401 (live, 2026-09-16).  `useApiReady` is the gate the geometry and
+  // schema probes already sit behind; flipping it (the sign-in) re-runs this
+  // effect, so the tab fills itself the moment there is a session — no page
+  // reload.  A MANUAL `reload()` is left ungated on purpose: it comes from a
+  // signed-in hand.
+  useEffect(() => { if (!ready) return; reloadBase(); }, [ready, reloadBase]);
 
   // per-user "my materials" (client Firestore) — reloadable after copy/edit/delete
   const reloadMine = useCallback(async () => {

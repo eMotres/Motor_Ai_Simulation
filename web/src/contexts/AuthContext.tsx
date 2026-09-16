@@ -67,6 +67,31 @@ const AuthCtx = createContext<AuthState>({
 
 export const useAuth = () => useContext(AuthCtx);
 
+/** May we call an `/api/*` route that a closed server gates?
+ *
+ *  Pure, and exported for the node test.  Two conditions, in this order:
+ *    • `/api/me` must have ANSWERED — `enforced` starts false, so before the
+ *      answer every caller reads "this backend does not enforce auth" and
+ *      fires at a door that 401s it.  A RESTORED session (`hasUser`, read
+ *      synchronously from localStorage) never waits, so a signed-in boot is
+ *      byte for byte what it was.
+ *    • and the visitor must be signed in — unless the backend does not
+ *      enforce auth at all (the local dev server), where everything is open.
+ *
+ *  This is the same test `App` applies to the geometry/schema probes
+ *  (`!authPending && signedIn`), in one place, for the hooks that fire from
+ *  their own mount effect and cannot see App's locals. */
+export function apiReady(resolved: boolean, hasUser: boolean, enforced: boolean): boolean {
+  if (!resolved && !hasUser) return false;
+  return !enforced || hasUser;
+}
+
+/** Hook form of `apiReady` — gate every boot-time fetch on it. */
+export function useApiReady(): boolean {
+  const { user, enforced, resolved } = useAuth();
+  return apiReady(resolved, !!user, enforced);
+}
+
 function toAuthUser(u: SessionUser | null): AuthUser | null {
   if (!u || !u.email) return null;
   return { uid: u.email, email: u.email, displayName: u.name || u.email, photoURL: u.picture };

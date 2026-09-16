@@ -148,13 +148,6 @@ const GeometryBuildTimer: React.FC = () => {
 function App() {
   const [themeMode, setThemeMode] = useState<AppMode>(() => loadThemeMode());
   useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
-  // Adopt the server's mesh block into the browser's mesh.* keys once per
-  // boot — see lib/meshConfigSync for the full-ring sweep this prevents.
-  // HERE, at the root: it used to sit in GeometryBuildTimer, which mounts
-  // only with the Geometry tab, so a browser that opened on Thermal or
-  // Electromagnetic never synced at all — the user's F5 kept "4 sectors"
-  // from the Ø200 on a 12/14 machine (2026-09-09, "нажимаю, но то же самое").
-  useEffect(() => { void syncMeshConfigFromServer(); }, []);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
   const { user, isAdmin, tier, enforced, resolved: authResolved } = useAuth();
@@ -261,6 +254,20 @@ function App() {
     loadServerSweepConfig();
   }, [authPending, signedIn, fetchGeometryFromApi, fetchSchemaFromApi, loadServerSweepConfig]);
 
+  // Adopt the server's mesh block into the browser's mesh.* keys once per
+  // boot — see lib/meshConfigSync for the full-ring sweep this prevents.
+  // HERE, at the root: it used to sit in GeometryBuildTimer, which mounts
+  // only with the Geometry tab, so a browser that opened on Thermal or
+  // Electromagnetic never synced at all — the user's F5 kept "4 sectors"
+  // from the Ø200 on a 12/14 machine (2026-09-09, "нажимаю, но то же самое").
+  // Behind the same gate as the probes above: /api/mesh/config is closed to an
+  // anonymous caller, and the sync has nothing to adopt until there is a
+  // session whose machine it belongs to (401 measured live, 2026-09-16).
+  useEffect(() => {
+    if (authPending || !signedIn) return;
+    void syncMeshConfigFromServer();
+  }, [authPending, signedIn]);
+
   // RECONNECT: the boot probe above runs once, and a backend that was merely
   // slow to wake (first request after a restart imports the whole solver
   // stack) left the app stuck in "Local Mode" until a manual reload — a
@@ -302,7 +309,16 @@ function App() {
   // There's always a working motor ("my copy"): a brand-new user with none gets
   // one created from the current state, so every later edit has somewhere to
   // auto-save.  A short delay lets the panels seed localStorage first.
-  useEffect(() => { const t = setTimeout(() => { ensureActiveMotor(); }, 1200); return () => clearTimeout(t); }, []);
+  // "A brand-new USER" is the point: with nobody signed in there is no account
+  // to own the motor, and the POST /api/presets went out 1.2 s into an
+  // anonymous visit and came back 401 (live, 2026-09-16).  Same gate as the
+  // probes; signing in re-arms the timer, so the first working motor is still
+  // created the moment there is somebody to create it for.
+  useEffect(() => {
+    if (authPending || !signedIn) return;
+    const t = setTimeout(() => { ensureActiveMotor(); }, 1200);
+    return () => clearTimeout(t);
+  }, [authPending, signedIn]);
 
   // The Simulation panel is kept mounted but hidden via display:none while
   // another tab is active.  recharts' ResponsiveContainer measures 0×0 inside

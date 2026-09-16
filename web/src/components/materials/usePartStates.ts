@@ -18,7 +18,7 @@
  * default, exactly as with materials.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth, useApiReady } from '../../contexts/AuthContext';
 
 export type PartState = 'included' | 'reference' | 'excluded';
 
@@ -75,6 +75,12 @@ function prune(m: PartStates): PartStates {
 
 export function usePartStates() {
   const { isAdmin, enforced, tier } = useAuth();
+  // GET /api/parts is closed to an anonymous caller, and this hook mounts at
+  // the App root (MaterialOverrideSync) — so the very first paint of the
+  // landing page knocked on it and got a 401 (live, 2026-09-16).  Same gate
+  // as the geometry/schema probes: nothing until /api/me has answered AND
+  // there is a session (or the backend does not enforce auth at all).
+  const ready = useApiReady();
   const localMode  = enforced && !isAdmin;
   const restricted = enforced && !isAdmin && tier !== 'pro' && tier !== 'team';
 
@@ -84,13 +90,14 @@ export function usePartStates() {
   const [error, setError]     = useState<string | null>(null);
 
   const refresh = useCallback(() => {
+    if (!ready) return;
     setLoading(true);
     fetchShared().then((shared: PartStates) => {
       let merged = { ...(shared || {}) };
       if (localMode) merged = { ...merged, ...readLocalOverlay() };
       setStates(prune(merged)); setLoading(false);
     });
-  }, [localMode]);
+  }, [localMode, ready]);
 
   useEffect(() => { refresh(); }, [refresh]);
 

@@ -24,9 +24,23 @@
  * off the stored per-duty fields (`motor_ai_sim.duty_fields`) — not stock art,
  * not a redraw:
  *
- *   em-field.png    report._em_maps(...)["b"]        CIANO10 200 opt / "L155 motor" / rated 1x9 mm
- *   thermal-map.png report._thermal_map(...)          the same die, configuration and duty
- *   campbell.png    report._campbell_png(...)         the same duty's critical-speed record
+ *   em-field.png            report._em_maps(...)["b"]
+ *   thermal-map.png         report._thermal_map(...)
+ *   rotor-displacement.png  report._mech_extra_maps(...)["disp"]
+ *
+ * all three off CIANO10 200 opt / "L155 motor" / rated 1x9 mm, so the three
+ * cards are one machine at one operating point rather than three unrelated
+ * pretty pictures.
+ *
+ * ONE CUT, THE WHOLE MACHINE (user 2026-09-16).  The mechanical solve is a full
+ * 360° ring; the electromagnetic and thermal ones are stored as HALF models —
+ * this machine is 12 slots / 10 poles, so its smallest periodic sector is a
+ * half, and their figures came out 2.2:1 beside a round rotor.  The generator
+ * completes those two to the full ring by ROTATING the solved half 180°, which
+ * is the periodic continuation the solve itself assumed; |B| is a magnitude and
+ * T is a scalar, so both survive the sign flip an anti-periodic boundary would
+ * carry, and the seam nodes are merged so the ring closes with no hairline.
+ * Nothing in report.py changes: the report still prints the half it solved.
  *
  * They are drawn on white — the report's own background — and sit on a white
  * tile in both themes, so the figure looks the same here as it does on the page
@@ -60,16 +74,20 @@ export const FEATURES: Feature[] = [
   {
     label: 'Electromagnetic FEM',
     src: '/landing/em-field.png',
-    alt: 'Flux-density map of a permanent-magnet machine: half the cross-section '
-      + 'coloured by |B| from 0 to 2.4 tesla, with the colour bar beside it.',
-    hint: 'Flux density |B| — the solved field of a 200 mm machine at its rated duty.',
+    alt: 'Flux-density map of a permanent-magnet machine: the whole '
+      + 'cross-section, twelve slots around ten magnets, coloured by |B| from '
+      + '0 to 2.4 tesla, with the colour bar beside it.',
+    hint: 'Flux density |B| of a 200 mm machine at its rated duty — the solved '
+      + 'half repeated to the full ring, which is the periodicity the solve '
+      + 'itself assumed.',
   },
   {
     label: 'Thermal & duty cycle',
     src: '/landing/thermal-map.png',
-    alt: 'Temperature map of the same cross-section, from 69 °C at the outer '
-      + 'housing to 135 °C in the rotor, with the colour bar beside it.',
-    hint: 'Temperature of the same machine, coupled to the losses of the same run.',
+    alt: 'Temperature map of the same whole cross-section, from 69 °C at the '
+      + 'outer housing to 135 °C in the rotor, with the colour bar beside it.',
+    hint: 'Temperature of the same machine, coupled to the losses of the same '
+      + 'run — the solved half repeated to the full ring, as above.',
   },
   {
     label: 'Mechanical simulation',
@@ -141,16 +159,20 @@ const FeatureCard: React.FC<{ feature: Feature }> = ({ feature }) => (
       {/* The figure keeps the report's own white ground in both themes, so the
           picture on the card and the picture on the page are one picture.
           THE PICTURE IS THE CARD (user 2026-09-16, on the first live page: the
-          images were ~180 px tall and he wanted them to dominate).  1.4:1 is the
-          tallest box the three fit: the rotor is 1.15:1 and fills its height
-          exactly, the two half-machine maps are 2.2:1 and keep a white band
-          above and below — invisible, because the figures' own ground is the
-          same white.  A taller box would only add white; a wider row is the
-          other half of the answer, and that is on the grid below. */}
+          images were ~180 px tall and he wanted them to dominate).  All three
+          are now the SAME CUT of the machine — the whole 360° ring, 1.15:1 —
+          so 1.25:1 is a box they all very nearly fill, ~354 px tall at 1440.
+          They were not always: the electromagnetic and thermal solves are
+          stored as half models and their pictures came out 2.2:1 beside a
+          round rotor (user, on the second live page: the three must show the
+          same section).  The halves are repeated to the full ring when the
+          PNGs are generated — by ROTATING 180°, which is the periodicity the
+          solve itself assumed, not by mirroring — and never in the report,
+          which still prints the half it solved. */}
       <Box sx={{
-        bgcolor: '#ffffff', aspectRatio: '1.4 / 1', p: 0.75,
+        bgcolor: '#ffffff', aspectRatio: '1.25 / 1', p: 0.75,
         // `minHeight: 0` or the flex box's automatic minimum lets a picture
-        // TALLER than 3:2 (the rotor is 1.15:1) push the box past its own
+        // TALLER than the declared ratio push the box past its own
         // aspect ratio — which is how the third card came out 80 px taller
         // than the other two, with white under their labels to match.
         minHeight: 0, overflow: 'hidden',

@@ -834,7 +834,7 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
     # which has two of them (reviewer 2026-09-14, B1).
     _p(doc, R.em_k3d_note(R._g(em, "end3d.k_flux")), size=9.5, italic=True,
        color=NOTE)
-    _crows = R.em_constant_rows(em)
+    _crows = R.em_constant_rows(em, _em_sine(D), _drive(D))
     if len(_crows) > 1:
         _h(doc, "Machine constants", 2)
         _table(doc, _crows, size=10.5, widths_cm=[6.4, 3.6, 12.0])
@@ -1122,7 +1122,14 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
     if cp:
         _h(doc, "Coupled loop", 2)
         _p(doc, R.coupled_loop_text(cp), size=9)
-        warn = (cp.get("coupling") or {}).get("warning")
+        # The route's sentence in the client's words, and the point miss in the
+        # same figure and sign as every other page (MJ-5 / CS-1, audit v7).
+        warn = R.coupled_warning_words(
+            cp.get("coupling") or {},
+            (R.duty_point_error(R._col_of(
+                D.get("cols"),
+                str((D.get("d_duty") or {}).get("name") or "")) or {})
+             or {}).get("pct"))
         if warn:
             _p(doc, "%s %s" % (R.FLAG, warn), size=9, bold=True, color=WARN)
 

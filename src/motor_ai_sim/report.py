@@ -1153,19 +1153,20 @@ VOLTAGE_CAPTION = (
 
 #: The same figure on a PWM duty, where the main panel is the BRIDGE and the
 #: field's winding voltage keeps a small panel of its own (2026-09-15).
+#: TWO SENTENCES, like every other caption in the document (CS-12, audit v7):
+#: this one ran to three and 501 characters, against 323 for the next longest.
 VOLTAGE_CAPTION_PWM = (
     "The bridge line voltage as the inverter switches it — a three-level pulse "
-    "train of +V_dc / 0 / −V_dc with its fundamental dashed over it, and the "
-    "spectrum and THD of that train — with the winding voltage the field gives "
-    "back, carrier-averaged, in the small panel below it.")
+    "train of +V_dc / 0 / −V_dc, its fundamental dashed over it, and its own "
+    "spectrum and THD; the winding voltage the field gives back is the small "
+    "panel below.")
 
 #: Which of the two the pulse train came from — said in the caption, because a
 #: reconstruction and a stored waveform are not the same claim.
 PWM_WAVE_SOURCE = {
-    "stored": (" The train is the run's own PWM sidecar: the exact edges whose "
-               "per-step volt-second means the solve integrated."),
+    "stored": " The train is the run's own PWM sidecar.",
     "regenerated": (" The train was regenerated from the record's modulator "
-                    "parameters — this run kept no voltage sidecar."),
+                    "parameters."),
 }
 
 
@@ -2855,6 +2856,52 @@ def pwm_bridge_spectrum(edges: Dict[str, Any], n_orders: Optional[int] = None
         return None
 
 
+def bridge_pulse_thd_pct(wf: Any, col: Optional[Dict[str, Any]] = None
+                         ) -> Optional[float]:
+    """The THD of the BRIDGE's pulse train — ``None`` when there is no bridge.
+
+    MJ-1 (audit v7).  The row and the §8 finding named "Line voltage THD at the
+    bridge (pulse train)" printed ``THD_LL_pct``, which is the FEM's
+    carrier-averaged WINDING line voltage: 32.28 % on the L155 rated duty,
+    43.35 % on the peak one, under the bridge's name and beside a figure whose
+    own spectrum panel says 115 % and 74.8 %.  A three-level pulse train on a
+    24 kHz carrier really does distort by that much, and the two numbers were
+    never the same quantity.
+
+    So there is ONE function for the row and the chart: both reach the train
+    through :func:`pwm_bridge_ll` and integrate it with
+    :func:`pwm_bridge_spectrum`, and the number in the table is by construction
+    the number printed on the picture.
+    """
+    br = pwm_bridge_ll(_with_inverter(wf or {}, col or {}))
+    if not br:
+        return None
+    d = pwm_bridge_spectrum(br)
+    return None if d is None else float(d[2])
+
+
+#: `(die, cfg, duty) -> bridge THD or None`, so one build integrates each
+#: duty's pulse train at most once.  Cleared with the process.
+_BRIDGE_THD_CACHE: Dict[Tuple[str, str, str], Optional[float]] = {}
+
+
+def duty_bridge_thd_pct(die: str, cfg: str, col: Dict[str, Any],
+                        cfg_doc: Dict[str, Any]) -> Optional[float]:
+    """:func:`bridge_pulse_thd_pct` for one stored duty — the run's own PWM
+    sidecar when it kept one, the regenerated train otherwise (the same order
+    :func:`pwm_bridge_ll` uses for the chart)."""
+    if duty_drive(col) != "pwm":
+        return None
+    duty = str(col.get("duty") or "")
+    key = (str(die), str(cfg), duty)
+    if key in _BRIDGE_THD_CACHE:
+        return _BRIDGE_THD_CACHE[key]
+    wf = duty_waveforms(die, cfg, duty, cfg_doc or {}, PWM_RUN_DRIVE)
+    out = bridge_pulse_thd_pct(wf, col)
+    _BRIDGE_THD_CACHE[key] = out
+    return out
+
+
 def _pwm_step(edges: Dict[str, Any]) -> Optional[Tuple[Any, Any]]:
     """The pulse train as a drawable step: (t, v) with the closing edge."""
     try:
@@ -3050,7 +3097,19 @@ def _voltage_png(wf: Dict[str, Any], width_cm: float = 22.0,
                         [_khz(t * _f1) or str(t) for t in _ticks])
                     bx.set_xlabel("harmonic order, as frequency [kHz]",
                                   fontsize=9)
-                    bx.annotate("carrier %s" % _khz_words(_nc * _f1),
+                    # THE CARRIER IS NAMED AS THE DOCUMENT NAMES IT (CS-7,
+                    # audit v7).  The cluster sits on the nearest harmonic
+                    # ORDER of a 1,181 Hz fundamental, so the bin reads
+                    # 23.7 kHz against the 24 kHz every other page prints.  The
+                    # annotation says the bridge's own carrier, and the bin
+                    # beside it only when the two round differently.
+                    _fc = _numf(_pwm.get("f_carrier_hz")) or (_nc * _f1)
+                    _bin = _nc * _f1
+                    bx.annotate("carrier %s%s"
+                                % (_khz_words(_fc),
+                                   ("" if _khz(_fc) == _khz(_bin)
+                                    else " (nearest order %s)"
+                                         % _khz_words(_bin))),
                                 (_nc, float(np.max(amp))),
                                 textcoords="offset points", xytext=(4, -6),
                                 ha="left", color="#B3261E",
@@ -4688,7 +4747,18 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                   % (_fmt(_m, 3),
                      (" — " + str(ctx["mod_index_note"]))
                      if ctx.get("mod_index_note") else ""))
-                 if _m is not None else ""))))
+                 if _m is not None else "")
+              # WHERE THIS VALUE COMES FROM (CS-5, audit v7).  On a PWM duty
+              # the value is rebuilt in the BRIDGE's own convention — V1_LL,peak
+              # = m·V_dc·√3/2 — because the stored V1 of a voltage-fed run is
+              # the star-equivalent circuit's and does not divide into the link
+              # the bridge ran on.  It therefore sits a little off section 4's
+              # V1 and well off section 3's ×k_3d row, and the reader is told so
+              # rather than left with three numbers for one fundamental.
+              + ("" if not (_is_pwm and _m is not None) else
+                 ". The value is the bridge's own V1_LL,peak = m·V_dc·√3/2, so "
+                 "it differs slightly from the field's V1 in section 4 and from "
+                 "the ×k_3d row in section 3, which are machine-side numbers"))))
     # …and what the INSULATION sees on a bridge: the line-to-line pulse
     # amplitude, which is the DC link itself.  A two-level inverter swings each
     # terminal between the rails, so between two terminals the winding sees
@@ -5291,10 +5361,17 @@ def demag_corner_clause(st: Optional[Dict[str, Any]]) -> str:
     if not st or not st.get("n_elements"):
         return ""
     n, tot = int(st.get("n_below_80") or 0), int(st["n_elements"])
+    # THE COUNT IS A MESH'S, NOT A ROTOR'S (CS-8, audit v7).  Two duties of one
+    # machine are meshed separately — 1,774 magnet elements on the rated duty
+    # against 1,525 on the peak — and quoting both as bare facts invites the
+    # reader to take the difference for a geometry change.  The AREA share
+    # beside it is the number that does not depend on the mesh.
     if not n:
         return ("No magnet element is below 80 %% of Br: the worst of the %d "
-                "magnet elements keeps %s." % (tot, _fmt(st.get("min_pct"), 1, "%")))
-    return ("It is a CORNER, not a pole: %d of the %d magnet elements are below "
+                "magnet elements of this duty's mesh keeps %s."
+                % (tot, _fmt(st.get("min_pct"), 1, "%")))
+    return ("It is a CORNER, not a pole: %d of the %d magnet elements of this "
+            "duty's mesh are below "
             "80 %% of Br and they are %s of the magnet area (%d below 50 %%, %s "
             "of the area); the 1st percentile of the map is %s."
             % (n, tot, _fmt(st.get("area_below_80_pct"), 2, "%"),
@@ -5658,10 +5735,25 @@ PWM_RUN_DRIVE = "pwm_voltage"
 
 #: Quantities that stay the SINUSOIDAL run's even on a PWM duty.  Not a
 #: convenience: the machine constants are properties of the geometry and the
-#: winding measured on a clean sinusoid, the connection is the duty's own (the
-#: inverter path solves a star-EQUIVALENT circuit and would report "star" for a
-#: delta machine), and the demagnetisation field is the one the maps in section
-#: 4 are drawn from.
+#: winding measured on a clean sinusoid, and the connection is the duty's own
+#: (the inverter path solves a star-EQUIVALENT circuit and would report "star"
+#: for a delta machine).
+#:
+#: ``demag`` IS NOT ONE OF THEM (BL-1, audit v7).  It was kept here while the
+#: maps of section 4 were drawn from the sinusoidal field; they are the PWM
+#: run's since 2026-09-16, and keeping the scalars behind made the document
+#: certify the peak duty at 2.383 % of Br lost with its own map beside it
+#: showing a worst element at 6.9 % and a fifth of the magnet area under 80 %.
+#: Demagnetisation is PERMANENT DAMAGE done by the duty's own condition — the
+#: carrier's current ripple included — so it is the PWM run's, like every other
+#: quantity that run measured, and the rules in section 8 fire on those
+#: numbers.
+#:
+#: ``R_`` IS NOT ONE OF THEM EITHER (MJ-4, audit v7).  A resistance is quoted
+#: at a temperature, and the two runs settle at different ones: the sinusoid's
+#: 5.253 mOhm at 97.8 °C was printed under an operating-point box stating
+#: 117.6 °C, where this run's own resistance is 5.566 mOhm.  The row carries
+#: the temperature it belongs to — see :func:`em_constant_rows`.
 #:
 #: ``end3d`` IS NOT ONE OF THEM (BL-4, audit v6).  The block carries k_flux — a
 #: property of the geometry, the same under either supply — but also
@@ -5671,8 +5763,8 @@ PWM_RUN_DRIVE = "pwm_voltage"
 #: (the sine's 403.5 × k) under the PWM run's 593.2 V peak, on one table of one
 #: duty.  The block is merged and the two corrected values are rebuilt from the
 #: run the rest of the row belongs to — see :func:`_pwm_end3d`.
-_PWM_KEEP_SINE = ("star_delta", "demag", "saliency_ratio")
-_PWM_KEEP_SINE_PREFIX = ("KV", "Kt", "Km", "L_", "R_", "psi", "V1_seed")
+_PWM_KEEP_SINE = ("star_delta", "saliency_ratio")
+_PWM_KEEP_SINE_PREFIX = ("KV", "Kt", "Km", "L_", "psi", "V1_seed")
 
 #: The coupled record's ``em`` block, in the keys a saved summary uses.
 _PWM_EM_KEYS = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W",
@@ -5913,8 +6005,10 @@ def apply_pwm_view(col: Dict[str, Any],
     side = pwm_run_sidecar(cfg_doc or {}, col.get("duty"))
     summ = side.get("summary") if isinstance(side.get("summary"), dict) else None
     if summ:
-        col["pwm_summary_source"] = ("the PWM run saved for this duty "
-                                     "(runs['%s'])" % PWM_RUN_DRIVE)
+        # NO STORE KEY IN A CLIENT DOCUMENT (CS-10, audit v7): the cover and
+        # section 4 printed "(runs['pwm_voltage'])" after this sentence, which
+        # names a field of the catalogue file and tells a reader nothing.
+        col["pwm_summary_source"] = "the PWM run saved for this duty"
     else:
         summ = _pwm_summary_from_record(rec)
         col["pwm_summary_source"] = "the coupled run's own electromagnetic block"
@@ -5955,7 +6049,9 @@ def supply_words(col: Dict[str, Any]) -> str:
     bits = ["PWM %s kHz" % f if f else "PWM"]
     v = _numf(inv.get("v_dc_V"))
     if v is not None:
-        bits.append("DC link %s V" % _fmt(v, 0))
+        # …TO THE DECIMAL THE REST OF THE DOCUMENT PRINTS (CS-2, audit v7):
+        # the cover and the overview said 750 V where section 3 said 750.4 V.
+        bits.append("DC link %s V" % _fmt(v, 1))
     m = _numf(inv.get("m"))
     if m is not None:
         bits.append("m %s" % _fmt(m, 2))
@@ -6358,7 +6454,15 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # the current THD beside it because that is what the winding lets through.
     ctx["thd_pct"] = _numf(em.get("THD_LL_pct") or em.get("THD_pct"))
     if ctx["drive"] == "pwm":
-        ctx["bridge_thd_pct"] = ctx["thd_pct"]
+        # …AND THE BRIDGE'S ROW IS THE BRIDGE'S NUMBER (MJ-1, audit v7).  It is
+        # the pulse train's own THD, integrated from the edges by
+        # `bridge_pulse_thd_pct` — the same two functions the U_AB spectrum
+        # panel uses — and never `THD_LL_pct`, which is the winding voltage the
+        # field gives back, carrier-averaged.  Absent when the train can be
+        # neither read nor regenerated, and then the row is not printed at all
+        # rather than printed with somebody else's number.
+        ctx["bridge_thd_pct"] = _numf(col.get("bridge_thd_pct"))
+        ctx["winding_thd_pct"] = ctx["thd_pct"]
         ctx["sine_thd_pct"] = sine_line_thd(col)
         ctx["thd_pct"] = ctx["sine_thd_pct"]
     ctx["j_coil_a_mm2"] = _numf(em.get("J_coil_A_per_mm2")
@@ -6467,7 +6571,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
             ctx["mod_index"] = _m
             ctx["mod_index_note"] = (
                 "the modulation index the inverter run itself ran at%s"
-                % ((", on a %s V link" % _fmt(_vdc, 0))
+                % ((", on a %s V link" % _fmt(_vdc, 1))
                    if _vdc is not None else ""))
             # …and the fundamental that goes with it, in the SAME convention.
             # The stored `V1_LL_V` of a voltage-fed run is the star-equivalent
@@ -6866,6 +6970,15 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # configuration is designed for — its own duties, not a number typed here.
     _speeds = [_numf(c["d"].get("rpm")) for c in cols]
     max_speed = max([s for s in _speeds if s] or [0.0]) or None
+    # THE BRIDGE'S OWN THD, before anything judges or prints it (MJ-1, audit
+    # v7).  It is integrated from the pulse train, which lives in the duty's
+    # stored run and not in any summary, so it is read here — where the die and
+    # the configuration are known — and travels on the column for the
+    # comparison row and the findings row alike.
+    for _c in cols:
+        _bt = duty_bridge_thd_pct(die, cfg, _c, cfg_doc)
+        if _bt is not None:
+            _c["bridge_thd_pct"] = _bt
     ctxs = {c["duty"]: _warning_context(
         c, mats=mats, batt=batt,
         brg=c.get("brg") or _bearing_losses(
@@ -7248,7 +7361,8 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                            mats=mats, ctxs=ctxs,
                            pair=D.get("pair"), figs=_figs,
                            em_duty=D.get("detail_duty"), sec=sec,
-                           detail_from_duty=bool(D.get("th_detail_from_duty")))
+                           detail_from_duty=bool(D.get("th_detail_from_duty")),
+                           col=_col_of(cols, str(d_duty.get("name") or "")))
     # The duty-cycle section, when a duty of this configuration has one: it
     # follows the steady states it replaces and precedes the mechanics, and on
     # every other machine it is not printed at all (2026-09-14).
@@ -8446,10 +8560,17 @@ def em_constants_note(k3d: Any, drive: str = "sine") -> str:
     inductances, the resistances and the flux linkage are the winding's own
     2-D values and are printed as solved.
     """
+    # …AND THE TWO EXCEPTIONS ARE NAMED (MJ-3 / MJ-4, audit v7).  The sentence
+    # said "every constant here is the sinusoidal run's" over a droop formed on
+    # the PWM torque and a resistance quoted at the sinusoid's temperature under
+    # an operating point stating another.  The droop is the sinusoid's and says
+    # so in its own label; the resistances are this run's, at the temperature
+    # the row prints.
     tail = ("" if str(drive or "sine") != "pwm" else
-            " Every constant in this table is the SINUSOIDAL run's: a "
-            "voltage-fed inverter run does not probe the no-load flux linkage "
-            "and measures no KV.")
+            " The constants here are the SINUSOIDAL run's — a voltage-fed "
+            "inverter run does not probe the no-load flux linkage and measures "
+            "no KV — except the resistances, which belong to this run and to "
+            "the winding temperature printed beside them.")
     if not k3d:
         return ("No 3-D passport for this geometry, so every constant above is "
                 "the 2-D value as solved." + tail)
@@ -8497,9 +8618,11 @@ def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
          "Electrical frequency", _fmt(f_el, 1, "Hz")],
         ["Winding temperature", _fmt(_g(em, "coil_temp_C"), 1, "°C"),
          "Magnet temperature", _fmt(t_mag, 1, "°C") + t_mag_src],
+        # TWO DECIMALS, the same as section 3 and the rule in section 8 (CS-4,
+        # audit v7): one place read 17.5 / 24.4 against their 17.46 / 24.42.
         ["Steps per period", _fmt(_g(em, "n_steps_per_period"), 0),
          "Current density (winding current / copper)",
-         _fmt(_g(em, "J_coil_A_per_mm2"), 1, "A/mm²")],
+         _fmt(_g(em, "J_coil_A_per_mm2"), 2, "A/mm²")],
         # The connection the point was solved in, beside the current it
         # implies in the winding (line ÷ √3 in delta) — user 2026-09-13.
         ["Terminal connection", _sd_words(None, em, d_duty),
@@ -8535,6 +8658,22 @@ PWM_VDC_NOTE = ("what the terminals really carry: a two-level bridge swings "
                 "each one between the rails, so the line-to-line pulse "
                 "amplitude IS the DC link — never 1.155 × V_dc, which belongs "
                 "to the star-equivalent circuit the solve runs in")
+
+#: MJ-6 (audit v7).  Section 3 printed a 912.9 V carrier-averaged peak two rows
+#: above "Bridge line voltage amplitude = DC link 750.4 V" and left the reader
+#: to reconcile them.  The reason is in `simulation.pwm.star_equivalent_bus`:
+#: the voltage-fed solve runs the star-EQUIVALENT circuit on a bus of √3·V_dc,
+#: whose branch waveform peaks at 1.1547 × V_dc where the real bridge's line
+#: voltage peaks at V_dc, and what the field gives back on top of that is the
+#: winding's own ring between pulses, carrier-averaged.  Neither is a terminal
+#: voltage; the terminals see the pulse train of the row above.
+PWM_VPK_VS_VDC_LABEL = "…why the two rows above exceed the bridge amplitude"
+PWM_VPK_VS_VDC_NOTE = (
+    "they are not terminal voltages: a voltage-fed run solves the "
+    "star-EQUIVALENT circuit, whose branch peaks at 1.1547 × V_dc where the "
+    "real bridge's line voltage peaks at V_dc, and the field adds the "
+    "winding's own ring between pulses on top of it. The terminals see the "
+    "pulse train — ± the DC link of the row above, and no more.")
 
 
 def em_torque_rows(em: Dict[str, Any],
@@ -8755,7 +8894,14 @@ def saliency_note(ratio: Any) -> str:
     return "≈ 1: no usable reluctance torque either way"
 
 
-def em_constant_rows(em: Dict[str, Any]) -> List[List[str]]:
+#: The tail a row of this table carries when its number is the SINUSOIDAL run's
+#: on a PWM duty — the same label the comparison table uses (``SINE_ROW_TAIL``).
+SINE_CONSTANT_TAIL = " (sinusoidal run)"
+
+
+def em_constant_rows(em: Dict[str, Any],
+                     em_sine: Optional[Dict[str, Any]] = None,
+                     drive: str = "sine") -> List[List[str]]:
     """The machine constants a control engineer asks for.  Header included.
 
     User 2026-09-11: *"проверь все эти параметры, они обязательно должны быть
@@ -8763,7 +8909,24 @@ def em_constant_rows(em: Dict[str, Any]) -> List[List[str]]:
     flux linkage, the winding resistances and the saturation droop were on the
     summary card and in no section of this document — and they are exactly what
     a drive is tuned from.
+
+    ``em_sine`` is the duty's sinusoidal summary on a PWM duty, and TWO rows
+    need it (audit v7):
+
+    * **the saturation droop** (MJ-3) is a property of the iron at this point,
+      measured against an unsaturated dq twin of the SAME run.  Formed on the
+      PWM torque it read 19.87 % on the L155 peak duty — 204.935 N·m against a
+      255.739 N·m reference — where the sinusoidal torque at that point is
+      239.972 N·m, so about 13.7 points of what the row called saturation were
+      carrier loss and the −1.18 % point miss.  It is taken on the sinusoidal
+      run, like every other constant of this table, and its label says so;
+    * **the resistances** (MJ-4) are the opposite case: they belong to the RUN
+      and to the temperature it settled at, so they are this run's and the row
+      prints that temperature rather than leaving it to be read off an
+      operating-point box that states another one.
     """
+    _pwm = str(drive or "sine") == "pwm" and bool(em_sine)
+    _sine = (em_sine or {}) if _pwm else em
     def R(label, v, d, unit, note=""):
         if v is not None:
             rows.append([label, _fmt(v, d, unit), note])
@@ -8835,9 +8998,12 @@ def em_constant_rows(em: Dict[str, Any]) -> List[List[str]]:
     if _mtot and _p3d:
         R("Rotor power per mass", abs(_p3d) / 1000.0 / _mtot, 3, "kW/kg",
           "rotor power × k_3d over the same mass")
+    # THE TEMPERATURE THE RESISTANCE BELONGS TO, printed (MJ-4, audit v7).
+    _rt = _numf(_g(em, "coil_temp_C"))
+    _r_note = ("at this run's winding temperature%s, end windings included"
+               % ("" if _rt is None else " of %s" % _fmt(_rt, 1, "°C")))
     R("Phase resistance" + _w, (lambda v: v * 1000.0 if v is not None else None)(
-        _numf(_g(em, "R_phase_ohm"))), 3, "mOhm",
-      "at the winding temperature of this run, end windings included")
+        _numf(_g(em, "R_phase_ohm"))), 3, "mOhm", _r_note)
     if _delta:
         R("Phase resistance, star-equivalent",
           (lambda v: v * 1000.0 if v is not None else None)(
@@ -8861,25 +9027,32 @@ def em_constant_rows(em: Dict[str, Any]) -> List[List[str]]:
     # reference" — the L155 rated duty is the second, 187.855 N·m against a
     # 184.946 N·m reference.  That is the reference's resolution, not a finding,
     # and it is printed as "not measured" rather than as a zero.
-    _sat = _numf(_g(em, "saturation.droop_pct"))
-    _t_lin = _numf(_g(em, "saturation.T_linear_Nm"))
-    _t_avg = _numf(_g(em, "T_em_avg_Nm"))
-    _bench = _g(em, "bench_ldq") or {}
+    # …AND IT IS THE SINUSOIDAL RUN'S, like every other constant of this table
+    # (MJ-3, audit v7): a carrier's torque loss and a missed operating point are
+    # not saturation, and the row sat inside a table whose closing sentence says
+    # every number in it is the sinusoid's.
+    _sat = _numf(_g(_sine, "saturation.droop_pct"))
+    _t_lin = _numf(_g(_sine, "saturation.T_linear_Nm"))
+    _t_avg = _numf(_g(_sine, "T_em_avg_Nm"))
+    _bench = _g(_sine, "bench_ldq") or _g(em, "bench_ldq") or {}
+    _sat_label = "Saturation droop" + (SINE_CONSTANT_TAIL if _pwm else "")
     _sat_note = (
         "how far the torque has fallen below the UNSATURATED linear reference "
         "T = 1.5·p·[ψ_PM·i_q + (Ld − Lq)·i_d·i_q] at this same point, with "
-        "Ld/Lq from the small-signal bench probe%s"
+        "Ld/Lq from the small-signal bench probe%s%s"
         % ("" if not _numf(_bench.get("I_probe_arms")) else
-           " at %s" % _fmt(_bench.get("I_probe_arms"), 1, "A rms")))
+           " at %s" % _fmt(_bench.get("I_probe_arms"), 1, "A rms"),
+           "; measured on the sinusoidal run, so no carrier loss is counted "
+           "as saturation" if _pwm else ""))
     if (_sat is not None and _sat <= 0.0 and _t_lin is not None
             and _t_avg is not None and abs(_t_avg) >= abs(_t_lin)):
         rows.append([
-            "Saturation droop", "not measured",
+            _sat_label, "not measured",
             _sat_note + ". The solved torque (%s) came out at or above the "
             "reference (%s), so the reference cannot resolve a droop here"
             % (_fmt(_t_avg, 3, "N·m"), _fmt(_t_lin, 3, "N·m"))])
     else:
-        R("Saturation droop", _sat, 2, "%",
+        R(_sat_label, _sat, 2, "%",
           _sat_note + ("" if _t_lin is None else
                        "; the reference is %s against a solved %s"
                        % (_fmt(_t_lin, 3, "N·m"), _fmt(_t_avg, 3, "N·m"))))
@@ -8945,8 +9118,14 @@ def em_loss_rows(em: Dict[str, Any],
     if brg and brg.get("has_bearings"):
         _lr("Bearings", brg.get("P_bearings_W"), "SKF friction model — analytic")
         _lr("Windage", brg.get("P_windage_W"), "rotor surface + gap shear — analytic")
+        # ONE SUM, NOT TWO (CS-3, audit v7).  Section 3 prints the coupled
+        # loop's own `P_loss_total_incl_mech_W` and this row re-added the
+        # terms, so the two pages read 6,234.5 and 6,234.4 W for one machine.
+        # The loop's figure when the run has one; the sum only when it does not.
+        _incl = _numf(_g(em, "coupling.P_loss_total_incl_mech_W"))
         _lr("Total including mechanical",
-            (float(tot_em or 0.0) + float(brg.get("P_mech_extra_W") or 0.0)),
+            (_incl if _incl is not None else
+             (float(tot_em or 0.0) + float(brg.get("P_mech_extra_W") or 0.0))),
             "what a calorimeter around the machine would read")
     else:
         lrows.append(["Bearings + windage", "—",
@@ -9141,7 +9320,7 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
     # The k_3d footnote belongs to the TORQUE table above, which really has
     # two columns (reviewer 2026-09-14, B1).
     out.append(_para(em_k3d_note(_g(em, "end3d.k_flux")), st["note"]))
-    _crows = em_constant_rows(em)
+    _crows = em_constant_rows(em, em_sine, drive)
     if len(_crows) > 1:
         out.append(_para("Machine constants", st["h2"]))
         out.append(_table([[r[0], r[1], _para(r[2], st["cell"])] for r in _crows],
@@ -9540,7 +9719,14 @@ THERMAL_MAP_MISSING = (
 
 THERMAL_MAP_CAPTION = (
     "Steady-state temperature over the solved cross-section, °C, from the "
-    "cycle-averaged loss map of the electromagnetic run named above.")
+    "cycle-averaged loss map of the electromagnetic run named above. The "
+    # CS-6 (audit v7): the bar topped at 135.2 °C where the caption and every
+    # table said 135.3, and 206.4 against 206.7 on the peak duty.  The picture
+    # is drawn from the area-weighted nodal average of each material class —
+    # that is what keeps a boundary from bleeding — so its bar ends a few
+    # tenths under the part maximum the tables quote.  Said, not chased.
+    "bar is the drawn field's own area-averaged range, a few tenths under the "
+    "part maxima in the tables.")
 
 
 def thermal_map_owner_text(map_duty: Optional[str], from_duty: bool = False,
@@ -10886,7 +11072,9 @@ def pwm_coupled_rows(col: Dict[str, Any]) -> Dict[str, Any]:
 
     _row("Carrier [kHz]",
          lambda r: _khz(_cpl_inv(r).get("f_carrier_hz")) or "—")
-    _row("DC link [V]", lambda r: _fmt(_cpl_inv(r).get("v_dc_V"), 0))
+    # ONE DC LINK, ONE FIGURE (CS-2, audit v7): 750 V here against the 750.4 V
+    # sections 3, 4 and 8 print is the same link, rounded twice.
+    _row("DC link [V]", lambda r: _fmt(_cpl_inv(r).get("v_dc_V"), 1))
     _row("Modulation index [-]", lambda r: _fmt(_cpl_inv(r).get("m"), 3))
     _row("Total electromagnetic loss [W]",
          lambda r: _fmt(_cpl_sum(_em(r), ("P_loss_total_W",)), 1))
@@ -11148,7 +11336,8 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
                   figs: Optional[List[int]] = None,
                   em_duty: Optional[str] = None,
                   sec: Optional[Dict[str, int]] = None,
-                  detail_from_duty: bool = False) -> List[Any]:
+                  detail_from_duty: bool = False,
+                  col: Optional[Dict[str, Any]] = None) -> List[Any]:
     from reportlab.platypus import Spacer
 
     out: List[Any] = [_para(section_heading(sec, "thermal"), st["h1"])]
@@ -11331,8 +11520,10 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
         c = cp.get("coupling") or {}
         out.append(_para("Coupled loop", st["h2"]))
         out.append(_para(coupled_loop_text(cp), st["body"]))
-        if c.get("warning"):
-            out.append(_para(f"{FLAG} {c['warning']}", st["warn"]))
+        _cw = coupled_warning_words(c, (duty_point_error(col or {}) or {})
+                                    .get("pct"))
+        if _cw:
+            out.append(_para(f"{FLAG} {_cw}", st["warn"]))
     return out
 
 
@@ -12061,9 +12252,11 @@ MODES_GALLERY_MISSING = (
     "The mode shapes were not stored with this solve (solved before shapes "
     "were kept) — re-run Solve modes and the gallery appears here.")
 MODES_CAPTION = (
+    # TWO SENTENCES (CS-12, audit v7): the bonded-interface caveat is a clause
+    # of the first, not a third sentence of its own.
     "The first %d in-plane modes of the %s cross-section, each at its natural "
-    "frequency with the circumferential order n; deformation exaggerated (%s "
-    "of the radius). Every interface bonded — an upper bound on the frequency.")
+    "frequency with the circumferential order n, every interface bonded — an "
+    "upper bound on the frequency. Deformation exaggerated (%s of the radius).")
 
 
 def modes_heading(res: Optional[Dict[str, Any]]) -> str:
@@ -13189,7 +13382,13 @@ MECH_COMPARE_NOTE = (
 CRIT_COMPARE_NOTE = (
     "A critical speed is where a forward whirl branch crosses the 1× unbalance "
     "line. The shaft line is an ASSUMPTION, so these locate the problem and do "
-    "not certify the rotor; each column's sweep range is that duty's own.")
+    "not certify the rotor; each column's sweep range is that duty's own, and "
+    # CS-9 (audit v7): 27,413 rpm in one column against 27,414 in the other for
+    # one shaft line.  Two sweeps bracket the same crossing on different grids;
+    # the last digit is the bisection's, not the rotor's, and saying so is
+    # honest where chasing it would not be.
+    "two sweeps bracket one crossing on different grids — the last digit is "
+    "the bisection's, not the rotor's.")
 
 COUPLED_COMPARE_NOTE = (
     "The loop alternates the electromagnetic transient and the thermal map "
@@ -13756,6 +13955,14 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
         R(PWM_VDC_LABEL,
           lambda c: (_numf(duty_inverter(c).get("v_dc_V"))
                      if duty_drive(c) == "pwm" else None), 1)
+        # …AND WHY THE TWO ROWS ABOVE ARE LARGER THAN IT (MJ-6, audit v7).  A
+        # client reading 912.9 V two rows over "= DC link 750.4 V" has every
+        # reason to think one of them is wrong, and section 3 is the table read
+        # first.  One clause, in the row under the pair it reconciles.
+        rows.append([PWM_VPK_VS_VDC_LABEL]
+                    + _col_vals(cols, lambda c: (
+                        PWM_VPK_VS_VDC_NOTE if duty_drive(c) == "pwm"
+                        else "—")))
     R("Line voltage, rms [V]", lambda c: _e(c, "V_line_rms_V"), 1)
 
     def _v1k(c) -> Optional[float]:
@@ -13806,9 +14013,15 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # 2026-09-15): the bridge's pulse train is tens of per cent by
     # construction, the 10 % gate is on the machine's own distortion, and the
     # rows say which is which rather than leaving one number to be read as both.
+    # …AND THE BRIDGE ROW IS THE BRIDGE'S OWN NUMBER (MJ-1, audit v7): the
+    # pulse train's THD, integrated from its edges by `bridge_pulse_thd_pct` —
+    # the very function the U_AB spectrum panel prints from — and not the
+    # field's carrier-averaged winding THD, which was 32.28 % under the bridge's
+    # name beside a figure saying 115 %.
     R(("Line voltage THD at the bridge (pulse train) [%]" if _pwm_v
        else "Line voltage THD [%]"),
-      lambda c: _e(c, "THD_LL_pct") or _e(c, "THD_pct"), 2)
+      lambda c: (_numf(c.get("bridge_thd_pct")) if duty_drive(c) == "pwm"
+                 else (_e(c, "THD_LL_pct") or _e(c, "THD_pct"))), 2)
     if _pwm_v:
         R("…of which low-order, sinusoidal run — the 10 % limit's row [%]",
           lambda c: (sine_line_thd(c) if duty_drive(c) == "pwm" else None), 2)
@@ -14259,7 +14472,7 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
     def S(label, fn):
         rows.append([label] + _col_vals(
             cols, lambda c: (NOT_SOLVED if _m(c) is None
-                             else (str(fn(c))[:160] if fn(c) is not None else "—"))))
+                             else (str(fn(c)) if fn(c) is not None else "—"))))
 
     R("Speed solved [rpm]", lambda c: (_m(c) or {}).get("rpm"), 0)
     R("Overspeed factor", lambda c: (_m(c) or {}).get("overspeed_factor"), 2)
@@ -14361,7 +14574,7 @@ def crit_compare_rows(cols: List[Dict[str, Any]]
                          else _fmt((_cs(c) or {}).get("rated_rpm"), 0))))
     crows.append(["Verdict"] + _col_vals(
         cols, lambda c: (NOT_SOLVED if _cs(c) is None
-                         else str((_cs(c) or {}).get("verdict") or "—")[:160])))
+                         else str((_cs(c) or {}).get("verdict") or "—"))))
     # FORWARD and BACKWARD apart (reviewer 2026-09-11: "rated 22,900, first
     # critical 22,585, verdict subcritical — wrong").  The 22,585 crossing is a
     # BACKWARD whirl: on isotropic bearings unbalance does not excite it, and
@@ -14465,6 +14678,91 @@ def coupled_refusal_reason(rec: Optional[Dict[str, Any]]) -> Tuple[Any, str]:
     return n, reason
 
 
+#: The configuration keys the coupled route's own refusal sentences name for
+#: the OPERATOR, and the words a client document says instead (MJ-5, audit v7).
+#: Longest first, so `inverter.i_tol_pct` is not eaten by a prefix.
+_OPERATOR_KEYS = (
+    ("inverter.i_tol_pct", "the point tolerance"),
+    ("inverter.v_dc_V", "the DC link"),
+    ("inverter.", "the inverter's "),
+    ("max_iter", "the iteration budget"),
+)
+
+
+def _client_words(msg: str) -> str:
+    """One stored refusal sentence with the operator's half taken off.
+
+    The route writes for whoever can re-run the loop: it ends in an imperative
+    naming the keys to change.  A client document says what happened and stops;
+    the remedy lives in the engineer's log.
+    """
+    out = str(msg or "").strip()
+    # The remedy is always the last clause, introduced by an em dash.
+    cut = out.rfind(" — raise ")
+    if cut > 0:
+        out = out[:cut]
+    for key, word in _OPERATOR_KEYS:
+        out = out.replace(key, word)
+    out = out.strip().rstrip(";,")
+    if out and not out.endswith("."):
+        out += "."
+    return (out[:1].upper() + out[1:]) if out else ""
+
+
+def coupled_warning_words(rec: Optional[Dict[str, Any]],
+                          point_pct: Optional[float] = None) -> str:
+    """The coupled loop's warning as a CLIENT reads it — ``""`` when there is
+    none.
+
+    MJ-5 (audit v7).  Section 6 of the peak document printed the route's own
+    sentence verbatim: two configuration keys (``max_iter``,
+    ``inverter.i_tol_pct``) and a millivolt-resolution voltage (617.110 V), in
+    a document written for the buyer of the machine.  What the buyer needs is
+    the fact — how many passes, how far off the point, against what tolerance,
+    and where the next pass would have aimed — and this says exactly that.
+
+    ``point_pct`` is the miss as the rest of the document prints it (CS-1): the
+    route's own figure is the winding current's and rounds to −1.17 % where
+    every other page says −1.18 %, with an ASCII hyphen against their Unicode
+    minus.  One number, one sign.
+    """
+    if not isinstance(rec, dict):
+        return ""
+    msg = str(rec.get("warning") or "").strip()
+    if not msg:
+        return ""
+    code = str(rec.get("warning_code") or "").strip()
+    if code == "point_not_converged" or "operating point did not" in msg.lower():
+        runs = _numf(rec.get("em_runs") or rec.get("iterations"))
+        if runs is None:
+            m = re.search(r"after (\d+) electromagnetic run", msg)
+            runs = float(m.group(1)) if m else None
+        pct = point_pct
+        if pct is None:
+            m = re.search(r"draws\s*([-+−]?[\d.]+)\s*%", msg)
+            pct = _numf(str(m.group(1)).replace("−", "-")) if m else None
+        m = re.search(r"off the ([\d.]+) A", msg)
+        billed = _numf(m.group(1)) if m else None
+        m = re.search(r"tolerance\s*±\s*([\d.]+)", msg)
+        tol = _numf(m.group(1)) if m else None
+        m = re.search(r"aimed at ([\d.]+) V", msg)
+        aim = _numf(m.group(1)) if m else None
+        if runs and pct is not None:
+            return ("The temperatures settled, the operating point did not: "
+                    "%d passes, and the machine draws %s %% off the %s this "
+                    "duty is billed at%s.%s The temperatures above are the "
+                    "last pass that solved."
+                    % (int(runs), _signed(pct, 2),
+                       _fmt(billed, 2, "A") if billed is not None
+                       else "current",
+                       ("" if tol is None
+                        else " (tolerance ± %s %%)" % _fmt(tol, 0)),
+                       ("" if aim is None else
+                        " The next pass would have aimed at %s."
+                        % _fmt(aim, 0, "V"))))
+    return _client_words(msg)
+
+
 def converged_words(rec: Optional[Dict[str, Any]]) -> str:
     """The "Converged" cell — ``"yes"``, a runaway, or WHY it is not yes.
 
@@ -14505,10 +14803,15 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
         rows.append([label] + _col_vals(
             cols, lambda c: (NOT_SOLVED if _c(c) is None else _fmt(fn(c), d, unit))))
 
+    # NO CLIP (MJ-2, audit v7).  These cells were cut at exactly 160 characters
+    # — mid-word, with no ellipsis: the peak duty's convergence sentence stopped
+    # inside "(tolerance", taking its remedy with it.  A comparison cell wraps
+    # in the PDF (`_cmp_table._cell`) and in Word (the row is kept whole), so
+    # there was nothing for the clip to protect.
     def S(label, fn):
         rows.append([label] + _col_vals(
             cols, lambda c: (NOT_SOLVED if _c(c) is None
-                             else (str(fn(c))[:160] if fn(c) is not None else "—"))))
+                             else (str(fn(c)) if fn(c) is not None else "—"))))
 
     def _sh(c):
         # The card's balance where it can be formed (the same `shaft_view` as
@@ -14577,7 +14880,10 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
       lambda c: (None if _cb(c, "tol_bearing_K") is None
                  else "± %.1f" % float(_cb(c, "tol_bearing_K"))))
     R("Residual, bearing seat [K]", lambda c: _cb(c, "residual_bearing_K"), 2)
-    S("Warning", lambda c: (_c(c) or {}).get("warning"))
+    # THE CLIENT'S HALF OF THE ROUTE'S SENTENCE (MJ-5 / CS-1, audit v7), and
+    # the miss in the same figure and the same sign as every other page.
+    S("Warning", lambda c: coupled_warning_words(
+        _c(c), (duty_point_error(c) or {}).get("pct")) or None)
     return "Coupled loop", _drop_empty(rows)
 
 

@@ -2931,7 +2931,11 @@ class TestTheClientReviewOf20260914:
         from motor_ai_sim import report as R
 
         txt = R.demag_corner_clause(self.CORNER)
-        assert "160 of the 1380 magnet elements are below 80 %" in txt
+        # …and the count is named as a MESH's, not a rotor's (CS-8, audit v7):
+        # two duties of one machine are meshed apart and quoted 1,774 and 1,525
+        # elements as bare facts.
+        assert ("160 of the 1380 magnet elements of this duty's mesh are "
+                "below 80 %") in txt
         assert "2.05 % of the magnet area" in txt
         assert "52 below 50 %" in txt and "33.6 %" in txt
 
@@ -2959,7 +2963,7 @@ class TestTheClientReviewOf20260914:
                                    "demag_corner": self.CORNER}),
                   "demag_worst_element")
         assert w["level"] == "red"
-        assert "160 of the 1380 magnet elements" in w["note"]
+        assert "160 of the 1380 magnet elements of this duty's mesh" in w["note"]
 
     # ── 3 · a bonded tie that goes into tension ─────────────────────────────
     def test_a_tie_in_tension_is_red_and_names_the_speed(self):
@@ -4686,7 +4690,10 @@ class TestPwmIsTheDutysOperatingCondition:
         c = self._col(cfg_doc=doc)
         assert c["em"]["P_loss_total_W"] == 9999.0
         assert c["em"]["I_phase_rms_A"] == 611.0
-        assert "runs['pwm_voltage']" in c["pwm_summary_source"]
+        # …and the source line says so in words, never by naming the store key
+        # (CS-10, audit v7).
+        assert c["pwm_summary_source"] == "the PWM run saved for this duty"
+        assert "runs[" not in c["pwm_summary_source"]
         assert c["wf_drive"] == R.PWM_RUN_DRIVE
         # …and with no such run the charts have no PWM waveforms to draw
         assert self._col()["wf_drive"] is None
@@ -6138,3 +6145,318 @@ class TestMapProvenance:
         assert "on both sides" in pair
         assert pair_caption("The temperature map.", side, dict(side),
                             map_kind="rotor_stress").count("map from") == 0
+
+
+# ---------------------------------------------------------------------------
+# Audit v7 — the last quantities a PWM duty still read off the sinusoid, and
+# the four places the document spoke to the operator instead of the client
+# ---------------------------------------------------------------------------
+# BL-1  the DEMAGNETISATION block: the L155 peak duty was billed at 2.383 % of
+#       Br lost with its own map beside it showing a worst element at 6.9 % and
+#       a fifth of the magnet area under 80 %.  Permanent damage, certified at a
+#       fifth of its size.
+# MJ-1  the "THD at the bridge (pulse train)" row printed the FIELD's
+#       carrier-averaged winding THD (32.28 %) under the bridge's name, beside a
+#       figure whose spectrum panel says 115 %.
+# MJ-2  three comparison cells were cut at exactly 160 characters, mid-word.
+# MJ-3  the saturation droop was formed on the PWM torque inside a table that
+#       says every constant in it is the sinusoid's.
+# MJ-4  the phase resistance was the sinusoid's, at the sinusoid's temperature,
+#       under an operating point stating another one.
+# MJ-5  section 6 printed `max_iter`, `inverter.i_tol_pct` and 617.110 V.
+
+
+class TestAuditV7:
+
+    #: the sinusoidal run's demagnetisation — what the document used to print
+    SINE_DEMAG = {"br_kept_vol_pct": 97.617, "br_worst_pct": 18.4,
+                  "bh_loss_pct": 4.267, "grade_nominal": 52,
+                  "grade_effective": 49.8, "magnet_name": "N52UH_150C"}
+    #: …and the PWM run's own, which is the duty's condition
+    PWM_DEMAG = {"br_kept_vol_pct": 86.509, "br_worst_pct": 6.9,
+                 "bh_loss_pct": 21.427, "grade_nominal": 52,
+                 "grade_effective": 40.9, "magnet_name": "N52UH_150C"}
+
+    INV = {"v_dc_V": 750.4, "m": 0.9426, "f_carrier_hz": 24000.0,
+           "f_elec_Hz": 1666.7, "carriers_per_period": 14,
+           "thd_ll_pct": 43.35, "thd_i_pct": 5.1}
+
+    SINE = {"rpm": 20000.0, "T_em_avg_Nm": 239.972, "I_phase_rms_A": 761.4,
+            "I_line_rms_A": 761.4, "A_phase_mm2": 18.0, "star_delta": "delta",
+            "V_line_peak_V": 900.0, "THD_LL_pct": 1.21,
+            "coil_temp_C": 139.2, "R_phase_ohm": 0.005908,
+            "P_loss_total_W": 7851.8, "demag": dict(SINE_DEMAG),
+            "saturation": {"droop_pct": 5.47, "T_linear_Nm": 253.856},
+            "end3d": {"k_flux": 0.9576}}
+
+    PWM_SUMMARY = {"T_em_avg_Nm": 204.935, "V_line_peak_V": 953.3,
+                   "THD_LL_pct": 43.35, "coil_temp_C": 154.3,
+                   "R_phase_ohm": 0.006147, "P_loss_total_W": 10131.2,
+                   "demag": dict(PWM_DEMAG),
+                   "saturation": {"droop_pct": 19.87, "T_linear_Nm": 255.739},
+                   "I_line_rms_A": 761.4, "I_phase_rms_solved_A": 439.6}
+
+    def _cfg_doc(self, duty="peak"):
+        return {"duties": [{"name": duty,
+                            "runs": {"pwm_voltage": {
+                                "summary": dict(self.PWM_SUMMARY),
+                                "payload_file": "runs/peak_pwm.json.gz"}}}]}
+
+    def _col(self, duty="peak", warning=None):
+        from motor_ai_sim import report as R
+
+        coupled = {"drive": "pwm", "inverter": dict(self.INV),
+                   "converged": warning is None, "em_runs": 4,
+                   "iterations": 4, "warning": warning,
+                   "warning_code": ("point_not_converged" if warning else None)}
+        return R.apply_pwm_view(
+            {"duty": duty, "d": {"name": duty, "rpm": 20000.0, "mode": "motor"},
+             "em": dict(self.SINE), "result": {},
+             "res": {"coupled": coupled}}, self._cfg_doc(duty))
+
+    def _ctx(self, col):
+        from motor_ai_sim import report as R
+
+        return R._warning_context(col, mats={}, batt={}, brg=None,
+                                  max_speed_rpm=20000.0, mag_lim=180.0,
+                                  mag_note="", ins_lim=180.0, ins_note="",
+                                  cold_k=1.1, cold_note="")
+
+    # ── BL-1 ───────────────────────────────────────────────────────────────
+    def test_bl1_the_demagnetisation_printed_is_the_pwm_runs(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        assert R._g(col["em"], "demag.br_kept_vol_pct") == 86.509
+        assert R._g(col["em"], "demag.br_worst_pct") == 6.9
+        # …and the SINUSOIDAL summary is untouched: section 5 compares the two
+        assert R._g(col["em_sine"], "demag.br_kept_vol_pct") == 97.617
+        assert R._g(col["em_sine"], "demag.br_worst_pct") == 18.4
+        assert "demag" not in R._PWM_KEEP_SINE
+
+    def test_bl1_the_rows_the_rules_and_the_paragraph_are_one_source(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        rows = {r[0]: r[1:] for r in R.em_compare_rows([col], {})[1]}
+        assert rows["Br kept in the magnets [%]"][0] == "86.509"
+        assert rows["Worst magnet element, Br [%]"][0] == "6.9"
+        # the rules fire on the same numbers — the duty's own condition
+        ws = R.duty_warnings(self._ctx(col))
+        loss = _rule(ws, "demag_br_loss")
+        worst = _rule(ws, "demag_worst_element")
+        assert abs(loss["value"] - 13.491) < 1e-3 and loss["level"] == "red"
+        assert worst["value"] == 6.9 and worst["level"] == "red"
+        # …and the paragraph's headline is the same block again
+        txt = R.em_demag_text(col["em"])
+        assert "Br kept 86.509 %" in txt
+        assert "worst single element KEPT 6.9 %" in txt
+        assert "97.617" not in txt and "18.4" not in txt
+
+    def test_bl1_the_caption_number_and_the_table_number_agree(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        # the caption is drawn from the MAP; the table from the summary — the
+        # two are the same run now, so they round to the same figure
+        cap = R.em_map_numbers("demag", {"demag_min_pct": 6.948},
+                               {"demag_min_pct": 82.639})
+        assert "6.9 %" in cap
+        assert R._fmt(R._g(col["em"], "demag.br_worst_pct"), 1) == "6.9"
+
+    def test_bl1_a_sinusoidal_duty_is_not_touched_at_all(self):
+        from motor_ai_sim import report as R
+
+        col = R.apply_pwm_view(
+            {"duty": "rated", "d": {"rpm": 20000.0}, "em": dict(self.SINE),
+             "res": {"coupled": {"drive": "sine"}}}, {"duties": []})
+        assert R._g(col["em"], "demag.br_worst_pct") == 18.4
+        assert "em_sine" not in col
+
+    # ── MJ-1 ───────────────────────────────────────────────────────────────
+    def _wf(self):
+        return {"V_A": [1.0], "f_elec_Hz": self.INV["f_elec_Hz"],
+                "inverter": dict(self.INV)}
+
+    def test_mj1_the_bridge_row_is_the_trains_own_thd(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        thd = R.bridge_pulse_thd_pct(self._wf(), col)
+        # the chart's number, through the chart's own two functions
+        chart = R.pwm_bridge_spectrum(R.pwm_bridge_ll(
+            R._with_inverter(self._wf(), col)))
+        assert thd is not None and chart is not None
+        assert abs(thd - chart[2]) < 1e-9
+        # a three-level pulse train distorts by tens of per cent, not by the
+        # 43.35 % of the field's carrier-averaged winding voltage
+        assert thd > 50.0
+        assert abs(thd - col["em"]["THD_LL_pct"]) > 10.0
+
+    def test_mj1_the_row_and_the_finding_read_that_number(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        col["bridge_thd_pct"] = 74.79
+        rows = {r[0]: r[1:] for r in R.em_compare_rows([col], {})[1]}
+        assert rows["Line voltage THD at the bridge (pulse train) [%]"][0] \
+            == "74.79"
+        ctx = self._ctx(col)
+        assert ctx["bridge_thd_pct"] == 74.79
+        # the winding's own figure is kept, under its own name, for whoever
+        # wants it — but it is NOT what the bridge row says
+        assert ctx["winding_thd_pct"] == 43.35
+        assert _rule(R.duty_warnings(ctx), "bridge_thd")["value"] == 74.79
+
+    def test_mj1_no_bridge_row_at_all_when_the_train_cannot_be_formed(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        assert R.bridge_pulse_thd_pct({}, {"duty": "x"}) is None
+        ctx = self._ctx(col)                       # no bridge_thd_pct on the col
+        assert ctx.get("bridge_thd_pct") is None
+        assert _rule(R.duty_warnings(ctx), "bridge_thd") is None
+
+    # ── MJ-2 ───────────────────────────────────────────────────────────────
+    LONG = ("the temperatures settled but the operating point did not: after 4 "
+            "electromagnetic run(s) the machine draws -1.17 % off the 444.83 A "
+            "this duty is billed at (tolerance and the remedy that used to be "
+            "cut off exactly here, mid-word, with no ellipsis and no marker)")
+
+    def test_mj2_no_comparison_cell_is_cut_mid_word(self):
+        from motor_ai_sim import report as R
+
+        assert len(self.LONG) > 160
+        col = {"duty": "peak", "d": {"rpm": 20000.0}, "em": {}, "res": {
+            "rotor_stress": {"torque_path": {"verdict": self.LONG},
+                             "case": "20,000 rpm"},
+            "critical_speeds": {"verdict": self.LONG, "rated_rpm": 20000.0,
+                                "critical_speeds": []},
+            "coupled": {"warning": self.LONG, "em_runs": 4}}}
+        cells = []
+        for fn in (R.mech_compare_rows, R.crit_compare_rows,
+                   R.coupled_compare_rows):
+            cells += [str(r[1]) for r in fn([col])[1]]
+        hit = [c for c in cells if self.LONG[:60] in c]
+        assert hit, "the long verdict reached no cell at all"
+        for c in hit:
+            assert len(c) != 160
+            assert not c.endswith("(tole")
+
+    def test_mj2_the_clip_is_gone_from_the_source(self):
+        import inspect
+
+        from motor_ai_sim import report as R
+
+        for fn in (R.mech_compare_rows, R.crit_compare_rows,
+                   R.coupled_compare_rows):
+            assert "[:160]" not in inspect.getsource(fn)
+
+    # ── MJ-3 / MJ-4 ────────────────────────────────────────────────────────
+    def test_mj3_the_saturation_droop_is_the_sine_runs_and_says_so(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        rows = {r[0]: r[1:] for r in
+                R.em_constant_rows(col["em"], col["em_sine"], "pwm")}
+        label = "Saturation droop" + R.SINE_CONSTANT_TAIL
+        assert label in rows, "the droop row is not labelled as the sine's"
+        assert rows[label][0] == "5.47 %"
+        assert "239.972" in rows[label][1] and "204.935" not in rows[label][1]
+        assert "sinusoidal run" in rows[label][1]
+        # …and a sinusoidal document keeps the plain label it always had
+        plain = {r[0]: r[1:] for r in R.em_constant_rows(dict(self.SINE))}
+        assert "Saturation droop" in plain and label not in plain
+
+    def test_mj4_the_resistance_is_this_runs_at_its_own_temperature(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        rows = {r[0]: r[1:] for r in
+                R.em_constant_rows(col["em"], col["em_sine"], "pwm")}
+        r = rows["Phase resistance (winding)"]
+        assert r[0] == "6.147 mOhm", "the sinusoid's 5.908 is still printed"
+        assert "154.3 °C" in r[1]
+        # the operating-point box states the same temperature
+        op = R.em_operating_rows(col["em"], col["d"], {}, None, {})
+        assert any("154.3 °C" in str(c) for row in op for c in row)
+        # …and the table's closing sentence no longer claims the resistance
+        # is the sinusoid's
+        note = R.em_constants_note(0.9576, "pwm")
+        assert "except the resistances" in note
+
+    # ── MJ-5 / CS-1 ────────────────────────────────────────────────────────
+    STORED_WARNING = (
+        "the temperatures settled but the operating point did not: after 4 "
+        "electromagnetic run(s) the machine draws -1.17 % off the 444.83 A "
+        "this duty is billed at (tolerance ±1 %); the next pass would have "
+        "been aimed at 617.110 V — raise max_iter, or widen "
+        "inverter.i_tol_pct if that miss is acceptable")
+
+    def test_mj5_the_client_sentence_names_no_parameter_and_no_millivolt(self):
+        from motor_ai_sim import report as R
+
+        txt = R.coupled_warning_words({"warning": self.STORED_WARNING,
+                                       "warning_code": "point_not_converged",
+                                       "em_runs": 4}, -1.1806)
+        for bad in ("max_iter", "i_tol_pct", "inverter.", "617.110"):
+            assert bad not in txt, "%r is still in the client's sentence" % bad
+        assert "4 passes" in txt
+        assert "617 V" in txt
+        assert "tolerance ± 1 %" in txt
+        # CS-1: one figure and one sign for the point miss, the document's own
+        assert "−1.18 %" in txt and "-1.17" not in txt
+
+    def test_mj5_any_other_refusal_keeps_its_fact_and_loses_its_remedy(self):
+        from motor_ai_sim import report as R
+
+        txt = R.coupled_warning_words({
+            "warning": ("stopped after 6 electromagnetic run(s) without "
+                        "settling inside 2 K — raise max_iter, or read the "
+                        "residual below as the honest uncertainty")})
+        assert txt.startswith("Stopped after 6 electromagnetic run(s)")
+        assert "max_iter" not in txt and txt.endswith(".")
+        assert R.coupled_warning_words(None) == ""
+        assert R.coupled_warning_words({"warning": ""}) == ""
+
+    def test_mj5_both_renderers_print_the_client_sentence(self):
+        import inspect
+
+        from motor_ai_sim import report as R
+        from motor_ai_sim import report_docx as RD
+
+        assert "coupled_warning_words" in inspect.getsource(R._thermal_page)
+        assert "coupled_warning_words" in inspect.getsource(RD._thermal_detail)
+        assert "coupled_warning_words" in inspect.getsource(
+            R.coupled_compare_rows)
+
+    # ── MJ-6 and the cosmetic set ──────────────────────────────────────────
+    def test_mj6_section_3_reconciles_the_peak_with_the_bridge_amplitude(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        rows = {r[0]: r[1:] for r in R.em_compare_rows([col], {})[1]}
+        note = rows[R.PWM_VPK_VS_VDC_LABEL][0]
+        assert "star-EQUIVALENT" in note and "1.1547" in note
+        assert "pulse train" in note
+        # …and only on a PWM document
+        sine = R.apply_pwm_view(
+            {"duty": "rated", "d": {"rpm": 20000.0}, "em": dict(self.SINE),
+             "res": {"coupled": {"drive": "sine"}}}, {"duties": []})
+        assert R.PWM_VPK_VS_VDC_LABEL not in {
+            r[0] for r in R.em_compare_rows([sine], {})[1]}
+
+    def test_cs2_and_cs10_the_supply_line_is_the_clients(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        assert R.supply_words(col) == "PWM 24 kHz, DC link 750.4 V, m 0.94"
+        assert col["pwm_summary_source"] == "the PWM run saved for this duty"
+        assert "runs[" not in col["pwm_summary_source"]
+
+    def test_cs4_the_current_density_is_two_decimals_everywhere(self):
+        from motor_ai_sim import report as R
+
+        em = dict(self.SINE, J_coil_A_per_mm2=24.422944)
+        op = R.em_operating_rows(em, {"rpm": 20000.0}, {}, None, {})
+        assert any("24.42 A/mm²" in str(c) for row in op for c in row)

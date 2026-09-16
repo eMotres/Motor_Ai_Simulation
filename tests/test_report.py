@@ -6726,3 +6726,374 @@ class TestAuditV7:
         em = dict(self.SINE, J_coil_A_per_mm2=24.422944)
         op = R.em_operating_rows(em, {"rpm": 20000.0}, {}, None, {})
         assert any("24.42 A/mm²" in str(c) for row in op for c in row)
+
+
+class TestButtonAuditOf20260916:
+    """The owner's own button build of 'CIANO10 200 opt' / 'L180 gen' — the
+    four statements a reviewing engineer would test with a calculator, and the
+    six smaller ones beside them.
+
+    Every number in the fixtures below is that machine's own record:
+    ``L180 gen.yaml -> duties[*].runs[*].summary`` and
+    ``config/.duty_results.json``.
+    """
+
+    K = 0.9634876570575458
+
+    #: the rated duty's SINUSOIDAL run, trimmed to what these tests read
+    SINE = {
+        "rpm": 20900.0, "T_em_avg_Nm": 237.942, "P_mech_W": 520_700.0,
+        "V_line_peak_V": 500.0, "P_loss_total_W": 7483.6,
+        "star_delta": "delta", "A_phase_mm2": 18.0,
+        "I_phase_rms_A": 346.6296, "I_line_rms_A": 600.3798,
+        "Ld_mH": 0.0976, "Lq_mH": 0.0693,
+        "Ld_eq_star_mH": 0.0325, "Lq_eq_star_mH": 0.0231,
+        "L0_mH": 0.126097, "saliency_Lq_over_Ld": 0.71,
+        "psi_pm_Wb": 0.070592, "KV_noload_rpm_per_V_line": 27.06,
+        "Kt_Nm_per_A_line": 0.3963, "Km_Nm_sqrtW": 4.7261,
+        "R_phase_ohm": 0.005253, "coil_temp_C": 97.8,
+        "demag": {"br_kept_vol_pct": 98.633, "loss_pct": 1.367,
+                  "bh_loss_pct": 2.661, "br_worst_pct": 50.2},
+        "end3d": {"k_flux": K, "T_corrected_Nm": 237.942 * K,
+                  "V_line_peak_corrected_V": 500.0 * K},
+    }
+
+    #: …and its PWM run.  ``Ld_mH`` is None (a voltage-fed run does not probe
+    #: it) and ``Lq_mH`` is NOT — which is how one table came to hold one of
+    #: each.
+    PWM_SUMMARY = {
+        "drive": "pwm", "rpm": 20900.0, "T_em_avg_Nm": 226.269,
+        "T_ripple_pct": 25.6, "T_ripple_filt_pct": 1.6,
+        "P_loss_total_W": 9394.4, "P_sleeve_W": 42.3781,
+        "I_line_rms_A": 581.8, "I_phase_rms_solved_A": 335.87919,
+        "Ld_mH": None, "Lq_mH": 0.0718, "Lq_eq_star_mH": 0.0239,
+        "L0_mH": 0.114641, "saliency_Lq_over_Ld": None,
+        "KV_noload_rpm_per_V_line": 27.06, "Kt_Nm_per_A_line": 0.3769,
+        "Km_Nm_sqrtW": 4.5406, "psi_pm_Wb": 0.070592,
+        "R_phase_ohm": 0.007337, "coil_temp_C": 142.8,
+        "star_delta": "delta",
+        "demag": {"br_kept_vol_pct": 97.143, "loss_pct": 2.857,
+                  "bh_loss_pct": 5.042, "br_worst_pct": 17.9},
+    }
+
+    def _col(self, duty="rated 1x9 mm"):
+        from motor_ai_sim import report as R
+
+        cfg_doc = {"duties": [{"name": duty, "runs": {
+            "pwm_voltage": {"summary": dict(self.PWM_SUMMARY)}}}]}
+        return R.apply_pwm_view(
+            {"duty": duty, "d": {"rpm": 20900.0, "mode": "generator"},
+             "em": dict(self.SINE), "result": {},
+             "res": {"coupled": {
+                 "drive": "pwm", "coil_temp_c": 142.75, "magnet_temp_c": 171.74,
+                 "bearing_temp_c": 158.4, "P_mech_extra_W": 1286.22,
+                 "inverter": {"f_carrier_hz": 24000.0, "v_dc_V": 799.2,
+                              "m": 1.1381, "i_tol_pct": 1.0,
+                              "point_error_pct": -3.101, "ripple_pct": 25.6,
+                              "thd_i_pct": 8.82, "dc_residual_A": 0.186,
+                              "dc_tol_A": 0.5, "ripple_quotable": True},
+                 "em": {"T_em_avg_Nm": 226.269, "P_loss_total_W": 9394.4,
+                        "P_stranded_W": 5622.2, "P_core_W": 3408.6,
+                        "P_mag_W": 307.5, "P_shaft_W": 13.8,
+                        "P_sleeve_W": 42.3781, "T_ripple_pct": 25.6,
+                        "n_steps_per_period": 280},
+                 "reference_sine": {
+                     "coil_temp_c": 127.05, "magnet_temp_c": 150.0,
+                     "bearing_temp_c": 141.2,
+                     "em": {"T_em_avg_Nm": 237.942, "P_loss_total_W": 7483.6,
+                            "P_stranded_W": 4533.2, "P_core_W": 2634.4,
+                            "P_mag_W": 241.9, "P_shaft_W": 13.5,
+                            "P_sleeve_W": 60.3, "T_ripple_pct": 1.5,
+                            "n_steps_per_period": 36}}}}},
+            cfg_doc)
+
+    def _col_peak(self):
+        """The same duty with the peak's torques and demagnetisation — the
+        26 % gap the section billed to the carrier."""
+        col = self._col("peak 1x9 mm")
+        rec = col["res"]["coupled"]
+        rec["em"]["T_em_avg_Nm"] = 176.679
+        rec["reference_sine"]["em"]["T_em_avg_Nm"] = 238.467
+        rec["inverter"]["point_error_pct"] = 1.125
+        col["em"]["demag"] = {"br_kept_vol_pct": 80.826, "loss_pct": 19.174,
+                              "bh_loss_pct": 30.391, "br_worst_pct": 7.1}
+        col["em_sine"]["demag"] = {"br_kept_vol_pct": 97.927,
+                                   "loss_pct": 2.073, "bh_loss_pct": 3.823,
+                                   "br_worst_pct": 36.2}
+        return col
+
+    def _on_point(self):
+        col = self._col()
+        col["res"]["coupled"]["em"]["T_em_avg_Nm"] = 237.0
+        col["res"]["coupled"]["inverter"]["point_error_pct"] = -0.2
+        return col
+
+    # ── BT-2 · every machine constant in section 4 is the sinusoid's ────────
+
+    def test_bt2_ld_lq_and_the_saliency_all_come_from_the_sine_run(self):
+        """``_PWM_KEEP_SINE_PREFIX`` held "L_" and ``_PWM_KEEP_SINE`` held
+        "saliency_ratio"; the keys are ``Ld_mH`` … and ``saliency_Lq_over_Ld``,
+        so both guards matched nothing.  Section 4 printed the sinusoid's Ld
+        beside the PWM run's Lq and a saliency that divides neither."""
+        col = self._col()
+        em = col["em"]
+        for key in ("Ld_mH", "Lq_mH", "Ld_eq_star_mH", "Lq_eq_star_mH",
+                    "L0_mH", "saliency_Lq_over_Ld", "psi_pm_Wb",
+                    "KV_noload_rpm_per_V_line", "Kt_Nm_per_A_line",
+                    "Km_Nm_sqrtW"):
+            assert em[key] == self.SINE[key], key
+        # …and the two that are deliberately NOT kept stay the PWM run's
+        assert em["R_phase_ohm"] == self.PWM_SUMMARY["R_phase_ohm"]
+        assert em["demag"] == self.PWM_SUMMARY["demag"]
+
+    def test_bt2_the_printed_lq_over_ld_is_the_printed_saliency(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        rows = dict((r[0], r[1]) for r in R.em_constant_rows(
+            col["em"], col["em_sine"], "pwm"))
+
+        def _f(s):
+            return float(str(s).split()[0].replace(",", ""))
+
+        ld, lq = _f(rows["Ld (winding)"]), _f(rows["Lq (winding)"])
+        assert abs(lq / ld - _f(rows["Saliency Lq/Ld"])) < 5e-3, rows
+        assert abs(_f(rows["Lq, star-equivalent"])
+                   - self.SINE["Lq_eq_star_mH"]) < 1e-9
+
+    # ── BT-3 · the heat budget's closure differences map against map ────────
+
+    def test_bt3_made_in_the_rotor_is_reconciled_against_the_map(self):
+        """581.6 W CONTAINS the sleeve's 42.4 W, which the same paragraph says
+        two clauses earlier is not in the map.  The map's rotor loss is
+        539.2 W and the windage credited to the rotor is 91.7 W, not 49.3."""
+        from motor_ai_sim import report as R
+
+        txt = R.thermal_budget_reconcile_text(
+            {"cooling": {"heat_budget": {
+                "losses_W": 9534.8, "mech_loss_in_map_W": 182.6,
+                "rotor_heat_split": {"rotor_W": 630.9}}}},
+            {}, {"P_loss_total_W": 9394.4, "P_sleeve_W": 42.3781,
+                 "P_loss_rotor_W": 581.6}, "rated 1x9 mm")
+        assert "630.9 W" in txt and "539.2 W" in txt and "91.7 W" in txt
+        assert "the sleeve's 42.4 W" in txt
+        assert "49.3" not in txt
+
+    def test_bt3_a_sleeve_inside_the_map_is_not_subtracted_twice(self):
+        from motor_ai_sim import report as R
+
+        txt = R.thermal_budget_reconcile_text(
+            {"cooling": {"heat_budget": {
+                "losses_W": 9577.2, "mech_loss_in_map_W": 182.6,
+                "rotor_heat_split": {"rotor_W": 630.9}}}},
+            {}, {"P_loss_total_W": 9394.4, "P_loss_rotor_W": 581.6},
+            "rated 1x9 mm")
+        assert "581.6 W" in txt and "49.3 W" in txt
+        assert "less the sleeve" not in txt
+
+    # ── BT-4 · section 5 says whether it is one point ───────────────────────
+
+    def test_bt4_section_5_prints_the_torque_and_the_demagnetisation(self):
+        from motor_ai_sim import report as R
+
+        blk = R.pwm_coupled_rows(self._col_peak())
+        rows = {r[0]: r[1:] for r in blk["rows"]}
+        assert "Torque × k_3d [N·m]" in rows
+        assert "Br kept in the magnets [%]" in rows
+        assert "Worst magnet element, Br [%]" in rows
+
+        def _f(s):
+            return float(str(s).replace(",", "").replace("−", "-"))
+
+        t_sine, t_pwm = (_f(x) for x in rows["Torque × k_3d [N·m]"])
+        assert abs(t_sine - 238.467 * self.K) < 0.01
+        assert abs(t_pwm - 176.679 * self.K) < 0.01
+        assert [_f(x) for x in rows["Br kept in the magnets [%]"]] \
+            == [97.927, 80.826]
+        assert [_f(x) for x in rows["Worst magnet element, Br [%]"]] \
+            == [36.2, 7.1]
+
+    def test_bt4_the_note_names_the_magnets_when_they_are_the_cause(self):
+        from motor_ai_sim import report as R
+
+        notes = " ".join(R.pwm_coupled_rows(self._col_peak())["notes"])
+        assert "NOT one operating point" in notes
+        assert "demagnetised" in notes and "19.17 %" in notes
+
+    def test_bt4_the_note_names_the_current_when_that_is_the_cause(self):
+        from motor_ai_sim import report as R
+
+        notes = " ".join(R.pwm_coupled_rows(self._col())["notes"])
+        assert "NOT one operating point" in notes
+        assert "did not solve the sinusoid's current" in notes
+        assert "demagnetised" not in notes
+        # …and in the figure the rest of the document prints for that miss
+        # (the LINE current's), never a second spelling of it
+        assert "−3.09 %" in notes
+
+    def test_bt4_a_run_on_its_point_says_nothing(self):
+        from motor_ai_sim import report as R
+
+        assert R.pwm_same_point_note(
+            237.942, 236.5, {"i_tol_pct": 1.0, "point_error_pct": -0.4}) == ""
+        assert "NOT one operating point" not in " ".join(
+            R.pwm_coupled_rows(self._on_point())["notes"])
+
+    def test_bt4_the_intro_promises_a_setpoint_not_a_solved_point(self):
+        from motor_ai_sim import report as R
+
+        assert "the same setpoint" in R.PWM_INTRO_COUPLED
+        assert "the same point" not in R.PWM_INTRO_COUPLED
+
+    # ── BT-5 · a cross-reference is a section, never a page ─────────────────
+
+    def test_bt5_no_cross_reference_is_a_page_number(self):
+        from motor_ai_sim import report as R
+
+        sec = R.section_numbers()
+        assert R.compare_ref(sec) == "the comparison table in section 3"
+        for txt in (R.thermal_map_owner_text("d", True, "x", sec),
+                    R.thermal_map_owner_text("d", False, "x", sec),
+                    R.mech_map_owner_text("d", True, "x", sec=sec),
+                    R.mech_map_owner_text("d", False, "x", sec=sec),
+                    R.mech_pair_tail_text(True, sec),
+                    " ".join(R.assumption_bullets(sec)),
+                    " ".join(R.not_included_bullets(None, {}, sec))):
+            assert "page" not in txt.lower(), txt
+            assert "section " in txt, txt
+
+    def test_bt5_the_reference_follows_the_renumbering(self):
+        from motor_ai_sim import report as R
+
+        assert R.sec_ref(R.section_numbers(), "mech") == "section 7"
+        assert R.sec_ref(R.section_numbers(True), "mech") == "section 8"
+        assert "section 6" in " ".join(
+            R.not_included_bullets(None, {}, R.section_numbers(True)))
+
+    # ── BT-6 · the bridge's own filtered ripple is in the document ──────────
+
+    def test_bt6_the_bridges_filtered_ripple_is_printed_past_the_gate(self):
+        from motor_ai_sim import report as R
+
+        ctx = {"duty": "peak 1x9 mm", "drive": "pwm", "ripple_pct": 1.6,
+               "carrier_ripple_pct": 33.4, "carrier_ripple_filt_pct": 6.112997,
+               "carrier_ripple_quotable": False,
+               "carrier_dc_residual_a": -1.001, "carrier_dc_tol_a": 0.5}
+        row = _rule(R.duty_warnings(ctx), "carrier_ripple_filtered")
+        assert row is not None and abs(row["value"] - 6.113) < 1e-3
+        assert "PAST the 5 % gate" in row["quantity"]
+        assert "DC offset" in row["quantity"]
+        assert row["level"] == "info"
+        # …and under the gate it says nothing extra
+        ok = _rule(R.duty_warnings(dict(ctx, carrier_ripple_filt_pct=1.554,
+                                        carrier_ripple_quotable=True)),
+                   "carrier_ripple_filtered")
+        assert "PAST" not in ok["quantity"]
+        assert "DC offset" not in ok["quantity"]
+        # …and a sinusoidal duty has no such row at all
+        assert _rule(R.duty_warnings({"duty": "d", "ripple_pct": 1.6}),
+                     "carrier_ripple_filtered") is None
+
+    def test_bt6_the_context_reads_it_off_the_pwm_run(self):
+        from motor_ai_sim import report as R
+
+        ctx = R._warning_context(
+            self._col(), mats={}, batt={}, brg=None, max_speed_rpm=None,
+            mag_lim=None, mag_note="", ins_lim=None, ins_note="",
+            cold_k=1.0, cold_note="")
+        assert abs(ctx["carrier_ripple_filt_pct"] - 1.6) < 1e-9
+        assert abs(ctx["ripple_pct"] - 1.5) < 1e-9
+
+    # ── BT-7 · the rotor's stress rows are in section 3 ─────────────────────
+
+    ROTOR_STRESS = {
+        "rpm": 20900.0, "overspeed_factor": 1.2, "case": "rated",
+        "sf_min": 0.22404, "sf_min_part": "rotor",
+        "parts": {
+            "rotor": {"von_mises_p995_mpa": 1533.5272,
+                      "von_mises_max_unaveraged_mpa": 1795.2425,
+                      "governing_stress_mpa": 1562.1958,
+                      "strength_mpa": 350.0, "safety_factor": 0.22404},
+            "sleeve": {"von_mises_p995_mpa": 1417.68,
+                       "von_mises_max_unaveraged_mpa": 1694.95,
+                       "governing_stress_mpa": 1441.974,
+                       "hoop_max_mpa": 1441.974,
+                       "strength_mpa": 2700.0, "safety_factor": 1.87243},
+        },
+    }
+
+    def test_bt7_section_3_carries_the_rotors_own_stress_rows(self):
+        """The loop asked for a part called "rotor_core"; the record calls it
+        "rotor", so the part that FAILS (SF 0.22) had no stress rows in the
+        comparison table while the sleeve and the shaft had five each."""
+        from motor_ai_sim import report as R
+
+        col = {"duty": "rated 1x9 mm", "em": {}, "d": {},
+               "res": {"rotor_stress": dict(self.ROTOR_STRESS)}}
+        labels = [r[0] for r in R.mech_compare_rows([col])[1]]
+        assert "Rotor core von Mises p99.5 [MPa]" in labels
+        assert "…Rotor core von Mises peak, unaveraged [MPa]" in labels
+        assert "Rotor core strength [MPa]" in labels
+        assert "Rotor core safety factor" in labels
+        # …beside the sleeve's, which were there all along
+        assert "Sleeve safety factor" in labels
+        # …and the rotor-bridge policy is printed ONCE, not once per place
+        assert labels.count("…what the rotor bridges carry") == 1
+
+    # ── BT-8 · the remedy does not promise a case the report lacks ──────────
+
+    def test_bt8_the_overspeed_remedy_names_the_case_that_is_reported(self):
+        from motor_ai_sim import report as R
+
+        assert "'rated' case, not that one" in R.overspeed_remedy_clause(
+            1.2, "rated")
+        assert "not that one" not in R.overspeed_remedy_clause(1.2, "overspeed")
+        assert "overspeed factor 1)" in R.overspeed_remedy_clause(1.0)
+        w = _rule(R.duty_warnings({
+            "duty": "rated 1x9 mm", "sf_min": 0.22404, "sf_min_part": "rotor",
+            "overspeed_factor": 1.2, "overspeed_case": "rated"}),
+            "safety_factor")
+        assert "not that one" in w["remedy"]
+
+    # ── BT-9 · a configuration-level rule is printed once ───────────────────
+
+    RUNAWAY = {"runaway_rpm": 17985.2, "max_speed_rpm": 22900.0}
+
+    def test_bt9_the_runaway_row_is_printed_once_untagged(self):
+        from motor_ai_sim import report as R
+
+        cols = [{"duty": "rated 1x9 mm"}, {"duty": "peak 1x9 mm"}]
+        ctxs = {c["duty"]: dict(self.RUNAWAY, duty=c["duty"]) for c in cols}
+        rows = [w for w in R.all_duty_warnings(cols, ctxs)
+                if w["rule"] == "runaway_speed"]
+        assert len(rows) == 1
+        assert rows[0]["duty"] == R.CONFIG_LEVEL_DUTY
+        assert "fastest duty" in rows[0]["quantity"]
+
+    def test_bt9_two_different_runaways_stay_two_rows(self):
+        from motor_ai_sim import report as R
+
+        cols = [{"duty": "rated 1x9 mm"}, {"duty": "peak 1x9 mm"}]
+        ctxs = {"rated 1x9 mm": dict(self.RUNAWAY, duty="rated 1x9 mm"),
+                "peak 1x9 mm": dict(self.RUNAWAY, duty="peak 1x9 mm",
+                                    runaway_rpm=20900.0)}
+        rows = [w for w in R.all_duty_warnings(cols, ctxs)
+                if w["rule"] == "runaway_speed"]
+        assert len(rows) == 2
+        assert {w["duty"] for w in rows} == {"rated 1x9 mm", "peak 1x9 mm"}
+
+    # ── BT-10 · a heading never ends a page ─────────────────────────────────
+
+    def test_bt10_a_heading_and_a_table_header_keep_with_what_follows(self):
+        import docx as _docx
+        from motor_ai_sim import report_docx as D
+
+        doc = _docx.Document()
+        assert D._h(doc, "Critical speeds", 2).paragraph_format \
+            .keep_with_next is True
+        t = D._table(doc, [["a", "b"], ["1", "2"], ["3", "4"]])
+        assert all(p.paragraph_format.keep_with_next
+                   for c in t.rows[0].cells for p in c.paragraphs)
+        # …and the rest of a long table still breaks between rows
+        assert not any(p.paragraph_format.keep_with_next
+                       for c in t.rows[-1].cells for p in c.paragraphs)

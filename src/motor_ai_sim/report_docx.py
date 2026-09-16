@@ -185,14 +185,24 @@ def _caption(doc, text: str):
     return _p(doc, text, size=9.5, italic=True, color=NOTE, space_after=8.0)
 
 
-def _h(doc, text: str, level: int = 1):
+def _h(doc, text: str, level: int = 1, keep_next: bool = True):
     """A REAL Word heading, so the navigation pane works and a table of contents
-    the user inserts himself finds every section."""
+    the user inserts himself finds every section.
+
+    ``keep_next`` — A HEADING NEVER ENDS A PAGE (BT-10, 2026-09-16).  The
+    "Critical speeds" heading and the header row of the table under it sat
+    alone at the foot of page 36 of the delivered document, with the three data
+    rows (and a repeated header) on page 37.  The style a user's template
+    supplies may or may not carry keep-with-next, so it is set here, on the
+    paragraph — the same explicit-over-style rule every run in this module
+    follows — and :func:`_table` drags its own first data row after its header.
+    """
     from docx.shared import Pt
 
     par = doc.add_heading("", level=level)
     par.paragraph_format.space_before = Pt(10 if level == 1 else 8)
     par.paragraph_format.space_after = Pt(4)
+    par.paragraph_format.keep_with_next = bool(keep_next)
     _set_font(par.add_run(text),
               size=round((15 if level == 1 else 11.5) * TEXT_SCALE, 1),
               bold=True, color=NAVY)
@@ -317,6 +327,14 @@ def _table(doc, rows: Sequence[Sequence[Any]], *, header: bool = True,   # doc O
     if header:
         t.rows[0]._tr.get_or_add_trPr().append(
             _tbl_header_repeat())
+        # …AND THE HEADER BAND NEVER STANDS ALONE (BT-10, 2026-09-16): with
+        # `keepNext` on its cells the first DATA row comes with it, so a table
+        # that will not fit starts on the next page whole instead of leaving a
+        # heading and a navy band at the foot of the previous one.
+        if len(t.rows) > 1:
+            for c in t.rows[0].cells:
+                for par in c.paragraphs:
+                    par.paragraph_format.keep_with_next = True
     return t
 
 
@@ -1001,12 +1019,13 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
         "The temperature maps and the charts", D.get("pair"),
         R.pair_owner_tail("thermal", map_duty,
                           bool(D.get("th_map_from_duty")),
-                          "Per-duty temperatures are in the comparison table "
-                          "on page 3."),
+                          "Per-duty temperatures are in %s."
+                          % R.compare_ref(D.get("sec"))),
         first_fig=R.fig_ahead(_numbered(D)))
        or R.thermal_map_owner_text(map_duty,
                                    bool(D.get("th_map_from_duty")),
-                                   R.point_words(map_rpm, map_cur)),
+                                   R.point_words(map_rpm, map_cur),
+                                   D.get("sec")),
        size=9.5, italic=True, color=NOTE)
     entry = th.get("field") or th.get("coupled")
     if not entry:
@@ -1193,7 +1212,7 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
                           bool(D.get("me_map_from_duty")),
                           R.mech_pair_tail_text(R.has_campbell(
                               (me.get("critical_speeds") or {}).get("result")
-                              or {}))),
+                              or {}), D.get("sec"))),
         first_fig=R.fig_ahead(_numbered(D)))
        or R.mech_map_owner_text(
         map_duty, bool(D.get("me_map_from_duty")),
@@ -1201,7 +1220,8 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
         # The opening sentence names the Campbell diagram only when the record
         # has the sweep to draw one (reviewer 2026-09-14, MJ-3).
         campbell=R.has_campbell((me.get("critical_speeds") or {}).get("result")
-                                or {})),
+                                or {}),
+        sec=D.get("sec")),
        size=9.5, italic=True, color=NOTE)
 
     entry = me.get("rotor_stress")
@@ -1454,7 +1474,7 @@ def _notes(doc, D: Dict[str, Any]) -> None:
     _h(doc, R.section_heading(D.get("sec"), "notes"), 1)
     # THE LIST DOES NOT BREAK (CS-8, audit v5): the last page of the document
     # was one orphaned bullet on 6 % of a sheet.
-    _bs = R.assumption_bullets()
+    _bs = R.assumption_bullets(D.get("sec"))
     for i, b in enumerate(_bs):
         par = _bullet(doc, b)
         if i < len(_bs) - 1:

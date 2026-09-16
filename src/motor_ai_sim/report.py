@@ -4420,7 +4420,12 @@ def _warn(rule: str, duty: str, quantity: str, value: Optional[float],
             "margin_pct": round(margin, 1), "remedy": remedy, "note": note}
 
 
-def overspeed_remedy_clause(factor: Any) -> str:
+#: What the rotor-stress route calls the case a retaining band is sized on
+#: (``?cases=three`` = standstill / rated / overspeed).
+OVERSPEED_CASE = "overspeed"
+
+
+def overspeed_remedy_clause(factor: Any, case: Any = None) -> str:
     """The half-sentence about the overspeed case, conditional on there being
     one (reviewer 2026-09-14, B7).
 
@@ -4429,13 +4434,23 @@ def overspeed_remedy_clause(factor: Any) -> str:
     solved.  With a factor of 1 the advice is the other way round: there is no
     overspeed case, and a retaining band has not been sized the way a band is
     sized until there is one.
+
+    ``case`` CLOSES THE OTHER HALF OF IT (BT-8, 2026-09-16).  A factor above 1
+    says the case exists; it does not say this document reports it.  The L180
+    gen record carries ``overspeed_factor 1.2`` and ``case "rated"`` — the
+    solve ran three cases and filed the rated one — so two red remedies pointed
+    a client at an overspeed case that appears on no page of the report.  The
+    clause now names the case the document actually carries.
     """
     f = _numf(factor)
     if f is None:
         return ""
     if f > 1.0 + 1e-9:
-        return (", or take the overspeed case (this duty's speed × %s) down"
-                % _fmt(f, 2))
+        _c = str(case or "").strip()
+        return (", or take the overspeed case (this duty's speed × %s) down%s"
+                % (_fmt(f, 2),
+                   "" if not _c or _c.lower() == OVERSPEED_CASE else
+                   "; this report carries the '%s' case, not that one" % _c))
     return (". This solve ran at the duty's own speed only (overspeed factor "
             "1) — re-run the rotor stress at 1.2, the case a band is sized "
             "against")
@@ -4647,6 +4662,32 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                                   else " against a ± %s band"
                                   % _fmt(ctx.get("carrier_dc_tol_a"), 2, "A")))
                               )))})
+    # …and what the BRIDGE's ripple is once the carrier is filtered out (BT-6,
+    # 2026-09-16).  The gate above is judged on the sinusoidal run and stays
+    # there — skew and a pole arc change that ripple and nothing else — but the
+    # PWM run's own filtered figure is a different number and the L180 gen peak
+    # duty's is 6.1 %, past the 5 % gate, printed on no page while the gate's
+    # own row read 1.6 % green with 68 % of margin.  Informational, because the
+    # rule's basis is the sinusoid and because a pass that ended with a DC
+    # offset reports a filtered ripple that partly belongs to the offset — but
+    # the number is in the document, beside the two it belongs with, and its
+    # own name says when it is past the gate (the warnings table prints no
+    # note column).
+    _crf = _numf(ctx.get("carrier_ripple_filt_pct"))
+    if _crf is not None:
+        out.append({
+            "rule": "carrier_ripple_filtered", "level": "info", "duty": duty,
+            "quantity": ("Torque ripple on the bridge, carrier filtered out"
+                         + (", PAST the %s %% gate" % _fmt(RIPPLE_LIMIT_PCT, 0)
+                            if _crf > RIPPLE_LIMIT_PCT else "")
+                         + ("" if ctx.get("carrier_ripple_quotable") is not False
+                            else " (this pass ended with a DC offset)")),
+            "value": _crf, "limit": None, "unit": "%", "kind": "info",
+            "margin_pct": None, "remedy": "",
+            "note": ("what is left of the bridge's ripple once the carrier is "
+                     "filtered out — the PWM run's own figure, beside the %s %% "
+                     "gate that is judged on the sinusoidal run above"
+                     % _fmt(RIPPLE_LIMIT_PCT, 0))})
     # …and the duty CYCLE's own rule: how much of the cycle this point may be
     # on for.  Requested against allowable, both off the record — the one
     # number a robot integrator asks for and the one the steady-state map
@@ -4850,7 +4891,8 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         ctx.get("sf_min"), ctx.get("sf_limit", 2.0), "",
         "Thicken the sleeve or raise its interference, shorten the magnet "
         "overhang, add material at the bridge root%s.%s"
-        % (overspeed_remedy_clause(ctx.get("overspeed_factor")),
+        % (overspeed_remedy_clause(ctx.get("overspeed_factor"),
+                                   ctx.get("overspeed_case")),
            rotor_bridge_remedy(ctx.get("sf_min_part"), ctx)),
         kind="min",
         note=_sf_note + rotor_bridge_note(ctx.get("sf_min_part"), ctx)))
@@ -5812,8 +5854,19 @@ PWM_RUN_DRIVE = "pwm_voltage"
 #: (the sine's 403.5 × k) under the PWM run's 593.2 V peak, on one table of one
 #: duty.  The block is merged and the two corrected values are rebuilt from the
 #: run the rest of the row belongs to — see :func:`_pwm_end3d`.
-_PWM_KEEP_SINE = ("star_delta", "saliency_ratio")
-_PWM_KEEP_SINE_PREFIX = ("KV", "Kt", "Km", "L_", "psi", "V1_seed")
+#: THE KEEP-LIST HAS TO NAME THE KEYS THE SUMMARY ACTUALLY USES (BT-2,
+#: 2026-09-16).  Two of these guards matched nothing and were dead: ``"L_"``
+#: against inductances filed as ``Ld_mH`` / ``Lq_mH`` / ``Ld_eq_star_mH`` /
+#: ``Lq_eq_star_mH`` / ``L0_mH``, and ``"saliency_ratio"`` against
+#: ``saliency_Lq_over_Ld``.  So section 4 printed the SINUSOID's Ld beside the
+#: PWM run's Lq in one table — the rated L180 gen duty read Ld 0.0976 mH,
+#: Lq 0.0718 mH and "Saliency Lq/Ld 0.71", three numbers that do not close
+#: (0.0718/0.0976 = 0.736) — under a closing sentence stating that every
+#: constant in the table is the sinusoidal run's.  Ld survived only because the
+#: voltage-fed run recorded none; where it records one, both halves flip.
+_PWM_KEEP_SINE = ("star_delta",)
+_PWM_KEEP_SINE_PREFIX = ("KV", "Kt", "Km", "Ld", "Lq", "L0", "psi",
+                         "saliency", "V1_seed")
 
 #: The coupled record's ``em`` block, in the keys a saved summary uses.
 _PWM_EM_KEYS = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W",
@@ -6497,6 +6550,13 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         _inv = duty_inverter(col)
         ctx["carrier_ripple_pct"] = _numf(em.get("T_ripple_pct")
                                           or _inv.get("ripple_pct"))
+        # …and what is LEFT of it once the carrier is filtered out (BT-6,
+        # 2026-09-16).  The 5 % gate is judged on the sinusoidal run, which is
+        # right — it is the geometry's ripple — but the PWM run measures its
+        # own carrier-filtered figure and it is not the sinusoid's: 6.1 % on
+        # the L180 gen peak duty against the 1.6 % the gate saw, past the gate,
+        # and it appeared nowhere in the document.
+        ctx["carrier_ripple_filt_pct"] = _numf(em.get("T_ripple_filt_pct"))
         ctx["carrier_thd_i_pct"] = _numf(em.get("THD_I_pct")
                                          or _inv.get("thd_i_pct"))
         ctx["carrier_hz"] = _numf(_inv.get("f_carrier_hz"))
@@ -6676,6 +6736,9 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         ctx["sleeve_hoop_mpa"] = _numf(sl.get("hoop_max_mpa"))
         ctx["sleeve_strength_mpa"] = _numf(sl.get("strength_mpa"))
         ctx["overspeed_factor"] = _numf(ms.get("overspeed_factor"))
+        # …and WHICH case the stored answer is (BT-8): a factor above 1
+        # says an overspeed case exists, not that this document carries it.
+        ctx["overspeed_case"] = ms.get("case")
         mg = parts.get("magnet") or {}
         # THE CRITERION THE SAFETY FACTOR IS ON (reviewer 2026-09-14, B4/B5).
         # The table divides the strength by `governing_stress_mpa` — the
@@ -7599,6 +7662,20 @@ def section_heading(sec: Optional[Dict[str, int]], key: str) -> str:
 def sec_ref(sec: Optional[Dict[str, int]], key: str) -> str:
     """``"section 8"`` — a cross-reference that survives the renumbering."""
     return "section %d" % _sec_no(sec, key)
+
+
+def compare_ref(sec: Optional[Dict[str, int]] = None) -> str:
+    """``"the comparison table in section 3"`` — NEVER a page number (BT-5,
+    2026-09-16).
+
+    Three cross-references said "on page 3" and were hard-coded.  In the Word
+    render section 3 starts on page 7 and page 3 is "1 · Machine"; in the
+    in-process PDF it is page 6.  A page number is a property of the RENDERER
+    and of how the figures happen to fall, and this document is built by two of
+    them — so the pointer is to the section, which is numbered by
+    :func:`section_numbers` and survives a duty-cycle section appearing or not.
+    """
+    return "the comparison table in %s" % sec_ref(sec, "compare")
 
 
 def contents_line(sec: Optional[Dict[str, int]] = None) -> str:
@@ -9818,22 +9895,25 @@ THERMAL_MAP_CAPTION = (
 
 
 def thermal_map_owner_text(map_duty: Optional[str], from_duty: bool = False,
-                           point: str = "") -> str:
+                           point: str = "",
+                           sec: Optional[Dict[str, int]] = None) -> str:
     """Whose temperature field the picture on the thermal page is.
 
     ``from_duty`` — the map was read back from THAT duty's own stored field
     (``pic_src['thermal']``), which is the statement the document makes; the
     branches that named the server instead went on 2026-09-14 (client review).
+    ``sec`` — this document's section numbering, for the cross-reference
+    (BT-5: it used to say "page 3", which is "1 · Machine").
     """
     at = (" at %s" % point) if point else ""
     if map_duty and from_duty:
         return ("The temperature map below is the stored field of the duty "
-                "'%s'%s. Per-duty temperatures are in the comparison table on "
-                "page 3." % (map_duty, at))
+                "'%s'%s. Per-duty temperatures are in %s."
+                % (map_duty, at, compare_ref(sec)))
     if map_duty:
         return ("The temperature map below belongs to the duty '%s'%s. "
-                "Per-duty temperatures are in the comparison table on "
-                "page 3." % (map_duty, at))
+                "Per-duty temperatures are in %s."
+                % (map_duty, at, compare_ref(sec)))
     return ("The temperature map below is the last stored temperature field; "
             "no duty of this configuration owns it, so it is not attributed.")
 
@@ -10271,16 +10351,28 @@ def thermal_budget_reconcile_text(res: Dict[str, Any], inner: Dict[str, Any],
     # (reviewer 2026-09-14, C1): the rotor's own electromagnetic loss plus the
     # share of the gap windage the map credits to the rotor surface, which is
     # why that row reads above `P_loss_rotor_W`.
+    # …AND IT DIFFERENCES WHAT IS IN THE MAP AGAINST WHAT IS IN THE MAP (BT-3,
+    # 2026-09-16).  `P_loss_rotor_W` contains the SLEEVE, which the clause two
+    # sentences above states is NOT in the map, so the sentence reconciled
+    # 630.9 W against 581.6 W and called the 49.3 W difference gap windage
+    # while the map's own rotor loss is 539.2 W and the windage credited to the
+    # rotor surface is 91.7 W — under-stated 1.9× and contradicting an adjacent
+    # row of the same table (L180 gen 'rated').  The band is subtracted here
+    # and both halves are named.
     tail = ""
     sp = budget.get("rotor_heat_split")
     ro_em = _numf(_g(em or {}, "P_loss_rotor_W"))
+    ro_map = None if ro_em is None else ro_em - slv
     if isinstance(sp, dict) and _numf(sp.get("rotor_W")) is not None \
-            and ro_em is not None and abs(_numf(sp["rotor_W"]) - ro_em) > 0.5:
-        tail = (" \"Made in the rotor\" below is %s against the "
-                "electromagnetic rotor loss %s; the %s difference is gap "
-                "windage credited to the rotor surface."
-                % (_fmt(sp["rotor_W"], 1, "W"), _fmt(ro_em, 1, "W"),
-                   _fmt(abs(_numf(sp["rotor_W"]) - ro_em), 1, "W")))
+            and ro_map is not None and abs(_numf(sp["rotor_W"]) - ro_map) > 0.5:
+        tail = (" \"Made in the rotor\" below is %s against the rotor loss the "
+                "map carries, %s%s; the %s difference is gap windage credited "
+                "to the rotor surface."
+                % (_fmt(sp["rotor_W"], 1, "W"), _fmt(ro_map, 1, "W"),
+                   ("" if not slv else
+                    " (the electromagnetic %s less the sleeve's %s)"
+                    % (_fmt(ro_em, 1, "W"), _fmt(slv, 1, "W"))),
+                   _fmt(abs(_numf(sp["rotor_W"]) - ro_map), 1, "W")))
     # A GAP THIS SIZE IS NOT AN INTEGRATOR (MJ-7, audit v6).  The closure line
     # blamed a 5,117.9 W difference on "the loss map's own integration error"
     # in a client document: the watts were this machine's and the map integral
@@ -10983,11 +11075,18 @@ def _pwm_bus_pair(cases: List[Dict[str, Any]]):
 #: on the peak document, whose duty is fed by a clean sinusoid and where no
 #: number anywhere is a PWM run, and its singular "This duty's" opened a section
 #: that prints a block for each duty of the configuration.
+#:
+#: …AND IT PROMISES A SETPOINT, NOT A SOLVED POINT (BT-4, 2026-09-16).  It said
+#: "the same point": the two columns are aimed at one current setpoint, which
+#: is true, but a voltage-fed run reaches it or does not, and on the L180 gen
+#: peak duty it did not — 176.679 N·m against the sinusoid's 238.467.  Where
+#: the two columns really are not one point, the block below says so and names
+#: the cause (:func:`pwm_same_point_note`).
 PWM_INTRO_COUPLED = (
     "The duty '%s' this report is about runs on the inverter: every number "
     "elsewhere in this report is its PWM run, and this section is what the "
-    "carrier costs against the sinusoidal run it replaced — the same machine, "
-    "the same point, both converged to their own temperatures.")
+    "carrier costs against the sinusoidal run it replaced — the same machine "
+    "at the same setpoint, both converged to their own temperatures.")
 
 #: …and when the report duty is sinusoidal while another duty of the same
 #: configuration was solved on a bridge.
@@ -10999,6 +11098,62 @@ PWM_INTRO_SINE_REPORT = (
 #: The informational row's own words, wherever it is printed.
 CARRIER_RIPPLE_NOTE = ("carrier-frequency ripple, filtered by the rotor "
                        "inertia; not a limit")
+
+#: How far section 5's two columns' TORQUES may sit apart before the block
+#: stops letting "the same point" stand (BT-4, 2026-09-16).  The inverter
+#: loop's own current tolerance (``inverter.i_tol_pct``) when the record
+#: carries one; 1 % is what this project's loop is configured with.
+PWM_SAME_POINT_TOL_PCT = 1.0
+
+
+def pwm_same_point_note(t_sine: Any, t_pwm: Any, inv: Any,
+                        dem_sine: Any = None, dem_pwm: Any = None,
+                        point_pct: Any = None) -> str:
+    """One clause when section 5's two columns are NOT the same point — ``""``
+    when they are.
+
+    The section's intro promises "the same machine, the same setpoint" and every
+    delta in the table is billed to the carrier.  On the L180 gen PEAK duty the
+    sinusoid solves 238.467 N·m and the bridge 176.679 N·m — 26 % apart — with
+    19.17 % of Br lost on the PWM run against 2.07 % on the sinusoid, so
+    "+3,456 W (+41.1 %)" and "shaft efficiency falls 98.17 → 96.70 %" compared a
+    553 kW machine with a 410 kW one.  Neither torque nor demagnetisation was
+    printed anywhere in the section.  Both have rows now, and this sentence
+    names the cause in ONE clause (minimal-prose rule): whichever of the two —
+    the current the bridge actually solved, or magnets the duty demagnetised —
+    accounts for more of the torque gap.
+    """
+    ts, tp = _numf(_g(t_sine, "T_em_avg_Nm") if isinstance(t_sine, dict)
+                   else t_sine), _numf(_g(t_pwm, "T_em_avg_Nm")
+                                       if isinstance(t_pwm, dict) else t_pwm)
+    if ts is None or tp is None or not ts:
+        return ""
+    tol = _numf((inv or {}).get("i_tol_pct")) or PWM_SAME_POINT_TOL_PCT
+    d_t = 100.0 * (abs(tp) - abs(ts)) / abs(ts)
+    if abs(d_t) <= abs(tol):
+        return ""
+    # ONE FIGURE FOR THE MISS.  ``point_pct`` is the document's own — the LINE
+    # current's, which sections 2, 3 and 5 print — so this clause cannot be the
+    # only place in the report that spells it differently.
+    d_i = _numf(point_pct)
+    if d_i is None:
+        d_i = _numf((inv or {}).get("point_error_pct")) or 0.0
+    ls = _numf(_g(dem_sine or {}, "loss_pct"))
+    lp = _numf(_g(dem_pwm or {}, "loss_pct"))
+    # The torque a current miss alone explains is the miss itself; what is left
+    # over is the magnets'.
+    if (ls is not None and lp is not None and lp > ls
+            and abs(d_t - d_i) > abs(d_i)):
+        why = ("the PWM run's magnets are demagnetised, %s of Br lost against "
+               "%s on the sinusoid" % (_fmt(lp, 2, "%"), _fmt(ls, 2, "%")))
+    else:
+        why = ("the bridge did not solve the sinusoid's current, %s %% off the "
+               "setpoint" % _signed(d_i, 2))
+    return ("The two columns are NOT one operating point — %s on the bridge "
+            "against %s on the sinusoid, %s %% — so the added loss above is "
+            "not the carrier's alone: %s."
+            % (_fmt(tp, 3, "N·m"), _fmt(ts, 3, "N·m"),
+               _signed(d_t, 1), why))
 
 
 def pwm_coupled_record(col: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -11172,8 +11327,39 @@ def pwm_coupled_rows(col: Dict[str, Any]) -> Dict[str, Any]:
         a, b = _cpl_sum(_em(r), keys), _cpl_sum(_em(sine), keys)
         return None if (a is None or b is None) else a - b
 
+    # THE TWO QUANTITIES THAT SAY WHETHER THIS IS ONE POINT (BT-4, 2026-09-16).
+    # The block billed every delta to the carrier and printed neither the
+    # torque nor the demagnetisation that separate the columns.
+    _k3 = _numf(_g(col.get("em") or {}, "end3d.k_flux"))
+    _dem_sine = ((sine_em or {}).get("demag")
+                 if isinstance((sine_em or {}).get("demag"), dict) else None)
+    _dem_pwm = ((col.get("em") or {}).get("demag")
+                if isinstance((col.get("em") or {}).get("demag"), dict) else None)
+
+    def _dem(r: Any) -> Optional[Dict[str, Any]]:
+        """The demagnetisation of the run THIS column is.  It lives on the run
+        summaries, not on the coupled record, so the sine column reads the
+        duty's saved sinusoidal summary and the carrier column the PWM run's;
+        an alternative carrier has none and prints an em dash."""
+        d = _em(r).get("demag")
+        if isinstance(d, dict) and d:
+            return d
+        if r is sine:
+            return _dem_sine
+        if r is rec:
+            return _dem_pwm
+        return None
+
     _row("Carrier [kHz]",
          lambda r: _khz(_cpl_inv(r).get("f_carrier_hz")) or "—")
+    _row("Torque%s [N·m]" % (" × k_3d" if _k3 else ", 2-D"),
+         lambda r: _fmt((lambda t: None if t is None else
+                         abs(t) * (float(_k3) if _k3 else 1.0))(
+                            _numf(_em(r).get("T_em_avg_Nm"))), 3))
+    _row("Br kept in the magnets [%]",
+         lambda r: _fmt(_numf((_dem(r) or {}).get("br_kept_vol_pct")), 3))
+    _row("Worst magnet element, Br [%]",
+         lambda r: _fmt(_numf((_dem(r) or {}).get("br_worst_pct")), 1))
     # ONE DC LINK, ONE FIGURE (CS-2, audit v7): 750 V here against the 750.4 V
     # sections 3, 4 and 8 print is the same link, rounded twice.
     _row("DC link [V]", lambda r: _fmt(_cpl_inv(r).get("v_dc_V"), 1))
@@ -11239,6 +11425,13 @@ def pwm_coupled_rows(col: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("This duty carries no sinusoidal record to be measured "
                      "against — the PWM column stands alone and the deltas "
                      "are not formed.")
+    # …and whether the two columns really are one point (BT-4).
+    _mismatch = pwm_same_point_note(
+        _em(sine).get("T_em_avg_Nm") if sine is not None else None,
+        _em(rec).get("T_em_avg_Nm"), _cpl_inv(rec), _dem_sine, _dem_pwm,
+        (duty_point_error(col) or {}).get("pct"))
+    if _mismatch:
+        notes.append(_mismatch)
     if borrowed:
         notes.append(PWM_SINE_WATTS_BORROWED)
     if any(bool(_cpl_inv(r).get("dc_unconverged")) for r in recs if r):
@@ -11447,11 +11640,12 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
         pair_owner_text("The temperature maps and the charts", pair,
                         pair_owner_tail(
                             "thermal", map_duty, map_from_duty,
-                            "Per-duty temperatures are in the comparison "
-                            "table on page 3."),
+                            "Per-duty temperatures are in %s."
+                            % compare_ref(sec)),
                         first_fig=fig_ahead(figs))
         or thermal_map_owner_text(map_duty, map_from_duty,
-                                  point_words(map_rpm, map_cur)), st["note"]))
+                                  point_words(map_rpm, map_cur), sec),
+        st["note"]))
     if run_note:
         out.append(_para(f'<font color="{WARN}"><b>{FLAG}</b></font> ' + run_note,
                          st["body"]))
@@ -12675,7 +12869,8 @@ def has_campbell(crit: Optional[Dict[str, Any]]) -> bool:
 
 
 def mech_map_owner_text(map_duty: Optional[str], from_duty: bool = False,
-                        point: str = "", campbell: bool = True) -> str:
+                        point: str = "", campbell: bool = True,
+                        sec: Optional[Dict[str, int]] = None) -> str:
     """Whose stress field and mode shapes the pictures on this page are.
 
     ``from_duty`` — they were read back from that duty's own stored fields,
@@ -12688,19 +12883,21 @@ def mech_map_owner_text(map_duty: Optional[str], from_duty: bool = False,
     _c = " and the Campbell diagram" if campbell else ""
     if map_duty and from_duty:
         return ("The stress map, the mode shapes%s below are the stored fields "
-                "of the duty '%s'%s; per-duty stress numbers are in the "
-                "comparison table on page 3." % (_c, map_duty, at))
+                "of the duty '%s'%s; per-duty stress numbers are in %s."
+                % (_c, map_duty, at, compare_ref(sec)))
     if map_duty:
         return ("The stress map%s below belong%s to the duty '%s'%s; "
-                "per-duty stress numbers are in the comparison table on "
-                "page 3." % (_c, "" if campbell else "s", map_duty, at))
+                "per-duty stress numbers are in %s."
+                % (_c, "" if campbell else "s", map_duty, at,
+                   compare_ref(sec)))
     return ("The stress map%s below %s the last stored one%s and %s not "
             "attributed to a duty column."
             % (_c, "are" if campbell else "is", "s" if campbell else "",
                "are" if campbell else "is"))
 
 
-def mech_pair_tail_text(campbell: bool) -> str:
+def mech_pair_tail_text(campbell: bool,
+                        sec: Optional[Dict[str, int]] = None) -> str:
     """What section 7's opening line says about the pictures that are NOT a
     pair, when the pictures that are one have taken over the sentence.
 
@@ -12713,7 +12910,7 @@ def mech_pair_tail_text(campbell: bool) -> str:
     return (("The mode shapes and the Campbell diagram are the one rotor's, "
              "drawn once. " if campbell else
              "The mode shapes are the one rotor's, drawn once. ")
-            + "Per-duty stress numbers are in the comparison table on page 3.")
+            + "Per-duty stress numbers are in %s." % compare_ref(sec))
 
 
 def mech_source_text(entry: Dict[str, Any], res: Dict[str, Any],
@@ -13050,12 +13247,13 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
                             "rotor-stress", map_duty, map_from_duty,
                             mech_pair_tail_text(has_campbell(
                                 (me.get("critical_speeds")
-                                 or {}).get("result") or {}))),
+                                 or {}).get("result") or {}), sec)),
                         first_fig=fig_ahead(figs))
         or mech_map_owner_text(
             map_duty, map_from_duty, point_words(map_rpm, map_cur),
             campbell=has_campbell((me.get("critical_speeds")
-                                   or {}).get("result") or {})), st["note"]))
+                                   or {}).get("result") or {}),
+            sec=sec), st["note"]))
     entry = me.get("rotor_stress")
     if not entry:
         out.append(_para(MECH_PAGE_UNSOLVED, st["warn"]))
@@ -13289,10 +13487,14 @@ READ_ONLY_CLOSING = (
     "started to produce it, and no stored state was changed by it.")
 
 
-def assumption_bullets() -> List[str]:
+def assumption_bullets(sec: Optional[Dict[str, int]] = None) -> List[str]:
     """What each solver actually did, in the five sentences that qualify every
     number above.  The ``<b>`` runs are the PDF's markup; the .docx renderer
-    strips them into a real bold run — see ``report_docx._rich``."""
+    strips them into a real bold run — see ``report_docx._rich``.
+
+    ``sec`` numbers the one cross-reference in the list (BT-5): the Thermal
+    bullet said "the electromagnetic run named on page 3", and page 3 is
+    "1 · Machine" in the Word render and "2 · Duties" in the PDF."""
     return [
         "<b>Electromagnetic</b> — 2-D transient finite elements on the sliding "
         "band, torque by the energy / flux-linkage method. The 3-D end effect "
@@ -13304,8 +13506,9 @@ def assumption_bullets() -> List[str]:
         "currents. A class the solver did not model is reported as unmodelled, "
         "never as no loss.",
         "<b>Thermal</b> — steady state, on the cycle-averaged loss map of the "
-        "electromagnetic run named on page 3; the air-gap conductivity is "
-        "derived from clearance, speed and gap temperature, not typed in.",
+        "electromagnetic run named in %s; the air-gap conductivity is "
+        "derived from clearance, speed and gap temperature, not typed in."
+        % sec_ref(sec, "compare"),
         "<b>Mechanical</b> — plane-stress 2-D with contact; a separation "
         "contact may open, a bonded one may not. Peak stresses at re-entrant "
         "corners are mesh-dependent singularities, hence the p99.5 column.",
@@ -13325,7 +13528,8 @@ def assumption_bullets() -> List[str]:
 
 
 def not_included_bullets(brg: Optional[Dict[str, Any]],
-                         th: Dict[str, Any]) -> List[str]:
+                         th: Dict[str, Any],
+                         sec: Optional[Dict[str, int]] = None) -> List[str]:
     """What this report does NOT model — read off the map that was solved."""
     # WHAT THE THERMAL MAP DID WITH THE MECHANICAL WATTS.  Until 2026-09-08 this
     # page stated flatly that bearing and windage heat is not a source in the
@@ -13338,18 +13542,20 @@ def not_included_bullets(brg: Optional[Dict[str, Any]],
     _tmech = ((_tm.get("cooling") or {}).get("mech_losses") or {})
     if _tmech.get("P_mech_into_map_W"):
         _mech_bullet = (
-            "the thermal map on page 4 CARRIES %.1f W of mechanical heat: "
+            "the thermal map in %s CARRIES %.1f W of mechanical heat: "
             "bearing friction at the shaft seats and gap windage in the air-gap "
             "air.  %.1f W of it could not be placed in a cross-section (see the "
             "heat budget) and is excluded there"
-            % (float(_tmech["P_mech_into_map_W"]),
+            % (sec_ref(sec, "thermal"),
+               float(_tmech["P_mech_into_map_W"]),
                float(_tmech.get("P_mech_total_W") or 0.0)
                - float(_tmech["P_mech_into_map_W"])))
     else:
         _mech_bullet = (
-            "bearing and windage heat is not a source in the thermal solve on "
-            "page 4 — the bearings sit on the shaft stubs outside this "
-            "cross-section, and its shaft-ends heat path was closed")
+            "bearing and windage heat is not a source in the thermal solve of "
+            "%s — the bearings sit on the shaft stubs outside this "
+            "cross-section, and its shaft-ends heat path was closed"
+            % sec_ref(sec, "thermal"))
     not_incl = [
         _mech_bullet,
         "transient duty cycles: every temperature here is a steady state",
@@ -13385,7 +13591,7 @@ def _notes_page(st, sources, brg, em, th, me, cp,
     from reportlab.platypus import Spacer
 
     out: List[Any] = [_para(section_heading(sec, "notes"), st["h1"])]
-    for b in assumption_bullets():
+    for b in assumption_bullets(sec):
         out.append(_para("• " + b, st["body"]))
         out.append(Spacer(1, 2))
     # NOTHING AFTER THE ASSUMPTIONS (user 2026-09-11: "я думаю это не надо").
@@ -14628,16 +14834,29 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
     # between the poles are assembly features; the factor on them stays, and so
     # does the flag, but a client must not read "SF 0.22" without being told
     # what those bridges are for and what holds the magnets.
-    if any(is_rotor_bridge_part((_m(c) or {}).get("sf_min_part")) for c in cols):
+    _bridge_said = any(is_rotor_bridge_part((_m(c) or {}).get("sf_min_part"))
+                       for c in cols)
+    if _bridge_said:
         rows.append(["…what the rotor bridges carry"] + _col_vals(
             cols, lambda c: (ROTOR_BRIDGE_POLICY
                              if is_rotor_bridge_part(
                                  (_m(c) or {}).get("sf_min_part")) else "—")))
     R("Lowest SF on the p05 field", lambda c: (_m(c) or {}).get("sf_min_p05"), 2)
-    for part, label in (("rotor_core", "Rotor core"), ("magnet", "Magnets"),
+    # THE ROTOR'S OWN KEY IS "rotor" (BT-7, 2026-09-16).  This loop asked for
+    # "rotor_core", which the rotor-stress record does not use — `parts` are
+    # rotor / magnet / sleeve / shaft — so section 3 printed the stress set of
+    # the magnet, the sleeve and the shaft and NONE of the rotor's, on a
+    # machine whose rotor is the part that fails (SF 0.22 / 0.19 in the very
+    # first rows of the same table).  Both spellings are accepted; everything
+    # else about the loop is unchanged.
+    def _has(part: str) -> bool:
+        return any(isinstance(((_m(c) or {}).get("parts") or {}).get(part), dict)
+                   for c in cols)
+
+    _rotor = next((k for k in ROTOR_BRIDGE_PARTS if _has(k)), "rotor_core")
+    for part, label in ((_rotor, "Rotor core"), ("magnet", "Magnets"),
                         ("sleeve", "Sleeve"), ("shaft", "Shaft")):
-        if not any(isinstance(((_m(c) or {}).get("parts") or {}).get(part), dict)
-                   for c in cols):
+        if not _has(part):
             continue
         R(f"{label} von Mises p99.5 [MPa]",
           lambda c, p=part: _p(c, p, "von_mises_p995_mpa"), 1)
@@ -14658,7 +14877,10 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
         # bridges between the poles are assembly features; the number stays and
         # so does the flag on it, but a client must not read "SF 0.24" without
         # being told what those bridges are for and what holds the magnets.
-        if is_rotor_bridge_part(part):
+        # …ONCE (BT-7, 2026-09-16).  The row above already carries it whenever
+        # the rotor is the part the lowest safety factor is on, which is every
+        # machine whose rotor rows this branch prints.
+        if is_rotor_bridge_part(part) and not _bridge_said:
             rows.append(["…what the rotor bridges carry"]
                         + _col_vals(cols, lambda c: ROTOR_BRIDGE_POLICY))
     if any(isinstance(((_m(c) or {}).get("parts") or {}).get("sleeve"), dict)
@@ -14769,8 +14991,13 @@ def _mech_compare(st, cols: List[Dict[str, Any]]) -> List[Any]:
 
     cheader, crows = crit_compare_rows(cols)
     if crows:
-        out.append(_para(CRIT_HEADING, st["h2"]))
-        out.append(_cmp_table(cheader, cols, crows, st=st))
+        # A HEADING NEVER ENDS A PAGE (BT-10, 2026-09-16) — the docx renderer's
+        # `keepNext` on this heading and on the table's header band, in the
+        # only form this renderer has.  The table is four rows; if it ever
+        # cannot fit, `KeepTogether` splits rather than refusing to lay out.
+        from reportlab.platypus import KeepTogether as _KT
+        out.append(_KT([_para(CRIT_HEADING, st["h2"]),
+                        _cmp_table(cheader, cols, crows, st=st)]))
         out.append(_para(CRIT_COMPARE_NOTE, st["body"]))
     return out
 
@@ -15228,12 +15455,60 @@ def cross_duty_warnings(cols: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+#: Rules that answer for the CONFIGURATION and not for one duty (BT-9,
+#: 2026-09-16).  The runaway speed is built from the machine's no-load KV and
+#: the pack minimum — neither is a duty's — and it is checked against the
+#: FASTEST duty of the configuration, so the identical row
+#: (17,985.2 rpm · 22,900 rpm · −21.5 %) printed under both L180 gen duties,
+#: each duty-tagged.  A reader comparing the two could only conclude that the
+#: 20,900 rpm duty had been judged at its own speed, which it had not.
+CONFIG_LEVEL_RULES: Tuple[str, ...] = ("runaway_speed",)
+
+#: What the duty column says on a row that is about the configuration.
+CONFIG_LEVEL_DUTY = "all duties"
+
+#: …and what its own name then has to say, because the limit is one duty's.
+CONFIG_LEVEL_TAIL = " (against this configuration's fastest duty)"
+
+
+def collapse_config_level(ws: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Print a configuration-level rule ONCE, tagged with what it is about.
+
+    Only when every duty's copy of it carries the same value and the same
+    limit: a runaway speed read off each duty's own loaded line voltage really
+    is per-duty, and collapsing those would hide the one that matters.
+    """
+    same: Dict[str, bool] = {}
+    for rule in CONFIG_LEVEL_RULES:
+        rows = [w for w in ws if w.get("rule") == rule]
+        same[rule] = (len(rows) > 1
+                      and len({(w.get("value"), w.get("limit")) for w in rows}) == 1)
+    out: List[Dict[str, Any]] = []
+    done: set = set()
+    for w in ws:
+        rule = w.get("rule")
+        if not same.get(rule):
+            out.append(w)
+            continue
+        if rule in done:
+            continue
+        done.add(rule)
+        w = dict(w)
+        w["duty"] = CONFIG_LEVEL_DUTY
+        if not str(w.get("quantity") or "").endswith(CONFIG_LEVEL_TAIL):
+            w["quantity"] = str(w.get("quantity") or "") + CONFIG_LEVEL_TAIL
+        out.append(w)
+    return out
+
+
 def all_duty_warnings(cols: List[Dict[str, Any]],
                       ctxs: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Every duty's warnings, red first — the order both renderers print."""
     all_w: List[Dict[str, Any]] = []
     for c in cols:
         all_w += duty_warnings(ctxs.get(c["duty"]) or {"duty": c["duty"]})
+    # …with the rules that are about the CONFIGURATION printed once (BT-9).
+    all_w = collapse_config_level(all_w)
     # …plus the checks that are ABOUT the set of duties rather than about one
     # of them.  A build whose duties disagree on its own mass is a data defect,
     # and the warnings section is where the reader looks for those (2026-09-14).

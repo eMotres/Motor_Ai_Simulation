@@ -670,6 +670,84 @@ def kinds_present(die: str, cfg: str) -> Dict[str, List[str]]:
     return {duty: [r["kind"] for r in rows] for duty, rows in have(die, cfg).items()}
 
 
+def _retag_duty(path: Path, duty: str) -> None:
+    """Rewrite one stored field's ``meta["duty"]`` in place.
+
+    :func:`have` keys its listing off the name INSIDE the file, not off the
+    folder — it cannot invert the hash — so a folder moved by :func:`rename`
+    whose files still name the old duty would list the maps under a duty that
+    no longer exists.  Every array member is copied over byte for byte (the
+    ``.npy`` payloads are read and written back unchanged); only the ``meta``
+    member is rebuilt.
+    """
+    import io as _io
+    import zipfile
+    import numpy as np
+    with zipfile.ZipFile(path) as z:
+        infos = list(z.infolist())
+        names = [i.filename for i in infos]
+        if "meta.npy" not in names:
+            return
+        raw = {n: z.read(n) for n in names}
+    meta = json.loads(str(np.load(_io.BytesIO(raw["meta.npy"]),
+                                  allow_pickle=False)))
+    if str(meta.get("duty")) == str(duty):
+        return
+    meta["duty"] = str(duty)
+    buf = _io.BytesIO()
+    np.lib.format.write_array(buf, np.array(json.dumps(meta, default=str)),
+                              allow_pickle=False)
+    raw["meta.npy"] = buf.getvalue()
+    tmp = path.with_name(path.name + f".tmp{os.getpid()}")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as out:
+        for info in infos:
+            out.writestr(info, raw[info.filename],
+                         compress_type=info.compress_type)
+    os.replace(tmp, path)
+
+
+def rename(die: str, cfg: str, old: str, new: str) -> int:
+    """Carry one duty's stored fields to the folder its NEW name hashes to.
+
+    The folder is ``_duty_stem(duty)`` — a hash of the duty NAME — so a rename
+    that left it behind orphaned every map the duty owns, and the next report
+    printed "not solved for this duty" over four solves still on disk (the
+    L180 gen rename of 2026-09-16: ``rated 0.5x9 mm`` → ``rated 1x9 mm`` moved
+    the run payloads and left ``em / thermal / rotor_stress / modes`` in the
+    old duty's folder).  Returns how many field files moved; never raises —
+    the same rule the rest of this module keeps.
+    """
+    if str(old) == str(new):
+        return 0
+    n = 0
+    try:
+        root = _dies_dir() / str(die) / "runs" / str(cfg)
+        src, dst = root / _duty_stem(old), root / _duty_stem(new)
+        if src == dst or not (src / "fields").is_dir():
+            return 0
+        (dst / "fields").mkdir(parents=True, exist_ok=True)
+        for p in sorted((src / "fields").glob("*.npz")):
+            q = dst / "fields" / p.name
+            os.replace(p, q)
+            _retag_duty(q, new)
+            n += 1
+        # …and the emptied folder goes with it, exactly as `drop` leaves none.
+        try:
+            if (src / "fields").is_dir() and not any((src / "fields").iterdir()):
+                (src / "fields").rmdir()
+            if src.is_dir() and not any(src.iterdir()):
+                src.rmdir()
+        except OSError:
+            pass
+        if n:
+            log.info("duty_fields: moved %d field file(s) of %s/%s from '%s' "
+                     "to '%s'", n, die, cfg, old, new)
+    except Exception as exc:                                # noqa: BLE001
+        log.warning("duty_fields: could not rename %s/%s '%s' -> '%s' (%s)",
+                    die, cfg, old, new, exc)
+    return n
+
+
 def drop(die: str, cfg: str, duty: Optional[str] = None) -> int:
     """Delete one duty's fields (or every duty's of a configuration).
 

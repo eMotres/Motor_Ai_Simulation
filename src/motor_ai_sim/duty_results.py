@@ -410,9 +410,35 @@ def get(die: str, cfg: str) -> Dict[str, Dict[str, Any]]:
         return {}
 
 
+def rename(die: str, cfg: str, old: str, new: str) -> bool:
+    """Carry a duty's results to its NEW name, keeping every row.
+
+    A duty is addressed here by its NAME, so a rename that left the rows
+    behind hid every thermal, mechanical, coupled and duty-cycle answer the
+    duty owns — the report then says "not solved for this duty" over results
+    that are still in the store (the L180 gen rename of 2026-09-16).  Dropping
+    them instead, which :func:`forget`'s docstring once offered a rename, is
+    the same loss with the evidence deleted.
+    """
+    if str(old) == str(new):
+        return False
+    try:
+        doc = read_all()
+        results = doc.get("results") or {}
+        for key in (str(die), _plain_die(die)):
+            node = (results.get(key) or {}).get(str(cfg))
+            if isinstance(node, dict) and str(old) in node:
+                node[str(new)] = node.pop(str(old))
+                return _write_all(doc)
+        return False
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
 def forget(die: str, cfg: str, duty: Optional[str] = None) -> bool:
     """Drop a duty's results (or a whole configuration's) — used when the
-    catalogue deletes or renames the duty they describe."""
+    catalogue DELETES the duty they describe.  A rename carries them instead
+    (:func:`rename`)."""
     try:
         doc = read_all()
         cfgs = (doc.get("results") or {}).get(str(die)) or {}

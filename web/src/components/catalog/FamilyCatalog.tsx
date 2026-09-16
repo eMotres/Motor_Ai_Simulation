@@ -443,7 +443,7 @@ const FamilyCatalog: React.FC<{
   const renameDuty = (die: string, cfg: string, duty: string) => setAskText({
     title: `Rename duty '${duty}' in ${die} / ${cfg}`,
     label: 'New name', initial: duty,
-    hint: 'Operating point, targets and the recorded result stay untouched',
+    hint: 'Operating point, targets, the recorded result, the stored runs, the solved maps and every thermal / mechanical / coupled answer follow the new name',
     onSubmit: (name) => { if (name !== duty) mutate(`duty renamed to '${name}'`, () =>
       fetch(`${API}/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },

@@ -2578,8 +2578,34 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
         import json as _json
         ctx["duty"] = new
         _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
-    log.info("family: duty '%s/%s/%s' renamed to '%s'", die, cfg, duty, new)
-    return {"ok": True, "duty": new}
+    # …AND SO DO THE DUTY'S ANSWERS (2026-09-16).  Both stores address a duty
+    # by its NAME — `duty_results` by the key itself, `duty_fields` by the
+    # folder the name hashes to — and this route moved neither, so a rename
+    # silently orphaned every thermal, mechanical, coupled and duty-cycle row
+    # and all four stored maps.  Found on CIANO10 200 opt / L180 gen, where
+    # 'rated 0.5x9 mm' → 'rated 1x9 mm' carried the two run payloads and left
+    # the results keyed under the old name and the em / thermal / rotor_stress
+    # / modes npz in the old duty's folder: the next report would have printed
+    # "not solved for this duty" over solves that were still on disk.
+    n_res = n_fields = 0
+    if new != duty:
+        try:
+            from motor_ai_sim import duty_results as _dr
+            n_res = int(bool(_dr.rename(die, cfg, duty, new)))
+        except Exception:  # noqa: BLE001 — bookkeeping never fails a rename
+            log.debug("family: per-duty results not carried for %s/%s/%s",
+                      die, cfg, duty, exc_info=True)
+        try:
+            from motor_ai_sim import duty_fields as _df
+            n_fields = _df.rename(die, cfg, duty, new)
+        except Exception:  # noqa: BLE001 — bookkeeping never fails a rename
+            log.debug("family: per-duty fields not carried for %s/%s/%s",
+                      die, cfg, duty, exc_info=True)
+    log.info("family: duty '%s/%s/%s' renamed to '%s' (%d result row(s), "
+             "%d stored field file(s) carried)", die, cfg, duty, new,
+             n_res, n_fields)
+    return {"ok": True, "duty": new, "results_carried": bool(n_res),
+            "fields_carried": n_fields}
 
 
 @router.delete("/duty/{die}/{cfg}/{duty}")

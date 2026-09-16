@@ -653,6 +653,82 @@ def test_renaming_a_duty_moves_its_run_files(dies):
     assert j["payload"]["time_s"]
 
 
+def _fake_field(dies, duty: str, kind: str = "thermal", cfg: str = CFG) -> Path:
+    """One stored map, written where ``duty_fields.save`` would write it."""
+    import numpy as np
+    from motor_ai_sim import duty_fields as df
+
+    p = df.fields_dir(DIE, cfg, duty) / f"{kind}.npz"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    meta = {"version": 1, "kind": kind, "die": DIE, "config": cfg,
+            "duty": duty, "saved_at": "2026-09-16T20:00:00"}
+    np.savez_compressed(p, meta=np.array(json.dumps(meta)),
+                        T_C=np.arange(6, dtype=np.float32))
+    return p
+
+
+def test_renaming_a_duty_carries_its_results_and_its_stored_fields(dies):
+    """A rename moved the run payloads and left the duty's ANSWERS behind
+    (2026-09-16, CIANO10 200 opt / L180 gen): the results stayed keyed under
+    the old name and the maps stayed in the folder the old name hashes to, so
+    the next report said "not solved for this duty" over solves still on
+    disk."""
+    import numpy as np
+    from motor_ai_sim import duty_fields as df
+    from motor_ai_sim import duty_results as dr
+
+    _save_everything("pwm_voltage", 91.0)
+    assert dr.record(DIE, CFG, DUTY, "thermal", {"coil_temp_c": 123.4})
+    old_map = _fake_field(dies, DUTY)
+    assert old_map.is_file()
+
+    r = client.patch(f"/api/family/duty/{DIE}/{CFG}/{DUTY}", json={"name": "peak2"})
+    assert r.status_code == 200, r.text
+    assert r.json()["results_carried"] is True
+    assert r.json()["fields_carried"] == 1
+
+    rows = dr.get(DIE, CFG)
+    assert DUTY not in rows and "peak2" in rows
+    assert rows["peak2"]["thermal"]["coil_temp_c"] == 123.4
+
+    assert not old_map.exists()
+    new_map = df.fields_dir(DIE, CFG, "peak2") / "thermal.npz"
+    assert new_map.is_file()
+    # the arrays survive the move, and the name INSIDE the file follows it —
+    # `have` keys its listing off that name and cannot invert the hash
+    got = df.load(DIE, CFG, "peak2", "thermal")
+    assert got is not None
+    assert np.allclose(got["T_C"], np.arange(6))
+    assert got["meta"]["duty"] == "peak2"
+    assert list(df.kinds_present(DIE, CFG)) == ["peak2"]
+
+
+def test_renaming_a_duty_to_its_own_name_moves_nothing(dies):
+    from motor_ai_sim import duty_fields as df
+    from motor_ai_sim import duty_results as dr
+
+    _save_everything("pwm_voltage", 91.0)
+    assert dr.record(DIE, CFG, DUTY, "thermal", {"coil_temp_c": 123.4})
+    p = _fake_field(dies, DUTY)
+    before = p.read_bytes()
+    r = client.patch(f"/api/family/duty/{DIE}/{CFG}/{DUTY}", json={"name": DUTY})
+    assert r.status_code == 200, r.text
+    assert r.json()["fields_carried"] == 0
+    assert p.read_bytes() == before
+    assert dr.get(DIE, CFG)[DUTY]["thermal"]["coil_temp_c"] == 123.4
+
+
+def test_a_duty_with_no_results_or_fields_still_renames(dies):
+    """A duty that was never solved has nothing to carry, and the rename is
+    the plain one it always was — bookkeeping never fails a rename."""
+    assert _save_second_duty("idle").status_code == 200
+    r = client.patch(f"/api/family/duty/{DIE}/{CFG}/idle", json={"name": "pause"})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "duty": "pause",
+                        "results_carried": False, "fields_carried": 0}
+    assert _duty_doc(dies, "pause")["name"] == "pause"
+
+
 def test_deleting_a_duty_removes_its_run_files(dies):
     _save_everything("current", 95.5)
     _save_everything("pwm_voltage", 91.0)

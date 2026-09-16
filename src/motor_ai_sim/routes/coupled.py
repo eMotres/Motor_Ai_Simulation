@@ -79,6 +79,7 @@ always did.  The same block, plus the parameters, is the answer of
 """
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import math
@@ -539,6 +540,61 @@ def _pwm_steps_per_period(f_carrier_hz: float, f_elec_hz: float) -> int:
     return int(nc * PWM_SAMPLES_PER_CARRIER)
 
 
+#: How far UNDER the modulator's own ceiling a regulator step may aim
+#: [fraction].  The gain below is measured at ONE reference phase, and the
+#: factory's compensation walks that phase a little while it solves; 0.5 % is
+#: wider than every phase spread there is above 4 carriers (0.12 % at 7, 0.01 %
+#: at 32) and is nothing a converging regulator can feel.
+_MODULATION_HEADROOM = 0.005
+
+
+@functools.lru_cache(maxsize=256)
+def _modulator_gain(carriers: int, v_delta_deg: float) -> float:
+    """Fundamental the bridge APPLIES per volt of linear-modulation reference,
+    at the linear limit m = 1.15 and this many carriers per electrical period.
+
+    THE NUMBER THE REGULATOR WAS MISSING (2026-09-15, CIANO10 200 opt / L180 gen
+    'rated 0.5x9 mm').  ``pwm.build_pwm_source`` does not apply the reference it
+    is handed: a regular-sampled modulator attenuates and delays the fundamental,
+    so the factory SOLVES for the reference whose APPLIED fundamental is the
+    requested one and refuses when that solved reference leaves the linear region
+    (``simulation/pwm.py``, the compensation loop at the end of
+    ``build_pwm_source``).  The ceiling in the coordinate the regulator moves —
+    ``v_phase_peak_V``, the fundamental it asks for — is therefore NOT
+    0.5·1.15·V_bus: it is what a reference at m = 1.15 actually puts on the
+    terminals, which at 14 carriers on a 799.2 V delta link is 750.9 V and not
+    795.9 V.  Aiming a pass between the two is a 422 hours into a loop
+    ("compensating the modulator's sampled-reference gain for 14 carriers per
+    period needs m = 1.161, past the 1.15 linear limit"), and that is exactly how
+    that generator lost its last pass and saved 3.4 % off point.
+
+    MEASURED, NOT MODELLED: the same ``PwmVoltageSource.applied_fundamental`` the
+    factory iterates against, on a unit bus (the ratio is bus-independent — the
+    bus is a multiplicative factor in every pole mean).  It is NOT the textbook
+    sinc(π/(2·N_c)) of the sampled hold, which is 0.2 % here; most of the loss is
+    the [0, 1] duty clamp biting at m > 1, where sine-triangle without
+    zero-sequence injection is already clipping.  Both effects are in the
+    measurement and neither is in a formula.
+
+    ``v_delta_deg`` is the reference's phase against the carrier.  The d-axis
+    offset the run adds to it is not known here and does not need to be: the
+    spread over a whole period is 0.12 % at 7 carriers and less above, which is
+    what ``_MODULATION_HEADROOM`` covers.  Clamped to 1.0 so a degenerate pulse
+    ratio can never hand back a ceiling ABOVE the linear one — at 3 carriers the
+    projection swings 0.81-1.10 with phase, and a source that thin is refused by
+    the factory's own "cannot synthesise this fundamental" branch anyway.
+
+    Cached: a few milliseconds each, and a loop asks for one carrier count.
+    """
+    from motor_ai_sim.simulation.pwm import (MAX_MODULATION_INDEX as _MAX_M,
+                                             PwmVoltageSource as _Src)
+    src = _Src(pole_pairs=1, daxis_deg=0.0, v_delta_deg=float(v_delta_deg),
+               v_bus=2.0, carriers=max(1, int(carriers)), m=_MAX_M)
+    applied, _ = src.applied_fundamental()
+    # v_bus = 2 V, so the LINEAR reference peak is 0.5·m·v_bus = m.
+    return min(1.0, max(1e-3, float(applied) / _MAX_M))
+
+
 def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
     """The inverter this coupled run is fed by, fully resolved — every default
     named, nothing guessed silently.
@@ -644,7 +700,55 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
                           "%r" % (inv.get("target_I_phase_rms_A"),),
                           ["inverter.target_I_phase_rms_A"], code="bad_inverter")
     nc = max(int(round(f_c / max(f_el, 1e-9))), 1)
+    # THE CEILING THE BRIDGE CAN ACTUALLY SYNTHESISE, in the same coordinate the
+    # regulator moves: the largest ``v_phase_peak_V`` whose modulation index is
+    # still inside the linear limit on THIS link.  In delta the drive is asked
+    # for the branch (= line) fundamental, so the ceiling carries the √3 the
+    # star-equivalent substitution carries (`pwm.modulation_index`).
+    #
+    # WHY IT IS COMPUTED HERE (2026-09-15, CIANO10 200 opt / L180 gen).  The
+    # electromagnetic half refuses m > 1.15 with a 422 in milliseconds — which
+    # is right — but the regulator between two passes did not know the number,
+    # so a secant step could aim the NEXT pass at a fundamental nobody can
+    # build and kill a loop that was hours deep.  That generator's peak duty
+    # sits 0.8 % under its own ceiling (789.7 V of 795.9 V on a 799.2 V pack),
+    # which is exactly where one honest correction runs out of inverter.
+    from motor_ai_sim.simulation.pwm import (
+        MAX_MODULATION_INDEX as _MAX_M, is_delta as _is_delta)
+    _sd = str(body.get("star_delta") or "").strip().lower()
+    if not _sd:
+        from motor_ai_sim.routes.simulation import _effective_star_delta as _esd
+        _sd = _esd(None)
+    v1_max_unc = 0.5 * _MAX_M * v_dc * (math.sqrt(3.0) if _is_delta(_sd) else 1.0)
+    # …AND IT IS THE COMPENSATED CEILING (2026-09-15, the same generator, one
+    # defect deeper).  The linear limit above is what the BRIDGE can chop; what
+    # the regulator asks for is the fundamental the modulator must APPLY, and
+    # the factory buys that by raising the reference (`_modulator_gain`).  The
+    # first fix clamped to the uncompensated number, so pass 4 was aimed at
+    # 761.7 V of a 795.9 V "ceiling" whose real value was 747.2 V — inside the
+    # clamp, outside the inverter, and the 422 killed the pass anyway.
+    _gain = _modulator_gain(nc, round(float(dl), 3))
+    v1_max = v1_max_unc * _gain * (1.0 - _MODULATION_HEADROOM)
+    # …AND IT IS ONLY HANDED ON WHEN THE RUN ITSELF FITS UNDER IT.  The
+    # connection is resolved here from the body, and a body that does not name
+    # one falls back to the shared configuration — which can be a machine away
+    # from the one being solved.  A ceiling computed as STAR for a machine the
+    # solver runs as DELTA is √3 too low, and clamping a good run down to it
+    # would be this function inventing an operating point.  So: when the
+    # fundamental this run starts from is already above the ceiling, the ceiling
+    # is not trusted and nothing is clamped — the electromagnetic half then
+    # refuses that run by name (m > 1.15, in milliseconds, naming the bus and
+    # the volts), which is the honest answer to a genuinely impossible inverter.
+    v1_cap = {"v_phase_peak_max_V": round(float(v1_max), 4)} \
+        if float(v1) <= v1_max else {}
     return {
+        **v1_cap,
+        # BOTH ceilings, always — including on the run whose seed is already
+        # over them and which therefore gets no clamp at all.  A reader looking
+        # at that refusal needs to see WHICH ceiling it hit and by how much, and
+        # a report comparing two carriers needs the gain that separates them.
+        "v_phase_peak_max_uncompensated_V": round(float(v1_max_unc), 4),
+        "modulator_gain_factor": round(float(_gain), 6),
         "record_as": rec_as,
         "harm_ref": bool(inv.get("harm_ref", False)),
         "target_I_phase_rms_A": tgt,
@@ -915,11 +1019,32 @@ def _regulate_v1(inv: Dict[str, Any], i_solved: Optional[float],
     # is one that has lost the machine — clamped, and the loop says so in the
     # record rather than solving an inverter nobody can build.
     lo, hi = 0.6 * float(inv["v_phase_peak_seed_V"]), 1.4 * float(inv["v_phase_peak_seed_V"])
+    # …and the SECOND ceiling, which is the inverter's own: a fundamental past
+    # the linear-modulation limit on this DC link is a 422 from the
+    # electromagnetic half, i.e. a loop that dies hours in over a step it could
+    # have declined.  Aim at the ceiling instead and say so — the point is then
+    # simply not reachable on this bus, which the record reports as an off-point
+    # run rather than as a crash.  (Absent key = older caller: unchanged.)
+    # …and it is the COMPENSATED ceiling (`_modulator_gain`): the largest
+    # fundamental the modulator can be made to APPLY, not the largest reference
+    # the bridge can chop.  Between the two there is a band that passes this
+    # clamp and is then refused by the electromagnetic half.
+    v_cap = inv.get("v_phase_peak_max_V")
+    capped = False
+    if v_cap:
+        try:
+            if v_new > float(v_cap) > 0.0:
+                v_new, capped = float(v_cap), True
+        except (TypeError, ValueError):
+            pass
     v_new = min(max(v_new, lo), hi)
     if abs(v_new - v_now) < 1e-6:
         return None
     out = dict(inv)
     out["v_phase_peak_V"] = float(v_new)
+    # Written on every step, True or False: a stale True carried forward from an
+    # earlier pass would report a ceiling the run had since walked away from.
+    out["v_phase_peak_at_modulation_ceiling"] = bool(capped)
     return out
 
 
@@ -1286,6 +1411,19 @@ def _inverter_record(em: Dict[str, Any], inv: Dict[str, Any],
         # of leaving the reader to re-derive it (absent when the last pass landed
         # inside the band, which is what "nothing left to correct" looks like).
         "v_phase_peak_next_V": inv.get("v_phase_peak_next_V"),
+        # The largest fundamental this DC link can synthesise inside the linear
+        # limit (delta: the branch = line value, √3 above the per-phase one).
+        # Printed so "off point" can be read as "out of inverter" where it is.
+        "v_phase_peak_max_V": inv.get("v_phase_peak_max_V"),
+        # The two halves of that ceiling: what the bridge could chop at m = 1.15,
+        # and the factor the modulator's sampled-reference gain costs on top of
+        # it (`coupled._modulator_gain`).  Printed so a point that ran out of
+        # inverter can be told from one that ran out of iterations.
+        "v_phase_peak_max_uncompensated_V": inv.get(
+            "v_phase_peak_max_uncompensated_V"),
+        "modulator_gain_factor": inv.get("modulator_gain_factor"),
+        "at_modulation_ceiling": inv.get(
+            "v_phase_peak_at_modulation_ceiling") or None,
         "v_delta_deg": float(inv["v_delta_deg"]),
         "m": pwm.get("modulation_index"),
         # The star-equivalent substitution, NAMED (never hidden — a model bus
@@ -2390,20 +2528,61 @@ def _run(body: Dict[str, Any],
         # here.  Never over a refusal or a runaway: those stopped the loop for a
         # harder reason and own the message.
         if point_off and refusal is None and not runaway:
-            refusal_code = "point_not_converged"
-            refusal = ("the temperatures settled but the operating point did "
-                       "not: after %d electromagnetic run(s) the machine draws "
-                       "%+.2f %% off the %.2f A this duty is billed at "
-                       "(tolerance ±%g %%)%s — raise max_iter, or widen "
-                       "inverter.i_tol_pct if that miss is acceptable"
-                       % (len(history), float(point_err or 0.0),
-                          float((inverter or {}).get("target_I_phase_rms_A") or 0.0),
-                          _point_tol_pct(inverter),
-                          ("" if v1_ran is None
-                           or abs(float(inverter["v_phase_peak_V"]) - v1_ran) < 1e-9
-                           else "; the next pass would have been aimed at "
-                                "%.3f V" % float(inverter["v_phase_peak_V"]))))
-            log.warning("coupled: %s", refusal)
+            # OUT OF INVERTER, OR OUT OF ITERATIONS?  Two different answers and
+            # only one of them is fixed by raising max_iter.  The last pass ran
+            # AT the ceiling — `v1_ran` is the fundamental it was actually solved
+            # at — when the regulator had nowhere left to aim: the bridge cannot
+            # build the volts this point needs on this link, and the current that
+            # pass drew is the most the machine will ever draw here.  Said with
+            # its own code, so a consumer can stop offering "more iterations".
+            _cap_v = 0.0
+            try:
+                _cap_v = float((inverter or {}).get("v_phase_peak_max_V") or 0.0)
+            except (TypeError, ValueError):
+                _cap_v = 0.0
+            _i_last = (history[-1].get("I_phase_rms_solved_A")
+                       if history else None)
+            if (_cap_v > 0.0 and v1_ran is not None
+                    and float(v1_ran) >= _cap_v - 1e-6):
+                from motor_ai_sim.simulation.pwm import (
+                    MAX_MODULATION_INDEX as _MAX_M_MSG)
+                refusal_code = "point_limited_by_modulation"
+                refusal = (
+                    "the point is out of INVERTER, not out of iterations: the "
+                    "largest fundamental a %.1f V link can build at %d carriers "
+                    "per electrical period is %.2f V peak (m = %.2f once the "
+                    "modulator's sampled-reference gain is compensated; %.1f V "
+                    "before it), the last pass ran there, and it drew %s A "
+                    "against the %.2f A this duty is billed at (%+.2f %%) — "
+                    "raise inverter.v_dc_V or the carrier, or bill this duty at "
+                    "the current the bridge can reach"
+                    % (float((inverter or {}).get("v_dc_V") or 0.0),
+                       int((inverter or {}).get("carriers_per_period") or 0),
+                       _cap_v, _MAX_M_MSG,
+                       float((inverter or {}).get(
+                           "v_phase_peak_max_uncompensated_V") or 0.0),
+                       ("—" if _i_last is None else "%.2f" % float(_i_last)),
+                       float((inverter or {}).get("target_I_phase_rms_A") or 0.0),
+                       float(point_err or 0.0)))
+                log.warning("coupled: %s", refusal)
+            else:
+                refusal_code = "point_not_converged"
+                refusal = (
+                    "the temperatures settled but the operating point did "
+                    "not: after %d electromagnetic run(s) the machine draws "
+                    "%+.2f %% off the %.2f A this duty is billed at "
+                    "(tolerance ±%g %%)%s — raise max_iter, or widen "
+                    "inverter.i_tol_pct if that miss is acceptable"
+                    % (len(history), float(point_err or 0.0),
+                       float((inverter or {}).get(
+                           "target_I_phase_rms_A") or 0.0),
+                       _point_tol_pct(inverter),
+                       ("" if v1_ran is None
+                        or abs(float(inverter["v_phase_peak_V"])
+                               - v1_ran) < 1e-9
+                        else "; the next pass would have been aimed at "
+                             "%.3f V" % float(inverter["v_phase_peak_V"]))))
+                log.warning("coupled: %s", refusal)
         # THE THIRD TAB at the same temperatures (phase 3): the rotor stress is
         # solved once, at the per-part averages of the last thermal map, while
         # this loop still owns the lock — a second coupled run must not start

@@ -1002,3 +1002,346 @@ def test_the_probe_fields_reach_the_snapshot_key():
     src = inspect.getsource(sim._fem_field2d_impl)
     assert 'drive=str(snap_drive or "current")' in src
     assert 'excitation=str(snap_excitation or "")' in src
+
+
+# ---------------------------------------------------------------------------
+# (g) THE GENERATOR — the same loop, run backwards
+# ---------------------------------------------------------------------------
+# CIANO10 200 opt / L180 gen, 2026-09-15.  Two generating duties on the same
+# Ø200 die: 'rated 0.5x9 mm' (600.38 A line, 20 900 rpm, γ = −15°, delta) and
+# 'peak 0.5x9 mm' (614.46 A, 22 900 rpm).  Everything the motor campaign relies
+# on has a mirror here that is easy to get wrong, so each one is pinned:
+#
+#   * the SEED is the duty's own solved terminal phasor and is already in the
+#     generator's frame — `postproc.fundamental_voltage` extracts it from the
+#     run that had γ+180 folded in, in exactly the (v_phase_peak, v_delta_deg)
+#     coordinates the PWM source consumes.  Nothing may add a second 180°;
+#   * the 180° belongs to the CURRENT.  The voltage source is placed by
+#     v_delta_deg + daxis alone (pwm.PwmVoltageSource), so the generator's shift
+#     must travel with `mode` to the transient route and nowhere else;
+#   * the TARGET is the WINDING current: in delta the catalogued 600.38 A is the
+#     line current and the branch carries 346.63 A, which is what the solver
+#     reports back as `I_phase_rms_solved_A`;
+#   * the DIRECTION of the regulator's first, damped step.  Measured on this
+#     machine's own stored dq numbers (psi_pm 0.070592 Wb, Ld 0.0976 mH, Lq
+#     0.0693 mH, R 7.032 mOhm, 1741.7 Hz) the phasor model reproduces the duty's
+#     346.63 A to 0.07 % and gives dlnI/dlnV = +0.62: on THIS generator more
+#     fundamental means more generating current, the same sign as a motor (the
+#     terminal phasor sits 81° off the (V−E) direction, not past it).  So the
+#     damped step keeps its direction — but a generator CAN sit on the other
+#     side of that null, and there the secant must walk the other way, which is
+#     what `test_a_negative_measured_slope_is_walked_the_right_way` pins.
+
+
+def _gen_body(**kw):
+    """The L180 generating duty as the background runner sends it."""
+    b = {"n_steps_per_period": 36, "n_periods": 1.0, "gamma_deg": -15.0,
+         "I_phase_rms": 600.38, "coil_temp_c": 127.0, "mode": "generator",
+         "star_delta": "delta", "eddy": True, "rotor_eddy": True,
+         "max_iter": 1, "mesh_size_mm": 4.0, "min_size_mm": 0.3,
+         "n_sectors": 2, "rpm": 20900.0, "drive": "pwm",
+         "inverter": {"f_carrier_hz": 24000.0, "v_dc_V": 799.2,
+                      "v_phase_peak_V": 729.6062, "v_delta_deg": -29.456,
+                      "target_I_phase_rms_A": 346.63, "i_tol_pct": 1.0}}
+    b.update(kw)
+    return b
+
+
+def test_a_generators_seed_reaches_the_bridge_verbatim(loop):
+    """No second 180°, no sign flip: the duty's solved terminal phasor IS the
+    request, because it was extracted in the drive's own coordinates."""
+    cp, seen = loop
+    cp.run(_gen_body())
+    em = seen["em"][-1]
+    assert em["v_phase_peak"] == pytest.approx(729.6062)
+    assert em["v_delta_deg"] == pytest.approx(-29.456)
+
+
+def test_the_generators_180_travels_with_the_mode_not_with_the_voltage(loop):
+    """The transient route turns `mode: generator` into γ+180 itself, so the
+    coupled half hands it the PANEL angle and the mode — while the loss-map
+    probe, which speaks the solver's already-shifted frame, asks for the shifted
+    one.  Backwards, that probe matches no run."""
+    cp, seen = loop
+    cp.run(_gen_body())
+    em = seen["em"][-1]
+    assert em["mode"] == "generator"
+    assert em["gamma_deg"] == pytest.approx(-15.0), "the panel angle, unshifted"
+    assert seen["probe"][-1]["gamma_deg"] == pytest.approx(165.0)
+
+
+def test_the_generators_seed_falls_back_to_the_duty_summary(loop, monkeypatch):
+    """A negative load angle is the generator's normal case, and `_num` refuses
+    non-positive numbers — so the angle must NOT go through it."""
+    cp, _ = loop
+    monkeypatch.setattr(cp, "_duty_summary",
+                        lambda: {"V1_seed_peak_V": 789.7464,
+                                 "V1_seed_delta_deg": -31.277})
+    inv = cp._inverter_settings({"star_delta": "delta", "mode": "generator",
+                                 "inverter": {"v_dc_V": 799.2,
+                                              "f_carrier_hz": 24000.0}},
+                                rpm=22900.0)
+    assert inv["v_phase_peak_V"] == pytest.approx(789.7464)
+    assert inv["v_delta_deg"] == pytest.approx(-31.277)
+    assert inv["sources"]["v_phase_peak_V"].startswith("the duty's saved")
+
+
+# ── the point, and the direction the regulator walks to hold it ─────────────
+
+def _reg_gen(v, i, pts, target=346.63, tol=1.0, seed=729.6062, cap=None):
+    """The L180 'rated 0.5x9 mm' regulator: the target is the WINDING current
+    (600.38 A line over √3), the seed the duty's own V₁."""
+    from motor_ai_sim.routes import coupled as cp
+    inv = {"v_phase_peak_V": v, "v_phase_peak_seed_V": seed,
+           "target_I_phase_rms_A": target, "i_tol_pct": tol}
+    if cap is not None:
+        inv["v_phase_peak_max_V"] = cap
+    return cp._regulate_v1(inv, i, pts)
+
+
+def test_the_generators_target_is_the_winding_current_not_the_line(loop):
+    """600.38 A at the terminals is 346.63 A in a delta branch, and
+    `I_phase_rms_solved_A` is the BRANCH current — judging one against the other
+    would read a machine on point as 73 % over it."""
+    cp, seen = loop
+    cp.run(_gen_body())
+    rec = seen["record"][-1][0]["coupling"]["inverter"]
+    assert rec["target_I_phase_rms_A"] == pytest.approx(346.63)
+    assert rec["point_error_pct"] == pytest.approx(
+        100.0 * (430.1 - 346.63) / 346.63, abs=1e-3)
+
+
+def test_the_generators_first_step_is_damped_and_follows_the_machine():
+    """One point, so no slope is known: the damped proportional step, in the
+    direction this machine measures (dlnI/dlnV = +0.62 — more fundamental, more
+    generating current) and short of the full step."""
+    pts = []
+    out = _reg_gen(729.6062, 330.0, pts)        # 4.8 % LOW on the generator
+    prop = 729.6062 * (346.63 / 330.0)
+    assert out["v_phase_peak_V"] > 729.6062, "too little current asks for more V₁"
+    assert out["v_phase_peak_V"] < prop, "a full proportional step overshoots"
+    out = _reg_gen(729.6062, 365.0, [])         # …and 5.3 % HIGH walks back
+    assert out["v_phase_peak_V"] < 729.6062
+
+
+def test_a_negative_measured_slope_is_walked_the_right_way():
+    """THE GENERATOR'S OWN HAZARD.  |I| = |V − E|/|Z|, so a machine whose
+    terminal phasor sits past the (V − E) normal answers MORE current to LESS
+    fundamental.  The secant is measured, not assumed, and must follow it — a
+    regulator that hard-coded the motor's sign would run to its clamp."""
+    pts = [(700.0, 380.0)]                      # …and this pass: 20 V MORE
+    out = _reg_gen(720.0, 360.0, pts, target=400.0)     # gave 20 A LESS
+    assert out is not None
+    assert out["v_phase_peak_V"] < 720.0, (
+        "with dI/dV < 0, raising the current means lowering V₁")
+    # the secant is exact on the measured slope: 720 + (400−360)·(20/−20)
+    assert out["v_phase_peak_V"] == pytest.approx(680.0)
+
+
+def test_the_regulator_never_asks_for_more_than_the_link_can_build():
+    """The rated generating duty runs at 729.61 V of a link whose LINEAR ceiling
+    is 795.95 V — but what the regulator asks for is the fundamental the
+    modulator must APPLY, and at this duty's 14 carriers that ceiling is
+    747.18 V.  One honest correction upward would otherwise be a 422 from the
+    electromagnetic half, hours into the loop."""
+    cap = 747.1802
+    out = _reg_gen(729.6062, 300.0, [], target=400.0, seed=729.6062, cap=cap)
+    assert out["v_phase_peak_V"] == pytest.approx(cap)
+    assert out["v_phase_peak_at_modulation_ceiling"] is True
+    # …and a step that does not need the ceiling says so, rather than carrying
+    # an earlier pass's flag forward.
+    out = _reg_gen(729.6062, 400.0, [], target=354.76, seed=729.6062, cap=cap)
+    assert out["v_phase_peak_V"] < 729.6062
+    assert out["v_phase_peak_at_modulation_ceiling"] is False
+
+
+def test_the_ceiling_is_the_delta_ceiling_and_reaches_the_record(loop):
+    """m = 2·V₁/(√3·V_dc) in delta (pwm.modulation_index), so the ceiling the
+    regulator is given carries the same √3 — 795.95 V of REFERENCE on the L180's
+    799.2 V pack, not 459.5 V — and the compensated ceiling under it carries the
+    same √3 with it."""
+    import math
+    from motor_ai_sim.simulation.pwm import (MAX_MODULATION_INDEX,
+                                             modulation_index)
+    cp, seen = loop
+    inv = cp._inverter_settings({"star_delta": "delta", "mode": "generator",
+                                 "inverter": {"v_dc_V": 799.2,
+                                              "f_carrier_hz": 24000.0,
+                                              "v_phase_peak_V": 729.6062,
+                                              "v_delta_deg": -29.456}},
+                                rpm=20900.0)
+    assert inv["v_phase_peak_max_uncompensated_V"] == pytest.approx(
+        0.5 * MAX_MODULATION_INDEX * math.sqrt(3.0) * 799.2, rel=1e-6)
+    assert modulation_index(inv["v_phase_peak_max_uncompensated_V"], 799.2,
+                            star_delta="delta") == pytest.approx(
+                                MAX_MODULATION_INDEX, rel=1e-5)
+    # …and the star machine keeps the ceiling it always had, √3 below.
+    inv_star = cp._inverter_settings({"star_delta": "star",
+                                      "inverter": {"v_dc_V": 799.2,
+                                                   "f_carrier_hz": 24000.0,
+                                                   "v_phase_peak_V": 400.0,
+                                                   "v_delta_deg": 10.0}},
+                                     rpm=22900.0)
+    assert inv_star["v_phase_peak_max_uncompensated_V"] == pytest.approx(
+        0.5 * MAX_MODULATION_INDEX * 799.2, rel=1e-6)
+    assert inv_star["v_phase_peak_max_V"] < inv["v_phase_peak_max_V"]
+    cp.run(_gen_body())
+    rec = seen["record"][-1][0]["coupling"]["inverter"]
+    assert rec["v_phase_peak_max_uncompensated_V"] == pytest.approx(
+        795.9466, abs=0.01)
+    assert rec["v_phase_peak_max_V"] == pytest.approx(747.18, abs=0.01)
+    assert rec["modulator_gain_factor"] == pytest.approx(0.94345, abs=1e-4)
+
+
+# ── the ceiling is the one the MODULATOR can apply, not the one the bridge
+#    can chop (2026-09-15, CIANO10 200 opt / L180 gen 'rated 0.5x9 mm') ──────
+#
+# The first clamp used 0.5·1.15·V_bus — the largest REFERENCE.  But
+# `pwm.build_pwm_source` does not apply the reference it is handed: it solves for
+# the reference whose APPLIED fundamental is the requested one, and refuses when
+# that solved reference leaves the linear region.  So on that generator (24 kHz,
+# 799.2 V link, 20 900 rpm → 1 741.7 Hz → 14 carriers per period) the regulator
+# aimed pass 4 at 761.7 V — under the 795.95 V it had been given, over the 747 V
+# the modulator can actually build — and the electromagnetic half refused it
+# ("needs m = 1.161, past the 1.15 linear limit").  The loop lost its last pass
+# and saved 3.4 % off point.
+
+def test_the_ceiling_is_what_the_modulator_can_apply_not_what_it_can_chop(loop):
+    """The L180 rated case, end to end: 14 carriers on a 799.2 V delta link give
+    a REFERENCE ceiling of 795.95 V and an APPLIED ceiling of 747.18 V, and it is
+    the second one the regulator is handed."""
+    cp, _ = loop
+    inv = cp._inverter_settings({"star_delta": "delta", "mode": "generator",
+                                 "inverter": {"v_dc_V": 799.2,
+                                              "f_carrier_hz": 24000.0,
+                                              "v_phase_peak_V": 729.6062,
+                                              "v_delta_deg": -29.456}},
+                                rpm=20900.0)
+    assert inv["carriers_per_period"] == 14
+    assert inv["f_elec_hz"] == pytest.approx(1741.6667, abs=1e-3)
+    assert inv["v_phase_peak_max_uncompensated_V"] == pytest.approx(795.9466,
+                                                                   abs=0.01)
+    assert inv["v_phase_peak_max_V"] == pytest.approx(747.18, abs=0.01)
+    # the gain is MEASURED off the modulator, and the 0.5 % margin is under it
+    g = inv["modulator_gain_factor"]
+    assert g == pytest.approx(0.94345, abs=1e-4)
+    assert inv["v_phase_peak_max_V"] == pytest.approx(
+        inv["v_phase_peak_max_uncompensated_V"] * g * 0.995, abs=1e-3)
+
+
+def test_the_bridge_really_accepts_the_ceiling_and_really_refused_761_7():
+    """The proof, against the modulator itself: a request AT the ceiling builds,
+    and the 761.7 V the old clamp allowed is the 422 that killed the pass."""
+    import math
+    from motor_ai_sim.simulation.pwm import (build_pwm_source, ExcitationError,
+                                             star_equivalent_bus)
+    f_el = 20900.0 * 5 / 60.0
+    kw = dict(pole_pairs=5, daxis_deg=0.0, v_delta_deg=-29.456,
+              v_bus=star_equivalent_bus(799.2, "delta"), f_switch_hz=24000.0,
+              f_elec_hz=f_el, v_bus_real=799.2)
+    src = build_pwm_source(v_phase_peak=747.1802, **kw)
+    assert src.carriers == 14
+    assert src.m <= 1.15
+    assert src.applied_fundamental()[0] == pytest.approx(747.18, abs=1.0)
+    with pytest.raises(ExcitationError) as e:
+        build_pwm_source(v_phase_peak=761.7, **kw)
+    assert "14 carriers per period needs m = 1.161" in str(e.value)
+    # …and the old ceiling would have let exactly that request through.
+    assert 761.7 < 0.5 * 1.15 * math.sqrt(3.0) * 799.2
+
+
+def test_a_clamped_step_costs_a_pass_no_longer_and_says_it_is_out_of_inverter(loop):
+    """The defect's own consequence, reversed: the step is clamped to something
+    the bridge CAN build, the pass runs, and the run that ends off point at the
+    ceiling says it ran out of INVERTER rather than out of iterations."""
+    cp, seen = loop
+    body = _gen_body(max_iter=2)
+    body["inverter"] = dict(body["inverter"], target_I_phase_rms_A=600.0)
+    c = cp.run(body)["coupling"]
+    h = c["history"]
+    assert len(h) == 2 and len(seen["em"]) == 2, "the clamped pass RAN"
+    # pass 1 asked for far more fundamental than the link can build…
+    assert h[0]["v_phase_peak_next_V"] == pytest.approx(747.1802, abs=0.01)
+    # …and pass 2 ran at the ceiling, not at the 816 V the secant wanted
+    assert h[1]["v_phase_peak_V"] == pytest.approx(747.1802, abs=0.01)
+    assert seen["em"][1]["v_phase_peak"] == pytest.approx(747.1802, abs=0.01)
+    assert c["converged"] is False
+    assert c["warning_code"] == "point_limited_by_modulation"
+    assert "747.18 V peak" in c["warning"] and "14 carriers" in c["warning"]
+    assert "430.10 A" in c["warning"], "the current the bridge CAN reach"
+    assert c["inverter"]["at_modulation_ceiling"] is True
+    assert c["inverter"]["on_point"] is False
+
+
+def test_a_seed_over_the_compensated_ceiling_is_refused_by_name_not_clamped(loop):
+    """THE SEED IS NOT THE REGULATOR'S TO MOVE.  The peak generating duty asks
+    for 789.75 V, which needs m = 1.204 once the modulator's gain is compensated
+    — no clamp can make that valid, and clamping the run's own operating point
+    down to the ceiling would be this function inventing a duty.  So no ceiling
+    is handed on, and the electromagnetic half refuses the run by name."""
+    import math
+    from motor_ai_sim.simulation.pwm import (build_pwm_source, ExcitationError,
+                                             star_equivalent_bus)
+    cp, _ = loop
+    inv = cp._inverter_settings({"star_delta": "delta", "mode": "generator",
+                                 "inverter": {"v_dc_V": 799.2,
+                                              "f_carrier_hz": 24000.0,
+                                              "v_phase_peak_V": 789.7464,
+                                              "v_delta_deg": -29.456}},
+                                rpm=20900.0)
+    assert "v_phase_peak_max_V" not in inv, "nothing is clamped to a seed"
+    # …but both numbers are still recorded, so the refusal can be read
+    assert inv["v_phase_peak_max_uncompensated_V"] == pytest.approx(795.9466,
+                                                                    abs=0.01)
+    assert inv["modulator_gain_factor"] == pytest.approx(0.94345, abs=1e-4)
+    assert cp._regulate_v1(dict(inv, v_phase_peak_seed_V=789.7464,
+                                target_I_phase_rms_A=400.0),
+                           300.0, [])["v_phase_peak_V"] > 789.7464
+    with pytest.raises(ExcitationError) as e:
+        build_pwm_source(pole_pairs=5, daxis_deg=0.0, v_phase_peak=789.7464,
+                         v_delta_deg=-29.456,
+                         v_bus=star_equivalent_bus(799.2, "delta"),
+                         f_switch_hz=24000.0, f_elec_hz=20900.0 * 5 / 60.0,
+                         v_bus_real=799.2)
+    assert "past the 1.15 linear limit" in str(e.value)
+    assert "m = 1.204" in str(e.value)
+    assert 789.7464 < 0.5 * 1.15 * math.sqrt(3.0) * 799.2
+
+
+def test_the_l155_seed_is_well_inside_and_nothing_about_it_moves(loop):
+    """The L155 rated duty — 280 steps / 14 carriers on a 750.4 V link — sits at
+    572.14 V against a compensated ceiling of 701.5 V.  A ceiling that bit there
+    would be the fix breaking the case it was not about."""
+    cp, seen = loop
+    inv = cp._inverter_settings({"star_delta": "delta",
+                                 "inverter": {"v_dc_V": 750.4,
+                                              "f_carrier_hz": 24000.0,
+                                              "v_phase_peak_V": 572.1396,
+                                              "v_delta_deg": 34.259}},
+                                rpm=20000.0)
+    assert inv["carriers_per_period"] == 14
+    assert inv["n_steps_per_period"] == 280
+    assert inv["v_phase_peak_max_V"] == pytest.approx(701.50, abs=0.05)
+    # 18 % of headroom: the regulator's whole ±40 % band on the low side and
+    # most of it on the high side is untouched by the clamp.
+    assert inv["v_phase_peak_max_V"] > 1.18 * 572.1396
+    out = cp._regulate_v1(dict(inv, v_phase_peak_seed_V=572.1396,
+                               target_I_phase_rms_A=460.0), 430.1, [])
+    assert out["v_phase_peak_V"] > 572.1396
+    assert out["v_phase_peak_at_modulation_ceiling"] is False
+
+
+def test_the_peak_generating_duty_is_refused_by_name_on_the_wrong_pack():
+    """789.75 V of delta branch fundamental needs 795.95 V of link at m = 1.15.
+    On the L155's 750.4 V pack — or on this pack's own 749.5 V floor — it is
+    m = 1.215 and the run must REFUSE, by name, rather than saturate silently;
+    on the L180's own 799.2 V nominal it is m = 1.141 and it stands."""
+    from motor_ai_sim.simulation.pwm import (MAX_MODULATION_INDEX,
+                                             modulation_index)
+    for v_dc in (749.5, 750.4):
+        assert modulation_index(789.7464, v_dc,
+                                star_delta="delta") > MAX_MODULATION_INDEX
+    assert modulation_index(789.7464, 799.2, star_delta="delta") == \
+        pytest.approx(1.1410, abs=5e-4)
+    assert modulation_index(729.6062, 799.2, star_delta="delta") == \
+        pytest.approx(1.0541, abs=5e-4)

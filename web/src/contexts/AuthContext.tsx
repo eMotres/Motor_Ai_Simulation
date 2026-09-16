@@ -42,6 +42,16 @@ export interface AuthState {
   isAdmin: boolean;
   /** True when the backend enforces auth (production). When false, role restrictions are off. */
   enforced: boolean;
+  /** Has `/api/me` ANSWERED yet?
+   *
+   *  `enforced` starts false, so before the first answer every consumer reads
+   *  "this backend does not enforce auth" — which for ~100 ms makes an
+   *  anonymous visitor to a CLOSED server look signed in.  That window is what
+   *  fired the geometry and schema probes at a door that 401s them, red in the
+   *  console of the very first page a visitor sees (live, 2026-09-16).  Wait on
+   *  this before acting on `enforced`; a restored session (`user`) needs no
+   *  wait, so nothing about a signed-in boot changes. */
+  resolved: boolean;
   /** Opens the sign-in dialog (Google button + email/password). */
   signIn: () => Promise<void>;
   logout: () => Promise<void>;
@@ -51,6 +61,7 @@ export interface AuthState {
 
 const AuthCtx = createContext<AuthState>({
   user: null, loading: false, enabled: true, tier: 'anon', isAdmin: false, enforced: false,
+  resolved: false,
   signIn: async () => {}, logout: async () => {}, getToken: async () => null,
 });
 
@@ -68,6 +79,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [tier, setTier] = useState<string>('anon');
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [enforced, setEnforced] = useState<boolean>(false);
+  // Flipped by the first /api/me answer we actually APPLY — never by the
+  // store-busy or provisional paths, both of which come back in a moment.
+  const [resolved, setResolved] = useState<boolean>(false);
   const [loginOpen, setLoginOpen] = useState<boolean>(false);
   // One short amber line when the backend could not READ its own auth store —
   // the session is kept and retried, so the user needs to know only that the
@@ -107,6 +121,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
       setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
+      setResolved(true);
       setSessionRole({ isAdmin: Boolean(j.isAdmin), enforced: Boolean(j.enforced) });
       // Sliding renewal: inside the last 7 days the backend hands back a fresh
       // 30-day token for the SAME session. Swap it in silently.
@@ -127,7 +142,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           + 'presented — keeping the session; retrying role resolution.');
         setTimeout(() => { void loadRoleRef.current?.(); }, 1500);
       }
-    } catch { setTier('anon'); setIsAdmin(false); setEnforced(false); }
+    } catch { setTier('anon'); setIsAdmin(false); setEnforced(false); setResolved(true); }
   }, []);
   loadRoleRef.current = loadRole;
 
@@ -160,7 +175,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const getToken = useCallback(async () => getStoredToken(), []);
 
   return (
-    <AuthCtx.Provider value={{ user, loading, enabled: true, tier, isAdmin, enforced, signIn, logout, getToken }}>
+    <AuthCtx.Provider value={{ user, loading, enabled: true, tier, isAdmin, enforced, resolved, signIn, logout, getToken }}>
       {children}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn} />
       <Snackbar open={storeBusy} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>

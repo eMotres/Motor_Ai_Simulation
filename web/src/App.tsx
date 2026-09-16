@@ -157,13 +157,22 @@ function App() {
   useEffect(() => { void syncMeshConfigFromServer(); }, []);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
-  const { user, isAdmin, tier, enforced } = useAuth();
+  const { user, isAdmin, tier, enforced, resolved: authResolved } = useAuth();
   // Access tiers (only enforced when the backend has AUTH_ENFORCE on; with it off,
   // dev shows everything):
   //   • Anonymous       → the Motors catalog ONLY (browse, can't work with a motor).
   //   • Signed in (free) → + the analytical Configurator.
   //   • Pro / team / admin → + the full engineering UI (geometry/mesh/FEM/optimize).
   const signedIn = !enforced || !!user;
+  // UNTIL /api/me HAS ANSWERED we do not know whether this backend enforces
+  // auth — `enforced` starts false, so `signedIn` reads true for the ~100 ms
+  // before the answer lands.  An anonymous visitor to a closed server spent
+  // that window booting the workspace: the geometry and schema probes went
+  // out and came back 401, red in the console of the first page anyone sees
+  // (live, 2026-09-16).  A RESTORED SESSION skips the wait entirely — `user`
+  // comes back from localStorage synchronously — so a signed-in boot is
+  // exactly what it was, and only an anonymous one waits.
+  const authPending = !authResolved && !user;
   const fullUI   = !enforced || isAdmin || tier === 'pro' || tier === 'team';
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
@@ -246,11 +255,11 @@ function App() {
   // open.  `signedIn` is true on an unenforced backend, so local dev boots
   // exactly as it always did, and flipping it (the sign-in dialog) re-runs this.
   useEffect(() => {
-    if (!signedIn) return;
+    if (authPending || !signedIn) return;
     fetchGeometryFromApi();
     fetchSchemaFromApi();
     loadServerSweepConfig();
-  }, [signedIn, fetchGeometryFromApi, fetchSchemaFromApi, loadServerSweepConfig]);
+  }, [authPending, signedIn, fetchGeometryFromApi, fetchSchemaFromApi, loadServerSweepConfig]);
 
   // RECONNECT: the boot probe above runs once, and a backend that was merely
   // slow to wake (first request after a restart imports the whole solver
@@ -262,13 +271,13 @@ function App() {
   // pendingGeometryEdits BEFORE adopting the server's geometry — the first
   // successful tick syncs the queue instead of clobbering it.
   useEffect(() => {
-    if (connectedToApi || !signedIn) return;
+    if (connectedToApi || authPending || !signedIn) return;
     const t = setInterval(() => {
       fetchGeometryFromApi();
       fetchSchemaFromApi();
     }, 5000);
     return () => clearInterval(t);
-  }, [connectedToApi, signedIn, fetchGeometryFromApi, fetchSchemaFromApi]);
+  }, [connectedToApi, authPending, signedIn, fetchGeometryFromApi, fetchSchemaFromApi]);
 
   // THE HEADER CHIP WHILE SIGNED OUT.  `connectedToApi` is set by the geometry
   // and schema fetches, and those answer 401 to a visitor on a server that
@@ -531,7 +540,7 @@ function App() {
             local dev server — never sees this branch and boots exactly as
             before.  The header (brand, version, the Sign in button, the theme
             toggle) is above this and stays on both sides. */}
-        {!signedIn ? <Landing /> : (
+        {authPending ? null : !signedIn ? <Landing /> : (
         <>
         {/* ── Full-width Navigation Tabs ── */}
         <Box sx={{ bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>

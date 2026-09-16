@@ -42,6 +42,12 @@ function shouldShowLanding(enforced, hasUser) {
   return enforced && !hasUser;
 }
 
+/** App.tsx: nothing is decided — and NO `/api/*` call is made — until
+ *  `/api/me` has answered, unless a session was restored from localStorage. */
+function authPending(authResolved, hasUser) {
+  return !authResolved && !hasUser;
+}
+
 /** The card list, kept in step with Landing.tsx's `FEATURES` (labels + srcs;
  *  the alt/hint prose lives in the component and is checked there by eye). */
 const FEATURES = [
@@ -65,6 +71,20 @@ test('the local dev server (auth not enforced) never gets the landing', () => {
   // straight into the workspace, signed in or not, exactly as it always did.
   assert.equal(shouldShowLanding(false, false), false);
   assert.equal(shouldShowLanding(false, true), false);
+});
+
+/* ── nothing before /api/me has answered ─────────────────────────────────── */
+
+test('an anonymous first paint waits for /api/me', () => {
+  // `enforced` starts false, so acting on it before the answer boots the
+  // workspace at a closed server and 401s in the visitor's console.
+  assert.equal(authPending(false, false), true);
+  assert.equal(authPending(true, false), false);
+});
+
+test('a restored session never waits — a signed-in boot is unchanged', () => {
+  assert.equal(authPending(false, true), false);
+  assert.equal(authPending(true, true), false);
 });
 
 /* ── what the button promises ────────────────────────────────────────────── */

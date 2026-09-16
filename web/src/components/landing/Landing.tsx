@@ -72,11 +72,14 @@ export const FEATURES: Feature[] = [
     hint: 'Temperature of the same machine, coupled to the losses of the same run.',
   },
   {
-    label: 'Reports & datasheets',
-    src: '/landing/campbell.png',
-    alt: 'Campbell diagram: whirl frequencies against shaft speed, with the '
-      + 'rated speed marked and the first critical crossing above it.',
-    hint: 'A Campbell diagram as the generated report prints it.',
+    label: 'Mechanical simulation',
+    src: '/landing/rotor-displacement.png',
+    alt: 'Deformation map of the same rotor under its retaining sleeve: the '
+      + 'whole ring — sleeve, magnets, rotor iron — coloured by how far each '
+      + 'point moves at speed, 7 to 146 micrometres, with the colour bar '
+      + 'beside it and the shape exaggerated so the bending is visible.',
+    hint: 'The rotor and its sleeve at speed, coloured by displacement |u| — '
+      + 'the shape is exaggerated 22x so the bending can be seen.',
   },
 ];
 
@@ -136,13 +139,25 @@ const FeatureCard: React.FC<{ feature: Feature }> = ({ feature }) => (
       }}
     >
       {/* The figure keeps the report's own white ground in both themes, so the
-          picture on the card and the picture on the page are one picture. */}
+          picture on the card and the picture on the page are one picture.
+          THE PICTURE IS THE CARD (user 2026-09-16, on the first live page: the
+          images were ~180 px tall and he wanted them to dominate).  1.4:1 is the
+          tallest box the three fit: the rotor is 1.15:1 and fills its height
+          exactly, the two half-machine maps are 2.2:1 and keep a white band
+          above and below — invisible, because the figures' own ground is the
+          same white.  A taller box would only add white; a wider row is the
+          other half of the answer, and that is on the grid below. */}
       <Box sx={{
-        bgcolor: '#ffffff', aspectRatio: '2.2 / 1', display: 'flex',
-        alignItems: 'center', justifyContent: 'center', p: 1,
+        bgcolor: '#ffffff', aspectRatio: '1.4 / 1', p: 0.75,
+        // `minHeight: 0` or the flex box's automatic minimum lets a picture
+        // TALLER than 3:2 (the rotor is 1.15:1) push the box past its own
+        // aspect ratio — which is how the third card came out 80 px taller
+        // than the other two, with white under their labels to match.
+        minHeight: 0, overflow: 'hidden',
       }}>
         <Box component="img" src={feature.src} alt={feature.alt} loading="lazy"
-          sx={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+          sx={{ width: '100%', height: '100%', objectFit: 'contain',
+            display: 'block' }} />
       </Box>
       <Typography component="h3" sx={{
         px: 1.75, py: 1.25, fontSize: '0.9rem', fontWeight: 600,
@@ -177,7 +192,11 @@ const Landing: React.FC = () => {
       {/* `minHeight: 100%` + centring, not `height` — the page sits in the
           middle of a tall window and still SCROLLS on a short one. */}
       <Box sx={{
-        maxWidth: 1040, mx: 'auto', px: { xs: 2.5, sm: 4 },
+        // 1400, not 1040: the pictures are the page, and three of them across a
+        // 1040 row came out 340 px wide (user 2026-09-16 on the live page).  The
+        // HEADLINE keeps its own narrower measure below — a line of type this
+        // size is unreadable at 1400.
+        maxWidth: 1400, mx: 'auto', px: { xs: 2.5, sm: 4 },
         py: { xs: 5, sm: 7 }, textAlign: 'center',
         minHeight: '100%', display: 'flex', flexDirection: 'column',
         justifyContent: 'center',
@@ -201,6 +220,7 @@ const Landing: React.FC = () => {
         <Typography component="h1" sx={{
           fontSize: { xs: '1.75rem', sm: '2.6rem' }, fontWeight: 700,
           letterSpacing: '-0.02em', lineHeight: 1.15, mb: 1.5,
+          maxWidth: 1100, mx: 'auto',
         }}>
           Design, simulate and document electric motors
         </Typography>
@@ -220,7 +240,7 @@ const Landing: React.FC = () => {
           startIcon={GOOGLE_CLIENT_ID ? <GoogleMark /> : undefined}
           sx={{
             // `alignSelf`, because the column above is a flex box and a button
-            // stretched to 1040 px is not a button, it is a bar.
+            // stretched across the whole row is not a button, it is a bar.
             alignSelf: 'center',
             textTransform: 'none', fontSize: '1rem', fontWeight: 600,
             px: 3.5, py: 1.25, borderRadius: 2,

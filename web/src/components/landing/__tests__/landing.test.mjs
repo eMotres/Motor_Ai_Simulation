@@ -53,7 +53,7 @@ function authPending(authResolved, hasUser) {
 const FEATURES = [
   { label: 'Electromagnetic FEM', src: '/landing/em-field.png' },
   { label: 'Thermal & duty cycle', src: '/landing/thermal-map.png' },
-  { label: 'Reports & datasheets', src: '/landing/campbell.png' },
+  { label: 'Mechanical simulation', src: '/landing/rotor-displacement.png' },
 ];
 
 /* ── who gets the landing ────────────────────────────────────────────────── */
@@ -126,4 +126,16 @@ test('every card picture exists under public/ and is under 300 KB', () => {
 
 test('each card names a different picture', () => {
   assert.equal(new Set(FEATURES.map((f) => f.src)).size, FEATURES.length);
+});
+
+test('nothing is left behind in public/landing', () => {
+  // The Campbell diagram was the third card until 2026-09-16 and is not shipped
+  // any more (user: show the rotor with its sleeve instead).  An asset nothing
+  // references is 16 KB every visitor's browser is never told about, and the
+  // next reader cannot tell whether it is dead or a card someone forgot.
+  const dir = path.join(WEB, 'public', 'landing');
+  const named = new Set(FEATURES.map((f) => path.basename(f.src)));
+  for (const f of fs.readdirSync(dir)) {
+    assert.ok(named.has(f), `${f} is in public/landing but no card names it`);
+  }
 });

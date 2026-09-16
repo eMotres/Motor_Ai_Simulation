@@ -54,6 +54,7 @@ cannot see.
 from __future__ import annotations
 
 import math
+from copy import copy
 from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
@@ -133,48 +134,65 @@ def solve_harmonic_eddy(
     dir_vals    : complex A_z there.
     Returns (A complex (Nn,), E0 complex (B,)).
     """
-    Nn = p.shape[1]
-    B = len(bodies)
-    K = assemble_K(p, t, nu_elem).astype(complex)
-    M = assemble_Msigma(p, t, sigma_elem).astype(complex)
-    A_block = K + 1j * omega * M
+    return _PreparedHarmonicEddy(p, t, nu_elem, sigma_elem, bodies, dir_nodes).solve(
+        I_bodies, omega, dir_vals, f_src)
 
-    # P[:,b] = M · 1_b  where 1_b is the NODE indicator of the nodes touched by body b.
-    Pcols = []
-    S = np.zeros(B, complex)
-    node_ind = []
-    for b in range(B):
-        ind = np.zeros(Nn)
-        ind[np.unique(t[:, bodies[b]].ravel())] = 1.0
-        node_ind.append(ind)
-        col = M @ ind
-        Pcols.append(col)
-        S[b] = ind @ col                      # 1_bᵀ M 1_b = ∫_b σ dA
-    P = np.array(Pcols).T if B else np.zeros((Nn, 0), complex)   # (Nn, B)
 
-    # Assemble the (Nn+B) bordered system.
-    top = sp.hstack([A_block, sp.csr_matrix(-P)], format="csr")
-    bot = sp.hstack([sp.csr_matrix(-1j * omega * P.T), sp.csr_matrix(np.diag(S))],
-                    format="csr")
-    KK = sp.vstack([top, bot], format="csr").tolil()
-    rhs = np.zeros(Nn + B, complex)
-    if f_src is not None:
-        rhs[:Nn] = f_src
-    rhs[Nn:] = np.asarray(I_bodies, complex)
+class _PreparedHarmonicEddy:
+    """Invariant assembly for one region's frequency sweep, never a global cache.
 
-    # Dirichlet on A (penalty-free: eliminate rows/cols).
-    free = np.ones(Nn + B, bool)
-    free[dir_nodes] = False
-    KK = KK.tocsr()
-    # move known A to RHS
-    A_full = np.zeros(Nn + B, complex)
-    A_full[dir_nodes] = dir_vals
-    rhs = rhs - KK @ A_full
-    KKf = KK[free][:, free]
-    sol = spsolve(KKf.tocsc(), rhs[free])
-    out = A_full.copy()
-    out[free] = sol
-    return out[:Nn], out[Nn:]
+    Matrices and body constraints own their assembled data; no solution, source
+    or boundary-value array is retained between frequencies. A changed mesh,
+    material, body incidence or boundary-node set needs a new instance.
+    """
+    def __init__(self, p, t, nu_elem, sigma_elem, bodies, dir_nodes):
+        Nn = p.shape[1]
+        B = len(bodies)
+        self.Nn, self.B = Nn, B
+        self.K = assemble_K(p, t, nu_elem).astype(complex)
+        self.M = assemble_Msigma(p, t, sigma_elem).astype(complex)
+
+        # P[:,b] = M · 1_b where 1_b marks nodes touched by body b.
+        Pcols = []
+        S = np.zeros(B, complex)
+        for b in range(B):
+            ind = np.zeros(Nn)
+            ind[np.unique(t[:, bodies[b]].ravel())] = 1.0
+            col = self.M @ ind
+            Pcols.append(col)
+            S[b] = ind @ col                  # 1_bᵀ M 1_b = ∫_b σ dA
+        self.P = np.array(Pcols).T if B else np.zeros((Nn, 0), complex)
+        self.S = S
+        self.dir_nodes = copy(dir_nodes)
+        self.free = np.ones(Nn + B, bool)
+        self.free[self.dir_nodes] = False
+
+    def solve(self, I_bodies, omega, dir_vals, f_src=None):
+        Nn, B = self.Nn, self.B
+        P, S, free = self.P, self.S, self.free
+        A_block = self.K + 1j * omega * self.M
+
+        # Keep the original frequency-dependent assembly and elimination.
+        # Each frequency has different numeric factors and calls spsolve anew.
+        top = sp.hstack([A_block, sp.csr_matrix(-P)], format="csr")
+        bot = sp.hstack([sp.csr_matrix(-1j * omega * P.T), sp.csr_matrix(np.diag(S))],
+                        format="csr")
+        KK = sp.vstack([top, bot], format="csr").tolil()
+        rhs = np.zeros(Nn + B, complex)
+        if f_src is not None:
+            rhs[:Nn] = f_src
+        rhs[Nn:] = np.asarray(I_bodies, complex)
+
+        # Dirichlet on A (penalty-free: eliminate rows/cols).
+        KK = KK.tocsr()
+        A_full = np.zeros(Nn + B, complex)
+        A_full[self.dir_nodes] = dir_vals
+        rhs = rhs - KK @ A_full
+        KKf = KK[free][:, free]
+        sol = spsolve(KKf.tocsc(), rhs[free])
+        out = A_full.copy()
+        out[free] = sol
+        return out[:Nn], out[Nn:]
 
 
 def eddy_loss_per_body(
@@ -302,6 +320,7 @@ def region_eddy_from_history(
     bnodes = np.where(bound_mask)[0]
     amax = float(np.abs(Ah[1:, bnodes]).max()) if Ah.shape[0] > 1 else 0.0
     P = np.zeros(len(bodies)); used: List[float] = []
+    prepared = None
     for k in range(1, min(n_harm, Ah.shape[0])):
         Abk = 2.0 * Ah[k]
         if amax > 0 and float(np.abs(Abk[bnodes]).max()) < amp_floor * 2.0 * amax:
@@ -309,8 +328,10 @@ def region_eddy_from_history(
         omega = 2.0 * math.pi * k / period_s
         I_k = ([complex(2.0 * Ih[b][k]) for b in range(len(bodies))]
                if Ih is not None else [0.0] * len(bodies))
-        A, E0 = solve_harmonic_eddy(p, t, nu_elem, sigma_elem, bodies, I_k, omega,
-                                    bnodes, Abk[bnodes])
+        if prepared is None:
+            prepared = _PreparedHarmonicEddy(
+                p, t, nu_elem, sigma_elem, bodies, bnodes)
+        A, E0 = prepared.solve(I_k, omega, Abk[bnodes])
         P += eddy_loss_per_body(p, t, sigma_elem, A, E0, bodies, omega, L)
         used.append(k / period_s)
     return P, used

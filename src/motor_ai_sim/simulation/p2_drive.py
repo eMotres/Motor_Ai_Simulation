@@ -136,6 +136,38 @@ class P2Drive:
         _m = np.zeros(nb, bool); _m[np.asarray(_r, int)] = True
         self.p_mask = _m
 
+    def _check_path_current_conservation(self, currents, imposed):
+        """Check each solder joint in amperes, including zero-current coils."""
+        if not np.all(np.isfinite(currents)) or not np.all(np.isfinite(imposed)):
+            raise RuntimeError(
+                "series strand paths: non-finite path or imposed coil current")
+        with np.errstate(over="ignore", invalid="ignore"):
+            total = np.asarray(self.pQ.T @ currents).ravel()
+            magnitude = np.asarray(abs(self.pQ).T @ np.abs(currents)).ravel()
+            count = np.asarray(abs(self.pQ).sum(axis=0)).ravel()
+            error = total - imposed
+            # Preserve the loaded-current criterion, but use a 1 pA absolute
+            # floor at a zero crossing. Circulating paths can be large while
+            # their sum is zero: n*eps*sum(abs(i)) is the summation-roundoff
+            # scale, with a 64-fold allowance for the bordered solve. Using
+            # 1e-8 times circulation would hide real leakage. All scales are
+            # LOCAL to this coil, never borrowed from a heavily loaded one.
+            tolerance = (1e-12 + 1e-8 * np.abs(imposed)
+                         + 64 * np.finfo(float).eps * np.maximum(count, 1.0)
+                         * magnitude)
+        bad = (~np.isfinite(total) | ~np.isfinite(magnitude)
+               | ~np.isfinite(error) | ~np.isfinite(tolerance)
+               | (np.abs(error) > tolerance))
+        if np.any(bad):
+            group = int(np.flatnonzero(bad)[0])
+            raise RuntimeError(
+                "series strand paths: coil current not conserved "
+                "(coil index %d: sum %.12g A, imposed %.12g A, error %.3e A, "
+                "tolerance %.3e A, sum(abs(paths)) %.3e A) — check the "
+                "incidence map and bordered linear solve"
+                % (group, total[group], imposed[group], error[group],
+                   tolerance[group], magnitude[group]))
+
     # Line-to-line Crank–Nicolson circuit residual + its 2×2 Jacobian —
     # simulation/drive.py.  R_phase is the only run-dependent term, so it is
     # bound here rather than captured.
@@ -414,15 +446,7 @@ class P2Drive:
                     # paths of a coil must still sum to the ampere-turns the
                     # transposed rows imposed.  If this ever drifts, the field
                     # is being driven by a winding the caller did not ask for.
-                    _err = np.asarray(self.pQ.T @ _ip).ravel() - _Ig
-                    _sc = max(float(np.max(np.abs(_Ig))), 1e-30)
-                    if float(np.max(np.abs(_err))) > 1e-8 * _sc:
-                        raise RuntimeError(
-                            "series strand paths: coil current not conserved "
-                            "(max %.3e A against %.3e A imposed) — Kirchhoff "
-                            "at the solder joint is a ROW of this system, so a "
-                            "violation means the incidence map is wrong"
-                            % (float(np.max(np.abs(_err))), _sc))
+                    self._check_path_current_conservation(_ip, _Ig)
                     # the circulating part: how far each path sits from the
                     # equal split its coil would have if it were transposed.
                     _kg = np.asarray(self.pQ.sum(axis=0)).ravel()
@@ -584,9 +608,23 @@ class P2Drive:
         nit = 0; rrel = 1.0
         rcc = np.array([np.inf, np.inf])
 
+        # Same fixed-projection optimization as eddy_solve, scoped to THIS
+        # frame: both the slip projection and the snapped timestep can change
+        # on the next call. Keep the timestep-scaled mass matrix out of the
+        # per-Newton sparse merge/projection and line-search matrix additions.
+        if _SB_FAST_LA:
+            _Pt = Pro.T.tocsr()
+            _Pf = Pro.tocsc()[:, free].tocsr()
+            _PfT = _Pf.T.tocsr()
+            _Msd_ff = (_PfT @ (Msd_k @ _Pf)).tocsr()
+
         def _res_ve(Av, Uv, ia, ib, Km):
-            rf = np.asarray(Pro.T @ ((Km + Msd_k) @ Av - self.G @ Uv
-                                     - rhs_e)).ravel()[free]
+            if _SB_FAST_LA:
+                _t = Km @ Av + Msd_k @ Av - self.G @ Uv - rhs_e
+                rf = np.asarray(_Pt @ _t).ravel()[free]
+            else:
+                rf = np.asarray(Pro.T @ ((Km + Msd_k) @ Av - self.G @ Uv
+                                         - rhs_e)).ravel()[free]
             rc = (Sdt_k * Uv - np.asarray(self.G.T @ Av).ravel()
                   - (dtk * (ia * self.ed_ca + ib * self.ed_cb) - _GtAp))
             rcv = self.circ_r(self.psi(Av), ia, ib, iv_prev, psi_prev, Vt, dtk)
@@ -612,7 +650,10 @@ class P2Drive:
                 T = self.p2.tangent2(info)
                 if T is not None:
                     J = Km + T
-            Jff = (Pro.T @ (J + Msd_k) @ Pro).tocsr()[free][:, free]
+            if _SB_FAST_LA:
+                Jff = ((_PfT @ (J @ _Pf)) + _Msd_ff).tocsr()
+            else:
+                Jff = (Pro.T @ (J + Msd_k) @ Pro).tocsr()[free][:, free]
             Mb = _bmat([[Jff, -Bf], [-Bf.T, _diags(Sdt_k)]]).tocsc()
             # column 0: the (A, U) correction at frozen current
             # columns 1,2: ∂(A, U)/∂i_A and ∂(A, U)/∂i_B — a pure CONSTRAINT

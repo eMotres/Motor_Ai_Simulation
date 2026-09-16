@@ -169,14 +169,22 @@ class SlipProjection:
             re = self._re_dofs[e]
             if re is None:
                 continue
-            # the rotor edge (a,b) maps to the stator edge (j[a], j[b]); it is
-            # a real mesh edge only when the two endpoints stay angularly
-            # consecutive with the SAME sign (i.e. no wrap between them).
-            if sg[a] != sg[b]:
-                continue
-            se = self.edge_dof(int(sring[j[a]]), int(sring[j[b]]))
+            if self.full_ring:
+                se = self.edge_dof(int(sring[j[a]]), int(sring[j[b]]))
+                edge_sign = float(sg[a])
+            else:
+                # A sector has Nring-1 intervals but two representations of
+                # its cut vertex (0 and Nring-1). Vertex ring_map deliberately
+                # retains that inclusive endpoint; using its j[a], j[b] for
+                # an EDGE therefore drops the interval crossing the cut.
+                # Map the interval's unwrapped start instead. Its interior
+                # has one wrap count and sign, even when its endpoint signs
+                # differ. divmod also handles negative/multiple turns.
+                wraps, start = divmod(a + int(m_shift), Nring - 1)
+                se = self.edge_dof(int(sring[start]), int(sring[start + 1]))
+                edge_sign = float(self.bc_sign if wraps % 2 else 1.0)
             if se is not None:
-                suf.union(int(re), int(se), float(sg[a]))
+                suf.union(int(re), int(se), edge_sign)
         roots = [suf.find(i) for i in range(N2)]
         rid = np.array([r for r, _ in roots])
         rsg = np.array([s for _, s in roots], float)

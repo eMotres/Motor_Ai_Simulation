@@ -313,6 +313,19 @@ def _arkkio_torque_p2(mesh, A_vec, basis, r_in_m: float, r_out_m: float,
     For a P2 field B is linear in the element (fast convergence, smooth torque);
     for a P1 field B is constant per element (the centroid value), so this matches
     the classic `_arkkio_torque`.  Returns the SECTOR torque (caller ×n_sectors)."""
+    return _prepare_arkkio_torque_p2(
+        mesh, basis, r_in_m, r_out_m, stack_length_m)(A_vec)
+
+
+def _prepare_arkkio_torque_p2(mesh, basis, r_in_m: float, r_out_m: float,
+                              stack_length_m: float):
+    """Prepare a torque evaluator for ONE fixed mesh, element and annulus.
+
+    The sliding-band solve changes its constraint projection and field each
+    frame, not its mesh. Restrict the basis and compute polar coordinates once
+    for that run. The returned callable retains no field or previous torque;
+    callers changing the mesh, radii or element must prepare a new evaluator.
+    """
     from skfem import Basis
     P, T = mesh.p, mesh.t
     cx = (P[0, T[0]] + P[0, T[1]] + P[0, T[2]]) / 3.0
@@ -320,16 +333,20 @@ def _arkkio_torque_p2(mesh, A_vec, basis, r_in_m: float, r_out_m: float,
     rc = np.hypot(cx, cy)
     gap_idx = np.where((rc >= r_in_m) & (rc <= r_out_m))[0]
     if gap_idx.size == 0:
-        return 0.0
+        return lambda A_vec: 0.0
     gb = Basis(mesh, basis.elem, elements=gap_idx)   # same element order as the field
-    Bx, By, dx = _p2_B_at_quad(gb, A_vec)
     X = gb.global_coordinates().value          # (2, n_gap_elem, n_qp) metres
     r = np.sqrt(X[0] ** 2 + X[1] ** 2)
     cosp, sinp = X[0] / r, X[1] / r
-    Br = Bx * cosp + By * sinp
-    Bph = -Bx * sinp + By * cosp
-    val = float(np.sum(dx * r * Br * Bph))
-    return stack_length_m / (MU0 * (r_out_m - r_in_m)) * val
+
+    def torque(A_vec):
+        Bx, By, dx = _p2_B_at_quad(gb, A_vec)
+        Br = Bx * cosp + By * sinp
+        Bph = -Bx * sinp + By * cosp
+        val = float(np.sum(dx * r * Br * Bph))
+        return stack_length_m / (MU0 * (r_out_m - r_in_m)) * val
+
+    return torque
 
 def band_limit_torque(T_series, n_steps_per_period, n_periods):
     """Reconstruct T(t) from the electrical orders a BALANCED three-phase machine

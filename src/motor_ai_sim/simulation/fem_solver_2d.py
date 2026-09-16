@@ -52,6 +52,10 @@ from typing import Dict, List, Mapping, Tuple, Optional
 
 import numpy as np
 
+from motor_ai_sim.simulation.pardiso_lifetime import (
+    own_pardiso as _own_pardiso, pardiso_scope as _pardiso_scope,
+)
+
 # ── Lower layers ─────────────────────────────────────────────────────────────
 # Domain tags / mesh flags and the whole geometry->mesh stage now live in their
 # own modules.  Re-exported here rather than merely imported: routes.simulation,
@@ -114,6 +118,7 @@ from motor_ai_sim.simulation.field_ops import (  # noqa: F401  (re-export)
     _mu_r_from_bh, _mu_r_from_bh_vec, _smooth_demag_H,
     _per_triangle_B, _triangle_areas, _maxwell_stress_torque,
     _arkkio_torque, _p2_B_at_quad, _arkkio_torque_p2,
+    _prepare_arkkio_torque_p2,
     band_limit_torque, end_winding_factor_geom, copper_loss_W,
     coil_slot_index, coil_copper_areas, coil_copper_area_total_m2,
 )
@@ -2510,6 +2515,7 @@ def _project_br(wc: dict, cen_new: np.ndarray, tag_new: np.ndarray):
     return out, n_hit
 
 
+@_pardiso_scope
 def fem_transient_sliding_band(
     n_steps_per_period: int = 12,
     n_periods: float = 1.0,
@@ -4428,13 +4434,15 @@ def fem_transient_sliding_band(
                     _os_sb.environ["PYPARDISO_MKL_RT"] = str(_mkl_rt_path)
             except Exception:   # older/rearranged pypardiso — just pay the glob
                 pass
-        _pardiso2 = _pypard2.PyPardisoSolver()
+        _pardiso2 = _own_pardiso(_pypard2.PyPardisoSolver())
     except Exception as _pae:
         log.info("pypardiso unavailable (%s) — using SuperLU for P2", _pae)
         _pardiso2 = None
     b2 = Basis(mesh_all, _P2E())
     b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
     N2 = b2.N
+    _torque2 = _prepare_arkkio_torque_p2(
+        mesh_all, b2, p.r_rotor_out, p.r_stator_in, p.stack_length)
     # Early-stop tolerance on the ν fixed point for every successive-
     # substitution loop in this branch: the magnetostatic Picard FALLBACK, the
     # voltage-drive p2_drive.v_picard fallback, and the dq phasor initialiser.
@@ -4804,7 +4812,11 @@ def fem_transient_sliding_band(
 
         _gcols = [c["g"] for c in _ed_con]
         if _gcols:
-            _G2 = _csr(np.column_stack(_gcols))
+            from scipy.sparse import csc_matrix as _csc2, hstack as _hstack2
+            # CSC columns avoid a dense dof-by-body temporary and keep each
+            # column's index pointer small; the assembled operator stays CSR.
+            _G2 = _hstack2([_csc2(g.reshape(-1, 1)) for g in _gcols],
+                          format="csr")
             _Sdt2 = np.array([c["S"] for c in _ed_con], float) * dt
         _Msd2 = (_Msig2 * (1.0 / dt)).tocsr()
         log.info("P2 eddy: %d constrained bodies (%d copper wires, %d rotor "
@@ -6238,7 +6250,9 @@ def fem_transient_sliding_band(
             # element's loss DENSITY [W/m³] — intensive, so no sector or
             # stack-length factor belongs here (the volume integral below
             # puts them back).
-            if _ed_elems.size and k >= 0:
+            # Only the field snapshot consumes this history; animation frames
+            # carry A/B without a loss map. Keep all frames when one is requested.
+            if return_field and _ed_elems.size and k >= 0:
                 _Uel = np.zeros(_ed_elems.size)
                 for _ci, _c in enumerate(_ed_con):
                     _Uel[_ed_uloc[_ci]] = float(_Ued[_ci])
@@ -6288,8 +6302,7 @@ def fem_transient_sliding_band(
         # WHICH frame and by WHICH path, so log it (DEBUG — one line per frame).
         log.debug("P2 frame %d: %s, %d its, res=%.3e",
                   k, "newton" if _newton_ok else "picard", _nit, _res)
-        Tq = _arkkio_torque_p2(mesh_all, A2, b2, p.r_rotor_out,
-                               p.r_stator_in, p.stack_length) * NS
+        Tq = _torque2(A2) * NS
         _T2.append(Tq)
         _pa, _pb, _pc = _psi2(A2)
         _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
@@ -7022,11 +7035,9 @@ def fem_transient_sliding_band(
             log.warning("P2 loss-density map failed: %s", _lde)
 
     # ── metrics ──────────────────────────────────────────────────────────
-    # Raw Maxwell-stress (Arkkio) torque — kept as a DIAGNOSTIC only.  On the
-    # node-repaired sliding band the gap field is contaminated UNDER LOAD, so
-    # the volume-weighted Maxwell integral is radius-INCONSISTENT (measured
-    # 0.78..1.30 Nm across integration bands for one converged frame) and
-    # over-reads the mean torque ~35 % vs the energy method / ANSYS.
+    # Raw Maxwell-stress (Arkkio) torque, retained as a diagnostic. Its accuracy
+    # depends on the gap field and discretization. Historical bias measurements
+    # do not establish a universal error for the current P2/source formulation.
     _T2raw = list(_T2)                       # preserve the Maxwell series (diag)
     # ── Torque harmonic spectrum over ONE electrical period ──────────────────
     # The single most telling diagnostic for "is this periodic or chaotic": a
@@ -7041,8 +7052,9 @@ def fem_transient_sliding_band(
     T_harm_order, T_harm_amp = _torque_harmonics(_T2raw, n_steps_per_period)
     T_arr = np.asarray(_T2, float)
     T_maxwell_avg = float(T_arr.mean()) if T_arr.size else 0.0
-    # HYBRID torque (energy-consistent MEAN + Maxwell-stress RIPPLE):
-    # simulation/sb_postproc.py — ONE definition, shared with the P1 path.
+    # Legacy hybrid: fundamental space-vector mean plus raw Maxwell AC.
+    # This is not general virtual work; see sb_postproc.hybrid_torque and
+    # docs/solver-torque-validation-plan.md for its assumptions and open issues.
     _torque_method = "maxwell_stress"
     try:
         _T2, _torque_method = _hybrid_torque(
@@ -7052,8 +7064,12 @@ def fem_transient_sliding_band(
         log.warning("P2 hybrid torque failed (%s) — using Maxwell series", _te)
     T_arr = np.asarray(_T2, float)
     Tavg = float(T_arr.mean()) if T_arr.size else 0.0
+    # The retained window is uniform, including after mixed-resolution settling.
+    # Its span is sample count * scheduled step (not the first-to-last span):
+    # rounding and settling trims can make it differ from requested n_periods.
     _Tf, Trip, Trip_raw, Tnoise = band_limit_torque(
-        _T2, int(n_steps_per_period), int(round(n_periods)))
+        _T2, int(n_steps_per_period),
+        len(_T2) * float(_sched_dth[-1]) / period_mech)
     _omega_m2 = 2.0 * math.pi * rpm / 60.0
     P_airgap_avg2 = float(Tavg * _omega_m2)
     P_mech_avg2 = P_airgap_avg2 - (P_fe_avg2 + P_mag_avg2 + P_shaft_avg2

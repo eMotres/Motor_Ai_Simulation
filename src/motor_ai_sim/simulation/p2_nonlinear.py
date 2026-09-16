@@ -32,6 +32,8 @@ from skfem.assembly.form.coo_data import COOData as _COOData
 from skfem.helpers import dot as _dot, grad as _grad
 from scipy.sparse.linalg import splu as _splu
 
+from motor_ai_sim.simulation.pardiso_lifetime import release_pardiso
+
 from motor_ai_sim.simulation.field_ops import (
     MU0, _grad_at_quad, _mu_r_from_bh_vec, _p2_B_at_quad,
 )
@@ -236,6 +238,7 @@ class P2Nonlinear:
             except Exception as _pe2:
                 self._log.warning(
                     "pypardiso solve failed (%s) — SuperLU fallback", _pe2)
+                release_pardiso(self._pardiso)
                 self._pardiso = None
                 self._pat = None
         return _splu(Mff).solve(rhs)

@@ -93,12 +93,12 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                   i_b: Sequence[float], i_c: Sequence[float],
                   t_maxwell: Sequence[float], pole_pairs: int,
                   n_parallel: int = 1) -> Tuple[List[float], str]:
-    """Energy-consistent MEAN + Maxwell-stress RIPPLE.  Returns (T(t), method).
+    """Fundamental space-vector mean + raw Maxwell AC. Returns (T(t), method).
 
     ``psi_*`` and ``i_*`` are PER-BRANCH (one parallel path), which is how the
     solver carries them everywhere — ``_sc_psi2`` divides psi by n_parallel and
-    the excitation's i_peak is ``I_phase / n_parallel``.  The virtual-work
-    identity is in PHASE quantities, so ``n_parallel`` restores the phase
+    the excitation's i_peak is ``I_phase / n_parallel``. The space-vector
+    expression uses PHASE quantities, so ``n_parallel`` restores the phase
     current (n_parallel branches carry the phase current between them, each at
     the same flux linkage).  Omitting it reported ``T_true / n_parallel``; it
     was invisible while every config in the repo had one parallel path, and it
@@ -106,20 +106,28 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
     machine be evaluated on its own connection (F3).  ``P_elec_in`` in the
     solver already carried exactly this factor for exactly this reason.
 
-    Two physical facts, each measured by the method that is right for it:
-     • MEAN — the ANSYS energy method (virtual work) via the terminal flux
-       linkages ψ and currents I:  <T> = (3/2)·p·<ψα·iβ − ψβ·iα>, the airgap
-       power balance P=T·ω.  It never touches the gap field, so it is immune
-       to the sliding-band DC contamination that makes the raw Maxwell mean
-       radius-inconsistent (~+35 %); validated vs ω·ψ_pm back-EMF and ANSYS.
-     • RIPPLE — the Maxwell-stress torque T(t).  The flux-linkage torque is
-       winding-FILTERED, so it is smooth and CANNOT see cogging or the slot
-       harmonics → it under-reports ripple (1.7 % vs the real ~5-6 %).  The
-       Maxwell σ_rθ integral DOES resolve them (P2 noise floor →0 with mesh).
-    So the reported T(t) = Maxwell AC (real ripple) re-centred on the energy
-    mean (correct DC).  This is NOT tuning: the DC bias we remove is the
-    measured slip-band contamination; the AC we keep is the physical ripple.
-    No-load (I≈0) keeps the raw Maxwell cogging directly (energy torque = 0).
+    The selected mean is (3/2)*p*<ψα*iβ - ψβ*iα>. This is the usual torque
+    identity for a rotationally covariant sinusoidal-winding dq model, not a
+    general finite-element virtual-work calculation. Arbitrary temporal
+    current waveforms alone need not invalidate that identity; explicit
+    rotor-position dependence of coenergy, spatial harmonics and cogging
+    require additional terms. Eddy-current redistribution and irreversible
+    magnet changes require a verified energy/port-work balance too. Agreement
+    at particular validated operating points is not a universal guarantee.
+
+    The reported waveform is raw Maxwell torque minus its mean plus the
+    space-vector mean. Its retained AC can contain physical ripple AND mesh
+    or sliding-band artifacts; this helper does not establish convergence.
+    Historical mean discrepancies do not establish a fixed Maxwell bias for
+    every geometry, material or operating point.
+
+    The legacy selector uses peak PER-BRANCH current > 1 A, subject to the
+    existing terminal-data check. Otherwise it returns the raw Maxwell series,
+    including at no-load. This threshold is not a physical conservation law
+    and can change the selected mean discontinuously. Zero terminal current
+    does not rule out cogging or eddy drag. Numerical behavior and the legacy
+    method strings are retained pending the energy-method validation plan in
+    docs/solver-torque-validation-plan.md.
     """
     _pa = np.asarray(psi_a, float); _pb = np.asarray(psi_b, float)
     _pc = np.asarray(psi_c, float)
@@ -135,9 +143,9 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                * (_psial * _ibe - _psibe * _ial))
         _emean = float(_Te.mean())
         _mx = np.asarray(t_maxwell, float)     # raw Maxwell σ_rθ series
-        # real Maxwell ripple, DC re-centred on the energy-consistent mean:
+        # Retain raw Maxwell AC; select the fundamental space-vector mean.
         return (_mx - _mx.mean() + _emean).tolist(), "energy_mean+maxwell_ripple"
-    # no-load (or no terminal data) → keep the Maxwell cogging series
+    # Legacy low-current/terminal-data fallback: retain the raw Maxwell series.
     return list(t_maxwell), "maxwell_stress"
 
 

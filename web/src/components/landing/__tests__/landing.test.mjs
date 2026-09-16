@@ -48,6 +48,14 @@ function authPending(authResolved, hasUser) {
   return !authResolved && !hasUser;
 }
 
+/** contexts/AuthContext.tsx `apiReady` — the gate every boot-time fetch is
+ *  behind (mesh config, materials library, assignments, part states, module
+ *  manifests, the working-motor POST). */
+function apiReady(resolved, hasUser, enforced) {
+  if (!resolved && !hasUser) return false;
+  return !enforced || hasUser;
+}
+
 /** The card list, kept in step with Landing.tsx's `FEATURES` (labels + srcs;
  *  the alt/hint prose lives in the component and is checked there by eye). */
 const FEATURES = [
@@ -85,6 +93,30 @@ test('an anonymous first paint waits for /api/me', () => {
 test('a restored session never waits — a signed-in boot is unchanged', () => {
   assert.equal(authPending(false, true), false);
   assert.equal(authPending(true, true), false);
+});
+
+/* ── the gate the boot fetches sit behind ────────────────────────────────── */
+
+test('an anonymous visit calls nothing — before or after /api/me answers', () => {
+  // Before the answer (`enforced` still false, its useless default) …
+  assert.equal(apiReady(false, false, false), false);
+  // … and after it, on a server that publishes nothing: six 401s measured on
+  // one anonymous load, 2026-09-16 (parts, materials, materials/library,
+  // modules, mesh/config, POST presets).
+  assert.equal(apiReady(true, false, true), false);
+});
+
+test('signing in opens the gate', () => {
+  assert.equal(apiReady(true, true, true), true);
+});
+
+test('a restored session calls immediately, and the dev server always does', () => {
+  // `user` comes back from localStorage synchronously — no wait, so a
+  // signed-in boot is byte for byte what it was …
+  assert.equal(apiReady(false, true, true), true);
+  // … and an UNENFORCED backend (local dev) opens the moment /api/me answers,
+  // signed in or not, exactly as it always did.
+  assert.equal(apiReady(true, false, false), true);
 });
 
 /* ── what the button promises ────────────────────────────────────────────── */

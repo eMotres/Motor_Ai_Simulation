@@ -3634,7 +3634,14 @@ class CadQueryCache:
     
     def __init__(self, cache_dir: str = "./cadquery_cache"):
         self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(exist_ok=True)
+        # Constructing the cache must never be the reason a route 500s: the
+        # cache is an OPTIMISATION.  An unwritable parent (container: /app is
+        # root-owned, the process is uid 10001) leaves it simply unusable —
+        # `exists()` stays False and every read misses.
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         
     def get_cache_path(self, param_hash: str) -> Path:
         return self.cache_dir / param_hash
@@ -3667,11 +3674,37 @@ class CadQueryCache:
         return stl_files
     
     def clear_all(self):
-        """Clear all cached geometry."""
+        """Clear all cached geometry — the CONTENTS, never the directory itself.
+
+        Removing and re-creating ``cache_dir`` needs write permission on its
+        PARENT, which the container does not have: the API runs as uid 10001
+        with WORKDIR /app, /app is root-owned and only /app/cadquery_cache is
+        chowned to the service account (deploy/Dockerfile.api).  ``rmtree`` of
+        the directory therefore raised
+
+            PermissionError: [Errno 13] Permission denied: 'cadquery_cache'
+
+        out of every ``PUT /api/geometry`` on production (2026-09-16) — the
+        route calls this before it writes, so no geometry edit could be saved
+        at all.  Deleting only the CHILDREN needs write permission on the cache
+        directory itself, which is exactly what we are given.
+
+        A missing directory is not an error: nothing is cached, so the cache is
+        already clear.  It is re-created so the next ``save`` has somewhere to
+        go, and even that is tolerated if the parent refuses.
+        """
         import shutil
-        if self.cache_dir.exists():
-            shutil.rmtree(self.cache_dir)
-            self.cache_dir.mkdir(exist_ok=True)
+        if not self.cache_dir.exists():
+            try:
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass        # unwritable parent — nothing was cached anyway
+            return
+        for child in self.cache_dir.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
     
     def clear_hash(self, param_hash: str):
         """Clear a specific cached geometry by hash."""

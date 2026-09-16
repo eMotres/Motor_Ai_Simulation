@@ -505,6 +505,34 @@ export const useMotorStore = create<MotorState>()(
             });
             return;
           }
+          // 500 = the server ANSWERED and blew up inside the route.  It is not
+          // an outage, so it must not go down the network path below: that one
+          // marks the backend disconnected and queues the edit, App's 5 s
+          // reconnect loop replays the queue, the PUT 500s again, the edit is
+          // re-applied locally … forever.  Live on production 2026-09-16 the
+          // Geometry tab BLINKED at ~6 s (nginx: a wall of `PUT /api/geometry
+          // → 500 [Errno 13] Permission denied: 'cadquery_cache'`), because
+          // every replay rewrote the geometry object and rebuilt the viewer.
+          // A broken route gets ONE red line naming it, and no retry.
+          // 502/503/504 stay on the outage path on purpose — those come from
+          // nginx while the API restarts, and replaying then is exactly right.
+          if (response.status === 500) {
+            let detail = '';
+            try { detail = String((await response.json())?.detail ?? ''); } catch { /* non-JSON */ }
+            set({
+              isLoading: false,
+              isGeometryUpdating: false,
+              connectedToApi: true,           // it answered — the backend is up
+              pendingGeometryEdits: null,     // never replay into a broken route
+              error: `The server could not save this edit (500)${detail ? ` — ${detail}` : ''}`,
+              geometryParamErrors: [{
+                field: '', value: null, kind: 'field',
+                message: `The server could not save this edit (500)`
+                  + `${detail ? ` — ${detail}` : ''}. Nothing was written.`,
+              }],
+            });
+            return;
+          }
           if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
           }

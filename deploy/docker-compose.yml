@@ -91,8 +91,22 @@ services:
     # AX42 (Ryzen 7 PRO 8700GE, 8 c / 16 t, 64 GB).  QUEUE_WORKERS=2 = cores/4
     # per §2.4; the cpuset leaves 4 threads for nginx, restic and the host.
     # Re-tune on an AX102: cpuset "0-27", QUEUE_WORKERS=4.
+    #
+    # THE BOX IS SHARED NOW (2026-09-16).  The ERP runs on the same node as its
+    # own compose project in /srv/erp, so "the solver takes what it likes" is no
+    # longer a safe default: a coupled loop that pins every thread and eats the
+    # page cache is an ERP that times out while somebody is invoicing.  The
+    # fences below are a CEILING and a PRIORITY, not a reservation —
+    #   cpus 12      hard quota: 12 of the 16 threads, whatever the cpuset allows
+    #   mem_limit    40 GB, leaving the ERP and the host 24
+    #   cpu_shares   512 against the ERP's 2048, so under contention the ERP
+    #                wins the scheduler and the solver simply runs slower
+    # — which is the right trade: a solve that takes 10 % longer is invisible, an
+    # ERP request that blocks for a minute is not.
     cpuset: "0-11"
-    mem_limit: 48g
+    cpus: 12
+    mem_limit: 40g
+    cpu_shares: 512
     # gmsh/OCP are happy with the default; PARDISO likes a real /dev/shm.
     shm_size: 2g
 
@@ -112,5 +126,10 @@ services:
     ports:
       # host nginx + certbot terminate TLS in front and proxy to 127.0.0.1:8080
       - "127.0.0.1:8080:80"
+    # nginx over a static bundle: one thread and a quarter of a gigabyte is more
+    # than it has ever used, and the same 512 shares as the API keep it behind
+    # the ERP under contention (see the api block above).
     cpuset: "12-13"
-    mem_limit: 1g
+    cpus: 1
+    mem_limit: 256m
+    cpu_shares: 512

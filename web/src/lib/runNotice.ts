@@ -2,8 +2,10 @@
  * What the Run button says when a solve does not happen.
  *
  * 2026-09-16, production.  "Coupled thermal" was on and the loaded duty was
- * `peak` — an S3 duty — so `POST /api/coupled/run` was refused, correctly and
- * with a sentence an engineer can act on:
+ * `peak` — an S3 duty — so `POST /api/coupled/run` was refused with a sentence
+ * an engineer can act on (the refusal itself is gone since that afternoon: the
+ * loop now FINDS the duty ratio, and what arrives here instead is the outcome
+ * sentence when the ratio the duty asks for does not fit):
  *
  *   422 duty 'peak' is an S3 duty — 25.0 % of a 60.0 s cycle, not a point the
  *       machine sits at. The coupled loop iterates … until they SETTLE …
@@ -63,8 +65,15 @@ export function runNoticeFor(raw: string | null | undefined): RunNotice | null {
   if (!m) return null;
 
   // A retry in flight is progress being made, not a failure to report as one.
+  // …and so is a DUTY CYCLE that does not fit (2026-09-16): the coupled loop
+  // solved the machine and the machine cannot hold the ratio the duty asks for,
+  // which is the answer the user came for — printing "not solved" over it would
+  // be the panel calling a result a failure.  The prefix is written by
+  // `coupledApi.coupledRegimeNotice`, so the classification is a contract
+  // between two modules and not a guess at prose.
   const kind: RunNoticeKind =
-    /reconnecting and re-solving/i.test(m) ? 'info' : 'error';
+    /reconnecting and re-solving/i.test(m) || /^duty cycle:/i.test(m)
+      ? 'info' : 'error';
 
   const text = m.length > LINE ? `${m.slice(0, LINE - 1).trimEnd()}…` : m;
   return { text, full: m, kind };

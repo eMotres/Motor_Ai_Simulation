@@ -1879,7 +1879,8 @@ def allowable_ed(profile: Profile, network: Network, caps: Mapping[str, Any],
                  *, limits: Optional[Mapping[str, float]] = None,
                  iters: int = 12, curve_step_pct: float = 5.0,
                  samples_per_segment: int = 40,
-                 with_curve: bool = True) -> Dict[str, Any]:
+                 with_curve: bool = True,
+                 warm_start: bool = False) -> Dict[str, Any]:
     """The highest ED whose PERIODIC peak still respects the limits.
 
     THE ANSWER THIS TOOL EXISTS FOR (user 2026-09-15): the duty cycle does not
@@ -1896,6 +1897,19 @@ def allowable_ed(profile: Profile, network: Network, caps: Mapping[str, Any],
     ``at_allowable`` is every node's temperature AT the found ED — the machine
     the answer describes, not the one that was asked about.  It is ``None``
     only when no ED is feasible.
+
+    ``warm_start`` (2026-09-16, for the coupled loop) starts each cycle-map
+    iteration from the START STATE of the last evaluation that converged instead
+    of from ambient.  The fixed point is the same one — a cycle map is a
+    contraction here and the tolerance that stops it is 0.05 K either way — but
+    the PATH to it is shorter, and on a period far below the machine's time
+    constant that path is most of the cost (a 10 s cycle needs ~60 cycles from
+    cold and a handful from the neighbouring ED).  OFF by default, so the
+    Thermal tab's answer is the one it has always been; the coupled loop, which
+    runs this search inside every pass, asks for it.  A seeded solve that comes
+    back "no periodic state" is retried COLD before it is believed — the same
+    rule the sweep applies to a seeded Newton failure, and for the same reason:
+    a seed is an accelerator and must never be able to invent a refusal.
     """
     if profile.kind != "S3":
         raise DutyCycleError(
@@ -1906,10 +1920,29 @@ def allowable_ed(profile: Profile, network: Network, caps: Mapping[str, Any],
     #: the ED the request ASKED about — ``None`` when it asked for none
     asked = profile.ed_pct if profile.ed_given else None
 
+    seed: Dict[str, float] = {}
+
+    def _periodic(ed: float) -> Dict[str, Any]:
+        if not (warm_start and seed):
+            return periodic_steady_state(profile.with_ed(ed), network, caps,
+                                         samples_per_segment=samples_per_segment)
+        try:
+            rec = periodic_steady_state(profile.with_ed(ed), network, caps,
+                                        T0=dict(seed),
+                                        samples_per_segment=samples_per_segment)
+        except DutyCycleError as exc:
+            if exc.code != "duty_cycle_no_periodic_state":
+                raise
+            # COLD RETRY: the seed is an accelerator, never a verdict.
+            rec = periodic_steady_state(profile.with_ed(ed), network, caps,
+                                        samples_per_segment=samples_per_segment)
+        seed.update({k: float(v) for k, v in (rec.get("start_state_c")
+                                              or {}).items()})
+        return rec
+
     def _peak(ed: float) -> Tuple[float, str, Dict[str, Any]]:
         """(worst margin K, part, the record) at this ED — >0 is over."""
-        rec = periodic_steady_state(profile.with_ed(ed), network, caps,
-                                    samples_per_segment=samples_per_segment)
+        rec = _periodic(ed)
         worst, who = -1e9, ""
         for node, lim in lims.items():
             t = (rec["winding_hot_peak_c"] if node == "winding"
@@ -1925,9 +1958,7 @@ def allowable_ed(profile: Profile, network: Network, caps: Mapping[str, Any],
         ed = step
         while ed <= 100.0 + 1e-9:
             try:
-                rec = periodic_steady_state(
-                    profile.with_ed(ed), network, caps,
-                    samples_per_segment=samples_per_segment)
+                rec = _periodic(ed)
                 curve.append([round(ed, 2), round(rec["winding_hot_peak_c"], 2)])
             except DutyCycleError as exc:
                 if exc.code != "duty_cycle_no_periodic_state":
@@ -1987,6 +2018,7 @@ def ed_vs_cycle(profile: Profile, network: Network, caps: Mapping[str, Any],
                 *, cycle_lengths: Sequence[float] = ED_CYCLE_LENGTHS_S,
                 limits: Optional[Mapping[str, float]] = None,
                 iters: int = 8, samples_per_segment: int = 24,
+                warm_start: bool = False,
                 ) -> List[Dict[str, Any]]:
     """The allowable ED as a function of the CYCLE LENGTH — the found regime.
 
@@ -2021,7 +2053,7 @@ def ed_vs_cycle(profile: Profile, network: Network, caps: Mapping[str, Any],
             rec = allowable_ed(replace(profile, cycle_s=length), network, caps,
                                limits=limits, iters=iters,
                                samples_per_segment=samples_per_segment,
-                               with_curve=False)
+                               with_curve=False, warm_start=warm_start)
         except DutyCycleError as exc:
             # A period the network cannot hold at ANY duty is an answer about
             # this machine, not a failure of the request — it is reported in

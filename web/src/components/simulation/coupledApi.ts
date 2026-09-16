@@ -20,6 +20,9 @@
  * the user has not solved with yet, and the promise in the toggle's tooltip is
  * "the Thermal tab's current settings" — not "whatever the server last stored".
  */
+import { regimeLine, type RegimeLimits }
+  from '../thermal/dutyCycleRegime';
+
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const BASE = `${API.replace(/\/$/, '')}/api/coupled`;
 
@@ -104,6 +107,32 @@ export interface CouplingBlock {
   } | null;
   note: string | null;
   warning: string | null;
+  /** THE REGIME the loop found, on an S2/S3 duty (2026-09-16).  Absent on every
+   *  continuous duty — the loop there is what it always was.  Spelled with the
+   *  SAME keys the stored duty-cycle record uses, so `dutyCycleRegime`'s own
+   *  readers take it as they take the Thermal tab's answer. */
+  duty_cycle?: CoupledRegime;
+}
+
+/** The found regime, as the coupling block carries it.  It IS a `RegimeLimits`
+ *  (same four numbers, same names) plus what only a coupled answer knows: which
+ *  kind of cycle it was, whether what the duty ASKED for fits under what the
+ *  machine can hold, and the sentence that says so. */
+export interface CoupledRegime extends RegimeLimits {
+  kind?: 'S2' | 'S3';
+  duty?: string;
+  cycle_s?: number | null;
+  t_on_allowable_s?: number | null;
+  requested_t_on_s?: number | null;
+  /** `true` it fits, `false` it does not, `null`/absent nothing was asked */
+  fits_requested?: boolean | null;
+  /** `false` = no duty ratio holds the limits at all — one pull is all there is */
+  feasible?: boolean;
+  unlimited?: boolean;
+  limiting_part?: string | null;
+  winding_hot_peak_c?: number | null;
+  magnet_peak_c?: number | null;
+  note?: string | null;
 }
 
 export interface CoupledRunResult {
@@ -324,9 +353,47 @@ export function couplingLine(c: CouplingBlock): string {
     : cr.first_forward_rpm == null ? null
     : `crit ${fmtRpm(cr.first_forward_rpm)}${(cr.n_forward_below_rated ?? 0) > 0
         || (cr.first_forward_margin_pct != null && cr.first_forward_margin_pct < 10) ? ' ⚠' : ''}`;
+  // THE REGIME, on an impulse duty (2026-09-16): the ratio the machine can hold
+  // and, when the duty asked about one, whether it fits.  One term — the
+  // sentence is in the tooltip — and nothing at all on a continuous duty.
   return [`winding ${c.coil_temp_c.toFixed(0)} °C`, m, mech,
-    `${c.iterations} it.${c.converged ? '' : ' ⚠'}`, mechNote, modesTerm, critTerm]
+    `${c.iterations} it.${c.converged ? '' : ' ⚠'}`, regimeTerm(c.duty_cycle),
+    mechNote, modesTerm, critTerm]
     .filter(Boolean).join(' · ');
+}
+
+/** "ED 21.6 % of 60 s ⚠" — the found regime, short enough for the card. */
+export function regimeTerm(r: CoupledRegime | null | undefined): string | null {
+  if (!r) return null;
+  const flag = r.feasible === false || r.fits_requested === false ? ' ⚠' : '';
+  if (r.kind === 'S2') {
+    const t = r.t_on_allowable_s;
+    return t == null ? null : `pull ${g1(t)} s${flag}`;
+  }
+  const ed = r.ed_allowable_pct;
+  if (ed == null) return null;
+  const cyc = r.ed_cycle_s ?? r.cycle_s;
+  return `ED ${g1(ed)} %${cyc == null ? '' : ` of ${g1(cyc)} s`}${flag}`;
+}
+
+/** THE SENTENCE the inline run notice shows when the duty does not fit — and
+ *  `null` when it does, which is what "no news" looks like.
+ *
+ *  A ratio that does not fit is an ANSWER, not a failure: the loop solved the
+ *  machine and the machine cannot hold what the duty asks of it.  So it is
+ *  prefixed rather than thrown, and `lib/runNotice` reads that prefix as the
+ *  INFO kind — blue, no "not solved" in front of it. */
+export function coupledRegimeNotice(c: CouplingBlock | null | undefined):
+    string | null {
+  const r = c?.duty_cycle;
+  if (!r) return null;
+  if (r.feasible !== false && r.fits_requested !== false) return null;
+  return `Duty cycle: ${r.note || regimeLine(r) || 'the duty does not fit'}`;
+}
+
+/** One decimal, and none when it is a whole number. */
+function g1(v: number): string {
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
 }
 
 /** 2104 → "2104 Hz", 12 430 → "12.4 kHz": the card line has no room for five digits. */
@@ -380,8 +447,26 @@ export function couplingTooltip(c: CouplingBlock): string {
         + 'last line — the run stored for this machine IS that run.'
       : (c.warning || 'did not settle'),
     c.note || '',
+    ...regimeRows(c),
     ...mechanicalRows(c),
   ].filter(Boolean).join('\n');
+}
+
+/** The regime, in the tooltip: what the loop was closing on besides the two
+ *  temperatures, and what the duty asked for.  Nothing on a continuous duty. */
+function regimeRows(c: CouplingBlock): string[] {
+  const r = c.duty_cycle;
+  if (!r) return [];
+  const rows: string[] = [
+    `Duty cycle (${r.kind ?? 'S3'}${r.duty ? ` · ${r.duty}` : ''}): this point `
+    + 'is an impulse, so the loop did not iterate to the temperature it would '
+    + 'reach if the pull never ended — each pass FOUND the regime the limits '
+    + 'allow and fed back the temperatures at it.',
+  ];
+  const line = regimeLine(r);
+  if (line) rows.push(line);
+  if (r.note) rows.push(r.note);
+  return rows;
 }
 
 /** The mechanical answers the run left, one line each: rotor stress, ring

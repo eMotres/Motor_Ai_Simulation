@@ -6,6 +6,12 @@
 // refused 422 ("duty 'peak' is an S3 duty …") and the panel showed NOTHING
 // where the user clicked — the sentence rendered far below the fold and the
 // Run button just flicked back to "Re-run Simulation".
+//
+// That refusal is gone since the same afternoon (the coupled loop FINDS the
+// duty ratio now), and what arrives in its place is the loop's OUTCOME when the
+// ratio the duty asks for does not fit.  It is an answer, not a failure, so it
+// carries the `Duty cycle:` prefix `coupledApi.coupledRegimeNotice` writes and
+// is classified INFO — the last test below is that contract.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -25,7 +31,8 @@ function runNoticeFor(raw) {
     } catch { /* not JSON after all */ }
   }
   if (!m) return null;
-  const kind = /reconnecting and re-solving/i.test(m) ? 'info' : 'error';
+  const kind = /reconnecting and re-solving/i.test(m) || /^duty cycle:/i.test(m)
+    ? 'info' : 'error';
   const text = m.length > LINE ? `${m.slice(0, LINE - 1).trimEnd()}…` : m;
   return { text, full: m, kind };
 }
@@ -34,7 +41,7 @@ const S3 = "duty 'peak' is an S3 duty — 25.0 % of a 60.0 s cycle, not a point 
   + 'machine sits at. The coupled loop iterates the electromagnetic run and the '
   + 'thermal solve until they SETTLE.';
 
-test('the coupled S3 refusal reaches the button, sentence intact', () => {
+test('a refusal reaches the button, sentence intact', () => {
   const n = runNoticeFor(`Error: ${S3}`);
   assert.ok(n, 'a refusal must produce a notice');
   assert.equal(n.kind, 'error');
@@ -97,4 +104,20 @@ test('a dead backend after the retries are spent IS a failure', () => {
   const n = runNoticeFor('Backend connection lost mid-solve — the run DIED with a '
     + 'server restart and nothing was updated. Press Re-run Simulation.');
   assert.equal(n.kind, 'error');
+});
+
+test('a duty cycle that does not fit is an ANSWER, not a failure', () => {
+  const n = runNoticeFor('Duty cycle: 21.6 % of a 60 s cycle (13 s on) is '
+    + 'allowable, limited by the winding at 200 °C; the 25 % asked for does NOT '
+    + 'fit under it.');
+  assert.equal(n.kind, 'info', 'the loop solved the machine — this is its answer');
+  assert.ok(n.text.startsWith('Duty cycle: 21.6 %'));
+});
+
+test('…and a duty cycle with no feasible ratio is still an answer', () => {
+  const n = runNoticeFor('Duty cycle: no duty ratio is allowable at this '
+    + 'operating point: even the shortest pull the search tries puts the winding '
+    + 'over 200 °C. One pull from 40 °C ambient lasts 19.8 s.');
+  assert.equal(n.kind, 'info');
+  assert.ok(n.full.includes('One pull from 40 °C ambient lasts 19.8 s.'));
 });

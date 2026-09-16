@@ -73,6 +73,10 @@ import {
 import {
   calibrationIssue, checkVerdict, edCycleRows, regimeLine,
 } from './dutyCycleRegime';
+/* …and the regime the COUPLED loop found for the same duty (2026-09-16): the
+   client is the Electromagnetic tab's, because the answer is that loop's. */
+import { fetchCoupledLast, type CoupledRegime }
+  from '../simulation/coupledApi';
 /* NO TOOLTIP WRAPS A CONTROL HERE.  A tooltip's popper is drawn above the menu
    a Select opens and takes the pointer, so the kind picker could not be opened
    at all (user 2026-09-15: «всплывающее меню всё закрывает»).  Every hint hangs
@@ -184,6 +188,8 @@ const DutyCycleEditor: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  /** the regime the COUPLED loop found for this duty, when it has run one */
+  const [coupled, setCoupled] = useState<CoupledRegime | null>(null);
 
   const key = ctx ? dutyKey(ctx.die, ctx.config, ctx.duty) : null;
 
@@ -234,6 +240,25 @@ const DutyCycleEditor: React.FC = () => {
       window.removeEventListener('sim-settings-restored', on);
     };
   }, [load]);
+
+  /* ── and what the COUPLED loop found for this duty (2026-09-16) ──────────
+     The loop solves an S2/S3 duty for its REGIME now: the electromagnetic run
+     and the thermal solve iterate, and inside every pass the allowable duty
+     ratio is searched at the temperatures that pass reached.  That answer is
+     about the same duty this editor is open on, and it is the one the report
+     prints — so it belongs here, on one line, rather than only on the
+     Electromagnetic tab's summary card. */
+  useEffect(() => {
+    if (!ctx) return;
+    let dead = false;
+    void (async () => {
+      const last = await fetchCoupledLast();
+      if (dead) return;
+      const r = last?.coupling?.duty_cycle ?? null;
+      setCoupled(r && (!r.duty || r.duty === ctx.duty) ? r : null);
+    })();
+    return () => { dead = true; };
+  }, [ctx]);
 
   /* ── whatever this backend last answered, if it is about THIS duty ──────── */
   useEffect(() => {
@@ -544,6 +569,23 @@ const DutyCycleEditor: React.FC = () => {
           </Typography>
         ) : (
           <Typography sx={lbl}>no duty loaded — press ▶ on one in the catalogue</Typography>
+        )}
+        {/* ── what the COUPLED loop found, one line ─────────────────────────
+            Never a second answer to the same question: this one is labelled
+            with where it came from, and it is the ratio the electromagnetic
+            run beside it was actually solved at. */}
+        {coupled && (
+          <Tooltip {...TIP_PROPS} title={`The coupled EM ↔ thermal loop found this regime for ${coupled.duty ?? 'this duty'}: on an impulse duty each pass searches the duty ratio the limits allow and feeds back the temperatures AT it, so the electromagnetic run this answer belongs to was solved at the winding and magnet temperatures of THAT cycle. ${regimeLine(coupled)}. ${coupled.note ?? ''}`}>
+            <Typography sx={{ ...lbl, cursor: 'help', fontFamily: 'monospace',
+              color: coupled.feasible === false || coupled.fits_requested === false
+                ? '#f87171' : '#34d399' }}>
+              coupled: {coupled.kind === 'S2'
+                ? `pull ${fmt(coupled.t_on_allowable_s, 0)} s`
+                : `ED ${fmt(coupled.ed_allowable_pct, 1)} %`}
+              {coupled.fits_requested === false ? ' — asked for more' : ''}
+              {coupled.feasible === false ? ' — no ratio holds' : ''}
+            </Typography>
+          </Tooltip>
         )}
         {edited && (
           <Tooltip {...TIP_PROPS} title="This cycle lives only in this browser so far. It is sent to the yaml by the duty save (the ✓ in the strip at the top), the same way a material pick is — until then the catalogue, the report and every other browser still see the previous block.">

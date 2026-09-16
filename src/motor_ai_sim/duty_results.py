@@ -1081,6 +1081,14 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         **({"em": {k: _f(v) if not isinstance(v, str) else v
                    for k, v in c["em"].items()}}
            if isinstance(c.get("em"), dict) and c["em"] else {}),
+        # THE REGIME the loop found, when this duty has a cycle (2026-09-16).
+        # Kept whole — it is two dozen scalars and two small temperature blocks,
+        # the curves live in the `duty_cycle` record the same run files — because
+        # a coupled answer on an impulse duty IS a duty ratio, and a column that
+        # carried the temperatures without the ratio they belong to would be a
+        # winding at 131 °C with nothing to say when.
+        **({"duty_cycle": dict(c["duty_cycle"])}
+           if isinstance(c.get("duty_cycle"), dict) and c["duty_cycle"] else {}),
         "iterations": c.get("iterations"),
         "em_runs": c.get("em_runs"),
         "converged": bool(c.get("converged")) if c else None,

@@ -90,6 +90,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
+from motor_ai_sim import coupled_duty_cycle as _cdc
 from motor_ai_sim import run_recording as _rr
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim import jobs as _JOBS
@@ -799,8 +800,9 @@ _EM_FACE_KEYS = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W",
 
 
 #: The duty-cycle kinds that are an IMPULSE: the machine does not stay at the
-#: point long enough for a steady temperature to exist.
-_IMPULSE_KINDS = ("S2", "S3")
+#: point long enough for a steady temperature to exist.  One definition, in
+#: ``coupled_duty_cycle`` — the module that solves them.
+_IMPULSE_KINDS = _cdc.IMPULSE_KINDS
 
 
 def _duty_cycle_of(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -832,41 +834,223 @@ def _duty_cycle_of(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]
     return None, ""
 
 
-def _refuse_impulse_loop(body: Dict[str, Any], max_iter: int) -> None:
-    """An S2/S3 duty may be run ONCE, never iterated to a settled temperature.
+def _cycle_preflight(body: Dict[str, Any]) -> None:
+    """An S2/S3 duty is solved as a REGIME — check that it CAN be, before a solve.
 
-    The loop's whole method is to iterate until the winding and the magnet stop
-    moving.  On an impulse duty that fixed point exists arithmetically and means
-    nothing physically: it is the temperature the machine would reach if the
-    pull never ended, and on the Ø85 robot joint's peak point that is several
-    hundred kelvin above anything the cycle actually sees.  One pass
-    (``max_iter = 1``) is a different and honest thing — the loss map at a coil
-    temperature the caller states — and it is what the duty-cycle model takes as
-    its calibration, so it stays legal.
+    THE REFUSAL THAT WENT AWAY (user, 2026-09-16: *"каплинг на цикле S3 подбирает
+    скважность для того чтобы можно было влезть в лимиты"*).  Until today this
+    function raised ``impulse_duty_not_steady`` on every impulse duty the loop
+    was asked to iterate, and its reasoning was sound: iterating an S3 point to a
+    fixed point answers with the temperature it would reach if the pull never
+    ended, which on the Ø85 robot joint is hundreds of kelvin above anything the
+    cycle sees.  The answer to that is not to refuse the question — it is to ask
+    the right one, which is what ``coupled_duty_cycle`` now does inside every
+    pass: FIND the duty ratio the machine can hold and feed back the temperatures
+    AT it.
+
+    What is still checked here is the SHAPE of the cycle, because everything it
+    can be wrong about is knowable without a solve: a kind nobody recognises, a
+    cycle time of zero, a segment naming a duty this configuration does not
+    have.  Each of those would otherwise surface as a ``DutyCycleError`` on the
+    far side of a two-minute transient.  It is the same structural check
+    ``routes.family`` runs when a cycle is SAVED (``structure_only=True``), so a
+    block the editor accepted can never be refused here.
     """
-    if max_iter <= 1:
-        return
     blk, name = _duty_cycle_of(body)
-    if not blk:
+    if not _cdc.is_impulse(blk):
         return
-    kind = str(blk.get("kind") or "").strip().upper()
-    if kind not in _IMPULSE_KINDS:
-        return
-    if kind == "S2":
-        what = "one pull of %s s" % (blk.get("t_on_s"),)
-    else:
-        what = "%s %% of a %s s cycle" % (blk.get("ed_pct"), blk.get("cycle_s"))
-    raise _refuse(
-        "duty '%s' is an %s duty — %s, not a point the machine sits at. The "
-        "coupled loop iterates the electromagnetic run and the thermal solve "
-        "until they SETTLE, so on an impulse it would answer with the "
-        "temperature this point would reach if it never ended, which is not "
-        "what the cycle does (it asks for %d iterations). Ask for max_iter = 1 "
-        "— one pass, the loss map at the coil temperature you state, which is "
-        "what the duty-cycle model calibrates on — and solve the cycle itself "
-        "as a duty cycle on the Thermal tab."
-        % (name or "this run", kind, what, max_iter),
-        ["max_iter", "duty_cycle"], code="impulse_duty_not_steady")
+    duties, name = _cycle_catalogue(body, name)
+    try:
+        from motor_ai_sim.thermal_duty_cycle import normalise_spec
+        normalise_spec(dict(blk or {}), duties, default_duty=name,
+                       structure_only=True)
+    except _cdc.DutyCycleError as exc:
+        raise _refuse(
+            "duty %r carries a cycle the coupled loop cannot solve: %s"
+            % (name, exc.message),
+            ["duty_cycle"], code=exc.code)
+
+
+def _cycle_catalogue(body: Dict[str, Any],
+                     name: str) -> Tuple[List[Dict[str, Any]], str]:
+    """``(the duties a cycle may name, the duty this run IS)``.
+
+    The name is the body's when it states one, else the duty the catalog context
+    has open — the loop runs the loaded duty's point, so that is the duty the
+    powered segment means.  The list always CONTAINS that duty, placeholder and
+    all: an API caller may state a cycle for a machine whose duty is not
+    catalogued, and refusing the run's own duty as "not one of this
+    configuration's duties" would be the pre-flight failing on the one name it
+    cannot be wrong about.  Every OTHER name in the block is still checked.
+    """
+    duties: List[Dict[str, Any]] = []
+    ctx = None
+    try:
+        from motor_ai_sim.duty_results import active_context
+        from motor_ai_sim.routes.family import config_duties
+        ctx = active_context()
+        if ctx:
+            duties = list(config_duties(ctx[0], ctx[1]) or ())
+    except Exception:  # noqa: BLE001 — a catalog read never fails a solve
+        log.debug("coupled: could not read the duties for the cycle",
+                  exc_info=True)
+    duty = str(body.get("duty") or (ctx[2] if ctx else "") or name or "this run")
+    if not any(str((d or {}).get("name") or "") == duty for d in duties):
+        duties = list(duties) + [{"name": duty}]
+    return duties, duty
+
+
+def _rated_state_c(die: str, cfg: str, duties: List[Dict[str, Any]],
+                   this_duty: str) -> Tuple[Dict[str, float], str, str]:
+    """The node MEANS of the RATED duty's own stored thermal map — the warm
+    machine an S2 pull may also be started from.
+
+    ``({}, "", why)`` whenever there is no such map, and that is the common case
+    and not a failure: the coupled loop calibrates on the point it is SOLVING,
+    so "and how long from rated?" can only be answered when the rated duty has
+    been solved on its own.  Naming where the state came from matters here — a
+    start state taken from this machine's own peak map would be a warm-up nobody
+    ran.
+    """
+    rated = ""
+    for d in (duties or ()):
+        nm = str((d or {}).get("name") or "")
+        if nm and nm != str(this_duty) and nm.strip().lower().startswith("rated"):
+            rated = nm
+            break
+    if not rated:
+        return {}, "", ("this configuration has no rated duty beside %r, so "
+                        "there is no warm state to start a pull from"
+                        % this_duty)
+    try:
+        from motor_ai_sim import duty_results as _dr
+        from motor_ai_sim.thermal_capacities import NODES as _NODES
+        comps = ((_dr.get(die, cfg).get(rated) or {}).get("thermal")
+                 or {}).get("components") or {}
+        out: Dict[str, float] = {}
+        for n in _NODES:
+            v = (comps.get(n) or {}).get("avg")
+            if v is None:
+                return {}, "", (
+                    "the rated duty %r has no stored temperature for the %s, so "
+                    "there is no warm state to start a pull from" % (rated, n))
+            out[n] = float(v)
+    except Exception:  # noqa: BLE001 — a store read never fails a solve
+        log.debug("coupled: could not read the rated duty's map", exc_info=True)
+        return {}, "", "the rated duty's stored map could not be read"
+    return out, rated, ("the rated duty %r's own stored thermal map" % rated)
+
+
+def _cycle_inputs(body: Dict[str, Any],
+                  cooling: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Everything the cycle model needs that does NOT change between passes.
+
+    ``None`` means this run is not on an impulse duty — every machine that has
+    no cycle, and every cycle that is S1 or an explicit segment list, is the
+    settled point the loop has always solved.
+
+    What DOES change between passes is the map and the run the model is fitted
+    to, and that is deliberately not in here: it arrives at :func:`_cycle_step`
+    each time, which is the whole mechanism.
+    """
+    blk, name = _duty_cycle_of(body)
+    if not _cdc.is_impulse(blk):
+        return None
+    duties, name = _cycle_catalogue(body, name)
+    die = cfg = ""
+    try:
+        from motor_ai_sim.duty_results import active_context
+        ctx = active_context()
+        if ctx:
+            die, cfg = str(ctx[0]), str(ctx[1])
+    except Exception:  # noqa: BLE001 — a catalog read never fails a solve
+        log.debug("coupled: could not read the catalog context for the cycle",
+                  exc_info=True)
+    from motor_ai_sim.routes.thermal import _assignments, _dc_geometry
+    geom, _ov = _dc_geometry(body.get("geo"))
+    lim, lim_src = _cdc.magnet_limit(blk, body.get("magnet_limit_c"))
+    rated, rated_duty, rated_why = _rated_state_c(die, cfg, duties, name)
+    return {
+        "block": dict(blk or {}), "duty": str(name or "this run"),
+        "die": die, "config": cfg, "duties": duties,
+        "geometry": geom,
+        "d_housing_m": float(geom.get("stator_diameter") or 0.0) * 1e-3,
+        # The materials the RUN itself used — the shared assignment plus this
+        # request's `?mat=` override — because the capacities must belong to the
+        # machine that was solved, not to a catalogue row that may name another
+        # steel (the stale-assignment trap, 2026-09-12).
+        "materials": _assignments(),
+        "part_states": None,          # = the states the run's summary carries
+        "magnet_limit_c": lim, "magnet_limit_source": lim_src,
+        "rated_state_c": rated, "rated_duty": rated_duty,
+        "rated_state_source": rated_why,
+        "cooling": dict(cooling or {}),
+    }
+
+
+def _cycle_lengths(body: Dict[str, Any]) -> Optional[List[float]]:
+    """The periods the ED-vs-cycle-length curve is solved at — ``None`` unless
+    the caller names them.
+
+    The same body key ``POST /api/thermal/duty_cycle`` takes, and the same
+    meaning, with one difference that is a cost decision and not a whim: there
+    the span DEFAULTS to five periods because that request exists to draw it;
+    here it defaults to none, because on a machine whose time constant is far
+    above its cycle each extra period is minutes of cycle-map iteration inside a
+    loop the user is watching.
+    """
+    raw = body.get("ed_cycle_lengths_s")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return None
+    out: List[float] = []
+    for v in raw:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f > 0.0 and math.isfinite(f):
+            out.append(f)
+    return out or None
+
+
+def _cycle_step(inputs: Dict[str, Any], em_summary: Dict[str, Any],
+                field: Dict[str, Any], *, with_curve: bool = False,
+                cycle_lengths: Optional[List[float]] = None,
+                samples: Optional[int] = None) -> Tuple[Any, Dict[str, Any]]:
+    """ONE pass's regime: fit the cycle to the map just solved and search it.
+
+    Returns ``(model, regime)``.  The model is kept because the FINAL regime —
+    the one with the curves, the ED-vs-period span and the stored record — is
+    solved on the last pass's model rather than on a fresh fit nobody iterated.
+    """
+    from motor_ai_sim.routes.thermal import _dc_side_areas
+
+    side = _dc_side_areas(field, em_summary, inputs["geometry"])
+    model = _cdc.build_model(
+        block=inputs["block"], duties=inputs["duties"],
+        duty_name=inputs["duty"], em_summary=em_summary, thermal_result=field,
+        geometry=inputs["geometry"], cooling=inputs["cooling"],
+        materials=inputs["materials"], part_states=inputs["part_states"],
+        magnet_limit_c=inputs["magnet_limit_c"],
+        magnet_limit_source=inputs["magnet_limit_source"],
+        side_areas=side, d_housing_m=inputs["d_housing_m"],
+        rated_state_c=inputs["rated_state_c"])
+    regime = _cdc.solve_regime(
+        model, samples_per_segment=int(samples or _cdc.LOOP_SAMPLES),
+        with_curve=bool(with_curve), cycle_lengths=cycle_lengths)
+    if inputs.get("rated_duty") and regime.get("s2_from_rated_s") is not None:
+        regime["s2_from_rated_duty"] = inputs["rated_duty"]
+    return model, regime
+
+
+def _cycle_refusal(exc: "_cdc.DutyCycleError", duty: str) -> HTTPException:
+    """A cycle the loop cannot solve, as this router's 422 — by NAME, with the
+    model's own code, so a client switches on the code and a panel prints the
+    sentence."""
+    return _refuse(
+        "the coupled loop could not solve duty %r as a cycle: %s  %s"
+        % (duty, getattr(exc, "message", str(exc)), getattr(exc, "remedy", "")),
+        ["duty_cycle"], code=getattr(exc, "code", "duty_cycle_refused"))
 
 
 def _preflight(body: Dict[str, Any], *,
@@ -880,14 +1064,14 @@ def _preflight(body: Dict[str, Any], *,
     close must refuse before it burns a solve.
 
     ``max_iter`` is the EFFECTIVE iteration budget (the body's, else the Thermal
-    panel's), which one check needs: whether this is a LOOP or a single pass
-    decides whether an impulse duty may run at all.  ``None`` = not resolved, and
-    that check is then skipped rather than guessed at.
+    panel's).  It no longer decides whether an impulse duty may run — since
+    2026-09-16 it may, and the loop finds its regime — but it is still part of
+    this signature because callers pass it and because a future check may need
+    to know whether this is a loop or a single pass.
     """
     from motor_ai_sim.routes.simulation import _effective_rpm, _effective_winding
 
-    if max_iter is not None:
-        _refuse_impulse_loop(body, int(max_iter))
+    _cycle_preflight(body)
     drive = _coupled_drive(body)
     if drive == "current" and int(body.get("n_steps_per_period") or 0) <= 1:
         raise _refuse(
@@ -1998,6 +2182,48 @@ def _attach_coupling(em_result: Dict[str, Any], block: Dict[str, Any]) -> bool:
 # The loop
 # ---------------------------------------------------------------------------
 
+#: What the COUPLING block keeps of the regime.  The curves and the per-period
+#: span are not here on purpose: they are big, they are drawn from the
+#: ``duty_cycle`` record the same run files, and this block travels inside every
+#: transient summary the panel holds.
+_CYCLE_BLOCK_KEYS = (
+    "kind", "duty", "cycle_s", "ed_cycle_s", "ed_requested_pct",
+    "ed_allowable_pct", "t_on_allowable_s", "requested_t_on_s",
+    "fits_requested", "feasible", "unlimited", "limiting_part", "limits_c",
+    "magnet_limit_source", "hot_spot_offset_K", "winding_hot_peak_c",
+    "magnet_peak_c", "coil_temp_c", "magnet_temp_c", "s2_time_to_limit_s",
+    "s2_limiting_part", "s2_note", "s2_from_rated_s", "s2_from_rated_part",
+    "s2_from_rated_duty", "at_allowable", "at_requested", "ed_note", "note")
+
+
+def _cycle_block_of(regime: Optional[Dict[str, Any]],
+                    inputs: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The regime as the coupled record carries it — the answer, not the
+    workings."""
+    out = {k: regime.get(k) for k in _CYCLE_BLOCK_KEYS
+           if regime and regime.get(k) is not None}
+    # …spelled ALSO the way the stored `duty_cycle` record spells it, so the web
+    # reads a coupled regime with the helper it already has
+    # (`dutyCycleRegime.regimeLine`) instead of growing a second reader of the
+    # same four numbers.
+    lims = dict(out.get("limits_c") or {})
+    if lims.get("winding") is not None:
+        out["winding_limit_c"] = lims["winding"]
+    if lims.get("magnet") is not None:
+        out["magnet_limit_c"] = lims["magnet"]
+    if out.get("limiting_part"):
+        out["ed_limiting_part"] = out["limiting_part"]
+    if regime:
+        out["ed_found"] = bool(regime.get("feasible", True))
+    if inputs:
+        out.setdefault("duty", inputs.get("duty"))
+        if not out.get("s2_from_rated_s") and inputs.get("rated_state_source"):
+            # WHY there is no "and from rated" answer — absent with no reason
+            # reads as a number somebody forgot to compute.
+            out["s2_from_rated_note"] = str(inputs["rated_state_source"])
+    return out
+
+
 def _record_wanted(body: Dict[str, Any]) -> bool:
     """Is this run THIS machine's answer, or an errand for another duty?
 
@@ -2153,6 +2379,22 @@ def _run(body: Dict[str, Any],
             "Thermal tab (or send thermal_settings) and run again." % issue,
             ["thermal_settings"], code="no_thermal_boundary")
     cooling = cooling_fields(settings)
+    # ── AN IMPULSE DUTY IS SOLVED AS A REGIME (2026-09-16) ──────────────────
+    # On an S2/S3 duty the loop no longer iterates towards the temperature this
+    # point would reach if it never ended: each pass fits the lumped cycle to
+    # the map it just solved, FINDS the duty ratio (or the on-time) the machine
+    # can hold inside its limits, and feeds back the temperatures AT that point.
+    # `None` = the continuous duty the loop has always solved, bit for bit.
+    #
+    # NOT on an errand (`record: false`): that run is made at ANOTHER duty's
+    # operating point while this one is loaded, so the cycle the context names
+    # is not the cycle of the run in hand — and a regime found for the wrong
+    # point is worse than no regime at all.
+    cycle_in = None if _rr.suppressed() else _cycle_inputs(body, cooling)
+    cycle_model: Any = None
+    regime: Optional[Dict[str, Any]] = None
+    prev_regime: Optional[Dict[str, Any]] = None
+    cycle_doc: Optional[Dict[str, Any]] = None
     # A non-positive band is a loop that can never stop, which is a typo far more
     # often than a request: it falls back to the default rather than running the
     # whole budget on every machine for ever.
@@ -2381,6 +2623,47 @@ def _run(body: Dict[str, Any],
             t_mag_out = _bulk_temp(m)
             t_mag_max = m.get("max")
             summary = em.get("summary") or {}
+            # ── THE CYCLE, INSIDE THE PASS (2026-09-16) ─────────────────────
+            # The steady map above is the machine running this point FOR EVER,
+            # which on an impulse duty is not a state it is ever in.  What the
+            # next electromagnetic run must be solved at is the temperature the
+            # CYCLE reaches — so the model is fitted to that map, the allowable
+            # regime is searched, and the pair that travels on is the pair at
+            # the found duty ratio.  `_bulk_temp` above still supplies them on
+            # every S1 machine, unchanged.
+            if cycle_in is not None:
+                _progress.update(
+                    phase="iteration %d/%d — duty cycle: the allowable regime"
+                          % (it, max_iter))
+                try:
+                    cycle_model, regime = _cycle_step(cycle_in, summary, field)
+                except _cdc.DutyCycleError as exc:
+                    if not history:
+                        raise _cycle_refusal(exc, cycle_in["duty"])
+                    # A LATER pass's cycle refused — answered exactly as a later
+                    # pass's electromagnetic refusal is: the previous pass is a
+                    # solved state and IS the answer so far.
+                    refusal = ("the duty cycle could not be solved on pass %d "
+                               "(%s) — the regime above is the last pass that "
+                               "could" % (it, getattr(exc, "message", str(exc))))
+                    refusal_code = "last_pass_cycle_refused"
+                    log.warning("coupled: %s", refusal)
+                    break
+                # The SPATIAL spread of the magnets, carried from the map onto
+                # the cycle peak: the node the model integrates is a mean, and
+                # the demagnetisation check is about the hottest element.
+                _spread = 0.0
+                _mavg, _mmax = _bulk_temp(m), m.get("max")
+                if _mavg is not None and _mmax is not None:
+                    _spread = max(float(_mmax) - float(_mavg), 0.0)
+                if regime.get("coil_temp_c") is not None:
+                    t_coil_out = float(regime["coil_temp_c"])
+                t_mag_out = (None if regime.get("magnet_temp_c") is None
+                             else float(regime["magnet_temp_c"]))
+                t_mag_max = (None if regime.get("magnet_peak_c") is None
+                             else round(float(regime["magnet_peak_c"]) + _spread, 2))
+                _progress.update(phase=_cdc.progress_words(
+                    it, regime, t_coil, regime.get("coil_temp_c")))
             # THE MECHANICAL HALF of this pass: the temperature the friction was
             # billed at (the machine's own on pass 1, the previous map's shaft
             # after that), and what it cost.  Read off the EM summary rather than
@@ -2404,6 +2687,15 @@ def _run(body: Dict[str, Any],
                 "bearing_temp_source": summary.get("bearing_temp_source"),
                 "P_mech_extra_W": summary.get("P_mech_extra_W"),
             })
+            if regime is not None:
+                # WHAT THIS PASS FOUND, beside the temperatures it found it at:
+                # the two numbers that make the search visible in the history
+                # the panel plots and the report quotes.
+                history[-1].update({
+                    "ed_allowable_pct": regime.get("ed_allowable_pct"),
+                    "t_on_allowable_s": regime.get("t_on_allowable_s"),
+                    "cycle_limiting_part": regime.get("limiting_part"),
+                })
             if inverter is not None:
                 # On a VOLTAGE-fed run the current is the answer, not the
                 # request: the inverter holds the fundamental and the machine
@@ -2467,8 +2759,15 @@ def _run(body: Dict[str, Any],
             d_coil = float(t_coil_out) - float(t_coil)
             d_mag = (0.0 if (t_mag is None or t_mag_out is None)
                      else float(t_mag_out) - float(t_mag))
-            hottest = max([x for x in (t_coil_out, t_mag_max) if x is not None],
-                          default=0.0)
+            # THE RUNAWAY GUARD, judged on what the machine actually reaches.
+            # On an impulse duty that is the CYCLE's peak — the steady map above
+            # it is routinely past this ceiling and says nothing about whether
+            # the cycle has an equilibrium (it has one: the search found the
+            # ratio at which it does, or said there is none).
+            _hot_pair = ((regime.get("winding_hot_peak_c"),
+                          regime.get("magnet_peak_c")) if regime is not None
+                         else (t_coil_out, t_mag_max))
+            hottest = max([x for x in _hot_pair if x is not None], default=0.0)
             if float(hottest) > runaway_c:
                 runaway = True
                 break                       # no equilibrium to converge TO
@@ -2487,11 +2786,20 @@ def _run(body: Dict[str, Any],
             # not sufficient: a machine 3 % off the current it is billed at is a
             # different machine.  Sine/current drive is untouched — `point_off`
             # is False there, the current being imposed rather than answered.
+            # …and on an IMPULSE duty the REGIME is the fifth (2026-09-16): the
+            # pair being compared is the pair at a duty ratio that is itself
+            # being searched, so a loop whose copper has stopped moving while
+            # its ED is still walking has not converged on anything.  The band
+            # is one percentage point (`coupled_duty_cycle.ED_TOL_PCT`), which
+            # on a 60 s cycle is 0.6 s of on-time.
             if (abs(d_coil) < tol and abs(d_mag) < tol
                     and (d_brg is None or abs(d_brg) < BEARING_TOL_K)
-                    and not point_off):
+                    and not point_off
+                    and (regime is None
+                         or _cdc.regime_settled(prev_regime, regime))):
                 converged = True
                 break
+            prev_regime = regime
             if it >= max_iter:
                 break                       # out of budget — see the note below
             # (f) THE UPDATE IS APPLIED ONLY WHEN ANOTHER ITERATION WILL USE IT.
@@ -2583,6 +2891,31 @@ def _run(body: Dict[str, Any],
                         else "; the next pass would have been aimed at "
                              "%.3f V" % float(inverter["v_phase_peak_V"]))))
                 log.warning("coupled: %s", refusal)
+        # ── THE FOUND REGIME, at the resolution the record keeps ────────────
+        # The loop searched at the coarse resolution because it was going to
+        # search again next pass; what is STORED — the cycle the report draws,
+        # the winding-peak-vs-ED curve, the allowable ratio over a span of
+        # periods and the two S2 times — is solved once, here, on the model the
+        # last pass was fitted with.  A runaway has no regime to report: the
+        # cycle peak passed the ceiling, which the loop already says.
+        if cycle_model is not None and regime is not None and not runaway:
+            _check_cancelled(run_id)
+            _progress.update(phase="duty cycle — the allowable regime, at full "
+                                   "resolution")
+            try:
+                regime = _cdc.solve_regime(
+                    cycle_model, samples_per_segment=_cdc.FINAL_SAMPLES,
+                    with_curve=True, cycle_lengths=_cycle_lengths(body))
+                if (cycle_in and cycle_in.get("rated_duty")
+                        and regime.get("s2_from_rated_s") is not None):
+                    regime["s2_from_rated_duty"] = cycle_in["rated_duty"]
+                cycle_doc = _cdc.cycle_record(cycle_model, regime)
+            except _cdc.DutyCycleError as exc:
+                # The loop's own answer stands: the pass that produced it solved
+                # the same search at the coarser resolution and converged on it.
+                log.warning("coupled: the final regime could not be re-solved "
+                            "at full resolution (%s) — keeping the last pass's",
+                            exc)
         # THE THIRD TAB at the same temperatures (phase 3): the rotor stress is
         # solved once, at the per-part averages of the last thermal map, while
         # this loop still owns the lock — a second coupled run must not start
@@ -2679,6 +3012,22 @@ def _run(body: Dict[str, Any],
             % (float(_fin), abs(float(_fin) - float(_mech_top["bearing_temp_c"])))
         ).lstrip("; ")
         _last_summary["bearing_temp_note"] = _mech_top["bearing_temp_note"]
+    # ── THE CYCLE'S OWN VERDICT ─────────────────────────────────────────────
+    # A duty ratio that does not fit is not a failed run: the loop solved the
+    # machine and the machine cannot hold what was asked of it, which is the
+    # answer the user came for.  It rides as a WARNING with its own code — never
+    # over a refusal or a runaway, which stopped the loop for a harder reason and
+    # own the message — so the panel's one-line notice can print the sentence.
+    if regime is not None and refusal is None and not runaway:
+        if not regime.get("feasible", True):
+            refusal_code = "duty_cycle_no_allowable_ed"
+            refusal = str(regime.get("note") or "")
+            log.warning("coupled: %s", refusal)
+        elif regime.get("fits_requested") is False:
+            refusal_code = "duty_cycle_requested_over_allowable"
+            refusal = ("the regime this duty asks for does not fit: %s"
+                       % (regime.get("note") or ""))
+            log.warning("coupled: %s", refusal)
     block: Dict[str, Any] = {
         # WHICH EXCITATION these temperatures belong to.  Always written — a
         # report that finds no `drive` is reading a record from before the
@@ -2698,6 +3047,13 @@ def _run(body: Dict[str, Any],
                if _last_summary.get(k) is not None},
         "coil_temp_c": round(float(em_at[0]), 2),
         "magnet_temp_c": (None if em_at[1] is None else round(float(em_at[1]), 2)),
+        # THE REGIME, when this duty has one (2026-09-16).  The temperatures
+        # above are the ones the last electromagnetic run was solved at, and on
+        # an impulse duty they ARE this block's cycle temperatures — the loop
+        # closes on both together.  Absent on every S1 machine, which is what
+        # "the loop is unchanged there" looks like in the payload.
+        **({"duty_cycle": _cycle_block_of(regime, cycle_in)}
+           if regime is not None else {}),
         # `**` rather than fixed keys: a machine with no bearings grows no
         # mechanical keys at all, which is what "absent, not zero" means in a
         # payload.
@@ -2777,6 +3133,33 @@ def _run(body: Dict[str, Any],
                     if k not in ("transient", "thermal")},
                    alt_carrier=bool(inverter
                                     and inverter.get("record_as") == "alt_carrier"))
+    # ── AND THE CYCLE, UNDER THE DUTY IT DESCRIBES ──────────────────────────
+    # The same ``duty_cycle`` kind ``POST /api/thermal/duty_cycle`` files, with
+    # the same keys, so the report's Allowable-regime line, its rows and its two
+    # ED figures print a coupled answer without knowing one exists.  Never on an
+    # errand (`record: false` suppresses the whole seam) and never over a
+    # runaway — there is no regime then, and `cycle_doc` is None.
+    if cycle_doc is not None and not _rr.suppressed():
+        try:
+            from motor_ai_sim import duty_results as _dr
+            _params = {
+                "rpm": rpm_eff, "I_phase_rms": _f(body, "I_phase_rms", 0.0),
+                "gamma_deg": _f(body, "gamma_deg", 0.0),
+                "coil_temp_c": block["coil_temp_c"],
+                "magnet_temp_c": block["magnet_temp_c"],
+                "calibration_duty": cycle_in["duty"],
+                "calibration_source": ("the coupled loop's own converged "
+                                       "thermal map of this very point"),
+                **{k: v for k, v in cooling.items()},
+            }
+            _dr.note_duty_cycle(cycle_doc, _params,
+                                out.get("geometry_fingerprint"),
+                                out.get("computed_at"),
+                                die=cycle_in.get("die") or None,
+                                cfg=cycle_in.get("config") or None,
+                                duty=cycle_in.get("duty") or None)
+        except Exception:  # noqa: BLE001 — bookkeeping never fails a solve
+            log.debug("coupled: the duty cycle was not filed", exc_info=True)
     log.info("coupled: %d EM run(s), winding %.1f degC, magnets %s, %s",
              n_em, block["coil_temp_c"],
              "n/a" if block["magnet_temp_c"] is None

@@ -37,8 +37,33 @@ function couplingLine(c) {
     : `crit ${fmtRpm(cr.first_forward_rpm)}${(cr.n_forward_below_rated ?? 0) > 0
         || (cr.first_forward_margin_pct != null && cr.first_forward_margin_pct < 10) ? ' ⚠' : ''}`;
   return [`winding ${c.coil_temp_c.toFixed(0)} °C`, m, mech,
-    `${c.iterations} it.${c.converged ? '' : ' ⚠'}`, mechNote, modesTerm, critTerm]
+    `${c.iterations} it.${c.converged ? '' : ' ⚠'}`, regimeTerm(c.duty_cycle),
+    mechNote, modesTerm, critTerm]
     .filter(Boolean).join(' · ');
+}
+
+function regimeTerm(r) {
+  if (!r) return null;
+  const flag = r.feasible === false || r.fits_requested === false ? ' ⚠' : '';
+  if (r.kind === 'S2') {
+    const t = r.t_on_allowable_s;
+    return t == null ? null : `pull ${g1(t)} s${flag}`;
+  }
+  const ed = r.ed_allowable_pct;
+  if (ed == null) return null;
+  const cyc = r.ed_cycle_s ?? r.cycle_s;
+  return `ED ${g1(ed)} %${cyc == null ? '' : ` of ${g1(cyc)} s`}${flag}`;
+}
+
+function coupledRegimeNotice(c) {
+  const r = c?.duty_cycle;
+  if (!r) return null;
+  if (r.feasible !== false && r.fits_requested !== false) return null;
+  return `Duty cycle: ${r.note || 'the duty does not fit'}`;
+}
+
+function g1(v) {
+  return Number.isInteger(v) ? String(v) : v.toFixed(1);
 }
 
 function fmtHz(f) {
@@ -167,4 +192,60 @@ test('each tooltip row names the bearing temperature it was billed at', () => {
   const [bare] = couplingTooltip(NO_BEARINGS);
   assert.ok(!bare.includes('bearings'), bare);
   assert.ok(bare.includes('hottest magnet 171.4 °C'), bare);
+});
+
+
+// ── THE REGIME (2026-09-16) ──────────────────────────────────────────────────
+// On an S2/S3 duty the loop no longer iterates to the temperature this point
+// would reach if the pull never ended: it FINDS the duty ratio the limits allow
+// and feeds back the temperatures at it.  Two rules are worth pinning — the
+// card carries the ratio, and "does not fit" travels to the Run button as an
+// ANSWER (the `Duty cycle:` prefix `lib/runNotice` reads as the info kind)
+// rather than as a failure.
+const S3_FITS = {
+  coil_temp_c: 131, magnet_temp_c: 111, iterations: 3, converged: true,
+  duty_cycle: { kind: 'S3', duty: 'peak', ed_allowable_pct: 21.6,
+                ed_requested_pct: 20, ed_cycle_s: 60, fits_requested: true,
+                feasible: true, note: 'it fits.' },
+};
+const S3_OVER = {
+  ...S3_FITS,
+  duty_cycle: { ...S3_FITS.duty_cycle, ed_requested_pct: 25,
+                fits_requested: false,
+                note: '21.6 % of a 60 s cycle (13 s on) is allowable; the 25 % '
+                    + 'asked for does NOT fit under it.' },
+};
+const S2_RUN = {
+  ...S3_FITS,
+  duty_cycle: { kind: 'S2', duty: 'pull', t_on_allowable_s: 26.6,
+                requested_t_on_s: 2, fits_requested: true, feasible: true },
+};
+
+test('the card carries the ratio the machine can hold', () => {
+  assert.ok(couplingLine(S3_FITS).includes('ED 21.6 % of 60 s'));
+  assert.ok(!couplingLine(S3_FITS).includes('⚠'), 'a ratio that fits is not a flag');
+  assert.ok(couplingLine(S3_OVER).includes('ED 21.6 % of 60 s ⚠'));
+  assert.ok(couplingLine(S2_RUN).includes('pull 26.6 s'));
+});
+
+test('a continuous duty grows no regime term at all', () => {
+  const { duty_cycle, ...s1 } = S3_FITS;
+  assert.ok(!couplingLine(s1).includes('ED'));
+  assert.equal(coupledRegimeNotice(s1), null);
+});
+
+test('only a duty that does NOT fit reaches the Run button', () => {
+  assert.equal(coupledRegimeNotice(S3_FITS), null);
+  const n = coupledRegimeNotice(S3_OVER);
+  assert.ok(n.startsWith('Duty cycle: '), 'the prefix runNotice classifies on');
+  assert.ok(n.includes('does NOT fit under it.'));
+});
+
+test('no feasible ratio at all is reported too', () => {
+  const none = { ...S3_FITS, duty_cycle: {
+    ...S3_FITS.duty_cycle, feasible: false, ed_allowable_pct: 0,
+    fits_requested: false, note: 'no duty ratio is allowable at this point.' } };
+  assert.ok(couplingLine(none).includes('ED 0 % of 60 s ⚠'));
+  assert.equal(coupledRegimeNotice(none),
+    'Duty cycle: no duty ratio is allowable at this point.');
 });

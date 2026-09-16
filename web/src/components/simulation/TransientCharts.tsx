@@ -28,8 +28,9 @@ import { buildEmRunPayload } from '../../lib/emRunPayload';
 // The EM<->thermal orchestrator.  It changes exactly ONE thing about a Run:
 // where the request goes.  See ./coupledApi.
 import {
-  adoptConvergedTemperatures, cancelCoupled, couplingAdopted, couplingStamp,
-  coupledEnabled, runCoupled, type CouplingBlock,
+  adoptConvergedTemperatures, cancelCoupled, coupledRegimeNotice,
+  couplingAdopted, couplingStamp, coupledEnabled, runCoupled,
+  type CouplingBlock,
 } from './coupledApi';
 import HelpTip from '../common/HelpTip';
 
@@ -338,9 +339,16 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // it — a refusal, a dead backend, a retry, a clear at the start of a run —
   // reaches the rail without a second set of call sites to keep in sync.
   // SimulationPanel renders `lib/runNotice.runNoticeFor(message)`.
+  // …and the same rail carries the coupled loop's OUTCOME when there is one to
+  // report (2026-09-16): on an S2/S3 duty the loop finds the regime the machine
+  // can hold, and "the 25 % this duty asks for does not fit under 21.6 %" is an
+  // answer the user must see where they clicked — not a failure (an error wins
+  // the rail when there is one), and not a line buried in a tooltip.
+  const [regimeNotice, setRegimeNotice] = useState<string | null>(null);
   useEffect(() => {
-    window.dispatchEvent(new CustomEvent('sim:run-notice', { detail: { message: error } }));
-  }, [error]);
+    window.dispatchEvent(new CustomEvent('sim:run-notice',
+      { detail: { message: error ?? regimeNotice } }));
+  }, [error, regimeNotice]);
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
   // True when the shown result was RESTORED on open but its params differ from
   // the current inputs (the backend flagged it stale) — a hint to press Run.
@@ -451,7 +459,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // ledger without turning the panel's "Start fresh" state on (that one belongs
   // to the Stop/Continue dialog and would then stick to every later Run).
   const run = (restoreOnly = false, freshOnce = false) => {
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setRegimeNotice(null);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     // THE REQUEST BODY — built in `lib/emRunPayload`, not here.  It lived in
@@ -491,6 +499,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           // localStorage copy, same "field snapshot moved" event.
           const res = await runCoupled(p, ctrl.signal);
           d = (res.transient || {}) as typeof d;
+          // What the loop found about this duty's CYCLE, when it is one: `null`
+          // on a continuous duty and on a ratio that fits, which is what "no
+          // news" looks like on the rail.
+          setRegimeNotice(coupledRegimeNotice(res.coupling));
           // The two temperatures this run SOLVED for go back into the fields
           // they came from — leaving them showing the guess the loop started
           // from would leave an input on screen that the run did not use.

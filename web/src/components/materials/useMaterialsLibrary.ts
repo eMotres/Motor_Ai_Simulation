@@ -11,7 +11,7 @@
  * (mine always; global only for admins — enforced server-side). `mine` overrides
  * by name, so a personal copy shadows the shared one in the tree.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useAuth, useApiReady } from '../../contexts/AuthContext';
@@ -148,6 +148,30 @@ async function readMine(uid: string): Promise<MineLayer> {
   return out;
 }
 
+// ─── Retry policy (pure — covered by __tests__/materialsLibraryRetry) ────────
+
+/** How many times a transient failure is asked again before the tab gives up
+ *  and says so.  Six, with the delays below, is ~45 s of patience. */
+export const MAX_LIBRARY_RETRIES = 6;
+
+/** Is this failure worth asking again?
+ *
+ *  `0` is "the server never answered" — offline, DNS, a container mid-restart —
+ *  and 5xx / 408 / 429 are the server saying "not now".  Everything else is a
+ *  REFUSAL: 401 (not signed in), 403 (this tier does not open the library),
+ *  404 (no such route on this backend) are final answers, and asking six more
+ *  times only spends the visitor's battery.  Not signed in is handled by the
+ *  gate below, which asks again the moment there IS a session. */
+export function isRetriableStatus(status: number): boolean {
+  return status === 0 || status === 408 || status === 429 || status >= 500;
+}
+
+/** 1 s, 2 s, 4 s, 8 s, 15 s, 15 s — doubling, capped, so a backend that is
+ *  down does not turn an open tab into a poller. */
+export function retryDelayMs(attempt: number): number {
+  return Math.min(1000 * 2 ** attempt, 15000);
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useMaterialsLibrary() {
@@ -161,12 +185,45 @@ export function useMaterialsLibrary() {
   const [error, setError] = useState<string | null>(null);
 
   // built-in + global (from the backend, already merged + tagged there)
-  const reloadBase = useCallback(() => {
+  //
+  // ONE failed fetch used to be final: MaterialsLibraryTree prints `error` as a
+  // grey caption and nothing ever asked again, so a single failure — the web
+  // image being rebuilt under an open tab, a dropped Wi-Fi second — left the
+  // Materials tab EMPTY for the rest of the session (production, 2026-09-16:
+  // "materials are not displayed").  The library is a plain read, so a
+  // TRANSIENT failure is asked again on a bounded backoff.
+  const retriesRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reloadBaseRef = useRef<((isRetry?: boolean) => void) | null>(null);
+
+  const reloadBase = useCallback((isRetry = false) => {
+    if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null; }
+    if (!isRetry) retriesRef.current = 0;   // a manual reload starts the budget over
     setLoading(true);
+    // 0 until the server answers at all — a DNS/offline/CORS failure never
+    // reaches the first `then`, and that is the case most worth retrying.
+    let status = 0;
     fetch((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') + '/api/materials/library', { cache: 'no-store' })
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then(data => { setBase(data); setLoading(false); })
-      .catch(e => { setError(String(e)); setLoading(false); });
+      .then(r => { status = r.status; if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(data => { retriesRef.current = 0; setBase(data); setError(null); setLoading(false); })
+      .catch(e => {
+        setLoading(false);
+        const attempt = retriesRef.current;
+        if (isRetriableStatus(status) && attempt < MAX_LIBRARY_RETRIES) {
+          retriesRef.current = attempt + 1;
+          setError(`${e} — retrying (${attempt + 1}/${MAX_LIBRARY_RETRIES})`);
+          timerRef.current = setTimeout(
+            () => reloadBaseRef.current?.(true), retryDelayMs(attempt));
+        } else {
+          setError(`${e} — the materials library could not be loaded; reload the page`);
+        }
+      });
+  }, []);
+  reloadBaseRef.current = reloadBase;
+
+  // Never leave a retry armed behind an unmounted tab.
+  useEffect(() => () => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
   }, []);
 
   // NOT before /api/me has answered, and not while nobody is signed in: this

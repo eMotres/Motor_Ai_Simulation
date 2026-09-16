@@ -986,8 +986,14 @@ def _pwm_influence(doc, D: Dict[str, Any]) -> None:
         return
     for b in blocks:
         _h(doc, "Duty '%s'" % b["duty"], 2)
+        # EACH DUTY'S CONCLUSIONS UNDER ITS OWN HEADING (A2-2) — see
+        # `report.pwm_duty_text`.
+        _bcol = R._col_of(D["cols"], b["duty"])
+        _btext = R.pwm_duty_text(_bcol, D.get("sec"), D.get("brg")) if _bcol else []
         if not b["measured"]:
             _p(doc, b["line"], size=9.5, italic=True, color=NOTE)
+            for par in _btext:
+                _p(doc, par, size=9)
             continue
         n = max(1, len(b["header"]) - 1)
         label_cm = 8.2
@@ -1005,9 +1011,8 @@ def _pwm_influence(doc, D: Dict[str, Any]) -> None:
                color=NOTE)
         for n in (b.get("notes") or []) if b.get("coupled") else []:
             _p(doc, n, size=9.5, italic=True, color=NOTE)
-    for par in (R.pwm_coupled_text(D["cols"], D.get("sec"))
-                + R.pwm_influence_text(D["cols"], D.get("brg"))):
-        _p(doc, par, size=9)
+        for par in _btext:
+            _p(doc, par, size=9)
 
 
 # ── 6 thermal in detail ─────────────────────────────────────────────────────
@@ -1354,15 +1359,20 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
         # machine the server held when the modal step ran.
         _m_rpm = D.get("modes_rpm") or mres.get("rpm") or map_rpm
         _m_fs = D.get("modes_f_switch_hz")
+        # …and the carrier the run REALLY switched at (A2-1): the modulator is
+        # synchronous, so a 24 kHz request became 24,383 / 24,808 Hz.
+        _m_fs_eff = D.get("modes_f_switch_eff_hz")
         _m_slots = D.get("slots")
-        mrows = R.mode_rows(mres, rpm=_m_rpm, slots=_m_slots, f_switch_hz=_m_fs)
+        mrows = R.mode_rows(mres, rpm=_m_rpm, slots=_m_slots, f_switch_hz=_m_fs,
+                            f_switch_eff_hz=_m_fs_eff)
         if len(mrows) > 1:
             # ONE PAGE, AND ITS NOTE WITH IT (MJ-8, audit v5): the last two
             # rows and the note under them had a page to themselves.
             _table(doc, mrows, size=10.5, widths_cm=[1.2, 2.4, 1.2, 7.0, 3.0],
                    keep_together=True, keep_next=True)
             _p(doc, R.modes_excitation_note(_m_rpm, _m_slots, _m_fs,
-                                            D.get("modes_duty") or map_duty),
+                                            D.get("modes_duty") or map_duty,
+                                            _m_fs_eff),
                size=9.5, italic=True, color=NOTE)
         # FULL PAGE WIDTH for the gallery (user 2026-09-11): twelve small
         # cross-sections at the 16.5 cm the maps use were thumbnails.  The

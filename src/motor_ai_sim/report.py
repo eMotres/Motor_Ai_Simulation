@@ -548,8 +548,11 @@ def _with_coupled_bearings(brg: Optional[Dict[str, Any]],
         out["bearing_temp_note"] = (
             "converged by the coupled loop — the seat temperature the loop "
             "solved for and billed the friction at")
+    # ONE SEAT TEMPERATURE, ONE ROUNDING (BT-13): this line printed "158 °C"
+    # against the "158.4 °C" the tables, the warnings and the coupled prose all
+    # carry, which is one number with two values on one page.
     out["temp_source"] = ("bearing temperature converged by the coupled run (%s)"
-                          % _fmt(coupled.get("bearing_temp_c"), 0, "°C"))
+                          % _fmt(coupled.get("bearing_temp_c"), 1, "°C"))
     out["from_coupled"] = True
     _scale_bearing_ends(out)
     return out
@@ -2228,6 +2231,31 @@ def _loss_pie_png(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
         return None
 
 
+#: THE ORDER EVERY PER-PART TEMPERATURE LIST IS PRINTED IN (BT-17, second
+#: button audit 2026-09-16).
+#:
+#: The comparison table in section 3, the detail table in the thermal section
+#: and the bar chart beside it each carried their own copy of the same ten
+#: parts in three different orders — the stator core came seventh, ninth and
+#: ninth, the shaft and the sleeve swapped — so a reader checking one table
+#: against the other had to find every row by name.  The order lives here; the
+#: wording stays with each caller, because the chart wants "Sleeve" where the
+#: tables want "Retaining sleeve".
+THERMAL_PART_ORDER = ("winding", "enamel", "liner", "slot_fill", "magnet",
+                      "rotor", "shaft", "sleeve", "stator", "gap_air")
+
+
+def thermal_parts(labels: Dict[str, str]) -> List[Tuple[str, str]]:
+    """``[(key, label), …]`` in :data:`THERMAL_PART_ORDER`.
+
+    Keys the caller does not label are dropped; keys it labels that the order
+    does not know follow at the end, so nothing is ever silently lost.
+    """
+    out = [(k, labels[k]) for k in THERMAL_PART_ORDER if k in labels]
+    out += [(k, v) for k, v in labels.items() if k not in THERMAL_PART_ORDER]
+    return out
+
+
 def _temp_bars_png(res: Dict[str, Any], inner: Dict[str, Any],
                    limits: Optional[Dict[str, float]] = None,
                    width_cm: float = SIDE_CHART_CM,
@@ -2241,11 +2269,11 @@ def _temp_bars_png(res: Dict[str, Any], inner: Dict[str, Any],
     the magnets' grade, which are what the reader is measuring the bars against.
     """
     comps = (res or {}).get("components") or (inner or {}).get("components") or {}
-    order = [("winding", "Winding"), ("enamel", "Wire enamel"),
-             ("liner", "Slot insulation"), ("slot_fill", "Slot fill"),
-             ("magnet", "Magnets"), ("rotor", "Rotor core"),
-             ("sleeve", "Sleeve"), ("shaft", "Shaft"),
-             ("stator", "Stator core"), ("gap_air", "Air gap")]
+    order = thermal_parts({"winding": "Winding", "enamel": "Wire enamel",
+                           "liner": "Slot insulation", "slot_fill": "Slot fill",
+                           "magnet": "Magnets", "rotor": "Rotor core",
+                           "shaft": "Shaft", "sleeve": "Sleeve",
+                           "stator": "Stator core", "gap_air": "Air gap"})
     rows = [(lbl, _numf((comps.get(k) or {}).get("max")),
              _numf((comps.get(k) or {}).get("avg")))
             for k, lbl in order if isinstance(comps.get(k), dict)]
@@ -3188,8 +3216,11 @@ def _sf_bars_png(case: Dict[str, Any], width_cm: float = SIDE_CHART_CM,
         vals = np.array([r[1] for r in rows], float)[::-1]
         lim = float(SF_ACCEPT) if _numf(SF_ACCEPT) else 2.0
         fig, ax = _fig(width_cm, px, aspect=0.72)
-        cols = ["#e02718" if v < 1.0 else "#e0821a" if v < lim else "#1E7A3C"
-                for v in vals]
+        # ONE COLOUR LANGUAGE FOR A SAFETY FACTOR (A2-3).  The bands used to be
+        # this chart's own — orange for anything between 1.0 and the acceptance
+        # level — so the magnet at 1.72 and the sleeve at 1.87 were orange here
+        # and red among the warnings.  The warnings' own rule paints the bars.
+        cols = [safety_factor_ink(v, lim) for v in vals]
         ax.barh(labels, vals, color=cols, height=0.6, zorder=2)
         span = max(float(vals.max()), lim) * 1.25
         for i, v in enumerate(vals):
@@ -4425,6 +4456,31 @@ def _warn(rule: str, duty: str, quantity: str, value: Optional[float],
     return {"rule": rule, "level": level, "duty": duty, "quantity": quantity,
             "value": v, "limit": L, "unit": unit, "kind": kind,
             "margin_pct": round(margin, 1), "remedy": remedy, "note": note}
+
+
+def safety_factor_level(sf: Any, limit: Any = None,
+                        near: float = NEAR_PCT) -> Optional[str]:
+    """``'red'`` / ``'amber'`` / ``'green'`` for one part's safety factor.
+
+    A2-3 (second button audit, 2026-09-16).  The safety-factor chart coloured
+    its bars on bands of its own — red under 1.0, orange under the acceptance
+    level, green above — while the warnings section judged the same numbers
+    with the ``part_safety_factor`` rule, so the magnet at 1.72 and the sleeve
+    at 1.87 were ORANGE in the figure and counted among the red rows two
+    sections later.  One rule decides both: this is the ``kind='min'`` verdict
+    of :func:`_warn`, and the chart asks it what colour to paint.
+    """
+    v = _numf(sf)
+    L = _numf(limit if limit is not None else SF_ACCEPT)
+    if v is None or L is None or L <= 0:
+        return None
+    w = _warn("part_safety_factor", "", "", v, L, "", "", kind="min", near=near)
+    return None if w is None else str(w["level"])
+
+
+def safety_factor_ink(sf: Any, limit: Any = None) -> str:
+    """The colour that verdict is drawn in — the warnings table's own ink."""
+    return WARN_INK.get(safety_factor_level(sf, limit) or "", WARN_INK["green"])
 
 
 #: What the rotor-stress route calls the case a retaining band is sized on
@@ -5906,6 +5962,38 @@ def duty_inverter(col: Dict[str, Any]) -> Dict[str, Any]:
     return dict(inv) if isinstance(inv, dict) else {}
 
 
+def effective_carrier_hz(col: Dict[str, Any]) -> Optional[float]:
+    """The frequency this duty's bridge REALLY switched at, or ``None``.
+
+    A2-1 (second button audit, 2026-09-16).  The modulator is SYNCHRONOUS: it
+    locks an integer number of carriers to the electrical period, so a duty
+    asked for 24,000 Hz at 1,741.67 Hz electrical switches at 14 × 1,741.67 =
+    24,383.33 Hz, and the peak duty, one carrier fewer, at 24,808.33 Hz.  The
+    ring modes were being judged against the REQUEST — mode #6 at 24,028 Hz is
+    0.12 % from 24,000 Hz and 1.5 % / 3.1 % from the two carriers the runs
+    actually used, which made one red row out of a frequency neither run ever
+    produced.  Fig. 6's spectrum already annotates the same number ("nearest
+    order 24.4 kHz"), off ``carriers × f_elec``; this is that number, read
+    first from the coupled record's own ``f_carrier_eff_hz``.
+
+    ``None`` on a sinusoidal duty and on a PWM record that filed neither the
+    effective carrier nor the pair it can be rebuilt from — the caller then
+    falls back to the requested carrier, which is what was judged before.
+    """
+    if duty_drive(col) != "pwm":
+        return None
+    inv = duty_inverter(col)
+    f = _numf(inv.get("f_carrier_eff_hz"))
+    if f and f > 0:
+        return float(f)
+    nc = _numf(inv.get("carriers_per_period"))
+    f1 = (_numf(inv.get("f_elec_Hz")) or _numf(inv.get("f_elec_hz"))
+          or _numf(((col.get("res") or {}).get("coupled") or {}).get("f_elec_Hz")))
+    if nc and f1 and nc > 0 and f1 > 0:
+        return float(nc) * float(f1)
+    return None
+
+
 def sine_line_thd(col: Dict[str, Any]) -> Optional[float]:
     """The LINE-voltage THD of this duty's SINUSOIDAL run, or ``None``.
 
@@ -6202,9 +6290,16 @@ def duty_point_error(col: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     em = col.get("em") if isinstance(col.get("em"), dict) else {}
     inv = duty_inverter(col)
-    pct = _numf(em.get("I_point_error_pct"))
+    # ONE MISS, FROM ONE PLACE (BT-11, button audits 2026-09-16).  The
+    # inverter block's own figure is formed from the unrounded solved and
+    # target WINDING currents (335.879 against 346.6296 — −3.101 %); the
+    # recomputation below divides the SUMMARY's line current, which is stored
+    # already rounded to 581.8 A, and came out −3.09 % — a third value beside
+    # the −3.10 % the document's own printed currents give.  The record's
+    # number leads; the recomputation stays for a run that filed none.
+    pct = _numf(inv.get("point_error_pct"))
     if pct is None:
-        pct = _numf(inv.get("point_error_pct"))
+        pct = _numf(em.get("I_point_error_pct"))
     if pct is None or abs(pct) < PWM_POINT_TOL_PCT:
         return None
     return {
@@ -6811,10 +6906,19 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # machine came out with two different verdicts about one rotor.  The
     # frequencies are read back from whatever the record kept; the lines are
     # built from `mesh['sim.fSwitch']`, the duty's speed and the slot count.
+    #
+    # …AND AGAINST THE CARRIER THE RUN REALLY SWITCHED AT (A2-1, second button
+    # audit 2026-09-16).  `sim.fSwitch` is what the panel ASKED for; the
+    # modulator is synchronous and locks an integer count of carriers to the
+    # electrical period, so the L180 gen's two duties, both asked for 24 kHz,
+    # switched at 24,383 Hz (14) and 24,808 Hz (13).  Judged against the
+    # request, mode #6 at 24,028 Hz came out 0.12 % away and red on both
+    # duties; against the carriers the runs used it is 1.5 % and 3.1 % away.
     _fs = _numf(_setting_of(col, "sim.fSwitch"))
+    _fs_eff = effective_carrier_hz(col)
     _modes_rec = res.get("modes") if isinstance(res.get("modes"), dict) else None
     _tight = tightest_ring_mode(_modes_rec, rpm=rpm, slots=slots,
-                                f_switch_hz=_fs)
+                                f_switch_hz=_fs, f_switch_eff_hz=_fs_eff)
     _rebuilt = _tight is not None
     if _tight is None:
         # Nothing stored for this duty — the coupled run's own block, which is
@@ -6825,15 +6929,24 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         ctx["ring_mode_margin_pct"] = _numf(_tight.get("margin_pct"))
         ctx["ring_mode_excitation"] = _tight.get("excitation")
         ctx["ring_mode_hz"] = _numf(_tight.get("f_hz"))
+        if _rebuilt and _tight.get("synchronised"):
+            _judged = (", re-judged against the carrier this duty's bridge "
+                       "really switched at — %s, the synchronous modulator's "
+                       "lock on the electrical period, not the %s the panel "
+                       "asked for — and its own speed (%s)"
+                       % (_fmt(_fs_eff, 0, "Hz"), _fmt(_fs, 0, "Hz"),
+                          _fmt(rpm, 0, "rpm")))
+        elif _rebuilt:
+            _judged = (", re-judged against this duty's own PWM carrier (%s) "
+                       "and speed (%s)"
+                       % (_fmt(_fs, 0, "Hz"), _fmt(rpm, 0, "rpm")))
+        else:
+            _judged = ", as the coupled run's modal step filed it"
         ctx["ring_mode_note"] = (
             "mode at %s against %s at %s%s" % (
                 _fmt(_tight.get("f_hz"), 1, "Hz"),
                 _tight.get("excitation") or "the nearest excitation",
-                _fmt(_tight.get("excitation_hz"), 1, "Hz"),
-                (", re-judged against this duty's own PWM carrier (%s) and "
-                 "speed (%s)" % (_fmt(_fs, 0, "Hz"), _fmt(rpm, 0, "rpm")))
-                if _rebuilt else
-                ", as the coupled run's modal step filed it"))
+                _fmt(_tight.get("excitation_hz"), 1, "Hz"), _judged))
 
     # ── bearings ────────────────────────────────────────────────────────────
     if brg and brg.get("has_bearings"):
@@ -7393,6 +7506,11 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
                                 cols)[0],
         "modes_f_switch_hz": duty_setting(
             cfg_doc, me_map_duty or detail_duty or "", "sim.fSwitch"),
+        # …and the carrier that duty's bridge REALLY switched at (A2-1): the
+        # synchronous modulator locks to the electrical period, so a 24 kHz
+        # request came out 24,383 Hz on one duty and 24,808 Hz on the other.
+        "modes_f_switch_eff_hz": effective_carrier_hz(
+            _col_of(cols, str(me_map_duty or detail_duty or "")) or {}),
         "em_from_run": bool(em_from_run),
         # The COVER duty's demagnetisation-field statistics, for the section-4
         # paragraph: the worst element's company — how many elements and how
@@ -7538,6 +7656,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                         map_cur=D.get("me_map_cur"),
                         modes_rpm=D.get("modes_rpm"), slots=D.get("slots"),
                         f_switch_hz=D.get("modes_f_switch_hz"),
+                        f_switch_eff_hz=D.get("modes_f_switch_eff_hz"),
                         pair=D.get("pair"), figs=_figs, sec=sec,
                         detail_from_duty=bool(D.get("me_detail_from_duty")))
     story.append(PageBreak())
@@ -8697,7 +8816,10 @@ def bearing_note_text(brg: Dict[str, Any]) -> str:
     return (
         f"Lubrication {brg.get('lubrication', '—')}{_lube_txt}, preload "
         f"{_fmt(brg.get('preload_n'), 0, 'N')} per bearing, bearing "
-        f"temperature {_fmt(brg.get('temp_c'), 0, '°C')}{_tsrc}; radial load "
+        # ONE SEAT TEMPERATURE, ONE ROUNDING (BT-13): this line said "158 °C"
+        # against the 158.4 °C of the bearing table one row above it, the
+        # coupled table, the warnings section and section 5's prose.
+        f"temperature {_fmt(brg.get('temp_c'), 1, '°C')}{_tsrc}; radial load "
         f"= the rotating mass {_fmt(brg.get('rotor_mass_kg'), 3, 'kg')} "
         f"({_fmt(brg.get('F_r_total_N'), 1, 'N')}) split between the two ends. "
         f"{brg.get('model', '')}")
@@ -9955,11 +10077,13 @@ def thermal_temp_rows(res: Dict[str, Any],
     """Per-part max/avg temperatures.  Header row included; one row means the
     solve carried no per-component breakdown."""
     comps = res.get("components") or inner.get("components") or {}
-    order = [("winding", "Winding (copper)"), ("enamel", "Wire enamel"),
-             ("liner", "Slot insulation"), ("slot_fill", "Slot fill / impregnation"),
-             ("magnet", "Magnets"), ("rotor", "Rotor core"), ("shaft", "Shaft"),
-             ("sleeve", "Retaining sleeve"), ("stator", "Stator core"),
-             ("gap_air", "Air gap")]
+    order = thermal_parts({"winding": "Winding (copper)",
+                           "enamel": "Wire enamel",
+                           "liner": "Slot insulation",
+                           "slot_fill": "Slot fill / impregnation",
+                           "magnet": "Magnets", "rotor": "Rotor core",
+                           "shaft": "Shaft", "sleeve": "Retaining sleeve",
+                           "stator": "Stator core", "gap_air": "Air gap"})
     trows = [["Part", "max / avg [°C]"]]
     for key, label in order:
         c = comps.get(key)
@@ -11565,6 +11689,24 @@ def pwm_coupled_text(cols: List[Dict[str, Any]],
     return out
 
 
+def pwm_duty_text(col: Dict[str, Any], sec: Optional[Dict[str, int]] = None,
+                  brg: Optional[Dict[str, Any]] = None) -> List[str]:
+    """ONE duty's conclusions — the paragraphs that belong under ITS heading.
+
+    A2-2 (second button audit, 2026-09-16).  Section 5 used to print every
+    duty's table under its own ``Duty '…'`` heading and then, in one trailing
+    loop, every duty's prose: on the L180 gen the rated duty's three paragraphs
+    sat under the heading "Duty 'peak 1x9 mm'", so a client reading the peak
+    block read the rated conclusions first.  The prose is per-duty, so it is
+    built per duty and the renderers put it where its table is.
+
+    The coupled comparison answers the question when the loop was run on the
+    inverter; the carrier study answers it when that is all the duty has.  Both
+    already refuse politely for a duty that has neither, so one call each.
+    """
+    return (pwm_coupled_text([col], sec) + pwm_influence_text([col], brg))
+
+
 def pwm_blocks(cols: List[Dict[str, Any]],
                brg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """One block per duty: the coupled comparison where there is one, the
@@ -11614,8 +11756,16 @@ def _pwm_page(st, cols: List[Dict[str, Any]],
         return out
     for b in blocks:
         out.append(_para("Duty '%s'" % b["duty"], st["h2"]))
+        # EACH DUTY'S CONCLUSIONS UNDER ITS OWN HEADING (A2-2): they used to be
+        # appended in one trailing loop, which put the rated duty's three
+        # paragraphs under the heading "Duty 'peak 1x9 mm'".
+        _bcol = _col_of(cols, b["duty"])
+        _btext = pwm_duty_text(_bcol, sec, brg) if _bcol else []
         if not b["measured"]:
             out.append(_para(b["line"], st["note"]))
+            for par in _btext:
+                out.append(_para(par, st["body"]))
+                out.append(Spacer(1, 3))
             continue
         n = max(1, len(b["header"]) - 1)
         lw = max(120.0, min(220.0, CONTENT_W - n * 72.0))
@@ -11629,9 +11779,9 @@ def _pwm_page(st, cols: List[Dict[str, Any]],
             out.append(_para("Source: %s." % b["source"], st["note"]))
         for n in (b.get("notes") or []) if b.get("coupled") else []:
             out.append(_para(n, st["note"]))
-    for par in pwm_coupled_text(cols, sec) + pwm_influence_text(cols, brg):
-        out.append(_para(par, st["body"]))
-        out.append(Spacer(1, 3))
+        for par in _btext:
+            out.append(_para(par, st["body"]))
+            out.append(Spacer(1, 3))
     return out
 
 
@@ -12580,7 +12730,8 @@ def modes_heading(res: Optional[Dict[str, Any]]) -> str:
 
 
 def modes_excitation_note(rpm: Any, slots: Any, f_switch_hz: Any,
-                          duty: Optional[str] = None) -> str:
+                          duty: Optional[str] = None,
+                          f_switch_eff_hz: Any = None) -> str:
     """The one line under the modal table that names the lines it was judged
     against, and whose carrier they are.
 
@@ -12589,23 +12740,33 @@ def modes_excitation_note(rpm: Any, slots: Any, f_switch_hz: Any,
     column that came from the duty from one that came from another motor
     (reviewer 2026-09-14, A1).
     """
-    lines = excitation_lines(rpm, slots, f_switch_hz)
+    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz)
     if not lines:
         return ("No excitation line could be formed for this duty — it carries "
                 "no PWM carrier and no speed, so the modes above are judged "
                 "against nothing.")
+    _carrier = next((l for l in lines if l["name"] == "PWM carrier"), None)
+    # WHICH CARRIER (A2-1): the synchronised one when the run filed it, with
+    # the requested figure named beside it, because every other page of this
+    # document calls the same duty's supply "PWM 24 kHz".
+    if _carrier is not None and _carrier.get("synchronised"):
+        _cw = ("PWM carrier %s — the modulator is synchronous, so it locked to "
+               "this instead of the %s asked for — and its 2×"
+               % (_fmt(_carrier.get("hz"), 0, "Hz"),
+                  _fmt(_carrier.get("requested_hz") or f_switch_hz, 0, "Hz")))
+    else:
+        _cw = "PWM carrier %s and its 2×" % _fmt(
+            (_carrier or {}).get("hz") or f_switch_hz, 0, "Hz")
     return ("The 'nearest excitation' column is rebuilt from the duty%s own "
-            "settings: PWM carrier %s and its 2×, slot passing %s (%s slots × "
-            "%s) and its 2×."
-            % ((" '%s's" % duty) if duty else "'s",
-               _fmt(f_switch_hz, 0, "Hz"),
+            "settings: %s, slot passing %s (%s slots × %s) and its 2×."
+            % ((" '%s's" % duty) if duty else "'s", _cw,
                _fmt(next((l["hz"] for l in lines
                           if l["name"] == "slot passing"), None), 0, "Hz"),
                _fmt(slots, 0), _fmt(rpm, 0, "rpm")))
 
 
-def excitation_lines(rpm: Any, slots: Any,
-                     f_switch_hz: Any) -> List[Dict[str, Any]]:
+def excitation_lines(rpm: Any, slots: Any, f_switch_hz: Any,
+                     f_switch_eff_hz: Any = None) -> List[Dict[str, Any]]:
     """The excitation lines a rotor ring mode is judged against, at THIS duty.
 
     The inverter carrier and its second harmonic (fixed, they do not scale with
@@ -12618,6 +12779,15 @@ def excitation_lines(rpm: Any, slots: Any,
     against that machine's 48 kHz carrier (reviewer 2026-09-14, A1).  A mode is
     a property of the rotor, the carrier is a property of the duty, and the
     report owns the second half of that sentence.
+
+    ``f_switch_eff_hz`` IS THE CARRIER THE RUN REALLY SWITCHED AT (A2-1, second
+    button audit 2026-09-16) — see :func:`effective_carrier_hz`.  The modulator
+    is synchronous, so a duty asked for 24 kHz switched at 24,383 Hz (14
+    carriers per electrical period) or 24,808 Hz (13), and a mode judged
+    against the REQUEST is judged against a frequency the machine never saw.
+    When it is given it replaces the requested carrier and the line says so;
+    a sinusoidal duty, or a record that filed no effective carrier, keeps the
+    requested one exactly as before.
     """
     out: List[Dict[str, Any]] = []
     f_rot = (_numf(rpm) or 0.0) / 60.0
@@ -12625,11 +12795,35 @@ def excitation_lines(rpm: Any, slots: Any,
     if f_rot > 0 and n_sl > 0:
         out.append({"name": "slot passing", "hz": n_sl * f_rot})
         out.append({"name": "slot passing 2×", "hz": 2.0 * n_sl * f_rot})
-    fs = _numf(f_switch_hz) or 0.0
+    req = _numf(f_switch_hz) or 0.0
+    eff = _numf(f_switch_eff_hz) or 0.0
+    fs = eff if eff > 0 else req
+    sync = bool(eff > 0)
     if fs > 0:
-        out.append({"name": "PWM carrier", "hz": fs})
-        out.append({"name": "PWM carrier 2×", "hz": 2.0 * fs})
+        for nm, hz in (("PWM carrier", fs), ("PWM carrier 2×", 2.0 * fs)):
+            line: Dict[str, Any] = {"name": nm, "hz": hz}
+            if sync:
+                line["synchronised"] = True
+                if req > 0:
+                    line["requested_hz"] = req * (2.0 if "2×" in nm else 1.0)
+            out.append(line)
     return out
+
+
+def excitation_label(line: Optional[Dict[str, Any]]) -> str:
+    """How an excitation line is NAMED on the page.
+
+    The synchronised carrier says so, so a reader who finds 24,383 Hz here and
+    the duty's "PWM 24 kHz" everywhere else does not read one of them as a
+    typing error (A2-1).
+    """
+    if not isinstance(line, dict) or not line.get("name"):
+        return ""
+    nm = str(line.get("name"))
+    if line.get("synchronised"):
+        # "PWM carrier 2×" keeps its multiplier in front of the qualifier.
+        return nm + ", synchronised"
+    return nm
 
 
 def nearest_excitation(f_hz: Any,
@@ -12650,12 +12844,21 @@ def nearest_excitation(f_hz: Any,
             continue
         margin = (f - hz) / hz
         if best is None or abs(margin) < abs(best["_m"]):
-            best = {"name": e.get("name"), "hz": hz, "_m": margin}
+            best = {"name": e.get("name"), "hz": hz, "_m": margin,
+                    "synchronised": bool(e.get("synchronised")),
+                    "requested_hz": _numf(e.get("requested_hz"))}
     if best is None:
         return None
-    return {"name": best["name"], "hz": best["hz"],
-            "margin_pct": 100.0 * best["_m"],
-            "flag": bool(abs(best["_m"]) < RING_MODE_AMBER_PCT / 100.0)}
+    out = {"name": best["name"], "hz": best["hz"],
+           "margin_pct": 100.0 * best["_m"],
+           "flag": bool(abs(best["_m"]) < RING_MODE_AMBER_PCT / 100.0)}
+    # …and WHICH carrier it was (A2-1): the synchronised one, and what was
+    # asked for, so the row and the warning under it can name both.
+    if best.get("synchronised"):
+        out["synchronised"] = True
+        if best.get("requested_hz"):
+            out["requested_hz"] = best["requested_hz"]
+    return out
 
 
 def mode_frequencies(res: Optional[Dict[str, Any]]) -> List[float]:
@@ -12675,7 +12878,8 @@ def mode_frequencies(res: Optional[Dict[str, Any]]) -> List[float]:
 
 
 def tightest_ring_mode(res: Optional[Dict[str, Any]], *, rpm: Any = None,
-                       slots: Any = None, f_switch_hz: Any = None
+                       slots: Any = None, f_switch_hz: Any = None,
+                       f_switch_eff_hz: Any = None
                        ) -> Optional[Dict[str, Any]]:
     """The stored mode that sits closest to one of THIS duty's excitation lines.
 
@@ -12684,7 +12888,7 @@ def tightest_ring_mode(res: Optional[Dict[str, Any]], *, rpm: Any = None,
     the duty's own carrier and speed so the two duties of one machine cannot
     disagree about a frequency that belongs to the rotor.
     """
-    lines = excitation_lines(rpm, slots, f_switch_hz)
+    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz)
     if not lines:
         return None
     best: Optional[Dict[str, Any]] = None
@@ -12696,11 +12900,16 @@ def tightest_ring_mode(res: Optional[Dict[str, Any]], *, rpm: Any = None,
             best = {"f_hz": f, "excitation": near["name"],
                     "excitation_hz": near["hz"],
                     "margin_pct": near["margin_pct"]}
+            if near.get("synchronised"):
+                best["synchronised"] = True
+                if near.get("requested_hz"):
+                    best["requested_hz"] = near["requested_hz"]
     return best
 
 
 def mode_rows(res: Optional[Dict[str, Any]], *, rpm: Any = None,
-              slots: Any = None, f_switch_hz: Any = None) -> List[List[str]]:
+              slots: Any = None, f_switch_hz: Any = None,
+              f_switch_eff_hz: Any = None) -> List[List[str]]:
     """One row per mode: number, frequency, order, the nearest excitation line
     and its margin.  Header included.
 
@@ -12709,7 +12918,7 @@ def mode_rows(res: Optional[Dict[str, Any]], *, rpm: Any = None,
     is the fallback for a caller that cannot say which duty it is printing.
     """
     rows = [["#", "f [Hz]", "n", "nearest excitation", "margin"]]
-    lines = excitation_lines(rpm, slots, f_switch_hz)
+    lines = excitation_lines(rpm, slots, f_switch_hz, f_switch_eff_hz)
     for m in ((res or {}).get("modes") or []):
         if not isinstance(m, dict):
             continue
@@ -12719,17 +12928,20 @@ def mode_rows(res: Optional[Dict[str, Any]], *, rpm: Any = None,
         rows.append([
             _fmt(m.get("index"), 0), _fmt(m.get("f_hz"), 0),
             _fmt(m.get("order"), 0) if m.get("order") is not None else "—",
-            ("%s (%s Hz)" % (near.get("name"), _fmt(near.get("hz"), 0))
+            ("%s (%s Hz)" % (excitation_label(near), _fmt(near.get("hz"), 0))
              if near else "—"),
             # SIGNED margins read as arithmetic errors ("−12 %" beside a line
             # the mode sits 12 % under — reviewer 2026-09-11).  Say the
-            # direction — and keep two decimals under one per cent (CS-11):
-            # rounded to a whole number a mode 0.12 % off the carrier printed
-            # "0 % above" here and "0.12 %" in the warning, which is one
-            # quantity with two values.
+            # direction — and keep two decimals inside the FLAG BAND (CS-11,
+            # widened with A2-1): rounded to a whole number a mode 0.12 % off
+            # the carrier printed "0 % above" here and "0.12 %" in the warning,
+            # which is one quantity with two values.  Judged against the
+            # synchronised carrier the tightest mode sits 1.45 % away, and one
+            # decimal place was the difference between "1 %" here and "1.45 %"
+            # in the warnings section — the same defect one band out.
             (("%s %s" % (_fmt(abs(_numf(near.get("margin_pct")) or 0.0),
-                              2 if abs(_numf(near.get("margin_pct")) or 0.0) < 1.0
-                              else 0, "%"),
+                              2 if abs(_numf(near.get("margin_pct")) or 0.0)
+                              < RING_MODE_AMBER_PCT else 0, "%"),
                          "below" if (_numf(near.get("margin_pct")) or 0.0) < 0
                          else "above"))
              + (" " + FLAG if near.get("flag") else "")) if near else "—",
@@ -12999,8 +13211,16 @@ def mech_exagg_text(exagg: Any) -> str:
 def mech_extra_captions() -> List[Tuple[str, str, str]]:
     """``(key, caption, what-to-say-when-missing)`` for the two extra maps."""
     return [
+        # …AND ITS BAR IS THE DRAWN FIELD'S OWN RANGE (BT-14, second button
+        # audit): it tops at 315.1 µm where the tables quote a 316.5 µm
+        # maximum, for the same reason the temperature map's does — the picture
+        # is the area-averaged nodal field, which ends a little under the part
+        # maximum.  The thermal caption has said so since CS-6; this one did
+        # not, and the reader was left with two numbers for one displacement.
         ("disp", "Displacement magnitude |u| over the same case, µm, drawn on "
-                 "the deformed shape.",
+                 "the deformed shape. The bar is the drawn field's own "
+                 "area-averaged range, a little under the maximum in the "
+                 "tables.",
          "the displacement field was not stored with this result"),
         ("sf", "Safety factor over the same case, each element against its own "
                "material's criterion; the bar stops at 4.",
@@ -13245,7 +13465,7 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
                map_from_duty: bool = False,
                map_rpm: Any = None, map_cur: Any = None,
                modes_rpm: Any = None, slots: Any = None,
-               f_switch_hz: Any = None,
+               f_switch_hz: Any = None, f_switch_eff_hz: Any = None,
                pair: Optional[Dict[str, Any]] = None,
                figs: Optional[List[int]] = None,
                sec: Optional[Dict[str, int]] = None,
@@ -13433,13 +13653,14 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
         out.append(_para(MODES_PAGE_UNSOLVED, st["body"]))
     else:
         mrows = mode_rows(mres, rpm=(modes_rpm or mres.get("rpm") or map_rpm),
-                          slots=slots, f_switch_hz=f_switch_hz)
+                          slots=slots, f_switch_hz=f_switch_hz,
+                          f_switch_eff_hz=f_switch_eff_hz)
         if len(mrows) > 1:
             out.append(_table(mrows, [30, 60, 30, 170, CONTENT_W - 290],
                               header=True, size=8.6))
             out.append(_para(modes_excitation_note(
                 (modes_rpm or mres.get("rpm") or map_rpm), slots, f_switch_hz,
-                map_duty), st["note"]))
+                map_duty, f_switch_eff_hz), st["note"]))
         gal = _image(_mode_gallery_png(mres, width_cm=MAP_FULL_CM),
                      CONTENT_W, max_height=PAGE_H * 0.74)
         if gal is not None:
@@ -14446,7 +14667,10 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     R("Total electromagnetic loss [W]",
       lambda c: _e(c, "P_loss_total_W") or (c.get("result") or {}).get("loss_w"), 1)
     R("Bearing loss [W]", lambda c: _e(c, "P_bearings_W"), 1)
-    R("Windage [W]", lambda c: _e(c, "P_windage_W"), 2)
+    # ONE ROUNDING FOR ONE QUANTITY (BT-13): the windage was the only watt row
+    # printed to two decimals, so "304.19 W" here met "304.2 W" in sections 1
+    # and 4.
+    R("Windage [W]", lambda c: _e(c, "P_windage_W"), 1)
     R("Electromagnetic efficiency [%]", _eta, 2)
     R("Shaft efficiency [%]", _eta_sh, 2)
     R("Br kept in the magnets [%]",
@@ -14510,13 +14734,20 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
 
     # `slot_fill` joined the list on 2026-09-14 (reviewer, D11): it is in the
     # detail table and on the bar chart and was the only part missing here.
-    for key, label in (("winding", "Winding (copper)"), ("enamel", "Wire enamel"),
-                       ("liner", "Slot insulation"),
-                       ("slot_fill", "Slot fill / impregnation"),
-                       ("magnet", "Magnets"),
-                       ("rotor", "Rotor core"), ("stator", "Stator core"),
-                       ("shaft", "Shaft"), ("sleeve", "Retaining sleeve"),
-                       ("gap_air", "Air-gap air")):
+    # …IN THE ONE ORDER (BT-17): this table listed the stator core between the
+    # rotor core and the shaft while the detail table in the thermal section
+    # listed it after the sleeve, so two tables of the same ten parts read in
+    # two orders.  `thermal_parts` owns the order; each caller keeps its own
+    # wording.
+    for key, label in thermal_parts({"winding": "Winding (copper)",
+                                     "enamel": "Wire enamel",
+                                     "liner": "Slot insulation",
+                                     "slot_fill": "Slot fill / impregnation",
+                                     "magnet": "Magnets",
+                                     "rotor": "Rotor core", "shaft": "Shaft",
+                                     "sleeve": "Retaining sleeve",
+                                     "stator": "Stator core",
+                                     "gap_air": "Air-gap air"}):
         if not any(isinstance(((_t(c) or {}).get("components") or {}).get(key), dict)
                    for c in cols):
             continue
@@ -14792,14 +15023,30 @@ def _liftoff_words(m: Optional[Dict[str, Any]]) -> Optional[str]:
 def _criterion_words(cols: List[Dict[str, Any]], part: str) -> str:
     """Which stress a part's safety factor is taken on, in words.
 
-    Read off the part's own ``strength_kind``: a tensile strength is applied to
-    the max principal stress (the magnets, the sleeve's hoop), a yield to the
-    von Mises equivalent.  Used to LABEL the governing-stress row (MJ-6).
+    THE VALUE DECIDES THE LABEL FIRST (BT-15, second button audit 2026-09-16).
+    The label used to be read off ``strength_kind`` alone, and a tensile card
+    was always called "max principal": the sleeve's row read "(averaged peak,
+    max principal)" over 1,441.97 MPa, which is its ``hoop_max_mpa`` — the
+    principal is 1,442.01, a different number under the same label.  So the
+    stored governing stress is matched against the part's own stress keys and
+    the row is named after the one it IS; the strength kind is the fallback for
+    a part whose criterion is none of them (the magnet's, which the solver
+    forms at the interface).
     """
     for c in cols:
         m = (c.get("res") or {}).get("rotor_stress")
         e = ((m or {}).get("parts") or {}).get(part)
-        if isinstance(e, dict) and e.get("strength_kind"):
+        if not isinstance(e, dict):
+            continue
+        gv = _numf(e.get("governing_stress_mpa"))
+        if gv is not None:
+            for key, words in (("hoop_max_mpa", "hoop"),
+                               ("principal_max_mpa", "max principal"),
+                               ("von_mises_max_mpa", "von Mises")):
+                v = _numf(e.get(key))
+                if v is not None and abs(v - gv) <= max(1e-6, 1e-9 * abs(gv)):
+                    return words
+        if e.get("strength_kind"):
             k = str(e.get("strength_kind")).lower()
             if k.startswith("tens"):
                 return "max principal"
@@ -15179,9 +15426,9 @@ def coupled_warning_words(rec: Optional[Dict[str, Any]],
     # ── THE BRIDGE RAN OUT OF VOLTAGE (2026-09-16) ─────────────────────────
     # Built from the record, not passed through from the route's sentence: the
     # stored prose is written for whoever can re-run the loop ("raise
-    # inverter.v_dc_V or the carrier"), says "out of INVERTER" in capitals, and
-    # carries its own rounding of the miss (−3.10 % against the document's
-    # −3.09 %).  Every number below is the inverter block's own.
+    # inverter.v_dc_V or the carrier") and says "out of INVERTER" in capitals.
+    # Every number below is the inverter block's own — and since BT-11 so is
+    # the miss every other page prints, so the two no longer round apart.
     lim = coupled_modulation_limit(rec)
     if lim and lim.get("v1_ceiling_V") is not None:
         pct = point_pct if point_pct is not None else lim.get("point_error_pct")
@@ -15392,7 +15639,7 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
 
     S("…where it came from", _bts)
     R("Bearing loss [W]", lambda c: (_c(c) or {}).get("P_bearings_W"), 1)
-    R("Windage [W]", lambda c: (_c(c) or {}).get("P_windage_W"), 2)
+    R("Windage [W]", lambda c: (_c(c) or {}).get("P_windage_W"), 1)   # BT-13
     R("Mechanical loss total [W]", lambda c: (_c(c) or {}).get("P_mech_extra_W"), 1)
     R("Loss incl. mechanical [W]",
       lambda c: (_c(c) or {}).get("P_loss_total_incl_mech_W"), 1)

@@ -4920,7 +4920,10 @@ class TestPwmIsTheDutysOperatingCondition:
 
         for fn in (R._pwm_page, RD._pwm_influence):
             src = inspect.getsource(fn)
-            assert "pwm_blocks" in src and "pwm_coupled_text" in src, fn
+            # `pwm_duty_text` is the coupled text and the carrier study's,
+            # per duty, so each block's prose sits under its own heading
+            # (A2-2, second button audit 2026-09-16).
+            assert "pwm_blocks" in src and "pwm_duty_text" in src, fn
 
 
 # ---------------------------------------------------------------------------
@@ -6927,9 +6930,11 @@ class TestButtonAuditOf20260916:
         assert "NOT one operating point" in notes
         assert "did not solve the sinusoid's current" in notes
         assert "demagnetised" not in notes
-        # …and in the figure the rest of the document prints for that miss
-        # (the LINE current's), never a second spelling of it
-        assert "−3.09 %" in notes
+        # …and in the figure the rest of the document prints for that miss,
+        # never a second spelling of it.  Since BT-11 (2026-09-16) that figure
+        # is the inverter block's own −3.101 %, not a recomputation from the
+        # summary's pre-rounded 581.8 A, which read −3.09 %.
+        assert "−3.1 %" in notes and "−3.09" not in notes
 
     def test_bt4_a_run_on_its_point_says_nothing(self):
         from motor_ai_sim import report as R
@@ -7097,3 +7102,295 @@ class TestButtonAuditOf20260916:
         # …and the rest of a long table still breaks between rows
         assert not any(p.paragraph_format.keep_with_next
                        for c in t.rows[-1].cells for p in c.paragraphs)
+
+
+# ---------------------------------------------------------------------------
+# The SECOND button audit of 'CIANO10 200 opt' / 'L180 gen'  (2026-09-16)
+# ---------------------------------------------------------------------------
+# A2-1  the ring modes were judged against the carrier the panel ASKED for
+#       (24,000 Hz) while the synchronous modulator switched at 24,383 Hz on
+#       the rated duty and 24,808 Hz on the peak one, so one red row in the
+#       warnings section rested on a frequency neither run produced;
+# A2-2  every duty's section-5 conclusions were printed under the LAST duty's
+#       heading;
+# A2-3  the safety-factor chart painted the magnet and the sleeve orange while
+#       the warnings section counted them among its red rows.
+# …and the cosmetics of the first audit that are one number or one label
+# printed from one place: BT-11, BT-13, BT-14, BT-15, BT-17.
+
+
+class TestSecondButtonAuditOf20260916:
+
+    MODES = [
+        {"index": 5, "f_hz": 21949.22, "order": 3},
+        {"index": 6, "f_hz": 24028.069605818095, "order": 3},
+        {"index": 12, "f_hz": 41783.2, "order": 10},
+    ]
+
+    #: the peak duty's bridge, as `.duty_results.json` files it
+    INV_PEAK = {"f_carrier_hz": 24000.0, "f_carrier_eff_hz": 24808.33,
+                "carriers_per_period": 13, "v_dc_V": 1049.76, "m": 0.9515}
+
+    def _col(self, inv=None, rpm=22900.0):
+        return {"duty": "peak 1x9 mm",
+                "d": {"rpm": rpm, "mesh": {"sim.fSwitch": 24000}},
+                "em": {}, "result": {},
+                "res": {"modes": {"modes": self.MODES},
+                        "coupled": {"drive": "pwm",
+                                    "inverter": dict(inv or self.INV_PEAK)}}}
+
+    # ── A2-1 · the carrier the run really switched at ──────────────────────
+
+    def test_a2_1_the_effective_carrier_is_read_from_the_record(self):
+        from motor_ai_sim import report as R
+
+        assert R.effective_carrier_hz(self._col()) == 24808.33
+        # …rebuilt from the carrier count and the electrical frequency when the
+        # record filed no effective one — the pair Fig. 6 annotates
+        assert abs(R.effective_carrier_hz(self._col(
+            {"f_carrier_hz": 24000.0, "carriers_per_period": 14,
+             "f_elec_Hz": 1741.6667})) - 24383.33) < 0.01
+        # …and nothing at all on a duty that was not solved on a bridge
+        assert R.effective_carrier_hz(
+            {"duty": "d", "res": {"coupled": {"drive": "sine"}}}) is None
+
+    def test_a2_1_the_excitation_line_is_the_synchronised_carrier(self):
+        from motor_ai_sim import report as R
+
+        lines = R.excitation_lines(22900.0, 12, 24000.0, 24808.33)
+        carrier = next(x for x in lines if x["name"] == "PWM carrier")
+        assert carrier["hz"] == 24808.33
+        assert carrier["synchronised"] is True
+        assert carrier["requested_hz"] == 24000.0
+        assert R.excitation_label(carrier) == "PWM carrier, synchronised"
+        # …and without one the requested carrier stands, exactly as before
+        plain = next(x for x in R.excitation_lines(22900.0, 12, 24000.0)
+                     if x["name"] == "PWM carrier")
+        assert plain["hz"] == 24000.0 and not plain.get("synchronised")
+        assert R.excitation_label(plain) == "PWM carrier"
+
+    def test_a2_1_the_modal_row_names_the_carrier_it_was_judged_against(self):
+        from motor_ai_sim import report as R
+
+        rows = R.mode_rows({"modes": self.MODES}, rpm=22900.0, slots=12,
+                           f_switch_hz=24000.0, f_switch_eff_hz=24808.33)
+        row = next(r for r in rows[1:] if r[0] == "6")
+        assert "24,808 Hz" in row[3] and "synchronised" in row[3]
+        assert "24,000" not in row[3]
+        # 24,028.07 against 24,808.33 is 3.15 % BELOW, not 0.12 % — and it is
+        # printed to the same two decimals the warnings section uses, so one
+        # margin is one number on both pages (CS-11)
+        assert "3.15 %" in row[4] and "below" in row[4]
+        # …and the same mode judged against the request is the old 0.12 %
+        old = next(r for r in R.mode_rows({"modes": self.MODES}, rpm=22900.0,
+                                          slots=12, f_switch_hz=24000.0)[1:]
+                   if r[0] == "6")
+        assert "0.12 %" in old[4] and "24,000 Hz" in old[3]
+
+    def test_a2_1_the_note_under_the_table_says_which_carrier(self):
+        from motor_ai_sim import report as R
+
+        txt = R.modes_excitation_note(22900.0, 12, 24000.0, "peak 1x9 mm",
+                                      24808.33)
+        assert "24,808 Hz" in txt and "synchronous" in txt
+        assert "24,000 Hz" in txt          # …and what was asked for
+        assert "synchronous" not in R.modes_excitation_note(
+            22900.0, 12, 24000.0, "peak 1x9 mm")
+
+    def test_a2_1_the_warning_row_follows_the_real_carrier(self):
+        from motor_ai_sim import report as R
+
+        ctx = R._warning_context(self._col(), mats={}, batt={}, brg=None,
+                                 max_speed_rpm=22900.0, mag_lim=180.0,
+                                 mag_note="", ins_lim=200.0, ins_note="",
+                                 cold_k=1.0, cold_note="", slots=12)
+        assert abs(abs(ctx["ring_mode_margin_pct"]) - 3.145) < 0.01
+        assert _rule(R.duty_warnings(ctx), "ring_mode_vs_carrier")["level"] \
+            == "amber"
+        assert "24,808 Hz" in ctx["ring_mode_note"]
+        assert "24,000 Hz" in ctx["ring_mode_note"]
+
+    def test_a2_1_a_record_without_the_real_carrier_is_judged_as_before(self):
+        from motor_ai_sim import report as R
+
+        ctx = R._warning_context(self._col({"f_carrier_hz": 24000.0}),
+                                 mats={}, batt={}, brg=None,
+                                 max_speed_rpm=22900.0, mag_lim=180.0,
+                                 mag_note="", ins_lim=200.0, ins_note="",
+                                 cold_k=1.0, cold_note="", slots=12)
+        assert abs(abs(ctx["ring_mode_margin_pct"]) - 0.117) < 0.01
+        assert _rule(R.duty_warnings(ctx), "ring_mode_vs_carrier")["level"] \
+            == "red"
+        assert "synchronous" not in ctx["ring_mode_note"]
+
+    # ── A2-2 · a duty's conclusions sit under that duty's heading ──────────
+
+    def _cols(self):
+        b = TestButtonAuditOf20260916()
+        return [b._col(), b._col_peak()]
+
+    def test_a2_2_the_pdf_puts_each_conclusion_under_its_own_heading(self):
+        from motor_ai_sim import report as R
+
+        txt = []
+        for f in R._pwm_page(R._styles(), self._cols(), None,
+                             R.section_numbers(), "rated 1x9 mm"):
+            t = getattr(f, "text", None)
+            if isinstance(t, str) and t.strip():
+                txt.append(t.strip())
+        head_rated = txt.index("Duty 'rated 1x9 mm'")
+        head_peak = txt.index("Duty 'peak 1x9 mm'")
+        assert head_rated < head_peak
+        said = 0
+        for i, t in enumerate(txt):
+            if t.startswith("Duty 'rated 1x9 mm',"):
+                assert i < head_peak, t
+                said += 1
+            if t.startswith("Duty 'peak 1x9 mm',"):
+                assert i > head_peak, t
+                said += 1
+        assert said >= 2
+
+    def test_a2_2_word_puts_each_conclusion_under_its_own_heading(self):
+        import docx as _docx
+
+        from motor_ai_sim import report as R
+        from motor_ai_sim import report_docx as RD
+
+        doc = _docx.Document()
+        RD._pwm_influence(doc, {"cols": self._cols(), "brg": None,
+                                "sec": R.section_numbers(),
+                                "d_duty": {"name": "rated 1x9 mm"}})
+        txt = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+        head_peak = txt.index("Duty 'peak 1x9 mm'")
+        said = 0
+        for i, t in enumerate(txt):
+            if t.startswith("Duty 'rated 1x9 mm',"):
+                assert i < head_peak, t
+                said += 1
+            if t.startswith("Duty 'peak 1x9 mm',"):
+                assert i > head_peak, t
+                said += 1
+        assert said >= 2
+
+    def test_a2_2_one_dutys_text_is_only_that_dutys(self):
+        from motor_ai_sim import report as R
+
+        rated, peak = self._cols()
+        for par in R.pwm_duty_text(rated, R.section_numbers()):
+            assert "peak 1x9 mm" not in par, par
+        assert any("rated 1x9 mm" in p for p in R.pwm_duty_text(rated))
+        assert any("peak 1x9 mm" in p for p in R.pwm_duty_text(peak))
+
+    # ── A2-3 · one colour language for a safety factor ─────────────────────
+
+    def test_a2_3_the_chart_colour_is_the_warning_rules_verdict(self):
+        from motor_ai_sim import report as R
+
+        for sf in (0.22, 1.44, 1.72, 1.87, 1.999, 2.0, 2.15, 2.4, 3.83):
+            rule = _rule(R.duty_warnings(
+                {"duty": "u", "sf_min": 9.0, "sf_min_part": "shaft",
+                 "part_safety_factors": {"magnet": sf}}),
+                "part_safety_factor")
+            assert R.safety_factor_level(sf) == rule["level"], sf
+            assert R.safety_factor_ink(sf) == R.WARN_INK[rule["level"]], sf
+        # the four safety factors of the L180 gen report: red in the warnings
+        # section, and now red in the chart too
+        for sf in (1.44, 1.55, 1.72, 1.87):
+            assert R.safety_factor_level(sf) == "red"
+
+    def test_a2_3_the_chart_asks_the_rule_instead_of_its_own_bands(self):
+        import inspect
+
+        from motor_ai_sim import report as R
+
+        src = inspect.getsource(R._sf_bars_png)
+        assert "safety_factor_ink" in src
+        assert "#e0821a" not in src        # the old orange band
+
+    # ── the cosmetics: one number, one label, printed from one place ───────
+
+    def test_bt11_the_miss_is_the_inverters_own_figure(self):
+        from motor_ai_sim import report as R
+
+        col = TestButtonAuditOf20260916()._col()
+        # the summary's line current is stored already rounded (581.8 A), so
+        # recomputing the miss from it gave a third value, −3.09 %
+        assert abs(R.duty_point_error(col)["pct"] + 3.101) < 1e-9
+        # …and it prints as one value, the one the document's own currents give
+        # (581.8 against 600.4 A is −3.10 %, and `_fmt` drops the trailing zero)
+        notes = " ".join(R.pwm_coupled_rows(col)["notes"])
+        assert "−3.1 %" in notes and "−3.09" not in notes
+
+    def test_bt13_one_rounding_for_the_seat_and_for_the_windage(self):
+        from motor_ai_sim import report as R
+
+        brg = R._with_coupled_bearings(
+            {"has_bearings": True, "P_bearings_W": 900.0,
+             "bearings": [{"bearing": "b"}]},
+            {"bearing_temp_c": 158.4, "P_bearings_W": 982.02,
+             "P_windage_W": 304.192}, None)
+        assert "158.4 °C" in brg["temp_source"]
+        assert "158 °C" not in brg["temp_source"].replace("158.4 °C", "")
+        # …and section 1's own prose, which printed the seat to a whole degree
+        note = R.bearing_note_text({"lubrication": "grease", "preload_n": 200.0,
+                                    "temp_c": 158.4, "rotor_mass_kg": 14.672,
+                                    "F_r_total_N": 143.9, "model": "SKF"})
+        assert "bearing temperature 158.4 °C" in note
+        cols = [{"duty": "u", "d": {}, "em": {"P_windage_W": 304.192},
+                 "result": {}, "res": {"coupled": {"P_windage_W": 304.192}}}]
+        for rows in (R.em_compare_rows(cols, {})[1],
+                     R.coupled_compare_rows(cols)[1]):
+            cell = next((str(r[1]) for r in rows
+                         if str(r[0]).startswith("Windage")), None)
+            assert cell == "304.2", rows
+
+    def test_bt14_the_displacement_map_says_its_bar_is_the_drawn_field(self):
+        from motor_ai_sim import report as R
+
+        cap = dict((k, c) for k, c, _m in R.mech_extra_captions())
+        assert "area-averaged range" in cap["disp"]
+        assert "area-averaged range" in R.THERMAL_MAP_CAPTION
+
+    def test_bt15_the_criterion_is_named_after_the_stress_it_is(self):
+        from motor_ai_sim import report as R
+
+        cols = [{"res": {"rotor_stress": {"parts": {
+            "sleeve": {"strength_kind": "tensile",
+                       "hoop_max_mpa": 1441.974379881978,
+                       "principal_max_mpa": 1442.0112099332673,
+                       "von_mises_max_mpa": 1441.8262875241737,
+                       "governing_stress_mpa": 1441.974379881978},
+            "rotor": {"strength_kind": "yield",
+                      "von_mises_max_mpa": 1562.195800326151,
+                      "principal_max_mpa": 1614.7842721829468,
+                      "governing_stress_mpa": 1562.195800326151},
+            "magnet": {"strength_kind": "tensile",
+                       "hoop_max_mpa": 13.6, "principal_max_mpa": 13.677,
+                       "von_mises_max_mpa": 541.6,
+                       "governing_stress_mpa": 46.418880074869044}}}}}]
+        assert R._criterion_words(cols, "sleeve") == "hoop"
+        assert R._criterion_words(cols, "rotor") == "von Mises"
+        # …and a part whose criterion is none of the stored stresses keeps the
+        # word its strength card implies
+        assert R._criterion_words(cols, "magnet") == "max principal"
+
+    def test_bt17_every_per_part_temperature_list_is_in_one_order(self):
+        from motor_ai_sim import report as R
+
+        comps = {k: {"max": 100.0, "avg": 90.0} for k in R.THERMAL_PART_ORDER}
+        detail = [str(r[0]) for r in
+                  R.thermal_temp_rows({"components": comps}, {})[1:]]
+        cols = [{"duty": "u", "d": {}, "em": {}, "result": {},
+                 "res": {"thermal": {"components": comps}}}]
+        compare = [str(r[0]) for r in R.thermal_compare_rows(cols)[1]]
+        names = ["Winding", "Wire enamel", "Slot insulation", "Slot fill",
+                 "Magnets", "Rotor core", "Shaft", "Retaining sleeve",
+                 "Stator core"]
+
+        def _seen(labels):
+            return [n for n in names
+                    if any(str(x).startswith(n) for x in labels)]
+
+        assert _seen(detail) == names
+        assert _seen(compare) == names

@@ -732,7 +732,7 @@ ANON_OWNER = "anonymous"
 
 
 def caller_identity(authorization: Optional[str] = None) -> dict:
-    """Who is asking — `{"id": str, "is_admin": bool}`.
+    """Who is asking — `{"id": str, "is_admin": bool, "tier": str}`.
 
     The id is the SAME dialect the stores spell in an entry's `owner` field, so
     "is this mine?" is one string comparison and not a translation step. It is
@@ -743,6 +743,13 @@ def caller_identity(authorization: Optional[str] = None) -> dict:
     of admin for the whole backend, including the local/unconfigured dev case
     where the developer IS the admin (otherwise every write on a laptop would
     have to be signed in to a Firebase project that local dev does not have).
+
+    `tier` rides along because the identity is ALREADY resolved here and the
+    job queue needs it (jobs.priority_for): re-resolving a bearer token deep
+    inside a submit would mean a second verification per solve, and a queue
+    class that could disagree with the tier the gate let through. It is the
+    registry tier of a signed-in account, 'admin' for an admin caller (the
+    local-dev one included) and 'anon' when no credentials were presented.
     """
     # A route handler called DIRECTLY (tests, internal call paths) still carries
     # FastAPI's unresolved `Header(...)` default in this slot.  Anything that is
@@ -756,7 +763,8 @@ def caller_identity(authorization: Optional[str] = None) -> dict:
         ident = (user.get("email") or "").strip().lower() or (user.get("uid") or "")
     if not ident:
         ident = ADMIN_OWNER if is_admin else ANON_OWNER
-    return {"id": ident, "is_admin": is_admin}
+    tier = "admin" if is_admin else str((user or {}).get("tier") or "anon")
+    return {"id": ident, "is_admin": is_admin, "tier": tier}
 
 
 def require_admin(authorization: Optional[str] = Header(default=None)) -> dict:

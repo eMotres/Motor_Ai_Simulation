@@ -299,6 +299,91 @@ def set_motor_grants(email: str, *, all_motors: bool,
     return get_motor_grants(email)
 
 
+# ── invites ──────────────────────────────────────────────────────────────────
+# An invite is NOT a second store.  There is one registry, and an invite is a
+# row in it that the vendor created on purpose, stamped with who invited whom,
+# when and why:  `invite: {"by", "at", "note", "tier"}`.  A second file would
+# have to be kept in step with users.json on every rename, disable and delete —
+# and the one thing this deployment cannot afford is two answers to "may this
+# person in?".
+#
+# No e-mail is sent, and none can be: the host blocks outbound 25/465, so the
+# admin tells the person to sign in with Google.  The row exists first, which is
+# what makes the difference between an invited account (its tier and its motors
+# are already decided) and an unknown Google address (auto-registered at `free`
+# with NOTHING granted — see auth._registry_tier).
+#
+# The password of an invited account is RANDOM and nobody holds it: the door is
+# Google sign-in, or an admin password reset.  It is not left empty, because an
+# empty hash is a hash somebody might one day match.
+
+def invite_user(email: str, *, tier: str = "free", name: str = "",
+                by: str = "", note: str = "") -> dict:
+    """Create — or re-invite — the account `email`, and stamp the invite.
+
+    Re-inviting an EXISTING account is deliberate and idempotent: it sets the
+    tier, clears `disabled` (an invite is "come in", and refusing the person at
+    the door because an old row says disabled is the worst kind of silent no)
+    and re-stamps who/when/why.  It never touches the password: an account that
+    already signs in keeps signing in.
+    """
+    email = _norm(email)
+    if not email or "@" not in email:
+        raise ValueError(f"'{email}' is not an email address")
+    if tier not in TIERS:
+        raise ValueError(f"tier must be one of {TIERS}")
+    stamp = {"by": _norm(by) or "admin",
+             "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+             "note": str(note or "")[:500],
+             "tier": tier}
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        if rec is None:
+            salt = secrets.token_hex(16)
+            rec = {"pw_salt": salt,
+                   "pw_hash": _hash_pw(secrets.token_urlsafe(32), salt),
+                   "pw_iters": _PBKDF2_ITERS,
+                   "tier": tier,
+                   "name": name or "",
+                   "disabled": False,
+                   "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            users[email] = rec
+        else:
+            rec["tier"] = tier
+            rec["disabled"] = False
+            if name:
+                rec["name"] = str(name)
+        rec["invite"] = stamp
+        _save(users)
+    return public_user(email)
+
+
+def invite_of(email: str) -> Optional[dict]:
+    """The invite stamp on an account, or None if it was never invited."""
+    inv = (_load_soft().get(_norm(email)) or {}).get("invite")
+    return dict(inv) if isinstance(inv, dict) else None
+
+
+def list_invites() -> list[dict]:
+    """Every INVITED account, newest invite first: the public record + stamp.
+
+    Accounts that arrived by themselves (an unknown Google address signing in)
+    carry no stamp and are not listed here — they are in `list_users()`.
+    """
+    out = []
+    for email, rec in _load_soft().items():
+        inv = rec.get("invite")
+        if not isinstance(inv, dict):
+            continue
+        out.append({**public_user(email),
+                    "invited_by": inv.get("by") or "",
+                    "invited_at": inv.get("at") or "",
+                    "note": inv.get("note") or ""})
+    out.sort(key=lambda r: r.get("invited_at") or "", reverse=True)
+    return out
+
+
 def any_users() -> bool:
     return bool(_load_soft())
 

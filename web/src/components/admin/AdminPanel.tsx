@@ -19,6 +19,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import KeyIcon from '@mui/icons-material/Key';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip as RcTooltip,
@@ -164,11 +165,80 @@ const ResetPasswordDialog: React.FC<{
 // A new account is granted NOTHING and sees an empty catalog; the vendor picks
 // its motors here. "All motors" also covers dies added later.
 
+/** The catalog picker itself — shared by the grants dialog and the invite row,
+ *  so a motor list that reads one way in one of them cannot read another way in
+ *  the other. */
+const MotorPicker: React.FC<{
+  dies: CatalogDie[] | null; all: boolean; picked: Set<string>;
+  onAll: (v: boolean) => void; onToggle: (name: string) => void;
+}> = ({ dies, all, picked, onAll, onToggle }) => {
+  // Grouped by stator diameter — the same hierarchy the Motors tab shows.
+  const groups = useMemo(() => {
+    const m = new Map<string, CatalogDie[]>();
+    for (const d of dies ?? []) {
+      const k = d.stator_diameter == null ? '—' : String(d.stator_diameter);
+      m.set(k, [...(m.get(k) ?? []), d]);
+    }
+    return [...m.entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
+  }, [dies]);
+
+  return (
+    <>
+      <FormControlLabel
+        control={<Switch size="small" checked={all} onChange={(e) => onAll(e.target.checked)} />}
+        label={<Typography sx={{ fontSize: 13 }}>All motors <span style={{ color: 'var(--text-4)' }}>(including ones added later)</span></Typography>}
+      />
+      {dies === null && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, color: 'var(--text-3)' }}>
+          <CircularProgress size={16} /> <Typography sx={{ fontSize: 12 }}>Loading catalog…</Typography>
+        </Box>
+      )}
+      {dies !== null && groups.map(([dia, list]) => (
+        <Box key={dia} sx={{ mt: 1.5, opacity: all ? 0.45 : 1 }}>
+          <Typography sx={{ ...LABEL, color: '#60a5fa' }}>Ø {dia} mm</Typography>
+          {list.map((d) => (
+            <FormControlLabel key={d.name} sx={{ display: 'flex', ml: 0 }}
+              control={<Checkbox size="small" disabled={all} checked={all || picked.has(d.name)}
+                onChange={() => onToggle(d.name)} sx={{ py: 0.25 }} />}
+              label={
+                <Typography sx={{ fontSize: 12.5, color: 'var(--text-1)' }}>
+                  {d.name}
+                  <span style={{ color: 'var(--text-4)' }}>
+                    {'  '}· {d.configs} config{d.configs === 1 ? '' : 's'}
+                  </span>
+                </Typography>
+              } />
+          ))}
+        </Box>
+      ))}
+      {dies !== null && dies.length === 0 && (
+        <Typography sx={{ fontSize: 12, color: 'var(--text-4)', py: 2 }}>
+          The catalog has no dies yet.
+        </Typography>
+      )}
+    </>
+  );
+};
+
+/** Load the catalog once per dialog opening. */
+const useCatalog = (open: boolean) => {
+  const [dies, setDies] = useState<CatalogDie[] | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    setDies(null);
+    fetch(`${API}/api/admin/motors`, { cache: 'no-store' })
+      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then((j) => setDies(j.dies ?? []))
+      .catch(() => setDies([]));
+  }, [open]);
+  return dies;
+};
+
 const MotorsDialog: React.FC<{
   user: RegistryUser | null; onClose: () => void;
   onSaved: (email: string, motors: MotorGrants) => void;
 }> = ({ user, onClose, onSaved }) => {
-  const [dies, setDies] = useState<CatalogDie[] | null>(null);
+  const dies = useCatalog(!!user);
   const [all, setAll] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [err, setErr] = useState<string | null>(null);
@@ -179,22 +249,7 @@ const MotorsDialog: React.FC<{
     setErr(null);
     setAll(user.motors?.all === true);
     setPicked(new Set(user.motors?.dies ?? []));
-    setDies(null);
-    fetch(`${API}/api/admin/motors`, { cache: 'no-store' })
-      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then((j) => setDies(j.dies ?? []))
-      .catch((e) => { setDies([]); setErr(String(e)); });
   }, [user]);
-
-  // Grouped by stator diameter — the same hierarchy the Motors tab shows.
-  const groups = useMemo(() => {
-    const m = new Map<string, CatalogDie[]>();
-    for (const d of dies ?? []) {
-      const k = d.stator_diameter == null ? '—' : String(d.stator_diameter);
-      m.set(k, [...(m.get(k) ?? []), d]);
-    }
-    return [...m.entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
-  }, [dies]);
 
   const toggle = (name: string) => setPicked((s) => {
     const n = new Set(s);
@@ -226,44 +281,94 @@ const MotorsDialog: React.FC<{
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: '8px !important' }}>
-        <FormControlLabel
-          control={<Switch size="small" checked={all} onChange={(e) => setAll(e.target.checked)} />}
-          label={<Typography sx={{ fontSize: 13 }}>All motors <span style={{ color: 'var(--text-4)' }}>(including ones added later)</span></Typography>}
-        />
-        {dies === null && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 2, color: 'var(--text-3)' }}>
-            <CircularProgress size={16} /> <Typography sx={{ fontSize: 12 }}>Loading catalog…</Typography>
-          </Box>
-        )}
-        {dies !== null && groups.map(([dia, list]) => (
-          <Box key={dia} sx={{ mt: 1.5, opacity: all ? 0.45 : 1 }}>
-            <Typography sx={{ ...LABEL, color: '#60a5fa' }}>Ø {dia} mm</Typography>
-            {list.map((d) => (
-              <FormControlLabel key={d.name} sx={{ display: 'flex', ml: 0 }}
-                control={<Checkbox size="small" disabled={all} checked={all || picked.has(d.name)}
-                  onChange={() => toggle(d.name)} sx={{ py: 0.25 }} />}
-                label={
-                  <Typography sx={{ fontSize: 12.5, color: 'var(--text-1)' }}>
-                    {d.name}
-                    <span style={{ color: 'var(--text-4)' }}>
-                      {'  '}· {d.configs} config{d.configs === 1 ? '' : 's'}
-                    </span>
-                  </Typography>
-                } />
-            ))}
-          </Box>
-        ))}
-        {dies !== null && dies.length === 0 && (
-          <Typography sx={{ fontSize: 12, color: 'var(--text-4)', py: 2 }}>
-            The catalog has no dies yet.
-          </Typography>
-        )}
+        <MotorPicker dies={dies} all={all} picked={picked} onAll={setAll} onToggle={toggle} />
         {err && <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>{err}</Typography>}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} sx={{ textTransform: 'none' }}>Cancel</Button>
         <Button variant="contained" disabled={busy} onClick={() => void save()}
           sx={{ textTransform: 'none' }}>Save</Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+// ── Invite ──────────────────────────────────────────────────────────────────
+// One call creates the account, its plan, its motors and its workspace. NO
+// E-MAIL IS SENT (the host blocks outbound SMTP) — the admin is the messenger,
+// which is why the dialog says so instead of implying a delivery.
+
+const InviteDialog: React.FC<{
+  open: boolean; onClose: () => void; onInvited: (msg: string) => void;
+}> = ({ open, onClose, onInvited }) => {
+  const dies = useCatalog(open);
+  const [email, setEmail] = useState('');
+  const [tier, setTier] = useState<string>('free');
+  const [note, setNote] = useState('');
+  const [all, setAll] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setEmail(''); setTier('free'); setNote(''); setAll(false);
+    setPicked(new Set()); setErr(null);
+  }, [open]);
+
+  const toggle = (name: string) => setPicked((s) => {
+    const n = new Set(s);
+    if (n.has(name)) n.delete(name); else n.add(name);
+    return n;
+  });
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${API}/api/admin/invite`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim(), tier, note: note.trim(),
+          motors: all ? 'all' : [...picked],
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(j.detail ?? `HTTP ${r.status}`); return; }
+      onClose();
+      onInvited(`${email.trim()} invited — tell them to sign in with Google (no e-mail was sent)`);
+    } catch (e) { setErr(String(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle sx={{ fontSize: '1rem' }}>
+        Invite
+        <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
+          Creates the account, its plan and its motors. No e-mail is sent — they sign in with Google.
+        </Typography>
+      </DialogTitle>
+      <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>
+        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Tooltip title="The Google address they will sign in with" arrow>
+            <TextField size="small" label="Email" type="email" value={email} autoFocus
+              onChange={(e) => setEmail(e.target.value)} sx={{ flex: '2 1 220px' }} />
+          </Tooltip>
+          <Select size="small" value={tier} onChange={(e) => setTier(e.target.value)} sx={{ flex: '0 0 110px' }}>
+            {TIERS.map((t) => <MenuItem key={t} value={t} sx={{ fontSize: 13 }}>{t}</MenuItem>)}
+          </Select>
+          <TextField size="small" label="Note (optional)" value={note}
+            onChange={(e) => setNote(e.target.value)} sx={{ flex: '2 1 200px' }} />
+        </Box>
+        <Box>
+          <MotorPicker dies={dies} all={all} picked={picked} onAll={setAll} onToggle={toggle} />
+        </Box>
+        {err && <Typography variant="caption" color="error">{err}</Typography>}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} sx={{ textTransform: 'none' }}>Cancel</Button>
+        <Button variant="contained" disabled={busy || !email.trim()}
+          onClick={() => void submit()} sx={{ textTransform: 'none' }}>Invite</Button>
       </DialogActions>
     </Dialog>
   );
@@ -300,6 +405,7 @@ const AdminPanel: React.FC = () => {
   const [tickets, setTickets] = useState<AdminTicket[]>([]);
   const [supportCfg, setSupportCfg] = useState<SupportCfg | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [motorsFor, setMotorsFor] = useState<RegistryUser | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
@@ -391,6 +497,12 @@ const AdminPanel: React.FC = () => {
         <Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>Admin · Users &amp; statistics</Typography>
         <Box sx={{ flex: 1 }} />
         {notice && <Typography sx={{ fontSize: 11, color: '#34d399' }}>✓ {notice}</Typography>}
+        <Tooltip title="Creates the account, its plan and its motors, and seeds its workspace. No e-mail is sent — tell them to sign in with Google with this address." arrow>
+          <Button size="small" startIcon={<MailOutlineIcon sx={{ fontSize: 16 }} />} onClick={() => setInviteOpen(true)}
+            variant="outlined" sx={{ textTransform: 'none', fontSize: 12 }}>
+            Invite
+          </Button>
+        </Tooltip>
         <Button size="small" startIcon={<PersonAddIcon sx={{ fontSize: 16 }} />} onClick={() => setCreateOpen(true)}
           variant="outlined" sx={{ textTransform: 'none', fontSize: 12 }}>
           Add account
@@ -643,6 +755,8 @@ const AdminPanel: React.FC = () => {
 
       <CreateUserDialog open={createOpen} onClose={() => setCreateOpen(false)}
         onCreated={() => { setNotice('account created'); void load(); }} />
+      <InviteDialog open={inviteOpen} onClose={() => setInviteOpen(false)}
+        onInvited={(m) => { setNotice(m); void load(); }} />
       <ResetPasswordDialog email={resetFor} onClose={() => setResetFor(null)}
         onDone={(m) => setNotice(m)} />
       <MotorsDialog user={motorsFor} onClose={() => setMotorsFor(null)}

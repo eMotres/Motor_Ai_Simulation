@@ -71,7 +71,8 @@ __all__ = [
     "Workspace", "WorkspaceState",
     "workspace", "root", "shared_root", "published_root", "config_file",
     "use_workspace", "workspace_for_identity", "workspace_for_request",
-    "workspace_id", "workspaces_root", "ensure_layout", "process_workspace",
+    "workspace_id", "workspaces_root", "ensure_layout", "provision",
+    "process_workspace",
     "WorkspaceMiddleware", "install_workspace_resolver", "module_attrs",
     # Stage 2 — the three layers
     "Layer", "layering", "layers", "resolve_die_dir", "resolve_config_file",
@@ -699,6 +700,34 @@ def ensure_layout(ws: Workspace) -> Workspace:
     except OSError as exc:              # noqa: BLE001 — never fail a request here
         log.warning("workspace %s layout unavailable: %s", ws.id, exc)
     return ws
+
+
+def provision(email: Optional[str]) -> Optional[Workspace]:
+    """Make sure `email` HAS a workspace, right now — sign-in and invite.
+
+    ``workspace_for_identity`` already seeds a workspace the first time it
+    resolves one, but that happens on the first REQUEST, inside the middleware,
+    with the answer of a route hanging on it.  Stage 10's requirement is that
+    the folder exists before anything needs it: an admin invites somebody, or
+    somebody signs in, and the machine they will open is already seeded.
+
+    Idempotent and never raises: ``ensure_layout`` is a ``mkdir -p`` plus one
+    ``exists()`` on the config file, so calling it on every sign-in costs two
+    stat calls and repairs the case a directory was removed underneath a
+    workspace this process still has cached.  A no-op when ``WORKSPACES_ROOT``
+    is unset (this workstation) or the identity is empty/anonymous.
+    """
+    ident = (email or "").strip().lower()
+    if workspaces_root() is None or not ident:
+        return None
+    from motor_ai_sim.auth import ADMIN_OWNER, ANON_OWNER
+    if ident in (ANON_OWNER, ADMIN_OWNER):
+        return None
+    try:
+        return ensure_layout(workspace_for_identity(ident))
+    except Exception as exc:                # noqa: BLE001 — never fail a sign-in
+        log.warning("workspace provisioning for %s failed: %s", ident, exc)
+        return None
 
 
 def workspace_for_request(authorization: Optional[str]) -> Workspace:

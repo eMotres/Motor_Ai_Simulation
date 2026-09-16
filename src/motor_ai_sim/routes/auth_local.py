@@ -47,8 +47,19 @@ def _who(request: Optional[Request]) -> tuple[str, str]:
 
 
 def _start_session(email: str, *, method: str, request: Optional[Request]) -> str:
-    """Record the session, return the signed token that names it."""
+    """Record the session, return the signed token that names it.
+
+    FIRST SIGN-IN PROVISIONING (Stage 10): the account's workspace is created
+    and seeded HERE, before the token leaves the building.  The middleware would
+    also do it on the first request that arrives, but then the very first
+    ``/api/config`` of a brand-new account is racing a directory copy — and if
+    the seed fails, it fails inside a route instead of at the door where the
+    log line is about sign-in.  ``workspace.provision`` is a no-op when
+    ``WORKSPACES_ROOT`` is unset, so this workstation is unaffected.
+    """
     ip, ua = _who(request)
+    from motor_ai_sim import workspace as W
+    W.provision(email)
     sid = S.create(email, expires=time.time() + U._TOKEN_TTL_S,
                    login_method=method, ip=ip, user_agent=ua)
     token = U.issue_token(email, sid=sid)

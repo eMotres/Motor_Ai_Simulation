@@ -261,17 +261,44 @@ def set_user_motors(email: str, body: dict = Body(default={}),
     a die was renamed is a user who still sees nothing and no way to find out
     why."""
     from motor_ai_sim import users as U
-    from motor_ai_sim.routes.family import die_names
     if U.get_user(email) is None:
         raise HTTPException(status_code=404, detail=f"user '{email}' not found")
     body = body or {}
     all_motors = bool(body.get("all"))
     raw = body.get("dies")
+    if raw is not None and not isinstance(raw, (list, tuple)):
+        raise HTTPException(status_code=422,
+                            detail="'dies' must be a list of die names")
+    dies = _check_dies(raw)
+    grants = U.set_motor_grants(email, all_motors=all_motors, dies=dies)
+    return {"ok": True, "email": email.strip().lower(), "motors": grants}
+
+
+# ── Invites ───────────────────────────────────────────────────────────────────
+# The door for an external user, and the ONLY one on a host with
+# PUBLIC_EXHIBIT=0 and CATALOG_GRANT_ALL_REGISTERED unset: an admin creates the
+# registry row, sets its tier and picks its motors, and the person signs in with
+# Google.  NO E-MAIL IS SENT — Hetzner blocks outbound 25/465, so a route that
+# claimed to send one would be lying.  The admin tells the person.
+#
+# Three routes and no new store: an invite is a stamped row in users.json
+# (users.invite_user), which is why disable / delete / grant changes made
+# through the other admin routes cannot drift away from it.
+
+
+def _check_dies(raw) -> list:
+    """Validate a die list against the catalog and NAME the unknown ones.
+
+    Shared with :func:`set_user_motors` above, which grew the rule first: a
+    grant silently dropped because a die was renamed is a user who still sees
+    nothing and no way to find out why.
+    """
+    from motor_ai_sim.routes.family import die_names
     if raw is None:
         raw = []
     if not isinstance(raw, (list, tuple)):
         raise HTTPException(status_code=422,
-                            detail="'dies' must be a list of die names")
+                            detail="'motors' must be a list of die names or \"all\"")
     dies = [str(d).strip() for d in raw if str(d).strip()]
     known = die_names()
     unknown = sorted({d for d in dies if d not in known})
@@ -280,8 +307,104 @@ def set_user_motors(email: str, body: dict = Body(default={}),
             "unknown die(s): " + ", ".join(f"'{d}'" for d in unknown)
             + " — the catalog has " + (", ".join(f"'{d}'" for d in sorted(known))
                                        if known else "no dies")))
+    return dies
+
+
+@router.post("/invite")
+def invite(body: dict = Body(default={}),
+           admin_user: dict = Depends(require_admin)):
+    """Invite one external user: registry row + tier + motors + workspace.
+
+    `{email, tier="free", motors: [die names] | "all" | [], note, name}`.
+
+    Everything the account needs exists when this returns — including its
+    WORKSPACE, seeded from the shared machine, so the person's first request
+    after signing in reads a working motor and not a half-created directory.
+    Re-inviting an existing account re-sets its tier, grants and note (and
+    un-disables it); it never touches a password.
+    """
+    from motor_ai_sim import users as U
+    from motor_ai_sim import workspace as W
+    body = body or {}
+    email = str(body.get("email") or "").strip().lower()
+    tier = str(body.get("tier") or "free").strip().lower()
+    if tier not in _VALID_TIERS:
+        raise HTTPException(status_code=422,
+                            detail=f"tier must be one of {_VALID_TIERS}")
+    motors = body.get("motors", [])
+    all_motors = (motors is True
+                  or (isinstance(motors, str) and motors.strip().lower() == "all")
+                  or (isinstance(motors, dict) and bool(motors.get("all"))))
+    dies = [] if all_motors else _check_dies(
+        motors.get("dies") if isinstance(motors, dict) else motors)
+    try:
+        user = U.invite_user(email, tier=tier, name=str(body.get("name") or ""),
+                             by=str(admin_user.get("email") or "") or "admin",
+                             note=str(body.get("note") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     grants = U.set_motor_grants(email, all_motors=all_motors, dies=dies)
-    return {"ok": True, "email": email.strip().lower(), "motors": grants}
+    ws = W.provision(email)
+    return {"ok": True,
+            "user": {**user, "motors": grants},
+            "motors": grants,
+            "workspace": (str(ws.root) if ws is not None else None),
+            # Said out loud in the response because the admin is the messenger:
+            # nothing left this server for the invited address.
+            "emailed": False,
+            "next": "no e-mail was sent — tell them to sign in with Google"}
+
+
+@router.get("/invites")
+def list_invites(_admin: dict = Depends(require_admin)):
+    """Every invited account, newest first, with whether it has ever signed in."""
+    from motor_ai_sim import sessions as S
+    from motor_ai_sim import users as U
+    rows = []
+    for r in U.list_invites():
+        try:
+            seen = S.list_for(r["email"])
+        except Exception:                               # noqa: BLE001
+            seen = []
+        last = max((float(s.get("last_seen") or s.get("created") or 0.0)
+                    for s in seen), default=0.0)
+        rows.append({**r, "accepted": bool(seen),
+                     "last_seen": last or None})
+    return {"count": len(rows), "invites": rows}
+
+
+@router.delete("/invites/{email}")
+def revoke_invite(email: str, _admin: dict = Depends(require_admin)):
+    """Withdraw an invite: the registry row goes, every session of it is revoked.
+
+    The account stops being able to sign in as itself — and if the person signs
+    in with Google again they are an unknown address, i.e. `free` with NOTHING
+    granted (auth._registry_tier), which is the same as being outside.
+
+    The WORKSPACE DIRECTORY IS NOT TOUCHED and its path is in the answer: it
+    holds the person's own saved work, and deleting a user's data as a side
+    effect of tidying an invite list is not a decision a DELETE on an invite
+    gets to make.  Refuses (404) on an account that was never invited — those
+    are removed through DELETE /api/auth/users/{email}, deliberately.
+    """
+    from motor_ai_sim import sessions as S
+    from motor_ai_sim import users as U
+    from motor_ai_sim import workspace as W
+    email = (email or "").strip().lower()
+    if U.get_user(email) is None:
+        raise HTTPException(status_code=404, detail=f"user '{email}' not found")
+    if U.invite_of(email) is None:
+        raise HTTPException(status_code=404, detail=(
+            f"'{email}' was not invited — delete it through "
+            "DELETE /api/auth/users/{email} if that is what you mean"))
+    n = S.revoke_all(email)
+    U.delete_user(email)
+    root = W.workspaces_root()
+    ws_dir = (root / W.workspace_id(email)) if root is not None else None
+    return {"ok": True, "email": email, "sessions_revoked": n,
+            "workspace": {"id": W.workspace_id(email),
+                          "path": str(ws_dir) if ws_dir else None,
+                          "exists": bool(ws_dir and ws_dir.is_dir())}}
 
 
 # ── Sessions + auth events ────────────────────────────────────────────────────

@@ -79,8 +79,78 @@ Windows workstation, so a value proven there is the value that ships.
 | `ADMIN_EMAILS` | — | comma-separated, always admin, overrides `users.json` |
 | `AUTH_ENFORCE` | `1` in the image | `1` = real tiers; `0` = everyone is admin (dev only) |
 | `PUBLIC_EXHIBIT` | `1` | `1` = the anonymous public exhibit (tree + geometry + report of the passported dies) — the workstation default. **`0` on any internet-facing host**: no credentials ⇒ 401 on every `/api` route but `/api/health`, `/api/me` (anonymous shape, so the SPA renders its login screen) and `/api/auth/login|google|logout`. Registered accounts are unaffected — grants still decide what each sees. |
+| `CATALOG_GRANT_ALL_REGISTERED` | *(unset)* | **leave it unset on this server.** Unset = a registered account sees exactly the dies it was granted, plus whatever anyone has published; `1` = every signed-in account sees the whole shared catalog. The grant posture below says why. |
 | `ALLOWED_ORIGINS` | *(empty)* | extra CORS origins. Only needed if the frontend is served from a **different** origin than the API; the same-origin nginx default needs nothing. |
 | `ANTHROPIC_API_KEY` | *(empty)* | in-app support assistant; empty = a flagged mock reply |
+
+### The grant posture — who sees which motors
+
+Three switches decide it, and on this host they are set like this:
+
+| switch | here | what it means |
+|---|---|---|
+| `PUBLIC_EXHIBIT` | `0` | no anonymous audience at all — 401 before any route runs |
+| `CATALOG_GRANT_ALL_REGISTERED` | **unset** | a registered account sees **only** its granted dies + the published layer |
+| `ADMIN_EMAILS` | the owner | admins bypass grants entirely and see the whole catalog |
+
+So a brand-new account — invited, or an unknown Google address that signed in by
+itself — starts at tier `free` with **nothing granted**, and its
+`/api/family/tree` is empty with a one-line note until a human picks its motors
+(`PUT /api/admin/users/{email}/motors`, or the `motors` field of an invite).
+Hiding is not cosmetic: every die-scoped route (`payload`, `datasheet`,
+`report`, `context`, duty save, stored fields) answers **404** on a die the
+account was not granted — 404 and never 403, so an ungranted motor cannot be
+told apart from one that does not exist.
+
+Turning `CATALOG_GRANT_ALL_REGISTERED=1` on would open the *vendor's whole
+catalog* — every die under `shared/`, including designs that are somebody's
+paid work — to anyone who can complete a Google sign-in. There is no
+self-service tier check in front of it. Set it only on a demo host whose
+`shared/` holds demo dies.
+
+### Invites — how an external user gets in
+
+No e-mail leaves this server (Hetzner blocks outbound 25/465), so the admin is
+the messenger. One call creates the row, the tier, the grants **and the seeded
+workspace**:
+
+```bash
+curl -s -X POST https://emotres.com/api/admin/invite \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"email":"someone@example.com","tier":"free",
+       "motors":["CIANO28 150_35"],"note":"Ø150 evaluation"}'
+```
+
+`motors` is a list of die names, or `"all"`. Then tell the person to open
+`https://emotres.com` and sign in with Google — the address must be the one they
+sign in with. `GET /api/admin/invites` lists the invites with an `accepted` flag
+(has that account ever actually signed in), and `DELETE /api/admin/invites/{email}`
+withdraws one: the registry row goes and every session of it is revoked, while
+the **workspace directory is left alone** and its path is in the answer — a
+person's saved work is not collateral of an admin tidying a list.
+
+An admin token for these calls is minted on the server, never pasted from a
+browser:
+
+```bash
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env exec -T api \
+  python -c "from motor_ai_sim import users as U; print(U.issue_token('<admin email>'))"
+```
+
+Sign-in itself provisions: `routes/auth_local._start_session` calls
+`workspace.provision(email)`, so the account's `<WORKSPACES_ROOT>/<ws_id>/`
+exists and holds a `motor_config.yaml` seeded from `shared/` before the first
+`/api/config` arrives.
+
+### Queue class by tier
+
+`jobs.priority_for(kind, tier)` is applied in `jobs.make_record`, the one funnel
+every submission passes through: a `free` account's optimizer run is a
+`CAMPAIGN` and everything else it submits is at best a `DUTY`; `pro` / `team` /
+`admin` keep the class the route asked for, `INTERACTIVE` included. It never
+promotes, and an unknown tier (a CLI run, a direct call) is left alone. The
+effect is ordering, never refusal: an evaluation account's transient still runs,
+it just runs after the paying user's.
 
 The API refuses to boot, or warns, on three of these at startup —
 `src/motor_ai_sim/startup_checks.py`:

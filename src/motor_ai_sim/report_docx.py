@@ -631,6 +631,12 @@ def _cover(doc, D: Dict[str, Any]) -> None:
         _table(doc, _brows, size=10.5, widths_cm=[5.0, 3.4, 18.0])
         _p(doc, R.battery_note(D.get("cols")), size=9.5, italic=True, color=NOTE,
            space_after=8.0)
+        # …AND WHY A DUTY IS BILLED ON THE TOP OF CHARGE (2026-09-16): two
+        # duties of one machine on two different links, with nothing saying
+        # what the nominal one could not have done.
+        _above = R.dc_link_above_nominal_text(D.get("cols"), D["batt"])
+        if _above:
+            _p(doc, _above, size=9.5, italic=True, color=NOTE, space_after=8.0)
     else:
         _p(doc, R.BATTERY_NONE, size=9.5, color=NOTE, space_after=8.0)
 

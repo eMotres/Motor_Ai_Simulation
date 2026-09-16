@@ -6040,11 +6040,29 @@ class TestPwmVoltageAndThdRules:
         assert converged_words(rec) == (
             "pass 4 refused: modulation ceiling - temperatures are the last "
             "solved pass").replace(" - ", " — ")
-        # the machine-readable code says the same thing on a newer record
-        rec2 = {"converged": False, "em_runs": 4,
+        # A POINT HELD AT THE CEILING IS NOT A REFUSED PASS (2026-09-16).  The
+        # L180 gen 'rated' duty solved all five of its passes — the last two at
+        # the clamp — and settled its temperatures to 0.15 K of a ± 2 K
+        # tolerance; the cell used to call that "pass 5 refused".
+        rec2 = {"converged": False, "em_runs": 5, "iterations": 5,
+                "tol_K": 2.0, "tol_bearing_K": 5.0,
+                "residual_coil_K": 0.15, "residual_magnet_K": 0.26,
+                "residual_bearing_K": 0.1,
+                "inverter": {"at_modulation_ceiling": True, "v_dc_V": 799.2,
+                             "carriers_per_period": 14,
+                             "v_phase_peak_V": 747.1802,
+                             "v_phase_peak_max_V": 747.1802,
+                             "v_phase_peak_max_uncompensated_V": 795.9466,
+                             "I_phase_rms_solved_A": 335.879,
+                             "target_I_phase_rms_A": 346.6296,
+                             "point_error_pct": -3.101},
                 "warning_code": "point_limited_by_modulation",
                 "warning": "the point is out of INVERTER, not out of iterations"}
-        assert converged_words(rec2).startswith("pass 4 refused: modulation")
+        cell = converged_words(rec2, -3.09)
+        assert "refused" not in cell
+        assert cell.startswith("temperatures converged in 5 passes")
+        assert "limited by the inverter" in cell
+        assert "747.18 V" in cell and "−3.09 %" in cell
         # a point that simply did not settle is not a refusal
         rec3 = {"converged": False, "em_runs": 4,
                 "warning_code": "point_not_converged",
@@ -6052,8 +6070,51 @@ class TestPwmVoltageAndThdRules:
                            "did not"}
         assert converged_words(rec3) == (
             "no — the operating point did not settle")
+        # …and when the temperatures did not settle either, the cell says so
+        rec4 = dict(rec3, tol_K=2.0, tol_bearing_K=5.0, residual_coil_K=8.92,
+                    residual_magnet_K=15.08, residual_bearing_K=12.9)
+        assert converged_words(rec4) == (
+            "no — the operating point did not settle, and the temperatures "
+            "had not settled in 4 passes")
         assert converged_words({"converged": True}) == "yes"
         assert converged_words({"runaway": True}).startswith("RUNAWAY")
+
+    def test_the_residuals_decide_whether_the_temperatures_settled(self):
+        from motor_ai_sim.report import coupled_temps_settled
+
+        base = {"tol_K": 2.0, "tol_bearing_K": 5.0}
+        assert coupled_temps_settled(dict(
+            base, residual_coil_K=0.15, residual_magnet_K=0.26,
+            residual_bearing_K=0.1)) is True
+        assert coupled_temps_settled(dict(
+            base, residual_coil_K=8.92, residual_magnet_K=15.08,
+            residual_bearing_K=12.9)) is False
+        # the bearing seat has its own, wider tolerance
+        assert coupled_temps_settled(dict(
+            base, residual_coil_K=0.4, residual_magnet_K=0.9,
+            residual_bearing_K=4.5)) is True
+        assert coupled_temps_settled({"tol_K": 2.0}) is None
+        assert coupled_temps_settled(None) is None
+
+    def test_section_6_does_not_call_settled_temperatures_unconverged(self):
+        from motor_ai_sim.report import coupled_loop_text
+
+        cp = {"coupling": {"coil_temp_c": 142.75, "magnet_temp_c": 171.74,
+                           "iterations": 5, "converged": False, "tol_K": 2.0,
+                           "residual_coil_K": 0.15, "residual_magnet_K": 0.26,
+                           "tol_bearing_K": 5.0, "residual_bearing_K": 0.1}}
+        txt = coupled_loop_text(cp)
+        assert "NOT converged" not in txt
+        assert "the TEMPERATURES converged; the operating point did not" in txt
+        # a loop that really did not settle keeps the blunt words
+        cp2 = {"coupling": dict(cp["coupling"], residual_coil_K=8.92,
+                                residual_magnet_K=15.08,
+                                residual_bearing_K=12.9)}
+        assert "NOT converged" in coupled_loop_text(cp2)
+        # …and a loop that converged outright still says just that
+        ok = coupled_loop_text(
+            {"coupling": dict(cp["coupling"], converged=True)})
+        assert "— converged (" in ok and "operating point" not in ok
 
     # -- 5 - the magnet's limit comes off the card --------------------------
 
@@ -6429,6 +6490,211 @@ class TestAuditV7:
         assert "coupled_warning_words" in inspect.getsource(RD._thermal_detail)
         assert "coupled_warning_words" in inspect.getsource(
             R.coupled_compare_rows)
+
+    # ── the L180 gen audit, 2026-09-16 ─────────────────────────────────────
+    #: The 'peak' duty's record: the route claims the temperatures settled and
+    #: its own residual rows say they did not (8.92 / 15.08 / 12.9 K against
+    #: ± 2 K and ± 5 K), three rows above in the same table.
+    PEAK_UNSETTLED = {
+        "converged": False, "em_runs": 4, "iterations": 4, "tol_K": 2.0,
+        "tol_bearing_K": 5.0, "residual_coil_K": 8.92,
+        "residual_magnet_K": 15.08, "residual_bearing_K": 12.9,
+        "warning": ("the temperatures settled but the operating point did not: "
+                    "after 4 electromagnetic run(s) the machine draws +1.12 % "
+                    "off the 354.76 A this duty is billed at (tolerance ±1 %); "
+                    "the next pass would have been aimed at 858.158 V — raise "
+                    "max_iter, or widen inverter.i_tol_pct if that miss is "
+                    "acceptable")}
+
+    def test_the_warning_does_not_claim_temperatures_that_did_not_settle(self):
+        from motor_ai_sim import report as R
+
+        txt = R.coupled_warning_words(self.PEAK_UNSETTLED, 1.13)
+        assert "The temperatures settled" not in txt
+        assert txt.startswith("Neither the operating point nor the "
+                              "temperatures had settled")
+        assert "4 passes" in txt and "+1.13 %" in txt and "858 V" in txt
+        for bad in ("max_iter", "i_tol_pct", "858.158"):
+            assert bad not in txt
+        # …and the sentence is unchanged where the residuals back it up
+        ok = R.coupled_warning_words(
+            dict(self.PEAK_UNSETTLED, residual_coil_K=0.4,
+                 residual_magnet_K=0.9, residual_bearing_K=1.1), 1.13)
+        assert ok.startswith("The temperatures settled, the operating point "
+                             "did not")
+
+    def test_the_modulation_ceiling_sentence_is_built_from_the_record(self):
+        from motor_ai_sim import report as R
+
+        rec = {"converged": False, "em_runs": 5, "tol_K": 2.0,
+               "tol_bearing_K": 5.0, "residual_coil_K": 0.15,
+               "residual_magnet_K": 0.26, "residual_bearing_K": 0.1,
+               "inverter": {"at_modulation_ceiling": True, "v_dc_V": 799.2,
+                            "carriers_per_period": 14,
+                            "v_phase_peak_V": 747.1802,
+                            "v_phase_peak_max_V": 747.1802,
+                            "v_phase_peak_max_uncompensated_V": 795.9466,
+                            "I_phase_rms_solved_A": 335.879,
+                            "target_I_phase_rms_A": 346.6296,
+                            "point_error_pct": -3.101},
+               "warning": ("the point is out of INVERTER, not out of "
+                           "iterations: ... — raise inverter.v_dc_V or the "
+                           "carrier")}
+        txt = R.coupled_warning_words(rec, -3.09)
+        assert txt.startswith("The bridge ran out of voltage, not out of "
+                              "passes")
+        assert "799.2 V link" in txt and "14 carriers" in txt
+        assert "747.18 V" in txt and "795.9 V" in txt
+        assert "335.9 A" in txt and "346.6 A" in txt and "−3.09 %" in txt
+        # the route's own capitals, keys and rounding are gone
+        for bad in ("INVERTER", "inverter.v_dc_V", "-3.10"):
+            assert bad not in txt
+        # the temperatures get their own clause, because they DID settle
+        assert "The temperatures settled inside their tolerance" in txt
+
+    def test_the_modulation_row_is_the_runs_own_clamp(self):
+        from motor_ai_sim import report as R
+
+        col = self._col()
+        col["res"]["coupled"]["inverter"].update({
+            "v_phase_peak_V": 747.1802, "v_phase_peak_max_V": 747.1802,
+            "v_phase_peak_max_uncompensated_V": 795.9466,
+            "at_modulation_ceiling": True, "carriers_per_period": 14,
+            "v_dc_V": 799.2, "star_delta": "delta"})
+        ctx = self._ctx(col)
+        # both halves are the run's own, in the LINE convention (delta)
+        assert ctx["v_line_fund_v"] == pytest.approx(747.1802)
+        assert ctx["v_mod_ceiling_v"] == pytest.approx(747.1802)
+        assert ctx["mod_at_ceiling"] is True and ctx["mod_carriers"] == 14
+        row = _rule(R.duty_warnings(ctx), "fundamental_vs_modulation")
+        assert row["level"] == "amber" and abs(row["margin_pct"]) < 0.05
+        # …and the limits table names the clamp, not the bare linear limit
+        src = {r[0]: r[2] for r in R.limit_rules_rows(ctx)}
+        assert "sampled-reference gain" in src[
+            "Line voltage, fundamental vs linear modulation"]
+        # a star run's row is the LINE value, √3 above the branch
+        col2 = self._col()
+        col2["res"]["coupled"]["inverter"].update({
+            "v_phase_peak_V": 400.0, "v_phase_peak_max_V": 431.0,
+            "star_delta": "star"})
+        c2 = self._ctx(col2)
+        assert c2["v_line_fund_v"] == pytest.approx(400.0 * 3 ** 0.5)
+        assert c2["v_mod_ceiling_v"] == pytest.approx(431.0 * 3 ** 0.5)
+        assert "mod_at_ceiling" not in c2
+
+    def test_a_duty_on_the_top_of_charge_says_what_the_nominal_could_not_do(
+            self):
+        import inspect
+
+        from motor_ai_sim import report as R
+        from motor_ai_sim import report_docx as RD
+
+        batt = {"v_min": 749.5, "v_nom": 799.2, "v_max": 1049.8}
+        peak = self._col("peak")
+        peak["res"]["coupled"]["inverter"].update(
+            {"v_dc_V": 1049.8, "m": 0.9515, "v_phase_peak_V": 863.6635})
+        txt = R.dc_link_above_nominal_text([peak], batt)
+        assert "'peak' is solved on 1,049.8 V, the pack's top of charge" in txt
+        assert "863.7 V" in txt and "1.25" in txt and "799.2 V nominal" in txt
+        assert "fully charged pack" in txt
+        # a duty on the nominal link, or one the nominal link could have held,
+        # says nothing
+        nom = self._col("rated")
+        nom["res"]["coupled"]["inverter"].update(
+            {"v_dc_V": 799.2, "m": 1.1381, "v_phase_peak_V": 747.18})
+        assert R.dc_link_above_nominal_text([nom], batt) == ""
+        easy = self._col("light")
+        easy["res"]["coupled"]["inverter"].update(
+            {"v_dc_V": 1049.8, "m": 0.6, "v_phase_peak_V": 545.0})
+        assert R.dc_link_above_nominal_text([easy], batt) == ""
+        assert R.dc_link_above_nominal_text([peak], {}) == ""
+        # …and both renderers print it
+        assert "dc_link_above_nominal_text" in inspect.getsource(R._cover)
+        assert "dc_link_above_nominal_text" in inspect.getsource(RD._cover)
+
+    def test_the_bearing_seat_row_does_not_claim_an_unsettled_feedback(self):
+        from motor_ai_sim import report as R
+
+        def _cell(**kw):
+            col = {"duty": "d", "d": {}, "em": {},
+                   "res": {"coupled": dict(
+                       {"bearing_temp_source": "coupled", "em_runs": 4,
+                        "tol_bearing_K": 5.0}, **kw)}}
+            rows = {r[0]: r[1] for r in R.coupled_compare_rows([col])[1]}
+            return rows["…where it came from"]
+
+        assert "fed back but still 12.9 K out of its ± 5 K tolerance" in \
+            _cell(residual_bearing_K=12.9)
+        assert "converged and fed back" in _cell(residual_bearing_K=0.1)
+        # a one-pass loop keeps its own words
+        assert "read off the one thermal map" in _cell(
+            em_runs=1, residual_bearing_K=12.9)
+
+    def test_the_point_error_clause_describes_the_regulator(self):
+        from motor_ai_sim import report as R
+
+        # the loop re-aims the fundamental every pass; it does not hold the
+        # first pass's (L180 gen: 729.6 -> 743.2 -> 747.18 V)
+        assert "held for the passes after" not in R.POINT_ERROR_WHY
+        assert "re-aims the fundamental after every pass" in R.POINT_ERROR_WHY
+        assert "modulation ceiling" in R.POINT_ERROR_WHY
+
+    def test_the_current_chart_names_the_current_it_draws(self):
+        import inspect
+
+        from motor_ai_sim import report as R
+
+        src = inspect.getsource(R._currents_png)
+        assert "I_phase_rms_solved_A" in src
+        # the setpoint keys are the FALLBACK, not the first choice: the solved
+        # value is read first and the else-branch carries the old keys
+        body = src[src.index("_solved = _numf"):]
+        assert body.index("I_phase_rms_solved_A") < body.index(
+            "I_winding_rms_A")
+        assert "else:" in body[:body.index("I_winding_rms_A")]
+
+    def test_the_carrier_ripple_row_carries_the_run_s_dc_caveat(self):
+        from motor_ai_sim import report as R
+
+        ctx = {"drive": "pwm", "carrier_ripple_pct": 33.4,
+               "carrier_thd_i_pct": 9.25, "carrier_hz": 24000.0,
+               "carrier_ripple_quotable": False,
+               "carrier_dc_residual_a": -1.001, "carrier_dc_tol_a": 0.5}
+        row = next(r for r in R.duty_warnings(dict(ctx, duty="peak"))
+                   if r and r.get("rule") == "carrier_ripple")
+        assert "DC offset" in row["note"] and "-1 A" in row["note"].replace(
+            "−", "-")
+        # …and the quantity column, which is the one the table prints
+        assert row["quantity"].endswith("(this pass ended with a DC offset)")
+        # a clean run says nothing extra
+        ok = next(r for r in R.duty_warnings(
+            dict(ctx, carrier_ripple_quotable=True, duty="rated"))
+            if r and r.get("rule") == "carrier_ripple")
+        assert "DC offset" not in ok["note"]
+        assert ok["quantity"] == "Torque ripple at the carrier"
+
+    def test_the_modulation_rule_says_when_the_run_sat_on_the_ceiling(self):
+        from motor_ai_sim import report as R
+
+        ctx = {"drive": "pwm", "v_dc_run_v": 799.2, "mod_index": 1.1381,
+               "v_line_fund_v": 747.1802, "v_mod_ceiling_v": 747.1802,
+               "v_pack_min_v": 749.5, "v_pack_nom_v": 799.2,
+               "v_pack_max_v": 1049.8, "mod_at_ceiling": True,
+               "mod_ceiling_v1_v": 747.1802, "mod_carriers": 14}
+        row = next(r for r in R.duty_warnings(dict(ctx, duty="rated"))
+                   if r and r.get("rule") == "fundamental_vs_modulation")
+        assert "ended ON that ceiling" in row["note"]
+        assert "747.18 V" in row["note"] and "14 carriers" in row["note"]
+        assert "nominal, not usable" in row["note"]
+        # the value and the limit are the run's own, so a 0 % margin is what
+        # the table prints where the point sits ON the ceiling
+        assert abs(row["value"] - 747.1802) < 0.01
+        assert abs(row["limit"] - 747.1802) < 0.01
+        assert abs(row["margin_pct"]) < 0.05
+        clean = next(r for r in R.duty_warnings(
+            {k: v for k, v in ctx.items() if k != "mod_at_ceiling"})
+            if r and r.get("rule") == "fundamental_vs_modulation")
+        assert "ended ON that ceiling" not in clean["note"]
 
     # ── MJ-6 and the cosmetic set ──────────────────────────────────────────
     def test_mj6_section_3_reconciles_the_peak_with_the_bridge_amplitude(self):

@@ -1102,6 +1102,14 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         "tol_bearing_K": _f(c.get("tol_bearing_K")),
         "residual_bearing_K": _f(c.get("residual_bearing_K")),
         "warning": c.get("warning"),
+        # …AND ITS MACHINE-READABLE HALF (2026-09-16).  The route writes both
+        # and only the prose was kept, so every reader of this record had to
+        # recognise the loop's state by matching words in a sentence written
+        # for an operator ("out of INVERTER", "electromagnetic run 4 refused").
+        # One of them got it wrong on the L180 gen 'rated' duty and billed a
+        # clamped-but-solved pass as a refused one.
+        **({"warning_code": c.get("warning_code")}
+           if c.get("warning_code") else {}),
         # `modes` rides along (2026-09-14): the report's ring-mode-vs-carrier
         # warning is judged on `mechanical.modes.tightest`, which the coupled
         # run already computes and which costs a dozen numbers to keep.

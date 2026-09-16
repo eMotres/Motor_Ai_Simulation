@@ -2663,8 +2663,19 @@ def _currents_png(wf: Dict[str, Any], width_cm: float = 22.0,
         # series was stored as stays in the title, because that is the number a
         # reader will find in the solver's own arrays (2026-09-13 / 2026-09-14).
         _su = wf.get("summary") if isinstance(wf.get("summary"), dict) else {}
-        _iw, _il = _numf(_su.get("I_winding_rms_A")), _numf(_su.get("I_terminal_rms_A")
-                                                             or _su.get("I_phase_rms_A"))
+        # THE CURRENT THE RUN SOLVED, not the one it was asked for (2026-09-16).
+        # A voltage-fed run keeps its SETPOINT in `I_winding_rms_A` /
+        # `I_terminal_rms_A` and its answer in `I_phase_rms_solved_A` /
+        # `I_line_rms_A`, and this title took the setpoint: the L180 gen 'rated'
+        # panel said "346.6 A rms (line 600.4 A)" over a trace whose own rms is
+        # 335.9 A, under a caption, a comparison table and a warnings section
+        # that all say 581.8 A line.  The picture and its title are one run.
+        _solved = _numf(_su.get("I_phase_rms_solved_A"))
+        if _solved is not None:
+            _iw, _il = _solved, _numf(_su.get("I_line_rms_A"))
+        else:
+            _iw = _numf(_su.get("I_winding_rms_A"))
+            _il = _numf(_su.get("I_terminal_rms_A") or _su.get("I_phase_rms_A"))
         _lab = "phase (winding) currents — %s rms" % _fmt(_iw or rms, 1, "A")
         _bits = []
         if _il and abs(_il - (_iw or rms)) > 0.02 * _il:
@@ -4606,14 +4617,36 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         _thd = _numf(ctx.get("carrier_thd_i_pct"))
         out.append({
             "rule": "carrier_ripple", "level": "info", "duty": duty,
-            "quantity": "Torque ripple at the carrier",
+            # …AND THE RUN'S OWN CAVEAT IS IN THE COLUMN THE READER SEES
+            # (2026-09-16).  The warnings table prints no note, so a figure the
+            # record itself marks as not quotable — the L180 gen 'peak' pass
+            # ended with −1 A of DC in the phase current against a ± 0.5 A band
+            # — has to say so in its own name or not at all.
+            "quantity": ("Torque ripple at the carrier"
+                         + ("" if ctx.get("carrier_ripple_quotable") is not False
+                            else " (this pass ended with a DC offset)")),
             "value": _cr, "limit": None, "unit": "%", "kind": "info",
             "margin_pct": None, "remedy": "",
-            "note": (CARRIER_RIPPLE_NOTE
-                     + ("; carrier %s, current THD %s"
-                        % (_fmt((_numf(ctx.get("carrier_hz")) or 0) / 1000.0,
-                                1, "kHz"), _fmt(_thd, 2, "%")))
-                     if _thd is not None else CARRIER_RIPPLE_NOTE)})
+            "note": ((CARRIER_RIPPLE_NOTE
+                      + ("; carrier %s, current THD %s"
+                         % (_fmt((_numf(ctx.get("carrier_hz")) or 0) / 1000.0,
+                                 1, "kHz"), _fmt(_thd, 2, "%")))
+                      if _thd is not None else CARRIER_RIPPLE_NOTE)
+                     # THE RUN'S OWN CAVEAT TRAVELS WITH THE NUMBER
+                     # (2026-09-16).  A voltage-fed pass that ends with a DC
+                     # offset in the phase current reports a ripple that partly
+                     # belongs to the offset; section 5 said so and this row,
+                     # which is where the figure is quoted as a finding, did
+                     # not (L180 gen 'peak', −1 A against a ± 0.5 A band).
+                     + ("" if ctx.get("carrier_ripple_quotable") is not False
+                        else (" — this run ended with a DC offset of %s in the "
+                              "phase current%s, so part of this figure belongs "
+                              "to the offset and not to the machine"
+                              % (_fmt(ctx.get("carrier_dc_residual_a"), 2, "A"),
+                                 ("" if ctx.get("carrier_dc_tol_a") is None
+                                  else " against a ± %s band"
+                                  % _fmt(ctx.get("carrier_dc_tol_a"), 2, "A")))
+                              )))})
     # …and the duty CYCLE's own rule: how much of the cycle this point may be
     # on for.  Requested against allowable, both off the record — the one
     # number a robot integrator asks for and the one the steady-state map
@@ -4748,17 +4781,33 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                      (" — " + str(ctx["mod_index_note"]))
                      if ctx.get("mod_index_note") else ""))
                  if _m is not None else "")
-              # WHERE THIS VALUE COMES FROM (CS-5, audit v7).  On a PWM duty
-              # the value is rebuilt in the BRIDGE's own convention — V1_LL,peak
-              # = m·V_dc·√3/2 — because the stored V1 of a voltage-fed run is
-              # the star-equivalent circuit's and does not divide into the link
-              # the bridge ran on.  It therefore sits a little off section 4's
-              # V1 and well off section 3's ×k_3d row, and the reader is told so
-              # rather than left with three numbers for one fundamental.
-              + ("" if not (_is_pwm and _m is not None) else
+              # WHERE THIS VALUE COMES FROM (CS-5, audit v7; revised
+              # 2026-09-16).  The run's own clamp is the first choice — the
+              # fundamental it applied against the largest one the bridge could
+              # build on that link — so this row and section 4's V1 are one
+              # number.  Only a record without the clamp falls back to the
+              # BRIDGE convention V1_LL,peak = m·V_dc·√3/2, which sits a little
+              # off section 4 and well off section 3's ×k_3d row.
+              + ("" if not (_is_pwm and _m is not None)
+                 or ctx.get("mod_ceiling_from_run") else
                  ". The value is the bridge's own V1_LL,peak = m·V_dc·√3/2, so "
                  "it differs slightly from the field's V1 in section 4 and from "
-                 "the ×k_3d row in section 3, which are machine-side numbers"))))
+                 "the ×k_3d row in section 3, which are machine-side numbers")
+              # …AND WHEN THE RUN SAT ON THE CLAMP, THE MARGIN IS NOMINAL
+              # (2026-09-16).  m is the reference's index and the clamp is on
+              # the fundamental the modulator APPLIES, which is smaller by the
+              # sampled-reference gain: a row reading "1 % left" belongs beside
+              # the sentence that says the point could not use it.
+              + ("" if not ctx.get("mod_at_ceiling") else
+                 ". This run ended ON that ceiling: the loop clamped the "
+                 "fundamental at %s%s — what this link can actually build once "
+                 "the modulator's sampled-reference gain is compensated — so "
+                 "the operating point is inverter-limited and the margin in "
+                 "this row is nominal, not usable"
+                 % (_fmt(ctx.get("mod_ceiling_v1_v"), 2, "V"),
+                    ("" if ctx.get("mod_carriers") is None else
+                     " at %d carriers per electrical period"
+                     % int(ctx["mod_carriers"])))))))
     # …and what the INSULATION sees on a bridge: the line-to-line pulse
     # amplitude, which is the DC link itself.  A two-level inverter swings each
     # terminal between the rails, so between two terminals the winding sees
@@ -6109,9 +6158,19 @@ def duty_point_error(col: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 #: WHY a voltage-fed run misses its current setpoint — the one clause that goes
 #: with every printing of the miss.
-POINT_ERROR_WHY = ("a voltage-fed run is given volts, not amps: the fundamental "
-                   "found on the first pass was held for the passes after it, "
-                   "so the current is where the machine's own impedance settled")
+#:
+#: IT DESCRIBES THE REGULATOR, not a fixed voltage (2026-09-16).  The clause
+#: used to say the first pass's fundamental "was held for the passes after it",
+#: which is not what the loop does and not what these records show: the L180 gen
+#: 'rated' duty was re-aimed 729.6 → 743.2 → 747.18 V and the 'peak' duty
+#: 789.7 → 825.0 → 863.7 V.  The loop stops when the current meets the setpoint,
+#: when the passes run out, or when the bridge reaches its modulation ceiling.
+POINT_ERROR_WHY = ("a voltage-fed run is given volts, not amps: the loop "
+                   "re-aims the fundamental after every pass — a damped step, "
+                   "then a secant on the solved current — until the current "
+                   "meets the setpoint, the passes run out, or the bridge "
+                   "reaches its modulation ceiling, and this is where it "
+                   "stopped")
 
 
 def point_error_cell(col: Dict[str, Any]) -> str:
@@ -6441,6 +6500,10 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         ctx["carrier_thd_i_pct"] = _numf(em.get("THD_I_pct")
                                          or _inv.get("thd_i_pct"))
         ctx["carrier_hz"] = _numf(_inv.get("f_carrier_hz"))
+        if _inv.get("ripple_quotable") is not None:
+            ctx["carrier_ripple_quotable"] = bool(_inv.get("ripple_quotable"))
+        ctx["carrier_dc_residual_a"] = _numf(_inv.get("dc_residual_A"))
+        ctx["carrier_dc_tol_a"] = _numf(_inv.get("dc_tol_A"))
     # The LINE (terminal) voltage's THD — what the inverter and the insulation
     # see, and what the U_AB spectrum chart measures.  `THD_pct` is the
     # winding's: in delta it carries the zero-sequence triplen EMF (6.3 %)
@@ -6581,6 +6644,28 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
             if _vdc is not None:
                 ctx["v_line_fund_v"] = (float(_m) * float(_vdc)
                                         * math.sqrt(3.0) / 2.0)
+        # …AND THE CEILING THE RUN ACTUALLY HAD (2026-09-16).  m is the index of
+        # the modulator's REFERENCE and the clamp is on the fundamental it
+        # APPLIES, which is smaller by the sampled-reference gain: the L180 gen
+        # 'rated' duty sat exactly on its 747.18 V ceiling and this row, rebuilt
+        # from m alone, read 787.71 V against 795.95 V — "1 % of margin left",
+        # in a document whose coupled block says the point is inverter-limited
+        # and whose section 4 prints the fundamental as 747.2 V.  Both halves
+        # now come off the record, in the LINE convention the row's name uses
+        # (in delta the branch IS the line; in star it is V_LL/√3).
+        _cap = _numf(_inv.get("v_phase_peak_max_V"))
+        _v1r = _numf(_inv.get("v_phase_peak_V"))
+        _sd_inv = str(_inv.get("star_delta") or "").strip().lower()
+        if _cap and _v1r and _sd_inv:
+            _ll = 1.0 if _sd_inv.startswith("d") else math.sqrt(3.0)
+            ctx["v_line_fund_v"] = _v1r * _ll
+            ctx["v_mod_ceiling_v"] = _cap * _ll
+            ctx["mod_ceiling_from_run"] = True
+            if (bool(_inv.get("at_modulation_ceiling"))
+                    or _v1r >= _cap - 1e-6):
+                ctx["mod_at_ceiling"] = True
+                ctx["mod_ceiling_v1_v"] = _cap * _ll
+                ctx["mod_carriers"] = _numf(_inv.get("carriers_per_period"))
 
     # ── mechanical ──────────────────────────────────────────────────────────
     if ms:
@@ -7775,6 +7860,9 @@ def _cover(st, die, cfg, role, geo, mats, d_duty, em, em_src, brg,
                            for r in _brows],
                           [140, 95, CONTENT_W - 235], header=True, size=8.8))
         out.append(_para(battery_note(cols), st["note"]))
+        _above = dc_link_above_nominal_text(cols, batt)
+        if _above:
+            out.append(_para(_above, st["note"]))
     else:
         out.append(_para(BATTERY_NONE, st["note"]))
     out.append(Spacer(1, 10))
@@ -10218,14 +10306,28 @@ def thermal_budget_reconcile_text(res: Dict[str, Any], inner: Dict[str, Any],
 
 
 def coupled_loop_text(cp: Dict[str, Any]) -> str:
-    """The one-sentence state of the coupled loop, for the thermal page."""
+    """The one-sentence state of the coupled loop, for the thermal page.
+
+    THREE VERDICTS, NOT TWO (2026-09-16).  ``converged`` is an AND of the
+    temperatures and the operating point, and this sentence printed it as
+    "NOT converged" in front of the very residuals — 0.15 K, 0.26 K, 0.1 K
+    against ± 2 K and ± 5 K — that say the temperatures converged (L180 gen
+    'rated').  What did not converge there is the point, and the flagged
+    sentence under this one says so; this one answers for the temperatures it
+    is about.
+    """
     c = (cp or {}).get("coupling") or {}
+    if c.get("converged"):
+        _verdict = "converged"
+    elif coupled_temps_settled(c) is True:
+        _verdict = "the TEMPERATURES converged; the operating point did not"
+    else:
+        _verdict = "NOT converged"
     txt = ("Winding %s, magnets %s after %s electromagnetic run(s) — %s "
            "(tolerance ± %s K, coil residual %s K, magnet residual %s K" % (
                _fmt(c.get("coil_temp_c"), 1, "°C"),
                _fmt(c.get("magnet_temp_c"), 1, "°C"),
-               _fmt(c.get("iterations"), 0),
-               "converged" if c.get("converged") else "NOT converged",
+               _fmt(c.get("iterations"), 0), _verdict,
                _fmt(c.get("tol_K"), 1), _fmt(c.get("residual_coil_K"), 2),
                _fmt(c.get("residual_magnet_K"), 2)))
     if c.get("residual_bearing_K") is not None:
@@ -13590,6 +13692,49 @@ BATTERY_NOTE_PWM = (
 )
 
 
+def dc_link_above_nominal_text(cols: Optional[List[Dict[str, Any]]] = None,
+                               batt: Optional[Dict[str, Any]] = None) -> str:
+    """WHY a duty was solved above the pack's nominal link — ``""`` when none
+    was (2026-09-16).
+
+    The L180 gen 'peak' duty is billed on the pack's TOP OF CHARGE, 1,049.8 V,
+    while its sister duty runs on the 799.2 V nominal, and no page said why the
+    two differ.  The reason is arithmetic the record carries: at the fundamental
+    this duty needs, the nominal link would have to be modulated past the
+    bridge's linear limit.  The sentence states that and nothing it cannot
+    measure — never why an engineer chose a link, only what the nominal one
+    could not have done.
+    """
+    nom = _numf((batt or {}).get("v_nom"))
+    if nom is None or nom <= 0:
+        return ""
+    bits = []
+    for c in (cols or []):
+        if duty_drive(c) != "pwm":
+            continue
+        inv = duty_inverter(c)
+        vdc, m = _numf(inv.get("v_dc_V")), _numf(inv.get("m"))
+        v1 = _numf(inv.get("v_phase_peak_V"))
+        if vdc is None or m is None or v1 is None or vdc <= nom + 0.5:
+            continue
+        # m scales with 1/V_dc at a fixed fundamental: what the same voltage
+        # would have cost on the nominal link.
+        m_nom = m * vdc / nom
+        if m_nom <= MOD_INDEX_LIMIT:
+            continue
+        bits.append(
+            "'%s' is solved on %s, the pack's top of charge: its fundamental "
+            "of %s would need a modulation index of %s on the %s nominal link, "
+            "past the %s a two-level bridge stays linear to"
+            % (c.get("duty") or "—", _fmt(vdc, 1, "V"), _fmt(v1, 1, "V"),
+               _fmt(m_nom, 2), _fmt(nom, 1, "V"), _fmt(MOD_INDEX_LIMIT, 2)))
+    if not bits:
+        return ""
+    return ("; ".join(bits)
+            + ". Every number of that duty therefore belongs to a fully "
+              "charged pack.")
+
+
 def battery_note(cols: Optional[List[Dict[str, Any]]] = None) -> str:
     """Which voltage rules this document's duties are judged by."""
     return BATTERY_NOTE_PWM if any_pwm(cols) else BATTERY_NOTE
@@ -14639,13 +14784,75 @@ COUPLED_REFUSAL_WORDS = {
 }
 
 
+def coupled_temps_settled(rec: Optional[Dict[str, Any]]) -> Optional[bool]:
+    """True when EVERY temperature residual the coupled record carries is
+    inside its own tolerance; ``None`` when it carries none.
+
+    The loop's ``converged`` flag is an AND of the temperatures and the
+    operating point, so a run that settled its temperatures perfectly and then
+    stopped because the bridge ran out of voltage stores ``converged: false``.
+    Printing that as "NOT converged" beside residuals of 0.15 K against ± 2 K
+    is a contradiction the reader has to resolve for himself (L180 gen 'rated',
+    2026-09-16), so every sentence about the loop asks this first.
+    """
+    if not isinstance(rec, dict):
+        return None
+    tol, tol_b = _numf(rec.get("tol_K")), _numf(rec.get("tol_bearing_K"))
+    pairs = [(_numf(rec.get("residual_coil_K")), tol),
+             (_numf(rec.get("residual_magnet_K")), tol),
+             (_numf(rec.get("residual_bearing_K")), tol_b)]
+    pairs = [(r, t) for r, t in pairs
+             if r is not None and t is not None and t > 0]
+    if not pairs:
+        return None
+    return all(abs(r) <= t + 1e-9 for r, t in pairs)
+
+
+def coupled_modulation_limit(rec: Optional[Dict[str, Any]]
+                             ) -> Optional[Dict[str, Any]]:
+    """The inverter ceiling a coupled run ended ON, or ``None``.
+
+    A voltage-fed loop that cannot reach its current setpoint because the
+    largest fundamental the bridge can synthesise is smaller than the one the
+    regulator wants did not fail and did not run out of passes: every pass
+    solved, the last ones at the clamp.  This reads that state off the record —
+    the machine-readable ``warning_code`` first, the route's own sentence on
+    records written before it existed.
+    """
+    if not isinstance(rec, dict):
+        return None
+    inv = rec.get("inverter") if isinstance(rec.get("inverter"), dict) else {}
+    code = str(rec.get("warning_code") or "").strip()
+    msg = str(rec.get("warning") or "")
+    hit = (code == "point_limited_by_modulation" or "out of INVERTER" in msg
+           or bool(inv.get("at_modulation_ceiling")))
+    if not hit:
+        return None
+    return {
+        "v_dc_V": _numf(inv.get("v_dc_V")),
+        "carriers": _numf(inv.get("carriers_per_period")),
+        "v1_ceiling_V": _numf(inv.get("v_phase_peak_max_V")),
+        "v1_uncompensated_V": _numf(inv.get("v_phase_peak_max_uncompensated_V")),
+        "solved_A": _numf(inv.get("I_phase_rms_solved_A")),
+        "target_A": _numf(inv.get("target_I_phase_rms_A")),
+        "point_error_pct": _numf(inv.get("point_error_pct")),
+    }
+
+
 def coupled_refusal_reason(rec: Optional[Dict[str, Any]]) -> Tuple[Any, str]:
-    """``(pass number, reason)`` of a coupled run that stopped early.
+    """``(pass number, reason)`` of a coupled run whose PASS was refused.
 
     The record's ``warning_code`` first; records written before it existed
     (2026-09-15 and earlier — the L180 gen duties among them) are read from the
     refusal sentence itself, which is the route's own wording and names both.
     ``(None, "")`` when the loop simply ran out of iterations.
+
+    A pass number is returned ONLY when a pass really was refused, i.e. the
+    route says so by name.  A point held at the modulation ceiling is NOT a
+    refusal — every pass of it solved — and it used to be reported as
+    "pass 5 refused" because the reason was inferred from the run count
+    (L180 gen 'rated', 2026-09-16): :func:`coupled_modulation_limit` is what
+    answers for that state now.
     """
     if not isinstance(rec, dict):
         return None, ""
@@ -14657,9 +14864,6 @@ def coupled_refusal_reason(rec: Optional[Dict[str, Any]]) -> Tuple[Any, str]:
     m = re.search(r"electromagnetic run (\d+) refused", msg)
     if m:
         n = int(m.group(1))
-    elif code == "point_limited_by_modulation" or "out of INVERTER" in msg:
-        runs = _numf(rec.get("em_runs") or rec.get("iterations"))
-        n = int(runs) if runs else None
     reason = COUPLED_REFUSAL_WORDS.get(code, "")
     if not reason:
         low = msg.lower()
@@ -14732,6 +14936,40 @@ def coupled_warning_words(rec: Optional[Dict[str, Any]],
     if not msg:
         return ""
     code = str(rec.get("warning_code") or "").strip()
+    settled = coupled_temps_settled(rec)
+    # ── THE BRIDGE RAN OUT OF VOLTAGE (2026-09-16) ─────────────────────────
+    # Built from the record, not passed through from the route's sentence: the
+    # stored prose is written for whoever can re-run the loop ("raise
+    # inverter.v_dc_V or the carrier"), says "out of INVERTER" in capitals, and
+    # carries its own rounding of the miss (−3.10 % against the document's
+    # −3.09 %).  Every number below is the inverter block's own.
+    lim = coupled_modulation_limit(rec)
+    if lim and lim.get("v1_ceiling_V") is not None:
+        pct = point_pct if point_pct is not None else lim.get("point_error_pct")
+        bits = ["The bridge ran out of voltage, not out of passes: the largest "
+                "fundamental it can build%s%s is %s" % (
+                    ("" if lim.get("v_dc_V") is None else
+                     " on the %s link" % _fmt(lim["v_dc_V"], 1, "V")),
+                    ("" if lim.get("carriers") is None else
+                     " at %d carriers per electrical period"
+                     % int(lim["carriers"])),
+                    _fmt(lim["v1_ceiling_V"], 2, "V"))]
+        if lim.get("v1_uncompensated_V") is not None:
+            bits.append(" (modulation index %s once the modulator's "
+                        "sampled-reference gain is compensated, %s before it)"
+                        % (_fmt(MOD_INDEX_LIMIT, 2),
+                           _fmt(lim["v1_uncompensated_V"], 1, "V")))
+        bits.append(", the last pass ran there")
+        if lim.get("solved_A") is not None and lim.get("target_A") is not None:
+            bits.append(" and drew %s against the %s this duty is billed at%s"
+                        % (_fmt(lim["solved_A"], 1, "A"),
+                           _fmt(lim["target_A"], 1, "A"),
+                           ("" if pct is None
+                            else " (%s %%)" % _signed(pct, 2))))
+        tail = ("" if settled is not True else
+                " The temperatures settled inside their tolerance; it is the "
+                "operating point that did not.")
+        return "".join(bits) + "." + tail
     if code == "point_not_converged" or "operating point did not" in msg.lower():
         runs = _numf(rec.get("em_runs") or rec.get("iterations"))
         if runs is None:
@@ -14748,10 +14986,20 @@ def coupled_warning_words(rec: Optional[Dict[str, Any]],
         m = re.search(r"aimed at ([\d.]+) V", msg)
         aim = _numf(m.group(1)) if m else None
         if runs and pct is not None:
-            return ("The temperatures settled, the operating point did not: "
-                    "%d passes, and the machine draws %s %% off the %s this "
-                    "duty is billed at%s.%s The temperatures above are the "
-                    "last pass that solved."
+            # …AND ONLY WHEN THEY DID (2026-09-16).  The route writes "the
+            # temperatures settled but the operating point did not" whenever
+            # the point is the thing it was regulating, and on the L180 gen
+            # 'peak' duty it wrote that over residuals of 8.92 K, 15.08 K and
+            # 12.9 K against ± 2 K and ± 5 K — three rows above, in the same
+            # table.  The residuals decide which sentence this is.
+            head = ("The temperatures settled, the operating point did not: "
+                    if coupled_temps_settled(rec) is not False else
+                    "Neither the operating point nor the temperatures had "
+                    "settled when the loop ran out of passes: ")
+            return (head
+                    + "%d passes, and the machine draws %s %% off the %s this "
+                      "duty is billed at%s.%s The temperatures above are the "
+                      "last pass that solved."
                     % (int(runs), _signed(pct, 2),
                        _fmt(billed, 2, "A") if billed is not None
                        else "current",
@@ -14763,14 +15011,24 @@ def coupled_warning_words(rec: Optional[Dict[str, Any]],
     return _client_words(msg)
 
 
-def converged_words(rec: Optional[Dict[str, Any]]) -> str:
+def converged_words(rec: Optional[Dict[str, Any]],
+                    point_pct: Optional[float] = None) -> str:
     """The "Converged" cell — ``"yes"``, a runaway, or WHY it is not yes.
 
     A bare "no" under a table of temperatures says nothing a client can act on
-    (reviewer 2026-09-15): the L180 'rated' duty stopped because the pass after
-    the last one would have needed m = 1.161 on a 799.2 V link, and the
-    temperatures printed above it are the last pass that solved.  That is the
-    sentence, not "no".
+    (reviewer 2026-09-15): the L180 'rated' duty stopped because the bridge
+    could not build a bigger fundamental on its link, and that is the sentence,
+    not "no".
+
+    …AND IT SAYS WHAT THE RECORD SAYS (2026-09-16).  That duty's five passes
+    ALL SOLVED — the last two at the clamp — and its temperatures settled to
+    0.15 K of a ± 2 K tolerance, so the cell used to print "pass 5 refused:
+    modulation ceiling" about a pass that was never refused and a loop whose
+    temperatures had converged.  What is unconverged here is the operating
+    POINT, and the cell now separates the two.
+
+    ``point_pct`` is the miss as the rest of the document prints it — line
+    current, Unicode minus — so the cell and section 3's own row agree.
     """
     if not isinstance(rec, dict):
         return "—"
@@ -14778,11 +15036,33 @@ def converged_words(rec: Optional[Dict[str, Any]]) -> str:
         return "yes"
     if rec.get("runaway"):
         return "RUNAWAY " + FLAG
+    settled = coupled_temps_settled(rec)
+    runs = _numf(rec.get("em_runs") or rec.get("iterations"))
     n, reason = coupled_refusal_reason(rec)
     if n is not None and reason:
         return ("pass %d refused: %s — temperatures are the last solved pass"
                 % (n, reason))
+    lim = coupled_modulation_limit(rec)
+    if lim:
+        # The temperatures are one verdict, the point another; the point's is
+        # the inverter's ceiling and it is stated with the number it is.
+        head = ("temperatures converged in %d passes" % int(runs)
+                if settled and runs else
+                ("temperatures converged" if settled else
+                 ("temperatures not settled in %d passes" % int(runs)
+                  if runs else "temperatures not settled")))
+        pct = point_pct if point_pct is not None else lim.get("point_error_pct")
+        tail = ""
+        if lim.get("v1_ceiling_V") is not None:
+            tail = " (the fundamental sits at the %s ceiling%s)" % (
+                _fmt(lim["v1_ceiling_V"], 2, "V"),
+                ("" if pct is None else
+                 ", %s %% off the setpoint" % _signed(pct, 2)))
+        return head + "; the operating point is limited by the inverter" + tail
     if reason:
+        if settled is False and runs:
+            return ("no — %s, and the temperatures had not settled in %d passes"
+                    % (reason, int(runs)))
         return "no — %s" % reason
     return "no"
 
@@ -14832,7 +15112,8 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
 
     R("Electromagnetic runs", lambda c: (_c(c) or {}).get("em_runs")
       or (_c(c) or {}).get("iterations"), 0)
-    S("Converged", lambda c: converged_words(_c(c)))
+    S("Converged", lambda c: converged_words(
+        _c(c), (duty_point_error(c) or {}).get("pct")))
     R("Winding temperature [°C]", lambda c: (_c(c) or {}).get("coil_temp_c"), 1)
     R("Magnet temperature [°C]", lambda c: (_c(c) or {}).get("magnet_temp_c"), 1)
     R("Magnet temperature, hottest [°C]",
@@ -14852,10 +15133,23 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
                      or (_c(c) or {}).get("iterations"))
         if runs is None:
             return src
-        return ("%s — %s run(s), so the seat temperature was %s" % (
-            src, _fmt(runs, 0),
-            "converged and fed back" if runs >= 2
-            else "read off the one thermal map"))
+        # …AND "converged" ONLY WHEN IT CONVERGED (2026-09-16).  A second pass
+        # feeds the seat back; it does not make the feedback settle.  The L180
+        # gen 'peak' loop ran four passes and left the seat 12.9 K out of its
+        # ± 5 K tolerance — the row two above this one — while this cell said
+        # the seat "was converged and fed back".
+        resid = _numf((_c(c) or {}).get("residual_bearing_K"))
+        tol = _numf((_c(c) or {}).get("tol_bearing_K"))
+        if runs < 2:
+            how = "read off the one thermal map"
+        elif resid is not None and tol is not None and tol > 0 \
+                and abs(resid) > tol:
+            how = ("fed back but still %s K out of its ± %s K tolerance"
+                   % (_fmt(abs(resid), 1), _fmt(tol, 1)))
+        else:
+            how = "converged and fed back"
+        return ("%s — %s run(s), so the seat temperature was %s"
+                % (src, _fmt(runs, 0), how))
 
     S("…where it came from", _bts)
     R("Bearing loss [W]", lambda c: (_c(c) or {}).get("P_bearings_W"), 1)
@@ -15064,12 +15358,22 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
           "INSULATION and device-rating question"]),
         ["Line voltage, fundamental vs linear modulation",
          _fmt(ex.get("v_mod_ceiling_v"), 1, "V"),
-         "%s × %s — the CONTROL question: modulation index "
-         "m = 2·V1_phase,peak/V_dc must stay at or under %s"
-         % (_fmt(MOD_CEILING_OF_VDC, 4),
-            ("the DC link this duty was solved on"
-             if str(ex.get("drive") or "") == "pwm" else "the pack minimum"),
-            _fmt(MOD_INDEX_LIMIT, 2))],
+         # THE RUN'S OWN CLAMP, where it has one (2026-09-16): the largest
+         # fundamental the modulator can APPLY on this link, which is the
+         # linear-modulation value less the sampled-reference gain the factory
+         # costs at a low pulse ratio.  Without it, the linear limit alone.
+         ("the largest fundamental the bridge can build on the DC link this "
+          "duty was solved on: %s × the link at modulation index %s, less the "
+          "sampled-reference gain the modulator costs at this pulse ratio — "
+          "the CONTROL question"
+          % (_fmt(MOD_CEILING_OF_VDC, 4), _fmt(MOD_INDEX_LIMIT, 2)))
+         if ex.get("mod_ceiling_from_run") else
+         ("%s × %s — the CONTROL question: modulation index "
+          "m = 2·V1_phase,peak/V_dc must stay at or under %s"
+          % (_fmt(MOD_CEILING_OF_VDC, 4),
+             ("the DC link this duty was solved on"
+              if str(ex.get("drive") or "") == "pwm" else "the pack minimum"),
+             _fmt(MOD_INDEX_LIMIT, 2)))],
         ["Bridge line voltage amplitude", "no limit",
          "the line-to-line pulse amplitude = the DC link — what the insulation "
          "sees; no insulation or device voltage rating is stated on this "

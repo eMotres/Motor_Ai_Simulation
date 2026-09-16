@@ -35,6 +35,7 @@ import ParameterVariationTable from './components/sweep/ParameterVariationTable'
 import MotorsCatalog from './components/catalog/MotorsCatalog';
 import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
 import AuthButton from './components/auth/AuthButton';
+import Landing from './components/landing/Landing';
 import { VersionBadge } from './components/VersionBadge';
 import { backendReachable } from './lib/version';
 import { useAuth } from './contexts/AuthContext';
@@ -516,6 +517,22 @@ function App() {
           </Toolbar>
         </AppBar>
 
+        {/* ── THE FRONT DOOR ──────────────────────────────────────────────
+            A visitor who is not signed in on a backend that ENFORCES auth used
+            to get the header, an empty tab bar and one grey line ("Sign in to
+            see the motor catalog") — an empty shell, which is what the user
+            asked to replace on 2026-09-16.  The landing takes the whole body
+            instead, and the tab bar, the family strip and every panel behind
+            them stay unmounted: each of them calls an `/api/*` route that
+            answers 401 to an anonymous caller, so not mounting them is also
+            what keeps the first impression free of failed requests.
+
+            `signedIn` is `!enforced || !!user`, so an UNENFORCED backend — the
+            local dev server — never sees this branch and boots exactly as
+            before.  The header (brand, version, the Sign in button, the theme
+            toggle) is above this and stays on both sides. */}
+        {!signedIn ? <Landing /> : (
+        <>
         {/* ── Full-width Navigation Tabs ── */}
         <Box sx={{ bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
           <Tabs
@@ -555,6 +572,8 @@ function App() {
             ) : (activeTab === t.id ? <ErrorBoundary key={t.id} label={t.label}>{t.render()}</ErrorBoundary> : null)
           ))}
         </Box>
+        </>
+        )}
       </Box>
       {/* Floating help/feedback — available to every user, on every tab */}
       <SupportWidget />

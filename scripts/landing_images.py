@@ -52,22 +52,25 @@ solved mesh.  At the size a REPORT places a figure, its hairline (0.12 pt,
 alpha 0.35, #2b2b2b) reads as texture over the field; at ~442 px on a card it
 disappears, which is why the first live cards looked like flat colour.
 
-So the weight of that ONE call is lifted for these three pictures, and only for
-them: :func:`mesh_weight` wraps `Axes.triplot` for the duration of a build and
-substitutes :data:`MESH_LW` / :data:`MESH_ALPHA` into it.  Nothing in report.py
-is touched and nothing outside this process changes — the report still prints
-its own hairline.  The thermal map gets the lighter alpha of the two
-(:data:`MESH_ALPHA_THERMAL`): most of it is dark red, and the weight that reads
-as texture over a pale field reads as ink over that one.  `--no-mesh` draws the
-fields bare, which is how the two styles get compared.
+So that ONE call is redrawn for these three pictures, and only for them:
+:func:`mesh_weight` wraps `Axes.triplot` for the duration of a build and
+substitutes :data:`MESH_LW` / :data:`MESH_ALPHA` / :data:`MESH_COLOR` into it.
+Nothing in report.py is touched and nothing outside this process changes — the
+report still prints its own hairline.  The three are sized against ONE test:
+after the browser has scaled the picture down to its 442 px card at 1x DPR,
+every triangle edge must still be a distinct line and not a grey wash.
+`--no-mesh` draws the fields bare, and `--preview DIR` writes that 442 px view
+— the only size at which "mesh or smudge" can be answered by eye.
 
 Edges do not double on the seam: the replication merges coincident nodes, and
 `triplot` draws a triangulation's UNIQUE edge list, so the joint carries one
 line like every other interior edge.
 
-SIZE.  Each card places a picture at ~442 CSS px and the disc inside the
-1.25:1 box is height-limited to ~354 px, so 1000 device px covers a 2x screen
-with room to spare.  The palette steps down until the file clears
+SIZE.  Each card places a picture at ~442 CSS px, so the file is rendered at
+exactly twice that (:data:`CARD_PX`): a 2x screen gets its own pixels, and at
+1x the browser folds two source pixels into one, which keeps a 2 px mesh line a
+1 px mesh line.  A round 1000 px was a 2.26x reduction and put the line on 0.44
+of a pixel.  The palette steps down until the file clears
 :data:`TARGET_BYTES`; the hard ceiling is :data:`MAX_BYTES` (300 KB, the
 landing's budget, enforced by the test beside the component) and the target is
 lower on purpose, so a later tweak cannot quietly blow it.  All three are
@@ -81,6 +84,7 @@ calls none::
     python scripts/landing_images.py            # rewrite web/public/landing/*.png
     python scripts/landing_images.py --check     # redraw elsewhere and compare
     python scripts/landing_images.py --no-mesh   # the fields with no mesh over them
+    python scripts/landing_images.py --preview DIR   # also save the 442 px card view
 
 ``--check`` writes nothing into the repo: it redraws into a temporary directory
 and reports, per file, whether the bytes still match what is committed.  A
@@ -114,19 +118,32 @@ OUT_DIR = ROOT / "web" / "public" / "landing"
 MAX_BYTES = 300 * 1024
 #: What the palette search actually aims at — see SIZE above.
 TARGET_BYTES = 255 * 1024
-#: Device pixels across, for a picture placed at ~442 CSS px on a 2x screen.
-CARD_PX = 1000
+#: Device pixels across: EXACTLY twice the ~442 px the card places the picture
+#: at.  A round 1000 was a 2.26x reduction at 1x DPR and a mesh line landed on
+#: 0.44 of a pixel; at 2x the browser folds two source pixels into one, so a
+#: 2 px line stays a 1 px line and a 2x screen still gets its own pixels.
+CARD_PX = 884
+#: What the card places the picture at, and therefore what `--preview` renders
+#: for the eye that has to judge the mesh.
+PREVIEW_PX = 442
 
-#: The mesh over the field, in points and alpha — see THE MESH above.  The
-#: report's own values are 0.12 / 0.35, which is right for a figure placed on a
-#: page and invisible on a 442 px card.
-MESH_LW = 0.22
-MESH_ALPHA = 0.55
-#: The temperature map gets its own value.  Its stator is pale and its rotor is
-#: one flat dark red, so the two halves of the picture want opposite things: at
-#: the other maps' 0.55 the stator reads busy, and at 0.38 the mesh vanishes
-#: inside the rotor altogether.  0.50 is where it is legible in both.
-MESH_ALPHA_THERMAL = 0.50
+#: The mesh over the field — weight in points, alpha, colour.  The report's own
+#: values are 0.12 pt / 0.35 / #2b2b2b, which is right for a figure placed on a
+#: page.  These are sized so that every triangle edge is still a DISTINCT line
+#: after the browser has scaled the picture down to its 442 px card at 1x DPR:
+#: at 0.22 the mesh survived that reduction only as a faint texture (live,
+#: 2026-09-16), and the user asked for a mesh, not a texture.  Measured by eye
+#: on the 442 px downscales `--preview` writes.
+MESH_LW = 0.5
+MESH_ALPHA = 0.85
+MESH_COLOR = "#5a5a5a"
+#: WHY MID-GREY AND NOT NEAR-BLACK.  A jet field is dark at BOTH ends — dark
+#: blue around 0.4 T and dark red at the top both sit near luminance 30-40 —
+#: and near-black ink has that same luminance, so it does not draw a line
+#: there, it disappears into it.  #5a5a5a is ~90: far enough from the dark ends
+#: to be seen and far enough from the pale middle (cyan ~180, yellow ~230) to
+#: stay a line.  One tone for all three, because the alternative is a tone per
+#: picture and no rule.
 
 DIE, CFG, DUTY = "CIANO10 200 opt", "L155 motor", "rated 1x9 mm"
 #: The width the figures are PLACED at, in cm.  `report.map_font_pt` sizes the
@@ -138,11 +155,14 @@ PLACE_CM = 12.0
 # ── the mesh ────────────────────────────────────────────────────────────────
 
 @contextmanager
-def mesh_weight(lw: float, alpha: float, on: bool = True) -> Iterator[None]:
+def mesh_weight(lw: float, alpha: float, color: str = MESH_COLOR,
+                on: bool = True) -> Iterator[None]:
     """Draw `report._map_png`'s mesh at THIS weight, for as long as the block.
 
     That one call is ``ax.triplot(tri, color="#2b2b2b", linewidth=0.12,
-    alpha=0.35)``, and it is the only `triplot` in the builders this script
+    alpha=0.35)`` — all three of which are substituted here, because at card
+    size the weight, the opacity and the tone all have to carry.  It is the
+    only `triplot` in the builders this script
     uses — the mode gallery draws its outlines with a `LineCollection` and the
     flux lines come from `tricontour`, so wrapping `triplot` reaches the mesh
     and nothing else.  `on=False` suppresses the mesh entirely (``--no-mesh``).
@@ -158,7 +178,7 @@ def mesh_weight(lw: float, alpha: float, on: bool = True) -> Iterator[None]:
         if "linewidth" in kw and "alpha" in kw:
             if not on:
                 return []
-            kw["linewidth"], kw["alpha"] = lw, alpha
+            kw["linewidth"], kw["alpha"], kw["color"] = lw, alpha, color
         return original(self, *a, **kw)
 
     matplotlib.axes.Axes.triplot = patched          # type: ignore[assignment]
@@ -291,7 +311,7 @@ def build(mesh: bool = True) -> Dict[str, bytes]:
     P, T, node, tri = to_full(th["vertices"], th["triangles"],
                               {"t": th["temperature_per_node"]},
                               {"dom": th["domain_per_tri"]})
-    with mesh_weight(MESH_LW, MESH_ALPHA_THERMAL, on=mesh):
+    with mesh_weight(MESH_LW, MESH_ALPHA, on=mesh):
         png = report._thermal_map({"field": {
             "vertices": P, "triangles": T,
             "temperature_per_node": node["t"], "domain_per_tri": tri["dom"],
@@ -316,9 +336,17 @@ def build(mesh: bool = True) -> Dict[str, bytes]:
 
 
 def main(argv: List[str]) -> int:
-    check = "--check" in argv[1:]
-    mesh = "--no-mesh" not in argv[1:]
-    unknown = [a for a in argv[1:] if a not in ("--check", "--no-mesh")]
+    args = list(argv[1:])
+    check = "--check" in args
+    mesh = "--no-mesh" not in args
+    preview: Optional[Path] = None
+    if "--preview" in args:
+        i = args.index("--preview")
+        if i + 1 >= len(args):
+            raise SystemExit("--preview needs a directory")
+        preview = Path(args[i + 1])
+        del args[i:i + 2]
+    unknown = [a for a in args if a not in ("--check", "--no-mesh")]
     if unknown:
         raise SystemExit("unknown argument(s): %s" % " ".join(unknown))
 
@@ -343,6 +371,15 @@ def main(argv: List[str]) -> int:
             name, len(data) / 1024,
             "unchanged" if match else ("DIFFERS from the committed file"
                                        if old else "new")))
+        if preview is not None:
+            # WHAT THE EYE HAS TO JUDGE: the card's own 442 px at 1x DPR, which
+            # is where a mesh line either is a line or is a grey smudge.
+            preview.mkdir(parents=True, exist_ok=True)
+            im = Image.open(io.BytesIO(data)).convert("RGB")
+            im = im.resize((PREVIEW_PX,
+                            round(im.height * PREVIEW_PX / im.width)),
+                           Image.LANCZOS)
+            im.save(preview / ("landing_preview_442_%s" % name))
     if dest is not OUT_DIR:
         print("\nredrawn into %s (nothing in the repo was touched)" % dest)
         return 0 if (same or not mesh) else 1

@@ -34,6 +34,43 @@ export interface RunNotice {
 /** How much fits on one line under the button before the tooltip takes over. */
 const LINE = 160;
 
+/* ── the gateway, not the solver (2026-09-16, production) ───────────────────
+   During an API redeploy nginx answers the run with its own 502 page and the
+   notice printed it verbatim — `⚠ not solved — <html><head><title>502 Bad
+   Gateway…`.  That is markup from a machine that never saw the request, in a
+   line written for an engineer, and it says nothing about the motor.  A 502 /
+   503 / 504 (or any body that arrives as an HTML page) means one thing here:
+   the API is down for a moment.  The outage path already retries, so it is
+   PROGRESS, not a failure — one sentence, in the info style. */
+/** An HTML page, wherever it starts — the panel prefixes its own words ("⚠ not
+ *  solved — ") in front of whatever it caught, so anchoring this at ^ would let
+ *  exactly the reported case through. */
+const HTML_BODY = /<!doctype\s|<html[\s>]/i;
+const GATEWAY_WORDS = /bad gateway|gateway time-?out|service (temporarily )?unavailable/i;
+/** A status code where a STATUS CODE goes — never a 502 inside a sentence. */
+const GATEWAY_STATUS =
+  /^(?:error:\s*)?(?:httpexception:\s*)?(?:http\s*)?(50[234])\b/i;
+
+const RESTARTING = 'server is restarting — try again in a minute';
+
+/** The code behind a gateway outage, when the message names one. */
+function gatewayCode(raw: string, stripped: string): string | null {
+  for (const s of [raw, stripped]) {
+    const m = GATEWAY_STATUS.exec(s.trim());
+    if (m) return m[1];
+    const w = /\b(50[234])\b[^0-9]{0,24}(bad gateway|gateway time-?out|service (temporarily )?unavailable)/i.exec(s);
+    if (w) return w[1];
+  }
+  return null;
+}
+
+/** Is this the gateway answering instead of the API? */
+function isGatewayOutage(raw: string, stripped: string): boolean {
+  return HTML_BODY.test(raw) || HTML_BODY.test(stripped)
+    || GATEWAY_WORDS.test(raw) || GATEWAY_WORDS.test(stripped)
+    || GATEWAY_STATUS.test(raw.trim()) || GATEWAY_STATUS.test(stripped.trim());
+}
+
 /**
  * Turn a caught run failure into the notice shown beside the Run button.
  *
@@ -42,7 +79,8 @@ const LINE = 160;
  */
 export function runNoticeFor(raw: string | null | undefined): RunNotice | null {
   if (raw == null) return null;
-  let m = String(raw).trim();
+  const original = String(raw).trim();
+  let m = original;
   if (!m) return null;
 
   // The user's own Stop.  Not a failure — and the button's own caption already
@@ -61,6 +99,22 @@ export function runNoticeFor(raw: string | null | undefined): RunNotice | null {
       const inner = typeof d === 'string' ? d : d?.error;
       if (typeof inner === 'string' && inner.trim()) m = inner.trim();
     } catch { /* not JSON after all — keep the text we have */ }
+  }
+  // THE GATEWAY, before anything else is read out of the text: an HTML page is
+  // not a sentence, the code in it is nginx's rather than the solver's — and a
+  // bare "502:" with NOTHING behind it strips to the empty string, so this has
+  // to be asked before "nothing to say" is.
+  if (isGatewayOutage(original, m)) {
+    const code = gatewayCode(original, m);
+    return {
+      text: RESTARTING,
+      full: `The API did not answer this run: the gateway replied `
+        + `${code ? `${code} ` : 'with an error page '}`
+        + `instead, which is what a redeploy or a restart looks like from here. `
+        + `Nothing was solved and nothing was changed — press Run again in a `
+        + `minute.`,
+      kind: 'info',
+    };
   }
   if (!m) return null;
 

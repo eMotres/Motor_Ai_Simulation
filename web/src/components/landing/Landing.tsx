@@ -22,7 +22,9 @@
  *
  * THE PICTURES ARE OURS.  All three are `report.py`'s own figures, rendered
  * off the stored per-duty fields (`motor_ai_sim.duty_fields`) — not stock art,
- * not a redraw:
+ * not a redraw.  `scripts/landing_images.py` is what draws them, and
+ * `python scripts/landing_images.py --check` redraws them somewhere else and
+ * says whether the committed bytes still match:
  *
  *   em-field.png            report._em_maps(...)["b"]
  *   thermal-map.png         report._thermal_map(...)
@@ -37,7 +39,8 @@
  * this machine is 12 slots / 10 poles, so its smallest periodic sector is a
  * half, and their figures came out 2.2:1 beside a round rotor.  The generator
  * completes those two to the full ring by ROTATING the solved half 180°, which
- * is the periodic continuation the solve itself assumed; |B| is a magnitude and
+ * is the periodic continuation the solve itself assumed — its docstring is
+ * where that argument is made in full; |B| is a magnitude and
  * T is a scalar, so both survive the sign flip an anti-periodic boundary would
  * carry, and the seam nodes are merged so the ring closes with no hairline.
  * Nothing in report.py changes: the report still prints the half it solved.

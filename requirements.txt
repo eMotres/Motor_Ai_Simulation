@@ -44,3 +44,9 @@ python-docx==1.2.0  # report_docx.py — the DEFAULT report format since 2026-09
 # loads and this is the belt-and-braces second path — it must exist, or the
 # fallback is a second ImportError instead of a fallback.
 triangle==20250106
+# The FOURTH unpinned report dependency, found on the server at Stage 7:
+# datasheet.py imports openpyxl, so GET /api/family/datasheet/...?format=xlsx
+# answered 500 "datasheet build failed: No module named 'openpyxl'" on the
+# first container build.  Same class of gap as the three above — installed on
+# the workstation, never pinned.  Version = the workstation's (2026-09-16).
+openpyxl==3.1.5

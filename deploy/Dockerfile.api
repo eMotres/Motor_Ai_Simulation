@@ -53,6 +53,15 @@ COPY scripts/migrate_to_workspaces.py \
 # Catalog SEED — read-only reference material, never the live tree.
 COPY config/ config-seed/
 
+# CadQueryCache defaults to the RELATIVE "./cadquery_cache"
+# (cadquery_geometry.py: CadQueryCache.__init__), i.e. /app/cadquery_cache with
+# WORKDIR /app — and /app is root-owned while the process runs as uid 10001.
+# Without this the cache mkdir raises and the geometry route answers
+#   500 {"detail": "[Errno 13] Permission denied: 'cadquery_cache'"}
+# Found on the server at Stage 7 (2026-09-16); six suite failures were this.
+RUN mkdir -p /app/cadquery_cache /app/logs \
+ && chown -R 10001:10001 /app/cadquery_cache /app/logs
+
 ENV PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

@@ -51,8 +51,8 @@ import { guardCanvas } from '../viewer3d/webglGuard';
 import { PART_COLORS } from '../../lib/partColors';
 import { TIP_PROPS } from './HelpTip';
 import {
-  buildHeatPathModel, coolingFromSettings, editorFor, fmtW, settingLabel,
-  sinkColour, sinkLabel, sinkTooltip,
+  arrowTooltip, brighten, buildHeatPathModel, coolingFromSettings, editorFor,
+  fmtW, settingLabel, sinkColour, sinkLabel, sinkTooltip,
 } from './heatPaths';
 import type {
   CoolingSettings, HeatPathModel, HeatSink, MachineEnvelope, SinkEditor, SinkId,
@@ -276,24 +276,51 @@ const Fit: React.FC<{ radiusMm: number }> = ({ radiusMm }) => {
   return null;
 };
 
-const Arrow: React.FC<{ at: THREE.Vector3; dir: THREE.Vector3; len: number;
-                        colour: string }> = ({ at, dir, len, colour }) => {
+/**
+ * ONE CHANNEL, drawn.  Its length already follows the watts (√share of the
+ * biggest path) and that does not change on hover — an arrow that grew when
+ * pointed at would be reporting the mouse, not the machine.  What hover changes
+ * is only the READING: the arrow goes brighter and thicker, and its tooltip
+ * says which channel it is and how much goes down it.
+ *
+ * The pointer events sit on an INVISIBLE fat cylinder around the whole arrow
+ * (opacity 0, not `visible={false}`, which r3f's raycaster skips): a 0.25 mm
+ * shaft on a Ø85 machine is a few screen pixels and nobody can hit it.  Its
+ * radius is set by the MACHINE (`hitR`), not by the arrow — a 3 % path draws a
+ * thin arrow and is exactly the one a reader wants explained, so its target
+ * must not be thin too.
+ */
+const Arrow: React.FC<{
+  at: THREE.Vector3; dir: THREE.Vector3; len: number; colour: string;
+  hitR?: number; hot?: boolean; onOver?: () => void; onOut?: () => void;
+}> = ({ at, dir, len, colour, hitR, hot, onOver, onOut }) => {
   const q = useMemo(() => new THREE.Quaternion().setFromUnitVectors(
     new THREE.Vector3(0, 1, 0), dir.clone().normalize()), [dir]);
   const shaftLen = Math.max(len * 0.7, 0.6);
   const headLen = Math.max(len * 0.3, 0.4);
-  const rad = Math.max(len * 0.07, 0.25);
-  const mid = at.clone().addScaledVector(dir.clone().normalize(), shaftLen / 2);
-  const tip = at.clone().addScaledVector(dir.clone().normalize(), shaftLen + headLen / 2);
+  const rad = Math.max(len * 0.07, 0.25) * (hot ? 1.5 : 1);
+  const n = dir.clone().normalize();
+  const mid = at.clone().addScaledVector(n, shaftLen / 2);
+  const tip = at.clone().addScaledVector(n, shaftLen + headLen / 2);
+  const hit = at.clone().addScaledVector(n, (shaftLen + headLen) / 2);
+  const shown = hot ? brighten(colour) : colour;
   return (
     <group>
       <mesh position={mid} quaternion={q}>
         <cylinderGeometry args={[rad, rad, shaftLen, 12]} />
-        <meshBasicMaterial color={colour} />
+        <meshBasicMaterial color={shown} />
       </mesh>
       <mesh position={tip} quaternion={q}>
         <coneGeometry args={[rad * 2.4, headLen, 14]} />
-        <meshBasicMaterial color={colour} />
+        <meshBasicMaterial color={shown} />
+      </mesh>
+      <mesh position={hit} quaternion={q}
+            onPointerOver={onOver ? (e) => { e.stopPropagation(); onOver(); } : undefined}
+            onPointerOut={onOut ? () => onOut() : undefined}>
+        <cylinderGeometry args={[Math.max(rad * 3.2, hitR ?? 1.2),
+                                 Math.max(rad * 3.2, hitR ?? 1.2),
+                                 shaftLen + headLen, 10]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
     </group>
   );
@@ -455,13 +482,19 @@ interface SceneProps {
   settings: CoolingSettings | null;
   selected: SinkId | null;
   hovered: SinkId | null;
+  /** which ARROW the pointer is on — `${sink.id}-${surface index}`, because a
+   *  path drawn on two ends has two arrows and only the one under the pointer
+   *  may carry the tooltip */
+  arrow: string | null;
   onSelect: (id: SinkId | null) => void;
   onHover: (id: SinkId | null) => void;
+  onArrow: (key: string | null, id: SinkId | null) => void;
   onChange: (k: keyof CoolingSettings, v: string) => void;
 }
 
 const Scene: React.FC<SceneProps> =
-({ model, cut, labels, settings, selected, hovered, onSelect, onHover, onChange }) => {
+({ model, cut, labels, settings, selected, hovered, arrow, onSelect, onHover,
+   onArrow, onChange }) => {
   const g = model.geometry;
   const thetaStart = cut ? Math.PI * 0.25 : 0;
   const thetaLength = cut ? Math.PI * 1.5 : Math.PI * 2;
@@ -552,10 +585,50 @@ const Scene: React.FC<SceneProps> =
           <lineBasicMaterial color="#ffffff" transparent opacity={0.9} />
         </lineSegments>
       ))}
-      {overlays.filter((o) => o.sink.active).map((o, i) => (
-        <Arrow key={`a-${o.sink.id}-${i}`} at={o.at} dir={o.dir}
-               len={arrowLen(o.sink)} colour={sinkColour(o.sink)} />
-      ))}
+      {/* THE ARROWS — one per cooled surface, each of them a hover target.
+          User, 2026-09-16: an arrow has to say what it MEANS and how much goes
+          down it, not only how long it is. */}
+      {overlays.filter((o) => o.sink.active).map((o, i) => {
+        const key = `${o.sink.id}-${i}`;
+        return (
+          <Arrow key={`a-${key}`} at={o.at} dir={o.dir}
+                 len={arrowLen(o.sink)} colour={sinkColour(o.sink)}
+                 hitR={R * 0.12}
+                 hot={arrow === key || hovered === o.sink.id}
+                 onOver={() => onArrow(key, o.sink.id)}
+                 onOut={() => onArrow(null, null)} />
+        );
+      })}
+      {/* …and the tooltip, ONE at a time, floating off the tip of the arrow the
+          pointer is on.  `pointerEvents: none` is what keeps it a tooltip: a
+          card that can itself be hovered steals the leave event and the label
+          never goes away. */}
+      {overlays.filter((o) => o.sink.active).map((o, i) => ({ o, key: `${o.sink.id}-${i}` }))
+        .filter(({ key }) => key === arrow)
+        .map(({ o, key }) => {
+          const tip = arrowTooltip(o.sink);
+          return (
+            <Html key={`t-${key}`} zIndexRange={[90, 70]} center
+                  style={{ pointerEvents: 'none' }}
+                  position={o.at.clone().addScaledVector(
+                    o.dir.clone().normalize(), arrowLen(o.sink) * 1.15)}>
+              <div style={{
+                pointerEvents: 'none', fontFamily: 'monospace', fontSize: 10.5,
+                lineHeight: 1.45, padding: '3px 7px', borderRadius: 4,
+                background: 'rgba(8,12,18,0.94)', color: '#e6edf5',
+                border: `1px solid ${brighten(sinkColour(o.sink))}`,
+                boxShadow: '0 6px 18px rgba(0,0,0,0.55)',
+                // A WIDTH, not a max-width: drei's `<Html>` wrapper is a
+                // shrink-to-fit box with nothing to shrink against, so a
+                // max-width alone leaves the text in a one-word column.
+                width: 'min(440px, 76vw)',
+              }}>
+                <div style={{ fontWeight: 600 }}>{tip.head}</div>
+                <div style={{ color: '#9fb0c4' }}>{tip.mech}</div>
+              </div>
+            </Html>
+          );
+        })}
       {labels && overlays
         // ONE label per sink, on its first surface: two identical billboards on
         // the two ends of the machine say nothing the one does not.
@@ -618,7 +691,7 @@ const Scene: React.FC<SceneProps> =
           mount as well as on a machine that changes size. */}
       <Fit radiusMm={R} />
       <Invalidator dep={`${model.schema_version}:${model.totals.removed_W}:${cut}:${labels}`
-                        + `:${selected ?? ''}:${hovered ?? ''}`
+                        + `:${selected ?? ''}:${hovered ?? ''}:${arrow ?? ''}`
                         + `:${settings ? JSON.stringify(settings) : ''}`} />
     </>
   );
@@ -649,6 +722,8 @@ const HeatPathView3D: React.FC<HeatPathView3DProps> = ({
   const [labels, setLabels] = useState(true);
   const [selected, setSelected] = useState<SinkId | null>(null);
   const [hovered, setHovered] = useState<SinkId | null>(null);
+  // which ARROW carries the tooltip — one at a time, by design
+  const [arrow, setArrow] = useState<string | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
 
   const editable = !!settings && !!onChange;
@@ -656,14 +731,27 @@ const HeatPathView3D: React.FC<HeatPathView3DProps> = ({
     onChange?.(k, v);
   }, [onChange]);
 
-  // ESC closes the popover — the same key that closes every other transient
-  // thing in this app.  Click-outside is `onPointerMissed` on the canvas.
+  // ESC closes the popover AND drops the arrow tooltip — the same key that
+  // closes every other transient thing in this app.  Click-outside is
+  // `onPointerMissed` on the canvas.
   useEffect(() => {
-    if (!selected) return undefined;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSelected(null); };
+    if (!selected && !arrow) return undefined;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setSelected(null);
+      setArrow(null);
+      setHovered(null);
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected]);
+  }, [selected, arrow]);
+
+  /** Hovering an arrow lights the arrow AND tints the surface it leaves
+   *  through: the two are one channel, and the picture has to say so. */
+  const onArrow = useCallback((key: string | null, id: SinkId | null) => {
+    setArrow(key);
+    setHovered(id);
+  }, []);
 
   const model = useMemo(() => {
     const direct = buildHeatPathModel(res as Record<string, unknown> | null,
@@ -692,7 +780,7 @@ const HeatPathView3D: React.FC<HeatPathView3DProps> = ({
           Heat paths
         </Typography>
         {/* One short line, the rest in the tooltip — the project's rule. */}
-        <Tooltip {...TIP_PROPS} title={`${editable ? 'Click a surface to set what it is — ε and the room on the housing, W/K and its temperature on the mount, open/closed on the end faces, the mode in the bore, millimetres on the shaft ends. Every field writes the same setting as the boxes above, and nothing here solves: press Solve when you are done. ' : ''}${solved ? `Each surface also carries what LEFT through it on the last solve. The colour and the arrow follow the share of the BIGGEST path (here ${active[0]?.short ?? '—'}), not of the total — on a joint whose mount takes 86 % a share scale would make every other path invisible. Shares are of what left, so they add to 100 % whatever the closure error is; the residual is on the line above. ` : 'Nothing has been solved for this machine yet, so there are no watts on it — the labels are the settings. '}Off paths are grey and named: "nothing sticks out of this housing" is an answer about the machine, not a missing number.`}>
+        <Tooltip {...TIP_PROPS} title={`${editable ? 'Click a surface to set what it is — ε and the room on the housing, W/K and its temperature on the mount, open/closed on the end faces, the mode in the bore, millimetres on the shaft ends. Every field writes the same setting as the boxes above, and nothing here solves: press Solve when you are done. ' : ''}${solved ? `Each surface also carries what LEFT through it on the last solve. The colour and the arrow follow the share of the BIGGEST path (here ${active[0]?.short ?? '—'}), not of the total — on a joint whose mount takes 86 % a share scale would make every other path invisible. Shares are of what left, so they add to 100 % whatever the closure error is; the residual is on the line above. Hover an ARROW for what that channel is — the mechanism, its coefficient and the two temperatures — and how much goes down it. ` :'Nothing has been solved for this machine yet, so there are no watts on it — the labels are the settings. '}Off paths are grey and named: "nothing sticks out of this housing" is an answer about the machine, not a missing number.`}>
           <Typography sx={{ ...lbl, cursor: 'help', fontFamily: 'monospace',
                             borderBottom: '1px dotted var(--text-4)' }}>
             {solved
@@ -733,8 +821,9 @@ const HeatPathView3D: React.FC<HeatPathView3DProps> = ({
                   onPointerMissed={() => setSelected(null)}>
             <Scene model={model} cut={cut} labels={labels}
                    settings={editable ? settings ?? null : null}
-                   selected={selected} hovered={hovered}
-                   onSelect={setSelected} onHover={setHovered} onChange={set} />
+                   selected={selected} hovered={hovered} arrow={arrow}
+                   onSelect={setSelected} onHover={setHovered}
+                   onArrow={onArrow} onChange={set} />
           </Canvas>
         </Box>
       )}

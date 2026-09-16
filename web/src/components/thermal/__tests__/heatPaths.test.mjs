@@ -149,6 +149,94 @@ function sinkTooltip(sink) {
   return `${bits.join(' · ')}.`;
 }
 
+function arrowMechanism(sink) {
+  const mode = sink.mode ?? '';
+  switch (sink.id) {
+    case 'mount': return 'conduction into the mount';
+    case 'housing':
+      return mode === 'liquid' ? 'liquid jacket on the housing'
+        : mode === 'air' ? 'forced air over the housing'
+          : mode === 'robotics' ? 'still air + radiation off the housing'
+            : mode === 'manual' ? 'imposed film on the housing'
+              : 'no cooling on the housing';
+    case 'end_face_winding': return 'still air on the end-winding faces';
+    case 'end_face_stator': return 'still air on the stator end annulus';
+    case 'end_face_rotor': return 'still air on the rotor end annulus';
+    case 'end_face_magnet': return 'still air on the magnet end annulus';
+    case 'bore':
+      return mode === 'air' ? 'forced air through the bore'
+        : mode === 'liquid' ? 'liquid through the bore'
+          : mode === 'still' ? 'still air in the bore' : 'closed bore';
+    case 'shaft_ends': return 'shaft stub as a fin in ambient air';
+    case 'end_windings': return 'air over the end turns';
+    case 'slot_channels': return 'air through the slot ducts';
+    default: return 'convection';
+  }
+}
+
+const TEMP_NAMES = {
+  mount: ['housing', 'mount'],
+  housing: ['wall', 'air'],
+  bore: ['wall', 'air'],
+  shaft_ends: ['shaft', 'air'],
+  end_face_winding: ['end turns', 'air'],
+  end_face_stator: ['face', 'air'],
+  end_face_rotor: ['face', 'air'],
+  end_face_magnet: ['face', 'air'],
+  end_windings: ['end turns', 'air'],
+  slot_channels: ['slot', 'air'],
+};
+
+function sidesPhrase(sink) {
+  const k = sink.placement.kind;
+  if (k !== 'annulus' && k !== 'band' && k !== 'stub') return null;
+  const n = sink.placement.sides?.length ?? 0;
+  if (n >= 2) return 'both sides';
+  if (n === 1) return 'one side';
+  return null;
+}
+
+function arrowTooltip(sink) {
+  if (!sink.active) {
+    return {
+      head: `${sink.label} — nothing leaves here`,
+      mech: `${arrowMechanism(sink)} is off (mode: ${sink.mode ?? '—'}).`,
+    };
+  }
+  const share = sink.pct === null ? '' : ` · ${sink.pct} % of what leaves`;
+  const head = `${sink.label} — ${fmtW(sink.W)}${share}`;
+
+  const mech = arrowMechanism(sink);
+  const bits = [mech];
+  const sides = sidesPhrase(sink);
+  if (sides) bits.push(sides);
+  if (sink.G_W_per_K !== null) bits.push(`G ${sink.G_W_per_K} W/K`);
+  else if (sink.h_W_per_m2K !== null) bits.push(`h ${sink.h_W_per_m2K} W/m²K`);
+  if (sink.detail.length === 2) {
+    bits.push(sink.detail.map((p) => `${p.label} ${fmtW(p.W)}`).join(' + '));
+  }
+  const [hot, cold] = TEMP_NAMES[sink.id] ?? ['surface', 'sink'];
+  if (sink.t_surface_c !== null && sink.t_sink_c !== null) {
+    bits.push(`${hot} ${sink.t_surface_c} → ${cold} ${sink.t_sink_c} °C`);
+  } else if (sink.t_sink_c !== null) {
+    bits.push(`into ${cold} at ${sink.t_sink_c} °C`);
+  }
+  if (sink.note && !/face\(s\)/.test(sink.note)
+      && !mech.toLowerCase().includes(sink.note.toLowerCase())) {
+    bits.push(sink.note);
+  }
+  return { head, mech: `${bits.join(', ')}.` };
+}
+
+function brighten(hex, f = 0.45) {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const t = Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 0;
+  return `#${[(n >> 16) & 255, (n >> 8) & 255, n & 255]
+    .map((c) => hex2(c + (255 - c) * t)).join('')}`;
+}
+
 /* ── the Ø85 robot joint's own sinks ─────────────────────────────────────── */
 
 const MOUNT = {
@@ -156,6 +244,7 @@ const MOUNT = {
   short: 'mount', mode: 'conduction', active: true, W: 48.532, pct: 86.4,
   intensity: 1, h_W_per_m2K: null, G_W_per_K: 2, area_m2: null,
   t_surface_c: 64.27, t_sink_c: 40, detail: [], note: 'given',
+  placement: { kind: 'annulus', r_in_mm: 35.1, r_out_mm: 42.5, sides: [-1], z_mm: 10 },
 };
 
 const HOUSING = {
@@ -165,6 +254,32 @@ const HOUSING = {
   t_surface_c: 63.75, t_sink_c: 40,
   detail: [{ label: 'convection', W: 0.45 }, { label: 'radiation', W: 0.67 }],
   note: 'still air',
+  placement: { kind: 'cylinder', facing: 'out', r_mm: 42.5, z0_mm: -10, z1_mm: 10 },
+};
+
+/** The end windings' axial faces — a BAND on both ends, the path that exists
+ *  only because the machine has its ends open. */
+const END_FACE_WINDING = {
+  id: 'end_face_winding', group: 'stator', label: 'End windings — axial faces',
+  short: 'end turns', mode: 'still', active: true, W: 10.62, pct: 18.9,
+  intensity: 0.2188, h_W_per_m2K: 12.4, G_W_per_K: null, area_m2: 0.00361,
+  t_surface_c: 71.6, t_sink_c: 40, detail: [], note: '2 face(s)',
+  placement: {
+    kind: 'band', r_in_mm: 33.1, r_out_mm: 40.1, length_mm: 7.6,
+    sides: [-1, 1], z_mm: 10,
+  },
+};
+
+/** The open bore — a detail split AND a regime note that is already the
+ *  mechanism.  From the same L13 solve: 1.96 W = 0.87 conv + 1.09 rad. */
+const BORE = {
+  id: 'bore', group: 'rotor', label: 'Bore — open, still air',
+  short: 'bore', mode: 'still', active: true, W: 1.96, pct: 1,
+  intensity: 0.012, h_W_per_m2K: 15.498, G_W_per_K: null, area_m2: 0.00284,
+  t_surface_c: 108.47, t_sink_c: 40,
+  detail: [{ label: 'convection', W: 0.87 }, { label: 'radiation', W: 1.09 }],
+  note: 'still air',
+  placement: { kind: 'cylinder', facing: 'in', r_mm: 22.6, z0_mm: -10, z1_mm: 10 },
 };
 
 const SHAFT_ENDS_OFF = {
@@ -172,6 +287,7 @@ const SHAFT_ENDS_OFF = {
   short: 'shaft ends', mode: 'off', active: false, W: 0, pct: 0, intensity: 0,
   h_W_per_m2K: null, G_W_per_K: null, area_m2: null, t_surface_c: null,
   t_sink_c: null, detail: [], note: '',
+  placement: { kind: 'stub', r_mm: 12.5, r_in_mm: 0, length_mm: 0, sides: [-1, 1], z_mm: 10 },
 };
 
 const JACKET = {
@@ -179,6 +295,7 @@ const JACKET = {
   short: 'housing', mode: 'liquid', active: true, W: 5644.14, pct: 96.3,
   intensity: 1, h_W_per_m2K: 100000, G_W_per_K: null, area_m2: 0.081551,
   t_surface_c: null, t_sink_c: 68.09, detail: [], note: 'turbulent',
+  placement: { kind: 'cylinder', facing: 'out', r_mm: 100, z0_mm: -77.5, z1_mm: 77.5 },
 };
 
 /* ── the colour ramp ─────────────────────────────────────────────────────── */
@@ -394,6 +511,109 @@ test('sinkLabel: an OFF path with a setting names the setting, not "none"', () =
   assert.equal(sinkLabel(SHAFT_ENDS_OFF, settingLabel('shaft_ends', L13_SETTINGS)),
                'shaft ends off');
   assert.equal(sinkLabel(SHAFT_ENDS_OFF, null), 'shaft ends — none');
+});
+
+/* ── the ARROWS ──────────────────────────────────────────────────────────── */
+
+/* User, 2026-09-16: *"добавить подсказки, когда наводишь курсором на стрелки:
+   что она означает и сколько тепла уходит через этот канал"*.  Two lines and no
+   more: WHICH path and how much, then the mechanism that carries it with the
+   coefficient and the two temperatures the watts came out of.  An arrow is a
+   channel, and a channel is not identified by its length. */
+
+test('arrowTooltip: the mount arrow names the channel, the watts and the share', () => {
+  const t = arrowTooltip(MOUNT);
+  assert.equal(t.head,
+    'Mount — bolted flange (conduction) — 48.5 W · 86.4 % of what leaves');
+  // mount_W = G · (T_housing − T_mount): the second line has to be checkable
+  assert.equal(t.mech,
+    'conduction into the mount, one side, G 2 W/K, housing 64.27 → mount 40 °C, given.');
+});
+
+test('arrowTooltip: a sink WITH a detail split says both films by name', () => {
+  // on a small machine in still air radiation carries more than convection, and
+  // an arrow that prints one number hides the half that matters
+  const t = arrowTooltip(HOUSING);
+  assert.equal(t.head,
+    'Housing — still air + radiation — 1.11 W · 2 % of what leaves');
+  assert.ok(t.mech.startsWith('still air + radiation off the housing,'), t.mech);
+  assert.ok(t.mech.includes('h 11.739 W/m²K'), t.mech);
+  assert.ok(t.mech.includes('convection 0.45 W + radiation 0.67 W'), t.mech);
+  assert.ok(t.mech.includes('wall 63.75 → air 40 °C'), t.mech);
+});
+
+test('arrowTooltip: a sink WITHOUT a detail split invents no split', () => {
+  const t = arrowTooltip(JACKET);
+  assert.equal(t.head, 'Housing — liquid jacket — 5.64 kW · 96.3 % of what leaves');
+  assert.ok(!t.mech.includes('+'), t.mech);
+  assert.ok(t.mech.includes('liquid jacket on the housing'), t.mech);
+  // no wall temperature was reported, so only the sink's own is named
+  assert.ok(t.mech.includes('into air at 68.09 °C'), t.mech);
+});
+
+test('arrowTooltip: an axial path says it is paid for on BOTH ends', () => {
+  const t = arrowTooltip(END_FACE_WINDING);
+  assert.equal(t.head, 'End windings — axial faces — 10.6 W · 18.9 % of what leaves');
+  assert.ok(t.mech.includes('both sides'), t.mech);
+  assert.ok(t.mech.includes('still air on the end-winding faces'), t.mech);
+  assert.ok(t.mech.includes('end turns 71.6 → air 40 °C'), t.mech);
+  // "2 face(s)" would repeat "both sides" in the same line
+  assert.ok(!t.mech.includes('face(s)'), t.mech);
+});
+
+test('arrowTooltip: a note that only repeats the mechanism is dropped', () => {
+  // the bore's regime IS "still air", and the mechanism already said it —
+  // "still air in the bore, …, still air" reads as two findings
+  const t = arrowTooltip(BORE);
+  assert.equal(t.mech,
+    'still air in the bore, h 15.498 W/m²K, convection 0.87 W + radiation 1.09 W, '
+    + 'wall 108.47 → air 40 °C.');
+  assert.equal(t.mech.match(/still air/g).length, 1);
+});
+
+test('arrowTooltip: an OFF path says the channel is off, not that it carries 0 W', () => {
+  const t = arrowTooltip(SHAFT_ENDS_OFF);
+  assert.ok(t.head.endsWith('nothing leaves here'), t.head);
+  assert.ok(!t.head.includes('0.00 W'), t.head);
+  assert.ok(t.mech.includes('fin in ambient air is off'), t.mech);
+  assert.ok(t.mech.includes('mode: off'), t.mech);
+});
+
+test('arrowTooltip is two lines and stays two lines — no paragraphs', () => {
+  for (const s of [MOUNT, HOUSING, JACKET, END_FACE_WINDING, BORE, SHAFT_ENDS_OFF]) {
+    const t = arrowTooltip(s);
+    assert.ok(!t.head.includes('\n') && !t.mech.includes('\n'), s.id);
+    assert.ok(t.mech.endsWith('.'), t.mech);
+    assert.ok(!t.mech.includes(', ,'), t.mech);
+    assert.ok(!`${t.head}${t.mech}`.includes('undefined'), s.id);
+    assert.ok(!`${t.head}${t.mech}`.includes('null'), s.id);
+  }
+});
+
+test('arrowTooltip agrees with the billboard beside it, to the watt', () => {
+  // the arrow and the label read the SAME sink; if they ever disagree the
+  // picture is lying about one of them
+  for (const s of [MOUNT, HOUSING, JACKET, END_FACE_WINDING]) {
+    assert.ok(arrowTooltip(s).head.includes(fmtW(s.W)), s.id);
+  }
+});
+
+test('arrowMechanism names the mode, not just the surface', () => {
+  assert.equal(arrowMechanism({ ...HOUSING, mode: 'air' }), 'forced air over the housing');
+  assert.equal(arrowMechanism({ ...HOUSING, mode: 'none' }), 'no cooling on the housing');
+  assert.equal(arrowMechanism({ ...MOUNT }), 'conduction into the mount');
+  assert.equal(arrowMechanism({ id: 'bore', mode: 'air' }), 'forced air through the bore');
+  assert.equal(arrowMechanism({ id: 'bore', mode: 'still' }), 'still air in the bore');
+});
+
+test('brighten: hover lifts a colour towards white without leaving the ramp', () => {
+  // a hovered 2 % path must still look like a 2 % path, only brighter
+  assert.equal(brighten('#000000', 1), '#ffffff');
+  assert.equal(brighten('#ff2a10', 0), '#ff2a10');
+  const hot = brighten(sinkColour(HOUSING));
+  assert.match(hot, /^#[0-9a-f]{6}$/);
+  assert.notEqual(hot, sinkColour(HOUSING));
+  assert.equal(brighten('not a colour'), 'not a colour');
 });
 
 test('sinkTooltip never leaves a dangling separator', () => {

@@ -563,6 +563,19 @@ export function sinkColour(sink: Pick<HeatSink, 'active' | 'intensity'>): string
   return sink.active ? heatColour(sink.intensity) : SINK_OFF_COLOUR;
 }
 
+/** The same colour, mixed `f` of the way towards white — what an arrow is drawn
+ *  in while the pointer is on it.  Mixing towards white rather than switching to
+ *  a highlight colour keeps the ramp readable: a hovered 2 % path must still
+ *  look like a 2 % path, only brighter. */
+export function brighten(hex: string, f = 0.45): string {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const t = Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 0;
+  return `#${[(n >> 16) & 255, (n >> 8) & 255, n & 255]
+    .map((c) => hex2(c + (255 - c) * t)).join('')}`;
+}
+
 /** Watts, at a resolution that does not pretend: 48.5 W, 0.59 W, 5.6 kW. */
 export function fmtW(w: number | null | undefined): string {
   if (w === null || w === undefined || !Number.isFinite(w)) return '—';
@@ -733,4 +746,119 @@ export function sinkTooltip(sink: HeatSink): string {
   }
   if (sink.note) bits.push(sink.note);
   return `${bits.join(' · ')}.`;
+}
+
+/* ── 5. the ARROWS: what the channel IS, and how much goes down it ────────── */
+
+/**
+ * The MECHANISM one arrow stands for, in the fewest words that still name it.
+ *
+ * User, 2026-09-16: *"добавить подсказки, когда наводишь курсором на стрелки:
+ * что она означает и сколько тепла уходит через этот канал"*.  An arrow on the
+ * picture is a channel, and a channel is not identified by its watts: 48.5 W
+ * out of a flange is conduction into an arm and 48.5 W off a cylinder is a film
+ * in the room, and the reader has to be told which one he is looking at.
+ */
+export function arrowMechanism(sink: Pick<HeatSink, 'id' | 'mode'>): string {
+  const mode = sink.mode ?? '';
+  switch (sink.id) {
+    case 'mount': return 'conduction into the mount';
+    case 'housing':
+      return mode === 'liquid' ? 'liquid jacket on the housing'
+        : mode === 'air' ? 'forced air over the housing'
+          : mode === 'robotics' ? 'still air + radiation off the housing'
+            : mode === 'manual' ? 'imposed film on the housing'
+              : 'no cooling on the housing';
+    case 'end_face_winding': return 'still air on the end-winding faces';
+    case 'end_face_stator': return 'still air on the stator end annulus';
+    case 'end_face_rotor': return 'still air on the rotor end annulus';
+    case 'end_face_magnet': return 'still air on the magnet end annulus';
+    case 'bore':
+      return mode === 'air' ? 'forced air through the bore'
+        : mode === 'liquid' ? 'liquid through the bore'
+          : mode === 'still' ? 'still air in the bore' : 'closed bore';
+    case 'shaft_ends': return 'shaft stub as a fin in ambient air';
+    case 'end_windings': return 'air over the end turns';
+    case 'slot_channels': return 'air through the slot ducts';
+    default: return 'convection';
+  }
+}
+
+/** What the two temperatures on an arrow are called.  "64 → 40 °C" is a number
+ *  pair; "housing 64 → mount 40 °C" is the equation the watts came out of. */
+const TEMP_NAMES: Record<string, [string, string]> = {
+  mount: ['housing', 'mount'],
+  housing: ['wall', 'air'],
+  bore: ['wall', 'air'],
+  shaft_ends: ['shaft', 'air'],
+  end_face_winding: ['end turns', 'air'],
+  end_face_stator: ['face', 'air'],
+  end_face_rotor: ['face', 'air'],
+  end_face_magnet: ['face', 'air'],
+  end_windings: ['end turns', 'air'],
+  slot_channels: ['slot', 'air'],
+};
+
+/** "both sides" / "one side" — an axial path drawn on one end of the machine is
+ *  usually paid for on two, and the arrow cannot show that by itself. */
+function sidesPhrase(sink: HeatSink): string | null {
+  const k = sink.placement.kind;
+  if (k !== 'annulus' && k !== 'band' && k !== 'stub') return null;
+  const n = sink.placement.sides?.length ?? 0;
+  if (n >= 2) return 'both sides';
+  if (n === 1) return 'one side';
+  return null;
+}
+
+export interface ArrowTip {
+  /** the one short line: which path, how many watts, what share of the outflow */
+  head: string;
+  /** the second line: the mechanism, its coefficient and the two temperatures */
+  mech: string;
+}
+
+/**
+ * The hover on ONE arrow — two lines, never a paragraph.
+ *
+ *   head: "Mount — bolted flange (conduction) — 48.5 W · 86.4 % of what leaves"
+ *   mech: "conduction into the mount, G 2 W/K, housing 64.27 → mount 40 °C."
+ *
+ * Everything is read off the SAME sink the tint and the billboard use, so the
+ * arrow cannot say a different number from the label beside it.  An arrow is
+ * only drawn for an active path, but an off sink is handled anyway: the legend
+ * hands this function whatever the user points at.
+ */
+export function arrowTooltip(sink: HeatSink): ArrowTip {
+  if (!sink.active) {
+    return {
+      head: `${sink.label} — nothing leaves here`,
+      mech: `${arrowMechanism(sink)} is off (mode: ${sink.mode ?? '—'}).`,
+    };
+  }
+  const share = sink.pct === null ? '' : ` · ${sink.pct} % of what leaves`;
+  const head = `${sink.label} — ${fmtW(sink.W)}${share}`;
+
+  const mech = arrowMechanism(sink);
+  const bits: string[] = [mech];
+  const sides = sidesPhrase(sink);
+  if (sides) bits.push(sides);
+  if (sink.G_W_per_K !== null) bits.push(`G ${sink.G_W_per_K} W/K`);
+  else if (sink.h_W_per_m2K !== null) bits.push(`h ${sink.h_W_per_m2K} W/m²K`);
+  if (sink.detail.length === 2) {
+    bits.push(sink.detail.map((p) => `${p.label} ${fmtW(p.W)}`).join(' + '));
+  }
+  const [hot, cold] = TEMP_NAMES[sink.id] ?? ['surface', 'sink'];
+  if (sink.t_surface_c !== null && sink.t_sink_c !== null) {
+    bits.push(`${hot} ${sink.t_surface_c} → ${cold} ${sink.t_sink_c} °C`);
+  } else if (sink.t_sink_c !== null) {
+    bits.push(`into ${cold} at ${sink.t_sink_c} °C`);
+  }
+  // The note earns its place only if it says something new: the face count is
+  // already "both sides", and the regime ("still air") is already the
+  // mechanism.  A line that says the same thing twice reads as two findings.
+  if (sink.note && !/face\(s\)/.test(sink.note)
+      && !mech.toLowerCase().includes(sink.note.toLowerCase())) {
+    bits.push(sink.note);
+  }
+  return { head, mech: `${bits.join(', ')}.` };
 }

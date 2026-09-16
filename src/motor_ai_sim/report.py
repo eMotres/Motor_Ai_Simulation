@@ -1116,14 +1116,11 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
         ax.set_aspect("equal")
         ax.axis("off")
         fig.tight_layout(pad=0.15)
-        buf = io.BytesIO()
         # bbox "tight": a sector or a half-machine is wide and short, and a
         # square figure around it was two thirds white — that white was what
         # pushed the field maps onto a page of their own (2026-09-08).
-        fig.savefig(buf, format="png", transparent=False, facecolor="white",
-                    bbox_inches="tight", pad_inches=0.05)
-        plt.close(fig)
-        return buf.getvalue()
+        return _png_bytes(fig, transparent=False,
+                          bbox_inches="tight", pad_inches=0.05)
     except Exception as exc:                                # noqa: BLE001
         log.debug("report: map render failed (%s)", exc)
         try:
@@ -2220,11 +2217,7 @@ def _loss_pie_png(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
                       fontsize=CHART_TICK_PT, handlelength=1.2)
         ax.set_title("Total %s" % _fmt(tot, 0, "W"), fontsize=10.5, pad=4)
         ax.set_aspect("equal")
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", facecolor="white", bbox_inches="tight",
-                    pad_inches=0.04)
-        plt.close(fig)
-        return buf.getvalue()
+        return _finish(fig)
     except Exception as exc:                                # noqa: BLE001
         log.debug("report: loss pie failed (%s)", exc)
         try:
@@ -2334,11 +2327,7 @@ def _temp_bars_png(res: Dict[str, Any], inner: Dict[str, Any],
         ax.grid(axis="x", color="#e6e6e6", lw=0.6, zorder=0)
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", facecolor="white", bbox_inches="tight",
-                    pad_inches=0.04)
-        plt.close(fig)
-        return buf.getvalue()
+        return _finish(fig)
     except Exception as exc:                                # noqa: BLE001
         log.debug("report: temperature bars failed (%s)", exc)
         try:
@@ -2489,13 +2478,34 @@ def _fig(width_cm: float, px: int, aspect: float = 0.62):
                         dpi=max(160.0, float(px) / w))
 
 
-def _finish(fig) -> bytes:
+def _png_bytes(fig, **kw: Any) -> bytes:
+    """THE place a matplotlib figure becomes bytes in this document.
+
+    Six sites used to write the same four lines (BytesIO, savefig, close, get)
+    with different ``savefig`` keywords — the maps keep their own padding, the
+    Campbell diagram its untrimmed box.  They are one function now for one
+    reason: the report's progress ring counts FIGURES, and a counter that has
+    to be pasted into twenty drawing functions is a counter that will be
+    forgotten in the twenty-first.  ``report_progress.figure_done`` is a no-op
+    unless a route opened a bar, so a test or a script that renders a figure
+    pays nothing for it.
+
+    Closing the figure is not optional and never was: Agg keeps every open
+    figure alive, and a 20-figure report that leaks them is a warning per
+    build and a slow leak in a server that runs all day.
+    """
     import matplotlib.pyplot as plt
+    from motor_ai_sim import report_progress as _RP
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", facecolor="white", bbox_inches="tight",
-                pad_inches=0.04)
+    fig.savefig(buf, format="png", **{"facecolor": "white", **kw})
     plt.close(fig)
-    return buf.getvalue()
+    blob = buf.getvalue()
+    _RP.figure_done()
+    return blob
+
+
+def _finish(fig) -> bytes:
+    return _png_bytes(fig, bbox_inches="tight", pad_inches=0.04)
 
 
 def _torque_png(wf: Dict[str, Any], width_cm: float = 22.0,
@@ -3561,10 +3571,7 @@ def _campbell_png(crit: Optional[Dict[str, Any]]) -> Optional[bytes]:
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)
         fig.tight_layout(pad=0.3)
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", facecolor="white")
-        plt.close(fig)
-        return buf.getvalue()
+        return _png_bytes(fig)
     except Exception as exc:                                # noqa: BLE001
         log.debug("report: campbell render failed (%s)", exc)
         try:
@@ -7428,9 +7435,13 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     from reportlab.lib.colors import HexColor
     from reportlab.platypus import PageBreak, SimpleDocTemplate
 
+    from motor_ai_sim import report_progress as _RP
+
     st = _styles()
     D = gather_report_data(die=die, cfg=cfg, die_doc=die_doc, cfg_doc=cfg_doc,
                            duty=duty, slot=slot, pictures=pictures)
+    # Every solver's store has been read; from here the wall clock is figures.
+    _RP.stage("records")
     geo, wind, mats, role = D["geo"], D["wind"], D["mats"], D["role"]
     d_duty, em, em_src, delta = D["d_duty"], D["em"], D["em_src"], D["delta"]
     brg_assign, brg, sources = D["brg_assign"], D["brg"], D["sources"]
@@ -7539,6 +7550,10 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # is dropped from this report rather than flagged in it, the Machine column
     # said "this machine" on every row.
 
+    # The story is complete: every figure this machine has was drawn, and what
+    # is left is reportlab laying 43 pages of it out.
+    _RP.stage("tables")
+
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=(PAGE_W, PAGE_H),
@@ -7566,6 +7581,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
         canv.line(MARGIN, MARGIN * 0.62 + 9, PAGE_W - MARGIN, MARGIN * 0.62 + 9)
         canv.restoreState()
 
+    _RP.stage("writing")
     doc.build(story, onFirstPage=_decorate, onLaterPages=_decorate)
     return buf.getvalue()
 
@@ -12824,11 +12840,7 @@ def _mode_gallery_png(res: Optional[Dict[str, Any]],
                 ("  n = %d" % int(order)) if order is not None else ""),
                 fontsize=10.5, pad=3)
         fig.tight_layout(pad=0.3)
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", facecolor="white",
-                    bbox_inches="tight", pad_inches=0.05)
-        plt.close(fig)
-        return buf.getvalue()
+        return _png_bytes(fig, bbox_inches="tight", pad_inches=0.05)
     except Exception as exc:                                # noqa: BLE001
         log.debug("report: mode gallery failed (%s)", exc)
         try:

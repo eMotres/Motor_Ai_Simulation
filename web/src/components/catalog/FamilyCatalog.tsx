@@ -8,7 +8,7 @@
  * same endpoints the rest of the app already uses; this panel writes nothing
  * of its own into the live config.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Box, Paper, Typography, Button, Chip, Tooltip, IconButton, CircularProgress,
 } from '@mui/material';
@@ -33,6 +33,10 @@ import {
 } from '../../lib/dutyLocalApply';
 import { beginDutyApply, endDutyApply } from '../../lib/familyFollow';
 import { downloadExport } from '../../lib/exportDownload';
+import {
+  IDLE as RING_IDLE, newRunId, ringBusy, ringDone, ringFail, ringPoll,
+  ringStart, ringTip, type ReportProgressInfo, type ReportRing,
+} from './reportProgress';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
 
@@ -141,6 +145,23 @@ const readLS = (k: string, d: any) => {
   try { const v = localStorage.getItem('sim.' + k); return v == null ? d : JSON.parse(v); }
   catch { return d; }
 };
+
+/**
+ * The report button's ring — MINIMAL by request (2026-09-16): a small circle
+ * and a percentage, no bar, no line of text.  It spins (indeterminate) from
+ * the click until the backend's first answer, so something moves within a
+ * second of pressing; after that it is the real fraction of the stages the
+ * build publishes.  Everything it knows is in the tooltip, one line.
+ */
+const ReportRing: React.FC<{ ring: ReportRing; size?: number }> = ({ ring, size = 15 }) => (
+  <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.45 }}>
+    <CircularProgress
+      variant={ring.pct == null ? 'indeterminate' : 'determinate'}
+      value={ring.pct ?? 0} size={size} thickness={6}
+      sx={{ color: 'inherit' }} />
+    {ring.pct != null && <span>{ring.pct} %</span>}
+  </Box>
+);
 
 const FamilyCatalog: React.FC<{
   /** Show only dies of this stator diameter (the page groups by Ø). */
@@ -264,6 +285,19 @@ const FamilyCatalog: React.FC<{
   // grey out the other on the same row.
   const [exporting, setExporting] = useState<string | null>(null);
 
+  // THE PROGRESS RING (user 2026-09-16: "нужно сделать ещё минимальный
+  // прогресс-ринг генерации отчёта, чтобы было видно, что работает, а не
+  // висит").  A report is ~50 s of figures and the PDF half a minute more, and
+  // the download is ONE request whose body is the file — nothing on the wire
+  // until it is finished.  So the click mints a run id, sends it with the
+  // download, and a second request polls the stages the backend publishes into
+  // the shared progress registry.  Rules in `./reportProgress`; this is the
+  // plumbing.
+  const [ring, setRing] = useState<ReportRing>(RING_IDLE);
+  const pollRef = useRef(0);
+  const reportBusy = (die: string, cfg: string) =>
+    exporting === `report:${die}/${cfg}` || exporting === `report:pdf:${die}/${cfg}`;
+
   // WHICH DUTY'S PICTURES go into the report (user 2026-09-11: "нужно ещё
   // сделать выбор, из какого режима мы публикуем картинки в отчёте").  The
   // backend's own rule is "the rated duty, then the loaded one"; this lets the
@@ -299,13 +333,55 @@ const FamilyCatalog: React.FC<{
     // …and the duty whose maps the report draws, when the user picked one.
     const pic = kind === 'report' ? picFor(die, cfg) : '';
     if (pic) qs.push(`pictures=${encodeURIComponent(pic)}`);
+    // …and the id this build's stages are published under.  Only the report
+    // has one: the datasheet is a second or two of openpyxl, and a ring that
+    // appears and vanishes is worse than no ring.
+    const runId = kind === 'report' ? newRunId() : '';
+    if (runId) qs.push(`run_id=${encodeURIComponent(runId)}`);
     const q = qs.length ? `?${qs.join('&')}` : '';
+
+    let poll = 0;
+    if (runId) {
+      const t0 = Date.now();
+      setRing(ringStart(key, runId));
+      // Every second: slow enough to be free next to a 50 s build, fast enough
+      // that the ring is never more than a second stale.  The first answer
+      // usually lands before the first figure, which is what turns the
+      // indeterminate spin into a percentage.
+      poll = pollRef.current = window.setInterval(() => {
+        void (async () => {
+          let info: ReportProgressInfo | null = null;
+          try {
+            const r = await fetch(`${API}/api/family/report/progress`
+              + `?run_id=${encodeURIComponent(runId)}`);
+            if (r.ok) info = await r.json();
+          } catch { /* a lost poll is not a failed build */ }
+          setRing((prev) => (prev.runId === runId
+            ? ringPoll(prev, info, (Date.now() - t0) / 1000) : prev));
+        })();
+      }, 1000);
+    }
+
     const err = await downloadExport(
       `${API}/api/family/${kind}/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}${q}`,
       `${die} ${cfg} ${kind}.${ext}`);
-    if (err) setMsg(`${kind === 'report' ? 'Report' : 'Datasheet'} failed: ${err}`);
+    if (poll) { window.clearInterval(poll); if (pollRef.current === poll) pollRef.current = 0; }
+    // A failed REPORT says so where it was clicked — the ring becomes the
+    // notice line.  The datasheet has no ring, so it keeps the panel message.
+    if (err && kind !== 'report') setMsg(`Datasheet failed: ${err}`);
+    if (runId) {
+      // The download's own answer is the last word — it has the sentence the
+      // backend refused with, which a poll may never have seen.
+      setRing((prev) => (prev.runId === runId || prev.key === key
+        ? (err ? ringFail(prev, err) : ringDone(prev)) : prev));
+    }
     setExporting((k) => (k === key ? null : k));
   };
+
+  // The ring stops with the panel: an unmounted catalogue must not keep a 1 s
+  // timer polling a backend nobody is watching (the build itself carries on —
+  // it is the download's own request — and the file still arrives).
+  useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
 
   // ── create/delete ─────────────────────────────────────────────────────────
   const createDie = () => setAskText({
@@ -805,18 +881,38 @@ const FamilyCatalog: React.FC<{
                     </span>
                   </Tooltip>
                 )}
-                <Tooltip title="Full report of the last results of every solver for this configuration — as a WORD document you can edit and forward: every duty compared in tables, the field maps, and the warnings with what to do about each.">
+                <Tooltip title={ringBusy(ring, `report:${die.name}/${c.name}`)
+                  ? ringTip(ring)
+                  : 'Full report of the last results of every solver for this configuration — as a WORD document you can edit and forward: every duty compared in tables, the field maps, and the warnings with what to do about each.'}>
                   <span>
                     <Button size="small"
-                      disabled={exporting === `report:${die.name}/${c.name}`}
+                      disabled={reportBusy(die.name, c.name)}
                       onClick={() => runExport('report', die.name, c.name)}
                       sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
                             textTransform: 'none', color: '#a78bfa' }}>
-                      {exporting === `report:${die.name}/${c.name}`
-                        ? '… report' : '⭳ report'}
+                      {ringBusy(ring, `report:${die.name}/${c.name}`)
+                        ? <ReportRing ring={ring} />
+                        : (exporting === `report:${die.name}/${c.name}`
+                          ? '… report' : '⭳ report')}
                     </Button>
                   </span>
                 </Tooltip>
+                {/* The failure, where it was clicked: one short sentence, the
+                    whole text in the tooltip (lib/runNotice, the Run button's
+                    own pattern).  A report that dies must not leave the user
+                    looking at a button that simply came back. */}
+                {ring.notice && ring.key.endsWith(`:${die.name}/${c.name}`) && (
+                  <Tooltip title={ring.notice.full}>
+                    <Typography onClick={() => setRing(RING_IDLE)}
+                      sx={{ fontSize: 11, cursor: 'pointer', maxWidth: 320,
+                            overflow: 'hidden', textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            color: ring.notice.kind === 'error'
+                              ? '#f87171' : 'var(--text-3)' }}>
+                      ✗ {ring.notice.text}
+                    </Typography>
+                  </Tooltip>
+                )}
                 {(c.duties?.length ?? 0) > 1 && (
                   <Tooltip title="Which duty's field maps go into the report — |B|, A_z, losses, temperature, stress, mode shapes. 'auto' is the backend's rule: the duty named rated, else the one loaded in the editor. Only a duty with stored fields can be drawn from; one without falls back to auto.">
                     <select
@@ -835,15 +931,19 @@ const FamilyCatalog: React.FC<{
                 )}
                 {/* …and the same report as a PDF, for sending it read-only.
                     Small, because Word is the one the user asked to lead. */}
-                <Tooltip title="The same report as a PDF — read-only, for sending on. Word can export one itself; this is the shortcut.">
+                <Tooltip title={ringBusy(ring, `report:pdf:${die.name}/${c.name}`)
+                  ? ringTip(ring)
+                  : 'The same report as a PDF — read-only, for sending on. Word can export one itself; this is the shortcut.'}>
                   <span>
                     <Button size="small"
-                      disabled={exporting === `report:pdf:${die.name}/${c.name}`}
+                      disabled={reportBusy(die.name, c.name)}
                       onClick={() => runExport('report', die.name, c.name, true)}
                       sx={{ fontSize: 10, py: 0, px: 0.4, minWidth: 0,
                             textTransform: 'none', color: 'var(--text-4)' }}>
-                      {exporting === `report:pdf:${die.name}/${c.name}`
-                        ? '…' : 'pdf'}
+                      {ringBusy(ring, `report:pdf:${die.name}/${c.name}`)
+                        ? <ReportRing ring={ring} size={13} />
+                        : (exporting === `report:pdf:${die.name}/${c.name}`
+                          ? '…' : 'pdf')}
                     </Button>
                   </span>
                 </Tooltip>

@@ -565,8 +565,12 @@ def build_motor_report_docx(*, die: str, cfg: str, die_doc: Dict[str, Any],
     from docx.enum.section import WD_ORIENT
     from docx.shared import Cm, Pt
 
+    from motor_ai_sim import report_progress as _RP
+
     D = R.gather_report_data(die=die, cfg=cfg, die_doc=die_doc, cfg_doc=cfg_doc,
                              duty=duty, slot=slot, pictures=pictures)
+    # Every solver's store has been read; from here the wall clock is figures.
+    _RP.stage("records")
 
     doc = Document()
     # One landscape section: the comparison tables are wide, and one section is
@@ -604,8 +608,11 @@ def build_motor_report_docx(*, die: str, cfg: str, die_doc: Dict[str, Any],
     _mech_detail(doc, D)
     _warnings(doc, D)
     _notes(doc, D)
+    # Every section is on the page: what is left is python-docx zipping it.
+    _RP.stage("tables")
 
     buf = io.BytesIO()
+    _RP.stage("writing")
     doc.save(buf)
     return buf.getvalue()
 

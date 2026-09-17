@@ -676,13 +676,22 @@ def chat(request: Request, body: dict = Body(default={}),
     except Exception as e:
         msg = str(e)
         rate_limited = "429" in msg or "quota" in msg.lower() or "RESOURCE_EXHAUSTED" in msg
+        logger.warning("support: provider call failed (%s: %s)%s",
+                       type(e).__name__, msg[:160],
+                       " [anonymous]" if anon else "")
+        # A VISITOR has no Report tab (it needs an account), so sending them
+        # there is sending them nowhere — they get the address instead, which
+        # is the answer they came for anyway.
+        where = ("write to vadim@motresres.com — access is by invitation and we "
+                 "answer every request personally"
+                 if anon else
+                 "use the **Report** tab to reach the team")
         return {
             "reply": (
-                "The assistant is busy right now (usage limit reached). Please try "
-                "again in a minute — or use the **Report** tab to reach the team."
+                f"The assistant is busy right now (usage limit reached). Please try "
+                f"again in a minute — or {where}."
                 if rate_limited else
-                "Sorry — I couldn't answer just now. Please try again, or use the "
-                "**Report** tab to reach the team."
+                f"Sorry — I couldn't answer just now. Please try again, or {where}."
             ),
             "source": "error",
             "detail": msg[:200],

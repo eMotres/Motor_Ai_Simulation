@@ -383,6 +383,29 @@ def test_a_real_error_is_not_retried(env, monkeypatch):
     assert calls["n"] == 1, "a broken key must not be tried twice"
 
 
+def test_a_visitor_is_not_sent_to_a_tab_they_do_not_have(env, monkeypatch):
+    """The provider's own quota is real (the live key is a free tier with 20
+    calls a DAY, met on 2026-09-17), so this branch is what a visitor sees on a
+    bad day — and "use the Report tab" sends them nowhere: the Report tab needs
+    an account."""
+    monkeypatch.setattr(support, "_effective", lambda: {
+        "provider": "gemini",
+        "gemini": {"key": "k", "model": "m", "key_source": "env"},
+        "anthropic": {"key": "", "model": "m", "key_source": "none"},
+    })
+
+    def exhausted(msgs, key, model, sp):
+        raise RuntimeError("HTTP Error 429: Too Many Requests (RESOURCE_EXHAUSTED)")
+
+    monkeypatch.setattr(support, "_gemini_reply", exhausted)
+    visitor = ask().json()
+    assert visitor["source"] == "error"
+    assert "vadim@motresres.com" in visitor["reply"]
+    assert "Report" not in visitor["reply"]
+    signed_in = ask(headers=env["client"]).json()
+    assert "**Report** tab" in signed_in["reply"]
+
+
 def test_what_counts_as_transient():
     class E(Exception):
         def __init__(self, msg, code=None):

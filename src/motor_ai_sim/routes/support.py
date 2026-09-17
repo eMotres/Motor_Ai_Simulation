@@ -370,6 +370,42 @@ def _gemini_reply(messages: list[dict], key: str, model: str, system_prompt: str
     return "".join(p.get("text", "") for p in parts).strip()
 
 
+# ── one retry, for the provider's own bad minute ─────────────────────────────
+#: Statuses that mean "not now", not "no": Gemini answers 503 "the model is
+#: overloaded" often enough that a visitor's FIRST and only question lands on
+#: one (seen live on 2026-09-17, on the old prompt as well as the new one — the
+#: same call succeeded two seconds later).  A visitor does not press send twice;
+#: they read "Sorry — I couldn't answer just now" and leave.
+_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+_RETRY_PAUSE_S = 1.2
+
+
+def _is_transient(e: Exception) -> bool:
+    code = getattr(e, "code", None) or getattr(e, "status_code", None)
+    if code in _RETRY_STATUS:
+        return True
+    m = str(e).lower()
+    return any(w in m for w in ("unavailable", "overloaded", "timed out",
+                                "timeout", "resource_exhausted"))
+
+
+def _call_provider(fn, *, attempts: int = 2, pause: Optional[float] = None):
+    """Run one provider call, retrying ONCE on a transient failure.
+
+    Deliberately not a backoff ladder: the caller is a person watching a
+    "thinking…" dot, and the rate limiter counts the request, not the attempts.
+    """
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:                              # noqa: BLE001
+            if i + 1 >= attempts or not _is_transient(e):
+                raise
+            logger.warning("support: provider call failed (%s: %s) — retrying once",
+                           type(e).__name__, str(e)[:120])
+            time.sleep(_RETRY_PAUSE_S if pause is None else pause)
+
+
 def _sanitize(raw, *, max_turns: int = _MAX_TURNS, max_chars: int = 4000) -> list[dict]:
     """Coerce the client payload into a clean alternating-friendly message list.
 
@@ -588,14 +624,16 @@ def chat(request: Request, body: dict = Body(default={}),
             g = eff["gemini"]
             if not g["key"]:
                 return {"reply": _mock_reply(messages), "source": "mock"}
-            text = _gemini_reply(messages, g["key"], g["model"], sp)
+            text = _call_provider(
+                lambda: _gemini_reply(messages, g["key"], g["model"], sp))
             return {"reply": text or "(no reply)", "source": "gemini", "model": g["model"]}
         # anthropic
         a = eff["anthropic"]
         client = _anthropic_client(a["key"])
         if client is None:
             return {"reply": _mock_reply(messages), "source": "mock"}
-        resp = client.messages.create(model=a["model"], max_tokens=1024, system=sp, messages=messages)
+        resp = _call_provider(lambda: client.messages.create(
+            model=a["model"], max_tokens=1024, system=sp, messages=messages))
         text = next((b.text for b in resp.content if b.type == "text"), "")
         return {"reply": text or "(no reply)", "source": "claude", "model": a["model"]}
     except Exception as e:

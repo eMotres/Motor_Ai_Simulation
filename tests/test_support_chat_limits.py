@@ -336,6 +336,67 @@ def test_the_prompt_answers_the_three_how_tos():
     assert "⭳ report" in p and "⭳ datasheet" in p
 
 
+# ── the provider's own bad minute ────────────────────────────────────────────
+
+def test_a_503_is_retried_once_so_a_visitor_sees_an_answer(env, monkeypatch):
+    """Live on 2026-09-17: three anonymous asks in a row got Gemini's 503 "the
+    model is overloaded", and a visitor who reads "Sorry — I couldn't answer
+    just now" simply leaves.  The same call succeeded two seconds later."""
+    monkeypatch.setattr(support, "_RETRY_PAUSE_S", 0.01)
+    calls = {"n": 0}
+
+    class _HTTP503(Exception):
+        code = 503
+
+    def flaky(msgs, key, model, sp):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _HTTP503("HTTP Error 503: Service Unavailable")
+        return "Access is by invitation."
+
+    monkeypatch.setattr(support, "_effective", lambda: {
+        "provider": "gemini",
+        "gemini": {"key": "k", "model": "m", "key_source": "env"},
+        "anthropic": {"key": "", "model": "m", "key_source": "none"},
+    })
+    monkeypatch.setattr(support, "_gemini_reply", flaky)
+    r = ask()
+    assert r.status_code == 200 and r.json()["reply"] == "Access is by invitation."
+    assert calls["n"] == 2
+
+
+def test_a_real_error_is_not_retried(env, monkeypatch):
+    calls = {"n": 0}
+
+    def broken(msgs, key, model, sp):
+        calls["n"] += 1
+        raise ValueError("API key not valid")
+
+    monkeypatch.setattr(support, "_effective", lambda: {
+        "provider": "gemini",
+        "gemini": {"key": "k", "model": "m", "key_source": "env"},
+        "anthropic": {"key": "", "model": "m", "key_source": "none"},
+    })
+    monkeypatch.setattr(support, "_gemini_reply", broken)
+    r = ask()
+    assert r.status_code == 200 and r.json()["source"] == "error"
+    assert calls["n"] == 1, "a broken key must not be tried twice"
+
+
+def test_what_counts_as_transient():
+    class E(Exception):
+        def __init__(self, msg, code=None):
+            super().__init__(msg)
+            if code is not None:
+                self.code = code
+    for yes in (E("x", 503), E("x", 429), E("x", 500), E("overloaded"),
+                E("The service is currently unavailable"), E("read timed out")):
+        assert support._is_transient(yes) is True, yes
+    for no in (E("API key not valid", 400), E("permission denied", 403),
+               E("model not found", 404)):
+        assert support._is_transient(no) is False, no
+
+
 # ── the ip helper ────────────────────────────────────────────────────────────
 
 class _Req:

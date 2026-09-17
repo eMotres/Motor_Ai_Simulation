@@ -88,7 +88,12 @@ CLOSED: list[tuple[str, str]] = [
     ("GET",  "/api/static3d/machine"),
     ("GET",  "/api/fusion/params.json"),
     ("GET",  "/api/freecad/export"),
-    ("POST", "/api/support/chat"),
+    # NOT ``POST /api/support/chat`` since 2026-09-17: the landing page shows
+    # the "Help & feedback" widget to a signed-out visitor, so that ONE route is
+    # open (rate-limited per IP and per day in routes/support.py, and told to
+    # describe the product and nothing else).  Its own door test lives in
+    # tests/test_support_chat_limits.py, which also re-checks the five routes
+    # below the way this file does — the hole must stay exactly one route wide.
     ("GET",  "/api/admin/users"),
     ("GET",  "/api/auth/users"),
 ]
@@ -183,13 +188,16 @@ def test_default_is_the_exhibit_open(monkeypatch):
 
 def test_anonymous_allowlist_is_exactly_health_me_and_sign_in():
     for ok in ("/api/health", "/api/me", "/api/me/", "/api/version",
+               # the visitor's chat (2026-09-17) — rate-limited, product-only
+               "/api/support/chat",
                "/api/auth/login", "/api/auth/google", "/api/auth/logout",
                # everything outside /api is the SPA's own bundle
                "/", "/index.html", "/assets/index-abc.js"):
         assert anonymous_allowed(ok) is True, ok
     for no in ("/api/family/tree", "/api/family/report/x/y", "/api/geometry",
                "/api/auth/users", "/api/auth/sessions", "/api/auth/password",
-               "/api/health/secret", "/api/mechanical/last", "/api"):
+               "/api/health/secret", "/api/mechanical/last", "/api",
+               "/api/support", "/api/support/chat/x", "/api/admin/support"):
         assert anonymous_allowed(no) is False, no
 
 

@@ -107,7 +107,19 @@ def public_exhibit() -> bool:
 #: family/tree, family/context, my_motors …) DOES describe a machine or the
 #: catalog, so it stays closed and the page renders without it (2026-09-16: the
 #: landing was checked against the live network log, not against a guess).
-_ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version"})
+#:
+#: 2026-09-17 adds ONE more: POST /api/support/chat, the "Help & feedback" chat
+#: the landing page already renders for a signed-out visitor.  It was tier
+#: "free" (and therefore 401 at the door), so the one question a visitor
+#: actually has — "how do I get access?" — got "Sorry — I couldn't answer just
+#: now".  It is the only open route that COSTS money per call, so it is also the
+#: only one with a rate limit: routes/support.py caps an anonymous caller per IP
+#: (burst + daily) and the anonymous audience as a whole per day, and answers a
+#: canned notice instead of calling the provider once a cap is hit.  It
+#: describes the product, never a machine: the visitor prompt forbids catalog
+#: contents and customer designs, and the route hands the model no app state.
+_ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version",
+                            "/api/support/chat"})
 #: …plus the sign-in endpoints themselves: the password login, the Google GIS
 #: token exchange, and logout (which must work for a token we are rejecting).
 #: NOT the rest of routes/auth_local.py — /api/auth/users, /api/auth/sessions and
@@ -200,9 +212,16 @@ _GATED: dict[tuple[str, str], str] = {
     # solve, i.e. the one moment the user most needs to see something.
     ("GET",  "/api/simulation/mesh/build2d"): "pro",
     ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "pro",
-    # AI support assistant calls the paid Anthropic API — require a signed-in
-    # account (>= free) so an anonymous visitor can't run up the bill.
-    ("POST", "/api/support/chat"): "free",
+    # NOT listed since 2026-09-17: POST /api/support/chat.  It was "free" —
+    # "calls the paid provider API, so require a signed-in account so an
+    # anonymous visitor can't run up the bill" — which is the right worry and
+    # was the wrong lever: the landing page shows the chat widget to a visitor,
+    # so the gate turned the product's own "how can I get access?" answer into
+    # "Sorry — I couldn't answer just now" (tested twice by the owner as a
+    # visitor, 2026-09-17).  The bill is now held down where it is actually
+    # spent — routes/support.py rate-limits the ANONYMOUS caller per IP and the
+    # anonymous audience as a whole, and stops calling the provider at the cap —
+    # so the door can stay open for the question a visitor has.
 }
 
 # (HTTP method, path PREFIX) -> minimum tier.  Checked when the exact table

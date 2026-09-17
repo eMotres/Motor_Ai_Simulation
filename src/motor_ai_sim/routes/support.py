@@ -13,13 +13,39 @@ status endpoint returns only a masked hint, never the key. IMPORTANT: lock your
 Firestore rules so clients cannot read the `config` collection (see firestore.rules).
 
 When no key is configured anywhere, the endpoint returns a flagged mock reply.
+
+ANONYMOUS CALLERS (2026-09-17).  The landing page shows this widget to a
+signed-out visitor, so the route is on ``auth._ANON_OK_PATHS`` and no longer
+carries a tier — otherwise the product's own "how can I get access?" answer was
+a 401 that the widget printed as "Sorry — I couldn't answer just now".  It is
+the only open route that costs money per call, so the bill is held down here
+instead of at the door:
+
+  * per IP: ``ANON_BURST_MAX`` messages per ``ANON_BURST_WINDOW_S`` and
+    ``ANON_DAY_MAX`` per day (the address nginx hands us — ``client_ip``);
+  * for the anonymous audience as a whole: ``ANON_GLOBAL_DAY_MAX`` per day;
+  * the history is cut to ``ANON_MAX_TURNS`` and each message to
+    ``ANON_MAX_CHARS`` before it is spent on a provider call.
+
+Over a cap the caller gets a polite canned reply with 429 and NO provider call,
+and one line reaches the log.  A signed-in caller is never counted or capped —
+the counters are keyed on "no credentials presented" and nothing else.  They are
+in-memory (one API process) and thread-safe; a restart forgives everyone, which
+is the right failure for a limit whose job is to bound a bill, not to punish.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
+import threading
 import time
-from fastapi import APIRouter, Body
+from typing import Optional
+
+from fastapi import APIRouter, Body, Header, Request
+from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/support", tags=["support"])
 
@@ -32,43 +58,49 @@ ENV_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
 ENV_ANTHROPIC_KEY = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
 ENV_ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_SUPPORT_MODEL", "claude-opus-4-8").strip()
 
-SYSTEM_PROMPT = """You are the friendly in-app assistant for **AeroStator Core** — a motor technology portal where users select a proven electric-motor design (for aerospace, robotics, EV or marine drivetrains), tune it to their spec, see the price, and request its manufacture. Under the hood it designs and analyses electric motors (interior-PM / spoke-PM synchronous machines).
+SYSTEM_PROMPT = """You are the friendly in-app assistant for **AeroStator Core** — the engineering portal where an invited user opens a proven electric-motor design (permanent-magnet synchronous machines for aerospace, robotics, EV and marine drivetrains), tunes it to a spec, and runs the analyses that prove it: electromagnetic FEM, thermal, mechanical, cost.
 
-## The app — tabs (these are the ONLY tabs; never invent others)
-- **Motors** — the motor catalog, grouped by stator diameter, plus the subscription plans. Click **Load** on a motor to open it as your editable copy; it opens in the **Geometry** editor. Your saved designs appear here under **My designs** (sign in with Google to save).
-- **Geometry** — edit the motor's geometry parameters in a table, with a live 3D viewer.
-- **Materials** — assign materials (steel, magnets, copper) to the parts.
-- **Mesh** — build the 2D FEM mesh.
-- **Simulation** — run the 2D FEM transient: torque vs time, back-EMF, losses (copper / iron / magnet), demagnetisation, and a field animation.
-- **Configure** — an INSTANT analytical tuner (no FEM). Pick a reference motor, then adjust stack length (mm), turns per slot, wire thickness (mm), winding connection (4S / 2P·2S / 4P), and the operating point (phase current A, speed rpm). It shows live torque, power, efficiency, losses, current density (A/mm²), required DC-bus voltage, mass, and an efficiency map (torque × speed). A battery panel (cell count, chemistry NMC / LiFePO4) checks voltage headroom. You can save configurations and compare them in a table.
-- **Optimization** — parameter sweeps / gradient descent / DOE to reduce torque ripple or improve torque / efficiency.
+## Access — by invitation only
+- There is **no self-sign-up** and **no public pricing**. Accounts are created by the team, and each account is granted the specific motors it may open.
+- A visitor asks for access with the **Request access** link on the landing page (it writes to vadim@motresres.com), or by writing to vadim@motresres.com directly.
+- **Plans and pricing are agreed individually — write to vadim@motresres.com.** NEVER name a price, a plan, a tier or a trial: there is no price list to quote.
+- Signing in is the **Sign in** button on the landing page (Google), for an account that already exists.
+
+## The app — tabs (these are the ONLY tabs; never invent others; which ones a user sees depends on their account)
+- **Motors** — the catalog: sections by stator diameter Ø → a **die** (a stamped lamination: frozen geometry) → a **configuration** (stack length, wire, turns, winding connection, Y/Δ, steel, magnet, battery) → its **duties** (operating points, with kW, N·m, rpm, A, V L-L, efficiency, ripple, losses, mass, KV). The green **▶** on a duty row loads that machine — geometry, winding, materials, operating point — into every other tab. A configuration row also carries **⭳ datasheet**, **⭳ report** and **pdf**. Private copies live under **My motors** above the catalog.
+- **Geometry** — the parameter table of the loaded machine beside a live 3D view; **Save as new motor** keeps a modified one.
+- **Materials** — the materials library (lamination steel, magnets, metals, insulators, coolants) with B-H and loss curves, and which material each part is made of.
+- **Mesh** — the 2D FEM mesh: element size per component, the sector solved (full, 1/2, 1/4 …) and periodic pole/slot meshing. It rebuilds itself as a setting changes.
+- **Electromagnetic** — the FEM transient: winding connection and Y/Δ, the operating point (motor or generator; sine current, target torque/power, PWM inverter, BLDC or a custom waveform; current, speed, current angle, temperatures), then **Run Simulation**. Out come torque and its ripple, back-EMF, copper / iron / magnet losses, R, L, KV/Kt/Km, the field animation and the transient curves.
+- **3D** — the 3D end-effect model of one sector: geometry, mesh and the |B| / demagnetisation fields, at a chosen fidelity.
+- **Mechanical** — rotor centrifugal stress and retaining-sleeve sizing at speed and overspeed, contacts and safety factors, plus vibration modes, shaft critical speeds and bearing / windage losses.
+- **Thermal** — the steady-state temperature map: cooling mode (air, liquid, manual h, none, or **Robotics — still air + mount**, which bundles a still-air housing with its emissivity, the mount W/K, an open bore and the exposed end faces), bore and frame options, coolant and ambient. Below it the **duty cycle** (S1 continuous, or S3 intermittent — give the ED %, or leave it blank and it finds the allowable one) and the read-only result of the last **coupled EM ↔ thermal** loop.
+- **Optimization** — one-click optimization (e.g. minimum torque ripple: explore, then refine), parameter sweeps, and a DOE screening of which variables matter; a result can be applied back to the design.
+- **Compare** — saved runs side by side, showing only the inputs that differ next to the key results.
+- **Cost** — the material cost of the loaded machine: an editable price per kg for copper, magnet, electrical steel and shaft steel plus labour, with the mass and cost of each item.
+- **Configure** — the instant analytical tuner, no FEM: stack length, turns, wire thickness, winding connection, phase current and speed (and PWM carrier / DC bus where the machine's passport carries them), with live torque, power, efficiency, losses, voltages, current density, slot fill, an efficiency map, a battery panel, and saved configurations to compare.
+- **Admin** — the team's own tab: accounts, per-account motor grants, sessions, tickets and this assistant's settings.
 
 ## Common how-to answers
-- **Load a motor to edit it:** go to the **Motors** tab → pick one → click **Load** → it opens in the **Geometry** editor where you change parameters.
-- **Quickly try design changes without running FEM:** use the **Configure** tab — it rescales an FEM "passport" of a reference motor instantly (length scales ~linearly; turns / wire / winding connection are electrical re-wirings). No simulation per tweak.
-- **Run an accurate analysis:** build it in Geometry → Materials → Mesh, then **Simulation** (this is live FEM; available on paid plans).
-- **Save your work:** sign in with Google, then your designs are kept under **My designs** on the Motors tab.
+- **Load a motor:** **Motors** tab → open the Ø section → the die → the configuration → click **▶** on the duty you want. Every other tab then describes that machine.
+- **Run the coupled EM ↔ thermal loop:** set the cooling on the **Thermal** tab, then on the **Electromagnetic** tab switch on **Coupled thermal — solve for the temperatures** and press **Run Simulation**; it iterates until the winding and magnet temperatures settle, and the **Thermal** tab shows the converged result.
+- **Generate a report or a datasheet:** **Motors** tab, on the configuration row — **⭳ report** (Word: every duty with its tables, field maps and warnings), **pdf** for the same, **⭳ datasheet** (Excel: a column per duty).
+- **Try a change without a FEM run:** the **Configure** tab rescales the machine's measured passport instantly.
+- **Save your work:** **💾 Save to <duty>** in the strip under the tab bar writes the current point back, or **＋ duty** on a configuration snapshots it as a new duty.
 
-## Motor catalog — representative ready-made motors (Motors tab)
-The catalog is grouped by stator diameter and users can save their own, so treat this as a guide, not an exhaustive list. Each card shows a geometry cross-section plus headline torque / power / efficiency. Notable picks:
-- **40 mm · 12-slot / 14-pole high-speed** — 0.46 N·m, 0.57 kW @ 12 000 rpm, 91 % eff, 35 A, only ~10 V phase-peak (suits a 6-cell pack). Spoke-PM inrunner, F45SH magnets, 20SW1200 steel. For small, fast, low-voltage drives.
-- **100 mm · 24-slot / 28-pole mid-torque** — 6.2 N·m, 2.47 kW @ 3 800 rpm, ~94 % eff, 47 A, ~30 V phase-peak (suits a 14-cell pack). F45SH magnets, JFE 20JNEH1200 steel, 2 parallel strands. A general-purpose mid-size motor.
-- **150 mm SPM-150** — ~25 N·m @ 3 950 rpm, 85 A; comes as a Baseline (higher ripple) and a Low-Ripple optimized version (~5.8 % ripple).
-- **200 mm** — ~79 N·m @ 2 000 rpm, 150 A — the high-torque, low-speed end.
-Rule of thumb: torque scales with diameter — 40 mm → sub-N·m and very fast; 100 mm → a few N·m; 150–200 mm → tens of N·m and slower.
-
-## Helping a user pick a motor
-Ask what matters: the target **torque** and **speed** (or the mechanical load), the **size/diameter** budget, and the **battery** (cell count / voltage). Then suggest the nearest catalog motor by torque and diameter, and tell them to **Load** it and open **Configure** to fine-tune stack length / turns / wire / current to hit their exact target and confirm the battery fits (watch the DC-bus and battery panels). Levers: more torque → bigger diameter, longer stack, or more turns/current; higher speed → fewer turns to keep the bus voltage in range. These are starting points to refine in Configure — don't overstate precision.
+## Helping a user pick a machine
+Ask what matters: the target **torque** and **speed** (or the mechanical load), the **diameter** budget, the **cooling** it will have, and the **supply** (battery cell count / DC-bus voltage). Then point at the nearest die in the catalog they have been granted, and tell them to load a duty with **▶** and open **Configure** to trim stack length / turns / wire / current onto their target while the battery panel confirms the voltage fits. Levers: more torque → a bigger diameter, a longer stack, more turns or more current; higher speed → fewer turns, to keep the bus voltage in range. These are starting points to confirm with a real run — don't overstate precision. What the catalog contains for a given account is decided by that account's grants; never promise a machine you cannot see.
 
 ## Facts
-- **Winding connection:** 4S = all series (highest voltage, lowest current); 4P = all parallel (lowest voltage, highest current); 2P·2S = balanced. It trades voltage ↔ current at the same torque.
-- **Plans:** **Free** — browse the catalog, precomputed FEM results, instant analytical preview (Configure), save up to 3 designs. **Pro ($19/mo)** — live FEM on demand, unlimited saves, torque-ripple optimization, CSV/DXF export. **Team ($99/mo)** — shared team library, batch sweeps, priority compute, REST API.
+- **Winding connection** trades voltage ↔ current at the same torque: all-series = the highest voltage and the lowest current, all-parallel = the opposite, and the mixed layouts sit between. **Y (star)** vs **Δ (delta)** does the same at the machine's terminals (Δ ≈ √3 more current at √3 less line voltage).
+- **Duty** = one operating point of a configuration (power, torque, speed, current, connection, temperatures, cooling). A configuration usually carries several — continuous, peak, generator …
+- There is **no free tier and no published price list**: plans and pricing are agreed individually — write to vadim@motresres.com.
 
 ## Parameter glossary (Configure tab)
 - **Stack length** (mm) — axial lamination length. More length ≈ proportionally more torque, power and mass.
 - **Turns per slot** — wire turns per slot. More turns = more torque per amp and more back-EMF (needs higher bus voltage), and more resistance.
 - **Wire thickness** (mm) — conductor height. Thicker = lower resistance and more current capacity, but the stack of turns must fit inside the slot (there's a slot-fill limit).
-- **Winding connection** — 4S / 2P·2S / 4P (see above).
+- **Winding connection** — series / parallel groups, plus Y or Δ (see above).
 - **Phase current** (A) — drive current. More current = more torque (until magnetic saturation) and more copper loss (∝ I²).
 - **Speed** (rpm) — operating speed. Back-EMF rises with rpm, so higher speed needs a higher DC-bus voltage.
 - **Current density** (A/mm²) — phase current ÷ conductor cross-section. High values heat the winding; what's acceptable depends on cooling.
@@ -81,8 +113,27 @@ Ask what matters: the target **torque** and **speed** (or the mechanical load), 
 - Be concise and warm — usually 1-4 sentences. Reply in the SAME language the user writes in.
 - **Be accurate about the UI.** Only mention tabs, buttons, and steps that are listed above. NEVER invent a tab name, a button, a menu, or a workflow. If you are not sure of the exact step, say so plainly and suggest the **Report** tab — do not guess.
 - You do NOT see the user's specific numbers unless they paste them — ask them to share values if needed. You may give general electric-motor engineering guidance.
-- If it's a **bug**, a **feature request**, an **account/billing** change, or needs a human → tell them to use the **Report** tab in this panel (it files a ticket the team sees). Don't promise fixes or timelines.
-- Don't invent prices or capabilities beyond the facts above."""
+- If it's a **bug**, a **feature request**, an **account** question, or needs a human → the **Report** tab in this panel files a ticket the team sees, or they can write to vadim@motresres.com. Don't promise fixes or timelines.
+- **Never invent a price, a plan, a tier, a discount or a delivery date** — access and commercial terms are agreed individually with vadim@motresres.com.
+- Never discuss how this assistant itself is built, which model or vendor answers, or anything about the servers."""
+
+
+#: Appended to the system prompt for a caller with NO account (the landing page
+#: widget).  A visitor is not a user: they cannot open a tab, they have no
+#: granted motors, and the only answer they are actually after is how to get in.
+VISITOR_NOTE = """
+
+## Visitor mode — this person is NOT signed in
+They are on the public landing page and have no account yet. Answer product
+questions briefly and plainly — what the portal is for, what it analyses, what a
+motor design involves — in two or three sentences. When they ask about access,
+say plainly that access is **by invitation**: use the **Request access** link on
+the page, or write to vadim@motresres.com, and the team creates the account and
+grants the motors it may open. Plans and pricing are agreed individually; never
+name a price or a plan, and never say there is a free tier or a trial. Do NOT
+describe internal data, the catalog's contents, any specific customer machine or
+numbers from any design, and do not walk them step by step through tabs they
+cannot open yet."""
 
 
 # ── Firestore-backed admin overrides (config/ai) ─────────────────────────────
@@ -319,18 +370,169 @@ def _gemini_reply(messages: list[dict], key: str, model: str, system_prompt: str
     return "".join(p.get("text", "") for p in parts).strip()
 
 
-def _sanitize(raw) -> list[dict]:
-    """Coerce the client payload into a clean alternating-friendly message list."""
+def _sanitize(raw, *, max_turns: int = _MAX_TURNS, max_chars: int = 4000) -> list[dict]:
+    """Coerce the client payload into a clean alternating-friendly message list.
+
+    An anonymous caller gets the SHORTER caps (``ANON_MAX_TURNS`` /
+    ``ANON_MAX_CHARS``): the history is what a chat costs per call, and a
+    visitor's question fits in a paragraph.
+    """
     out: list[dict] = []
-    for m in (raw or [])[-_MAX_TURNS:]:
+    for m in (raw or [])[-max_turns:]:
         if not isinstance(m, dict):
             continue
         role, content = m.get("role"), m.get("content")
         if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-            out.append({"role": role, "content": content[:4000]})
+            out.append({"role": role, "content": content[:max_chars]})
     while out and out[0]["role"] != "user":  # the API requires a leading user turn
         out.pop(0)
     return out
+
+
+# ── The anonymous audience: how much it may ask ──────────────────────────────
+#: Per IP, per ``ANON_BURST_WINDOW_S`` — a real visitor asks a handful of
+#: questions; eight in ten minutes is more than the owner's own two test runs
+#: and far less than a script's.
+ANON_BURST_MAX = 8
+ANON_BURST_WINDOW_S = 600.0
+#: Per IP, per day.
+ANON_DAY_MAX = 40
+#: And the whole anonymous audience per day — the ceiling on the bill even if
+#: the traffic arrives from a thousand addresses.
+ANON_GLOBAL_DAY_MAX = 500
+#: What an anonymous conversation may carry into a provider call.
+ANON_MAX_TURNS = 6
+ANON_MAX_CHARS = 1000
+
+_DAY_S = 86400.0
+#: Env overrides, read per call so a server can retune without a code change.
+_CAP_ENV = {
+    "burst": "SUPPORT_ANON_BURST_MAX",
+    "day": "SUPPORT_ANON_DAY_MAX",
+    "global": "SUPPORT_ANON_GLOBAL_DAY_MAX",
+}
+
+
+def _cap(name: str) -> int:
+    default = {"burst": ANON_BURST_MAX, "day": ANON_DAY_MAX,
+               "global": ANON_GLOBAL_DAY_MAX}[name]
+    raw = os.environ.get(_CAP_ENV[name], "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
+def client_ip(request: Optional[Request]) -> str:
+    """The caller's address as nginx hands it to us (deploy/nginx.conf).
+
+    ``X-Forwarded-For`` is ``$proxy_add_x_forwarded_for``: whatever the client
+    sent PLUS the address nginx itself saw, appended.  So the LAST entry is the
+    only one a client cannot forge — reading the first would let anyone reset
+    their own counter with a header.  ``X-Real-IP`` (``$remote_addr``) is the
+    same value and is the fallback; last comes the socket peer, which is what a
+    local run without a proxy has.
+    """
+    if request is None:
+        return ""
+    try:
+        headers = request.headers
+    except Exception:                                        # pragma: no cover
+        return ""
+    xff = (headers.get("x-forwarded-for") or "").strip()
+    if xff:
+        last = xff.split(",")[-1].strip()
+        if last:
+            return last
+    real = (headers.get("x-real-ip") or "").strip()
+    if real:
+        return real
+    client = getattr(request, "client", None)
+    return getattr(client, "host", "") or ""
+
+
+_rl_lock = threading.Lock()
+_ip_hits: dict[str, list[float]] = {}
+_global_hits: list[float] = []
+
+#: What the visitor reads instead of an answer.  It is still an ANSWER to the
+#: question they came with — access is by invitation — so it names the way in.
+_LIMIT_REPLIES = {
+    "ip_burst": (
+        "I've answered as many questions as I can from this connection for the "
+        "moment — please try again in a few minutes.\n\n"
+        "If you're after access: the portal is invitation-only. Use the "
+        "**Request access** link on this page, or write to vadim@motresres.com, "
+        "and we'll set you up."
+    ),
+    "ip_day": (
+        "That's my daily limit for questions from this connection. Please write "
+        "to vadim@motresres.com — access to the portal is by invitation and we "
+        "answer every request personally."
+    ),
+    "global_day": (
+        "The assistant has reached today's limit for visitors. Please write to "
+        "vadim@motresres.com — access to the portal is by invitation, and we "
+        "answer every request personally."
+    ),
+}
+_RETRY_AFTER = {"ip_burst": int(ANON_BURST_WINDOW_S), "ip_day": 3600,
+                "global_day": 3600}
+
+
+def reset_limits() -> None:
+    """Forget every counter (tests; a fresh process starts here anyway)."""
+    with _rl_lock:
+        _ip_hits.clear()
+        _global_hits.clear()
+
+
+def _charge_anonymous(ip: str, now: Optional[float] = None) -> Optional[str]:
+    """Check AND record one anonymous message, atomically.
+
+    Returns ``None`` when the call may go to the provider, else the key of the
+    cap it hit (``ip_burst`` | ``ip_day`` | ``global_day``).  A refused call is
+    NOT recorded: the counters measure what was spent, and a refusal spends
+    nothing.
+    """
+    now = time.time() if now is None else now
+    key = ip or "?"
+    with _rl_lock:
+        hits = [t for t in _ip_hits.get(key, ()) if now - t < _DAY_S]
+        recent = sum(1 for t in hits if now - t < ANON_BURST_WINDOW_S)
+        glob = [t for t in _global_hits if now - t < _DAY_S]
+        _global_hits[:] = glob
+        if recent >= _cap("burst"):
+            _ip_hits[key] = hits
+            return "ip_burst"
+        if len(hits) >= _cap("day"):
+            _ip_hits[key] = hits
+            return "ip_day"
+        if len(glob) >= _cap("global"):
+            _ip_hits[key] = hits
+            return "global_day"
+        hits.append(now)
+        _ip_hits[key] = hits
+        _global_hits.append(now)
+        if len(_ip_hits) > 5000:                             # pragma: no cover
+            for k, v in list(_ip_hits.items()):
+                if not v or now - v[-1] > _DAY_S:
+                    _ip_hits.pop(k, None)
+        return None
+
+
+def _is_anonymous(authorization: Optional[str]) -> bool:
+    """No credentials at all?  `caller_identity` is the ONE definition of who is
+    calling in this backend, tier 'anon' its answer for "nobody presented any" —
+    which also keeps the local/unconfigured workstation (where the developer IS
+    the admin) out of the limiter, exactly as it is out of every other gate."""
+    try:
+        from motor_ai_sim.auth import caller_identity
+        return caller_identity(authorization).get("tier") == "anon"
+    except Exception:                                        # pragma: no cover
+        return True
 
 
 def _mock_reply(messages: list[dict]) -> str:
@@ -338,7 +540,7 @@ def _mock_reply(messages: list[dict]) -> str:
     return (
         "⚠️ Demo mode — the AI assistant isn't switched on for this server yet "
         "(no API key configured). Once it's enabled I'll answer questions about the "
-        "Configurator, motor parameters, plans and more.\n\n"
+        "Configurator, motor parameters, the catalog and how the app works.\n\n"
         + (f'You asked: "{last[:200]}".\n\n' if last else "")
         + "In the meantime, use the **Report** tab to send a bug or feature request "
         "straight to the team."
@@ -346,17 +548,41 @@ def _mock_reply(messages: list[dict]) -> str:
 
 
 @router.post("/chat")
-def chat(body: dict = Body(default={})):
-    messages = _sanitize(body.get("messages"))
+def chat(request: Request, body: dict = Body(default={}),
+         authorization: Optional[str] = Header(default=None)):
+    anon = _is_anonymous(authorization)
+    messages = _sanitize(
+        body.get("messages"),
+        max_turns=ANON_MAX_TURNS if anon else _MAX_TURNS,
+        max_chars=ANON_MAX_CHARS if anon else 4000,
+    )
     if not messages:
         return {"reply": "Hi! How can I help you with the motor simulator?", "source": "mock"}
+
+    # The limiter sits in front of the provider call and nowhere else: it must
+    # bound what is SPENT, so a signed-in user never meets it and a refusal
+    # never reaches the provider.
+    if anon:
+        ip = client_ip(request)
+        hit = _charge_anonymous(ip)
+        if hit is not None:
+            logger.warning("support: anonymous chat REFUSED (%s) ip=%s ua=%r",
+                           hit, ip or "?",
+                           (request.headers.get("user-agent") if request else "")
+                           or "")
+            return JSONResponse(
+                status_code=429,
+                content={"reply": _LIMIT_REPLIES[hit], "source": "rate_limited",
+                         "limit": hit},
+                headers={"Retry-After": str(_RETRY_AFTER[hit])},
+            )
 
     eff = _effective()
     provider = eff["provider"]
     if provider == "none":
         return {"reply": _mock_reply(messages), "source": "mock"}
 
-    sp = _effective_prompt()
+    sp = _effective_prompt() + (VISITOR_NOTE if anon else "")
     try:
         if provider == "gemini":
             g = eff["gemini"]

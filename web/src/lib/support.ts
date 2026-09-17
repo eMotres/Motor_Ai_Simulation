@@ -40,12 +40,39 @@ export async function listMyTickets(uid: string): Promise<Ticket[]> {
 
 export interface ChatMsg { role: 'user' | 'assistant'; content: string; }
 
-/** Ask the in-app assistant. The backend proxies to Claude (key stays server-side). */
-export async function askAssistant(messages: ChatMsg[]): Promise<{ reply: string; source: string }> {
+export interface ChatReply { reply: string; source: string; }
+
+/**
+ * What one /api/support/chat response MEANS.
+ *
+ * A 429 from this endpoint is an ANSWER, not a failure: the backend rate-limits
+ * an anonymous visitor (per IP, and the anonymous audience as a whole) and
+ * sends back a written, polite notice instead of calling the provider. Printing
+ * the widget's generic "Sorry — I couldn't answer just now" over it would throw
+ * away the one sentence that tells the visitor what to do next — so any status
+ * that carries a `reply` string is shown as the assistant's message, and only a
+ * response WITHOUT one is an error.
+ *
+ * Kept pure (no fetch) so `__tests__/supportReply.test.mjs` can state the rule.
+ */
+export function chatReplyFrom(status: number, body: unknown): ChatReply | null {
+  const b = body as { reply?: unknown; source?: unknown } | null;
+  const reply = typeof b?.reply === 'string' ? b.reply.trim() : '';
+  if (!reply) return null;
+  if (status >= 200 && status < 300) return { reply, source: String(b?.source ?? '') };
+  if (status === 429) return { reply, source: String(b?.source ?? 'rate_limited') };
+  return null;
+}
+
+/** Ask the in-app assistant. The backend proxies to the provider (key stays server-side). */
+export async function askAssistant(messages: ChatMsg[]): Promise<ChatReply> {
   const r = await fetch(`${API}/api/support/chat`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages }),
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json();
+  let body: unknown = null;
+  try { body = await r.json(); } catch { body = null; }
+  const out = chatReplyFrom(r.status, body);
+  if (!out) throw new Error(`HTTP ${r.status}`);
+  return out;
 }

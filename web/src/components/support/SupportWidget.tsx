@@ -33,7 +33,7 @@ const STATUS_COLOR: Record<string, string> = {
 const TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: 'var(--text-3)' };
 const GREETING: ChatMsg = {
   role: 'assistant',
-  content: 'Hi! I can help with the Configurator, motor parameters, plans, and how the app works. Ask away — or use **Report** to send a bug or feature request.',
+  content: 'Hi! I can help with the Configurator, motor parameters, the catalog, and how the app works. Ask away — or use **Report** to send a bug or feature request.',
 };
 
 const SupportWidget: React.FC = () => {

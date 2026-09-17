@@ -1,0 +1,143 @@
+{
+  "case": "p2_voltage",
+  "status": "passed",
+  "parameters": {
+    "n_steps_per_period": 12,
+    "n_periods": 1.0,
+    "mesh_size_mm": 1.4,
+    "min_size_mm": 0.35,
+    "gap_layers": 1.0,
+    "n_sectors": 2,
+    "structured_gap": true,
+    "iron_template": true,
+    "geo_mesh": true,
+    "coil_temp_c": 120.0,
+    "rotor_eddy": false,
+    "element_order": 2,
+    "demag": false,
+    "I_phase_rms": 60.0,
+    "gamma_deg": 0.0,
+    "drive": "voltage",
+    "v_phase_peak": 7.0,
+    "v_delta_deg": 10.0
+  },
+  "actual_metrics": {
+    "T_avg_Nm": 0.2437749232603467,
+    "T_ripple_pct": 1.4983812494563136,
+    "P_cu_W": 81.47425885404546,
+    "P_fe_W": 5.8605599492141,
+    "V_peak": 8.100464859626321,
+    "T_avg_maxwell_Nm": 0.24313711477023067,
+    "I_A_peak_A": 70.88436471768537,
+    "I_A_fund_A": 72.78368613303472,
+    "I_A_thd_pct": 1.8077498613703658,
+    "v_dc_residual_A": 0.0,
+    "v_circuit_resid_max_V": 4.440892098500626e-15
+  },
+  "baseline_metrics": {
+    "I_A_fund_A": 72.78770571765571,
+    "I_A_peak_A": 70.88908540923734,
+    "I_A_thd_pct": 1.8074330273755352,
+    "P_cu_W": 81.48269635400762,
+    "P_fe_W": 5.8566429903198935,
+    "T_avg_Nm": 0.2437855718219991,
+    "T_avg_maxwell_Nm": 0.2432,
+    "T_ripple_pct": 1.5061722052857611,
+    "V_peak": 8.100633845304378,
+    "v_circuit_resid_max_V": 8.049116928532385e-15,
+    "v_dc_residual_A": 0.0
+  },
+  "comparisons": {
+    "I_A_fund_A": {
+      "actual": 72.78368613303472,
+      "baseline": 72.78770571765571,
+      "difference": -0.004019584620991168,
+      "relative_change_pct": -0.005522340045423577,
+      "tolerance": 0.3639385285882786,
+      "within_existing_tolerance": true
+    },
+    "I_A_peak_A": {
+      "actual": 70.88436471768537,
+      "baseline": 70.88908540923734,
+      "difference": -0.004720691551966638,
+      "relative_change_pct": -0.00665926429254157,
+      "tolerance": 0.3544454270461867,
+      "within_existing_tolerance": true
+    },
+    "I_A_thd_pct": {
+      "actual": 1.8077498613703658,
+      "baseline": 1.8074330273755352,
+      "difference": 0.0003168339948305121,
+      "relative_change_pct": 0.017529501233612386,
+      "tolerance": 0.009037165136877676,
+      "within_existing_tolerance": true
+    },
+    "P_cu_W": {
+      "actual": 81.47425885404546,
+      "baseline": 81.48269635400762,
+      "difference": -0.008437499962155925,
+      "relative_change_pct": -0.010354959199556408,
+      "tolerance": 0.4074134817700381,
+      "within_existing_tolerance": true
+    },
+    "P_fe_W": {
+      "actual": 5.8605599492141,
+      "baseline": 5.8566429903198935,
+      "difference": 0.0039169588942060685,
+      "relative_change_pct": 0.06688061575001555,
+      "tolerance": 0.029283214951599468,
+      "within_existing_tolerance": true
+    },
+    "T_avg_Nm": {
+      "actual": 0.2437749232603467,
+      "baseline": 0.2437855718219991,
+      "difference": -1.0648561652393251e-05,
+      "relative_change_pct": -0.004368003230383272,
+      "tolerance": 0.0012189278591099955,
+      "within_existing_tolerance": true
+    },
+    "T_avg_maxwell_Nm": {
+      "actual": 0.24313711477023067,
+      "baseline": 0.2432,
+      "difference": -6.28852297693272e-05,
+      "relative_change_pct": -0.025857413556466775,
+      "tolerance": 0.001216,
+      "within_existing_tolerance": true
+    },
+    "T_ripple_pct": {
+      "actual": 1.4983812494563136,
+      "baseline": 1.5061722052857611,
+      "difference": -0.0077909558294475545,
+      "relative_change_pct": -0.5172685966522269,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    },
+    "V_peak": {
+      "actual": 8.100464859626321,
+      "baseline": 8.100633845304378,
+      "difference": -0.0001689856780568988,
+      "relative_change_pct": -0.0020860796980084863,
+      "tolerance": 0.04050316922652189,
+      "within_existing_tolerance": true
+    },
+    "v_circuit_resid_max_V": {
+      "actual": 4.440892098500626e-15,
+      "baseline": 8.049116928532385e-15,
+      "difference": -3.608224830031759e-15,
+      "relative_change_pct": -44.827586206896555,
+      "tolerance": 1e-09,
+      "within_existing_tolerance": true
+    },
+    "v_dc_residual_A": {
+      "actual": 0.0,
+      "baseline": 0.0,
+      "difference": 0.0,
+      "relative_change_pct": null,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    }
+  },
+  "run_id": "20260916T204913.918167Z",
+  "wall_seconds": 129.36828629999945,
+  "cpu_seconds": 128.296875
+}

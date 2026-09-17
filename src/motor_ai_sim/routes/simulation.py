@@ -289,7 +289,7 @@ class SimConfigPatch(BaseModel):
     demag:              Optional[bool]  = None   # per-element irreversible demag (de-rates Br)
     eddy:               Optional[bool]  = None   # coupled sigma*dA/dt solve (solved copper loss)
     rotor_eddy:         Optional[bool]  = None   # field-based magnet/shaft eddy (vs slab estimate)
-    torque_filter:      Optional[bool]  = None   # band-limit T(t) to the 6k orders
+    torque_filter:      Optional[bool]  = None   # deprecated, ignored; raw torque only
     drive:              Optional[str]   = None   # "current" | "voltage" | "pwm_voltage"
                                                  #  | "custom_current"
     v_phase_peak:       Optional[float] = None   # voltage drive: phase amplitude [V peak]
@@ -4288,7 +4288,7 @@ def get_fem_transient(
                                           #   snapshots without anyone ever looking at them.
     rotor_eddy:          bool  = True,    # ← field-based magnet/shaft eddy losses
     demag:               bool  = False,   # ← per-element irreversible demagnetisation (de-rates Br → torque)
-    torque_filter:       bool  = False,   # ← band-limit T(t) to physical 6·k orders (off = raw; honest default)
+    torque_filter:       bool  = False,   # deprecated, ignored; raw torque only
     pole_copy:           bool  = False,   # ← bit-identical pole/slot template-copy mesh
     iron_template:       bool  = True,    # ← deterministic template iron (fallback: gmsh)
     geo_mesh:            bool  = True,    # ← geometry-driven CDT mesh (real fillets, cell-tiled iron;
@@ -6923,11 +6923,10 @@ def _build_transient_summary(
         "T_em_avg_Nm": round(_Tavg, 3),
         "T_ripple_pct": round(abs(float(sbres.get("T_ripple_pct", 0.0))), 1),
         "T_ripple_raw_pct": round(abs(float(sbres.get("T_ripple_raw_pct", 0.0))), 1),
-        "T_ripple_filt_pct": round(abs(float(sbres.get("T_ripple_filt_pct",
+        "T_ripple_filt_pct": round(abs(float(sbres.get("T_ripple_raw_pct",
                                                    sbres.get("T_ripple_pct", 0.0)))), 1),
-        # Mesh-noise floor: RMS of the forbidden (non-6·k) torque orders, % of
-        # mean torque — how much numerical noise the 6·k gate removed.
-        "T_noise_floor_pct": round(float(sbres.get("T_noise_floor_pct", 0.0)), 2),
+        # Deprecated compatibility fields: raw ripple, no noise estimate.
+        "T_noise_floor_pct": None, "torque_filter_applied": False,
         "P_mech_W": round(_Pmech, 1),
         "V_phase_peak_V": round(_Vpk, 1),
         "V_phase_rms_V": round(_Vrms, 1),

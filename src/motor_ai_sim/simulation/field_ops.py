@@ -348,51 +348,29 @@ def _prepare_arkkio_torque_p2(mesh, basis, r_in_m: float, r_out_m: float,
 
     return torque
 
-def band_limit_torque(T_series, n_steps_per_period, n_periods):
-    """Reconstruct T(t) from the electrical orders a BALANCED three-phase machine
-    can physically produce — DC + EVERY 6·k order (6, 12, 18, 24, …): the
-    6th/12th… torque ripple and the order-12 cogging of a 24/28 machine — and
-    discard everything else.
+def torque_metrics(T_series):
+    """Return the unchanged torque samples and their raw peak-to-peak ripple.
 
-    Both transient pipelines inject NON-physical torque ripple at forbidden
-    orders: the sliding band steps the rotor across discrete slip nodes, and the
-    remesh-per-frame path gives every frame a slightly different mesh.  Both errors
-    spread broadband over orders a 3-phase drive cannot make (1,2,4,5,7,…) and
-    NEITHER converges with mesh refinement → they are numerical, not real.  So we
-    simply KEEP THE MULTIPLES OF 6 and drop the rest — no amplitude threshold, no
-    special-casing.  The MEAN (calibrated average torque) is preserved exactly.
-
-    Returns (T_phys_list, ripple_phys_pct, ripple_raw_pct, noise_floor_pct) —
-    noise_floor_pct = RMS of the DISCARDED (forbidden-order) content as % of the
-    mean torque: an honest, always-visible measure of how much numerical mesh
-    noise the solve carried (0 on a perfectly converged mesh)."""
+    No harmonic content is discarded. Raw ripple can contain physical effects
+    and numerical artifacts; this calculation does not establish convergence.
+    """
     x = np.asarray(T_series, float); n = x.size
     if n == 0:
-        return [], 0.0, 0.0, 0.0
+        return [], 0.0
     avg = float(x.mean())
-    def _pp(arr):
-        return (100.0 * (float(arr.max()) - float(arr.min())) / abs(avg)
-                if abs(avg) > 1e-9 else 0.0)
-    raw_rip = _pp(x)
-    # The 6·k comb assumes the window spans a WHOLE number of electrical
-    # periods — on a fractional window (n_periods=1.5) the rounded comb lands
-    # on orders 8, 16, … and the REAL 6·k ripple is discarded into the "noise"
-    # figure.  A fractional window cannot be comb-filtered honestly, so return
-    # the raw series unfiltered (the headline raw ripple is unaffected either
-    # way).
-    if abs(float(n_periods) - round(float(n_periods))) > 1e-6:
-        return x.tolist(), raw_rip, raw_rip, 0.0
-    nper = max(1, int(round(n_periods)))
-    step = 6 * nper                                  # electrical order 6 → bin 6·nper
-    if n < 2 * step:                                 # too few frames to resolve order 6
-        return x.tolist(), raw_rip, raw_rip, 0.0
-    F = np.fft.rfft(x - avg)
-    G = np.zeros_like(F)
-    G[step:F.size:step] = F[step:F.size:step]        # keep DC + every 6·k harmonic
-    xf = np.fft.irfft(G, n=n) + avg
-    noise = (100.0 * float(np.sqrt(np.mean((x - xf) ** 2))) / abs(avg)
-             if abs(avg) > 1e-9 else 0.0)
-    return xf.tolist(), _pp(xf), raw_rip, noise
+    ripple = (100.0 * (float(x.max()) - float(x.min())) / abs(avg)
+              if abs(avg) > 1e-9 else 0.0)
+    return x.tolist(), ripple
+
+
+def band_limit_torque(T_series, n_steps_per_period, n_periods):
+    """Deprecated compatibility entry point; always preserves raw torque.
+
+    Resolution/window arguments are ignored. Both legacy ripple entries are
+    raw ripple; the fourth value is None because no noise estimate is made.
+    """
+    raw, ripple = torque_metrics(T_series)
+    return raw, ripple, ripple, None
 
 def end_winding_factor_geom(p, geo_cfg) -> float:
     """Estimate the end-winding length factor k_end = (active + end-turn) /

@@ -90,20 +90,29 @@ def _result() -> str:
     from motor_ai_sim.contracts.adapters import result_ir_from_transient, stamp
 
     # Representative shape of the sliding-band transient dict (subset of real keys).
+    raw_torque = [6.1, 6.3, 6.0]
+    raw_ripple = 100.0 * (max(raw_torque) - min(raw_torque)) / 6.13
     sbres = {
         "time_s": [0.0, 1e-4, 2e-4],
-        "T_em_Nm": [6.1, 6.3, 6.0],
-        "T_em_filt_Nm": [6.13, 6.13, 6.13],
+        "T_em_Nm": raw_torque,
+        "T_em_raw_Nm": raw_torque,
+        "T_em_filt_Nm": raw_torque,  # deprecated alias preserves raw samples
+        "T_ripple_raw_pct": raw_ripple,
+        "torque_filter_applied": False,
+        "T_noise_floor_pct": None,
         "P_cu_W": [240.0, 240.0, 240.0],
         "T_avg_Nm": 6.13,
         "summary": {"P_stranded_W": 240.0, "P_core_W": 16.5, "efficiency": 0.943,
-                    "V_phase_peak_V": 29.7, "mass_total_kg": 0.75, "T_ripple_pct": 3.6},
+                    "V_phase_peak_V": 29.7, "mass_total_kg": 0.75,
+                    "T_ripple_pct": raw_ripple},
     }
     r: ResultIR = result_ir_from_transient(sbres, provenance=stamp("solver-em-transient"))
     assert r.ok and r.physics == "em_transient"
     assert abs(r.scalars.torque_Nm - 6.13) < 1e-9
     assert abs(r.scalars.efficiency - 0.943) < 1e-9
     assert r.series and len(r.series.time_s) == 3
+    assert r.series.torque_Nm == raw_torque
+    assert abs(r.scalars.torque_ripple_pct - raw_ripple) < 1e-9
     # graceful-failure payload (fault isolation)
     bad = ResultIR.failed("thermal", "solver crashed (SIGSEGV)")
     assert not bad.ok and bad.error

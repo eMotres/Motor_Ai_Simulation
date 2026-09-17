@@ -1,5 +1,54 @@
 # Codex — solver audit fixes
 
+2026-09-17 checkpoint: user explicitly requested committing the work. Preparing
+a path-limited commit of the verified application batch and this journal.
+Pending CAD/P2 source patch, three tests, hashes and numerical evidence are
+preserved in docs/solver-audit-checkpoint-2026-09-17 without activation.
+All 20 application code/test/baseline hashes still match the tested snapshots.
+Foreign configs, logs, reports and scratch work are excluded. No push requested.
+
+## Latest diagnostic: complete P2 radial-cut constraints (sandbox only)
+
+The canonical CAD and P2 radial-cut candidates remain isolated pending the
+combined gates. The actual half/quarter meshes contain 55 radial-cut facets,
+but the old radius-adjacency enumeration constrained only 53 midpoints.
+Coincident, distinct rotor/stator slip vertices interleave in the radius list.
+Enumerating actual facets through the matched vertex map restores all 55;
+a missing slave counterpart now raises explicitly. Existing slip-wrap logic
+and the full-ring projection are unchanged.
+
+Identical new tests on old source: 9 failed (7 synthetic + 2 actual meshes).
+Patched projection suite: 25 passed, including existing analytic field checks.
+Cold field capture: omitted midpoint jumps up to 2.7412e-4 T m become zero;
+half/quarter moment difference falls from 1.90008e-4 to 6.27e-13 N m.
+Completed no-load 72-point curves, against the full circle with common outer
+air discretization: half max pointwise difference 8.2211e-13 N m; quarter
+1.1598e-12 N m. All angles match exactly; raw range is 0.273733075787 N m.
+This proves sector parity on this mesh, not physical mesh convergence.
+
+Completed: half/quarter zero and loaded curves (4 passed, 795.10 s), common-
+mesh full loaded reference (1 passed, 508.09 s). At 46 A the raw ranges agree:
+full 0.2638129591315188, half 0.26381295913198954, quarter
+0.2638129591317515 N m. All raw samples and all 37 spectral bins are saved in
+solver-ripple-review/waveform-comparison. Full outer-air uniformization was a
+diagnostic runtime override, not a production mesh change.
+
+Combined CAD/mesh/P2 regression: 7 passed, 1 failed, 584.89 s. Sole failure
+p2_noload reproduces the earlier CAD-only values exactly: mean and Maxwell
+mean 3.921709386350385e-5 N m vs 4.1481998567548255e-5; ripple
+154.01844415169822% vs 128.72201908278132%. No new regression pins promoted.
+CAD and radial-cut P2 candidates remain UNINTEGRATED; reviewed five-file
+bundle: solver-integration-cad-cut (manifest, before/after, review.patch).
+
+User requires keeping 20% weekly usage in reserve; latest check has 25% left.
+All started numerical runs have finished; agents are idle. Post-fix radial
+convergence is prepared but NOT launched. Resume with the regression-pin
+review/integration and physical convergence, not a fresh audit. General mean
+torque/1 A selector remain open. The regression log also shows existing
+losses.py leakage-ramp removal in iron-loss processing; the raw-torque fix
+does NOT remove that separate processing. Audit it before claiming nothing
+is discarded throughout the solver. No commit/push/API/restart/deployment.
+
 ## Active: raw cogging/ripple and symmetry validation (2026-09-16)
 
 User requests convergence of cogging/ripple including full/half/quarter symmetry.
@@ -19,14 +68,175 @@ Raw-torque implementation sandbox: `solver-raw-torque`. Reserved narrow regions:
 selection; `routes/simulation.py` legacy ripple/noise summary fields; corresponding
 tests. Legacy filtered output aliases, if retained, must contain RAW samples.
 No numerical-noise estimate is inferred merely from non-6k orders.
-`web/src/components/simulation/TransientCharts.tsx` cleanup is prepared only in
-the sandbox at this stage; do not mutate the owner's live browser or run server.
+`web/src/components/simulation/TransientCharts.tsx` raw-only cleanup is now
+integrated after the HMR notice and baseline-hash verification. No browser action.
 Report files are owned by another agent and will not be overwritten.
 No commit/push/deploy/restart. Direct lead messaging still unavailable.
 
+Lead integration received: previous 21-file batch committed as
+`d2d3d4395cc6643752218037d2880b36e6dbcb05` and pushed by the lead.
+Current raw-only and symmetry work is a NEW batch on top of that commit.
+The new spectrum uses the entire retained waveform, including fractional
+windows, with actual fractional electrical orders; no first-period truncation.
+Raw-waveform/FFT tests: 54 passed; chart selection tests: 3 passed.
+Isolated TypeScript comparison: 139 diagnostics before and after, no new
+diagnostics; 9 pre-existing diagnostics remain in TransientCharts (not clean).
+Native and symmetry runs are in progress; these results are not yet an
+accuracy claim. Report-owner handoff: `report.py` currently formats the dominant
+spectral order with `int(...)` / `%d`, truncating fractional orders. Preserve
+numeric fractional orders in that label when integrating the new spectrum.
+
+Raw-only + sector-guard batch is now INTEGRATED, UNCOMMITTED (16 code/test paths,
+plus this journal and validation-plan documentation). All production inputs
+matched the reviewed baseline hashes immediately before copying; all outputs
+match `solver-raw-symmetry-integrated/integration-hashes.json` afterward.
+Combined FEM SHA256: 9F14E064A04A7467BA6BFE9537D98880C63E34F132BF7035DB071AB0B8037105.
+Sector guard adds `simulation/geometry_2d.py::validate_sector_symmetry` and
+`tests/test_sector_symmetry_guard.py`; private probes choose the largest
+certified sector or Full. Explicit invalid public sectors raise before solving.
+Historical route-cache returns and mesh preview are outside this guard's scope
+and remain follow-up items. The missing winding identity in calibration caches
+has now been fixed by the separately reviewed follow-up below.
+
+Final combined isolated gate: 124 passed, 1 unrelated slow calibration test
+deselected, 50.81 s (includes two native FEM solves); 3 chart tests passed.
+Earlier raw-only native + full physics-regression module: 16 passed, 650.03 s;
+that process imported the first-period spectrum revision. After the user's
+whole-window instruction, focused 54 tests and native 2 tests passed, followed
+by the final combined gate above. Physics baselines and tolerances unchanged.
+First combined attempt collected no tests because the copied calibration test
+was absent; restored the unchanged test (hash equals live) and reran successfully.
+Path-limited whitespace check passed. No commit/push/API/restart/deploy by Codex.
+
+Winding-cache follow-up INTEGRATED, UNCOMMITTED: FEM cache keys now include the
+resolved phase/sign basis (`w2-` hash; `psipm_v2_` namespace). Manual-angle
+validation uses the same winding identity. Old unproven entries miss lazily;
+no live cache is cleared or modified by integration. The next normal request
+may calibrate once. Actual automatic and equivalent explicit layouts share
+identity, while phase relabeling, sign inversion and orientation changes do not.
+Verified 89 tests (1 slow deselected), plus 7 existing PM-linkage/scaling/stale
+cache tests (25 unrelated deselected); no field solve required for these keys.
+Final FEM hash after this follow-up:
+491C41972632CACD48E1D9C5A1AB84492C590AD42260CCD162293CDD2CC2B576.
+New own test: `tests/test_winding_calibration_cache.py`; total current batch
+17 code/test paths plus two documentation paths. No baseline changes.
+
+Gap-tie follow-up is now INTEGRATED, UNCOMMITTED; CAD remains SANDBOX-ONLY:
+- `solver-gap-ties`: narrow `_weld_belt_into_half` roundoff-tie comparison in
+  `simulation/mesher.py`. Exact real-mesh replay: 58 differing rotor triangles
+  (29 diagonal flips) -> zero, with all coordinates unchanged. Corrected 58
+  unit cases + replay pass; the identical original-source suite fails 30 cases.
+  Initial 4 coordinate-only fixture failures were corrected using an explicit
+  16*machine-epsilon*radius roundoff bound, not a changed topology tolerance.
+  Eight unchanged physics pins finished: 7 passed, 1 failed, 840.83 s. The
+  only mismatch is p2_noload T_avg_maxwell_Nm: stored rounded 0.0 versus
+  full-precision 4.1482e-5, matching the existing T_avg_Nm pin. This is the
+  intentional removal of output rounding, not evidence of a field change.
+  Targeted retry plus import-provenance gate: 2 passed, 13 deselected, 21.11 s.
+  Actual module origins and runtime/source equivalence verified in the sandbox
+  before and after the solve (35 motor modules at finish). Old traceback paths
+  can persist in copied bytecode metadata; the retry checks actual origins.
+  Exactly one baseline value is now updated: p2_noload T_avg_maxwell_Nm from
+  0.0 to its existing T_avg_Nm value 4.1481998567548255e-5. No tolerance changes.
+  This documents removal of rounding, not a change in the calculated field.
+  Actual corrected quarter/half no-load runs pass, but their peak-to-peak
+  discrepancy remains: 0.323345 vs 0.295980 N m. This is NOT the complete
+  cogging fix; the new motor campaign is not promoted to a physical baseline.
+  Mesher and new tests/test_gap_zipper_ties.py matched reviewed hashes before
+  and after integration; original live mesher and baseline hashes were checked.
+  Current new batch: 20 code/test/baseline paths plus two documentation paths.
+- `solver-cad-symmetry`: investigating `cadquery_geometry.py` slot-mouth circle
+  polygons (only centres rotate; 27-gon orientations do not) and coordinate-
+  dependent ring weld representatives. Production CAD and mesher paths were
+  clean when these candidates started; no production edits to them yet.
+  Saved stage proof finds 84 differing stator vertices. Four identical cells
+  already classify differently before snapping because the exported CAD
+  contour itself is not invariant under the intended 90-degree repetition.
+  No changes to the owner's geometry/config, API or browser for these probes.
+
+Mouth-only historical CAD gate: 88 passed, 1 skipped, 5 failed in 45.44 s.
+Four failures are Windows asyncio socketpair creation blocked by the isolated
+network guard before in-process API requests. One frozen-default rotor contour
+has a 3.90% local chord ratio against the existing 4% gate. Identical failure
+was reproduced with original source and the same frozen config (both sides:
+1 failed, 1 passed, about 1.2 s, including the actual mouth-export A/B proof).
+All named-preset shared-boundary quality cases passed.
+No CAD candidate integration yet; no tolerance was relaxed.
+
+Wire-split historical gate: 11 passed, 1 failed, 132.06 s. Native winding/series
+checks passed; the thermal-map case is blocked by the same Windows socketpair
+network guard before its in-process route request. This is not a clean full
+API/thermal gate; no live API was used to work around the guard.
+
+Process-only canonical primitive cleanup experiment: 1 passed in 1.13 s after
+correcting a test-only package import (first attempt did not collect). For the
+100mm fixture, post-placement close runs drop 48 -> 0, complete stator R90
+symmetry is roundoff-exact (3.5e-14 mm Hausdorff), shared points match and repeat
+cleanup is identical. This is a bounded geometry correction, NOT only roundoff:
+final stator area changes by -0.416232 mm2 and boundary by 0.00920022 mm; the
+existing weld tolerance is 0.025 mm. Cross-preset verification and guarded
+implementation remain isolated, pending integration.
+
+Final CAD candidate SHA17D39AF02B85E5CB228C4F82A9C2903A35D61FB58552FB6E31441FEC58239EBA
+is independently reviewed. Its 25 new tests and historical contour tests give
+53 passed, 1 unchanged default-rotor quality failure (17.48 s). Two initial
+negative-radius test errors assumed Polygon rather than MultiPolygon; only
+the topology assertion was corrected, not production behavior or tolerances.
+Source-frame cleanup is accepted only within original weld displacement and
+Hausdorff budgets with component/hole topology preserved; otherwise it keeps
+the original primitive. Generic sanitizer remains unchanged.
+
+Actual Full/Half/Quarter mesh gate: strict global equality failed in 23.68 s,
+but localization proves EVERY mismatch is in full-ring outer air at radii
+50-65 mm. Half/quarter match everywhere; full rotor and inner stator match
+all quarter blocks, including exact triangle connectivity and material labels.
+Available classifier PM polarity and winding phase/sign parity checks pass.
+The full-only outer grading makes 75 outer chords versus a sector-equivalent
+600, with different radial rows and discrete boundary area. This is a mesh
+path difference, not yet an identified field-error magnitude.
+Process-only uniform-outer experiment (no production edit) passed all 12
+strict mesh/material comparisons in 11.93 s. Saved-only localization/boundary
+diagnostics passed in 1.77/0.26 s. A common-outer full field comparison is being
+prepared; native half/quarter comparison and 8 unchanged physics pins are
+running in separate guarded copies. CAD remains unintegrated until these
+effects are assessed; the new campaign does not change any baseline.
+
+IMPORTANT: identical-mesh half/quarter field campaign finished (2 passed,
+496.71 s), but physical parity FAILED: raw no-load ranges are 0.296219408240
+and 0.323507065150 N m, means -0.008328877949/-0.007503380162 N m. Nonlinear
+convergence and all CREATED projection constraints pass; those checks alone
+do not certify completeness. At angle 5 mechanical degrees the torque differs
+by 0.017468373918 N m; at zero by 0.000190008337 N m.
+
+Independent saved-mesh torque-operator audit passed (2.31 s): quarter/half
+select 1284/2568 matching gap elements; radial threshold margins exceed 82 um,
+quadrature geometry/weights/rotation tensor differ only at roundoff. A separate
+actual-cut coverage audit passed (1.34 s) and found a concrete second P2 tear:
+there are 55 geometric radial-cut facets but only 53 midpoint constraints.
+The missing stator and rotor belt edges both touch the duplicated slip radius.
+Sorted neighboring cut vertices do NOT enumerate all actual mesh facets.
+All 57 cut-vertex pairs are correct, no stator/rotor crossing, no origin vertex
+(minimum radius 20.7 mm). New actual-facet enumeration and single-frame field
+A/B are being prepared in separate copies; this P2 fix is NOT integrated yet.
+
+CAD mouth-only candidate: 15 tests plus 2 diagnostic-census checks passed
+in 1.06 s; independent source review approved. Local right cutter retains its
+sampling, the complete geometry is mirrored and then rotated in both export
+paths. Sanitizer is UNCHANGED. Its remaining coordinate-dependent weld still
+breaks final stator symmetry: R90 symmetric-difference area 0.393012 mm2,
+Hausdorff distance 0.00920022 mm on the 100mm fixture after the mouth fix.
+All 48 observed short runs (24 stator + 24 matching out-band boundary copies)
+remain unresolved by the conservative corner classifier; no averaging applied.
+
+All baseline sector solves completed. At 46 A and the common 72-step grid:
+Full/Half/Quarter raw peak-to-peak = 0.264085 / 0.287864 / 0.313877 N m;
+reported means = 6.029726 / 6.032464 / 6.035131 N m. Quarter differs from Full
+by about 18.9% in ripple range despite about 0.09% in mean. These unconverged
+meshes are diagnostic evidence, not an accuracy certification or new baseline.
+
 ## Completed: integer P2 sector midpoint coupling (2026-09-16)
 
-Integrated, uncommitted. `simulation/p2_projection.py::SlipProjection.build`
+Integrated in lead commit `d2d3d43`. `simulation/p2_projection.py::SlipProjection.build`
 now maps sector intervals directly with divmod and the signed wrap count.
 The previous vertex-derived edge pair omitted one midpoint weld at the cut,
 including periodic sectors where the pair named a nonexistent facet. Actual

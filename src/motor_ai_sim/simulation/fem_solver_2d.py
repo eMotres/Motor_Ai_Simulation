@@ -119,7 +119,7 @@ from motor_ai_sim.simulation.field_ops import (  # noqa: F401  (re-export)
     _per_triangle_B, _triangle_areas, _maxwell_stress_torque,
     _arkkio_torque, _p2_B_at_quad, _arkkio_torque_p2,
     _prepare_arkkio_torque_p2,
-    band_limit_torque, end_winding_factor_geom, copper_loss_W,
+    band_limit_torque, torque_metrics, end_winding_factor_geom, copper_loss_W,
     coil_slot_index, coil_copper_areas, coil_copper_area_total_m2,
 )
 
@@ -222,6 +222,31 @@ _DAXIS_TLS = threading.local()
 _DAXIS_LOCK = threading.RLock()
 
 
+def _winding_cache_identity(geo, wind, num_poles=None) -> str:
+    """Versioned identity of the phase/sign basis actually used by the solver.
+
+    Resolve the explicit layout with the same generator/parser as MotorDomains2D:
+    spelling/separators and an explicit copy of the automatic winding are not
+    physical differences. Inputs are request-local; never read global config.
+    The version deliberately excludes legacy cache entries lacking this basis.
+    """
+    import hashlib
+    import json
+    from motor_ai_sim.simulation.geometry_2d import build_winding_layout
+    geo, wind = geo or {}, wind or {}
+    slots = int(geo.get("num_slots") or round(float(geo.get("num_seg") or 0)
+                * float(geo.get("num_slots_per_segment") or 0)))
+    poles = int(num_poles or geo.get("num_poles") or round(float(geo.get("num_seg") or 0)
+                * float(geo.get("num_poles_per_segment") or 0)))
+    if slots <= 0 or poles <= 0:
+        raise ValueError("Winding cache identity requires resolved positive slot/pole counts.")
+    layout = build_winding_layout(slots, poles // 2,
+                                  single_layer=int(wind.get("layers", 1)) == 1,
+                                  layout_str=wind.get("layout") or None)
+    payload = json.dumps(layout, separators=(",", ":"), ensure_ascii=True)
+    return "w2-" + hashlib.sha256(payload.encode("ascii")).hexdigest()
+
+
 def psipm_cache_key(geo, wind, connection=None) -> str:
     """The disk key ``noload_psi_pm`` files its answer under.
 
@@ -259,8 +284,29 @@ def psipm_cache_key(geo, wind, connection=None) -> str:
                              _npe_pm((wind or {}).get("n_parallel", 1), geo))
     except Exception:       # noqa: BLE001 — a cache key may not raise
         _scale = "Tx"
-    return "psipm_%s_L%s_C%s_%s" % (_fp, int((wind or {}).get("layers", 1) or 1),
-                                    _conn_pm or "cfg", _scale)
+    return "psipm_v2_%s_L%s_C%s_%s_%s" % (
+        _fp, int((wind or {}).get("layers", 1) or 1), _conn_pm or "cfg",
+        _winding_cache_identity(geo, wind), _scale)
+
+
+def _calibration_sector_count(num_slots, num_poles, wind):
+    """Largest certified sector for a private probe, without changing the run."""
+    from motor_ai_sim.simulation.geometry_2d import (
+        build_winding_layout, validate_sector_symmetry)
+    slots, poles = int(num_slots), int(num_poles)
+    layout = build_winding_layout(slots, poles // 2,
+                                  single_layer=int((wind or {}).get("layers", 1)) == 1,
+                                  layout_str=(wind or {}).get("layout") or None)
+    symmetry = math.gcd(slots, poles)
+    for sectors in range(symmetry, 1, -1):
+        if symmetry % sectors:
+            continue
+        try:
+            validate_sector_symmetry(slots, poles, sectors, layout, paired_stator=True)
+        except ValueError:
+            continue
+        return sectors
+    return 1
 
 
 def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
@@ -288,8 +334,8 @@ def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
                 return float(_v[0]), float(_v[1])
         except Exception:
             pass
-    _cal_ns = _m.gcd(int((geo or {}).get("num_slots") or 1),
-                     int((geo or {}).get("num_poles") or 1)) or 1
+    _cal_ns = _calibration_sector_count(int((geo or {}).get("num_slots") or 1),
+                                      2 * int(pole_pairs), wind)
     _cal_D = float((geo or {}).get("stator_diameter") or 0.0) or 40.0
     _cal_mesh = round(min(2.0, max(0.5, 1.4 * _cal_D / 150.0)), 2)
     # The connection the loaded run used — the SAME spelling `psipm_cache_key`
@@ -417,12 +463,15 @@ def _daxis_topology_key(p, geo, wind, geo_fp=None) -> tuple:
     12s14p angles do sit on 60.0° across three cross-sections — but an argument
     is not a licence for a cache to answer for a machine it never measured, so
     the geometry fingerprint is part of the key and a new cross-section
-    re-calibrates.
+    re-calibrates. The resolved phase/sign winding basis is also part of the
+    topology: equal counts can orient phase A differently. Its versioned token
+    prevents reusing older memory/disk entries that never identified the basis.
     """
     return (int(getattr(p, "num_poles", 0) or 0),
             int((geo or {}).get("num_slots") or 0),
             int((wind or {}).get("layers", 1) or 1),
             str((wind or {}).get("connection", "")),
+            _winding_cache_identity(geo, wind, getattr(p, "num_poles", None)),
             str(geo_fp or _daxis_geo_fingerprint(geo)))
 
 def _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override, n_sectors,
@@ -513,9 +562,8 @@ def _calibrate_daxis(p, geo, wind, pole_pairs, geo_override, n_sectors,
         # 12s14p came out 60.0219 at 2S and 60.0168 at 2P — mesh noise, not a
         # winding effect.  It stays in the key because the key is a promise
         # about the machine, not because θ* depends on it.
-        import math as _mth
-        _cal_ns = _mth.gcd(int((geo or {}).get("num_slots") or 1),
-                           int(getattr(p, "num_poles", 1) or 1)) or 1
+        _cal_ns = _calibration_sector_count(int((geo or {}).get("num_slots") or 1),
+                                          p.num_poles, wind)
         _cal_D = float((geo or {}).get("stator_diameter") or 0.0) or 40.0
         _cal_mesh = round(min(2.0, max(0.5, 1.4 * _cal_D / 150.0)), 2)
         # The bar says WHICH stage is running.  Its own frame count, its own
@@ -2604,8 +2652,8 @@ def fem_transient_sliding_band(
     field_first: bool = False,   # snapshot the FIRST frame (rotor at angle0) instead
                                  # of the last — used by the magnetostatic field view
                                  # so the picture matches the requested rotor angle
-    torque_filter: bool = False,  # band-limit T(t) to the physical 6·k orders — OFF by default: the headline ripple is the RAW one (no filters)
-                                 # (False = raw per-frame Maxwell-stress torque)
+    torque_filter: bool = False,  # deprecated compatibility option, ignored;
+                                 # every reported torque sample is retained
     pole_copy: Optional[bool] = None,  # bit-identical pole/slot mesh; None=env default
     iron_template: Optional[bool] = None,  # deterministic template iron; None=env default
     geo_mesh: Optional[bool] = None,   # geometry-driven CDT mesh; None=env default
@@ -2855,23 +2903,11 @@ def fem_transient_sliding_band(
         _use_geo_tr = False
         _geo_mesh_eff = False
     NS = 1 if _full_ring else int(n_sectors)
-    # A 1/N model exists only when N divides gcd(slots, poles); otherwise the
-    # wedge holds a FRACTIONAL pole count and the (anti)periodic sign below is
-    # computed from the floored poles-per-sector — the comment above names the
-    # consequence (3.5 poles/sector → corrupt BC → spurious torque/ripple), but
-    # only the 1→4 fallthrough was ever guarded: an EXPLICIT invalid N sailed
-    # through and reported the wedge ×N as the machine.  static3d and the iron
-    # template both raise on exactly this; the layer that produces every
-    # published number must too (an unsupported option raises — the route must
-    # not quietly answer a different question).
-    _sym = math.gcd(int(p.num_slots), int(p.num_poles))
-    if NS > 1 and _sym % NS != 0:
-        raise ValueError(
-            "n_sectors=%d is not a symmetry of this machine: %d slots / %d "
-            "poles repeat only in 1/%d fractions (divisors of gcd=%d). Use one "
-            "of %s, or 1 for the full ring."
-            % (NS, p.num_slots, p.num_poles, _sym, _sym,
-               sorted(d for d in range(2, _sym + 1) if _sym % d == 0)))
+    # Count divisibility alone does not certify the paired CAD geometry or
+    # the actual phase terminals. Reject before calibration or mesh fallbacks.
+    from motor_ai_sim.simulation.geometry_2d import validate_sector_symmetry
+    validate_sector_symmetry(p.num_slots, p.num_poles, NS, dom.winding_layout,
+                             paired_stator=True)
     sector_deg = 360.0 / NS
     pole_pairs = p.num_poles // 2
     # Sector boundary sign: ANTI-periodic (−1) only when the sector spans an
@@ -3043,8 +3079,10 @@ def fem_transient_sliding_band(
         # that measurement is not a fine adjustment, it is the wrong machine's
         # number: refuse, name both, tell the user to clear the field.
         try:
-            _kp = _daxis_topology_key(p, geo, wind, _daxis_geo_fingerprint(geo))[:4]
-            _known = [float(v) for k, v in _DAXIS_CACHE.items() if tuple(k[:4]) == tuple(_kp)]
+            # Compare all topology fields, including the versioned resolved
+            # winding, while retaining the existing cross-section pin policy.
+            _kp = _daxis_topology_key(p, geo, wind, _daxis_geo_fingerprint(geo))[:-1]
+            _known = [float(v) for k, v in _DAXIS_CACHE.items() if tuple(k[:-1]) == tuple(_kp)]
             _dp_chk = _daxis_disk_path()
             if _dp_chk and _os_sb.path.exists(_dp_chk):
                 import json as _json_dx
@@ -7039,17 +7077,13 @@ def fem_transient_sliding_band(
     # depends on the gap field and discretization. Historical bias measurements
     # do not establish a universal error for the current P2/source formulation.
     _T2raw = list(_T2)                       # preserve the Maxwell series (diag)
-    # ── Torque harmonic spectrum over ONE electrical period ──────────────────
-    # The single most telling diagnostic for "is this periodic or chaotic": a
-    # clean ripple shows a few DISCRETE peaks (the cogging / 6·k 3-phase orders);
-    # broadband noise spreads across all orders.  Orders are multiples of the
-    # ELECTRICAL fundamental; amplitude is the single-sided FFT magnitude [N·m].
-    # ALWAYS the RAW per-frame torque (not the band-limited series), so the UI
-    # shows every order and the user can SEE which bars the 6·k filter keeps
-    # (orange) vs drops.  Computed on the P1 path only until now, so the UI's
-    # harmonic chart went blank the day P2 became the default — the helper is
-    # element-order-agnostic and belongs beside the ripple it explains.
-    T_harm_order, T_harm_amp = _torque_harmonics(_T2raw, n_steps_per_period)
+    # Raw Maxwell harmonic diagnostic over every returned sample. Bin orders
+    # use the actual window duration and may be fractional electrical orders.
+    # Retain every resolved order at full precision. An order alone does not
+    # establish whether its amplitude is physical or a numerical artifact.
+    T_harm_order, T_harm_amp = _torque_harmonics(
+        _T2raw, n_steps_per_period,
+        step_periods=float(_sched_dth[-1]) / period_mech)
     T_arr = np.asarray(_T2, float)
     T_maxwell_avg = float(T_arr.mean()) if T_arr.size else 0.0
     # Legacy hybrid: fundamental space-vector mean plus raw Maxwell AC.
@@ -7064,12 +7098,7 @@ def fem_transient_sliding_band(
         log.warning("P2 hybrid torque failed (%s) — using Maxwell series", _te)
     T_arr = np.asarray(_T2, float)
     Tavg = float(T_arr.mean()) if T_arr.size else 0.0
-    # The retained window is uniform, including after mixed-resolution settling.
-    # Its span is sample count * scheduled step (not the first-to-last span):
-    # rounding and settling trims can make it differ from requested n_periods.
-    _Tf, Trip, Trip_raw, Tnoise = band_limit_torque(
-        _T2, int(n_steps_per_period),
-        len(_T2) * float(_sched_dth[-1]) / period_mech)
+    _T_report, Trip_raw = torque_metrics(_T2)
     _omega_m2 = 2.0 * math.pi * rpm / 60.0
     P_airgap_avg2 = float(Tavg * _omega_m2)
     P_mech_avg2 = P_airgap_avg2 - (P_fe_avg2 + P_mag_avg2 + P_shaft_avg2
@@ -7490,11 +7519,12 @@ def fem_transient_sliding_band(
         "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
         "time_s": _tt, "rotor_angle_deg": _ang,
         "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
-        "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip,
-        "T_noise_floor_pct": round(float(Tnoise), 2),
-        "T_em_raw_Nm": list(_T2), "T_em_filt_Nm": _Tf,
+        "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip_raw,
+        # Deprecated aliases retain raw values; no filtering/noise estimate.
+        "T_noise_floor_pct": None, "torque_filter_applied": False,
+        "T_em_raw_Nm": list(_T2), "T_em_filt_Nm": _T_report,
         "torque_method": _torque_method,
-        "T_avg_maxwell_Nm": round(T_maxwell_avg, 4),
+        "T_avg_maxwell_Nm": T_maxwell_avg,
         "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp,
         "T_em_maxwell_Nm": list(_T2raw),
         "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
@@ -7887,7 +7917,7 @@ def em_transient_eval(
                                      # strands in hand are connected in the coupled
                                      # eddy solve; see fem_transient_sliding_band
     demag: bool = False,
-    torque_filter: bool = False,
+    torque_filter: bool = False,  # deprecated compatibility option, ignored
     pole_copy=None,
     component_mesh_mm=None,
     geo_override=None,

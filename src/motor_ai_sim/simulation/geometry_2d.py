@@ -418,6 +418,45 @@ def build_winding_layout(num_slots: int, num_pole_pairs: int,
     return [_slot_phase_sector((k * alpha_e) % 360.0) for k in range(num_slots)]
 
 
+def validate_sector_symmetry(num_slots, num_poles, n_sectors, winding_layout,
+                             *, paired_stator=False):
+    """Validate a scalar periodic/antiperiodic sector and its phase terminals.
+
+    ``paired_stator`` names the current CAD/template family's two-slot repeat;
+    it is a builder constraint, not a theorem about arbitrary stator geometry.
+    Check the resolved phase basis even at zero current: sector-scaled phase
+    flux linkages and subsequent terminal probes still require this symmetry.
+    Winding layer labels are irrelevant once the actual layout is resolved.
+    """
+    slots, poles, sectors = int(num_slots), int(num_poles), int(n_sectors)
+    if sectors <= 1:
+        return
+    if slots % sectors or poles % sectors:
+        raise ValueError(
+            f"n_sectors={sectors} is not a symmetry of this machine: "
+            f"{slots} slots / {poles} poles must both be divisible by it. "
+            "Use 1 for the full ring or a compatible sector.")
+    shift = slots // sectors
+    if paired_stator and shift % 2:
+        raise ValueError(
+            f"n_sectors={sectors} gives {shift} slots per sector; the current "
+            "paired-stator CAD/template family requires whole two-slot units. "
+            "Use 1 for the full ring or a sector containing whole slot pairs.")
+    if len(winding_layout) != slots:
+        raise ValueError("Resolved winding layout must contain one entry per slot.")
+    sign = -1 if (poles // sectors) % 2 else 1
+    for slot, (phase, direction) in enumerate(winding_layout):
+        other = (slot + shift) % slots
+        actual_phase, actual_direction = winding_layout[other]
+        if actual_phase != phase or actual_direction != sign * direction:
+            raise ValueError(
+                f"n_sectors={sectors} is incompatible with the resolved winding: "
+                f"slot {slot + 1} ({phase},{direction:+d}) maps to slot "
+                f"{other + 1} ({actual_phase},{actual_direction:+d}), but the "
+                f"sector boundary requires the same phase with sign {sign:+d}. "
+                "Use 1 for the full ring or a winding-compatible sector.")
+
+
 # Cached layout for 24s/28p (14 pole-pairs) — single-layer
 _WINDING_24S_28P: List[Tuple[str, int]] = build_winding_layout(24, 14)
 

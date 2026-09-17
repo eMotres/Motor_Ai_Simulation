@@ -82,9 +82,7 @@ interface TransientPayload {
   time_s: number[];
   rotor_angle_deg: number[];
   T_em_Nm: number[];
-  // Raw per-frame torque + the band-limited (6·k) reconstruction.  Both are
-  // ALWAYS returned so the "Torque filter" toggle flips between them client-
-  // side (instant — band-limiting is post-processing, no re-solve needed).
+  // Raw torque is authoritative. Legacy filtered fields are not displayed.
   T_em_raw_Nm?: number[];
   T_em_filt_Nm?: number[];
   T_avg_Nm: number;
@@ -208,8 +206,8 @@ interface Props {
   // Field-based magnet/shaft eddy losses (J = σ(−∂A/∂t + U) magnetodynamic
   // solve, per-magnet ∫J=0, library σ) instead of the slab d²/12 estimate.
   fieldLosses?: boolean;
-  // Band-limit T(t) to the physical 6·k orders (default ON; off = raw torque).
-  torqueFilter?: boolean;
+  // Legacy callers may still pass this prop; raw torque is always displayed.
+  torqueFilter?: boolean; // deprecated compatibility prop, ignored
   // Per-element irreversible demagnetisation — de-rates Br → torque/EMF + %-map.
   demag?: boolean;
   // Coupled σ·∂A/∂t eddy-current solve (P2): the induced currents in copper /
@@ -324,7 +322,7 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, vBus = 0, fSwitch = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, vBus = 0, fSwitch = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -474,7 +472,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       steps, gamma_deg, I_phase_rms,
       drive, vPeak, vDelta, vBus, fSwitch, iBlock, waveform,
       battery, busCouple, chargeMax,
-      fieldLosses, eddyCoupled, demag, torqueFilter,
+      fieldLosses, eddyCoupled, demag, torqueFilter: false,
       fresh: fresh || freshOnce,
       run_id: String(runNonce),
     });
@@ -615,8 +613,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
             detail: { field_snapshot: (d as any).field_snapshot === true,
                       eddy: (d as any).field_snapshot_eddy === true } }));
         }
-        // summary is emitted by the effect below (so its ripple matches the
-        // current filter toggle, and flips with it without a re-solve).
+        // The effect below emits the summary with the raw curve's ripple.
       } catch (e: any) {
         const msg = String(e);
         // User pressed Stop → don't retry, don't surface as an error.
@@ -798,16 +795,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   }, []);
 
   // Build chart-friendly row arrays
-  // Torque series shown: band-limited (6·k) when the filter is ON, raw per-
-  // frame otherwise.  Both arrays come from the backend, so flipping the
-  // checkbox switches the curve INSTANTLY — no re-solve.  Falls back to the
-  // legacy single T_em_Nm for cached runs from before this field existed.
+  // Always show raw samples, including when restoring a legacy filtered run.
   const Tshown = React.useMemo(() => {
     if (!data) return [] as number[];
-    const raw  = data.T_em_raw_Nm  ?? data.T_em_Nm;
-    const filt = data.T_em_filt_Nm ?? data.T_em_Nm;
-    return torqueFilter ? filt : raw;
-  }, [data, torqueFilter]);
+    return data.T_em_raw_Nm ?? data.T_em_Nm ?? [];
+  }, [data]);
 
   const rows = React.useMemo(() => {
     if (!data) return [];
@@ -1086,9 +1078,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   }, [data, cdcUF, lcUH]);
 
   // Ripple % computed from the DISPLAYED curve (pk-pk / |T_avg|), so it
-  // recomputes the instant the 6·k filter is toggled and always matches the
-  // shown torque + spectrum — no dependence on which ripple field the backend
-  // happened to cache.  (Near no-load |T_avg|→0 makes % meaningless; the header
+  // matches the raw torque — no dependence on a cached filtered ripple.
+  // (Near no-load |T_avg|→0 makes % meaningless; the header
   // shows the absolute cogging pk-pk there instead.)
   const ripplePct = React.useMemo(() => {
     if (!data || !Tshown.length) return 0;
@@ -1097,10 +1088,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     return 100 * (Math.max(...Tshown) - Math.min(...Tshown)) / avg;
   }, [data, Tshown]);
 
-  // Emit the summary to the parent with the T-ripple of the DISPLAYED curve, so
-  // the summary cards flip together with the torque curve + spectrum on toggle —
-  // instantly, no re-solve.  (Declared AFTER ripplePct so its dep array doesn't
-  // hit the temporal-dead-zone.)  Fires on data change + whenever the toggle does.
+  // Emit the summary with the raw curve's ripple when data changes.
   // NB: a run that lacks a summary never reaches setData — the fetch surfaces it
   // as an error first (see the run() guards) — so `data && !data.summary` here
   // means only the empty-panel state (data null): correctly a no-op, not a freeze.
@@ -1127,25 +1115,19 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 _matSig: data._matSig ?? undefined,
                 _geoStaleBackend: data.stale_geometry === true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, torqueFilter, ripplePct]);
+  }, [data, ripplePct]);
 
-  // Torque harmonic spectrum (over one electrical period).  6·k orders are the
-  // physical 3-phase torque ripple; a clean ripple = a few discrete bars, broad
-  // noise = energy in every order.  When the 6·k filter is ON the spectrum MUST
-  // match the displayed (filtered) torque curve, so the parasitic non-6·k bars
-  // are zeroed out — they visibly disappear, exactly what the filter removes.
-  // Toggle OFF to see the full raw spectrum again.
+  // Display every resolved harmonic of the raw torque without suppressing bars.
   const harmRows = React.useMemo(() => {
     if (!data?.T_harm_order || !data?.T_harm_amp) return [];
     return data.T_harm_order.map((n, i) => {
-      const raw = data.T_harm_amp![i];
-      const amp = (torqueFilter && n % 6 !== 0) ? 0 : raw;
+      const amp = data.T_harm_amp![i];
       return {
         order: n, amp,
         pct: data.T_avg_Nm ? (100 * amp / Math.abs(data.T_avg_Nm)) : 0,
       };
     });
-  }, [data, torqueFilter]);
+  }, [data]);
 
   // Phase-voltage harmonic spectrum — client-side DFT of V(t) over the stored
   // window (N samples = n_periods electrical periods, so harmonic h lives in
@@ -1273,8 +1255,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           {data && (() => {
             const tpp = Tshown.length
               ? Math.max(...Tshown) - Math.min(...Tshown) : 0;
-            // Ripple = pk-pk of the DISPLAYED curve / |T_avg| — recomputed on
-            // every filter toggle so it always matches the shown torque + spectrum.
+            // Ripple is the raw curve's pk-pk / |T_avg|.
             const ripPct = ripplePct;
             // ripple % = pk-pk / |T_avg| is meaningless near no-load (T_avg≈0 →
             // it blows up to 1000s of %).  There, report the absolute cogging
@@ -1292,8 +1273,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 T_avg = {data.T_avg_Nm.toFixed(2)} N·m · {loaded
                   ? `ripple = ${ripPct.toFixed(1)} %`
                   : `cogging pk-pk = ${tpp.toFixed(2)} N·m`}
-                {' · '}<span style={{ color: torqueFilter ? '#34d399' : '#fbbf24' }}>
-                  {torqueFilter ? '6·k filtered' : 'raw'}</span>
+                {' · '}<span style={{ color: '#fbbf24' }}>raw</span>
                 {data.computed_at &&
                   <> · <span style={{ color: '#60a5fa' }}>
                     solved {new Date(data.computed_at).toLocaleTimeString()}</span></>}
@@ -1452,7 +1432,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           <Box sx={{ height: 200 }}>
             <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
               Torque harmonics (order = ×electrical freq)
-              <Tooltip title="FFT of T(t) over one electrical period. A clean PERIODIC ripple shows a few discrete bars — the 6th/12th/18th (3-phase) and slot-cogging orders. Energy spread across every order = broadband (chaotic) noise. Orange = the physical 6·k 3-phase orders." placement="top">
+              <Tooltip title="FFT of the entire raw Maxwell torque waveform. Every resolved bin is shown; finite windows can have fractional electrical orders. Orange marks multiples of six; an order alone does not establish whether its amplitude is physical or a numerical artifact." placement="top">
                 <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
@@ -1469,7 +1449,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 <RcTooltip {...TOOLTIP}
                   labelFormatter={(v: number) => `harmonic n = ${v}`}
                   formatter={(val: number, _n: string, p: any) =>
-                    [`${Number(val).toFixed(2)} N·m  (${p?.payload?.pct?.toFixed(1)} % of T_avg)`, 'amplitude']}/>
+                    [`${Number(val).toPrecision(4)} N·m  (${p?.payload?.pct?.toPrecision(3)} % of T_avg)`, 'amplitude']}/>
                 <Bar dataKey="amp" isAnimationActive={false}>
                   {harmRows.map((r, i) => (
                     <Cell key={i} fill={r.order % 6 === 0 ? '#f59e0b' : '#3b82f6'}/>

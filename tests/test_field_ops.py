@@ -62,8 +62,8 @@ class TestBHCurve:
             prev = b
 
 
-class TestBandLimitTorque:
-    """The 6*k band-limit that separates real ripple from slip-band hash."""
+class TestRawTorqueCompatibility:
+    """The deprecated entry point preserves every sampled torque order."""
 
     @staticmethod
     def _series(n_per, n_periods, orders):
@@ -74,27 +74,26 @@ class TestBandLimitTorque:
             y = y + amp * np.cos(k * t)
         return y.tolist()
 
-    def test_mean_is_preserved_exactly(self):
-        """The filter may only touch the AC content. If it moved the mean it
-        would silently rewrite the headline torque."""
+    def test_mean_and_all_samples_are_preserved_exactly(self):
         y = self._series(48, 1, {6: 1.0, 5: 0.7, 13: 0.4})
         filt, _, _, _ = band_limit_torque(y, 48, 1)
+        np.testing.assert_array_equal(filt, y)
         assert np.mean(filt) == pytest.approx(np.mean(y), rel=1e-12)
 
-    def test_keeps_order_6_drops_order_5(self):
-        """A balanced 3-phase machine cannot produce order 5; whatever sits
-        there is numerical and must go, while order 6 is real cogging."""
+    def test_keeps_orders_6_and_5(self):
         keep = self._series(48, 1, {6: 1.0})
         junk = self._series(48, 1, {6: 1.0, 5: 1.0})
         f_keep, _, _, _ = band_limit_torque(keep, 48, 1)
         f_junk, _, _, _ = band_limit_torque(junk, 48, 1)
-        assert np.allclose(f_keep, f_junk, atol=1e-9), \
-            "the order-5 content should have been removed entirely"
+        np.testing.assert_array_equal(f_keep, keep)
+        np.testing.assert_array_equal(f_junk, junk)
+        assert not np.allclose(f_keep, f_junk)
 
-    def test_raw_ripple_exceeds_filtered_when_junk_present(self):
+    def test_legacy_ripple_alias_is_raw_and_noise_is_unavailable(self):
         y = self._series(48, 1, {6: 0.5, 5: 0.5, 7: 0.5})
-        _, rip_filt, rip_raw, _ = band_limit_torque(y, 48, 1)
-        assert rip_raw > rip_filt
+        _, rip_filt, rip_raw, noise = band_limit_torque(y, 48, 1)
+        assert rip_raw == rip_filt
+        assert noise is None
 
 
 class TestCopperConstants:

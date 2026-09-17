@@ -2221,8 +2221,14 @@ def _weld_belt_into_half(mesh, tags, spec: dict, half: str, n_sectors: int):
     b_ext = np.concatenate([aa, [aa[-1] + ang0] if full else [aa[-1]]])
     total_a = m if full else m - 1
     total_b = ncell
+    # atan2 and rotated copies of the same ray can differ by a few binary64
+    # ulps. Keep the existing iron-first exact-tie priority at that scale;
+    # this chooses a diagonal without moving or quantizing either angular grid.
+    angle_eps = 16.0 * np.finfo(float).eps
     while ia < total_a or ib < total_b:
-        adv_a = (ia < total_a) and (ib >= total_b or a_ext[ia + 1] <= b_ext[ib + 1])
+        adv_a = (ia < total_a) and (ib >= total_b or
+            a_ext[ia + 1] - b_ext[ib + 1] <= angle_eps *
+            max(1.0, abs(a_ext[ia + 1]), abs(b_ext[ib + 1])))
         if adv_a:
             tri.append((int(iron[ia % m]), int(iron[(ia + 1) % m]), _uid(0, ib)))
             ia += 1

@@ -1,0 +1,92 @@
+{
+  "case": "p2_noload",
+  "status": "failed",
+  "parameters": {
+    "n_steps_per_period": 12,
+    "n_periods": 1.0,
+    "mesh_size_mm": 1.4,
+    "min_size_mm": 0.35,
+    "gap_layers": 1.0,
+    "n_sectors": 2,
+    "structured_gap": true,
+    "iron_template": true,
+    "geo_mesh": true,
+    "coil_temp_c": 120.0,
+    "rotor_eddy": false,
+    "element_order": 2,
+    "demag": false,
+    "I_phase_rms": 0.0,
+    "gamma_deg": 0.0
+  },
+  "actual_metrics": {
+    "T_avg_Nm": 3.921709386350385e-05,
+    "T_ripple_pct": 154.01844415169822,
+    "P_cu_W": 1.5750016259747548,
+    "P_fe_W": 4.3401487158180725,
+    "V_peak": 5.394381532522122,
+    "T_avg_maxwell_Nm": 3.921709386350385e-05
+  },
+  "baseline_metrics": {
+    "P_cu_W": 1.57497034339078,
+    "P_fe_W": 4.337758079033422,
+    "T_avg_Nm": 4.1481998567548255e-05,
+    "T_avg_maxwell_Nm": 4.1481998567548255e-05,
+    "T_ripple_pct": 128.72201908278132,
+    "V_peak": 5.394363861332385
+  },
+  "comparisons": {
+    "P_cu_W": {
+      "actual": 1.5750016259747548,
+      "baseline": 1.57497034339078,
+      "difference": 3.128258397477879e-05,
+      "relative_change_pct": 0.001986233207885679,
+      "tolerance": 0.0078748517169539,
+      "within_existing_tolerance": true
+    },
+    "P_fe_W": {
+      "actual": 4.3401487158180725,
+      "baseline": 4.337758079033422,
+      "difference": 0.0023906367846509013,
+      "relative_change_pct": 0.05511226631577399,
+      "tolerance": 0.021688790395167107,
+      "within_existing_tolerance": true
+    },
+    "T_avg_Nm": {
+      "actual": 3.921709386350385e-05,
+      "baseline": 4.1481998567548255e-05,
+      "difference": -2.2649047040444042e-06,
+      "relative_change_pct": -5.45997006474095,
+      "tolerance": 2.074099928377413e-07,
+      "within_existing_tolerance": false
+    },
+    "T_avg_maxwell_Nm": {
+      "actual": 3.921709386350385e-05,
+      "baseline": 4.1481998567548255e-05,
+      "difference": -2.2649047040444042e-06,
+      "relative_change_pct": -5.45997006474095,
+      "tolerance": 2.074099928377413e-07,
+      "within_existing_tolerance": false
+    },
+    "T_ripple_pct": {
+      "actual": 154.01844415169822,
+      "baseline": 128.72201908278132,
+      "difference": 25.296425068916903,
+      "relative_change_pct": 19.651979707254856,
+      "tolerance": 0.6436100954139066,
+      "within_existing_tolerance": false
+    },
+    "V_peak": {
+      "actual": 5.394381532522122,
+      "baseline": 5.394363861332385,
+      "difference": 1.7671189736390147e-05,
+      "relative_change_pct": 0.0003275861656841487,
+      "tolerance": 0.026971819306661926,
+      "within_existing_tolerance": true
+    }
+  },
+  "run_id": "20260916T204913.918167Z",
+  "error_type": "AssertionError",
+  "error": "physics moved in case 'p2_noload':\n    T_avg_Nm: 4.1482e-05 -> 3.92171e-05  (-5.46 %)\n    T_avg_maxwell_Nm: 4.1482e-05 -> 3.92171e-05  (-5.46 %)\n    T_ripple_pct: 128.722 -> 154.018  (+19.65 %)\n  \n  If the change is intended, regenerate with UPDATE_PHYSICS_BASELINE=1 and justify every line above in the commit.\nassert not ['  T_avg_Nm: 4.1482e-05 -> 3.92171e-05  (-5.46 %)', '  T_avg_maxwell_Nm: 4.1482e-05 -> 3.92171e-05  (-5.46 %)', '  T_ripple_pct: 128.722 -> 154.018  (+19.65 %)']",
+  "wall_seconds": 8.564706600001955,
+  "cpu_seconds": 8.5
+}

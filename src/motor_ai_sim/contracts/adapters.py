@@ -187,9 +187,10 @@ def result_ir_from_transient(sbres: Dict[str, Any], *, provenance: Optional[Prov
                     return float(v)
         return None
 
+    raw_ripple = f("T_ripple_raw_pct")
     scalars = ScalarResults(
         torque_Nm=f("T_avg_Nm", "T_em_avg_Nm"),
-        torque_ripple_pct=f("T_ripple_pct", "T_ripple_filt_pct"),
+        torque_ripple_pct=(raw_ripple if raw_ripple is not None else f("T_ripple_pct")),
         p_copper_W=f("P_stranded_W", "P_cu_W"),
         p_iron_W=f("P_core_W", "P_fe_W"),
         p_magnet_eddy_W=f("P_mag_eddy_W"),
@@ -210,7 +211,7 @@ def result_ir_from_transient(sbres: Dict[str, Any], *, provenance: Optional[Prov
                 extra[k] = [float(x) for x in sbres[k]]
         series = SeriesResults(
             time_s=[float(x) for x in sbres["time_s"]],
-            torque_Nm=[float(x) for x in (sbres.get("T_em_filt_Nm") or sbres.get("T_em_Nm") or [])],
+            torque_Nm=[float(x) for x in (sbres.get("T_em_raw_Nm") or sbres.get("T_em_Nm") or [])],
             extra=extra,
         )
 

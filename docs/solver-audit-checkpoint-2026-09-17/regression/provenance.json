@@ -1,0 +1,126 @@
+{
+  "run_id": "20260916T204913.918167Z",
+  "imported_source": [
+    {
+      "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-combined-physics-gate\\src\\motor_ai_sim\\cadquery_geometry.py",
+      "sha256": "17D39AF02B85E5CB228C4F82A9C2903A35D61FB58552FB6E31441FEC58239EBA",
+      "verified_function": "_clean_stator_mouth_cutter",
+      "executed_bytecode_sha256": "a4caffd5ba381c516226aa2b2df74b5a35519d61e05e50a1b649c715a60d6c2b",
+      "executed_bytecode_matches_source": true
+    },
+    {
+      "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-combined-physics-gate\\src\\motor_ai_sim\\simulation\\mesher.py",
+      "sha256": "8CB0A52FBA3B6A0BEA1BBADD47DFED2532E7B1F6F37A0A068581A6637D28AE16",
+      "verified_function": "_simplify_polys",
+      "executed_bytecode_sha256": "ff7df9b8bb05983dbf69ac26c8d389065ac46ee2c768dc0148e277c511a50f64",
+      "executed_bytecode_matches_source": true
+    },
+    {
+      "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-combined-physics-gate\\src\\motor_ai_sim\\simulation\\fem_solver_2d.py",
+      "sha256": "491C41972632CACD48E1D9C5A1AB84492C590AD42260CCD162293CDD2CC2B576",
+      "verified_function": "fem_transient_sliding_band",
+      "executed_bytecode_sha256": "8ca5e2a1681357ac942d54134006bf15e26858ea5a216b6c505231d49ec6e4f4",
+      "executed_bytecode_matches_source": true
+    },
+    {
+      "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-combined-physics-gate\\src\\motor_ai_sim\\simulation\\p2_projection.py",
+      "sha256": "352A7E2518CF5997937D8BF45E3BCF62A515B349C34D2C304AB782C3E269155B",
+      "verified_function": "SlipProjection.__init__",
+      "executed_bytecode_sha256": "07a896b7a74842d6de48b813a8ab9e008035728c2d510c0434b7f135df0189f8",
+      "executed_bytecode_matches_source": true
+    }
+  ],
+  "baseline": {
+    "copied_baseline_sha256": "779E931697957F9695241FD86939D8E2618F32827CEAE86A3A1DEE1E19D25B57",
+    "source": "C:\\Users\\vadim\\Projects\\motor_ai_sim\\tests\\physics_baseline.json",
+    "frozen_before_copy_sha256": "1A90F46D68CD6C676A18D303C25B9A4621497A40C4D526D66A5D53E4307DDCC6",
+    "authorized_difference": {
+      "old": 0.0,
+      "metric": "T_avg_maxwell_Nm",
+      "case": "p2_noload",
+      "new": 4.1481998567548255e-05
+    },
+    "no_baseline_generation": true
+  },
+  "regression_module": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-combined-physics-gate\\tests\\test_physics_regression.py",
+  "regression_source_sha256": "E451F7AA83970D976A6AD5FFC822F4A90B25E3DF1903FC58AD15357504A6B616",
+  "cases": [
+    "p2_demag",
+    "p2_demag_eddy",
+    "p2_eddy",
+    "p2_load",
+    "p2_noload",
+    "p2_voltage",
+    "p2_voltage_eddy",
+    "p2_voltage_eddy_rotor"
+  ],
+  "cold_start_fixture": "unchanged test_physics_regression._cold_eddy_warm_cache",
+  "baseline_updated": false,
+  "RTOL": 0.005,
+  "ATOL": {
+    "T_ripple_pct": 0.05,
+    "P_shaft_W": 0.05,
+    "P_solid_W": 0.05,
+    "P_core_W": 0.05,
+    "demag_br_min": 0.01,
+    "demag_br_mean": 0.01,
+    "P_shaft_honest_W": 0.05,
+    "P_shaft_solve_W": 0.05,
+    "v_dc_residual_A": 0.05,
+    "v_circuit_resid_max_V": 1e-09
+  },
+  "explicit_geometry": {
+    "stator_diameter": 30.0,
+    "slot_height": 4.3,
+    "core_thickness": 1.5,
+    "num_seg": 2,
+    "num_slots_per_segment": 6,
+    "num_poles_per_segment": 7,
+    "air_gap": 0.2,
+    "tooth_width": 2.6,
+    "tooth2_width": 1.4,
+    "cut_width": 1.5,
+    "insulation_thickness": 0.05,
+    "wire_width": 2.0,
+    "wire_height": 0.5,
+    "wire_spacing_x": 0.1,
+    "wire_spacing_y": 0.1,
+    "num_wires_per_slot": 6,
+    "wire_parallel": 1,
+    "wire_split": 1,
+    "slot_hs": 0.267,
+    "magnet_height": 4.5,
+    "rotor_house_height": 0.8,
+    "shaft_height": 2.0,
+    "magnet_fill_down": 0.9,
+    "magnet_fill_up": 0.3,
+    "magnet_fill_radius": 0.1,
+    "magnet_up_gap": 0.1,
+    "rotor_hole": 0.7,
+    "magnet_down_height": 1.4,
+    "magnet_lamination": 0,
+    "stator_fillet_r": 1.2,
+    "stator_fillet_r1": 0.0,
+    "rotor_fill_r": 0.2,
+    "motor_length": 10.0,
+    "sleeve_thickness": 0.0
+  },
+  "materials": {
+    "assignment": {
+      "magnet": "F45SH_120C",
+      "stator_core": "B15AHV950M",
+      "rotor_core": "B15AHV950M",
+      "shaft": "Aluminium_6061"
+    },
+    "materials": {},
+    "parts": {
+      "stator_core": "included",
+      "rotor_core": "included",
+      "magnet": "included",
+      "slot": "included",
+      "shaft": "included"
+    }
+  },
+  "rpm": 15000.0,
+  "connection": "2S"
+}

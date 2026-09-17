@@ -1,0 +1,490 @@
+diff --git a/src/motor_ai_sim/cadquery_geometry.py b/src/motor_ai_sim/cadquery_geometry.py
+index dbd8293..bba7efb 100644
+--- a/src/motor_ai_sim/cadquery_geometry.py
++++ b/src/motor_ai_sim/cadquery_geometry.py
+@@ -209,17 +209,75 @@ def _arc_points(cx: float, cy: float, r: float, a0: float, sweep: float,
+              float(cy + r * sin(a0 + sweep * k / n))) for k in range(k0, n + 1)]
+ 
+ 
+-def _circle_points(r: float, n: int = 256):
++def _circle_points(r: float, n: int = 256):
+     """Full-circle polygon.  Deliberately a FIXED 256-gon, NOT sagitta-driven:
+     these are the air-gap / OD / bore domain boundaries and their density is a
+     SOLVER requirement (torque accuracy across the sliding band), not a CAD
+     tolerance.  They are uniform and produce no micro chords, so they are not
+     part of the defect this helper set fixes — sagitta rules would only coarsen
+     the air gap and move the pinned physics."""
+-    return [(r * cos(2 * pi * i / n), r * sin(2 * pi * i / n)) for i in range(n)]
+-
+-
+-# ═══════════════════════════════════════════════════════════════════════════
++    return [(r * cos(2 * pi * i / n), r * sin(2 * pi * i / n)) for i in range(n)]
++
++
++def _clean_stator_mouth_cutter(source, scale_mm):
++    """Clean a known local primitive only when the existing weld stays bounded.
++
++    The source frame belongs to the CAD construction. Cleaning before copying
++    it avoids world-coordinate weld choices differing between identical teeth.
++    Ambiguous long chains or topology changes retain the original primitive;
++    the general shared-boundary sanitizer is deliberately unchanged.
++    """
++    merges = {}
++    candidate = _sanitize_geom(source, scale_mm, "stator.local-mouth", merges=merges)
++    eps = (float(scale_mm) if scale_mm and scale_mm > 0 else _DEFAULT_SCALE_MM) / _WELD_DIV
++    if candidate.is_empty or not candidate.is_valid or candidate.area <= 0:
++        return source
++
++    def topology(geom):
++        parts = list(geom.geoms) if hasattr(geom, "geoms") else [geom]
++        return sorted(len(part.interiors) if hasattr(part, "interiors") else -1 for part in parts)
++
++    if topology(source) != topology(candidate):
++        return source
++    if any(hypot(a[0]-b[0], a[1]-b[1]) > eps
++           for a, b in _resolve_node_map(merges).items()):
++        return source
++    # Also covers collinear deletion and any buffer(0) repair, which do not
++    # necessarily appear in the weld map.
++    if source.boundary.hausdorff_distance(candidate.boundary) > eps:
++        return source
++    return candidate
++
++
++def _stator_mouth_cutters(p1, p2, p3, p4, radius, scale_mm, n_pairs):
++    """Build one local mouth cutter, mirror it, then rotate complete pairs.
++
++    The sagitta polygon approximating the circle must move with its tooth.
++    Rotating only its center leaves its chord directions fixed in world space;
++    an odd 27-gon then neither repeats under a quarter turn nor mirrors across
++    the tooth axis. Clean the small polygon/trapezoid join once in this source
++    frame, with the existing weld tolerance, before mirroring and placement.
++    Arc sampling is unchanged. Both 2-D export paths share this construction.
++    """
++    from shapely.affinity import affine_transform
++    from shapely.geometry import Polygon
++    trap = Polygon([p1, p2, p3, p4])
++    circle = Polygon(_arc_points(p3[0], p3[1], radius, 0., 2*pi, scale_mm)[:-1])
++    right = _safe_union(trap, circle)
++    if not right.is_valid:
++        right = right.buffer(0)
++    right = _clean_stator_mouth_cutter(right, scale_mm)
++    left = affine_transform(right, [-1., 0., 0., 1., 0., 0.])
++    pairs = []
++    for i in range(n_pairs):
++        angle = i * radians(360. / n_pairs)
++        c, s = cos(angle), sin(angle)
++        matrix = [c, -s, s, c, 0., 0.]
++        pairs.append((affine_transform(right, matrix), affine_transform(left, matrix)))
++    return pairs
++
++
++# ═══════════════════════════════════════════════════════════════════════════
+ #  Ring sanitising — no duplicate points, no degenerate rings, ever
+ # ═══════════════════════════════════════════════════════════════════════════
+ _DEGEN_AREA_MM2 = 1e-8      # (1e-4 mm)^2 — below this a ring is not geometry
+@@ -2627,27 +2685,11 @@ class CadQueryMotor:
+         # base ring
+         stator_poly = SPoly(_circle(outer_r), [_circle(inner_r)])
+ 
+-        cutters = []
+-        for i in range(half_slots):
+-            a = i * radians(slot_angle_deg)
+-            # +X trapezoid pre-merged with fill_r fillet circle at p3s
+-            # (circle overlaps trap → clean Polygon union, no tangency issues)
+-            trap_p = SPoly([_rot(*p1s, a), _rot(*p2s, a),
+-                             _rot(*p3s, a), _rot(*p4s, a)])
+-            cx, cy = _rot(p3s[0], p3s[1], a)
+-            circ_p = SPoly(_arc_points(cx, cy, fill_r, 0.0, 2*pi, scale_mm)[:-1])
+-            m_p = _safe_union(trap_p, circ_p)
+-            cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
+-
+-            # -X trapezoid pre-merged with fill_r fillet circle
+-            mp1n = (-p1s[0], p1s[1]); mp2n = (-p2s[0], p2s[1])
+-            mp3n = (-p3s[0], p3s[1]); mp4n = (-p4s[0], p4s[1])
+-            trap_n = SPoly([_rot(*mp1n, a), _rot(*mp2n, a),
+-                             _rot(*mp3n, a), _rot(*mp4n, a)])
+-            cxn, cyn = _rot(-p3s[0], p3s[1], a)
+-            circ_n = SPoly(_arc_points(cxn, cyn, fill_r, 0.0, 2*pi, scale_mm)[:-1])
+-            m_n = _safe_union(trap_n, circ_n)
+-            cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
++        mouth_pairs = _stator_mouth_cutters(p1s, p2s, p3s, p4s, fill_r, scale_mm, half_slots)
++        cutters = []
++        for i in range(half_slots):
++            a = i * radians(slot_angle_deg)
++            cutters.extend(mouth_pairs[i])
+ 
+             # slot rectangles — sized on the wire COLUMN (wire_split widens it)
+             slot_w  = wire_col_w + ins_w*2 + wire_dx
+@@ -3246,23 +3288,11 @@ class CadQueryMotor:
+         p4s = (ext * tan(radians(slot_angle_deg/2)), ext)
+ 
+         stator_poly_base = SPoly(_circle(outer_r), [_circle(inner_r)])
+-        cutters = []
+-        for i in range(half_slots):
+-            a = i * radians(slot_angle_deg)
+-            trap_p = SPoly([_rot(*p1s,a), _rot(*p2s,a), _rot(*p3s,a), _rot(*p4s,a)])
+-            cx, cy = _rot(p3s[0], p3s[1], a)
+-            # slot-mouth rounding circle — sagitta-discretised like every other arc
+-            circ_p = SPoly(_arc_points(cx, cy, fill_r2, 0.0, 2*pi, scale_mm)[:-1])
+-            m_p = _safe_union(trap_p, circ_p)
+-            cutters.append(m_p if m_p.is_valid else m_p.buffer(0))
+-
+-            mp1n=(-p1s[0],p1s[1]); mp2n=(-p2s[0],p2s[1])
+-            mp3n=(-p3s[0],p3s[1]); mp4n=(-p4s[0],p4s[1])
+-            trap_n = SPoly([_rot(*mp1n,a), _rot(*mp2n,a), _rot(*mp3n,a), _rot(*mp4n,a)])
+-            cxn,cyn = _rot(-p3s[0],p3s[1],a)
+-            circ_n = SPoly(_arc_points(cxn, cyn, fill_r2, 0.0, 2*pi, scale_mm)[:-1])
+-            m_n = _safe_union(trap_n, circ_n)
+-            cutters.append(m_n if m_n.is_valid else m_n.buffer(0))
++        mouth_pairs = _stator_mouth_cutters(p1s, p2s, p3s, p4s, fill_r2, scale_mm, half_slots)
++        cutters = []
++        for i in range(half_slots):
++            a = i * radians(slot_angle_deg)
++            cutters.extend(mouth_pairs[i])
+ 
+             # the wire COLUMN, so a split's extra strips and their (N−1) gaps of
+             # 2·wire_spacing_x get real pocket to sit in
+diff --git a/src/motor_ai_sim/simulation/p2_projection.py b/src/motor_ai_sim/simulation/p2_projection.py
+index d98db65..daceb3b 100644
+--- a/src/motor_ai_sim/simulation/p2_projection.py
++++ b/src/motor_ai_sim/simulation/p2_projection.py
+@@ -110,20 +110,29 @@ class SlipProjection:
+         self.n_re_pairs = len(_re_pairs)
+ 
+         # Anti-periodic RADIAL-CUT welds (sector only) — VERTICES and the cut-
+-        # boundary EDGE midpoints.  Mn/Sn are matched master/slave cut vertices
+-        # sorted by radius, so consecutive entries (i, i+1) delimit a cut edge on
+-        # each side; the slave DOF = _bc_sign · master DOF, same as P1's vertex BC.
++        # boundary EDGE midpoints. Mn/Sn match vertices, but their radial order
++        # does not describe mesh connectivity: stator and rotor have distinct
++        # coincident slip vertices which can interleave in that order. Enumerate
++        # actual facets and map their endpoints to the opposite cut instead.
++        # The slave DOF = _bc_sign · master DOF, same as P1's vertex BC.
+         _cut_v = []          # (slave_dof, master_dof, sign) for vertices
+         _cut_e = []          # (slave_edge_dof, master_edge_dof, sign) for edges
+         if not _full_ring and Mn.size:
+             for i in range(Mn.size):
+                 _cut_v.append((int(vdof[int(Sn[i])]), int(vdof[int(Mn[i])]),
+                                float(_bc_sign)))
+-            for i in range(Mn.size - 1):
+-                em = self.edge_dof(int(Mn[i]), int(Mn[i + 1]))
+-                es = self.edge_dof(int(Sn[i]), int(Sn[i + 1]))
+-                if em is not None and es is not None:
+-                    _cut_e.append((int(es), int(em), float(_bc_sign)))
++            cut_map = {int(master): int(slave) for master, slave in zip(Mn, Sn)}
++            for fi, (a, b) in enumerate(np.asarray(facets).T):
++                sa, sb = cut_map.get(int(a)), cut_map.get(int(b))
++                if sa is None or sb is None:
++                    continue
++                es = self.edge_dof(sa, sb)
++                if es is None:
++                    raise ValueError(
++                        f"P2 radial-cut facet ({int(a)}, {int(b)}) has no "
++                        f"matching slave facet ({sa}, {sb}); sector cut meshes "
++                        "must have matching edge connectivity")
++                _cut_e.append((int(es), int(fdof[fi]), float(_bc_sign)))
+         self._cut_v = _cut_v
+         self._cut_e = _cut_e
+         self.n_cut_v = len(_cut_v)
+diff --git a/tests/test_p2_cut_facets.py b/tests/test_p2_cut_facets.py
+new file mode 100644
+index 0000000..625c879
+--- /dev/null
++++ b/tests/test_p2_cut_facets.py
+@@ -0,0 +1,105 @@
++"""Radial-cut P2 constraints follow actual disconnected-half connectivity."""
++import math
++
++import numpy as np
++import pytest
++from skfem import Basis, ElementTriP2, MeshTri
++
++from motor_ai_sim.simulation.p2_projection import SlipProjection
++
++
++def geometric_cut_pairs(mesh, basis, nsn, angle):
++    """Independent oracle: boundary facets, geometric rotation, half identity.
++
++    Does not use Mn/Sn ordering or the implementation's stored cut constraints.
++    """
++    boundary = mesh.boundary_facets()
++    fp = mesh.p[:, mesh.facets[:, boundary]]
++    centers = fp.mean(axis=1)
++    direction = np.array([math.cos(angle), math.sin(angle)])
++    on_master = np.all(abs(fp[1]) < 1e-10, axis=0) & (centers[0] > 0.)
++    on_slave = np.all(abs(direction[1]*fp[0]-direction[0]*fp[1]) < 1e-10, axis=0) & (direction @ centers > 0.)
++    masters, slaves = boundary[on_master], boundary[on_slave]
++    slave_vertices = np.unique(mesh.facets[:, slaves])
++    c, s = math.cos(angle), math.sin(angle)
++    rotation = np.array([[c, -s], [s, c]])
++    vertex_map = {}
++    for node in np.unique(mesh.facets[:, masters]):
++        candidates = slave_vertices[(slave_vertices < nsn) == (node < nsn)]
++        distance = np.linalg.norm(mesh.p[:, candidates]-rotation @ mesh.p[:, node, None], axis=0)
++        assert np.sum(distance < 1e-10) == 1
++        vertex_map[int(node)] = int(candidates[np.argmin(distance)])
++    lookup = {tuple(sorted(map(int, mesh.facets[:, fi]))): int(fi) for fi in slaves}
++    pairs, covered = [], set()
++    for fm in masters:
++        endpoints = tuple(sorted(vertex_map[int(v)] for v in mesh.facets[:, fm]))
++        fs = lookup[endpoints]
++        covered.add(fs)
++        pairs.append((int(basis.facet_dofs[0, fs]), int(basis.facet_dofs[0, fm])))
++    assert covered == set(map(int, slaves))
++    return pairs
++
++
++def synthetic(order, sign):
++    segments, nv = 6, 7
++    angle = np.linspace(0., np.pi/2, nv)
++    def half(radii):
++        points = np.array([(r*np.cos(a), r*np.sin(a)) for r in radii for a in angle]).T
++        cells = []
++        for layer in range(2):
++            for k in range(segments):
++                a, b, c, d = layer*nv+k, layer*nv+k+1, (layer+1)*nv+k, (layer+1)*nv+k+1
++                cells.extend([(a, c, d), (a, d, b)])
++        return points, np.array(cells).T
++    ps, ts = half((1., 1.2, 1.4))
++    pr, tr = half((.5, .8, 1.))
++    nsn = ps.shape[1]
++    mesh = MeshTri(np.hstack([ps, pr]), np.hstack([ts, tr+nsn]))
++    basis = Basis(mesh, ElementTriP2())
++    # Distinct stator/rotor vertices share r=1. Interleaving them breaks the
++    # old assumption that adjacent entries necessarily delimit real facets.
++    master = np.array([nsn, nsn+nv, 0, nsn+2*nv, nv, 2*nv])[order]
++    slave = master+nv-1
++    args = dict(n_dof=basis.N, facets=mesh.facets, vdof=basis.nodal_dofs[0],
++                fdof=basis.facet_dofs[0], rring=np.arange(2*nv, 3*nv), sring=np.arange(nv),
++                nsn=nsn, n_ring=nv, full_ring=False, bc_sign=sign, Mn=master, Sn=slave,
++                dirichlet_dofs=np.array([], int))
++    return mesh, basis, args
++
++
++def assert_geometric_rows(proj, pairs, shifts):
++    assert {(s, m) for s, m, _ in proj._cut_e} == set(pairs)
++    ranks = []
++    for shift in shifts:
++        matrix, _ = proj.build(shift)
++        assert np.all(np.diff(matrix.indptr) == 1)
++        columns, values = matrix.indices[matrix.indptr[:-1]], matrix.data[matrix.indptr[:-1]]
++        for slave, master in pairs:
++            assert columns[slave] == columns[master]
++            assert values[slave] == proj.bc_sign*values[master]
++        for slave, master, sign in proj._cut_v:
++            assert columns[slave] == columns[master] and values[slave] == sign*values[master]
++        ranks.append(matrix.shape[1])
++    assert len(set(ranks)) == 1
++
++
++@pytest.mark.parametrize("sign", [-1., 1.])
++@pytest.mark.parametrize("order", [np.arange(6), np.arange(5, -1, -1), np.array([0, 2, 4, 1, 3, 5])],
++                         ids=["interleaved-radii", "reverse", "shuffled-pairs"])
++def test_all_actual_cut_facets_are_welded_despite_pair_interleaving(sign, order):
++    mesh, basis, args = synthetic(order, sign)
++    pairs = geometric_cut_pairs(mesh, basis, args["nsn"], np.pi/2)
++    assert len(pairs) == 4
++    proj = SlipProjection(**args)
++    assert proj.n_cut_e == 4
++    assert_geometric_rows(proj, pairs, [0, 2, 5, 6, -2, -13, 17, 601])
++
++
++def test_missing_counterpart_is_an_explicit_invalid_cut_error():
++    mesh, basis, args = synthetic(np.arange(6), -1.)
++    pairs = geometric_cut_pairs(mesh, basis, args["nsn"], np.pi/2)
++    missing_slave_dof = pairs[0][0]
++    keep = args["fdof"] != missing_slave_dof
++    args["facets"], args["fdof"] = args["facets"][:, keep], args["fdof"][keep]
++    with pytest.raises(ValueError, match="P2 radial-cut facet.*no matching slave facet"):
++        SlipProjection(**args)
+diff --git a/tests/test_stator_local_cleanup.py b/tests/test_stator_local_cleanup.py
+new file mode 100644
+index 0000000..24d7b09
+--- /dev/null
++++ b/tests/test_stator_local_cleanup.py
+@@ -0,0 +1,76 @@
++"""Bounded source-frame cleanup; no claim of a generic invariant sanitizer."""
++import numpy as np
++import pytest
++from shapely.affinity import rotate, translate
++from shapely.geometry import Polygon
++
++from motor_ai_sim import cadquery_geometry as cad
++from tests.test_stator_mouth_symmetry import arguments, assert_same_shape
++from tests.test_cad_polygon_quality import _cases, _build, _rings
++
++
++def points(geom):
++    return {(round(x, 9), round(y, 9)) for _, ring in _rings(geom, "g") for x, y in ring}
++
++
++def topology(geom):
++    parts = list(geom.geoms) if hasattr(geom, "geoms") else [geom]
++    return sorted(len(part.interiors) for part in parts)
++
++
++def test_source_cleanup_is_cyclic_reversal_independent_and_idempotent():
++    args = arguments()
++    source = cad._safe_union(Polygon(args[:4]), Polygon(cad._arc_points(
++        args[2][0], args[2][1], args[4], 0., 2*np.pi, args[5])[:-1]))
++    expected = cad._clean_stator_mouth_cutter(source, args[5])
++    coords = list(source.exterior.coords)[:-1]
++    for offset in range(len(coords)):
++        rolled = coords[offset:]+coords[:offset]
++        for ordered in (rolled, rolled[::-1]):
++            result = cad._clean_stator_mouth_cutter(Polygon(ordered), args[5])
++            assert_same_shape(result, expected)
++            assert points(result) == points(expected)
++    assert_same_shape(cad._clean_stator_mouth_cutter(expected, args[5]), expected)
++    assert points(cad._clean_stator_mouth_cutter(expected, args[5])) == points(expected)
++
++
++def test_long_close_chain_retains_source_instead_of_exceeding_weld_budget():
++    # Existing consecutive-edge grouping permits transitive chains wider than
++    # eps. The new source-stage intervention may not silently use that width.
++    source = Polygon([(0., 0.), (.018, 0.), (.036, 0.), (.054, 0.), (1., 0.), (1., 1.), (0., 1.)])
++    merges = {}
++    cad._sanitize_geom(source, 80., "chain", merges=merges)
++    assert max(np.linalg.norm(np.subtract(a, b)) for a, b in cad._resolve_node_map(merges).items()) > .02
++    assert cad._clean_stator_mouth_cutter(source, 80.) is source
++
++
++@pytest.mark.parametrize("replacement", [
++    Polygon([(0., 0.), (1., 0.), (1., 1.), (0., 1.)], [[(.49, .49), (.51, .49), (.51, .51), (.49, .51)]]),
++    translate(Polygon([(0., 0.), (1., 0.), (1., 1.), (0., 1.)]), xoff=.03),
++])
++def test_unmapped_topology_or_boundary_changes_are_rejected(monkeypatch, replacement):
++    source = Polygon([(0., 0.), (1., 0.), (1., 1.), (0., 1.)])
++    monkeypatch.setattr(cad, "_sanitize_geom", lambda *a, **kw: replacement)
++    assert cad._clean_stator_mouth_cutter(source, 100.) is source
++
++
++@pytest.mark.parametrize("name,geo", _cases(), ids=[c[0] for c in _cases()])
++def test_historical_stators_keep_shared_boundary_and_domain_topology(monkeypatch, name, geo):
++    # Includes explicit30/40/100/150/200mm historical geometry, plus frozen
++    # default. Compare to the canonical-mouth-only stage, never live config.
++    candidate, diameter = _build(geo)
++    with monkeypatch.context() as local:
++        local.setattr(cad, "_clean_stator_mouth_cutter", lambda source, scale: source)
++        baseline, _ = _build(geo)
++    for key in ("stator", "out_band"):
++        actual, old = candidate[key], baseline[key]
++        assert actual.is_valid and not actual.is_empty
++        assert topology(actual) == topology(old), (name, key)
++    assert not points(candidate["stator"])-points(candidate["out_band"])
++    assert candidate["stator"].intersection(candidate["out_band"]).area < 1e-9
++    if name == "preset motor_100mm":
++        stator = candidate["stator"]
++        assert_same_shape(stator, rotate(stator, 90., origin=(0., 0.)))
++        repeated = cad._sanitize_geom(stator, diameter, "stator-repeat")
++        assert_same_shape(stator, repeated)
++        assert points(stator) == points(repeated)
+diff --git a/tests/test_stator_mouth_symmetry.py b/tests/test_stator_mouth_symmetry.py
+new file mode 100644
+index 0000000..a8e2327
+--- /dev/null
++++ b/tests/test_stator_mouth_symmetry.py
+@@ -0,0 +1,102 @@
++"""The exported sampled mouth shape moves with its intended tooth pair."""
++import json
++from pathlib import Path
++
++import numpy as np
++import pytest
++from shapely.affinity import rotate, scale
++from shapely.geometry import Polygon
++
++from motor_ai_sim import cadquery_geometry as cad
++
++
++def arguments(radius=1.8116415052257349, pairs=12):
++    cut_x, outer = 9.45, 50.
++    y = (37.7+4.+radius)*np.cos(np.pi/pairs)
++    return ((cut_x, 2*outer), (cut_x, y), (cut_x+radius, y),
++            (2*outer*np.tan(np.pi/pairs), 2*outer), radius, 100., pairs)
++
++
++def assert_same_shape(first, second):
++    assert first.geom_type == second.geom_type
++    assert first.is_valid and second.is_valid
++    assert first.symmetric_difference(second).area < 2e-10
++    assert first.boundary.hausdorff_distance(second.boundary) < 2e-11
++
++
++def test_odd_27_segment_mouth_has_exact_pair_mirror_and_rotational_copies(monkeypatch):
++    args = arguments()
++    assert cad._arc_n_segments(args[4], 2*np.pi, args[5]) == 27
++    original_arc = cad._arc_points
++    calls = []
++    def observed_arc(*positional, **keywords):
++        calls.append((positional, keywords))
++        return original_arc(*positional, **keywords)
++    monkeypatch.setattr(cad, "_arc_points", observed_arc)
++    pairs = cad._stator_mouth_cutters(*args)
++    assert len(calls) == 1  # one actual sampled local circle, not resampled copies
++    assert calls[0][0] == (args[2][0], args[2][1], args[4], 0., 2*np.pi, args[5])
++    right, left = pairs[0]
++    old_right = cad._safe_union(Polygon(args[:4]), Polygon(original_arc(
++        args[2][0], args[2][1], args[4], 0., 2*np.pi, args[5])[:-1]))
++    # The intentional local weld preserves the original analytic tangent p2.
++    # A 27-gon has no sample at pi and creates a 12.25um spurious stub there.
++    expected = cad._sanitize_geom(old_right, args[5], "expected-local-mouth")
++    assert_same_shape(right, expected)
++    assert args[1] in list(right.exterior.coords)
++    assert len(right.exterior.coords) == len(old_right.exterior.coords)-1
++    assert old_right.boundary.hausdorff_distance(right.boundary) < args[5]/cad._WELD_DIV
++    assert right.area > old_right.area
++    assert_same_shape(left, scale(right, xfact=-1, yfact=1, origin=(0, 0)))
++    for i, (r, l) in enumerate(pairs):
++        assert_same_shape(r, rotate(right, i*30., origin=(0, 0)))
++        assert_same_shape(l, rotate(left, i*30., origin=(0, 0)))
++
++
++@pytest.mark.parametrize("radius", [0., -.7, .03, .7, 1.8116415052257349, 4.])
++@pytest.mark.parametrize("pairs", [6, 12])
++def test_radius_edge_cases_keep_valid_nonempty_cutter_for_geometry_validation(radius, pairs):
++    # Negative/zero mouth radii can describe infeasible machines; the CAD helper
++    # must let the existing geometry validator diagnose them, not crash first.
++    args = arguments(radius, pairs)
++    shapes = cad._stator_mouth_cutters(*args)
++    assert len(shapes) == pairs
++    old_right = cad._safe_union(Polygon(args[:4]), Polygon(cad._arc_points(
++        args[2][0], args[2][1], radius, 0., 2*np.pi, args[5])[:-1]))
++    if not old_right.is_valid:
++        old_right = old_right.buffer(0)
++    assert old_right.boundary.hausdorff_distance(shapes[0][0].boundary) <= args[5]/cad._WELD_DIV
++    assert shapes[0][0].geom_type == old_right.geom_type
++    def topology(geom):
++        parts = list(geom.geoms) if hasattr(geom, "geoms") else [geom]
++        return sorted(len(part.interiors) for part in parts)
++    assert topology(shapes[0][0]) == topology(old_right)
++    for right, left in shapes:
++        assert right.is_valid and left.is_valid
++        assert right.area > 0. and left.area == pytest.approx(right.area, abs=2e-10)
++        assert right.geom_type == left.geom_type
++
++
++class ExportCaptured(BaseException):
++    pass
++
++
++@pytest.mark.parametrize("entry", ["get_2d_polygons", "get_2d_mesh_data"])
++def test_both_actual_export_routes_use_the_canonical_pair_builder(monkeypatch, entry):
++    presets = json.loads((Path(__file__).resolve().parents[1]/"config/motor_presets.json").read_text(encoding="utf-8-sig"))
++    motor = cad.CadQueryMotor()
++    motor.set_parameters(dict(presets["motor_100mm"]["geometry"], wire_parallel=1, wire_split=1))
++    original = cad._stator_mouth_cutters
++    calls = []
++    def intercepted(*args):
++        pairs = original(*args)
++        calls.append(args)
++        assert args[-1] == 12
++        assert cad._arc_n_segments(args[4], 2*np.pi, args[5]) == 27
++        assert_same_shape(pairs[3][0], rotate(pairs[0][0], 90., origin=(0, 0)))
++        assert_same_shape(pairs[0][1], scale(pairs[0][0], xfact=-1, yfact=1, origin=(0, 0)))
++        raise ExportCaptured
++    monkeypatch.setattr(cad, "_stator_mouth_cutters", intercepted)
++    with pytest.raises(ExportCaptured):
++        getattr(motor, entry)()
++    assert len(calls) == 1

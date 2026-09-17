@@ -149,25 +149,27 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
     return list(t_maxwell), "maxwell_stress"
 
 
-def torque_harmonics(t_raw: Sequence[float], n_steps_per_period: int
-                     ) -> Tuple[List[int], List[float]]:
-    """Single-sided FFT of ONE electrical period of the RAW torque.
+def torque_harmonics(t_raw: Sequence[float], n_steps_per_period: int,
+                     step_periods: Optional[float] = None,
+                     ) -> Tuple[List[float], List[float]]:
+    """Single-sided FFT of the entire available RAW torque waveform.
 
-    The single most telling diagnostic for "is this periodic or chaotic": a
-    clean ripple shows a few DISCRETE peaks (the cogging / 6·k 3-phase orders);
-    broadband noise spreads across all orders.  Orders are multiples of the
-    ELECTRICAL fundamental; amplitude is the single-sided FFT magnitude [N·m].
-    Spectrum is ALWAYS the RAW per-frame torque (not the band-limited series),
-    so the UI shows every order and the user can SEE which bars the 6·k filter
-    keeps (orange) vs drops (the broadband slip-node noise).
+    Return all resolved orders at full precision, without discarding content
+    or classifying it as numerical noise. Amplitudes are peak values in N·m.
+    The order of bin k is k / (sample_count * step_periods), so finite windows
+    can have fractional electrical orders. The even-length Nyquist bin is not
+    doubled. DC is reported separately as T_avg_maxwell_Nm by the caller.
+    No samples are truncated or demeaned before the transform.
     """
-    if not t_raw:
+    _Tp = np.asarray(t_raw, float)
+    if not _Tp.size:
         return [], []
-    _per = max(1, int(round(n_steps_per_period)))
-    _Tp = np.asarray(t_raw[:_per], float)
-    if _Tp.size < 4:
-        return [], []
-    _F = np.abs(np.fft.rfft(_Tp - _Tp.mean())) / _Tp.size * 2.0
-    _nh = min(_F.size - 1, 36)
-    return (list(range(1, _nh + 1)),
-            [round(float(_F[k]), 4) for k in range(1, _nh + 1)])
+    _step = 1.0 / float(n_steps_per_period) if step_periods is None else float(step_periods)
+    if not np.isfinite(_step) or _step <= 0.0:
+        raise ValueError("Torque spectrum requires a finite positive sampling step")
+    _F = np.abs(np.fft.rfft(_Tp)) / _Tp.size * 2.0
+    if _Tp.size % 2 == 0:
+        _F[-1] *= 0.5
+    _nh = _F.size - 1
+    return ([float(k / (_Tp.size * _step)) for k in range(1, _nh + 1)],
+            [float(_F[k]) for k in range(1, _nh + 1)])

@@ -2426,6 +2426,34 @@ def duty_waveforms(die: str, cfg: str, duty: Optional[str],
         return {}
 
 
+def harmonic_order_label(order: Any) -> str:
+    """A spectral order as the page prints it — *"6"*, *"4"*, *"5.99"*.
+
+    THE ORDER IS NO LONGER AN INTEGER.  The solver's torque spectrum
+    (``T_harm_order``) is a plain FFT of the whole retained window, so bin *k*
+    sits at ``k / (N · step_periods)`` — over a 1.5-period window the sixth
+    cogging harmonic is order 4.0, and over a 1.001-period one it is 5.994.
+    The chart used to label it with ``"%d" % int(o)``, which TRUNCATES: 5.994
+    was printed as *"order 5"*, a harmonic the machine does not have.
+
+    The rule: an order that IS an integer prints as one (no "6.00" where every
+    other page says six), and a fractional one keeps two decimals — more only
+    when two would round it onto an integer and tell the same lie again
+    (5.999 → *"5.999"*, never *"6"*).  Trailing zeros are dropped, so 5.90
+    reads *"5.9"*.  A missing or non-finite order prints as nothing.
+    """
+    v = _numf(order)
+    if v is None:
+        return ""
+    if abs(v - round(v)) <= 1e-9 * max(1.0, abs(v)):
+        return "%d" % int(round(v))
+    for prec in (2, 3, 4, 5, 6):
+        txt = ("%.*f" % (prec, v)).rstrip("0").rstrip(".")
+        if "." in txt:
+            return txt
+    return repr(float(v))
+
+
 def _dft_pct(series: Any, n_orders: int = 20) -> Optional[Tuple[Any, Any, float]]:
     """``(orders, amplitude as % of the fundamental, THD %)`` of one period.
 
@@ -2628,13 +2656,23 @@ def _torque_png(wf: Dict[str, Any], width_cm: float = 22.0,
                 o, a, _thd = d
                 lbl = "% of the fundamental"
         if o.size:
-            bx.bar(o, a, color="#e0821a", width=0.72, zorder=3)
+            # THE BARS ARE AS WIDE AS THE BINS ARE APART.  The solver's orders
+            # are k/(N·step_periods): a 1.5-period window puts them 0.667 apart
+            # and a fixed 0.72-wide bar drew them OVERLAPPING, one harmonic
+            # eating its neighbour.  Integer orders keep the width they had.
+            _dx = float(np.min(np.diff(o))) if o.size > 1 else 1.0
+            if not np.isfinite(_dx) or _dx <= 0:
+                _dx = 1.0
+            bx.bar(o, a, color="#e0821a", width=0.72 * _dx, zorder=3)
             # ROOM FOR THE "order N" LABEL over the tallest bar — on half a
             # page it landed on the panel's own title.
             if _narrow(width_cm) and float(a.max()) > 0:
                 bx.set_ylim(0.0, float(a.max()) * 1.30)
             _top = int(np.argmax(a))
-            bx.annotate("order %d" % int(o[_top]), (o[_top], a[_top]),
+            # NUMERIC FRACTIONAL ORDER (Codex handoff, 2026-09-17) — see
+            # `harmonic_order_label`: `int(o)` turned order 5.994 into "5".
+            bx.annotate("order %s" % harmonic_order_label(o[_top]),
+                        (o[_top], a[_top]),
                         textcoords="offset points", xytext=(0, 3),
                         ha="center", fontsize=CHART_LABEL_PT, color="#B3261E")
             bx.set_xlabel("harmonic order", fontsize=9)

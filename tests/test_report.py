@@ -4280,6 +4280,131 @@ class TestAuditV5:
 
 
 # ---------------------------------------------------------------------------
+# Codex handoff, 2026-09-17 — the spectral order is no longer an integer
+# ---------------------------------------------------------------------------
+# a71206a made the solver keep the WHOLE sampled torque window, so bin k of
+# `T_harm_order` sits at k/(N·step_periods): over 1.5 periods the sixth cogging
+# harmonic is order 4.0, over 1.001 periods it is 5.994.  The chart labelled the
+# tallest bar with `"order %d" % int(o)`, which truncates — 5.994 was printed in
+# the client's DOCX/PDF as "order 5", a harmonic the machine does not have.
+
+
+class TestFractionalSpectralOrders:
+
+    def test_an_integer_order_still_prints_as_an_integer(self):
+        from motor_ai_sim import report as R
+
+        assert R.harmonic_order_label(6) == "6"
+        assert R.harmonic_order_label(6.0) == "6"
+        assert R.harmonic_order_label(4.0) == "4"
+        assert R.harmonic_order_label(12) == "12"
+        # float noise on an integer bin is noise, not a fraction
+        assert R.harmonic_order_label(6.0000000001) == "6"
+
+    def test_a_fractional_order_keeps_its_digits(self):
+        from motor_ai_sim import report as R
+
+        assert R.harmonic_order_label(5.994) == "5.99"
+        assert R.harmonic_order_label(12.02) == "12.02"
+        assert R.harmonic_order_label(4.6667) == "4.67"
+        # two decimals would round this ONTO an integer and tell the old lie
+        assert R.harmonic_order_label(5.999) == "5.999"
+        # trailing zeros are not digits worth printing
+        assert R.harmonic_order_label(5.90) == "5.9"
+
+    def test_a_missing_order_prints_nothing(self):
+        from motor_ai_sim import report as R
+
+        assert R.harmonic_order_label(None) == ""
+        assert R.harmonic_order_label("") == ""
+        assert R.harmonic_order_label(float("nan")) == ""
+
+    @staticmethod
+    def _annotations(monkeypatch, wf, width_cm=22.0):
+        """The PNG the chart really renders, and every label it wrote."""
+        import matplotlib.axes
+
+        from motor_ai_sim import report as R
+
+        seen = []
+        real = matplotlib.axes.Axes.annotate
+
+        def _spy(self, text, *a, **kw):
+            seen.append(str(text))
+            return real(self, text, *a, **kw)
+
+        monkeypatch.setattr(matplotlib.axes.Axes, "annotate", _spy)
+        png = R._torque_png(wf, width_cm=width_cm, px=600)
+        return png, seen
+
+    def test_the_chart_labels_the_fractional_order_numerically(self,
+                                                               monkeypatch):
+        # a 1.001-period window: orders 0.999, 1.998 … and the peak on 5.994
+        wf = {"T_em_Nm": [100.0 + 4.0 * (k % 6 == 0) for k in range(72)],
+              "T_harm_order": [5.994, 4.0, 12.02],
+              "T_harm_amp": [3.2, 0.9, 0.4]}
+        png, seen = self._annotations(monkeypatch, wf)
+        assert png and png[:4] == b"\x89PNG"
+        assert "order 5.99" in seen, seen
+        assert not any(s == "order 5" for s in seen), (
+            "the chart truncated a fractional order again: %s" % seen)
+
+    def test_each_fixture_order_is_labelled_as_the_rule_says(self,
+                                                             monkeypatch):
+        base = [100.0 + 4.0 * (k % 6 == 0) for k in range(72)]
+        for ords, amps, want in (
+                ([5.994, 4.0, 12.02], [3.2, 0.9, 0.4], "order 5.99"),
+                ([5.994, 4.0, 12.02], [0.4, 3.2, 0.9], "order 4"),
+                ([5.994, 4.0, 12.02], [0.4, 0.9, 3.2], "order 12.02")):
+            png, seen = self._annotations(
+                monkeypatch, {"T_em_Nm": base, "T_harm_order": ords,
+                              "T_harm_amp": amps})
+            assert png, want
+            assert want in seen, (want, seen)
+
+    def test_an_integer_spectrum_is_labelled_exactly_as_before(self,
+                                                               monkeypatch):
+        wf = {"T_em_Nm": [100.0 + 4.0 * (k % 6 == 0) for k in range(72)],
+              "T_harm_order": [float(k) for k in range(1, 19)],
+              "T_harm_amp": [0.1] * 5 + [3.3] + [0.1] * 12}
+        png, seen = self._annotations(monkeypatch, wf)
+        assert png
+        assert "order 6" in seen, seen
+
+    def test_the_bars_do_not_overlap_at_fractional_spacing(self, monkeypatch):
+        """0.667 apart, and the old chart drew them 0.72 wide."""
+        import inspect
+
+        import matplotlib.axes
+
+        from motor_ai_sim import report as R
+
+        widths = []
+        real = matplotlib.axes.Axes.bar
+
+        def _spy(self, x, height, *a, **kw):
+            widths.append(kw.get("width"))
+            return real(self, x, height, *a, **kw)
+
+        monkeypatch.setattr(matplotlib.axes.Axes, "bar", _spy)
+        # a 1.5-period window: bins 2/3 apart
+        ords = [round(k * 2.0 / 3.0, 12) for k in range(1, 19)]
+        png = R._torque_png(
+            {"T_em_Nm": [100.0 + 4.0 * (k % 6 == 0) for k in range(72)],
+             "T_harm_order": ords,
+             "T_harm_amp": [0.1] * 5 + [3.3] + [0.1] * 12}, px=600)
+        assert png
+        assert widths and widths[-1] is not None
+        assert widths[-1] <= 2.0 / 3.0 + 1e-9, (
+            "bars %s wide on bins %.4f apart — they overlap"
+            % (widths[-1], 2.0 / 3.0))
+        # and nothing in the chart assumes an integer axis any more
+        src = inspect.getsource(R._torque_png)
+        assert "int(o[" not in src and '"order %d"' not in src
+        assert "integer=True" not in src
+
+
+# ---------------------------------------------------------------------------
 # Client review, 2026-09-14 — what the client document may NOT say
 # ---------------------------------------------------------------------------
 # TWO FINDINGS, one rule each.

@@ -412,3 +412,31 @@ def test_client_ip_prefers_the_last_forwarded_entry():
     assert support.client_ip(_Req({"x-forwarded-for": "", "x-real-ip": "7.7.7.7"})) == "7.7.7.7"
     assert support.client_ip(_Req({})) == "10.1.1.1"
     assert support.client_ip(None) == ""
+
+
+def test_client_ip_steps_over_our_own_plumbing():
+    """THE production chain: host nginx (TLS) appends the visitor, the container
+    nginx appends the docker bridge.  Reading "the last entry" gave
+    ``172.18.0.1`` for everyone — one bucket for the whole internet, which is
+    what the live log showed on 2026-09-17 before this was fixed."""
+    chain = "203.0.113.9, 172.18.0.1"
+    assert support.client_ip(_Req({"x-forwarded-for": chain})) == "203.0.113.9"
+    # a forged prefix still cannot win: every hop appends AFTER it
+    forged = "8.8.8.8, 203.0.113.9, 172.18.0.1"
+    assert support.client_ip(_Req({"x-forwarded-for": forged})) == "203.0.113.9"
+    # deeper plumbing, same answer
+    assert support.client_ip(
+        _Req({"x-forwarded-for": "203.0.113.9, 10.0.0.5, 127.0.0.1, 172.18.0.1"})
+    ) == "203.0.113.9"
+    # …and an all-internal chain (a LAN call, a dev proxy) keeps its last hop
+    assert support.client_ip(_Req({"x-forwarded-for": "10.0.0.5, 172.18.0.1"})) == "172.18.0.1"
+    # IPv6 visitors are read the same way
+    assert support.client_ip(_Req({"x-forwarded-for": "2001:db8::1, 172.18.0.1"})) == "2001:db8::1"
+
+
+def test_two_visitors_behind_the_same_bridge_have_their_own_quota(env):
+    for _ in range(support.ANON_BURST_MAX):
+        assert ask(ip="203.0.113.11, 172.18.0.1").status_code == 200
+    assert ask(ip="203.0.113.11, 172.18.0.1").status_code == 429
+    assert ask(ip="203.0.113.12, 172.18.0.1").status_code == 200, \
+        "the second visitor was punished for the first one's questions"

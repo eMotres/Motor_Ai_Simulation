@@ -35,6 +35,7 @@ is the right failure for a limit whose job is to bound a bill, not to punish.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -461,15 +462,46 @@ def _cap(name: str) -> int:
         return default
 
 
-def client_ip(request: Optional[Request]) -> str:
-    """The caller's address as nginx hands it to us (deploy/nginx.conf).
+#: The address families that can only be a hop of OUR OWN plumbing — the docker
+#: bridge (172.16/12), a host-local proxy (127/8), a LAN (10/8, 192.168/16) —
+#: and never a visitor arriving from the internet.  Spelled out rather than
+#: taken from ``ip.is_private``, which in Python also answers True for the
+#: documentation ranges (192.0.2/24, 198.51.100/24, 203.0.113/24) that tests and
+#: examples are written in: those must behave like the visitors they stand for.
+_INTERNAL_NETS = tuple(ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8",
+    "169.254.0.0/16", "0.0.0.0/32", "::1/128", "fc00::/7", "fe80::/10",
+))
 
-    ``X-Forwarded-For`` is ``$proxy_add_x_forwarded_for``: whatever the client
-    sent PLUS the address nginx itself saw, appended.  So the LAST entry is the
-    only one a client cannot forge — reading the first would let anyone reset
-    their own counter with a header.  ``X-Real-IP`` (``$remote_addr``) is the
-    same value and is the fallback; last comes the socket peer, which is what a
-    local run without a proxy has.
+
+def _is_internal(ip: str) -> bool:
+    """Is this hop our own plumbing rather than a visitor?"""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(a in n for n in _INTERNAL_NETS if n.version == a.version)
+
+
+def client_ip(request: Optional[Request]) -> str:
+    """The VISITOR's address, read out of the proxy chain in front of us.
+
+    On the server a request crosses TWO nginxes: the host one (TLS, port 443)
+    and the container one (``deploy/nginx.conf``, in front of the API).  Both
+    use ``$proxy_add_x_forwarded_for``, i.e. each APPENDS the peer it saw, so
+    what arrives is
+
+        <whatever the client itself sent>, <the real client>, 172.18.0.x
+
+    — the last entry is the docker bridge and is the same for every visitor on
+    earth (seen in the live log on 2026-09-17: ``ip=172.18.0.1`` for a per-IP
+    limit, which would have made ONE bucket for the whole internet).  The last
+    entry a client can forge is never the last PUBLIC one either, because every
+    hop appends after it: dropping the internal tail and taking what remains is
+    both correct and unforgeable.  ``X-Real-IP`` is rewritten by the inner nginx
+    to that same bridge address, so it is only a fallback for a one-hop
+    deployment; last comes the socket peer, which is what a local run without a
+    proxy has.
     """
     if request is None:
         return ""
@@ -479,9 +511,14 @@ def client_ip(request: Optional[Request]) -> str:
         return ""
     xff = (headers.get("x-forwarded-for") or "").strip()
     if xff:
-        last = xff.split(",")[-1].strip()
-        if last:
-            return last
+        hops = [h.strip() for h in xff.split(",") if h.strip()]
+        while hops and _is_internal(hops[-1]):
+            hops.pop()
+        if hops:
+            return hops[-1]
+        last = [h.strip() for h in xff.split(",") if h.strip()]
+        if last:                       # an all-internal chain: a LAN/dev call
+            return last[-1]
     real = (headers.get("x-real-ip") or "").strip()
     if real:
         return real

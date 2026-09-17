@@ -18,8 +18,8 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Box, Button, CircularProgress, MenuItem, Paper, Select, TextField,
-  Tooltip, Typography,
+  Alert, Box, Button, CircularProgress, Collapse, MenuItem, Paper, Select,
+  TextField, Tooltip, Typography,
 } from '@mui/material';
 
 import { useMotorStore } from '../../stores/motorStore';
@@ -35,6 +35,11 @@ import HeatPathView3D from './HeatPathView3D';
 import DutyCycleEditor from './DutyCycleEditor';
 import { DUTY_CYCLE_ENABLED } from '../../lib/dutyCycleFlag';
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
+import {
+  BORE_MODE_LABEL, COOL_MODE_LABEL, END_FACE_LABEL, END_FACE_SIDES_LABEL,
+  FRAME_LABEL as FRAME_MODE_LABEL, HOW_IT_WORKS, HOW_IT_WORKS_TITLE,
+  ROBOTICS_HELP, ROBOTICS_SUBTITLE, SHAFT_SIDES_LABEL,
+} from './roboticsHelp';
 import {
   fmt, fmtSecs, meshParams, outerCooling, simOperatingPoint, writeSimCoilTemp,
 } from './api';
@@ -55,20 +60,17 @@ const warn = { ...lbl, color: '#fbbf24', cursor: 'help',
                borderBottom: '1px dotted #fbbf24' } as const;
 const bad = { ...warn, color: '#f87171', borderBottom: '1px dotted #f87171' } as const;
 
-const COOL_LABEL: Record<CoolMode, string> = {
-  air: 'Air', liquid: 'Liquid', manual: 'Manual h', none: 'No cooling',
-  robotics: 'Robotics (still air + mount)',
-};
-const BORE_LABEL: Record<BoreMode, string> = {
-  none: 'No cooling', air: 'Air through bore', liquid: 'Liquid through bore',
-  still: 'Still air (open bore)',
-};
+/* Every menu text and every hint of this cooling block lives in
+   `roboticsHelp` — one module, so the panel, the 3-D view's popovers and the
+   arrow tooltips cannot describe the same parameter three different ways
+   (owner 2026-09-17: «надо более подробно расписать это меню»).  An option
+   now says what it DOES, not what it is called internally. */
+const COOL_LABEL: Record<CoolMode, string> = COOL_MODE_LABEL;
+const BORE_LABEL: Record<BoreMode, string> = BORE_MODE_LABEL;
 /** How the machine is BUILT.  `open` is the 40 mm CIANO14 (user 2026-09-09:
  *  *нет корпуса*) — tooth blocks between two end plates, end turns and slot
  *  channels in the propeller wash. */
-const FRAME_LABEL: Record<FrameMode, string> = {
-  housed: 'Housed', open: 'Open (no housing)',
-};
+const FRAME_LABEL: Record<FrameMode, string> = FRAME_MODE_LABEL;
 const FLUIDS: [string, string][] = [
   ['water', 'Water'], ['water_glycol_50', 'Glycol 50 %'],
   ['ethylene_glycol', 'Ethylene glycol'], ['oil', 'Oil'],
@@ -544,6 +546,10 @@ const ThermalPanel: React.FC = () => {
      a duty load fires `sim-settings-restored`, a finished run re-stamps the
      panel.  This panel NEVER writes them and never keeps a copy of its own. */
   const [op, setOp] = useState(simOperatingPoint);
+  /* The "How this cooling model works" note — CLOSED by default and not
+     persisted: it is a thing you read once, and a panel that reopens a wall of
+     text on every visit is the wall of text this project forbids. */
+  const [howOpen, setHowOpen] = useState(false);
   useEffect(() => {
     const on = () => setOp(simOperatingPoint());
     window.addEventListener('sim-settings-restored', on);
@@ -800,12 +806,15 @@ const ThermalPanel: React.FC = () => {
               "зачем тебе это, если всё равно все граничные условия задаём"). */}
           {(coolMode === 'air' || boreMode === 'air' || coolMode === 'robotics') && (
             <Box sx={CTRL_ROW}>
-              <TextField label={coolMode === 'robotics' ? 'room °C' : 'air °C'}
+              <TextField
+                label={coolMode === 'robotics' ? ROBOTICS_HELP.ambientT.label : 'air °C'}
                 size="small" value={ambientT}
                 onChange={(e) => setField('ambientT', e.target.value)}
-                sx={{ width: 96 }} inputProps={{ style: { fontSize: 12 } }}
+                sx={{ width: coolMode === 'robotics' ? 122 : 96 }}
+                inputProps={{ style: { fontSize: 12 } }}
                 InputLabelProps={{ style: { fontSize: 12 } }} />
-              <HelpTip title="Temperature of the blown air, °C — the ROOM in the robotics mode." />
+              <HelpTip title={coolMode === 'robotics' ? ROBOTICS_HELP.ambientT.tip
+                : 'Temperature of the blown air, °C — the one ambient every air path works against.'} />
             </Box>
           )}
 
@@ -866,6 +875,47 @@ const ThermalPanel: React.FC = () => {
           )}
         </Box>
 
+        {/* ── the ROBOTICS block's own header (owner 2026-09-17) ────────────
+            One line that says what the mode IS, and one click that lists the
+            heat paths in the order the 3-D view draws them with the parameter
+            that governs each.  Closed by default: the rule is one short line
+            plus a tooltip, and this is the tooltip made readable for the one
+            reader who wants the whole map at once.  Every word comes from
+            `roboticsHelp`, which the 3-D view reads too. */}
+        {coolMode === 'robotics' && (
+          <Box sx={{ mt: 1 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Typography sx={{ ...lbl, fontStyle: 'italic' }}>
+                {ROBOTICS_SUBTITLE}
+              </Typography>
+              <Typography component="button" type="button"
+                onClick={() => setHowOpen((v) => !v)}
+                sx={{ ...lbl, background: 'none', border: 'none', p: 0,
+                  cursor: 'pointer', color: 'var(--brand)', fontWeight: 700,
+                  textDecoration: 'underline', textUnderlineOffset: 2 }}>
+                {howOpen ? '▾' : '▸'} {HOW_IT_WORKS_TITLE}
+              </Typography>
+            </Box>
+            <Collapse in={howOpen} unmountOnExit>
+              <Box component="ul" sx={{ listStyle: 'none', m: 0, mt: 0.5, p: 0,
+                pl: 0.5, borderLeft: '2px solid var(--line-accent, #334155)' }}>
+                {HOW_IT_WORKS.map((h) => (
+                  <Box component="li" key={h.path}
+                    sx={{ ...lbl, whiteSpace: 'normal', pl: 1, py: 0.125 }}>
+                    <Box component="span" sx={{ color: 'var(--text-2)' }}>{h.path}</Box>
+                    {h.param && (
+                      <Box component="span" sx={{ fontWeight: 700, color: 'var(--text-0)' }}>
+                        {' — '}{h.param}
+                      </Box>
+                    )}
+                    {': '}{h.text}
+                  </Box>
+                ))}
+              </Box>
+            </Collapse>
+          </Box>
+        )}
+
         {/* ── boundary 1: the OUTER stator surface ──────────────────────────
             Two rows, one per surface, because they are two independent boundary
             conditions of the same solve (user 2026-09-07) — a machine cooled
@@ -887,12 +937,12 @@ const ThermalPanel: React.FC = () => {
                 if (m === 'robotics' && boreMode === 'none') setField('boreMode', 'still');
                 if (m !== 'robotics' && boreMode === 'still') setField('boreMode', 'none');
               }}
-              sx={{ fontSize: 11, height: 30, minWidth: 118 }}>
+              sx={{ fontSize: 11, height: 30, minWidth: 218 }}>
               {(['air', 'liquid', 'manual', 'none', 'robotics'] as CoolMode[]).map((m) => (
                 <MenuItem key={m} value={m} sx={{ fontSize: 11 }}>{COOL_LABEL[m]}</MenuItem>
               ))}
             </Select>
-            <HelpTip title="How the heat leaves the outer surface — robotics is still air + radiation + a bolted mount." />
+            <HelpTip title={ROBOTICS_HELP.coolMode.tip} />
           </Box>
 
           {/* ── the ROBOTICS mode's own four inputs (2026-09-14) ───────────
@@ -900,35 +950,37 @@ const ThermalPanel: React.FC = () => {
               They only appear with the mode, because they are only sent by it. */}
           {coolMode === 'robotics' && (
             <>
-              <NumField label="ε" value={emissivity}
-                onChange={(v) => setField('emissivity', v)} width={78}
+              <NumField label={ROBOTICS_HELP.emissivity.label} value={emissivity}
+                onChange={(v) => setField('emissivity', v)} width={128}
                 error={!!coolErr && /emissivity/.test(coolErr)}
-                tip="Total hemispherical emissivity of the housing, 0…1. On a small machine standing in still air RADIATION carries more than convection does — on the 85 mm at 100 °C in a 40 °C room h_rad ≈ 8.3 against h_conv ≈ 6 — so this number decides over half of what the housing loses. 0.9 is anodised, painted or oxidised metal and most real housings; 0.2 is bare machined aluminium; 0.05 is polished. ε = 0 is a legal answer and removes exactly the radiation half, which the heat budget reports on its own line." />
-              <NumField label="mount W/K" value={mountG}
-                onChange={(v) => setField('mountG', v)} width={112}
+                tip={ROBOTICS_HELP.emissivity.tip} />
+              <NumField label={ROBOTICS_HELP.mountG.label} value={mountG}
+                onChange={(v) => setField('mountG', v)} width={160}
                 error={!!coolErr && /mount conductance/.test(coolErr)}
-                tip="The bolted flange's contact conductance to the arm, W/K — the path a joint in still air actually loses its heat through (the housing film gives the room about 3 W of 64 on the 85 mm; the BOLTS take the rest). It is a lumped conductance between the stator's mean temperature and the mount temperature beside it, so the heat budget's mount_W = G · (T_stator − T_mount) is checkable. 0 means bolted to nothing, and the answer then says so. The shipped 2 W/K is an ASSUMPTION — nobody has measured this flange (its material, bolt pattern, contact area and whether there is a pad or grease) — so treat the mount line of any result as provisional until it is." />
-              <NumField label="mount °C" value={mountT}
-                onChange={(v) => setField('mountT', v)} width={104}
-                tip="The temperature the mount is HELD at, °C. Blank means the room temperature above — the arm is not a heat source of its own — and blank is the honest default: filling it in with the ambient would make a default look like a number somebody measured. Type one when the arm is known to run warm (a neighbouring joint, a hot enclosure): the mount is modelled as an infinite sink at exactly this temperature." />
+                tip={ROBOTICS_HELP.mountG.tip} />
+              <NumField label={ROBOTICS_HELP.mountT.label} value={mountT}
+                onChange={(v) => setField('mountT', v)} width={196}
+                tip={ROBOTICS_HELP.mountT.tip} />
               <Box sx={CTRL_ROW}>
                 <Select size="small" value={endFaces}
                   onChange={(e) => setField('endFaces', e.target.value as EndFaceMode)}
-                  sx={{ fontSize: 11, height: 30, minWidth: 138 }}>
-                  <MenuItem value="still" sx={{ fontSize: 11 }}>End faces exposed</MenuItem>
-                  <MenuItem value="none" sx={{ fontSize: 11 }}>End faces buried</MenuItem>
+                  sx={{ fontSize: 11, height: 30, minWidth: 176 }}>
+                  {(['still', 'none'] as EndFaceMode[]).map((m) => (
+                    <MenuItem key={m} value={m} sx={{ fontSize: 11 }}>{END_FACE_LABEL[m]}</MenuItem>
+                  ))}
                 </Select>
-                <HelpTip title="Are the axial faces in the room's air, or buried between a gearbox and the arm?" />
+                <HelpTip title={ROBOTICS_HELP.endFaces.tip} />
               </Box>
               {endFaces === 'still' && (
                 <Box sx={CTRL_ROW}>
                   <Select size="small" value={endFaceSides}
                     onChange={(e) => setField('endFaceSides', String(e.target.value))}
-                    sx={{ fontSize: 11, height: 30, minWidth: 104 }}>
-                    <MenuItem value="2" sx={{ fontSize: 11 }}>2 ends open</MenuItem>
-                    <MenuItem value="1" sx={{ fontSize: 11 }}>1 end open</MenuItem>
+                    sx={{ fontSize: 11, height: 30, minWidth: 186 }}>
+                    {['2', '1'].map((n) => (
+                      <MenuItem key={n} value={n} sx={{ fontSize: 11 }}>{END_FACE_SIDES_LABEL[n]}</MenuItem>
+                    ))}
                   </Select>
-                  <HelpTip title="How many ends are actually in the air — every axial conductance scales with it." />
+                  <HelpTip title={ROBOTICS_HELP.endFaceSides.tip} />
                 </Box>
               )}
             </>
@@ -971,7 +1023,7 @@ const ThermalPanel: React.FC = () => {
           <Box sx={CTRL_ROW}>
             <Select size="small" value={boreMode}
               onChange={(e) => setField('boreMode', e.target.value as BoreMode)}
-              sx={{ fontSize: 11, height: 30, minWidth: 158 }}>
+              sx={{ fontSize: 11, height: 30, minWidth: 208 }}>
               {/* `still` is offered ONLY with the robotics mode: it is
                   evaluated with that mode's emissivity, an input no other mode
                   sends, and the backend refuses it elsewhere by name. */}
@@ -981,7 +1033,7 @@ const ThermalPanel: React.FC = () => {
                 <MenuItem key={m} value={m} sx={{ fontSize: 11 }}>{BORE_LABEL[m]}</MenuItem>
               ))}
             </Select>
-            <HelpTip title="What flows through the bore — none is adiabatic, and the rotor's heat then crosses the gap." />
+            <HelpTip title={ROBOTICS_HELP.boreMode.tip} />
           </Box>
 
           {boreMode === 'air' && (
@@ -1017,18 +1069,19 @@ const ThermalPanel: React.FC = () => {
               does: it comes out through the bearings, so its exposed stubs are
               a third path off the rotor and they belong in this row, beside
               the bore, because both of them bypass the air gap. */}
-          <NumField label="shaft out, mm/side" value={shaftExtMm}
-            onChange={(v) => setField('shaftExtMm', v)} width={132}
-            tip="How much shaft sticks out of the housing on EACH side, in mm — 0 turns this path off. It is modelled as a FIN, not as a wetted area: the stub cools along its length (heat has to be conducted out along the steel before it can be convected away), so past about 2.5 decay lengths another millimetre removes nothing. The film on it is a cylinder spinning in still ambient air, so it improves with rpm. The rotor's end faces and the end windings get nothing at all: they are inside the closed housing, turning in their own air, and whatever they hand to it comes straight back through the housing." />
+          <NumField label={ROBOTICS_HELP.shaftExtMm.label} value={shaftExtMm}
+            onChange={(v) => setField('shaftExtMm', v)} width={202}
+            tip={ROBOTICS_HELP.shaftExtMm.tip} />
           {Number(shaftExtMm) > 0 && (
             <Box sx={CTRL_ROW}>
               <Select size="small" value={shaftExtSides}
                 onChange={(e) => setField('shaftExtSides', String(e.target.value))}
-                sx={{ fontSize: 11, height: 30, minWidth: 104 }}>
-                <MenuItem value="2" sx={{ fontSize: 11 }}>2 ends out</MenuItem>
-                <MenuItem value="1" sx={{ fontSize: 11 }}>1 end out</MenuItem>
+                sx={{ fontSize: 11, height: 30, minWidth: 138 }}>
+                {['2', '1'].map((n) => (
+                  <MenuItem key={n} value={n} sx={{ fontSize: 11 }}>{SHAFT_SIDES_LABEL[n]}</MenuItem>
+                ))}
               </Select>
-              <HelpTip title="How many shaft ends come out of the housing — the same fin, once or twice." />
+              <HelpTip title={ROBOTICS_HELP.shaftExtSides.tip} />
             </Box>
           )}
         </Box>
@@ -1042,12 +1095,11 @@ const ThermalPanel: React.FC = () => {
             housed motor the end turns really do have nowhere to send their
             heat, and adding a path there would flatter every housed design. */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
-          <RowLabel text="Frame"
-            tip="How the machine is BUILT — which decides whether its end windings and slot air are cooled at all. Housed: they are inside a closed housing, turning in their own air, so whatever they hand to it comes straight back through the housing and there is no extra path (this is every normally-built motor, and it is what this tab has always solved). Open: no housing — the tooth blocks with their coils are held between two end plates by standoff pins and the end turns and the axial channels between neighbouring coils sit in the airflow. On a 40 mm tooth-coil machine the end turns are three quarters of the copper LENGTH, so which of the two it is moves the winding temperature by more than any film coefficient above." />
+          <RowLabel text="Frame" tip={ROBOTICS_HELP.frame.tip} />
           <Box sx={CTRL_ROW}>
             <Select size="small" value={frame}
               onChange={(e) => setField('frame', e.target.value as FrameMode)}
-              sx={{ fontSize: 11, height: 30, minWidth: 158 }}>
+              sx={{ fontSize: 11, height: 30, minWidth: 178 }}>
               {(['housed', 'open'] as FrameMode[]).map((m) => (
                 <MenuItem key={m} value={m} sx={{ fontSize: 11 }}>{FRAME_LABEL[m]}</MenuItem>
               ))}
@@ -1055,9 +1107,9 @@ const ThermalPanel: React.FC = () => {
             <HelpTip title="Open adds two paths a housed machine does not have: end turns in cross flow and the slot channels." />
           </Box>
           {frame === 'open' && (
-            <NumField label="wash m/s" value={openAirSpeed}
+            <NumField label={ROBOTICS_HELP.openAirSpeed.label} value={openAirSpeed}
               onChange={(v) => setField('openAirSpeed', v)} width={112}
-              tip="Air over the end turns and through the slot channels, m/s — the propeller wash on an open machine (10–12 m/s on the 40 mm). 0 means the same air that is blowing on the housing above when the outer surface is in air, and still air when it is not: it is one airstream, and typing the number twice is how the two end up disagreeing. Still air is not zero cooling — it is the natural-convection floor, about 7 W/m²K." />
+              tip={ROBOTICS_HELP.openAirSpeed.tip} />
           )}
         </Box>
 

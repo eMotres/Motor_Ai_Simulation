@@ -57,6 +57,11 @@ import {
 import type {
   CoolingSettings, HeatPathModel, HeatSink, MachineEnvelope, SinkEditor, SinkId,
 } from './heatPaths';
+/* The SAME words the Thermal panel's rows carry (owner 2026-09-17: the cooling
+   menu must say what each parameter is for).  Imported, not re-typed: a
+   surface's popover and the row it mirrors cannot be allowed to explain one
+   parameter two different ways. */
+import { ROBOTICS_HELP, setByLine } from './roboticsHelp';
 
 const lbl = { fontSize: 11, color: 'var(--text-3)' } as const;
 
@@ -375,8 +380,9 @@ const SinkEditorCard: React.FC<{
   const rows: React.ReactNode[] = [];
   if (editor === 'housing') {
     if (s.coolMode === 'robotics') {
-      rows.push(<Num key="e" cap="ε" value={s.emissivity} step={0.05} width={58}
-                     hint="Total hemispherical emissivity of the housing, 0…1. On a small machine in still air RADIATION carries more than convection, so this decides over half of what the housing loses. 0.9 is anodised / painted / oxidised metal; 0.2 bare machined aluminium; 0.05 polished."
+      rows.push(<Num key="e" cap={ROBOTICS_HELP.emissivity.short} value={s.emissivity}
+                     step={0.05} width={58}
+                     hint={ROBOTICS_HELP.emissivity.tip}
                      onChange={(v) => onChange('emissivity', v)} />);
     } else if (s.coolMode === 'air') {
       rows.push(<Num key="v" cap="m/s" value={s.airSpeed} width={58}
@@ -395,32 +401,36 @@ const SinkEditorCard: React.FC<{
                      onChange={(v) => onChange('hConv', v)} />);
     }
     if (s.coolMode !== 'liquid') {
-      rows.push(<Num key="a" cap={s.coolMode === 'robotics' ? 'room °C' : 'air °C'}
+      rows.push(<Num key="a" cap={s.coolMode === 'robotics'
+                       ? ROBOTICS_HELP.ambientT.short : 'air °C'}
                      value={s.ambientT} width={58}
-                     hint="The temperature this surface works against — the ROOM in the robotics mode. It is also the sink the end faces, the bore and the mount fall back to."
+                     hint={s.coolMode === 'robotics' ? ROBOTICS_HELP.ambientT.tip
+                       : 'The temperature this surface works against. It is also the sink the end faces, the bore and the mount fall back to.'}
                      onChange={(v) => onChange('ambientT', v)} />);
     }
   } else if (editor === 'mount') {
-    rows.push(<Num key="g" cap="W/K" value={s.mountG} width={62}
-                   hint="The bolted flange's contact conductance to the arm, W/K — the path a joint in still air actually loses its heat through. 0 means bolted to nothing. The shipped 2 W/K is an ASSUMPTION until this joint is measured."
+    rows.push(<Num key="g" cap={ROBOTICS_HELP.mountG.short} value={s.mountG} width={62}
+                   hint={ROBOTICS_HELP.mountG.tip}
                    onChange={(v) => onChange('mountG', v)} />);
-    rows.push(<Num key="t" cap="mount °C" value={s.mountT} width={62}
-                   hint="The temperature the mount is HELD at, °C. BLANK means the ambient above — leave it blank unless the arm is at a temperature of its own."
+    rows.push(<Num key="t" cap={ROBOTICS_HELP.mountT.short} value={s.mountT} width={62}
+                   hint={ROBOTICS_HELP.mountT.tip}
                    onChange={(v) => onChange('mountT', v)} />);
   } else if (editor === 'end_faces') {
-    rows.push(<Sel key="m" cap="ends" value={s.endFaces === 'none' ? 'none' : 'still'}
-                   hint="Whether the machine's AXIAL faces are exposed. 'Open' puts the end turns, the core end annuli and the magnet ends in the room — on a Ø85 joint the end turns alone are a larger area than the whole housing cylinder. 'Closed' is a machine with end plates."
-                   opts={[['still', 'open'], ['none', 'closed']]}
+    rows.push(<Sel key="m" cap={ROBOTICS_HELP.endFaces.short}
+                   value={s.endFaces === 'none' ? 'none' : 'still'}
+                   hint={ROBOTICS_HELP.endFaces.tip}
+                   opts={[['still', 'open to air'], ['none', 'closed off']]}
                    onChange={(v) => onChange('endFaces', v)} />);
     if (s.endFaces !== 'none') {
-      rows.push(<Sel key="n" cap="sides" value={String(Number(s.endFaceSides) === 1 ? 1 : 2)}
-                     hint="How many ends are open — 1 when the machine is bolted flat on one face, 2 when both ends see the room."
-                     opts={[['2', '2'], ['1', '1']]}
+      rows.push(<Sel key="n" cap={ROBOTICS_HELP.endFaceSides.short}
+                     value={String(Number(s.endFaceSides) === 1 ? 1 : 2)}
+                     hint={ROBOTICS_HELP.endFaceSides.tip}
+                     opts={[['2', 'both'], ['1', '1 (mount shut)']]}
                      onChange={(v) => onChange('endFaceSides', v)} />);
     }
   } else if (editor === 'bore') {
-    rows.push(<Sel key="m" cap="bore" value={s.boreMode}
-                   hint="The rotor's inner diameter. Cooling it is the only path that reaches the magnets WITHOUT crossing the air gap. 'Closed' is adiabatic — all the rotor heat crosses the gap."
+    rows.push(<Sel key="m" cap={ROBOTICS_HELP.boreMode.short} value={s.boreMode}
+                   hint={ROBOTICS_HELP.boreMode.tip}
                    opts={[['none', 'closed'], ['still', 'still air'], ['air', 'air'], ['liquid', 'liquid']]}
                    onChange={(v) => onChange('boreMode', v)} />);
     if (s.boreMode === 'air') {
@@ -434,21 +444,22 @@ const SinkEditorCard: React.FC<{
                      onChange={(v) => onChange('boreFlowLpm', v)} />);
     }
   } else if (editor === 'shaft_ends') {
-    rows.push(<Num key="l" cap="mm/side" value={s.shaftExtMm} width={62}
-                   hint="How much shaft sticks out of the housing on EACH side, in mm — 0 turns this path off. Modelled as a FIN, not a wetted area: past about 2.5 decay lengths another millimetre removes nothing."
+    rows.push(<Num key="l" cap={ROBOTICS_HELP.shaftExtMm.short} value={s.shaftExtMm}
+                   width={62} hint={ROBOTICS_HELP.shaftExtMm.tip}
                    onChange={(v) => onChange('shaftExtMm', v)} />);
-    rows.push(<Sel key="n" cap="sides" value={String(Number(s.shaftExtSides) === 1 ? 1 : 2)}
-                   hint="How many shaft ends come out of the housing — the same fin, once or twice."
+    rows.push(<Sel key="n" cap={ROBOTICS_HELP.shaftExtSides.short}
+                   value={String(Number(s.shaftExtSides) === 1 ? 1 : 2)}
+                   hint={ROBOTICS_HELP.shaftExtSides.tip}
                    opts={[['2', '2'], ['1', '1']]}
                    onChange={(v) => onChange('shaftExtSides', v)} />);
   } else if (editor === 'frame') {
-    rows.push(<Sel key="f" cap="frame" value={s.frame}
-                   hint="How the machine is BUILT — which decides whether its end turns and slot air are cooled at all. Housed: they are inside a closed housing and there is no extra path. Open: the end turns and the axial channels sit in the airflow."
+    rows.push(<Sel key="f" cap={ROBOTICS_HELP.frame.short} value={s.frame}
+                   hint={ROBOTICS_HELP.frame.tip}
                    opts={[['housed', 'housed'], ['open', 'open']]}
                    onChange={(v) => onChange('frame', v)} />);
     if (s.frame === 'open') {
-      rows.push(<Num key="v" cap="m/s" value={s.openAirSpeed} width={58}
-                     hint="Air over the end turns and through the slot channels, m/s. 0 means the same air that is blowing on the housing."
+      rows.push(<Num key="v" cap={ROBOTICS_HELP.openAirSpeed.short} value={s.openAirSpeed}
+                     width={58} hint={ROBOTICS_HELP.openAirSpeed.tip}
                      onChange={(v) => onChange('openAirSpeed', v)} />);
     }
   }
@@ -625,6 +636,11 @@ const Scene: React.FC<SceneProps> =
               }}>
                 <div style={{ fontWeight: 600 }}>{tip.head}</div>
                 <div style={{ color: '#9fb0c4' }}>{tip.mech}</div>
+                {/* …and WHICH field decides it, named exactly as the cooling
+                    menu labels it, so the reader knows where to go. */}
+                {setByLine(o.sink.id) && (
+                  <div style={{ color: '#7f8ea3' }}>{setByLine(o.sink.id)}</div>
+                )}
               </div>
             </Html>
           );
@@ -638,7 +654,7 @@ const Scene: React.FC<SceneProps> =
           <Html key={`l-${o.sink.id}`} zIndexRange={[20, 0]} center
                 position={o.at.clone().addScaledVector(
                   o.dir.clone().normalize(), arrowLen(o.sink) * 1.6)}>
-            <div title={`${sinkTooltip(o.sink)} Click the surface to set it.`}
+            <div title={`${sinkTooltip(o.sink)} ${setByLine(o.sink.id)} Click the surface to set it.`}
                  onClick={() => onSelect(o.sink.id === selected ? null : o.sink.id)}
                  onMouseEnter={() => onHover(o.sink.id)}
                  onMouseLeave={() => onHover(null)}
@@ -835,7 +851,7 @@ const HeatPathView3D: React.FC<HeatPathView3DProps> = ({
           const canEdit = editable && editorFor(s.id) !== null;
           return (
             <Tooltip key={s.id} {...TIP_PROPS}
-                     title={`${sinkTooltip(s)}${canEdit ? ' Click to set it.' : ''}`}>
+                     title={`${sinkTooltip(s)} ${setByLine(s.id)}${canEdit ? ' Click to set it.' : ''}`}>
               <Box onClick={canEdit ? () => setSelected(s.id === selected ? null : s.id) : undefined}
                    onMouseEnter={canEdit ? () => setHovered(s.id) : undefined}
                    onMouseLeave={canEdit ? () => setHovered(null) : undefined}

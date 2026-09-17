@@ -32,6 +32,28 @@ and one line reaches the log.  A signed-in caller is never counted or capped —
 the counters are keyed on "no credentials presented" and nothing else.  They are
 in-memory (one API process) and thread-safe; a restart forgives everyone, which
 is the right failure for a limit whose job is to bound a bill, not to punish.
+
+WHERE A VISITOR'S WORDS GO (2026-09-17, the owner's question: "как сообщения,
+которые они пишут боту, будут доходить до нас?").  Two things happen to an
+ANONYMOUS turn after the provider answers, and neither to a signed-in one:
+
+  * every turn is appended to the day's visitor log
+    (``support_store.log_visitor_turn``) — including the ones the limiter
+    refused, so "forty questions then a wall" is visible;
+  * if the reply ends with the assistant's ACCESS-REQUEST MARKER, the marker is
+    parsed, STRIPPED from what the visitor reads, and filed as a structured
+    request in the admin inbox, with a Telegram push if the owner configured one.
+
+The marker is this codebase's substitute for a tool API — the provider call here
+is one plain text completion, with no tools and no function calling, so the only
+channel the model has back to us is the text itself::
+
+    [[ACCESS_REQUEST: name="…"; company="…"; email="…"; note="…"]]
+
+``VISITOR_NOTE`` is the contract that tells it when to write one.  The parser is
+deliberately forgiving about quoting and unknown keys and deliberately strict
+about ONE thing — the e-mail — because that is the field the record is keyed and
+de-duplicated on, and an invented address is worse than no request at all.
 """
 from __future__ import annotations
 
@@ -39,6 +61,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Optional
@@ -114,7 +137,7 @@ Ask what matters: the target **torque** and **speed** (or the mechanical load), 
 - Be concise and warm — usually 1-4 sentences. Reply in the SAME language the user writes in.
 - **Be accurate about the UI.** Only mention tabs, buttons, and steps that are listed above. NEVER invent a tab name, a button, a menu, or a workflow. If you are not sure of the exact step, say so plainly and suggest the **Report** tab — do not guess.
 - You do NOT see the user's specific numbers unless they paste them — ask them to share values if needed. You may give general electric-motor engineering guidance.
-- If it's a **bug**, a **feature request**, an **account** question, or needs a human → the **Report** tab in this panel files a ticket the team sees, or they can write to vadim@motresres.com. Don't promise fixes or timelines.
+- If it's a **bug**, a **feature request**, an **account** question, or needs a human → say so plainly in one sentence and send them to the **Report** tab in this panel, which files a ticket the team reads (type, title, description); for anything commercial — access for a colleague, another motor, terms — vadim@motresres.com. Ask for the missing detail first (what they did, what happened, which motor and duty) so the ticket is worth reading. Never promise a fix, a date or a price.
 - **Never invent a price, a plan, a tier, a discount or a delivery date** — access and commercial terms are agreed individually with vadim@motresres.com.
 - Never discuss how this assistant itself is built, which model or vendor answers, or anything about the servers."""
 
@@ -122,19 +145,131 @@ Ask what matters: the target **torque** and **speed** (or the mechanical load), 
 #: Appended to the system prompt for a caller with NO account (the landing page
 #: widget).  A visitor is not a user: they cannot open a tab, they have no
 #: granted motors, and the only answer they are actually after is how to get in.
+#:
+#: It also carries the ACCESS-REQUEST CONTRACT — the marker that turns "somebody
+#: chatted with the bot" into a row in the team's inbox.  There is no tool API in
+#: this call, so the contract is written the way a person would be told it, and
+#: the backend (``parse_access_request``) is what actually enforces it: the line
+#: never reaches the visitor, and a request without a valid e-mail is never filed.
 VISITOR_NOTE = """
 
 ## Visitor mode — this person is NOT signed in
 They are on the public landing page and have no account yet. Answer product
 questions briefly and plainly — what the portal is for, what it analyses, what a
-motor design involves — in two or three sentences. When they ask about access,
-say plainly that access is **by invitation**: use the **Request access** link on
-the page, or write to vadim@motresres.com, and the team creates the account and
-grants the motors it may open. Plans and pricing are agreed individually; never
-name a price or a plan, and never say there is a free tier or a trial. Do NOT
-describe internal data, the catalog's contents, any specific customer machine or
-numbers from any design, and do not walk them step by step through tabs they
-cannot open yet."""
+motor design involves — in two or three sentences. Access is **by invitation**:
+the **Request access** link on the page, or a note to vadim@motresres.com, and
+the team creates the account and grants the motors it may open. Plans and
+pricing are agreed individually; never name a price or a plan, and never say
+there is a free tier or a trial. Do NOT describe internal data, the catalog's contents,
+any specific customer machine or numbers from any design, and do not walk
+them step by step through tabs they cannot open yet.
+
+### What to do, and when
+1. **A question about the product** → answer it, briefly. Nothing else needed.
+2. **They want access, a quote, a demo, prices, or to be contacted** → collect
+   their details, ONE QUESTION AT A TIME, in a sentence, never as a form or a
+   list of fields: their name, then the company, then their work e-mail, then in
+   one sentence what they want to do (which machine, what power / torque /
+   speed, what it is for). Never ask again for something they already told you.
+   As soon as you have a valid e-mail — even if the rest is still missing —
+   finish that reply with the confirmation *"I've passed this to the team —
+   you'll hear from vadim@motresres.com."* and then, as the VERY LAST line of
+   the message, on its own line, exactly this:
+   [[ACCESS_REQUEST: name="…"; company="…"; email="…"; note="…"]]
+   Fill in what you know and leave "" for what you do not. Write it at most ONCE
+   per reply, never in a reply that carries no e-mail address, and never mention
+   it, explain it, quote it or offer it as an example — it is for the team's
+   system, not for the visitor, who never sees it.
+3. **A bug, an idea, or something that looks broken** → thank them and say the
+   team reads these conversations, so it has been passed on; signed-in users
+   file it themselves with the **Report** tab. Ask for one detail (what they did
+   and what happened) so it is useful.
+4. **Never promise a timeline, a price, a plan, a tier, a trial, a delivery date
+   or a callback within any particular time.** The team answers every request
+   personally, and that is all you may say about when."""
+
+
+# ── the access-request marker ────────────────────────────────────────────────
+#: What the assistant appends when it has collected a visitor's contact details.
+#: Values may be double-quoted, single-quoted or bare (a model is not a parser
+#: generator); keys other than the four are ignored rather than fatal; a `]` can
+#: never appear inside, which is what stops a half-written marker from eating the
+#: rest of the reply.
+_MARKER_RE = re.compile(r"\[\[\s*ACCESS_REQUEST\s*:(?P<body>[^\]]*)\]\]",
+                        re.IGNORECASE | re.DOTALL)
+#: The same thing, plus the whitespace that only existed to separate it from the
+#: sentence above: removing the marker alone leaves the visitor's message ending
+#: in a hole where it used to be.
+_MARKER_CUT_RE = re.compile(r"\s*\[\[\s*ACCESS_REQUEST\s*:[^\]]*\]\][ \t]*",
+                            re.IGNORECASE | re.DOTALL)
+#: A marker the model started and never closed: it must still not reach the
+#: visitor, and there is nothing after it worth keeping.
+_MARKER_TAIL_RE = re.compile(r"\s*\[\[\s*ACCESS_REQUEST\s*:.*\Z",
+                             re.IGNORECASE | re.DOTALL)
+_FIELD_RE = re.compile(
+    r"""(?P<key>[A-Za-z_]+)\s*=\s*(?:"(?P<dq>[^"]*)"|'(?P<sq>[^']*)'|(?P<bare>[^;]*))""",
+    re.DOTALL)
+#: Deliberately plain: one @, a dotted domain, a 2+ letter TLD, no spaces.  It is
+#: a guard against "the model wrote a sentence where the address goes", not an
+#: RFC 5322 implementation — the team's reply is what proves an address real.
+_EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$")
+_FIELDS = ("name", "company", "email", "note")
+#: Said in the visitor's place when stripping the marker leaves nothing — a
+#: model that answers with the marker ALONE has still done the job, and an empty
+#: bubble would tell the visitor their details went nowhere.
+ACCESS_CONFIRMATION = (
+    "Thank you — I've passed this to the team. You'll hear from "
+    "vadim@motresres.com."
+)
+
+
+def valid_email(value: str) -> bool:
+    v = (value or "").strip()
+    return bool(v) and len(v) <= 254 and bool(_EMAIL_RE.match(v))
+
+
+def _fields_of(body: str) -> dict:
+    out: dict = {}
+    for m in _FIELD_RE.finditer(body or ""):
+        key = (m.group("key") or "").strip().lower()
+        if key not in _FIELDS:
+            continue
+        raw = m.group("dq")
+        if raw is None:
+            raw = m.group("sq")
+        if raw is None:
+            raw = m.group("bare") or ""
+        out[key] = raw.strip().strip(",").strip()
+    return out
+
+
+def parse_access_request(reply: str) -> tuple[str, Optional[dict]]:
+    """Split one assistant reply into (what the visitor reads, the request).
+
+    The marker NEVER survives into the first half — not when it parses, not when
+    it is malformed, not when the model wrote three of them.  The second half is
+    the LAST marker that carries a valid e-mail, or ``None``: a request with a
+    made-up address is a row nobody can answer, and filing it would only teach
+    the inbox to be ignored.
+    """
+    text = reply or ""
+    best: Optional[dict] = None
+    for m in _MARKER_RE.finditer(text):
+        f = _fields_of(m.group("body"))
+        email = (f.get("email") or "").strip().lower()
+        if not valid_email(email):
+            continue
+        best = {"name": f.get("name", "")[:200],
+                "company": f.get("company", "")[:200],
+                "email": email,
+                "note": f.get("note", "")[:1000]}
+    clean = _MARKER_CUT_RE.sub("", text)
+    clean = _MARKER_TAIL_RE.sub("", clean)
+    # Collapse the blank lines the removal left behind, so the visitor's bubble
+    # does not end in a hole where the marker used to be.
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    return clean, best
 
 
 # ── Firestore-backed admin overrides (config/ai) ─────────────────────────────
@@ -620,6 +755,68 @@ def _mock_reply(messages: list[dict]) -> str:
     )
 
 
+def _visitor_turn(messages: list[dict]) -> str:
+    """The question this call is answering (the last user message)."""
+    return next((m["content"] for m in reversed(messages)
+                 if m.get("role") == "user"), "")
+
+
+def _deliver(reply: str, source: str, *, anon: bool, messages: list[dict],
+             ip: str = "", ua: str = "", model: str = "", limit: str = "",
+             **extra) -> dict:
+    """The ONE exit of the chat route for a caller who asked something.
+
+    For a SIGNED-IN caller it is a pass-through: their chat is theirs, it is not
+    logged here, and no marker is looked for (the note that defines one is only
+    appended to a visitor's prompt).
+
+    For a VISITOR it does the three things the owner asked for: strip and file
+    the access-request marker, push it, and write the turn to the day's log.
+    None of it may fail the reply — everything below either swallows its own
+    errors (`support_store`, `notify`) or is wrapped here.
+    """
+    out: dict = {"reply": reply, "source": source}
+    if model:
+        out["model"] = model
+    if limit:
+        out["limit"] = limit
+    out.update(extra)
+    if not anon:
+        return out
+
+    filed = None
+    try:
+        clean, req = parse_access_request(reply)
+        if req is not None:
+            from motor_ai_sim import notify, support_store
+            transcript = [{"role": m.get("role"), "content": m.get("content")}
+                          for m in messages]
+            transcript.append({"role": "assistant", "content": clean})
+            filed = support_store.file_access_request(
+                email=req["email"], name=req["name"], company=req["company"],
+                note=req["note"], transcript=transcript, ip=ip, user_agent=ua)
+            if filed is not None:
+                notify.access_request(filed)
+        if not clean.strip():
+            # The marker WAS the whole message.  Never hand back an empty bubble.
+            clean = ACCESS_CONFIRMATION if req is not None else reply
+        out["reply"] = clean
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning("support: access-request handling failed (%s: %s) — the "
+                       "visitor still gets their answer", type(e).__name__, e)
+
+    try:
+        from motor_ai_sim import notify, support_store
+        support_store.log_visitor_turn(
+            ip=ip, user_agent=ua, messages=messages,
+            user_message=_visitor_turn(messages), reply=out["reply"],
+            source=source, model=model, limit=limit)
+        notify.maybe_daily_digest()
+    except Exception:                                        # noqa: BLE001
+        pass
+    return out
+
+
 @router.post("/chat")
 def chat(request: Request, body: dict = Body(default={}),
          authorization: Optional[str] = Header(default=None)):
@@ -632,47 +829,54 @@ def chat(request: Request, body: dict = Body(default={}),
     if not messages:
         return {"reply": "Hi! How can I help you with the motor simulator?", "source": "mock"}
 
+    ua = ""
+    try:
+        ua = (request.headers.get("user-agent") or "") if request else ""
+    except Exception:                                        # pragma: no cover
+        ua = ""
+    ip = client_ip(request) if anon else ""
+    deliver = lambda reply, source, **kw: _deliver(          # noqa: E731
+        reply, source, anon=anon, messages=messages, ip=ip, ua=ua, **kw)
+
     # The limiter sits in front of the provider call and nowhere else: it must
     # bound what is SPENT, so a signed-in user never meets it and a refusal
     # never reaches the provider.
     if anon:
-        ip = client_ip(request)
         hit = _charge_anonymous(ip)
         if hit is not None:
             logger.warning("support: anonymous chat REFUSED (%s) ip=%s ua=%r",
-                           hit, ip or "?",
-                           (request.headers.get("user-agent") if request else "")
-                           or "")
+                           hit, ip or "?", ua)
+            # Logged like any other turn — "forty questions and then a wall" is
+            # something the team must be able to see in the visitor log.
             return JSONResponse(
                 status_code=429,
-                content={"reply": _LIMIT_REPLIES[hit], "source": "rate_limited",
-                         "limit": hit},
+                content=deliver(_LIMIT_REPLIES[hit], "rate_limited", limit=hit),
                 headers={"Retry-After": str(_RETRY_AFTER[hit])},
             )
 
     eff = _effective()
     provider = eff["provider"]
     if provider == "none":
-        return {"reply": _mock_reply(messages), "source": "mock"}
+        return deliver(_mock_reply(messages), "mock")
 
     sp = _effective_prompt() + (VISITOR_NOTE if anon else "")
     try:
         if provider == "gemini":
             g = eff["gemini"]
             if not g["key"]:
-                return {"reply": _mock_reply(messages), "source": "mock"}
+                return deliver(_mock_reply(messages), "mock")
             text = _call_provider(
                 lambda: _gemini_reply(messages, g["key"], g["model"], sp))
-            return {"reply": text or "(no reply)", "source": "gemini", "model": g["model"]}
+            return deliver(text or "(no reply)", "gemini", model=g["model"])
         # anthropic
         a = eff["anthropic"]
         client = _anthropic_client(a["key"])
         if client is None:
-            return {"reply": _mock_reply(messages), "source": "mock"}
+            return deliver(_mock_reply(messages), "mock")
         resp = _call_provider(lambda: client.messages.create(
             model=a["model"], max_tokens=1024, system=sp, messages=messages))
         text = next((b.text for b in resp.content if b.type == "text"), "")
-        return {"reply": text or "(no reply)", "source": "claude", "model": a["model"]}
+        return deliver(text or "(no reply)", "claude", model=a["model"])
     except Exception as e:
         msg = str(e)
         rate_limited = "429" in msg or "quota" in msg.lower() or "RESOURCE_EXHAUSTED" in msg
@@ -686,13 +890,9 @@ def chat(request: Request, body: dict = Body(default={}),
                  "answer every request personally"
                  if anon else
                  "use the **Report** tab to reach the team")
-        return {
-            "reply": (
-                f"The assistant is busy right now (usage limit reached). Please try "
-                f"again in a minute — or {where}."
-                if rate_limited else
-                f"Sorry — I couldn't answer just now. Please try again, or {where}."
-            ),
-            "source": "error",
-            "detail": msg[:200],
-        }
+        return deliver(
+            (f"The assistant is busy right now (usage limit reached). Please try "
+             f"again in a minute — or {where}."
+             if rate_limited else
+             f"Sorry — I couldn't answer just now. Please try again, or {where}."),
+            "error", detail=msg[:200])

@@ -26,6 +26,7 @@ import {
 } from 'recharts';
 import SupportSettings, { type SupportCfg } from './SupportSettings';
 import SessionsSection from './SessionsSection';
+import VisitorRequests from './VisitorRequests';
 import ModulesPanel from './ModulesPanel';
 import PassportManager from './PassportManager';
 import { ConfirmDialog, type ConfirmState } from '../common/PromptDialogs';
@@ -300,7 +301,9 @@ const MotorsDialog: React.FC<{
 
 const InviteDialog: React.FC<{
   open: boolean; onClose: () => void; onInvited: (msg: string) => void;
-}> = ({ open, onClose, onInvited }) => {
+  /** Pre-fill, so "Invite" on a visitor request opens this already addressed. */
+  email?: string;
+}> = ({ open, onClose, onInvited, email: prefill }) => {
   const dies = useCatalog(open);
   const [email, setEmail] = useState('');
   const [tier, setTier] = useState<string>('free');
@@ -312,9 +315,9 @@ const InviteDialog: React.FC<{
 
   useEffect(() => {
     if (!open) return;
-    setEmail(''); setTier('free'); setNote(''); setAll(false);
+    setEmail(prefill ?? ''); setTier('free'); setNote(''); setAll(false);
     setPicked(new Set()); setErr(null);
-  }, [open]);
+  }, [open, prefill]);
 
   const toggle = (name: string) => setPicked((s) => {
     const n = new Set(s);
@@ -406,6 +409,7 @@ const AdminPanel: React.FC = () => {
   const [supportCfg, setSupportCfg] = useState<SupportCfg | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [invitePrefill, setInvitePrefill] = useState('');
   const [resetFor, setResetFor] = useState<string | null>(null);
   const [motorsFor, setMotorsFor] = useState<RegistryUser | null>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
@@ -498,7 +502,7 @@ const AdminPanel: React.FC = () => {
         <Box sx={{ flex: 1 }} />
         {notice && <Typography sx={{ fontSize: 11, color: '#34d399' }}>✓ {notice}</Typography>}
         <Tooltip title="Creates the account, its plan and its motors, and seeds its workspace. No e-mail is sent — tell them to sign in with Google with this address." arrow>
-          <Button size="small" startIcon={<MailOutlineIcon sx={{ fontSize: 16 }} />} onClick={() => setInviteOpen(true)}
+          <Button size="small" startIcon={<MailOutlineIcon sx={{ fontSize: 16 }} />} onClick={() => { setInvitePrefill(''); setInviteOpen(true); }}
             variant="outlined" sx={{ textTransform: 'none', fontSize: 12 }}>
             Invite
           </Button>
@@ -683,6 +687,9 @@ const AdminPanel: React.FC = () => {
           {/* sessions + auth events */}
           <SessionsSection />
 
+          {/* visitors who asked for access, and the chats behind them */}
+          <VisitorRequests onInvite={(email) => { setInvitePrefill(email); setInviteOpen(true); }} />
+
           {/* support tickets */}
           <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 3, mb: 1 }}>
             <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)' }}>Support tickets</Typography>
@@ -755,7 +762,7 @@ const AdminPanel: React.FC = () => {
 
       <CreateUserDialog open={createOpen} onClose={() => setCreateOpen(false)}
         onCreated={() => { setNotice('account created'); void load(); }} />
-      <InviteDialog open={inviteOpen} onClose={() => setInviteOpen(false)}
+      <InviteDialog open={inviteOpen} email={invitePrefill} onClose={() => setInviteOpen(false)}
         onInvited={(m) => { setNotice(m); void load(); }} />
       <ResetPasswordDialog email={resetFor} onClose={() => setResetFor(null)}
         onDone={(m) => setNotice(m)} />

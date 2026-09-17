@@ -565,3 +565,67 @@ def support_models(_admin: dict = Depends(require_admin)):
     """Available models per provider (live from the provider API, static fallback)."""
     from motor_ai_sim.routes import support as support_mod
     return support_mod.list_models()
+
+
+# ── The visitor inbox ─────────────────────────────────────────────────────────
+# A signed-out visitor talks to the assistant on the landing page.  Until
+# 2026-09-17 that conversation ended in the browser and the team never heard it;
+# now every anonymous turn is logged and a visitor who gives their contact
+# details becomes an ACCESS REQUEST (support_store).  These four routes are the
+# Admin tab's side of it, and they are admin-only like everything else here: the
+# door (PUBLIC_EXHIBIT) keeps an anonymous caller out with 401, require_admin
+# turns a signed-in non-admin away with 403.
+#
+# NOT `require_admin_or_token`: the static ADMIN_API_TOKEN is for the headless
+# read-only tickets agent, and a visitor's conversation is personal data that has
+# no business being readable by a shared static string.
+
+_VALID_REQUEST_STATUS = ("new", "contacted", "invited", "declined")
+
+
+@router.get("/support/requests")
+def support_requests(_admin: dict = Depends(require_admin)):
+    """Every access request a visitor left with the assistant, newest first."""
+    from motor_ai_sim import support_store as S
+    rows = S.list_access_requests()
+    return {"count": len(rows),
+            "new": sum(1 for r in rows if r.get("status") == "new"),
+            "requests": rows}
+
+
+@router.patch("/support/requests/{request_id}")
+def set_support_request_status(request_id: str, body: dict = Body(default={}),
+                               _admin: dict = Depends(require_admin)):
+    """Move one request through new → contacted / invited / declined."""
+    from motor_ai_sim import support_store as S
+    status = str((body or {}).get("status") or "").strip().lower()
+    if status not in _VALID_REQUEST_STATUS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"status must be one of {_VALID_REQUEST_STATUS}")
+    rec = S.set_status(request_id, status)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"no request '{request_id}'")
+    return {"ok": True, "request": rec}
+
+
+@router.delete("/support/requests/{request_id}")
+def delete_support_request(request_id: str,
+                           _admin: dict = Depends(require_admin)):
+    """Drop one request — a test row, or one the team is finished with.
+
+    The visitor CHAT log is not touched: it is the day's record of what was said
+    and it ages out on its own (90 days), while the inbox is a worklist.
+    """
+    from motor_ai_sim import support_store as S
+    if not S.delete_request(request_id):
+        raise HTTPException(status_code=404, detail=f"no request '{request_id}'")
+    return {"ok": True, "id": request_id}
+
+
+@router.get("/support/visitor_chats")
+def support_visitor_chats(day: str = "", _admin: dict = Depends(require_admin)):
+    """One day of visitor conversations, read-only.  `?day=YYYY-MM-DD`;
+    without it, the newest day that has a log."""
+    from motor_ai_sim import support_store as S
+    return S.conversations(day)

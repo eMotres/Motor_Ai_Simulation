@@ -11,6 +11,7 @@ import {
   IconButton,
   Tooltip,
   Chip,
+  Badge,
   CircularProgress,
   ToggleButtonGroup,
   ToggleButton,
@@ -53,6 +54,8 @@ import type { SelectedMaterial, MaterialCategory } from './components/materials/
 import { saveGlobal, blankMaterial, type Cat } from './lib/materialsActions';
 import { useMotorStore, useUIStore } from './stores/motorStore';
 import { installDiag } from './lib/diag';
+import { newRequestCount } from './lib/visitorRequests';
+import { pageVisible } from './lib/pageVisible';
 import SimulationPanel from './components/simulation/SimulationPanel';
 import Static3DPanel from './components/static3d/Static3DPanel';
 import MechanicalPanel from './components/mechanical/MechanicalPanel';
@@ -68,6 +71,35 @@ import { useModulePanels } from './modules/moduleTabs';
 // Theme is built from the shared eMotres/aerostator design tokens — see
 // src/theme.ts.  Light is the default (matches the marketing site); dark
 // stays available via the AppBar toggle.
+
+const API_BASE = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
+
+/** How many visitors are waiting for an answer — the badge on the Admin tab.
+ *
+ *  A visitor who asks for access on the landing page leaves a request the admin
+ *  has no other reason to go looking for, so the tab itself says there is one.
+ *  Admin-only and deliberately silent: a 401/403 (or a signed-out moment) is not
+ *  an error here, it is "no badge", and nothing is polled while the tab is
+ *  hidden or the user is not an admin. */
+function useNewRequestCount(isAdmin: boolean): number {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    if (!isAdmin) { setN(0); return; }
+    let alive = true;
+    const read = () => {
+      if (!pageVisible()) return;
+      fetch(`${API_BASE}/api/admin/support/requests`, { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => { if (alive) setN(newRequestCount(j?.requests)); })
+        .catch(() => { /* signed out, offline, or not an admin — no badge */ });
+    };
+    read();
+    const id = setInterval(read, 60_000);
+    window.addEventListener('focus', read);
+    return () => { alive = false; clearInterval(id); window.removeEventListener('focus', read); };
+  }, [isAdmin]);
+  return n;
+}
 
 // ─── Geometry build timer ───────────────────────────────────────────────────
 const indicatorBoxSx = {
@@ -167,6 +199,7 @@ function App() {
   // exactly what it was, and only an anonymous one waits.
   const authPending = !authResolved && !user;
   const fullUI   = !enforced || isAdmin || tier === 'pro' || tier === 'team';
+  const newRequests = useNewRequestCount(isAdmin);
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
   const { library: matLibrary, loading: matLoading, error: matError, reload: matReload } = useMaterialsLibrary();
@@ -567,7 +600,19 @@ function App() {
             sx={{ minHeight: 40 }}
           >
             {tabs.map((t) => (
-              <Tab key={t.id} label={t.label} value={t.id}
+              <Tab key={t.id} value={t.id}
+                /* The badge rides on the RENDERED label, never on the registry
+                   literal above: tests/test_support_chat_limits.py regexes the
+                   id/label pairs out of this file and holds every one of them
+                   to the assistant's system prompt, so the literals must stay
+                   plain strings.  (Nor may this comment spell such a pair out —
+                   the regex would capture it as a fourteenth tab.) */
+                label={t.id === 'admin' && newRequests > 0 ? (
+                  <Badge badgeContent={newRequests} color="error" invisible={newRequests === 0}
+                    sx={{ '& .MuiBadge-badge': { top: -2, right: -10, height: 15, minWidth: 15, fontSize: 9.5 } }}>
+                    {t.label}
+                  </Badge>
+                ) : t.label}
                 /* Sentence case and tight padding: "ELECTROMAGNETIC" in caps
                    did not fit a full-width tab and was clipped to "ECTROMAGNE"
                    (user 2026-09-08). */

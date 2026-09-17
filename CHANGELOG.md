@@ -7,6 +7,23 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Changed
+- **The duty cycle is behind a feature flag, off by default** (owner 2026-09-17:
+  *«давай пока уберём duty cycle из Thermal, оставим только стандартный
+  каплинг»*). The Thermal tab is the cooling and the coupled EM↔thermal loop
+  again; the Duty cycle block, the catalog's S1/S3 chip and every ED term a
+  coupled answer could print are hidden behind the build flag `VITE_DUTY_CYCLE`,
+  and the loop's own ED search behind the backend env var `DUTY_CYCLE_ENABLED`.
+  With the backend flag off `POST /api/coupled/run` runs the **standard** loop
+  for every duty — a stored S2/S3 block is read as the continuous point, the
+  temperatures iterate to their fixed point, no `duty_cycle` sub-block is written
+  and no cycle record is filed. Nothing was deleted: `1` on either flag restores
+  that half exactly. The standalone `POST /api/thermal/duty_cycle`, the heat
+  paths, the `robotics` cooling mode and every duty-cycle record already filed
+  are untouched — the report still prints its cycle section for a stored record.
+  Rationale and the operator's view: `deploy/README.md` § *The duty cycle is
+  behind a flag*.
+
 ### Added
 - **A second optimizer search: screening descent** (`POST /api/optimization/auto`
   with `mode: "screen"`; the Optimize card's **Explore / Refine** switch). The

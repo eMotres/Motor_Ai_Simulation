@@ -22,6 +22,7 @@
  */
 import { regimeLine, type RegimeLimits }
   from '../thermal/dutyCycleRegime';
+import { DUTY_CYCLE_ENABLED } from '../../lib/dutyCycleFlag';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const BASE = `${API.replace(/\/$/, '')}/api/coupled`;
@@ -364,7 +365,11 @@ export function couplingLine(c: CouplingBlock): string {
 
 /** "ED 21.6 % of 60 s ⚠" — the found regime, short enough for the card. */
 export function regimeTerm(r: CoupledRegime | null | undefined): string | null {
-  if (!r) return null;
+  // …and nothing at all while the duty-cycle feature is off (owner 2026-09-17).
+  // With the backend flag off no coupled answer carries a regime anyway; this
+  // guard is for the RESTORED one — a record filed before the feature was put
+  // away must not print an ED on a build that has no duty cycle in it.
+  if (!r || !DUTY_CYCLE_ENABLED) return null;
   const flag = r.feasible === false || r.fits_requested === false ? ' ⚠' : '';
   if (r.kind === 'S2') {
     const t = r.t_on_allowable_s;
@@ -386,7 +391,7 @@ export function regimeTerm(r: CoupledRegime | null | undefined): string | null {
 export function coupledRegimeNotice(c: CouplingBlock | null | undefined):
     string | null {
   const r = c?.duty_cycle;
-  if (!r) return null;
+  if (!r || !DUTY_CYCLE_ENABLED) return null;
   if (r.feasible !== false && r.fits_requested !== false) return null;
   return `Duty cycle: ${r.note || regimeLine(r) || 'the duty does not fit'}`;
 }
@@ -456,7 +461,7 @@ export function couplingTooltip(c: CouplingBlock): string {
  *  temperatures, and what the duty asked for.  Nothing on a continuous duty. */
 function regimeRows(c: CouplingBlock): string[] {
   const r = c.duty_cycle;
-  if (!r) return [];
+  if (!r || !DUTY_CYCLE_ENABLED) return [];
   const rows: string[] = [
     `Duty cycle (${r.kind ?? 'S3'}${r.duty ? ` · ${r.duty}` : ''}): this point `
     + 'is an impulse, so the loop did not iterate to the temperature it would '

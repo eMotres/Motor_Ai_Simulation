@@ -23,6 +23,7 @@ import ConfigHistoryDialog from './ConfigHistoryDialog';
 import {
   clearDutyMaterialsKeys, dutyCycleChip, setActiveDuty,
 } from '../../lib/dutySettings';
+import { gatedDutyCycleChip } from '../../lib/dutyCycleFlag';
 import { driveLabel } from '../../lib/dutyRuns';
 // The LOCAL half of this load — the panel's own operating point, the duty's
 // settings block, its materials and its stored runs.  Shared verbatim with the
@@ -1099,7 +1100,11 @@ const FamilyCatalog: React.FC<{
                                 — saying "S1" for it would claim a continuous
                                 rating nobody wrote.  One short chip, the block
                                 itself in the tooltip (no-walls-of-text rule). */}
-                            {dutyCycleChip(d.duty_cycle) && (
+                            {/* …and NOTHING at all while the duty-cycle feature
+                                is off (owner 2026-09-17) — the chip is the one
+                                place a hidden feature would still name itself
+                                in the catalog.  `lib/dutyCycleFlag`. */}
+                            {gatedDutyCycleChip(dutyCycleChip(d.duty_cycle)) && (
                               <Tooltip key="dc" placement="top"
                                 title={dutyCycleTip(d.duty_cycle)}>
                                 <span style={{
@@ -1107,7 +1112,7 @@ const FamilyCatalog: React.FC<{
                                   borderRadius: 3, cursor: 'help', fontWeight: 600,
                                   color: '#a78bfa', border: '1px solid #a78bfa55',
                                 }}>
-                                  {dutyCycleChip(d.duty_cycle)}
+                                  {gatedDutyCycleChip(dutyCycleChip(d.duty_cycle))}
                                 </span>
                               </Tooltip>
                             )}

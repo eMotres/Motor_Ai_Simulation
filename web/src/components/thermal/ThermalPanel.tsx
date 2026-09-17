@@ -33,6 +33,7 @@ import { SolveTimer, solvedIn } from '../mechanical/SolveTimer';
 import ThermalMap, { GeometryMap } from './ThermalMap';
 import HeatPathView3D from './HeatPathView3D';
 import DutyCycleEditor from './DutyCycleEditor';
+import { DUTY_CYCLE_ENABLED } from '../../lib/dutyCycleFlag';
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
 import {
   fmt, fmtSecs, meshParams, outerCooling, simOperatingPoint, writeSimCoilTemp,
@@ -1071,8 +1072,14 @@ const ThermalPanel: React.FC = () => {
             so it is read before the mesh and the map, not after them.
 
             Still inert: nothing in it solves on mount, and its own RUN CYCLE
-            button remains the standalone tool. */}
-        <DutyCycleEditor />
+            button remains the standalone tool.
+
+            …and BEHIND A FLAG since 2026-09-17 (owner: «давай пока уберём duty
+            cycle из Thermal, оставим только стандартный каплинг»).  Off by
+            default, so this tab is the cooling and the coupled loop and nothing
+            else; `VITE_DUTY_CYCLE=1` at build time brings the block back
+            exactly as it is.  Nothing was deleted — see `lib/dutyCycleFlag`. */}
+        {DUTY_CYCLE_ENABLED && <DutyCycleEditor />}
 
         {/* ── where the physics comes from: the Electromagnetic tab, always ──── */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>

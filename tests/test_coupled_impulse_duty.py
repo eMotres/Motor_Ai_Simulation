@@ -48,6 +48,20 @@ BODY = {"n_steps_per_period": 4, "drive": "current",
         "eddy": True, "rotor_eddy": True}
 
 
+@pytest.fixture(autouse=True)
+def duty_cycle_on(monkeypatch):
+    """THE FEATURE FLAG, on (owner 2026-09-17).
+
+    Everything in this file is about what the coupled loop does with an impulse
+    duty, and since 2026-09-17 it does any of it only when
+    ``DUTY_CYCLE_ENABLED`` says so — the owner asked for the duty cycle to be
+    out of the way "for now", and the switch that puts it back is this variable.
+    So every test here runs with the feature ON and pins it unchanged; what the
+    loop does with the feature OFF is pinned beside the gate, below.
+    """
+    monkeypatch.setenv("DUTY_CYCLE_ENABLED", "1")
+
+
 @pytest.fixture()
 def catalog(tmp_path, monkeypatch):
     """A throwaway die whose one duty carries the S3 cycle, with the family
@@ -177,6 +191,26 @@ def test_only_an_impulse_duty_gets_a_cycle_context(catalog):
     for blk in ({"kind": "S1"}, {"kind": "segments",
                                  "segments": [{"duty": DUTY, "t_s": 2.0}]}):
         assert cp._cycle_inputs({"duty_cycle": dict(blk)}, {}) is None
+
+
+def test_with_the_feature_off_no_duty_gets_one(catalog, monkeypatch):
+    """THE REMOVAL of 2026-09-17, at the gate.  With ``DUTY_CYCLE_ENABLED``
+    unset the loop is the standard loop for every duty — the S3 block stored on
+    this one is read as the continuous point it was read as before cycles
+    existed, and a malformed block refuses nothing, because nothing is going to
+    solve it."""
+    from motor_ai_sim.routes import coupled as cp
+
+    monkeypatch.delenv("DUTY_CYCLE_ENABLED", raising=False)
+    assert cp._cycle_inputs({}, {}) is None
+    assert cp._cycle_inputs({"duty_cycle": dict(S3)}, {}) is None
+    assert cp._cycle_inputs({"duty_cycle": dict(S2), "duty": "pull"}, {}) is None
+    # the block is still THERE — hidden, never deleted
+    blk, name = cp._duty_cycle_of({})
+    assert name == DUTY and blk["kind"] == "S3"
+    # …and the pre-flight lets a cycle nobody will solve through
+    cp._preflight({**BODY, "duty_cycle": {"kind": "S3", "ed_pct": 25,
+                                          "cycle_s": 0}}, max_iter=6)
 
 
 def test_an_errand_never_gets_one(catalog):

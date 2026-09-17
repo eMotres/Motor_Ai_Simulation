@@ -66,6 +66,7 @@ it.  Every refusal is a :class:`thermal_duty_cycle.DutyCycleError` carrying the
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field as _field, replace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -76,6 +77,38 @@ from motor_ai_sim.thermal_duty_cycle import DutyCycleError
 #: The duty-cycle kinds that are an IMPULSE — the machine does not sit at the
 #: point long enough for a steady temperature to be the answer.
 IMPULSE_KINDS: Tuple[str, ...] = ("S2", "S3")
+
+#: The env var that switches everything above BACK ON, and the values that count
+#: as "on".  Off is the default (owner, 2026-09-17: *«давай пока уберём duty
+#: cycle из Thermal, оставим только стандартный каплинг»*).
+DUTY_CYCLE_ENV = "DUTY_CYCLE_ENABLED"
+_ON = ("1", "true", "yes", "on")
+
+
+def enabled() -> bool:
+    """Is the coupled loop's duty-cycle search switched on?
+
+    OFF BY DEFAULT since 2026-09-17.  With the feature off the coupled loop runs
+    the STANDARD loop for every duty: a stored S2/S3 block is read as the
+    continuous point it was read as before cycles existed — the temperatures
+    iterate to their fixed point, no ED is searched, and no ``duty_cycle``
+    sub-block is written into the answer or filed as a record.
+    ``DUTY_CYCLE_ENABLED=1`` restores the behaviour of 2026-09-16 exactly;
+    nothing in this module was removed.
+
+    WHAT THE FLAG DOES NOT TOUCH, on purpose: ``POST /api/thermal/duty_cycle``
+    (the standalone tool is how a cycle is still asked about), the heat paths and
+    the ``robotics`` cooling mode (a different feature that merely arrived in the
+    same week), and every duty-cycle record already filed — the report prints its
+    cycle section when a RECORD exists, so stored answers stay readable.
+
+    Read from the environment on every call rather than at import: a flag that is
+    frozen into a module at import time cannot be flipped in a test, and cannot
+    be flipped by an operator without a restart of something that is not the
+    process they just edited the env of.
+    """
+    return str(os.environ.get(DUTY_CYCLE_ENV, "")).strip().lower() in _ON
+
 
 #: How far the found duty ratio may move between two passes and still count as
 #: settled [percentage POINTS].  One point of ED on a 60 s cycle is 0.6 s of

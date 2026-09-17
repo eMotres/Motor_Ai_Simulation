@@ -263,13 +263,17 @@ LOOP_BODY = {**EM_BODY, "thermal_settings": PANEL_COOLING, "magnet_temp_c": 90.0
              "mechanical": False}
 
 
-@pytest.fixture
-def faked_loop(monkeypatch):
+def _fake_the_halves(monkeypatch, *, stub_cycle_inputs: bool):
     """``_em_run``, ``_thermal_solve`` and ``_cycle_step`` replaced by recorders.
 
     The thermal map hands back a winding at 400 °C — where this point WOULD end
     up if the pull never ended — so a loop that fed back the steady map instead
     of the cycle would be visible immediately.
+
+    ``stub_cycle_inputs`` is the one switch: with it the cycle context is handed
+    to the loop ready-made (no catalog, no geometry — the wiring is what these
+    tests are about), without it the REAL ``_cycle_inputs`` runs and the feature
+    flag is what decides whether this run gets a regime at all.
     """
     from motor_ai_sim.routes import coupled as cp
 
@@ -313,16 +317,19 @@ def faked_loop(monkeypatch):
                         raising=True)
     monkeypatch.setattr(cp, "_remember_last", lambda out, **k: None,
                         raising=True)
-    monkeypatch.setattr(
-        cp, "_cycle_inputs",
-        lambda body, cooling: {"duty": "peak", "die": "D", "config": "C",
-                               "duties": [], "geometry": {}, "d_housing_m": 0.0,
-                               "materials": {}, "part_states": None,
-                               "block": dict(S3), "magnet_limit_c": None,
-                               "magnet_limit_source": "", "rated_state_c": {},
-                               "rated_duty": "", "rated_state_source": "",
-                               "cooling": {}},
-        raising=True)
+    if stub_cycle_inputs:
+        monkeypatch.setattr(
+            cp, "_cycle_inputs",
+            lambda body, cooling: {"duty": "peak", "die": "D", "config": "C",
+                                   "duties": [], "geometry": {},
+                                   "d_housing_m": 0.0,
+                                   "materials": {}, "part_states": None,
+                                   "block": dict(S3), "magnet_limit_c": None,
+                                   "magnet_limit_source": "",
+                                   "rated_state_c": {},
+                                   "rated_duty": "", "rated_state_source": "",
+                                   "cooling": {}},
+            raising=True)
 
     def _final(model, **kw):
         # the FINAL, full-resolution re-solve: the same search on the model the
@@ -341,6 +348,25 @@ def faked_loop(monkeypatch):
         lambda rec, params, fp, at=None, **kw: seen["filed"].append((rec, kw)),
         raising=True)
     return seen
+
+
+@pytest.fixture
+def faked_loop(monkeypatch):
+    """The halves faked, the cycle context handed in, and the FEATURE FLAG ON.
+
+    Everything below (b) is about the loop's wiring when the duty cycle is
+    switched on, which since 2026-09-17 is not the default: the flag is set here
+    so these tests keep saying what they always said — ``DUTY_CYCLE_ENABLED=1``
+    is today's behaviour of yesterday.
+    """
+    monkeypatch.setenv(cdc.DUTY_CYCLE_ENV, "1")
+    return _fake_the_halves(monkeypatch, stub_cycle_inputs=True)
+
+
+@pytest.fixture
+def faked_loop_real_gate(monkeypatch):
+    """The same halves with the REAL ``_cycle_inputs`` — the gate under test."""
+    return _fake_the_halves(monkeypatch, stub_cycle_inputs=False)
 
 
 @pytest.fixture(scope="module")
@@ -500,6 +526,73 @@ def test_an_s1_machine_is_untouched(client, monkeypatch, faked_loop):
     assert faked_loop["coil_in"] == [120.0, 400.0]     # the map's winding avg
     assert faked_loop["final"] == 0 and not faked_loop["filed"]
     assert all("ed_allowable_pct" not in row for row in c["history"])
+
+
+# ---------------------------------------------------------------------------
+# (b2) THE FEATURE FLAG — with the duty cycle OFF, every duty is the point it is
+# ---------------------------------------------------------------------------
+# Owner, 2026-09-17: *«давай пока уберём duty cycle из Thermal, оставим только
+# стандартный каплинг»*.  Nothing above was deleted; it is all behind
+# `DUTY_CYCLE_ENABLED`, which is OFF unless something sets it.  What has to be
+# true then is exactly what `test_an_s1_machine_is_untouched` pins for a machine
+# with no cycle at all — with the difference that the duty here HAS an S3 block
+# and the real gate is the only thing standing between it and the search.
+
+def test_with_the_feature_off_an_s3_duty_runs_as_the_standard_loop(
+        client, monkeypatch, faked_loop_real_gate):
+    """THE claim of the removal.  A stored S3 block, the real ``_cycle_inputs``,
+    the flag unset: the loop iterates the point to its fixed point, feeding back
+    the steady map's own winding average (400 °C — the temperature this point
+    would reach if the pull never ended, which is what a continuous duty MEANS),
+    searches no ED, writes no ``duty_cycle`` sub-block and files no record."""
+    from motor_ai_sim.routes import coupled as cp
+
+    monkeypatch.delenv(cdc.DUTY_CYCLE_ENV, raising=False)
+    # the gate itself, before any solve: an impulse block is no cycle context
+    assert cp._cycle_inputs({"duty_cycle": dict(S3), "duty": "peak"}, {}) is None
+    assert cp._cycle_inputs({"duty_cycle": dict(S2), "duty": "pull"}, {}) is None
+
+    r = client.post("/api/coupled/run",
+                    json={**LOOP_BODY, "max_iter": 2, "tol_k": 1.0,
+                          "duty_cycle": dict(S3)})
+    assert r.status_code == 200, r.text[:600]
+    c = r.json()["coupling"]
+    assert "duty_cycle" not in c
+    assert faked_loop_real_gate["regimes"] == []       # no pass searched a ratio
+    assert faked_loop_real_gate["coil_in"] == [120.0, 400.0]   # the map's own
+    assert faked_loop_real_gate["final"] == 0
+    assert not faked_loop_real_gate["filed"]
+    assert all("ed_allowable_pct" not in row for row in c["history"])
+    assert c.get("warning_code") != "duty_cycle_requested_over_allowable"
+
+
+def test_with_the_feature_off_a_malformed_cycle_refuses_nothing(monkeypatch):
+    """The pre-flight's structural check goes with the feature.  A block nobody
+    is going to solve must not refuse a run that was never going to read it —
+    and with the flag on, the same block is refused by name as before."""
+    from motor_ai_sim.routes import coupled as cp
+
+    body = {"n_steps_per_period": 4, "drive": "current", "eddy": True,
+            "rotor_eddy": True,
+            "duty_cycle": {"kind": "S3", "ed_pct": 25, "cycle_s": 0}}
+    monkeypatch.delenv(cdc.DUTY_CYCLE_ENV, raising=False)
+    cp._cycle_preflight(dict(body))                      # must not raise
+    monkeypatch.setenv(cdc.DUTY_CYCLE_ENV, "1")
+    with pytest.raises(Exception) as exc:
+        cp._cycle_preflight(dict(body))
+    assert exc.value.detail["error_code"] == "duty_cycle_bad_cycle"
+
+
+@pytest.mark.parametrize("value, on", [
+    (None, False), ("", False), ("0", False), ("off", False), ("no", False),
+    ("1", True), ("true", True), ("TRUE", True), ("yes", True), (" on ", True),
+])
+def test_the_flag_is_off_unless_something_turns_it_on(monkeypatch, value, on):
+    if value is None:
+        monkeypatch.delenv(cdc.DUTY_CYCLE_ENV, raising=False)
+    else:
+        monkeypatch.setenv(cdc.DUTY_CYCLE_ENV, value)
+    assert cdc.enabled() is on
 
 
 # ---------------------------------------------------------------------------

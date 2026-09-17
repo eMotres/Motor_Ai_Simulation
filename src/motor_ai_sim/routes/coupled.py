@@ -855,7 +855,14 @@ def _cycle_preflight(body: Dict[str, Any]) -> None:
     far side of a two-minute transient.  It is the same structural check
     ``routes.family`` runs when a cycle is SAVED (``structure_only=True``), so a
     block the editor accepted can never be refused here.
+
+    …and NOTHING AT ALL while the duty-cycle feature is off (owner 2026-09-17).
+    With the flag off this run is a standard coupled loop whatever the duty
+    stores, so a structural complaint about a cycle nobody is going to solve
+    would refuse a run that was never going to look at the block.
     """
+    if not _cdc.enabled():
+        return
     blk, name = _duty_cycle_of(body)
     if not _cdc.is_impulse(blk):
         return
@@ -952,7 +959,17 @@ def _cycle_inputs(body: Dict[str, Any],
     What DOES change between passes is the map and the run the model is fitted
     to, and that is deliberately not in here: it arrives at :func:`_cycle_step`
     each time, which is the whole mechanism.
+
+    THE FEATURE FLAG (owner 2026-09-17: *«давай пока уберём duty cycle из
+    Thermal, оставим только стандартный каплинг»*).  With
+    ``DUTY_CYCLE_ENABLED`` off — the default — this is ``None`` for EVERY duty,
+    including one carrying a stored S2/S3 block: the loop then iterates that
+    point to its fixed point exactly as it did before cycles existed, writes no
+    ``duty_cycle`` sub-block and files no cycle record.  One gate, here, because
+    ``None`` is already the word this loop understands for "no regime".
     """
+    if not _cdc.enabled():
+        return None
     blk, name = _duty_cycle_of(body)
     if not _cdc.is_impulse(blk):
         return None

@@ -82,6 +82,30 @@ Windows workstation, so a value proven there is the value that ships.
 | `CATALOG_GRANT_ALL_REGISTERED` | *(unset)* | **leave it unset on this server.** Unset = a registered account sees exactly the dies it was granted, plus whatever anyone has published; `1` = every signed-in account sees the whole shared catalog. The grant posture below says why. |
 | `ALLOWED_ORIGINS` | *(empty)* | extra CORS origins. Only needed if the frontend is served from a **different** origin than the API; the same-origin nginx default needs nothing. |
 | `ANTHROPIC_API_KEY` | *(empty)* | in-app support assistant; empty = a flagged mock reply |
+| `DUTY_CYCLE_ENABLED` | *(unset = off)* | the duty cycle inside the coupled loop — see below |
+
+### The duty cycle is behind a flag (2026-09-17)
+
+Owner's decision on 2026-09-17: *«давай пока уберём duty cycle из Thermal,
+оставим только стандартный каплинг»* — for now the Thermal tab shows the cooling
+and the coupled EM↔thermal loop and nothing about S2/S3 cycles. It is a *for
+now*, so nothing was deleted: the whole feature sits behind two flags that are
+**off by default**. The backend's is `DUTY_CYCLE_ENABLED` (this table); with it
+off `POST /api/coupled/run` runs the **standard** loop for every duty — a stored
+S2/S3 block is read as the continuous point it was read as before cycles existed,
+the temperatures iterate to their fixed point, no allowable ED is searched, no
+`duty_cycle` sub-block is written into the answer and no cycle record is filed.
+The frontend's is the build-time `VITE_DUTY_CYCLE`; with it off the Thermal tab
+does not render the Duty cycle block at all, the family catalog shows no S1/S3
+chip, and a coupled answer prints no ED term in its summary line, its run notice
+or its tooltip. Set either to `1` to bring that half back — and set both to get
+the behaviour of 2026-09-16. What the flags deliberately do **not** touch: the
+standalone `POST /api/thermal/duty_cycle` tool (that is how a cycle is still
+asked about), the heat paths and the `robotics` cooling mode (a different feature
+that merely arrived in the same week), and every duty-cycle record already filed
+— the report prints its cycle section when a record exists, so stored answers
+stay readable. Tests pin both sides: `tests/test_coupled_duty_cycle.py`,
+`tests/test_coupled_impulse_duty.py`, `web/src/lib/__tests__/dutyCycleFlag.test.mjs`.
 
 ### The grant posture — who sees which motors
 

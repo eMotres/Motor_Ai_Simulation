@@ -6324,6 +6324,32 @@ def _refresh_summary_shape(res: dict) -> dict:
         return res
 
 
+def _round_w(value: float, nd: int) -> float:
+    """Round a watt figure for STORAGE without ever turning it into a zero.
+
+    The house rule this module keeps (see ``mech_losses``) is that a mechanical
+    loss nobody measured is ABSENT, never 0 W — an efficiency nobody measured is
+    the one thing a stored run may not claim.  Rounding breaks that rule from the
+    other end: on 2026-09-15 the 30 mm fixture at 1000 rpm computed a 618/8-2Z
+    pair at 2.9 mW — an honest number, the whole loss of a shielded miniature
+    bearing at that speed — and ``round(x, 2)`` stored it as ``0.0``.  Every
+    consumer then read "this machine's bearings cost nothing", which is a claim
+    the solver never made; the same run at 12 000 rpm stored 0.12 W and read
+    correctly, so the bug only ever showed on the small, slow machines where a
+    milliwatt IS the answer.
+
+    So: the fixed precision when it keeps the number, three significant figures
+    when it would erase it.  Nothing a reader sees moves — a 84.0 W pair still
+    rounds to 84.0 — and a machine whose friction is genuinely zero (no speed, no
+    bearings) is unaffected, because those paths return ``{}`` long before here.
+    """
+    v = float(value or 0.0)
+    r = round(v, nd)
+    if r == 0.0 and v != 0.0:
+        return float(f"{v:.3g}")
+    return r
+
+
 def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
                       rpm: float, p_mech_w: float, p_loss_w: float,
                       efficiency: float, op_mode: str,
@@ -6422,9 +6448,9 @@ def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
         p_shaft_net = p_mech - p_extra
         eta_shaft = float(efficiency) * max(0.0, 1.0 - x)
     return {
-        "P_bearings_W": round(p_brg, 2),
-        "P_windage_W": round(p_wind, 3),
-        "P_mech_extra_W": round(p_extra, 2),
+        "P_bearings_W": _round_w(p_brg, 2),
+        "P_windage_W": _round_w(p_wind, 3),
+        "P_mech_extra_W": _round_w(p_extra, 2),
         "bearing_temp_c": mech.get("bearing_temp_c"),
         "bearing_temp_source": mech.get("bearing_temp_source"),
         "bearing_temp_note": mech.get("bearing_temp_note"),
@@ -6437,7 +6463,13 @@ def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
                                "coupling must supply" if gen else
                                "rotor power MINUS the mechanical losses — what "
                                "leaves at the coupling"),
-        "efficiency_shaft": (None if eta_shaft is None else round(eta_shaft, 4)),
+        # SIX decimals, not the four `efficiency` is stored at: eta_shaft is
+        # DERIVED from eta by the factor (1 - x), and quantising it onto eta's
+        # own grid makes a machine whose friction is small but real report the
+        # same shaft efficiency as its electromagnetic one — the rounding saying
+        # "no mechanical loss" about a machine that has one.  1e-4 % is below
+        # every display precision in the product, so nothing a reader sees moves.
+        "efficiency_shaft": (None if eta_shaft is None else round(eta_shaft, 6)),
         "mech_losses": _ml.summary_block(mech),
     }
 

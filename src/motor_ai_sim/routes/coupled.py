@@ -91,6 +91,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
 from motor_ai_sim import coupled_duty_cycle as _cdc
+from motor_ai_sim import coupled_time_to_limit as _ttl
 from motor_ai_sim import run_recording as _rr
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim import jobs as _JOBS
@@ -1058,6 +1059,112 @@ def _cycle_step(inputs: Dict[str, Any], em_summary: Dict[str, Any],
     if inputs.get("rated_duty") and regime.get("s2_from_rated_s") is not None:
         regime["s2_from_rated_duty"] = inputs["rated_duty"]
     return model, regime
+
+
+# ---------------------------------------------------------------------------
+# HOW LONG MAY IT RUN — the time to the limit (owner 2026-09-17)
+# ---------------------------------------------------------------------------
+# *«если где-то выходим за лимиты, нужно посчитать время, за какое мотор
+# проработает до этого лимита»*.  The loop answers a question about the STEADY
+# state; when that state is past a limit the one thing the answer does not
+# contain is how long the machine may actually pull before it gets there.
+#
+# NOT GATED BY `DUTY_CYCLE_ENABLED`, on purpose: this is not a duty cycle.  It
+# reads no cycle block, offers no cycle UI and needs no duty ratio — it only
+# reuses `thermal_duty_cycle`'s network, which is the one thing in this project
+# that knows both the conductances of THIS machine and its heat capacity.  It
+# runs on every coupled loop, flag on or off.
+
+
+def _ttl_rated_state(die: str, cfg: str, duties: List[Dict[str, Any]],
+                     this_duty: str) -> Tuple[Dict[str, float], str]:
+    """The WARM start: the rated duty's own converged node temperatures.
+
+    ``({}, why)`` unless that duty has BOTH a stored thermal map (the state) and
+    a coupled record (the evidence that the state is a converged one and not a
+    single thermal solve at a temperature nobody iterated).  A warm start
+    invented out of this point's own map would be a warm-up nobody ran, and a
+    map solved at a typed coil temperature is not a machine that has been
+    working.
+    """
+    state, rated, why = _rated_state_c(die, cfg, duties, this_duty)
+    if not state:
+        return {}, why
+    try:
+        from motor_ai_sim import duty_results as _dr
+        rec = (_dr.get(die, cfg) or {}).get(rated) or {}
+    except Exception:  # noqa: BLE001 — a store read never fails a solve
+        log.debug("coupled: could not read the rated duty's record",
+                  exc_info=True)
+        return {}, "the rated duty's stored record could not be read"
+    cp = rec.get("coupled")
+    if not isinstance(cp, dict) or not cp:
+        return {}, ("the rated duty %r has a thermal map but no coupled record, "
+                    "so there is no converged warm state to start a pull from"
+                    % rated)
+    return state, ("the rated duty %r's own coupled run — the node means of the "
+                   "map it converged on" % rated)
+
+
+def _ttl_step(body: Dict[str, Any], cooling: Dict[str, Any],
+              em_summary: Dict[str, Any], field: Dict[str, Any], *,
+              bearing_temp_c: Optional[float],
+              runaway: bool) -> Optional[Dict[str, Any]]:
+    """The ``time_to_limit`` block for the point this loop just solved.
+
+    ``None`` whenever the answer cannot be formed — no map, no capacities, no
+    limits on this machine.  NEVER an exception out of here: the loop solved the
+    machine, and a bookkeeping answer that could not be computed must not turn a
+    successful two-minute run into a 500.
+    """
+    from motor_ai_sim.routes.thermal import (_assignments, _dc_geometry,
+                                             _dc_side_areas)
+    from motor_ai_sim.thermal_capacities import CapacityError, part_capacities
+
+    if not field or not em_summary:
+        return None
+    geom, _ov = _dc_geometry(body.get("geo"))
+    mats = _assignments()
+    try:
+        caps = part_capacities(em_summary, mats, None)
+    except CapacityError as exc:
+        log.debug("coupled: no capacities for the time to the limit (%s)", exc)
+        return None
+
+    duties, duty = _cycle_catalogue(body, "")
+    die = cfg = ""
+    try:
+        from motor_ai_sim.duty_results import active_context
+        ctx = active_context()
+        if ctx:
+            die, cfg = str(ctx[0]), str(ctx[1])
+    except Exception:  # noqa: BLE001 — a catalog read never fails a solve
+        log.debug("coupled: no catalog context for the time to the limit",
+                  exc_info=True)
+    rated, rated_why = (_ttl_rated_state(die, cfg, duties, duty)
+                        if (die and cfg) else
+                        ({}, "this run is not on a catalogued machine, so there "
+                             "is no rated duty to start a warm pull from"))
+
+    limits = _ttl.part_limits(
+        thermal_result=field, em_summary=em_summary,
+        magnet_grade=mats.get("magnet"),
+        bearing_temp_c=bearing_temp_c,
+        magnet_limit_c=(float(body["magnet_limit_c"])
+                        if body.get("magnet_limit_c") not in (None, "") else None))
+    if not limits:
+        return None
+    try:
+        return _ttl.solve(
+            thermal_result=field, em_summary=em_summary, limits=limits,
+            caps=caps, geometry=geom, cooling=cooling,
+            side_areas=_dc_side_areas(field, em_summary, geom),
+            d_housing_m=float(geom.get("stator_diameter") or 0.0) * 1e-3,
+            duty=duty, rated_state_c=(rated or None), rated_source=rated_why,
+            runaway=bool(runaway))
+    except _cdc.DutyCycleError as exc:
+        log.info("coupled: the time to the limit was not computed (%s)", exc)
+        return None
 
 
 def _cycle_refusal(exc: "_cdc.DutyCycleError", duty: str) -> HTTPException:
@@ -2412,6 +2519,11 @@ def _run(body: Dict[str, Any],
     regime: Optional[Dict[str, Any]] = None
     prev_regime: Optional[Dict[str, Any]] = None
     cycle_doc: Optional[Dict[str, Any]] = None
+    # HOW LONG THE POINT MAY BE HELD, when it is past a limit (2026-09-17).
+    # `None` on every machine that states no limit at all and on every run whose
+    # map could not be fitted; a point INSIDE its limits still gets a block, and
+    # that block says so — "nothing is over" is an answer a reader may rely on.
+    time_to_limit: Optional[Dict[str, Any]] = None
     # A non-positive band is a loop that can never stop, which is a typo far more
     # often than a request: it falls back to the default rather than running the
     # whole budget on every machine for ever.
@@ -2933,6 +3045,34 @@ def _run(body: Dict[str, Any],
                 log.warning("coupled: the final regime could not be re-solved "
                             "at full resolution (%s) — keeping the last pass's",
                             exc)
+        # ── HOW LONG MAY IT RUN (owner 2026-09-17) ──────────────────────────
+        # The loop has finished; if the point it finished at is past any limit
+        # this machine states, the same network the duty cycle uses is fitted to
+        # the map that last pass solved and the step response is integrated from
+        # cold and from rated.  Done HERE — inside the lock, beside the map it is
+        # fitted to — so a second coupled run cannot start between the map and
+        # the answer that belongs to it, and so the phase is visible on the bar.
+        # It costs four ODE nodes against the two minutes of finite elements
+        # above it, and it never fails a run: `_ttl_step` returns None instead.
+        if history and field:
+            _check_cancelled(run_id)
+            _progress.update(phase="how long until the limit — the step "
+                                   "response of this point")
+            try:
+                time_to_limit = _ttl_step(
+                    body, cooling, (em.get("summary") or {}), field,
+                    bearing_temp_c=((em.get("summary") or {})
+                                    .get("bearing_temp_c")),
+                    runaway=bool(runaway))
+            except Exception:  # noqa: BLE001 — never fails a solved run
+                log.debug("coupled: the time to the limit was not computed",
+                          exc_info=True)
+            if time_to_limit and not time_to_limit.get("within_limits", True):
+                log.warning("coupled: %s", time_to_limit.get("note") or "")
+            elif time_to_limit:
+                log.info("coupled: every part with a stated limit (%s) is "
+                         "inside it at this point",
+                         ", ".join(time_to_limit.get("judged") or ()) or "none")
         # THE THIRD TAB at the same temperatures (phase 3): the rotor stress is
         # solved once, at the per-part averages of the last thermal map, while
         # this loop still owns the lock — a second coupled run must not start
@@ -3071,6 +3211,14 @@ def _run(body: Dict[str, Any],
         # "the loop is unchanged there" looks like in the payload.
         **({"duty_cycle": _cycle_block_of(regime, cycle_in)}
            if regime is not None else {}),
+        # HOW LONG THIS POINT MAY BE HELD (owner 2026-09-17).  A temperature past
+        # its limit is half an answer: the other half is the TIME, and it rides
+        # at the top of the block beside the temperatures it belongs to rather
+        # than in the history, because it is the sentence the panel prints and
+        # the row the report adds.  Absent on a machine that states no limit and
+        # on a run whose map could not be fitted; a point inside every limit
+        # carries the block with `within_limits: true` and no time.
+        **({"time_to_limit": time_to_limit} if time_to_limit else {}),
         # `**` rather than fixed keys: a machine with no bearings grows no
         # mechanical keys at all, which is what "absent, not zero" means in a
         # payload.
@@ -3177,9 +3325,11 @@ def _run(body: Dict[str, Any],
                                 duty=cycle_in.get("duty") or None)
         except Exception:  # noqa: BLE001 — bookkeeping never fails a solve
             log.debug("coupled: the duty cycle was not filed", exc_info=True)
-    log.info("coupled: %d EM run(s), winding %.1f degC, magnets %s, %s",
+    log.info("coupled: %d EM run(s), winding %.1f degC, magnets %s, %s%s",
              n_em, block["coil_temp_c"],
              "n/a" if block["magnet_temp_c"] is None
              else "%.1f degC" % block["magnet_temp_c"],
-             "converged" if converged else "NOT converged")
+             "converged" if converged else "NOT converged",
+             ("" if not time_to_limit or time_to_limit.get("within_limits", True)
+              else " — %s" % _ttl.headline(time_to_limit)))
     return out

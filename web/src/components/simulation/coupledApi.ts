@@ -113,6 +113,55 @@ export interface CouplingBlock {
    *  SAME keys the stored duty-cycle record uses, so `dutyCycleRegime`'s own
    *  readers take it as they take the Thermal tab's answer. */
   duty_cycle?: CoupledRegime;
+  /** HOW LONG THE POINT MAY BE HELD, when it is past a limit (2026-09-17).
+   *  Absent on a machine that states no limit and on a record written before
+   *  this existed; present with `within_limits: true` on a point that is inside
+   *  every one of them, which is what "nothing to say" looks like here. */
+  time_to_limit?: TimeToLimit;
+}
+
+/** One part's answer inside {@link TimeToLimit}. */
+export interface TimeToLimitPart {
+  part: string;
+  /** "the winding hot spot" / "the hottest magnet element" / "the bearing seat" */
+  quantity?: string;
+  limit_c?: number;
+  at_point_c?: number;
+  over_by_K?: number;
+  /** `false` = the step response of this network settles BELOW the limit, so no
+   *  time may be quoted — the map is over it for a reason four nodes cannot
+   *  represent.  The `asymptote_c` beside it says where it settles. */
+  reaches?: boolean;
+  time_to_limit_s?: number | null;
+  asymptote_c?: number | null;
+  note?: string;
+}
+
+/** The step response of this operating point, from cold and from rated.
+ *
+ *  The loop answers a question about the STEADY state; when that state is past
+ *  a limit the other half of the answer is the TIME, and this is it. */
+export interface TimeToLimit {
+  within_limits: boolean;
+  /** the minimum over the parts, from COLD — `null` when nothing is reached */
+  time_to_limit_s?: number | null;
+  time_to_limit_from_rated_s?: number | null;
+  limiting_part?: string | null;
+  limits_c?: Record<string, number>;
+  at_point_c?: Record<string, number>;
+  over_by_K?: Record<string, number>;
+  over_parts?: string[];
+  parts?: TimeToLimitPart[];
+  starts?: Record<string, { time_to_limit_s?: number | null;
+                            limiting_part?: string | null;
+                            start_source?: string } >;
+  rated_start_note?: string;
+  network?: { available?: boolean; note?: string;
+              worst_residual_W?: number;
+              link_kinds?: Record<string, string> };
+  model?: string;
+  note?: string;
+  calibration_runaway?: boolean;
 }
 
 /** The found regime, as the coupling block carries it.  It IS a `RegimeLimits`
@@ -394,6 +443,75 @@ export function coupledRegimeNotice(c: CouplingBlock | null | undefined):
   if (!r || !DUTY_CYCLE_ENABLED) return null;
   if (r.feasible !== false && r.fits_requested !== false) return null;
   return `Duty cycle: ${r.note || regimeLine(r) || 'the duty does not fit'}`;
+}
+
+/* ── HOW LONG MAY IT RUN (owner 2026-09-17) ─────────────────────────────────
+ * *«если где-то выходим за лимиты, нужно посчитать время, за какое мотор
+ * проработает до этого лимита»*.  A temperature past its class is half an
+ * answer; the loop now computes the other half and it gets ONE line.
+ *
+ * NOT gated by the duty-cycle flag: this is not a duty cycle.  It reads no
+ * cycle block, needs no duty ratio and runs on every coupled loop. */
+
+/** A duration a human reads at a glance: "0.8 s", "48 s", "2 m 40 s".
+ *
+ *  The same rule `coupled_time_to_limit.fmt_seconds` and `report._secs_words`
+ *  apply, so one number is called one thing in the panel, the log and the PDF. */
+export function fmtSecs(s: number | null | undefined): string {
+  if (s == null || !Number.isFinite(s) || s < 0) return '—';
+  if (s < 10) return `${s.toFixed(1)} s`;
+  if (s < 60) return `${Math.round(s)} s`;
+  const m = Math.floor(s / 60);
+  return `${m} m ${String(Math.round(s - m * 60)).padStart(2, '0')} s`;
+}
+
+/** "Runs 2 m 40 s from cold, 1 m 05 s from rated, then the winding reaches
+ *  200 °C" — and `null` when there is nothing to say.
+ *
+ *  Nothing to say means one of two things, and both are answers: the point is
+ *  inside every limit it has (so there is no time to a limit, and printing one
+ *  would invite planning around a number that is not a constraint), or the
+ *  record predates this feature. */
+export function timeToLimitLine(t: TimeToLimit | null | undefined):
+    string | null {
+  if (!t || t.within_limits) return null;
+  const part = t.limiting_part ?? 'a part';
+  const lim = t.limits_c?.[part];
+  const ends = `then the ${part} reaches${lim == null ? ' its limit'
+    : ` ${Math.round(lim)} °C`}`;
+  const runs: string[] = [];
+  const cold = t.starts?.cold?.time_to_limit_s;
+  const rated = t.starts?.rated?.time_to_limit_s;
+  if (cold != null) runs.push(`${fmtSecs(cold)} from cold`);
+  if (rated != null) runs.push(`${fmtSecs(rated)} from rated`);
+  if (!runs.length) {
+    return `No time to the ${part} limit: this network settles below it`;
+  }
+  return `Runs ${runs.join(', ')}, ${ends}`;
+}
+
+/** The HelpTip behind that line: what the model IS, in one short paragraph
+ *  plus the per-part detail the answer is a minimum over. */
+export function timeToLimitTip(t: TimeToLimit | null | undefined): string {
+  if (!t) return '';
+  const rows = (t.parts ?? []).map(p => `· ${p.note ?? p.part}`);
+  return [
+    'The four-node lumped network (winding, stator, rotor, magnet) fitted to '
+    + "THIS run's own converged thermal map — its conductances are divided out "
+    + 'of that map, its heat capacities are the machine\'s own masses — switched '
+    + 'on at the start state and integrated at this operating point. The time is '
+    + 'the first crossing; only the copper loss moves with temperature.',
+    t.starts?.cold?.start_source ? `From cold: ${t.starts.cold.start_source}`
+                                 : '',
+    t.starts?.rated?.start_source ? `From rated: ${t.starts.rated.start_source}`
+                                  : (t.rated_start_note ?? ''),
+    ...rows,
+    t.network?.note ?? '',
+    t.calibration_runaway
+      ? 'The map behind this network RAN AWAY — it has no equilibrium, so the '
+        + 'conductances come from a state the machine cannot actually hold.'
+      : '',
+  ].filter(Boolean).join('\n');
 }
 
 /** One decimal, and none when it is a whole number. */

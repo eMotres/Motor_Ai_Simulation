@@ -7519,3 +7519,135 @@ class TestSecondButtonAuditOf20260916:
 
         assert _seen(detail) == names
         assert _seen(compare) == names
+
+
+class TestTimeToTheLimit:
+    """HOW LONG THE POINT MAY BE HELD (owner 2026-09-17).
+
+    The coupled loop now answers "и сколько он так проработает?" whenever its
+    converged state is past a limit.  The report's job is to carry that number
+    to the two places a reader looks — one row of the coupled table and one
+    CLAUSE on the §8 row of the part it is about — and, on a point that is
+    inside every limit, to carry nothing at all.
+    """
+
+    #: A coupled record of a point over the winding class, as the route files it.
+    OVER = {
+        "coil_temp_c": 212.4, "em_runs": 3, "converged": True,
+        "time_to_limit": {
+            "within_limits": False, "time_to_limit_s": 160.2,
+            "time_to_limit_from_rated_s": 65.0, "limiting_part": "winding",
+            "limits_c": {"winding": 200.0, "magnet": 180.0},
+            "at_point_c": {"winding": 212.4, "magnet": 150.0},
+            "over_by_K": {"winding": 12.4}, "over_parts": ["winding"],
+            "parts": [{"part": "winding", "quantity": "the winding hot spot",
+                       "limit_c": 200.0, "reaches": True,
+                       "time_to_limit_s": 160.2}],
+            "starts": {
+                "cold": {"time_to_limit_s": 160.2,
+                         "parts": [{"part": "winding",
+                                    "time_to_limit_s": 160.2}]},
+                "rated": {"time_to_limit_s": 65.0,
+                          "parts": [{"part": "winding",
+                                     "time_to_limit_s": 65.0}]}}}}
+
+    def _col(self, coupled):
+        return {"duty": "peak", "em": {}, "d": {}, "res": {"coupled": coupled}}
+
+    def test_the_coupled_table_gets_one_row_per_duty(self):
+        from motor_ai_sim import report as R
+
+        rows = {r[0]: r[1] for r in
+                R.coupled_compare_rows([self._col(self.OVER)])[1]}
+        assert rows["Time to the limit"] == (
+            "2 m 40 s from cold / 1 m 05 s from rated (winding, 200 °C)")
+
+    def test_a_point_inside_every_limit_grows_no_row(self):
+        """`_drop_empty` takes it out: "no time to a limit" is not a number a
+        reader should have to interpret."""
+        from motor_ai_sim import report as R
+
+        inside = {"coil_temp_c": 130.0, "em_runs": 2,
+                  "time_to_limit": {"within_limits": True,
+                                    "time_to_limit_s": None}}
+        rows = [r[0] for r in R.coupled_compare_rows([self._col(inside)])[1]]
+        assert "Time to the limit" not in rows
+        # …and so does a record written before this feature existed.
+        rows = [r[0] for r in
+                R.coupled_compare_rows([self._col({"em_runs": 2})])[1]]
+        assert "Time to the limit" not in rows
+
+    def test_a_limit_the_network_never_reaches_says_so_instead_of_a_number(self):
+        from motor_ai_sim import report as R
+
+        never = {"time_to_limit": {
+            "within_limits": False, "time_to_limit_s": None,
+            "limiting_part": "winding", "limits_c": {"winding": 200.0},
+            "parts": [{"part": "winding", "quantity": "the winding hot spot",
+                       "limit_c": 200.0, "reaches": False,
+                       "asymptote_c": 171.0}],
+            "starts": {"cold": {"time_to_limit_s": None}}}}
+        cell = R.time_to_limit_words(never)
+        assert "no time is quoted" in cell and "settles below the limit" in cell
+        assert R.time_to_limit_clause(never, "winding").startswith(
+            "; no time to the limit is quoted")
+        assert "171 °C" in R.time_to_limit_clause(never, "winding")
+
+    def test_the_section_8_rows_carry_the_time_in_their_note(self):
+        from motor_ai_sim.report import duty_warnings
+
+        ws = {w["rule"]: w for w in duty_warnings({
+            "duty": "peak", "winding_temp_c": 212.4, "winding_limit_c": 200.0,
+            "hot_spot_c": 212.4,
+            "magnet_temp_c": 150.0, "magnet_limit_c": 180.0,
+            "winding_limit_note": "class N per IEC 60085",
+            "time_to_limit": self.OVER["time_to_limit"]})}
+        note = ws["winding_temperature"]["note"]
+        assert "class N per IEC 60085" in note
+        assert "reaches 200 °C after 2 m 40 s from cold" in note
+        assert "1 m 05 s from rated" in note
+        # ONE CLAUSE, no new prose: it is appended with a semicolon and adds no
+        # sentence of its own.
+        assert note.count(". ") <= 1
+        # The hot-spot row is about the same part and carries the same clause…
+        assert "2 m 40 s from cold" in ws["hot_spot"]["note"]
+        # …and the magnets, which are inside their limit, carry nothing.
+        assert "reaches" not in ws["magnet_temperature"]["note"]
+
+    def test_the_bearing_row_carries_it_too(self):
+        from motor_ai_sim.report import duty_warnings
+
+        ttl = {
+            "within_limits": False, "time_to_limit_s": 48.0,
+            "limiting_part": "bearing", "limits_c": {"bearing": 150.0},
+            "parts": [{"part": "bearing", "quantity": "the bearing seat",
+                       "limit_c": 150.0, "reaches": True,
+                       "time_to_limit_s": 48.0}],
+            "starts": {"cold": {"time_to_limit_s": 48.0,
+                                "parts": [{"part": "bearing",
+                                           "time_to_limit_s": 48.0}]}}}
+        w = {x["rule"]: x for x in duty_warnings({
+            "duty": "peak", "bearing_temp_c": 163.0,
+            "bearing_temp_limit_c": 150.0, "bearing_lubricant": "LGLT 2",
+            "time_to_limit": ttl})}["bearing_temperature"]
+        assert "the bearing seat reaches 150 °C after 48 s from cold" in w["note"]
+        # No rated start was available, so nothing claims one.
+        assert "from rated" not in w["note"]
+
+    def test_the_block_reaches_the_report_through_the_duty_record(self):
+        """The report reads the DUTY's stored record, so the seam that matters
+        is `compact_coupled` — not the run payload."""
+        from motor_ai_sim import report as R
+        from motor_ai_sim.duty_results import compact_coupled
+
+        rec = compact_coupled({"coupling": dict(self.OVER)})
+        assert R.time_to_limit_of(rec) is not None
+        assert R.time_to_limit_words(rec).startswith("2 m 40 s from cold")
+
+    def test_the_duration_words_match_the_panels_and_the_solvers(self):
+        from motor_ai_sim import report as R
+        from motor_ai_sim.coupled_time_to_limit import fmt_seconds
+
+        for s in (0.83, 9.9, 10.0, 48.2, 59.6, 60.0, 125.0, 160.2, 3661.0):
+            assert R._secs_words(s) == fmt_seconds(s), s
+        assert R._secs_words(None) == ""

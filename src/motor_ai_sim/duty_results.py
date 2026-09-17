@@ -1214,6 +1214,16 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         # winding at 131 °C with nothing to say when.
         **({"duty_cycle": dict(c["duty_cycle"])}
            if isinstance(c.get("duty_cycle"), dict) and c["duty_cycle"] else {}),
+        # HOW LONG IT MAY RUN, when the point is over a limit (2026-09-17).
+        # Kept whole — it is a handful of scalars, a per-part list and two start
+        # blocks — because the report's "Time to the limit" row and the §8 notes
+        # are read off the DUTY's record and not off the run, and a temperature
+        # over its class with no time beside it is the question the owner asked
+        # this feature for.  Absent, never null, on a point inside every limit:
+        # a machine that is not over anything has no time to a limit.
+        **({"time_to_limit": dict(c["time_to_limit"])}
+           if isinstance(c.get("time_to_limit"), dict) and c["time_to_limit"]
+           else {}),
         "iterations": c.get("iterations"),
         "em_runs": c.get("em_runs"),
         "converged": bool(c.get("converged")) if c else None,

@@ -4658,27 +4658,35 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Optional[Dict[str, Any]]] = []
 
     # ── temperatures ────────────────────────────────────────────────────────
+    # …AND HOW LONG IT MAY BE HELD (owner 2026-09-17).  A part over its limit is
+    # half an answer; the coupled loop now computes the other half, and it rides
+    # in the row's own note as ONE clause rather than as new prose.
+    _ttl = ctx.get("time_to_limit") if isinstance(
+        ctx.get("time_to_limit"), dict) else None
     out.append(_warn(
         "magnet_temperature", duty, "Magnet temperature",
         ctx.get("magnet_temp_c"), ctx.get("magnet_limit_c"), "°C",
         "Cool the rotor (bore air or a shaft path), move to a higher-coercivity "
         "grade (SH -> UH -> EH), or cut the rotor loss that is heating it: "
         "segment the magnets axially and check the slot-opening harmonics.",
-        note=str(ctx.get("magnet_limit_note") or "")))
+        note=(str(ctx.get("magnet_limit_note") or "")
+              + time_to_limit_clause({"time_to_limit": _ttl}, "magnet"))))
     out.append(_warn(
         "winding_temperature", duty, "Winding temperature",
         ctx.get("winding_temp_c"), ctx.get("winding_limit_c"), "°C",
         "Lower the current density (more copper or fewer turns), improve the "
         "housing cooling, or specify a higher insulation class - class R (220 "
         "°C) or S (240 °C) enamel and slot insulation.",
-        note=str(ctx.get("winding_limit_note") or "")))
+        note=(str(ctx.get("winding_limit_note") or "")
+              + time_to_limit_clause({"time_to_limit": _ttl}, "winding"))))
     out.append(_warn(
         "hot_spot", duty, "Hot spot in the machine",
         ctx.get("hot_spot_c"), ctx.get("winding_limit_c"), "°C",
         "The hottest point is not always the winding average: check where it "
         "sits on the temperature map, and open a heat path there (slot-liner "
         "conductivity, potting, an end-winding spray).",
-        note=str(ctx.get("winding_limit_note") or "")))
+        note=(str(ctx.get("winding_limit_note") or "")
+              + time_to_limit_clause({"time_to_limit": _ttl}, "winding"))))
 
     # ── electromagnetic ─────────────────────────────────────────────────────
     kept = _numf(ctx.get("br_kept_pct"))
@@ -5127,7 +5135,9 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                    % (ctx.get("bearing_lubricant") or "the grease",
                       _fmt((ctx["bearing_lubricant_range_c"] or [None, None])[0], 0),
                       _fmt((ctx["bearing_lubricant_range_c"] or [None, None])[1], 0)))),
-                 str(ctx.get("bearing_lubricant_source") or "")))))
+                 str(ctx.get("bearing_lubricant_source") or ""))
+              # …and how long the seat takes to get there (owner 2026-09-17).
+              + time_to_limit_clause({"time_to_limit": _ttl}, "bearing"))))
 
     # ── a ring mode sitting on an excitation line ───────────────────────────
     # Reviewer 2026-09-14: the L155 peak's mode 3 is 24,028 Hz against a
@@ -6609,6 +6619,10 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                              or _numf(em.get("coil_temp_C")))
     ctx["winding_limit_c"], ctx["winding_limit_note"] = ins_lim, ins_note
     ctx["hot_spot_c"] = _numf((t or {}).get("T_max"))
+    # …AND HOW LONG THE POINT MAY BE HELD (owner 2026-09-17).  Only when the
+    # coupled loop found something over a limit; the rows above then carry the
+    # time in their own note, as one clause.
+    ctx["time_to_limit"] = time_to_limit_of(cp)
     # ── …AND A CYCLE BEATS EVERY STEADY STATE (2026-09-14) ──────────────────
     # An S2 or S3 duty never reaches the steady state the 2-D map ran to: it is
     # switched off first, and it is switched back on before it has cooled.  The
@@ -15437,6 +15451,102 @@ def _client_words(msg: str) -> str:
     return (out[:1].upper() + out[1:]) if out else ""
 
 
+# ── how long the point may be held (owner 2026-09-17) ───────────────────────
+# A temperature past its limit is half an answer; the other half is the TIME.
+# The coupled record carries it (``routes.coupled`` → ``duty_results
+# .compact_coupled`` → here), and it reaches the reader twice: as one row of the
+# coupled table, and as ONE CLAUSE on the §8 row of the part it is about.
+
+
+def _secs_words(s: Any) -> str:
+    """A duration a reader takes in at a glance: ``48 s``, ``2 m 40 s``.
+
+    The same rule ``coupled_time_to_limit.fmt_seconds`` and the panel's
+    ``fmtSecs`` apply, so one number is called one thing in all three places.
+    """
+    v = _numf(s)
+    if v is None or v < 0.0:
+        return ""
+    if v < 10.0:
+        return "%.1f s" % v
+    if v < 60.0:
+        return "%d s" % round(v)
+    m = int(v // 60.0)
+    return "%d m %02d s" % (m, int(round(v - m * 60.0)))
+
+
+def time_to_limit_of(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The ``time_to_limit`` block of a coupled record, or ``None``.
+
+    ``None`` too for a point INSIDE every limit: there is no time to a limit it
+    respects, and a row saying so would invite the reader to plan around a
+    number that is not a constraint.
+    """
+    if not isinstance(rec, dict):
+        return None
+    blk = rec.get("time_to_limit")
+    if not isinstance(blk, dict) or not blk or blk.get("within_limits", True):
+        return None
+    return blk
+
+
+def time_to_limit_words(rec: Optional[Dict[str, Any]]) -> str:
+    """The coupled table's cell: both starts, then what ends the pull.
+
+    ``2 m 40 s from cold / 1 m 05 s from rated (winding, 200 °C)`` — and, when
+    the step response never reaches the limit at all, the sentence that says so
+    instead of a number nobody may quote.
+    """
+    blk = time_to_limit_of(rec)
+    if blk is None:
+        return ""
+    part = str(blk.get("limiting_part") or "")
+    lim = _numf((blk.get("limits_c") or {}).get(part))
+    tail = " (%s%s)" % (part or "the limiting part",
+                        "" if lim is None else ", %s" % _fmt(lim, 0, "°C"))
+    parts: List[str] = []
+    for start, word in (("cold", "from cold"), ("rated", "from rated")):
+        t = _numf(((blk.get("starts") or {}).get(start) or {})
+                  .get("time_to_limit_s"))
+        if t is not None:
+            parts.append("%s %s" % (_secs_words(t), word))
+    if not parts:
+        return ("no time is quoted: the step response of this point settles "
+                "below the limit%s" % tail)
+    return " / ".join(parts) + tail
+
+
+def time_to_limit_clause(rec: Optional[Dict[str, Any]], part: str) -> str:
+    """ONE clause for the §8 note of ``part`` — ``""`` when it has none.
+
+    The house rule for these notes is one clause and no new prose, so this is a
+    single "; …" and never a sentence of its own.
+    """
+    blk = time_to_limit_of(rec)
+    if blk is None:
+        return ""
+    row = next((r for r in (blk.get("parts") or ())
+                if str((r or {}).get("part") or "") == str(part)), None)
+    if not isinstance(row, dict):
+        return ""
+    lim = _numf(row.get("limit_c"))
+    what = str(row.get("quantity") or part)
+    if not row.get("reaches"):
+        asym = _numf(row.get("asymptote_c"))
+        return ("; no time to the limit is quoted — the lumped network fitted "
+                "to this run's own map settles%s, below it"
+                % ("" if asym is None else " at %s" % _fmt(asym, 0, "°C")))
+    cold = _secs_words(row.get("time_to_limit_s"))
+    warm = _numf((next((r for r in (((blk.get("starts") or {}).get("rated")
+                                     or {}).get("parts") or ())
+                        if str((r or {}).get("part") or "") == str(part)),
+                       {}) or {}).get("time_to_limit_s"))
+    return ("; held here %s reaches %s after %s from cold%s, on the lumped "
+            "network fitted to this run's own thermal map"
+            % (what, _fmt(lim, 0, "°C"), cold,
+               "" if warm is None else " and %s from rated" % _secs_words(warm)))
+
+
 def coupled_warning_words(rec: Optional[Dict[str, Any]],
                           point_pct: Optional[float] = None) -> str:
     """The coupled loop's warning as a CLIENT reads it — ``""`` when there is
@@ -15643,6 +15753,11 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     R("Magnet temperature, hottest [°C]",
       lambda c: (_c(c) or {}).get("magnet_temp_max_c"), 1)
     R("Bearing temperature [°C]", lambda c: (_c(c) or {}).get("bearing_temp_c"), 1)
+    # HOW LONG THE POINT MAY BE HELD (owner 2026-09-17).  Only on a duty whose
+    # converged state is past a limit — `_drop_empty` takes the row out on a
+    # machine that is inside all of them, because "no time to a limit" is not a
+    # number a reader should have to interpret.
+    S("Time to the limit", lambda c: time_to_limit_words(_c(c)) or None)
     # …AND WHY THE PROVENANCE DIFFERS between two duties of one machine
     # (reviewer 2026-09-14, C5).  A loop that needed a second electromagnetic
     # run fed the seat temperature back and converged on it; a loop that

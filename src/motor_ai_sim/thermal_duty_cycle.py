@@ -1839,6 +1839,111 @@ def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
     return out
 
 
+#: One thing that may be judged against a limit: a LABEL, the network node whose
+#: transient it rides, the limit in °C, and the CONSTANT offset from that node's
+#: temperature to the quantity being judged (the winding hot spot is the winding
+#: node plus the calibration map's own max − mean; the bearing seat is the rotor
+#: node plus the map's own seat − rotor mean).  A label rather than a node key
+#: because two parts may ride ONE node — the seat and the rotor iron do — and a
+#: dict keyed by node could not carry both.
+Target = Tuple[str, str, float, float]      # (label, node, limit_c, offset_k)
+
+
+def time_to_limits(segment: Segment, network: Network, caps: Mapping[str, Any],
+                   targets: Sequence[Target], *,
+                   T0: Optional[Mapping[str, float]] = None,
+                   t_max_s: Optional[float] = None,
+                   ) -> Dict[str, Any]:
+    """The STEP RESPONSE of this operating point, and when each target is hit.
+
+    :func:`time_to_limit` answers the S2 question for the two nodes a duty cycle
+    judges; this one answers it for an arbitrary list of ``(label, node, limit,
+    offset)`` targets, which is what the coupled loop needs — it judges the
+    winding HOT SPOT, the hottest MAGNET element and the BEARING SEAT, and the
+    last two are a node-plus-offset rather than a node.
+
+    The machine is switched on at ``T0`` (missing nodes take the profile's start
+    temperature, i.e. ambient) and held at this point for ever; each target
+    reports the first time its own quantity crosses its limit, or says that it
+    never does.  ``reaches: False`` with an ``asymptote_c`` below the limit is a
+    real answer and not a failure — it means the step response of THIS network
+    settles under the limit, so a map that is over it is over it for a reason the
+    four-node network does not represent, and inventing a number would be worse
+    than saying so.
+
+    Returns ``{"targets": {label: {...}}, "t_horizon_s", "end_state_c",
+    "settled": bool}``.
+    """
+    from scipy.integrate import solve_ivp
+
+    C = merged_capacities(caps, network)
+    active = network.active_nodes
+    state = {r: float(network.t_ambient_c) for r in active}
+    for n, v in (T0 or {}).items():
+        if network.rep(n) in state:
+            state[network.rep(n)] = float(v)
+    t_end = float(t_max_s if t_max_s is not None
+                  else 10.0 * _time_constant(network, C))
+    t_end = max(t_end, 1e-3)
+
+    def rhs(_t, y):
+        st = {r: float(y[i]) for i, r in enumerate(active)}
+        d, _P, _F = _derivatives(segment, st, network, C)
+        return [d[r] for r in active]
+
+    events = []
+    labels: List[str] = []
+    for label, node, lim, off in targets:
+        idx = active.index(network.rep(node))
+
+        def _ev(_t, y, _i=idx, _l=float(lim), _o=float(off)):
+            return y[_i] + _o - _l
+        _ev.terminal = False
+        _ev.direction = 1.0
+        events.append(_ev)
+        labels.append(str(label))
+
+    sol = solve_ivp(rhs, (0.0, t_end), [state[r] for r in active],
+                    method="LSODA", rtol=1e-9, atol=1e-9, events=events,
+                    dense_output=False, max_step=max(t_end / 200.0, 1e-6))
+    if not sol.success:
+        raise DutyCycleError(
+            "duty_cycle_integration_failed",
+            "the step response could not be integrated: %s" % sol.message)
+
+    end_state = {r: float(sol.y[i][-1]) for i, r in enumerate(active)}
+    # SETTLED?  The last derivative, in kelvin per hour — under a kelvin an hour
+    # nothing is going to move again, and an asymptote may be quoted.
+    d_end, _P, _F = _derivatives(segment, end_state, network, C)
+    drift_k_per_h = max(abs(v) for v in d_end.values()) * 3600.0
+
+    out: Dict[str, Any] = {
+        "t_horizon_s": round(t_end, 3),
+        "end_state_c": {n: round(end_state[network.rep(n)], 2) for n in NODES},
+        "settled": bool(drift_k_per_h < 1.0),
+        "drift_K_per_h": round(drift_k_per_h, 4),
+        "start_state_c": {n: round(state[network.rep(n)], 2) for n in NODES},
+        "targets": {},
+    }
+    for i, (label, node, lim, off) in enumerate(targets):
+        te = sol.t_events[i]
+        end_c = end_state[network.rep(node)] + float(off)
+        blk: Dict[str, Any] = {
+            "node": str(node), "limit_c": float(lim),
+            "offset_K": round(float(off), 3),
+            "end_c": round(end_c, 2),
+        }
+        if len(te):
+            blk["reaches"] = True
+            blk["time_s"] = round(float(te[0]), 3)
+        else:
+            blk["reaches"] = False
+            blk["time_s"] = None
+            blk["asymptote_c"] = (round(end_c, 2) if out["settled"] else None)
+        out["targets"][str(label)] = blk
+    return out
+
+
 def _time_constant(network: Network, C: Mapping[str, float]) -> float:
     """A crude ΣC/ΣG — only used to pick an integration horizon."""
     g = (float(network.G.get("s_mount") or 0.0)

@@ -16,7 +16,8 @@ import { pickCable } from '../../lib/cableTable';
 import { fetchBearingLosses } from '../../lib/machineBearings';
 import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
-import { couplingLine, couplingTooltip } from './coupledApi';
+import { couplingLine, couplingTooltip, timeToLimitLine,
+         timeToLimitTip } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 
 /** Bench-probe result riding in the summary (backend measures it once per
@@ -1110,6 +1111,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             accent={s.coupling.runaway ? 'red'
                     : s.coupling.converged ? 'green' : 'amber'}
             tooltip={couplingTooltip(s.coupling)}/>
+        </Box>
+      )}
+      {/* …AND HOW LONG IT MAY RUN (owner 2026-09-17).  Directly under the
+          temperatures it qualifies: a winding past its class is half an
+          answer, and this is the other half.  One short line, the model
+          behind it in the tooltip (no-walls-of-text rule); nothing at all
+          on a point that is inside every limit it states. */}
+      {s.coupling && timeToLimitLine(s.coupling.time_to_limit) && (
+        <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
+          <Cell label="Time to the limit"
+            value={timeToLimitLine(s.coupling.time_to_limit) as string}
+            accent="amber"
+            tooltip={timeToLimitTip(s.coupling.time_to_limit)}/>
         </Box>
       )}
 

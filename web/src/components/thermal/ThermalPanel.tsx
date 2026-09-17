@@ -35,6 +35,10 @@ import HeatPathView3D from './HeatPathView3D';
 import DutyCycleEditor from './DutyCycleEditor';
 import { DUTY_CYCLE_ENABLED } from '../../lib/dutyCycleFlag';
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
+// The ORCHESTRATOR's last answer, for the one line this tab reads off it.
+import { fetchCoupledLast, timeToLimitLine,
+         timeToLimitTip } from '../simulation/coupledApi';
+import type { TimeToLimit } from '../simulation/coupledApi';
 import {
   BORE_MODE_LABEL, COOL_MODE_LABEL, END_FACE_LABEL, END_FACE_SIDES_LABEL,
   FRAME_LABEL as FRAME_MODE_LABEL, HOW_IT_WORKS, HOW_IT_WORKS_TITLE,
@@ -389,6 +393,21 @@ const CoupledSection: React.FC = () => {
   const err = st.coupled.err;
 
   const hist = res?.coil_temp_history_C ?? [];
+  // …AND HOW LONG THE POINT MAY BE HELD (owner 2026-09-17).  Read from the
+  // ORCHESTRATOR's last answer (`/api/coupled/last`), which is the loop that
+  // computes it: this section's own slice is the Thermal tab's one-loss-map
+  // loop, which has no magnet feedback and therefore no limits to judge.  It is
+  // a read, never a solve, and it says nothing at all when the last coupled run
+  // was inside every limit or predates the feature.
+  const [ttl, setTtl] = useState<TimeToLimit | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void fetchCoupledLast().then((r) => {
+      if (!alive) return;
+      setTtl(r && !r.stale ? (r.coupling.time_to_limit ?? null) : null);
+    });
+    return () => { alive = false; };
+  }, [res]);
   const [used, setUsed] = useState(false);
   // A new answer is a new number to adopt: the "used" acknowledgement belongs
   // to the result it was pressed on, not to the button.
@@ -441,6 +460,20 @@ const CoupledSection: React.FC = () => {
                 ⚠ did not converge in {res.iterations} iterations
               </Typography>
             </Tooltip>
+          )}
+          {/* ONE SHORT LINE (owner 2026-09-17): a machine past a limit, and how
+              long it may be held before it gets there.  The model is in the
+              HelpTip beside it, per the no-walls-of-text rule. */}
+          {timeToLimitLine(ttl) && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+                       mb: 0.75 }}>
+              <Typography sx={{ ...warn, display: 'inline-block',
+                                borderBottom: 'none', cursor: 'default',
+                                whiteSpace: 'normal' }}>
+                {timeToLimitLine(ttl)}
+              </Typography>
+              <HelpTip title={timeToLimitTip(ttl).split('\n')[0]} />
+            </Box>
           )}
 
           <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-end', flexWrap: 'wrap' }}>

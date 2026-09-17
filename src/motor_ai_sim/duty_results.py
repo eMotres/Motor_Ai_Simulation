@@ -410,6 +410,105 @@ def get(die: str, cfg: str) -> Dict[str, Dict[str, Any]]:
         return {}
 
 
+def store_paths(die: str) -> List[Path]:
+    """Every store a read for this die falls THROUGH, in merge order.
+
+    Deepest first (shared, then the publishing author's, then this workspace's),
+    which is exactly the order :func:`get` and :func:`index` apply them in — the
+    shallowest layer lands on top.  Exposed because a caller that MEMOISES
+    anything derived from this store has to be able to ask what its memo depends
+    on, and stat-ing the paths is the cheapest honest answer (see
+    :func:`store_signature`).
+    """
+    out = list(_fallback_stores(die))
+    out.append(store_path())
+    return out
+
+
+def store_signature(dies: Any) -> tuple:
+    """``((path, mtime_ns, size), …)`` for every store that could answer for
+    ``dies`` — what a memo over this store is valid for.
+
+    WHY THIS EXISTS (2026-09-17).  ``routes.family._tree_signature`` covers the
+    catalog's YAML files, because until now the tree was built from nothing else.
+    A coupled run writes ``.duty_results.json`` and touches no yaml, so a tree
+    that carries anything from this store would keep serving the answer from
+    before the run — a duty row saying a machine is fine hours after the loop
+    said it is not.  One stat per store (one file on a single-layer install)
+    closes that, and an unreadable store returns ``()``, which every caller here
+    treats as "never serve from the memo".
+    """
+    seen: Dict[str, None] = {}
+    sig: List[tuple] = []
+    try:
+        for die in (dies or ()):
+            for p in store_paths(str(die)):
+                key = str(p)
+                if key in seen:
+                    continue
+                seen[key] = None
+                try:
+                    st = p.stat()
+                except FileNotFoundError:
+                    # An absent store is a FACT about this workspace, and it has
+                    # to be part of the signature: a memo taken before the first
+                    # coupled run of a fresh workspace must fall the moment that
+                    # run creates the file.
+                    sig.append((key, -1, -1))
+                    continue
+                sig.append((key, st.st_mtime_ns, st.st_size))
+    except OSError:
+        return ()
+    return tuple(sig)
+
+
+def _die_configs(results: Dict[str, Any], die: str) -> Dict[str, Any]:
+    """One layer's rows for a die: ``{configuration: {duty: {kind: entry}}}``.
+
+    The same two-name match :func:`_node` makes, applied to the whole die at
+    once: a published die is addressed as ``"<die> · by <name>"`` while its own
+    store, written by its author, knows it as ``<die>``.  The caller's own
+    spelling wins, so the two are visited least-specific first.
+    """
+    out: Dict[str, Any] = {}
+    for key in (_plain_die(die), str(die)):
+        node = results.get(key)
+        if not isinstance(node, dict):
+            continue
+        for cfg, duties in node.items():
+            if isinstance(duties, dict) and duties:
+                out[str(cfg)] = duties
+    return out
+
+
+def index(die: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Every stored answer this die has, ``{configuration: {duty: {kind: …}}}``.
+
+    THE POINT IS THE READ COUNT.  :func:`get` answers for ONE configuration and
+    re-reads every layer's whole JSON to do it, which is the right shape for a
+    report of one machine and the wrong one for the catalog tree: a die with
+    twelve configurations would parse the same file twelve times, on a request
+    the Motors tab makes on every render.  This reads each layer ONCE and hands
+    back the whole die.
+
+    Merged exactly the way :func:`get` merges — deepest layer first, the
+    shallowest on top, first hit wins PER DUTY — so a caller cannot see one
+    answer here and a different one there.  ``{}`` on anything unreadable: the
+    catalog degrades to the row it drew before this store existed.
+    """
+    out: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    try:
+        for p in store_paths(die):
+            for cfg, duties in _die_configs(_read_store(p), die).items():
+                node = out.setdefault(cfg, {})
+                for duty, kinds in duties.items():
+                    if isinstance(kinds, dict):
+                        node[str(duty)] = kinds
+    except Exception:                                       # noqa: BLE001
+        return {}
+    return out
+
+
 def rename(die: str, cfg: str, old: str, new: str) -> bool:
     """Carry a duty's results to its NEW name, keeping every row.
 

@@ -24,6 +24,8 @@ import {
   clearDutyMaterialsKeys, dutyCycleChip, setActiveDuty,
 } from '../../lib/dutySettings';
 import { gatedDutyCycleChip } from '../../lib/dutyCycleFlag';
+import { timeToLimitChip, timeToLimitChipTip, type DutyTimeToLimit }
+  from '../../lib/timeToLimitChip';
 import { driveLabel } from '../../lib/dutyRuns';
 // The LOCAL half of this load — the panel's own operating point, the duty's
 // settings block, its materials and its stored runs.  Shared verbatim with the
@@ -76,6 +78,10 @@ interface Duty {
   // ▶ loads them all so the Simulation panel can switch between them.
   primary_drive?: string;
   runs?: DutyRunRow[];
+  /** HOW LONG MAY IT RUN — the coupled loop's step response, when this point is
+   *  past a limit (2026-09-17).  Absent on a duty with no coupled record, on a
+   *  record older than the feature, and on a point inside every limit it has. */
+  time_to_limit?: DutyTimeToLimit | null;
 }
 interface Battery {
   chemistry?: string | null; cells?: number | null;
@@ -1113,6 +1119,25 @@ const FamilyCatalog: React.FC<{
                                   color: '#a78bfa', border: '1px solid #a78bfa55',
                                 }}>
                                   {gatedDutyCycleChip(dutyCycleChip(d.duty_cycle))}
+                                </span>
+                              </Tooltip>
+                            )}
+                            {/* HOW LONG MAY IT RUN (owner 2026-09-17).  A point
+                                the coupled loop found past a limit gets the
+                                other half of the answer right here, where the
+                                reader is when they ask whether they may pull
+                                it.  NOT gated by the duty-cycle flag — this is
+                                not a cycle — and absent entirely on a point
+                                inside every limit (`lib/timeToLimitChip`). */}
+                            {timeToLimitChip(d.time_to_limit) && (
+                              <Tooltip key="ttl" placement="top"
+                                title={timeToLimitChipTip(d.time_to_limit)}>
+                                <span style={{
+                                  marginLeft: 5, fontSize: 9.5, padding: '0 4px',
+                                  borderRadius: 3, cursor: 'help', fontWeight: 600,
+                                  color: '#f59e0b', border: '1px solid #f59e0b88',
+                                }}>
+                                  {timeToLimitChip(d.time_to_limit)}
                                 </span>
                               </Tooltip>
                             )}

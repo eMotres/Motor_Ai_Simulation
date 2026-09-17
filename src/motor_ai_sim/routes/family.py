@@ -1092,6 +1092,75 @@ def _run_rows(build_sig: str, entry: dict) -> list[dict]:
     return rows
 
 
+def _ttl_num(v: Any) -> Optional[float]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def _time_to_limit_row(coupled: Any) -> Optional[Dict[str, Any]]:
+    """The catalog row's half of a stored ``time_to_limit`` block — or ``None``.
+
+    HOW LONG MAY IT RUN (owner, 2026-09-17).  The coupled loop answers about the
+    STEADY state; when that state is past a limit it also integrates the step
+    response and says how long the machine has.  The Thermal tab prints it; the
+    catalog row is where the reader is ALREADY looking when they ask "can I pull
+    this point?", so the answer gets a chip there too.
+
+    ``None`` on three things, and each of them is an answer rather than a gap:
+    a duty with no coupled record (never solved), a record written before this
+    feature existed, and — the important one — a point that is INSIDE every
+    limit it has.  A machine that is not over anything has no time to a limit,
+    and a chip quoting one would invite planning around a number that is not a
+    constraint.
+
+    FLATTENED ON PURPOSE.  The block carries ``limits_c`` / ``at_point_c`` as a
+    dict PER PART; the row carries the limiting part's two scalars under
+    deliberately different names, so a reader of either shape cannot mistake one
+    for the other.  Everything else stays behind — the tree is fetched on every
+    catalog render, and the per-part list, the two start states and the network
+    fit are a payload (same rule as ``_run_rows``: descriptions only).
+    """
+    t = (coupled or {}).get("time_to_limit") if isinstance(coupled, dict) else None
+    if not isinstance(t, dict) or t.get("within_limits", True):
+        return None
+    part = str(t.get("limiting_part") or "")
+    starts = t.get("starts") if isinstance(t.get("starts"), dict) else {}
+
+    def _start(name: str) -> Optional[float]:
+        blk = starts.get(name)
+        return _ttl_num((blk or {}).get("time_to_limit_s")) \
+            if isinstance(blk, dict) else None
+
+    row: Dict[str, Any] = {
+        "part": part or None,
+        "at_point_c": _ttl_num((t.get("at_point_c") or {}).get(part)),
+        "limit_c": _ttl_num((t.get("limits_c") or {}).get(part)),
+        "over_by_K": _ttl_num((t.get("over_by_K") or {}).get(part)),
+        "cold_s": _start("cold"),
+        "rated_s": _start("rated"),
+        # The block's OWN sentence, which is what the tooltip prints: it already
+        # names the part, the limit and both starts, and a second sentence
+        # written here could disagree with the one the panel and the report show.
+        "note": str(t.get("note") or "") or None,
+    }
+    return row
+
+
+def _time_to_limit_kv(coupled: Any) -> Dict[str, Any]:
+    """``{"time_to_limit": row}`` or ``{}`` — the duty literal splices this.
+
+    An ABSENT key, never a null one: "this duty has no time-to-limit answer" and
+    "this duty's answer is nothing" are the same thing to a reader and both mean
+    "draw no chip", so the tree says it once, the way ``duty_cycle`` and the
+    layer keys beside it are said.
+    """
+    row = _time_to_limit_row(coupled)
+    return {"time_to_limit": row} if row else {}
+
+
 def _duty_run_files(entry: dict) -> list[str]:
     return [str(r["payload_file"])
             for r in (entry.get("runs") or {}).values()
@@ -1413,14 +1482,32 @@ _TREE_CACHE = _WS.ws_map("family.tree_cache", _TREE_CACHE_MAX, lru_on_read=True)
 
 def _tree_signature(with_catalog: bool) -> tuple:
     """Every file `tree()` reads, with its mtime and size — what the memo is
-    valid for.  ~30 stats, well under a millisecond."""
+    valid for.  ~30 stats, well under a millisecond.
+
+    THE DUTY-RESULTS STORE IS ONE OF THEM (2026-09-17).  Since the duty row
+    carries the coupled loop's "how long may it run" answer, the tree is no
+    longer built from the YAML files alone: a coupled run writes
+    ``.duty_results.json`` and touches no yaml, so a signature over the catalog
+    only would keep serving a row saying the machine is fine hours after the
+    loop said it is not.  One stat per store — one file unless layering is on —
+    and `duty_results.store_signature` returns `()` on anything unreadable,
+    which lands in the same "never serve from the memo" branch as an
+    unreadable die.
+    """
     sig = []
     try:
+        _dies = []
         for _e in _iter_die_entries():
             dd = Path(str(_e["dir"]))
+            _dies.append(str(_e["name"]))
             for f in sorted(dd.glob("*.yaml")):
                 st = f.stat()
                 sig.append((_e["name"], f.name, st.st_mtime_ns, st.st_size))
+        from motor_ai_sim import duty_results as _dr
+        _dsig = _dr.store_signature(_dies)
+        if _dies and not _dsig:
+            return ()                # unreadable store → never served from memo
+        sig.extend(("\0duty_results", *row) for row in _dsig)
         if with_catalog:
             p = _ws_root_f() / "motor_catalog.json"
             if p.is_file():
@@ -1529,11 +1616,20 @@ def tree(response: Response, authorization: str = Header(default=None)):
         geo = die.get("geometry") or {}
         if _client_filter and not _die_is_client_ready(geo):
             continue
+        # Every stored solver answer this die has, read ONCE — never
+        # `duty_results.get()` per configuration, which re-reads the whole JSON
+        # of every layer each time (a twelve-configuration die would parse the
+        # same file twelve times, on a request the Motors tab makes per render).
+        # `_tree_signature` stats the same stores, so the memo above falls the
+        # moment a coupled run writes one.
+        from motor_ai_sim import duty_results as _dr
+        _dr_die = _dr.index(_die_name)
         cfgs = []
         for cf in sorted(dd.glob("*.yaml")):
             if cf.name == "die.yaml":
                 continue
             c = _load_yaml(cf, "configuration")
+            _dr_cfg = _dr_die.get(cf.stem) or {}
             ov = c.get("geometry_overrides") or {}
             w = c.get("winding") or {}
             _bsig = _build_sig(die, c)
@@ -1591,7 +1687,14 @@ def tree(response: Response, authorization: str = Header(default=None)):
                      # on every catalog render).  Empty list = a duty that has
                      # only ever been saved the way duties always were.
                      "primary_drive": _primary_drive(d),
-                     "runs": _run_rows(_bsig, d)}
+                     "runs": _run_rows(_bsig, d),
+                     # HOW LONG MAY IT RUN (2026-09-17).  Absent — never null —
+                     # on a duty with no coupled record, on a record older than
+                     # the feature, and on a point inside every limit it has.
+                     # `_time_to_limit_row` says why each of those is an answer.
+                     **_time_to_limit_kv(
+                         (_dr_cfg.get(str(d.get("name") or "")) or {})
+                         .get("coupled"))}
                     for d in (c.get("duties") or [])
                 ],
             })

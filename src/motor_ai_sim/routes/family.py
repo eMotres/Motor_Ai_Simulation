@@ -1146,6 +1146,19 @@ def _time_to_limit_row(coupled: Any) -> Optional[Dict[str, Any]]:
         # written here could disagree with the one the panel and the report show.
         "note": str(t.get("note") or "") or None,
     }
+    # ── WHICH STATE THIS DUTY'S RECORD IS (owner 2026-09-18) ────────────────
+    # A `limits` run reports the machine AT the crossing, so the chip's job
+    # changes from "warning: past a limit" to "this is how long it runs" — and
+    # the tooltip becomes the limited block's own line, which also names the
+    # cooling the answer is conditional on.  Absent on every steady record,
+    # which is what "nothing changed there" looks like in the tree.
+    _lim = (coupled or {}).get("limited") if isinstance(coupled, dict) else None
+    if str((coupled or {}).get("mode") or "") == "limited" and isinstance(
+            _lim, dict) and _lim:
+        row["mode"] = "limited"
+        row["at_point_c"] = _ttl_num((_lim.get("at_limit_c") or {}).get(part))
+        row["note"] = str(_lim.get("line") or row.get("note") or "") or None
+        row["cooling_words"] = str(_lim.get("cooling_words") or "") or None
     return row
 
 

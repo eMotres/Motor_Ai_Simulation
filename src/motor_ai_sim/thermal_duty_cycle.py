@@ -1906,6 +1906,10 @@ def time_to_limits(segment: Segment, network: Network, caps: Mapping[str, Any],
     sol = solve_ivp(rhs, (0.0, t_end), [state[r] for r in active],
                     method="LSODA", rtol=1e-9, atol=1e-9, events=events,
                     dense_output=False, max_step=max(t_end / 200.0, 1e-6))
+    # NOTE ON `y_events`: SciPy hands back the WHOLE state vector at each event,
+    # which is what makes "the machine AT the limit" a state and not a single
+    # temperature — every other node is read off the same instant of the same
+    # trajectory rather than interpolated afterwards.
     if not sol.success:
         raise DutyCycleError(
             "duty_cycle_integration_failed",
@@ -1936,6 +1940,16 @@ def time_to_limits(segment: Segment, network: Network, caps: Mapping[str, Any],
         if len(te):
             blk["reaches"] = True
             blk["time_s"] = round(float(te[0]), 3)
+            # …AND THE STATE THE MACHINE IS IN AT THAT INSTANT (owner
+            # 2026-09-18).  The time alone answers "how long"; the answer the
+            # owner asked for is the MACHINE at that moment, so every node is
+            # read off the same crossing — this part at its limit by
+            # construction, the others wherever the trajectory has put them.
+            ye = sol.y_events[i]
+            if ye is not None and len(ye):
+                blk["state_c"] = {
+                    n: round(float(ye[0][active.index(network.rep(n))]), 2)
+                    for n in NODES}
         else:
             blk["reaches"] = False
             blk["time_s"] = None

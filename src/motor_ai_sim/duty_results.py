@@ -1224,6 +1224,23 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         **({"time_to_limit": dict(c["time_to_limit"])}
            if isinstance(c.get("time_to_limit"), dict) and c["time_to_limit"]
            else {}),
+        # ── WHICH QUESTION THIS DUTY WAS ASKED, AND WHAT CAME BACK ──────────
+        # Owner 2026-09-18: the loop now answers one of two questions — the
+        # steady state, or the machine AT the first limit it reaches — and it is
+        # a CHOICE.  Both travel: `solve_to` is what was asked, `mode` is what
+        # this record is.  A record written before they existed carries neither,
+        # and every reader must take that as `steady`: that is what it was.
+        #
+        # The `limited` block is kept WHOLE (a dozen scalars, two small
+        # temperature dicts and the cooling the answer is conditional on)
+        # because the report's §8, its coupled table and the catalog chip all
+        # read the DUTY's record and not the run, and a table of temperatures
+        # at a limit with nothing saying they are at a limit is worse than no
+        # table at all.
+        **({"solve_to": c["solve_to"]} if c.get("solve_to") else {}),
+        **({"mode": c["mode"]} if c.get("mode") else {}),
+        **({"limited": dict(c["limited"])}
+           if isinstance(c.get("limited"), dict) and c["limited"] else {}),
         "iterations": c.get("iterations"),
         "em_runs": c.get("em_runs"),
         "converged": bool(c.get("converged")) if c else None,

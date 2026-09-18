@@ -2317,6 +2317,154 @@ _AIR_TAGS = (DOM_AIR, DOM_AIRGAP, DOM_BAND, DOM_OUTER, DOM_GAP_AIR,
              DOM_SLOT_FILL)
 
 
+# ---------------------------------------------------------------------------
+# THE MAP AT A TRANSIENT INSTANT — the "limited operation" snapshot
+# ---------------------------------------------------------------------------
+# Owner, 2026-09-18: when the coupled loop's steady state is past a limit, what
+# is reported is the machine AT THE MOMENT THE FIRST LIMIT IS REACHED.  The
+# tables then carry the node temperatures of that instant — and the MAPS beside
+# them must carry the same machine, or the picture and the numbers would be two
+# different states of one motor.
+#
+# There is no transient field solve here and there must not be one: the
+# time-to-limit model already states its assumption — *the SHAPE of each part's
+# temperature field is frozen at the calibration map's, and only its level
+# moves* — so the honest snapshot is the last solved map TRANSLATED part by part
+# onto the four node temperatures of the crossing.  Anything cleverer would be a
+# transient the solver never ran.
+
+#: The collapsed palette's own tags, at MODULE scope.  ``solve_thermal_field``
+#: unpacks the same numbers into locals of its own (``DOM_STATOR`` and friends),
+#: which is where they are documented; they are spelled again here because this
+#: helper is called from outside that function and PART_NAMES above is the table
+#: both agree with: 1 stator, 2 coil, 4 magnet_N, 5 rotor, 11 sleeve, 44 magnet_S.
+_SNAP_STATOR, _SNAP_COIL, _SNAP_MAG_N = 1, 2, 4
+_SNAP_ROTOR, _SNAP_SLEEVE, _SNAP_MAG_S = 5, 11, 44
+
+#: Which of the four network nodes every SOLID domain of the map rides.
+#: Unlisted domains follow the stator, which is the frame of this cross-section.
+_SNAPSHOT_NODE_OF_DOMAIN = {
+    _SNAP_STATOR: "stator",
+    _SNAP_COIL: "winding",
+    DOM_TPL_LINER: "winding", DOM_TPL_ENAMEL: "winding",
+    DOM_SLOT_LINER: "winding", DOM_WIRE_ENAMEL: "winding",
+    DOM_SLOT_FILL: "winding",
+    _SNAP_MAG_N: "magnet", _SNAP_MAG_S: "magnet",
+    _SNAP_ROTOR: "rotor", DOM_SHAFT: "rotor", _SNAP_SLEEVE: "rotor",
+    DOM_POCKET_AIR: "rotor",
+    # The clearance is half one part and half the other, which is what an air
+    # gap physically is: it takes the mean of the two shifts.
+    DOM_GAP_AIR: "gap",
+}
+
+
+def rescale_map_to_nodes(result: dict, node_temps_c: dict, *,
+                         note: str = "") -> dict:
+    """A COPY of ``result`` translated onto ``node_temps_c`` — never in place.
+
+    ``node_temps_c`` is ``{"winding": …, "stator": …, "rotor": …, "magnet": …}``
+    in °C.  Each part's field is shifted by the difference between its target
+    and its own mean in this map, so the SHAPE (the hot spot's offset above the
+    mean, the gradient through the liner) is exactly the shape that was solved
+    and only the level moves.  A vertex shared by two domains takes the mean of
+    their shifts, so the field stays continuous where the parts meet.
+
+    The copy is MARKED — ``transient_snapshot`` — because it is not a solved
+    steady map and nothing downstream may mistake it for one.  Returns the
+    input unchanged (and unmarked) when there is nothing to shift.
+    """
+    import numpy as _np
+
+    if not isinstance(result, dict) or not result.get("ok"):
+        return result
+    comps = result.get("components") or {}
+    shift: dict = {}
+    for node, target in (node_temps_c or {}).items():
+        blk = comps.get(node)
+        if not isinstance(blk, dict):
+            continue
+        try:
+            mean, t = float(blk.get("avg")), float(target)
+        except (TypeError, ValueError):
+            continue
+        if mean == mean and t == t:                       # not NaN
+            shift[str(node)] = t - mean
+    if not shift:
+        return result
+    try:
+        tris = _np.asarray(result["triangles"], dtype=int)
+        tags = _np.asarray(result["domain_per_tri"], dtype=int)
+        T = _np.asarray(result["temperature_per_node"], dtype=float).copy()
+    except (KeyError, TypeError, ValueError):
+        return result
+    if tris.ndim != 2 or tris.shape[0] != tags.shape[0]:
+        return result
+
+    def _tri_shift(tag: int) -> float:
+        node = _SNAPSHOT_NODE_OF_DOMAIN.get(int(tag), "stator")
+        if node == "gap":
+            return 0.5 * (shift.get("rotor", 0.0) + shift.get("stator", 0.0))
+        return float(shift.get(node, shift.get("stator", 0.0)))
+
+    per_tri = _np.array([_tri_shift(t) for t in tags], dtype=float)
+    acc = _np.zeros(T.shape[0], dtype=float)
+    cnt = _np.zeros(T.shape[0], dtype=float)
+    flat = tris.ravel()
+    _np.add.at(acc, flat, _np.repeat(per_tri, tris.shape[1]))
+    _np.add.at(cnt, flat, 1.0)
+    T = T + acc / _np.maximum(cnt, 1.0)
+
+    out = dict(result)
+    out["temperature_per_node"] = T.tolist()
+    out["T_max"] = round(float(T.max()), 1)
+    out["T_min"] = round(float(T.min()), 1)
+    # The per-part block is RE-READ off the shifted field rather than assumed:
+    # a vertex on an interface carries a blended shift, so a part's new mean is
+    # within a fraction of a kelvin of its target and the map says which.
+    new_comps = dict(comps)
+    for node in ("winding", "stator", "rotor", "magnet", "shaft", "sleeve",
+                 "liner", "enamel", "slot_fill", "gap_air", "pocket_air"):
+        blk = comps.get(node)
+        if not isinstance(blk, dict):
+            continue
+        mask = _np.zeros(tags.shape[0], dtype=bool)
+        for tag, n in _SNAPSHOT_NODE_OF_DOMAIN.items():
+            if n == node:
+                mask |= (tags == tag)
+        if node == "shaft":
+            mask = (tags == DOM_SHAFT)
+        elif node == "sleeve":
+            mask = (tags == _SNAP_SLEEVE)
+        elif node == "liner":
+            mask = (tags == DOM_SLOT_LINER)
+        elif node == "enamel":
+            mask = (tags == DOM_WIRE_ENAMEL)
+        elif node == "slot_fill":
+            mask = (tags == DOM_SLOT_FILL)
+        elif node == "gap_air":
+            mask = (tags == DOM_GAP_AIR)
+        elif node == "pocket_air":
+            mask = (tags == DOM_POCKET_AIR)
+        elif node == "winding":
+            mask = (tags == _SNAP_COIL)
+        if not mask.any():
+            continue
+        nodes = _np.unique(tris[mask])
+        new_comps[node] = {"max": round(float(T[nodes].max()), 1),
+                           "avg": round(float(T[nodes].mean()), 1)}
+    out["components"] = new_comps
+    out["transient_snapshot"] = {
+        "kind": "time_to_limit",
+        "node_temps_c": {k: round(float(v), 2)
+                         for k, v in (node_temps_c or {}).items()},
+        "shift_K": {k: round(float(v), 2) for k, v in shift.items()},
+        "note": (note or "the last solved map, translated part by part onto the "
+                 "node temperatures of this instant — the field SHAPE is frozen "
+                 "at the solved map's, only its level moves"),
+    }
+    return out
+
+
 def _end_winding_factor(em, geo_ov) -> "tuple[float, str]":
     """``(k_end, where it came from)`` — the end-winding factor the LOSSES of
     this map were billed at.

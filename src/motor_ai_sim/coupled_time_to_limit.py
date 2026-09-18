@@ -349,6 +349,70 @@ def headline(block: Optional[Mapping[str, Any]]) -> str:
                ", ".join(times)))
 
 
+def limiting(block: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """WHAT ENDS THE PULL, or ``None`` when nothing does.
+
+    ``None`` means one of three things and each of them says "there is no
+    limited state to report": every part is inside its limit, the block could
+    not be formed, or the step response of this network never reaches the limit
+    at all — and in that last case the STEADY state is the answer, exactly as
+    :mod:`routes.coupled` documents (a map over a limit whose transient settles
+    below it is over it for a reason four nodes do not represent, and a time
+    extrapolated out of a curve that flattens first would be an invented
+    number).
+
+    The dict is the limiting part, its limit, both times and the node
+    temperatures at the cold crossing — everything the "limited" mode needs and
+    nothing it does not.
+    """
+    b = dict(block or {})
+    if not b or b.get("within_limits", True):
+        return None
+    cold = dict((b.get("starts") or {}).get("cold") or {})
+    t_cold = _num(cold.get("time_to_limit_s"))
+    part = str(cold.get("limiting_part") or b.get("limiting_part") or "")
+    state = cold.get("state_at_limit_c")
+    if t_cold is None or not part or not isinstance(state, Mapping):
+        return None
+    row = next((dict(r) for r in (b.get("parts") or ())
+                if str((r or {}).get("part") or "") == part), {})
+    return {
+        "part": part,
+        "quantity": str(row.get("quantity") or PART_QUANTITY.get(part, part)),
+        "limit_c": _num((b.get("limits_c") or {}).get(part)),
+        "limit_source": str(row.get("limit_source") or ""),
+        "offset_K": _num(row.get("offset_K")),
+        "t_cold_s": t_cold,
+        "t_rated_s": _num(((b.get("starts") or {}).get("rated") or {})
+                          .get("time_to_limit_s")),
+        "temperatures_at_limit": {k: round(float(v), 2)
+                                  for k, v in state.items()},
+    }
+
+
+def limited_line(block: Optional[Mapping[str, Any]], *,
+                 cooling: str = "") -> str:
+    """THE ONE SENTENCE of the limited mode — ``""`` when there is none.
+
+    Owner, 2026-09-18: the reported machine is the one AT the limit, and the
+    line has to say what that state IS — *«Runs 24 s from cold, then the winding
+    reaches 200 °C»* — plus (addendum, same day) the two things the answer is
+    conditional on: *«при заданной мощности и заданном охлаждении»*.  One
+    sentence, the cooling MODE in the tooltip rather than in it.
+    """
+    lim = limiting(block)
+    if not lim:
+        return ""
+    runs = "%s from cold" % fmt_seconds(lim["t_cold_s"])
+    if lim["t_rated_s"] is not None:
+        runs += " (%s from rated)" % fmt_seconds(lim["t_rated_s"])
+    return ("Runs %s at this power and cooling, then the %s reaches %s — the "
+            "numbers below are the machine at that moment"
+            % (runs, lim["part"],
+               "%g °C" % lim["limit_c"] if lim["limit_c"] is not None
+               else "its limit"))
+
+
 def panel_line(block: Optional[Mapping[str, Any]]) -> str:
     """The panel's own wording: what it RUNS, not what it is over by."""
     b = dict(block or {})
@@ -513,6 +577,12 @@ def _parts_block(rec: Mapping[str, Any], over: Sequence[PartLimit]
             row["note"] = ("%s reaches %g °C after %s"
                            % (row["quantity"], p.limit_c,
                               fmt_seconds(row["time_to_limit_s"])))
+            # THE STATE AT THE CROSSING travels with the row: it is what the
+            # "limited" mode reports as the machine (owner 2026-09-18), and it
+            # must be the instant this very row is about.
+            if isinstance(t.get("state_c"), Mapping):
+                row["state_c"] = {k: round(float(v), 2)
+                                  for k, v in t["state_c"].items()}
             v = _num(row["time_to_limit_s"])
             if v is not None and (best is None or v < best[0]):
                 best = (v, p.part)
@@ -602,11 +672,18 @@ def solve(*, thermal_result: Mapping[str, Any],
             continue
         rec = _one_start(seg, net, caps, over, T0)
         rows, t_min, part_min = _parts_block(rec, over)
+        # THE MACHINE AT THE FIRST CROSSING — the state the "limited" mode
+        # reports (owner 2026-09-18).  The LIMITING part's instant, because that
+        # is when the pull ends; a later part's crossing is a state the machine
+        # is never allowed to reach.
+        at_lim = next((dict(r["state_c"]) for r in rows
+                       if r.get("part") == part_min and r.get("state_c")), None)
         starts[name] = {
             "start": name,
             "start_state_c": {k: round(float(v), 2) for k, v in T0.items()},
             "start_source": why,
             "time_to_limit_s": t_min,
+            **({"state_at_limit_c": at_lim} if at_lim else {}),
             "time_to_limit_words": fmt_seconds(t_min) if t_min is not None else None,
             "limiting_part": part_min,
             "horizon_s": rec.get("t_horizon_s"),

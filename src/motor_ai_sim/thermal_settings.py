@@ -209,6 +209,61 @@ def cooling_issue(s: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
+def cooling_words(c: Mapping[str, Any]) -> str:
+    """THE BOUNDARY, in a handful of words — ``""`` when there is nothing to say.
+
+    Owner, 2026-09-18 (addendum): the limited state is the machine *«при заданной
+    мощности и заданном охлаждении»*, so the answer has to NAME the cooling it
+    was computed with.  The sentence itself stays one line (the no-walls rule),
+    so this is what its tooltip prints.
+
+    Takes the mapped block :func:`cooling_fields` produces — the one the coupled
+    loop actually solved with — never the panel's raw fields, so what is named
+    is what was used.
+    """
+    if not isinstance(c, Mapping) or not c:
+        return ""
+    amb = _num(c.get("ambient_temp"), 40.0)
+    mode = str(c.get("cooling_mode") or "air")
+    bits = []
+    if mode == "liquid":
+        bits.append("%s jacket, %g L/min in at %g °C"
+                    % (str(c.get("fluid") or "water"),
+                       _num(c.get("flow_lpm"), 0.0),
+                       _num(c.get("fluid_temp_in_c"), amb)))
+    elif mode == "manual":
+        bits.append("h = %g W/m²K at %g °C" % (_num(c.get("h_conv"), 0.0), amb))
+    elif mode == "none":
+        bits.append("no film on the housing")
+    elif mode == "robotics":
+        bits.append("robotics: still air + radiation (ε = %g) at %g °C"
+                    % (_num(c.get("emissivity"), 0.9), amb))
+        if str(c.get("end_faces") or "still") != "none":
+            bits.append("end faces %s" % str(c.get("end_faces") or "still"))
+    else:
+        v = _num(c.get("air_speed_mps"), 0.0)
+        bits.append("still air at %g °C" % amb if v <= 0.0
+                    else "air %g m/s at %g °C" % (v, amb))
+    if _num(c.get("mount_g_w_per_k"), 0.0) > 0.0:
+        bits.append("mount %g W/K at %g °C"
+                    % (_num(c.get("mount_g_w_per_k"), 0.0),
+                       _num(c.get("mount_temp_c"), amb)))
+    bore = str(c.get("bore_mode") or "none")
+    if bore == "air":
+        bits.append("bore air %g m/s" % _num(c.get("bore_air_speed_mps"), 0.0))
+    elif bore == "liquid":
+        bits.append("bore %s %g L/min" % (str(c.get("bore_fluid") or "water"),
+                                          _num(c.get("bore_flow_lpm"), 0.0)))
+    elif bore == "still":
+        bits.append("still air down the bore")
+    if str(c.get("frame") or "") == "open":
+        bits.append("open frame")
+    if _num(c.get("shaft_ext_length_mm"), 0.0) > 0.0:
+        bits.append("%g mm of exposed shaft"
+                    % _num(c.get("shaft_ext_length_mm"), 0.0))
+    return ", ".join(bits)
+
+
 def coupled_iteration_settings(s: Mapping[str, Any]) -> Dict[str, Any]:
     """The one ITERATION field the Thermal panel owns: ``maxIter``.
 

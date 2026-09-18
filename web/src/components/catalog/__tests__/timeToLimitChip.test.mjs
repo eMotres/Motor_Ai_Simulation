@@ -136,3 +136,50 @@ test('the same durations the panel, the log and the PDF print', () => {
   assert.equal(secsWords(null), '—');
   assert.equal(secsWords(-1), '—');
 });
+
+/* ── SOLVED TO THE LIMITS (owner 2026-09-18) ──────────────────────────────── */
+// «надо сделать выбор — или считать до конца стабилизации температуры, или
+// считать до лимитов и находить время работы при заданных условиях».  With the
+// second question asked, the duty's whole record IS the machine at the crossing
+// — so the chip stops being a warning ("this point is past a limit and the
+// numbers beside it are a state it never reaches") and becomes the answer
+// ("it runs 24 s").  Two rules, and nothing else here:
+//
+//   1. the label states the RUN and drops the ⚠ — there is nothing to warn
+//      about, the duty was solved to exactly this;
+//   2. the tooltip names the COOLING the answer is conditional on (the owner's
+//      addendum of the same day: «при заданной мощности и заданном охлаждении»).
+
+/** The same L13 peak duty, solved to its limits instead of to a steady state. */
+const PEAK_LIMITED = {
+  ...PEAK,
+  mode: 'limited',
+  at_point_c: 200,          // the limit itself — the machine IS there
+  cold_s: 24.3,
+  rated_s: 9.1,
+  cooling_words: 'robotics: still air + radiation (ε = 0.9) at 40 °C, mount 2 W/K at 40 °C',
+  note: 'Runs 24 s from cold (9.1 s from rated) at this power and cooling, then '
+    + 'the winding reaches 200 °C — the numbers below are the machine at that moment',
+};
+
+test('a duty solved to its limits states the run, not a warning', () => {
+  assert.equal(timeToLimitChip(PEAK_LIMITED),
+               '⏱ runs 24 s · winding 200 °C');
+});
+
+test('the same duty solved to the steady state still warns', () => {
+  // The identical row without the mode: this is the assertion that the chip
+  // changed BECAUSE of the mode and not because of the numbers.
+  const { mode, cooling_words, ...steady } = PEAK_LIMITED;
+  assert.equal(timeToLimitChip(steady), '⚠ winding 200 °C · 24 s to limit');
+});
+
+test('a limited chip names the cooling its answer is conditional on', () => {
+  const tip = timeToLimitChipTip(PEAK_LIMITED);
+  assert.ok(tip.startsWith(PEAK_LIMITED.note), tip);
+  assert.ok(tip.includes('Cooling: robotics:'), tip);
+});
+
+test('a steady chip with no cooling words is the sentence alone', () => {
+  assert.equal(timeToLimitChipTip(PEAK), PEAK.note);
+});

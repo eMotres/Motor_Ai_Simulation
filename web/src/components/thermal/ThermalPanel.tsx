@@ -36,9 +36,9 @@ import DutyCycleEditor from './DutyCycleEditor';
 import { DUTY_CYCLE_ENABLED } from '../../lib/dutyCycleFlag';
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
 // The ORCHESTRATOR's last answer, for the one line this tab reads off it.
-import { fetchCoupledLast, timeToLimitLine,
-         timeToLimitTip } from '../simulation/coupledApi';
-import type { TimeToLimit } from '../simulation/coupledApi';
+import { fetchCoupledLast, coupledStateLine,
+         coupledStateTip } from '../simulation/coupledApi';
+import type { CouplingBlock } from '../simulation/coupledApi';
 import {
   BORE_MODE_LABEL, COOL_MODE_LABEL, END_FACE_LABEL, END_FACE_SIDES_LABEL,
   FRAME_LABEL as FRAME_MODE_LABEL, HOW_IT_WORKS, HOW_IT_WORKS_TITLE,
@@ -399,12 +399,15 @@ const CoupledSection: React.FC = () => {
   // loop, which has no magnet feedback and therefore no limits to judge.  It is
   // a read, never a solve, and it says nothing at all when the last coupled run
   // was inside every limit or predates the feature.
-  const [ttl, setTtl] = useState<TimeToLimit | null>(null);
+  // THE WHOLE COUPLING BLOCK since 2026-09-18, not just its time-to-limit
+  // half: a `limits` run's answer is the `limited` block, and the line has to
+  // be able to say "the numbers are the machine at that moment".
+  const [ttl, setTtl] = useState<CouplingBlock | null>(null);
   useEffect(() => {
     let alive = true;
     void fetchCoupledLast().then((r) => {
       if (!alive) return;
-      setTtl(r && !r.stale ? (r.coupling.time_to_limit ?? null) : null);
+      setTtl(r && !r.stale ? (r.coupling ?? null) : null);
     });
     return () => { alive = false; };
   }, [res]);
@@ -464,15 +467,15 @@ const CoupledSection: React.FC = () => {
           {/* ONE SHORT LINE (owner 2026-09-17): a machine past a limit, and how
               long it may be held before it gets there.  The model is in the
               HelpTip beside it, per the no-walls-of-text rule. */}
-          {timeToLimitLine(ttl) && (
+          {coupledStateLine(ttl) && (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
                        mb: 0.75 }}>
               <Typography sx={{ ...warn, display: 'inline-block',
                                 borderBottom: 'none', cursor: 'default',
                                 whiteSpace: 'normal' }}>
-                {timeToLimitLine(ttl)}
+                {coupledStateLine(ttl)}
               </Typography>
-              <HelpTip title={timeToLimitTip(ttl).split('\n')[0]} />
+              <HelpTip title={coupledStateTip(ttl).split('\n')[0]} />
             </Box>
           )}
 

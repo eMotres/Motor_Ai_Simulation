@@ -4663,6 +4663,12 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     # in the row's own note as ONE clause rather than as new prose.
     _ttl = ctx.get("time_to_limit") if isinstance(
         ctx.get("time_to_limit"), dict) else None
+    # …EXCEPT ON A LIMITED RECORD (owner 2026-09-18), where the rows above are
+    # ALREADY the machine at that limit and their own note says for how long it
+    # runs.  A second clause repeating the same time would be the wall of prose
+    # the report conventions forbid.
+    if str(ctx.get("coupled_mode") or "") == "limited":
+        _ttl = None
     out.append(_warn(
         "magnet_temperature", duty, "Magnet temperature",
         ctx.get("magnet_temp_c"), ctx.get("magnet_limit_c"), "°C",
@@ -6623,6 +6629,35 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # coupled loop found something over a limit; the rows above then carry the
     # time in their own note, as one clause.
     ctx["time_to_limit"] = time_to_limit_of(cp)
+    # ── …AND A LIMITED RECORD IS JUDGED AT ITS LIMIT (owner 2026-09-18) ─────
+    # The loop was asked to stop at the first limit and report the machine AT
+    # that moment, so that is the machine §8 judges: the limiting part sits
+    # exactly ON its limit (amber — "it runs 24 s", not red "it is over"), and
+    # a part that is STILL past its own limit at that instant stays red, because
+    # at that instant it really is.  Judging the steady state here instead would
+    # colour a machine the record explicitly does not describe.
+    _limited = limited_of(cp)
+    if _limited:
+        _at = _limited.get("at_limit_c") or {}
+        _nodes = _limited.get("temperatures_at_limit") or {}
+        _wl = _numf(_at.get("winding"))
+        _ml_ = _numf(_at.get("magnet")) or _numf(_nodes.get("magnet"))
+        ctx["coupled_mode"] = "limited"
+        ctx["limited"] = _limited
+        ctx["limited_words"] = str(_limited.get("line") or "")
+        _basis = ("the machine AT the limit: %s"
+                  % (str(_limited.get("line") or "").rstrip(".") or
+                     "stopped at the first limit"))
+        ctx["temp_basis"] = _basis
+        if _wl is not None:
+            ctx["winding_temp_c"] = _wl
+            ctx["hot_spot_c"] = _wl
+            ctx["winding_limit_note"] = ((ins_note + "; " if ins_note else "")
+                                         + _basis)
+        if _ml_ is not None:
+            ctx["magnet_temp_c"] = _ml_
+            ctx["magnet_limit_note"] = ((mag_note + "; " if mag_note else "")
+                                        + _basis)
     # ── …AND A CYCLE BEATS EVERY STEADY STATE (2026-09-14) ──────────────────
     # An S2 or S3 duty never reaches the steady state the 2-D map ran to: it is
     # switched off first, and it is switched back on before it has cooled.  The
@@ -10601,7 +10636,12 @@ def coupled_loop_text(cp: Dict[str, Any]) -> str:
     is about.
     """
     c = (cp or {}).get("coupling") or {}
-    if c.get("converged"):
+    if coupled_mode(c) == "limited":
+        # …AND A FOURTH (owner 2026-09-18): the loop was asked to stop at the
+        # first limit, so there is no fixed point to have converged ON and the
+        # sentence says what state these temperatures ARE.
+        _verdict = limited_words(c) or "stopped at the first limit"
+    elif c.get("converged"):
         _verdict = "converged"
     elif coupled_temps_settled(c) is True:
         _verdict = "the TEMPERATURES converged; the operating point did not"
@@ -15475,6 +15515,65 @@ def _secs_words(s: Any) -> str:
     return "%d m %02d s" % (m, int(round(v - m * 60.0)))
 
 
+# ── …AND WHICH STATE THE RECORD IS (owner 2026-09-18) ───────────────────────
+# The loop answers one of two questions now, and it is the user's choice:
+# ``steady`` — held here for ever, the winding settles at 397 °C — or ``limits``
+# — run it from cold and it reaches 200 °C after 24 s, and THAT machine is what
+# every number in the record describes.  A record written before the choice
+# existed carries no ``mode`` and is a steady one, which is what it was.
+
+
+def coupled_mode(rec: Optional[Dict[str, Any]]) -> str:
+    """``"limited"`` or ``"steady"`` — never anything else, never a guess."""
+    if not isinstance(rec, dict):
+        return "steady"
+    return "limited" if str(rec.get("mode") or "") == "limited" else "steady"
+
+
+def limited_of(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The ``limited`` block of a coupled record — ``None`` on a steady one."""
+    if coupled_mode(rec) != "limited":
+        return None
+    blk = rec.get("limited") if isinstance(rec, dict) else None
+    return blk if isinstance(blk, dict) and blk else None
+
+
+def limited_words(rec: Optional[Dict[str, Any]]) -> str:
+    """THE ONE SENTENCE a limited record is read with — ``""`` on a steady one.
+
+    The block's own line, verbatim, so the PDF, the panel, the catalog chip and
+    the log cannot describe one state in four ways.
+    """
+    blk = limited_of(rec)
+    return str((blk or {}).get("line") or "").strip()
+
+
+def limited_state_clause(rec: Optional[Dict[str, Any]]) -> str:
+    """The coupled table's one clause about WHAT the temperatures beside it are.
+
+    ``the limit, after 24 s from cold (9 s from rated); held here for ever the
+    winding would reach 397 °C`` — one clause, no verdict row, no new prose
+    (report conventions 2026-09-14).
+    """
+    blk = limited_of(rec)
+    if not blk:
+        return ""
+    part = str(blk.get("part") or "a part")
+    runs = _secs_words(blk.get("t_cold_s")) + " from cold"
+    warm = _secs_words(blk.get("t_rated_s"))
+    if warm:
+        runs += " (%s from rated)" % warm
+    would = _numf((blk.get("steady_state_would_be") or {}).get(part))
+    tail = ""
+    if would is not None:
+        tail = ("; held here for ever the %s would reach %s%s"
+                % (part, _fmt(would, 0, "°C"),
+                   "" if blk.get("steady_state_converged")
+                   else " (the pass this was fitted to, not a converged "
+                        "fixed point — the loop was stopped at the limit)"))
+    return "the limit, after %s%s" % (runs, tail)
+
+
 def time_to_limit_of(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """The ``time_to_limit`` block of a coupled record, or ``None``.
 
@@ -15666,6 +15765,13 @@ def converged_words(rec: Optional[Dict[str, Any]],
     """
     if not isinstance(rec, dict):
         return "—"
+    # A LIMITED record never "converged" and was never meant to (owner
+    # 2026-09-18): the loop was asked to stop at the first limit, and the cell
+    # says what it stopped at instead of reporting a failure to settle.
+    if coupled_mode(rec) == "limited":
+        return (limited_words(rec)
+                or "stopped at the first limit — the numbers are the machine "
+                   "at that moment")
     if rec.get("converged"):
         return "yes"
     if rec.get("runaway"):
@@ -15748,6 +15854,15 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
       or (_c(c) or {}).get("iterations"), 0)
     S("Converged", lambda c: converged_words(
         _c(c), (duty_point_error(c) or {}).get("pct")))
+    # WHAT THE THREE TEMPERATURES BELOW ARE (owner 2026-09-18).  On a steady
+    # record they are the state this point settles at and the row is absent
+    # (`_drop_empty`); on a LIMITED one they are an instant of a step response,
+    # and a table that did not say so would read as a machine that holds them.
+    # …and NOT through `S`: a duty with no coupled record would print "not
+    # solved" here and keep the row alive on every report of a machine that was
+    # solved to its steady state, which is all of them until somebody asks.
+    rows.append(["Temperatures are"] + _col_vals(
+        cols, lambda c: limited_state_clause(_c(c)) or "—"))
     R("Winding temperature [°C]", lambda c: (_c(c) or {}).get("coil_temp_c"), 1)
     R("Magnet temperature [°C]", lambda c: (_c(c) or {}).get("magnet_temp_c"), 1)
     R("Magnet temperature, hottest [°C]",

@@ -48,6 +48,14 @@ export const DUTY_OP_KEYS: readonly string[] = [
   'sim.drive', 'sim.vPeak', 'sim.vDelta',
   'sim.vBus', 'sim.fSwitch', 'sim.fSwGroup', 'sim.fSwCustom',
   'sim.iBlock',
+  // WHICH QUESTION THE COUPLED LOOP IS ASKED for THIS duty (owner 2026-09-18):
+  // the steady state, or the first limit and the time to it.  It belongs here
+  // and not to the machine because it is a property of the DUTY — a continuous
+  // duty is a steady state by definition, a peak is a pull with a length — and
+  // switching between them must bring each one's own question back.  The switch
+  // itself (`sim.coupled`, on/off) stays global: that is "am I coupling at
+  // all", which is a way of working rather than a property of a duty.
+  'sim.coupledSolveTo',
   // The duty's MATERIALS — a PARTIAL ASSIGNMENT `{part: material}` (user
   // 2026-09-01: "смена магнитов не сохраняется в duty — нужно запоминать какие
   // магниты, и не только магниты: все материалы, для каждого duty").  A duty of

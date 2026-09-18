@@ -124,3 +124,52 @@ test('the time-to-limit helpers are not behind the duty-cycle flag', () => {
                         src.indexOf('/** One decimal'));
   assert.ok(!tip.includes('DUTY_CYCLE_ENABLED'), tip);
 });
+
+// ── SOLVE TO THE STEADY STATE, OR TO THE LIMITS (owner 2026-09-18) ─────────
+// `coupledStateLine` is the one function every panel now asks: it reads the
+// record's own MODE and prints the sentence that mode calls for.  Restated
+// verbatim, like everything else in this file.
+function coupledStateLine(c) {
+  if (!c) return null;
+  if (c.mode === 'limited' && c.limited?.line) return c.limited.line;
+  return timeToLimitLine(c.time_to_limit);
+}
+
+const LIMITED_LINE =
+  'Runs 24 s from cold (9.1 s from rated) at this power and cooling, then the '
+  + 'winding reaches 200 °C — the numbers below are the machine at that moment';
+
+test('a limited record prints its own sentence, not the time-to-limit one', () => {
+  const c = { mode: 'limited', limited: { part: 'winding', line: LIMITED_LINE },
+              time_to_limit: OVER };
+  assert.equal(coupledStateLine(c), LIMITED_LINE);
+});
+
+test('a steady record prints the line it always printed', () => {
+  assert.equal(coupledStateLine({ mode: 'steady', time_to_limit: OVER }),
+               timeToLimitLine(OVER));
+  // …and so does a record written before the choice existed.
+  assert.equal(coupledStateLine({ time_to_limit: OVER }),
+               timeToLimitLine(OVER));
+});
+
+test('a limits run that found nothing to stop at is a steady line', () => {
+  // `solve_to: limits` with a machine inside every limit comes back as a
+  // STEADY record — there is no moment to report — and the panel says nothing.
+  assert.equal(
+    coupledStateLine({ solve_to: 'limits', mode: 'steady',
+                       time_to_limit: { within_limits: true } }), null);
+});
+
+test('the source keeps the mode check on the record, not on a temperature', () => {
+  // The rule this file exists to protect: which sentence is printed is decided
+  // by the record's own `mode`, never by comparing a temperature to a limit in
+  // the browser — two places judging "is this past its class" is how the panel
+  // and the PDF end up disagreeing.
+  const here2 = dirname(fileURLToPath(import.meta.url));
+  const src = readFileSync(join(here2, '..', 'coupledApi.ts'), 'utf8');
+  const fn = src.slice(src.indexOf('export function coupledStateLine'),
+                       src.indexOf('export function coupledStateTip'));
+  assert.ok(fn.includes("c.mode === 'limited'"), fn);
+  assert.ok(!fn.includes('>'), fn);       // no comparison of its own
+});

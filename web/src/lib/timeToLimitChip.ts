@@ -50,6 +50,13 @@ export interface DutyTimeToLimit {
   rated_s?: number | null;
   /** the block's OWN headline sentence — the tooltip, verbatim */
   note?: string | null;
+  /** `'limited'` = this duty was solved TO its limits (owner 2026-09-18), so
+   *  the record's numbers ARE the machine at the crossing and the chip says how
+   *  long it runs rather than warning that something is past a limit.  Absent
+   *  on every steady record, which is every record before that day. */
+  mode?: string | null;
+  /** the cooling the limited answer is conditional on — the tooltip's tail */
+  cooling_words?: string | null;
 }
 
 /** A duration a human reads at a glance: "0.8 s", "48 s", "2 m 40 s". */
@@ -102,6 +109,15 @@ export function timeToLimitChip(t: DutyTimeToLimit | null | undefined):
   if (part) bits.push(part);
   const at = Number(t.at_point_c);
   if (Number.isFinite(at)) bits.push(`${Math.round(at)} °C`);
+  // A LIMITED record is not a warning, it is the answer somebody asked for: the
+  // duty was solved TO its limits and its numbers are the machine at the
+  // crossing.  So the chip states the RUN — "runs 24 s" — and drops the ⚠,
+  // which on a steady record means "this point is past a limit and the numbers
+  // beside it are a state it never reaches".
+  if (String(t.mode ?? '') === 'limited') {
+    const when = `runs ${secsWords(secs)}${cold == null ? ' from rated' : ''}`;
+    return `⏱ ${[when, bits.join(' ')].filter(Boolean).join(' · ')}`;
+  }
   const when = `${secsWords(secs)} to limit${cold == null ? ' from rated' : ''}`;
   return `⚠ ${[bits.join(' '), when].filter(Boolean).join(' · ')}`;
 }
@@ -116,7 +132,8 @@ export function timeToLimitChipTip(t: DutyTimeToLimit | null | undefined):
     string {
   if (!t) return '';
   const note = String(t.note ?? '').trim();
-  if (note) return note;
+  const cooling = String(t.cooling_words ?? '').trim();
+  if (note) return cooling ? `${note}\nCooling: ${cooling}.` : note;
   const part = String(t.part ?? '').trim() || 'a part';
   const lim = Number(t.limit_c);
   const runs: string[] = [];

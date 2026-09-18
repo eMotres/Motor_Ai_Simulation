@@ -340,3 +340,114 @@ def test_the_block_survives_compact_coupled_into_the_duty_record():
     assert rec["time_to_limit"]["starts"]["rated"]["time_to_limit_s"] == 65.0
     # …and a run with no block grows no key, rather than a null one.
     assert "time_to_limit" not in compact_coupled({"coupling": {}})
+
+
+# ---------------------------------------------------------------------------
+# (d) THE MACHINE AT THE CROSSING — the "limited" mode's raw material
+# ---------------------------------------------------------------------------
+# Owner, 2026-09-18: *«состояние мотора в работе 24 секунды при заданной
+# мощности»*.  The time alone was the 2026-09-17 answer; what the loop now
+# reports is the STATE at that instant, so the step response has to hand back
+# every node at the crossing and not just when it happened.
+
+def test_the_step_response_hands_back_every_node_at_the_crossing():
+    """One lump, so the closed form fixes the answer: at the crossing the state
+    IS the limit, to the integrator's own tolerance."""
+    C, G, P, t_amb, t_lim = 200.0, 2.0, 100.0, 25.0, 60.0
+    net = _one_node_network(G, t_amb)
+    caps = {n: C / 4.0 for n in NODES}
+    rec = dc.time_to_limits(_const_segment(P), net, caps,
+                            [("winding", "winding", t_lim, 0.0)],
+                            t_max_s=1000.0)
+    got = rec["targets"]["winding"]
+    assert set(got["state_c"]) == set(NODES)
+    # Everything is one merged lump here, so every node reads the limit.
+    for n in NODES:
+        assert got["state_c"][n] == pytest.approx(t_lim, abs=0.05), n
+    # …and a target that is NEVER reached has no state: there is no instant.
+    none = dc.time_to_limits(_const_segment(P), net, caps,
+                             [("w", "winding", 100.0, 0.0)], t_max_s=1000.0)
+    assert "state_c" not in none["targets"]["w"]
+
+
+def test_an_offset_puts_the_NODE_below_the_limit_by_exactly_the_offset():
+    """The winding HOT SPOT is what is judged; the node the electromagnetic run
+    is solved at is that limit MINUS the map's own offset, and confusing the two
+    would run the final pass 27 K too hot."""
+    C, G, P, t_amb = 200.0, 2.0, 100.0, 25.0
+    net = _one_node_network(G, t_amb)
+    caps = {n: C / 4.0 for n in NODES}
+    rec = dc.time_to_limits(_const_segment(P), net, caps,
+                            [("hot", "winding", 60.0, 5.0)], t_max_s=1000.0)
+    assert rec["targets"]["hot"]["state_c"]["winding"] == pytest.approx(
+        55.0, abs=0.05)
+
+
+def test_limiting_is_the_first_crossing_with_the_whole_machine(caps, areas):
+    """The L13 peak: the winding ends the pull, and what `limiting` hands the
+    loop is the machine at THAT instant — the magnets are nowhere near their own
+    card, which is the whole point of reporting the moment instead of the
+    steady state."""
+    out = ttl.solve(
+        thermal_result=PEAK_MAP, em_summary=PEAK_SUMMARY,
+        limits=_limits(("winding", "winding", 200.0, 27.5, 777.0),
+                       ("magnet", "magnet", 180.0, 1.2, 630.7)),
+        caps=caps, geometry=L13_GEO, side_areas=areas,
+        d_housing_m=D_HOUSING_M,
+        cooling={"mount_g_w_per_k": 2.0, "mount_temp_c": 40.0}, duty="peak",
+        rated_state_c={"winding": 103.7, "stator": 94.5, "rotor": 95.7,
+                       "magnet": 95.6},
+        rated_source="the rated duty's own stored thermal map")
+    lim = ttl.limiting(out)
+    assert lim["part"] == "winding"
+    assert lim["limit_c"] == 200.0
+    assert lim["offset_K"] == pytest.approx(27.5, abs=1e-6)
+    # The node the final electromagnetic pass is solved at = limit − offset.
+    assert lim["temperatures_at_limit"]["winding"] == pytest.approx(
+        200.0 - 27.5, abs=0.2)
+    # …and the magnets are still cold there, far under their 180 °C card.
+    assert lim["temperatures_at_limit"]["magnet"] < 150.0
+    assert 0.0 < lim["t_rated_s"] < lim["t_cold_s"]
+
+
+def test_the_limited_sentence_names_the_power_and_the_cooling(caps, areas):
+    """One sentence (the no-walls rule), and it states the two things the answer
+    is conditional on — the owner's addendum of 2026-09-18."""
+    out = ttl.solve(
+        thermal_result=PEAK_MAP, em_summary=PEAK_SUMMARY,
+        limits=_limits(("winding", "winding", 200.0, 27.5, 777.0)),
+        caps=caps, geometry=L13_GEO, side_areas=areas,
+        d_housing_m=D_HOUSING_M,
+        cooling={"mount_g_w_per_k": 2.0, "mount_temp_c": 40.0}, duty="peak")
+    line = ttl.limited_line(out)
+    assert line.startswith("Runs ")
+    assert "from cold at this power and cooling" in line
+    assert "then the winding reaches 200 °C" in line
+    assert line.endswith("the numbers below are the machine at that moment")
+    assert "\n" not in line
+
+
+def test_a_point_inside_every_limit_has_no_moment_to_report(caps, areas):
+    out = ttl.solve(thermal_result=RATED_MAP, em_summary=RATED_SUMMARY,
+                    limits=_limits(("winding", "winding", 200.0, 2.4, 106.1)),
+                    caps=caps, geometry=L13_GEO, side_areas=areas,
+                    d_housing_m=D_HOUSING_M,
+                    cooling={"mount_g_w_per_k": 2.0, "mount_temp_c": 40.0},
+                    duty="rated")
+    assert ttl.limiting(out) is None
+    assert ttl.limited_line(out) == ""
+
+
+def test_a_limit_that_is_never_reached_leaves_the_steady_state_the_answer(
+        caps, areas):
+    """The brief's own rule: no crossing, no limited state — a time
+    extrapolated out of a curve that flattens first would be invented."""
+    out = ttl.solve(
+        thermal_result=RATED_MAP, em_summary=RATED_SUMMARY,
+        limits=_limits(("winding", "winding", 200.0, 2.4, 260.0)),
+        caps=caps, geometry=L13_GEO, side_areas=areas,
+        d_housing_m=D_HOUSING_M,
+        cooling={"mount_g_w_per_k": 2.0, "mount_temp_c": 40.0}, duty="rated")
+    assert out["within_limits"] is False        # it IS over
+    assert ttl.limiting(out) is None            # …but there is no moment
+    assert ttl.limited_line(out) == ""

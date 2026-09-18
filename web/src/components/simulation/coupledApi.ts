@@ -118,6 +118,54 @@ export interface CouplingBlock {
    *  this existed; present with `within_limits: true` on a point that is inside
    *  every one of them, which is what "nothing to say" looks like here. */
   time_to_limit?: TimeToLimit;
+  /** WHICH QUESTION this run was asked (owner 2026-09-18) — the selector beside
+   *  the Coupled thermal switch.  Absent on every record written before the
+   *  choice existed, and that is a `steady` one. */
+  solve_to?: 'steady' | 'limits';
+  /** …and WHICH ANSWER came back.  A `limits` run of a machine that is inside
+   *  every limit — or whose step response never reaches one — is a `steady`
+   *  record, because there is no moment to report. */
+  mode?: 'steady' | 'limited';
+  limited?: LimitedState;
+}
+
+/** The machine AT the first limit it reaches — the `limits` mode's whole answer.
+ *
+ *  Owner 2026-09-18: *«состояние мотора в работе 24 секунды при заданной
+ *  мощности»* and, the same day, *«при заданной мощности и заданном
+ *  охлаждении»*.  Every number in the coupling block beside this one is that
+ *  machine: the loop made one more electromagnetic pass at these temperatures
+ *  and the thermal map was translated onto them. */
+export interface LimitedState {
+  /** 'winding' | 'magnet' | 'bearing' — what ends the pull */
+  part: string;
+  quantity?: string;
+  limit_c?: number | null;
+  limit_source?: string;
+  t_cold_s?: number | null;
+  t_cold_words?: string | null;
+  t_rated_s?: number | null;
+  t_rated_words?: string | null;
+  /** the four network NODES at that instant (means, °C) */
+  temperatures_at_limit?: Record<string, number>;
+  /** …and each judged part's own quantity there — the hot spot, the hottest
+   *  element, the seat.  The limiting one is exactly its limit. */
+  at_limit_c?: Record<string, number>;
+  bearing_seat_at_limit_c?: number | null;
+  /** what the pass this was fitted to says each part reaches if held for ever */
+  steady_state_would_be?: Record<string, number>;
+  /** `false` = the loop was STOPPED at the limit rather than iterated to a
+   *  fixed point, so the number above is a reading off the last map */
+  steady_state_converged?: boolean;
+  steady_state_runaway?: boolean;
+  calibration_passes?: number;
+  /** the duty's OWN cooling — the boundary this answer is conditional on */
+  cooling_words?: string;
+  point_error_pct?: number | null;
+  drive_held?: 'sine' | 'pwm';
+  /** the block's own one sentence, verbatim */
+  line?: string;
+  note?: string;
 }
 
 /** One part's answer inside {@link TimeToLimit}. */
@@ -210,6 +258,22 @@ export function coupledEnabled(): boolean {
   catch { return false; }
 }
 
+/** WHICH QUESTION the loop is asked (owner 2026-09-18) — the two-option
+ *  selector beside the Coupled thermal switch.
+ *
+ *  `'steady'` is the default and every record written with it is what it always
+ *  was; `'limits'` stops at the first limit a part reaches and reports the
+ *  machine at that moment.  Read from the SAME per-duty memory the operating
+ *  point uses (`lib/dutySettings`), so switching duty brings its own answer
+ *  back — a peak that is a 24-second pull and a continuous duty that is a
+ *  steady state are two different questions about one machine. */
+export function coupledSolveTo(): 'steady' | 'limits' {
+  try {
+    return JSON.parse(localStorage.getItem('sim.coupledSolveTo') || '"steady"')
+      === 'limits' ? 'limits' : 'steady';
+  } catch { return 'steady'; }
+}
+
 /** The Thermal tab's boundary conditions, as THAT TAB'S STORE holds them —
  *  registered by `stores/thermalStore` at load (it imports this module, so the
  *  dependency runs one way).  The store adopts the user's server-side settings
@@ -256,6 +320,11 @@ export interface CoupledRunOptions {
    *  iterating to a fixed point (that is this toggle's job), it is making the
    *  ONE run its map was missing. */
   maxIter?: number;
+  /** `'steady'` (the default) iterates until the temperatures stop moving;
+   *  `'limits'` stops at the first limit a part reaches and reports the machine
+   *  at that moment.  Omitted = whatever the selector beside the switch holds
+   *  for the loaded duty. */
+  solveTo?: 'steady' | 'limits';
 }
 
 /**
@@ -283,6 +352,11 @@ export async function runCoupled(
   // одинаковы").  Opt-in on the server; the toggle always asks for it.
   body.mechanical = opts.mechanical !== false;
   if (opts.maxIter !== undefined) body.max_iter = opts.maxIter;
+  // WHICH QUESTION (owner 2026-09-18).  Always sent, never inferred server-side:
+  // the backend's own default is `steady`, and a body that said nothing would
+  // make "the user chose the steady state" and "this client is too old to ask"
+  // the same request.
+  body.solve_to = opts.solveTo ?? coupledSolveTo();
   const r = await fetch(`${BASE}/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal,
@@ -407,7 +481,11 @@ export function couplingLine(c: CouplingBlock): string {
   // and, when the duty asked about one, whether it fits.  One term — the
   // sentence is in the tooltip — and nothing at all on a continuous duty.
   return [`winding ${c.coil_temp_c.toFixed(0)} °C`, m, mech,
-    `${c.iterations} it.${c.converged ? '' : ' ⚠'}`, regimeTerm(c.duty_cycle),
+    // …and a LIMITED run did not fail to settle, it was asked to stop (owner
+    // 2026-09-18), so the term says which state this is rather than warning.
+    c.mode === 'limited' ? `${c.iterations} it. · at the limit`
+                         : `${c.iterations} it.${c.converged ? '' : ' ⚠'}`,
+    regimeTerm(c.duty_cycle),
     mechNote, modesTerm, critTerm]
     .filter(Boolean).join(' · ');
 }
@@ -488,6 +566,44 @@ export function timeToLimitLine(t: TimeToLimit | null | undefined):
     return `No time to the ${part} limit: this network settles below it`;
   }
   return `Runs ${runs.join(', ')}, ${ends}`;
+}
+
+/* ── SOLVE TO THE STEADY STATE, OR TO THE LIMITS (owner 2026-09-18) ─────────
+ * *«надо сделать выбор — или считать до конца стабилизации температуры, или
+ * считать до лимитов и находить время работы при заданных условиях»*.  The
+ * selector beside the Coupled thermal switch asks the question; these two read
+ * the answer back off the record, so the panel, the catalog chip and the PDF
+ * print ONE sentence about one state. */
+
+/** The line the panels print for a coupled answer — `null` when there is none.
+ *
+ *  A LIMITED record's own sentence ("Runs 24 s from cold … — the numbers below
+ *  are the machine at that moment"), else the steady record's time-to-limit
+ *  line, else nothing. */
+export function coupledStateLine(c: CouplingBlock | null | undefined):
+    string | null {
+  if (!c) return null;
+  if (c.mode === 'limited' && c.limited?.line) return c.limited.line;
+  return timeToLimitLine(c.time_to_limit);
+}
+
+/** The HelpTip behind it: the model, and — on a limited answer — the two things
+ *  it is conditional on, the operating point and the COOLING (owner's addendum
+ *  of the same day: *«при заданной мощности и заданном охлаждении»*). */
+export function coupledStateTip(c: CouplingBlock | null | undefined): string {
+  if (!c) return '';
+  const l = c.mode === 'limited' ? c.limited : undefined;
+  if (!l) return timeToLimitTip(c.time_to_limit);
+  const steady = l.steady_state_would_be?.[l.part];
+  return [
+    l.note ?? l.line ?? '',
+    l.cooling_words ? `Cooling: ${l.cooling_words}.` : '',
+    steady == null ? ''
+      : `Held here for ever the ${l.part} would reach ${Math.round(steady)} °C`
+        + `${l.steady_state_converged ? '' : ' (the pass this was fitted to — '
+          + 'the loop was stopped at the limit, not iterated to a fixed point)'}.`,
+    timeToLimitTip(c.time_to_limit),
+  ].filter(Boolean).join('\n');
 }
 
 /** The HelpTip behind that line: what the model IS, in one short paragraph

@@ -188,6 +188,12 @@ export function thermalRowFromResult(
     // Converged AND not run away: a loop that diverged reports a number, and
     // that number is where the iteration got to, not an equilibrium.
     out.coupled_converged = !!coupled.converged && !coupled.runaway;
+    // …AND WHICH STATE THE ROW ABOVE IS (owner 2026-09-18).  A `limits` run
+    // stores `converged: false` by construction — its temperatures are an
+    // instant of a step response, not a fixed point — so a column that showed
+    // only the flag would read a deliberate answer as a failure.
+    const mode = (coupled as unknown as { mode?: unknown }).mode;
+    if (typeof mode === 'string') put(out, 'coupled_mode', mode);
   }
 
   return out;

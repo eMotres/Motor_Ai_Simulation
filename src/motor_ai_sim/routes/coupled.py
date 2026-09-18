@@ -86,7 +86,7 @@ import math
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
@@ -476,6 +476,46 @@ def _coupled_drive(body: Dict[str, Any]) -> str:
             "has no carrier to measure and is not offered here." % (body.get("drive"),),
             ["drive"], code="unknown_drive")
     return d
+
+
+# ---------------------------------------------------------------------------
+# WHAT THE LOOP IS ASKED FOR — the steady state, or the limits
+# ---------------------------------------------------------------------------
+# Owner, 2026-09-18: *«надо сделать выбор — или считать до конца стабилизации
+# температуры, или считать до лимитов и находить время работы при заданных
+# условиях»*.  So it is a CHOICE and not a rule the backend applies by itself:
+#
+#   ``steady``  (the default, and byte-identical to every record ever written)
+#               iterate until the winding, the magnets and the bearing seat stop
+#               moving, and report that state — even when it is past a limit.
+#   ``limits``  stop at the FIRST limit any part reaches and report the machine
+#               AT THAT MOMENT, with the time it took to get there from cold.
+#
+# A default that had switched silently would have re-written the meaning of
+# every stored coupled record on the next re-run; this way a duty gets the
+# limited answer only because somebody asked for it, and the record says which
+# question it is the answer to (``solve_to``) and which answer it turned out to
+# be (``mode``).
+SOLVE_TO = ("steady", "limits")
+_SOLVE_TO_ALIASES = {"": "steady", "steady": "steady", "steady_state": "steady",
+                     "stabilise": "steady", "stabilize": "steady",
+                     "limits": "limits", "limit": "limits",
+                     "time_to_limit": "limits", "limited": "limits"}
+
+
+def _solve_to(body: Dict[str, Any]) -> str:
+    """``"steady"`` or ``"limits"`` — validated, and ``"steady"`` when absent."""
+    raw = str(body.get("solve_to") or "").strip().lower()
+    out = _SOLVE_TO_ALIASES.get(raw)
+    if out is None:
+        raise _refuse(
+            "solve_to=%r is not one of the two questions this loop answers: "
+            "\"steady\" iterates until the temperatures stop moving and reports "
+            "that state, \"limits\" stops at the first limit a part reaches and "
+            "reports the machine at that moment with the time it took to get "
+            "there." % (body.get("solve_to"),),
+            ["solve_to"], code="unknown_solve_to")
+    return out
 
 
 def _pole_pairs(body: Dict[str, Any]) -> int:
@@ -1165,6 +1205,92 @@ def _ttl_step(body: Dict[str, Any], cooling: Dict[str, Any],
     except _cdc.DutyCycleError as exc:
         log.info("coupled: the time to the limit was not computed (%s)", exc)
         return None
+
+
+def _limited_block(time_to_limit: Optional[Dict[str, Any]],
+                   *, cooling: Dict[str, Any], field: Dict[str, Any],
+                   passes: int, steady_converged: bool,
+                   steady_runaway: bool) -> Optional[Dict[str, Any]]:
+    """THE LIMITED STATE this run is about to be re-computed at, or ``None``.
+
+    ``None`` — and the loop's own steady answer stands — on all three of:
+
+      * the point is inside every limit this machine states (there is no first
+        crossing, so there is no moment to report);
+      * the step response never reaches the limit at all.  The map is then over
+        it for a reason the four-node network does not represent, and the
+        STEADY state is the answer (the brief's own rule): a time extrapolated
+        out of a curve that flattens first would be an invented number;
+      * no block could be formed.
+
+    ``steady_state_would_be`` is what the pass this network was fitted to says
+    each part reaches — with ``steady_state_converged`` beside it, because in
+    this mode the loop STOPS at the first over-limit pass rather than iterating
+    towards a state the machine cannot hold, so that number is a reading off
+    the last map and not a converged fixed point.
+    """
+    from motor_ai_sim.thermal_settings import cooling_words
+
+    lim = _ttl.limiting(time_to_limit)
+    if not lim:
+        return None
+    t = dict(time_to_limit or {})
+    out: Dict[str, Any] = {
+        "part": lim["part"],
+        "quantity": lim["quantity"],
+        "limit_c": lim["limit_c"],
+        "limit_source": lim["limit_source"],
+        "t_cold_s": lim["t_cold_s"],
+        "t_cold_words": _ttl.fmt_seconds(lim["t_cold_s"]),
+        "t_rated_s": lim["t_rated_s"],
+        "t_rated_words": (None if lim["t_rated_s"] is None
+                          else _ttl.fmt_seconds(lim["t_rated_s"])),
+        # THE NODE MEANS at the crossing — what the final electromagnetic pass
+        # is solved at and what the record's temperatures become.
+        "temperatures_at_limit": dict(lim["temperatures_at_limit"]),
+        # …and each JUDGED part's own quantity there (the hot spot, the hottest
+        # element, the seat), which is what §8 judges and the maps must show.
+        "at_limit_c": {},
+        "steady_state_would_be": dict(t.get("at_point_c") or {}),
+        "steady_state_converged": bool(steady_converged),
+        "steady_state_runaway": bool(steady_runaway),
+        "calibration_passes": int(passes),
+        # THE COOLING THIS ANSWER IS CONDITIONAL ON (owner addendum 2026-09-18):
+        # the duty's own boundary, the one the loop solved with — never a
+        # default.  Named here so the line can say "at this power and cooling"
+        # and the tooltip can say WHICH cooling.
+        "cooling": dict(cooling or {}),
+        "cooling_words": cooling_words(cooling or {}),
+    }
+    for row in (t.get("parts") or ()):
+        if not isinstance(row, dict):
+            continue
+        st = row.get("state_c")
+        part, node = str(row.get("part") or ""), str(row.get("node") or "")
+        off = row.get("offset_K")
+        if part == lim["part"] and lim["limit_c"] is not None:
+            out["at_limit_c"][part] = round(float(lim["limit_c"]), 2)
+        elif isinstance(st, Mapping) or node in lim["temperatures_at_limit"]:
+            base = lim["temperatures_at_limit"].get(node)
+            if base is not None and off is not None:
+                out["at_limit_c"][part] = round(float(base) + float(off), 2)
+    # The bearing seat rides the rotor node whether or not it is JUDGED — the
+    # summary of the final pass is billed at it, so it is resolved here from the
+    # same map the offsets come from.
+    _seat = _bearing_temp(field)
+    _rotor = _bulk_temp(_component(field, "rotor"))
+    _r_lim = lim["temperatures_at_limit"].get("rotor")
+    if _seat is not None and _rotor is not None and _r_lim is not None:
+        out["bearing_seat_at_limit_c"] = round(
+            float(_r_lim) + (float(_seat[0]) - float(_rotor)), 2)
+    out["line"] = _ttl.limited_line(time_to_limit)
+    out["note"] = (
+        "%s. Every number in this record is the machine at that moment: the "
+        "electromagnetic run was made once more at these temperatures, and the "
+        "thermal map is the last solved map translated onto them (its shape "
+        "frozen, as the time-to-limit model states). Cooling: %s."
+        % (out["line"].rstrip("."), out["cooling_words"] or "as solved"))
+    return out
 
 
 def _cycle_refusal(exc: "_cdc.DutyCycleError", duty: str) -> HTTPException:
@@ -2524,6 +2650,15 @@ def _run(body: Dict[str, Any],
     # map could not be fitted; a point INSIDE its limits still gets a block, and
     # that block says so — "nothing is over" is an answer a reader may rely on.
     time_to_limit: Optional[Dict[str, Any]] = None
+    # …AND WHICH OF THE TWO QUESTIONS THIS RUN IS (owner 2026-09-18).  `steady`
+    # is the default and every line below it behaves exactly as it always has;
+    # `limits` stops at the first limit a part reaches and re-computes the
+    # machine AT that moment.  `limited` is the block that says what that moment
+    # is — `None` right through a steady run, and `None` in `limits` mode too
+    # whenever there is no first crossing to stop at.
+    solve_to = _solve_to(body)
+    limited: Optional[Dict[str, Any]] = None
+    limited_stop = False
     # A non-positive band is a loop that can never stop, which is a typo far more
     # often than a request: it falls back to the default rather than running the
     # whole budget on every machine for ever.
@@ -2888,6 +3023,47 @@ def _run(body: Dict[str, Any],
             d_coil = float(t_coil_out) - float(t_coil)
             d_mag = (0.0 if (t_mag is None or t_mag_out is None)
                      else float(t_mag_out) - float(t_mag))
+            # ── THE LIMITS, WHEN THAT IS THE QUESTION (owner 2026-09-18) ────
+            # *«или считать до конца стабилизации температуры, или считать до
+            # лимитов»*.  In `limits` mode the loop must NOT keep iterating
+            # towards a steady state the machine is never allowed to reach: as
+            # soon as a pass's own map puts a part past its limit, the step
+            # response of THAT map is integrated and — if it really does cross —
+            # the loop stops here and the answer becomes the machine at the
+            # crossing.  Four ODE nodes against a two-minute transient.
+            #
+            # IT STOPS ONLY ON A REAL CROSSING.  A map over a limit whose
+            # transient settles UNDER it is over it for a reason these four
+            # nodes do not represent, and then the steady state IS the answer —
+            # so the loop goes on iterating towards it exactly as in `steady`.
+            #
+            # NOT on an impulse duty (`regime is not None`): the cycle search is
+            # already the "how long may it be pulled" answer for that duty, and
+            # two answers to one question is worse than one.  NOT on an errand
+            # (`record: false`), which is one pass by contract.
+            if (solve_to == "limits" and regime is None
+                    and not _rr.suppressed()):
+                _progress.update(
+                    phase="iteration %d/%d — how long until the limit"
+                          % (it, max_iter))
+                _ttl_now = None
+                try:
+                    _ttl_now = _ttl_step(
+                        body, cooling, summary, field,
+                        bearing_temp_c=summary.get("bearing_temp_c"),
+                        runaway=False)
+                except Exception:  # noqa: BLE001 — never fails a solved pass
+                    log.debug("coupled: the limit check could not be made",
+                              exc_info=True)
+                if (_ttl_now and not _ttl_now.get("within_limits", True)
+                        and _ttl.limiting(_ttl_now)):
+                    time_to_limit = _ttl_now
+                    limited_stop = True
+                    log.info("coupled: solve_to=limits — pass %d is already "
+                             "past a limit, so the loop stops here instead of "
+                             "iterating towards a state the machine cannot "
+                             "hold; %s", it, _ttl.limited_line(_ttl_now))
+                    break
             # THE RUNAWAY GUARD, judged on what the machine actually reaches.
             # On an impulse duty that is the CYCLE's peak — the steady map above
             # it is routinely past this ceiling and says nothing about whether
@@ -2964,7 +3140,10 @@ def _run(body: Dict[str, Any],
         # Said as a warning with its own code, like every other "stopped early"
         # here.  Never over a refusal or a runaway: those stopped the loop for a
         # harder reason and own the message.
-        if point_off and refusal is None and not runaway:
+        # …and NEVER over a deliberate stop at a limit (2026-09-18): that loop
+        # did not run out of budget, it was asked to stop, and the pass it makes
+        # at the limit re-aims at this duty's current anyway.
+        if point_off and refusal is None and not runaway and not limited_stop:
             # OUT OF INVERTER, OR OUT OF ITERATIONS?  Two different answers and
             # only one of them is fixed by raising max_iter.  The last pass ran
             # AT the ceiling — `v1_ran` is the fundamental it was actually solved
@@ -3054,7 +3233,7 @@ def _run(body: Dict[str, Any],
         # the answer that belongs to it, and so the phase is visible on the bar.
         # It costs four ODE nodes against the two minutes of finite elements
         # above it, and it never fails a run: `_ttl_step` returns None instead.
-        if history and field:
+        if history and field and time_to_limit is None:
             _check_cancelled(run_id)
             _progress.update(phase="how long until the limit — the step "
                                    "response of this point")
@@ -3067,12 +3246,129 @@ def _run(body: Dict[str, Any],
             except Exception:  # noqa: BLE001 — never fails a solved run
                 log.debug("coupled: the time to the limit was not computed",
                           exc_info=True)
-            if time_to_limit and not time_to_limit.get("within_limits", True):
-                log.warning("coupled: %s", time_to_limit.get("note") or "")
-            elif time_to_limit:
-                log.info("coupled: every part with a stated limit (%s) is "
-                         "inside it at this point",
-                         ", ".join(time_to_limit.get("judged") or ()) or "none")
+        if time_to_limit and not time_to_limit.get("within_limits", True):
+            log.warning("coupled: %s", time_to_limit.get("note") or "")
+        elif time_to_limit:
+            log.info("coupled: every part with a stated limit (%s) is "
+                     "inside it at this point",
+                     ", ".join(time_to_limit.get("judged") or ()) or "none")
+        # ── AND THE MACHINE AT THAT MOMENT (owner 2026-09-18) ───────────────
+        # *«будем ставить максимальные значения этих лимитов и делать вычисление
+        # для них… то есть состояние мотора в работе 24 секунды при заданной
+        # мощности»* — and (addendum) at the cooling this duty was solved with.
+        #
+        # ONE extra electromagnetic pass, at the node temperatures of the
+        # crossing, so torque, the four loss classes, R, KV/Kt/Km, the
+        # demagnetisation check, the voltages and the ripple are those of the
+        # machine at that instant instead of those of a steady state it never
+        # reaches.  The thermal map is the last solved one TRANSLATED onto the
+        # same temperatures — the field-shape-frozen assumption the
+        # time-to-limit model already states — so the pictures and the tables
+        # are one state.  The loop is NOT re-entered: one pass, and the
+        # temperatures it is made at are the answer by construction.
+        if (solve_to == "limits" and history and field and regime is None
+                and not _rr.suppressed()):
+            limited = _limited_block(
+                time_to_limit, cooling=cooling, field=field,
+                passes=len(history), steady_converged=bool(converged),
+                steady_runaway=bool(runaway))
+        if limited:
+            from motor_ai_sim.routes import thermal as _th
+            _check_cancelled(run_id)
+            _t_at = limited["temperatures_at_limit"]
+            _t_c = float(_t_at["winding"])
+            _t_m = _t_at.get("magnet")
+            _t_m = None if (t_mag is None or _t_m is None) else float(_t_m)
+            _t_b = limited.get("bearing_seat_at_limit_c")
+            _progress.update(
+                phase="final pass at the limit — the machine after %s"
+                      % limited["t_cold_words"])
+            log.info("coupled: final pass at the limit — coil %.1f degC, "
+                     "magnet %s degC; %s", _t_c,
+                     "n/a" if _t_m is None else "%.1f" % _t_m, limited["line"])
+            _tok = _ml.BEARING_TEMP_C.set(None if _t_b is None else float(_t_b))
+            try:
+                _em_lim = _em_run(body, coil_temp_c=_t_c, magnet_temp_c=_t_m,
+                                  inverter=inverter)
+            except HTTPException as exc:
+                # The machine could not be solved AT its limit.  The steady
+                # answer above is a solved state and stays — said loudly, with
+                # its own code, exactly as a late pass's refusal is.
+                refusal = ("the final pass at the limit was refused at coil "
+                           "%.1f °C / magnet %s °C: %s — the temperatures "
+                           "above are the loop's own last pass, not the state "
+                           "at the limit"
+                           % (_t_c, ("—" if _t_m is None else "%.1f" % _t_m),
+                              _detail_text(exc)))
+                refusal_code = "limited_pass_refused"
+                log.warning("coupled: %s", refusal)
+                limited = None
+                _em_lim = None
+            finally:
+                _ml.BEARING_TEMP_C.reset(_tok)
+            if limited and _em_lim:
+                em = _em_lim
+                em_at = (_t_c, _t_m)
+                t_coil, t_mag = _t_c, _t_m
+                _s_lim = em.get("summary") or {}
+                field = _th.rescale_map_to_nodes(
+                    field, _t_at,
+                    note=("the machine %s: the last solved map translated onto "
+                          "the node temperatures of that instant, its shape "
+                          "frozen at the solved map's — NOT a transient field "
+                          "solve" % limited["line"].split(" — ")[0].lower()))
+                if _t_b is not None:
+                    t_brg = float(_t_b)
+                history.append({
+                    "iter": len(history) + 1,
+                    # WHAT THIS ROW IS: not another step of the loop but the one
+                    # pass made AT the limit, so a chart of the history does not
+                    # read it as a residual that jumped.
+                    "phase": "limit",
+                    "T_coil_in": round(_t_c, 2),
+                    "T_magnet_in": (None if _t_m is None else round(_t_m, 2)),
+                    "T_coil_out": None, "T_magnet_out": None,
+                    "T_magnet_max": limited.get("at_limit_c", {}).get("magnet"),
+                    "P_loss_W": _s_lim.get("P_loss_total_W"),
+                    "T_em_Nm": _s_lim.get("T_em_avg_Nm"),
+                    "bearing_temp_c": _s_lim.get("bearing_temp_c"),
+                    "bearing_temp_source": _s_lim.get("bearing_temp_source"),
+                    "P_mech_extra_W": _s_lim.get("P_mech_extra_W"),
+                })
+                if inverter is not None:
+                    # THE POINT IS HELD FOR THIS PASS TOO: the same inverter the
+                    # regulator had aimed at this duty's current drives it, and
+                    # how far the colder machine then landed is RECORDED rather
+                    # than regulated away — a second re-aim would be a second
+                    # pass, and there is exactly one.
+                    _i_lim = em.get("I_phase_rms_solved_A")
+                    _pe = _point_error_pct(inverter, _i_lim)
+                    history[-1].update({
+                        "v_phase_peak_V": round(
+                            float(inverter["v_phase_peak_V"]), 4),
+                        "I_phase_rms_solved_A": _i_lim,
+                        "T_ripple_pct": _s_lim.get("T_ripple_pct"),
+                        "pwm_dc_residual_A": _s_lim.get("pwm_dc_residual_A"),
+                        **({"point_error_pct": round(_pe, 3)}
+                           if _pe is not None else {}),
+                    })
+                    v1_ran = float(inverter["v_phase_peak_V"])
+                    limited["drive_held"] = "pwm"
+                    limited["v_phase_peak_V"] = round(
+                        float(inverter["v_phase_peak_V"]), 4)
+                    limited["I_phase_rms_solved_A"] = _i_lim
+                    if _pe is not None:
+                        limited["point_error_pct"] = round(_pe, 3)
+                        point_err, point_off = _pe, False
+                else:
+                    limited["drive_held"] = "sine"
+                limited["em_run"] = True
+        if time_to_limit is not None:
+            # WHICH STATE THE RECORD AROUND IT DESCRIBES.  A reader who has only
+            # this block must not have to guess whether the temperatures beside
+            # it are a steady state or the instant of the crossing.
+            time_to_limit["reported_state"] = "limited" if limited else "steady"
+            time_to_limit["solve_to"] = solve_to
         # THE THIRD TAB at the same temperatures (phase 3): the rotor stress is
         # solved once, at the per-part averages of the last thermal map, while
         # this loop still owns the lock — a second coupled run must not start
@@ -3219,6 +3515,20 @@ def _run(body: Dict[str, Any],
         # on a run whose map could not be fitted; a point inside every limit
         # carries the block with `within_limits: true` and no time.
         **({"time_to_limit": time_to_limit} if time_to_limit else {}),
+        # ── WHICH QUESTION, AND WHICH ANSWER (owner 2026-09-18) ─────────────
+        # `solve_to` is what was ASKED (the panel's two-option selector, stored
+        # with the duty); `mode` is what this record turned out to BE.  They
+        # differ legitimately: a `limits` run of a machine that is inside every
+        # limit — or whose transient never reaches one — is a `steady` record,
+        # and it says so rather than inventing a moment to report.
+        #
+        # `converged` is NOT how this is read.  A limited record's temperatures
+        # are not a fixed point of the loop and never will be; they are an
+        # instant of a step response, and a consumer that tested `converged` to
+        # decide whether the numbers may be quoted must read `mode` instead.
+        "solve_to": solve_to,
+        "mode": ("limited" if limited else "steady"),
+        **({"limited": limited} if limited else {}),
         # `**` rather than fixed keys: a machine with no bearings grows no
         # mechanical keys at all, which is what "absent, not zero" means in a
         # payload.
@@ -3228,7 +3538,10 @@ def _run(body: Dict[str, Any],
              if r.get("T_magnet_max") is not None), None),
         "iterations": n_em,
         "em_runs": n_em,
-        "converged": bool(converged),
+        # …and in a LIMITED record it is false by construction: the reported
+        # state is an instant of a transient, not a fixed point the loop settled
+        # on, and a `true` here would tell every consumer the opposite.
+        "converged": bool(converged) and not limited,
         "runaway": bool(runaway),
         "tol_K": float(tol),
         "damping": float(damping),
@@ -3264,8 +3577,14 @@ def _run(body: Dict[str, Any],
         # about which half of the answer may be quoted, and it rides at the top
         # of the block so nobody has to read the history to find it.
         **({"dc_notes": list(dc_notes)} if dc_notes else {}),
-        **({"warning_code": refusal_code} if refusal_code else {}),
-        "warning": (refusal if refusal else
+        **({"warning_code": ("limited_operation" if limited and not refusal
+                             else refusal_code)}
+           if (refusal_code or limited) else {}),
+        # A LIMITED run is not an unconverged one, and must not be described as
+        # one: the loop stopped deliberately, at a moment the user asked for.
+        # The sentence is the block's own — one line, the model in the tooltip.
+        "warning": (limited["line"] if (limited and not refusal) else
+                    refusal if refusal else
                     "thermal runaway: no equilibrium at this operating point — "
                     "more cooling or less current" if runaway else
                     (None if converged else
@@ -3329,7 +3648,9 @@ def _run(body: Dict[str, Any],
              n_em, block["coil_temp_c"],
              "n/a" if block["magnet_temp_c"] is None
              else "%.1f degC" % block["magnet_temp_c"],
-             "converged" if converged else "NOT converged",
-             ("" if not time_to_limit or time_to_limit.get("within_limits", True)
+             ("AT THE LIMIT" if limited else
+              "converged" if converged else "NOT converged"),
+             (" — %s" % limited["line"] if limited else
+              "" if not time_to_limit or time_to_limit.get("within_limits", True)
               else " — %s" % _ttl.headline(time_to_limit)))
     return out

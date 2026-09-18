@@ -654,6 +654,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // solve changes.  On, it goes to POST /api/coupled/run instead — see
   // ./coupledApi and TransientCharts' `run()`.
   const [coupled,       setCoupled]       = usePersisted('coupled', false);
+  // WHICH QUESTION the loop is asked (owner 2026-09-18: *«надо сделать выбор —
+  // или считать до конца стабилизации температуры, или считать до лимитов и
+  // находить время работы при заданных условиях»*).  Per DUTY, like the
+  // operating point (`lib/dutySettings` carries the key), because a continuous
+  // duty is a steady state by definition and a peak is a pull with a length.
+  const [solveTo,       setSolveTo]       = usePersisted<'steady' | 'limits'>(
+    'coupledSolveTo', 'steady');
   // A DIFFERENT MACHINE is on the panel — loaded here, or (since 2026-09-08) in
   // another browser and followed by the header strip.  lib/dutyLocalApply says
   // so with this event, after it has reset these two fields to the incoming
@@ -2574,6 +2581,40 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               }
             />
           </Tooltip>
+          {/* ── …AND WHICH QUESTION IT ANSWERS (owner 2026-09-18) ───────────
+              "или считать до конца стабилизации температуры, или считать до
+              лимитов и находить время работы при заданных условиях".  A CHOICE,
+              not a rule the backend applies by itself — one short line, both
+              modes in the HelpTip (UI rule). */}
+          {coupled && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+              ml: 0.25, mb: 0.75 }}>
+              <Typography variant="caption" sx={{ color: 'var(--text-2)' }}>
+                Solve to
+              </Typography>
+              <Select size="small" value={solveTo} disabled={simBusy}
+                onChange={e => setSolveTo(
+                  e.target.value === 'limits' ? 'limits' : 'steady')}
+                sx={{ fontSize: 11, '& .MuiSelect-select': { py: 0.25 } }}>
+                <MenuItem value="steady" sx={{ fontSize: 11 }}>
+                  steady state
+                </MenuItem>
+                <MenuItem value="limits" sx={{ fontSize: 11 }}>
+                  the limits (time at this power and cooling)
+                </MenuItem>
+              </Select>
+              <HelpTip title={
+                'Steady state: iterate until the winding, the magnets and the '
+                + 'bearing seat stop moving, and report that state — even when '
+                + 'it is past a limit.\n\n'
+                + 'The limits: stop at the FIRST limit any part reaches and '
+                + 'report the machine at that moment — "Runs 24 s from cold at '
+                + 'this power and cooling, then the winding reaches 200 °C". '
+                + 'Torque, losses, efficiency, KV/Kt, demagnetisation and the '
+                + 'maps are all that state. A point that is inside every limit '
+                + 'comes back as a steady answer and says so.'} />
+            </Box>
+          )}
           {simBusy ? (
             <Button
               fullWidth

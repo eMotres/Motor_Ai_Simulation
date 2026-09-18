@@ -16,8 +16,8 @@ import { pickCable } from '../../lib/cableTable';
 import { fetchBearingLosses } from '../../lib/machineBearings';
 import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
-import { couplingLine, couplingTooltip, timeToLimitLine,
-         timeToLimitTip } from './coupledApi';
+import { couplingLine, couplingTooltip, coupledStateLine,
+         coupledStateTip } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 
 /** Bench-probe result riding in the summary (backend measures it once per
@@ -1118,12 +1118,17 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           answer, and this is the other half.  One short line, the model
           behind it in the tooltip (no-walls-of-text rule); nothing at all
           on a point that is inside every limit it states. */}
-      {s.coupling && timeToLimitLine(s.coupling.time_to_limit) && (
+      {/* …and on a `limits` run (owner 2026-09-18) the same line says what the
+          numbers ABOVE it are: the machine at that moment, not a state it
+          holds.  `coupledStateLine` picks whichever sentence this record's own
+          mode calls for — there is never more than one. */}
+      {s.coupling && coupledStateLine(s.coupling) && (
         <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-          <Cell label="Time to the limit"
-            value={timeToLimitLine(s.coupling.time_to_limit) as string}
+          <Cell label={s.coupling.mode === 'limited' ? 'At the limit'
+                                                     : 'Time to the limit'}
+            value={coupledStateLine(s.coupling) as string}
             accent="amber"
-            tooltip={timeToLimitTip(s.coupling.time_to_limit)}/>
+            tooltip={coupledStateTip(s.coupling)}/>
         </Box>
       )}
 

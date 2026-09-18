@@ -828,6 +828,16 @@ def _em_sine(D: Dict[str, Any]):
     return (col or {}).get("em_sine")
 
 
+def _coupled(D: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The report duty's stored COUPLED record — where the 20 °C catalogue
+    constants live (owner 2026-09-18).  ``None`` on a duty that has never been
+    through the loop, which the table then says out loud."""
+    col = R._col_of(D.get("cols"),
+                    str((D.get("d_duty") or {}).get("name") or ""))
+    rec = ((col or {}).get("res") or {}).get("coupled")
+    return rec if isinstance(rec, dict) else None
+
+
 def _drive(D: Dict[str, Any]) -> str:
     """"pwm" when the duty this report is about runs on the inverter."""
     return ("pwm" if (D.get("supply") or R.SUPPLY_SINE) != R.SUPPLY_SINE
@@ -872,6 +882,14 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
         _p(doc, R.em_constants_note(R._g(em, "end3d.k_flux"), _drive(D)),
            size=9.5,
            italic=True, color=NOTE)
+    # …AND THE SAME CONSTANTS AT 20 °C (owner 2026-09-18) — the numbers a
+    # catalogue quotes, so this machine can be compared with any other.  Always
+    # printed, like the PDF's: an absent subsection would read as a machine that
+    # HAS no catalogue constants, which is a different statement.
+    _h(doc, "Machine constants at 20 °C (catalogue values)", 2)
+    _table(doc, R.cold_constant_rows(_coupled(D)), size=10.5,
+           widths_cm=[6.4, 3.6, 12.0])
+    _p(doc, R.COLD_CONSTANTS_NOTE, size=9.5, italic=True, color=NOTE)
 
     _h(doc, "Losses", 2)
     _tag_r = _report_tag(D)

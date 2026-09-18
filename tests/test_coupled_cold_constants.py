@@ -344,3 +344,50 @@ def test_the_route_refuses_by_name_when_the_machine_will_not_solve_cold(
                     json={**LOOP_BODY, "record": False})
     assert r.status_code == 422
     assert r.json()["detail"]["error_code"] == "cold_constants_unsolved"
+
+
+# ---------------------------------------------------------------------------
+# the no-load probe, walked — the one number that is not a direct reading
+# ---------------------------------------------------------------------------
+# Measured on the L13 rated duty (2026-09-18): the cold pass moved Kt by 5.3 %
+# and R by 51 % and left KV at 53.26 rpm/V, bit for bit — because
+# `simulation.noload_psi_pm` takes no run temperature and reads the magnet
+# CARD.  A "KV at 20 °C" that is really a KV at the card's 120 °C is exactly
+# the wrong number to put in a catalogue line.
+
+def test_the_no_load_kv_is_walked_to_20_degrees_on_the_cards_own_coefficient(
+        client, monkeypatch):
+    from motor_ai_sim.routes import coupled as cp
+
+    _fake(monkeypatch, summary={**COLD_SUMMARY,
+                                "demag": {"magnet_name": "N52UH_150C"}})
+    # The card's own rule, asked directly, so this test pins the WIRING and
+    # never a second opinion about Br(T).
+    from motor_ai_sim.report import kv_at_magnet_temp
+    want, why = kv_at_magnet_temp(50.0, "N52UH_150C", cp.COLD_CONSTANTS_C)
+    assert want is not None and why, "the fixture's grade carries no dBr/dT"
+
+    k = _run(client)["constants_20c"]
+    assert k["kv_walked"] is True
+    assert k["magnet_grade"] == "N52UH_150C"
+    assert "20 °C" in k["kv_note"]
+    assert k["two_d"]["KV_noload_rpm_per_V_line"] == pytest.approx(want,
+                                                                  abs=1e-5)
+    # COLDER MAGNETS MEAN MORE FLUX, so the speed per volt goes DOWN — a walk
+    # with the sign the other way would read as a weaker magnet.
+    assert k["two_d"]["KV_noload_rpm_per_V_line"] < 50.0
+    # …and Ψ_PM is the same probe read the other way round, by ONE factor, so
+    # the two can never drift apart.
+    assert k["two_d"]["psi_pm_Wb"] == pytest.approx(
+        0.01 * 50.0 / want, abs=1e-9)
+
+
+def test_a_card_with_no_coefficient_leaves_the_probe_alone_and_says_so(
+        client, monkeypatch):
+    """NOTHING INVENTED, again: a KV at a temperature nothing was measured at
+    would be worse than a KV whose provenance is stated."""
+    _fake(monkeypatch, summary=COLD_SUMMARY)          # no `demag` block at all
+    k = _run(client)["constants_20c"]
+    assert k["kv_walked"] is False
+    assert k["two_d"]["KV_noload_rpm_per_V_line"] == pytest.approx(50.0)
+    assert "card" in k["kv_note"]

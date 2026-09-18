@@ -9360,9 +9360,14 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
         if v is not None:
             rows.append([label, _fmt(v, d, unit), note])
 
+    # THE ONE NUMBER HERE THAT IS NOT A DIRECT READING of the cold pass: the
+    # no-load probe takes no run temperature, so it comes off the magnet card
+    # and is WALKED to 20 °C on that card's own dBr/dT.  The row says which,
+    # because a KV a catalogue is compared against must state its provenance.
     R("KV, no load [rpm/V]", _v("KV_noload_rpm_per_V_line"), 2, "",
-      "per LINE volt, magnets at 20 °C; KV goes as 1/flux, so it is ÷ k_3d"
-      if k3 else "per LINE volt, magnets at 20 °C")
+      "per LINE volt; %s%s"
+      % (str(c.get("kv_note") or "the no-load probe"),
+         "; KV goes as 1/flux, so it is ÷ k_3d" if k3 else ""))
     R("Torque constant Kt [N·m/A rms]",
       _v("Kt_Nm_per_A_line" if delta else "Kt_Nm_per_Arms"), 4, "",
       ("per LINE amp — in delta the winding carries I_line/√3" if delta

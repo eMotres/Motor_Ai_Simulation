@@ -1278,6 +1278,42 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
             return None
         return f if math.isfinite(f) else None
 
+    # ── THE NO-LOAD PROBE DOES NOT FOLLOW THE RUN ───────────────────────────
+    # `KV_noload_rpm_per_V_line` and `psi_pm_Wb` come from
+    # `simulation.noload_psi_pm`, which takes NO run temperature: it is a
+    # per-geometry probe at the magnet CARD's own temperature, so it reads the
+    # same under every duty of a machine and the same at 20 °C as at 150 °C.
+    # Measured on the L13 rated duty (2026-09-18): the cold pass moved Kt by
+    # 5.3 % and R by 51 % and left KV at 53.26 rpm/V, bit for bit.
+    #
+    # A "KV at 20 °C" that is really a KV at 120 °C is exactly the wrong number
+    # to put in a catalogue line, so it is WALKED — by the one rule this project
+    # already states (`report.kv_at_magnet_temp`): KV goes as 1/Br, Br walks
+    # linearly on the card's own reversible coefficient.  A card that carries no
+    # dBr/dT leaves both quantities at the probe's value and SAYS so, because a
+    # KV at a temperature nothing was measured at would be an invention.
+    _grade = ((s.get("demag") or {}).get("magnet_name")
+              if isinstance(s.get("demag"), Mapping) else None)
+    kv_note = "the no-load probe, at the magnet card's own temperature"
+    kv_walked = None
+    try:
+        from motor_ai_sim.report import kv_at_magnet_temp
+        kv_walked, _why = kv_at_magnet_temp(
+            s.get("KV_noload_rpm_per_V_line"), _grade, COLD_CONSTANTS_C)
+        if kv_walked is not None:
+            kv_note = "walked to %g °C — %s" % (COLD_CONSTANTS_C, _why)
+    except Exception:  # noqa: BLE001 — a note is not worth losing a block over
+        log.debug("coupled: the 20 °C KV could not be walked", exc_info=True)
+    s = dict(s)
+    if kv_walked is not None:
+        # ψ_PM is the same probe read the other way round: KV goes as 1/Br and
+        # the flux linkage as Br, so one factor moves both, in opposite
+        # directions, and the two cannot drift apart.
+        _f_br = float(s["KV_noload_rpm_per_V_line"]) / float(kv_walked)
+        s["KV_noload_rpm_per_V_line"] = round(float(kv_walked), 6)
+        if _n("psi_pm_Wb") is not None:
+            s["psi_pm_Wb"] = round(_n("psi_pm_Wb") * _f_br, 8)
+
     two_d: Dict[str, Any] = {}
     k3d: Dict[str, Any] = {}
     for key in _COLD_FLUX:
@@ -1314,6 +1350,12 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         "k_3d": k3,
         "two_d": two_d,
         "k3d": k3d,
+        # WHERE THE NO-LOAD KV CAME FROM.  It is the one number in this block
+        # that is not a direct reading of the cold pass, and a catalogue line
+        # must not hide that.
+        "kv_note": kv_note,
+        "kv_walked": bool(kv_walked is not None),
+        "magnet_grade": (str(_grade) if _grade else None),
         # WHICH Kt A CATALOGUE WOULD PRINT: per LINE amp, which in star is the
         # winding's and in delta is the winding's ÷ √3.
         "kt_line_Nm_per_A": ((k3d if k3 is not None else two_d).get(

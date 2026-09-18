@@ -2620,6 +2620,11 @@ def _run(body: Dict[str, Any],
                  (" (this run is for %r)" % str(body.get("for_duty")))
                  if body.get("for_duty") else "")
 
+    # WHICH OF THE TWO QUESTIONS (owner 2026-09-18) — resolved here, BEFORE the
+    # pre-flight, for the reason everything else in this neighbourhood is: a
+    # misspelled mode is a 422 in milliseconds, not after a transient.
+    solve_to = _solve_to(body)
+
     _preflight(body, max_iter=max_iter)
 
     issue = cooling_issue(settings)
@@ -2656,7 +2661,6 @@ def _run(body: Dict[str, Any],
     # machine AT that moment.  `limited` is the block that says what that moment
     # is — `None` right through a steady run, and `None` in `limits` mode too
     # whenever there is no first crossing to stop at.
-    solve_to = _solve_to(body)
     limited: Optional[Dict[str, Any]] = None
     limited_stop = False
     # A non-positive band is a loop that can never stop, which is a typo far more

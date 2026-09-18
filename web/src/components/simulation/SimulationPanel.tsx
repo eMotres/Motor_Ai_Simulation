@@ -2585,35 +2585,39 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               "или считать до конца стабилизации температуры, или считать до
               лимитов и находить время работы при заданных условиях".  A CHOICE,
               not a rule the backend applies by itself — one short line, both
-              modes in the HelpTip (UI rule). */}
+              modes in the HelpTip (UI rule).  Owner 2026-09-18 again: "сделай
+              это меню поаккуратней" — the same outlined-label select as "Steps
+              per electrical period" above (label in the outline, never wrapped,
+              two short options; the explanation lives in the tip). */}
           {coupled && (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
-              ml: 0.25, mb: 0.75 }}>
-              <Typography variant="caption" sx={{ color: 'var(--text-2)' }}>
-                Solve to
-              </Typography>
-              <Select size="small" value={solveTo} disabled={simBusy}
+            <FormControl size="small" fullWidth sx={{ mt: 0.75, mb: 1 }} disabled={simBusy}>
+              <InputLabel id="solve-to-label">Solve to</InputLabel>
+              <Select
+                labelId="solve-to-label"
+                label="Solve to"
+                value={solveTo}
                 onChange={e => setSolveTo(
                   e.target.value === 'limits' ? 'limits' : 'steady')}
-                sx={{ fontSize: 11, '& .MuiSelect-select': { py: 0.25 } }}>
-                <MenuItem value="steady" sx={{ fontSize: 11 }}>
-                  steady state
-                </MenuItem>
-                <MenuItem value="limits" sx={{ fontSize: 11 }}>
-                  the limits (time at this power and cooling)
-                </MenuItem>
+                endAdornment={
+                  <InputAdornment position="end" sx={{ mr: 2.5 }}>
+                    <HelpTip title={
+                      'Steady state: iterate until the winding, the magnets and '
+                      + 'the bearing seat stop moving, and report that state — '
+                      + 'even when it is past a limit.\n\n'
+                      + 'Time to the limits: stop at the FIRST limit any part '
+                      + 'reaches and report the machine at that moment, at this '
+                      + 'power and cooling — "Runs 24 s from cold, then the '
+                      + 'winding reaches 200 °C". Torque, losses, efficiency, '
+                      + 'KV/Kt, demagnetisation and the maps are all that state. '
+                      + 'A point that is inside every limit comes back as a '
+                      + 'steady answer and says so.'} />
+                  </InputAdornment>
+                }
+              >
+                <MenuItem value="steady">steady state</MenuItem>
+                <MenuItem value="limits">time to the limits</MenuItem>
               </Select>
-              <HelpTip title={
-                'Steady state: iterate until the winding, the magnets and the '
-                + 'bearing seat stop moving, and report that state — even when '
-                + 'it is past a limit.\n\n'
-                + 'The limits: stop at the FIRST limit any part reaches and '
-                + 'report the machine at that moment — "Runs 24 s from cold at '
-                + 'this power and cooling, then the winding reaches 200 °C". '
-                + 'Torque, losses, efficiency, KV/Kt, demagnetisation and the '
-                + 'maps are all that state. A point that is inside every limit '
-                + 'comes back as a steady answer and says so.'} />
-            </Box>
+            </FormControl>
           )}
           {simBusy ? (
             <Button

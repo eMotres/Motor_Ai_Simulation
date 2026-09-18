@@ -874,7 +874,18 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
 def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                     cfg_doc: Dict[str, Any],
                     passport: Optional[Dict[str, Any]] = None,
-                    slot: Optional[Dict[str, float]] = None) -> bytes:
+                    slot: Optional[Dict[str, float]] = None,
+                    coupled: Optional[Dict[str, Any]] = None) -> bytes:
+    """``coupled`` is ``{duty name: its stored coupled record}`` — the only
+    thing in this card that does not come out of the two yaml documents.
+
+    It is here for ONE block: the catalogue constants at 20 °C (owner
+    2026-09-18).  KV, Kt, Km and Km/kg are what a buyer compares two machines
+    on, and every other number on this card is at the duty's own temperatures —
+    right, and not comparable.  ``None`` (or a duty whose loop never made the
+    cold pass) simply leaves those four lines out: this card states measured
+    numbers, and a room-temperature Kt extrapolated from a hot one is not one.
+    """
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
@@ -1380,6 +1391,33 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             / float(_g(_ktd, "summary.I_phase_rms_A")),
             "measured T/I at the duty point; saturation included — the "
             "low-current (bench) value sits slightly above", 4)
+    # ── THE SAME FOUR, AT 20 °C (owner 2026-09-18) ──────────────────────────
+    # *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить все
+    # коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех каталогах
+    # моторов и нужны для сравнения»*.  Beside the hot ones, named, from the
+    # coupled loop's own cold pass — and absent entirely when no duty has one,
+    # because this card does not extrapolate.
+    _c20 = None
+    for _d in duties:
+        _rec = (coupled or {}).get(str(_d.get("name") or ""))
+        _blk = (_rec or {}).get("constants_20c") if isinstance(_rec, dict) else None
+        if isinstance(_blk, dict) and _blk:
+            _c20 = _blk
+            break
+    if _c20:
+        _tail20 = ("solved with the winding and the magnets at 20 °C — the "
+                   "datasheet convention every catalogue uses, for comparison "
+                   "between machines; the values above are at this duty's own "
+                   "temperatures")
+        one("KV at 20 °C (rpm/V)", _c20.get("kv_line_rpm_per_V"),
+            "no load, per line volt; " + _tail20, 1)
+        one("Kt at 20 °C (N·m/A rms)", _c20.get("kt_line_Nm_per_A"),
+            "per line amp; " + _tail20, 4)
+        one("Km at 20 °C (N·m/√W)", _c20.get("km_Nm_sqrtW"),
+            "torque per root watt of copper; " + _tail20, 3)
+        one("Km per mass at 20 °C (N·m/(√W·kg))",
+            _c20.get("km_per_mass_Nm_sqrtW_kg"),
+            "the figure of merit that survives scaling; " + _tail20, 4)
     # resistance and the temperature it belongs to must come from the SAME duty
     _rd = next((d for d in duties if _g(d, "summary.R_phase_ohm")), None)
     r_phase = _g(_rd, "summary.R_phase_ohm") if _rd else None

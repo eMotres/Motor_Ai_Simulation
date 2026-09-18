@@ -7704,7 +7704,13 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                       em_sine=(_col_of(cols, str(d_duty.get("name") or ""))
                                or {}).get("em_sine"),
                       inverter=duty_inverter(
-                          _col_of(cols, str(d_duty.get("name") or "")) or {}))
+                          _col_of(cols, str(d_duty.get("name") or "")) or {}),
+                      # The COVER duty's coupled record, for the 20 °C
+                      # catalogue constants: they are a property of the machine,
+                      # but they are solved at THIS duty's operating point and
+                      # are read off its own record like everything else.
+                      coupled=((_col_of(cols, str(d_duty.get("name") or ""))
+                                or {}).get("res") or {}).get("coupled"))
     # From here on a section opens a NEW page only when less than half of the
     # current one is left: with full-width field maps a hard break after each
     # section left a map alone on a page with three quarters of white under it
@@ -9289,6 +9295,106 @@ def saliency_note(ratio: Any) -> str:
 SINE_CONSTANT_TAIL = " (sinusoidal run)"
 
 
+# ── THE CATALOGUE CONSTANTS, AT 20 °C (owner 2026-09-18) ────────────────────
+# *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить все
+# коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех каталогах
+# моторов и нужны для сравнения; это нужно отдельно упомянуть в отчёте»*.
+#
+# Every constant elsewhere in this document is at the duty's OWN temperatures,
+# which is right and is not comparable: a catalogue quotes room-temperature
+# numbers, so a Kt measured with the winding at 172 °C reads 10-15 % below a
+# competitor's page and nothing says why.  The coupled loop now ends with one
+# electromagnetic pass at 20/20 and this is where it is printed — its own
+# subsection, one table, one sentence, and NOTHING INVENTED when the pass was
+# not made.
+
+#: The one sentence under the table.  Said once, here, so the PDF, the Word
+#: document and the datasheet cannot describe the same pass three ways.
+COLD_CONSTANTS_NOTE = (
+    "Solved with the winding and the magnets at 20 °C at this duty's operating "
+    "point — the datasheet convention every motor catalogue uses, for "
+    "comparison between machines; the hot values above are the same constants "
+    "at this duty's temperatures.")
+
+#: …and what the table says when the pass was never made.  No extrapolation:
+#: KV goes as Br(T) and Kt with it, but R goes as rho_Cu(T) and Km as the two
+#: together, and a "20 °C Km" derived from a hot one is a number nobody solved.
+COLD_CONSTANTS_UNSOLVED = (
+    "not solved — re-run the coupled loop, or POST /api/coupled/constants_20c")
+
+
+def cold_constants_of(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The ``constants_20c`` block of a coupled record, or ``None``."""
+    if not isinstance(rec, dict):
+        return None
+    blk = rec.get("constants_20c")
+    return blk if isinstance(blk, dict) and blk else None
+
+
+def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
+    """The catalogue table — always a table, never a silence.
+
+    A duty whose cold pass was never made gets ONE row saying so and naming the
+    two ways to make it: an absent subsection would read as "this machine has no
+    catalogue constants", which is a different statement.
+    """
+    rows: List[List[Any]] = [["Constant", "At 20 °C", "What it is"]]
+    c = cold_constants_of(rec)
+    if not c:
+        rows.append(["KV, Kt, Km, Km per mass", NOT_SOLVED,
+                     COLD_CONSTANTS_UNSOLVED])
+        return rows
+    k3 = _numf(c.get("k_3d"))
+    two, k3v = dict(c.get("two_d") or {}), dict(c.get("k3d") or {})
+
+    def _v(key):
+        """The 3-D-corrected value where this geometry has a passport, else the
+        2-D one — the same rule §4 applies to the hot constants above."""
+        return _numf(k3v.get(key) if k3 else two.get(key))
+
+    delta = str((c.get("point") or {}).get("star_delta")
+                or two.get("star_delta") or "star").lower().startswith("d")
+    _tail = ("; × k_3d = %s" % _fmt(k3, 4)) if k3 else "; 2-D, no 3-D passport"
+
+    def R(label, v, d, unit, note=""):
+        if v is not None:
+            rows.append([label, _fmt(v, d, unit), note])
+
+    R("KV, no load [rpm/V]", _v("KV_noload_rpm_per_V_line"), 2, "",
+      "per LINE volt, magnets at 20 °C; KV goes as 1/flux, so it is ÷ k_3d"
+      if k3 else "per LINE volt, magnets at 20 °C")
+    R("Torque constant Kt [N·m/A rms]",
+      _v("Kt_Nm_per_A_line" if delta else "Kt_Nm_per_Arms"), 4, "",
+      ("per LINE amp — in delta the winding carries I_line/√3" if delta
+       else "per line amp, which in star is the winding's") + _tail)
+    R("Motor constant Km [N·m/√W]", _v("Km_Nm_sqrtW"), 3, "",
+      "torque per root watt of copper, at 20 °C copper" + _tail)
+    R("Km per mass [N·m/(√W·kg)]", _v("Km_per_mass_Nm_sqrtW_kg"), 4, "",
+      "the figure of merit that survives scaling" + _tail)
+    R("Phase resistance R₂₀ [mΩ]",
+      (lambda v: None if v is None else v * 1000.0)(
+          _numf(c.get("R_phase_20_ohm"))), 3, "",
+      "at 20 °C, end windings included — the resistance the three constants "
+      "above are consistent with")
+    R("Magnet flux linkage Ψ_PM [Wb]", _v("psi_pm_Wb"), 4, "",
+      "the back-EMF per rad/s at 20 °C" + _tail)
+    R("Ld [mH]", _numf(two.get("Ld_mH")), 4, "",
+      "direct-axis inductance at this point")
+    R("Lq [mH]", _numf(two.get("Lq_mH")), 4, "",
+      "quadrature-axis inductance at this point")
+    R("Mass [kg]", _numf(c.get("mass_kg")), 3, "",
+      "the total this report's cover prints, to the same parts policy")
+    pt = dict(c.get("point") or {})
+    rows.append(["…measured at", "%s, %s, %s"
+                 % (_fmt(pt.get("rpm"), 0, "rpm"),
+                    _fmt(pt.get("I_phase_rms"), 1, "A rms"),
+                    _fmt(pt.get("gamma_deg"), 1, "°")),
+                 "Kt and Km are constants only while the iron is not "
+                 "saturating, so the current they were taken at is part of the "
+                 "answer"])
+    return rows
+
+
 def em_constant_rows(em: Dict[str, Any],
                      em_sine: Optional[Dict[str, Any]] = None,
                      drive: str = "sine") -> List[List[str]]:
@@ -9688,7 +9794,8 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
              figs: Optional[List[int]] = None,
              drive: str = "sine",
              em_sine: Optional[Dict[str, Any]] = None,
-             inverter: Optional[Dict[str, Any]] = None) -> List[Any]:
+             inverter: Optional[Dict[str, Any]] = None,
+             coupled: Optional[Dict[str, Any]] = None) -> List[Any]:
     out: List[Any] = [_para(section_heading(None, "em"), st["h1"])]
     if not em:
         out.append(_para(EM_PAGE_UNSOLVED, st["warn"]))
@@ -9717,6 +9824,17 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
                           [175, 95, CONTENT_W - 270], header=True, size=8.8))
         out.append(_para(em_constants_note(_g(em, "end3d.k_flux"), drive),
                          st["note"]))
+    # ── …AND THE SAME CONSTANTS AT 20 °C (owner 2026-09-18) ─────────────────
+    # Its OWN subsection, because it answers a different question from the table
+    # above it: not "what is this machine at this duty" but "what would this
+    # machine's line in a catalogue say".  Always printed — a duty whose cold
+    # pass was never made gets one row saying so, since an absent subsection
+    # would read as a machine that has no catalogue constants.
+    out.append(_para("Machine constants at 20 °C (catalogue values)", st["h2"]))
+    out.append(_table([[r[0], r[1], _para(r[2], st["cell"])]
+                       for r in cold_constant_rows(coupled)],
+                      [175, 95, CONTENT_W - 270], header=True, size=8.8))
+    out.append(_para(COLD_CONSTANTS_NOTE, st["note"]))
 
     out.append(_para("Losses", st["h2"]))
     out.append(_table([[r[0], r[1], _para(r[2], st["cell"])]

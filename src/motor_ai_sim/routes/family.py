@@ -3592,8 +3592,20 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
             _slot = slot_fill_from_cad(_geo)
         except Exception:                                     # noqa: BLE001
             _slot = None
+        # THE STORED COUPLED RECORDS, for the 20 °C catalogue constants only
+        # (owner 2026-09-18).  They live in `.duty_results.json` and not in the
+        # yaml, so this is the one thing the card needs that its two documents
+        # do not carry; a store that cannot be read simply leaves those four
+        # lines out.
+        try:
+            from motor_ai_sim import duty_results as _dr
+            _cpl = {k: (v or {}).get("coupled")
+                    for k, v in (_dr.get(die, cfg) or {}).items()
+                    if isinstance(v, dict) and isinstance(v.get("coupled"), dict)}
+        except Exception:                                     # noqa: BLE001
+            _cpl = None
         blob = build_datasheet(die=die, cfg=cfg, die_doc=d, cfg_doc=c,
-                               passport=passport, slot=_slot)
+                               passport=passport, slot=_slot, coupled=_cpl)
     except Exception as e:                                    # noqa: BLE001
         log.exception("datasheet build failed for %s/%s", die, cfg)
         raise HTTPException(500, detail=f"datasheet build failed: {e}")

@@ -135,8 +135,13 @@ def client():
 
 
 def _run(client, **body):
+    # The 20 °C catalogue pass is OFF in this file: it is a different feature
+    # (tests/test_coupled_cold_constants.py owns it) and it is one more
+    # electromagnetic run, which would show up in every "how many passes" count
+    # below.  One test at the bottom turns it back on, to pin the ORDER.
     r = client.post("/api/coupled/run",
-                    json={**LOOP_BODY, "max_iter": 3, "tol_k": 1.0, **body})
+                    json={**LOOP_BODY, "max_iter": 3, "tol_k": 1.0,
+                          "cold_constants": False, **body})
     assert r.status_code == 200, r.text[:800]
     return r.json()["coupling"]
 
@@ -473,3 +478,22 @@ def test_the_map_is_translated_onto_the_instant_and_says_so():
     # unmarked map is a solved one, and that promise must not be weakened.
     assert "transient_snapshot" not in rescale_map_to_nodes(_tiny_map(), {})
     assert "transient_snapshot" not in rescale_map_to_nodes({"ok": False}, {})
+
+
+def test_the_cold_catalogue_pass_comes_after_the_pass_at_the_limit(
+        client, monkeypatch):
+    """Both extras on (owner 2026-09-18, the two decisions of one day): the loop
+    stops at the limit, re-solves the machine THERE, and only then measures the
+    catalogue constants at 20 °C.  The order matters — the cold pass must not be
+    what the record's temperatures come from."""
+    seen = _fake(monkeypatch, ttl=_ttl_block())
+    r = client.post("/api/coupled/run",
+                    json={**LOOP_BODY, "max_iter": 3, "tol_k": 1.0,
+                          "solve_to": "limits", "cold_constants": True})
+    assert r.status_code == 200, r.text[:800]
+    c = r.json()["coupling"]
+    assert seen["coil_in"] == [120.0, 172.5, 20.0], seen["coil_in"]
+    assert c["mode"] == "limited"
+    # The record is still the machine AT THE LIMIT, not the cold one.
+    assert c["coil_temp_c"] == 172.5
+    assert c["constants_20c"]["coil_temp_c"] == 20.0

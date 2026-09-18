@@ -1241,6 +1241,17 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         **({"mode": c["mode"]} if c.get("mode") else {}),
         **({"limited": dict(c["limited"])}
            if isinstance(c.get("limited"), dict) and c["limited"] else {}),
+        # ── THE CATALOGUE CONSTANTS (owner 2026-09-18) ──────────────────────
+        # *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить
+        # все коэффициенты KV, Kt, Km, Km/mass»*.  Kept WHOLE — three small
+        # dicts of scalars — because §4's catalogue subsection, the datasheet
+        # and any comparison between machines read the DUTY's record and not
+        # the run, and a constant that does not make this crossing reaches no
+        # page.  Absent, never null, on a record whose cold pass was switched
+        # off or refused: "not solved" is an answer, an extrapolated Kt is not.
+        **({"constants_20c": dict(c["constants_20c"])}
+           if isinstance(c.get("constants_20c"), dict) and c["constants_20c"]
+           else {}),
         "iterations": c.get("iterations"),
         "em_runs": c.get("em_runs"),
         "converged": bool(c.get("converged")) if c else None,

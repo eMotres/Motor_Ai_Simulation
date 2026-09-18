@@ -127,6 +127,38 @@ export interface CouplingBlock {
    *  record, because there is no moment to report. */
   mode?: 'steady' | 'limited';
   limited?: LimitedState;
+  /** THE CATALOGUE CONSTANTS (owner 2026-09-18): this machine's KV, Kt, Km and
+   *  Km-per-kg with the winding AND the magnets at 20 °C — the datasheet
+   *  convention every motor catalogue quotes, so two machines can be compared.
+   *  The loop measures them with one extra background pass at the end; absent
+   *  when that pass was switched off (`cold_constants: false`) or refused, and
+   *  absent is the honest answer — nothing here is extrapolated from the hot
+   *  constants.  `POST /api/coupled/constants_20c` fills it in for a duty that
+   *  already converged, without re-running the loop. */
+  constants_20c?: ColdConstants;
+}
+
+/** The 20 °C block.  `two_d` is what the solver produced; `k3d` is the same
+ *  quantities under this geometry's 3-D passport, by §4's own conventions —
+ *  Kt, Km, Km/mass and Ψ_PM × k_3d, KV ÷ k_3d (rpm per volt goes as 1/flux).
+ *  `k3d` is empty and `k_3d` null on a machine with no passport. */
+export interface ColdConstants {
+  coil_temp_c: number;
+  magnet_temp_c: number;
+  point?: { rpm?: number; I_phase_rms?: number; gamma_deg?: number;
+            drive?: string; star_delta?: 'star' | 'delta' };
+  k_3d?: number | null;
+  two_d?: Record<string, number | string>;
+  k3d?: Record<string, number>;
+  /** the four a catalogue prints — corrected where there is a passport */
+  kt_line_Nm_per_A?: number | null;
+  kv_line_rpm_per_V?: number | null;
+  km_Nm_sqrtW?: number | null;
+  km_per_mass_Nm_sqrtW_kg?: number | null;
+  R_phase_20_ohm?: number | null;
+  mass_kg?: number | null;
+  computed_at?: string | null;
+  note?: string;
 }
 
 /** The machine AT the first limit it reaches — the `limits` mode's whole answer.

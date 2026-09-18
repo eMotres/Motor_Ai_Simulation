@@ -1207,6 +1207,168 @@ def _ttl_step(body: Dict[str, Any], cooling: Dict[str, Any],
         return None
 
 
+# ---------------------------------------------------------------------------
+# THE CATALOGUE CONSTANTS — the same machine at 20 °C
+# ---------------------------------------------------------------------------
+# Owner, 2026-09-18: *«для каждого отчёта делать прогон на холодную 20 °C, чтобы
+# находить все коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех
+# каталогах моторов и нужны для сравнения»*.
+#
+# EVERY constant in this project is reported at the duty's own temperatures,
+# which is the honest thing to do and the wrong thing to COMPARE with.  A
+# catalogue quotes KV, Kt, Km and Km/kg at room temperature — copper at 20 °C,
+# magnets at 20 °C — because that is the only state two machines from two
+# manufacturers are ever both in.  A Kt measured with the winding at 172 °C and
+# the magnets at 120 °C is 10-15 % below the number on the competitor's page,
+# and nothing on either page says so.
+#
+# So the loop ends with ONE more electromagnetic run at 20/20, at the same
+# operating point and on the same drive, NOT fed back into anything: it is a
+# measurement of the machine, not a state it is in.  It runs as a BACKGROUND
+# solve (`simulation._BACKGROUND_RUN`), which is what keeps it from replacing
+# the duty's own run on the Electromagnetic tab, its field snapshot and its
+# persisted last-transient — the cold pass must leave no trace except its
+# numbers.
+
+#: The datasheet temperature.  20 °C and not 25: the magnet cards this project
+#: carries are stated at 20 °C (`<grade>_<T>C`), and picking the copper's
+#: reference instead would put the two halves of one constant 5 K apart.
+COLD_CONSTANTS_C = 20.0
+
+#: What is read off the cold pass, and how each one travels.  ``flux`` means the
+#: quantity goes as the flux and therefore carries the 3-D end-effect factor;
+#: ``inv_flux`` means it goes as 1/flux (KV is rpm per volt, so a bigger flux is
+#: a SMALLER KV); ``plain`` is a number k_3d has nothing to do with.
+_COLD_FLUX = ("psi_pm_Wb", "Kt_Nm_per_Arms", "Kt_Nm_per_A_line",
+              "Km_Nm_sqrtW", "Km_per_mass_Nm_sqrtW_kg", "T_em_avg_Nm")
+_COLD_INV_FLUX = ("KV_noload_rpm_per_V_line", "KV_rpm_per_V_line")
+_COLD_PLAIN = ("Ld_mH", "Lq_mH", "Ld_eq_star_mH", "Lq_eq_star_mH",
+               "saliency_Lq_over_Ld", "R_phase_ohm", "R_phase_eq_star_ohm",
+               "mass_total_kg", "star_delta", "connection",
+               "P_cu_dc_W", "P_cu_exact_W", "I_phase_rms_A")
+
+
+def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
+                    rpm: float, drive: str) -> Optional[Dict[str, Any]]:
+    """The 20 °C block, off a cold electromagnetic pass — or ``None``.
+
+    BOTH VALUES ARE KEPT for every flux-proportional constant: the 2-D one the
+    solver produced and the one corrected by this geometry's 3-D passport, under
+    the report's own §4 conventions — Kt × k_3d, KV ÷ k_3d, and in delta the Kt
+    that matters is the one per LINE amp because that is what an inverter is
+    rated against.  A machine with no passport carries ``k_3d: null`` and no
+    corrected column, exactly as §4 prints an em dash there.
+    """
+    s = dict((em or {}).get("summary") or {})
+    if not s:
+        return None
+    k3 = None
+    try:
+        k3 = float(((s.get("end3d") or {}).get("k_flux")))
+    except (TypeError, ValueError):
+        k3 = None
+    if k3 is not None and not (k3 > 0.0):
+        k3 = None
+
+    def _n(key):
+        v = s.get(key)
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if math.isfinite(f) else None
+
+    two_d: Dict[str, Any] = {}
+    k3d: Dict[str, Any] = {}
+    for key in _COLD_FLUX:
+        v = _n(key)
+        if v is None:
+            continue
+        two_d[key] = v
+        if k3 is not None:
+            k3d[key] = round(v * k3, 6)
+    for key in _COLD_INV_FLUX:
+        v = _n(key)
+        if v is None:
+            continue
+        two_d[key] = v
+        if k3 is not None:
+            k3d[key] = round(v / k3, 6)
+    for key in _COLD_PLAIN:
+        v = s.get(key)
+        if v is None:
+            continue
+        two_d[key] = _n(key) if not isinstance(v, str) else v
+    delta = str(s.get("star_delta") or "star").lower().startswith("d")
+    return {
+        "coil_temp_c": COLD_CONSTANTS_C,
+        "magnet_temp_c": COLD_CONSTANTS_C,
+        # THE POINT THEY WERE MEASURED AT.  Kt and Km are only constants while
+        # the iron is not saturating, so the current they were taken at is part
+        # of the answer and not a footnote.
+        "point": {"rpm": float(rpm),
+                  "I_phase_rms": _f(body, "I_phase_rms", 0.0),
+                  "gamma_deg": _f(body, "gamma_deg", 0.0),
+                  "drive": str(drive),
+                  "star_delta": "delta" if delta else "star"},
+        "k_3d": k3,
+        "two_d": two_d,
+        "k3d": k3d,
+        # WHICH Kt A CATALOGUE WOULD PRINT: per LINE amp, which in star is the
+        # winding's and in delta is the winding's ÷ √3.
+        "kt_line_Nm_per_A": ((k3d if k3 is not None else two_d).get(
+            "Kt_Nm_per_A_line" if delta else "Kt_Nm_per_Arms")),
+        "kv_line_rpm_per_V": ((k3d if k3 is not None else two_d).get(
+            "KV_noload_rpm_per_V_line")),
+        "km_Nm_sqrtW": ((k3d if k3 is not None else two_d).get("Km_Nm_sqrtW")),
+        "km_per_mass_Nm_sqrtW_kg": ((k3d if k3 is not None else two_d).get(
+            "Km_per_mass_Nm_sqrtW_kg")),
+        "R_phase_20_ohm": two_d.get("R_phase_ohm"),
+        "mass_kg": two_d.get("mass_total_kg"),
+        "computed_at": em.get("computed_at"),
+        "note": (
+            "solved with the winding and the magnets at %g °C at this duty's "
+            "operating point — the datasheet convention every motor catalogue "
+            "uses, for comparison between machines. The hot values elsewhere "
+            "in this document are the same constants at this duty's own "
+            "temperatures.%s"
+            % (COLD_CONSTANTS_C,
+               "" if k3 is None else
+               " Kt, Km and Km/mass carry k_3d = %.4f; KV is ÷ k_3d." % k3)),
+    }
+
+
+def _cold_constants_step(body: Dict[str, Any], *, rpm: float, drive: str,
+                         inverter: Optional[Dict[str, Any]]
+                         ) -> Optional[Dict[str, Any]]:
+    """Run the cold pass and read the constants off it — never raising.
+
+    As a BACKGROUND solve: no field snapshot, no persisted last transient, no
+    run-journal entry, so the duty's own run on the Electromagnetic tab is still
+    the run the user pressed.  A refusal at 20 °C is logged and the block is
+    simply absent — a machine that could not be solved cold has no catalogue
+    constants, and inventing them by extrapolating the hot ones is exactly what
+    this pass exists to replace.
+    """
+    from motor_ai_sim.routes.simulation import _BACKGROUND_RUN
+
+    tok = _BACKGROUND_RUN.set(True)
+    try:
+        em = _em_run(body, coil_temp_c=COLD_CONSTANTS_C,
+                     magnet_temp_c=COLD_CONSTANTS_C, inverter=inverter)
+    except HTTPException as exc:
+        log.warning("coupled: the 20 °C constants pass was refused (%s) — the "
+                    "record carries no catalogue constants",
+                    _detail_text(exc))
+        return None
+    except Exception:  # noqa: BLE001 — never fails a solved run
+        log.debug("coupled: the 20 °C constants pass failed", exc_info=True)
+        return None
+    finally:
+        _BACKGROUND_RUN.reset(tok)
+    return _cold_constants(em, body=body, rpm=rpm, drive=drive)
+
+
 def _limited_block(time_to_limit: Optional[Dict[str, Any]],
                    *, cooling: Dict[str, Any], field: Dict[str, Any],
                    passes: int, steady_converged: bool,
@@ -2663,6 +2825,18 @@ def _run(body: Dict[str, Any],
     # whenever there is no first crossing to stop at.
     limited: Optional[Dict[str, Any]] = None
     limited_stop = False
+    # …AND THE CATALOGUE CONSTANTS (owner 2026-09-18).  One extra pass at 20/20
+    # after the loop has finished, so the report can print the KV / Kt / Km /
+    # Km-per-kg a datasheet quotes beside the hot ones this duty actually runs
+    # at.  `cold_constants: false` in the body switches it off — an errand or a
+    # sweep point does not need it and it is a whole transient.
+    constants_20c: Optional[Dict[str, Any]] = None
+    # …and NEVER on an ERRAND.  `record: false` is one electromagnetic run and
+    # one thermal solve at a point this machine is not loaded at, by contract
+    # (the route's own docstring and its `max_iter` refusal); a second transient
+    # bolted onto it would break that promise, and the constants would be filed
+    # nowhere anyway.
+    want_cold = bool(body.get("cold_constants", True)) and not _rr.suppressed()
     # A non-positive band is a loop that can never stop, which is a typo far more
     # often than a request: it falls back to the default rather than running the
     # whole budget on every machine for ever.
@@ -3367,6 +3541,26 @@ def _run(body: Dict[str, Any],
                 else:
                     limited["drive_held"] = "sine"
                 limited["em_run"] = True
+        # ── AND THE SAME MACHINE AT 20 °C (owner 2026-09-18) ────────────────
+        # *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить
+        # все коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех
+        # каталогах моторов и нужны для сравнения»*.  One background pass, at
+        # the end, feeding back into nothing: it is a measurement of the
+        # machine, not a state the machine is in.
+        if want_cold and history:
+            _check_cancelled(run_id)
+            _progress.update(phase="catalogue constants — the same machine at "
+                                   "%g °C" % COLD_CONSTANTS_C)
+            constants_20c = _cold_constants_step(
+                body, rpm=rpm_eff, drive=drive, inverter=inverter)
+            if constants_20c:
+                log.info("coupled: constants at %g degC — KV %s rpm/V, Kt %s "
+                         "N·m/A (line), Km %s N·m/sqrt(W), Km/kg %s",
+                         COLD_CONSTANTS_C,
+                         constants_20c.get("kv_line_rpm_per_V"),
+                         constants_20c.get("kt_line_Nm_per_A"),
+                         constants_20c.get("km_Nm_sqrtW"),
+                         constants_20c.get("km_per_mass_Nm_sqrtW_kg"))
         if time_to_limit is not None:
             # WHICH STATE THE RECORD AROUND IT DESCRIBES.  A reader who has only
             # this block must not have to guess whether the temperatures beside
@@ -3533,6 +3727,13 @@ def _run(body: Dict[str, Any],
         "solve_to": solve_to,
         "mode": ("limited" if limited else "steady"),
         **({"limited": limited} if limited else {}),
+        # THE CATALOGUE CONSTANTS (owner 2026-09-18): KV, Kt, Km and Km/kg of
+        # this machine at 20 °C, for comparison with any other manufacturer's
+        # page.  ABSENT — never null — when the cold pass was switched off or
+        # could not be solved; the report then says "not solved" rather than
+        # extrapolating the hot numbers, which is the very thing this pass
+        # exists to replace.
+        **({"constants_20c": constants_20c} if constants_20c else {}),
         # `**` rather than fixed keys: a machine with no bearings grows no
         # mechanical keys at all, which is what "absent, not zero" means in a
         # payload.
@@ -3658,3 +3859,136 @@ def _run(body: Dict[str, Any],
               "" if not time_to_limit or time_to_limit.get("within_limits", True)
               else " — %s" % _ttl.headline(time_to_limit)))
     return out
+
+
+# ---------------------------------------------------------------------------
+# THE CATALOGUE CONSTANTS ON THEIR OWN — for a duty that already converged
+# ---------------------------------------------------------------------------
+
+@router.post("/constants_20c")
+@_JOBS.queued("coupled.constants_20c", priority=_JOBS.Priority.DUTY,
+              run_id_from=_JOBS.body_run_id("coupled"))
+def constants_20c(body: Dict[str, Any] = Body(default_factory=dict),
+                  authorization: Optional[str] = Header(default=None)
+                  ) -> Dict[str, Any]:
+    """``POST /api/coupled/constants_20c`` — ONE cold pass, nothing else.
+
+    Owner, 2026-09-18: every report is to carry the KV / Kt / Km / Km-per-kg a
+    catalogue quotes, and those are 20 °C numbers.  A duty whose coupled loop
+    already converged should not have to pay for that loop again to get them —
+    it is one electromagnetic run at 20/20 at the same point, and this is it.
+
+    The body is the same payload ``/run`` takes (the operating point, the mesh,
+    the drive and, on a voltage-fed duty, its ``inverter``); ``max_iter``,
+    ``thermal_settings`` and ``mechanical`` are ignored, because nothing thermal
+    and nothing mechanical happens here.
+
+    What it WRITES, and only this: ``constants_20c`` onto the last coupled
+    answer (``/last``) and onto the duty's stored coupled record, both in place.
+    The temperatures, the torque, the losses and every other number in those
+    records are left exactly as the loop left them — this pass is a measurement
+    of the machine, not a new answer about the duty, and a route that quietly
+    replaced a converged record with a 20 °C one would be the no-silent-state
+    rule broken.  ``record: false`` files nothing, as everywhere else.
+    """
+    from motor_ai_sim import material_context as _mc
+    from motor_ai_sim.routes.simulation import _effective_rpm, _parse_mat_override
+
+    tok_rec = None if _record_wanted(body) else _rr.suppress()
+    try:
+        if body.get("mat") is not None:
+            ov = _parse_mat_override(body.get("mat"))
+            if ov and ov.get("assignment"):
+                from motor_ai_sim.materials import (UnknownMaterialError,
+                                                    validate_assignment)
+                try:
+                    validate_assignment(ov["assignment"],
+                                        known_extra=set(ov.get("materials") or ()))
+                except UnknownMaterialError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc))
+            _mc.set_request_materials(ov)
+
+        drive = _coupled_drive(body)
+        rpm_eff = _effective_rpm(body.get("rpm"))
+        inverter = (_inverter_settings(body, rpm=rpm_eff)
+                    if drive == "pwm" else None)
+        # The SAME lock the loop takes: this pass goes through the transient
+        # solver and its process-wide caches, and a cold run interleaving with
+        # a coupled iteration would have each reading the other's field.
+        if not _LOCK.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail=(
+                "a coupled run is already in flight on this backend — wait for "
+                "it or press Stop"))
+        t0 = time.time()
+        try:
+            _progress.start(total=1, kind="coupled",
+                            phase="catalogue constants — the same machine at "
+                                  "%g °C" % COLD_CONSTANTS_C,
+                            composition="one electromagnetic run")
+            out = _cold_constants_step(body, rpm=rpm_eff, drive=drive,
+                                       inverter=inverter)
+            _progress.update(done=1, total=1)
+        finally:
+            _progress.finish()
+            _LOCK.release()
+        if not out:
+            raise _refuse(
+                "the machine could not be solved at %g °C, so it has no "
+                "catalogue constants. The electromagnetic run refused — see "
+                "the server log for the reason it gave." % COLD_CONSTANTS_C,
+                ["cold_constants"], code="cold_constants_unsolved")
+        written = _merge_constants_20c(out)
+        return {"ok": True, "constants_20c": out,
+                "written_to_last": bool(written.get("last")),
+                "written_to_duty": bool(written.get("duty")),
+                "elapsed_s": round(max(time.time() - t0, 1e-3), 2)}
+    finally:
+        _rr.restore(tok_rec)
+
+
+def _merge_constants_20c(block: Dict[str, Any]) -> Dict[str, bool]:
+    """Put ``block`` on the last coupled answer and on the duty's record.
+
+    IN PLACE, and touching nothing else.  Both writes are best-effort and
+    reported: a machine that has never been through the loop has no record to
+    merge into, which is an answer ("run the loop first"), not a failure.
+    """
+    done = {"last": False, "duty": False}
+    if _rr.suppressed():
+        return done
+    try:
+        _load_last()
+        cur = dict(_LAST)
+        cp = cur.get("coupling")
+        if isinstance(cp, dict) and cp:
+            cp = dict(cp)
+            cp["constants_20c"] = dict(block)
+            cur["coupling"] = cp
+            _remember_last(cur)
+            done["last"] = True
+    except Exception:  # noqa: BLE001 — bookkeeping never fails a solve
+        log.debug("coupled: the 20 °C constants were not merged into /last",
+                  exc_info=True)
+    if done["last"]:
+        # `_remember_last` already re-filed the whole compacted record under the
+        # duty, constants included — no second write, and therefore no way for
+        # the two copies to disagree.
+        done["duty"] = True
+        return done
+    # No coupled answer in hand: patch the DUTY's stored record directly, so a
+    # duty whose loop ran in another session (or before a restart) still gets
+    # its constants.
+    try:
+        from motor_ai_sim import duty_results as _dr
+        ctx = _dr.active_context()
+        if ctx:
+            entry = (_dr.get(ctx[0], ctx[1]) or {}).get(ctx[2]) or {}
+            rec = entry.get("coupled")
+            if isinstance(rec, dict) and rec:
+                rec = dict(rec)
+                rec["constants_20c"] = dict(block)
+                done["duty"] = bool(_dr.record(*ctx, "coupled", rec))
+    except Exception:  # noqa: BLE001
+        log.debug("coupled: the 20 °C constants were not filed under the duty",
+                  exc_info=True)
+    return done

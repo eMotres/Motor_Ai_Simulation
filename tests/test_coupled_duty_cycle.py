@@ -259,8 +259,12 @@ def _model_of(regime):
     return types.SimpleNamespace(regime=regime), regime
 
 
+#: `cold_constants: False` — the 20 °C catalogue pass (owner 2026-09-18) is one
+#: more electromagnetic run at the end of every loop, and every assertion in
+#: this file counts the passes the CYCLE search made.  It has its own suite
+#: (tests/test_coupled_cold_constants.py); here it would only be noise.
 LOOP_BODY = {**EM_BODY, "thermal_settings": PANEL_COOLING, "magnet_temp_c": 90.0,
-             "mechanical": False}
+             "mechanical": False, "cold_constants": False}
 
 
 def _fake_the_halves(monkeypatch, *, stub_cycle_inputs: bool):

@@ -497,3 +497,40 @@ def test_the_cold_catalogue_pass_comes_after_the_pass_at_the_limit(
     # The record is still the machine AT THE LIMIT, not the cold one.
     assert c["coil_temp_c"] == 172.5
     assert c["constants_20c"]["coil_temp_c"] == 20.0
+
+
+def test_the_thermal_tab_is_left_showing_the_same_machine(client, monkeypatch):
+    """Seen live on emotres.com, 2026-09-18: the record said the winding was at
+    200 °C and the Thermal tab still showed the 409 °C map the loop had solved
+    on its way there — two states of one motor, which is the exact thing the
+    snapshot exists to prevent.  The rescaled map is re-remembered under the
+    SAME params, so it replaces that entry rather than growing a second one."""
+    from motor_ai_sim.routes import coupled as cp
+    from motor_ai_sim.routes import thermal as th
+
+    _fake(monkeypatch, ttl=_ttl_block())
+    seen = []
+    monkeypatch.setattr(
+        cp, "_thermal_solve",
+        lambda body, cooling, *, coil_temp_c, magnet_temp_c, rpm,
+        params_out=None, **k: (
+            params_out.update({"probe": "the one identity"})
+            if params_out is not None else None,
+            {"ok": True,
+             "components": {"winding": {"avg": 400.0, "max": 430.0},
+                            "magnet": {"avg": 93.0, "max": 95.0}}})[1],
+        raising=True)
+    monkeypatch.setattr(
+        th, "_remember_last",
+        lambda kind, result, params, fp, **k: seen.append(
+            (kind, (result.get("components") or {}).get("winding"),
+             dict(params or {}))),
+        raising=True)
+    c = _run(client, solve_to="limits")
+    assert c["mode"] == "limited"
+    # The LAST thing remembered is the snapshot, under the same params as the
+    # solve it replaces — one entry, one identity, one state.
+    assert seen, "nothing was remembered at all"
+    assert seen[-1][0] == "field"
+    assert seen[-1][2] == {"probe": "the one identity"}
+    assert seen[-1][2] == seen[0][2]

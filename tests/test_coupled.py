@@ -97,6 +97,12 @@ EM_BODY = {
     # assertions below failed on the sign alone.  The explicit value outranks
     # the config by design, like the geometry and the materials.
     "mode": "motor",
+    # THE 20 °C CATALOGUE PASS IS OFF in the shared body (owner 2026-09-18).
+    # It is one more electromagnetic run at the END of every loop, and the
+    # assertions in this file — and in every suite that imports EM_BODY — count
+    # the passes the LOOP made.  It has a suite of its own
+    # (tests/test_coupled_cold_constants.py), which switches it back on.
+    "cold_constants": False,
     "geo": json.dumps(GEO_30MM),
 }
 

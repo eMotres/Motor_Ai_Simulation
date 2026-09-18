@@ -2116,7 +2116,8 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
                    bearing_temp_c: Optional[float] = None,
                    n_steps_per_period: Optional[int] = None,
                    em_map: Optional[Dict[str, Any]] = None,
-                   em_loss_source: Optional[Dict[str, Any]] = None
+                   em_loss_source: Optional[Dict[str, Any]] = None,
+                   params_out: Optional[Dict[str, Any]] = None
                    ) -> Dict[str, Any]:
     """ONE thermal solve at the same temperatures the EM run was made at.
 
@@ -2183,12 +2184,18 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
         # thermal route never stores it: it is the whole machine as a JSON
         # string, the fingerprint beside it already says WHICH machine, and the
         # store is a pickle that sits next to the user's config.
-        th._remember_last(
-            "field", out,
-            th._field_params(**{k: v for k, v in kw.items()
-                                if k not in ("geo", "bearing_temp_c",
-                                             "_em_map", "_em_loss_source")}),
-            out.get("geometry_fingerprint"))
+        _p = th._field_params(**{k: v for k, v in kw.items()
+                                 if k not in ("geo", "bearing_temp_c",
+                                              "_em_map", "_em_loss_source")})
+        # …and handed BACK, so a caller that goes on to change the map can
+        # re-remember it under the very same params (the limited mode's
+        # transient snapshot — see `_run`).  Re-deriving them at the second
+        # call site would be two spellings of one identity, which is how a
+        # store ends up with two entries for one solve.
+        if params_out is not None:
+            params_out.clear()
+            params_out.update(_p)
+        th._remember_last("field", out, _p, out.get("geometry_fingerprint"))
     except Exception:  # noqa: BLE001 — a memory is not worth losing an answer over
         log.exception("could not remember the coupled run's thermal map")
     return out
@@ -2924,6 +2931,10 @@ def _run(body: Dict[str, Any],
     magnet_note = ""
     em: Dict[str, Any] = {}
     field: Dict[str, Any] = {}
+    #: The params the LAST thermal solve was remembered under — kept so the
+    #: limited mode can re-remember its rescaled snapshot as the same answer
+    #: rather than leave the Thermal tab showing a state the record does not.
+    field_params: Dict[str, Any] = {}
     mech_block: Optional[Dict[str, Any]] = None
     # THE BEARING TEMPERATURE, carried from one pass to the next.  `None` on the
     # first pass is not a missing value: it means "resolve it the way any other
@@ -3099,7 +3110,8 @@ def _run(body: Dict[str, Any],
                                    n_steps_per_period=(
                                        inverter["n_steps_per_period"]
                                        if inverter else None),
-                                   em_map=_em_map, em_loss_source=_em_src)
+                                   em_map=_em_map, em_loss_source=_em_src,
+                                   params_out=field_params)
 
             w = _component(field, "winding")
             m = _component(field, "magnet")
@@ -3539,6 +3551,21 @@ def _run(body: Dict[str, Any],
                           "solve" % limited["line"].split(" — ")[0].lower()))
                 if _t_b is not None:
                     t_brg = float(_t_b)
+                # …AND THE TAB MUST SHOW THE SAME MACHINE.  Without this the
+                # Thermal tab (and `/api/thermal/last`, and the per-duty map the
+                # report draws) keeps the map the loop solved on its way here —
+                # the L13 peak's 409 °C steady state — beside a record that says
+                # the winding is at 200 °C.  Seen live on emotres.com,
+                # 2026-09-18.  The snapshot is remembered under the very same
+                # params, so it REPLACES that entry instead of growing a second
+                # one for the same solve.
+                try:
+                    if field_params:
+                        _th._remember_last("field", field, dict(field_params),
+                                           field.get("geometry_fingerprint"))
+                except Exception:  # noqa: BLE001 — a memory never fails a solve
+                    log.debug("coupled: the snapshot map was not remembered",
+                              exc_info=True)
                 history.append({
                     "iter": len(history) + 1,
                     # WHAT THIS ROW IS: not another step of the loop but the one

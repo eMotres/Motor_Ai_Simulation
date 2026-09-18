@@ -172,7 +172,12 @@ def loop(monkeypatch):
 BODY = {"n_steps_per_period": 36, "n_periods": 1.0, "gamma_deg": 15.0,
         "I_phase_rms": 433.559, "coil_temp_c": 134.7, "mode": "motor",
         "eddy": True, "rotor_eddy": True, "max_iter": 1,
-        "mesh_size_mm": 4.0, "min_size_mm": 0.3, "n_sectors": 2}
+        "mesh_size_mm": 4.0, "min_size_mm": 0.3, "n_sectors": 2,
+        # THE 20 °C CATALOGUE PASS IS OFF (owner 2026-09-18): every assertion
+        # in this file counts what the BRIDGE was asked for, pass by pass, and
+        # the cold pass is one more electromagnetic run at the end of the loop.
+        # tests/test_coupled_cold_constants.py is where it is switched on.
+        "cold_constants": False}
 
 
 # ---------------------------------------------------------------------------
@@ -1040,6 +1045,10 @@ def _gen_body(**kw):
          "star_delta": "delta", "eddy": True, "rotor_eddy": True,
          "max_iter": 1, "mesh_size_mm": 4.0, "min_size_mm": 0.3,
          "n_sectors": 2, "rpm": 20900.0, "drive": "pwm",
+         # Same as BODY above: the 20 °C catalogue pass is off, because these
+         # tests read `seen["em"][-1]` and count the passes the bridge was
+         # asked for.
+         "cold_constants": False,
          "inverter": {"f_carrier_hz": 24000.0, "v_dc_V": 799.2,
                       "v_phase_peak_V": 729.6062, "v_delta_deg": -29.456,
                       "target_I_phase_rms_A": 346.63, "i_tol_pct": 1.0}}

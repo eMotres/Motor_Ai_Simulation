@@ -36,8 +36,11 @@ import pytest
 
 from tests.test_coupled import COOLING as PANEL_COOLING, EM_BODY
 
+#: …and back ON here, over EM_BODY's default: this suite is the one that is
+#: about the cold pass.
 LOOP_BODY = {**EM_BODY, "thermal_settings": PANEL_COOLING,
-             "magnet_temp_c": 90.0, "mechanical": False}
+             "magnet_temp_c": 90.0, "mechanical": False,
+             "cold_constants": True}
 
 #: A 2-D summary with a 3-D passport, delta-connected — the shape that makes
 #: every convention in (c) visible at once.

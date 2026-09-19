@@ -9024,3 +9024,271 @@ class TestB1TheDocxCarriesAPageNumberedFooter:
         text = "\n".join(p.text for p in footer.paragraphs)
         assert DIE in text and CFG in text
         assert "page" in text
+
+
+# ---------------------------------------------------------------------------
+# N1 — the demag recompute disclosure reached only ONE duty out of two
+# (L13 server audit round 5, 2026-09-20)
+# ---------------------------------------------------------------------------
+# `em_demag_text` (the single "Demagnetisation" paragraph) is bound to
+# whichever duty is the report's cover, so its recompute-disclosure clause
+# only ever reached that one duty.  `demag_pair_note` — the caption printed
+# under BOTH duties' figures — never read the `recomputed_*` flags at all, so
+# the OTHER duty's identically-recomputed numbers carried no disclosure
+# anywhere in the delivered document.
+
+
+class TestN1DemagRecomputeReachesBothDutiesInThePairCaption:
+
+    def _dem(self, **extra):
+        return dict({"br_kept_vol_pct": 99.43, "loss_pct": 0.46,
+                    "bh_loss_pct": 0.66, "br_worst_pct": 11.7,
+                    "area_derated_pct": 2.16}, **extra)
+
+    def test_both_sides_print_the_disclosure_when_both_were_recomputed(self):
+        from motor_ai_sim import report as R
+
+        left = {"duty": "rated", "coupled": {"magnet_temp_c": 108.0},
+               "em": {"demag": self._dem(
+                   recomputed_from_field=True, recomputed_verified=False)}}
+        right = {"duty": "peak", "coupled": {"magnet_temp_c": 43.0},
+                "em": {"demag": self._dem(
+                    br_kept_vol_pct=99.934, loss_pct=0.07, bh_loss_pct=0.1,
+                    area_derated_pct=0.32,
+                    recomputed_from_field=True, recomputed_verified=False)}}
+        note = R.demag_pair_note(left, right)
+        # both duties' own numbers are still there (unchanged contract)
+        assert "duty 'rated': magnets 108" in note
+        assert "duty 'peak': magnets 43" in note
+        # …and now BOTH carry the recompute disclosure, not just one
+        assert note.count("recomputed; the saved summary is a different "
+                          "solve, not compared") == 2
+
+    def test_a_verified_side_names_the_agreement_not_just_recomputed(self):
+        from motor_ai_sim import report as R
+
+        left = {"duty": "rated", "coupled": {"magnet_temp_c": 108.0},
+               "em": {"demag": self._dem(
+                   recomputed_from_field=True, recomputed_verified=True,
+                   recomputed_delta_pct=0.0)}}
+        right = {"duty": "peak", "coupled": {"magnet_temp_c": 43.0},
+                "em": {"demag": self._dem(
+                    recomputed_from_field=True, recomputed_verified=False)}}
+        note = R.demag_pair_note(left, right)
+        assert "recomputed, agreeing with the saved summary to 0 pt" in note
+        assert "recomputed; the saved summary is a different solve, not " \
+            "compared" in note
+
+    def test_a_side_never_recomputed_prints_no_clause(self):
+        from motor_ai_sim import report as R
+
+        left = {"duty": "rated", "coupled": {"magnet_temp_c": 108.0},
+               "em": {"demag": self._dem()}}
+        note = R.demag_pair_note(left, None)
+        assert "duty 'rated': magnets 108" in note
+        assert "recomputed" not in note
+
+    def test_em_demag_text_keeps_its_own_exact_sentences(self):
+        """The single-duty paragraph's wording is untouched by sharing its
+        logic with the pair caption — same exact strings the I1 fix (round 4)
+        already pinned."""
+        from motor_ai_sim import report as R
+
+        verified = {
+            "br_kept_vol_pct": 99.43, "bh_loss_pct": 0.1,
+            "br_worst_pct": 11.7, "recomputed_from_field": True,
+            "recomputed_verified": True, "recomputed_delta_pct": 0.0}
+        text = R.em_demag_text({"demag": verified})
+        assert ("Recomputed from the stored field, agreeing with the saved "
+               "summary to 0 pt.") in text
+        unverified = dict(verified, recomputed_verified=False)
+        text2 = R.em_demag_text({"demag": unverified})
+        assert ("Recomputed from the stored field; the saved summary is a "
+               "different solve, not compared.") in text2
+
+
+# ---------------------------------------------------------------------------
+# N2 — three figures render with overlapping legend / axis-label text in the
+# delivered PDF (L13 server audit round 5, 2026-09-20)
+# ---------------------------------------------------------------------------
+# `_torque_png` / `_currents_png` / `_voltage_png` are the SAME functions the
+# docx and the PDF both call, at different physical widths — the docx's own
+# full text width (`report_docx.PIC_CM`, 26.7 cm) and half of it
+# (`report.PAIR_CM`, ~9.2 cm) on a compared pair; the PDF's own full width
+# (`report.MAP_FULL_CM`, ~18.6 cm) and the SAME `PAIR_CM` half.  A legend
+# placed with a fixed AXES-FRACTION offset bought enough absolute clearance
+# at the width it was eyeballed at and not at the others, so the x-axis label
+# and the legend below it rendered overlapping, illegibly, in the PDF pages a
+# client actually opens (11, 12, 13) — clean in the docx purely by width.
+# This locks the fix down at the pixel level: the LEGEND's own rendered
+# bounding box must never intersect the X-AXIS LABEL's, at either of the
+# widths these charts are actually placed at in either document.
+
+
+class _CaptureFig:
+    """Monkeypatches `report._png_bytes` to hand back the still-open
+    `Figure` a chart function built, instead of only the PNG bytes — the
+    bounding boxes below only exist on the live object, and `_png_bytes`
+    already closes it."""
+
+    def __init__(self, monkeypatch):
+        from motor_ai_sim import report as R
+
+        self.fig = None
+        real = R._png_bytes
+
+        def _spy(fig, **kw):
+            self.fig = fig
+            return real(fig, **kw)
+
+        monkeypatch.setattr(R, "_png_bytes", _spy)
+
+
+def _no_text_overlap(fig) -> list:
+    """Every pair of (legend, x-axis label) and (legend, next-panel-title)
+    bounding boxes on `fig` that INTERSECT — empty when the figure is clean.
+
+    Matches the audit's own check: "matplotlib: check `get_window_extent` of
+    legend vs axes labels" — read on the SAME renderer the figure was last
+    drawn with, after a fresh `draw()` so every artist's position is current.
+    """
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    axes = list(fig.axes)
+    problems = []
+    for i, ax in enumerate(axes):
+        leg = ax.get_legend()
+        if leg is None:
+            continue
+        lb = leg.get_window_extent(renderer)
+        xl = ax.xaxis.label
+        if xl.get_text():
+            xb = xl.get_window_extent(renderer)
+            if lb.overlaps(xb):
+                problems.append("legend of axes[%d] overlaps its own "
+                                "x-axis label %r" % (i, xl.get_text()))
+        # any OTHER axes' title this legend might have landed on (the
+        # stacked torque/voltage layout's second panel)
+        for j, other in enumerate(axes):
+            if other is ax or not other.title.get_text():
+                continue
+            tb = other.title.get_window_extent(renderer)
+            if lb.overlaps(tb):
+                problems.append("legend of axes[%d] overlaps the title of "
+                                "axes[%d] (%r)"
+                                % (i, j, other.title.get_text()))
+    return problems
+
+
+class TestN2FigureLegendDoesNotOverlapTheAxisLabel:
+
+    #: One electrical period, enough points for a legend AND a DFT.
+    _ANG = [360.0 * i / 200 for i in range(200)]
+
+    def _torque_wf(self):
+        import math
+
+        return {"T_em_Nm": [5.4 + 0.15 * math.sin(6 * math.radians(a))
+                            for a in self._ANG],
+               "rotor_angle_deg": self._ANG}
+
+    def _currents_wf(self):
+        import math
+
+        def ph(shift):
+            return [37.0 * math.cos(math.radians(a + shift))
+                    for a in self._ANG]
+        return {"rotor_angle_deg": self._ANG, "I_A": ph(0.0),
+               "I_B": ph(-120.0), "I_C": ph(120.0)}
+
+    def _voltage_wf(self):
+        import math
+
+        def ph(shift):
+            return [24.5 * math.cos(math.radians(a + shift))
+                    for a in self._ANG]
+        return {"rotor_angle_deg": self._ANG, "V_A": ph(0.0),
+               "V_B": ph(-120.0), "V_C": ph(120.0), "star_delta": "star",
+               "summary": {"star_delta": "star"}}
+
+    #: The widths these three functions are ACTUALLY called at, both
+    #: documents, both the paired-duty and the single-duty layout — see the
+    #: audit's root-cause table.
+    def _widths(self):
+        from motor_ai_sim import report as R
+        from motor_ai_sim import report_docx as RD
+
+        return {"PAIR_CM (PDF/docx, compared pair)": R.PAIR_CM,
+               "MAP_FULL_CM (PDF, single duty)": R.MAP_FULL_CM,
+               "PIC_CM (docx, single duty)": RD.PIC_CM}
+
+    def test_currents_chart_legend_never_overlaps_its_xlabel(self, monkeypatch):
+        from motor_ai_sim import report as R
+
+        for label, width in self._widths().items():
+            cap = _CaptureFig(monkeypatch)
+            png = R._currents_png(self._currents_wf(), width_cm=width, px=600)
+            assert png and png[:4] == b"\x89PNG"
+            problems = _no_text_overlap(cap.fig)
+            assert not problems, "at %s (%.2f cm): %s" % (label, width,
+                                                           problems)
+
+    def test_voltage_chart_legend_never_overlaps_its_xlabel(self, monkeypatch):
+        from motor_ai_sim import report as R
+
+        for label, width in self._widths().items():
+            cap = _CaptureFig(monkeypatch)
+            png = R._voltage_png(self._voltage_wf(), width_cm=width, px=600)
+            assert png and png[:4] == b"\x89PNG"
+            problems = _no_text_overlap(cap.fig)
+            assert not problems, "at %s (%.2f cm): %s" % (label, width,
+                                                           problems)
+
+    def test_pwm_voltage_chart_legend_never_overlaps_its_xlabel(
+            self, monkeypatch):
+        """The bridge panel's legend, against the SAME class of collision —
+        the PWM branch has TWO legends (the field-voltage panel's and the
+        bridge's own), each with a panel of its own directly below it in at
+        least one of the two internal layouts."""
+        from motor_ai_sim import report as R
+        from motor_ai_sim.simulation.pwm import PwmVoltageSource
+
+        wf = self._voltage_wf()
+        src = PwmVoltageSource(pole_pairs=1, daxis_deg=0.0, v_delta_deg=20.0,
+                               v_bus=750.4, carriers=20, m=0.63)
+        wf["pwm"] = {"v_bus_V": 750.4, "v_bus_real_V": 750.4,
+                    "wave_AB": src.edge_waveform_ll(1183.33, 1.0)}
+        assert R.pwm_bridge_ll(wf) is not None, "fixture is not a PWM duty"
+        for label, width in self._widths().items():
+            cap = _CaptureFig(monkeypatch)
+            png = R._voltage_png(wf, width_cm=width, px=600)
+            assert png and png[:4] == b"\x89PNG"
+            problems = _no_text_overlap(cap.fig)
+            assert not problems, "at %s (%.2f cm): %s" % (label, width,
+                                                           problems)
+
+    def test_torque_chart_has_no_legend_but_still_no_title_collision(
+            self, monkeypatch):
+        """`_torque_png` has no legend (its "mean" annotation is drawn
+        INSIDE the axes), but Fig. 4's own defect was the left panel's
+        x-axis label landing on the right panel's title in the
+        side-by-side (non-paired, full-width) layout — the same
+        insufficient-absolute-height class as N2, checked directly."""
+        from motor_ai_sim import report as R
+
+        for label, width in self._widths().items():
+            cap = _CaptureFig(monkeypatch)
+            png = R._torque_png(self._torque_wf(), width_cm=width, px=600)
+            assert png and png[:4] == b"\x89PNG"
+            fig = cap.fig
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            ax, bx = fig.axes[0], fig.axes[1]
+            axl = ax.xaxis.label
+            if not (axl.get_text() and bx.title.get_text()):
+                continue
+            overlap = axl.get_window_extent(renderer).overlaps(
+                bx.title.get_window_extent(renderer))
+            assert not overlap, (
+                "at %s (%.2f cm): torque panel's x-axis label overlaps the "
+                "spectrum panel's title" % (label, width))

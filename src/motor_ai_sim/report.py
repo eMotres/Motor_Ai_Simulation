@@ -2544,10 +2544,155 @@ PAIR_CHART_CM = 14.0
 PAIR_CHART_TALLER = 1.85
 
 
-def _chart_aspect(aspect: float, width_cm: float) -> float:
-    """The height/width a chart is drawn at, taller when it is half of a pair."""
-    return float(aspect) * (PAIR_CHART_TALLER
-                            if float(width_cm) < PAIR_CHART_CM else 1.0)
+def _chart_aspect(aspect: float, width_cm: float, min_h_in: float = 0.0) -> float:
+    """The height/width a chart is drawn at, taller when it is half of a pair.
+
+    ``min_h_in`` (round-5 audit, N2) is an absolute floor on the rendered
+    height, in inches.  A SIDE-BY-SIDE pair (torque + its spectrum, line
+    voltages + theirs) was tuned once, by eye, at the docx's full text width
+    (``PIC_CM``, 26.7 cm): at that width ``aspect=0.30`` draws a figure a
+    comfortable 3.15 in tall.  The PDF draws the very same "not narrow" layout
+    at its OWN full width (``MAP_FULL_CM``, 18.6 cm) — same relative aspect,
+    but a physically shorter figure (2.2 in) carrying the same fixed-point-size
+    titles, tick labels and axis labels top and bottom.  At 2.2 in there is not
+    enough absolute room left between the left panel's own x-axis label and the
+    right panel's own title, and the two collide — invisible in Word, which
+    never draws this layout that short, and missed by every audit round that
+    never looked at the PDF pages this happens on (Figs. 4 and 6).  A floor on
+    the ABSOLUTE height, independent of width, keeps every renderer's version
+    of this layout at least as tall as the one it was actually proven on.
+    """
+    a = float(aspect) * (PAIR_CHART_TALLER
+                         if float(width_cm) < PAIR_CHART_CM else 1.0)
+    if min_h_in > 0:
+        w_in = max(float(width_cm), 4.0) / 2.54
+        a = max(a, float(min_h_in) / w_in)
+    return a
+
+
+#: The minimum ABSOLUTE height (inches) of the torque/voltage side-by-side
+#: (waveform + spectrum) layout, whatever width it is drawn at — see
+#: `_chart_aspect`.  2.8 in is a hair under the 3.15 in the docx's own
+#: `PIC_CM` width already draws (so a report built at that width is
+#: byte-for-byte unchanged) and comfortably above the ~2.2 in the PDF's
+#: `MAP_FULL_CM` used to collapse to.
+PAIR_SIDE_MIN_H_IN = 2.8
+
+
+def _legend_dy(width_cm: float, aspect: float, min_pt: float = 36.0) -> float:
+    """A STARTING GUESS for the legend's ``bbox_to_anchor`` Y offset — see
+    :func:`_legend_clear_of_xlabel`, which turns this into a real answer.
+
+    Every legend in this module's charts used to stop at a fixed AXES-FRACTION
+    offset (``-0.16`` and kin) — a fixed fraction of the axes' own height.
+    That is plenty of room at the width the layout was tuned at (the docx's
+    full width, ~26.7 cm), and not enough at the PDF's narrower ones (round-5
+    audit, N2).  This scales the offset by the figure's physical size, which
+    gets closer faster than a constant does — but it is still a GUESS: how
+    much of its own gridspec cell an axes actually keeps for the plot, once
+    matplotlib has room for tick labels, its own axis label and its title, is
+    not something this can compute in closed form, only measure.
+    """
+    h_pt = (max(float(width_cm), 4.0) / 2.54) * float(aspect) * 72.0
+    if h_pt <= 0:
+        return -0.16
+    return -max(0.16, float(min_pt) / h_pt)
+
+
+def _legend_clear_of_xlabel(ax, fig, *, min_gap_pt: float = 6.0,
+                            max_iter: int = 5, **legend_kwargs):
+    """``ax.legend(**legend_kwargs)``, pushed down until it MEASURABLY clears
+    the x-axis label — never left at a guessed offset (round-5 audit, N2).
+
+    Three of the document's 22 figures rendered with the x-axis label and the
+    legend below it overlapping, illegibly, in the delivered PDF specifically
+    — clean in the docx, because the docx draws these same charts at its own
+    wider full-page width, where the same fixed ``bbox_to_anchor`` fraction
+    happened to buy enough absolute room.  A better GUESS at the fraction
+    (``_legend_dy``) gets closer, but it is still open-loop: how much of its
+    own gridspec cell an axes keeps for the plot area, once matplotlib has
+    made room for tick labels, the axis label and the title, is not
+    predictable from the width and aspect ratio alone — it has to be asked of
+    the renderer.  So this draws the legend at the caller's starting guess,
+    measures the REAL bounding boxes of the legend and the x-axis label, and
+    if they are closer than ``min_gap_pt`` (or overlapping outright) moves the
+    legend down by exactly the measured shortfall, converted from pixels to
+    the axes-fraction unit ``bbox_to_anchor`` is in.  Repeats until clear or
+    ``max_iter`` is spent — one correction is normally exact, because moving
+    the legend does not change its own height.
+    """
+    anchor = legend_kwargs.pop("bbox_to_anchor", (0.5, -0.16))
+    dy = float(anchor[1])
+    xl = ax.xaxis.label
+    leg = None
+    for _ in range(max(1, int(max_iter))):
+        if leg is not None:
+            leg.remove()
+        leg = ax.legend(bbox_to_anchor=(anchor[0], dy), **legend_kwargs)
+        if not xl.get_text():
+            break
+        try:
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            lb = leg.get_window_extent(renderer)
+            xb = xl.get_window_extent(renderer)
+            ax_h_px = ax.get_window_extent(renderer).height
+        except Exception:                                       # noqa: BLE001
+            break                          # never fail a report over a measurement
+        min_gap_px = min_gap_pt * fig.dpi / 72.0
+        gap_px = xb.y0 - lb.y1             # > 0 already clear
+        if gap_px >= min_gap_px or ax_h_px <= 0:
+            break
+        # +1 px of overshoot: the measurement pass and the final `savefig`
+        # pass are two separate draws, and a correction landing EXACTLY on
+        # the threshold has, empirically, a sub-pixel residual left over.
+        dy -= (min_gap_px - gap_px + 1.0) / ax_h_px
+    return leg
+
+
+def _make_room_below_legend(ax, below: List[Any], fig, *,
+                            min_gap_pt: float = 6.0) -> None:
+    """Shift every axes in ``below`` DOWN just enough that none of them (or
+    their title) overlaps ``ax``'s own legend (round-5 audit, N2).
+
+    On the STACKED torque/voltage layout the legend's slot is between the
+    x-axis label above it and the next panel below it, and
+    :func:`_legend_clear_of_xlabel` only measures the first side: pushed down
+    far enough to clear the label, on a short enough figure the legend then
+    lands on the second panel's own title instead (Fig. 6 line-voltage chart,
+    round 5) — clearing one collision by causing another is not a fix.  This
+    is the second half: once the legend is where it needs to be, whatever
+    sits below it is moved out of its way rather than the other way round, so
+    a legend never has to choose between two things it must not touch.
+    ``bbox_inches="tight"`` at save time grows the canvas for the extra
+    height this can add; nothing is cropped.
+    """
+    leg = ax.get_legend()
+    if leg is None or not below:
+        return
+    try:
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        lb = leg.get_window_extent(renderer)
+        fig_h_px = fig.get_window_extent(renderer).height
+    except Exception:                                           # noqa: BLE001
+        return
+    min_gap_px = min_gap_pt * fig.dpi / 72.0
+    shift_px = 0.0
+    for other in below:
+        top = other.title if other.title.get_text() else None
+        top_bbox = (top.get_window_extent(renderer) if top is not None
+                   else other.get_window_extent(renderer))
+        gap_px = lb.y0 - top_bbox.y1        # legend's BOTTOM vs the other's TOP
+        if gap_px < min_gap_px:
+            shift_px = max(shift_px, min_gap_px - gap_px)
+    if shift_px <= 0 or fig_h_px <= 0:
+        return
+    shift_frac = shift_px / fig_h_px
+    for other in below:
+        pos = other.get_position()
+        other.set_position([pos.x0, pos.y0 - shift_frac,
+                            pos.width, pos.height])
 
 
 def _narrow(width_cm: float) -> bool:
@@ -2647,7 +2792,8 @@ def _torque_png(wf: Dict[str, Any], width_cm: float = 22.0,
                 gridspec_kw={"height_ratios": [1.45, 1.0]})
         else:
             fig, (ax, bx) = plt.subplots(
-                1, 2, figsize=(w, w * _chart_aspect(0.30, width_cm)),
+                1, 2, figsize=(w, w * _chart_aspect(
+                    0.30, width_cm, min_h_in=PAIR_SIDE_MIN_H_IN)),
                 dpi=max(160.0, float(px) / w),
                 gridspec_kw={"width_ratios": [1.7, 1.0]})
         ax.plot(x, y, color="#2e86ff", lw=1.8, zorder=3)
@@ -2776,8 +2922,8 @@ def _currents_png(wf: Dict[str, Any], width_cm: float = 22.0,
         ang = wf.get("rotor_angle_deg")
         x = (np.asarray(ang, float) if ang and len(ang) == y[0].size
              else np.arange(y[0].size, dtype=float))
-        fig, ax = _fig(width_cm, px,
-                       aspect=_chart_aspect(0.28, width_cm))
+        _asp = _chart_aspect(0.28, width_cm)
+        fig, ax = _fig(width_cm, px, aspect=_asp)
         for v, name, col in zip(y, ("A", "B", "C"),
                                 ("#e02718", "#1E7A3C", "#2e86ff")):
             ax.plot(x, v, color=col, lw=1.7, label="phase %s" % name, zorder=3)
@@ -2819,13 +2965,22 @@ def _currents_png(wf: Dict[str, Any], width_cm: float = 22.0,
         # whole frame.
         _hi = max(float(np.abs(v).max()) for v in y) or 1.0
         ax.set_ylim(-_hi * 1.12, _hi * 1.12)
-        ax.legend(frameon=False, fontsize=_chart_fs(8.5, width_cm), ncol=3,
-                  loc="upper center", bbox_to_anchor=(0.5, -0.16),
-                  columnspacing=1.6, handlelength=1.4)
+        # TICKS, GRID AND SPINES FIRST (round-5 audit, N2): every one of these
+        # can change how much of the axes' own gridspec cell matplotlib
+        # spends on the plot area (a smaller tick font frees margin a bigger
+        # one eats), so the legend clearance below has to be measured AFTER
+        # them — measuring first and formatting the axes afterward left a
+        # legend that had cleared the x-label during the loop overlapping it
+        # again by the time this figure was actually saved.
         ax.tick_params(labelsize=CHART_TICK_PT)
         ax.grid(color="#ececec", lw=0.6, zorder=0)
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
+        _legend_clear_of_xlabel(
+            ax, fig, frameon=False, fontsize=_chart_fs(8.5, width_cm), ncol=3,
+            loc="upper center",
+            bbox_to_anchor=(0.5, _legend_dy(width_cm, _asp)),
+            columnspacing=1.6, handlelength=1.4)
         return _finish(fig)
     except Exception as exc:                                # noqa: BLE001
         log.debug("report: current chart failed (%s)", exc)
@@ -3098,6 +3253,11 @@ def _voltage_png(wf: Dict[str, Any], width_cm: float = 22.0,
         # paired chart is 4 cm wide: the two titles collide over the gap and
         # the spectrum's y-label lands on the waveform's x-ticks.  One above
         # the other, both panels keep the full column width.
+        # `_ax_h_over_w` (N2 fix, round-5 audit): the panel `ax` ends up
+        # holding its LEGEND against — height / width of the whole figure,
+        # times the fraction of that height this one gridspec cell gets — so
+        # `_legend_dy` below can reserve the same ABSOLUTE clearance under the
+        # x-axis label whichever of the four layouts this is.
         if _pwm is not None:
             # THREE PANELS (2026-09-15): the bridge's pulse train, its
             # spectrum, and — smaller, under its own name — the winding
@@ -3117,21 +3277,32 @@ def _voltage_png(wf: Dict[str, Any], width_cm: float = 22.0,
                 ax = fig.add_subplot(gs[0, 0])
                 cx = fig.add_subplot(gs[1, 0])
                 bx = fig.add_subplot(gs[:, 1])
+            _ax_h_over_w = None       # set below, AFTER the ax/cx swap
         elif _narrow(width_cm):
             fig, (ax, bx) = plt.subplots(
                 2, 1, figsize=(w, w * 0.92), dpi=max(160.0, float(px) / w),
                 gridspec_kw={"height_ratios": [1.45, 1.0]})
             cx = None
+            _ax_h_over_w = 0.92 * (1.45 / 2.45)
         else:
+            _aspect = _chart_aspect(0.30, width_cm, min_h_in=PAIR_SIDE_MIN_H_IN)
             fig, (ax, bx) = plt.subplots(
-                1, 2, figsize=(w, w * _chart_aspect(0.30, width_cm)),
+                1, 2, figsize=(w, w * _aspect),
                 dpi=max(160.0, float(px) / w),
                 gridspec_kw={"width_ratios": [1.7, 1.0]})
             cx = None
+            _ax_h_over_w = _aspect
         if cx is not None:
             # The field's winding voltage moves down into the small panel; the
-            # main axes belong to the bridge.
+            # main axes belong to the bridge.  Its own gridspec cell is the
+            # PANEL `ax` renders in from here on, so its clearance follows.
             ax, cx = cx, ax
+            _ax_h_over_w = (1.48 * (1.0 / 3.4) if _narrow(width_cm)
+                           else 0.46 * (1.0 / 2.5))
+            # The bridge panel (now `cx`) kept its ORIGINAL cell — the one
+            # `ax` had before the swap.
+            _cx_h_over_w = (1.48 * (1.35 / 3.4) if _narrow(width_cm)
+                            else 0.46 * (1.5 / 2.5))
         for (name, v), col in zip(lines.items(),
                                   ("#e02718", "#1E7A3C", "#2e86ff")):
             ax.plot(x, v, color=col, lw=1.7, label="U%s" % name, zorder=3)
@@ -3167,10 +3338,6 @@ def _voltage_png(wf: Dict[str, Any], width_cm: float = 22.0,
         # entries at "upper right" sat on the tops of the three waveforms.
         _vpk = max(float(np.abs(v).max()) for v in lines.values()) or 1.0
         ax.set_ylim(-_vpk * 1.10, _vpk * 1.10)
-        ax.legend(frameon=False, fontsize=_chart_fs(8.5, width_cm), ncol=3,
-                  loc="upper center",
-                  bbox_to_anchor=(0.5, -0.34 if _pwm is not None else -0.16),
-                  columnspacing=1.6, handlelength=1.4)
         ax.tick_params(labelsize=CHART_TICK_PT)
         ax.grid(color="#ececec", lw=0.6, zorder=0)
         for sp in ("top", "right"):
@@ -3204,9 +3371,6 @@ def _voltage_png(wf: Dict[str, Any], width_cm: float = 22.0,
                    _khz_words(_pwm.get("f_carrier_hz")
                               or _pwm.get("f_carrier_eff_hz"))),
                 width_cm, cols=64), fontsize=_chart_fs(9.5, width_cm), pad=4)
-            cx.legend(frameon=False, fontsize=_chart_fs(8.0, width_cm), ncol=2,
-                      loc="upper center", bbox_to_anchor=(0.5, -0.30),
-                      columnspacing=1.6, handlelength=1.8)
             cx.tick_params(labelsize=CHART_TICK_PT)
             cx.grid(color="#ececec", lw=0.6, zorder=0)
             for sp in ("top", "right"):
@@ -3278,6 +3442,38 @@ def _voltage_png(wf: Dict[str, Any], width_cm: float = 22.0,
         fig.tight_layout(pad=0.4,
                          **({"w_pad": 2.2, "h_pad": 1.8} if _pwm is not None
                             else {}))
+        # THE LEGENDS GO ON LAST (round-5 audit, N2): `tight_layout` above
+        # repositions every axes' rectangle to fit its OWN ticks, labels and
+        # title, but it knows nothing about a legend placed outside the axes
+        # with `bbox_to_anchor` — placed before it, the legend's clearance was
+        # measured against a layout `tight_layout` then moved, and by the time
+        # this figure was actually saved it was overlapping the x-axis label
+        # again.  Placed after, `_legend_clear_of_xlabel` measures the axes
+        # rectangle `tight_layout` actually settled on.
+        _legend_clear_of_xlabel(
+            ax, fig, frameon=False, fontsize=_chart_fs(8.5, width_cm), ncol=3,
+            loc="upper center",
+            bbox_to_anchor=(0.5, _legend_dy(
+                width_cm, _ax_h_over_w,
+                min_pt=46.0 if _pwm is not None else 36.0)),
+            columnspacing=1.6, handlelength=1.4)
+        if _pwm is None and _narrow(width_cm):
+            # `ax` is the TOP panel of the stacked (non-PWM) pair, `bx` the
+            # spectrum below it — the legend's slot is between them.
+            _make_room_below_legend(ax, [bx], fig)
+        if _pwm is not None:
+            _legend_clear_of_xlabel(
+                cx, fig, frameon=False, fontsize=_chart_fs(8.0, width_cm),
+                ncol=2, loc="upper center",
+                bbox_to_anchor=(0.5, _legend_dy(width_cm, _cx_h_over_w,
+                                                min_pt=44.0)),
+                columnspacing=1.6, handlelength=1.8)
+            # `cx` (the bridge panel) always has ANOTHER panel directly below
+            # it in its own column — `bx` (the spectrum) when this is the
+            # narrow 3-row stack, `ax` (the small field-voltage panel) when
+            # it is the 2x2 grid.
+            _make_room_below_legend(cx, [bx if _narrow(width_cm) else ax],
+                                    fig)
         return _finish(fig)
     except Exception as exc:                                # noqa: BLE001
         log.debug("report: voltage chart failed (%s)", exc)
@@ -10961,6 +11157,36 @@ def em_loss_rows(em: Dict[str, Any],
     return lrows
 
 
+def _demag_recompute_clause(dem: Dict[str, Any], *, short: bool = False) -> str:
+    """The I1 recompute-disclosure clause for one duty's demag block, or ``""``.
+
+    Shared by :func:`em_demag_text` (the single "Demagnetisation" paragraph,
+    bound to whichever duty is this report's cover) and :func:`demag_pair_note`
+    (the comparison caption printed under BOTH duties' figures) so the
+    reassurance this clause exists to give — that a duty's demag numbers were
+    recomputed from the stored field and separately checked against the saved
+    summary — reaches the reader for every duty the document prints, not only
+    the one the cover happens to be (round-5 audit, N1: the delivered document
+    printed this for 'peak' and said nothing anywhere for 'rated', although
+    both were recomputed and both carry the flags this reads).
+
+    ``short=True`` gives the one-clause form `demag_pair_note` appends inline;
+    the long form is `em_demag_text`'s own sentence, unchanged.
+    """
+    if not dem.get("recomputed_from_field"):
+        return ""
+    if dem.get("recomputed_verified"):
+        _rd = _numf(dem.get("recomputed_delta_pct")) or 0.0
+        return (("recomputed, agreeing with the saved summary to %s"
+                 % _fmt(_rd, 2, "pt")) if short else
+                (" Recomputed from the stored field, agreeing with the "
+                 "saved summary to %s." % _fmt(_rd, 2, "pt")))
+    return (("recomputed; the saved summary is a different solve, not "
+            "compared") if short else
+            (" Recomputed from the stored field; the saved summary is a "
+             "different solve, not compared."))
+
+
 def em_demag_text(em: Dict[str, Any],
                   corner: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """The demagnetisation sentence, or ``None`` when the run did not model it.
@@ -10998,15 +11224,7 @@ def em_demag_text(em: Dict[str, Any],
     # independent check; where it does not (a genuinely different solve) the
     # note says there is nothing stored to check the recomputed figure
     # against, instead of implying one.
-    _recomp = ""
-    if dem.get("recomputed_from_field"):
-        if dem.get("recomputed_verified"):
-            _rd = _numf(dem.get("recomputed_delta_pct")) or 0.0
-            _recomp = (" Recomputed from the stored field, agreeing with the "
-                      "saved summary to %s." % _fmt(_rd, 2, "pt"))
-        else:
-            _recomp = (" Recomputed from the stored field; the saved summary "
-                      "is a different solve, not compared.")
+    _recomp = _demag_recompute_clause(dem)
     return ("Br kept %s of the magnet volume, energy ((BH)max) lost %s, worst "
             "single element KEPT %s of its Br%s.%s%s%s" % (
                 _fmt(dem.get("br_kept_vol_pct"), 3, "%"),
@@ -11046,6 +11264,14 @@ def demag_pair_note(left: Optional[Dict[str, Any]],
                    _fmt(bh, 2, "%") if bh is not None else "—",
                    _fmt(area, 2, "%") if area is not None else "—",
                    _fmt(worst, 1, "%") if worst is not None else "—"))
+        # N1 (round-5 audit): the recompute disclosure `em_demag_text` prints
+        # reaches only the ONE duty bound to the report's single
+        # "Demagnetisation" paragraph — this caption is the one place BOTH
+        # duties' demag numbers appear together, so it is where the OTHER
+        # duty's identical reassurance has to live too.
+        _clause = _demag_recompute_clause(dem, short=True)
+        if _clause:
+            words += " (%s)" % _clause
         return words, loss, t
     l_words, l_loss, l_t = _one(left)
     r_words, r_loss, r_t = _one(right)

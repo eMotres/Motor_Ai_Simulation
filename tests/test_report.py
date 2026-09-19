@@ -7677,7 +7677,7 @@ class TestL13Review20260919:
                    "air_gap": 0.3}
         em = {"_geoSig": "air_gap:0.3|rotor_outer_radius:32.4|"
                         "stator_inner_radius:32.7"}
-        geo, h, mismatch = R.report_geometry(geo_live, em)
+        geo, h, mismatch, no_snap = R.report_geometry(geo_live, em)
         # THE SNAPSHOT WINS, not the live configuration (page 4's complaint:
         # 32.8 printed beside a 32.4 solve).
         assert geo["rotor_outer_radius"] == 32.4
@@ -7686,15 +7686,42 @@ class TestL13Review20260919:
         assert h is not None and len(h) >= 6
         # …and the mismatch is caught rather than blended in silently.
         assert mismatch is True
+        assert no_snap is False
 
     def test_item1_no_snapshot_falls_back_to_the_live_geometry(self):
         from motor_ai_sim import report as R
 
-        geo, h, mismatch = R.report_geometry(
+        geo, h, mismatch, no_snap = R.report_geometry(
             {"rotor_outer_radius": 32.8}, {})
         assert geo["rotor_outer_radius"] == 32.8
         assert h is None
         assert mismatch is False
+        # F1 (L13 server audit 2026-09-19): a run with no `_geoSig` at all —
+        # the ordinary case, since `_geoSig` is only ever written by the
+        # optimizer's own save path — must say so loudly rather than let the
+        # live configuration pass as a verified snapshot.
+        assert no_snap is True
+
+    def test_item1_no_snapshot_still_prints_a_fingerprint_when_one_exists(self):
+        # F1 follow-up: even with no `_geoSig`, a fingerprint carried by the
+        # electromagnetic data or the mechanical run is not thrown away — §1
+        # must always print SOME geometry hash.
+        from motor_ai_sim import report as R
+
+        em = {"geo_fingerprint": "abc123def456"}
+        geo, h, mismatch, no_snap = R.report_geometry(
+            {"rotor_outer_radius": 32.8}, em,
+            mech={"air_gap": {"rotor_r_mm": 32.4, "bore_r_mm": 32.7}},
+            live_fp="abc123def456")
+        assert h == "abc123def456"
+        assert no_snap is True
+        assert mismatch is False
+        # …and the two dimensions a mechanical run's own air-gap block kept
+        # are recovered, in the GEOMETRY TABLE's own key names — never the
+        # block's — rather than left as the live (possibly edited)
+        # configuration's.  32.8 (F1's original complaint) must not survive.
+        assert geo["rotor_outer_radius"] == 32.4
+        assert geo["air_gap"] == pytest.approx(0.3)
 
     def test_item1_a_matching_live_configuration_is_not_flagged(self):
         from motor_ai_sim import report as R
@@ -7702,8 +7729,9 @@ class TestL13Review20260919:
 
         geo_live = {"rotor_outer_radius": 32.4, "air_gap": 0.3}
         em = {"_geoSig": _geo_sig(geo_live)}
-        geo, h, mismatch = R.report_geometry(geo_live, em)
+        geo, h, mismatch, no_snap = R.report_geometry(geo_live, em)
         assert mismatch is False
+        assert no_snap is False
         assert geo["rotor_outer_radius"] == 32.4
 
     # ── 2 · t_lim reliability ────────────────────────────────────────────────
@@ -8036,8 +8064,287 @@ class TestL13Review20260919:
         from motor_ai_sim import report as R
         from motor_ai_sim import report_docx as RD
 
-        assert "thermal_source_text" in inspect.getsource(R._thermal_page)
-        src = inspect.getsource(R._thermal_page)
-        assert "_pair0_r" in src
-        assert "_pair0_r" in inspect.getsource(RD._thermal_detail)
+        # F6 (L13 server audit 2026-09-19): ONE function builds these lines
+        # for both renderers — no more hand-rolled, diverging loops.
+        assert "thermal_pair_source_lines" in inspect.getsource(R._thermal_page)
+        assert "thermal_pair_source_lines" in inspect.getsource(RD._thermal_detail)
         assert R._secs_words(None) == ""
+
+    def test_f6_a_side_with_no_thermal_record_never_borrows_the_others(self):
+        # F6: the audited document printed the PEAK duty's own operating
+        # point (46 A rms / 184 degC / 43 degC) under the "Left (duty
+        # 'rated')" label, because the rated side carried no separate
+        # thermal-map record of its own (only ever run through the coupled
+        # loop) and the old code fell back to the report's own (peak) entry.
+        from motor_ai_sim import report as R
+
+        th = {"field": {"result": {
+            "point": {"rpm": 1000.0, "I_phase_rms": 46.0,
+                     "coil_temp_c": 184.0, "magnet_temp_c": 43.0}}}}
+        entry = th["field"]
+        rated_side = {"duty": "rated", "th": None,
+                     "coupled": {"coil_temp_c": 149.3, "magnet_temp_c": 108.2}}
+        peak_side = {"duty": "peak", "th": entry["result"],
+                    "coupled": {"coil_temp_c": 184.0, "magnet_temp_c": 43.0}}
+        pair = {"left": rated_side, "right": peak_side}
+        lines = R.thermal_pair_source_lines(pair, th, entry, "peak", True,
+                                            {"mode": "steady"})
+        assert len(lines) == 2
+        left, right = lines
+        assert left.startswith("Left (duty 'rated')")
+        # Never the other side's operating point under this side's label.
+        assert "46 A rms" not in left
+        assert "184" not in left
+        # An honest statement instead — no thermal map of its own, but the
+        # coupled loop's own numbers exist and are pointed to, not invented.
+        assert "No separate thermal map is stored for this duty" in left
+        assert right.startswith("Right (duty 'peak')")
+        assert "46 A rms" in right
+
+    def test_f6_docx_and_pdf_read_the_same_source_lines(self):
+        # Parity test the audit itself asked for: the same set of source
+        # lines in both documents.
+        from motor_ai_sim import report as R
+
+        th = {"coupled": {"result": {"point": {"rpm": 1000.0}}}}
+        entry = th["coupled"]
+        pair = None          # no pair: the single-duty path
+        cp_flat = {"mode": "steady", "converged": True}
+        lines = R.thermal_pair_source_lines(pair, th, entry, "rated", True,
+                                            cp_flat)
+        assert lines == [R.thermal_source_text(th, entry, "rated", True,
+                                               cp_flat)]
+
+
+class TestL13ServerAuditOf20260919:
+    """The L13 SERVER report audit (2026-09-19, model Claude Sonnet 5):
+    state mixing between a stale legacy EM run and a fresh coupled-loop
+    solve for one duty, and the knock-on contradictions it caused.  See
+    the scratchpad audit `l13_server_audit_2026-09-19.md`, findings F1-F11.
+    """
+
+    # ── F2 · fingerprint-consistency check ──────────────────────────────────
+    def test_f2_all_records_agreeing_is_reported_plainly(self):
+        from motor_ai_sim import report as R
+
+        res = {"thermal": {"geometry_fingerprint": "aaa111"},
+              "coupled": {"geometry_fingerprint": "aaa111"},
+              "rotor_stress": {"geometry_fingerprint": "aaa111"}}
+        em = {"geo_fingerprint": "aaa111"}
+        fp, agree, per = R.duty_fingerprint_check(res, em)
+        assert fp == "aaa111"
+        assert agree is True
+        note = R.duty_fingerprint_note(fp, agree, per)
+        assert note == "All records of this duty share geometry aaa111."
+
+    def test_f2_a_stale_em_record_is_flagged_loudly_never_blended(self):
+        # Exactly the audited bug: the EM data is the 2026-09-03 legacy run
+        # (fingerprint 34aa9ba5d105aae1), everything else is the fresh
+        # 2026-09-18 solve (f3b4728f381c5b31).
+        from motor_ai_sim import report as R
+
+        res = {"thermal": {"geometry_fingerprint": "f3b4728f381c5b31"},
+              "coupled": {"geometry_fingerprint": "f3b4728f381c5b31"},
+              "rotor_stress": {"geometry_fingerprint": "f3b4728f381c5b31"},
+              "modes": {"geometry_fingerprint": "f3b4728f381c5b31"},
+              "critical_speeds": {"geometry_fingerprint": "f3b4728f381c5b31"}}
+        em = {"geo_fingerprint": "34aa9ba5d105aae1"}
+        fp, agree, per = R.duty_fingerprint_check(res, em)
+        # The majority (5 fresh records vs 1 stale) decides the winner.
+        assert fp == "f3b4728f381c5b31"
+        assert agree is False
+        note = R.duty_fingerprint_note(fp, agree, per)
+        assert "DIFFERENT geometries" in note
+        assert "Electromagnetic" in note
+        assert "34aa9ba5d105aae1" in note
+        assert fp[:12] in note
+
+    def test_f2_an_unfingerprinted_em_record_is_not_a_clean_bill(self):
+        # Found verifying this fix against the SERVER's own L13 records: the
+        # audited stale 'peak' summary carries NO fingerprint field at all —
+        # no `_geoSig`, no `geo_fingerprint` — so treating "nothing to
+        # disagree with" as agreement silently cleared exactly the record
+        # the audit caught blending a seven-months-stale run.
+        from motor_ai_sim import report as R
+
+        res = {"thermal": {"geometry_fingerprint": "f3b4728f381c5b31"},
+              "coupled": {"geometry_fingerprint": "f3b4728f381c5b31"}}
+        em = {"T_avg_Nm": 8.18, "P_loss_total_W": 686.7}   # no fingerprint at all
+        fp, agree, per = R.duty_fingerprint_check(res, em)
+        assert fp == "f3b4728f381c5b31"
+        assert agree is False
+        note = R.duty_fingerprint_note(fp, agree, per)
+        assert "Electromagnetic" in note
+        assert "no stored fingerprint" in note
+
+    def test_f2_no_em_data_at_all_is_not_flagged(self):
+        # An empty `em` means the duty has no electromagnetic answer to show
+        # at all — nothing is being blended, so this must not trip the check.
+        from motor_ai_sim import report as R
+
+        res = {"thermal": {"geometry_fingerprint": "f3b4728f381c5b31"}}
+        fp, agree, per = R.duty_fingerprint_check(res, {})
+        assert agree is True
+
+    def test_f2_nothing_to_check_against_is_not_a_false_agreement(self):
+        from motor_ai_sim import report as R
+
+        fp, agree, per = R.duty_fingerprint_check({}, {})
+        assert fp is None
+        assert agree is True                    # nothing contradicts
+        assert R.duty_fingerprint_note(fp, agree, per) == ""
+
+    def test_f2_duty_columns_carry_the_fingerprint_flag(self):
+        # `_duty_columns` computes this once, off the exact `em`/`res` every
+        # renderer reads — never a second, possibly-drifting copy.
+        from motor_ai_sim import report as R
+
+        cfg_doc = {"duties": [{"name": "peak", "summary":
+                              {"geo_fingerprint": "OLD", "T_em_avg_Nm": 8.18}}]}
+        with _patch_duty_results_get(
+                R, {"peak": {
+                    "coupled": {"geometry_fingerprint": "NEW",
+                               "magnet_temp_c": 43.31},
+                    "thermal": {"geometry_fingerprint": "NEW"}}}):
+            cols, _owners = R._duty_columns("die", "cfg", cfg_doc, {}, {},
+                                            None)
+        col = cols[0]
+        assert col["fp_agree"] is False
+        assert col["fp"] == "NEW"
+        assert "DIFFERENT geometries" in col["fp_note"]
+
+    # ── F4 · magnet temperature mislabelled "(coupled loop)" ────────────────
+    def test_f4_prefers_the_duty_s_own_current_coupled_record(self):
+        # The audited bug: a stale EM summary's OWN embedded
+        # `coupling.magnet_temp_c` (120, the card's fixed input from a much
+        # older coupled pass) was printed as if it were THIS report's
+        # coupled answer, beside a coupled table showing 43.31.
+        from motor_ai_sim import report as R
+
+        em = {"coupling": {"magnet_temp_c": 120.0}}
+        cp = {"magnet_temp_c": 43.31}
+        rows = R.em_operating_rows(em, {}, {}, None, {}, cp=cp)
+        mag_row = next(r for r in rows if r[2] == "Magnet temperature")
+        assert "43.3" in mag_row[3]
+        assert "120" not in mag_row[3]
+        assert "(coupled loop)" in mag_row[3]
+
+    def test_f4_falls_back_to_the_embedded_value_with_no_current_record(self):
+        from motor_ai_sim import report as R
+
+        em = {"coupling": {"magnet_temp_c": 120.0}}
+        rows = R.em_operating_rows(em, {}, {}, None, {}, cp=None)
+        mag_row = next(r for r in rows if r[2] == "Magnet temperature")
+        assert "120" in mag_row[3]
+
+    # ── F3 · shaft mass/material contradicts the Materials table ────────────
+    def test_f3_a_mismatched_component_material_is_flagged(self):
+        from motor_ai_sim import report as R
+
+        em = {"mass_components": [
+            {"name": "Shaft", "material": "Aluminium_6061",
+             "mass_kg": 0.01, "volume_cm3": 3.9}]}
+        mats = {"shaft": "Steel_42CrMo4_QT"}
+        rows = R.mass_rows(em, mats)
+        shaft_row = next(r for r in rows if r[0] == "Shaft")
+        assert "Aluminium_6061" in shaft_row[1]
+        assert R.FLAG in shaft_row[1]
+        assert "Steel_42CrMo4_QT" in shaft_row[1]
+
+    def test_f3_an_agreeing_material_is_printed_plainly(self):
+        from motor_ai_sim import report as R
+
+        em = {"mass_components": [
+            {"name": "Shaft", "material": "Steel_42CrMo4_QT",
+             "mass_kg": 0.03, "volume_cm3": 3.9}]}
+        mats = {"shaft": "Steel_42CrMo4_QT"}
+        rows = R.mass_rows(em, mats)
+        shaft_row = next(r for r in rows if r[0] == "Shaft")
+        assert shaft_row[1] == "Steel_42CrMo4_QT"
+        assert R.FLAG not in shaft_row[1]
+
+    def test_f3_no_mats_given_behaves_exactly_as_before(self):
+        from motor_ai_sim import report as R
+
+        em = {"mass_components": [
+            {"name": "Shaft", "material": "Aluminium_6061",
+             "mass_kg": 0.01, "volume_cm3": 3.9}]}
+        rows = R.mass_rows(em)
+        assert rows[1][1] == "Aluminium_6061"
+
+    # ── F5 · demag caption vs note vs table ─────────────────────────────────
+    def test_f5_caption_prefers_the_filtered_field_the_note_and_table_use(self):
+        from motor_ai_sim import report as R
+
+        left = {"duty": "rated", "em": {"demag": {"br_worst_pct": 22.6}}}
+        right = {"duty": "peak", "em": {"demag": {"br_worst_pct": 11.7}}}
+        maps = {"demag_min_pct": 19.0}       # the RAW field minimum
+        maps_r = {"demag_min_pct": 59.2}
+        clause = R.em_map_numbers("demag", maps, maps_r,
+                                  left_side=left, right_side=right)
+        assert "22.6" in clause
+        assert "11.7" in clause
+        assert "19" not in clause.split("vs")[0]
+
+    def test_f5_falls_back_to_the_raw_field_with_no_demag_summary(self):
+        from motor_ai_sim import report as R
+
+        maps = {"demag_min_pct": 19.0}
+        maps_r = {"demag_min_pct": 59.2}
+        clause = R.em_map_numbers("demag", maps, maps_r)
+        assert "19" in clause
+        assert "59.2" in clause
+
+    # ── F7 · safety-factor colour bar degenerate when the whole field clears
+    # the fixed cap ───────────────────────────────────────────────────────
+    def test_f7_sf_map_range_never_collapses_above_the_fixed_cap(self):
+        from motor_ai_sim import report as R
+
+        verts = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+        tris = [[0, 1, 2], [1, 3, 2]]
+        # Every element is SAFER than the fixed cap (2x SF_ACCEPT = 4.0) —
+        # the audited rotor's own situation (sf_min 28.3, bar meant to stop
+        # at 4).
+        values = [27.41, 30.0]
+        vmin, vmax = R._map_png(verts, tris, values, label="safety factor",
+                                vmax_fixed=2.0 * R.SF_ACCEPT, reverse=True,
+                                range_only=True)
+        assert vmax == 4.0
+        # Never the degenerate `vmin == vmax` this bug produced — the caption
+        # promises "the bar stops at 4" and the bar must actually span a
+        # range to say so.
+        assert vmin < vmax
+        assert vmin == 0.0
+
+    def test_f7_a_field_that_spans_the_cap_is_unaffected(self):
+        # A normal rotor — some elements below the cap, some above — must
+        # keep reading its own true minimum, not be forced to zero.
+        from motor_ai_sim import report as R
+
+        verts = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+        tris = [[0, 1, 2], [1, 3, 2]]
+        values = [1.5, 6.0]
+        vmin, vmax = R._map_png(verts, tris, values, label="safety factor",
+                                vmax_fixed=2.0 * R.SF_ACCEPT, reverse=True,
+                                range_only=True)
+        assert vmax == 4.0
+        assert vmin == 1.5
+
+
+def _patch_duty_results_get(R, doc):
+    """A context manager patching ``motor_ai_sim.duty_results.get``/
+    ``active_context`` so ``_duty_columns`` reads ``doc`` without a real
+    store on disk."""
+    import contextlib
+    from motor_ai_sim import duty_results as dr
+
+    @contextlib.contextmanager
+    def _cm():
+        orig_get, orig_ctx = dr.get, dr.active_context
+        dr.get = lambda die, cfg: doc
+        dr.active_context = lambda: None
+        try:
+            yield
+        finally:
+            dr.get, dr.active_context = orig_get, orig_ctx
+    return _cm()

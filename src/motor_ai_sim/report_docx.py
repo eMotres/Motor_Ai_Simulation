@@ -705,11 +705,25 @@ def _machine(doc, D: Dict[str, Any]) -> None:
         # report was solved on, printed once.
         _p(doc, "geometry %s — the snapshot every number in this report was "
                 "solved on" % _ghash, size=9, italic=True)
+    elif D.get("geo_no_snapshot"):
+        # F1 (L13 server audit 2026-09-19) — see report._machine_page.
+        _p(doc, "%s live configuration — no geometry snapshot stored with "
+                "this run; the table below is what the die/configuration "
+                "currently reads, not verified against what the run "
+                "actually solved" % R.FLAG, size=9, bold=True, color=WARN)
     if D.get("geo_mismatch"):
         _p(doc, "%s the live configuration has since changed — every table, "
                 "figure and number below is built from the stored snapshot "
                 "above, never from what is open now" % R.FLAG,
            size=9, bold=True, color=WARN)
+    _fp_note = D.get("duty_fp_note") or ""
+    if _fp_note:
+        # F2 (L13 server audit 2026-09-19) — see report._machine_page.
+        if D.get("duty_fp_mismatch"):
+            _p(doc, "%s %s" % (R.FLAG, _fp_note), size=9, bold=True,
+               color=WARN)
+        else:
+            _p(doc, _fp_note, size=9, italic=True)
     _table(doc, R.geometry_rows(_geo, D["wind"], D["slot"], D["em"]),
            header=False, size=10.5,
            widths_cm=[5.2, 2.6, 1.4, 5.2, 2.6, 1.4])
@@ -719,7 +733,7 @@ def _machine(doc, D: Dict[str, Any]) -> None:
            widths_cm=[4.0, 5.4, 14.0])
     # …at what temperature the magnets were taken, and what the winding is
     # insulated with, both in words (user 2026-09-11).
-    _mrows = R.mass_rows(D["em"])
+    _mrows = R.mass_rows(D["em"], D["mats"])
     if len(_mrows) > 2:
         _h(doc, "Masses", 2)
         # THE TABLE FULL WIDTH AND THE PIE UNDER IT, ALSO FULL WIDTH (user
@@ -871,10 +885,17 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
         _p(doc, R.EM_PAGE_UNSOLVED, size=9, bold=True, color=WARN)
         return
     _p(doc, "Source: %s." % D["em_src"], size=9.5, italic=True, color=NOTE)
+    if D.get("duty_fp_mismatch"):
+        # F2 (L13 server audit 2026-09-19) — see report._em_page.
+        _p(doc, "%s %s" % (R.FLAG, D.get("duty_fp_note") or (
+            "this duty's electromagnetic data was solved on a different "
+            "geometry than its thermal/coupled/mechanical records below — "
+            "read this section as a SEPARATE, older machine.")),
+           size=9.5, bold=True, color=WARN)
 
     _h(doc, "Operating point", 2)
     _table(doc, R.em_operating_rows(em, d_duty, D["geo"], D["em_run"],
-                                    D["mats"]),
+                                    D["mats"], cp=_coupled(D)),
            header=False, size=10.5, widths_cm=[4.6, 5.4, 4.6, 5.4])
 
     _h(doc, "Torque, power and voltage", 2)
@@ -984,7 +1005,8 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
         _a, _b = maps.get(key), (maps_r or {}).get(key)
         if _R and (_a or _b):
             if _pair_fig(doc, D, _a, _b, cap,
-                         numbers=R.em_map_numbers(key, maps, maps_r),
+                         numbers=R.em_map_numbers(key, maps, maps_r,
+                                                  left_side=_L, right_side=_R),
                          map_kind="em"):
                 n_fig += 1
                 # UNDER EACH DEMAG MAP (item 6, owner review 2026-09-19):
@@ -1092,26 +1114,10 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
     # reads THIS flattened copy, never `cp` directly.
     _cp_flat = (cp or {}).get("coupling") if isinstance(cp, dict) else None
     _cp_flat = _cp_flat if isinstance(_cp_flat, dict) and _cp_flat else cp
-    _pair0_l = (D.get("pair") or {}).get("left")
-    _pair0_r = (D.get("pair") or {}).get("right")
-    if _pair0_r:
-        for _side0, _lbl0 in ((_pair0_l, "Left"), (_pair0_r, "Right")):
-            _th0 = (_side0 or {}).get("th")
-            _entry0 = (((_th0 or {}).get("field") or (_th0 or {}).get("coupled"))
-                      if _th0 else None)
-            if not _entry0:
-                continue
-            _p(doc, "%s (duty '%s'). %s" % (
-                    _lbl0, _side0.get("duty") or "—",
-                    R.thermal_source_text(
-                        _th0, _entry0, _side0.get("duty"), True,
-                        _side0.get("coupled"))),
-               size=9.5, italic=True, color=NOTE)
-    else:
-        _p(doc, R.thermal_source_text(th, entry, D.get("detail_duty"),
-                                      bool(D.get("th_detail_from_duty")),
-                                      _cp_flat),
-           size=9.5, italic=True, color=NOTE)
+    for _line in R.thermal_pair_source_lines(
+            D.get("pair"), th, entry, D.get("detail_duty"),
+            bool(D.get("th_detail_from_duty")), _cp_flat):
+        _p(doc, _line, size=9.5, italic=True, color=NOTE)
 
     _h(doc, "Boundary conditions", 2)
     for line in R._cooling_words(res.get("cooling") or inner.get("cooling") or {}):

@@ -824,6 +824,18 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
         if vmax_fixed is not None:
             vmax = float(vmax_fixed)
         vmin = float(finite.min())
+        if vmax_fixed is not None and vmin > vmax:
+            # F7 (L13 server audit 2026-09-19): a field entirely SAFER than
+            # the fixed cap — every rotor safety factor above the promised
+            # "bar stops at 4" — left `vmin` (the data's own minimum, e.g.
+            # 27.41) above `vmax` (the fixed 4.0).  `hi = vmax if vmax > vmin
+            # else vmin + 1e-9` below then collapsed the whole bar onto
+            # `vmin`: every tick read the same 27.41, contradicting the
+            # figure's own caption.  The fixed cap IS the top of the scale by
+            # definition, so when the data floor sits above it the map is
+            # uniformly past the cap and the bar keeps the range it
+            # promised, floored at zero (a safety factor is never negative).
+            vmin = 0.0
         _nodal_range: Optional[Tuple[float, float]] = None
         # BANDED, like the viewer: 11 equal steps of the scale, each one flat
         # colour, so a value read off the document lands in the same band as the
@@ -4064,13 +4076,126 @@ def _geo_sig_hash(sig: Any) -> Optional[str]:
     return hashlib.sha1(s.encode("utf-8")).hexdigest()[:10]
 
 
-def report_geometry(geo_live: Dict[str, Any], em: Dict[str, Any]
-                    ) -> Tuple[Dict[str, Any], Optional[str], bool]:
-    """``(geo, hash, mismatch)`` — the geometry every OTHER number in this
-    report was solved on, never the live configuration alone (item 1, owner
-    review 2026-09-19: the geometry table read live ``motor_config.yaml``
-    while the results were a stored snapshot, and the rotor outer radius
-    printed 32.8 mm beside a 32.4 mm solve).
+def _any_fp(d: Any) -> Optional[str]:
+    """Either spelling this build uses for a geometry fingerprint.
+
+    An electromagnetic run's own summary carries ``geo_fingerprint``
+    (``routes.simulation._geometry_fingerprint``); every ``duty_results``
+    kind (thermal/coupled/rotor_stress/modes/critical_speeds/pwm/duty_cycle)
+    carries ``geometry_fingerprint`` — the same value, two names, and nothing
+    in this module ever compared them against each other before (F2, L13
+    server audit 2026-09-19).
+    """
+    if not isinstance(d, dict):
+        return None
+    fp = d.get("geometry_fingerprint") or d.get("geo_fingerprint")
+    return str(fp) if fp else None
+
+
+def duty_fingerprint_check(res: Dict[str, Any], em: Dict[str, Any]
+                           ) -> Tuple[Optional[str], bool,
+                                      List[Tuple[str, Optional[str]]]]:
+    """Whether every record a duty's report leans on was solved on the SAME
+    machine (F1/F2, L13 server audit 2026-09-19: the audited L13 report's
+    electromagnetic tables, the Losses table, the Demagnetisation text and
+    four figures for duty 'peak' came from a seven-months-stale run —
+    different geometry fingerprint, different materials — while the
+    thermal, coupled-loop and mechanical sections of the SAME duty column
+    used the fresh one, with no flag anywhere that two runs were blended).
+
+    ``res`` is the duty's own ``duty_results`` entry.  ``em`` is the
+    ELECTROMAGNETIC data this report actually prints for the duty — the
+    saved duty summary off the configuration yaml, since the ``em`` kind in
+    ``duty_results`` is only a pointer at that same summary
+    (``duty_results.note_em_pointer``), never a second copy of it.
+
+    Returns ``(fp, all_agree, per_kind)``: ``fp`` is the fingerprint most of
+    the records carry (``None`` when nothing here carries one at all, so
+    there is nothing to check); ``all_agree`` is whether every kind that DOES
+    carry a fingerprint matches it; ``per_kind`` is the raw ``(label, fp)``
+    pairs, for the caller to name the odd one out.
+    """
+    em_fp = _any_fp(em)
+    per_kind: List[Tuple[str, Optional[str]]] = [("Electromagnetic", em_fp)]
+    for kind, label in (("thermal", "Thermal"), ("coupled", "Coupled loop"),
+                        ("rotor_stress", "Mechanical"), ("modes", "Modes"),
+                        ("critical_speeds", "Critical speeds"),
+                        ("pwm", "PWM run"), ("duty_cycle", "Duty cycle")):
+        v = (res or {}).get(kind)
+        if isinstance(v, dict) and v:
+            per_kind.append((label, _any_fp(v)))
+    fps = [fp for _n, fp in per_kind if fp]
+    if not fps:
+        return None, True, per_kind
+    counts: Dict[str, int] = {}
+    for fp in fps:
+        counts[fp] = counts.get(fp, 0) + 1
+    winner = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+    all_agree = all(fp == winner for fp in fps)
+    # AN UNFINGERPRINTED EM RECORD IS NOT A CLEAN BILL.  Found empirically
+    # against the SERVER's own L13 records while verifying this fix: the
+    # audited stale 'peak' summary carries no fingerprint of its own at all
+    # — no `_geoSig`, no `geo_fingerprint` — so the loop above had nothing to
+    # disagree with and this returned "all agree" while the electromagnetic
+    # tables were seven months stale.  When there IS electromagnetic data
+    # (``em`` truthy) but it carries no fingerprint, and every OTHER kind
+    # present DOES carry one, that is exactly as unverifiable as a genuine
+    # mismatch and must never print as "all agree".
+    if em_fp is None and em and fps:
+        all_agree = False
+    return winner, all_agree, per_kind
+
+
+def duty_fingerprint_note(fp: Optional[str], all_agree: bool,
+                          per_kind: List[Tuple[str, Optional[str]]]) -> str:
+    """The one §1 line item 1/2 asks for (F1/F2, L13 server audit
+    2026-09-19): every record of this duty shares one geometry, said once —
+    or, when they do not, which ones disagree, loudly, so the mismatch this
+    module used to blend silently is now the first thing a reader sees.
+
+    ``""`` when there is nothing to check (``fp is None``) — a duty with no
+    fingerprinted record at all is item 2's "no snapshot" case, not this
+    one.
+    """
+    if fp is None:
+        return ""
+    short = fp[:12]
+    if all_agree:
+        return "All records of this duty share geometry %s." % short
+    odd = sorted({n for n, f in per_kind if f and f != fp})
+    other_fps = sorted({f for _n, f in per_kind if f and f != fp})
+    # A record with NO fingerprint of its own — the audited stale EM
+    # summary's actual state, found verifying this fix against the server's
+    # own records — is exactly as unverifiable as a genuine mismatch and is
+    # named the same way, not silently dropped from the sentence.
+    unverified = sorted({n for n, f in per_kind if not f})
+    bits = []
+    if odd:
+        bits.append("%s %s geometry %s"
+                    % (", ".join(odd), "carries" if len(odd) == 1 else "carry",
+                       ", ".join(other_fps)))
+    if unverified:
+        bits.append("%s carries no stored fingerprint at all"
+                    % ", ".join(unverified))
+    # PLAIN TEXT — no markup.  Each renderer prepends its own flag/colour
+    # (`report._machine_page` and `report_docx._machine`), the same split
+    # every other loud note in this module already uses between the two
+    # documents' different markup languages.
+    return ("this duty blends records solved on DIFFERENT geometries — %s: "
+            "the rest %s: never read as one machine."
+            % ("; ".join(bits) or "one record", short))
+
+
+def report_geometry(geo_live: Dict[str, Any], em: Dict[str, Any],
+                    mech: Optional[Dict[str, Any]] = None,
+                    report_fp: Optional[str] = None,
+                    live_fp: Optional[str] = None
+                    ) -> Tuple[Dict[str, Any], Optional[str], bool, bool]:
+    """``(geo, hash, mismatch, no_snapshot)`` — the geometry every OTHER
+    number in this report was solved on, never the live configuration alone
+    (item 1, owner review 2026-09-19: the geometry table read live
+    ``motor_config.yaml`` while the results were a stored snapshot, and the
+    rotor outer radius printed 32.8 mm beside a 32.4 mm solve).
 
     ``geo`` is the run's own snapshot, from its saved summary's ``_geoSig``,
     merged onto the live geometry so a key the signature does not track (it
@@ -4079,22 +4204,55 @@ def report_geometry(geo_live: Dict[str, Any], em: Dict[str, Any]
     configuration's own signature differs from the snapshot's — the state a
     report must never blend silently, so the caller prints one loud note and
     keeps using the snapshot rather than the live number.
+
+    ``no_snapshot`` is True whenever ``em`` carries no ``_geoSig`` at all
+    (F1, L13 server audit 2026-09-19 — the follow-up on item 1: ``_geoSig``
+    is only ever written by the optimizer's own save path
+    (``routes.optimization``); an ordinary Simulation-tab run, a coupled-loop
+    run, or anything saved through the family duty routes never stamps one,
+    so this branch used to return ``(geo_live, None, False)`` — no hash, no
+    warning — on every ordinary report, which is exactly the silent fallback
+    item 1 was written to forbid).  When that happens this still recovers
+    what a mechanical run's own ``air_gap`` block kept (the rotor and bore
+    radii — the two dimensions that drift most and the ones the original
+    complaint was about) and still prints a fingerprint, off whichever record
+    carries one, so §1 is never blank; the caller's ``no_snapshot`` note says
+    the rest of the table is the live configuration, unverified.
     """
     snap = _parse_geo_sig((em or {}).get("_geoSig"))
     h = _geo_sig_hash((em or {}).get("_geoSig"))
-    if snap is None:
-        return dict(geo_live or {}), None, False
+    if snap is not None:
+        geo = dict(geo_live or {})
+        geo.update(snap)
+        mismatch = False
+        try:
+            from motor_ai_sim.routes.presets import _geo_sig as _live_geo_sig
+            live_sig = _live_geo_sig(geo_live or {})
+            stored_sig = str((em or {}).get("_geoSig") or "")
+            mismatch = bool(live_sig) and bool(stored_sig) and live_sig != stored_sig
+        except Exception as exc:                                # noqa: BLE001
+            log.debug("report: live geometry signature unavailable (%s)", exc)
+        return geo, h, mismatch, False
     geo = dict(geo_live or {})
-    geo.update(snap)
-    mismatch = False
-    try:
-        from motor_ai_sim.routes.presets import _geo_sig as _live_geo_sig
-        live_sig = _live_geo_sig(geo_live or {})
-        stored_sig = str((em or {}).get("_geoSig") or "")
-        mismatch = bool(live_sig) and bool(stored_sig) and live_sig != stored_sig
-    except Exception as exc:                                    # noqa: BLE001
-        log.debug("report: live geometry signature unavailable (%s)", exc)
-    return geo, h, mismatch
+    air_gap = (mech or {}).get("air_gap") if isinstance(mech, dict) else None
+    if isinstance(air_gap, dict):
+        # THE GEOMETRY TABLE'S OWN KEYS (F1 follow-up, found verifying this
+        # fix against the server's own L13 records): the mechanical run's
+        # ``air_gap`` block names its two radii ``rotor_r_mm``/``bore_r_mm``,
+        # the geometry table names the same two dimensions
+        # ``rotor_outer_radius``/``air_gap`` — writing the block's own key
+        # names into ``geo`` silently changed nothing the table reads, and
+        # "Rotor outer radius" kept printing the live 32.8 mm beside a run
+        # solved at 32.4 mm, reproducing the original complaint verbatim.
+        rotor_r = air_gap.get("rotor_r_mm")
+        bore_r = air_gap.get("bore_r_mm")
+        if rotor_r is not None:
+            geo["rotor_outer_radius"] = rotor_r
+        if rotor_r is not None and bore_r is not None:
+            geo["air_gap"] = bore_r - rotor_r
+    fp = _any_fp(em) or _any_fp(mech) or report_fp
+    mismatch = bool(fp and live_fp and live_fp not in ("nofp", fp))
+    return geo, fp, mismatch, True
 
 
 class _Source:
@@ -6071,7 +6229,7 @@ def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
             res[k] = v
             origin[k] = ("the machine's last %s solve (%s)"
                          % (k.replace("_", " "), why))
-        cols.append(apply_pwm_view({
+        col = apply_pwm_view({
             "duty": name,
             "d": d,
             "em": (d.get("summary") if isinstance(d.get("summary"), dict) else {}),
@@ -6079,7 +6237,16 @@ def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
             "res": res,
             "origin": origin,
             "active": (name == active),
-        }, cfg_doc))
+        }, cfg_doc)
+        # F1/F2 (L13 server audit 2026-09-19): whether every record this duty
+        # leans on — the electromagnetic data above included — was solved on
+        # the same geometry.  Computed once, here, off the SAME `em`/`res`
+        # every renderer reads, so the flag and the numbers it describes can
+        # never drift apart from each other.
+        _fp, _agree, _per = duty_fingerprint_check(res, col.get("em") or {})
+        col["fp"], col["fp_agree"], col["fp_per_kind"] = _fp, _agree, _per
+        col["fp_note"] = duty_fingerprint_note(_fp, _agree, _per)
+        cols.append(col)
     return cols, owners
 
 
@@ -7481,7 +7648,24 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # section 1's table, its hash line and its mismatch note are built from —
     # the run's OWN geometry when it carries one, the live configuration only
     # when no run has ever recorded one.
-    geo_report, geo_hash, geo_mismatch = report_geometry(geo, em)
+    # THE COVER DUTY'S OWN mechanical record, never the machine-level "last
+    # solve" (F1 follow-up, found verifying this against the server's own
+    # records): `me` is whatever this PROCESS solved last, which on a report
+    # built from stored records alone — the normal case — is empty, so the
+    # rotor/bore radii recovered below must come from the same per-duty
+    # record §8's own mechanical section reads.
+    _cov_mech = ((_cov or {}).get("res") or {}).get("rotor_stress") \
+        or me.get("rotor_stress")
+    geo_report, geo_hash, geo_mismatch, geo_no_snapshot = report_geometry(
+        geo, em, mech=_cov_mech, report_fp=report_fp, live_fp=live_fp)
+    # F2 (L13 server audit 2026-09-19): the cover duty's own fingerprint
+    # consistency — whether the electromagnetic data `em` above and every
+    # other record this duty's column carries (thermal, coupled loop,
+    # mechanical, modes, critical speeds) were solved on the same geometry.
+    # `_cov["fp_note"]` was already computed in `_duty_columns`, off the same
+    # `em`/`res` this whole page reads; printed once in §1.
+    duty_fp_note = (_cov or {}).get("fp_note") or ""
+    duty_fp_mismatch = bool(_cov is not None and (_cov.get("fp_agree") is False))
     for _c in cols:
         if _c is not _cov and _c.get("brg") is None:
             _rpm_c = float(_c["d"].get("rpm") or 0.0)
@@ -7757,6 +7941,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "die": die, "cfg": cfg, "die_doc": die_doc, "cfg_doc": cfg_doc, "wf": wf,
         "role": role, "geo": geo, "geo_report": geo_report,
         "geo_hash": geo_hash, "geo_mismatch": geo_mismatch,
+        "geo_no_snapshot": geo_no_snapshot,
+        "duty_fp_note": duty_fp_note, "duty_fp_mismatch": duty_fp_mismatch,
         "wind": wind, "mats": mats, "slot": slot,
         "live_geo": live_geo, "live_fp": live_fp, "report_fp": report_fp,
         "d_duty": d_duty, "em": em, "em_src": em_src, "delta": delta,
@@ -7840,6 +8026,9 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     geo, wind, mats, role = D["geo"], D["wind"], D["mats"], D["role"]
     geo_report = D.get("geo_report") or geo
     geo_hash, geo_mismatch = D.get("geo_hash"), bool(D.get("geo_mismatch"))
+    geo_no_snapshot = bool(D.get("geo_no_snapshot"))
+    duty_fp_note = D.get("duty_fp_note") or ""
+    duty_fp_mismatch = bool(D.get("duty_fp_mismatch"))
     d_duty, em, em_src, delta = D["d_duty"], D["em"], D["em_src"], D["delta"]
     brg_assign, brg, sources = D["brg_assign"], D["brg"], D["sources"]
     em_run, snap, th, me, cp = D["em_run"], D["snap"], D["th"], D["me"], D["cp"]
@@ -7868,7 +8057,10 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     story += _machine_page(st, die_doc, geo_report, wind, mats, slot,
                            brg_assign, brg, em, D.get("ctxs"),
                            report_tag=_rtag, figs=_figs, sec=sec,
-                           geo_hash=geo_hash, geo_mismatch=geo_mismatch)
+                           geo_hash=geo_hash, geo_mismatch=geo_mismatch,
+                           geo_no_snapshot=geo_no_snapshot,
+                           duty_fp_note=duty_fp_note,
+                           duty_fp_mismatch=duty_fp_mismatch)
     from reportlab.platypus import CondPageBreak
     story.append(CondPageBreak(PAGE_H * 0.5))
     story += _duty_overview(st, cols, active_duty)
@@ -7903,7 +8095,8 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                       # but they are solved at THIS duty's operating point and
                       # are read off its own record like everything else.
                       coupled=((_col_of(cols, str(d_duty.get("name") or ""))
-                                or {}).get("res") or {}).get("coupled"))
+                                or {}).get("res") or {}).get("coupled"),
+                      fp_mismatch=duty_fp_mismatch, fp_note=duty_fp_note)
     # From here on a section opens a NEW page only when less than half of the
     # current one is left: with full-width field maps a hard break after each
     # section left a map alone on a page with three quarters of white under it
@@ -8391,7 +8584,10 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
                   figs: Optional[List[int]] = None,
                   sec: Optional[Dict[str, int]] = None,
                   geo_hash: Optional[str] = None,
-                  geo_mismatch: bool = False) -> List[Any]:
+                  geo_mismatch: bool = False,
+                  geo_no_snapshot: bool = False,
+                  duty_fp_note: str = "",
+                  duty_fp_mismatch: bool = False) -> List[Any]:
     from reportlab.platypus import Spacer
 
     out: List[Any] = [_para(section_heading(sec, "machine"), st["h1"])]
@@ -8422,12 +8618,32 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
         # dimension since.
         out.append(_para("geometry %s — the snapshot every number in this "
                          "report was solved on" % geo_hash, st["note"]))
+    elif geo_no_snapshot:
+        # F1 (L13 server audit 2026-09-19): no run carries a `_geoSig` at
+        # all — never printed silently as if the live configuration WERE the
+        # snapshot (that gap is exactly how a 32.8 mm live rotor radius sat
+        # beside a run solved at 32.4 mm with nothing to say so).
+        out.append(_para(
+            f'<font color="{WARN}"><b>{FLAG}</b></font> live configuration '
+            "— no geometry snapshot stored with this run; the table below is "
+            "what the die/configuration currently reads, not verified "
+            "against what the run actually solved", st["body"]))
     if geo_mismatch:
         out.append(_para(
             f'<font color="{WARN}"><b>{FLAG}</b></font> the live configuration '
             "has since changed — every table, figure and number below is "
             "built from the stored snapshot above, never from what is open "
             "now", st["body"]))
+    if duty_fp_note:
+        # F2 (L13 server audit 2026-09-19): whether every record this duty's
+        # report leans on — electromagnetic, thermal, coupled loop,
+        # mechanical — was solved on the same geometry, printed once.
+        if duty_fp_mismatch:
+            out.append(_para(
+                f'<font color="{WARN}"><b>{FLAG}</b></font> ' + duty_fp_note,
+                st["body"]))
+        else:
+            out.append(_para(duty_fp_note, st["note"]))
     rows = geometry_rows(geo, wind, slot, em)
     w = CONTENT_W / 2.0
     out.append(_table(rows, [w * 0.52, w * 0.30, w * 0.18,
@@ -8437,7 +8653,7 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
     mrows = material_rows(mats, em, geo, sec)
     out.append(_table([[r[0], r[1], _para(r[2], st["cell"])] for r in mrows],
                       [110, 150, CONTENT_W - 260], header=True, size=8.8))
-    _mrows = mass_rows(em)
+    _mrows = mass_rows(em, mats)
     if len(_mrows) > 2:
         out.append(_para("Masses", st["h2"]))
         # THE TABLE FULL WIDTH AND THE PIE UNDER IT, AT FULL WIDTH TOO (user
@@ -8788,7 +9004,8 @@ def _steel_card(name: Any) -> Any:
         return None
 
 
-def mass_rows(em: Dict[str, Any]) -> List[List[str]]:
+def mass_rows(em: Dict[str, Any],
+             mats: Optional[Dict[str, Any]] = None) -> List[List[str]]:
     """Every part of the machine and what it weighs.  Header row included.
 
     The cover carries one mass; this is what it is made of (user 2026-09-11).
@@ -8803,6 +9020,15 @@ def mass_rows(em: Dict[str, Any]) -> List[List[str]]:
     both totals by name, instead of one bare "TOTAL" a reader has to reverse-
     engineer against the cover, is what closes the gap the old table only
     footnoted.
+
+    ``mats`` — the configuration's CURRENT material assignment — is optional
+    only for callers that have none to give; every report caller has one.
+    F3 (L13 server audit 2026-09-19): a row's own material used to be printed
+    on trust, and a stale ``em`` summary's shaft (Aluminium_6061, 0.01 kg) sat
+    two tables below a Materials table and a mechanical solve both naming
+    Steel_42CrMo4_QT — an internal contradiction inside one document.  A row
+    whose part is named in ``mats`` and disagrees with it is flagged in place
+    rather than printed as if the two tables agreed.
     """
     comps = _g(em, "mass_components") or []
     rows = [["Part", "Material", "Volume", "Mass", "Share"]]
@@ -8818,9 +9044,24 @@ def mass_rows(em: Dict[str, Any]) -> List[List[str]]:
         v = _numf(c.get("mass_kg") or c.get("mass_modelled_kg"))
         if not v:
             continue
+        material = str(c.get("material") or "")
+        mat_cell = material
+        if mats and material:
+            _bare = str(c.get("name") or "").split("(")[0].split("—")[0]
+            _bare = _bare.strip().lower()
+            for _k, _live_mat in mats.items():
+                if not _live_mat or not _k or str(_k).lower() not in _bare:
+                    continue
+                if str(_live_mat) != material:
+                    # PLAIN TEXT (no markup): this row is shared verbatim by
+                    # both renderers, and the .docx table writer inserts a
+                    # cell's string as-is, with no markup support at all.
+                    mat_cell = ("%s %s current assignment: %s"
+                               % (material, FLAG, _live_mat))
+                break
         rows.append([
             str(c.get("name") or "—"),
-            str(c.get("material") or ""),
+            mat_cell,
             _fmt(c.get("volume_cm3"), 1, "cm³"),
             _fmt(v, 3, "kg"),
             _fmt(100.0 * float(v) / tot, 1, "%") if tot else ""])
@@ -9245,7 +9486,8 @@ def em_constants_note(k3d: Any, drive: str = "sine") -> str:
 
 def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
                       geo: Dict[str, Any], em_run: Optional[Dict[str, Any]],
-                      mats: Dict[str, Any]) -> List[List[str]]:
+                      mats: Dict[str, Any],
+                      cp: Optional[Dict[str, Any]] = None) -> List[List[str]]:
     """The operating point, as the four label/value pairs both documents print.
 
     The electrical frequency is not on every stored summary (older duties carry
@@ -9253,6 +9495,16 @@ def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
     is the magnet temperature: it rides on the RUN's key fields, so the run is
     asked first and the assigned card's own quoted temperature is the fallback,
     said as such and never as a solve input.
+
+    ``cp`` is this duty's OWN, CURRENT ``coupled`` record (F4, L13 server
+    audit 2026-09-19).  An electromagnetic summary saved by an OLDER coupled
+    pass carries its own ``coupling.magnet_temp_c`` embedded inside it — a
+    snapshot of what the loop found THAT day, not what it finds today.  The
+    audited report labelled a stale run's fixed 120 °C card temperature
+    "(coupled loop)" this way, beside a coupled table showing the loop had
+    actually converged at 43 °C.  The live per-duty record, when the caller
+    has one, is read first and only the number embedded inside ``em`` falls
+    back to when it does not.
     """
     I = _g(em, "I_phase_rms_A") or _g(d_duty, "current_arms")
     rpm = _g(em, "rpm") or _g(d_duty, "rpm")
@@ -9262,9 +9514,14 @@ def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
         f_el = float(rpm) / 60.0 * poles / 2.0
     t_mag, t_mag_src = _g(em, "magnet_temp_C"), ""
     if t_mag is None:
-        # A coupled run solved its final pass AT the loop's magnet temperature
-        # — that is the run's own temperature, not the card's (2026-09-13).
-        t_mag = _g(em, "coupling.magnet_temp_c")
+        # THIS DUTY'S OWN, CURRENT coupled record first (F4) — never a value
+        # merely embedded inside a possibly-stale EM summary.
+        t_mag = _g(cp or {}, "magnet_temp_c")
+        if t_mag is None:
+            # A coupled run solved its final pass AT the loop's magnet
+            # temperature — that is the run's own temperature, not the
+            # card's (2026-09-13).
+            t_mag = _g(em, "coupling.magnet_temp_c")
         t_mag_src = " (coupled loop)" if t_mag is not None else ""
     if t_mag is None:
         t_mag = _g(em_run or {}, "key_fields.magnet_temp_c",
@@ -10006,16 +10263,35 @@ def demag_pair_note(left: Optional[Dict[str, Any]],
 
 
 def em_map_numbers(key: str, maps: Dict[str, Any],
-                   other: Optional[Dict[str, Any]]) -> str:
+                   other: Optional[Dict[str, Any]],
+                   left_side: Optional[Dict[str, Any]] = None,
+                   right_side: Optional[Dict[str, Any]] = None) -> str:
     """The ONE number per side that belongs in a paired map's caption.
 
     The worst magnet element on the demagnetisation map and the raw peak on the
     |B| map — both are read off the same arrays the two pictures are drawn
     from, so the caption cannot disagree with either half of its own figure.
+
+    F5 (L13 server audit 2026-09-19): the demag caption used to read
+    ``demag_min_pct`` — the RAW per-element minimum off the field snapshot —
+    while the note printed under the same figure and the section-3 table both
+    read ``br_worst_pct`` off the duty's own (filtered) demag summary: three
+    different "worst element" numbers on one page.  ``left_side``/
+    ``right_side`` are the pair-side dicts ``demag_pair_note`` already reads
+    (each carrying its own ``em.demag``); when they have the filtered figure
+    this caption now agrees with the note and the table instead of the raw
+    field.
     """
     if not other:
         return ""
     if key == "demag":
+        l_worst = _numf(_g((left_side or {}).get("em") or {},
+                           "demag.br_worst_pct"))
+        r_worst = _numf(_g((right_side or {}).get("em") or {},
+                           "demag.br_worst_pct"))
+        if l_worst is not None or r_worst is not None:
+            return pair_number_clause("worst element keeps", l_worst,
+                                      r_worst, 1, "%")
         return pair_number_clause("worst element keeps",
                                   maps.get("demag_min_pct"),
                                   other.get("demag_min_pct"), 1, "%")
@@ -10120,16 +10396,30 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
              drive: str = "sine",
              em_sine: Optional[Dict[str, Any]] = None,
              inverter: Optional[Dict[str, Any]] = None,
-             coupled: Optional[Dict[str, Any]] = None) -> List[Any]:
+             coupled: Optional[Dict[str, Any]] = None,
+             fp_mismatch: bool = False,
+             fp_note: str = "") -> List[Any]:
     out: List[Any] = [_para(section_heading(None, "em"), st["h1"])]
     if not em:
         out.append(_para(EM_PAGE_UNSOLVED, st["warn"]))
         return out
     out.append(_para(f"Source: {em_src}.", st["note"]))
+    if fp_mismatch:
+        # F2 (L13 server audit 2026-09-19): this section's own electromagnetic
+        # data was solved on a DIFFERENT geometry than the thermal, coupled
+        # and mechanical sections of the same duty — printed loudly, right
+        # under the section's own source line, rather than blended in as if
+        # every table below were one build.
+        out.append(_para(
+            f'<font color="{WARN}"><b>{FLAG}</b></font> ' + (fp_note or
+            "this duty's electromagnetic data was solved on a different "
+            "geometry than its thermal/coupled/mechanical records below — "
+            "read this section as a SEPARATE, older machine."),
+            st["body"]))
 
     out.append(_para("Operating point", st["h2"]))
     w = CONTENT_W / 2.0
-    out.append(_table(em_operating_rows(em, d_duty, geo, em_run, mats),
+    out.append(_table(em_operating_rows(em, d_duty, geo, em_run, mats, cp=coupled),
                       [w * 0.46, w * 0.54, w * 0.46, w * 0.54], size=8.8))
 
     out.append(_para("Torque, power and voltage", st["h2"]))
@@ -10273,7 +10563,9 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
         if _R:
             _blk = _fig_pair(st, _a, _b, pair_caption(
                     cap, _L, _R, have=(bool(_a), bool(_b)),
-                    numbers=em_map_numbers(key, maps, maps_r), note=_note,
+                    numbers=em_map_numbers(key, maps, maps_r,
+                                           left_side=_L, right_side=_R),
+                    note=_note,
                     map_kind="em"),
                 max_height=PAIR_MAX_H, lead=lead, figs=figs)
             if _blk is not None:
@@ -10691,6 +10983,62 @@ def thermal_source_text(th: Dict[str, Any], entry: Dict[str, Any],
                       _fmt(_mag, 0, "°C") if _mag is not None else "—"))
     bits.append("Built: %s." % built)
     return " ".join(bits)
+
+
+def thermal_pair_source_lines(pair: Optional[Dict[str, Any]],
+                              th: Dict[str, Any], entry: Dict[str, Any],
+                              em_duty: Optional[str],
+                              detail_from_duty: bool,
+                              cp_flat: Optional[Dict[str, Any]]
+                              ) -> List[str]:
+    """The §6 source paragraph(s): one per side of a rated/peak pair, or one
+    for the report's own duty when there is no pair.
+
+    ONE FUNCTION, BOTH RENDERERS (F6, L13 server audit 2026-09-19).  The PDF
+    and the .docx used to each hand-roll this loop, and diverged on the one
+    case that matters: a side whose own ``_side_thermal`` found no thermal
+    record (a duty that was only ever run through the coupled loop, with no
+    separate "solve the map" call of its own).  The PDF fell back to the
+    REPORT'S OWN entry and printed it under that side's label — the peak
+    duty's 46 A rms / 184 °C quoted as if it were the rated duty's own point
+    — the .docx dropped the paragraph outright, so the delivered document had
+    a full "Left (rated)" paragraph in the PDF and none at all in the Word
+    file, and the one it did print named the wrong duty's numbers.  Neither
+    may attribute another duty's answer to this one, so both renderers now
+    call this function and print exactly what it returns — the same lines,
+    every time.
+    """
+    pair0_l, pair0_r = (pair or {}).get("left"), (pair or {}).get("right")
+    if not pair0_r:
+        return [thermal_source_text(th, entry, em_duty, detail_from_duty,
+                                    cp_flat)]
+    lines: List[str] = []
+    for side0, lbl0 in ((pair0_l, "Left"), (pair0_r, "Right")):
+        duty0 = (side0 or {}).get("duty") or "—"
+        th0 = (side0 or {}).get("th")
+        if isinstance(th0, dict) and th0:
+            # `_side_thermal` already resolves to THIS duty's own thermal
+            # result — a plain "result" dict, never the machine-level
+            # entry-of-entries `th` carries — so it is wrapped the way
+            # `thermal_source_text` reads a machine-level entry, and the
+            # report's own (possibly different) duty is never substituted.
+            entry0 = {"result": th0}
+            lines.append("%s (duty '%s'). %s" % (
+                lbl0, duty0,
+                thermal_source_text({"field": entry0}, entry0, duty0, True,
+                                    (side0 or {}).get("coupled"))))
+            continue
+        cp0 = (side0 or {}).get("coupled")
+        if isinstance(cp0, dict) and cp0:
+            lines.append(
+                "%s (duty '%s'). No separate thermal map is stored for this "
+                "duty — its temperatures are the coupled loop's own (see the "
+                "Coupled-loop table)." % (lbl0, duty0))
+        else:
+            lines.append(
+                "%s (duty '%s'). No thermal map or coupled loop is stored "
+                "for this duty." % (lbl0, duty0))
+    return lines
 
 
 def thermal_temp_rows(res: Dict[str, Any],
@@ -12472,27 +12820,9 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
     # line — the old text described only this report's own duty ("Steady
     # state.") even when the picture beside it is the OTHER duty's map, of a
     # different type (steady vs the limited record's transient snapshot).
-    _pair0_l, _pair0_r = (pair or {}).get("left"), (pair or {}).get("right")
-    if _pair0_r:
-        for _side0, _lbl0 in ((_pair0_l, "Left"), (_pair0_r, "Right")):
-            _th0 = (_side0 or {}).get("th")
-            _entry0 = ((_th0 or {}).get("field") or (_th0 or {}).get("coupled")
-                      if _th0 else None) or (entry if _side0 is _pair0_l
-                                             and not _th0 else None)
-            if not _entry0:
-                continue
-            out.append(_para(
-                "%s (duty '%s'). %s" % (
-                    _lbl0, _side0.get("duty") or "—",
-                    thermal_source_text(
-                        _th0 or th, _entry0,
-                        _side0.get("duty"), bool(_th0), _side0.get("coupled"))),
-                st["note"]))
-    else:
-        out.append(_para(
-            thermal_source_text(th, entry, em_duty, detail_from_duty,
-                                _cp_flat),
-            st["note"]))
+    for _line in thermal_pair_source_lines(pair, th, entry, em_duty,
+                                           detail_from_duty, _cp_flat):
+        out.append(_para(_line, st["note"]))
 
     out.append(_para("Boundary conditions", st["h2"]))
     for line in _cooling_words(res.get("cooling") or inner.get("cooling") or {}):
@@ -13975,7 +14305,9 @@ def rotor_inertia_rows(em: Dict[str, Any]) -> List[List[str]]:
 
 ROTOR_INERTIA_NOTE = (
     "From the CAD polygons of every rotating part; a part marked reference or "
-    "excluded is out of this total, as it is out of the mass.")
+    "excluded is out of this total, as it is out of the mass. TOTAL is the "
+    "run's own unrounded figure, not the sum of the rounded rows above (F9, "
+    "L13 server audit 2026-09-19).")
 
 
 def mech_fit_rows(case: Dict[str, Any], res: Dict[str, Any]) -> List[List[str]]:

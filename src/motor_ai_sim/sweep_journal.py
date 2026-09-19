@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 __all__ = [
     "SweepJournal", "SweepJournalRecord", "SweepResumeInfo",
     "create_sweep_journal", "update_sweep_journal", "finish_sweep_journal",
-    "cancel_sweep_journal", "mark_stale_sweep_journal",
+    "cancel_sweep_journal", "mark_stale_sweep_journal", "save_sweep_journal",
     "load_sweep_journal", "should_resume_sweep",
     "JOURNAL_FILE",
 ]
@@ -222,6 +222,17 @@ def mark_stale_sweep_journal(config_dir: str, reason: str) -> None:
         log.info("marked sweep journal as stale: %s", reason)
     except Exception as e:
         log.debug("could not mark sweep journal as stale: %s", e)
+
+
+def save_sweep_journal(config_dir: str, record: SweepJournalRecord) -> None:
+    """Persist an already-built record verbatim, atomically.
+
+    Used by the resume path to stamp ``resumed_from_restart`` on a loaded
+    journal before re-enqueuing its worker — a plain ``open(...).write()``
+    there defeated the whole point of this module (surviving a restart
+    mid-write) the moment IT got interrupted mid-write.
+    """
+    _atomic_write_json(_journal_path(config_dir), record.to_dict())
 
 
 def load_sweep_journal(config_dir: str) -> Optional[SweepJournalRecord]:

@@ -21,6 +21,8 @@ import HelpTip from '../common/HelpTip';
 import { autoSaveAppliedDesign, appliedSaveLine } from '../../lib/appliedAutoSave';
 import { copyTsv, downloadCsv, downloadXlsx, stampName } from '../../lib/xlsxExport';
 import type { AppliedSaveResult } from '../../lib/appliedAutoSave';
+import { sweepResumeNoticeText } from '../../lib/sweepResumeNotice';
+import type { SweepResumeInfo } from '../../lib/sweepResumeNotice';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -316,7 +318,34 @@ const SweepStudyPanel: React.FC = () => {
   // rate and a bar that creeps INSIDE a point — so the screen visibly lives
   // even when the server number stands still for minutes.
   const liveRef = useRef({ t0: 0, lastDone: -1, lastDoneT: 0 });
+  // Owner 2026-09-19: "нужно, чтобы автоматом это было видно после сбоя" — a
+  // sweep the backend resumed after an API restart (sweep_journal.py /
+  // sweep_resume.py) says so on screen without the user doing anything.  The
+  // backend stamps `resumed_from_restart` on the SAME progress payload this
+  // panel already polls, and keeps stamping it for as long as the resumed
+  // sweep is running — a page reload re-adopts it below, in the mount effect,
+  // exactly like it re-adopts `done`/`total`.
+  const [resumeInfo, setResumeInfo] = useState<SweepResumeInfo | null>(null);
+  // Fire the cross-tab notice ONCE per resume (keyed by its `at` stamp), not
+  // on every 1.5 s poll — the rail (lib/runNotice.ts) is meant for an event,
+  // not a heartbeat.
+  const notifiedResumeAtRef = useRef<string | null>(null);
   const adoptProgress = (st: any) => {
+    const r = st.resumed_from_restart;
+    if (r && typeof r === 'object' && r.at) {
+      const info: SweepResumeInfo = { at: String(r.at), done_before: Number(r.done_before) || 0,
+                                      total: Number(r.total) || 0 };
+      setResumeInfo(info);
+      if (notifiedResumeAtRef.current !== info.at) {
+        notifiedResumeAtRef.current = info.at;
+        try {
+          window.dispatchEvent(new CustomEvent('sim:run-notice',
+            { detail: { message: sweepResumeNoticeText(info) } }));
+        } catch { /* not fatal — the panel's own line still shows it */ }
+      }
+    } else {
+      setResumeInfo(null);
+    }
     const now = Date.now() / 1000;
     const lv = liveRef.current;
     if (!lv.t0) {
@@ -527,6 +556,10 @@ const SweepStudyPanel: React.FC = () => {
 
   const run = async () => {
     setErr(null); setResult(null); setRunning(true); setProgress(null); stopRef.current = false;
+    // A user-started run is never a resume — the backend clears its own
+    // `resumed_from_restart` on a fresh /scan POST, and the panel must not go
+    // on showing last run's resume notice over this one.
+    setResumeInfo(null); notifiedResumeAtRef.current = null;
     // fresh liveness clocks: this run starts NOW as far as the user can see
     liveRef.current = { t0: Date.now() / 1000, lastDone: 0, lastDoneT: Date.now() / 1000 };
     // UNIQUE per launch.  It used to be `sweep_${nPts}`, which two runs of the
@@ -1058,6 +1091,17 @@ const SweepStudyPanel: React.FC = () => {
         return <LinearProgress variant="buffer" value={pct} valueBuffer={buf}
           sx={{ mb: 1.5, height: 4, borderRadius: 2 }} />;
       })()}
+
+      {/* One short line, kept up for as long as the resumed sweep is running
+          (a page reload re-adopts it — see adoptProgress above) — gone once
+          the sweep finishes or the user starts a fresh one. */}
+      {running && resumeInfo && (
+        <Typography component="div" sx={{ fontSize: 11, color: '#60a5fa', mb: 1,
+          display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          {sweepResumeNoticeText(resumeInfo)}
+          <HelpTip title="The API restarted while this sweep was running. The points already computed were kept and reused from cache; the rest are being solved now." />
+        </Typography>
+      )}
 
       {/* …or when every point failed: a sweep whose points all timed out plotted
           NOTHING and said nothing — the user asked "where is the sweep result?"

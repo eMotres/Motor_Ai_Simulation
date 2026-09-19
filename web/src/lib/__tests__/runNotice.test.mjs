@@ -68,6 +68,7 @@ function runNoticeFor(raw) {
   }
   if (!m) return null;
   const kind = /reconnecting and re-solving/i.test(m) || /^duty cycle:/i.test(m)
+    || /^sweep resumed after a restart/i.test(m)
     ? 'info' : 'error';
   const text = m.length > LINE ? `${m.slice(0, LINE - 1).trimEnd()}…` : m;
   return { text, full: m, kind };
@@ -198,6 +199,18 @@ test('a 500 is the API itself failing, and is reported as a failure', () => {
   const n = runNoticeFor('HTTPException: 500: no conducting region in the mesh');
   assert.equal(n.kind, 'error');
   assert.equal(n.text, 'no conducting region in the mesh');
+});
+
+// ── a resumed sweep is progress, not a failure (2026-09-19) ────────────────
+// lib/sweepResumeNotice.ts builds this exact sentence from the backend's
+// `resumed_from_restart` and fires it once on the cross-tab run-notice rail
+// (see sweepResumeNotice.test.mjs for the sentence itself).
+
+test('a resumed-sweep notice reads as info, not as a failure', () => {
+  const n = runNoticeFor(
+    'sweep resumed after a restart at 2:23 PM: 81 of 128 points were already done');
+  assert.equal(n.kind, 'info', 'the backend recovered on its own — this is progress');
+  assert.ok(n.text.startsWith('sweep resumed after a restart'));
 });
 
 test('…and a duty cycle with no feasible ratio is still an answer', () => {

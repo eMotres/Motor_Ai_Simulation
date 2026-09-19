@@ -1511,7 +1511,13 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             log.info("resuming sweep %s: %d/%d points already done",
                      run_id, len(_existing_journal.done_points), _existing_journal.total_points)
         else:
-            # Build request body for journal
+            # Build request body for journal.  MUST carry every solver knob
+            # _scan_worker takes, not just the ones a resume "usually" needs:
+            # a resume that dropped mesh_size_mm/hi_fidelity/demag/etc back to
+            # this function's defaults would silently solve the remaining
+            # points with different physics than the ones already cached —
+            # same bug class as a sweep reading its geometry from the wrong
+            # source, just for solver settings instead.
             _req_body = {
                 "variables": [{"name": v["name"], "min": v["min"], "max": v["max"],
                               "mode": v.get("mode", "optimize"), "step": v.get("step", 0)}
@@ -1522,6 +1528,14 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 "max_geometries": max_geom,
                 "coil_temp_c": coil_temp_c,
                 "seed": seed,
+                "mesh_size_mm": mesh_size_mm, "min_size_mm": min_size_mm,
+                "pole_copy": pole_copy, "torque_filter": torque_filter,
+                "n_sectors": n_sectors, "gap_layers": gap_layers,
+                "end_winding": end_winding, "rotor_eddy": rotor_eddy,
+                "hi_fidelity": hi_fidelity, "structured_gap": structured_gap,
+                "airgap_macro": airgap_macro, "iron_template": iron_template,
+                "geo_mesh": geo_mesh, "element_order": element_order,
+                "demag": demag, "with_baseline": with_baseline,
             }
             _total_pts = len(_enumerate_geometries(variables, int(max_geom), n_opt=4, seed=seed)) * len(operating_points)
             if with_baseline:
@@ -1674,10 +1688,17 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 # total for the whole run.
                 _scan_state["done"] = n_cached + n_rejected
                 _scan_state["points"] = [p for p in points if p is not None]   # instant plot
-        # SWEEP JOURNAL: mark all prefilled/rejected points as done
+        # SWEEP JOURNAL: mark all prefilled/rejected points as done — by their
+        # ACTUAL task index (wherever `points[i]` got filled above), not by
+        # `range(n_cached + n_rejected)`: a cache hit is rarely the first N
+        # tasks in the list (the queue is sorted by current/γ/geometry, not by
+        # cache membership), so range() stamped the wrong indices as done and
+        # `resumed_from_restart.done_before` under-reported what was actually
+        # already on disk.
         if _sweep_journal_record:
-            for i in range(n_cached + n_rejected):
-                _sweep_journal.update_sweep_journal(_config_dir_o(), str(run_id), i)
+            for i, _p in enumerate(points):
+                if _p is not None:
+                    _sweep_journal.update_sweep_journal(_config_dir_o(), str(run_id), i)
             # Update the progress state with resume info if this is a resume
             if _resumed_info and _scan_owns(run_id):
                 with _scan_lock:
@@ -2016,7 +2037,12 @@ def scan_designs(req: ScanRequest):
                             "cached": 0,
                             "ts_start": _t_scan.time(),
                             "workers": int(_scan_worker_count()),
-                            "s_per_eval": float(_rate0.get("s_per_eval", 0.0) or 0.0)})
+                            "s_per_eval": float(_rate0.get("s_per_eval", 0.0) or 0.0),
+                            # A fresh, user-started run is NOT a resume — clear
+                            # whatever a previous resumed run left here, or the
+                            # panel would keep showing "sweep resumed after a
+                            # restart" on a run nobody restarted anything for.
+                            "resumed_from_restart": None})
     # Stage 3: the worker runs in a fresh thread, whose context is empty — bind
     # it to THIS caller's workspace so the campaign it drives, the evals it
     # spawns and the stores it writes are all that caller's.
@@ -2501,14 +2527,38 @@ def _load_descent_state() -> None:
         if isinstance(blob, dict):
             _backfill_point_metrics(blob.get("points") or [])
             _descent_state.update(blob)
+            # A checkpoint saved with running=True was written WHILE a worker
+            # thought it was still going — every NORMAL finish (or cancel)
+            # writes running=False together with its final phase/result in the
+            # SAME save (see the `finally` blocks in _auto_worker /
+            # _screen_worker / the descent worker), so running=True here can
+            # only mean the process that owned it never got to finish —
+            # a restart cut it off mid-run.  2026-09-19 (production): an
+            # interrupted Ø200 descent kept reading "done" after a restart —
+            # this must never be silently presented as a normal finish.
+            was_running = bool(blob.get("running"))
             _descent_state["running"] = False   # a reloaded run is not in flight
             _descent_state["cancel"] = False
-            log.info("restored last optimization from %s", p)
+            _descent_state["interrupted_by_restart"] = (
+                {"at": datetime.utcnow().isoformat() + "Z",
+                 "n_evals": blob.get("n_evals"), "iter": blob.get("iter"),
+                 "phase_at_interrupt": blob.get("phase")}
+                if was_running else None)
+            # Sync the disk-checkpoint watermark to what was JUST loaded, so
+            # the first `/auto/status` poll's `_refresh_descent_state_from_disk`
+            # does not treat this same file as a brand-new checkpoint and
+            # re-derive `running` from `fresh` (a 5-minute window where a
+            # genuinely-dead run could read `running: true` again right after
+            # this function had already, correctly, set it False).
+            try:
+                _descent_disk_mtime[0] = _os_o.path.getmtime(p)
+            except Exception:
+                pass
+            log.info("restored last optimization from %s%s", p,
+                     " (was interrupted mid-run, not finished)" if was_running else "")
     except Exception as _e:   # noqa: BLE001
         log.warning("could not restore descent state: %s", _e)
 
-
-_load_descent_state()   # repopulate at import (startup)
 
 # mtime of the checkpoint the in-memory state was last taken from (per workspace)
 _descent_disk_mtime = _WSP.ws_list("optimization.descent_disk_mtime",
@@ -2519,6 +2569,12 @@ _descent_disk_mtime = _WSP.ws_list("optimization.descent_disk_mtime",
 # _refresh_descent_state_from_disk.
 _descent_external = _WSP.ws_list("optimization.descent_external",
                                  seed=lambda: [False])
+
+# MUST run after _descent_disk_mtime exists: _load_descent_state syncs it to
+# the checkpoint's own mtime so the FIRST /auto/status poll's
+# _refresh_descent_state_from_disk does not re-process the same file as a
+# brand-new checkpoint (see the comment inside _load_descent_state).
+_load_descent_state()   # repopulate at import (startup)
 
 
 def _refresh_descent_state_from_disk() -> None:
@@ -2554,6 +2610,15 @@ def _refresh_descent_state_from_disk() -> None:
                     "the optimizer process stopped without finishing — its "
                     "checkpoint went silent. The numbers shown are the last "
                     "generation it completed, not a final result.")
+            # Same rule as _load_descent_state: a run that went silent without
+            # a normal finish must not be readable as "done" by whoever polls
+            # phase/n_evals alone.
+            if not _descent_state.get("interrupted_by_restart"):
+                _descent_state["interrupted_by_restart"] = {
+                    "at": datetime.utcnow().isoformat() + "Z",
+                    "n_evals": _descent_state.get("n_evals"),
+                    "iter": _descent_state.get("iter"),
+                    "phase_at_interrupt": _descent_state.get("phase")}
             log.warning("adopted optimizer run declared dead: checkpoint %s "
                         "silent for %.0f s", p, _t.time() - m)
         return
@@ -3868,6 +3933,10 @@ def descent_start(req: DescentRequest):
                                "boundary": [], "walk_round": 1, "converged": False,
                                "range_events": [],   # auto-expansions of pinned variables (info feed)
                                "seeded_from_surrogate": False,
+                               # A fresh, user-started run was not interrupted by
+                               # anything — clear whatever a previous crashed run
+                               # left stamped here.
+                               "interrupted_by_restart": None,
                                "walk_rounds": (max_rounds if auto_expand else 1),
                                # Eval parameters this run used — pinned to the result so applying
                                # a point can RESTORE them into the Simulation tab (else re-running
@@ -6153,6 +6222,9 @@ def auto_start(req: AutoOptRequest, request: Request):
             "phase": "starting", "points": [], "grad": {}, "mtpa_gamma_deg": None,
             "variables": [], "boundary": [], "walk_round": 1, "walk_rounds": 1,
             "converged": False, "range_events": [], "seeded_from_surrogate": False,
+            # A fresh, user-started run was not interrupted by anything —
+            # clear whatever a previous crashed run left stamped here.
+            "interrupted_by_restart": None,
             # Pinned so applying the result RESTORES the eval settings into the
             # Simulation tab — else re-running the Sim would not reproduce it.
             "eval_params": {
@@ -6263,6 +6335,12 @@ def auto_status():
         "pareto": pareto,
         "verdict": verdict,
         "error": st.get("error"),
+        # Set only when the state shown was adopted from a checkpoint written
+        # WHILE a worker thought it was still going, with nothing to finish it
+        # since (see _load_descent_state) — a restart cut the run off, and
+        # `phase`/`best`/`n_evals` above are its last completed generation,
+        # not a finished result.  2026-09-19: never let this read as "done".
+        "interrupted_by_restart": st.get("interrupted_by_restart"),
         "progress_channel": "/api/optimization/descent/progress",
     }
 

@@ -125,8 +125,11 @@ export function runNoticeFor(raw: string | null | undefined): RunNotice | null {
   // be the panel calling a result a failure.  The prefix is written by
   // `coupledApi.coupledRegimeNotice`, so the classification is a contract
   // between two modules and not a guess at prose.
+  // A resumed sweep (2026-09-19: lib/sweepResumeNotice.ts) is progress being
+  // reported, same as the retry/duty-cycle lines above it — not a failure.
   const kind: RunNoticeKind =
     /reconnecting and re-solving/i.test(m) || /^duty cycle:/i.test(m)
+    || /^sweep resumed after a restart/i.test(m)
       ? 'info' : 'error';
 
   const text = m.length > LINE ? `${m.slice(0, LINE - 1).trimEnd()}…` : m;

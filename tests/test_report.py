@@ -1603,7 +1603,11 @@ def test_h3_the_review_fixes_of_2026_09_14():
          "note": "measured copper section 1080 mm2 x stack x k_end 1.287"},
         {"name": "c", "material": "NdFeB", "mass_kg": 12.634}]}
     rows = R.mass_rows(em)
-    assert rows[-1][0] == "TOTAL" and "27.457" in rows[-1][3]
+    # ITEM 7 (owner review 2026-09-19): the TOTAL row names what it is —
+    # the mass every N·m/kg divides by — so it cannot be read as the "full
+    # mass with shaft" row the review asked for beside it.
+    assert rows[-1][0] == "TOTAL — mass used for N·m/kg"
+    assert "27.457" in rows[-1][3]
     assert R.mass_total_note(em) == "", "a gram apart is not worth a sentence"
     heavy = dict(em, mass_total_kg=26.0)
     assert "27.458" in R.mass_total_note(heavy)
@@ -3686,7 +3690,11 @@ class TestAuditV3:
         th_src = inspect.getsource(R._thermal_page)
         mc_src = inspect.getsource(R._machine_page)
         assert "_loss_pie_png" in em_src and "LOSS_PIE_CAPTION" in em_src
-        assert "_temp_bars_png" in th_src and "TEMP_BARS_CAPTION" in th_src
+        # ITEM 4 (owner review 2026-09-19): the caption is no longer the bare
+        # constant — a limited record reads "transient", not "steady-state" —
+        # so the page now calls `temp_bars_caption_with_duty`, which is built
+        # from TEMP_BARS_CAPTION rather than quoting it by name here.
+        assert "_temp_bars_png" in th_src and "temp_bars_caption_with_duty" in th_src
         assert "_heat_waterfall_png" in th_src
         assert "heat_chart_caption" in th_src
         assert "MASS_PIE_CAPTION" in mc_src
@@ -7650,4 +7658,386 @@ class TestTimeToTheLimit:
 
         for s in (0.83, 9.9, 10.0, 48.2, 59.6, 60.0, 125.0, 160.2, 3661.0):
             assert R._secs_words(s) == fmt_seconds(s), s
+
+
+class TestL13Review20260919:
+    """The twelve findings of the owner + Codex review of the CIANO28 85
+    20SW1200 / L13 client report (2026-09-19), one test per item.  Fixtures
+    below are shaped exactly like the die's own stored records (rated: coil
+    149.3 / magnets 108-109 °C, steady; peak: mode 'limited', t_lim 24.4 s
+    from cold, coil 200 / magnets 45.2 °C) so a change here is pinned against
+    real numbers, not invented ones.
+    """
+
+    # ── 1 · geometry snapshot ────────────────────────────────────────────────
+    def test_item1_geometry_reads_the_stored_snapshot_not_the_live_config(self):
+        from motor_ai_sim import report as R
+
+        geo_live = {"rotor_outer_radius": 32.8, "stator_inner_radius": 33.1,
+                   "air_gap": 0.3}
+        em = {"_geoSig": "air_gap:0.3|rotor_outer_radius:32.4|"
+                        "stator_inner_radius:32.7"}
+        geo, h, mismatch = R.report_geometry(geo_live, em)
+        # THE SNAPSHOT WINS, not the live configuration (page 4's complaint:
+        # 32.8 printed beside a 32.4 solve).
+        assert geo["rotor_outer_radius"] == 32.4
+        assert geo["stator_inner_radius"] == 32.7
+        assert geo["air_gap"] == 0.3
+        assert h is not None and len(h) >= 6
+        # …and the mismatch is caught rather than blended in silently.
+        assert mismatch is True
+
+    def test_item1_no_snapshot_falls_back_to_the_live_geometry(self):
+        from motor_ai_sim import report as R
+
+        geo, h, mismatch = R.report_geometry(
+            {"rotor_outer_radius": 32.8}, {})
+        assert geo["rotor_outer_radius"] == 32.8
+        assert h is None
+        assert mismatch is False
+
+    def test_item1_a_matching_live_configuration_is_not_flagged(self):
+        from motor_ai_sim import report as R
+        from motor_ai_sim.routes.presets import _geo_sig
+
+        geo_live = {"rotor_outer_radius": 32.4, "air_gap": 0.3}
+        em = {"_geoSig": _geo_sig(geo_live)}
+        geo, h, mismatch = R.report_geometry(geo_live, em)
+        assert mismatch is False
+        assert geo["rotor_outer_radius"] == 32.4
+
+    # ── 2 · t_lim reliability ────────────────────────────────────────────────
+    def _ttl_block(self, resid_pct):
+        return {
+            "within_limits": False, "time_to_limit_s": 24.411,
+            "limiting_part": "winding", "limits_c": {"winding": 200.0},
+            "parts": [{"part": "winding", "quantity": "the winding hot spot",
+                       "limit_c": 200.0, "reaches": True,
+                       "time_to_limit_s": 24.411}],
+            "starts": {"cold": {"time_to_limit_s": 24.411,
+                                "parts": [{"part": "winding",
+                                           "time_to_limit_s": 24.411}]}},
+            "network": {"available": True, "worst_residual_W": 201.8361,
+                       "worst_residual_pct_of_losses": resid_pct}}
+
+    def test_item2_residual_above_threshold_reads_preliminary(self):
+        from motor_ai_sim import report as R
+
+        blk = self._ttl_block(20.548)
+        row = R.time_to_limit_words({"time_to_limit": blk})
+        assert "preliminary estimate (network residual" in row
+        assert "of losses)" in row
+        clause = R.time_to_limit_clause({"time_to_limit": blk}, "winding")
+        assert "preliminary estimate (network residual" in clause
+
+    def test_item2_residual_below_threshold_reads_the_plain_figure(self):
+        from motor_ai_sim import report as R
+
+        blk = self._ttl_block(3.2)
+        row = R.time_to_limit_words({"time_to_limit": blk})
+        assert "preliminary estimate" not in row
+        assert "network residual" in row and "3.2 % of losses" in row
+
+    def test_item2_the_section_8_clause_carries_the_same_residual_on_a_limited_duty(self):
+        from motor_ai_sim.report import duty_warnings
+
+        ctx = {"duty": "peak", "winding_temp_c": 200.0, "winding_limit_c": 200.0,
+              "hot_spot_c": 200.0, "coupled_mode": "limited",
+              "winding_limit_note": "class N per IEC 60085",
+              "time_to_limit": self._ttl_block(20.548)}
+        ws = {w["rule"]: w for w in duty_warnings(ctx)}
+        assert "preliminary estimate (network residual" in ws[
+            "winding_temperature"]["note"]
+
+    # ── 3 · transient vs steady heat budget ──────────────────────────────────
+    def test_item3_the_limited_budget_is_one_line_not_a_steady_balance(self):
+        from motor_ai_sim import report as R
+
+        cp = {"mode": "limited", "limited": {"t_cold_s": 24.411}}
+        text = R.transient_budget_fallback_text(cp)
+        assert text == ("transient state at t = 24.4 s — no steady heat "
+                        "balance; stored power not resolved")
+
+    def test_item3_a_steady_record_is_untouched(self):
+        from motor_ai_sim import report as R
+
+        assert R.coupled_mode({"mode": "steady"}) == "steady"
+        assert R.coupled_mode(None) == "steady"
+
+    def test_item3_the_thermal_page_drops_the_steady_table_when_limited(self):
+        import inspect
+        from motor_ai_sim import report as R
+
+        src = inspect.getsource(R._thermal_page)
+        assert "_limited_budget" in src
+        assert "transient_budget_fallback_text" in src
+
+    # ── 4 · captions ─────────────────────────────────────────────────────────
+    def test_item4_rated_caption_is_steady_state(self):
+        from motor_ai_sim import report as R
+
+        cap = R.temp_bars_caption_with_duty(None, False, None)
+        assert cap.startswith("Steady-state coupled temperature.")
+        assert R.thermal_map_caption_with_duty(None, False, None) \
+            == R.THERMAL_MAP_CAPTION
+
+    def test_item4_limited_peak_caption_is_transient_at_t(self):
+        from motor_ai_sim import report as R
+
+        cap = R.temp_bars_caption_with_duty(None, True, 24.411)
+        assert "Transient temperature at the winding limit, t = 24.4 s" in cap
+        assert ("map shape from the last solved pass, translated to the "
+               "node temperatures") in cap
+        mcap = R.thermal_map_caption_with_duty(None, True, 24.411)
+        assert "Transient temperature at the winding limit, t = 24.4 s" in mcap
+        assert "translated to the node temperatures" in mcap
+
+    def test_item4_a_paired_page_captions_each_side_by_its_own_state(self):
+        from motor_ai_sim import report as R
+
+        left = {"duty": "rated", "coupled": {"mode": "steady"}}
+        right = {"duty": "peak", "coupled": {
+            "mode": "limited", "limited": {"t_cold_s": 24.411}}}
+        cap = R.paired_thermal_caption(R.thermal_map_caption_with_duty,
+                                       left, right)
+        assert cap.startswith("Left: %s" % R.THERMAL_MAP_CAPTION)
+        assert "Right: Transient temperature at the winding limit, t = 24.4 s" \
+            in cap
+
+    # ── 5 · eddy not settled ─────────────────────────────────────────────────
+    def test_item5_not_settled_capped_flags_the_section_8_row(self):
+        from motor_ai_sim.report import duty_warnings
+
+        ctx = {"duty": "peak", "eddy_settled": False, "eddy_capped": True,
+              "eddy_settle_residual": 0.0226, "eddy_settle_tol": 0.02}
+        ws = {w["rule"]: w for w in duty_warnings(ctx)}
+        row = ws["eddy_not_settled"]
+        assert row["level"] == "info"
+        assert "not settled / capped" in row["quantity"]
+        assert "0.0226" in row["note"] and "0.02" in row["note"]
+
+    def test_item5_a_settled_run_raises_no_row(self):
+        from motor_ai_sim.report import duty_warnings
+
+        ws = {w["rule"]: w for w in duty_warnings(
+            {"duty": "rated", "eddy_settled": True})}
+        assert "eddy_not_settled" not in ws
+        # …and a record that never carried the key (an older run) stays silent
+        # too — absence is not a finding.
+        ws2 = {w["rule"]: w for w in duty_warnings({"duty": "rated"})}
+        assert "eddy_not_settled" not in ws2
+
+    def test_item5_the_loss_table_carries_the_same_status(self):
+        import inspect
+        from motor_ai_sim import report as R
+
+        src = inspect.getsource(R.em_compare_rows)
+        assert "eddy_settled" in src and "eddy currents" in src
+
+    # ── 6 · demag per map ─────────────────────────────────────────────────────
+    def test_item6_each_side_prints_its_own_demag_numbers(self):
+        from motor_ai_sim import report as R
+
+        rated_dem = {"br_kept_vol_pct": 99.54, "loss_pct": 0.46,
+                    "bh_loss_pct": 0.66, "br_worst_pct": 11.7,
+                    "area_derated_pct": 2.16}
+        peak_dem = {"br_kept_vol_pct": 99.934, "loss_pct": 0.066,
+                   "bh_loss_pct": 0.095, "br_worst_pct": 11.7,
+                   "area_derated_pct": 0.32}
+        left = {"duty": "rated", "em": {"demag": rated_dem},
+               "coupled": {"magnet_temp_c": 109.0}}
+        right = {"duty": "peak", "em": {"demag": peak_dem},
+                "coupled": {"magnet_temp_c": 45.2}}
+        note = R.demag_pair_note(left, right)
+        assert "duty 'rated': magnets 109" in note
+        assert "duty 'peak': magnets 45" in note
+        assert "Br lost 0.46 %" in note and "Br lost 0.07 %" in note
+        assert "affected area 2.16 %" in note and "affected area 0.32 %" in note
+        # ONE-CLAUSE EXPLANATION when one duty's mean loss is clearly larger.
+        assert "rated worse: magnets 109" in note
+
+    def test_item6_no_demag_block_prints_nothing(self):
+        from motor_ai_sim import report as R
+
+        assert R.demag_pair_note({"duty": "rated", "em": {}}, None) == ""
+
+    def test_item6_the_demag_map_shares_one_colour_scale(self):
+        """The one exception to 'each side its own scale' (item 6)."""
+        import inspect
+        from motor_ai_sim import report as R
+
+        src = inspect.getsource(R.em_maps_pair)
+        assert "demag" in src and "range_only" in src
+
+    # ── 7 · mass ─────────────────────────────────────────────────────────────
+    def test_item7_the_cover_mass_names_only_the_parts_actually_summed(self):
+        from motor_ai_sim import report as R
+
+        em = {"mass_total_kg": 0.367, "mass_active_kg": 0.367,
+             "mass_components": [
+                 {"name": "Stator core (20SW1200)", "mass_kg": 0.126,
+                  "counted": True},
+                 {"name": "Copper windings (Cu)", "mass_kg": 0.107,
+                  "counted": True},
+                 {"name": "Magnets (F52SH_120C)", "mass_kg": 0.07,
+                  "counted": True},
+                 {"name": "Rotor back-iron (20SW1200)", "mass_kg": 0.064,
+                  "counted": True},
+                 {"name": "Shaft (Steel_42CrMo4_QT) — customer-supplied",
+                  "mass_kg": 0, "mass_modelled_kg": 0.03, "counted": False,
+                  "state": "reference"}]}
+        words = R.mass_composition_words(em)
+        # NO "band" — this machine has none (item 7's own complaint).
+        assert "band" not in words
+        assert "Stator core" in words and "Copper windings" in words
+        # THE SHAFT IS NAMED AS EXCLUDED, never silently folded in.
+        assert "excludes Shaft" in words
+
+    def test_item7_the_masses_table_names_full_mass_separately(self):
+        from motor_ai_sim import report as R
+
+        em = {"mass_total_kg": 0.367, "mass_components": [
+            {"name": "Stator core", "mass_kg": 0.126},
+            {"name": "Copper windings", "mass_kg": 0.107},
+            {"name": "Magnets", "mass_kg": 0.07},
+            {"name": "Rotor back-iron", "mass_kg": 0.064},
+            {"name": "Shaft — customer-supplied", "mass_kg": 0,
+             "mass_modelled_kg": 0.03, "counted": False,
+             "state": "reference"}]}
+        rows = R.mass_rows(em)
+        labels = [r[0] for r in rows]
+        assert "TOTAL — mass used for N·m/kg" in labels
+        total_row = next(r for r in rows
+                         if r[0] == "TOTAL — mass used for N·m/kg")
+        assert "0.367" in total_row[3]
+        full_row = next(r for r in rows
+                        if r[0] == "Full mass, incl. reference/excluded parts")
+        assert "0.397" in full_row[3]
+        # …and the shares above sum to THAT row, not to the one used for
+        # N·m/kg — checked against the row's own printed 100 %.
+        assert full_row[4] == "100 %"
+
+    # ── 8 · band not installed ───────────────────────────────────────────────
+    def test_item8_a_zero_thickness_sleeve_is_not_installed(self):
+        from motor_ai_sim import report as R
+
+        mats = {"sleeve": "M40X_UD_60"}
+        geo = {"sleeve_thickness": 0}
+        rows = R.material_rows(mats, {}, geo, {})
+        row = next(r for r in rows if r[0] == "Retaining sleeve")
+        assert row[2] == "not installed — sleeve thickness is 0 in this geometry"
+        assert "hoop-wound" not in row[2]
+
+    def test_item8_a_real_sleeve_still_reads_installed(self):
+        from motor_ai_sim import report as R
+
+        rows = R.material_rows({"sleeve": "M40X_UD_60"}, {},
+                               {"sleeve_thickness": 1.2}, {})
+        row = next(r for r in rows if r[0] == "Retaining sleeve")
+        assert row[2] == "hoop-wound carbon fibre"
+
+    # ── 9 · retention text ───────────────────────────────────────────────────
+    def test_item9_no_sleeve_no_retention_claim(self):
+        from motor_ai_sim import report as R
+
+        case = {"parts": {"rotor": {}}, "sf_min_part": "rotor",
+               "interfaces": {"magnet_rotor": {"type": "separation",
+                                               "open_fraction": 0.689,
+                                               "lift_off": True}}}
+        words = R.retention_words_case(case)
+        assert "does not confirm magnet retention and the torque path" in words
+        assert "contact opening 69 %" in words
+        assert "retained by the sleeve" not in words
+
+    def test_item9_a_real_sleeve_still_carries_the_original_policy(self):
+        from motor_ai_sim import report as R
+
+        case = {"parts": {"rotor": {}, "sleeve": {"safety_factor": 1.87}},
+               "interfaces": {"sleeve_magnet": {"type": "separation",
+                                                "open_fraction": 0.0}}}
+        assert R.retention_words_case(case) == R.ROTOR_BRIDGE_POLICY
+
+    def test_item9_the_rotor_row_uses_the_dynamic_sentence(self):
+        import inspect
+        from motor_ai_sim import report as R
+
+        assert "retention_words_case" in inspect.getsource(R.mech_compare_rows)
+        assert "retention_words_case" in inspect.getsource(R.mech_percentile_text)
+        assert "retention_words_ctx" in inspect.getsource(R.rotor_bridge_note)
+
+    # ── 10 · tolerance row ───────────────────────────────────────────────────
+    def test_item10_limited_unconverged_prints_not_applicable(self):
+        from motor_ai_sim import report as R
+
+        rec = {"mode": "limited", "converged": False}
+        assert R.tolerance_words(rec, 2.0) == "not applicable — stopped at the limit"
+
+    def test_item10_a_converged_or_steady_record_prints_the_number(self):
+        from motor_ai_sim import report as R
+
+        assert R.tolerance_words({"mode": "steady"}, 2.0) == "± 2.0"
+        assert R.tolerance_words({"mode": "limited", "converged": True}, 5.0) \
+            == "± 5.0"
+        assert R.tolerance_words({"mode": "steady"}, None) is None
+
+    # ── 11 · 409 °C is not a converged steady state ─────────────────────────
+    def test_item11_the_steady_state_would_be_figure_is_caveated(self):
+        from motor_ai_sim import report as R
+
+        rec = {"mode": "limited", "limited": {
+            "part": "winding", "t_cold_s": 24.411, "t_rated_s": 4.32,
+            "steady_state_would_be": {"winding": 408.9, "magnet": 238.5},
+            "steady_state_converged": False}}
+        clause = R.limited_state_clause(rec)
+        assert "409" in clause
+        assert "not a converged fixed point" in clause
+        assert "stopped at the limit" in clause
+
+    def test_item11_a_converged_steady_answer_carries_no_caveat(self):
+        from motor_ai_sim import report as R
+
+        rec = {"mode": "limited", "limited": {
+            "part": "winding", "t_cold_s": 24.411,
+            "steady_state_would_be": {"winding": 205.0},
+            "steady_state_converged": True}}
+        clause = R.limited_state_clause(rec)
+        assert "205" in clause
+        assert "not a converged fixed point" not in clause
+
+    # ── 12 · per-map source line ─────────────────────────────────────────────
+    def test_item12_a_limited_maps_source_line_says_transient(self):
+        from motor_ai_sim import report as R
+
+        th = {"field": {"result": {
+            "point": {"I_phase_rms": 46.0, "rpm": 1000.0,
+                     "coil_temp_c": 200.0, "magnet_temp_c": 120.0}}}}
+        entry = th["field"]
+        cp = {"mode": "limited", "converged": False,
+             "limited": {"t_cold_s": 24.411}}
+        text = R.thermal_source_text(th, entry, "peak", True, cp)
+        assert "State: transient, t = 24.4 s from cold" in text
+        assert "stopped at the limit" in text
+        assert "46 A rms at 1,000 rpm" in text
+        assert "winding 200 °C / magnets 120 °C" in text
+        assert "translated onto the node temperatures" in text
+
+    def test_item12_a_steady_maps_source_line_says_steady_and_converged(self):
+        from motor_ai_sim import report as R
+
+        th = {"field": {"result": {"point": {"rpm": 20900.0}}}}
+        entry = th["field"]
+        cp = {"mode": "steady", "converged": True}
+        text = R.thermal_source_text(th, entry, "rated", True, cp)
+        assert "State: steady state (converged)." in text
+        assert "the cycle-averaged loss map, solved to a steady balance" in text
+
+    def test_item12_each_side_of_a_pair_gets_its_own_line(self):
+        import inspect
+        from motor_ai_sim import report as R
+        from motor_ai_sim import report_docx as RD
+
+        assert "thermal_source_text" in inspect.getsource(R._thermal_page)
+        src = inspect.getsource(R._thermal_page)
+        assert "_pair0_r" in src
+        assert "_pair0_r" in inspect.getsource(RD._thermal_detail)
         assert R._secs_words(None) == ""

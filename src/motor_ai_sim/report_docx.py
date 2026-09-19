@@ -698,12 +698,24 @@ def _machine(doc, D: Dict[str, Any]) -> None:
         _caption(doc, R.fig_label(_numbered(D), R.DIE_SECTION_CAPTION))
 
     _h(doc, "Geometry", 2)
-    _table(doc, R.geometry_rows(D["geo"], D["wind"], D["slot"], D["em"]),
+    _geo = D.get("geo_report") or D["geo"]
+    _ghash = D.get("geo_hash")
+    if _ghash:
+        # ITEM 1 (owner review 2026-09-19): the snapshot every number in this
+        # report was solved on, printed once.
+        _p(doc, "geometry %s — the snapshot every number in this report was "
+                "solved on" % _ghash, size=9, italic=True)
+    if D.get("geo_mismatch"):
+        _p(doc, "%s the live configuration has since changed — every table, "
+                "figure and number below is built from the stored snapshot "
+                "above, never from what is open now" % R.FLAG,
+           size=9, bold=True, color=WARN)
+    _table(doc, R.geometry_rows(_geo, D["wind"], D["slot"], D["em"]),
            header=False, size=10.5,
            widths_cm=[5.2, 2.6, 1.4, 5.2, 2.6, 1.4])
 
     _h(doc, "Materials", 2)
-    _table(doc, R.material_rows(D["mats"], D["em"], D["geo"], D.get("sec")), size=10.5,
+    _table(doc, R.material_rows(D["mats"], D["em"], _geo, D.get("sec")), size=10.5,
            widths_cm=[4.0, 5.4, 14.0])
     # …at what temperature the magnets were taken, and what the winding is
     # insulated with, both in words (user 2026-09-11).
@@ -975,6 +987,13 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
                          numbers=R.em_map_numbers(key, maps, maps_r),
                          map_kind="em"):
                 n_fig += 1
+                # UNDER EACH DEMAG MAP (item 6, owner review 2026-09-19):
+                # magnet temperature, mean Br loss, BH energy loss, affected
+                # area, worst element, both sides.
+                if key == "demag":
+                    _dn = R.demag_pair_note(_L, _R)
+                    if _dn:
+                        _p(doc, _dn, size=9.5, italic=True, color=NOTE)
             continue
         if _picture(doc, _a):
             n_fig += 1
@@ -1063,9 +1082,36 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
         return
     res = entry.get("result") or {}
     inner = res.get("field") if isinstance(res.get("field"), dict) else res
-    _p(doc, R.thermal_source_text(th, entry, D.get("detail_duty"),
-                                  bool(D.get("th_detail_from_duty"))),
-       size=9.5, italic=True, color=NOTE)
+    # ITEM 12 (owner review 2026-09-19): each thermal map gets its own source
+    # line, per side of a pair — never one line describing only this report's
+    # own duty while a different duty's map (steady vs transient) sits beside
+    # it.
+    # THIS PAGE'S OWN `cp` IS THE MACHINE-LEVEL STORE'S SHAPE — its loop
+    # nests under "coupling" (see `R.coupled_loop_text`), unlike the FLAT
+    # per-duty record every mode check below reads.  Every item-3/4/12 check
+    # reads THIS flattened copy, never `cp` directly.
+    _cp_flat = (cp or {}).get("coupling") if isinstance(cp, dict) else None
+    _cp_flat = _cp_flat if isinstance(_cp_flat, dict) and _cp_flat else cp
+    _pair0_l = (D.get("pair") or {}).get("left")
+    _pair0_r = (D.get("pair") or {}).get("right")
+    if _pair0_r:
+        for _side0, _lbl0 in ((_pair0_l, "Left"), (_pair0_r, "Right")):
+            _th0 = (_side0 or {}).get("th")
+            _entry0 = (((_th0 or {}).get("field") or (_th0 or {}).get("coupled"))
+                      if _th0 else None)
+            if not _entry0:
+                continue
+            _p(doc, "%s (duty '%s'). %s" % (
+                    _lbl0, _side0.get("duty") or "—",
+                    R.thermal_source_text(
+                        _th0, _entry0, _side0.get("duty"), True,
+                        _side0.get("coupled"))),
+               size=9.5, italic=True, color=NOTE)
+    else:
+        _p(doc, R.thermal_source_text(th, entry, D.get("detail_duty"),
+                                      bool(D.get("th_detail_from_duty")),
+                                      _cp_flat),
+           size=9.5, italic=True, color=NOTE)
 
     _h(doc, "Boundary conditions", 2)
     for line in R._cooling_words(res.get("cooling") or inner.get("cooling") or {}):
@@ -1101,16 +1147,24 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
                       R._temp_bars_png(_R.get("th") or {},
                                        _R.get("th_inner") or {}, _lims,
                                        width_cm=PAIR_CM),
-                      R.TEMP_BARS_CAPTION, numbers=_t_num,
-                      map_kind="thermal")
+                      R.paired_thermal_caption(
+                          R.temp_bars_caption_with_duty, _L, _R),
+                      numbers=_t_num, map_kind="thermal")
         elif _bars is not None:
             _table(doc, trows, size=10.5, widths_cm=[7.0, 4.2])
             # The caption says which bars the lines apply to (D8): every dashed
             # line spans the whole axis, but only the coloured bars are judged
             # against one — a blue bar has no limit of its own.
+            # ITEM 4 (owner review 2026-09-19): this page's own duty, steady or
+            # transient — never a fixed "steady-state" wording.
+            _is_lim0 = R.coupled_mode(_cp_flat) == "limited"
+            _t_lim0 = (R._numf((R.limited_of(_cp_flat) or {}).get("t_cold_s"))
+                      if _is_lim0 else None)
             if _picture(doc, _bars, cm=PIC_CM):
                 _caption(doc, R.fig_label(
-                    _numbered(D), _prov(D, R.TEMP_BARS_CAPTION, "thermal"),
+                    _numbered(D),
+                    _prov(D, R.temp_bars_caption_with_duty(
+                        None, _is_lim0, _t_lim0), "thermal"),
                     _tag_t))
         else:
             _table(doc, trows, size=10.5, widths_cm=[7.0, 4.2])
@@ -1118,40 +1172,53 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
        color=NOTE)
 
     _h(doc, "Heat budget", 2)
-    _wf_png = R._heat_waterfall_png(res, inner, width_cm=PIC_CM)
-    if _R:
-        _table(doc, R.thermal_budget_rows(res, inner, D.get("em")), size=10.5,
-               widths_cm=[6.4, 2.6])
-        _pair_fig(doc, D,
-                  R._heat_waterfall_png((_L or {}).get("th") or res,
-                                        (_L or {}).get("th_inner") or inner,
-                                        width_cm=PAIR_CM),
-                  R._heat_waterfall_png(_R.get("th") or {},
-                                        _R.get("th_inner") or {},
-                                        width_cm=PAIR_CM),
-                  R.heat_chart_caption_pair(
-                      (_L or {}).get("th") or res,
-                      (_L or {}).get("th_inner") or inner,
-                      (_R or {}).get("th") or {},
-                      (_R or {}).get("th_inner") or {}))
-    elif _wf_png is not None:
-        _table(doc, R.thermal_budget_rows(res, inner, D.get("em")), size=10.5,
-               widths_cm=[6.4, 2.6])
-        # The caption's hatched-bar sentence is added only when that bar is
-        # actually drawn (reviewer 2026-09-14, B2).
-        if _picture(doc, _wf_png, cm=PIC_CM):
-            _caption(doc, R.fig_label(_numbered(D),
-                                      R.heat_chart_caption(res, inner),
-                                      _tag_t))
+    # ITEM 3 (owner review 2026-09-19): a `mode: limited` record's own
+    # thermal answer is the STEADY map the lumped network was fitted to, not
+    # the machine at t_lim — printing its full losses as a steady balance
+    # beside a map now captioned "transient at t = …" mixes two regimes.
+    # Without the node capacities and dT/dt AT t_lim this report cannot build
+    # a transient balance, so the budget becomes one line and the waterfall
+    # (that same overheated map's fluxes) is dropped.
+    _limited_budget = R.coupled_mode(_cp_flat) == "limited"
+    if _limited_budget:
+        _p(doc, R.transient_budget_fallback_text(_cp_flat),
+           size=9.5, italic=True, color=NOTE)
     else:
-        _table(doc, R.thermal_budget_rows(res, inner, D.get("em")), size=10.5,
-               widths_cm=[6.4, 2.6])
-    # The line that makes the three totals on this page add up, with the duty
-    # named (reviewer 2026-09-14).
-    _rec = R.thermal_budget_reconcile_text(res, inner, D.get("em"), map_duty,
-                                           em_duty=D.get("detail_duty"))
-    if _rec:
-        _p(doc, _rec, size=9.5, italic=True, color=NOTE)
+        _wf_png = R._heat_waterfall_png(res, inner, width_cm=PIC_CM)
+        if _R:
+            _table(doc, R.thermal_budget_rows(res, inner, D.get("em")),
+                   size=10.5, widths_cm=[6.4, 2.6])
+            _pair_fig(doc, D,
+                      R._heat_waterfall_png((_L or {}).get("th") or res,
+                                            (_L or {}).get("th_inner") or inner,
+                                            width_cm=PAIR_CM),
+                      R._heat_waterfall_png(_R.get("th") or {},
+                                            _R.get("th_inner") or {},
+                                            width_cm=PAIR_CM),
+                      R.heat_chart_caption_pair(
+                          (_L or {}).get("th") or res,
+                          (_L or {}).get("th_inner") or inner,
+                          (_R or {}).get("th") or {},
+                          (_R or {}).get("th_inner") or {}))
+        elif _wf_png is not None:
+            _table(doc, R.thermal_budget_rows(res, inner, D.get("em")),
+                   size=10.5, widths_cm=[6.4, 2.6])
+            # The caption's hatched-bar sentence is added only when that bar
+            # is actually drawn (reviewer 2026-09-14, B2).
+            if _picture(doc, _wf_png, cm=PIC_CM):
+                _caption(doc, R.fig_label(_numbered(D),
+                                          R.heat_chart_caption(res, inner),
+                                          _tag_t))
+        else:
+            _table(doc, R.thermal_budget_rows(res, inner, D.get("em")),
+                   size=10.5, widths_cm=[6.4, 2.6])
+        # The line that makes the three totals on this page add up, with the
+        # duty named (reviewer 2026-09-14).
+        _rec = R.thermal_budget_reconcile_text(res, inner, D.get("em"),
+                                               map_duty,
+                                               em_duty=D.get("detail_duty"))
+        if _rec:
+            _p(doc, _rec, size=9.5, italic=True, color=NOTE)
 
     # The rated duty's own field when one is stored (2026-09-10) — and the
     # other duty's beside it, on one colour bar, since 2026-09-14.
@@ -1161,14 +1228,21 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
             or (D.get("detail_src") or {}).get("thermal") or res,
             (_R.get("src") or {}).get("thermal") or _R.get("th"),
             width_cm=PAIR_CM)
-        if not _pair_fig(doc, D, _ml, _mr, R.THERMAL_MAP_CAPTION,
+        if not _pair_fig(doc, D, _ml, _mr,
+                         R.paired_thermal_caption(
+                             R.thermal_map_caption_with_duty, _L, _R),
                          numbers=_t_num, map_kind="thermal"):
             _p(doc, R.THERMAL_MAP_MISSING, size=9.5, italic=True, color=NOTE)
     elif _picture(doc, R._thermal_map(
             (D.get("detail_src") or {}).get("thermal") or res,
             width_cm=PIC_CM), cm=PIC_CM):
+        _is_lim1 = R.coupled_mode(_cp_flat) == "limited"
+        _t_lim1 = (R._numf((R.limited_of(_cp_flat) or {}).get("t_cold_s"))
+                  if _is_lim1 else None)
         _caption(doc, R.fig_label(
-            _numbered(D), _prov(D, R.THERMAL_MAP_CAPTION, "thermal"),
+            _numbered(D),
+            _prov(D, R.thermal_map_caption_with_duty(None, _is_lim1, _t_lim1),
+                 "thermal"),
             R._map_tag(map_duty, res.get("rpm", inner.get("rpm")) or map_rpm,
                        map_cur)))
     else:

@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # Motor AI Simulator — Project Guide
 
 ## Overview

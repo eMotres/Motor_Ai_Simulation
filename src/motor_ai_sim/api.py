@@ -128,6 +128,12 @@ from motor_ai_sim import watchdog_notify as _watchdog
 @_asynccontextmanager
 async def _lifespan(_app):
     _run_startup_checks()
+    # Resume any incomplete sweeps from before the restart
+    try:
+        from motor_ai_sim import sweep_resume as _sweep_resume
+        _sweep_resume.resume_incomplete_sweeps()
+    except Exception as _e:
+        logging.getLogger(__name__).warning("sweep resumption failed: %s", _e)
     _watchdog.start()
     try:
         yield

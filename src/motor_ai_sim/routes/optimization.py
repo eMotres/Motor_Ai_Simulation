@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim import workspace as _WSP
+from motor_ai_sim import sweep_journal as _sweep_journal
 from motor_ai_sim.config import get_config
 from motor_ai_sim.optimization import run_pareto_search
 from motor_ai_sim.optimization import pareto as _pareto
@@ -1494,6 +1495,48 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
     import numpy as np  # noqa: F401
     from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
     from motor_ai_sim.optimization.optimizer import _pareto_front
+
+    # SWEEP JOURNAL: create and update as we progress
+    _sweep_journal_record = None
+    _resumed_info = None
+    try:
+        _cfg_fp = _config_fingerprint()
+        _owner = _WSP.workspace().id if _WSP.workspace() else "process"
+
+        # Check if this is a resume (journal already exists with this run_id)
+        _existing_journal = _sweep_journal.load_sweep_journal(_config_dir_o())
+        if _existing_journal and _existing_journal.sweep_id == str(run_id):
+            _sweep_journal_record = _existing_journal
+            _resumed_info = _existing_journal.resumed_from_restart
+            log.info("resuming sweep %s: %d/%d points already done",
+                     run_id, len(_existing_journal.done_points), _existing_journal.total_points)
+        else:
+            # Build request body for journal
+            _req_body = {
+                "variables": [{"name": v["name"], "min": v["min"], "max": v["max"],
+                              "mode": v.get("mode", "optimize"), "step": v.get("step", 0)}
+                             for v in variables],
+                "operating_points": operating_points,
+                "steps_per_period": steps,
+                "ripple_max_pct": ripple_max,
+                "max_geometries": max_geom,
+                "coil_temp_c": coil_temp_c,
+                "seed": seed,
+            }
+            _total_pts = len(_enumerate_geometries(variables, int(max_geom), n_opt=4, seed=seed)) * len(operating_points)
+            if with_baseline:
+                _total_pts += 1
+            _sweep_journal_record = _sweep_journal.create_sweep_journal(
+                _config_dir_o(),
+                sweep_id=str(run_id),
+                request_body=_req_body,
+                total_points=_total_pts,
+                owner=_owner,
+                machine_fp=_cfg_fp,
+            )
+    except Exception as _e_journal:
+        log.debug("sweep journal creation failed: %s", _e_journal)
+
     try:
         geos = _enumerate_geometries(variables, int(max_geom), n_opt=4, seed=seed)
         tasks = []  # (geom_id, op_index, overrides, current, op_gamma, op_rpm)
@@ -1631,6 +1674,18 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 # total for the whole run.
                 _scan_state["done"] = n_cached + n_rejected
                 _scan_state["points"] = [p for p in points if p is not None]   # instant plot
+        # SWEEP JOURNAL: mark all prefilled/rejected points as done
+        if _sweep_journal_record:
+            for i in range(n_cached + n_rejected):
+                _sweep_journal.update_sweep_journal(_config_dir_o(), str(run_id), i)
+            # Update the progress state with resume info if this is a resume
+            if _resumed_info and _scan_owns(run_id):
+                with _scan_lock:
+                    _scan_state["resumed_from_restart"] = {
+                        "at": _resumed_info.at,
+                        "done_before": _resumed_info.done_before,
+                        "total": _resumed_info.total,
+                    }
 
         # Manual executor so a Stop can cancel the not-yet-started tasks; the
         # already-running subprocesses are killed by scan_cancel through the
@@ -1702,6 +1757,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                         continue
                     points[i] = pt
                     done += 1
+                    # SWEEP JOURNAL: mark this point as done
+                    if _sweep_journal_record:
+                        _sweep_journal.update_sweep_journal(_config_dir_o(), str(run_id), i)
                 with _scan_lock:
                     if _scan_owns(run_id):
                         _scan_state["done"] = done
@@ -1810,12 +1868,20 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 result.setdefault("machine", _machine_stamp(_swept_geo_keys(result)))
                 _scan_state["result"] = result
         _save_last_scan(result)   # persist so it survives reload / restart
+        # SWEEP JOURNAL: mark as finished
+        if _sweep_journal_record:
+            _sweep_journal.finish_sweep_journal(_config_dir_o(), str(run_id))
     except Exception as e:  # noqa: BLE001
         log.exception("FEM scan failed")
         with _scan_lock:
             if _scan_owns(run_id):
                 _scan_state["error"] = str(e)
     finally:
+        # SWEEP JOURNAL: cancel if user stopped the sweep
+        if _sweep_journal_record:
+            with _scan_lock:
+                if _scan_state.get("cancel"):
+                    _sweep_journal.cancel_sweep_journal(_config_dir_o(), str(run_id))
         with _scan_lock:
             # ONLY if we are still the current run — otherwise this clears the
             # flag for the run that superseded us, which is the bug above.
@@ -1996,6 +2062,15 @@ def scan_progress():
     _res = out.get("result") if isinstance(out.get("result"), dict) else None
     _sw = tuple(((_res or {}).get("machine") or {}).get("swept") or ()) or _swept_geo_keys(_res)
     out["machine_now"] = _machine_stamp(_sw)
+    # Include resume info from journal if present
+    if out.get("resumed_from_restart"):
+        resume = out["resumed_from_restart"]
+        if isinstance(resume, dict):
+            out["resumed_from_restart"] = {
+                "at": resume.get("at", ""),
+                "done_before": int(resume.get("done_before", 0)),
+                "total": int(resume.get("total", 0)),
+            }
     return _json_sane(out)
 
 

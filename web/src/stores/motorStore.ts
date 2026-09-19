@@ -6,6 +6,8 @@ import { canWriteServer } from '../lib/localAuth';
 import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
 import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
 import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
+import { geometryApplyOutcome } from '../lib/geometryApplyOutcome';
+import type { GeometryApplyOutcome } from '../lib/geometryApplyOutcome';
 import type {
   MotorGeometryParams,
   MaterialAssignments,
@@ -191,7 +193,12 @@ interface MotorState {
   // API Actions
   fetchGeometryFromApi: () => Promise<void>;
   fetchSchemaFromApi: () => Promise<void>;
-  updateGeometryViaApi: (params: Partial<MotorGeometryParams>) => Promise<void>;
+  // Returns whether every requested field actually landed (a 422/423/500
+  // refuses SILENTLY as far as the Promise is concerned — no throw, no
+  // rejected fields in the resolved value's absence — so a caller that acts
+  // on "did this apply?" must read this, not just await the call. See
+  // lib/geometryApplyOutcome.ts.
+  updateGeometryViaApi: (params: Partial<MotorGeometryParams>) => Promise<GeometryApplyOutcome>;
   resetGeometryViaApi: () => Promise<void>;
   fetchFullConfigFromApi: () => Promise<void>;
   
@@ -454,7 +461,7 @@ export const useMotorStore = create<MotorState>()(
           }));
           // same acknowledgement pulse the server path gives the viewers
           setTimeout(() => set({ isGeometryUpdating: false }), 400);
-          return;
+          return { ok: true, refused: [] };
         }
         set({ isLoading: true, isGeometryUpdating: true, error: null });
         try {
@@ -485,7 +492,7 @@ export const useMotorStore = create<MotorState>()(
               // said WHY, the list above shows it — nothing left to sync.
               pendingGeometryEdits: null,
             });
-            return;
+            return geometryApplyOutcome(422, Object.keys(params), bad);
           }
           // 423 = the field is LOCKED by the active die/configuration (family
           // catalog).  Same surfacing as 422: name the fields and the lock, so
@@ -503,7 +510,7 @@ export const useMotorStore = create<MotorState>()(
               } as GeometryParamError],
               pendingGeometryEdits: null,   // same as 422 — refusal resolves the queue
             });
-            return;
+            return geometryApplyOutcome(423, Object.keys(params), bad);
           }
           // 500 = the server ANSWERED and blew up inside the route.  It is not
           // an outage, so it must not go down the network path below: that one
@@ -531,7 +538,7 @@ export const useMotorStore = create<MotorState>()(
                   + `${detail ? ` — ${detail}` : ''}. Nothing was written.`,
               }],
             });
-            return;
+            return geometryApplyOutcome(500, Object.keys(params), null);
           }
           if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -578,6 +585,7 @@ export const useMotorStore = create<MotorState>()(
             set({ isGeometryUpdating: false });
           }
           syncActiveMotor();   // auto-save the geometry edit into "my" motor
+          return geometryApplyOutcome(response.status, Object.keys(params), null);
         } catch (error) {
           // NETWORK death only — a 422/423 refusal returned above and never
           // lands here.  The edit is kept twice: applied to the local copy so
@@ -603,9 +611,10 @@ export const useMotorStore = create<MotorState>()(
             geometryParamErrors: null,
           });
           get().updateGeometry(params);
+          return geometryApplyOutcome(0, Object.keys(params), null);
         }
       },
-      
+
       fetchGeometryValidation: async () => {
         try {
           const response = await fetch(`${API_BASE_URL}/api/geometry/validation`);

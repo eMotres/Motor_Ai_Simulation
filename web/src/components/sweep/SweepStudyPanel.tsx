@@ -23,6 +23,7 @@ import { copyTsv, downloadCsv, downloadXlsx, stampName } from '../../lib/xlsxExp
 import type { AppliedSaveResult } from '../../lib/appliedAutoSave';
 import { sweepResumeNoticeText } from '../../lib/sweepResumeNotice';
 import type { SweepResumeInfo } from '../../lib/sweepResumeNotice';
+import { readCurrentUnit, formatCurrent } from '../../lib/sweepCurrentUnit';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -842,7 +843,15 @@ const SweepStudyPanel: React.FC = () => {
     if (!p) return;
     setApplyMsg('applying…'); setSaveRes(null);
     try {
-      if (p.overrides && Object.keys(p.overrides).length) await updateGeometryViaApi(p.overrides);
+      // updateGeometryViaApi resolves normally even on a 422/423/500 refusal
+      // (it never throws for those — see lib/geometryApplyOutcome.ts) so the
+      // ONLY way to know the picked geometry actually landed is to read what
+      // it returns.  Root cause of the 2026-09-19 report: a locked die/
+      // configuration refused tooth_width/magnet_fill_up (423) and this
+      // function still said "✓ applied" for the whole design — only the
+      // operating point (the PATCH below, which no lock touches) had moved.
+      let geomOutcome: { ok: boolean; refused: { field: string; reason: string }[] } | null = null;
+      if (p.overrides && Object.keys(p.overrides).length) geomOutcome = await updateGeometryViaApi(p.overrides);
       await fetch(`${API}/api/simulation/config`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ max_current: p.I, phase_offset_deg: p.g }),
@@ -908,7 +917,19 @@ const SweepStudyPanel: React.FC = () => {
         window.dispatchEvent(new CustomEvent('sim-design-applied'));
       } catch { /* SSR/no-window */ }
       const ovStr = Object.entries(p.overrides || {}).map(([k, v]) => `${k}=${v}`).join(', ');
-      setApplyMsg(`✓ applied${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${p.I} A · γ=${p.g}° — its own FEM numbers are shown in Simulation; Run there only for waveforms or a re-check`);
+      // Same unit the card above prints ("now: … A peak (from Simulation)") —
+      // the raw stored Arms value here used to read "I = 49.4975 A" right next
+      // to a card reading "70 A peak" for the identical operating point.
+      const iShown = formatCurrent(Number(p.I) || 0, readCurrentUnit());
+      if (geomOutcome && !geomOutcome.ok) {
+        const names = geomOutcome.refused.map(r => r.field).join(', ') || 'the swept geometry';
+        setApplyMsg(`⚠ operating point applied (I=${iShown} · γ=${p.g}°) — geometry NOT applied: `
+          + `${names} refused by the active die/configuration lock. Unlock it in the Motors `
+          + `catalog (admin) or load another configuration, then apply again.`);
+      } else {
+        setApplyMsg(`✓ applied${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${iShown} · γ=${p.g}° `
+          + `— its own FEM numbers are shown in Simulation; Run there only for waveforms or a re-check`);
+      }
       // ARCHIVE IT — a picked sweep design is applied into the editor and would
       // otherwise live only there until someone remembered to save it.  New
       // motor, never the source one; the failure (if any) is shown, not swallowed.
@@ -1242,7 +1263,11 @@ const SweepStudyPanel: React.FC = () => {
           {selected && (
             <Box sx={{ mt: 1, p: 1, bgcolor: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 1 }}>
               <Typography sx={{ fontSize: 11, color: 'var(--text-1)' }}>
-                Picked: <strong>I = {selected.I} A · γ = {selected.g}°</strong> → η {selected.y?.toFixed?.(2)} % · {selected.x?.toFixed?.(2)} N·m/kg · T {selected.T?.toFixed?.(2)} N·m · ripple {selected.ripple?.toFixed?.(1)} %
+                {/* Same unit + label the range card above prints ("now: … A peak
+                    (from Simulation)") — the stored value is Arms, this line used
+                    to print it raw ("I = 49.4975 A") next to a card reading
+                    "70 A peak" for the SAME point (2026-09-19). */}
+                Picked: <strong>I = {formatCurrent(Number(selected.I) || 0, readCurrentUnit())} · γ = {selected.g}°</strong> → η {selected.y?.toFixed?.(2)} % · {selected.x?.toFixed?.(2)} N·m/kg · T {selected.T?.toFixed?.(2)} N·m · ripple {selected.ripple?.toFixed?.(1)} %
               </Typography>
               <Typography sx={{ fontSize: 10.5, color: '#93c5fd', mt: 0.25, wordBreak: 'break-word' }}>
                 geometry: {Object.keys(selected.overrides || {}).length

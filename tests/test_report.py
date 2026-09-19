@@ -8270,6 +8270,14 @@ class TestL13ServerAuditOf20260919:
 
     # ── F3 · shaft mass/material contradicts the Materials table ────────────
     def test_f3_a_mismatched_component_material_is_flagged(self):
+        """M1 (L13 server audit round 4) supersedes this row's own shape: the
+        row used to LEAD with the stale material and a "(!) current
+        assignment" flag even once the mass had been re-weighed at the live
+        density — see ``TestMassFollowsTheAssignedMaterial`` and
+        ``test_m1_a_reweighed_row_leads_with_the_assigned_material``.  It now
+        leads with the ASSIGNED card and names the stale one in a one-clause
+        note instead of a warning flag; the material is still both named and
+        still a re-weighed, correct mass."""
         from motor_ai_sim import report as R
 
         em = {"mass_components": [
@@ -8278,9 +8286,9 @@ class TestL13ServerAuditOf20260919:
         mats = {"shaft": "Steel_42CrMo4_QT"}
         rows = R.mass_rows(em, mats)
         shaft_row = next(r for r in rows if r[0] == "Shaft")
+        assert shaft_row[1].startswith("Steel_42CrMo4_QT")
         assert "Aluminium_6061" in shaft_row[1]
-        assert R.FLAG in shaft_row[1]
-        assert "Steel_42CrMo4_QT" in shaft_row[1]
+        assert "record solved with" in shaft_row[1]
 
     def test_f3_an_agreeing_material_is_printed_plainly(self):
         from motor_ai_sim import report as R
@@ -8621,6 +8629,35 @@ class TestMassFollowsTheAssignedMaterial:
         assert "current assignment" in shaft[1]
         assert "mass not recomputed" in shaft[3]
 
+    def test_m1_a_reweighed_row_leads_with_the_assigned_material(
+            self, monkeypatch):
+        """M1 (L13 server audit round 4): N4 fixed the KILOGRAMS at the live
+        density and left the row's own label and Material cell reading
+        "Aluminium_6061 (!) current assignment: Steel_42CrMo4_QT" — the
+        Materials table two rows up and section 8's stress table both simply
+        say "Steel_42CrMo4_QT", so the Masses table was the only place left
+        naming the wrong material as the headline."""
+        from motor_ai_sim import report as R
+
+        monkeypatch.setattr(R, "material_density",
+                            lambda n: 7850.0 if "Steel" in str(n) else None)
+        rows = R.mass_rows({"mass_components": self.COMPS}, self.MATS)
+        shaft = next(r for r in rows if "Steel_42CrMo4_QT" in str(r[0])
+                    or "Steel_42CrMo4_QT" in str(r[1]))
+        # the row's own name no longer opens with the stale material...
+        assert "Aluminium_6061" not in shaft[0]
+        assert "Steel_42CrMo4_QT" in shaft[0]
+        # ...the Material cell LEADS with the assigned card...
+        assert str(shaft[1]).startswith("Steel_42CrMo4_QT")
+        # ...the stale record's material is named in a one-clause note...
+        assert "(record solved with Aluminium_6061; mass re-weighed)" \
+            in shaft[1]
+        # ...and the now-redundant warning flag is gone from this row.
+        assert R.FLAG not in shaft[1]
+        assert "current assignment" not in shaft[1]
+        # the mass itself is still the steel figure (N4's own fix, unchanged)
+        assert "0.031" in shaft[3]
+
 
 #: What must never reach a rendered page: a finding id, a review filename, a
 #: raw date, a reviewer.  The delivered document printed
@@ -8786,3 +8823,204 @@ class TestGeometryFingerprintIsOfTheMachineNotTheMesh:
         assert note.endswith(".")
         assert "f3b4728f381c5b31" in note
         assert ": the rest" not in note
+
+
+class TestM2GeometrySnapshotV2ComputedOnTheFly:
+    """M2 (L13 server audit round 4): 'rated' and 'peak' print two DIFFERENT
+    v1 §3 "Geometry snapshot" hashes with nothing explaining they are the same
+    machine remeshed.  ``geometry_fingerprint_v2`` exists and is wired into
+    ``duty_fingerprint_check``, but every record of the audited L13 predates
+    its rollout, so it is a no-op for that report; this pins the ON-THE-FLY
+    fallback the fix adds, and the case where there is genuinely not enough to
+    compute from."""
+
+    #: One geometry, meshed twice — the L13's own bit-identical air-gap radii,
+    #: two different `mesh.n_triangles` (test_report.l13_dump.json).
+    GEO_SIG_A = "rotor_outer_radius=32.4;bore_r=32.697555196742144;mesh=4815"
+    GEO_SIG_B = "rotor_outer_radius=32.400000000000006;bore_r=32.697555196742144;mesh=4813"
+
+    def test_two_meshes_of_one_geometry_compute_the_same_v2_on_the_fly(self):
+        from motor_ai_sim import report as R
+
+        # No record of either duty carries a stamped v2 — exactly the L13's
+        # own state — but each carries a `_geoSig` (the one place a full
+        # geometry snapshot IS stored today, see `_record_geometry_for_v2`).
+        # The format is `report._parse_geo_sig`'s own: 'key:value|key:value'.
+        em_a = {"geo_fingerprint": "ee6accdc227f05fb",
+               "_geoSig": "rotor_outer_radius:32.4|stator_inner_radius:32.7"}
+        em_b = {"geo_fingerprint": "f3b4728f381c5b31",
+               "_geoSig": "rotor_outer_radius:32.400000000000006"
+                          "|stator_inner_radius:32.7"}
+        v2_a, computed_a = R.duty_geometry_fingerprint_v2({}, em_a, {}, {})
+        v2_b, computed_b = R.duty_geometry_fingerprint_v2({}, em_b, {}, {})
+        assert v2_a and v2_b and v2_a == v2_b
+        assert computed_a is True and computed_b is True
+
+    def test_a_stamped_v2_wins_over_computing_one(self):
+        from motor_ai_sim import report as R
+
+        res = {"rotor_stress": {"geometry_fingerprint": "aaaa",
+                                "geometry_fingerprint_v2": "stamped0001"}}
+        v2, computed = R.duty_geometry_fingerprint_v2(
+            res, {"geo_fingerprint": "bbbb"}, {}, {})
+        assert v2 == "stamped0001" and computed is False
+
+    def test_not_enough_stored_geometry_returns_none(self):
+        from motor_ai_sim import report as R
+
+        # the shape every real L13 duty_results record actually has: mesh and
+        # air_gap scalars, no `_geoSig`, no `geometry` dict — see
+        # `_record_geometry_for_v2`'s own docstring.
+        res = {"rotor_stress": {"geometry_fingerprint": "ee6accdc227f05fb",
+                                "air_gap": {"rotor_r_mm": 32.4,
+                                            "bore_r_mm": 32.7},
+                                "mesh": {"n_triangles": 4815}}}
+        v2, computed = R.duty_geometry_fingerprint_v2(res, {}, {}, {})
+        assert v2 is None and computed is False
+
+    def test_the_note_explains_a_remesh_not_a_real_difference(self):
+        from motor_ai_sim import report as R
+
+        cols = [
+            {"fp": "ee6accdc227f05fb", "fp2": "same0000machine1",
+             "fp2_computed": True},
+            {"fp": "f3b4728f381c5b31", "fp2": "same0000machine1",
+             "fp2_computed": True},
+        ]
+        note = R.geometry_snapshot_note(cols)
+        assert "one machine" in note
+        assert "different mesh" in note or "more than one mesh" in note
+
+    def test_the_note_says_a_real_difference_when_v2_disagrees_too(self):
+        from motor_ai_sim import report as R
+
+        cols = [{"fp": "aaaa", "fp2": "vvvv1111", "fp2_computed": False},
+               {"fp": "bbbb", "fp2": "wwww2222", "fp2_computed": False}]
+        note = R.geometry_snapshot_note(cols)
+        assert "more than one geometry" in note
+
+    def test_the_note_admits_it_cannot_tell_with_no_v2_at_all(self):
+        from motor_ai_sim import report as R
+
+        cols = [{"fp": "aaaa", "fp2": None}, {"fp": "bbbb", "fp2": None}]
+        note = R.geometry_snapshot_note(cols)
+        assert "not enough stored geometry" in note
+
+    def test_no_note_when_the_v1_hashes_already_agree(self):
+        from motor_ai_sim import report as R
+
+        cols = [{"fp": "aaaa", "fp2": None}, {"fp": "aaaa", "fp2": None}]
+        assert R.geometry_snapshot_note(cols) == ""
+        assert R.geometry_snapshot_note([]) == ""
+
+
+class TestI1DemagRecomputedFromTheFieldIsSaidNotJustDone:
+    """I1 (L13 server audit round 4): the demagnetisation figures printed for
+    'peak' are recomputed from the duty's own stored FIELD
+    (`report.demag_from_field`), with no stored JSON counterpart to verify
+    'peak' against — only self-consistency and, on 'rated' (whose field and
+    stored summary ARE one solve), agreement to within 0.01 pt.  The fix
+    writes that recomputation into the report's OWN data and says so in the
+    prose, rather than leaving a reader to assume the number came straight off
+    the stored summary."""
+
+    def test_the_rated_duty_recompute_agrees_with_its_own_stored_summary(
+            self, monkeypatch):
+        """The regression: the 'rated'-shaped self-test `demag_from_field`'s
+        own comment describes (99.430/99.128/2.593 recomputed against
+        99.43/99.128/2.59 stored) — agreement to within 0.01 pt."""
+        from motor_ai_sim import report as R
+
+        monkeypatch.setattr(R, "demag_corner_stats", lambda *a, **k: {
+            "n_elements": 1774, "min_pct": 92.6, "p1_pct": 93.0,
+            "n_below_50": 0, "area_below_50_pct": 0.0,
+            "n_below_80": 0, "area_below_80_pct": 0.0,
+            "n_below_90": 40, "area_below_90_pct": 1.0,
+            "br_kept_vol_pct": 99.430, "bh_kept_vol_pct": 99.128,
+            "area_derated_pct": 2.593})
+        sine = {"demag": {"br_worst_pct": 92.6, "br_kept_vol_pct": 99.43,
+                          "bh_kept_vol_pct": 99.128, "grade_nominal": 52.0,
+                          "grade_effective": 51.5,
+                          "magnet_name": "F52SH_120C"}}
+        dem = R.demag_from_field("die", "cfg", "rated", sine)
+        assert dem["recomputed_from_field"] is True
+        assert dem["recomputed_verified"] is True
+        assert dem["recomputed_delta_pct"] <= 0.01
+        text = R.em_demag_text({"demag": dem})
+        assert "Recomputed from the stored field" in text
+        assert "agreeing with the saved summary" in text
+
+    def test_the_peak_duty_recompute_has_nothing_stored_to_check_against(
+            self, monkeypatch):
+        """The audited L13 'peak': its OLD stored summary is a different,
+        stale solve, so the recompute cannot be verified against it — the
+        note must say so, not print a false "agrees" over a 6-point gap."""
+        from motor_ai_sim import report as R
+
+        monkeypatch.setattr(R, "demag_corner_stats", lambda *a, **k: {
+            "n_elements": 623, "min_pct": 59.19, "p1_pct": 61.63,
+            "n_below_50": 0, "area_below_50_pct": 0.0,
+            "n_below_80": 21, "area_below_80_pct": 0.166,
+            "n_below_90": 21, "area_below_90_pct": 0.166,
+            "br_kept_vol_pct": 99.914, "bh_kept_vol_pct": 99.852,
+            "area_derated_pct": 0.545})
+        sine = {"demag": {"br_worst_pct": 11.7, "br_kept_vol_pct": 93.834,
+                          "bh_kept_vol_pct": 92.251, "grade_nominal": 52.0,
+                          "grade_effective": 48.0,
+                          "magnet_name": "F52SH_120C"}}
+        dem = R.demag_from_field("die", "cfg", "peak", sine)
+        assert dem["recomputed_from_field"] is True
+        assert dem["recomputed_verified"] is False
+        text = R.em_demag_text({"demag": dem})
+        assert "Recomputed from the stored field" in text
+        assert "different solve, not compared" in text
+        assert "agreeing with the saved summary" not in text
+
+    def test_a_block_the_store_never_touched_carries_no_recompute_note(self):
+        """A duty with no stored field at all keeps the standalone block
+        untouched, and the paragraph says nothing about a recompute that did
+        not happen."""
+        from motor_ai_sim import report as R
+
+        text = R.em_demag_text({"demag": {"br_kept_vol_pct": 97.617,
+                                          "bh_loss_pct": 4.267,
+                                          "br_worst_pct": 18.4}})
+        assert "Recomputed from the stored field" not in text
+
+
+# ---------------------------------------------------------------------------
+# B1 — the .docx has no footer/page numbers at all  (L13 server audit round 4)
+# ---------------------------------------------------------------------------
+# The delivered .docx carried zero `<w:footerReference>` parts, zero literal
+# "page N" text and no confidentiality line on any page, while the PDF has all
+# three on every one of its 28 — a client opening the Word file saw an
+# unbranded, unpaginated document reflowed to roughly 1.5x the page count.
+
+
+class TestB1TheDocxCarriesAPageNumberedFooter:
+
+    def test_the_footer_part_carries_the_page_field_and_the_title(self, dies):
+        import io
+        import zipfile
+
+        blob = _build_docx(dies)
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            names = [n for n in z.namelist()
+                    if n.startswith("word/footer") and n.endswith(".xml")]
+            assert names, "no footer part in the docx package at all"
+            xml = "\n".join(z.read(n).decode("utf-8") for n in names)
+        assert "PAGE" in xml
+        assert "NUMPAGES" in xml
+        assert DIE in xml and CFG in xml
+        # a real Word field, not a literal string that happens to say PAGE
+        assert 'w:fldCharType="begin"' in xml
+        assert 'w:fldCharType="end"' in xml
+
+    def test_python_docx_reads_the_same_footer(self, dies):
+        blob = _build_docx(dies)
+        doc = _dx(blob)
+        footer = doc.sections[0].footer
+        assert not footer.is_linked_to_previous
+        text = "\n".join(p.text for p in footer.paragraphs)
+        assert DIE in text and CFG in text
+        assert "page" in text

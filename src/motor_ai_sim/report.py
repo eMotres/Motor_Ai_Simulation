@@ -4222,6 +4222,114 @@ def duty_fingerprint_note(fp: Optional[str], all_agree: bool,
             "machine." % ("; ".join(bits) or "one record", short))
 
 
+def _record_geometry_for_v2(res: Optional[Dict[str, Any]],
+                            em: Optional[Dict[str, Any]]
+                            ) -> Optional[Dict[str, Any]]:
+    """The geometry ONE duty's OWN records carry in enough detail to compute
+    ``geometry_fingerprint_v2`` from directly — never the live configuration,
+    which may have moved on since either record was solved (M2, L13 server
+    audit round 4).
+
+    Most ``duty_results`` kinds (thermal/coupled/rotor_stress/modes/
+    critical_speeds) store only mesh-scoped fields — ``air_gap``, ``mesh``,
+    ``point`` — not the full geometry dict; verified against the server's own
+    L13 records (``scratchpad/audit4_data/l13_dump.json``), which carry
+    neither a ``geometry`` block nor a ``_geoSig`` anywhere.  The one place a
+    full geometry snapshot IS stored today is an ``em`` summary saved through
+    the optimizer's own save path, in ``_geoSig`` (``report_geometry``); a
+    future record kind that starts carrying its own ``geometry`` dict is
+    picked up here too, ahead of that fallback.  ``None`` when nothing here
+    has enough, so the caller prints an explanation instead of a hash it
+    cannot back up.
+    """
+    for cand in [em] + [v for v in (res or {}).values() if isinstance(v, dict)]:
+        if not isinstance(cand, dict):
+            continue
+        geo = cand.get("geometry")
+        if isinstance(geo, dict) and geo:
+            return dict(geo)
+    snap = _parse_geo_sig((em or {}).get("_geoSig")) if em else None
+    if snap:
+        return dict(snap)
+    return None
+
+
+def duty_geometry_fingerprint_v2(res: Optional[Dict[str, Any]],
+                                 em: Optional[Dict[str, Any]],
+                                 mats: Optional[Dict[str, Any]] = None,
+                                 wind: Optional[Dict[str, Any]] = None
+                                 ) -> Tuple[Optional[str], bool]:
+    """``(v2, computed)`` for ONE duty (M2, L13 server audit round 4): the
+    mesh-independent print that answers whether two duties printing two
+    different v1 ``geometry_fingerprint``s (a cache key that moves on a
+    remesh — see :func:`_any_fp2`) are really two different machines.
+
+    Prefers a v2 already STAMPED on one of the duty's own records
+    (:func:`duty_results.live_fingerprint_v2`); computes one ON THE FLY, from
+    the duty's OWN stored geometry only (:func:`_record_geometry_for_v2` —
+    never the live configuration), when nothing is stamped and there is
+    enough to compute from; ``(None, False)`` otherwise, so the caller prints
+    a one-clause explanation instead of a hash it cannot back up.
+    ``computed`` is True only on the on-the-fly path, so a note can say
+    "recomputed" rather than imply the solve itself wrote the number.
+    """
+    kinds: List[Any] = [em]
+    for kind in ("thermal", "coupled", "rotor_stress", "modes",
+                "critical_speeds", "pwm", "duty_cycle"):
+        v = (res or {}).get(kind)
+        if isinstance(v, dict) and v:
+            kinds.append(v)
+    for v in kinds:
+        fp2 = _any_fp2(v)
+        if fp2:
+            return fp2, False
+    geo = _record_geometry_for_v2(res, em)
+    if geo is None:
+        return None, False
+    try:
+        from motor_ai_sim.simulation.geometry_2d import geometry_fingerprint_v2
+        return geometry_fingerprint_v2(geo, mats or {}, wind or {}), True
+    except Exception as exc:                                    # noqa: BLE001
+        log.debug("report: on-the-fly geometry_fingerprint_v2 failed (%s)", exc)
+        return None, False
+
+
+def geometry_snapshot_note(cols: List[Dict[str, Any]]) -> str:
+    """Why two duties of the SAME machine may print two different §3
+    "Geometry snapshot" hashes (M2, L13 server audit round 4).
+
+    ``fp`` (the row's own print, v1) is a cache key: it moves on a remesh or a
+    re-derived float even when the geometry, materials and winding did not
+    change at all — measured on the L13, whose 'rated' and 'peak' records
+    have bit-identical air-gap radii and two different v1 prints.
+    ``geometry_fingerprint_v2`` is built to ignore exactly that noise (mesh
+    size, triangle count, solver settings); ``""`` when the row's own hashes
+    already agree, or when there is nothing to reconcile.
+    """
+    fps = [str(c.get("fp") or "") for c in cols if c.get("fp")]
+    if len(set(fps)) <= 1:
+        return ""
+    have = [c for c in cols if c.get("fp")]
+    v2s = [c.get("fp2") for c in have]
+    if v2s and all(v2s):
+        if len(set(v2s)) == 1:
+            how = ("every record above carries its own" if not any(
+                       c.get("fp2_computed") for c in have)
+                   else "computed on the fly from each duty's own stored "
+                        "geometry")
+            return ("The hashes above differ because they key the MESH, not "
+                    "the machine — %s, the mesh-independent "
+                    "geometry_fingerprint_v2 is the same on every duty above: "
+                    "this is one machine, solved on more than one mesh."
+                    % how)
+        return ("The hashes above differ, and the mesh-independent "
+                "geometry_fingerprint_v2 differs too — this is more than one "
+                "geometry across the duties above.")
+    return ("The hashes above differ; there is not enough stored geometry on "
+            "one or more of these duties to tell whether that is a real "
+            "geometry difference or only a different mesh.")
+
+
 def geometry_hash_line(geo_hash: Any, duty: Any = None) -> str:
     """The §1 line that names the geometry snapshot — OF ONE DUTY (N3, round 3).
 
@@ -6342,6 +6450,17 @@ def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
         _fp, _agree, _per = duty_fingerprint_check(res, col.get("em") or {})
         col["fp"], col["fp_agree"], col["fp_per_kind"] = _fp, _agree, _per
         col["fp_note"] = duty_fingerprint_note(_fp, _agree, _per)
+        # M2 (L13 server audit round 4): the mesh-independent print for THIS
+        # duty, stamped or computed on the fly from what this duty's own
+        # records store — the §3 "Geometry snapshot" row's own hashes are v1
+        # (a cache key, see `duty_fingerprint_check`) and two duties of one
+        # machine can print two of them; this is what tells the two apart
+        # from a real geometry difference.
+        _dmats = dict((cfg_doc or {}).get("materials") or {})
+        _dmats.update({k: v for k, v in (d.get("materials") or {}).items()
+                      if v})
+        col["fp2"], col["fp2_computed"] = duty_geometry_fingerprint_v2(
+            res, col.get("em") or {}, _dmats, cfg_doc.get("winding") or {})
         cols.append(col)
     return cols, owners
 
@@ -6944,9 +7063,27 @@ def demag_from_field(die: str, cfg: str, duty: Optional[str],
     # from a different solve is what this whole path exists to remove.
     _stored = _numf((base or {}).get("br_kept_vol_pct")) \
         if isinstance(base, dict) else None
-    if _stored is None or abs(_stored - float(st["br_kept_vol_pct"])) > 0.01:
+    _delta = (abs(_stored - float(st["br_kept_vol_pct"]))
+             if _stored is not None else None)
+    _verified = _delta is not None and _delta <= 0.01
+    if not _verified:
         out.pop("per_magnet_spread_pct", None)
         out.pop("report", None)
+    # I1 (L13 server audit round 4): THESE NUMBERS ARE RECOMPUTED, not the
+    # store's — written back into the REPORT's OWN data (``em["demag"]``
+    # below, never `.duty_results.json`), so a reader who cannot see this
+    # function's source is told the same thing the docstring says.  When the
+    # duty's own stored summary agrees with the map to within 0.01 pt (the
+    # 'rated'-duty self-test this function's own comment already describes —
+    # ``_verified``, the same test that decides whether the per-magnet spread
+    # above survives), that agreement is the independent check a number
+    # recomputed against nothing else can offer; when it does not (a
+    # genuinely different solve, like the audited L13 'peak'), there is
+    # nothing stored to check the recomputed figure against and the note says
+    # so instead of implying one.
+    out["recomputed_from_field"] = True
+    out["recomputed_verified"] = _verified
+    out["recomputed_delta_pct"] = round(_delta, 4) if _delta is not None else None
     return out
 
 
@@ -9685,17 +9822,34 @@ def mass_rows(em: Dict[str, Any],
             continue
         mat_cell = str(c.get("material") or "")
         mass_note = ""
+        row_name = str(c.get("name") or "—")
         live = c.get("material_assigned")
         if live:
-            # PLAIN TEXT (no markup): this row is shared verbatim by both
-            # renderers, and the .docx table writer inserts a cell's string
-            # as-is, with no markup support at all.
-            mat_cell = ("%s %s current assignment: %s"
-                        % (c.get("material_stored") or mat_cell, FLAG, live))
-            if not c.get("mass_recomputed"):
+            stored = c.get("material_stored") or mat_cell
+            if c.get("mass_recomputed"):
+                # M1 (L13 server audit round 4): the row used to LEAD with the
+                # stale record's material ("Aluminium_6061 (!) current
+                # assignment: Steel_42CrMo4_QT") beside a mass already
+                # re-weighed at the live density — the Materials table two
+                # rows up and section 8's stress table both simply say
+                # "Steel_42CrMo4_QT", so this was the only place in the
+                # document still surfacing the wrong material as the
+                # headline.  The row now leads with the ASSIGNED card, like
+                # every other table; the stale record's material is named in
+                # a one-clause note, not the first thing a reader sees.
+                # PLAIN TEXT (no markup): this row is shared verbatim by both
+                # renderers, and the .docx table writer inserts a cell's
+                # string as-is, with no markup support at all.
+                mat_cell = ("%s (record solved with %s; mass re-weighed)"
+                           % (live, stored))
+                if stored and stored in row_name:
+                    row_name = row_name.replace(stored, live)
+            else:
+                mat_cell = ("%s %s current assignment: %s"
+                           % (stored, FLAG, live))
                 mass_note = " — mass not recomputed"
         rows.append([
-            str(c.get("name") or "—"),
+            row_name,
             mat_cell,
             _fmt(c.get("volume_cm3"), 1, "cm³"),
             _fmt(v, 3, "kg") + mass_note,
@@ -10836,13 +10990,30 @@ def em_demag_text(em: Dict[str, Any],
     # stored field says the 18.4 % of the L155 peak duty is 160 of 1380 elements
     # under 80 %, 2.05 % of the magnet area.
     _corner = demag_corner_clause(corner)
+    # I1 (L13 server audit round 4): these figures are RECOMPUTED from the
+    # duty's own stored field (`demag_from_field`), not the standalone
+    # summary's — said once, here, wherever this sentence is printed, rather
+    # than left for a reader to assume the summary's own number.  Where the
+    # summary agrees with the map to within 0.01 pt that agreement IS the
+    # independent check; where it does not (a genuinely different solve) the
+    # note says there is nothing stored to check the recomputed figure
+    # against, instead of implying one.
+    _recomp = ""
+    if dem.get("recomputed_from_field"):
+        if dem.get("recomputed_verified"):
+            _rd = _numf(dem.get("recomputed_delta_pct")) or 0.0
+            _recomp = (" Recomputed from the stored field, agreeing with the "
+                      "saved summary to %s." % _fmt(_rd, 2, "pt"))
+        else:
+            _recomp = (" Recomputed from the stored field; the saved summary "
+                      "is a different solve, not compared.")
     return ("Br kept %s of the magnet volume, energy ((BH)max) lost %s, worst "
-            "single element KEPT %s of its Br%s.%s%s" % (
+            "single element KEPT %s of its Br%s.%s%s%s" % (
                 _fmt(dem.get("br_kept_vol_pct"), 3, "%"),
                 _fmt(dem.get("bh_loss_pct"), 3, "%"),
                 _fmt(dem.get("br_worst_pct"), 1, "%"),
                 (", knee field %s kA/m" % _fmt(knee, 1)) if knee is not None else "",
-                grade, (" " + _corner) if _corner else ""))
+                grade, (" " + _corner) if _corner else "", _recomp))
 
 
 def demag_pair_note(left: Optional[Dict[str, Any]],
@@ -16395,6 +16566,11 @@ def _em_compare(st, cols: List[Dict[str, Any]], batt: Dict[str, Any],
     _mc = mass_consistency(cols)
     if _mc:
         out.append(_para("%s %s." % (FLAG, _mc["text"]), st["warn"]))
+    # M2 (L13 server audit round 4): whether the row above's disagreeing
+    # geometry hashes are a real geometry difference or just a remesh.
+    _gn = geometry_snapshot_note(cols)
+    if _gn:
+        out.append(_para(_gn, st["note"]))
     out.append(_para(EM_COMPARE_NOTE, st["body"]))
     if brg and brg.get("has_bearings"):
         out.append(_para(EM_BEARING_NOTE, st["note"]))

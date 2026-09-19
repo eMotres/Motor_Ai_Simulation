@@ -119,6 +119,91 @@ def _set_font(run, *, size: Optional[float] = None, bold: Optional[bool] = None,
     return run
 
 
+def _add_field(par, field: str, cached_text: str = "1") -> None:
+    """One live Word field (``PAGE``/``NUMPAGES``) as a run.
+
+    python-docx has no helper for a field code, so this writes the raw OOXML
+    Word itself writes: begin/instrText/separate/end, each its own run — the
+    form Word's own "Insert > Page Number" produces, so it is not a literal
+    string that happens to look like a field, and Word updates it like any
+    other one (print preview, F9, opening the file) rather than leaving it
+    frozen at whatever this process last saw.  ``cached_text`` is the LAST
+    COMPUTED VALUE a field carries between the ``separate`` and ``end``
+    chars — what a viewer that never re-lays-out the document (a thumbnailer,
+    a diff tool) shows instead of nothing; Word overwrites it the moment it
+    opens the file.
+    """
+    from docx.oxml import OxmlElement
+
+    r1 = par.add_run()
+    _set_font(r1, size=8.0, color=NOTE)
+    fld_begin = OxmlElement("w:fldChar")
+    fld_begin.set(_qn("w:fldCharType"), "begin")
+    r1._r.append(fld_begin)
+
+    r2 = par.add_run()
+    _set_font(r2, size=8.0, color=NOTE)
+    instr = OxmlElement("w:instrText")
+    instr.set(_qn("xml:space"), "preserve")
+    instr.text = " %s " % field
+    r2._r.append(instr)
+
+    r3 = par.add_run()
+    _set_font(r3, size=8.0, color=NOTE)
+    fld_sep = OxmlElement("w:fldChar")
+    fld_sep.set(_qn("w:fldCharType"), "separate")
+    r3._r.append(fld_sep)
+
+    _set_font(par.add_run(cached_text), size=8.0, color=NOTE)
+
+    r5 = par.add_run()
+    _set_font(r5, size=8.0, color=NOTE)
+    fld_end = OxmlElement("w:fldChar")
+    fld_end.set(_qn("w:fldCharType"), "end")
+    r5._r.append(fld_end)
+
+
+def _add_footer(doc, stamp: str) -> None:
+    """The PAGE-NUMBERED FOOTER the PDF has always carried on every page and
+    the .docx, until now, had NONE (B1, L13 server audit round 4): unzipped,
+    the delivered .docx had zero ``<w:footerReference>`` parts and zero literal
+    "page N" text anywhere, so a client opening it in real Word saw no running
+    header, no confidentiality line and no page numbers at all — on a document
+    that, reflowed, is 1.5x the PDF's page count.
+
+    The PDF's own footer is ``report._decorate``: ``"{die} · {cfg}"`` on the
+    left, ``"page N"`` on the right.  This is the SAME left-hand stamp; the
+    right-hand side is ``"page {PAGE} of {NUMPAGES}"`` rather than a bare page
+    number, because Word's own pagination (which a client's fonts, printer
+    driver and page setup all move) is never the PDF's 28 — see the module
+    docstring's "SAME DOCUMENT, TWO RENDERERS" note.  The two documents are
+    cross-referenced by FIGURE and TABLE number, which are already identical,
+    not by page.
+
+    One call, because the whole document is one landscape section (see the
+    module docstring, "WHY LANDSCAPE") — one footer therefore already applies
+    to every page there is, and a second section would only give Word a seam
+    to reset the numbering at.
+    """
+    from docx.enum.text import WD_TAB_ALIGNMENT
+    from docx.shared import Cm, Pt
+
+    sec = doc.sections[0]
+    sec.footer.is_linked_to_previous = False
+    par = sec.footer.paragraphs[0] if sec.footer.paragraphs \
+        else sec.footer.add_paragraph()
+    for run in list(par.runs):
+        run._r.getparent().remove(run._r)
+    par.paragraph_format.space_before = Pt(2)
+    par.paragraph_format.tab_stops.add_tab_stop(
+        Cm(PAGE_TEXT_CM), WD_TAB_ALIGNMENT.RIGHT)
+    _set_font(par.add_run(stamp), size=8.0, color=NOTE)
+    _set_font(par.add_run("\tpage "), size=8.0, color=NOTE)
+    _add_field(par, "PAGE")
+    _set_font(par.add_run(" of "), size=8.0, color=NOTE)
+    _add_field(par, "NUMPAGES")
+
+
 _TAG = re.compile(r"<[^>]+>")
 
 
@@ -584,6 +669,10 @@ def build_motor_report_docx(*, die: str, cfg: str, die_doc: Dict[str, Any],
     sec.left_margin = sec.right_margin = Cm(1.5)
     sec.top_margin = sec.bottom_margin = Cm(1.5)
 
+    # THE SAME FOOTER THE PDF HAS ON EVERY PAGE, on every page here too (B1,
+    # L13 server audit round 4) — see `_add_footer`.
+    _add_footer(doc, "%s · %s" % (D["die"], D["cfg"]))
+
     normal = doc.styles["Normal"]
     normal.font.name = FONT
     normal.font.size = Pt(9)
@@ -817,6 +906,11 @@ def _comparisons(doc, D: Dict[str, Any]) -> None:
     _mc = R.mass_consistency(cols)
     if _mc:
         _p(doc, "%s %s." % (R.FLAG, _mc["text"]), size=9, bold=True, color=WARN)
+    # M2 (L13 server audit round 4): whether the row above's disagreeing
+    # geometry hashes are a real geometry difference or just a remesh.
+    _gn = R.geometry_snapshot_note(cols)
+    if _gn:
+        _p(doc, _gn, size=9.5, italic=True, color=NOTE)
     _p(doc, R.EM_COMPARE_NOTE, size=9)
     if D["brg"] and D["brg"].get("has_bearings"):
         _p(doc, R.EM_BEARING_NOTE, size=9.5, italic=True, color=NOTE)

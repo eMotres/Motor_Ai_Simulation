@@ -1218,6 +1218,18 @@ TEMP_BARS_CAPTION = (
     "Bar = the part's maximum, tick = its average; dashed lines are the "
     "insulation class and the magnet grade, a blue bar has no limit of its own.")
 
+def temp_bars_caption_with_duty(duty_name: Optional[str],
+                                 is_transient: bool = False,
+                                 time_s: Optional[float] = None) -> str:
+    """The temperature bars caption, with duty name and type (steady or transient)."""
+    base = TEMP_BARS_CAPTION
+    if is_transient and time_s is not None:
+        return f"Transient temperature at winding limit, t = {_fmt(time_s, 1, 's')}. {base}"
+    elif is_transient:
+        return f"Transient temperature. {base}"
+    else:
+        return f"Steady-state coupled temperature. {base}"
+
 MASS_J_CAPTION = (
     "Where the spinning inertia is — a part weighed by the SQUARE of its "
     "radius, same colours as the mass pie.")
@@ -8442,7 +8454,10 @@ def material_rows(mats: Dict[str, Any],
             ("Wire insulation", "wire_insulation", "enamel"),
             ("Insulation class", "__class__", ""),
             ("Retaining sleeve", "sleeve",
-             "hoop-wound carbon fibre" if mats.get("sleeve") else ""),
+             ("hoop-wound carbon fibre (ASSUMED: sleeve thickness is 0 or not set — "
+              "not installed)" if mats.get("sleeve") and
+              float(geo.get("sleeve_thickness", 0) or 0) <= 0
+              else "hoop-wound carbon fibre" if mats.get("sleeve") else "")),
             ("Shaft", "shaft", ""),
     ):
         # THE INSULATION IS ALWAYS ON THE PAGE (user 2026-09-11: "не нашёл ни
@@ -10240,6 +10255,20 @@ THERMAL_MAP_CAPTION = (
     # tenths under the part maximum the tables quote.  Said, not chased.
     "bar is the drawn field's own area-averaged range, a few tenths under the "
     "part maxima in the tables.")
+
+def thermal_map_caption_with_duty(duty_name: Optional[str],
+                                   is_transient: bool = False,
+                                   time_s: Optional[float] = None) -> str:
+    """The thermal map caption, with duty name and type (steady or transient)."""
+    if is_transient and time_s is not None:
+        return (f"Transient temperature at winding limit, t = {_fmt(time_s, 1, 's')}, "
+                f"from the cycle-averaged loss map. The bar is the drawn field's own "
+                f"area-averaged range.")
+    elif is_transient:
+        return (f"Transient temperature from the cycle-averaged loss map. The bar is "
+                f"the drawn field's own area-averaged range.")
+    else:
+        return THERMAL_MAP_CAPTION
 
 
 def thermal_map_owner_text(map_duty: Optional[str], from_duty: bool = False,

@@ -250,8 +250,9 @@ const FamilyCatalog: React.FC<{
 
   // Every mutation goes through here: run it, surface the backend's own error
   // text (they are written for engineers), reload the tree.
-  const mutate = async (label: string, fn: () => Promise<Response>) => {
-    setBusy(label); setMsg(null);
+  const mutate = async (label: string | ((data: any) => string), fn: () => Promise<Response>) => {
+    const pendingLabel = typeof label === 'string' ? label : 'saving configuration';
+    setBusy(pendingLabel); setMsg(null);
     try {
       const r = await fn();
       if (!r.ok) {
@@ -259,9 +260,13 @@ const FamilyCatalog: React.FC<{
         try { detail = (await r.json()).detail ?? detail; } catch { /* keep */ }
         setMsg(`✗ ${detail}`);
       } else {
-        setMsg(`✓ ${label}`);
+        let data: any = {};
+        if (typeof label === 'function') {
+          try { data = await r.json(); } catch { /* response data is optional */ }
+        }
+        setMsg(`✓ ${typeof label === 'function' ? label(data) : label}`);
       }
-    } catch (e) { setMsg(`✗ ${label}: ${e}`); }
+    } catch (e) { setMsg(`✗ ${pendingLabel}: ${e}`); }
     setBusy(null);
     await load(true);
     try { window.dispatchEvent(new CustomEvent('family-changed')); } catch { /* SSR */ }
@@ -403,7 +408,7 @@ const FamilyCatalog: React.FC<{
     hint: 'Snapshots the CURRENT stack / wire / winding / materials',
     onSubmit: (name) => {
       const role = readLS('opMode', 'motor') === 'generator' ? 'generator' : 'motor';
-      mutate(`configuration '${name}' created`, () =>
+      mutate((data) => `configuration '${String(data?.config || name)}' created`, () =>
         post('/api/family/config', { die, name, role }));
     },
   });

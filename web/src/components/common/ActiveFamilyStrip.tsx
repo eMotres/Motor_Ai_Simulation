@@ -229,8 +229,13 @@ const ActiveFamilyStrip: React.FC = () => {
 
   // Save the CURRENT Simulation point back into the loaded duty; then, when
   // the LAST finished run sits exactly on that point, record its results too.
-  const save = async () => {
+  const save = async (configOverride?: string) => {
     if (!ctx.duty) return;
+    // `setCtx` is asynchronous.  The "save as new configuration" flow must
+    // therefore pass the freshly-created canonical name explicitly; otherwise
+    // this closure still writes to the configuration that was active before.
+    const targetConfig = String(configOverride || ctx.config || '');
+    if (!targetConfig) return;
     setBusy(true); setMsg(null);
     try {
       // Does the LAST finished run sit on the point being saved?  Then its
@@ -422,7 +427,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // before this feature existed.
       let dcSent: Record<string, unknown> | null = null;
       try {
-        dcSent = readDutyCycle(dutyKey(ctx.die, ctx.config, ctx.duty));
+        dcSent = readDutyCycle(dutyKey(ctx.die, targetConfig, ctx.duty));
         if (dcSent) dutyBody.duty_cycle = dcSent;
       } catch { /* no cycle — the continuous point it stays */ }
       // NOTE for the overlay bookkeeping further down: `mesh` is the ONLY
@@ -434,7 +439,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // as having captured the point either.
       const r = await fetch(`${API}/api/family/duty`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die: ctx.die, config: ctx.config, duty: dutyBody }),
+        body: JSON.stringify({ die: ctx.die, config: targetConfig, duty: dutyBody }),
       });
       if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
       // The save may have AUTO-RENAMED the configuration (M1-L200 -> M1-L220
@@ -446,7 +451,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // settings ARE this die's settings — remember them, so loading any duty
       // of this die later restores the user's own mesh, not a stray snapshot.
       try { rememberDieSettings(String(ctx.die)); } catch { /* convenience */ }
-      const cfgName = (rj && rj.config) ? String(rj.config) : (ctx.config as string);
+      const cfgName = (rj && rj.config) ? String(rj.config) : targetConfig;
       // The duty's SNAPSHOT now states this point, so the local per-duty
       // overlay has nothing left to say — dropping it is what makes a save
       // stick: otherwise the pre-save edit would keep winning on every later
@@ -460,17 +465,17 @@ const ActiveFamilyStrip: React.FC = () => {
       // back to whatever its sibling last left on the panel.
       try {
         if (runMatches) {
-          clearDutyOp(dutyKey(ctx.die, ctx.config, ctx.duty));
-          if (cfgName !== ctx.config) clearDutyOp(dutyKey(ctx.die, cfgName, ctx.duty));
+          clearDutyOp(dutyKey(ctx.die, targetConfig, ctx.duty));
+          if (cfgName !== targetConfig) clearDutyOp(dutyKey(ctx.die, cfgName, ctx.duty));
         }
         // An auto-rename (M1-L200 → M1-L220) moves the duty to a new
         // configuration, and its per-duty memory has to move with it — the
         // point on the panel IS that memory, so re-filing it under the new
         // name is the whole migration.
-        if (cfgName !== ctx.config) {
+        if (cfgName !== targetConfig) {
           setActiveDuty(String(ctx.die), cfgName, String(ctx.duty));
           if (!runMatches) rememberDutyOp(dutyKey(ctx.die, cfgName, ctx.duty));
-          clearDutyOp(dutyKey(ctx.die, ctx.config, ctx.duty));
+          clearDutyOp(dutyKey(ctx.die, targetConfig, ctx.duty));
         }
         // The DUTY CYCLE overlay, on the same rule as the point's but WITHOUT
         // the matching-run condition: the block was sent on this save whatever
@@ -478,9 +483,9 @@ const ActiveFamilyStrip: React.FC = () => {
         // nothing left to add.  It becomes this duty's snapshot layer in the
         // same breath, so the editor keeps showing what was just saved.
         if (dcSent) {
-          clearDutyCycle(dutyKey(ctx.die, ctx.config, ctx.duty),
-                         cfgName === ctx.config ? dcSent : null);
-          if (cfgName !== ctx.config) {
+          clearDutyCycle(dutyKey(ctx.die, targetConfig, ctx.duty),
+                         cfgName === targetConfig ? dcSent : null);
+          if (cfgName !== targetConfig) {
             clearDutyCycle(dutyKey(ctx.die, cfgName, ctx.duty), dcSent);
           }
         }
@@ -606,11 +611,17 @@ const ActiveFamilyStrip: React.FC = () => {
       });
       if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
       const rj = await r.json().catch(() => ({} as any));
-      const created = String(rj?.name || name);
-      await fetch(`${API}/api/family/activate`, {
+      // The API returns the canonical name in `config` (for example an entered
+      // L12 becomes L15 when the live stack is 15 mm).  Keep `name` only for
+      // compatibility with older servers.
+      const created = String(rj?.config || rj?.name || name);
+      const activated = await fetch(`${API}/api/family/activate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ die: ctx.die, config: created, duty: ctx.duty }),
       });
+      if (!activated.ok) {
+        throw new Error((await activated.json()).detail ?? `HTTP ${activated.status}`);
+      }
       setBuildClash(false);
       // The duty moved to a new configuration: its per-duty operating-point
       // memory has to follow, or the panel keeps filing edits under the
@@ -619,9 +630,10 @@ const ActiveFamilyStrip: React.FC = () => {
       catch { /* memory is a convenience, never a blocker */ }
       window.dispatchEvent(new CustomEvent('family-changed'));
       setMsg(`✓ configuration '${created}' created — saving the duty…`);
-      // Re-read the context (the strip's own poller is async) and save.
+      // Save with the server's canonical name.  Updating React state alone is
+      // insufficient here because this function still closes over the old ctx.
       setCtx((c) => (c ? { ...c, config: created } : c));
-      setTimeout(() => { void save(); }, 150);
+      await save(created);
     } catch (e: any) { setMsg(`✗ ${e?.message ?? e}`); }
     setBusy(false);
   };

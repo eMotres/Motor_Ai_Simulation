@@ -15697,6 +15697,38 @@ def limited_state_clause(rec: Optional[Dict[str, Any]]) -> str:
     return "the limit, after %s%s" % (runs, tail)
 
 
+#: Which network node each judged part's temperature row is the mean of.
+_LIMITED_PART_NODE = {"winding": "winding", "magnet": "magnet"}
+
+
+def limited_temperature_clause(rec: Optional[Dict[str, Any]], part: str) -> str:
+    """The one clause the coupled table's temperature row of the LIMITING part
+    prints beside its number — ``""`` everywhere else.
+
+    ``solved at the limit; node mean 183.5 °C``: the record's ``coil_temp_c``
+    of a limited duty IS the class temperature (owner 2026-09-18: *«расчёт
+    должен быть при катушках в 200 градусов, а не 184»* — the final
+    electromagnetic pass is made with the limiting part exactly at its limit,
+    ``routes.coupled._limited_block`` states the rule), and the row says so in
+    one clause, with the node mean the map is translated onto beside it, so a
+    reader who compares the table with the map's mean is not left with two
+    numbers for one winding.
+
+    Only on a record whose block carries ``em_pass_at`` — a limited record
+    written before that day was solved at the node mean, and this clause would
+    misdescribe it; its number prints bare, as it did.
+    """
+    blk = limited_of(rec)
+    if not blk or not isinstance(blk.get("em_pass_at"), dict):
+        return ""
+    if str(blk.get("part") or "") != str(part):
+        return ""
+    node = _numf((blk.get("temperatures_at_limit") or {}).get(
+        _LIMITED_PART_NODE.get(str(part), str(part))))
+    return "solved at the limit" + (
+        "" if node is None else "; node mean %s" % _fmt(node, 1, "°C"))
+
+
 def time_to_limit_of(rec: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """The ``time_to_limit`` block of a coupled record, or ``None``.
 
@@ -15986,8 +16018,23 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     # solved to its steady state, which is all of them until somebody asks.
     rows.append(["Temperatures are"] + _col_vals(
         cols, lambda c: limited_state_clause(_c(c)) or "—"))
-    R("Winding temperature [°C]", lambda c: (_c(c) or {}).get("coil_temp_c"), 1)
-    R("Magnet temperature [°C]", lambda c: (_c(c) or {}).get("magnet_temp_c"), 1)
+
+    # …AND THE LIMITING PART'S ROW SAYS IT WAS SOLVED AT THE LIMIT (owner
+    # 2026-09-18): "200 (solved at the limit; node mean 183.5 °C)".  One
+    # clause on one cell, only on a record whose final pass was made there;
+    # every other cell is the bare number it always was.
+    def T(label, key, part):
+        def _cell(c):
+            rec = _c(c)
+            if rec is None:
+                return NOT_SOLVED
+            v = _fmt(rec.get(key), 1, "")
+            clause = limited_temperature_clause(rec, part)
+            return v + (" (%s)" % clause if clause else "")
+        rows.append([label] + _col_vals(cols, _cell))
+
+    T("Winding temperature [°C]", "coil_temp_c", "winding")
+    T("Magnet temperature [°C]", "magnet_temp_c", "magnet")
     R("Magnet temperature, hottest [°C]",
       lambda c: (_c(c) or {}).get("magnet_temp_max_c"), 1)
     R("Bearing temperature [°C]", lambda c: (_c(c) or {}).get("bearing_temp_c"), 1)

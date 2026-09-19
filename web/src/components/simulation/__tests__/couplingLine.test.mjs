@@ -14,10 +14,16 @@
 // this line is the most-read place it could appear.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ── verbatim from coupledApi.ts ───────────────────────────────────────────
 function couplingLine(c) {
-  const m = c.magnet_temp_c == null ? null : `magnets ${c.magnet_temp_c.toFixed(0)} °C`;
+  const limPart = c.mode === 'limited' ? String(c.limited?.part ?? '') : '';
+  const atLimit = (part) => (limPart === part ? ' (at the limit)' : '');
+  const m = c.magnet_temp_c == null ? null
+    : `magnets ${c.magnet_temp_c.toFixed(0)} °C${atLimit('magnet')}`;
   const w = c.P_mech_extra_W;
   const mech = w == null ? null : `mechanical ${w.toFixed(w < 10 ? 1 : 0)} W`;
   const mb = c.mechanical;
@@ -36,8 +42,12 @@ function couplingLine(c) {
     : cr.first_forward_rpm == null ? null
     : `crit ${fmtRpm(cr.first_forward_rpm)}${(cr.n_forward_below_rated ?? 0) > 0
         || (cr.first_forward_margin_pct != null && cr.first_forward_margin_pct < 10) ? ' ⚠' : ''}`;
-  return [`winding ${c.coil_temp_c.toFixed(0)} °C`, m, mech,
-    `${c.iterations} it.${c.converged ? '' : ' ⚠'}`, regimeTerm(c.duty_cycle),
+  return [`winding ${c.coil_temp_c.toFixed(0)} °C${atLimit('winding')}`, m, mech,
+    c.mode === 'limited'
+      ? (limPart === 'winding' || limPart === 'magnet'
+          ? `${c.iterations} it.` : `${c.iterations} it. · at the limit`)
+      : `${c.iterations} it.${c.converged ? '' : ' ⚠'}`,
+    regimeTerm(c.duty_cycle),
     mechNote, modesTerm, critTerm]
     .filter(Boolean).join(' · ');
 }
@@ -239,6 +249,58 @@ test('only a duty that does NOT fit reaches the Run button', () => {
   const n = coupledRegimeNotice(S3_OVER);
   assert.ok(n.startsWith('Duty cycle: '), 'the prefix runNotice classifies on');
   assert.ok(n.includes('does NOT fit under it.'));
+});
+
+// ── THE MACHINE AT THE LIMIT (owner 2026-09-18) ─────────────────────────────
+// «так и расчёт тогда должен быть при катушках в 200 градусов, а не 184»: a
+// `limits` run's final pass is solved with the limiting part exactly AT its
+// limit, so the record's temperature IS the limit and the line says so on that
+// term — the reader then knows the torque, the losses and R beside it are
+// those of a 200 °C winding.  No ⚠: the loop was asked to stop, it did not
+// fail to settle.
+const L13_PEAK_LIMITED = {
+  coil_temp_c: 200.0, magnet_temp_c: 45.18, iterations: 2, converged: false,
+  P_mech_extra_W: 1.8, mode: 'limited', solve_to: 'limits',
+  limited: { part: 'winding', limit_c: 200,
+             temperatures_at_limit: { winding: 183.5, magnet: 43.78 },
+             em_pass_at: { coil_c: 200.0, magnet_c: 45.18 } },
+  history: [
+    { iter: 1, T_coil_in: 200.0, T_magnet_in: 120.0, T_coil_out: 409.0,
+      T_magnet_out: 95.0, T_magnet_max: 96.1, P_mech_extra_W: 1.8, bearing_temp_c: 40 },
+    { iter: 2, phase: 'limit', T_coil_in: 200.0, T_magnet_in: 45.18,
+      T_coil_out: null, T_magnet_out: null, T_magnet_max: 45.18,
+      P_mech_extra_W: 1.8, bearing_temp_c: 43.6 },
+  ],
+};
+
+test('a limited record says the winding IS at the limit, and drops the ⚠', () => {
+  assert.equal(couplingLine(L13_PEAK_LIMITED),
+    'winding 200 °C (at the limit) · magnets 45 °C · mechanical 1.8 W · 2 it.');
+});
+
+test('when the magnets limit, the words move to the magnet term', () => {
+  const byMagnet = { ...L13_PEAK_LIMITED, coil_temp_c: 177.5, magnet_temp_c: 180,
+    limited: { ...L13_PEAK_LIMITED.limited, part: 'magnet', limit_c: 180 } };
+  assert.equal(couplingLine(byMagnet),
+    'winding 178 °C · magnets 180 °C (at the limit) · mechanical 1.8 W · 2 it.');
+});
+
+test('a record limited by another part keeps the words on the iteration term', () => {
+  const bySeat = { ...L13_PEAK_LIMITED, coil_temp_c: 150, magnet_temp_c: 60,
+    limited: { ...L13_PEAK_LIMITED.limited, part: 'bearing', limit_c: 120 } };
+  const line = couplingLine(bySeat);
+  assert.ok(line.endsWith('2 it. · at the limit'), line);
+  assert.ok(!line.includes('(at the limit)'), line);
+  assert.ok(!line.includes('⚠'), line);
+});
+
+test('the shipped source prints the same words', () => {
+  const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)),
+                                '..', 'coupledApi.ts'), 'utf8');
+  const fn = src.slice(src.indexOf('export function couplingLine'),
+                       src.indexOf('export function regimeTerm'));
+  assert.ok(fn.includes("' (at the limit)'"), fn);
+  assert.ok(fn.includes("c.mode === 'limited'"), fn);
 });
 
 test('no feasible ratio at all is reported too', () => {

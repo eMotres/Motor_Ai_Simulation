@@ -15,9 +15,16 @@ WIRING, and that is what this file pins:
       extra electromagnetic pass, ``converged`` meaning what it meant.  This is
       the assertion that protects every stored duty in the catalog.
   (b) ``limits`` STOPS AT THE FIRST CROSSING and re-solves the machine there: one
-      extra pass, at the node temperatures of that instant, and the record says
-      so (``mode: "limited"``) with the part, the limit, both times, the
-      temperatures at the limit and the cooling the answer is conditional on.
+      extra pass, AT THE LIMIT, and the record says so (``mode: "limited"``)
+      with the part, the limit, both times, the temperatures at the limit and
+      the cooling the answer is conditional on.  "At the limit" is literal
+      (owner 2026-09-18, on the live site: *«так и расчёт тогда должен быть
+      при катушках в 200 градусов, а не 184»*): the pass is solved with each
+      part at the temperature its limit is judged on — the winding hot spot,
+      the hottest magnet element — and the limiting part exactly AT its limit,
+      never at the node mean the network integrates.  ``em_pass_at`` names the
+      two numbers; ``temperatures_at_limit`` keeps the node means the map is
+      translated onto.
   (c) …AND ONLY ON A REAL CROSSING.  A point inside every limit, and a point
       whose step response settles UNDER the limit, are ``steady`` records in
       ``limits`` mode too: the steady state IS the answer there, and a moment
@@ -84,6 +91,36 @@ def _ttl_block(*, reaches: bool = True, within: bool = False,
         "starts": starts,
         "network": {"available": True},
         "note": "over the winding limit",
+    }
+
+
+def _ttl_block_magnet_limits(*, winding_node: float = 140.0,
+                             magnet_node: float = 178.8):
+    """The other case: the MAGNETS reach their card first.  The winding is
+    inside its class here, so it has NO row — its hot spot at the instant has to
+    be read off the map's own offset (the fake map is 400 mean / 430 max, so
+    +30 K), which is exactly the path the rule needs for a part that is not
+    over anything."""
+    state = {"winding": winding_node, "stator": 100.0, "rotor": 120.0,
+             "magnet": magnet_node}
+    return {
+        "within_limits": False,
+        "time_to_limit_s": 40.0, "limiting_part": "magnet",
+        "limits_c": {"winding": 200.0, "magnet": 180.0},
+        "at_point_c": {"winding": 170.0, "magnet": 195.0},
+        "over_by_K": {"magnet": 15.0},
+        "over_parts": ["magnet"], "judged": ["winding", "magnet"],
+        "parts": [{"part": "magnet", "node": "magnet",
+                   "quantity": "the hottest magnet element", "limit_c": 180.0,
+                   "limit_source": "the card", "offset_K": 1.2,
+                   "reaches": True, "time_to_limit_s": 40.0,
+                   "state_c": state}],
+        "starts": {"cold": {"start": "cold", "time_to_limit_s": 40.0,
+                            "limiting_part": "magnet",
+                            "start_source": "every node at the ambient",
+                            "state_at_limit_c": state}},
+        "network": {"available": True},
+        "note": "over the magnet limit",
     }
 
 
@@ -160,8 +197,10 @@ def test_the_default_is_the_steady_state_and_grows_no_limited_block(
     assert c["mode"] == "steady"
     assert "limited" not in c
     # The loop ran its budget on the winding at 400 °C and never once solved the
-    # machine at 172.5 °C — no extra pass happened.
+    # machine at the crossing — no extra pass happened, at the node mean or at
+    # the limit.
     assert 172.5 not in seen["coil_in"]
+    assert not any(r.get("phase") == "limit" for r in c["history"])
     assert c["em_runs"] == len(seen["coil_in"])
     assert c.get("warning_code") != "limited_operation"
 
@@ -183,29 +222,41 @@ def test_limits_stops_at_the_first_crossing_and_solves_the_machine_there(
         client, monkeypatch):
     """THE claim.  The loop sees a pass past the class, stops there rather than
     iterating towards a state the machine never reaches, and makes ONE more
-    electromagnetic run at the node temperatures of the crossing."""
+    electromagnetic run AT THE LIMIT: the winding at its class (200 °C — the
+    owner's correction of 2026-09-18, not the 172.5 °C node mean) and the
+    magnets at their hottest element of that instant (47.0 + 1.2 K)."""
     seen = _fake(monkeypatch, ttl=_ttl_block())
     c = _run(client, solve_to="limits")
 
     assert c["solve_to"] == "limits" and c["mode"] == "limited"
     # Pass 1 at the body's own 120 °C, then the pass AT the limit — and nothing
     # in between: the loop did not iterate towards the 400 °C map.
-    assert seen["coil_in"] == [120.0, 172.5], seen["coil_in"]
-    assert seen["magnet_in"] == [90.0, 47.0], seen["magnet_in"]
-    # …and the record's own temperatures are that pass's, not the map's.
-    assert c["coil_temp_c"] == 172.5
-    assert c["magnet_temp_c"] == 47.0
+    assert seen["coil_in"] == [120.0, 200.0], seen["coil_in"]
+    assert seen["magnet_in"] == [90.0, 48.2], seen["magnet_in"]
+    # …and the record's own temperatures are that pass's: the limit, and the
+    # hottest element — never the node means.
+    assert c["coil_temp_c"] == 200.0
+    assert c["magnet_temp_c"] == 48.2
 
     lim = c["limited"]
     assert lim["part"] == "winding"
     assert lim["limit_c"] == 200.0
     assert lim["t_cold_s"] == 24.0 and lim["t_rated_s"] == 9.0
     assert lim["t_cold_words"] == "24 s"
+    # The NODE MEANS of the crossing are kept — the map is translated onto them.
     assert lim["temperatures_at_limit"]["winding"] == 172.5
     assert lim["temperatures_at_limit"]["magnet"] == 47.0
     # The winding hot spot is AT the limit by construction — that is what the
     # §8 row is judged on, and it is the limit, not the node mean.
     assert lim["at_limit_c"]["winding"] == 200.0
+    assert lim["at_limit_c"]["magnet"] == 48.2
+    # …and the record SAYS what the electromagnetic numbers were solved at.
+    ep = lim["em_pass_at"]
+    assert ep["coil_c"] == 200.0 and ep["magnet_c"] == 48.2
+    assert ep["coil_basis"] == "the winding limit"
+    assert ep["magnet_basis"] == "the hottest magnet element at that instant"
+    assert "the limiting part exactly at its limit" in ep["rule"]
+    assert "the winding at 200.0 °C (the winding limit)" in lim["note"]
     # What the steady state WOULD have been, beside a flag saying the loop was
     # stopped rather than iterated to it.
     assert lim["steady_state_would_be"]["winding"] == 430.0
@@ -237,9 +288,29 @@ def test_the_final_pass_is_marked_in_the_history(client, monkeypatch):
     _fake(monkeypatch, ttl=_ttl_block())
     c = _run(client, solve_to="limits")
     assert c["history"][-1]["phase"] == "limit"
-    assert c["history"][-1]["T_coil_in"] == 172.5
+    assert c["history"][-1]["T_coil_in"] == 200.0
+    assert c["history"][-1]["T_magnet_in"] == 48.2
     assert c["history"][-1]["T_coil_out"] is None
     assert all("phase" not in r for r in c["history"][:-1])
+
+
+def test_when_the_magnets_limit_they_sit_at_the_card_and_the_coil_at_its_hot_spot(
+        client, monkeypatch):
+    """The rule, the other way round: the limiting part exactly at its limit,
+    every other part at the temperature ITS limit is judged on.  The winding is
+    inside its class here and has no row of its own, so its hot spot is read
+    off the map's offset (400 mean / 430 max = +30 K on a 140 °C node)."""
+    seen = _fake(monkeypatch, ttl=_ttl_block_magnet_limits())
+    c = _run(client, solve_to="limits")
+    assert c["mode"] == "limited" and c["limited"]["part"] == "magnet"
+    assert seen["coil_in"] == [120.0, 170.0], seen["coil_in"]
+    assert seen["magnet_in"] == [90.0, 180.0], seen["magnet_in"]
+    assert c["coil_temp_c"] == 170.0 and c["magnet_temp_c"] == 180.0
+    ep = c["limited"]["em_pass_at"]
+    assert ep["magnet_basis"] == "the magnet limit"
+    assert ep["coil_basis"] == "the winding hot spot at that instant"
+    assert c["limited"]["at_limit_c"] == {"winding": 170.0, "magnet": 180.0}
+    assert c["limited"]["temperatures_at_limit"]["winding"] == 140.0
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +395,7 @@ def test_a_voltage_fed_loop_holds_the_point_and_records_where_it_landed(
     assert c["history"][-1]["phase"] == "limit"
     assert c["history"][-1]["v_phase_peak_V"] == 300.0
     # ONE extra pass, never two: the loop is not re-entered.
-    assert seen["coil_in"] == [120.0, 172.5]
+    assert seen["coil_in"] == [120.0, 200.0]
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +407,11 @@ LIMITED = {
     "t_cold_words": "24 s", "t_rated_words": "9.0 s",
     "temperatures_at_limit": {"winding": 172.5, "magnet": 47.0},
     "at_limit_c": {"winding": 200.0, "magnet": 48.2},
+    "em_pass_at": {
+        "coil_c": 200.0, "magnet_c": 48.2,
+        "coil_basis": "the winding limit",
+        "magnet_basis": "the hottest magnet element at that instant",
+    },
     "steady_state_would_be": {"winding": 430.0},
     "steady_state_converged": False,
     "cooling_words": "air 10 m/s at 30 °C, bore air 40 m/s",
@@ -349,7 +425,8 @@ def test_the_three_keys_survive_compact_coupled_into_the_duty_record():
     """The report and the catalog chip read the DUTY's stored record, not the
     run: a mode that does not make that crossing reaches no page."""
     from motor_ai_sim.duty_results import compact_coupled
-    rec = compact_coupled({"coupling": {"coil_temp_c": 172.5,
+    rec = compact_coupled({"coupling": {"coil_temp_c": 200.0,
+                                        "magnet_temp_c": 48.2,
                                         "solve_to": "limits",
                                         "mode": "limited",
                                         "limited": dict(LIMITED)},
@@ -358,6 +435,8 @@ def test_the_three_keys_survive_compact_coupled_into_the_duty_record():
     assert rec["mode"] == "limited"
     assert rec["limited"]["t_cold_s"] == 24.0
     assert rec["limited"]["at_limit_c"]["winding"] == 200.0
+    assert rec["limited"]["em_pass_at"]["coil_c"] == 200.0
+    assert rec["coil_temp_c"] == 200.0
     # …and a steady record grows no keys at all, rather than null ones.
     plain = compact_coupled({"coupling": {"coil_temp_c": 120.0}})
     assert "mode" not in plain and "limited" not in plain \
@@ -377,6 +456,17 @@ def test_the_report_reads_the_mode_and_judges_the_limited_state():
     clause = rp.limited_state_clause(rec)
     assert clause.startswith("the limit, after 24 s from cold (9.0 s from rated)")
     assert "430 °C" in clause and "stopped at the limit" in clause
+    assert rp.limited_temperature_clause(rec, "winding") == (
+        "solved at the limit; node mean 172.5 °C")
+    assert rp.limited_temperature_clause(rec, "magnet") == ""
+    rows = {row[0]: row[1] for row in rp.coupled_compare_rows([
+        {"duty": "peak", "em": {}, "d": {}, "res": {
+            "coupled": {**rec, "coil_temp_c": 200.0,
+                        "magnet_temp_c": 48.2}}}
+    ])[1]}
+    assert rows["Winding temperature [°C]"] == (
+        "200 (solved at the limit; node mean 172.5 °C)")
+    assert rows["Magnet temperature [°C]"] == "48.2"
     # A steady record has none of it.
     assert rp.coupled_mode({"converged": True}) == "steady"
     assert rp.limited_state_clause({"converged": True}) == ""
@@ -492,10 +582,10 @@ def test_the_cold_catalogue_pass_comes_after_the_pass_at_the_limit(
                           "solve_to": "limits", "cold_constants": True})
     assert r.status_code == 200, r.text[:800]
     c = r.json()["coupling"]
-    assert seen["coil_in"] == [120.0, 172.5, 20.0], seen["coil_in"]
+    assert seen["coil_in"] == [120.0, 200.0, 20.0], seen["coil_in"]
     assert c["mode"] == "limited"
     # The record is still the machine AT THE LIMIT, not the cold one.
-    assert c["coil_temp_c"] == 172.5
+    assert c["coil_temp_c"] == 200.0
     assert c["constants_20c"]["coil_temp_c"] == 20.0
 
 

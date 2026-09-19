@@ -183,6 +183,15 @@ export interface LimitedState {
   /** …and each judged part's own quantity there — the hot spot, the hottest
    *  element, the seat.  The limiting one is exactly its limit. */
   at_limit_c?: Record<string, number>;
+  /** WHAT THE FINAL ELECTROMAGNETIC PASS WAS SOLVED AT (owner 2026-09-18:
+   *  *«расчёт должен быть при катушках в 200 градусов, а не 184»*): each part
+   *  at the temperature its limit is judged on — the winding hot spot, the
+   *  hottest magnet element — and the limiting part exactly AT its limit.
+   *  The block's `coil_temp_c` / `magnet_temp_c` ARE these two numbers; the
+   *  node means above are what the map was translated onto.  Absent on a
+   *  limited record written before that day (solved at the node mean). */
+  em_pass_at?: { coil_c?: number | null; magnet_c?: number | null;
+                 coil_basis?: string; magnet_basis?: string; rule?: string };
   bearing_seat_at_limit_c?: number | null;
   /** what the pass this was fitted to says each part reaches if held for ever */
   steady_state_would_be?: Record<string, number>;
@@ -484,7 +493,14 @@ export function couplingAdopted(stamp: string): boolean {
  *  on the line is a loss the reader has to go looking for.  Omitted entirely on
  *  a machine that names no bearings, because "0 W" would be a claim. */
 export function couplingLine(c: CouplingBlock): string {
-  const m = c.magnet_temp_c == null ? null : `magnets ${c.magnet_temp_c.toFixed(0)} °C`;
+  // A LIMITED record's temperatures are the ones the numbers were SOLVED at
+  // (owner 2026-09-18): the limiting part sits exactly at its limit, so its
+  // term says so — "winding 200 °C (at the limit)" — and the reader knows the
+  // torque, the losses and R beside it are those of a 200 °C winding.
+  const limPart = c.mode === 'limited' ? String(c.limited?.part ?? '') : '';
+  const atLimit = (part: string) => (limPart === part ? ' (at the limit)' : '');
+  const m = c.magnet_temp_c == null ? null
+    : `magnets ${c.magnet_temp_c.toFixed(0)} °C${atLimit('magnet')}`;
   const w = c.P_mech_extra_W;
   const mech = w == null ? null : `mechanical ${w.toFixed(w < 10 ? 1 : 0)} W`;
   // The mechanical step's own footnotes (2026-09-09): a joint solved bonded
@@ -512,11 +528,16 @@ export function couplingLine(c: CouplingBlock): string {
   // THE REGIME, on an impulse duty (2026-09-16): the ratio the machine can hold
   // and, when the duty asked about one, whether it fits.  One term — the
   // sentence is in the tooltip — and nothing at all on a continuous duty.
-  return [`winding ${c.coil_temp_c.toFixed(0)} °C`, m, mech,
+  return [`winding ${c.coil_temp_c.toFixed(0)} °C${atLimit('winding')}`, m, mech,
     // …and a LIMITED run did not fail to settle, it was asked to stop (owner
-    // 2026-09-18), so the term says which state this is rather than warning.
-    c.mode === 'limited' ? `${c.iterations} it. · at the limit`
-                         : `${c.iterations} it.${c.converged ? '' : ' ⚠'}`,
+    // 2026-09-18), so there is no ⚠.  The temperature term already says
+    // "(at the limit)" when the winding or the magnets limit; only a record
+    // limited by another part (the bearing seat, or one with no part named)
+    // still needs the words on the iteration term.
+    c.mode === 'limited'
+      ? (limPart === 'winding' || limPart === 'magnet'
+          ? `${c.iterations} it.` : `${c.iterations} it. · at the limit`)
+      : `${c.iterations} it.${c.converged ? '' : ' ⚠'}`,
     regimeTerm(c.duty_cycle),
     mechNote, modesTerm, critTerm]
     .filter(Boolean).join(' · ');

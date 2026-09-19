@@ -1432,6 +1432,26 @@ def _limited_block(time_to_limit: Optional[Dict[str, Any]],
     this mode the loop STOPS at the first over-limit pass rather than iterating
     towards a state the machine cannot hold, so that number is a reading off
     the last map and not a converged fixed point.
+
+    THE TEMPERATURES THE FINAL ELECTROMAGNETIC PASS IS SOLVED AT (``em_pass_at``,
+    owner 2026-09-18 on the live site: *«так и расчёт тогда должен быть при
+    катушках в 200 градусов, а не 184»*).  THE RULE: the EM pass of a limited
+    state uses, for each part, the temperature the LIMIT is judged on (the
+    winding HOT SPOT, the HOTTEST magnet element — never the node mean), with
+    the limiting part exactly at its limit.  So when the winding limits, the
+    coils are solved AT the class temperature (200 °C) and the magnets at their
+    hottest element of that instant (43.8 °C node → 45.2 °C); when the magnet
+    limits, the magnets are solved at the card's limit and the coils at their
+    hot spot of that instant.  The resistances, the copper loss, the torque, η,
+    KV/Kt and the voltages of the record are then those of a winding that IS at
+    200 °C — conservative, and consistent with the sentence "then the winding
+    reaches 200 °C" — instead of those of the 183.5 °C node mean, which is a
+    machine 16 K colder than the one the sentence describes.
+
+    ``temperatures_at_limit`` (the node means) and ``at_limit_c`` (each judged
+    quantity) are both kept: the map is translated onto the node means, §8 is
+    judged on the quantities, and ``em_pass_at`` says which numbers the
+    electromagnetic ones were solved at.
     """
     from motor_ai_sim.thermal_settings import cooling_words
 
@@ -1449,11 +1469,13 @@ def _limited_block(time_to_limit: Optional[Dict[str, Any]],
         "t_rated_s": lim["t_rated_s"],
         "t_rated_words": (None if lim["t_rated_s"] is None
                           else _ttl.fmt_seconds(lim["t_rated_s"])),
-        # THE NODE MEANS at the crossing — what the final electromagnetic pass
-        # is solved at and what the record's temperatures become.
+        # THE NODE MEANS at the crossing — what the thermal map is translated
+        # onto (the network integrates node means).
         "temperatures_at_limit": dict(lim["temperatures_at_limit"]),
-        # …and each JUDGED part's own quantity there (the hot spot, the hottest
-        # element, the seat), which is what §8 judges and the maps must show.
+        # …and each part's own JUDGED quantity there (the hot spot, the hottest
+        # element, the seat): what §8 judges, what the maps must show, and —
+        # since 2026-09-18 — what the final electromagnetic pass is solved at
+        # (`em_pass_at`, below), so the record's temperatures are these.
         "at_limit_c": {},
         "steady_state_would_be": dict(t.get("at_point_c") or {}),
         "steady_state_converged": bool(steady_converged),
@@ -1478,6 +1500,39 @@ def _limited_block(time_to_limit: Optional[Dict[str, Any]],
             base = lim["temperatures_at_limit"].get(node)
             if base is not None and off is not None:
                 out["at_limit_c"][part] = round(float(base) + float(off), 2)
+    # A part that is NOT over its limit has no row above (the step response is
+    # only integrated for the parts that are over), so its judged quantity at
+    # the instant is read the same way the network reads it: the node mean of
+    # the crossing plus the map's own max − mean, frozen at the map's shape.
+    # Without this the magnets of the L13 peak (43.8 °C, far inside their card)
+    # would have no "hottest element" to solve the final pass at.
+    for part, node in (("winding", "winding"), ("magnet", "magnet")):
+        if part in out["at_limit_c"]:
+            continue
+        base = lim["temperatures_at_limit"].get(node)
+        if base is None:
+            continue
+        off, _why = _ttl._offset(field or {}, node)
+        out["at_limit_c"][part] = round(float(base) + float(off), 2)
+    # ── WHAT THE FINAL ELECTROMAGNETIC PASS IS SOLVED AT (owner 2026-09-18) ──
+    # The rule in the docstring: each part at the temperature its limit is
+    # judged on, the limiting part exactly at its limit.  `at_limit_c` already
+    # IS that — the limiting part's entry is its limit by construction, every
+    # other part's is its hot spot / hottest element of the instant — so the
+    # pass is solved at those two numbers and the record says so by name.
+    _coil_at = out["at_limit_c"].get("winding")
+    _mag_at = out["at_limit_c"].get("magnet")
+    out["em_pass_at"] = {
+        "coil_c": (None if _coil_at is None else round(float(_coil_at), 2)),
+        "magnet_c": (None if _mag_at is None else round(float(_mag_at), 2)),
+        "coil_basis": ("the winding limit" if lim["part"] == "winding"
+                       else "the winding hot spot at that instant"),
+        "magnet_basis": ("the magnet limit" if lim["part"] == "magnet"
+                         else "the hottest magnet element at that instant"),
+        "rule": ("the electromagnetic pass of a limited state uses, for each "
+                 "part, the temperature the LIMIT is judged on (hot spot / "
+                 "hottest element), the limiting part exactly at its limit"),
+    }
     # The bearing seat rides the rotor node whether or not it is JUDGED — the
     # summary of the final pass is billed at it, so it is resolved here from the
     # same map the offsets come from.
@@ -1488,12 +1543,20 @@ def _limited_block(time_to_limit: Optional[Dict[str, Any]],
         out["bearing_seat_at_limit_c"] = round(
             float(_r_lim) + (float(_seat[0]) - float(_rotor)), 2)
     out["line"] = _ttl.limited_line(time_to_limit)
+    _ep = out["em_pass_at"]
     out["note"] = (
         "%s. Every number in this record is the machine at that moment: the "
-        "electromagnetic run was made once more at these temperatures, and the "
-        "thermal map is the last solved map translated onto them (its shape "
+        "electromagnetic run was made once more with each part at the "
+        "temperature its limit is judged on — the winding at %s (%s), the "
+        "magnets at %s (%s) — and the thermal map is the last solved map "
+        "translated onto the node temperatures of that instant (its shape "
         "frozen, as the time-to-limit model states). Cooling: %s."
-        % (out["line"].rstrip("."), out["cooling_words"] or "as solved"))
+        % (out["line"].rstrip("."),
+           ("—" if _ep["coil_c"] is None else "%.1f °C" % _ep["coil_c"]),
+           _ep["coil_basis"],
+           ("—" if _ep["magnet_c"] is None else "%.1f °C" % _ep["magnet_c"]),
+           _ep["magnet_basis"],
+           out["cooling_words"] or "as solved"))
     return out
 
 
@@ -3489,15 +3552,22 @@ def _run(body: Dict[str, Any],
         # для них… то есть состояние мотора в работе 24 секунды при заданной
         # мощности»* — and (addendum) at the cooling this duty was solved with.
         #
-        # ONE extra electromagnetic pass, at the node temperatures of the
-        # crossing, so torque, the four loss classes, R, KV/Kt/Km, the
-        # demagnetisation check, the voltages and the ripple are those of the
-        # machine at that instant instead of those of a steady state it never
-        # reaches.  The thermal map is the last solved one TRANSLATED onto the
-        # same temperatures — the field-shape-frozen assumption the
-        # time-to-limit model already states — so the pictures and the tables
-        # are one state.  The loop is NOT re-entered: one pass, and the
-        # temperatures it is made at are the answer by construction.
+        # ONE extra electromagnetic pass, AT THE LIMIT, so torque, the four
+        # loss classes, R, KV/Kt/Km, the demagnetisation check, the voltages
+        # and the ripple are those of the machine at that instant instead of
+        # those of a steady state it never reaches.  "At the limit" is literal
+        # (owner 2026-09-18, on the live site: *«так и расчёт тогда должен быть
+        # при катушках в 200 градусов, а не 184»*): each part is solved at the
+        # temperature its limit is judged on — the winding hot spot, the
+        # hottest magnet element — and the limiting part exactly AT its limit,
+        # never at the node mean the network integrates (`_limited_block`
+        # states the rule; `em_pass_at` records the two numbers).  The thermal
+        # map is the last solved one TRANSLATED onto the node temperatures of
+        # the same instant — the field-shape-frozen assumption the
+        # time-to-limit model already states — so its hot spot IS that limit
+        # and the pictures and the tables are one state.  The loop is NOT
+        # re-entered: one pass, and the temperatures it is made at are the
+        # answer by construction.
         if (solve_to == "limits" and history and field and regime is None
                 and not _rr.suppressed()):
             limited = _limited_block(
@@ -3507,17 +3577,32 @@ def _run(body: Dict[str, Any],
         if limited:
             from motor_ai_sim.routes import thermal as _th
             _check_cancelled(run_id)
+            # THE NODE MEANS of the crossing — what the map is translated onto.
             _t_at = limited["temperatures_at_limit"]
-            _t_c = float(_t_at["winding"])
-            _t_m = _t_at.get("magnet")
+            # …AND THE TEMPERATURES THE PASS IS SOLVED AT: the winding at its
+            # limit (or its hot spot, when another part limits), the magnets at
+            # their hottest element (or their limit).  Never the node means —
+            # a "winding at 200 °C" solved with 183.5 °C copper is a machine
+            # 16 K colder than the sentence beside it.
+            _ep = limited["em_pass_at"]
+            _t_c = float(_ep["coil_c"] if _ep.get("coil_c") is not None
+                         else _t_at["winding"])
+            _t_m = (_ep.get("magnet_c") if _ep.get("magnet_c") is not None
+                    else _t_at.get("magnet"))
             _t_m = None if (t_mag is None or _t_m is None) else float(_t_m)
+            _ep["coil_c"], _ep["magnet_c"] = round(_t_c, 2), (
+                None if _t_m is None else round(_t_m, 2))
             _t_b = limited.get("bearing_seat_at_limit_c")
             _progress.update(
                 phase="final pass at the limit — the machine after %s"
                       % limited["t_cold_words"])
-            log.info("coupled: final pass at the limit — coil %.1f degC, "
-                     "magnet %s degC; %s", _t_c,
-                     "n/a" if _t_m is None else "%.1f" % _t_m, limited["line"])
+            log.info("coupled: final pass at the limit — coil %.1f degC (%s), "
+                     "magnet %s degC (%s); node means winding %.1f / magnet "
+                     "%s; %s", _t_c, _ep["coil_basis"],
+                     "n/a" if _t_m is None else "%.1f" % _t_m,
+                     _ep["magnet_basis"], float(_t_at["winding"]),
+                     "n/a" if _t_at.get("magnet") is None
+                     else "%.1f" % float(_t_at["magnet"]), limited["line"])
             _tok = _ml.BEARING_TEMP_C.set(None if _t_b is None else float(_t_b))
             try:
                 _em_lim = _em_run(body, coil_temp_c=_t_c, magnet_temp_c=_t_m,

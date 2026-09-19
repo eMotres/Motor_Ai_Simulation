@@ -4092,6 +4092,20 @@ def _any_fp(d: Any) -> Optional[str]:
     return str(fp) if fp else None
 
 
+def _any_fp2(d: Any) -> Optional[str]:
+    """The SAME-MACHINE print of a stored record, when it carries one.
+
+    Written by :func:`duty_results.live_fingerprint_v2` since 2026-09-19 (see
+    :func:`motor_ai_sim.simulation.geometry_2d.geometry_fingerprint_v2`);
+    records stored before that date have none, and a missing print is never a
+    mismatch.
+    """
+    if not isinstance(d, dict):
+        return None
+    fp = d.get("geometry_fingerprint_v2") or d.get("geo_fingerprint_v2")
+    return str(fp) if fp else None
+
+
 def duty_fingerprint_check(res: Dict[str, Any], em: Dict[str, Any]
                            ) -> Tuple[Optional[str], bool,
                                       List[Tuple[str, Optional[str]]]]:
@@ -4115,15 +4129,29 @@ def duty_fingerprint_check(res: Dict[str, Any], em: Dict[str, Any]
     carry a fingerprint matches it; ``per_kind`` is the raw ``(label, fp)``
     pairs, for the caller to name the odd one out.
     """
-    em_fp = _any_fp(em)
-    per_kind: List[Tuple[str, Optional[str]]] = [("Electromagnetic", em_fp)]
+    kinds: List[Tuple[str, Any]] = [("Electromagnetic", em)]
     for kind, label in (("thermal", "Thermal"), ("coupled", "Coupled loop"),
                         ("rotor_stress", "Mechanical"), ("modes", "Modes"),
                         ("critical_speeds", "Critical speeds"),
                         ("pwm", "PWM run"), ("duty_cycle", "Duty cycle")):
         v = (res or {}).get(kind)
         if isinstance(v, dict) and v:
-            per_kind.append((label, _any_fp(v)))
+            kinds.append((label, v))
+    per_kind: List[Tuple[str, Optional[str]]] = [(n, _any_fp(v))
+                                                 for n, v in kinds]
+    # THE SAME-MACHINE PRINT WINS WHERE EVERY RECORD CARRIES ONE (item 3,
+    # 2026-09-19).  The v1 print is a cache key and moves on a remesh or a
+    # re-derived float — measured on the L13, whose 'rated' and 'peak' records
+    # have bit-identical geometry inputs and two different v1 prints — so a
+    # check run on it can call one machine two.  Records written since carry
+    # `geometry_fingerprint_v2`, which is the geometry, the materials and the
+    # winding and nothing else; when they ALL do, that is what this compares
+    # and what the note prints.  Mixed or absent, nothing changes.
+    per_kind2 = [(n, _any_fp2(v)) for n, v in kinds]
+    _have2 = [f for _n, f in per_kind2 if f]
+    if len(_have2) >= 2 and len(_have2) == len([1 for _n, f in per_kind if f]):
+        per_kind = per_kind2
+    em_fp = per_kind[0][1]
     fps = [fp for _n, fp in per_kind if fp]
     if not fps:
         return None, True, per_kind
@@ -4159,7 +4187,11 @@ def duty_fingerprint_note(fp: Optional[str], all_agree: bool,
     """
     if fp is None:
         return ""
-    short = fp[:12]
+    # THE WHOLE PRINT, as §1's own hash line prints it (N3, round 3): the note
+    # used to truncate to twelve characters, so the two lines three rows apart
+    # read "f3b4728f381c5b31" and "f3b4728f381c" and invited the reader to
+    # take one for the other.
+    short = fp
     if all_agree:
         return "All records of this duty share geometry %s." % short
     odd = sorted({n for n, f in per_kind if f and f != fp})
@@ -4181,9 +4213,33 @@ def duty_fingerprint_note(fp: Optional[str], all_agree: bool,
     # (`report._machine_page` and `report_docx._machine`), the same split
     # every other loud note in this module already uses between the two
     # documents' different markup languages.
-    return ("this duty blends records solved on DIFFERENT geometries — %s: "
-            "the rest %s: never read as one machine."
-            % ("; ".join(bits) or "one record", short))
+    # A SENTENCE, NOT A STRING OF COLONS (N3, round 3).  The old form built
+    # "… DIFFERENT geometries — Electromagnetic carries no stored fingerprint
+    # at all: the rest f3b4728f381c: never read as one machine." — no verb, a
+    # truncated hash and no full stop after it.
+    return ("this duty blends records solved on DIFFERENT geometries: %s, "
+            "while the rest were solved on %s — they may not be read as one "
+            "machine." % ("; ".join(bits) or "one record", short))
+
+
+def geometry_hash_line(geo_hash: Any, duty: Any = None) -> str:
+    """The §1 line that names the geometry snapshot — OF ONE DUTY (N3, round 3).
+
+    It used to read "the snapshot every number in this report was solved on",
+    which is a claim about the whole document and was false on the audited
+    L13: the print shown, ``f3b4728f381c5b31``, is the 'peak' duty's, while
+    every record of the 'rated' duty beside it carries ``ee6accdc227f05fb``.
+    The line names the duty it belongs to; the comparison table in section 3
+    carries one row with each duty's own print, so the reader can see whether
+    the columns are one machine without being told they are.
+    """
+    h = str(geo_hash or "").strip()
+    if not h:
+        return ""
+    if duty:
+        return ("geometry %s — the snapshot the duty '%s' was solved on"
+                % (h, duty))
+    return "geometry %s — the snapshot this report's duty was solved on" % h
 
 
 def report_geometry(geo_live: Dict[str, Any], em: Dict[str, Any],
@@ -4220,7 +4276,17 @@ def report_geometry(geo_live: Dict[str, Any], em: Dict[str, Any],
     the rest of the table is the live configuration, unverified.
     """
     snap = _parse_geo_sig((em or {}).get("_geoSig"))
-    h = _geo_sig_hash((em or {}).get("_geoSig"))
+    # ONE IDENTIFIER FOR ONE SNAPSHOT (N3, round 3).  The hash printed used to
+    # be a sha1 of the `_geoSig` string when the run carried one and the
+    # records' own md5 fingerprint when it did not — two different ids for the
+    # same idea, so the 'rated' build printed "geometry c04978a3e2" three rows
+    # above "All records of this duty share geometry ee6accdc227f05fb" and the
+    # comparison table's own snapshot row matched neither.  The records'
+    # fingerprint wins wherever there is one; the `_geoSig` keeps doing what
+    # only it can — supplying the dimensions the table prints and the
+    # live-vs-snapshot comparison.
+    h = (_any_fp(em) or _any_fp(mech) or report_fp
+         or _geo_sig_hash((em or {}).get("_geoSig")))
     if snap is not None:
         geo = dict(geo_live or {})
         geo.update(snap)
@@ -4886,7 +4952,9 @@ def rotor_bridge_note(part: Any, ctx: Dict[str, Any]) -> str:
     _f = _numf(ctx.get("overspeed_factor"))
     if _f is not None and _f <= 1.0 + 1e-9:
         bits.append("overspeed 1.2 not solved")
-    return ". Standing policy for this rotor (2026-09-15): " + "; ".join(bits)
+    # NO RAW DATE IN CLIENT PROSE: the sentence carried the day the policy was
+    # set, which tells a reader of the machine nothing and dates the document.
+    return ". Standing policy for this rotor: " + "; ".join(bits)
 
 
 def rotor_bridge_remedy(part: Any, ctx: Dict[str, Any]) -> str:
@@ -5820,6 +5888,12 @@ def _duty_detail_sources(die: str, cfg: str, duty: Optional[str],
 #: read-only and a re-solve writes a new file, never mutates this.
 _DEMAG_CORNER_CACHE: Dict[Tuple[str, str, str], Optional[Dict[str, Any]]] = {}
 
+#: An element counts as DERATED below this fraction of its card Br.  Not a
+#: judgement — the solver's own "affected area" threshold, recovered from the
+#: L13 'rated' duty's stored summary (`area_derated_pct` 2.59 against 2.593 of
+#: the map's area under 0.999, 2.136 under 0.99).
+DEMAG_DERATED_COEF = 0.999
+
 
 def demag_corner_stats(die: str, cfg: str,
                        duty: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -5881,6 +5955,28 @@ def demag_corner_stats(die: str, cfg: str,
                     out["n_below_%s" % tag] = int(sel.sum())
                     out["area_below_%s_pct" % tag] = round(
                         100.0 * float(ar[sel].sum()) / tot, 3)
+                # ── THE WHOLE SUMMARY BLOCK, OFF THE MAP ITSELF (F2/N2,
+                # round 3) ───────────────────────────────────────────────
+                # The three volume/area figures the document quotes beside
+                # the worst element are area-weighted means of this very
+                # array, with the solver's own definitions:
+                #   Br kept    = Σ(area·coef) / Σarea
+                #   (BH)max    ∝ Br², so kept = Σ(area·coef²) / Σarea
+                #   derated    = the area share with any coefficient below 1
+                # Verified against the L13 'rated' duty's own stored summary,
+                # whose field and summary ARE one solve: 99.430 / 99.128 /
+                # 2.593 against the stored 99.43 / 99.128 / 2.59.  Recomputing
+                # them here is what lets :func:`duty_em_source` hand the
+                # tables the demagnetisation of the RUN THE MAP IS, instead
+                # of a five-day-old standalone solve's (the audited document
+                # printed "worst element kept 11.7 %" over a map whose 1st
+                # percentile is 61.6 % and whose worst element is 59.2 %).
+                out["br_kept_vol_pct"] = round(
+                    100.0 * float((ar * m).sum()) / tot, 3)
+                out["bh_kept_vol_pct"] = round(
+                    100.0 * float((ar * m * m).sum()) / tot, 3)
+                out["area_derated_pct"] = round(
+                    100.0 * float(ar[m < DEMAG_DERATED_COEF].sum()) / tot, 3)
     except Exception as exc:                                 # noqa: BLE001
         log.debug("report: demag corner stats unavailable (%s)", exc)
         out = None
@@ -6237,7 +6333,7 @@ def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
             "res": res,
             "origin": origin,
             "active": (name == active),
-        }, cfg_doc)
+        }, cfg_doc, die, cfg)
         # F1/F2 (L13 server audit 2026-09-19): whether every record this duty
         # leans on — the electromagnetic data above included — was solved on
         # the same geometry.  Computed once, here, off the SAME `em`/`res`
@@ -6573,37 +6669,451 @@ def pwm_em_overlay(sine: Dict[str, Any],
     return out
 
 
-def apply_pwm_view(col: Dict[str, Any],
-                   cfg_doc: Optional[Dict[str, Any]] = None
-                   ) -> Dict[str, Any]:
-    """Make one duty column say what supply it runs on, and read that supply.
+# ---------------------------------------------------------------------------
+# ONE ELECTROMAGNETIC SOURCE PER DUTY  (F2/N2, L13 server audit rounds 2 and 3)
+# ---------------------------------------------------------------------------
+# A duty of a configuration can carry THREE different electromagnetic answers,
+# all honest, all of the same machine, all solved at different moments:
+#
+#   1. the STANDALONE solve saved with the duty in the configuration yaml
+#      (`duties[].summary` / `duties[].result`) — whatever the Simulation tab
+#      last produced for it;
+#   2. the COUPLED loop's own electromagnetic run (`duty_results[duty].coupled
+#      .em`) — the run the converged (or limited) temperatures, the thermal map,
+#      the mechanical solve and the stored field snapshots all belong to;
+#   3. the 20 °C constants pass (`coupled.constants_20c`), an explicitly
+#      labelled cold-machine sub-table and nothing else.
+#
+# Until now only (1) fed the tables and only (2) fed the thermal/mechanical
+# pages, and nothing reconciled them.  On the audited L13 'peak' duty that put
+# 8.18 N·m, 686.7 W and a 5.0 % ripple in section 3 and 9.361 N·m, 658.0 W and
+# a 6.4 % ripple in section 6 of ONE document about ONE duty — with the figures
+# beside the section-3 tables drawn from the section-6 run's own field, so the
+# picture and its caption disagreed by a factor of five on the worst magnet
+# element (59.2 % kept on the map, "11.7 %" in the text).
+#
+# THE POLICY, in one place, for every EM-derived number and figure:
+#
+#   • a duty with a coupled record is read from THAT record.  Its `em` block is
+#     the source of the torque, the losses, the efficiency, the ripple and the
+#     THD; its converged temperatures are the operating point; the constants
+#     that are DEFINED by those numbers (Kt, Km, the per-mass figures, the
+#     3-D corrected values) are recomputed from them with the solver's own
+#     formulas, and the demagnetisation block is recomputed from the duty's own
+#     stored field — the very map the document prints.  Everything the coupled
+#     record does not measure (the winding, the geometry, the masses, the
+#     no-load KV, the inductances) falls through to the standalone summary
+#     underneath, which is where it was solved and where it does not depend on
+#     the operating point.
+#   • a duty with NO coupled record is read from the standalone summary, and
+#     section 1 says so in one clause.
+#   • the 20 °C sub-table stays exactly as it is — it is the one place where a
+#     second electromagnetic generation is named as such.
+#
+# The PWM branch is unchanged in substance: a duty whose coupled loop ran on
+# the inverter is read from its PWM run, whose star-equivalent constants are
+# NOT the machine's and are therefore left at the sinusoid's (see
+# `_PWM_KEEP_SINE_PREFIX`).
 
-    A sinusoidal duty is returned untouched but for ``drive``.  A PWM duty keeps
-    its sinusoidal summary under ``em_sine`` — section 5 is the comparison of
-    the two — and its ``em`` becomes the inverter's answer.
+#: Copper's temperature coefficient — the ONE value the loss solver uses
+#: (`simulation.field_ops.ALPHA_CU`), imported lazily so this module keeps
+#: importing on a checkout without the solver package.
+_ALPHA_CU_FALLBACK = 0.00393
+
+
+def _alpha_cu() -> float:
+    try:
+        from motor_ai_sim.simulation.field_ops import ALPHA_CU as _a
+        return float(_a)
+    except Exception:                                        # noqa: BLE001
+        return _ALPHA_CU_FALLBACK
+
+
+def _r_phase_at(r_ohm: Any, t_from_c: Any, t_to_c: Any) -> Optional[float]:
+    """A phase resistance moved from one winding temperature to another.
+
+    Exact, not an approximation: the L13 duties' own stored resistances are
+    0.062303 Ω at 20 °C, 0.093962 at 149.3 °C and 0.106376 at 200 °C, which is
+    ``R20 · (1 + 0.00393 (T − 20))`` to the last printed digit.
     """
-    col["drive"] = duty_drive(col)
-    if col["drive"] != "pwm":
-        return col
-    rec = (col.get("res") or {}).get("coupled") or {}
-    col["inverter"] = duty_inverter(col)
-    side = pwm_run_sidecar(cfg_doc or {}, col.get("duty"))
-    summ = side.get("summary") if isinstance(side.get("summary"), dict) else None
-    if summ:
-        # NO STORE KEY IN A CLIENT DOCUMENT (CS-10, audit v7): the cover and
-        # section 4 printed "(runs['pwm_voltage'])" after this sentence, which
-        # names a field of the catalogue file and tells a reader nothing.
-        col["pwm_summary_source"] = "the PWM run saved for this duty"
+    r, t0, t1 = _numf(r_ohm), _numf(t_from_c), _numf(t_to_c)
+    if r is None or t0 is None or t1 is None:
+        return None
+    a = _alpha_cu()
+    den = 1.0 + a * (t0 - 20.0)
+    if den <= 0:
+        return None
+    return r * (1.0 + a * (t1 - 20.0)) / den
+
+
+def _em_recompute_derived(out: Dict[str, Any]) -> None:
+    """The quantities that are DEFINITIONS of the torque, the loss and the
+    current in the same dict — recomputed, so no row of one table can describe
+    a different run from the row above it.
+
+    Every formula here was verified against the L13 duties' own stored
+    summaries, which reproduce to the last printed digit:
+    ``Kt = T/I``, ``Km = Kt/sqrt(3R)``, ``Km/kg``, ``T/kg``, ``P/kg`` and
+    ``loss/kg``.  A quantity whose inputs are missing is left alone.
+    """
+    t = _numf(out.get("T_em_avg_Nm"))
+    n = _numf(out.get("rpm"))
+    if t is not None and n:
+        out["P_mech_W"] = abs(t) * 2.0 * math.pi * float(n) / 60.0
+    i_w = _numf(out.get("I_winding_rms_A")) or _numf(out.get("I_phase_rms_A"))
+    i_l = _numf(out.get("I_line_rms_A")) or _numf(out.get("I_phase_rms_A"))
+    if t is not None and i_w:
+        out["Kt_Nm_per_Arms"] = abs(t) / float(i_w)
+    if t is not None and i_l:
+        out["Kt_Nm_per_A_line"] = abs(t) / float(i_l)
+    r = _numf(out.get("R_phase_ohm"))
+    kt = _numf(out.get("Kt_Nm_per_Arms"))
+    if kt is not None and r and r > 0:
+        out["Km_Nm_sqrtW"] = kt / math.sqrt(3.0 * float(r))
+    mass = _numf(out.get("mass_total_kg"))
+    if mass:
+        km = _numf(out.get("Km_Nm_sqrtW"))
+        if km is not None:
+            out["Km_per_mass_Nm_sqrtW_kg"] = km / float(mass)
+        if t is not None:
+            out["torque_per_mass_Nm_kg"] = abs(t) / float(mass)
+        p = _numf(out.get("P_mech_W"))
+        if p is not None:
+            out["power_per_mass_W_kg"] = abs(p) / float(mass)
+        lo = _numf(out.get("P_loss_total_W"))
+        if lo is not None:
+            out["loss_density_W_kg"] = float(lo) / float(mass)
+    # THE SATURATION DROOP IS A COMPARISON OF THIS TORQUE with the unsaturated
+    # linear reference printed beside it, so it follows the torque: the stored
+    # 17.27 % was 8.18 N·m against a 9.887 N·m reference, and leaving it under
+    # a 9.361 N·m torque put a subtraction on the page that a reader can do
+    # and get 5.3 %.
+    _sat = out.get("saturation")
+    _t_lin = _numf((_sat or {}).get("T_linear_Nm")) if isinstance(_sat, dict) \
+        else None
+    if _t_lin and t is not None:
+        _sat = dict(_sat)
+        _sat["droop_pct"] = round(100.0 * (1.0 - abs(t) / abs(_t_lin)), 2)
+        out["saturation"] = _sat
+
+
+def _em_from_coupled(sine: Dict[str, Any], rec: Dict[str, Any],
+                     demag: Optional[Dict[str, Any]] = None
+                     ) -> Dict[str, Any]:
+    """The duty's electromagnetic view AS THE COUPLED LOOP SOLVED IT.
+
+    The coupled record's own `em` block over the standalone summary, the
+    winding resistance moved to the temperature the loop settled at, every
+    derived constant rebuilt from the result (:func:`_em_recompute_derived`),
+    the 3-D corrected values rebuilt from this run's own 2-D ones, and the
+    demagnetisation block taken from the duty's stored field when there is one.
+    """
+    out = dict(sine or {})
+    over = _pwm_summary_from_record(rec or {})
+    for k, v in over.items():
+        if v is not None:
+            out[k] = v
+    # THE RESISTANCE BELONGS TO THE TEMPERATURE THE LOOP SETTLED AT.  Km is
+    # Kt/sqrt(3R) and the standalone solve's R is quoted at its own winding
+    # temperature — 200 °C on the audited 'peak' duty against the coupled
+    # loop's 184 °C.
+    _t_new = _numf(out.get("coil_temp_C"))
+    _t_old = _numf((sine or {}).get("coil_temp_C"))
+    if _t_new is not None and _t_old is not None and abs(_t_new - _t_old) > 0.05:
+        for _k in ("R_phase_ohm", "R_phase_eq_star_ohm", "R_line_line_ohm"):
+            _r = _r_phase_at((sine or {}).get(_k), _t_old, _t_new)
+            if _r is not None:
+                out[_k] = _r
+    # THE WHOLE VOLTAGE FAMILY FOLLOWS THE PEAK THE RUN RECORDED.  The coupled
+    # record keeps one voltage — the line waveform peak — and the standalone
+    # summary keeps the rms, the fundamental and the phase values of ITS run.
+    # Printing the two together put a 31.7 V peak over a 21.4 V rms (a crest
+    # factor of 1.48 on a waveform whose own shape gives 1.41) and fed the
+    # modulation-index rule the other run's fundamental.  The two solves are
+    # the same machine at the same current and speed with different magnet and
+    # winding temperatures, so the waveform's SHAPE is the same and only its
+    # amplitude moved: every other voltage is scaled by the recorded peak's own
+    # ratio, which is the same rule `_pwm_end3d` already applies to the
+    # corrected values.
+    _v_new = _numf(out.get("V_line_peak_V"))
+    _v_old = _numf((sine or {}).get("V_line_peak_V"))
+    if _v_new and _v_old and abs(_v_new - _v_old) > 1e-9:
+        _k_v = _v_new / _v_old
+        for _k in ("V_line_rms_V", "V1_LL_V", "V1_phase_V", "V_phase_peak_V",
+                   "V_phase_rms_V", "V_line_peak_solved_V",
+                   "V_line_rms_solved_V", "V1_seed_peak_V"):
+            _v = _numf((sine or {}).get(_k))
+            if _v is not None:
+                out[_k] = _v * _k_v
+    # …AND SO DOES THE IRON SPLIT.  The coupled record carries one core-loss
+    # number; the stator/rotor split beside it is the standalone run's and used
+    # to sum to the OTHER run's total (2.3 + 0.2 = 2.5 W printed under a total
+    # of 2.8 W).  Split in the same proportion as the run that measured it.
+    _c_new = _numf(out.get("P_core_W"))
+    _c_old = _numf((sine or {}).get("P_core_W"))
+    if _c_new is not None and _c_old:
+        _k_c = _c_new / _c_old
+        for _k in ("P_core_stator_W", "P_core_rotor_W"):
+            _v = _numf((sine or {}).get(_k))
+            if _v is not None:
+                out[_k] = _v * _k_c
+    # QUANTITIES THE COUPLED RUN DID NOT MEASURE AND NOTHING CAN REBUILD are
+    # dropped rather than carried over from the other solve: the ripple's own
+    # decomposition (raw / filtered / noise floor), the measured loss split by
+    # side and the solved terminal power.  A blank cell is what section 3 says
+    # it means — "a quantity that run did not record" — and it is the one
+    # honest answer here.
+    if _numf(out.get("T_ripple_pct")) != _numf((sine or {}).get("T_ripple_pct")):
+        for _k in ("T_ripple_filt_pct", "T_ripple_raw_pct",
+                   "T_noise_floor_pct"):
+            out.pop(_k, None)
+    if _numf(out.get("P_loss_total_W")) != _numf(
+            (sine or {}).get("P_loss_total_W")):
+        for _k in ("P_loss_stator_W", "P_loss_rotor_W",
+                   "P_loss_split_measured", "P_elec_in_solved_W",
+                   "P_mech_balance_W"):
+            out.pop(_k, None)
+    _em_recompute_derived(out)
+    _pwm_end3d(out, sine or {}, out)
+    if demag:
+        out["demag"] = demag
+    # …AND THE LOOP THE SUMMARY CARRIES INSIDE ITSELF.  A saved standalone
+    # summary embeds the coupled loop AS IT STOOD WHEN IT WAS SAVED, under
+    # `coupling`, and several paragraphs read it: the audited 'peak' summary's
+    # copy says coil 200 °C, magnets 120 °C, NOT converged, 193 K of residual,
+    # which is how the Materials page went on stating "the run's magnets sat
+    # at 120 °C" under a document whose every other page says 43.3 °C.  The
+    # record itself is that block, in that shape.
+    out["coupling"] = dict(rec or {})
+    # WHOSE ANSWER THIS IS, carried on the data itself so the fingerprint
+    # check, the source line and the map captions all read the same record
+    # (F1/N3): the electromagnetic block used to carry no print at all, which
+    # `duty_fingerprint_check` could only report as "unverifiable".
+    for _k, _v in (("geo_fingerprint", (rec or {}).get("geometry_fingerprint")),
+                   ("geometry_fingerprint_v2",
+                    (rec or {}).get("geometry_fingerprint_v2")),
+                   ("recorded_at", (rec or {}).get("recorded_at")
+                    or (rec or {}).get("computed_at"))):
+        if _v:
+            out[_k] = _v
+    return out
+
+
+def demag_from_field(die: str, cfg: str, duty: Optional[str],
+                     sine: Optional[Dict[str, Any]] = None
+                     ) -> Optional[Dict[str, Any]]:
+    """The duty's demagnetisation block rebuilt from ITS OWN stored map.
+
+    The card names (grade, magnet) are the standalone summary's — they are
+    properties of the material, not of the run — and every number is the map's:
+    the document can then never quote a worst element the picture beside it
+    does not show (N2/F5, round 3: "worst element kept 11.7 %" printed over a
+    map whose worst element keeps 59.2 %).
+
+    ``None`` when the duty kept no field, or the field no demagnetisation
+    array — the standalone block is then used unchanged.
+    """
+    st = demag_corner_stats(die, cfg, duty)
+    if not st or st.get("br_kept_vol_pct") is None:
+        return None
+    base = (sine or {}).get("demag")
+    out = dict(base) if isinstance(base, dict) else {}
+    out["br_kept_vol_pct"] = st["br_kept_vol_pct"]
+    out["loss_pct"] = round(100.0 - float(st["br_kept_vol_pct"]), 3)
+    out["bh_kept_vol_pct"] = st["bh_kept_vol_pct"]
+    out["bh_loss_pct"] = round(100.0 - float(st["bh_kept_vol_pct"]), 3)
+    out["area_derated_pct"] = st["area_derated_pct"]
+    out["br_worst_pct"] = st["min_pct"]
+    e_tot = _numf(out.get("energy_total_J"))
+    if e_tot is not None:
+        out["energy_lost_J"] = round(
+            e_tot * float(out["bh_loss_pct"]) / 100.0, 3)
+    # The EFFECTIVE grade is the nominal one times the energy that is left —
+    # the solver's own definition, recovered from the L13 duties (52 × 0.99128
+    # = 51.5, 52 × 0.92251 = 48.0) — so it cannot stay at the other run's 48
+    # under a map that lost 0.15 % of its energy.
+    g_nom = _numf(out.get("grade_nominal"))
+    if g_nom is not None:
+        out["grade_effective"] = round(
+            g_nom * float(out["bh_kept_vol_pct"]) / 100.0, 1)
+    # A SPREAD THIS FUNCTION CANNOT RE-DERIVE IS NOT CARRIED OVER FROM ANOTHER
+    # RUN.  Per-magnet spread and the per-magnet report need the grouping the
+    # field does not store, so they survive only while the stored block really
+    # is THIS map's run — which the block says itself, by agreeing with the
+    # map on the volume it kept.  Where it does not, they go, because a number
+    # from a different solve is what this whole path exists to remove.
+    _stored = _numf((base or {}).get("br_kept_vol_pct")) \
+        if isinstance(base, dict) else None
+    if _stored is None or abs(_stored - float(st["br_kept_vol_pct"])) > 0.01:
+        out.pop("per_magnet_spread_pct", None)
+        out.pop("report", None)
+    return out
+
+
+#: What ``duty_em_source`` reports as the origin of a duty's electromagnetic
+#: numbers — and, for ``"standalone"``, what section 1 says about it.
+EM_SOURCE_WORDS = {
+    "coupled": "the coupled electromagnetic/thermal run of this duty",
+    "pwm": "the PWM run of this duty",
+    "standalone": "a standalone electromagnetic solve, no coupled loop",
+    "none": "no electromagnetic solve is stored for this duty",
+}
+
+#: The same, in a comparison-table cell.
+EM_SOURCE_SHORT = {
+    "coupled": "coupled loop",
+    "pwm": "PWM run",
+    "standalone": "standalone solve",
+    "none": NOT_SOLVED,
+}
+
+
+def em_source_note(kind: Any, duty: Any = None) -> str:
+    """The one §1 clause that names where every electromagnetic number came
+    from — printed only when a reader must know.
+
+    A duty read from its coupled loop needs no sentence: that is what the rest
+    of the document already says it is.  A duty read from a STANDALONE solve
+    does: its torque and its losses were not solved at the temperatures the
+    thermal pages print, and the document may not let that pass silently.
+    """
+    k = str(kind or "")
+    if k == "standalone":
+        return ("Electromagnetic numbers: standalone electromagnetic solve, "
+                "no coupled loop — they were not solved at the temperatures "
+                "this report gives elsewhere.")
+    if k == "none":
+        return "No electromagnetic solve is stored for this duty."
+    return ""
+
+
+def duty_em_source(die: str, cfg: str, duty: Optional[str],
+                   cfg_doc: Optional[Dict[str, Any]] = None,
+                   d: Optional[Dict[str, Any]] = None,
+                   res: Optional[Dict[str, Any]] = None,
+                   sine: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """THE electromagnetic answer this duty's report is built from — one
+    policy, one place, for every number and every figure (see the block
+    comment above).
+
+    ``d`` is the duty's entry in the configuration yaml and ``res`` its
+    ``duty_results`` record; both are looked up from ``die``/``cfg``/``duty``
+    when not handed in (the report already has them and passes them, so a
+    build reads each store once).
+
+    Returns ``{"em", "em_sine", "kind", "drive", "words", "fp", "recorded_at",
+    "inverter", "pwm_summary", "pwm_summary_source", "wf_drive"}``; ``kind`` is
+    one of ``"coupled" | "pwm" | "standalone" | "none"``.
+    """
+    if d is None:
+        for _x in ((cfg_doc or {}).get("duties") or []):
+            if isinstance(_x, dict) and str(_x.get("name") or "") == str(duty):
+                d = _x
+                break
+    d = d if isinstance(d, dict) else {}
+    if res is None:
+        res = _duty_record(die, cfg, duty)
+    if sine is None:
+        sine = (d.get("summary")
+                if isinstance(d.get("summary"), dict) else {})
+    sine = dict(sine or {})
+    rec = (res or {}).get("coupled")
+    rec = rec if isinstance(rec, dict) and rec else {}
+    out: Dict[str, Any] = {
+        "em_sine": dict(sine), "inverter": {}, "pwm_summary": None,
+        "pwm_summary_source": None, "wf_drive": None,
+    }
+    drive = record_drive(rec) if rec else "sine"
+    out["drive"] = drive
+    has_coupled_em = isinstance(rec.get("em"), dict) and bool(rec.get("em"))
+    demag = demag_from_field(die, cfg, duty, sine)
+
+    if drive == "pwm":
+        out["inverter"] = dict(rec.get("inverter") or {})
+        side = pwm_run_sidecar(cfg_doc or {}, duty)
+        summ = (side.get("summary")
+                if isinstance(side.get("summary"), dict) else None)
+        if summ:
+            # NO STORE KEY IN A CLIENT DOCUMENT (CS-10, audit v7): the cover
+            # and section 4 printed "(runs['pwm_voltage'])" after this
+            # sentence, which names a field of the catalogue file and tells a
+            # reader nothing.
+            out["pwm_summary_source"] = "the PWM run saved for this duty"
+        else:
+            summ = _pwm_summary_from_record(rec)
+            out["pwm_summary_source"] = (
+                "the coupled run's own electromagnetic block")
+        out["pwm_summary"] = dict(summ)
+        em = pwm_em_overlay(sine, summ)
+        if demag:
+            em["demag"] = demag
+        em["coupling"] = dict(rec)
+        for _k, _v in (("geo_fingerprint", rec.get("geometry_fingerprint")),
+                       ("geometry_fingerprint_v2",
+                        rec.get("geometry_fingerprint_v2"))):
+            if _v:
+                em[_k] = _v
+        out["wf_drive"] = PWM_RUN_DRIVE if side.get("payload_file") else None
+        out["em"], out["kind"] = em, "pwm"
+    elif has_coupled_em:
+        out["em"], out["kind"] = _em_from_coupled(sine, rec, demag), "coupled"
+    elif sine:
+        em = dict(sine)
+        if demag:
+            em["demag"] = demag
+        out["em"], out["kind"] = em, "standalone"
     else:
-        summ = _pwm_summary_from_record(rec)
-        col["pwm_summary_source"] = "the coupled run's own electromagnetic block"
-    col["em_sine"] = dict(col.get("em") or {})
-    col["pwm_summary"] = dict(summ)
-    col["em"] = pwm_em_overlay(col.get("em") or {}, summ)
-    # Which stored run the waveform charts may be drawn from.  The sidecar's
-    # pointer is dropped by `family._store_run` when the file belongs to another
-    # run, so its presence here really does mean "this run's waveforms".
-    col["wf_drive"] = PWM_RUN_DRIVE if side.get("payload_file") else None
+        out["em"], out["kind"] = {}, "none"
+    # THE MASSES AT THE MATERIALS THIS CONFIGURATION NOW ASSIGNS (N4) — done
+    # here, on the one `em` every table, every total and the pie chart read,
+    # so a re-assigned part can never weigh two different things in one
+    # document.  A duty's own materials win over the configuration's (duty-
+    # scoped state), exactly as the Materials table resolves them.
+    if out["em"].get("mass_components"):
+        _mats = dict((cfg_doc or {}).get("materials") or {})
+        _mats.update({k: v for k, v in (d.get("materials") or {}).items() if v})
+        if _mats:
+            out["em"]["mass_components"] = mass_components_live(out["em"],
+                                                                _mats)
+    out["words"] = EM_SOURCE_WORDS[out["kind"]]
+    out["fp"] = _any_fp(out["em"])
+    _r = d.get("result") if isinstance(d.get("result"), dict) else {}
+    out["recorded_at"] = (out["em"].get("recorded_at")
+                          or _r.get("recorded_at"))
+    return out
+
+
+def apply_pwm_view(col: Dict[str, Any],
+                   cfg_doc: Optional[Dict[str, Any]] = None,
+                   die: str = "", cfg: str = "") -> Dict[str, Any]:
+    """Apply :func:`duty_em_source` to one duty column.
+
+    Kept under its old name because the PWM switch is still what it makes most
+    visible, but it is no longer only about the inverter: since round 3 of the
+    L13 audit a SINUSOIDAL duty with a coupled loop is read from that loop's
+    own electromagnetic run too, and only a duty with no coupled record at all
+    comes through with its standalone summary untouched.
+    """
+    src = duty_em_source(die, cfg, col.get("duty"), cfg_doc,
+                         d=col.get("d"), res=col.get("res"),
+                         sine=col.get("em"))
+    col["drive"] = src["drive"]
+    col["em_source"] = src["kind"]
+    col["em_source_words"] = src["words"]
+    if src["kind"] == "none":
+        return col
+    col["em"] = src["em"]
+    if src["kind"] in ("coupled", "pwm"):
+        col["em_sine"] = src["em_sine"]
+    if src["kind"] == "pwm":
+        col["inverter"] = src["inverter"]
+        col["pwm_summary"] = src["pwm_summary"]
+        col["pwm_summary_source"] = src["pwm_summary_source"]
+        # Which stored run the waveform charts may be drawn from.  The
+        # sidecar's pointer is dropped by `family._store_run` when the file
+        # belongs to another run, so its presence here really does mean "this
+        # run's waveforms".
+        col["wf_drive"] = src["wf_drive"]
     return col
 
 
@@ -7069,7 +7579,15 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # the L155 peak duty a 44 % carrier figure would have failed a design whose
     # low-order ripple is under 1 %.  So the rule reads the SINUSOIDAL run, and
     # the carrier's own figure gets an informational row with no limit.
-    _sine_em = col.get("em_sine") if isinstance(col.get("em_sine"), dict) else em
+    # …AND ONLY ON A PWM DUTY (F2/N7, round 3).  `em_sine` is now filled on
+    # every duty with a coupled loop — it is the standalone solve section 5
+    # compares an inverter run against — so reading it unconditionally would
+    # judge a SINUSOIDAL duty on a different run from the one the rest of the
+    # document prints: the audited 'peak' scored 5.0 % here, exactly on the
+    # gate, while its own coupled run reports 6.4 %, which is over it.
+    _sine_em = (col.get("em_sine")
+                if (ctx["drive"] == "pwm"
+                    and isinstance(col.get("em_sine"), dict)) else em)
     _sine_cp = ((cp or {}).get("reference_sine")
                 if isinstance((cp or {}).get("reference_sine"), dict) else None)
     ctx["ripple_pct"] = _numf(
@@ -7634,12 +8152,26 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # column.  `em` was formed above from the duty's SINUSOIDAL summary, so it
     # is re-pointed here — one place, before anything has used it for a number.
     supply = supply_words(_cov) if _cov is not None else SUPPLY_SINE
-    if _cov is not None and _cov.get("drive") == "pwm" and _cov.get("em"):
+    # ── ONE ELECTROMAGNETIC SOURCE, AND IT IS THE COLUMN'S (F2/N2, L13 audit
+    # rounds 2 and 3) ───────────────────────────────────────────────────────
+    # `em` was formed above from the duty's saved STANDALONE summary, and the
+    # per-duty column has since resolved the one source the whole document is
+    # to be built from (`duty_em_source`).  Re-pointing it here — always, not
+    # only on a PWM duty — is what stops the cover and sections 3/4/5 quoting a
+    # different run from sections 6/7/8 of the same duty.
+    em_source_kind = str((_cov or {}).get("em_source") or "standalone")
+    if _cov is not None and _cov.get("em"):
         em = dict(_cov["em"])
-        em_src = ((em_src + " — on the inverter, from %s"
-                   % _cov.get("pwm_summary_source"))
-                  if em_src else
-                  "the PWM run of the duty '%s'" % (d_duty.get("name") or "—"))
+        em_from_run = False
+        if em_source_kind == "pwm":
+            em_src = ((em_src + " — on the inverter, from %s"
+                       % _cov.get("pwm_summary_source"))
+                      if em_src else
+                      "the PWM run of the duty '%s'"
+                      % (d_duty.get("name") or "—"))
+        elif em_source_kind == "coupled":
+            em_src = ("the coupled electromagnetic/thermal run of the duty "
+                      "'%s'" % (d_duty.get("name") or "—"))
     # ── THE GEOMETRY EVERY OTHER NUMBER IN THIS REPORT WAS SOLVED ON (item 1,
     # owner review 2026-09-19) ───────────────────────────────────────────────
     # `geo` above is the LIVE, editable configuration; a stored result is a
@@ -7943,6 +8475,11 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "geo_hash": geo_hash, "geo_mismatch": geo_mismatch,
         "geo_no_snapshot": geo_no_snapshot,
         "duty_fp_note": duty_fp_note, "duty_fp_mismatch": duty_fp_mismatch,
+        # WHERE EVERY ELECTROMAGNETIC NUMBER CAME FROM (F2/N2) — one source
+        # for the whole document, named in §1 when it is not the coupled loop.
+        "em_source": em_source_kind,
+        "em_source_note": em_source_note(em_source_kind,
+                                         d_duty.get("name")),
         "wind": wind, "mats": mats, "slot": slot,
         "live_geo": live_geo, "live_fp": live_fp, "report_fp": report_fp,
         "d_duty": d_duty, "em": em, "em_src": em_src, "delta": delta,
@@ -8060,7 +8597,9 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
                            geo_hash=geo_hash, geo_mismatch=geo_mismatch,
                            geo_no_snapshot=geo_no_snapshot,
                            duty_fp_note=duty_fp_note,
-                           duty_fp_mismatch=duty_fp_mismatch)
+                           duty_fp_mismatch=duty_fp_mismatch,
+                           geo_hash_duty=str(d_duty.get("name") or "") or None,
+                           em_source_note_text=D.get("em_source_note") or "")
     from reportlab.platypus import CondPageBreak
     story.append(CondPageBreak(PAGE_H * 0.5))
     story += _duty_overview(st, cols, active_duty)
@@ -8587,7 +9126,9 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
                   geo_mismatch: bool = False,
                   geo_no_snapshot: bool = False,
                   duty_fp_note: str = "",
-                  duty_fp_mismatch: bool = False) -> List[Any]:
+                  duty_fp_mismatch: bool = False,
+                  geo_hash_duty: Optional[str] = None,
+                  em_source_note_text: str = "") -> List[Any]:
     from reportlab.platypus import Spacer
 
     out: List[Any] = [_para(section_heading(sec, "machine"), st["h1"])]
@@ -8616,8 +9157,8 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
         # report was solved on, printed once, so a reader can check it against
         # the run's own record rather than trust that nobody edited a
         # dimension since.
-        out.append(_para("geometry %s — the snapshot every number in this "
-                         "report was solved on" % geo_hash, st["note"]))
+        out.append(_para(geometry_hash_line(geo_hash, geo_hash_duty),
+                         st["note"]))
     elif geo_no_snapshot:
         # F1 (L13 server audit 2026-09-19): no run carries a `_geoSig` at
         # all — never printed silently as if the live configuration WERE the
@@ -8644,6 +9185,8 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
                 st["body"]))
         else:
             out.append(_para(duty_fp_note, st["note"]))
+    if em_source_note_text:
+        out.append(_para(em_source_note_text, st["note"]))
     rows = geometry_rows(geo, wind, slot, em)
     w = CONTENT_W / 2.0
     out.append(_table(rows, [w * 0.52, w * 0.30, w * 0.18,
@@ -9004,6 +9547,102 @@ def _steel_card(name: Any) -> Any:
         return None
 
 
+def material_density(name: Any) -> Optional[float]:
+    """kg/m³ of a material card by NAME, whatever category it belongs to.
+
+    Used to re-weigh a mass row whose stored card is not the one the
+    configuration now assigns (N4, round 3: the audited document's Masses
+    table carried "Shaft (Aluminium_6061) … 0.01 kg" — aluminium's own figure
+    for 3.9 cm³ — beside a Materials table and a mechanical solve that both
+    name Steel_42CrMo4_QT, whose same volume is 0.031 kg).  ``None`` when no
+    library card of that name exists, and then the row says the mass was not
+    recomputed rather than printing the other material's.
+    """
+    if not name:
+        return None
+    try:
+        from motor_ai_sim.materials import get_material
+    except Exception:                                       # noqa: BLE001
+        return None
+    for cat in ("steel", "magnet", "conductor", "insulator"):
+        try:
+            card = get_material(cat, str(name))
+        except Exception:                                   # noqa: BLE001
+            continue
+        d = _numf(getattr(card, "density", None))
+        if d:
+            return float(d)
+    return None
+
+
+def _live_card_for(part_name: Any, mats: Optional[Dict[str, Any]]) -> str:
+    """What the configuration assigns to the part a mass row is about."""
+    if not mats:
+        return ""
+    bare = str(part_name or "").split("(")[0].split("—")[0].strip().lower()
+    for k, v in mats.items():
+        if v and k and str(k).lower() in bare:
+            return str(v)
+    return ""
+
+
+def mass_components_live(em: Optional[Dict[str, Any]],
+                         mats: Optional[Dict[str, Any]] = None
+                         ) -> List[Any]:
+    """``mass_components`` RE-WEIGHED at the materials the configuration now
+    assigns — one resolution, read by the table, the totals and the pie alike.
+
+    N4 (round 3).  The audited document flagged the shaft row as the wrong
+    material and kept the wrong material's kilograms anyway: "Shaft
+    (Aluminium_6061) (!) current assignment: Steel_42CrMo4_QT … 0.01 kg", and
+    Fig. 2's pie legend carried the same 0.01 kg for a steel part that weighs
+    0.031 kg.  A flagged row is re-weighed from its own volume and the live
+    card's density; when no card of that name can be read the row says "mass
+    not recomputed" instead of quoting the other material's.
+
+    Rows nobody re-assigned come through untouched, so this is a no-op on
+    every configuration whose stored run is its current one.
+    """
+    out: List[Any] = []
+    for c in (_g(em, "mass_components") or []):
+        if not isinstance(c, dict):
+            out.append(c)
+            continue
+        c = dict(c)
+        stored = _row_card(c.get("name")) or str(c.get("material") or "")
+        live = _live_card_for(c.get("name"), mats)
+        if live and stored and live != stored:
+            c["material_stored"] = stored
+            c["material_assigned"] = live
+            vol, dens = _numf(c.get("volume_cm3")), material_density(live)
+            if vol and dens:
+                m = float(vol) * 1e-6 * float(dens)
+                for k in ("mass_kg", "mass_modelled_kg"):
+                    if _numf(c.get(k)):
+                        c[k] = round(m, 4)
+                c["density_kg_m3"] = float(dens)
+                c["mass_recomputed"] = True
+            else:
+                c["mass_recomputed"] = False
+        out.append(c)
+    return out
+
+
+def _row_card(name: Any) -> str:
+    """The material card a mass row names, out of its own label:
+    ``"Shaft (Aluminium_6061) — customer-supplied"`` -> ``"Aluminium_6061"``.
+
+    N5 (round 3): the "current assignment" flag used to compare the row's
+    CATEGORY ("NdFeB", "shaft") against the configuration's card name, so it
+    fired on every magnet row — "Magnets (F52SH_120C) NdFeB (!) current
+    assignment: F52SH_120C" — where nothing had changed at all.
+    """
+    s = str(name or "")
+    if "(" in s and ")" in s.split("(", 1)[1]:
+        return s.split("(", 1)[1].split(")", 1)[0].strip()
+    return ""
+
+
 def mass_rows(em: Dict[str, Any],
              mats: Optional[Dict[str, Any]] = None) -> List[List[str]]:
     """Every part of the machine and what it weighs.  Header row included.
@@ -9030,7 +9669,7 @@ def mass_rows(em: Dict[str, Any],
     whose part is named in ``mats`` and disagrees with it is flagged in place
     rather than printed as if the two tables agreed.
     """
-    comps = _g(em, "mass_components") or []
+    comps = mass_components_live(em, mats)
     rows = [["Part", "Material", "Volume", "Mass", "Share"]]
     tot = 0.0
     for c in comps:
@@ -9044,26 +9683,22 @@ def mass_rows(em: Dict[str, Any],
         v = _numf(c.get("mass_kg") or c.get("mass_modelled_kg"))
         if not v:
             continue
-        material = str(c.get("material") or "")
-        mat_cell = material
-        if mats and material:
-            _bare = str(c.get("name") or "").split("(")[0].split("—")[0]
-            _bare = _bare.strip().lower()
-            for _k, _live_mat in mats.items():
-                if not _live_mat or not _k or str(_k).lower() not in _bare:
-                    continue
-                if str(_live_mat) != material:
-                    # PLAIN TEXT (no markup): this row is shared verbatim by
-                    # both renderers, and the .docx table writer inserts a
-                    # cell's string as-is, with no markup support at all.
-                    mat_cell = ("%s %s current assignment: %s"
-                               % (material, FLAG, _live_mat))
-                break
+        mat_cell = str(c.get("material") or "")
+        mass_note = ""
+        live = c.get("material_assigned")
+        if live:
+            # PLAIN TEXT (no markup): this row is shared verbatim by both
+            # renderers, and the .docx table writer inserts a cell's string
+            # as-is, with no markup support at all.
+            mat_cell = ("%s %s current assignment: %s"
+                        % (c.get("material_stored") or mat_cell, FLAG, live))
+            if not c.get("mass_recomputed"):
+                mass_note = " — mass not recomputed"
         rows.append([
             str(c.get("name") or "—"),
             mat_cell,
             _fmt(c.get("volume_cm3"), 1, "cm³"),
-            _fmt(v, 3, "kg"),
+            _fmt(v, 3, "kg") + mass_note,
             _fmt(100.0 * float(v) / tot, 1, "%") if tot else ""])
     if len(rows) > 1:
         # THE SUMMARY'S OWN TOTAL, not the sum of the rounded rows above
@@ -14303,11 +14938,16 @@ def rotor_inertia_rows(em: Dict[str, Any]) -> List[List[str]]:
     return rows
 
 
+#: NO INTERNAL REFERENCE IN CLIENT PROSE (N1, round 3).  This note was written
+#: by copying a review's own citation — "(F9, L13 server audit 2026-09-19)" —
+#: into the document, which printed a finding id and a review filename on page
+#: 22 of a client report, in both formats.  The sentence says what it has to
+#: say on its own; `test_report` now fails the build if any rendered text
+#: carries an audit id, a review name or a raw date again.
 ROTOR_INERTIA_NOTE = (
     "From the CAD polygons of every rotating part; a part marked reference or "
     "excluded is out of this total, as it is out of the mass. TOTAL is the "
-    "run's own unrounded figure, not the sum of the rounded rows above (F9, "
-    "L13 server audit 2026-09-19).")
+    "run's own unrounded figure, not the sum of the rounded rows above.")
 
 
 def mech_fit_rows(case: Dict[str, Any], res: Dict[str, Any]) -> List[List[str]]:
@@ -14767,13 +15407,18 @@ def assumption_bullets(sec: Optional[Dict[str, int]] = None) -> List[str]:
         "contact may open, a bonded one may not. Peak stresses at re-entrant "
         "corners are mesh-dependent singularities, hence the p99.5 column.",
         # ONE BALANCE, AND WHY IT IS NOT THE STORED NUMBER (reviewer
-        # 2026-09-14, D14): the catalog row and Compare quote the solver's own
-        # `efficiency`, this document recomputes it, and the two differ by a
-        # few hundredths of a point on the same run.
+        # 2026-09-14, D14).  F8/N6, round 3: the old wording said the two
+        # balances were "a few hundredths of a point apart", and on the L13
+        # rated duty the gap is 1.52 points (72.76 % here against the solver's
+        # 74.28 %).  It is not rounding and never was — the solver's figure is
+        # the 2-D balance and this document's takes the end-effect factor off
+        # the rotor power first, so the gap is the size of k_3d.  Said plainly.
         "<b>Efficiency</b> — one balance everywhere: rotor power × k_3d "
         "against the 2-D losses, bearings and windage where they sit. The "
-        "solver's own solve-time figure, which the catalog quotes, is a "
-        "different balance a few hundredths of a point apart.",
+        "solver's own solve-time figure, which the catalog quotes, is the "
+        "same losses against the UNCORRECTED 2-D rotor power, so it reads "
+        "higher by about as much as k_3d takes off — a point or two, not a "
+        "rounding difference.",
         "<b>Bearings and windage</b> — the SKF frictional-moment model plus an "
         "analytic windage term, not FEM. The radial load is the rotor's own "
         "weight only: magnetic pull, coupling, belt and gear side loads are "
@@ -15487,6 +16132,22 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # document, and this row is where the reader learns which columns those
     # are — two duties of one machine may well be one of each.
     rows.append(["Supply"] + _col_vals(cols, supply_words))
+    # WHICH GEOMETRY SNAPSHOT EACH COLUMN IS (N3, round 3).  Section 1 prints
+    # ONE hash, and it is the report duty's; on the audited L13 the other
+    # duty's records all carry a different print, so a reader who took the §1
+    # line for the whole document was comparing two snapshots without being
+    # told.  One row, one print per column, and where they are the same the
+    # row says so by simply repeating.
+    if any(c.get("fp") for c in cols):
+        rows.append(["Geometry snapshot"] + _col_vals(
+            cols, lambda c: str(c.get("fp") or "")))
+    # …AND WHICH ELECTROMAGNETIC RUN IT IS (F2/N2).  A column read from its
+    # coupled loop and one read from a standalone solve are not the same kind
+    # of answer, and the reader is told which is which in the same place.
+    if any(str(c.get("em_source") or "") not in ("", "coupled") for c in cols):
+        rows.append(["Electromagnetic source"] + _col_vals(
+            cols, lambda c: EM_SOURCE_SHORT.get(
+                str(c.get("em_source") or ""), "")))
     # Per duty, because two duties of one configuration may be solved in Y
     # and in Δ (user 2026-09-13: "нужно добавить соединение в отчёт").
     rows.append(["Terminal connection"] + _col_vals(

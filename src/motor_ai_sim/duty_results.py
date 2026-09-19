@@ -241,6 +241,38 @@ ALT_CARRIERS_MAX = 4
 _NESTING_KEYS = ("reference_sine", "alt_carriers")
 
 
+def live_fingerprint_v2() -> Optional[str]:
+    """THE SAME-MACHINE PRINT of the machine as it stands at this moment.
+
+    Stamped on every record this module writes, beside the v1
+    ``geometry_fingerprint`` it does not replace (see
+    :func:`motor_ai_sim.simulation.geometry_2d.geometry_fingerprint_v2` for
+    why there are two).  v1 keys the caches and every already-stored record;
+    v2 answers "same motor?", which is the only question a report asks of it,
+    and it does not move when a geometry is remeshed or a derived float comes
+    back with different last bits.
+
+    ``None`` — and then the record simply carries no v2 — whenever the live
+    configuration cannot be read.  A missing print is never a mismatch.
+    """
+    try:
+        from motor_ai_sim.config import get_config
+        from motor_ai_sim.simulation.geometry_2d import (
+            geometry_fingerprint_v2 as _fp2)
+        cfg = get_config() or {}
+        return _fp2(cfg.get("geometry") or {}, cfg.get("materials") or {},
+                    cfg.get("winding") or {})
+    except Exception as exc:                                 # noqa: BLE001
+        log.debug("duty_results: no same-machine print (%s)", exc)
+        return None
+
+
+def _fp2_block() -> Dict[str, Any]:
+    """``{"geometry_fingerprint_v2": …}`` or ``{}`` — spread into a record."""
+    v = live_fingerprint_v2()
+    return {"geometry_fingerprint_v2": v} if v else {}
+
+
 def _entry_drive(entry: Any) -> str:
     """``"pwm"`` | ``"sine"`` — what excitation a stored record describes.
 
@@ -672,6 +704,7 @@ def compact_thermal(result: Dict[str, Any], params: Dict[str, Any],
     out = {
         "computed_at": computed_at,
         "geometry_fingerprint": fp,
+        **_fp2_block(),
         "drive": str(_ls.get("drive") or "sine"),
         **({"inverter": dict(_ls["inverter"])}
            if isinstance(_ls.get("inverter"), dict) else {}),
@@ -866,6 +899,7 @@ def compact_duty_cycle(record: Dict[str, Any], params: Dict[str, Any],
     out: Dict[str, Any] = {
         "computed_at": computed_at or rec.get("computed_at"),
         "geometry_fingerprint": fp or rec.get("geometry_fingerprint"),
+        **_fp2_block(),
         "duty": rec.get("duty"),
         "spec": _pick(rec.get("spec"), _DC_SPEC_KEYS),
         "network": _pick(rec.get("network"), _DC_NETWORK_KEYS),
@@ -973,6 +1007,7 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
     """
     res = result if isinstance(result, dict) else {}
     base = {"computed_at": computed_at, "geometry_fingerprint": fp,
+            **_fp2_block(),
             "point": _pick(params, ("rpm", "torque_nm", "loads", "cases",
                                     "overspeed", "mesh_size_mm", "order"))}
     if kind == "rotor_stress":
@@ -1193,6 +1228,7 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "computed_at": o.get("computed_at"),
         "geometry_fingerprint": o.get("geometry_fingerprint"),
+        **_fp2_block(),
         # WHICH EXCITATION these temperatures were reached on, and — when it is
         # the inverter — the bridge that reached them.  A record with no
         # `drive` predates the PWM loop and is a sinusoid (see `_entry_drive`).

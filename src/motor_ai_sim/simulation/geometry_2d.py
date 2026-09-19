@@ -123,6 +123,93 @@ class MotorDomainParams:
     sigma_shaft:  float = 2.5e7    # Al6061 conductivity [S/m]
 
 
+# ---------------------------------------------------------------------------
+# THE SAME-MACHINE PRINT  (v2, 2026-09-19)
+# ---------------------------------------------------------------------------
+# `routes.simulation._geometry_fingerprint` (call it v1) is a CACHE KEY: it
+# hashes the serialised live geometry object, which means a re-derived float
+# (32.400000000000006 against 32.4), a key that appears or disappears between
+# builds, or anything else the object happens to carry moves it.  That is
+# right for "may I reuse this result?" and wrong for the question a client
+# report asks — "were these two stored answers solved on the same MOTOR?" —
+# because a machine that never changed can print twice.  Measured on the L13:
+# every numeric geometry input of the 'rated' and 'peak' records is identical
+# and their v1 prints are `ee6accdc227f05fb` and `f3b4728f381c5b31`.
+#
+# THE DECISION (2026-09-19): v1 is NOT redefined.  Every cache, every stored
+# record and every staleness check already issued is keyed on it, and changing
+# it would invalidate all of them at once.  v2 is a second, narrower print
+# that answers only the same-machine question, and the report's consistency
+# check prefers it wherever both records carry one.
+#
+# THE TOLERANCE RULE: a value is rounded to 9 significant digits before it is
+# hashed, so re-derivation noise in the last bits cannot move the print, and a
+# real edit (the smallest dimension this tool lets a user type is 0.01 mm)
+# always can.  Keys that describe the DISCRETISATION rather than the machine —
+# a mesh size, an element order, a triangle count, a solver seed — are not in
+# it at all: two meshes of one geometry are one machine.
+
+#: Substrings of a key name that mean "how it was discretised or solved", not
+#: "what it is".  Excluded from the v2 print.
+_FP2_EXCLUDE_TOKENS = ("mesh", "element_order", "n_tri", "triangle", "seed",
+                       "refine", "solver", "tol", "n_steps", "timestamp",
+                       "computed_at", "recorded_at", "fingerprint")
+
+#: Significant digits kept before hashing — the tolerance rule above.
+FP2_SIG_DIGITS = 9
+
+
+def _fp2_clean(d) -> dict:
+    """One mapping reduced to what it says about the MACHINE."""
+    out = {}
+    for k, v in (d or {}).items():
+        key = str(k)
+        if key.startswith("_"):
+            continue
+        low = key.lower()
+        if any(t in low for t in _FP2_EXCLUDE_TOKENS):
+            continue
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            out[key] = bool(v)
+        elif isinstance(v, (int, float)):
+            out[key] = float("%.*g" % (FP2_SIG_DIGITS, float(v)))
+        elif isinstance(v, str):
+            out[key] = v
+        elif isinstance(v, dict):
+            sub = _fp2_clean(v)
+            if sub:
+                out[key] = sub
+    return out
+
+
+def geometry_fingerprint_v2(geo, materials=None, winding=None) -> str:
+    """A 16-character print of the MACHINE: its geometry, and the materials and
+    winding that make it that machine — never its mesh.
+
+    Identical parameters give an identical print, whatever mesh they were
+    discretised with and whatever float representation they arrived in (see
+    the block comment above for why this exists beside v1 and why v1 stays).
+
+    >>> a = {"rotor_outer_radius": 32.4, "mesh_size_mm": 1.5,
+    ...      "n_triangles": 4815}
+    >>> b = {"rotor_outer_radius": 32.400000000000006, "mesh_size_mm": 1.0,
+    ...      "n_triangles": 4813}
+    >>> geometry_fingerprint_v2(a) == geometry_fingerprint_v2(b)
+    True
+    """
+    import hashlib as _hl
+    import json as _jl
+    payload = {"g": _fp2_clean(geo)}
+    if materials:
+        payload["m"] = _fp2_clean(materials)
+    if winding:
+        payload["w"] = _fp2_clean(winding)
+    return _hl.md5(_jl.dumps(payload, sort_keys=True,
+                             default=str).encode()).hexdigest()[:16]
+
+
 def merge_geo_override(base: dict, override) -> dict:
     """Merge a per-request geometry override into the base geometry so that the
     slot/pole COUNTS always describe the motor the CAD actually meshes.

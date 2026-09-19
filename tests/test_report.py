@@ -484,6 +484,11 @@ def test_b_report_after_em_thermal_and_mechanical(dies, solved, as_this_machine)
     assert "What the symbols mean" in txt
     assert "CONFIDENTIAL" in txt and "Motres d.o.o." in txt
 
+    # …AND NOTHING INTERNAL ANYWHERE IN IT.  A finding id and a review
+    # filename were once printed verbatim on page 22 of a delivered client
+    # document, in both formats — see `assert_no_internal_reference`.
+    assert_no_internal_reference(txt)
+
 
 def test_b2_a_foreign_result_is_dropped_not_flagged(dies, solved,
                                                     as_this_machine):
@@ -4804,13 +4809,39 @@ class TestPwmIsTheDutysOperatingCondition:
         assert round(em["end3d"]["V_line_peak_corrected_V"], 2) == round(
             505.0 * 0.96, 2)
 
-    def test_a_sinusoidal_duty_is_untouched(self):
+    def test_a_sinusoidal_duty_is_read_from_its_own_coupled_loop(self):
+        """CHANGED BY ROUND 3 OF THE L13 AUDIT.  This used to assert that a
+        sinusoidal duty came through untouched — `c["em"] == self.EM` — which
+        is exactly the defect: the duty's COUPLED loop had solved the machine
+        again, at the temperatures it settled at, and the document went on
+        printing the standalone summary beside that loop's thermal map.  A
+        sine duty with a coupled record is now read from it; only a duty with
+        no coupled record at all keeps its standalone summary (the test below).
+        """
         from motor_ai_sim import report as R
 
         c = self._col(pwm=False)
         assert c["drive"] == "sine"
-        assert c["em"] == self.EM and "em_sine" not in c
+        assert c["em_source"] == "coupled"
+        # the coupled run's own electromagnetic block, not the saved summary
+        assert c["em"]["P_loss_total_W"] == 7400.0      # they agree here…
+        assert c["em"]["coil_temp_C"] == 120.0          # …and this is the
+        assert c["em"]["magnet_temp_C"] == 110.0        # loop's own answer
         assert R.supply_words(c) == R.SUPPLY_SINE
+
+    def test_a_duty_with_no_coupled_record_keeps_its_standalone_solve(self):
+        from motor_ai_sim import report as R
+
+        col = {"duty": "peak", "d": {"rpm": 20000.0, "mode": "motor"},
+               "em": dict(self.EM), "result": {}, "res": {}}
+        c = R.apply_pwm_view(col, {"duties": []})
+        assert c["drive"] == "sine"
+        assert c["em_source"] == "standalone"
+        assert c["em"] == self.EM and "em_sine" not in c
+        # …and section 1 says so, because those numbers were NOT solved at the
+        # temperatures the rest of the document gives
+        assert "standalone" in R.em_source_note("standalone")
+        assert R.em_source_note("coupled") == ""
 
     def test_the_sidecar_run_wins_over_the_coupled_block(self):
         """`runs['pwm_voltage'].summary` is the whole run; the coupled record's
@@ -8348,3 +8379,410 @@ def _patch_duty_results_get(R, doc):
         finally:
             dr.get, dr.active_context = orig_get, orig_ctx
     return _cm()
+
+
+# ---------------------------------------------------------------------------
+# ONE ELECTROMAGNETIC SOURCE PER DUTY  (L13 server review, round 3 — 2026)
+# ---------------------------------------------------------------------------
+# A duty can carry three electromagnetic answers of the same machine: the
+# STANDALONE solve saved with it in the configuration yaml, the COUPLED loop's
+# own run, and the 20 deg C constants pass.  The L13 document printed the
+# first in sections 3/4/5 and the second in sections 6/7/8 of ONE duty — 8.18
+# N.m, 686.7 W, 5.0 % ripple beside 9.361 N.m, 658.0 W, 6.4 % — with the
+# figures drawn from the second run's own field, so the demagnetisation map
+# showed a worst element keeping 59.2 % of its Br under a caption saying
+# 11.7 %.  `report.duty_em_source` is the one policy that resolves this, and
+# everything below pins it.
+
+
+class TestDutyEmSource:
+    """The policy, on synthetic records — no FEM, no store on disk."""
+
+    #: The duty's standalone summary: an older solve of the same machine, at
+    #: the temperature the user typed rather than the one the loop found.
+    SINE = {
+        "rpm": 1000.0, "T_em_avg_Nm": 8.18, "P_mech_W": 856.6,
+        "P_loss_total_W": 686.7, "P_stranded_W": 676.1, "P_core_W": 2.5,
+        "P_core_stator_W": 2.3, "P_core_rotor_W": 0.2,
+        "T_ripple_pct": 5.0, "T_ripple_filt_pct": 4.9, "T_ripple_raw_pct": 5.0,
+        "THD_LL_pct": 2.49, "efficiency": 0.555,
+        "I_phase_rms_A": 45.96, "I_line_rms_A": 45.96,
+        "I_winding_rms_A": 45.96, "R_phase_ohm": 0.106376,
+        "Kt_Nm_per_Arms": 0.178, "Km_Nm_sqrtW": 0.315,
+        "mass_total_kg": 0.367, "coil_temp_C": 200.0,
+        "V_line_peak_V": 30.7, "V_line_rms_V": 21.4, "V1_LL_V": 30.29,
+        "end3d": {"k_flux": 0.9248078395217973},
+        "coupling": {"coil_temp_c": 200.0, "magnet_temp_c": 120.0,
+                     "converged": False, "residual_coil_K": 193.0},
+        "demag": {"br_worst_pct": 11.7, "br_kept_vol_pct": 93.834,
+                  "bh_kept_vol_pct": 92.251, "grade_nominal": 52.0,
+                  "grade_effective": 48.0, "magnet_name": "F52SH_120C"},
+    }
+
+    #: The coupled loop's own record, five days newer — the run the thermal
+    #: map, the mechanical solve and every stored field belong to.
+    COUPLED = {
+        "drive": "sine", "kind": "coupled", "converged": False,
+        "computed_at": "2026-09-18T09:23:51",
+        "recorded_at": "2026-09-18T09:26:59",
+        "geometry_fingerprint": "f3b4728f381c5b31",
+        "coil_temp_c": 184.0, "magnet_temp_c": 43.31,
+        "magnet_temp_max_c": 44.71,
+        "em": {"T_em_avg_Nm": 9.361, "T_ripple_pct": 6.4,
+               "P_stranded_W": 652.5, "P_core_W": 2.8, "P_solid_W": 2.6,
+               "P_mag_W": 0.9, "P_shaft_W": 1.8, "P_loss_total_W": 658.0,
+               "efficiency": 0.5984, "THD_LL_pct": 5.28,
+               "V_line_peak_V": 31.7},
+    }
+
+    def _src(self, coupled=True):
+        from motor_ai_sim import report as R
+
+        res = {"coupled": dict(self.COUPLED)} if coupled else {}
+        return R.duty_em_source("die", "cfg", "peak", {"duties": []},
+                                d={"name": "peak"}, res=res,
+                                sine=dict(self.SINE))
+
+    # -- the switch itself --------------------------------------------------
+    def test_the_coupled_run_is_the_source_of_every_em_number(self):
+        s = self._src()
+        assert s["kind"] == "coupled"
+        em = s["em"]
+        assert em["T_em_avg_Nm"] == 9.361
+        assert em["P_loss_total_W"] == 658.0
+        assert em["T_ripple_pct"] == 6.4
+        assert em["THD_LL_pct"] == 5.28
+        assert em["efficiency"] == 0.5984
+        assert em["coil_temp_C"] == 184.0
+        assert em["magnet_temp_C"] == 43.31
+        # ...and the standalone solve is kept beside it, never over it
+        assert s["em_sine"]["T_em_avg_Nm"] == 8.18
+
+    def test_no_coupled_record_means_the_standalone_solve_and_says_so(self):
+        from motor_ai_sim import report as R
+
+        s = self._src(coupled=False)
+        assert s["kind"] == "standalone"
+        assert s["em"]["T_em_avg_Nm"] == 8.18
+        assert "standalone" in R.em_source_note(s["kind"])
+
+    # -- what follows from the switch ---------------------------------------
+    def test_the_constants_are_rebuilt_from_the_run_they_describe(self):
+        em = self._src()["em"]
+        # Kt = T/I and Km = Kt/sqrt(3R) — the solver's own definitions, which
+        # the L13 duties' stored summaries reproduce to the last digit.  The
+        # stale 0.178 N.m/A belonged to an 8.18 N.m run.
+        assert round(em["Kt_Nm_per_Arms"], 4) == round(9.361 / 45.96, 4)
+        assert round(em["Km_Nm_sqrtW"], 4) == round(
+            em["Kt_Nm_per_Arms"] / (3.0 * em["R_phase_ohm"]) ** 0.5, 4)
+        # the rotor power is the torque it is made of...
+        assert round(em["P_mech_W"], 1) == round(
+            9.361 * 2 * 3.141592653589793 * 1000.0 / 60.0, 1)
+        # ...and so is the 3-D corrected torque
+        assert round(em["end3d"]["T_corrected_Nm"], 4) == round(
+            9.361 * 0.9248078395217973, 4)
+        # ...and the per-mass figures
+        assert round(em["torque_per_mass_Nm_kg"], 3) == round(
+            9.361 / 0.367, 3)
+
+    def test_the_resistance_moves_to_the_temperature_the_loop_settled_at(self):
+        em = self._src()["em"]
+        # 0.106376 ohm at 200 deg C is 0.062303 at 20 with copper's 0.00393/K;
+        # at the loop's 184 deg C it is 0.102, and Km above is formed on it.
+        a = 0.00393
+        want = 0.106376 * (1 + a * (184.0 - 20.0)) / (1 + a * (200.0 - 20.0))
+        assert round(em["R_phase_ohm"], 6) == round(want, 6)
+
+    def test_the_voltage_family_follows_the_peak_the_run_recorded(self):
+        em = self._src()["em"]
+        k = 31.7 / 30.7
+        assert round(em["V_line_rms_V"], 3) == round(21.4 * k, 3)
+        assert round(em["V1_LL_V"], 3) == round(30.29 * k, 3)
+        # a crest factor the waveform can actually have
+        assert 1.40 < em["V_line_peak_V"] / em["V_line_rms_V"] < 1.46
+
+    def test_the_iron_split_sums_to_the_core_loss_it_is_a_split_of(self):
+        em = self._src()["em"]
+        assert round(em["P_core_stator_W"] + em["P_core_rotor_W"], 6) == \
+            round(em["P_core_W"], 6)
+
+    def test_what_the_loop_did_not_measure_is_dropped_not_carried_over(self):
+        em = self._src()["em"]
+        for k in ("T_ripple_filt_pct", "T_ripple_raw_pct"):
+            assert k not in em, "%s is the other run's ripple" % k
+
+    def test_the_summarys_embedded_loop_is_replaced_by_the_real_one(self):
+        """A saved summary carries a copy of the coupled loop as it stood when
+        it was saved; the Materials paragraph reads it, and on the delivered
+        document it went on saying "the run's magnets sat at 120 C" under a
+        report whose every other page says 43.3 C."""
+        from motor_ai_sim import report as R
+
+        em = self._src()["em"]
+        assert em["coupling"]["magnet_temp_c"] == 43.31
+        assert R._duty_magnet_temp(em) == 43.31
+
+    def test_the_electromagnetic_data_carries_the_print_it_was_solved_on(self):
+        from motor_ai_sim import report as R
+
+        em = self._src()["em"]
+        assert em["geo_fingerprint"] == "f3b4728f381c5b31"
+        fp, agree, _per = R.duty_fingerprint_check(
+            {"coupled": dict(self.COUPLED)}, em)
+        assert fp == "f3b4728f381c5b31" and agree is True
+
+    # -- the demagnetisation block is the map's -----------------------------
+    def test_the_demag_block_comes_from_the_dutys_own_map(self, monkeypatch):
+        from motor_ai_sim import report as R
+
+        monkeypatch.setattr(R, "demag_corner_stats", lambda *a, **k: {
+            "n_elements": 623, "min_pct": 59.19, "p1_pct": 61.63,
+            "n_below_50": 0, "area_below_50_pct": 0.0,
+            "n_below_80": 21, "area_below_80_pct": 0.166,
+            "n_below_90": 21, "area_below_90_pct": 0.166,
+            "br_kept_vol_pct": 99.914, "bh_kept_vol_pct": 99.852,
+            "area_derated_pct": 0.545})
+        dem = self._src()["em"]["demag"]
+        assert dem["br_worst_pct"] == 59.19          # not the stale 11.7
+        assert dem["br_kept_vol_pct"] == 99.914
+        assert round(dem["bh_loss_pct"], 3) == 0.148
+        assert dem["area_derated_pct"] == 0.545
+        # the effective grade is the nominal one times the energy left
+        assert dem["grade_effective"] == round(52.0 * 0.99852, 1)
+
+    def test_the_ripple_rule_reads_the_source_the_document_prints(self):
+        """The rule scored 5.0 % — exactly ON the 5 % gate — off the stale
+        summary, while the run the rest of the document quotes reports 6.4 %,
+        which is over it."""
+        from motor_ai_sim import report as R
+
+        col = {"duty": "peak", "d": {"rpm": 1000.0, "mode": "motor"},
+               "em": dict(self.SINE), "result": {},
+               "res": {"coupled": dict(self.COUPLED)}}
+        col = R.apply_pwm_view(col, {"duties": []})
+        ctx = R._warning_context(col, mats={}, batt={}, brg=None,
+                                 max_speed_rpm=None, mag_lim=None,
+                                 mag_note="", ins_lim=200.0, ins_note="",
+                                 cold_k=1.0, cold_note="")
+        assert ctx["ripple_pct"] == 6.4
+        assert ctx["thd_pct"] == 5.28
+
+
+class TestMassFollowsTheAssignedMaterial:
+    """A mass row flagged as the wrong material kept the wrong material's
+    kilograms, in the table, in the shares and in the pie chart; and the flag
+    fired on rows where nothing had changed at all."""
+
+    COMPS = [
+        {"name": "Magnets (F52SH_120C)", "material": "NdFeB",
+         "density_kg_m3": 7500.0, "volume_cm3": 9.3, "mass_kg": 0.07},
+        {"name": "Shaft (Aluminium_6061) - customer-supplied",
+         "material": "shaft", "density_kg_m3": 2700.0, "volume_cm3": 3.9,
+         "mass_kg": 0.0, "mass_modelled_kg": 0.01},
+    ]
+    MATS = {"magnet": "F52SH_120C", "shaft": "Steel_42CrMo4_QT"}
+
+    def test_a_reassigned_part_is_reweighed_at_the_live_density(
+            self, monkeypatch):
+        from motor_ai_sim import report as R
+
+        monkeypatch.setattr(R, "material_density",
+                            lambda n: 7850.0 if "Steel" in str(n) else None)
+        comps = R.mass_components_live({"mass_components": self.COMPS},
+                                       self.MATS)
+        shaft = comps[1]
+        assert shaft["material_assigned"] == "Steel_42CrMo4_QT"
+        assert shaft["mass_recomputed"] is True
+        # 3.9 cm3 of steel, not of aluminium
+        assert round(shaft["mass_modelled_kg"], 4) == round(
+            3.9e-6 * 7850.0, 4)
+        assert shaft["density_kg_m3"] == 7850.0
+
+    def test_an_unchanged_row_is_not_flagged(self, monkeypatch):
+        from motor_ai_sim import report as R
+
+        monkeypatch.setattr(R, "material_density", lambda n: 7850.0)
+        comps = R.mass_components_live({"mass_components": self.COMPS},
+                                       self.MATS)
+        # "Magnets (F52SH_120C)" against an assignment of F52SH_120C is not a
+        # discrepancy — the old check compared the CATEGORY "NdFeB" with the
+        # card name and flagged every magnet row of every report.
+        assert "material_assigned" not in comps[0]
+        rows = R.mass_rows({"mass_components": self.COMPS}, self.MATS)
+        assert not any("current assignment" in str(r[1]) for r in rows
+                       if str(r[0]).startswith("Magnets"))
+
+    def test_a_row_that_cannot_be_reweighed_says_so(self, monkeypatch):
+        from motor_ai_sim import report as R
+
+        monkeypatch.setattr(R, "material_density", lambda n: None)
+        rows = R.mass_rows({"mass_components": self.COMPS}, self.MATS)
+        shaft = next(r for r in rows if str(r[0]).startswith("Shaft"))
+        assert "current assignment" in shaft[1]
+        assert "mass not recomputed" in shaft[3]
+
+
+#: What must never reach a rendered page: a finding id, a review filename, a
+#: raw date, a reviewer.  The delivered document printed
+#: "(F9, L13 server ... 2026-09-19)" on page 22 in both formats, because the
+#: fix for that finding was written by copying the review's own citation into
+#: the report template.  Docstrings and comments may say whatever an engineer
+#: needs; a string the renderers can PRINT may not.
+FORBIDDEN_IN_CLIENT_PROSE = (
+    (r"(?i)\baudits?\b", "an audit reference"),
+    (r"(?i)scratchpad", "a scratchpad path"),
+    # The leak's own shape: "(F9, ...".  Anchored on the bracket because a
+    # bare F-and-digits turns up by chance in a PDF's binary streams, which
+    # the rendered-text check below walks.
+    (r"\(F\d+[,)]", "a finding id"),
+    (r"\b20\d\d-\d\d-\d\d\b", "a raw date"),
+    (r"(?i)\breviewers?\b", "a reviewer reference"),
+)
+
+
+def assert_no_internal_reference(text):
+    """No audit id, review name, reviewer or raw date in a rendered document."""
+    import re
+
+    for pat, what in FORBIDDEN_IN_CLIENT_PROSE:
+        m = re.search(pat, text)
+        assert not m, "%s in the rendered document: %r" % (
+            what, text[max(0, m.start() - 60):m.end() + 60])
+
+
+def _printable_strings(module):
+    """Every string constant of a module that is NOT a docstring — the ones a
+    renderer can put on a page."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(module))
+    docstrings = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(node, (ast.Module, ast.FunctionDef,
+                                 ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if (body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            docstrings.add(id(body[0].value))
+    out = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings):
+            out.append((node.lineno, node.value))
+    return out
+
+
+class TestNoInternalReferencesInClientProse:
+    """The one-line leak, and the test that keeps it out."""
+
+    def _offenders(self, module):
+        import re
+
+        bad = []
+        for lineno, s in _printable_strings(module):
+            for pat, what in FORBIDDEN_IN_CLIENT_PROSE:
+                if re.search(pat, s):
+                    bad.append((lineno, what, s[:120]))
+                    break
+        return bad
+
+    def test_report_py_prints_no_internal_reference(self):
+        from motor_ai_sim import report as R
+
+        bad = self._offenders(R)
+        assert not bad, "\n".join("line %d: %s - %r" % b for b in bad)
+
+    def test_report_docx_py_prints_no_internal_reference(self):
+        from motor_ai_sim import report_docx as RD
+
+        bad = self._offenders(RD)
+        assert not bad, "\n".join("line %d: %s - %r" % b for b in bad)
+
+    def test_the_rotor_inertia_note_explains_itself(self):
+        from motor_ai_sim import report as R
+
+        assert "unrounded" in R.ROTOR_INERTIA_NOTE
+        assert "audit" not in R.ROTOR_INERTIA_NOTE.lower()
+
+
+class TestGeometryFingerprintIsOfTheMachineNotTheMesh:
+    """The print section 1 shows as "the snapshot everything was solved on"
+    moved between two records whose every geometry input is bit-identical.
+    v1 stays (it keys every cache and every stored record); v2 is the
+    same-machine print, and it is what the consistency check uses wherever
+    the records carry one."""
+
+    GEO = {
+        "rotor_outer_radius": 32.4, "stator_inner_radius": 32.7,
+        "air_gap": 0.3, "motor_length": 13.0, "num_slots": 24,
+        "num_poles": 28, "winding_type": "PMSM",
+    }
+
+    def test_two_meshes_of_one_geometry_are_one_machine(self):
+        from motor_ai_sim.simulation.geometry_2d import (
+            geometry_fingerprint_v2 as fp2)
+
+        a = dict(self.GEO, mesh_size_mm=1.5, n_triangles=4815,
+                 element_order=2)
+        # the same machine, remeshed — and with the float the derivation
+        # actually hands back rather than the one the user typed
+        b = dict(self.GEO, mesh_size_mm=1.0, n_triangles=4813,
+                 element_order=2)
+        b["rotor_outer_radius"] = 32.400000000000006
+        assert fp2(a) == fp2(b)
+
+    def test_a_real_edit_moves_the_print(self):
+        from motor_ai_sim.simulation.geometry_2d import (
+            geometry_fingerprint_v2 as fp2)
+
+        assert fp2(dict(self.GEO)) != fp2(
+            dict(self.GEO, rotor_outer_radius=32.41))
+
+    def test_materials_and_winding_are_part_of_the_machine(self):
+        from motor_ai_sim.simulation.geometry_2d import (
+            geometry_fingerprint_v2 as fp2)
+
+        assert fp2(self.GEO, {"magnet": "F52SH_120C"}) != \
+            fp2(self.GEO, {"magnet": "N52UH_150C"})
+
+    def test_the_check_prefers_the_same_machine_print_when_all_carry_one(self):
+        from motor_ai_sim import report as R
+
+        # two v1 prints, one v2: the records ARE one machine and the check
+        # must say so instead of crying "different geometries".
+        res = {"coupled": {"geometry_fingerprint": "ee6accdc227f05fb",
+                           "geometry_fingerprint_v2": "aaaa1111bbbb2222"},
+               "thermal": {"geometry_fingerprint": "f3b4728f381c5b31",
+                           "geometry_fingerprint_v2": "aaaa1111bbbb2222"}}
+        em = {"geo_fingerprint": "f3b4728f381c5b31",
+              "geometry_fingerprint_v2": "aaaa1111bbbb2222"}
+        fp, agree, _per = R.duty_fingerprint_check(res, em)
+        assert fp == "aaaa1111bbbb2222" and agree is True
+        # ...and with no v2 anywhere the v1 answer is unchanged
+        res2 = {k: {"geometry_fingerprint": v["geometry_fingerprint"]}
+                for k, v in res.items()}
+        fp_v1, agree2, _p2 = R.duty_fingerprint_check(
+            res2, {"geo_fingerprint": "f3b4728f381c5b31"})
+        assert agree2 is False and fp_v1 in ("ee6accdc227f05fb",
+                                             "f3b4728f381c5b31")
+
+    def test_the_hash_line_names_the_duty_it_belongs_to(self):
+        from motor_ai_sim import report as R
+
+        line = R.geometry_hash_line("f3b4728f381c5b31", "peak")
+        assert "f3b4728f381c5b31" in line and "'peak'" in line
+        assert "every number in this report" not in line
+        assert R.geometry_hash_line(None) == ""
+
+    def test_the_mismatch_note_is_a_sentence_with_the_whole_print(self):
+        from motor_ai_sim import report as R
+
+        note = R.duty_fingerprint_note(
+            "f3b4728f381c5b31", False,
+            [("Electromagnetic", None), ("Thermal", "f3b4728f381c5b31")])
+        assert note.endswith(".")
+        assert "f3b4728f381c5b31" in note
+        assert ": the rest" not in note

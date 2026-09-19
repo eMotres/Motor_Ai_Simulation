@@ -701,10 +701,11 @@ def _machine(doc, D: Dict[str, Any]) -> None:
     _geo = D.get("geo_report") or D["geo"]
     _ghash = D.get("geo_hash")
     if _ghash:
-        # ITEM 1 (owner review 2026-09-19): the snapshot every number in this
-        # report was solved on, printed once.
-        _p(doc, "geometry %s — the snapshot every number in this report was "
-                "solved on" % _ghash, size=9, italic=True)
+        # ITEM 1 (owner review 2026-09-19), NAMING ITS DUTY since round 3 of
+        # the audit — see `report.geometry_hash_line`.
+        _p(doc, R.geometry_hash_line(
+            _ghash, str((D.get("d_duty") or {}).get("name") or "") or None),
+           size=9, italic=True)
     elif D.get("geo_no_snapshot"):
         # F1 (L13 server audit 2026-09-19) — see report._machine_page.
         _p(doc, "%s live configuration — no geometry snapshot stored with "
@@ -724,6 +725,11 @@ def _machine(doc, D: Dict[str, Any]) -> None:
                color=WARN)
         else:
             _p(doc, _fp_note, size=9, italic=True)
+    _em_src_note = D.get("em_source_note") or ""
+    if _em_src_note:
+        # ONE ELECTROMAGNETIC SOURCE, NAMED (F2/N2) — see
+        # `report.em_source_note`.
+        _p(doc, _em_src_note, size=9, italic=True)
     _table(doc, R.geometry_rows(_geo, D["wind"], D["slot"], D["em"]),
            header=False, size=10.5,
            widths_cm=[5.2, 2.6, 1.4, 5.2, 2.6, 1.4])

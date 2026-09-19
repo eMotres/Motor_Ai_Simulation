@@ -617,6 +617,39 @@ def test_a_cyrillic_duty_name_gets_a_safe_stable_file_name(dies):
     assert j["payload"]["time_s"]
 
 
+def test_a_stray_cyrillic_lookalike_in_an_otherwise_latin_duty_name_is_normalised(dies):
+    """The OPPOSITE of the test above: a name typed as plain English that
+    picked up one Cyrillic letter pixel-identical to its Latin neighbour
+    ('...120С...' — Cyrillic С) is silently corrected to the Latin spelling
+    on save — this is exactly how the server workspace's 'rated' duty
+    (die 'CIANO28 85 20SW1200' / config 'L13') ended up with its thermal map
+    filed under a name the configuration no longer used, 2026-09-19.  A name
+    that is mostly ANOTHER alphabet (the test above) is never touched."""
+    from motor_ai_sim.routes import family as fam
+
+    # unit-level: the helper itself, both directions
+    assert fam._delookalike_duty_name("rated 120С wire 80C NdFeB") \
+        == "rated 120C wire 80C NdFeB"
+    assert fam._delookalike_duty_name("пик 30С") \
+        == "пик 30С"          # mostly Cyrillic — untouched
+    assert fam._delookalike_duty_name("rated") == "rated"
+
+    # integration: POST /api/family/duty stores the normalised name
+    name_in = "rated 120С wire 80C NdFeB"
+    r = client.post("/api/family/duty", json={
+        "die": DIE, "config": CFG,
+        "duty": {"name": name_in, "mode": "motor", "current_arms": 85.0,
+                 "rpm": 6000.0, "gamma_deg": 12.0}})
+    assert r.status_code == 200, r.text
+    assert _duty_doc(dies, "rated 120C wire 80C NdFeB")
+
+    # …and PATCH /duty/.../rename normalises the new name too
+    r = client.patch(f"/api/family/duty/{DIE}/{CFG}/{DUTY}",
+                     json={"name": "peak 200С wire 120C NdFeB"})
+    assert r.status_code == 200, r.text
+    assert r.json()["duty"] == "peak 200C wire 120C NdFeB"
+
+
 # ── duplicate / rename / delete carry the files ──────────────────────────────
 
 def test_duplicating_a_duty_copies_its_runs_and_their_files(dies):

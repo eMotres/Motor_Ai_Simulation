@@ -140,6 +140,46 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.,()#+°·\- ]{0,63}$")
 # before the validator already carry Cyrillic letters.
 _DUTY_NAME_RE = re.compile(r"^[^\W_][\w.,()#+°·\- ]{0,63}$", re.UNICODE)
 
+# Cyrillic letters that are pixel-identical to a Latin one on every font this
+# app ships with — the handful a Russian keyboard layout actually produces
+# when typing what looks like an English word.  Deliberately NOT the whole
+# Cyrillic alphabet: only the shapes that read as their Latin twin.
+_CYRILLIC_LATIN_LOOKALIKES: Dict[str, str] = {
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O",
+    "Р": "P", "С": "C", "Т": "T", "Х": "X",
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
+}
+
+
+def _delookalike_duty_name(n: str) -> str:
+    """NFC-normalise ``n``, then silently swap a STRAY Cyrillic look-alike for
+    its Latin twin inside an otherwise-Latin name.
+
+    ``_DUTY_NAME_RE`` above admits any alphabet on purpose — rejecting one
+    broke the 2026-09-01 case, and this function does not reopen that: a name
+    that is mostly Cyrillic (a real word in another alphabet, e.g. 'пик 30С')
+    is returned untouched, look-alikes and all.  What it closes is the
+    opposite case, found on the server workspace 2026-09-19
+    (die 'CIANO28 85 20SW1200' / config 'L13'): a name typed as plain English
+    picks up ONE Cyrillic letter the keyboard layout made indistinguishable
+    from its Latin neighbour ('rated 120С wire 80C NdFeB' — one Cyrillic С
+    next to an otherwise-Latin 'C').  Every store downstream
+    (``duty_results``, ``duty_fields``) keys off the exact string, so the
+    stray letter silently started a SECOND, empty duty next to the one the
+    user meant, and the configuration's plain 'rated' printed "no thermal map
+    stored" over a solve that was sitting on disk under the look-alike name.
+    A name that is already overwhelmingly Latin is never an intentional
+    non-Latin word, so swapping look-alikes there is lossless.
+    """
+    import unicodedata
+    n = unicodedata.normalize("NFC", n)
+    if not any(ch in _CYRILLIC_LATIN_LOOKALIKES for ch in n):
+        return n
+    letters = [ch for ch in n if ch.isalpha()]
+    if not letters or sum(ch.isascii() for ch in letters) < 0.6 * len(letters):
+        return n          # mostly another alphabet — a real word, leave it
+    return "".join(_CYRILLIC_LATIN_LOOKALIKES.get(ch, ch) for ch in n)
+
 
 def _lookalike_hint(n: str) -> str:
     """Name the offending characters — 'invalid name' with an invisible
@@ -160,6 +200,7 @@ def _lookalike_hint(n: str) -> str:
 def _check_name(name: str, what: str) -> str:
     n = (name or "").strip()
     if what == "duty":
+        n = _delookalike_duty_name(n)
         if not _DUTY_NAME_RE.match(n):
             raise HTTPException(422, detail=(
                 f"duty name '{name}' is invalid — use letters (any alphabet), "
@@ -2621,7 +2662,7 @@ def duplicate_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     saved_at stamp is fresh, marking when the copy was made."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     _require_die_write(die, _w)
-    new = str(req.name or "").strip()
+    new = _delookalike_duty_name(str(req.name or "").strip())
     if not new:
         raise HTTPException(422, detail="give the copy a name")
     p = _cfg_file(die, cfg)
@@ -2661,7 +2702,7 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     would throw the recorded result away."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     _require_die_write(die, _w)
-    new = str(req.name or "").strip()
+    new = _delookalike_duty_name(str(req.name or "").strip())
     if not new:
         raise HTTPException(422, detail="give the duty a name")
     p = _cfg_file(die, cfg)

@@ -23,7 +23,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
+# Workspace-carrying pool: a DOE eval must be spawned with the CALLER'S
+# config, not the process one (workspace.WorkspaceThreadPoolExecutor).
+from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
+                                    as ThreadPoolExecutor)
 from typing import Any, Dict, List
 
 import numpy as np

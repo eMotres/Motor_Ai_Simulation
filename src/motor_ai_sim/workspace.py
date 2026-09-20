@@ -53,6 +53,8 @@ NTFS alike, and it does not put an e-mail address in a directory name.
 """
 from __future__ import annotations
 
+import concurrent.futures
+import contextvars
 import functools
 import hashlib
 import logging
@@ -83,6 +85,7 @@ __all__ = [
     # Stage 3 — the in-memory stores
     "BoundedStore", "StateMapping", "StateList", "StateLock",
     "state", "ws_map", "ws_list", "ws_lock", "bind", "bind_thread",
+    "WorkspaceThreadPoolExecutor",
     "MAX_WORKSPACES", "registry_size", "registry_ids", "evict_workspace",
     "evict_all_workspaces", "audit_cache_keys",
 ]
@@ -1418,3 +1421,49 @@ def bind(fn: Callable) -> Callable:
 def bind_thread(target: Callable, **kwargs) -> threading.Thread:
     """``threading.Thread`` with :func:`bind` already applied to its target."""
     return threading.Thread(target=bind(target), **kwargs)
+
+
+class WorkspaceThreadPoolExecutor(concurrent.futures.ThreadPoolExecutor):
+    """``ThreadPoolExecutor`` whose workers run in the SUBMITTER'S context.
+
+    WHY THIS EXISTS (production incident, 2026-09-20)
+    -------------------------------------------------
+    :func:`bind` fixed ``threading.Thread``, which starts with an empty context.
+    ``concurrent.futures.ThreadPoolExecutor`` has exactly the same hole and it
+    was missed: ``Executor.submit`` hands the callable to a POOL thread, and a
+    pool thread's context is empty too — ``contextvars`` are per thread and
+    nothing in ``concurrent.futures`` copies them (unlike Starlette's threadpool,
+    which runs a sync handler through ``anyio``'s context copy, and unlike
+    ``asyncio.to_thread``).
+
+    What that cost: the owner ran a 6-point ``wire_height`` sweep in his own
+    workspace on emotres.com.  ``_scan_worker`` itself was bound, so the sweep's
+    in-process grid gate correctly measured his Ø50 machine — but every eval was
+    dispatched through ``ex.submit(_do, …)``, and inside that pool thread
+    ``workspace()`` fell back to the PROCESS workspace.  So
+    ``_base_eval_env`` stamped the eval subprocess with
+    ``MOTOR_AI_SIM_CONFIG=/srv/motres/identity/motor_config.yaml`` — the Ø85
+    starter machine — and all six points came back rejected against ITS slot:
+    "wire_height = 0.4 does not fit — the bound here is 0.3356", where his own
+    machine's bound is 0.72.  Same class as the 2026-09-15 import-bound config
+    path and the Stage 3 ``bind()`` for threads, one layer further out.
+
+    THE COPY IS THE WHOLE CONTEXT, not the three vars :func:`bind` carries.  A
+    pool thread here is an extension of the request that submitted to it, so it
+    must see what that request sees: the workspace, the resolved caller and the
+    write layer, and equally ``material_context`` (the ``?mat=`` assignment),
+    ``run_recording`` (record / dry-run), ``progress`` and
+    ``mech_losses.BEARING_TEMP_C``.  Every one of those is a ``ContextVar`` that
+    a request sets and a worker would otherwise read as its module default —
+    i.e. somebody else's answer.  ``copy_context()`` per SUBMIT, never one
+    context reused: a ``Context`` cannot be entered twice at once, and each
+    submitted task must be free to run concurrently with its siblings.
+
+    With ``WORKSPACES_ROOT`` unset the copied context resolves to the process
+    workspace on both ends, so this is the status quo with one dict copy per
+    task — microseconds against a multi-minute FEM eval.
+    """
+
+    def submit(self, fn, *args, **kwargs):      # noqa: D102 — Executor's contract
+        ctx = contextvars.copy_context()
+        return super().submit(ctx.run, fn, *args, **kwargs)

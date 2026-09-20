@@ -526,8 +526,24 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "                             'generated_utc', 'l_stack_curve')}\n"
                 "print('PASSPORT3D:' + json.dumps(out, default=float))\n")
             try:
+                # THE CHILD'S MACHINE IS THE CALLER'S.  Geometry and materials
+                # travel in the file above, but everything the child does NOT
+                # override — the mesh block, the winding, the passport store it
+                # reads — resolves from ``MOTOR_AI_SIM_CONFIG``, and a bare
+                # inherited environment names the process/starter machine on a
+                # layered server (2026-09-20, the sweep incident).  Stamp the
+                # caller's own config path, exactly as the optimizer's eval
+                # subprocess does.
+                import os as _os_c
+                _env_c = dict(_os_c.environ)
+                try:
+                    from motor_ai_sim.config import config_path as _cfgp_c
+                    _env_c["MOTOR_AI_SIM_CONFIG"] = str(_cfgp_c())
+                except Exception:               # noqa: BLE001
+                    pass
                 _pr = _sp.run([_sys.executable, "-c", _child, _src, _mfile],
-                              capture_output=True, text=True, timeout=7200)
+                              capture_output=True, text=True, timeout=7200,
+                              env=_env_c)
             finally:
                 try:
                     _P2(_mfile).unlink()

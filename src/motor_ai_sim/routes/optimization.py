@@ -668,8 +668,19 @@ def _base_eval_env() -> Dict[str, str]:
     try:
         from motor_ai_sim.config import config_path as _resolve_cfg_path
         env["MOTOR_AI_SIM_CONFIG"] = str(_resolve_cfg_path())
-    except Exception:                   # noqa: BLE001 — never fail an eval here
-        pass
+    except Exception as _exc:           # noqa: BLE001
+        # SINGLE-USER: the env already names the only machine there is, so a
+        # failure here changes nothing and must not cost an eval.
+        # LAYERED: falling through would hand the subprocess whatever
+        # ``MOTOR_AI_SIM_CONFIG`` the SERVER started with — the identity/starter
+        # machine — and the eval would answer about a motor nobody asked about
+        # (2026-09-20: six sweep points rejected against the starter's slot).
+        # Never solve an impossible machine silently: refuse, loudly.
+        if _WSP.layering():
+            raise RuntimeError(
+                "cannot resolve this caller's motor config for an eval "
+                "subprocess (%s) — refusing to evaluate on the process "
+                "machine" % _exc) from _exc
     env["SB_SEED_FROM_PREVIOUS"] = "1"
     return env
 
@@ -1515,7 +1526,10 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  geo_mesh=True, element_order=2, demag=False,
                  with_baseline=False) -> None:
     import numpy as np  # noqa: F401
-    from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+    from concurrent.futures import wait, FIRST_COMPLETED
+    # Workspace-carrying pool — see workspace.WorkspaceThreadPoolExecutor.
+    from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
+                                        as ThreadPoolExecutor)
     from motor_ai_sim.optimization.optimizer import _pareto_front
 
     # SWEEP JOURNAL: create and update as we progress
@@ -3086,7 +3100,8 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
     whole run was pinned to γ = 0.0 (perp_free_200_20260904, 2026-09-04).
     Same 11 evals, one parallel wave: [-50, 50] at 10° plus the parabolic
     refine resolves the peak to ~1° on a cosine-shaped T(γ)."""
-    from concurrent.futures import ThreadPoolExecutor
+    from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
+                                        as ThreadPoolExecutor)
     cand = [round(lo + i * step, 1) for i in range(int(round((hi - lo) / step)) + 1)]
 
     def _one(gc):
@@ -3130,7 +3145,9 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
     # the gradient path runs a single round, then the UI flags boundary variables
     # for a manual one-click continue.
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
+    from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
+                                        as ThreadPoolExecutor)
     try:
         cfg = get_config()
         geo0 = dict(cfg.get("geometry", {}))
@@ -3529,7 +3546,9 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
     [0,1] so their very different physical scales don't bias the search.  Writes
     the SAME _descent_state the UI already renders (baseline/best/history/points)
     so the existing charts work unchanged."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
+    from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
+                                        as ThreadPoolExecutor)
     import numpy as np
     try:
         import cma
@@ -5065,7 +5084,9 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     instead of spending four minutes of FEM to be told it is unbuildable, and
     again inside refine_proc for everything the cheap screen cannot decide.
     Every candidate either fence rejects is counted."""
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import as_completed
+    from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
+                                        as ThreadPoolExecutor)
     try:
         import cma
     except Exception as e:  # noqa: BLE001
@@ -5523,7 +5544,8 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     Costs are recomputed from stored METRICS on every comparison rather than
     cached as numbers, so the ripple-penalty continuation ramp re-scores the
     whole run consistently instead of leaving old costs measured at an old λ."""
-    from concurrent.futures import ThreadPoolExecutor
+    from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
+                                        as ThreadPoolExecutor)
 
     specs = plan["variables"]
     names = [v["name"] for v in specs]

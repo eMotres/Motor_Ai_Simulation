@@ -1433,13 +1433,24 @@ def _cold_ldq0(em: Dict[str, Any],
     from motor_ai_sim.routes.simulation import catalogue_ldq0
 
     s = dict((em or {}).get("summary") or {})
-    if s.get("daxis_deg") is None:
+    # THE D-AXIS STAMP SITS ON THE RESULT, NOT IN ITS SUMMARY.  The transient
+    # route returns ``daxis_deg`` / ``daxis_source`` beside ``summary`` (what
+    # ``_transient_ledger_row`` reads as ``result.get("daxis_deg")``), and the
+    # summary itself carries no d-axis key at all — so a read of the summary
+    # alone never probed on a real run and every cold block came back without
+    # Ld0/Lq0 (measured 2026-09-20 on the L180 rated duty through
+    # ``POST /api/coupled/constants_20c``).  Both places are read; the result's
+    # own stamp wins.
+    _dax = (em or {}).get("daxis_deg")
+    if _dax is None:
+        _dax = s.get("daxis_deg")
+    if _dax is None:
         return None
     try:
         ov = parse_geo_override(body.get("geo")) or None
     except Exception:   # noqa: BLE001 — the live machine, then
         ov = None
-    blk = catalogue_ldq0(ov, daxis_deg=float(s["daxis_deg"]),
+    blk = catalogue_ldq0(ov, daxis_deg=float(_dax),
                          connection=(str(s.get("connection") or "") or None),
                          magnet_temp_c=COLD_CONSTANTS_C)
     if not blk or blk.get("Ld_mH") is None:

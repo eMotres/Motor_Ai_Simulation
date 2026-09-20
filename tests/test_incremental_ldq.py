@@ -330,6 +330,28 @@ def test_the_cold_pass_carries_the_catalogue_inductances(monkeypatch):
     assert "20" in out["ldq0_method"] and "i=0" in out["ldq0_method"]
 
 
+def test_the_cold_pass_reads_the_result_level_daxis_stamp(monkeypatch):
+    """The transient route stamps ``daxis_deg`` on the RESULT, beside
+    ``summary`` — never inside it.  A cold pass that looked only in the summary
+    never probed on a real run (2026-09-20, L180 rated through
+    ``POST /api/coupled/constants_20c``: KV/Kt/Km present, Ld0/Lq0 absent)."""
+    from motor_ai_sim.routes import coupled as C
+
+    seen = {}
+
+    def _probe(ov, *, daxis_deg, connection=None, magnet_temp_c=20.0):
+        seen["daxis_deg"] = daxis_deg
+        return {"Ld_mH": 0.0805, "Lq_mH": 0.0819, "Ldq_mH": -0.0027,
+                "spread_pct": {"Ld": 0.2, "Lq": 1.5}, "reciprocity_pct": 0.0}
+
+    monkeypatch.setattr("motor_ai_sim.routes.simulation.catalogue_ldq0", _probe)
+    out = C._cold_ldq0({"daxis_deg": 120.0138, "daxis_source": "calibrated",
+                        "summary": {"connection": "2P"}}, {})
+    assert seen["daxis_deg"] == pytest.approx(120.0138)
+    assert out["Ld0_mH"] == 0.0805 and out["Lq0_mH"] == 0.0819
+    assert out["saliency0_Lq_over_Ld"] == pytest.approx(1.017, abs=5e-4)
+
+
 def test_no_probe_means_no_catalogue_row(monkeypatch):
     """A machine whose no-load probe failed gets NOTHING — never a loaded
     chord dressed up as a catalogue constant."""

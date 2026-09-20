@@ -90,6 +90,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
+from motor_ai_sim import coupled_continuous_rating as _ccr
 from motor_ai_sim import coupled_duty_cycle as _cdc
 from motor_ai_sim import coupled_time_to_limit as _ttl
 from motor_ai_sim import run_recording as _rr
@@ -4208,3 +4209,374 @@ def _merge_constants_20c(block: Dict[str, Any]) -> Dict[str, bool]:
         log.debug("coupled: the 20 °C constants were not filed under the duty",
                   exc_info=True)
     return done
+
+
+# ---------------------------------------------------------------------------
+# HOW MUCH MAY IT PULL FOR EVER — the continuous rating, per cooling condition
+# ---------------------------------------------------------------------------
+# Owner, 2026-09-20: *«давай ещё сделаем расчёт continuous power для разных
+# условий охлаждения»*.  The loop and `coupled_time_to_limit` both answer for a
+# current somebody typed; this answers for the current the machine may HOLD, and
+# it answers it once per cooling condition, because that is the number that
+# moves by a factor of three between a joint in still air and a jacketed one.
+#
+# ONE electromagnetic run pays for the whole table.  The physics is in
+# `coupled_continuous_rating` (pure); everything here is the bridge to the 2-D
+# thermal FEM: which map, solved with which copper, under which cooling.
+
+
+def _cr_point_kwargs(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The operating-point and mesh half of a thermal request, from the body.
+
+    The same fields ``/run`` takes and the same defaults, so a caller hands this
+    route its Simulation-tab payload unchanged.  The COOLING half is not here:
+    it is what a condition varies.
+    """
+    from motor_ai_sim.routes.simulation import _effective_rpm
+
+    return dict(
+        rpm=_effective_rpm(body.get("rpm")),
+        gamma_deg=_f(body, "gamma_deg", 0.0),
+        I_phase_rms=_f(body, "I_phase_rms", 0.0),
+        n_steps_per_period=int(body.get("n_steps_per_period") or 12),
+        n_periods=_f(body, "n_periods", 1.0),
+        mesh_size_mm=_f(body, "mesh_size_mm", 3.0),
+        min_size_mm=_f(body, "min_size_mm", 0.3),
+        outer_air_factor=_f(body, "outer_air_factor", 1.3),
+        n_sectors=int(body.get("n_sectors") or 1),
+        component_mesh=str(body.get("component_mesh") or ""),
+        geo=body.get("geo"),
+        coil_temp_c=_f(body, "coil_temp_c", 120.0),
+        magnet_temp_c=(None if body.get("magnet_temp_c") in (None, "")
+                       else float(body["magnet_temp_c"])),
+        op_mode=body.get("mode"),
+    )
+
+
+def _cr_duty_cooling() -> Tuple[Dict[str, Any], str]:
+    """``(the cooling the loaded duty's stored thermal map was solved under, why)``.
+
+    The DEFAULTS a condition patches, so "the saved setup but 20 m/s" is one
+    key.  ``({}, why)`` when this machine has no stored thermal block — and then
+    a condition carries its whole cooling or the request is refused by name,
+    rather than silently solved against the panel's still-air defaults.
+    """
+    try:
+        from motor_ai_sim import duty_results as _dr
+        ctx = _dr.active_context()
+        if not ctx:
+            return {}, ("no die / configuration / duty is loaded, so there is "
+                        "no saved thermal setup to take the defaults from")
+        rec = (_dr.get(ctx[0], ctx[1]) or {}).get(ctx[2]) or {}
+        th = rec.get("thermal")
+        if not isinstance(th, dict) or not th:
+            return {}, ("the duty %r has no stored thermal map, so there is no "
+                        "saved cooling to patch" % ctx[2])
+        return _ccr.cooling_from_duty_thermal(th), (
+            "the cooling the duty %r's own stored thermal map was solved under"
+            % ctx[2])
+    except Exception as exc:  # noqa: BLE001 — a store read never fails a solve
+        log.debug("continuous_rating: no duty defaults", exc_info=True)
+        return {}, "the duty's stored thermal setup could not be read (%s)" % exc
+
+
+def _cr_scaled_map(em: Dict[str, Any], factor: float) -> Dict[str, Any]:
+    """The same loss map with ONLY the winding multiplied by ``factor``.
+
+    The current-scaling twin of ``routes.thermal._scaled_copper_map``, and it is
+    deliberately ONE factor over the whole copper: ``factor`` already carries
+    both ``s**2`` and the copper's own rho ratio, the map does not carry the
+    DC/AC split per ELEMENT, and the thermal solve spreads the copper total
+    uniformly over the coil domain anyway (``q_cu`` in ``solve_thermal_field``).
+    Iron, magnet, shaft and sleeve losses are untouched — they do not move with
+    the winding's current at a fixed field to first order, which is the
+    approximation ``coupled_continuous_rating`` states out loud.
+
+    A shallow copy: the mesh arrays are shared.
+    """
+    import numpy as _np
+
+    from motor_ai_sim.routes.thermal import _DOM_COIL_VIS
+
+    f = float(factor)
+    out = dict(em)
+    tags = _np.asarray(em.get("domain_per_tri") or [], int)
+    ld = _np.asarray(em.get("loss_density_per_tri") or [], float)
+    if ld.size and tags.size == ld.size:
+        ld = ld.copy()
+        coil = (tags == _DOM_COIL_VIS)
+        if coil.any():
+            ld[coil] *= f
+        out["loss_density_per_tri"] = ld.tolist()
+    for p_key, tot_key in (("P_cu_W", "P_loss_total_W"),
+                           ("P_cu_exact_W", "P_loss_total_exact_W")):
+        if em.get(p_key) is None:
+            continue
+        p = float(em[p_key])
+        out[p_key] = p * f
+        if em.get(tot_key) is not None:
+            out[tot_key] = float(em[tot_key]) + p * (f - 1.0)
+    for ac_key in ("P_cu_ac_solve_W", "P_cu_ac_exact_W"):
+        if em.get(ac_key) is not None:
+            out[ac_key] = float(em[ac_key]) * f
+    return out
+
+
+def _cr_solve_map(point: Dict[str, Any], cooling: Dict[str, Any], *,
+                  em_map: Optional[Dict[str, Any]] = None,
+                  em_source: Optional[Dict[str, Any]] = None,
+                  capture: Optional[Dict[str, Any]] = None
+                  ) -> Dict[str, Any]:
+    """ONE 2-D steady thermal map: this point, this cooling, this loss map.
+
+    Nothing is remembered and nothing is filed — unlike the loop's own
+    ``_thermal_step``, which re-points the Thermal tab at its result.  A rating
+    sweep solves six machines the user did not ask to look at, and leaving the
+    last one in the tab would be exactly the silent state change the project
+    forbids.
+    """
+    from motor_ai_sim.routes import thermal as th
+
+    kw = dict(point)
+    kw.update(cooling)
+    if em_map is not None:
+        kw["_em_map"] = em_map
+        kw["_em_loss_source"] = dict(em_source or {})
+    if capture is not None:
+        kw["_em_capture"] = capture
+    return th.solve_thermal_field(**kw)
+
+
+def _cr_conditions(body: Dict[str, Any]) -> List[Any]:
+    """The conditions this request asks for, validated by name."""
+    raw = body.get("conditions")
+    if not isinstance(raw, (list, tuple)) or not raw:
+        raise _refuse(
+            "continuous_rating needs a conditions list: each entry is a label "
+            "plus the cooling that differs from the duty's saved setup, for "
+            "example {label: 'forced air 20 m/s', cooling_mode: 'air', "
+            "air_speed_mps: 20, bore_mode: 'none'}.",
+            ["conditions"], code="no_conditions")
+    out: List[Any] = []
+    for i, c in enumerate(raw):
+        if not isinstance(c, dict):
+            raise _refuse("conditions[%d] is not an object" % i, ["conditions"])
+        label = str(c.get("label") or "").strip() or ("condition %d" % (i + 1))
+        params = {k: v for k, v in c.items()
+                  if k in _ccr.COOLING_KEYS and v is not None}
+        unknown = sorted(set(c) - set(_ccr.COOLING_KEYS) - {"label"})
+        if unknown:
+            raise _refuse(
+                "conditions[%d] (%s) names %s, which is not cooling: a "
+                "condition may only vary how the machine is COOLED — the "
+                "operating point, the mesh and the electromagnetic run are the "
+                "body's and are the same for every row."
+                % (i, label, ", ".join(repr(u) for u in unknown)),
+                ["conditions"], code="condition_not_cooling")
+        out.append(_ccr.Condition(label, params))
+    return out
+
+
+def _cr_em_summary() -> Dict[str, Any]:
+    """The summary of the electromagnetic run the thermal map was built from.
+
+    ``solve_thermal_field`` does not hand its EM summary back, so it is read
+    from the same place every other consumer reads it — the persisted last
+    transient.  ``{}`` when there is none, and the caller then refuses by name
+    rather than rating a machine whose torque nobody knows.
+    """
+    try:
+        from motor_ai_sim.routes import simulation as _sim
+        res = dict(_sim._last_transient_ref.get("result") or {})
+        return dict(res.get("summary") or {})
+    except Exception:  # noqa: BLE001
+        log.debug("continuous_rating: no last transient summary", exc_info=True)
+        return {}
+
+
+def _cr_record(block: Dict[str, Any]) -> bool:
+    """File the table under the loaded duty as ``continuous_rating``."""
+    try:
+        from motor_ai_sim import duty_results as _dr
+        ctx = _dr.active_context()
+        if not ctx:
+            return False
+        return bool(_dr.record(*ctx, "continuous_rating", dict(block)))
+    except Exception:  # noqa: BLE001 — bookkeeping never fails an answer
+        log.debug("continuous_rating: not filed under the duty", exc_info=True)
+        return False
+
+
+def _cr_one(cond: Any, *, point: Dict[str, Any], defaults: Dict[str, Any],
+            geom: Dict[str, Any], mats: Dict[str, Any], d_housing_m: float,
+            duty: str, mode: str, limit_kw: Dict[str, Any]) -> Dict[str, Any]:
+    """ONE condition, from its cooling patch to its rating block.
+
+    Never raises for a reason that belongs to this row alone: a cooling the
+    thermal router refuses (a still bore beside a jacket, a liquid with no flow)
+    and a machine with no heat capacities are both REPORTED in the row, because
+    one impossible condition must not cost the other five their answer.
+    """
+    from motor_ai_sim.routes.thermal import _dc_side_areas
+    from motor_ai_sim.thermal_capacities import CapacityError, part_capacities
+
+    cooling = cond.merged(defaults)
+    capture: Dict[str, Any] = {}
+    try:
+        field0 = _cr_solve_map(point, cooling, capture=capture)
+    except HTTPException as exc:
+        return {"label": cond.label, "cooling": cooling, "ok": False,
+                "refusal": (exc.detail if isinstance(exc.detail, dict)
+                            else {"error": str(exc.detail)})}
+    em0 = capture.get("em")
+    em_src0 = dict(capture.get("loss_source") or {})
+    summary = _cr_em_summary()
+    if not summary:
+        return {"label": cond.label, "cooling": cooling, "ok": False,
+                "refusal": {"error": ("this backend holds no electromagnetic "
+                                      "run summary, so there is no torque to "
+                                      "rate"),
+                            "error_code": "no_electromagnetic_run"}}
+    try:
+        caps = part_capacities(summary, mats, None)
+    except CapacityError as exc:
+        return {"label": cond.label, "cooling": cooling, "ok": False,
+                "refusal": {"error": str(exc), "error_code": "no_capacities"}}
+    side0 = _dc_side_areas(field0, summary, geom)
+
+    def _resolve(factor: float) -> Optional[Dict[str, Any]]:
+        if em0 is None:
+            return None
+        return _cr_solve_map(
+            point, cooling, em_map=_cr_scaled_map(em0, factor),
+            em_source={**em_src0, "note": (
+                "the same cycle-averaged map with the copper scaled by %.4f x "
+                "(s^2 x rho_Cu(T_w)/rho_Cu(coil_ref)) — no electromagnetic "
+                "solve" % float(factor))})
+
+    def _refit(m: Mapping[str, Any]):
+        return _dc_side_areas(dict(m), summary, geom), None
+
+    try:
+        block = _ccr.rate(
+            thermal_result=field0, em_summary=summary, caps=caps,
+            geometry=geom, cooling=cooling, side_areas=side0,
+            d_housing_m=d_housing_m, duty=duty, mode=mode,
+            resolve=_resolve, refit=_refit,
+            magnet_grade=mats.get("magnet"), bearing_temp_c=None, **limit_kw)
+    except _cdc.DutyCycleError as exc:
+        return {"label": cond.label, "cooling": cooling, "ok": False,
+                "refusal": {"error": str(exc),
+                            "error_code": getattr(exc, "error_code",
+                                                  "duty_cycle")}}
+    block["label"] = cond.label
+    block["ok"] = True
+    block["headline"] = _ccr.headline(block)
+    block["loss_source"] = em_src0
+    return block
+
+
+@router.post("/continuous_rating")
+@_JOBS.queued("coupled.continuous_rating", priority=_JOBS.Priority.DUTY,
+              run_id_from=_JOBS.body_run_id("coupled"))
+def continuous_rating(body: Dict[str, Any] = Body(default_factory=dict),
+                      authorization: Optional[str] = Header(default=None)
+                      ) -> Dict[str, Any]:
+    """``POST /api/coupled/continuous_rating`` — the S1 rating, per cooling.
+
+    Body: the operating point and mesh ``/run`` takes (they select the
+    ELECTROMAGNETIC run this table stands on — one run, and no electromagnetic
+    solve is ever started here), plus
+
+      ``conditions``      a list of ``{label, ...cooling...}`` patches over the
+                          loaded duty's own saved thermal setup;
+      ``reference``       ``"last_run"`` (the default and the only value): the
+                          electromagnetic run this backend already holds for the
+                          point in the body;
+      ``winding_limit_c`` / ``magnet_limit_c`` / ``bearing_limit_c``
+                          override the cards, for a what-if;
+      ``record``          ``true`` files the block under the loaded duty as
+                          ``continuous_rating``.  The default is FALSE: a
+                          what-if sweep over six coolings is not the duty's
+                          answer, and nothing is written unless it is asked for.
+
+    Every condition costs two or three 2-D thermal solves and NO electromagnetic
+    solve.  The Thermal tab is left exactly where the user had it.
+    """
+    from motor_ai_sim.material_context import set_request_materials
+    from motor_ai_sim.routes.simulation import _parse_mat_override
+    from motor_ai_sim.routes.thermal import _assignments, _dc_geometry
+
+    ref = body.get("reference")
+    ref_sel = "explicit" if isinstance(ref, dict) else str(
+        ref or "last_run").strip().lower()
+    if ref_sel != "last_run":
+        raise _refuse(
+            "reference must be 'last_run': this route rates the machine that is "
+            "LOADED, from the electromagnetic run this backend already holds for "
+            "the point in the body. Naming another die / configuration / duty "
+            "would load another machine into your workspace behind a read-only "
+            "question — load it yourself and ask again.",
+            ["reference"], code="reference_must_be_last_run")
+
+    if body.get("mat") is not None:
+        ov = _parse_mat_override(body.get("mat"))
+        if ov and ov.get("assignment"):
+            from motor_ai_sim.materials import (UnknownMaterialError,
+                                                validate_assignment)
+            try:
+                validate_assignment(ov["assignment"],
+                                    known_extra=set(ov.get("materials") or ()))
+            except UnknownMaterialError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+        set_request_materials(ov)
+
+    conditions = _cr_conditions(body)
+    point = _cr_point_kwargs(body)
+    defaults, defaults_why = _cr_duty_cooling()
+    geom, _ov = _dc_geometry(body.get("geo"))
+    mats = _assignments()
+    d_housing_m = float(geom.get("stator_diameter") or 0.0) * 1e-3
+    duty = _cycle_catalogue(body, "")[1]
+    mode = str(body.get("mode") or "motor")
+    limit_kw = {k: float(body[k]) for k in ("winding_limit_c", "magnet_limit_c",
+                                            "bearing_limit_c")
+                if body.get(k) not in (None, "")}
+
+    t0 = time.time()
+    rows: List[Dict[str, Any]] = []
+    _progress.start(total=len(conditions), kind="coupled",
+                    phase="continuous rating — %d cooling condition(s)"
+                          % len(conditions),
+                    composition="2-3 thermal solves each, no electromagnetic run")
+    try:
+        for i, cond in enumerate(conditions):
+            if not cond.merged(defaults).get("cooling_mode"):
+                raise _refuse(
+                    "condition %r carries no cooling and there is no saved "
+                    "thermal setup to patch: %s. Give the condition its whole "
+                    "cooling (cooling_mode, ambient_temp, ...)."
+                    % (cond.label, defaults_why),
+                    ["conditions"], code="no_cooling")
+            _progress.update(done=i, total=len(conditions),
+                             phase="continuous rating — %s" % cond.label)
+            rows.append(_cr_one(cond, point=point, defaults=defaults,
+                                geom=geom, mats=mats, d_housing_m=d_housing_m,
+                                duty=duty, mode=mode, limit_kw=limit_kw))
+        _progress.update(done=len(conditions), total=len(conditions))
+    finally:
+        _progress.finish()
+
+    out = {
+        "ok": True,
+        "conditions": rows,
+        "defaults": {"cooling": defaults, "source": defaults_why},
+        "duty": duty,
+        "elapsed_s": round(max(time.time() - t0, 1e-3), 2),
+        "note": ("one electromagnetic run pays for the whole table: every row is "
+                 "that run's loss map re-solved under its own cooling with the "
+                 "copper scaled to the current the machine can hold"),
+    }
+    if _record_wanted(body) and body.get("record") is not None:
+        out["recorded"] = _cr_record(out)
+    return out

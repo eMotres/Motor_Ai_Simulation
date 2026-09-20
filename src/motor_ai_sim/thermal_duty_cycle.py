@@ -926,6 +926,14 @@ class Network:
     #: small one.
     links: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     housing_G_fixed: Optional[float] = None
+    #: WHAT THE CALIBRATION MAP SAYS each SURFACE path is worth (2026-09-20):
+    #: ``{path: W/K}`` at ``t_fit_c[path]``, with ``film_kind[path]`` saying
+    #: whether that film moves with the wall temperature (``"natural"``) or not
+    #: (``"forced"`` — blown air, a jacket, a typed h).  See :func:`still_air_G`
+    #: for why a fitted conductance beats a re-evaluated correlation.
+    G_fit: Dict[str, float] = field(default_factory=dict)
+    t_fit_c: Dict[str, float] = field(default_factory=dict)
+    film_kind: Dict[str, str] = field(default_factory=dict)
     calibration: Dict[str, Any] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
     h_sources: Dict[str, str] = field(default_factory=dict)
@@ -1091,6 +1099,7 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
                         geometry: Optional[Mapping[str, Any]] = None,
                         magnet_k_w_per_mk: Optional[float] = None,
                         allow_merge: bool = False,
+                        surface_fit: bool = False,
                         ) -> Network:
     """Fit the lumped network to ONE converged steady map.
 
@@ -1114,6 +1123,18 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     ``magnet_height``) and, for the magnets, the card's conductivity.
     ``Network.links`` says of every link whether it is ``calibrated``,
     ``physical`` or ``merged``.
+
+    ``surface_fit=True`` (2026-09-20) takes each SURFACE path's conductance from
+    the map as well — the housing film the map actually used (forced air, a
+    jacket, a typed h) instead of a natural-convection correlation, the axial
+    end faces from the watts the map's heat budget closes on, and the open
+    frame's end-turn and slot-channel paths, which the network had no key for at
+    all.  It also takes every watt a node sends STRAIGHT to the room off that
+    node's internal drive, so the winding→stator link is fitted to what actually
+    crosses into the iron.  It is OFF by default because switching it on moves
+    every answer this network has produced on a machine that is not a still-air
+    housed one, reports already delivered included; see the module note in
+    ``docs/CONTINUOUS_RATING_2026-09-20.md`` for the measured sizes.
 
     ``allow_merge=True`` restores the old behaviour (capacities and losses
     summed, no conductance carried) and is there for reading an OLD record back,
@@ -1161,7 +1182,58 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     bore_w = float(budget.get("bore_W") or 0.0)
     shaft_w = float(budget.get("shaft_ends_W") or 0.0)
     housing_w = float(budget.get("housing_W") or 0.0)
-    drive = {"w_s": P_cu, "r_s": gap_w, "m_r": P_mag}
+    # ── THE OPEN FRAME's two winding-side paths (2026-09-20) ────────────────
+    # On a machine built WITHOUT a housing the map cools the end turns in the
+    # airflow and the ventilated slot channels directly to the room, and those
+    # two are not the housing, not the bore and not an axial end face — so
+    # until today the network had nowhere to put them and simply did not carry
+    # them.  On the Ø50 joint that is 207 W of the 262 W the machine makes: the
+    # fitted network could reject 55 W, every transient ran away, and the
+    # continuous rating came out `feasible: false` under a cooling the machine
+    # actually holds (measured while writing this).  Worse, the winding→stator
+    # fit `P_cu / ΔT` assumed ALL the copper crossed into the iron when only a
+    # seventh of it does, so `w_s` came out 7× too stiff.
+    #
+    # Both are fitted here as ONE conductance from the WINDING node to the
+    # ambient — the end turns are copper and the slot channels blow over the
+    # slot the copper sits in — and the copper they take is removed from the
+    # winding→stator drive.  Zero on every housed machine, where the map
+    # reports both as `mode: housed` with no watts, so nothing that has been
+    # computed before this line existed moves.
+    #
+    # OPT-IN, and that is not squeamishness (``surface_fit``, default False).
+    # Switching it on moves every number this network has ever produced on a
+    # machine that is not a still-air housed one — the L13's time to its
+    # insulation class among them, which is printed in reports already
+    # delivered.  The project's rule is that live answers do not move without
+    # the owner's word, so the correction ships switched OFF, the continuous
+    # rating (a NEW feature, with no records to disturb) asks for it, and the
+    # finding goes to the owner with the numbers above.  Turning it on for the
+    # loop and the duty cycle is a one-word change once he has seen them.
+    ew_w = float((dict(cooling.get("end_windings") or {})
+                  ).get("heat_removed_W") or 0.0)
+    ch_w = float((dict(cooling.get("slot_channels") or {})
+                  ).get("heat_removed_W") or 0.0)
+    open_w = max(ew_w + ch_w, 0.0) if surface_fit else 0.0
+    # …and the AXIAL END FACES, which are the robotics machine's version of the
+    # same thing: 192 of the 263 W this Ø50 joint makes leave through them.  Any
+    # watt a node sends straight to the room is a watt that does NOT cross into
+    # the iron, and the internal conductances are fitted to what does.
+    _efw = {n: (float((dict((cooling.get("end_faces") or {}).get(n) or {})
+                       ).get("heat_removed_W") or 0.0) if surface_fit else 0.0)
+            for n in NODES}
+    drive = {"w_s": max(P_cu - open_w - _efw["winding"], 0.0),
+             "r_s": gap_w,
+             "m_r": max(P_mag - _efw["magnet"], 0.0)}
+    if open_w > 0.0 or _efw["winding"] > 0.0:
+        notes.append(
+            "%.2f W leave the winding DIRECTLY to the room (%.2f W from the end "
+            "turns in the airflow, %.2f W through the ventilated slot channels, "
+            "%.2f W off the axial end face), so only %.2f W of the %.2f W of "
+            "copper crosses into the iron and the winding→stator conductance is "
+            "fitted to that"
+            % (open_w + _efw["winding"], ew_w, ch_w, _efw["winding"],
+               drive["w_s"], P_cu))
     # The map's own gap block (``k_eff``, and on a live payload the clearance and
     # the mean radius too) and the emissivity the gap faces radiate at.
     gap_blk = dict(cooling.get("gap") or {})
@@ -1296,6 +1368,18 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     dt_rotor = means["rotor"] - t_amb
     G["r_bore"] = bore_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
     G["r_shaft"] = shaft_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
+    dt_wind = means["winding"] - t_amb
+    G["w_open"] = (open_w / dt_wind
+                   if (open_w > 0.0 and abs(dt_wind) > 1e-6) else 0.0)
+    if G["w_open"] > 0.0:
+        links["w_open"] = {
+            "kind": "calibrated", "nodes": ["winding", "ambient"],
+            "G_W_per_K": round(float(G["w_open"]), 6),
+            "basis": ("fitted to the calibration map: %.3f W off the winding "
+                      "node at %.2f °C into the %.2f °C room (end turns %.3f W "
+                      "+ slot channels %.3f W)"
+                      % (open_w, means["winding"], t_amb, ew_w, ch_w)),
+            "dt_K": round(dt_wind, 3), "P_W": round(open_w, 4)}
 
     areas: Dict[str, float] = {"housing": float(outer.get("area_m2") or 0.0)}
     chars: Dict[str, float] = {}
@@ -1315,6 +1399,69 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
 
     housing_G = (housing_w / (means["stator"] - t_amb)
                  if abs(means["stator"] - t_amb) > 1e-6 else None)
+
+    # ── WHAT THE MAP SAYS EACH SURFACE PATH IS WORTH (2026-09-20) ───────────
+    # Until today every surface path was re-computed from a NATURAL-convection
+    # correlation at solve time — the housing whenever a diameter was known, the
+    # four end faces always, and the end faces from a flat provisional
+    # `END_FACE_H_PROVISIONAL` at that.  Both were wrong wherever the map was
+    # not a still-air one, and wrong by a lot: on this Ø50 joint the 40 m/s
+    # housing film is 132 W/m²K against the correlation's 8, and the robotics
+    # end-winding film the 2-D solve computes from its own Rayleigh number is
+    # 30.8 W/m²K against the provisional 12 — so the network could reject 10 W
+    # of the 192 W the map takes off the end faces, and EVERY transient on such
+    # a machine ran away (measured 2026-09-20 while building the continuous
+    # rating: still air 152 °C in the map, 230 °C and climbing in the network).
+    #
+    # The fix is the module's own principle applied to the surfaces as well as
+    # to the internal links: the LEVEL comes from the map that was solved, and
+    # only the SHAPE — how a natural film moves with the wall temperature —
+    # comes from a correlation.  A forced film (blown air, a jacket, a typed h)
+    # does not move with the wall at all and is held.
+    G_fit: Dict[str, float] = {}
+    t_fit: Dict[str, float] = {}
+    film: Dict[str, str] = {}
+    _o_mode = str(outer.get("mode") or "").strip().lower()
+    _o_reg = str(outer.get("regime") or "").strip().lower()
+    if surface_fit and housing_G is not None and housing_G > 0.0:
+        G_fit["housing"] = float(housing_G)
+        t_fit["housing"] = float(means["stator"])
+        film["housing"] = ("natural" if (_o_mode == "robotics"
+                                         or "natural" in _o_reg) else "forced")
+    _ef = dict(cooling.get("end_faces") or {}) if surface_fit else {}
+    for _node, _key in _SIDE_KEY.items():
+        _blk = dict(_ef.get(_node) or {})
+        # THE WATTS, not the stated conductance.  The map carries both, and on a
+        # robotics map they do not agree: the 2-D solve's end-face sinks remove
+        # the watts the heat budget closes on (192.3 W on this Ø50 joint) while
+        # the block's own `G_W_per_K` (the closed form re-evaluated at the
+        # converged wall) accounts for 11 W of them — a factor of 17, reported
+        # to the owner as a finding.  What a lumped network has to reproduce is
+        # the map that was SOLVED, and that is the watts; taking the stated G
+        # instead would fit the network to a number the temperature field never
+        # came from.  The housing fit above has always worked this way.
+        _w = _efw.get(_node, 0.0)
+        _dt = float(means[_node]) - t_amb
+        _g = (_w / _dt) if (_w > 0.0 and abs(_dt) > 1e-6) else 0.0
+        if _g <= 0.0:
+            continue
+        G_fit[_key] = _g
+        t_fit[_key] = float(means[_node])
+        if abs(_g - float(_blk.get("G_W_per_K") or 0.0)) > 0.1 * _g:
+            notes.append(
+                "the %s end face is fitted to the %.2f W the map's heat budget "
+                "actually removes through it (%.4f W/K over %.2f K), not to the "
+                "%.5f W/K the map's own end-face block states — the two "
+                "disagree in the payload"
+                % (_node, _w, _g, _dt, float(_blk.get("G_W_per_K") or 0.0)))
+        # The end faces are ALWAYS a natural film plus radiation — they are the
+        # robotics mode's own paths and that mode blows nothing.
+        film[_key] = "natural"
+        if not float(areas.get(_key) or 0.0) > 0.0:
+            areas[_key] = float(_blk.get("area_m2") or 0.0)
+        if not float(chars.get(_key) or 0.0) > 0.0:
+            chars[_key] = float(_blk.get("char_len_mm") or 0.0) * 1e-3
+
     if d_h <= 0.0:
         notes.append("no housing diameter given, so the still-air film is not "
                      "re-evaluated with temperature: the calibration map's own "
@@ -1326,6 +1473,7 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
         t_mount_c=t_mount, emissivity=eps, d_housing_m=d_h,
         hot_spot_offset_k=hot_off, node_of=node_of, merged=tuple(merged),
         links=links, housing_G_fixed=housing_G, notes=notes,
+        G_fit=G_fit, t_fit_c=t_fit, film_kind=film,
         calibration={
             "duty": calibration_duty,
             "means_c": {n: round(means[n], 2) for n in NODES},
@@ -1335,9 +1483,15 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
             "P_cu_W": round(P_cu, 3), "P_mag_W": round(P_mag, 3),
             "gap_W": round(gap_w, 3), "bore_W": round(bore_w, 3),
             "shaft_ends_W": round(shaft_w, 3), "housing_W": round(housing_w, 3),
+            "end_windings_W": round(ew_w, 3), "slot_channels_W": round(ch_w, 3),
             "losses_W": float(budget.get("losses_W") or 0.0),
             "housing_G_W_per_K": (None if housing_G is None
                                   else round(housing_G, 5)),
+            "surface_G_W_per_K": {k: round(float(v), 6)
+                                  for k, v in G_fit.items()},
+            "surface_film_kind": dict(film),
+            "surface_t_fit_c": {k: round(float(v), 2)
+                                for k, v in t_fit.items()},
         })
     # Record which film each still-air path will actually use.
     net.h_sources["housing"] = housing_h_total(
@@ -1347,15 +1501,57 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     return net
 
 
+def _film_h(t_wall_c: float, network: Network, path: str) -> float:
+    """The correlation's ``h_total`` for one surface path at a wall temperature.
+
+    The SHAPE, not the level: it is used as a ratio against the same call at the
+    calibration temperature, so the coefficients it carries cancel and only how
+    strongly a natural film moves with ΔT survives.
+    """
+    area = float(network.areas.get(path) or 0.0)
+    if path == "housing":
+        return housing_h_total(t_wall_c, network.t_ambient_c,
+                               max(network.d_housing_m, 1e-3),
+                               network.emissivity, area)[0]
+    return end_face_h_total(t_wall_c, network.t_ambient_c, network.emissivity,
+                            float(network.char_len_m.get(path) or 0.0),
+                            area)[0]
+
+
 def still_air_G(t_wall_c: float, network: Network,
                 path: str = "housing") -> float:
-    """``h_total(T_wall)·A`` [W/K] for one still-air path, re-evaluated.
+    """``W/K`` for one SURFACE path at this wall temperature.
 
     ``path`` is ``"housing"`` or one of the four end faces
     (``winding_ends``, ``stator_ends``, ``rotor_ends``, ``magnet_ends``).
-    Returns 0 for a path with no area — "this machine has no exposed magnet end
-    face" is an answer.
+
+    THE MAP WINS (2026-09-20).  When the calibration map states what this path
+    is worth — every map does for the housing, and a robotics map does for each
+    end face — that number is the level, because it is the conductance the
+    solved temperatures actually came from.  What the correlation is still
+    asked for is how a NATURAL film moves with the wall:
+
+        G(T) = G_map · h_still(T) / h_still(T_map)
+
+    so a machine 80 K hotter than its calibration point gets the extra film it
+    earns, and a machine cooled by 40 m/s of air or by a jacket keeps the
+    coefficient somebody blew or pumped (``film_kind = "forced"`` → held).  The
+    old behaviour — a natural-convection correlation re-evaluated from scratch,
+    and ``END_FACE_H_PROVISIONAL`` for the end faces — is the fallback for a
+    map that states nothing, and nothing else.
+
+    Returns 0 for a path with no conductance and no area — "this machine has no
+    exposed magnet end face" is an answer.
     """
+    fit = network.G_fit.get(path)
+    if fit is not None and float(fit) > 0.0:
+        if str(network.film_kind.get(path) or "natural") == "forced":
+            return float(fit)
+        t0 = float(network.t_fit_c.get(path, t_wall_c))
+        h0 = _film_h(t0, network, path)
+        if not (h0 > 1e-12):
+            return float(fit)
+        return float(fit) * _film_h(t_wall_c, network, path) / h0
     area = float(network.areas.get(path) or 0.0)
     if area <= 0.0:
         return 0.0
@@ -1425,11 +1621,19 @@ def _flows(T: Mapping[str, float], network: Network) -> Dict[str, float]:
     amb, mnt = network.t_ambient_c, network.t_mount_c
     ts = float(T[network.rep("stator")])
     tr = float(T[network.rep("rotor")])
+    tw = float(T[network.rep("winding")])
     out: Dict[str, float] = {
         "housing": still_air_G(ts, network, "housing") * (ts - amb),
         "mount": float(network.G.get("s_mount") or 0.0) * (ts - mnt),
         "bore": float(network.G.get("r_bore") or 0.0) * (tr - amb),
         "shaft_ends": float(network.G.get("r_shaft") or 0.0) * (tr - amb),
+        # THE OPEN FRAME (2026-09-20): the end turns in the airflow and the
+        # ventilated slot channels.  Zero on every housed machine, and on this
+        # Ø50 open-frame joint 207 of the 262 W the machine makes — see
+        # ``network_from_steady``.  A FIXED conductance and not a still-air
+        # film: it is forced convection at a stated air speed, which does not
+        # move with the wall temperature the way natural convection does.
+        "winding_open": float(network.G.get("w_open") or 0.0) * (tw - amb),
     }
     for node, key in _SIDE_KEY.items():
         tn = float(T[network.rep(node)])
@@ -1446,10 +1650,12 @@ _FLOW_NODE: Dict[str, str] = {
     "housing": "stator", "mount": "stator", "bore": "rotor",
     "shaft_ends": "rotor", "winding_ends": "winding",
     "stator_ends": "stator", "rotor_ends": "rotor", "magnet_ends": "magnet",
+    "winding_open": "winding",
 }
 EXTERNAL_FLOWS: Tuple[str, ...] = tuple(_FLOW_NODE)
 #: Which side of the machine each external path belongs to (for the split).
-STATOR_SIDE_FLOWS = ("housing", "mount", "winding_ends", "stator_ends")
+STATOR_SIDE_FLOWS = ("housing", "mount", "winding_ends", "stator_ends",
+                     "winding_open")
 ROTOR_SIDE_FLOWS = ("bore", "shaft_ends", "rotor_ends", "magnet_ends")
 
 

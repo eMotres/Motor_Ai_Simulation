@@ -78,7 +78,7 @@ log = logging.getLogger(__name__)
 #: point, so it is filed through :func:`note_pwm` by whoever made it.
 KINDS: Tuple[str, ...] = ("thermal", "rotor_stress", "modes",
                           "critical_speeds", "coupled", "em", "duty_cycle",
-                          "pwm")
+                          "pwm", "continuous_rating")
 
 #: The mechanical kinds, in the order ``routes.mechanical._LAST`` names them.
 MECH_KINDS: Tuple[str, ...] = ("rotor_stress", "modes", "critical_speeds")

@@ -89,6 +89,7 @@ from motor_ai_sim.routes.panel_settings import router as panel_settings_router
 from motor_ai_sim.routes.thermal import router as thermal_router
 from motor_ai_sim.routes.coupled import router as coupled_router
 from motor_ai_sim.routes.bearings import router as bearings_router
+from motor_ai_sim.routes.wire_stock import router as wire_stock_router
 from motor_ai_sim.routes.optimization import router as optimization_router
 from motor_ai_sim.routes.presets import router as presets_router
 from motor_ai_sim.routes.catalog import router as catalog_router
@@ -225,6 +226,7 @@ app.include_router(coupled_router)
 # field and never writes; the machine's own bearing assignment is written by
 # PATCH /api/family/config/{die}/{cfg}/bearings, next to its battery.
 app.include_router(bearings_router)
+app.include_router(wire_stock_router)
 app.include_router(optimization_router)
 app.include_router(presets_router)
 app.include_router(catalog_router)

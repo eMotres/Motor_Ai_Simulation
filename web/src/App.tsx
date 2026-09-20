@@ -48,6 +48,7 @@ import SaveToMotorButton from './components/common/SaveToMotorButton';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
 import MaterialDetailView from './components/materials/MaterialDetailView';
+import WireStockTable from './components/materials/WireStockTable';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
 import type { SelectedMaterial, MaterialCategory } from './components/materials/useMaterialsLibrary';
@@ -457,6 +458,7 @@ function App() {
             <MaterialsLibraryTree library={matLibrary} loading={matLoading} error={matError}
               selected={selectedMaterial} onSelect={setSelectedMaterial}
               canAdd={isAdmin} onAdd={handleAddGlobal} />
+            <WireStockTable />
           </Box>
           <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
             bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />

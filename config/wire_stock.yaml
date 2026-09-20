@@ -1,0 +1,187 @@
+# Enamelled flat copper wire physically in stock (reference table for the
+# winding editors: users may only pick sizes that exist).
+#
+# Source: warehouse screenshots supplied by the owner on 2026-09-20 (Chinese
+# stock system, MOCHI side).  Spec "a*b" = thickness × width in mm of the flat
+# strip (our geometry: wire_height = thickness, wire_width = width).
+# Insulation codes: SFT-AIW = polyamide-imide enamelled flat wire (class 200/220),
+# /SB = self-bonding overcoat, /200 = 200 °C class stated on the label,
+# QZYB-1-180 = polyester-imide, class 180.  Stock in kg as shown; where the
+# same item code appears twice it is two lots/locations.  Entries flagged
+# `check: true` had an ambiguous label (typos, missing prefix) — confirm.
+#
+# Later this table is meant to be replaced by a live pull from the ERP stock
+# ledger (motres_erp, company MOCHI); keep the keys stable.
+
+version: 1
+updated: "2026-09-20"
+unit: kg
+wires:
+  - code: "0010006"
+    spec: "SFT-AIW/SB 0.2*2"
+    thickness_mm: 0.2
+    width_mm: 2.0
+    insulation: "AIW"
+    self_bonding: true
+    stock_kg: 5.9
+    warehouse: ""
+  - code: "010214"
+    spec: "SFT-AIW/SB 0.2*2.5"
+    thickness_mm: 0.2
+    width_mm: 2.5
+    insulation: "AIW"
+    self_bonding: true
+    stock_kg: 6.9
+    warehouse: ""
+  - code: "010224"
+    spec: "SFT-AIW 0.3*3"
+    thickness_mm: 0.3
+    width_mm: 3.0
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 2.35
+    warehouse: "富临仓库"
+  - code: "010021"
+    spec: "SFT-AIW/SB 0.3*3.5"
+    thickness_mm: 0.3
+    width_mm: 3.5
+    insulation: "AIW"
+    self_bonding: true
+    stock_kg: 2.27
+    warehouse: "小象仓库"
+  - code: "010223"
+    spec: "SFT-AIW 0.3*3.5"
+    thickness_mm: 0.3
+    width_mm: 3.5
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 4.52
+    warehouse: "富临仓库"
+  - code: "010233"
+    spec: "SFT-AIW/ 0.3*7"
+    thickness_mm: 0.3
+    width_mm: 7.0
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 9.1
+    warehouse: ""
+  - code: "SFT-AIW-0.3x2.5"
+    spec: "SFT-AIW 0.300x2.500 (batches W012020…3B260617 9.18 kg, W5610102A260624 7.12 kg)"
+    thickness_mm: 0.3
+    width_mm: 2.5
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 16.3
+    warehouse: ""
+    check: true
+  - code: "0010012"
+    spec: "SFT-AIW 0.35*7"
+    thickness_mm: 0.35
+    width_mm: 7.0
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 12.94
+    warehouse: ""
+  - code: "010008"
+    spec: "SFT-AIW/SB 0.4*7"
+    thickness_mm: 0.4
+    width_mm: 7.0
+    insulation: "AIW"
+    self_bonding: true
+    stock_kg: 0.37
+    warehouse: ""
+  - code: "010276"
+    spec: "SFT-AIW/SB 0.45*2.5"
+    thickness_mm: 0.45
+    width_mm: 2.5
+    insulation: "AIW"
+    self_bonding: true
+    stock_kg: 8.05
+    warehouse: ""
+  - code: "010110"
+    spec: "SFT- AIW 0.5*2.5"
+    thickness_mm: 0.5
+    width_mm: 2.5
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 6.0
+    warehouse: ""
+  - code: "0010021"
+    spec: "SFT-AIW/200-0.5*7"
+    thickness_mm: 0.5
+    width_mm: 7.0
+    insulation: "AIW"
+    thermal_class_c: 200
+    self_bonding: false
+    stock_kg: 1.25
+    warehouse: ""
+  - code: "010119"
+    spec: "SFT-AIW 0.6*2.5"
+    thickness_mm: 0.6
+    width_mm: 2.5
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 5.6
+    warehouse: ""
+  - code: "0010026"
+    spec: "0.6*7"
+    thickness_mm: 0.6
+    width_mm: 7.0
+    insulation: ""
+    self_bonding: false
+    stock_kg: 29.17
+    warehouse: ""
+    check: true
+  - code: "010230"
+    spec: "SFT-AIW--0.7*2.5"
+    thickness_mm: 0.7
+    width_mm: 2.5
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 9.56
+    warehouse: ""
+  - code: "010094"
+    spec: "SFT-AIW-0.8*2.5"
+    thickness_mm: 0.8
+    width_mm: 2.5
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 32.55
+    warehouse: ""
+  - code: "010045"
+    spec: "0.8*7"
+    thickness_mm: 0.8
+    width_mm: 7.0
+    insulation: ""
+    self_bonding: false
+    stock_kg: 19.03
+    warehouse: ""
+    check: true
+  - code: "0010045"
+    spec: "1*7 (two lots: 302.849 + 18.534 kg)"
+    thickness_mm: 1.0
+    width_mm: 7.0
+    insulation: ""
+    self_bonding: false
+    stock_kg: 321.383
+    warehouse: ""
+    check: true
+  - code: "010263"
+    spec: "SFT-AIW--1.44*2.53"
+    thickness_mm: 1.44
+    width_mm: 2.53
+    insulation: "AIW"
+    self_bonding: false
+    stock_kg: 17.65
+    warehouse: ""
+  - code: "010208"
+    spec: "QZYB-1-180 2*2.5"
+    thickness_mm: 2.0
+    width_mm: 2.5
+    insulation: "QZYB (polyester-imide)"
+    thermal_class_c: 180
+    self_bonding: false
+    stock_kg: 5.9
+    warehouse: ""
+# Not wire (listed on the same screen): 0140300 绕线模具 方孔铜线圈 0.3*3.5 精工模具 — a
+# winding die for 0.3*3.5 strip, 1 pcs, 模具仓库.

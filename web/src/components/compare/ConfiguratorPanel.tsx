@@ -38,6 +38,8 @@ import PerformanceCharts from './PerformanceCharts';
 import ConfiguratorThermal from './ConfiguratorThermal';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
+import { useWireStock } from '../materials/useWireStock';
+import { stockHint } from '../../lib/wireStock';
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -480,6 +482,11 @@ const ConfiguratorPanel: React.FC = () => {
   const turnsMax  = Math.max(3, Math.min(30, Math.floor(availStack_mm / rowPitch_mm)));
   const wireMax   = Math.max(0.3, Math.min(2.5, Math.round(Math.floor((availStack_mm / knobs.N - ref.fit.wireSpacingY_mm) / 0.1 + 1e-9) * 0.1 * 10) / 10));
   const atLimit   = knobs.N >= turnsMax || knobs.wireH_mm >= wireMax - 1e-9;
+  // Passive stock hint (owner, 2026-09-20): does not restrict the slider —
+  // only names the nearest size actually on the shelf. wire_width is FIXED in
+  // this tuner (see the module header), so only the thickness knob moves.
+  const { data: wireStockData } = useWireStock();
+  const wireStockNote = stockHint(knobs.wireH_mm, ref.fit.wireWidth_mm, wireStockData?.available_sizes ?? []);
   // The two winding sliders STOP at the slot (user 2026-09-02: the stack gauge
   // is gone — the cross-section shows the stack, the slider just must not let
   // the wire leave the stator).  A typed value clamps to the same cap; only a
@@ -601,6 +608,11 @@ const ConfiguratorPanel: React.FC = () => {
             <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -0.5, mb: 1 }}
               title={`${knobs.N} rows × (${fmt(knobs.wireH_mm, 2)} wire + ${fmt(ref.fit.wireSpacingY_mm, 2)} gap) = ${fmt(stackHeight_mm, 1)} mm of ${fmt(availStack_mm, 1)} mm usable slot height — the sliders stop here so the winding stays inside the stator.`}>
               at the slot limit
+            </Typography>
+          ) : wireStockNote ? (
+            <Typography sx={{ fontSize: 11, color: '#f59e0b', mt: -0.5, mb: 1 }}
+              title="Compared against the flat wire physically on the shelf (Materials tab → Flat wire in stock). Not enforced yet.">
+              {wireStockNote}
             </Typography>
           ) : null}
 

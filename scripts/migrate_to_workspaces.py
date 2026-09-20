@@ -59,8 +59,11 @@ from typing import Dict, List, Optional, Tuple
 # ── what goes where ─────────────────────────────────────────────────────────
 
 #: Read-only libraries — one machine-wide answer every workspace quotes.
+#: ``wire_stock.yaml`` added 2026-09-20: the flat-wire warehouse table the
+#: winding editors are meant to restrict wire-size choice to (owner request),
+#: same shared-library shape as the materials and bearings catalogues above.
 SHARED_FILES = ("materials_library.yaml", "bearings_library.yaml",
-                "fusion_param_map.yaml")
+                "fusion_param_map.yaml", "wire_stock.yaml")
 
 #: The identity layer.  ``.auth_secret`` is a FIRST-CLASS backup item: losing it
 #: signs everyone out permanently and ``users.py`` deliberately refuses to mint

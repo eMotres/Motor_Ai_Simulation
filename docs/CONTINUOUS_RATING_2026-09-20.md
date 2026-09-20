@@ -131,11 +131,11 @@ the run's speed.
 
 | condition (ambient 30 °C) | I_cont A rms | s* | limited by | winding °C | magnet °C | T N·m | P_mech W | η_em | fit % | FEM |
 |---|---|---|---|---|---|---|---|---|---|---|
-| A robotics, still air + radiation ε 0.9, bore still, no mount | — ! | — | magnet | 199.7 | 72.0 | (2.465) | (2581) | (0.867) | 6.7 | 1 |
+| A robotics, still air + radiation ε 0.9, bore still, no mount | — ! | (1.133) | winding | 199.7 | 72.0 | (2.465) | (2581) | (0.867) | 6.7 | 1 |
 | B forced air 10 m/s, bore none | — | — | magnet | 74.3 | 157.0 | — | — | — | 35.2 | 2 |
 | C forced air 20 m/s, bore none | 13.37 | 0.210 | magnet | 68.8 | 149.9 | 0.457 | 479 | 0.940 | 25.2 | 4 |
 | D air 40 m/s + bore air 10 m/s (the duty's own setup) | 34.36 | 0.540 | magnet | 103.0 | 149.7 | 1.175 | 1230 | 0.933 | 9.2 | 4 |
-| E liquid jacket, water 25 °C, 2 L/min, bore none | 59.66 | 0.938 | magnet | 127.6 | 149.9 | 2.040 | 2224 | 0.943 | 3.9 | 4 |
+| E liquid jacket, water 25 °C, 2 L/min, bore none | 59.66 | 0.938 | magnet | 127.6 | 149.9 | 2.040 | 2136 | 0.903 | 3.9 | 4 |
 | F robotics + mount 1.0 W/K at 30 °C | 31.60 | 0.497 | magnet | 114.5 | 150.4 | 1.080 | 1131 | 0.935 | 8.1 | 3 |
 
 `!` A is **not a rating**: the 2-D robotics map is non-monotone in the copper

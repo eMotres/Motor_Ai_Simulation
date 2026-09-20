@@ -236,7 +236,7 @@ def _leader(ax, anchor, text_xy, text, *, color="#7a5cff", fontsize=8.5,
 
 def _dim_h(ax, x0: float, x1: float, y_dim: float, label: str, *,
            y0: Optional[float] = None, y1: Optional[float] = None,
-           color: str = "#5c4aa0", fontsize: float = 7.6,
+           color: str = "#5c4aa0", fontsize: float = 22,
            text_side: str = "auto") -> None:
     """A horizontal dimension: extension lines from the feature's own edges
     (``y0``/``y1``, defaulting to ``y_dim`` — no extension needed when the
@@ -261,7 +261,7 @@ def _dim_h(ax, x0: float, x1: float, y_dim: float, label: str, *,
 
 def _dim_v(ax, y0: float, y1: float, x_dim: float, label: str, *,
            x0: Optional[float] = None, x1: Optional[float] = None,
-           color: str = "#5c4aa0", fontsize: float = 7.6,
+           color: str = "#5c4aa0", fontsize: float = 22,
            text_side: str = "right", label_x: Optional[float] = None,
            label_dy: float = 0.0) -> None:
     """The vertical counterpart of ``_dim_h`` — extension lines horizontal,
@@ -311,7 +311,7 @@ def _dim_v(ax, y0: float, y1: float, x_dim: float, label: str, *,
 
 
 def _dim_radial(ax, r0: float, r1: float, angle_deg: float, label: str, *,
-                 color: str = "#5c4aa0", fontsize: float = 7.2,
+                 color: str = "#5c4aa0", fontsize: float = 22,
                  r_label: Optional[float] = None) -> None:
     """A radial dimension arrow from ``r0`` to ``r1`` at ``angle_deg`` about
     the origin — the small full-ring inset's OD/ID/etc. dimensions, drawn
@@ -724,13 +724,20 @@ def _draw_sector(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set):
     # placing the escape point AT the axes' own xlim edge worked for the
     # ARROW/LEADER (a zero-width line) but clipped the NAME sitting there,
     # which has width and was growing further out, off the edge of the page.
-    ESCAPE_MARGIN = half_w * 0.05
-    TEXT_ROOM = half_w * 0.42
+    ESCAPE_MARGIN = half_w * 0.06
+    TEXT_ROOM = half_w * 0.62      # bigger than before — the labels are now
+                                    # 22pt, not 7.6pt, and need real room to
+                                    # sit in without running off the page
     esc_left, esc_right = -(half_w + ESCAPE_MARGIN), half_w + ESCAPE_MARGIN
     x_min, x_max = esc_left - TEXT_ROOM, esc_right + TEXT_ROOM
     y_min, y_max = -r_max * 0.04, r_max * 1.12
-    BOX_ASPECT = 16.57 / 17.30   # sector column / full height — build_dimension_sheet's
-                                 # gridspec, layout="sector" (update together if either changes)
+    # Read back from THIS axes' own allotted box (gridspec position x figure
+    # size) rather than a hand-copied constant — a magic number here had to
+    # be kept in sync with build_dimension_sheet's gridspec by hand, and
+    # fell out of sync the moment either one changed on its own.
+    _bb = ax.get_position()
+    _fw, _fh = ax.figure.get_size_inches()
+    BOX_ASPECT = (_bb.width * _fw) / (_bb.height * _fh)
     nat_x, nat_y = x_max - x_min, y_max - y_min
     if nat_x / nat_y > BOX_ASPECT:
         want_y = nat_x / BOX_ASPECT
@@ -744,7 +751,7 @@ def _draw_sector(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set):
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
     ax.set_anchor("W")
-    lane = half_w * 0.14     # one dimension-line "lane" width — successive
+    lane = half_w * 0.16     # one dimension-line "lane" width — successive
                              # parallel dimensions step out by this much, the
                              # standard drafting fix for several stacked
                              # dimensions sharing one side of a part.
@@ -819,7 +826,7 @@ def _draw_sector(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set):
     slot_hs_h = min(0.06 * (stator_span[1] - stator_span[0]), (cmaxy - cminy) * 0.18) or 0.5
     slot_hs_x = cminx - 0.35 * max(cmaxx - cminx, 0.5)
     slot_hs_mid = y_bore_tip + slot_hs_h / 2.0
-    slot_hs_label_y_nudge = r_max * 0.035   # air_gap's own label lands at
+    slot_hs_label_y_nudge = r_max * 0.09    # air_gap's own label lands at
                                              # almost the same height (both
                                              # near the bore) — nudge clear.
     # The leader is a short DIAGONAL once nudged (start and end at different
@@ -833,15 +840,25 @@ def _draw_sector(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set):
            label_x=slot_hs_esc, label_dy=slot_hs_label_y_nudge)
     drawn.add("slot_hs")
 
-    # slot_height — the slot's own (real, envelope) radial span.
+    # slot_height — the slot's own (real, envelope) radial span. Escapes
+    # LEFT, same as every other name now (detaches it from tooth_width's
+    # label, which sits right above this arrow's top end at cmaxy — with
+    # the bigger fonts the two rotated/horizontal labels started touching).
     _dim_v(ax, cminy, cmaxy, x_dim=cminx - lane,
-           label=_label("slot_height", geo.get("slot_height"), "mm", "float"))
+           label=_label("slot_height", geo.get("slot_height"), "mm", "float"),
+           label_x=_esc_x((cminy + cmaxy) / 2.0, "left"))
     drawn.add("slot_height")
 
-    # core_thickness — yoke material above the slot, on the tooth centreline.
+    # core_thickness — yoke material above the slot. Offset toward the
+    # tooth's own edge, NOT its centreline — tooth_width's label sits
+    # centred at y=cmaxy, exactly where this arrow starts, and a vertical
+    # line dead-centre ran straight through that label's text box.
     tooth_cx = (tooth_yoke[0] + tooth_yoke[1]) / 2.0 if tooth_yoke else 0.0
-    _dim_v(ax, cmaxy, stator_span[1], x_dim=tooth_cx,
-           label=_label("core_thickness", geo.get("core_thickness"), "mm", "float"))
+    core_t_x = (tooth_yoke[1] - 0.18 * (tooth_yoke[1] - tooth_yoke[0])
+                if tooth_yoke else tooth_cx)
+    _dim_v(ax, cmaxy, stator_span[1], x_dim=core_t_x,
+           label=_label("core_thickness", geo.get("core_thickness"), "mm", "float"),
+           label_x=_esc_x((cmaxy + stator_span[1]) / 2.0, "right"))
     drawn.add("core_thickness")
 
     # ═══ 2. Air gap / sleeve / magnet — the ARROW sits on the real feature
@@ -863,9 +880,13 @@ def _draw_sector(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set):
     sleeve_span = _radial_span(sleeve_c) if sleeve_c is not None else None
     if sleeve_span:
         mid = (sleeve_span[0] + sleeve_span[1]) / 2.0
+        # Nudged UP, clear of magnet_up_gap's own label just below it — the
+        # sleeve sits right where the air gap starts, i.e. right next to
+        # where magnet_up_gap ends (rotor_span[1]), so the two escaped
+        # labels land almost at the same height on the same (right) side.
         _dim_v(ax, sleeve_span[0], sleeve_span[1], x_dim=0.0,
                label=_label("sleeve_thickness", sleeve_t, "mm", "float"),
-               label_x=_esc_x(mid, "right"))
+               label_x=_esc_x(mid, "right"), label_dy=r_max * 0.09)
         drawn.add("sleeve_thickness")
 
     if mag_poly is not None:
@@ -920,7 +941,7 @@ def _draw_sector(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set):
                 alpha=0.85, zorder=6)
         ax.text(0.0, label_y,
                 "num_seg" if not _SHOW_VALUES else _label("num_seg", geo.get("num_seg"), "", "int"),
-                fontsize=7.6, family=_MONO, color="#222222", ha="center", va="top", zorder=7,
+                fontsize=22, family=_MONO, color="#222222", ha="center", va="top", zorder=7,
                 bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.92))
         drawn.add("num_seg")
 
@@ -936,7 +957,7 @@ def _draw_ring_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: se
     apart, so none crosses the ring or another leader."""
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.set_title("radii (full ring)", fontsize=8.6, color="#555555", pad=3)
+    ax.set_title("radii (full ring)", fontsize=18, color="#555555", pad=6)
 
     for key in ("air_gap", "stator", "rotor"):
         for p in _poly_patches(regions.get(key), **_PART_STYLE[key]):
@@ -953,38 +974,49 @@ def _draw_ring_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: se
     if not stator_span:
         return
     r_out = stator_span[1]
-    r_lbl = r_out * 1.22       # where every name lands — one common ring of
+    r_lbl = r_out * 1.55       # where every name lands — one common ring of
                                 # labels, outside the drawing, so nothing
-                                # written there can ever overlap the section
+                                # written there can ever overlap the section.
+                                # Bigger than before — separation between two
+                                # neighbouring labels scales with r_lbl at a
+                                # fixed angular spacing, and the labels
+                                # themselves are now 22pt, ~3x the size.
 
-    _dim_radial(ax, 0, stator_span[1], -72,
-                _label("stator_diameter (radius shown)", geo.get("stator_diameter"), "mm", "float"),
+    # Exactly 5 slots, 72 degrees apart — the previous set (-72, -8, 64, 136,
+    # then a "5th slot" typed as -216) was NOT evenly spaced: -216 reduces to
+    # 144 degrees, only 8 degrees from the 136-degree slot right next to it,
+    # so shaft_height's label sat on top of rotor_inner_radius's.
+    A_OD, A_ID, A_ROR, A_RIR, A_SHAFT = -72, 0, 72, 144, 216
+
+    _dim_radial(ax, 0, stator_span[1], A_OD,
+                _label("stator_diameter", geo.get("stator_diameter"), "mm", "float"),
                 r_label=r_lbl)
     drawn.add("stator_diameter")
-    _dim_radial(ax, 0, stator_span[0], -8,
+    _dim_radial(ax, 0, stator_span[0], A_ID,
                 _label("stator_inner_radius", geo.get("stator_inner_radius"), "mm", "float"),
                 r_label=r_lbl)
     drawn.add("stator_inner_radius")
     if rotor_span:
-        _dim_radial(ax, 0, rotor_span[1], 64,
+        _dim_radial(ax, 0, rotor_span[1], A_ROR,
                     _label("rotor_outer_radius", geo.get("rotor_outer_radius"), "mm", "float"),
                     r_label=r_lbl)
         drawn.add("rotor_outer_radius")
-        _dim_radial(ax, 0, max(rotor_span[0], 1.0), 136,
+        _dim_radial(ax, 0, max(rotor_span[0], 1.0), A_RIR,
                     _label("rotor_inner_radius", geo.get("rotor_inner_radius"), "mm", "float"),
                     r_label=r_lbl)
         drawn.add("rotor_inner_radius")
     if shaft_span:
-        _dim_radial(ax, 0, shaft_span[1], -216,   # = 144° — the 5th slot
+        _dim_radial(ax, 0, shaft_span[1], A_SHAFT,
                     _label("shaft_height", geo.get("shaft_height"), "mm", "float"),
                     r_label=r_lbl)
         drawn.add("shaft_height")
 
-    # Generous — a near-horizontal label (e.g. the -8 degree slot) grows
-    # AWAY from its anchor with real, non-zero text width; too little margin
-    # here let it run past this axes' own right edge and, since text is not
-    # clipped by default, bleed into the legend column next door.
-    lim = r_lbl * 1.75
+    # Generous — a near-horizontal label grows AWAY from its anchor with
+    # real, non-zero text width; too little margin here let it run past this
+    # axes' own right edge and, since text is not clipped by default, bleed
+    # into the legend column next door.
+    lim = r_lbl * 2.0   # extra room beyond r_lbl for the label TEXT itself
+                        # (22pt, ~3x the previous size) to grow into
     ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim)
 
 
@@ -992,7 +1024,7 @@ def _draw_wire_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], coil, dra
     """One conductor, zoomed — wire_width across it, wire_height along it."""
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.set_title("one conductor (zoom)", fontsize=7.3, color="#555555", pad=2)
+    ax.set_title("one conductor (zoom)", fontsize=18, color="#555555", pad=6)
 
     if coil is None:
         # Fall back to the nearest-to-top coil in the FULL (unclipped) set —
@@ -1000,7 +1032,7 @@ def _draw_wire_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], coil, dra
         coils = list(regions.get("coils") or [])
         coil = _nearest_to_angle(coils, 90.0)
     if coil is None:
-        ax.text(0.5, 0.5, "(no winding)", transform=ax.transAxes, ha="center", fontsize=7)
+        ax.text(0.5, 0.5, "(no winding)", transform=ax.transAxes, ha="center", fontsize=18)
         return
 
     for p in _poly_patches(coil, **_PART_STYLE["coil"]):
@@ -1012,14 +1044,19 @@ def _draw_wire_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], coil, dra
     w, h = maxx - minx, maxy - miny
     pad_w, pad_h = max(w, 1e-6) * 1.3, max(h, 1e-6) * 1.3
 
-    _dim_h(ax, minx, maxx, maxy + 0.18 * pad_h,
-           _label("wire_width", geo.get("wire_width"), "mm", "float"), fontsize=7.0)
-    _dim_v(ax, miny, maxy, x_dim=maxx + 0.22 * pad_w,
-           label=_label("wire_height", geo.get("wire_height"), "mm", "float"), fontsize=7.0)
+    # The wire itself is tiny next to a 22pt label — pushed much further out
+    # than the offsets below implied at the old (7pt) size, or the two
+    # labels' own text (one horizontal above, one rotated to the right)
+    # overlapped in the middle.
+    _dim_h(ax, minx, maxx, maxy + 0.55 * pad_h,
+           _label("wire_width", geo.get("wire_width"), "mm", "float"))
+    _dim_v(ax, miny, maxy, x_dim=maxx + 0.75 * pad_w,
+           label=_label("wire_height", geo.get("wire_height"), "mm", "float"))
     drawn.update({"wire_width", "wire_height"})
 
     cx, cy = (minx + maxx) / 2.0, (miny + maxy) / 2.0
-    half = max(pad_w, pad_h) * 0.95
+    half = max(pad_w, pad_h) * 3.2   # more headroom for the now much bigger
+                                      # (22pt) labels in this small inset
     ax.set_xlim(cx - half, cx + half); ax.set_ylim(cy - half, cy + half)
 
 
@@ -1037,7 +1074,8 @@ def _draw_axial_view(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: se
     ax.set_aspect("equal")
     ax.axis("off")
     ax.set_title("axial (side) view" if compact else "Axial (side) view — stack length",
-                 fontsize=7.3 if compact else 9.5, color="#555555" if compact else None, pad=2)
+                 fontsize=18 if compact else 9.5, color="#555555" if compact else None,
+                 pad=6 if compact else 2)
 
     stator_span = _radial_span(regions.get("stator"))
     r_out = stator_span[1] if stator_span else 25.0
@@ -1062,29 +1100,30 @@ def _draw_axial_view(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: se
 
     _dim_h(ax, 0, L, -r_out * 1.35,
            _label("motor_length", geo.get("motor_length"), "mm", "float"),
-           fontsize=6.6 if compact else 8.5, text_side="below")
+           fontsize=22 if compact else 8.5, text_side="below")
     drawn.add("motor_length")
 
     ax.set_xlim(-0.35 * L, 1.35 * L)
-    ax.set_ylim(-r_out * (1.65 if compact else 1.9), r_out * (1.55 if compact else 1.9))
+    ax.set_ylim(-r_out * (2.0 if compact else 1.9), r_out * (1.55 if compact else 1.9))
 
 
 _GROUP_HEADER_COLOR = "#4a3f80"
 
 
 def _draw_legend(ax, geo: Dict[str, Any], schema: Dict[str, dict],
-                  groups: List[dict], drawn: set) -> None:
+                  groups: List[dict], drawn: set, *, n_cols: int = 2,
+                  key_font: float = 16, meaning_font: float = 16,
+                  header_font: float = 20, title_font: float = 20) -> None:
     """Every schema key, grouped, drawn or not — a COMPACT table: one line
     per parameter (key, a one-line meaning truncated to fit, drawn/legend
     flag). The long, multi-sentence description used to be printed in full
     and wrapped to 2-3 lines per row; that belongs in the Geometry tab's own
     HelpTip tooltip, not on this picture — here it only has to say which
-    knob a name is, at a glance, to fit ~34 parameters in a narrow column
-    beside a picture that is now the dominant thing on the page.
+    knob a name is, at a glance.
     """
     ax.axis("off")
     ax.set_title("Legend — every parameter (name · meaning · drawn?)",
-                 fontsize=9.5, loc="left")
+                 fontsize=title_font, loc="left", pad=10)
 
     order = {g.get("id"): g.get("order", 99) for g in groups}
     label_of = {g.get("id"): g.get("label", g.get("id")) for g in groups}
@@ -1094,7 +1133,7 @@ def _draw_legend(ax, geo: Dict[str, Any], schema: Dict[str, dict],
         by_group.setdefault(grp, []).append(key)
 
     Row = Tuple[str, str, Any]     # kind, key/header text, extra (flag, raw description) | None
-    KEY_FONT, MEANING_FONT = 6.5, 6.1
+    KEY_FONT, MEANING_FONT = key_font, meaning_font
     # Sized from the ACTUAL rendered glyph widths (a renderer, from the
     # already-built figure — this runs after the sector/insets are drawn),
     # not an assumed points-per-character constant: two guesses at that
@@ -1139,9 +1178,8 @@ def _draw_legend(ax, geo: Dict[str, Any], schema: Dict[str, dict],
             rows.append(("item", key, (flag, desc)))
         group_rows.append(rows)
 
-    # Greedy bin-packing: a WHOLE group onto whichever of 2 columns is
+    # Greedy bin-packing: a WHOLE group onto whichever column is currently
     # lighter — never split a header from its own items.
-    n_cols = 2
     weight = {"header": 1.4, "item": 1.0}
     col_weights = [0.0] * n_cols
     columns: List[List[Row]] = [[] for _ in range(n_cols)]
@@ -1150,20 +1188,23 @@ def _draw_legend(ax, geo: Dict[str, Any], schema: Dict[str, dict],
         columns[ci].extend(rows)
         col_weights[ci] += sum(weight[r[0]] for r in rows)
 
-    line_h = 0.0145
-    col_x = [0.0, 0.50]
-    key_gap = 0.012          # fixed gap between the key and its meaning
-    flag_x = 0.465            # flag sits here, right-aligned — FIXED, so the
-                               # meaning lane's available width is whatever is
-                               # left after this row's own (variable-width) key
-    flag_gap = 0.012
+    col_w = 1.0 / n_cols
+    col_x = [i * col_w for i in range(n_cols)]
+    line_h = (key_font / 72.0) * 2.2 / max(ax.get_position().height
+                                            * ax.figure.get_size_inches()[1], 1e-6)
+    key_gap = 0.010 * (2.0 / n_cols)         # fixed gap between the key and its meaning
+    flag_x = col_w * 0.93                     # flag sits here, right-aligned — FIXED,
+                                               # so the meaning lane's available width
+                                               # is whatever is left after this row's
+                                               # own (variable-width) key
+    flag_gap = 0.008 * (2.0 / n_cols)
     for ci, col in enumerate(columns):
         x0 = col_x[ci]
-        y = 0.97
+        y = 0.955
         for kind, text, extra in col:
             if kind == "header":
                 y -= line_h * 0.5
-                ax.text(x0, y, text, transform=ax.transAxes, fontsize=8.6,
+                ax.text(x0, y, text, transform=ax.transAxes, fontsize=header_font,
                         fontweight="bold", color=_GROUP_HEADER_COLOR,
                         va="top", ha="left")
                 y -= line_h * 1.3
@@ -1179,13 +1220,13 @@ def _draw_legend(ax, geo: Dict[str, Any], schema: Dict[str, dict],
                 # own glyphs, which is exactly the rows that were touching).
                 # The 0.92x on top is slack for the exact-fit binary search's
                 # own zero-clearance-by-construction result.
-                flag_w = _text_w_axesfrac(flag, 6.1)
+                flag_w = _text_w_axesfrac(flag, KEY_FONT)
                 avail = ((x0 + flag_x - flag_w - flag_gap) - meaning_x0) * 0.92
                 meaning = _fit_meaning(desc, avail)
                 ax.text(meaning_x0, y, meaning, transform=ax.transAxes,
                         fontsize=MEANING_FONT, va="top", ha="left", color="#555555")
                 ax.text(x0 + flag_x, y, flag, transform=ax.transAxes,
-                        fontsize=6.1, va="top", ha="right",
+                        fontsize=KEY_FONT, va="top", ha="right",
                         color="#2f7a3a" if flag == "drawn" else "#b0b0b0")
                 y -= line_h
 
@@ -1236,23 +1277,25 @@ def build_dimension_sheet(geo: Dict[str, Any], schema: Dict[str, dict],
         drawn: set = set()
 
         if layout == "sector":
-            # Wide and tall enough that the sector column alone rasterises to
-            # >=2400 px at 150 dpi (26in * 150 * 0.65 ~= 2535 px) — the sector
-            # is THE picture, not one panel among several.  The three small
-            # insets (radii, one conductor, axial view) are SIBLING subplots
-            # in their own narrow column, not carved out of the sector axes'
-            # own data range — nesting them inside fought `aspect="equal"`
-            # for the same pixels and lost (see ``_draw_sector``'s comment).
-            fig = plt.figure(figsize=(26.0, 18.5), facecolor="white")
-            gs = fig.add_gridspec(3, 3, width_ratios=[0.65, 0.16, 0.19],
-                                  height_ratios=[2.0, 1.0, 1.0],
-                                  wspace=0.08, hspace=0.30,
-                                  left=0.01, right=0.99, top=0.955, bottom=0.02)
-            ax_sector = fig.add_subplot(gs[:, 0])
+            # Wide/tall enough that the sector alone rasterises well past
+            # 2400 px at 150 dpi and fills ~70% of the sheet's WIDth and
+            # most of its height — the sector is THE picture. The three
+            # small insets are SIBLING subplots in a narrower right column
+            # (not carved out of the sector axes' own data range — nesting
+            # them inside fought `aspect="equal"` for the same pixels and
+            # lost, see ``_draw_sector``'s comment); the legend moves to its
+            # own full-width row below both, since it needed far more room
+            # once its own text grew to a legible size.
+            fig = plt.figure(figsize=(34.0, 34.0), facecolor="white")
+            gs = fig.add_gridspec(4, 2, width_ratios=[0.70, 0.30],
+                                  height_ratios=[1.0, 1.0, 1.0, 1.35],
+                                  wspace=0.05, hspace=0.26,
+                                  left=0.01, right=0.99, top=0.965, bottom=0.012)
+            ax_sector = fig.add_subplot(gs[0:3, 0])
             ax_ring   = fig.add_subplot(gs[0, 1])
             ax_wire   = fig.add_subplot(gs[1, 1])
             ax_axial  = fig.add_subplot(gs[2, 1])
-            ax_legend = fig.add_subplot(gs[:, 2])
+            ax_legend = fig.add_subplot(gs[3, :])
 
             coil = None
             try:
@@ -1265,7 +1308,8 @@ def build_dimension_sheet(geo: Dict[str, Any], schema: Dict[str, dict],
                 _draw_axial_view(ax_axial, geo, regions, drawn, compact=True)
             except Exception:
                 log.exception("dimension sheet: sector insets failed")
-            _draw_legend(ax_legend, geo, schema, groups, drawn)
+            _draw_legend(ax_legend, geo, schema, groups, drawn, n_cols=4,
+                         key_font=16, meaning_font=16, header_font=20, title_font=20)
         else:
             fig = plt.figure(figsize=(16.0, 10.5), facecolor="white")
             gs = fig.add_gridspec(3, 3, width_ratios=[2.3, 1.35, 1.55],
@@ -1293,9 +1337,11 @@ def build_dimension_sheet(geo: Dict[str, Any], schema: Dict[str, dict],
                 _draw_axial_view(ax_axial, geo, regions, drawn)
             except Exception:
                 log.exception("dimension sheet: axial view failed")
-            _draw_legend(ax_legend, geo, schema, groups, drawn)
+            _draw_legend(ax_legend, geo, schema, groups, drawn, n_cols=2,
+                         key_font=6.5, meaning_font=6.1, header_font=8.6, title_font=9.5)
 
-        fig.suptitle(title, fontsize=13, fontweight="bold", x=0.02, ha="left")
+        fig.suptitle(title, fontsize=30 if layout == "sector" else 13,
+                     fontweight="bold", x=0.02, ha="left")
 
         buf = io.BytesIO()
         save_kw: Dict[str, Any] = dict(format=fmt, facecolor="white")

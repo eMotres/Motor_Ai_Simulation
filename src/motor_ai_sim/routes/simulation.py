@@ -5118,6 +5118,12 @@ def get_fem_transient(
                 waveform=_wf_pts, i_block=float(i_block),
                 element_order=int(element_order),
                 return_frames=int(n_frames) if include_frames else 0,
+                # THE HONEST INDUCTANCES OF THIS POINT: frozen permeability on
+                # the frames this run already solves, so the card and the
+                # report can stop quoting a chord (ψd − ψ_PM)/i_d that the
+                # loaded iron's ψ_PM sag dominates (client review, 2026-09-20).
+                # Three extra back-solves on four frames' own matrices.
+                inc_ldq=True,
                 # Coupled σ·∂A/∂t solve — only when the caller asked for it.
                 eddy=bool(eddy),
                 # Keep the last frame's field for the J⟳ / Loss views.  Free:
@@ -5710,6 +5716,39 @@ def _bench_compute(geo_ov: Optional[dict], conn: str,
     return out
 
 
+def catalogue_ldq0(geo_ov: Optional[dict], *, daxis_deg: float,
+                   connection: Optional[str] = None,
+                   magnet_temp_c: float = 20.0) -> Optional[dict]:
+    """CATALOGUE Ld/Lq — incremental, no load, 20 °C — for THIS machine.
+
+    The config plumbing around ``fem_solver_2d.noload_incremental_ldq``, in one
+    place: which geometry (the override when a catalog motor is being probed,
+    the live machine otherwise), which winding, how many pole pairs.  The same
+    shape ``_bench_compute`` has, and for the same reason — a probe that reads
+    the live config when it was handed another machine measures the wrong one.
+
+    Never raises: a machine whose no-load probe will not converge simply has no
+    catalogue inductances, and inventing them from a loaded chord is what this
+    whole change exists to stop.
+    """
+    from motor_ai_sim.config import get_config as _gc
+    from motor_ai_sim.simulation.fem_solver_2d import noload_incremental_ldq
+    try:
+        _geo_cfg = dict(geo_ov) if geo_ov else dict(_gc().get("geometry") or {})
+        _wind = dict(_gc().get("winding") or {})
+        _pp = int(_geo_cfg.get("num_poles", 0)) // 2
+        if _pp <= 0:
+            return None
+        return noload_incremental_ldq(
+            _geo_cfg, _wind, _pp, float(daxis_deg),
+            geo_override=geo_ov, connection=(connection or None),
+            magnet_temp_c=float(magnet_temp_c),
+            coil_temp_c=float(magnet_temp_c))
+    except Exception:   # noqa: BLE001 — a catalogue row is never worth a 500
+        log.warning("catalogue Ld0/Lq0 probe failed", exc_info=True)
+        return None
+
+
 @router.get("/pwm_waveform")
 def get_pwm_waveform(
     v_bus:        float = Query(..., description="DC link voltage [V]"),
@@ -6163,7 +6202,8 @@ def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
 #                  the numbers are arithmetic over the run's own rpm and mass
 #                  rows plus the machine's bearing cards, so a stored result can
 #                  be given them honestly without re-solving anything.
-_SUMMARY_SHAPE_V = 17   # v17: mean |B| in the air gap (2026-09-10)
+_SUMMARY_SHAPE_V = 18   # v18: incremental (frozen-permeability) Ld/Lq, the
+                        #      chord under its own name, ψ_PM sag (2026-09-20)
 # NOT bumped for the eddy-settle verdict (2026-09-07): a solver payload from
 # before that date cannot say whether its warm-up settled, so rebuilding an old
 # summary would stamp a default "settled: true" into it — a claim nobody
@@ -6763,11 +6803,20 @@ def _build_transient_summary(
     # quoted for the isolated-neutral star this machine is driven as (the
     # voltage circuit is line-to-line for exactly that reason): R_LL = 2·R_ph.
     _R_ph = float(sbres.get("R_phase_ohm", 0.0) or 0.0)
-    # Ld/Lq: ψd = ψ_PM + Ld·id and ψq = Lq·iq, with ψ_PM measured at I=0 (one
-    # cached no-load solve per geometry).  Refused rather than guessed when the
-    # frame cannot be trusted: the dq torque identity must reproduce the energy
-    # torque, and ψq at no load must be small next to ψ_PM.
-    _Ld_mH = _Lq_mH = _psi_pm = None
+    # CHORD Ld/Lq: ψd = ψ_PM + Ld·id and ψq = Lq·iq, with ψ_PM measured at I=0
+    # (one cached no-load solve per geometry).  Refused rather than guessed when
+    # the frame cannot be trusted: the dq torque identity must reproduce the
+    # energy torque, and ψq at no load must be small next to ψ_PM.
+    #
+    # THESE ARE NO LONGER THE REPORTED Ld/Lq (client review 2026-09-20: *"这个
+    # 电机 Ld > Lq? 好像和一般的电机不太一样"*).  The chord divides by a ψ_PM
+    # measured at NO LOAD while the loaded iron's magnet flux has sagged ~9 %,
+    # and on a machine driven at a small γ that sag IS the numerator — which is
+    # how a spoke-PM machine whose Lq is the larger inductance shipped a report
+    # saying Ld 0.0976 > Lq 0.0693.  They are kept, under their own names, as
+    # the number the sag can be read off; the reported Ld/Lq are the
+    # frozen-permeability incremental values below.
+    _Ld_chord = _Lq_chord = _psi_pm = None
     _sat_droop = None          # set below only when ψ_PM and i_q both resolved
     _dq_note = ""
     try:
@@ -6795,7 +6844,7 @@ def _build_transient_summary(
             else:
                 _psi_pm = float(_pm)
                 if abs(float(_iqm)) > 1e-3:
-                    _Lq_mH = 1e3 * float(_psiq) / float(_iqm)
+                    _Lq_chord = 1e3 * float(_psiq) / float(_iqm)
                 # Ld divides (ψd − ψ_PM_noload) by i_d — but under load the
                 # iron's cross-saturation shifts ψd by ~1-2 % of ψ_PM even at
                 # i_d = 0, and that shift lands in the numerator.  A small
@@ -6806,7 +6855,7 @@ def _build_transient_summary(
                 # the number would be cross-saturation, not inductance.
                 _i_pk = (float(_idm) ** 2 + float(_iqm) ** 2) ** 0.5
                 if abs(float(_idm)) >= max(1e-3, 0.10 * _i_pk):
-                    _Ld_mH = 1e3 * (float(_psid) - _psi_pm) / float(_idm)
+                    _Ld_chord = 1e3 * (float(_psid) - _psi_pm) / float(_idm)
                 else:
                     _dq_note = (
                         "i_d is only %.1f%% of the current at γ = %.1f° — "
@@ -6856,26 +6905,60 @@ def _build_transient_summary(
     except Exception:   # noqa: BLE001 — a droop failure must not sink the summary
         _sat_droop = None
 
-    # ── Cross-saturation dominance check on the chord Ld ─────────────────────
-    # The i_d-fraction gate above is not enough under DEEP saturation: at
-    # γ = 8°, 89 A the run's own droop said ψ_PM sags 10.1 % under load, and
-    # (droop·ψ_PM)/i_d accounted for the chord Ld reading 0.116 mH against a
-    # bench 0.041 (excess ×i_d = 1.32 mWb = exactly the 10 % sag — measured
-    # live).  When the sag term dominates the numerator, the "inductance" is
-    # mostly iron state, not flux-per-amp — withhold it; the card then shows
-    # the bench value, which IS the machine constant.
+    # ── THE REPORTED Ld/Lq: frozen-permeability INCREMENTAL at this point ────
+    # The solver measured them on the frames it already solved: the per-element
+    # ν of the converged loaded field is held fixed and a unit d- and q-axis
+    # current solved on that operator, so Ld = ∂ψd/∂i_d and Lq = ∂ψq/∂i_q are
+    # flux-per-amp at THIS iron state and nothing else (fem_solver_2d.
+    # frozen_permeability_ldq).  The magnets' own flux in that same loaded iron
+    # comes out of the same solve, which turns the ψ_PM sag — the term that
+    # contaminated the chord — into a number of its own instead of a suspicion.
+    _Ld_mH = _Lq_mH = _Ldq_mH = _psi_sag_pct = None
+    _ldq_method = None
+    _inc_blk = sbres.get("inc_ldq")
     try:
-        if _Ld_mH is not None and _sat_droop is not None and _psi_pm:
-            _sag = abs(float(_sat_droop["droop_pct"])) / 100.0 * abs(_psi_pm)
-            _numer = abs(float(sbres.get("psi_d_Wb")) - _psi_pm)
-            if _numer > 1e-12 and _sag > 0.4 * _numer:
+        if isinstance(_inc_blk, dict) and _inc_blk.get("Ld_mH") is not None:
+            _Ld_mH = float(_inc_blk["Ld_mH"])
+            _Lq_mH = float(_inc_blk["Lq_mH"])
+            _Ldq_mH = (None if _inc_blk.get("Ldq_mH") is None
+                       else float(_inc_blk["Ldq_mH"]))
+            _ldq_method = "frozen-permeability incremental at the point"
+            _pmf = _inc_blk.get("psi_d_pm_frozen_Wb")
+            if _psi_pm and _pmf is not None:
+                _psi_sag_pct = 100.0 * (1.0 - float(_pmf) / float(_psi_pm))
+        else:
+            _dq_note = (_dq_note or
+                        "this run predates the incremental Ld/Lq measurement — "
+                        "re-run to measure them by frozen permeability")
+    except Exception:   # noqa: BLE001 — never sink a summary over a diagnostic
+        _Ld_mH = _Lq_mH = _Ldq_mH = None
+
+    # ── What the CHORD says, and why it is not the answer ────────────────────
+    # With ν frozen the flux linkage splits EXACTLY, ψd = ψ*_PM + Ld·i_d +
+    # Ldq·i_q, so the chord and the incremental value differ by an identity:
+    #
+    #     (ψd − ψ_PM)/i_d  =  Ld  +  [(ψ*_PM − ψ_PM) + Ldq·i_q] / i_d
+    #
+    # — the magnet flux the LOAD moved, plus the q-axis cross term, divided by
+    # a current that may be small.  Both are iron state, neither is
+    # flux-per-amp, and at γ = 8°, 89 A they took a 0.041 mH machine to a
+    # 0.116 mH reading (measured live, 2026-09-13).  The note quantifies them
+    # instead of inferring them from the torque droop, as it used to.
+    try:
+        if (_Ld_chord is not None and _psi_pm and _psi_sag_pct is not None
+                and _Ldq_mH is not None):
+            _d_pm = abs(_psi_sag_pct) / 100.0 * abs(float(_psi_pm))
+            _x_wb = abs(1e-3 * _Ldq_mH * float(sbres.get("i_q_A") or 0.0))
+            _numer = abs(float(sbres.get("psi_d_Wb")) - float(_psi_pm))
+            if _numer > 1e-12 and (_d_pm + _x_wb) > 0.4 * _numer:
                 _dq_note = (
-                    "loaded iron sags ψ_PM by %.1f%% — ~%.0f%% of the chord-Ld "
-                    "numerator is cross-saturation, not flux-per-amp; chord Ld "
-                    "withheld (bench Ld is the machine constant)"
-                    % (float(_sat_droop["droop_pct"]),
-                       min(100.0, 100.0 * _sag / _numer)))
-                _Ld_mH = None
+                    "chord (ψd − ψ_PM)/i_d = %.4f mH — not an inductance here: "
+                    "~%.0f%% of that numerator is the magnet flux the load "
+                    "moved (%+.1f%% of ψ_PM) plus the q-axis cross term; Ld/Lq "
+                    "above are the frozen-permeability incremental values"
+                    % (_Ld_chord,
+                       min(100.0, 100.0 * (_d_pm + _x_wb) / _numer),
+                       -_psi_sag_pct))
     except Exception:   # noqa: BLE001
         pass
 
@@ -6945,8 +7028,47 @@ def _build_transient_summary(
                           else round(_Ld_mH / (3.0 if _is_delta else 1.0), 4)),
         "Lq_eq_star_mH": (None if _Lq_mH is None
                           else round(_Lq_mH / (3.0 if _is_delta else 1.0), 4)),
+        # Ld_mH / Lq_mH ARE the incremental (frozen-permeability) values since
+        # 2026-09-20 — every consumer that reads them (the card, §4, the
+        # datasheet, the PWM calculator) gets flux-per-amp at this point.
         "Ld_mH": (None if _Ld_mH is None else round(_Ld_mH, 4)),
         "Lq_mH": (None if _Lq_mH is None else round(_Lq_mH, 4)),
+        "Ld_inc_mH": (None if _Ld_mH is None else round(_Ld_mH, 4)),
+        "Lq_inc_mH": (None if _Lq_mH is None else round(_Lq_mH, 4)),
+        # The CROSS term of the same 2×2 matrix.  Symmetric by reciprocity of a
+        # linear magnetic circuit, which the solver checks rather than assumes.
+        "Ldq_inc_mH": (None if _Ldq_mH is None else round(_Ldq_mH, 4)),
+        "ldq_method": _ldq_method,
+        # The chord, under its own name: (ψd − ψ_PM_noload)/i_d and ψq/i_q.
+        # NOT an inductance under saturation — see `dq_note`.
+        "Ld_chord_mH": (None if _Ld_chord is None else round(_Ld_chord, 4)),
+        "Lq_chord_mH": (None if _Lq_chord is None else round(_Lq_chord, 4)),
+        # WHAT THE LOAD DID TO THE MAGNET FLUX, measured rather than inferred
+        # from the torque droop: 100·(1 − ψ*_PM/ψ_PM), with ψ*_PM the magnets'
+        # own flux solved on the LOADED field's frozen permeability and ψ_PM
+        # the cached no-load probe.  POSITIVE is a sag (the armature reaction
+        # saturated the flux path); NEGATIVE means the load saturated a
+        # LEAKAGE path instead and more magnet flux reached the gap, which is
+        # ordinary on a flux-concentrating rotor.  These are exactly the two
+        # numbers the chord Ld differences, so this IS the chord's error term
+        # — including the part of it that is the calibration mesh the no-load
+        # probe runs on, which is why it belongs in a note and not in a row.
+        "psi_pm_sag_pct": (None if _psi_sag_pct is None
+                           else round(_psi_sag_pct, 2)),
+        "psi_pm_frozen_Wb": (
+            None if not isinstance(_inc_blk, dict)
+            or _inc_blk.get("psi_d_pm_frozen_Wb") is None
+            else round(float(_inc_blk["psi_d_pm_frozen_Wb"]), 6)),
+        # …and its Q COMPONENT, which is zero at no load and is NOT zero under
+        # cross-saturation: the loaded iron tilts the magnets' own flux off the
+        # d-axis (−7.5 mWb on the L180 rated duty).  That term sits in ψq, so
+        # it is the reason the chord ψq/i_q is not Lq either.
+        "psi_pm_q_frozen_Wb": (
+            None if not isinstance(_inc_blk, dict)
+            or _inc_blk.get("psi_q_pm_frozen_Wb") is None
+            else round(float(_inc_blk["psi_q_pm_frozen_Wb"]), 6)),
+        **({"inc_ldq": _inc_blk} if isinstance(_inc_blk, dict) and _inc_blk
+           else {}),
         "psi_pm_Wb": (None if _psi_pm is None else round(_psi_pm, 6)),
         "saliency_Lq_over_Ld": (round(_Lq_mH / _Ld_mH, 3)
                                 if _Ld_mH not in (None, 0) and _Lq_mH is not None

@@ -6767,7 +6767,12 @@ PWM_RUN_DRIVE = "pwm_voltage"
 #: voltage-fed run recorded none; where it records one, both halves flip.
 _PWM_KEEP_SINE = ("star_delta",)
 _PWM_KEEP_SINE_PREFIX = ("KV", "Kt", "Km", "Ld", "Lq", "L0", "psi",
-                         "saliency", "V1_seed")
+                         "saliency", "V1_seed",
+                         # the incremental-inductance block and the name of the
+                         # method that produced it travel with the numbers they
+                         # describe, or §4 would label the sinusoid's Ld with
+                         # the PWM run's method (2026-09-20)
+                         "ldq_", "inc_ldq")
 
 #: The coupled record's ``em`` block, in the keys a saved summary uses.
 _PWM_EM_KEYS = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W",
@@ -10966,10 +10971,19 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
       "above are consistent with")
     R("Magnet flux linkage Ψ_PM [Wb]", _v("psi_pm_Wb"), 4, "",
       "the back-EMF per rad/s at 20 °C" + _tail)
-    R("Ld [mH]", _numf(two.get("Ld_mH")), 4, "",
-      "direct-axis inductance at this point")
-    R("Lq [mH]", _numf(two.get("Lq_mH")), 4, "",
-      "quadrature-axis inductance at this point")
+    # Ld / Lq ON THE CATALOGUE'S OWN BASIS (owner 2026-09-20: *«Ld/Lq нужно
+    # указывать тоже для 20 градусов и без тока, как для KV»*).  KV above is a
+    # no-load constant at 20 °C; quoting the inductances of a 600 A operating
+    # point beside it compares two different machines.  These are the
+    # incremental (frozen-permeability) values at i = 0 and 20 °C — the duty's
+    # own loaded inductances stay in §4, where the operating point is stated.
+    R("Ld at no load [mH]", _numf(c.get("Ld0_mH")), 4, "",
+      "incremental (frozen permeability) at zero current and 20 °C — the same "
+      "basis as KV above")
+    R("Lq at no load [mH]", _numf(c.get("Lq0_mH")), 4, "",
+      "same solve, quadrature axis")
+    R("Saliency Lq/Ld at no load", _numf(c.get("saliency0_Lq_over_Ld")), 3, "",
+      saliency_note(_numf(c.get("saliency0_Lq_over_Ld"))))
     R("Mass [kg]", _numf(c.get("mass_kg")), 3, "",
       "the total this report's cover prints, to the same parts policy")
     pt = dict(c.get("point") or {})
@@ -11033,28 +11047,52 @@ def em_constant_rows(em: Dict[str, Any],
         return (f * float(_k3c)) if (f is not None and _k3c) else f
 
     _kt_tail = ((" × k_3d = %s" % _fmt(_k3c, 4)) if _k3c else " (2-D, no 3-D passport)")
-    # The load angle, for the inductance caveat below (reviewer 2026-09-14, C6).
+    # The load angle, for the inductance note below (reviewer 2026-09-14, C6).
     _gam = _numf(_g(em, "gamma_deg"))
-    # ONE CAVEAT, TWO AXES (MJ-7, reviewer 2026-09-14).  The shared suffix was
-    # appended to both rows, so the q-axis row carried a sentence about the
-    # d-axis.  The common half stays common; each axis says what its own chord
-    # means.
-    _chord_head = ("" if (_gam is None or abs(_gam) < 0.5) else
-                   (" — a CHORD extraction at gamma = %s, not a small-signal "
-                    "slope" % _fmt(_gam, 1, "°")))
-    _chord_d = _chord_head
-    _chord_q = _chord_head + ("" if not _chord_head else
-                              "; it already carries this current's saturation")
+    # WHAT THESE TWO ROWS ARE (client review 2026-09-20: *"这个电机 Ld > Lq?
+    # 好像和一般的电机不太一样"*).  They used to be the CHORD, (ψd − ψ_PM)/i_d
+    # and ψq/i_q, and on this spoke-PM machine at γ = −15° the chord Ld read
+    # 0.0976 mH against a chord Lq of 0.0693 — an inversion of the real
+    # saliency, because the numerator was mostly the magnet flux the loaded
+    # iron moved.  They are now the INCREMENTAL values: the per-element
+    # reluctivity of the converged loaded field is frozen and a unit d- and
+    # q-axis current solved on that operator, i.e. ∂ψ/∂i at this iron state.
+    # The chord is kept as a comparison inside the note, never as "Ld".
+    _inc = str(_g(em, "ldq_method") or "")
+    _meth = (" — incremental (frozen permeability) at this point, not a chord"
+             if _inc else "")
+    _at = ("" if (_gam is None or abs(_gam) < 0.5)
+           else ", at gamma = %s" % _fmt(_gam, 1, "°"))
+    _chord_d_v = _numf(_g(em, "Ld_chord_mH"))
+    _chord_q_v = _numf(_g(em, "Lq_chord_mH"))
+    _chord_d = _meth + _at + (
+        "" if _chord_d_v is None else
+        "; the chord (Psi_d - Psi_PM)/i_d is %s — dominated by cross-"
+        "saturation, not an inductance" % _fmt(_chord_d_v, 4, "mH"))
+    _chord_q = _meth + _at + (
+        "" if _chord_q_v is None else
+        "; the chord Psi_q/i_q is %s" % _fmt(_chord_q_v, 4, "mH"))
     rows.append(["Terminal connection", "DELTA (Δ)" if _delta else "STAR (Y)",
                  ("windings between the lines: I_line = √3·I_winding" if _delta
                   else "isolated neutral: V_line = √3·V_phase, "
                        "I_line = I_phase")])
+    # ψ_PM is the no-load probe; how far the LOAD moves it is measured on the
+    # same frozen-permeability solve as Ld/Lq, and said in one clause here
+    # rather than left to be inferred from the chord.
+    _sag = _numf(_g(em, "psi_pm_sag_pct"))
     R("Magnet flux linkage Psi_PM", _g(em, "psi_pm_Wb"), 4, "Wb",
-      "the back-EMF per rad/s")
+      "the back-EMF per rad/s, measured at no load"
+      + ("" if _sag is None else
+         "; in the loaded iron the magnets link %s (%s)"
+         % (_fmt(_numf(_g(em, "psi_pm_frozen_Wb")), 4, "Wb"),
+            _fmt(-_sag, 1, "%"))))
     R("Ld" + _w, _g(em, "Ld_mH"), 4, "mH",
-      "direct-axis inductance at this point" + _chord_d)
+      "direct-axis inductance" + _chord_d)
     R("Lq" + _w, _g(em, "Lq_mH"), 4, "mH",
-      "quadrature-axis inductance at this point" + _chord_q)
+      "quadrature-axis inductance" + _chord_q)
+    R("Cross-saturation Ldq" + _w, _g(em, "Ldq_inc_mH"), 4, "mH",
+      "the off-diagonal term of the same 2x2 matrix, dPsi_d/di_q — zero on an "
+      "unsaturated machine")
     if _delta:
         R("Ld, star-equivalent", _g(em, "Ld_eq_star_mH"), 4, "mH",
           "the per-phase value of the equivalent star — one third of the winding's")

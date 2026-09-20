@@ -53,14 +53,28 @@ export interface TransientSummary {
   // sign, so a hand-typed generator angle is labelled too.
   op_mode?:            'motor' | 'generator' | string;
   // Terminal parameters (persisted with the summary like everything else).
-  // R includes the end-winding; L are APPARENT (chord) inductances at THIS
-  // operating point — saturated, not small-signal.  Absent on runs from
-  // before the dq stamp; dq_note says why a value was withheld.
+  // R includes the end-winding; Ld/Lq are the INCREMENTAL (frozen-permeability)
+  // inductances of THIS operating point — ∂ψ/∂i at the loaded iron state.  The
+  // chord they replaced is kept under *_chord_mH for comparison only; it is
+  // not an inductance under saturation.  Absent on runs from before the dq
+  // stamp, and Ld/Lq absent on runs before the incremental measurement
+  // (2026-09-20); dq_note says why a value was withheld.
   R_phase_ohm?:         number | null;
   R_line_line_ohm?:     number | null;
   Ld_mH?:               number | null;
   Lq_mH?:               number | null;
+  Ld_inc_mH?:           number | null;
+  Lq_inc_mH?:           number | null;
+  /** cross term ∂ψd/∂i_q of the same 2×2 matrix */
+  Ldq_inc_mH?:          number | null;
+  Ld_chord_mH?:         number | null;
+  Lq_chord_mH?:         number | null;
+  ldq_method?:          string | null;
   psi_pm_Wb?:           number | null;
+  /** the magnets' own flux linkage in the LOADED iron (frozen permeability) */
+  psi_pm_frozen_Wb?:    number | null;
+  /** 100·(1 − ψ*_PM/ψ_PM): positive = the load sagged the magnet flux */
+  psi_pm_sag_pct?:      number | null;
   /** area-weighted mean |B| over the air-gap clearance, period-averaged */
   B_gap_mean_T?:        number | null;
   saliency_Lq_over_Ld?: number | null;
@@ -745,7 +759,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         end3d_k: apply3d && k3d != null ? k3d : null,
         r_temp_C: r25 && solveT != null ? 25 : solveT,
         kv: (kvNl && s.KV_noload_rpm_per_V_line != null) ? 'no-load' : 'loaded',
-        ld_source: s.Ld_mH != null ? 'chord' : (s.bench_ldq ? 'bench' : 'none'),
+        ld_source: s.Ld_mH != null ? 'incremental'
+          : (s.bench_ldq ? 'bench' : 'none'),
       },
     };
     localStorage.setItem('sim.viewSummary', JSON.stringify(view));
@@ -1474,27 +1489,35 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       {(s.Ld_mH != null || s.Lq_mH != null || s.bench_ldq != null || s.psi_pm_Wb != null) && (
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
         {/* Ld / Lq / Lq/Ld — ALWAYS a number when one exists, never advice
-            text in the value slot (user's call).  Preference order: the
-            loaded (chord) value of this run; else the bench (small-signal)
-            value measured automatically once per machine — with the label
-            saying which frame is on display.  The dq_note stays in the
-            tooltip for the "why" of a missing chord value. */}
+            text in the value slot (user's call).  Since 2026-09-20 the value
+            is the INCREMENTAL (frozen-permeability) inductance of this point:
+            the per-element ν of the converged loaded field held fixed and a
+            unit d/q current solved on it. The chord it replaces divided by a
+            NO-LOAD ψ_PM and read Ld > Lq on a machine whose Lq is the larger
+            (client review of the L180 report). Fallback order is unchanged:
+            this run's value, else the bench small-signal probe. */}
         <Cell label="Ld"
           value={s.Ld_mH != null ? fmt(s.Ld_mH, 3)
             : (s.bench_ldq ? fmt(s.bench_ldq.Ld_mH, 3) : '—')} unit="mH"
           accent="blue"
           tooltip={(s.Ld_mH != null
-            ? 'd-axis APPARENT inductance at THIS operating point: Ld = (ψd − ψ_PM)/i_d, with ψ_PM from a cached no-load solve. Saturated (chord) value, not small-signal.'
-            : 'BENCH value — small-signal Ld at the I≈0 iron state, rotor locked on a magnet: what an LCR meter on the terminals reads (the LOWER of the two on a surface-magnet rotor — the d-path crosses the magnet, which is air to the field). The loaded chord Ld needs a d-current to measure (γ ≥ ~6°).')
+            ? 'd-axis INCREMENTAL inductance at THIS operating point, ∂ψd/∂i_d by frozen permeability: the iron\'s ν is held at the loaded field\'s own state and a unit d-axis current solved on it, so this is flux-per-amp and carries none of the magnet flux the load moved.'
+            : 'BENCH value — small-signal Ld at the I≈0 iron state, rotor locked on a magnet: what an LCR meter on the terminals reads. This run predates the incremental measurement; re-run to measure it at the point.')
+            + (s.Ldq_inc_mH != null ? ` Cross term ∂ψd/∂i_q = ${fmt(s.Ldq_inc_mH, 3)} mH.` : '')
             + (s.bench_ldq && s.Ld_mH != null ? ` Bench (small-signal): ${fmt(s.bench_ldq.Ld_mH, 3)} mH.` : '')
+            + (s.Ld_chord_mH != null ? ` Chord (ψd − ψ_PM)/i_d for comparison: ${fmt(s.Ld_chord_mH, 3)} mH — not an inductance under saturation.` : '')
             + (s.dq_note ? ' — ' + s.dq_note : '')}/>
         <Cell label="Lq" value={s.Lq_mH != null ? fmt(s.Lq_mH, 3) : '—'} unit="mH"
           accent="blue"
-          tooltip={'q-axis APPARENT inductance under load: Lq = ψq/i_q. The q-axis saturates under load, so this sits below the bench value.'
+          tooltip={'q-axis INCREMENTAL inductance under load, ∂ψq/∂i_q by frozen permeability (same solve as Ld). The q-axis saturates under load, so this sits below the no-load value.'
             + (s.bench_ldq ? ` Bench (small-signal, rotor between magnets): ${fmt(s.bench_ldq.Lq_mH, 3)} mH.` : '')
+            + (s.Lq_chord_mH != null ? ` Chord ψq/i_q for comparison: ${fmt(s.Lq_chord_mH, 3)} mH.` : '')
             + (s.dq_note ? ' — ' + s.dq_note : '')}/>
         <Cell label="ψ_PM" value={s.psi_pm_Wb != null ? fmt(s.psi_pm_Wb * 1000, 2) : '—'} unit="mWb"
-          tooltip={'Magnet flux linkage (phase, peak) measured at I = 0 — one cheap no-load solve, cached per geometry. The PM term of ψd = ψ_PM + Ld·i_d.'}/>
+          tooltip={'Magnet flux linkage (phase, peak) measured at I = 0 — one cheap no-load solve, cached per geometry. The PM term of ψd = ψ_PM + Ld·i_d.'
+            + (s.psi_pm_frozen_Wb != null
+              ? ` In the LOADED iron the magnets link ${fmt(s.psi_pm_frozen_Wb * 1000, 2)} mWb (${fmt(-(s.psi_pm_sag_pct ?? 0), 1)}%) — measured on the same frozen-permeability solve as Ld/Lq. That difference is what the old chord Ld divided by i_d and called an inductance.`
+              : '')}/>
         {s.B_gap_mean_T != null && (
           <Cell label="B gap mean" value={fmt(s.B_gap_mean_T, 3)} unit="T"
             tooltip={'Mean |B| over the AIR-GAP clearance, averaged over the electrical period. Area-weighted over the elements between the outermost rotating metal and the stator bore — a mean of the field, not of the mesh. It is the whole gap under load, magnet flux and armature reaction together, so it is not the no-load fundamental B_g1 a sizing formula asks for.'}/>
@@ -1503,8 +1526,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           value={s.saliency_Lq_over_Ld != null ? fmt(s.saliency_Lq_over_Ld, 2)
             : (s.bench_ldq?.Lq_over_Ld != null ? fmt(s.bench_ldq.Lq_over_Ld, 2) : '—')}
           tooltip={(s.saliency_Lq_over_Ld != null
-            ? 'Saliency at this load point (chord frame). The dq frame behind these cells is self-checked every run: T = 1.5·p·(ψd·iq − ψq·id) must reproduce the energy-method torque, or the inductances are withheld rather than shown wrong.'
-            : 'Saliency from the BENCH (small-signal) frame — both axes measured the LCR way at I≈0, so the ratio is cross-saturation-free. The loaded chord ratio needs γ ≥ ~6°.')}/>
+            ? 'Saliency at this load point, from the two INCREMENTAL inductances (frozen permeability). The dq frame behind these cells is self-checked every run: T = 1.5·p·(ψd·iq − ψq·id) must reproduce the energy-method torque, or the inductances are withheld rather than shown wrong.'
+            : 'Saliency from the BENCH (small-signal) frame — both axes measured the LCR way at I≈0, so the ratio is cross-saturation-free.')}/>
       </Box>
       )}
 

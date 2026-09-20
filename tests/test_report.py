@@ -2774,16 +2774,25 @@ class TestTheRestOfThe20260914Pass:
         assert "2 run(s)" in a and "converged" in a
         assert "1 run(s)" in b and "one thermal map" in b
 
-    def test_c6_the_inductances_carry_the_chord_caveat(self):
+    def test_c6_the_inductances_name_their_method_and_show_the_chord(self):
+        """C6 asked for the extraction to be named; since 2026-09-20 the rows
+        are the INCREMENTAL (frozen-permeability) values and the chord they
+        replaced appears inside the note, as a comparison, never as "Ld"."""
         from motor_ai_sim import report as R
 
         notes = dict((r[0], r[2]) for r in R.em_constant_rows(
-            {"Ld_mH": 0.0694, "Lq_mH": 0.0524, "gamma_deg": 15.0}))
-        assert "CHORD extraction" in notes["Ld"]
-        assert "CHORD extraction" in notes["Lq"]
+            {"Ld_mH": 0.0798, "Lq_mH": 0.0835, "gamma_deg": -15.0,
+             "ldq_method": "frozen-permeability incremental at the point",
+             "Ld_chord_mH": 0.0396, "Lq_chord_mH": 0.0648}))
+        for ax in ("Ld", "Lq"):
+            assert "incremental (frozen permeability)" in notes[ax], notes[ax]
+            assert "gamma = -15" in notes[ax]
+        assert "0.0396 mH" in notes["Ld"] and "not an inductance" in notes["Ld"]
+        assert "0.0648 mH" in notes["Lq"]
+        # a run with neither: the note says nothing it cannot support
         flat = dict((r[0], r[2]) for r in R.em_constant_rows(
             {"Ld_mH": 0.0694, "gamma_deg": 0.0}))
-        assert "CHORD" not in flat["Ld"]
+        assert "chord" not in flat["Ld"] and "gamma" not in flat["Ld"]
 
     def test_d1_and_d2_the_sleeve_eddy_is_one_decimal(self):
         from motor_ai_sim import report as R
@@ -3588,19 +3597,24 @@ class TestAuditV3:
 
     # ── MJ-7 · Lq gets its own note ─────────────────────────────────────────
     def test_the_q_axis_row_does_not_carry_the_d_axis_sentence(self):
+        """Each axis says what its OWN comparison is.  (The 2026-09-14 form of
+        this was a shared chord caveat; the rows now print the incremental
+        values and each quotes its own chord.)"""
         from motor_ai_sim import report as R
 
         rows = {r[0]: r for r in R.em_constant_rows(
-            {"Ld_mH": 0.0405, "Lq_mH": 0.0495, "gamma_deg": 15.0})}
+            {"Ld_mH": 0.0405, "Lq_mH": 0.0495, "gamma_deg": 15.0,
+             "ldq_method": "frozen-permeability incremental at the point",
+             "Ld_chord_mH": 0.0976, "Lq_chord_mH": 0.0693})}
         ld, lq = rows["Ld"][2], rows["Lq"][2]
-        assert "CHORD extraction at gamma = 15" in ld
-        assert "CHORD extraction at gamma = 15" in lq
-        assert "already carries this current's saturation" not in ld
-        assert "already carries this current's saturation" in lq
-        # at gamma ~ 0 there is no chord to caveat
+        assert "gamma = 15" in ld and "gamma = 15" in lq
+        assert "(Psi_d - Psi_PM)/i_d" in ld
+        assert "(Psi_d - Psi_PM)/i_d" not in lq
+        assert "Psi_q/i_q" in lq
+        # with no chord stored there is nothing to compare against
         plain = {r[0]: r for r in R.em_constant_rows(
             {"Ld_mH": 0.04, "Lq_mH": 0.05, "gamma_deg": 0.0})}
-        assert "CHORD" not in plain["Lq"][2]
+        assert "chord" not in plain["Lq"][2]
 
     # ── CS-5 / CS-6 / CS-11 · the small ones ────────────────────────────────
     def test_the_symbols_and_the_units_survive(self):

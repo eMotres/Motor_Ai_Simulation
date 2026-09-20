@@ -1408,7 +1408,58 @@ def _cold_constants_step(body: Dict[str, Any], *, rpm: float, drive: str,
         return None
     finally:
         _BACKGROUND_RUN.reset(tok)
-    return _cold_constants(em, body=body, rpm=rpm, drive=drive)
+    blk = _cold_constants(em, body=body, rpm=rpm, drive=drive)
+    if blk is not None:
+        blk.update(_cold_ldq0(em, body) or {})
+    return blk
+
+
+def _cold_ldq0(em: Dict[str, Any],
+               body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """CATALOGUE Ld / Lq: incremental, at i = 0, at 20 °C — never raising.
+
+    The owner's rule of 2026-09-20: *«Ld/Lq нужно указывать тоже для 20
+    градусов и без тока, как для KV»*.  KV is a no-load constant at a stated
+    temperature; so are the inductances a control engineer sizes a loop with,
+    and a catalogue that quotes one at no load and the other at 600 A is
+    comparing two different machines.  The LOADED point's own inductances stay
+    where they are — in the run's summary, incremental, at that point.
+
+    One extra cheap no-load solve per duty (the ψ_PM calibration knobs), cached
+    on disk per geometry/winding/magnet temperature, so a re-run of the same
+    machine pays nothing.
+    """
+    from motor_ai_sim.routes._validation import parse_geo_override
+    from motor_ai_sim.routes.simulation import catalogue_ldq0
+
+    s = dict((em or {}).get("summary") or {})
+    if s.get("daxis_deg") is None:
+        return None
+    try:
+        ov = parse_geo_override(body.get("geo")) or None
+    except Exception:   # noqa: BLE001 — the live machine, then
+        ov = None
+    blk = catalogue_ldq0(ov, daxis_deg=float(s["daxis_deg"]),
+                         connection=(str(s.get("connection") or "") or None),
+                         magnet_temp_c=COLD_CONSTANTS_C)
+    if not blk or blk.get("Ld_mH") is None:
+        return None
+    _ld, _lq = float(blk["Ld_mH"]), float(blk["Lq_mH"])
+    return {
+        "Ld0_mH": round(_ld, 4),
+        "Lq0_mH": round(_lq, 4),
+        "Ldq0_mH": (None if blk.get("Ldq_mH") is None
+                    else round(float(blk["Ldq_mH"]), 4)),
+        "saliency0_Lq_over_Ld": (round(_lq / _ld, 3) if abs(_ld) > 1e-9
+                                 else None),
+        "ldq0_method": ("frozen-permeability incremental at i=0, %g °C"
+                        % COLD_CONSTANTS_C),
+        # The probe's own self-checks, kept: `spread_pct` is how much L(θ)
+        # moves with rotor position (these are the average of four positions),
+        # `reciprocity_pct` the asymmetry of a matrix that must be symmetric.
+        "ldq0_spread_pct": blk.get("spread_pct"),
+        "ldq0_reciprocity_pct": blk.get("reciprocity_pct"),
+    }
 
 
 def _limited_block(time_to_limit: Optional[Dict[str, Any]],

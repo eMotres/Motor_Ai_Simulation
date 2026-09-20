@@ -1418,6 +1418,26 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         one("Km per mass at 20 °C (N·m/(√W·kg))",
             _c20.get("km_per_mass_Nm_sqrtW_kg"),
             "the figure of merit that survives scaling; " + _tail20, 4)
+        # …AND THE INDUCTANCES ON THE SAME BASIS (owner 2026-09-20: *«Ld/Lq
+        # нужно указывать тоже для 20 градусов и без тока, как для KV»*).  KV
+        # is a no-load constant at a stated temperature; a catalogue that
+        # quotes the inductances at 600 A beside it is comparing two different
+        # machines.  Incremental (∂ψ/∂i at the no-load iron state), never a
+        # loaded chord.
+        _ld0, _lq0 = _c20.get("Ld0_mH"), _c20.get("Lq0_mH")
+        if _ld0 is not None:
+            _tail0 = ("incremental (frozen permeability) at zero current and "
+                      "20 °C — the same basis as KV above, which is what makes "
+                      "the two comparable between machines")
+            one("Ld at 20 °C, no load (mH)" + (" — winding" if _delta else ""),
+                _ld0, _tail0, 4)
+            one("Lq at 20 °C, no load (mH)" + (" — winding" if _delta else ""),
+                _lq0, _tail0, 4)
+            if _lq0 and float(_ld0):
+                one("Saliency Lq / Ld at 20 °C",
+                    float(_lq0) / float(_ld0),
+                    "how far the two axes differ at no load — the further from "
+                    "1, the more reluctance torque is available", 3)
     # resistance and the temperature it belongs to must come from the SAME duty
     _rd = next((d for d in duties if _g(d, "summary.R_phase_ohm")), None)
     r_phase = _g(_rd, "summary.R_phase_ohm") if _rd else None
@@ -1437,8 +1457,9 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                 "quotes for a delta machine", 2)
     # Two different inductances get quoted for the same machine and mixing them
     # up is the classic datasheet error: the BENCH pair is the small-signal
-    # value an LCR meter reads at I≈0, the LOADED pair is the chord value at the
-    # duty's own iron state.  Both are stated, each labelled with its own basis.
+    # value an LCR meter reads at I≈0, the LOADED pair is the incremental
+    # (frozen-permeability) value at the duty's own iron state.  Both are
+    # stated, each labelled with its own basis.
     bench = next((_g(d, "summary.bench_ldq") for d in duties
                   if _g(d, "summary.bench_ldq")), None) or \
         (((passport or {}).get("passport") or {}).get("ldq0") if passport else None)

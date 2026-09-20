@@ -1011,6 +1011,59 @@ def _fit_box_aspect(ax, x_min: float, x_max: float, y_min: float, y_max: float
     return x_min, x_max, y_min, y_max
 
 
+def _text_px_width(fig, s: str, fontsize: float, family: Optional[str] = None) -> float:
+    """The REAL rendered pixel width of ``s`` at ``fontsize`` (points) on
+    ``fig`` — measured via the renderer (the same technique ``_draw_legend``
+    already uses for its own column fit), not an assumed points-per-
+    character constant. A guessed constant is what let the first pass of
+    this fix still clip the longest escaped names (``rotor_inner_radius``,
+    18 characters) off the page's own left edge — right for the SHORT
+    names, not enough for the long ones."""
+    t = fig.text(0, 0, s, fontsize=fontsize, family=family, alpha=0)
+    w = t.get_window_extent(renderer=fig.canvas.get_renderer()).width
+    t.remove()
+    return w
+
+
+def _min_half_for_escaped_labels(fig, box_px_w: float, box_px_h: float,
+                                  specs: Sequence[Tuple[float, float, float, str]]
+                                  ) -> float:
+    """The smallest symmetric ``half`` (a square ``[-half, half]`` data
+    range in both x and y) that keeps every one of ``specs`` — each
+    ``(anchor_r, angle_deg, fontsize, text)`` an escaped label anchored at
+    polar ``(anchor_r, angle_deg)``, text growing AWAY from the origin on
+    whichever side its ``ha`` (left/right, i.e. ``cos(angle) >= 0`` picks
+    left) lands — fully on the page, given this axes' box is ``box_px_w`` x
+    ``box_px_h`` PIXELS (fixed, independent of ``half``: a bigger ``half``
+    only means those same pixels cover more data-mm, so a label's real
+    (fixed, point-sized) pixel width needs proportionally MORE data-mm to
+    draw, not less — the two are coupled, hence solving for ``half``
+    directly rather than picking a margin by feel).
+
+    For one label: pixel-width ``w`` maps to data-mm ``w * (2*half) /
+    box_px`` at the eventual scale: this must fit within ``half`` measured
+    from the anchor's OWN reach along that axis. ``half >= |anchor| / (1 -
+    2*w/box_px)`` — solved in closed form (``box_px`` does not depend on
+    ``half``), not iterated.
+    """
+    half = 0.0
+    for anchor_r, angle_deg, fontsize, text in specs:
+        a = math.radians(angle_deg)
+        cos_a, sin_a = math.cos(a), math.sin(a)
+        w_px = _text_px_width(fig, text, fontsize, _MONO)
+        for reach_along, box_px in ((abs(cos_a), box_px_w), (abs(sin_a), box_px_h)):
+            if reach_along < 1e-6:
+                continue
+            k = 2.0 * w_px / box_px
+            if k >= 0.92:      # this one label alone would need more than
+                k = 0.92       # the whole box — cap so the formula still
+                                # returns a (very generous) finite answer
+                                # instead of blowing up/going negative.
+            req = (anchor_r * reach_along) / (1.0 - k)
+            half = max(half, req)
+    return half
+
+
 def _draw_ring_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set, *,
                       big: bool = False) -> None:
     """Full-ring diagram.
@@ -1026,16 +1079,21 @@ def _draw_ring_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: se
     / shaft_height point at nothing"). Draws every region the sector page
     draws (``_draw_regions`` — stator slots+coils, rotor poles+magnets,
     sleeve, shaft) at the SAME light fills, fills the whole allotted box
-    (``_fit_box_aspect``), and letters SEVEN radial quantities, each its own
-    angle 360/7 apart, its own thin dashed reference circle, and its name in
-    a white box — outside the ring for the coarse OD-type quantities
-    (escaping past the ring on the SAME angle's leader, ``_dim_radial``'s
-    ``r_label``), inside the blank bore around the shaft for the two that
-    sit close to the axis (rotor_inner_radius, shaft_height — the small
-    inset's actual bug: it dimensioned "shaft_height" from the ORIGIN out to
-    rotor_inner_radius, not the shaft's own span) — plus two informational
-    grey radii (magnet OD, sleeve OD) that only the gap-zone callout
-    otherwise letters.
+    (``_fit_box_aspect``), and letters SEVEN radial quantities — ONE rule
+    for all six non-diameter ones (owner's second correction, same day:
+    "every radius must have its own arrow from the axis to its circle...
+    name outside on a short leader" — an earlier pass had rotor_inner_radius
+    /shaft_height escape their names into the blank bore instead, which
+    read as "no arrow" even though one was drawn): each its own angle
+    360/7 apart, a real ``ax.annotate`` double-arrow from the origin out to
+    its own circle (``_dim_radial``), its own thin dashed reference circle,
+    and its name in a white box just outside the ring on the SAME angle's
+    short leader (``r_label``). ``stator_diameter`` alone keeps the
+    through-axis DIAMETER line. ``shaft_height``'s own circle is the
+    shaft's true OD (rotor_inner_radius minus shaft_height) — a separate,
+    smaller circle from rotor_inner_radius's own, right next to it. Plus
+    two informational grey radii (magnet OD, sleeve OD) that only the
+    gap-zone callout otherwise letters.
     """
     ax.set_aspect("equal")
     ax.axis("off")
@@ -1190,34 +1248,60 @@ def _draw_ring_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: se
                     fontsize=fs * 0.72, color="#999999")
         _dash(sleeve_od, color="#999999")
 
-    # ── 6-7. the two quantities close to the axis — the arrow still spans
-    # the REAL feature (shaft_height is the shaft's own annulus, shaft_id_r
-    # -> shaft_od_r, NOT the origin -> rotor_inner_radius the small inset
-    # used to draw), but the NAME sits close to the axis, in the blank bore
-    # around the shaft, instead of escaping past the OD on a leader that
-    # would have to cross the whole rotor+stator body to reach open page. ──
+    # ── 6-7. the two quantities close to the axis — SAME convention as
+    # every other radius here (owner's correction, 2026-09-20: "every radius
+    # must have its own arrow from the axis to its circle... name outside
+    # on a short leader" — the earlier "name inside the blank bore" reading
+    # was one placement style too many; one rule for all six non-diameter
+    # dimensions is simpler and matches what was actually asked for).
+    # shaft_height's OWN circle is the shaft's true OD (shaft_id_r,
+    # rotor_inner_radius minus shaft_height) — not rotor_inner_radius
+    # itself, which is a SEPARATE dimension right next to it.
     if r_rir is not None:
         _dim_radial(ax, 0, r_rir, A_RIR,
                     _label("rotor_inner_radius", geo.get("rotor_inner_radius"), "mm", "float"),
-                    fontsize=fs * 0.62, color="#3a2e66")
+                    r_label=r_lbl, fontsize=fs * 0.8, color="#3a2e66")
         _dash(r_rir, color="#3a2e66")
         drawn.add("rotor_inner_radius")
 
-    if shaft_id_r is not None and shaft_od_r is not None:
-        _dim_radial(ax, shaft_id_r, shaft_od_r, A_SHAFT,
+    if shaft_id_r is not None:
+        _dim_radial(ax, 0, shaft_id_r, A_SHAFT,
                     _label("shaft_height", geo.get("shaft_height"), "mm", "float"),
-                    fontsize=fs * 0.62, color="#3a2e66")
+                    r_label=r_lbl, fontsize=fs * 0.8, color="#3a2e66")
         _dash(shaft_id_r, color="#3a2e66")
         drawn.add("shaft_height")
 
-    # ── fill the allotted box. text_room is a fixed margin past r_lbl for
-    # the escaped names themselves (30pt text needs real room); the SHORTER
-    # axis is then padded to this axes' own box shape (``_fit_box_aspect``)
-    # instead of a flat symmetric multiplier that wastes whatever the box's
-    # aspect ratio did not need — the actual fix for "occupies ~25% of the
-    # page in a sea of white".
-    text_room = r_out * 0.32
-    half = r_lbl + text_room
+    # ── fill the allotted box. ``half`` is SOLVED, not guessed: a fixed
+    # text_room multiplier was enough for the short escaped names but let
+    # the longest one (rotor_inner_radius, 18 characters) run flush off the
+    # page's own left edge (owner's report, this same pass) — measure every
+    # escaped label's REAL rendered pixel width and solve for the smallest
+    # symmetric half that keeps all of them on the page
+    # (``_min_half_for_escaped_labels``). The SHORTER axis is then padded to
+    # this axes' own box shape (``_fit_box_aspect``) — the fix for
+    # "occupies ~25% of the page in a sea of white".
+    _bb = ax.get_position()
+    _fw, _fh = ax.figure.get_size_inches()
+    _dpi = ax.figure.dpi
+    box_px_w, box_px_h = _bb.width * _fw * _dpi, _bb.height * _fh * _dpi
+    label_specs: List[Tuple[float, float, float, str]] = [
+        (r_lbl, A_BORE, fs, _label("stator_inner_radius", geo.get("stator_inner_radius"), "mm", "float")),
+    ]
+    if r_ror is not None:
+        label_specs.append((r_lbl, A_ROR, fs,
+                             _label("rotor_outer_radius", geo.get("rotor_outer_radius"), "mm", "float")))
+    if magnet_od is not None:
+        label_specs.append((r_lbl, A_MAG_OD, fs * 0.72, "magnet OD"))
+    if sleeve_od is not None:
+        label_specs.append((r_lbl, A_SLEEVE_OD, fs * 0.72, "sleeve OD"))
+    if r_rir is not None:
+        label_specs.append((r_lbl, A_RIR, fs * 0.8,
+                             _label("rotor_inner_radius", geo.get("rotor_inner_radius"), "mm", "float")))
+    if shaft_id_r is not None:
+        label_specs.append((r_lbl, A_SHAFT, fs * 0.8,
+                             _label("shaft_height", geo.get("shaft_height"), "mm", "float")))
+    half = max(r_out * 1.05,
+               _min_half_for_escaped_labels(ax.figure, box_px_w, box_px_h, label_specs) * 1.06)
     x_min, x_max, y_min, y_max = _fit_box_aspect(ax, -half, half, -half, half)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
@@ -1247,6 +1331,11 @@ def _draw_gap_callout(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: s
     ax.set_title("Air gap zone, enlarged", fontsize=28, color="#333333",
                  fontweight="bold", pad=14)
 
+    _bb = ax.get_position()
+    _fw, _fh = ax.figure.get_size_inches()
+    _dpi = ax.figure.dpi
+    box_px_w, box_px_h = _bb.width * _fw * _dpi, _bb.height * _fh * _dpi
+
     stator_span = _radial_span(regions.get("stator"))
     rotor_span = _radial_span(regions.get("rotor"))
     sleeve_span = _radial_span(regions.get("sleeve")) if regions.get("sleeve") is not None else None
@@ -1266,8 +1355,8 @@ def _draw_gap_callout(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: s
                             # owner's ask ("a magnified wedge, say 25 deg");
                             # the radial extent below is what makes it look
                             # zoomed-in rather than a thin arc ribbon.
-    r_in = magnet_top_r * 0.75
-    r_out = bore_r * 1.30
+    r_in = magnet_top_r * 0.85
+    r_out = bore_r * 1.20
 
     # Coloured bands — the SAME styling as the sector/ring, purely for
     # orientation (which band is rotor iron, which is the sleeve, which is
@@ -1288,65 +1377,104 @@ def _draw_gap_callout(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: s
                                    color="black", lw=1.3, zorder=5))
 
     # Three angles across the wedge for the three dimensions — the ARROWS at
-    # a0/a1/mid so each sits on its own feature; the LABELS escape at
-    # DIFFERENT radii (near/far/near), not one shared ring, because at only
-    # a 25-degree wedge all three escape almost straight up regardless of
-    # angle and would otherwise collide (the a_up/a_sl mid-point, sleeve_
-    # thickness, sat almost exactly where magnet_up_gap's own label landed
-    # when magnet_up_gap happens to be ~0 on this motor — a zero-length
-    # arrow, same radius as sleeve_thickness's own start).
+    # a0/a1/mid so each sits on its own feature, close together (a 25-degree
+    # wedge leaves no room to spread them apart angularly). The LABELS
+    # therefore do NOT follow their own arrow's angle out to a shared escape
+    # ring (owner, 2026-09-20, second pass: that read as a "~5% of the page"
+    # wedge drowned in a huge label margin) — each gets its own short,
+    # explicitly-placed leader (``_leader``) landing close to the wedge, at
+    # a DIFFERENT clock position, so the three stay legible without needing
+    # a large surrounding margin to fit them.
     a_up, a_sl, a_gap = a0, (a0 + a1) / 2.0, a1
-    r_lbl_side = r_out * 1.42
-    r_lbl_mid = r_out * 1.95
 
-    _dim_radial(ax, magnet_top_r, rotor_span[1], a_up,
-                _label("magnet_up_gap", geo.get("magnet_up_gap"), "mm", "float"),
-                r_label=r_lbl_side, fontsize=26)
+    def _mid(r0: float, r1: float, ang: float) -> Tuple[float, float]:
+        a = math.radians(ang)
+        return (((r0 + r1) / 2.0) * math.cos(a), ((r0 + r1) / 2.0) * math.sin(a))
+
+    up_mid = _mid(magnet_top_r, rotor_span[1], a_up)
+    sl_mid = _mid(rotor_span[1], sleeve_or, a_sl) if sleeve_span else None
+    gap_mid = _mid(magnet_top_r, bore_r, a_gap)
+
+    _dim_radial(ax, magnet_top_r, rotor_span[1], a_up, "", fontsize=1)
     drawn.add("magnet_up_gap")
     if sleeve_span:
-        _dim_radial(ax, rotor_span[1], sleeve_or, a_sl,
-                    _label("sleeve_thickness", sleeve_t, "mm", "float"),
-                    r_label=r_lbl_mid, fontsize=26)
+        _dim_radial(ax, rotor_span[1], sleeve_or, a_sl, "", fontsize=1)
         drawn.add("sleeve_thickness")
     # air_gap — magnet OD to bore: the MAGNETIC gap (owner's spec), not just
     # the sleeve-OD-to-bore open-air sliver (the two coincide only when
     # magnet_up_gap is 0) — includes the sleeve, same as the schema value.
-    _dim_radial(ax, magnet_top_r, bore_r, a_gap,
-                _label("air_gap", geo.get("air_gap"), "mm", "float"),
-                r_label=r_lbl_side, fontsize=26)
+    _dim_radial(ax, magnet_top_r, bore_r, a_gap, "", fontsize=1)
     drawn.add("air_gap")
 
-    # Which circle is which — short plain leaders, no schema key (these are
-    # real geometry radii, not separate dimension arrows of their own; each
-    # IS one of the 7 radii on the main radii picture).
-    label_pts: List[Tuple[float, float]] = []
-    for r, name, ang in ((magnet_top_r, "magnet OD", a0 - 20),
-                         (sleeve_or if sleeve_span else rotor_span[1],
-                          "sleeve OD" if sleeve_span else "rotor OD", a0 - 8),
-                         (bore_r, "bore (stator_inner_radius)", a1 + 16)):
-        p = (r * math.cos(math.radians(ang)), r * math.sin(math.radians(ang)))
-        out = (r_out * 1.2 * math.cos(math.radians(ang)), r_out * 1.2 * math.sin(math.radians(ang)))
-        label_pts.append(out)
+    # Short leaders, close in, one per clock position, SMALL font (this
+    # panel is itself a zoom — a name here does not need the ring's 26-30pt;
+    # keeping it small is what lets it sit close, which is what keeps the
+    # panel's own data range small, which is what makes the wedge's px
+    # height big at a fixed box size — the three are coupled, and a big
+    # font here was fighting the "wedge fills its box" ask directly).
+    lbl_fs = 13
+    text_specs: List[Tuple[float, float, str, float, str]] = []   # (x, y, text, fontsize, ha)
+    for mid, ang, lbl_r_mul, text in (
+            (up_mid, a0 - 10.0, 1.10, _label("magnet_up_gap", geo.get("magnet_up_gap"), "mm", "float")),
+            (sl_mid, 90.0, 1.35, _label("sleeve_thickness", sleeve_t, "mm", "float")) if sl_mid else (None, 0, 0, ""),
+            (gap_mid, a1 + 10.0, 1.10, _label("air_gap", geo.get("air_gap"), "mm", "float"))):
+        if mid is None:
+            continue
+        lbl_r = r_out * lbl_r_mul
+        p_txt = (lbl_r * math.cos(math.radians(ang)), lbl_r * math.sin(math.radians(ang)))
         ha = "left" if math.cos(math.radians(ang)) >= 0 else "right"
-        ax.annotate(name, xy=p, xytext=out, fontsize=18, family=_MONO,
+        text_specs.append((p_txt[0], p_txt[1], text, lbl_fs, ha))
+        _leader(ax, mid, p_txt, text, fontsize=lbl_fs, ha=ha)
+
+    # Which circle is which — short plain leaders, close in, no schema key
+    # (these are real geometry radii, not separate dimension arrows of
+    # their own; each IS one of the 7 radii on the main radii picture) —
+    # short names so the leader stays close to the wedge.
+    circle_fs = 10
+    for r, name, ang in ((magnet_top_r, "magnet OD", a0 - 6),
+                         (sleeve_or if sleeve_span else rotor_span[1],
+                          "sleeve OD" if sleeve_span else "rotor OD", a0 - 2),
+                         (bore_r, "bore", a1 + 4)):
+        p = (r * math.cos(math.radians(ang)), r * math.sin(math.radians(ang)))
+        out = (r_out * 1.02 * math.cos(math.radians(ang)), r_out * 1.02 * math.sin(math.radians(ang)))
+        ha = "left" if math.cos(math.radians(ang)) >= 0 else "right"
+        text_specs.append((out[0], out[1], name, circle_fs, ha))
+        ax.annotate(name, xy=p, xytext=out, fontsize=circle_fs, family=_MONO,
                     color="#333333", ha=ha, va="center",
                     arrowprops=dict(arrowstyle="-", color="#888888", lw=0.7, shrinkA=0, shrinkB=2),
-                    bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.9))
+                    bbox=dict(boxstyle="round,pad=0.1", fc="white", ec="none", alpha=0.9))
 
     # Fill the allotted box (35% page width x 50% height, ``build_dimension_
-    # sheet``'s add_axes call) instead of leaving the wedge tiny in a mostly
-    # empty panel — collect every point this function actually placed
-    # (wedge corners, the 3 staggered dimension labels, the 3 "which circle"
-    # leaders) and fit THAT bounding box to the box's own aspect ratio.
-    xs: List[float] = list(x for x, _y in label_pts)
-    ys: List[float] = list(y for _x, y in label_pts)
-    for r in (r_in, r_out, r_lbl_side, r_lbl_mid):
-        for ang in (a0, a1, a_up, a_sl, a_gap):
+    # sheet``'s add_axes call) — SOLVED, not guessed (owner, 2026-09-20,
+    # second pass: "the wedge occupies ~5% of the page" with the old flat
+    # text-pad multiplier). The content here is NOT the ring's symmetric
+    # circle — it is a wedge that sits almost entirely above the origin, so
+    # a symmetric +-half box (the ring's own approach) would waste the
+    # whole bottom half as blank margin; instead, a few fixed-point passes
+    # (each label's REAL rendered pixel width, converted to data-mm at the
+    # PREVIOUS pass's scale, extends the tight anchor-only bounding box)
+    # converge on the smallest box that still contains every label's own
+    # text — this also directly targets the "sleeve/gap band >= 40 px"
+    # requirement, since a smaller final box means MORE px per mm.
+    anchor_xs = [x for x, _y, _t, _f, _h in text_specs]
+    anchor_ys = [y for _x, y, _t, _f, _h in text_specs]
+    for r in (r_in, r_out):
+        for ang in (a0, a1):
             a = math.radians(ang)
-            xs.append(r * math.cos(a)); ys.append(r * math.sin(a))
-    text_pad = r_out * 0.30   # room for the label text itself past its anchor
-    x_min, x_max = min(xs) - text_pad, max(xs) + text_pad
-    y_min, y_max = min(ys) - text_pad * 0.5, max(ys) + text_pad * 0.5
+            anchor_xs.append(r * math.cos(a)); anchor_ys.append(r * math.sin(a))
+    x_min, x_max = min(anchor_xs), max(anchor_xs)
+    y_min, y_max = min(anchor_ys), max(anchor_ys)
+    y_height_pad = (r_out - r_in) * 0.10   # a little headroom for a label's own text HEIGHT
+                                             # (the loop below only accounts for its WIDTH)
+    for _ in range(3):
+        fx_min, fx_max, _fy_min, _fy_max = _fit_box_aspect(ax, x_min, x_max, y_min, y_max)
+        ratio_x = box_px_w / max(fx_max - fx_min, 1e-6)
+        xs2 = list(anchor_xs)
+        for tx, _ty, text, tfs, ha in text_specs:
+            w_mm = _text_px_width(ax.figure, text, tfs, _MONO) / ratio_x
+            xs2.append(tx + w_mm if ha == "left" else tx - w_mm)
+        x_min, x_max = min(xs2), max(xs2)
+    y_min, y_max = min(anchor_ys) - y_height_pad, max(anchor_ys) + y_height_pad
     x_min, x_max, y_min, y_max = _fit_box_aspect(ax, x_min, x_max, y_min, y_max)
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
@@ -1632,7 +1760,11 @@ def build_dimension_sheet(geo: Dict[str, Any], schema: Dict[str, dict],
             # what left the callout looking tiny relative to its own,
             # mostly-empty panel).
             fig = plt.figure(figsize=(30.0, 20.0), facecolor="white")
-            ax_ring = fig.add_axes((0.01, 0.03, 0.60, 0.85))
+            # left=0.03 (not 0.01) — a rotor_inner_radius label escaping
+            # toward the lower-left used to run flush off the page's own
+            # left edge with only a 1% margin; 3% gives its text room to
+            # sit fully on-page without shrinking the ring's own width.
+            ax_ring = fig.add_axes((0.03, 0.03, 0.585, 0.85))
             ax_gap = fig.add_axes((0.635, 0.24, 0.345, 0.50))
 
             try:

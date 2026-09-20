@@ -84,6 +84,78 @@ def test_radii_page_keys_are_on_the_radii_picture():
     assert not missing, f"radii-page key(s) missing from the picture: {missing}"
 
 
+#: The ring's own SEVEN radial-dimension names (owner, 2026-09-20 — the
+#: "featureless grey disc" ring was redone to letter every radius/diameter
+#: on the ring itself; the gap-zone quantities above are already covered by
+#: ``_RADII_PAGE_KEYS`` and drawn on the CALLOUT, not the ring). "magnet OD"
+#: / "sleeve OD" are informational-only (grey, no schema key of their own).
+_RADII_RING_NAMES = ("stator_diameter", "stator_inner_radius", "rotor_outer_radius",
+                     "rotor_inner_radius", "shaft_height", "magnet OD", "sleeve OD")
+
+
+def test_radii_ring_has_all_seven_names_and_is_not_tiny():
+    """Regression for the owner's own complaint about an earlier pass: "the
+    ring occupies ~25% of the page in a sea of white" and "the rotor is a
+    featureless grey disc". Checks the REAL rendered artifact two ways:
+    every one of the ring's seven names is actual SVG text, and the ring's
+    own filled drawing (not the callout, not the page titles) spans at
+    least half the page's width — not just that xlim/ylim were SET to some
+    value, which would not catch a page that is mostly blank margin around
+    a small ring."""
+    import io
+
+    import numpy as np
+    import matplotlib.image as mpimg
+
+    from motor_ai_sim.routes._validation import SCHEMA_FALLBACK
+
+    cfg = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
+    schema = {k: dict(v) for k, v in (cfg.get("geometry_schema") or {}).items()}
+    for k, v in SCHEMA_FALLBACK.items():
+        schema.setdefault(k, dict(v))
+    groups_cfg = cfg.get("parameter_groups", {}) or {}
+    groups = sorted(
+        [{"id": gid, "label": meta.get("label", gid.title()), "order": meta.get("order", 99)}
+         for gid, meta in groups_cfg.items()],
+        key=lambda g: g["order"])
+
+    die_path = _ROOT / "config" / "dies" / "CIANO10 200 opt" / "die.yaml"
+    duty_path = _ROOT / "config" / "dies" / "CIANO10 200 opt" / "L155 motor.yaml"
+    die = yaml.safe_load(die_path.read_text(encoding="utf-8"))
+    duty = yaml.safe_load(duty_path.read_text(encoding="utf-8"))
+    full_geo = {**die["geometry"], **(duty.get("geometry_overrides") or {})}
+    geo = MotorGeometryParams(full_geo, {}).to_dict()
+
+    svg = build_dimension_sheet(geo, schema, groups, fmt="svg", show_values=False,
+                                 layout="radii", title="t")
+    tree = ET.fromstring(svg)
+    rendered = " ".join(
+        (node.text or "") for node in tree.iter()
+        if node.tag.endswith("}text") or node.tag.endswith("}tspan"))
+    missing = sorted(n for n in _RADII_RING_NAMES if n not in rendered)
+    assert not missing, f"radii ring missing name(s): {missing}"
+
+    png = build_dimension_sheet(geo, schema, groups, fmt="png", show_values=False,
+                                 layout="radii", title="t")
+    arr = mpimg.imread(io.BytesIO(png))
+    h, w = arr.shape[0], arr.shape[1]
+    non_white = (arr[:, :, :3] < 0.92).any(axis=2)
+    ring_col_limit = int(w * 0.62)       # the gap-zone callout lives to the
+                                          # right of this — excluded, this
+                                          # checks the RING's own extent
+    row_start = int(h * 0.12)            # excludes the page/panel titles at
+                                          # the very top, which are not part
+                                          # of "the ring's bounding box"
+    sub = non_white[row_start:, :ring_col_limit]
+    content_cols = np.where(sub.sum(axis=0) > 20)[0]
+    assert content_cols.size > 0, "no ring content found on the radii picture"
+    frac = (content_cols.max() - content_cols.min()) / w
+    assert frac >= 0.50, (
+        f"the radii page's ring bounding box is only {frac:.0%} of the page "
+        f"width (want >= 50%) — it must not shrink back to a small ring in "
+        f"a sea of white")
+
+
 def test_static_svg_is_valid_xml():
     ET.parse(_HELP_SVG)   # raises ParseError on malformed XML
 

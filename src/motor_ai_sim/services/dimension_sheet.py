@@ -984,91 +984,263 @@ def _draw_sector(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set):
     return coil    # the picked conductor — the wire inset zooms into THIS one
 
 
+def _fit_box_aspect(ax, x_min: float, x_max: float, y_min: float, y_max: float
+                     ) -> Tuple[float, float, float, float]:
+    """Pad whichever of (x_min, x_max) / (y_min, y_max) is proportionally too
+    SHORT for this axes' own allotted box (its gridspec/``add_axes``
+    position times the figure's own size, i.e. the box's real on-page
+    aspect ratio) — so a square data range dropped into a non-square box
+    still uses the WHOLE box, instead of ``aspect="equal"`` shrinking to the
+    tighter dimension and leaving the rest as dead white margin. Shared by
+    the sector view (``_draw_sector``, inlined there) and the big-ring radii
+    page (``_draw_ring_inset(big=True)``) — this is the actual fix for "the
+    ring occupies ~25% of the page in a sea of white": a flat multiplier on
+    the radius does not adapt to the box's own shape at all."""
+    _bb = ax.get_position()
+    _fw, _fh = ax.figure.get_size_inches()
+    box_aspect = (_bb.width * _fw) / (_bb.height * _fh)
+    nat_x, nat_y = x_max - x_min, y_max - y_min
+    if nat_x / nat_y > box_aspect:
+        want_y = nat_x / box_aspect
+        pad = (want_y - nat_y) / 2.0
+        y_min -= pad; y_max += pad
+    else:
+        want_x = nat_y * box_aspect
+        pad = (want_x - nat_x) / 2.0
+        x_min -= pad; x_max += pad
+    return x_min, x_max, y_min, y_max
+
+
 def _draw_ring_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set, *,
                       big: bool = False) -> None:
-    """Full-ring diagram — the coarse radii/diameters AND shaft_height (the
-    sector has only a sliver of the shaft to hang a dimension off; the full
-    ring has the real thing), each a TRUE polar dimension arrow from the
-    axis (``_dim_radial``) with its name OUTSIDE the ring on a short
-    staggered leader — 5 dimensions at 5 angles 72° apart, so none crosses
-    the ring or another leader. ``big`` — the standalone Radii page's own
-    dominant picture, not the sector page's small corner inset: bigger
-    fonts, more room reserved for them."""
+    """Full-ring diagram.
+
+    ``big=False`` — the sector page's small corner inset: coarse fills only
+    (stator/rotor/shaft/sleeve, no coils/magnets — too small at that scale
+    to letter), 5 radial dimensions from the origin, name outside on a
+    staggered leader.
+
+    ``big=True`` — the standalone Radii page's OWN dominant picture (owner,
+    2026-09-20: the small inset's ring "occupies ~25% of the page in a sea
+    of white" and "the rotor is a featureless grey disc — rotor_inner_radius
+    / shaft_height point at nothing"). Draws every region the sector page
+    draws (``_draw_regions`` — stator slots+coils, rotor poles+magnets,
+    sleeve, shaft) at the SAME light fills, fills the whole allotted box
+    (``_fit_box_aspect``), and letters SEVEN radial quantities, each its own
+    angle 360/7 apart, its own thin dashed reference circle, and its name in
+    a white box — outside the ring for the coarse OD-type quantities
+    (escaping past the ring on the SAME angle's leader, ``_dim_radial``'s
+    ``r_label``), inside the blank bore around the shaft for the two that
+    sit close to the axis (rotor_inner_radius, shaft_height — the small
+    inset's actual bug: it dimensioned "shaft_height" from the ORIGIN out to
+    rotor_inner_radius, not the shaft's own span) — plus two informational
+    grey radii (magnet OD, sleeve OD) that only the gap-zone callout
+    otherwise letters.
+    """
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.set_title("Every diameter / radius" if big else "radii (full ring)",
-                 fontsize=32 if big else 18, color="#333333" if big else "#555555",
-                 pad=14 if big else 6, fontweight="bold" if big else "normal")
     label_fontsize = 26 if big else 22
 
-    for key in ("air_gap", "stator", "rotor"):
-        for p in _poly_patches(regions.get(key), **_PART_STYLE[key]):
+    if not big:
+        ax.set_title("radii (full ring)", fontsize=18, color="#555555", pad=6)
+        for key in ("air_gap", "stator", "rotor"):
+            for p in _poly_patches(regions.get(key), **_PART_STYLE[key]):
+                ax.add_patch(p)
+        for p in _poly_patches(regions.get("shaft"), **_PART_STYLE["shaft"]):
             ax.add_patch(p)
-    for p in _poly_patches(regions.get("shaft"), **_PART_STYLE["shaft"]):
-        ax.add_patch(p)
-    if regions.get("sleeve") is not None:
-        for p in _poly_patches(regions.get("sleeve"), **_PART_STYLE["sleeve"]):
-            ax.add_patch(p)
+        if regions.get("sleeve") is not None:
+            for p in _poly_patches(regions.get("sleeve"), **_PART_STYLE["sleeve"]):
+                ax.add_patch(p)
+
+        stator_span = _radial_span(regions.get("stator"))
+        rotor_span = _radial_span(regions.get("rotor"))
+        shaft_span = _radial_span(regions.get("shaft"))
+        if not stator_span:
+            return
+        r_out = stator_span[1]
+        r_lbl = r_out * 1.55       # where every name lands — one common ring
+                                    # of labels, outside the drawing, so
+                                    # nothing written there can ever overlap
+                                    # the section.
+
+        # Exactly 5 slots, 72 degrees apart.
+        A_OD, A_ID, A_ROR, A_RIR, A_SHAFT = -72, 0, 72, 144, 216
+
+        _dim_radial(ax, 0, stator_span[1], A_OD,
+                    _label("stator_diameter", geo.get("stator_diameter"), "mm", "float"),
+                    r_label=r_lbl, fontsize=label_fontsize)
+        drawn.add("stator_diameter")
+        _dim_radial(ax, 0, stator_span[0], A_ID,
+                    _label("stator_inner_radius", geo.get("stator_inner_radius"), "mm", "float"),
+                    r_label=r_lbl, fontsize=label_fontsize)
+        drawn.add("stator_inner_radius")
+        if rotor_span:
+            _dim_radial(ax, 0, rotor_span[1], A_ROR,
+                        _label("rotor_outer_radius", geo.get("rotor_outer_radius"), "mm", "float"),
+                        r_label=r_lbl, fontsize=label_fontsize)
+            drawn.add("rotor_outer_radius")
+            _dim_radial(ax, 0, max(rotor_span[0], 1.0), A_RIR,
+                        _label("rotor_inner_radius", geo.get("rotor_inner_radius"), "mm", "float"),
+                        r_label=r_lbl, fontsize=label_fontsize)
+            drawn.add("rotor_inner_radius")
+        if shaft_span:
+            _dim_radial(ax, 0, shaft_span[1], A_SHAFT,
+                        _label("shaft_height", geo.get("shaft_height"), "mm", "float"),
+                        r_label=r_lbl, fontsize=label_fontsize)
+            drawn.add("shaft_height")
+
+        lim = r_lbl * 2.0
+        ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim)
+        return
+
+    # ══ big=True — the Radii page's own dominant picture ═══════════════════
+    ax.set_title("Every diameter / radius", fontsize=32, color="#333333",
+                 pad=14, fontweight="bold")
+    _draw_regions(ax, regions)     # full detail — same call the sector page
+                                    # makes: stator (incl. slots+coils),
+                                    # rotor (incl. magnets), sleeve, shaft.
 
     stator_span = _radial_span(regions.get("stator"))
     rotor_span = _radial_span(regions.get("rotor"))
-    shaft_span = _radial_span(regions.get("shaft"))
+    shaft_span = _radial_span(regions.get("shaft"))       # (shaft's own OD, rotor_inner_radius)
+    sleeve_span = _radial_span(regions.get("sleeve")) if regions.get("sleeve") is not None else None
+    magnets = regions.get("magnets") or []
+    magnet_spans = [s for s in (_radial_span(m) for m, _pol in magnets) if s]
+    magnet_od = max(s[1] for s in magnet_spans) if magnet_spans else None
+
     if not stator_span:
+        ax.text(0.5, 0.5, "(no stator region)", transform=ax.transAxes, ha="center")
         return
     r_out = stator_span[1]
-    r_lbl = r_out * 1.55       # where every name lands — one common ring of
-                                # labels, outside the drawing, so nothing
-                                # written there can ever overlap the section.
-                                # Bigger than before — separation between two
-                                # neighbouring labels scales with r_lbl at a
-                                # fixed angular spacing, and the labels
-                                # themselves are now 22pt, ~3x the size.
+    r_bore = stator_span[0]
+    r_ror = rotor_span[1] if rotor_span else None
+    r_rir = rotor_span[0] if rotor_span else None
+    sleeve_od = sleeve_span[1] if sleeve_span else r_ror
+    shaft_od_r = shaft_span[1] if shaft_span else None    # == r_rir, the shaft's outer boundary
+    shaft_id_r = shaft_span[0] if shaft_span else None    # the shaft's own true OD (the circle
+                                                            # "shaft_height" itself actually bounds)
 
-    # Exactly 5 slots, 72 degrees apart — the previous set (-72, -8, 64, 136,
-    # then a "5th slot" typed as -216) was NOT evenly spaced: -216 reduces to
-    # 144 degrees, only 8 degrees from the 136-degree slot right next to it,
-    # so shaft_height's label sat on top of rotor_inner_radius's.
-    A_OD, A_ID, A_ROR, A_RIR, A_SHAFT = -72, 0, 72, 144, 216
+    import matplotlib.patches as mpatches
 
-    _dim_radial(ax, 0, stator_span[1], A_OD,
-                _label("stator_diameter", geo.get("stator_diameter"), "mm", "float"),
-                r_label=r_lbl, fontsize=label_fontsize)
+    def _dash(r: Optional[float], color: str = "#8a8a8a", lw: float = 1.1) -> None:
+        """A thin dashed reference circle — "what the number bounds",
+        independent of the dimension arrow itself (which only marks one
+        angle)."""
+        if r is None or r <= 1e-6:
+            return
+        ax.add_patch(mpatches.Circle((0, 0), r, fill=False, ec=color, lw=lw,
+                                      ls=(0, (4, 3)), zorder=6, alpha=0.85))
+
+    def _pt(r: float, deg: float) -> Tuple[float, float]:
+        a = math.radians(deg)
+        return (r * math.cos(a), r * math.sin(a))
+
+    r_lbl = r_out * 1.10   # where the coarse (outer-style) leaders land, just
+                            # outside the stator OD — TEXT_ROOM (below, in the
+                            # xlim/ylim fit) is the extra page margin reserved
+                            # for the NAME text itself past this point.
+    fs = 30                 # big, per the owner's ask — the ring IS the page
+
+    # 7 angles, evenly spread (360/7 ~= 51.43 deg) so no two leaders/names
+    # can ever land on top of each other regardless of this motor's own
+    # proportions — fixed slots, not derived from which quantity happens to
+    # be numerically bigger or smaller.
+    A_DIAM, A_BORE, A_ROR, A_MAG_OD, A_SLEEVE_OD, A_RIR, A_SHAFT = (
+        90.0, 38.57, -12.86, -64.29, -115.71, 192.86, 141.43)
+
+    # ── 1. stator_diameter — a DIAMETER: one straight arrow across the
+    # WHOLE stator, through the axis (not a radius from the axis to one
+    # edge, like every other quantity here) ─────────────────────────────────
+    p_pos, p_neg = _pt(r_out, A_DIAM), _pt(r_out, A_DIAM + 180.0)
+    ax.annotate("", xy=p_pos, xytext=p_neg, zorder=7,
+                arrowprops=dict(arrowstyle="<->", color="#5c4aa0", lw=1.4,
+                                 shrinkA=0, shrinkB=0))
+    _dash(r_out, color="#5c4aa0", lw=1.4)
+    p_lbl = _pt(r_lbl, A_DIAM)
+    ax.plot([p_pos[0], p_lbl[0]], [p_pos[1], p_lbl[1]], color="#5c4aa0", lw=1.0, zorder=7)
+    ax.text(p_lbl[0], p_lbl[1],
+            _label("stator_diameter", geo.get("stator_diameter"), "mm", "float"),
+            fontsize=fs, family=_MONO, color="#222222", ha="center", va="bottom", zorder=8,
+            bbox=dict(boxstyle="round,pad=0.16", fc="white", ec="none", alpha=0.94))
     drawn.add("stator_diameter")
-    _dim_radial(ax, 0, stator_span[0], A_ID,
+
+    # ── 2-5. the coarse OUTER-style radii — arrow from the axis to the real
+    # edge, dashed reference circle, name escapes past the ring on a short
+    # leader at the SAME angle (``_dim_radial``'s ``r_label``) ─────────────
+    _dim_radial(ax, 0, r_bore, A_BORE,
                 _label("stator_inner_radius", geo.get("stator_inner_radius"), "mm", "float"),
-                r_label=r_lbl, fontsize=label_fontsize)
+                r_label=r_lbl, fontsize=fs, color="#4a8f5c")
+    _dash(r_bore, color="#4a8f5c")
     drawn.add("stator_inner_radius")
-    if rotor_span:
-        _dim_radial(ax, 0, rotor_span[1], A_ROR,
+
+    if r_ror is not None:
+        _dim_radial(ax, 0, r_ror, A_ROR,
                     _label("rotor_outer_radius", geo.get("rotor_outer_radius"), "mm", "float"),
-                    r_label=r_lbl, fontsize=label_fontsize)
+                    r_label=r_lbl, fontsize=fs, color="#a05c00")
+        _dash(r_ror, color="#a05c00")
         drawn.add("rotor_outer_radius")
-        _dim_radial(ax, 0, max(rotor_span[0], 1.0), A_RIR,
+
+    if magnet_od is not None:
+        _dim_radial(ax, 0, magnet_od, A_MAG_OD, "magnet OD", r_label=r_lbl,
+                    fontsize=fs * 0.72, color="#999999")
+        _dash(magnet_od, color="#999999")
+
+    if sleeve_od is not None:
+        _dim_radial(ax, 0, sleeve_od, A_SLEEVE_OD, "sleeve OD", r_label=r_lbl,
+                    fontsize=fs * 0.72, color="#999999")
+        _dash(sleeve_od, color="#999999")
+
+    # ── 6-7. the two quantities close to the axis — the arrow still spans
+    # the REAL feature (shaft_height is the shaft's own annulus, shaft_id_r
+    # -> shaft_od_r, NOT the origin -> rotor_inner_radius the small inset
+    # used to draw), but the NAME sits close to the axis, in the blank bore
+    # around the shaft, instead of escaping past the OD on a leader that
+    # would have to cross the whole rotor+stator body to reach open page. ──
+    if r_rir is not None:
+        _dim_radial(ax, 0, r_rir, A_RIR,
                     _label("rotor_inner_radius", geo.get("rotor_inner_radius"), "mm", "float"),
-                    r_label=r_lbl, fontsize=label_fontsize)
+                    fontsize=fs * 0.62, color="#3a2e66")
+        _dash(r_rir, color="#3a2e66")
         drawn.add("rotor_inner_radius")
-    if shaft_span:
-        _dim_radial(ax, 0, shaft_span[1], A_SHAFT,
+
+    if shaft_id_r is not None and shaft_od_r is not None:
+        _dim_radial(ax, shaft_id_r, shaft_od_r, A_SHAFT,
                     _label("shaft_height", geo.get("shaft_height"), "mm", "float"),
-                    r_label=r_lbl, fontsize=label_fontsize)
+                    fontsize=fs * 0.62, color="#3a2e66")
+        _dash(shaft_id_r, color="#3a2e66")
         drawn.add("shaft_height")
 
-    # Generous — a near-horizontal label grows AWAY from its anchor with
-    # real, non-zero text width; too little margin here let it run past this
-    # axes' own right edge and, since text is not clipped by default, bleed
-    # into the legend column next door.
-    lim = r_lbl * (1.7 if big else 2.0)
-    ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim)
+    # ── fill the allotted box. text_room is a fixed margin past r_lbl for
+    # the escaped names themselves (30pt text needs real room); the SHORTER
+    # axis is then padded to this axes' own box shape (``_fit_box_aspect``)
+    # instead of a flat symmetric multiplier that wastes whatever the box's
+    # aspect ratio did not need — the actual fix for "occupies ~25% of the
+    # page in a sea of white".
+    text_room = r_out * 0.32
+    half = r_lbl + text_room
+    x_min, x_max, y_min, y_max = _fit_box_aspect(ax, -half, half, -half, half)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
 
 
-def _draw_gap_callout(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set) -> None:
-    """A magnified wedge of the air-gap zone — bore, sleeve OD, rotor OD,
-    magnet OD as concentric arcs, with air_gap / sleeve_thickness /
-    magnet_up_gap as radial dimension arrows between them (names outside, on
-    staggered leaders, same convention as everywhere else). The owner's
-    "second, enlarged half-ring/quadrant of the gap zone" — the small
-    full-ring picture is too small to letter these three, which are all a
-    couple of mm at most next to a 100+ mm stator OD."""
+def _draw_gap_callout(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set
+                       ) -> Optional[Tuple[Tuple[float, float], Tuple[float, float]]]:
+    """A magnified wedge of the air-gap zone — bore, sleeve OD, rotor pole
+    (magnet) OD, magnet top as concentric arcs, with air_gap /
+    sleeve_thickness / magnet_up_gap as radial dimension arrows between them
+    (names outside, on staggered leaders, same convention as everywhere
+    else). The owner's "magnified wedge (say 25 deg)" — narrow angularly (a
+    true zoom, not the earlier 70-degree slice that read as a thin ribbon)
+    but radially generous, since air_gap/magnet_up_gap/sleeve_thickness are
+    all a couple of mm at most next to a 100+ mm stator OD.
+
+    Returns the wedge's own two extreme corners (inner-near, outer-far), in
+    THIS axes' data coordinates — so the caller can anchor the ring-to-
+    callout connector lines to the actual drawn shape (``ax.transData``)
+    instead of the axes' own box corners (``ax.transAxes`` 0/1), which used
+    to land wherever ``_fit_box_aspect``'s padding happened to leave them —
+    sometimes on top of this function's own title, sometimes well past the
+    wedge into blank margin."""
     import matplotlib.patches as mpatches
     ax.set_aspect("equal")
     ax.axis("off")
@@ -1080,19 +1252,22 @@ def _draw_gap_callout(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: s
     sleeve_span = _radial_span(regions.get("sleeve")) if regions.get("sleeve") is not None else None
     if not (stator_span and rotor_span):
         ax.text(0.5, 0.5, "(no air-gap region)", transform=ax.transAxes, ha="center")
-        return
+        return None
 
     mag_up_gap = _num(geo.get("magnet_up_gap")) or 0.0
-    magnet_top_r = rotor_span[1] - mag_up_gap
+    magnet_top_r = rotor_span[1] - mag_up_gap     # the magnet's REAL top (the
+                                                    # arc) — rotor_outer_radius
+                                                    # itself is "rotor pole top"
     sleeve_t = _num(geo.get("sleeve_thickness")) or 0.0
     sleeve_or = sleeve_span[1] if sleeve_span else rotor_span[1]
     bore_r = stator_span[0]
 
-    a0, a1 = 55.0, 125.0   # a 70-degree wedge — wide enough to read arcs and
-                            # dimension arrows apart, narrow enough that the
-                            # radial features fill it rather than a sliver
-    r_in = magnet_top_r * 0.90
-    r_out = bore_r * 1.10
+    a0, a1 = 77.5, 102.5   # a 25-degree wedge, centred at 90 (up) — the
+                            # owner's ask ("a magnified wedge, say 25 deg");
+                            # the radial extent below is what makes it look
+                            # zoomed-in rather than a thin arc ribbon.
+    r_in = magnet_top_r * 0.75
+    r_out = bore_r * 1.30
 
     # Coloured bands — the SAME styling as the sector/ring, purely for
     # orientation (which band is rotor iron, which is the sleeve, which is
@@ -1112,42 +1287,73 @@ def _draw_gap_callout(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: s
         ax.add_patch(mpatches.Arc((0, 0), 2 * r, 2 * r, angle=0, theta1=a0, theta2=a1,
                                    color="black", lw=1.3, zorder=5))
 
-    r_lbl = r_out * 1.55
-    # Three angles across the wedge for the three dimensions, so none of
-    # their radial arrows or escaped labels sit on top of another.
-    a_up, a_sl, a_gap = a0 + 10, (a0 + a1) / 2.0, a1 - 10
+    # Three angles across the wedge for the three dimensions — the ARROWS at
+    # a0/a1/mid so each sits on its own feature; the LABELS escape at
+    # DIFFERENT radii (near/far/near), not one shared ring, because at only
+    # a 25-degree wedge all three escape almost straight up regardless of
+    # angle and would otherwise collide (the a_up/a_sl mid-point, sleeve_
+    # thickness, sat almost exactly where magnet_up_gap's own label landed
+    # when magnet_up_gap happens to be ~0 on this motor — a zero-length
+    # arrow, same radius as sleeve_thickness's own start).
+    a_up, a_sl, a_gap = a0, (a0 + a1) / 2.0, a1
+    r_lbl_side = r_out * 1.42
+    r_lbl_mid = r_out * 1.95
 
     _dim_radial(ax, magnet_top_r, rotor_span[1], a_up,
                 _label("magnet_up_gap", geo.get("magnet_up_gap"), "mm", "float"),
-                r_label=r_lbl, fontsize=24)
+                r_label=r_lbl_side, fontsize=26)
     drawn.add("magnet_up_gap")
     if sleeve_span:
         _dim_radial(ax, rotor_span[1], sleeve_or, a_sl,
                     _label("sleeve_thickness", sleeve_t, "mm", "float"),
-                    r_label=r_lbl, fontsize=24)
+                    r_label=r_lbl_mid, fontsize=26)
         drawn.add("sleeve_thickness")
-    _dim_radial(ax, sleeve_or, bore_r, a_gap,
+    # air_gap — magnet OD to bore: the MAGNETIC gap (owner's spec), not just
+    # the sleeve-OD-to-bore open-air sliver (the two coincide only when
+    # magnet_up_gap is 0) — includes the sleeve, same as the schema value.
+    _dim_radial(ax, magnet_top_r, bore_r, a_gap,
                 _label("air_gap", geo.get("air_gap"), "mm", "float"),
-                r_label=r_lbl, fontsize=24)
+                r_label=r_lbl_side, fontsize=26)
     drawn.add("air_gap")
 
     # Which circle is which — short plain leaders, no schema key (these are
     # real geometry radii, not separate dimension arrows of their own; each
-    # IS one of the 5 radii on the main radii picture).
-    for r, name, ang in ((magnet_top_r, "magnet OD", a0 - 22),
+    # IS one of the 7 radii on the main radii picture).
+    label_pts: List[Tuple[float, float]] = []
+    for r, name, ang in ((magnet_top_r, "magnet OD", a0 - 20),
                          (sleeve_or if sleeve_span else rotor_span[1],
-                          "sleeve OD" if sleeve_span else "rotor OD", a0 - 6),
-                         (bore_r, "bore (stator_inner_radius)", a1 + 14)):
+                          "sleeve OD" if sleeve_span else "rotor OD", a0 - 8),
+                         (bore_r, "bore (stator_inner_radius)", a1 + 16)):
         p = (r * math.cos(math.radians(ang)), r * math.sin(math.radians(ang)))
-        out = (r_out * 1.15 * math.cos(math.radians(ang)), r_out * 1.15 * math.sin(math.radians(ang)))
+        out = (r_out * 1.2 * math.cos(math.radians(ang)), r_out * 1.2 * math.sin(math.radians(ang)))
+        label_pts.append(out)
         ha = "left" if math.cos(math.radians(ang)) >= 0 else "right"
-        ax.annotate(name, xy=p, xytext=out, fontsize=16, family=_MONO,
+        ax.annotate(name, xy=p, xytext=out, fontsize=18, family=_MONO,
                     color="#333333", ha=ha, va="center",
                     arrowprops=dict(arrowstyle="-", color="#888888", lw=0.7, shrinkA=0, shrinkB=2),
                     bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.9))
 
-    lim = r_lbl * 1.5
-    ax.set_xlim(-lim * 0.75, lim); ax.set_ylim(-lim * 0.15, lim)
+    # Fill the allotted box (35% page width x 50% height, ``build_dimension_
+    # sheet``'s add_axes call) instead of leaving the wedge tiny in a mostly
+    # empty panel — collect every point this function actually placed
+    # (wedge corners, the 3 staggered dimension labels, the 3 "which circle"
+    # leaders) and fit THAT bounding box to the box's own aspect ratio.
+    xs: List[float] = list(x for x, _y in label_pts)
+    ys: List[float] = list(y for _x, y in label_pts)
+    for r in (r_in, r_out, r_lbl_side, r_lbl_mid):
+        for ang in (a0, a1, a_up, a_sl, a_gap):
+            a = math.radians(ang)
+            xs.append(r * math.cos(a)); ys.append(r * math.sin(a))
+    text_pad = r_out * 0.30   # room for the label text itself past its anchor
+    x_min, x_max = min(xs) - text_pad, max(xs) + text_pad
+    y_min, y_max = min(ys) - text_pad * 0.5, max(ys) + text_pad * 0.5
+    x_min, x_max, y_min, y_max = _fit_box_aspect(ax, x_min, x_max, y_min, y_max)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+
+    p_near = (r_in * math.cos(math.radians(a0)), r_in * math.sin(math.radians(a0)))
+    p_far = (r_out * math.cos(math.radians(a1)), r_out * math.sin(math.radians(a1)))
+    return p_near, p_far
 
 
 def _draw_wire_inset(ax, geo: Dict[str, Any], regions: Dict[str, Any], coil, drawn: set) -> None:
@@ -1418,42 +1624,58 @@ def build_dimension_sheet(geo: Dict[str, Any], schema: Dict[str, dict],
             # couple of mm next to a 100+ mm OD, illegible on the same
             # scale as the ring itself) — linked to it by two thin lines,
             # the usual "detail view" drafting convention.
+            # Explicit page fractions (not a gridspec column) — the owner's
+            # own numbers: the ring at ~60% of the page's width and ~85% of
+            # its height (it IS the page); the callout at ~35% width and
+            # only ~50% height (vertically centred alongside the ring, not
+            # stretched to match it — the earlier full-height column is
+            # what left the callout looking tiny relative to its own,
+            # mostly-empty panel).
             fig = plt.figure(figsize=(30.0, 20.0), facecolor="white")
-            gs = fig.add_gridspec(1, 2, width_ratios=[0.56, 0.44], wspace=0.08,
-                                  left=0.02, right=0.98, top=0.93, bottom=0.03)
-            ax_ring = fig.add_subplot(gs[0, 0])
-            ax_gap = fig.add_subplot(gs[0, 1])
+            ax_ring = fig.add_axes((0.01, 0.03, 0.60, 0.85))
+            ax_gap = fig.add_axes((0.635, 0.24, 0.345, 0.50))
 
             try:
                 _draw_ring_inset(ax_ring, geo, regions, drawn, big=True)
             except Exception:
                 log.exception("dimension sheet: radii ring failed")
+            callout_corners = None
             try:
-                _draw_gap_callout(ax_gap, geo, regions, drawn)
+                callout_corners = _draw_gap_callout(ax_gap, geo, regions, drawn)
             except Exception:
                 log.exception("dimension sheet: gap callout failed")
 
             # Two thin connector lines, ring -> callout — a small marker
-            # circle on the ring at the gap zone, joined at both ends to the
-            # callout axes' own left edge (ConnectionPatch spans the two
-            # SEPARATE axes directly, in DATA/axes coordinates each, which is
-            # exactly the "linked by two thin lines" ask).
+            # circle on the ring at the gap zone, joined to the callout's OWN
+            # two drawn corners (returned by ``_draw_gap_callout``, in ITS
+            # data coordinates — ``coordsB=ax_gap.transData``) rather than
+            # the axes' own box corners: the box is padded to fill its
+            # allotted page fraction (``_fit_box_aspect``), so the box
+            # corners do not track where the wedge itself actually ends up —
+            # they used to land on the callout's own title, or well past the
+            # wedge into blank margin.
             try:
                 import matplotlib.patches as mpatches
                 stator_span_r = _radial_span(regions.get("stator"))
                 rotor_span_r = _radial_span(regions.get("rotor"))
-                if stator_span_r and rotor_span_r:
+                if stator_span_r and rotor_span_r and callout_corners is not None:
                     mark_r = (stator_span_r[0] + rotor_span_r[1]) / 2.0
-                    a_lo, a_hi = math.radians(50), math.radians(130)
+                    # Centred on the gap between the ring's own "magnet OD"
+                    # (-64.29 deg) and "sleeve OD" (-115.71 deg) leaders —
+                    # the one clear 51-degree slot nothing else on the ring
+                    # occupies, and thematically the right spot: that IS the
+                    # gap zone the callout is a magnified view of.
+                    a_lo, a_hi = math.radians(-100.0), math.radians(-80.0)
                     p_lo = (mark_r * math.cos(a_lo), mark_r * math.sin(a_lo))
                     p_hi = (mark_r * math.cos(a_hi), mark_r * math.sin(a_hi))
                     ax_ring.add_patch(mpatches.Circle((0, 0), mark_r, fill=False,
                                                        ec="#aaaaaa", lw=1.0,
                                                        ls=(0, (2, 2)), zorder=4))
-                    for p_end, corner in ((p_lo, (0.0, 0.0)), (p_hi, (0.0, 1.0))):
+                    p_near, p_far = callout_corners
+                    for p_end, p_target in ((p_lo, p_near), (p_hi, p_far)):
                         con = mpatches.ConnectionPatch(
                             xyA=p_end, coordsA=ax_ring.transData,
-                            xyB=corner, coordsB=ax_gap.transAxes,
+                            xyB=p_target, coordsB=ax_gap.transData,
                             color="#aaaaaa", lw=1.0, ls=(0, (2, 2)), zorder=1)
                         fig.add_artist(con)
             except Exception:

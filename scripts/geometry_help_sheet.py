@@ -61,7 +61,7 @@ def main() -> None:
     geo = MotorGeometryParams(full_geo, {}).to_dict()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    title = "Geometry parameters — where each schema key is on the machine"
+    title = "Geometry parameters — one sector, enlarged (bore to sleeve)"
 
     svg = build_dimension_sheet(geo, schema, groups, fmt="svg", show_values=False,
                                  layout="sector", title=title)

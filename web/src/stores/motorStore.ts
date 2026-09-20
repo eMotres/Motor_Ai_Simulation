@@ -1023,6 +1023,14 @@ export const useMotorStore = create<MotorState>()(
               // Line-to-line voltage THD gate (FOC waveform quality), same scale.
               thd_penalty_lambda: thdPenaltyLambda ?? 0,
               thd_max_pct: thdMaxPct ?? 5,
+              // Consent to vary a DIE-DEFINING key under an active die (the
+              // Optimize header's checkbox, localStorage opt.allowNewLamination);
+              // without it the backend answers 422 with the reason
+              // (routes/family.refuse_die_defining_variables, 2026-09-20).
+              allow_new_lamination: ((): boolean => {
+                try { return localStorage.getItem('opt.allowNewLamination') === '1'; }
+                catch { return false; }
+              })(),
             }),
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);

@@ -87,6 +87,69 @@ FREE_GEO_KEYS = (
 EDITABLE_UNDER_DIE_LOCK = ("motor_length", "wire_height", "num_wires_per_slot",
                            "wire_parallel")
 
+#: What makes a die THIS die: the stamped lamination's diameter and its
+#: slot/pole topology.  Every other geometry key is a shape the engineer may
+#: rework on an unlocked die; these four never change by editing — a machine
+#: whose value moved is a DIFFERENT lamination, i.e. a new die.  ONE list, read
+#: by the identity guard in `sync_active_die_geometry`, by `/context` (so the
+#: Geometry table and the sweep pickers can flag the keys BEFORE the change,
+#: 2026-09-20: "опять та же самая проблема — я всё оптимизировал, а сохранить
+#: не могу"), and by the optimizer routes that refuse to vary them while a die
+#: is active unless the caller says "allow new lamination".
+DIE_IDENTITY_KEYS = ("stator_diameter", "num_seg", "num_slots_per_segment",
+                     "num_poles_per_segment")
+
+#: How the identity keys read on screen (the strip, the refusal texts).
+_DIE_KEY_LABELS: Dict[str, str] = {
+    "stator_diameter": "stator Ø",
+    "num_seg": "segments",
+    "num_slots_per_segment": "slots/segment",
+    "num_poles_per_segment": "poles/segment",
+}
+
+
+def die_identity_diffs(die_geo: dict, live_geo: dict) -> list:
+    """``[{key, label, die, live}]`` for every identity key on which the live
+    machine is not the die.  Pure; the same comparison the identity guard
+    makes, so the strip's "poles/segment 7 → 8" is the guard's own verdict."""
+    out = []
+    for k in DIE_IDENTITY_KEYS:
+        dv, sv = (die_geo or {}).get(k), (live_geo or {}).get(k)
+        if (isinstance(dv, (int, float)) and isinstance(sv, (int, float))
+                and not isinstance(dv, bool) and not isinstance(sv, bool)
+                and abs(float(dv) - float(sv)) > 1e-6):
+            out.append({"key": k, "label": _DIE_KEY_LABELS.get(k, k),
+                        "die": dv, "live": sv})
+    return out
+
+
+def die_defining_variables(names) -> list:
+    """The subset of ``names`` that are die identity keys, in list order."""
+    return [str(n) for n in (names or []) if str(n) in DIE_IDENTITY_KEYS]
+
+
+def refuse_die_defining_variables(names, allow_new_lamination: bool) -> None:
+    """The optimizer / sweep gate.  While a die is ACTIVE, a campaign that
+    varies a die-defining key would end with an apply that turns the live
+    machine into a foreign lamination — the identity guard then releases the
+    context and the result can be saved nowhere (the 12:47 dead end,
+    2026-09-20).  So it is refused UP FRONT, with the reason, unless the caller
+    ticked "allow new lamination" (the web's one checkbox + HelpTip).  No die
+    active → nothing to protect → no refusal.  Raises 422."""
+    hit = die_defining_variables(names)
+    if not hit or allow_new_lamination:
+        return
+    ctx = _read_ctx()
+    if not ctx:
+        return
+    die = str(ctx.get("die") or "")
+    raise HTTPException(422, detail=(
+        "die-defining variable(s) %s would change the lamination of the "
+        "active die '%s' (a die keeps its diameter and slot/pole topology for "
+        "life). Tick 'allow new lamination' to vary them — the result is a "
+        "NEW die, saved with 'Save as new die' — or remove them from the "
+        "variables." % (", ".join(hit), die)))
+
 #: What a geometry key MEANS when a die/configuration does not carry it (older
 #: files predate the knob).  Served by ``/payload`` so a load describes the
 #: whole machine and nothing of the previously loaded one survives the PUT.
@@ -1903,6 +1966,18 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     if req.role not in ("motor", "generator"):
         raise HTTPException(422, detail="role must be 'motor' or 'generator'")
     live = _live_cfg()
+    name, doc = _config_doc_from_live(die, name, req.role, live)
+    _save_yaml(_cfg_file(die, name), doc)
+    log.info("family: configuration '%s/%s' created from the live machine",
+             die, name)
+    return {"ok": True, "die": die, "config": name}
+
+
+def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
+    """``(name, doc)`` — a fresh configuration document snapshotted from the
+    live machine, the name corrected to the live stack.  Shared by
+    ``POST /config`` and ``POST /save_as_new_die`` so the two can never write a
+    different shape."""
     geo = _plain(live.get("geometry")) or {}
     sim = _sim_of(live)
     mat = _plain(live.get("materials")) or {}
@@ -1922,10 +1997,10 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
                  "L-number follows the live stack (%s mm)",
                  name, _fixed, geo.get("motor_length"))
         name = _fixed
-    _save_yaml(_cfg_file(die, name), {
+    doc = {
         "name": name,
         "die": die,
-        "role": req.role,
+        "role": role,
         "created": datetime.now().isoformat(timespec="seconds"),
         "geometry_overrides": {k: geo.get(k) for k in FREE_GEO_KEYS
                                if geo.get(k) is not None},
@@ -1945,10 +2020,8 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
         # condition the Simulation tab owns, not a property of the build.
         "end_winding_factor": sim.get("end_winding_factor"),
         "duties": [],
-    })
-    log.info("family: configuration '%s/%s' created from the live machine",
-             die, name)
-    return {"ok": True, "die": die, "config": name}
+    }
+    return name, doc
 
 
 # ── L-name ↔ stack consistency ───────────────────────────────────────────────
@@ -2850,11 +2923,97 @@ def release_context(reason: str) -> Optional[str]:
     _ctx_file().write_text(_json.dumps({
         "die": None, "config": None, "duty": None,
         "released_from": ctx.get("die"),
+        # WHICH configuration and duty were loaded, so the released strip can
+        # offer "discard and reload ▶ die / config / duty" and "save as new
+        # configuration of <die>" instead of a bare "press ▶ in Motors".
+        "released_config": ctx.get("config"),
+        "released_duty": ctx.get("duty"),
         "reason": reason,
         "at": datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
     log.info("family: context released (%s) — was '%s/%s'",
              reason, ctx.get("die"), ctx.get("config"))
     return ctx.get("die")
+
+
+def _read_released() -> Optional[dict]:
+    """The raw released record, or None when the file is absent, unreadable,
+    names no released die, or a die is active."""
+    try:
+        import json as _json
+        raw = _json.loads(_ctx_file().read_text(encoding="utf-8"))
+    except Exception:            # noqa: BLE001 — no file, no story
+        return None
+    if not isinstance(raw, dict) or raw.get("die") or not raw.get("released_from"):
+        return None
+    return raw
+
+
+def released_state() -> Optional[dict]:
+    """What the strip needs to turn a released context into OFFERS instead of
+    a dead end: which die/configuration/duty was released, why, and how the
+    LIVE machine differs from that die on the identity keys.
+
+    ``live_is_die`` True means the live machine is that lamination again (the
+    user reverted the edit, or a shape-only change released nothing) — the
+    offers are then "re-attach" / "save as new configuration"; False means
+    the lamination changed and the way to keep the work is "save as NEW die".
+    A configuration / duty the record does not name is filled in when the die
+    has exactly one, so the record written before this existed (the owner's
+    2026-09-20 12:47 file) still yields a reload offer."""
+    raw = _read_released()
+    if not raw:
+        return None
+    die = str(raw.get("released_from") or "")
+    out: Dict[str, Any] = {
+        "released_from": die,
+        "released_config": raw.get("released_config"),
+        "released_duty": raw.get("released_duty"),
+        "reason": raw.get("reason"), "at": raw.get("at"),
+        "die_keys": list(DIE_IDENTITY_KEYS),
+        "die_exists": False, "die_diffs": [], "live_is_die": None,
+        "live_topology": None,
+    }
+    try:
+        d = _load_yaml(_die_file(die), "die")
+    except HTTPException:
+        return out                          # the die is gone — nothing to diff
+    out["die_exists"] = True
+    # Fill config/duty from a die with a single configuration / single duty.
+    try:
+        if not out["released_config"]:
+            _cfgs = [p.stem for p in _die_dir(die).glob("*.yaml")
+                     if p.name != "die.yaml"]
+            if len(_cfgs) == 1:
+                out["released_config"] = _cfgs[0]
+        if out["released_config"] and not out["released_duty"]:
+            _c = _load_yaml(_cfg_file(die, str(out["released_config"])),
+                            "configuration")
+            _duties = [x.get("name") for x in (_c.get("duties") or [])
+                       if isinstance(x, dict) and x.get("name")]
+            if len(_duties) == 1:
+                out["released_duty"] = _duties[0]
+    except Exception:            # noqa: BLE001 — a fill-in never fails the strip
+        log.debug("released_state: config/duty fill skipped", exc_info=True)
+    try:
+        geo = _plain(_live_cfg().get("geometry")) or {}
+    except Exception:            # noqa: BLE001 — no live config, no diff
+        return out
+    diffs = die_identity_diffs(d.get("geometry") or {}, geo)
+    out["die_diffs"] = diffs
+    out["live_is_die"] = not diffs
+    try:
+        _ns = float(geo.get("num_seg") or 0)
+        _sl = geo.get("num_slots") or (_ns * float(geo.get("num_slots_per_segment") or 0))
+        _po = geo.get("num_poles") or (_ns * float(geo.get("num_poles_per_segment") or 0))
+        out["live_topology"] = {
+            "stator_diameter": geo.get("stator_diameter"),
+            "slots": int(round(float(_sl))) if _sl else None,
+            "poles": int(round(float(_po))) if _po else None,
+            "motor_length": geo.get("motor_length"),
+        }
+    except (TypeError, ValueError):
+        pass
+    return out
 
 
 def sync_active_die_geometry(saved_geo: dict,
@@ -2901,13 +3060,8 @@ def sync_active_die_geometry(saved_geo: dict,
     # die '20SW1200' was overwritten with a 200 mm motor — the catalog then
     # filed it under Ø 200 and its three duties "vanished" for the user.
     _die_g0 = d.get("geometry") or {}
-    _ident = []
-    for k in ("stator_diameter", "num_seg", "num_slots_per_segment",
-              "num_poles_per_segment"):
-        dv, sv = _die_g0.get(k), geo.get(k)
-        if (isinstance(dv, (int, float)) and isinstance(sv, (int, float))
-                and abs(float(dv) - float(sv)) > 1e-6):
-            _ident.append(f"{k} {dv} → {sv}")
+    _ident = [f"{x['key']} {x['die']} → {x['live']}"
+              for x in die_identity_diffs(_die_g0, geo)]
     if _ident:
         log.warning(
             "family: REFUSED to sync die '%s' — the saved machine is not this "
@@ -3074,6 +3228,107 @@ def deactivate(req: Deactivate, _w: dict = Depends(require_catalog_write)):
     return {"ok": True, "released_from": was}
 
 
+class SaveAsNewDie(BaseModel):
+    name: str                            # the new die's name
+    config: Optional[str] = None         # default: the released configuration's name
+    duty: Optional[str] = None           # default: the released duty's name, else "rated"
+    mode: Optional[str] = None           # "motor" | "generator"; default: the live Simulation mode
+    note: Optional[str] = None
+
+
+@router.post("/save_as_new_die")
+def save_as_new_die(req: SaveAsNewDie, _w: dict = Depends(require_catalog_write)):
+    """Keep the machine on screen when it is no longer the active die's
+    lamination: a NEW die from the live geometry (unlocked, provenance
+    recorded), ONE configuration from the live build (stack, wire, winding,
+    materials, parts — `POST /config`'s own snapshot) and ONE duty at the live
+    operating point (`POST /duty` with from_current) — then the new triple is
+    made ACTIVE, so the strip's ordinary "Save to duty" can record the last
+    run's results into it.
+
+    This is the way out of the dead end of 2026-09-20 12:47: the identity
+    guard released 'CIANO14 50 edited' when poles/segment went 7 → 8, the strip
+    offered only "press ▶ in Motors", and ▶ would have overwritten the
+    optimised geometry.  Nothing here touches the released die or the live
+    config; it only writes the new die's folder and the context file.
+    """
+    name = _check_name(req.name, "die")
+    if req.mode is not None and req.mode not in ("motor", "generator"):
+        raise HTTPException(422, detail="mode must be 'motor' or 'generator'")
+    if _die_file(name).exists() or (_ws_layering() and _ws_resolve_die_dir(name) is not None):
+        raise HTTPException(409, detail=f"die '{name}' already exists — pick another name")
+    live = _live_cfg()
+    geo = _plain(live.get("geometry"))
+    if not geo:
+        raise HTTPException(500, detail="live config has no geometry block")
+    sim = _sim_of(live)
+    rel = released_state() or {}
+    _cfg_src = req.config or rel.get("released_config")
+    if not _cfg_src:
+        try:
+            _cfg_src = "L%g" % float(geo.get("motor_length"))
+        except (TypeError, ValueError):
+            _cfg_src = "L-new"
+    cfg_name = _check_name(str(_cfg_src), "configuration")
+    if cfg_name == "die":
+        raise HTTPException(422, detail="'die' is reserved")
+    duty_name = _check_name(str(req.duty or rel.get("released_duty") or "rated"), "duty")
+    mode = req.mode or (str(sim.get("mode") or "").lower()
+                        if str(sim.get("mode") or "").lower() in ("motor", "generator")
+                        else "motor")
+    try:
+        from motor_ai_sim.routes.presets import _gen_thumb_svg
+        thumb = _gen_thumb_svg(dict(geo))
+    except Exception:                      # noqa: BLE001 — thumbnail is cosmetic
+        thumb = None
+    die_doc: Dict[str, Any] = {
+        "name": name,
+        "locked": False,                   # a new lamination is a work in progress
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "daxis_deg": sim.get("daxis_deg"),
+        "thumb_svg": thumb,
+        "geometry": dict(geo),
+    }
+    if rel.get("released_from"):
+        die_doc["derived_from"] = {
+            "die": rel.get("released_from"), "config": rel.get("released_config"),
+            "duty": rel.get("released_duty"), "reason": rel.get("reason"),
+            "changed": [f"{x['key']} {x['die']} → {x['live']}"
+                        for x in (rel.get("die_diffs") or [])],
+        }
+    if req.note:
+        die_doc["note"] = str(req.note)
+    _save_yaml(_die_file(name), die_doc)
+    role = "generator" if mode == "generator" else "motor"
+    cfg_name, cfg_doc = _config_doc_from_live(name, cfg_name, role, live)
+    _save_yaml(_cfg_file(name, cfg_name), cfg_doc)
+    # The duty: the SAME route the strip's save uses, so the operating point,
+    # the terminal connection and the L-name rule are read exactly once.
+    out = upsert_duty(DutyCreate(die=name, config=cfg_name,
+                                 duty=DutySpec(name=duty_name, mode=mode,
+                                               from_current=True,
+                                               note=req.note or "")), _w=_w)
+    cfg_name = str(out.get("config") or cfg_name)
+    import json as _json
+    _ctx_file().write_text(
+        _json.dumps({"die": name, "config": cfg_name, "duty": duty_name,
+                     "at": datetime.now().isoformat(timespec="seconds")}),
+        encoding="utf-8")
+    log.info("family: NEW die '%s' saved from the live machine (Ø %s, %s keys; "
+             "%s) — configuration '%s', duty '%s'; context now active on it",
+             name, geo.get("stator_diameter"), len(geo),
+             ("derived from '%s': %s" % (rel.get("released_from"),
+                                         "; ".join(die_doc.get("derived_from", {})
+                                                   .get("changed") or ["no identity diff"]))
+              if rel.get("released_from") else "no released context"),
+             cfg_name, duty_name)
+    return {"ok": True, "die": name, "config": cfg_name, "duty": duty_name,
+            "derived_from": die_doc.get("derived_from"),
+            "topology": {"stator_diameter": geo.get("stator_diameter"),
+                         "num_slots": geo.get("num_slots"),
+                         "num_poles": geo.get("num_poles")}}
+
+
 @router.get("/context")
 def context(response: Response, authorization: str = Header(default=None)):
     """WHAT is loaded in the editor right now — die / configuration / duty —
@@ -3086,16 +3341,18 @@ def context(response: Response, authorization: str = Header(default=None)):
     if not ctx:
         # A RELEASED context says why (identity guard or an explicit
         # deactivate) so the strip can show "no die active" honestly instead
-        # of vanishing without a word.
-        _rel = {}
+        # of vanishing without a word — and, since 2026-09-20, HOW the live
+        # machine differs from the released die, so the strip can offer the
+        # ways to keep the work (save as new die / new configuration / reload)
+        # instead of the "press ▶" dead end.
+        _rel: Dict[str, Any] = {}
         try:
-            import json as _json
-            _raw = _json.loads(_ctx_file().read_text(encoding="utf-8"))
-            if isinstance(_raw, dict) and _raw.get("released_from"):
-                _rel = {"released_from": _raw.get("released_from"),
-                        "reason": _raw.get("reason"), "at": _raw.get("at")}
+            _rel = released_state() or {}
         except Exception:   # noqa: BLE001 — no file, no story
-            pass
+            _rel = {}
+        if _rel and not may_see_die(catalog_access(authorization),
+                                    str(_rel.get("released_from") or "")):
+            _rel = {}
         return {"active": False, "can_write": _can_write_catalog(who), **_rel}
     die, cfg = str(ctx.get("die") or ""), str(ctx.get("config") or "")
     duty = ctx.get("duty")
@@ -3122,6 +3379,10 @@ def context(response: Response, authorization: str = Header(default=None)):
         # The keys a die-lock leaves editable — ONE source of truth for the
         # Geometry tab's read-only greying (must match the PUT guard).
         "free_keys": list(EDITABLE_UNDER_DIE_LOCK),
+        # The keys that make this die THIS die: the Geometry table flags them
+        # ("die-defining — changing it makes a new die") and the sweep/optimizer
+        # pickers refuse to vary them without "allow new lamination".
+        "die_keys": list(DIE_IDENTITY_KEYS),
         # The supply this machine is designed around.  The Simulation tab's PWM
         # source prefills V_bus from it: a DC-link voltage typed by hand is a
         # number nobody checks against the pack that is actually there, and the

@@ -24,6 +24,7 @@ import type { AppliedSaveResult } from '../../lib/appliedAutoSave';
 import { sweepResumeNoticeText } from '../../lib/sweepResumeNotice';
 import type { SweepResumeInfo } from '../../lib/sweepResumeNotice';
 import { readCurrentUnit, formatCurrent } from '../../lib/sweepCurrentUnit';
+import { readAllowNewLamination } from '../../lib/releasedContext';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -600,9 +601,14 @@ const SweepStudyPanel: React.FC = () => {
           // showing. Costs a whole extra period of frames per point.
           demag: readBool('sim.demag', false),
           run_id: myRunId,
+          // Consent to vary a DIE-DEFINING key under an active die (the
+          // Optimize header's checkbox); without it the backend answers 422
+          // with the reason instead of starting a run whose apply would
+          // release the die context (2026-09-20).
+          allow_new_lamination: readAllowNewLamination(),
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 400)}`);
       await poll(myRunId);
     } catch (e: any) { setErr(String(e?.message ?? e)); }
     finally { setRunning(false); }

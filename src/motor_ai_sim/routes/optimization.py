@@ -1184,11 +1184,26 @@ class OptRequest(BaseModel):
     n_samples: int = 600                   # number of GEOMETRY samples
     coil_temp_c: float = 120.0
     seed: int = 12345
+    # A die-defining variable (stator Ø, segments, slots/poles per segment —
+    # routes/family.DIE_IDENTITY_KEYS) is refused while a die is active unless
+    # this is set: varying it makes a NEW lamination, and the apply of such a
+    # result released the die context with nowhere to save (2026-09-20 12:47).
+    allow_new_lamination: bool = False
+
+
+def _refuse_die_defining(req) -> None:
+    """The family gate, on the request's variable names.  422 with the reason
+    when a die is active and a die-defining key is varied without consent."""
+    from motor_ai_sim.routes.family import refuse_die_defining_variables
+    refuse_die_defining_variables(
+        [v.name for v in (getattr(req, "variables", None) or [])],
+        bool(getattr(req, "allow_new_lamination", False)))
 
 
 @router.post("/run")
 def run_optimization(req: OptRequest):
     """Run the Pareto design search and return points + segments + front."""
+    _refuse_die_defining(req)
     try:
         cfg = get_config()
         geo = dict(cfg.get("geometry", {}))
@@ -1228,6 +1243,7 @@ def list_optimizable_variables():
             # num_wires_per_slot (a continuous sweep of it builds fractional
             # turns), so it is a build choice, never an optimizer variable.
             "num_wires_per_slot", "wire_parallel"}
+    from motor_ai_sim.routes.family import DIE_IDENTITY_KEYS
     for name, meta in schema.items():
         if name in skip or name not in geo:
             continue
@@ -1239,7 +1255,11 @@ def list_optimizable_variables():
         hi = float(meta.get("max", cur * 1.5))
         out.append({"name": name, "label": meta.get("label", name),
                     "unit": meta.get("unit", ""), "group": meta.get("group", ""),
-                    "current": cur, "min": lo, "max": hi})
+                    "current": cur, "min": lo, "max": hi,
+                    # die-defining: varying it makes a new lamination — the
+                    # picker flags it and the routes refuse it under an active
+                    # die without `allow_new_lamination`.
+                    "die_defining": name in DIE_IDENTITY_KEYS})
     # operating-point variables
     out.append({"name": "gamma_deg", "label": "Load angle γ", "unit": "°",
                 "group": "operating", "current": float(cfg.get("simulation", {}).get("phase_offset_deg", 0.0)),
@@ -1366,6 +1386,8 @@ class ScanRequest(BaseModel):
     with_baseline: bool = False
     seed: int = 12345
     run_id: str = ""
+    # See OptRequest.allow_new_lamination.
+    allow_new_lamination: bool = False
 
 
 def _enumerate_geometries(variables: List[Dict[str, Any]], max_geom: int,
@@ -1913,6 +1935,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
 @router.post("/scan")
 def scan_designs(req: ScanRequest):
     """Start a background FEM scan — every point is a real transient."""
+    # BEFORE the running guard and before any state is touched: a die-defining
+    # variable under an active die is refused with the reason (422).
+    _refuse_die_defining(req)
     # Start guard (done OUTSIDE the param lock so the wait can't deadlock the
     # worker's finally, which needs _scan_lock to clear "running"):
     #  • genuinely running scan, no Stop pending → 409;
@@ -2729,6 +2754,8 @@ class DescentRequest(BaseModel):
     #  'product': the legacy (efficiency/eff0)^w_eff · (T/mass/td0)^w_td.
     objective: str = "baseline_line"
     current_bump_pct: float = 10.0    # 2nd baseline current = I·(1 + pct/100)
+    # See OptRequest.allow_new_lamination.
+    allow_new_lamination: bool = False
 
 
 class BaselineRequest(BaseModel):
@@ -3852,6 +3879,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
 def descent_start(req: DescentRequest):
     """Start a background geometry optimization (fixed current+rpm+γ).
     algorithm='cmaes' (default) → CMA-ES; 'gradient' → finite-diff descent."""
+    _refuse_die_defining(req)          # before any state is touched (422)
     with _descent_lock:
         if _descent_state["running"]:
             raise HTTPException(status_code=409, detail="a descent is already running")

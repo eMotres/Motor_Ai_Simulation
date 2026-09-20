@@ -9,7 +9,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Typography, Button, Tooltip, CircularProgress } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
 import { pageVisible } from '../../lib/pageVisible';
-import { TextPromptDialog, type TextPromptState } from './PromptDialogs';
+import {
+  ConfirmDialog, TextPromptDialog, type ConfirmState, type TextPromptState,
+} from './PromptDialogs';
+import { applyDutyEverywhere } from '../../lib/dutyApply';
+import { releasedOffers, type ReleasedCtxLike } from '../../lib/releasedContext';
 import { rememberDieSettings } from '../../lib/dieSettings';
 import {
   clearDutyCycle, clearDutyOp, dutyKey, readDutyCycle, rememberDutyOp,
@@ -92,6 +96,10 @@ const ActiveFamilyStrip: React.FC = () => {
   // — offers "save as new configuration" instead of leaving a dead end.
   const [buildClash, setBuildClash] = useState(false);
   const [askCfg, setAskCfg] = useState<TextPromptState | null>(null);
+  // The RELEASED-context offers (2026-09-20): a new die's name, a new
+  // configuration's name, or the "discard and reload" confirmation.
+  const [askDie, setAskDie] = useState<TextPromptState | null>(null);
+  const [askReload, setAskReload] = useState<ConfirmState | null>(null);
   // ticks so the drift marker re-evaluates while the user types in the panel
   const [, setTick] = useState(0);
 
@@ -188,26 +196,10 @@ const ActiveFamilyStrip: React.FC = () => {
     })();
   }, [ctx]);
 
-  if (!ctx?.active) {
-    // Released context (a Compare / My-motors / preset load, or the identity
-    // guard): say so in one line — the live machine is not a catalog die
-    // until ▶ makes one active.  Nothing to show when no die was ever loaded.
-    const rel = (ctx as any)?.released_from as string | undefined;
-    if (!rel || !ctx?.can_write) return null;
-    return (
-      <Box sx={{ px: 1.5, py: 0.25, fontSize: 11, color: '#f59e0b',
-                 borderBottom: '1px solid var(--line)' }}>
-        <Tooltip title={`Context released from '${rel}': ${(ctx as any)?.reason ?? 'a whole-machine load outside the catalog'}. `
-          + 'The machine on screen belongs to no die, so nothing is synced into the catalog. '
-          + 'Press ▶ on a duty in Motors to make a die active again.'}>
-          <span>⚠ no die active — the loaded machine is not a catalog duty (released from {rel}); press ▶ in Motors to load one</span>
-        </Tooltip>
-      </Box>
-    );
-  }
-
   // Has the Simulation panel drifted off the loaded duty's operating point?
-  const p = ctx.duty_point;
+  // (`ctx` may still be null or RELEASED here — the released branch renders
+  // below, after the save closures it shares are defined.)
+  const p = ctx?.duty_point ?? null;
   const cur = Number(readLS('current', NaN));
   const rpm = Number(readLS('rpm', NaN));
   const gam = Number(readLS('gamma', NaN));
@@ -219,23 +211,25 @@ const ActiveFamilyStrip: React.FC = () => {
     && near(rpm, p.rpm, 0.5) && near(gam, p.gamma_deg, 0.01)
     && mode === p.mode);
 
-  const lockGlyph = ctx.die_locked && ctx.config_locked ? '🔒🔒'
-                  : ctx.die_locked ? '🔒' : '🔓';
-  const lockTip = ctx.die_locked && ctx.config_locked
+  const lockGlyph = ctx?.die_locked && ctx?.config_locked ? '🔒🔒'
+                  : ctx?.die_locked ? '🔒' : '🔓';
+  const lockTip = ctx?.die_locked && ctx?.config_locked
     ? 'Die AND configuration locked — geometry is read-only; only Simulation parameters move'
-    : ctx.die_locked
+    : ctx?.die_locked
       ? 'Die locked — stack length, wire and turns are editable; stamped geometry is not'
       : 'Nothing locked — the whole geometry is editable';
 
   // Save the CURRENT Simulation point back into the loaded duty; then, when
   // the LAST finished run sits exactly on that point, record its results too.
-  const save = async (configOverride?: string) => {
-    if (!ctx.duty) return;
-    // `setCtx` is asynchronous.  The "save as new configuration" flow must
-    // therefore pass the freshly-created canonical name explicitly; otherwise
-    // this closure still writes to the configuration that was active before.
-    const targetConfig = String(configOverride || ctx.config || '');
-    if (!targetConfig) return;
+  const save = async (target?: { die?: string; config?: string; duty?: string }) => {
+    // `setCtx` is asynchronous.  The "save as new configuration" and "save as
+    // new die" flows must therefore pass the freshly-created canonical names
+    // explicitly; otherwise this closure still writes to the triple that was
+    // active before (or to none at all, on a released context).
+    const tDie = String(target?.die || ctx?.die || '');
+    const tDuty = String(target?.duty || ctx?.duty || '');
+    const targetConfig = String(target?.config || ctx?.config || '');
+    if (!tDie || !tDuty || !targetConfig) return;
     setBusy(true); setMsg(null);
     try {
       // Does the LAST finished run sit on the point being saved?  Then its
@@ -341,7 +335,7 @@ const ActiveFamilyStrip: React.FC = () => {
         if (!Number.isFinite(extra)) return rotor;
         return mode === 'generator' ? rotor + extra : Math.max(0, rotor - extra);
       })();
-      const dutyBody: any = { name: ctx.duty, mode, from_current: true };
+      const dutyBody: any = { name: tDuty, mode, from_current: true };
       if (runMatches) {
         // The backend routes the snapshot on this: `current` owns the primary,
         // everything else is stored beside it.
@@ -427,7 +421,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // before this feature existed.
       let dcSent: Record<string, unknown> | null = null;
       try {
-        dcSent = readDutyCycle(dutyKey(ctx.die, targetConfig, ctx.duty));
+        dcSent = readDutyCycle(dutyKey(tDie, targetConfig, tDuty));
         if (dcSent) dutyBody.duty_cycle = dcSent;
       } catch { /* no cycle — the continuous point it stays */ }
       // NOTE for the overlay bookkeeping further down: `mesh` is the ONLY
@@ -439,7 +433,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // as having captured the point either.
       const r = await fetch(`${API}/api/family/duty`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die: ctx.die, config: targetConfig, duty: dutyBody }),
+        body: JSON.stringify({ die: tDie, config: targetConfig, duty: dutyBody }),
       });
       if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
       // The save may have AUTO-RENAMED the configuration (M1-L200 -> M1-L220
@@ -450,7 +444,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // A successful save is the strongest possible statement that the panel's
       // settings ARE this die's settings — remember them, so loading any duty
       // of this die later restores the user's own mesh, not a stray snapshot.
-      try { rememberDieSettings(String(ctx.die)); } catch { /* convenience */ }
+      try { rememberDieSettings(tDie); } catch { /* convenience */ }
       const cfgName = (rj && rj.config) ? String(rj.config) : targetConfig;
       // The duty's SNAPSHOT now states this point, so the local per-duty
       // overlay has nothing left to say — dropping it is what makes a save
@@ -465,17 +459,17 @@ const ActiveFamilyStrip: React.FC = () => {
       // back to whatever its sibling last left on the panel.
       try {
         if (runMatches) {
-          clearDutyOp(dutyKey(ctx.die, targetConfig, ctx.duty));
-          if (cfgName !== targetConfig) clearDutyOp(dutyKey(ctx.die, cfgName, ctx.duty));
+          clearDutyOp(dutyKey(tDie, targetConfig, tDuty));
+          if (cfgName !== targetConfig) clearDutyOp(dutyKey(tDie, cfgName, tDuty));
         }
         // An auto-rename (M1-L200 → M1-L220) moves the duty to a new
         // configuration, and its per-duty memory has to move with it — the
         // point on the panel IS that memory, so re-filing it under the new
         // name is the whole migration.
         if (cfgName !== targetConfig) {
-          setActiveDuty(String(ctx.die), cfgName, String(ctx.duty));
-          if (!runMatches) rememberDutyOp(dutyKey(ctx.die, cfgName, ctx.duty));
-          clearDutyOp(dutyKey(ctx.die, targetConfig, ctx.duty));
+          setActiveDuty(tDie, cfgName, tDuty);
+          if (!runMatches) rememberDutyOp(dutyKey(tDie, cfgName, tDuty));
+          clearDutyOp(dutyKey(tDie, targetConfig, tDuty));
         }
         // The DUTY CYCLE overlay, on the same rule as the point's but WITHOUT
         // the matching-run condition: the block was sent on this save whatever
@@ -483,10 +477,10 @@ const ActiveFamilyStrip: React.FC = () => {
         // nothing left to add.  It becomes this duty's snapshot layer in the
         // same breath, so the editor keeps showing what was just saved.
         if (dcSent) {
-          clearDutyCycle(dutyKey(ctx.die, targetConfig, ctx.duty),
+          clearDutyCycle(dutyKey(tDie, targetConfig, tDuty),
                          cfgName === targetConfig ? dcSent : null);
           if (cfgName !== targetConfig) {
-            clearDutyCycle(dutyKey(ctx.die, cfgName, ctx.duty), dcSent);
+            clearDutyCycle(dutyKey(tDie, cfgName, tDuty), dcSent);
           }
         }
       } catch { /* memory is a convenience, never a blocker */ }
@@ -504,7 +498,7 @@ const ActiveFamilyStrip: React.FC = () => {
       if (runMatches) {
         const rr = await fetch(`${API}/api/family/duty_result`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ die: ctx.die, config: cfgName, duty: ctx.duty,
+          body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
             drive, assignment_sig: dutyBody.assignment_sig,
             result: { efficiency_pct: dutyEfficiencyPct(s, PmW),
                       ripple_pct: s.T_ripple_pct,
@@ -544,7 +538,7 @@ const ActiveFamilyStrip: React.FC = () => {
             }
             const pr = await fetch(`${API}/api/family/duty_run`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ die: ctx.die, config: cfgName, duty: ctx.duty,
+              body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
                 drive, settings: dutyBody.mesh, summary: s,
                 assignment_sig: dutyBody.assignment_sig, payload }),
             });
@@ -580,7 +574,7 @@ const ActiveFamilyStrip: React.FC = () => {
             ? ` (${driveLabel(drive)} run stored — now this duty's primary)`
             : ` (${driveLabel(drive)} run stored; primary sine result kept)`)
         : '';
-      setMsg(`✓ saved to ${ctx.duty}${extra}${where}`);
+      setMsg(`✓ saved to ${tDie} / ${cfgName} / ${tDuty}${extra}${where}`);
       setBuildClash(false);
       window.dispatchEvent(new CustomEvent('family-changed'));
     } catch (e: any) {
@@ -599,15 +593,17 @@ const ActiveFamilyStrip: React.FC = () => {
 
   /** Save the ON-SCREEN build as a NEW configuration of the same die, then
    *  put this duty into it — the escape hatch from a build clash. */
-  const saveAsNewConfig = async (name: string) => {
-    if (!ctx.die || !ctx.duty) return;
+  const saveAsNewConfig = async (name: string, target?: { die: string; duty: string }) => {
+    const die = String(target?.die || ctx?.die || '');
+    const duty = String(target?.duty || ctx?.duty || '');
+    if (!die || !duty) return;
     setBusy(true); setMsg(null);
     try {
       // A fresh configuration has NO stored build, so the duty save below
       // DEFINES it from the live machine (family.py's `_defined_build` path).
       const r = await fetch(`${API}/api/family/config`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die: ctx.die, name }),
+        body: JSON.stringify({ die, name }),
       });
       if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
       const rj = await r.json().catch(() => ({} as any));
@@ -615,9 +611,12 @@ const ActiveFamilyStrip: React.FC = () => {
       // L12 becomes L15 when the live stack is 15 mm).  Keep `name` only for
       // compatibility with older servers.
       const created = String(rj?.config || rj?.name || name);
+      // On a RELEASED context this is also the re-attach: the die becomes
+      // active again, on the new configuration, with the live geometry
+      // untouched (activate loads nothing — ▶ does).
       const activated = await fetch(`${API}/api/family/activate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die: ctx.die, config: created, duty: ctx.duty }),
+        body: JSON.stringify({ die, config: created, duty }),
       });
       if (!activated.ok) {
         throw new Error((await activated.json()).detail ?? `HTTP ${activated.status}`);
@@ -626,17 +625,123 @@ const ActiveFamilyStrip: React.FC = () => {
       // The duty moved to a new configuration: its per-duty operating-point
       // memory has to follow, or the panel keeps filing edits under the
       // configuration the duty no longer lives in.
-      try { setActiveDuty(String(ctx.die), created, String(ctx.duty)); }
+      try { setActiveDuty(die, created, duty); }
       catch { /* memory is a convenience, never a blocker */ }
       window.dispatchEvent(new CustomEvent('family-changed'));
       setMsg(`✓ configuration '${created}' created — saving the duty…`);
-      // Save with the server's canonical name.  Updating React state alone is
+      // Save with the server's canonical names.  Updating React state alone is
       // insufficient here because this function still closes over the old ctx.
-      setCtx((c) => (c ? { ...c, config: created } : c));
-      await save(created);
+      setCtx((c) => (c ? { ...c, active: true, die, config: created, duty } : c));
+      await save({ die, config: created, duty });
     } catch (e: any) { setMsg(`✗ ${e?.message ?? e}`); }
     setBusy(false);
   };
+
+  /** RELEASED context, the machine on screen is a NEW lamination: keep it as
+   *  a new die (backend: die from the live geometry + one configuration from
+   *  the live build + one duty at the live point, context made active), then
+   *  record the last run's results into that duty exactly as "Save to duty"
+   *  does.  The released die is untouched. */
+  const saveAsNewDie = async (name: string) => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch(`${API}/api/family/save_as_new_die`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
+      const rj = await r.json();
+      const die = String(rj.die), config = String(rj.config), duty = String(rj.duty);
+      try { setActiveDuty(die, config, duty); } catch { /* convenience */ }
+      window.dispatchEvent(new CustomEvent('family-changed'));
+      setMsg(`✓ new die '${die}' saved (${config} / ${duty}) — recording the last run…`);
+      setCtx((c) => ({ ...(c ?? { active: true }), active: true, die, config, duty,
+                       can_write: true, die_locked: false, config_locked: false }));
+      await save({ die, config, duty });
+    } catch (e: any) { setMsg(`✗ ${e?.message ?? e}`); }
+    setBusy(false);
+  };
+
+  /** RELEASED context: throw the live changes away and load the released
+   *  duty again — the very ▶ the Motors catalog runs (lib/dutyApply). */
+  const reloadReleased = async (die: string, config: string, duty: string) => {
+    setBusy(true); setMsg(null);
+    try {
+      const done = await applyDutyEverywhere(die, config, duty, true);
+      setMsg(`✓ reloaded ${die} / ${config} / ${duty} — ${done.message}`);
+      window.dispatchEvent(new CustomEvent('family-changed'));
+    } catch (e: any) { setMsg(`✗ reload: ${e?.message ?? e}`); }
+    setBusy(false);
+  };
+
+  if (!ctx?.active) {
+    // RELEASED context (the identity guard, a Compare / My-motors / preset
+    // load): never a dead end (2026-09-20).  One line saying WHAT changed,
+    // and the ways to keep the work — lib/releasedContext decides which.
+    const offers = releasedOffers(ctx as ReleasedCtxLike | null);
+    if (!offers) return null;
+    const btnSx = { textTransform: 'none', fontSize: 11, py: 0, minHeight: 22 } as const;
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.25,
+                 fontSize: 11, color: '#f59e0b', borderBottom: '1px solid var(--line)',
+                 flexWrap: 'wrap' }}>
+        <Tooltip title={offers.tip}>
+          <span style={{ cursor: 'help' }}>{offers.line}</span>
+        </Tooltip>
+        <Box sx={{ flex: 1 }} />
+        {msg && (
+          <Typography sx={{ fontSize: 11,
+            color: msg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{msg}</Typography>
+        )}
+        {offers.saveNewDie && (
+          <Button size="small" variant="contained" disabled={busy}
+            onClick={() => setAskDie({
+              title: 'Save the machine on screen as a NEW die',
+              label: 'Die name',
+              initial: offers.saveNewDie!.initialName,
+              hint: offers.saveNewDie!.hint,
+              onSubmit: (n) => { void saveAsNewDie(n.trim()); },
+            })}
+            sx={{ ...btnSx, bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } }}>
+            {busy ? <CircularProgress size={11} /> : offers.saveNewDie.label}
+          </Button>
+        )}
+        {offers.saveNewConfig && (
+          <Button size="small" variant="outlined" disabled={busy}
+            onClick={() => setAskCfg({
+              title: `Save the machine on screen as a NEW configuration of ${offers.saveNewConfig!.die}`,
+              label: 'Configuration name',
+              initial: (() => {
+                try {
+                  const L = Number((useMotorStore.getState().geometry as any)?.motor_length);
+                  return Number.isFinite(L) ? `L${Math.round(L)}` : 'L-new';
+                } catch { return 'L-new'; }
+              })(),
+              hint: `The current build (stack, wire, turns, winding, materials) defines it; duty '${offers.saveNewConfig!.duty}' is saved into it and the die becomes active again`,
+              onSubmit: (n) => { void saveAsNewConfig(n.trim(), offers.saveNewConfig!); },
+            })}
+            sx={btnSx}>
+            {offers.saveNewConfig.label}
+          </Button>
+        )}
+        {offers.reload && (
+          <Button size="small" variant="outlined" color="warning" disabled={busy}
+            onClick={() => setAskReload({
+              title: 'Discard the live changes?',
+              body: `The geometry on screen is replaced by ${offers.reload!.die} / ${offers.reload!.config} / ${offers.reload!.duty} as saved in the catalog. Nothing of the current machine is kept — save it as a new die first if you want it.`,
+              confirmLabel: 'Discard & reload',
+              onConfirm: () => { void reloadReleased(offers.reload!.die, offers.reload!.config, offers.reload!.duty); },
+            })}
+            sx={btnSx}>
+            {offers.reload.label}
+          </Button>
+        )}
+        <TextPromptDialog state={askDie} onClose={() => setAskDie(null)} />
+        <TextPromptDialog state={askCfg} onClose={() => setAskCfg(null)} />
+        <ConfirmDialog state={askReload} onClose={() => setAskReload(null)} />
+      </Box>
+    );
+  }
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.35,

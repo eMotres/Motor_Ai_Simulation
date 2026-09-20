@@ -24,7 +24,12 @@ import FreeCADRoundTrip from '../common/FreeCADRoundTrip';
 import Fusion360RoundTrip from '../common/Fusion360RoundTrip';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
+import { ConfirmDialog, type ConfirmState } from '../common/PromptDialogs';
+import { useDieContext } from '../common/useDieContext';
+import { dieKeyLabel } from '../../lib/releasedContext';
 import { openGeometryHelpWindow } from '../../lib/geometryHelpWindow';
+import { useWireStock } from '../materials/useWireStock';
+import { stockHint } from '../../lib/wireStock';
 
 const numFieldSx = {
   width: '100%',   // fill the fixed-width value column → values line up vertically
@@ -165,6 +170,15 @@ const ParameterVariationTable: React.FC = () => {
     if (!free && famLocks.dieLocked) return `die '${famLocks.die}'`;
     return null;
   };
+  // DIE-DEFINING keys (stator Ø, segments, slots/poles per segment): on an
+  // UNLOCKED active die they are editable, but changing one makes the live
+  // machine a DIFFERENT lamination — the backend then releases the die
+  // context.  Warn BEFORE the change (flag + confirm), not after: the
+  // after-the-fact release is what left the owner's optimised machine
+  // unsaveable on 2026-09-20 12:47 (poles/segment 7 → 8 typed here).
+  const dieCtx = useDieContext();
+  const dieDefining = (name: string): boolean => dieCtx.active && dieCtx.dieKeys.has(name);
+  const [askNewDie, setAskNewDie] = useState<ConfirmState | null>(null);
 
   const {
     parameterSchema,
@@ -220,6 +234,16 @@ const ParameterVariationTable: React.FC = () => {
   const dirtyCount = dirtyKeys.size;
   const isDirty    = dirtyCount > 0;
 
+  // ── wire-stock hint (passive only — nothing here restricts the field) ───
+  // The owner's warehouse table (2026-09-20): "не блокируем выбор, просто
+  // подсказываем, если введённого размера физически нет на складе".
+  const { data: wireStockData } = useWireStock();
+  const currentWireH = localValues.wire_height ?? (geometry.wire_height as number | undefined) ?? 0;
+  const currentWireW = localValues.wire_width ?? (geometry.wire_width as number | undefined) ?? 0;
+  const wireStockNote = useMemo(
+    () => stockHint(currentWireH, currentWireW, wireStockData?.available_sizes ?? []),
+    [currentWireH, currentWireW, wireStockData]);
+
   // ── value committed from a field → local edit buffer only (no API) ──────
   const commitValue = useCallback((name: string, v: number) => {
     setLocalValues(prev => ({ ...prev, [name]: v }));
@@ -234,9 +258,7 @@ const ParameterVariationTable: React.FC = () => {
   }, [geometry]);
 
   // ── Recalculate → send all dirty changes to API ───────────────────────
-  const handleRecalculate = useCallback(async () => {
-    if (!isDirty) return;
-
+  const sendRecalculate = useCallback(async () => {
     const pending: Record<string, number> = {};
     dirtyKeys.forEach(k => { pending[k] = localValues[k]; });
 
@@ -247,7 +269,29 @@ const ParameterVariationTable: React.FC = () => {
     }
     setDirtyKeys(new Set());
     setShowSaved(true);
-  }, [isDirty, dirtyKeys, localValues, connectedToApi, updateGeometryViaApi, updateGeometry]);
+  }, [dirtyKeys, localValues, connectedToApi, updateGeometryViaApi, updateGeometry]);
+
+  const handleRecalculate = useCallback(async () => {
+    if (!isDirty) return;
+    // A die-defining edit under an active die: say what it means and ask.
+    const hits = [...dirtyKeys].filter(k => dieDefining(k)
+      && Number(localValues[k]) !== Number(geometry[k]));
+    if (hits.length) {
+      const what = hits.map(k => `${dieKeyLabel(k)} ${geometry[k]} → ${localValues[k]}`).join(', ');
+      setAskNewDie({
+        title: `${what}: this makes a NEW die`,
+        body: `Die '${dieCtx.die}' keeps its diameter and slot/pole topology for life. `
+          + 'After Recalculate the machine on screen is a different lamination: the die context is released '
+          + 'and the header strip offers "Save as NEW die" (your work is kept there) or "discard and reload". '
+          + 'The catalog die itself is not changed.',
+        confirmLabel: 'Recalculate as a new lamination',
+        onConfirm: () => { void sendRecalculate(); },
+      });
+      return;
+    }
+    await sendRecalculate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDirty, dirtyKeys, localValues, geometry, dieCtx.active, dieCtx.die, dieCtx.dieKeys, sendRecalculate]);
 
   // ── sweep toggle ──────────────────────────────────────────────────────
   const toggleSweep = useCallback((name: string) => {
@@ -436,6 +480,12 @@ const ParameterVariationTable: React.FC = () => {
                         <span style={{ marginRight: 4, cursor: 'help', fontSize: 11 }}>🔒</span>
                       </Tooltip>
                     )}
+                    {!lockedBy && dieDefining(param.name) && (
+                      <Tooltip title={`Die-defining — changing it makes a NEW die: '${dieCtx.die}' keeps its ${dieKeyLabel(param.name)} for life. Recalculate asks first; the strip then offers "Save as new die".`}>
+                        <span style={{ marginRight: 4, cursor: 'help', fontSize: 10,
+                                       color: '#f59e0b', fontWeight: 700 }}>die</span>
+                      </Tooltip>
+                    )}
                     {param.description
                       ? <Tooltip title={param.description}>
                           <span style={{ cursor: 'help' }}>{param.label}</span>
@@ -450,6 +500,17 @@ const ParameterVariationTable: React.FC = () => {
                       </Typography>
                     )}
                   </Typography>
+                  {/* Passive stock hint — wire_height/wire_width only, and
+                      only when the CURRENT pair is not a stocked size. Does
+                      not restrict the field; the owner decides that later. */}
+                  {(param.name === 'wire_height' || param.name === 'wire_width') && wireStockNote && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.3, mt: '-2px' }}>
+                      <Typography noWrap sx={{ fontSize: '0.62rem', color: '#f59e0b' }}>
+                        {wireStockNote}
+                      </Typography>
+                      <HelpTip title="Compared against the flat wire physically on the shelf (Materials tab → Flat wire in stock). Not enforced yet." />
+                    </Box>
+                  )}
                 </Box>
 
                 {/* Editable value — free-typing local draft */}
@@ -502,6 +563,7 @@ const ParameterVariationTable: React.FC = () => {
         onClose={() => setHelpError(null)}
         message={helpError ?? ''}
       />
+      <ConfirmDialog state={askNewDie} onClose={() => setAskNewDie(null)} />
     </Box>
   );
 };

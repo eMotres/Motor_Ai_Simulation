@@ -60,6 +60,8 @@ export interface ConfirmState {
   title: string;
   body?: string;
   onConfirm: () => void;
+  /** the red button's word — "Delete" when absent (every existing caller) */
+  confirmLabel?: string;
 }
 
 export const ConfirmDialog: React.FC<{
@@ -87,7 +89,7 @@ export const ConfirmDialog: React.FC<{
         <Button onClick={onClose}
           sx={{ textTransform: 'none', color: 'var(--text-2)' }}>Cancel</Button>
         <Button variant="contained" color="error" onClick={confirm}
-          sx={{ textTransform: 'none' }}>Delete</Button>
+          sx={{ textTransform: 'none' }}>{state?.confirmLabel ?? 'Delete'}</Button>
       </DialogActions>
     </Dialog>
   );

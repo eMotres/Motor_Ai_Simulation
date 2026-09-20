@@ -30,6 +30,10 @@ import SweepStudyPanel from './SweepStudyPanel';
 import DOEPanel from './DOEPanel';
 import HelpTip from '../common/HelpTip';
 import SectionLabel from '../common/SectionLabel';
+import { useDieContext } from '../common/useDieContext';
+import {
+  dieDefiningSelected, dieKeyLabel, readAllowNewLamination, writeAllowNewLamination,
+} from '../../lib/releasedContext';
 
 // Non-geometry variables (selected outside the Geometry tab) need their own
 // display label/unit since they are absent from the geometry parameter schema.
@@ -280,6 +284,19 @@ const SweepConfigPanel: React.FC = () => {
   const schemaMap = Object.fromEntries(parameterSchema.map(p => [p.name, p]));
   const sweepEntries = Object.entries(sweepConfig.variations).filter(([, v]) => v.mode !== 'fixed');
 
+  // DIE-DEFINING variables under an ACTIVE die (stator Ø, segments, slots /
+  // poles per segment): varying one makes a NEW lamination, and applying such
+  // a result released the die context with nowhere to save (2026-09-20
+  // 12:47).  The backend refuses the run (422) unless the request carries
+  // `allow_new_lamination` — this is that consent: one line + HelpTip, shown
+  // only when it matters, remembered in localStorage and read by every
+  // request builder (SweepStudyPanel, motorStore.runDescent).
+  const dieCtx = useDieContext();
+  const dieHits = dieCtx.active
+    ? dieDefiningSelected(sweepEntries.map(([n]) => n), dieCtx.dieKeys) : [];
+  const [allowNewLam, setAllowNewLam] = useState<boolean>(() => readAllowNewLamination());
+  const setAllowNewLamLS = (v: boolean) => { setAllowNewLam(v); writeAllowNewLamination(v); };
+
   // ── Add-variable dropdown: make the tab self-contained (no need to hunt
   //    chart-icons in the Geometry/Simulation tabs).  Adds as an optimize var.
   const DEFAULT_RANGE: Record<string, { min: number; max: number; step: number }> = {
@@ -431,6 +448,19 @@ const SweepConfigPanel: React.FC = () => {
           {sweepEntries.length} variable{sweepEntries.length === 1 ? '' : 's'}
         </Typography>
       </Box>
+      {dieHits.length > 0 && (
+        <Box sx={{ px: 3, py: 0.5, display: 'flex', alignItems: 'center', gap: 1,
+                   borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0,
+                   fontSize: 11, color: '#f59e0b' }}>
+          <span>⚠ die-defining: {dieHits.map(dieKeyLabel).join(', ')} — varying it makes a NEW die (not '{dieCtx.die}')</span>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+            <input type="checkbox" checked={allowNewLam}
+              onChange={(e) => setAllowNewLamLS(e.target.checked)} />
+            allow new lamination
+          </label>
+          <HelpTip title={`'${dieCtx.die}' keeps its stator Ø and slot/pole topology for life. A run that varies one of them is refused (422) unless this is ticked; with it ticked the result you apply is a different lamination — the die context is released and the header strip offers "Save as NEW die" so nothing is lost.`} />
+        </Box>
+      )}
 
       {/* ── Body: config (two columns) + the optimizer ── */}
       <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }}>
@@ -552,7 +582,8 @@ const SweepConfigPanel: React.FC = () => {
                 <SweepVarCard
                   key={name}
                   paramName={name}
-                  label={schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name}
+                  label={(dieHits.includes(name) ? '⚠ die · ' : '')
+                    + (schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name)}
                   unit={schemaMap[name]?.unit ?? SPECIAL_VARS[name]?.unit}
                   optimize={algoTab === 'optimize'}
                 />

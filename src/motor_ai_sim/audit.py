@@ -27,7 +27,43 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 _ROOT = Path(__file__).resolve().parents[2]
-_AUDIT_PATH = _ROOT / "logs" / "geometry_audit.jsonl"
+_REPO_CONFIG_DIR = (_ROOT / "config").resolve()
+
+
+def audit_path() -> Path:
+    """WHERE this process writes its geometry audit — resolved per call.
+
+    The path was pinned to the repo's ``logs/geometry_audit.jsonl``, so every
+    process that was NOT the owner's API — pytest's TestClient, a sandbox
+    uvicorn on another port with ``MOTOR_AI_SIM_CONFIG`` redirected — wrote its
+    PUTs into the owner's forensic trail (seen 2026-09-20: pid 48328 on
+    localhost:5199 and test pids beside the owner's 12:47 entry).  The trail
+    exists to answer "who changed MY machine?", and foreign machines in it are
+    noise at best and a false accusation at worst.
+
+    Rule, in order:
+      1. ``MOTOR_AI_SIM_LOG_DIR`` set → ``<that dir>/geometry_audit.jsonl``;
+      2. the process config (``config.DEFAULT_CONFIG_PATH``) lives OUTSIDE the
+         repo's ``config/`` (a redirected sandbox) → ``<config dir>/logs/…``,
+         i.e. the audit follows the machine it describes;
+      3. otherwise (this workstation's API, no env) the repo's ``logs/`` —
+         byte-identical to before.
+    A monkeypatched ``_AUDIT_PATH`` in the module dict still wins.
+    """
+    _ov = globals().get("_AUDIT_PATH")
+    if _ov is not None:
+        return Path(str(_ov))
+    env = os.environ.get("MOTOR_AI_SIM_LOG_DIR", "").strip()
+    if env:
+        return Path(env).expanduser() / "geometry_audit.jsonl"
+    try:
+        from motor_ai_sim import config as _config
+        cfg_dir = Path(str(_config.DEFAULT_CONFIG_PATH)).expanduser().resolve().parent
+        if cfg_dir != _REPO_CONFIG_DIR:
+            return cfg_dir / "logs" / "geometry_audit.jsonl"
+    except Exception:                   # noqa: BLE001 — never break an audit
+        pass
+    return _ROOT / "logs" / "geometry_audit.jsonl"
 # The presets backups go BESIDE THE STORE THEY BACK UP — i.e. beside the config
 # this process is pointed at (``MOTOR_AI_SIM_CONFIG``).  Pinned to the repo's own
 # config/, `snapshot_presets` dropped a redirected process's sandbox presets into
@@ -52,6 +88,8 @@ def _history_dir() -> Path:
 def __getattr__(name):
     if name == "_HISTORY_DIR":
         return _history_dir()
+    if name == "_AUDIT_PATH":
+        return audit_path()
     raise AttributeError(name)
 
 
@@ -90,7 +128,8 @@ def record_write(target: str, before: Optional[Mapping[str, Any]],
     try:
         b, a = _identity(before), _identity(after)
         changed = sorted(k for k in set(b) | set(a) if b.get(k) != a.get(k))
-        _AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        path = audit_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         line = {
             "t": datetime.now().astimezone().isoformat(timespec="seconds"),
             "target": target,
@@ -102,7 +141,7 @@ def record_write(target: str, before: Optional[Mapping[str, Any]],
             "client": client,
             "stack": _caller(),
         }
-        with open(_AUDIT_PATH, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
     except Exception:
         pass

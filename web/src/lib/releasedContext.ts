@@ -90,6 +90,10 @@ export interface ReleasedOffers {
   saveNewConfig: { label: string; die: string; duty: string } | null;
   /** "Discard live changes and reload ▶ X / cfg / duty" */
   reload: { label: string; die: string; config: string; duty: string } | null;
+  /** "↩ Re-attach to X / cfg / duty (keep the machine on screen)" — only when
+   *  the live machine IS the die's lamination again; activates the context
+   *  without loading anything (backend POST /reattach). */
+  reattach: { label: string; die: string; config: string; duty: string | null } | null;
 }
 
 /**
@@ -119,8 +123,8 @@ export function releasedOffers(ctx: ReleasedCtxLike | null | undefined): Release
         ? `A die keeps its diameter and slot/pole topology for life, so a machine with ${changed} is a NEW lamination. `
           + 'Nothing is synced into the catalog until you save it as a new die (the live geometry, its build and the operating point go into it), '
           + 'or discard the live changes and reload the released duty.'
-        : 'The machine on screen belongs to no die, so nothing is synced into the catalog. Re-attach it to the released die by saving it as a new configuration, '
-          + 'save it as a new die, or reload the released duty with ▶.');
+        : 'The machine on screen belongs to no die, so nothing is synced into the catalog. Re-attach it to the released die as it is, '
+          + 'save it as a new configuration or a new die, or reload the released duty with ▶.');
 
   return {
     line, tip,
@@ -139,6 +143,10 @@ export function releasedOffers(ctx: ReleasedCtxLike | null | undefined): Release
     reload: (dieExists && cfg && duty) ? {
       label: `↺ Discard live changes and reload ▶ ${rel} / ${cfg} / ${duty}`,
       die: rel, config: cfg, duty,
+    } : null,
+    reattach: (liveIsDie && dieExists && cfg) ? {
+      label: `↩ Re-attach to ${rel} / ${cfg}${duty ? ` / ${duty}` : ''} (keep the machine on screen)`,
+      die: rel, config: cfg, duty: duty || null,
     } : null,
   };
 }

@@ -281,6 +281,68 @@ def test_save_as_new_die_honours_explicit_names_and_the_l_rule(dies, live):
     assert ei.value.status_code == 422
 
 
+# ── re-attach: the live machine IS the die's lamination again ────────────────
+
+def test_reattach_activates_the_released_triple_without_loading_anything(dies, live):
+    """Poles put back to 7, shape optimised (tooth_width 4.2 → 4.5): the
+    context becomes active on the released triple, the live geometry is
+    untouched, and the UNLOCKED die adopts the live shape into its snapshot."""
+    cfg = live(7, tooth_width=4.5)
+    _ctx_file().write_text(json.dumps(OWNER_RECORD), encoding="utf-8")
+    out = fam.reattach(fam.Reattach(die=DIE, config=CFG, duty=DUTY), _w={})
+    assert out == {"ok": True, "die": DIE, "config": CFG, "duty": DUTY,
+                   "die_locked": False, "config_locked": False, "die_synced": True}
+    ctx = json.loads(_ctx_file().read_text(encoding="utf-8"))
+    assert (ctx["die"], ctx["config"], ctx["duty"]) == (DIE, CFG, DUTY)
+    assert _context()["active"] is True
+    # nothing was loaded: the live config is the very dict we installed
+    assert cfg["geometry"]["tooth_width"] == 4.5 and cfg["simulation"]["rpm"] == 20000.0
+    # the unlocked die's snapshot now describes the machine on screen
+    d = yaml.safe_load((dies / DIE / "die.yaml").read_text(encoding="utf-8"))
+    assert d["geometry"]["tooth_width"] == 4.5 and d["geometry"]["num_poles_per_segment"] == 7
+    # …and the configuration's duty point is untouched (no save happened)
+    c = yaml.safe_load((dies / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert c["duties"][0]["current_arms"] == 55.0
+
+
+def test_reattach_without_a_duty_and_on_a_locked_die(dies, live):
+    live(7, tooth_width=4.5)
+    d_path = dies / DIE / "die.yaml"
+    d = yaml.safe_load(d_path.read_text(encoding="utf-8"))
+    d["locked"] = True
+    d_path.write_text(yaml.safe_dump(d, sort_keys=False), encoding="utf-8")
+    out = fam.reattach(fam.Reattach(die=DIE, config=CFG), _w={})
+    assert out["duty"] is None and out["die_locked"] is True
+    assert out["die_synced"] is False           # a locked die's snapshot is canon
+    d2 = yaml.safe_load(d_path.read_text(encoding="utf-8"))
+    assert d2["geometry"]["tooth_width"] == 4.2
+    assert json.loads(_ctx_file().read_text(encoding="utf-8"))["duty"] is None
+
+
+def test_reattach_refuses_a_different_lamination_with_409(dies, live):
+    live(8)
+    _ctx_file().write_text(json.dumps(OWNER_RECORD), encoding="utf-8")
+    with pytest.raises(HTTPException) as ei:
+        fam.reattach(fam.Reattach(die=DIE, config=CFG, duty=DUTY), _w={})
+    assert ei.value.status_code == 409
+    assert "poles/segment 7 → 8" in ei.value.detail and "NEW die" in ei.value.detail
+    # the released record still stands, the die is untouched
+    assert json.loads(_ctx_file().read_text(encoding="utf-8")) == OWNER_RECORD
+    d = yaml.safe_load((dies / DIE / "die.yaml").read_text(encoding="utf-8"))
+    assert d["geometry"]["num_poles_per_segment"] == 7
+
+
+def test_reattach_404s_on_an_unknown_die_configuration_or_duty(dies, live):
+    live(7)
+    for req in (fam.Reattach(die="nope", config=CFG),
+                fam.Reattach(die=DIE, config="L99"),
+                fam.Reattach(die=DIE, config=CFG, duty="peak")):
+        with pytest.raises(HTTPException) as ei:
+            fam.reattach(req, _w={})
+        assert ei.value.status_code == 404
+    assert not (_ctx_file()).exists() or fam._read_ctx() is None
+
+
 # ── the die-defining gate for sweeps / optimizations ─────────────────────────
 
 def test_die_identity_keys_are_the_four_lamination_keys():

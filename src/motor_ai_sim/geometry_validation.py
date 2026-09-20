@@ -1153,6 +1153,47 @@ _FRACTION_0_1 = (
     "magnet_fill_down", "magnet_fill_up", "rotor_hole", "slot_hs",
 )
 
+#: THE admissible slot/pole topology PER SEGMENT — one table, read by the
+#: value validator below (→ ``PUT /api/geometry`` 422), served by
+#: ``GET /api/geometry/schema`` as ``allowed_by`` on ``num_poles_per_segment``
+#: (→ the Geometry table's select) and by nothing else.  Owner 2026-09-20:
+#: "Poles per Segment у нас 5 или 7, других комбинаций пока не бывает" — after a
+#: stray 7 → 8 (12s16p) turned the live machine into a lamination nobody
+#: stamps.  A slots-per-segment count NOT in the table carries no rule (there
+#: is no such family yet, and refusing it would refuse exploring one).
+ADMISSIBLE_POLES_PER_SEGMENT: Dict[int, Tuple[int, ...]] = {
+    6: (5, 7),           # 12s10p / 12s14p per two segments, 24s20p / 24s28p per four
+}
+
+
+def admissible_poles_per_segment(slots_per_segment) -> Optional[Tuple[int, ...]]:
+    """The poles/segment values a slots/segment count admits, or None when
+    the table says nothing about that count."""
+    s = _num(slots_per_segment)
+    if s is None:
+        return None
+    return ADMISSIBLE_POLES_PER_SEGMENT.get(int(round(s)))
+
+
+def topology_error(geo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The one record ``validate_parameter_values`` emits for an inadmissible
+    (slots/segment, poles/segment) pair, or None.  Pure, so the route test and
+    the validator test pin the same words."""
+    allowed = admissible_poles_per_segment(geo.get("num_slots_per_segment"))
+    p = _num(geo.get("num_poles_per_segment"))
+    if allowed is None or p is None:
+        return None
+    pi = int(round(p))
+    if pi in allowed:
+        return None
+    s = int(round(_num(geo.get("num_slots_per_segment"))))
+    return {"field": "num_poles_per_segment", "value": geo.get("num_poles_per_segment"),
+            "kind": "derived", "allowed": list(allowed),
+            "message": ("num_poles_per_segment = {:d} is not a lamination this "
+                        "product family stamps: with {:d} slots per segment the "
+                        "admissible values are {} (got {:d})."
+                        .format(pi, s, " or ".join(str(a) for a in allowed), pi))}
+
 
 def _num(v) -> Optional[float]:
     try:
@@ -1236,6 +1277,12 @@ def validate_parameter_values(geo: Dict[str, Any]) -> List[Dict[str, Any]]:
     # build a different machine — 7 wires wound 2-in-hand is 3.5 turns per coil,
     # and 3.5 turns is not a winding.
     _kind["k"] = "derived"
+    # ── the slot/pole topology has to be one the family stamps ───────────────
+    # DERIVED: it is the PAIR (slots/segment, poles/segment) that is judged,
+    # and either half is a legitimate thing to have just typed.
+    _topo = topology_error(geo)
+    if _topo is not None:
+        bad.append(_topo)
     _wp = _num(geo.get("wire_parallel"))
     _nw = _num(geo.get("num_wires_per_slot"))
     if _wp is not None and _nw is not None and _wp >= 1 and _nw >= 1:

@@ -66,8 +66,8 @@ function releasedOffers(ctx) {
         ? `A die keeps its diameter and slot/pole topology for life, so a machine with ${changed} is a NEW lamination. `
           + 'Nothing is synced into the catalog until you save it as a new die (the live geometry, its build and the operating point go into it), '
           + 'or discard the live changes and reload the released duty.'
-        : 'The machine on screen belongs to no die, so nothing is synced into the catalog. Re-attach it to the released die by saving it as a new configuration, '
-          + 'save it as a new die, or reload the released duty with ▶.');
+        : 'The machine on screen belongs to no die, so nothing is synced into the catalog. Re-attach it to the released die as it is, '
+          + 'save it as a new configuration or a new die, or reload the released duty with ▶.');
 
   return {
     line, tip,
@@ -86,6 +86,10 @@ function releasedOffers(ctx) {
     reload: (dieExists && cfg && duty) ? {
       label: `↺ Discard live changes and reload ▶ ${rel} / ${cfg} / ${duty}`,
       die: rel, config: cfg, duty,
+    } : null,
+    reattach: (liveIsDie && dieExists && cfg) ? {
+      label: `↩ Re-attach to ${rel} / ${cfg}${duty ? ` / ${duty}` : ''} (keep the machine on screen)`,
+      die: rel, config: cfg, duty: duty || null,
     } : null,
   };
 }
@@ -117,8 +121,10 @@ test('the 12:47 state offers "save as NEW die" and "discard & reload", never a d
   assert.equal(o.saveNewDie.label,
     '＋ Save as NEW die (copy of CIANO14 50 edited with the new lamination: poles/segment 7 → 8)');
   assert.equal(o.saveNewDie.initialName, 'CIANO14 50 edited 12s16p');
-  // a different lamination is NOT a configuration of the released die
+  // a different lamination is NOT a configuration of the released die, and
+  // cannot be re-attached to it either
   assert.equal(o.saveNewConfig, null);
+  assert.equal(o.reattach, null);
   assert.deepEqual(o.reload, {
     label: '↺ Discard live changes and reload ▶ CIANO14 50 edited / L15 / rated',
     die: 'CIANO14 50 edited', config: 'L15', duty: 'rated',
@@ -135,6 +141,21 @@ test('when the live machine is the die again, "save as new configuration" is off
                                       die: 'CIANO14 50 edited', duty: 'rated' });
   assert.equal(o.saveNewDie.label, '＋ Save as NEW die (copy of CIANO14 50 edited)');
   assert.ok(o.reload);
+  // …and the machine on screen can be RE-ATTACHED without a load
+  assert.deepEqual(o.reattach, {
+    label: '↩ Re-attach to CIANO14 50 edited / L15 / rated (keep the machine on screen)',
+    die: 'CIANO14 50 edited', config: 'L15', duty: 'rated',
+  });
+  // a configuration alone is enough to re-attach (the duty is optional)
+  const o2 = releasedOffers({ ...OWNER, die_diffs: [], live_is_die: true, released_duty: null });
+  assert.deepEqual(o2.reattach, {
+    label: '↩ Re-attach to CIANO14 50 edited / L15 (keep the machine on screen)',
+    die: 'CIANO14 50 edited', config: 'L15', duty: null,
+  });
+  assert.equal(o2.reload, null);
+  // no configuration known → nothing to re-attach to
+  assert.equal(releasedOffers({ ...OWNER, die_diffs: [], live_is_die: true,
+                                released_config: null }).reattach, null);
 });
 
 test('the reload offer needs a configuration AND a duty; the other offers do not', () => {
@@ -152,6 +173,7 @@ test('a released die that no longer exists offers nothing that needs it', () => 
   assert.equal(o.saveNewDie, null);
   assert.equal(o.saveNewConfig, null);
   assert.equal(o.reload, null);
+  assert.equal(o.reattach, null);
   assert.match(o.line, /released from 'CIANO14 50 edited'/);
 });
 

@@ -563,6 +563,14 @@ def get_geometry_schema():
         # value.  The yaml bounds are preserved; this only overrides them at serve
         # time while the flag is on — unset the env var to restore the caps.
         _unbounded = os.environ.get("GEO_UNBOUNDED", "0") == "1"
+        # The admissible slot/pole topology, ONE table (geometry_validation):
+        # served on `num_poles_per_segment` as `allowed_by` = {dependency key:
+        # {its value: [allowed values]}}, so the Geometry table offers a select
+        # of the stamped pole counts instead of a free number — the same rule
+        # PUT /api/geometry refuses on.
+        from motor_ai_sim.geometry_validation import ADMISSIBLE_POLES_PER_SEGMENT
+        _allowed_by = {"num_slots_per_segment": {
+            str(k): list(v) for k, v in ADMISSIBLE_POLES_PER_SEGMENT.items()}}
 
         parameters = [
             {
@@ -585,6 +593,7 @@ def get_geometry_schema():
                 "default": meta.get("default"),
                 "optimizable": bool(allow_all or name in whitelist_set),
                 "hidden": bool(meta.get("hidden", False)),
+                **({"allowed_by": _allowed_by} if name == "num_poles_per_segment" else {}),
             }
             for name, meta in schema.items()
         ]

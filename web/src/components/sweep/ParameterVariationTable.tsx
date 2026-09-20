@@ -513,7 +513,30 @@ const ParameterVariationTable: React.FC = () => {
                   )}
                 </Box>
 
-                {/* Editable value — free-typing local draft */}
+                {/* Editable value — a SELECT of the admissible values when the
+                    schema's topology table has an entry for the dependency's
+                    current value (poles/segment given slots/segment: 5 or 7 —
+                    owner 2026-09-20, "других комбинаций пока не бывает"), a
+                    free-typing local draft otherwise. */}
+                {(() => {
+                  const dep = param.allowed_by ? Object.keys(param.allowed_by)[0] : null;
+                  const depVal = dep ? Number(localValues[dep] ?? geometry[dep]) : NaN;
+                  const allowed = dep && Number.isFinite(depVal)
+                    ? param.allowed_by![dep][String(Math.round(depVal))] : undefined;
+                  if (!allowed || !allowed.length) return null;
+                  const cur = Number(displayVal);
+                  return (
+                    <TextField select size="small" value={allowed.includes(cur) ? cur : ''}
+                      disabled={!!lockedBy}
+                      SelectProps={{ native: true }}
+                      onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) commitValue(param.name, n); }}
+                      sx={{ ...numFieldSx, '& select': { px: '4px', py: '4px', fontSize: 12, textAlign: 'right' },
+                            '& .MuiOutlinedInput-root': dirty ? { '& fieldset': { borderColor: '#f59e0b55' } } : {} }}>
+                      {!allowed.includes(cur) && <option value="">{Number.isFinite(cur) ? cur : ''}</option>}
+                      {allowed.map(a => <option key={a} value={a}>{a}</option>)}
+                    </TextField>
+                  );
+                })() ?? (
                 <ParamValueField
                   value={typeof displayVal === 'number' ? displayVal : (Number(displayVal) || 0)}
                   type={param.type as 'float' | 'int'}
@@ -525,6 +548,7 @@ const ParameterVariationTable: React.FC = () => {
                   onCommit={(v) => commitValue(param.name, v)}
                   onEnter={handleRecalculate}
                 />
+                )}
 
                 {/* Add / remove from sweep — only for whitelisted params */}
                 {canSweep ? (

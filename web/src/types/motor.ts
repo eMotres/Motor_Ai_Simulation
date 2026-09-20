@@ -14,6 +14,11 @@ export interface ParameterSchema {
   options?: string[]; // For string type with predefined choices
   optimizable?: boolean; // may be used as a Sweep/Optimize variable (whitelist)
   hidden?: boolean; // kept in config but not shown in the geometry UI
+  /** Admissible values keyed by ANOTHER parameter's value — today only
+   *  num_poles_per_segment: {num_slots_per_segment: {"6": [5, 7]}} (the one
+   *  topology table in geometry_validation).  The form renders a select of
+   *  those values whenever the dependency's current value has an entry. */
+  allowed_by?: Record<string, Record<string, number[]>>;
 }
 
 /**

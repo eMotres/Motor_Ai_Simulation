@@ -3228,6 +3228,66 @@ def deactivate(req: Deactivate, _w: dict = Depends(require_catalog_write)):
     return {"ok": True, "released_from": was}
 
 
+class Reattach(BaseModel):
+    die: str
+    config: str
+    duty: Optional[str] = None
+
+
+@router.post("/reattach")
+def reattach(req: Reattach, _w: dict = Depends(require_catalog_write)):
+    """Make die/config/duty ACTIVE again WITHOUT loading anything.
+
+    The way back from a released context when the live machine IS that die's
+    lamination (the identity keys match — e.g. the pole count was put back):
+    the optimised geometry on screen stays exactly as it is, the context is
+    stamped, and the strip's ordinary "Save to <duty>" works on it.  Unlike
+    ▶/activate: no geometry PUT, no winding / materials / simulation PATCH,
+    no mesh-block sync — the machine is not replaced by the catalog copy.
+
+    404 when the die / configuration / duty does not exist; 409 with the
+    identity diffs when the live machine is NOT this lamination (that case is
+    "Save as new die", never a re-attach).  An UNLOCKED die adopts the live
+    shape into its snapshot (the same sync every geometry save performs), so
+    the catalog card and build_sig describe the machine that is now active.
+    """
+    die = _check_name(req.die, "die")
+    cfg = _check_name(req.config, "configuration")
+    _require_die_write(die, _w)
+    d = _load_yaml(_die_file(die), "die")
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    duty = None
+    if req.duty:
+        duty = _check_name(req.duty, "duty")
+        if not any(isinstance(x, dict) and x.get("name") == duty
+                   for x in (c.get("duties") or [])):
+            raise HTTPException(404, detail=f"duty '{duty}' not found in {die}/{cfg}")
+    geo = _plain(_live_cfg().get("geometry")) or {}
+    diffs = die_identity_diffs(d.get("geometry") or {}, geo)
+    if diffs:
+        raise HTTPException(409, detail=(
+            "the live machine is not die '%s': %s — it is a different "
+            "lamination; save it as a NEW die instead of re-attaching."
+            % (die, "; ".join(f"{x['label']} {x['die']} → {x['live']}" for x in diffs))))
+    import json as _json
+    _ctx_file().write_text(
+        _json.dumps({"die": die, "config": cfg, "duty": duty,
+                     "at": datetime.now().isoformat(timespec="seconds")}),
+        encoding="utf-8")
+    synced = None
+    try:
+        synced = sync_active_die_geometry(dict(geo))
+    except Exception as _se:          # noqa: BLE001 — the re-attach already happened
+        log.warning("family: reattach could not sync the die snapshot: %s", _se)
+    log.info("family: context RE-ATTACHED to '%s/%s/%s' without a load (live "
+             "machine kept; die snapshot %s)", die, cfg, duty,
+             "synced" if synced else "left as is")
+    return {"ok": True, "die": die, "config": cfg, "duty": duty,
+            "die_locked": bool(d.get("locked", True)),
+            "config_locked": bool(c.get("locked", False)),
+            "die_synced": bool(synced)}
+
+
 class SaveAsNewDie(BaseModel):
     name: str                            # the new die's name
     config: Optional[str] = None         # default: the released configuration's name

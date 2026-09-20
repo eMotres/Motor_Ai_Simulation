@@ -662,6 +662,30 @@ const ActiveFamilyStrip: React.FC = () => {
     setBusy(false);
   };
 
+  /** RELEASED context, the live machine IS the die's lamination again: make
+   *  the released triple active WITHOUT loading anything (backend
+   *  POST /reattach — no geometry PUT, no point overwrite), so "Save to
+   *  <duty>" works on the optimised geometry on screen. */
+  const reattachReleased = async (die: string, config: string, duty: string | null) => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await fetch(`${API}/api/family/reattach`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ die, config, duty }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
+      const rj = await r.json();
+      if (duty) { try { setActiveDuty(die, config, duty); } catch { /* convenience */ } }
+      setCtx((c) => ({ ...(c ?? { active: true }), active: true, die, config, duty,
+                       can_write: true, die_locked: rj?.die_locked === true,
+                       config_locked: rj?.config_locked === true }));
+      setMsg(`✓ re-attached to ${die} / ${config}${duty ? ` / ${duty}` : ''} — machine on screen kept`
+        + (rj?.die_synced ? ' (die snapshot updated)' : ''));
+      window.dispatchEvent(new CustomEvent('family-changed'));
+    } catch (e: any) { setMsg(`✗ re-attach: ${e?.message ?? e}`); }
+    setBusy(false);
+  };
+
   /** RELEASED context: throw the live changes away and load the released
    *  duty again — the very ▶ the Motors catalog runs (lib/dutyApply). */
   const reloadReleased = async (die: string, config: string, duty: string) => {
@@ -704,6 +728,14 @@ const ActiveFamilyStrip: React.FC = () => {
             })}
             sx={{ ...btnSx, bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } }}>
             {busy ? <CircularProgress size={11} /> : offers.saveNewDie.label}
+          </Button>
+        )}
+        {offers.reattach && (
+          <Button size="small" variant="contained" disabled={busy}
+            onClick={() => void reattachReleased(offers.reattach!.die, offers.reattach!.config,
+                                                 offers.reattach!.duty)}
+            sx={{ ...btnSx, bgcolor: '#047857', '&:hover': { bgcolor: '#059669' } }}>
+            {offers.reattach.label}
           </Button>
         )}
         {offers.saveNewConfig && (

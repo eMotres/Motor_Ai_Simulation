@@ -2781,7 +2781,8 @@ class TestTheRestOfThe20260914Pass:
         from motor_ai_sim import report as R
 
         notes = dict((r[0], r[2]) for r in R.em_constant_rows(
-            {"Ld_mH": 0.0798, "Lq_mH": 0.0835, "gamma_deg": -15.0,
+            {"Ld_mH": 0.0798, "Lq_mH": 0.0835,
+             "Ld_inc_mH": 0.0798, "Lq_inc_mH": 0.0835, "gamma_deg": -15.0,
              "ldq_method": "frozen-permeability incremental at the point",
              "Ld_chord_mH": 0.0396, "Lq_chord_mH": 0.0648}))
         for ax in ("Ld", "Lq"):
@@ -2789,10 +2790,12 @@ class TestTheRestOfThe20260914Pass:
             assert "gamma = -15" in notes[ax]
         assert "0.0396 mH" in notes["Ld"] and "not an inductance" in notes["Ld"]
         assert "0.0648 mH" in notes["Lq"]
-        # a run with neither: the note says nothing it cannot support
-        flat = dict((r[0], r[2]) for r in R.em_constant_rows(
-            {"Ld_mH": 0.0694, "gamma_deg": 0.0}))
-        assert "chord" not in flat["Ld"] and "gamma" not in flat["Ld"]
+        # a run with neither Ld_inc_mH nor Lq_inc_mH (predates the incremental
+        # measurement): the row says "not solved" rather than print a value
+        # that might be the stale chord under the "Ld" label.
+        flat = {r[0]: r for r in R.em_constant_rows(
+            {"Ld_mH": 0.0694, "gamma_deg": 0.0})}
+        assert flat["Ld"][1] == "not solved — re-run the electromagnetic solve"
 
     def test_d1_and_d2_the_sleeve_eddy_is_one_decimal(self):
         from motor_ai_sim import report as R
@@ -3603,7 +3606,8 @@ class TestAuditV3:
         from motor_ai_sim import report as R
 
         rows = {r[0]: r for r in R.em_constant_rows(
-            {"Ld_mH": 0.0405, "Lq_mH": 0.0495, "gamma_deg": 15.0,
+            {"Ld_mH": 0.0405, "Lq_mH": 0.0495,
+             "Ld_inc_mH": 0.0405, "Lq_inc_mH": 0.0495, "gamma_deg": 15.0,
              "ldq_method": "frozen-permeability incremental at the point",
              "Ld_chord_mH": 0.0976, "Lq_chord_mH": 0.0693})}
         ld, lq = rows["Ld"][2], rows["Lq"][2]
@@ -3611,10 +3615,13 @@ class TestAuditV3:
         assert "(Psi_d - Psi_PM)/i_d" in ld
         assert "(Psi_d - Psi_PM)/i_d" not in lq
         assert "Psi_q/i_q" in lq
-        # with no chord stored there is nothing to compare against
+        # with the incremental block present but no chord stored: nothing to
+        # compare against, but the row is still the solved value, not a guard.
         plain = {r[0]: r for r in R.em_constant_rows(
-            {"Ld_mH": 0.04, "Lq_mH": 0.05, "gamma_deg": 0.0})}
+            {"Ld_mH": 0.04, "Lq_mH": 0.05,
+             "Ld_inc_mH": 0.04, "Lq_inc_mH": 0.05, "gamma_deg": 0.0})}
         assert "chord" not in plain["Lq"][2]
+        assert plain["Lq"][1] == "0.05 mH"
 
     # ── CS-5 / CS-6 / CS-11 · the small ones ────────────────────────────────
     def test_the_symbols_and_the_units_survive(self):
@@ -6933,6 +6940,7 @@ class TestButtonAuditOf20260916:
         "star_delta": "delta", "A_phase_mm2": 18.0,
         "I_phase_rms_A": 346.6296, "I_line_rms_A": 600.3798,
         "Ld_mH": 0.0976, "Lq_mH": 0.0693,
+        "Ld_inc_mH": 0.0976, "Lq_inc_mH": 0.0693,
         "Ld_eq_star_mH": 0.0325, "Lq_eq_star_mH": 0.0231,
         "L0_mH": 0.126097, "saliency_Lq_over_Ld": 0.71,
         "psi_pm_Wb": 0.070592, "KV_noload_rpm_per_V_line": 27.06,
@@ -7285,6 +7293,75 @@ class TestButtonAuditOf20260916:
         # …and the rest of a long table still breaks between rows
         assert not any(p.paragraph_format.keep_with_next
                        for c in t.rows[-1].cells for p in c.paragraphs)
+
+
+# ---------------------------------------------------------------------------
+# Hot Ld/Lq guard against pre-incremental EM records  (2026-09-20)
+# ---------------------------------------------------------------------------
+# A duty solved before commit 28aa982 stored Ld_mH / Lq_mH / saliency_Lq_
+# over_Ld as the OLD CHORD values, under the exact key names the incremental
+# measurement now uses — the client-questioned "Saliency Lq/Ld 0.71" on the
+# L180 gen duty.  Ld_inc_mH / Lq_inc_mH only ever get written together with
+# the incremental block, so their presence is the guard's signal.
+class TestHotLdLqGuardAgainstPreIncrementalRecords:
+
+    #: A duty's stored hot EM summary exactly as it looked before the fix:
+    #: Ld_mH / Lq_mH / saliency_Lq_over_Ld are the chord, no incremental keys.
+    OLD_RECORD = {
+        "Ld_mH": 0.0976, "Lq_mH": 0.0693, "Ld_eq_star_mH": 0.0325,
+        "Lq_eq_star_mH": 0.0231, "saliency_Lq_over_Ld": 0.71,
+        "star_delta": "delta", "gamma_deg": -15.0,
+    }
+
+    #: The same duty after the sandbox re-solve: the incremental block is
+    #: present and Ld_mH/Lq_mH/saliency_Lq_over_Ld are the incremental values.
+    NEW_RECORD = {
+        "Ld_mH": 0.0798, "Lq_mH": 0.0835,
+        "Ld_inc_mH": 0.0798, "Lq_inc_mH": 0.0835, "Ldq_inc_mH": -0.0027,
+        "Ld_eq_star_mH": 0.0266, "Lq_eq_star_mH": 0.0278,
+        "saliency_Lq_over_Ld": 1.047, "ldq_method":
+            "frozen-permeability incremental at the point",
+        "Ld_chord_mH": 0.0396, "Lq_chord_mH": 0.0648,
+        "star_delta": "delta", "gamma_deg": -15.0,
+        "psi_pm_Wb": 0.0706, "psi_pm_sag_pct": 6.1,
+        "psi_pm_frozen_Wb": 0.0663,
+    }
+
+    def _rows(self, em):
+        from motor_ai_sim import report as R
+
+        return {r[0]: r for r in R.em_constant_rows(em)}
+
+    def test_pre_incremental_record_prints_not_solved_never_the_stale_chord(self):
+        rows = self._rows(self.OLD_RECORD)
+        for label in ("Ld (winding)", "Lq (winding)",
+                      "Ld, star-equivalent", "Lq, star-equivalent",
+                      "Saliency Lq/Ld"):
+            assert rows[label][1] == \
+                "not solved — re-run the electromagnetic solve", rows[label]
+            # the value column must never carry the old chord-derived numbers
+            assert "0.71" not in rows[label][1]
+            assert "0.0976" not in rows[label][1]
+            assert "0.0693" not in rows[label][1]
+
+    def test_incremental_record_prints_the_incremental_values_and_sag(self):
+        rows = self._rows(self.NEW_RECORD)
+        assert rows["Ld (winding)"][1] == "0.0798 mH"
+        assert rows["Lq (winding)"][1] == "0.0835 mH"
+        assert rows["Saliency Lq/Ld"][1] == "1.047"
+        assert "incremental (frozen permeability)" in rows["Ld (winding)"][2]
+        # the ψ_PM row states what the load did to the magnet flux
+        assert "6.1" in rows["Magnet flux linkage Psi_PM"][2]
+        assert "0.0663" in rows["Magnet flux linkage Psi_PM"][2]
+
+    def test_missing_lq_inc_alone_also_trips_the_guard(self):
+        """Only Ld_inc_mH present (a partial/corrupt record): still guarded —
+        the row must not mix an incremental Ld with a chord Lq."""
+        rows = self._rows({**self.OLD_RECORD, "Ld_inc_mH": 0.0798})
+        assert rows["Ld (winding)"][1] == \
+            "not solved — re-run the electromagnetic solve"
+        assert rows["Lq (winding)"][1] == \
+            "not solved — re-run the electromagnetic solve"
 
 
 # ---------------------------------------------------------------------------

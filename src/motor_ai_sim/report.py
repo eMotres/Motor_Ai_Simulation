@@ -11086,19 +11086,45 @@ def em_constant_rows(em: Dict[str, Any],
          "; in the loaded iron the magnets link %s (%s)"
          % (_fmt(_numf(_g(em, "psi_pm_frozen_Wb")), 4, "Wb"),
             _fmt(-_sag, 1, "%"))))
-    R("Ld" + _w, _g(em, "Ld_mH"), 4, "mH",
-      "direct-axis inductance" + _chord_d)
-    R("Lq" + _w, _g(em, "Lq_mH"), 4, "mH",
-      "quadrature-axis inductance" + _chord_q)
-    R("Cross-saturation Ldq" + _w, _g(em, "Ldq_inc_mH"), 4, "mH",
-      "the off-diagonal term of the same 2x2 matrix, dPsi_d/di_q — zero on an "
-      "unsaturated machine")
-    if _delta:
-        R("Ld, star-equivalent", _g(em, "Ld_eq_star_mH"), 4, "mH",
-          "the per-phase value of the equivalent star — one third of the winding's")
-        R("Lq, star-equivalent", _g(em, "Lq_eq_star_mH"), 4, "mH", "")
-    R("Saliency Lq/Ld", _g(em, "saliency_Lq_over_Ld"), 3, "",
-      saliency_note(_g(em, "saliency_Lq_over_Ld")))
+    # GUARD (client review 2026-09-20 follow-up): a run made BEFORE the
+    # frozen-permeability fix (commit 28aa982) still carries `Ld_mH` /
+    # `Lq_mH` / `saliency_Lq_over_Ld` under these same key names, but as the
+    # OLD chord values — that run never wrote `Ld_inc_mH` / `Lq_inc_mH` at
+    # all.  Reading `Ld_mH` etc. unconditionally would silently reprint the
+    # very chord-derived saliency (0.71 on the L180) the client questioned,
+    # now mislabelled as the incremental one.  `Ld_inc_mH` / `Lq_inc_mH` only
+    # ever get written together with the incremental block (routes/
+    # simulation.py), so their presence is the one reliable signal that this
+    # run's `Ld_mH` / `Lq_mH` / `saliency_Lq_over_Ld` are the incremental
+    # values and not a leftover chord.
+    _has_inc = (_g(em, "Ld_inc_mH") is not None
+                and _g(em, "Lq_inc_mH") is not None)
+    if _has_inc:
+        R("Ld" + _w, _g(em, "Ld_mH"), 4, "mH",
+          "direct-axis inductance" + _chord_d)
+        R("Lq" + _w, _g(em, "Lq_mH"), 4, "mH",
+          "quadrature-axis inductance" + _chord_q)
+        R("Cross-saturation Ldq" + _w, _g(em, "Ldq_inc_mH"), 4, "mH",
+          "the off-diagonal term of the same 2x2 matrix, dPsi_d/di_q — zero on "
+          "an unsaturated machine")
+        if _delta:
+            R("Ld, star-equivalent", _g(em, "Ld_eq_star_mH"), 4, "mH",
+              "the per-phase value of the equivalent star — one third of the "
+              "winding's")
+            R("Lq, star-equivalent", _g(em, "Lq_eq_star_mH"), 4, "mH", "")
+        R("Saliency Lq/Ld", _g(em, "saliency_Lq_over_Ld"), 3, "",
+          saliency_note(_g(em, "saliency_Lq_over_Ld")))
+    else:
+        _inc_missing = NOT_SOLVED + " — re-run the electromagnetic solve"
+        _inc_missing_note = ("this run predates the incremental "
+                              "(frozen-permeability) Ld/Lq measurement; the "
+                              "chord is not printed here as an inductance")
+        rows.append(["Ld" + _w, _inc_missing, _inc_missing_note])
+        rows.append(["Lq" + _w, _inc_missing, _inc_missing_note])
+        if _delta:
+            rows.append(["Ld, star-equivalent", _inc_missing, _inc_missing_note])
+            rows.append(["Lq, star-equivalent", _inc_missing, _inc_missing_note])
+        rows.append(["Saliency Lq/Ld", _inc_missing, _inc_missing_note])
     R("Torque constant Kt" + (" per winding A" if _delta else ""),
       _km(_g(em, "Kt_Nm_per_Arms")), 4, "N·m/A rms", "2-D" + _kt_tail)
     if _delta:

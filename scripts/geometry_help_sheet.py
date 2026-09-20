@@ -1,14 +1,15 @@
 #!/usr/bin/env python
-"""Regenerate the static Geometry-tab Help picture.
+"""Regenerate the static Geometry-tab Help pictures — TWO of them, tabbed in
+the Help window: "Sector" (geometry_parameters.svg/.png) and "Radii"
+(geometry_parameters_radii.svg/.png).
 
-ONE picture, for every model — not a per-machine render.  The Geometry tab's
-Help button opens ``web/public/help/geometry_parameters.svg`` (a static
-asset, no backend call), so labels never carry a value: a number from
-whichever machine this script happened to load would be wrong on every other
-model that shares the page (owner's correction, 2026-09-20 — the original
-brief asked for a live per-machine render; keep that as the still-available
-dev route ``GET /api/geometry/dimension_sheet``, but the button no longer
-opens it).
+ONE pair of pictures, for every model — not a per-machine render.  The
+Geometry tab's Help button opens them (static assets, no backend call), so
+labels never carry a value: a number from whichever machine this script
+happened to load would be wrong on every other model that shares the page
+(owner's correction, 2026-09-20 — the original brief asked for a live
+per-machine render; keep that as the still-available dev route
+``GET /api/geometry/dimension_sheet``, but the button no longer opens it).
 
 Run this whenever the geometry schema grows (a new parameter needs a legend
 row) or the drawing needs a tweak:
@@ -79,6 +80,32 @@ def main() -> None:
               f"{missing}", file=sys.stderr)
     else:
         print(f"all {len(schema)} schema keys are present in the SVG text.")
+
+    # Second Help-window tab: every diameter/radius on one big ring, plus a
+    # magnified callout of the air-gap zone (owner, 2026-09-20 — the small
+    # ring inset on the sector page was too small to letter the coarse
+    # radii, and air_gap/magnet_up_gap/sleeve_thickness are illegible at the
+    # sector's own scale).
+    radii_title = "Geometry parameters — every diameter / radius"
+    radii_svg = build_dimension_sheet(geo, schema, groups, fmt="svg", show_values=False,
+                                       layout="radii", title=radii_title)
+    (OUT_DIR / "geometry_parameters_radii.svg").write_bytes(radii_svg)
+    print(f"wrote {OUT_DIR / 'geometry_parameters_radii.svg'} ({len(radii_svg):,} bytes)")
+
+    radii_png = build_dimension_sheet(geo, schema, groups, fmt="png", show_values=False,
+                                       layout="radii", title=radii_title)
+    (OUT_DIR / "geometry_parameters_radii.png").write_bytes(radii_png)
+    print(f"wrote {OUT_DIR / 'geometry_parameters_radii.png'} ({len(radii_png):,} bytes)")
+
+    radii_keys = ("stator_diameter", "stator_inner_radius", "rotor_outer_radius",
+                  "rotor_inner_radius", "shaft_height", "air_gap", "magnet_up_gap",
+                  "sleeve_thickness")
+    radii_missing = [k for k in radii_keys if k.encode() not in radii_svg]
+    if radii_missing:
+        print(f"WARNING: {len(radii_missing)} radii key(s) not found verbatim in the "
+              f"radii SVG text: {radii_missing}", file=sys.stderr)
+    else:
+        print(f"all {len(radii_keys)} radii-page keys are present in the radii SVG text.")
 
 
 if __name__ == "__main__":

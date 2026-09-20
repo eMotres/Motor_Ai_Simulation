@@ -6760,10 +6760,28 @@ def fem_transient_sliding_band(
                       "tags": np.concatenate(
                           [np.asarray(ts), np.asarray(tr)]).astype(int),
                       "nsn": int(nsn)}
+            # J (source) view: the APPLIED per-element source current density,
+            # so the "J" view shows the winding currents at this rotor
+            # position.  Same key and same construction as the P1 snapshot —
+            # a viewer must not need a per-order case.  ALWAYS written, eddy
+            # run or not — an eddy transient snapshot used to skip this
+            # branch entirely (only `else` wrote it), so the "J" view served
+            # from an eddy run's snapshot read all-zero (2026-09-20 bug: "J —
+            # Source current density" showed max 0.0 · min 0.0, no +/-).
+            _Js2 = np.zeros(int(mesh_all.t.shape[1]))
+            for _ix, _ar, _dir, _ph, _as in coil_info:
+                # Same divisor as the assembled source (the slot's REAL
+                # copper area), so the J card reads the density the solve
+                # actually used, not a nominal-rectangle one.
+                _Js2[_ix] = (_dir * Ist[_ph] * n_wires / max(_as, 1e-12))
+            _snap2["Jtri_src"] = _Js2
             if eddy:
-                # J-VIEW: the eddy current density J = σ(−∂A/∂t + U_b) the
-                # coupled solve produces, sampled at the mesh VERTICES (the
-                # P1 snapshot is nodal too, so the viewer needs no new case).
+                # J⟳ (eddy) view: the eddy current density J = σ(−∂A/∂t + U_b)
+                # the coupled solve produces, sampled at the mesh VERTICES
+                # (the P1 snapshot is nodal too, so the viewer needs no new
+                # case).  Written IN ADDITION TO Jtri_src above, not instead
+                # of it — a snapshot from an eddy run must still carry the
+                # source density for the "J" view.
                 def _bdofs(ids):
                     return np.concatenate([
                         vdof[np.unique(mesh_all.t[:, ids])],
@@ -6777,20 +6795,6 @@ def fem_transient_sliding_band(
                     for _tg_i in _c.get("tags", [_c["tag"]]):
                         _u_n[_bdofs(_elm[_tg_i])] = float(_Ued[_ci])
                 _snap2["Jeddy"] = (_sig_n * (-_dAe + _u_n))[vdof].copy()
-            else:
-                # Magnetostatic view: the APPLIED per-element source current
-                # density, so the "J" view shows the winding currents at this
-                # rotor position.  Same key and same construction as the P1
-                # snapshot — a viewer must not need a per-order case, and the
-                # J view rendered EMPTY on P2 for exactly as long as this key
-                # was missing here.
-                _Js2 = np.zeros(int(mesh_all.t.shape[1]))
-                for _ix, _ar, _dir, _ph, _as in coil_info:
-                    # Same divisor as the assembled source (the slot's REAL
-                    # copper area), so the J card reads the density the solve
-                    # actually used, not a nominal-rectangle one.
-                    _Js2[_ix] = (_dir * Ist[_ph] * n_wires / max(_as, 1e-12))
-                _snap2["Jtri_src"] = _Js2
     # ── What the run COST, captured before the settling frames are stripped ──
     # `n_total` is about to be decremented back to the REPORTED window, and both
     # the log line and the result dict below read it — so both understated the

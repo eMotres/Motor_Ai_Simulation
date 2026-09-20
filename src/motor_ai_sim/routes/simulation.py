@@ -2535,13 +2535,27 @@ def _fem_field2d_impl(
     A  = _np.asarray(fld["A"])
     Bx = _np.asarray(fld["Bx"]); By = _np.asarray(fld["By"])
     Bmag = _np.sqrt(Bx ** 2 + By ** 2)
-    # J: the coupled solve's EDDY density σ(−∂A/∂t + U) when it ran, else the
-    # applied SOURCE density.  The eddy J is nodal (as it is in the solve) —
-    # average it onto elements so both cases hand the renderer the same shape.
+    # J: the requested VIEW picks the quantity — Jeddy for the coupled solve's
+    # EDDY density σ(−∂A/∂t + U), Jtri_src for the applied SOURCE density —
+    # not merely whether the snapshot happened to come from an eddy run: the
+    # solver now writes Jtri_src on every snapshot (eddy or not), so a J⟳
+    # request against a non-eddy snapshot still falls back to the source
+    # density below rather than reading nothing.  The eddy J is nodal (as it
+    # is in the solve) — average it onto elements so both cases hand the
+    # renderer the same shape.
+    _j_stale = False
     if eddy and fld.get("Jeddy") is not None:
         Jtri = _np.asarray(fld["Jeddy"], float)[T].mean(axis=0)
+    elif not eddy and fld.get("Jtri_src") is not None:
+        Jtri = _np.asarray(fld["Jtri_src"], float)
     else:
-        Jtri = _np.asarray(fld.get("Jtri_src", _np.zeros(T.shape[1])))
+        # A snapshot that predates this fix (an eddy run whose snapshot only
+        # ever carried Jeddy) has no source density to show. Do not paint
+        # zeros — on the "J" view that reads as "no current", which is not
+        # what "no data yet" means. NaN so the renderer draws nothing for
+        # these elements; the header note (below) says why.
+        Jtri = _np.full(int(T.shape[1]), _np.nan)
+        _j_stale = True
     tags = _np.asarray(fld["tags"]).astype(int)
 
     # Collapse per-wire / per-magnet tags → renderer palette (rotor at angle).
@@ -2711,6 +2725,15 @@ def _fem_field2d_impl(
         "transient_steps_per_period": _meta.get("n_steps_per_period"),
         "transient_computed_at": _meta.get("computed_at"),
     }
+    if _j_stale:
+        # Same header-note mechanism as the relaxed-match sentence above —
+        # printed by the SAME renderer, so no web change is needed for it to
+        # show up under the field.
+        result["source_label"] = (
+            str(result["source_label"]) + " — this run predates the "
+            "source-J snapshot (Jtri_src); re-run the simulation to get "
+            "the \"J\" view for it.")
+        result["j_view_stale"] = True
     # A real transient also produces the machine numbers the J⟳ sidebar and the
     # thermal solve read off this payload.  A single frame produces none of them
     # honestly, so they are only added when the frames were actually swept.

@@ -15,6 +15,7 @@ import CloseIcon        from '@mui/icons-material/Close';
 import RefreshIcon      from '@mui/icons-material/Refresh';
 import AddIcon          from '@mui/icons-material/Add';
 import PlayArrowIcon    from '@mui/icons-material/PlayArrow';
+import HelpOutlineIcon  from '@mui/icons-material/HelpOutline';
 import CircularProgress from '@mui/material/CircularProgress';
 import { useMotorStore } from '../../stores/motorStore';
 import { pageVisible } from '../../lib/pageVisible';
@@ -22,6 +23,8 @@ import AddParameterDialog from '../parameters/AddParameterDialog';
 import FreeCADRoundTrip from '../common/FreeCADRoundTrip';
 import Fusion360RoundTrip from '../common/Fusion360RoundTrip';
 import SectionLabel from '../common/SectionLabel';
+import HelpTip from '../common/HelpTip';
+import { openGeometryHelpWindow } from '../../lib/geometryHelpWindow';
 
 const numFieldSx = {
   width: '100%',   // fill the fixed-width value column → values line up vertically
@@ -185,6 +188,11 @@ const ParameterVariationTable: React.FC = () => {
   // Only reset keys that are NOT dirty (i.e. not pending recalc)
   const [dirtyKeys, setDirtyKeys] = useState<Set<string>>(new Set());
   const [showSaved, setShowSaved] = useState(false);
+  const [helpError, setHelpError] = useState<string | null>(null);
+  const handleHelpClick = useCallback(() => {
+    const err = openGeometryHelpWindow();
+    if (err) setHelpError(err);
+  }, []);
 
   // Always-current dirtyKeys for the geometry-sync effect below.  Without this
   // the effect closed over a STALE dirtyKeys (it isn't in its deps), so a
@@ -289,6 +297,16 @@ const ParameterVariationTable: React.FC = () => {
           sx={{ fontSize: 10, height: 20 }}
         />
         <Box sx={{ flex: 1 }} />
+        <Button
+          size="small"
+          startIcon={<HelpOutlineIcon sx={{ fontSize: 14 }} />}
+          onClick={handleHelpClick}
+          sx={{ fontSize: 11, py: 0.25, px: 1, minHeight: 24 }}
+        >
+          Help — dimensions
+        </Button>
+        <HelpTip title="Opens a picture of the machine with every parameter's
+          name pointing at the dimension it controls, in a new window." />
         <Button
           size="small"
           startIcon={<AddIcon sx={{ fontSize: 14 }} />}
@@ -477,6 +495,12 @@ const ParameterVariationTable: React.FC = () => {
         autoHideDuration={2500}
         onClose={() => setShowSaved(false)}
         message="Geometry changes applied & saved to config"
+      />
+      <Snackbar
+        open={!!helpError}
+        autoHideDuration={5000}
+        onClose={() => setHelpError(null)}
+        message={helpError ?? ''}
       />
     </Box>
   );

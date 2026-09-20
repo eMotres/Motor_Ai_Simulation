@@ -8,7 +8,7 @@ from typing import Any, Optional
 log = logging.getLogger(__name__)
 
 import yaml
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from motor_ai_sim.config import get_config, clear_config_cache, config_path as _resolve_cfg_path
@@ -599,6 +599,76 @@ def get_geometry_schema():
 
         return {"parameters": parameters, "groups": group_list}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+#: Dimension-sheet render cache — one slot per (workspace, format), same
+#: shape as the mesh slots below (a params-hash tag and the last payload, so a
+#: Help click on an unchanged machine is a cache hit instead of a re-render) —
+#: but defined here, ahead of ``_mesh_slot()``, so it seeds itself rather than
+#: forward-referencing a function that is not defined until further down.
+_dimsheet_cache = _WSG.ws_map(
+    "geometry.dimension_sheet_slot", 8,
+    seed=lambda: {"hash": None, "data": None})
+
+
+@router.get("/dimension_sheet")
+def get_geometry_dimension_sheet(format: str = "svg"):
+    """An annotated cross-section of the CURRENT machine — every geometry
+    parameter as a dimension line/leader where it is a visible feature of the
+    section, or a legend row (`key = value unit`) otherwise.  The Geometry
+    tab's Help button opens this in a new window; see
+    ``services/dimension_sheet.py`` for how labels are placed.
+
+    Same geometry ``get_2d_polygons()`` (not a re-derived shape), same auth
+    tier as the rest of ``GET /api/geometry*`` (none of its own).  Cacheable
+    by geometry fingerprint — a repeat click on an unchanged machine is a
+    cache hit.
+    """
+    fmt = (format or "svg").lower()
+    if fmt not in ("svg", "png"):
+        raise reject("unsupported dimension_sheet format", [param_error(
+            "format", format, "bad_value",
+            f"format must be 'svg' or 'png', got {format!r}.")])
+    try:
+        import hashlib, json
+        from motor_ai_sim.routes._validation import geometry_schema_meta
+        from motor_ai_sim.services.dimension_sheet import build_dimension_sheet
+
+        geo = get_current_geometry().to_dict()
+        schema = geometry_schema_meta()
+        groups_cfg = get_config().get("parameter_groups", {})
+        groups = sorted(
+            [{"id": gid, "label": gmeta.get("label", gid.title()),
+              "order": gmeta.get("order", 99)}
+             for gid, gmeta in groups_cfg.items()],
+            key=lambda g: g["order"])
+
+        params_hash = hashlib.md5(
+            (json.dumps(geo, sort_keys=True)
+             + json.dumps(schema, sort_keys=True, default=str)).encode()
+        ).hexdigest()
+        cache_key = f"{params_hash}.{fmt}"
+        slot = _dimsheet_cache
+        if slot.get("hash") == cache_key and slot.get("data") is not None:
+            payload = slot["data"]
+        else:
+            payload = build_dimension_sheet(geo, schema, groups, fmt=fmt)
+            slot["hash"] = cache_key
+            slot["data"] = payload
+
+        media_type = "image/svg+xml" if fmt == "svg" else "image/png"
+        return Response(
+            content=payload, media_type=media_type,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "ETag": f'"{params_hash}"',
+                "Content-Disposition": f'inline; filename="geometry_dimensions.{fmt}"',
+            })
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("dimension_sheet build failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 

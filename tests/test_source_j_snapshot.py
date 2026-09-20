@@ -20,8 +20,13 @@ Two layers, two tests:
     coupled-eddy transient, checked end to end;
   * (b) the ROUTE picks the quantity the VIEW asked for (the ``eddy`` request
     flag), not whatever the snapshot happens to carry, and degrades to an
-    explicit "no data yet" (NaN + a header note) rather than painting zeros
+    explicit "no data yet" — ``j_view_stale`` + a header-note sentence, over
+    FINITE zeros — rather than silently painting zeros with no explanation,
     when an old snapshot predating this fix is all a probe has to serve.
+    (Zeros, not NaN: this payload ships through Starlette's JSONResponse,
+    which serialises with ``allow_nan=False`` — a NaN here is an HTTP 500 on
+    every such probe, not a blank picture. Caught in review 2026-09-20
+    before deploy, see ``test_the_stale_payload_still_serialises_as_json``.)
 """
 from __future__ import annotations
 
@@ -165,17 +170,41 @@ class TestTheRouteServesTheViewNotTheRunFlag:
         # the source density under the eddy request.
         assert j != pytest.approx(fld["Jtri_src"].tolist())
 
-    def test_a_stale_pre_fix_snapshot_does_not_paint_zeros(self, monkeypatch):
+    def test_a_stale_pre_fix_snapshot_is_flagged_not_painted_as_current(
+            self, monkeypatch):
         """An eddy-only snapshot from before this fix: Jeddy present, no
-        Jtri_src. The "J" (source) view must say "no data", never 0.0
-        everywhere (that reads as "no current", the bug's own symptom)."""
+        Jtri_src. The "J" (source) view has no data to show — it must say
+        so via `j_view_stale` + the header note, not via the array itself.
+
+        The array stays FINITE zeros (2026-09-20 review, pre-deploy): a NaN
+        here used to reach the client as-is, and Starlette's JSONResponse
+        serialises with allow_nan=False — NaN in this payload is a 500 on
+        every such probe, not a blank picture. See
+        test_the_stale_payload_still_serialises_as_json below for the
+        end-to-end proof.
+        """
         fld = _synthetic_snapshot(with_jtri_src=False, with_jeddy=True)
         out = _serve(monkeypatch, fld, eddy=False)
         assert out["ok"] and out.get("from_transient")
         j = out["J_z_per_tri"]
-        assert all(v != v for v in j), "expected NaN, not a silent zero fill"  # v != v <=> NaN
+        assert all(v == 0.0 for v in j), "must be finite zeros, not NaN"
         assert out.get("j_view_stale") is True
         assert "predates" in str(out.get("source_label", ""))
+
+    def test_the_stale_payload_still_serialises_as_json(self, monkeypatch):
+        """The regression this exists for: NaN in J_z_per_tri used to reach
+        Starlette's JSONResponse.render (allow_nan=False) and turn every "J"
+        probe against a pre-fix snapshot into an HTTP 500 instead of a
+        picture with a note — exactly the snapshot sitting on the owner's
+        server right now (run 2026-09-20T18:34:40)."""
+        import json
+        fld = _synthetic_snapshot(with_jtri_src=False, with_jeddy=True)
+        out = _serve(monkeypatch, fld, eddy=False)
+        # What Starlette's JSONResponse actually does under the hood.
+        raw = json.dumps(out, allow_nan=False)
+        assert json.loads(raw)["j_view_stale"] is True
+        assert all(v == v and v not in (float("inf"), float("-inf"))
+                   for v in out["J_z_per_tri"])
 
     def test_a_fresh_snapshot_is_never_flagged_stale(self, monkeypatch):
         fld = _synthetic_snapshot(with_jtri_src=True, with_jeddy=True)

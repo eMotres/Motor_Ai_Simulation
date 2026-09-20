@@ -2550,11 +2550,14 @@ def _fem_field2d_impl(
         Jtri = _np.asarray(fld["Jtri_src"], float)
     else:
         # A snapshot that predates this fix (an eddy run whose snapshot only
-        # ever carried Jeddy) has no source density to show. Do not paint
-        # zeros — on the "J" view that reads as "no current", which is not
-        # what "no data yet" means. NaN so the renderer draws nothing for
-        # these elements; the header note (below) says why.
-        Jtri = _np.full(int(T.shape[1]), _np.nan)
+        # ever carried Jeddy) has no source density to show. NaN would say
+        # "no data" to the renderer, but this payload leaves the process as
+        # JSON through Starlette's JSONResponse (allow_nan=False) — a NaN
+        # here is not a blank picture, it is a 500 on every such probe
+        # (2026-09-20 review). Zeros are FINITE and ship; `j_view_stale` and
+        # the source_label sentence below are what actually tell the user
+        # this picture is not data, not the array itself.
+        Jtri = _np.zeros(int(T.shape[1]))
         _j_stale = True
     tags = _np.asarray(fld["tags"]).astype(int)
 

@@ -6486,11 +6486,16 @@ class TestAuditV7:
 
         col = self._col()
         # the caption is drawn from the MAP; the table from the summary — the
-        # two are the same run now, so they round to the same figure
-        cap = R.em_map_numbers("demag", {"demag_min_pct": 6.948},
+        # two are the same run now, so they round to the same figure.
+        # CS-1 (L155 audit, 2026-09-20): the caption now rounds to TWO
+        # decimals, matching the §5/§8 tables' own precision for this
+        # quantity (`_fmt(..., 2, "%")`) — at one decimal a stored 6.95 used
+        # to print as bare "7" (`_fmt` strips ".0"), a different-LOOKING
+        # number from the table's own "6.95 %" of the identical figure.
+        cap = R.em_map_numbers("demag", {"demag_min_pct": 6.899},
                                {"demag_min_pct": 82.639})
         assert "6.9 %" in cap
-        assert R._fmt(R._g(col["em"], "demag.br_worst_pct"), 1) == "6.9"
+        assert R._fmt(R._g(col["em"], "demag.br_worst_pct"), 2) == "6.9"
 
     def test_bl1_a_sinusoidal_duty_is_not_touched_at_all(self):
         from motor_ai_sim import report as R
@@ -7737,6 +7742,16 @@ class TestL13Review20260919:
         # F1 follow-up: even with no `_geoSig`, a fingerprint carried by the
         # electromagnetic data or the mechanical run is not thrown away — §1
         # must always print SOME geometry hash.
+        #
+        # SUPERSEDED 2026-09-20 (L155/L180 audits): this test used to assert
+        # that the mechanical run's own `rotor_r_mm`/`bore_r_mm` (the
+        # AS-ASSEMBLED sleeve OD and bore) were written into
+        # `rotor_outer_radius`/`air_gap` — the exact regression the L155
+        # audit caught: a sleeved die's magnetic design gap (3.2 mm) printed
+        # as the sleeve's mechanical clearance (0.695 mm).  The mechanical
+        # record is never a source of DESIGN geometry any more; see
+        # `mechanical_assembly_rows` for where those two dimensions go
+        # instead.
         from motor_ai_sim import report as R
 
         em = {"geo_fingerprint": "abc123def456"}
@@ -7747,12 +7762,9 @@ class TestL13Review20260919:
         assert h == "abc123def456"
         assert no_snap is True
         assert mismatch is False
-        # …and the two dimensions a mechanical run's own air-gap block kept
-        # are recovered, in the GEOMETRY TABLE's own key names — never the
-        # block's — rather than left as the live (possibly edited)
-        # configuration's.  32.8 (F1's original complaint) must not survive.
-        assert geo["rotor_outer_radius"] == 32.4
-        assert geo["air_gap"] == pytest.approx(0.3)
+        # The live (design) configuration is what prints, honestly — never
+        # the mechanical run's radii.
+        assert geo["rotor_outer_radius"] == 32.8
 
     def test_item1_a_matching_live_configuration_is_not_flagged(self):
         from motor_ai_sim import report as R
@@ -9292,3 +9304,219 @@ class TestN2FigureLegendDoesNotOverlapTheAxisLabel:
             assert not overlap, (
                 "at %s (%.2f cm): torque panel's x-axis label overlaps the "
                 "spectrum panel's title" % (label, width))
+
+
+class TestL155L180Audits20260920:
+    """The two audits of the CIANO10 200 opt reports (L155 motor / L180 gen,
+    2026-09-20) agreed on three findings and disagreed on one — settled
+    physically, in favour of the L155 audit: a sleeved rotor's MAGNETIC air
+    gap (magnet OD to stator bore, including the sleeve — the design figure,
+    3.2 mm on this die) is not the same quantity as the MECHANICAL clearance
+    under the sleeve (sleeve OD to stator bore, 0.695 mm) — one test class,
+    one item each.
+    """
+
+    # ── item 1 · the design table never borrows the mechanical record ───────
+
+    def test_sleeved_fixture_keeps_the_design_gap_and_adds_the_clearance_row(
+            self):
+        from motor_ai_sim import report as R
+
+        # The die's own design geometry (die.yaml / the 09-16 delivered
+        # reports): 3.2 mm magnetic gap, 63.2 mm magnet-side rotor radius.
+        geo_live = {"air_gap": 3.2, "rotor_outer_radius": 63.2,
+                   "stator_inner_radius": 66.4}
+        # The same duty's own rotor-stress record: the sleeve OD (65.1 mm)
+        # against the stator bore (65.8 mm) — the AS-ASSEMBLED clearance
+        # under the band, a different pair of surfaces entirely.
+        mech = {"air_gap": {"rotor_r_mm": 65.1, "bore_r_mm": 65.8,
+                            "clearance_um": 695.0}}
+        geo, h, mismatch, no_snap = R.report_geometry(
+            geo_live, {}, mech=mech)
+        assert no_snap is True
+        # THE DESIGN ROWS ARE UNTOUCHED — the L155 audit's own complaint:
+        # 0.695 mm (the mechanical clearance) must never print under "Air
+        # gap", and 65.1 mm must never print under "Rotor outer radius".
+        assert geo["air_gap"] == 3.2
+        assert geo["rotor_outer_radius"] == 63.2
+        rows = R.mechanical_assembly_rows(mech)
+        assert len(rows) == 1
+        assert "sleeve OD" in rows[0][0] and "assembled" in rows[0][0]
+        assert rows[0][1] == "65.1"
+        assert "clearance" in rows[0][3].lower()
+        assert rows[0][4] == "0.695"
+
+    def test_a_fixture_without_a_sleeve_prints_no_clearance_row(self):
+        from motor_ai_sim import report as R
+
+        assert R.mechanical_assembly_rows(None) == []
+        assert R.mechanical_assembly_rows({}) == []
+        # A rotor-stress record on an UN-sleeved machine carries no `air_gap`
+        # block at all (`rotor_stress.py`'s own guard: the block is built
+        # only `if r_bore_m > r_node.max()` — see its docstring).
+        assert R.mechanical_assembly_rows({"some_other_key": 1}) == []
+
+    def test_the_air_gap_row_says_magnetic_and_names_the_sleeve(self):
+        from motor_ai_sim import report as R
+
+        rows = R.geometry_rows({"air_gap": 3.2}, {}, None, {})
+        label = rows[2][0]
+        assert "Air gap" in label
+        assert "magnetic" in label.lower()
+        assert "sleeve" in label.lower()
+
+    def test_no_snapshot_note_is_never_masked_by_a_bare_fingerprint(self):
+        # The bug the audits caught in the renderers: `report_geometry`'s own
+        # `h` can be non-empty (a mechanical/electromagnetic fingerprint)
+        # even when `no_snapshot` is True, and the PDF/.docx used to check
+        # `geo_hash` BEFORE `geo_no_snapshot` — so the honest warning never
+        # printed on the ordinary case (no `_geoSig` at all).  Both
+        # renderers now check `geo_no_snapshot` first; this pins the data
+        # shape that made the old order wrong.
+        from motor_ai_sim import report as R
+
+        geo, h, mismatch, no_snap = R.report_geometry(
+            {"rotor_outer_radius": 63.2}, {"geo_fingerprint": "abc123"},
+            mech={"air_gap": {"rotor_r_mm": 65.1, "bore_r_mm": 65.8}})
+        assert no_snap is True
+        assert h == "abc123"          # truthy — the old `if geo_hash` masked
+
+    # ── item 2 · §6 quotes the SOLVED current, not the setpoint ─────────────
+
+    def test_thermal_point_line_quotes_the_solved_current_not_the_setpoint(
+            self):
+        from motor_ai_sim import report as R
+
+        # `point.I_phase_rms` is what the thermal solve's REQUEST carried —
+        # on a voltage-fed duty that is the commanded figure
+        # (`duty_results._pick`); 562.1 A is the L155 rated duty's own
+        # setpoint from the 09-16 delivery.
+        th = {"field": {"result": {"point": {
+            "I_phase_rms": 562.1, "rpm": 20000.0}}}}
+        entry = th["field"]
+        # The duty's own resolved electromagnetic summary — SOLVED, per the
+        # BL-2 convention every other page of this document already uses.
+        em = {"I_phase_rms_A": 544.3, "I_commanded_line_A": 562.1}
+        txt = R.thermal_source_text(th, entry, "rated", True, None, em)
+        assert "544.3 A rms" in txt
+        assert "vs setpoint 562.1" in txt
+        assert "562.1 A rms" not in txt
+
+    def test_thermal_point_line_prints_the_bare_current_when_on_point(self):
+        from motor_ai_sim import report as R
+
+        th = {"field": {"result": {"point": {
+            "I_phase_rms": 314.2, "rpm": 20000.0}}}}
+        entry = th["field"]
+        em = {"I_phase_rms_A": 314.2}          # no commanded key: on point
+        txt = R.thermal_source_text(th, entry, "rated", True, None, em)
+        assert "314.2 A rms" in txt
+        assert "setpoint" not in txt
+
+    def test_thermal_pair_source_lines_reads_each_sides_own_em(self):
+        from motor_ai_sim import report as R
+
+        th0 = {"result": {"point": {"I_phase_rms": 770.5, "rpm": 23000.0}}}
+        pair = {"left": {"duty": "rated", "th": None, "coupled": None,
+                        "em": {"I_phase_rms_A": 544.3,
+                               "I_commanded_line_A": 562.1}},
+               "right": {"duty": "peak", "th": th0, "coupled": None,
+                        "em": {"I_phase_rms_A": 761.4,
+                               "I_commanded_line_A": 770.5}}}
+        lines = R.thermal_pair_source_lines(
+            pair, {}, {}, "peak", True, None)
+        assert len(lines) == 2
+        assert "No thermal map" in lines[0]        # left has neither
+        assert "761.4 A rms" in lines[1]
+        assert "vs setpoint 770.5" in lines[1]
+        assert "770.5 A rms" not in lines[1]
+
+    # ── item 3 · §6 uses the three-way "converged" wording ──────────────────
+
+    def test_temperatures_converged_point_limited_is_not_blunt_not_converged(
+            self):
+        # L180 M-2 (audit 2026-09-20): a duty whose temperatures settled
+        # while only the operating point is inverter-limited used to print
+        # the blunt "not converged" here (a bare `cp.get("converged")` AND
+        # of the two); `converged_words` already tells the two apart
+        # (owner review 2026-09-16, L180 gen 'rated') and this line now
+        # quotes it.
+        from motor_ai_sim import report as R
+
+        cp = {
+            "converged": False, "warning_code": "point_limited_by_modulation",
+            "tol_K": 2.0, "residual_coil_K": 0.15, "residual_magnet_K": 0.1,
+            "inverter": {"at_modulation_ceiling": True,
+                        "v_phase_peak_max_V": 830.0,
+                        "point_error_pct": -3.16},
+        }
+        th = {"field": {"result": {"point": {
+            "I_phase_rms": 747.2, "rpm": 20000.0}}}}
+        entry = th["field"]
+        txt = R.thermal_source_text(th, entry, "rated", True, cp)
+        assert "not converged" not in txt
+        assert "temperatures converged" in txt
+        assert "limited by the inverter" in txt
+        # …and it is the SAME sentence `converged_words` (the §3/§6/§7 table
+        # cell) prints for this record — one source, not two.
+        assert R.converged_words(cp) in txt
+
+    def test_a_genuinely_unconverged_loop_still_says_so(self):
+        from motor_ai_sim import report as R
+
+        cp = {"converged": False}
+        th = {"field": {"result": {"point": {"I_phase_rms": 100.0}}}}
+        txt = R.thermal_source_text(th, th["field"], "rated", True, cp)
+        assert "State: steady state (no)." in txt
+
+    # ── item 4 · §4 carries the same "per-duty numbers" signpost §6/§7 do ───
+
+    def test_em_page_owner_text_carries_the_section3_signpost(self):
+        from motor_ai_sim import report as R
+
+        sec = R.section_numbers()
+        for from_duty in (True, False):
+            txt = R.map_owner_text("rated", {}, {}, point="1 A rms",
+                                   from_duty=from_duty, sec=sec)
+            assert "Per-duty numbers are in" in txt
+            assert R.compare_ref(sec) in txt
+        # …and the unattributed branch (no duty owns the last snapshot) is
+        # unchanged — the same branch `thermal_map_owner_text` leaves alone.
+        assert "Per-duty" not in R.map_owner_text(
+            None, {"rpm": 1.0, "I_phase_rms_A": 1.0}, {})
+
+    def test_em_page_paired_lead_in_also_carries_the_signpost(self):
+        # The branch that actually fires on a rated/peak pair (the ordinary
+        # case): `pair_owner_text`'s own tail, not `map_owner_text` — a
+        # report with two duties never reaches the single-duty branch above
+        # at all, and §4's paired lead-in carried no tail until this fix.
+        from motor_ai_sim import report as R
+
+        sec = R.section_numbers()
+        pair = {"left": {"duty": "rated", "point": "10 A rms at 100 rpm"},
+               "right": {"duty": "peak", "point": "20 A rms at 200 rpm"}}
+        txt = R.pair_owner_text(
+            "The field maps", pair,
+            R.pair_owner_tail("em", "rated", True,
+                              "Per-duty numbers are in %s."
+                              % R.compare_ref(sec)))
+        assert "Per-duty numbers are in" in txt
+        assert R.compare_ref(sec) in txt
+
+    # ── L155 cosmetic · Fig. 10's caption rounds like the table ─────────────
+
+    def test_fig10_caption_prints_two_decimals_like_the_table(self):
+        # CS-1 (L155 audit, 2026-09-20): §5/§8 print the identical stored
+        # `br_worst_pct` at two decimals ("6.95 %"); the paired figure
+        # caption used one decimal, and `_fmt` strips a trailing ".0", so
+        # 6.95 printed as bare "7" — a different-LOOKING number on the same
+        # page spread.
+        from motor_ai_sim import report as R
+
+        left = {"duty": "rated", "em": {"demag": {"br_worst_pct": 82.64}}}
+        right = {"duty": "peak", "em": {"demag": {"br_worst_pct": 6.95}}}
+        cap = R.em_map_numbers("demag", {"demag_min_pct": 1.0},
+                               {"demag_min_pct": 1.0},
+                               left_side=left, right_side=right)
+        assert "6.95 %" in cap
+        assert "7 %" not in cap

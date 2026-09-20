@@ -789,19 +789,27 @@ def _machine(doc, D: Dict[str, Any]) -> None:
     _h(doc, "Geometry", 2)
     _geo = D.get("geo_report") or D["geo"]
     _ghash = D.get("geo_hash")
-    if _ghash:
+    _no_snap = bool(D.get("geo_no_snapshot"))
+    if _no_snap:
+        # F1 (L13 server audit 2026-09-19), FIXED 2026-09-20 (L155/L180
+        # audits) — see report._machine_page: this used to sit in an
+        # `elif` after `_ghash`, and a run's own fingerprint (recovered
+        # even with no design snapshot at all) made `_ghash` truthy on the
+        # ordinary case, so this honest warning never printed.
+        _cfg_hash = (" %s" % _ghash) if _ghash else ""
+        _p(doc, "%s no geometry snapshot stored with this run — design "
+                "values from the configuration file%s, not verified "
+                "against what the run actually solved"
+                % (R.FLAG, _cfg_hash), size=9, bold=True, color=WARN)
+    elif _ghash:
         # ITEM 1 (owner review 2026-09-19), NAMING ITS DUTY since round 3 of
         # the audit — see `report.geometry_hash_line`.
         _p(doc, R.geometry_hash_line(
             _ghash, str((D.get("d_duty") or {}).get("name") or "") or None),
            size=9, italic=True)
-    elif D.get("geo_no_snapshot"):
-        # F1 (L13 server audit 2026-09-19) — see report._machine_page.
-        _p(doc, "%s live configuration — no geometry snapshot stored with "
-                "this run; the table below is what the die/configuration "
-                "currently reads, not verified against what the run "
-                "actually solved" % R.FLAG, size=9, bold=True, color=WARN)
-    if D.get("geo_mismatch"):
+    if D.get("geo_mismatch") and not _no_snap:
+        # Only true when there IS a stored snapshot to be built from — see
+        # report._machine_page.
         _p(doc, "%s the live configuration has since changed — every table, "
                 "figure and number below is built from the stored snapshot "
                 "above, never from what is open now" % R.FLAG,
@@ -819,7 +827,11 @@ def _machine(doc, D: Dict[str, Any]) -> None:
         # ONE ELECTROMAGNETIC SOURCE, NAMED (F2/N2) — see
         # `report.em_source_note`.
         _p(doc, _em_src_note, size=9, italic=True)
-    _table(doc, R.geometry_rows(_geo, D["wind"], D["slot"], D["em"]),
+    # THE AS-ASSEMBLED sleeve rows, appended — never blended into the design
+    # "Air gap"/"Rotor outer radius" rows above (L155/L180 audits,
+    # 2026-09-20) — see report._machine_page.
+    _table(doc, R.geometry_rows(_geo, D["wind"], D["slot"], D["em"])
+           + R.mechanical_assembly_rows(D.get("mech_geo")),
            header=False, size=10.5,
            widths_cm=[5.2, 2.6, 1.4, 5.2, 2.6, 1.4])
 
@@ -1089,11 +1101,19 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
     # THE LEAD-IN LEADS (MJ-6, audit v5): this sentence used to be printed
     # after the last map of the section, two pages below the first pair it
     # introduces.
+    # L180 M-3 (audit 2026-09-20) — see report._em_page: §4's paired lead-in
+    # carries the same "Per-duty numbers are in section N" signpost §6/§7
+    # already do on theirs.
     _p(doc, R.pair_owner_text("The field maps", D.get("pair"),
-                              first_fig=R.fig_ahead(_numbered(D)))
+            R.pair_owner_tail("em", D.get("em_map_duty") or D["em_duty"],
+                              bool(D.get("em_map_from_duty")),
+                              "Per-duty numbers are in %s."
+                              % R.compare_ref(D.get("sec"))),
+            first_fig=R.fig_ahead(_numbered(D)))
        or R.map_owner_text(D.get("em_map_duty") or D["em_duty"], em, d_duty,
                            point=D.get("em_map_point"),
-                           from_duty=bool(D.get("em_map_from_duty"))),
+                           from_duty=bool(D.get("em_map_from_duty")),
+                           sec=D.get("sec")),
        size=9.5, italic=True, color=NOTE)
     # The point of the PICTURES (the picture duty's stored run), not the
     # report duty's — see `report.em_map_point` (2026-09-13).
@@ -1216,7 +1236,7 @@ def _thermal_detail(doc, D: Dict[str, Any]) -> None:
     _cp_flat = _cp_flat if isinstance(_cp_flat, dict) and _cp_flat else cp
     for _line in R.thermal_pair_source_lines(
             D.get("pair"), th, entry, D.get("detail_duty"),
-            bool(D.get("th_detail_from_duty")), _cp_flat):
+            bool(D.get("th_detail_from_duty")), _cp_flat, D.get("em")):
         _p(doc, _line, size=9.5, italic=True, color=NOTE)
 
     _h(doc, "Boundary conditions", 2)

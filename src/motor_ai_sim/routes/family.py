@@ -129,26 +129,19 @@ def die_defining_variables(names) -> list:
 
 
 def refuse_die_defining_variables(names, allow_new_lamination: bool) -> None:
-    """The optimizer / sweep gate.  While a die is ACTIVE, a campaign that
-    varies a die-defining key would end with an apply that turns the live
-    machine into a foreign lamination — the identity guard then releases the
-    context and the result can be saved nowhere (the 12:47 dead end,
-    2026-09-20).  So it is refused UP FRONT, with the reason, unless the caller
-    ticked "allow new lamination" (the web's one checkbox + HelpTip).  No die
-    active → nothing to protect → no refusal.  Raises 422."""
-    hit = die_defining_variables(names)
-    if not hit or allow_new_lamination:
-        return
-    ctx = _read_ctx()
-    if not ctx:
-        return
-    die = str(ctx.get("die") or "")
-    raise HTTPException(422, detail=(
-        "die-defining variable(s) %s would change the lamination of the "
-        "active die '%s' (a die keeps its diameter and slot/pole topology for "
-        "life). Tick 'allow new lamination' to vary them — the result is a "
-        "NEW die, saved with 'Save as new die' — or remove them from the "
-        "variables." % (", ".join(hit), die)))
+    """Formerly the optimizer / sweep gate — refused a campaign that varies a
+    die-defining key while a die is active, because the apply used to dead-end
+    the identity guard (release with nowhere to save, 2026-09-20 12:47).
+
+    Superseded the same day by the owner's rule: an apply that turns the live
+    machine into a foreign lamination now AUTO-TRANSITIONS the active
+    configuration/duty into the die that lamination is (new or reused,
+    `_auto_transition_die`) instead of dead-ending — so there is nothing left
+    to refuse up front.  A no-op kept for every call site (`allow_new_lamination`
+    is still accepted, just no longer required) and so `die_defining_variables`
+    / `/variables`' `die_defining` flag keep marking these keys amber in the
+    picker, now purely as INFORMATION rather than a gate."""
+    return
 
 #: What a geometry key MEANS when a die/configuration does not carry it (older
 #: files predate the knob).  Served by ``/payload`` so a load describes the
@@ -193,8 +186,10 @@ _ABSENT_MEANS: Dict[str, Any] = {
 
 # Display names double as file/dir names, so the charset is "safe on every
 # filesystem": letters, digits, space and light punctuation.  Real product
-# names have spaces ("CILN28 200", "CIANO14 30_10").
-_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.,()#+°·\- ]{0,63}$")
+# names have spaces ("CILN28 200", "CIANO14 30_10").  "Ø" joined the set
+# 2026-09-20: the auto-transition's own names carry it (a diameter change
+# reads "CIANO14 edited Ø60 12s14p") and it is safe on every filesystem too.
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.,()#+°·Ø\- ]{0,63}$")
 
 # Duty names are NOT file names — a duty lives inside its configuration's yaml
 # — so they admit Unicode letters.  The user types them off a Russian keyboard,
@@ -3016,6 +3011,225 @@ def released_state() -> Optional[dict]:
     return out
 
 
+# ── automatic die transition (owner's rule, 2026-09-20) ──────────────────────
+# «если мы меняем геометрию — неважно какую — того die, который загрузили, мы
+# всю конфигурацию переводим в новый диаметр или новое количество полюсов без
+# всяких разрывов и сохраняем её» — a die-defining edit on the ACTIVE die must
+# never dead-end the context (the 12:47 incident this whole module chases).
+# Replaces the identity guard's `release_context` call: the live machine
+# becomes a foreign lamination → find (or mint) the die THIS lamination is and
+# move the active configuration/duty into it, in the same request.  The
+# source die is never written by any of this.
+
+
+def _unique_name(exists, base: str) -> str:
+    """``base``, or ``"<base> 2"``, ``"<base> 3"``, … — the first one
+    ``exists`` says is free.  One collision rule for die names and, within a
+    die, configuration names."""
+    if not exists(base):
+        return base
+    i = 2
+    while exists(f"{base} {i}"):
+        i += 1
+    return f"{base} {i}"
+
+
+def _unique_die_name(base: str) -> str:
+    def _exists(n: str) -> bool:
+        return (_die_file(n).exists()
+                or (_ws_layering() and _ws_resolve_die_dir(n) is not None))
+    return _unique_name(_exists, base)
+
+
+def _unique_config_name(die: str, base: str) -> str:
+    return _unique_name(lambda n: _cfg_file(die, n).exists(), base)
+
+
+def _die_transition_name(source_die: str, die_geo: dict, live_geo: dict,
+                         diffs: list) -> str:
+    """The auto-transition's target name, before the collision suffix.
+
+    A pole/segment (or any non-diameter) change keeps the source die's own
+    name and appends the new topology — owner's example, 2026-09-20:
+    'CIANO14 50 edited' 7 -> 8 poles/segment => 'CIANO14 50 edited 12s16p'.
+    A DIAMETER change additionally drops the old diameter token from the name
+    and states the new one: 'CIANO14 50 edited' Ø50 -> Ø60 =>
+    'CIANO14 edited Ø60 12s14p'.  Pure — pinned by tests, independent of the
+    collision suffix (``_unique_die_name``) and of ``_check_name``."""
+    def _int(v) -> int:
+        try:
+            return int(round(float(v)))
+        except (TypeError, ValueError):
+            return 0
+    ns = float(live_geo.get("num_seg") or 0)
+    slots = _int(ns * float(live_geo.get("num_slots_per_segment") or 0))
+    poles = _int(ns * float(live_geo.get("num_poles_per_segment") or 0))
+    topo = f"{slots}s{poles}p"
+    keys = {x["key"] for x in (diffs or [])}
+    base = str(source_die).strip()
+    if "stator_diameter" in keys:
+        old = die_geo.get("stator_diameter")
+        try:
+            token = "%g" % float(old)
+        except (TypeError, ValueError):
+            token = None
+        if token:
+            words = [w for w in base.split(" ") if w != token]
+            if words:
+                base = " ".join(words)
+        new_dia = live_geo.get("stator_diameter")
+        dia_txt = ("%g" % float(new_dia)) if isinstance(new_dia, (int, float)) \
+            else str(new_dia)
+        return f"{base} Ø{dia_txt} {topo}".strip()
+    return f"{base} {topo}".strip()
+
+
+def _matching_die(live_geo: dict, exclude: str) -> Optional[str]:
+    """The name of an existing die IN THE CALLER'S OWN WORKSPACE whose
+    identity (``DIE_IDENTITY_KEYS``) already matches ``live_geo``, other than
+    ``exclude`` (the die that was just left) — the transition REUSES it
+    instead of minting a copy.  Published/shared dies are never a reuse
+    target: "an existing die of the user", not of the catalog."""
+    for e in _iter_die_entries():
+        name = str(e["name"])
+        if name == exclude:
+            continue
+        if _ws_layering() and e.get("layer") != _WS.LAYER_WORKSPACE:
+            continue
+        try:
+            dd = _load_yaml(Path(str(e["dir"])) / "die.yaml", "die")
+        except HTTPException:
+            continue
+        if not die_identity_diffs(dd.get("geometry") or {}, live_geo):
+            return name
+    return None
+
+
+def _copy_die_documents(src_die: str, dst_die: str) -> list:
+    """Copy a WHOLE die's documents — die.yaml plus every configuration with
+    its duties, materials, parts and notes — into a brand-new WORKSPACE
+    folder, run sidecars included.  ``duplicate_die``'s own body (kept
+    separate so that route's HTTP concerns — auth, 404/409 — never leak into
+    this internal helper).  The copy starts UNLOCKED: it is not the stamp
+    ``src_die`` names any more.  Returns the copied configuration names."""
+    src_dir = _die_dir(src_die)
+    dst_dir = _dies_dir() / dst_die
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    d = _load_yaml(src_dir / "die.yaml", "die")
+    d["name"] = dst_die
+    d["locked"] = False
+    d["created"] = datetime.now().isoformat(timespec="seconds")
+    _save_yaml(dst_dir / "die.yaml", d)
+    cfgs = []
+    for p in sorted(src_dir.glob("*.yaml")):
+        if p.name == "die.yaml":
+            continue
+        c = _load_yaml(p, "configuration")
+        c["die"] = dst_die
+        _save_yaml(dst_dir / p.name, c)
+        cfgs.append(p.stem)
+    if (src_dir / "runs").is_dir():
+        import shutil as _sh
+        _sh.copytree(src_dir / "runs", dst_dir / "runs", dirs_exist_ok=True)
+    return cfgs
+
+
+def _copy_config_into(src_die: str, dst_die: str, cfg: str) -> str:
+    """Bring configuration ``cfg`` (materials, parts, notes, duties, stored
+    runs) from ``src_die`` into ``dst_die`` — the merge the transition needs
+    when it REUSES an existing die that does not yet carry this configuration
+    (or carries a same-named but unrelated one, in which case the copy lands
+    under a numeric-suffixed name rather than overwriting it).  Returns the
+    name it landed under in ``dst_die``."""
+    c = _load_yaml(_cfg_file(src_die, cfg), "configuration")
+    dst_name = _unique_config_name(dst_die, cfg)
+    c["die"] = dst_die
+    if dst_name != cfg:
+        c["name"] = dst_name
+    _save_yaml(_cfg_file(dst_die, dst_name), c)
+    src_runs = _runs_dir(src_die, cfg)
+    if not src_runs.is_dir():
+        _s = _src_die_dir(src_die)
+        if _s is not None and (_s / "runs" / cfg).is_dir():
+            src_runs = _s / "runs" / cfg
+    if src_runs.is_dir():
+        import shutil as _sh
+        dst_runs = _runs_dir(dst_die, dst_name)
+        dst_runs.parent.mkdir(parents=True, exist_ok=True)
+        _sh.copytree(src_runs, dst_runs, dirs_exist_ok=True)
+        if dst_name != cfg:
+            for dty in (c.get("duties") or []):
+                for drive, r in list(((dty.get("runs") or {})
+                                      if isinstance(dty, dict) else {}).items()):
+                    if isinstance(r, dict) and r.get("payload_file"):
+                        r["payload_file"] = _run_rel(
+                            dst_name, str(dty.get("name") or ""), drive)
+            _save_yaml(_cfg_file(dst_die, dst_name), c)
+    return dst_name
+
+
+def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
+                         die_doc: dict, live_geo: dict, diffs: list) -> Optional[dict]:
+    """The transition itself.  Finds (``_matching_die``) or mints
+    (``_copy_die_documents``) the die this lamination now IS, moves the
+    active configuration/duty into it — same names, same operating point —
+    and activates the new triple with ``transitioned_from`` recorded.  The
+    SOURCE die (``die``) is never written here, locked or not, shared or not.
+    """
+    target = _matching_die(live_geo, exclude=die)
+    created = False
+    if target is None:
+        name = _unique_die_name(_check_name(
+            _die_transition_name(die, die_doc.get("geometry") or {}, live_geo, diffs),
+            "die"))
+        _copy_die_documents(die, name)
+        nd = _load_yaml(_die_file(name), "die")
+        nd["geometry"] = dict(live_geo)
+        nd["derived_from"] = {
+            "die": die, "config": cfg, "duty": duty,
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "changed": [f"{x['key']} {x['die']} → {x['live']}" for x in diffs]}
+        try:
+            from motor_ai_sim.routes.presets import _gen_thumb_svg
+            thumb = _gen_thumb_svg(dict(live_geo))
+            if thumb:
+                nd["thumb_svg"] = thumb
+        except Exception:                      # noqa: BLE001 — thumbnail is cosmetic
+            pass
+        _save_yaml(_die_file(name), nd)
+        target = name
+        created = True
+    target_cfg = cfg
+    if cfg and not _cfg_file(target, cfg).is_file():
+        target_cfg = _copy_config_into(die, target, cfg)
+    elif cfg and duty:
+        c = _load_yaml(_cfg_file(target, cfg), "configuration")
+        if not any(isinstance(x, dict) and x.get("name") == duty
+                  for x in (c.get("duties") or [])):
+            # the reused die has this configuration's NAME but not this duty —
+            # bring the duty across rather than silently dropping the point.
+            target_cfg = _copy_config_into(die, target, cfg)
+    import json as _json
+    at = datetime.now().isoformat(timespec="seconds")
+    _ctx_file().write_text(_json.dumps({
+        "die": target, "config": target_cfg, "duty": duty, "at": at,
+        "transitioned_from": {"die": die, "at": at, "diffs": diffs},
+    }), encoding="utf-8")
+    # An UNLOCKED target adopts the live shape into its snapshot exactly as
+    # /reattach does — a second, ordinary pass through this same function,
+    # now with no identity diff (the target matches by construction), so the
+    # lock check / thumbnail / stranger-guard code is not duplicated here.
+    try:
+        sync_active_die_geometry(dict(live_geo))
+    except Exception:                          # noqa: BLE001 — cosmetic snapshot polish
+        log.debug("family: auto-transition follow-up snapshot sync skipped",
+                  exc_info=True)
+    log.info("family: die '%s' auto-transitioned to '%s' (%s; '%s'/'%s' now "
+             "active) — the source die is untouched", die, target,
+             "new copy" if created else "existing die reused", target_cfg, duty)
+    return {"die": target, "config": target_cfg, "duty": duty, "created": created}
+
+
 def sync_active_die_geometry(saved_geo: dict,
                              prev_geo: Optional[dict] = None) -> Optional[str]:
     """Refresh the ACTIVE die's geometry snapshot after a geometry save.
@@ -3060,26 +3274,36 @@ def sync_active_die_geometry(saved_geo: dict,
     # die '20SW1200' was overwritten with a 200 mm motor — the catalog then
     # filed it under Ø 200 and its three duties "vanished" for the user.
     _die_g0 = d.get("geometry") or {}
-    _ident = [f"{x['key']} {x['die']} → {x['live']}"
-              for x in die_identity_diffs(_die_g0, geo)]
-    if _ident:
+    _diffs = die_identity_diffs(_die_g0, geo)
+    if _diffs:
+        _ident = [f"{x['key']} {x['die']} → {x['live']}" for x in _diffs]
         log.warning(
-            "family: REFUSED to sync die '%s' — the saved machine is not this "
-            "die (%s). A die keeps its diameter and topology for life; load "
-            "the other motor into its own die. The die snapshot is untouched.",
-            die, "; ".join(_ident))
-        # The live editor no longer holds this die's machine — a whole-machine
-        # load (Compare apply, My motors, a preset, the classic catalog) went
-        # through a path that never calls /activate.  Leaving the context
-        # pointing at the old die is what made the header strip lie
-        # ("CIANO28 85 … / L13 (L40)" over a 200 mm G2-L40 live machine,
-        # 2026-09-01 22:33) and sent the overnight charging study to the wrong
-        # motor.  Drop it: no die is active until a load says which one.
+            "family: die '%s' identity changed (%s) — auto-transitioning the "
+            "active configuration/duty (owner's rule, 2026-09-20: a "
+            "die-defining edit never dead-ends the context); '%s' itself is "
+            "untouched.", die, "; ".join(_ident), die)
+        # A die-defining edit while this die is active — through the Geometry
+        # table, Recalculate, a sweep/optimizer apply or Configure apply, every
+        # path lands here the same way.  It used to RELEASE the context
+        # (2026-09-20 12:47: the strip then offered only "press ▶ in Motors",
+        # which would have overwritten the optimised geometry — the dead end
+        # bf246ff/f46913c papered over with offers).  Now the whole
+        # configuration/duty moves WITH the machine: find or mint the die this
+        # lamination is and activate it there, in the same request.
         try:
-            release_context("live machine is not this die: " + "; ".join(_ident))
-        except Exception as _ce:   # noqa: BLE001 — never fail the save
-            log.warning("family: could not release the context: %s", _ce)
-        return None
+            out = _auto_transition_die(die, ctx.get("config"), ctx.get("duty"),
+                                       d, geo, _diffs)
+        except Exception:                      # noqa: BLE001 — the save already happened
+            log.exception("family: auto-transition failed for die '%s' — "
+                          "releasing the context rather than leaving it "
+                          "pointing at a die that is no longer the live "
+                          "machine", die)
+            try:
+                release_context("live machine is not this die: " + "; ".join(_ident))
+            except Exception as _ce:   # noqa: BLE001 — never fail the save
+                log.warning("family: could not release the context either: %s", _ce)
+            return None
+        return (out or {}).get("die")
     # ── The stranger guard ───────────────────────────────────────────────────
     # Sync follows EDITS of this die's own machine — it never adopts a foreign
     # one.  A save whose PRE-save live machine does not match the die's
@@ -3443,6 +3667,12 @@ def context(response: Response, authorization: str = Header(default=None)):
         # ("die-defining — changing it makes a new die") and the sweep/optimizer
         # pickers refuse to vary them without "allow new lamination".
         "die_keys": list(DIE_IDENTITY_KEYS),
+        # Set once, by the auto-transition that just landed this die/config —
+        # the strip's one-line "moved to X (poles/segment 7 → 8); the original
+        # die is untouched" and nothing else: it is NOT cleared on later reads,
+        # so refreshing the tab still explains why the strip's name changed
+        # (cleared only by the next /activate, which stamps a fresh context).
+        "transitioned_from": ctx.get("transitioned_from"),
         # The supply this machine is designed around.  The Simulation tab's PWM
         # source prefills V_bus from it: a DC-link voltage typed by hand is a
         # number nobody checks against the pack that is actually there, and the

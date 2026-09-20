@@ -135,20 +135,19 @@ def test_release_context_records_the_configuration_and_the_duty(dies):
     assert raw["reason"] == "test release"
 
 
-def test_the_identity_guard_release_carries_config_and_duty(dies, live):
-    """The geometry save that turned 7 into 8 poles/segment: the guard refuses
-    the sync, releases, and the record names what was loaded."""
-    live(8)
+def test_deactivate_still_releases_for_a_whole_machine_load_outside_the_catalog(dies):
+    """/deactivate (Compare apply, My motors, a preset) is the one path that
+    still ends in `release_context` — never in an auto-transition, because
+    there is no "the live machine changed identity WHILE this die was active"
+    story to move: the editor is about to hold a machine that may not even be
+    this die's lamination at all."""
     _write_active()
-    saved = dict(DIE_GEO, num_poles_per_segment=8, num_poles=16)
-    assert fam.sync_active_die_geometry(saved, prev_geo=dict(DIE_GEO)) is None
+    out = fam.deactivate(fam.Deactivate(reason="preset load"), _w={})
+    assert out == {"ok": True, "released_from": DIE}
     raw = json.loads(_ctx_file().read_text(encoding="utf-8"))
     assert raw["die"] is None and raw["released_from"] == DIE
     assert raw["released_config"] == CFG and raw["released_duty"] == DUTY
-    assert "num_poles_per_segment 7 → 8" in raw["reason"]
-    # the die snapshot is untouched
-    d = yaml.safe_load((dies / DIE / "die.yaml").read_text(encoding="utf-8"))
-    assert d["geometry"]["num_poles_per_segment"] == 7
+    assert raw["reason"] == "preset load"
 
 
 # ── /context on a released record ────────────────────────────────────────────
@@ -197,6 +196,128 @@ def test_context_with_no_record_at_all_is_plain(dies, live):
     live(8)
     c = _context()
     assert c == {"active": False, "can_write": True}
+
+
+# ── automatic die transition (owner's rule, 2026-09-20) ──────────────────────
+# «мы всю конфигурацию переводим в новый диаметр или новое количество полюсов
+# без всяких разрывов и сохраняем её» — a die-defining edit on the ACTIVE die
+# no longer releases the context (the tests above pinned the PRIOR behaviour,
+# superseded the same day): it auto-transitions instead.
+
+def test_identity_guard_auto_transitions_to_a_new_die(dies, live):
+    """7 -> 8 poles/segment, no existing die at that lamination: a NEW copy
+    is minted, named after the owner's own example, and the configuration +
+    duty move into it verbatim — same names, same operating point."""
+    live(8)
+    _write_active()
+    saved = dict(DIE_GEO, num_poles_per_segment=8, num_poles=16)
+    result = fam.sync_active_die_geometry(saved, prev_geo=dict(DIE_GEO))
+    assert result == "CIANO14 50 edited 12s16p"
+    ctx = json.loads(_ctx_file().read_text(encoding="utf-8"))
+    assert ctx["die"] == "CIANO14 50 edited 12s16p"
+    assert ctx["config"] == CFG and ctx["duty"] == DUTY
+    assert ctx["transitioned_from"]["die"] == DIE
+    assert ctx["transitioned_from"]["diffs"] == [
+        {"key": "num_poles_per_segment", "label": "poles/segment", "die": 7, "live": 8}]
+    # the new die: the LIVE geometry, unlocked, provenance recorded
+    nd = yaml.safe_load((dies / ctx["die"] / "die.yaml").read_text(encoding="utf-8"))
+    assert nd["locked"] is False
+    assert nd["geometry"]["num_poles_per_segment"] == 8
+    assert nd["derived_from"]["die"] == DIE
+    assert nd["derived_from"]["changed"] == ["num_poles_per_segment 7 → 8"]
+    # the configuration + duty: SAME name, SAME point — nothing re-derived
+    nc = yaml.safe_load((dies / ctx["die"] / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert nc["duties"][0]["name"] == DUTY
+    assert nc["duties"][0]["current_arms"] == 55.0
+    assert nc["materials"] == {"magnet": "N52UH"}
+    # the source die is byte-for-byte untouched
+    src = yaml.safe_load((dies / DIE / "die.yaml").read_text(encoding="utf-8"))
+    assert src["geometry"]["num_poles_per_segment"] == 7
+    src_c = yaml.safe_load((dies / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert src_c["duties"][0]["current_arms"] == 55.0
+    assert _context()["active"] is True
+    assert _context()["die"] == "CIANO14 50 edited 12s16p"
+
+
+def test_identity_guard_reuses_an_existing_matching_die(dies, live):
+    """A die that already IS the new lamination but has no history of this
+    configuration: reused, and only the missing configuration is merged in —
+    no copy of the source die is minted."""
+    (dies / "Other 16p").mkdir()
+    (dies / "Other 16p" / "die.yaml").write_text(yaml.safe_dump({
+        "name": "Other 16p", "locked": False,
+        "geometry": dict(DIE_GEO, num_poles_per_segment=8, num_poles=16)},
+        sort_keys=False), encoding="utf-8")
+    live(8)
+    _write_active()
+    saved = dict(DIE_GEO, num_poles_per_segment=8, num_poles=16)
+    result = fam.sync_active_die_geometry(saved, prev_geo=dict(DIE_GEO))
+    assert result == "Other 16p"
+    ctx = json.loads(_ctx_file().read_text(encoding="utf-8"))
+    assert ctx["die"] == "Other 16p" and ctx["config"] == CFG and ctx["duty"] == DUTY
+    nc = yaml.safe_load((dies / "Other 16p" / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert nc["duties"][0]["current_arms"] == 55.0
+    assert not (dies / "CIANO14 50 edited 12s16p").exists()
+
+
+def test_reverting_the_edit_reattaches_to_the_original_die_automatically(dies, live):
+    """Forward 7 -> 8 mints a new die; back 8 -> 7 finds the ORIGINAL die
+    matches again and re-attaches to it — no third die, no copy."""
+    live(8)
+    _write_active()
+    fam.sync_active_die_geometry(dict(DIE_GEO, num_poles_per_segment=8, num_poles=16),
+                                 prev_geo=dict(DIE_GEO))
+    new_die = fam._read_ctx()["die"]
+    assert new_die != DIE
+    before = sorted(p.name for p in dies.iterdir())
+    live(7)
+    result = fam.sync_active_die_geometry(
+        dict(DIE_GEO), prev_geo=dict(DIE_GEO, num_poles_per_segment=8, num_poles=16))
+    assert result == DIE
+    ctx = json.loads(_ctx_file().read_text(encoding="utf-8"))
+    assert (ctx["die"], ctx["config"], ctx["duty"]) == (DIE, CFG, DUTY)
+    assert sorted(p.name for p in dies.iterdir()) == before   # no new die minted
+
+
+def test_transition_name_collision_gets_a_numeric_suffix(dies, live):
+    (dies / "CIANO14 50 edited 12s16p").mkdir()
+    (dies / "CIANO14 50 edited 12s16p" / "die.yaml").write_text(yaml.safe_dump({
+        "name": "CIANO14 50 edited 12s16p", "locked": False,
+        # a DIFFERENT topology under the same name — not a reuse match
+        "geometry": dict(DIE_GEO, num_poles_per_segment=5, num_poles=10)},
+        sort_keys=False), encoding="utf-8")
+    live(8)
+    _write_active()
+    result = fam.sync_active_die_geometry(
+        dict(DIE_GEO, num_poles_per_segment=8, num_poles=16), prev_geo=dict(DIE_GEO))
+    assert result == "CIANO14 50 edited 12s16p 2"
+
+
+def test_diameter_change_names_the_new_die_with_the_new_diameter(dies, live):
+    live(7, stator_diameter=60)
+    _write_active()
+    result = fam.sync_active_die_geometry(
+        dict(DIE_GEO, stator_diameter=60), prev_geo=dict(DIE_GEO))
+    assert result == "CIANO14 edited Ø60 12s14p"
+
+
+def test_auto_transition_never_writes_the_locked_source_die(dies, live):
+    """Defense in depth: whatever reaches `_auto_transition_die` (even if the
+    lock is bypassed upstream), the SOURCE die and its configuration are
+    never opened for a write."""
+    d_path = dies / DIE / "die.yaml"
+    d = yaml.safe_load(d_path.read_text(encoding="utf-8"))
+    d["locked"] = True
+    d_path.write_text(yaml.safe_dump(d, sort_keys=False), encoding="utf-8")
+    before_die = d_path.read_bytes()
+    before_cfg = (dies / DIE / f"{CFG}.yaml").read_bytes()
+    live(8)
+    new_geo = dict(DIE_GEO, num_poles_per_segment=8, num_poles=16)
+    out = fam._auto_transition_die(DIE, CFG, DUTY, d, new_geo,
+                                   fam.die_identity_diffs(DIE_GEO, new_geo))
+    assert out["created"] is True and out["die"] != DIE
+    assert d_path.read_bytes() == before_die
+    assert (dies / DIE / f"{CFG}.yaml").read_bytes() == before_cfg
 
 
 # ── save as NEW die ──────────────────────────────────────────────────────────
@@ -353,49 +474,35 @@ def test_die_identity_keys_are_the_four_lamination_keys():
         ["num_poles_per_segment", "stator_diameter"]
 
 
-def test_refuse_die_defining_variables_only_under_an_active_die(dies):
-    # no context at all → nothing to protect
+def test_refuse_die_defining_variables_is_now_a_no_op(dies):
+    """Superseded 2026-09-20: an apply that varies a die-defining key under an
+    active die no longer dead-ends (it auto-transitions), so there is nothing
+    left to refuse up front — every call shape that used to 422 now passes."""
     fam.refuse_die_defining_variables(["num_poles_per_segment"], False)
-    # a RELEASED context is not an active die either
     _ctx_file().write_text(json.dumps(OWNER_RECORD), encoding="utf-8")
     fam.refuse_die_defining_variables(["num_poles_per_segment"], False)
-    # active die + die-defining variable → 422 with the reason
     _write_active()
     fam.refuse_die_defining_variables(["tooth_width", "magnet_height"], False)
-    with pytest.raises(HTTPException) as ei:
-        fam.refuse_die_defining_variables(["tooth_width", "num_poles_per_segment"], False)
-    assert ei.value.status_code == 422
-    assert "die-defining" in ei.value.detail
-    assert "num_poles_per_segment" in ei.value.detail and DIE in ei.value.detail
-    assert "allow new lamination" in ei.value.detail
-    # …unless the caller explicitly allows a new lamination
+    fam.refuse_die_defining_variables(["tooth_width", "num_poles_per_segment"], False)
     fam.refuse_die_defining_variables(["num_poles_per_segment"], True)
 
 
-def test_scan_and_descent_routes_refuse_a_die_defining_variable_with_422(dies):
-    """Through the HTTP routes, BEFORE any state is touched: the sweep study's
-    /scan and the optimizer's /descent/start."""
-    from fastapi.testclient import TestClient
-    from motor_ai_sim.api import app
+def test_scan_and_descent_gates_no_longer_refuse_a_die_defining_variable(dies):
+    """The gate every /scan, /descent/start and /run call makes first,
+    BEFORE any state is touched — pinned at the call site rather than through
+    a real HTTP round trip, so this stays a fast unit test instead of kicking
+    off an actual FEM background thread."""
     from motor_ai_sim.routes import optimization as opt
 
     _write_active()
-    client = TestClient(app)
-    var = {"name": "num_poles_per_segment", "min": 7, "max": 8, "mode": "sweep", "step": 1}
-    r = client.post("/api/optimization/scan",
-                    json={"variables": [var], "operating_points": [
-                        {"gamma_deg": 0, "current_a": 60, "rpm": 20000}]})
-    assert r.status_code == 422, r.text
-    assert "die-defining" in r.json()["detail"] and DIE in r.json()["detail"]
-    assert opt._scan_state.get("running") is not True
-    r = client.post("/api/optimization/descent/start",
-                    json={"variables": [var],
-                          "operating_point": {"gamma_deg": 0, "current_a": 60, "rpm": 20000}})
-    assert r.status_code == 422, r.text
-    assert "allow new lamination" in r.json()["detail"]
-    assert opt._descent_state.get("running") is not True
-    r = client.post("/api/optimization/run", json={"variables": [var]})
-    assert r.status_code == 422, r.text
+    var = opt.OptVariable(name="num_poles_per_segment", min=7, max=8,
+                          mode="sweep", step=1)
+    opt._refuse_die_defining(opt.ScanRequest(variables=[var]))
+    opt._refuse_die_defining(opt.DescentRequest(variables=[var]))
+    opt._refuse_die_defining(opt.OptRequest(variables=[var]))
+    # the amber flag survives as INFORMATION — /variables still marks it
+    assert fam.die_defining_variables(["num_poles_per_segment"]) == \
+        ["num_poles_per_segment"]
 
 
 def test_variables_route_flags_the_die_defining_ones():

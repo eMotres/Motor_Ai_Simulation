@@ -31,9 +31,7 @@ import DOEPanel from './DOEPanel';
 import HelpTip from '../common/HelpTip';
 import SectionLabel from '../common/SectionLabel';
 import { useDieContext } from '../common/useDieContext';
-import {
-  dieDefiningSelected, dieKeyLabel, readAllowNewLamination, writeAllowNewLamination,
-} from '../../lib/releasedContext';
+import { dieDefiningSelected, dieKeyLabel } from '../../lib/releasedContext';
 
 // Non-geometry variables (selected outside the Geometry tab) need their own
 // display label/unit since they are absent from the geometry parameter schema.
@@ -294,8 +292,6 @@ const SweepConfigPanel: React.FC = () => {
   const dieCtx = useDieContext();
   const dieHits = dieCtx.active
     ? dieDefiningSelected(sweepEntries.map(([n]) => n), dieCtx.dieKeys) : [];
-  const [allowNewLam, setAllowNewLam] = useState<boolean>(() => readAllowNewLamination());
-  const setAllowNewLamLS = (v: boolean) => { setAllowNewLam(v); writeAllowNewLamination(v); };
 
   // ── Add-variable dropdown: make the tab self-contained (no need to hunt
   //    chart-icons in the Geometry/Simulation tabs).  Adds as an optimize var.
@@ -453,12 +449,7 @@ const SweepConfigPanel: React.FC = () => {
                    borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0,
                    fontSize: 11, color: '#f59e0b' }}>
           <span>⚠ die-defining: {dieHits.map(dieKeyLabel).join(', ')} — varying it makes a NEW die (not '{dieCtx.die}')</span>
-          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-            <input type="checkbox" checked={allowNewLam}
-              onChange={(e) => setAllowNewLamLS(e.target.checked)} />
-            allow new lamination
-          </label>
-          <HelpTip title={`'${dieCtx.die}' keeps its stator Ø and slot/pole topology for life. A run that varies one of them is refused (422) unless this is ticked; with it ticked the result you apply is a different lamination — the die context is released and the header strip offers "Save as NEW die" so nothing is lost.`} />
+          <HelpTip title={`'${dieCtx.die}' keeps its stator Ø and slot/pole topology for life. Applying a result that varies one of these moves the active configuration/duty to the die that lamination now is (new or an existing match) automatically — '${dieCtx.die}' itself is untouched.`} />
         </Box>
       )}
 

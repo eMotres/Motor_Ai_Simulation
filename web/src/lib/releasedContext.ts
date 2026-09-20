@@ -19,12 +19,22 @@
  *   • "Discard live changes and reload ▶ X / cfg / duty" — when the record
  *     names (or the backend could fill in) the configuration and duty.
  *
+ * Superseded the same day, for the identity-guard case specifically: a
+ * die-defining edit on the ACTIVE die no longer releases the context at all
+ * — it AUTO-TRANSITIONS the active configuration/duty to the die the new
+ * lamination is (new or reused), so `/api/family/context` comes back ACTIVE
+ * again and none of the offers below ever render for it.  `released_from`
+ * (and everything this module computes from it) now fires only for a
+ * whole-machine load OUTSIDE the catalog — Compare apply, My motors, a
+ * preset — which is exactly what bf246ff/f46913c also covered; this module
+ * is kept, unmodified in shape, as that fallback.
+ *
  * Kept free of React and fetch so `node --test` pins the rules
  * (lib/__tests__/releasedContext.test.mjs — copied verbatim, the repo's
- * convention).  The same file also holds the "allow new lamination" consent
- * the sweep / optimizer requests carry, because it is the other half of the
- * same rule: die-defining keys are flagged BEFORE the change and refused by
- * the backend (422) unless this consent is given.
+ * convention).  The same file also holds `dieDefiningSelected`, which still
+ * flags die-defining keys in the sweep/optimizer pickers — now purely as
+ * INFORMATION (amber), since the backend gate they used to require
+ * `allow_new_lamination` for no longer refuses anything.
  */
 
 /** One identity key on which the live machine differs from the released die,
@@ -151,7 +161,14 @@ export function releasedOffers(ctx: ReleasedCtxLike | null | undefined): Release
   };
 }
 
-// ── "allow new lamination" — the consent the sweep / optimizer requests carry ─
+// ── "allow new lamination" — vestigial (2026-09-20) ──────────────────────────
+// Used to be consent a sweep/optimizer request needed before the backend
+// would even RUN a campaign that varies a die-defining key; the backend gate
+// (`refuse_die_defining_variables`) is now a no-op, so this value is read and
+// sent by the request builders below but no longer changes anything either
+// side of the wire.  Left in place rather than ripped out: the field is still
+// accepted (`OptRequest.allow_new_lamination` et al.), and removing the
+// plumbing buys nothing over just not gating on it.
 
 export const ALLOW_NEW_LAMINATION_KEY = 'opt.allowNewLamination';
 

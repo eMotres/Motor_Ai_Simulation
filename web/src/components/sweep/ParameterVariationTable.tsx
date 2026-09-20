@@ -24,7 +24,6 @@ import FreeCADRoundTrip from '../common/FreeCADRoundTrip';
 import Fusion360RoundTrip from '../common/Fusion360RoundTrip';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
-import { ConfirmDialog, type ConfirmState } from '../common/PromptDialogs';
 import { useDieContext } from '../common/useDieContext';
 import { dieKeyLabel } from '../../lib/releasedContext';
 import { openGeometryHelpWindow } from '../../lib/geometryHelpWindow';
@@ -172,13 +171,14 @@ const ParameterVariationTable: React.FC = () => {
   };
   // DIE-DEFINING keys (stator Ø, segments, slots/poles per segment): on an
   // UNLOCKED active die they are editable, but changing one makes the live
-  // machine a DIFFERENT lamination — the backend then releases the die
-  // context.  Warn BEFORE the change (flag + confirm), not after: the
-  // after-the-fact release is what left the owner's optimised machine
-  // unsaveable on 2026-09-20 12:47 (poles/segment 7 → 8 typed here).
+  // machine a DIFFERENT lamination — Recalculate then AUTO-TRANSITIONS the
+  // active configuration/duty to the die that lamination now is (new or
+  // reused; the source die is untouched).  Flagged here as INFORMATION only
+  // (2026-09-20: the confirm this tooltip used to gate — "this makes a NEW
+  // die, continue?" — is gone; a die-defining edit never dead-ends any more,
+  // so there is nothing left to ask permission for).
   const dieCtx = useDieContext();
   const dieDefining = (name: string): boolean => dieCtx.active && dieCtx.dieKeys.has(name);
-  const [askNewDie, setAskNewDie] = useState<ConfirmState | null>(null);
 
   const {
     parameterSchema,
@@ -271,27 +271,16 @@ const ParameterVariationTable: React.FC = () => {
     setShowSaved(true);
   }, [dirtyKeys, localValues, connectedToApi, updateGeometryViaApi, updateGeometry]);
 
+  // A die-defining edit under an active die used to stop here for a confirm
+  // ("this makes a NEW die — release the context?"): removed 2026-09-20 —
+  // the backend now AUTO-TRANSITIONS the active configuration/duty to the die
+  // the edited lamination is (new or reused) in the same Recalculate, so
+  // there is nothing left to ask permission for.  The amber "die-defining"
+  // tooltip below still flags the keys, purely as information.
   const handleRecalculate = useCallback(async () => {
     if (!isDirty) return;
-    // A die-defining edit under an active die: say what it means and ask.
-    const hits = [...dirtyKeys].filter(k => dieDefining(k)
-      && Number(localValues[k]) !== Number(geometry[k]));
-    if (hits.length) {
-      const what = hits.map(k => `${dieKeyLabel(k)} ${geometry[k]} → ${localValues[k]}`).join(', ');
-      setAskNewDie({
-        title: `${what}: this makes a NEW die`,
-        body: `Die '${dieCtx.die}' keeps its diameter and slot/pole topology for life. `
-          + 'After Recalculate the machine on screen is a different lamination: the die context is released '
-          + 'and the header strip offers "Save as NEW die" (your work is kept there) or "discard and reload". '
-          + 'The catalog die itself is not changed.',
-        confirmLabel: 'Recalculate as a new lamination',
-        onConfirm: () => { void sendRecalculate(); },
-      });
-      return;
-    }
     await sendRecalculate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDirty, dirtyKeys, localValues, geometry, dieCtx.active, dieCtx.die, dieCtx.dieKeys, sendRecalculate]);
+  }, [isDirty, sendRecalculate]);
 
   // ── sweep toggle ──────────────────────────────────────────────────────
   const toggleSweep = useCallback((name: string) => {
@@ -481,7 +470,7 @@ const ParameterVariationTable: React.FC = () => {
                       </Tooltip>
                     )}
                     {!lockedBy && dieDefining(param.name) && (
-                      <Tooltip title={`Die-defining — changing it makes a NEW die: '${dieCtx.die}' keeps its ${dieKeyLabel(param.name)} for life. Recalculate asks first; the strip then offers "Save as new die".`}>
+                      <Tooltip title={`Die-defining — changing it makes a NEW die: '${dieCtx.die}' keeps its ${dieKeyLabel(param.name)} for life. Recalculate moves the active configuration/duty to that die automatically (new or an existing match); '${dieCtx.die}' itself is untouched.`}>
                         <span style={{ marginRight: 4, cursor: 'help', fontSize: 10,
                                        color: '#f59e0b', fontWeight: 700 }}>die</span>
                       </Tooltip>
@@ -587,7 +576,6 @@ const ParameterVariationTable: React.FC = () => {
         onClose={() => setHelpError(null)}
         message={helpError ?? ''}
       />
-      <ConfirmDialog state={askNewDie} onClose={() => setAskNewDie(null)} />
     </Box>
   );
 };

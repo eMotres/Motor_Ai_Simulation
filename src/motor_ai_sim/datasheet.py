@@ -22,7 +22,7 @@ import logging
 import math
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +79,42 @@ def _g(duty: Dict[str, Any], *paths: str, default: Any = None) -> Any:
         if node is not None:
             return node
     return default
+
+
+def pick_limit_speed(mech_by_duty: Dict[str, Dict[str, Any]]
+                     ) -> Optional[Dict[str, Any]]:
+    """The machine's `limit_speed` block, from ANY duty's stored rotor-stress
+    record — pure, so it is testable without a workbook or a `duty_results`
+    store.  ``mech_by_duty`` is ``duty_results.get(die, cfg)``'s shape:
+    ``{duty: {kind: entry}}``.  It is a property of the rotor's structure, not
+    of one operating point, so the first duty that carries it answers for the
+    whole machine."""
+    for by_kind in (mech_by_duty or {}).values():
+        if not isinstance(by_kind, dict):
+            continue
+        rs = by_kind.get("rotor_stress")
+        if isinstance(rs, dict) and isinstance(rs.get("limit_speed"), dict):
+            return rs["limit_speed"]
+    return None
+
+
+def limit_speed_datasheet_row(mech_by_duty: Dict[str, Dict[str, Any]]
+                              ) -> Tuple[str, Any, str, int]:
+    """``(label, value, note, decimals)`` for the DESIGN block's "Max
+    mechanical speed (SF = 1)" line — pure, one clause of prose either way."""
+    label = "Max mechanical speed (SF = 1)"
+    ls = pick_limit_speed(mech_by_duty)
+    if isinstance(ls, dict) and ls.get("reached"):
+        return (label, ls.get("rpm_sf1"),
+                "same torque, contacts, interference and temperatures as "
+                "the case analysed; limited by the %s. Not a burst test"
+                % (ls.get("limiting_part") or "—"), 0)
+    if isinstance(ls, dict):
+        return (label, "not reached",
+                "the search did not bracket SF = 1 within the range tried", 0)
+    return (label, "not solved",
+            "run the coupled loop, or press Limit speed on the Mechanical "
+            "tab", 0)
 
 
 def _setting(duty: Dict[str, Any], key: str) -> Any:
@@ -1306,6 +1342,20 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "iron + copper + magnets + shaft over the active length", 3)
     one("Cooling", cfg_doc.get("cooling") or die_doc.get("cooling") or "air",
         "the losses above are electromagnetic — the cooling has to remove them")
+    # THE MECHANICAL LIMIT SPEED (owner 2026-09-21: "нужно эту максимальную
+    # скорость вращения обязательно добавлять в отчёт") — read from the
+    # `duty_results` store's compact rotor-stress record (the coupled loop's
+    # automatic search in `routes/mechanical.py:run_rotor_stress_at`, or a
+    # manual press of the Mechanical tab's **Limit speed** button attaches
+    # it), never computed here.  Any duty's record answers, since it is a
+    # property of the machine's structure, not of that one operating point.
+    try:
+        from motor_ai_sim import duty_results as _dr
+        _mech_by_duty = _dr.get(die, cfg)
+    except Exception:  # noqa: BLE001 — a missing store is not a datasheet error
+        _mech_by_duty = {}
+    label, value, note, d = limit_speed_datasheet_row(_mech_by_duty)
+    one(label, value, note, d)
     blank()
 
     from motor_ai_sim.winding import (wire_parallel_from_geo as _wp_geo,

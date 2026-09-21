@@ -1299,6 +1299,219 @@ def _panel_float(settings: Dict[str, Any], key: str) -> Optional[float]:
     return f if math.isfinite(f) else None
 
 
+# ---------------------------------------------------------------------------
+# The COUPLED LOOP'S OWN limit speed — automatic, cached, never manual
+# ---------------------------------------------------------------------------
+# Owner 2026-09-21: "нужно эту максимальную скорость обязательно добавлять в
+# отчёт" — every duty a coupled run saves must carry it, not only the ones a
+# human pressed **Limit speed (SF = 1)** for.  Wired into `run_rotor_stress_at`
+# ONLY — the hook `routes/coupled.py` calls — so a plain interactive
+# `/rotor_stress` GET (the Mechanical tab's own Solve button) never pays this
+# automatically; a human who wants it there presses the button, which is the
+# `/limit_speed` route above.
+#
+# `MECH_LIMIT_SPEED_AUTO=0` turns it off for emergencies (a coupled run that
+# must not spend the extra solves right now) without touching this file again.
+
+def _limit_speed_auto_enabled() -> bool:
+    v = str(os.environ.get("MECH_LIMIT_SPEED_AUTO", "1")).strip().lower()
+    return v not in ("0", "false", "off", "no")
+
+
+#: Cached per (geometry, loads/torque, contacts, temperatures, mesh, order,
+#: target) — a second coupled run of the SAME machine at the SAME case is a
+#: cache hit and spends nothing; a different geometry or a different case
+#: (a different duty's torque, a different rotor temperature) is not.  Small
+#: cap: this is a handful of numbers per entry, not a field.
+_LIMIT_SPEED_AUTO_MAX = 32
+_LIMIT_SPEED_AUTO_CACHE = _WSP.ws_map("mechanical.limit_speed_auto_cache",
+                                      _LIMIT_SPEED_AUTO_MAX, lru_on_read=True)
+
+
+def _limit_speed_auto_cache_key(fp: Optional[str], out: Dict[str, Any]) -> tuple:
+    contacts = out.get("contacts") or {}
+    c_sig = tuple(sorted(
+        (str(k), str(v.get("type")), round(float(v.get("mu") or 0.0), 4))
+        for k, v in contacts.items() if isinstance(v, dict)))
+    thermal = out.get("thermal") or {}
+    part_temps = thermal.get("part_temps_c") or {}
+
+    def _round5(x: Any) -> float:
+        return round(float(x) / 5.0) * 5.0
+
+    if part_temps:
+        t_sig = tuple(sorted((str(k), _round5(v)) for k, v in part_temps.items()
+                             if v is not None))
+    else:
+        t_sig = (("rotor", _round5(thermal.get("rotor_temp_c", 20.0))),
+                 ("sleeve", _round5(thermal.get("sleeve_temp_c", 20.0))))
+    mesh = out.get("mesh") or {}
+    return (
+        fp,
+        str(out.get("loads") or "both"),
+        round(float(out.get("torque_nm") or 0.0), 1),
+        round(float(out.get("interference_mm") or 0.0), 4),
+        c_sig, t_sig,
+        round(float(mesh.get("mesh_size_mm") or 1.5), 4),
+        int(mesh.get("element_order") or 2),
+        1.0,  # target_sf — fixed at SF = 1 on the automatic path
+    )
+
+
+def _auto_limit_speed(out: Dict[str, Any],
+                      geo: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The block `run_rotor_stress_at` attaches to a just-solved answer.
+
+    Reads the analysed point (rpm, SF, part) straight off the PRIMARY case of
+    ``out`` — never re-solved, unlike the manual route, which has no such
+    answer in hand yet.  Everything else — loads, torque, contacts,
+    interference, temperatures, mesh, order — is read off ``out`` too, so the
+    search runs at EXACTLY the case that was just solved.
+
+    Never raises: a search that fails must not take a coupled step down with
+    it, so a failure is logged and the duty is saved without the block —
+    which is exactly what happened before this existed, and the mandatory
+    report row says so rather than showing a made-up number.
+    """
+    if not _limit_speed_auto_enabled() or not isinstance(out, dict):
+        return None
+    try:
+        fp = out.get("geo_fingerprint")
+        key = _limit_speed_auto_cache_key(fp, out)
+        hit = _LIMIT_SPEED_AUTO_CACHE.get(key)
+        if hit is not None:
+            return dict(hit)
+
+        cases = out.get("cases") or {}
+        primary = out.get("primary_case") or next(iter(cases), None)
+        case0 = cases.get(primary) if primary else None
+        if not isinstance(case0, dict):
+            return None
+
+        def _numf(v: Any) -> Optional[float]:
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return f if math.isfinite(f) else None
+
+        rpm0 = _numf(case0.get("rpm"))
+        sf0 = _numf(case0.get("sf_min"))
+        if rpm0 is None or rpm0 <= 0 or sf0 is None or sf0 <= 0:
+            return None
+
+        from motor_ai_sim.simulation.mechanical import contact as ctc
+        from motor_ai_sim.simulation.mechanical import limit_speed as lsm
+        from motor_ai_sim.simulation.mechanical import rotor_stress as rsm
+
+        loads = str(out.get("loads") or "both")
+        torque_nm = float(out.get("torque_nm") or 0.0)
+        interference_mm = float(out.get("interference_mm") or 0.0)
+        mesh = out.get("mesh") or {}
+        mesh_size_mm = float(mesh.get("mesh_size_mm") or 1.5)
+        order = int(mesh.get("element_order") or 2)
+        sym = out.get("symmetry") or {}
+        sym_mode = str(sym.get("mode") or "full") if isinstance(sym, dict) else "full"
+        thermal = out.get("thermal") or {}
+        rotor_temp_c = float(thermal.get("rotor_temp_c", 20.0))
+        sleeve_temp_c = float(thermal.get("sleeve_temp_c", 20.0))
+        part_temps_c = {str(k): float(v) for k, v in
+                        (thermal.get("part_temps_c") or {}).items()
+                        if str(k) in ("rotor_core", "magnet", "shaft")
+                        and v is not None}
+        cspec = {str(k): ctc.ContactSpec(str(v.get("type") or "separation"),
+                                         float(v.get("mu") or 0.0))
+                for k, v in (out.get("contacts") or {}).items()
+                if isinstance(v, dict)}
+
+        max_solves = 12
+        _progress.start(total=max_solves, phase="geometry build",
+                        kind="limit_speed", composition="")
+        try:
+            polys, motor, geo_ov = _live_polys(geo)
+            assign = _assignments()
+            stack_mm = float(motor.parameters.get("motor_length") or 0.0)
+            n_poles = _num_poles(motor)
+            override_props = _override_props()
+
+            solves_done = 0
+
+            def _solve_rpm(cand_rpm: float):
+                nonlocal solves_done
+                solves_done += 1
+                _progress.update(
+                    done=min(solves_done, max_solves), total=max_solves,
+                    phase=f"limit speed {solves_done}/{max_solves} — "
+                          f"{cand_rpm:,.0f} rpm")
+                try:
+                    sol = rsm.solve_rotor_stress(
+                        polys, assign, cand_rpm, 1.0, interference_mm,
+                        stack_length_mm=stack_mm,
+                        material_overrides=override_props,
+                        mesh_size_mm=mesh_size_mm, order=order,
+                        with_field=False, contacts=cspec, lift_off_solves=0,
+                        case_mode="single", loads=loads,
+                        torque_nm=torque_nm, rotor_temp_c=rotor_temp_c,
+                        sleeve_temp_c=sleeve_temp_c,
+                        part_temps_c=(part_temps_c or None),
+                        symmetry=sym_mode, num_poles=n_poles)
+                except rsm.RotorRanAway as exc:
+                    return 0.0, (exc.pair or None), {}
+                _name, sol_case = next(iter(sol["cases"].items()))
+                return (sol_case["sf_min"], sol_case["sf_min_part"],
+                       sol_case["sf_min_per_part"])
+
+            search = lsm.find_limit_speed(_solve_rpm, rpm0, sf0, target=1.0,
+                                          max_factor=5.0, max_solves=max_solves)
+        finally:
+            _progress.finish()
+
+        block = dict(search)
+        block.update({
+            "target_sf": 1.0, "loads": loads, "torque_nm": torque_nm,
+            "interference_mm": interference_mm, "rotor_temp_c": rotor_temp_c,
+            "sleeve_temp_c": sleeve_temp_c, "geo_fingerprint": fp,
+            "analysed_rpm": rpm0,
+        })
+        if len(_LIMIT_SPEED_AUTO_CACHE) >= _LIMIT_SPEED_AUTO_MAX:
+            _LIMIT_SPEED_AUTO_CACHE.popitem(last=False)
+        _LIMIT_SPEED_AUTO_CACHE[key] = dict(block)
+        return block
+    except Exception:  # noqa: BLE001 — never take a coupled step down with it
+        log.warning("mechanical: automatic limit-speed search failed",
+                   exc_info=True)
+        return None
+
+
+def _refile_with_limit_speed(out: Dict[str, Any]) -> None:
+    """Re-park `out` (now carrying `limit_speed`) as the tab's last result and
+    the duty's compact copy, so a coupled run's saved duty carries the block
+    without a second FEM solve.  A bookkeeping miss here must not fail the
+    coupled step that got this far."""
+    try:
+        mesh = out.get("mesh") or {}
+        sym = out.get("symmetry") or {}
+        thermal = out.get("thermal") or {}
+        params = {
+            "rpm": out.get("rpm"), "overspeed_factor": out.get("overspeed_factor"),
+            "interference_mm": out.get("interference_mm"),
+            "mesh_size_mm": mesh.get("mesh_size_mm"),
+            "order": mesh.get("element_order"),
+            "cases": out.get("case_mode") or "three",
+            "symmetry": (sym.get("mode") if isinstance(sym, dict) else None) or "full",
+            "loads": out.get("loads"), "torque_nm": out.get("torque_nm"),
+            "rotor_temp_c": (thermal.get("rotor_temp_c")),
+            "sleeve_temp_c": (thermal.get("sleeve_temp_c")),
+            "contacts": {str(k): {"type": v.get("type"), "mu": v.get("mu")}
+                        for k, v in (out.get("contacts") or {}).items()
+                        if isinstance(v, dict)},
+        }
+        _remember_last("rotor_stress", out, params, out.get("geo_fingerprint"))
+    except Exception:  # noqa: BLE001
+        log.warning("mechanical: could not re-file the limit-speed result",
+                   exc_info=True)
+
+
 def run_rotor_stress_at(temps: Dict[str, float],
                         **route_params) -> Dict[str, Any]:
     """Solve the rotor stress with each part at the temperature ``temps`` gives.
@@ -1428,7 +1641,7 @@ def run_rotor_stress_at(temps: Dict[str, float],
                 return f
         return default
 
-    return rotor_stress(
+    out = rotor_stress(
         rpm=rpm,
         overspeed_factor=float(_pick("overspeed_factor", "osf", 1.2)),
         interference_mm=float(_pick("interference_mm", "interf", 0.0)),
@@ -1453,6 +1666,22 @@ def run_rotor_stress_at(temps: Dict[str, float],
                      or ps.get("symmetry") or "full"),
         geo=route_params.get("geo"),
     )
+    # THE LIMIT SPEED, AUTOMATIC (owner 2026-09-21: "нужно эту максимальную
+    # скорость вращения обязательно добавлять в отчёт").  Only here — the
+    # coupled loop's own hook — never on a plain interactive Solve, and never
+    # for a solve marked `record: false` (nobody will ever read it).
+    if isinstance(out, dict):
+        try:
+            from motor_ai_sim import run_recording as _rr
+            recorded = not _rr.suppressed()
+        except Exception:  # noqa: BLE001
+            recorded = True
+        if recorded:
+            block = _auto_limit_speed(out, route_params.get("geo"))
+            if block is not None:
+                out["limit_speed"] = block
+                _refile_with_limit_speed(out)
+    return out
 
 
 def run_modes_at(**route_params) -> Dict[str, Any]:

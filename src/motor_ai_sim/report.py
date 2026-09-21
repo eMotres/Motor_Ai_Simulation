@@ -17478,20 +17478,27 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
       lambda c: ", ".join(f"{k} {float(v):g}" for k, v in
                           sorted(((_m(c) or {}).get("part_temps_c") or {}).items())
                           if v is not None) or None)
-    # SPEED AT SF = 1 (owner 2026-09-21: "нужно искать ещё максимальную
-    # скорость вращения ... она будет, когда достигает SF = 1"), same loads,
-    # contacts, interference and temperatures as the case above.  Present only
-    # when the **Limit speed** button produced the block for a duty in this
-    # comparison — never computed here, and the row is left out entirely
-    # rather than printed as "—" for every duty when nobody ever pressed it.
-    if any(isinstance((_m(c) or {}).get("limit_speed"), dict) for c in cols):
-        S("Speed at SF = 1 (same loads)",
-          lambda c: _limit_speed_words((_m(c) or {}).get("limit_speed")))
+    # SPEED AT SF = 1 — MANDATORY (owner 2026-09-21: "нужно эту максимальную
+    # скорость обязательно добавлять в отчёт" — every report, not only when
+    # the button was pressed).  Same loads, contacts, interference and
+    # temperatures as the case above; the block itself comes from the
+    # coupled loop's automatic search (`run_rotor_stress_at`) or a manual
+    # press of **Limit speed**, NEVER computed in this function.  Unlike
+    # every other row in this table, it is NEVER left out: a duty whose
+    # mechanical answer predates the automatic search (an old record) must
+    # show the gap rather than silently drop the row, so a stale report is
+    # visibly stale.
+    rows.append(["Speed at SF = 1 (same loads)"] + _col_vals(
+        cols, lambda c: (NOT_SOLVED if _m(c) is None else
+                        (_limit_speed_words((_m(c) or {}).get("limit_speed"))
+                         or (NOT_SOLVED + " — re-run the coupled loop")))))
     return "Mechanical", _drop_empty(rows)
 
 
 def _limit_speed_words(ls: Optional[Dict[str, Any]]) -> Optional[str]:
-    """'25,400 rpm — sleeve', or 'not reached (SF 1.8 at 5x)' — one clause."""
+    """'25,400 rpm — sleeve', 'not reached (search range)', or None when
+    there is no block at all — the caller then prints the mandatory
+    "not solved" text, never a blank cell."""
     if not isinstance(ls, dict):
         return None
     if not ls.get("reached"):
@@ -17500,7 +17507,10 @@ def _limit_speed_words(ls: Optional[Dict[str, Any]]) -> Optional[str]:
     if rpm1 is None:
         return None
     part = ls.get("limiting_part")
-    return f"{rpm1:,.0f} rpm — {part}" if part else f"{rpm1:,.0f} rpm"
+    txt = f"{rpm1:,.0f} rpm — {part}" if part else f"{rpm1:,.0f} rpm"
+    if ls.get("non_monotonic"):
+        txt += " (non-monotonic SF — conservative)"
+    return txt
 
 
 def crit_compare_rows(cols: List[Dict[str, Any]]

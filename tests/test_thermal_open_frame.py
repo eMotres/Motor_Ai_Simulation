@@ -429,8 +429,12 @@ def test_the_budget_still_closes_with_both_new_sinks(client, em_run):
     assert b["residual_pct"] < 2.0, b
     assert b["end_windings_W"] > 0.0
     assert b["slot_channels_W"] > 0.0
+    # Since 2026-09-21 the open frame has two more outflow lines — the rotor's
+    # axial end faces in the wash and the ventilated gap — and they are part of
+    # the same identity: EVERY watt that leaves is on a named line.
     assert (b["housing_W"] + b["bore_W"] + b["shaft_ends_W"]
             + b["end_windings_W"] + b["slot_channels_W"]
+            + b["end_faces_W"] + b["gap_flow_W"]
             == pytest.approx(b["losses_W"], rel=0.02, abs=0.02))
     # G·ΔT in machine watts — the wedge bookkeeping, made checkable.
     assert ew["t_winding_mean_c"] is not None

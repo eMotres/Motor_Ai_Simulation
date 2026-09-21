@@ -1232,6 +1232,19 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     _efw = {n: (float((dict((cooling.get("end_faces") or {}).get(n) or {})
                        ).get("heat_removed_W") or 0.0) if surface_fit else 0.0)
             for n in NODES}
+    # ── THE VENTILATED AIR GAP (2026-09-21) ────────────────────────────────
+    # An OPEN machine's clearance is a duct the wash blows through, and the map
+    # reports what each half of it carries: the rotor half (inside the slip
+    # radius, plus any open magnet recess) and the stator half.  They are the
+    # rotor's and the stator's, not the winding's, so they get their own two
+    # conductances to ambient below — without them the network hands the rotor
+    # back the watts the map took off it and every transient runs the magnets
+    # hot.  Zero on a housed machine, where the block reads `mode: off`.
+    _gapf = dict(cooling.get("gap_flow") or {})
+    gf_rot_w = (max(float(_gapf.get("rotor_side_W") or 0.0), 0.0)
+                if surface_fit else 0.0)
+    gf_sta_w = (max(float(_gapf.get("stator_side_W") or 0.0), 0.0)
+                if surface_fit else 0.0)
     drive = {"w_s": max(P_cu - open_w - _efw["winding"], 0.0),
              "r_s": gap_w,
              "m_r": max(P_mag - _efw["magnet"], 0.0)}
@@ -1378,6 +1391,33 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     dt_rotor = means["rotor"] - t_amb
     G["r_bore"] = bore_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
     G["r_shaft"] = shaft_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
+    # THE VENTILATED GAP, one conductance per side, fitted the same way every
+    # surface path here is: the WATTS the map removed over the node's own ΔT.
+    G["r_gap_flow"] = (gf_rot_w / dt_rotor
+                       if (gf_rot_w > 0.0 and abs(dt_rotor) > 1e-6) else 0.0)
+    dt_stator = means["stator"] - t_amb
+    G["s_gap_flow"] = (gf_sta_w / dt_stator
+                       if (gf_sta_w > 0.0 and abs(dt_stator) > 1e-6) else 0.0)
+    for _k, _w, _dt, _nd in (("r_gap_flow", gf_rot_w, dt_rotor, "rotor"),
+                             ("s_gap_flow", gf_sta_w, dt_stator, "stator")):
+        if G[_k] > 0.0:
+            links[_k] = {
+                "kind": "calibrated", "nodes": [_nd, "ambient"],
+                "G_W_per_K": round(float(G[_k]), 6),
+                "basis": ("fitted to the calibration map: %.3f W blown out of "
+                          "the %s half of the air gap at %.2f m/s through-flow, "
+                          "against the %s node at %.2f °C and the %.2f °C room"
+                          % (_w, _nd,
+                             float(_gapf.get("gap_speed_mps") or 0.0),
+                             _nd, means[_nd], t_amb)),
+                "dt_K": round(_dt, 3), "P_W": round(_w, 4)}
+    if gf_rot_w > 0.0 or gf_sta_w > 0.0:
+        notes.append(
+            "the air gap is VENTILATED on this map (%.2f m/s through the "
+            "clearance): %.2f W leave the rotor half and %.2f W the stator half "
+            "straight into the room, so neither is available to cross the gap "
+            "and both are carried as their own conductance"
+            % (float(_gapf.get("gap_speed_mps") or 0.0), gf_rot_w, gf_sta_w))
     dt_wind = means["winding"] - t_amb
     G["w_open"] = (open_w / dt_wind
                    if (open_w > 0.0 and abs(dt_wind) > 1e-6) else 0.0)
@@ -1464,9 +1504,17 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
                 "%.5f W/K the map's own end-face block states — the two "
                 "disagree in the payload"
                 % (_node, _w, _g, _dt, float(_blk.get("G_W_per_K") or 0.0)))
-        # The end faces are ALWAYS a natural film plus radiation — they are the
-        # robotics mode's own paths and that mode blows nothing.
-        film[_key] = "natural"
+        # WHICH FILM this face is on comes from the MAP (2026-09-21), not from
+        # this module's idea of what an end face is.  The robotics mode's faces
+        # are natural convection plus radiation and move with the wall; the open
+        # frame's rotor faces (since 2026-09-21) are forced convection in the
+        # propeller wash and do not move with it at all, so re-evaluating them
+        # against a Rayleigh number would walk a 143 W/m²·K film down to 8.
+        # Absent (every map solved before today) reads "natural", which is
+        # exactly what those maps' faces were.
+        film[_key] = ("forced"
+                      if str(_blk.get("film_kind") or "natural").strip().lower()
+                      == "forced" else "natural")
         if not float(areas.get(_key) or 0.0) > 0.0:
             areas[_key] = float(_blk.get("area_m2") or 0.0)
         if not float(chars.get(_key) or 0.0) > 0.0:
@@ -1494,6 +1542,8 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
             "gap_W": round(gap_w, 3), "bore_W": round(bore_w, 3),
             "shaft_ends_W": round(shaft_w, 3), "housing_W": round(housing_w, 3),
             "end_windings_W": round(ew_w, 3), "slot_channels_W": round(ch_w, 3),
+            "gap_flow_rotor_W": round(gf_rot_w, 3),
+            "gap_flow_stator_W": round(gf_sta_w, 3),
             "losses_W": float(budget.get("losses_W") or 0.0),
             "housing_G_W_per_K": (None if housing_G is None
                                   else round(housing_G, 5)),
@@ -1625,8 +1675,10 @@ def _flows(T: Mapping[str, float], network: Network) -> Dict[str, float]:
     """Every heat flow OUT of the machine plus the internal ones, in W.
 
     Keys: ``housing``, ``mount``, ``bore``, ``shaft_ends``, the four
-    ``*_ends`` side faces, and the internal ``w_s``/``r_s``/``m_r`` (positive =
-    from the hotter node to the colder one, in the order of :data:`_PAIRS`).
+    ``*_ends`` side faces, the open frame's ``winding_open`` and (since
+    2026-09-21) ``rotor_gap_flow`` / ``stator_gap_flow``, and the internal
+    ``w_s``/``r_s``/``m_r`` (positive = from the hotter node to the colder one,
+    in the order of :data:`_PAIRS`).
     """
     amb, mnt = network.t_ambient_c, network.t_mount_c
     ts = float(T[network.rep("stator")])
@@ -1644,6 +1696,11 @@ def _flows(T: Mapping[str, float], network: Network) -> Dict[str, float]:
         # film: it is forced convection at a stated air speed, which does not
         # move with the wall temperature the way natural convection does.
         "winding_open": float(network.G.get("w_open") or 0.0) * (tw - amb),
+        # THE VENTILATED GAP (2026-09-21), one per side and both FIXED for the
+        # same reason `winding_open` is: a blown film does not move with the
+        # wall the way natural convection does.
+        "rotor_gap_flow": float(network.G.get("r_gap_flow") or 0.0) * (tr - amb),
+        "stator_gap_flow": float(network.G.get("s_gap_flow") or 0.0) * (ts - amb),
     }
     for node, key in _SIDE_KEY.items():
         tn = float(T[network.rep(node)])
@@ -1661,12 +1718,14 @@ _FLOW_NODE: Dict[str, str] = {
     "shaft_ends": "rotor", "winding_ends": "winding",
     "stator_ends": "stator", "rotor_ends": "rotor", "magnet_ends": "magnet",
     "winding_open": "winding",
+    "rotor_gap_flow": "rotor", "stator_gap_flow": "stator",
 }
 EXTERNAL_FLOWS: Tuple[str, ...] = tuple(_FLOW_NODE)
 #: Which side of the machine each external path belongs to (for the split).
 STATOR_SIDE_FLOWS = ("housing", "mount", "winding_ends", "stator_ends",
-                     "winding_open")
-ROTOR_SIDE_FLOWS = ("bore", "shaft_ends", "rotor_ends", "magnet_ends")
+                     "winding_open", "stator_gap_flow")
+ROTOR_SIDE_FLOWS = ("bore", "shaft_ends", "rotor_ends", "magnet_ends",
+                    "rotor_gap_flow")
 
 
 def _derivatives(seg: Segment, T: Mapping[str, float], network: Network,
@@ -2509,6 +2568,11 @@ def average_split(trace: Trace, network: Network) -> Dict[str, Any]:
         "magnet_end_faces_W": round(flows.get("magnet_ends", 0.0), 3),
         "bore_W": round(flows.get("bore", 0.0), 3),
         "shaft_ends_W": round(flows.get("shaft_ends", 0.0), 3),
+        # The OPEN frame's three forced paths (end turns + slot channels are one
+        # line, the ventilated gap is two).  0 on every housed machine.
+        "winding_open_W": round(flows.get("winding_open", 0.0), 3),
+        "rotor_gap_flow_W": round(flows.get("rotor_gap_flow", 0.0), 3),
+        "stator_gap_flow_W": round(flows.get("stator_gap_flow", 0.0), 3),
         "gap_W": round(flows.get("r_s", 0.0), 3),
         "winding_to_core_W": round(flows.get("w_s", 0.0), 3),
         "closure_W": round(total_in - total_out, 4),

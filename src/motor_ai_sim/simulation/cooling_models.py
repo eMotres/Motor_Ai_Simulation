@@ -1493,6 +1493,350 @@ def slot_channels_path(*, air_speed_mps: float, t_ambient_c: float,
 
 
 # ---------------------------------------------------------------------------
+# The OPEN frame, part two: the ROTOR is in the wash as well (2026-09-21)
+# ---------------------------------------------------------------------------
+# User, 2026-09-21, with his thermal photographs of the Ø50 drone motor in
+# front of him: *«по термофотографиям катушки греются всегда значительно больше
+# магнитов; конструкция полностью открыта, магниты обдуваются со всех сторон, и
+# воздух ещё продувает зазор»* — the coils are ALWAYS much hotter than the
+# magnets, the build is open on every side, the magnets are washed all round and
+# the air blows through the gap as well.  The model said the opposite: on the
+# CIANO14 50 edited / L15 record the winding came out at 251 °C and the magnets
+# at 240 °C, i.e. the rotor sat 11 K under the copper because its ONLY ways out
+# of the 2-D section were the 0.2 mm air gap and a 10 m/s bore.
+#
+# The 2026-09-09 open frame put the STATOR side in the wash (end turns, slot
+# channels) and left the rotor where the housed model had it.  These two
+# functions put the rotor in the same air:
+#
+#   * ``rotor_end_faces_open`` — the rotor's axial faces (iron + magnet ends) in
+#     forced convection.  They are a disc spinning at the machine's own speed
+#     INSIDE an axial stream, so the film is the larger of the rotating-disc and
+#     the flat-plate cross-flow value — the two mechanisms do not add, and
+#     taking the larger is the standard conservative reading of a mixed film;
+#   * ``gap_axial_flow`` — the clearance as a short annular DUCT the wash blows
+#     through, with the through-velocity SOLVED from the pressure balance rather
+#     than assumed, and a mass flow that fixes how many watts the gap air can
+#     carry away axially.
+#
+# NEITHER HAS BEEN CALIBRATED.  The owner has the thermal photographs and has
+# not given numbers yet (2026-09-21), so the two multipliers below are 1.0 and
+# say what they are waiting for.  Nothing here invents a measurement.
+
+#: Multiplier on the SOLVED gap through-velocity (``gap_axial_flow``).
+#:
+#: The velocity itself is a pressure balance and not a guess: the wash's dynamic
+#: head ½ρv² drives the gap against an entrance loss, an exit loss and the
+#: channel friction over the stack (see that function).  Two effects the balance
+#: does NOT carry pull in opposite directions and are both stated there — the
+#: full free-stream head is assumed available at the inlet (optimistic), while
+#: the rotor's own disc pumping, which adds flow, is not counted (pessimistic).
+#:
+#: 1.0 = the balance as solved.  IT AWAITS CALIBRATION against the owner's
+#: thermal photographs of the open Ø50 machine (magnet surface temperature at a
+#: known wash speed and current); until he gives a number this multiplier is not
+#: a measured value and must not be quoted as one.
+OPEN_GAP_FLOW_CALIBRATION = 1.0
+
+#: Multiplier on the rotor end-face film (``rotor_end_faces_open``).
+#:
+#: Same status and the same reason: the rotating-disc and flat-plate
+#: correlations are textbook averages for clean isolated geometries, and a rotor
+#: face a millimetre from an end plate with standoff pins across the stream is
+#: neither.  1.0 = the correlations as published; AWAITING CALIBRATION against
+#: the owner's measurements.
+OPEN_ROTOR_FACE_H_CALIBRATION = 1.0
+
+#: Entrance loss coefficient of the gap's inlet [-] — a sharp-edged annular
+#: opening, the standard K = 0.5.
+GAP_ENTRANCE_K = 0.5
+#: Exit loss coefficient [-] — the stream discharges its whole velocity head
+#: into the room, K = 1.0.
+GAP_EXIT_K = 1.0
+
+#: Where the free disc goes turbulent: Re_ω = ω·R²/ν (Cobb & Saunders).
+DISC_RE_OMEGA_TURBULENT = 2.4e5
+
+
+def rotating_disc_nu(re_omega: float, pr: float = _AIR_PR) -> Tuple[float, str]:
+    """(Nu, regime) for a disc ROTATING in otherwise still air, on its radius.
+
+    The free-disc correlations, average over the face::
+
+        Re_ω < 2.4e5   Nu = 0.36 · Re_ω^(1/2)        (laminar, Cobb & Saunders)
+        Re_ω ≥ 2.4e5   Nu = 0.015 · Re_ω^(4/5)       (turbulent, Dorfman)
+
+    with ``Re_ω = ω·R²/ν`` and ``Nu = h·R/k`` — both on the disc RADIUS, which
+    is the length the boundary layer grows along.  Pr enters only through the
+    fluid; for air over the range that matters the two forms above are quoted at
+    Pr ≈ 0.7 and carrying an explicit Pr^(1/3) would be a precision the
+    correlations do not have, so ``pr`` is accepted, reported and not applied.
+
+    NO RADIATION, the same omission ``rotating_cylinder_h`` states: an open
+    rotor face sees the end plate, the propeller and whatever the machine is
+    bolted to, and a view factor of 1 to the room would over-read it.
+    """
+    re = max(float(re_omega), 0.0)
+    if re <= 0.0:
+        return 0.0, "at rest"
+    if re < DISC_RE_OMEGA_TURBULENT:
+        return 0.36 * re ** 0.5, "rotating disc (laminar)"
+    return 0.015 * re ** 0.8, "rotating disc (turbulent)"
+
+
+def flat_plate_forced_nu(re_l: float, pr: float) -> Tuple[float, str]:
+    """(Nu, regime) for a FLAT PLATE in parallel forced flow, average over L.
+
+        Re_L < 5e5    Nu = 0.664 · Re_L^(1/2) · Pr^(1/3)          (Blasius)
+        Re_L ≥ 5e5    Nu = (0.037 · Re_L^(4/5) − 871) · Pr^(1/3)  (mixed)
+
+    The characteristic length is the distance the flow runs along the face — for
+    a rotor end face in an axial stream that is the face's DIAMETER, which is
+    what the caller passes.  The mixed form's −871 is the laminar leading edge
+    subtracted off, so the two branches meet at Re 5e5 rather than stepping.
+    """
+    re = max(float(re_l), 0.0)
+    p = max(float(pr), 1e-6)
+    if re <= 1.0:
+        return 0.0, "no flow"
+    if re < 5.0e5:
+        return 0.664 * re ** 0.5 * p ** (1.0 / 3.0), "flat plate (laminar)"
+    return max(0.037 * re ** 0.8 - 871.0, 0.0) * p ** (1.0 / 3.0), \
+        "flat plate (mixed laminar/turbulent)"
+
+
+def rotor_end_faces_open(*, air_speed_mps: float, rpm: float, t_wall_c: float,
+                         t_ambient_c: float, area_m2: float, radius_m: float,
+                         n_faces: int = 2, name: str = "rotor end face",
+                         props: Optional[FluidProps] = None) -> Dict[str, Any]:
+    """A rotor axial face of an OPEN machine, as a lumped conductance [W/K].
+
+    ``area_m2`` is ONE face's exposed area (measured on the cross-section by the
+    caller — the rotor iron's annulus, or the magnets' own end sections),
+    ``radius_m`` the rotor's outside radius and ``n_faces`` how many ends are in
+    the stream.  The output is the same shape ``end_face_still`` returns, so the
+    caller's sink bookkeeping and its payload block do not have to know which of
+    the two films it asked for.
+
+    TWO MECHANISMS, and the LARGER is taken:
+
+      * the face is a DISC spinning at the machine's speed — ``rotating_disc_nu``
+        on ``Re_ω = ω·R²/ν``, ``h = Nu·k/R``.  This one is there whenever the
+        machine turns, wash or no wash, and it is why an open rotor is never at
+        the still-air floor;
+      * the face is a PLATE in the propeller stream — ``flat_plate_forced_nu`` on
+        ``Re_D = v·2R/ν``, ``h = Nu·k/(2R)``.
+
+    Taking ``max`` rather than a sum is the deliberate under-read this module
+    takes everywhere: the two boundary layers occupy the same face and the
+    superposition of a rotating and a cross-flow layer is weaker than the sum of
+    the two (the usual mixed-convection blend, ``(h₁ⁿ + h₂ⁿ)^(1/n)``, sits
+    between them).  Below both sits ``NATURAL_CONVECTION_H``, the same floor the
+    other two open-frame paths carry.
+
+    NO RADIATION — see ``rotating_disc_nu``.  ``OPEN_ROTOR_FACE_H_CALIBRATION``
+    multiplies the result and is 1.0 AWAITING the owner's measurements.
+    """
+    a = max(float(area_m2), 0.0)
+    n = max(int(n_faces), 0)
+    r = max(float(radius_m), 1e-4)
+    t_film = 0.5 * (float(t_wall_c) + float(t_ambient_c))
+    p = props or air_properties(t_film)
+    v = max(float(air_speed_mps), 0.0)
+    omega = abs(float(rpm)) * 2.0 * math.pi / 60.0
+    re_omega = omega * r * r / max(p.nu, 1e-12)
+    nu_d, reg_d = rotating_disc_nu(re_omega, p.pr)
+    h_disc = nu_d * p.k / r
+    re_l = v * 2.0 * r / max(p.nu, 1e-12)
+    nu_p, reg_p = flat_plate_forced_nu(re_l, p.pr)
+    h_plate = nu_p * p.k / (2.0 * r)
+    if h_disc >= h_plate:
+        h_forced, regime, nu, re = h_disc, reg_d, nu_d, re_omega
+    else:
+        h_forced, regime, nu, re = h_plate, reg_p, nu_p, re_l
+    h_forced *= max(float(OPEN_ROTOR_FACE_H_CALIBRATION), 0.0)
+    h = max(h_forced, NATURAL_CONVECTION_H)
+    if h_forced <= NATURAL_CONVECTION_H:
+        regime = "at rest" if (v <= 0.0 and omega <= 0.0) else "natural (floor)"
+    g = h * a * n
+    dt = float(t_wall_c) - float(t_ambient_c)
+    if a <= 0.0 or n <= 0:
+        note = (f"no exposed {name} area — this path is off (the part is not in "
+                f"this cross-section, or its ends are covered)")
+    else:
+        note = (f"{n} × {a * 1e4:.1f} cm² of {name} in the wash: rotating disc "
+                f"at {abs(float(rpm)):.0f} rpm (Re_ω {re_omega:.2e}, h "
+                f"{h_disc:.0f}) vs flat plate at {v:.1f} m/s (Re_D "
+                f"{re_l:.2e}, h {h_plate:.0f}) → {regime}, h {h:.0f} W/m²·K → "
+                f"{g:.3f} W/K.  No radiation (the face sees the end plate and "
+                f"the propeller, not the room).  Films AWAIT CALIBRATION "
+                f"against the owner's thermal photographs.")
+    return {
+        "mode": ("forced" if (a > 0.0 and n > 0) else "off"),
+        "film_kind": "forced",
+        "name": str(name),
+        "G_W_per_K": float(g),
+        "h_conv": float(h),
+        "h_rad": 0.0,
+        "h_total": float(h),
+        "h_disc": float(h_disc),
+        "h_plate": float(h_plate),
+        "re": float(re),
+        "re_omega": float(re_omega),
+        "re_plate": float(re_l),
+        "nu": float(nu),
+        "regime": regime,
+        "orientation": "axial face in cross-flow",
+        "area_m2": float(a),
+        "area_total_m2": float(a * n),
+        "char_len_m": float(2.0 * r),
+        "n_faces": n,
+        "emissivity": 0.0,
+        "air_speed_mps": float(v),
+        "rpm": float(rpm),
+        "t_wall_c": float(t_wall_c),
+        "t_film_c": float(t_film),
+        "t_sink_c": float(t_ambient_c),
+        "heat_removed_W": float(g * dt),
+        "convection_W": float(g * dt),
+        "radiation_W": 0.0,
+        "calibration": float(OPEN_ROTOR_FACE_H_CALIBRATION),
+        "note": note,
+    }
+
+
+def gap_axial_flow(*, air_speed_mps: float, r_rotor_m: float, r_bore_m: float,
+                   length_m: float, t_air_c: float, t_ambient_c: float,
+                   rpm: float = 0.0, extra_area_m2: float = 0.0,
+                   props: Optional[FluidProps] = None) -> Dict[str, Any]:
+    """The air gap of an OPEN machine as a short annular DUCT the wash blows
+    through — the through-velocity, the mass flow and what it can carry.
+
+    THE VELOCITY IS SOLVED, NOT ASSUMED.  The free stream arrives at the gap
+    mouth with a dynamic head ½ρv_wash², and the gap spends it on an entrance
+    loss, the channel friction over the stack and the exit::
+
+        ½ρv_wash² = (K_in + K_out + f_D·L/D_h) · ½ρv_gap²
+        v_gap     = v_wash / sqrt(K_in + K_out + f_D·L/D_h)
+
+    with ``D_h = 2δ`` (the annulus's hydraulic diameter, δ = r_bore − r_rotor),
+    ``f_D = 64/Re`` laminar and ``0.316·Re^(-1/4)`` turbulent, and ``Re =
+    v_gap·D_h/ν`` — so the balance is implicit and is iterated to a per-mille.
+    On the Ø50 machine (δ 0.25 mm, 15 mm of stack, 40 m/s wash) that is L/D_h
+    ≈ 30 and a solved v_gap of a few m/s, NOT the free-stream speed — which is
+    exactly why it is solved.
+
+    TWO EFFECTS THE BALANCE DOES NOT CARRY, and they pull opposite ways:
+
+      * the FULL free-stream head is taken as available at the inlet, i.e. the
+        gap mouth is treated as a stagnation region discharging to static
+        ambient.  That is the optimistic end;
+      * the rotor's own DISC PUMPING — a spinning rotor drags air through its
+        own clearance and adds to this flow — is not counted at all.  That is
+        the pessimistic end.
+
+    ``OPEN_GAP_FLOW_CALIBRATION`` multiplies the solved velocity and is 1.0
+    AWAITING the owner's measurements; neither of the two effects above is
+    tuned into it.
+
+    WHAT IT RETURNS IS AN ENTHALPY CONDUCTANCE.  Fresh air enters at ambient and
+    leaves at T_out, so in steady state the channel removes ``ṁ·cp·(T_out −
+    T_in)``; taking the air's MEAN temperature as (T_in + T_out)/2 — a linear
+    rise along a channel with a roughly constant wall — that is
+
+        Q = 2·ṁ·cp·(T_mean − T_ambient)     →    G = 2·ṁ·cp
+
+    and ``G_W_per_K`` is that number, to be applied to the gap AIR's own mean
+    temperature.  The wall→air film is NOT in it: in a 0.25 mm clearance the
+    air is a quarter of a millimetre from both walls and the meshed gap air
+    already carries that resistance by conduction, so folding a film in here
+    would count it twice.  ``k_eff_axial`` is the transverse conductivity the
+    axial flow is worth (Nu_D on D_h, expressed over the clearance as
+    ``Nu_D·k/2``) so the caller can take the larger of it and the
+    Taylor–Couette value instead of adding the two.
+
+    ``extra_area_m2`` is free flow cross-section BESIDE the clearance that the
+    same stream passes through — on a rotor whose magnet pockets are open to the
+    OD (``rotor_hole`` > 0) the recess above each magnet (``magnet_up_gap``) is
+    part of this channel, and the caller measures it on the mesh.
+    """
+    delta = max(float(r_bore_m) - float(r_rotor_m), 1e-6)
+    d_h = 2.0 * delta
+    L = max(float(length_m), 1e-6)
+    v_wash = max(float(air_speed_mps), 0.0)
+    p = props or air_properties(t_air_c)
+    a_cs = max(math.pi * (float(r_bore_m) ** 2 - float(r_rotor_m) ** 2), 0.0)
+    a_cs += max(float(extra_area_m2), 0.0)
+
+    v_gap, re, f_d, regime = 0.0, 0.0, 0.0, "no through-flow"
+    if v_wash > 0.0 and a_cs > 0.0:
+        v_gap = v_wash                      # seed: the frictionless limit
+        for _ in range(60):
+            re = max(v_gap * d_h / max(p.nu, 1e-12), 1e-6)
+            if re < 2300.0:
+                f_d, regime = 64.0 / re, "laminar duct"
+            else:
+                f_d, regime = 0.316 * re ** -0.25, "turbulent duct"
+            sigma = GAP_ENTRANCE_K + GAP_EXIT_K + f_d * L / d_h
+            v_new = v_wash / math.sqrt(max(sigma, 1e-9))
+            if abs(v_new - v_gap) <= 1e-3 * max(v_new, 1e-9):
+                v_gap = v_new
+                break
+            v_gap = 0.5 * (v_gap + v_new)   # damped: the balance is stiff at
+        re = max(v_gap * d_h / max(p.nu, 1e-12), 0.0)   # small L/D_h
+        v_gap *= max(float(OPEN_GAP_FLOW_CALIBRATION), 0.0)
+
+    m_dot = p.rho * a_cs * v_gap
+    g = 2.0 * m_dot * p.cp
+    nu_d, nu_regime = (pipe_nusselt(re, p.pr) if (v_gap > 0.0 and re > 0.0)
+                       else (0.0, "no through-flow"))
+    return {
+        "mode": ("through-flow" if g > 0.0 else "off"),
+        "film_kind": "forced",
+        "G_W_per_K": float(g),
+        "m_dot_kg_s": float(m_dot),
+        "air_speed_mps": float(v_wash),
+        "gap_speed_mps": float(v_gap),
+        "speed_fraction": float(v_gap / v_wash) if v_wash > 0.0 else 0.0,
+        "re": float(re),
+        "friction_factor": float(f_d),
+        "regime": regime,
+        "nu_duct": float(nu_d),
+        "nu_regime": nu_regime,
+        "k_eff_axial": float(nu_d * p.k / 2.0),
+        "hydraulic_diameter_m": float(d_h),
+        "clearance_m": float(delta),
+        "cross_section_m2": float(a_cs),
+        "extra_area_m2": float(max(float(extra_area_m2), 0.0)),
+        "length_m": float(L),
+        "L_over_Dh": float(L / d_h),
+        "entrance_k": float(GAP_ENTRANCE_K),
+        "exit_k": float(GAP_EXIT_K),
+        "t_air_c": float(t_air_c),
+        "t_sink_c": float(t_ambient_c),
+        "rpm": float(rpm),
+        "calibration": float(OPEN_GAP_FLOW_CALIBRATION),
+        "note": (
+            f"the clearance as a {L * 1e3:.1f} mm annular duct, δ "
+            f"{delta * 1e3:.3f} mm (D_h {d_h * 1e3:.3f} mm, L/D_h "
+            f"{L / d_h:.1f}), free area {a_cs * 1e6:.2f} mm²"
+            + (f" (of which {max(float(extra_area_m2), 0.0) * 1e6:.2f} mm² is "
+               f"the open magnet recess)" if extra_area_m2 > 0.0 else "")
+            + "; "
+            + (f"{v_wash:.1f} m/s of wash spends its head on K_in "
+               f"{GAP_ENTRANCE_K} + K_out {GAP_EXIT_K} + {regime} friction "
+               f"f {f_d:.3f} → v_gap {v_gap:.2f} m/s (Re {re:.0f}), "
+               f"ṁ {m_dot * 1e3:.3f} g/s → G = 2·ṁ·cp = {g:.4f} W/K on the "
+               f"gap air's MEAN temperature.  The full free-stream head is "
+               f"assumed at the inlet and the rotor's own disc pumping is NOT "
+               f"counted; the velocity AWAITS CALIBRATION."
+               if g > 0.0 else
+               "no wash, so nothing is blown through the clearance and the gap "
+               "is the closed Taylor-Couette conductor it has always been")),
+    }
+
+
+# ---------------------------------------------------------------------------
 # The air gap
 # ---------------------------------------------------------------------------
 

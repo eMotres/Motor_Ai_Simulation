@@ -394,6 +394,20 @@ def solve_steady_thermal(
         sym_s = max(int(s.get("symmetry_mult", 1) or 1), 1)
         want = np.asarray(list(s.get("tags") or ()), int)
         mask = np.isin(tags_ord, want) if want.size else np.zeros(tags_ord.size, bool)
+        # ``r_range_m`` (2026-09-21) narrows the sink to the elements whose
+        # CENTROID radius lies in [r_min, r_max).  One thing needed it: the open
+        # frame's gap through-flow, where the same air-gap domain carries two
+        # streams — the rotor half of the clearance and the stator half, split
+        # at the slip radius — and each has to be reported on its own side of
+        # the machine's heat budget or neither the rotor nor the stator split
+        # closes.  Tags alone cannot say that: the two halves are one domain.
+        _rr = s.get("r_range_m")
+        if _rr is not None and mask.any():
+            _r0 = float(_rr[0] if _rr[0] is not None else 0.0)
+            _r1 = float(_rr[1] if _rr[1] is not None else np.inf)
+            _rc = np.hypot(p_sub[0][t_sub].mean(axis=0),
+                           p_sub[1][t_sub].mean(axis=0))
+            mask = mask & (_rc >= _r0) & (_rc < _r1)
         a_tags = float(a_elem[mask].sum()) if mask.any() else 0.0
         if g_tot <= 0.0 or a_tags <= 0.0:
             sinks_active.append({"name": name, "G_W_per_K": g_tot, "t_sink": ts,

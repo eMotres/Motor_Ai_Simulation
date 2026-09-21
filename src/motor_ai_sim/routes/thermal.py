@@ -3091,6 +3091,51 @@ def solve_thermal_field(
     ``shaft_ends``, both get a line in the heat budget, and the budget still
     closes on them.
 
+    THE ROTOR IS IN THE WASH TOO (2026-09-21) — the 2026-09-09 model above put
+    the STATOR side in the propeller stream and left the rotor exactly where the
+    housed model had it, with the mechanical clearance and the bore as its only
+    doors.  The user, with his thermal photographs of the open Ø50 machine:
+    *"по термофотографиям катушки греются всегда значительно больше магнитов;
+    конструкция полностью открыта, магниты обдуваются со всех сторон, и воздух
+    ещё продувает зазор"*.  The model said the opposite — on the CIANO14 50
+    edited / L15 record the winding came out at 251 °C and the magnets at
+    240 °C, i.e. the rotor all but welded to the stator through 0.2 mm of air.
+    Two more paths, both only when ``frame == 'open'``:
+
+      * the ROTOR's AXIAL FACES — its iron annulus and the magnets' own end
+        sections, each measured on THIS mesh × symmetry × ``end_face_sides`` —
+        get a FORCED film at the wash speed
+        (``cooling_models.rotor_end_faces_open``): the larger of a rotating-disc
+        coefficient on ``Re_ω = ω·R²/ν`` and a flat-plate cross-flow one on
+        ``Re = v·2R/ν``, with NO radiation term (an open rotor face sees the end
+        plate and the propeller, not the room).  They ride the same
+        ``cooling.end_faces`` machinery the robotics mode's still-air faces do,
+        because they are the same kind of object; each node's block says which
+        film it is on (``film_kind``).  The winding's and the stator core's end
+        faces are deliberately NOT added — the end turns already have their own
+        path in this very wash, and counting them twice would cool the copper
+        twice;
+      * the CLEARANCE becomes a VENTILATED DUCT (``cooling.gap_flow``,
+        ``cooling_models.gap_axial_flow``).  The through-velocity is SOLVED from
+        a pressure balance (the wash's dynamic head against an entrance loss, the
+        channel friction over the stack and the exit), not assumed to be the free
+        stream; the model is an enthalpy conductance ``G = 2·ṁ·cp`` on the gap
+        AIR's own elements against ambient, which is the energy balance
+        ``Q = ṁ·cp·(T_out − T_in)`` with the air's mean taken as
+        ``(T_in + T_out)/2``.  The wall→air film is NOT folded in: the meshed gap
+        air already carries it by conduction.  TWO streams, split at the slip
+        radius, so the rotor's and the stator's heat splits each close on their
+        own half.  When the rotor's magnet pockets run out to the OD
+        (``rotor_hole`` > 0) and there is a recess above the magnet
+        (``magnet_up_gap`` > 0), that recess air is part of the same channel and
+        the magnet's top face is washed by it — its free area is MEASURED on the
+        mesh.  With no recess, or with pockets this section shows closed, the
+        pocket air stays enclosed and conduction-only, and the block says so.
+
+    NEITHER IS CALIBRATED.  ``cooling_models.OPEN_GAP_FLOW_CALIBRATION`` and
+    ``OPEN_ROTOR_FACE_H_CALIBRATION`` are 1.0 and say what they are waiting for;
+    the owner has thermal photographs and has given no numbers yet.
+
     THE ROBOTICS MODE (``cooling_mode='robotics'``, 2026-09-14) — a robot joint
     has no fan, no jacket and no slipstream: it is bolted to an arm and it sits
     in a room.  The nearest thing before today was ``air`` at v = 0, i.e. the
@@ -3936,6 +3981,7 @@ def solve_thermal_field(
                 "name": name, "label": label, "tags": list(tags_list),
                 "area_face_m2": float(area_face),
                 "char_len_m": float(char_len),
+                "film": "still",
                 "has_elements": bool(mask.any())})
 
         _a_stator_face = _tag_area_m2(tags == DOM_STATOR) * sym
@@ -3977,6 +4023,145 @@ def solve_thermal_field(
             "the shaft's own end face is not counted here — when it comes out of "
             "the housing it is the shaft_ends fin path, and claiming it on both "
             "would be the same watts twice")
+
+    # ── THE ROTOR IS IN THE WASH TOO (frame='open', 2026-09-21) ──────────────
+    # User, with his thermal photographs: *«по термофотографиям катушки греются
+    # всегда значительно больше магнитов; конструкция полностью открыта, магниты
+    # обдуваются со всех сторон, и воздух ещё продувает зазор»*.  The 2026-09-09
+    # open frame put the STATOR side in the wash and left the rotor exactly
+    # where the housed model had it — with the 0.2 mm clearance and the bore as
+    # its only doors — and on the Ø50 record that reads the magnets at 240 °C
+    # against a 251 °C winding, i.e. the rotor all but welded to the stator.
+    #
+    # Two things change, and only when there is no housing:
+    #
+    #   * the rotor's AXIAL FACES (its iron annulus and the magnets' own end
+    #     sections) get a FORCED film at the wash speed instead of nothing —
+    #     ``cooling_models.rotor_end_faces_open``, the larger of a rotating-disc
+    #     and a flat-plate cross-flow coefficient, no radiation;
+    #   * the CLEARANCE becomes a ventilated duct — see the gap-flow block below.
+    #
+    # The rotor faces ride the SAME `_ef_specs` machinery the robotics mode's
+    # still-air faces do, because they are the same kind of object (a lumped
+    # out-of-plane conductance on a measured section area, re-evaluated against
+    # the wall in the pass loop) and one mechanism is one place.  When a machine
+    # asks for both (a robotics housing that is also open), the OPEN film wins on
+    # the rotor and the magnets: forced convection at 40 m/s is not still air,
+    # and taking the larger of the two would be the same face cooled twice.
+    #
+    # The winding's and the stator core's end faces are NOT added here.  That is
+    # deliberate and it is the conservative half: the end turns already have the
+    # open frame's own `end_windings` path in this very wash, and giving the
+    # copper a second axial conductance would cool it twice; the stator core's
+    # end annulus is a real uncounted path on an open machine and is left for a
+    # separate decision rather than smuggled in beside the rotor's.
+    _rf_on = bool(frame == "open")
+    if _rf_on:
+        _a_rotor_face = _tag_area_m2(tags == DOM_ROTOR) * sym
+        _a_magnet_face = _tag_area_m2(is_mag) * sym
+        _ef_specs = [_s for _s in _ef_specs
+                     if _s["name"] not in ("end_face_rotor", "end_face_magnet")]
+        for _nm, _lb, _tg, _mk, _ar in (
+                ("end_face_rotor", "rotor core end face", [DOM_ROTOR],
+                 (tags == DOM_ROTOR), _a_rotor_face),
+                ("end_face_magnet", "magnet end face", [DOM_MAG_N, DOM_MAG_S],
+                 is_mag, _a_magnet_face)):
+            _ef_specs.append({
+                "name": _nm, "label": _lb, "tags": list(_tg),
+                "area_face_m2": float(_ar),
+                # The rotating disc runs on the rotor's RADIUS and the plate on
+                # its diameter, so the length both films need is the machine's,
+                # not the part's own section area — `rotor_end_faces_open` takes
+                # the radius and reports the diameter it used.
+                "char_len_m": float(2.0 * rotor_outer_m),
+                "radius_m": float(rotor_outer_m),
+                "film": "open",
+                "has_elements": bool(_mk.any())})
+        _ef_notes.append(
+            "the rotor's axial faces are in the SAME wash as the end turns "
+            "(frame=open): a forced film at %.1f m/s (%s), not still air, and "
+            "with no radiation term — an open rotor face sees the end plate and "
+            "the propeller, not the room" % (_open_v, _open_v_src))
+        _ef_notes.append(
+            "the winding's and the stator core's end faces are NOT counted on "
+            "an open frame: the end turns already have their own path in this "
+            "wash (cooling.end_windings) and counting them twice would cool the "
+            "copper twice; the stator core's end annulus is a real uncounted "
+            "path and is left out rather than assumed")
+
+    # ── THE VENTILATED AIR GAP (frame='open', 2026-09-21) ────────────────────
+    # The wash does not only pass the machine, it passes THROUGH it: the
+    # clearance is a short annular duct open at both ends, and on a rotor whose
+    # magnet pockets run out to the OD (`rotor_hole` > 0) the recess above each
+    # magnet (`magnet_up_gap`) is part of the same channel, so the magnet's own
+    # top face is washed rather than sealed in a pocket.
+    #
+    # The model is ONE enthalpy conductance per stream, `2·ṁ·cp` against
+    # ambient, applied to the gap AIR's own elements — see
+    # `cooling_models.gap_axial_flow` for why the factor is two and why the
+    # wall→air film is deliberately NOT folded into it (the meshed gap air
+    # already carries that resistance by conduction; folding it in would count
+    # it twice).  What the walls can actually hand the stream therefore falls
+    # out of the coupled solve rather than being asserted here: a channel whose
+    # enthalpy capacity exceeds what the walls can transfer simply leaves
+    # cooler.
+    #
+    # TWO streams, not one, split at the SLIP RADIUS: the rotor half of the
+    # clearance (plus the open recess) and the stator half.  They are the same
+    # domain and one sink could not be attributed, and then neither the rotor's
+    # nor the stator's heat split would close — which is the whole point of
+    # those two blocks.  Each stream's mass flow is its own share of the annular
+    # cross-section, analytic, and the recess's free area is MEASURED on the
+    # mesh (the same rule the slot channels follow).
+    gap_flow: Optional[Dict[str, Any]] = None
+    _gf_on = bool(frame == "open" and _open_v > 0.0 and is_gap_air.any())
+    _gf_recess_open = False
+    _gf_recess_area = 0.0
+    _gf_r_lo = float(rotor_outer_m)
+    _gf_notes: List[str] = []
+    if frame == "open":
+        _up_gap_mm = float(g.get("magnet_up_gap", 0.0) or 0.0)
+        _rot_hole = float(g.get("rotor_hole", 0.0) or 0.0)
+        _gf_recess_open = bool(_up_gap_mm > 0.0 and _rot_hole > 0.0
+                               and is_pocket.any())
+        if _gf_recess_open:
+            # Both pocket families open to the rotor OD — `rotor_hole >= 1` is
+            # the magnet outline with straight sides run to the OD, and
+            # `rotor_hole < 1` a narrower rectangular opening from the OD (see
+            # cadquery_geometry._extended_pocket / _pocket_cut_depth) — so the
+            # air above the magnet is continuous with the gap either way, and
+            # the criterion is simply that there IS a recess and there IS an
+            # opening.  Its free area is what this mesh has above the magnet
+            # top, measured, not derived from a pocket width nobody types.
+            _gf_r_lo = max(rotor_outer_m - _up_gap_mm * 1e-3, 0.0)
+            _cent = verts[tris]                       # (n_el, 3, 2)
+            _cent_r = _np.hypot(_cent[:, :, 0].mean(axis=1),
+                                _cent[:, :, 1].mean(axis=1))
+            _pm = is_pocket & (_cent_r >= _gf_r_lo)
+            _gf_recess_area = _tag_area_m2(_pm) * sym
+            _gf_notes.append(
+                "the magnet pockets are OPEN to the rotor OD (rotor_hole %.2f) "
+                "with a %.2f mm recess above the magnet (magnet_up_gap), so the "
+                "recess air is part of the gap channel and the magnet's top face "
+                "is washed by it — %.2f mm² of extra free area, measured on this "
+                "mesh" % (_rot_hole, _up_gap_mm, _gf_recess_area * 1e6))
+        elif _up_gap_mm <= 0.0:
+            _gf_notes.append(
+                "there is no recess above the magnets (magnet_up_gap = 0), so "
+                "the magnet top face IS the rotor OD and sees the gap film "
+                "directly; nothing extra flows over it")
+        else:
+            _gf_notes.append(
+                "the magnet pockets are not open to the OD on this "
+                "cross-section, so the pocket air stays enclosed and "
+                "conduction-only — the magnets' lateral faces are not washed")
+        if not _gf_on:
+            _gf_notes.append(
+                "the air gap is NOT ventilated on this request: %s, so the "
+                "clearance stays the closed Taylor-Couette conductor"
+                % ("there is no wash (open_air_speed_mps and the housing air "
+                   "speed are both 0)" if _open_v <= 0.0 else
+                   "this mesh resolves no gap-air elements"))
 
     # ── THE MECHANICAL HEAT (2026-09-08) ─────────────────────────────────────
     # User: *"все потери должны передаваться в электромагнитный расчёт"* — and
@@ -4111,9 +4296,12 @@ def solve_thermal_field(
                         if (n == "outer" and m == "robotics")
                         or (n == "bore" and m == "still")])
     _iterating = _outlet_iterating + _wall_iterating
-    if _ef_specs and not _wall_iterating:
-        # Can't happen today (the end faces only come with the robotics housing)
-        # but the loop must be driven by whatever moves, not by a mode name.
+    if (_ef_specs or _gf_on) and not _wall_iterating:
+        # The open frame (2026-09-21) reaches this too: its rotor-face film is
+        # evaluated at the film temperature and its gap stream's density at the
+        # air's own mean, so both move with the answer exactly as a still-air
+        # coefficient does.  The loop must be driven by whatever moves, not by a
+        # mode name.
         _wall_iterating = ["end_faces"]
         _iterating = _iterating + _wall_iterating
     # The SEED is every watt the map carries, mechanical heat included: a coolant
@@ -4144,6 +4332,16 @@ def solve_thermal_field(
     _t_wall: Dict[str, float] = {"outer": _t_wall_seed, "bore": _t_wall_seed}
     for _s in _ef_specs:
         _t_wall[_s["name"]] = _t_wall_seed
+    # The two gap streams (2026-09-21) iterate on the AIR's own mean
+    # temperature, not on a wall: that is the temperature their density and
+    # their enthalpy balance are evaluated at.  Seeded halfway between ambient
+    # and the seed wall — a channel that takes heat off both sides and leaves
+    # cannot be at either end of that range — and walked to the fixed point by
+    # the same loop.
+    _GF_NAMES = ("gap_flow_rotor", "gap_flow_stator")
+    if _gf_on:
+        for _n in _GF_NAMES:
+            _t_wall[_n] = 0.5 * (float(ambient_temp) + _t_wall_seed)
 
     # 6. steady thermal solve — drop ALL air (outer + gap + slip band); the rotor
     # is reconnected to the stator by an explicit gap conductance bridge.
@@ -4167,6 +4365,8 @@ def solve_thermal_field(
     gap = None
     passes = 0
     _ef_reports: Dict[str, Dict[str, Any]] = {}
+    _gf_report: Dict[str, Any] = {}
+    _gf_share: Dict[str, float] = {}
     for _p in range(MAX_PASSES):
         passes = _p + 1
         h_eff, t_sink, cooling = _cooling_bc(
@@ -4188,11 +4388,23 @@ def solve_thermal_field(
         # of what moves between passes.
         _ef_sinks: List[Dict[str, Any]] = []
         for _s in _ef_specs:
-            _rep = _cm3.end_face_still(
-                t_wall_c=_t_wall[_s["name"]], t_ambient_c=ambient_temp,
-                area_m2=_s["area_face_m2"], char_len_m=_s["char_len_m"],
-                emissivity=emissivity, orientation="vertical",
-                n_faces=_ef_n, name=_s["label"])
+            if _s.get("film") == "open":
+                # The OPEN frame's rotor faces (2026-09-21): a forced film at
+                # the wash speed, not still air.  Same shape back, so everything
+                # downstream — the sink, the payload block, the heat budget — is
+                # written once and does not know which film it asked for.
+                _rep = _cm3.rotor_end_faces_open(
+                    air_speed_mps=_open_v, rpm=rpm,
+                    t_wall_c=_t_wall[_s["name"]], t_ambient_c=ambient_temp,
+                    area_m2=_s["area_face_m2"],
+                    radius_m=float(_s.get("radius_m") or rotor_outer_m),
+                    n_faces=_ef_n, name=_s["label"])
+            else:
+                _rep = _cm3.end_face_still(
+                    t_wall_c=_t_wall[_s["name"]], t_ambient_c=ambient_temp,
+                    area_m2=_s["area_face_m2"], char_len_m=_s["char_len_m"],
+                    emissivity=emissivity, orientation="vertical",
+                    n_faces=_ef_n, name=_s["label"])
             _ef_reports[_s["name"]] = _rep
             if float(_rep["G_W_per_K"]) > 0.0 and _s["has_elements"]:
                 _ef_sinks.append({"name": _s["name"], "tags": list(_s["tags"]),
@@ -4200,7 +4412,49 @@ def solve_thermal_field(
                                   "t_sink_c": float(ambient_temp),
                                   # whole-machine G on a 1/sym wedge, as always
                                   "symmetry_mult": sym})
-        _sinks_pass = list(_sinks) + _ef_sinks
+
+        # THE TWO GAP STREAMS, at this pass's air temperatures (2026-09-21).
+        # `2·ṁ·cp` on the gap air's own elements, split at the slip radius so
+        # each side of the machine's heat budget can own its half; the rotor
+        # stream carries the open magnet recess with it (tags and radius range
+        # both), because that air is the same channel.
+        _gf_sinks: List[Dict[str, Any]] = []
+        if _gf_on:
+            # ONE pressure balance on the REAL clearance — it is one channel —
+            # evaluated at the mean of the two streams' air temperatures, then
+            # the enthalpy conductance split between the two halves in
+            # proportion to the free area each of them carries.  Splitting the
+            # BALANCE instead (a half-clearance duct each) would treat the gap
+            # as two ducts of half the hydraulic diameter and roughly quadruple
+            # its friction, which is not this machine.
+            _gf_report = _cm3.gap_axial_flow(
+                air_speed_mps=_open_v, r_rotor_m=rotor_outer_m,
+                r_bore_m=stator_inner_m, length_m=L, rpm=rpm,
+                t_air_c=0.5 * (_t_wall["gap_flow_rotor"]
+                               + _t_wall["gap_flow_stator"]),
+                t_ambient_c=ambient_temp, extra_area_m2=_gf_recess_area)
+            _a_rot = (max(math.pi * (slip_r_m ** 2 - rotor_outer_m ** 2), 0.0)
+                      + _gf_recess_area)
+            _a_sta = max(math.pi * (stator_inner_m ** 2 - slip_r_m ** 2), 0.0)
+            _a_tot = max(_a_rot + _a_sta, 1e-12)
+            _g_tot = float(_gf_report["G_W_per_K"])
+            _gf_share = {"gap_flow_rotor": _a_rot / _a_tot,
+                         "gap_flow_stator": _a_sta / _a_tot}
+            for _nm, _r0, _r1, _tg in (
+                    ("gap_flow_rotor", _gf_r_lo, slip_r_m,
+                     ([DOM_GAP_AIR, DOM_POCKET_AIR] if _gf_recess_open
+                      else [DOM_GAP_AIR])),
+                    ("gap_flow_stator", slip_r_m, None, [DOM_GAP_AIR])):
+                _g = _g_tot * _gf_share[_nm]
+                if _g > 0.0:
+                    _gf_sinks.append({
+                        "name": _nm, "tags": list(_tg),
+                        "r_range_m": (float(_r0),
+                                      None if _r1 is None else float(_r1)),
+                        "G_W_per_K": float(_g),
+                        "t_sink_c": float(ambient_temp),
+                        "symmetry_mult": sym})
+        _sinks_pass = list(_sinks) + _ef_sinks + _gf_sinks
 
         if gap is None:
             # The air gap, once.  Properties at a STATED gap temperature: the
@@ -4386,6 +4640,12 @@ def solve_thermal_field(
                 _d = max(_d, _wall_move(
                     _s["name"],
                     (_sk_by_name.get(_s["name"]) or {}).get("t_mean_c")))
+            if _gf_on:
+                # The gap streams iterate on the AIR's own mean temperature —
+                # the elements the sink sits on — for the same half a kelvin.
+                for _n in _GF_NAMES:
+                    _d = max(_d, _wall_move(
+                        _n, (_sk_by_name.get(_n) or {}).get("t_mean_c")))
         if _d < OUTLET_TOL_C:
             break
 
@@ -4417,11 +4677,19 @@ def solve_thermal_field(
         # not the last guess that produced it.  The WATTS below are still the
         # solver's own, never this closed form's.
         for _s in _ef_specs:
-            _ef_reports[_s["name"]] = _cm3.end_face_still(
-                t_wall_c=_t_wall[_s["name"]], t_ambient_c=ambient_temp,
-                area_m2=_s["area_face_m2"], char_len_m=_s["char_len_m"],
-                emissivity=emissivity, orientation="vertical",
-                n_faces=_ef_n, name=_s["label"])
+            _ef_reports[_s["name"]] = (
+                _cm3.rotor_end_faces_open(
+                    air_speed_mps=_open_v, rpm=rpm,
+                    t_wall_c=_t_wall[_s["name"]], t_ambient_c=ambient_temp,
+                    area_m2=_s["area_face_m2"],
+                    radius_m=float(_s.get("radius_m") or rotor_outer_m),
+                    n_faces=_ef_n, name=_s["label"])
+                if _s.get("film") == "open" else
+                _cm3.end_face_still(
+                    t_wall_c=_t_wall[_s["name"]], t_ambient_c=ambient_temp,
+                    area_m2=_s["area_face_m2"], char_len_m=_s["char_len_m"],
+                    emissivity=emissivity, orientation="vertical",
+                    n_faces=_ef_n, name=_s["label"]))
     _gap_w = float(th.get("gap_heat_W", 0.0)) * sym
     _bridge_w = float(th.get("slot_bridge_W", 0.0)) * sym
     _coil_w = float(th.get("coil_boundary_W", 0.0)) * sym
@@ -4662,10 +4930,21 @@ def solve_thermal_field(
                             if _node == "winding" else
                             "this mesh's own section area for the part × "
                             "symmetry"),
+            # WHICH FILM this face is on — the lumped network downstream needs
+            # it to decide whether the conductance moves with the wall (a
+            # natural film does, a blown one does not), and reading it off a
+            # mode name would be a second place for the two to disagree.
+            "film_kind": str(_rep.get("film_kind") or "natural"),
+            "air_speed_mps": (None if _rep.get("air_speed_mps") is None
+                              else round(float(_rep["air_speed_mps"]), 2)),
             "note": str(_rep.get("note") or ""),
         }
     end_faces_block = {
-        "mode": ("still" if _ef_specs else "off"),
+        # "still" is the robotics mode's room; "forced" is the open frame's
+        # wash.  A machine that asked for both carries both films, one per node
+        # (`film_kind` on each block says which), and the headline names the
+        # still-air one because that is the mode the four faces came from.
+        "mode": (("still" if _ef_on else "forced") if _ef_specs else "off"),
         "sides": (_ef_n if _ef_specs else 0),
         "emissivity": round(float(emissivity), 3),
         "heat_removed_W": round(_ef_w_total, 3),
@@ -4675,12 +4954,91 @@ def solve_thermal_field(
     }
     if _ef_notes:
         end_faces_block["notes"] = list(_ef_notes)
-    if _ef_specs:
+    if _ef_on:
         end_faces_block["k_end"] = round(float(_ef_k_end), 4)
         end_faces_block["k_end_source"] = _ef_k_end_src
 
+    # ── THE VENTILATED GAP, as the solve measured it (2026-09-21) ───────────
+    # Same shape and the same bookkeeping as every other out-of-plane path:
+    # `heat_removed_W` is the SOLVER's (wedge watts × sym) and
+    # `G·(t_air_mean_c − ambient)` is the check on it.  `mode: off` on a housed
+    # machine — and on an open one with no wash — is an ANSWER.
+    _gf_rot_sink = _sink_by_name.get("gap_flow_rotor")
+    _gf_sta_sink = _sink_by_name.get("gap_flow_stator")
+    _gf_w_rot = float((_gf_rot_sink or {}).get("heat_removed_W") or 0.0) * sym
+    _gf_w_sta = float((_gf_sta_sink or {}).get("heat_removed_W") or 0.0) * sym
+    _gf_w = _gf_w_rot + _gf_w_sta
+    if _gf_on and _gf_report:
+        _gf_mdot = float(_gf_report.get("m_dot_kg_s") or 0.0)
+        _gf_cp = _fluid_props("air").cp
+        gap_flow = {
+            "mode": "through-flow",
+            "film_kind": "forced",
+            "air_speed_mps": round(float(_open_v), 2),
+            "air_speed_source": _open_v_src,
+            "gap_speed_mps": round(float(_gf_report.get("gap_speed_mps") or 0.0), 3),
+            "speed_fraction": round(float(_gf_report.get("speed_fraction") or 0.0), 4),
+            "re": float(_gf_report.get("re") or 0.0),
+            "friction_factor": round(float(_gf_report.get("friction_factor") or 0.0), 5),
+            "regime": _gf_report.get("regime"),
+            "entrance_k": _gf_report.get("entrance_k"),
+            "exit_k": _gf_report.get("exit_k"),
+            "clearance_mm": round(float(_gf_report.get("clearance_m") or 0.0) * 1e3, 4),
+            "hydraulic_diameter_mm": round(
+                float(_gf_report.get("hydraulic_diameter_m") or 0.0) * 1e3, 4),
+            "L_over_Dh": round(float(_gf_report.get("L_over_Dh") or 0.0), 2),
+            "cross_section_mm2": round(
+                float(_gf_report.get("cross_section_m2") or 0.0) * 1e6, 4),
+            "recess_area_mm2": round(_gf_recess_area * 1e6, 4),
+            "recess_open": bool(_gf_recess_open),
+            "m_dot_g_s": round(_gf_mdot * 1e3, 5),
+            "G_W_per_K": round(float(_gf_report.get("G_W_per_K") or 0.0), 5),
+            "G_rotor_W_per_K": round(
+                float(_gf_report.get("G_W_per_K") or 0.0)
+                * float(_gf_share.get("gap_flow_rotor") or 0.0), 5),
+            "G_stator_W_per_K": round(
+                float(_gf_report.get("G_W_per_K") or 0.0)
+                * float(_gf_share.get("gap_flow_stator") or 0.0), 5),
+            "t_sink_c": round(float(ambient_temp), 2),
+            "t_air_rotor_c": (None if (_gf_rot_sink or {}).get("t_mean_c") is None
+                              else round(float(_gf_rot_sink["t_mean_c"]), 2)),
+            "t_air_stator_c": (None if (_gf_sta_sink or {}).get("t_mean_c") is None
+                               else round(float(_gf_sta_sink["t_mean_c"]), 2)),
+            # The stream's OWN energy balance, stated so it can be checked:
+            # what it removed, divided by ṁ·cp, is how much hotter the air left.
+            "dT_air_K": (round(_gf_w / (_gf_mdot * _gf_cp), 2)
+                         if _gf_mdot * _gf_cp > 1e-12 else None),
+            "t_air_out_c": (round(float(ambient_temp)
+                                  + _gf_w / (_gf_mdot * _gf_cp), 2)
+                            if _gf_mdot * _gf_cp > 1e-12 else None),
+            "heat_removed_W": round(_gf_w, 3),
+            "rotor_side_W": round(_gf_w_rot, 3),
+            "stator_side_W": round(_gf_w_sta, 3),
+            "calibration": _gf_report.get("calibration"),
+            "k_eff_axial": round(float(_gf_report.get("k_eff_axial") or 0.0), 4),
+            "n_elements": (int((_gf_rot_sink or {}).get("n_elements") or 0)
+                           + int((_gf_sta_sink or {}).get("n_elements") or 0)),
+            "note": str(_gf_report.get("note") or ""),
+        }
+        if _gf_notes:
+            gap_flow["notes"] = list(_gf_notes)
+    else:
+        gap_flow = {
+            "mode": "off", "film_kind": "none", "G_W_per_K": 0.0,
+            "heat_removed_W": 0.0, "rotor_side_W": 0.0, "stator_side_W": 0.0,
+            "m_dot_g_s": 0.0, "gap_speed_mps": 0.0,
+            "t_sink_c": round(float(ambient_temp), 2),
+            "note": ("the air gap is a CLOSED Taylor-Couette conductor on this "
+                     "machine: nothing blows through the clearance, so the only "
+                     "thing the gap air does is carry heat radially between the "
+                     "rotor and the stator.  frame=open with a wash speed makes "
+                     "it a ventilated duct."),
+        }
+        if _gf_notes:
+            gap_flow["notes"] = list(_gf_notes)
+
     _resid = (_gen_w - _outer_w - _bore_w - _shaft_w - _ew_w - _ch_w
-              - _mount_w - _ef_w_total)
+              - _mount_w - _ef_w_total - _gf_w)
 
     # ── WHERE THE ROTOR'S HEAT GOES: out through the gap, or in through the
     #    shaft (2026-09-10) ───────────────────────────────────────────────────
@@ -4735,11 +5093,17 @@ def solve_thermal_field(
                                    + _ef_w_by_node.get("magnet", 0.0), 3),
         "axial_end_faces_pct": _share(_ef_w_by_node.get("rotor", 0.0)
                                       + _ef_w_by_node.get("magnet", 0.0)),
+        # …and, since 2026-09-21, the rotor half of the VENTILATED GAP: the
+        # watts the wash carries out of the clearance (and out of an open magnet
+        # recess) INSIDE the slip radius, i.e. before they ever reach the
+        # stator.  0 on a housed machine and on an open one with no wash.
+        "gap_flow_W": round(_gf_w_rot, 3),
+        "gap_flow_pct": _share(_gf_w_rot),
         # The identity still runs over all of them — a closure that ignored an
         # axial term would not close on a machine that has one.
         "closure_W": round(_rotor_w - _gap_w - _bore_w - _shaft_w
                            - _ef_w_by_node.get("rotor", 0.0)
-                           - _ef_w_by_node.get("magnet", 0.0), 3),
+                           - _ef_w_by_node.get("magnet", 0.0) - _gf_w_rot, 3),
         "note": ("what the rotor makes and where it goes, on the 2-D "
                  "cross-section: across the AIR GAP into the stator (the outer "
                  "diameter) and off the BORE surface into whatever turns in it "
@@ -4747,9 +5111,11 @@ def solve_thermal_field(
                  "solved section, so the two are directly comparable.  "
                  "axial_shaft_ends_W is a lumped OUT-OF-PLANE path down the "
                  "exposed shaft stubs — reported beside them, never folded into "
-                 "either.  closure_W is what all three leave over against the "
-                 "rotor's own generation: the slip-tie and shaft-sink identity, "
-                 "as a number."),
+                 "either; axial_end_faces_W the same for the rotor's and the "
+                 "magnets' own ends, and gap_flow_W for the air the wash blows "
+                 "through the clearance.  closure_W is what all of them leave "
+                 "over against the rotor's own generation: the slip-tie and "
+                 "sink identity, as a number."),
     }
 
     # ── …AND WHERE THE STATOR'S HEAT GOES (2026-09-14) ──────────────────────
@@ -4788,8 +5154,13 @@ def solve_thermal_field(
         "end_faces_pct": _share_s(_ef_stator_side_w),
         "end_windings_W": round(_ew_w, 3),
         "slot_channels_W": round(_ch_w, 3),
+        # …and the STATOR half of the ventilated gap (2026-09-21): the wash
+        # takes heat off the tooth tips on its way through, before it ever
+        # reaches the back iron.
+        "gap_flow_W": round(_gf_w_sta, 3),
+        "gap_flow_pct": _share_s(_gf_w_sta),
         "closure_W": round(_stator_in_w - _outer_w - _mount_w
-                           - _ef_stator_side_w - _ew_w - _ch_w, 3),
+                           - _ef_stator_side_w - _ew_w - _ch_w - _gf_w_sta, 3),
         "note": ("what the stator side makes and where it goes: ∫q dV outside "
                  "the slip radius plus what crosses the AIR GAP from the rotor, "
                  "against the housing film, the bolted MOUNT (a lumped "
@@ -4836,6 +5207,15 @@ def solve_thermal_field(
         # the model is on one of these lines.
         "end_windings_W": round(_ew_w, 3),
         "slot_channels_W": round(_ch_w, 3),
+        # ── THE VENTILATED GAP (2026-09-21) ────────────────────────────────
+        # What the wash carries out of the CLEARANCE itself: fresh air in at
+        # ambient, warmer air out of the other end.  Split rotor-side /
+        # stator-side at the slip radius so both heat splits above close on
+        # their own half.  0 on a housed machine, and 0 there is a statement:
+        # nothing blows through a closed machine's gap.
+        "gap_flow_W": round(_gf_w, 3),
+        "gap_flow_rotor_W": round(_gf_w_rot, 3),
+        "gap_flow_stator_W": round(_gf_w_sta, 3),
         "frame": frame,
         # ∫q dV inside the slip radius — what the ROTOR makes.  In steady state
         # it has to leave across the gap, through the bore or along the exposed
@@ -4957,6 +5337,11 @@ def solve_thermal_field(
             "frame": frame,
             "end_windings": end_windings,
             "slot_channels": slot_channels,
+            # …and the THIRD one (2026-09-21): the clearance as a duct the wash
+            # blows through, which is what puts the ROTOR in the same air as the
+            # coils.  `mode: off` on a housed machine and on an open one with no
+            # wash — both are answers, not missing keys.
+            "gap_flow": gap_flow,
             # The MECHANICAL heat (2026-09-08): what the bearings and the air
             # cost this machine at this speed, at which bearing temperature and
             # from where, and what this cross-section did with each watt.

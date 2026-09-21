@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
+import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -30,6 +32,254 @@ from motor_ai_sim.simulation.sb_domains import (
 )
 
 log = logging.getLogger(__name__)
+
+
+class MeshingError(RuntimeError):
+    """The polygons cannot be meshed — raised INSTEAD of letting gmsh spin.
+
+    The UI shows this; a frozen solve shows nothing.  See
+    ``_repair_needles`` / ``_preflight_near_touching`` for the one failure
+    mode that used to hang (2026-09-21).
+    """
+
+
+# ---------------------------------------------------------------------------
+# Sub-tolerance "needle" repair.
+#
+# A ring that walks forward along an arc chord and then doubles straight back
+# on itself leaves a needle a few microns wide.  It is not a modelling choice:
+# the bore/OD circles are fixed 256-gons whose chords sag ~1 um inside the
+# ideal circle, so a slot or tooth corner placed on the EXACT circle sticks out
+# of the discretised ring, and the Shapely union has to bulge out to the corner
+# and come back.  OCC keeps the needle, and gmsh's 2-D edge recovery then
+# reports "There are 4 intersections in the 1D mesh" and re-splits the
+# offending edges for ever ("Splitting those edges and trying again - level N",
+# seen past level 115 with no end — CIANO14 50 / L15, rotor_hole 1.0,
+# magnet_up_gap 0.05, 2026-09-21: 540 s with no result, 100 % of one core).
+#
+# The repair is conformity-preserving, which a plain vertex deletion is not:
+# the corner is snapped ONTO the neighbouring chord (it moves by less than the
+# tolerance and then lies EXACTLY on the edge the touching rings share, so OCC
+# just splits that edge there), and only the overshooting vertex is dropped.
+# Nothing else in the ring moves, and rings without a fold-back are untouched.
+_NEEDLE_TOL_MM = float(os.environ.get("SB_NEEDLE_TOL_MM", "0.01"))
+# Wall-clock budget for one gmsh 2-D pass; exceeding it is logged loudly so a
+# future pathology is named in the log instead of looking like a slow solve.
+_MESH_WATCHDOG_S = float(os.environ.get("SB_MESH_WATCHDOG_S", "120"))
+_MESH_PREFLIGHT = os.environ.get("SB_MESH_PREFLIGHT", "1").lower() not in ("0", "false")
+# gmsh's 2-D edge recovery retries "Splitting those edges and trying again"
+# with NO effective bound at the default 10 (observed past level 115 = a hang).
+# Capping it makes generate() always return, and the gmsh log is then read back
+# so a failed recovery becomes a MeshingError instead of a silent bad mesh.
+_MESH_MAX_RETRIES = float(os.environ.get("SB_MESH_MAX_RETRIES", "3"))
+#: ``SB_MESH_STRICT=0`` downgrades that refusal to an error LINE and uses the
+#: mesh anyway — an escape hatch for a machine that has to be solved today, not
+#: a default: a boundary gmsh never recovered is wrong physics, quietly.
+_MESH_STRICT = os.environ.get("SB_MESH_STRICT", "1").lower() not in ("0", "false")
+_GMSH_FAIL_MARKS = ("intersections in the 1D mesh",
+                    "Could not recover",
+                    "Impossible to recover",
+                    "Unable to recover")
+
+
+def _foot(u, w, q):
+    """(distance of q from line(u,w), parameter along it, foot point)."""
+    ex, ey = w[0] - u[0], w[1] - u[1]
+    l2 = ex * ex + ey * ey
+    if l2 <= 0.0:
+        return (float("inf"), 0.0, u)
+    d = abs(ex * (q[1] - u[1]) - ey * (q[0] - u[0])) / math.sqrt(l2)
+    t = ((q[0] - u[0]) * ex + (q[1] - u[1]) * ey) / l2
+    return (d, t, (u[0] + t * ex, u[1] + t * ey))
+
+
+def _repair_needles(ring, tol: float = _NEEDLE_TOL_MM):
+    """Snap away fold-back needles thinner than `tol` from an OPEN ring.
+
+    Returns ``(ring, n_fixed, worst_width_mm)``.  A vertex is only touched
+    when the ring genuinely doubles back on itself there AND the two flanks
+    are closer than `tol`; a real notch of any meshable width is kept.
+    """
+    v = [(float(x), float(y)) for x, y in ring]
+    if len(v) < 4 or tol <= 0.0:
+        return v, 0, 0.0
+    n_fix = 0
+    worst = 0.0
+    guard = 4 * len(v) + 16          # never spin on a pathological ring
+    changed = True
+    while changed and len(v) >= 4 and guard > 0:
+        changed = False
+        m = len(v)
+        for i in range(m):
+            ia, ib = (i - 1) % m, (i + 1) % m
+            a, p, b = v[ia], v[i], v[ib]
+            if ((p[0] - a[0]) * (b[0] - p[0])
+                    + (p[1] - a[1]) * (b[1] - p[1])) >= 0.0:
+                continue                      # ring does not fold back at p
+            d1, t1, f1 = _foot(a, p, b)       # b off the incoming edge
+            d2, t2, f2 = _foot(p, b, a)       # a off the outgoing edge
+            ok1 = d1 < tol and 0.0 <= t1 <= 1.0
+            ok2 = d2 < tol and 0.0 <= t2 <= 1.0
+            if not (ok1 or ok2):
+                continue                      # a real notch — leave it alone
+            if ok1 and (not ok2 or d1 <= d2):
+                v[ib] = f1
+                worst = max(worst, d1)
+            else:
+                v[ia] = f2
+                worst = max(worst, d2)
+            del v[i]
+            n_fix += 1
+            guard -= 1
+            changed = True
+            break
+    return v, n_fix, worst
+
+
+def _repair_needles_poly(g, tol: float = _NEEDLE_TOL_MM):
+    """`_repair_needles` over a Shapely Polygon's exterior and holes.
+
+    Returns ``(polygon, n_fixed, worst_width_mm)``; the original polygon is
+    returned untouched when nothing folds back (the common case).
+    """
+    from shapely.geometry import Polygon as _SPn
+    ext, n_ext, w = _repair_needles(list(g.exterior.coords)[:-1], tol)
+    holes: List[list] = []
+    n_hole = 0
+    for h in g.interiors:
+        hr, nh, wh = _repair_needles(list(h.coords)[:-1], tol)
+        n_hole += nh
+        w = max(w, wh)
+        if len(hr) >= 3:
+            holes.append(hr)
+    if n_ext + n_hole == 0:
+        return g, 0, 0.0
+    if len(ext) < 3:
+        return g, 0, 0.0
+    try:
+        q = _SPn(ext, holes)
+        if not q.is_valid:
+            q = q.buffer(0)
+    except Exception as e:                    # pragma: no cover - defensive
+        log.warning("needle repair failed (%s) — keeping the original ring", e)
+        return g, 0, 0.0
+    if q.is_empty:
+        return g, 0, 0.0
+    return q, n_ext + n_hole, w
+
+
+def _check_gmsh_log(lines) -> None:
+    """Raise `MeshingError` when gmsh's own log says edge recovery failed.
+
+    With ``Mesh.MaxRetries`` bounded gmsh stops splitting and carries on with
+    a surface whose boundary it never recovered — a mesh that looks fine and
+    is not.  Its complaint is the only honest signal we get, so it becomes
+    the error.
+    """
+    fails = [str(ln) for ln in (lines or [])
+             if any(mk in str(ln) for mk in _GMSH_FAIL_MARKS)]
+    if not fails:
+        return
+    msg = ("gmsh could not recover the geometry into the 2-D mesh "
+           "(%d message(s), first: %s) — a sub-tolerance feature is in the "
+           "polygons; the mesh was NOT used" % (len(fails), fails[0].strip()))
+    if not _MESH_STRICT:
+        log.error("%s [SB_MESH_STRICT=0: using it anyway]", msg)
+        return
+    raise MeshingError(msg)
+
+
+def _preflight_near_touching(gmsh, tol: float = _NEEDLE_TOL_MM,
+                             max_report: int = 4) -> None:
+    """Name the sub-tolerance features gmsh's 2-D edge recovery may choke on.
+
+    Two curves of the SAME surface that come closer than `tol` without
+    sharing an endpoint are the configuration behind ":-( There are N
+    intersections in the 1D mesh" followed by "Splitting those edges and
+    trying again - level N".  It is NOT a reliable refusal criterion —
+    measured on CIANO14 50 / L15, four of the thirteen recess cases carry
+    such a pair at the pocket-wall/fillet junction and mesh perfectly well —
+    so this only WARNS with coordinates.  The hard stop is the bounded
+    ``Mesh.MaxRetries`` plus the gmsh-log check after ``generate``.
+    ``SB_MESH_PREFLIGHT=0`` silences it.
+    """
+    if not _MESH_PREFLIGHT or tol <= 0.0:
+        return
+    from shapely.geometry import LineString
+    from shapely.strtree import STRtree
+    tags: List[int] = []
+    lines: List = []
+    ends: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+    for (_d, _ct) in gmsh.model.getEntities(1):
+        ct = int(_ct)
+        try:
+            lo, hi = gmsh.model.getParametrizationBounds(1, ct)
+            pts = []
+            for f in (0.0, 0.25, 0.5, 0.75, 1.0):
+                xyz = gmsh.model.getValue(1, ct, [lo[0] + f * (hi[0] - lo[0])])
+                pts.append((float(xyz[0]), float(xyz[1])))
+        except Exception:
+            continue
+        if LineString(pts).length <= 0.0:
+            continue
+        tags.append(ct)
+        lines.append(LineString(pts))
+        ends.append((pts[0], pts[-1]))
+    if len(lines) < 2:
+        return
+    try:
+        tree = STRtree(lines)
+    except Exception as e:                    # pragma: no cover - defensive
+        log.warning("mesh pre-flight skipped (%s)", e)
+        return
+    _surfs: Dict[int, set] = {}
+
+    def _on(ct: int) -> set:
+        s = _surfs.get(ct)
+        if s is None:
+            try:
+                s = set(int(x) for x in gmsh.model.getAdjacencies(1, ct)[0])
+            except Exception:
+                s = set()
+            _surfs[ct] = s
+        return s
+
+    bad: List[str] = []
+    seen = set()
+    for i, li in enumerate(lines):
+        try:
+            hits = tree.query(li, predicate="dwithin", distance=tol)
+        except Exception:                     # shapely without dwithin
+            return
+        for j in hits:
+            j = int(j)
+            if j <= i:
+                continue
+            key = (i, j)
+            if key in seen:
+                continue
+            seen.add(key)
+            # neighbours on the same wire share an endpoint — not a hazard
+            if any(math.hypot(p[0] - q[0], p[1] - q[1]) < 1e-9
+                   for p in ends[i] for q in ends[j]):
+                continue
+            common = _on(tags[i]) & _on(tags[j])
+            if not common:
+                continue
+            d = li.distance(lines[j])
+            pt = li.interpolate(0.5, normalized=True)
+            bad.append("curves %d/%d on surface %d, %.2f um apart at "
+                       "(%.3f, %.3f) r=%.3f"
+                       % (tags[i], tags[j], sorted(common)[0], d * 1000.0,
+                          pt.x, pt.y, math.hypot(pt.x, pt.y)))
+            if len(bad) >= max_report:
+                break
+        if len(bad) >= max_report:
+            break
+    if bad:
+        log.warning("sub-tolerance geometry (< %.1f um) handed to gmsh: %s",
+                    tol * 1000.0, "; ".join(bad))
+
 
 def _fillet_polygon(poly, r_convex: float = 0.6, r_concave: float = 0.6):
     """Round sharp corners of a Shapely (Multi)Polygon with two buffer passes.
@@ -2624,6 +2874,22 @@ def build_mesh_from_polygons(polys: dict,
                     return out
                 return []  # LineString / Point → not a surface
             geoms = _polys_only(geom)
+            # Strip sub-tolerance fold-back needles BEFORE anything else looks
+            # at the ring: they are what makes gmsh's 2-D edge recovery spin
+            # for ever (see _repair_needles).  Conformity-preserving, so the
+            # touching rings still meet exactly.
+            if _NEEDLE_TOL_MM > 0.0:
+                _rep: List = []
+                for g in geoms:
+                    q, n_fix, w = _repair_needles_poly(g, _NEEDLE_TOL_MM)
+                    if n_fix:
+                        _c = g.centroid
+                        log.info("needle repair: %d sub-tolerance fold-back(s) "
+                                 "removed (worst %.2f um) near (%.2f, %.2f) "
+                                 "r=%.3f", n_fix, w * 1000.0, _c.x, _c.y,
+                                 math.hypot(_c.x, _c.y))
+                    _rep.extend(_polys_only(q))
+                geoms = _rep
             # Split PINCHED (self-touching) rings — Shapely tolerates a ring
             # that visits the same point twice, OCC rejects the loop.  Pinches
             # arise from ring subtractions and half/wedge clips; the converter
@@ -3560,7 +3826,45 @@ def build_mesh_from_polygons(polys: dict,
             except Exception as _e:
                 log.warning("rotational periodicity skipped: %s", _e)
 
-        gmsh.model.mesh.generate(2)
+        # gmsh's 2-D pass has no timeout of its own: on a sub-tolerance feature
+        # its edge recovery splits the offending edges and retries for ever
+        # (observed past "level 115", 540 s, no result — CIANO14 50 / L15,
+        # magnet_up_gap 0.05, 2026-09-21).  Bound the retries, watch the wall
+        # clock, and read gmsh's own log back so a failed recovery is a loud
+        # MeshingError instead of a frozen solve or a silently broken mesh.
+        _preflight_near_touching(gmsh)
+        try:
+            gmsh.option.setNumber("Mesh.MaxRetries", _MESH_MAX_RETRIES)
+        except Exception:                     # pragma: no cover - old gmsh
+            log.debug("Mesh.MaxRetries not supported by this gmsh")
+        _t_gen = time.time()
+        _wd = threading.Timer(
+            _MESH_WATCHDOG_S,
+            lambda: log.error(
+                "gmsh 2-D meshing still running after %.0f s — a sub-tolerance "
+                "feature is almost certainly making edge recovery loop; check "
+                "the polygons around the last surface in the gmsh log",
+                _MESH_WATCHDOG_S))
+        _wd.daemon = True
+        _wd.start()
+        _logging_started = False
+        try:
+            gmsh.logger.start()
+            _logging_started = True
+        except Exception:                     # pragma: no cover - old gmsh
+            pass
+        try:
+            gmsh.model.mesh.generate(2)
+        finally:
+            _wd.cancel()
+        _gmsh_log: List[str] = []
+        if _logging_started:
+            try:
+                _gmsh_log = list(gmsh.logger.get())
+            finally:
+                gmsh.logger.stop()
+        _check_gmsh_log(_gmsh_log)
+        log.debug("gmsh 2-D pass %.1f s", time.time() - _t_gen)
 
         # Pre-compute the (gmsh_element_tag → domain id) map using the physical
         # groups — this lets us recover correct cell tags AFTER the meshio

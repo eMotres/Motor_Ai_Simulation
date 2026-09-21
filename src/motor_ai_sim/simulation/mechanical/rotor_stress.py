@@ -1164,6 +1164,7 @@ def _build_rotor_mesh(polys: dict,
     from shapely.prepared import prep
     from skfem import MeshTri
 
+    from motor_ai_sim.simulation.mesher import _repair_needles
     from motor_ai_sim.simulation.sb_domains import _GMSH_LOCK
 
     parts: List[Tuple[int, int, Any]] = []  # (PART_*, magnet index, polygon)
@@ -1205,7 +1206,22 @@ def _build_rotor_mesh(polys: dict,
                 # cut: the rotor came back as a full DISK covering the shaft, the
                 # sleeve as a disk covering the whole rotor, and the fragment
                 # then split them into overlapping pieces.  Normalise to CCW.
-                cs = list(coords)[:-1]
+                # Strip sub-tolerance fold-back needles first.  On the Ø50
+                # straight pocket at magnet_up_gap = 0.05 the rotor ring walks
+                # out to a 256-gon OD station and straight back to the pocket
+                # corner at TWO of the fourteen poles (measured 2026-09-21:
+                # interior angle 0.000°, r = 14.637 mm, poles at 85.775° and
+                # 265.775°) — which pole it hits depends only on where the
+                # fixed angular grid falls relative to that pole, so it is one
+                # bad pocket out of fourteen and looks like magic.  The same
+                # repair the magnetic mesher runs (mesher._repair_needles)
+                # snaps the corner onto the chord instead of deleting a shared
+                # station, so the rings still meet exactly.
+                cs, _n_needle, _w_needle = _repair_needles(list(coords)[:-1])
+                if _n_needle:
+                    _log.info("rotor mesh: %d sub-tolerance fold-back(s) "
+                              "removed from a ring (worst %.2f um)",
+                              _n_needle, _w_needle * 1000.0)
                 a2 = 0.0
                 for i in range(len(cs)):
                     x0, y0 = cs[i]

@@ -89,3 +89,26 @@ export function formatQueueLine(
   const n = Number(p.position) || 0;
   return n > 0 ? `Queued · position ${n}` : 'Queued';
 }
+
+/**
+ * The Simulation tab mounts TWO strips: the coupled orchestrator's own
+ * (`/api/coupled/progress`) and its plain transient strip
+ * (`/api/simulation/physics/fem_transient/progress`).  While the coupled
+ * toggle is on and the orchestrator's step IS the transient solve (its EM
+ * sub-step), both endpoints report the same running solve at once — two
+ * identical bars, one saying "steps", one "points" (owner 2026-09-21
+ * screenshot: "Computing 17 / 48 steps … / Computing 17 / 48 points …",
+ * same elapsed, same ETA).  Only one strip may show at a time: the
+ * orchestrator's, because it is the one that also names non-transient phases
+ * ("S1 verification 1/2").
+ *
+ * `coupledStripActive` is true only while the orchestrator strip is showing a
+ * bar for a RUNNING solve (its own `onActiveChange`) — not merely queued.
+ * With the coupled toggle off, the transient strip is this tab's only
+ * progress and always shows.
+ */
+export function showsTransientStrip(
+  coupled: boolean, coupledStripActive: boolean,
+): boolean {
+  return !(coupled && coupledStripActive);
+}

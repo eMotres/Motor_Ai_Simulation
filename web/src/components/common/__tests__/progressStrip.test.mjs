@@ -129,3 +129,33 @@ test('queued with no position still says it is queued', () => {
   assert.equal(formatQueueLine({ queued: true }), 'Queued');
   assert.equal(formatQueueLine({ queued: true, position: 0 }), 'Queued');
 });
+
+/* ── the Simulation tab's transient-vs-coupled visibility rule ──────────── */
+/* Same rule as above: a verbatim copy of the shipped helper, so changing
+ * `progressLine.ts` forces someone to justify the change here too.  Pinned
+ * 2026-09-21: the owner saw two identical progress bars — one "steps", one
+ * "points" — because both the coupled orchestrator strip and the plain
+ * transient strip were mounted unconditionally while a coupled run's EM
+ * sub-step IS the transient solve. */
+
+function showsTransientStrip(coupled, coupledStripActive) {
+  return !(coupled && coupledStripActive);
+}
+
+test('a plain (non-coupled) Simulation run always keeps its own strip', () => {
+  assert.equal(showsTransientStrip(false, false), true);
+  // Even if some stray "active" signal were true, the toggle being off means
+  // there is no orchestrator strip to defer to.
+  assert.equal(showsTransientStrip(false, true), true);
+});
+
+test('coupled toggle on but the orchestrator strip not (yet) running: transient shows', () => {
+  assert.equal(showsTransientStrip(true, false), true);
+});
+
+test('coupled toggle on and the orchestrator strip running: transient hides', () => {
+  // This is the exact bug: both endpoints report the same running solve at
+  // once, so only the orchestrator's strip (it names "S1 verification 1/2")
+  // may show.
+  assert.equal(showsTransientStrip(true, true), false);
+});

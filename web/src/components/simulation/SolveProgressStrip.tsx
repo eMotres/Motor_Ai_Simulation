@@ -7,6 +7,14 @@
  * SimulationPanel's import keeps working, and so the two things only this tab
  * knows stay with this tab: the transient progress URL, and the PWM composition
  * fallback (it describes the frame schedule of a voltage run and nothing else).
+ *
+ * `unit="steps"` (changed 2026-09-21 from "points"): the coupled orchestrator's
+ * own strip (`common/SolveProgressStrip` against `/api/coupled/progress`, see
+ * SimulationPanel) sits right above this one and says "steps" for the very same
+ * kind of count — when SimulationPanel lets both render in the same render pass
+ * (e.g. the instant the orchestrator hands off between its own step and the
+ * transient's), the word must not flip.  One wording everywhere this counts
+ * FEM frames.
  */
 import React from 'react';
 
@@ -19,7 +27,7 @@ import Strip from '../common/SolveProgressStrip';
  *  else's solve.  Omitted, the poll keeps its old no-argument form. */
 const SolveProgressStrip: React.FC<{ runId?: string }> = ({ runId }) => (
   <Strip endpoint="/api/simulation/physics/fem_transient/progress"
-    unit="points" pwmFallback runId={runId} />
+    unit="steps" pwmFallback runId={runId} />
 );
 
 export default SolveProgressStrip;

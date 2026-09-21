@@ -33,6 +33,7 @@ import SolveProgressStrip from './SolveProgressStrip';
 // render nothing when their endpoint reports no solve, so mounting the second
 // costs an idle page one cheap poll.
 import CommonProgressStrip from '../common/SolveProgressStrip';
+import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
 import { fetchCoupledLast } from './coupledApi';
 import { syncActiveMotor, getActiveMotor } from '../common/motorSettings';
@@ -848,6 +849,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     return () => window.removeEventListener('sim-design-applied', on);
   }, [refreshAssign]);
   const [simBusy,  setSimBusy]  = useState(false);
+  // Whether the coupled-orchestrator strip is currently showing a bar for a
+  // RUNNING solve (set by its onActiveChange) — while true, the plain
+  // transient strip below is redundant (see the render site) and hides.
+  const [coupledStripActive, setCoupledStripActive] = useState(false);
   // Tell the follower (lib/familyFollow) that THIS browser has a solve in
   // flight: a duty loaded in another window must not swap these fields under a
   // run whose fetch is already out — the charts would describe one point and
@@ -2765,14 +2770,22 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         {/* The ORCHESTRATOR's counter, only while the toggle is on: which
             iteration of how many.  It sits above the transient's own strip
             because the two answer different questions — "pass 2 of 6" and
-            "frame 17 of 48" — and on a six-pass run the frame count alone
-            cannot tell a slow loop from a stuck one.  Renders nothing when the
-            endpoint reports no solve, so it costs an idle page one poll. */}
+            "frame 17 of 48" — EXCEPT while the orchestrator's own running step
+            IS the transient solve (its EM sub-step): both progress endpoints
+            then report the same solve at once and the transient strip has
+            nothing to add, only a second bar with the same numbers under a
+            different word ("points" vs "steps" — owner 2026-09-21 screenshot).
+            So the transient strip is suppressed for exactly that window, via
+            onActiveChange below.  Renders nothing when the endpoint reports no
+            solve, so it costs an idle page one poll. */}
         {coupled && (
           <CommonProgressStrip endpoint="/api/coupled/progress" unit="steps"
-            kindLabels={{ coupled: 'Coupled EM ↔ thermal' }} />
+            kindLabels={{ coupled: 'Coupled EM ↔ thermal' }}
+            onActiveChange={setCoupledStripActive} />
         )}
-        <SolveProgressStrip runId={runNonce ? String(runNonce) : undefined} />
+        {showsTransientStrip(coupled, coupledStripActive) && (
+          <SolveProgressStrip runId={runNonce ? String(runNonce) : undefined} />
+        )}
 
         {/* Header + Physics overview card removed by user request.
             • The "2D Magnetostatics / Governing equation / Rotor

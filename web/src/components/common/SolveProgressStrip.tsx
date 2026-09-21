@@ -46,15 +46,26 @@ export interface SolveProgressStripProps {
    *  newest run in that router: that fall-back is why the tabs that have no run
    *  id yet need no change at all. */
   runId?: string;
+  /** Fires whenever this strip starts/stops showing a bar for a RUNNING solve
+   *  (not a queued one).  Lets a page that mounts two strips against the same
+   *  underlying solve — the Simulation tab's coupled orchestrator strip and its
+   *  own transient strip, both of which go `running` together while the
+   *  orchestrator's EM sub-step IS the transient solve — suppress the redundant
+   *  one instead of stacking two near-identical bars (owner 2026-09-21: two
+   *  bars, "steps" and "points", same numbers). */
+  onActiveChange?: (active: boolean) => void;
 }
 
 const SolveProgressStrip: React.FC<SolveProgressStripProps> = ({
   endpoint, unit = 'points', kindLabels, label, pwmFallback = false, runId,
+  onActiveChange,
 }) => {
   const [p, setP] = useState<ProgressInfo | null>(null);
   // Local ticking clock between polls so "elapsed" advances smoothly.
   const [, force] = useState(0);
   const seenStart = useRef(0);
+
+  useEffect(() => { onActiveChange?.(!!p?.running); }, [p?.running, onActiveChange]);
 
   useEffect(() => {
     let alive = true;

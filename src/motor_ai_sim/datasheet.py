@@ -1310,14 +1310,36 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         return _blk if isinstance(_blk, dict) and _blk else None
 
     if any(_cont_rating(d) for d in duties):
-        from motor_ai_sim.report import continuous_rating_feasible
+        from motor_ai_sim.report import (continuous_rating_feasible,
+                                         continuous_rating_clause)
+        _cr_first = next((_cont_rating(d) for d in duties if _cont_rating(d)),
+                         None)
+        _cr_note = ("the largest current this machine holds for ever at THIS "
+                   "duty's own saved cooling"
+                   + (continuous_rating_clause({"continuous_rating": _cr_first})
+                      or ""))
         row("Continuous current (S1) at saved cooling (A rms)",
             [(_cont_rating(d) or {}).get("I_cont_A_rms")
              if continuous_rating_feasible(_cont_rating(d)) else None
              for d in duties],
-            "the largest current this machine holds for ever at THIS duty's "
-            "own saved cooling; torque linear in current, iron and magnet "
-            "losses held at the solved point", 1)
+            _cr_note, 1)
+
+        def _s1_torque(du: Dict[str, Any]) -> Optional[float]:
+            blk = _cont_rating(du)
+            if not blk or not continuous_rating_feasible(blk) \
+                    or blk.get("verified") is not True:
+                return None
+            t = (blk.get("power") or {}).get("T_em_Nm")
+            return None if t is None else abs(float(t))
+
+        # THE TORQUE AT S1 (owner 2026-09-21, second addendum): real once the
+        # rating was confirmed with an electromagnetic pass, absent when it
+        # was not (never the linear estimate printed as if it were measured).
+        row("Continuous torque (S1) at saved cooling (N·m)",
+            [_s1_torque(d) for d in duties],
+            "the shaft torque FEM verified at the continuous current above — "
+            "absent, never a linear estimate, on a duty whose rating was not "
+            "confirmed", 3)
     # ── MECHANICAL, when the machine says which bearings it has ─────────────
     if _has_brg:
         _cards = [str((( _brg_assign.get(e) or {}).get("card") or ""))

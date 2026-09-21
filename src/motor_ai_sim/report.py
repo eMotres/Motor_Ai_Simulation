@@ -18008,6 +18008,16 @@ def continuous_rating_feasible(blk: Optional[Dict[str, Any]]) -> bool:
                and b.get("trustworthy", True))
 
 
+def _continuous_rating_untrustworthy_why(blk: Mapping[str, Any]) -> str:
+    """The SPECIFIC reason a block is ``trustworthy: false`` — the non-monotone
+    -map note this module's own search raises, or a caller's own ``note``
+    (a contradiction with the run's own ``time_to_limit``, a re-solve that
+    never converged) — never only ever the one case read off blindly."""
+    return next((n for n in (blk.get("notes") or ())
+                if n.startswith("THE 2-D") or n.startswith("CONTRADICTS")),
+               None) or blk.get("note") or "the map could not be iterated"
+
+
 def continuous_rating_words(rec: Optional[Dict[str, Any]]) -> str:
     """The one-line cell / datasheet row: the current and what limits it, or
     the reason there is none.
@@ -18018,8 +18028,7 @@ def continuous_rating_words(rec: Optional[Dict[str, Any]]) -> str:
     if blk is None:
         return ""
     if blk.get("trustworthy") is False:
-        return ("not a rating — the thermal solve is not monotone under this "
-                "cooling")
+        return "not a rating — " + _continuous_rating_untrustworthy_why(blk)
     if not blk.get("ok", True) or blk.get("feasible") is False:
         return str((blk.get("refusal") or {}).get("error") or blk.get("note")
                    or "no continuous rating under this cooling")
@@ -18037,14 +18046,30 @@ def continuous_rating_words(rec: Optional[Dict[str, Any]]) -> str:
 
 
 def continuous_rating_clause(rec: Optional[Dict[str, Any]]) -> str:
-    """ONE clause, the approximation stated: the house rule for these notes is
-    a single "; …" and never a sentence of its own."""
+    """ONE clause: the verification status when the block has one — a REAL
+    electromagnetic pass at this current (owner 2026-09-21: *«почему сразу не
+    пересчитывается электромагнитное моделирование … токи не совпадают»*)
+    replaces the linear estimate's approximation with the honest fact that it
+    either was, or was not, confirmed.  The house rule for these notes is a
+    single "; …" and never a sentence of its own."""
     blk = continuous_rating_of(rec)
     if blk is None or not continuous_rating_feasible(blk):
         return ""
     cooling = blk.get("cooling_label")
+    tail = ("; " + cooling) if cooling else ""
+    if blk.get("verified") is True:
+        n = blk.get("verification_passes")
+        miss = _numf(blk.get("miss_K"))
+        return ("; confirmed with a real electromagnetic pass at this "
+                "current%s%s"
+                % ("" if miss is None else " (%s K of the limit)"
+                   % _fmt(abs(miss), 1, ""), tail))
+    if blk.get("verified") is False:
+        why = blk.get("note") or "not verified"
+        return "; NOT VERIFIED — %s%s" % (why, tail)
+    # No verification was attempted at all (no card limit to verify against).
     return ("; torque linear in current, iron and magnet losses held at the "
-            "solved point%s" % ("; " + cooling if cooling else ""))
+            "solved point%s" % tail)
 
 
 def continuous_rating_limit_words(rec: Optional[Dict[str, Any]]) -> str:
@@ -18054,8 +18079,7 @@ def continuous_rating_limit_words(rec: Optional[Dict[str, Any]]) -> str:
     if blk is None:
         return ""
     if blk.get("trustworthy") is False:
-        return ("not a rating — the thermal solve is not monotone under this "
-                "cooling")
+        return "not a rating — " + _continuous_rating_untrustworthy_why(blk)
     if not blk.get("ok", True) or blk.get("feasible") is False:
         return str((blk.get("refusal") or {}).get("error") or blk.get("note")
                    or "no continuous rating under this cooling")
@@ -18332,14 +18356,31 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
             return "—" if v is None else _fmt(v, d, unit)
         rows.append([label] + _col_vals(cols, _cell))
 
-    # Owner addendum, 2026-09-21: *«не пиши уже мощность и момент — его и так
-    # видно»* — the tiles already carry the machine's torque and power, and
-    # the S1 torque is a linear estimate anyway, so only the current and what
-    # limits it print here.  Both stay in the STORED block for the API/CLI
-    # (``power.T_em_Nm`` / ``power.P_shaft_W``) — nothing here computes them,
-    # this row group only reads what is already on the record.
+    # Owner, 2026-09-21 first addendum: *«не пиши уже мощность и момент — его
+    # и так видно»* — torque and power dropped because the S1 numbers were a
+    # LINEAR ESTIMATE, and the tiles already carried the setpoint's real ones.
+    # Owner, same day, second addendum: *«почему сразу не пересчитывается
+    # электромагнитное моделирование … токи не совпадают»* — the loop now
+    # CONFIRMS the estimate with a real electromagnetic pass and the record's
+    # own tiles become the S1 machine, so torque and power are real again and
+    # print once more; `continuous_rating_clause` states whether they are
+    # verified or still the linear estimate.
     CR("Continuous rating (S1), current [A rms]",
        lambda b: _numf(b.get("I_cont_A_rms")), 1)
+    # VERIFIED ONLY (owner's first addendum still stands for the estimate):
+    # `power.T_em_Nm` / `P_shaft_W` are the linear estimate until a real
+    # electromagnetic pass confirms them, and an estimate is not printed as a
+    # number here — `verified is True` is the one flag that says which this is.
+    CR("Continuous rating (S1), torque [N·m]",
+       lambda b: (abs(_numf((b.get("power") or {}).get("T_em_Nm")))
+                  if b.get("verified") is True
+                  and _numf((b.get("power") or {}).get("T_em_Nm")) is not None
+                  else None), 3)
+    CR("Continuous rating (S1), shaft power [W]",
+       lambda b: (((b.get("power") or {}).get("P_shaft_W")
+                   if (b.get("power") or {}).get("P_shaft_W") is not None
+                   else (b.get("power") or {}).get("P_mech_W"))
+                  if b.get("verified") is True else None), 0)
     S("Continuous rating (S1), limited by",
       lambda c: continuous_rating_limit_words(_c(c)) or None)
     # …AND WHY THE PROVENANCE DIFFERS between two duties of one machine

@@ -544,6 +544,30 @@ def test_the_catalog_row_states_the_continuous_rating():
         "continuous_rating": row}
 
 
+def test_the_catalog_row_carries_the_verified_flag_when_the_block_has_one():
+    """Owner 2026-09-21, second addendum: the S1 rating is now CONFIRMED with
+    a real electromagnetic pass, and the catalog chip gets a checkmark for
+    it — `verified` rides the row exactly when the block states one, never a
+    false `False` for a duty whose rating was never verification-tried."""
+    from motor_ai_sim.routes.family import _continuous_rating_row
+
+    # No verification was attempted at all (an old-style record, or no card
+    # limit) — the row carries no key, the same "absent, not a guess" rule
+    # every other field here follows.
+    plain = _continuous_rating_row({"continuous_rating": dict(CONTINUOUS_RATING)})
+    assert "verified" not in plain
+
+    verified = _continuous_rating_row({"continuous_rating": {
+        **CONTINUOUS_RATING, "verified": True, "verification_passes": 1,
+        "miss_K": -0.5}})
+    assert verified["verified"] is True
+
+    missed = _continuous_rating_row({"continuous_rating": {
+        **CONTINUOUS_RATING, "verified": False, "verification_passes": 2,
+        "note": "still 12.3 K over its limit after 2 verification pass(es)"}})
+    assert missed["verified"] is False
+
+
 def test_section_8_judges_the_limited_state_amber_not_red():
     """The winding sits exactly ON its class at the moment the pull ends, so §8
     reads "it runs 24 s" (amber) and never "it is 430 °C" (red) — the steady

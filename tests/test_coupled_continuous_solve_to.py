@@ -90,6 +90,12 @@ _RATING_BLOCK = {
                 "sits on 149.7 °C",
 }
 
+#: The same block, as it looks AFTER a real S1 verification pass confirmed it
+#: (owner 2026-09-21, second addendum) — for the report/datasheet tests, which
+#: read a static record and never run the loop's own verification logic.
+_RATING_BLOCK_VERIFIED = {**_RATING_BLOCK, "verified": True,
+                          "verification_passes": 1, "miss_K": -0.5}
+
 
 def _fake_rating(monkeypatch, *, block=None):
     from motor_ai_sim.routes import coupled as cp
@@ -138,15 +144,35 @@ def test_the_default_grows_no_continuous_rating_key(client, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_continuous_stops_the_loop_exactly_as_limits_does(client, monkeypatch):
-    """Same crossing, same one extra pass AT the limit — asking for the rating
-    buys no extra electromagnetic solve of its own."""
+    """Same crossing, same one extra pass AT the limit — the LOOP's own stop
+    rule buys no extra electromagnetic solve; the S1 VERIFICATION passes are
+    a separate, later thing (owner 2026-09-21: the network's answer must be
+    confirmed with a real EM pass), counted on their own."""
     _fake_rating(monkeypatch, block=dict(_RATING_BLOCK))
     seen = _fake(monkeypatch, ttl=_ttl_block())
     c = _run(client, solve_to="continuous")
     assert c["solve_to"] == "continuous"
-    assert c["mode"] == "limited"
-    assert seen["coil_in"] == [120.0, 200.0], seen["coil_in"]
+    # The loop's own two passes (body's 120 °C, then AT the limit 200 °C) —
+    # unchanged by asking for the rating.
+    assert seen["coil_in"][:2] == [120.0, 200.0], seen["coil_in"]
     assert c["limited"]["part"] == "winding"
+    # …and the S1 verification ran on top, at the rating's OWN estimated
+    # winding temperature (103.0 °C from _RATING_BLOCK) — the fake thermal
+    # solve never settles near the magnet's 149.7 °C card, so it used its
+    # full two-pass budget and reported the miss rather than a false "verified".
+    assert seen["coil_in"][2:] == [103.0, 103.0]
+    cr = c["continuous_rating"]
+    assert cr["verified"] is False
+    assert cr["verification_passes"] == 2
+    assert cr["I_estimated_A_rms"] == 34.36
+    # THE RECORD'S OWN MACHINE MOVED TO S1 (owner's rule): the coupled
+    # block's temperatures are no longer the setpoint's 200 °C AT-THE-LIMIT
+    # pass, they are the S1 verification's own — even unverified, it is the
+    # real pass the record now describes, not the setpoint's.
+    assert c["coil_temp_c"] == 103.0
+    # …and the setpoint's own story survives, unabbreviated.
+    assert cr["duty_point"]["I_phase_rms_A"] == LOOP_BODY["I_phase_rms"]
+    assert "winding reaches 200" in cr["duty_point"]["verdict"]
 
 
 def test_continuous_on_a_point_inside_every_limit_is_still_a_steady_record(
@@ -191,7 +217,10 @@ def test_the_block_rides_the_record_as_continuous_rating(client, monkeypatch):
     _fake(monkeypatch, ttl=_ttl_block())
     c = _run(client, solve_to="continuous")
     cr = c["continuous_rating"]
-    assert cr["I_cont_A_rms"] == 34.36
+    # I_cont_A_rms is the VERIFIED reading (owner 2026-09-21) — the network's
+    # own first answer survives separately, as I_estimated_A_rms.
+    assert cr["I_estimated_A_rms"] == 34.36
+    assert cr["I_cont_A_rms"] == 20.0          # the fake EM pass's own current
     assert cr["limiting_part"] == "magnet"
     assert cr["cooling_label"].startswith("forced air 40 m/s")
 
@@ -207,6 +236,101 @@ def test_a_refused_rating_is_reported_not_raised(client, monkeypatch):
     assert c["mode"] == "limited"          # the loop's own answer stands
     assert c["continuous_rating"]["ok"] is False
     assert c["continuous_rating"]["refusal"]["error_code"] == "no_part_limits"
+
+
+# ---------------------------------------------------------------------------
+# THE S1 VERIFICATION PASS (owner 2026-09-21) — confirm the network's
+# estimate with a real EM + thermal pass; adopt it as the record's machine.
+# ---------------------------------------------------------------------------
+
+def _fake_verify(monkeypatch, *, winding_max_at, magnet_max_at):
+    """A CURRENT-AWARE EM/thermal fake, so a verification pass/correction/
+    convergence scenario can be built exactly: ``winding_max_at(I)`` /
+    ``magnet_max_at(I)`` are this map's own hot-spot reading at that current."""
+    from motor_ai_sim.routes import coupled as cp
+
+    seen = {"I": [], "coil_in": []}
+
+    def _em(body, *, coil_temp_c, magnet_temp_c, inverter=None, **_k):
+        i = float(body.get("I_phase_rms") or 0.0)
+        seen["I"].append(round(i, 4))
+        seen["coil_in"].append(round(float(coil_temp_c), 4))
+        return {"summary": {"P_loss_total_W": 100.0, "T_em_avg_Nm": 5.0,
+                            "rpm": 1000.0, "coil_temp_C": float(coil_temp_c),
+                            "I_phase_rms_A": i},
+                "I_phase_rms_solved_A": i}
+
+    def _th(body, cooling, *, coil_temp_c, magnet_temp_c, rpm, **_k):
+        i = float(body.get("I_phase_rms") or 0.0)
+        wmax, mmax = winding_max_at(i), magnet_max_at(i)
+        return {"ok": True,
+                "components": {"winding": {"avg": wmax - 5.0, "max": wmax},
+                               "magnet": {"avg": mmax - 2.0, "max": mmax}}}
+
+    monkeypatch.setattr(cp, "_em_run", _em, raising=True)
+    monkeypatch.setattr(cp, "_thermal_solve", _th, raising=True)
+    return seen
+
+
+def test_a_verification_within_3k_is_accepted_in_one_pass(client, monkeypatch):
+    _fake_rating(monkeypatch, block=dict(_RATING_BLOCK))    # magnet, 149.7 °C
+    seen = _fake_verify(monkeypatch, winding_max_at=lambda i: 100.0,
+                        magnet_max_at=lambda i: 148.0)       # 1.7 K under
+    c = _run(client, solve_to="continuous")
+    cr = c["continuous_rating"]
+    assert cr["verified"] is True
+    assert cr["verification_passes"] == 1
+    assert abs(cr["miss_K"]) <= 3.0
+    # The loop makes its own two passes first (unmocked here, both at this
+    # fixture's fixed I=20.0); the verification's OWN call is the one after.
+    verify_calls = seen["I"][2:]
+    assert len(verify_calls) == 1
+    # THE VERIFIED CURRENT is what the (fake) EM pass actually drew.
+    assert cr["I_cont_A_rms"] == pytest.approx(_RATING_BLOCK["I_cont_A_rms"])
+    assert cr["I_estimated_A_rms"] == _RATING_BLOCK["I_cont_A_rms"]
+    # …and the RECORD becomes this pass: the block's own temperatures are the
+    # verification's, not the setpoint's AT-THE-LIMIT 200 °C.
+    assert c["coil_temp_c"] == 103.0                        # RATING's own guess
+    # THE FEM TORQUE/POWER are real now, not the linear estimate.
+    assert cr["power"]["T_em_Nm"] == 5.0
+    assert "real electromagnetic pass" in cr["power"]["basis"]
+
+
+def test_a_miss_over_3k_triggers_one_correction_pass_and_can_converge(
+        client, monkeypatch):
+    _fake_rating(monkeypatch, block=dict(_RATING_BLOCK))
+    # First pass (at the estimate, 34.36 A): 50.3 K over the magnet card.
+    # The correction must pull the current DOWN; the second pass then lands
+    # under 30 A, where this fixture settles comfortably inside the card.
+    def magnet_fn(i):
+        return 200.0 if i > 30.0 else 148.0
+    seen = _fake_verify(monkeypatch, winding_max_at=lambda i: 50.0,
+                        magnet_max_at=magnet_fn)
+    c = _run(client, solve_to="continuous")
+    cr = c["continuous_rating"]
+    verify_calls = seen["I"][2:]
+    assert len(verify_calls) == 2
+    assert verify_calls[1] < verify_calls[0]    # corrected DOWN, over the card
+    assert cr["verification_passes"] == 2
+    assert cr["verified"] is True
+    assert cr["I_cont_A_rms"] == pytest.approx(verify_calls[1], abs=1e-3)
+
+
+def test_a_verification_still_off_after_two_passes_states_the_miss(
+        client, monkeypatch):
+    """The cap is real: a map that never settles near the card is reported
+    with the miss stated, not chased for ever."""
+    _fake_rating(monkeypatch, block=dict(_RATING_BLOCK))
+    seen = _fake_verify(monkeypatch, winding_max_at=lambda i: 50.0,
+                        magnet_max_at=lambda i: 300.0)       # never settles
+    c = _run(client, solve_to="continuous")
+    cr = c["continuous_rating"]
+    verify_calls = seen["I"][2:]
+    assert len(verify_calls) == 2                # the cap, never chased further
+    assert cr["verification_passes"] == 2
+    assert cr["verified"] is False
+    assert cr["miss_K"] is not None and cr["miss_K"] > 3.0
+    assert "still" in cr["note"] and "verification pass" in cr["note"]
 
 
 # ---------------------------------------------------------------------------
@@ -323,12 +447,28 @@ def test_the_row_group_appears_only_when_a_duty_asked_for_it():
     assert by_label["Continuous rating (S1), current [A rms]"][2] == "—"
     lim = by_label["Continuous rating (S1), limited by"][1]
     assert lim.startswith("magnet, 149.7 / 150")
-    # Owner addendum, 2026-09-21: torque and shaft power are not printed here
-    # any more (the tiles already show them, and the S1 torque is a linear
-    # estimate) — only the current and the "limited by" row remain.
+    assert "torque linear in current" in lim     # not verified — an estimate
+    # Owner's first addendum, 2026-09-21: torque and shaft power printed as a
+    # linear ESTIMATE were dropped.  Neither duty here was ever VERIFIED
+    # (owner's second addendum, same day, is what re-admits them), so the
+    # row group has nothing to print and `_drop_empty` takes it out whole —
+    # the same "silent unless it applies" rule as the group itself.
     assert not any(l.startswith("Continuous rating (S1), torque")
                   or l.startswith("Continuous rating (S1), shaft power")
                   for l in by_label)
+
+    # …and once VERIFIED, the real FEM torque/power print, and the clause
+    # says so instead of naming the linear-estimate approximation.
+    rec_verified = {"coil_temp_c": 103.0,
+                    "continuous_rating": dict(_RATING_BLOCK_VERIFIED)}
+    _, rows_v = rp.coupled_compare_rows(
+        [{"duty": "rated", "em": {}, "d": {}, "res": {"coupled": rec_verified}}])
+    by_label_v = {r[0]: r for r in rows_v}
+    assert by_label_v["Continuous rating (S1), torque [N·m]"][1] == "1.175"
+    assert by_label_v["Continuous rating (S1), shaft power [W]"][1] == "1,230"
+    lim_v = by_label_v["Continuous rating (S1), limited by"][1]
+    assert "confirmed with a real electromagnetic pass" in lim_v
+    assert "torque linear in current" not in lim_v
 
     # …and when NO duty in the report ever asked, the whole group is silent —
     # `_drop_empty` takes it out, exactly as the "Warning" row is taken out of
@@ -378,17 +518,33 @@ def test_the_datasheet_carries_one_row_per_duty_when_a_duty_has_it(tmp_path):
     # `duties` are sorted continuous-looking first, "peak" last (the paper
     # card's own order), so the columns are [rated, peak].
     label = "Continuous current (S1) at saved cooling (A rms)"
-    with_ = _row(build_datasheet(
+    torque_label = "Continuous torque (S1) at saved cooling (N·m)"
+    blob = build_datasheet(
         die="D", cfg="L13", die_doc=die_doc, cfg_doc=cfg_doc,
-        coupled={"peak": {"continuous_rating": dict(_RATING_BLOCK)}}), label)
+        coupled={"peak": {"continuous_rating": dict(_RATING_BLOCK)}})
+    with_ = _row(blob, label)
     assert with_ is not None
     # The duty with no block of its own carries no number on the same row.
     assert with_[0] is None
     assert with_[1] == pytest.approx(34.4, abs=1e-6)   # one decimal, per `row`
+    # The current is not VERIFIED (owner 2026-09-21, second addendum) — the
+    # torque row prints no number for it, ever the linear estimate.
+    torque_unverified = _row(blob, torque_label)
+    assert torque_unverified is not None
+    assert torque_unverified == [None, None]
 
     without = _row(build_datasheet(die="D", cfg="L13", die_doc=die_doc,
                                    cfg_doc=cfg_doc, coupled=None), label)
     assert without is None                 # no row at all — never computed here
+
+    # …and once the rating IS verified, the torque prints — real, from the
+    # FEM pass that confirmed it.
+    blob_v = build_datasheet(
+        die="D", cfg="L13", die_doc=die_doc, cfg_doc=cfg_doc,
+        coupled={"peak": {"continuous_rating": dict(_RATING_BLOCK_VERIFIED)}})
+    torque_verified = _row(blob_v, torque_label)
+    assert torque_verified[0] is None
+    assert torque_verified[1] == pytest.approx(1.175, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------

@@ -71,6 +71,18 @@ test('the owner\'s own example, to the character', () => {
   assert.equal(continuousRatingChip(S1), 'S1 28.7 A · magnet');
 });
 
+// ── S1 VERIFICATION (owner 2026-09-21, second addendum) ────────────────────
+test('a verified rating carries the checkmark', () => {
+  assert.equal(continuousRatingChip({ ...S1, verified: true }),
+    'S1 28.7 A · magnet ✓');
+});
+
+test('an unverified or never-tried rating stays exactly the chip it was', () => {
+  assert.equal(continuousRatingChip({ ...S1, verified: false }),
+    'S1 28.7 A · magnet');
+  assert.equal(continuousRatingChip(S1), 'S1 28.7 A · magnet');   // no key at all
+});
+
 test('the chip stays one short line', () => {
   assert.ok(continuousRatingChip(S1).length <= 24,
     'a duty row has one line; everything else is the tooltip');

@@ -32,6 +32,13 @@ function continuousRatingLine(c) {
     const lim = r.limits_c?.[r.limiting_part];
     parts.push(`limited by ${r.limiting_part}`
       + (lim == null ? '' : ` ${Math.round(lim)} °C`));
+    if (r.verified === true) {
+      const actual = r.temperatures_c?.[r.limiting_part];
+      parts.push(`FEM-verified${actual == null ? ''
+        : ` (${r.limiting_part} ${actual.toFixed(1)} °C)`}`);
+    } else if (r.verified === false) {
+      parts.push(`estimate, not verified (${r.note ?? 'see the tooltip'})`);
+    }
   }
   return `S1: ${parts.join(' · ')}`;
 }
@@ -82,6 +89,30 @@ test('the line: only the current and the part it is limited by', () => {
   assert.equal(
     continuousRatingLine({ continuous_rating: RATING }),
     'S1: 34.4 A rms · limited by magnet 150 °C');
+});
+
+// ── S1 VERIFICATION (owner 2026-09-21, second addendum) ────────────────────
+// *«почему сразу не пересчитывается электромагнитное моделирование … токи не
+// совпадают»* — the line must say whether the current beside it was
+// CONFIRMED by a real EM pass, or is still the network's own estimate.
+test('a verified rating names the part\'s own confirmed temperature', () => {
+  const verified = { continuous_rating: { ...RATING, verified: true,
+    verification_passes: 1, miss_K: -0.5,
+    temperatures_c: { winding: 103.0, magnet: 149.2 } } };
+  assert.equal(continuousRatingLine(verified),
+    'S1: 34.4 A rms · limited by magnet 150 °C · FEM-verified (magnet '
+    + '149.2 °C)');
+});
+
+test('an unverified rating names why, never silently prints a bare current', () => {
+  const unverified = { continuous_rating: { ...RATING, verified: false,
+    verification_passes: 2,
+    note: 'still 12.3 K over its limit after 2 verification pass(es) — the '
+         + 'last verified state stands' } };
+  assert.equal(continuousRatingLine(unverified),
+    'S1: 34.4 A rms · limited by magnet 150 °C · estimate, not verified '
+    + '(still 12.3 K over its limit after 2 verification pass(es) — the '
+    + 'last verified state stands)');
 });
 
 test('nothing to say when the answer was not asked for', () => {

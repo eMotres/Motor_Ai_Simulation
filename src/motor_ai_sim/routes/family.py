@@ -1313,6 +1313,13 @@ def _continuous_rating_row(coupled: Any) -> Optional[Dict[str, Any]]:
         "torque_Nm": torque,
         "cooling_label": cooling_label,
         "feasible": feasible,
+        # CONFIRMED WITH A REAL EM PASS (owner 2026-09-21, second addendum) —
+        # `True` only once a verification pass landed within 3 K of the card;
+        # `False` when one was tried and missed; absent (never `False`) when
+        # none was tried at all (no card limit to verify against), so a reader
+        # cannot mistake "not tried" for "tried and failed".
+        **({"verified": bool(blk["verified"])}
+           if blk.get("verified") is not None else {}),
     }
     # A refused or untrustworthy search has a sentence to print, never a
     # number — same rule as `report.continuous_rating_words`.

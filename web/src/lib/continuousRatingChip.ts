@@ -51,6 +51,12 @@ export interface DutyContinuousRating {
   feasible?: boolean | null;
   /** the block's OWN sentence — the tooltip, verbatim */
   note?: string | null;
+  /** CONFIRMED WITH A REAL EM PASS (owner 2026-09-21, second addendum) —
+   *  `true` only once a verification pass landed within 3 K of the card;
+   *  absent when none was tried (no card limit to verify against), which
+   *  reads exactly as `undefined` does everywhere else on this row: not
+   *  drawn, never a false "not verified". */
+  verified?: boolean | null;
 }
 
 /** PURE.  The chip's label, or `null` when the row must draw nothing.
@@ -73,7 +79,12 @@ export function continuousRatingChip(
   const bits: string[] = [`S1 ${i.toFixed(1)} A`];
   const part = String(r.part ?? '').trim();
   if (part) bits.push(part);
-  return bits.join(' · ');
+  let label = bits.join(' · ');
+  // A CHECKMARK, when a real electromagnetic pass confirmed this current
+  // (owner 2026-09-21, second addendum) — one glyph, never a second chip: an
+  // unverified rating stays exactly the chip it always was.
+  if (r.verified === true) label += ' ✓';
+  return label;
 }
 
 /** PURE.  The chip's tooltip: the block's OWN sentence.

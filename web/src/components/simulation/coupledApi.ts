@@ -331,6 +331,29 @@ export interface ContinuousRating {
   headline?: string;
   /** present when `ok: false` (or `feasible: false`) instead of a current */
   refusal?: { error: string; error_code?: string };
+
+  // ── S1 VERIFICATION (owner 2026-09-21, second addendum) ──────────────────
+  // *«почему сразу не пересчитывается электромагнитное моделирование для
+  // найденного непрерывного режима — токи не совпадают»* — the network's own
+  // answer is an ESTIMATE; the loop now CONFIRMS it with a real EM + thermal
+  // pass at that current, and the record (em / field / temperatures) becomes
+  // that pass.  `I_cont_A_rms` above is the VERIFIED reading once this ran;
+  // the network's own first answer survives here.
+  I_estimated_A_rms?: number;
+  /** `true` = a real EM pass landed within 3 K of the limiting part's card;
+   *  `false` = it did not (see `note`), or the pass itself could not be
+   *  solved; absent = no card limit to verify against, so none was tried —
+   *  `I_cont_A_rms` is then still the network's own estimate. */
+  verified?: boolean;
+  /** how many real EM + thermal passes the verification made (cap 2) */
+  verification_passes?: number;
+  /** the verified pass's own reading, minus the limit — 0 is exact, positive
+   *  is still over */
+  miss_K?: number | null;
+  /** the SETPOINT's own question and answer, kept once the record's own
+   *  machine moves to the S1 point — "runs 41 s" is this, not the S1 line */
+  duty_point?: { I_phase_rms_A?: number | null; T_em_Nm?: number | null;
+                verdict?: string | null };
 }
 
 /** The found regime, as the coupling block carries it.  It IS a `RegimeLimits`
@@ -805,6 +828,17 @@ export function continuousRatingLine(c: CouplingBlock | null | undefined):
     const lim = r.limits_c?.[r.limiting_part];
     parts.push(`limited by ${r.limiting_part}`
       + (lim == null ? '' : ` ${Math.round(lim)} °C`));
+    // THE VERIFICATION STATUS (owner 2026-09-21, second addendum) — the whole
+    // reason this pass exists: a reader must see whether the current beside
+    // it was CONFIRMED by a real electromagnetic pass or is still the
+    // network's own estimate.
+    if (r.verified === true) {
+      const actual = r.temperatures_c?.[r.limiting_part];
+      parts.push(`FEM-verified${actual == null ? ''
+        : ` (${r.limiting_part} ${actual.toFixed(1)} °C)`}`);
+    } else if (r.verified === false) {
+      parts.push(`estimate, not verified (${r.note ?? 'see the tooltip'})`);
+    }
   }
   return `S1: ${parts.join(' · ')}`;
 }

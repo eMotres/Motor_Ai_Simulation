@@ -3815,6 +3815,121 @@ def _run(body: Dict[str, Any],
             except Exception:  # noqa: BLE001 — never fails the loop's own answer
                 log.debug("coupled: the continuous rating could not be found",
                           exc_info=True)
+            # ── CONFIRM IT WITH A REAL EM PASS (owner 2026-09-21) ────────────
+            # *«почему сразу не пересчитывается электромагнитное моделирование
+            # для найденного непрерывного режима — токи не совпадают»*.  The
+            # network's own answer is an ESTIMATE (a four-node fit); the record
+            # — and every tile downstream of `em` / `field` — must be the
+            # REAL machine at that current, exactly as `limits` mode makes the
+            # record the real machine AT the limit rather than the network's
+            # step-response estimate of it.
+            if (continuous_rating and continuous_rating.get("ok")
+                    and continuous_rating.get("feasible") is not False
+                    and continuous_rating.get("I_cont_A_rms") is not None
+                    and continuous_rating.get("limiting_part")):
+                i_est = float(continuous_rating["I_cont_A_rms"])
+                part = str(continuous_rating["limiting_part"])
+                lim_c = _ccr._num((continuous_rating.get("limits_c") or {})
+                                  .get(part))
+                # THE SETPOINT'S OWN STORY, kept — the "runs 41 s" answer is
+                # this duty's own question and stays available, printed by the
+                # AT THE LIMIT block above; only the record's OWN machine
+                # (em / field / temperatures) moves to the S1 point.
+                continuous_rating["duty_point"] = {
+                    "I_phase_rms_A": _f(body, "I_phase_rms", 0.0),
+                    "T_em_Nm": (last_row := (history[-1] if history else {}))
+                              .get("T_em_Nm"),
+                    "verdict": (limited["line"] if limited
+                               else (time_to_limit.get("note")
+                                     if time_to_limit else None)),
+                }
+                continuous_rating["I_estimated_A_rms"] = round(i_est, 3)
+                if lim_c is None:
+                    continuous_rating["verified"] = False
+                    continuous_rating["note"] = (
+                        "no card limit for %r, so the estimate could not be "
+                        "verified" % part)
+                else:
+                    try:
+                        v = _s1_verify(
+                            body, cooling=cooling, rpm=rpm_eff,
+                            inverter=inverter, i_estimate=i_est,
+                            coil_temp_c_guess=float(
+                                (continuous_rating.get("temperatures_c") or {})
+                                .get("winding") or t_coil),
+                            magnet_temp_c_guess=(
+                                (continuous_rating.get("temperatures_c") or {})
+                                .get("magnet")),
+                            limiting_part=part, limit_c=float(lim_c))
+                    except HTTPException as exc:
+                        v = None
+                        continuous_rating["verified"] = False
+                        continuous_rating["note"] = (
+                            "the verification pass could not be solved at "
+                            "%.1f A (%s) — the current below is the network's "
+                            "own estimate, not confirmed"
+                            % (i_est, _detail_text(exc)))
+                    except Exception:  # noqa: BLE001 — never fails the loop
+                        v = None
+                        log.debug("coupled: S1 verification failed",
+                                  exc_info=True)
+                        continuous_rating["verified"] = False
+                    if v:
+                        continuous_rating["verified"] = bool(v.get("verified"))
+                        continuous_rating["verification_passes"] = v.get("passes")
+                        continuous_rating["miss_K"] = v.get("miss_K")
+                        if v.get("note"):
+                            continuous_rating["note"] = v["note"]
+                        continuous_rating["I_cont_A_rms"] = v.get(
+                            "I_cont_A_rms", i_est)
+                        continuous_rating["temperatures_c"] = dict(
+                            continuous_rating.get("temperatures_c") or {})
+                        if v.get("actual_c") is not None:
+                            continuous_rating["temperatures_c"][part] = round(
+                                float(v["actual_c"]), 2)
+                        # THE REAL FEM TORQUE AND POWER — no longer the linear
+                        # estimate: this pass really was solved.
+                        from motor_ai_sim.report import shaft_view
+                        _s_v = v["em"].get("summary") or {}
+                        _t_v, _t_note_v = _shaft_torque_nm(_s_v)
+                        _x_v = _ccr._num(_s_v.get("P_mech_extra_W"))
+                        _brg_v = ({"has_bearings": True,
+                                  "P_mech_extra_W": _x_v}
+                                 if _x_v is not None else None)
+                        _sv_v = shaft_view(_s_v, _brg_v,
+                                           str(body.get("mode") or "motor"))
+                        continuous_rating["power"] = {
+                            "T_em_Nm": _t_v, "P_mech_W": _sv_v.get("P_mech_W"),
+                            "P_rotor_W": _sv_v.get("P_rotor_W"),
+                            "P_shaft_W": _sv_v.get("P_shaft_W"),
+                            "eta_em": _sv_v.get("eta_em"),
+                            "eta_shaft": _sv_v.get("eta_shaft"),
+                            "basis": ("real electromagnetic pass at the "
+                                     "verified S1 current — report.shaft_view, "
+                                     "not the linear estimate"),
+                        }
+                        # THE RECORD BECOMES THE S1 MACHINE (owner's rule): the
+                        # same replacement `limits` mode makes for the setpoint,
+                        # made here for the rating instead.
+                        em = v["em"]
+                        field = v["field"]
+                        t_coil = v["coil_temp_c"]
+                        t_mag = v["magnet_temp_c"]
+                        em_at = (t_coil, t_mag)
+                        history.append({
+                            "iter": len(history) + 1, "phase": "s1_verify",
+                            "T_coil_in": round(float(t_coil), 2),
+                            "T_magnet_in": (None if t_mag is None
+                                           else round(float(t_mag), 2)),
+                            "T_coil_out": None, "T_magnet_out": None,
+                            "T_magnet_max": None,
+                            "P_loss_W": _s_v.get("P_loss_total_W"),
+                            "T_em_Nm": _s_v.get("T_em_avg_Nm"),
+                            "bearing_temp_c": _s_v.get("bearing_temp_c"),
+                            "bearing_temp_source": _s_v.get(
+                                "bearing_temp_source"),
+                            "P_mech_extra_W": _s_v.get("P_mech_extra_W"),
+                        })
             if continuous_rating:
                 log.info(
                     "coupled: continuous rating — %s",
@@ -4561,6 +4676,105 @@ def _cr_consistency_guard(block: Dict[str, Any],
         "CONTRADICTS THE LOOP'S OWN VERDICT: " + contradiction]
     out["note"] = contradiction
     return out
+
+
+def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
+               inverter: Optional[Dict[str, Any]], i_estimate: float,
+               coil_temp_c_guess: float, magnet_temp_c_guess: Optional[float],
+               limiting_part: str, limit_c: float, max_passes: int = 2
+               ) -> Dict[str, Any]:
+    """CONFIRM the S1 network estimate with a real EM pass, at the current
+    the estimate found — never trust the network alone.
+
+    Owner, 2026-09-21 (screenshot: the S1 line said 34.1 A while the tiles
+    still showed the 63.64 A setpoint's numbers): *«почему сразу не
+    пересчитывается электромагнитное моделирование для найденного
+    непрерывного режима — токи не совпадают»*.  One EM pass at ``i_estimate``,
+    one real 2-D thermal solve of its own loss map, and the limiting part's
+    OWN hot spot / hottest element read straight off that map (never the
+    network's node-mean-plus-offset estimate).  Off by more than 3 K in
+    either direction: ONE first-order correction —
+    ``i_next = i_now · sqrt((limit − ambient) / (actual − ambient))``, the
+    same square-law the network search itself bisects on, applied once more
+    with the REAL map's reading in place of the estimate — and one more pass.
+    Two passes, never more: a machine that still misses after two real solves
+    is reported with the miss stated, not chased further.
+
+    Returns ``{"verified", "passes", "miss_K", "I_cont_A_rms", "em", "field",
+    "coil_temp_c", "magnet_temp_c"}`` — ``em``/``field`` are the LAST pass
+    made, real, for the caller to adopt as the record's own (the "AT THE
+    LIMIT" convention, applied to the S1 point instead of the setpoint's).
+    Never raises: a pass that cannot be solved stops the loop where it is and
+    reports the miss against the last pass that DID solve, or — on the very
+    first pass — re-raises so the caller can fall back to the estimate.
+    """
+    amb = _ccr._num((cooling or {}).get("ambient_temp"))
+    if amb is None:
+        amb = 25.0
+    i_now = float(i_estimate)
+    last: Dict[str, Any] = {}
+    for k in range(max(int(max_passes), 1)):
+        _progress.update(phase="S1 verification %d/%d — EM at %.1f A"
+                               % (k + 1, max_passes, i_now))
+        body_at = dict(body)
+        body_at["I_phase_rms"] = i_now
+        inv_at = None
+        if inverter is not None:
+            # THE FUNDAMENTAL, not the current, is what a PWM run is actually
+            # fed — scaled by the same ratio the current moved by, as a
+            # STARTING guess for this one pass, exactly as "AT THE LIMIT"
+            # drives its own extra pass with the loop's inverter rather than
+            # re-regulating it: one pass, and whatever current it actually
+            # draws is recorded, not chased to an exact target.
+            inv_at = dict(inverter)
+            ratio = (i_now / float(inverter.get("target_I_phase_rms_A") or i_now
+                                   or 1.0))
+            if _ccr._num(inv_at.get("v_phase_peak_V")):
+                inv_at["v_phase_peak_V"] = float(inv_at["v_phase_peak_V"]) * ratio
+            inv_at["target_I_phase_rms_A"] = i_now
+        try:
+            em_v = _em_run(body_at, coil_temp_c=coil_temp_c_guess,
+                           magnet_temp_c=magnet_temp_c_guess, inverter=inv_at)
+            _progress.update(phase="S1 verification %d/%d — thermal"
+                                   % (k + 1, max_passes))
+            field_v = _thermal_solve(body_at, cooling,
+                                     coil_temp_c=coil_temp_c_guess,
+                                     magnet_temp_c=magnet_temp_c_guess, rpm=rpm)
+        except HTTPException as exc:
+            if not last:
+                raise
+            last["verified"] = False
+            last["note"] = ("pass %d could not be solved (%s) — the last "
+                            "verified state stands" % (k + 1, _detail_text(exc)))
+            break
+        i_solved = _ccr._num((em_v.get("summary") or {}).get("I_phase_rms_A")) \
+            or _ccr._num(em_v.get("I_phase_rms_solved_A")) or i_now
+        comp = (field_v.get("components") or {})
+        node = "winding" if limiting_part == "winding" else (
+            "magnet" if limiting_part == "magnet" else limiting_part)
+        actual = _ccr._num((comp.get(node) or {}).get("max"))
+        miss = None if actual is None else round(actual - float(limit_c), 3)
+        last = {"verified": (miss is not None and abs(miss) <= 3.0),
+                "passes": k + 1, "miss_K": miss, "I_cont_A_rms": round(i_solved, 3),
+                "em": em_v, "field": field_v,
+                "coil_temp_c": coil_temp_c_guess,
+                "magnet_temp_c": magnet_temp_c_guess,
+                "actual_c": actual}
+        if last["verified"] or actual is None or k >= max_passes - 1:
+            if actual is None:
+                last["note"] = ("the verification map carries no %s reading, "
+                                "so the miss could not be judged" % node)
+            elif not last["verified"]:
+                last["note"] = ("still %.1f K %s its limit after %d "
+                                "verification pass(es) — the last verified "
+                                "state stands" % (abs(miss), "over" if miss > 0
+                                                  else "under", k + 1))
+            break
+        # ONE first-order correction, from the REAL map's reading.
+        over_amb_actual = max(actual - amb, 1e-6)
+        over_amb_limit = max(float(limit_c) - amb, 1e-6)
+        i_now = max(i_now * math.sqrt(over_amb_limit / over_amb_actual), 0.01)
+    return last
 
 
 def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any],

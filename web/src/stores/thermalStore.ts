@@ -399,12 +399,14 @@ export function coolingFields(s: CoolingInputs): CoolingRequest {
     // THE FRAME, sent only when the machine is OPEN — the same rule the shaft
     // follows.  A `frame: 'housed'` on the wire is a value the solver keys its
     // cache on and never reads, so it would split one machine's cache in two.
-    // The SPEED rides with it even at 0: 0 is meaningful there (the backend
-    // takes the housing's own air speed, because it is the same wash), which is
-    // exactly why it is not gated on being > 0 the way the stub length is.
+    // The wash speed is ALWAYS 0 now (owner 2026-09-21: the panel already
+    // states the outer-surface air speed, so a second "wash m/s" input was
+    // redundant — 0 tells the backend to use the housing air speed, which is
+    // the same wash by construction). `s.openAirSpeed` is deliberately not
+    // read here any more: a value left over from before today must not ride
+    // back onto the wire.
     frame: s.frame === 'open' ? 'open' : undefined,
-    open_air_speed_mps: s.frame === 'open'
-      ? Math.max(0, num(s.openAirSpeed, 0)) : undefined,
+    open_air_speed_mps: s.frame === 'open' ? 0 : undefined,
     emissivity: robot ? Math.min(Math.max(num(s.emissivity, 0.9), 0), 1)
                       : undefined,
     end_faces: robot ? endFaces : undefined,

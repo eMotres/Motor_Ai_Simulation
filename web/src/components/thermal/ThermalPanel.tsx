@@ -1154,13 +1154,8 @@ const ThermalPanel: React.FC = () => {
                 <MenuItem key={m} value={m} sx={{ fontSize: 11 }}>{FRAME_LABEL[m]}</MenuItem>
               ))}
             </Select>
-            <HelpTip title="Open adds two paths a housed machine does not have: end turns in cross flow and the slot channels." />
+            <HelpTip title="Open adds two paths a housed machine does not have: end turns in cross flow and the slot channels — both in the same air as the Outer surface above." />
           </Box>
-          {frame === 'open' && (
-            <NumField label={ROBOTICS_HELP.openAirSpeed.label} value={openAirSpeed}
-              onChange={(v) => setField('openAirSpeed', v)} width={112}
-              tip={ROBOTICS_HELP.openAirSpeed.tip} />
-          )}
         </Box>
 
         {/* ── WHAT THE MACHINE DOES WITH THIS POINT, over TIME ───────────────

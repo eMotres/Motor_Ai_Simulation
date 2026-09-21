@@ -457,11 +457,10 @@ const SinkEditorCard: React.FC<{
                    hint={ROBOTICS_HELP.frame.tip}
                    opts={[['housed', 'housed'], ['open', 'open']]}
                    onChange={(v) => onChange('frame', v)} />);
-    if (s.frame === 'open') {
-      rows.push(<Num key="v" cap={ROBOTICS_HELP.openAirSpeed.short} value={s.openAirSpeed}
-                     width={58} hint={ROBOTICS_HELP.openAirSpeed.tip}
-                     onChange={(v) => onChange('openAirSpeed', v)} />);
-    }
+    // No wash-speed input here any more (2026-09-21): the end turns and the
+    // slot channels now always take the housing's own outer-surface air
+    // speed, so a second "m/s" a click away from this one would only be a
+    // second place for it to disagree.
   }
   return (
     <div style={{

@@ -153,8 +153,12 @@ function coolingFields(s) {
     shaft_ext_sides: shaftMm > 0
       ? (num(s.shaftExtSides, 2) === 1 ? 1 : 2) : undefined,
     frame: s.frame === 'open' ? 'open' : undefined,
-    open_air_speed_mps: s.frame === 'open'
-      ? Math.max(0, num(s.openAirSpeed, 0)) : undefined,
+    // The wash speed is ALWAYS 0 now (owner 2026-09-21): the panel no longer
+    // has its own "wash m/s" input, so an open frame always tells the backend
+    // to use the housing's own outer-surface air speed. `s.openAirSpeed` is
+    // deliberately not read here — a value left over from before today must
+    // not ride back onto the wire.
+    open_air_speed_mps: s.frame === 'open' ? 0 : undefined,
     emissivity: robot ? Math.min(Math.max(num(s.emissivity, 0.9), 0), 1)
                       : undefined,
     end_faces: robot ? endFaces : undefined,
@@ -346,23 +350,22 @@ test('an openAirSpeed left over from an open machine is not sent once it is hous
   assert.ok(!('open_air_speed_mps' in sent(r)));
 });
 
-test('an open frame sends both fields, and 0 m/s IS one of them', () => {
-  // Unlike the shaft length, 0 is meaningful here — the backend then takes the
-  // housing's own air speed, because it is the same wash — so the speed rides
-  // with the frame rather than being gated on being > 0.
-  const r = coolingFields(inputs({ frame: 'open', openAirSpeed: '11' }));
+test('an open frame always sends 0 m/s — the panel has no wash input of its own', () => {
+  // Removed 2026-09-21: the panel used to let the wash ride separately from
+  // the housing's own outer-surface air speed; now it always sends 0, which
+  // the backend reads as "use the housing air speed, because it is the same
+  // wash" — so the payload must carry 0 even when a stale `openAirSpeed` is
+  // still sitting in a saved panel setting from before today.
+  const r = coolingFields(inputs({ frame: 'open' }));
   assert.equal(r.frame, 'open');
-  assert.equal(r.open_air_speed_mps, 11);
-  const z = coolingFields(inputs({ frame: 'open', openAirSpeed: '0' }));
-  assert.equal(z.frame, 'open');
-  assert.equal(z.open_air_speed_mps, 0);
-  assert.ok('open_air_speed_mps' in sent(z));
+  assert.equal(r.open_air_speed_mps, 0);
+  assert.ok('open_air_speed_mps' in sent(r));
 });
 
-test('a blank or negative wash speed is 0, not a negative heat path', () => {
-  for (const bad of ['', '   ', '-8', 'abc']) {
-    const r = coolingFields(inputs({ frame: 'open', openAirSpeed: bad }));
-    assert.equal(r.open_air_speed_mps, 0, JSON.stringify(bad));
+test('a leftover openAirSpeed from before the wash input was removed is ignored', () => {
+  for (const stale of ['11', '30', '-8', '', 'abc']) {
+    const r = coolingFields(inputs({ frame: 'open', openAirSpeed: stale }));
+    assert.equal(r.open_air_speed_mps, 0, JSON.stringify(stale));
   }
 });
 
@@ -371,10 +374,9 @@ test('the frame is independent of every cooling mode', () => {
   // different facts: an open machine can still have a jacket on the tooth
   // backs, and neither may switch the other off.
   for (const coolMode of ['air', 'liquid', 'manual', 'none']) {
-    const r = coolingFields(inputs({ coolMode, boreMode: 'air',
-                                     frame: 'open', openAirSpeed: '10' }));
+    const r = coolingFields(inputs({ coolMode, boreMode: 'air', frame: 'open' }));
     assert.equal(r.frame, 'open', coolMode);
-    assert.equal(r.open_air_speed_mps, 10, coolMode);
+    assert.equal(r.open_air_speed_mps, 0, coolMode);
     assert.equal(r.cooling_mode, coolMode);
   }
 });

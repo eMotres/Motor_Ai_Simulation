@@ -128,7 +128,7 @@ export const ROBOTICS_HELP: Record<RoboticsControlKey, RoboticsControl> = {
   frame: {
     label: 'Frame',
     short: 'frame',
-    tip: 'How the machine is BUILT, which decides whether its end windings and slot air are cooled at all. Housed: they sit inside a closed case, turning in their own air, so whatever they hand it comes straight back through the housing and there is no extra path — this is every normally-built motor. Open: no housing, the tooth blocks with their coils held between two end plates on standoff pins, with the end turns and the axial channels between neighbouring coils in the airflow. On a 40 mm tooth-coil machine the end turns are three quarters of the copper LENGTH, so which of the two it is moves the winding temperature by more than any film coefficient above.',
+    tip: 'How the machine is BUILT, which decides whether its end windings and slot air are cooled at all. Housed: they sit inside a closed case, turning in their own air, so whatever they hand it comes straight back through the housing and there is no extra path — this is every normally-built motor. Open: no housing, the tooth blocks with their coils held between two end plates on standoff pins, with the end turns and the axial channels between neighbouring coils in the airflow. On a 40 mm tooth-coil machine the end turns are three quarters of the copper LENGTH, so which of the two it is moves the winding temperature by more than any film coefficient above. On Open, the end turns and the slot channels see the same air as the housing (the Outer surface speed above) — there is no separate wash speed to set.',
   },
   openAirSpeed: {
     label: 'wash m/s',

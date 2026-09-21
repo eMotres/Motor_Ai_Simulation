@@ -687,7 +687,11 @@ export function settingLabel(id: SinkId, s: CoolingSettings | null | undefined):
       return `${s.shaftExtMm} mm × ${nz(s.shaftExtSides, '2')}`;
     }
     case 'frame':
-      return s.frame === 'open' ? `open, ${nz(s.openAirSpeed, '0')} m/s` : 'housed';
+      // The wash speed is no longer its own setting (2026-09-21): an open
+      // frame always takes the housing's own outer-surface air speed, so a
+      // leftover `openAirSpeed` from before that date is not read here —
+      // printing it would claim a control that no longer exists.
+      return s.frame === 'open' ? 'open, housing air' : 'housed';
     default:
       return null;
   }

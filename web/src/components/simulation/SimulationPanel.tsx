@@ -1449,6 +1449,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
+    // THE RACE (owner, sixth round, live-verified in a sandbox): this GET is
+    // fired once on mount and can still be in flight — carrying the OLD
+    // setpoint — when a finished continuous run auto-sets the S1 current
+    // (coupledApi.applyS1AsOperatingPoint) in between.  Its resolution then
+    // called `setCurrent` with the stale value it read, undoing the S1 write
+    // a moment after the notice appeared (and its own debounced sync PATCHed
+    // that undone value back to the server).  Stamped ONCE, before the first
+    // request goes out: an S1 write timestamped AFTER this moment happened
+    // WHILE (or after) this fetch was in flight, so it — not this response —
+    // is the newer truth, and `setCurrent` below is skipped for it.
+    const mountedAt = Date.now();
     const load = () => {
       const j = (url: string) => fetch(url).then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1459,8 +1470,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           if (!alive) return;
           setSrvStatus(d);
           setSrvErr(null);
+          let s1Newer = false;
+          try {
+            const s1At = Number(localStorage.getItem('sim.current.s1AppliedAt'));
+            s1Newer = Number.isFinite(s1At) && s1At >= mountedAt;
+          } catch { /* no guard available — adopt as before */ }
           if (d.operating_point) {
-            setCurrent(d.operating_point.max_current ?? 85);
+            if (!s1Newer) setCurrent(d.operating_point.max_current ?? 85);
             // frequency is NOT seeded from the saved operating point — it is
             // fully derived (rpm·pp/60, effect above); seeding it here raced the
             // geometry load and pinned the stale value after a pole-count change.

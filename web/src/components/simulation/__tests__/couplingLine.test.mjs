@@ -31,24 +31,18 @@ function couplingLine(c) {
     : mb.ok === false ? 'mechanics ⚠'
     : mb.contact_fallback ? `${String(mb.contact_fallback.pair ?? 'joint').replace('_', '–')} solved ${mb.contact_fallback.to ?? 'bonded'}`
     : null;
-  const mo = mb?.modes;
-  const modesTerm = !mo ? null
-    : mo.ok === false ? 'modes ⚠'
-    : mo.f1_hz == null ? null
-    : `f₁ ${fmtHz(mo.f1_hz)}${(mo.n_flagged ?? 0) > 0 ? ' ⚠' : ''}`;
-  const cr = mb?.critical_speeds;
-  const critTerm = !cr ? null
-    : cr.ok === false ? 'criticals ⚠'
-    : cr.first_forward_rpm == null ? null
-    : `crit ${fmtRpm(cr.first_forward_rpm)}${(cr.n_forward_below_rated ?? 0) > 0
-        || (cr.first_forward_margin_pct != null && cr.first_forward_margin_pct < 10) ? ' ⚠' : ''}`;
+  // The modes and the critical speeds the same run left (2026-09-13) used to
+  // print here too (f₁ …, crit … rpm) — owner, 2026-09-21: *«не надо их
+  // выводить сюда»*.  They stay everywhere else that already carries them
+  // (Mechanical tab, this record, the catalog row, the report); only this
+  // ONE dashboard line drops them.
   return [`winding ${c.coil_temp_c.toFixed(0)} °C${atLimit('winding')}`, m, mech,
     c.mode === 'limited'
       ? (limPart === 'winding' || limPart === 'magnet'
           ? `${c.iterations} it.` : `${c.iterations} it. · at the limit`)
       : `${c.iterations} it.${c.converged ? '' : ' ⚠'}`,
     regimeTerm(c.duty_cycle),
-    mechNote, modesTerm, critTerm]
+    mechNote]
     .filter(Boolean).join(' · ');
 }
 
@@ -74,15 +68,6 @@ function coupledRegimeNotice(c) {
 
 function g1(v) {
   return Number.isInteger(v) ? String(v) : v.toFixed(1);
-}
-
-function fmtHz(f) {
-  return f >= 10000 ? `${(f / 1000).toFixed(1)} kHz` : `${Math.round(f)} Hz`;
-}
-
-function fmtRpm(v) {
-  const r = v >= 10000 ? Math.round(v / 100) * 100 : Math.round(v / 10) * 10;
-  return `${r.toLocaleString('en-US').replace(/,/g, ' ')} rpm`;
 }
 
 function couplingTooltip(c) {
@@ -152,10 +137,12 @@ test('a run that did not settle still says so after the mechanical term', () => 
   assert.ok(line.includes('mechanical 63 W'));
 });
 
-// 2026-09-13: the same coupled run now leaves the ring modes and the critical
-// speeds (user: "чтобы к отчёту было всё готово"), so the line carries the
-// first frequency and the first forward critical — and NOTHING for a run that
-// did not ask for mechanics, never "0 Hz".
+// 2026-09-13: the same coupled run started leaving the ring modes and the
+// critical speeds on this line too (user: "чтобы к отчёту было всё готово").
+// 2026-09-21 (owner, addendum): *«не надо их выводить сюда»* — the dashboard
+// line drops both fragments again; the modal / critical-speed answers stay in
+// `mechanical.modes` / `mechanical.critical_speeds` on the SAME record for
+// the Mechanical tab, the catalog row and the report to read.
 const WITH_MECH = {
   ...WITH_BEARINGS,
   mechanical: {
@@ -166,9 +153,16 @@ const WITH_MECH = {
   },
 };
 
-test('the line carries the first mode and the first forward critical', () => {
+test('the line drops the modal and critical-speed fragments even when the '
+   + 'record carries them', () => {
   assert.equal(couplingLine(WITH_MECH),
-    'winding 128 °C · magnets 163 °C · mechanical 63 W · 3 it. · f₁ 2104 Hz · crit 48 300 rpm');
+    'winding 128 °C · magnets 163 °C · mechanical 63 W · 3 it.');
+  const line = couplingLine(WITH_MECH);
+  assert.ok(!line.includes('f₁') && !line.includes('crit') && !line.includes('Hz')
+    && !line.includes('rpm'), line);
+  // The record itself still has them — only the LINE built from it does not.
+  assert.equal(WITH_MECH.mechanical.modes.f1_hz, 2104.3);
+  assert.equal(WITH_MECH.mechanical.critical_speeds.first_forward_rpm, 48312);
 });
 
 test('a run without the mechanical step shows neither term', () => {
@@ -176,23 +170,19 @@ test('a run without the mechanical step shows neither term', () => {
   assert.ok(!line.includes('f₁') && !line.includes('crit'), line);
 });
 
-test('a flagged separation, a critical below rated, or a refusal each raise ⚠', () => {
+test('a flagged separation, a critical below rated, or a refusal still raise '
+   + 'nothing on the line — those ⚠ moved to the tooltip / Mechanical tab '
+   + 'with the rest of the modal and critical-speed answers', () => {
   const flagged = { ...WITH_MECH, mechanical: { ...WITH_MECH.mechanical,
     modes: { ...WITH_MECH.mechanical.modes, n_flagged: 1 } } };
-  assert.ok(couplingLine(flagged).includes('f₁ 2104 Hz ⚠'));
+  assert.equal(couplingLine(flagged), couplingLine(WITH_MECH));
   const below = { ...WITH_MECH, mechanical: { ...WITH_MECH.mechanical,
     critical_speeds: { ...WITH_MECH.mechanical.critical_speeds,
                        first_forward_rpm: 18400, first_forward_margin_pct: -13.6, n_forward_below_rated: 1 } } };
-  assert.ok(couplingLine(below).includes('crit 18 400 rpm ⚠'));
+  assert.equal(couplingLine(below), couplingLine(WITH_MECH));
   const refused = { ...WITH_MECH, mechanical: { ...WITH_MECH.mechanical,
     critical_speeds: { ok: false, error: 'impossible shaft line' } } };
-  assert.ok(couplingLine(refused).endsWith('criticals ⚠'));
-});
-
-test('five-digit frequencies read in kHz', () => {
-  const hi = { ...WITH_MECH, mechanical: { ...WITH_MECH.mechanical,
-    modes: { ...WITH_MECH.mechanical.modes, f1_hz: 12430 } } };
-  assert.ok(couplingLine(hi).includes('f₁ 12.4 kHz'));
+  assert.equal(couplingLine(refused), couplingLine(WITH_MECH));
 });
 
 test('each tooltip row names the bearing temperature it was billed at', () => {
@@ -301,6 +291,12 @@ test('the shipped source prints the same words', () => {
                        src.indexOf('export function regimeTerm'));
   assert.ok(fn.includes("' (at the limit)'"), fn);
   assert.ok(fn.includes("c.mode === 'limited'"), fn);
+  // Owner, 2026-09-21: *«не надо их выводить сюда»* — modesTerm / critTerm
+  // must not be built (or returned) by couplingLine any more; couplingTooltip
+  // → mechanicalRows still prints the full sentences on hover.
+  assert.ok(!fn.includes('modesTerm'), fn);
+  assert.ok(!fn.includes('critTerm'), fn);
+  assert.ok(!fn.includes('f₁ $'), fn);
 });
 
 test('no feasible ratio at all is reported too', () => {

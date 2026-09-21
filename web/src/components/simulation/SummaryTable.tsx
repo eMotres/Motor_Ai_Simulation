@@ -18,8 +18,7 @@ import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
 import { couplingLine, couplingTooltip, coupledStateLine,
          coupledStateTip, continuousRatingLine,
-         continuousRatingTip, s1ResultsAtLine,
-         applyS1AsOperatingPoint } from './coupledApi';
+         continuousRatingTip, s1ResultsAtLine } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 
 /** Bench-probe result riding in the summary (backend measures it once per
@@ -1175,27 +1174,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                     && s.coupling.continuous_rating.trustworthy !== false
                     ? 'green' : 'amber'}
             tooltip={continuousRatingTip(s.coupling)}/>
-          {/* "Use N A as the operating point" (owner 2026-09-21, third round):
-              never silent (project rule) — an explicit click, through the
-              SAME field the Operating-point panel itself owns, so peak/rms
-              stay derived consistently and the value persists like a typed
-              one.  Only offered once there is a real current to apply. */}
-          {s.coupling.continuous_rating.I_cont_A_rms != null && (
-            <Tooltip title={
-              'Writes this current into the Operating point panel’s own '
-              + 'I phase rms field (peak follows, derived the same way it '
-              + 'always is) — nothing here re-runs the simulation; press '
-              + 'Run afterwards to solve at it.'}>
-              <Button size="small" variant="outlined"
-                onClick={() => applyS1AsOperatingPoint(
-                  s.coupling!.continuous_rating!.I_cont_A_rms as number)}
-                sx={{ fontSize: 10, py: 0.25, px: 0.75, minWidth: 0,
-                     lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-                Use {s.coupling.continuous_rating.I_cont_A_rms.toFixed(1)} A as
-                the operating point
-              </Button>
-            </Tooltip>
-          )}
+          {/* The manual "Use N A as the operating point" button (owner
+              2026-09-21, third round) is GONE (owner, fourth round, looking at
+              it: *«ты что не можешь сам записать этот ток и прогнать солвер с
+              ним автоматом?»*) — a verified S1 run now writes the panel by
+              itself (`PhysicsDashboard`'s `s1AutoSetPlan` effect, still the
+              SAME `applyS1AsOperatingPoint` setter), with the one visible
+              notice + undo that rule requires instead of a click nobody
+              noticed at the end of this row. */}
         </Box>
       )}
 

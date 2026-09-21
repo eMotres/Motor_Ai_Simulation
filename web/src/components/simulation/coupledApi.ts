@@ -623,21 +623,12 @@ export function couplingLine(c: CouplingBlock): string {
     : mb.ok === false ? 'mechanics ⚠'
     : mb.contact_fallback ? `${String(mb.contact_fallback.pair ?? 'joint').replace('_', '–')} solved ${mb.contact_fallback.to ?? 'bonded'}`
     : null;
-  // The modes and the critical speeds the same run left (2026-09-13): the
-  // first frequency and the first forward critical, each with its ⚠ when the
-  // step refused or the number sits inside the separation rule.  Absent
-  // entirely on a run that did not ask for mechanics — never "0 Hz".
-  const mo = mb?.modes;
-  const modesTerm = !mo ? null
-    : mo.ok === false ? 'modes ⚠'
-    : mo.f1_hz == null ? null
-    : `f₁ ${fmtHz(mo.f1_hz)}${(mo.n_flagged ?? 0) > 0 ? ' ⚠' : ''}`;
-  const cr = mb?.critical_speeds;
-  const critTerm = !cr ? null
-    : cr.ok === false ? 'criticals ⚠'
-    : cr.first_forward_rpm == null ? null
-    : `crit ${fmtRpm(cr.first_forward_rpm)}${(cr.n_forward_below_rated ?? 0) > 0
-        || (cr.first_forward_margin_pct != null && cr.first_forward_margin_pct < 10) ? ' ⚠' : ''}`;
+  // The modes and the critical speeds the same run left (2026-09-13) used to
+  // print here too (f₁ …, crit … rpm) — owner, 2026-09-21: *«не надо их
+  // выводить сюда»*.  They stay everywhere else that already carries them:
+  // the Mechanical tab, this record, the catalog row and the report — only
+  // this ONE dashboard line drops them.  `couplingTooltip` → `mechanicalRows`
+  // (below) still prints the full sentences on hover.
   // THE REGIME, on an impulse duty (2026-09-16): the ratio the machine can hold
   // and, when the duty asked about one, whether it fits.  One term — the
   // sentence is in the tooltip — and nothing at all on a continuous duty.
@@ -652,7 +643,7 @@ export function couplingLine(c: CouplingBlock): string {
           ? `${c.iterations} it.` : `${c.iterations} it. · at the limit`)
       : `${c.iterations} it.${c.converged ? '' : ' ⚠'}`,
     regimeTerm(c.duty_cycle),
-    mechNote, modesTerm, critTerm]
+    mechNote]
     .filter(Boolean).join(' · ');
 }
 
@@ -899,17 +890,58 @@ export function s1ResultsAtLine(c: CouplingBlock | null | undefined):
  *  reading (derived from it) and the panel's own state stay consistent and
  *  the value persists exactly like one the user typed.
  *
- *  NEVER SILENT (project rule): called either by an explicit button click
- *  next to the S1 line — "Use N A as the operating point" — or by the
- *  auto-set below for a verified S1 run, which always pairs the call with a
- *  visible notice + undo (`s1AutoSetPlan` / PhysicsDashboard); never a bare
- *  side effect of loading or rendering a record with nothing said on
- *  screen. */
+ *  NEVER SILENT (project rule): called only by the auto-set below for a
+ *  verified S1 run, which always pairs the call with a visible notice + undo
+ *  (`s1AutoSetPlan` / PhysicsDashboard) — never a bare side effect with
+ *  nothing said on screen.  The manual "Use N A as the operating point"
+ *  button that used to call this on click is GONE (owner, fourth round:
+ *  *«ты что не можешь сам записать этот ток и прогнать солвер с ним
+ *  автоматом?»* — the auto-set below is the answer).
+ *
+ *  ALSO PATCHES THE BACKEND DIRECTLY (owner, 2026-09-21, fifth round: field
+ *  still read the old setpoint after an F5, live-verified in a sandbox).
+ *  `SimulationPanel` mounts by ADOPTING THE SERVER'S OWN `max_current` —
+ *  "the SERVER config is the single source of truth" (its own mount-effect
+ *  comment) — and only afterwards starts a 700 ms DEBOUNCED patch back from
+ *  whatever the panel is showing.  Writing only `localStorage` + the restore
+ *  event wins the RACE inside one already-open tab, but loses it across a
+ *  reload that lands before that debounce fires: the mount effect re-reads
+ *  the server's still-old current and calls `setCurrent` with it, which then
+ *  writes that old value back over `sim.current` too (`usePersisted`'s own
+ *  write-back effect), so the browser forgets the S1 value ever arrived.
+ *  Sending the SAME field the debounced sync PATCHes (`max_current`) right
+ *  here removes the race instead of trying to win it: by the time anyone
+ *  reloads, the server already agrees.
+ *
+ *  A SECOND race, found live in a sandbox (owner, sixth round — the field
+ *  DID move on screen, but the backend read back the OLD current a moment
+ *  later): the mount-time "adopt the server's own operating point" fetch
+ *  (`SimulationPanel`'s `/api/simulation/status` + `/api/simulation/config`
+ *  GET, issued once on page load) can still be IN FLIGHT — with the SETPOINT,
+ *  not the S1 current, since it was sent before this function ever ran — when
+ *  a finished continuous run restores and this function fires.  That GET then
+ *  resolves and calls `setCurrent(server_value)` unconditionally, undoing
+ *  the S1 write in local state; its OWN 700 ms debounced sync then PATCHes
+ *  the undone value back to the server too (observed: `max_current: 45.962`
+ *  overwriting the `30.0` this function had just written).  The stamp below
+ *  is the other half of the fix — `SimulationPanel`'s mount effect skips its
+ *  `setCurrent` when this stamp is newer than the moment ITS OWN fetch was
+ *  issued, i.e. an S1 write that happened while that GET was in flight or
+ *  after it. */
 export function applyS1AsOperatingPoint(i_A_rms: number): void {
   try { localStorage.setItem('sim.current', JSON.stringify(i_A_rms)); }
   catch { /* best effort — the field simply is not updated */ }
+  // The race-guard stamp SimulationPanel's mount effect reads — see above.
+  try { localStorage.setItem('sim.current.s1AppliedAt', String(Date.now())); }
+  catch { /* best effort — the guard simply does not arm */ }
   try { window.dispatchEvent(new Event('sim-settings-restored')); }
   catch { /* best effort */ }
+  try {
+    fetch(`${API}/api/simulation/config`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_current: i_A_rms }),
+    }).catch(() => { /* the debounced sync will retry this on the next edit */ });
+  } catch { /* best effort — SSR / no fetch */ }
 }
 
 /* ── AUTO-SET on a VERIFIED S1 run (owner 2026-09-21, fourth round) ─────────
@@ -917,9 +949,11 @@ export function applyS1AsOperatingPoint(i_A_rms: number): void {
  * stale/"different point" verdict) and the Operating point panel still read
  * the setpoint (63.64 A) under tiles at the S1 machine (48.6 A) — *«почему
  * замыленный экран после окончания каплинга и почему опять токи не
- * совпадают»*.  The manual "Use N A as the operating point" button (above)
- * sits at the far right of a row and was not noticed.  This is the same
- * setter, called once by the run itself — but ONLY for a REAL S1
+ * совпадают»*.  A manual "Use N A as the operating point" button briefly
+ * fixed this on click, but sat at the far right of a row and went unnoticed —
+ * removed (owner, fourth round: *«ты что не можешь сам записать этот ток и
+ * прогнать солвер с ним автоматом?»*).  This is the same setter, called once
+ * by the run itself — but ONLY for a REAL S1
  * verification pass that replaced the record (`record_is_s1` AND
  * `verified === true`); an estimate or a contradiction must never move the
  * setpoint (rule 2 of the brief) — `continuousRatingLine` already says why

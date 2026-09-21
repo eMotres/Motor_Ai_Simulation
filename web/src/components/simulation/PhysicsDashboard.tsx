@@ -155,13 +155,16 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
   // vs `liveOp.current`) — this is the current mismatch, not the geometry
   // fingerprint (the "3D ×0.951 ⚠ recompute" chip is the unrelated inherited
   // passport).  Fixing the mismatch clears the dim by itself: writing the S1
-  // current through the SAME setter the manual button already used
-  // (`applyS1AsOperatingPoint`) brings `liveOp.current` back within the
-  // guard's own 0.05 A tolerance.  Only for a REAL verification pass
-  // (`s1AutoSetPlan` — record_is_s1 AND verified === true); an estimate or a
-  // contradiction never moves the setpoint (rule 2 of the brief), and the S1
-  // line already says why.  Never silent (project rule): one visible line
-  // under the header, with an undo back to the previous setpoint.
+  // current through `applyS1AsOperatingPoint` brings `liveOp.current` back
+  // within the guard's own 0.05 A tolerance.  A manual "Use N A…" button once
+  // did this on click, but sat unnoticed at the end of a row — removed (owner,
+  // fourth round: *«ты что не можешь сам записать этот ток и прогнать солвер
+  // с ним автоматом?»*): the panel now moves BY ITSELF.  Only for a REAL
+  // verification pass (`s1AutoSetPlan` — record_is_s1 AND verified === true);
+  // an estimate or a contradiction never moves the setpoint (rule 2 of the
+  // brief), and the S1 line already says why.  Never silent (project rule):
+  // one visible line under the header, with an undo back to the previous
+  // setpoint.
   const [s1Notice, setS1Notice] =
     React.useState<{ from: number; to: number } | null>(null);
   const s1AppliedForRef = React.useRef<TransientSummary | null>(null);

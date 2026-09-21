@@ -73,11 +73,18 @@ function s1ResultsAtLine(c) {
     + `(setpoint ${iSet.toFixed(2)} A rms)`;
 }
 
+const API = 'http://localhost:8001';
 function applyS1AsOperatingPoint(i_A_rms) {
   try { localStorage.setItem('sim.current', JSON.stringify(i_A_rms)); }
   catch { /* best effort */ }
   try { window.dispatchEvent(new Event('sim-settings-restored')); }
   catch { /* best effort */ }
+  try {
+    fetch(`${API}/api/simulation/config`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_current: i_A_rms }),
+    }).catch(() => {});
+  } catch { /* best effort */ }
 }
 
 // ── fixtures ──────────────────────────────────────────────────────────────
@@ -258,38 +265,71 @@ test('no header line on an ordinary run, or before the record moved', () => {
     record_is_s1: false, duty_point: { I_phase_rms_A: 63.64 } } }), null);
 });
 
-test('the action writes the field the Operating-point panel itself owns',
-    () => {
-  const calls = { setItem: [], dispatched: [] };
+test('the action writes the field the Operating-point panel itself owns, '
+   + 'AND patches the server directly — the F5 race (owner, fifth round: '
+   + 'live-verified in a sandbox — the field read the old setpoint after a '
+   + 'reload because only localStorage had moved and the server had not '
+   + 'caught up yet)', () => {
+  const calls = { setItem: [], dispatched: [], fetched: [] };
   const prevLS = globalThis.localStorage;
   const prevWin = globalThis.window;
+  const prevFetch = globalThis.fetch;
   globalThis.localStorage = {
     setItem: (k, v) => calls.setItem.push([k, v]),
   };
   globalThis.window = {
     dispatchEvent: (ev) => calls.dispatched.push(ev.type),
   };
+  globalThis.fetch = (url, init) => {
+    calls.fetched.push({ url, init });
+    return { catch: () => {} };   // matches the production .catch(() => {}) chain
+  };
   try {
     applyS1AsOperatingPoint(48.6);
   } finally {
     globalThis.localStorage = prevLS;
     globalThis.window = prevWin;
+    globalThis.fetch = prevFetch;
   }
   assert.deepEqual(calls.setItem, [['sim.current', '48.6']]);
   assert.deepEqual(calls.dispatched, ['sim-settings-restored']);
+  assert.equal(calls.fetched.length, 1);
+  assert.equal(calls.fetched[0].url, 'http://localhost:8001/api/simulation/config');
+  assert.equal(calls.fetched[0].init.method, 'PATCH');
+  assert.deepEqual(JSON.parse(calls.fetched[0].init.body), { max_current: 48.6 });
 });
 
 test('the action never throws when storage is unavailable (private window)',
     () => {
   const prevLS = globalThis.localStorage;
   const prevWin = globalThis.window;
+  const prevFetch = globalThis.fetch;
   globalThis.localStorage = { setItem() { throw new Error('blocked'); } };
   globalThis.window = { dispatchEvent() { throw new Error('blocked'); } };
+  globalThis.fetch = () => ({ catch: () => {} });
   try {
     assert.doesNotThrow(() => applyS1AsOperatingPoint(48.6));
   } finally {
     globalThis.localStorage = prevLS;
     globalThis.window = prevWin;
+    globalThis.fetch = prevFetch;
+  }
+});
+
+test('the action never throws when the server PATCH itself throws '
+   + '(offline / fetch unavailable)', () => {
+  const prevLS = globalThis.localStorage;
+  const prevWin = globalThis.window;
+  const prevFetch = globalThis.fetch;
+  globalThis.localStorage = { setItem() {} };
+  globalThis.window = { dispatchEvent() {} };
+  globalThis.fetch = () => { throw new Error('no network'); };
+  try {
+    assert.doesNotThrow(() => applyS1AsOperatingPoint(48.6));
+  } finally {
+    globalThis.localStorage = prevLS;
+    globalThis.window = prevWin;
+    globalThis.fetch = prevFetch;
   }
 });
 
@@ -373,4 +413,23 @@ test('PhysicsDashboard auto-applies only a verified S1 record, with a '
     'the notice must offer a clickable undo, not just a message');
   assert.ok(src.includes('s1AutoSetNoticeText('),
     'the visible line must use the shared wording, not a re-typed one');
+});
+
+// ── the manual button is GONE (owner, fourth round) ─────────────────────────
+// *«ты что не можешь сам записать этот ток и прогнать солвер с ним
+// автоматом?»* — the panel must move BY ITSELF; no click left to forget.
+test('the manual "Use N A as the operating point" button no longer exists', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const summarySrc = readFileSync(
+    join(here, '..', 'SummaryTable.tsx'), 'utf8');
+  // The history is allowed to stay in a comment naming the function; the
+  // BUTTON — an IMPORT of the setter, and an onClick that calls it — must not.
+  assert.ok(!summarySrc.split('\n').some(l => /^\s*import\b/.test(l)
+      && l.includes('applyS1AsOperatingPoint')),
+    'SummaryTable must not import the setter any more — only the '
+    + 'PhysicsDashboard auto-set effect does');
+  assert.ok(!summarySrc.includes('onClick={() => applyS1AsOperatingPoint'),
+    'no button click left that calls the setter');
+  assert.ok(!/Use \{[^}]*\}\s*A as/.test(summarySrc),
+    'no button text template ("Use {…} A as the operating point") left');
 });

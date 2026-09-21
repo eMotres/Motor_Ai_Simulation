@@ -321,10 +321,14 @@ def test_the_row_group_appears_only_when_a_duty_asked_for_it():
     by_label = {r[0]: r for r in rows_with}
     assert by_label["Continuous rating (S1), current [A rms]"][1] == "34.4"
     assert by_label["Continuous rating (S1), current [A rms]"][2] == "—"
-    assert by_label["Continuous rating (S1), torque, est. [N·m]"][1] == "1.175"
-    assert by_label["Continuous rating (S1), shaft power, est. [W]"][1] == "1,230"
     lim = by_label["Continuous rating (S1), limited by"][1]
     assert lim.startswith("magnet, 149.7 / 150")
+    # Owner addendum, 2026-09-21: torque and shaft power are not printed here
+    # any more (the tiles already show them, and the S1 torque is a linear
+    # estimate) — only the current and the "limited by" row remain.
+    assert not any(l.startswith("Continuous rating (S1), torque")
+                  or l.startswith("Continuous rating (S1), shaft power")
+                  for l in by_label)
 
     # …and when NO duty in the report ever asked, the whole group is silent —
     # `_drop_empty` takes it out, exactly as the "Warning" row is taken out of

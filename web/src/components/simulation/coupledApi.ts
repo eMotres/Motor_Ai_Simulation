@@ -772,28 +772,35 @@ export function timeToLimitTip(t: TimeToLimit | null | undefined): string {
  * this machine may hold FOR EVER at this duty's own saved cooling, found from
  * the pass the loop already made. */
 
-/** "S1: 28.7 A rms · 1.04 N·m · 1.34 kW · limited by magnet 150 °C" — and
- *  `null` when it was not asked for.  A rating that could not be found still
- *  prints a line (there is always something to say about why), the way a
- *  refused `limits` pass still warns instead of going silent. */
+/** "S1: 34.4 A rms · limited by winding 200 °C" — and `null` when it was not
+ *  asked for.  A rating that could not be found still prints a line (there is
+ *  always something to say about why), the way a refused `limits` pass still
+ *  warns instead of going silent.
+ *
+ *  Owner addendum, 2026-09-21: *«не пиши уже мощность и момент — его и так
+ *  видно»* — the tiles already show the machine's numbers, and the S1 torque
+ *  is a linear estimate anyway, so the line names only the current and what
+ *  limits it.  Both are still in the stored block for the API/CLI
+ *  (`power.T_em_Nm` / `power.P_shaft_W`) and in the tooltip's per-part table. */
 export function continuousRatingLine(c: CouplingBlock | null | undefined):
     string | null {
   const r = c?.continuous_rating;
   if (!r) return null;
   if (r.trustworthy === false) {
-    return 'S1: NOT A RATING — the thermal solve was not monotone under this '
-      + 'cooling';
+    // The specific reason, when the block names one (a contradiction with
+    // this run's own time_to_limit verdict, a re-solve that never converged,
+    // the non-monotone-map case) — never only ever the one this line used to
+    // hard-code.
+    const why = r.notes?.find(n => n.startsWith('THE 2-D')
+                                  || n.startsWith('CONTRADICTS'))
+      ?? r.note ?? 'the map could not be iterated';
+    return `S1: NOT A RATING — ${why}`;
   }
   if (!r.ok || r.feasible === false || r.I_cont_A_rms == null) {
     return `S1: ${r.refusal?.error ?? r.note ?? 'no continuous rating under '
       + 'this cooling'}`;
   }
   const parts: string[] = [`${r.I_cont_A_rms.toFixed(1)} A rms`];
-  if (r.power?.T_em_Nm != null) {
-    parts.push(`${g1(Math.abs(r.power.T_em_Nm))} N·m`);
-  }
-  const pShaft = r.power?.P_shaft_W ?? r.power?.P_mech_W;
-  if (pShaft != null) parts.push(`${(pShaft / 1000).toFixed(2)} kW`);
   if (r.limiting_part) {
     const lim = r.limits_c?.[r.limiting_part];
     parts.push(`limited by ${r.limiting_part}`

@@ -18332,15 +18332,14 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
             return "—" if v is None else _fmt(v, d, unit)
         rows.append([label] + _col_vals(cols, _cell))
 
+    # Owner addendum, 2026-09-21: *«не пиши уже мощность и момент — его и так
+    # видно»* — the tiles already carry the machine's torque and power, and
+    # the S1 torque is a linear estimate anyway, so only the current and what
+    # limits it print here.  Both stay in the STORED block for the API/CLI
+    # (``power.T_em_Nm`` / ``power.P_shaft_W``) — nothing here computes them,
+    # this row group only reads what is already on the record.
     CR("Continuous rating (S1), current [A rms]",
        lambda b: _numf(b.get("I_cont_A_rms")), 1)
-    CR("Continuous rating (S1), torque, est. [N·m]",
-       lambda b: (None if _numf((b.get("power") or {}).get("T_em_Nm")) is None
-                  else abs(_numf((b.get("power") or {}).get("T_em_Nm")))), 3)
-    CR("Continuous rating (S1), shaft power, est. [W]",
-       lambda b: ((b.get("power") or {}).get("P_shaft_W")
-                  if (b.get("power") or {}).get("P_shaft_W") is not None
-                  else (b.get("power") or {}).get("P_mech_W")), 0)
     S("Continuous rating (S1), limited by",
       lambda c: continuous_rating_limit_words(_c(c)) or None)
     # …AND WHY THE PROVENANCE DIFFERS between two duties of one machine

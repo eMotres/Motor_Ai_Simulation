@@ -14,27 +14,20 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 // ── verbatim from coupledApi.ts ───────────────────────────────────────────
-function g1(v) {
-  return Number.isInteger(v) ? String(v) : v.toFixed(1);
-}
-
 function continuousRatingLine(c) {
   const r = c?.continuous_rating;
   if (!r) return null;
   if (r.trustworthy === false) {
-    return 'S1: NOT A RATING — the thermal solve was not monotone under this '
-      + 'cooling';
+    const why = r.notes?.find(n => n.startsWith('THE 2-D')
+                                  || n.startsWith('CONTRADICTS'))
+      ?? r.note ?? 'the map could not be iterated';
+    return `S1: NOT A RATING — ${why}`;
   }
   if (!r.ok || r.feasible === false || r.I_cont_A_rms == null) {
     return `S1: ${r.refusal?.error ?? r.note ?? 'no continuous rating under '
       + 'this cooling'}`;
   }
   const parts = [`${r.I_cont_A_rms.toFixed(1)} A rms`];
-  if (r.power?.T_em_Nm != null) {
-    parts.push(`${g1(Math.abs(r.power.T_em_Nm))} N·m`);
-  }
-  const pShaft = r.power?.P_shaft_W ?? r.power?.P_mech_W;
-  if (pShaft != null) parts.push(`${(pShaft / 1000).toFixed(2)} kW`);
   if (r.limiting_part) {
     const lim = r.limits_c?.[r.limiting_part];
     parts.push(`limited by ${r.limiting_part}`
@@ -81,10 +74,14 @@ const RATING = {
             + 'on 149.7 °C',
 };
 
-test('the line: current, torque, power, and the part it is limited by', () => {
+test('the line: only the current and the part it is limited by', () => {
+  // Owner addendum, 2026-09-21: *«не пиши уже мощность и момент — его и так
+  // видно»* — no torque, no power: the tiles already show the machine's
+  // numbers, and the S1 torque is a linear estimate anyway.  Both stay on
+  // the STORED block (RATING.power below) for the API/CLI and the tooltip.
   assert.equal(
     continuousRatingLine({ continuous_rating: RATING }),
-    'S1: 34.4 A rms · 1.2 N·m · 1.23 kW · limited by magnet 150 °C');
+    'S1: 34.4 A rms · limited by magnet 150 °C');
 });
 
 test('nothing to say when the answer was not asked for', () => {
@@ -109,10 +106,38 @@ test('a non-monotone map is flagged NOT A RATING, never quoted as a current', ()
     I_cont_A_rms: 72.1, trustworthy: false,
     notes: ['THE 2-D THERMAL SOLVE IS NOT MONOTONE under this cooling'] } };
   assert.equal(continuousRatingLine(bad),
-    'S1: NOT A RATING — the thermal solve was not monotone under this cooling');
+    'S1: NOT A RATING — THE 2-D THERMAL SOLVE IS NOT MONOTONE under this '
+    + 'cooling');
 });
 
-test('a feasible rating with no torque or power still shows the current', () => {
+// ── the production defect, 2026-09-21 ───────────────────────────────────────
+// The consistency guard (backend `_cr_consistency_guard`) flags a rating that
+// contradicts the loop's own time_to_limit verdict; this line must surface
+// THAT reason, not a hard-coded one.
+test('a contradiction with the loop is flagged and named', () => {
+  const contra = { continuous_rating: { ok: true, feasible: true,
+    I_cont_A_rms: 64.9, trustworthy: false, s: 1.0195,
+    notes: ['CONTRADICTS THE LOOP\'S OWN VERDICT: time_to_limit says this '
+           + 'point is OVER a limit (winding), yet the continuous rating '
+           + 'came out at or above the duty\'s own current (s=1.020) — a '
+           + 'point that reaches its limit cannot hold MORE current for '
+           + 'ever'] } };
+  const line = continuousRatingLine(contra);
+  assert.ok(line.startsWith('S1: NOT A RATING — CONTRADICTS'));
+  assert.ok(line.includes('cannot hold MORE current for ever'));
+});
+
+test('a re-solve failure falls back to the block\'s own note', () => {
+  const failed = { continuous_rating: { ok: true, feasible: true,
+    I_cont_A_rms: 64.9, trustworthy: false,
+    note: 'the fixed-point re-solve did not converge within the map-pass '
+         + 'budget, so this number is not a settled rating', notes: [] } };
+  assert.equal(continuousRatingLine(failed),
+    'S1: NOT A RATING — the fixed-point re-solve did not converge within '
+    + 'the map-pass budget, so this number is not a settled rating');
+});
+
+test('a feasible rating with no power on the block still shows the current', () => {
   const bare = { continuous_rating: { ok: true, feasible: true,
     I_cont_A_rms: 13.37, limiting_part: 'magnet',
     limits_c: { magnet: 149.9 } } };

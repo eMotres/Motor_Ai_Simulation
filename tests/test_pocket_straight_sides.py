@@ -722,6 +722,14 @@ GEO_50 = {
 #: Gaps swept over the recess: 0 (the magnet reaches the rim) up to 0.3 mm.
 RECESS_GAPS = [0.0, 0.05, 0.1, 0.2, 0.3]
 
+#: ``rotor_hole`` × ``magnet_up_gap``, minus the one pair that is not a machine:
+#: an opening NARROWER than a magnet flush with the rotor OD leaves retaining
+#: tabs of zero radial thickness, and 8258ad0 turned that into a loud
+#: ``geometry_validation.rotor_hole_gap_error`` — see
+#: ``tests/test_geometry_validation.py::TestRotorHoleFlushMagnet``.
+HOLE_GAP_MATRIX = [(h, g) for h in (0.9, 1.0) for g in RECESS_GAPS
+                   if not (h < 1.0 and g <= 0.0)]
+
 #: sha1 of the Ø200 rotor's rings at magnet_up_gap = 0 (`_coord_hash`), i.e. the
 #: `CIANO10 200 opt` recipe.  The cusp fix must not move a coordinate of it —
 #: 1.2 × its own weld tolerance is 1.2 × 200/4000 = 0.06 mm, the constant that
@@ -812,9 +820,8 @@ def test_the_fillet_meets_the_pocket_wall_at_a_finite_angle(gap):
         f"elements (user 2026-09-07, 2026-09-21)")
 
 
-@pytest.mark.parametrize("gap", RECESS_GAPS)
-@pytest.mark.parametrize("hole", [0.9, 1.0])
-def test_the_mechanical_mesh_has_no_sub_degree_element(gap, hole):
+@pytest.mark.parametrize("hole,gap", HOLE_GAP_MATRIX)
+def test_the_mechanical_mesh_has_no_sub_degree_element(hole, gap):
     """The measurement the fix is judged on, on the mesh the solver uses.
 
     Before: 22 elements under 1°, the smallest 6.2e-19 mm², minimum angle

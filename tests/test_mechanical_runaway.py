@@ -380,8 +380,14 @@ def _solve_ciano50(hole: float, gap: float, rpm: float = 20000.0):
         lift_off_solves=0, case_mode="single", loads="centrifugal")
 
 
-@pytest.mark.parametrize("hole", [0.9, 1.0])
-@pytest.mark.parametrize("gap", [0.0, 0.05, 0.1, 0.3])
+#: ``rotor_hole`` × ``magnet_up_gap``, minus (0.9, 0.0): an opening narrower
+#: than a magnet flush with the rotor OD leaves zero-thickness retaining tabs
+#: and is refused by ``geometry_validation.rotor_hole_gap_error`` (8258ad0).
+CIANO50_MATRIX = [(h, g) for h in (0.9, 1.0) for g in (0.0, 0.05, 0.1, 0.3)
+                  if not (h < 1.0 and g <= 0.0)]
+
+
+@pytest.mark.parametrize("hole,gap", CIANO50_MATRIX)
 def test_the_recessed_magnet_solves_at_every_gap(hole, gap):
     """The pair the owner needs: any magnet_up_gap on either pocket.
 

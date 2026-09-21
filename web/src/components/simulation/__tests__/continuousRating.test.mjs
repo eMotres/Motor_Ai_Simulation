@@ -292,3 +292,85 @@ test('the action never throws when storage is unavailable (private window)',
     globalThis.window = prevWin;
   }
 });
+
+// ── AUTO-SET on a VERIFIED S1 run (owner 2026-09-21, fourth round) ─────────
+// Screenshot: after a `continuous` run the dashboard DIMMED and the panel
+// still read the setpoint (63.64 A) under tiles at the S1 machine (48.6 A) —
+// *«почему замыленный экран … опять токи не совпадают»*.  The dimming is
+// SummaryTable's own `opStale` guard (current vs `liveOp.current`), so
+// closing the gap between the panel and the S1 record clears it by itself.
+
+// ── verbatim from coupledApi.ts (repo convention, see file header) ─────────
+function s1AutoSetPlan(c, prevA) {
+  const r = c?.continuous_rating;
+  if (!r || r.record_is_s1 !== true || r.verified !== true
+      || r.I_cont_A_rms == null) return null;
+  if (prevA == null || !Number.isFinite(prevA)) return null;
+  const to = r.I_cont_A_rms;
+  if (Math.abs(prevA - to) <= 0.05) return null;
+  return { from: prevA, to };
+}
+
+function s1AutoSetNoticeText(plan) {
+  return `Operating point set to the continuous current ${plan.to.toFixed(1)} A rms `
+       + `(was ${plan.from.toFixed(2)} A) — undo`;
+}
+
+test('a verified S1 record plans a move from the panel to the S1 current', () => {
+  const verified = { continuous_rating: { ...RATING, record_is_s1: true,
+    verified: true, I_cont_A_rms: 48.6,
+    duty_point: { I_phase_rms_A: 63.64 } } };
+  assert.deepEqual(s1AutoSetPlan(verified, 63.64), { from: 63.64, to: 48.6 });
+});
+
+test('the notice names both currents and ends in the clickable word', () => {
+  assert.equal(
+    s1AutoSetNoticeText({ from: 63.64, to: 48.6 }),
+    'Operating point set to the continuous current 48.6 A rms '
+    + '(was 63.64 A) — undo');
+});
+
+test('never plans a move for an UNVERIFIED rating — estimate or contradiction', () => {
+  const estimate = { continuous_rating: { ...RATING, record_is_s1: true,
+    verified: false, I_cont_A_rms: 48.6 } };
+  assert.equal(s1AutoSetPlan(estimate, 63.64), null);
+  const noS1yet = { continuous_rating: { ...RATING, record_is_s1: false,
+    verified: true, I_cont_A_rms: 48.6 } };
+  assert.equal(s1AutoSetPlan(noS1yet, 63.64), null);
+  assert.equal(s1AutoSetPlan(undefined, 63.64), null);
+  assert.equal(s1AutoSetPlan({}, 63.64), null);
+});
+
+test('never plans a move with nothing to compare against, or nothing to move', () => {
+  const verified = { continuous_rating: { ...RATING, record_is_s1: true,
+    verified: true, I_cont_A_rms: 48.6 } };
+  assert.equal(s1AutoSetPlan(verified, null), null);
+  assert.equal(s1AutoSetPlan(verified, undefined), null);
+  assert.equal(s1AutoSetPlan(verified, NaN), null);
+});
+
+test('nothing to say once the panel already agrees (same 0.05 A tolerance '
+   + 'as the staleness guard) — this is what makes the effect fire ONCE per '
+   + 'run and clears without re-announcing itself', () => {
+  const verified = { continuous_rating: { ...RATING, record_is_s1: true,
+    verified: true, I_cont_A_rms: 48.6 } };
+  assert.equal(s1AutoSetPlan(verified, 48.6), null);
+  assert.equal(s1AutoSetPlan(verified, 48.63), null);   // inside 0.05 A
+  assert.notEqual(s1AutoSetPlan(verified, 48.66), null); // just outside it
+});
+
+// ── the wiring lives in PhysicsDashboard, gated the same way the S1 line is ─
+test('PhysicsDashboard auto-applies only a verified S1 record, with a '
+   + 'visible undo, never silently', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const src = readFileSync(
+    join(here, '..', '..', 'simulation', 'PhysicsDashboard.tsx'), 'utf8');
+  assert.ok(src.includes('s1AutoSetPlan('),
+    'PhysicsDashboard must gate the auto-set through s1AutoSetPlan');
+  assert.ok(src.includes('applyS1AsOperatingPoint(plan.to)'),
+    'the plan\'s target current must be written through the shared setter');
+  assert.ok(src.includes('undoS1Notice') && src.includes('onClick={undoS1Notice}'),
+    'the notice must offer a clickable undo, not just a message');
+  assert.ok(src.includes('s1AutoSetNoticeText('),
+    'the visible line must use the shared wording, not a re-typed one');
+});

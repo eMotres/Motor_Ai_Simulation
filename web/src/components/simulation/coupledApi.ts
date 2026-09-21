@@ -899,14 +899,57 @@ export function s1ResultsAtLine(c: CouplingBlock | null | undefined):
  *  reading (derived from it) and the panel's own state stay consistent and
  *  the value persists exactly like one the user typed.
  *
- *  NEVER CALLED SILENTLY (project rule): this is the effect of an explicit
- *  button click next to the S1 line — "Use N A as the operating point" —
- *  never a side effect of loading or rendering a record. */
+ *  NEVER SILENT (project rule): called either by an explicit button click
+ *  next to the S1 line — "Use N A as the operating point" — or by the
+ *  auto-set below for a verified S1 run, which always pairs the call with a
+ *  visible notice + undo (`s1AutoSetPlan` / PhysicsDashboard); never a bare
+ *  side effect of loading or rendering a record with nothing said on
+ *  screen. */
 export function applyS1AsOperatingPoint(i_A_rms: number): void {
   try { localStorage.setItem('sim.current', JSON.stringify(i_A_rms)); }
   catch { /* best effort — the field simply is not updated */ }
   try { window.dispatchEvent(new Event('sim-settings-restored')); }
   catch { /* best effort */ }
+}
+
+/* ── AUTO-SET on a VERIFIED S1 run (owner 2026-09-21, fourth round) ─────────
+ * Screenshot after a `continuous` coupled run: the dashboard DIMMED (the
+ * stale/"different point" verdict) and the Operating point panel still read
+ * the setpoint (63.64 A) under tiles at the S1 machine (48.6 A) — *«почему
+ * замыленный экран после окончания каплинга и почему опять токи не
+ * совпадают»*.  The manual "Use N A as the operating point" button (above)
+ * sits at the far right of a row and was not noticed.  This is the same
+ * setter, called once by the run itself — but ONLY for a REAL S1
+ * verification pass that replaced the record (`record_is_s1` AND
+ * `verified === true`); an estimate or a contradiction must never move the
+ * setpoint (rule 2 of the brief) — `continuousRatingLine` already says why
+ * in that case. */
+
+/** Whether THIS record should move the panel, and what to say if so.  `prevA`
+ *  is the panel's OWN current at the moment the record arrived (captured
+ *  before the write, so the notice can name what it was).  `null` when
+ *  nothing should move: not S1, not verified, no number to apply, or the
+ *  panel already reads within the same 0.05 A tolerance SummaryTable's own
+ *  staleness check uses (nothing to announce). */
+export function s1AutoSetPlan(c: CouplingBlock | null | undefined,
+    prevA: number | null | undefined): { from: number; to: number } | null {
+  const r = c?.continuous_rating;
+  if (!r || r.record_is_s1 !== true || r.verified !== true
+      || r.I_cont_A_rms == null) return null;
+  if (prevA == null || !Number.isFinite(prevA)) return null;
+  const to = r.I_cont_A_rms;
+  if (Math.abs(prevA - to) <= 0.05) return null;
+  return { from: prevA, to };
+}
+
+/** "Operating point set to the continuous current 48.6 A rms (was 63.64 A) —
+ *  undo" — the one visible line the brief asks for.  Ends in the literal word
+ *  "undo" so a caller that needs it clickable can slice it off the end and
+ *  render its own control in its place (`PhysicsDashboard` does this) without
+ *  duplicating the number formatting. */
+export function s1AutoSetNoticeText(plan: { from: number; to: number }): string {
+  return `Operating point set to the continuous current ${plan.to.toFixed(1)} A rms `
+       + `(was ${plan.from.toFixed(2)} A) — undo`;
 }
 
 /** One decimal, and none when it is a whole number. */

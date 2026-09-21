@@ -23,6 +23,8 @@ import SummaryTable        from './SummaryTable';
 import StoredRunSelector   from './StoredRunSelector';
 import { useMotorStore }   from '../../stores/motorStore';
 import { geoSignature }    from '../common/geoSig';
+import { applyS1AsOperatingPoint, s1AutoSetPlan, s1AutoSetNoticeText }
+                            from './coupledApi';
 import type { TransientSummary } from './SummaryTable';
 import type { FemPayload } from './fem-types';
 
@@ -144,6 +146,38 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
   // "vs applied point" delta chip removed (user request 2026-08-20): the
   // header line had no room for it and the η delta was routinely nonsense
   // when the applied point carried no recorded results.
+
+  // ── AUTO-SET the operating point from a VERIFIED S1 run (owner 2026-09-21,
+  // fourth round, screenshot: the dashboard DIMMED after a `continuous` run
+  // and the panel still read the setpoint 63.64 A under tiles at 48.6 A —
+  // *«почему замыленный экран … опять токи не совпадают»*).  The dimming
+  // IS SummaryTable's own operating-point staleness guard (`opStale`, current
+  // vs `liveOp.current`) — this is the current mismatch, not the geometry
+  // fingerprint (the "3D ×0.951 ⚠ recompute" chip is the unrelated inherited
+  // passport).  Fixing the mismatch clears the dim by itself: writing the S1
+  // current through the SAME setter the manual button already used
+  // (`applyS1AsOperatingPoint`) brings `liveOp.current` back within the
+  // guard's own 0.05 A tolerance.  Only for a REAL verification pass
+  // (`s1AutoSetPlan` — record_is_s1 AND verified === true); an estimate or a
+  // contradiction never moves the setpoint (rule 2 of the brief), and the S1
+  // line already says why.  Never silent (project rule): one visible line
+  // under the header, with an undo back to the previous setpoint.
+  const [s1Notice, setS1Notice] =
+    React.useState<{ from: number; to: number } | null>(null);
+  const s1AppliedForRef = React.useRef<TransientSummary | null>(null);
+  React.useEffect(() => {
+    if (!transientSummary || s1AppliedForRef.current === transientSummary) return;
+    s1AppliedForRef.current = transientSummary;      // once per NEW run only
+    const plan = s1AutoSetPlan(transientSummary.coupling, I_phase_rms ?? null);
+    if (!plan) return;
+    applyS1AsOperatingPoint(plan.to);
+    setS1Notice(plan);
+  }, [transientSummary, I_phase_rms]);
+  const undoS1Notice = React.useCallback(() => {
+    if (!s1Notice) return;
+    applyS1AsOperatingPoint(s1Notice.from);
+    setS1Notice(null);
+  }, [s1Notice]);
   // Forward the shown summary to the parent (for the Save-simulation snapshot) and
   // persist it, so "Save as new motor" stamps the card with the numbers the user
   // actually SEES here — not a stale .last_transient on disk.
@@ -171,6 +205,23 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
         <StoredRunSelector />
         <Box sx={{ flex: 1 }}/>
       </Box>
+
+      {/* ── S1 auto-set notice (owner 2026-09-21, fourth round) — never silent:
+           the setpoint just moved on its own, so this says to what, from what,
+           and offers the one click back.  `undo` restores the PREVIOUS
+           setpoint through the same setter, exactly like a typed value. ── */}
+      {s1Notice && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+          px: 1.25, py: 0.75, borderRadius: 1, bgcolor: 'rgba(74,222,128,0.10)',
+          border: '1px solid #16a34a', color: '#4ade80', fontSize: 12,
+          fontWeight: 600, alignSelf: 'flex-start' }}>
+          <span>{s1AutoSetNoticeText(s1Notice).slice(0, -'undo'.length)}</span>
+          <Box component="span" onClick={undoS1Notice}
+            sx={{ textDecoration: 'underline', cursor: 'pointer', fontWeight: 700 }}>
+            undo
+          </Box>
+        </Box>
+      )}
 
       {/* ── Top-of-tab summary card — populated by TransientCharts, or by a
            design applied from the Sweep tab (numbers reused, no re-run) ── */}

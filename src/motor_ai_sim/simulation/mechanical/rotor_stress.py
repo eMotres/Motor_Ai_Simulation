@@ -1279,9 +1279,23 @@ def _build_rotor_mesh(polys: dict,
     # 20 µm is far below the 0.25 mm minimum element and below any real flux
     # barrier, so nothing that is physically separate is joined by this.
     if weld_tol_mm > 0:
-        q = np.round(pts / weld_tol_mm).astype(np.int64)
-        # Check the 4 neighbouring buckets too, so a pair straddling a bucket
-        # edge still welds.
+        q = np.floor(pts / weld_tol_mm).astype(np.int64)
+        # Check the neighbouring buckets too, so a pair straddling a bucket edge
+        # still welds — ALL EIGHT of them (2026-09-21).  The bucket key used to
+        # be `round`, which puts a point in the cell its coordinate is NEAREST
+        # to, while the scan only looked at the (0, -1) x (0, -1) corner; two
+        # points 15 µm apart then landed in cells (696, 218) and (697, 217) and
+        # were never compared.  That is not academic: on the owner's Ø50
+        # straight pocket exactly such a pair — the magnet's fillet junction and
+        # a gmsh node 15 µm along its own edge — survived the weld as a third
+        # COLLINEAR node, and the triangle spanning the three came out with a
+        # 0.00° angle and 2e-18 mm² of area.  Fifteen of them per rotor was
+        # enough to freeze the contact solve (every pair closed to 2e-16 µm, the
+        # rotor deforming 0.05 µm instead of 6, the bore reacting 0.5 % of the
+        # applied torque) and the machine was refused as a runaway.  `floor` +
+        # the full 3 x 3 neighbourhood is the correct pair of choices: with a
+        # cell of exactly the tolerance, two points within it differ by at most
+        # one cell on each axis, in either direction.
         first: Dict[Tuple[int, int], int] = {}
         rep = np.arange(pts.shape[0])
         # ── which node SURVIVES a weld (2026-09-09) ─────────────────────────
@@ -1305,8 +1319,8 @@ def _build_rotor_mesh(polys: dict,
                                     np.nonzero(~on_ray)[0]])
         for i in visit:
             hit = None
-            for dx in (0, -1):
-                for dy in (0, -1):
+            for dx in (0, -1, 1):
+                for dy in (0, -1, 1):
                     hit = first.get((int(q[i, 0]) + dx, int(q[i, 1]) + dy))
                     if hit is not None and \
                             abs(pts[hit, 0] - pts[i, 0]) <= weld_tol_mm and \
@@ -1324,6 +1338,44 @@ def _build_rotor_mesh(polys: dict,
             # Welding can collapse a sliver into a line — drop those.
             keep = (t[:, 0] != t[:, 1]) & (t[:, 1] != t[:, 2]) & (t[:, 0] != t[:, 2])
             t = t[keep]
+            used = np.unique(t)
+            remap = -np.ones(pts.shape[0], dtype=np.int64)
+            remap[used] = np.arange(used.size)
+            pts = pts[used]
+            t = remap[t]
+
+    # ── drop COLLINEAR triangles (2026-09-21) ───────────────────────────────
+    # A triangle whose three nodes sit on one straight line has no interior: it
+    # is a node that landed ON an edge of its neighbour, not a piece of the
+    # machine.  Its element stiffness matrix is singular, and a handful of them
+    # is enough to make the whole answer nonsense — on the owner's Ø50 straight
+    # pocket eight of these (2e-17 mm², 0.00°) froze the contact solve: every
+    # pair closed to 2e-16 µm, the rotor deformed 0.05 µm instead of 6, the bore
+    # reacted 0.5 % of the applied torque and the machine was refused as a
+    # runaway (`RotorRanAway`).  They come out of OCC's `fragment`, whose
+    # boolean tolerance (10 µm) is coarser than the tip of the air wedge between
+    # a magnet's corner fillet and the straight pocket wall beside it, so the
+    # two edges there are neither merged nor cleanly separated; the 20 µm node
+    # weld above catches most and this catches the rest.
+    #
+    # The threshold is RELATIVE to the mesh's own elements — a millionth of the
+    # median area, which on this rotor is 2.4e-7 mm² against a smallest honest
+    # element of 1.8e-4 — so nothing a mesher meant to build is ever dropped.
+    # Removing one cannot open a hole (it encloses no area) but it can in
+    # principle unlink two regions, which the connectivity check below would
+    # then refuse loudly rather than solve.
+    if t.shape[0]:
+        _v0, _v1, _v2 = pts[t[:, 0]], pts[t[:, 1]], pts[t[:, 2]]
+        _a = 0.5 * np.abs((_v1[:, 0] - _v0[:, 0]) * (_v2[:, 1] - _v0[:, 1])
+                          - (_v2[:, 0] - _v0[:, 0]) * (_v1[:, 1] - _v0[:, 1]))
+        _floor = 1e-6 * float(np.median(_a)) if _a.size else 0.0
+        _degen = _a <= _floor
+        if _degen.any():
+            _log.warning("rotor mesh: dropped %d collinear element(s) "
+                        "(area <= %.3g mm2, smallest %.3g mm2) — a node on a "
+                        "neighbour's edge, not a piece of the machine",
+                        int(_degen.sum()), _floor, float(_a.min()))
+            t = t[~_degen]
             used = np.unique(t)
             remap = -np.ones(pts.shape[0], dtype=np.int64)
             remap[used] = np.arange(used.size)

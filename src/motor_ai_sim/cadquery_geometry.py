@@ -647,57 +647,6 @@ def _extended_pocket(p: Dict) -> bool:
         return False
 
 
-def _pocket_bridge(p: Dict) -> float:
-    """Thickness (mm) of the iron BRIDGE that closes a straight-sided pocket
-    over the magnet — ``magnet_up_gap`` when there is one, 0.0 when there is not.
-
-    WHY (user 2026-09-21, after the Ø50 CIANO14 50 / L15 refused to solve):
-    "мне нужно сделать запас magnet_up_gap = 0.1, чтобы магниты не выскочили
-    наружу, я должен проверить деформации … эта пара должна работать при любом
-    значении magnet_up_gap".
-
-    Until then ``rotor_hole >= 1`` meant ONE machine: the Ø200 recipe, where the
-    magnet reaches the rotor OD (``magnet_up_gap = 0``) and is retained by a
-    carbon sleeve, so the pocket's straight sides are run out to the OD and the
-    pocket is open at the rim.  Running them to the OD at ``magnet_up_gap > 0``
-    as well threw the retaining iron away and left the magnet's top edge
-    ``magnet_up_gap`` short of a rim the pocket had already cut through: a
-    0.1 mm crescent of pocket air whose two ends are wedges of ZERO angle.  On
-    the Ø50 that meshed into 22 triangles of 6e-19 mm² with a 0.00° minimum
-    angle (against 6e-4 mm² / 3.7° at ``magnet_up_gap = 0``), the magnet locked
-    in its pocket at ±105 MPa with every contact pair closed to 2e-16 µm, the
-    rotor stopped deforming (0.05 µm against 6.2) and the bore reacted 0.5 % of
-    the applied torque — `rotor_stress.RotorRanAway`.
-
-    With a bridge the pocket IS the magnet outline: no extension, no corner on
-    the rim, and the iron between the magnet's top arc and the OD stays where
-    the user drew it, continuous and joined to both pole pieces — the same
-    retaining iron ``rotor_hole < 1`` leaves, minus the rectangular slot.  Sides
-    are still straight: they are the magnet's own side edges.
-
-    ``magnet_up_gap = 0`` is unchanged and MUST stay so — the Ø200 die
-    (`CIANO10 200 opt`) is built from it and its polygons are asserted
-    bit-identical in `tests/test_pocket_straight_sides.py`."""
-    if not _extended_pocket(p):
-        return 0.0
-    try:
-        g = float(p.get('magnet_up_gap', 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-    return g if g > 1e-9 else 0.0
-
-
-def _pocket_open_to_od(p: Dict) -> bool:
-    """True when the straight-sided pocket is run OUT to the rotor OD.
-
-    That is ``rotor_hole >= 1`` AND no bridge, i.e. ``magnet_up_gap = 0``.  Every
-    consumer of the "extend the sides to the rim" behaviour asks THIS, not
-    `_extended_pocket`: with a bridge there is no pocket vertex on the rim, so
-    the rim ring, the pocket polygon, the 3-D cut and the pole-tip fillet band
-    must all behave the way they do for `rotor_hole < 1`."""
-    return _extended_pocket(p) and _pocket_bridge(p) <= 0.0
-
-
 def _pocket_side_to_od(p_low, p_top, rotor_or: float):
     """Where the magnet's side edge ``p_low → p_top``, extended BEYOND p_top,
     crosses the circle r = rotor_or.
@@ -1034,9 +983,24 @@ def _open_fillet_at_top(poly, r_top: float, min_deg: float = 12.0,
             return poly
         r = _np.hypot(P[:, 0], P[:, 1])
         # 'on the circle' must tolerate the ring sanitiser's welds (up to
-        # diameter/4000 = 0.05 mm here): a welded station read as an off-circle
+        # diameter/4000 = `weld_tol`): a welded station read as an off-circle
         # point looked like a 1.4 deg 'junction' and confused the chain walk.
-        on_top = _np.abs(r - float(r_top)) < max(1e-6 * max(1.0, float(r_top)), 0.06)
+        #
+        # 1.2 x THAT, not a constant.  It used to be a flat 0.06 mm, which is
+        # 1.2 x the Ø200's own 0.05 mm weld and was therefore right on the
+        # machine it was measured on — and five times too generous on a Ø50,
+        # where the weld is 0.0125 mm.  On the owner's CIANO14 50 / L15
+        # (magnet_fill_radius 0.2 mm, fillet chords 0.069 mm) that band swallowed
+        # the fillet's own vertices: the first vertex past the wall junction sat
+        # 0.046 mm from the top circle, `_walk` read it as "on the top arc",
+        # broke out before dropping anything, and the fillet kept arriving at the
+        # pocket wall TANGENTIALLY.  The 4 µm cusp that leaves meshed into 22
+        # triangles of 0.00 deg in the mechanical mesh, which froze the contact
+        # solve and refused the machine (2026-09-21).  Scaled to the weld the
+        # band means what it says and the Ø200's value is unchanged to the bit
+        # (1.2 x 200/4000 = 0.06).
+        _top_band = max(1e-6 * max(1.0, float(r_top)), 1.2 * float(weld_tol))
+        on_top = _np.abs(r - float(r_top)) < _top_band
         keep = _np.ones(n, bool)
 
         def _ang(u, w):
@@ -1997,7 +1961,7 @@ class CadQueryMotor:
                                          rotor_outer_r - mag_up_gap,
                                          _scale_mm,
                                          open_top=(float(mag_up_gap) <= 1e-9),
-                                          open_wall=_pocket_open_to_od(p))
+                                          open_wall=_extended_pocket(p))
             profile = [(float(x), float(y))
                        for x, y in list(_mp.exterior.coords)[:-1]]
         except Exception as e:                       # noqa: BLE001
@@ -2077,20 +2041,13 @@ class CadQueryMotor:
             .extrude(width)
         )
 
-        # rotor_hole >= 1 AND magnet_up_gap = 0 — the WHOLE pocket, straight
-        # sides run to the OD (see `_pocket_open_to_od`).  Not an "opening" any
-        # more: the cut IS the magnet outline with its side edges extended, so
-        # `build_all`'s later `rotor.cut(magnet)` finds nothing left to remove
-        # and the 3-D solid is the same shape the mesher solves.  User
-        # 2026-09-06: "нужно сделать грань ротора прямой".
-        #
-        # With magnet_up_gap > 0 the pocket is CLOSED by a bridge of iron (see
-        # `_pocket_bridge`, user 2026-09-21), so there is nothing to cut here at
-        # all: `rect_depth` is 0 for every straight-sided pocket and the loop
-        # below falls straight through, leaving the plain annulus for
-        # `build_all`'s `rotor.cut(magnet)` to open — which is exactly the
-        # pocket, bridge and all.
-        if _pocket_open_to_od(p):
+        # rotor_hole >= 1 — the WHOLE pocket, straight sides run to the OD (see
+        # `_extended_pocket`).  Not an "opening" any more: the cut IS the magnet
+        # outline with its side edges extended, so `build_all`'s later
+        # `rotor.cut(magnet)` finds nothing left to remove and the 3-D solid is
+        # the same shape the mesher solves.  User 2026-09-06: "нужно сделать
+        # грань ротора прямой".
+        if _extended_pocket(p):
             rotor_house_h = p['rotor_house_height']
             mag_down_h = p['magnet_down_height']
             mag_fill_down = p['magnet_fill_down']
@@ -2551,18 +2508,14 @@ class CadQueryMotor:
             return _fillet_magnet_top_arc(SPoly(pts), fillet_r,
                                           mag_r_top, scale_mm,
                                           open_top=(float(mag_up_gap) <= 1e-9),
-                                          open_wall=_pocket_open_to_od(p))
+                                          open_wall=_extended_pocket(p))
 
         # rotor_hole >= 1: no rectangle at all — the pocket is the magnet
-        # outline, with its side edges extended straight to the OD when the
-        # magnet reaches the rim (magnet_up_gap = 0, `_pocket_open_to_od`, user
-        # 2026-09-06) and NOT extended when an iron bridge closes it over the
-        # magnet (magnet_up_gap > 0, `_pocket_bridge`, user 2026-09-21) — there
-        # the pocket is the magnet and `hole = mp` below.  Only for
-        # rotor_hole < 1: the rectangular cut above each magnet — matches 3D
-        # _create_rotor:
+        # outline with its side edges extended straight to the OD (see
+        # `_extended_pocket`, user 2026-09-06).  Below, only for rotor_hole < 1:
+        # the rectangular cut above each magnet — matches 3D _create_rotor:
         #   rect(rec_w, -mag_h).translate((-rec_w/2, rotor_outer_r)).rotate(angle)
-        _ext_pocket = _pocket_open_to_od(p)
+        _ext_pocket = _extended_pocket(p)
         mag_angle_up_hole = pole_angle_r * mag_fu * magnet_hole / 2  # radians
         rec_w = 2 * rotor_or * sin(mag_angle_up_hole)
         _rd = _pocket_cut_depth(p)          # see _create_rotor: opening only
@@ -2622,7 +2575,7 @@ class CadQueryMotor:
         # One difference call with the union of all holes — preserves
         # bridges between adjacent magnets and clips any sliver that
         # would stick past rotor_or.
-        if _ext_pocket:
+        if _extended_pocket(p):
             # Share the pocket OD corners with the rim (see
             # _od_ring_with_pocket_corners): no needle at the corners.
             rotor_disk = SPoly(_od_ring_with_pocket_corners(rotor_or, hole_polys),
@@ -2646,7 +2599,7 @@ class CadQueryMotor:
                 # corners near the OD ARE the pole tips, so the band is fixed —
                 # the up_gap-scaled band was 0 at up_gap 0 and the tips stayed
                 # sharp (user 2026-09-06: "ты забыл применить это на углы ротора").
-                _band = (1.5 if _pocket_open_to_od(self.parameters)
+                _band = (1.5 if _extended_pocket(self.parameters)
                          else min(1.5, 0.6 * float(self.parameters.get('magnet_up_gap', 1.5) or 1.5)))
                 _f = _round_corners_vertex(rotor_poly, _rfr, surface_band=_band,
                                            scale_mm=scale_mm)
@@ -3118,16 +3071,13 @@ class CadQueryMotor:
             # 0.048 mm² magnet∩iron, static-3D validator, 2026-08-24).
             return _fillet_magnet_top_arc(SPoly(pts), fr, mag_r_top, scale_mm,
                                           open_top=(float(mag_up_gap) <= 1e-9),
-                                          open_wall=_pocket_open_to_od(p))
+                                          open_wall=_extended_pocket(p))
 
         # rotor_hole >= 1: no rectangle at all — the pocket is the magnet
-        # outline, its side edges extended straight to the OD only when the
-        # magnet reaches the rim (magnet_up_gap = 0, `_pocket_open_to_od`, user
-        # 2026-09-06); with magnet_up_gap > 0 an iron BRIDGE closes it over the
-        # magnet (`_pocket_bridge`, user 2026-09-21) and the pocket IS the
-        # magnet (`hole = mp`).  Rectangular cut above each magnet,
-        # rotor_hole < 1 only:
-        _ext_pocket = _pocket_open_to_od(p)
+        # outline with its side edges extended straight to the OD (see
+        # `_extended_pocket`, user 2026-09-06).  Rectangular cut above each
+        # magnet, rotor_hole < 1 only:
+        _ext_pocket = _extended_pocket(p)
         mag_angle_up_hole = pole_angle_r * mag_fu * magnet_hole / 2
         rec_w = 2 * rotor_or * sin(mag_angle_up_hole)
         _rd = _pocket_cut_depth(p)          # see _create_rotor: opening only

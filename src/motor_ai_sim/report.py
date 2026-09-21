@@ -18045,31 +18045,56 @@ def continuous_rating_words(rec: Optional[Dict[str, Any]]) -> str:
     return "%s A rms%s" % (_fmt(i, 1, ""), tail)
 
 
+def _continuous_rating_setpoint_words(blk: Mapping[str, Any]) -> str:
+    """"setpoint 63.64 A rms, continuous 48.6 A rms" — ``""`` unless the
+    record actually moved to the S1 machine (owner 2026-09-21, third round:
+    *«опять токи не совпадают»* — the setpoint's own current and the
+    rating's must never be silently conflated once a real S1 verification
+    pass has made them two different machines on one record)."""
+    if not blk.get("record_is_s1"):
+        return ""
+    i_set = _numf((blk.get("duty_point") or {}).get("I_phase_rms_A"))
+    i_cont = _numf(blk.get("I_cont_A_rms"))
+    if i_set is None or i_cont is None:
+        return ""
+    return ("setpoint %s A rms, continuous %s A rms"
+            % (_fmt(i_set, 2, ""), _fmt(i_cont, 1, "")))
+
+
 def continuous_rating_clause(rec: Optional[Dict[str, Any]]) -> str:
-    """ONE clause: the verification status when the block has one — a REAL
-    electromagnetic pass at this current (owner 2026-09-21: *«почему сразу не
-    пересчитывается электромагнитное моделирование … токи не совпадают»*)
-    replaces the linear estimate's approximation with the honest fact that it
-    either was, or was not, confirmed.  The house rule for these notes is a
-    single "; …" and never a sentence of its own."""
+    """ONE clause: which current is which (owner 2026-09-21, third round),
+    then the verification status when the block has one — a REAL
+    electromagnetic pass at this current (owner 2026-09-21, second round:
+    *«почему сразу не пересчитывается электромагнитное моделирование … токи
+    не совпадают»*) replaces the linear estimate's approximation with the
+    honest fact that it either was, or was not, confirmed.  The house rule
+    for these notes is a single "; …" and never a sentence of its own —
+    several facts joined by "; " still read as one clause."""
     blk = continuous_rating_of(rec)
     if blk is None or not continuous_rating_feasible(blk):
         return ""
     cooling = blk.get("cooling_label")
-    tail = ("; " + cooling) if cooling else ""
+    parts: List[str] = []
+    setpoint_words = _continuous_rating_setpoint_words(blk)
+    if setpoint_words:
+        parts.append(setpoint_words)
     if blk.get("verified") is True:
-        n = blk.get("verification_passes")
         miss = _numf(blk.get("miss_K"))
-        return ("; confirmed with a real electromagnetic pass at this "
-                "current%s%s"
-                % ("" if miss is None else " (%s K of the limit)"
-                   % _fmt(abs(miss), 1, ""), tail))
-    if blk.get("verified") is False:
-        why = blk.get("note") or "not verified"
-        return "; NOT VERIFIED — %s%s" % (why, tail)
-    # No verification was attempted at all (no card limit to verify against).
-    return ("; torque linear in current, iron and magnet losses held at the "
-            "solved point%s" % tail)
+        parts.append("confirmed with a real electromagnetic pass at this "
+                     "current" + ("" if miss is None else
+                                  " (%s K of the limit)"
+                                  % _fmt(abs(miss), 1, "")))
+    elif blk.get("verified") is False:
+        parts.append("NOT VERIFIED — %s" % (blk.get("note")
+                                                 or "not verified"))
+    else:
+        # No verification was attempted at all (no card limit to verify
+        # against) — the number is still the linear estimate.
+        parts.append("torque linear in current, iron and magnet losses "
+                     "held at the solved point")
+    if cooling:
+        parts.append(cooling)
+    return "; " + "; ".join(parts) if parts else ""
 
 
 def continuous_rating_limit_words(rec: Optional[Dict[str, Any]]) -> str:

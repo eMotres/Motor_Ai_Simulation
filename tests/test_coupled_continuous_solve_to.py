@@ -94,7 +94,13 @@ _RATING_BLOCK = {
 #: (owner 2026-09-21, second addendum) — for the report/datasheet tests, which
 #: read a static record and never run the loop's own verification logic.
 _RATING_BLOCK_VERIFIED = {**_RATING_BLOCK, "verified": True,
-                          "verification_passes": 1, "miss_K": -0.5}
+                          "verification_passes": 1, "miss_K": -0.5,
+                          "record_is_s1": True,
+                          "duty_point": {"I_phase_rms_A": 63.64,
+                                        "T_em_Nm": 2.21,
+                                        "verdict": "Runs 45 s from cold at "
+                                                   "this cooling, then the "
+                                                   "winding reaches 200 °C"}}
 
 
 def _fake_rating(monkeypatch, *, block=None):
@@ -128,6 +134,11 @@ def test_limits_alone_grows_no_continuous_rating_key(client, monkeypatch):
     # …and the stop rule is exactly what it was: one pass at the body's own
     # temperature, one AT the limit.
     assert seen["coil_in"] == [120.0, 200.0]
+    # `limits` mode makes no S1 pass, so its own "the numbers below are the
+    # machine at that moment" is still TRUE — the tail must survive here,
+    # untouched by the third-round rewording (that only ever fires after a
+    # real S1 verification replaced the record).
+    assert "the numbers below are the machine at that moment" in c["limited"]["line"]
 
 
 def test_the_default_grows_no_continuous_rating_key(client, monkeypatch):
@@ -173,6 +184,18 @@ def test_continuous_stops_the_loop_exactly_as_limits_does(client, monkeypatch):
     # …and the setpoint's own story survives, unabbreviated.
     assert cr["duty_point"]["I_phase_rms_A"] == LOOP_BODY["I_phase_rms"]
     assert "winding reaches 200" in cr["duty_point"]["verdict"]
+
+    # ── THE RECORD SAYS SO (owner 2026-09-21, third round: "опять токи не
+    # совпадают" — the AT-THE-LIMIT line used to end "the numbers below are
+    # the machine at that moment", which is false once those numbers are the
+    # S1 pass's) ─────────────────────────────────────────────────────────
+    assert cr["record_is_s1"] is True
+    line = c["limited"]["line"]
+    assert line == ("Setpoint 20.00 A rms runs 24 s from cold (9.0 s from "
+                    "rated) at this cooling, then the winding reaches 200 °C")
+    assert "the numbers below are the machine at that moment" not in line
+    # …and the warning line (the one every surface prints) picks it up too.
+    assert c["warning"] == line
 
 
 def test_continuous_on_a_point_inside_every_limit_is_still_a_steady_record(
@@ -469,6 +492,10 @@ def test_the_row_group_appears_only_when_a_duty_asked_for_it():
     lim_v = by_label_v["Continuous rating (S1), limited by"][1]
     assert "confirmed with a real electromagnetic pass" in lim_v
     assert "torque linear in current" not in lim_v
+    # …and once the record has MOVED to S1 (owner 2026-09-21, third round:
+    # "опять токи не совпадают"), both currents are named so the setpoint's
+    # and the rating's are never silently conflated on one record.
+    assert "setpoint 63.64 A rms, continuous 34.4 A rms" in lim_v
 
     # …and when NO duty in the report ever asked, the whole group is silent —
     # `_drop_empty` takes it out, exactly as the "Warning" row is taken out of

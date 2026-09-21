@@ -3835,6 +3835,12 @@ def _run(body: Dict[str, Any],
                 # this duty's own question and stays available, printed by the
                 # AT THE LIMIT block above; only the record's OWN machine
                 # (em / field / temperatures) moves to the S1 point.
+                # `False` until a verification pass actually REPLACES em /
+                # field / temperatures below with the S1 machine — the flag a
+                # reader (the panel, `coupledStateLine`) checks before trusting
+                # that the record's own numbers are the rating's rather than
+                # the setpoint's.
+                continuous_rating["record_is_s1"] = False
                 continuous_rating["duty_point"] = {
                     "I_phase_rms_A": _f(body, "I_phase_rms", 0.0),
                     "T_em_Nm": (last_row := (history[-1] if history else {}))
@@ -3930,6 +3936,25 @@ def _run(body: Dict[str, Any],
                                 "bearing_temp_source"),
                             "P_mech_extra_W": _s_v.get("P_mech_extra_W"),
                         })
+                        continuous_rating["record_is_s1"] = True
+                        # …AND THE SETPOINT'S OWN "AT THE LIMIT" LINE MUST STOP
+                        # CLAIMING TO DESCRIBE THE NUMBERS BELOW IT (owner
+                        # 2026-09-21, third round) — those numbers are now the
+                        # S1 machine, not the setpoint's crossing.
+                        if limited:
+                            _i_duty = _ccr._num(
+                                (continuous_rating.get("duty_point") or {})
+                                .get("I_phase_rms_A"))
+                            _new_line = _setpoint_only_limited_line(
+                                _i_duty, time_to_limit)
+                            if _new_line:
+                                limited["line"] = _new_line
+                                limited["note"] = (
+                                    _new_line + " — this is the SETPOINT's own "
+                                    "question; the temperatures, torque and "
+                                    "power below are the S1 machine the "
+                                    "continuous rating verified, not this "
+                                    "crossing.")
             if continuous_rating:
                 log.info(
                     "coupled: continuous rating — %s",
@@ -4676,6 +4701,30 @@ def _cr_consistency_guard(block: Dict[str, Any],
         "CONTRADICTS THE LOOP'S OWN VERDICT: " + contradiction]
     out["note"] = contradiction
     return out
+
+
+def _setpoint_only_limited_line(i_duty: Optional[float],
+                                time_to_limit: Optional[Dict[str, Any]]) -> str:
+    """The AT-THE-LIMIT sentence, re-worded once the record's own numbers have
+    moved to the S1 machine (owner 2026-09-21, third round: *«опять токи не
+    совпадают»* — the setpoint's own "Runs 45 s …" sentence used to end "the
+    numbers below are the machine at that moment", which became FALSE the
+    instant those numbers became the S1 pass's.  States the SETPOINT's own
+    current up front and drops the now-false tail.  Only ever called after a
+    real S1 verification pass replaced the record — `limits` mode, where the
+    tail is still true, keeps `coupled_time_to_limit.limited_line` unchanged.
+    """
+    lim = _ttl.limiting(time_to_limit)
+    if not lim:
+        return ""
+    runs = "%s from cold" % _ttl.fmt_seconds(lim["t_cold_s"])
+    if lim["t_rated_s"] is not None:
+        runs += " (%s from rated)" % _ttl.fmt_seconds(lim["t_rated_s"])
+    i_txt = ("Setpoint %.2f A rms " % i_duty) if i_duty is not None else ""
+    return ("%sruns %s at this cooling, then the %s reaches %s"
+            % (i_txt, runs, lim["part"],
+               "%g °C" % lim["limit_c"] if lim["limit_c"] is not None
+               else "its limit"))
 
 
 def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,

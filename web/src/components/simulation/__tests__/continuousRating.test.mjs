@@ -63,6 +63,23 @@ function continuousRatingTip(c) {
   ].filter(Boolean).join('\n');
 }
 
+function s1ResultsAtLine(c) {
+  const r = c?.continuous_rating;
+  if (!r || r.record_is_s1 !== true) return null;
+  const i = r.I_cont_A_rms;
+  const iSet = r.duty_point?.I_phase_rms_A;
+  if (i == null || iSet == null) return null;
+  return `Results at the continuous current ${i.toFixed(1)} A rms `
+    + `(setpoint ${iSet.toFixed(2)} A rms)`;
+}
+
+function applyS1AsOperatingPoint(i_A_rms) {
+  try { localStorage.setItem('sim.current', JSON.stringify(i_A_rms)); }
+  catch { /* best effort */ }
+  try { window.dispatchEvent(new Event('sim-settings-restored')); }
+  catch { /* best effort */ }
+}
+
 // ── fixtures ──────────────────────────────────────────────────────────────
 const RATING = {
   ok: true, feasible: true, I_cont_A_rms: 34.36, I_cont_A_peak: 48.59,
@@ -215,4 +232,63 @@ test('the summary card reads continuous_rating off the coupling block, not a new
   assert.ok(src.includes('continuousRatingLine(s.coupling)'));
   assert.ok(src.includes('continuousRatingTip(s.coupling)'));
   assert.ok(src.includes("label=\"Continuous rating\""));
+});
+
+// ── THE RECORD MOVED TO S1 (owner 2026-09-21, third round) ─────────────────
+// *«опять токи не совпадают»* — the tiles were the S1 machine while the
+// Operating point panel and the AT-THE-LIMIT line both still described the
+// setpoint, with nothing on screen saying so.
+
+test('the header line names both currents, only once the record IS s1', () => {
+  const verified = { continuous_rating: { ...RATING, record_is_s1: true,
+    I_cont_A_rms: 48.6, duty_point: { I_phase_rms_A: 63.64 } } };
+  assert.equal(s1ResultsAtLine(verified),
+    'Results at the continuous current 48.6 A rms (setpoint 63.64 A rms)');
+});
+
+test('no header line on an ordinary run, or before the record moved', () => {
+  assert.equal(s1ResultsAtLine(undefined), null);
+  assert.equal(s1ResultsAtLine({}), null);
+  // continuous_rating exists, but the S1 verification never replaced the
+  // record (record_is_s1 absent or false) — the tiles are still the
+  // setpoint's, and a line here would be exactly the false claim the owner
+  // is reporting.
+  assert.equal(s1ResultsAtLine({ continuous_rating: RATING }), null);
+  assert.equal(s1ResultsAtLine({ continuous_rating: { ...RATING,
+    record_is_s1: false, duty_point: { I_phase_rms_A: 63.64 } } }), null);
+});
+
+test('the action writes the field the Operating-point panel itself owns',
+    () => {
+  const calls = { setItem: [], dispatched: [] };
+  const prevLS = globalThis.localStorage;
+  const prevWin = globalThis.window;
+  globalThis.localStorage = {
+    setItem: (k, v) => calls.setItem.push([k, v]),
+  };
+  globalThis.window = {
+    dispatchEvent: (ev) => calls.dispatched.push(ev.type),
+  };
+  try {
+    applyS1AsOperatingPoint(48.6);
+  } finally {
+    globalThis.localStorage = prevLS;
+    globalThis.window = prevWin;
+  }
+  assert.deepEqual(calls.setItem, [['sim.current', '48.6']]);
+  assert.deepEqual(calls.dispatched, ['sim-settings-restored']);
+});
+
+test('the action never throws when storage is unavailable (private window)',
+    () => {
+  const prevLS = globalThis.localStorage;
+  const prevWin = globalThis.window;
+  globalThis.localStorage = { setItem() { throw new Error('blocked'); } };
+  globalThis.window = { dispatchEvent() { throw new Error('blocked'); } };
+  try {
+    assert.doesNotThrow(() => applyS1AsOperatingPoint(48.6));
+  } finally {
+    globalThis.localStorage = prevLS;
+    globalThis.window = prevWin;
+  }
 });

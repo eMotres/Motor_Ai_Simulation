@@ -354,6 +354,13 @@ export interface ContinuousRating {
    *  machine moves to the S1 point — "runs 41 s" is this, not the S1 line */
   duty_point?: { I_phase_rms_A?: number | null; T_em_Nm?: number | null;
                 verdict?: string | null };
+  /** `true` once a real S1 verification pass REPLACED this record's own
+   *  em / field / temperatures — i.e. the ONLY time the panel's tiles are
+   *  the S1 machine rather than the setpoint's (owner 2026-09-21, third
+   *  round: *«опять токи не совпадают»* — the Operating point panel and the
+   *  AT-THE-LIMIT line both kept describing the setpoint while the tiles
+   *  had already moved to S1, with nothing on screen saying so). */
+  record_is_s1?: boolean;
 }
 
 /** The found regime, as the coupling block carries it.  It IS a `RegimeLimits`
@@ -863,6 +870,43 @@ export function continuousRatingTip(c: CouplingBlock | null | undefined): string
     r.trustworthy === false
       ? (r.notes?.find(n => n.startsWith('THE 2-D')) ?? '') : '',
   ].filter(Boolean).join('\n');
+}
+
+/* ── THE RECORD MOVED TO S1 — say so, and let the panel catch up ────────────
+ * Owner, 2026-09-21, third round (screenshot: tiles at the S1 machine, the
+ * Operating point panel and the AT-THE-LIMIT line both still describing the
+ * setpoint): *«опять токи не совпадают»*. */
+
+/** "Results at the continuous current 48.6 A rms (setpoint 63.64 A rms)" —
+ *  `null` unless a real S1 verification pass actually REPLACED this record
+ *  (`record_is_s1`), which is the only time the tiles are not the setpoint's
+ *  own numbers and a reader needs telling which current they are looking at. */
+export function s1ResultsAtLine(c: CouplingBlock | null | undefined):
+    string | null {
+  const r = c?.continuous_rating;
+  if (!r || r.record_is_s1 !== true) return null;
+  const i = r.I_cont_A_rms;
+  const iSet = r.duty_point?.I_phase_rms_A;
+  if (i == null || iSet == null) return null;
+  return `Results at the continuous current ${i.toFixed(1)} A rms `
+    + `(setpoint ${iSet.toFixed(2)} A rms)`;
+}
+
+/** Writes the S1 current into the Operating point panel's OWN `current`
+ *  field (I phase rms) — the same `sim.current` localStorage key and the
+ *  same `sim-settings-restored` re-read event `SimulationPanel`'s
+ *  `usePersisted('current', …)` already uses for a duty load, so the peak
+ *  reading (derived from it) and the panel's own state stay consistent and
+ *  the value persists exactly like one the user typed.
+ *
+ *  NEVER CALLED SILENTLY (project rule): this is the effect of an explicit
+ *  button click next to the S1 line — "Use N A as the operating point" —
+ *  never a side effect of loading or rendering a record. */
+export function applyS1AsOperatingPoint(i_A_rms: number): void {
+  try { localStorage.setItem('sim.current', JSON.stringify(i_A_rms)); }
+  catch { /* best effort — the field simply is not updated */ }
+  try { window.dispatchEvent(new Event('sim-settings-restored')); }
+  catch { /* best effort */ }
 }
 
 /** One decimal, and none when it is a whole number. */

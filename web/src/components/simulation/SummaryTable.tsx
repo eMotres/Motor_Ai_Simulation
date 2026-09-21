@@ -18,7 +18,8 @@ import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
 import { couplingLine, couplingTooltip, coupledStateLine,
          coupledStateTip, continuousRatingLine,
-         continuousRatingTip } from './coupledApi';
+         continuousRatingTip, s1ResultsAtLine,
+         applyS1AsOperatingPoint } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 
 /** Bench-probe result riding in the summary (backend measures it once per
@@ -1100,6 +1101,17 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               routinely nonsense when the applied point carried no results. */}
         </Typography>
       </Box>
+      {/* WHICH CURRENT THE TILES BELOW ARE AT (owner 2026-09-21, third round:
+          screenshot showing the tiles at the S1 machine while the Operating
+          point panel still read the setpoint — *«опять токи не совпадают»*).
+          Only once a real S1 verification pass has REPLACED this record
+          (`record_is_s1`): every other run's tiles are simply the setpoint's,
+          which is what "no line here" already means on every card today. */}
+      {s.coupling && s1ResultsAtLine(s.coupling) && (
+        <Typography sx={{ fontSize: 11, color: '#4ade80', opacity: stale ? 0.55 : 1 }}>
+          {s1ResultsAtLine(s.coupling)}
+        </Typography>
+      )}
 
       {/* ── SEVEN FIXED ROWS (user 2026-09-04: "упорядочить вывод по строкам"):
             1 torque · power · mass · efficiency · ripple  (+ the two densities)
@@ -1155,7 +1167,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           search refused (no capacities, a non-monotone map, …) — the same
           "something is always said" rule as the limit line. */}
       {s.coupling?.continuous_rating && (
-        <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
+        <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1, alignItems: 'center' }}>
           <Cell label="Continuous rating"
             value={continuousRatingLine(s.coupling) as string}
             accent={s.coupling.continuous_rating.ok
@@ -1163,6 +1175,27 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                     && s.coupling.continuous_rating.trustworthy !== false
                     ? 'green' : 'amber'}
             tooltip={continuousRatingTip(s.coupling)}/>
+          {/* "Use N A as the operating point" (owner 2026-09-21, third round):
+              never silent (project rule) — an explicit click, through the
+              SAME field the Operating-point panel itself owns, so peak/rms
+              stay derived consistently and the value persists like a typed
+              one.  Only offered once there is a real current to apply. */}
+          {s.coupling.continuous_rating.I_cont_A_rms != null && (
+            <Tooltip title={
+              'Writes this current into the Operating point panel’s own '
+              + 'I phase rms field (peak follows, derived the same way it '
+              + 'always is) — nothing here re-runs the simulation; press '
+              + 'Run afterwards to solve at it.'}>
+              <Button size="small" variant="outlined"
+                onClick={() => applyS1AsOperatingPoint(
+                  s.coupling!.continuous_rating!.I_cont_A_rms as number)}
+                sx={{ fontSize: 10, py: 0.25, px: 0.75, minWidth: 0,
+                     lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+                Use {s.coupling.continuous_rating.I_cont_A_rms.toFixed(1)} A as
+                the operating point
+              </Button>
+            </Tooltip>
+          )}
         </Box>
       )}
 

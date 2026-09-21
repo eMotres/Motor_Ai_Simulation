@@ -922,17 +922,16 @@ def test_the_iron_face_beside_a_bridged_magnet_is_still_one_straight_line(gap):
 #: ``rotor_hole`` × ``magnet_up_gap`` — the matrix the owner asked for
 #: (2026-09-21: «эта пара должна работать при любом значении magnet_up_gap»).
 #:
-#: ``(0.9, 0.0)`` is marked: an opening NARROWER than a magnet that is flush
-#: with the rotor OD leaves retaining tabs of zero thickness, and the sanitiser
-#: welds 5.594e-4 mm² of the Ø50's magnets into the iron there.  Measured
-#: identical on HEAD (2401d16) and after the bridge change — it is the
-#: rectangle path's own degenerate corner, not this one's, and it is listed
-#: here rather than hidden so the next person meets it.
+#: ``(0.9, 0.0)`` is NOT a buildable pair and is deliberately absent here: an
+#: opening NARROWER than a magnet that is flush with the rotor OD leaves
+#: retaining tabs of zero thickness, and the sanitiser used to weld
+#: 5.594e-4 mm² of the Ø50's magnets into the iron there (measured identical on
+#: HEAD 2401d16 and after the bridge change — it is the rectangle path's own
+#: degenerate corner, not this one's).  It is now a loud
+#: ``geometry_validation.rotor_hole_gap_error`` refusal instead of a silently
+#: welded sliver — see ``tests/test_geometry_validation.py``
+#: ``TestRotorHoleFlushMagnet`` for the validator test and the message.
 HOLE_GAP_MATRIX = [
-    pytest.param(0.9, 0.0, marks=pytest.mark.xfail(
-        strict=True, reason="rotor_hole < 1 with the magnet flush at the OD: "
-                            "zero-thickness tabs, 5.6e-4 mm² of magnet welded "
-                            "into the iron — pre-existing, see AGENTS notes")),
     (0.9, 0.05), (0.9, 0.1), (0.9, 0.3),
     (1.0, 0.0), (1.0, 0.05), (1.0, 0.1), (1.0, 0.3),
 ]

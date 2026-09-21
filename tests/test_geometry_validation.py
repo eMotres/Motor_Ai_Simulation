@@ -555,3 +555,103 @@ class TestWeldToleranceIsTheJudgingTolerance:
         res = validate_geometry(geo)
         assert not res.ok
         assert "rotor_crosses_air_gap" in _error_codes(res)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  rotor_hole < 1 with the magnet flush at the OD: zero-thickness tabs
+# ══════════════════════════════════════════════════════════════════════════
+#
+# ``tests/test_pocket_straight_sides.py`` pins the rectangle path
+# (``rotor_hole < 1``) byte for byte and used to xfail exactly this pair
+# (``rotor_hole=0.9, magnet_up_gap=0``) on its ``HOLE_GAP_MATRIX``: an opening
+# narrower than the magnet with the magnet's top arc already sitting ON the
+# rotor OD leaves the retaining tabs over the magnet's corners with ZERO
+# radial thickness, and the ring sanitiser used to weld 5.594e-4 mm² of magnet
+# into the iron there instead of raising.  The scan for every saved die,
+# duty, preset and catalog geometry that hits this combination (2026-09-21)
+# found none in any die/duty and exactly one preset — an auto-saved,
+# not-locked sweep-apply snapshot, not a catalog die — so the fix is a loud
+# validation error, not a silent clamp: ``geometry_validation
+# .rotor_hole_gap_error`` (wired into ``validate_polygons`` section 5c), which
+# every consumer of ``validate_geometry``/``validate_polygons`` picks up for
+# free — the Geometry tab's GET/PUT ``geometry_validation`` payload, the EM
+# solve gate (``routes/simulation.get_fem_transient``) and the mechanical/
+# static-3D builder's own backstop (``simulation/static3d/motor_geometry
+# .build_motor_section``, which already raises ``GeometryInvalid`` on
+# ``not validate_polygons(...).ok`` — no new backstop code needed).
+
+#: Same Ø50 CIANO14 fixture ``test_pocket_straight_sides.GEO_50`` pins the
+#: defect on, imported rather than duplicated so the two files cannot drift.
+from tests.test_pocket_straight_sides import GEO_50 as _GEO_50_FLUSH  # noqa: E402
+
+_ROTOR_HOLE_GAP_CODE = "rotor_pocket_tabs_zero_thickness"
+
+
+class TestRotorHoleFlushMagnet:
+    def test_rotor_hole_below_one_flush_magnet_is_rejected(self):
+        """The exact pair the xfail used to cover: refused, not welded quiet."""
+        geo = dict(_GEO_50_FLUSH, rotor_hole=0.9, magnet_up_gap=0.0)
+        res = validate_geometry(geo)
+        assert not res.ok
+        errs = [v for v in res.errors if v.code == _ROTOR_HOLE_GAP_CODE]
+        assert len(errs) == 1, _error_codes(res)
+        v = errs[0]
+        assert "rotor_hole" in v.message and "magnet_up_gap" in v.message
+        assert "zero" in v.message.lower()
+        assert set(v.likely_params) >= {"rotor_hole", "magnet_up_gap"}
+
+    def test_setting_rotor_hole_to_one_clears_it(self):
+        """The named fix (rotor_hole >= 1, the straight-sided pocket) works."""
+        geo = dict(_GEO_50_FLUSH, rotor_hole=1.0, magnet_up_gap=0.0)
+        res = validate_geometry(geo)
+        assert _ROTOR_HOLE_GAP_CODE not in _error_codes(res)
+
+    def test_a_nonzero_bridge_also_clears_it(self):
+        """The other named fix (magnet_up_gap > 0, the retaining bridge)."""
+        geo = dict(_GEO_50_FLUSH, rotor_hole=0.9, magnet_up_gap=0.1)
+        res = validate_geometry(geo)
+        assert _ROTOR_HOLE_GAP_CODE not in _error_codes(res)
+
+    def test_the_scalar_rule_pins_the_boundary(self):
+        """The pure function ``validate_polygons`` calls — no polygon build
+        needed to know the tab is gone, and it fires on this ONE combination."""
+        from motor_ai_sim.geometry_validation import rotor_hole_gap_error
+
+        assert rotor_hole_gap_error(
+            {"rotor_hole": 0.9, "magnet_up_gap": 0.0})[1] == _ROTOR_HOLE_GAP_CODE
+        assert rotor_hole_gap_error({"rotor_hole": 0.9}) is not None  # missing
+        # gap defaults to 0.0, same as the builder (`p.get('magnet_up_gap', 0.0)`)
+        assert rotor_hole_gap_error({"rotor_hole": 1.0, "magnet_up_gap": 0.0}) is None
+        assert rotor_hole_gap_error({"rotor_hole": 0.9, "magnet_up_gap": 0.05}) is None
+        assert rotor_hole_gap_error({"rotor_hole": 1.5, "magnet_up_gap": 0.0}) is None
+
+    def test_the_one_saved_preset_that_hits_it_is_rejected_and_fixable(self):
+        """The scan (2026-09-21) of every die/duty/preset/catalog geometry for
+        this combination found exactly one hit: an auto-saved, not-locked
+        sweep-apply snapshot in ``motor_presets.json`` — not a catalog die.
+        Read it straight from the file (skip if it is ever cleaned up or
+        renamed) rather than pinning a copy, so this stays truthful to what is
+        actually on disk."""
+        presets_path = _ROOT / "config" / "motor_presets.json"
+        if not presets_path.is_file():
+            pytest.skip("config/motor_presets.json not present")
+        import json
+        presets = json.loads(presets_path.read_text(encoding="utf-8"))
+        entry = presets.get("applied_sweep_20260906_100049")
+        if not entry or not isinstance(entry.get("geometry"), dict):
+            pytest.skip("applied_sweep_20260906_100049 is no longer in "
+                        "motor_presets.json")
+        geo = dict(entry["geometry"])
+        assert float(geo.get("rotor_hole", 1.0)) < 1.0
+        assert float(geo.get("magnet_up_gap", 0.0) or 0.0) <= 1e-9
+
+        res = validate_geometry(geo)
+        assert _ROTOR_HOLE_GAP_CODE in _error_codes(res), (
+            "the one saved config known to hit this combination must be "
+            "flagged loudly, not solved silently")
+
+        fixed = dict(geo, rotor_hole=1.0)
+        res_fixed = validate_geometry(fixed)
+        assert _ROTOR_HOLE_GAP_CODE not in _error_codes(res_fixed), (
+            "rotor_hole = 1 must clear the error so the preset stays "
+            "correctable, not permanently locked out")

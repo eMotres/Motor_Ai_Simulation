@@ -327,6 +327,7 @@ _CAUSES: Dict[str, List[str]] = {
         "air_gap", "magnet_up_gap", "rotor_fill_r", "sleeve_thickness"],
     "sleeve_fills_air_gap": ["sleeve_thickness", "air_gap"],
     "sleeve_overlaps_stator": ["sleeve_thickness", "air_gap"],
+    "rotor_pocket_tabs_zero_thickness": ["rotor_hole", "magnet_up_gap"],
     "stator_crosses_air_gap": [
         "air_gap", "slot_height", "core_thickness", "stator_diameter"],
     "air_gap_not_positive": [
@@ -437,6 +438,51 @@ def sleeve_gap_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
                 .format(t, gap - t, gap, MIN_MECH_GAP_MM, t_max,
                         t + MIN_MECH_GAP_MM))
     return None
+
+
+def rotor_hole_gap_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
+    """``(field, code, message)`` when the rotor pocket opening is narrower than
+    the magnet while the magnet sits flush with the rotor OD, else ``None``.
+
+    ``rotor_hole < 1`` cuts a RECTANGULAR opening narrower than the magnet
+    (``cadquery_geometry._pocket_cut_depth`` / ``rec_w``); what is left of the
+    pocket wall between the rectangle's edge and the magnet's own top corner is
+    the retaining "tab" of iron over that corner.  With ``magnet_up_gap = 0``
+    the magnet's top arc already sits ON the rotor OD, so that tab has ZERO
+    radial thickness — there is no iron left between the narrower opening and
+    the circle the magnet's corners sit on.
+
+    Measured on the Ø50 fixture (``rotor_hole=0.9``, ``magnet_up_gap=0``,
+    ``tests/test_pocket_straight_sides.py::GEO_50``): the ring sanitiser welds
+    5.594e-4 mm² of the magnet into the rotor there — a real overlap, not a
+    weld seam (pre-existing, `tests/test_pocket_straight_sides.py`
+    ``HOLE_GAP_MATRIX``).  ``magnet_up_gap > 0`` gives the tab its thickness
+    back (the magnet's top arc then sits ``magnet_up_gap`` short of the OD, so
+    the opening's edge finds iron before it reaches the magnet), and
+    ``rotor_hole >= 1`` has no rectangle to open at all
+    (``cadquery_geometry._extended_pocket``) — so this fires on the one
+    combination only.
+
+    A SCALAR rule, deliberately (same reasoning as ``sleeve_gap_error``): it
+    needs no polygon build to know the tab is gone, and it must gate every
+    solve even where the polygon build itself still "succeeds" by welding the
+    sliver away instead of raising.
+    """
+    hole = _num(geo.get("rotor_hole"))
+    if hole is None or hole >= 1.0 - 1e-9:
+        return None
+    gap = _num(geo.get("magnet_up_gap"))
+    gap = gap if gap is not None else 0.0
+    if gap > 1e-9:
+        return None
+    return ("rotor_hole", "rotor_pocket_tabs_zero_thickness",
+            "magnet_up_gap = 0 needs an opening at least as wide as the magnet: "
+            "with rotor_hole = {:g} (< 1) the pocket opening is narrower than "
+            "the magnet, and with magnet_up_gap = 0 the magnet's top arc "
+            "already sits on the rotor OD, so the retaining tabs of iron over "
+            "the magnet's corners would have ZERO radial thickness there. Set "
+            "rotor_hole >= 1 (the straight-sided pocket, no rectangle) or give "
+            "the bridge a thickness with magnet_up_gap > 0.".format(hole))
 
 
 def slot_cut_limits(geo: Dict[str, Any]) -> Optional[Tuple[float, float, int]]:
@@ -1058,6 +1104,24 @@ def validate_polygons(polys: Dict[str, Any],
             measured_mm=_num(p.get("sleeve_thickness")),
             limit_mm=_num(p.get("air_gap")),
             likely_params=_CAUSES.get(_code, ["sleeve_thickness", "air_gap"])))
+
+    # ── 5c. a rotor_hole < 1 opening needs iron tabs of non-zero thickness ───
+    # Another SCALAR rule, same reasoning as 5b: `rotor_hole_gap_error` needs no
+    # polygon to know the retaining tab over each magnet corner is gone, and it
+    # has to gate every solve even where the builder's ring-weld hides the
+    # sliver overlap instead of raising (`tests/test_pocket_straight_sides.py`
+    # ``HOLE_GAP_MATRIX``, (0.9, 0.0) — welds 5.594e-4 mm² of magnet into iron).
+    checks.append("rotor_hole_pocket_tabs")
+    _rh_err = rotor_hole_gap_error(p)
+    if _rh_err is not None:
+        _fld, _code, _msg = _rh_err
+        col.add(Violation(
+            code=_code, severity=_SEV_ERROR,
+            part_a="The rotor pocket opening", part_b="the magnet",
+            message=_msg,
+            measured_mm=_num(p.get("magnet_up_gap")),
+            limit_mm=_num(p.get("rotor_hole")),
+            likely_params=_CAUSES.get(_code, ["rotor_hole", "magnet_up_gap"])))
 
     # ── 6. iron connectivity (warning — solvable, but rarely intended) ───────
     checks.append("iron_connectivity")

@@ -143,3 +143,68 @@ r = 14.637 mm on two of the fourteen poles (θ 85.775° and 265.775°) — the s
 rotation-dependent needle, one pole per segment. `_repair_needles` now removes
 it, though on this machine the mechanical mesh is unchanged by it, because that
 mesher already welds 10 µm slivers (`Geometry.ToleranceBoolean = 1e-2`).
+
+---
+
+# The "one hot pocket" at θ ≈ 317° — what it is not, 2026-09-21 (round 2)
+
+The owner sees a single pocket carrying a stress maximum the other thirteen do
+not (156 MPa, min SF 2.6 against 6.5 elsewhere, r ≈ 14.6 mm, θ ≈ 317°). The
+case that reproduces the PATTERN is the **designed** one, `rotor_hole = 0.9`,
+`magnet_up_gap = 0.1` at 20 000 rpm — not the 0.05 recess.
+
+## Measured, both machines, on 4f66471 (polygons bit-identical to c540c52)
+
+| | Ø50 recess 1.0 / 0.1 | Ø50 designed 0.9 / 0.1 | Ø200 L155 rated |
+|---|---|---|---|
+| distinct per-pole vertex sets (OD band) | 9 of 14 | 14 of 14 | 8 of 10 |
+| closest vertex pair in the OD band | 46.8 µm (3.7 × weld) | 19.2 µm (1.5 × weld) | 116.8 µm (2.3 × weld) |
+| EM mesh | 3.9 s, 15 926 el, 1.4149°, 0 sub-degree | 3.7 s, 15 908 el, 1.4149°, 0 | 9.8 s, 149 708 el, 1.8636°, 0 |
+| mechanical rotor mesh | 2 554 el, min 3.9332°, min 5.44e-4 mm², 0 sub-degree | 2 676 el, min 9.0980°, min 1.84e-4 mm², 0 | 16 516 el, min 16.9756°, min 4.16e-3 mm², 0 |
+| wall/fillet junctions (28) | 3.93°…10.20°, spread 2.59×, 0 sub-degree | 9.10°…11.73°, spread 1.29×, 0 sub-degree | none — the magnet top is under the sleeve |
+| rotor SF | 6.5246 | 1.5002 | 0.4979 (generic contacts, zero interference — NOT the stored duty) |
+| **vM max per pocket** | 69.3…73.3, **spread 1.058×** | 192.3…241.5, **spread 1.256×**, hottest θ 317.3° | 805.6…831.2, **spread 1.032×** |
+
+## What the artefact is not
+
+* **Not a degenerate element.** No sub-degree triangle at any of the 28
+  wall/fillet junctions, at `mesh_size` 1.5, 0.8 or 0.5 mm, in either Ø50 case.
+* **Not a sub-tolerance polygon feature.** The closest vertex pair in the OD
+  band is 1.5–3.7 × the weld tolerance on every machine.
+* **Not a geometry difference between poles.** Magnet areas differ by 0.002 %
+  (21.22167…21.22219 mm²), the centroid radius by 0.1 µm, the shoulder's
+  smallest interior angle by 0.17° (121.39…121.56°), the iron over the magnet by
+  2.3 % (82.6…84.5 µm) — and none of them correlates with the stress
+  (corr(vM, min interior angle) = 0.03, corr(vM, area) = −0.50 with the WRONG
+  sign: the thinnest poles are the coolest).
+* **Not mesh noise either.** The pattern survives a mesh refinement 1.5 → 0.8 mm
+  (hottest pole 12 both times, 241.5 → 236.5 MPa; coldest pole 5, 192.3 → 194.9)
+  and it survives nodal averaging (spread 1.65×, same ranking).
+
+## What it is
+
+About half of the spread is the **torque load**: dropping it
+(`loads="centrifugal"`) takes the per-pocket spread from 1.256× to **1.134×**
+and moves the hottest pole from 12 to 8. The torque is applied at the bore and
+reacted through the rotor, and that reaction path is not pole-symmetric in the
+discrete model. The remaining ~13 % is the scatter of an UNAVERAGED per-element
+peak — which is the project's own singularity gauge, not a stress to judge a
+machine by (`stress-convention-averaged`: every printed stress is AVERAGED).
+
+## Not done, because it needs the owner's word
+
+Making every pole's vertex set identical is only possible if the station count
+is a multiple of the pole count (256 is not: 256/14 = 18.29, 256/10 = 25.6).
+A rotation-invariant corner guard — each pocket corner shadows the ONE station
+nearest to it, so the clearance is always ≥ half a step — was written and
+measured (kept in the session scratchpad as `cq_guard_variant.py`). It works,
+but it changes both machines' polygons and therefore their fingerprints:
+
+| | vertices | area | Hausdorff |
+|---|---|---|---|
+| Ø200 rotor | 259 → 255 | −0.0681 mm² (−0.0019 %) | 10.1 µm |
+| Ø50 rotor (gap 0.1) | 371 → 370 | −0.0175 mm² (−0.0068 %) | 4.5 µm |
+
+Since the measurements above show no sub-tolerance feature to remove, the guard
+buys tidiness, not correctness, and the records keyed by the old fingerprint
+would all have to be re-stamped. Left for the owner to decide.

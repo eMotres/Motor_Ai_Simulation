@@ -701,6 +701,8 @@ def compact_thermal(result: Dict[str, Any], params: Dict[str, Any],
     # the PWM loop existed.
     _ls = res.get("loss_source") or inner.get("loss_source") or {}
     _ls = _ls if isinstance(_ls, dict) else {}
+    _snap = res.get("transient_snapshot") or inner.get("transient_snapshot") or {}
+    _snap = _snap if isinstance(_snap, dict) else {}
     out = {
         "computed_at": computed_at,
         "geometry_fingerprint": fp,
@@ -708,6 +710,21 @@ def compact_thermal(result: Dict[str, Any], params: Dict[str, Any],
         "drive": str(_ls.get("drive") or "sine"),
         **({"inverter": dict(_ls["inverter"])}
            if isinstance(_ls.get("inverter"), dict) else {}),
+        # WHICH STATE these components are (2026-09-21).  "steady" is a solved
+        # map; "limited" is the machine at the instant a part reached its limit,
+        # translated off the steady map it was solved from — and then the
+        # `cooling` block below is the STEADY one and says so
+        # (`cooling.from_state`).  A record that does not say which state it is
+        # cannot be read back at all: the L13 peak's mixed one carried a 183.5 °C
+        # winding beside a 297.3 °C housing wall and refits to nothing.
+        "state": str(res.get("state") or inner.get("state") or "steady"),
+        # …and the node means of the map the cooling block DOES belong to, so a
+        # limited record is refittable read-only.
+        **({"calibration_components_c": dict(_snap["calibration_components_c"])}
+           if isinstance(_snap.get("calibration_components_c"), dict) else {}),
+        **({"transient_snapshot": {k: v for k, v in _snap.items()
+                                   if k != "calibration_components_c"}}
+           if _snap else {}),
         "components": comps,
         "T_max": _f(res.get("T_max", inner.get("T_max"))),
         "T_min": _f(res.get("T_min", inner.get("T_min"))),
@@ -716,6 +733,13 @@ def compact_thermal(result: Dict[str, Any], params: Dict[str, Any],
         "P_cu_W": _f(res.get("P_cu_W", inner.get("P_cu_W"))),
         "P_fe_W": _f(res.get("P_fe_W", inner.get("P_fe_W"))),
         "cooling": {
+            # WHICH STATE the block below belongs to (2026-09-21).  On a LIMITED
+            # record it is the steady map's, never the instant the components
+            # describe — `rescale_map_to_nodes` stamps it and this carries it
+            # through, so nobody fits a network to two states at once again.
+            **({"from_state": str(cooling["from_state"]),
+                "state_note": str(cooling.get("state_note") or "")}
+               if cooling.get("from_state") else {}),
             "outer": _pick(cooling.get("outer"), _COOLING_KEYS),
             "inner": _pick(cooling.get("inner"), _COOLING_KEYS),
             "shaft_ends": _pick(cooling.get("shaft_ends"),

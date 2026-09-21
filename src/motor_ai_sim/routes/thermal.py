@@ -2453,11 +2453,49 @@ def rescale_map_to_nodes(result: dict, node_temps_c: dict, *,
         new_comps[node] = {"max": round(float(T[nodes].max()), 1),
                            "avg": round(float(T[nodes].mean()), 1)}
     out["components"] = new_comps
+    # ── THE STATE THIS MAP IS, AND THE ONE IT CAME FROM (2026-09-21) ────────
+    # Until today this snapshot kept the components of the LIMITED instant and
+    # the `cooling` block of the STEADY solve it was made from, with nothing
+    # saying so — and the duty record stored the mixture.  The L13 peak record
+    # is the measured case: `components.winding.avg = 183.5 °C` (the machine at
+    # the crossing) beside `cooling.mount.t_housing_mean_c = 297.3 °C` and a
+    # heat budget of 682.8 W (the runaway steady state), and its own
+    # `time_to_limit.network.map_winding_mean_c` saying 392.4.  Refitting that
+    # record gives a 55-67 % residual and no time to any limit — it is not one
+    # machine.
+    #
+    # Nothing here re-solves: the cooling block of the limited instant would
+    # need a second 2-D solve, which this path exists to avoid.  What it does is
+    # LABEL, so the two states can never be read as one, and carry the
+    # calibration map's own node means so a reader can refit the state the
+    # conductances actually belong to.
+    out["state"] = "limited"
+    cool = result.get("cooling")
+    if isinstance(cool, dict):
+        out["cooling"] = {
+            **cool,
+            "from_state": "steady",
+            "state_note": (
+                "this cooling block — the films, the sinks and the heat budget "
+                "— belongs to the STEADY map this snapshot was translated from, "
+                "NOT to the limited instant above it.  The two are different "
+                "states of the same machine and are reported together only "
+                "because computing the films at the crossing would need a "
+                "second conduction solve.  Fit a network to the calibration "
+                "components in transient_snapshot, never to these two mixed."),
+        }
     out["transient_snapshot"] = {
         "kind": "time_to_limit",
+        "state": "limited",
+        "from_state": "steady",
         "node_temps_c": {k: round(float(v), 2)
                          for k, v in (node_temps_c or {}).items()},
         "shift_K": {k: round(float(v), 2) for k, v in shift.items()},
+        # THE MAP THE COOLING BLOCK BELONGS TO, in the same shape `components`
+        # has — so a record written from here is refittable read-only.
+        "calibration_components_c": {
+            str(k): {"avg": v.get("avg"), "max": v.get("max")}
+            for k, v in comps.items() if isinstance(v, dict)},
         "note": (note or "the last solved map, translated part by part onto the "
                  "node temperatures of this instant — the field SHAPE is frozen "
                  "at the solved map's, only its level moves"),
@@ -5031,6 +5069,13 @@ def solve_thermal_field(
     result["solve_time_s"] = round(time.time() - _t_solve, 2)
     result["elapsed_s"] = _elapsed(t0)
     result["cached"] = False
+    # WHICH STATE THIS MAP IS (2026-09-21).  A solved map is the STEADY one, by
+    # construction; ``rescale_map_to_nodes`` stamps ``limited`` on the snapshot
+    # it makes out of it.  It is here so that every consumer — the duty record,
+    # the network fitter, a reader — can tell the two apart without inferring it
+    # from a `transient_snapshot` key that only one of them carries.  See
+    # `rescale_map_to_nodes` for what the L13 peak record looked like without it.
+    result["state"] = "steady"
     result["geometry_fingerprint"] = _live_fingerprint(_geo_ov)
     if _em_map is None:
         # An injected (copper-scaled) map is an approximation of the map a solve

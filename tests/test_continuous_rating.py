@@ -387,8 +387,7 @@ def _open_frame_map() -> Dict[str, Any]:
 def test_the_open_frame_s_winding_path_is_carried_by_the_network():
     """85 of the 100 W of copper leave the winding directly; the network knows."""
     net = dc.network_from_steady(_open_frame_map(), t_ambient_c=40.0,
-                                 d_housing_m=D_HOUSING_M, geometry=L13_GEO,
-                                 surface_fit=True)
+                                 d_housing_m=D_HOUSING_M, geometry=L13_GEO)
     assert net.G["w_open"] > 0.0
     means = {"winding": 145.0, "stator": 134.5, "rotor": 103.0,
              "magnet": 102.8}
@@ -401,16 +400,26 @@ def test_the_open_frame_s_winding_path_is_carried_by_the_network():
     assert any("leave the winding DIRECTLY" in n for n in net.notes)
 
 
-def test_the_surface_fit_is_opt_in_and_off_by_default():
-    """Default OFF: not one number this network produced before today moves."""
-    net = dc.network_from_steady(_open_frame_map(), t_ambient_c=40.0,
-                                 d_housing_m=D_HOUSING_M, geometry=L13_GEO)
-    assert net.G.get("w_open", 0.0) == 0.0
-    assert net.G_fit == {} and net.film_kind == {}
+def test_the_surface_fit_is_the_default_and_can_still_be_asked_off():
+    """ON since 2026-09-21 (owner's word), and the old fit is still reachable.
+
+    The default carries the map's surfaces; ``surface_fit=False`` restores the
+    pre-2026-09-21 network exactly, which is what a record written before that
+    date has to be read back with.
+    """
+    on = dc.network_from_steady(_open_frame_map(), t_ambient_c=40.0,
+                                d_housing_m=D_HOUSING_M, geometry=L13_GEO)
+    assert on.G["w_open"] > 0.0 and on.G_fit
+
+    off = dc.network_from_steady(_open_frame_map(), t_ambient_c=40.0,
+                                 d_housing_m=D_HOUSING_M, geometry=L13_GEO,
+                                 surface_fit=False)
+    assert off.G.get("w_open", 0.0) == 0.0
+    assert off.G_fit == {} and off.film_kind == {}
     means = {"winding": 145.0, "stator": 134.5, "rotor": 103.0,
              "magnet": 102.8}
-    state = {net.rep(n): means[n] for n in NODES}
-    flows = dc._flows(state, net)
+    state = {off.rep(n): means[n] for n in NODES}
+    flows = dc._flows(state, off)
     assert flows["winding_open"] == 0.0
     # …and the winding→stator link is the whole copper loss, as it always was
     assert flows["w_s"] == pytest.approx(100.0, rel=1e-6)
@@ -447,3 +456,95 @@ def test_a_forced_housing_film_is_held_and_a_natural_one_moves():
     t0 = net2.t_fit_c["housing"]
     assert dc.still_air_G(t0 + 100.0, net2, "housing") > dc.still_air_G(
         t0, net2, "housing")
+
+
+# ---------------------------------------------------------------------------
+# The stored record must be ONE machine (2026-09-21)
+# ---------------------------------------------------------------------------
+# A `solve_to: limits` run files the machine AT the crossing.  Until today that
+# record carried the LIMITED components beside the STEADY cooling block with
+# nothing saying so, and the L13 peak on this disk is the measured case: a
+# 183.5 °C winding beside a 297.3 °C housing wall and a 682.8 W heat budget,
+# refitting to a 55-67 % residual and no time to any limit.  These pin the
+# label and the calibration means that make it readable again.
+
+def _synthetic_steady_map() -> Dict[str, Any]:
+    """A solved steady map, in the shape `rescale_map_to_nodes` takes."""
+    return {
+        "ok": True,
+        "state": "steady",
+        "components": {"winding": {"avg": 392.4, "max": 408.9},
+                       "stator": {"avg": 300.0, "max": 312.0},
+                       "rotor": {"avg": 120.0, "max": 121.0},
+                       "magnet": {"avg": 119.0, "max": 120.5}},
+        "cooling": {"outer": {"mode": "robotics", "heat_removed_W": 26.86,
+                              "t_sink_c": 40.0},
+                    "mount": {"mode": "conduction", "G_W_per_K": 2.0,
+                              "t_housing_mean_c": 297.3,
+                              "heat_removed_W": 514.6, "t_sink_c": 40.0},
+                    "heat_budget": {"losses_W": 682.8, "housing_W": 26.86,
+                                    "bore_W": 8.49, "residual_pct": 0.0}},
+        "P_cu_exact_W": 676.2, "P_mag_eddy_W": 1.0, "ambient_temp": 40.0,
+        # the two arrays the shift needs
+        "triangles": [[0, 1, 2], [1, 2, 3]],
+        "domain_per_tri": [2, 2],
+        "temperature_per_node": [390.0, 392.0, 394.0, 396.0],
+        "T_max": 408.9, "T_min": 40.0,
+    }
+
+
+def test_a_limited_snapshot_says_which_state_it_is_and_what_it_came_from():
+    from motor_ai_sim.routes.thermal import rescale_map_to_nodes
+
+    steady = _synthetic_steady_map()
+    at_limit = {"winding": 183.5, "stator": 125.06, "rotor": 45.68,
+                "magnet": 43.7}
+    snap = rescale_map_to_nodes(steady, at_limit)
+
+    assert snap["state"] == "limited"
+    assert snap["cooling"]["from_state"] == "steady"
+    assert "NOT to the limited instant" in snap["cooling"]["state_note"]
+    # …and the state the cooling block DOES belong to travels with it
+    cal = snap["transient_snapshot"]["calibration_components_c"]
+    assert cal["winding"]["avg"] == pytest.approx(392.4)
+    assert cal["magnet"]["avg"] == pytest.approx(119.0)
+    # the original is untouched — the snapshot is a copy
+    assert steady["state"] == "steady"
+    assert "from_state" not in steady["cooling"]
+
+
+def test_the_duty_record_carries_the_state_and_stays_readable():
+    from motor_ai_sim.duty_results import compact_thermal
+    from motor_ai_sim.routes.thermal import rescale_map_to_nodes
+
+    steady = _synthetic_steady_map()
+    rec_steady = compact_thermal(steady, {}, "fp0", "2026-09-21T00:00:00")
+    assert rec_steady["state"] == "steady"
+    assert "from_state" not in rec_steady["cooling"]
+    assert "calibration_components_c" not in rec_steady
+
+    snap = rescale_map_to_nodes(steady, {"winding": 183.5, "stator": 125.06,
+                                         "rotor": 45.68, "magnet": 43.7})
+    rec = compact_thermal(snap, {}, "fp0", "2026-09-21T00:00:00")
+    assert rec["state"] == "limited"
+    assert rec["cooling"]["from_state"] == "steady"
+    # the components are the LIMITED instant …
+    assert rec["components"]["winding"]["avg"] == pytest.approx(183.5, abs=1.0)
+    # … and the means the cooling block belongs to are beside them, so the
+    # steady state can be refitted from the record alone
+    assert rec["calibration_components_c"]["winding"]["avg"] == pytest.approx(
+        392.4)
+    assert rec["transient_snapshot"]["state"] == "limited"
+
+
+def test_the_time_to_limit_record_carries_all_four_calibration_means(caps):
+    """`map_means_c` — what makes a limited record refittable read-only."""
+    m = _linear_map(float(RATED_MAP["P_cu_exact_W"]))
+    net = dc.network_from_steady(m, t_ambient_c=40.0,
+                                 d_housing_m=D_HOUSING_M, geometry=L13_GEO)
+    seg = ttl._segment(RATED_SUMMARY, m, "rated")
+    got = ttl._fit_residual(seg, net, caps, m)
+    assert got["available"] is True
+    assert set(got["map_means_c"]) == set(NODES)
+    assert got["map_means_c"]["winding"] == pytest.approx(
+        float(m["components"]["winding"]["avg"]), abs=0.01)

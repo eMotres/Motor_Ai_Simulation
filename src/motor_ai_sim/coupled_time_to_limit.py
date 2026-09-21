@@ -509,6 +509,13 @@ def _fit_residual(segment: tdc.Segment, network: tdc.Network,
         "hot_spot_offset_K": round(float(network.hot_spot_offset_k), 2),
         "coil_ref_c": round(float(segment.coil_ref_c), 2),
         "map_winding_mean_c": round(t_w, 2),
+        # ALL FOUR node means of the map these conductances were fitted to
+        # (2026-09-21), not just the winding's.  A record whose stored thermal
+        # block is the LIMITED state carries the steady map's cooling and the
+        # limited state's components; with these four the steady state can be
+        # refitted read-only, which is what "this number can be checked" means.
+        "map_means_c": {n: round(float(state[network.rep(n)]), 2)
+                        for n in NODES},
         "coil_ref_drift_K": round(drift_k, 2),
         "note": ("at the map's own temperatures the network is out of balance by "
                  "at most %.2f W (%.2f %% of the %.1f W this point makes); the "

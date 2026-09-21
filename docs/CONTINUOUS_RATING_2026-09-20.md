@@ -79,7 +79,12 @@ After the fix the network reproduces the map it was fitted to: the worst
 residual on the rated condition falls from 298 W (of the 262 W the machine
 makes) to 9 %.
 
-**All three ship OFF** behind `network_from_steady(..., surface_fit=True)`.
+**All three shipped OFF for one day** behind
+`network_from_steady(..., surface_fit=…)`, and are **ON by default since
+2026-09-21** (owner: *«давай включай все»*). `surface_fit=False` still restores
+the pre-2026-09-21 network exactly, which is how a record written before that
+date has to be read back. What follows is the reasoning from the day they were
+gated; the appendix carries what turning them on actually moved.
 Switching them on moves every number this network has produced on a machine
 that is not a still-air housed one — the L13's time to its insulation class
 among them, which is printed in reports already delivered — and the project's
@@ -87,21 +92,34 @@ rule is that live answers do not move without the owner's word. Measured while
 gating it: with the correction on by default the L13 fixtures' time-to-limit
 suite went from 60 s to over 14 minutes of CPU without finishing, because the
 housing conductance it had been using was 23× too small and the machine it was
-integrating no longer ran away. **`coupled_continuous_rating` asks for it;
-`coupled_time_to_limit` and `coupled_duty_cycle` do not, yet.** Turning it on
-for them is a one-word change once the owner has seen these numbers.
+integrating no longer ran away.
 
-## Two defects found and NOT fixed — they belong to `routes/thermal.py`
+**That slowdown was NOT this fit, and it is fixed** (2026-09-21). A 4 % change
+in one conductance was enough to tip the 40 mm S3 search into an **unguarded
+Aitken Δ² extrapolation** in `periodic_steady_state`, which threw the rotor to
+**−2822 °C**; LSODA then ground for ever on air properties evaluated below
+absolute zero. `_aitken` had an upper bound (`RUNAWAY_C`) and no lower one. It
+now takes a `floor_c` — the coldest sink the machine touches — and rejects an
+extrapolation below it, which costs one ordinary iteration. With the guard the
+five named test files run in **34 s**, an order of magnitude faster than the
+458 s they took before either change: the bad extrapolation had been costing
+time all along, it simply had not been fatal.
 
-Reported rather than touched: they change every robotics map already computed,
-and that needs the owner's word.
+## One defect found and NOT fixed — it belongs to `routes/thermal.py`
 
-1. **The robotics end-face block is internally inconsistent.** For the Ø50 joint
-   in still air the heat budget closes on `end_faces_W = 192.3 W`, while the
-   block's own conductances (`cooling.end_faces.<node>.G_W_per_K`, summing to
-   0.108 W/K over ~100 K ≈ 11 W) account for a seventeenth of it. The network is
-   therefore fitted to the WATTS (what the temperature field actually came from)
-   and says so in its notes.
+1. ~~**The robotics end-face block is internally inconsistent** (a factor of
+   seventeen between its stated conductances and the watts its heat budget
+   closes on).~~ **WITHDRAWN 2026-09-21 — this was my error, not the solver's.**
+   The factor came from dividing the STEADY map's watts by the LIMITED state's
+   ΔT, because the record mixes the two (see the appendix). Separated, they
+   agree to 0.1 %: on the L13 peak the winding end face is 97.708 W over
+   (392.37 − 40) K = 0.2773 W/K against the block's stated 0.27699, and the
+   mount is 514.6 W over the same ΔT = exactly the 2.0 W/K that was typed. The
+   same withdrawal applies to the "third mismatch of the same family" in the
+   appendix. Fitting the network to the WATTS is still what the code does, and
+   it is still right — on a self-consistent map the two answers are the same
+   number, and on a mixed one the watts are the half that belongs with the
+   cooling block.
 2. **The robotics map is NOT MONOTONE in the copper loss.** Same machine, same
    cooling, the loss map handed in at four scales:
 
@@ -229,7 +247,33 @@ actually carries.
 `CIANO10 200 opt / L180 motor` could not be measured: no run payload is left in
 the die's run store for those two duties.
 
-### The L13 peak record's 24 s — it cannot be recomputed, and it can only grow
+### The L13 peak record's 24 s — RE-DERIVED 2026-09-21: it does not move
+
+**Superseded.** The paragraph below said the number could not be recomputed.
+It can: the steady map's four node means survive in the record after all — not
+in `components` (those are the limited instant) but in
+`cooling.end_faces.<node>.t_mean_c`, which the 2-D solve wrote for its own
+sinks, and whose winding value (392.37 °C) is the same number the record's
+`time_to_limit.network.map_winding_mean_c` reports. Rebuilding the steady
+components from them and re-running `coupled_time_to_limit.solve` read-only:
+
+| | t_limit cold | from rated | limiting | at_point winding °C |
+|---|---|---|---|---|
+| the stored record | 24.411 s | 4.32 s | winding | 408.9 |
+| re-derived, `surface_fit=False` | 22.948 s | 3.857 s | winding | 408.87 |
+| re-derived, `surface_fit=True` | **22.948 s** | **3.857 s** | winding | 408.87 |
+
+**The correction changes it by nothing at all** — the two flags agree to the
+millisecond, because the first 23 s of a 676 W pull into this coil are nearly
+adiabatic and no surface conductance is in that answer. The 1.5 s between the
+stored 24.411 s and the re-derived 22.948 s is not the flag either: the
+compacted record keeps only the rounded `P_cu_W` (676.2 W) where the loop used
+the exact one. **Nothing has to be re-run and nothing sent to a client moves.**
+
+The original paragraph, kept because the mixed record is still the reason it
+took a re-derivation to find out:
+
+### (superseded) it cannot be recomputed, and it can only grow
 
 `CIANO28 85 20SW1200 / L13 / peak` stores `time_to_limit_s = 24.411` (the "24 s"
 on the catalog chip and in §8). **That number cannot be recomputed from the
@@ -259,9 +303,27 @@ less, to reach 200 °C.** The number the owner has sent is on the safe side. By
 how much cannot be stated without re-running that duty's coupled loop, which
 would replace his record and was not done.
 
-### A third mismatch of the same family, found and not touched
+### ~~A third mismatch of the same family~~ — WITHDRAWN 2026-09-21
 
-On the same L13 map the MOUNT is driven by the housing WALL (297.3 °C) in the
-2-D solve and by the stator NODE MEAN (118.3 °C) in the network — 514.6 W
-against 157 W for the same 2.0 W/K. It belongs with the two `routes/thermal.py`
-findings above and is left for the owner for the same reason.
+I reported that the L13 MOUNT was driven by the housing wall (297.3 °C) in the
+2-D solve and by the stator node mean (118.3 °C) in the network, 514.6 W against
+157 W for the same 2.0 W/K. **Wrong, and for the same reason as the end-face
+one**: 297.3 °C IS the steady map's stator mean, 118.3 °C is the limited
+instant's, and I was comparing across the two states of a mixed record.
+514.6 W / (297.32 − 40) K = 2.000 W/K, exactly what was typed. The mount model
+is correct.
+
+### The one real defect behind all three — fixed at the source 2026-09-21
+
+A `solve_to: limits` run files the machine AT the crossing, and until today the
+record it stored carried the LIMITED `components` beside the STEADY `cooling`
+block with nothing saying so. `routes.thermal.rescale_map_to_nodes` now stamps
+`state: "limited"` on the snapshot, marks the cooling block
+`from_state: "steady"` with a note, and carries the calibration map's own node
+means in `transient_snapshot.calibration_components_c`;
+`duty_results.compact_thermal` carries all three into the stored record, every
+solved map is stamped `state: "steady"`, and
+`coupled_time_to_limit._fit_residual` records all four `map_means_c` instead of
+the winding's alone. Existing records are NOT rewritten — they are readable as
+shown above. Tests: `tests/test_continuous_rating.py`, three new, on a synthetic
+record.

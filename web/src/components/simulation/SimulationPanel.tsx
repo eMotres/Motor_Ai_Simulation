@@ -656,10 +656,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [coupled,       setCoupled]       = usePersisted('coupled', false);
   // WHICH QUESTION the loop is asked (owner 2026-09-18: *«надо сделать выбор —
   // или считать до конца стабилизации температуры, или считать до лимитов и
-  // находить время работы при заданных условиях»*).  Per DUTY, like the
-  // operating point (`lib/dutySettings` carries the key), because a continuous
-  // duty is a steady state by definition and a peak is a pull with a length.
-  const [solveTo,       setSolveTo]       = usePersisted<'steady' | 'limits'>(
+  // находить время работы при заданных условиях»*; third option 2026-09-21:
+  // *«давай сделаем кнопку, или лучше добавим ещё один элемент в меню»*).  Per
+  // DUTY, like the operating point (`lib/dutySettings` carries the key),
+  // because a continuous duty is a steady state by definition and a peak is a
+  // pull with a length.
+  const [solveTo,       setSolveTo]
+    = usePersisted<'steady' | 'limits' | 'continuous'>(
     'coupledSolveTo', 'steady');
   // A DIFFERENT MACHINE is on the panel — loaded here, or (since 2026-09-08) in
   // another browser and followed by the header strip.  lib/dutyLocalApply says
@@ -2597,7 +2600,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 label="Solve to"
                 value={solveTo}
                 onChange={e => setSolveTo(
-                  e.target.value === 'limits' ? 'limits' : 'steady')}
+                  e.target.value === 'limits' ? 'limits'
+                    : e.target.value === 'continuous' ? 'continuous'
+                    : 'steady')}
                 endAdornment={
                   <InputAdornment position="end" sx={{ mr: 2.5 }}>
                     <HelpTip title={
@@ -2610,12 +2615,18 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       + 'winding reaches 200 °C". Torque, losses, efficiency, '
                       + 'KV/Kt, demagnetisation and the maps are all that state. '
                       + 'A point that is inside every limit comes back as a '
-                      + 'steady answer and says so.'} />
+                      + 'steady answer and says so.\n\n'
+                      + 'Continuous rating (S1): does the same, then finds the '
+                      + "largest current the machine holds for ever at this "
+                      + "duty's saved cooling; torque scaled linearly with "
+                      + 'current, iron and magnet losses held at the solved '
+                      + 'point.'} />
                   </InputAdornment>
                 }
               >
                 <MenuItem value="steady">steady state</MenuItem>
                 <MenuItem value="limits">time to the limits</MenuItem>
+                <MenuItem value="continuous">continuous rating (S1)</MenuItem>
               </Select>
             </FormControl>
           )}

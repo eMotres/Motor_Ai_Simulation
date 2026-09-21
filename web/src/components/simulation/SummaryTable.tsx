@@ -17,7 +17,8 @@ import { fetchBearingLosses } from '../../lib/machineBearings';
 import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
 import { couplingLine, couplingTooltip, coupledStateLine,
-         coupledStateTip } from './coupledApi';
+         coupledStateTip, continuousRatingLine,
+         continuousRatingTip } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 
 /** Bench-probe result riding in the summary (backend measures it once per
@@ -1144,6 +1145,24 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             value={coupledStateLine(s.coupling) as string}
             accent="amber"
             tooltip={coupledStateTip(s.coupling)}/>
+        </Box>
+      )}
+      {/* ── THE CONTINUOUS (S1) RATING (owner 2026-09-21) ───────────────────
+          "давай сделаем кнопку, или лучше добавим ещё один элемент в меню" —
+          the third `solve_to` option's own line, beside the limit line above
+          it: the largest current this machine holds for ever at this duty's
+          own saved cooling.  Green when a current came back, amber when the
+          search refused (no capacities, a non-monotone map, …) — the same
+          "something is always said" rule as the limit line. */}
+      {s.coupling?.continuous_rating && (
+        <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
+          <Cell label="Continuous rating"
+            value={continuousRatingLine(s.coupling) as string}
+            accent={s.coupling.continuous_rating.ok
+                    && s.coupling.continuous_rating.feasible !== false
+                    && s.coupling.continuous_rating.trustworthy !== false
+                    ? 'green' : 'amber'}
+            tooltip={continuousRatingTip(s.coupling)}/>
         </Box>
       )}
 

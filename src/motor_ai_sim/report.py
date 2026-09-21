@@ -17977,6 +17977,98 @@ def time_to_limit_clause(rec: Optional[Dict[str, Any]], part: str) -> str:
                ttl_residual_words(blk)))
 
 
+
+# ---------------------------------------------------------------------------
+# THE CONTINUOUS (S1) RATING (owner 2026-09-21) — a third `solve_to` answer,
+# beside `steady` / `limits`: the largest current this machine may hold FOR
+# EVER at THIS duty's own saved cooling, found from the pass the loop already
+# made (`coupled_continuous_rating.rate`, run inline by the loop for exactly
+# one condition).  NEVER COMPUTED HERE — every function below only reads the
+# `continuous_rating` block the coupled record already carries, absent on
+# every duty that did not ask `solve_to: continuous`.
+# ---------------------------------------------------------------------------
+
+def continuous_rating_of(rec: Optional[Dict[str, Any]]
+                         ) -> Optional[Dict[str, Any]]:
+    """The ``continuous_rating`` block of a coupled record, or ``None`` — a
+    ``solve_to: continuous`` run's answer only.  ``None`` on every other
+    record, which is what "not asked" looks like here — never computed, never
+    guessed from the limited or steady state beside it."""
+    if not isinstance(rec, dict):
+        return None
+    blk = rec.get("continuous_rating")
+    return blk if isinstance(blk, dict) and blk else None
+
+
+def continuous_rating_feasible(blk: Optional[Dict[str, Any]]) -> bool:
+    """Whether a current may be quoted at all — a refused or untrustworthy
+    search has a sentence to print, never a number."""
+    b = blk or {}
+    return bool(b.get("ok", True) and b.get("feasible", True)
+               and b.get("trustworthy", True))
+
+
+def continuous_rating_words(rec: Optional[Dict[str, Any]]) -> str:
+    """The one-line cell / datasheet row: the current and what limits it, or
+    the reason there is none.
+
+    ``34.4 A rms — magnet 149.7 / 150 °C`` — and, on a search the machine or
+    the map refused, that refusal's own sentence rather than a blank cell."""
+    blk = continuous_rating_of(rec)
+    if blk is None:
+        return ""
+    if blk.get("trustworthy") is False:
+        return ("not a rating — the thermal solve is not monotone under this "
+                "cooling")
+    if not blk.get("ok", True) or blk.get("feasible") is False:
+        return str((blk.get("refusal") or {}).get("error") or blk.get("note")
+                   or "no continuous rating under this cooling")
+    i = _numf(blk.get("I_cont_A_rms"))
+    if i is None:
+        return ""
+    part = blk.get("limiting_part")
+    if not part:
+        return "%s A rms" % _fmt(i, 1, "")
+    q = _numf((blk.get("temperatures_c") or {}).get(part))
+    lim = _numf((blk.get("limits_c") or {}).get(part))
+    tail = ((" — %s %s / %s °C" % (part, _fmt(q, 1, ""), _fmt(lim, 0, "")))
+            if q is not None and lim is not None else " — %s" % part)
+    return "%s A rms%s" % (_fmt(i, 1, ""), tail)
+
+
+def continuous_rating_clause(rec: Optional[Dict[str, Any]]) -> str:
+    """ONE clause, the approximation stated: the house rule for these notes is
+    a single "; …" and never a sentence of its own."""
+    blk = continuous_rating_of(rec)
+    if blk is None or not continuous_rating_feasible(blk):
+        return ""
+    cooling = blk.get("cooling_label")
+    return ("; torque linear in current, iron and magnet losses held at the "
+            "solved point%s" % ("; " + cooling if cooling else ""))
+
+
+def continuous_rating_limit_words(rec: Optional[Dict[str, Any]]) -> str:
+    """The table's "limited by" cell: the part, its temperature against its
+    limit, and the one clause behind it — ``""`` when there is none."""
+    blk = continuous_rating_of(rec)
+    if blk is None:
+        return ""
+    if blk.get("trustworthy") is False:
+        return ("not a rating — the thermal solve is not monotone under this "
+                "cooling")
+    if not blk.get("ok", True) or blk.get("feasible") is False:
+        return str((blk.get("refusal") or {}).get("error") or blk.get("note")
+                   or "no continuous rating under this cooling")
+    part = blk.get("limiting_part")
+    if not part:
+        return ""
+    q = _numf((blk.get("temperatures_c") or {}).get(part))
+    lim = _numf((blk.get("limits_c") or {}).get(part))
+    base = (part if q is None or lim is None
+            else "%s, %s / %s °C" % (part, _fmt(q, 1, ""), _fmt(lim, 0, "")))
+    return base + continuous_rating_clause(rec)
+
+
 def coupled_warning_words(rec: Optional[Dict[str, Any]],
                           point_pct: Optional[float] = None) -> str:
     """The coupled loop's warning as a CLIENT reads it — ``""`` when there is
@@ -18219,6 +18311,38 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     # machine that is inside all of them, because "no time to a limit" is not a
     # number a reader should have to interpret.
     S("Time to the limit", lambda c: time_to_limit_words(_c(c)) or None)
+    # ── CONTINUOUS RATING (S1) AT THE SAVED COOLING (owner 2026-09-21) ───────
+    # *«давай сделаем кнопку, или лучше добавим ещё один элемент в меню»* — a
+    # third `solve_to` answer, beside the one above it: the largest current
+    # this machine may hold FOR EVER at this duty's own saved cooling.  NEVER
+    # COMPUTED HERE (`continuous_rating_of` only reads the stored block), so
+    # the whole group is silent — `_drop_empty` takes every row out — on any
+    # report where no duty ever asked `solve_to: continuous`.
+    def _crb(c):
+        return continuous_rating_of(_c(c))
+
+    def CR(label, fn, d=2, unit=""):
+        def _cell(c):
+            if _c(c) is None:
+                return NOT_SOLVED
+            blk = _crb(c)
+            if blk is None or not continuous_rating_feasible(blk):
+                return "—"
+            v = fn(blk)
+            return "—" if v is None else _fmt(v, d, unit)
+        rows.append([label] + _col_vals(cols, _cell))
+
+    CR("Continuous rating (S1), current [A rms]",
+       lambda b: _numf(b.get("I_cont_A_rms")), 1)
+    CR("Continuous rating (S1), torque, est. [N·m]",
+       lambda b: (None if _numf((b.get("power") or {}).get("T_em_Nm")) is None
+                  else abs(_numf((b.get("power") or {}).get("T_em_Nm")))), 3)
+    CR("Continuous rating (S1), shaft power, est. [W]",
+       lambda b: ((b.get("power") or {}).get("P_shaft_W")
+                  if (b.get("power") or {}).get("P_shaft_W") is not None
+                  else (b.get("power") or {}).get("P_mech_W")), 0)
+    S("Continuous rating (S1), limited by",
+      lambda c: continuous_rating_limit_words(_c(c)) or None)
     # …AND WHY THE PROVENANCE DIFFERS between two duties of one machine
     # (reviewer 2026-09-14, C5).  A loop that needed a second electromagnetic
     # run fed the seat temperature back and converged on it; a loop that

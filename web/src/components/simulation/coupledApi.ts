@@ -118,15 +118,23 @@ export interface CouplingBlock {
    *  this existed; present with `within_limits: true` on a point that is inside
    *  every one of them, which is what "nothing to say" looks like here. */
   time_to_limit?: TimeToLimit;
-  /** WHICH QUESTION this run was asked (owner 2026-09-18) — the selector beside
-   *  the Coupled thermal switch.  Absent on every record written before the
-   *  choice existed, and that is a `steady` one. */
-  solve_to?: 'steady' | 'limits';
-  /** …and WHICH ANSWER came back.  A `limits` run of a machine that is inside
-   *  every limit — or whose step response never reaches one — is a `steady`
-   *  record, because there is no moment to report. */
+  /** WHICH QUESTION this run was asked (owner 2026-09-18, third option added
+   *  2026-09-21) — the selector beside the Coupled thermal switch.  Absent on
+   *  every record written before the choice existed, and that is a `steady`
+   *  one. */
+  solve_to?: 'steady' | 'limits' | 'continuous';
+  /** …and WHICH ANSWER came back.  A `limits` (or `continuous`) run of a
+   *  machine that is inside every limit — or whose step response never
+   *  reaches one — is a `steady` record, because there is no moment to
+   *  report. */
   mode?: 'steady' | 'limited';
   limited?: LimitedState;
+  /** THE CONTINUOUS (S1) RATING (owner 2026-09-21): the largest current this
+   *  machine may hold FOR EVER at THIS duty's own saved cooling, found from
+   *  the pass above (the converged steady state, or the machine at the limit)
+   *  — `solve_to: 'continuous'` only.  Absent, never null, on every other
+   *  answer. */
+  continuous_rating?: ContinuousRating;
   /** THE CATALOGUE CONSTANTS (owner 2026-09-18): this machine's KV, Kt, Km and
    *  Km-per-kg with the winding AND the magnets at 20 °C — the datasheet
    *  convention every motor catalogue quotes, so two machines can be compared.
@@ -253,6 +261,78 @@ export interface TimeToLimit {
   calibration_runaway?: boolean;
 }
 
+/** ONE part's judged quantity at the continuous rating — the same shape
+ *  `POST /api/coupled/continuous_rating` prints per row. */
+export interface ContinuousRatingPart {
+  part: string;
+  node?: string;
+  quantity?: string;
+  node_c?: number;
+  quantity_c?: number;
+  limit_c?: number;
+  over_by_K?: number;
+  limit_source?: string;
+}
+
+/** THE CONTINUOUS (S1) RATING — the largest current this machine may hold FOR
+ *  EVER at ONE stated cooling (`coupled_continuous_rating.rate`).  On the
+ *  coupling block it is always the DUTY'S OWN saved cooling, found from the
+ *  pass the loop already made; `POST /api/coupled/continuous_rating` uses the
+ *  same shape for a whole table of what-if coolings.
+ *
+ *  Owner 2026-09-21: *«давай сделаем кнопку, или лучше добавим ещё один
+ *  элемент в меню»* — the third `solve_to` option. */
+export interface ContinuousRating {
+  ok?: boolean;
+  feasible?: boolean;
+  /** absent = refused; see `refusal` */
+  I_cont_A_rms?: number | null;
+  I_cont_A_peak?: number | null;
+  s?: number | null;
+  limiting_part?: string | null;
+  limit_residual_K?: number | null;
+  capped?: boolean;
+  /** each judged part's quantity AT the rating (°C) */
+  temperatures_c?: Record<string, number>;
+  parts?: ContinuousRatingPart[];
+  node_means_c?: Record<string, number>;
+  losses_W?: Record<string, number>;
+  power?: {
+    T_em_Nm?: number | null; P_cu_W?: number; P_other_loss_W?: number;
+    P_mech_W?: number; P_rotor_W?: number; P_elec_W?: number;
+    P_shaft_W?: number | null; eta_em?: number | null; eta_shaft?: number | null;
+    k_flux?: number | null; torque_basis?: string; basis?: string;
+    shaft_note?: string; note?: string;
+  };
+  /** the run this rating is a multiple of — the current, speed, load angle and
+   *  provenance the 's' scaling is against */
+  reference?: {
+    I_phase_rms_A?: number; rpm?: number | null; gamma_deg?: number | null;
+    coil_ref_c?: number | null; T_em_avg_Nm?: number | null;
+    computed_at?: string | null; geo_fingerprint?: string | null;
+    note?: string;
+  };
+  /** the cooling this rating answers for — machine-readable */
+  cooling?: Record<string, unknown>;
+  /** …and the same cooling, one line for a human: "forced air 40 m/s + bore
+   *  air 10 m/s, 30 °C" */
+  cooling_label?: string;
+  judged?: string[];
+  limits_c?: Record<string, number>;
+  n_thermal_fem_solves?: number;
+  converged?: boolean;
+  /** `false` = the 2-D thermal solve was not monotone under this cooling and
+   *  the search was refused to iterate — the row is NOT a rating */
+  trustworthy?: boolean;
+  model?: string;
+  notes?: string[];
+  note?: string | null;
+  /** the one sentence — `coupled_continuous_rating.headline` */
+  headline?: string;
+  /** present when `ok: false` (or `feasible: false`) instead of a current */
+  refusal?: { error: string; error_code?: string };
+}
+
 /** The found regime, as the coupling block carries it.  It IS a `RegimeLimits`
  *  (same four numbers, same names) plus what only a coupled answer knows: which
  *  kind of cycle it was, whether what the duty ASKED for fits under what the
@@ -299,19 +379,21 @@ export function coupledEnabled(): boolean {
   catch { return false; }
 }
 
-/** WHICH QUESTION the loop is asked (owner 2026-09-18) — the two-option
- *  selector beside the Coupled thermal switch.
+/** WHICH QUESTION the loop is asked (owner 2026-09-18, third option added
+ *  2026-09-21) — the selector beside the Coupled thermal switch.
  *
  *  `'steady'` is the default and every record written with it is what it always
  *  was; `'limits'` stops at the first limit a part reaches and reports the
- *  machine at that moment.  Read from the SAME per-duty memory the operating
- *  point uses (`lib/dutySettings`), so switching duty brings its own answer
- *  back — a peak that is a 24-second pull and a continuous duty that is a
- *  steady state are two different questions about one machine. */
-export function coupledSolveTo(): 'steady' | 'limits' {
+ *  machine at that moment; `'continuous'` does the same and adds the largest
+ *  current this machine may hold for ever at this duty's own saved cooling
+ *  (S1).  Read from the SAME per-duty memory the operating point uses
+ *  (`lib/dutySettings`), so switching duty brings its own answer back — a peak
+ *  that is a 24-second pull and a continuous duty that is a steady state are
+ *  two different questions about one machine. */
+export function coupledSolveTo(): 'steady' | 'limits' | 'continuous' {
   try {
-    return JSON.parse(localStorage.getItem('sim.coupledSolveTo') || '"steady"')
-      === 'limits' ? 'limits' : 'steady';
+    const v = JSON.parse(localStorage.getItem('sim.coupledSolveTo') || '"steady"');
+    return v === 'limits' || v === 'continuous' ? v : 'steady';
   } catch { return 'steady'; }
 }
 
@@ -363,9 +445,10 @@ export interface CoupledRunOptions {
   maxIter?: number;
   /** `'steady'` (the default) iterates until the temperatures stop moving;
    *  `'limits'` stops at the first limit a part reaches and reports the machine
-   *  at that moment.  Omitted = whatever the selector beside the switch holds
-   *  for the loaded duty. */
-  solveTo?: 'steady' | 'limits';
+   *  at that moment; `'continuous'` does the same and adds the S1 rating at
+   *  this duty's own cooling.  Omitted = whatever the selector beside the
+   *  switch holds for the loaded duty. */
+  solveTo?: 'steady' | 'limits' | 'continuous';
 }
 
 /**
@@ -680,6 +763,64 @@ export function timeToLimitTip(t: TimeToLimit | null | undefined): string {
       ? 'The map behind this network RAN AWAY — it has no equilibrium, so the '
         + 'conductances come from a state the machine cannot actually hold.'
       : '',
+  ].filter(Boolean).join('\n');
+}
+
+/* ── THE CONTINUOUS (S1) RATING (owner 2026-09-21) ───────────────────────────
+ * *«давай сделаем кнопку, или лучше добавим ещё один элемент в меню»* — the
+ * third `solve_to` option, beside `steady` and `limits`: the largest current
+ * this machine may hold FOR EVER at this duty's own saved cooling, found from
+ * the pass the loop already made. */
+
+/** "S1: 28.7 A rms · 1.04 N·m · 1.34 kW · limited by magnet 150 °C" — and
+ *  `null` when it was not asked for.  A rating that could not be found still
+ *  prints a line (there is always something to say about why), the way a
+ *  refused `limits` pass still warns instead of going silent. */
+export function continuousRatingLine(c: CouplingBlock | null | undefined):
+    string | null {
+  const r = c?.continuous_rating;
+  if (!r) return null;
+  if (r.trustworthy === false) {
+    return 'S1: NOT A RATING — the thermal solve was not monotone under this '
+      + 'cooling';
+  }
+  if (!r.ok || r.feasible === false || r.I_cont_A_rms == null) {
+    return `S1: ${r.refusal?.error ?? r.note ?? 'no continuous rating under '
+      + 'this cooling'}`;
+  }
+  const parts: string[] = [`${r.I_cont_A_rms.toFixed(1)} A rms`];
+  if (r.power?.T_em_Nm != null) {
+    parts.push(`${g1(Math.abs(r.power.T_em_Nm))} N·m`);
+  }
+  const pShaft = r.power?.P_shaft_W ?? r.power?.P_mech_W;
+  if (pShaft != null) parts.push(`${(pShaft / 1000).toFixed(2)} kW`);
+  if (r.limiting_part) {
+    const lim = r.limits_c?.[r.limiting_part];
+    parts.push(`limited by ${r.limiting_part}`
+      + (lim == null ? '' : ` ${Math.round(lim)} °C`));
+  }
+  return `S1: ${parts.join(' · ')}`;
+}
+
+/** The HelpTip behind it: the model in one line, the cooling it is
+ *  conditional on, and the table of every judged part's temperature. */
+export function continuousRatingTip(c: CouplingBlock | null | undefined): string {
+  const r = c?.continuous_rating;
+  if (!r) return '';
+  const rows = (r.parts ?? []).map(p => {
+    const q = p.quantity_c != null ? `${p.quantity_c.toFixed(1)} °C` : '—';
+    const lim = p.limit_c != null ? ` / ${p.limit_c} °C` : '';
+    return `· ${p.quantity ?? p.part}: ${q}${lim}`;
+  });
+  return [
+    r.headline ?? '',
+    r.cooling_label ? `Cooling: ${r.cooling_label}.` : '',
+    'Largest current the machine holds for ever at this cooling: torque '
+    + 'scaled linearly with current, iron and magnet losses held at the '
+    + 'solved point.',
+    ...rows,
+    r.trustworthy === false
+      ? (r.notes?.find(n => n.startsWith('THE 2-D')) ?? '') : '',
   ].filter(Boolean).join('\n');
 }
 

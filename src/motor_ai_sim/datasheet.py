@@ -1297,6 +1297,27 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         + _split_note, 1, bold=True)
     row("Coil temperature (°C)", [_g(d, "summary.coil_temp_C") for d in duties],
         "the temperature the copper resistance is quoted at", 0)
+    # ── CONTINUOUS RATING (S1), when a duty was solved for one (owner
+    # 2026-09-21) ─────────────────────────────────────────────────────────
+    # A `solve_to: continuous` coupled run's own answer, read off the stored
+    # record — NEVER computed here.  Absent entirely (no row at all) when no
+    # duty in this configuration ever asked for it, the same "only when the
+    # block exists" rule the report's own row group follows.
+    def _cont_rating(du: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        _rec = (coupled or {}).get(str(du.get("name") or ""))
+        _blk = (_rec or {}).get("continuous_rating") \
+            if isinstance(_rec, dict) else None
+        return _blk if isinstance(_blk, dict) and _blk else None
+
+    if any(_cont_rating(d) for d in duties):
+        from motor_ai_sim.report import continuous_rating_feasible
+        row("Continuous current (S1) at saved cooling (A rms)",
+            [(_cont_rating(d) or {}).get("I_cont_A_rms")
+             if continuous_rating_feasible(_cont_rating(d)) else None
+             for d in duties],
+            "the largest current this machine holds for ever at THIS duty's "
+            "own saved cooling; torque linear in current, iron and magnet "
+            "losses held at the solved point", 1)
     # ── MECHANICAL, when the machine says which bearings it has ─────────────
     if _has_brg:
         _cards = [str((( _brg_assign.get(e) or {}).get("card") or ""))

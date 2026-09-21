@@ -486,35 +486,52 @@ def _coupled_drive(body: Dict[str, Any]) -> str:
 # температуры, или считать до лимитов и находить время работы при заданных
 # условиях»*.  So it is a CHOICE and not a rule the backend applies by itself:
 #
-#   ``steady``  (the default, and byte-identical to every record ever written)
-#               iterate until the winding, the magnets and the bearing seat stop
-#               moving, and report that state — even when it is past a limit.
-#   ``limits``  stop at the FIRST limit any part reaches and report the machine
-#               AT THAT MOMENT, with the time it took to get there from cold.
+#   ``steady``      (the default, and byte-identical to every record ever
+#                   written) iterate until the winding, the magnets and the
+#                   bearing seat stop moving, and report that state — even
+#                   when it is past a limit.
+#   ``limits``      stop at the FIRST limit any part reaches and report the
+#                   machine AT THAT MOMENT, with the time it took to get there
+#                   from cold.
+#   ``continuous``  (owner 2026-09-21: *«давай сделаем кнопку, или лучше
+#                   добавим ещё один элемент в меню»*, on the same selector) —
+#                   run the loop exactly as ``limits`` does (same stop rule, no
+#                   extra electromagnetic passes beyond what ``limits`` costs),
+#                   then, from that converged/limited pass's own loss map and
+#                   the cooling THIS duty was just solved with, find the
+#                   largest current the machine may hold FOR EVER (S1) —
+#                   :func:`coupled_continuous_rating.rate`, the same machinery
+#                   ``POST /api/coupled/continuous_rating`` uses, here run for
+#                   exactly one condition (the duty's own cooling, no patch).
 #
 # A default that had switched silently would have re-written the meaning of
 # every stored coupled record on the next re-run; this way a duty gets the
-# limited answer only because somebody asked for it, and the record says which
-# question it is the answer to (``solve_to``) and which answer it turned out to
-# be (``mode``).
-SOLVE_TO = ("steady", "limits")
+# limited or continuous answer only because somebody asked for it, and the
+# record says which question it is the answer to (``solve_to``) and which
+# answer it turned out to be (``mode``).
+SOLVE_TO = ("steady", "limits", "continuous")
 _SOLVE_TO_ALIASES = {"": "steady", "steady": "steady", "steady_state": "steady",
                      "stabilise": "steady", "stabilize": "steady",
                      "limits": "limits", "limit": "limits",
-                     "time_to_limit": "limits", "limited": "limits"}
+                     "time_to_limit": "limits", "limited": "limits",
+                     "continuous": "continuous", "continuous_rating": "continuous",
+                     "rating": "continuous", "s1": "continuous"}
 
 
 def _solve_to(body: Dict[str, Any]) -> str:
-    """``"steady"`` or ``"limits"`` — validated, and ``"steady"`` when absent."""
+    """``"steady"``, ``"limits"`` or ``"continuous"`` — validated, and
+    ``"steady"`` when absent."""
     raw = str(body.get("solve_to") or "").strip().lower()
     out = _SOLVE_TO_ALIASES.get(raw)
     if out is None:
         raise _refuse(
-            "solve_to=%r is not one of the two questions this loop answers: "
+            "solve_to=%r is not one of the three questions this loop answers: "
             "\"steady\" iterates until the temperatures stop moving and reports "
             "that state, \"limits\" stops at the first limit a part reaches and "
             "reports the machine at that moment with the time it took to get "
-            "there." % (body.get("solve_to"),),
+            "there, \"continuous\" does the same and adds the largest current "
+            "this machine may hold for ever at the duty's own cooling (S1)."
+            % (body.get("solve_to"),),
             ["solve_to"], code="unknown_solve_to")
     return out
 
@@ -2961,6 +2978,13 @@ def _run(body: Dict[str, Any],
     # pre-flight, for the reason everything else in this neighbourhood is: a
     # misspelled mode is a 422 in milliseconds, not after a transient.
     solve_to = _solve_to(body)
+    # ``continuous`` STOPS THE LOOP EXACTLY WHERE ``limits`` DOES — the S1
+    # search below is not another loop, it is one more thing done with the
+    # pass the loop already made, so it must never buy itself extra
+    # electromagnetic passes by changing the stop rule.  `solve_to` (what was
+    # ASKED, stored on the record) is kept separate from `_loop_solve_to`
+    # (which of the two STOP RULES the iteration itself obeys).
+    _loop_solve_to = "limits" if solve_to in ("limits", "continuous") else "steady"
 
     _preflight(body, max_iter=max_iter)
 
@@ -3399,7 +3423,7 @@ def _run(body: Dict[str, Any],
             # already the "how long may it be pulled" answer for that duty, and
             # two answers to one question is worse than one.  NOT on an errand
             # (`record: false`), which is one pass by contract.
-            if (solve_to == "limits" and regime is None
+            if (_loop_solve_to == "limits" and regime is None
                     and not _rr.suppressed()):
                 _progress.update(
                     phase="iteration %d/%d — how long until the limit"
@@ -3631,7 +3655,7 @@ def _run(body: Dict[str, Any],
         # and the pictures and the tables are one state.  The loop is NOT
         # re-entered: one pass, and the temperatures it is made at are the
         # answer by construction.
-        if (solve_to == "limits" and history and field and regime is None
+        if (_loop_solve_to == "limits" and history and field and regime is None
                 and not _rr.suppressed()):
             limited = _limited_block(
                 time_to_limit, cooling=cooling, field=field,
@@ -3758,6 +3782,44 @@ def _run(body: Dict[str, Any],
                 else:
                     limited["drive_held"] = "sine"
                 limited["em_run"] = True
+        # ── THE CONTINUOUS (S1) RATING, when that is the question ───────────
+        # Owner 2026-09-21: a third option on the ``solve_to`` selector, beside
+        # ``steady`` and ``limits``.  This is not a second loop: it is one more
+        # thing said about the pass the loop already made — the converged
+        # steady state, or the machine at the limit found above — using this
+        # duty's OWN cooling with no patch, and the already-existing
+        # ``coupled_continuous_rating`` machinery
+        # (``POST /api/coupled/continuous_rating``) for exactly one condition.
+        # `regime is None` for the reason the limit search above states: an
+        # impulse duty's S2/S3 search already answers "how long may it be
+        # pulled", and a continuous rating beside it would answer a question
+        # this duty does not ask.
+        continuous_rating: Optional[Dict[str, Any]] = None
+        if (solve_to == "continuous" and history and field and regime is None
+                and not _rr.suppressed()):
+            _check_cancelled(run_id)
+            try:
+                from motor_ai_sim.duty_results import active_context as _dnc
+                _dn_ctx = _dnc()
+                duty_name = str(_dn_ctx[2]) if _dn_ctx else "this run"
+            except Exception:  # noqa: BLE001 — a context read never fails
+                duty_name = "this run"
+            _progress.update(phase="continuous rating — this duty's own "
+                                   "cooling, from the pass just solved")
+            try:
+                continuous_rating = _continuous_rating_for_loop(
+                    body, cooling=cooling, em=em,
+                    summary=(em.get("summary") or {}), field=field,
+                    duty=duty_name, mode=str(body.get("mode") or "motor"))
+            except Exception:  # noqa: BLE001 — never fails the loop's own answer
+                log.debug("coupled: the continuous rating could not be found",
+                          exc_info=True)
+            if continuous_rating:
+                log.info(
+                    "coupled: continuous rating — %s",
+                    continuous_rating.get("headline")
+                    or (continuous_rating.get("refusal") or {}).get("error")
+                    or "")
         # ── AND THE SAME MACHINE AT 20 °C (owner 2026-09-18) ────────────────
         # *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить
         # все коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех
@@ -3951,6 +4013,12 @@ def _run(body: Dict[str, Any],
         # extrapolating the hot numbers, which is the very thing this pass
         # exists to replace.
         **({"constants_20c": constants_20c} if constants_20c else {}),
+        # THE CONTINUOUS (S1) RATING (owner 2026-09-21), when ``solve_to`` asked
+        # for it — kept whole, exactly as ``/continuous_rating`` returns a row,
+        # so the panel and the report read one shape either way.  Absent, never
+        # null, when it was not asked for or could not be found.
+        **({"continuous_rating": continuous_rating} if continuous_rating
+           else {}),
         # `**` rather than fixed keys: a machine with no bearings grows no
         # mechanical keys at all, which is what "absent, not zero" means in a
         # payload.
@@ -4405,6 +4473,126 @@ def _cr_record(block: Dict[str, Any]) -> bool:
     except Exception:  # noqa: BLE001 — bookkeeping never fails an answer
         log.debug("continuous_rating: not filed under the duty", exc_info=True)
         return False
+
+
+def _cooling_label(cooling: Mapping[str, Any]) -> str:
+    """One line, for a human, of a cooling block — "forced air 40 m/s + bore
+    air 10 m/s, 30 °C".  Display only; the machine-readable answer is the
+    ``cooling`` block that already rides beside it in every rating."""
+    c = dict(cooling or {})
+    mode = str(c.get("cooling_mode") or "").strip().lower()
+    parts: List[str] = []
+    if mode == "air":
+        v = _ccr._num(c.get("air_speed_mps"))
+        parts.append("forced air %.0f m/s" % v if v else "still air")
+    elif mode == "liquid":
+        v = _ccr._num(c.get("flow_lpm"))
+        parts.append("liquid jacket, %s%s" % (
+            str(c.get("fluid") or "water"),
+            "" if v is None else " %.1f L/min" % v))
+    elif mode == "manual":
+        v = _ccr._num(c.get("h_conv"))
+        parts.append("manual film" + ("" if v is None else " %.0f W/m2K" % v))
+    elif mode == "robotics":
+        v = _ccr._num(c.get("emissivity"))
+        parts.append("still air + radiation" + ("" if v is None
+                                                 else " eps %.2f" % v))
+    else:
+        parts.append(mode or "cooling not stated")
+    if str(c.get("frame") or "housed").strip().lower() == "open":
+        v = _ccr._num(c.get("open_air_speed_mps"))
+        parts.append("open frame" + ("" if v is None else " %.0f m/s" % v))
+    bore = str(c.get("bore_mode") or "none").strip().lower()
+    if bore == "air":
+        v = _ccr._num(c.get("bore_air_speed_mps"))
+        parts.append("bore air" + ("" if v is None else " %.0f m/s" % v))
+    elif bore == "liquid":
+        v = _ccr._num(c.get("bore_flow_lpm"))
+        parts.append("bore liquid" + ("" if v is None else " %.1f L/min" % v))
+    if _ccr._num(c.get("mount_g_w_per_k")):
+        parts.append("mount %.1f W/K" % _ccr._num(c.get("mount_g_w_per_k")))
+    label = " + ".join(p for p in parts if p)
+    amb = _ccr._num(c.get("ambient_temp"))
+    if amb is not None:
+        label += ", %g °C" % amb
+    return label or "cooling not stated"
+
+
+def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any],
+                                em: Dict[str, Any], summary: Dict[str, Any],
+                                field: Mapping[str, Any], duty: str, mode: str
+                                ) -> Optional[Dict[str, Any]]:
+    """The S1 rating for ``solve_to: continuous`` — ONE condition (this duty's
+    own cooling, no patch), from the pass the loop already made.
+
+    No electromagnetic run beyond the loop's own: ``em`` and ``field`` are the
+    converged (or limited) pass this loop just solved, and only the 2-D
+    thermal FEM is re-solved, once or twice more, with the copper scaled —
+    exactly what :func:`coupled_continuous_rating.rate`'s ``resolve`` callback
+    does for ``POST /api/coupled/continuous_rating``, reused here rather than
+    re-implemented.  Never raises: a condition that cannot be rated (no
+    capacities, no part limits, a non-monotone map) is reported as
+    ``{"ok": False, "refusal": ...}`` rather than failing the loop's own
+    answer.
+    """
+    from motor_ai_sim.routes.thermal import _assignments, _dc_geometry, \
+        _dc_side_areas
+    from motor_ai_sim.thermal_capacities import CapacityError, part_capacities
+
+    if not summary:
+        return None
+    try:
+        geom, _ov = _dc_geometry(body.get("geo"))
+        mats = _assignments()
+        d_housing_m = float(geom.get("stator_diameter") or 0.0) * 1e-3
+        caps = part_capacities(summary, mats, None)
+    except CapacityError as exc:
+        return {"ok": False, "cooling": dict(cooling or {}),
+                "cooling_label": _cooling_label(cooling),
+                "refusal": {"error": str(exc), "error_code": "no_capacities"}}
+    except Exception:  # noqa: BLE001 — never fails the loop's own answer
+        log.debug("coupled: continuous rating precheck failed", exc_info=True)
+        return None
+    side0 = _dc_side_areas(dict(field), summary, geom)
+
+    _pass_n = {"n": 1}
+
+    def _resolve(factor: float) -> Optional[Dict[str, Any]]:
+        _pass_n["n"] += 1
+        _s_approx = math.sqrt(max(float(factor), 0.0))
+        _progress.update(
+            phase="continuous rating %d/%d — thermal at ≈%.2f × I"
+                  % (_pass_n["n"], _ccr.MAX_MAP_PASSES, _s_approx))
+        return _cr_solve_map(
+            _cr_point_kwargs(body), cooling,
+            em_map=_cr_scaled_map(em, factor),
+            em_source={"kind": "coupled_loop_pass",
+                       "note": ("the loop's own converged/limited pass, "
+                                "re-solved with the copper scaled by %.4f x "
+                                "(s^2 x rho_Cu(T_w)/rho_Cu(coil_ref)) — no "
+                                "electromagnetic solve" % float(factor))})
+
+    def _refit(m: Mapping[str, Any]):
+        return _dc_side_areas(dict(m), summary, geom), None
+
+    _progress.update(phase="continuous rating 1/%d — the loop's own pass"
+                           % _ccr.MAX_MAP_PASSES)
+    try:
+        block = _ccr.rate(
+            thermal_result=field, em_summary=summary, caps=caps,
+            geometry=geom, cooling=cooling, side_areas=side0,
+            d_housing_m=d_housing_m, duty=duty, mode=mode,
+            resolve=_resolve, refit=_refit, magnet_grade=mats.get("magnet"))
+    except _cdc.DutyCycleError as exc:
+        return {"ok": False, "cooling": dict(cooling or {}),
+                "cooling_label": _cooling_label(cooling),
+                "refusal": {"error": str(exc),
+                            "error_code": getattr(exc, "error_code",
+                                                  "duty_cycle")}}
+    block["ok"] = True
+    block["headline"] = _ccr.headline(block)
+    block["cooling_label"] = _cooling_label(cooling)
+    return block
 
 
 def _cr_one(cond: Any, *, point: Dict[str, Any], defaults: Dict[str, Any],

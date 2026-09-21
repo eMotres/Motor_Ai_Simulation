@@ -1332,6 +1332,16 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         **({"constants_20c": dict(c["constants_20c"])}
            if isinstance(c.get("constants_20c"), dict) and c["constants_20c"]
            else {}),
+        # THE CONTINUOUS (S1) RATING (owner 2026-09-21): the largest current
+        # this machine may hold for ever at THIS duty's own saved cooling, from
+        # a ``solve_to: continuous`` run.  Kept WHOLE — the same shape
+        # ``coupled_continuous_rating.rate`` returns for one condition — because
+        # the report's rating row and the catalog chip read the DUTY's record,
+        # not the run.  Absent, never null, on every record that did not ask
+        # for it.
+        **({"continuous_rating": dict(c["continuous_rating"])}
+           if isinstance(c.get("continuous_rating"), dict)
+           and c["continuous_rating"] else {}),
         "iterations": c.get("iterations"),
         "em_runs": c.get("em_runs"),
         "converged": bool(c.get("converged")) if c else None,

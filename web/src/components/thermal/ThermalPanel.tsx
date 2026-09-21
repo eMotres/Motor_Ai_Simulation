@@ -37,7 +37,8 @@ import { DUTY_CYCLE_ENABLED } from '../../lib/dutyCycleFlag';
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
 // The ORCHESTRATOR's last answer, for the one line this tab reads off it.
 import { fetchCoupledLast, coupledStateLine,
-         coupledStateTip } from '../simulation/coupledApi';
+         coupledStateTip, continuousRatingLine,
+         continuousRatingTip } from '../simulation/coupledApi';
 import type { CouplingBlock } from '../simulation/coupledApi';
 import {
   BORE_MODE_LABEL, COOL_MODE_LABEL, END_FACE_LABEL, END_FACE_SIDES_LABEL,
@@ -476,6 +477,19 @@ const CoupledSection: React.FC = () => {
                 {coupledStateLine(ttl)}
               </Typography>
               <HelpTip title={coupledStateTip(ttl).split('\n')[0]} />
+            </Box>
+          )}
+          {/* THE CONTINUOUS (S1) RATING (owner 2026-09-21), beside the limit
+              line above it — present only on a `solve_to: continuous` run. */}
+          {continuousRatingLine(ttl) && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
+                       mb: 0.75 }}>
+              <Typography sx={{ ...warn, display: 'inline-block',
+                                borderBottom: 'none', cursor: 'default',
+                                whiteSpace: 'normal' }}>
+                {continuousRatingLine(ttl)}
+              </Typography>
+              <HelpTip title={continuousRatingTip(ttl).split('\n')[0]} />
             </Box>
           )}
 

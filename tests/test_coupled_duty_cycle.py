@@ -157,8 +157,16 @@ def test_a_pull_longer_than_the_machine_allows_does_not_fit(areas):
 def test_a_point_with_no_feasible_ratio_says_so_and_offers_the_pull(areas):
     """NEVER A FAKE CONVERGENCE.  A magnet limit this point cannot respect at any
     duty ratio must come back as "there is no regime" plus the single-pulse time
-    — the same number the duty-cycle tool prints — and not as a settled pair."""
-    m = _model(dict(S3), areas, magnet_limit_c=45.0,
+    — the same number the duty-cycle tool prints — and not as a settled pair.
+
+    The limit MOVED on 2026-09-21, from 45 °C to 41 °C, and the move is the
+    measurement: with ``surface_fit`` on, this machine's housing carries the
+    1.107 W/K its map was solved at instead of a still-air 0.057 W/K, so 45 °C
+    (5 K over the 40 °C air) is now reachable at ED 1.5 % — a REGIME, and the
+    test would have been asserting that a feasible duty is infeasible.  41 °C is
+    one kelvin over the air the magnets sit in, which no duty ratio can respect
+    on a machine whose magnets make their own eddy loss."""
+    m = _model(dict(S3), areas, magnet_limit_c=41.0,
                magnet_limit_source="the request (magnet_limit_c)")
     r = cdc.solve_regime(m, samples_per_segment=12)
     assert r["feasible"] is False

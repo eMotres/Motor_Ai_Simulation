@@ -1099,7 +1099,7 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
                         geometry: Optional[Mapping[str, Any]] = None,
                         magnet_k_w_per_mk: Optional[float] = None,
                         allow_merge: bool = False,
-                        surface_fit: bool = False,
+                        surface_fit: bool = True,
                         ) -> Network:
     """Fit the lumped network to ONE converged steady map.
 
@@ -1124,17 +1124,27 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     ``Network.links`` says of every link whether it is ``calibrated``,
     ``physical`` or ``merged``.
 
-    ``surface_fit=True`` (2026-09-20) takes each SURFACE path's conductance from
+    ``surface_fit`` (2026-09-20, **the DEFAULT since 2026-09-21** — owner:
+    *«давай включай все»*) takes each SURFACE path's conductance from
     the map as well — the housing film the map actually used (forced air, a
     jacket, a typed h) instead of a natural-convection correlation, the axial
     end faces from the watts the map's heat budget closes on, and the open
     frame's end-turn and slot-channel paths, which the network had no key for at
     all.  It also takes every watt a node sends STRAIGHT to the room off that
     node's internal drive, so the winding→stator link is fitted to what actually
-    crosses into the iron.  It is OFF by default because switching it on moves
-    every answer this network has produced on a machine that is not a still-air
-    housed one, reports already delivered included; see the module note in
-    ``docs/CONTINUOUS_RATING_2026-09-20.md`` for the measured sizes.
+    crosses into the iron.  It shipped OFF for one day, so the owner could see
+    what it moves before it moved anything; ``surface_fit=False`` still restores
+    the pre-2026-09-21 network exactly, which is how a record written before
+    that date has to be read back.  ``docs/CONTINUOUS_RATING_2026-09-20.md``
+    carries the measured sizes.
+
+    WHAT TURNING IT ON COST, and it was not what it looked like: the L13 test
+    set went from 60 s to over 14 minutes without finishing, and the cause was
+    NOT this fit.  A 4 % change in one conductance was enough to tip the S3
+    search into an unguarded Aitken extrapolation that threw the rotor to
+    −2822 °C, and LSODA then ground for ever on air properties below absolute
+    zero.  :func:`_aitken` now has a lower bound; with it the same set runs in
+    34 s — an order of magnitude FASTER than before either change.
 
     ``allow_merge=True`` restores the old behaviour (capacities and losses
     summed, no conductance carried) and is there for reading an OLD record back,
@@ -1896,7 +1906,11 @@ def periodic_steady_state(profile: Profile, network: Network,
         if residual < float(tol_k):
             break
         if aitken and len(history) >= 3:
-            acc = _aitken(history[-3], history[-2], history[-1])
+            # The coldest thing this machine touches: an accelerated state below
+            # it is an extrapolation and not a temperature (see `_aitken`).
+            acc = _aitken(history[-3], history[-2], history[-1],
+                          floor_c=min(float(network.t_ambient_c),
+                                      float(network.t_mount_c)) - 1.0)
             if acc is not None:
                 state = acc
     else:
@@ -1932,8 +1946,27 @@ def periodic_steady_state(profile: Profile, network: Network,
 
 
 def _aitken(a: Mapping[str, float], b: Mapping[str, float],
-            c: Mapping[str, float]) -> Optional[Dict[str, float]]:
-    """Aitken Δ² on the cycle map, per node — ``None`` if it is not usable."""
+            c: Mapping[str, float], floor_c: Optional[float] = None
+            ) -> Optional[Dict[str, float]]:
+    """Aitken Δ² on the cycle map, per node — ``None`` if it is not usable.
+
+    BOUNDED AT BOTH ENDS (2026-09-21).  The upper guard has always been here;
+    the lower one was missing, and an acceleration is not a physical step: on a
+    node whose two increments nearly cancel, ``d2²/den`` can throw the state
+    hundreds of degrees the wrong way.  Measured while turning ``surface_fit``
+    on — a 4 % change in one conductance was enough to tip the 40 mm S3 search
+    into it — the rotor was extrapolated to **−2822 °C**, and the next cycle was
+    then integrated through air properties evaluated below absolute zero, where
+    LSODA cuts its step down and never comes back: one ``allowable_ed`` call
+    that costs 14 s stopped finishing at all.
+
+    A cycle map's fixed point cannot be colder than the coldest sink the machine
+    touches, so ``floor_c`` (the ambient / mount, whichever is lower) is the
+    bound, with absolute zero as the backstop when no floor is given.  Rejecting
+    the step costs one ordinary iteration and nothing else — the plain iteration
+    converges to the same fixed point, only slower.
+    """
+    lo = (float(floor_c) if floor_c is not None else -273.15)
     out: Dict[str, float] = {}
     for n in NODES:
         d1 = b[n] - a[n]
@@ -1942,7 +1975,7 @@ def _aitken(a: Mapping[str, float], b: Mapping[str, float],
         if abs(den) < 1e-12 or abs(d2) > abs(d1):      # diverging: don't push
             return None
         out[n] = c[n] - d2 * d2 / den
-        if not math.isfinite(out[n]) or out[n] > RUNAWAY_C:
+        if not math.isfinite(out[n]) or out[n] > RUNAWAY_C or out[n] < lo:
             return None
     return out
 

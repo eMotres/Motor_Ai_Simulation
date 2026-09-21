@@ -288,26 +288,53 @@ def test_the_end_face_areas_are_the_geometrys_own(areas):
     assert "end_winding_area" in areas["basis"]["winding_ends"]
 
 
-def test_the_end_faces_carry_more_than_the_housing(net_robot):
-    """The user's correction, as a number.
+def test_the_end_faces_carry_more_than_the_housing_in_STILL_air():
+    """The user's correction, as a number — on a machine that IS in still air.
 
-    At ΔT 60 K over 40 °C air the machine's exposed AXIAL faces are worth
-    0.24 W/K against the housing cylinder's 0.06 W/K — four times as much — and
-    the coil ends alone are 2.5× the housing.  A model without them would put
-    every one of those watts through the mount.
+    At ΔT 60 K over 40 °C air the 40 mm joint's exposed AXIAL faces are worth
+    0.23 W/K against the housing cylinder's 0.055 W/K — four times as much —
+    and the coil ends alone are 2.5× the housing.  A model without them would
+    put every one of those watts through the mount.
+
+    The fixture MOVED on 2026-09-21: it used to be ``net_robot``, whose map was
+    solved at a typed h = 300 W/m²K, and the claim only held there because the
+    network was re-inventing that housing as still air (see the next test).  The
+    CAL40 map is the genuinely still-air one, and the claim is its own.
     """
+    net = _net40()
     t_wall = 100.0
-    g_house = dc.still_air_G(t_wall, net_robot, "housing")
-    g_coils = dc.still_air_G(t_wall, net_robot, "winding_ends")
-    g_sides = sum(dc.still_air_G(t_wall, net_robot, k)
+    g_house = dc.still_air_G(t_wall, net, "housing")
+    g_coils = dc.still_air_G(t_wall, net, "winding_ends")
+    g_sides = sum(dc.still_air_G(t_wall, net, k)
                   for k in ("winding_ends", "stator_ends", "rotor_ends",
                             "magnet_ends"))
-    assert g_house == pytest.approx(0.057, abs=0.008)
+    assert g_house == pytest.approx(0.055, abs=0.008)
     assert g_coils > 2.0 * g_house
     assert g_sides > 3.5 * g_house
-    # h rises with the wall temperature (radiation and Rayleigh both do)
-    assert (dc.still_air_G(140.0, net_robot, "housing")
-            > dc.still_air_G(60.0, net_robot, "housing"))
+    # h rises with the wall temperature (radiation and Rayleigh both do), and a
+    # NATURAL film keeps doing so after the map's level has been adopted
+    assert (dc.still_air_G(140.0, net, "housing")
+            > dc.still_air_G(60.0, net, "housing"))
+
+
+def test_a_typed_h_is_the_maps_own_conductance_and_is_HELD(net_robot):
+    """surface_fit, 2026-09-21: the map wins, and a forced film does not move.
+
+    ``RATED_MAP`` was solved with ``cooling_mode: manual``, h = 300 W/m²·K —
+    60.31 W off a 94.5 °C stator into 40 °C air, i.e. 1.107 W/K.  Until today
+    the network threw that away and re-evaluated a natural-convection
+    correlation, which reads 0.057 W/K: a factor of nineteen, and the whole
+    reason the L13 transients ran away in the network while the 2-D map they
+    were fitted to sat still.  Now the level is the map's, and because the film
+    is FORCED (somebody typed it / blew it / pumped it) it does not move with
+    the wall.
+    """
+    assert net_robot.film_kind["housing"] == "forced"
+    assert net_robot.G_fit["housing"] == pytest.approx(60.31 / (94.5 - 40.0),
+                                                       rel=1e-3)
+    for t_wall in (60.0, 100.0, 140.0):
+        assert dc.still_air_G(t_wall, net_robot, "housing") == pytest.approx(
+            1.1066, rel=1e-3)
 
 
 def test_S1_on_the_network_reproduces_the_calibration_map(net_cal, caps):
@@ -368,10 +395,14 @@ def test_the_S2_pull_sits_between_the_two_hand_bounds(net_robot, caps):
     assert adiabatic == pytest.approx(9.7, abs=0.2)
     assert mixed == pytest.approx(40.0, abs=0.3)
     assert adiabatic < out["s2_time_to_limit_s"] < mixed
-    # 25.8 s with the rotor and the magnets on their own conductances.  Merging
-    # them into the stator lump (the pre-2026-09-15 network) reads 33 s here —
-    # the coil borrowing 71 J/K it is not in contact with.
-    assert out["s2_time_to_limit_s"] == pytest.approx(25.8, abs=1.5)
+    # 27.4 s with the rotor and the magnets on their own conductances.  It was
+    # 25.8 s until 2026-09-21: `surface_fit` gives the housing the 1.107 W/K the
+    # map was actually solved with instead of a still-air 0.057 W/K, so a little
+    # more of the pull leaves through the housing and the coil takes 1.6 s
+    # longer to reach the class.  Merging the rotor and the magnets into the
+    # stator lump (the pre-2026-09-15 network) reads ~33 s here — the coil
+    # borrowing 71 J/K it is not in contact with.
+    assert out["s2_time_to_limit_s"] == pytest.approx(27.4, abs=1.5)
     assert out["s2_limiting_part"] == "winding"
     assert "200 °C" in out["note"]
 
@@ -407,7 +438,12 @@ def test_the_S3_cycle_reaches_a_periodic_state_and_the_budget_closes(net_robot,
     assert abs(split["closure_pct"]) < 0.1
     # every path is its own line, and the axial ones are inside the two sides
     assert split["mount_W"] > split["housing_W"] > 0.0
-    assert split["winding_end_faces_W"] > split["housing_W"]
+    # The coil ends are NOT the second path on this machine — its map was solved
+    # at a typed h = 300 W/m²·K, so the housing carries 45 W against their 9 W.
+    # Until 2026-09-21 the network re-invented that housing as still air and the
+    # order came out the other way round; see
+    # `test_a_typed_h_is_the_maps_own_conductance_and_is_HELD`.
+    assert split["housing_W"] > split["winding_end_faces_W"] > 0.0
     assert split["stator_side_W"] == pytest.approx(
         split["housing_W"] + split["mount_W"] + split["winding_end_faces_W"]
         + split["stator_end_faces_W"], abs=0.02)

@@ -593,8 +593,9 @@ def rate(*, thermal_result: Mapping[str, Any],
             # reason this feature can answer for a jacket and an open frame at
             # all: without it the network re-invents a still-air film for a
             # 40 m/s housing and has no key for the 207 W the end turns of this
-            # machine take straight to the room.  See `network_from_steady` for
-            # why it is opt-in and not the default.
+            # machine take straight to the room.  It is the DEFAULT since
+            # 2026-09-21 and is spelled out here anyway, because this feature
+            # cannot be correct without it.
             surface_fit=True)
         judged = list(limits if limits is not None
                       else _ttl.part_limits(thermal_result=cur_map,

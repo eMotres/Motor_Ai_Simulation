@@ -314,3 +314,105 @@ def test_a_free_part_with_no_separation_joint_falls_back_to_the_open_rule():
     v = rs.runaway_verdict(
         2e-2, 0.1, ["rotor"], None, _ifaces(magnet_rotor=0.93, shaft_rotor=0.20))
     assert v["pair"] in ("magnet_rotor", "rotor_shaft", "shaft_rotor")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-09-21.  The owner hit this refusal on production with a machine that was
+# NOT a runaway at all: CIANO14 50 edited / L15 — Ø50, 14 poles, rotor_hole 1,
+# magnet_up_gap 0.1, «мне нужно сделать запас magnet_up_gap = 0.1, чтобы
+# магниты не выскочили наружу, я должен проверить деформации».
+#
+# The straight-sided pocket ran its walls out to the rotor OD whatever the gap,
+# so the 0.1 mm of retaining iron he had drawn was cut away and replaced by a
+# crescent of pocket air ending in a ZERO-angle wedge on each side.  That wedge
+# meshed into 22 triangles of 6e-19 mm² (minimum angle 0.00°, against 6e-4 mm²
+# / 3.70° at magnet_up_gap = 0); the magnet locked at ±105 MPa with every
+# contact pair closed to 2e-16 µm, the rotor stopped deforming (0.05 µm against
+# 6.23) and the bore reacted 0.5 % of the applied torque — so `runaway_verdict`
+# refused it, correctly, for a geometry that should never have been built.
+#
+# `cadquery_geometry._pocket_bridge` now leaves the iron where it was drawn, and
+# the combination solves like the machine it is.  The geometry side is pinned in
+# tests/test_pocket_straight_sides.py, section (h); this is the solver side.
+# ─────────────────────────────────────────────────────────────────────────────
+
+CIANO50 = {
+    "stator_diameter": 50.0, "slot_height": 7.5, "core_thickness": 2.4,
+    "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
+    "air_gap": 0.25, "tooth_width": 4.2, "tooth2_width": 2.1, "cut_width": 1.2,
+    "insulation_thickness": 0.06, "wire_width": 3.0, "wire_height": 0.5,
+    "wire_spacing_x": 0.07, "wire_spacing_y": 0.1, "num_wires_per_slot": 11,
+    "wire_split": 1, "wire_parallel": 1, "slot_hs": 0.267,
+    "magnet_height": 7.0, "rotor_house_height": 1.3, "shaft_height": 2.0,
+    "magnet_fill_down": 0.87, "magnet_fill_up": 0.34, "magnet_fill_radius": 0.2,
+    "magnet_up_gap": 0.1, "rotor_hole": 1.0, "magnet_down_height": 1.5,
+    "magnet_lamination": 0, "stator_fillet_r": 1.5, "stator_fillet_r1": 0.1,
+    "rotor_fill_r": 0.2, "motor_length": 15.0, "sleeve_thickness": 0.0,
+    "rotor_outer_radius": 14.85, "rotor_inner_radius": 6.55,
+}
+
+CIANO50_ASSIGN = {"rotor_core": "20SW1200", "magnet": "N52UH_150C",
+                  "shaft": "Aluminium_7075"}
+
+
+def _ciano50(hole: float, gap: float):
+    from motor_ai_sim.cadquery_geometry import CadQueryMotor
+
+    motor = CadQueryMotor()
+    motor.set_parameters(dict(CIANO50, rotor_hole=hole, magnet_up_gap=gap))
+    return motor.get_2d_polygons(0.0)
+
+
+def _solve_ciano50(hole: float, gap: float, rpm: float = 20000.0):
+    """Coarse mesh, P1, spin only — this asks whether the machine is BUILDABLE,
+    not what its safety factor is (that is the owner's own run)."""
+    return rs.solve_rotor_stress(
+        _ciano50(hole, gap), CIANO50_ASSIGN, rpm, 1.0, 0.0,
+        stack_length_mm=float(CIANO50["motor_length"]),
+        mesh_size_mm=3.0, order=1, with_field=False,
+        contacts={"magnet_rotor": ctc.ContactSpec("separation", 0.2)},
+        lift_off_solves=0, case_mode="single", loads="centrifugal")
+
+
+@pytest.mark.parametrize("hole", [0.9, 1.0])
+@pytest.mark.parametrize("gap", [0.0, 0.05, 0.1, 0.3])
+def test_the_ciano50_solves_at_every_pocket_and_gap(hole, gap):
+    """«эта пара должна работать при любом значении magnet_up_gap» — asserted.
+
+    Solved, not refused; the rotor one body with no part left unretained; and
+    the displacements an elastic answer rather than the 0.05 µm frozen state the
+    degenerate pocket produced.
+    """
+    out = _solve_ciano50(hole, gap)
+    case = out["cases"][out["primary_case"]]
+    assert case["contact"]["unretained_parts"] == []
+    assert case["contact"]["n_bodies"] == 1
+    u = case["max_displacement_um"]
+    assert 0.1 < u < 0.1 * CIANO50["rotor_outer_radius"] * 1e3, (
+        f"rotor_hole {hole}, magnet_up_gap {gap}: |u|max = {u} µm is not an "
+        f"elastic answer for a Ø{2 * CIANO50['rotor_outer_radius']:.1f} mm "
+        f"rotor at 20 000 rpm")
+    assert case["parts"]["rotor"]["safety_factor"] > 0.0
+    assert case["parts"]["magnet"]["safety_factor"] > 1.0, (
+        "the magnet is crushed in its own pocket — the jam this fix removed")
+
+
+def test_the_bridged_ciano50_is_held_by_the_bridge_not_by_the_wedge():
+    """The retaining iron is what carries the magnets once it exists.
+
+    At magnet_up_gap = 0 the magnets reach the rim and the converging pocket
+    walls hold them (the "wedge"); at 0.1 mm the bridge over them does, which is
+    what the owner drew it for.  The verdict line has to say so, because it is
+    the sentence he reads in the report.
+    """
+    wedge = _solve_ciano50(1.0, 0.0)["cases"]["20,000 rpm"]
+    bridge = _solve_ciano50(1.0, 0.1)["cases"]["20,000 rpm"]
+    assert "wedge" in wedge["magnet_retention"]["verdict"]
+    assert "iron" in bridge["magnet_retention"]["verdict"], \
+        bridge["magnet_retention"]["verdict"]
+    # the bridge takes the centrifugal load radially; the wedge takes it on the
+    # side walls.  Either way SOMETHING carries it — the failing build carried
+    # 9 % of it and called the rest nobody's.
+    for out in (wedge, bridge):
+        share = out["magnet_retention"]["share"]
+        assert max(share.values()) > 0.5, share

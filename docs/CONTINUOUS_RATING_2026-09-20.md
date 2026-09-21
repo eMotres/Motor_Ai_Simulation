@@ -327,3 +327,56 @@ solved map is stamped `state: "steady"`, and
 the winding's alone. Existing records are NOT rewritten — they are readable as
 shown above. Tests: `tests/test_continuous_rating.py`, three new, on a synthetic
 record.
+
+
+## Validation on the other motors — 2026-09-21, each with ITS OWN saved cooling
+
+Owner: *«проверяй алгоритм на других моторах не меняя систему охлаждения»*.  One
+condition per duty and it is the empty patch — the cooling the duty's own stored
+thermal map was solved under, read back by
+`coupled_continuous_rating.cooling_from_duty_thermal`.  No electromagnetic solve:
+each rating stands on the cycle-averaged loss map the thermal router already
+remembers for that exact point (`config/.thermal_loss_maps.pkl`).
+
+| die / config / duty | I_duty A | the coupled record's verdict | I_cont A | s\* | limited by | winding / magnet °C at s\* | T N·m | P_rotor W | η_em | resid % | FEM | wall | a | b |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| CIANO28 85 20SW1200 / L13 / rated | 26.09 | INSIDE its limits (winding 157.3/200, magnet 110.0/150) | **29.30** | 1.123 | winding | 200.2 / 131.7 | 6.117 | 592 | 0.682 | 10.1 | 2 | 6.5 s | ✔ 0.0 K | ✔ s\*>1 |
+| CIANO28 85 20SW1200 / L13 / peak | 45.96 | OVER the winding limit (408.9/200), 24.4 s from cold | **29.40** | 0.640 | winding | 200.4 / 138.9 | 6.021 | 583 | 0.677 | 1.3 | 3 | 10.0 s | ✔ 0.03 K | ✔ s\*<1 |
+| CIANO14 50 edited / L15 / rated edited @10 000 | 63.64 | thermal map OVER the magnet card (239.5/150) | **34.36** | 0.540 | magnet | 103.0 / 149.7 | 1.175 | 1230 | 0.933 | 9.2 | 4 | ~9 s | ✔ 0.0 K | ✔ s\*<1 |
+| CIANO14 50 edited / L15 / rated edited @13 000 | 42.78 | (its own run, no coupled record at this speed) | **28.74** | 0.672 | magnet | 94.8 / 149.9 | 1.037 | 1343 | 0.944 | 11.1 | 3 | ~9 s | ✔ | n/a |
+
+**(a)** is the regression: the reference map at s = 1 must reproduce the map the
+duty stores.  L13 rated 152.2 °C against the stored 152.2; L13 peak 392.4 against
+the 392.37 the record's steady state actually is (its `components` say 183.5 —
+that is the mixed-state record above, and the rating correctly reproduces the
+solve, not the mixture); the Ø50 reproduces 251.5 / 257.7 exactly.
+
+**(b)** is the direction: a duty the loop settled INSIDE its limits must rate at
+or above its own current, one it found OVER a limit below it.  Both hold, and
+both name the same limiting part the record does.
+
+**The strongest check is one nobody asked for**: the L13's two duties are two
+different reference points — 26.09 A at coil 151.6 °C and 45.96 A at coil
+200 °C, 195 W and 676 W of copper — and they rate the same machine under the
+same cooling at **29.30 A and 29.40 A**. The method is reference-independent to
+0.35 %.
+
+`P_shaft` and `η_shaft` are absent in every row: none of these configurations
+names bearings, so `P_mech_extra_W` is unknown and an unknown friction is not a
+zero. The η column is the electromagnetic one. `P_rotor` carries each machine's
+own 3-D factor (L13 k_flux 0.9248, Ø50 0.95139).
+
+### Skipped, and why
+
+| duty | why |
+|---|---|
+| CIANO10 200 opt / L155 motor / rated + peak | no remembered loss map for their points (562.1 A @ 14 200 rpm, 770.5 A @ 20 000 rpm) |
+| CIANO10 200 opt / L180 gen / rated + peak | the same (600.4 A @ 20 900 rpm, 614.5 A @ 22 900 rpm) |
+| CIANO10 200 opt / L180 motor / rated + peak | no run payload left in the die's run store |
+| CIANO14 40 new / L12 / peak | the same |
+
+Rating any of them needs one electromagnetic transient each — minutes on the
+Ø200 — which was not authorised.  Their loss maps are not in
+`.thermal_loss_maps.pkl` because that store keeps only what the thermal tab has
+been asked for recently.  Nothing about the method blocks them: hand the route a
+backend that holds their runs and the same call answers.

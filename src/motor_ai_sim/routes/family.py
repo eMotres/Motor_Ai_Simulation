@@ -1273,6 +1273,77 @@ def _time_to_limit_kv(coupled: Any) -> Dict[str, Any]:
     return {"time_to_limit": row} if row else {}
 
 
+def _continuous_rating_row(coupled: Any) -> Optional[Dict[str, Any]]:
+    """The catalog row's half of a stored ``continuous_rating`` block — or
+    ``None``.
+
+    THE THIRD ANSWER, BESIDE STEADY AND LIMITS (owner 2026-09-21): a
+    ``solve_to: continuous`` run finds the largest current this machine may
+    hold FOR EVER at THIS duty's own saved cooling — the S1 rating.  Same
+    presence rule as :func:`_time_to_limit_row`, and the same data path: the
+    block is read off the DUTY's stored record, never computed here, and
+    ``None`` on every duty that never asked ``solve_to: continuous`` — which is
+    every duty before this feature and every duty solved to ``steady`` or
+    ``limits`` instead.
+
+    FLATTENED, and named differently from the block, same reason as
+    ``_time_to_limit_row``: the block carries ``temperatures_c`` / ``limits_c``
+    as a dict PER PART; the row carries the limiting part's two scalars under
+    different names so a reader of either shape cannot mistake one for the
+    other.
+    """
+    blk = ((coupled or {}).get("continuous_rating")
+           if isinstance(coupled, dict) else None)
+    if not isinstance(blk, dict) or not blk:
+        return None
+    feasible = bool(blk.get("ok", True) and blk.get("feasible", True)
+                    and blk.get("trustworthy", True))
+    part = str(blk.get("limiting_part") or "") or None
+    power = blk.get("power") if isinstance(blk.get("power"), dict) else {}
+    at_point = (_ttl_num((blk.get("temperatures_c") or {}).get(part))
+                if part else None)
+    limit = _ttl_num((blk.get("limits_c") or {}).get(part)) if part else None
+    torque = _ttl_num(power.get("T_em_Nm"))
+    cooling_label = str(blk.get("cooling_label") or "") or None
+    row: Dict[str, Any] = {
+        "i_cont_A": _ttl_num(blk.get("I_cont_A_rms")) if feasible else None,
+        "part": part,
+        "at_point_c": at_point,
+        "limit_c": limit,
+        "torque_Nm": torque,
+        "cooling_label": cooling_label,
+        "feasible": feasible,
+    }
+    # A refused or untrustworthy search has a sentence to print, never a
+    # number — same rule as `report.continuous_rating_words`.
+    if not feasible:
+        row["note"] = str((blk.get("refusal") or {}).get("error")
+                          or blk.get("headline")
+                          or "no continuous rating under this cooling")
+        return row
+    head = "continuous current at the saved cooling"
+    if cooling_label:
+        head += " — %s" % cooling_label
+    clauses = [head]
+    if part and at_point is not None and limit is not None:
+        clauses.append("limited by %s %.1f °C of %.0f °C"
+                       % (part, at_point, limit))
+    elif part:
+        clauses.append("limited by %s" % part)
+    if torque is not None:
+        clauses.append("torque est. %.1f N·m" % abs(torque))
+    row["note"] = "; ".join(clauses)
+    return row
+
+
+def _continuous_rating_kv(coupled: Any) -> Dict[str, Any]:
+    """``{"continuous_rating": row}`` or ``{}`` — the duty literal splices this,
+    beside ``_time_to_limit_kv``.  Same absent-not-null rule: "draw no chip" is
+    said once by leaving the key out."""
+    row = _continuous_rating_row(coupled)
+    return {"continuous_rating": row} if row else {}
+
+
 def _duty_run_files(entry: dict) -> list[str]:
     return [str(r["payload_file"])
             for r in (entry.get("runs") or {}).values()
@@ -1805,6 +1876,12 @@ def tree(response: Response, authorization: str = Header(default=None)):
                      # the feature, and on a point inside every limit it has.
                      # `_time_to_limit_row` says why each of those is an answer.
                      **_time_to_limit_kv(
+                         (_dr_cfg.get(str(d.get("name") or "")) or {})
+                         .get("coupled")),
+                     # THE CONTINUOUS (S1) RATING (2026-09-21) — the other chip
+                     # beside it, same presence rule and same data path:
+                     # `_continuous_rating_row` says why "no key" is an answer.
+                     **_continuous_rating_kv(
                          (_dr_cfg.get(str(d.get("name") or "")) or {})
                          .get("coupled"))}
                     for d in (c.get("duties") or [])

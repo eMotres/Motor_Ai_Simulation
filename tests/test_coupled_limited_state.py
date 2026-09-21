@@ -489,6 +489,61 @@ def test_the_catalog_row_says_which_state_it_is():
     assert steady["at_point_c"] == 430.0
 
 
+CONTINUOUS_RATING = {
+    "ok": True, "feasible": True, "trustworthy": True,
+    "I_cont_A_rms": 28.7,
+    "limiting_part": "magnet",
+    "limits_c": {"magnet": 150.0},
+    "temperatures_c": {"magnet": 149.7},
+    "power": {"T_em_Nm": 4.2, "P_shaft_W": 950.0},
+    "cooling_label": "air 10 m/s at 30 °C, bore air 40 m/s",
+    "headline": "28.7 A rms continuously, 950 W at the shaft — the magnet "
+               "sits on 150 °C",
+}
+
+
+def test_the_catalog_row_states_the_continuous_rating():
+    """The S1 rating gets its own catalog chip beside the time-to-limit one —
+    same presence rule (only when the block exists on the duty's stored
+    record) and the same data path (the block is read, never computed here)."""
+    from motor_ai_sim.routes.family import _continuous_rating_row
+
+    row = _continuous_rating_row({"continuous_rating": dict(CONTINUOUS_RATING)})
+    assert row["i_cont_A"] == 28.7
+    assert row["part"] == "magnet"
+    assert row["at_point_c"] == 149.7
+    assert row["limit_c"] == 150.0
+    assert row["torque_Nm"] == 4.2
+    assert row["cooling_label"] == CONTINUOUS_RATING["cooling_label"]
+    assert row["feasible"] is True
+    assert row["note"] == (
+        "continuous current at the saved cooling — air 10 m/s at 30 °C, bore "
+        "air 40 m/s; limited by magnet 149.7 °C of 150 °C; torque est. 4.2 N·m")
+    # Absent entirely — never a null key — on a duty that never asked
+    # `solve_to: continuous`.
+    assert _continuous_rating_row({}) is None
+    assert _continuous_rating_row({"continuous_rating": {}}) is None
+    assert _continuous_rating_row(None) is None
+
+    # A refused or untrustworthy search has a sentence, never a number — the
+    # chip must not invent a current the search itself would not print.
+    refused = _continuous_rating_row({"continuous_rating": {
+        "ok": False, "cooling_label": "air 10 m/s at 30 °C",
+        "refusal": {"error": "nothing on this machine states a temperature "
+                             "limit", "error_code": "no_part_limits"}}})
+    assert refused["i_cont_A"] is None
+    assert refused["feasible"] is False
+    assert refused["note"] == ("nothing on this machine states a temperature "
+                               "limit")
+
+    # …and the kv splice is the same "absent key" rule as `_time_to_limit_kv`.
+    from motor_ai_sim.routes.family import _continuous_rating_kv
+    assert _continuous_rating_kv({}) == {}
+    assert _continuous_rating_kv(
+        {"continuous_rating": dict(CONTINUOUS_RATING)}) == {
+        "continuous_rating": row}
+
+
 def test_section_8_judges_the_limited_state_amber_not_red():
     """The winding sits exactly ON its class at the moment the pull ends, so §8
     reads "it runs 24 s" (amber) and never "it is 430 °C" (red) — the steady

@@ -24,6 +24,8 @@ import { dutyCycleChip } from '../../lib/dutySettings';
 import { gatedDutyCycleChip } from '../../lib/dutyCycleFlag';
 import { timeToLimitChip, timeToLimitChipTip, type DutyTimeToLimit }
   from '../../lib/timeToLimitChip';
+import { continuousRatingChip, continuousRatingChipTip,
+  type DutyContinuousRating } from '../../lib/continuousRatingChip';
 import { driveLabel } from '../../lib/dutyRuns';
 // The WHOLE load — the server half (owner) and the local half the follower in
 // ActiveFamilyStrip shares (lib/dutyLocalApply, lib/familyFollow) — lives in
@@ -76,6 +78,9 @@ interface Duty {
    *  past a limit (2026-09-17).  Absent on a duty with no coupled record, on a
    *  record older than the feature, and on a point inside every limit it has. */
   time_to_limit?: DutyTimeToLimit | null;
+  /** THE CONTINUOUS (S1) RATING at this duty's own saved cooling (2026-09-21).
+   *  Absent on a duty that never asked `solve_to: continuous`. */
+  continuous_rating?: DutyContinuousRating | null;
 }
 interface Battery {
   chemistry?: string | null; cells?: number | null;
@@ -1008,6 +1013,23 @@ const FamilyCatalog: React.FC<{
                                   color: '#f59e0b', border: '1px solid #f59e0b88',
                                 }}>
                                   {timeToLimitChip(d.time_to_limit)}
+                                </span>
+                              </Tooltip>
+                            )}
+                            {/* THE CONTINUOUS (S1) RATING (owner 2026-09-21) —
+                                the other chip beside it, same presence rule and
+                                same data path: absent entirely on a duty that
+                                never asked `solve_to: continuous`
+                                (`lib/continuousRatingChip`). */}
+                            {continuousRatingChip(d.continuous_rating) && (
+                              <Tooltip key="cr" placement="top"
+                                title={continuousRatingChipTip(d.continuous_rating)}>
+                                <span style={{
+                                  marginLeft: 5, fontSize: 9.5, padding: '0 4px',
+                                  borderRadius: 3, cursor: 'help', fontWeight: 600,
+                                  color: '#34d399', border: '1px solid #34d39988',
+                                }}>
+                                  {continuousRatingChip(d.continuous_rating)}
                                 </span>
                               </Tooltip>
                             )}

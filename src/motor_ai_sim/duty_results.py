@@ -1089,6 +1089,26 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
             "mesh": _pick(res.get("mesh"), ("n_triangles", "element_order",
                                             "mesh_size_mm")),
         })
+        # THE LIMIT SPEED (owner 2026-09-21: "нужно искать ещё максимальную
+        # скорость вращения ... она будет, когда достигает SF = 1"), riding on
+        # the same rotor-stress record — present only when the **Limit speed**
+        # button (not this table build) produced it, never computed here.
+        _ls = res.get("limit_speed")
+        if isinstance(_ls, dict):
+            base["limit_speed"] = {
+                "rpm_sf1": _f(_ls.get("rpm_sf1")),
+                "reached": (bool(_ls.get("reached"))
+                           if _ls.get("reached") is not None else None),
+                "limiting_part": _ls.get("limiting_part"),
+                "sf_at_rpm0": _f(_ls.get("sf_at_rpm0")),
+                "target_sf": _f(_ls.get("target_sf")),
+                "analysed_rpm": _f(_ls.get("analysed_rpm")),
+                "loads": _ls.get("loads"),
+                "torque_nm": _f(_ls.get("torque_nm")),
+                "n_solves": _ls.get("n_solves"),
+                "omega2_extrapolation_rpm": _f(_ls.get("omega2_extrapolation_rpm")),
+                "note": _ls.get("note"),
+            }
     elif kind == "critical_speeds":
         base.update({
             "rated_rpm": _f(res.get("rated_rpm")),

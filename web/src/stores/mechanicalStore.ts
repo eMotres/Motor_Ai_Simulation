@@ -42,7 +42,7 @@ import { fetchLastThermalLight } from '../components/thermal/api';
 import type { SymmetryMode } from '../components/mechanical/api';
 import {
   DEFAULT_BEAM, DEFAULT_CONTACTS, REF_TEMP_C, coupledPoint, fetchCriticalSpeeds,
-  fetchLastMechanical, fetchMechMesh, fetchModes, fetchRotorStress,
+  fetchLastMechanical, fetchLimitSpeed, fetchMechMesh, fetchModes, fetchRotorStress,
   readLastSecs, readMech, readSimSetting, readSimTorqueNm, writeLastSecs,
   writeMech,
 } from '../components/mechanical/api';
@@ -276,6 +276,16 @@ export interface MechanicalState {
    *  disabled in the UI, but its remembered value survives a switch to a
    *  sleeveless machine — sending it would turn that switch into an error. */
   solveStress: (hasSleeve: boolean) => Promise<void>;
+  /** The **Limit speed** button: the same case `solveStress` would send —
+   *  same torque, contacts, interference, temperatures, mesh — searched for
+   *  the speed at which SF reaches 1 (owner 2026-09-21: "нужно искать ещё
+   *  максимальную скорость вращения ... она будет, когда достигает SF = 1").
+   *  Lands in the SAME `stress` slice `solveStress` fills: the backend
+   *  returns a genuine single-speed `rotor_stress` answer with `.limit_speed`
+   *  riding on it, so every existing reader of `st.stress.data` (tiles, maps,
+   *  the compare row) sees it unchanged, and the panel reads the extra field
+   *  only where it draws the limit-speed line. */
+  solveLimitSpeed: (hasSleeve: boolean) => Promise<void>;
   solveModes: (rpm: number) => Promise<void>;
   solveCriticals: (rpm: number) => Promise<void>;
 }
@@ -665,6 +675,43 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
       // The field was empty and the backend resolved a torque from the last
       // run: adopt it, so the number that was actually applied is on screen and
       // the next Solve reproduces this answer instead of re-resolving.
+      if (s.torque.trim() === '' && out.torque_nm) {
+        get().set('torque', String(Math.round(out.torque_nm * 10) / 10));
+      }
+      if (!out.cached) noteSecs(set, get, 'stress', out.elapsed_s ?? out.solve_time_s);
+    } catch (e) {
+      set({ stress: { ...EMPTY, err: msg(e) } as Slice<RotorStress> });
+    }
+  },
+
+  solveLimitSpeed: async (hasSleeve) => {
+    const s = get();
+    set({ stress: { ...s.stress, busy: true, err: null, startedAt: Date.now() } });
+    try {
+      const single = s.cases === 'single';
+      const tq = Number(s.torque);
+      const cp = coupledPoint();
+      const out = await fetchLimitSpeed({
+        loads: s.loads,
+        torque_nm: cp.torque !== null ? cp.torque
+          : (s.torque.trim() !== '' && Number.isFinite(tq) && tq !== 0)
+            ? tq : undefined,
+        // The analysed case, exactly as `solveStress` resolves it — a limit
+        // speed is a question about the SAME case, not a different one.
+        rpm: cp.rpm !== null ? cp.rpm
+          : (single ? effectiveProofRpm(s.rpm1) : (Number(s.rpm) || effectiveProofRpm(''))),
+        interference_mm: hasSleeve ? (Number(s.interf) || 0) : 0,
+        ...mechTempParams(s.tempSource, s.thermalTemps,
+                          { rotorTempC: s.rotorTempC, sleeveTempC: s.sleeveTempC },
+                          REF_TEMP_C),
+        mesh_size_mm: Number(s.meshMm) || 1.5,
+        order: 2,
+        ...(s.symmetry === 'sector' ? { symmetry: 'sector' as const } : {}),
+        contacts: s.contacts,
+      });
+      set({ stress: { data: out, busy: false, err: null,
+                      geoSig: liveGeoSig(), backendStale: false,
+                      restoredAt: null, startedAt: null } });
       if (s.torque.trim() === '' && out.torque_nm) {
         get().set('torque', String(Math.round(out.torque_nm * 10) / 10));
       }

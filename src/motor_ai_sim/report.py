@@ -17478,7 +17478,29 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
       lambda c: ", ".join(f"{k} {float(v):g}" for k, v in
                           sorted(((_m(c) or {}).get("part_temps_c") or {}).items())
                           if v is not None) or None)
+    # SPEED AT SF = 1 (owner 2026-09-21: "нужно искать ещё максимальную
+    # скорость вращения ... она будет, когда достигает SF = 1"), same loads,
+    # contacts, interference and temperatures as the case above.  Present only
+    # when the **Limit speed** button produced the block for a duty in this
+    # comparison — never computed here, and the row is left out entirely
+    # rather than printed as "—" for every duty when nobody ever pressed it.
+    if any(isinstance((_m(c) or {}).get("limit_speed"), dict) for c in cols):
+        S("Speed at SF = 1 (same loads)",
+          lambda c: _limit_speed_words((_m(c) or {}).get("limit_speed")))
     return "Mechanical", _drop_empty(rows)
+
+
+def _limit_speed_words(ls: Optional[Dict[str, Any]]) -> Optional[str]:
+    """'25,400 rpm — sleeve', or 'not reached (SF 1.8 at 5x)' — one clause."""
+    if not isinstance(ls, dict):
+        return None
+    if not ls.get("reached"):
+        return "not reached in the searched range"
+    rpm1 = _numf(ls.get("rpm_sf1"))
+    if rpm1 is None:
+        return None
+    part = ls.get("limiting_part")
+    return f"{rpm1:,.0f} rpm — {part}" if part else f"{rpm1:,.0f} rpm"
 
 
 def crit_compare_rows(cols: List[Dict[str, Any]]

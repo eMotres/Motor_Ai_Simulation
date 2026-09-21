@@ -333,6 +333,39 @@ export interface FieldPayload {
   cases: Record<CaseName, StressField>;
 }
 
+/** The rotor's structural limit — the speed at which the minimum averaged
+ *  safety factor reaches `target_sf` (1.0 = SF 1), everything else held as in
+ *  the case this rode in on: same torque, contacts, interference,
+ *  temperatures, mesh, order.  Owner 2026-09-21: "нужно искать ещё
+ *  максимальную скорость вращения ... она будет, когда достигает SF = 1".
+ *
+ *  `rpm_sf1` is null when the search did not bracket a crossing within
+ *  `max_factor` of the analysed speed (`reached: false`) — a real answer
+ *  ("not within the range searched"), not a failed request.
+ *  `omega2_extrapolation_rpm` is a pure ω² cross-check only (SF ∝ 1/rpm² if
+ *  every load were centrifugal) — the real answer is `rpm_sf1`, which is
+ *  interpolated between two actual solves, never extrapolated. */
+export interface LimitSpeedResult {
+  rpm_sf1: number | null;
+  reached: boolean;
+  bracket: [number, number] | null;
+  limiting_part: string | null;
+  sf_at_rpm0: number;
+  n_solves: number;
+  log: [number, number, string | null][];
+  omega2_extrapolation_rpm: number;
+  note: string;
+  target_sf: number;
+  loads: LoadsMode;
+  torque_nm: number;
+  interference_mm: number;
+  rotor_temp_c: number;
+  sleeve_temp_c: number;
+  geo_fingerprint: string | null;
+  /** the rpm this search started from — the case `sf_at_rpm0` describes */
+  analysed_rpm: number;
+}
+
 export interface RotorStress {
   rpm: number;
   /** which case table this is — `single` means `cases` has one entry, named by
@@ -470,6 +503,9 @@ export interface RotorStress {
   elapsed_s?: number;
   cached?: boolean;
   geo_fingerprint?: string | null;
+  /** present only on a result the **Limit speed** button produced — see
+   *  `LimitSpeedResult`. Absent on a plain Solve. */
+  limit_speed?: LimitSpeedResult;
 }
 
 export interface MechMaterialsReport {
@@ -543,6 +579,57 @@ export const fetchRotorStress = (p: {
     // The contact settings ARE the model — they ride in the query string and
     // are part of the server's cache key, so a Solve after changing one is a
     // fresh solve, not a cache hit.
+    contacts: contacts ? JSON.stringify(contacts) : undefined,
+  });
+};
+
+/** Same contract as `get`, POST instead — everything still rides the query
+ *  string (there is no body), matching the route's own signature. */
+async function post<T>(path: string,
+                       params: Record<string, string | number | boolean | null | undefined>): Promise<T> {
+  const qs = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== null && v !== undefined) qs.set(k, String(v));
+  });
+  const r = await fetch(`${BASE}${path}?${qs.toString()}`, { method: 'POST', cache: 'no-store' });
+  if (!r.ok) {
+    let msg = await r.text();
+    try {
+      const j = JSON.parse(msg);
+      const d = j?.detail;
+      msg = typeof d === 'string' ? d : (d?.error ?? msg);
+    } catch { /* not JSON — keep the raw text */ }
+    throw new Error(msg.slice(0, 400));
+  }
+  return r.json() as Promise<T>;
+}
+
+/** The **Limit speed** button: the same case `fetchRotorStress` would solve
+ *  (rpm, loads, torque, contacts, interference, temperatures, mesh, order —
+ *  `cases` and `overspeed_factor` are not sent, because the search is
+ *  inherently about ONE speed at a time), plus `target_sf` and the search's
+ *  own knobs.  Returns a genuine single-speed `RotorStress`, with the search
+ *  riding on it as `.limit_speed` — the backend's `/rotor_stress` shape is
+ *  unchanged, so every existing reader of the result (the tiles, the maps,
+ *  the compare row) keeps working on this answer exactly as it does on a
+ *  plain Solve's. */
+export const fetchLimitSpeed = (p: {
+  rpm: number; interference_mm: number; mesh_size_mm: number; order: number;
+  symmetry?: SymmetryMode;
+  loads?: LoadsMode;
+  torque_nm?: number;
+  rotor_temp_c?: number;
+  sleeve_temp_c?: number;
+  magnet_temp_c?: number;
+  rotor_core_temp_c?: number;
+  shaft_temp_c?: number;
+  contacts?: Record<string, ContactSpec>;
+  /** 1.0 = the rotor's structural limit; omitted = the API's own 1.0 */
+  target_sf?: number;
+}) => {
+  const { contacts, ...rest } = p;
+  return post<RotorStress>('/limit_speed', {
+    ...rest,
     contacts: contacts ? JSON.stringify(contacts) : undefined,
   });
 };

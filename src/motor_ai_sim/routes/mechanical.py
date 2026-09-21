@@ -936,6 +936,313 @@ def rotor_stress(
 
 
 # ---------------------------------------------------------------------------
+# Limit speed — the rpm at which SF = 1 (or whatever target is asked for)
+# ---------------------------------------------------------------------------
+# Owner 2026-09-21: "нужно искать ещё максимальную скорость вращения, на
+# всякий случай — она будет, когда достигает SF = 1".  ``rotor_stress`` answers
+# "is THIS speed safe"; this route answers the companion question everything
+# else about the case held fixed — same torque, contacts, interference,
+# temperatures, mesh, order — by bracketing and bisecting single-speed
+# ``solve_rotor_stress`` calls (the pure search is
+# ``simulation.mechanical.limit_speed.find_limit_speed``).
+#
+# The geometry and material assignment are built ONCE, like
+# ``rotor_stress()``'s own ``_solve`` closure, and every candidate speed reuses
+# them — only the FEM solve differs between the analysed case and the search
+# steps that follow it.  ``cases`` is pinned to ``single`` (a limit speed is a
+# question about ONE speed at a time; a three-case table under a search that
+# asks a dozen different speeds would be a different feature): the panel gets
+# a genuine ``rotor_stress`` answer, at ``rpm``, with ``limit_speed`` riding on
+# it, and THAT becomes the tab's last result — the point of the button is
+# exactly to show "here is the case, and here is how far it is from SF = 1".
+@router.post("/limit_speed")
+@_JOBS.queued("mechanical.limit_speed", priority=_JOBS.Priority.INTERACTIVE)
+def limit_speed(
+    rpm: Optional[float] = Query(default=None,
+                                 description="the analysed speed; default = simulation.rpm"),
+    interference_mm: float = Query(default=0.0, ge=0.0, le=1.0,
+                                   description="sleeve RADIAL interference fit"),
+    mesh_size_mm: float = Query(default=1.5, gt=0.1, le=10.0),
+    order: int = Query(default=2, ge=1, le=2),
+    contacts: Optional[str] = Query(
+        default=None,
+        description='JSON {pair: {"type": separation|bonded|sliding, "mu": 0}}; '
+                    'same contract as /rotor_stress'),
+    loads: str = Query(
+        default="both",
+        description="which forces act: centrifugal | torque | both — held the "
+                    "same at every speed the search tries"),
+    torque_nm: Optional[float] = Query(
+        default=None, ge=-1e6, le=1e6,
+        description="electromagnetic torque, N·m, HELD CONSTANT across the "
+                    "whole search (it is the duty's torque, not a function of "
+                    "speed); default = the mean torque of the last Simulation "
+                    "run on this machine"),
+    rotor_temp_c: float = Query(default=20.0, ge=-273.15, le=1000.0),
+    sleeve_temp_c: float = Query(default=20.0, ge=-273.15, le=1000.0),
+    magnet_temp_c: Optional[float] = Query(default=None, ge=-273.15, le=1000.0),
+    rotor_core_temp_c: Optional[float] = Query(default=None, ge=-273.15, le=1000.0),
+    shaft_temp_c: Optional[float] = Query(default=None, ge=-273.15, le=1000.0),
+    symmetry: str = Query(default="full"),
+    target_sf: float = Query(
+        default=1.0, gt=0.0, le=10.0,
+        description="the safety factor searched for; 1.0 = the rotor's "
+                    "structural limit"),
+    max_factor: float = Query(
+        default=5.0, gt=1.0, le=20.0,
+        description="how far from the analysed speed (as a multiple of it) "
+                    "the bracket search may range before giving up"),
+    max_solves: int = Query(
+        default=12, ge=2, le=30,
+        description="the whole search's solve budget, bracket + bisection"),
+    geo: Optional[str] = Query(default=None),
+):
+    """The speed at which the minimum averaged safety factor reaches ``target_sf``.
+
+    Everything about the case is held exactly as given — the same torque
+    (``loads=both`` keeps the duty's torque applied at every candidate speed,
+    not scaled with it), the same contact set, interference, temperatures,
+    mesh and element order — and only ``rpm`` is swept, by
+    :func:`motor_ai_sim.simulation.mechanical.limit_speed.find_limit_speed`.
+
+    The FIRST solve is at ``rpm`` itself (the analysed case); its answer
+    becomes this response — a genuine single-speed ``rotor_stress`` result —
+    with the search's block riding on it as ``limit_speed``.  Every candidate
+    the search tries after that is a plain ``solve_rotor_stress`` call with
+    ``with_field=False`` (the search wants a number, not a map) sharing the
+    SAME cross-section and material assignment, so nothing is rebuilt between
+    solves.
+
+    A candidate speed at which a separation joint runs away
+    (:class:`~motor_ai_sim.simulation.mechanical.rotor_stress.RotorRanAway`) is
+    treated as SF 0 at that speed — a part held by nothing is a worse failure
+    than SF < target — so the search brackets toward a lower, retained limit
+    speed instead of raising mid-search.  The analysed case itself running
+    away IS refused, exactly as ``/rotor_stress`` refuses it, because there is
+    no case to search from.
+    """
+    from motor_ai_sim.simulation.mechanical import contact as ctc
+    from motor_ai_sim.simulation.mechanical import limit_speed as lsm
+    from motor_ai_sim.simulation.mechanical import rotor_stress as rsm
+
+    load_mode = str(loads or "both").strip().lower()
+    if load_mode not in rsm.LOAD_MODES:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": f"unknown load selection {loads!r}",
+                    "invalid_parameters": [{
+                        "field": "loads", "value": loads, "kind": "bad_value",
+                        "message": "loads must be 'centrifugal', 'torque' or "
+                                   "'both'"}]})
+
+    sym_mode = str(symmetry or "full").strip().lower()
+    if sym_mode not in ("full", "sector"):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": f"unknown symmetry {symmetry!r}",
+                    "invalid_parameters": [{
+                        "field": "symmetry", "value": symmetry,
+                        "kind": "bad_value",
+                        "message": "symmetry must be 'full' or 'sector'"}]})
+
+    loads_requested = load_mode
+    if torque_nm is None:
+        torque, torque_source = _default_torque_nm()
+    else:
+        torque, torque_source = float(torque_nm), "given"
+    if torque is not None and not math.isfinite(torque):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "torque_nm is not a finite number",
+                    "invalid_parameters": [{
+                        "field": "torque_nm", "value": torque_nm,
+                        "kind": "bad_value",
+                        "message": "pass a finite torque in N·m"}]})
+    if load_mode in ("torque", "both") and not torque:
+        if load_mode == "torque":
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "no electromagnetic torque to apply",
+                        "invalid_parameters": [{
+                            "field": "torque_nm", "value": torque_nm,
+                            "kind": "missing",
+                            "message": ("pass ?torque_nm=, or run the "
+                                        "Simulation tab once — the default is "
+                                        "that run's mean torque")}]})
+        load_mode = "centrifugal"
+        torque = 0.0
+
+    try:
+        cspec = ctc.parse_contacts(contacts)
+    except ctc.ContactConfigError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": str(exc),
+                    "invalid_parameters": [{
+                        "field": exc.field_name, "value": contacts,
+                        "kind": "bad_contact_setting", "message": str(exc)}]})
+
+    part_temps: Dict[str, float] = {}
+    for _field, _val in (("rotor_core", rotor_core_temp_c),
+                         ("magnet", magnet_temp_c),
+                         ("shaft", shaft_temp_c)):
+        if _val is not None:
+            v = float(_val)
+            if not math.isfinite(v):
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": f"{_field}_temp_c is not a finite number",
+                            "invalid_parameters": [{
+                                "field": f"{_field}_temp_c", "value": _val,
+                                "kind": "bad_value",
+                                "message": "pass a temperature in °C"}]})
+            part_temps[_field] = v
+
+    rpm0 = _default_rpm() if rpm is None else float(rpm)
+    if rpm0 <= 0:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "no analysed speed to search from",
+                    "invalid_parameters": [{
+                        "field": "rpm", "value": rpm, "kind": "missing",
+                        "message": ("pass ?rpm=, or set simulation.rpm — a "
+                                    "limit-speed search needs a starting "
+                                    "point")}]})
+
+    _progress.start(
+        total=2 + (int(max_solves) + 1) * rsm.MAX_CONTACT_ITER,
+        phase="geometry build", kind="limit_speed", composition="")
+    try:
+        t0 = time.time()
+        try:
+            polys, motor, geo_ov = _live_polys(geo)
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500,
+                                detail=f"geometry build failed: {type(exc).__name__}: {exc}")
+
+        assign = _assignments()
+        stack_mm = float(motor.parameters.get("motor_length") or 0.0)
+        n_poles = _num_poles(motor)
+        override_props = _override_props()
+        fp = _live_fingerprint(geo_ov)
+
+        solves_done = 0
+
+        def _solve_rpm(cand_rpm: float):
+            nonlocal solves_done
+            solves_done += 1
+            _progress.update(
+                done=min(solves_done, int(max_solves)), total=int(max_solves),
+                phase=f"limit speed {solves_done}/{max_solves} — "
+                      f"{cand_rpm:,.0f} rpm")
+            try:
+                out = rsm.solve_rotor_stress(
+                    polys, assign, cand_rpm, 1.0, interference_mm,
+                    stack_length_mm=stack_mm, material_overrides=override_props,
+                    mesh_size_mm=mesh_size_mm, order=order, with_field=False,
+                    contacts=cspec, lift_off_solves=0,
+                    case_mode="single", loads=load_mode,
+                    torque_nm=float(torque or 0.0),
+                    rotor_temp_c=float(rotor_temp_c),
+                    sleeve_temp_c=float(sleeve_temp_c),
+                    part_temps_c=(dict(part_temps) or None),
+                    symmetry=sym_mode, num_poles=n_poles)
+            except rsm.RotorRanAway as exc:
+                # A part held by nothing at this candidate speed IS below the
+                # target factor, more so than any number the solve could have
+                # printed — fold it in rather than aborting the search over a
+                # speed nobody asked to see reported.
+                return 0.0, (exc.pair or None), {}, None
+            _case_name, case = next(iter(out["cases"].items()))
+            return case["sf_min"], case["sf_min_part"], case["sf_min_per_part"], out
+
+        try:
+            sf0, part0, per_part0, out0 = _solve_rpm(rpm0)
+        except rsm.MissingMechanicalProperty as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": str(exc),
+                        "invalid_parameters": [{
+                            "field": f"materials.{exc.part}", "value": exc.material,
+                            "kind": "missing_mechanical_property",
+                            "message": str(exc)}]})
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail={"error": str(exc),
+                                                         "invalid_parameters": []})
+        except Exception as exc:  # noqa: BLE001
+            log.exception("limit speed: analysed-case solve failed")
+            raise HTTPException(status_code=500,
+                                detail=f"{type(exc).__name__}: {exc}")
+
+        if out0 is None:
+            # The analysed case ITSELF ran away — there is no safe case to
+            # search a limit speed from; refused exactly as /rotor_stress
+            # refuses the same solve.
+            raise HTTPException(
+                status_code=422,
+                detail={"error": ("the analysed case does not retain its "
+                                  f"parts at {rpm0:,.0f} rpm ({part0} ran "
+                                  "away) — fix the contacts or the speed "
+                                  "before searching for a limit speed"),
+                        "invalid_parameters": [{
+                            "field": (f"contacts.{part0}" if part0
+                                      else "contacts"),
+                            "value": "separation", "kind": "unretained_part",
+                            "message": "see /rotor_stress at this rpm for the "
+                                       "full refusal"}]})
+
+        def _solve_for_search(cand_rpm: float):
+            sf, part, per_part, _out = _solve_rpm(cand_rpm)
+            return sf, part, per_part
+
+        try:
+            search = lsm.find_limit_speed(
+                _solve_for_search, rpm0, sf0, target=float(target_sf),
+                max_factor=float(max_factor), max_solves=int(max_solves))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail={"error": str(exc),
+                                                         "invalid_parameters": []})
+
+        block = dict(search)
+        block["target_sf"] = float(target_sf)
+        block["loads"] = load_mode
+        block["torque_nm"] = float(torque or 0.0)
+        block["interference_mm"] = float(interference_mm)
+        block["rotor_temp_c"] = float(rotor_temp_c)
+        block["sleeve_temp_c"] = float(sleeve_temp_c)
+        block["geo_fingerprint"] = fp
+        block["analysed_rpm"] = rpm0
+
+        out0["limit_speed"] = block
+        out0["solve_time_s"] = round(time.time() - t0, 2)
+        out0["elapsed_s"] = _elapsed(t0)
+        out0["cached"] = False
+        out0["loads_requested"] = loads_requested
+        out0["torque_source"] = torque_source
+        out0["geo_fingerprint"] = fp
+
+        _params = {"rpm": rpm0, "overspeed_factor": 1.0,
+                   "interference_mm": interference_mm,
+                   "mesh_size_mm": mesh_size_mm, "order": order,
+                   "cases": "single", "symmetry": sym_mode,
+                   "loads": load_mode, "torque_nm": float(torque or 0.0),
+                   "rotor_temp_c": float(rotor_temp_c),
+                   "sleeve_temp_c": float(sleeve_temp_c),
+                   "contacts": {k: {"type": v.type, "mu": v.mu}
+                                for k, v in cspec.items()},
+                   "target_sf": float(target_sf)}
+        for _field, _v in part_temps.items():
+            _params[f"{_field}_temp_c"] = _v
+        _remember_last("rotor_stress", out0, _params, fp)
+
+        return out0
+    finally:
+        _progress.finish()
+
+
+# ---------------------------------------------------------------------------
 # The coupled hook — one rotor-stress solve AT a given set of temperatures
 # ---------------------------------------------------------------------------
 # User 2026-09-08: "в механический расчёт тоже нужно делать каплинг, чтобы

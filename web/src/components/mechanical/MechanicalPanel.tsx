@@ -388,6 +388,9 @@ const MechanicalPanel: React.FC = () => {
   const solveStress = st.solveStress;
   const solve = useCallback(() => { void solveStress(hasSleeveGeo); },
                             [solveStress, hasSleeveGeo]);
+  const solveLimitSpeed = st.solveLimitSpeed;
+  const limitSpeed = useCallback(() => { void solveLimitSpeed(hasSleeveGeo); },
+                                 [solveLimitSpeed, hasSleeveGeo]);
 
   /* ── the mesh, as a thing you control ────────────────────────────────────
      User 2026-09-06: "по поводу сетки — как я понял, она строится отдельно, и
@@ -688,6 +691,7 @@ const MechanicalPanel: React.FC = () => {
         kindLabels={{
           rotor_stress: 'Rotor stress', modes: 'Modal analysis',
           critical_speeds: 'Critical speeds', mesh: 'Mesh build',
+          limit_speed: 'Limit speed',
         }} />
 
       {/* ── controls ──────────────────────────────────────────────────── */}
@@ -837,6 +841,32 @@ const MechanicalPanel: React.FC = () => {
           </Button>
           <SolveTimer busy={busy} startedAt={st.stress.startedAt} est={st.est.stress}
             what="stress solve" />
+          {/* ── Limit speed (SF = 1) ────────────────────────────────────────
+              Owner 2026-09-21: "нужно искать ещё максимальную скорость
+              вращения, на всякий случай — она будет, когда достигает SF = 1".
+              Same case as Solve — same torque, contacts, interference,
+              temperatures, mesh — swept in rpm by the backend search; the
+              answer lands in the SAME slice Solve fills (`res.limit_speed`),
+              so it reads the fields above it exactly as Solve does. */}
+          <Tooltip title="Bisects the speed at which the minimum averaged safety factor (the same SF the tiles below print) reaches 1 — the rotor's structural limit — with everything else held exactly as this case: the same torque (not scaled with speed), contacts, interference, temperatures, mesh and element order. Not a burst test: it is the same FEM model this Solve uses, evaluated at a handful of other speeds.">
+            <span>
+              <Button variant="outlined" size="small" onClick={limitSpeed} disabled={busy}
+                startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
+                Limit speed (SF = 1)
+              </Button>
+            </span>
+          </Tooltip>
+          {res?.limit_speed && (
+            <Tooltip title={`Searched from ${Math.round(res.limit_speed.analysed_rpm).toLocaleString()} rpm (SF ${res.limit_speed.sf_at_rpm0.toFixed(2)} there) toward SF = ${res.limit_speed.target_sf.toFixed(2)}, ${res.limit_speed.loads} loads, ${fmt(res.limit_speed.torque_nm, 0)} N·m held constant at every speed tried. ${res.limit_speed.n_solves} solve(s), bracket ${res.limit_speed.bracket ? `${Math.round(res.limit_speed.bracket[0]).toLocaleString()}–${Math.round(res.limit_speed.bracket[1]).toLocaleString()} rpm` : 'none'}. Pure ω² cross-check (centrifugal-only, sanity read, not the answer): ${Math.round(res.limit_speed.omega2_extrapolation_rpm).toLocaleString()} rpm. ${res.limit_speed.note}`}>
+              <Typography sx={{ ...(res.limit_speed.reached ? lbl : warn), cursor: 'help' }}>
+                {res.limit_speed.reached
+                  ? `Limit speed: ${Math.round(res.limit_speed.rpm_sf1 ?? 0).toLocaleString()} rpm — ${
+                      PART_LABEL[res.limit_speed.limiting_part ?? ''] ?? res.limit_speed.limiting_part ?? '—'
+                    }, SF ${res.limit_speed.sf_at_rpm0.toFixed(2)} at ${Math.round(res.limit_speed.analysed_rpm).toLocaleString()}`
+                  : `Limit speed: not reached within the searched range (SF ${res.limit_speed.sf_at_rpm0.toFixed(2)} at ${Math.round(res.limit_speed.analysed_rpm).toLocaleString()} rpm)`}
+              </Typography>
+            </Tooltip>
+          )}
           {/* ONE short line, tooltip for the rest — the project's no-walls-of-
               text rule.  User 2026-09-06: "нужно подсвечивать неактуальность
               текущего расчёта". */}

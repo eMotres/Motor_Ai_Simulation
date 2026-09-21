@@ -786,10 +786,16 @@ def headline(block: Optional[Mapping[str, Any]]) -> str:
         return str(b.get("note") or "there is no continuous rating under this "
                                     "cooling")
     if not b.get("trustworthy", True):
-        return ("NOT A RATING — %s"
-                % next((n for n in (b.get("notes") or ())
-                        if n.startswith("THE 2-D")), "the map could not be "
-                       "iterated"))
+        # The SPECIFIC reason, when one was stamped on the block: this
+        # module's own non-monotone-map note, a caller's contradiction with
+        # this run's own `time_to_limit` verdict, or (falling back to `note`)
+        # a re-solve that never converged.  Checked in that order because a
+        # block can carry a pass's own ordinary fit note in `note` at the same
+        # time as a specific "why untrustworthy" line in `notes`.
+        why = next((n for n in (b.get("notes") or ())
+                    if n.startswith("THE 2-D") or n.startswith("CONTRADICTS")),
+                   None) or b.get("note") or "the map could not be iterated"
+        return "NOT A RATING — %s" % why
     i = _num(b.get("I_cont_A_rms"))
     part = str(b.get("limiting_part") or "a part")
     lim = _num((b.get("limits_c") or {}).get(part))

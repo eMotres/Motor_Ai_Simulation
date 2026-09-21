@@ -24,6 +24,31 @@ What this file pins is the WIRING, not the physics (that is
 Both halves of the loop are faked, exactly as ``test_coupled_limited_state``
 fakes them; the rating step itself is faked too, because its own arithmetic is
 ``coupled_continuous_rating``'s to prove.
+
+── THE PRODUCTION DEFECT (2026-09-21) ────────────────────────────────────────
+Seen on `/srv/motres/workspaces/.../​.last_coupled.json` (Ø50 L15): a point 41 s
+from its winding class (`time_to_limit.within_limits: false`) came back rated
+at 1.02 x its OWN duty current — physically impossible, a point that reaches
+its limit cannot hold MORE current for ever.  Two causes, both fixed in
+`_continuous_rating_for_loop`, both pinned below (the section marked "THE FIX,
+PINNED"):
+
+  1. the reference map was the LOOP's own ``field`` — on a ``limits``-mode pass
+     that is the machine translated onto the INSTANT it crosses its limit
+     (`rescale_map_to_nodes`), so the network the search fits sits ON the
+     limit at s ≈ 1 by construction.  Fixed: a fresh STEADY 2-D thermal solve,
+     looked up by the pass's own identity (no `_em_map` override), exactly as
+     the standalone `/continuous_rating` route already does.
+  2. the re-solve crashed with a TypeError, because the loop's own `em` does
+     not carry the per-element loss mesh at all (it lives in a separate
+     snapshot store `field_snapshot` keys into) — fixed the same way, by
+     letting the lookup capture its own mesh-level map (`capture["em"]`)
+     instead of handing back the loop's bare transient dict.
+
+A belt-and-braces consistency guard (`_cr_consistency_guard`) also catches ANY
+other way a rating could contradict this run's own `time_to_limit` verdict,
+and a re-solve that never converges is marked `trustworthy: false` rather than
+kept as a network-only pass.
 """
 from __future__ import annotations
 
@@ -71,10 +96,12 @@ def _fake_rating(monkeypatch, *, block=None):
 
     calls = []
 
-    def _rate(body, *, cooling, em, summary, field, duty, mode):
+    def _rate(body, *, cooling, rpm, coil_temp_c, magnet_temp_c, duty, mode,
+              time_to_limit=None):
         calls.append({"cooling": dict(cooling or {}), "duty": duty,
-                      "mode": mode, "has_em": bool(em), "has_field": bool(field),
-                      "has_summary": bool(summary)})
+                      "mode": mode, "rpm": rpm, "coil_temp_c": coil_temp_c,
+                      "magnet_temp_c": magnet_temp_c,
+                      "time_to_limit": dict(time_to_limit or {})})
         return None if block is None else dict(block)
 
     monkeypatch.setattr(cp, "_continuous_rating_for_loop", _rate, raising=True)
@@ -146,8 +173,14 @@ def test_the_rating_step_is_called_once_with_this_runs_own_state(
     c = _run(client, solve_to="continuous")
     assert len(calls) == 1
     call = calls[0]
-    assert call["has_em"] and call["has_field"] and call["has_summary"]
     assert call["mode"] == "motor"
+    # The temperatures handed to the rating step are THIS PASS's own — the
+    # limited pass's coil (200 °C) and magnet (48.2 °C), never the body's
+    # original 120 °C / 90 °C.
+    assert call["coil_temp_c"] == 200.0
+    assert call["magnet_temp_c"] == 48.2
+    assert call["rpm"]
+    assert call["time_to_limit"]
     # The cooling handed to the rating step is this run's own — the panel
     # cooling body carries, not a re-read of a stale duty save.
     assert call["cooling"]
@@ -352,3 +385,259 @@ def test_the_datasheet_carries_one_row_per_duty_when_a_duty_has_it(tmp_path):
     without = _row(build_datasheet(die="D", cfg="L13", die_doc=die_doc,
                                    cfg_doc=cfg_doc, coupled=None), label)
     assert without is None                 # no row at all — never computed here
+
+
+# ---------------------------------------------------------------------------
+# THE FIX, PINNED (2026-09-21 production defect) — _continuous_rating_for_loop
+# itself, called directly, with every dependency mocked so the WIRING is what
+# is pinned: which map it rates from, at which point, and how a bad answer is
+# caught.
+# ---------------------------------------------------------------------------
+
+def _mock_rating_deps(monkeypatch, *, rate_return, solve_map_calls=None,
+                      capture_em=True):
+    """Every collaborator `_continuous_rating_for_loop` calls, mocked.
+
+    Returns the list `_cr_solve_map` calls are recorded into, so a test can
+    assert WHICH map (whose point, with or without `em_map`) the rating was
+    built from — the exact thing the production bug got wrong.
+    """
+    from motor_ai_sim.routes import coupled as cp
+    from motor_ai_sim.routes import thermal as th
+    from motor_ai_sim import thermal_capacities as tc
+
+    calls = solve_map_calls if solve_map_calls is not None else []
+
+    def _solve_map(point, cooling, *, em_map=None, em_source=None,
+                   capture=None):
+        calls.append({"point": dict(point), "cooling": dict(cooling or {}),
+                      "em_map": em_map, "capture_given": capture is not None})
+        if capture is not None and capture_em:
+            capture["em"] = {"domain_per_tri": [0], "loss_density_per_tri": [1.0],
+                             "P_cu_W": 10.0, "P_cu_exact_W": 10.0}
+            capture["loss_source"] = {"kind": "test_reference"}
+        return {"ok": True,
+               "components": {"winding": {"avg": 300.0, "max": 320.0},
+                              "magnet": {"avg": 150.0, "max": 155.0}},
+               "P_cu_exact_W": 10.0}
+
+    monkeypatch.setattr(cp, "_cr_solve_map", _solve_map, raising=True)
+    monkeypatch.setattr(cp, "_cr_em_summary", lambda: {
+        "I_phase_rms_A": 63.64, "rpm": 10000.0, "coil_temp_C": 200.0,
+        "T_em_avg_Nm": 2.176, "P_core_W": 13.2, "P_solid_W": 8.2,
+    }, raising=True)
+    monkeypatch.setattr(th, "_assignments", lambda: {"magnet": "F52SH_120C"},
+                        raising=True)
+    monkeypatch.setattr(th, "_dc_geometry", lambda geo: (
+        {"stator_diameter": 50.0}, {}), raising=True)
+    monkeypatch.setattr(th, "_dc_side_areas",
+                        lambda field, summary, geom: {"a": 1.0}, raising=True)
+    monkeypatch.setattr(tc, "part_capacities",
+                        lambda summary, mats, x: {"winding": 1.0}, raising=True)
+
+    def _rate(*, thermal_result, em_summary, caps, geometry, cooling,
+             side_areas, d_housing_m, duty, mode, resolve, refit,
+             magnet_grade):
+        return dict(rate_return)
+
+    monkeypatch.setattr(cp._ccr, "rate", _rate, raising=True)
+    return calls
+
+
+def test_the_rating_is_built_from_a_fresh_steady_lookup_not_the_loops_field(
+        monkeypatch):
+    """Cause (1) of the production defect: the reference must be a STEADY map
+    looked up by the pass's own identity — never `_em_map`-injected from
+    whatever the loop happens to be holding (which, in `limits`/`continuous`
+    mode, can be the machine translated onto the INSTANT of a crossing)."""
+    from motor_ai_sim.routes import coupled as cp
+
+    calls = _mock_rating_deps(monkeypatch, rate_return={
+        "feasible": True, "s": 0.5, "I_cont_A_rms": 30.0,
+        "limiting_part": "magnet", "limits_c": {"magnet": 150.0},
+        "temperatures_c": {"magnet": 150.0}, "notes": [],
+        "converged": True, "n_thermal_fem_solves": 1})
+
+    out = cp._continuous_rating_for_loop(
+        {"geo": None}, cooling={"cooling_mode": "air", "air_speed_mps": 40.0},
+        rpm=10000.0, coil_temp_c=200.0, magnet_temp_c=48.2, duty="peak",
+        mode="motor", time_to_limit={"within_limits": False,
+                                     "limiting_part": "winding"})
+
+    assert out is not None and out["ok"] is True
+    # ONE lookup for the reference — no `_em_map` override, so
+    # `solve_thermal_field` finds its OWN map by identity rather than being
+    # handed the loop's possibly-limited snapshot.
+    assert len(calls) == 1
+    assert calls[0]["em_map"] is None
+    assert calls[0]["capture_given"] is True
+    # …and it is looked up AT THE PASS's own temperatures, never the body's.
+    assert calls[0]["point"]["coil_temp_c"] == 200.0
+    assert calls[0]["point"]["magnet_temp_c"] == 48.2
+    assert calls[0]["point"]["rpm"] == 10000.0
+
+
+def test_a_scaled_pass_reuses_the_captured_map_not_a_fresh_lookup(monkeypatch):
+    """The rescale passes (`resolve`) must scale the CAPTURED reference map —
+    never re-look-up (that would silently drift onto a different run) and
+    never crash on a map that lacks the mesh-level fields (cause 2)."""
+    from motor_ai_sim.routes import coupled as cp
+
+    calls = _mock_rating_deps(monkeypatch, rate_return={
+        "feasible": True, "s": 0.5, "I_cont_A_rms": 30.0,
+        "limiting_part": "magnet", "limits_c": {"magnet": 150.0},
+        "temperatures_c": {"magnet": 150.0}, "notes": [],
+        "converged": True, "n_thermal_fem_solves": 1})
+
+    resolve_holder = {}
+
+    def _rate(*, resolve, **kw):
+        resolve_holder["resolve"] = resolve
+        return {"feasible": True, "s": 0.5, "I_cont_A_rms": 30.0,
+               "limiting_part": "magnet", "limits_c": {"magnet": 150.0},
+               "temperatures_c": {"magnet": 150.0}, "notes": [],
+               "converged": True, "n_thermal_fem_solves": 1}
+
+    monkeypatch.setattr(cp._ccr, "rate", _rate, raising=True)
+    cp._continuous_rating_for_loop(
+        {"geo": None}, cooling={"cooling_mode": "air", "air_speed_mps": 40.0},
+        rpm=10000.0, coil_temp_c=200.0, magnet_temp_c=48.2, duty="peak",
+        mode="motor", time_to_limit=None)
+
+    # Calling `resolve` a second time must not crash (the TypeError of the
+    # production bug) and must reuse the SAME captured map, scaled.
+    out2 = resolve_holder["resolve"](1.05)
+    assert out2 is not None
+    assert len(calls) == 2
+    assert calls[1]["em_map"] is not None
+    assert calls[1]["em_map"]["P_cu_exact_W"] == pytest.approx(10.0 * 1.05)
+
+
+# ---------------------------------------------------------------------------
+# the consistency guard
+# ---------------------------------------------------------------------------
+
+def test_over_the_limit_but_rated_above_the_duty_current_is_flagged():
+    from motor_ai_sim.routes import coupled as cp
+
+    block = {"ok": True, "feasible": True, "trustworthy": True, "s": 1.02,
+            "notes": []}
+    out = cp._cr_consistency_guard(
+        block, {"within_limits": False, "limiting_part": "winding"})
+    assert out["trustworthy"] is False
+    assert any("CONTRADICTS" in n for n in out["notes"])
+    assert "cannot hold MORE current" in out["note"]
+
+
+def test_inside_every_limit_but_rated_below_the_duty_current_is_flagged():
+    from motor_ai_sim.routes import coupled as cp
+
+    block = {"ok": True, "feasible": True, "trustworthy": True, "s": 0.8,
+            "notes": []}
+    out = cp._cr_consistency_guard(block, {"within_limits": True})
+    assert out["trustworthy"] is False
+    assert any("CONTRADICTS" in n for n in out["notes"])
+
+
+def test_a_consistent_answer_is_left_alone():
+    from motor_ai_sim.routes import coupled as cp
+
+    # over the limit, rated BELOW the duty current — consistent (the L13 peak
+    # case: s* = 0.64).
+    block = {"ok": True, "feasible": True, "trustworthy": True, "s": 0.64,
+            "notes": ["some ordinary note"]}
+    out = cp._cr_consistency_guard(
+        block, {"within_limits": False, "limiting_part": "winding"})
+    assert out.get("trustworthy", True) is True
+    assert out["notes"] == ["some ordinary note"]
+
+    # inside every limit, rated AT/above the duty current — consistent (the
+    # L13 rated case: s* = 1.12).
+    block2 = {"ok": True, "feasible": True, "trustworthy": True, "s": 1.12,
+             "notes": []}
+    out2 = cp._cr_consistency_guard(block2, {"within_limits": True})
+    assert out2.get("trustworthy", True) is True
+
+
+def test_the_guard_does_not_touch_an_already_untrustworthy_or_infeasible_block():
+    from motor_ai_sim.routes import coupled as cp
+
+    non_mono = {"ok": True, "feasible": True, "trustworthy": False, "s": 1.5,
+               "notes": ["THE 2-D THERMAL SOLVE IS NOT MONOTONE ..."]}
+    out = cp._cr_consistency_guard(
+        non_mono, {"within_limits": False, "limiting_part": "winding"})
+    assert out is non_mono                 # untouched, not re-wrapped
+
+    infeasible = {"ok": True, "feasible": False, "s": None}
+    assert cp._cr_consistency_guard(
+        infeasible, {"within_limits": False}) is infeasible
+
+
+def test_the_headline_of_a_contradiction_names_the_reason():
+    from motor_ai_sim import coupled_continuous_rating as ccr
+    from motor_ai_sim.routes import coupled as cp
+
+    block = {"ok": True, "feasible": True, "trustworthy": True, "s": 1.02,
+            "I_cont_A_rms": 64.9, "limiting_part": "winding", "notes": []}
+    flagged = cp._cr_consistency_guard(
+        block, {"within_limits": False, "limiting_part": "winding"})
+    line = ccr.headline(flagged)
+    assert line.startswith("NOT A RATING")
+    assert "cannot hold MORE current" in line
+
+
+# ---------------------------------------------------------------------------
+# the re-solve failure path
+# ---------------------------------------------------------------------------
+
+def test_a_resolve_that_never_settles_is_marked_not_trustworthy(monkeypatch):
+    """`coupled_continuous_rating.rate` itself only NOTES a re-solve that
+    fails or does not converge and keeps going on the map(s) it already has —
+    right for its own module, but a network-only pass must not be left
+    looking trustworthy on the coupled record, which is what stamped the
+    64.9 A / trustworthy:true answer on the record the owner saw."""
+    from motor_ai_sim.routes import coupled as cp
+
+    _mock_rating_deps(monkeypatch, rate_return={})   # unused; _rate overridden below
+    monkeypatch.setattr(cp._ccr, "rate", lambda **kw: {
+        "feasible": True, "s": 1.0195, "I_cont_A_rms": 64.9,
+        "limiting_part": "winding", "limits_c": {"winding": 200.0},
+        "temperatures_c": {"winding": 200.0},
+        "notes": ["the loss map could not be re-solved at 1.022x the "
+                 "reference copper (float() argument must be a string or a "
+                 "real number, not 'NoneType')"],
+        "converged": False, "n_thermal_fem_solves": 2}, raising=True)
+
+    out = cp._continuous_rating_for_loop(
+        {"geo": None}, cooling={"cooling_mode": "air", "air_speed_mps": 40.0},
+        rpm=10000.0, coil_temp_c=200.0, magnet_temp_c=48.2, duty="peak",
+        mode="motor", time_to_limit={"within_limits": False,
+                                     "limiting_part": "winding"})
+
+    assert out["trustworthy"] is False
+    assert any("did not converge" in n for n in out["notes"])
+    # The consistency guard does not re-wrap an already-untrustworthy block
+    # (pinned separately) — the re-solve-failure note is reason enough on its
+    # own, and is the one that actually explains THIS record.
+
+
+def test_a_one_pass_answer_with_no_resolve_attempt_is_not_penalised(monkeypatch):
+    """`n_thermal_fem_solves == 1` (the reference pass alone, no rescale
+    attempted at all — e.g. `resolve` returned `None` on the first try because
+    the reference itself could not be captured) must not be flagged by the
+    re-solve-failure rule, which only fires once a SECOND pass was tried and
+    still did not converge."""
+    from motor_ai_sim.routes import coupled as cp
+
+    _mock_rating_deps(monkeypatch, rate_return={
+        "feasible": True, "s": 0.64, "I_cont_A_rms": 29.4,
+        "limiting_part": "winding", "limits_c": {"winding": 200.0},
+        "temperatures_c": {"winding": 200.0}, "notes": [],
+        "converged": False, "n_thermal_fem_solves": 1})
+
+    out = cp._continuous_rating_for_loop(
+        {"geo": None}, cooling={"cooling_mode": "air", "air_speed_mps": 40.0},
+        rpm=10000.0, coil_temp_c=200.0, magnet_temp_c=48.2, duty="peak",
+        mode="motor", time_to_limit={"within_limits": False,
+                                     "limiting_part": "winding"})
+    assert out.get("trustworthy", True) is True

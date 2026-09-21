@@ -3808,9 +3808,10 @@ def _run(body: Dict[str, Any],
                                    "cooling, from the pass just solved")
             try:
                 continuous_rating = _continuous_rating_for_loop(
-                    body, cooling=cooling, em=em,
-                    summary=(em.get("summary") or {}), field=field,
-                    duty=duty_name, mode=str(body.get("mode") or "motor"))
+                    body, cooling=cooling, rpm=rpm_eff,
+                    coil_temp_c=t_coil, magnet_temp_c=t_mag,
+                    duty=duty_name, mode=str(body.get("mode") or "motor"),
+                    time_to_limit=time_to_limit)
             except Exception:  # noqa: BLE001 — never fails the loop's own answer
                 log.debug("coupled: the continuous rating could not be found",
                           exc_info=True)
@@ -4518,19 +4519,83 @@ def _cooling_label(cooling: Mapping[str, Any]) -> str:
     return label or "cooling not stated"
 
 
+def _cr_consistency_guard(block: Dict[str, Any],
+                          time_to_limit: Optional[Dict[str, Any]]
+                          ) -> Dict[str, Any]:
+    """A rating that CONTRADICTS this run's own ``time_to_limit`` verdict is
+    not trustworthy, whatever its residual says (bug found in production
+    2026-09-21: a point 41 s from its winding class came back rated ABOVE its
+    own duty current — a point that reaches its limit cannot hold MORE
+    current for ever, and a point inside every limit cannot rate BELOW the
+    current it is already holding).  Belt and braces over the reference-map
+    fix below: the guard catches any OTHER way the two could disagree, not
+    only the one that was found.
+    """
+    if not isinstance(block, dict) or not block.get("ok") \
+            or block.get("feasible") is False or block.get("trustworthy") is False:
+        return block
+    s = _ccr._num(block.get("s"))
+    within = (time_to_limit or {}).get("within_limits") \
+        if isinstance(time_to_limit, dict) and time_to_limit else None
+    if s is None or within is None:
+        return block
+    contradiction = None
+    if within is False and s >= 1.0:
+        contradiction = (
+            "time_to_limit says this point is OVER a limit (%s), yet the "
+            "continuous rating came out at or above the duty's own current "
+            "(s=%.3f) — a point that reaches its limit cannot hold MORE "
+            "current for ever" % (time_to_limit.get("limiting_part")
+                                  or "a part", s))
+    elif within is True and s < 1.0:
+        contradiction = (
+            "time_to_limit says this point is INSIDE every limit, yet the "
+            "continuous rating came out below the duty's own current "
+            "(s=%.3f) — an inside-limits point should rate at or above its "
+            "own current" % s)
+    if contradiction is None:
+        return block
+    out = dict(block)
+    out["trustworthy"] = False
+    out["notes"] = list(block.get("notes") or []) + [
+        "CONTRADICTS THE LOOP'S OWN VERDICT: " + contradiction]
+    out["note"] = contradiction
+    return out
+
+
 def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any],
-                                em: Dict[str, Any], summary: Dict[str, Any],
-                                field: Mapping[str, Any], duty: str, mode: str
+                                rpm: float, coil_temp_c: float,
+                                magnet_temp_c: Optional[float], duty: str,
+                                mode: str,
+                                time_to_limit: Optional[Dict[str, Any]] = None
                                 ) -> Optional[Dict[str, Any]]:
     """The S1 rating for ``solve_to: continuous`` — ONE condition (this duty's
     own cooling, no patch), from the pass the loop already made.
 
-    No electromagnetic run beyond the loop's own: ``em`` and ``field`` are the
-    converged (or limited) pass this loop just solved, and only the 2-D
-    thermal FEM is re-solved, once or twice more, with the copper scaled —
-    exactly what :func:`coupled_continuous_rating.rate`'s ``resolve`` callback
-    does for ``POST /api/coupled/continuous_rating``, reused here rather than
-    re-implemented.  Never raises: a condition that cannot be rated (no
+    THE REFERENCE MUST BE A STEADY MAP, never the loop's own ``field``.  Bug
+    found in production 2026-09-21: on a ``limits``-mode pass ``field`` is the
+    machine translated onto the INSTANT it crosses its limit
+    (``routes.thermal.rescale_map_to_nodes``) — the network the S1 search
+    fits to that snapshot sits ON the limit at ``s ≈ 1`` BY CONSTRUCTION, so a
+    machine 41 s from its winding class came back rated ABOVE its own duty
+    current.  The fix is the same one the standalone
+    ``POST /api/coupled/continuous_rating`` route already uses: solve a FRESH
+    2-D STEADY thermal map — no ``_em_map`` override, ``_cr_solve_map`` looks
+    the loop's own just-solved run up by its own IDENTITY (rpm, current,
+    gamma, mesh, ``coil_temp_c``/``magnet_temp_c`` — this pass's own, not the
+    body's original ones) exactly as this loop's ``_thermal_solve`` does every
+    iteration — and CAPTURE the mesh-level loss map from that lookup for the
+    rescale passes.
+
+    This also fixes the TypeError the first version hit: the loop's own
+    ``em`` (the bare transient result) does not carry the per-element loss
+    mesh at all — ``field_snapshot=True`` keeps it in a SEPARATE snapshot
+    store keyed by identity, not in the dict the loop passes around — so
+    scaling it and handing it back as ``_em_map`` fed ``solve_thermal_field``
+    arrays it could not do arithmetic on.  Letting the lookup find its own
+    map, as the standalone route does, sidesteps that shape entirely.
+
+    Never raises: a condition that cannot be rated (no run to rate from, no
     capacities, no part limits, a non-monotone map) is reported as
     ``{"ok": False, "refusal": ...}`` rather than failing the loop's own
     answer.
@@ -4539,8 +4604,37 @@ def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any]
         _dc_side_areas
     from motor_ai_sim.thermal_capacities import CapacityError, part_capacities
 
+    point = dict(_cr_point_kwargs(body))
+    point["rpm"] = float(rpm)
+    point["coil_temp_c"] = float(coil_temp_c)
+    point["magnet_temp_c"] = (None if magnet_temp_c is None
+                              else float(magnet_temp_c))
+
+    capture: Dict[str, Any] = {}
+    try:
+        field0 = _cr_solve_map(point, cooling, capture=capture)
+    except HTTPException as exc:
+        return {"ok": False, "cooling": dict(cooling or {}),
+                "cooling_label": _cooling_label(cooling),
+                "refusal": {"error": (exc.detail if isinstance(exc.detail, str)
+                                      else str(exc.detail)),
+                           "error_code": "no_steady_map"}}
+    em0 = capture.get("em")
+    em_src0 = dict(capture.get("loss_source") or {})
+    # THE SUMMARY comes from the canonical "last run" store — where every
+    # other reader of this run's numbers reads them, and the shape
+    # `coupled_continuous_rating.reference_point` was written against — never
+    # the loop's own local `em["summary"]`, which does not carry the same
+    # keys (the None-valued I_phase_rms_A / rpm / coil_temp_c / P_cu_W of the
+    # production bug).
+    summary = _cr_em_summary()
     if not summary:
-        return None
+        return {"ok": False, "cooling": dict(cooling or {}),
+                "cooling_label": _cooling_label(cooling),
+                "refusal": {"error": ("this backend holds no electromagnetic "
+                                      "run summary, so there is no torque to "
+                                      "rate"),
+                           "error_code": "no_electromagnetic_run"}}
     try:
         geom, _ov = _dc_geometry(body.get("geo"))
         mats = _assignments()
@@ -4553,33 +4647,33 @@ def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any]
     except Exception:  # noqa: BLE001 — never fails the loop's own answer
         log.debug("coupled: continuous rating precheck failed", exc_info=True)
         return None
-    side0 = _dc_side_areas(dict(field), summary, geom)
+    side0 = _dc_side_areas(field0, summary, geom)
 
     _pass_n = {"n": 1}
 
     def _resolve(factor: float) -> Optional[Dict[str, Any]]:
+        if em0 is None:
+            return None
         _pass_n["n"] += 1
         _s_approx = math.sqrt(max(float(factor), 0.0))
         _progress.update(
             phase="continuous rating %d/%d — thermal at ≈%.2f × I"
                   % (_pass_n["n"], _ccr.MAX_MAP_PASSES, _s_approx))
         return _cr_solve_map(
-            _cr_point_kwargs(body), cooling,
-            em_map=_cr_scaled_map(em, factor),
-            em_source={"kind": "coupled_loop_pass",
-                       "note": ("the loop's own converged/limited pass, "
-                                "re-solved with the copper scaled by %.4f x "
-                                "(s^2 x rho_Cu(T_w)/rho_Cu(coil_ref)) — no "
-                                "electromagnetic solve" % float(factor))})
+            point, cooling, em_map=_cr_scaled_map(em0, factor),
+            em_source={**em_src0, "note": (
+                "the loop's own steady reference map, re-solved with the "
+                "copper scaled by %.4f x (s^2 x rho_Cu(T_w)/rho_Cu(coil_ref)) "
+                "— no electromagnetic solve" % float(factor))})
 
     def _refit(m: Mapping[str, Any]):
         return _dc_side_areas(dict(m), summary, geom), None
 
-    _progress.update(phase="continuous rating 1/%d — the loop's own pass"
-                           % _ccr.MAX_MAP_PASSES)
+    _progress.update(phase="continuous rating 1/%d — steady map at the "
+                           "pass's own losses" % _ccr.MAX_MAP_PASSES)
     try:
         block = _ccr.rate(
-            thermal_result=field, em_summary=summary, caps=caps,
+            thermal_result=field0, em_summary=summary, caps=caps,
             geometry=geom, cooling=cooling, side_areas=side0,
             d_housing_m=d_housing_m, duty=duty, mode=mode,
             resolve=_resolve, refit=_refit, magnet_grade=mats.get("magnet"))
@@ -4589,9 +4683,31 @@ def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any]
                 "refusal": {"error": str(exc),
                             "error_code": getattr(exc, "error_code",
                                                   "duty_cycle")}}
+    # A FAILED RE-SOLVE must not leave a network-only pass looking trustworthy
+    # (production bug, item 2): `_ccr.rate` itself only NOTES a failed
+    # `resolve()` and keeps going on the map(s) it already has — right for an
+    # ordinary "no map yet at this factor", wrong here because pass 0's own
+    # map is exactly the one the whole bug above was found on.  So: no
+    # electromagnetic solve happened here at all (`em0 is None`, `resolve`
+    # always returns `None`) is never actually hit — `em0` comes from the SAME
+    # lookup as `field0` — but a genuinely failed later pass (an exception
+    # `_ccr.rate` caught and turned into a note) still leaves `converged`
+    # false; the consistency guard below is what actually catches a bad
+    # NUMBER, and a note starting "the loss map could not be re-solved" is
+    # kept in `notes` for a reader either way.
+    if not block.get("converged") and int(block.get("n_thermal_fem_solves")
+                                          or 0) > 1:
+        block = dict(block)
+        block["trustworthy"] = False
+        block["notes"] = list(block.get("notes") or []) + [
+            "the fixed-point re-solve did not converge within the map-pass "
+            "budget, so this number is not a settled rating"]
     block["ok"] = True
     block["headline"] = _ccr.headline(block)
     block["cooling_label"] = _cooling_label(cooling)
+    block = _cr_consistency_guard(block, time_to_limit)
+    if block.get("trustworthy") is False:
+        block["headline"] = _ccr.headline(block)
     return block
 
 

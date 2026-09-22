@@ -1077,6 +1077,60 @@ def rotor_stress(
 # a genuine ``rotor_stress`` answer, at ``rpm``, with ``limit_speed`` riding on
 # it, and THAT becomes the tab's last result — the point of the button is
 # exactly to show "here is the case, and here is how far it is from SF = 1".
+
+# ---------------------------------------------------------------------------
+# Persistent history (2026-09-22) — "don't recompute an identical search"
+# ---------------------------------------------------------------------------
+# The search is `max_solves` FEM solves, several times the cost of a single
+# rotor_stress call — the most worth caching of the four kinds wired this
+# session.  Reuses `_cache_key`'s tuple exactly as rotor_stress's own history
+# does, plus the three fields that are this route's alone: the search cannot
+# be the same search if what it was SEARCHING FOR changed.
+_LIMIT_SPEED_HISTORY = _RH.history_for("mechanical.limit_speed")
+_RH.register_kind("mechanical.limit_speed")
+
+
+def _limit_speed_history_key(geo_ov, assign, rpm0, interference_mm,
+                             mesh_size_mm, order, cspec, load_mode, torque,
+                             rotor_temp_c, sleeve_temp_c, part_temps, sym_mode,
+                             target_sf, max_factor, max_solves) -> str:
+    base = _cache_key(geo_ov, assign, rpm0, 1.0, interference_mm, mesh_size_mm,
+                      order, cspec, "single", load_mode, torque or 0.0,
+                      rotor_temp_c, sleeve_temp_c, part_temps or None, sym_mode)
+    extra = (round(float(target_sf), 4), round(float(max_factor), 4),
+            int(max_solves))
+    return _RH.make_key("mechanical.limit_speed", base + extra)
+
+
+def _limit_speed_summary(out0: Dict[str, Any]) -> str:
+    try:
+        blk = out0.get("limit_speed") or {}
+        rpm_found = blk.get("rpm_sf1")
+        bits = [f"analysed {blk.get('analysed_rpm', 0):,.0f} rpm"]
+        if rpm_found is not None:
+            bits.append(f"limit {float(rpm_found):,.0f} rpm")
+        if blk.get("target_sf") is not None:
+            bits.append(f"SF {blk['target_sf']:.2f}")
+        return ", ".join(bits)
+    except Exception:                                       # noqa: BLE001
+        return "limit speed search"
+
+
+def _load_limit_speed_history_entry(entry: Dict[str, Any],
+                                    payload: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(payload)
+    out["cached"] = True
+    out["served_from_history"] = True
+    out["computed_at"] = entry.get("computed_at")
+    out["history_key"] = entry.get("key")
+    _remember_last("rotor_stress", out, dict(entry.get("params") or {}),
+                   out.get("geo_fingerprint"))
+    return out
+
+
+_RH.register_loader("mechanical.limit_speed", _load_limit_speed_history_entry)
+
+
 @router.post("/limit_speed")
 @_JOBS.queued("mechanical.limit_speed", priority=_JOBS.Priority.INTERACTIVE)
 def limit_speed(
@@ -1118,6 +1172,11 @@ def limit_speed(
         default=12, ge=2, le=30,
         description="the whole search's solve budget, bracket + bisection"),
     geo: Optional[str] = Query(default=None),
+    fresh: bool = Query(
+        default=False,
+        description="ignore a stored history answer and search again, even "
+                    "if an identical request was already computed — the "
+                    "panel's Recompute button"),
 ):
     """The speed at which the minimum averaged safety factor reaches ``target_sf``.
 
@@ -1250,6 +1309,16 @@ def limit_speed(
         override_props = _override_props()
         fp = _live_fingerprint(geo_ov)
 
+        history_key = _limit_speed_history_key(
+            geo_ov, assign, rpm0, interference_mm, mesh_size_mm, order, cspec,
+            load_mode, torque, rotor_temp_c, sleeve_temp_c, part_temps, sym_mode,
+            target_sf, max_factor, max_solves)
+        if not fresh:
+            _hist_hit = _LIMIT_SPEED_HISTORY.get(history_key)
+            if _hist_hit is not None:
+                return _load_limit_speed_history_entry(
+                    _hist_hit["entry"], _hist_hit["payload"])
+
         solves_done = 0
 
         def _solve_rpm(cand_rpm: float):
@@ -1358,6 +1427,15 @@ def limit_speed(
         for _field, _v in part_temps.items():
             _params[f"{_field}_temp_c"] = _v
         _remember_last("rotor_stress", out0, _params, fp)
+        try:
+            _LIMIT_SPEED_HISTORY.put(
+                history_key, params=_params,
+                summary=_limit_speed_summary(out0), payload=out0,
+                extra={"geo_fingerprint": fp})
+        except Exception:                                   # noqa: BLE001
+            log.warning("mechanical: could not file this limit-speed search "
+                       "in the history", exc_info=True)
+        out0["history_key"] = history_key
 
         return out0
     finally:

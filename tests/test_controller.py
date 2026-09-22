@@ -1126,12 +1126,145 @@ def test_resolved_point_preview_names_every_source_before_solving(
     assert out["i_phase_rms_A"] == pytest.approx(48.6)
     assert out["v_dc_V"] == pytest.approx(44.4)
     assert out["star_delta"] == "star"
+    # No V1_phase_V on this fixture's (empty) summary: no PWM record either,
+    # so the preview honestly says the modulation index is not known yet —
+    # never a silent gap in the line.
+    assert out["modulation_index"] is None and out["power_factor"] is None
     assert out["line"] == (
         f"solving for: {_DUTY} · 48.6 A rms · 44.4 V "
         "(the configuration's battery block (pack nominal)) · star · "
         f"{rc.DEFAULT_CARRIER_HZ / 1000.0:.0f} kHz "
         "(this module's stated default (20 kHz — no PWM history and no "
-        "saved carrier))")
+        "saved carrier)) · no modulation index known")
+
+
+# ---------------------------------------------------------------------------
+# Modulation index / power factor are resolved server-side, never required
+# from the web (owner 2026-09-22, production, Controller -> Solve on a duty
+# solved with sine current: "Error: send modulation_index ... or
+# power_factor — the bridge's duty cycle cannot be guessed from the current
+# alone").  Same class of defect as p_ac_W/v_dc_V above.
+# ---------------------------------------------------------------------------
+
+def test_modulation_index_resolves_from_the_dutys_own_pwm_record(
+        synth_dir, monkeypatch):
+    """A duty actually solved with PWM knows its own modulation index —
+    that real number wins over anything this route could derive."""
+    node = _sine_node(inv_extra={"v_dc_V": 750.4, "m": 0.87})
+    _patch_duty(monkeypatch, node, cfg_doc={"battery": _BATTERY})
+    r = _solve(_duty_solve_body(power_factor=None, v_dc_V=None))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["point"]["modulation_index"] == pytest.approx(0.87, abs=1e-3)
+    assert "PWM" in out["sources"]["modulation_index"] or \
+        "inverter block" in out["sources"]["modulation_index"]
+
+
+def _rms_pf(v1_peak, i1_rms, p_ac):
+    return p_ac / (3.0 * (v1_peak / math.sqrt(2.0)) * i1_rms)
+
+
+def test_modulation_and_power_factor_derive_from_a_sine_record_star(
+        synth_dir, monkeypatch):
+    """No PWM at all: a plain standalone (sine current-drive) record — the
+    controller must still get a modulation index without anyone typing
+    physics, from the record's own fundamental voltage."""
+    rpm, T_Nm, P_loss_W, i1, v1, v_dc = 3000.0, 10.0, 400.0, 40.0, 150.0, 400.0
+    d_entry = {"name": _DUTY, "mode": "motor", "rpm": rpm,
+              "summary": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W,
+                          "I1_phase_rms_A": i1, "star_delta": "star",
+                          "V1_phase_V": v1}}
+    _patch_duty(monkeypatch, {}, d_entry)
+    r = _solve(_duty_solve_body(power_factor=None, v_dc_V=v_dc))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    p_ac = abs(T_Nm) * 2 * math.pi * rpm / 60.0 + P_loss_W
+    m_expect = 2.0 * v1 / v_dc                       # star: no sqrt(3)
+    pf_expect = _rms_pf(v1, i1, p_ac)
+    assert out["point"]["modulation_index"] == pytest.approx(m_expect, rel=1e-3)
+    assert out["point"]["power_factor"] == pytest.approx(pf_expect, rel=1e-3)
+    assert "V1_phase_V" in out["sources"]["modulation_index"] or \
+        "fundamental" in out["sources"]["modulation_index"]
+    assert "sine" in out["sources"]["modulation_index"]
+
+
+def test_modulation_and_power_factor_derive_from_a_sine_record_delta(
+        synth_dir, monkeypatch):
+    """Delta: the fundamental is the coil (= line) voltage already, and the
+    star-equivalent sqrt(3) belongs only inside ``pwm.modulation_index`` —
+    the power factor formula (V1_rms x I1_rms) is connection-independent."""
+    rpm, T_Nm, P_loss_W, i1, v1, v_dc = 3000.0, 10.0, 400.0, 40.0, 150.0, 400.0
+    d_entry = {"name": _DUTY, "mode": "motor", "rpm": rpm,
+              "summary": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W,
+                          "I1_phase_rms_A": i1, "star_delta": "delta",
+                          "V1_phase_V": v1}}
+    _patch_duty(monkeypatch, {}, d_entry)
+    r = _solve(_duty_solve_body(power_factor=None, v_dc_V=v_dc, star_delta="delta"))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    p_ac = abs(T_Nm) * 2 * math.pi * rpm / 60.0 + P_loss_W
+    m_expect = 2.0 * v1 / (v_dc * math.sqrt(3.0))    # delta: the sqrt(3)
+    pf_expect = _rms_pf(v1, i1, p_ac)
+    assert out["point"]["modulation_index"] == pytest.approx(m_expect, rel=1e-3)
+    assert out["point"]["power_factor"] == pytest.approx(pf_expect, rel=1e-3)
+
+
+def test_overmodulation_solves_and_flags_rather_than_refusing(
+        synth_dir, monkeypatch):
+    """m > 1 (a fundamental this bus cannot linearly synthesise) is a design
+    warning, never a refusal — the same rule ``inverter/losses.py`` already
+    applies to a stated ``modulation_index``, exercised here through the
+    EM-record derivation."""
+    rpm, T_Nm, P_loss_W, i1, v1, v_dc = 3000.0, 10.0, 400.0, 40.0, 150.0, 100.0
+    d_entry = {"name": _DUTY, "mode": "motor", "rpm": rpm,
+              "summary": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W,
+                          "I1_phase_rms_A": i1, "star_delta": "star",
+                          "V1_phase_V": v1}}
+    _patch_duty(monkeypatch, {}, d_entry)
+    r = _solve(_duty_solve_body(power_factor=None, v_dc_V=v_dc))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["point"]["modulation_index"] == pytest.approx(2.0 * v1 / v_dc, rel=1e-3)
+    assert out["point"]["modulation_index"] > 1.0
+    assert any("OVERMODULATED" in w or "modulation index" in w
+              for w in out["warnings"])
+    assert out["feasible"] is True or out["feasible"] is False  # never a 422
+
+
+def test_manual_modulation_index_override_beats_the_em_record(
+        synth_dir, monkeypatch):
+    """A deliberate manual override, saved on the controller settings, beats
+    what this route would otherwise derive from the EM record — the exact
+    footing ``v_dc_V``'s own manual override already has."""
+    d_entry = {"name": _DUTY, "mode": "motor", "rpm": 3000.0,
+              "summary": {"T_em_avg_Nm": 10.0, "P_loss_total_W": 400.0,
+                          "I1_phase_rms_A": 40.0, "star_delta": "star",
+                          "V1_phase_V": 150.0}}
+    _patch_duty(monkeypatch, {}, d_entry,
+               cfg_doc={"controller": {"modulation_index": 0.55}})
+    r = _solve(_duty_solve_body(power_factor=None, v_dc_V=400.0))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["point"]["modulation_index"] == pytest.approx(0.55, abs=1e-3)
+    assert "manual" in out["sources"]["modulation_index"]
+
+
+def test_old_record_with_no_voltage_refuses_with_the_plain_sentence(
+        synth_dir, monkeypatch):
+    """A record from before the solver saved a fundamental voltage at all —
+    no PWM, no V1_phase_V, no manual override: one plain sentence naming the
+    fix, never ``solve_controller``'s raw "send modulation_index ... or
+    power_factor", which names an internal field."""
+    d_entry = {"name": _DUTY, "mode": "motor", "rpm": 3000.0,
+              "summary": {"T_em_avg_Nm": 10.0, "P_loss_total_W": 400.0,
+                          "I1_phase_rms_A": 40.0, "star_delta": "star"}}
+    _patch_duty(monkeypatch, {}, d_entry)
+    r = _solve(_duty_solve_body(power_factor=None, v_dc_V=400.0))
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "no_modulation_source"
+    assert "re-run the Simulation" in detail["message"]
+    assert "modulation_index" in detail["fields"]
 
 
 def test_no_machine_loaded_refuses_by_name(monkeypatch):

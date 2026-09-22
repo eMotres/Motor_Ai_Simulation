@@ -253,6 +253,25 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
         except Exception:                                   # noqa: BLE001
             pass
 
+    # THE FUNDAMENTAL PHASE (COIL) VOLTAGE — the one field a SINE duty (no
+    # PWM inverter block at all) needs so its own modulation index and power
+    # factor can be derived below (:func:`_build_request`) instead of being
+    # required from the web (owner 2026-09-22, production: "Error: send
+    # modulation_index ... or power_factor" on a duty solved with sine
+    # current).  ``V1_phase_V`` — never ``V_phase_peak_V``/``V_phase_rms_V``,
+    # which are the WHOLE waveform's peak/rms, harmonics included — is the
+    # harmonic-decomposed fundamental (``simulation/postproc.voltage_harmonics``),
+    # and it is already the quantity the bridge must synthesise: in star the
+    # phase voltage, in DELTA the coil voltage, which IS the line-to-line
+    # voltage the bridge terminals see (the winding IS the line — no separate
+    # delta handling needed here, only inside ``pwm.modulation_index`` itself).
+    v1 = _num(em.get("V1_phase_V"))
+    if v1 is not None and v1 > 0:
+        out["v1_phase_peak_V"] = float(v1)
+        src["v1_phase_peak_V"] = (
+            f"{where} (the fundamental phase/coil voltage the solver "
+            "reports, V1_phase_V)")
+
     # THE POWER: rotor power (from the SAME em block, deriving it off the
     # torque exactly as the report's headline does when the record carries no
     # ``P_mech_W`` of its own) plus the electromagnetic loss —
@@ -544,19 +563,31 @@ def get_resolved_point(die: Optional[str] = Query(None), config: Optional[str] =
     ctx = req.get("_context") or {}
     i_ph, p_ac = req.get("i_phase_rms_A"), req.get("p_ac_W")
     v_dc, f_sw, sd = req.get("v_dc_V"), req.get("f_carrier_hz"), req.get("star_delta")
+    m, pf = req.get("modulation_index"), req.get("power_factor")
     line = None
     if i_ph is not None and p_ac is not None:
+        if m is not None and pf is not None:
+            mod_txt = (f"m {float(m):.2f} · cos φ {float(pf):.2f} "
+                       f"({sources.get('modulation_index', 'unknown source')})")
+        elif m is not None:
+            mod_txt = f"m {float(m):.2f} ({sources.get('modulation_index', 'unknown source')})"
+        elif pf is not None:
+            mod_txt = f"cos φ {float(pf):.2f} ({sources.get('power_factor', 'unknown source')})"
+        else:
+            mod_txt = "no modulation index known"
         parts = [str(ctx.get("duty") or "the loaded duty"),
                  f"{float(i_ph):.1f} A rms",
                  (f"{float(v_dc):.1f} V ({sources.get('v_dc_V', 'unknown source')})"
                   if v_dc is not None else "no DC bus voltage known"),
                  str(sd or "star"),
                  (f"{float(f_sw) / 1000.0:.0f} kHz ({sources.get('f_carrier_hz', 'unknown source')})"
-                  if f_sw is not None else "no carrier known")]
+                  if f_sw is not None else "no carrier known"),
+                 mod_txt]
         line = "solving for: " + " · ".join(parts)
     return {"die": ctx.get("die"), "config": ctx.get("config"), "duty": ctx.get("duty"),
             "i_phase_rms_A": i_ph, "p_ac_W": p_ac, "v_dc_V": v_dc,
-            "f_carrier_hz": f_sw, "star_delta": sd, "sources": sources, "line": line}
+            "f_carrier_hz": f_sw, "star_delta": sd, "modulation_index": m,
+            "power_factor": pf, "sources": sources, "line": line}
 
 
 @router.post("/schematic")
@@ -721,6 +752,71 @@ def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]
                                    "PWM history and no saved carrier)"
                                    % (DEFAULT_CARRIER_HZ / 1000.0))
 
+    # ── MODULATION INDEX / POWER FACTOR (owner 2026-09-22, production,
+    # Controller -> Solve on a duty solved with plain sine current: "Error:
+    # send modulation_index ... or power_factor — the bridge's duty cycle
+    # cannot be guessed from the current alone").  Same class of defect as
+    # v_dc_V/p_ac_W above — resolved here, never required from the web:
+    #
+    #   the request (the generic loop above; a manual ``power_factor`` there
+    #   already popped ``modulation_index``)
+    #     > a saved manual override (a deliberate choice, same footing as the
+    #       saved manual V_dc)
+    #     > the duty's own PWM record (the generic loop above, from
+    #       ``inv.get("m")`` — what the bridge was ACTUALLY told to do)
+    #     > derived from the EM record's fundamental voltage/current and the
+    #       V_dc just resolved above — the ONLY way a duty solved on plain
+    #       sine current (no PWM at all) gets a modulation index without
+    #       anyone typing physics.
+    #
+    # Derivation: ``pwm.modulation_index()`` — the SAME m the project's own
+    # ideal-PWM path (``routes/coupled.py::_inverter_settings``) computes for
+    # a delta machine's star-equivalent substitution — against ``v1``, the
+    # solved fundamental (``V1_phase_V`` above; in delta this IS the coil/line
+    # voltage, so no extra star/delta handling belongs here, only inside that
+    # function).  Power factor is the displacement one, off the SAME
+    # fundamentals: P_elec (the same ``p_ac_W`` every other quantity in this
+    # module reads, never a different power) over the fundamental apparent
+    # power 3*V1_rms*I1_rms — algebraically the identical ratio
+    # ``solve_controller`` recomputes internally once it has ``m``, so the
+    # two never disagree.  A current-drive sine run imposes an exactly
+    # sinusoidal current, so its rms current IS its fundamental — the
+    # already-resolved ``i_phase_rms_A`` needs no separate "I1" lookup.
+    if req.get("modulation_index") is None and req.get("power_factor") is None:
+        if ctrl.get("modulation_index") is not None:
+            req["modulation_index"] = ctrl["modulation_index"]
+            sources["modulation_index"] = (
+                "the saved controller settings (manual modulation index)")
+        elif ctrl.get("power_factor") is not None:
+            req["power_factor"] = ctrl["power_factor"]
+            sources["power_factor"] = (
+                "the saved controller settings (manual power factor)")
+        else:
+            v1 = duty.get("v1_phase_peak_V")
+            i1 = req.get("i_phase_rms_A")
+            p_ac = req.get("p_ac_W")
+            v_dc = req.get("v_dc_V")
+            if v1 is not None and i1 and p_ac is not None and v_dc:
+                from motor_ai_sim.simulation.pwm import \
+                    modulation_index as _modulation_index
+                sd = str(req.get("star_delta") or "star")
+                m = _modulation_index(float(v1), float(v_dc), star_delta=sd)
+                v1_rms = float(v1) / math.sqrt(2.0)
+                s3 = 3.0 * v1_rms * float(i1)
+                pf = (float(p_ac) / s3) if s3 > 0 else None
+                v1_where = duty_src.get(
+                    "v1_phase_peak_V",
+                    "the duty's electromagnetic record's fundamental voltage")
+                req["modulation_index"] = round(m, 4)
+                sources["modulation_index"] = (
+                    f"{v1_where} — m = 2*V1/(V_dc*(sqrt3 if delta)), the "
+                    "duty was solved on sine current, not PWM")
+                if pf is not None:
+                    req["power_factor"] = round(max(0.0, min(1.0, pf)), 4)
+                    sources["power_factor"] = (
+                        f"{v1_where}: cos phi = P_elec / (3 * V1_rms * "
+                        "I1_rms)")
+
     defaults = {"device": (body.get("device") or ctrl.get("device") or _default_device()),
                 "devices_parallel": (body.get("devices_parallel")
                                      or ctrl.get("devices_parallel") or 1),
@@ -815,6 +911,19 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
             "no DC bus voltage is known for this motor — add a battery to "
             "the configuration, or set V_dc in the controller settings",
             ["v_dc_V"], code="no_v_dc_source")
+    # Modulation index / power factor: resolved in _build_request from the
+    # duty's own PWM record, a saved manual override, or (for a duty solved
+    # on plain sine current) the EM record's fundamental voltage — see the
+    # block above the "defaults" dict there.  What is left here is a record
+    # so old it carries none of those (no V1_phase_V at all): never the
+    # physics module's raw "send modulation_index ... or power_factor",
+    # which names an internal field, but one sentence saying what to do.
+    if req.get("modulation_index") is None and req.get("power_factor") is None:
+        raise _refuse(
+            "this duty's electromagnetic record has no voltage saved (an "
+            "old run, from before the fundamental voltage was recorded) — "
+            "re-run the Simulation for this duty to get a modulation index",
+            ["modulation_index", "power_factor"], code="no_modulation_source")
     key = _history_key(req)
 
     if not fresh:

@@ -189,6 +189,24 @@ def test_devices_parallel_below_one_is_refused(dies, granted):
     assert "devices_parallel" in r.json()["detail"]
 
 
+def test_modulation_index_and_power_factor_round_trip(dies, granted):
+    """A deliberate manual override (owner 2026-09-22, production: "send
+    modulation_index ... or power_factor") — saved on the same footing as
+    ``v_dc_V``, and read back by ``routes.controller._build_request``."""
+    r = _patch_controller(headers=granted, modulation_index=0.62,
+                          power_factor=None)
+    assert r.status_code == 200, r.text
+    c = _cfg_doc(dies)
+    assert c["controller"]["modulation_index"] == pytest.approx(0.62)
+    assert c["controller"]["power_factor"] is None
+
+
+def test_power_factor_above_one_is_refused(dies, granted):
+    r = _patch_controller(headers=granted, power_factor=1.5)
+    assert r.status_code == 422
+    assert "power_factor" in r.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # load -> GET /api/controller/settings
 # ---------------------------------------------------------------------------

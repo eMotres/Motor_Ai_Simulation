@@ -3950,6 +3950,14 @@ class ControllerPatch(BaseModel):
     dead_time_us: Optional[float] = None
     f_carrier_hz: Optional[float] = None
     v_dc_V: Optional[float] = None
+    # A deliberate manual override, same footing as ``v_dc_V`` above — the
+    # bridge's duty cycle the tab is told to assume rather than the one
+    # ``routes.controller._build_request`` would otherwise derive from the
+    # duty's own PWM record or its EM record's fundamental (owner 2026-09-22,
+    # production: "send modulation_index ... or power_factor" on a duty
+    # solved with sine current — the same audit that added ``v_dc_V`` here).
+    modulation_index: Optional[float] = None
+    power_factor: Optional[float] = None
     cooling: ControllerCoolingSpec = ControllerCoolingSpec()
     mapping: list[ControllerMappingRow] = []
     couple_with_em: bool = False
@@ -3979,10 +3987,15 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
     for _f, _v in (("r_g_ext_ohm", req.r_g_ext_ohm),
                    ("dead_time_us", req.dead_time_us),
                    ("f_carrier_hz", req.f_carrier_hz),
-                   ("v_dc_V", req.v_dc_V)):
+                   ("v_dc_V", req.v_dc_V),
+                   ("modulation_index", req.modulation_index),
+                   ("power_factor", req.power_factor)):
         if _v is not None and not (float(_v) >= 0):
             raise HTTPException(422, detail=(
                 f"controller.{_f} must be non-negative; got {_v}"))
+    if req.power_factor is not None and float(req.power_factor) > 1.0:
+        raise HTTPException(422, detail=(
+            f"controller.power_factor cannot exceed 1; got {req.power_factor}"))
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     c["controller"] = {
         "saved_at": datetime.now().isoformat(timespec="seconds"),
@@ -3997,6 +4010,8 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
         "v_gs_off_V": req.v_gs_off_V,
         "dead_time_us": req.dead_time_us,
         "f_carrier_hz": req.f_carrier_hz,
+        "modulation_index": req.modulation_index,
+        "power_factor": req.power_factor,
         "v_dc_V": req.v_dc_V,
         "cooling": req.cooling.model_dump(exclude_none=True),
         "mapping": [m.model_dump() for m in req.mapping],

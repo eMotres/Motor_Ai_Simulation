@@ -228,6 +228,76 @@ test('settingsForSave round-trips through formStateFromSettings', () => {
   assert.equal(restored.coupleWithEm, true);
 });
 
+/* ── controllerSolveBody — the wire payload (owner 2026-09-22, third round:
+ * "Error: v_dc_V is required" — «проверь всё») ─────────────────────────────
+ * Every machine/point value (V_dc, carrier, current, power, connection) is
+ * resolved server-side; the tab must never send '' or null for a blank
+ * number box, only OMIT the key entirely, or the route reads "the request
+ * provided this field" and the server-side fallback chain never runs.
+ */
+
+const blank = (v) => (v === '' ? undefined : v);
+
+function controllerSolveBody(s, customRows) {
+  return {
+    device: s.device,
+    devices_parallel: blank(s.nPar),
+    topology: s.topology, set_split: s.setSplit, h_bridge_modulation: s.hbMod,
+    r_g_ext_ohm: blank(s.rg),
+    v_gs_off_V: blank(s.vgsOff),
+    dead_time_us: blank(s.dead),
+    f_carrier_hz: blank(s.fsw),
+    v_dc_V: blank(s.vdc),
+    r_tim_k_w: blank(s.rtim),
+    cooling: { coolant: s.coolant, flow_lpm: blank(s.flow), t_in_c: blank(s.tin) },
+    mapping: s.topology === 'custom' ? customRows : undefined,
+    devices_parallel_by_bridge: Object.keys(s.parByBridge).length ? s.parByBridge : undefined,
+  };
+}
+
+test('a blank V_dc/carrier/R_g/dead-time is OMITTED from the wire, never null', () => {
+  const s = { ...DEFAULT_FORM, vdc: '', fsw: '', rg: '', vgsOff: '', dead: '',
+    rtim: '', flow: '', tin: '' };
+  const body = controllerSolveBody(s, []);
+  const json = JSON.stringify(body);
+  for (const key of ['v_dc_V', 'f_carrier_hz', 'r_g_ext_ohm', 'v_gs_off_V',
+                      'dead_time_us', 'r_tim_k_w']) {
+    assert.equal(body[key], undefined, `${key} must be undefined, not a blank string`);
+    assert.ok(!json.includes(`"${key}"`), `${key} leaked into the JSON wire body`);
+  }
+  // cooling is a nested object — its own blanks must vanish the same way
+  // (JSON.stringify drops an undefined-valued key even inside a sub-object).
+  assert.equal(body.cooling.flow_lpm, undefined);
+  assert.equal(body.cooling.t_in_c, undefined);
+  assert.ok(!json.includes('flow_lpm'));
+  assert.ok(!json.includes('"t_in_c"'));
+  assert.ok(!json.includes('null'), 'no field may cross the wire as null either');
+});
+
+test('a real zero (V_GS off = 0 V) is sent, never mistaken for blank', () => {
+  const s = { ...DEFAULT_FORM, vgsOff: 0, rg: 0 };
+  const body = controllerSolveBody(s, []);
+  assert.equal(body.v_gs_off_V, 0);
+  assert.equal(body.r_g_ext_ohm, 0);
+  assert.ok(JSON.stringify(body).includes('"v_gs_off_V":0'));
+});
+
+test('filled fields cross the wire exactly as typed', () => {
+  const s = { ...DEFAULT_FORM, vdc: 750.4, fsw: 24000, rg: 4.7 };
+  const body = controllerSolveBody(s, []);
+  assert.equal(body.v_dc_V, 750.4);
+  assert.equal(body.f_carrier_hz, 24000);
+  assert.equal(body.r_g_ext_ohm, 4.7);
+});
+
+test('a custom mapping is sent only for the custom topology', () => {
+  const rows = [{ coil: 1, bridge: 'INV1', leg: 'A' }];
+  const custom = controllerSolveBody({ ...DEFAULT_FORM, topology: 'custom' }, rows);
+  assert.deepEqual(custom.mapping, rows);
+  const notCustom = controllerSolveBody({ ...DEFAULT_FORM, topology: 'one_3ph' }, rows);
+  assert.equal(notCustom.mapping, undefined);
+});
+
 /* ── controllerMirrorApplies (owner 2026-09-22, second round) ───────────────
  * "при сохранении мотора текущий контроллер тоже должен сохраняться" — not
  * only the Controller tab's own button. ActiveFamilyStrip's "Save to duty"

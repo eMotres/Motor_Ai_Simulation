@@ -228,9 +228,11 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
             "current, so it was divided by sqrt(3))" if sd == "delta"
             else "the duty's point")
 
-    for k_out, k_in, w in (("v_dc_V", "v_dc_V", "the duty's inverter block"),
+    for k_out, k_in, w in (("v_dc_V", "v_dc_V",
+                            "the duty's own PWM bus (the real voltage it was "
+                            "solved at)"),
                            ("f_carrier_hz", "f_carrier_hz",
-                            "the duty's inverter block"),
+                            "the duty's own PWM carrier"),
                            ("modulation_index", "m",
                             "the duty's inverter block (the modulator's own "
                             "ratio; it transfers unchanged to the real "
@@ -453,10 +455,26 @@ def get_topologies(num_slots: Optional[int] = Query(None),
 # Settings — the tab's own FORM, persisted with the configuration
 # ---------------------------------------------------------------------------
 
-@router.get("/settings")
-def get_controller_settings(die: Optional[str] = Query(None),
-                            config: Optional[str] = Query(None)
-                            ) -> Dict[str, Any]:
+def _config_doc_for(die: Optional[str], cfg: Optional[str]) -> Dict[str, Any]:
+    """The configuration's yaml document, or ``{}`` — die/cfg resolved from
+    the active context when not given, the one convention every resolver in
+    this module (``_duty_defaults``, this one, the battery lookup below)
+    shares, so they can never disagree about WHICH machine is loaded."""
+    d, cf = die, cfg
+    if not (d and cf):
+        ctx = _DR.active_context()
+        if not ctx:
+            return {}
+        d, cf = ctx[0], ctx[1]
+    try:
+        from motor_ai_sim.routes import family as _fam
+        doc = _fam.config_doc(str(d), str(cf))
+    except Exception:                                       # noqa: BLE001
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _controller_settings_for(die: Optional[str], cfg: Optional[str]) -> Dict[str, Any]:
     """The Controller tab's own settings, as they were last saved WITH the
     active configuration (owner 2026-09-22: "при сохранении мотора текущий
     контроллер тоже должен сохраняться со всеми настройками") — written by
@@ -470,19 +488,75 @@ def get_controller_settings(die: Optional[str] = Query(None),
     (the losses/thermal/limits table ``POST /solve`` writes) and lives beside
     this, never inside it.
     """
-    d, cf = die, config
-    if not (d and cf):
-        ctx = _DR.active_context()
-        if not ctx:
-            return {}
-        d, cf = ctx[0], ctx[1]
-    try:
-        from motor_ai_sim.routes import family as _fam
-        doc = _fam.config_doc(str(d), str(cf))
-    except Exception:                                       # noqa: BLE001
-        return {}
-    block = (doc or {}).get("controller")
+    block = _config_doc_for(die, cfg).get("controller")
     return dict(block) if isinstance(block, dict) else {}
+
+
+def _battery_v_dc(die: Optional[str], cfg: Optional[str]) -> Tuple[Optional[float], Optional[str]]:
+    """The configuration's own battery pack, nominal — ``(v_dc, basis)``, or
+    ``(None, None)`` when the configuration names no battery at all.
+
+    Owner 2026-09-22 (production, "Error: v_dc_V is required"): «почему это
+    всё не берётся из мотора или из батарейки?» — this is the "или из
+    батарейки" half.  ``v_nom`` (``set_battery``'s own pack total, ``n_cells
+    x v_cell_nom``) is preferred; a pack that never named a nominal CELL
+    voltage falls back to the midpoint of its min/max, then to its minimum —
+    every step says which it used, because a nominal and a floor read the
+    same on the tab otherwise.
+    """
+    batt = _config_doc_for(die, cfg).get("battery")
+    if not isinstance(batt, dict) or not batt:
+        return None, None
+    v_nom = _num(batt.get("v_nom"))
+    if v_nom is not None:
+        return v_nom, "the configuration's battery block (pack nominal)"
+    v_min, v_max = _num(batt.get("v_min")), _num(batt.get("v_max"))
+    if v_min is not None and v_max is not None:
+        return ((v_min + v_max) / 2.0,
+                "the configuration's battery block (no nominal cell voltage "
+                "saved — midpoint of the pack's min/max)")
+    if v_min is not None:
+        return v_min, ("the configuration's battery block (no nominal or max "
+                       "saved — the pack's minimum)")
+    return None, None
+
+
+@router.get("/settings")
+def get_controller_settings(die: Optional[str] = Query(None),
+                            config: Optional[str] = Query(None)
+                            ) -> Dict[str, Any]:
+    """The Controller tab's own settings — see :func:`_controller_settings_for`."""
+    return _controller_settings_for(die, config)
+
+
+@router.get("/point")
+def get_resolved_point(die: Optional[str] = Query(None), config: Optional[str] = Query(None),
+                       duty: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """The point ``POST /solve`` WOULD use right now — before anything is
+    solved, and without a device/topology chosen yet.
+
+    Owner 2026-09-22: the tab must say where it is about to get every number
+    from, not only after a failed Solve.  Built on the exact same
+    :func:`_build_request` a real solve runs, so the preview line can never
+    name a different source than the answer that follows it.
+    """
+    req, sources = _build_request({"die": die, "config": config, "duty": duty})
+    ctx = req.get("_context") or {}
+    i_ph, p_ac = req.get("i_phase_rms_A"), req.get("p_ac_W")
+    v_dc, f_sw, sd = req.get("v_dc_V"), req.get("f_carrier_hz"), req.get("star_delta")
+    line = None
+    if i_ph is not None and p_ac is not None:
+        parts = [str(ctx.get("duty") or "the loaded duty"),
+                 f"{float(i_ph):.1f} A rms",
+                 (f"{float(v_dc):.1f} V ({sources.get('v_dc_V', 'unknown source')})"
+                  if v_dc is not None else "no DC bus voltage known"),
+                 str(sd or "star"),
+                 (f"{float(f_sw) / 1000.0:.0f} kHz ({sources.get('f_carrier_hz', 'unknown source')})"
+                  if f_sw is not None else "no carrier known")]
+        line = "solving for: " + " · ".join(parts)
+    return {"die": ctx.get("die"), "config": ctx.get("config"), "duty": ctx.get("duty"),
+            "i_phase_rms_A": i_ph, "p_ac_W": p_ac, "v_dc_V": v_dc,
+            "f_carrier_hz": f_sw, "star_delta": sd, "sources": sources, "line": line}
 
 
 @router.post("/schematic")
@@ -526,6 +600,15 @@ def post_schematic(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 # Solve
 # ---------------------------------------------------------------------------
 
+#: The PWM carrier when nothing else names one at all — the duty's own PWM
+#: setup and the saved controller settings both come first (see
+#: ``_build_request``); this only fires when NEITHER exists, so a fresh
+#: configuration with no PWM history and no saved controller can still be
+#: solved.  A plain, conservative SiC number — no measurement backs it, and
+#: the response's ``sources`` names it as this module's own default, never
+#: as anything read off the machine.
+DEFAULT_CARRIER_HZ = 20_000.0
+
 #: Everything that changes the answer, rounded, in one place — see
 #: ``run_history``'s contract on why the rounding lives in the key-builder.
 _KEY_FIELDS = ("num_slots", "num_poles", "single_layer", "winding_layout",
@@ -562,17 +645,41 @@ def _summary(req: Dict[str, Any], out: Dict[str, Any]) -> str:
 
 
 def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
-    """The solver's request, with a ``sources`` map for every resolved field."""
+    """The solver's request, with a ``sources`` map for every resolved field.
+
+    AUDIT, owner 2026-09-22 (production, "Error: v_dc_V is required" —
+    «почему это всё не берётся из мотора или из батарейки? проверь всё»):
+    nothing here may be REQUIRED from the web except the controller's own
+    choices — topology/mapping, device, N in parallel, R_g, dead time,
+    cooling.  Every machine/point value is resolved server-side and named in
+    ``sources``, in this priority, highest first:
+
+      the request (whatever is on screen right now)
+        > the saved controller settings (``PATCH .../controller`` — a
+          deliberate choice, e.g. a manual V_dc override)
+        > the duty's own PWM record (what it was ACTUALLY solved at)
+        > the configuration's battery pack, nominal (V_dc only)
+        > this module's own stated default (carrier only — see
+          ``DEFAULT_CARRIER_HZ``)
+
+    V_dc and the carrier are handled OUTSIDE the generic loop below because
+    their priority order differs from every other field's (and from each
+    other's — the duty's PWM record outranks the saved settings for the
+    carrier, the settings outrank the duty for V_dc: a saved manual bus is a
+    deliberate override, a saved manual carrier is a fallback for a duty that
+    has never run PWM at all).
+    """
     mach = _live_machine(body)
     req: Dict[str, Any] = dict(mach["values"])
     sources: Dict[str, str] = dict(mach["sources"])
 
     duty = _duty_defaults(body.get("die"), body.get("config"), body.get("duty"))
     duty_src = duty.pop("_sources", {}) if duty else {}
+    ctrl = _controller_settings_for(body.get("die"), body.get("config"))
+    ctrl_cooling = ctrl.get("cooling") if isinstance(ctrl.get("cooling"), dict) else {}
 
     for key in ("star_delta", "i_phase_rms_A", "p_ac_W", "f_elec_hz",
-                "f_carrier_hz", "v_dc_V", "modulation_index",
-                "efficiency_shaft", "rpm"):
+                "modulation_index", "efficiency_shaft", "rpm"):
         if body.get(key) is not None:
             req[key], sources[key] = body[key], "the request"
         elif duty.get(key) is not None:
@@ -582,27 +689,75 @@ def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]
         sources["power_factor"] = "the request"
         req.pop("modulation_index", None)
 
-    defaults = {"device": (body.get("device") or _default_device()),
-                "devices_parallel": body.get("devices_parallel") or 1,
-                "topology": body.get("topology") or "one_3ph",
-                "set_split": body.get("set_split") or "series_split",
-                "h_bridge_modulation": body.get("h_bridge_modulation") or "unipolar",
-                "dead_time_us": body.get("dead_time_us"),
+    # ── V_DC: request > saved manual override > the duty's own PWM bus (the
+    # REAL voltage it was solved at) > the configuration's battery, nominal.
+    if body.get("v_dc_V") is not None:
+        req["v_dc_V"], sources["v_dc_V"] = body["v_dc_V"], "the request"
+    elif ctrl.get("v_dc_V") is not None:
+        req["v_dc_V"] = ctrl["v_dc_V"]
+        sources["v_dc_V"] = "the saved controller settings (manual V_dc)"
+    elif duty.get("v_dc_V") is not None:
+        req["v_dc_V"] = duty["v_dc_V"]
+        sources["v_dc_V"] = duty_src.get("v_dc_V", "the duty's own PWM bus")
+    else:
+        v_batt, batt_basis = _battery_v_dc(body.get("die"), body.get("config"))
+        if v_batt is not None:
+            req["v_dc_V"], sources["v_dc_V"] = v_batt, batt_basis
+
+    # ── CARRIER: request > the duty's own PWM carrier (what it was actually
+    # solved at) > a saved controller default > this module's plain default —
+    # always SOMETHING, so a solve never dies on a raw "is required".
+    if body.get("f_carrier_hz") is not None:
+        req["f_carrier_hz"], sources["f_carrier_hz"] = body["f_carrier_hz"], "the request"
+    elif duty.get("f_carrier_hz") is not None:
+        req["f_carrier_hz"] = duty["f_carrier_hz"]
+        sources["f_carrier_hz"] = duty_src.get("f_carrier_hz", "the duty's own PWM carrier")
+    elif ctrl.get("f_carrier_hz") is not None:
+        req["f_carrier_hz"] = ctrl["f_carrier_hz"]
+        sources["f_carrier_hz"] = "the saved controller settings"
+    else:
+        req["f_carrier_hz"] = DEFAULT_CARRIER_HZ
+        sources["f_carrier_hz"] = ("this module's stated default (%.0f kHz — no "
+                                   "PWM history and no saved carrier)"
+                                   % (DEFAULT_CARRIER_HZ / 1000.0))
+
+    defaults = {"device": (body.get("device") or ctrl.get("device") or _default_device()),
+                "devices_parallel": (body.get("devices_parallel")
+                                     or ctrl.get("devices_parallel") or 1),
+                "topology": (body.get("topology") or ctrl.get("topology")
+                            or "one_3ph"),
+                "set_split": (body.get("set_split") or ctrl.get("set_split")
+                             or "series_split"),
+                "h_bridge_modulation": (body.get("h_bridge_modulation")
+                                        or ctrl.get("h_bridge_modulation")
+                                        or "unipolar"),
+                "dead_time_us": (body.get("dead_time_us")
+                                 if body.get("dead_time_us") is not None
+                                 else ctrl.get("dead_time_us")),
                 "v_gs_on_V": body.get("v_gs_on_V"),
-                "v_gs_off_V": body.get("v_gs_off_V"),
-                "r_g_ext_ohm": body.get("r_g_ext_ohm"),
-                "r_tim_k_w": body.get("r_tim_k_w"),
+                "v_gs_off_V": (body.get("v_gs_off_V")
+                               if body.get("v_gs_off_V") is not None
+                               else ctrl.get("v_gs_off_V")),
+                "r_g_ext_ohm": (body.get("r_g_ext_ohm")
+                                if body.get("r_g_ext_ohm") is not None
+                                else ctrl.get("r_g_ext_ohm")),
+                "r_tim_k_w": (body.get("r_tim_k_w")
+                              if body.get("r_tim_k_w") is not None
+                              else ctrl_cooling.get("r_tim_k_w")),
                 "r_spread_k_w": body.get("r_spread_k_w"),
                 "e_oss_policy": body.get("e_oss_policy") or "included_in_eon",
                 "samples_per_carrier": body.get("samples_per_carrier"),
-                "mapping": body.get("mapping"),
+                "mapping": body.get("mapping") or (ctrl.get("mapping") or None),
                 "devices_parallel_by_bridge":
-                    dict(body.get("devices_parallel_by_bridge") or {}) or None,
-                "cooling": dict(body.get("cooling") or {})}
+                    dict(body.get("devices_parallel_by_bridge")
+                         or ctrl.get("devices_parallel_by_bridge") or {}) or None,
+                "cooling": {**ctrl_cooling, **dict(body.get("cooling") or {})}}
     for k, v in defaults.items():
         if v is not None:
             req[k] = v
             sources.setdefault(k, "the request" if body.get(k) is not None
+                               else "the saved controller settings"
+                               if (k in ctrl or (k == "r_tim_k_w" and "r_tim_k_w" in ctrl_cooling))
                                else "this module's stated default")
     if duty.get("die"):
         req["_context"] = {"die": duty["die"], "config": duty["config"],
@@ -630,17 +785,36 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
     ctx = req.pop("_context", None)
     solved_for = req.pop("_solved_for", None)
     em_source = req.pop("_em_source", None)
-    # ``p_ac_W`` is never typed by anyone (owner 2026-09-22): the route
-    # resolves it, together with the phase current, from the duty's own
-    # electromagnetic record.  A duty with no such record gets ONE plain
-    # sentence here — never the physics module's raw "p_ac_W is required",
-    # which the panel would otherwise show as its status line with no way for
-    # the owner to know what to do about it.
+    # AUDIT, owner 2026-09-22 ("Error: v_dc_V is required" — «проверь всё»):
+    # every value that is genuinely missing gets ONE plain sentence here,
+    # never the physics module's raw "<field> is required" — the panel would
+    # otherwise show that as its status line with no way to know what to do.
+    if req.get("num_slots") is None or req.get("num_poles") is None:
+        raise _refuse(
+            "no machine is loaded — open a motor before solving the controller",
+            ["num_slots", "num_poles"], code="no_machine")
+    # ``p_ac_W`` is never typed by anyone: the route resolves it, together
+    # with the phase current, from the duty's own electromagnetic record.
     if req.get("p_ac_W") is None or req.get("i_phase_rms_A") is None:
         raise _refuse(
             "run the Simulation/coupled solve for this duty first — the "
             "controller needs its electrical input power and phase current",
             ["p_ac_W", "i_phase_rms_A"], code="no_duty_record")
+    if req.get("f_elec_hz") is None:
+        raise _refuse(
+            "the duty's speed (rpm) could not be resolved — set it on the "
+            "Simulation tab and save the duty, or run the coupled solve",
+            ["f_elec_hz"], code="no_duty_record")
+    # V_dc: the configuration's battery, the duty's own PWM bus and a saved
+    # manual override are all tried in _build_request — this is what is left
+    # when a configuration names NONE of the three («почему это всё не
+    # берётся из мотора или из батарейки?» — because there was nothing to
+    # take it from).
+    if req.get("v_dc_V") is None:
+        raise _refuse(
+            "no DC bus voltage is known for this motor — add a battery to "
+            "the configuration, or set V_dc in the controller settings",
+            ["v_dc_V"], code="no_v_dc_source")
     key = _history_key(req)
 
     if not fresh:

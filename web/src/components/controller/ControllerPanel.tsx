@@ -31,8 +31,9 @@ import { useDieContext } from '../common/useDieContext';
 import { listDevices, getTopologies, solveController, getLast, postSchematic,
          polyline, fmt, pct, statusLine, getControllerSettings,
          saveControllerSettings, formStateFromSettings, settingsForSave,
+         controllerSolveBody, getResolvedPoint,
          type DeviceRow, type CoilRow, type ControllerResult,
-         type ControllerFormState } from './controllerApi';
+         type ControllerFormState, type ResolvedPoint } from './controllerApi';
 
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 const NUM = { width: 120, '& input': { fontSize: 12, py: 0.5 } } as const;
@@ -194,21 +195,13 @@ const ControllerPanel: React.FC = () => {
                       leg: (mapping[c.index] || 'INV1/A').split('/')[1] || 'A' })),
     [coils, mapping]);
 
-  const body = () => ({
-    device,
-    devices_parallel: nPar === '' ? undefined : nPar,
-    topology, set_split: setSplit, h_bridge_modulation: hbMod,
-    r_g_ext_ohm: rg === '' ? undefined : rg,
-    v_gs_off_V: vgsOff === '' ? undefined : vgsOff,
-    dead_time_us: dead === '' ? undefined : dead,
-    f_carrier_hz: fsw === '' ? undefined : fsw,
-    v_dc_V: vdc === '' ? undefined : vdc,
-    r_tim_k_w: rtim === '' ? undefined : rtim,
-    cooling: { coolant, flow_lpm: flow === '' ? undefined : flow,
-               t_in_c: tin === '' ? undefined : tin },
-    mapping: topology === 'custom' ? customRows : undefined,
-    devices_parallel_by_bridge: Object.keys(parByBridge).length ? parByBridge : undefined,
-  });
+  // The wire body — see controllerSolveBody's own doc: every blank number
+  // box is OMITTED, never sent as '' or null, so the route's own V_dc /
+  // carrier / current / power resolution chain runs uncontested.
+  const body = () => controllerSolveBody(
+    { device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
+      coolant, flow, tin, rtim, mapping, parByBridge, coupleWithEm },
+    customRows);
 
   // The per-switch current — and so the catalogue's "parallel" suggestion —
   // depends on the topology, so it is re-asked when that changes.
@@ -228,6 +221,18 @@ const ControllerPanel: React.FC = () => {
       setSvg(s.svg);
     } catch (e) { setSvg(''); }
   })(); }, [schemaKey, coils.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── the resolved point, BEFORE Solve is pressed ─────────────────────────
+  // Owner 2026-09-22 audit: the tab must say where every number is about to
+  // come from, not only after a failed Solve.  Built on the exact same
+  // resolution `POST /solve` runs (GET /point), so this line can never name
+  // a different source than the answer that follows it.
+  const [point, setPoint] = useState<ResolvedPoint | null>(null);
+  useEffect(() => { void (async () => {
+    if (!dieCtx.die || !dieCtx.config) { setPoint(null); return; }
+    try { setPoint(await getResolvedPoint(dieCtx.die, dieCtx.config)); }
+    catch { setPoint(null); }
+  })(); }, [dieCtx.die, dieCtx.config, dieCtx.active]);
 
   const solve = async (fresh = false) => {
     setBusy(true); setErr(null);
@@ -369,7 +374,17 @@ const ControllerPanel: React.FC = () => {
         {/* ── results ── */}
         <Paper sx={{ ...CARD, flex: 1, minWidth: 420 }}>
           {busy && !res && <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', color: 'var(--text-3)', py: 2 }}><CircularProgress size={16} /> Solving…</Box>}
-          {!res && !busy && <Typography sx={{ fontSize: 12.5, color: 'var(--text-3)' }}>Press Solve — the operating point comes from the loaded duty.</Typography>}
+          {!res && !busy && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <Typography sx={{ fontSize: 12.5, color: 'var(--text-3)' }}>
+                {point?.line || 'Press Solve — the operating point comes from the loaded duty.'}
+              </Typography>
+              {point?.line && (
+                <HelpTip title={Object.entries(point.sources || {})
+                  .map(([k, v]) => `${k}: ${v}`).join('\n')} />
+              )}
+            </Box>
+          )}
           {res && (
             <>
               {/* ONE LINE for the whole model, the full text behind the ⓘ.

@@ -842,15 +842,16 @@ def test_route_solves_caches_and_lists(synth_dir, monkeypatch, tmp_path):
 _DIE, _CFG, _DUTY = "DIE", "CFG", "rated"
 
 
-def _patch_duty(monkeypatch, node, d_entry=None):
+def _patch_duty(monkeypatch, node, d_entry=None, cfg_doc=None):
     """Stand in for the duty store and the die config, so ``_duty_defaults``
-    resolves from a fixture instead of the filesystem."""
+    (and ``_battery_v_dc`` / ``_controller_settings_for``, which read the SAME
+    ``config_doc``) resolve from a fixture instead of the filesystem."""
     from motor_ai_sim import duty_results as dr
     from motor_ai_sim.routes import controller as rc
     from motor_ai_sim.routes import family as fam
     monkeypatch.setattr(rc, "_DR", dr)             # the module already imported
     monkeypatch.setattr(dr, "get", lambda die, cfg: {_DUTY: node})
-    monkeypatch.setattr(fam, "config_doc", lambda die, cfg: None)
+    monkeypatch.setattr(fam, "config_doc", lambda die, cfg: dict(cfg_doc or {}))
     monkeypatch.setattr(fam, "duty_entry",
                         lambda die, cfg, duty: dict(d_entry or {}))
 
@@ -991,6 +992,164 @@ def test_missing_duty_record_refuses_with_the_plain_sentence(synth_dir, monkeypa
         "run the Simulation/coupled solve for this duty first — the "
         "controller needs its electrical input power and phase current")
     assert "p_ac_W" in detail["fields"] and "i_phase_rms_A" in detail["fields"]
+
+
+# ---------------------------------------------------------------------------
+# V_dc and the carrier are resolved server-side, never required from the web
+# (owner 2026-09-22, production: "Error: v_dc_V is required" — «почему это
+# всё не берётся из мотора или из батарейки? проверь всё»)
+# ---------------------------------------------------------------------------
+
+def _sine_node(rpm=3000.0, T_Nm=12.0, P_loss_W=500.0, i_A=48.6, sd="star",
+              inv_extra=None):
+    """A duty solved on a plain sinusoid — no PWM, so its own inverter block
+    carries neither ``v_dc_V`` nor ``f_carrier_hz`` (the case a battery/module
+    default has to answer for)."""
+    return {
+        "coupled": {
+            "mode": "steady",
+            "em": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W},
+            "inverter": {"I_phase_rms_solved_A": i_A, "star_delta": sd,
+                        **(inv_extra or {})},
+        },
+        "thermal": {"point": {"rpm": rpm}},
+    }
+
+
+_BATTERY = {"chemistry": "NMC", "cells": 12, "v_cell_min": 3.0, "v_cell_nom": 3.7,
+           "v_cell_max": 4.2, "v_min": 36.0, "v_nom": 44.4, "v_max": 50.4}
+
+
+def test_v_dc_resolves_from_the_configuration_battery_nominal(synth_dir, monkeypatch):
+    _patch_duty(monkeypatch, _sine_node(), cfg_doc={"battery": _BATTERY})
+    r = _solve(_duty_solve_body(v_dc_V=None))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["point"]["v_dc_V"] == pytest.approx(44.4)
+    assert "battery" in out["sources"]["v_dc_V"] and "nominal" in out["sources"]["v_dc_V"]
+
+
+def test_v_dc_falls_back_to_the_battery_midpoint_with_no_nominal(synth_dir, monkeypatch):
+    batt = {"cells": 12, "v_cell_min": 3.0, "v_cell_max": 4.2,
+            "v_min": 36.0, "v_max": 50.4}          # no v_cell_nom / v_nom saved
+    _patch_duty(monkeypatch, _sine_node(), cfg_doc={"battery": batt})
+    r = _solve(_duty_solve_body(v_dc_V=None))
+    assert r.status_code == 200, r.text
+    assert r.json()["point"]["v_dc_V"] == pytest.approx((36.0 + 50.4) / 2.0)
+    assert "midpoint" in r.json()["sources"]["v_dc_V"]
+
+
+def test_v_dc_prefers_the_dutys_own_pwm_bus_over_battery_nominal(synth_dir, monkeypatch):
+    """A duty actually solved with PWM at 750.4 V knows its own real bus
+    better than a generic battery nominal — that real number wins."""
+    node = _sine_node(inv_extra={"v_dc_V": 750.4})
+    _patch_duty(monkeypatch, node, cfg_doc={"battery": _BATTERY})
+    r = _solve(_duty_solve_body(v_dc_V=None))
+    assert r.status_code == 200, r.text
+    assert r.json()["point"]["v_dc_V"] == pytest.approx(750.4)
+    assert "PWM bus" in r.json()["sources"]["v_dc_V"]
+
+
+def test_v_dc_prefers_a_saved_manual_override_over_everything(synth_dir, monkeypatch):
+    """A deliberate manual V_dc, saved on the controller settings, beats even
+    the duty's own solved PWM bus — it is the owner overriding the machine on
+    purpose (e.g. a different pack about to be fitted)."""
+    node = _sine_node(inv_extra={"v_dc_V": 750.4})
+    _patch_duty(monkeypatch, node,
+               cfg_doc={"battery": _BATTERY, "controller": {"v_dc_V": 44.4}})
+    r = _solve(_duty_solve_body(v_dc_V=None))
+    assert r.status_code == 200, r.text
+    assert r.json()["point"]["v_dc_V"] == pytest.approx(44.4)
+    assert "manual" in r.json()["sources"]["v_dc_V"]
+
+
+def test_missing_battery_and_no_pwm_bus_refuses_with_the_v_dc_sentence(
+        synth_dir, monkeypatch):
+    """No battery on the configuration, the duty never ran PWM, nothing typed
+    — one plain sentence, never solve_controller's raw "v_dc_V is required"."""
+    _patch_duty(monkeypatch, _sine_node(), cfg_doc={})
+    r = _solve(_duty_solve_body(v_dc_V=None))
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "no_v_dc_source"
+    assert detail["message"] == (
+        "no DC bus voltage is known for this motor — add a battery to the "
+        "configuration, or set V_dc in the controller settings")
+    assert detail["fields"] == ["v_dc_V"]
+
+
+def test_carrier_prefers_the_dutys_own_pwm_setup(synth_dir, monkeypatch):
+    node = _sine_node(inv_extra={"f_carrier_hz": 24_000.0})
+    _patch_duty(monkeypatch, node,
+               cfg_doc={"battery": _BATTERY, "controller": {"f_carrier_hz": 48_000.0}})
+    r = _solve(_duty_solve_body(f_carrier_hz=None, v_dc_V=None))
+    assert r.status_code == 200, r.text
+    assert r.json()["point"]["f_carrier_hz"] == pytest.approx(24_000.0)
+    assert "PWM carrier" in r.json()["sources"]["f_carrier_hz"]
+
+
+def test_carrier_falls_back_to_the_saved_controller_default(synth_dir, monkeypatch):
+    _patch_duty(monkeypatch, _sine_node(),
+               cfg_doc={"battery": _BATTERY, "controller": {"f_carrier_hz": 48_000.0}})
+    r = _solve(_duty_solve_body(f_carrier_hz=None, v_dc_V=None))
+    assert r.status_code == 200, r.text
+    assert r.json()["point"]["f_carrier_hz"] == pytest.approx(48_000.0)
+    assert r.json()["sources"]["f_carrier_hz"] == "the saved controller settings"
+
+
+def test_carrier_falls_back_to_the_modules_own_default(synth_dir, monkeypatch):
+    """No PWM history and no saved controller default: the module's own
+    plain constant — a solve must never die on a missing carrier."""
+    from motor_ai_sim.routes import controller as rc
+    _patch_duty(monkeypatch, _sine_node(), cfg_doc={"battery": _BATTERY})
+    r = _solve(_duty_solve_body(f_carrier_hz=None, v_dc_V=None))
+    assert r.status_code == 200, r.text
+    assert r.json()["point"]["f_carrier_hz"] == pytest.approx(rc.DEFAULT_CARRIER_HZ)
+    assert "module's stated default" in r.json()["sources"]["f_carrier_hz"]
+
+
+def test_resolved_point_preview_names_every_source_before_solving(
+        synth_dir, monkeypatch):
+    """``GET /point`` — what the tab prints BEFORE Solve is pressed, built on
+    the exact same resolution a real Solve uses."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.routes import controller as rc
+    _patch_duty(monkeypatch, _sine_node(rpm=3000.0, T_Nm=12.0, P_loss_W=500.0,
+                                        i_A=48.6),
+               cfg_doc={"battery": _BATTERY})
+    app = FastAPI(); app.include_router(rc.router)
+    c = TestClient(app)
+    r = c.get(f"/api/controller/point?die={_DIE}&config={_CFG}&duty={_DUTY}")
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["i_phase_rms_A"] == pytest.approx(48.6)
+    assert out["v_dc_V"] == pytest.approx(44.4)
+    assert out["star_delta"] == "star"
+    assert out["line"] == (
+        f"solving for: {_DUTY} · 48.6 A rms · 44.4 V "
+        "(the configuration's battery block (pack nominal)) · star · "
+        f"{rc.DEFAULT_CARRIER_HZ / 1000.0:.0f} kHz "
+        "(this module's stated default (20 kHz — no PWM history and no "
+        "saved carrier))")
+
+
+def test_no_machine_loaded_refuses_by_name(monkeypatch):
+    """A solve with no geometry at all (num_slots/num_poles unresolved) —
+    the audit's other genuinely-missing case."""
+    from motor_ai_sim.routes import controller as rc
+    monkeypatch.setattr(rc, "_live_machine",
+                        lambda body: {"values": {"num_slots": None, "num_poles": None,
+                                                 "single_layer": True,
+                                                 "winding_layout": None},
+                                     "sources": {}, "winding": {}})
+    from motor_ai_sim import duty_results as dr
+    monkeypatch.setattr(dr, "active_context", lambda: None)
+    r = _solve({"device": "SYNTH"})
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "no_machine"
+    assert "no machine is loaded" in detail["message"]
 
 
 def test_route_refuses_an_unwireable_mapping(synth_dir):

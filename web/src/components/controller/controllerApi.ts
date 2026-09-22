@@ -356,6 +356,77 @@ export function controllerMirrorApplies(
     && mirrored.die === die && mirrored.config === config;
 }
 
+/** The ``POST /solve`` request body — every field the ROUTE resolves
+ * server-side (V_dc, carrier, current, power, connection, rpm — see
+ * ``routes.controller._build_request``) is OMITTED here when blank, never
+ * sent as ``''`` or ``null``.  Owner 2026-09-22 audit ("Error: v_dc_V is
+ * required" — «проверь всё»): a blank number box must vanish from the wire
+ * entirely (``JSON.stringify`` drops an ``undefined`` property), so the
+ * route's own fallback chain runs — sending ``''`` would instead read as
+ * "the request provided v_dc_V" and either crash on `float('')` or, worse,
+ * silently shadow a real resolved value with a falsy one. */
+export interface ControllerSolveBody {
+  device: string;
+  devices_parallel?: number;
+  topology: string;
+  set_split: string;
+  h_bridge_modulation: string;
+  r_g_ext_ohm?: number;
+  v_gs_off_V?: number;
+  dead_time_us?: number;
+  f_carrier_hz?: number;
+  v_dc_V?: number;
+  r_tim_k_w?: number;
+  cooling: { coolant: string; flow_lpm?: number; t_in_c?: number };
+  mapping?: ControllerMappingRowSettings[];
+  devices_parallel_by_bridge?: Record<string, number>;
+}
+
+const blank = (v: NumOrBlank): number | undefined => (v === '' ? undefined : v);
+
+export function controllerSolveBody(
+  s: ControllerFormState,
+  customRows: ControllerMappingRowSettings[],
+): ControllerSolveBody {
+  return {
+    device: s.device,
+    devices_parallel: blank(s.nPar),
+    topology: s.topology, set_split: s.setSplit, h_bridge_modulation: s.hbMod,
+    r_g_ext_ohm: blank(s.rg),
+    v_gs_off_V: blank(s.vgsOff),
+    dead_time_us: blank(s.dead),
+    f_carrier_hz: blank(s.fsw),
+    v_dc_V: blank(s.vdc),
+    r_tim_k_w: blank(s.rtim),
+    cooling: { coolant: s.coolant, flow_lpm: blank(s.flow), t_in_c: blank(s.tin) },
+    mapping: s.topology === 'custom' ? customRows : undefined,
+    devices_parallel_by_bridge: Object.keys(s.parByBridge).length ? s.parByBridge : undefined,
+  };
+}
+
+/** What ``POST /solve`` WOULD use right now, before anything is solved —
+ * the tab's "solving for: …" line. */
+export interface ResolvedPoint {
+  die: string | null;
+  config: string | null;
+  duty: string | null;
+  i_phase_rms_A: number | null;
+  p_ac_W: number | null;
+  v_dc_V: number | null;
+  f_carrier_hz: number | null;
+  star_delta: string | null;
+  sources: Record<string, string>;
+  line: string | null;
+}
+
+export const getResolvedPoint = (die?: string, config?: string, duty?: string) => {
+  const p = new URLSearchParams();
+  if (die) p.set('die', die);
+  if (config) p.set('config', config);
+  if (duty) p.set('duty', duty);
+  return fetch(`${API}/api/controller/point?${p}`).then(j<ResolvedPoint>);
+};
+
 /** One electrical period as an SVG polyline, scaled to its own axis. */
 export function polyline(values: number[], w: number, h: number, pad = 2): string {
   if (!values.length) return '';

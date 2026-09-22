@@ -291,8 +291,7 @@ class InverterVoltageSource(_ExcPwm):
                  v_delta_deg: float, f_switch_requested_hz: float,
                  drop: DeviceDrop, v_dc_real_V: float, star_delta: str,
                  n_parallel: int = 1, pole_pairs: int = 1,
-                 f_elec_hz: float = 0.0, topology: str = "one_3ph",
-                 controller: Optional[Dict[str, Any]] = None):
+                 f_elec_hz: float = 0.0, topology: str = "one_3ph"):
         super().__init__(exc, modulator, v_phase_peak=v_phase_peak,
                          v_delta_deg=v_delta_deg,
                          f_switch_requested_hz=f_switch_requested_hz)
@@ -303,7 +302,6 @@ class InverterVoltageSource(_ExcPwm):
         self.pole_pairs = max(int(pole_pairs), 1)
         self.f_elec_hz = float(f_elec_hz)
         self.topology = str(topology)
-        self.controller = dict(controller or {})
         #: Electrical degrees per second — the dead-time window's width in the
         #: modulator's own coordinate.
         self.deg_per_s = 360.0 * float(f_elec_hz)
@@ -312,7 +310,6 @@ class InverterVoltageSource(_ExcPwm):
         #: rms the loss model is re-seeded with.
         self._i_leg_sq = {k: 0.0 for k in _ABC}
         self._i_leg_peak = 0.0
-        self._n_seen = 0
         self._fine_seen = 0
 
     # ── the one thing that is different ────────────────────────────────────
@@ -322,7 +319,6 @@ class InverterVoltageSource(_ExcPwm):
             return base
         legs = leg_currents(fb.i_abc, star_delta=self.star_delta,
                             n_parallel=self.n_parallel)
-        self._n_seen += 1
         self._fine_seen += 1
         for k in _ABC:
             self._i_leg_sq[k] += legs[k] ** 2
@@ -425,8 +421,7 @@ def build_inverter_source(*, pole_pairs: int, daxis_deg: float,
                           f_switch_hz: float, f_elec_hz: float,
                           drop: DeviceDrop, star_delta: str,
                           n_parallel: int = 1, I_phase_rms: float = 0.0,
-                          gamma_deg: float = 0.0, topology: str = "one_3ph",
-                          controller: Optional[Dict[str, Any]] = None
+                          gamma_deg: float = 0.0, topology: str = "one_3ph"
                           ) -> InverterVoltageSource:
     """Build the Stage-2 source through the SAME factory the ideal one uses.
 
@@ -455,4 +450,4 @@ def build_inverter_source(*, pole_pairs: int, daxis_deg: float,
         f_switch_requested_hz=float(f_switch_hz), drop=drop,
         v_dc_real_V=float(v_dc_real), star_delta=star_delta,
         n_parallel=n_par, pole_pairs=int(pole_pairs),
-        f_elec_hz=float(f_elec_hz), topology=topology, controller=controller)
+        f_elec_hz=float(f_elec_hz), topology=topology)

@@ -664,8 +664,7 @@ def make_source(drive: str, *, pole_pairs: int, daxis_deg: float,
             f_switch_hz=float(f_switch), f_elec_hz=float(f_elec), drop=drop,
             star_delta=str(star_delta or "star"), n_parallel=n_parallel,
             I_phase_rms=float(I_phase_rms), gamma_deg=float(gamma_deg),
-            topology=str(nid.get("topology") or "one_3ph"),
-            controller=nid.get("controller"))
+            topology=str(nid.get("topology") or "one_3ph"))
     if name == "custom_current":
         return CustomCurrentSource(_SampledCurrent.build(
             parse_waveform(waveform), pole_pairs=int(pole_pairs),

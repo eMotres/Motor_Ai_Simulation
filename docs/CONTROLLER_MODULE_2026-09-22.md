@@ -659,6 +659,135 @@ the record says it is one.
 
 ---
 
+## 7b · Stage 2, MEASURED — L155 motor / rated 1×9 mm (2026-09-22)
+
+Owner, 13:45: *«запускай каплинг — сначала стандартный инвертор на L155 motor»*.
+One three-phase bridge of **IMCQ120R004M2H**, **N = 3** per switch, **24 kHz**,
+**750.4 V**, **0.5 µs** dead time, V_GS 18/0 V, micro-channel coldplate
+water-glycol 50/50 at **65 °C, 8 L/min**; motor cooling the duty's own (water
+60 °C, 10 L/min, bore air 30 m/s).  `drive: "inverter"`, 400 FEM steps per
+electrical period = **20 per carrier**, two coupled passes, **11 397 s**
+(3 h 10) on one BelowNormal process in a sandbox.  Nothing was saved into the
+catalogue: a Stage-2 record is a new kind of answer about this duty and the
+owner decides whether it replaces the stored one.
+
+### The dead time is the one the closed form predicts
+
+| | |
+|---|---|
+| dead-time error, solved run | **8.991 V** per leg |
+| `t_d·f_sw,eff·(V_dc + 2·V_SD)` by hand | 0.5 µs × 23 666.67 Hz × (750.4 + 2×4.75) = **8.992 V** |
+
+…and the leg current the module reconstructs from the solved BRANCH currents
+(`i_leg = n_parallel·(I_A − I_C)`) is **546.60 A rms** against the solver's own
+independently-computed `I_line_rms_A` of **546.5 A** — 0.02 % apart.  The delta
+mapping is not argued, it is checked against the solver.
+
+### Both fixed points close
+
+| pass | coil °C | magnet °C | bearing °C | T_j °C | ΔT_j | V₁ branch | I branch | P_inv |
+|---|---|---|---|---|---|---|---|---|
+| start | 97.8 | 104.2 | 70.0 | 120.0 (seed) | — | 411.437 | — | — |
+| 1 | 97.8 → 114.1 | 104.2 → 128.9 | 70.0 → 119.5 | **132.8** | +12.8 K | 411.437 | 315.50 A | 4 187.3 W |
+| 2 | 114.1 → 113.6 | 128.9 → 129.1 | 119.5 → 119.8 | **130.0** | −2.8 K | 414.963 | 309.26 A | 4 014.4 W |
+
+Temperatures settled (coil −0.5 K, magnet +0.2 K, seat +0.3 K); the junction
+temperature settled to −2.8 K against a 2 K band, i.e. one more pass short.
+`R_DS(on)` per device moved 6.706 → 6.560 mΩ with it, which is the loop working.
+
+### The devices, on the machine's own run
+
+| | |
+|---|---|
+| conduction / third quadrant / switching | 1 838.1 / 141.7 / 2 034.6 W |
+| **total inverter loss** | **4 014.4 W** |
+| junction temperature | **130.0 °C**, limit 175, margin **45 K** |
+| datasheet limit table | **PASS**, every row |
+| inverter efficiency | **98.48 %** |
+| shaft efficiency (the machine's ONE efficiency) | **97.71 %** |
+| **wall-to-shaft efficiency** | **96.22 %** |
+
+**Against Stage 1's arithmetic on the stored point** (§6: 4 151 W, T_j 132 °C,
+η_inv 98.50 %, η_wall-to-shaft 96.24 %) the coupled answer moves by **3.3 % of
+the inverter loss and 0.02 pp of either efficiency**.  That is the headline
+result of Stage 2 and it is worth stating plainly: **solving the devices on the
+real rippled excitation changes the INVERTER very little and the MOTOR a great
+deal.**  The device losses are dominated by the fundamental, which Stage 1
+already had.
+
+### The motor, on the controller's waveform against the sine
+
+Pass 1 was solved at **coil 97.8 °C / magnet 104.2 °C — exactly the duty's sine
+reference's own converged temperatures**, so this column pair is a
+same-temperature measurement of what the carrier and the device cost the
+machine.
+
+| | sine reference | controller's bridge | Δ |
+|---|---|---|---|
+| copper | 2 259.1 W | 3 164.3 W | **+905 W (+40 %)** |
+| iron | 1 447.6 W | 2 291.8 W | **+844 W (+58 %)** |
+| magnets | 84.9 W | 114.1 W | +29 W |
+| rotor solid | 123.6 W | 144.4 W | +21 W |
+| sleeve | 9.7 W | 21.8 W | +12 W |
+| shaft | 29.0 W | 8.5 W | −21 W |
+| **motor loss, total** | **3 830.3 W** | **5 600.5 W** | **+1 770 W (+46 %)** |
+| torque (2-D) | 187.86 N·m | 174.06 N·m | −13.8 |
+| torque ripple | 1.4 % | 30.8 % | |
+| current THD | 0 % | 4.97 % | |
+| shaft efficiency | 98.49 % | 97.70 % | −0.79 pp |
+
+**NOT resolution-matched**, and it matters: the sine ran at 36 steps per
+electrical period against 400, and the carrier study's own rule puts about
+100 W of any such difference on the step count alone.
+
+### What the device costs at a FIXED fundamental
+
+The cleanest single number this run produces.  Held at the duty's own seed
+V₁ = 411.437 V, the machine drew **315.50 A** where it is billed at 324.51 A —
+**−2.78 %**.  The dead time's own fundamental is 4/π × 8.99 = 11.4 V per leg,
+which on the branch (line-to-line) is √3 × that ≈ 19.8 V; only ~3.5 V of it
+shows up as a magnitude the regulator has to make back, because the error sits
+along the CURRENT and the current is nearly in quadrature with the applied
+voltage.  The rest moves the LOAD ANGLE — which is why the torque falls further
+than the current alone explains.
+
+### What did NOT converge, and why
+
+The operating point: **−4.70 %** after two passes.  Between pass 1 and pass 2
+the winding moved 16 K and the magnets 25 K, so the secant `_regulate_v1` fits
+is dominated by the TEMPERATURE and not by the machine's dI/dV — raising V₁ by
+3.5 V while the copper heated 16 K made the current FALL, and the regulator
+then extrapolated the wrong way (next aim 406.3 V).  This is not something
+Stage 2 introduced: the duty's stored IDEAL-PWM record is **−3.16 % off point**
+for the same reason.  The fix is passes, not code — the stored PWM campaign
+used 3–4.
+
+### Record-to-record, with the caveat stated
+
+| | ideal PWM (stored) | controller's bridge |
+|---|---|---|
+| coil / magnet °C | 117.6 / 133.0 | 114.1 / 128.9 |
+| V₁ branch | 411.437 V | 414.963 V |
+| I branch solved | 314.25 A | 309.26 A |
+| point error | −3.16 % | −4.70 % |
+| torque (2-D) | 179.22 N·m | 171.59 N·m |
+| copper / iron | 3 257.0 / 2 414.5 W | 3 118.9 / 2 303.5 W |
+| motor loss total | 5 824.1 W | 5 568.6 W |
+| torque ripple / THD_I | 28.7 % / 5.23 % | 29.8 % / 5.1 % |
+| DC residual | 0.067 A | 0.348 A (settled) |
+
+The two sit at different currents AND different temperatures, so the loss
+difference here is mostly those two and not the device.  **Only the fixed-V₁
+current drop above is a clean measurement of what the power stage costs.**
+
+### Not done
+
+**Peak.**  The rated duty alone took 3 h 10 for two passes at 20 samples per
+carrier, so the peak duty did not fit the session.  It needs the same run with
+`--duty "peak 1x9 mm"` and, for the point to land, `--max-iter 4`.
+
+---
+
 ## 8 · Stage 3 — the six-coil H-bridge study
 
 The topology is already available and already costed (§6). What Stage 3 adds

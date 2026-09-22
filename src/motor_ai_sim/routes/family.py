@@ -3907,11 +3907,32 @@ def set_battery(die: str, cfg: str, req: BatteryPatch,
 
 
 class ControllerCoolingSpec(BaseModel):
-    """The coldplate the Controller tab's MOSFET cooling row is set to."""
+    """The Controller tab's MOSFET cooling row.
+
+    ``mode`` (owner 2026-09-22: *"надо добавить воздушное охлаждение и
+    скорость ветра, как в термосимуляции"*) picks which of the three
+    ``inverter.losses.COOLING_MODES`` the fields below feed —
+    ``None``/``"liquid"`` (the original, only-ever-existed-before coldplate:
+    ``coolant``/``flow_lpm``/``t_in_c``), ``"air_forced"`` (a fan/slipstream:
+    ``air_speed_mps``/``t_ambient_c``/heatsink or plate area/
+    ``fin_efficiency``) or ``"air_still"`` (no fan: the same area fields plus
+    ``emissivity``, no ``air_speed_mps``).  Every field is Optional and the
+    unused ones for a given mode are simply ignored — the SAME "send
+    everything, only the relevant part is read" contract ``ControllerPatch``
+    already uses for the rest of the form, so the web selector's own PATCH
+    (a separate follow-up) never has to omit fields by mode.
+    """
+    mode: Optional[str] = None
     coolant: Optional[str] = None
     flow_lpm: Optional[float] = None
     t_in_c: Optional[float] = None
     r_tim_k_w: Optional[float] = None
+    air_speed_mps: Optional[float] = None
+    t_ambient_c: Optional[float] = None
+    heatsink_area_cm2_per_device: Optional[float] = None
+    plate_area_cm2: Optional[float] = None
+    fin_efficiency: Optional[float] = None
+    emissivity: Optional[float] = None
 
 
 class ControllerMappingRow(BaseModel):
@@ -3996,6 +4017,12 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
     if req.power_factor is not None and float(req.power_factor) > 1.0:
         raise HTTPException(422, detail=(
             f"controller.power_factor cannot exceed 1; got {req.power_factor}"))
+    if req.cooling.mode is not None:
+        from motor_ai_sim.inverter.losses import COOLING_MODES
+        if str(req.cooling.mode).strip().lower() not in COOLING_MODES:
+            raise HTTPException(422, detail=(
+                "controller.cooling.mode must be " + " or ".join(COOLING_MODES)
+                + f"; got {req.cooling.mode!r}"))
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     c["controller"] = {
         "saved_at": datetime.now().isoformat(timespec="seconds"),

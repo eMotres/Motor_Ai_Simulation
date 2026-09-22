@@ -15113,6 +15113,39 @@ def controller_device_text(rec: Dict[str, Any]) -> str:
             f"= {t.get('n_devices')} devices.")
 
 
+def controller_cooling_line(T: Dict[str, Any], cool: Dict[str, Any]
+                            ) -> Tuple[str, str]:
+    """``(value, note)`` for the Controller section's one cooling line.
+
+    Owner 2026-09-22: the coldplate row now has two air-cooled siblings
+    (``inverter.losses`` ``cooling.mode`` = "air_forced"/"air_still") and the
+    report must say WHICH mode a duty was solved with, never just print the
+    liquid coldplate's own numbers as if every controller had one.
+    """
+    mode = str(T.get("cooling_mode") or cool.get("mode") or "liquid")
+    if mode == "liquid":
+        value = (f"{_fmt(T.get('t_coolant_in_c'), 0)} → "
+                 f"{_fmt((T.get('t_coolant_in_c') or 0) + (T.get('coolant_rise_K') or 0), 0)} °C")
+        note = (f"liquid, {cool.get('coolant')}, {_fmt(cool.get('flow_lpm'), 1)} "
+                f"L/min; plate {_fmt(T.get('r_coldplate_k_w'), 4)} K/W, "
+                f"{cool.get('regime')}")
+        return value, note
+    if mode == "air_forced":
+        value = f"{_fmt(cool.get('air_speed_mps'), 1)} m/s / {_fmt(cool.get('t_ambient_c'), 0)} °C"
+    else:  # air_still
+        value = f"still air / {_fmt(cool.get('t_ambient_c'), 0)} °C"
+    topo = cool.get("topology") or ("shared_plate" if T.get("r_coldplate_k_w") else
+                                    "per_device_heatsink")
+    r_film = T.get("r_film_per_device_k_w") or 0.0
+    note = (f"{mode.replace('_', ' ')}, h {_fmt(cool.get('h_w_m2k'), 0)} W/m²K "
+            f"({cool.get('regime')}) over {_fmt(cool.get('area_cm2'), 0)} cm² "
+            f"({topo.replace('_', ' ')}) × fin η {_fmt(cool.get('fin_efficiency'), 2)}"
+            + (f", ε {_fmt(cool.get('emissivity'), 2)}" if mode == "air_still" else "")
+            + (f"; R_film {_fmt(r_film, 3)} K/W per device" if r_film else
+               f"; R_film {_fmt(T.get('r_coldplate_k_w'), 4)} K/W shared"))
+    return value, note
+
+
 def controller_rows(rec: Dict[str, Any]) -> List[List[str]]:
     """The section's one table — what it costs and how hot it gets."""
     L = rec.get("losses") or {}
@@ -15160,14 +15193,15 @@ def controller_rows(rec: Dict[str, Any]) -> List[List[str]]:
     r("Junction temperature", T.get("t_j_max_c"),
       f"hottest device; limit {_fmt(T.get('t_j_limit_c'), 0)} °C, margin "
       f"{_fmt(T.get('margin_K'), 0)} K", 0, "°C")
+    r_film = T.get("r_film_per_device_k_w") or 0.0
     r("Case temperature", T.get("t_case_c"),
       f"through R_th(j-c) {_fmt(T.get('r_th_jc_k_w'), 3)} K/W "
-      f"({T.get('r_th_jc_basis')}), TIM {_fmt(T.get('r_tim_k_w'), 3)} K/W",
+      f"({T.get('r_th_jc_basis')}), TIM {_fmt(T.get('r_tim_k_w'), 3)} K/W"
+      + (f", spread {_fmt(T.get('r_spread_k_w'), 3)} K/W"
+         if T.get("r_spread_k_w") else "")
+      + (f", film {_fmt(r_film, 3)} K/W per device" if r_film else ""),
       0, "°C")
-    r("Coolant", f"{_fmt(T.get('t_coolant_in_c'), 0)} → "
-                 f"{_fmt((T.get('t_coolant_in_c') or 0) + (T.get('coolant_rise_K') or 0), 0)} °C",
-      f"{cool.get('coolant')}, {_fmt(cool.get('flow_lpm'), 1)} L/min; "
-      f"plate {_fmt(T.get('r_coldplate_k_w'), 4)} K/W, {cool.get('regime')}")
+    r("Cooling", *controller_cooling_line(T, cool))
     r("DC-link ripple current", D.get("i_cap_rms_A"),
       f"capacitor rms; bus mean {_fmt(D.get('i_dc_mean_A'), 0)} A, "
       f"peak-to-peak {_fmt(D.get('i_dc_pp_A'), 0)} A", 0, "A")

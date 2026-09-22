@@ -1503,3 +1503,172 @@ def test_report_prints_the_whole_limit_table_with_its_verdict(synth_dir):
 def test_report_controller_section_is_absent_without_a_record():
     from motor_ai_sim import report as R
     assert R.controller_record({"duty": "x", "res": {}}) is None
+
+
+# ---------------------------------------------------------------------------
+# Cooling modes — owner 2026-09-22: "надо добавить воздушное охлаждение и
+# скорость ветра, как в термосимуляции" (the Controller cooling selector
+# only offered liquid coolants).  ``liquid`` (the original ColdPlate) must
+# stay bit-identical; ``air_forced``/``air_still`` reuse the SAME
+# correlations the motor's own housing ("air") and robotics ("still")
+# thermal modes already cite.
+# ---------------------------------------------------------------------------
+
+from motor_ai_sim.simulation import cooling_models as cm
+
+
+def test_liquid_mode_is_the_default_and_unnamed_and_named_agree(synth_dir):
+    """``cooling`` with no ``mode`` key at all (every request/config written
+    before this feature) must solve exactly like ``mode: "liquid"``."""
+    implicit = lo.solve_controller(_synth_request(
+        cooling={"coolant": "water", "flow_lpm": 10.0, "t_in_c": 40.0}))
+    explicit = lo.solve_controller(_synth_request(
+        cooling={"mode": "liquid", "coolant": "water", "flow_lpm": 10.0,
+                 "t_in_c": 40.0}))
+    assert implicit["thermal"]["t_j_max_c"] == pytest.approx(explicit["thermal"]["t_j_max_c"])
+    assert implicit["thermal"]["cooling_mode"] == "liquid"
+    assert implicit["thermal"]["coldplate"]["mode"] == "liquid"
+    assert implicit["thermal"]["r_film_per_device_k_w"] == pytest.approx(0.0)
+
+
+def test_bad_cooling_mode_is_refused(synth_dir):
+    with pytest.raises(lo.ControllerRefusal) as exc:
+        lo.solve_controller(_synth_request(cooling={"mode": "nitrogen"}))
+    assert "cooling.mode" in str(exc.value)
+
+
+def test_air_forced_film_is_the_motor_housings_own_correlation():
+    """Same function, same effective diameter, same speed -> same h — the
+    owner's own test bar ("film vs the motor's correlation at the same
+    speed, same number")."""
+    for v in (0.0, 3.0, 10.0):
+        want = cm.outer_air(air_speed_mps=v, t_ambient_c=35.0,
+                            d_housing_m=lo.AIR_DEVICE_CHAR_LENGTH_M)["h_conv"]
+        got = lo.AirForcedCooling(air_speed_mps=v, t_ambient_c=35.0).resistance()
+        assert got["h_w_m2k"] == pytest.approx(want, rel=1e-9)
+
+
+def test_air_still_uses_the_flat_plate_still_air_correlation():
+    """Same family the robotics mode uses for a flat face (Churchill-Chu
+    vertical plate + linearised radiation), not the housing's cylinder one."""
+    want = cm.end_face_still(t_wall_c=70.0, t_ambient_c=40.0, area_m2=0.004,
+                             char_len_m=lo.AIR_DEVICE_CHAR_LENGTH_M,
+                             emissivity=0.9, orientation="vertical")
+    got = lo.AirStillCooling(t_ambient_c=40.0, emissivity=0.9,
+                             heatsink_area_cm2_per_device=40.0
+                             ).resistance(t_wall_c=70.0)
+    assert got["h_w_m2k"] == pytest.approx(want["h_total"], rel=1e-9)
+    assert got["area_m2"] == pytest.approx(0.004)
+
+
+def test_air_forced_per_device_heatsink_is_the_stated_chain(synth_dir):
+    """T_j = T_ambient + P_device*(R_jc + R_TIM + R_spread + R_film) — no
+    shared plate node at all (the default topology: one heatsink per
+    device)."""
+    out = lo.solve_controller(_synth_request(
+        devices_parallel=2, r_tim_k_w=0.02, r_spread_k_w=0.01,
+        cooling={"mode": "air_forced", "air_speed_mps": 5.0,
+                 "t_ambient_c": 35.0, "heatsink_area_cm2_per_device": 50.0,
+                 "fin_efficiency": 0.8}))
+    T = out["thermal"]
+    assert T["cooling_mode"] == "air_forced"
+    assert T["coldplate"]["topology"] == "per_device_heatsink"
+    assert T["r_coldplate_k_w"] == pytest.approx(0.0)          # no shared node
+    assert T["t_case_c"] == pytest.approx(35.0, abs=0.05)      # sink = ambient
+    p_dev = max(l["p_device_W"] for b in out["bridges"] for l in b["legs"])
+    r_film = T["r_film_per_device_k_w"]
+    assert r_film > 0.0
+    assert T["t_j_max_c"] == pytest.approx(
+        35.0 + p_dev * (0.05 + 0.02 + 0.01 + r_film), abs=0.2)
+
+
+def test_air_forced_shared_plate_is_the_coldplate_shape(synth_dir):
+    """``plate_area_cm2`` asks for ONE shared PCB pad under every device — the
+    same shared-node shape the liquid coldplate uses, sink pinned at
+    ambient."""
+    out = lo.solve_controller(_synth_request(
+        devices_parallel=2,
+        cooling={"mode": "air_forced", "air_speed_mps": 5.0,
+                 "t_ambient_c": 35.0, "plate_area_cm2": 200.0}))
+    T = out["thermal"]
+    assert T["coldplate"]["topology"] == "shared_plate"
+    assert T["r_film_per_device_k_w"] == pytest.approx(0.0)
+    assert T["r_coldplate_k_w"] > 0.0
+    assert T["t_case_c"] == pytest.approx(
+        35.0 + out["losses"]["total_W"] * T["r_coldplate_k_w"], abs=0.05)
+
+
+def test_air_still_is_colder_air_is_hotter_removal(synth_dir):
+    """More wind -> a bigger forced film -> a lower junction temperature than
+    the still-air mode at the same ambient, same device, same power."""
+    still = lo.solve_controller(_synth_request(
+        device=REAL_TC, devices_parallel=2, v_dc_V=44.0, i_phase_rms_A=43.8,
+        p_ac_W=1900.0, star_delta="star", f_elec_hz=1516.7,
+        f_carrier_hz=48_000.0, v_gs_on_V=10.0, v_gs_off_V=0.0,
+        r_g_ext_ohm=1.6, dead_time_us=0.5, r_tim_k_w=0.03, r_spread_k_w=0.02,
+        cooling={"mode": "air_still", "t_ambient_c": 35.0}))
+    forced = lo.solve_controller(_synth_request(
+        device=REAL_TC, devices_parallel=2, v_dc_V=44.0, i_phase_rms_A=43.8,
+        p_ac_W=1900.0, star_delta="star", f_elec_hz=1516.7,
+        f_carrier_hz=48_000.0, v_gs_on_V=10.0, v_gs_off_V=0.0,
+        r_g_ext_ohm=1.6, dead_time_us=0.5, r_tim_k_w=0.03, r_spread_k_w=0.02,
+        cooling={"mode": "air_forced", "air_speed_mps": 10.0, "t_ambient_c": 35.0}))
+    assert still["thermal"]["converged"] is True
+    assert forced["thermal"]["converged"] is True
+    assert forced["thermal"]["t_j_max_c"] < still["thermal"]["t_j_max_c"]
+    # THE Ø40 L12 NUMBERS — IQE050N08NM5SC, R_th(j-a) = 60 K/W is cited, not
+    # used, and the note says which resistance chain the solve actually took.
+    assert any("R_th(j-a)" in n for n in forced["model_notes"])
+    assert any("R_th(j-a)" in n for n in still["model_notes"])
+
+
+def test_pqfn_part_cites_its_own_r_th_ja_in_air_modes(synth_dir):
+    from motor_ai_sim.inverter import devices as dv
+    card = dv.get_device(REAL_TC)
+    assert card.r_th_ja_k_w == pytest.approx(60.0)
+    out = lo.solve_controller(_synth_request(
+        device=REAL_TC, devices_parallel=2, v_dc_V=44.0, i_phase_rms_A=43.8,
+        p_ac_W=1900.0, star_delta="star", f_elec_hz=1516.7,
+        f_carrier_hz=48_000.0, v_gs_on_V=10.0, v_gs_off_V=0.0,
+        r_g_ext_ohm=1.6, dead_time_us=0.5, r_tim_k_w=0.03, r_spread_k_w=0.02,
+        cooling={"mode": "air_forced", "air_speed_mps": 10.0, "t_ambient_c": 35.0}))
+    note = next(n for n in out["model_notes"] if "R_th(j-a)" in n)
+    assert "60" in note
+    assert "does NOT use" in note
+    assert "R_spread" in note
+
+
+def test_liquid_mode_is_untouched_by_a_pqfn_air_note(synth_dir):
+    """The R_th(j-a) cross-check is an AIR-mode-only note — a liquid solve
+    must not carry it."""
+    out = lo.solve_controller(_synth_request(
+        device=REAL_TC, devices_parallel=2, v_dc_V=44.0, i_phase_rms_A=43.8,
+        p_ac_W=1900.0, star_delta="star", f_elec_hz=1516.7,
+        f_carrier_hz=48_000.0, v_gs_on_V=10.0, v_gs_off_V=0.0,
+        r_g_ext_ohm=1.6, dead_time_us=0.5, r_tim_k_w=0.03, r_spread_k_w=0.02,
+        cooling={"coolant": "water", "flow_lpm": 4.0, "t_in_c": 40.0,
+                 "r_override_k_w": 0.05}))
+    assert not any("R_th(j-a)" in n for n in out["model_notes"])
+
+
+def test_cooling_report_line_names_the_mode(synth_dir):
+    """Report/datasheet rows print the cooling mode on the Controller
+    section's cooling line (owner's item 3)."""
+    from motor_ai_sim import duty_results as dr
+    from motor_ai_sim import report as R
+    liquid = dr.compact_controller(lo.solve_controller(_synth_request()))
+    rows = {r[0]: r for r in R.controller_rows(liquid)}
+    assert "liquid" in rows["Cooling"][2].lower()
+
+    forced = dr.compact_controller(lo.solve_controller(_synth_request(
+        cooling={"mode": "air_forced", "air_speed_mps": 8.0,
+                 "t_ambient_c": 30.0})))
+    rows2 = {r[0]: r for r in R.controller_rows(forced)}
+    assert "8 m/s" in rows2["Cooling"][1]
+    assert "air forced" in rows2["Cooling"][2].lower()
+
+    still = dr.compact_controller(lo.solve_controller(_synth_request(
+        cooling={"mode": "air_still", "t_ambient_c": 30.0})))
+    rows3 = {r[0]: r for r in R.controller_rows(still)}
+    assert "still air" in rows3["Cooling"][1].lower()
+    assert "air still" in rows3["Cooling"][2].lower()

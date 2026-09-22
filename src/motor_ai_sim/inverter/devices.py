@@ -374,6 +374,29 @@ class DeviceCard:
         r = (self.doc["thermal"] or {}).get("r_th_jc_k_w") or {}
         return "max" if _num(r.get("max")) is not None else "typ"
 
+    @property
+    def r_th_ja_k_w(self) -> Optional[float]:
+        """Junction-to-ambient resistance, when the card publishes one —
+        almost always a BOARD number (a stated PCB copper area/layer count,
+        vertical-in-still-air test condition), not a package property, so
+        the loss model never puts it inside its own R_th(j-c)+R_TIM+
+        R_spread+R_film chain.  It exists only as a CITED still-air
+        cross-check for the controller's ``air_forced``/``air_still``
+        cooling modes (``inverter.losses.solve_controller``) — reported
+        alongside the model's own number and named as the datasheet's, never
+        silently substituted for it.  ``None`` when the card does not
+        publish one (most higher-current SiC modules, which are always
+        cooled through a case, not free air).
+        """
+        r = (self.doc["thermal"] or {}).get("r_th_ja_k_w") or {}
+        if not isinstance(r, dict):
+            return None
+        return _num(r.get("max")) if _num(r.get("max")) is not None else _num(r.get("typ"))
+
+    @property
+    def r_th_ja_note(self) -> Optional[str]:
+        return (self.doc["thermal"] or {}).get("r_th_ja_note")
+
     def t_j_curve_max_c(self) -> float:
         """The hottest junction temperature the card actually TABULATES.
 

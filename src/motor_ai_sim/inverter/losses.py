@@ -71,7 +71,8 @@ from motor_ai_sim.inverter.topology import (Bridge, Coil, Topology,
 
 log = logging.getLogger(__name__)
 
-__all__ = ["ControllerRefusal", "ColdPlate", "solve_controller", "limit_rows",
+__all__ = ["ControllerRefusal", "ColdPlate", "AirForcedCooling",
+           "AirStillCooling", "COOLING_MODES", "solve_controller", "limit_rows",
            "DEFAULT_TIM_K_W", "TOL_K", "E_OSS_POLICIES", "SET_SPLITS",
            "V_DSS_WARN_FRACTION"]
 
@@ -150,10 +151,18 @@ class ColdPlate:
     fin_area_factor: float = 1.0
     r_override_k_w: Optional[float] = None   # bypasses the correlation
 
-    def resistance(self) -> Dict[str, Any]:
-        """``{r_k_w, h_w_m2k, ...}`` — the plate-to-coolant thermal resistance."""
+    def resistance(self, t_wall_c: Optional[float] = None) -> Dict[str, Any]:
+        """``{r_k_w, h_w_m2k, ...}`` — the plate-to-coolant thermal resistance.
+
+        ``t_wall_c`` is accepted and ignored — the pipe-flow film here does
+        not depend on the wall temperature, only ``AirStillCooling``'s does
+        (natural convection), and :func:`solve_controller` calls every
+        cooling object through the same signature so the thermal loop does
+        not need to know which mode it is iterating.
+        """
         if self.r_override_k_w is not None:
             return {"r_k_w": float(self.r_override_k_w),
+                    "r_film_per_device_k_w": 0.0,
                     "basis": "given by the request (the correlation was not used)"}
         from motor_ai_sim.simulation import cooling_models as cm
         from motor_ai_sim.routes.thermal import _coolant_props
@@ -172,7 +181,8 @@ class ColdPlate:
         fin = max(float(self.fin_area_factor), 1.0)
         area = n * 2.0 * (w + h) * L * fin    # wetted perimeter x length x fins
         r = 1.0 / (h_film * area) if h_film * area > 0 else float("inf")
-        return {"r_k_w": r, "h_w_m2k": h_film, "reynolds": re, "nusselt": nu,
+        return {"r_k_w": r, "r_film_per_device_k_w": 0.0,
+                "h_w_m2k": h_film, "reynolds": re, "nusselt": nu,
                 "regime": regime, "velocity_mps": v,
                 "hydraulic_diameter_mm": d_h * 1e3, "wetted_area_m2": area,
                 "m_dot_kg_s": props.rho * q, "cp_j_kgk": props.cp,
@@ -183,12 +193,265 @@ class ColdPlate:
                             "the motor jacket uses)")}
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"coolant": self.coolant, "flow_lpm": self.flow_lpm,
+        return {"mode": "liquid",
+                "coolant": self.coolant, "flow_lpm": self.flow_lpm,
                 "t_in_c": self.t_in_c, "n_channels": self.n_channels,
                 "channel_w_mm": self.channel_w_mm,
                 "channel_h_mm": self.channel_h_mm, "length_mm": self.length_mm,
                 "fin_area_factor": self.fin_area_factor,
                 "r_override_k_w": self.r_override_k_w}
+
+
+# ---------------------------------------------------------------------------
+# Air cooling — a heatsink or a PCB pad in an air stream, or in still air
+# ---------------------------------------------------------------------------
+# Owner, 2026-09-22 (screenshot of the Controller cooling selector offering
+# only water / water_glycol_50 / ethylene_glycol / oil): *"надо добавить
+# воздушное охлаждение и скорость ветра, как в термосимуляции"* — the same
+# two air modes the motor's own Thermal tab already offers for the housing
+# (``routes.thermal``'s ``cooling_mode`` = "air" / "robotics"), applied to
+# the controller's devices instead of the housing.  NOTHING NEW IS INVENTED:
+# both modes reuse the exact correlations ``simulation/cooling_models.py``
+# already carries and the motor's own thermal solve already cites.
+#
+#   ``air_forced`` — a fan or a slipstream over a heatsink/plate:
+#       ``cooling_models.outer_air`` (Churchill–Bernstein, cylinder in
+#       cross-flow) — the SAME function ``routes.thermal._cooling_bc`` calls
+#       for the housing's ``cooling_mode="air"``.  A heatsink is not a
+#       cylinder, so a characteristic length has to stand in for the
+#       diameter Churchill–Bernstein needs; see
+#       ``AIR_DEVICE_CHAR_LENGTH_M`` for what it is and why.
+#   ``air_still`` — no fan at all, natural convection + radiation:
+#       ``cooling_models.end_face_still`` (Churchill–Chu VERTICAL-plate form
+#       plus linearised radiation) — the same FLAT-FACE still-air
+#       correlation the motor's "robotics" thermal mode uses for its end
+#       turns and open core face, which is the better physical match for a
+#       flat heatsink/PCB pad than the housing's own cylinder correlation
+#       (``outer_still``) would be.
+#
+# THE THERMAL STACK (owner's own words): T_j = T_ambient + P * (R_th(j-c) +
+# R_TIM + R_spread + R_film), R_film = 1/(h * A_eff * eta_fin).  Unlike the
+# liquid coldplate (ONE plate under every device, so ONE shared resistance
+# node between the total power and a common case temperature), a heatsink is
+# normally PER DEVICE — each device has its own fins and its own air, they do
+# not share a spreading plate — so by default R_film is folded into the
+# PER-DEVICE chain (``r_film_per_device_k_w``) exactly as R_TIM and R_spread
+# already are, and the module's usual SHARED node (``r_k_w``, what
+# ``ColdPlate`` always returns) is zero.  A caller that states ``plate_area``
+# instead of a per-device heatsink IS asking for a shared node — a PCB pad
+# spreads the several devices bolted to it through its own copper, the same
+# shape as a coldplate — and the two areas are mutually exclusive per mode.
+#
+# The sink is always ambient and never iterates an outlet: unlike a coolant
+# loop, the room's air is an unbounded reservoir (the same reasoning
+# ``cooling_models.outer_air``/``outer_still`` state for the housing) — so
+# ``t_in_c`` below IS the ambient temperature and the existing rise/outlet
+# arithmetic in the loop below collapses to zero automatically (no
+# ``m_dot_kg_s``/``cp_j_kgk`` keys in the resistance dict).
+
+COOLING_MODES = ("liquid", "air_forced", "air_still")
+
+#: Characteristic length fed to the forced/still correlations above — NOT a
+#: real cylinder or plate height, a stated assumption standing in for one.
+#: Churchill–Bernstein and the flat-plate Churchill–Chu form both need ONE
+#: length scale, and this is the footprint a small finned/pin-fin heatsink or
+#: a PQFN/TO-247-class device's copper pour actually has (25-40 mm class).
+#: The SAME value is used for both air modes so a report that quotes a
+#: forced-air film and a still-air film for the same device is quoting one
+#: assumed geometry, not two.
+AIR_DEVICE_CHAR_LENGTH_M = 0.03
+
+#: Wetted (finned) area of the default heatsink, ONE PER DEVICE, used when
+#: the request states neither ``heatsink_area_cm2_per_device`` nor
+#: ``plate_area_cm2`` — "a small finned heatsink", the assumption the owner's
+#: brief names explicitly.  A TO-247/PQFN-class device on a compact
+#: pin-fin/extruded heatsink commonly wets 30-50 cm^2; 40 cm^2 is the middle
+#: of that band.  Reported on every solve that falls back to it.
+DEFAULT_HEATSINK_AREA_CM2_PER_DEVICE = 40.0
+
+#: Fin efficiency of that assumed heatsink — a STATED CONSTANT, not fitted,
+#: reported on every air-mode solve.  0.75 is the middle of the band a short
+#: aluminium pin/plate fin sits in at the h this module's correlations give
+#: (a longer or thinner fin would be lower; a bare flat pad with no fins at
+#: all should be sent as 1.0).
+FIN_EFFICIENCY_DEFAULT = 0.75
+
+#: Emissivity of the device heatsink/PCB pad in ``air_still`` mode, when the
+#: request does not state one — the same default and the same band
+#: (0.85-0.95 for anodised aluminium / bare FR4 solder mask; a bare polished
+#: heatsink is far lower) ``cooling_models.EMISSIVITY_DEFAULT`` states for
+#: the motor's own housing, repeated here rather than imported so this
+#: module's constants stay self-contained and greppable.
+AIR_STILL_EMISSIVITY_DEFAULT = 0.9
+
+
+@dataclass
+class AirForcedCooling:
+    """A heatsink or PCB pad blown by a fan or a slipstream.
+
+    ``air_speed_mps``/``t_ambient_c`` are the panel's own "wind speed, as in
+    the thermal simulation" inputs.  Either ``heatsink_area_cm2_per_device``
+    (a heatsink bolted to EACH device — the default topology) or
+    ``plate_area_cm2`` (one PCB pad shared by every device on it) states the
+    wetted area; sending both is not an error, but ``plate_area_cm2`` wins
+    (see :meth:`resistance`).
+    """
+    air_speed_mps: float = 5.0
+    t_ambient_c: float = 40.0
+    heatsink_area_cm2_per_device: Optional[float] = None
+    plate_area_cm2: Optional[float] = None
+    fin_efficiency: float = FIN_EFFICIENCY_DEFAULT
+
+    @property
+    def t_in_c(self) -> float:
+        return self.t_ambient_c
+
+    def resistance(self, t_wall_c: Optional[float] = None) -> Dict[str, Any]:
+        """``{r_k_w, r_film_per_device_k_w, h_w_m2k, ...}``.
+
+        ``t_wall_c`` is accepted and ignored: Churchill–Bernstein forced
+        convection is evaluated at the ambient film here exactly as
+        ``cooling_models.outer_air`` states for the housing, so this film
+        does not depend on how hot the device runs.
+        """
+        from motor_ai_sim.simulation import cooling_models as cm
+        eta = min(max(float(self.fin_efficiency), 1e-3), 1.0)
+        rep = cm.outer_air(air_speed_mps=float(self.air_speed_mps),
+                           t_ambient_c=float(self.t_ambient_c),
+                           d_housing_m=AIR_DEVICE_CHAR_LENGTH_M)
+        h = float(rep["h_conv"])
+        shared = self.plate_area_cm2 is not None
+        a_cm2 = float(self.plate_area_cm2 if shared else
+                     (self.heatsink_area_cm2_per_device
+                      if self.heatsink_area_cm2_per_device is not None
+                      else DEFAULT_HEATSINK_AREA_CM2_PER_DEVICE))
+        a_m2 = max(a_cm2, 1e-6) * 1e-4
+        r = 1.0 / (h * a_m2 * eta) if h * a_m2 * eta > 0 else float("inf")
+        basis = (f"Churchill-Bernstein cross-flow at {self.air_speed_mps:g} m/s "
+                f"over a {AIR_DEVICE_CHAR_LENGTH_M * 1e3:.0f} mm effective "
+                "length (cooling_models.outer_air — the same correlation the "
+                "motor's own housing uses in cooling_mode='air') -> h = "
+                f"{h:.0f} W/m^2K, x {a_cm2:g} cm^2 "
+                + ("shared PCB plate" if shared else "heatsink per device")
+                + f" x fin efficiency {eta:.2f} (stated constant)")
+        out = {"h_w_m2k": h, "area_m2": a_m2, "area_cm2": a_cm2,
+              "fin_efficiency": eta, "regime": rep.get("regime"),
+              "re": rep.get("re"), "nu": rep.get("nu"), "basis": basis}
+        if shared:
+            out.update({"r_k_w": r, "r_film_per_device_k_w": 0.0,
+                       "topology": "shared_plate"})
+        else:
+            out.update({"r_k_w": 0.0, "r_film_per_device_k_w": r,
+                       "topology": "per_device_heatsink"})
+        return out
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"mode": "air_forced", "air_speed_mps": self.air_speed_mps,
+                "t_ambient_c": self.t_ambient_c,
+                "heatsink_area_cm2_per_device": self.heatsink_area_cm2_per_device,
+                "plate_area_cm2": self.plate_area_cm2,
+                "fin_efficiency": self.fin_efficiency}
+
+
+@dataclass
+class AirStillCooling:
+    """A heatsink or PCB pad in still air — no fan, no slipstream.
+
+    Same shape as :class:`AirForcedCooling`, minus the air speed and plus
+    ``emissivity`` — natural convection + radiation, exactly the pair the
+    motor's own "robotics" thermal mode applies to a joint with no fan
+    (``cooling_models.end_face_still``, the FLAT-FACE member of that family:
+    a heatsink/PCB pad is a plate, not a cylinder, so this is the better
+    match of the two still-air correlations that module carries).
+    """
+    t_ambient_c: float = 40.0
+    emissivity: float = AIR_STILL_EMISSIVITY_DEFAULT
+    heatsink_area_cm2_per_device: Optional[float] = None
+    plate_area_cm2: Optional[float] = None
+    fin_efficiency: float = FIN_EFFICIENCY_DEFAULT
+
+    @property
+    def t_in_c(self) -> float:
+        return self.t_ambient_c
+
+    def resistance(self, t_wall_c: Optional[float] = None) -> Dict[str, Any]:
+        """``{r_k_w, r_film_per_device_k_w, h_w_m2k, ...}``.
+
+        Natural convection depends on the WALL temperature (``h`` grows with
+        ΔT^~0.25) — the one air mode where that matters, like the motor's own
+        ``outer_still``/``end_face_still`` — so :func:`solve_controller`
+        passes its current best case-temperature ESTIMATE as ``t_wall_c`` on
+        every pass of the junction-temperature loop, the same lagged
+        fixed-point iteration the loop already runs for R_DS(on)(T_j).  The
+        first pass (no estimate yet) assumes a 20 K rise over ambient.
+        """
+        from motor_ai_sim.simulation import cooling_models as cm
+        eta = min(max(float(self.fin_efficiency), 1e-3), 1.0)
+        eps = min(max(float(self.emissivity), 0.0), 1.0)
+        wall = float(t_wall_c) if t_wall_c is not None else float(self.t_ambient_c) + 20.0
+        shared = self.plate_area_cm2 is not None
+        a_cm2 = float(self.plate_area_cm2 if shared else
+                     (self.heatsink_area_cm2_per_device
+                      if self.heatsink_area_cm2_per_device is not None
+                      else DEFAULT_HEATSINK_AREA_CM2_PER_DEVICE))
+        a_m2 = max(a_cm2, 1e-6) * 1e-4
+        rep = cm.end_face_still(t_wall_c=wall, t_ambient_c=float(self.t_ambient_c),
+                                area_m2=a_m2, char_len_m=AIR_DEVICE_CHAR_LENGTH_M,
+                                emissivity=eps, orientation="vertical",
+                                name=("shared PCB plate" if shared
+                                     else "device heatsink"))
+        h = float(rep["h_total"])
+        r = 1.0 / (h * a_m2 * eta) if h * a_m2 * eta > 0 else float("inf")
+        basis = (f"Churchill-Chu vertical-plate natural convection + "
+                f"radiation at eps {eps:.2f} on a {AIR_DEVICE_CHAR_LENGTH_M * 1e3:.0f} mm "
+                "effective height (cooling_models.end_face_still — the same "
+                "still-air family the motor's robotics thermal mode uses) -> "
+                f"h_conv {rep.get('h_conv', 0.0):.1f} + h_rad "
+                f"{rep.get('h_rad', 0.0):.1f} = {h:.1f} W/m^2K, x {a_cm2:g} cm^2 "
+                + ("shared PCB plate" if shared else "heatsink per device")
+                + f" x fin efficiency {eta:.2f} (stated constant)")
+        out = {"h_w_m2k": h, "h_conv": rep.get("h_conv"), "h_rad": rep.get("h_rad"),
+              "area_m2": a_m2, "area_cm2": a_cm2, "fin_efficiency": eta,
+              "emissivity": eps, "ra": rep.get("ra"), "nu": rep.get("nu"),
+              "regime": rep.get("regime"), "t_wall_c": wall, "basis": basis}
+        if shared:
+            out.update({"r_k_w": r, "r_film_per_device_k_w": 0.0,
+                       "topology": "shared_plate"})
+        else:
+            out.update({"r_k_w": 0.0, "r_film_per_device_k_w": r,
+                       "topology": "per_device_heatsink"})
+        return out
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {"mode": "air_still", "t_ambient_c": self.t_ambient_c,
+                "emissivity": self.emissivity,
+                "heatsink_area_cm2_per_device": self.heatsink_area_cm2_per_device,
+                "plate_area_cm2": self.plate_area_cm2,
+                "fin_efficiency": self.fin_efficiency}
+
+
+def _build_cooling(cooling_req: Dict[str, Any]
+                   ) -> "ColdPlate | AirForcedCooling | AirStillCooling":
+    """The cooling object for this solve, dispatched on ``cooling.mode``.
+
+    ``mode`` absent (every configuration saved before 2026-09-22, and every
+    request that never mentions it) means ``"liquid"`` — the ONLY mode that
+    ever existed before this — so an old request reproduces bit-identical
+    results through the unchanged :class:`ColdPlate` path.
+    """
+    spec = dict(cooling_req)
+    mode = str(spec.pop("mode", None) or "liquid").strip().lower()
+    if mode == "liquid":
+        cls: Any = ColdPlate
+    elif mode == "air_forced":
+        cls = AirForcedCooling
+    elif mode == "air_still":
+        cls = AirStillCooling
+    else:
+        raise ControllerRefusal(
+            "cooling.mode must be " + " or ".join(COOLING_MODES) + f"; got {mode!r}",
+            ["cooling"], code="bad_cooling_mode")
+    return cls(**{k: v for k, v in spec.items() if k in cls.__dataclass_fields__})
 
 
 # ---------------------------------------------------------------------------
@@ -440,8 +703,12 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
       devices   ``device``, ``devices_parallel``, ``r_g_ext_ohm``,
                 ``v_gs_on_V``, ``v_gs_off_V``, ``dead_time_us``
       topology  ``topology``, ``mapping``, ``h_bridge_modulation``, ``set_split``
-      cooling   ``cooling`` -> :class:`ColdPlate` fields, ``r_tim_k_w``,
-                ``r_spread_k_w``
+      cooling   ``cooling.mode`` -> ``"liquid"`` (default, :class:`ColdPlate`
+                fields — coolant/flow/inlet/channels), ``"air_forced"``
+                (:class:`AirForcedCooling` — air_speed_mps/t_ambient_c/
+                heatsink or plate area/fin_efficiency) or ``"air_still"``
+                (:class:`AirStillCooling` — same, plus emissivity, no fan);
+                also ``r_tim_k_w``, ``r_spread_k_w`` (per-device, every mode)
     """
     # ── the machine and the map ────────────────────────────────────────────
     slots = int(_f(req.get("num_slots"), "num_slots", positive=True))
@@ -574,14 +841,11 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "this operating point needs without overmodulation or a higher bus")
 
     # ── the thermal loop ───────────────────────────────────────────────────
-    plate = ColdPlate(
-        **{k: v for k, v in (req.get("cooling") or {}).items()
-           if k in ColdPlate.__dataclass_fields__})
-    cp = plate.resistance()
+    plate = _build_cooling(req.get("cooling") or {})
     r_tim = _f((req.get("r_tim_k_w")), "r_tim_k_w", default=DEFAULT_TIM_K_W)
     r_spread = _f(req.get("r_spread_k_w"), "r_spread_k_w", default=0.0)
     r_jc = card.r_th_jc_k_w
-    r_dev = r_jc + r_tim + r_spread
+    cooling_mode = str(plate.as_dict().get("mode") or "liquid")
 
     dead_us = _f(req.get("dead_time_us"), "dead_time_us", default=0.5)
     if dead_us < 0.0:
@@ -618,10 +882,21 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     p_total = 0.0
     t_case = plate.t_in_c
     t_cool_mean = plate.t_in_c
+    cp: Dict[str, Any] = {}
+    r_dev = r_jc + r_tim + r_spread
     while True:
         iters += 1
         t_eval = min(t_j, t_cap)
         clamped = clamped or (t_j > t_cap + 1e-9)
+        # ``t_case`` here is the PREVIOUS pass's case-temperature estimate
+        # (seeded at the cooling object's own inlet/ambient) — only
+        # ``AirStillCooling`` reads it (natural convection depends on the
+        # wall), the liquid/forced-air films ignore it, and recomputing
+        # ``cp`` on every pass for those two is harmless: they are
+        # temperature-independent, so this reproduces the pre-2026-09-22
+        # ColdPlate-only result bit-for-bit.
+        cp = plate.resistance(t_wall_c=t_case)
+        r_dev = r_jc + r_tim + r_spread + float(cp.get("r_film_per_device_k_w") or 0.0)
         per_leg = {}
         p_total = 0.0
         for b in topo.bridges:
@@ -796,6 +1071,31 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
               * (v_dc + 2.0 * card.v_sd_V(i_ph * math.sqrt(2.0) / max(n_par, 1),
                                           t_draw, v_gs_off))), 2)
 
+    # ── the R_th(j-a) cross-check, air-cooled modes only (owner's brief: a
+    # PQFN/source-down part's path is pad -> PCB copper -> air; state clearly
+    # which resistance the solve actually used) ────────────────────────────
+    cooling_notes: List[str] = []
+    if cooling_mode in ("air_forced", "air_still"):
+        r_ja = card.r_th_ja_k_w
+        if r_ja is not None:
+            used = r_jc + r_tim + r_spread + float(cp.get("r_film_per_device_k_w") or 0.0)
+            cooling_notes.append(
+                f"{card.part} publishes R_th(j-a) = {r_ja:g} K/W as its own "
+                "still-air limit"
+                + (f" ({card.r_th_ja_note.strip()})" if card.r_th_ja_note else "")
+                + f" — this solve does NOT use that number; it derates on "
+                  f"R_th(j-c) {r_jc:g} + R_TIM {r_tim:g} + R_spread {r_spread:g} "
+                  "(the PCB-copper-spreading path from the pad to THIS board, "
+                  "a stated assumption, default 0 K/W unless given) + R_film "
+                  f"from the chosen air correlation = {used:g} K/W per device; "
+                  "the datasheet's R_th(j-a) is reported here only as a "
+                  "cross-check, not an input")
+        else:
+            cooling_notes.append(
+                f"{card.part} publishes no R_th(j-a) — no still-air "
+                "cross-check is available for this device; the solve derates "
+                "on R_th(j-c) + R_TIM + R_spread + R_film only")
+
     return {
         "ok": not violations,
         # ``feasible`` is the word the limit table answers: every published
@@ -837,6 +1137,14 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "r_tim_k_w": r_tim,
             "r_spread_k_w": r_spread,
             "r_coldplate_k_w": round(float(cp["r_k_w"]), 5),
+            "r_film_per_device_k_w": round(
+                float(cp.get("r_film_per_device_k_w") or 0.0), 5),
+            "cooling_mode": cooling_mode,
+            # "coldplate" is the pre-2026-09-22 key name, kept for every
+            # reader that already looks for it (the report, the tab); it now
+            # holds whichever cooling object solved this controller — a
+            # liquid coldplate, a forced-air heatsink/plate, or a still-air
+            # one — and its own ``mode`` field says which.
             "coldplate": {**plate.as_dict(),
                           **{k: (round(v, 4) if isinstance(v, float) else v)
                              for k, v in cp.items()}},
@@ -925,5 +1233,5 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "curves are extrapolated on the straight line through their two "
             "lowest points — that is where a sinusoidal current's zero "
             "crossings live",
-        ],
+        ] + cooling_notes,
     }

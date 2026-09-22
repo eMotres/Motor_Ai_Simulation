@@ -208,6 +208,65 @@ def test_power_factor_above_one_is_refused(dies, granted):
 
 
 # ---------------------------------------------------------------------------
+# cooling.mode — owner 2026-09-22: "надо добавить воздушное охлаждение и
+# скорость ветра, как в термосимуляции" (the selector only offered liquid
+# coolants). The web selector itself is a separate follow-up; this is the
+# round-trip of the saved block through the PATCH route.
+# ---------------------------------------------------------------------------
+
+def test_air_forced_cooling_round_trips(dies, granted):
+    r = _patch_controller(headers=granted, cooling={
+        "mode": "air_forced", "air_speed_mps": 8.0, "t_ambient_c": 35.0,
+        "heatsink_area_cm2_per_device": 50.0, "fin_efficiency": 0.8})
+    assert r.status_code == 200, r.text
+    assert r.json()["controller"]["cooling"] == {
+        "mode": "air_forced", "air_speed_mps": 8.0, "t_ambient_c": 35.0,
+        "heatsink_area_cm2_per_device": 50.0, "fin_efficiency": 0.8}
+
+    c = _cfg_doc(dies)
+    assert c["controller"]["cooling"]["mode"] == "air_forced"
+
+    got = client.get(f"/api/controller/settings?die={DIE}&config={CFG}").json()
+    assert got["cooling"]["air_speed_mps"] == pytest.approx(8.0)
+    assert got["cooling"]["heatsink_area_cm2_per_device"] == pytest.approx(50.0)
+
+
+def test_air_still_cooling_round_trips(dies, granted):
+    r = _patch_controller(headers=granted, cooling={
+        "mode": "air_still", "t_ambient_c": 30.0, "emissivity": 0.85,
+        "plate_area_cm2": 200.0})
+    assert r.status_code == 200, r.text
+    c = _cfg_doc(dies)
+    assert c["controller"]["cooling"] == {
+        "mode": "air_still", "t_ambient_c": 30.0, "emissivity": 0.85,
+        "plate_area_cm2": 200.0}
+
+
+def test_unknown_cooling_mode_is_refused(dies, granted):
+    r = _patch_controller(headers=granted, cooling={"mode": "nitrogen"})
+    assert r.status_code == 422
+    assert "cooling.mode" in r.json()["detail"]
+
+
+def test_solve_reads_the_saved_air_cooling_mode(dies, granted):
+    """A solve with no ``cooling`` of its own picks up the saved
+    ``air_forced`` settings, same footing as the saved liquid coldplate."""
+    _patch_controller(headers=granted, device="IQE050N08NM5SC",
+                      devices_parallel=2, devices_parallel_by_bridge={},
+                      v_dc_V=44.0, cooling={
+                          "mode": "air_forced", "air_speed_mps": 10.0,
+                          "t_ambient_c": 35.0})
+    r = client.post("/api/controller/solve", headers=granted, json={
+        "die": DIE, "config": CFG, "duty": DUTY,
+        "i_phase_rms_A": 43.8, "p_ac_W": 1900.0, "f_elec_hz": 1516.7,
+        "modulation_index": 0.5})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["thermal"]["cooling_mode"] == "air_forced"
+    assert out["thermal"]["coldplate"]["air_speed_mps"] == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------------
 # load -> GET /api/controller/settings
 # ---------------------------------------------------------------------------
 

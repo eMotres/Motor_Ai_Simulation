@@ -94,6 +94,7 @@ from motor_ai_sim import coupled_continuous_rating as _ccr
 from motor_ai_sim import coupled_duty_cycle as _cdc
 from motor_ai_sim import coupled_time_to_limit as _ttl
 from motor_ai_sim import run_recording as _rr
+from motor_ai_sim import run_history as _RH
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim.progress import poll as _progress_poll
@@ -2828,6 +2829,150 @@ def _cycle_block_of(regime: Optional[Dict[str, Any]],
     return out
 
 
+# ---------------------------------------------------------------------------
+# Persistent history (2026-09-22) — "don't recompute an identical coupled run"
+# ---------------------------------------------------------------------------
+# Owner, first sentence of the 2026-09-22 ask: *"если я запускаю те же
+# параметры каплинга, он не считается, а подгружает уже рассчитанный
+# вариант"*.  There is no in-process memo to build on here (unlike the EM
+# transient's ``_fem_transient_cache`` or mechanical's ``rsm.cache_get``):
+# ``_em_run`` below deliberately forces every INNER electromagnetic pass to
+# solve (``fresh=True, ledger=False`` at its own call site) because a coupled
+# iteration must see a real field each step — that has nothing to do with the
+# OUTER question this section answers, which is "has this /run request, as a
+# whole, already been solved before".
+_COUPLED_HISTORY = _RH.history_for("coupled.run")
+_RH.register_kind("coupled.run")
+
+
+def _coupled_body_bool(body: Dict[str, Any], key: str, default: bool = False) -> bool:
+    v = body.get(key)
+    if v is None:
+        return default
+    if isinstance(v, str):
+        return v.strip().lower() not in ("false", "0", "no", "off", "")
+    return bool(v)
+
+
+def _coupled_canonical(body: Dict[str, Any], cooling: Dict[str, Any],
+                       solve_to: str, max_iter: int) -> Dict[str, Any]:
+    """Every field that can change the coupled answer — the key the brief
+    asks for, spelled out field by field:
+
+    * ``cfg`` — ``routes.simulation._config_physics_fingerprint`` (with this
+      request's material override folded in): the LIVE geometry object plus
+      the raw ``geometry:``/``winding:``/``materials:``/``magnet:`` config
+      blocks and the per-part accounting state (``excluded``/``reference``).
+      This is what the brief calls "geometry_fingerprint_v2" and "part
+      states" — the closest existing machine-identity hash in this codebase
+      (``geometry_fingerprint_v2`` itself is never called anywhere in the
+      backend outside its own module and tests; every route that needs a
+      machine fingerprint, including mechanical.py's reference integration,
+      uses this one).
+    * ``body`` — the WHOLE request body, minus ``run_id`` (a fresh nonce
+      every launch), ``for_duty`` (a log label) and ``record`` (a
+      ``record: false`` errand never reaches this cache at all — see
+      ``_run``).  ``_run``'s own docstring says what this already is:
+      "every parameter the Electromagnetic Run sends" — the operating point
+      (I/rpm/gamma), the drive/PWM/inverter block, star/delta, coil/magnet
+      temperatures, mesh/steps-per-period/periods/sectors, the
+      eddy/rotor_eddy/demag/element-order flags, plus ``max_iter``,
+      ``tol_k``, ``damping``, ``thermal_settings`` (when the caller sent its
+      own) and ``cold_constants``.  ``mat`` is dropped here — it already
+      rode into ``cfg`` above; keeping it twice would just be two names for
+      one input.
+    * ``cooling`` — the RESOLVED cooling block (``thermal_settings.
+      cooling_fields``): mode, both fluids/flows, ambient, frame, mount,
+      emissivity, end faces.  Resolved and not raw, because the normal case
+      is an ABSENT ``thermal_settings`` in the body, which then means "the
+      caller's remembered Thermal-tab settings" — two requests with the same
+      (absent) body key can still be different runs if the user's stored
+      Thermal tab changed between them, and only the resolved block sees
+      that.
+    * ``solve_to`` / ``max_iter`` — already inside ``body`` too; pulled out
+      explicitly so a future rename/alias inside the body can never quietly
+      stop being keyed.
+
+    ``k_3d`` is deliberately NOT an independent input: ``_cold_constants``
+    derives it from the geometry alone, so ``cfg`` above already determines
+    it bit for bit — hashing it separately could only ever agree with what
+    ``cfg`` says, never catch anything ``cfg`` would miss.
+    """
+    skip_keys = {"run_id", "for_duty", "record", "mat"}
+    body_norm = {k: v for k, v in body.items() if k not in skip_keys}
+    from motor_ai_sim.routes.simulation import _config_physics_fingerprint
+    return {
+        "cfg": _config_physics_fingerprint(with_request_materials=True),
+        "body": _RH.round_floats(body_norm),
+        "cooling": _RH.round_floats(dict(cooling or {})),
+        "solve_to": str(solve_to),
+        "max_iter": int(max_iter),
+    }
+
+
+def _coupled_history_key(body: Dict[str, Any], cooling: Dict[str, Any],
+                         solve_to: str, max_iter: int) -> str:
+    return _RH.make_key("coupled.run",
+                        _coupled_canonical(body, cooling, solve_to, max_iter))
+
+
+def _coupled_summary(block: Dict[str, Any], solve_to: str) -> str:
+    try:
+        bits = [f"{float(block.get('coil_temp_c') or 0.0):.1f}°C coil"]
+        mag = block.get("magnet_temp_c")
+        if mag is not None:
+            bits.append(f"{float(mag):.1f}°C magnet")
+        bits.append(str(solve_to))
+        if block.get("mode"):
+            bits.append(str(block["mode"]))
+        if block.get("limited"):
+            bits.append("AT THE LIMIT")
+        elif not block.get("converged"):
+            bits.append("not converged")
+        return ", ".join(bits)
+    except Exception:                                       # noqa: BLE001
+        return "coupled run"
+
+
+def _load_coupled_history_entry(entry: Dict[str, Any],
+                                payload: Dict[str, Any]) -> Dict[str, Any]:
+    """``run_history.register_loader`` hook AND the shared tail of a
+    ``/run`` history hit: the response is the whole stored ``out`` dict, so
+    the S1 auto-set and the "AT THE LIMIT" line (``coupling.warning``,
+    ``coupling.limited``) come back exactly as the record has always shown
+    them — they are already baked into the payload, nothing here recomputes
+    them. What this function still has to REPLAY is the SIDE EFFECT a normal
+    run has: ``_remember_last`` (``.last_coupled.json`` + the per-duty
+    ``duty_results.note_coupled`` row), so a History-popover load makes the
+    Coupled panel and the report agree exactly as a fresh Run would.
+
+    KNOWN GAP (2026-09-22, scoped out for time): the impulse-duty regime
+    save (``duty_results.note_duty_cycle``, S2/S3 machines) is NOT replayed
+    — it needs ``cycle_doc``/``cycle_in``, which only exist as local state
+    inside a live solve. A loaded S2/S3 record still shows correctly on the
+    Coupled panel; the duty-cycle editor's regime row keeps whatever the
+    LAST real solve filed there until the next real solve.
+    """
+    out = dict(payload)
+    out["served_from_history"] = True
+    out["computed_at"] = entry.get("computed_at")
+    out["history_key"] = entry.get("key")
+    try:
+        _remember_last({k: v for k, v in out.items()
+                        if k not in ("transient", "thermal", "served_from_history",
+                                    "history_key")},
+                       alt_carrier=bool(entry.get("alt_carrier")))
+    except Exception:                                       # noqa: BLE001
+        log.debug("coupled: history load could not update /last", exc_info=True)
+    log.info("coupled: %s served from history (computed %s); the duty-cycle "
+             "regime row was not re-filed (known gap)",
+             entry.get("key"), entry.get("computed_at"))
+    return out
+
+
+_RH.register_loader("coupled.run", _load_coupled_history_entry)
+
+
 def _record_wanted(body: Dict[str, Any]) -> bool:
     """Is this run THIS machine's answer, or an errand for another duty?
 
@@ -2995,6 +3140,25 @@ def _run(body: Dict[str, Any],
             "Thermal tab (or send thermal_settings) and run again." % issue,
             ["thermal_settings"], code="no_thermal_boundary")
     cooling = cooling_fields(settings)
+
+    # ── persistent history (2026-09-22) ─────────────────────────────────────
+    # The earliest point every field the key needs is resolved (solve_to,
+    # max_iter, thermal settings validated, cooling resolved) — and BEFORE
+    # anything that looks like a solve starts: no ``_LOCK``, no
+    # ``_progress.start``, no EM/thermal call.  A hit therefore returns with
+    # no progress ring and holds the run lock for nobody.  Never on an
+    # errand (``record: false``): that run is deliberately not this
+    # machine's answer and must neither be served as one nor stored as one.
+    history_fresh = _coupled_body_bool(body, "fresh", False)
+    history_key: Optional[str] = None
+    if not _rr.suppressed():
+        history_key = _coupled_history_key(body, cooling, solve_to, max_iter)
+        if not history_fresh:
+            history_hit = _COUPLED_HISTORY.get(history_key)
+            if history_hit is not None:
+                return _load_coupled_history_entry(
+                    history_hit["entry"], history_hit["payload"])
+
     # ── AN IMPULSE DUTY IS SOLVED AS A REGIME (2026-09-16) ──────────────────
     # On an S2/S3 duty the loop no longer iterates towards the temperature this
     # point would reach if it never ended: each pass fits the lumped cycle to
@@ -4248,6 +4412,22 @@ def _run(body: Dict[str, Any],
                     if k not in ("transient", "thermal")},
                    alt_carrier=bool(inverter
                                     and inverter.get("record_as") == "alt_carrier"))
+    # ── and file the WHOLE coupling block in the persistent history ────────
+    # ``history_key`` is the one computed before anything was solved — the
+    # inputs it was built from (body, cooling, solve_to, max_iter) are fixed
+    # for the whole loop, so it is still the right key for what just ran.
+    if history_key is not None:
+        try:
+            _COUPLED_HISTORY.put(
+                history_key,
+                params=_coupled_canonical(body, cooling, solve_to, max_iter),
+                summary=_coupled_summary(block, solve_to),
+                payload=out,
+                extra={"alt_carrier": bool(inverter and
+                                           inverter.get("record_as") == "alt_carrier")})
+        except Exception:                                   # noqa: BLE001
+            log.warning("coupled: could not file this run in the history",
+                       exc_info=True)
     # ── AND THE CYCLE, UNDER THE DUTY IT DESCRIBES ──────────────────────────
     # The same ``duty_cycle`` kind ``POST /api/thermal/duty_cycle`` files, with
     # the same keys, so the report's Allowable-regime line, its rows and its two
@@ -4284,6 +4464,8 @@ def _run(body: Dict[str, Any],
              (" — %s" % limited["line"] if limited else
               "" if not time_to_limit or time_to_limit.get("within_limits", True)
               else " — %s" % _ttl.headline(time_to_limit)))
+    if history_key is not None:
+        out["history_key"] = history_key
     return out
 
 

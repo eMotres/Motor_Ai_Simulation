@@ -195,6 +195,16 @@ def sandbox():
     monkeypatch.undo()
 
 
+# NOTE (2026-09-22): this module's tests reuse the textually identical
+# ``EM_BODY``/``COOLING`` body across many tests (``faked_halves`` &c.),
+# relying on each test's own monkeypatched ``_em_run``/``_thermal_solve`` to
+# answer differently — which would collide with the new persistent
+# ``run_history`` layer (routes/coupled.py's ``_COUPLED_HISTORY``) if it were
+# not cleared between tests. That clearing is done once, for every
+# ``run_history`` kind, by the session-wide autouse fixture
+# ``tests/conftest.py::_clear_run_history`` — nothing file-local is needed.
+
+
 # ---------------------------------------------------------------------------
 # (a) the isolation the orchestrator exists to preserve
 # ---------------------------------------------------------------------------

@@ -132,3 +132,36 @@ def _assert_the_live_config_is_untouched():
         "from the UI) edited it while the run was in flight.  Both are worth "
         "knowing; check the audit trail in logs/geometry_audit.jsonl and rerun "
         "with the app idle before treating it as a test bug.")
+
+
+@pytest.fixture(autouse=True)
+def _clear_run_history():
+    """Empty every ``motor_ai_sim.run_history`` kind before each test (2026-09-22).
+
+    ``run_history`` is a NEW persistent layer ("don't recompute an identical
+    request") that survives across requests — and, in this suite, across
+    TEST FUNCTIONS too, because the sandbox config directory this file
+    redirects to is the same for the whole session while ``run_history``
+    stores its files on disk under it.  A great many existing tests
+    (``tests/test_coupled*.py``, and others as more solve kinds are wired
+    in) post the textually IDENTICAL request body through a shared fixture,
+    relying on each test's OWN monkeypatched solver to answer differently —
+    exactly the situation persistent history exists to short-circuit for a
+    REAL caller.  Cleared here, once, for every kind, rather than in each
+    affected test file, so a new kind being wired into ``run_history`` can
+    never silently reintroduce this same class of cross-test collision.
+
+    Cheap: each kind's index is a small JSON file, and there are a handful
+    of kinds.  Failures are swallowed — a workspace this test has not
+    touched yet has no ``.run_history`` directory at all, which is not an
+    error.
+    """
+    try:
+        from motor_ai_sim import run_history as _rh
+        for _kind in _rh.known_kinds():
+            _h = _rh.history_for(_kind)
+            for _row in _h.list():
+                _h.delete(_row["key"])
+    except Exception:                                       # noqa: BLE001
+        pass
+    yield

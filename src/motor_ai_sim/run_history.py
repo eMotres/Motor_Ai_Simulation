@@ -97,8 +97,9 @@ from motor_ai_sim import workspace as _WSP
 log = logging.getLogger(__name__)
 
 __all__ = [
-    "DEFAULT_CAP", "code_version", "make_key", "RunHistory", "history_for",
-    "register_kind", "known_kinds", "register_loader", "loader_for",
+    "DEFAULT_CAP", "code_version", "make_key", "round_floats", "RunHistory",
+    "history_for", "register_kind", "known_kinds", "register_loader",
+    "loader_for",
 ]
 
 #: The owner's number, verbatim ("хранить небольшую историю, 10 вычислений").
@@ -180,6 +181,28 @@ def _reset_code_version_cache_for_tests() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 #  The key
 # ─────────────────────────────────────────────────────────────────────────────
+
+def round_floats(obj: Any, ndigits: int = 6) -> Any:
+    """Recursively round every float in ``obj`` — the normalisation
+    :func:`make_key`'s docstring asks callers to do before hashing, factored
+    out here because every route that hashes a whole request BODY (rather
+    than a hand-built tuple, the way ``mechanical._cache_key`` already
+    rounds each field itself) needs the same walk. Dict key ORDER is not
+    this function's job — ``make_key`` already sorts keys when it dumps to
+    JSON; this only makes two floats that differ in the 9th decimal (a
+    request re-typed, a value round-tripped through a UI control) hash the
+    same.
+    """
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, float):
+        return round(obj, ndigits)
+    if isinstance(obj, dict):
+        return {k: round_floats(v, ndigits) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [round_floats(v, ndigits) for v in obj]
+    return obj
+
 
 def make_key(kind: str, canonical: Dict[str, Any]) -> str:
     """``sha1(json({"kind": kind, "p": canonical}))[:16]``.

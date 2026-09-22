@@ -275,7 +275,9 @@ export interface MechanicalState {
    *  the backend rejects a non-zero interference on it with a 422.  The field is
    *  disabled in the UI, but its remembered value survives a switch to a
    *  sleeveless machine — sending it would turn that switch into an error. */
-  solveStress: (hasSleeve: boolean) => Promise<void>;
+  /** `fresh` (2026-09-22, the History notice's Recompute button): ignore a
+   *  stored history answer and solve again, even for byte-identical inputs. */
+  solveStress: (hasSleeve: boolean, fresh?: boolean) => Promise<void>;
   /** The **Limit speed** button: the same case `solveStress` would send —
    *  same torque, contacts, interference, temperatures, mesh — searched for
    *  the speed at which SF reaches 1 (owner 2026-09-21: "нужно искать ещё
@@ -285,7 +287,7 @@ export interface MechanicalState {
    *  riding on it, so every existing reader of `st.stress.data` (tiles, maps,
    *  the compare row) sees it unchanged, and the panel reads the extra field
    *  only where it draws the limit-speed line. */
-  solveLimitSpeed: (hasSleeve: boolean) => Promise<void>;
+  solveLimitSpeed: (hasSleeve: boolean, fresh?: boolean) => Promise<void>;
   solveModes: (rpm: number) => Promise<void>;
   solveCriticals: (rpm: number) => Promise<void>;
 }
@@ -616,7 +618,7 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
     }
   },
 
-  solveStress: async (hasSleeve) => {
+  solveStress: async (hasSleeve, fresh) => {
     const s = get();
     set({ stress: { ...s.stress, busy: true, err: null, startedAt: Date.now() } });
     try {
@@ -668,6 +670,7 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
         // app has always made unless the user picked the sector.
         ...(s.symmetry === 'sector' ? { symmetry: 'sector' as const } : {}),
         contacts: s.contacts,
+        ...(fresh ? { fresh: true } : {}),
       });
       set({ stress: { data: out, busy: false, err: null,
                       geoSig: liveGeoSig(), backendStale: false,
@@ -684,7 +687,7 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
     }
   },
 
-  solveLimitSpeed: async (hasSleeve) => {
+  solveLimitSpeed: async (hasSleeve, fresh) => {
     const s = get();
     set({ stress: { ...s.stress, busy: true, err: null, startedAt: Date.now() } });
     try {
@@ -708,6 +711,7 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
         order: 2,
         ...(s.symmetry === 'sector' ? { symmetry: 'sector' as const } : {}),
         contacts: s.contacts,
+        ...(fresh ? { fresh: true } : {}),
       });
       set({ stress: { data: out, busy: false, err: null,
                       geoSig: liveGeoSig(), backendStale: false,

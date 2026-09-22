@@ -28,6 +28,7 @@ import { effectiveProofRpm, isStale, useMechanicalStore } from '../../stores/mec
 import {
   thermalTempsLine, thermalTempsTip, thermalTempsInUse,
 } from '../../lib/mechThermalTemps';
+import { historyNoticeFor } from '../../lib/historyNotice';
 import { useMotorStore } from '../../stores/motorStore';
 import AddResultToCompareButton from '../compare/AddResultToCompareButton';
 import { MAX_LOCAL_ROWS, localMechanicalRow } from '../compare/resultRows';
@@ -391,6 +392,13 @@ const MechanicalPanel: React.FC = () => {
   const solveLimitSpeed = st.solveLimitSpeed;
   const limitSpeed = useCallback(() => { void solveLimitSpeed(hasSleeveGeo); },
                                  [solveLimitSpeed, hasSleeveGeo]);
+  // The History notice's Recompute (2026-09-22): the SAME request, `fresh:
+  // true` — whichever of the two buttons produced the result on screen
+  // (`res.limit_speed` present = the search, not a plain Solve).
+  const recompute = useCallback(() => {
+    if (res?.limit_speed) void solveLimitSpeed(hasSleeveGeo, true);
+    else void solveStress(hasSleeveGeo, true);
+  }, [solveStress, solveLimitSpeed, hasSleeveGeo, res?.limit_speed]);
 
   /* ── the mesh, as a thing you control ────────────────────────────────────
      User 2026-09-06: "по поводу сетки — как я понял, она строится отдельно, и
@@ -877,6 +885,21 @@ const MechanicalPanel: React.FC = () => {
                 ⚠ {staleNote}
               </Typography>
             </Tooltip>
+          )}
+          {/* "Loaded from history — computed …" (2026-09-22, owner: a repeat
+              launch of the same parameters must say so, not solve again).
+              One line, Recompute a click away — the project's no-walls-of-
+              text rule, same shape as staleNote just above. */}
+          {!staleNote && historyNoticeFor(res) && (
+            <Typography sx={{ ...lbl, color: '#93c5fd' }}>
+              {historyNoticeFor(res)!.text}
+              {' · '}
+              <Typography component="span" onClick={recompute}
+                sx={{ ...lbl, color: '#93c5fd', textDecoration: 'underline',
+                     cursor: 'pointer' }}>
+                Recompute
+              </Typography>
+            </Typography>
           )}
           {res && (
             /* The context line: what was solved, on what, and how long it took

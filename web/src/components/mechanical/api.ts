@@ -506,6 +506,15 @@ export interface RotorStress {
   /** present only on a result the **Limit speed** button produced — see
    *  `LimitSpeedResult`. Absent on a plain Solve. */
   limit_speed?: LimitSpeedResult;
+  /* ── persistent history (2026-09-22) ──────────────────────────────────────
+     `motor_ai_sim.run_history` — "don't recompute an identical request".
+     `served_from_history` true means this answer was LOADED, not just solved
+     into the process's own session cache (`cached` covers both; this is the
+     narrower claim "and it also survived a restart"). `history_key`
+     addresses the row for `POST /api/history/{key}/load` and `?fresh=true`. */
+  served_from_history?: boolean;
+  computed_at?: string;
+  history_key?: string;
 }
 
 export interface MechMaterialsReport {
@@ -572,6 +581,8 @@ export const fetchRotorStress = (p: {
   rotor_core_temp_c?: number;
   shaft_temp_c?: number;
   contacts?: Record<string, ContactSpec>;
+  /** the Recompute button: ignore a stored history answer and solve again */
+  fresh?: boolean;
 }) => {
   const { contacts, ...rest } = p;
   return get<RotorStress>('/rotor_stress', {
@@ -626,6 +637,8 @@ export const fetchLimitSpeed = (p: {
   contacts?: Record<string, ContactSpec>;
   /** 1.0 = the rotor's structural limit; omitted = the API's own 1.0 */
   target_sf?: number;
+  /** the Recompute button: ignore a stored history answer and search again */
+  fresh?: boolean;
 }) => {
   const { contacts, ...rest } = p;
   return post<RotorStress>('/limit_speed', {

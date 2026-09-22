@@ -95,6 +95,9 @@ export type ThermView = 'temp' | 'flux' | 'grad';
  *  value of a run is read from where the user set it), the COOLING half is
  *  this tab's own. */
 export interface ThermalRequest {
+  /** the History notice's Recompute (2026-09-22): ignore a stored history
+   *  answer and solve again, even for byte-identical inputs. */
+  fresh?: boolean;
   // ── the OUTER stator surface ──────────────────────────────────────────────
   cooling_mode: CoolMode;
   /** ambient / air temperature, °C — also the temperature of the air blown
@@ -187,6 +190,11 @@ export interface ThermalField extends ThermalPayload {
   solve_time_s?: number;
   cached?: boolean;
   geometry_fingerprint?: string | null;
+  /** persistent history (2026-09-22) — see mechanical/api.ts's RotorStream
+   *  for the same three fields and why they are named this way everywhere. */
+  served_from_history?: boolean;
+  computed_at?: string;
+  history_key?: string;
 }
 
 /** The coupled EM↔thermal loop: losses raise the copper temperature, the hotter

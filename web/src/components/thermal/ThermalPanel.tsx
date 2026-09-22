@@ -24,6 +24,7 @@ import {
 
 import { useMotorStore } from '../../stores/motorStore';
 import { coolingIssue, isStale, useThermalStore } from '../../stores/thermalStore';
+import { historyNoticeFor } from '../../lib/historyNotice';
 import AddResultToCompareButton from '../compare/AddResultToCompareButton';
 import { MAX_LOCAL_ROWS, localThermalRow, partMaxLabel } from '../compare/resultRows';
 import LocalCompareTable from '../common/LocalCompareTable';
@@ -624,6 +625,7 @@ const ThermalPanel: React.FC = () => {
     : 'The geometry changed after this result was solved, so the temperatures and the picture below belong to the previous cross-section. Press Solve to recompute them for the machine currently loaded.';
 
   const solve = useCallback(() => { void solveField(); }, [solveField]);
+  const recompute = useCallback(() => { void solveField(true); }, [solveField]);
   const buildMesh = useCallback(() => { void loadGeometry(); }, [loadGeometry]);
 
   /* ── the Electromagnetic run this Solve had to make for itself ────────────
@@ -913,6 +915,19 @@ const ThermalPanel: React.FC = () => {
             <Tooltip {...TIP_PROPS} title={staleTip}>
               <Typography sx={{ ...warn, fontWeight: 700 }}>⚠ {staleNote}</Typography>
             </Tooltip>
+          )}
+          {/* "Loaded from history — computed …" (2026-09-22) — same one line
+              + Recompute as the Mechanical tab's, same shape as staleNote. */}
+          {!staleNote && historyNoticeFor(res) && (
+            <Typography sx={{ ...lbl, color: '#93c5fd' }}>
+              {historyNoticeFor(res)!.text}
+              {' · '}
+              <Typography component="span" onClick={recompute}
+                sx={{ ...lbl, color: '#93c5fd', textDecoration: 'underline',
+                     cursor: 'pointer' }}>
+                Recompute
+              </Typography>
+            </Typography>
           )}
 
           {res && (

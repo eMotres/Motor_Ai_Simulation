@@ -265,7 +265,9 @@ export interface ThermalState {
    *  called on a field edit — each build is seconds of the mesher, so it is a
    *  button. */
   loadGeometry: () => Promise<void>;
-  solveField: () => Promise<void>;
+  /** `fresh` (2026-09-22, the History notice's Recompute): ignore a stored
+   *  history answer and solve again, even for byte-identical inputs. */
+  solveField: (fresh?: boolean) => Promise<void>;
   solveCoupled: () => Promise<void>;
   /** Make ONE Electromagnetic run at a point that is NOT this tab's — the
    *  duty-cycle editor's calibration duty (2026-09-14).  Through the same
@@ -455,13 +457,15 @@ export function coolingIssue(s: CoolingInputs): string | null {
  * coupled loop's converged temperature to belong to a different boundary
  * condition than the map beside it.
  */
-function buildRequest(s: ThermalState, mesh: ThermalMeshRequest): ThermalRequest {
+function buildRequest(s: ThermalState, mesh: ThermalMeshRequest,
+                      fresh?: boolean): ThermalRequest {
   return {
     ...coolingFields(s),
     // …and the physics of the machine itself, from the Electromagnetic tab.
     ...simOperatingPoint(),
     n_periods: 1,
     ...mesh,
+    ...(fresh ? { fresh: true } : {}),
   };
 }
 
@@ -848,7 +852,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     }
   },
 
-  solveField: async () => {
+  solveField: async (fresh) => {
     const s = get();
     // Never send a boundary condition that cannot be solved (a liquid loop with
     // no pump, no cooled surface at all): the panel disables Solve on the same
@@ -861,7 +865,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     try {
       const mesh = await fetchMeshParams();
       set({ meshCfg: mesh });
-      const out = tileFullRing(await fetchThermalField(buildRequest(s, mesh)));
+      const out = tileFullRing(await fetchThermalField(buildRequest(s, mesh, fresh)));
       set({ field: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
                      backendStale: false, restoredAt: null, startedAt: null } });
       if (!out.cached) noteSecs(set, get, 'field', out.elapsed_s ?? out.solve_time_s);

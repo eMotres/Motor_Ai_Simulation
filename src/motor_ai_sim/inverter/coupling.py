@@ -371,15 +371,25 @@ class InverterVoltageSource(_ExcPwm):
             "devices_parallel": self.drop.devices_parallel,
             "topology": self.topology,
             "dead_time_us": round(self.drop.dead_time_s * 1e6, 4),
-            "r_ds_on_mohm_device": round(self.drop.r_ds_on_mohm_device, 4),
+            # DERIVED, not remembered: a source built from the four physics
+            # scalars the route carries knows the leg's resistance and the
+            # parallel count, so one device's is arithmetic.  The fields it
+            # genuinely does NOT know — the gate drive it was read at, the
+            # body-diode fit's own quality — are LEFT OUT rather than printed
+            # as 0.0; the record's `device_drop` block carries all of them,
+            # because that one is built by the module that read the card.
+            "r_ds_on_mohm_device": round(
+                self.drop.r_ds_ohm * self.drop.devices_parallel * 1e3, 4),
             "r_ds_on_mohm_leg": round(self.drop.r_ds_ohm * 1e3, 4),
             "t_j_c": round(self.drop.t_j_c, 2),
-            "v_gs_on_V": self.drop.v_gs_on_V,
-            "v_gs_off_V": self.drop.v_gs_off_V,
             "v_sd_model_V": ("%.3f + %.5g*i_leg"
                              % (self.drop.v_sd_v0_V, self.drop.v_sd_rd_ohm)),
-            "v_sd_fit_max_err_V": round(self.drop.v_sd_fit_max_err_V, 4),
-            "v_sd_fit_span_A": round(self.drop.v_sd_fit_span_A, 2),
+            **({"v_sd_fit_max_err_V": round(self.drop.v_sd_fit_max_err_V, 4),
+                "v_sd_fit_span_A": round(self.drop.v_sd_fit_span_A, 2)}
+               if self.drop.v_sd_fit_span_A > 0.0 else {}),
+            **({"v_gs_on_V": self.drop.v_gs_on_V,
+                "v_gs_off_V": self.drop.v_gs_off_V}
+               if self.drop.v_gs_on_V else {}),
             # The textbook fundamental error this dead time produces at the
             # measured leg current — the number the note quotes, so a reader
             # can size the effect without re-deriving it.

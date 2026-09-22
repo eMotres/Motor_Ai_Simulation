@@ -278,6 +278,30 @@ def test_the_source_reports_the_leg_current_it_saw():
     assert ni["device"] == "TEST"
     assert ni["dead_time_us"] == pytest.approx(0.5)
     assert "dead time" in d["pwm"]["modulator"]
+    # One device's resistance is DERIVED from the leg's and the parallel count
+    # — the source has both, so it never has to be handed the number.
+    assert ni["r_ds_on_mohm_device"] == pytest.approx(
+        drop.r_ds_ohm * drop.devices_parallel * 1e3)
+    # …and what the source does NOT know is LEFT OUT, never printed as 0.0:
+    # an unknown shown as zero is the one reporting habit this project forbids.
+    assert "v_gs_on_V" not in ni
+    assert "v_sd_fit_max_err_V" not in ni
+
+
+def test_a_source_built_from_a_full_card_still_prints_its_provenance():
+    from motor_ai_sim.inverter.devices import get_device
+    card = get_device("IMCQ120R004M2H")
+    drop = fit_device_drop(card, t_j_c=132.0, n_parallel=3,
+                           i_leg_peak_A=917.0, dead_time_s=0.5e-6)
+    src = build_inverter_source(
+        pole_pairs=5, daxis_deg=0.0, v_phase_peak=411.4, v_delta_deg=23.4,
+        v_bus_model=V_DC * math.sqrt(3.0), v_dc_real=V_DC, f_switch_hz=F_SW,
+        f_elec_hz=F_EL, drop=drop, star_delta="delta", n_parallel=1)
+    ni = src.describe({"f_elec": F_EL})["pwm"]["nonideal"]
+    assert ni["v_gs_on_V"] == 18.0
+    assert ni["v_sd_fit_max_err_V"] < 0.1
+    assert ni["r_ds_on_mohm_device"] == pytest.approx(
+        card.r_ds_on_ohm(132.0, 18.0) * 1e3, rel=1e-6)
 
 
 # ---------------------------------------------------------------------------

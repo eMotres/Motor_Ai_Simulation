@@ -21,10 +21,11 @@ same bridge with the three things a real one has:
   and the leg terminal is pulled by the CURRENT into a body diode:
   ``−V/2 − V_SD`` while the current leaves the leg, ``+V/2 + V_SD`` while it
   enters.  Over a whole carrier period that is the classic square-wave error
-  ``ΔV = −sign(i)·t_d·f_sw·(V_dc + 2·V_SD)`` — small on the fundamental (±9 V
-  on 750 V at L155 rated) and a SQUARE WAVE in the sign of the current, which
-  is why it injects 5th and 7th and why the ideal modulator cannot stand in
-  for it.
+  ``ΔV = −sign(i)·t_d·f_sw·(V_dc + 2·V_SD)`` — ±8.99 V per leg on the 750.4 V
+  link at L155 rated, i.e. 1.2 % of the link and 3.8 % of that leg's own
+  fundamental pole voltage — and a SQUARE WAVE in the sign of the current,
+  which is why it injects 5th and 7th and why the ideal modulator cannot stand
+  in for it.
 * **the current that decides both** — not an assumed sinusoid: the solver hands
   every source the PREVIOUS converged step's phase currents
   (``excitation.Feedback.i_abc``), which is the sampling delay real hardware

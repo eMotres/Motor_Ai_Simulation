@@ -556,8 +556,10 @@ Added to the ideal pole voltage, per leg, over each step:
   `ΔV = −sign(i)·t_d·f_sw·(V_dc + 2·V_SD)`.  That identity is the test, and it
   holds at 200 sub-steps per carrier AND at one step per carrier — the loss
   integral and the picture are not two opinions about one clamp.  On L155
-  rated it is **−9.80 V on a 750.4 V link**, 1.3 % of the fundamental and a
-  SQUARE wave in the sign of the current.
+  rated the solved run measures **8.99 V per leg** — 1.2 % of the 750.4 V
+  link, and 3.8 % of that leg's own fundamental pole voltage (m·V_dc/2 =
+  237.6 V) — a SQUARE wave in the sign of the leg current, so its own
+  fundamental is 4/π of it.
 
 **The delta mapping is exact, not a scaling.**  A delta machine is solved on the
 star equivalent, so the model's phase voltage IS the real line-to-line voltage:

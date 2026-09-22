@@ -4811,6 +4811,16 @@ def get_fem_transient(
         # have no business sitting in a dict key).
         ("v_bus", round(float(v_bus), 3)),
         ("f_switch", round(float(f_switch), 3)),
+        # …and on the CONTROLLER's bridge the DEVICE is physics too (Stage 2,
+        # 2026-09-22): the channel resistance, the body-diode fit and the dead
+        # time are what the dead-time clamp and the drops are built from, and
+        # R_DS(on) moves ~0.6 % per kelvin of junction temperature.  Two passes
+        # of one coupled loop differ in exactly that and in nothing else, so
+        # without it in the key the second pass would be served the first one's
+        # answer and the junction-temperature fixed point could never move.
+        # Empty on every other drive, so their keys are byte-identical to what
+        # they were before this field existed.
+        ("inverter_device", _inv_key),
         ("waveform", _wf_key),
         ("i_block", round(float(i_block), 3)),
         ("element_order", int(element_order)),

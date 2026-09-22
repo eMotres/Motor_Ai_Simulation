@@ -561,3 +561,50 @@ def test_the_ac_power_points_the_right_way_on_a_generator():
     # Generator: the AC side is the smaller one — the shaft carries them.
     assert gen["p_ac_W"] == pytest.approx(6000.0 * 0.98 / 0.02)
     assert gen["p_ac_W"] < mot["p_ac_W"]
+
+
+# ---------------------------------------------------------------------------
+# 8 · the keys — two passes of one loop are two different runs
+# ---------------------------------------------------------------------------
+
+def _key_fields(**over):
+    """The transient's own cache-key fields, read off the shipped source.
+
+    The key is built inline in `get_fem_transient` (it closes over thirty
+    locals), so the test pins the CONTRACT rather than calling it: the device's
+    four physics numbers must be in the key, and they must be empty on every
+    other drive.
+    """
+    import inspect
+    from motor_ai_sim.routes import simulation as S
+    return inspect.getsource(S.get_fem_transient)
+
+
+def test_the_device_is_in_the_run_key():
+    src = _key_fields()
+    assert '("inverter_device", _inv_key)' in src, (
+        "two passes of one coupled loop differ in R_DS(on) and in nothing "
+        "else — without the device in the key the second is served the first")
+    # …and the snapshot key carries it too, or the thermal half would read the
+    # previous pass's per-element loss map.
+    assert 'excitation=(_inv_key if _drive == "inverter"' in src
+    # It is EMPTY on every other drive, so their keys are unchanged.
+    assert '_inv_key = ""' in src
+    assert 'if _drive == "inverter":' in src
+
+
+def test_the_key_changes_with_the_junction_temperature():
+    """The same duty at two device temperatures gives two different keys."""
+    from motor_ai_sim.inverter.coupling import fit_device_drop
+    from motor_ai_sim.inverter.devices import get_device
+    card = get_device("IMCQ120R004M2H")
+
+    def key(t_j):
+        d = fit_device_drop(card, t_j_c=t_j, n_parallel=3, i_leg_peak_A=770.0,
+                            dead_time_s=0.5e-6)
+        return ("%g/%g/%g/%g/%g/%g"
+                % (V_DC, F_SW, d.r_ds_ohm, d.v_sd_v0_V, d.v_sd_rd_ohm,
+                   d.dead_time_s * 1e6))
+
+    assert key(120.0) != key(140.0)
+    assert key(132.0) == key(132.0)

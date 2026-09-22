@@ -685,6 +685,166 @@ def test_route_solves_caches_and_lists(synth_dir, monkeypatch, tmp_path):
     assert c.get("/api/controller/history").json()["entries"]
 
 
+# ---------------------------------------------------------------------------
+# p_ac_W is resolved from the duty — never typed (owner 2026-09-22 production
+# bug: "Error: p_ac_W is required" on the Controller tab, CIANO14 50 edited /
+# L15 / rated edited, whose latest coupled record is a continuous (S1) run)
+# ---------------------------------------------------------------------------
+
+_DIE, _CFG, _DUTY = "DIE", "CFG", "rated"
+
+
+def _patch_duty(monkeypatch, node, d_entry=None):
+    """Stand in for the duty store and the die config, so ``_duty_defaults``
+    resolves from a fixture instead of the filesystem."""
+    from motor_ai_sim import duty_results as dr
+    from motor_ai_sim.routes import controller as rc
+    from motor_ai_sim.routes import family as fam
+    monkeypatch.setattr(rc, "_DR", dr)             # the module already imported
+    monkeypatch.setattr(dr, "get", lambda die, cfg: {_DUTY: node})
+    monkeypatch.setattr(fam, "config_doc", lambda die, cfg: None)
+    monkeypatch.setattr(fam, "duty_entry",
+                        lambda die, cfg, duty: dict(d_entry or {}))
+
+
+def _duty_solve_body(**over):
+    """Every field NOT under test: the duty supplies the operating point."""
+    body = dict(num_slots=12, num_poles=10, single_layer=True,
+               device="SYNTH", devices_parallel=1, topology="one_3ph",
+               f_elec_hz=250.0, f_carrier_hz=20_000.0, power_factor=0.9,
+               dead_time_us=0.0,
+               cooling={"coolant": "water", "flow_lpm": 10.0, "t_in_c": 40.0,
+                        "r_override_k_w": 0.0},
+               r_tim_k_w=0.0, r_spread_k_w=0.0,
+               die=_DIE, config=_CFG, duty=_DUTY)
+    body.update(over)
+    return body
+
+
+def _solve(body):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.routes import controller as rc
+    app = FastAPI(); app.include_router(rc.router)
+    c = TestClient(app)
+    return c.post("/api/controller/solve?fresh=true", json=body)
+
+
+def test_p_ac_w_resolves_from_a_steady_coupled_record(synth_dir, monkeypatch):
+    rpm = 3000.0
+    T_Nm, P_loss_W = 12.0, 500.0
+    node = {
+        "coupled": {
+            "mode": "steady",
+            "em": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W},
+            "inverter": {"I_phase_rms_solved_A": 48.6, "star_delta": "star",
+                        "v_dc_V": 400.0},
+        },
+        "thermal": {"point": {"rpm": rpm}},
+    }
+    _patch_duty(monkeypatch, node)
+    r = _solve(_duty_solve_body())
+    assert r.status_code == 200, r.text
+    out = r.json()
+    expect = abs(T_Nm) * 2 * math.pi * rpm / 60.0 + P_loss_W
+    assert out["point"]["p_ac_W"] == pytest.approx(expect, rel=1e-4)
+    assert out["point"]["i_phase_rms_A"] == pytest.approx(48.6)
+    assert out["point"]["star_delta"] == "star"
+    assert out["em_source"] == "coupled"
+    assert "steady point" in out["solved_for"]
+    assert f"{48.6:.1f} A rms" in out["solved_for"]
+
+
+def test_p_ac_w_resolves_from_a_limited_coupled_record(synth_dir, monkeypatch):
+    rpm = 3000.0
+    T_Nm, P_loss_W = 9.0, 300.0
+    node = {
+        "coupled": {
+            "mode": "limited",
+            "em": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W},
+            "inverter": {"I_phase_rms_solved_A": 35.0, "star_delta": "delta",
+                        "v_dc_V": 400.0},
+        },
+        "thermal": {"point": {"rpm": rpm}},
+    }
+    _patch_duty(monkeypatch, node)
+    r = _solve(_duty_solve_body())
+    assert r.status_code == 200, r.text
+    out = r.json()
+    expect = abs(T_Nm) * 2 * math.pi * rpm / 60.0 + P_loss_W
+    assert out["point"]["p_ac_W"] == pytest.approx(expect, rel=1e-4)
+    assert out["point"]["i_phase_rms_A"] == pytest.approx(35.0)
+    assert out["point"]["star_delta"] == "delta"
+    assert "point at the limit" in out["solved_for"]
+
+
+def test_p_ac_w_resolves_from_the_s1_verified_record(synth_dir, monkeypatch):
+    """The continuous (S1) rating REPLACES the coupled record's own ``em``
+    with the S1 machine (``continuous_rating.record_is_s1``).  The current and
+    the power must both come off THAT machine — never the setpoint's."""
+    rpm = 3000.0
+    T_Nm, P_loss_W = 6.0, 90.0
+    node = {
+        "coupled": {
+            "mode": "limited",
+            "continuous_rating": {"record_is_s1": True},
+            "em": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W},
+            "inverter": {"I_phase_rms_solved_A": 48.6, "star_delta": "star",
+                        "v_dc_V": 400.0},
+        },
+        "thermal": {"point": {"rpm": rpm}},
+    }
+    _patch_duty(monkeypatch, node)
+    r = _solve(_duty_solve_body())
+    assert r.status_code == 200, r.text
+    out = r.json()
+    expect = abs(T_Nm) * 2 * math.pi * rpm / 60.0 + P_loss_W
+    assert out["point"]["p_ac_W"] == pytest.approx(expect, rel=1e-4)
+    assert out["point"]["i_phase_rms_A"] == pytest.approx(48.6)
+    assert out["em_source"] == "coupled"
+    assert "S1 point" in out["solved_for"]
+    assert f"{48.6:.1f} A rms" in out["solved_for"]
+    assert f"{expect / 1000.0:.2f} kW" in out["solved_for"]
+
+
+def test_p_ac_w_resolves_from_a_plain_em_record(synth_dir, monkeypatch):
+    """No coupled loop at all: a standalone Simulation run, read off the
+    duty's own ``summary`` in the configuration yaml."""
+    rpm = 3000.0
+    T_Nm, P_loss_W, I1 = 10.0, 400.0, 40.0
+    node = {}                                       # no duty_results entry
+    d_entry = {"name": _DUTY, "mode": "motor", "rpm": rpm,
+              "summary": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W,
+                          "I1_phase_rms_A": I1, "star_delta": "delta"}}
+    _patch_duty(monkeypatch, node, d_entry)
+    # A standalone solve names no bridge at all — the bus is the one thing a
+    # plain EM record cannot answer for, so it is given directly here (the
+    # panel's "DC link" box), unlike a coupled duty's own ``inverter.v_dc_V``.
+    r = _solve(_duty_solve_body(v_dc_V=400.0))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    expect = abs(T_Nm) * 2 * math.pi * rpm / 60.0 + P_loss_W
+    assert out["point"]["p_ac_W"] == pytest.approx(expect, rel=1e-4)
+    assert out["point"]["i_phase_rms_A"] == pytest.approx(I1)
+    assert out["point"]["star_delta"] == "delta"
+    assert out["em_source"] == "standalone"
+    assert "standalone electromagnetic solve" in out["solved_for"]
+
+
+def test_missing_duty_record_refuses_with_the_plain_sentence(synth_dir, monkeypatch):
+    """A duty nobody has solved yet: never the physics module's raw
+    "p_ac_W is required" — one sentence that says what to do."""
+    _patch_duty(monkeypatch, {}, {})
+    r = _solve(_duty_solve_body())
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "no_duty_record"
+    assert detail["message"] == (
+        "run the Simulation/coupled solve for this duty first — the "
+        "controller needs its electrical input power and phase current")
+    assert "p_ac_W" in detail["fields"] and "i_phase_rms_A" in detail["fields"]
+
+
 def test_route_refuses_an_unwireable_mapping(synth_dir):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

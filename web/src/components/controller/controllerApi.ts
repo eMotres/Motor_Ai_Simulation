@@ -107,6 +107,17 @@ export interface ControllerResult {
   served_from_history?: boolean;
   computed_at?: string;
   elapsed_s?: number;
+  /** Which point of the duty this answer is for — e.g. "solved for the S1
+   * point: 48.6 A rms · 1.99 kW in".  The backend resolves ``p_ac_W`` (never
+   * typed by anyone) from the duty's own electromagnetic record, and a
+   * continuous (S1) rating REPLACES that record's numbers with the verified
+   * S1 machine — this line is what tells the tab (and the owner) which
+   * machine the tiles below actually describe. ``null`` when the duty has no
+   * electromagnetic answer at all (the solve was refused instead). */
+  solved_for?: string | null;
+  /** ``"coupled" | "pwm" | "standalone" | "none"`` — where the point above
+   * was read from (:func:`report.duty_em_source`'s own vocabulary). */
+  em_source?: string | null;
 }
 
 async function j<T>(r: Response): Promise<T> {
@@ -190,3 +201,21 @@ export const fmt = (v: any, digits = 1, dash = '—'): string =>
 
 export const pct = (v: any, digits = 2): string =>
   (v === null || v === undefined) ? '—' : `${(Number(v) * 100).toFixed(digits)} %`;
+
+/**
+ * The tab's one status line, above the tiles.
+ *
+ * An error ALWAYS wins — the plain sentence the route sends (never a raw
+ * validation error; the 422 for a duty with no electromagnetic record reads
+ * "run the Simulation/coupled solve for this duty first…").  Otherwise, once
+ * something has solved, it names which point of the duty the numbers below
+ * are for — e.g. "solved for the S1 point: 48.6 A rms · 1.99 kW in" — because
+ * a continuous (S1) rating REPLACES the coupled record's own machine with the
+ * verified S1 one, and tiles with no such line would read like a plain solve
+ * of whatever was last typed on the Simulation tab.  `null` before the first
+ * solve, when there is nothing to say yet.
+ */
+export function statusLine(res: ControllerResult | null, err: string | null): string | null {
+  if (err) return err;
+  return res?.solved_for || null;
+}

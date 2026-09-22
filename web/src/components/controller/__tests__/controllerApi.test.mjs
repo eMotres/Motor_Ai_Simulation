@@ -41,6 +41,11 @@ const fmt = (v, digits = 1, dash = '—') =>
 const pct = (v, digits = 2) =>
   (v === null || v === undefined) ? '—' : `${(Number(v) * 100).toFixed(digits)} %`;
 
+function statusLine(res, err) {
+  if (err) return err;
+  return res?.solved_for || null;
+}
+
 /* ── polyline ────────────────────────────────────────────────────────────── */
 
 test('polyline spans the full width and inverts y for SVG', () => {
@@ -96,4 +101,26 @@ test('pct is a fraction turned into per cent', () => {
   assert.equal(pct(0.99045), '99.05 %');
   assert.equal(pct(1), '100.00 %');
   assert.equal(pct(0.9771, 3), '97.710 %');
+});
+
+/* ── statusLine ──────────────────────────────────────────────────────────── */
+// Owner 2026-09-22 production bug: "Error: p_ac_W is required" with no clue
+// where to type it. The backend now refuses with one plain sentence instead,
+// and a successful solve says which point of the duty it is FOR (the S1
+// point beats out the setpoint that was typed on the Simulation tab).
+
+test('an error always wins the status line, even with a stale solved_for', () => {
+  const res = { solved_for: 'solved for the duty’s steady point: 10.0 A rms · 1.00 kW in' };
+  assert.equal(statusLine(res, 'run the Simulation/coupled solve for this duty first'),
+    'run the Simulation/coupled solve for this duty first');
+});
+
+test('a solved duty prints which point it was solved for', () => {
+  const res = { solved_for: 'solved for the S1 point: 48.6 A rms · 1.99 kW in' };
+  assert.equal(statusLine(res, null), 'solved for the S1 point: 48.6 A rms · 1.99 kW in');
+});
+
+test('nothing solved yet and no error is a blank status line, never "null"', () => {
+  assert.equal(statusLine(null, null), null);
+  assert.equal(statusLine({}, null), null);
 });

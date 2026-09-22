@@ -27,7 +27,7 @@ import type { LocalRow } from '../compare/resultRows';
 import { CONTROLLER_COMPARE_COLUMNS, localControllerRow,
          controllerRowName } from './compareRows';
 import { listDevices, getTopologies, solveController, getLast, postSchematic,
-         polyline, fmt, pct,
+         polyline, fmt, pct, statusLine,
          type DeviceRow, type CoilRow, type ControllerResult } from './controllerApi';
 
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
@@ -199,7 +199,13 @@ const ControllerPanel: React.FC = () => {
           + Add to comparison</Button>
       </Box>
 
-      {err && <Alert severity="error" sx={{ mb: 1.5, fontSize: 12.5 }}>{err}</Alert>}
+      {/* ONE status line: the plain-English refusal when the duty has no
+          electromagnetic answer yet, otherwise which point of the duty this
+          solve is FOR — the S1-verified machine, a limit crossing, or the
+          duty's steady point — never silent about which numbers are below. */}
+      {statusLine(res, err) && (err
+        ? <Alert severity="error" sx={{ mb: 1.5, fontSize: 12.5 }}>{statusLine(res, err)}</Alert>
+        : <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mb: 1 }}>{statusLine(res, err)}</Typography>)}
       {res?.violations?.map((v, i) => (
         <Alert key={i} severity="error" sx={{ mb: 1, fontSize: 12.5 }}>{v}</Alert>))}
       {res?.warnings?.map((w, i) => (

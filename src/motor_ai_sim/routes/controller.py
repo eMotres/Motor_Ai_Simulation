@@ -102,6 +102,39 @@ def _live_machine(body: Dict[str, Any]) -> Dict[str, Any]:
     return {"values": out, "sources": src, "winding": wnd}
 
 
+def _num(v: Any) -> Optional[float]:
+    try:
+        if v is None:
+            return None
+        x = float(v)
+        return None if (math.isnan(x) or math.isinf(x)) else x
+    except (TypeError, ValueError):
+        return None
+
+
+def _point_label(coupled: Dict[str, Any], kind: str) -> str:
+    """What the resolved point is called, for the tab's header line.
+
+    Owner 2026-09-22 (production, CIANO14 50 edited / L15 / rated edited): the
+    S1-verified continuous rating REPLACES the coupled record's own ``em`` with
+    the S1 machine (``continuous_rating.record_is_s1``) — a controller solved
+    from it must say so, never "solved for the duty" as if it were the
+    setpoint that was typed on the Simulation tab.
+    """
+    if kind == "coupled":
+        cr = coupled.get("continuous_rating") or {}
+        if isinstance(cr, dict) and cr.get("record_is_s1"):
+            return "the S1 point"
+        if coupled.get("mode") == "limited":
+            return "the point at the limit"
+        return "the duty's steady point"
+    if kind == "pwm":
+        return "the PWM run"
+    if kind == "standalone":
+        return "the standalone electromagnetic solve"
+    return "the duty"
+
+
 def _duty_defaults(die: Optional[str], cfg: Optional[str],
                    duty: Optional[str]) -> Dict[str, Any]:
     """The duty's own operating point and inverter block, or ``{}``.
@@ -112,36 +145,81 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
     phase current is taken from the coupled record's
     ``inverter.I_phase_rms_solved_A`` when it is there and derived otherwise —
     and which of the two it was is reported.
+
+    ``p_ac_W`` — the inverter's AC OUTPUT power, i.e. the motor's electrical
+    INPUT power — is never typed by anyone (owner 2026-09-22: «не пойму, куда
+    это записывать»).  It is resolved through :func:`report.duty_em_source`
+    (the SAME lookup a report page uses: a coupled record whatever state it is
+    in — steady, at a limit, or the S1-verified machine a ``solve_to:
+    continuous`` run replaced it with — a PWM run, or a plain standalone
+    electromagnetic solve) and :func:`report.shaft_view` (the SAME formula
+    every table of this document prints: ``P_elec = P_rotor + P_loss_em`` for a
+    motor), so a report and this tab can never print two different inputs for
+    one duty.  The OLD formula here required the mechanical/bearing block
+    (``efficiency_shaft`` + ``P_loss_total_incl_mech_W``) to exist, which is
+    absent on a machine with no bearings assigned or a background pass — and
+    ``p_ac_W`` does not need a bearing at all, only the rotor power and the
+    electromagnetic loss.  The current and the power are read off this SAME
+    resolved record — never the coupled record's power beside the Simulation
+    tab's setpoint current, which is the mismatch the owner's screenshot showed
+    on 2026-09-21.
     """
     if not (die and cfg and duty):
         ctx = _DR.active_context()
         if not ctx:
             return {}
         die, cfg, duty = ctx
+    die, cfg, duty = str(die), str(cfg), str(duty)
     try:
-        node = (_DR.get(str(die), str(cfg)) or {}).get(str(duty)) or {}
+        node = (_DR.get(die, cfg) or {}).get(duty) or {}
     except Exception:                                       # noqa: BLE001
-        return {}
-    if not isinstance(node, dict) or not node:
-        return {}
+        node = {}
+    if not isinstance(node, dict):
+        node = {}
+
+    try:
+        from motor_ai_sim.routes import family as _fam
+        cfg_doc = _fam.config_doc(die, cfg)
+        d_entry = _fam.duty_entry(die, cfg, duty)
+    except Exception:                                       # noqa: BLE001
+        cfg_doc, d_entry = None, None
+    d_entry = d_entry if isinstance(d_entry, dict) else {}
+
+    try:
+        from motor_ai_sim import report as _R
+        em_src = _R.duty_em_source(die, cfg, duty, cfg_doc, d=d_entry, res=node)
+    except Exception:                                       # noqa: BLE001
+        em_src = {"em": {}, "kind": "none", "inverter": {}}
+    em: Dict[str, Any] = em_src.get("em") or {}
+    kind = str(em_src.get("kind") or "none")
+
+    out: Dict[str, Any] = {"die": die, "config": cfg, "duty": duty,
+                           "em_source": kind}
+    src: Dict[str, str] = {}
+    if kind == "none":
+        out["_sources"] = src
+        return out
+
     coupled = node.get("coupled") if isinstance(node.get("coupled"), dict) else {}
     thermal = node.get("thermal") if isinstance(node.get("thermal"), dict) else {}
-    inv = (coupled.get("inverter") or thermal.get("inverter") or {})
+    inv = em_src.get("inverter") or coupled.get("inverter") or thermal.get("inverter") or {}
     point = thermal.get("point") or {}
-    em = coupled.get("em") or {}
-    out: Dict[str, Any] = {"die": die, "config": cfg, "duty": duty}
-    src: Dict[str, str] = {}
+    where = f"the duty's {kind} record" if kind != "coupled" else "the duty's coupled record"
 
-    sd = str(inv.get("star_delta") or "star").lower()
+    sd = str(inv.get("star_delta") or em.get("star_delta") or "star").lower()
     out["star_delta"] = sd
-    src["star_delta"] = "the duty's coupled record"
+    src["star_delta"] = where
 
-    i_solved = inv.get("I_phase_rms_solved_A")
+    # THE CURRENT: the SAME record ``em`` (and its ``inverter`` block, when
+    # there is one) that ``p_ac_W`` below is read from — never mixed with the
+    # Simulation tab's setpoint (``thermal.point``), which is a DIFFERENT
+    # record on a run that moved off it (e.g. the S1-verified machine).
+    i_solved = (inv.get("I_phase_rms_solved_A") or em.get("I_phase_rms_solved_A")
+               or em.get("I1_phase_rms_A") or em.get("I_phase_rms_A"))
     if i_solved is not None:
         out["i_phase_rms_A"] = float(i_solved)
-        src["i_phase_rms_A"] = ("the duty's coupled record "
-                                "(inverter.I_phase_rms_solved_A — the current "
-                                "the machine actually drew)")
+        src["i_phase_rms_A"] = (f"{where} (the current the machine actually "
+                                f"drew, from {_point_label(coupled, kind)})")
     elif point.get("I_phase_rms") is not None:
         raw = float(point["I_phase_rms"])
         out["i_phase_rms_A"] = raw / math.sqrt(3.0) if sd == "delta" else raw
@@ -150,18 +228,18 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
             "current, so it was divided by sqrt(3))" if sd == "delta"
             else "the duty's point")
 
-    for k_out, k_in, where in (("v_dc_V", "v_dc_V", "the duty's inverter block"),
-                               ("f_carrier_hz", "f_carrier_hz",
-                                "the duty's inverter block"),
-                               ("modulation_index", "m",
-                                "the duty's inverter block (the modulator's own "
-                                "ratio; it transfers unchanged to the real "
-                                "bridge)")):
+    for k_out, k_in, w in (("v_dc_V", "v_dc_V", "the duty's inverter block"),
+                           ("f_carrier_hz", "f_carrier_hz",
+                            "the duty's inverter block"),
+                           ("modulation_index", "m",
+                            "the duty's inverter block (the modulator's own "
+                            "ratio; it transfers unchanged to the real "
+                            "bridge)")):
         if inv.get(k_in) is not None:
             out[k_out] = float(inv[k_in])
-            src[k_out] = where
+            src[k_out] = w
 
-    rpm = point.get("rpm")
+    rpm = _num(point.get("rpm")) or _num(d_entry.get("rpm")) or _num(em.get("rpm"))
     if rpm is not None:
         out["rpm"] = float(rpm)
         src["rpm"] = "the duty's point"
@@ -173,20 +251,41 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
         except Exception:                                   # noqa: BLE001
             pass
 
+    # THE POWER: rotor power (from the SAME em block, deriving it off the
+    # torque exactly as the report's headline does when the record carries no
+    # ``P_mech_W`` of its own) plus the electromagnetic loss —
+    # ``report.shaft_view``'s ``P_elec_W``, motor-side.  No bearing block is
+    # needed for this number; only ``efficiency_shaft`` (below) is.
+    mode = ("generator" if str(d_entry.get("mode")
+                              or em.get("op_mode") or "").lower().startswith("gen")
+           else "motor")
+    t2d = _num(em.get("T_em_avg_Nm"))
+    p_mech = _num(em.get("P_mech_W"))
+    if p_mech is None and t2d is not None and rpm:
+        p_mech = abs(t2d) * 2.0 * math.pi * float(rpm) / 60.0
+    sv = _R.shaft_view({**em, "P_mech_W": p_mech} if p_mech is not None else em,
+                       None, mode)
+    if sv.get("P_elec_W") is not None:
+        out["p_ac_W"] = float(sv["P_elec_W"])
+        src["p_ac_W"] = (f"{where}: report.shaft_view's P_elec_W (rotor power "
+                         f"plus the electromagnetic loss) at {_point_label(coupled, kind)} "
+                         "— the motor's electrical input power")
+    if t2d is not None:
+        out["torque_Nm"] = t2d
+
+    # ``efficiency_shaft`` rides ALONGSIDE, for the wall-to-shaft column — but
+    # ``p_ac_W`` above never depends on it existing.
     eta = coupled.get("efficiency_shaft")
-    p_loss = coupled.get("P_loss_total_incl_mech_W")
     if eta is not None:
         out["efficiency_shaft"] = float(eta)
         src["efficiency_shaft"] = ("the duty's coupled record — the ONE shaft "
                                    "efficiency, not recomputed here")
-        if p_loss is not None and 0.0 < float(eta) < 1.0:
-            p_shaft = float(p_loss) * float(eta) / (1.0 - float(eta))
-            out["p_shaft_W"] = p_shaft
-            out["p_ac_W"] = p_shaft + float(p_loss)
-            src["p_ac_W"] = ("the duty's coupled record: P_shaft / eta_shaft "
-                             "(shaft power plus every motor loss)")
-    if em.get("T_em_avg_Nm") is not None:
-        out["torque_Nm"] = float(em["T_em_avg_Nm"])
+
+    if out.get("i_phase_rms_A") is not None and out.get("p_ac_W") is not None:
+        out["solved_for_line"] = (
+            f"solved for {_point_label(coupled, kind)}: "
+            f"{out['i_phase_rms_A']:.1f} A rms · "
+            f"{out['p_ac_W'] / 1000.0:.2f} kW in")
     out["_sources"] = src
     return out
 
@@ -472,6 +571,11 @@ def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]
     if duty.get("die"):
         req["_context"] = {"die": duty["die"], "config": duty["config"],
                            "duty": duty["duty"]}
+    # WHICH POINT this solve is for, and whether the duty has an answer at all
+    # — the route uses the second to decide between solving and refusing with
+    # the plain-English sentence (never the raw "p_ac_W is required").
+    req["_solved_for"] = duty.get("solved_for_line")
+    req["_em_source"] = duty.get("em_source")
     return req, sources
 
 
@@ -488,6 +592,19 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
     t0 = time.time()
     req, sources = _build_request(body or {})
     ctx = req.pop("_context", None)
+    solved_for = req.pop("_solved_for", None)
+    em_source = req.pop("_em_source", None)
+    # ``p_ac_W`` is never typed by anyone (owner 2026-09-22): the route
+    # resolves it, together with the phase current, from the duty's own
+    # electromagnetic record.  A duty with no such record gets ONE plain
+    # sentence here — never the physics module's raw "p_ac_W is required",
+    # which the panel would otherwise show as its status line with no way for
+    # the owner to know what to do about it.
+    if req.get("p_ac_W") is None or req.get("i_phase_rms_A") is None:
+        raise _refuse(
+            "run the Simulation/coupled solve for this duty first — the "
+            "controller needs its electrical input power and phase current",
+            ["p_ac_W", "i_phase_rms_A"], code="no_duty_record")
     key = _history_key(req)
 
     if not fresh:
@@ -510,6 +627,11 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
 
     out["sources"] = sources
     out["context"] = ctx
+    # WHICH POINT this answer is for — printed as the tab's header line so a
+    # run that used the S1-verified machine (or one at a limit) never reads
+    # like a plain solve of the setpoint that was typed on the Simulation tab.
+    out["solved_for"] = solved_for
+    out["em_source"] = em_source
     out["elapsed_s"] = round(time.time() - t0, 3)
     out["history_key"] = key
     out["cached"] = False

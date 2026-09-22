@@ -10,6 +10,7 @@ Infineon card could only ever compare the code with itself.
 from __future__ import annotations
 
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -485,6 +486,42 @@ def test_schematic_draws_the_winding_the_duty_is_wound_as(sd, marker, absent):
     svg = sc.schematic_svg(t)
     assert marker in svg
     assert absent not in svg
+
+
+@pytest.mark.parametrize("sd", ["star", "delta"])
+@pytest.mark.parametrize("slots,poles", [(12, 10), (12, 14)])
+def test_the_three_terminals_sit_120_degrees_apart(sd, slots, poles):
+    """The textbook symbols, and the reason the phase lines do not cross.
+
+    Owner 2026-09-22, on the first two attempts: *«я бы повернул и треугольник,
+    и звезду на 60 градусов»*, then *«нарисуй нормальную звезду»*.  What both
+    corrections come down to is one property, and it is the one pinned here:
+    the three terminals are 120 degrees apart — an equilateral triangle, or a
+    Y of three equal arms — placed upper-left, lower-left and right, so L1 and
+    L2 arrive straight and L3 is taken under.
+    """
+    import math
+    from motor_ai_sim.inverter.schematic import MOTOR_R
+    coils = tp.coils_from_winding(slots, poles)
+    t = tp.build_topology(preset="one_3ph", coils=coils, star_delta=sd)
+    svg = sc.schematic_svg(t)
+    # The terminal dots are the r="2.4" circles.
+    # (the SVG rounds every coordinate to 0.1 px, hence the absolute
+    # tolerances below)
+    pts = [(float(x), float(y)) for x, y in
+           re.findall(r'<circle cx="([-\d.]+)" cy="([-\d.]+)" r="2.4"', svg)]
+    assert len(pts) == 3, "three terminals, one per leg"
+    cx = sum(p[0] for p in pts) / 3.0
+    cy = sum(p[1] for p in pts) / 3.0
+    radii = [math.hypot(x - cx, y - cy) for x, y in pts]
+    for r in radii:
+        assert r == pytest.approx(MOTOR_R, abs=0.2), "equal arms / equal sides"
+    angles = sorted(math.degrees(math.atan2(cy - y, x - cx)) % 360.0
+                    for x, y in pts)
+    assert angles == pytest.approx([0.0, 120.0, 240.0], abs=0.3)
+    # …and the coil labels are beside the terminals, one per leg.
+    for lbl in ("L1 ", "L2 ", "L3 "):
+        assert lbl in svg
 
 
 def test_per_bridge_parallel_counts_override_the_common_one():

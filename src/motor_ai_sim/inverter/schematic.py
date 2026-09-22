@@ -204,50 +204,74 @@ MOTOR_R = 48.0
 
 def _three_phase_motor(blk: Dict[str, Any], x_bridge_end: float,
                        label_of: Dict[int, str]) -> List[str]:
-    """Wire this bridge's three legs to a drawn star or delta.
+    """Wire this bridge's three legs to a drawn star or delta — NO CROSSINGS.
 
-    The three vertices sit at 90°, 210° and 330° — top, lower-left,
-    lower-right — because the legs come in from the left at three heights and
-    that is the arrangement whose routing needs no wire through the symbol.
+    Owner, 2026-09-22, on the first version (one vertex at the top, the other
+    two below it): *«я бы повернул и треугольник, и звезду на 60 градусов,
+    тогда линии фаз не пересекались бы»*.  He is right, and the rule behind it
+    is the one this function now keeps: **the terminals must appear in the same
+    top-to-bottom order as the legs that feed them.**  The legs leave the
+    bridge stacked L1 / L2 / L3, so:
+
+    Both symbols are the TEXTBOOK ones and they share one terminal geometry —
+    three points 120° apart at 120° / 240° / 0°, i.e. upper-left, lower-left
+    and right (owner, on the first star: *«нарисуй нормальную звезду»* — three
+    identical windings at 120°, equal arms, meeting at N in the centre).
+
+    ``star``   three equal arms from the neutral N at the centre to those
+               three points, a winding on each.
+    ``delta``  the equilateral triangle on the same three points, a winding on
+               each side, terminals at the vertices.
+
+    The feeders then need no crossing: L1 goes straight to the upper-left
+    terminal, L2 straight to the lower-left one, and L3 — already the lowest
+    wire — is taken UNDER the symbol and up into the right terminal, so it
+    meets neither another feeder nor a winding.
     """
     import math
     nodes = blk["nodes"]
     b = blk["bridge"]
     y_mid = blk["y_mid"]
     x_gather = x_bridge_end + 34
-    cx = x_gather + MOTOR_R + 46
+    cx = x_gather + MOTOR_R + 52
     cy = y_mid
-    v = [(cx + MOTOR_R * math.cos(math.radians(a)),
-          cy - MOTOR_R * math.sin(math.radians(a))) for a in (90.0, 210.0, 330.0)]
-
+    R = MOTOR_R
     out: List[str] = []
-    # ── the three feeders: right to the gather line, then straight to the
-    #    vertex.  One diagonal beats three orthogonal doglegs round a symbol
-    #    that is itself a triangle.
+
+    #: The three terminals, 120° apart: upper-left, lower-left, right.
+    term = [(cx + R * math.cos(math.radians(a)),
+             cy - R * math.sin(math.radians(a))) for a in (120.0, 240.0, 0.0)]
+    y_under = cy + 1.5 * R               # clear of the symbol and of L2's label
+
     for i, nd in enumerate(nodes[:3]):
         y_out = y_mid - OUT_DY + i * OUT_DY
         if abs(y_out - nd["y"]) > 0.5:
             out.append(_line(nd["x"], nd["y"], nd["x"], y_out))
-        tx, ty = v[i]
-        out += [_line(nd["x"], y_out, x_gather, y_out),
-                _line(x_gather, y_out, tx, ty),
-                _dot(tx, ty, 2.4)]
-        out.append(_text(tx + (0 if i == 0 else (-8 if i == 1 else 8)),
-                         ty + (-9 if i == 0 else 15),
+        out.append(_line(nd["x"], y_out, x_gather, y_out))
+        tx, ty = term[i]
+        if i < 2:
+            out.append(_line(x_gather, y_out, tx, ty))
+        else:
+            out += [_line(x_gather, y_out, x_gather, y_under),
+                    _line(x_gather, y_under, tx, y_under),
+                    _line(tx, y_under, tx, ty)]
+        out.append(_dot(tx, ty, 2.4))
+        dx, dy, anchor = ((-7.0, -9.0, "end") if i == 0 else
+                          (-7.0, 16.0, "end") if i == 1 else
+                          (10.0, 3.5, "start"))
+        out.append(_text(tx + dx, ty + dy,
                          ", ".join(label_of.get(c, str(c)) for c in nd["coils"]),
-                         8.5, "500",
-                         anchor=("middle" if i == 0 else
-                                 "end" if i == 1 else "start")))
+                         8.5, "500", anchor=anchor))
 
-    # ── the winding itself ─────────────────────────────────────────────────
     if b.connection == "delta":
         for a, bb in ((0, 1), (1, 2), (2, 0)):
-            out += _coil_seg(v[a][0], v[a][1], v[bb][0], v[bb][1])
-        out.append(_text(cx, cy + 5, "Δ", 13, "700", 0.85, anchor="middle"))
+            out += _coil_seg(term[a][0], term[a][1], term[bb][0], term[bb][1])
+        out.append(_text(cx - 0.12 * R, cy + 4.5, "Δ", 13, "700", 0.85,
+                         anchor="middle"))
     else:
-        for x, y in v:
-            out += _coil_seg(cx, cy, x, y)
-        out += [_dot(cx, cy, 3.2), _text(cx + 8, cy - 8, "N", 9, "600")]
+        for tx, ty in term:
+            out += _coil_seg(cx, cy, tx, ty)
+        out += [_dot(cx, cy, 3.2), _text(cx + 7, cy + 12, "N", 9, "600")]
     return out
 
 

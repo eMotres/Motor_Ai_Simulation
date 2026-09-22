@@ -440,8 +440,17 @@ def test_the_record_carries_the_excitation_and_the_passes():
     for k in ("losses", "thermal", "efficiency", "limits", "bridges", "point",
               "device_row", "provenance", "settings"):
         assert k in rec, k
-    # …and the waveform arrays are NOT in a record.
+    # …and the waveform arrays are NOT in a record — only their summary.
     assert "waveforms" not in rec
+    ws = rec["waveform_summary"]
+    assert ws["dead_time_us"] == pytest.approx(0.5)
+    assert ws["f_elec_hz"] == pytest.approx(1183.33, abs=0.5)
+    assert ws["dead_time_error_V"] > 0.0
+    # One rms per COIL: six on this winding, and they must all be there.
+    assert set(ws["v_coil_rms_V"]) == {"1", "2", "3", "4", "5", "6"}
+    assert all(v is not None for v in ws["v_coil_rms_V"].values())
+    assert set(ws["i_coil_rms_A"]) == set(ws["v_coil_rms_V"])
+    assert not any(isinstance(v, list) for v in ws.values())
     assert rec["efficiency"]["wall_to_shaft"] is not None
 
 

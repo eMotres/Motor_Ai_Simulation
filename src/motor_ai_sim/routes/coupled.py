@@ -2405,7 +2405,29 @@ class _ControllerLoop:
         still was, and the excitation the machine was really fed.
         """
         out = dict(self.solve or {})
+        # THE WAVEFORM, AS A SUMMARY.  The arrays themselves are a thousand
+        # samples per coil and a record is not the place for them (the
+        # Controller tab draws them live from its own solve); what a reader of
+        # this record needs is the shape's own numbers — the grid it was drawn
+        # on, the dead-time error it carries, and one rms per coil, which is
+        # the quantity that says whether the six coils see the same volts.
+        _wf = (self.solve or {}).get("waveforms")
         out.pop("waveforms", None)
+        if isinstance(_wf, dict):
+            out["waveform_summary"] = {
+                k: _wf.get(k) for k in
+                ("f_elec_hz", "f_carrier_eff_hz", "dead_time_us", "samples",
+                 "dead_time_error_V") if _wf.get(k) is not None}
+            out["waveform_summary"]["v_coil_rms_V"] = {
+                str(c): (v or {}).get("v_rms_V")
+                for c, v in sorted((_wf.get("coils") or {}).items())}
+            out["waveform_summary"]["i_coil_rms_A"] = {
+                str(c): (v or {}).get("i_rms_A")
+                for c, v in sorted((_wf.get("coils") or {}).items())}
+            out["waveform_summary"]["note"] = (
+                "the Controller module's own picture of what the bridge "
+                "applies, at THIS pass's device temperature; the machine was "
+                "marched on the same clamp through the excitation block below")
         nonideal = {}
         pwm = em.get("pwm") if isinstance(em.get("pwm"), dict) else {}
         if not pwm:

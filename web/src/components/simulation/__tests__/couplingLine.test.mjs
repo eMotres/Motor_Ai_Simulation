@@ -42,8 +42,20 @@ function couplingLine(c) {
           ? `${c.iterations} it.` : `${c.iterations} it. · at the limit`)
       : `${c.iterations} it.${c.converged ? '' : ' ⚠'}`,
     regimeTerm(c.duty_cycle),
+    controllerTerm(c.controller),
     mechNote]
     .filter(Boolean).join(' · ');
+}
+
+function controllerTerm(ctl) {
+  if (!ctl) return null;
+  const tj = ctl.t_j_c ?? ctl.thermal?.t_j_max_c;
+  const wts = ctl.efficiency?.wall_to_shaft;
+  const bits = [];
+  if (tj != null) bits.push(`T_j ${Number(tj).toFixed(0)} °C`);
+  if (wts != null) bits.push(`η wall-to-shaft ${(Number(wts) * 100).toFixed(2)} %`);
+  if (ctl.limits_verdict === 'fail') bits.push('datasheet limits ⚠');
+  return bits.length ? bits.join(' · ') : null;
 }
 
 function regimeTerm(r) {
@@ -282,6 +294,35 @@ test('a record limited by another part keeps the words on the iteration term', (
   assert.ok(line.endsWith('2 it. · at the limit'), line);
   assert.ok(!line.includes('(at the limit)'), line);
   assert.ok(!line.includes('⚠'), line);
+});
+
+// ── the CONTROLLER's own two numbers (Stage 2, 2026-09-22) ─────────────────
+// The machine keeps ONE efficiency and it is the shaft's; the drive's is a
+// DIFFERENT quantity — DC link in, shaft out — so it is named in full on this
+// line rather than shown beside the first under the same word.  And it must be
+// absent on every sine and ideal-PWM record, which is what "nothing else
+// changed" has to look like here.
+test('a controller run names its junction temperature and wall-to-shaft', () => {
+  const base = { coil_temp_c: 189.9, magnet_temp_c: 150.2, iterations: 2,
+                 converged: true };
+  assert.equal(controllerTerm(null), null);
+  assert.equal(controllerTerm(undefined), null);
+  assert.ok(!couplingLine(base).includes('wall-to-shaft'));
+  const ctl = { ...base, controller: {
+    device: 'IMCQ120R004M2H', t_j_c: 132.4,
+    efficiency: { inverter: 0.985, shaft: 0.9771, wall_to_shaft: 0.96242 },
+    limits_verdict: 'pass' } };
+  const line = couplingLine(ctl);
+  assert.ok(line.includes('T_j 132 °C'), line);
+  assert.ok(line.includes('η wall-to-shaft 96.24 %'), line);
+  assert.ok(!line.includes('⚠'), line);
+  // A device outside its datasheet must say so on the line people read.
+  const bad = { ...ctl, controller: { ...ctl.controller,
+                                      limits_verdict: 'fail' } };
+  assert.ok(couplingLine(bad).includes('datasheet limits ⚠'));
+  // T_j alone, with no efficiency yet, still prints — half an answer is not
+  // no answer.
+  assert.equal(controllerTerm({ thermal: { t_j_max_c: 164 } }), 'T_j 164 °C');
 });
 
 test('the shipped source prints the same words', () => {

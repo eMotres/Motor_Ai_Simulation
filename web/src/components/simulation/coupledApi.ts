@@ -83,6 +83,21 @@ export interface CouplingBlock {
   P_mech_extra_W?: number;
   P_loss_total_incl_mech_W?: number;
   efficiency_shaft?: number;
+  /** THE CONTROLLER (Stage 2, 2026-09-22).  Present exactly when this run was
+   *  made on `drive: "inverter"` — the machine fed the controller's own
+   *  waveform, and the devices solved on the current it produced.  Loosely
+   *  typed on purpose, as `mechanical` is: the Controller tab and the report
+   *  hold the full answer, this is the line. */
+  controller?: {
+    device?: string;
+    t_j_c?: number;
+    losses?: { total_W?: number | null };
+    efficiency?: { inverter?: number | null; shaft?: number | null;
+                   wall_to_shaft?: number | null };
+    thermal?: { t_j_max_c?: number | null; margin_K?: number | null };
+    limits_verdict?: string;
+    passes?: Array<Record<string, unknown>>;
+  } | null;
   /** The mechanical step's verdict (phase 3), or its recorded refusal, or
    *  absent when the caller skipped it.  Loosely typed on purpose: the
    *  Mechanical tab's last result is the full answer, this is the line. */
@@ -654,8 +669,28 @@ export function couplingLine(c: CouplingBlock): string {
           ? `${c.iterations} it.` : `${c.iterations} it. · at the limit`)
       : `${c.iterations} it.${c.converged ? '' : ' ⚠'}`,
     regimeTerm(c.duty_cycle),
+    // THE CONTROLLER's two numbers, on a run that had one (Stage 2).  The
+    // machine keeps ONE efficiency and it is the shaft's — the drive's second
+    // one is a DIFFERENT quantity, so it is NAMED in full rather than shown
+    // beside the first under the same word.  Absent on every sine and ideal-PWM
+    // run, which is what "nothing else changed" looks like on this line.
+    controllerTerm(c.controller),
     mechNote]
     .filter(Boolean).join(' · ');
+}
+
+
+/** "T_j 132 °C · η wall-to-shaft 96.24 %" — the drive's own two numbers. */
+export function controllerTerm(
+  ctl: CouplingBlock['controller']): string | null {
+  if (!ctl) return null;
+  const tj = ctl.t_j_c ?? ctl.thermal?.t_j_max_c;
+  const wts = ctl.efficiency?.wall_to_shaft;
+  const bits: string[] = [];
+  if (tj != null) bits.push(`T_j ${Number(tj).toFixed(0)} °C`);
+  if (wts != null) bits.push(`η wall-to-shaft ${(Number(wts) * 100).toFixed(2)} %`);
+  if (ctl.limits_verdict === 'fail') bits.push('datasheet limits ⚠');
+  return bits.length ? bits.join(' · ') : null;
 }
 
 /** "ED 21.6 % of 60 s ⚠" — the found regime, short enough for the card. */

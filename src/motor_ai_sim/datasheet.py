@@ -1189,8 +1189,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
              for d in duties],
             "the CONTROLLER alone: AC output / (AC output + conduction, "
             "dead-time, switching and E_oss losses of every switch) at the "
-            "device, carrier and cooling the Controller tab was solved with", 2,
-            bold=True)
+            "device, carrier and cooling this duty's controller was solved "
+            "with", 2, bold=True)
         row("Wall-to-shaft efficiency (%)",
             [((_ctrl(d).get("efficiency") or {}).get("wall_to_shaft") or None) and
              float((_ctrl(d).get("efficiency") or {})["wall_to_shaft"]) * 100.0

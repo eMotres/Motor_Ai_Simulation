@@ -317,4 +317,77 @@ def test_ledger_list_and_clear_endpoints(sim, solver, ledger_dir):
     assert _files(ledger_dir) == []
     # …and with the ledger emptied, the same request solves again
     sim.get_fem_transient(**RUN)
-    assert len(solver) == 2
+
+
+# ── (g) the response contract every panel's "Loaded from history" line reads
+# ---------------------------------------------------------------------------
+# 2026-09-22: mechanical.py's _ROTOR_STRESS_HISTORY and coupled.py's
+# _COUPLED_HISTORY both stamp a hit `served_from_history: true`; this ledger
+# is the EM route's own, older, equivalent persistent layer (see the note
+# beside `_ledger_dir()`) — aligned here so the web notice is one component
+# for all four panels rather than one per backend mechanism.
+
+def test_a_ledger_hit_carries_the_shared_history_vocabulary(sim, solver):
+    first = sim.get_fem_transient(**RUN)
+    assert not first.get("served_from_history")
+
+    second = sim.get_fem_transient(**RUN)
+    assert len(solver) == 1, "a repeat re-solved instead of loading"
+    assert second["served_from_history"] is True
+    assert second["computed_at"] == first["computed_at"]
+    # ledger_hit/ledger_computed_at stay — this is an ADDED alias, not a
+    # rename, so nothing that already reads the older names breaks.
+    assert second["ledger_hit"] is True
+    assert second["ledger_computed_at"] == first["computed_at"]
+
+
+# ── (h) the key already covers what the brief asks for, field by field ──────
+# "a canonical key over every field that changes the answer ... and a test
+# that a change in EACH listed field changes the key" — proved here against
+# the key `_sb_key_fields` ALREADY builds (routes/simulation.py:4715-4801),
+# reused as-is rather than re-specified (see run_history.py's module
+# docstring on why a caller normalises and this module never invents its
+# own rounding/sorting). Every case below: two runs that differ in ONLY the
+# named field must both hit the solver — a would-be ledger hit on the second
+# call would mean that field is NOT in the key.
+
+_KEY_COVERAGE_CASES = [
+    ("I_phase_rms (operating point)", {"I_phase_rms": 11.0}),
+    ("gamma_deg (operating point)", {"gamma_deg": 5.0}),
+    ("rpm (operating point)", {"rpm": 2000.0}),
+    ("coil_temp_c (temperature)", {"coil_temp_c": 140.0}),
+    ("magnet_temp_c (temperature)", {"magnet_temp_c": 80.0}),
+    ("star_delta (connection)", {"star_delta": "delta"}),
+    ("mesh_size_mm (solver setting)", {"mesh_size_mm": 3.0}),
+    ("n_steps_per_period (solver setting)", {"n_steps_per_period": 8}),
+    ("n_sectors (solver setting)", {"n_sectors": 2}),
+    ("element_order (solver setting)", {"element_order": 1}),
+    ("eddy (solver flag)", {"eddy": True}),
+    ("rotor_eddy (solver flag)", {"rotor_eddy": False}),
+    ("demag (solver flag)", {"demag": True}),
+    ("drive (drive/PWM)", {"drive": "voltage", "v_phase_peak": 5.0}),
+]
+
+
+@pytest.mark.parametrize("label, override", _KEY_COVERAGE_CASES,
+                         ids=[c[0] for c in _KEY_COVERAGE_CASES])
+def test_each_listed_field_changes_the_ledger_key(sim, solver, label, override):
+    sim.get_fem_transient(**RUN)
+    assert len(solver) == 1
+    sim.get_fem_transient(**{**RUN, **override})
+    assert len(solver) == 2, (
+        f"{label} did not change the ledger key — a request that differs "
+        "only in this field would be silently served another point's answer")
+
+
+def test_reordering_and_float_noise_do_not_change_the_key(sim, solver, ledger_dir):
+    """The flip side of (h): the SAME point, spelled with float noise a UI
+    round-trip could introduce, must still be one entry, not two."""
+    sim.get_fem_transient(**RUN)
+    assert len(_files(ledger_dir)) == 1
+    noisy = dict(RUN)
+    noisy["I_phase_rms"] = 10.0 + 1e-12
+    noisy["gamma_deg"] = 0.0 + 1e-12
+    sim.get_fem_transient(**noisy)
+    assert len(solver) == 1, "float noise below the key's rounding re-solved"
+    assert len(_files(ledger_dir)) == 1

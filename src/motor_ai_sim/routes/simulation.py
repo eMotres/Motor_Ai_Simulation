@@ -4955,6 +4955,19 @@ def get_fem_transient(
             _out.pop("frames", None)     # never stored; never implied
             _out["ledger_hit"] = True
             _out["ledger_computed_at"] = _led.get("computed_at")
+            # ALIAS (2026-09-22): `computed_at` is already in `_out` (copied
+            # straight off the stored `result`, which carries its own); what
+            # is missing is the one flag every other panel's history hit
+            # carries (mechanical.py's _ROTOR_STRESS_HISTORY, coupled.py's
+            # _COUPLED_HISTORY) so the web notice ("Loaded from history —
+            # computed … · Recompute") is ONE piece of UI code across all
+            # four panels rather than one per backend mechanism. This ledger
+            # already IS this route's persistent layer — see the module note
+            # above `_ledger_dir()`: built well before `motor_ai_sim.
+            # run_history` existed, exact-key, `fresh`-gated, survives a
+            # restart. It is not re-implemented on top of
+            # run_history.RunHistory; only its response vocabulary is aligned.
+            _out["served_from_history"] = True
             # NOT `restored`: that word means "the last transient, shown while
             # you decide whether to run", and the UI escalates a stale restore
             # to a red banner.  This is a full match on today's inputs.

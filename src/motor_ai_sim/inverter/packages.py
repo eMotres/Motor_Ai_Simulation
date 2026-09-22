@@ -35,6 +35,11 @@ PACKAGE_FAMILIES: Dict[str, Dict[str, Any]] = {
     "62mm-module": {"leads": 0,  "rows": 0, "tab": "none",   "aspect": (106.0, 62.0)},
     "xm3":         {"leads": 0,  "rows": 0, "tab": "none",   "aspect": (53.0, 80.0)},
     "easypack":    {"leads": 0,  "rows": 0, "tab": "none",   "aspect": (60.0, 32.0)},
+    # A small source-down/drain-down QFN — leads on two opposite sides and a
+    # large exposed pad (the cooled face) covering most of the body, e.g.
+    # Infineon's PG-TSON-8 / PG-WHSON-8 family (owner 2026-09-22: IQE050N08NM5SC,
+    # PQFN 3.3x3.3 mm, datasheet package PG-TSON-8-4).
+    "pqfn":        {"leads": 4,  "rows": 2, "tab": "bottom", "aspect": (3.3, 3.3)},
     "generic":     {"leads": 4,  "rows": 2, "tab": "top",    "aspect": (14.0, 14.0)},
 }
 
@@ -49,6 +54,7 @@ _ALIASES = (
     ("62mm-module", (r"62\s*mm", r"econodual")),
     ("xm3", (r"\bxm3\b",)),
     ("easypack", (r"easy\s*1b", r"easy\s*2b", r"easypack")),
+    ("pqfn", (r"tson[\s_-]*8", r"whson[\s_-]*8", r"pqfn")),
 )
 
 

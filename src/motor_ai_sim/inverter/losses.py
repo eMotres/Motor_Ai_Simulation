@@ -227,7 +227,8 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
     notes: List[str] = []
     for x in ladder:
         e = card.e_switch(i_d_A=float(x), t_j_c=t_j_c, v_dc_V=v_dc,
-                          v_gs_off_V=v_gs_off, r_g_ext_ohm=r_g)
+                          v_gs_off_V=v_gs_off, r_g_ext_ohm=r_g,
+                          v_gs_on_V=v_gs_on)
         e_on.append(e["e_on_J"]); e_off.append(e["e_off_J"]); e_fr.append(e["e_fr_J"])
         extrapolated = extrapolated or bool(e["extrapolated"])
         if not notes:
@@ -821,6 +822,7 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                     for b in topo.bridges for lg in b.legs), 1),
             "total_W": round(p_total, 1),
             "e_oss_policy": policy,
+            "switching_energy_source": card.switching_energy_source(),
         },
         "thermal": {
             "t_j_max_c": round(t_j_max_seen, 1),
@@ -885,6 +887,13 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         "warnings": warnings,
         "violations": violations,
         "model_notes": card_notes + [
+            f"switching-energy source for {card.part}: "
+            f"{card.switching_energy_source().replace('_', ' ')} "
+            + ("(the datasheet's own E_on/E_off table)"
+               if card.switching_energy_source() == "curves" else
+               "(first-order overlap-model estimate from switching times and "
+               "gate charges — the card publishes no E_on/E_off table; treat "
+               "as a lower bound)"),
             "conduction is integrated over the whole period because with "
             "synchronous rectification the leg current is always in a channel; "
             "the duty only decides WHICH switch carries it",

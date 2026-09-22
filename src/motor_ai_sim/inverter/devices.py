@@ -197,9 +197,14 @@ def validate_card(doc: Any) -> List[str]:
         if not _num(sw.get("v_dd_ref_V")):
             bad.append("switching.v_dd_ref_V is required (the bus the energies "
                        "were measured at)")
-        if not (isinstance(sw.get("curves"), list) and sw.get("curves")):
-            bad.append("switching.curves needs at least one "
-                       "{v_gs_off_V, t_j_c, e_on_uJ, e_off_uJ} set")
+        has_curves = isinstance(sw.get("curves"), list) and bool(sw.get("curves"))
+        if not has_curves and not _has_times_and_charges(doc):
+            bad.append(
+                "switching needs EITHER .curves (an E_on/E_off energy table) OR "
+                "enough of .times_ns + gate charges for the times-and-charges "
+                "fallback: a reference r_g_ext_ref_ohm, and either "
+                "gate.q_gd_nC (with gate.q_sw_nC to recover Qgs2) or "
+                "switching.times_ns.t_r/t_f")
     tq = doc.get("third_quadrant") or {}
     if isinstance(tq, dict) and not (isinstance(tq.get("curves"), list)
                                      and tq.get("curves")):
@@ -244,6 +249,28 @@ def _num(v: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return None if math.isnan(f) or math.isinf(f) else f
+
+
+def _has_times_and_charges(doc: Dict[str, Any]) -> bool:
+    """Whether ``doc`` carries enough for the TIMES-AND-CHARGES switching
+    fallback (:meth:`DeviceCard._e_switch_from_times_charges`) — most
+    low-voltage Si/SiC MOSFET datasheets publish switching TIMES
+    (``t_d/t_r/t_d(off)/t_f``) and gate CHARGES (``Q_gd``, ``Q_sw``) rather
+    than an E_on/E_off energy table, and a card built from one of those has
+    no ``switching.curves`` at all.
+    """
+    sw = doc.get("switching") or {}
+    if not isinstance(sw, dict) or _num(sw.get("r_g_ext_ref_ohm")) is None:
+        return False
+    gate = doc.get("gate") or {}
+    if _num(gate.get("q_gd_nC")) is not None:
+        return True
+    times = sw.get("times_ns") or {}
+    def _has_pts(name: str) -> bool:
+        blk = times.get(name) or {}
+        return isinstance(blk, dict) and any(
+            k.startswith("t_j_") and _num(v) is not None for k, v in blk.items())
+    return _has_pts("t_r") and _has_pts("t_f")
 
 
 def _points_of(raw: Any, xk: str, yk: str) -> List[Tuple[float, float]]:
@@ -552,9 +579,42 @@ class DeviceCard:
         b = s.get(name)
         return b if isinstance(b, dict) else None
 
+    def switching_energy_source(self) -> str:
+        """``"curves"`` or ``"times_and_charges"`` — which method
+        :meth:`e_switch` uses for THIS card.  ``"curves"`` when the datasheet
+        publishes an E_on/E_off energy table (the SiC power modules this
+        project started with); ``"times_and_charges"`` when it does not — most
+        low-voltage Si/SiC MOSFET datasheets publish switching TIMES and gate
+        CHARGES instead, and owner 2026-09-22: *"конечно, нужен честный
+        пересчёт для любых MOSFET"* — a card without an energy table gets an
+        honest ESTIMATE from what it DOES publish, not a null loss.
+        """
+        sw = self.doc.get("switching") or {}
+        if isinstance(sw.get("curves"), list) and sw.get("curves"):
+            return "curves"
+        return "times_and_charges"
+
     def e_switch(self, *, i_d_A: float, t_j_c: float, v_dc_V: float,
                  v_gs_off_V: float = 0.0,
-                 r_g_ext_ohm: Optional[float] = None) -> Dict[str, Any]:
+                 r_g_ext_ohm: Optional[float] = None,
+                 v_gs_on_V: float = 18.0) -> Dict[str, Any]:
+        """``{e_on_J, e_off_J, e_fr_J, extrapolated, notes}`` at one point.
+
+        Dispatches on :meth:`switching_energy_source`.  ``v_gs_on_V`` is only
+        used by the times-and-charges path (the gate-drive current needs
+        BOTH rail voltages); the curves path ignores it, as before.
+        """
+        if self.switching_energy_source() == "curves":
+            return self._e_switch_from_curves(
+                i_d_A=i_d_A, t_j_c=t_j_c, v_dc_V=v_dc_V,
+                v_gs_off_V=v_gs_off_V, r_g_ext_ohm=r_g_ext_ohm)
+        return self._e_switch_from_times_charges(
+            i_d_A=i_d_A, t_j_c=t_j_c, v_dc_V=v_dc_V, v_gs_off_V=v_gs_off_V,
+            v_gs_on_V=v_gs_on_V, r_g_ext_ohm=r_g_ext_ohm)
+
+    def _e_switch_from_curves(self, *, i_d_A: float, t_j_c: float, v_dc_V: float,
+                              v_gs_off_V: float = 0.0,
+                              r_g_ext_ohm: Optional[float] = None) -> Dict[str, Any]:
         """``{e_on_J, e_off_J, e_fr_J, extrapolated, notes}`` at one point.
 
         Order of operations, and every step is a stated rule of the card:
@@ -622,7 +682,186 @@ class DeviceCard:
         out["extrapolated"] = above                 # type: ignore[assignment]
         out["extrapolated_below"] = below           # type: ignore[assignment]
         out["notes"] = notes                        # type: ignore[assignment]
+        out["switching_energy_source"] = "curves"    # type: ignore[assignment]
         return out
+
+    def _e_switch_from_times_charges(self, *, i_d_A: float, t_j_c: float,
+                                     v_dc_V: float, v_gs_off_V: float,
+                                     v_gs_on_V: float,
+                                     r_g_ext_ohm: Optional[float]) -> Dict[str, Any]:
+        """First-order OVERLAP-MODEL switching energy, for a card whose
+        datasheet publishes switching TIMES and gate CHARGES instead of an
+        E_on/E_off energy table (most low-voltage Si/SiC MOSFET datasheets —
+        only the higher-current SiC modules this project started with publish
+        the energy curves directly).
+
+        The classic hard-switching overlap estimate, as stated in every major
+        vendor's own MOSFET switching-loss application note::
+
+            E_on  = 0.5 * V_dc * I_d * (t_ri + t_fv)
+            E_off = 0.5 * V_dc * I_d * (t_rv + t_fi)
+
+        with the voltage transition set by the MILLER (gate-drain) charge and
+        the current transition by the charge ABOVE THRESHOLD to the plateau
+        (``Qgs2``), both driven by a CONSTANT gate current — the textbook
+        simplification, and it is the reason this model under-reads (see
+        below)::
+
+            t_fv = Q_gd  / I_g(on)     t_ri = Qgs2 / I_g(on)
+            t_rv = Q_gd  / I_g(off)    t_fi = Qgs2 / I_g(off)
+            I_g  = (V_gs,on - V_gs,off) / (R_g,int + R_g,ext)
+
+        ``Qgs2`` is not a field this project's cards carry directly.  Where
+        the card publishes the industry's own SWITCHING charge ``Q_sw``
+        (``Qgs2 + Qgd``, e.g. this part's datasheet Table 6) it is recovered
+        as ``Q_sw - Q_gd``.  Where the card has neither a usable ``Q_gd`` nor
+        ``Q_sw``, the datasheet's OWN measured ``t_r``/``t_f`` are used
+        instead, closest-temperature and LINEARLY SCALED by the gate
+        resistance ratio — the same physical reasoning the curves path's
+        ``r_g_rule`` states for E_on/E_off: a resistive gate charge/discharge
+        time scales with R_g to first order.
+
+        Body-diode reverse recovery (``e_fr_J``) is estimated as
+        ``0.5 * Q_rr * V_dc`` when the card publishes ``Q_rr`` — the standard
+        first-order recovery-energy estimate — and reported as an explicit
+        zero (which UNDER-reads) when it does not.
+
+        WHAT THIS IS NOT: a SPICE switching-loss simulation.  It has no stray
+        inductance, no parasitic ringing, and a Miller charge treated as
+        constant rather than the real V_DS-dependent nonlinear C_rss.  On the
+        one card this project can check BOTH ways — :data:`IMCQ120R004M2H`,
+        whose datasheet publishes an E_on/E_off table AND the times/charges
+        this method needs — the two branches read very differently at the
+        L155 operating point (185.2 A, 800 V, 175 degC; see
+        ``tests/test_controller.py::test_times_charges_fallback_against_the_known_curves``
+        for the numbers, on the owner's instruction NOT tuned to 1):
+
+        * the CHARGE branch (Q_gd and a Qgs2 proxy) under-reads the measured
+          E_on/E_off by roughly a THIRD — the honest number for the branch
+          this card (IQE050N08NM5SC) actually uses, since it publishes real
+          Q_gd/Q_sw;
+        * the TIMES branch (no usable charge pair) reproduces the measured
+          curve within ~2 % AT THE DATASHEET'S OWN R_g — expected, since it
+          is just recombining the manufacturer's own measured t_r/t_f rather
+          than re-deriving them; its accuracy at a DIFFERENT R_g rests on the
+          stated linear-scaling assumption alone and is unverified here.
+
+        Treat every number from this method as a LOWER BOUND, never a
+        measurement — the notes say so on every call.
+        """
+        sw = self.doc.get("switching") or {}
+        gate = self.doc.get("gate") or {}
+        r_g_ref = _num(sw.get("r_g_ext_ref_ohm"))
+        r_g_int = _num(gate.get("r_g_internal_ohm")) or 0.0
+        r_g_ext = _num(r_g_ext_ohm) if r_g_ext_ohm is not None else r_g_ref
+        if r_g_ext is None:
+            raise CardError(
+                f"{self.part}: no R_g,ext given and the card publishes no "
+                "reference gate resistance (switching.r_g_ext_ref_ohm) for "
+                "the times-and-charges fallback")
+        r_g_total = max(r_g_int + float(r_g_ext), 1e-9)
+
+        d_v = max(float(v_gs_on_V) - float(v_gs_off_V), 1e-9)
+        i_g = d_v / r_g_total                # constant gate-drive current, stated
+
+        q_gd = _num(gate.get("q_gd_nC"))
+        q_sw = _num(gate.get("q_sw_nC"))
+        q_gs2 = (q_sw - q_gd) if (q_sw is not None and q_gd is not None
+                                  and q_sw > q_gd) else None
+
+        notes: List[str] = []
+        if q_gd is not None and q_gs2 is not None:
+            t_fv = t_rv = (q_gd * 1e-9) / i_g
+            t_ri = t_fi = (q_gs2 * 1e-9) / i_g
+            notes.append(
+                f"switching times from gate charge: Q_gd={q_gd:g} nC, "
+                f"Qgs2=Q_sw-Q_gd={q_gs2:g} nC, I_g=(V_gs,on-V_gs,off)/"
+                f"(R_g,int+R_g,ext)={i_g * 1e3:.1f} mA at R_g,total="
+                f"{r_g_total:.2f} ohm (V_gs,on={float(v_gs_on_V):g} V, "
+                f"V_gs,off={float(v_gs_off_V):g} V)")
+        else:
+            times = sw.get("times_ns") or {}
+
+            def _pt(name: str) -> Optional[float]:
+                blk = times.get(name) or {}
+                vals = [(k, _num(v)) for k, v in blk.items() if k.startswith("t_j_")]
+                vals = [(k, v) for k, v in vals if v is not None]
+                if not vals:
+                    return None
+                def _tk(k: str) -> float:
+                    try:
+                        return float(k.split("t_j_")[1])
+                    except (IndexError, ValueError):
+                        return 1e9
+                vals.sort(key=lambda kv: abs(_tk(kv[0]) - float(t_j_c)))
+                return vals[0][1]
+
+            t_r0, t_f0 = _pt("t_r"), _pt("t_f")
+            if t_r0 is None or t_f0 is None or r_g_ref is None:
+                raise CardError(
+                    f"{self.part}: the card publishes neither a usable "
+                    "gate-charge pair (gate.q_gd_nC with gate.q_sw_nC) nor "
+                    "switching times (switching.times_ns.t_r/t_f) with a "
+                    "reference R_g — no honest switching-energy estimate is "
+                    "possible")
+            # The published t_r/t_f were measured with R_g,ext = r_g_ref AND
+            # the SAME internal R_g this card states — so the total the
+            # datasheet's own numbers correspond to is (r_g_int + r_g_ref),
+            # not r_g_ref alone.  Scaling by r_g_total / (r_g_int + r_g_ref)
+            # is what makes k = 1 when the request matches the datasheet's
+            # own test condition exactly, instead of over-reading by
+            # (r_g_int + r_g_ref) / r_g_ref every time.
+            k = r_g_total / max(r_g_int + float(r_g_ref), 1e-9)
+            t_fv = t_rv = t_r0 * 1e-9 * k
+            t_ri = t_fi = t_f0 * 1e-9 * k
+            notes.append(
+                f"no usable gate charge on this card — switching times taken "
+                f"from the datasheet's own t_r={t_r0:g} ns / t_f={t_f0:g} ns "
+                f"(closest tabulated T_j to {float(t_j_c):.0f} degC) at "
+                f"R_g,ext={r_g_ref:g} ohm (R_g,total,datasheet="
+                f"{r_g_int + float(r_g_ref):.2f} ohm), linearly scaled by "
+                f"R_g,total/{r_g_int + float(r_g_ref):.2f} ohm = {k:.3f}")
+
+        v = max(float(v_dc_V), 0.0)
+        i = max(float(i_d_A), 0.0)
+        e_on = 0.5 * v * i * (t_ri + t_fv)
+        e_off = 0.5 * v * i * (t_rv + t_fi)
+
+        tq = self.doc.get("third_quadrant") or {}
+        rr = tq.get("reverse_recovery") or {}
+        q_rr = _num(rr.get("q_rr_nC_typ")) if isinstance(rr, dict) else None
+        v_rr_ref = _num(rr.get("v_r_ref_V")) if isinstance(rr, dict) else None
+        e_fr = 0.0
+        if q_rr is not None:
+            v_scale = v if not v_rr_ref else v          # V_dc IS the reverse bias here
+            e_fr = 0.5 * (q_rr * 1e-9) * v_scale
+            notes.append(
+                f"E_fr (body-diode reverse recovery) = 0.5 * Q_rr * V_dc, "
+                f"Q_rr={q_rr:g} nC typ"
+                + (f" (V_R={v_rr_ref:g} V test condition on the card, NOT "
+                   f"this working di/dt — a further first-order approximation)"
+                   if v_rr_ref else ""))
+        else:
+            notes.append(
+                "no Q_rr published on this card — E_fr (body-diode reverse "
+                "recovery) is reported as zero, which UNDER-reads")
+
+        notes.insert(0,
+            f"switching energy source: TIMES-AND-CHARGES fallback for "
+            f"{self.part} — this card's datasheet publishes no E_on/E_off "
+            "table (owner 2026-09-22: every MOSFET gets an honest recalc, "
+            "never a silent zero)")
+        notes.append(
+            "first-order overlap-model ESTIMATE, not a measured curve — "
+            "treat as a LOWER BOUND (constant gate current, linear Miller "
+            "charge, no stray inductance or ringing)")
+
+        return {
+            "e_on_J": max(e_on, 0.0), "e_off_J": max(e_off, 0.0),
+            "e_fr_J": max(e_fr, 0.0),
+            "extrapolated": False, "extrapolated_below": False,
+            "notes": notes, "switching_energy_source": "times_and_charges",
+        }
 
     def e_oss_J(self, v_dc_V: float) -> Optional[float]:
         """E_oss at this bus from C_o(er) — AN2025-10 eq. (11), rearranged."""
@@ -643,13 +882,29 @@ class DeviceCard:
 
         The card publishes I_SD = f(V_SD); this inverts it.  At 175 degC and
         185 A the card's anchor is the exact Table 6 value.
+
+        Curve choice: CLOSEST published ``v_gs_off_V`` first (as before — a
+        different gate-off voltage is a genuinely different device curve, not
+        an interpolation), and among ties on that, closest ``t_j_c`` — a card
+        with more than one third-quadrant temperature (e.g. IQE050N08NM5SC's
+        25/175 degC pair) must not silently answer with whichever curve
+        happens to sort first.
         """
         curves = [c for c in (self.doc["third_quadrant"] or {}).get("curves") or []
                   if isinstance(c, dict)]
         if not curves:
             raise CardError(f"{self.part}: third_quadrant.curves is empty")
-        want = _num(v_gs_off_V) or 0.0
-        c = min(curves, key=lambda x: abs((_num(x.get("v_gs_off_V")) or 0.0) - want))
+        want_v = _num(v_gs_off_V) or 0.0
+        d_v = {id(c): abs((_num(c.get("v_gs_off_V")) or 0.0) - want_v) for c in curves}
+        best_dv = min(d_v.values())
+        tied = [c for c in curves if d_v[id(c)] <= best_dv + 1e-9]
+        want_t = _num(t_j_c)
+        if want_t is None or len(tied) == 1:
+            c = tied[0]
+        else:
+            c = min(tied, key=lambda x: abs(
+                (_num(x.get("t_j_c")) if _num(x.get("t_j_c")) is not None else 1e9)
+                - want_t))
         pts = _pairs(c.get("points"))               # [(V_SD, I_SD)]
         if not pts:
             raise CardError(f"{self.part}: third_quadrant curve has no points")
@@ -715,6 +970,7 @@ class DeviceCard:
             "manufacturer": self.doc.get("manufacturer"),
             "family": self.doc.get("family"),
             "technology": self.doc.get("technology"),
+            "switching_energy_source": self.switching_energy_source(),
             "package": self.doc.get("package"),
             "package_common_name": self.doc.get("package_common_name"),
             "cooling": self.doc.get("cooling"),

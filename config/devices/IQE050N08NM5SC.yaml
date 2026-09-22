@@ -1,0 +1,266 @@
+# ============================================================
+# Power-device card — Infineon IQE050N08NM5SC
+# OptiMOS(TM) 5 Si power MOSFET, 80 V, PG-TSON-8-4 (PQFN 3.3x3.3 mm,
+# source-down)
+# ============================================================
+# Owner, 2026-09-22: add this part for the Oe40 motor (CIANO14 40_12 / L12).
+#
+# THE DATASHEET TRANSCRIBED HERE is for the BASE part "IQE050N08NM5"
+# (Infineon, "Final Data Sheet", Rev. 2.0, 2021-04-26, document
+# https://www.infineon.com/assets/row/public/documents/24/49/infineon-iqe050n08nm5-datasheet-en.pdf).
+# "...SC" is Infineon's own packing/tape-and-reel suffix (see the product
+# page ordering options) — ASSUMPTION: it is the same silicon and the same
+# electrical/thermal datasheet; nothing on the product page contradicts this,
+# and Infineon publishes no separate "...SC" datasheet.  The product page
+# also calls the package "PQFN 3.3x3.3 Source-Down"; the datasheet itself
+# names it "PG-TSON-8-4" — the same physical outline, and both names are
+# kept below (`package` is the datasheet's own designator).
+#
+# EVERY number below is transcribed from the source named in its own block's
+# `source` line.  Nothing is invented.  A value the datasheet does not
+# publish is `null`.
+#
+# THIS PART'S DATASHEET PUBLISHES NO E_on/E_off SWITCHING-ENERGY TABLE — only
+# switching TIMES (Table 5) and gate CHARGES (Table 6), which is normal for a
+# low-voltage synchronous-rectification MOSFET.  `switching_energy_source`
+# below is a marker (not consumed by the loader; the model itself decides via
+# DeviceCard.switching_energy_source(), which returns "times_and_charges"
+# whenever `switching.curves` is absent) — the loss model's
+# `_e_switch_from_times_charges` builds E_on/E_off from Q_gd, Q_sw-Q_gd
+# (~Qgs2) and R_g, and E_fr from Q_rr; see that method's docstring for the
+# formula and its honesty check against IMCQ120R004M2H (the one card this
+# project holds that publishes BOTH the energy curves and the times/charges).
+#
+# Units: V, A, ohm (`_ohm`), mOhm (`_mohm`), degC, W, K/W, nC, pF, uJ.
+# ============================================================
+
+part: IQE050N08NM5SC
+manufacturer: Infineon
+family: "OptiMOS 5 80 V"
+technology: si_mosfet
+package: PG-TSON-8-4
+package_common_name: "PQFN 3.3x3.3 Source-Down"
+cooling: bottom_side          # the exposed pad is the SOURCE (product page:
+                               # "...Source-Down package"); Drain is pins 5-8,
+                               # Gate pin 4, Source pins 1-3 (datasheet p.1
+                               # pin-out figure) — R_thJC is measured to that
+                               # pad (Table 3, "junction-case, bottom")
+marking: 05008N5
+# Package outline — datasheet Figure 1 (section 5, "Package Outlines"),
+# PG-TSON-8-4, MAX column (same convention as IMCQ120R004M2H's card):
+#   length_mm = D   3.30 (single value, min=max in the table)
+#   width_mm  = E   3.30 (single value)
+#   height_mm = A   1.10 max (A1 stand-off 0.05 max)
+# 8 leads on e = 0.65 mm pitch; exposed pad D1 = 2.31...2.51 mm (most of the
+# body — the cooled face).
+package_size_mm:
+  source: "Datasheet Figure 1 (section 5, Package Outlines), PG-TSON-8-4, MAX column"
+  length_mm: 3.30
+  width_mm: 3.30
+  height_mm: 1.10
+  lead_pitch_mm: 0.65
+  leads: 8
+#: Not published in this datasheet revision.
+weight_g: null
+datasheet_revision: "2.0, 2021-04-26"
+datasheet_url: "https://www.infineon.com/assets/row/public/documents/24/49/infineon-iqe050n08nm5-datasheet-en.pdf"
+
+# ── ratings ────────────────────────────────────────────────────────────────
+ratings:
+  source: "Datasheet Table 2 (Maximum ratings); T_j/T_stg from the same table"
+  v_dss_V: 80                  # V_(BR)DSS, Table 4 (VGS=0, ID=1mA)
+  i_d_continuous:
+    # I_D, V_GS = 10 V, vs CASE temperature (Table 2, footnote 1: de-rate per
+    # Diagram 2 for other case temperatures).
+    - {t_case_c: 25,  i_a: 101, basis: table}
+    - {t_case_c: 100, i_a: 71,  basis: table}
+  # A THIRD, board-limited number the datasheet also states and this model
+  # does NOT use directly (it derates via R_th(j-c) to the cooled pad, not a
+  # board number): I_D = 16 A at T_A = 25 degC, R_thJA = 60 degC/W — i.e. on
+  # "40 mm x 40 mm x 1.5 mm epoxy PCB FR4 with 6 cm^2 (one layer, 70 um thick)
+  # copper area for drain connection, PCB vertical in still air" (Table 2
+  # footnote 2).  Kept here as provenance for the PCB-copper-spreading
+  # assumption the Controller solve states separately (r_spread_k_w).
+  i_d_pcb_limited_A_at_ta25: 16
+  i_d_pcb_limited_note: >-
+    Table 2 footnote 2: 40x40x1.5 mm FR4, 6 cm^2 one-layer 70 um Cu for the
+    drain connection, PCB vertical in still air, R_thJA(max) = 60 degC/W.
+  i_d_pulsed_A: 404             # I_D,pulse, T_A = 25 degC (Table 2, see Diagram 3)
+  p_tot_W:
+    - {t_case_c: 25, p_w: 100, basis: table}
+  t_j_max_c: 175                 # T_j, Table 2
+  t_storage_c: {min: -55, max: 175}
+  v_gs_static_V: {min: -20, max: 20}   # V_GS, Table 2 (one window; no
+                                        # separate transient rating published)
+  e_as_mJ: 184                  # single pulse, I_D = 20 A, R_GS = 25 ohm (Table 2)
+
+# ── gate ───────────────────────────────────────────────────────────────────
+gate:
+  source: "Datasheet Table 4 (R_G, V_GS(th)) and Table 6 (Gate charge characteristics)"
+  v_gs_th_V: {min: 2.2, typ: 3.0, max: 3.8, at_t_j_c: 25,
+              note: "V_DS = V_GS, I_D = 49 uA"}
+  v_plateau_V: 4.5              # typ, Table 6
+  q_g_nC: 34.6                  # typ (max 43.2), V_DD=40V, I_D=20A, V_GS=0..10V
+  q_g_max_nC: 43.2
+  q_gs_nC: 10.0                 # typ, same conditions
+  q_gth_nC: 6.7                 # typ, gate charge AT threshold, same conditions
+  q_gd_nC: 8.8                  # typ (max 13), same conditions
+  q_gd_max_nC: 13.0
+  q_sw_nC: 12.0                 # typ, "switching charge" (~ Qgs2 + Qgd), same
+                                 # conditions — the model recovers
+                                 # Qgs2 = q_sw_nC - q_gd_nC = 3.2 nC
+  q_g_sync_nC: 28.7              # typ, sync. FET, V_DS=0.1V, V_GS=0..10V
+  gate_charge_test_conditions: "V_DD = 40 V, I_D = 20 A, V_GS = 0 to 10 V (Table 6)"
+  r_g_internal_ohm: 0.8          # typ, Table 4 ("Gate resistance", no separate
+                                  # test condition given)
+
+# ── on-state resistance ────────────────────────────────────────────────────
+r_ds_on:
+  source: >-
+    Datasheet Table 4 (R_DS(on) at V_GS = 10 V and 6 V, T_j = 25 degC) and the
+    figure "Normalized drain-source on resistance, R_DS(on) = f(T_j)"
+    (Diagram 9, I_D = 20 A, V_GS = 10 V) for the temperature shape.
+  measured_at_i_d_A: 20
+  curves:
+    - v_gs_on_V: 10
+      points:
+        # Table 4 anchor at 25 degC: 4.3 typ / 5.0 max mOhm.  Diagram 9 is a
+        # NORMALIZED curve (R_DS(on)/R_DS(on,25C)) vs T_j — read off it and
+        # applied to the table's 25 degC TYP value, so every other point here
+        # is `basis: figure`.
+        - {t_j_c: -55, r_mohm: 3.4,  basis: figure, tolerance_pct: 12}
+        - {t_j_c: -25, r_mohm: 3.7,  basis: figure, tolerance_pct: 12}
+        - {t_j_c: 0,   r_mohm: 3.9,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 25,  r_mohm: 4.3,  basis: table, anchor: true, r_mohm_max: 5.0}
+        - {t_j_c: 50,  r_mohm: 4.9,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 75,  r_mohm: 5.6,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 100, r_mohm: 6.4,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 125, r_mohm: 7.3,  basis: figure, tolerance_pct: 12}
+        - {t_j_c: 150, r_mohm: 8.2,  basis: figure, tolerance_pct: 12}
+        - {t_j_c: 175, r_mohm: 9.0,  basis: figure, tolerance_pct: 15}
+    - v_gs_on_V: 6
+      points:
+        - {t_j_c: 25, r_mohm: 6.1, basis: table, anchor: true, r_mohm_max: 8.5}
+
+# ── capacitances ────────────────────────────────────────────────────────────
+# No C_o(er)/E_oss table published (only C_oss(typ) at one V_DS and a Q_oss
+# charge) — e_oss_J() is left unusable for this card (c_o_er_pF/e_oss_uJ are
+# both null) rather than approximated from the nonlinear C_oss(V) curve; a
+# solve reports E_oss as not computed for this device, which is honest given
+# `e_oss_policy` defaults to "included_in_eon" and does not need it.
+capacitance:
+  source: "Datasheet Table 5 (Dynamic characteristics) and Table 6 (Q_oss)"
+  at_v_ds_V: 40
+  c_iss_pF: 2200                # typ (max 2900), V_GS=0, V_DS=40V, f=1MHz
+  c_iss_max_pF: 2900
+  c_oss_pF: 370                 # typ (max 480), same conditions
+  c_oss_max_pF: 480
+  c_rss_pF: 21                  # typ (max 37), same conditions
+  c_rss_max_pF: 37
+  q_oss_nC: 40                  # typ (max 53), V_DS=40V, V_GS=0 (Table 6)
+  q_oss_max_nC: 53
+  c_o_er_pF: null
+  e_oss_uJ: null
+
+# ── switching (no E_on/E_off table — times + charges only) ────────────────
+switching:
+  source: >-
+    Datasheet Table 5 (switching times, V_DD=40V, V_GS=10V, I_D=20A,
+    R_G,ext=1.6 ohm, T_j=25 degC) and Table 6 (gate charge, V_DD=40V, I_D=20A,
+    V_GS=0..10V).  NO E_on/E_off ENERGY TABLE IS PUBLISHED for this part —
+    normal for a low-voltage synchronous-rectification OptiMOS device.
+  energy_source: times_and_charges     # documentary marker; see DeviceCard.switching_energy_source()
+  v_dd_ref_V: 40
+  i_d_ref_A: 20
+  v_gs_ref_V: 10
+  r_g_ext_ref_ohm: 1.6
+  note: >-
+    switching energy is estimated by this project's model from Q_gd,
+    Qgs2 = Q_sw - Q_gd, and R_g (the classic overlap formula), falling back to
+    the datasheet's own t_r/t_f scaled by R_g when charge data is
+    insufficient (not needed here — both are given).  See
+    DeviceCard._e_switch_from_times_charges.  NO TEMPERATURE DEPENDENCE is
+    published for the switching times (only R_DS(on) has a T_j curve) — the
+    25 degC times are used at every T_j, which is a stated model limitation,
+    not a datasheet fact.
+  times_ns:
+    source: "Datasheet Table 5, T_j = 25 degC, V_DD=40V, V_GS=10V, I_D=20A, R_G,ext=1.6 ohm"
+    t_d_on:  {t_j_25: 9.4}
+    t_r:     {t_j_25: 4.6}
+    t_d_off: {t_j_25: 16.1}
+    t_f:     {t_j_25: 4.0}
+
+# ── third quadrant (body diode / reverse conduction) ───────────────────────
+third_quadrant:
+  source: "Datasheet Table 7 (Reverse diode) and Diagram 12 (forward characteristics)"
+  i_sd_continuous:
+    - {t_case_c: 25, i_a: 76, basis: table}    # I_S, Table 7
+  i_sm_A: 404                                   # I_S,pulse, Table 7
+  v_sd_at_20A:
+    - {t_j_c: 25, v: 0.83, basis: table, v_max: 1.1}   # V_SD, V_GS=0, I_F=20A
+  reverse_recovery:
+    q_rr_nC_typ: 30                             # Table 7
+    q_rr_nC_max: 60
+    t_rr_ns_typ: 37
+    t_rr_ns_max: 74
+    v_r_ref_V: 40
+    i_f_ref_A: 20
+    di_dt_ref_A_us: 100
+    source: "Datasheet Table 7, V_R=40V, I_F=20A, diF/dt=100 A/us"
+  # V_SD [V] against reverse current [A] — ONLY the exact table anchor plus
+  # the physical origin.  Diagram 12 (log-scale forward-conduction figure)
+  # also shows 25/175 degC curves, but reading intermediate points reliably
+  # off a log-log hand plot is not honest enough to tag `basis: figure` with
+  # a stated tolerance the way the IMCQ card does; beyond 20 A the model's
+  # own linear extrapolation (interp()) is the stated behaviour, not a
+  # datasheet figure.
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 25
+      basis: table
+      anchor_note: "the 0.83 V / 20 A point is Table 7 (exact); 0 V / 0 A is the physical origin, not measured"
+      points: [[0.0, 0.0], [0.83, 20.0]]
+    # 175 degC: Diagram 12 shows the curve shifted to LOWER V_SD (negative
+    # tempco), but no table value exists at this temperature — a single
+    # hand-read anchor from the figure, wide tolerance stated.
+    - v_gs_off_V: 0
+      t_j_c: 175
+      basis: figure
+      tolerance_pct: 25
+      anchor_note: "read off Diagram 12 (forward characteristics of reverse diode, 175 degC curve) at I_F=20A — no table value at this temperature"
+      points: [[0.0, 0.0], [0.60, 20.0]]
+  channel_on_note: >-
+    At V_GS = 10 V the third quadrant is the CHANNEL (synchronous
+    rectification, this part's stated application — datasheet Features:
+    "Optimized for synchronous rectification"), i.e. V = I * R_DS(on); the
+    body-diode curves above apply only while both switches of the leg are
+    off (dead time).
+
+# ── thermal ────────────────────────────────────────────────────────────────
+thermal:
+  source: "Datasheet Table 3 (Thermal characteristics)"
+  r_th_jc_k_w: {typ: 0.9, max: 1.5}
+  r_th_jc_note: >-
+    "Thermal resistance, junction-case, bottom" (Table 3) — the package is
+    SOURCE-DOWN (product page: "PQFN 3.3x3.3 Source-Down"; pin-out figure:
+    Source pins 1-3, Gate pin 4, Drain pins 5-8), so the cooled exposed pad
+    on the bottom is the SOURCE terminal, not the drain.  The model derates
+    on the MAX value (1.5 K/W), same convention as every other card.
+  r_th_ja_k_w: {max: 60}
+  r_th_ja_note: >-
+    "Device on PCB, 6 cm^2 cooling area" (Table 3) = a BOARD number, not a
+    package property: 40x40x1.5 mm FR4, 6 cm^2 one-layer 70 um Cu for the
+    drain connection, PCB vertical in still air (Table 2 footnote 2).  This
+    model does NOT use R_thJA — the Controller solve applies R_th(j-c) from
+    the junction to the exposed pad and then the CHOSEN coldplate/TIM stack
+    to that pad directly (`r_tim_k_w`), exactly as for the top-side-cooled
+    IMCQ card.  ASSUMPTION, named once and not a datasheet value: a QFN's
+    pad also spreads some heat sideways into the PCB copper before it ever
+    reaches a coldplate under the board, and that path is NOT inside
+    R_th(j-c) — it is given to the solve as `r_spread_k_w`, a stated K/W
+    per device for the PCB-copper-spreading path (default 0 K/W unless the
+    caller states a board/copper design; the datasheet's own R_thJA=60 K/W
+    number is board-limited free-air and is not a spreading resistance the
+    model can subtract a coldplate term from).
+  z_th_jc_curve: null   # Diagram 4 (max transient thermal impedance) exists
+                         # as a FIGURE but is not digitised here

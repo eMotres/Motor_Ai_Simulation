@@ -29,6 +29,10 @@ from motor_ai_sim.inverter import schematic as sc
 # ---------------------------------------------------------------------------
 
 REAL = "IMCQ120R004M2H"
+#: A low-voltage Si OptiMOS card with NO E_on/E_off table — only switching
+#: times and gate charges — added 2026-09-22 for the Oe40 motor (CIANO14
+#: 40_12 / L12).  Exercises the times-and-charges fallback in production.
+REAL_TC = "IQE050N08NM5SC"
 
 
 def test_real_card_loads_and_matches_datasheet_tables():
@@ -152,6 +156,9 @@ def synth_dir(tmp_path, monkeypatch):
     real = dv.devices_dir() / f"{REAL}.yaml"
     (d / f"{REAL}.yaml").write_text(real.read_text(encoding="utf-8"),
                                     encoding="utf-8")
+    real_tc = dv.devices_dir() / f"{REAL_TC}.yaml"
+    (d / f"{REAL_TC}.yaml").write_text(real_tc.read_text(encoding="utf-8"),
+                                       encoding="utf-8")
     monkeypatch.setattr(dv, "_DIR", d)
     dv._CACHE.clear()
     yield d
@@ -654,6 +661,147 @@ def test_suggested_parallel_is_the_current_rating_and_says_so():
 
 
 # ---------------------------------------------------------------------------
+# The times-and-charges switching-energy fallback (owner 2026-09-22:
+# IQE050N08NM5SC has no E_on/E_off table, only t_r/t_f and gate charges —
+# "конечно, нужен честный пересчёт для любых MOSFET")
+# ---------------------------------------------------------------------------
+
+def test_tc_card_loads_and_matches_datasheet_tables():
+    c = dv.get_device(REAL_TC)
+    assert c.part == REAL_TC
+    assert c.v_dss_V == 80
+    assert c.t_j_max_c == 175
+    assert c.switching_energy_source() == "times_and_charges"
+    # Table 3: R_thJC max 1.5 K/W — derates on MAX, same convention as IMCQ.
+    assert c.r_th_jc_k_w == pytest.approx(1.5)
+    # Table 2: I_D 101 A at 25 degC case, 71 A at 100 degC.
+    assert c.i_d_continuous(25.0) == pytest.approx(101.0)
+    assert c.i_d_continuous(100.0) == pytest.approx(71.0)
+    # Table 4: R_DS(on) 4.3 mOhm typ at 25 degC, V_GS = 10 V (the anchor).
+    assert c.r_ds_on_ohm(25.0, 10.0) * 1e3 == pytest.approx(4.3)
+    # …and the 6 V curve is a different curve, not an interpolation.
+    assert c.r_ds_on_ohm(25.0, 6.0) * 1e3 == pytest.approx(6.1)
+    # Package outline reaches the catalogue row (Figure 1, MAX column).
+    row = c.row()
+    assert row["package_size_mm"]["length_mm"] == pytest.approx(3.30)
+    assert row["package_size_mm"]["width_mm"] == pytest.approx(3.30)
+    assert row["package_size_mm"]["height_mm"] == pytest.approx(1.10)
+    assert row["switching_energy_source"] == "times_and_charges"
+    assert row["package_svg"].startswith("<svg")
+    from motor_ai_sim.inverter import packages as pk
+    assert pk.family_for("PG-TSON-8-4", "PQFN 3.3x3.3 Source-Down") == "pqfn"
+
+
+def test_tc_third_quadrant_and_reverse_recovery_are_on_the_card():
+    c = dv.get_device(REAL_TC)
+    # Table 7: V_SD = 0.83 V typ at I_SD = 20 A, V_GS = 0 V, T_j = 25 degC.
+    assert c.v_sd_V(20.0, 25.0, 0.0) == pytest.approx(0.83, rel=1e-3)
+    # The 175 degC body-diode drop is lower (negative tempco) — a figure-based
+    # point, not a table one, but it must still be an actual number.
+    assert c.v_sd_V(20.0, 175.0, 0.0) < c.v_sd_V(20.0, 25.0, 0.0)
+
+
+def test_times_charges_fallback_against_the_known_curves():
+    """The owner's mandated honesty check: compute the times-and-charges
+    fallback from IMCQ120R004M2H's OWN t_r/t_f and Q_gd, and report the ratio
+    against its published E_on/E_off curves at the L155 point (185.2 A,
+    800 V, 175 degC) — NOT tuned to 1, the ratio itself is what is being
+    checked."""
+    c = dv.get_device(REAL)
+    curve = c.e_switch(i_d_A=185.2, t_j_c=175.0, v_dc_V=800.0,
+                       v_gs_off_V=0.0, v_gs_on_V=18.0)
+    assert curve["switching_energy_source"] == "curves"
+
+    # The TIMES branch: IMCQ's card has no `gate.q_sw_nC`, so the fallback
+    # falls through to the datasheet's own t_r/t_f, scaled by R_g,total
+    # against the datasheet's OWN total (R_g,int + R_g,ext,ref) — which must
+    # equal 1.0 exactly at the datasheet's own R_g,ext, so this reproduces
+    # the measured curve almost exactly (it is recombining the manufacturer's
+    # own measured times, not re-deriving them).
+    fb_times = c._e_switch_from_times_charges(
+        i_d_A=185.2, t_j_c=175.0, v_dc_V=800.0, v_gs_off_V=0.0,
+        v_gs_on_V=18.0, r_g_ext_ohm=2.3)
+    assert fb_times["switching_energy_source"] == "times_and_charges"
+    ratio_on = fb_times["e_on_J"] / curve["e_on_J"]
+    ratio_off = fb_times["e_off_J"] / curve["e_off_J"]
+    assert 0.9 < ratio_on < 1.1
+    assert 0.9 < ratio_off < 1.1
+
+    # The CHARGE branch, exploratory: IMCQ's card publishes `q_gs_pl_nC`
+    # (plateau gate charge), not the `q_sw_nC` (switching charge) the
+    # production code reads — a different vendor convention — so it is
+    # injected here only to exercise the OTHER branch's honesty gap, the one
+    # IQE050N08NM5SC's own card actually uses in production.
+    import copy
+    doc2 = copy.deepcopy(c.doc)
+    doc2["gate"]["q_sw_nC"] = doc2["gate"]["q_gd_nC"] + doc2["gate"]["q_gs_pl_nC"]
+    c2 = dv.DeviceCard(doc2)
+    fb_charge = c2._e_switch_from_times_charges(
+        i_d_A=185.2, t_j_c=175.0, v_dc_V=800.0, v_gs_off_V=0.0,
+        v_gs_on_V=18.0, r_g_ext_ohm=2.3)
+    charge_ratio_on = fb_charge["e_on_J"] / curve["e_on_J"]
+    # The known, stated limitation of the first-order overlap model: it
+    # under-reads the manufacturer's measured energy by roughly a third here.
+    # This is NOT tuned to 1 — the gap itself is the honesty check.
+    assert 0.5 < charge_ratio_on < 0.75
+
+
+def test_tc_solve_reports_switching_energy_source_and_limits(synth_dir):
+    """The Oe40 L12 device end to end: the record names WHICH switching-energy
+    method it used, and the limit table still carries every row."""
+    out = lo.solve_controller(_synth_request(
+        device=REAL_TC, devices_parallel=2, v_dc_V=44.0,
+        i_phase_rms_A=43.8, p_ac_W=1900.0, star_delta="star",
+        f_elec_hz=1516.7, f_carrier_hz=48_000.0, v_gs_on_V=10.0,
+        v_gs_off_V=0.0, r_g_ext_ohm=1.6, dead_time_us=0.5,
+        cooling={"coolant": "water", "flow_lpm": 4.0, "t_in_c": 40.0,
+                 "r_override_k_w": 0.05},
+        r_tim_k_w=0.03, r_spread_k_w=0.02))
+    assert out["losses"]["switching_energy_source"] == "times_and_charges"
+    assert any("times-and-charges" in n.lower() or "TIMES-AND-CHARGES" in n
+               for n in out["model_notes"])
+    names = [r["name"] for r in out["limits"]]
+    assert names == list(_LIMIT_NAMES)
+    by = {r["name"]: r for r in out["limits"]}
+    assert by["DC link vs V_DSS"]["limit"] == pytest.approx(80.0)
+    assert by["Junction temperature"]["limit"] == pytest.approx(175.0)
+    assert by["Continuous current per device"]["limit"] is not None
+
+
+def test_validate_card_accepts_times_and_charges_without_curves():
+    doc = {
+        "part": "TCTEST", "package": "PG-TSON-8-4",
+        "ratings": {"v_dss_V": 80, "t_j_max_c": 175,
+                    "i_d_continuous": [{"t_case_c": 25, "i_a": 100}]},
+        "r_ds_on": {"curves": [{"v_gs_on_V": 10,
+                                "points": [{"t_j_c": 25, "r_mohm": 5.0}]}]},
+        "switching": {"v_dd_ref_V": 40, "r_g_ext_ref_ohm": 1.6,
+                     "times_ns": {"t_r": {"t_j_25": 5.0},
+                                  "t_f": {"t_j_25": 4.0}}},
+        "third_quadrant": {"curves": [{"v_gs_off_V": 0, "t_j_c": 25,
+                                       "points": [[0.0, 0.0], [0.8, 20.0]]}]},
+        "thermal": {"r_th_jc_k_w": {"max": 1.5}},
+    }
+    assert dv.validate_card(doc) == []
+
+
+def test_validate_card_refuses_switching_with_neither_curves_nor_times():
+    doc = {
+        "part": "HALFTC", "package": "X",
+        "ratings": {"v_dss_V": 80, "t_j_max_c": 175,
+                    "i_d_continuous": [{"t_case_c": 25, "i_a": 100}]},
+        "r_ds_on": {"curves": [{"v_gs_on_V": 10,
+                                "points": [{"t_j_c": 25, "r_mohm": 5.0}]}]},
+        "switching": {"v_dd_ref_V": 40},
+        "third_quadrant": {"curves": [{"v_gs_off_V": 0, "t_j_c": 25,
+                                       "points": [[0.0, 0.0], [0.8, 20.0]]}]},
+        "thermal": {"r_th_jc_k_w": {"max": 1.5}},
+    }
+    bad = dv.validate_card(doc)
+    assert any("times-and-charges fallback" in b for b in bad)
+
+
+# ---------------------------------------------------------------------------
 # The route, and the duty record it writes
 # ---------------------------------------------------------------------------
 
@@ -670,7 +818,7 @@ def test_route_solves_caches_and_lists(synth_dir, monkeypatch, tmp_path):
     c = TestClient(app)
 
     rows = c.get("/api/controller/devices").json()["devices"]
-    assert {r["part"] for r in rows} == {"SYNTH", REAL}
+    assert {r["part"] for r in rows} == {"SYNTH", REAL, REAL_TC}
 
     body = {k: v for k, v in _synth_request().items()}
     r1 = c.post("/api/controller/solve?fresh=true", json=body)

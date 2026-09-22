@@ -61,6 +61,7 @@ import SimulationPanel from './components/simulation/SimulationPanel';
 import Static3DPanel from './components/static3d/Static3DPanel';
 import MechanicalPanel from './components/mechanical/MechanicalPanel';
 import ThermalPanel from './components/thermal/ThermalPanel';
+import ControllerPanel from './components/controller/ControllerPanel';
 import { syncMeshConfigFromServer } from './lib/meshConfigSync';
 import CompareTab from './components/compare/CompareTab';
 import ComparePanel from './components/compare/ComparePanel';
@@ -499,6 +500,14 @@ function App() {
     // controls drive MotorScene.
     { id: 'thermal', label: 'Thermal', order: 58, gate: 'admin', showViewer: false,
       render: () => <ThermalPanel /> },
+    // The INVERTER (2026-09-22): the device, the coil->bridge map, the losses
+    // with the MOSFET coldplate and the waveform the motor will be fed with.
+    // It draws its own schematic, so like Mechanical and Thermal it does not
+    // take the AppBar's viewer cluster.  Admin-only for now: it writes the
+    // duty's `controller` block on the shared store, exactly as the coupled
+    // loop does.
+    { id: 'controller', label: 'Controller', order: 59, gate: 'admin', showViewer: false,
+      render: () => <ControllerPanel /> },
     // The optimizer/sweep burns the whole machine on the shared config —
     // server-side it is admin-only since the deploy hardening, so showing the
     // tab to pro users would only offer buttons that 403.

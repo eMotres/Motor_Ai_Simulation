@@ -8846,7 +8846,10 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # a machine nobody ran a duty cycle on gets no empty chapter — so the
     # numbering after it is not a constant and both renderers read it here.
     has_duty_cycle = any(duty_cycle_record(c) is not None for c in cols)
-    sec = section_numbers(has_duty_cycle)
+    # The CONTROLLER section (2026-09-22) follows the same rule: printed only
+    # where a duty of this configuration has been solved for an inverter.
+    has_controller = any(controller_record(c) is not None for c in cols)
+    sec = section_numbers(has_duty_cycle, has_controller)
 
     return {
         "pair": pair,
@@ -8914,6 +8917,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "supply": supply, "any_pwm": any_pwm(cols),
         "wf_sine_on_pwm": bool(wf_sine_on_pwm),
         "has_duty_cycle": has_duty_cycle,
+        "has_controller": has_controller,
         "sec": sec,
         # WHERE SECTIONS 6 AND 7 GOT THEIR TABLES (BL-1) — the duty's own
         # record, or the machine-level tab store when it really is this
@@ -9054,6 +9058,12 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     if D.get("has_duty_cycle"):
         story.append(CondPageBreak(PAGE_H * 0.5))
         story += _duty_cycle_page(st, cols, ctxs, sec, _figs)
+    # The CONTROLLER, when a duty has one: it follows the machine's own thermal
+    # answer (the inverter is cooled separately and judged separately) and
+    # precedes the mechanics.
+    if D.get("has_controller"):
+        story.append(CondPageBreak(PAGE_H * 0.5))
+        story += _controller_page(st, cols, sec)
     story.append(CondPageBreak(PAGE_H * 0.5))
     story += _mech_page(st, me, D.get("me_map_duty"),
                         field_src=(D.get("detail_src") or {}).get("rotor_stress"),
@@ -9139,7 +9149,7 @@ EM_FROM_LAST_RUN_NOTE = (
 #: no duty of the configuration carries a cycle record.
 SECTION_ORDER: Tuple[str, ...] = (
     "machine", "duties", "compare", "em", "pwm", "thermal", "duty_cycle",
-    "mech", "warnings", "notes")
+    "controller", "mech", "warnings", "notes")
 
 SECTION_TITLES: Dict[str, str] = {
     "machine": "Machine",
@@ -9149,6 +9159,7 @@ SECTION_TITLES: Dict[str, str] = {
     "pwm": "PWM influence",
     "thermal": "Thermal in detail",
     "duty_cycle": "Duty cycle",
+    "controller": "Controller",
     "mech": "Mechanical in detail",
     "warnings": "Warnings and limits",
     "notes": "Assumptions and notes",
@@ -9164,18 +9175,27 @@ SECTION_CONTENTS_WORDS: Dict[str, str] = {
     "pwm": "PWM influence",
     "thermal": "thermal in detail",
     "duty_cycle": "duty cycle",
+    "controller": "controller",
     "mech": "mechanical in detail",
     "warnings": "warnings and limits",
     "notes": "assumptions, notes and sources",
 }
 
 
-def section_numbers(has_duty_cycle: bool = False) -> Dict[str, int]:
-    """``{"thermal": 6, "mech": 7, …}`` — this document's section numbers."""
+def section_numbers(has_duty_cycle: bool = False,
+                    has_controller: bool = False) -> Dict[str, int]:
+    """``{"thermal": 6, "mech": 7, …}`` — this document's section numbers.
+
+    Two optional sections now, on the same rule: a chapter is printed only when
+    a duty of the configuration has an answer for it, and everything after it
+    shifts by one.  Neither renderer ever types a number.
+    """
     out: Dict[str, int] = {}
     n = 1
     for key in SECTION_ORDER:
         if key == "duty_cycle" and not has_duty_cycle:
+            continue
+        if key == "controller" and not has_controller:
             continue
         out[key] = n
         n += 1
@@ -9193,7 +9213,7 @@ def _sec_no(sec: Optional[Dict[str, int]], key: str) -> int:
     s = sec if isinstance(sec, dict) else {}
     if key in s:
         return int(s[key])
-    full = section_numbers(True)
+    full = section_numbers(True, True)
     return int(section_numbers().get(key, full.get(key, len(SECTION_ORDER))))
 
 
@@ -14909,6 +14929,186 @@ def _duty_cycle_page(st, cols: List[Dict[str, Any]],
                 fig_label(figs, caption, "duty '%s'" % c.get("duty")),
                 st["note"])]))
             out.append(Spacer(1, 4))
+    return out
+
+
+# ── the CONTROLLER section (2026-09-22) ─────────────────────────────────────
+# Printed only where a duty carries a `controller` record.  MINIMAL PROSE, like
+# every section since 2026-09-14: one intro sentence, one-clause notes, the
+# numbers in tables.  Two efficiencies are named in full and never merged —
+# the machine has ONE efficiency, at the shaft, and the inverter's is a second,
+# separate number whose product with it is spelled out as "wall-to-shaft".
+
+CONTROLLER_INTRO = (
+    "The inverter that feeds this machine: the device, how its bridges are "
+    "combined with the winding's coils, what they dissipate at this duty's "
+    "current and carrier, and the junction temperature the coldplate settles "
+    "them at.")
+
+CONTROLLER_NOT_RUN = (
+    "No controller solved for this duty — open the Controller tab, choose a "
+    "device and a topology and press Solve.")
+
+CONTROLLER_SHAFT_NOTE = (
+    "The machine's efficiency is the shaft efficiency and it is unchanged by "
+    "this section; the inverter's is a second, separate number, and their "
+    "product is the wall-to-shaft efficiency of the whole drive.")
+
+
+def controller_record(col: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """This duty's stored controller answer, or ``None``."""
+    rec = (col.get("res") or {}).get("controller")
+    return rec if isinstance(rec, dict) else None
+
+
+def controller_device_text(rec: Dict[str, Any]) -> str:
+    """One line: the device, the topology and how much silicon it is."""
+    d = rec.get("device_row") or {}
+    t = rec.get("topology") or {}
+    s = rec.get("settings") or {}
+    pkg = d.get("package_common_name") or d.get("package") or ""
+    return (f"{rec.get('device')} ({d.get('manufacturer') or ''}"
+            f"{', ' + str(pkg) if pkg else ''}, "
+            f"{_fmt(d.get('v_dss_V'), 0)} V) · "
+            f"{t.get('preset_label') or t.get('preset')} · "
+            f"{t.get('n_bridges')} bridge(s), {t.get('n_switches')} switches "
+            f"× {s.get('devices_parallel') or 1} in parallel "
+            f"= {t.get('n_devices')} devices.")
+
+
+def controller_rows(rec: Dict[str, Any]) -> List[List[str]]:
+    """The section's one table — what it costs and how hot it gets."""
+    L = rec.get("losses") or {}
+    T = rec.get("thermal") or {}
+    E = rec.get("efficiency") or {}
+    D = rec.get("dc_link") or {}
+    P = rec.get("point") or {}
+    cool = T.get("coldplate") or {}
+    rows: List[List[str]] = [["Quantity", "Value", "What it is"]]
+
+    def r(name: str, value: Any, note: str, digits: int = 1,
+          unit: str = "") -> None:
+        rows.append([name,
+                     (value if isinstance(value, str)
+                      else _fmt(value, digits)) + (f" {unit}" if unit else ""),
+                     note])
+
+    r("Conduction loss", L.get("conduction_W"),
+      "channel I²R of every switch at its junction temperature; with "
+      "synchronous rectification the leg current is always in a channel",
+      0, "W")
+    r("Third-quadrant loss", L.get("third_quadrant_W"),
+      "the dead-time windows, where the current is in a body diode", 0, "W")
+    r("Switching loss", L.get("switching_W"),
+      "one hard turn-on, one hard turn-off and one body-diode recovery per "
+      "carrier period per leg, scaled to this bus", 0, "W")
+    if str(L.get("e_oss_policy")) == "added":
+        r("Output-capacitance loss", L.get("e_oss_W"),
+          "E_oss added on top of the measured E_on (pessimistic bound)", 0, "W")
+    else:
+        r("Output-capacitance loss", "already in E_on",
+          f"the datasheet E_on is a hard-switching measurement and contains "
+          f"it; for reference it would be {_fmt(L.get('e_oss_reference_W'), 0)} W")
+    r("Total inverter loss", L.get("total_W"), "", 0, "W")
+    r("Inverter efficiency",
+      None if E.get("inverter") is None else float(E["inverter"]) * 100.0,
+      "AC output / (AC output + the losses above)", 2, "%")
+    r("Shaft efficiency",
+      None if E.get("shaft") is None else float(E["shaft"]) * 100.0,
+      "the machine's own, unchanged — read from this duty's coupled record",
+      2, "%")
+    r("Wall-to-shaft efficiency",
+      None if E.get("wall_to_shaft") is None else float(E["wall_to_shaft"]) * 100.0,
+      "inverter × shaft: DC link in, shaft out", 2, "%")
+    r("Junction temperature", T.get("t_j_max_c"),
+      f"hottest device; limit {_fmt(T.get('t_j_limit_c'), 0)} °C, margin "
+      f"{_fmt(T.get('margin_K'), 0)} K", 0, "°C")
+    r("Case temperature", T.get("t_case_c"),
+      f"through R_th(j-c) {_fmt(T.get('r_th_jc_k_w'), 3)} K/W "
+      f"({T.get('r_th_jc_basis')}), TIM {_fmt(T.get('r_tim_k_w'), 3)} K/W",
+      0, "°C")
+    r("Coolant", f"{_fmt(T.get('t_coolant_in_c'), 0)} → "
+                 f"{_fmt((T.get('t_coolant_in_c') or 0) + (T.get('coolant_rise_K') or 0), 0)} °C",
+      f"{cool.get('coolant')}, {_fmt(cool.get('flow_lpm'), 1)} L/min; "
+      f"plate {_fmt(T.get('r_coldplate_k_w'), 4)} K/W, {cool.get('regime')}")
+    r("DC-link ripple current", D.get("i_cap_rms_A"),
+      f"capacitor rms; bus mean {_fmt(D.get('i_dc_mean_A'), 0)} A, "
+      f"peak-to-peak {_fmt(D.get('i_dc_pp_A'), 0)} A", 0, "A")
+    r("Operating point",
+      f"{_fmt(P.get('i_phase_rms_A'), 0)} A phase / "
+      f"{_fmt(P.get('i_leg_rms_3ph_A'), 0)} A per leg",
+      f"{P.get('star_delta')}, m {_fmt(P.get('modulation_index'), 3)}, "
+      f"power factor {_fmt(P.get('power_factor'), 3)}, "
+      f"{_fmt(P.get('f_carrier_hz'), 0)} Hz carrier on "
+      f"{_fmt(P.get('v_dc_V'), 0)} V")
+    return rows
+
+
+def controller_bridge_rows(rec: Dict[str, Any]) -> List[List[str]]:
+    """One row per leg — the coils it drives, its current and its share."""
+    rows: List[List[str]] = [["Bridge / leg", "Coils", "Leg current",
+                              "Per device", "T_j"]]
+    for b in rec.get("bridges") or []:
+        for lg in b.get("legs") or []:
+            rows.append([
+                f"{b.get('id')}/{lg.get('leg')}",
+                ", ".join(str(c) for c in (lg.get("coils") or [])),
+                f"{_fmt(lg.get('i_leg_rms_A'), 0)} A rms",
+                f"{_fmt(lg.get('p_device_W'), 1)} W / "
+                f"{_fmt(lg.get('i_device_rms_A'), 0)} A",
+                f"{_fmt(lg.get('t_j_c'), 0)} °C"])
+    return rows
+
+
+def controller_assumption_text(rec: Dict[str, Any]) -> str:
+    """The one-clause assumptions line the minimal-prose rule allows."""
+    s = rec.get("settings") or {}
+    bits = [f"dead time {_fmt(s.get('dead_time_us'), 2)} µs",
+            f"V_GS {_fmt(s.get('v_gs_on_V'), 0)}/{_fmt(s.get('v_gs_off_V'), 0)} V"]
+    if s.get("r_g_ext_ohm") is not None:
+        bits.append(f"R_G,ext {_fmt(s.get('r_g_ext_ohm'), 1)} Ω")
+    if rec.get("set_split"):
+        bits.append(str(rec["set_split"]).replace("_", " "))
+    bits.append("devices in one switch share the current equally")
+    return "Assumptions: " + ", ".join(bits) + "."
+
+
+def controller_source_text(rec: Dict[str, Any]) -> str:
+    """Where the device numbers came from — the card's own provenance."""
+    p = rec.get("provenance") or {}
+    ds = p.get("datasheet_revision")
+    return ("Device data transcribed from the manufacturer's datasheet"
+            + (f" (revision {ds})" if ds else "")
+            + "; figure-read points carry the tolerance stated on the card.")
+
+
+def _controller_page(st, cols: List[Dict[str, Any]],
+                     sec: Optional[Dict[str, int]] = None) -> List[Any]:
+    from reportlab.platypus import Spacer
+
+    out: List[Any] = [_para(section_heading(sec, "controller"), st["h1"])]
+    out.append(_para(CONTROLLER_INTRO, st["body"]))
+    out.append(_para(CONTROLLER_SHAFT_NOTE, st["note"]))
+    for c in cols:
+        rec = controller_record(c)
+        out.append(_para("Duty '%s'" % c.get("duty"), st["h2"]))
+        if rec is None:
+            out.append(_para(CONTROLLER_NOT_RUN, st["note"]))
+            continue
+        out.append(_para(controller_device_text(rec), st["body"]))
+        for v in rec.get("violations") or []:
+            out.append(_para(FLAG + " " + str(v), st["warn"]))
+        rows = controller_rows(rec)
+        out.append(_table([[r[0], r[1], _para(str(r[2]), st["cell"])]
+                           for r in rows],
+                          [140, 120, CONTENT_W - 260], header=True, size=7.6))
+        out.append(Spacer(1, 4))
+        brows = controller_bridge_rows(rec)
+        out.append(_table(brows, [90, 70, 90, 110, CONTENT_W - 360],
+                          header=True, size=7.6))
+        out.append(Spacer(1, 3))
+        out.append(_para(controller_assumption_text(rec), st["note"]))
+        out.append(_para(controller_source_text(rec), st["note"]))
     return out
 
 

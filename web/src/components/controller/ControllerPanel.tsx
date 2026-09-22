@@ -1,0 +1,419 @@
+/**
+ * ControllerPanel — the Controller tab.
+ *
+ * Owner, 2026-09-22: the inverter as its own menu — the device, how the bridges
+ * are combined with the motor's coils ("один контроллер на один мотор, два
+ * контроллера на один мотор … один мост на каждую катушку отдельно"), the
+ * losses with the MOSFET cooling, and a power schematic that follows whatever
+ * topology is chosen.
+ *
+ * Layout: settings on the left, results on the right, the schematic and one
+ * electrical period of the waveform underneath, the device catalogue at the
+ * bottom.  One short line + HelpTip per control — no text walls.
+ *
+ * Every default comes from the DUTY (the backend resolves them from the stored
+ * coupled record and sends a `sources` map back); a field left blank here is a
+ * field the duty answers.
+ */
+import React, { useEffect, useMemo, useState } from 'react';
+import { Box, Paper, Typography, Button, TextField, MenuItem, Divider,
+         CircularProgress, Alert, Chip, Tooltip } from '@mui/material';
+import SectionLabel from '../common/SectionLabel';
+import HelpTip from '../common/HelpTip';
+import DeviceCatalog from './DeviceCatalog';
+import { listDevices, getTopologies, solveController, getLast, postSchematic,
+         polyline, fmt, pct,
+         type DeviceRow, type CoilRow, type ControllerResult } from './controllerApi';
+
+const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
+const NUM = { width: 120, '& input': { fontSize: 12, py: 0.5 } } as const;
+const TH = { fontSize: 11, color: 'var(--text-3)' } as const;
+const TD = { fontSize: 12, color: 'var(--text-1)', fontFamily: 'monospace', textAlign: 'right' } as const;
+
+type Nullable = number | '' ;
+
+const ControllerPanel: React.FC = () => {
+  const [devices, setDevices] = useState<DeviceRow[]>([]);
+  const [device, setDevice] = useState('');
+  const [presets, setPresets] = useState<{ id: string; label: string; hint: string }[]>([]);
+  const [coils, setCoils] = useState<CoilRow[]>([]);
+  const [machine, setMachine] = useState<Record<string, any>>({});
+
+  const [topology, setTopology] = useState('one_3ph');
+  const [setSplit, setSetSplit] = useState('series_split');
+  const [hbMod, setHbMod] = useState('unipolar');
+  const [nPar, setNPar] = useState<Nullable>(4);
+  const [rg, setRg] = useState<Nullable>(2.3);
+  const [vgsOff, setVgsOff] = useState<Nullable>(0);
+  const [dead, setDead] = useState<Nullable>(0.5);
+  const [fsw, setFsw] = useState<Nullable>('');
+  const [vdc, setVdc] = useState<Nullable>('');
+  const [coolant, setCoolant] = useState('water_glycol_50');
+  const [flow, setFlow] = useState<Nullable>(8);
+  const [tin, setTin] = useState<Nullable>(65);
+  const [rtim, setRtim] = useState<Nullable>(0.03);
+  const [mapping, setMapping] = useState<Record<number, string>>({});
+  /** N per switch, per bridge — empty means "the common count above". */
+  const [parByBridge, setParByBridge] = useState<Record<string, number>>({});
+  const [switchCurrent, setSwitchCurrent] = useState<
+    { i_switch_rms_A: number | null; basis: string | null; note: string } | null>(null);
+
+  const [res, setRes] = useState<ControllerResult | null>(null);
+  const [svg, setSvg] = useState<string>('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // ── what the machine is, and what cards exist ──────────────────────────
+  const loadDevices = async (topo: string) => {
+    const d = await listDevices(topo);
+    setDevices(d.devices);
+    setSwitchCurrent({ i_switch_rms_A: d.i_switch_rms_A,
+                       basis: d.i_switch_rms_basis, note: d.suggestion_note });
+    const first = d.devices.find(x => !x.error);
+    if (first) setDevice(p => p || first.part);
+  };
+
+  useEffect(() => { void (async () => {
+    try { await loadDevices(topology); } catch (e) { setErr(String(e)); }
+    try {
+      const t = await getTopologies({});
+      setPresets(t.presets); setCoils(t.coils); setMachine(t.machine || {});
+    } catch (e) { setErr(String(e)); }
+    try {
+      const last = await getLast();
+      if (last && (last as ControllerResult).device) setRes(last as ControllerResult);
+    } catch { /* nothing solved yet */ }
+  })(); }, []);
+
+  const customRows = useMemo(() =>
+    coils.map(c => ({ coil: c.index, bridge: (mapping[c.index] || 'INV1').split('/')[0],
+                      leg: (mapping[c.index] || 'INV1/A').split('/')[1] || 'A' })),
+    [coils, mapping]);
+
+  const body = () => ({
+    device,
+    devices_parallel: nPar === '' ? undefined : nPar,
+    topology, set_split: setSplit, h_bridge_modulation: hbMod,
+    r_g_ext_ohm: rg === '' ? undefined : rg,
+    v_gs_off_V: vgsOff === '' ? undefined : vgsOff,
+    dead_time_us: dead === '' ? undefined : dead,
+    f_carrier_hz: fsw === '' ? undefined : fsw,
+    v_dc_V: vdc === '' ? undefined : vdc,
+    r_tim_k_w: rtim === '' ? undefined : rtim,
+    cooling: { coolant, flow_lpm: flow === '' ? undefined : flow,
+               t_in_c: tin === '' ? undefined : tin },
+    mapping: topology === 'custom' ? customRows : undefined,
+    devices_parallel_by_bridge: Object.keys(parByBridge).length ? parByBridge : undefined,
+  });
+
+  // The per-switch current — and so the catalogue's "parallel" suggestion —
+  // depends on the topology, so it is re-asked when that changes.
+  useEffect(() => { void loadDevices(topology).catch(() => undefined); },
+    [topology]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── the schematic follows the topology, without solving ────────────────
+  const schemaKey = JSON.stringify([topology, device, nPar, vdc, hbMod,
+                                    topology === 'custom' ? customRows : null,
+                                    machine.num_slots, machine.num_poles]);
+  useEffect(() => { void (async () => {
+    if (!coils.length) return;
+    try {
+      // No star_delta: the route resolves the connection from the duty, the
+      // same way Solve does, so the picture cannot contradict the numbers.
+      const s = await postSchematic(body());
+      setSvg(s.svg);
+    } catch (e) { setSvg(''); }
+  })(); }, [schemaKey, coils.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const solve = async (fresh = false) => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await solveController(body(), fresh);
+      setRes(r);
+      if (r.schematic_svg) setSvg(r.schematic_svg);
+    } catch (e) { setErr(String(e)); }
+    setBusy(false);
+  };
+
+  const L = res?.losses as any; const T = res?.thermal as any;
+  const E = res?.efficiency; const P = res?.point as any;
+  const wave = res?.waveforms;
+  const firstCoil = wave ? Object.keys(wave.coils)[0] : null;
+
+  return (
+    <Box sx={{ height: '100%', overflowY: 'auto', p: 2.5, bgcolor: 'var(--panel-2)' }}>
+      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mb: 1, flexWrap: 'wrap' }}>
+        <Typography sx={{ fontSize: 20, fontWeight: 800, color: 'var(--text-0)' }}>Controller</Typography>
+        <HelpTip title="The inverter that drives this motor: which device, how many in parallel per switch, how the bridges map onto the winding's coils, and what that costs in watts and junction temperature. The operating point comes from the loaded duty's own coupled record — current, DC link, carrier and the one shaft efficiency." />
+        {res?.context && (
+          <Typography sx={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'monospace' }}>
+            {res.context.die} · {res.context.config} · {res.context.duty}
+          </Typography>
+        )}
+        <Box sx={{ flex: 1 }} />
+        {res?.served_from_history && (
+          <Tooltip title={`Loaded from history — computed ${res.computed_at || ''}`}>
+            <Chip size="small" label="from history" sx={{ fontSize: 10, height: 20 }} />
+          </Tooltip>
+        )}
+        <Button size="small" variant="contained" disabled={busy || !device}
+          onClick={() => void solve(false)} sx={{ textTransform: 'none' }}>
+          {busy ? 'Solving…' : 'Solve'}</Button>
+        <Button size="small" variant="outlined" disabled={busy || !device}
+          onClick={() => void solve(true)} sx={{ textTransform: 'none', fontSize: 11 }}>
+          Recompute</Button>
+      </Box>
+
+      {err && <Alert severity="error" sx={{ mb: 1.5, fontSize: 12.5 }}>{err}</Alert>}
+      {res?.violations?.map((v, i) => (
+        <Alert key={i} severity="error" sx={{ mb: 1, fontSize: 12.5 }}>{v}</Alert>))}
+      {res?.warnings?.map((w, i) => (
+        <Alert key={i} severity="warning" sx={{ mb: 1, fontSize: 12.5 }}>{w}</Alert>))}
+
+      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {/* ── settings ── */}
+        <Paper sx={{ ...CARD, width: 330, flexShrink: 0 }}>
+          <SectionLabel sx={{ mb: 1.5 }}>Controller</SectionLabel>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.1 }}>
+            <Row label="Device" tip="The power device, from the catalogue below. Its card carries the datasheet numbers this solve uses.">
+              <TextField select size="small" value={device} onChange={e => setDevice(e.target.value)}
+                sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                {devices.filter(d => !d.error).map(d =>
+                  <MenuItem key={d.part} value={d.part} sx={{ fontSize: 12 }}>{d.part}</MenuItem>)}
+              </TextField>
+            </Row>
+            <Row label="Topology" tip="How the bridges are combined with the motor: one inverter, two inverters on alternate coils, an H-bridge per coil, or an explicit coil-to-bridge mapping.">
+              <TextField select size="small" value={topology} onChange={e => setTopology(e.target.value)}
+                sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                {presets.map(p => <MenuItem key={p.id} value={p.id} sx={{ fontSize: 12 }}>{p.label}</MenuItem>)}
+              </TextField>
+            </Row>
+            {topology === 'two_3ph' && (
+              <Row label="Coil split" tip="series_split: the winding is untouched, so each inverter keeps the per-coil current and supplies half the volts. power_split: the sets are reconnected so each inverter delivers half the power at the full bus, halving the device current.">
+                <TextField select size="small" value={setSplit} onChange={e => setSetSplit(e.target.value)}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="series_split" sx={{ fontSize: 12 }}>series split</MenuItem>
+                  <MenuItem value="power_split" sx={{ fontSize: 12 }}>power split</MenuItem>
+                </TextField>
+              </Row>)}
+            {topology === 'h_bridge' && (
+              <Row label="H-bridge PWM" tip="Unipolar switches the two legs against opposite references — the coil sees twice the ripple frequency and half the step. Bipolar switches the diagonals together.">
+                <TextField select size="small" value={hbMod} onChange={e => setHbMod(e.target.value)}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="unipolar" sx={{ fontSize: 12 }}>unipolar</MenuItem>
+                  <MenuItem value="bipolar" sx={{ fontSize: 12 }}>bipolar</MenuItem>
+                </TextField>
+              </Row>)}
+            <Row label="Devices / switch" tip="How many of the chosen part sit in parallel in ONE switch position. They are assumed to share the current equally — the usual reason a real stack is derated."><Num v={nPar} set={setNPar} /></Row>
+            <Row label="R_G,ext" tip="External gate resistance. The card's switching energies were measured at its own R_G and are scaled linearly from it." unit="Ω"><Num v={rg} set={setRg} /></Row>
+            <Row label="V_GS off" tip="Gate-off voltage: 0 V or −5 V. It changes both the turn-off energy and the body-diode drop during dead time." unit="V"><Num v={vgsOff} set={setVgsOff} /></Row>
+            <Row label="Dead time" tip="Both switches of a leg off. The current then runs through a SiC body diode at ~4 V, so this is expensive — and it is what distorts the output voltage at every current zero crossing." unit="µs"><Num v={dead} set={setDead} /></Row>
+            <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
+            <Row label="Carrier" tip="PWM carrier frequency. Blank = the duty's own (its stored inverter block)." unit="Hz"><Num v={fsw} set={setFsw} /></Row>
+            <Row label="DC link" tip="Bus voltage. Blank = the duty's own — for this machine the battery pack the configuration carries." unit="V"><Num v={vdc} set={setVdc} /></Row>
+            <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
+            <SectionLabel sx={{ mb: 0.5 }}>MOSFET cooling</SectionLabel>
+            <Row label="Coolant" tip="The coldplate fluid, from the same catalogue the motor jacket uses.">
+              <TextField select size="small" value={coolant} onChange={e => setCoolant(e.target.value)}
+                sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                {['water', 'water_glycol_50', 'ethylene_glycol', 'oil'].map(c =>
+                  <MenuItem key={c} value={c} sx={{ fontSize: 12 }}>{c}</MenuItem>)}
+              </TextField>
+            </Row>
+            <Row label="Flow" tip="Coldplate flow. It sets the film coefficient AND the coolant's own temperature rise." unit="L/min"><Num v={flow} set={setFlow} /></Row>
+            <Row label="Inlet" tip="Coolant inlet temperature — the bottom of the whole thermal stack." unit="°C"><Num v={tin} set={setTin} /></Row>
+            <Row label="R_th TIM" tip="Thermal interface between the device tab and the plate, per device. It is comparable with R_th(j-c) itself, so it changes the answer." unit="K/W"><Num v={rtim} set={setRtim} /></Row>
+          </Box>
+        </Paper>
+
+        {/* ── results ── */}
+        <Paper sx={{ ...CARD, flex: 1, minWidth: 420 }}>
+          {busy && !res && <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', color: 'var(--text-3)', py: 2 }}><CircularProgress size={16} /> Solving…</Box>}
+          {!res && !busy && <Typography sx={{ fontSize: 12.5, color: 'var(--text-3)' }}>Press Solve — the operating point comes from the loaded duty.</Typography>}
+          {res && (
+            <>
+              {/* ONE LINE for the whole model, the full text behind the ⓘ.
+                  Owner 2026-09-22: «не пиши это всё, никто это не читает». */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  Model: datasheet curves at T_j · hard-switching bus scaling ·
+                  synchronous rectification · {res.settings?.devices_parallel} device(s)
+                  per switch sharing equally
+                </Typography>
+                <HelpTip title={(res.model_notes || []).join('. ')} />
+              </Box>
+              <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 1.5 }}>
+                <Tile label="Inverter losses" value={`${fmt(L?.total_W, 0)} W`} />
+                <Tile label="Inverter efficiency" value={pct(E?.inverter)} />
+                <Tile label="Wall-to-shaft efficiency" value={pct(E?.wall_to_shaft)}
+                  tip="inverter efficiency × the ONE shaft efficiency of this duty's coupled record" />
+                <Tile label="T_j max" value={`${fmt(T?.t_j_max_c, 0)} °C`}
+                  bad={(T?.margin_K ?? 1) < 0}
+                  tip={`limit ${fmt(T?.t_j_limit_c, 0)} °C · margin ${fmt(T?.margin_K, 0)} K`} />
+                <Tile label="DC-link ripple" value={`${fmt(res.dc_link?.i_cap_rms_A, 0)} A rms`}
+                  tip={`mean ${fmt(res.dc_link?.i_dc_mean_A, 0)} A · pk-pk ${fmt(res.dc_link?.i_dc_pp_A, 0)} A`} />
+                <Tile label="Switches" value={`${res.topology?.n_switches} × ${res.settings?.devices_parallel}`}
+                  tip={`${res.topology?.n_devices} devices in ${res.topology?.n_bridges} bridge(s)`} />
+              </Box>
+
+              <SectionLabel sx={{ mb: 0.75 }}>Loss split</SectionLabel>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1.6fr repeat(5, 1fr)', rowGap: 0.5, columnGap: 1 }}>
+                <Typography sx={TH}>Bridge / leg</Typography>
+                <Typography sx={{ ...TH, textAlign: 'right' }}>Conduction</Typography>
+                <Typography sx={{ ...TH, textAlign: 'right' }}>3rd quadrant</Typography>
+                <Typography sx={{ ...TH, textAlign: 'right' }}>Switching</Typography>
+                <Typography sx={{ ...TH, textAlign: 'right' }}>Per device</Typography>
+                <Typography sx={{ ...TH, textAlign: 'right' }}>T_j</Typography>
+                {res.bridges?.map(b => (
+                  <React.Fragment key={b.id}>
+                    <Box sx={{ gridColumn: '1 / -1', mt: 0.5, display: 'flex',
+                               alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                      <Typography sx={{ fontSize: 11.5, color: 'var(--text-0)' }}>
+                        {b.label} · {b.connection} · m {fmt(b.modulation_index, 3)} · {fmt(b.p_loss_W, 0)} W
+                      </Typography>
+                      {/* N per switch is a property of THIS bridge and is
+                          edited where it is read (owner 2026-09-22). */}
+                      <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>parallel</Typography>
+                      <TextField type="number" size="small"
+                        value={parByBridge[b.id] ?? b.devices_parallel}
+                        onChange={e => setParByBridge(m => ({
+                          ...m, [b.id]: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
+                        sx={{ width: 68, '& input': { fontSize: 11.5, py: 0.25 } }} />
+                    </Box>
+                    {b.legs.map(l => (
+                      <React.Fragment key={`${b.id}${l.leg}`}>
+                        <Typography sx={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'monospace' }}>
+                          {b.id}/{l.leg} · {fmt(l.i_leg_rms_A, 0)} A</Typography>
+                        <Typography sx={TD}>{fmt(l.p_conduction_W, 0)} W</Typography>
+                        <Typography sx={TD}>{fmt(l.p_third_quadrant_W, 0)} W</Typography>
+                        <Typography sx={TD}>{fmt(l.p_switching_W, 0)} W</Typography>
+                        <Typography sx={TD}>{fmt(l.p_device_W, 1)} W</Typography>
+                        <Typography sx={{ ...TD, color: l.t_j_c > (T?.t_j_limit_c ?? 1e9) ? '#fca5a5' : 'var(--text-1)' }}>
+                          {fmt(l.t_j_c, 0)} °C</Typography>
+                      </React.Fragment>))}
+                  </React.Fragment>))}
+                <Divider sx={{ gridColumn: '1 / -1', borderColor: 'var(--panel)', my: 0.5 }} />
+                {/* The totals do NOT go in the grid: its last two columns are
+                    "per device" and "T_j", and a sum has neither. */}
+                <Typography sx={{ gridColumn: '1 / -1', fontSize: 12.5, color: 'var(--text-0)' }}>
+                  Total {fmt(L?.total_W, 0)} W — conduction {fmt(L?.conduction_W, 0)} W ·
+                  3rd quadrant {fmt(L?.third_quadrant_W, 0)} W ·
+                  switching {fmt(L?.switching_W, 0)} W ·
+                  E_oss {fmt(L?.e_oss_W, 0)} W
+                </Typography>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  E_oss {L?.e_oss_policy === 'added' ? 'added' : 'in E_on'} ·
+                  coolant {fmt(T?.t_coolant_in_c, 0)} → {fmt(T?.t_coolant_in_c + (T?.coolant_rise_K ?? 0), 0)} °C ·
+                  case {fmt(T?.t_case_c, 0)} °C · R_plate {fmt(T?.r_coldplate_k_w, 4)} K/W
+                </Typography>
+                <HelpTip title={`E_oss reference ${fmt(L?.e_oss_reference_W, 0)} W.`} />
+              </Box>
+            </>
+          )}
+        </Paper>
+      </Box>
+
+      {/* ── schematic + waveform ── */}
+      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 2, alignItems: 'flex-start' }}>
+        <Paper sx={{ ...CARD, flex: 1, minWidth: 420 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <SectionLabel sx={{ m: 0 }}>Power schematic</SectionLabel>
+            <HelpTip title="Drawn from the chosen topology and the winding builder's own coils, so it cannot disagree with the numbers. ×N on a switch is the parallel device count." />
+          </Box>
+          <Box sx={{ color: 'var(--text-1)', overflowX: 'auto' }}
+            dangerouslySetInnerHTML={{ __html: svg }} />
+        </Paper>
+
+        <Paper sx={{ ...CARD, flex: 1, minWidth: 380 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <SectionLabel sx={{ m: 0 }}>One electrical period</SectionLabel>
+            <HelpTip title="What the coil actually sees: the PWM terminal voltage with the device drops and the dead-time windows, over the phase current. The voltage error the dead time causes flips sign at every current zero crossing." />
+          </Box>
+          {wave && firstCoil ? (
+            <>
+              <svg viewBox="0 0 600 150" style={{ width: '100%' }} role="img" aria-label="phase voltage and current">
+                {/* Each trace on its OWN scale (the report's rule for a figure
+                    pair): the PWM voltage swings the bus, the current a few
+                    hundred amps, and one axis would hide the second. */}
+                <polyline points={polyline(wave.coils[firstCoil].v_V, 600, 150)} fill="none"
+                  stroke="var(--text-3)" strokeWidth="0.8" />
+                <polyline points={polyline(wave.coils[firstCoil].i_A, 600, 150)} fill="none"
+                  stroke="#0ea5e9" strokeWidth="1.6" />
+              </svg>
+              <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                coil {firstCoil} · v_rms {fmt(wave.coils[firstCoil].v_rms_V, 0)} V ·
+                i_rms {fmt(wave.coils[firstCoil].i_rms_A, 0)} A ·
+                f {fmt(wave.f_elec_hz, 0)} Hz · dead time {fmt(wave.dead_time_us, 2)} µs
+                {wave.dead_time_error_V != null && ` · dead-time voltage error ±${fmt(wave.dead_time_error_V, 1)} V`}
+              </Typography>
+            </>
+          ) : <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>Solve to draw the waveform.</Typography>}
+          {res && (
+            <Box sx={{ mt: 1.5 }}>
+              <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                {P?.i_leg_rms_3ph_A != null && `leg ${fmt(P.i_leg_rms_3ph_A, 0)} A rms · `}
+                phase {fmt(P?.i_phase_rms_A, 0)} A · {P?.star_delta} ·
+                m {fmt(P?.modulation_index, 3)} · pf {fmt(P?.power_factor, 3)} ·
+                {` ${fmt(P?.f_carrier_hz, 0)} Hz carrier · ${fmt(P?.v_dc_V, 0)} V bus`}
+              </Typography>
+            </Box>)}
+        </Paper>
+      </Box>
+
+      {/* ── custom mapping ── */}
+      {topology === 'custom' && (
+        <Paper sx={{ ...CARD, mt: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <SectionLabel sx={{ m: 0 }}>Coil → bridge mapping</SectionLabel>
+            <HelpTip title="One row per coil: which bridge and which leg drives it. Written as BRIDGE/LEG (e.g. INV1/A, HB3/P). Every coil must be assigned exactly once — the backend refuses anything else by coil number." />
+          </Box>
+          <Box sx={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 0.75, columnGap: 1.5, alignItems: 'center', maxWidth: 520 }}>
+            {coils.map(c => (
+              <React.Fragment key={c.index}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'monospace' }}>{c.label}</Typography>
+                <TextField size="small" value={mapping[c.index] ?? `INV1/${c.phase}`}
+                  onChange={e => setMapping(m => ({ ...m, [c.index]: e.target.value }))}
+                  sx={{ width: 160, '& input': { fontSize: 12, py: 0.5, fontFamily: 'monospace' } }} />
+              </React.Fragment>))}
+          </Box>
+        </Paper>)}
+
+      {/* ── catalogue ── */}
+      <Box sx={{ mt: 2 }}>
+        <DeviceCatalog devices={devices} selected={device} onSelect={setDevice}
+          onChanged={setDevices} parallel={nPar} onParallel={setNPar}
+          switchCurrent={switchCurrent} />
+      </Box>
+
+    </Box>
+  );
+};
+
+const Row: React.FC<{ label: string; tip: string; unit?: string; children: React.ReactNode }> =
+  ({ label, tip, unit, children }) => (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Typography sx={{ fontSize: 12, color: 'var(--text-1)', flex: 1 }}>{label}</Typography>
+      <HelpTip title={tip} />
+      {children}
+      {unit && <Typography sx={{ fontSize: 10, color: 'var(--text-3)', width: 32 }}>{unit}</Typography>}
+    </Box>);
+
+const Num: React.FC<{ v: Nullable; set: (v: Nullable) => void }> = ({ v, set }) => (
+  <TextField type="number" size="small" value={v}
+    onChange={e => set(e.target.value === '' ? '' : parseFloat(e.target.value))}
+    sx={NUM} />);
+
+const Tile: React.FC<{ label: string; value: string; tip?: string; bad?: boolean }> =
+  ({ label, value, tip, bad }) => (
+    <Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{label}</Typography>
+        {tip && <HelpTip title={tip} />}
+      </Box>
+      <Typography sx={{ fontSize: 18, fontWeight: 800, color: bad ? '#fca5a5' : 'var(--text-0)' }}>
+        {value}</Typography>
+    </Box>);
+
+export default ControllerPanel;

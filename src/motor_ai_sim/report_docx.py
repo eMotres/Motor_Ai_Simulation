@@ -694,6 +694,7 @@ def build_motor_report_docx(*, die: str, cfg: str, die_doc: Dict[str, Any],
     _pwm_influence(doc, D)
     _thermal_detail(doc, D)
     _duty_cycle(doc, D)
+    _controller(doc, D)
     _mech_detail(doc, D)
     _warnings(doc, D)
     _notes(doc, D)
@@ -1426,6 +1427,36 @@ def _duty_cycle(doc, D: Dict[str, Any]) -> None:
             if _picture(doc, blob):
                 _caption(doc, R.fig_label(_numbered(D), caption,
                                           "duty '%s'" % c.get("duty")))
+
+
+# ── controller ──────────────────────────────────────────────────────────────
+# The PDF's `report._controller_page`, in Word.  Printed only when a duty of
+# this configuration has an inverter answer; every number and every sentence
+# comes from `report`, so the two documents cannot disagree about what the
+# controller costs or how hot it gets.
+
+
+def _controller(doc, D: Dict[str, Any]) -> None:
+    if not D.get("has_controller"):
+        return
+    _h(doc, R.section_heading(D.get("sec"), "controller"), 1)
+    _p(doc, R.CONTROLLER_INTRO, size=9.5)
+    _p(doc, R.CONTROLLER_SHAFT_NOTE, size=9, italic=True, color=NOTE)
+    for c in D["cols"]:
+        rec = R.controller_record(c)
+        _h(doc, "Duty '%s'" % c.get("duty"), 2)
+        if rec is None:
+            _p(doc, R.CONTROLLER_NOT_RUN, size=9.5, italic=True, color=NOTE)
+            continue
+        _p(doc, R.controller_device_text(rec), size=9.5)
+        for v in rec.get("violations") or []:
+            _p(doc, "%s %s" % (R.FLAG, v), size=9, bold=True, color=WARN)
+        _table(doc, R.controller_rows(rec), size=10.5,
+               widths_cm=[5.4, 4.0, 17.3])
+        _table(doc, R.controller_bridge_rows(rec), size=10.5,
+               widths_cm=[4.0, 3.2, 4.4, 5.6, 9.5])
+        _p(doc, R.controller_assumption_text(rec), size=9, italic=True, color=NOTE)
+        _p(doc, R.controller_source_text(rec), size=9, italic=True, color=NOTE)
 
 
 # ── 7 mechanical in detail ──────────────────────────────────────────────────

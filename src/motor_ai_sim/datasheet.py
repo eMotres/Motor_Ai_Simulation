@@ -1102,6 +1102,25 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         k = (1.0 / (1.0 + x)) if gen else max(0.0, 1.0 - x)
         return float(eta) * k
 
+    # ── the CONTROLLER's two numbers (2026-09-22) ───────────────────────────
+    # The inverter is a separate machine with a separate efficiency, and the
+    # project's rule is that there is ONE efficiency at the shaft: so the
+    # inverter gets its own named row and the product is spelled out in full as
+    # "wall-to-shaft" rather than folded into anything above.  Both come out of
+    # the duty's stored `controller` block and appear only where one exists.
+    try:
+        from motor_ai_sim import duty_results as _dr_c
+        _ctrl_by_duty = _dr_c.get(die, cfg)
+    except Exception:                            # noqa: BLE001
+        _ctrl_by_duty = {}
+
+    def _ctrl(d: Dict[str, Any]) -> Dict[str, Any]:
+        e = (_ctrl_by_duty or {}).get(str(d.get("name") or "")) or {}
+        c = e.get("controller")
+        return c if isinstance(c, dict) else {}
+
+    _has_ctrl = any(_ctrl(d) for d in duties)
+
     # ── title ───────────────────────────────────────────────────────────────
     t = ws.cell(row=1, column=1, value=f"{die} · {cfg}")
     t.font = Font(bold=True, size=16, color=_TITLE)
@@ -1155,6 +1174,43 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             "sit — between the rotor and the coupling. This is what a dynamometer "
             "on the shaft reads. Analytic (SKF frictional-moment model + windage), "
             "not FEM", 2, bold=True)
+    if _has_ctrl:
+        row("Inverter efficiency (%)",
+            [((_ctrl(d).get("efficiency") or {}).get("inverter") or None) and
+             float((_ctrl(d).get("efficiency") or {})["inverter"]) * 100.0
+             for d in duties],
+            "the CONTROLLER alone: AC output / (AC output + conduction, "
+            "dead-time, switching and E_oss losses of every switch) at the "
+            "device, carrier and cooling the Controller tab was solved with", 2,
+            bold=True)
+        row("Wall-to-shaft efficiency (%)",
+            [((_ctrl(d).get("efficiency") or {}).get("wall_to_shaft") or None) and
+             float((_ctrl(d).get("efficiency") or {})["wall_to_shaft"]) * 100.0
+             for d in duties],
+            "inverter efficiency × the shaft efficiency above — DC link in, "
+            "shaft out, the whole drive", 2, bold=True)
+        row("Inverter loss (W)",
+            [((_ctrl(d).get("losses") or {}).get("total_W")) for d in duties],
+            "every switch of every bridge, at the junction temperature the "
+            "coldplate settles them at", 0)
+        row("Controller device",
+            [str((_ctrl(d).get("device") or "")) for d in duties],
+            "the power device the two rows above were computed for", 0)
+        row("Controller topology",
+            [f"{(_ctrl(d).get('topology') or {}).get('preset_label') or ''}"
+             f" · {(_ctrl(d).get('topology') or {}).get('n_switches') or 0} switches"
+             f" × {((_ctrl(d).get('settings') or {}).get('devices_parallel') or 1)}"
+             if _ctrl(d) else "" for d in duties],
+            "how the bridges are combined with the coils, and how many devices "
+            "sit in parallel in one switch position", 0)
+        row("Junction temperature (°C)",
+            [((_ctrl(d).get("thermal") or {}).get("t_j_max_c")) for d in duties],
+            "the hottest device, with its margin to the datasheet limit in the "
+            "report's Controller section", 0)
+        row("DC-link ripple current (A rms)",
+            [((_ctrl(d).get("dc_link") or {}).get("i_cap_rms_A")) for d in duties],
+            "what the link capacitor carries — computed from the modulator's "
+            "switching functions, ideal devices", 0)
     row("Minimum bus voltage (V)",
         [_g(d, "result.v_ll_peak_v", "summary.V_line_peak_V") for d in duties],
         "line-to-line peak of the solved waveform — the DC bus must stay above it", 1)

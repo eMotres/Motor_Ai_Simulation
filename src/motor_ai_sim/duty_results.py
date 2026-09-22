@@ -76,9 +76,14 @@ log = logging.getLogger(__name__)
 #: in this store (and in the report) assumes.  It is a MEASUREMENT record, not a
 #: solver route's tail — a PWM run is a separate, deliberate experiment at one
 #: point, so it is filed through :func:`note_pwm` by whoever made it.
+#: ``controller`` (2026-09-22) is the INVERTER's own answer for this duty: the
+#: device, the coil->bridge map, the loss split, the junction temperatures and
+#: the second efficiency (wall-to-shaft).  It is filed like the others so the
+#: report can print a Controller section only where one exists, and it carries
+#: NO field maps — the waveform it stores is one electrical period, decimated.
 KINDS: Tuple[str, ...] = ("thermal", "rotor_stress", "modes",
                           "critical_speeds", "coupled", "em", "duty_cycle",
-                          "pwm", "continuous_rating")
+                          "pwm", "continuous_rating", "controller")
 
 #: The mechanical kinds, in the order ``routes.mechanical._LAST`` names them.
 MECH_KINDS: Tuple[str, ...] = ("rotor_stress", "modes", "critical_speeds")
@@ -1471,6 +1476,70 @@ def note_pwm(record_: Dict[str, Any], computed_at: Optional[str] = None,
     return record(*ctx, "pwm", compact_pwm(record_, computed_at))
 
 
+def compact_controller(out: Dict[str, Any]) -> Dict[str, Any]:
+    """What the report and the datasheet need from a controller solve.
+
+    Explicit keys, like every other ``compact_*`` here: the solve's own payload
+    carries a full electrical period of every coil's voltage and current, and a
+    duty store that grew those arrays would be megabytes per machine.  The
+    waveform is dropped; the numbers, the map and the assumptions stay.
+    """
+    topo = out.get("topology") or {}
+    return {
+        "computed_at": out.get("computed_at") or _now(),
+        "device": out.get("device"),
+        "device_row": _pick(out.get("device_row") or {},
+                            ("part", "manufacturer", "package",
+                             "package_common_name", "v_dss_V", "i_d_100c_A",
+                             "t_j_max_c", "r_ds_on_25c_mohm",
+                             "r_ds_on_175c_mohm", "r_th_jc_k_w",
+                             "r_th_jc_max_k_w", "datasheet_url",
+                             "datasheet_revision")),
+        "topology": {k: topo.get(k) for k in
+                     ("preset", "preset_label", "star_delta", "n_bridges",
+                      "n_switches", "n_devices", "mapping", "notes")},
+        "bridges": [{k: b.get(k) for k in
+                     ("id", "kind", "label", "connection", "coils",
+                      "devices_parallel", "n_switches", "modulation",
+                      "modulation_index", "p_loss_W", "legs")}
+                    for b in (out.get("bridges") or [])],
+        "losses": dict(out.get("losses") or {}),
+        "thermal": dict(out.get("thermal") or {}),
+        "dc_link": dict(out.get("dc_link") or {}),
+        "efficiency": dict(out.get("efficiency") or {}),
+        "point": dict(out.get("point") or {}),
+        "settings": dict(out.get("settings") or {}),
+        "set_split": out.get("set_split"),
+        "provenance": dict(out.get("provenance") or {}),
+        "warnings": list(out.get("warnings") or []),
+        "violations": list(out.get("violations") or []),
+        # The full assumption text lives HERE, in the record, and in the docs
+        # note — never on the tab (owner 2026-09-22: «не пиши это всё, никто
+        # это не читает»).  The tab shows one line and a tooltip.
+        "assumptions": list(out.get("model_notes") or []),
+        "schematic_svg": out.get("schematic_svg"),
+        "elapsed_s": _f(out.get("elapsed_s")),
+    }
+
+
+def note_controller(out: Dict[str, Any], die: Optional[str] = None,
+                    cfg: Optional[str] = None,
+                    duty: Optional[str] = None) -> bool:
+    """File a controller solve under the duty it was solved for.
+
+    Like ``note_pwm``, the caller may NAME the duty: the Controller tab solves
+    from a stored record and the editor's context is not necessarily pointing
+    at it.
+    """
+    if die and cfg and duty:
+        ctx: Optional[Tuple[str, str, str]] = (str(die), str(cfg), str(duty))
+    else:
+        ctx = active_context()
+    if ctx is None:
+        return False
+    return record(*ctx, "controller", compact_controller(out))
+
+
 def note_em_pointer(die: str, cfg: str, duty: str,
                     saved_at: Optional[str] = None,
                     build_sig: Optional[str] = None) -> bool:
@@ -1497,5 +1566,6 @@ def kinds_present(entry: Dict[str, Any]) -> List[str]:
     (``GET /api/family/duty_results``) never mentioned it.
     """
     return [k for k in ("em", "pwm", "thermal", "duty_cycle", "coupled",
-                        "rotor_stress", "critical_speeds", "modes")
+                        "controller", "rotor_stress", "critical_speeds",
+                        "modes")
             if isinstance((entry or {}).get(k), dict)]

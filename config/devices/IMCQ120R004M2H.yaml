@@ -1,0 +1,325 @@
+# ============================================================
+# Power-device card — Infineon IMCQ120R004M2H
+# CoolSiC(TM) 1200 V SiC MOSFET G2, Q-DPAK top-side cooled
+# ============================================================
+# EVERY number below is transcribed from the sources named in the `source`
+# line of its own block.  Nothing is invented.  A value the datasheet does
+# not publish is `null`, and the model says so rather than guessing.
+#
+# Two kinds of number live here and they are TAGGED, because they do not
+# carry the same authority:
+#   basis: table   — read from a numbered TABLE of the datasheet; exact.
+#   basis: figure  — READ OFF A PLOTTED CURVE by eye.  Useful, but it is a
+#                    digitisation: `tolerance_pct` states how far it may be
+#                    out.  Where a figure point coincides with a table point
+#                    the TABLE value is written and the point is marked
+#                    `anchor: true`.
+#
+# Units: V, A, ohm (`_ohm`), mOhm (`_mohm`), degC, W, K/W, nC, pF, uJ.
+# ============================================================
+
+part: IMCQ120R004M2H
+manufacturer: Infineon
+family: "CoolSiC MOSFET 1200 V G2"
+technology: sic_mosfet
+package: PG-HDSOP-22-U03
+package_common_name: Q-DPAK
+cooling: top_side            # the TAB (pins 12-22, drain) is the cooled face
+marking: 12M2H004
+# Package outline — datasheet Figure 1 (section 5, "Package outlines"),
+# PACKAGE-GROUP-NUMBER PG-HDSOP-22-U03, MAX column:
+#   length_mm = D  (body across the two lead rows)            15.10
+#   width_mm  = E  (overall, lead tip to lead tip)            21.11
+#   height_mm = A  (seating plane to the top of the tab)       2.35
+# Body-only width is E1 = 15.50 mm max; 22 leads on 1.14 mm pitch (e).
+package_size_mm:
+  source: "Datasheet Figure 1 (section 5, Package outlines), MAX column"
+  length_mm: 15.10
+  width_mm: 21.11
+  height_mm: 2.35
+  body_width_mm: 15.50
+  lead_pitch_mm: 1.14
+  leads: 22
+#: Not published in this datasheet revision.
+weight_g: null
+datasheet_revision: "1.10, 2025-10-13"
+datasheet_url: "https://www.infineon.com/assets/row/public/documents/60/49/infineon-imcq120r004m2h-datasheet-en.pdf"
+application_note_url: "https://www.infineon.com/assets/row/public/documents/60/42/infineon-an2025-10-understanding-and-interpreting-the-coolsic-mosfet-1200v-datasheet-applicationnotes-en.pdf"
+application_note_revision: "AN2025-10 V 1.1, 2026-07-15"
+
+# ── ratings ────────────────────────────────────────────────────────────────
+ratings:
+  source: "Datasheet Table 2 (Maximum rated values); T_vj from Table 4"
+  v_dss_V: 1200                # T_vj >= 25 degC
+  i_d_continuous:
+    # I_DDC, V_GS = 18 V, limited by T_vj(max) through R_th(j-c,max)
+    - {t_case_c: 25,  i_a: 403, basis: table}
+    - {t_case_c: 100, i_a: 287, basis: table}
+  i_d_pulsed_A: 1433           # I_DM, V_GS = 18 V, limited by T_vj(max)
+  p_tot_W:
+    - {t_case_c: 25,  p_w: 1500, basis: table}
+    - {t_case_c: 100, p_w: 750,  basis: table}
+  t_j_max_c: 175               # T_vj, Table 4
+  t_j_overload_c: 200          # T_vj(over), cumulative max 100 h, <=5000 cycles, dT <= 100 K
+  t_storage_c: {min: -55, max: 150}
+  v_gs_transient_V: {min: -10, max: 25}   # t_p <= 0.5 us, D < 0.01
+  v_gs_static_V:    {min: -7,  max: 23}
+  e_as_mJ: 1163                # single pulse, I_D = 93 A, V_DD = 50 V, L = 0.3 mH
+  e_ar_mJ: 5.8                 # repetitive, I_D = 93 A, V_DD = 50 V, L = 1.4 uH
+
+# ── gate ───────────────────────────────────────────────────────────────────
+gate:
+  source: "Datasheet Table 3 (Recommended values) and Table 4 (Characteristic values)"
+  v_gs_on_recommended_V:  {min: 15, max: 18}
+  v_gs_off_recommended_V: {min: -5, max: 0}
+  v_gs_th_V: {min: 3.5, typ: 4.2, max: 5.1, at_t_j_c: 25,
+              note: "I_D = 58.3 mA, V_DS = V_GS; typ 3.2 V at T_vj = 175 degC"}
+  q_g_nC:  348                 # V_DD = 800 V, I_D = 185.2 A, V_GS = 0/18 V
+  q_gs_pl_nC: 76               # plateau gate charge, same conditions
+  q_gd_nC: 86                  # same conditions
+  r_g_internal_ohm: 2.25       # R_G,int, f = 1 MHz, V_AC = 25 mV
+  r_g_ext_datasheet_ohm: 2.3   # the R_G,ext every switching number below was measured at
+  l_sigma_nH: 15               # stray inductance of the switching test circuit
+
+# ── on-state resistance ────────────────────────────────────────────────────
+r_ds_on:
+  source: >-
+    Datasheet Table 4 (rows T_vj = 25/150/175 degC at V_GS(on) = 18 V and the
+    T_vj = 25 degC row at V_GS(on) = 15 V) and the figure
+    "Typical on-state resistance as a function of junction temperature,
+    R_DS(on) = f(T_vj), I_D = 185.2 A" on datasheet page 10.
+  measured_at_i_d_A: 185.2
+  # R_DS(on) [mOhm] against junction temperature, per gate-on voltage.
+  curves:
+    - v_gs_on_V: 18
+      points:
+        - {t_j_c: -50, r_mohm: 3.2,  basis: figure, tolerance_pct: 8}
+        - {t_j_c: 0,   r_mohm: 3.4,  basis: figure, tolerance_pct: 8}
+        - {t_j_c: 25,  r_mohm: 3.7,  basis: table, anchor: true}
+        - {t_j_c: 50,  r_mohm: 4.1,  basis: figure, tolerance_pct: 8}
+        - {t_j_c: 75,  r_mohm: 4.7,  basis: figure, tolerance_pct: 8}
+        - {t_j_c: 100, r_mohm: 5.4,  basis: figure, tolerance_pct: 8}
+        - {t_j_c: 125, r_mohm: 6.3,  basis: figure, tolerance_pct: 8}
+        - {t_j_c: 150, r_mohm: 7.6,  basis: table, anchor: true, r_mohm_max: 10.4}
+        - {t_j_c: 175, r_mohm: 8.9,  basis: table, anchor: true}
+        - {t_j_c: 200, r_mohm: 10.3, basis: figure, tolerance_pct: 8}
+    - v_gs_on_V: 15
+      points:
+        - {t_j_c: 25,  r_mohm: 4.7,  basis: table, anchor: true}
+        - {t_j_c: 100, r_mohm: 6.6,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 150, r_mohm: 8.6,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 175, r_mohm: 9.7,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 200, r_mohm: 11.0, basis: figure, tolerance_pct: 10}
+
+# ── capacitances and output-capacitance energy ─────────────────────────────
+capacitance:
+  source: "Datasheet Table 4; f = 100 kHz, V_AC = 25 mV, V_GS = 0 V"
+  at_v_ds_V: 800
+  c_iss_pF: 13000
+  c_oss_pF: 574
+  c_rss_pF: 50
+  c_o_er_pF: 756               # energy-related, calculated from E_oss, V_DS = 0...800 V
+  c_o_tr_pF: 1123              # time-related, calculated from Q_oss
+  e_oss_uJ: 242                # C_oss stored energy at V_DS = 800 V
+  q_oss_nC: 898                # output charge at V_DS = 800 V
+  # AN2025-10 eq. (11): C_o(er) = 2*E_oss / V_DS^2, so E_oss at any bus voltage
+  # is 0.5 * C_o(er) * V^2 EXACTLY (it reproduces the 242 uJ at 800 V).
+  e_oss_rule: "E_oss(V) = 0.5 * c_o_er * V^2   [AN2025-10 eq. (11), rearranged]"
+  # C_oss(V_DS) read off the log-log figure on datasheet page 10 — informative
+  # only; the model uses c_o_er above, which is exact.
+  c_oss_vs_vds:
+    basis: figure
+    tolerance_pct: 25
+    points: [[1, 15000], [10, 9000], [20, 2000], [50, 1300], [100, 1050],
+             [400, 700], [800, 574], [1000, 550]]
+
+# ── switching energies ─────────────────────────────────────────────────────
+# Measured in a HARD-SWITCHING half-bridge double pulse, the second device's
+# OWN BODY DIODE as the freewheeling path (datasheet "test circuit in Fig. F").
+# E_fr is the freewheeling device's forward-recovery energy; per AN2025-10
+# section 5.2.4 it is INCLUDED IN E_tot, and section 6.1 states that "when the
+# bridge leg operates in the commutation mode, the reverse recovery loss of the
+# SiC MOSFET's body diode is added to the turn-on energy, E_on, of the opposite
+# switch" — so one commutation of a leg costs E_on + E_off + E_fr in total.
+switching:
+  source: >-
+    Datasheet Table 4 (E_on / E_off / E_tot at V_GS = 0/18 V and at
+    V_GS = -5/18 V) and Table 6 (E_fr); the current dependence is the figure
+    "Typical switching energy as a function of drain current ... E = f(I_D),
+    T_vj = 175 degC, R_G,ext = 2.3 ohm, V_DD = 800 V" on datasheet page 12
+    (left panel V_GS = 0 V, right panel V_GS = -5 V).
+  v_dd_ref_V: 800
+  i_d_ref_A: 185.2
+  r_g_ext_ref_ohm: 2.3
+  # How to move the datasheet numbers to the working point.  The datasheet
+  # publishes no scaling law, so the rules used are named here as MODEL rules,
+  # not as datasheet facts.
+  scaling:
+    voltage_exponent: 1.0
+    voltage_rule: >-
+      E(V_dc) = E(800 V) * (V_dc / 800)^1.0 — the first-order hard-switching
+      rule (the switched energy is the V*I overlap integral and scales with the
+      blocking voltage). ASSUMPTION: the datasheet gives no V_DD sweep.
+    current_rule: >-
+      Linear interpolation between the tabulated points of `curves`, linear
+      extrapolation outside them from the last two points.
+    temperature_rule: >-
+      Linear interpolation between the 25 degC and 175 degC curve sets.
+    r_g_rule: >-
+      Linear in R_G,ext through the datasheet point (2.3 ohm): the figure
+      "E = f(R_G,ext)" on datasheet page 12 is a straight line over
+      2.3...50 ohm for E_on and E_off.  E_fr FALLS with R_G and is NOT scaled
+      (held at its 2.3 ohm value), which over-reads slightly at large R_G.
+  # Per gate-off voltage.  Each point is [I_D (A), E (uJ)].
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 175
+      e_on_uJ:
+        basis: figure
+        tolerance_pct: 10
+        points: [[25, 1050], [50, 1500], [100, 2650], [150, 3950],
+                 [185.2, 4920], [250, 6800], [300, 8200], [350, 9700],
+                 [375, 10600]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 4, E_on at T_vj = 175 degC = 4.92 mJ"
+      e_off_uJ:
+        basis: figure
+        tolerance_pct: 10
+        points: [[25, 700], [50, 1150], [100, 2400], [150, 3800],
+                 [185.2, 4780], [250, 6300], [300, 7400], [350, 8700],
+                 [375, 9300]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 4, E_off at T_vj = 175 degC = 4.78 mJ"
+      e_fr_uJ:
+        basis: figure
+        tolerance_pct: 12
+        points: [[25, 450], [50, 800], [100, 1700], [150, 2550],
+                 [185.2, 2990], [250, 4200], [300, 5100], [350, 6200],
+                 [375, 6600]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 6, E_fr at T_vj = 175 degC = 2.99 mJ"
+    - v_gs_off_V: 0
+      t_j_c: 25
+      # Only the table point exists at 25 degC; the shape is taken from the
+      # 175 degC curve, scaled to the 25 degC table value at 185.2 A.
+      e_on_uJ:
+        basis: table
+        points: [[185.2, 3790]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 4, E_on at T_vj = 25 degC = 3.79 mJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+      e_off_uJ:
+        basis: table
+        points: [[185.2, 3970]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 4, E_off at T_vj = 25 degC = 3.97 mJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+      e_fr_uJ:
+        basis: table
+        points: [[185.2, 860]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 6, E_fr at T_vj = 25 degC = 0.86 mJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+    - v_gs_off_V: -5
+      t_j_c: 175
+      e_on_uJ:
+        basis: figure
+        tolerance_pct: 10
+        points: [[25, 1100], [100, 2700], [150, 4000], [185.2, 4890],
+                 [250, 6800], [300, 8200], [375, 10500]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 175 degC = 4.89 mJ"
+      e_off_uJ:
+        basis: figure
+        tolerance_pct: 10
+        points: [[25, 400], [100, 1400], [150, 2100], [185.2, 2510],
+                 [250, 3900], [300, 4900], [375, 6800]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 175 degC = 2.51 mJ"
+      e_fr_uJ:
+        basis: figure
+        tolerance_pct: 12
+        points: [[25, 300], [100, 1600], [150, 2400], [185.2, 3100],
+                 [250, 4300], [300, 5100], [375, 5300]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 6, E_fr at -5 V, T_vj = 175 degC = 3.1 mJ"
+    - v_gs_off_V: -5
+      t_j_c: 25
+      e_on_uJ:
+        basis: table
+        points: [[185.2, 3770]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 25 degC = 3.77 mJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+      e_off_uJ:
+        basis: table
+        points: [[185.2, 2310]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 25 degC = 2.31 mJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+      e_fr_uJ:
+        basis: table
+        points: [[185.2, 870]]
+        anchor_i_d_A: 185.2
+        anchor_source: "Datasheet Table 6, E_fr at -5 V, T_vj = 25 degC = 0.87 mJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+  # Switching times, informative (they set the minimum dead time through
+  # AN2025-10 eqs. (22)-(26); the model does not use them for losses).
+  times_ns:
+    source: "Datasheet Table 4, V_DD = 800 V, I_D = 185.2 A, V_GS = 0/18 V, R_G,ext = 2.3 ohm"
+    t_d_on:  {t_j_25: 40,   t_j_175: 30.6}
+    t_r:     {t_j_25: 26.8, t_j_175: 23.8}
+    t_d_off: {t_j_25: 80.8, t_j_175: 94.5}
+    t_f:     {t_j_25: 35.5, t_j_175: 41.8}
+
+# ── third quadrant (body diode / reverse conduction) ───────────────────────
+# What the switch costs while the leg is in DEAD TIME and the phase current has
+# to go somewhere.  With the channel OFF the current runs through the SiC body
+# diode at ~4 V — an order of magnitude above the channel drop, which is why the
+# app note (section 6.1) tells you to keep the dead time short.
+third_quadrant:
+  source: >-
+    Datasheet Table 5 (maximum rated values) and Table 6 (V_SD); the current
+    dependence is the figure "Typical reverse drain current as a function of
+    reverse drain voltage, I_SD = f(V_SD), T_vj = 175 degC" on datasheet
+    page 11 (V_GS as a parameter).
+  i_sd_continuous:
+    - {t_case_c: 25,  i_a: 300,   basis: table}
+    - {t_case_c: 100, i_a: 174.3, basis: table}
+  i_sm_A: 860
+  v_sd_at_185A:                 # V_GS = 0 V, I_SD = 185.2 A
+    - {t_j_c: 25,  v: 4.2, basis: table, v_max: 5.5}
+    - {t_j_c: 100, v: 4.1, basis: table}
+    - {t_j_c: 175, v: 4.0, basis: table}
+  q_fr_uC: {t_j_25: 0.95, t_j_175: 3.36}
+  i_frm_A: {t_j_25: 119,  t_j_175: 199}
+  # V_SD [V] against reverse current [A], per gate-off voltage, at 175 degC.
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 175
+      basis: figure
+      tolerance_pct: 10
+      anchor_note: "the 4.0 V / 185.2 A point is Table 6 (exact)"
+      points: [[0.0, 0], [2.5, 5], [3.0, 25], [3.5, 105], [4.0, 185.2],
+               [4.5, 265], [5.0, 345], [5.5, 425], [6.0, 500]]
+    - v_gs_off_V: -5
+      t_j_c: 175
+      basis: figure
+      tolerance_pct: 12
+      points: [[0.0, 0], [3.0, 2], [3.5, 10], [4.0, 80], [4.5, 160],
+               [5.0, 240], [5.5, 320], [6.0, 400]]
+  # With the channel ON (synchronous rectification) the third quadrant is
+  # resistive: V = I * R_DS(on).  The model uses `r_ds_on` above for that and
+  # this block only for the dead-time windows.
+  channel_on_note: >-
+    At V_GS = 15...18 V the third quadrant is the CHANNEL (datasheet page 11,
+    V_GS = 15 V and 18 V traces), i.e. V = I * R_DS(on); the body-diode curves
+    above apply only while both switches of the leg are off.
+
+# ── thermal ────────────────────────────────────────────────────────────────
+thermal:
+  source: "Datasheet Table 1 (Package, Characteristic values)"
+  r_th_jc_k_w: {typ: 0.07, max: 0.1}
+  r_th_jc_note: "MOSFET/body diode, junction-case; the case is the TOP-SIDE tab"
+  r_th_ja_k_w: {max: 62}
+  z_th_jc_curve: null          # not present in this datasheet revision

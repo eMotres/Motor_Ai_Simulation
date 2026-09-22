@@ -88,6 +88,7 @@ from motor_ai_sim.routes.mechanical import router as mechanical_router
 from motor_ai_sim.routes.panel_settings import router as panel_settings_router
 from motor_ai_sim.routes.thermal import router as thermal_router
 from motor_ai_sim.routes.coupled import router as coupled_router
+from motor_ai_sim.routes.controller import router as controller_router
 from motor_ai_sim.routes.bearings import router as bearings_router
 from motor_ai_sim.routes.wire_stock import router as wire_stock_router
 from motor_ai_sim.routes.optimization import router as optimization_router
@@ -222,6 +223,13 @@ app.include_router(thermal_router)
 # the fixed point.  Neither solver learns about the other, and with the
 # Electromagnetic tab's toggle off nothing here is reachable at all.
 app.include_router(coupled_router)
+# /api/controller — the INVERTER (2026-09-22, owner: «давай начнём делать модуль
+# инвертора … чтобы была возможность комбинировать мосты так, как нам надо»).
+# A fourth analysis router beside coupled/thermal/mechanical: a device card
+# library, a coil->bridge map, the loss and junction-temperature arithmetic over
+# them, and the waveform the motor will be fed with in Stage 2.  It solves no
+# field and writes nothing but the duty's own `controller` block.
+app.include_router(controller_router)
 # /api/bearings — the catalogue, and the MECHANICAL half of the loss picture
 # (SKF frictional moment + rotor windage).  Analytics only: it never solves a
 # field and never writes; the machine's own bearing assignment is written by

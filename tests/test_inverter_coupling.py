@@ -553,9 +553,10 @@ def test_the_ac_power_points_the_right_way_on_a_generator():
     lp = _loop()
     base = {"I1_phase_rms_A": 314.3, "efficiency_shaft": 0.98,
             "P_loss_total_incl_mech_W": 6000.0}
-    mot = lp._solve_request({"summary": dict(base), "pwm": {}})
+    pwm = {"modulation_index": 0.63}
+    mot = lp._solve_request({"summary": dict(base), "pwm": pwm})
     gen = lp._solve_request({"summary": {**base, "op_mode": "generator"},
-                             "pwm": {}})
+                             "pwm": pwm})
     # Motor: the AC side is the bigger number (it carries the losses).
     assert mot["p_ac_W"] == pytest.approx(6000.0 * 0.98 / 0.02 + 6000.0)
     # Generator: the AC side is the smaller one — the shaft carries them.
@@ -608,3 +609,15 @@ def test_the_key_changes_with_the_junction_temperature():
 
     assert key(120.0) != key(140.0)
     assert key(132.0) == key(132.0)
+
+
+def test_a_run_with_no_modulation_index_is_declined_not_guessed():
+    """The bridge's duty cycle is not derivable from the current alone."""
+    lp = _loop()
+    em = {"summary": {"I1_phase_rms_A": 314.3, "efficiency_shaft": 0.9771,
+                      "P_loss_total_incl_mech_W": 6230.0},
+          "I_phase_rms_solved_A": 314.3}          # …and no `pwm` block at all
+    assert lp._solve_request(em) is None
+    assert lp.step(em, it=1) is None
+    assert any("modulation index" in w for w in lp.warnings)
+    assert lp.passes == []

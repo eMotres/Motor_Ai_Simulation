@@ -2389,10 +2389,18 @@ class _ControllerLoop:
             "efficiency_shaft": eta_f,
             "t_j_start_c": self.t_j_c,
         }
-        if m:
-            req["modulation_index"] = float(m)
-        else:
-            req["power_factor"] = 0.95
+        if not m:
+            # NO INVENTED POWER FACTOR.  The bridge's duty cycle cannot be got
+            # from the current alone, and a 0.95 stuffed in here would be a
+            # number nobody measured deciding the switching loss.  Every run
+            # of this drive reports its modulation index; a run that does not
+            # is one this module declines to answer for, and says so.
+            self.warnings.append(
+                "the electromagnetic run reported no modulation index, so the "
+                "devices were not solved on this pass — the bridge's duty "
+                "cycle cannot be derived from the current alone")
+            return None
+        req["modulation_index"] = float(m)
         return req
 
     # ── the record ────────────────────────────────────────────────────────

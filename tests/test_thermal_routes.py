@@ -1422,8 +1422,15 @@ def test_the_friction_makes_the_shaft_hotter_and_leaves_down_its_own_ends(
             "mech": None, "windage": None, "bearing_temp_c": None,
             "bearing_temp_source": None, "note": "no bearings"},
         raising=True)
+    # `fresh=True`: same request params, but `_resolve_mech_losses` was just
+    # swapped out from under it (2026-09-22) — persistent history
+    # (routes/thermal.py's `_THERMAL_FIELD_HISTORY`) would otherwise serve
+    # `with_mech`'s stored answer right back, which a REAL caller never hits
+    # (its mechanical losses are a deterministic function of the geometry the
+    # history key already pins) but this test's monkeypatch deliberately does.
     without = client.get("/api/thermal/field",
-                         params=_field_params(**AIR, **SHAFT)).json()
+                         params={**_field_params(**AIR, **SHAFT),
+                                "fresh": True}).json()
 
     assert (with_mech["components"]["shaft"]["max"]
             > without["components"]["shaft"]["max"] + 1.0)
@@ -1492,7 +1499,10 @@ def test_windage_heats_the_gap_air_it_is_sheared_in(client, em_runs,
     monkeypatch.setattr(th, "_resolve_mech_losses", _mk(60.0), raising=True)
     hot = client.get("/api/thermal/field", params=_field_params(**AIR)).json()
     monkeypatch.setattr(th, "_resolve_mech_losses", _mk(0.0), raising=True)
-    cold = client.get("/api/thermal/field", params=_field_params(**AIR)).json()
+    # `fresh=True` — see the sibling test above for why (2026-09-22, persistent
+    # history).
+    cold = client.get("/api/thermal/field",
+                      params={**_field_params(**AIR), "fresh": True}).json()
 
     assert hot["cooling"]["heat_budget"]["windage_W"] == pytest.approx(60.0)
     assert cold["cooling"]["heat_budget"]["windage_W"] == 0.0

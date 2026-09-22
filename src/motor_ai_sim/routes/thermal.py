@@ -82,6 +82,7 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim import jobs as _JOBS
+from motor_ai_sim import run_history as _RH
 from motor_ai_sim.progress import poll as _progress_poll
 from motor_ai_sim.progress import route_progress as _route_progress
 
@@ -975,6 +976,52 @@ _COUPLED_CACHE = _WSP.ws_map("thermal.coupled_cache", _COUPLED_CACHE_MAX,
                              lru_on_read=True)
 _MESH_CACHE = _WSP.ws_map("thermal.mesh_cache", _MESH_CACHE_MAX,
                           lru_on_read=True)
+
+# ---------------------------------------------------------------------------
+# Persistent history (2026-09-22) — "don't recompute an identical /field solve"
+# ---------------------------------------------------------------------------
+# The three caches just above (``_FIELD_CACHE`` &c.) are the SAME kind of
+# in-memory, per-process, unbounded-by-restart layer ``rsm.cache_get`` is for
+# mechanical — fast, but gone the moment the backend restarts.  This is the
+# persistent layer on top, the same relationship mechanical.py's
+# ``_ROTOR_STRESS_HISTORY`` has with ``rsm.cache_get``/``cache_put``.
+_THERMAL_FIELD_HISTORY = _RH.history_for("thermal.field")
+_RH.register_kind("thermal.field")
+
+
+def _thermal_field_summary(params: Dict[str, Any], out: Dict[str, Any]) -> str:
+    try:
+        bits = [f"{float(params.get('ambient_temp') or 0):.0f}°C ambient"]
+        tmax = out.get("T_max")
+        if tmax is not None:
+            bits.append(f"T_max {float(tmax):.0f}°C")
+        mode = str(params.get("cooling_mode") or "").strip()
+        if mode:
+            bits.append(mode)
+        return ", ".join(bits)
+    except Exception:                                       # noqa: BLE001
+        return "thermal field"
+
+
+def _load_thermal_field_history_entry(entry: Dict[str, Any],
+                                      payload: Dict[str, Any]) -> Dict[str, Any]:
+    """``run_history.register_loader`` hook: a History-popover click behaves
+    like the route's own history hit — same response, and ``/last`` (the
+    Thermal tab's restore-on-reopen store) is updated too."""
+    out = dict(payload)
+    out["cached"] = True
+    out["served_from_history"] = True
+    out["computed_at"] = entry.get("computed_at")
+    out["history_key"] = entry.get("key")
+    try:
+        _remember_last("field", out, dict(entry.get("params") or {}),
+                       out.get("geometry_fingerprint"))
+    except Exception:                                       # noqa: BLE001
+        log.debug("thermal: history load could not update /last", exc_info=True)
+    return out
+
+
+_RH.register_loader("thermal.field", _load_thermal_field_history_entry)
 
 
 def _cache_put(store: "OrderedDict", key: tuple, value, cap: int) -> None:
@@ -5882,6 +5929,12 @@ def field(
                                                           "the run (generator keys on "
                                                           "γ + 180°), changes no "
                                                           "physics here"),
+    fresh:              bool = Query(default=False,
+                                     description="ignore a stored history answer "
+                                                 "and solve again, even if an "
+                                                 "identical request was already "
+                                                 "computed — the panel's "
+                                                 "Recompute button"),
 ):
     """Steady-state 2-D temperature map of the machine.
 
@@ -5901,11 +5954,6 @@ def field(
     422 with ``error_code: "no_electromagnetic_run"`` naming the point to run —
     never a solve started behind this request.
     """
-    # Two steps: the conduction solve and the post-processing.  No EM frames —
-    # there is no EM solve in this route.
-    _progress.start(
-        total=2, phase="loss map — looking for the Electromagnetic run",
-        kind="field", composition="conduction + post-processing")
     # The frame's two parameters are RESTORED into the tab's fields only when
     # they were part of the request — the same rule the cache key follows
     # (`_field_cache_key`) and the same one `thermal_settings` states: a
@@ -5930,6 +5978,52 @@ def field(
         _mount_kw["mount_g_w_per_k"] = float(mount_g_w_per_k)
         if mount_temp_c is not None:
             _mount_kw["mount_temp_c"] = float(mount_temp_c)
+
+    # ── persistent history (2026-09-22) ─────────────────────────────────────
+    # Computed and checked BEFORE the progress bar opens, exactly as
+    # mechanical.py's reference integration does — a hit returns with no
+    # progress ring.  `_field_params` is the same "request, restorable" dict
+    # `_remember_last` below has always used; `_config_physics_fingerprint`
+    # is what `_field_cache_key` folds the machine into.  Reused, not
+    # re-specified — see run_history.py's module docstring on why a caller
+    # normalises its own canonical structure rather than this module
+    # inventing a second one.
+    _hist_params = _field_params(
+        cooling_mode=cooling_mode, ambient_temp=ambient_temp, h_conv=h_conv,
+        slot_k=slot_k, rpm=rpm, gamma_deg=gamma_deg,
+        I_phase_rms=I_phase_rms, n_steps_per_period=n_steps_per_period,
+        n_periods=n_periods, mesh_size_mm=mesh_size_mm,
+        min_size_mm=min_size_mm, outer_air_factor=outer_air_factor,
+        n_sectors=n_sectors, coil_temp_c=coil_temp_c,
+        component_mesh=component_mesh, air_speed_mps=air_speed_mps,
+        fluid=fluid, fluid_temp_in_c=fluid_temp_in_c, flow_lpm=flow_lpm,
+        bore_mode=bore_mode, bore_air_speed_mps=bore_air_speed_mps,
+        bore_fluid=bore_fluid,
+        bore_fluid_temp_in_c=bore_fluid_temp_in_c,
+        bore_flow_lpm=bore_flow_lpm,
+        shaft_ext_length_mm=shaft_ext_length_mm,
+        shaft_ext_diameter_mm=shaft_ext_diameter_mm,
+        shaft_ext_sides=shaft_ext_sides,
+        **_open_kw, **_robot_kw, **_mount_kw,
+        magnet_temp_c=magnet_temp_c)
+    from motor_ai_sim.routes.simulation import _config_physics_fingerprint
+    _history_key = _RH.make_key("thermal.field", {
+        "cfg": _config_physics_fingerprint(with_request_materials=True),
+        "geo": geo,
+        "params": _RH.round_floats(_hist_params),
+        "mode": mode,
+    })
+    if not fresh:
+        _hist_hit = _THERMAL_FIELD_HISTORY.get(_history_key)
+        if _hist_hit is not None:
+            return _load_thermal_field_history_entry(
+                _hist_hit["entry"], _hist_hit["payload"])
+
+    # Two steps: the conduction solve and the post-processing.  No EM frames —
+    # there is no EM solve in this route.
+    _progress.start(
+        total=2, phase="loss map — looking for the Electromagnetic run",
+        kind="field", composition="conduction + post-processing")
     try:
         out = solve_thermal_field(
             ambient_temp=ambient_temp, h_conv=h_conv, slot_k=slot_k, gap_k=gap_k,
@@ -5973,6 +6067,16 @@ def field(
             # stored entry from before this field existed reads the same.
             magnet_temp_c=magnet_temp_c),
             out.get("geometry_fingerprint"))
+        try:
+            _THERMAL_FIELD_HISTORY.put(
+                _history_key, params=_hist_params,
+                summary=_thermal_field_summary(_hist_params, out),
+                payload=out,
+                extra={"geometry_fingerprint": out.get("geometry_fingerprint")})
+        except Exception:                                   # noqa: BLE001
+            log.warning("thermal: could not file this solve in the history",
+                       exc_info=True)
+        out["history_key"] = _history_key
         return out
     finally:
         # Unconditional: an exception on any path must not leave

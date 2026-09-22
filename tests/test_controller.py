@@ -383,6 +383,33 @@ def test_efficiency_names_both_numbers(synth_dir):
     assert "shaft" in e["note"]
 
 
+def test_no_shaft_efficiency_gives_the_generic_reason(synth_dir):
+    """No ``efficiency_shaft`` in the request and no reason handed in either
+    (a raw API call that skipped the route) — never a silent blank, the
+    generic sentence."""
+    req = _synth_request()
+    req.pop("efficiency_shaft")
+    out = lo.solve_controller(req)
+    e = out["efficiency"]
+    assert e["shaft"] is None
+    assert e["wall_to_shaft"] is None
+    assert "no shaft efficiency is known" in e["note"]
+
+
+def test_no_shaft_efficiency_carries_the_routes_own_reason(synth_dir):
+    """``routes/controller.py`` hands back WHY it could not resolve even the
+    electromagnetic shaft efficiency (``_efficiency_shaft_note``) — the
+    physics module prints exactly that reason, never its own generic one."""
+    req = _synth_request()
+    req.pop("efficiency_shaft")
+    req["_efficiency_shaft_note"] = ("the duty's standalone record carries "
+                                     "no rotor power or electromagnetic "
+                                     "loss to balance")
+    out = lo.solve_controller(req)
+    assert out["efficiency"]["shaft"] is None
+    assert out["efficiency"]["note"] == req["_efficiency_shaft_note"]
+
+
 # ---------------------------------------------------------------------------
 # Topology — the owner's actual requirement
 # ---------------------------------------------------------------------------
@@ -978,6 +1005,95 @@ def test_p_ac_w_resolves_from_a_plain_em_record(synth_dir, monkeypatch):
     assert out["point"]["star_delta"] == "delta"
     assert out["em_source"] == "standalone"
     assert "standalone electromagnetic solve" in out["solved_for"]
+
+
+def test_efficiency_shaft_resolves_from_a_steady_coupled_record(synth_dir,
+                                                                 monkeypatch):
+    """``efficiency.shaft``/``wall_to_shaft`` used to be read off the
+    persisted ``coupled.efficiency_shaft`` field alone; here it is populated,
+    so the fix must still agree with it — through ``report.shaft_view``, the
+    SAME balance a report table prints, not a second formula."""
+    rpm = 3000.0
+    T_Nm, P_loss_W, P_extra_W = 12.0, 500.0, 200.0
+    node = {
+        "coupled": {
+            "mode": "steady",
+            "P_mech_extra_W": P_extra_W,
+            "em": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W},
+            "inverter": {"I_phase_rms_solved_A": 48.6, "star_delta": "star",
+                        "v_dc_V": 400.0},
+        },
+        "thermal": {"point": {"rpm": rpm}},
+    }
+    _patch_duty(monkeypatch, node)
+    r = _solve(_duty_solve_body())
+    assert r.status_code == 200, r.text
+    out = r.json()
+    pr = T_Nm * 2 * math.pi * rpm / 60.0
+    pe = pr + P_loss_W
+    expect_shaft = (pr - P_extra_W) / pe
+    assert out["efficiency"]["shaft"] == pytest.approx(expect_shaft, rel=1e-4)
+    assert out["efficiency"]["wall_to_shaft"] == pytest.approx(
+        out["efficiency"]["inverter"] * expect_shaft, rel=1e-3)
+    assert "bearings" in out["sources"]["efficiency_shaft"]
+
+
+def test_efficiency_shaft_resolves_from_the_s1_verified_record(synth_dir,
+                                                                monkeypatch):
+    """Production bug, 2026-09-22 (CIANO14 50 edited / L15 / rated edited): an
+    S1-verified continuous run came back with ``efficiency.shaft`` /
+    ``wall_to_shaft`` both ``None`` because the coupled loop's OWN
+    ``efficiency_shaft`` bookkeeping never re-runs for a verification pass —
+    the fixture below deliberately leaves that top-level field unset, exactly
+    as the real record does, and the answer must still come out through
+    ``report.shaft_view`` on the S1 machine's own ``P_mech_extra_W``."""
+    rpm = 3000.0
+    T_Nm, P_loss_W, P_extra_W = 6.0, 90.0, 15.0
+    node = {
+        "coupled": {
+            "mode": "limited",
+            "continuous_rating": {"record_is_s1": True},
+            "P_mech_extra_W": P_extra_W,
+            "em": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W},
+            "inverter": {"I_phase_rms_solved_A": 48.6, "star_delta": "star",
+                        "v_dc_V": 400.0},
+        },
+        "thermal": {"point": {"rpm": rpm}},
+    }
+    _patch_duty(monkeypatch, node)
+    r = _solve(_duty_solve_body())
+    assert r.status_code == 200, r.text
+    out = r.json()
+    pr = T_Nm * 2 * math.pi * rpm / 60.0
+    pe = pr + P_loss_W
+    expect_shaft = (pr - P_extra_W) / pe
+    assert out["efficiency"]["shaft"] is not None
+    assert out["efficiency"]["shaft"] == pytest.approx(expect_shaft, rel=1e-4)
+    assert out["efficiency"]["wall_to_shaft"] is not None
+
+
+def test_efficiency_shaft_falls_back_to_electromagnetic_with_no_bearings(
+        synth_dir, monkeypatch):
+    """A standalone Simulation run (no coupled loop, no bearing model at
+    all): ``shaft_view`` has no ``P_mech_extra_W`` to take off the shaft, so
+    "the ONE shaft efficiency" is the electromagnetic one — the same
+    fallback the report headline uses — never left blank and never a
+    bearings number invented for a machine that names none."""
+    rpm = 3000.0
+    T_Nm, P_loss_W, I1 = 10.0, 400.0, 40.0
+    node = {}
+    d_entry = {"name": _DUTY, "mode": "motor", "rpm": rpm,
+              "summary": {"T_em_avg_Nm": T_Nm, "P_loss_total_W": P_loss_W,
+                          "I1_phase_rms_A": I1, "star_delta": "delta"}}
+    _patch_duty(monkeypatch, node, d_entry)
+    r = _solve(_duty_solve_body(v_dc_V=400.0))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    pr = T_Nm * 2 * math.pi * rpm / 60.0
+    pe = pr + P_loss_W
+    expect_eta_em = pr / pe
+    assert out["efficiency"]["shaft"] == pytest.approx(expect_eta_em, rel=1e-4)
+    assert "no bearings" in out["sources"]["efficiency_shaft"]
 
 
 def test_missing_duty_record_refuses_with_the_plain_sentence(synth_dir, monkeypatch):

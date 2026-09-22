@@ -163,6 +163,22 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
     resolved record — never the coupled record's power beside the Simulation
     tab's setpoint current, which is the mismatch the owner's screenshot showed
     on 2026-09-21.
+
+    ``efficiency_shaft`` (owner 2026-09-22, production, an S1-verified
+    continuous run: ``efficiency.shaft`` / ``wall_to_shaft`` came back
+    ``None`` although the report prints a shaft efficiency for that exact
+    record) is resolved the SAME way, through :func:`report.shaft_view`, on
+    whichever ``em`` block ``duty_em_source`` handed back — never the
+    persisted top-level ``coupled.efficiency_shaft``, which is only ever
+    written by the coupled loop's own iterations and stays ``None`` on a
+    record an S1 verification pass, a PWM run or a standalone solve produced
+    instead.  With a bearing model (``P_mech_extra_W``, read off the coupled
+    record or the em block, whichever carries it) this is the SKF shaft
+    efficiency every report table prints; with none assigned it is the
+    electromagnetic shaft efficiency ``shaft_view`` itself falls back to —
+    never invented here.  Truly unavailable (no rotor power or
+    electromagnetic loss at all) leaves the field absent and says why in
+    ``efficiency_shaft_note``.
     """
     if not (die and cfg and duty):
         ctx = _DR.active_context()
@@ -284,8 +300,28 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
     p_mech = _num(em.get("P_mech_W"))
     if p_mech is None and t2d is not None and rpm:
         p_mech = abs(t2d) * 2.0 * math.pi * float(rpm) / 60.0
-    sv = _R.shaft_view({**em, "P_mech_W": p_mech} if p_mech is not None else em,
-                       None, mode)
+    em_for_sv = {**em, "P_mech_W": p_mech} if p_mech is not None else em
+
+    # THE BEARING BLOCK, for ``shaft_view`` below — the SAME construction
+    # ``report._cpl_shaft_view`` uses for every table of the document, not
+    # the persisted top-level ``coupled.efficiency_shaft`` field (owner
+    # 2026-09-22, production, CIANO14 50 edited / L15 / rated edited, an
+    # S1-verified continuous run): that field is only ever written by the
+    # coupled loop's OWN iterations, and stays ``None`` on a record whose
+    # answer came from elsewhere afterwards — the S1 verification pass
+    # (``routes/coupled.py``, ``continuous_rating['record_is_s1']``) REPLACES
+    # ``em`` with the verified machine but never re-derives that top-level
+    # field, and a plain PWM or standalone record never had it at all.
+    # ``P_mech_extra_W`` is the one number every such pass DOES carry (it is
+    # a postprocessing output, not the loop's own bookkeeping) — the coupled
+    # record's own first, the em block's (the S1/PWM/standalone machine)
+    # second.
+    p_extra = _num(coupled.get("P_mech_extra_W"))
+    if p_extra is None:
+        p_extra = _num(em.get("P_mech_extra_W"))
+    brg = ({"has_bearings": True, "P_mech_extra_W": p_extra}
+           if p_extra is not None else None)
+    sv = _R.shaft_view(em_for_sv, brg, mode)
     if sv.get("P_elec_W") is not None:
         out["p_ac_W"] = float(sv["P_elec_W"])
         src["p_ac_W"] = (f"{where}: report.shaft_view's P_elec_W (rotor power "
@@ -295,12 +331,30 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
         out["torque_Nm"] = t2d
 
     # ``efficiency_shaft`` rides ALONGSIDE, for the wall-to-shaft column — but
-    # ``p_ac_W`` above never depends on it existing.
-    eta = coupled.get("efficiency_shaft")
-    if eta is not None:
-        out["efficiency_shaft"] = float(eta)
-        src["efficiency_shaft"] = ("the duty's coupled record — the ONE shaft "
-                                   "efficiency, not recomputed here")
+    # ``p_ac_W`` above never depends on it existing.  ``shaft_view`` itself
+    # decides what "the ONE shaft efficiency" means here: with a bearing
+    # model, bearings + windage taken off the shaft (SKF model); with none
+    # assigned, the electromagnetic shaft efficiency the report prints for
+    # this machine instead (never invented, never left silently absent when
+    # the report would print something) — see ``shaft_view``'s own
+    # docstring.  Only when even that cannot be formed (no rotor power / no
+    # electromagnetic loss on this record) does the field stay absent, with
+    # a reason.
+    if brg is not None and sv.get("eta_shaft") is not None:
+        out["efficiency_shaft"] = float(sv["eta_shaft"])
+        src["efficiency_shaft"] = (
+            f"{where}: report.shaft_view's eta_shaft (bearings + windage "
+            f"taken off the shaft, SKF model) at {_point_label(coupled, kind)}")
+    elif sv.get("eta_em") is not None:
+        out["efficiency_shaft"] = float(sv["eta_em"])
+        src["efficiency_shaft"] = (
+            f"{where}: report.shaft_view's eta_em — this configuration "
+            "names no bearings, so the electromagnetic shaft efficiency is "
+            "the one the report prints for this machine")
+    else:
+        out["efficiency_shaft_note"] = (
+            f"{where} carries no rotor power or electromagnetic loss to "
+            "balance, so no shaft efficiency could be resolved")
 
     if out.get("i_phase_rms_A") is not None and out.get("p_ac_W") is not None:
         out["solved_for_line"] = (
@@ -715,6 +769,11 @@ def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]
             req[key], sources[key] = body[key], "the request"
         elif duty.get(key) is not None:
             req[key], sources[key] = duty[key], duty_src.get(key, "the duty record")
+    # WHY, when it stays absent: the one case ``_duty_defaults`` could not
+    # form even the electromagnetic shaft efficiency (no bearings AND no
+    # rotor power/loss to balance) — never left for the panel to guess at.
+    if req.get("efficiency_shaft") is None and duty.get("efficiency_shaft_note"):
+        req["_efficiency_shaft_note"] = duty["efficiency_shaft_note"]
     if body.get("power_factor") is not None:
         req["power_factor"] = body["power_factor"]
         sources["power_factor"] = "the request"

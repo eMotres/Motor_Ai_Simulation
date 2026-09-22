@@ -847,8 +847,20 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "inverter": None if eta_inv is None else round(eta_inv, 5),
             "shaft": None if eta_shaft is None else round(eta_shaft, 5),
             "wall_to_shaft": None if eta_wall is None else round(eta_wall, 5),
-            "note": "wall-to-shaft = inverter efficiency x the ONE shaft "
-                    "efficiency of this duty's coupled record",
+            # WHY it is absent, when it is: never a silent blank — the route
+            # (``routes/controller.py::_duty_defaults``) hands back the one
+            # reason it could not form even the electromagnetic shaft
+            # efficiency (no bearings AND no rotor power/loss on this
+            # record); a caller that skipped the route (a raw API call with
+            # no ``efficiency_shaft``) gets the generic sentence instead.
+            "note": ("wall-to-shaft = inverter efficiency x the ONE shaft "
+                     "efficiency of this duty's record (report.shaft_view: "
+                     "bearings + windage off the shaft where a bearing model "
+                     "is assigned, the electromagnetic shaft efficiency "
+                     "otherwise)" if eta_shaft is not None else
+                     (req.get("_efficiency_shaft_note")
+                      or "no shaft efficiency is known for this point — "
+                         "wall-to-shaft could not be computed")),
         },
         "point": {
             "i_phase_rms_A": round(i_ph, 1),

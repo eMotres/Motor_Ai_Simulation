@@ -567,18 +567,23 @@ def test_the_second_em_run_is_made_at_the_first_answers_temperatures(loop):
     input plus ``damping`` times the gap the thermal solve found — checked
     against the arithmetic rather than against a stored number, so this test
     still means something when the physics moves.
+
+    The loop rounds the updated temperature to 1 decimal place (to match what
+    the panel displays) before the next EM run, so the expected value is rounded
+    to 1 decimal with a small tolerance to account for the rounding.
     """
     c = loop["coupling"]
     a, b = c["history"][0], c["history"][1]
     d = float(a["T_coil_out"]) - float(a["T_coil_in"])
     assert abs(d) > 0.02, ("the thermal solve returned the coil temperature it "
                            "was handed — there is no feedback to test")
-    assert float(b["T_coil_in"]) == pytest.approx(
-        float(a["T_coil_in"]) + c["damping"] * d, abs=0.02)
+    # The loop rounds the updated temperature to 1 decimal place
+    expected_t_coil = round(float(a["T_coil_in"]) + c["damping"] * d, 1)
+    assert float(b["T_coil_in"]) == pytest.approx(expected_t_coil, abs=0.01)
     if a["T_magnet_out"] is not None and a["T_magnet_in"] is not None:
         dm = float(a["T_magnet_out"]) - float(a["T_magnet_in"])
-        assert float(b["T_magnet_in"]) == pytest.approx(
-            float(a["T_magnet_in"]) + c["damping"] * dm, abs=0.02)
+        expected_t_magnet = round(float(a["T_magnet_in"]) + c["damping"] * dm, 1)
+        assert float(b["T_magnet_in"]) == pytest.approx(expected_t_magnet, abs=0.01)
 
 
 def test_the_magnet_starts_at_its_own_cards_temperature(loop):

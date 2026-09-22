@@ -1856,6 +1856,12 @@ def tree(response: Response, authorization: str = Header(default=None)):
                 # property of the MACHINE, so the catalog row, the Mechanical
                 # tab and the datasheet all read one yaml.
                 "bearings": c.get("bearings"),
+                # The Controller tab's own settings (owner 2026-09-22): one
+                # physical inverter box per configuration, same footing as the
+                # battery above.  `None` when no controller has ever been
+                # saved — the catalog chip (when built) and the Controller
+                # tab both read that as "nothing saved yet", never an error.
+                "controller": c.get("controller"),
                 "duties": [
                     {"name": d.get("name"), "mode": d.get("mode", "motor"),
                      "saved_at": d.get("saved_at"),
@@ -3898,6 +3904,109 @@ def set_battery(die: str, cfg: str, req: BatteryPatch,
     _save_yaml(_cfg_file(die, cfg), c)
     log.info("family: battery on '%s/%s': %s", die, cfg, c["battery"])
     return {"ok": True, "battery": c["battery"]}
+
+
+class ControllerCoolingSpec(BaseModel):
+    """The coldplate the Controller tab's MOSFET cooling row is set to."""
+    coolant: Optional[str] = None
+    flow_lpm: Optional[float] = None
+    t_in_c: Optional[float] = None
+    r_tim_k_w: Optional[float] = None
+
+
+class ControllerMappingRow(BaseModel):
+    """One coil -> bridge/leg row of the Controller tab's custom mapping."""
+    coil: int
+    bridge: str
+    leg: str
+
+
+class ControllerPatch(BaseModel):
+    """The Controller tab's own SETTINGS — never a solve result (that is
+    ``duty_results``'s own ``controller`` kind, the losses/thermal/limits
+    table a Solve produces).  This is the FORM the tab was left in: which
+    device, how the bridges map onto the winding, how many devices in
+    parallel, the gate/dead-time numbers, the carrier and the bus (blank —
+    ``None`` — meaning "the duty's own", exactly the convention
+    ``routes.controller._duty_defaults`` already reports in its ``sources``
+    map), the coldplate, and whether this controller is meant to feed its
+    losses back into the coupled EM/thermal loop.
+
+    Owner 2026-09-22: *"при сохранении мотора текущий контроллер тоже должен
+    сохраняться со всеми настройками"* — saved WHOLE, the same footing as
+    ``battery`` (:func:`set_battery` above): every field is sent every time
+    (the tab has exactly one form, not several dialogs edited piecemeal), so
+    this PATCH REPLACES the stored block rather than merging into it field by
+    field.
+    """
+    device: Optional[str] = None
+    topology: str = "one_3ph"
+    set_split: str = "series_split"
+    h_bridge_modulation: str = "unipolar"
+    devices_parallel: int = 1
+    devices_parallel_by_bridge: dict[str, int] = {}
+    r_g_ext_ohm: Optional[float] = None
+    v_gs_off_V: Optional[float] = None
+    dead_time_us: Optional[float] = None
+    f_carrier_hz: Optional[float] = None
+    v_dc_V: Optional[float] = None
+    cooling: ControllerCoolingSpec = ControllerCoolingSpec()
+    mapping: list[ControllerMappingRow] = []
+    couple_with_em: bool = False
+
+
+@router.patch("/config/{die}/{cfg}/controller")
+def set_controller(die: str, cfg: str, req: ControllerPatch,
+                   _w: dict = Depends(require_catalog_write)):
+    """Save the Controller tab's current settings WITH the configuration —
+    the same footing as :func:`set_battery`: every duty of this
+    configuration shares one physical controller box, so the block sits
+    beside ``winding``/``battery``, not inside one duty's own entry.
+
+    A WHOLE replace, not a merge (see :class:`ControllerPatch`) — the tab
+    sends its complete state on every save, so there is nothing to keep from
+    a previous PATCH.  Migration-safe by construction: an old configuration
+    simply has no ``controller`` key, and every reader treats that as "the
+    tab's own defaults" (never an error — see ``routes.controller``'s
+    ``GET /settings``).
+    """
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w)
+    if not (int(req.devices_parallel) >= 1):
+        raise HTTPException(422, detail=(
+            f"controller.devices_parallel must be at least 1, got "
+            f"{req.devices_parallel}"))
+    for _f, _v in (("r_g_ext_ohm", req.r_g_ext_ohm),
+                   ("dead_time_us", req.dead_time_us),
+                   ("f_carrier_hz", req.f_carrier_hz),
+                   ("v_dc_V", req.v_dc_V)):
+        if _v is not None and not (float(_v) >= 0):
+            raise HTTPException(422, detail=(
+                f"controller.{_f} must be non-negative; got {_v}"))
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    c["controller"] = {
+        "saved_at": datetime.now().isoformat(timespec="seconds"),
+        "device": (req.device or "").strip() or None,
+        "topology": req.topology,
+        "set_split": req.set_split,
+        "h_bridge_modulation": req.h_bridge_modulation,
+        "devices_parallel": int(req.devices_parallel),
+        "devices_parallel_by_bridge": {str(k): int(v) for k, v in
+                                       (req.devices_parallel_by_bridge or {}).items()},
+        "r_g_ext_ohm": req.r_g_ext_ohm,
+        "v_gs_off_V": req.v_gs_off_V,
+        "dead_time_us": req.dead_time_us,
+        "f_carrier_hz": req.f_carrier_hz,
+        "v_dc_V": req.v_dc_V,
+        "cooling": req.cooling.model_dump(exclude_none=True),
+        "mapping": [m.model_dump() for m in req.mapping],
+        "couple_with_em": bool(req.couple_with_em),
+    }
+    _save_yaml(_cfg_file(die, cfg), c)
+    log.info("family: controller settings on '%s/%s': %s x%s, topology %s",
+             die, cfg, c["controller"]["device"],
+             c["controller"]["devices_parallel"], c["controller"]["topology"])
+    return {"ok": True, "controller": c["controller"]}
 
 
 class BearingEnd(BaseModel):

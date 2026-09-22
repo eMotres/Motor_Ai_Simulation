@@ -17,7 +17,8 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Paper, Typography, Button, TextField, MenuItem, Divider,
-         CircularProgress, Alert, Chip, Tooltip } from '@mui/material';
+         CircularProgress, Alert, Chip, Tooltip, Checkbox,
+         FormControlLabel } from '@mui/material';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
 import DeviceCatalog from './DeviceCatalog';
@@ -26,9 +27,12 @@ import { MAX_LOCAL_ROWS, normalizeLocalRows } from '../compare/resultRows';
 import type { LocalRow } from '../compare/resultRows';
 import { CONTROLLER_COMPARE_COLUMNS, localControllerRow,
          controllerRowName } from './compareRows';
+import { useDieContext } from '../common/useDieContext';
 import { listDevices, getTopologies, solveController, getLast, postSchematic,
-         polyline, fmt, pct, statusLine,
-         type DeviceRow, type CoilRow, type ControllerResult } from './controllerApi';
+         polyline, fmt, pct, statusLine, getControllerSettings,
+         saveControllerSettings, formStateFromSettings, settingsForSave,
+         type DeviceRow, type CoilRow, type ControllerResult,
+         type ControllerFormState } from './controllerApi';
 
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 const NUM = { width: 120, '& input': { fontSize: 12, py: 0.5 } } as const;
@@ -63,6 +67,12 @@ const ControllerPanel: React.FC = () => {
   const [mapping, setMapping] = useState<Record<number, string>>({});
   /** N per switch, per bridge — empty means "the common count above". */
   const [parByBridge, setParByBridge] = useState<Record<string, number>>({});
+  /** Whether this controller is meant to feed its losses back into the
+   * coupled EM/thermal loop — a SAVED setting; wiring it into the loop
+   * itself belongs to that loop's own owner, not this tab. */
+  const [coupleWithEm, setCoupleWithEm] = useState(false);
+  const [settingsErr, setSettingsErr] = useState<string | null>(null);
+  const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [switchCurrent, setSwitchCurrent] = useState<
     { i_switch_rms_A: number | null; basis: string | null; note: string } | null>(null);
 
@@ -116,6 +126,46 @@ const ControllerPanel: React.FC = () => {
       if (last && (last as ControllerResult).device) setRes(last as ControllerResult);
     } catch { /* nothing solved yet */ }
   })(); }, []);
+
+  // ── the tab's own settings, saved WITH the active configuration ────────
+  // Owner 2026-09-22: "при сохранении мотора текущий контроллер тоже должен
+  // сохраняться со всеми настройками". `useDieContext` is the same "which
+  // motor is loaded" the Geometry table and the Optimize/Sweep pickers
+  // already poll — no new plumbing, and it answers before the first Solve,
+  // so a saved controller restores the moment the tab opens.
+  const dieCtx = useDieContext();
+  useEffect(() => { void (async () => {
+    if (!dieCtx.die || !dieCtx.config) return;
+    try {
+      const block = await getControllerSettings(dieCtx.die, dieCtx.config);
+      const fallback: ControllerFormState = { device, topology, setSplit, hbMod,
+        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
+        parByBridge, coupleWithEm };
+      const next = formStateFromSettings(block, fallback);
+      setDevice(next.device); setTopology(next.topology); setSetSplit(next.setSplit);
+      setHbMod(next.hbMod); setNPar(next.nPar); setRg(next.rg); setVgsOff(next.vgsOff);
+      setDead(next.dead); setFsw(next.fsw); setVdc(next.vdc); setCoolant(next.coolant);
+      setFlow(next.flow); setTin(next.tin); setRtim(next.rtim);
+      setMapping(next.mapping); setParByBridge(next.parByBridge);
+      setCoupleWithEm(next.coupleWithEm);
+      if (block && (block as any).saved_at) setSettingsSavedAt((block as any).saved_at);
+    } catch { /* nothing saved yet, or the read failed — the tab's own defaults stand */ }
+  })(); }, [dieCtx.die, dieCtx.config]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveSettings = async () => {
+    setSettingsErr(null);
+    if (!dieCtx.die || !dieCtx.config) {
+      setSettingsErr('no motor is loaded — load a configuration first');
+      return;
+    }
+    try {
+      const state: ControllerFormState = { device, topology, setSplit, hbMod,
+        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
+        parByBridge, coupleWithEm };
+      const r = await saveControllerSettings(dieCtx.die, dieCtx.config, settingsForSave(state));
+      setSettingsSavedAt(r.controller?.saved_at || null);
+    } catch (e) { setSettingsErr(String(e)); }
+  };
 
   const customRows = useMemo(() =>
     coils.map(c => ({ coil: c.index, bridge: (mapping[c.index] || 'INV1').split('/')[0],
@@ -197,7 +247,25 @@ const ControllerPanel: React.FC = () => {
         <Button size="small" variant="outlined" disabled={!res}
           onClick={addRow} sx={{ textTransform: 'none', fontSize: 11 }}>
           + Add to comparison</Button>
+        <Tooltip title={dieCtx.active
+          ? 'Save this controller — device, topology, mapping, N parallel, '
+            + 'R_G, dead time, carrier, DC link and cooling — with the loaded '
+            + 'configuration, the same way the battery is saved. Restored the '
+            + 'next time this configuration is loaded.'
+          : 'Load a configuration first — the controller is saved WITH it.'}>
+          <span>
+            <Button size="small" variant="outlined" disabled={!dieCtx.active}
+              onClick={() => void saveSettings()} sx={{ textTransform: 'none', fontSize: 11 }}>
+              Save settings</Button>
+          </span>
+        </Tooltip>
+        {settingsSavedAt && !settingsErr && (
+          <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>
+            saved {settingsSavedAt}</Typography>)}
       </Box>
+
+      {settingsErr && <Alert severity="error" sx={{ mb: 1, fontSize: 12.5 }}
+        onClose={() => setSettingsErr(null)}>{settingsErr}</Alert>}
 
       {/* ONE status line: the plain-English refusal when the duty has no
           electromagnetic answer yet, otherwise which point of the duty this
@@ -264,6 +332,15 @@ const ControllerPanel: React.FC = () => {
             <Row label="Flow" tip="Coldplate flow. It sets the film coefficient AND the coolant's own temperature rise." unit="L/min"><Num v={flow} set={setFlow} /></Row>
             <Row label="Inlet" tip="Coolant inlet temperature — the bottom of the whole thermal stack." unit="°C"><Num v={tin} set={setTin} /></Row>
             <Row label="R_th TIM" tip="Thermal interface between the device tab and the plate, per device. It is comparable with R_th(j-c) itself, so it changes the answer." unit="K/W"><Num v={rtim} set={setRtim} /></Row>
+            <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <FormControlLabel sx={{ mr: 0, flex: 1 }}
+                slotProps={{ typography: { sx: { fontSize: 12, color: 'var(--text-1)' } } }}
+                control={<Checkbox size="small" checked={coupleWithEm}
+                  onChange={e => setCoupleWithEm(e.target.checked)} />}
+                label="Couple with EM" />
+              <HelpTip title="Whether this controller is meant to feed its losses back into the coupled electromagnetic/thermal loop. This tab only SAVES the choice with the configuration — it does not itself run the coupled loop." />
+            </Box>
           </Box>
         </Paper>
 

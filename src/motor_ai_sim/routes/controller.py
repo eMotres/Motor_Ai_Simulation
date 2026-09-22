@@ -449,6 +449,42 @@ def get_topologies(num_slots: Optional[int] = Query(None),
             "coils": coils, "error": error}
 
 
+# ---------------------------------------------------------------------------
+# Settings — the tab's own FORM, persisted with the configuration
+# ---------------------------------------------------------------------------
+
+@router.get("/settings")
+def get_controller_settings(die: Optional[str] = Query(None),
+                            config: Optional[str] = Query(None)
+                            ) -> Dict[str, Any]:
+    """The Controller tab's own settings, as they were last saved WITH the
+    active configuration (owner 2026-09-22: "при сохранении мотора текущий
+    контроллер тоже должен сохраняться со всеми настройками") — written by
+    ``PATCH /api/family/config/{die}/{cfg}/controller``, one physical
+    controller box per configuration, the same footing as ``battery``.
+
+    ``{}`` — never a 404, never a validation error — when nothing has ever
+    been saved: the tab reads that as "use its own defaults", exactly the
+    rule ``missing block = the tab's defaults, no error`` the owner stated.
+    Never a solve RESULT: that is ``duty_results``'s own ``controller`` kind
+    (the losses/thermal/limits table ``POST /solve`` writes) and lives beside
+    this, never inside it.
+    """
+    d, cf = die, config
+    if not (d and cf):
+        ctx = _DR.active_context()
+        if not ctx:
+            return {}
+        d, cf = ctx[0], ctx[1]
+    try:
+        from motor_ai_sim.routes import family as _fam
+        doc = _fam.config_doc(str(d), str(cf))
+    except Exception:                                       # noqa: BLE001
+        return {}
+    block = (doc or {}).get("controller")
+    return dict(block) if isinstance(block, dict) else {}
+
+
 @router.post("/schematic")
 def post_schematic(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """The power schematic for a topology, without solving anything.

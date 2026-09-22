@@ -370,6 +370,98 @@ class DeviceCard:
                          "t_case_c", "i_a")
         return interp(pts, float(t_case_c)) if pts else None
 
+    def i_d_rating(self, t_case_c: float) -> Dict[str, Any]:
+        """``{i_a, basis, source}`` — the continuous rating to judge against.
+
+        INSIDE the card's tabulated span the published points answer, linearly
+        interpolated; that is the datasheet, and nothing else is allowed to
+        override it.  OUTSIDE it the straight line is nonsense — extrapolated
+        it would still promise 171 A at the junction limit itself — so the
+        datasheet's OWN limiting mechanism is used instead.  Table 2 states
+        that I_DDC is "limited by T_vj(max)" through R_th(j-c,max), which is
+
+            I_D = sqrt( (T_j,max - T_c) / (R_th(j-c,max) * R_DS(on)@T_j,max) )
+
+        and it is not a guess: on this card it gives 410 A at 25 degC against a
+        published 403, and 290 A at 100 degC against a published 287 — both
+        within 2 %.  It is capped at the coldest tabulated value, because below
+        that the bond wire limits the current and not the junction (the flat
+        top of the I_D = f(T_c) figure).  Which branch answered is reported.
+        """
+        pts = _points_of((self.doc["ratings"] or {}).get("i_d_continuous"),
+                         "t_case_c", "i_a")
+        if not pts:
+            return {"i_a": None, "basis": "the card publishes no I_D rating",
+                    "source": None}
+        t = float(t_case_c)
+        src = ((self.doc["ratings"] or {}).get("source") or "").strip()
+        if pts[0][0] <= t <= pts[-1][0]:
+            return {"i_a": interp(pts, t),
+                    "basis": (f"the card's published I_D(T_c) points, "
+                              f"interpolated at {t:.0f} degC"),
+                    "source": src}
+        r_hot = self.r_ds_on_ohm(self.t_j_max_c, 18.0)
+        r_th = self.r_th_jc_k_w
+        head = self.t_j_max_c - t
+        if head <= 0 or r_hot <= 0 or r_th <= 0:
+            return {"i_a": 0.0,
+                    "basis": (f"the case is at or above T_j,max "
+                              f"({self.t_j_max_c:.0f} degC) — no current at all"),
+                    "source": src}
+        i = math.sqrt(head / (r_th * r_hot))
+        cap = pts[0][1] if t < pts[0][0] else None
+        if cap is not None and i > cap:
+            return {"i_a": cap,
+                    "basis": (f"below the card's coldest published point the "
+                              f"bond wire limits, not the junction: held at "
+                              f"{cap:.0f} A"),
+                    "source": src}
+        return {"i_a": i,
+                "basis": (f"outside the card's published span: "
+                          f"sqrt((T_j,max - T_c)/(R_th(j-c,max) * "
+                          f"R_DS(on)@T_j,max)) at T_c = {t:.0f} degC"),
+                "source": src}
+
+    def unit_price(self) -> Dict[str, Any]:
+        """``{amount, currency, quantity, source, dated}`` — all optional.
+
+        A price is a QUOTATION and never a datasheet value, so it is null
+        unless somebody put it on the card with where and when it came from.
+        The Compare table multiplies it by the device count as a cost PROXY,
+        which is what it is called there.
+        """
+        p = self.doc.get("price")
+        p = p if isinstance(p, dict) else {}
+        return {"amount": _num(p.get("amount")),
+                "currency": p.get("currency") or "EUR",
+                "quantity": _num(p.get("quantity")),
+                "source": p.get("source"), "dated": p.get("dated")}
+
+    @property
+    def i_d_pulsed_A(self) -> Optional[float]:
+        return _num((self.doc["ratings"] or {}).get("i_d_pulsed_A"))
+
+    @property
+    def i_sm_A(self) -> Optional[float]:
+        return _num((self.doc["third_quadrant"] or {}).get("i_sm_A"))
+
+    def v_gs_static_window(self) -> Tuple[Optional[float], Optional[float]]:
+        """The static V_GS window, from wherever the card keeps it.
+
+        Infineon publishes it in the MAXIMUM RATED VALUES table, so the card
+        carries it under ``ratings``; another manufacturer's card may put it
+        with the rest of the gate data.  Both are read — a limit that exists
+        and is not found would be reported as "not judged", which is the one
+        outcome a limit table must not produce by accident.
+        """
+        for blk in ("ratings", "gate"):
+            w = (self.doc.get(blk) or {}).get("v_gs_static_V")
+            if isinstance(w, dict):
+                lo, hi = _num(w.get("min")), _num(w.get("max"))
+                if lo is not None and hi is not None:
+                    return lo, hi
+        return None, None
+
     def gate_window(self) -> Dict[str, Any]:
         return dict((self.doc.get("gate") or {}))
 
@@ -640,6 +732,10 @@ class DeviceCard:
             # GENERATED drawing of the package — no vendor artwork is fetched.
             "package_size_mm": self.package_size(),
             "weight_g": _num(self.doc.get("weight_g")),
+            # OPTIONAL and null by default: a price is a quotation, not a
+            # datasheet value, so it is only ever what somebody typed on the
+            # card, with the date and the source they typed it from.
+            "price": self.unit_price(),
             "image": self.doc.get("image"),
             "package_svg": self.package_outline_svg(),
             "suggested_parallel": (None if i_switch_rms_A is None else

@@ -21,6 +21,11 @@ import { Box, Paper, Typography, Button, TextField, MenuItem, Divider,
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
 import DeviceCatalog from './DeviceCatalog';
+import LocalCompareTable from '../common/LocalCompareTable';
+import { MAX_LOCAL_ROWS, normalizeLocalRows } from '../compare/resultRows';
+import type { LocalRow } from '../compare/resultRows';
+import { CONTROLLER_COMPARE_COLUMNS, localControllerRow,
+         controllerRowName } from './compareRows';
 import { listDevices, getTopologies, solveController, getLast, postSchematic,
          polyline, fmt, pct,
          type DeviceRow, type CoilRow, type ControllerResult } from './controllerApi';
@@ -31,6 +36,9 @@ const TH = { fontSize: 11, color: 'var(--text-3)' } as const;
 const TD = { fontSize: 12, color: 'var(--text-1)', fontFamily: 'monospace', textAlign: 'right' } as const;
 
 type Nullable = number | '' ;
+
+/** Where this tab keeps its stacked comparison between visits. */
+const COMPARE_KEY = 'controller.compareRows';
 
 const ControllerPanel: React.FC = () => {
   const [devices, setDevices] = useState<DeviceRow[]>([]);
@@ -62,6 +70,30 @@ const ControllerPanel: React.FC = () => {
   const [svg, setSvg] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // The stacked comparison, the same contract every other tab's uses. Kept in
+  // this browser (the Compare tab's server-side library is the permanent one);
+  // whatever is on disk is normalised, never trusted.
+  const [rows, setRows] = useState<LocalRow[]>(() => {
+    try { return normalizeLocalRows(JSON.parse(
+      localStorage.getItem(COMPARE_KEY) || '[]')); } catch { return []; }
+  });
+  const saveRows = (next: LocalRow[]) => {
+    setRows(next);
+    try { localStorage.setItem(COMPARE_KEY, JSON.stringify(next)); } catch { /* private window */ }
+  };
+  const addRow = () => {
+    setErr(null);
+    try {
+      if (!res) throw new Error('nothing to compare yet — press Solve first');
+      if (rows.length >= MAX_LOCAL_ROWS) {
+        throw new Error(`the comparison below already holds ${MAX_LOCAL_ROWS} `
+          + 'variants — drop one first');
+      }
+      const { inputs, results } = localControllerRow(res);
+      saveRows([...rows, { id: `ctrl-${Date.now()}`, name: controllerRowName(res),
+                           at: new Date().toISOString(), inputs, results }]);
+    } catch (e) { setErr(String(e)); }
+  };
 
   // ── what the machine is, and what cards exist ──────────────────────────
   const loadDevices = async (topo: string) => {
@@ -162,6 +194,9 @@ const ControllerPanel: React.FC = () => {
         <Button size="small" variant="outlined" disabled={busy || !device}
           onClick={() => void solve(true)} sx={{ textTransform: 'none', fontSize: 11 }}>
           Recompute</Button>
+        <Button size="small" variant="outlined" disabled={!res}
+          onClick={addRow} sx={{ textTransform: 'none', fontSize: 11 }}>
+          + Add to comparison</Button>
       </Box>
 
       {err && <Alert severity="error" sx={{ mb: 1.5, fontSize: 12.5 }}>{err}</Alert>}
@@ -302,6 +337,45 @@ const ControllerPanel: React.FC = () => {
                   E_oss {fmt(L?.e_oss_W, 0)} W
                 </Typography>
               </Box>
+              {/* ── the datasheet limits, always, one line + the table ── */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mt: 1.5 }}>
+                <SectionLabel sx={{ m: 0 }}>Datasheet limits</SectionLabel>
+                <Chip size="small"
+                  label={res.limits_verdict === 'fail' ? 'FAIL'
+                       : res.limits_verdict === 'warn' ? 'WARNING' : 'PASS'}
+                  color={res.limits_verdict === 'fail' ? 'error'
+                       : res.limits_verdict === 'warn' ? 'warning' : 'success'}
+                  sx={{ fontSize: 10, height: 20 }} />
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  {res.feasible === false
+                    ? `${(res.limits || []).filter(r => r.verdict === 'fail').length} limit(s) exceeded`
+                    : `inside every published limit of ${res.device}`}
+                </Typography>
+                <HelpTip title="Every published limit of the chosen device with the number this duty reaches. A line that is not judged is one the datasheet does not publish or this model does not compute — never a pass by omission." />
+              </Box>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr 0.9fr 0.9fr', rowGap: 0.4, columnGap: 1, mt: 0.5 }}>
+                <Typography sx={TH}>Limit</Typography>
+                <Typography sx={{ ...TH, textAlign: 'right' }}>This duty</Typography>
+                <Typography sx={{ ...TH, textAlign: 'right' }}>Rating</Typography>
+                <Typography sx={{ ...TH, textAlign: 'right' }}>Margin</Typography>
+                <Typography sx={{ ...TH, textAlign: 'right' }}>Verdict</Typography>
+                {(res.limits || []).map(r => (
+                  <React.Fragment key={r.name}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4, minWidth: 0 }}>
+                      <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{r.name}</Typography>
+                      <HelpTip title={`${r.source}${r.note ? ` — ${r.note}` : ''}`} />
+                    </Box>
+                    <Typography sx={TD}>{r.value == null ? '—' : `${fmt(r.value, 1)} ${r.unit}`}</Typography>
+                    <Typography sx={TD}>{r.limit == null ? '—' : `${fmt(r.limit, 1)} ${r.unit}`}</Typography>
+                    <Typography sx={TD}>{r.margin == null ? '—' : `${fmt(r.margin, 1)} ${r.unit}`}</Typography>
+                    <Typography sx={{ ...TD, color: r.verdict === 'fail' ? '#fca5a5'
+                                        : r.verdict === 'warn' ? '#fbbf24'
+                                        : r.verdict === 'pass' ? '#34d399' : 'var(--text-3)' }}>
+                      {r.verdict === 'not_judged' ? 'not judged' : r.verdict.toUpperCase()}
+                    </Typography>
+                  </React.Fragment>))}
+              </Box>
+
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
                 <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
                   E_oss {L?.e_oss_policy === 'added' ? 'added' : 'in E_on'} ·
@@ -379,6 +453,20 @@ const ControllerPanel: React.FC = () => {
               </React.Fragment>))}
           </Box>
         </Paper>)}
+
+      {/* ── the stacked comparison, the same table every other tab uses ── */}
+      <Box sx={{ mt: 2 }}>
+        <LocalCompareTable
+          title="Controller variants"
+          rows={rows}
+          columns={CONTROLLER_COMPARE_COLUMNS}
+          onRemove={(id) => saveRows(rows.filter(r => r.id !== id))}
+          onClear={() => saveRows([])}
+          onRename={(id, name) => saveRows(rows.map(r => (r.id === id ? { ...r, name } : r)))}
+          emptyHint={'Press "+ Add to comparison" and this solve becomes a column here — '
+                     + 'two topologies, two devices or two coldplates side by side.'}
+        />
+      </Box>
 
       {/* ── catalogue ── */}
       <Box sx={{ mt: 2 }}>

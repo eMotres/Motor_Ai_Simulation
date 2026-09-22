@@ -1455,6 +1455,13 @@ def _controller(doc, D: Dict[str, Any]) -> None:
                widths_cm=[5.4, 4.0, 17.3])
         _table(doc, R.controller_bridge_rows(rec), size=10.5,
                widths_cm=[4.0, 3.2, 4.4, 5.6, 9.5])
+        _v = R.controller_limits_verdict_text(rec)
+        if _v:
+            _p(doc, _v, size=9.5, bold=True,
+               color=(WARN if str(rec.get("limits_verdict")) != "pass" else None))
+        _p(doc, R.CONTROLLER_LIMITS_NOTE, size=9, italic=True, color=NOTE)
+        _table(doc, R.controller_limit_rows(rec), size=10.5,
+               widths_cm=[5.6, 3.4, 3.0, 2.6, 12.1])
         _p(doc, R.controller_assumption_text(rec), size=9, italic=True, color=NOTE)
         _p(doc, R.controller_source_text(rec), size=9, italic=True, color=NOTE)
 

@@ -15044,6 +15044,47 @@ def controller_rows(rec: Dict[str, Any]) -> List[List[str]]:
     return rows
 
 
+CONTROLLER_LIMITS_NOTE = (
+    "Every published limit of the chosen device, with the number this duty "
+    "reaches. A line that is not judged is one the datasheet does not publish "
+    "or this model does not compute — never a pass by omission.")
+
+
+def controller_limits_verdict_text(rec: Dict[str, Any]) -> str:
+    """The one-line answer the limits table exists to give."""
+    v = str(rec.get("limits_verdict") or "")
+    dev = rec.get("device") or "the device"
+    if v == "fail":
+        bad = [r.get("name") for r in (rec.get("limits") or [])
+               if r.get("verdict") == "fail"]
+        return (f"OUTSIDE the {dev} datasheet limits: "
+                + ", ".join(str(b) for b in bad) + ".")
+    if v == "warn":
+        return f"Inside every {dev} datasheet limit, with a design warning below."
+    if v == "pass":
+        return f"Inside every {dev} datasheet limit."
+    return ""
+
+
+def controller_limit_rows(rec: Dict[str, Any]) -> List[List[str]]:
+    """The datasheet-limit table: quantity, reached, limit, verdict, source."""
+    rows: List[List[str]] = [["Datasheet limit", "This duty", "Limit",
+                              "Verdict", "Where the limit comes from"]]
+    words = {"pass": "PASS", "fail": "FAIL", "warn": "WARNING",
+             "not_judged": "not judged"}
+    for r in rec.get("limits") or []:
+        unit = str(r.get("unit") or "")
+        val = r.get("value")
+        lim = r.get("limit")
+        rows.append([
+            str(r.get("name") or ""),
+            "—" if val is None else f"{_fmt(val, 1)} {unit}".strip(),
+            "—" if lim is None else f"{_fmt(lim, 1)} {unit}".strip(),
+            words.get(str(r.get("verdict")), str(r.get("verdict"))),
+            str(r.get("source") or r.get("note") or "")])
+    return rows
+
+
 def controller_bridge_rows(rec: Dict[str, Any]) -> List[List[str]]:
     """One row per leg — the coils it drives, its current and its share."""
     rows: List[List[str]] = [["Bridge / leg", "Coils", "Leg current",
@@ -15105,6 +15146,16 @@ def _controller_page(st, cols: List[Dict[str, Any]],
         out.append(Spacer(1, 4))
         brows = controller_bridge_rows(rec)
         out.append(_table(brows, [90, 70, 90, 110, CONTENT_W - 360],
+                          header=True, size=7.6))
+        out.append(Spacer(1, 4))
+        _v = controller_limits_verdict_text(rec)
+        if _v:
+            out.append(_para("<b>%s</b>" % _v, st["body"]))
+        out.append(_para(CONTROLLER_LIMITS_NOTE, st["note"]))
+        lrows = controller_limit_rows(rec)
+        out.append(_table([[r[0], r[1], r[2], r[3],
+                            _para(str(r[4]), st["cell"])] for r in lrows],
+                          [130, 78, 70, 56, CONTENT_W - 334],
                           header=True, size=7.6))
         out.append(Spacer(1, 3))
         out.append(_para(controller_assumption_text(rec), st["note"]))

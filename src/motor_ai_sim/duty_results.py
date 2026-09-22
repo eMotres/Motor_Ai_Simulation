@@ -1503,6 +1503,12 @@ def compact_controller(out: Dict[str, Any]) -> Dict[str, Any]:
                       "devices_parallel", "n_switches", "modulation",
                       "modulation_index", "p_loss_W", "legs")}
                     for b in (out.get("bridges") or [])],
+        # The datasheet limit table travels with the record: a stored answer
+        # that says 96 % efficiency and does not say whether the part is
+        # inside its ratings is half an answer.
+        "feasible": out.get("feasible"),
+        "limits_verdict": out.get("limits_verdict"),
+        "limits": [dict(r) for r in (out.get("limits") or [])],
         "losses": dict(out.get("losses") or {}),
         "thermal": dict(out.get("thermal") or {}),
         "dc_link": dict(out.get("dc_link") or {}),

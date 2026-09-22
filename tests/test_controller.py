@@ -263,6 +263,96 @@ def test_overheating_is_a_loud_violation_not_a_silent_number(synth_dir):
                or "runaway" in v.lower() for v in out["violations"])
 
 
+# ---------------------------------------------------------------------------
+# The datasheet limits — every one of them, on every solve
+# ---------------------------------------------------------------------------
+
+_LIMIT_NAMES = ("Continuous current per device", "Peak current per device",
+                "Reverse peak current per device", "Junction temperature",
+                "DC link vs V_DSS", "Gate voltage", "Avalanche energy",
+                "dv/dt")
+
+
+def test_every_solve_carries_the_whole_limit_table(synth_dir):
+    out = lo.solve_controller(_synth_request())
+    names = [r["name"] for r in out["limits"]]
+    assert names == list(_LIMIT_NAMES)
+    assert out["feasible"] is True
+    assert out["limits_verdict"] == "pass"
+    for r in out["limits"]:
+        assert r["verdict"] in ("pass", "fail", "warn", "not_judged")
+        # a limit that is not judged says WHY — never a pass by omission
+        if r["verdict"] == "not_judged":
+            assert r["note"]
+
+
+def test_the_limits_use_the_datasheet_numbers(synth_dir):
+    """Against the real card, so the table is checkable against the PDF."""
+    out = lo.solve_controller(_synth_request(
+        device=REAL, devices_parallel=3, i_phase_rms_A=314.3, p_ac_W=272_200.0,
+        star_delta="delta", f_elec_hz=1183.3, f_carrier_hz=24_000.0,
+        v_dc_V=750.4, modulation_index=0.6333, power_factor=None,
+        dead_time_us=0.5, v_gs_on_V=18.0, v_gs_off_V=0.0,
+        cooling={"coolant": "water_glycol_50", "flow_lpm": 8.0, "t_in_c": 65.0},
+        r_tim_k_w=0.03, r_spread_k_w=0.0))
+    by = {r["name"]: r for r in out["limits"]}
+    assert by["Peak current per device"]["limit"] == pytest.approx(1433.0)
+    assert by["Reverse peak current per device"]["limit"] == pytest.approx(860.0)
+    assert by["Junction temperature"]["limit"] == pytest.approx(175.0)
+    assert by["DC link vs V_DSS"]["limit"] == pytest.approx(1200.0)
+    assert by["DC link vs V_DSS"]["utilisation_pct"] == pytest.approx(62.5, abs=0.1)
+    assert by["Gate voltage"]["verdict"] == "pass"     # -7 … 23 V window
+    assert by["Avalanche energy"]["verdict"] == "not_judged"
+    assert by["dv/dt"]["verdict"] == "not_judged"
+    assert out["feasible"] is True
+
+
+def test_a_gate_drive_outside_the_window_fails(synth_dir):
+    out = lo.solve_controller(_synth_request(device=REAL, devices_parallel=6,
+                                             v_gs_on_V=25.0))
+    by = {r["name"]: r for r in out["limits"]}
+    assert by["Gate voltage"]["verdict"] == "fail"
+    assert out["feasible"] is False
+
+
+def test_a_bus_near_vdss_warns_but_does_not_refuse(synth_dir):
+    out = lo.solve_controller(_synth_request(
+        device=REAL, devices_parallel=6, v_dc_V=1000.0, power_factor=0.9))
+    by = {r["name"]: r for r in out["limits"]}
+    assert by["DC link vs V_DSS"]["verdict"] == "warn"
+    assert by["DC link vs V_DSS"]["utilisation_pct"] == pytest.approx(83.3, abs=0.1)
+    assert out["feasible"] is True                     # a warning is not a fail
+    assert any("DC link" in w for w in out["warnings"])
+
+
+def test_the_current_rating_follows_the_datasheet_derating(synth_dir):
+    """Inside the published span the table answers; outside it, the datasheet's
+    own limiting mechanism does — and it reproduces both published points."""
+    import math
+    c = dv.get_device(REAL)
+    assert c.i_d_rating(25.0)["i_a"] == pytest.approx(403.0)
+    assert c.i_d_rating(100.0)["i_a"] == pytest.approx(287.0)
+    assert "published" in c.i_d_rating(60.0)["basis"]
+    # Just outside the span the law must not JUMP: at 101 degC it answers
+    # 288 A against the 287 A the table gives one degree colder — the 2 % by
+    # which the law over-reads the published points, and not a step.
+    assert c.i_d_rating(101.0)["i_a"] == pytest.approx(287.0, rel=0.02)
+    # At the junction limit there is no current at all, and a straight-line
+    # extrapolation of the two table points would have promised ~171 A.
+    assert c.i_d_rating(175.0)["i_a"] == pytest.approx(0.0)
+    assert c.i_d_rating(140.0)["i_a"] == pytest.approx(
+        math.sqrt(35.0 / (0.1 * c.r_ds_on_ohm(175.0, 18.0))), rel=1e-6)
+    # Below the coldest point the bond wire limits, not the junction.
+    assert c.i_d_rating(-20.0)["i_a"] == pytest.approx(403.0)
+    assert "bond wire" in c.i_d_rating(-20.0)["basis"]
+
+
+def test_the_connection_is_the_motors_and_is_reported(synth_dir):
+    out = lo.solve_controller(_synth_request(star_delta="delta"))
+    assert out["point"]["star_delta"] == "delta"
+    assert "duty" in out["point"]["connection_from"]
+
+
 def test_bus_above_vdss_is_refused_by_name(synth_dir):
     with pytest.raises(lo.ControllerRefusal) as exc:
         lo.solve_controller(_synth_request(v_dc_V=1500.0))
@@ -670,6 +760,28 @@ def test_report_controller_rows_name_both_efficiencies(synth_dir):
     assert R.controller_bridge_rows(rec)[0][0] == "Bridge / leg"
     assert len(R.controller_bridge_rows(rec)) == 4      # header + three legs
     assert "dead time" in R.controller_assumption_text(rec)
+
+
+def test_report_prints_the_whole_limit_table_with_its_verdict(synth_dir):
+    from motor_ai_sim import duty_results as dr
+    from motor_ai_sim import report as R
+    rec = dr.compact_controller(lo.solve_controller(_synth_request()))
+    assert rec["feasible"] is True
+    rows = R.controller_limit_rows(rec)
+    assert rows[0] == ["Datasheet limit", "This duty", "Limit", "Verdict",
+                       "Where the limit comes from"]
+    assert len(rows) == 1 + len(_LIMIT_NAMES)
+    assert "PASS" in [r[3] for r in rows[1:]]
+    assert "not judged" in [r[3] for r in rows[1:]]
+    assert "Inside every" in R.controller_limits_verdict_text(rec)
+
+    bad = dr.compact_controller(lo.solve_controller(
+        _synth_request(device=REAL, devices_parallel=1, i_phase_rms_A=500.0,
+                       p_ac_W=400_000.0, star_delta="delta", dead_time_us=1.0)))
+    assert bad["feasible"] is False
+    text = R.controller_limits_verdict_text(bad)
+    assert text.startswith("OUTSIDE")
+    assert "Junction temperature" in text
 
 
 def test_report_controller_section_is_absent_without_a_record():

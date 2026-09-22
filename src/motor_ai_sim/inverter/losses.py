@@ -71,8 +71,16 @@ from motor_ai_sim.inverter.topology import (Bridge, Coil, Topology,
 
 log = logging.getLogger(__name__)
 
-__all__ = ["ControllerRefusal", "ColdPlate", "solve_controller",
-           "DEFAULT_TIM_K_W", "TOL_K", "E_OSS_POLICIES", "SET_SPLITS"]
+__all__ = ["ControllerRefusal", "ColdPlate", "solve_controller", "limit_rows",
+           "DEFAULT_TIM_K_W", "TOL_K", "E_OSS_POLICIES", "SET_SPLITS",
+           "V_DSS_WARN_FRACTION"]
+
+#: Bus utilisation above this fraction of V_DSS is a DESIGN WARNING, not a
+#: refusal: the device blocks it, but there is nothing left for the switching
+#: overshoot a real commutation loop produces, and every application note in
+#: the trade says so.  It is a convention of this module and it is printed as
+#: one — the datasheet's own limit is V_DSS itself, which is the FAIL line.
+V_DSS_WARN_FRACTION = 0.80
 
 
 class ControllerRefusal(ValueError):
@@ -259,6 +267,140 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
         "extrapolated": extrapolated,
         "notes": notes,
     }
+
+
+# ---------------------------------------------------------------------------
+# THE DATASHEET LIMITS — every one of them, with its number, on every solve
+# ---------------------------------------------------------------------------
+# Owner, 2026-09-22: *«не забудь про паспортные лимиты MOSFET»*.  The junction
+# temperature and the current rating were already refusals; this makes the
+# WHOLE list explicit and always present, so a design is not "fine" merely
+# because nobody printed the line that would have failed.
+#
+# Every row carries the measured number, the datasheet limit, where that limit
+# comes from, and a verdict:
+#   ``pass``        the number is inside the published limit
+#   ``fail``        it is not — the solve is ``feasible: false``
+#   ``warn``        inside the limit, but against this module's own stated
+#                   convention (the only one is bus utilisation)
+#   ``not_judged``  the card does not publish the limit, or this model does not
+#                   compute the quantity.  NEVER silently a pass.
+
+def limit_rows(*, card: DeviceCard, v_dc_V: float, t_case_c: float,
+               t_j_c: float, i_device_rms_A: float, i_device_peak_A: float,
+               i_device_reverse_peak_A: float,
+               v_gs_on_V: float, v_gs_off_V: float,
+               dead_time_us: float) -> List[Dict[str, Any]]:
+    """The datasheet limit table for one solved controller."""
+    rows: List[Dict[str, Any]] = []
+
+    def row(name: str, value: Optional[float], limit: Optional[float],
+            unit: str, source: str, note: str = "",
+            higher_is_worse: bool = True) -> None:
+        if value is None or limit is None:
+            rows.append({"name": name, "value": value, "limit": limit,
+                         "unit": unit, "margin": None, "utilisation_pct": None,
+                         "verdict": "not_judged", "source": source,
+                         "note": note or "the card does not publish this limit"})
+            return
+        ok = (value <= limit) if higher_is_worse else (value >= limit)
+        rows.append({
+            "name": name, "value": round(float(value), 2),
+            "limit": round(float(limit), 2), "unit": unit,
+            "margin": round(float(limit) - float(value), 2),
+            "utilisation_pct": (round(100.0 * value / limit, 1)
+                                if limit else None),
+            "verdict": "pass" if ok else "fail",
+            "source": source, "note": note})
+
+    rating = card.i_d_rating(t_case_c)
+    row("Continuous current per device", i_device_rms_A, rating.get("i_a"),
+        "A rms",
+        (rating.get("source") or "the card's ratings block")
+        + " — " + str(rating.get("basis")),
+        f"rms over the whole period at the solved case temperature "
+        f"{t_case_c:.0f} degC")
+
+    row("Peak current per device", i_device_peak_A, card.i_d_pulsed_A, "A",
+        "the card's ratings block (I_DM)",
+        "the datasheet states I_DM as limited by T_vj(max) rather than by a "
+        "fixed pulse width, and here it recurs every fundamental period — the "
+        "binding judge is the junction-temperature row below")
+
+    row("Reverse peak current per device", i_device_reverse_peak_A,
+        card.i_sm_A, "A", "the card's third_quadrant block (I_SM)",
+        f"through the body diode during the {dead_time_us:g} us dead-time "
+        f"windows" if dead_time_us > 0 else
+        "no dead time in this solve, so the body diode never conducts")
+
+    row("Junction temperature", t_j_c, card.t_j_max_c, "degC",
+        "the card's ratings block (T_vj)",
+        "the hottest device of the whole controller")
+
+    rows.append(_bus_row(card, v_dc_V))
+
+    lo_v, hi_v = card.v_gs_static_window()
+    if lo_v is None or hi_v is None:
+        rows.append({"name": "Gate voltage", "value": None, "limit": None,
+                     "unit": "V", "margin": None, "utilisation_pct": None,
+                     "verdict": "not_judged",
+                     "source": "the card's gate block",
+                     "note": "the card publishes no static V_GS window"})
+    else:
+        worst = max(abs(v_gs_on_V - hi_v), abs(lo_v - v_gs_off_V))
+        inside = (lo_v <= v_gs_off_V <= hi_v) and (lo_v <= v_gs_on_V <= hi_v)
+        rows.append({
+            "name": "Gate voltage", "value": None, "limit": None, "unit": "V",
+            "margin": round(min(hi_v - v_gs_on_V, v_gs_off_V - lo_v), 2),
+            "utilisation_pct": None,
+            "verdict": "pass" if inside else "fail",
+            "source": "the card's gate block (static V_GS window)",
+            "note": (f"driven {v_gs_on_V:g} / {v_gs_off_V:g} V against a "
+                     f"{lo_v:g} … {hi_v:g} V window")})
+
+    rat = card.doc.get("ratings") or {}
+    has_av = rat.get("e_as_mJ") is not None
+    rows.append({
+        "name": "Avalanche energy", "value": None,
+        "limit": (float(rat["e_as_mJ"]) if has_av else None), "unit": "mJ",
+        "margin": None, "utilisation_pct": None, "verdict": "not_judged",
+        "source": "the card's ratings block (E_AS/E_AR)" if has_av else "",
+        "note": ("this model computes no avalanche event — a clamped "
+                 "two-level bridge should have none, and the stray-inductance "
+                 "spike that would cause one is not modelled"
+                 if has_av else "the card publishes no avalanche rating")})
+    rows.append({
+        "name": "dv/dt", "value": None, "limit": None, "unit": "kV/us",
+        "margin": None, "utilisation_pct": None, "verdict": "not_judged",
+        "source": "", "note": "the card publishes no dv/dt rating (the "
+                              "datasheet states a characterisation figure, "
+                              "not a limit), and this model computes no slope"})
+    return rows
+
+
+def _bus_row(card: DeviceCard, v_dc_V: float) -> Dict[str, Any]:
+    """The DC link against V_DSS — a fail above it, a warning near it."""
+    v_dss = card.v_dss_V
+    use = 100.0 * float(v_dc_V) / v_dss if v_dss else None
+    if v_dc_V > v_dss:
+        verdict = "fail"
+    elif use is not None and use > 100.0 * V_DSS_WARN_FRACTION:
+        verdict = "warn"
+    else:
+        verdict = "pass"
+    return {
+        "name": "DC link vs V_DSS", "value": round(float(v_dc_V), 1),
+        "limit": round(float(v_dss), 1), "unit": "V",
+        "margin": round(float(v_dss) - float(v_dc_V), 1),
+        "utilisation_pct": None if use is None else round(use, 1),
+        "verdict": verdict,
+        "source": "the card's ratings block (V_DSS)",
+        "note": (f"{use:.0f} % of the blocking voltage; above "
+                 f"{100 * V_DSS_WARN_FRACTION:.0f} % there is nothing left for "
+                 f"the commutation overshoot — a design warning of this "
+                 f"module, not a datasheet limit" if verdict == "warn"
+                 else f"{use:.0f} % of the blocking voltage"
+                 if use is not None else "")}
 
 
 # ---------------------------------------------------------------------------
@@ -573,19 +715,25 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             currents.append(leg_current[(b.id, lg.name)])
     dc = wf.dc_link_current(states, currents)
 
-    # ── verdicts ───────────────────────────────────────────────────────────
+    # ── the datasheet limits, and the verdicts that follow from them ───────
+    i_pk_dev = max((per_leg[(b.id, lg.name)]["i_device_peak_A"]
+                    for b in topo.bridges for lg in b.legs), default=0.0)
+    limits = limit_rows(
+        card=card, v_dc_V=v_dc, t_case_c=min(t_case, t_cap),
+        t_j_c=t_j_max_seen, i_device_rms_A=i_dev_max,
+        i_device_peak_A=i_pk_dev,
+        i_device_reverse_peak_A=(i_pk_dev if dead_us > 0 else 0.0),
+        v_gs_on_V=v_gs_on, v_gs_off_V=v_gs_off, dead_time_us=dead_us)
+
     violations: List[str] = []
-    if t_j_max_seen > card.t_j_max_c:
-        violations.append(
-            f"junction temperature {t_j_max_seen:.0f} degC is above the "
-            f"{card.part} limit of {card.t_j_max_c:.0f} degC — this controller "
-            f"does not run at this point (more devices in parallel, a colder "
-            f"coolant or a lower carrier)")
-    i_rating = card.i_d_continuous(min(t_case, t_cap))
-    if i_rating is not None and i_dev_max > i_rating:
-        violations.append(
-            f"each device carries {i_dev_max:.0f} A rms and {card.part} is rated "
-            f"{i_rating:.0f} A continuous at a {t_case:.0f} degC case")
+    for r in limits:
+        if r["verdict"] == "fail":
+            violations.append(
+                f"{r['name']}: {r['value']} {r['unit']} against the "
+                f"{card.part} limit of {r['limit']} {r['unit']}"
+                + (f" — {r['note']}" if r["note"] else ""))
+        elif r["verdict"] == "warn":
+            warnings.append(f"{r['name']}: {r['note']}")
     if diverged:
         violations.append(
             "THERMAL RUNAWAY: the junction temperature has no steady state "
@@ -649,8 +797,16 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "ok": not violations,
+        # ``feasible`` is the word the limit table answers: every published
+        # limit of the chosen part is inside its number.  It is not the same
+        # question as "did the solver converge" — that is `thermal.converged`.
+        "feasible": not violations,
+        "limits": limits,
+        "limits_verdict": ("fail" if violations else
+                           "warn" if any(r["verdict"] == "warn" for r in limits)
+                           else "pass"),
         "device": card.part,
-        "device_row": card.row(),
+        "device_row": card.row(i_switch_rms_A=i_dev_max * max(n_par, 1)),
         "provenance": card.provenance(),
         "topology": topo.as_dict(),
         "set_split": set_split if n_3ph >= 2 else None,
@@ -695,6 +851,11 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         "point": {
             "i_phase_rms_A": round(i_ph, 1),
             "i_leg_rms_3ph_A": round(i_leg_3ph, 1),
+            # The connection is the MOTOR's, never this module's: it comes from
+            # the duty's own record and the route reports where it came from
+            # (owner 2026-09-22: «соединение звезда/треугольник у нас
+            # определяется на моторе»).
+            "connection_from": "the duty (star/delta is a property of the motor)",
             "i_switch_rms_max_A": round(
                 max((per_leg[(b.id, lg.name)]["i_switch_rms_A"]
                      for b in topo.bridges for lg in b.legs), default=0.0), 1),

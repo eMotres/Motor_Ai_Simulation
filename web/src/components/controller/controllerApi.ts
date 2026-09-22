@@ -29,6 +29,9 @@ export interface DeviceRow {
   package_svg?: string;
   /** ceil(I_switch_rms / I_DDC@100 °C) for the duty the catalogue was asked for. */
   suggested_parallel?: number | null;
+  /** A quotation somebody typed on the card, never a datasheet value. */
+  price?: { amount: number | null; currency: string; quantity: number | null;
+            source: string | null; dated: string | null };
   datasheet_url?: string | null;
   datasheet_revision?: string | null;
   error?: string;
@@ -58,8 +61,24 @@ export interface BridgeResult {
   legs: LegResult[];
 }
 
+export interface LimitRow {
+  name: string;
+  value: number | null;
+  limit: number | null;
+  unit: string;
+  margin: number | null;
+  utilisation_pct: number | null;
+  verdict: 'pass' | 'fail' | 'warn' | 'not_judged';
+  source: string;
+  note: string;
+}
+
 export interface ControllerResult {
   ok: boolean;
+  /** every published limit of the chosen part is inside its number */
+  feasible?: boolean;
+  limits?: LimitRow[];
+  limits_verdict?: 'pass' | 'fail' | 'warn';
   device: string;
   device_row: DeviceRow;
   topology: { preset: string; preset_label: string; star_delta: string;

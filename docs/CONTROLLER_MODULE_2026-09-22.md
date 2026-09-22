@@ -219,6 +219,50 @@ impossible design stays visibly impossible. If the iteration diverges — R
 rising faster with T_j than the plate removes heat — it stops and says
 THERMAL RUNAWAY rather than printing a number.
 
+### The datasheet limits — all of them, on every solve
+
+Owner: *«не забудь про паспортные лимиты MOSFET»*. The junction temperature
+and the current rating were already refusals; the solve now carries the WHOLE
+list, so a design is not "fine" merely because nobody printed the line that
+would have failed. Every row has the number reached, the published limit,
+where that limit comes from, and a verdict — `pass`, `fail`, `warn` or
+`not_judged`. Any `fail` makes the solve `feasible: false`.
+
+| row | judged against | note |
+|---|---|---|
+| Continuous current per device | I_DDC at the SOLVED case temperature | see the derating rule below |
+| Peak current per device | I_DM (1433 A) | the datasheet states I_DM as limited by T_vj(max), not by a fixed pulse width; here it recurs every fundamental period, so the binding judge is the T_j row |
+| Reverse peak current per device | I_SM (860 A) | through the body diode during the dead-time windows |
+| Junction temperature | T_vj max (175 °C) | the hottest device of the controller |
+| DC link vs V_DSS | V_DSS (1200 V) | `fail` above it; `warn` above 80 % of it — a convention of THIS module, printed as one, because nothing is then left for the commutation overshoot |
+| Gate voltage | the static V_GS window (−7…23 V) | the drive actually used |
+| Avalanche energy | E_AS/E_AR published | **not judged** — this model computes no avalanche event |
+| dv/dt | — | **not judged** — the datasheet states a characterisation figure, not a limit |
+
+`not_judged` is never a silent pass: the row says why.
+
+**The current derating.** Inside the card's tabulated span (25…100 °C) the
+published points answer, interpolated. Outside it a straight line is nonsense
+— extrapolated it would still promise 171 A at the junction limit itself — so
+the datasheet's own limiting mechanism is used instead. Table 2 states that
+I_DDC is *limited by T_vj(max)* through R_th(j-c,max):
+
+```
+I_D(T_c) = sqrt( (T_j,max − T_c) / (R_th(j-c,max) · R_DS(on)@T_j,max) )
+```
+
+and it is not a guess: on this card it gives **410 A at 25 °C** against a
+published 403 and **290 A at 100 °C** against a published 287 — both within
+2 %. Below the coldest published point it is capped there, because the bond
+wire limits and not the junction (the flat top of the I_D = f(T_c) figure).
+Which branch answered is reported in the row's `source`.
+
+**The connection is the motor's.** Star or delta comes from the duty's own
+coupled record and never from this module (owner: *«соединение звезда/
+треугольник у нас определяется на моторе»*). The response's `sources`
+block names where it came from, the point block repeats it, and the schematic
+draws it.
+
 ### The two efficiencies
 
 One efficiency at the shaft stays one efficiency at the shaft:
@@ -296,6 +340,31 @@ stored coupled record (2026-09-15/16); nothing was re-solved.
 | Two 3-phase inverters (series split) | 13 | 12 × 13 = 156 | 1 970 W | 320 W | 6 281 W | 8 571 W | 149 °C | 98.09 % | 95.60 % | 785 A rms |
 | H-bridge per coil (unipolar) | — | — | — | — | — | no solution on this coldplate | ≥ 160 °C | — | — | — |
 
+### Sized on the WHOLE limit table instead (T_j ≤ 175 °C, the datasheet)
+
+The table above sizes to a 150 °C DESIGN TARGET. Asked instead for the
+smallest N that passes every published limit — which lets T_j run to the
+datasheet's own 175 °C — the answer is smaller silicon and thinner margin.
+Connection delta, taken from the duty. Same device, same coldplate.
+
+| duty | topology | N | devices | I rms/device vs I_D | I peak/device vs I_DM | T_j (margin) | V utilisation | losses | η_inv | η wall-to-shaft | limits |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| rated | One 3-phase inverter | 3 | 6×3 = 18 | 128.3 / 285.9 A | 257 / 1433 A | 132 °C (+43 K) | 62 % | 4 151 W | 98.50 % | 96.24 % | PASS |
+| rated | H-bridge per coil | 3 | 24×3 = 72 | 74.1 / 197.1 A | 148 / 1433 A | 156 °C (+19 K) | 62 % | 8 413 W | 97.00 % | 94.78 % | PASS |
+| peak | One 3-phase inverter | 4 | 6×4 = 24 | 134.6 / 233.6 A | 269 / 1433 A | 164 °C (+11 K) | 62 % | 6 852 W | 98.47 % | 95.96 % | PASS |
+| peak | H-bridge per coil | 7 | 24×7 = 168 | 44.4 / 127.0 A | 89 / 1433 A | 169 °C (+6 K) | 62 % | 10 665 W | 97.63 % | 95.15 % | PASS |
+
+Read the two tables together: **the current rating never binds** — at every
+feasible point the devices run at 45…55 % of their continuous rating and at
+under 20 % of I_DM. What binds is the JUNCTION TEMPERATURE, and through it the
+coldplate. Sizing to the datasheet's 175 °C leaves 6 K of margin at peak on
+the H-bridge, which is not a machine anyone should build; the 150 °C target in
+the first table is the number to design to, and the difference between the two
+is one device per switch on the standard inverter and four on the H-bridge.
+
+The bus sits at 62 % of V_DSS on all of them — comfortable, and the reason a
+1200 V part is the right class for a 750 V link.
+
 ### What the table says
 
 1. **One three-phase inverter wins on every count** for this machine: fewest
@@ -357,27 +426,68 @@ this note, the duty record's `controller.assumptions` list, and the tooltip
 behind the one-line "Model: …" under the results header. Every other
 explanatory sentence in the tab is a label plus a HelpTip.
 
+## 6b · Compare — the same stacked table the other tabs have
+
+Owner: *«не забудь Compare сделать для анализа разных вариантов, так же как на
+всех других меню»*. The tab hosts `common/LocalCompareTable`, the component
+the Thermal and Mechanical tabs use, with the same skin and the same row
+contract (`compare/resultRows.LocalRow`): press **+ Add to comparison** and the
+solve on screen becomes a column — device, topology, connection, duty, N,
+switches, devices, carrier, bus, dead time, coldplate on the input side; the
+loss split, T_j and its margin, the case, both efficiencies, the DC-link
+ripple, the datasheet verdict, the number of failed limits and a device cost
+proxy on the result side. Inputs identical in every column collapse into one
+line; every result cell carries its Δ against the first column.
+
+The row builders are pure and live in `controller/compareRows.ts` rather than
+in `compare/resultRows.ts`: that module is shared by three tabs and a new tab's
+builder has no business widening it, while the TYPES and the store conventions
+come from it, so there is still one definition of what a stacked row is. They
+are pinned by `controller/__tests__/compareRows.test.mjs`.
+
+The **cost proxy** is devices × the card's own `price.amount`, and only where a
+card carries one (it is a quotation with a source and a date, never a datasheet
+value — `price` is optional and null by default). It is not a bill of
+materials: no gate drivers, no busbars, no coldplate, no assembly.
+
 ## 7 · Stage 2 — coupling with the electromagnetic solver
 
-The hook exists; the consumer does not yet.
+Owner, 2026-09-22: *«как отладим каплинг с контроллером, нам не нужен будет PWM
+в электромагнитном моделировании — всё будет задаваться в меню Controller»*.
+So Stage 2 is not only a new drive; it is where the Controller becomes the ONE
+place a PWM excitation is described, and the Simulation tab stops owning one.
 
 1. `routes/coupled.py` gains `drive: "inverter"` beside `"current"` and
-   `"pwm"`. `_pwm_snap_excitation` takes a per-coil voltage series instead of
-   synthesising an ideal one.
+   `"pwm"`. The excitation is no longer synthesised from a handful of PWM
+   fields: it comes from a CONTROLLER CONFIG — topology, device, N per switch,
+   carrier, dead time, V_dc, modulation — which the module turns into per-coil
+   waveforms with the device drops already in them.
+   `_pwm_snap_excitation` takes that series instead of building an ideal one.
 2. The loop becomes: controller waveform → EM transient → solved coil currents
    → controller again (the device currents changed, so the drops and the
    dead-time error changed) → iterate to a fixed point on the fundamental
    current, with the same tolerance machinery the temperature loop uses.
-3. The record keeps both: what the bridge ASKED for and what the machine drew,
-   exactly as the present `inverter` block does.
-4. Expected size of the effect: the dead-time error at L155 rated is
+3. **The Simulation tab keeps only "Sine current" (the ideal reference) and
+   "Target T/P".** Its PWM controls are retired and redirect to the Controller
+   tab; a machine's carrier, bus and dead time are a property of its
+   controller, and having two places to type them is how two answers for one
+   duty happen.
+4. **Reports name the Controller as the PWM source.** The "PWM influence"
+   section keeps its numbers and its meaning; what changes is the sentence that
+   says where the carrier came from.
+5. **Old records stay readable.** A stored `drive: "pwm"` record keeps its
+   `inverter` block and its answer, and a duty re-solved with `drive: "pwm"`
+   must still give byte-identical numbers — `drive: "inverter"` is a THIRD
+   drive, not a change to the second. Nothing in Stage 1 blocks any of this:
+   the per-coil waveform interface already exists, the record already carries
+   the full controller configuration (`controller.settings`,
+   `controller.topology`, `controller.point`), and the duty store already
+   keeps `pwm` and `controller` as separate kinds.
+6. Expected size of the effect: the dead-time error at L155 rated is
    ±9 V on a 750 V link (1.2 % of the fundamental) plus ~2.2 V of device drop
    — small on the fundamental, but it is a SQUARE wave in the current sign, so
    it injects 5th and 7th harmonics that the ideal modulator does not, and
    those land in the rotor losses.
-5. What must not regress: a duty solved with `drive: "pwm"` must keep giving
-   byte-identical answers. `drive: "inverter"` is a third drive, not a change
-   to the second.
 
 ## 8 · Stage 3 — the six-coil H-bridge study
 

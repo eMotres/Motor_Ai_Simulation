@@ -253,7 +253,6 @@ export interface ControllerFormState {
   tin: NumOrBlank;
   rtim: NumOrBlank;
   mapping: Record<number, string>;
-  parByBridge: Record<string, number>;
   coupleWithEm: boolean;
 }
 
@@ -280,7 +279,10 @@ export function formStateFromSettings(
   const rows = block.mapping || [];
   const mapping: Record<number, string> = {};
   for (const m of rows) mapping[m.coil] = `${m.bridge}/${m.leg}`;
-  const parByBridge = block.devices_parallel_by_bridge || {};
+  // A per-bridge override in the saved block (from the API/CLI, or an older
+  // save) is IGNORED here on purpose — the web only ever shows and writes the
+  // one global `devices_parallel` (owner 2026-09-22: «Давай сделаем одно
+  // общее число»). `settingsForSave` below then clears it on the next save.
   return {
     device: block.device || fallback.device,
     topology: block.topology || fallback.topology,
@@ -297,7 +299,6 @@ export function formStateFromSettings(
     tin: toFormNumber(cooling.t_in_c),
     rtim: toFormNumber(cooling.r_tim_k_w),
     mapping: rows.length ? mapping : fallback.mapping,
-    parByBridge: Object.keys(parByBridge).length ? parByBridge : fallback.parByBridge,
     coupleWithEm: block.couple_with_em ?? fallback.coupleWithEm,
   };
 }
@@ -315,7 +316,10 @@ export function settingsForSave(s: ControllerFormState): ControllerSettings {
     set_split: s.setSplit,
     h_bridge_modulation: s.hbMod,
     devices_parallel: s.nPar === '' ? 1 : s.nPar,
-    devices_parallel_by_bridge: s.parByBridge,
+    // ALWAYS {} — the tab has only the one global count now; this REPLACES
+    // (never merges into) whatever a saved block held, so a stale per-bridge
+    // override from the API/CLI does not survive the web's own save.
+    devices_parallel_by_bridge: {},
     r_g_ext_ohm: toSaveNumber(s.rg),
     v_gs_off_V: toSaveNumber(s.vgsOff),
     dead_time_us: toSaveNumber(s.dead),
@@ -379,7 +383,10 @@ export interface ControllerSolveBody {
   r_tim_k_w?: number;
   cooling: { coolant: string; flow_lpm?: number; t_in_c?: number };
   mapping?: ControllerMappingRowSettings[];
-  devices_parallel_by_bridge?: Record<string, number>;
+  // Deliberately no `devices_parallel_by_bridge` here — the web only ever
+  // sends the one global `devices_parallel`; a per-bridge override remains a
+  // backend/API-CLI-only feature (owner 2026-09-22: «Давай сделаем одно
+  // общее число»).
 }
 
 const blank = (v: NumOrBlank): number | undefined => (v === '' ? undefined : v);
@@ -400,7 +407,6 @@ export function controllerSolveBody(
     r_tim_k_w: blank(s.rtim),
     cooling: { coolant: s.coolant, flow_lpm: blank(s.flow), t_in_c: blank(s.tin) },
     mapping: s.topology === 'custom' ? customRows : undefined,
-    devices_parallel_by_bridge: Object.keys(s.parByBridge).length ? s.parByBridge : undefined,
   };
 }
 

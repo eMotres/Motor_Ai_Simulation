@@ -66,8 +66,6 @@ const ControllerPanel: React.FC = () => {
   const [tin, setTin] = useState<Nullable>(65);
   const [rtim, setRtim] = useState<Nullable>(0.03);
   const [mapping, setMapping] = useState<Record<number, string>>({});
-  /** N per switch, per bridge — empty means "the common count above". */
-  const [parByBridge, setParByBridge] = useState<Record<string, number>>({});
   /** Whether this controller is meant to feed its losses back into the
    * coupled EM/thermal loop — a SAVED setting; wiring it into the loop
    * itself belongs to that loop's own owner, not this tab. */
@@ -141,13 +139,13 @@ const ControllerPanel: React.FC = () => {
       const block = await getControllerSettings(dieCtx.die, dieCtx.config);
       const fallback: ControllerFormState = { device, topology, setSplit, hbMod,
         nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
-        parByBridge, coupleWithEm };
+        coupleWithEm };
       const next = formStateFromSettings(block, fallback);
       setDevice(next.device); setTopology(next.topology); setSetSplit(next.setSplit);
       setHbMod(next.hbMod); setNPar(next.nPar); setRg(next.rg); setVgsOff(next.vgsOff);
       setDead(next.dead); setFsw(next.fsw); setVdc(next.vdc); setCoolant(next.coolant);
       setFlow(next.flow); setTin(next.tin); setRtim(next.rtim);
-      setMapping(next.mapping); setParByBridge(next.parByBridge);
+      setMapping(next.mapping);
       setCoupleWithEm(next.coupleWithEm);
       if (block && (block as any).saved_at) setSettingsSavedAt((block as any).saved_at);
     } catch { /* nothing saved yet, or the read failed — the tab's own defaults stand */ }
@@ -166,13 +164,13 @@ const ControllerPanel: React.FC = () => {
     try {
       const state: ControllerFormState = { device, topology, setSplit, hbMod,
         nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
-        parByBridge, coupleWithEm };
+        coupleWithEm };
       localStorage.setItem('ctrl.settings', JSON.stringify({
         die: dieCtx.die, config: dieCtx.config, block: settingsForSave(state) }));
     } catch { /* private window — the auto-save-with-the-motor mirror just won't work this session */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
-      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping, parByBridge,
+      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
       coupleWithEm]);
 
   const saveSettings = async () => {
@@ -184,7 +182,7 @@ const ControllerPanel: React.FC = () => {
     try {
       const state: ControllerFormState = { device, topology, setSplit, hbMod,
         nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
-        parByBridge, coupleWithEm };
+        coupleWithEm };
       const r = await saveControllerSettings(dieCtx.die, dieCtx.config, settingsForSave(state));
       setSettingsSavedAt(r.controller?.saved_at || null);
     } catch (e) { setSettingsErr(String(e)); }
@@ -200,7 +198,7 @@ const ControllerPanel: React.FC = () => {
   // carrier / current / power resolution chain runs uncontested.
   const body = () => controllerSolveBody(
     { device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
-      coolant, flow, tin, rtim, mapping, parByBridge, coupleWithEm },
+      coolant, flow, tin, rtim, mapping, coupleWithEm },
     customRows);
 
   // The per-switch current — and so the catalogue's "parallel" suggestion —
@@ -340,7 +338,7 @@ const ControllerPanel: React.FC = () => {
                   <MenuItem value="bipolar" sx={{ fontSize: 12 }}>bipolar</MenuItem>
                 </TextField>
               </Row>)}
-            <Row label="Devices / switch" tip="How many of the chosen part sit in parallel in ONE switch position. They are assumed to share the current equally — the usual reason a real stack is derated."><Num v={nPar} set={setNPar} /></Row>
+            <Row label="Devices / switch" tip="How many of the chosen part sit in parallel in ONE switch position. They are assumed to share the current equally — the usual reason a real stack is derated. The same number for every bridge; per-bridge counts only via the API."><Num v={nPar} set={setNPar} /></Row>
             <Row label="R_G,ext" tip="External gate resistance. The card's switching energies were measured at its own R_G and are scaled linearly from it." unit="Ω"><Num v={rg} set={setRg} /></Row>
             <Row label="V_GS off" tip="Gate-off voltage: 0 V or −5 V. It changes both the turn-off energy and the body-diode drop during dead time." unit="V"><Num v={vgsOff} set={setVgsOff} /></Row>
             <Row label="Dead time" tip="Both switches of a leg off. The current then runs through a SiC body diode at ~4 V, so this is expensive — and it is what distorts the output voltage at every current zero crossing." unit="µs"><Num v={dead} set={setDead} /></Row>
@@ -424,16 +422,8 @@ const ControllerPanel: React.FC = () => {
                     <Box sx={{ gridColumn: '1 / -1', mt: 0.5, display: 'flex',
                                alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                       <Typography sx={{ fontSize: 11.5, color: 'var(--text-0)' }}>
-                        {b.label} · {b.connection} · m {fmt(b.modulation_index, 3)} · {fmt(b.p_loss_W, 0)} W
+                        {b.label} · {b.connection} · m {fmt(b.modulation_index, 3)} · {fmt(b.p_loss_W, 0)} W · ×{b.devices_parallel}
                       </Typography>
-                      {/* N per switch is a property of THIS bridge and is
-                          edited where it is read (owner 2026-09-22). */}
-                      <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>parallel</Typography>
-                      <TextField type="number" size="small"
-                        value={parByBridge[b.id] ?? b.devices_parallel}
-                        onChange={e => setParByBridge(m => ({
-                          ...m, [b.id]: Math.max(1, parseInt(e.target.value, 10) || 1) }))}
-                        sx={{ width: 68, '& input': { fontSize: 11.5, py: 0.25 } }} />
                     </Box>
                     {b.legs.map(l => (
                       <React.Fragment key={`${b.id}${l.leg}`}>

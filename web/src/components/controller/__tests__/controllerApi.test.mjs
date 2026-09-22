@@ -119,7 +119,8 @@ function formStateFromSettings(block, fallback) {
   const rows = block.mapping || [];
   const mapping = {};
   for (const m of rows) mapping[m.coil] = `${m.bridge}/${m.leg}`;
-  const parByBridge = block.devices_parallel_by_bridge || {};
+  // A per-bridge override in the saved block (API/CLI, or an older save) is
+  // ignored — the web only ever shows/writes the one global devices_parallel.
   return {
     device: block.device || fallback.device,
     topology: block.topology || fallback.topology,
@@ -136,7 +137,6 @@ function formStateFromSettings(block, fallback) {
     tin: toFormNumber(cooling.t_in_c),
     rtim: toFormNumber(cooling.r_tim_k_w),
     mapping: rows.length ? mapping : fallback.mapping,
-    parByBridge: Object.keys(parByBridge).length ? parByBridge : fallback.parByBridge,
     coupleWithEm: block.couple_with_em ?? fallback.coupleWithEm,
   };
 }
@@ -152,7 +152,9 @@ function settingsForSave(s) {
     set_split: s.setSplit,
     h_bridge_modulation: s.hbMod,
     devices_parallel: s.nPar === '' ? 1 : s.nPar,
-    devices_parallel_by_bridge: s.parByBridge,
+    // ALWAYS {} — the whole-replace PATCH clears any per-bridge override a
+    // saved block held, since the web has only the one global count now.
+    devices_parallel_by_bridge: {},
     r_g_ext_ohm: toSaveNumber(s.rg),
     v_gs_off_V: toSaveNumber(s.vgsOff),
     dead_time_us: toSaveNumber(s.dead),
@@ -169,7 +171,7 @@ const DEFAULT_FORM = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
   nPar: 4, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
   coolant: 'water_glycol_50', flow: 8, tin: 65, rtim: 0.03,
-  mapping: {}, parByBridge: {}, coupleWithEm: false,
+  mapping: {}, coupleWithEm: false,
 };
 
 test('an empty saved block leaves the tab at its own defaults', () => {
@@ -193,7 +195,9 @@ test('a saved block restores the panel state field by field', () => {
   assert.equal(s.topology, 'two_3ph');
   assert.equal(s.setSplit, 'power_split');
   assert.equal(s.nPar, 3);
-  assert.deepEqual(s.parByBridge, { INV2: 6 });
+  // A per-bridge override in the block (from the API/CLI) has no seat in the
+  // panel state at all — the web only shows/edits the one global count.
+  assert.equal(s.parByBridge, undefined);
   assert.equal(s.rg, 4.7);
   assert.equal(s.fsw, 24000);
   assert.equal(s.vdc, 750.4);
@@ -201,6 +205,14 @@ test('a saved block restores the panel state field by field', () => {
   assert.equal(s.flow, 10);
   assert.deepEqual(s.mapping, { 1: 'INV1/A', 2: 'INV2/B' });
   assert.equal(s.coupleWithEm, true);
+});
+
+test('settingsForSave always clears a per-bridge override — the global '
+   + 'count is the only one the web ever writes', () => {
+  const edited = { ...DEFAULT_FORM, nPar: 5 };
+  const saved = settingsForSave(edited);
+  assert.deepEqual(saved.devices_parallel_by_bridge, {});
+  assert.equal(saved.devices_parallel, 5);
 });
 
 test('a blank saved carrier/DC link restores as blank — "the duty\'s own"', () => {
@@ -251,7 +263,6 @@ function controllerSolveBody(s, customRows) {
     r_tim_k_w: blank(s.rtim),
     cooling: { coolant: s.coolant, flow_lpm: blank(s.flow), t_in_c: blank(s.tin) },
     mapping: s.topology === 'custom' ? customRows : undefined,
-    devices_parallel_by_bridge: Object.keys(s.parByBridge).length ? s.parByBridge : undefined,
   };
 }
 
@@ -288,6 +299,14 @@ test('filled fields cross the wire exactly as typed', () => {
   assert.equal(body.v_dc_V, 750.4);
   assert.equal(body.f_carrier_hz, 24000);
   assert.equal(body.r_g_ext_ohm, 4.7);
+});
+
+test('the solve body never carries a per-bridge override — only the global '
+   + 'devices_parallel crosses the wire', () => {
+  const body = controllerSolveBody(DEFAULT_FORM, []);
+  assert.equal(body.devices_parallel_by_bridge, undefined);
+  assert.ok(!JSON.stringify(body).includes('devices_parallel_by_bridge'));
+  assert.equal(body.devices_parallel, DEFAULT_FORM.nPar);
 });
 
 test('a custom mapping is sent only for the custom topology', () => {

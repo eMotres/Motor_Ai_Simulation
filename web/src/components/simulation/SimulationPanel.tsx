@@ -35,7 +35,13 @@ import SolveProgressStrip from './SolveProgressStrip';
 import CommonProgressStrip from '../common/SolveProgressStrip';
 import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
-import { fetchCoupledLast } from './coupledApi';
+import { fetchCoupledLast, setCoupledControllerRef } from './coupledApi';
+// The Drive selector (2026-09-22, Stage 2's open item): whether the CONTROLLER
+// has a device saved for this configuration at all — the same read the
+// Controller tab itself does on mount, reused here only to GATE the option
+// (never to duplicate that tab's form).
+import { useDieContext } from '../common/useDieContext';
+import { getControllerSettings, type ControllerSettings } from '../controller/controllerApi';
 import { syncActiveMotor, getActiveMotor } from '../common/motorSettings';
 import BatteryDialog, { type BatteryValue } from '../catalog/BatteryDialog';
 import {
@@ -676,6 +682,57 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [solveTo,       setSolveTo]
     = usePersisted<'steady' | 'limits' | 'continuous'>(
     'coupledSolveTo', 'steady');
+  // THE DRIVE the loop solves on (2026-09-22 — Stage 2's open item: the
+  // Coupled panel had no selector of its own, so drive='inverter' was only
+  // reachable from the API).  'sine' is today's behaviour, bit for bit — the
+  // Simulation tab's own drive (sine / voltage / PWM) rides the payload
+  // exactly as it always has.  'inverter' asks the CONTROLLER's own bridge to
+  // drive this pass instead (routes/coupled.py's THIRD drive, docs
+  // CONTROLLER_MODULE_2026-09-22.md §7a) and is offered only when this
+  // configuration has a saved controller — see `controllerReady` below.
+  const [coupledDrive,   setCoupledDrive]
+    = usePersisted<'sine' | 'inverter'>('coupledDrive', 'sine');
+  const dieCtx = useDieContext();
+  const [ctrlSettings, setCtrlSettings] = useState<ControllerSettings | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (!dieCtx.die || !dieCtx.config) { setCtrlSettings(null); return; }
+    void (async () => {
+      try {
+        const block = await getControllerSettings(dieCtx.die as string, dieCtx.config as string);
+        const hasDevice = block && (block as ControllerSettings).device;
+        if (alive) setCtrlSettings(hasDevice ? (block as ControllerSettings) : null);
+      } catch { if (alive) setCtrlSettings(null); }
+    })();
+    return () => { alive = false; };
+    // `coupled` rides the dependency list too — this panel stays MOUNTED
+    // across a tab switch (no remount to re-run the effect on), so a
+    // controller saved on the Controller tab AFTER this one first loaded
+    // would otherwise never be picked up until a reload.  Flipping the
+    // switch on is exactly the moment a stale "no controller" answer would
+    // wrongly leave the option disabled, so it re-checks right then — one
+    // cheap GET, not a poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dieCtx.die, dieCtx.config, coupled]);
+  // A device chosen and saved — either through the Controller tab's own
+  // "Save to duty" or the config-level PATCH — is what "the controller is set
+  // up" means here; a SOLVED record is not required, `_controller_settings`
+  // (routes/coupled.py) accepts a device from the request alone.
+  const controllerReady = !!ctrlSettings?.device;
+  // Mirror the fetched block for `runCoupled` to send BY REFERENCE
+  // (`coupledApi.coupledControllerRef`) — the same "one browser-side source of
+  // truth, no prop threading through TransientCharts" shape `coupled` /
+  // `coupledSolveTo` already use.  And never leave the selector on 'inverter'
+  // for a configuration that turns out to have no controller (a duty switch,
+  // a reload that lands before the fetch) — that would silently ask the
+  // backend to fall back to whatever the ACTIVE duty's own stored solve says,
+  // which may be a different machine's answer.
+  useEffect(() => {
+    setCoupledControllerRef(controllerReady
+      ? (ctrlSettings as unknown as Record<string, unknown>) : null);
+    if (!controllerReady && coupledDrive === 'inverter') setCoupledDrive('sine');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controllerReady, ctrlSettings]);
   // A DIFFERENT MACHINE is on the panel — loaded here, or (since 2026-09-08) in
   // another browser and followed by the header strip.  lib/dutyLocalApply says
   // so with this event, after it has reset these two fields to the incoming
@@ -2638,6 +2695,42 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               }
             />
           </Tooltip>
+          {/* ── …AND WHICH DRIVE IT SOLVES ON (2026-09-22, Stage 2's open
+              item) — 'sine' (today's behaviour) or the CONTROLLER's own
+              bridge.  Same skin as "Solve to" beside it: one short label, both
+              choices explained in the tip, never a text wall in the rail. */}
+          {coupled && (
+            <FormControl size="small" fullWidth sx={{ mt: 0.75 }} disabled={simBusy}>
+              <InputLabel id="coupled-drive-label">Drive</InputLabel>
+              <Select
+                labelId="coupled-drive-label"
+                label="Drive"
+                value={coupledDrive}
+                onChange={e => setCoupledDrive(
+                  e.target.value === 'inverter' ? 'inverter' : 'sine')}
+                endAdornment={
+                  <InputAdornment position="end" sx={{ mr: 2.5 }}>
+                    <HelpTip title={
+                      'Sine current: the ideal reference this tab has always solved '
+                      + 'the coupled loop on.\n\n'
+                      + 'Inverter (Controller): the CONTROLLER\'s own bridge drives '
+                      + 'this pass instead — per-coil PWM voltage with dead time and '
+                      + 'device drops, iterated to a second fixed point on the '
+                      + "junction temperature. The record gains a controller block "
+                      + '(device losses, T_j, inverter and wall-to-shaft efficiency) '
+                      + 'beside the usual coupling one.'
+                      + (controllerReady ? '' : '\n\nDisabled: set up the controller in the Controller tab first'
+                        + ' — choose a device and save it.')} />
+                  </InputAdornment>
+                }
+              >
+                <MenuItem value="sine">sine current</MenuItem>
+                <MenuItem value="inverter" disabled={!controllerReady}>
+                  inverter (Controller)
+                </MenuItem>
+              </Select>
+            </FormControl>
+          )}
           {/* ── …AND WHICH QUESTION IT ANSWERS (owner 2026-09-18) ───────────
               "или считать до конца стабилизации температуры, или считать до
               лимитов и находить время работы при заданных условиях".  A CHOICE,

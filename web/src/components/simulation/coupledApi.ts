@@ -453,6 +453,44 @@ export function coupledSolveTo(): 'steady' | 'limits' | 'continuous' {
   } catch { return 'steady'; }
 }
 
+/** WHICH DRIVE the loop solves on (2026-09-22 — the Coupled panel's own
+ *  selector, closing Stage 2's open item: `drive: "inverter"` used to be
+ *  reachable only from the API).  `'sine'` is the default and every record
+ *  written with it is what it always was: the Simulation tab's own drive
+ *  (sine / voltage / PWM) rides the payload exactly as before this selector
+ *  existed.  `'inverter'` asks the CONTROLLER's own bridge to drive this pass
+ *  instead — `routes/coupled.py`'s THIRD drive
+ *  (`docs/CONTROLLER_MODULE_2026-09-22.md` §7a) — and `SimulationPanel` only
+ *  offers it once a controller is saved for the active configuration. */
+export function coupledDrive(): 'sine' | 'inverter' {
+  try {
+    const v = JSON.parse(localStorage.getItem('sim.coupledDrive') || '"sine"');
+    return v === 'inverter' ? 'inverter' : 'sine';
+  } catch { return 'sine'; }
+}
+
+/** The saved controller settings the selector's gate fetched, mirrored here so
+ *  `runCoupled` can send `body.controller` BY REFERENCE without
+ *  `TransientCharts` threading it through — the same one-browser-side-source
+ *  `coupledEnabled` / `coupledSolveTo` already use.  `null` = the selector is
+ *  on 'sine', or no controller is saved for the active configuration; either
+ *  way an 'inverter' request then leans on the ACTIVE DUTY's own stored
+ *  controller solve, exactly as a bare `drive: "inverter"` API call does
+ *  (`routes/coupled.py::_duty_controller_record`). */
+export function coupledControllerRef(): Record<string, unknown> | null {
+  try {
+    const raw = localStorage.getItem('sim.coupledControllerRef');
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+export function setCoupledControllerRef(v: Record<string, unknown> | null): void {
+  try {
+    if (v) localStorage.setItem('sim.coupledControllerRef', JSON.stringify(v));
+    else localStorage.removeItem('sim.coupledControllerRef');
+  } catch { /* private mode — the request falls back to the duty's own record */ }
+}
+
 /** The Thermal tab's boundary conditions, as THAT TAB'S STORE holds them —
  *  registered by `stores/thermalStore` at load (it imports this module, so the
  *  dependency runs one way).  The store adopts the user's server-side settings
@@ -505,6 +543,15 @@ export interface CoupledRunOptions {
    *  this duty's own cooling.  Omitted = whatever the selector beside the
    *  switch holds for the loaded duty. */
   solveTo?: 'steady' | 'limits' | 'continuous';
+  /** `'sine'` (the default) leaves the caller's own payload `drive` alone;
+   *  `'inverter'` overrides it with the CONTROLLER's bridge.  Omitted =
+   *  whatever the selector beside the switch holds — see `coupledDrive`. */
+  drive?: 'sine' | 'inverter';
+  /** The controller settings to send BY REFERENCE alongside `drive:
+   *  "inverter"` (`body.controller`).  Omitted = `coupledControllerRef()`,
+   *  which is `null` when nothing is saved — the request then leans on the
+   *  active duty's own stored controller solve. */
+  controller?: Record<string, unknown> | null;
 }
 
 /**
@@ -537,6 +584,18 @@ export async function runCoupled(
   // make "the user chose the steady state" and "this client is too old to ask"
   // the same request.
   body.solve_to = opts.solveTo ?? coupledSolveTo();
+  // THE DRIVE (2026-09-22).  'inverter' OVERRIDES whatever `payload.drive`
+  // already carried (the Simulation tab's own ideal reference) with the
+  // CONTROLLER's bridge, and rides `body.controller` beside it when one is
+  // known — never inferred silently: 'sine' leaves the caller's own payload
+  // exactly as it was, which is what "nothing else changed" has to mean for
+  // every duty that has never touched this selector.
+  const drv = opts.drive ?? coupledDrive();
+  if (drv === 'inverter') {
+    body.drive = 'inverter';
+    const ref = opts.controller !== undefined ? opts.controller : coupledControllerRef();
+    if (ref) body.controller = ref;
+  }
   const r = await fetch(`${BASE}/run`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal,

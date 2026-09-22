@@ -18,7 +18,7 @@ import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
 import { couplingLine, couplingTooltip, coupledStateLine,
          coupledStateTip, continuousRatingLine,
-         continuousRatingTip, s1ResultsAtLine } from './coupledApi';
+         continuousRatingTip, s1ResultsAtLine, controllerTerm } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 
 /** Bench-probe result riding in the summary (backend measures it once per
@@ -1248,6 +1248,28 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               : `* ELECTROMAGNETIC only: rotor T·ω against T·ω ${genMode ? '−' : '+'} every solved loss `
                 + `(copper, iron, eddy). ${NO_BRG} The shaft efficiency is LOWER than this by an amount `
                 + `nobody can see until they are.`)}/>
+        {/* THE CONTROLLER'S SECOND EFFICIENCY (Stage 2, drive='inverter' —
+            2026-09-22): a SECOND, NAMED tile beside the shaft's, never folded
+            into it — inverter η × shaft η is a DIFFERENT quantity from either
+            one alone.  Present exactly when this run carries a controller
+            block; absent on every sine / ideal-PWM run, which is what
+            "nothing else changed" looks like here. */}
+        {s.coupling?.controller && (
+          <Cell label="η wall-to-shaft"
+            value={fmt((s.coupling.controller.efficiency?.wall_to_shaft ?? 0) * 100, 2)}
+            unit="%"
+            accent={s.coupling.controller.limits_verdict === 'fail' ? 'red' : 'blue'}
+            tooltip={'Inverter efficiency × shaft efficiency — the power stage on '
+              + `top of the machine's ONE shaft efficiency beside it. `
+              + `${controllerTerm(s.coupling.controller) ?? ''}`
+              + (s.coupling.controller.device ? ` Device ${s.coupling.controller.device}.` : '')
+              + (s.coupling.controller.efficiency?.inverter != null
+                ? ` Inverter alone: ${fmt(s.coupling.controller.efficiency.inverter * 100, 2)} %.`
+                : '')
+              + (s.coupling.controller.limits_verdict === 'fail'
+                ? ' At least one of the datasheet limits FAILED on this run — see the Controller tab.'
+                : '')}/>
+        )}
         <Cell label="T ripple" value={fmt(s.T_ripple_pct, 1)} unit="%"
           accent={accentRipple}
           tooltip={`Physical torque ripple (T_max − T_min)/|T_avg| over one electrical period, ` +

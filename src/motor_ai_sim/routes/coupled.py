@@ -4163,6 +4163,13 @@ def _run(body: Dict[str, Any],
                 # reads R_DS(on) and V_SD at, which is the second fixed point
                 # this drive closes.
                 if ctl is not None:
+                    # ONE MORE PHASE ON THE STRIP (Stage 2 web hook, 2026-09-22):
+                    # the controller step is arithmetic over a card, not a solve,
+                    # so it costs no extra done-count — but it does take a
+                    # moment, and the ring said nothing about it before this.
+                    _progress.update(
+                        phase="iteration %d/%d — controller: device losses / T_j"
+                        % (it, max_iter))
                     d_tj = ctl.step(em, it=it)
                     history[-1]["T_junction_c"] = round(float(ctl.t_j_c), 2)
                     if d_tj is not None:

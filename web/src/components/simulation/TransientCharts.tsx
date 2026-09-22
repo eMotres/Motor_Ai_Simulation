@@ -5,7 +5,7 @@
  * (default 60), the same mesh and solver settings as the rest of the
  * Simulation tab.  Plots T(t), P_cu/P_fe/P_total(t) and V_A/B/C(t).
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { whenVisible } from '../../lib/pageVisible';
 import {
   Box, Paper, Typography, Tooltip, CircularProgress, TextField,
@@ -25,12 +25,15 @@ import { assignmentSignature } from '../../lib/dutyMaterials';
 // which builds the same one when it has to make the run its own solve was
 // missing.  See lib/emRunPayload.
 import { buildEmRunPayload } from '../../lib/emRunPayload';
+import { historyNoticeFor, formatHistoryComputedAt } from '../../lib/historyNotice';
+import HistoryPopover, { type HistoryRow } from '../common/HistoryPopover';
 // The EM<->thermal orchestrator.  It changes exactly ONE thing about a Run:
 // where the request goes.  See ./coupledApi.
 import {
   adoptConvergedTemperatures, cancelCoupled, coupledRegimeNotice,
   couplingAdopted, couplingStamp, coupledEnabled, runCoupled,
-  type CouplingBlock,
+  applyLoadedOperatingPoint,
+  type CouplingBlock, type CoupledRunResult,
 } from './coupledApi';
 import HelpTip from '../common/HelpTip';
 
@@ -112,6 +115,11 @@ interface TransientPayload {
   // not solve must never look like one that did — with a Recompute beside it.
   ledger_hit?: boolean;
   ledger_computed_at?: string;
+  // Vocabulary shared with the other three panels (2026-09-22, cbe1de8) —
+  // `historyNoticeFor` reads these two, not `ledger_hit`/`ledger_computed_at`
+  // above (which stay for the wall-time-skip check in `run()`).
+  served_from_history?: boolean;
+  history_key?: string;
   // Set (instead of `summary`) when the backend solved the waveforms but the
   // summary-block build threw — lets the UI surface the error rather than freeze
   // the cards on the previous run's numbers.
@@ -351,6 +359,15 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // True when the shown result was RESTORED on open but its params differ from
   // the current inputs (the backend flagged it stale) — a hint to press Run.
   const [stale, setStale] = useState<boolean>(false);
+  // "Loaded from history — computed …" for the COUPLED half of a run
+  // (2026-09-22): `POST /api/coupled/run`'s own `served_from_history` /
+  // `computed_at` live on the TOP-LEVEL response (`res`, below), not inside
+  // `res.coupling` — the coupling block written into the summary is the same
+  // object whether solved or loaded, so it carries no stamp of its own.  Kept
+  // here, next to `stale`, rather than folded into `data`: it describes the
+  // COUPLED call this run made, and a plain (uncoupled) run must not show it.
+  const [coupledHistory, setCoupledHistory] =
+    useState<{ computed_at: string } | null>(null);
 
   // GEOMETRY staleness.  The shown result is stamped (in run()) with the
   // geometry it was solved for.  When the live geometry differs — e.g. after
@@ -497,6 +514,14 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           // localStorage copy, same "field snapshot moved" event.
           const res = await runCoupled(p, ctrl.signal);
           d = (res.transient || {}) as typeof d;
+          // "Loaded from history — computed …" for the COUPLED call itself
+          // (2026-09-22): an IDENTICAL coupled request — same machine, same
+          // operating point, same cooling — was already in `run_history` and
+          // was handed back rather than re-iterated.  `fresh || freshOnce` is
+          // already inside `p`, so the SAME Recompute link the EM notice uses
+          // (below) forces this fresh too; no second control needed.
+          setCoupledHistory(res.served_from_history && res.computed_at
+            ? { computed_at: res.computed_at } : null);
           // What the loop found about this duty's CYCLE, when it is one: `null`
           // on a continuous duty and on a ratio that fits, which is what "no
           // news" looks like on the rail.
@@ -507,6 +532,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           adoptConvergedTemperatures(
             res.coupling, couplingStamp(res.coupling, d.computed_at));
         } else {
+          if (!restoreOnly) setCoupledHistory(null);   // plain run — no coupled call made
           // ALWAYS through the modular kernel (POST /api/kernel/run, capability
           // solver.em_transient). The kernel -> get_fem_transient -> em_transient_eval
           // (the same solver), so results are identical to the old direct route.
@@ -640,6 +666,104 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     };
     attempt();
   };
+
+  // ── History popover: EM ledger (2026-09-22) ─────────────────────────────
+  // Lists/loads/deletes rows of the SAME `.run_ledger` store the "Loaded from
+  // history" notice above already reads (`served_from_history`/`computed_at`
+  // on `data`) — see the module note on `routes/simulation.py`'s
+  // `/ledger/recent` for why this is a second listing rather than the
+  // generic `/api/history` one every other panel's popover would use.
+  const listLedgerHistory = useCallback(async (): Promise<HistoryRow[]> => {
+    const r = await fetch(`${API}/api/simulation/ledger/recent?limit=10`);
+    if (!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+    return (j.entries || []) as HistoryRow[];
+  }, []);
+  // A load is shaped exactly like a ledger-hit `attempt()` would have
+  // produced (`ledger_hit`/`served_from_history`/`computed_at`/`stale:
+  // false`, already set by the backend) — applied the same way a restore
+  // adopts a persisted result, minus the geometry/material stamp: an entry
+  // picked from history may not describe what is live NOW, so `_geoSig` /
+  // `_matSig` are left unset, exactly as an old (pre-stamp) restored result
+  // is — "unknown", which `geoStale`/`stale` above read as "say nothing",
+  // never as "fine" (the backend's own `stale_geometry` on the payload is
+  // the one witness that CAN speak here, and it does: see `/ledger/{key}
+  // /load`'s docstring).
+  const loadLedgerHistory = useCallback(async (key: string) => {
+    const r = await fetch(
+      `${API}/api/simulation/ledger/${encodeURIComponent(key)}/load`,
+      { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json() as TransientPayload;
+    if (!d.time_s || !d.time_s.length) {
+      throw new Error('stored entry has no waveform data');
+    }
+    setCoupledHistory(null);      // a ledger row is an EM-only record
+    setStale(false);
+    setData(d); setBusy(false); setError(null);
+    persistLastTransient(d);
+    // The dashboard's "different point" verdict compares the PANEL's own
+    // current/γ/rpm fields against the shown summary (SummaryTable's
+    // `opStale`) — sync them to what this row was actually solved at, same
+    // setter path the S1 auto-set uses, so a loaded point never reads as
+    // stale against itself.
+    applyLoadedOperatingPoint({
+      current: d.summary?.I_terminal_rms_A ?? d.summary?.I_phase_rms_A,
+      gamma_deg: d.summary?.gamma_deg, rpm: d.summary?.rpm,
+    });
+  }, []);
+  const deleteLedgerHistory = useCallback(async (key: string) => {
+    const r = await fetch(`${API}/api/simulation/ledger/${encodeURIComponent(key)}`,
+      { method: 'DELETE' });
+    if (!r.ok) throw new Error(await r.text());
+  }, []);
+
+  // ── History popover: the COUPLED result (2026-09-22) ────────────────────
+  // The generic, `run_history`-backed store every other panel's history
+  // already lives in (`GET/POST/DELETE /api/history`, kind `coupled.run`,
+  // `routes/coupled.py`'s `_COUPLED_HISTORY`/`_load_coupled_history_entry`) —
+  // unlike the EM ledger above, this one needs NO dedicated endpoints.
+  const listCoupledHistory = useCallback(async (): Promise<HistoryRow[]> => {
+    const r = await fetch(`${API}/api/history?kind=coupled.run&limit=10`);
+    if (!r.ok) throw new Error(await r.text());
+    const j = await r.json();
+    return (j.kinds?.['coupled.run'] || []) as HistoryRow[];
+  }, []);
+  // The loaded response is the WHOLE `/run` payload — applied exactly as the
+  // live coupled branch of `attempt()` applies one (same regime notice, same
+  // converged-temperature adoption, same charts) — minus the geometry stamp,
+  // for the same "unknown, not fine" reason `loadLedgerHistory` leaves it
+  // unset above.
+  const loadCoupledHistory = useCallback(async (key: string) => {
+    const r = await fetch(
+      `${API}/api/history/${encodeURIComponent(key)}/load?kind=coupled.run`,
+      { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+    const res = await r.json() as CoupledRunResult;
+    const d = (res.transient || {}) as TransientPayload;
+    if (!d.time_s || !d.time_s.length) {
+      throw new Error('stored entry has no waveform data');
+    }
+    setCoupledHistory(res.served_from_history && res.computed_at
+      ? { computed_at: res.computed_at } : null);
+    setRegimeNotice(coupledRegimeNotice(res.coupling));
+    adoptConvergedTemperatures(
+      res.coupling, couplingStamp(res.coupling, d.computed_at));
+    setStale(false);
+    setData(d); setBusy(false); setError(null);
+    persistLastTransient(d);
+    // Same sync as the ledger load above — see its comment.
+    applyLoadedOperatingPoint({
+      current: d.summary?.I_terminal_rms_A ?? d.summary?.I_phase_rms_A,
+      gamma_deg: d.summary?.gamma_deg, rpm: d.summary?.rpm,
+    });
+  }, []);
+  const deleteCoupledHistory = useCallback(async (key: string) => {
+    const r = await fetch(
+      `${API}/api/history/${encodeURIComponent(key)}?kind=coupled.run`,
+      { method: 'DELETE' });
+    if (!r.ok) throw new Error(await r.text());
+  }, []);
 
   // On MOUNT (page/back-end reload): show the last run from localStorage rather
   // than recomputing.  After mount, a runNonce CHANGE means the user pressed Run
@@ -1280,16 +1404,16 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               </Typography>
             );
           })()}
-          {/* LOADED, NOT SOLVED.  One line, never a paragraph: the backend found
-              a stored run whose parameters are identical to this one and handed
-              it back instead of re-solving (user, 2026-09-05).  Saying so is the
-              whole condition on which that is allowed — plus a way out of it. */}
-          {data?.ledger_hit && !busy && (
-            <Typography sx={{ fontSize: 10, color: '#34d399', mt: 0.25 }}>
-              result from{' '}
-              {new Date(data.ledger_computed_at || data.computed_at || '')
-                .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              {' '}— identical parameters{' · '}
+          {/* "Loaded from history — computed …" (2026-09-22): the SAME notice
+              Mechanical/Thermal/Coupled show, not the bespoke "result from
+              HH:MM" line this used to be — one wording across every panel
+              that can answer from a store instead of solving.  The condition
+              is unchanged (a stored run whose parameters are byte-identical
+              to this one was found — user, 2026-09-05), only the words. */}
+          {!geoStale && historyNoticeFor(data) && !busy && (
+            <Typography sx={{ fontSize: 10, color: '#93c5fd', mt: 0.25 }}>
+              {historyNoticeFor(data)!.text}
+              {' · '}
               <Box component="span" role="button" tabIndex={0}
                 onClick={() => { setStale(false); run(false, true); }}
                 onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
@@ -1298,6 +1422,27 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                 Recompute
               </Box>
               <HelpTip title="Nothing was solved: a run with exactly these inputs — geometry, materials, current, γ, rpm, mesh and drive — is already stored, so it was loaded. Recompute solves it again and replaces the stored one." />
+            </Typography>
+          )}
+          {/* The COUPLED half of the same notice (2026-09-22) — a separate
+              line because it answers a separate question ("was the EM/thermal
+              LOOP re-iterated, or handed back") that can disagree with the one
+              above (e.g. a Start-fresh EM solve whose coupled call still hit
+              its own history). Same Recompute: `fresh` already rides the one
+              request both calls share. */}
+          {coupledHistory && !busy && (
+            <Typography sx={{ fontSize: 10, color: '#93c5fd', mt: 0.25 }}>
+              Coupled run — loaded from history — computed{' '}
+              {formatHistoryComputedAt(coupledHistory.computed_at)}
+              {' · '}
+              <Box component="span" role="button" tabIndex={0}
+                onClick={() => { setStale(false); run(false, true); }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setStale(false); run(false, true); } }}
+                sx={{ color: '#60a5fa', cursor: 'pointer', fontWeight: 700,
+                  textDecoration: 'underline' }}>
+                Recompute
+              </Box>
+              <HelpTip title="Nothing was iterated: an EM ↔ thermal coupled loop with exactly these inputs — geometry, materials, operating point, cooling — is already stored, so it was loaded. Recompute runs the loop again and replaces the stored one." />
             </Typography>
           )}
           {/* Voltage-drive result strip: what was applied + what the machine
@@ -1372,6 +1517,20 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               : `Computing ${steps} points…`}
           </Typography>
         )}
+        {/* History (2026-09-22): the last 10 stored runs of each kind, a click
+            away from being shown with nothing solved — see HistoryPopover.
+            Two buttons because they are two different stores (the EM ledger
+            predates `run_history`; the coupled kind is `run_history`-backed)
+            and two different questions ("which EM waveform" vs "which
+            EM+thermal loop"). */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
+          <HistoryPopover label="EM transient runs" disabled={busy}
+            list={listLedgerHistory} onLoad={loadLedgerHistory}
+            onDelete={deleteLedgerHistory} />
+          <HistoryPopover label="coupled runs" disabled={busy}
+            list={listCoupledHistory} onLoad={loadCoupledHistory}
+            onDelete={deleteCoupledHistory} />
+        </Box>
       </Box>
 
       {/* Live progress strip — appears the INSTANT a recompute starts (not

@@ -5632,6 +5632,122 @@ def delete_run_ledger():
     return {"deleted": n}
 
 
+# ── the "History" popover (2026-09-22) ──────────────────────────────────────
+# The EM transient predates `motor_ai_sim.run_history` (its own `.run_ledger`
+# store, above) and was only aligned in RESPONSE VOCABULARY with the shared
+# one (`served_from_history` on a ledger hit, see `get_fem_transient` above) —
+# it was never re-plumbed onto `RunHistory` itself, so it does not show up in
+# `GET /api/history` and has no key `RunHistory.get` would recognise.  These
+# three endpoints give the Simulation panel's History button (mirroring the
+# Mechanical/Thermal/Coupled one, `run_history.py`'s "last 10, browsable")
+# the same three verbs — list, load, delete — spoken in the ledger's own
+# filename-is-the-key vocabulary instead.  Gated identically to `GET`/`DELETE
+# /ledger` just above (`auth._GATED`, "admin"): the ledger is the SHARED
+# machine's store, not a per-workspace one, so the same owner-only bargain
+# applies to browsing or discarding one row of it as to the whole thing.
+def _ledger_key_safe(key: str) -> str:
+    """Refuse anything that is not a bare filename stem — the key rides
+    straight into a path join below, and a `/` or `..` in it must never reach
+    the filesystem as one (there is no other validation between the URL and
+    the disk)."""
+    if not key or "/" in key or "\\" in key or ".." in key:
+        raise HTTPException(status_code=400,
+                            detail={"error": "invalid history key"})
+    return key
+
+
+def _ledger_row_view(e: Dict[str, Any]) -> Dict[str, Any]:
+    """One `_ledger_entries()` row → a History-popover row: `key` (the
+    filename stem `POST .../ledger/{key}/load` takes back), `summary` (built
+    from the NAMED key fields the entry already carries — the same "why did
+    it not match" fields `_ledger_write` stores, read here for a human line
+    instead of a diff), `computed_at`."""
+    kf = dict(e.get("key_fields") or {})
+    bits = []
+    if kf.get("I_phase_rms") is not None:
+        bits.append(f"{float(kf['I_phase_rms']):.1f} A")
+    if kf.get("rpm") is not None:
+        bits.append(f"{float(kf['rpm']):.0f} rpm")
+    if kf.get("gamma_deg") is not None:
+        bits.append(f"γ {float(kf['gamma_deg']):.1f}°")
+    if kf.get("drive") and kf["drive"] not in ("current", None):
+        bits.append(str(kf["drive"]))
+    summary = ", ".join(bits) if bits else "EM transient"
+    key = str(e.get("file") or "")
+    if key.endswith(".json.gz"):
+        key = key[: -len(".json.gz")]
+    return {"key": key, "kind": "simulation.fem_transient",
+            "summary": summary, "computed_at": e.get("computed_at"),
+            "geo_fingerprint": e.get("geo_fingerprint")}
+
+
+@router.get("/ledger/recent")
+def get_run_ledger_recent(limit: int = Query(default=10, ge=1, le=50)):
+    """The newest `limit` ledger rows, in the shape the History popover reads
+    everywhere else (`routes/history.py`'s `_row_view`) — see the module note
+    above for why this is a second listing rather than the generic one."""
+    es = _ledger_entries()[: max(int(limit), 0)]
+    return {"entries": [_ledger_row_view(e) for e in es]}
+
+
+@router.post("/ledger/{key}/load")
+def load_run_ledger_entry(key: str):
+    """Serve ledger entry `key` as though it had just been solved — the
+    History popover's click, same contract as `POST /api/history/{key}/load`
+    (`served_from_history` + `computed_at` + `history_key`, no side effects
+    beyond the response: an EM transient has no `_remember_last`-style
+    record for a History load to replay, unlike the coupled loader)."""
+    key = _ledger_key_safe(key)
+    p = _ledger_dir() / f"{key}.json.gz"
+    if not p.is_file():
+        raise HTTPException(status_code=404,
+                            detail={"error": "no ledger entry with that key"})
+    import gzip as _gz
+    try:
+        with _gz.open(p, "rt", encoding="utf-8") as fh:
+            blob = _json.load(fh)
+    except Exception as exc:                                # noqa: BLE001
+        raise HTTPException(status_code=500,
+                            detail=f"could not read ledger entry: {exc}")
+    out = dict(_refresh_summary_shape(blob.get("result") or {}))
+    out.pop("frames", None)
+    out["ledger_hit"] = True
+    out["ledger_computed_at"] = blob.get("computed_at")
+    out["served_from_history"] = True
+    out["computed_at"] = blob.get("computed_at")
+    out["history_key"] = key
+    out["restored"] = False
+    out["stale"] = False
+    # WHICH MACHINE, same check the restore path makes above (`_live_geo_fp`
+    # in the `restore` branch): a History row can be weeks old, and loading
+    # it onto a DIFFERENT
+    # motor with nothing said would be the exact silent-wrong-numbers failure
+    # `stale_geometry` exists to close.  `None` — not `False` — when the row
+    # predates the fingerprint stamp: unknown, never "fine" (same rule the
+    # restore path and `_refresh_summary_shape`'s callers already follow).
+    _saved_geo_fp = out.get("geo_fingerprint")
+    out["stale_geometry"] = (None if not _saved_geo_fp
+                             else bool(_saved_geo_fp != _geometry_fingerprint(None)))
+    log.info("run ledger: %s served from the History popover (computed %s)",
+             key, blob.get("computed_at"))
+    return out
+
+
+@router.delete("/ledger/{key}")
+def delete_run_ledger_entry(key: str):
+    key = _ledger_key_safe(key)
+    p = _ledger_dir() / f"{key}.json.gz"
+    if not p.is_file():
+        raise HTTPException(status_code=404,
+                            detail={"error": "no ledger entry with that key"})
+    try:
+        p.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500,
+                            detail=f"could not delete ledger entry: {exc}")
+    return {"deleted": True, "key": key}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 7a-bis.  Bench-style Ld/Lq probe — the LCR-meter measurement, simulated
 # ─────────────────────────────────────────────────────────────────────────────

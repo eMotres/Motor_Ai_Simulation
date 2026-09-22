@@ -153,6 +153,10 @@ _GATED: dict[tuple[str, str], str] = {
     # throwing them away.  Same class as the cache view above — owner-only.
     ("GET",  "/api/simulation/ledger"): "admin",
     ("DELETE", "/api/simulation/ledger"): "admin",
+    # The History popover's three verbs on ONE ledger row (2026-09-22) — same
+    # shared-store bargain as the whole-ledger view/clear just above, not the
+    # per-workspace "pro" tier `/api/history` gets away without gating at all.
+    ("GET",  "/api/simulation/ledger/recent"): "admin",
     # "Have you already computed exactly this?" — a hash lookup, no solve, but
     # it answers a question only a paying engineering user gets to ask, so it
     # rides the same tier as the run it is a pre-flight for.
@@ -241,6 +245,11 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     ("POST",   "/api/kernel/run", "pro"),
     ("POST",   "/api/kernel/study", "pro"),
     ("POST",   "/api/simulation/physics/fem_transient/cancel", "pro"),
+    # The History popover's load/delete on ONE ledger row — a path param, so
+    # the exact table above cannot name it; same "admin" bargain as the
+    # ledger's exact-path GET/DELETE and .../ledger/recent right next to them.
+    ("POST",   "/api/simulation/ledger/", "admin"),
+    ("DELETE", "/api/simulation/ledger/", "admin"),
     # shared-config / shared-store mutations → owner only
     ("PUT",    "/api/geometry", "admin"),
     ("POST",   "/api/geometry/parameter", "admin"),

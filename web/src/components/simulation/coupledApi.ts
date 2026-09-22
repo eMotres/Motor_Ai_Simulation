@@ -399,6 +399,17 @@ export interface CoupledRunResult {
   written_to_last_run: boolean;
   run_id: string;
   elapsed_s: number;
+  /** LOADED, not solved (2026-09-22): an identical `/run` request was already
+   *  in `motor_ai_sim.run_history` (kind `coupled.run`) and was handed back
+   *  instead of iterating the loop again — see `run_history.py`'s module
+   *  docstring and `routes/coupled.py`'s `_load_coupled_history_entry`.
+   *  `computed_at` is the ISO stamp of when it WAS solved; a fresh run
+   *  carries neither field.  `history_key` addresses the row for the
+   *  History popover's delete — a Recompute instead just re-sends this same
+   *  request with `fresh: true`, so it never needs the key. */
+  served_from_history?: boolean;
+  computed_at?: string;
+  history_key?: string;
 }
 
 /** Is the toggle on?  Read straight from localStorage so the run builder does
@@ -942,6 +953,63 @@ export function applyS1AsOperatingPoint(i_A_rms: number): void {
       body: JSON.stringify({ max_current: i_A_rms }),
     }).catch(() => { /* the debounced sync will retry this on the next edit */ });
   } catch { /* best effort — SSR / no fetch */ }
+}
+
+/**
+ * Sync the panel's OWN operating-point fields to a LOADED result (the
+ * History popover, 2026-09-22) — the same setter path as
+ * `applyS1AsOperatingPoint` above (the same `sim.*` keys, the same
+ * `sim-settings-restored` re-read event), generalised to every coordinate
+ * `SummaryTable`'s `opStale` guard compares: current, γ, rpm.
+ *
+ * WHY THIS EXISTS: a History row is the same point ITS OWN run was solved
+ * at, by construction — loading one and then showing the dashboard's
+ * "⚠ STALE — DIFFERENT MACHINE" banner over it, only because the operating-
+ * point FIELDS still hold whatever was typed before the click, would be
+ * exactly the false alarm the S1 auto-set feature above exists to prevent
+ * (PhysicsDashboard's 2026-09-21 note: *"почему замыленный экран … опять
+ * токи не совпадают"*). `current` is `I_terminal_rms_A ?? I_phase_rms_A` —
+ * the SAME preference `opStale`'s own comparison uses (SummaryTable.tsx),
+ * so a loaded entry that predates one of the two fields still clears the
+ * guard. Each field is skipped independently when the loaded summary does
+ * not carry it (`undefined`/non-finite) rather than writing a bad value in.
+ *
+ * CONNECTION IS NOT TOUCHED: star/delta is a machine SETTING, never solved
+ * for, so a mismatch between the loaded entry's winding and the panel's
+ * current selection is real and must keep flagging (`connStale`).
+ *
+ * KNOWN GAP, same class as the PATCH note above: only `current` is echoed to
+ * the server (`max_current`, the field a page reload re-adopts from); γ and
+ * rpm stay LOCAL-only. The dashboard banner this function exists to fix is
+ * corrected the instant it runs (the localStorage write is synchronous and
+ * every persisted field re-reads on the SAME event) — a reload before the
+ * next real solve is the only case where γ/rpm could revert, scoped out for
+ * time rather than adding two more debounced PATCH targets the backend does
+ * not yet expose.
+ */
+export function applyLoadedOperatingPoint(point: {
+  current?: number | null; gamma_deg?: number | null; rpm?: number | null;
+}): void {
+  const finite = (v: number | null | undefined): v is number =>
+    typeof v === 'number' && Number.isFinite(v);
+  try {
+    if (finite(point.current)) {
+      localStorage.setItem('sim.current', JSON.stringify(point.current));
+      localStorage.setItem('sim.current.s1AppliedAt', String(Date.now()));
+    }
+    if (finite(point.gamma_deg)) localStorage.setItem('sim.gamma', JSON.stringify(point.gamma_deg));
+    if (finite(point.rpm)) localStorage.setItem('sim.rpm', JSON.stringify(point.rpm));
+  } catch { /* best effort — the fields simply are not updated */ }
+  try { window.dispatchEvent(new Event('sim-settings-restored')); }
+  catch { /* best effort */ }
+  if (finite(point.current)) {
+    try {
+      fetch(`${API}/api/simulation/config`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_current: point.current }),
+      }).catch(() => { /* the debounced sync will retry this on the next edit */ });
+    } catch { /* best effort — SSR / no fetch */ }
+  }
 }
 
 /* ── AUTO-SET on a VERIFIED S1 run (owner 2026-09-21, fourth round) ─────────

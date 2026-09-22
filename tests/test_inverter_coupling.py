@@ -537,3 +537,18 @@ def test_a_stored_pwm_record_still_reads_as_a_bridge():
     assert R.record_drive({}) == "sine"
     assert DR._entry_drive({"drive": "inverter"}) == "pwm"
     assert DR._entry_drive({"drive": "pwm"}) == "pwm"
+
+
+def test_the_ac_power_points_the_right_way_on_a_generator():
+    """A generator's shaft efficiency is P_ac/P_shaft, not the other way."""
+    lp = _loop()
+    base = {"I1_phase_rms_A": 314.3, "efficiency_shaft": 0.98,
+            "P_loss_total_incl_mech_W": 6000.0}
+    mot = lp._solve_request({"summary": dict(base), "pwm": {}})
+    gen = lp._solve_request({"summary": {**base, "op_mode": "generator"},
+                             "pwm": {}})
+    # Motor: the AC side is the bigger number (it carries the losses).
+    assert mot["p_ac_W"] == pytest.approx(6000.0 * 0.98 / 0.02 + 6000.0)
+    # Generator: the AC side is the smaller one — the shaft carries them.
+    assert gen["p_ac_W"] == pytest.approx(6000.0 * 0.98 / 0.02)
+    assert gen["p_ac_W"] < mot["p_ac_W"]

@@ -2334,7 +2334,18 @@ class _ControllerLoop:
         p_ac = None
         if eta is not None and 0.0 < float(eta) < 1.0:
             eta_f = float(eta)
-            p_ac = p_loss * eta_f / (1.0 - eta_f) + p_loss
+            # THE SHAFT EFFICIENCY POINTS THE OTHER WAY ON A GENERATOR, and the
+            # quantity this module needs is always the AC side of the bridge.
+            # Motor:      eta = P_shaft / P_ac      -> P_shaft = P_loss*eta/(1-eta),
+            #                                          P_ac    = P_shaft + P_loss.
+            # Generator:  eta = P_ac / P_shaft      -> P_ac    = P_loss*eta/(1-eta).
+            # One line apart, and getting it wrong would hand the inverter the
+            # MECHANICAL power of a generator and quietly over-read its
+            # efficiency.
+            _other = p_loss * eta_f / (1.0 - eta_f)
+            _gen = str((em.get("summary") or {}).get("op_mode")
+                       or "motor").strip().lower().startswith("gen")
+            p_ac = _other if _gen else (_other + p_loss)
         if p_ac is None or not (p_ac > 0.0):
             return None
         pwm = em.get("pwm") if isinstance(em.get("pwm"), dict) else {}

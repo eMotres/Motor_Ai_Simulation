@@ -2203,7 +2203,8 @@ class _ControllerLoop:
     """
 
     def __init__(self, cfg: Dict[str, Any], *, inverter: Dict[str, Any],
-                 star_delta: str, rpm: float, pole_pairs: int):
+                 star_delta: str, rpm: float, pole_pairs: int,
+                 i_leg_seed_A: float = 0.0):
         from motor_ai_sim.inverter.coupling import fit_device_drop
         from motor_ai_sim.inverter.devices import get_device
 
@@ -2217,12 +2218,16 @@ class _ControllerLoop:
         self.solve: Dict[str, Any] = {}
         self.passes: List[Dict[str, Any]] = []
         self.warnings: List[str] = list(cfg.get("notes") or [])
-        # The first pass has no solved current yet, so the drop is fitted at
-        # the fundamental the duty is AIMED at — stated, and replaced by the
-        # solved one from pass 2.
+        # The first pass has no solved current yet, so the body-diode fit is
+        # placed at the current the duty is AIMED at — the regulator's target
+        # where there is one, and otherwise the panel's own terminal current,
+        # which on either connection IS the leg current.  A seed of zero would
+        # fit the diode over a one-amp span and read it four volts wrong on the
+        # first pass; from pass 2 the solved current replaces it either way.
         i_target = float(inverter.get("target_I_phase_rms_A") or 0.0)
-        i_leg = i_target * (math.sqrt(3.0)
-                            if self.star_delta == "delta" else 1.0)
+        i_leg = (i_target * (math.sqrt(3.0)
+                             if self.star_delta == "delta" else 1.0)
+                 or abs(float(i_leg_seed_A or 0.0)))
         self.drop = fit_device_drop(
             self.card, t_j_c=self.t_j_c,
             n_parallel=int(cfg["devices_parallel"]),
@@ -3779,7 +3784,8 @@ def _run(body: Dict[str, Any],
                 _effective_star_delta as _esd2)
             _ctl_sd = _esd2(None)
         ctl = _ControllerLoop(_ctl_cfg, inverter=inverter, star_delta=_ctl_sd,
-                              rpm=rpm_eff, pole_pairs=_pole_pairs(body))
+                              rpm=rpm_eff, pole_pairs=_pole_pairs(body),
+                              i_leg_seed_A=_f(body, "I_phase_rms", 0.0))
     # …and the carrier, resolved WITH the run and before anything else can move
     # the shared configuration under it (2026-09-14).  It reaches the modal and
     # rotordynamic steps explicitly and is stored in their records.

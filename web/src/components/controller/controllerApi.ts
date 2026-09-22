@@ -328,6 +328,34 @@ export function settingsForSave(s: ControllerFormState): ControllerSettings {
   };
 }
 
+/** The `ctrl.settings` localStorage mirror ``ControllerPanel`` writes, TAGGED
+ * with the configuration it was captured for. */
+export interface ControllerMirror {
+  die: string;
+  config: string;
+  block: ControllerSettings;
+}
+
+/**
+ * Whether a mirrored settings snapshot belongs to the motor being saved.
+ *
+ * Owner 2026-09-22, second round: *"при сохранении мотора текущий контроллер
+ * тоже должен сохраняться со всеми настройками"* — not only the Controller
+ * tab's own button.  ``ActiveFamilyStrip``'s "Save to duty" reads
+ * ``ctrl.settings`` right after the duty save and PATCHes it in the same
+ * flow — but ONLY when the tag matches: a mirror left over from a DIFFERENT
+ * motor (the Controller tab was never opened for the one being saved now, or
+ * it still holds an earlier session's snapshot) must never land on this one.
+ */
+export function controllerMirrorApplies(
+  mirrored: ControllerMirror | null | undefined,
+  die: string,
+  config: string,
+): boolean {
+  return !!mirrored && !!mirrored.block
+    && mirrored.die === die && mirrored.config === config;
+}
+
 /** One electrical period as an SVG polyline, scaled to its own axis. */
 export function polyline(values: number[], w: number, h: number, pad = 2): string {
   if (!values.length) return '';

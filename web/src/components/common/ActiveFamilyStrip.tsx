@@ -28,6 +28,7 @@ import { followActiveDuty } from '../../lib/dutyLocalApply';
 import { driveLabel } from '../../lib/dutyRuns';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 import { currentMatJson } from '../../lib/apiAuth';
+import { controllerMirrorApplies, type ControllerMirror } from '../controller/controllerApi';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -489,6 +490,32 @@ const ActiveFamilyStrip: React.FC = () => {
         }
       } catch { /* memory is a convenience, never a blocker */ }
       let extra = rj && rj.renamed_to ? ` · renamed to ${rj.renamed_to}` : '';
+      // ── THE CONTROLLER TAB'S OWN SETTINGS ride THIS save too ───────────────
+      // Owner 2026-09-22: *"при сохранении мотора текущий контроллер тоже
+      // должен сохраняться со всеми настройками"* — not only the Controller
+      // tab's own "Save settings" button.  The tab mirrors its current form
+      // (device, topology, mapping, N parallel per bridge, R_g, dead time,
+      // carrier, DC link, cooling, couple-with-EM) to `localStorage` under
+      // `ctrl.settings`, TAGGED with the die/config it was captured for —
+      // the same "current panel state rides the save" shape `mesh.*`/`sim.*`
+      // already use above, except TAGGED because the Controller tab (unlike
+      // Simulation) is not always the one just edited: a mirror from a
+      // DIFFERENT motor, still sitting in this browser from an earlier
+      // session, must never land on the one being saved now.  Silently
+      // skipped when nothing was ever configured, or when the tag does not
+      // match — one status line either way, folded into THIS save's own.
+      try {
+        const raw = localStorage.getItem('ctrl.settings');
+        const mirrored = raw ? JSON.parse(raw) as ControllerMirror : null;
+        if (controllerMirrorApplies(mirrored, tDie, cfgName)) {
+          const cr = await fetch(`${API}/api/family/config/`
+            + `${encodeURIComponent(tDie)}/${encodeURIComponent(cfgName)}/controller`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(mirrored!.block),
+          });
+          extra += cr.ok ? ' + controller settings' : ' (controller settings NOT saved)';
+        }
+      } catch { /* the controller mirror is best-effort, never blocks the duty save */ }
       // KV as DISPLAYED (user: with the pressed buttons): the summary card
       // publishes its view copy (sim.viewSummary) with the KV button already
       // applied and view_flags saying which convention is on screen.

@@ -228,6 +228,39 @@ test('settingsForSave round-trips through formStateFromSettings', () => {
   assert.equal(restored.coupleWithEm, true);
 });
 
+/* ── controllerMirrorApplies (owner 2026-09-22, second round) ───────────────
+ * "при сохранении мотора текущий контроллер тоже должен сохраняться" — not
+ * only the Controller tab's own button. ActiveFamilyStrip's "Save to duty"
+ * reads the `ctrl.settings` localStorage mirror and PATCHes it in the SAME
+ * flow, but only when the tag matches the motor actually being saved — a
+ * mirror left over from a different motor must never land on this one.
+ */
+
+function controllerMirrorApplies(mirrored, die, config) {
+  return !!mirrored && !!mirrored.block
+    && mirrored.die === die && mirrored.config === config;
+}
+
+test('a mirror tagged for the motor being saved applies', () => {
+  const mirrored = { die: 'CIANO14 50 edited', config: 'L15',
+    block: { device: 'IMCQ120R004M2H' } };
+  assert.equal(controllerMirrorApplies(mirrored, 'CIANO14 50 edited', 'L15'), true);
+});
+
+test('a mirror from a DIFFERENT motor never applies', () => {
+  const mirrored = { die: 'CIANO14 50 edited', config: 'L15',
+    block: { device: 'IMCQ120R004M2H' } };
+  assert.equal(controllerMirrorApplies(mirrored, 'CIANO 150_40', 'L35'), false);
+  assert.equal(controllerMirrorApplies(mirrored, 'CIANO14 50 edited', 'L20'), false);
+});
+
+test('nothing mirrored yet (the Controller tab was never opened) never applies', () => {
+  assert.equal(controllerMirrorApplies(null, 'CIANO14 50 edited', 'L15'), false);
+  assert.equal(controllerMirrorApplies(undefined, 'CIANO14 50 edited', 'L15'), false);
+  assert.equal(controllerMirrorApplies({ die: 'X', config: 'Y', block: null },
+    'X', 'Y'), false);
+});
+
 /* ── statusLine ──────────────────────────────────────────────────────────── */
 // Owner 2026-09-22 production bug: "Error: p_ac_W is required" with no clue
 // where to type it. The backend now refuses with one plain sentence instead,

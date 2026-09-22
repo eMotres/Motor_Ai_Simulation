@@ -252,3 +252,58 @@ def test_an_old_configuration_with_no_controller_key_loads_everywhere(dies, gran
     payload = client.get(f"/api/family/payload/{DIE}/{CFG}", headers=granted,
                          params={"duty": DUTY})
     assert payload.status_code == 200, payload.text
+
+
+# ---------------------------------------------------------------------------
+# duty save carries the current controller settings (owner 2026-09-22,
+# second round: "не только кнопкой самой вкладки Controller")
+# ---------------------------------------------------------------------------
+#
+# ``ActiveFamilyStrip``'s "Save to duty" is the WEB flow: it reads the
+# `ctrl.settings` localStorage mirror right after ``POST /api/family/duty``
+# succeeds and PATCHes it in the same round, so there is no single backend
+# endpoint for "one save" — the two calls below are exactly what that button
+# now issues, in order, against the SAME die/config the duty save answered
+# with (``cfgName`` in the web code — this fixture never renames, so it is
+# ``CFG`` here too). What is pinned is the OUTCOME: one ordinary duty save,
+# immediately followed by the controller PATCH the web flow adds, leaves BOTH
+# in the yaml together.
+
+def _save_duty(die=DIE, cfg=CFG, duty=DUTY, headers=None, **kw):
+    body = {"name": duty, "mode": "motor", "from_current": False,
+            "current_arms": 85.0, "rpm": 6000.0, "gamma_deg": 12.0}
+    body.update(kw)
+    return client.post("/api/family/duty", headers=headers,
+                       json={"die": die, "config": cfg, "duty": body})
+
+
+def test_duty_save_followed_by_the_controller_patch_leaves_both_in_the_yaml(
+        dies, granted):
+    """The exact two-call flow ``ActiveFamilyStrip.save()`` now performs."""
+    r1 = _save_duty(headers=granted, note="a duty save with the controller "
+                                          "tab open")
+    assert r1.status_code == 200, r1.text
+
+    r2 = _patch_controller(headers=granted)
+    assert r2.status_code == 200, r2.text
+
+    c = _cfg_doc(dies)
+    duty = next(d for d in c["duties"] if d["name"] == DUTY)
+    assert duty["note"] == "a duty save with the controller tab open"
+    assert duty["current_arms"] == 85.0
+    assert c["controller"]["device"] == "IMCQ120R004M2H"
+    assert c["controller"]["devices_parallel"] == 3
+    assert c["controller"]["couple_with_em"] is True
+
+
+def test_a_second_duty_save_does_not_disturb_the_controller_block(dies, granted):
+    """The controller block is config-level, not duty-level — an ordinary
+    resave of the operating point (no controller PATCH this time) must leave
+    a PREVIOUSLY saved controller block exactly as it was."""
+    _patch_controller(headers=granted)
+    r = _save_duty(headers=granted, current_arms=90.0)
+    assert r.status_code == 200, r.text
+
+    c = _cfg_doc(dies)
+    assert c["controller"]["device"] == "IMCQ120R004M2H"
+    assert next(d for d in c["duties"] if d["name"] == DUTY)["current_arms"] == 90.0

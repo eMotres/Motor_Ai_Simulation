@@ -152,6 +152,28 @@ const ControllerPanel: React.FC = () => {
     } catch { /* nothing saved yet, or the read failed — the tab's own defaults stand */ }
   })(); }, [dieCtx.die, dieCtx.config]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── mirror the current form to localStorage, TAGGED with the active
+  // configuration — the same "current panel state" shape ActiveFamilyStrip
+  // already reads for `mesh.*`/`sim.*` on every "Save to duty".  Owner
+  // 2026-09-22, second round: the controller must ride THAT save too, not
+  // only this tab's own button — ActiveFamilyStrip reads this key right
+  // after the duty save succeeds and PATCHes it in the same flow, folding
+  // the result into ONE status line.  The tag is what stops a stale mirror
+  // from an earlier motor landing on the one being saved now.
+  useEffect(() => {
+    if (!dieCtx.die || !dieCtx.config) return;
+    try {
+      const state: ControllerFormState = { device, topology, setSplit, hbMod,
+        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
+        parByBridge, coupleWithEm };
+      localStorage.setItem('ctrl.settings', JSON.stringify({
+        die: dieCtx.die, config: dieCtx.config, block: settingsForSave(state) }));
+    } catch { /* private window — the auto-save-with-the-motor mirror just won't work this session */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
+      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping, parByBridge,
+      coupleWithEm]);
+
   const saveSettings = async () => {
     setSettingsErr(null);
     if (!dieCtx.die || !dieCtx.config) {

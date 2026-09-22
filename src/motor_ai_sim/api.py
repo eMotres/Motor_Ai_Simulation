@@ -110,6 +110,7 @@ from motor_ai_sim.routes.support import router as support_router
 from motor_ai_sim.routes.modules import router as modules_router
 from motor_ai_sim.routes.kernel import router as kernel_router
 from motor_ai_sim.routes.jobs_api import router as jobs_router
+from motor_ai_sim.routes.history import router as history_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
 from motor_ai_sim import materials as mat_lib
 from motor_ai_sim.materials import UnknownMaterialError
@@ -245,6 +246,10 @@ app.include_router(kernel_router)
 # Stage 4: the queue's own surface — what is running, queued and finished FOR
 # THIS CALLER, and the one owner-checked cancel every Stop button delegates to.
 app.include_router(jobs_router)
+# /api/history — the persistent "don't recompute this" layer (2026-09-22):
+# browse, load and delete the last few results of each solve kind that has
+# wired itself into motor_ai_sim.run_history (today: mechanical.rotor_stress).
+app.include_router(history_router)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

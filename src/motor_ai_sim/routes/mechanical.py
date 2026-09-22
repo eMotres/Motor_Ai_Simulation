@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim import jobs as _JOBS
+from motor_ai_sim import run_history as _RH
 from motor_ai_sim.progress import poll as _progress_poll
 from motor_ai_sim.progress import route_progress as _route_progress
 
@@ -525,6 +526,89 @@ def _cache_key(geo_ov, assign, rpm, osf, interf, mesh_mm, order, contacts,
 
 
 # ---------------------------------------------------------------------------
+# Persistent history — "don't recompute an identical rotor_stress request"
+# ---------------------------------------------------------------------------
+# Owner, 2026-09-22: a repeat launch of the SAME parameters must load the
+# stored answer, not solve again — and survive a backend restart, unlike
+# ``rsm.cache_get``/``cache_put`` above (an in-memory, per-process table that
+# already makes a same-session Solve press instant but forgets everything on
+# restart).  ``run_history`` is the persistent layer; ``_cache_key``'s tuple
+# IS the canonical, already-normalised structure the brief asks for (every
+# float rounded, every unordered collection sorted — see its own docstring
+# for the enumerated field list: geometry, material assignment + overrides,
+# rpm, overspeed factor, interference, mesh, order, the case table, which
+# loads act and the torque, per-part temperatures, the contact spec, the
+# symmetry reduction), so it is hashed AS IS rather than re-specified here.
+_ROTOR_STRESS_HISTORY = _RH.history_for("mechanical.rotor_stress")
+_RH.register_kind("mechanical.rotor_stress")
+
+
+def _rotor_stress_history_key(key: tuple) -> str:
+    return _RH.make_key("mechanical.rotor_stress", key)
+
+
+def _load_rotor_stress_history_entry(entry: Dict[str, Any],
+                                     payload: Dict[str, Any]) -> Dict[str, Any]:
+    """``run_history.register_loader`` hook: make a History-popover click on a
+    rotor_stress row behave exactly like the route's own history hit —
+    the SAME response shape, and the Mechanical tab's /last restores from it
+    too (2026-09-22, "Dashboard stale verdict must treat a loaded entry like
+    a fresh result")."""
+    out = dict(payload)
+    out["cached"] = True
+    out["served_from_history"] = True
+    out["computed_at"] = entry.get("computed_at")
+    out["history_key"] = entry.get("key")
+    _remember_last("rotor_stress", out, dict(entry.get("params") or {}),
+                   out.get("geo_fingerprint"))
+    return out
+
+
+_RH.register_loader("mechanical.rotor_stress", _load_rotor_stress_history_entry)
+
+
+def _min_safety_factor(obj, _depth: int = 0) -> Optional[float]:
+    """A cheap, best-effort scan for the worst ``safety_factor`` in a result —
+    for the history list's one-line summary only, never for a verdict.  Skips
+    into plain numeric arrays (the field map) without walking every element."""
+    if _depth > 6:
+        return None
+    best: Optional[float] = None
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == "safety_factor" and isinstance(v, (int, float)) and math.isfinite(v):
+                if best is None or v < best:
+                    best = float(v)
+            elif isinstance(v, (dict, list)):
+                sub = _min_safety_factor(v, _depth + 1)
+                if sub is not None and (best is None or sub < best):
+                    best = sub
+    elif isinstance(obj, list) and obj and isinstance(obj[0], (dict, list)):
+        for v in obj:
+            sub = _min_safety_factor(v, _depth + 1)
+            if sub is not None and (best is None or sub < best):
+                best = sub
+    return best
+
+
+def _rotor_stress_summary(params: Dict[str, Any], out: Dict[str, Any]) -> str:
+    try:
+        bits = [f"{float(params.get('rpm') or 0):,.0f} rpm"]
+        if params.get("cases") == "single":
+            bits.append("single case")
+        if params.get("symmetry") == "sector":
+            bits.append("sector")
+        if params.get("loads") and params.get("loads") != "both":
+            bits.append(str(params["loads"]))
+        sf = _min_safety_factor(out)
+        if sf is not None:
+            bits.append(f"SF {sf:.2f}")
+        return ", ".join(bits)
+    except Exception:                                       # noqa: BLE001
+        return "rotor stress"
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -590,6 +674,11 @@ def rotor_stress(
                     "faces, so every pole carries an identical load by "
                     "construction and the solve is ~n times cheaper"),
     geo: Optional[str] = Query(default=None),
+    fresh: bool = Query(
+        default=False,
+        description="ignore a stored history answer and solve again, even if "
+                    "an identical request was already computed — the panel's "
+                    "Recompute button"),
 ):
     """Centrifugal stress & deformation of the rotor solids, with CONTACT.
 
@@ -795,16 +884,32 @@ def rotor_stress(
         # a per-part override it never set (2026-09-08).
         for _field, _v in part_temps.items():
             _params[f"{_field}_temp_c"] = _v
-        hit = rsm.cache_get(key)
-        if hit is not None:
-            out = dict(hit)
-            out["cached"] = True
-            # A cache hit is still "the last thing the tab showed" — remember it, or
-            # pressing Solve twice would leave /last pointing at an older answer.
-            _remember_last("rotor_stress", hit, _params, hit.get("geo_fingerprint"))
-            if not field:
-                out.pop("field", None)
-            return out
+        requested_history_key = _rotor_stress_history_key(key)
+        if not fresh:
+            hit = rsm.cache_get(key)
+            if hit is not None:
+                out = dict(hit)
+                out["cached"] = True
+                # A cache hit is still "the last thing the tab showed" — remember it, or
+                # pressing Solve twice would leave /last pointing at an older answer.
+                _remember_last("rotor_stress", hit, _params, hit.get("geo_fingerprint"))
+                if not field:
+                    out.pop("field", None)
+                return out
+            # A miss in THIS process's session cache — try the persistent
+            # history (survives a restart; ``rsm.cache_get`` above does not).
+            h_hit = _ROTOR_STRESS_HISTORY.get(requested_history_key)
+            if h_hit is not None:
+                out = dict(h_hit["payload"])
+                out["cached"] = True
+                out["served_from_history"] = True
+                out["computed_at"] = h_hit["entry"].get("computed_at")
+                out["history_key"] = requested_history_key
+                rsm.cache_put(key, out)      # warm the fast layer too
+                _remember_last("rotor_stress", out, _params, out.get("geo_fingerprint"))
+                if not field:
+                    out.pop("field", None)
+                return out
 
         stack_mm = float(motor.parameters.get("motor_length") or 0.0)
         contact_fallback: Optional[Dict[str, Any]] = None
@@ -925,6 +1030,23 @@ def rotor_stress(
         rsm.cache_put(key, out)
         if key != requested_key:
             rsm.cache_put(requested_key, out)
+        # ── persistent history (2026-09-22) ─────────────────────────────────
+        # Filed under the key the SOLVE actually ran under (the bonded
+        # fallback may have re-keyed it above) and, when that differs, also
+        # under the ORIGINAL requested key — mirroring the two
+        # ``rsm.cache_put`` calls just above, so a plain repeat of the request
+        # the user actually typed is a history hit even though it silently
+        # solved bonded last time.
+        final_history_key = _rotor_stress_history_key(key)
+        summary = _rotor_stress_summary(_params, out)
+        _ROTOR_STRESS_HISTORY.put(final_history_key, params=dict(_params),
+                                  summary=summary, payload=out,
+                                  extra={"geo_fingerprint": out["geo_fingerprint"]})
+        if final_history_key != requested_history_key:
+            _ROTOR_STRESS_HISTORY.put(requested_history_key, params=dict(_params),
+                                      summary=summary, payload=out,
+                                      extra={"geo_fingerprint": out["geo_fingerprint"]})
+        out["history_key"] = final_history_key
         _remember_last("rotor_stress", out, _params, out["geo_fingerprint"])
         if not field:
             out = {k: v for k, v in out.items() if k != "field"}

@@ -1963,8 +1963,22 @@ class _NoLossMap(Exception):
 def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
             magnet_temp_c: Optional[float],
             inverter: Optional[Dict[str, Any]] = None,
-            fresh: bool = False) -> Dict[str, Any]:
+            fresh: bool = False, ledger: bool = False) -> Dict[str, Any]:
     """ONE Electromagnetic run — the same call the Run button makes.
+
+    ``ledger`` — OFF for every pass except the loop's very FIRST one, and even
+    there only when the caller opts in.  Every iteration from the second on
+    solves at a temperature the network fed back, which the results ledger
+    has never seen under that key — reading it there would be the exact trap
+    the module note below `ledger=False, fresh=bool(fresh)` describes (the
+    night's peak run died in three seconds on a stored summary with no field
+    behind it).  The FIRST pass is different: it is solved at the body's OWN
+    coil/magnet temperature, the identical point a plain Run at those same
+    panel fields would have made moments before Coupled thermal was switched
+    on — and owner, 2026-09-22, the REVERSE of the ledger-miss report: "why
+    does it solve the electromagnetic pass again" applies just as much to the
+    loop re-solving a point the user already ran.  The caller (the loop's own
+    ``it == 1``) is the only one that may ask for it.
 
     Goes through ``routes.simulation.get_fem_transient`` and nothing else, so the
     result IS the tab's last run: journaled, snapshotted, cached and persisted by
@@ -2017,8 +2031,16 @@ def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
               # second attempt — the ledger lives on disk, so an API restart
               # does not clear it.  Same trap the Ø200 gen pair hit on
               # 2026-09-13; the cure there was `fresh`, and the cure here is to
-              # shut the door: a coupled iteration is never a lookup.
-              ledger=False, fresh=bool(fresh),
+              # shut the door: a coupled iteration is never a lookup — EXCEPT
+              # the one call that opts in through this function's own
+              # ``ledger`` parameter (the loop's first pass only — see the
+              # docstring).  A ledger hit there is not "a stored summary with
+              # no field behind it": the FIELD SNAPSHOT lives in the in-memory
+              # store keyed by the same identity, not on the stored result, so
+              # it is still there whenever the hit is served in the same
+              # process the Run that made it ran in — exactly the situation a
+              # plain Run just before switching Coupled thermal on leaves.
+              ledger=bool(ledger), fresh=bool(fresh),
               restore=False, ledger_probe=False)
     if inverter is None:
         # THE LOOP's spelling of the drive is not the RUN's: this route accepts
@@ -3299,8 +3321,21 @@ def _run(body: Dict[str, Any],
             _tok = _ml.BEARING_TEMP_C.set(
                 None if t_brg is None else float(t_brg))
             try:
+                # THE REVERSE of the ledger-miss report (owner, 2026-09-22):
+                # the FIRST pass is solved at the body's own coil/magnet
+                # temperature — the identical point a plain Run at those same
+                # panel fields would make.  If that Run already happened (the
+                # ordinary way Coupled thermal gets switched ON: type an
+                # operating point, Run it once to see it solve, then turn the
+                # loop on), this pass should be served from the results
+                # ledger instead of paying for the same transient twice.
+                # Every later iteration keeps the door shut (`ledger=False`,
+                # the module note above explains why) — only `it == 1` ever
+                # asks, and `history_fresh` (this run's own "Recompute") shuts
+                # it even there.
                 em = _em_run(body, coil_temp_c=t_coil, magnet_temp_c=t_mag,
-                             inverter=inverter)
+                             inverter=inverter,
+                             ledger=(it == 1 and not history_fresh))
             except HTTPException as exc:
                 if not history:
                     raise               # the first pass: nothing solved to keep
@@ -3676,9 +3711,25 @@ def _run(body: Dict[str, Any],
                         damping_eff = min(damping_eff, DAMPING_ON_OSCILLATION)
             prev_d = (d_coil, d_mag)
             history[-1]["damping_used"] = round(float(damping_eff), 3)
-            t_coil = float(t_coil) + damping_eff * d_coil
+            # ROUNDED to the panel's own precision (owner, 2026-09-22: "зачем
+            # он ещё пересчитывает... если во время каплинга он уже считал").
+            # `adoptConvergedTemperatures` (web/coupledApi.ts) writes this
+            # exact 1-decimal number into the Simulation tab's coil/magnet
+            # temperature fields, and the tab's next Run sends it straight
+            # back — so the EM ledger key (`round(coil_temp_c, 1)` /
+            # `round(magnet_temp_c, 1)` in routes/simulation.py) can only
+            # equal the key this pass writes under if the pass was SOLVED at
+            # the same 1-decimal number the panel will show, not at the raw
+            # damped-update float (189.95 rounds to 189.9 in Python's
+            # round-half-to-even but to 190.0 in JS's Math.round — a solved
+            # pass at the unrounded value made every later key miss on that
+            # boundary alone).  0.05 °C of truncation is far inside `tol` and
+            # changes no physics; solving AT the number the panel will
+            # actually show is what lets that later Run be served from here
+            # instead of re-solved from scratch.
+            t_coil = round(float(t_coil) + damping_eff * d_coil, 1)
             if t_mag is not None and t_mag_out is not None:
-                t_mag = float(t_mag) + damping_eff * d_mag
+                t_mag = round(float(t_mag) + damping_eff * d_mag, 1)
         # THE BUDGET RAN OUT WITH THE POINT STILL OFF.  The last pass is a solved
         # state and is KEPT — the temperatures, the map and the mechanics all
         # belong to it — but it is not the duty's operating point, and a reader
@@ -3841,8 +3892,15 @@ def _run(body: Dict[str, Any],
             _t_m = (_ep.get("magnet_c") if _ep.get("magnet_c") is not None
                     else _t_at.get("magnet"))
             _t_m = None if (t_mag is None or _t_m is None) else float(_t_m)
-            _ep["coil_c"], _ep["magnet_c"] = round(_t_c, 2), (
-                None if _t_m is None else round(_t_m, 2))
+            # ROUNDED to the panel's own 1-decimal precision — same reason as
+            # the damped-update rounding above: this pass becomes the record,
+            # and the record's temperatures are what the Simulation tab's
+            # coil/magnet fields auto-set to and replay on its next Run.
+            # Solving at the panel's own number (not a finer one nobody will
+            # ever ask for again) is what lets that Run hit the ledger.
+            _t_c = round(_t_c, 1)
+            _t_m = None if _t_m is None else round(_t_m, 1)
+            _ep["coil_c"], _ep["magnet_c"] = _t_c, _t_m
             _t_b = limited.get("bearing_seat_at_limit_c")
             _progress.update(
                 phase="final pass at the limit — the machine after %s"
@@ -4020,16 +4078,26 @@ def _run(body: Dict[str, Any],
                         "no card limit for %r, so the estimate could not be "
                         "verified" % part)
                 else:
+                    # ROUNDED to the panel's own 1-decimal precision — same
+                    # reason as the two roundings above: a verified S1 pass
+                    # REPLACES the record (below, `record_is_s1 = True`), and
+                    # `adoptConvergedTemperatures` will write this exact
+                    # number into the Simulation tab.  Guessing at the
+                    # network fit's raw float and only rounding for DISPLAY
+                    # would solve a pass under a key the panel's own Run can
+                    # never reproduce.
+                    _cr_temps = continuous_rating.get("temperatures_c") or {}
+                    _coil_guess = round(
+                        float(_cr_temps.get("winding") or t_coil), 1)
+                    _mag_guess = _cr_temps.get("magnet")
+                    _mag_guess = (None if _mag_guess is None
+                                 else round(float(_mag_guess), 1))
                     try:
                         v = _s1_verify(
                             body, cooling=cooling, rpm=rpm_eff,
                             inverter=inverter, i_estimate=i_est,
-                            coil_temp_c_guess=float(
-                                (continuous_rating.get("temperatures_c") or {})
-                                .get("winding") or t_coil),
-                            magnet_temp_c_guess=(
-                                (continuous_rating.get("temperatures_c") or {})
-                                .get("magnet")),
+                            coil_temp_c_guess=_coil_guess,
+                            magnet_temp_c_guess=_mag_guess,
                             limiting_part=part, limit_c=float(lim_c))
                     except HTTPException as exc:
                         v = None

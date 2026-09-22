@@ -1698,7 +1698,15 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
     # look up after a restart — still matches instead of being orphaned by a
     # field that carries no information for it.
     if magnet_temp_c is not None:
-        _kf["magnet_temp_c"] = round(float(magnet_temp_c), 2)
+        # ONE-DECIMAL, same precision as coil_temp_c above and as the
+        # results-ledger key's own magnet_temp_c (`_sb_key_fields`, same
+        # file) — not two.  Same reason: the Simulation tab's "from the
+        # coupled loop" field round-trips at one decimal
+        # (web/coupledApi.ts adoptConvergedTemperatures), so a finer key
+        # here would silently never match that field's next Run either,
+        # and the field views (J⟳ / Loss) would re-solve for a picture the
+        # coupled run already made.
+        _kf["magnet_temp_c"] = round(float(magnet_temp_c), 1)
     return _kf
 
 
@@ -4790,7 +4798,15 @@ def get_fem_transient(
     # the magnet's Br and its demag knee both move, so this run must never be
     # answered from the entry solved at the card's own temperature.
     if magnet_temp_c is not None:
-        _sb_key_fields["magnet_temp_c"] = round(float(magnet_temp_c), 2)
+        # ONE-DECIMAL, same precision as coil_temp_c just above — not two.
+        # The Simulation tab's "Magnet temperature — from the coupled loop"
+        # field round-trips at one decimal (web/coupledApi.ts,
+        # `adoptConvergedTemperatures`: `Math.round(c.magnet_temp_c*10)/10`),
+        # so a key built to two decimals could never be hit by that field's
+        # own next Run even when the coupled loop solved this exact
+        # operating point (2026-09-22, coil_temp_c already at one decimal
+        # a few lines up — this was the other half of the same mismatch).
+        _sb_key_fields["magnet_temp_c"] = round(float(magnet_temp_c), 1)
     if _batt is not None:
         _sb_key_fields["battery"] = ("batt", round(_batt.v_oc, 4),
                                      round(_batt.r_pack_ohm, 7),

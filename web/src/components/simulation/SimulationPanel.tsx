@@ -16,7 +16,7 @@ import {
   InputAdornment, ListSubheader, Switch,
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
-import { useMotorStore } from '../../stores/motorStore';
+import { useMotorStore, useUIStore } from '../../stores/motorStore';
 import { geoSignature } from '../common/geoSig';
 import { windingConnections } from '../../lib/referencePassports';
 import { currentGeoJson, currentMatJson } from '../../lib/apiAuth';
@@ -454,6 +454,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // remembered because the same kHz belongs to more than one class.
   const [fSwGroup, setFSwGroup] = usePersisted('fSwGroup', 0);
   const [fSwCustom, setFSwCustom] = usePersisted('fSwCustom', false);
+  // ── PWM MOVED TO THE CONTROLLER TAB (owner 2026-09-22) ─────────────────
+  // *«как отладим каплинг с контроллером, нам не нужен будет PWM в
+  // электромагнитном моделировании — всё будет задаваться в меню Controller»*.
+  // A machine's carrier, bus and dead time are a property of its CONTROLLER,
+  // and having two places to type them is how one duty ends up with two
+  // answers.  So the button no longer switches the drive: it says where the
+  // setting lives and offers to go there.  A stored `pwm_voltage` run still
+  // restores into this panel with its controls — old records stay readable
+  // and re-runnable, which is the whole reason the drive itself is untouched.
+  const [pwmMoved, setPwmMoved] = useState(false);
+  const goToTab = useUIStore((st: any) => st.setActiveTab);
   // ── GENERATOR → BATTERY (boost mode) ───────────────────────────────────
   // Iterate the bus against the pack instead of assuming an infinitely stiff
   // supply.  Persisted ON, but only ever SENT on a generator run of a machine
@@ -1904,7 +1915,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   variant={drive === m ? 'contained' : 'outlined'}
                   color="secondary"
                   onClick={() => {
-                    setDrive(m); setTargetKind('off');
+                    if (m === 'pwm_voltage' && drive !== 'pwm_voltage') {
+                      setPwmMoved(true);            // one line, below
+                      return;
+                    }
+                    setDrive(m); setTargetKind('off'); setPwmMoved(false);
                     // Seed the amplitudes from what is already on screen so the
                     // source arrives at the SAME operating point rather than at
                     // zero: the BLDC block that matches this run's copper loss
@@ -1912,13 +1927,31 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                     // run's V₁ when the panel has one.
                     if (m === 'bldc_current' && !(iBlock > 0))
                       setIBlock(+(current * Math.sqrt(1.5)).toFixed(2));
-                    if (m === 'pwm_voltage' && !(vPeak > 0)) setVPeak(30);
                   }}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
                   {label}
                 </Button>
               ))}
             </Box>
+            {pwmMoved && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  PWM is defined in Controller
+                </Typography>
+                <Button size="small" variant="text"
+                  onClick={() => { setPwmMoved(false); goToTab('controller'); }}
+                  sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0 }}>
+                  Open
+                </Button>
+                <HelpTip title={'The carrier, the DC link, the dead time and the '
+                  + 'device are the CONTROLLER\u2019s, and a coupled run reads them '
+                  + 'from there (drive \u201cinverter\u201d): the machine is then fed the '
+                  + 'waveform that controller really applies, dead-time '
+                  + 'distortion and device drops included, and the devices are '
+                  + 'solved on the current it produces. Runs already stored on '
+                  + 'the ideal modulator keep their answer and still load here.'} />
+              </Box>
+            )}
             {drive === 'pwm_voltage' && (<>
               <Box sx={{ display: 'flex', gap: 1 }}>
                 <TextField label="V bus (V)" type="number" size="small" fullWidth

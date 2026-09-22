@@ -489,6 +489,174 @@ place a PWM excitation is described, and the Simulation tab stops owning one.
    it injects 5th and 7th harmonics that the ideal modulator does not, and
    those land in the rotor losses.
 
+## 7a · Stage 2 — WHAT WAS BUILT (2026-09-22)
+
+Owner, 13:45: *«как закончишь лимиты, запускай каплинг — сначала стандартный
+инвертор на L155 motor»*.  Below is what the plan above turned into, and where
+it differs from the plan it says so.
+
+### The drive
+
+`drive: "inverter"` is a THIRD drive of the coupled loop, beside `"current"`
+and `"pwm"` (`routes/coupled.py::_DRIVE_ALIASES`, `_BRIDGE_DRIVES`).  It is not
+a change to the second: a stored `drive: "pwm"` record keeps its answer, a duty
+re-solved on `"pwm"` gives the same numbers, and `tests/test_coupled_pwm.py`
+and `tests/test_excitation_source.py` still pin that path.  What changed is
+that `"inverter"` used to be an ALIAS of `"pwm"` and now means the Controller.
+
+### Where the non-ideality lives
+
+| what | where |
+|---|---|
+| the source the solver marches | `inverter/coupling.py::InverterVoltageSource` |
+| the card, reduced for a time loop | `inverter/coupling.py::fit_device_drop` |
+| the per-step pole-voltage error | `inverter/coupling.py::pole_error_volts` |
+| the factory | `simulation/excitation.py::make_source("inverter", …)` |
+| the route's four scalars | `routes/simulation.py` — `inv_r_ds_ohm`, `inv_v_sd_v0_V`, `inv_v_sd_rd_ohm`, `inv_dead_time_us` (+ provenance) |
+| the fixed point | `routes/coupled.py::_ControllerLoop` |
+| tests | `tests/test_inverter_coupling.py`, `web/.../__tests__/pwmInController.test.mjs` |
+
+`InverterVoltageSource` SUBCLASSES the ideal PWM source and overrides exactly
+one method, `mean_over`.  Everything else — the compensated reference, the
+exact per-step volt-second means, the settle policy, the DC-link switch
+function — is the one implementation it always was.
+
+### The two loops, and why only one of them is an iteration
+
+**The inner one is not.** `excitation.Feedback` already carries the PREVIOUS
+converged step's phase currents — the sampling delay real hardware has — so the
+dead-time polarity and the device drops are decided by the current the solver
+has just measured, at every FEM step.  The controller↔machine loop is therefore
+closed INSIDE the transient and needs no relaxation.
+
+**The outer one is.**  The devices' losses set a junction temperature, that
+temperature moves `R_DS(on)` (≈ 0.6 %/K) and `V_SD`, and those move the
+waveform.  So each coupled pass solves the machine, then solves the controller
+on the current that pass drew, and the next pass reads the card at the new
+`T_j`.  `T_j` is a residual of the loop exactly as the winding, the magnets and
+the bearing seat are, and it is tested with them — band `CONTROLLER_TJ_TOL_K`
+= 2 K, which is ~1.2 % of the channel resistance and inside the figure-read
+tolerance of the curve it comes from.  It costs no extra electromagnetic run:
+the controller solve is arithmetic over a card.
+
+### What the bridge really applies
+
+Added to the ideal pole voltage, per leg, over each step:
+
+* **the channel** `−i·R_DS(on)/N` — independent of which switch is on, so a
+  plain constant over a step;
+* **the dead time** — per commanded edge, clipped to the step:
+
+  | edge | i > 0 (leaving) | i < 0 (entering) |
+  |---|---|---|
+  | rising (LS→HS) | `−(V_dc + V_SD)` | `+V_SD` |
+  | falling (HS→LS) | `−V_SD` | `+(V_dc + V_SD)` |
+
+  whose sum over a carrier period is the textbook
+  `ΔV = −sign(i)·t_d·f_sw·(V_dc + 2·V_SD)`.  That identity is the test, and it
+  holds at 200 sub-steps per carrier AND at one step per carrier — the loss
+  integral and the picture are not two opinions about one clamp.  On L155
+  rated it is **−9.80 V on a 750.4 V link**, 1.3 % of the fundamental and a
+  SQUARE wave in the sign of the current.
+
+**The delta mapping is exact, not a scaling.**  A delta machine is solved on the
+star equivalent, so the model's phase voltage IS the real line-to-line voltage:
+
+```
+star    e_A = err(i_leg_A)
+delta   e_A = err(i_leg_A) − err(i_leg_B)
+```
+
+with the LEG (device) current reconstructed from the solved branch currents —
+`i_leg_A = n_parallel·(I_A − I_C)`, the √3, 30°-lagging line current the bridge
+outside the delta really carries.  The circulating triplen stays inside the
+delta and never reaches a device, which is the point of comparing with the
+H-bridge later.  The drops and the dead-time clamp are computed on the REAL
+`V_dc`, never on the √3 model bus (`v_bus_real` is a separate solver argument).
+
+### The body diode, and the one thing that is a fit
+
+`R_DS(on)` is a single card look-up.  `V_SD(i)` is a least-squares straight line
+through the card's own curve over `0.1·i_peak … i_peak` of device current, and
+the worst deviation over that span is a record field
+(`device_drop.v_sd_fit_max_err_V`, **< 0.1 V** on this card).  The TOE is
+deliberately outside the fit — the characteristic is logarithmic below the knee
+(0.5 V at 1 A, 3.0 V at 25 A) and a line asked to cover zero is wrong
+everywhere in exchange for being right where nothing happens.  What it costs is
+an over-read of up to `v0` while the current crosses zero, i.e. `2·v0` of
+`V_dc + 2·V_SD` — under one per cent of an error that is itself ~1 % of the
+fundamental.  A per-sample card look-up inside a FEM time loop was the
+alternative: thousands of interpolations per frame for a number whose own
+tolerance is ±10 %.
+
+### The record
+
+The coupled record's `drive` becomes `"inverter"`; the `inverter` block keeps
+its meaning unchanged (carrier, link, modulation, the settled DC, the regulator)
+and a new `controller` block says which power stage applied them.  It is the
+Stage 1 solve's own shape — `losses`, `thermal`, `efficiency`, `limits`,
+`bridges`, `point`, `device_row`, `provenance`, `settings` — minus the waveform
+arrays, plus `coupled: true`, `stage: 2`, `settings_resolved`, `sources`,
+`t_j_c` / `t_j_residual_K` / `t_j_tol_K`, `passes` (one row per coupled pass:
+`T_j`, its step, the inverter watts, both efficiencies, `R_DS(on)`, the
+verdict), `excitation` (what the source really applied, with its
+`dead_time_error_V`) and `device_drop`.  The thermal loss map carries
+`drive: "inverter"` and names the device.
+
+### Report and datasheet
+
+`PWM_DRIVE_WORDS` already contained `"inverter"`, so the whole "PWM influence"
+machinery — the sine → bridge loss table, the ripple gates, the carrier rows —
+reads a Stage-2 record without a change.  What was added:
+
+* `report.controller_record` prefers the COUPLED block over the tab's
+  standalone solve where both exist: same question, and only one of them
+  measured it.  `datasheet._ctrl` does the same.
+* a new coupled table in the Controller section (PDF and Word):
+  copper / iron / magnets / sleeve+shaft / total, torque and current, **on the
+  controller's waveform against the duty's own sine reference**, then the
+  inverter's watts and both efficiencies.
+* two one-clause notes under it: how many passes and the junction temperature's
+  last step, and what the excitation was (dead time, `R_DS(on)` at the solved
+  `T_j`, the dead-time error in volts).
+
+### The Simulation tab
+
+Pressing "PWM inverter" no longer switches the drive: it shows ONE line — *PWM
+is defined in Controller* — an "Open" button and a HelpTip.  A stored
+`pwm_voltage` run still restores into the panel with its controls, so old
+records stay readable and re-runnable, which is why the drive itself was left
+alone.  Pinned by `web/.../__tests__/pwmInController.test.mjs`.
+
+**Open item:** the coupled panel has no drive selector of its own today (PWM
+coupled runs have always been driven from a script), so "the coupled loop's
+drive selector gets *inverter (Controller)*" has nothing to extend yet; the
+drive is available on `POST /api/coupled/run` as `drive: "inverter"` with a
+`controller` block.
+
+### What is exact on the device side, and what is not
+
+The loss model is handed the run's own **solved rms** — the switching ripple is
+in it — so the CONDUCTION term is exact: it depends on `⟨i²⟩` and on nothing
+else.  The third-quadrant and switching integrals still run on a SINUSOID of
+that rms, so the instantaneous current each commutation switches is the
+fundamental's rather than the rippled one.  On this machine the current THD is a
+few per cent and the effect averages toward zero over a period, but it does not
+vanish, and the record says so (`controller.model_note`).  The DC-link series
+beside it is still the COMMANDED switching function's: the dead-time notch is
+not in the bus current (`excitation.dc_link_note`).
+
+### Dead time
+
+The IMCQ120R004M2H datasheet publishes no RECOMMENDED dead time — it publishes
+switching TIMES.  `_dead_time_floor_ns` builds the device's own floor from them
+(AN2025-10 §7: `max t_d_off + max t_f − min t_d_on`) and reports it beside the
+value used; the gate driver's propagation mismatch and the layout add to it and
+neither is on the card.  The runs use **0.5 µs**, Stage 1's design value, and
+the record says it is one.
+
+---
+
 ## 8 · Stage 3 — the six-coil H-bridge study
 
 The topology is already available and already costed (§6). What Stage 3 adds

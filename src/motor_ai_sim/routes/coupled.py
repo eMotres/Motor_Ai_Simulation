@@ -448,9 +448,25 @@ def _magnet_reference_temp_c() -> Optional[float]:
 # modulator, the settled DC anchor — at the loop's current temperatures, and the
 # per-element loss map THAT run produces is what the thermal half solves on.
 # ``drive`` absent, or "sine"/"current", is byte-for-byte today's loop.
+#
+# …and from 2026-09-22 a THIRD: ``drive: "inverter"`` is the CONTROLLER's own
+# bridge — the same modulator with the dead time and the device drops of a
+# named part, iterated against the junction temperature those losses produce
+# (Controller Stage 2, docs/CONTROLLER_MODULE_2026-09-22.md §7).  It is a new
+# drive and NOT a change to the second: a stored ``drive: "pwm"`` record keeps
+# its answer and a duty re-solved on ``pwm`` gives the same numbers it always
+# did.  ``"inverter"`` used to be an ALIAS of ``"pwm"``; it now means the
+# Controller, which is the one place a PWM excitation is described from here on
+# (owner: *«всё будет задаваться в меню Controller»*).
 _DRIVE_ALIASES = {"": "current", "sine": "current", "sinusoid": "current",
                   "current": "current", "pwm": "pwm", "pwm_voltage": "pwm",
-                  "inverter": "pwm"}
+                  "ideal_pwm": "pwm",
+                  "inverter": "inverter", "controller": "inverter"}
+
+#: The two drives that are a CHOPPED BRIDGE — everything the loop does about a
+#: carrier, a DC link, a modulation ceiling, a loss map and a current regulator
+#: is asked of this set rather than of the word "pwm".
+_BRIDGE_DRIVES = ("pwm", "inverter")
 
 #: Samples of the FEM march per carrier period.  The study's two measured
 #: carriers were solved at 280 steps over 14 carriers (20.0) and 600 over 29
@@ -467,15 +483,17 @@ _PWM_SCHEDULES = {"mixed": "1", "fine": "0"}
 
 
 def _coupled_drive(body: Dict[str, Any]) -> str:
-    """``"current"`` (the sinusoid) or ``"pwm"`` (the inverter) — validated."""
+    """``"current"``, ``"pwm"`` or ``"inverter"`` — validated."""
     raw = str(body.get("drive") or "").strip().lower()
     d = _DRIVE_ALIASES.get(raw)
     if d is None:
         raise _refuse(
             "drive=%r is not something this loop can run: the electromagnetic "
-            "half is either the sinusoidal CURRENT drive (\"sine\", the default) "
-            "or the two-level inverter (\"pwm\"). An imposed sinusoidal voltage "
-            "has no carrier to measure and is not offered here." % (body.get("drive"),),
+            "half is the sinusoidal CURRENT drive (\"sine\", the default), the "
+            "IDEAL two-level inverter (\"pwm\"), or the CONTROLLER's own bridge "
+            "(\"inverter\" — the Controller menu's device, dead time and drops). "
+            "An imposed sinusoidal voltage has no carrier to measure and is not "
+            "offered here." % (body.get("drive"),),
             ["drive"], code="unknown_drive")
     return d
 
@@ -1939,6 +1957,492 @@ def _pwm_dc_verdict(inv: Dict[str, Any], summary: Dict[str, Any]) -> tuple:
 _V1_FIRST_STEP_GAIN = 0.3
 
 
+# ---------------------------------------------------------------------------
+# STAGE 2 — THE CONTROLLER AS THE DRIVE (2026-09-22)
+# ---------------------------------------------------------------------------
+# Owner: *«как закончишь лимиты, запускай каплинг — сначала стандартный инвертор
+# на L155 motor»*, and, the decision that shapes it: *«как отладим каплинг с
+# контроллером, нам не нужен будет PWM в электромагнитном моделировании — всё
+# будет задаваться в меню Controller»*.
+#
+# WHAT THIS ADDS TO ``drive: "pwm"`` is the DEVICE, and with it a second fixed
+# point.  The fundamental regulator (``_regulate_v1``) and every ceiling, every
+# DC gate and every loss-map path are reused unchanged; what is new is:
+#
+#   1. the excitation carries the dead-time clamp and the channel/diode drops of
+#      a real part (``inverter/coupling.py``), decided by the current the solver
+#      has just measured — so the inner controller↔machine loop is closed at the
+#      FEM time-step level, not by an outer relaxation;
+#   2. the losses those currents cause in the DEVICES set a junction
+#      temperature, that temperature moves ``R_DS(on)`` and ``V_SD``, and the
+#      next pass is solved with the moved numbers.  ``T_j`` is therefore a
+#      residual of this loop exactly as the winding and the magnets are, and it
+#      is tested with them.
+#
+# It costs NO extra electromagnetic run: the controller solve is arithmetic over
+# a card and it rides on the pass the loop was going to make anyway.
+
+#: Junction-temperature band the coupled loop closes on [K].  Two kelvin, not
+#: the controller module's own 0.1 K: that tolerance is the inner solve's
+#: (how exactly ONE controller solve settles against its coldplate), while this
+#: one is the OUTER loop's, and a device whose R_DS(on) moves 0.6 % per kelvin
+#: does not need the outer loop chased to a tenth.  Two kelvin is ~1.2 % of the
+#: channel resistance, which is inside the figure-read tolerance of the curve
+#: it comes from.
+CONTROLLER_TJ_TOL_K = 2.0
+
+#: The dead time used when neither the request nor the duty's stored controller
+#: record names one [µs].  The IMCQ120R004M2H datasheet publishes no
+#: RECOMMENDED dead time — it publishes switching TIMES, from which AN2025-10
+#: eqs. (22)-(26) build a minimum — so this is Stage 1's design value and it is
+#: reported as one.  ``_dead_time_floor_ns`` below states the device's own
+#: floor beside it, so the margin is visible rather than asserted.
+CONTROLLER_DEAD_TIME_US = 0.5
+
+
+def _dead_time_floor_ns(card) -> Optional[float]:
+    """The device's own dead-time floor [ns], from its switching times.
+
+    AN2025-10 §7: the low side must be fully off before the high side turns on,
+    so the window has to cover the worst turn-OFF delay less the best turn-ON
+    delay.  The card tabulates ``t_d_off`` and ``t_d_on`` at 25 and 175 °C, and
+    the worst pairing of the two is what a design has to clear:
+
+        ``t_dead,min = max(t_d_off) + max(t_f) − min(t_d_on)``
+
+    It is the DEVICE's floor only: the gate driver's own propagation-delay
+    mismatch and the layout add to it, and neither is on this card.  ``None``
+    when the card does not publish the times.
+    """
+    try:
+        t = ((card.doc.get("switching") or {}).get("times_ns")) or {}
+        def _mx(name, fn):
+            blk = t.get(name) or {}
+            vals = [float(v) for k, v in blk.items()
+                    if k.startswith("t_j_") and v is not None]
+            return fn(vals) if vals else None
+        off, fall, on = _mx("t_d_off", max), _mx("t_f", max), _mx("t_d_on", min)
+        if off is None or on is None:
+            return None
+        return float(off) + float(fall or 0.0) - float(on)
+    except Exception:                                       # noqa: BLE001
+        return None
+
+
+def _controller_settings(body: Dict[str, Any], *, rpm: float,
+                         inverter: Dict[str, Any]) -> Dict[str, Any]:
+    """The CONTROLLER this coupled run is driven by, fully resolved.
+
+    ``body["controller"]`` carries what the Controller tab carries — ``device``,
+    ``topology``, ``devices_parallel``, ``dead_time_us``, the gate drive, the
+    coldplate — and every field that is absent falls back, in order, to the
+    duty's own stored ``controller`` record (the Stage 1 solve the tab left
+    behind) and then to a NAMED default.  Where each one came from is reported
+    in ``sources`` and travels into the coupled record, because a controller
+    whose device nobody can name is not a measurement of anything.
+
+    The carrier, the DC link and the fundamental are NOT here: they are the
+    inverter block's, resolved by :func:`_inverter_settings` exactly as the
+    ideal-PWM path resolves them, so the two drives cannot disagree about which
+    bus this machine runs on.
+    """
+    from motor_ai_sim.inverter.devices import CardError, get_device
+    from motor_ai_sim.inverter.losses import (DEFAULT_TIM_K_W, E_OSS_POLICIES,
+                                              SET_SPLITS)
+
+    raw = body.get("controller")
+    req = dict(raw) if isinstance(raw, dict) else {}
+    stored = _duty_controller_record()
+    st_set = dict((stored.get("settings") or {})) if stored else {}
+    st_top = dict((stored.get("topology") or {})) if stored else {}
+    src: Dict[str, str] = {}
+
+    def _pick(key, stored_val, default, where_stored, where_default):
+        if req.get(key) is not None:
+            src[key] = "the request"
+            return req[key]
+        if stored_val is not None:
+            src[key] = where_stored
+            return stored_val
+        src[key] = where_default
+        return default
+
+    device = _pick("device", stored.get("device") if stored else None, None,
+                   "the duty's stored controller solve", "")
+    if not device:
+        raise _refuse(
+            "drive='inverter' is the CONTROLLER's bridge and it needs a device: "
+            "send controller.device (a part in config/devices), or solve this "
+            "duty once in the Controller tab so its record carries one.  For an "
+            "IDEAL two-level bridge use drive='pwm' — both stay available and "
+            "both stay readable.",
+            ["controller.device"], code="controller_no_device")
+    try:
+        card = get_device(str(device))
+    except CardError as exc:
+        raise _refuse(str(exc), ["controller.device"], code="unknown_device")
+
+    topology = str(_pick("topology", st_top.get("preset"), "one_3ph",
+                         "the duty's stored controller solve",
+                         "the standard three-phase bridge") or "one_3ph")
+    n_par = int(_pick("devices_parallel", st_set.get("devices_parallel"), 1,
+                      "the duty's stored controller solve", "one per switch")
+                or 1)
+    if n_par < 1:
+        raise _refuse("controller.devices_parallel must be at least 1",
+                      ["controller.devices_parallel"])
+    dead_us = float(_pick("dead_time_us", st_set.get("dead_time_us"),
+                          CONTROLLER_DEAD_TIME_US,
+                          "the duty's stored controller solve",
+                          "this module's stated default (the card publishes "
+                          "switching times, not a recommended dead time)"))
+    if dead_us < 0.0:
+        raise _refuse("controller.dead_time_us cannot be negative",
+                      ["controller.dead_time_us"])
+    v_gs_on = float(_pick("v_gs_on_V", st_set.get("v_gs_on_V"), 18.0,
+                          "the duty's stored controller solve",
+                          "the card's recommended gate-on voltage"))
+    v_gs_off = float(_pick("v_gs_off_V", st_set.get("v_gs_off_V"), 0.0,
+                           "the duty's stored controller solve",
+                           "a 0 V gate-off drive"))
+    r_g = _pick("r_g_ext_ohm", st_set.get("r_g_ext_ohm"), None,
+                "the duty's stored controller solve",
+                "the datasheet's own R_G,ext")
+    policy = str(_pick("e_oss_policy", None, "included_in_eon", "", "the "
+                       "module default — the datasheet E_on already contains "
+                       "the C_oss discharge") or "included_in_eon")
+    if policy not in E_OSS_POLICIES:
+        raise _refuse("controller.e_oss_policy must be "
+                      + " or ".join(E_OSS_POLICIES),
+                      ["controller.e_oss_policy"])
+    split = str(_pick("set_split", None, "series_split", "",
+                      "the module default") or "series_split")
+    if split not in SET_SPLITS:
+        raise _refuse("controller.set_split must be " + " or ".join(SET_SPLITS),
+                      ["controller.set_split"])
+    cooling = req.get("cooling")
+    if cooling is None and stored:
+        cooling = ((stored.get("thermal") or {}).get("coldplate"))
+        if isinstance(cooling, dict):
+            cooling = {k: v for k, v in cooling.items()
+                       if k in ("coolant", "flow_lpm", "t_in_c", "n_channels",
+                                "channel_w_mm", "channel_h_mm", "length_mm",
+                                "fin_area_factor", "r_override_k_w")}
+        src["cooling"] = "the duty's stored controller solve"
+    elif cooling is not None:
+        src["cooling"] = "the request"
+    else:
+        src["cooling"] = "the module's default micro-channel coldplate"
+    r_tim = float(_pick("r_tim_k_w", st_set.get("r_tim_k_w"), DEFAULT_TIM_K_W,
+                        "the duty's stored controller solve",
+                        "the module's stated default thermal interface"))
+
+    floor_ns = _dead_time_floor_ns(card)
+    notes: List[str] = []
+    if floor_ns and dead_us * 1e3 < floor_ns:
+        notes.append(
+            "the %.3g us dead time is BELOW the %.0f ns this card's own "
+            "switching times demand (t_d_off + t_f - t_d_on, AN2025-10 "
+            "eqs. 22-26) — before the gate driver's propagation mismatch is "
+            "counted at all" % (dead_us, floor_ns))
+    return {
+        "device": card.part,
+        "topology": topology,
+        "devices_parallel": n_par,
+        "dead_time_us": dead_us,
+        "dead_time_floor_ns": (None if floor_ns is None
+                               else round(float(floor_ns), 1)),
+        "v_gs_on_V": v_gs_on, "v_gs_off_V": v_gs_off,
+        "r_g_ext_ohm": (None if r_g is None else float(r_g)),
+        "e_oss_policy": policy, "set_split": split,
+        "cooling": cooling or {}, "r_tim_k_w": r_tim,
+        "h_bridge_modulation": str(req.get("h_bridge_modulation")
+                                   or st_top.get("h_bridge_modulation")
+                                   or "unipolar"),
+        "mapping": req.get("mapping"),
+        "devices_parallel_by_bridge": req.get("devices_parallel_by_bridge"),
+        # The junction temperature the FIRST pass reads the card at.  A start,
+        # not an answer: pass 2 onward uses what the previous pass solved.
+        "t_j_start_c": float(req.get("t_j_start_c")
+                             or (stored.get("thermal") or {}).get("t_j_max_c")
+                             or 120.0) if stored else float(
+            req.get("t_j_start_c") or 120.0),
+        "notes": notes,
+        "sources": src,
+    }
+
+
+def _duty_controller_record() -> Dict[str, Any]:
+    """The Stage 1 controller solve stored on the duty the context names.
+
+    ``{}`` when nothing is loaded or the duty has never been through the
+    Controller tab — which is not an error: the request may carry everything.
+    """
+    try:
+        from motor_ai_sim.duty_results import active_context, get as _dr_get
+        ctx = active_context()
+        if not ctx:
+            return {}
+        die, cfg, duty = ctx
+        node = (_dr_get(str(die), str(cfg)) or {}).get(str(duty)) or {}
+        blk = node.get("controller")
+        return dict(blk) if isinstance(blk, dict) else {}
+    except Exception:                                       # noqa: BLE001
+        log.debug("coupled: could not read the duty's controller record",
+                  exc_info=True)
+        return {}
+
+
+class _ControllerLoop:
+    """The controller half of a ``drive: "inverter"`` run, pass by pass.
+
+    It owns exactly two things: the :class:`DeviceDrop` the next
+    electromagnetic run is solved with, and the last controller solve those
+    currents produced.  Everything else — the carrier, the bus, the
+    fundamental, the regulator — belongs to the inverter block beside it.
+    """
+
+    def __init__(self, cfg: Dict[str, Any], *, inverter: Dict[str, Any],
+                 star_delta: str, rpm: float, pole_pairs: int):
+        from motor_ai_sim.inverter.coupling import fit_device_drop
+        from motor_ai_sim.inverter.devices import get_device
+
+        self.cfg = dict(cfg)
+        self.inverter = inverter
+        self.star_delta = str(star_delta or "star").lower()
+        self.rpm = float(rpm)
+        self.pole_pairs = int(pole_pairs)
+        self.card = get_device(str(cfg["device"]))
+        self.t_j_c = float(cfg.get("t_j_start_c") or 120.0)
+        self.solve: Dict[str, Any] = {}
+        self.passes: List[Dict[str, Any]] = []
+        self.warnings: List[str] = list(cfg.get("notes") or [])
+        # The first pass has no solved current yet, so the drop is fitted at
+        # the fundamental the duty is AIMED at — stated, and replaced by the
+        # solved one from pass 2.
+        i_target = float(inverter.get("target_I_phase_rms_A") or 0.0)
+        i_leg = i_target * (math.sqrt(3.0)
+                            if self.star_delta == "delta" else 1.0)
+        self.drop = fit_device_drop(
+            self.card, t_j_c=self.t_j_c,
+            n_parallel=int(cfg["devices_parallel"]),
+            i_leg_peak_A=max(i_leg * math.sqrt(2.0), 1.0),
+            v_gs_on_V=float(cfg["v_gs_on_V"]),
+            v_gs_off_V=float(cfg["v_gs_off_V"]),
+            dead_time_s=float(cfg["dead_time_us"]) * 1e-6)
+
+    # ── what the electromagnetic run needs ────────────────────────────────
+    def run_kwargs(self) -> Dict[str, Any]:
+        """The four physics scalars and the provenance beside them."""
+        d = self.drop
+        return dict(
+            inv_r_ds_ohm=float(d.r_ds_ohm),
+            inv_v_sd_v0_V=float(d.v_sd_v0_V),
+            inv_v_sd_rd_ohm=float(d.v_sd_rd_ohm),
+            inv_dead_time_us=float(d.dead_time_s) * 1e6,
+            inv_device=str(d.device),
+            inv_devices_parallel=int(d.devices_parallel),
+            inv_t_j_c=float(d.t_j_c),
+            inv_topology=str(self.cfg.get("topology") or "one_3ph"))
+
+    def snap_excitation(self) -> str:
+        """The snapshot key's ``excitation`` field — spelled EXACTLY as
+        ``get_fem_transient`` spells it for this drive."""
+        d = self.drop
+        return ("%g/%g/%g/%g/%g/%g"
+                % (float(self.inverter["v_dc_V"]),
+                   float(self.inverter["f_carrier_hz"]),
+                   float(d.r_ds_ohm), float(d.v_sd_v0_V),
+                   float(d.v_sd_rd_ohm), float(d.dead_time_s) * 1e6))
+
+    # ── and what comes back ───────────────────────────────────────────────
+    def step(self, em: Dict[str, Any], *, it: int) -> Optional[float]:
+        """Solve the controller on THIS pass's answer; return ``ΔT_j`` [K].
+
+        ``None`` when the pass carried nothing to solve on — the loop then
+        treats the junction temperature as un-moved rather than inventing a
+        residual.
+        """
+        from motor_ai_sim.inverter.coupling import fit_device_drop
+        from motor_ai_sim.inverter.losses import ControllerRefusal, solve_controller
+
+        req = self._solve_request(em)
+        if req is None:
+            return None
+        try:
+            out = solve_controller(req)
+        except ControllerRefusal as exc:
+            # A controller that cannot be solved does not kill a solved
+            # electromagnetic pass: the machine's own answer stands, the
+            # devices are reported as unsolved, and the run says why.
+            self.warnings.append(
+                "the controller could not be solved on pass %d: %s" % (it, exc))
+            log.warning("coupled: controller solve refused on pass %d: %s",
+                        it, exc)
+            return None
+        self.solve = out
+        t_new = float((out.get("thermal") or {}).get("t_j_max_c")
+                      or self.t_j_c)
+        d_tj = t_new - self.t_j_c
+        self.t_j_c = t_new
+        self.drop = fit_device_drop(
+            self.card, t_j_c=t_new,
+            n_parallel=int(self.cfg["devices_parallel"]),
+            i_leg_peak_A=max(float((out.get("point") or {}).get(
+                "i_leg_rms_3ph_A") or 0.0) * math.sqrt(2.0), 1.0),
+            v_gs_on_V=float(self.cfg["v_gs_on_V"]),
+            v_gs_off_V=float(self.cfg["v_gs_off_V"]),
+            dead_time_s=float(self.cfg["dead_time_us"]) * 1e-6)
+        self.passes.append({
+            "iter": int(it),
+            "t_j_c": round(t_new, 2),
+            "d_t_j_K": round(d_tj, 3),
+            "p_inverter_W": (out.get("losses") or {}).get("total_W"),
+            "eta_inverter": (out.get("efficiency") or {}).get("inverter"),
+            "eta_wall_to_shaft": (out.get("efficiency") or {}).get(
+                "wall_to_shaft"),
+            "r_ds_on_mohm_device": round(self.drop.r_ds_on_mohm_device, 3),
+            "limits_verdict": out.get("limits_verdict"),
+        })
+        return d_tj
+
+    def _solve_request(self, em: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """The controller solve's inputs, from the electromagnetic pass.
+
+        EVERY number is the run's own: the current the machine drew, the power
+        it drew it at, the modulation index the modulator reported and the ONE
+        shaft efficiency of this pass.  Nothing is read from
+        ``motor_config.yaml`` and nothing is re-derived from a nameplate.
+        """
+        s = em.get("summary") or {}
+        i_ph = em.get("I_phase_rms_solved_A") or s.get("I1_phase_rms_A")
+        eta = s.get("efficiency_shaft")
+        p_loss = s.get("P_loss_total_incl_mech_W") or s.get("P_loss_total_W")
+        if not i_ph or not p_loss:
+            return None
+        try:
+            i_ph = float(i_ph)
+            p_loss = float(p_loss)
+        except (TypeError, ValueError):
+            return None
+        eta_f = None
+        p_ac = None
+        if eta is not None and 0.0 < float(eta) < 1.0:
+            eta_f = float(eta)
+            p_ac = p_loss * eta_f / (1.0 - eta_f) + p_loss
+        if p_ac is None or not (p_ac > 0.0):
+            return None
+        pwm = em.get("pwm") if isinstance(em.get("pwm"), dict) else {}
+        if not pwm:
+            exc = em.get("excitation")
+            pwm = (exc.get("pwm") or {}) if isinstance(exc, dict) else {}
+        m = pwm.get("modulation_index")
+        f_el = float(self.rpm) * self.pole_pairs / 60.0
+        try:
+            from motor_ai_sim.config import get_config
+            geo = dict((get_config().get("geometry") or {}))
+            wnd = dict((get_config().get("winding") or {}))
+        except Exception:                                   # noqa: BLE001
+            geo, wnd = {}, {}
+        cfg = self.cfg
+        req: Dict[str, Any] = {
+            "num_slots": geo.get("num_slots"),
+            "num_poles": geo.get("num_poles"),
+            "single_layer": int(wnd.get("layers") or 1) == 1,
+            "star_delta": self.star_delta,
+            "device": cfg["device"],
+            "devices_parallel": int(cfg["devices_parallel"]),
+            "topology": cfg["topology"],
+            "set_split": cfg["set_split"],
+            "h_bridge_modulation": cfg["h_bridge_modulation"],
+            "mapping": cfg.get("mapping"),
+            "devices_parallel_by_bridge": cfg.get("devices_parallel_by_bridge"),
+            "v_dc_V": float(self.inverter["v_dc_V"]),
+            "f_carrier_hz": float(self.inverter["f_carrier_hz"]),
+            "dead_time_us": float(cfg["dead_time_us"]),
+            "v_gs_on_V": float(cfg["v_gs_on_V"]),
+            "v_gs_off_V": float(cfg["v_gs_off_V"]),
+            "r_g_ext_ohm": cfg.get("r_g_ext_ohm"),
+            "e_oss_policy": cfg["e_oss_policy"],
+            "cooling": cfg.get("cooling") or {},
+            "r_tim_k_w": float(cfg["r_tim_k_w"]),
+            "i_phase_rms_A": i_ph,
+            "p_ac_W": p_ac,
+            "f_elec_hz": f_el,
+            "rpm": self.rpm,
+            "efficiency_shaft": eta_f,
+            "t_j_start_c": self.t_j_c,
+        }
+        if m:
+            req["modulation_index"] = float(m)
+        else:
+            req["power_factor"] = 0.95
+        return req
+
+    # ── the record ────────────────────────────────────────────────────────
+    def record(self, em: Dict[str, Any]) -> Dict[str, Any]:
+        """The ``controller`` block a coupled record carries.
+
+        The Stage 1 solve's own shape, trimmed of the waveform arrays (the
+        record is not a place for a thousand samples), plus what only a COUPLED
+        run knows: which pass it settled on, how far the junction temperature
+        still was, and the excitation the machine was really fed.
+        """
+        out = dict(self.solve or {})
+        out.pop("waveforms", None)
+        nonideal = {}
+        pwm = em.get("pwm") if isinstance(em.get("pwm"), dict) else {}
+        if not pwm:
+            exc = em.get("excitation")
+            pwm = (exc.get("pwm") or {}) if isinstance(exc, dict) else {}
+        if isinstance(pwm.get("nonideal"), dict):
+            nonideal = dict(pwm["nonideal"])
+        d = self.drop
+        out.update({
+            "source": "controller",
+            "stage": 2,
+            "coupled": True,
+            "settings_resolved": {
+                k: self.cfg.get(k) for k in
+                ("device", "topology", "devices_parallel", "dead_time_us",
+                 "dead_time_floor_ns", "v_gs_on_V", "v_gs_off_V",
+                 "r_g_ext_ohm", "e_oss_policy", "set_split", "r_tim_k_w")},
+            "sources": dict(self.cfg.get("sources") or {}),
+            "t_j_c": round(float(self.t_j_c), 2),
+            "t_j_tol_K": CONTROLLER_TJ_TOL_K,
+            "t_j_residual_K": (round(float(self.passes[-1]["d_t_j_K"]), 3)
+                               if self.passes else None),
+            "passes": list(self.passes),
+            "excitation": nonideal,
+            "device_drop": d.as_dict(),
+            "warnings": list(self.warnings)
+                        + list((self.solve or {}).get("warnings") or []),
+            "note": (
+                "the machine was solved on the CONTROLLER's own waveform — "
+                "%s x%d at %.3g us dead time on a %.1f V link — and these "
+                "device losses are the ones that waveform's currents cause; "
+                "the junction temperature they set moved R_DS(on) and V_SD for "
+                "the next pass, so the two halves are one fixed point"
+                % (d.device, d.devices_parallel, d.dead_time_s * 1e6,
+                   float(self.inverter["v_dc_V"]))),
+            # WHAT IS EXACT AND WHAT IS NOT, on the device side.  The loss model
+            # is handed the SOLVED rms — the ripple is in it — so the CONDUCTION
+            # term is exact (it depends on <i^2> and on nothing else).  The
+            # third-quadrant and switching terms are integrated on a SINUSOID of
+            # that rms rather than on the rippled waveform itself: the shape
+            # decides which instantaneous current each edge switches, and the
+            # ripple's own contribution to that averages toward zero over a
+            # period but does not vanish.  Named rather than left implied.
+            "model_note": (
+                "conduction is billed on the run's own solved rms (the "
+                "switching ripple is in it and it is the only thing I^2R "
+                "depends on); the dead-time and switching integrals run on a "
+                "SINUSOID of that rms, so the instantaneous current at each "
+                "commutation is the fundamental's and not the rippled one"),
+        })
+        return out
+
+
 def _pwm_snap_excitation(inv: Dict[str, Any]) -> str:
     """The snapshot key's ``excitation`` field for this inverter — spelled
     EXACTLY as ``get_fem_transient`` spells it when it stores the snapshot
@@ -1963,6 +2467,7 @@ class _NoLossMap(Exception):
 def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
             magnet_temp_c: Optional[float],
             inverter: Optional[Dict[str, Any]] = None,
+            controller: Optional["_ControllerLoop"] = None,
             fresh: bool = False, ledger: bool = False) -> Dict[str, Any]:
     """ONE Electromagnetic run — the same call the Run button makes.
 
@@ -2055,6 +2560,16 @@ def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
     # back afterwards — a coupled run must not leave the process configured
     # for the next request.
     kw.update(_pwm_run_kwargs(inverter))
+    if controller is not None:
+        # STAGE 2.  The SAME arguments the ideal bridge takes, plus the device:
+        # four physics scalars (the leg's channel resistance at the junction
+        # temperature the controller last converged on, the body-diode fit and
+        # the dead time) and the provenance the record prints.  Nothing else
+        # changes — the carrier, the link and the fundamental are the inverter
+        # block's, so an "inverter" run and a "pwm" run of one duty differ in
+        # exactly the thing they are supposed to differ in.
+        kw["drive"] = "inverter"
+        kw.update(controller.run_kwargs())
     _prev = os.environ.get("SB_PWM_COARSE_SETTLE")
     os.environ["SB_PWM_COARSE_SETTLE"] = _PWM_SCHEDULES[inverter["schedule"]]
     try:
@@ -2068,8 +2583,9 @@ def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
 
 def _pwm_loss_map(body: Dict[str, Any], em: Dict[str, Any],
                   inv: Dict[str, Any], *, coil_temp_c: float,
-                  magnet_temp_c: Optional[float]) -> Tuple[Dict[str, Any],
-                                                           Dict[str, Any]]:
+                  magnet_temp_c: Optional[float],
+                  controller: Optional["_ControllerLoop"] = None
+                  ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """The PWM run's own per-element loss map, in the payload shape the thermal
     solve reads — and its provenance.
 
@@ -2123,8 +2639,9 @@ def _pwm_loss_map(body: Dict[str, Any], em: Dict[str, Any],
         demag=bool(body.get("demag", False)),
         rotor_angle_deg=_f(body, "rotor_angle_deg", 0.0),
         geo=body.get("geo"),
-        snap_drive="pwm_voltage",
-        snap_excitation=_pwm_snap_excitation(inv),
+        snap_drive=("inverter" if controller is not None else "pwm_voltage"),
+        snap_excitation=(controller.snap_excitation() if controller is not None
+                         else _pwm_snap_excitation(inv)),
         use_transient_snapshot=True, snapshot_only=True,
         latest_run_field=False)
     out = _sim.get_fem_field2d(**probe) or {}
@@ -2151,8 +2668,15 @@ def _pwm_loss_map(body: Dict[str, Any], em: Dict[str, Any],
         # …and the two fields the THERMAL record reads off its own
         # `loss_source`, so the temperature column can say which excitation it
         # belongs to without having to find the coupled record beside it.
-        "drive": "pwm",
+        "drive": ("inverter" if controller is not None else "pwm"),
         "inverter": _inverter_record(em, inv),
+        **({"controller": {
+            "device": controller.drop.device,
+            "devices_parallel": controller.drop.devices_parallel,
+            "t_j_c": round(float(controller.t_j_c), 2),
+            "dead_time_us": round(controller.drop.dead_time_s * 1e6, 3),
+            "topology": controller.cfg.get("topology")}}
+           if controller is not None else {}),
         "note": ("per-element loss density of THIS coupled iteration's PWM run "
                  "(%.0f Hz carrier on a %.1f V link, %d steps/period = %.1f per "
                  "carrier): the copper term is the coupled eddy solve's own "
@@ -3242,7 +3766,20 @@ def _run(body: Dict[str, Any],
     # is a 422 in milliseconds, not after a transient.
     drive = _coupled_drive(body)
     inverter = (_inverter_settings(body, rpm=rpm_eff)
-                if drive == "pwm" else None)
+                if drive in _BRIDGE_DRIVES else None)
+    # …and, on the CONTROLLER's bridge, the device behind it.  Resolved with the
+    # inverter block and before the lock, for the same reason: a controller with
+    # no device is a 422 in milliseconds, not after a transient.
+    ctl: Optional["_ControllerLoop"] = None
+    if drive == "inverter":
+        _ctl_cfg = _controller_settings(body, rpm=rpm_eff, inverter=inverter)
+        _ctl_sd = str(body.get("star_delta") or "").strip().lower()
+        if not _ctl_sd:
+            from motor_ai_sim.routes.simulation import (
+                _effective_star_delta as _esd2)
+            _ctl_sd = _esd2(None)
+        ctl = _ControllerLoop(_ctl_cfg, inverter=inverter, star_delta=_ctl_sd,
+                              rpm=rpm_eff, pole_pairs=_pole_pairs(body))
     # …and the carrier, resolved WITH the run and before anything else can move
     # the shared configuration under it (2026-09-14).  It reaches the modal and
     # rotordynamic steps explicitly and is stored in their records.
@@ -3291,6 +3828,11 @@ def _run(body: Dict[str, Any],
     point_err: Optional[float] = None
     point_off = False
     v1_ran: Optional[float] = None   # the fundamental the last pass really ran at
+    # THE JUNCTION TEMPERATURE's own residual [K].  `None` on every drive but
+    # the Controller's, and `None` on a pass whose controller could not be
+    # solved — in both cases the convergence test below is the one it always
+    # was, which is what "nothing else changed" has to mean.
+    d_tj: Optional[float] = None
     ripple_quotable = True           # …until a pass comes back carrying DC
     dc_notes: List[str] = []
     refusal: Optional[str] = None    # a later pass's EM refusal, verbatim
@@ -3334,7 +3876,7 @@ def _run(body: Dict[str, Any],
                 # asks, and `history_fresh` (this run's own "Recompute") shuts
                 # it even there.
                 em = _em_run(body, coil_temp_c=t_coil, magnet_temp_c=t_mag,
-                             inverter=inverter,
+                             inverter=inverter, controller=ctl,
                              ledger=(it == 1 and not history_fresh))
             except HTTPException as exc:
                 if not history:
@@ -3418,7 +3960,7 @@ def _run(body: Dict[str, Any],
                 try:
                     _em_map, _em_src = _pwm_loss_map(
                         body, em, inverter, coil_temp_c=t_coil,
-                        magnet_temp_c=t_mag)
+                        magnet_temp_c=t_mag, controller=ctl)
                 except _NoLossMap as _nm:
                     # SOLVE, don't refuse.  A run that was answered from a
                     # store left no field behind it; ONE forced solve is the
@@ -3436,13 +3978,13 @@ def _run(body: Dict[str, Any],
                     try:
                         em = _em_run(body, coil_temp_c=t_coil,
                                      magnet_temp_c=t_mag, inverter=inverter,
-                                     fresh=True)
+                                     controller=ctl, fresh=True)
                     finally:
                         _ml.BEARING_TEMP_C.reset(_tok2)
                     try:
                         _em_map, _em_src = _pwm_loss_map(
                             body, em, inverter, coil_temp_c=t_coil,
-                            magnet_temp_c=t_mag)
+                            magnet_temp_c=t_mag, controller=ctl)
                     except _NoLossMap as _nm2:
                         raise _refuse(
                             "the PWM electromagnetic run left no per-element "
@@ -3568,6 +4110,22 @@ def _run(body: Dict[str, Any],
                 # …and RE-AIM at the duty's current for the next pass.  Applied
                 # here, between the map and the next electromagnetic run, so it
                 # costs nothing: the loop was going to solve again anyway.
+                # THE DEVICES, on the current this pass actually drew.  It
+                # costs no solve — arithmetic over a card — and the junction
+                # temperature it lands on is what the NEXT electromagnetic run
+                # reads R_DS(on) and V_SD at, which is the second fixed point
+                # this drive closes.
+                if ctl is not None:
+                    d_tj = ctl.step(em, it=it)
+                    history[-1]["T_junction_c"] = round(float(ctl.t_j_c), 2)
+                    if d_tj is not None:
+                        history[-1]["d_T_junction_K"] = round(float(d_tj), 3)
+                    if ctl.solve:
+                        history[-1]["P_inverter_W"] = (
+                            ctl.solve.get("losses") or {}).get("total_W")
+                        history[-1]["eta_wall_to_shaft"] = (
+                            ctl.solve.get("efficiency") or {}).get(
+                                "wall_to_shaft")
                 _next = _regulate_v1(inverter, _i_solved, v1_pts)
                 if _next is not None:
                     log.info("coupled: re-aiming the fundamental %.3f -> %.3f V "
@@ -3678,8 +4236,14 @@ def _run(body: Dict[str, Any],
             # its ED is still walking has not converged on anything.  The band
             # is one percentage point (`coupled_duty_cycle.ED_TOL_PCT`), which
             # on a 60 s cycle is 0.6 s of on-time.
+            # …and on the CONTROLLER's bridge the JUNCTION TEMPERATURE is the
+            # sixth (2026-09-22): the devices' own losses set it, it moves
+            # R_DS(on) by ~0.6 %/K and V_SD with it, and those move the waveform
+            # the machine is fed — so a loop whose copper has settled while its
+            # silicon is still climbing has not closed the excitation.
             if (abs(d_coil) < tol and abs(d_mag) < tol
                     and (d_brg is None or abs(d_brg) < BEARING_TOL_K)
+                    and (d_tj is None or abs(d_tj) < CONTROLLER_TJ_TOL_K)
                     and not point_off
                     and (regime is None
                          or _cdc.regime_settled(prev_regime, regime))):
@@ -4204,7 +4768,13 @@ def _run(body: Dict[str, Any],
             _progress.update(phase="catalogue constants — the same machine at "
                                    "%g °C" % COLD_CONSTANTS_C)
             constants_20c = _cold_constants_step(
-                body, rpm=rpm_eff, drive=drive, inverter=inverter)
+                body, rpm=rpm_eff,
+                # The catalogue constants are a MEASUREMENT of the machine, not
+                # of its power stage: a 20 °C pass is run on whichever bridge
+                # the loop used, and "inverter" is spelled "pwm" to that step
+                # because it takes the ideal modulator's arguments.
+                drive=("pwm" if drive == "inverter" else drive),
+                inverter=inverter)
             if constants_20c:
                 log.info("coupled: constants at %g degC — KV %s rpm/V, Kt %s "
                          "N·m/A (line), Km %s N·m/sqrt(W), Km/kg %s",
@@ -4336,10 +4906,18 @@ def _run(body: Dict[str, Any],
         # report that finds no `drive` is reading a record from before the
         # inverter existed, and that is a sinusoid; a record that says "pwm"
         # carries the `inverter` block beside it and nothing has to be inferred.
-        "drive": ("pwm" if inverter is not None else "sine"),
+        "drive": ("inverter" if ctl is not None
+                  else "pwm" if inverter is not None else "sine"),
         **({"inverter": _inverter_record(em, _record_inverter(inverter, v1_ran),
                                          ripple_quotable=ripple_quotable)}
            if inverter is not None else {}),
+        # ── THE CONTROLLER (Stage 2) ───────────────────────────────────────
+        # The devices' own losses, their junction temperature, the datasheet
+        # verdict and BOTH efficiencies, from the SAME run the machine's
+        # numbers above came from.  The `inverter` block beside it keeps its
+        # meaning unchanged — carrier, link, modulation, the settled DC — and
+        # this block says which power stage applied them.
+        **({"controller": ctl.record(em)} if ctl is not None else {}),
         # THE LAST RUN's electromagnetic numbers, in the block itself.  Not a
         # duplicate for its own sake: the per-duty record keeps this block and
         # drops the transient beside it, and "sine → PWM at the same point"

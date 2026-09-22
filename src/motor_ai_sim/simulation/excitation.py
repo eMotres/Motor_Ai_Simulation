@@ -63,7 +63,12 @@ __all__ = [
     "BldcCurrentSource", "CustomCurrentSource", "make_source", "DRIVES",
 ]
 
-DRIVES = ("current", "voltage", "pwm_voltage", "custom_current",
+#: ``inverter`` (2026-09-22, Controller Stage 2) is the SAME bridge as
+#: ``pwm_voltage`` with dead time and device drops taken from a real device
+#: card — the excitation the Controller menu describes.  It is a THIRD drive
+#: and not a change to the second: a stored ``pwm_voltage`` record re-solved
+#: gives the same numbers it always did.
+DRIVES = ("current", "voltage", "pwm_voltage", "inverter", "custom_current",
           "bldc_current")
 
 
@@ -598,7 +603,9 @@ def make_source(drive: str, *, pole_pairs: int, daxis_deg: float,
                 n_parallel: int = 1, v_phase_peak: float = 0.0,
                 v_delta_deg: float = 0.0, v_bus: float = 0.0,
                 f_switch: float = 0.0, f_elec: float = 0.0,
-                waveform: Any = None, i_block: float = 0.0
+                waveform: Any = None, i_block: float = 0.0,
+                inverter_nonideal: Optional[Dict[str, Any]] = None,
+                star_delta: str = "star", v_bus_real: float = 0.0
                 ) -> ExcitationSource:
     """Build the source ``drive=`` names, from the solver's own keywords.
 
@@ -630,6 +637,35 @@ def make_source(drive: str, *, pole_pairs: int, daxis_deg: float,
         return PwmVoltageSource(exc, mod, v_phase_peak=float(v_phase_peak),
                                 v_delta_deg=float(v_delta_deg),
                                 f_switch_requested_hz=float(f_switch))
+    if name == "inverter":
+        # THE CONTROLLER'S OWN BRIDGE (Stage 2).  Everything the ideal source
+        # does, plus the dead time and the device drops of a named part —
+        # which is why the non-ideal block is REQUIRED here rather than
+        # defaulted: an "inverter" run with no device is a pwm_voltage run
+        # wearing another name, and two names for one answer is how a duty
+        # ends up with two records.
+        from motor_ai_sim.inverter.coupling import (DeviceDrop,
+                                                    build_inverter_source)
+        if not inverter_nonideal:
+            raise ExcitationError(
+                "drive='inverter' is the CONTROLLER's bridge and needs its "
+                "device: send inverter_nonideal (r_ds_ohm, v_sd_v0_V, "
+                "v_sd_rd_ohm, dead_time_s), which the Controller module "
+                "produces from the part's own card.  For an ideal bridge use "
+                "drive='pwm_voltage'.")
+        nid = dict(inverter_nonideal)
+        drop = DeviceDrop(**{k: v for k, v in nid.items()
+                             if k in DeviceDrop.__dataclass_fields__})
+        _real = float(v_bus_real) if float(v_bus_real) > 0.0 else float(v_bus)
+        return build_inverter_source(
+            pole_pairs=int(pole_pairs), daxis_deg=float(daxis_deg),
+            v_phase_peak=float(v_phase_peak), v_delta_deg=float(v_delta_deg),
+            v_bus_model=float(v_bus), v_dc_real=_real,
+            f_switch_hz=float(f_switch), f_elec_hz=float(f_elec), drop=drop,
+            star_delta=str(star_delta or "star"), n_parallel=n_parallel,
+            I_phase_rms=float(I_phase_rms), gamma_deg=float(gamma_deg),
+            topology=str(nid.get("topology") or "one_3ph"),
+            controller=nid.get("controller"))
     if name == "custom_current":
         return CustomCurrentSource(_SampledCurrent.build(
             parse_waveform(waveform), pole_pairs=int(pole_pairs),

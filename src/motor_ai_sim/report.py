@@ -14956,9 +14956,146 @@ CONTROLLER_SHAFT_NOTE = (
 
 
 def controller_record(col: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """This duty's stored controller answer, or ``None``."""
-    rec = (col.get("res") or {}).get("controller")
+    """This duty's controller answer, or ``None``.
+
+    TWO CAN EXIST AND THE COUPLED ONE WINS (Stage 2, 2026-09-22).  The
+    Controller tab's own solve is arithmetic over a STORED operating point; a
+    ``drive: "inverter"`` coupled run solved the machine on the controller's own
+    waveform and then solved the devices on the current that waveform really
+    produced, with the junction temperature iterated against it.  Where both
+    exist they answer the same question and only one of them measured it, so the
+    coupled block is the record and the other is not printed beside it.
+    """
+    res = col.get("res") or {}
+    cp = res.get("coupled")
+    if isinstance(cp, dict) and isinstance(cp.get("controller"), dict):
+        return cp["controller"]
+    rec = res.get("controller")
     return rec if isinstance(rec, dict) else None
+
+
+def controller_is_coupled(rec: Dict[str, Any]) -> bool:
+    """True when the device losses were solved on the machine's OWN run."""
+    return bool((rec or {}).get("coupled"))
+
+
+CONTROLLER_COUPLED_INTRO = (
+    "Solved together: the machine was fed the controller's own waveform — the "
+    "carrier with its dead time and the devices' voltage drops — and the "
+    "devices were then solved on the current that waveform produced, with the "
+    "junction temperature iterated until both stopped moving.")
+
+CONTROLLER_STANDALONE_INTRO = (
+    "Solved on the duty's stored operating point: the machine's own numbers "
+    "come from a run made on a sinusoid or on the ideal modulator, and the "
+    "device losses are arithmetic over that point.")
+
+
+def controller_excitation_text(rec: Dict[str, Any]) -> str:
+    """One line: what the bridge really applied, and what it cost in volts."""
+    e = (rec or {}).get("excitation") or {}
+    if not e:
+        return ""
+    bits = []
+    if e.get("dead_time_us") is not None:
+        bits.append(f"{_fmt(e.get('dead_time_us'), 2)} µs dead time")
+    if e.get("r_ds_on_mohm_device") is not None:
+        bits.append(f"R_DS(on) {_fmt(e.get('r_ds_on_mohm_device'), 1)} mΩ per "
+                    f"device at {_fmt(e.get('t_j_c'), 0)} °C")
+    if e.get("dead_time_error_V") is not None:
+        bits.append(f"a ±{_fmt(e.get('dead_time_error_V'), 1)} V square wave in "
+                    f"the sign of the leg current")
+    if not bits:
+        return ""
+    return ("Excitation: " + ", ".join(bits)
+            + ". The carrier, the link and the fundamental are the same ones "
+              "the inverter block above states; what this adds is the power "
+              "stage that applied them.")
+
+
+#: The motor-side loss rows the coupled comparison prints, in order.
+_CTRL_CPL_GROUPS = (
+    ("Copper", ("P_stranded_W",)),
+    ("Iron", ("P_core_W",)),
+    ("Magnets", ("P_mag_W",)),
+    ("Sleeve + shaft", ("P_sleeve_W", "P_shaft_W")),
+    ("Motor loss, total", ("P_loss_total_W",)),
+)
+
+
+def controller_coupled_rows(rec: Dict[str, Any],
+                            col: Dict[str, Any]) -> List[List[str]]:
+    """Motor side under the REAL excitation against the sine reference, plus
+    the inverter's own watts and both efficiencies.
+
+    ``[]`` when this controller record is not a coupled one, or when the duty
+    kept no sinusoidal reference to compare against — an empty table is better
+    than a column of em dashes.
+    """
+    if not controller_is_coupled(rec):
+        return []
+    cp = (col.get("res") or {}).get("coupled")
+    if not isinstance(cp, dict):
+        return []
+    em = cp.get("em") if isinstance(cp.get("em"), dict) else {}
+    sine = (cp.get("reference_sine")
+            if isinstance(cp.get("reference_sine"), dict) else {})
+    sine_em = _cpl_em(sine) if sine else {}
+    if not em:
+        return []
+    L = rec.get("losses") or {}
+    E = rec.get("efficiency") or {}
+    rows: List[List[str]] = [["Quantity", "Sine reference",
+                              "On the controller's waveform", "Difference"]]
+
+    def _row(name, a, b, digits=0, unit="W"):
+        d = (None if (a is None or b is None) else float(b) - float(a))
+        rows.append([
+            name,
+            "—" if a is None else f"{_fmt(a, digits)} {unit}".strip(),
+            "—" if b is None else f"{_fmt(b, digits)} {unit}".strip(),
+            "—" if d is None else f"{'+' if d >= 0 else ''}{_fmt(d, digits)} "
+                                  f"{unit}".strip()])
+
+    for label, keys in _CTRL_CPL_GROUPS:
+        _row(label, _cpl_sum(sine_em, keys), _cpl_sum(em, keys))
+    _row("Torque", _numf(sine_em.get("T_em_avg_Nm")),
+         _numf(em.get("T_em_avg_Nm")), 1, "N·m")
+    _row("Phase current", _numf(sine_em.get("I1_phase_rms_A")),
+         _numf(em.get("I1_phase_rms_A")), 1, "A rms")
+    rows.append(["Inverter loss", "—",
+                 f"{_fmt(L.get('total_W'), 0)} W",
+                 "the devices are not in the sine column at all"])
+    rows.append([
+        "Shaft efficiency",
+        "—" if _numf(sine_em.get("efficiency")) is None
+        else f"{_fmt(float(sine_em['efficiency']) * 100.0, 2)} %",
+        "—" if E.get("shaft") is None
+        else f"{_fmt(float(E['shaft']) * 100.0, 2)} %",
+        "the machine's ONE efficiency, at the shaft"])
+    rows.append([
+        "Wall-to-shaft efficiency", "—",
+        "—" if E.get("wall_to_shaft") is None
+        else f"{_fmt(float(E['wall_to_shaft']) * 100.0, 2)} %",
+        "inverter × shaft: DC link in, shaft out"])
+    return rows
+
+
+def controller_convergence_text(rec: Dict[str, Any]) -> str:
+    """One line: how many passes, and how far the junction temperature still is."""
+    if not controller_is_coupled(rec):
+        return ""
+    ps = rec.get("passes") or []
+    res = rec.get("t_j_residual_K")
+    tol = rec.get("t_j_tol_K")
+    if not ps:
+        return ""
+    return (f"{len(ps)} pass(es); the junction temperature settled at "
+            f"{_fmt(rec.get('t_j_c'), 0)} °C"
+            + ("" if res is None
+               else f", the last step being {_fmt(abs(float(res)), 1)} K"
+                    + ("" if tol is None else f" against a {_fmt(tol, 1)} K band"))
+            + ".")
 
 
 def controller_device_text(rec: Dict[str, Any]) -> str:
@@ -15137,6 +15274,8 @@ def _controller_page(st, cols: List[Dict[str, Any]],
             out.append(_para(CONTROLLER_NOT_RUN, st["note"]))
             continue
         out.append(_para(controller_device_text(rec), st["body"]))
+        out.append(_para(CONTROLLER_COUPLED_INTRO if controller_is_coupled(rec)
+                         else CONTROLLER_STANDALONE_INTRO, st["note"]))
         for v in rec.get("violations") or []:
             out.append(_para(FLAG + " " + str(v), st["warn"]))
         rows = controller_rows(rec)
@@ -15144,6 +15283,25 @@ def _controller_page(st, cols: List[Dict[str, Any]],
                            for r in rows],
                           [140, 120, CONTENT_W - 260], header=True, size=7.6))
         out.append(Spacer(1, 4))
+        # ── THE COUPLED ROWS (Stage 2) ──────────────────────────────────────
+        # What the real excitation cost the MACHINE, against the same duty's
+        # sinusoidal reference, with the inverter's own watts and both
+        # efficiencies under it.  Printed only where the controller was solved
+        # together with the machine, because only then is the comparison the
+        # same run.
+        crows = controller_coupled_rows(rec, c)
+        if crows:
+            out.append(_table([[r[0], r[1], r[2],
+                                _para(str(r[3]), st["cell"])] for r in crows],
+                              [120, 92, 132, CONTENT_W - 344],
+                              header=True, size=7.6))
+            _cv = controller_convergence_text(rec)
+            if _cv:
+                out.append(_para(_cv, st["note"]))
+            _ex = controller_excitation_text(rec)
+            if _ex:
+                out.append(_para(_ex, st["note"]))
+            out.append(Spacer(1, 4))
         brows = controller_bridge_rows(rec)
         out.append(_table(brows, [90, 70, 90, 110, CONTENT_W - 360],
                           header=True, size=7.6))

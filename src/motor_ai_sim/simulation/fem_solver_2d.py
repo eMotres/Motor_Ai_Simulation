@@ -2899,12 +2899,25 @@ def fem_transient_sliding_band(
                                      # modulation index is m = 2·v_phase_peak/v_bus.
     v_delta_deg: float = 0.0,        # voltage drive: voltage angle [°el] in the SAME frame as γ
     v_bus: float = 0.0,              # pwm_voltage: DC link voltage [V] (pole voltage = ±v_bus/2)
+    v_bus_real: float = 0.0,         # drive="inverter": the PHYSICAL DC link [V] when `v_bus`
+                                     # above is the star-equivalent MODEL bus (√3·V_dc on a delta
+                                     # machine).  Device drops and the dead-time clamp are computed
+                                     # on this one — they are properties of the power stage, not of
+                                     # the change of variable the delta machine is solved through.
+                                     # 0 = there is no substitution and it IS `v_bus`.
     f_switch: float = 0.0,           # pwm_voltage: carrier frequency [Hz], SNAPPED to a whole
                                      # number of carriers per electrical period (synchronous PWM —
                                      # see simulation/pwm.py); the effective value is reported.
     waveform=None,                   # custom_current: [(θ_e_deg, i_A)] samples of the phase-A
                                      # TERMINAL current over one electrical period (B/C = the same
                                      # shape shifted ∓120°el), linearly interpolated.
+    inverter_nonideal=None,          # drive="inverter" (Controller Stage 2): the device's own
+                                     # non-ideality, as the Controller module resolved it —
+                                     # {r_ds_ohm, v_sd_v0_V, v_sd_rd_ohm, dead_time_s, …} per LEG
+                                     # at the solved junction temperature.  The bridge is then the
+                                     # SAME modulator as "pwm_voltage" with the dead-time clamp and
+                                     # the channel/diode drops on top, decided by the PREVIOUS
+                                     # step's measured current (inverter/coupling.py).
     i_block: float = 0.0,            # bldc_current: FLAT-TOP terminal current of the 120° block
                                      # [A] — not an rms and not a sinusoid peak (rms = i_block·
                                      # √(2/3); see simulation/pwm.BlockCurrentSource).  γ is the
@@ -3339,7 +3352,13 @@ def fem_transient_sliding_band(
         n_parallel=n_parallel, v_phase_peak=float(v_phase_peak),
         v_delta_deg=float(v_delta_deg), v_bus=float(v_bus),
         f_switch=float(f_switch), f_elec=float(f_elec),
-        waveform=waveform, i_block=float(i_block))
+        waveform=waveform, i_block=float(i_block),
+        # Stage 2 only: the device's non-ideality and the two things the leg
+        # current is reconstructed from (the connection and the model/real bus
+        # pair).  Every other drive ignores them.
+        inverter_nonideal=inverter_nonideal,
+        star_delta=str(star_delta or "star"),
+        v_bus_real=float(v_bus_real or 0.0))
     # What the payload calls this run's drive.  The SOURCE names itself, so a
     # hand-written one is reported as itself rather than as whatever `drive=`
     # happened to be left at.
@@ -8224,7 +8243,9 @@ def em_transient_eval(
     v_phase_peak: float = 0.0,
     v_delta_deg: float = 0.0,
     v_bus: float = 0.0,              # pwm_voltage: DC link [V]
+    v_bus_real: float = 0.0,         # inverter: the PHYSICAL link when v_bus is the model bus
     f_switch: float = 0.0,           # pwm_voltage: carrier [Hz] (snapped, see simulation/pwm.py)
+    inverter_nonideal=None,          # inverter: the device's per-leg non-ideality (Controller)
     waveform=None,                   # custom_current: [(θ_e_deg, i_A)] over one electrical period
     i_block: float = 0.0,            # bldc_current: flat-top block amplitude [A terminal]
     excitation=None,                 # an ExcitationSource OBJECT instead of the five named
@@ -8275,8 +8296,9 @@ def em_transient_eval(
         frozen_nu=bool(frozen_nu), inc_ldq=bool(inc_ldq),
         drive=str(drive or "current"), v_phase_peak=float(v_phase_peak),
         v_delta_deg=float(v_delta_deg),
-        v_bus=float(v_bus), f_switch=float(f_switch), waveform=waveform,
-        i_block=float(i_block),
+        v_bus=float(v_bus), v_bus_real=float(v_bus_real),
+        f_switch=float(f_switch), waveform=waveform,
+        i_block=float(i_block), inverter_nonideal=inverter_nonideal,
         excitation=excitation,
         element_order=int(element_order),
         return_frames=int(return_frames),

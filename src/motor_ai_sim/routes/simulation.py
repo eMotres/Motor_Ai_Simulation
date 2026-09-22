@@ -3485,7 +3485,7 @@ def _battery_charge_block(sbres: dict, *, op_mode: str, p_mech_w: float,
     if not isinstance(bi, dict):
         return None
     drive = str(sbres.get("drive") or "")
-    if drive not in ("voltage", "pwm_voltage"):
+    if drive not in ("voltage", "pwm_voltage", "inverter"):
         return None
     v_oc = float(bi.get("v_oc_V") or 0.0)
     r_pack = float(bi.get("R_pack_ohm") or 0.0)
@@ -4378,6 +4378,22 @@ def get_fem_transient(
                                           #   block [A].  Not an rms: a 120° block of amplitude I
                                           #   has rms I·√(2/3), so the copper-loss-matched
                                           #   equivalent of a sinusoidal I_rms is I_rms·√(3/2).
+    # ── drive="inverter" — THE CONTROLLER'S BRIDGE (Stage 2, 2026-09-22) ──
+    # The same modulator as "pwm_voltage" with the dead time and the device
+    # drops of a NAMED part.  They arrive as four scalars rather than a device
+    # name because this route must stay a cacheable GET: the Controller module
+    # owns the card, resolves R_DS(on) at the junction temperature its own
+    # solve converged on and fits the body diode, and what crosses the seam is
+    # the resolved physics.  The provenance beside them is carried so the
+    # record can say WHICH part and at what T_j, never to be re-derived here.
+    inv_r_ds_ohm:        float = 0.0,     # ← the LEG's channel resistance [ohm] (R_DS(on)/N)
+    inv_v_sd_v0_V:       float = 0.0,     # ← body-diode fit: threshold [V]
+    inv_v_sd_rd_ohm:     float = 0.0,     # ← body-diode fit: slope in the LEG current [ohm]
+    inv_dead_time_us:    float = 0.0,     # ← one dead-time window [us]
+    inv_device:          str   = "",      # ← provenance: the part
+    inv_devices_parallel: int  = 1,       # ← provenance: devices per switch
+    inv_t_j_c:           float = 0.0,     # ← provenance: T_j the card was read at
+    inv_topology:        str   = "",      # ← provenance: the coil->bridge map
     harm_ref:            bool  = True,    # ← voltage drive: ALSO run a current-drive reference at
                                           #   the extracted fundamental (I₁, γ₁) → ΔP_harm = the
                                           #   watt cost of the parasitic harmonic currents
@@ -4500,8 +4516,13 @@ def get_fem_transient(
         MAX_MODULATION_INDEX as _MAX_M,
         star_equivalent_bus as _sq_bus, modulation_index as _mod_idx)
     _drive = str(drive or "current").strip().lower()
-    _DRIVES = ("current", "voltage", "pwm_voltage", "custom_current",
-               "bldc_current")
+    _DRIVES = ("current", "voltage", "pwm_voltage", "inverter",
+               "custom_current", "bldc_current")
+    # The Controller's bridge is the ideal one PLUS the device: every gate,
+    # every substitution and every refusal written for "pwm_voltage" applies to
+    # it unchanged, so the two travel together wherever the question is "is
+    # this a chopped bridge".
+    _pwm_like = ("pwm_voltage", "inverter")
     # ── DELTA ON AN IMPOSED-VOLTAGE SOURCE — the EXACT star equivalent ────
     # The voltage circuit (drive.circuit_residual_ll) is the isolated-neutral
     # STAR one: it integrates DIFFERENCES of the applied phase voltages, so a
@@ -4527,7 +4548,7 @@ def get_fem_transient(
     # a model bus of 1299.7 V that nobody can buy must not look like a number
     # somebody measured.
     _sd_eff = _effective_star_delta(star_delta)
-    _eq_star = (_drive in ("voltage", "pwm_voltage") and _sd_eff == "delta")
+    _eq_star = (_drive in ("voltage",) + _pwm_like and _sd_eff == "delta")
     # The bus the SOURCE chops.  Star: v_bus, byte for byte.  The REQUEST keeps
     # the real link everywhere else (cache key, snapshot key, the reported
     # v_bus_real_V) — what is scaled is only what the star circuit is handed.
@@ -4548,20 +4569,29 @@ def get_fem_transient(
             "used by drive='custom_current'.  Either switch the source or drop "
             "the waveform — silently ignoring it would hide a wrong request."
             % (drive,)))
-    if _drive == "pwm_voltage":
+    if _drive in _pwm_like:
         if not (float(v_bus) > 0.0):
             raise HTTPException(status_code=422, detail=(
-                "drive='pwm_voltage' needs a DC bus voltage; got v_bus=%r.  "
-                "Use the machine's battery v_nom, or type one." % (v_bus,)))
+                "drive=%r needs a DC bus voltage; got v_bus=%r.  "
+                "Use the machine's battery v_nom, or type one."
+                % (_drive, v_bus)))
         if not (float(f_switch) > 0.0):
             raise HTTPException(status_code=422, detail=(
-                "drive='pwm_voltage' needs a switching frequency; got "
-                "f_switch=%r Hz." % (f_switch,)))
+                "drive=%r needs a switching frequency; got f_switch=%r Hz."
+                % (_drive, f_switch)))
         if not (float(v_phase_peak) > 0.0):
             raise HTTPException(status_code=422, detail=(
-                "drive='pwm_voltage' needs the fundamental phase-voltage "
-                "amplitude v_phase_peak [V peak]; got %r.  Run a current-drive "
-                "simulation first and use its V₁." % (v_phase_peak,)))
+                "drive=%r needs the fundamental phase-voltage amplitude "
+                "v_phase_peak [V peak]; got %r.  Run a current-drive "
+                "simulation first and use its V₁." % (_drive, v_phase_peak)))
+        if _drive == "inverter" and not (float(inv_r_ds_ohm) > 0.0):
+            raise HTTPException(status_code=422, detail=(
+                "drive='inverter' is the CONTROLLER's bridge and needs the "
+                "device it is built from: send inv_r_ds_ohm (the leg's "
+                "R_DS(on)/N at the solved junction temperature) and the "
+                "body-diode fit beside it.  For an IDEAL bridge use "
+                "drive='pwm_voltage' — they are different drives and both "
+                "stay readable."))
         # ── MODULATION INDEX, on the PER-PHASE fundamental ────────────────
         # m = 2·V_phase/V_dc, and the modulator's V_phase is a POLE voltage
         # referred to the DC mid-point — the star-equivalent per-phase quantity.
@@ -4606,6 +4636,29 @@ def get_fem_transient(
         raise HTTPException(status_code=422, detail=(
             "i_block was sent with drive=%r; it only means something for "
             "drive='bldc_current'." % (drive,)))
+    # ── THE CONTROLLER'S DEVICE, as the solver's source wants it ───────
+    # One dict, built once, and the SAME four physics numbers go into the cache
+    # and the snapshot keys below: two runs of one machine whose devices sit at
+    # different junction temperatures are two different excitations and must
+    # never be served for each other.
+    _inv_nonideal = None
+    _inv_key = ""
+    if _drive == "inverter":
+        _inv_nonideal = {
+            "r_ds_ohm": float(inv_r_ds_ohm),
+            "v_sd_v0_V": float(inv_v_sd_v0_V),
+            "v_sd_rd_ohm": float(inv_v_sd_rd_ohm),
+            "dead_time_s": float(inv_dead_time_us) * 1e-6,
+            "device": str(inv_device or ""),
+            "t_j_c": float(inv_t_j_c),
+            "devices_parallel": int(inv_devices_parallel or 1),
+            "topology": str(inv_topology or "one_3ph"),
+        }
+        _inv_key = ("%g/%g/%g/%g/%g/%g"
+                    % (float(v_bus), float(f_switch), float(inv_r_ds_ohm),
+                       float(inv_v_sd_v0_V), float(inv_v_sd_rd_ohm),
+                       float(inv_dead_time_us)))
+
     # Content hash of the imposed waveform for the transient cache key — the
     # samples themselves are physics, and a 20k-point list is not a dict key.
     _wf_key = ""
@@ -4831,7 +4884,8 @@ def get_fem_transient(
         eddy=eddy, rotor_eddy=rotor_eddy, demag=demag,
         drive=_drive, element_order=element_order,
         magnet_temp_c=magnet_temp_c,
-        excitation=("%g/%g" % (float(v_bus), float(f_switch))
+        excitation=(_inv_key if _drive == "inverter"
+                    else "%g/%g" % (float(v_bus), float(f_switch))
                     if _drive == "pwm_voltage"
                     else (_wf_key if _drive == "custom_current"
                           else ("%g" % float(i_block)
@@ -5170,6 +5224,11 @@ def get_fem_transient(
                 # branch voltage the real bridge's LINE voltage harmonic for
                 # harmonic (see the star-equivalent block above).
                 v_bus=float(_v_bus_model), f_switch=float(f_switch),
+                # THE PHYSICAL LINK, beside the model one: the device drops and
+                # the dead-time clamp of drive='inverter' belong to the power
+                # stage, not to the star-equivalent change of variable.
+                v_bus_real=float(v_bus),
+                inverter_nonideal=_inv_nonideal,
                 waveform=_wf_pts, i_block=float(i_block),
                 element_order=int(element_order),
                 return_frames=int(n_frames) if include_frames else 0,
@@ -5192,7 +5251,7 @@ def get_fem_transient(
             # point: ΔP_harm is then exactly the watt cost of the SWITCHING
             # ripple, measured against an ideal sinusoid at the same fundamental
             # current the inverter actually produced.
-            if _drive in ("voltage", "pwm_voltage") and harm_ref:
+            if _drive in ("voltage",) + _pwm_like and harm_ref:
                 try:
                     from motor_ai_sim.simulation.postproc import fundamental_current
                     _fc = fundamental_current(_sbres)

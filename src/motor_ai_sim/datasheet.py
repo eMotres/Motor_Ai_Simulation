@@ -1116,6 +1116,14 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
 
     def _ctrl(d: Dict[str, Any]) -> Dict[str, Any]:
         e = (_ctrl_by_duty or {}).get(str(d.get("name") or "")) or {}
+        # THE COUPLED BLOCK WINS (Stage 2, 2026-09-22).  A `drive: "inverter"`
+        # coupled run solved the devices on the current the controller's own
+        # waveform really produced and iterated the junction temperature with
+        # it; the Controller tab's standalone solve is arithmetic over a stored
+        # point.  Same question, one measurement.
+        cp = e.get("coupled")
+        if isinstance(cp, dict) and isinstance(cp.get("controller"), dict):
+            return cp["controller"]
         c = e.get("controller")
         return c if isinstance(c, dict) else {}
 

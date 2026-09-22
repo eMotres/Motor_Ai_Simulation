@@ -1451,8 +1451,22 @@ def _controller(doc, D: Dict[str, Any]) -> None:
         _p(doc, R.controller_device_text(rec), size=9.5)
         for v in rec.get("violations") or []:
             _p(doc, "%s %s" % (R.FLAG, v), size=9, bold=True, color=WARN)
+        if R.controller_is_coupled(rec):
+            _p(doc, R.CONTROLLER_COUPLED_INTRO, size=9, italic=True, color=NOTE)
+        else:
+            _p(doc, R.CONTROLLER_STANDALONE_INTRO, size=9, italic=True,
+               color=NOTE)
         _table(doc, R.controller_rows(rec), size=10.5,
                widths_cm=[5.4, 4.0, 17.3])
+        crows = R.controller_coupled_rows(rec, c)
+        if crows:
+            _table(doc, crows, size=10.5, widths_cm=[4.6, 3.6, 5.2, 13.3])
+            _cv = R.controller_convergence_text(rec)
+            if _cv:
+                _p(doc, _cv, size=9, italic=True, color=NOTE)
+            _ex = R.controller_excitation_text(rec)
+            if _ex:
+                _p(doc, _ex, size=9, italic=True, color=NOTE)
         _table(doc, R.controller_bridge_rows(rec), size=10.5,
                widths_cm=[4.0, 3.2, 4.4, 5.6, 9.5])
         _v = R.controller_limits_verdict_text(rec)

@@ -47,7 +47,11 @@ def _common(**over) -> Dict[str, Any]:
     return kw
 
 
-# ── the factory round-trips all five shipped drives ─────────────────────────
+# ── the factory round-trips every shipped drive ─────────────────────────────
+# SIX since 2026-09-22: "inverter" is the CONTROLLER's bridge (Stage 2), the
+# ideal two-level modulator with the dead time and the device drops of a named
+# part on top.  It is a THIRD voltage source, not a change to the second — the
+# ``pwm_voltage`` row below is untouched and still builds the ideal one.
 def test_make_source_round_trips_every_drive():
     wf = [(x * 360.0 / 36.0, 40.0 * math.cos(math.radians(x * 360.0 / 36.0)))
           for x in range(36)]
@@ -59,17 +63,26 @@ def test_make_source_round_trips_every_drive():
             v_phase_peak=7.0, v_delta_deg=10.0, v_bus=48.0, f_switch=28000.0)),
         "custom_current": make_source("custom_current", **_common(waveform=wf)),
         "bldc_current": make_source("bldc_current", **_common(i_block=50.0)),
+        "inverter": make_source("inverter", **_common(
+            v_phase_peak=7.0, v_delta_deg=10.0, v_bus=48.0, f_switch=28000.0,
+            star_delta="star",
+            inverter_nonideal={"r_ds_ohm": 0.0025, "v_sd_v0_V": 3.1,
+                               "v_sd_rd_ohm": 0.004, "dead_time_s": 5e-7,
+                               "device": "TEST", "devices_parallel": 2})),
     }
     assert set(built) == set(ex.DRIVES)
+    from motor_ai_sim.inverter.coupling import InverterVoltageSource
     types = {"current": SineCurrentSource, "voltage": SineVoltageSource,
              "pwm_voltage": PwmVoltageSource,
+             "inverter": InverterVoltageSource,
              "custom_current": CustomCurrentSource,
              "bldc_current": BldcCurrentSource}
     for name, src in built.items():
         assert isinstance(src, types[name]), name
         # The name the payload reports is the drive that was asked for.
         assert src.name == name
-        assert src.kind == ("V" if name in ("voltage", "pwm_voltage") else "I")
+        assert src.kind == ("V" if name in ("voltage", "pwm_voltage",
+                                            "inverter") else "I")
         d = src.describe()
         assert d["name"] == name
         assert d["series"] == src.kind

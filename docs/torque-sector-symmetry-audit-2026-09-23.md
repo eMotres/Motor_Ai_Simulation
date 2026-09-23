@@ -41,3 +41,8 @@ For every valid mode, compare at least no-load, small positive current, small ne
 4. Full raw harmonic order/amplitude arrays, including every resolved bin; no bin deletion or filtering. Compare harmonics in their shared electrical-order bins and retain unequal/fractional-window resolution explicitly.
 
 Acceptance should be specified before numerical runs: sector and full-ring phase traces must satisfy the signed boundary relation; sampled torque waveforms and means must agree within a tolerance justified by the same-mesh discretization; no-load torque differences must be judged in N·m rather than percent ripple; and ripple/harmonic parity must be judged independently of mean torque. Do not accept mean-only agreement as evidence of waveform or cogging accuracy. Once same-mesh parity is established, a separate later study can vary mesh, slip-ring density, and angular sampling one at a time.
+
+Verification after the audit: `test_sector_symmetry_guard.py`,
+`test_p2_projection.py`, and `test_p2_projection_fields.py` passed 69 tests in
+4.30 s. These are guard/projection checks; they do not close the numerical
+full-ring-versus-sector torque parity gap described above.

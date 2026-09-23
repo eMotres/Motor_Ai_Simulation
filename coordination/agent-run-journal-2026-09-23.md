@@ -248,3 +248,13 @@ No production solver files claimed or edited; no deployment or live API use.
   theta_eff degrees mislabeled radians;converted and wiringtestadded.
   Parent13tests9subtests passed0.84s,diffcheckpassed.NoFEM/noescalation.
   Usage check23%remaining;reserve20% preserved. Local changes notcommitted.
+- Luna (Codex) fixed the bounded Nedelec PARDISO failure path: if factorize
+  raises after solver construction, release_pardiso is called before the
+  existing SuperLU fallback; cleanup errors remain non-fatal. Added two focused
+  fake-solver tests (failure/fallback and normal cleanup), updated checkpoint.
+  Verification: focused test file only, no FEM/live API/config, no escalation.
+- Follow-up review removed a redundant broad catch around release_pardiso; its
+  owner already logs/suppresses native free errors. Added fake cleanup-error
+  case proving fallback works and no second free occurs. Focused file now has
+  three tests; no FEM/live API/config.
+- Sol bounded physics follow-up (escalation from Luna): existing harmonic, parallel-scaling and reverse-angle gates passed (10 tests, 12 subtests); documented missing production periodic-state/energy certificate in docs/torque-next-gate-2026-09-23.md. No selector change or FEM.

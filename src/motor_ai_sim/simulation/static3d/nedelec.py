@@ -580,6 +580,7 @@ def _regularised_preconditioner(A, Mm, c: float = REG_PRECOND_C):
         return None
     eps = float(c) * float(np.median(dK[ok] / dM[ok]))
     Areg = (A + eps * Mm).tocsr()
+    ps = None
     try:
         from pypardiso import PyPardisoSolver
         ps = PyPardisoSolver()
@@ -600,6 +601,11 @@ def _regularised_preconditioner(A, Mm, c: float = REG_PRECOND_C):
                 pass
         return _apply, _release
     except Exception:
+        if ps is not None:
+            # factorize may allocate native buffers before reporting failure.
+            # Release this handle before dropping it and trying the fallback.
+            from ..pardiso_lifetime import release_pardiso
+            release_pardiso(ps)
         try:
             from scipy.sparse.linalg import splu
             lu = splu(Areg.tocsc())

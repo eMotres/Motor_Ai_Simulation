@@ -99,10 +99,38 @@ period, 6 mm / 0.5 mm mesh, 2 sectors, magnets 104.2 °C, coil 97.8 °C;
 The sleeve loss moves +1.1 % (+0.094 W) on this case; every other solved
 number is bit-identical (the last sleeve frame is 7.8685 W in both), which
 is the proof that only the averaging window changed. `P_fe` differs between
-the two legs (1362.9 vs 1296.1 W) because of Codex's core-loss candidate
-commits between 68de0ca and HEAD, not this change. On PWM runs with a longer
+the two legs (1362.9 vs 1296.1 W) because of Codex's core-loss work between
+68de0ca and the working tree (f12df2e, c582449 and the uncommitted
+`losses.py` edits at the time), not this change. On PWM runs with a longer
 settling prefix the sleeve delta is expected to be larger; L155/L180 client
 reports that quote `P_sleeve` on a voltage/PWM duty should be regenerated.
+
+## Physics regression status (and a correction to commit 1c23f12's message)
+
+`tests/test_physics_regression.py` on the working tree: the guard passes on
+all 8 cases and the ONLY moved pin is `P_fe_W`, −3.0…−4.3 % on every case,
+eddy and non-eddy alike. Where it comes from, established properly:
+
+* 68de0ca pristine, imports forced to the worktree's `src`: `p2_load` PASSES
+  (P_fe at its pin);
+* 68de0ca + only the hunks of 1c23f12 (this change): `p2_load`,
+  `p2_voltage_eddy_rotor` and the 17 guard tests PASS — this change moves no
+  pin;
+* working tree (68de0ca + Codex's core-loss commits f12df2e / c582449 and
+  in-flight `losses.py`): P_fe −4.28 % on `p2_load` (4.93028 → 4.71945 W).
+
+So the drift belongs to the core-loss selection work, not to 68de0ca and not
+to this commit. The message of 1c23f12 says "reproduced on pristine 68de0ca,
+i.e. pre-existing at the deployed commit" — that sentence is WRONG and this
+paragraph supersedes it. The first probes were run with plain `pytest`
+inside a git worktree, and the `__editable__.electric_motor_ai_simulator`
+.pth in site-packages points at the MAIN checkout's `src`, so every one of
+those probes silently imported the working tree's code and "reproduced" its
+own number. Trap for the next agent: in a worktree, force the import
+(`sys.path.insert(0, root/src)` before importing, and assert
+`motor_ai_sim.__file__` is under the worktree) or the A/B is fiction. The
+sleeve A/B above was run through a script that does exactly that (the 132
+vs 12 series lengths are the proof it ran two different trees).
 
 ## Tests
 

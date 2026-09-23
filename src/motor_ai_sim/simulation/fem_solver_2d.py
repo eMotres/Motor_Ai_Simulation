@@ -107,6 +107,8 @@ from motor_ai_sim.simulation.losses import (
 )
 from motor_ai_sim.simulation.sb_postproc import (
     drop_settling_frames as _drop_settling_frames,
+    retained_window_metadata as _retained_window_metadata,
+    snapshot_scalar_history as _snapshot_scalar_history,
     eddy_settle_resid as _eddy_settle_resid,
     hybrid_torque as _hybrid_torque,
     torque_method_diagnostics as _torque_method_diagnostics,
@@ -5372,7 +5374,7 @@ def fem_transient_sliding_band(
                              _ipark(_psd, _psq, _thal - _w * float(_sched_dt[0]))))
 
     # ── frame loop ───────────────────────────────────────────────────────
-    _T2 = []; _psiA = []; _psiB = []; _psiC = []; _tt = []
+    _T2 = []; _psiA = []; _psiB = []; _psiC = []; _tt = []; _theta_samples = []
     _IA = []; _IB = []; _IC = []
     # APPLIED terminal voltage per solved step (imposed-voltage sources only) —
     # the excitation chart's series.  Empty on the imposed-current sources,
@@ -6605,6 +6607,7 @@ def fem_transient_sliding_band(
         # frames can be coarser than the reported ones, so elapsed time is a
         # cumulative sum of the schedule (identical to k*dt when uniform).
         _tt.append(_sched_t[k] if k >= 0 else k * dt)
+        _theta_samples.append(math.radians(float(theta_eff)))
         if _vdrive:
             # ── circuit bookkeeping on the CONVERGED field ───────────────
             # Residual of the line-to-line equations evaluated with the
@@ -6855,12 +6858,44 @@ def fem_transient_sliding_band(
     # trimmed with them — otherwise its indices are offset by _vskip against
     # I/psi/T and the reported max residual is the SETTLING residual, not
     # the steady-state one.
-    _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt,
+    _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt, _theta_samples,
                  _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
                  _histA_rot2, _pic_iters,
                  _ed_cu, _ed_mag, _ed_sh, _ed_dc2d, _ed_dens_hist,
                  _v_diag["iters"], _v_diag["resid"],
                  _vapp['A'], _vapp['B'], _vapp['C'])
+    # Keep the compact scalar traces that the settle trims are about to erase.
+    # The per-frame element/DOF arrays below remain un-copied; preserving their
+    # discarded prefixes would duplicate the largest histories in the result.
+    _p2_scalar_series = {
+        "time_s_absolute": _tt,
+        "mechanical_angle_rad": _theta_samples,
+        "torque_em_Nm": _T2,
+        "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
+        "current_A_A": _IA, "current_B_A": _IB, "current_C_A": _IC,
+        "picard_iterations": _pic_iters,
+        "eddy_copper_power_W": _ed_cu, "eddy_magnet_power_W": _ed_mag,
+        "eddy_shaft_power_W": _ed_sh, "eddy_dc_copper_power_W": _ed_dc2d,
+        "voltage_solver_iterations": _v_diag["iters"],
+        "voltage_solver_residual_V": _v_diag["resid"],
+        "applied_voltage_A_V": _vapp['A'], "applied_voltage_B_V": _vapp['B'],
+        "applied_voltage_C_V": _vapp['C'],
+    }
+    _p2_trim_operations = []
+    if _vdrive and _vskip:
+        _p2_trim_operations.append({"kind": "voltage_settling", "requested_frames": int(_vskip)})
+    if _dmskip and demag and _dmst is not None:
+        _p2_trim_operations.append({"kind": "demag_settling", "requested_frames": int(_dmskip)})
+    _p2_raw_scalar_history = (_snapshot_scalar_history(_p2_scalar_series)
+                              if _p2_trim_operations else None)
+    _p2_field_history_counts = {
+        "stator_Bx": len(_hsx2), "stator_By": len(_hsy2),
+        "rotor_Bx": len(_hrx2), "rotor_By": len(_hry2),
+        "coil_Bx": len(_hcx2), "coil_By": len(_hcy2),
+        "magnet_Bx": len(_hmx2), "magnet_By": len(_hmy2),
+        "rotor_potential_A": len(_histA_rot2),
+        "eddy_loss_density": len(_ed_dens_hist),
+    }
     # ── DC RESIDUAL OF THE REPORTED PERIOD (B5 / PWM study 2026-09-13) ────
     # Measured HERE, before the settling frames are dropped, because the
     # trapezoidal mean needs the frame BEFORE the window — and measured the way
@@ -6941,6 +6976,29 @@ def fem_transient_sliding_band(
         n_total -= _dmskip
         n_periods = float(n_periods) - 1.0
         _drop_settling_frames(_v2_lists, _dmskip, _tt)
+
+    _p2_transient_history = None
+    if _p2_raw_scalar_history is not None:
+        _p2_transient_history = dict(_p2_raw_scalar_history)
+        _p2_transient_history["retained_window"] = _retained_window_metadata(
+            _p2_raw_scalar_history, _p2_scalar_series,
+            core_series=("time_s_absolute", "mechanical_angle_rad",
+                         "torque_em_Nm", "psi_A_Wb", "psi_B_Wb", "psi_C_Wb",
+                         "current_A_A", "current_B_A", "current_C_A"),
+            trim_operations=_p2_trim_operations,
+            nominal_retained_frames=n_total, retained_periods=n_periods)
+        _p2_transient_history["non_scalar_history_sample_counts"] = {
+            "before_trim": _p2_field_history_counts,
+            "after_trim": {
+                "stator_Bx": len(_hsx2), "stator_By": len(_hsy2),
+                "rotor_Bx": len(_hrx2), "rotor_By": len(_hry2),
+                "coil_Bx": len(_hcx2), "coil_By": len(_hcy2),
+                "magnet_Bx": len(_hmx2), "magnet_By": len(_hmy2),
+                "rotor_potential_A": len(_histA_rot2),
+                "eddy_loss_density": len(_ed_dens_hist),
+            },
+            "values_copied": False,
+        }
 
     # ── Voltage drive: copper loss from the SOLVED current ───────────────
     # `copper_loss_W` ran near the top of this function on the CONFIG
@@ -7858,6 +7916,7 @@ def fem_transient_sliding_band(
         "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
         "dt_s": dt, "T_period_s": (1.0 / f_elec if f_elec > 1e-9 else 0.0),
         "time_s": _tt, "rotor_angle_deg": _ang,
+        "P2_transient_sample_history": _p2_transient_history,
         "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
         "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip_raw,
         # Deprecated aliases retain raw values; no filtering/noise estimate.

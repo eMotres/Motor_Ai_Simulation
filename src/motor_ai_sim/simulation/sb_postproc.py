@@ -14,9 +14,90 @@ trims lists in place because the frame loop's series ARE those lists.
 from __future__ import annotations
 
 import math
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
+
+
+def snapshot_scalar_history(series: Mapping[str, Sequence]) -> dict:
+    """Copy scalar per-frame histories before settling prefixes are trimmed.
+
+    The returned lists are independent of later in-place prefix deletion. This
+    deliberately rejects vector samples: field histories can be large, and this
+    helper is for compact scalar traces only.
+    """
+    samples = {}
+    for name, values in series.items():
+        copied = []
+        for value in values:
+            if not np.isscalar(value):
+                raise TypeError("scalar history %r contains a non-scalar sample" % name)
+            copied.append(value.item() if isinstance(value, np.generic) else value)
+        samples[str(name)] = copied
+    return {
+        "samples": samples,
+        "sample_count_by_series": {name: len(values) for name, values in samples.items()},
+        "all_series_aligned": len({len(values) for values in samples.values()}) <= 1,
+    }
+
+
+def retained_window_metadata(raw_history: Mapping, retained_series: Mapping[str, Sequence],
+                              core_series: Sequence[str],
+                              trim_operations: Sequence[Mapping],
+                              nominal_retained_frames: int,
+                              retained_periods: float) -> dict:
+    """Describe what remains after the existing sequential settling trims.
+
+    Core indices and absolute endpoints are provided only when all designated
+    waveform channels have matching raw and retained lengths. Other channels
+    retain independent counts; they are never zipped to force alignment.
+    """
+    raw_samples = raw_history["samples"]
+    raw_counts = dict(raw_history["sample_count_by_series"])
+    kept_counts = {name: len(values) for name, values in retained_series.items()}
+    removed_counts = {name: raw_counts[name] - kept_counts[name]
+                      for name in raw_counts if name in kept_counts}
+    aligned = all(name in raw_samples and name in retained_series
+                  and name in raw_counts and name in kept_counts
+                  for name in core_series)
+    raw_core_counts = ({raw_counts[name] for name in core_series}
+                       if aligned else set())
+    kept_core_counts = ({kept_counts[name] for name in core_series}
+                        if aligned else set())
+    aligned = (aligned and len(raw_core_counts) == 1
+               and len(kept_core_counts) == 1)
+    start_index = start_time = end_time = start_angle = end_angle = None
+    raw_core_count = kept_core_count = None
+    if aligned:
+        raw_core_count = next(iter(raw_core_counts))
+        kept_core_count = next(iter(kept_core_counts))
+        aligned = 0 <= kept_core_count <= raw_core_count
+    if aligned:
+        start_index = raw_core_count - kept_core_count
+        times = raw_samples.get("time_s_absolute", [])
+        angles = raw_samples.get("mechanical_angle_rad", [])
+        if len(times) == raw_core_count and kept_core_count:
+            start_time, end_time = times[start_index], times[-1]
+        if len(angles) == raw_core_count and kept_core_count:
+            start_angle, end_angle = angles[start_index], angles[-1]
+    return {
+        "trim_operations": [dict(op) for op in trim_operations],
+        "nominal_retained_frames": int(nominal_retained_frames),
+        "retained_periods": float(retained_periods),
+        "sample_count_by_series_before_trim": raw_counts,
+        "sample_count_by_series_after_trim": kept_counts,
+        "removed_sample_count_by_series": removed_counts,
+        "all_scalar_series_aligned_before_trim": bool(raw_history["all_series_aligned"]),
+        "core_waveform_series": list(core_series),
+        "core_waveform_aligned": bool(aligned),
+        "raw_core_sample_count": raw_core_count,
+        "retained_core_sample_count": kept_core_count,
+        "retained_start_raw_sample_index": start_index,
+        "retained_time_start_s_absolute": start_time,
+        "retained_time_end_s_absolute": end_time,
+        "retained_mechanical_angle_start_rad": start_angle,
+        "retained_mechanical_angle_end_rad": end_angle,
+    }
 
 
 def drop_settling_frames(series: Iterable[list], n_skip: int,

@@ -242,3 +242,9 @@ No production solver files claimed or edited; no deployment or live API use.
   raw IABC identical,psi differences<=2.863e-17Wb,Tmaxwell<=2.271e-14Nm.
   54tests6subtests passed1.60s,diffcheckpassed. Earlier hash-case preflight
   failure stopped beforeFEM,then fixed. No livewrites/filter/finer mesh/deploy.
+- Budget-bounded Luna task:added P2 scalar history before destructive settling
+  trims,original absolute time/angle and independentchannel counts retained.
+  Steady metrics unchanged;P1/largefieldarrays out ofscope. Parent caught
+  theta_eff degrees mislabeled radians;converted and wiringtestadded.
+  Parent13tests9subtests passed0.84s,diffcheckpassed.NoFEM/noescalation.
+  Usage check23%remaining;reserve20% preserved. Local changes notcommitted.

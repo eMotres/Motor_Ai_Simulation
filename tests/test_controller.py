@@ -699,24 +699,29 @@ def test_tc_card_loads_and_matches_datasheet_tables():
     assert c.v_dss_V == 80
     assert c.t_j_max_c == 175
     assert c.switching_energy_source() == "times_and_charges"
-    # Table 3: R_thJC max 1.5 K/W — derates on MAX, same convention as IMCQ.
+    # Table 3: R_thJC max 1.5 K/W (bottom) — derates on MAX, same convention
+    # as IMCQ.  This card's own SC datasheet — corrected 2026-09-23, see the
+    # card's header comment — package PG-WHSON-8, dual-side-cooled, but the
+    # model still derates through the bottom path only.
     assert c.r_th_jc_k_w == pytest.approx(1.5)
-    # Table 2: I_D 101 A at 25 degC case, 71 A at 100 degC.
-    assert c.i_d_continuous(25.0) == pytest.approx(101.0)
-    assert c.i_d_continuous(100.0) == pytest.approx(71.0)
+    # Table 2: I_D 99 A at 25 degC case, 70 A at 100 degC (V_GS = 10 V).
+    assert c.i_d_continuous(25.0) == pytest.approx(99.0)
+    assert c.i_d_continuous(100.0) == pytest.approx(70.0)
     # Table 4: R_DS(on) 4.3 mOhm typ at 25 degC, V_GS = 10 V (the anchor).
     assert c.r_ds_on_ohm(25.0, 10.0) * 1e3 == pytest.approx(4.3)
     # …and the 6 V curve is a different curve, not an interpolation.
     assert c.r_ds_on_ohm(25.0, 6.0) * 1e3 == pytest.approx(6.1)
-    # Package outline reaches the catalogue row (Figure 1, MAX column).
+    # Package outline reaches the catalogue row (Figure 1, MAX column,
+    # PG-WHSON-8-U01) — bigger footprint but noticeably thinner than the
+    # base part's PG-TSON-8-4 (3.30 x 3.30 x 1.10).
     row = c.row()
-    assert row["package_size_mm"]["length_mm"] == pytest.approx(3.30)
-    assert row["package_size_mm"]["width_mm"] == pytest.approx(3.30)
-    assert row["package_size_mm"]["height_mm"] == pytest.approx(1.10)
+    assert row["package_size_mm"]["length_mm"] == pytest.approx(3.40)
+    assert row["package_size_mm"]["width_mm"] == pytest.approx(3.40)
+    assert row["package_size_mm"]["height_mm"] == pytest.approx(0.75)
     assert row["switching_energy_source"] == "times_and_charges"
     assert row["package_svg"].startswith("<svg")
     from motor_ai_sim.inverter import packages as pk
-    assert pk.family_for("PG-TSON-8-4", "PQFN 3.3x3.3 Source-Down") == "pqfn"
+    assert pk.family_for("PG-WHSON-8", None) == "pqfn"
 
 
 def test_tc_third_quadrant_and_reverse_recovery_are_on_the_card():

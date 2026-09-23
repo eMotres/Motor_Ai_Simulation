@@ -101,7 +101,15 @@ def _mu_r_from_bh(bh_curve: List[Tuple[float, float]], B_mag: float
     bs = [pt[1] for pt in bh_curve]
     hs = [pt[0] for pt in bh_curve]
     if B_mag <= bs[0]:
-        H = hs[0] + (hs[1] - hs[0]) * (B_mag - bs[0]) / max(bs[1] - bs[0], 1e-12)
+        if bs[0] > 0.0 and B_mag < bs[0]:
+            # Match the co-energy curve's implicit (0, 0) endpoint for
+            # positive-first-B curves.  This branch is only used below the
+            # first knot; explicit-origin and negative-B curves keep their
+            # established interpolation unchanged.
+            H = hs[0] * B_mag / bs[0]
+        else:
+            H = (hs[0] + (hs[1] - hs[0]) * (B_mag - bs[0])
+                 / max(bs[1] - bs[0], 1e-12))
     elif B_mag >= bs[-1]:
         # Extrapolate above the last sample with the differential μ₀ slope.
         H = hs[-1] + (B_mag - bs[-1]) / MU0
@@ -131,6 +139,12 @@ def _mu_r_from_bh_vec(bh_curve, B_arr):
     hs = np.array([pt[0] for pt in bh_curve], float)
     bs = np.array([pt[1] for pt in bh_curve], float)
     H = np.interp(B, bs, hs)                       # clamps at the ends
+    if bs[0] > 0.0:
+        # Same implicit origin used by static3d.torque3d._curve_coenergy.
+        # Gate the mask construction so ordinary explicit-origin curves pay
+        # no extra full-array pass.
+        below_first = B < bs[0]
+        H = np.where(below_first, hs[0] * B / bs[0], H)
     above = B >= bs[-1]
     H = np.where(above, hs[-1] + (B - bs[-1]) / MU0, H)
     H = np.maximum(H, 1e-9)

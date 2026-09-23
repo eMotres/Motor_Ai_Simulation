@@ -5136,6 +5136,13 @@ def fem_transient_sliding_band(
     _sc_psi2 = p.stack_length * NS / float(n_parallel)
 
     def _psi2(A2):
+        if not eddy:
+            # The imposed-current RHS uses uniform J over each slot's meshed
+            # copper.  Individual conductor tags can have slightly different
+            # mesh areas, so summing their *unweighted* means is not the exact
+            # adjoint of that RHS.  Use the same assembled unit-current source
+            # for terminal linkage and winding work in the magnetostatic path.
+            return tuple(_sc_psi2 * float(A2 @ f_coil2[ph]) for ph in 'ABC')
         Ae_ = A2[_As_e]
         A_tri = (Ae_[0] + Ae_[1] + Ae_[2]) / 3.0
         pa = pb = pc = 0.0

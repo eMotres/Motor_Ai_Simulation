@@ -507,11 +507,27 @@ const ActiveFamilyStrip: React.FC = () => {
       try {
         const raw = localStorage.getItem('ctrl.settings');
         const mirrored = raw ? JSON.parse(raw) as ControllerMirror : null;
-        if (controllerMirrorApplies(mirrored, tDie, cfgName)) {
+        // Tagged with whichever name was ACTIVE when the Controller tab wrote
+        // the mirror — which is `targetConfig`, the name this save WENT IN
+        // with, not necessarily `cfgName`, the name it may have come OUT
+        // with.  A die-defining geometry change auto-renames the
+        // configuration as part of THIS save (§1 above already carries both
+        // names through the duty-op / duty-cycle overlays for exactly this
+        // reason); a mirror check against `cfgName` alone silently missed a
+        // save whose rename it could not have anticipated (bug found
+        // 2026-09-22: CIANO14 50 edited -> L15's controller tab had a device
+        // chosen and mirrored, yet no PATCH was ever sent — only
+        // `cfgName`, the post-rename name, was compared, mirror tagged under
+        // `targetConfig` never matched, and the whole block was skipped with
+        // no error to show for it, matching the owner's server log: GETs
+        // only, no PATCH attempt at all).
+        const mirrorMatch = controllerMirrorApplies(mirrored, tDie, targetConfig)
+          ? mirrored : controllerMirrorApplies(mirrored, tDie, cfgName) ? mirrored : null;
+        if (mirrorMatch) {
           const cr = await fetch(`${API}/api/family/config/`
             + `${encodeURIComponent(tDie)}/${encodeURIComponent(cfgName)}/controller`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(mirrored!.block),
+            body: JSON.stringify(mirrorMatch.block),
           });
           extra += cr.ok ? ' + controller settings' : ' (controller settings NOT saved)';
         }

@@ -41,7 +41,10 @@ import { fetchCoupledLast, setCoupledControllerRef } from './coupledApi';
 // Controller tab itself does on mount, reused here only to GATE the option
 // (never to duplicate that tab's form).
 import { useDieContext } from '../common/useDieContext';
-import { getControllerSettings, type ControllerSettings } from '../controller/controllerApi';
+import {
+  getControllerSettings, readControllerMirror, saveControllerFromMirror,
+  controllerSavedFieldsLine, type ControllerSettings,
+} from '../controller/controllerApi';
 import { syncActiveMotor, getActiveMotor } from '../common/motorSettings';
 import BatteryDialog, { type BatteryValue } from '../catalog/BatteryDialog';
 import {
@@ -694,6 +697,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     = usePersisted<'sine' | 'inverter'>('coupledDrive', 'sine');
   const dieCtx = useDieContext();
   const [ctrlSettings, setCtrlSettings] = useState<ControllerSettings | null>(null);
+  // A one-shot bump that forces a re-render right when the Drive dropdown
+  // opens (its `onOpen` below), so the mirror read a few lines down is
+  // never more than a click stale — the Controller tab keeps writing it on
+  // every keystroke (`ControllerPanel`'s own mirror effect), well before
+  // anyone presses that tab's "Save settings".
+  const [, bumpCtrlRecheck] = useState(0);
   useEffect(() => {
     let alive = true;
     if (!dieCtx.die || !dieCtx.config) { setCtrlSettings(null); return; }
@@ -714,19 +723,61 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     // cheap GET, not a poll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dieCtx.die, dieCtx.config, coupled]);
-  // A device chosen and saved — either through the Controller tab's own
-  // "Save to duty" or the config-level PATCH — is what "the controller is set
-  // up" means here; a SOLVED record is not required, `_controller_settings`
-  // (routes/coupled.py) accepts a device from the request alone.
-  const controllerReady = !!ctrlSettings?.device;
-  // Mirror the fetched block for `runCoupled` to send BY REFERENCE
+  // "the controller is set up" (owner 2026-09-22, second round) means the
+  // Controller tab HOLDS a usable configuration — a device chosen there,
+  // whether or not that tab's own "Save settings" was ever pressed — OR a
+  // block is already saved server-side.  Read fresh on every render (one
+  // cheap localStorage.getItem, tagged with the active die/config by
+  // `ControllerPanel`'s own mirror effect): the owner's 2026-09-22 20:25
+  // report was exactly a configuration where a device WAS chosen on that
+  // tab but no PATCH had ever reached the server, so gating on the server
+  // block alone (`ctrlSettings`) left the option wrongly disabled.
+  const ctrlMirror = (dieCtx.die && dieCtx.config)
+    ? readControllerMirror(dieCtx.die, dieCtx.config) : null;
+  // A device chosen — on the tab right now, or already saved — is what
+  // "the controller is set up" means here; a SOLVED record is not required,
+  // `_controller_settings` (routes/coupled.py) accepts a device from the
+  // request alone.  Nothing else gates this option (owner: "nothing else
+  // blocks it").
+  const controllerReady = !!ctrlSettings?.device || !!ctrlMirror?.device;
+  // ── AUTO-SAVE (owner 2026-09-22, second round) ──────────────────────────
+  // Picking "inverter (Controller)" PATCHes the Controller tab's CURRENT
+  // settings into this configuration itself — the same writer that tab's own
+  // "Save settings" button uses — so there is no separate save step and the
+  // PATCH lands before anyone can press Run, whether or not a Solve was ever
+  // made on that tab.  `saveControllerFromMirror` is a no-op (returns `null`)
+  // when there is nothing NEW to send (no live mirror for this
+  // configuration) — the already-saved server block then stands as is.
+  const [ctrlSaveMsg, setCtrlSaveMsg] = useState<string | null>(null);
+  const [ctrlSaveErr, setCtrlSaveErr] = useState<string | null>(null);
+  const [ctrlSaveTip, setCtrlSaveTip] = useState('');
+  const autoSaveController = useCallback(async () => {
+    if (!dieCtx.die || !dieCtx.config) return;
+    const res = await saveControllerFromMirror(dieCtx.die, dieCtx.config);
+    if (!res) return; // nothing live to send — the saved block (if any) stands
+    if (res.ok) {
+      setCtrlSettings(res.block);
+      setCtrlSaveErr(null);
+      setCtrlSaveMsg(`controller settings saved to ${dieCtx.config}`);
+      setCtrlSaveTip(controllerSavedFieldsLine(res.block));
+    } else {
+      setCtrlSaveMsg(null);
+      setCtrlSaveErr(`controller settings NOT saved — ${res.error}`);
+    }
+  }, [dieCtx.die, dieCtx.config]);
+  useEffect(() => {
+    if (coupled && coupledDrive === 'inverter') void autoSaveController();
+    if (!(coupled && coupledDrive === 'inverter')) { setCtrlSaveMsg(null); setCtrlSaveErr(null); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coupled, coupledDrive, dieCtx.die, dieCtx.config]);
+  // Mirror the fetched/saved block for `runCoupled` to send BY REFERENCE
   // (`coupledApi.coupledControllerRef`) — the same "one browser-side source of
   // truth, no prop threading through TransientCharts" shape `coupled` /
   // `coupledSolveTo` already use.  And never leave the selector on 'inverter'
-  // for a configuration that turns out to have no controller (a duty switch,
-  // a reload that lands before the fetch) — that would silently ask the
-  // backend to fall back to whatever the ACTIVE duty's own stored solve says,
-  // which may be a different machine's answer.
+  // for a configuration that turns out to have no controller at all (a duty
+  // switch, a reload that lands before the mirror/fetch resolve) — that would
+  // silently ask the backend to fall back to whatever the ACTIVE duty's own
+  // stored solve says, which may be a different machine's answer.
   useEffect(() => {
     setCoupledControllerRef(controllerReady
       ? (ctrlSettings as unknown as Record<string, unknown>) : null);
@@ -2706,6 +2757,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 labelId="coupled-drive-label"
                 label="Drive"
                 value={coupledDrive}
+                onOpen={() => bumpCtrlRecheck(n => n + 1)}
                 onChange={e => setCoupledDrive(
                   e.target.value === 'inverter' ? 'inverter' : 'sine')}
                 endAdornment={
@@ -2718,9 +2770,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       + 'device drops, iterated to a second fixed point on the '
                       + "junction temperature. The record gains a controller block "
                       + '(device losses, T_j, inverter and wall-to-shaft efficiency) '
-                      + 'beside the usual coupling one.'
-                      + (controllerReady ? '' : '\n\nDisabled: set up the controller in the Controller tab first'
-                        + ' — choose a device and save it.')} />
+                      + 'beside the usual coupling one. Picking it saves the '
+                      + "Controller tab's current settings into this configuration "
+                      + 'automatically — no separate save step.'
+                      + (controllerReady ? '' : '\n\nDisabled: choose a device in '
+                        + 'the Controller tab.')} />
                   </InputAdornment>
                 }
               >
@@ -2729,6 +2783,16 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   inverter (Controller)
                 </MenuItem>
               </Select>
+              {coupledDrive === 'inverter' && (ctrlSaveMsg || ctrlSaveErr) && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
+                  <Typography sx={{ fontSize: 10.5,
+                    color: ctrlSaveErr ? '#f87171' : 'var(--text-3)' }}>
+                    {ctrlSaveErr || ctrlSaveMsg}
+                  </Typography>
+                  {ctrlSaveMsg && !ctrlSaveErr && <HelpTip title={
+                    `Saved: ${ctrlSaveTip}.`} />}
+                </Box>
+              )}
             </FormControl>
           )}
           {/* ── …AND WHICH QUESTION IT ANSWERS (owner 2026-09-18) ───────────

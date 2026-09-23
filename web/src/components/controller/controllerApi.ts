@@ -360,6 +360,61 @@ export function controllerMirrorApplies(
     && mirrored.die === die && mirrored.config === config;
 }
 
+/** The mirror's own block, when its tag matches ``die``/``config`` — ``null``
+ *  otherwise (the Controller tab was never opened for this configuration this
+ *  session, or it still holds a different one's snapshot). */
+export function readControllerMirror(
+  die: string, config: string,
+): ControllerSettings | null {
+  try {
+    const raw = localStorage.getItem('ctrl.settings');
+    const mirrored = raw ? JSON.parse(raw) as ControllerMirror : null;
+    return controllerMirrorApplies(mirrored, die, config) ? mirrored!.block : null;
+  } catch { return null; }
+}
+
+/** Save the Controller tab's CURRENT settings — the live mirror
+ *  ``ControllerPanel`` keeps in ``ctrl.settings``, not only the last block the
+ *  server has — to the active configuration.  Used by the Coupled panel's own
+ *  "inverter (Controller)" drive selector (2026-09-22, second round): picking
+ *  that option, or starting a coupled run while it is picked, used to lean on
+ *  the user having ALREADY pressed the Controller tab's own "Save settings" —
+ *  and the common case (choose a device, switch straight to the Coupled tab,
+ *  never press Solve) left nothing saved at all, so ``drive: "inverter"``
+ *  silently fell back to the duty's own stored controller solve, or to
+ *  nothing (``GET /api/controller/settings`` answering ``{}``).  This closes
+ *  that gap: the mirror is written on every keystroke, well before any Solve,
+ *  so it is there to save even when the tab has never been asked to solve.
+ *
+ *  ``null`` = nothing to save — no device is chosen anywhere for this
+ *  configuration, so the caller's own gating (``controllerReady``) already
+ *  keeps the option disabled; this is a defensive no-op, never an error the
+ *  caller has to show. */
+export async function saveControllerFromMirror(
+  die: string, config: string,
+): Promise<{ ok: true; block: ControllerSettings } | { ok: false; error: string } | null> {
+  const block = readControllerMirror(die, config);
+  if (!block || !block.device) return null;
+  try {
+    const r = await saveControllerSettings(die, config, block);
+    return { ok: true, block: r.controller ?? block };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/** The short list the auto-save's HelpTip names — "device, topology, N
+ *  parallel, dead time, carrier, DC link, cooling" — never every field, this
+ *  is a caption, not a table (project UI rule). */
+export function controllerSavedFieldsLine(block: ControllerSettings): string {
+  const bits = [`device ${block.device}`];
+  if (block.topology) bits.push('topology');
+  if (block.devices_parallel != null) bits.push('N parallel');
+  if (block.dead_time_us != null) bits.push('dead time');
+  if (block.f_carrier_hz != null) bits.push('carrier');
+  if (block.v_dc_V != null) bits.push('DC link');
+  if (block.cooling && Object.values(block.cooling).some(v => v != null)) bits.push('cooling');
+  return bits.join(', ');
+}
+
 /** The ``POST /solve`` request body — every field the ROUTE resolves
  * server-side (V_dc, carrier, current, power, connection, rpm — see
  * ``routes.controller._build_request``) is OMITTED here when blank, never

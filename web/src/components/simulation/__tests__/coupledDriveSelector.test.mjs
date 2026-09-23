@@ -168,12 +168,19 @@ test('runCoupled applies the drive override AFTER solve_to is set — both '
 // ── SimulationPanel.tsx: the selector itself ────────────────────────────────
 const panelSrc = readFileSync(webSrc('components', 'simulation', 'SimulationPanel.tsx'), 'utf8');
 
-test('the panel gates the option on a saved controller (GET /api/controller/'
-   + 'settings via getControllerSettings), never on the Controller tab merely '
-   + 'having been opened', () => {
-  assert.ok(panelSrc.includes("import { getControllerSettings, type ControllerSettings } "
-    + "from '../controller/controllerApi';"));
-  assert.ok(panelSrc.includes('const controllerReady = !!ctrlSettings?.device;'));
+test('the panel gates the option on EITHER the saved server block OR the '
+   + "Controller tab's own LIVE mirror (owner 2026-09-22, second round: a "
+   + 'device chosen but never explicitly saved must still enable it) — never '
+   + 'on the server block alone', () => {
+  assert.ok(panelSrc.includes('readControllerMirror, saveControllerFromMirror,\n'
+    + '  controllerSavedFieldsLine, type ControllerSettings,')
+    || (panelSrc.includes('readControllerMirror') && panelSrc.includes('saveControllerFromMirror')
+        && panelSrc.includes('controllerSavedFieldsLine')),
+    'the mirror-based helpers must be imported from controllerApi');
+  assert.ok(panelSrc.includes(
+    'const controllerReady = !!ctrlSettings?.device || !!ctrlMirror?.device;'));
+  assert.ok(panelSrc.includes('readControllerMirror(dieCtx.die, dieCtx.config)'),
+    'the mirror must be read tagged with the ACTIVE die/config, never blind');
 });
 
 test('the Drive selector offers "sine current" and "inverter (Controller)", '
@@ -186,8 +193,30 @@ test('the Drive selector offers "sine current" and "inverter (Controller)", '
   assert.ok(block.includes('{coupled && ('), 'must render only while Coupled thermal is on');
   assert.ok(block.includes('<MenuItem value="sine">sine current</MenuItem>'));
   assert.ok(/<MenuItem value="inverter" disabled=\{!controllerReady\}/.test(block));
-  assert.ok(block.includes('set up the controller in the Controller tab first'),
-    'the disabled state must explain itself in the HelpTip, per the brief');
+  assert.ok(block.includes("'\\n\\nDisabled: choose a device in '")
+    && block.includes("+ 'the Controller tab.')} />"),
+    'the disabled HelpTip must name the ONE thing that blocks it, per the brief '
+    + '("nothing else blocks it")');
+  assert.ok(!block.includes('save it.\')} />') && !block.includes('and save it'),
+    'the old two-part reason (choose AND save) must be gone — saving is now '
+    + 'automatic, so it is no longer a precondition');
+});
+
+test('picking "inverter" auto-saves the Controller tab\'s CURRENT settings '
+   + '(the live mirror) into the configuration — the same writer "Save '
+   + 'settings" uses — with no separate save step, and reverts to "sine" on a '
+   + 'gone controller exactly as before', () => {
+  assert.ok(panelSrc.includes('const autoSaveController = useCallback(async () => {'));
+  assert.ok(panelSrc.includes('saveControllerFromMirror(dieCtx.die, dieCtx.config)'));
+  assert.ok(panelSrc.includes(
+    "if (coupled && coupledDrive === 'inverter') void autoSaveController();"),
+    'the auto-save must run the moment the selector is on "inverter" — at '
+    + 'selection time AND on a reload that lands with it already selected — '
+    + 'never gated on a prior Solve');
+  assert.ok(panelSrc.includes("setCtrlSaveMsg(`controller settings saved to ${dieCtx.config}`)"),
+    'one status line, naming the configuration, per the brief');
+  assert.ok(panelSrc.includes('controllerSavedFieldsLine(res.block)'),
+    'the HelpTip behind the status line must name which fields were saved');
 });
 
 test('a controller that disappears (duty switch, empty settings) falls the '
@@ -210,6 +239,34 @@ test('the controller-settings fetch re-checks when the Coupled switch is '
    + 'stayed disabled until reload)', () => {
   assert.ok(panelSrc.includes('}, [dieCtx.die, dieCtx.config, coupled]);'),
     'the fetch effect must depend on `coupled` too');
+});
+
+// ── gating matrix: tab state (live mirror) × saved block × device ──────────
+// The exact truth table `controllerReady = !!ctrlSettings?.device ||
+// !!ctrlMirror?.device` implements — restated so a future edit to that one
+// line has to keep every cell honest, not just the string it happens to
+// contain.
+function controllerReadyFor(ctrlSettings, ctrlMirror) {
+  return !!(ctrlSettings && ctrlSettings.device) || !!(ctrlMirror && ctrlMirror.device);
+}
+
+test('gating matrix: enabled whenever EITHER the saved block or the live '
+   + 'tab-state mirror names a device, disabled only when neither does', () => {
+  const withDevice = { device: 'IMCQ120R004M2H' };
+  const noDevice = { device: null };
+  const rows = [
+    // [ctrlSettings (saved), ctrlMirror (tab state), expected]
+    [null,        null,        false, 'nothing saved, tab never opened'],
+    [null,        withDevice,  true,  'a device chosen on the tab, never saved — the owner\'s bug'],
+    [withDevice,  null,        true,  'a saved block, tab not opened this session'],
+    [withDevice,  withDevice,  true,  'both agree'],
+    [noDevice,    null,        false, 'a settings block exists but names no device'],
+    [null,        noDevice,    false, 'a mirror exists but names no device'],
+    [noDevice,    withDevice,  true,  'stale deviceless save, but the tab has one now'],
+  ];
+  for (const [saved, mirror, expected, why] of rows) {
+    assert.equal(controllerReadyFor(saved, mirror), expected, why);
+  }
 });
 
 // ── the backend progress phase the ring now shows (routes/coupled.py) ──────

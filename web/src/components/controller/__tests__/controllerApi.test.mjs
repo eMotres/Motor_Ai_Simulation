@@ -16,6 +16,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 /* ── verbatim copies of the shipped helpers ──────────────────────────────── */
 
@@ -348,6 +353,116 @@ test('nothing mirrored yet (the Controller tab was never opened) never applies',
   assert.equal(controllerMirrorApplies(undefined, 'CIANO14 50 edited', 'L15'), false);
   assert.equal(controllerMirrorApplies({ die: 'X', config: 'Y', block: null },
     'X', 'Y'), false);
+});
+
+/* ── readControllerMirror / saveControllerFromMirror (owner 2026-09-22, third
+ * round: the Coupled panel's "inverter (Controller)" stayed DISABLED for
+ * CIANO14 50 edited / L15 although the owner had set the Controller tab up —
+ * `GET /api/controller/settings` answered `{}`, the api log showed GETs
+ * only, never a PATCH). `readControllerMirror` is what the Drive selector's
+ * gating now reads INSTEAD of (or alongside) that GET, and
+ * `saveControllerFromMirror` is what fires the missing PATCH itself, on the
+ * SAME `ctrl.settings` mirror `controllerMirrorApplies` above already
+ * guards — so it inherits the same die/config tag rule for free.
+ */
+
+function readControllerMirror(store, die, config) {
+  try {
+    const raw = store['ctrl.settings'];
+    const mirrored = raw ? JSON.parse(raw) : null;
+    return controllerMirrorApplies(mirrored, die, config) ? mirrored.block : null;
+  } catch { return null; }
+}
+
+async function saveControllerFromMirror(store, die, config, patch) {
+  const block = readControllerMirror(store, die, config);
+  if (!block || !block.device) return null;
+  try {
+    const saved = await patch(die, config, block);
+    return { ok: true, block: saved ?? block };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+test('readControllerMirror returns the tagged block\'s device, and null on '
+   + 'a stale/missing/deviceless one', () => {
+  const store = { 'ctrl.settings': JSON.stringify(
+    { die: 'CIANO14 50 edited', config: 'L15', block: { device: 'IMCQ120R004M2H' } }) };
+  assert.deepEqual(readControllerMirror(store, 'CIANO14 50 edited', 'L15'),
+    { device: 'IMCQ120R004M2H' });
+  assert.equal(readControllerMirror(store, 'CIANO14 50 edited', 'L20'), null,
+    'a mirror tagged for a different configuration must not leak into this one');
+  assert.equal(readControllerMirror({}, 'CIANO14 50 edited', 'L15'), null);
+});
+
+test('saveControllerFromMirror is a no-op (null) when nothing is chosen on '
+   + 'the Controller tab for this configuration — never an error the caller '
+   + 'has to show, since the gating already keeps the option disabled then', async () => {
+  assert.equal(await saveControllerFromMirror({}, 'CIANO14 50 edited', 'L15',
+    async () => { throw new Error('must not be called'); }), null);
+  const noDevice = { 'ctrl.settings': JSON.stringify(
+    { die: 'CIANO14 50 edited', config: 'L15', block: { device: null } }) };
+  assert.equal(await saveControllerFromMirror(noDevice, 'CIANO14 50 edited', 'L15',
+    async () => { throw new Error('must not be called'); }), null);
+});
+
+test('saveControllerFromMirror PATCHes the live mirror and reports what the '
+   + 'server saved — this is the missing write: a device chosen but never '
+   + 'explicitly saved on the Controller tab now reaches the server the '
+   + 'moment "inverter" is picked, with no prior Solve required', async () => {
+  const store = { 'ctrl.settings': JSON.stringify(
+    { die: 'CIANO14 50 edited', config: 'L15', block: { device: 'IMCQ120R004M2H',
+      topology: 'one_3ph', f_carrier_hz: 24000 } }) };
+  let patched = null;
+  const patch = async (die, config, block) => {
+    patched = { die, config, block };
+    return { ...block, saved_at: '2026-09-22T21:00:00' };
+  };
+  const res = await saveControllerFromMirror(store, 'CIANO14 50 edited', 'L15', patch);
+  assert.deepEqual(patched, { die: 'CIANO14 50 edited', config: 'L15',
+    block: { device: 'IMCQ120R004M2H', topology: 'one_3ph', f_carrier_hz: 24000 } });
+  assert.equal(res.ok, true);
+  assert.equal(res.block.device, 'IMCQ120R004M2H');
+  assert.equal(res.block.saved_at, '2026-09-22T21:00:00');
+});
+
+test('saveControllerFromMirror reports a failed PATCH (a 4xx, a network drop) '
+   + 'as {ok: false, error}, never a swallowed exception', async () => {
+  const store = { 'ctrl.settings': JSON.stringify(
+    { die: 'CIANO14 50 edited', config: 'L15', block: { device: 'IMCQ120R004M2H' } }) };
+  const res = await saveControllerFromMirror(store, 'CIANO14 50 edited', 'L15',
+    async () => { throw new Error('controller.devices_parallel must be at least 1'); });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /devices_parallel/);
+});
+
+/* ── ActiveFamilyStrip's "Save to duty" — the actual missing-PATCH root
+ * cause (owner 2026-09-22, third round).  `readControllerMirror` above is
+ * gating; THIS is why the write itself never fired: "Save to duty" tags the
+ * PATCH's applicability check against `cfgName`, the configuration's name
+ * AFTER a possible auto-rename (a die-defining geometry change moves the
+ * duty to a new configuration automatically, mid-save) — but the Controller
+ * tab's mirror was written under `targetConfig`, the name that was active
+ * BEFORE that same save renamed it, because the rename is a RESULT of this
+ * save, unknowable beforehand.  Every other post-save concern in that
+ * function (the duty-op overlay, the duty-cycle overlay) already clears
+ * BOTH names for exactly this reason; the controller mirror check alone
+ * compared only the post-rename name, so a same-save rename silently
+ * dropped the PATCH — zero network traffic, matching the owner's api log
+ * (GETs only). Source-checked here (not re-implemented): ActiveFamilyStrip
+ * imports import.meta.env and JSX, which `node --test` cannot load. */
+test('ActiveFamilyStrip checks the controller mirror against BOTH the '
+   + 'pre-rename (targetConfig) and post-rename (cfgName) configuration '
+   + 'name, not cfgName alone', () => {
+  const fs = readFileSync(
+    join(HERE, '..', '..', 'common', 'ActiveFamilyStrip.tsx'), 'utf8');
+  const start = fs.indexOf("const raw = localStorage.getItem('ctrl.settings');");
+  assert.ok(start > 0, 'the controller-mirror save block must exist');
+  const end = fs.indexOf('} catch { /* the controller mirror is best-effort', start);
+  const block = fs.slice(start, end);
+  assert.ok(block.includes('controllerMirrorApplies(mirrored, tDie, targetConfig)'),
+    'must check the PRE-rename name the mirror was actually tagged with');
+  assert.ok(block.includes('controllerMirrorApplies(mirrored, tDie, cfgName)'),
+    'must also check the POST-rename name (an edit made after the rename)');
 });
 
 /* ── statusLine ──────────────────────────────────────────────────────────── */

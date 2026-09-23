@@ -109,6 +109,7 @@ from motor_ai_sim.simulation.sb_postproc import (
     drop_settling_frames as _drop_settling_frames,
     eddy_settle_resid as _eddy_settle_resid,
     hybrid_torque as _hybrid_torque,
+    torque_method_diagnostics as _torque_method_diagnostics,
     torque_harmonics as _torque_harmonics,
 )
 from motor_ai_sim.simulation.moving_band import slip_ring_nodes as _slip_ring_nodes
@@ -4044,11 +4045,17 @@ def fem_transient_sliding_band(
     # ── Stage 2: solid-copper current-constrained eddy data ──────────────────
     # Each coil is a SOLID bar: J = σ(−∂A/∂t + U_c) with ∫J dA = I_c imposed.
     # Per coil store: g_c (σ-lumped load, full DOF space), S_c = ∫σ dA, and the
-    # imposed-current coefficient I_c_unit = dir·n_wires·(area_c/A_copper_of_slot)
-    # so that I_c = Ist[phase]·I_c_unit exactly matches the magnetostatic
-    # ampere-turns — the SAME divisor build_materials normalises J_z by, so the
-    # two excitation channels cannot drift apart (they did: both carried the
-    # nominal slot rectangle and were therefore both off by k).
+    # imposed-current coefficient I_c_unit = dir for EACH physical conductor.
+    # `Ist` is already divided by n_parallel_effective (connection paths ×
+    # strands in hand), so every meshed strip gets its actual branch current;
+    # wire_split strips are series turns and do not divide it. The slot's
+    # conductor count is `n_wires`, so summing these per-body currents gives
+    # the same total ampere-turns as the area-normalized magnetostatic J_z.
+    # Do not scale this current by each tag's meshed area: that would make
+    # series turns carry different currents solely because their triangles
+    # differ slightly in area, and k=1 series would disagree with transposed.
+    # The area normalization remains in build_materials for the continuum
+    # source; eddy constraints instead express physical conductor currents.
     _coil_con = []
     if eddy:
         _ones_s = np.ones(half["s"]["n"])
@@ -4070,15 +4077,13 @@ def fem_transient_sliding_band(
                 _slot_j = int(nm.split("_slot", 1)[1].split("_", 1)[0])
             except Exception:
                 _slot_j = -1
-            area_c = float(areas_s[idx].sum())
-            _a_slot_c = (_coil_areas.get(int(tag)) or (area_c, area_c))[1]
             _coil_con.append({
                 "tag": int(tag),          # domain tag — the P2 branch rebuilds g/S
                                           # on ITS basis and needs the identity of
                                           # the wire this (phase, Iunit) belongs to.
                 "g": np.concatenate([g_s, np.zeros(_nr0)]),
                 "S": float(g_s.sum()),
-                "Iunit": dr * n_wires * area_c / max(_a_slot_c, 1e-12),
+                "Iunit": dr,
                 "phase": ph,
                 "slot": _slot_j,
                 "coil": (_slot_j // 2 if _slot_j >= 0 else -1),
@@ -7347,6 +7352,26 @@ def fem_transient_sliding_band(
             n_parallel=int(n_parallel))
     except Exception as _te:
         log.warning("P2 hybrid torque failed (%s) — using Maxwell series", _te)
+    try:
+        _torque_method_diag = _torque_method_diagnostics(
+            _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
+            n_parallel=int(n_parallel), selected_method=_torque_method)
+    except Exception as _diag_error:
+        # Diagnostics are additive and must never interrupt a completed solve.
+        _torque_method_diag = {
+            "validation_status": "uncertified",
+            "validation_reason": "available solver metadata do not certify a general torque method",
+            "candidate_kind": "fundamental_space_vector_mean_candidate",
+            "selected_method": str(_torque_method),
+            "space_vector_mean_candidate_Nm": None,
+            "raw_maxwell_mean_Nm": None,
+            "space_vector_minus_maxwell_mean_Nm": None,
+            "per_branch_peak_current_A": None,
+            "legacy_selector_would_use_space_vector_mean": None,
+            "certified_energy_balance_Nm": None,
+            "diagnostic_input_reason": "diagnostic evaluation failed: "
+                                       + type(_diag_error).__name__,
+        }
     T_arr = np.asarray(_T2, float)
     Tavg = float(T_arr.mean()) if T_arr.size else 0.0
     _T_report, Trip_raw = torque_metrics(_T2)
@@ -7839,6 +7864,7 @@ def fem_transient_sliding_band(
         "T_noise_floor_pct": None, "torque_filter_applied": False,
         "T_em_raw_Nm": list(_T2), "T_em_filt_Nm": _T_report,
         "torque_method": _torque_method,
+        "torque_method_diagnostics": _torque_method_diag,
         "T_avg_maxwell_Nm": T_maxwell_avg,
         "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp,
         "T_em_maxwell_Nm": list(_T2raw),

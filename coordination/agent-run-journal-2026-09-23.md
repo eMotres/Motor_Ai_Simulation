@@ -148,3 +148,97 @@ No production solver files claimed or edited; no deployment or live API use.
   24s28p standard winding fixture supports1/2/4 (half periodic,quarter anti).
   Parent checked existing guard tests/source; no FEM or guard-suite execution.
   New note records common-angle/mesh requirements and limitations. No escalation.
+- Sol reused to prepare bounded numerical24s28p sector comparison (1/2/4),
+  matched physical angles/current and slip density. No full waveform/sweep;
+  execution pending parent review of stop/persistence preflight and CPU cap.
+- Sol run10 safely stopped pre-mesh due early package import before config
+  isolation; no FEM/live writes. Corrected run11 completed NS4/2/1 sequentially
+  (15.57/24.22/43.22s), one angle0deg, fixed currents, no more solves.
+  T=40.9584901/40.9523109/40.9426034Nm; all residuals<3.7e-8,14iterations.
+  Parent independently checked common current/angle/slip/source/config hashes:
+  half vsfull +0.023710%, quarter vsfull +0.038803%. Raw full fields persisted.
+  Analytic template geometry, coarse distinct meshes; not ripple convergence
+  or material-region equivalence certification. GPT-6 Sol,no escalation.
+- Sol reused for bounded common-angle sector shape comparison after run11;
+  prescribe matching synchronous currents (not frozen-current ripple), raw data
+  retained, no production change. Execution pending preflight/cost review.
+- Sol run12 completed5 synchronous-current angles per sector (NS4/2/1),
+  wall21.25/43.75/65.42s, all15 Newton states accepted residual<=7.173e-8.
+  Raw fields/material tags/nu/Hc/BH persisted per frame; no failed executions.
+  Parent independently checked max torque differences vsfull:
+  NS2 .0316983Nm(.07465%);NS4 .0616551Nm(.14521%). Same angle/current/hashes.
+  Frame0 reproduces run11. Source law checked against production Excitation.
+  Covers36electrical degrees, template geometry;not full ripple certification.
+  Same GPT-6 Sol,no escalation;no production/live edits.
+- Sol reused for full-electrical-period NS4 gate:authorized60samples on fixed
+  1680-node ring,shifts0:2:118,raw waveform retained. Nested20/30/60 sensitivity
+  without duplicate solves.180s wall cap,one thread,BelowNormal,stop on failure.
+- Sol run13 NS4 completed60samples/full electrical period in110.31s,
+  all60 accepted residual<=9.9601e-8;raw waveform+emergency A retained.
+  Parent independently recomputed nested grids20/30/60:means40.24572955,
+  40.24460079,40.24478513Nm;p2p5.55618878,5.14168407,5.57652082Nm.
+  30point sampled range7.7976% below60point despite stable mean. This is
+  sampling sensitivity,not continuum convergence or field-period certification.
+  Same Sol,no escalation,no other sectors/extra solves/live changes.
+- Sol reused:authorized missing odd slip angles1:2:119 only,NS4,same run13
+  setup;180s cap,one thread,BelowNormal. Merge retained evens+odds into120point
+  diagnostic,no filtered/discarded samples,no full/half or mesh changes.
+- Sol run14 completed60missing odd shifts in95.91s;allconverged,raw preserved.
+  Exact mesh/basis/material equality to run13. Parent independently merged by
+  shift:120unique samples,mean40.2474570472Nm,p2p5.5765208241Nm unchanged;
+  min shift54,max4. Mean+0.00664% vs60. Covers every integer slip cell only;
+  spatial/continuum convergence and full/half period comparison remain open.
+  Same GPT-6 Sol,no escalation,no new production/live edits.
+- Owner declined finer spatial mesh; preserve this constraint. Owner explicitly
+  requested Luna for next check. Reused GPT-6 Luna solver_speed_inventory for
+  read-only saved-data/provenance review and economical full-period NS2/NS1
+  plan. No FEM or assembly authorized in this subtask; no escalation.
+- GPT-6 Luna independently implemented guarded NS2 matched20point run15,
+  succeeded first FEM attempt in102.21s(100.39CPU),all20 accepted,
+  residual<=9.3970e-8. No model escalation. Parent recomputed saved comparison:
+  means40.24961239 vsNS4 40.24572955Nm,+0.0096478%;maxpoint diff.03587345Nm.
+  Same1680ring,source/config/material hashes;no finer mesh,no NS1 yet.
+  Raw retained;20point sample does not certify ripple. Sanitizer degenerate
+  rotor-ring warning recorded in note;no production/live writes.
+- Owner approved remaining full-ring comparison;reused GPT-6 Luna for NS1
+  same20angles/ring/material/current asNS2run15 andNS4run13. Authorized single
+  invocation240s wall,one thread,BelowNormal,no finer mesh,no live changes.
+- Luna run16 NS1 completed20frames first invocation194.39s,allaccepted,
+  residual<=8.9936e-8,child exited. No escalation. Parent independently checked
+  means full/half/quarter40.25493388/40.24961239/40.24572955Nm and sampled
+  ranges5.49766361/5.53019325/5.55618878Nm. Quarter range+1.06455% vsfull;
+  maxpoint difference.07688007Nm. Same20angles;not true-extrema certification.
+  No finer mesh,no live/source changes. Raw fields/provenance retained.
+- Owner approved Luna1A selector audit. Reused GPT-6 Luna for call-site and
+  synthetic discontinuity review;no new FEM or production edits authorized.
+  Must distinguish arbitrary threshold from general energy-formula validity.
+- Luna threshold audit completed,no escalation. Parent reran standalone actual
+  helper reproduction exit0(.34s). Synthetic Maxwell DC offset+0.25Nm gives
+  selected mean jump~0.2498Nm at1->1.001A;NOT measured motor error. Raw p2p
+  unchanged. Method threshold applies per branch;report consumers use selected
+  mean. No source change:unified physics-valid replacement remains unresolved.
+- Reused Luna for executable method-evidence audit. No production periodic
+  energy certificate exists. Authorized additive P2 diagnostics exposing both
+  candidate means and explicit uncertified status,without changing selector or
+  waveform. sb_postproc/fem clean before scope;focused tests,no FEM/live writes.
+- Luna implemented additive uncertified torque-method diagnostics in
+  sb_postproc/P2 result. Both means,delta,branch peak and legacy-selector state
+  exported;selected output unchanged. Parent caught finite-input overflow risk;
+  fixed with guarded arithmetic/finite output checks and JSON-safety test.
+  Parent focused suite16passed18subtests1.52s,diffcheckpassed.NoFEM,noescalation.
+  Threshold replacement still unresolved;this adds evidence,not certification.
+- Owner requested continue untilfix. Luna traced k1SERIES/TRANSPOSED difference
+  to per-body area-weighted Iunit versus single path current. Parent rejected
+  premature mode-canonicalization; authorized physical eddy Iunit=orientation
+  (effective branch division already upstream),multi-body tests and one guarded
+  corrected-mode pair30mm12steps60A <=120s,total1thread,BelowNormal. No livewrites.
+- Luna fixed eddy physical per-conductor current coefficient toorientation
+  only;effective branch count already upstream. Unequal mesh areas no longer
+  perturb series-turn currents. Earlier suggestion tocanonicalize k1 rejected
+  by parent until physical source mismatch proved. No model escalation.
+- Corrected real30mm12steps k1 A/B pair completed~41.6s,cold separate guarded
+  processes. Both modes copperAC3.277W,total65.509W(oldseries3.240/65.473).
+  Series path exercised14frames,current conservation error0. Parent verified
+  raw IABC identical,psi differences<=2.863e-17Wb,Tmaxwell<=2.271e-14Nm.
+  54tests6subtests passed1.60s,diffcheckpassed. Earlier hash-case preflight
+  failure stopped beforeFEM,then fixed. No livewrites/filter/finer mesh/deploy.

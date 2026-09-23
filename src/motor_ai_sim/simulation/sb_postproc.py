@@ -14,7 +14,7 @@ trims lists in place because the frame loop's series ARE those lists.
 from __future__ import annotations
 
 import math
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -147,6 +147,87 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
         return (_mx - _mx.mean() + _emean).tolist(), "energy_mean+maxwell_ripple"
     # Legacy low-current/terminal-data fallback: retain the raw Maxwell series.
     return list(t_maxwell), "maxwell_stress"
+
+
+def torque_method_diagnostics(psi_a: Sequence[float], psi_b: Sequence[float],
+                              psi_c: Sequence[float], i_a: Sequence[float],
+                              i_b: Sequence[float], i_c: Sequence[float],
+                              t_maxwell: Sequence[float], pole_pairs: int,
+                              n_parallel: int = 1,
+                              selected_method: Optional[str] = None
+                              ) -> Dict[str, object]:
+    """Compare torque mean candidates without certifying either physically.
+
+    This is additive diagnostic metadata only. It deliberately does not pick
+    the reported torque or infer energy balance, periodicity, or dq validity.
+    Invalid or unavailable inputs yield JSON-safe ``None`` values and a reason.
+    """
+    result: Dict[str, object] = {
+        "validation_status": "uncertified",
+        "validation_reason": (
+            "available solver metadata do not certify a general torque method"),
+        "candidate_kind": "fundamental_space_vector_mean_candidate",
+        "selected_method": (str(selected_method)
+                            if selected_method is not None else None),
+        "space_vector_mean_candidate_Nm": None,
+        "raw_maxwell_mean_Nm": None,
+        "space_vector_minus_maxwell_mean_Nm": None,
+        "per_branch_peak_current_A": None,
+        "legacy_selector_would_use_space_vector_mean": None,
+        "certified_energy_balance_Nm": None,
+        "diagnostic_input_reason": None,
+    }
+    try:
+        arrays = [np.asarray(v, dtype=float) for v in
+                  (psi_a, psi_b, psi_c, i_a, i_b, i_c, t_maxwell)]
+        if any(a.ndim != 1 for a in arrays):
+            result["diagnostic_input_reason"] = "all inputs must be 1-D arrays"
+            return result
+        sizes = {int(a.size) for a in arrays}
+        if len(sizes) != 1 or not sizes or next(iter(sizes)) == 0:
+            result["diagnostic_input_reason"] = (
+                "phase flux, phase current, and Maxwell arrays must have equal nonzero length")
+            return result
+        if not all(np.all(np.isfinite(a)) for a in arrays):
+            result["diagnostic_input_reason"] = "inputs must contain only finite values"
+            return result
+        p = int(pole_pairs)
+        npar = int(n_parallel)
+        if p <= 0 or p != pole_pairs or npar < 1 or npar != n_parallel:
+            result["diagnostic_input_reason"] = (
+                "pole_pairs and n_parallel must be positive integers")
+            return result
+
+        pa, pb, pc, ia, ib, ic, mx = arrays
+        with np.errstate(over="raise", invalid="raise", divide="raise"):
+            peak = float(np.max(np.abs(np.concatenate((ia, ib, ic)))))
+            scale, k_clarke = 2.0 / 3.0, math.sqrt(3.0) / 2.0
+            psi_alpha = scale * (pa - 0.5 * pb - 0.5 * pc)
+            psi_beta = scale * k_clarke * (pb - pc)
+            i_alpha = scale * (ia - 0.5 * ib - 0.5 * ic)
+            i_beta = scale * k_clarke * (ib - ic)
+            candidate = (1.5 * float(p) * float(npar)
+                         * (psi_alpha * i_beta - psi_beta * i_alpha))
+            candidate_mean = float(np.mean(candidate))
+            maxwell_mean = float(np.mean(mx))
+            mean_difference = candidate_mean - maxwell_mean
+        if not all(math.isfinite(v) for v in
+                   (peak, candidate_mean, maxwell_mean, mean_difference)):
+            result["diagnostic_input_reason"] = (
+                "diagnostic arithmetic produced a nonfinite value")
+            return result
+        result.update({
+            "space_vector_mean_candidate_Nm": candidate_mean,
+            "raw_maxwell_mean_Nm": maxwell_mean,
+            "space_vector_minus_maxwell_mean_Nm": mean_difference,
+            "per_branch_peak_current_A": peak,
+            "legacy_selector_would_use_space_vector_mean": bool(peak > 1.0),
+        })
+        return result
+    except Exception as exc:
+        result["diagnostic_input_reason"] = (
+            "diagnostic inputs could not be evaluated: " + type(exc).__name__)
+        return result
 
 
 def torque_harmonics(t_raw: Sequence[float], n_steps_per_period: int,

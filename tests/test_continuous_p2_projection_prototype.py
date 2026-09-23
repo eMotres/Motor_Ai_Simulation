@@ -8,6 +8,7 @@ from skfem import Basis, ElementTriP2, MeshTri
 
 from motor_ai_sim.simulation.p2_projection import SlipProjection
 from scripts.continuous_p2_mortar_prototype import ContinuousMortarProjection
+from scripts.continuous_p2_mortar_trace_prototype import TraceMortarProjection
 from scripts.continuous_p2_projection_prototype import ContinuousSlipProjection
 
 
@@ -213,3 +214,28 @@ def test_mortar_removes_collocation_weak_residual_on_crossed_edge():
         mortar.Mrr @ mortar.rotor_coordinates(mortar_values) - mixed @ z)
     assert np.max(np.abs(collocation_residual)) > 1e-4
     assert np.max(np.abs(mortar_residual)) < 1e-13
+
+
+@pytest.mark.parametrize("full_ring,sign", [(True, 1), (False, 1), (False, -1)])
+@pytest.mark.parametrize("slots", [0., .37, -.37, 5.37, -5.37])
+def test_trace_only_mortar_matches_dense_global_reference(full_ring, sign, slots):
+    discrete = annular_projection(5, full_ring, sign)
+    step = _spacing(5, full_ring)
+    reference = ContinuousMortarProjection(discrete, step)
+    trace_only = TraceMortarProjection(discrete, step)
+    theta = slots*step
+    mixed, derivative = reference.overlap(theta)
+    local_mixed, local_derivative = trace_only.overlap_trace(theta)
+    np.testing.assert_allclose(trace_only.Mrr.toarray(), reference.Mrr,
+                               rtol=0., atol=1e-14)
+    np.testing.assert_allclose(local_mixed,
+                               mixed[:, trace_only.stator_global_cols],
+                               rtol=0., atol=1e-14)
+    np.testing.assert_allclose(local_derivative,
+                               derivative[:, trace_only.stator_global_cols],
+                               rtol=0., atol=1e-13)
+    p_ref, dp_ref, outer_ref = reference.build(theta)
+    p, dp, outer = trace_only.build(theta)
+    np.testing.assert_allclose(p.toarray(), p_ref.toarray(), rtol=0., atol=2e-13)
+    np.testing.assert_allclose(dp.toarray(), dp_ref.toarray(), rtol=0., atol=2e-12)
+    np.testing.assert_array_equal(outer, outer_ref)

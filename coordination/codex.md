@@ -503,3 +503,23 @@ Isolated implementation and verification folder:
 `C:\Users\vadim\.codex\visualizations\2026\09\16\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\solver-pardiso-fix`
 
 Commit: none (handoff to integration lead). Deployment: none. Restart: none.
+
+## Low-current torque selector audit (2026-09-23)
+
+GPT-6 Sol implemented the read-only review script, five analytic checks, and
+the audit note. No escalation was needed. The parent independently reran the
+five tests and the archived-data review.
+
+On the fixed GEO30 12-slot/14-pole NS2 fixture, the selected mean torque drops
+by 0.000081312055 Nm between 1.000 and 1.001 A peak per branch. Over the same
+increment, raw Maxwell rises by 0.000005119930 Nm and terminal/space-vector
+work rises by 0.000005140365 Nm. The existing hard 1 A method switch therefore
+introduces a nonphysical discontinuity. The selector was intentionally left
+unchanged pending the bounded 1 A frozen-current virtual-work discriminator.
+
+Artifacts: `scripts/torque_low_current_review.py`,
+`tests/test_torque_low_current_review.py`, and
+`docs/torque-low-current-threshold-2026-09-23.md`.
+Verification: 5 passed in 0.12 s; archived review reproduced all four saved
+cases and hashes. No live API access, restart, deployment, configuration edit,
+or push.

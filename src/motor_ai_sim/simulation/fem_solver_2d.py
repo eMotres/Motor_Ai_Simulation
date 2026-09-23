@@ -7162,7 +7162,7 @@ def fem_transient_sliding_band(
     _fe_break = {}
     for _half, _tm in (("stator", _fe_terms_s), ("rotor", _fe_terms_r)):
         if _tm:
-            _fe_break[_half] = {
+            _fe_row = {
                 "hysteresis_W": round(_tm["hysteresis_W"] * NS, 3),
                 "eddy_W": round(_tm["eddy_W"] * NS, 3),
                 "excess_W": round(_tm["excess_W"] * NS, 3),
@@ -7175,6 +7175,36 @@ def fem_transient_sliding_band(
                 # measured remainder, not a separately measured split.
                 "model": _tm.get("model", "bertotti"),
             }
+            for _candidate_key in (
+                    "surface_raw_window_candidate_W",
+                    "surface_detrended_candidate_W"):
+                if (_candidate_key in _tm
+                        and _tm[_candidate_key] is not None
+                        and np.isfinite(_tm[_candidate_key])):
+                    _fe_row[_candidate_key] = float(_tm[_candidate_key] * NS)
+            if "surface_selected_candidate" in _tm:
+                _fe_row["surface_selected_candidate"] = _tm[
+                    "surface_selected_candidate"]
+                _fe_row["wrap_jump_frac"] = float(
+                    _tm.get("wrap_jump_frac", 0.0))
+                _fe_row["wrap_guard_weight"] = float(
+                    _tm.get("wrap_guard_weight", 0.0))
+            _fe_break[_half] = _fe_row
+    _has_surface_candidates = any(
+        (_tm.get("surface_raw_window_candidate_W") is not None)
+        for _tm in (_fe_terms_s, _fe_terms_r))
+    if _has_surface_candidates:
+        _raw_surface_delta = sum(
+            (_tm["surface_raw_window_candidate_W"]
+             - _tm["surface_detrended_candidate_W"]) * NS
+            for _tm in (_fe_terms_s, _fe_terms_r)
+            if _tm.get("surface_raw_window_candidate_W") is not None
+            and _tm.get("surface_detrended_candidate_W") is not None)
+        P_fe_raw_window_candidate_avg2 = float(P_fe_avg2 + _raw_surface_delta)
+        P_fe_detrended_candidate_avg2 = float(P_fe_avg2)
+    else:
+        P_fe_raw_window_candidate_avg2 = None
+        P_fe_detrended_candidate_avg2 = None
     if _fe_break:
         log.info("iron loss | %s | total %.2f W",
                  " | ".join("%s: hyst %.2f + eddy %.2f + excess %.2f = %.2f W "
@@ -8103,6 +8133,10 @@ def fem_transient_sliding_band(
         "magnet_segmentation": _seg_rep,
         "P_fe_avg_W": round(float(P_fe_avg2), 3),
         "P_fe_terms": _fe_break,   # {stator|rotor: hyst/eddy/excess/k_f/model}
+        "P_fe_raw_window_candidate_avg_W": P_fe_raw_window_candidate_avg2,
+        "P_fe_detrended_candidate_avg_W": P_fe_detrended_candidate_avg2,
+        "P_fe_surface_selected_candidate": (
+            "detrended_legacy" if _has_surface_candidates else None),
         "P_loss_total_avg_W": round(float(P_loss_avg2), 3),
         "P_airgap_W": P_airgap_avg2, "P_mech_avg_W": P_mech_avg2,
         "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)

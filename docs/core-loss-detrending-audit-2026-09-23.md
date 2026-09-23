@@ -37,4 +37,18 @@ honest next step: expose raw and corrected surface-loss candidates with the
 existing guard metrics, without selecting either as truth, then validate on a
 slot-passing-commensurate rotor capture (the source identifies seven electrical
 periods) before changing the reported model. No formula or tests were changed
-for this audit; no FEM run was launched by this task.
+for the initial audit; no FEM run was launched by that audit.
+
+## Candidate visibility added
+
+The measured-surface path now exposes `surface_raw_window_candidate_W` and
+`surface_detrended_candidate_W` per steel half, along with
+`surface_selected_candidate="detrended_legacy"`, `wrap_jump_frac`, and
+`wrap_guard_weight`. The top-level result also reports
+`P_fe_raw_window_candidate_avg_W` and `P_fe_detrended_candidate_avg_W`; raw
+replaces only each measured-surface half's candidate total while keeping other
+halves' selected models intact. Existing `P_fe_avg_W`, time series, and selected
+formula still use the legacy detrended candidate. These are diagnostic
+comparisons, not a validation or selector change. Candidate evaluation uses a
+separate excursion context and leaves the selected surface's envelope logs
+unchanged.

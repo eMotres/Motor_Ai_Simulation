@@ -42,7 +42,8 @@ DEFAULT_STACKING_FACTOR = 0.97
 
 
 def harmonic_amplitudes(H: np.ndarray, f_elec_hz: float, n_periods: float,
-                        wrap: Optional[dict] = None
+                        wrap: Optional[dict] = None,
+                        raw_amplitudes: Optional[list] = None,
                         ) -> Tuple[np.ndarray, np.ndarray]:
     """(amplitudes, frequencies) of one field COMPONENT's per-element history.
 
@@ -99,6 +100,12 @@ def harmonic_amplitudes(H: np.ndarray, f_elec_hz: float, n_periods: float,
     the run can say which half it was talking about.
     """
     n = int(H.shape[0])
+    if raw_amplitudes is not None:
+        raw_C = np.fft.rfft(H, axis=0) / max(n, 1)
+        raw_amp = 2.0 * np.abs(raw_C)
+        if n % 2 == 0 and raw_amp.shape[0] > 1:
+            raw_amp[-1] = np.abs(raw_C[-1])
+        raw_amplitudes.append(raw_amp[1:])
     if n >= 4:
         jump = 3.0 * H[-1] - 3.0 * H[-2] + H[-3] - H[0]
         ptp = np.maximum(H.max(0) - H.min(0), 1e-12)
@@ -131,6 +138,7 @@ def surface_loss_density(
     excursion: Optional[dict] = None,
     fundamental_only: Optional[list] = None,
     wrap: Optional[dict] = None,
+    raw_window_candidate: Optional[dict] = None,
 ) -> np.ndarray:
     """Per-element iron loss density [W/m³ of STEEL] from the measured surface.
 
@@ -165,19 +173,31 @@ def surface_loss_density(
     so the harmonic content's contribution can be reported rather than assumed.
     """
     out = np.zeros(X.shape[1], float)
+    raw_out = np.zeros(X.shape[1], float)
     fund = np.zeros(X.shape[1], float)
     for H in (X, Y):
-        amp, freqs = harmonic_amplitudes(H, f_elec_hz, n_periods, wrap)
+        raw_amp: list = []
+        amp, freqs = harmonic_amplitudes(
+            H, f_elec_hz, n_periods, wrap,
+            raw_amplitudes=raw_amp if raw_window_candidate is not None else None)
         for m in range(amp.shape[0]):
             A = amp[m] * inv_kf
-            if not A.size or float(A.max()) < HARMONIC_FLOOR_T:
-                continue
-            p = surface.w_per_m3(A, float(freqs[m]), excursion, weight)
-            out += p
-            if m == 0:                     # m is 0-based over harmonics 1, 2, …
-                fund += p
+            if A.size and float(A.max()) >= HARMONIC_FLOOR_T:
+                p = surface.w_per_m3(A, float(freqs[m]), excursion, weight)
+                out += p
+                if m == 0:                 # m is 0-based over harmonics 1, 2, …
+                    fund += p
+            if raw_window_candidate is not None:
+                raw_A = raw_amp[0][m] * inv_kf
+                if raw_A.size and float(raw_A.max()) >= HARMONIC_FLOOR_T:
+                    # Keep this candidate's envelope accounting separate from
+                    # the legacy detrended result and its caller-owned logs.
+                    raw_out += surface.w_per_m3(
+                        raw_A, float(freqs[m]), None, weight)
     if fundamental_only is not None:
         fundamental_only.append(fund)
+    if raw_window_candidate is not None:
+        raw_window_candidate["density"] = raw_out
     return out
 
 
@@ -342,12 +362,18 @@ def iron_loss_series(
         exc: dict = {}
         fund: list = []
         wrap: dict = {}
+        raw_candidate: dict = {}
         # X/Y are ALREADY restricted to this half's iron elements — the
         # classical term above broadcasts them straight against vol_steel.
         dens = surface_loss_density(
             X, Y, surface, inv_kf, f_elec_hz, n_periods,
-            weight=vol_steel, excursion=exc, fundamental_only=fund, wrap=wrap)
+            weight=vol_steel, excursion=exc, fundamental_only=fund, wrap=wrap,
+            raw_window_candidate=raw_candidate if terms is not None else None)
         P_surf = float(np.sum(dens * vol_steel))
+        P_surf_raw = (float(np.sum(raw_candidate["density"] * vol_steel))
+                      if raw_candidate else None)
+        if P_surf_raw is not None and not np.isfinite(P_surf_raw):
+            P_surf_raw = None
         P_fund = float(np.sum(fund[0] * vol_steel)) if fund else 0.0
         P_eddy = float(np.mean(classical))
         # The time RIPPLE of the iron loss is the classical term — it is the
@@ -389,7 +415,12 @@ def iron_loss_series(
                 "wrap_jump_frac": wrap.get("frac", 0.0),
                 "wrap_guard_weight": wrap.get("weight", 0.0),
                 "envelope_out_frac": (exc.get("w_out", 0.0)
-                                      / max(exc.get("w_all", 0.0), 1e-30))})
+                                      / max(exc.get("w_all", 0.0), 1e-30)),
+                **({
+                    "surface_raw_window_candidate_W": P_surf_raw,
+                    "surface_detrended_candidate_W": P_surf,
+                    "surface_selected_candidate": "detrended_legacy",
+                } if P_surf_raw is not None else {})})
         return classical, rest
 
     if terms is not None:

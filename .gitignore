@@ -139,3 +139,10 @@ config/.run_ledger/
 # in a committed .cmd.  Template: scripts/api.env.example  (migration Stage 6)
 scripts/api.env
 deploy/.env
+
+# Vendor SPICE libraries (Infineon Model Terms of Use §3: confidential; no
+# redistribution grant on the others).  Only the manifests are committed;
+# each names the URL and sha256 of the exact file (2026-09-23).
+config/devices/spice/_vendor/
+# harness scratch output (netlists, wrdata, logs)
+config/devices/spice/_runs/

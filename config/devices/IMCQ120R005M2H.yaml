@@ -138,26 +138,31 @@ switching:
       Linear in R_G,ext through the datasheet point (2.3 ohm) — the same
       rule as IMCQ120R004M2H; E_fr held at its 2.3 ohm value.
   curves:
+    # CORRECTED 2026-09-23 (SPICE validation pass): the 175 degC blocks of
+    # this card carried IMCQ120R004M2H's Table 4/6 values (4.92/4.78/2.99 mJ
+    # and 4.89/2.51/3.1 mJ at -5 V) — a copy error.  Re-read from THIS
+    # part's datasheet rev 1.10: Table 4/6 at 138.2 A and the E = f(I_D)
+    # figure, p. 12 (curves start at ~15 A, end at 275 A).
     - v_gs_off_V: 0
       t_j_c: 175
       e_on_uJ:
         basis: figure
         tolerance_pct: 15
-        points: [[10, 900], [138.2, 4920], [275, 6000]]
+        points: [[15, 820], [138.2, 3300], [275, 6950]]
         anchor_i_d_A: 138.2
-        anchor_source: "Datasheet Table 4, E_on at T_vj = 175 degC = 4.92 mJ"
+        anchor_source: "Datasheet Table 4, E_on at T_vj = 175 degC = 3.3 mJ"
       e_off_uJ:
         basis: figure
         tolerance_pct: 15
-        points: [[10, 800], [138.2, 4780], [275, 4700]]
+        points: [[15, 550], [138.2, 3040], [275, 5950]]
         anchor_i_d_A: 138.2
-        anchor_source: "Datasheet Table 4, E_off at T_vj = 175 degC = 4.78 mJ"
+        anchor_source: "Datasheet Table 4, E_off at T_vj = 175 degC = 3.04 mJ"
       e_fr_uJ:
         basis: figure
         tolerance_pct: 18
-        points: [[10, 450], [138.2, 2990], [275, 4200]]
+        points: [[15, 330], [138.2, 2100], [275, 4650]]
         anchor_i_d_A: 138.2
-        anchor_source: "Datasheet Table 6, E_fr at T_vj = 175 degC = 2.99 mJ"
+        anchor_source: "Datasheet Table 6, E_fr at T_vj = 175 degC = 2.1 mJ"
     - v_gs_off_V: 0
       t_j_c: 25
       e_on_uJ:
@@ -183,21 +188,21 @@ switching:
       e_on_uJ:
         basis: figure
         tolerance_pct: 15
-        points: [[10, 950], [138.2, 4890], [275, 6800]]
+        points: [[15, 820], [138.2, 3270], [275, 6850]]
         anchor_i_d_A: 138.2
-        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 175 degC = 4.89 mJ"
+        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 175 degC = 3.27 mJ"
       e_off_uJ:
         basis: figure
         tolerance_pct: 15
-        points: [[10, 380], [138.2, 2510], [275, 4600]]
+        points: [[15, 200], [138.2, 1560], [275, 3450]]
         anchor_i_d_A: 138.2
-        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 175 degC = 2.51 mJ"
+        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 175 degC = 1.56 mJ"
       e_fr_uJ:
         basis: figure
         tolerance_pct: 18
-        points: [[10, 300], [138.2, 3100], [275, 5000]]
+        points: [[15, 300], [138.2, 2100], [275, 4650]]
         anchor_i_d_A: 138.2
-        anchor_source: "Datasheet Table 6, E_fr at -5 V, T_vj = 175 degC = 3.1 mJ"
+        anchor_source: "Datasheet Table 6, E_fr at -5 V, T_vj = 175 degC = 2.1 mJ"
     - v_gs_off_V: -5
       t_j_c: 25
       e_on_uJ:

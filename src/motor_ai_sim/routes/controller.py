@@ -711,12 +711,19 @@ _KEY_FIELDS = ("num_slots", "num_poles", "single_layer", "winding_layout",
                "dead_time_us", "v_gs_on_V", "v_gs_off_V", "r_g_ext_ohm",
                "r_tim_k_w", "r_spread_k_w", "e_oss_policy",
                "samples_per_carrier")
+#: Keyed only when SET (2026-09-23), so every key written before these
+#: fields existed stays the same key.
+_KEY_FIELDS_OPTIONAL = ("switching_source", "r_g_off_ext_ohm", "l_sigma_nH")
 
 
 def _history_key(req: Dict[str, Any]) -> str:
     p: Dict[str, Any] = {}
     for k in _KEY_FIELDS:
         p[k] = _RH.round_floats(req.get(k), 6) if req.get(k) is not None else None
+    for k in _KEY_FIELDS_OPTIONAL:
+        if req.get(k) is not None and not (k == "switching_source"
+                                           and str(req[k]).lower() == "datasheet"):
+            p[k] = _RH.round_floats(req.get(k), 6)
     p["cooling"] = _RH.round_floats(dict(req.get("cooling") or {}), 6)
     p["par_by_bridge"] = sorted(
         f"{k}={v}" for k, v in (req.get("devices_parallel_by_bridge") or {}).items())
@@ -908,6 +915,17 @@ def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]
                               else ctrl_cooling.get("r_tim_k_w")),
                 "r_spread_k_w": body.get("r_spread_k_w"),
                 "e_oss_policy": body.get("e_oss_policy") or "included_in_eon",
+                # 2026-09-23: the optional SPICE switching source (default: the
+                # card's own, i.e. "datasheet"); R_G,off and L_sigma only pick
+                # the SPICE table's driver/layout set.
+                "switching_source": (body.get("switching_source")
+                                     or ctrl.get("switching_source")),
+                "r_g_off_ext_ohm": (body.get("r_g_off_ext_ohm")
+                                    if body.get("r_g_off_ext_ohm") is not None
+                                    else ctrl.get("r_g_off_ext_ohm")),
+                "l_sigma_nH": (body.get("l_sigma_nH")
+                               if body.get("l_sigma_nH") is not None
+                               else ctrl.get("l_sigma_nH")),
                 "samples_per_carrier": body.get("samples_per_carrier"),
                 "mapping": body.get("mapping") or (ctrl.get("mapping") or None),
                 "devices_parallel_by_bridge":

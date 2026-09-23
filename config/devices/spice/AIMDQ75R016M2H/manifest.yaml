@@ -1,0 +1,51 @@
+# SPICE model manifest — AIMDQ75R016M2H
+# Written 2026-09-23 from what was actually downloaded.  The vendor
+# files live in ../_vendor/ and are NOT in git (see `licence`); this
+# manifest says where to fetch the identical file and how to check it.
+part: AIMDQ75R016M2H
+status: encrypted
+status_reason: "every variant of this library is ENCRYPTED for one commercial simulator (LTspice / Cadence PSpice / SIMetrix); ngspice cannot run it — needs LTspice (free) or OrCAD PSpice or SIMetrix"
+source:
+  vendor: Infineon Technologies AG
+  product_page: https://www.infineon.com/part/AIMDQ75R016M2H
+  document: "CoolSiC Automotive MOSFET 750 V G2 - SPICE"
+  url: https://www.infineon.com/assets/row/public/documents/24/50/infineon-coolsic-750v-g2-automotive-mosfet-simulationmodels-en.zip
+  revision: "01_00 (library version 1325, 16.10.2025)"
+  released: "2025-11-21"
+  access: "public asset (design-resources API: confidentialityLevel Public, damGated f, accessMode Default) — plain HTTPS GET, no login, no click-through"
+  downloaded: "2026-09-23"
+  zip_sha256: 15964cd23e0d57676cd21f30b14de21fa64cdefafe2868661db3490ccb88b954
+  zip_bytes: 246289
+library:
+  file: ../_vendor/infineon-coolsic-750v-g2-automotive-mosfet-simulationmodels-en/infineon-coolsic-automotive-mosfet-750v-g2-spice-v1325/CoolSiC_Gen2_750V_Auto_wave1_wave3_wave4_wave6_1325/IFX_CoolSiC_Gen2_750V_Auto_obfuscated_wave1_3_4_6_PSpice.lib
+  sha256: 187c6a8d2e10179b880863929cdcc328dbe9780e19385ba1868a97b1f8a448b0
+  bytes: 197163
+  header: "INFINEON Power Transistors, Level0/1/3 SPICE Library for 750V SiC Trench MOSFETs, version 01_00 (library version 1325, 16.10.2025)"
+  dialect: "PSpice with **$ENCRYPTED_LIB (Cadence PSpice encryption)"
+  other_variants:
+    - {file: ../_vendor/infineon-coolsic-750v-g2-automotive-mosfet-simulationmodels-en/infineon-coolsic-automotive-mosfet-750v-g2-spice-v1325/CoolSiC_Gen2_750V_Auto_wave1_wave3_wave4_wave6_1325/IFX_CoolSiC_Gen2_750V_Auto_obfuscated_wave1_3_4_6_LTSpice.lib, sha256: de5aba25b76c14e878a9e110f3d9bacbf351e9f443a1cc8f2f0c4ce71b500f63, simulator: "LTspice (LTspice-encrypted, '* Begin:' block)"}
+    - {file: ../_vendor/infineon-coolsic-750v-g2-automotive-mosfet-simulationmodels-en/infineon-coolsic-automotive-mosfet-750v-g2-spice-v1325/CoolSiC_Gen2_750V_Auto_wave1_wave3_wave4_wave6_1325/IFX_CoolSiC_Gen2_750V_Auto_obfuscated_wave1_3_4_6_Simetrix.lib, sha256: 390729996b8852244650503703ef9bfd60eb17ff2951cfeb30d6c6047c46a9f3, simulator: "SIMetrix (SMX_AES encrypted blocks)"}
+models:
+  L1:
+    subckt: AIMDQ75R016M2H_L1
+    pins: [drain, gate, source, source_k]
+    temperature: "isothermal (.temp); PARAMS dvth/dvtdibl (IMDQ75R004M2H: dvth1/dvth2 — dual-chip)"
+  L3:
+    subckt: AIMDQ75R016M2H_L3
+    pins: [drain, gate, source, source_k, Tj, Tcase]
+    temperature: "self-heating, Tj/Tcase thermal nodes"
+ngspice:
+  compat: psa
+  tested_with: null
+licence:
+  summary: >-
+    Header disclaimer (model subject to change, typical device, no warranty,
+    user validates); the library body is ENCRYPTED per simulator; the LTspice
+    variant carries LTspice's own notice "Permission is granted to use this
+    file for simulations but not to reverse engineer its contents".  No
+    explicit redistribution grant.
+  redistribution: "not granted — kept out of git"
+  in_git: false   # config/devices/spice/_vendor/ is .gitignored
+notes:
+  - "the subcircuit NAMES and pins are readable; the bodies are encrypted"
+  - "to use: open the LTspice variant in LTspice with the .cir this harness writes (same circuit, same pins)"

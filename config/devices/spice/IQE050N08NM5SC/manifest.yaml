@@ -1,0 +1,57 @@
+# SPICE model manifest — IQE050N08NM5SC
+# Written 2026-09-23 from what was actually downloaded.  The vendor
+# files live in ../_vendor/ and are NOT in git (see `licence`); this
+# manifest says where to fetch the identical file and how to check it.
+part: IQE050N08NM5SC
+status: usable_ngspice
+status_reason: "plain-text SPICE (the '_Spice' flavour of the library); runs in ngspice with ngbehavior=psa"
+source:
+  vendor: Infineon Technologies AG
+  product_page: https://www.infineon.com/part/IQE050N08NM5SC
+  document: "MOSFET OptiMOS 80 V N-Channel PSpice"
+  url: https://www.infineon.com/assets/row/public/documents/24/50/infineon-optimos-powermosfet-pspice-80v-n-channel-simulationmodels-en.zip
+  revision: "06_00 (OptiMOS5 80V library 'Version 280225')"
+  released: "2026-04-10"
+  access: "public asset (design-resources API: confidentialityLevel Public, damGated f, accessMode Default) — plain HTTPS GET, no login, no click-through"
+  downloaded: "2026-09-23"
+  zip_sha256: 6475fc420d511e3d6df2740031fb36d1a622bd7875069ae22658e3424698d876
+  zip_bytes: 951616
+library:
+  file: ../_vendor/infineon-optimos-powermosfet-pspice-80v-n-channel-simulationmodels-en/OptiMOS5/OptiMOS5_80V_Spice.lib
+  sha256: fc2b9524e8b0186c93dd94df576aa5052bd531043a69556caaf5e5d5f213f5c4
+  bytes: 285150
+  header: "INFINEON Power Transistors, PSPICE Library for OptiMOS5 80V n-channel Transistors, Version 280225"
+  dialect: "PSpice (VALUE=, limit(), if(), TEMP)"
+  other_variants:
+    - {file: ../_vendor/infineon-optimos-powermosfet-pspice-80v-n-channel-simulationmodels-en/OptiMOS5/OptiMOS5_80V_LTSpice.lib, sha256: f90200848836cbf98a8b779ff4033fe206ec0fb0cff6c3f942460a18295f4b7e, simulator: "LTspice"}
+    - {file: ../_vendor/infineon-optimos-powermosfet-pspice-80v-n-channel-simulationmodels-en/OptiMOS5/OptiMOS5_80V_Cadence_PSpice.lib, sha256: 7186745c60c3b5c4786cc7ee7d544a8a6e56b8b470a38a9affc8589d7b8e3147, simulator: "Cadence PSpice"}
+models:
+  L1:
+    subckt: IQE050N08NM5SC_L1
+    pins: [drain, gate, source]
+    temperature: "Tj = TEMP (.temp) plus the model's own self-heating source on an internal node"
+  L3:
+    subckt: IQE050N08NM5SC
+    pins: [drain, gate, source, Tj, Ttop, Tbottom]
+    temperature: "thermal nodes Tj, Ttop, Tbottom (dual-side-cooled Cauer network)"
+ngspice:
+  compat: psa
+  # The L1 wrapper (junction = TEMP through a 1 uOhm E-source loop) does NOT
+  # converge in an ngspice transient ("timestep too small" at the internal
+  # gate at the first turn-off; gear/xmu/looser tolerances/ps mode/slower
+  # gate edge tried 2026-09-23), and its DC point needs a voltage drive.
+  # The L3 model with ALL thermal pins (Tj, Ttop, Tbottom) held at T_j by
+  # voltage sources is the same electrical core, isothermal at T_j, and runs
+  # (7 s per double pulse).  The harness uses L3 for this part.
+  level: L3
+  tested_with: "ngspice-46 shared library bundled with KiCad 10.0 (C:/Program Files/KiCad/10.0/bin/ngspice.dll)"
+licence:
+  summary: >-
+    Header disclaimer only (model subject to change without notice,
+    typical device, datasheet is the conclusive guideline, no warranty or
+    liability).  No explicit redistribution grant.
+  redistribution: "not granted — kept out of git"
+  in_git: false   # config/devices/spice/_vendor/ is .gitignored
+notes:
+  - "the library carries a SEPARATE IQE050N08NM5SC model (R_g 0.62 ohm, and a TOP-side thermal path Ttop besides Tbottom) next to the base IQE050N08NM5 (R_g 0.8 ohm, Tcase only): the '...SC' suffix is not just packing — see docs/CONTROLLER_SPICE_2026-09-23.md"
+  - "no Kelvin source pin (3-terminal PQFN)"

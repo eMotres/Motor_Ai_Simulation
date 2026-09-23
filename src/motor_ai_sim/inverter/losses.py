@@ -64,7 +64,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from motor_ai_sim.inverter import waveforms as wf
-from motor_ai_sim.inverter.devices import DeviceCard, CardError, get_device
+from motor_ai_sim.inverter.devices import (DeviceCard, CardError, get_device,
+                                           SWITCHING_SOURCES)
 from motor_ai_sim.inverter.topology import (Bridge, Coil, Topology,
                                             TopologyError, build_topology,
                                             coils_from_winding)
@@ -461,8 +462,15 @@ def _build_cooling(cooling_req: Dict[str, Any]
 def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
                 f_sw: float, t_j_c: float, v_dc: float, v_gs_on: float,
                 v_gs_off: float, r_g: Optional[float], dead_time_s: float,
-                e_oss_policy: str) -> Dict[str, Any]:
-    """Conduction / third-quadrant / switching / E_oss of ONE leg, watts."""
+                e_oss_policy: str, switching_source: Optional[str] = None,
+                r_g_off: Optional[float] = None,
+                l_sigma_nH: Optional[float] = None) -> Dict[str, Any]:
+    """Conduction / third-quadrant / switching / E_oss of ONE leg, watts.
+
+    ``switching_source`` — ``None``/``"datasheet"`` (the card's curves, as
+    before) or ``"spice"`` (the card's SPICE-built table; ``r_g_off`` and
+    ``l_sigma_nH`` choose its driver/layout set).
+    """
     n = max(int(n_par), 1)
     r_tot = card.r_ds_on_ohm(t_j_c, v_gs_on)
     r_eff = r_tot / n
@@ -491,7 +499,8 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
     for x in ladder:
         e = card.e_switch(i_d_A=float(x), t_j_c=t_j_c, v_dc_V=v_dc,
                           v_gs_off_V=v_gs_off, r_g_ext_ohm=r_g,
-                          v_gs_on_V=v_gs_on)
+                          v_gs_on_V=v_gs_on, source=switching_source,
+                          r_g_off_ext_ohm=r_g_off, l_sigma_nH=l_sigma_nH)
         e_on.append(e["e_on_J"]); e_off.append(e["e_off_J"]); e_fr.append(e["e_fr_J"])
         extrapolated = extrapolated or bool(e["extrapolated"])
         if not notes:
@@ -855,6 +864,26 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     v_gs_off = _f(req.get("v_gs_off_V"), "v_gs_off_V", default=0.0)
     r_g = req.get("r_g_ext_ohm")
     r_g = None if r_g is None else _f(r_g, "r_g_ext_ohm")
+    # Owner 2026-09-23: the switching energies may come from the vendor's
+    # SPICE model instead of the datasheet curves — an OPTIONAL second
+    # source, default "datasheet" (the card's own ``switching_source`` field
+    # decides when the request does not).  R_G,off and L_sigma only select
+    # the SPICE table's driver/layout set.
+    sw_src = str(req.get("switching_source") or card.switching_source_default()
+                 ).strip().lower()
+    if sw_src not in SWITCHING_SOURCES:
+        raise ControllerRefusal("switching_source must be "
+                                + " or ".join(SWITCHING_SOURCES),
+                                ["switching_source"])
+    if sw_src == "spice" and card.switching_table() is None:
+        raise ControllerRefusal(
+            f"switching_source 'spice': {card.part} has no SPICE switching "
+            "table (build it with scripts/spice_build_tables.py)",
+            ["switching_source", "device"], code="no_spice_table")
+    r_g_off = req.get("r_g_off_ext_ohm")
+    r_g_off = None if r_g_off is None else _f(r_g_off, "r_g_off_ext_ohm")
+    l_sig = req.get("l_sigma_nH")
+    l_sig = None if l_sig is None else _f(l_sig, "l_sigma_nH", positive=True)
     policy = str(req.get("e_oss_policy") or "included_in_eon").strip().lower()
     if policy not in E_OSS_POLICIES:
         raise ControllerRefusal("e_oss_policy must be "
@@ -906,7 +935,9 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                                   n_par=b.devices_parallel, f_sw=f_sw,
                                   t_j_c=t_eval, v_dc=v_dc, v_gs_on=v_gs_on,
                                   v_gs_off=v_gs_off, r_g=r_g,
-                                  dead_time_s=dead_s, e_oss_policy=policy)
+                                  dead_time_s=dead_s, e_oss_policy=policy,
+                                  switching_source=sw_src, r_g_off=r_g_off,
+                                  l_sigma_nH=l_sig)
                 per_leg[key] = res
                 p_total += res["p_total_W"]
         m_dot = float(cp.get("m_dot_kg_s") or 0.0)
@@ -1122,7 +1153,11 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                     for b in topo.bridges for lg in b.legs), 1),
             "total_W": round(p_total, 1),
             "e_oss_policy": policy,
-            "switching_energy_source": card.switching_energy_source(),
+            "switching_energy_source": ("spice_table" if sw_src == "spice"
+                                        else card.switching_energy_source()),
+            "switching_source": sw_src,
+            "switching_basis": ((card.switching_table() or {}).get("basis")
+                                if sw_src == "spice" else "datasheet"),
         },
         "thermal": {
             "t_j_max_c": round(t_j_max_seen, 1),
@@ -1200,6 +1235,9 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "dead_time_us": dead_us,
             "v_gs_on_V": v_gs_on, "v_gs_off_V": v_gs_off,
             "r_g_ext_ohm": r_g,
+            "r_g_off_ext_ohm": r_g_off,
+            "l_sigma_nH": l_sig,
+            "switching_source": sw_src,
             "samples_per_carrier": st0.samples_per_carrier,
             "grid_points": int(u.size),
         },
@@ -1207,13 +1245,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         "warnings": warnings,
         "violations": violations,
         "model_notes": card_notes + [
-            f"switching-energy source for {card.part}: "
-            f"{card.switching_energy_source().replace('_', ' ')} "
-            + ("(the datasheet's own E_on/E_off table)"
-               if card.switching_energy_source() == "curves" else
-               "(first-order overlap-model estimate from switching times and "
-               "gate charges — the card publishes no E_on/E_off table; treat "
-               "as a lower bound)"),
+            (f"switching-energy source for {card.part}: SPICE table built from "
+             f"the vendor model ({(card.switching_table() or {}).get('basis')}) "
+             "in the datasheet's double-pulse circuit — NOT the datasheet curves"
+             if sw_src == "spice" else
+             f"switching-energy source for {card.part}: "
+             f"{card.switching_energy_source().replace('_', ' ')} "
+             + ("(the datasheet's own E_on/E_off table)"
+                if card.switching_energy_source() == "curves" else
+                "(first-order overlap-model estimate from switching times and "
+                "gate charges — the card publishes no E_on/E_off table; treat "
+                "as a lower bound)")),
             "conduction is integrated over the whole period because with "
             "synchronous rectification the leg current is always in a channel; "
             "the duty only decides WHICH switch carries it",

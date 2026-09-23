@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 __all__ = [
     "CardError", "DeviceCard", "devices_dir", "library", "list_devices",
     "get_device", "validate_card", "write_card", "REQUIRED_BLOCKS",
+    "SWITCHING_SOURCES",
 ]
 
 
@@ -82,6 +83,10 @@ _PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{1,63}$")
 #: A card without these cannot be used by :mod:`motor_ai_sim.inverter.losses`.
 REQUIRED_BLOCKS = ("part", "package", "ratings", "r_ds_on", "switching",
                    "third_quadrant", "thermal")
+
+#: Where the switching energies come from: the datasheet (curves, or the
+#: times-and-charges estimate) or the card's SPICE-built ``switching_table``.
+SWITCHING_SOURCES = ("datasheet", "spice")
 
 
 def _read(path: Path) -> Dict[str, Any]:
@@ -617,16 +622,58 @@ class DeviceCard:
             return "curves"
         return "times_and_charges"
 
+    # ── the SPICE table (optional second source, 2026-09-23) ────────────────
+    def switching_table(self) -> Optional[Dict[str, Any]]:
+        """The card's generated ``switching_table`` block, or ``None``."""
+        b = self.doc.get("switching_table")
+        return b if isinstance(b, dict) and b.get("sets") else None
+
+    def switching_source_default(self) -> str:
+        """The card's own ``switching_source`` (``datasheet`` unless the card
+        says ``spice``).  A request's ``switching_source`` overrides it."""
+        s = str(self.doc.get("switching_source") or "datasheet").strip().lower()
+        return s if s in SWITCHING_SOURCES else "datasheet"
+
     def e_switch(self, *, i_d_A: float, t_j_c: float, v_dc_V: float,
                  v_gs_off_V: float = 0.0,
                  r_g_ext_ohm: Optional[float] = None,
-                 v_gs_on_V: float = 18.0) -> Dict[str, Any]:
+                 v_gs_on_V: float = 18.0,
+                 source: Optional[str] = None,
+                 r_g_off_ext_ohm: Optional[float] = None,
+                 l_sigma_nH: Optional[float] = None) -> Dict[str, Any]:
         """``{e_on_J, e_off_J, e_fr_J, extrapolated, notes}`` at one point.
+
+        ``source`` — ``"datasheet"`` (default: the card's curves, or the
+        times-and-charges fallback when it has none) or ``"spice"`` (the
+        card's ``switching_table``, built from the vendor's SPICE model; a
+        card without one is REFUSED by name rather than silently answered
+        from the datasheet).  ``r_g_off_ext_ohm`` and ``l_sigma_nH`` pick the
+        SPICE set (driver/layout); the datasheet path ignores them.
 
         Dispatches on :meth:`switching_energy_source`.  ``v_gs_on_V`` is only
         used by the times-and-charges path (the gate-drive current needs
         BOTH rail voltages); the curves path ignores it, as before.
         """
+        src = (source or self.switching_source_default()).strip().lower()
+        if src not in SWITCHING_SOURCES:
+            raise CardError(f"switching_source must be one of {SWITCHING_SOURCES}; got {src!r}")
+        if src == "spice":
+            blk = self.switching_table()
+            if blk is None:
+                raise CardError(
+                    f"{self.part}: switching_source 'spice' asked for, but the card "
+                    "carries no switching_table (build it with "
+                    "scripts/spice_build_tables.py)")
+            from motor_ai_sim.inverter.spice.table import table_energy
+            r_on = r_g_ext_ohm
+            r_off = r_g_off_ext_ohm if r_g_off_ext_ohm is not None else r_g_ext_ohm
+            if r_on is None:
+                r_on = _num((self.doc.get("switching") or {}).get("r_g_ext_ref_ohm"))
+                r_off = r_off if r_off is not None else r_on
+            return table_energy(blk, i_d_A=i_d_A, v_dc_V=v_dc_V, t_j_c=t_j_c,
+                                v_gs_off_V=v_gs_off_V, r_g_on_ohm=r_on,
+                                r_g_off_ohm=r_off, l_sigma_nH=l_sigma_nH,
+                                v_gs_on_V=v_gs_on_V)
         if self.switching_energy_source() == "curves":
             return self._e_switch_from_curves(
                 i_d_A=i_d_A, t_j_c=t_j_c, v_dc_V=v_dc_V,

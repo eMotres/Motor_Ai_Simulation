@@ -115,6 +115,10 @@ from motor_ai_sim.simulation.sb_postproc import (
     torque_harmonics as _torque_harmonics,
 )
 from motor_ai_sim.simulation.moving_band import slip_ring_nodes as _slip_ring_nodes
+from motor_ai_sim.simulation.p2_state_capture import (
+    current_p2_state_capture as _current_p2_state_capture,
+    emit_selected_p2_state as _emit_selected_p2_state,
+)
 from motor_ai_sim.simulation.field_ops import (  # noqa: F401  (re-export)
     MU0, RHO_CU_20, ALPHA_CU,
     _snap_steps_to_nodes, _build_magnet_bh_curve_payload, _b_from_bh_at_H,
@@ -6578,6 +6582,55 @@ def fem_transient_sliding_band(
         _pa, _pb, _pc = _psi2(A2)
         _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
         _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
+        _p2_capture = _current_p2_state_capture()
+        if _p2_capture is not None:
+            _emit_selected_p2_state(
+                _p2_capture,
+                {
+                    "frame_index": int(k),
+                    "slip_shift": int(m_shift),
+                    "mechanical_angle_deg": float(theta_eff),
+                    "mechanical_angle_rad": math.radians(float(theta_eff)),
+                    "time_s": float(_sched_t[k]),
+                    "current_abc_A": {ph: float(Ist[ph]) for ph in "ABC"},
+                    "psi_abc_Wb": {"A": float(_pa), "B": float(_pb),
+                                   "C": float(_pc)},
+                    "newton_converged": bool(_newton_ok),
+                    "iterations": int(_nit),
+                    "raw_residual": float(_res),
+                    "picard_unconverged": bool(k in _pic_unconv),
+                    "eddy": bool(eddy), "demag": bool(demag),
+                    "voltage_drive": bool(_vdrive),
+                    "imposed_current_drive": not bool(_vdrive),
+                    "rotor_eddy": bool(rotor_eddy),
+                    "frozen_nu": bool(frozen_nu),
+                    "n_parallel": int(n_parallel), "n_sectors": int(NS),
+                    "pole_pairs": int(pole_pairs),
+                    "stack_length_m": float(p.stack_length),
+                    "stator_element_count": int(nst),
+                },
+                lambda: {
+                    "A_z": A2,
+                    "mesh_p_m": mesh_all.p,
+                    "mesh_t": mesh_all.t,
+                    "stator_cell_tags": half["s"]["cells"],
+                    "rotor_cell_tags": half["r"]["cells"],
+                    "doflocs_m": b2.doflocs,
+                    "element_dofs": b2.element_dofs,
+                    "quadrature_dx_m2": b2.dx,
+                    "nu_base2": nu_base2,
+                    "saturable_materials": _sat2,
+                    "Hc_x_effective_Apm": _mx_all,
+                    "Hc_y_effective_Apm": _my_all,
+                    "magnet_source_vector": f_mag2,
+                    "coil_source_vectors_per_A": f_coil2,
+                    "magnet_br_state": _br_glob,
+                    "rotor_vertex_dofs": _rot_vdof,
+                    "rotor_node_count": _nr2,
+                    "Bx_quad_T": (_capture_grad := b2.interpolate(A2).grad)[1],
+                    "By_quad_T": -_capture_grad[0],
+                },
+            )
         # ── INCREMENTAL d-q INDUCTANCES at this rotor position ───────────
         # Frozen permeability on the field THIS frame just converged (see
         # `frozen_permeability_ldq`): three linear back-solves with the

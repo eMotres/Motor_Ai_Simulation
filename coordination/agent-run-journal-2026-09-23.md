@@ -258,3 +258,12 @@ No production solver files claimed or edited; no deployment or live API use.
   case proving fallback works and no second free occurs. Focused file now has
   three tests; no FEM/live API/config.
 - Sol bounded physics follow-up (escalation from Luna): existing harmonic, parallel-scaling and reverse-angle gates passed (10 tests, 12 subtests); documented missing production periodic-state/energy certificate in docs/torque-next-gate-2026-09-23.md. No selector change or FEM.
+- User removed 20% reserve; reset remains manual. Luna implemented opt-in selected P2 state capture, reviewed to include actual B quadrature, tag maps, exact source vectors and explicit mode flags. No default snapshots or numerical formula changes. Sol built portable archived closure diagnostic and synthetic provenance tests; physics review escalated from Luna. Parent focused verification: 17 tests and 12 subtests passed in 1.26 s. New same-run FEM validation is pending.
+- Luna (Codex) audited run15's core-loss wrap warning (76% mean field weight).
+  Documented harmonic DFT ramp correction, unchanged raw solver B histories,
+  changed measured-surface P_fe and missing paired raw estimate, existing open/
+  closed-window tests, and proposed dual-candidate/commensurate-window gate.
+  Read-only source/docs audit; no FEM/tests/formula edit, no escalation.
+- Same-run guarded run15 completed: 48x2 GEO30 12s14p NS2, unchanged spatial mesh, 60 A/15000 rpm, no eddy/demag. One thread BelowNormal, 120 s cap, actual 57.96 s; all 96 frames converged, source hashes unchanged. Selected four full states persisted before postchecks. Independent source/linkage discrepancy 1.08e-19 Wb; potential period change 1.0902e-6 J remains diagnostic.
+- Luna implemented all-sample interpolating cubic/Gauss terminal path-work helper; Sol independently reviewed physics/numerics. No smoothing, selector integration or additional FEM. Run15 24-to-48 interval sensitivity: trapezoid 0.8512%, cubic 0.01092%; 12-to-48 cubic still 0.11661%. This is quadrature evidence, not physical certification. Explicit endpoint potential correction may replace exact periodicity only after validating discrete moving-weld energy/work identity.
+- Final parent focused gate: 31 tests and 12 subtests passed in 1.28 s. Live API/config untouched. Existing steel-loss ramp correction found separately and left unresolved, documented with 76% mean correction weight (not fraction of removed field).

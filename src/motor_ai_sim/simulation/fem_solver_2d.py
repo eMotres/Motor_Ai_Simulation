@@ -2753,6 +2753,126 @@ def _project_br(wc: dict, cen_new: np.ndarray, tag_new: np.ndarray):
     return out, n_hit
 
 
+# Conductor-area spread inside one slot that is still "the same wire drawn n
+# times" (the meshed rectangles of one slot agree to ~0.2 % today), and the
+# spread beyond which a body cannot be a strip of that wire at all.
+_EDDY_CON_AREA_WARN_RTOL = 0.05
+_EDDY_CON_AREA_FAIL_RTOL = 0.50
+
+
+def check_eddy_conductor_bodies(coil_con, coil_area_m2, n_wires, *,
+                                n_slots_expected=None,
+                                warn_rtol=_EDDY_CON_AREA_WARN_RTOL,
+                                fail_rtol=_EDDY_CON_AREA_FAIL_RTOL,
+                                log=None):
+    """Refuse an eddy solve whose meshed conductor bodies are not the winding.
+
+    The coupled eddy solve imposes ``∫J dΩ = ±I_branch`` on EVERY conductor
+    body (``Iunit = ±1`` since 2026-09-23 — one physical conductor, one branch
+    current; ``docs/eddy-series-current-normalization-2026-09-23.md``).  The
+    slot's ampere-turns are therefore ``(bodies in the slot) × I_branch`` and
+    they equal the magnetostatic source's ``n_wires × I_branch`` ONLY when the
+    mesh carries exactly ``n_wires`` bodies per slot — ``num_wires_per_slot ×
+    wire_split`` (``winding.conductors_per_slot``): every drawn strip is a
+    body, strands in hand are rows of their own, and the bonding mode
+    (transposed / parallel / series paths) only groups these bodies AFTER they
+    are built, never changes their number.  The old area-weighted ``Iunit``
+    stayed right when a drawing dropped, merged or clipped a body; this one is
+    wrong by one branch current per missing body, silently, so the count is
+    checked HERE, on the bodies as built, before any current is imposed.
+
+    Raises ``RuntimeError`` naming the slot, the expected and the found count
+    when a slot does not hold ``n_wires`` bodies, when a body's slot cannot be
+    read off its material name, or when a sector model does not hold
+    ``n_slots_expected`` whole slots.
+
+    Areas.  The constraint does NOT assume equal areas — ``∫J = I`` holds for a
+    body of any section, and the area enters only that body's DC reference
+    (``I²/S``) and the eddy redistribution inside it — so an unequal area is
+    not a wrong ampere-turn.  What it IS is a body that is not the wire the
+    parameters describe: every conductor of a slot is the same ``wire_width ×
+    wire_height`` strip, so its meshed area must match its neighbours'.  A
+    spread above ``warn_rtol`` (5 %) is a clipped / shrunk stack — the CAD does
+    that to fit a slot, ``geometry_validation`` already flags it as a WARNING,
+    and the machine is solvable with less copper than described — so it is
+    logged and recorded, not refused.  A body under half its slot's median
+    (``fail_rtol``) is not a strip of that wire at all (a sliver, a body cut by
+    the sector boundary) and imposing a full branch current on it is an
+    impossible machine: refused.
+
+    ``coil_con`` are the per-body dicts with ``tag``, ``slot``, ``phase``;
+    ``coil_area_m2`` maps tag → meshed area.  Returns a small summary dict for
+    the result record.
+    """
+    n_wires = int(n_wires)
+    per_slot: dict = {}
+    for c in coil_con:
+        per_slot.setdefault(int(c.get("slot", -1)), []).append(int(c["tag"]))
+    problems = []
+    if -1 in per_slot:
+        problems.append(
+            "%d conductor body(ies) whose slot cannot be read off the material "
+            "name (tags %s)" % (len(per_slot[-1]), sorted(per_slot[-1])[:12]))
+    slots = sorted(s for s in per_slot if s >= 0)
+    for s in slots:
+        if len(per_slot[s]) != n_wires:
+            problems.append("slot %d: expected %d conductor bodies "
+                            "(num_wires_per_slot x wire_split), found %d"
+                            % (s, n_wires, len(per_slot[s])))
+    if n_slots_expected is not None and len(slots) != int(n_slots_expected):
+        problems.append("the meshed sector holds %d slot(s) (%s), expected %d"
+                        % (len(slots), slots, int(n_slots_expected)))
+    if problems:
+        raise RuntimeError(
+            "eddy conductor bodies are not the winding: " + "; ".join(problems)
+            + ".  Each meshed conductor is imposed one branch current, so a "
+            "slot with the wrong body count is solved at the wrong "
+            "ampere-turns.  Refusing rather than solving a machine that is not "
+            "the one described (check the coil polygons / sector cut).")
+    warnings_out = []
+    worst = 0.0
+    for s in slots:
+        a = np.asarray([float(coil_area_m2.get(t, 0.0) or 0.0)
+                        for t in per_slot[s]], float)
+        med = float(np.median(a)) if a.size else 0.0
+        if med <= 0.0:
+            raise RuntimeError(
+                "eddy conductor bodies are not the winding: slot %d has no "
+                "meshed copper area (tags %s)" % (s, per_slot[s]))
+        dev = np.abs(a / med - 1.0)
+        i_w = int(np.argmax(dev))
+        worst = max(worst, float(dev[i_w]))
+        if dev[i_w] > fail_rtol:
+            raise RuntimeError(
+                "eddy conductor bodies are not the winding: slot %d, tag %d "
+                "has %.4g mm2 of copper against the slot's median conductor "
+                "%.4g mm2 (%.0f %% off) — a body that small is not a strip of "
+                "this wire (a sliver or a body cut by the sector boundary), "
+                "and imposing a full branch current on it is not the machine."
+                % (s, per_slot[s][i_w], 1e6 * a[i_w], 1e6 * med,
+                   100.0 * dev[i_w]))
+        if dev[i_w] > warn_rtol:
+            msg = ("slot %d: conductor areas spread %.1f %% (tag %d %.4g mm2 "
+                   "vs median %.4g mm2) — a clipped / shrunk stack; the "
+                   "ampere-turns are still exact, that body just has less "
+                   "copper than wire_width x wire_height"
+                   % (s, 100.0 * dev[i_w], per_slot[s][i_w], 1e6 * a[i_w],
+                      1e6 * med))
+            warnings_out.append(msg)
+            if log is not None:
+                log.warning("eddy conductor bodies: %s", msg)
+    summary = {"n_wires_per_slot": n_wires, "n_slots_meshed": len(slots),
+               "n_bodies": sum(len(per_slot[s]) for s in slots),
+               "area_spread_max_rel": round(float(worst), 6),
+               "area_warnings": warnings_out}
+    if log is not None:
+        log.info("eddy conductor bodies: %d slot(s) x %d = %d bodies, conductor "
+                 "area spread <= %.3f %% within a slot%s",
+                 len(slots), n_wires, summary["n_bodies"], 100.0 * worst,
+                 "" if not warnings_out else " (%d WARNING(s))" % len(warnings_out))
+    return summary
+
+
 @_pardiso_scope
 def fem_transient_sliding_band(
     n_steps_per_period: int = 12,
@@ -4063,6 +4183,7 @@ def fem_transient_sliding_band(
     # The area normalization remains in build_materials for the continuum
     # source; eddy constraints instead express physical conductor currents.
     _coil_con = []
+    _eddy_con_check = None
     if eddy:
         _ones_s = np.ones(half["s"]["n"])
         _nr0 = half["r"]["n"]
@@ -4095,6 +4216,15 @@ def fem_transient_sliding_band(
                 "coil": (_slot_j // 2 if _slot_j >= 0 else -1),
                 "nodes": np.unique(half["s"]["mesh"].t[:, idx]),   # stator-local node ids
             })
+        # LOUD GUARD (2026-09-23): with Iunit = ±1 per body the slot's
+        # ampere-turns are right only if the mesh holds exactly n_wires bodies
+        # per slot — checked here, once, on the bodies both element orders
+        # read their currents off.  A sector model must hold whole slots.
+        _eddy_con_check = check_eddy_conductor_bodies(
+            _coil_con, _coil_area_meshed, n_wires,
+            n_slots_expected=(int(p.num_slots) // int(NS)
+                              if int(p.num_slots) % int(NS) == 0 else None),
+            log=log)
 
     # ── Rotor-eddy stage: FIELD-BASED magnet eddy losses ─────────────────────
     # The rotor mesh is the rotor's MATERIAL frame (rotation lives in the slip
@@ -6911,10 +7041,17 @@ def fem_transient_sliding_band(
     # trimmed with them — otherwise its indices are offset by _vskip against
     # I/psi/T and the reported max residual is the SETTLING residual, not
     # the steady-state one.
+    # EVERY per-frame series the loop appends at k >= 0 belongs here (the
+    # sb_postproc docstring says why; tests/test_solver_guards.py enumerates
+    # the loop's appends against this tuple).  The sleeve loss `_ed_sl` and the
+    # air-gap |B| `_bgap2` were missing until 2026-09-23: on every voltage /
+    # PWM eddy run P_sleeve was averaged over the settling frames too, and the
+    # loss-total zip paired the trimmed copper series with the sleeve's
+    # SETTLING prefix (docs/solver-guards-2026-09-23.md).
     _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt, _theta_samples,
                  _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
-                 _histA_rot2, _pic_iters,
-                 _ed_cu, _ed_mag, _ed_sh, _ed_dc2d, _ed_dens_hist,
+                 _histA_rot2, _pic_iters, _bgap2,
+                 _ed_cu, _ed_mag, _ed_sh, _ed_sl, _ed_dc2d, _ed_dens_hist,
                  _v_diag["iters"], _v_diag["resid"],
                  _vapp['A'], _vapp['B'], _vapp['C'])
     # Keep the compact scalar traces that the settle trims are about to erase.
@@ -6927,8 +7064,10 @@ def fem_transient_sliding_band(
         "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
         "current_A_A": _IA, "current_B_A": _IB, "current_C_A": _IC,
         "picard_iterations": _pic_iters,
+        "air_gap_B_mean_T": _bgap2,
         "eddy_copper_power_W": _ed_cu, "eddy_magnet_power_W": _ed_mag,
-        "eddy_shaft_power_W": _ed_sh, "eddy_dc_copper_power_W": _ed_dc2d,
+        "eddy_shaft_power_W": _ed_sh, "eddy_sleeve_power_W": _ed_sl,
+        "eddy_dc_copper_power_W": _ed_dc2d,
         "voltage_solver_iterations": _v_diag["iters"],
         "voltage_solver_residual_V": _v_diag["resid"],
         "applied_voltage_A_V": _vapp['A'], "applied_voltage_B_V": _vapp['B'],
@@ -6939,8 +7078,22 @@ def fem_transient_sliding_band(
         _p2_trim_operations.append({"kind": "voltage_settling", "requested_frames": int(_vskip)})
     if _dmskip and demag and _dmst is not None:
         _p2_trim_operations.append({"kind": "demag_settling", "requested_frames": int(_dmskip)})
-    _p2_raw_scalar_history = (_snapshot_scalar_history(_p2_scalar_series)
-                              if _p2_trim_operations else None)
+    # A bookkeeping copy of a finished solve must never be what fails it: the
+    # snapshot skips a vector channel by itself (named in `skipped_series`),
+    # and anything else it trips on is logged and leaves the history absent.
+    _p2_raw_scalar_history = None
+    if _p2_trim_operations:
+        try:
+            _p2_raw_scalar_history = _snapshot_scalar_history(_p2_scalar_series)
+            if _p2_raw_scalar_history.get("skipped_series"):
+                log.warning("P2 scalar history: %d channel(s) skipped as "
+                            "non-scalar: %s",
+                            len(_p2_raw_scalar_history["skipped_series"]),
+                            _p2_raw_scalar_history["skipped_series"])
+        except Exception as _e_hist:      # noqa: BLE001 — the solve is done
+            log.warning("P2 scalar history not kept (%s: %s)",
+                        type(_e_hist).__name__, _e_hist)
+            _p2_raw_scalar_history = None
     _p2_field_history_counts = {
         "stator_Bx": len(_hsx2), "stator_By": len(_hsy2),
         "rotor_Bx": len(_hrx2), "rotor_By": len(_hry2),
@@ -7032,26 +7185,31 @@ def fem_transient_sliding_band(
 
     _p2_transient_history = None
     if _p2_raw_scalar_history is not None:
-        _p2_transient_history = dict(_p2_raw_scalar_history)
-        _p2_transient_history["retained_window"] = _retained_window_metadata(
-            _p2_raw_scalar_history, _p2_scalar_series,
-            core_series=("time_s_absolute", "mechanical_angle_rad",
-                         "torque_em_Nm", "psi_A_Wb", "psi_B_Wb", "psi_C_Wb",
-                         "current_A_A", "current_B_A", "current_C_A"),
-            trim_operations=_p2_trim_operations,
-            nominal_retained_frames=n_total, retained_periods=n_periods)
-        _p2_transient_history["non_scalar_history_sample_counts"] = {
-            "before_trim": _p2_field_history_counts,
-            "after_trim": {
-                "stator_Bx": len(_hsx2), "stator_By": len(_hsy2),
-                "rotor_Bx": len(_hrx2), "rotor_By": len(_hry2),
-                "coil_Bx": len(_hcx2), "coil_By": len(_hcy2),
-                "magnet_Bx": len(_hmx2), "magnet_By": len(_hmy2),
-                "rotor_potential_A": len(_histA_rot2),
-                "eddy_loss_density": len(_ed_dens_hist),
-            },
-            "values_copied": False,
-        }
+        try:
+            _p2_transient_history = dict(_p2_raw_scalar_history)
+            _p2_transient_history["retained_window"] = _retained_window_metadata(
+                _p2_raw_scalar_history, _p2_scalar_series,
+                core_series=("time_s_absolute", "mechanical_angle_rad",
+                             "torque_em_Nm", "psi_A_Wb", "psi_B_Wb", "psi_C_Wb",
+                             "current_A_A", "current_B_A", "current_C_A"),
+                trim_operations=_p2_trim_operations,
+                nominal_retained_frames=n_total, retained_periods=n_periods)
+            _p2_transient_history["non_scalar_history_sample_counts"] = {
+                "before_trim": _p2_field_history_counts,
+                "after_trim": {
+                    "stator_Bx": len(_hsx2), "stator_By": len(_hsy2),
+                    "rotor_Bx": len(_hrx2), "rotor_By": len(_hry2),
+                    "coil_Bx": len(_hcx2), "coil_By": len(_hcy2),
+                    "magnet_Bx": len(_hmx2), "magnet_By": len(_hmy2),
+                    "rotor_potential_A": len(_histA_rot2),
+                    "eddy_loss_density": len(_ed_dens_hist),
+                },
+                "values_copied": False,
+            }
+        except Exception as _e_hist:      # noqa: BLE001 — metadata, not physics
+            log.warning("P2 transient history metadata not built (%s: %s)",
+                        type(_e_hist).__name__, _e_hist)
+            _p2_transient_history = None
 
     # ── Voltage drive: copper loss from the SOLVED current ───────────────
     # `copper_loss_W` ran near the top of this function on the CONFIG
@@ -8124,6 +8282,10 @@ def fem_transient_sliding_band(
         # and rounding it to 0.000 would read as "not solved".
         "P_sleeve_solve_W": (round(float(P_sleeve_avg2), 4)
                              if (eddy and rotor_eddy) else 0.0),
+        # The conductor-body guard's summary (None on a non-eddy run): slots x
+        # n_wires bodies as built, and the in-slot area spread with any
+        # clipped-stack warnings — see check_eddy_conductor_bodies.
+        "eddy_conductor_check": _eddy_con_check,
         "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
         "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
         # AXIAL magnet segmentation — what `magnet_lamination` did to the two

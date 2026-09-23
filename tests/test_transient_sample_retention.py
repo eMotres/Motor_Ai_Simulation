@@ -84,9 +84,14 @@ class TransientSampleRetentionTests(unittest.TestCase):
         self.assertEqual(meta["sample_count_by_series_before_trim"]["psi_C_Wb"], 5)
         self.assertEqual(meta["sample_count_by_series_after_trim"]["psi_C_Wb"], 3)
 
-    def test_snapshot_rejects_large_vector_samples(self):
-        with self.assertRaisesRegex(TypeError, "non-scalar"):
-            snapshot_scalar_history({"field_B": [np.zeros(100)]})
+    def test_snapshot_skips_large_vector_samples_without_raising(self):
+        # 2026-09-23: a vector channel is left out and named, never raised on —
+        # this runs on a finished solve and must not be what fails it.
+        raw = snapshot_scalar_history({"field_B": [np.zeros(100)],
+                                       "torque_em_Nm": [np.array(1.0)]})
+        self.assertNotIn("field_B", raw["samples"])
+        self.assertIn("non-scalar", raw["skipped_series"]["field_B"])
+        self.assertEqual(raw["samples"]["torque_em_Nm"], [1.0])
 
     def test_solver_converts_effective_angle_degrees_to_snapshot_radians(self):
         source_path = (Path(__file__).resolve().parents[1]

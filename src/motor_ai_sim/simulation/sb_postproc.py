@@ -19,25 +19,62 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 
 
+def _scalar_sample(value) -> Tuple[bool, object]:
+    """``(is_scalar, json_safe_value)`` for one per-frame sample.
+
+    Python numbers, ``None``, numpy scalars and ONE-element numpy arrays (a 0-d
+    array, or a ``(1,)`` slice of one) are scalars here and come back as plain
+    Python values.  Anything with more than one element is not.
+    """
+    if isinstance(value, np.generic):     # before `float`: np.float64 IS a float
+        return True, value.item()
+    if value is None or isinstance(value, (bool, int, float, complex, str)):
+        return True, value
+    if isinstance(value, np.ndarray):
+        if value.size == 1:
+            return True, value.reshape(()).item()
+        return False, None
+    try:                                  # anything else that reads as a float
+        return True, float(value)
+    except (TypeError, ValueError):
+        return False, None
+
+
 def snapshot_scalar_history(series: Mapping[str, Sequence]) -> dict:
     """Copy scalar per-frame histories before settling prefixes are trimmed.
 
-    The returned lists are independent of later in-place prefix deletion. This
-    deliberately rejects vector samples: field histories can be large, and this
-    helper is for compact scalar traces only.
+    The returned lists are independent of later in-place prefix deletion.  This
+    helper is for compact scalar traces only: a channel whose samples are
+    genuinely vectors (a field history) is NOT copied — it is left out of
+    ``samples`` and named in ``skipped_series`` with the reason, so the record
+    says what is missing and why.  It never raises on a sample's type: this
+    runs after the frame loop on a finished solve, and a bookkeeping helper
+    must not be the thing that throws that solve away.  A 0-d numpy array or a
+    numpy scalar is a scalar (``float()`` of it), not a reason to skip.
     """
     samples = {}
+    skipped = {}
     for name, values in series.items():
         copied = []
-        for value in values:
-            if not np.isscalar(value):
-                raise TypeError("scalar history %r contains a non-scalar sample" % name)
-            copied.append(value.item() if isinstance(value, np.generic) else value)
+        reason = None
+        for index, value in enumerate(values):
+            ok, converted = _scalar_sample(value)
+            if not ok:
+                shape = getattr(value, "shape", None)
+                reason = ("non-scalar sample at index %d: %s%s" % (
+                    index, type(value).__name__,
+                    (" shape %s" % (tuple(shape),)) if shape is not None else ""))
+                break
+            copied.append(converted)
+        if reason is not None:
+            skipped[str(name)] = reason
+            continue
         samples[str(name)] = copied
     return {
         "samples": samples,
         "sample_count_by_series": {name: len(values) for name, values in samples.items()},
         "all_series_aligned": len({len(values) for values in samples.values()}) <= 1,
+        "skipped_series": skipped,
     }
 
 
@@ -82,6 +119,9 @@ def retained_window_metadata(raw_history: Mapping, retained_series: Mapping[str,
             start_angle, end_angle = angles[start_index], angles[-1]
     return {
         "trim_operations": [dict(op) for op in trim_operations],
+        # Channels the snapshot could not copy (vector samples), with the reason
+        # — the warning travels with the record instead of failing the solve.
+        "skipped_series": dict(raw_history.get("skipped_series") or {}),
         "nominal_retained_frames": int(nominal_retained_frames),
         "retained_periods": float(retained_periods),
         "sample_count_by_series_before_trim": raw_counts,

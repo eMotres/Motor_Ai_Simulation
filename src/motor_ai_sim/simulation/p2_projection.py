@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import numpy as np
 from scipy.sparse import coo_matrix as _coo
+from scipy.sparse.linalg import splu as _splu
 
 
 class SignedUF:
@@ -192,3 +193,117 @@ class SlipProjection:
         Pro = _coo((rsg, (np.arange(N2), inv)),
                    shape=(N2, uniq.size)).tocsr()
         return Pro, np.unique(inv[self.D_ids])
+
+
+class SlipMortarDerivativeAction:
+    """Exact 1-D L2 slip derivative at an existing integer ring shift.
+
+    Prepare the signed rotor trace mass matrix once. ``motion_derivative``
+    takes a full field satisfying ``SlipProjection.build(m_shift)`` and returns
+    ``P'(theta) @ a`` in full P2 coordinates without constructing either dense
+    projection. The angle spacing is mechanical radians per ring interval.
+    This helper is not used by the production frame loop.
+    """
+
+    _mass = np.array([[4., 2., -1.],
+                      [2., 16., 2.],
+                      [-1., 2., 4.]]) / 30.
+    # integral_0^1 L_i(u) dL_j/du du, for endpoint/midpoint/endpoint P2.
+    _motion = np.array([[-.5, 2./3., -1./6.],
+                        [-2./3., 0., 2./3.],
+                        [1./6., -2./3., .5]])
+
+    def __init__(self, projection: SlipProjection, spacing_rad: float):
+        if not np.isfinite(spacing_rad) or spacing_rad <= 0.:
+            raise ValueError("spacing_rad must be finite and positive")
+        self.projection = projection
+        self.spacing_rad = float(spacing_rad)
+        self.N = projection.N
+        self.period = (projection.Nring if projection.full_ring
+                       else projection.Nring - 1)
+        if self.period < 2:
+            raise ValueError("the slip ring has too few intervals")
+
+        cut = SignedUF(self.N)
+        for slave, master, sign in projection._cut_v + projection._cut_e:
+            cut.union(slave, master, sign)
+        self._rotor_segments = []
+        rotor_dofs = []
+        for edge, (a, b) in enumerate(projection._re_pairs):
+            midpoint = projection._re_dofs[edge]
+            if midpoint is None:
+                raise ValueError("incomplete rotor P2 slip trace")
+            dofs = (int(projection.vdof[int(projection.rring[a]) + projection.nsn]),
+                    int(midpoint),
+                    int(projection.vdof[int(projection.rring[b]) + projection.nsn]))
+            rotor_dofs.extend(dofs)
+            self._rotor_segments.append(tuple(cut.find(dof) for dof in dofs))
+        self._rotor_dofs = np.unique(rotor_dofs)
+        roots = sorted({root for segment in self._rotor_segments
+                        for root, _ in segment})
+        root_column = {root: i for i, root in enumerate(roots)}
+        self.n_trace = len(roots)
+        self._rotor_segments = [tuple((root_column[root], sign)
+                                      for root, sign in segment)
+                                for segment in self._rotor_segments]
+        self._scatter_index = np.array(
+            [root_column[cut.find(int(dof))[0]] for dof in self._rotor_dofs],
+            dtype=int)
+        self._scatter_sign = np.array(
+            [cut.find(int(dof))[1] for dof in self._rotor_dofs], dtype=float)
+
+        self._stator_segments = []
+        stator_dofs = []
+        for a, b in projection._re_pairs:
+            midpoint = projection.edge_dof(int(projection.sring[a]),
+                                            int(projection.sring[b]))
+            if midpoint is None:
+                raise ValueError("incomplete stator P2 slip trace")
+            dofs = (int(projection.vdof[int(projection.sring[a])]),
+                    int(midpoint),
+                    int(projection.vdof[int(projection.sring[b])]))
+            stator_dofs.extend(dofs)
+            self._stator_segments.append(dofs)
+        if {cut.find(dof)[0] for dof in stator_dofs}.intersection(roots):
+            raise ValueError("a radial-cut constraint joins rotor and stator traces")
+
+        rows, cols, values = [], [], []
+        for segment in self._rotor_segments:
+            for i in range(3):
+                for j in range(3):
+                    rows.append(segment[i][0]); cols.append(segment[j][0])
+                    values.append(segment[i][1] * segment[j][1] *
+                                  self._mass[i, j])
+        mass = _coo((values, (rows, cols)),
+                    shape=(self.n_trace, self.n_trace)).tocsc()
+        self.mass_nnz = mass.nnz
+        self.mass_storage_bytes = (mass.data.nbytes + mass.indices.nbytes +
+                                   mass.indptr.nbytes)
+        self._factor = _splu(mass)
+
+    def motion_derivative(self, full_field, m_shift: int) -> np.ndarray:
+        """Return full ``dA/dtheta``; only rotor trace rows can be nonzero."""
+        if not np.isfinite(m_shift) or int(m_shift) != m_shift:
+            raise ValueError("m_shift must be an integer")
+        field = np.asarray(full_field, dtype=float)
+        if field.shape != (self.N,) or not np.isfinite(field).all():
+            raise ValueError("full_field must be a finite full P2 vector")
+        shift = int(m_shift)
+        rhs = np.zeros(self.n_trace)
+        for edge, rotor in enumerate(self._rotor_segments):
+            if self.projection.full_ring:
+                start = (edge + shift) % self.period
+                wrap_sign = 1.
+            else:
+                wraps, start = divmod(edge + shift, self.period)
+                wrap_sign = float(self.projection.bc_sign if wraps % 2 else 1.)
+            stator = self._stator_segments[start]
+            local = (wrap_sign / self.spacing_rad) * (
+                self._motion @ field[list(stator)])
+            for i, (column, sign) in enumerate(rotor):
+                rhs[column] += sign * local[i]
+        derivative_trace = self._factor.solve(rhs)
+        result = np.zeros(self.N)
+        result[self._rotor_dofs] = (self._scatter_sign *
+                                    derivative_trace[self._scatter_index])
+        return result

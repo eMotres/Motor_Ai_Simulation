@@ -2873,6 +2873,34 @@ def check_eddy_conductor_bodies(coil_con, coil_area_m2, n_wires, *,
     return summary
 
 
+def _p2_virtual_work_torque(p2, field, source, motion, shift,
+                            sector_count, stack_length_m):
+    """Diagnostic torque from the full pointwise field residual (mechanical rad)."""
+    stiffness, _ = p2.Kpw(field)
+    residual = np.asarray(stiffness @ field - source).ravel()
+    derivative = motion.motion_derivative(field, shift)
+    return -float(sector_count) * float(stack_length_m) * float(
+        residual @ derivative)
+
+
+def _p2_virtual_work_ineligible_reason(*, eddy, voltage_drive, demag,
+                                       frozen_nu, saturable, newton_ok):
+    """Only the accepted, imposed-current pointwise Newton path is comparable."""
+    if eddy:
+        return "coupled_eddy_field"
+    if voltage_drive:
+        return "voltage_drive_field"
+    if demag:
+        return "irreversible_demagnetisation"
+    if frozen_nu:
+        return "frozen_permeability"
+    if not saturable:
+        return "linear_path_not_certified"
+    if not newton_ok:
+        return "pointwise_newton_not_accepted"
+    return None
+
+
 @_pardiso_scope
 def fem_transient_sliding_band(
     n_steps_per_period: int = 12,
@@ -4792,6 +4820,7 @@ def fem_transient_sliding_band(
     from motor_ai_sim.simulation.p2_drive import P2Drive as _P2Drive
     from motor_ai_sim.simulation.p2_projection import (
         SlipProjection as _SlipProjection,
+        SlipMortarDerivativeAction as _SlipMortarDerivativeAction,
     )
     # ONE persistent MKL PARDISO solver for the whole run: it caches the
     # symbolic factorization and reuses it across the same-pattern Picard
@@ -4955,6 +4984,17 @@ def fem_transient_sliding_band(
         n_dof=N2, facets=mesh_all.facets, vdof=vdof, fdof=fdof, rring=rring,
         sring=sring, nsn=nsn, n_ring=Nring, full_ring=_full_ring,
         bc_sign=_bc_sign, Mn=Mn, Sn=Sn, dirichlet_dofs=_D2_ids)
+    # The derivative is an independent, diagnostic L2 mortar trace action.
+    # Prepare its rotor-trace mass factorization once for the entire run.
+    _vw_action = None
+    _vw_init_error = None
+    try:
+        _vw_action = _SlipMortarDerivativeAction(
+            _proj, math.radians(float(spacing)))
+    except Exception as _vw_exc:  # noqa: BLE001 — diagnostic must not abort FEM
+        _vw_init_error = type(_vw_exc).__name__
+        log.warning("P2 virtual-work diagnostic unavailable: derivative "
+                    "initialisation failed (%s: %s)", _vw_init_error, _vw_exc)
     log.info("P2 belt: N2=%d dofs, %s, ring=%d nodes, %d/%d ring-edge + "
              "%d cut-vertex + %d cut-edge midpoints paired",
              N2, "full ring" if _full_ring else "sector",
@@ -5508,7 +5548,8 @@ def fem_transient_sliding_band(
                              _ipark(_psd, _psq, _thal - _w * float(_sched_dt[0]))))
 
     # ── frame loop ───────────────────────────────────────────────────────
-    _T2 = []; _psiA = []; _psiB = []; _psiC = []; _tt = []; _theta_samples = []
+    _T2 = []; _T_vw = []; _T_vw_reason = []
+    _psiA = []; _psiB = []; _psiC = []; _tt = []; _theta_samples = []
     _IA = []; _IB = []; _IC = []
     # APPLIED terminal voltage per solved step (imposed-voltage sources only) —
     # the excitation chart's series.  Empty on the imposed-current sources,
@@ -6708,6 +6749,27 @@ def fem_transient_sliding_band(
         # WHICH frame and by WHICH path, so log it (DEBUG — one line per frame).
         log.debug("P2 frame %d: %s, %d its, res=%.3e",
                   k, "newton" if _newton_ok else "picard", _nit, _res)
+        _vw_reason = _p2_virtual_work_ineligible_reason(
+            eddy=bool(eddy), voltage_drive=bool(_vdrive), demag=bool(demag),
+            frozen_nu=bool(frozen_nu), saturable=bool(_sat2),
+            newton_ok=bool(_newton_ok))
+        _vw_torque = None
+        if _vw_reason is None:
+            if _vw_action is None:
+                _vw_reason = "derivative_initialisation_failed:" + str(_vw_init_error)
+            else:
+                try:
+                    _vw_torque = _p2_virtual_work_torque(
+                        _p2, A2, f, _vw_action, m_shift, NS, p.stack_length)
+                    if not math.isfinite(_vw_torque):
+                        _vw_torque = None
+                        _vw_reason = "nonfinite_virtual_work"
+                except Exception as _vw_exc:  # noqa: BLE001 — diagnostic only
+                    _vw_reason = "virtual_work_failed:" + type(_vw_exc).__name__
+                    log.warning("P2 virtual-work diagnostic frame %d failed "
+                                "(%s: %s)", k, type(_vw_exc).__name__, _vw_exc)
+        _T_vw.append(_vw_torque)
+        _T_vw_reason.append(_vw_reason)
         Tq = _torque2(A2) * NS
         _T2.append(Tq)
         _pa, _pb, _pc = _psi2(A2)
@@ -7049,7 +7111,8 @@ def fem_transient_sliding_band(
     # PWM eddy run P_sleeve was averaged over the settling frames too, and the
     # loss-total zip paired the trimmed copper series with the sleeve's
     # SETTLING prefix (docs/solver-guards-2026-09-23.md).
-    _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt, _theta_samples,
+    _v2_lists = (_T2, _T_vw, _T_vw_reason,
+                 _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt, _theta_samples,
                  _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
                  _histA_rot2, _pic_iters, _frame_converged, _bgap2,
                  _ed_cu, _ed_mag, _ed_sh, _ed_sl, _ed_dc2d, _ed_dens_hist,
@@ -7062,6 +7125,7 @@ def fem_transient_sliding_band(
         "time_s_absolute": _tt,
         "mechanical_angle_rad": _theta_samples,
         "torque_em_Nm": _T2,
+        "torque_virtual_work_diagnostic_Nm": _T_vw,
         "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
         "current_A_A": _IA, "current_B_A": _IB, "current_C_A": _IC,
         "picard_iterations": _pic_iters,
@@ -8135,6 +8199,30 @@ def fem_transient_sliding_band(
         except Exception as _ei2:   # noqa: BLE001
             _inc = {"inc_ldq_error": f"{type(_ei2).__name__}: {_ei2}"}
 
+    _vw_all_eligible = bool(_T_vw) and len(_T_vw) == len(_T2) and all(
+        value is not None for value in _T_vw)
+    _vw_mean = (float(np.mean(_T_vw)) if _vw_all_eligible else None)
+    _vw_reason_counts = {}
+    for _vw_reason in _T_vw_reason:
+        if _vw_reason is not None:
+            _vw_reason_counts[_vw_reason] = _vw_reason_counts.get(_vw_reason, 0) + 1
+    _vw_diagnostics = {
+        "status": "uncertified_diagnostic",
+        "frame_reasons": list(_T_vw_reason),
+        "eligible_frame_count": sum(value is not None for value in _T_vw),
+        "reported_frame_count": len(_T2),
+        "ineligible_reason_counts": _vw_reason_counts,
+        "mean_available": _vw_all_eligible,
+        "mean_unavailable_reason": (None if _vw_all_eligible else
+                                    "one_or_more_reported_frames_ineligible"),
+        "angle_unit": "mechanical_radian",
+        "slip_node_spacing_mechanical_rad": math.radians(float(spacing)),
+        "sign_convention": "T = -d(magnetic_potential)/d(mechanical_angle)",
+        "sector_multiplier": int(NS),
+        "stack_length_m": float(p.stack_length),
+        "scale_convention": "2D sector residual times stack length and sector count",
+        "constraint_derivative": "L2 trace mortar at integer slip shift",
+    }
     return {
         "method": "sliding_band_p2", "element_order": 2,
         **({"inc_ldq": _inc} if _inc else {}),
@@ -8186,6 +8274,9 @@ def fem_transient_sliding_band(
         "time_s": _tt, "rotor_angle_deg": _ang,
         "P2_transient_sample_history": _p2_transient_history,
         "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
+        "T_em_virtual_work_diagnostic_Nm": list(_T_vw),
+        "T_avg_virtual_work_diagnostic_Nm": _vw_mean,
+        "virtual_work_diagnostics": _vw_diagnostics,
         "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip_raw,
         "T_ripple_pp_Nm": T_ripple_pp, "T_ripple_raw_pp_Nm": T_ripple_pp,
         "T_ripple_pct_available": Trip_raw is not None,

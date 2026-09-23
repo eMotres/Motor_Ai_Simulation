@@ -202,7 +202,8 @@ class SlipMortarDerivativeAction:
     takes a full field satisfying ``SlipProjection.build(m_shift)`` and returns
     ``P'(theta) @ a`` in full P2 coordinates without constructing either dense
     projection. The angle spacing is mechanical radians per ring interval.
-    This helper is not used by the production frame loop.
+    The production frame loop uses it only for an uncertified diagnostic torque;
+    its existing slip constraint and Maxwell/mean torque remain unchanged.
     """
 
     _mass = np.array([[4., 2., -1.],

@@ -20,6 +20,14 @@ def _hybrid_torque():
     return module.hybrid_torque
 
 
+def _terminal_work_mean():
+    path = Path(__file__).resolve().parents[1] / "src/motor_ai_sim/simulation/sb_postproc.py"
+    spec = importlib.util.spec_from_file_location("torque_gate_work_postproc", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.terminal_work_mean
+
+
 def _three_phase(harmonics, current_harmonics, n=720, pole_pairs=7):
     theta = 2 * np.pi * np.arange(n) / n
     offsets = (0.0, 2 * np.pi / 3, -2 * np.pi / 3)
@@ -120,26 +128,39 @@ class TorqueEnergyValidation(unittest.TestCase):
         helper = _hybrid_torque()
         psi, current, exact = _three_phase([(1, .02), (5, .002)],
                                             [(1, 10), (5, 2)])
-        output, method = helper(*psi, *current, np.zeros(720), 7)
-        self.assertEqual(method, "energy_mean+maxwell_ripple")
-        self.assertAlmostEqual(float(np.mean(output)), 2.058, places=12)
+        angle = 2 * np.pi * np.arange(720) / (720 * 7)
+        output, method = helper(
+            *psi, *current, np.zeros(720), 7,
+            mechanical_angle_rad=angle, imposed_current_drive=True,
+            all_frames_converged=True, integer_period_window=True)
+        self.assertEqual(method, "terminal_work_mean+maxwell_ripple")
+        self.assertAlmostEqual(float(np.mean(output)), 2.31, places=12)
         self.assertAlmostEqual(float(np.mean(exact)), 2.31, places=12)
-        self.assertAlmostEqual(float(np.mean(exact) - np.mean(output)), .252, places=12)
-        # The sinusoidal subcase is inside the helper's documented scope.
-        psi, current, exact = _three_phase([(1, .02)], [(1, 10)])
-        output, _ = helper(*psi, *current, np.zeros(720), 7)
-        self.assertAlmostEqual(float(np.mean(output)), float(np.mean(exact)), places=12)
+        # Reversing sample order leaves the signed derivative consistent with
+        # the physical angle values; reversing current sign reverses work.
+        work = _terminal_work_mean()
+        self.assertAlmostEqual(
+            work(*(v[::-1] for v in psi), *(v[::-1] for v in current),
+                 angle[::-1], 7), 2.31, places=12)
+        self.assertAlmostEqual(work(*psi, *(-current), angle, 7), -2.31, places=12)
         for branches in (1, 2, 12):
             per_branch = current / branches
-            output, method = helper(*psi, *per_branch, np.zeros(720), 7,
-                                    n_parallel=branches)
-            if branches < 12:
-                self.assertEqual(method, "energy_mean+maxwell_ripple")
-                self.assertAlmostEqual(float(np.mean(output)), 2.1, places=12)
-            else:
-                # Synthetic zero Maxwell exposes the legacy 1 A branch gate.
-                self.assertEqual(method, "maxwell_stress")
-                self.assertEqual(float(np.mean(output)), 0.0)
+            output, method = helper(
+                *psi, *per_branch, np.zeros(720), 7, n_parallel=branches,
+                mechanical_angle_rad=angle, imposed_current_drive=True,
+                all_frames_converged=True, integer_period_window=True)
+            self.assertEqual(method, "terminal_work_mean+maxwell_ripple")
+            self.assertAlmostEqual(float(np.mean(output)), 2.31, places=12)
+
+    def test_zero_and_subamp_current_work_is_continuous(self):
+        helper = _terminal_work_mean()
+        psi, current, _ = _three_phase([(1, .02), (5, .002)],
+                                       [(1, 10), (5, 2)])
+        angle = 2 * np.pi * np.arange(720) / (720 * 7)
+        for scale in (0.0, .05, .1, .1001):
+            with self.subTest(scale=scale):
+                got = helper(*psi, *(current * scale), angle, 7)
+                self.assertAlmostEqual(got, 2.31 * scale, places=12)
 
 
 if __name__ == "__main__":

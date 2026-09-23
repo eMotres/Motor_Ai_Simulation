@@ -7202,6 +7202,9 @@ def _build_transient_summary(
     except Exception:   # noqa: BLE001
         pass
 
+    def _summary_ripple_pct(value):
+        return None if value is None else round(abs(float(value)), 1)
+
     return {
         "rpm": _rpm,
         # I_phase_rms_A is the TERMINAL current — the setpoint the panel holds,
@@ -7315,10 +7318,14 @@ def _build_transient_summary(
                                 else None),
         "dq_note": _dq_note,
         "T_em_avg_Nm": round(_Tavg, 3),
-        "T_ripple_pct": round(abs(float(sbres.get("T_ripple_pct", 0.0))), 1),
-        "T_ripple_raw_pct": round(abs(float(sbres.get("T_ripple_raw_pct", 0.0))), 1),
-        "T_ripple_filt_pct": round(abs(float(sbres.get("T_ripple_raw_pct",
-                                                   sbres.get("T_ripple_pct", 0.0)))), 1),
+        "T_ripple_pct": _summary_ripple_pct(sbres.get("T_ripple_pct", 0.0)),
+        "T_ripple_raw_pct": _summary_ripple_pct(sbres.get("T_ripple_raw_pct", 0.0)),
+        "T_ripple_filt_pct": _summary_ripple_pct(sbres.get(
+            "T_ripple_raw_pct", sbres.get("T_ripple_pct", 0.0))),
+        "T_ripple_pp_Nm": sbres.get("T_ripple_pp_Nm"),
+        "T_ripple_raw_pp_Nm": sbres.get("T_ripple_raw_pp_Nm"),
+        "T_ripple_pct_available": sbres.get("T_ripple_pct_available"),
+        "T_ripple_pct_reason": sbres.get("T_ripple_pct_reason"),
         # Deprecated compatibility fields: raw ripple, no noise estimate.
         "T_noise_floor_pct": None, "torque_filter_applied": False,
         "P_mech_W": round(_Pmech, 1),

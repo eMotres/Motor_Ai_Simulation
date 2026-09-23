@@ -1497,7 +1497,8 @@ def _point_from_eval(out: Dict[str, Any], ov: Dict[str, float], I: float,
         # the panel flags it rather than the coordinator vetoing it.
         return {**r, "overrides": ov, "current_a": I, "geom_id": gi,
                 "op_index": oi, "fem": True, "feasible": True,
-                "eligible": bool(r.get("T_ripple_pct", 1e9) <= ripple_max)}
+                "eligible": bool(_defined_ripple_pct(r) is not None
+                                 and _defined_ripple_pct(r) <= ripple_max)}
     return {"overrides": ov, "current_a": I, "geom_id": gi, "op_index": oi,
             "fem": True, "feasible": False, "eligible": False,
             "error": out.get("error", "eval failed")}
@@ -2965,6 +2966,20 @@ _THD_PEN = {"lam": 0.0, "max": 5.0}   # >0 → _descent_cost penalises THD_LL_pc
                                       # thd_max_pct (same per-run-global pattern)
 
 
+def _defined_ripple_pct(metrics: Dict[str, Any]) -> Optional[float]:
+    """Finite measured ripple, or None; undefined ripple never passes a gate."""
+    try:
+        value = float(metrics.get("T_ripple_pct"))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _ripple_log(metrics: Dict[str, Any]) -> str:
+    value = _defined_ripple_pct(metrics)
+    return "undefined" if value is None else "%.3g%%" % value
+
+
 def _ripple_ramp_step(best_metrics: Dict[str, Any], ripple_max: float,
                       rnd: int) -> Optional[Dict[str, Any]]:
     """Augmented-Lagrangian-style penalty CONTINUATION for ripple.
@@ -2980,8 +2995,8 @@ def _ripple_ramp_step(best_metrics: Dict[str, Any], ripple_max: float,
     v0 = float(_RIPPLE_PEN_LAM.get("v0", 0.0) or 0.0)
     if v0 <= 0.0:
         return None
-    rip = float(best_metrics.get("T_ripple_pct", 0.0) or 0.0)
-    if rip <= float(ripple_max) + _RIPPLE_OVER_TOL:
+    rip = _defined_ripple_pct(best_metrics)
+    if rip is not None and rip <= float(ripple_max) + _RIPPLE_OVER_TOL:
         return None                                   # already under the gate
     cur = float(_RIPPLE_PEN_LAM.get("v", v0) or v0)
     cap = v0 * _RIPPLE_RAMP_CAP
@@ -2989,11 +3004,13 @@ def _ripple_ramp_step(best_metrics: Dict[str, Any], ripple_max: float,
         return None                                   # escalation exhausted
     new = min(cur * _RIPPLE_RAMP, cap)
     _RIPPLE_PEN_LAM["v"] = new
-    log.info("descent ripple RAMP: ripple %.2f%% > gate %.2f%% -> lambda %.3g -> %.3g",
-             rip, float(ripple_max), cur, new)
+    log.info("descent ripple RAMP: ripple %s > gate %.2f%% -> lambda %.3g -> %.3g",
+             "undefined" if rip is None else "%.2f%%" % rip,
+             float(ripple_max), cur, new)
     return {"iter": int(rnd), "name": "ripple_penalty", "side": "ramp",
             "from": round(cur, 4), "to": round(new, 4),
-            "ripple": round(rip, 2), "gate": round(float(ripple_max), 2)}
+            "ripple": (None if rip is None else round(rip, 2)),
+            "gate": round(float(ripple_max), 2)}
 
 
 def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
@@ -3018,8 +3035,12 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
     vpk  = float(m.get("V_peak", 0.0) or 0.0)
     pen  = lam * max(0.0, vpk - v_peak_limit)
     _rp = float(_RIPPLE_PEN_LAM.get("v", 0.0) or 0.0)
-    if _rp > 0.0:
-        _rip = float(m.get("T_ripple_pct", 0.0) or 0.0)
+    _rip = _defined_ripple_pct(m)
+    if _rip is None:
+        # A percentage without a nonzero mean is not a good zero-ripple design.
+        # Keep the internal objective finite; eligibility remains false.
+        pen += 1e6
+    elif _rp > 0.0:
         # /100: 1 % overshoot → 0.01·λ_r, same order as typical F gains (~0.01)
         pen += _rp * max(0.0, _rip - float(ripple_max)) / 100.0
     _tl = float(_THD_PEN.get("lam", 0.0) or 0.0)
@@ -5419,12 +5440,12 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                 _descent_state.update(iter=it, history=list(history))
             _save_descent_state()
             rj = _reject_block()
-            log.info("AUTO gen %d/%d | evals %d/%d | best F=%.5g ripple=%.3g%% "
+            log.info("AUTO gen %d/%d | evals %d/%d | best F=%.5g ripple=%s "
                      "T=%.4g Nm | fenced %d/%d (%.0f%%: geom %d, unconv %d, "
                      "mesh %d, timeout %d) | pre-fenced %d/%d this gen "
                      "(%d resampled, %d graded)",
                      it, plan["generations"], n_evals, budget, best["F"],
-                     float(best["metrics"].get("T_ripple_pct") or 0.0),
+                     _ripple_log(best["metrics"]),
                      float(best["metrics"].get("T_em_Nm") or 0.0),
                      rj["rejected"], rj["evaluated"], rj["reject_pct"],
                      rj["rejected_geometry"], rj["rejected_unconverged"],
@@ -5482,10 +5503,10 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             _descent_state["result"] = result
             _descent_state["auto"] = dict(_descent_state.get("auto") or {},
                                           rejects=rj, n_evals=n_evals)
-        log.info("AUTO done | %d evals, %d fenced (%.0f%%) | best ripple %.3g%% "
+        log.info("AUTO done | %d evals, %d fenced (%.0f%%) | best ripple %s "
                  "(gate %.3g%%) T=%.4g Nm eff=%.4g",
                  n_evals, rj["rejected"], rj["reject_pct"],
-                 float(best["metrics"].get("T_ripple_pct") or 0.0), ripple_max,
+                 _ripple_log(best["metrics"]), ripple_max,
                  float(best["metrics"].get("T_em_Nm") or 0.0),
                  float(best["metrics"].get("efficiency") or 0.0))
 
@@ -5825,12 +5846,12 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                     _descent_state.get("auto") or {},
                     rejects=_reject_block(), trajectory=list(trajectory))
             _save_descent_state()
-            log.info("SCREEN %s | F=%+.6g cost=%.6g | td=%.4g eff=%.5g ripple=%.3g%% "
+            log.info("SCREEN %s | F=%+.6g cost=%.6g | td=%.4g eff=%.5g ripple=%s "
                      "| %d FEM evals (%d cache hits) | %s",
                      phase, cur["F"], cur["cost"],
                      float(cur["metrics"].get("torque_per_mass_Nm_kg") or 0.0),
                      float(cur["metrics"].get("efficiency") or 0.0),
-                     float(cur["metrics"].get("T_ripple_pct") or 0.0),
+                     _ripple_log(cur["metrics"]),
                      state["n_evals"],
                      state["n_cache_pre"] + state["n_cache_self"], note)
 
@@ -6072,9 +6093,9 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                                           rejects=rj, n_evals=state["n_evals"],
                                           stop_reason=stop_reason)
         log.info("SCREEN done | %d FEM evals + %d cache hits | %d fenced | best "
-                 "F=%+.6g ripple %.3g%% (gate %.3g%%) td=%.4g eff=%.5g",
+                 "F=%+.6g ripple %s (gate %.3g%%) td=%.4g eff=%.5g",
                  state["n_evals"], rj["cache_hits"], rj["rejected"], best["F"],
-                 float(best["metrics"].get("T_ripple_pct") or 0.0), ripple_max,
+                 _ripple_log(best["metrics"]), ripple_max,
                  float(best["metrics"].get("torque_per_mass_Nm_kg") or 0.0),
                  float(best["metrics"].get("efficiency") or 0.0))
 

@@ -51,6 +51,15 @@ def test_raw_metrics_do_not_compute_a_harmonic_filter(monkeypatch):
     assert band_limit_torque([9., 10., 11.], 72, 1.) == (raw, ripple, ripple, None)
 
 
+def test_zero_mean_ripple_percent_is_undefined_but_samples_are_unchanged():
+    series = [0.2, -0.1, -0.1]
+    raw, percent = torque_metrics(series)
+    assert raw == series
+    assert percent is None
+    assert float(np.ptp(raw)) == pytest.approx(0.3)
+    assert band_limit_torque(series, 72, 1.) == (series, None, None, None)
+
+
 @pytest.mark.parametrize("periods", [.5, 1.001, 1.01, 1.5, 2.])
 def test_actual_transient_spectrum_keeps_entire_fractional_window(transient_calls, periods):
     count = round(72 * periods)

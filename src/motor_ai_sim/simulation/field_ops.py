@@ -370,10 +370,10 @@ def torque_metrics(T_series):
     """
     x = np.asarray(T_series, float); n = x.size
     if n == 0:
-        return [], 0.0
+        return [], None
     avg = float(x.mean())
     ripple = (100.0 * (float(x.max()) - float(x.min())) / abs(avg)
-              if abs(avg) > 1e-9 else 0.0)
+              if abs(avg) > 1e-9 else None)
     return x.tolist(), ripple
 
 

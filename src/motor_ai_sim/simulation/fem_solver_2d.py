@@ -5524,7 +5524,7 @@ def fem_transient_sliding_band(
         _ns_inc = max(1, min(int(_INC_LDQ_SAMPLES), int(n_total)))
         _inc_at = {int(round(_j * n_total / _ns_inc)) % int(n_total)
                    for _j in range(_ns_inc)}
-    _pic_iters = []; _pic_res_max = 0.0
+    _pic_iters = []; _pic_res_max = 0.0; _frame_converged = []
     _pic_fallback = []      # frames Newton did not solve (fell back to Picard)
     _pic_unconv = []        # frames that met NEITHER path's tolerance
     _snap2 = None
@@ -6702,6 +6702,7 @@ def fem_transient_sliding_band(
             _pic_fallback.append(k)
             if not (_res < _PIC_TOL2):
                 _pic_unconv.append(k)
+        _frame_converged.append(bool(_newton_ok or _res < _PIC_TOL2))
         # Per-frame convergence trace.  picard_resid_max alone says only THAT
         # some frame was the worst; when it lands near the tol you need to know
         # WHICH frame and by WHICH path, so log it (DEBUG — one line per frame).
@@ -7050,7 +7051,7 @@ def fem_transient_sliding_band(
     # SETTLING prefix (docs/solver-guards-2026-09-23.md).
     _v2_lists = (_T2, _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt, _theta_samples,
                  _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
-                 _histA_rot2, _pic_iters, _bgap2,
+                 _histA_rot2, _pic_iters, _frame_converged, _bgap2,
                  _ed_cu, _ed_mag, _ed_sh, _ed_sl, _ed_dc2d, _ed_dens_hist,
                  _v_diag["iters"], _v_diag["resid"],
                  _vapp['A'], _vapp['B'], _vapp['C'])
@@ -7642,20 +7643,36 @@ def fem_transient_sliding_band(
         step_periods=float(_sched_dth[-1]) / period_mech)
     T_arr = np.asarray(_T2, float)
     T_maxwell_avg = float(T_arr.mean()) if T_arr.size else 0.0
-    # Legacy hybrid: fundamental space-vector mean plus raw Maxwell AC.
-    # This is not general virtual work; see sb_postproc.hybrid_torque and
-    # docs/solver-torque-validation-plan.md for its assumptions and open issues.
+    # Eligible all-bin terminal-work mean plus raw Maxwell AC. This is not a
+    # general virtual-work certificate; see sb_postproc.hybrid_torque and
+    # docs/solver-torque-validation-plan.md for the remaining error gates.
     _torque_method = "maxwell_stress"
+    _retained_periods_integer = (
+        math.isfinite(float(n_periods)) and float(n_periods) > 0.0
+        and math.isclose(float(n_periods), round(float(n_periods)),
+                         rel_tol=1e-10, abs_tol=1e-10))
+    _torque_method_args = {
+        "mechanical_angle_rad": _theta_samples,
+        "imposed_current_drive": not bool(_vdrive),
+        "eddy": bool(eddy),
+        "rotor_eddy": bool(rotor_eddy),
+        "demag": bool(demag),
+        "frozen_nu": bool(frozen_nu),
+        "all_frames_converged": (bool(_frame_converged)
+                                 and all(_frame_converged)),
+        "integer_period_window": bool(_retained_periods_integer),
+    }
     try:
         _T2, _torque_method = _hybrid_torque(
             _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
-            n_parallel=int(n_parallel))
+            n_parallel=int(n_parallel), **_torque_method_args)
     except Exception as _te:
         log.warning("P2 hybrid torque failed (%s) — using Maxwell series", _te)
     try:
         _torque_method_diag = _torque_method_diagnostics(
             _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
-            n_parallel=int(n_parallel), selected_method=_torque_method)
+            n_parallel=int(n_parallel), selected_method=_torque_method,
+            **_torque_method_args)
     except Exception as _diag_error:
         # Diagnostics are additive and must never interrupt a completed solve.
         _torque_method_diag = {
@@ -7666,6 +7683,11 @@ def fem_transient_sliding_band(
             "space_vector_mean_candidate_Nm": None,
             "raw_maxwell_mean_Nm": None,
             "space_vector_minus_maxwell_mean_Nm": None,
+            "terminal_work_mean_candidate_Nm": None,
+            "terminal_work_minus_maxwell_mean_Nm": None,
+            "terminal_work_method_eligible": False,
+            "terminal_work_eligibility_reason":
+                "diagnostic evaluation failed: " + type(_diag_error).__name__,
             "per_branch_peak_current_A": None,
             "legacy_selector_would_use_space_vector_mean": None,
             "certified_energy_balance_Nm": None,
@@ -7675,6 +7697,7 @@ def fem_transient_sliding_band(
     T_arr = np.asarray(_T2, float)
     Tavg = float(T_arr.mean()) if T_arr.size else 0.0
     _T_report, Trip_raw = torque_metrics(_T2)
+    T_ripple_pp = (float(np.ptp(np.asarray(_T2, float))) if _T2 else 0.0)
     _omega_m2 = 2.0 * math.pi * rpm / 60.0
     P_airgap_avg2 = float(Tavg * _omega_m2)
     P_mech_avg2 = P_airgap_avg2 - (P_fe_avg2 + P_mag_avg2 + P_shaft_avg2
@@ -7921,9 +7944,12 @@ def fem_transient_sliding_band(
     except TypeError:       # a source whose describe() takes no context
         _desc = _src.describe() or {}
     log.info("P2 belt transient done: %d frames reported (%d SOLVED incl. "
-             "settling) in %.1f s, T_avg=%.5f Nm, ripple_raw=%.2f%%, max "
+             "settling) in %.1f s, T_avg=%.5f Nm, ripple_pp=%.6g Nm, "
+             "ripple_pct=%s, max "
              "nonlinear resid=%.2e, picard-fallback frames=%s",
-             n_total, _n_solved, _t.time() - t0, Tavg, Trip_raw,
+             n_total, _n_solved, _t.time() - t0, Tavg, T_ripple_pp,
+             ("undefined (near-zero mean)" if Trip_raw is None
+              else "%.2f%%" % Trip_raw),
              _pic_res_max, _pic_fallback or "none")
     # What the two per-run caches actually saved, so a slow run can be read
     # instead of guessed: a healthy run reuses ONE symbolic factorization for a
@@ -8161,6 +8187,10 @@ def fem_transient_sliding_band(
         "P2_transient_sample_history": _p2_transient_history,
         "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
         "T_ripple_raw_pct": Trip_raw, "T_ripple_filt_pct": Trip_raw,
+        "T_ripple_pp_Nm": T_ripple_pp, "T_ripple_raw_pp_Nm": T_ripple_pp,
+        "T_ripple_pct_available": Trip_raw is not None,
+        "T_ripple_pct_reason": (None if Trip_raw is not None
+                                else "undefined: mean torque is zero or near zero"),
         # Deprecated aliases retain raw values; no filtering/noise estimate.
         "T_noise_floor_pct": None, "torque_filter_applied": False,
         "T_em_raw_Nm": list(_T2), "T_em_filt_Nm": _T_report,

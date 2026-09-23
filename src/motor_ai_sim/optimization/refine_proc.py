@@ -502,7 +502,9 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "T_em_Nm": round(Tavg, 3), "efficiency": round(eff, 5),
         "op_mode": op_mode,     # derived from the power-flow sign (see above)
         "torque_per_mass_Nm_kg": round(Tavg / mass, 4) if mass > 0 else 0.0,
-        "T_ripple_pct": round(float(d["T_ripple_pct"]), 2),
+        "T_ripple_pct": (None if d.get("T_ripple_pct") is None
+                         else round(float(d["T_ripple_pct"]), 2)),
+        "T_ripple_pp_Nm": d.get("T_ripple_pp_Nm"),
         "P_loss_total_W": round(ploss, 1), "P_cu_W": round(cu, 1),
         "P_cu_dc_W": round(cu_dc, 1), "P_cu_ac_W": round(cu_ac, 1),
         "P_fe_W": round(fe, 1), "P_mag_W": round(mg, 1), "P_shaft_W": round(sh, 1),

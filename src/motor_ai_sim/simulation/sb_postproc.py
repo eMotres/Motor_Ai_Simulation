@@ -209,65 +209,144 @@ def eddy_settle_resid(p_solid: Sequence[float], n_steps_per_period: int,
     return abs(d2) / ref, None
 
 
+def terminal_work_mean(psi_a: Sequence[float], psi_b: Sequence[float],
+                       psi_c: Sequence[float], i_a: Sequence[float],
+                       i_b: Sequence[float], i_c: Sequence[float],
+                       mechanical_angle_rad: Sequence[float], pole_pairs: int,
+                       n_parallel: int = 1) -> float:
+    """Return the all-bin periodic mean ``n_parallel * Σ(i * dψ/dθ_m)``.
+
+    Samples are endpoint-excluded and equally spaced in signed mechanical
+    angle. The derivative uses the full DFT of every supplied sample; for an
+    even sample count, the real-grid Nyquist derivative has the usual zero
+    convention because its sine quadrature is not represented by samples.
+    This is a terminal-work candidate, not by itself a universal torque or
+    energy-balance certification.
+    """
+    try:
+        arrays = [np.asarray(v, dtype=float) for v in
+                  (psi_a, psi_b, psi_c, i_a, i_b, i_c,
+                   mechanical_angle_rad)]
+    except Exception as exc:
+        raise ValueError("terminal-work inputs must be numeric 1-D arrays") from exc
+    if any(a.ndim != 1 for a in arrays):
+        raise ValueError("terminal-work inputs must be 1-D arrays")
+    sizes = {int(a.size) for a in arrays}
+    if len(sizes) != 1:
+        raise ValueError("terminal-work phase and angle arrays must have equal length")
+    n = next(iter(sizes))
+    if n < 8:
+        raise ValueError("terminal-work requires at least 8 samples")
+    if not all(np.all(np.isfinite(a)) for a in arrays):
+        raise ValueError("terminal-work inputs must be finite")
+    p, npar = int(pole_pairs), int(n_parallel)
+    if p <= 0 or p != pole_pairs or npar < 1 or npar != n_parallel:
+        raise ValueError("pole_pairs and n_parallel must be positive integers")
+
+    angles = arrays[6]
+    steps = np.diff(angles)
+    step = float(steps[0])
+    if not math.isfinite(step) or step == 0.0:
+        raise ValueError("mechanical angles must have a nonzero signed step")
+    step_tol = max(1e-14, abs(step) * 1e-10)
+    if not np.allclose(steps, step, rtol=1e-10, atol=step_tol):
+        raise ValueError("mechanical angles must be uniformly spaced")
+    electrical_periods = abs(n * step * p / (2.0 * math.pi))
+    nearest_periods = round(electrical_periods)
+    if nearest_periods < 1 or not math.isclose(
+            electrical_periods, nearest_periods, rel_tol=1e-10, abs_tol=1e-10):
+        raise ValueError(
+            "mechanical-angle samples must span endpoint-excluded integer electrical periods")
+
+    pa, pb, pc, ia, ib, ic = arrays[:6]
+    omega = 2.0 * math.pi * np.fft.fftfreq(n, d=step)
+    try:
+        with np.errstate(over="raise", invalid="raise", divide="raise"):
+            derivative = np.fft.ifft(
+                1j * omega[None, :] * np.fft.fft(
+                    np.stack((pa, pb, pc)), axis=-1), axis=-1).real
+            work = float(npar * np.mean(
+                ia * derivative[0] + ib * derivative[1] + ic * derivative[2]))
+    except (FloatingPointError, ValueError) as exc:
+        raise ValueError("terminal-work arithmetic was nonfinite") from exc
+    if not math.isfinite(work):
+        raise ValueError("terminal-work arithmetic was nonfinite")
+    return work
+
+
+def _terminal_work_ineligibility(*, imposed_current_drive: bool, eddy: bool,
+                                  rotor_eddy: bool, demag: bool,
+                                  frozen_nu: bool,
+                                  all_frames_converged: bool,
+                                  integer_period_window: bool,
+                                  mechanical_angle_rad: Optional[Sequence[float]]
+                                  ) -> Optional[str]:
+    checks = (
+        (imposed_current_drive, "requires imposed-current drive"),
+        (not eddy, "eddy solve is active"),
+        (not rotor_eddy, "rotor eddy solve is active"),
+        (not demag, "demagnetization is active"),
+        (not frozen_nu, "frozen permeability is active"),
+        (all_frames_converged, "one or more retained frames are unconverged"),
+        (integer_period_window, "retained window is not an integer number of periods"),
+        (mechanical_angle_rad is not None, "actual mechanical angles are unavailable"),
+    )
+    return next((reason for ok, reason in checks if not ok), None)
+
+
 def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                   psi_c: Sequence[float], i_a: Sequence[float],
                   i_b: Sequence[float], i_c: Sequence[float],
                   t_maxwell: Sequence[float], pole_pairs: int,
-                  n_parallel: int = 1) -> Tuple[List[float], str]:
-    """Fundamental space-vector mean + raw Maxwell AC. Returns (T(t), method).
+                  n_parallel: int = 1, *,
+                  mechanical_angle_rad: Optional[Sequence[float]] = None,
+                  imposed_current_drive: bool = False, eddy: bool = False,
+                  rotor_eddy: bool = False, demag: bool = False,
+                  frozen_nu: bool = False,
+                  all_frames_converged: bool = False,
+                  integer_period_window: bool = False
+                  ) -> Tuple[List[float], str]:
+    """Eligible all-bin terminal-work mean + raw Maxwell AC, or raw Maxwell.
 
     ``psi_*`` and ``i_*`` are PER-BRANCH (one parallel path), which is how the
     solver carries them everywhere — ``_sc_psi2`` divides psi by n_parallel and
-    the excitation's i_peak is ``I_phase / n_parallel``. The space-vector
-    expression uses PHASE quantities, so ``n_parallel`` restores the phase
-    current (n_parallel branches carry the phase current between them, each at
-    the same flux linkage).  Omitting it reported ``T_true / n_parallel``; it
-    was invisible while every config in the repo had one parallel path, and it
-    surfaced the moment the per-request winding channel let a stored ``2S-2P``
-    machine be evaluated on its own connection (F3).  ``P_elec_in`` in the
-    solver already carried exactly this factor for exactly this reason.
+    the excitation's i_peak is ``I_phase / n_parallel``. The selected terminal
+    work uses ``n_parallel * mean(sum(i_branch * dψ/dθ_m))``, restoring the
+    full phase current once. The legacy fundamental space-vector expression
+    remains a diagnostic candidate; its sinusoidal-winding assumptions omit
+    material spatial-harmonic terms in general.
 
-    The selected mean is (3/2)*p*<ψα*iβ - ψβ*iα>. This is the usual torque
-    identity for a rotationally covariant sinusoidal-winding dq model, not a
-    general finite-element virtual-work calculation. Arbitrary temporal
-    current waveforms alone need not invalidate that identity; explicit
-    rotor-position dependence of coenergy, spatial harmonics and cogging
-    require additional terms. Eddy-current redistribution and irreversible
-    magnet changes require a verified energy/port-work balance too. Agreement
-    at particular validated operating points is not a universal guarantee.
+    The all-bin terminal path still needs a conservative, complete periodic
+    state and an error budget before its mean can be regarded as virtual-work
+    torque. Eddy-current redistribution, irreversible magnet changes, and
+    frozen permeability are outside this selector's validated regime.
 
     The reported waveform is raw Maxwell torque minus its mean plus the
-    space-vector mean. Its retained AC can contain physical ripple AND mesh
+    all-bin terminal-work mean. Its retained AC can contain physical ripple AND mesh
     or sliding-band artifacts; this helper does not establish convergence.
     Historical mean discrepancies do not establish a fixed Maxwell bias for
     every geometry, material or operating point.
 
-    The legacy selector uses peak PER-BRANCH current > 1 A, subject to the
-    existing terminal-data check. Otherwise it returns the raw Maxwell series,
-    including at no-load. This threshold is not a physical conservation law
-    and can change the selected mean discontinuously. Zero terminal current
-    does not rule out cogging or eddy drag. Numerical behavior and the legacy
-    method strings are retained pending the energy-method validation plan in
-    docs/solver-torque-validation-plan.md.
+    Selection is based on explicit conservative-periodic eligibility, never on a
+    current threshold. The fallback preserves the raw Maxwell series exactly.
+    Zero-current terminal work is not a cogging estimate.
     """
-    _pa = np.asarray(psi_a, float); _pb = np.asarray(psi_b, float)
-    _pc = np.asarray(psi_c, float)
-    _ea = np.asarray(i_a, float); _eb = np.asarray(i_b, float)
-    _ec = np.asarray(i_c, float)
-    _Ipk = (float(np.max(np.abs(np.concatenate([_ea, _eb, _ec]))))
-            if _ea.size else 0.0)
-    if _pa.size and _pa.size == _ea.size and _Ipk > 1.0:
-        _s = 2.0 / 3.0; _kc = math.sqrt(3.0) / 2.0
-        _psial = _s * (_pa - 0.5 * _pb - 0.5 * _pc); _psibe = _s * _kc * (_pb - _pc)
-        _ial = _s * (_ea - 0.5 * _eb - 0.5 * _ec); _ibe = _s * _kc * (_eb - _ec)
-        _Te = (1.5 * float(pole_pairs) * float(max(1, int(n_parallel)))
-               * (_psial * _ibe - _psibe * _ial))
-        _emean = float(_Te.mean())
-        _mx = np.asarray(t_maxwell, float)     # raw Maxwell σ_rθ series
-        # Retain raw Maxwell AC; select the fundamental space-vector mean.
-        return (_mx - _mx.mean() + _emean).tolist(), "energy_mean+maxwell_ripple"
-    # Legacy low-current/terminal-data fallback: retain the raw Maxwell series.
-    return list(t_maxwell), "maxwell_stress"
+    _ineligible = _terminal_work_ineligibility(
+        imposed_current_drive=imposed_current_drive, eddy=eddy,
+        rotor_eddy=rotor_eddy, demag=demag, frozen_nu=frozen_nu,
+        all_frames_converged=all_frames_converged,
+        integer_period_window=integer_period_window,
+        mechanical_angle_rad=mechanical_angle_rad)
+    if _ineligible is not None:
+        return list(t_maxwell), "maxwell_stress"
+    _mx = np.asarray(t_maxwell, float)
+    _mean = terminal_work_mean(
+        psi_a, psi_b, psi_c, i_a, i_b, i_c, mechanical_angle_rad,
+        pole_pairs, n_parallel)
+    if _mx.ndim != 1 or not np.all(np.isfinite(_mx)) \
+            or _mx.size != np.asarray(psi_a).size:
+        raise ValueError("Maxwell torque must be finite and aligned with terminal samples")
+    return (_mx - _mx.mean() + _mean).tolist(), "terminal_work_mean+maxwell_ripple"
 
 
 def torque_method_diagnostics(psi_a: Sequence[float], psi_b: Sequence[float],
@@ -275,7 +354,13 @@ def torque_method_diagnostics(psi_a: Sequence[float], psi_b: Sequence[float],
                               i_b: Sequence[float], i_c: Sequence[float],
                               t_maxwell: Sequence[float], pole_pairs: int,
                               n_parallel: int = 1,
-                              selected_method: Optional[str] = None
+                              selected_method: Optional[str] = None, *,
+                              mechanical_angle_rad: Optional[Sequence[float]] = None,
+                              imposed_current_drive: bool = False,
+                              eddy: bool = False, rotor_eddy: bool = False,
+                              demag: bool = False, frozen_nu: bool = False,
+                              all_frames_converged: bool = False,
+                              integer_period_window: bool = False
                               ) -> Dict[str, object]:
     """Compare torque mean candidates without certifying either physically.
 
@@ -293,6 +378,10 @@ def torque_method_diagnostics(psi_a: Sequence[float], psi_b: Sequence[float],
         "space_vector_mean_candidate_Nm": None,
         "raw_maxwell_mean_Nm": None,
         "space_vector_minus_maxwell_mean_Nm": None,
+        "terminal_work_mean_candidate_Nm": None,
+        "terminal_work_minus_maxwell_mean_Nm": None,
+        "terminal_work_method_eligible": False,
+        "terminal_work_eligibility_reason": None,
         "per_branch_peak_current_A": None,
         "legacy_selector_would_use_space_vector_mean": None,
         "certified_energy_balance_Nm": None,
@@ -344,6 +433,29 @@ def torque_method_diagnostics(psi_a: Sequence[float], psi_b: Sequence[float],
             "per_branch_peak_current_A": peak,
             "legacy_selector_would_use_space_vector_mean": bool(peak > 1.0),
         })
+        reason = _terminal_work_ineligibility(
+            imposed_current_drive=imposed_current_drive, eddy=eddy,
+            rotor_eddy=rotor_eddy, demag=demag, frozen_nu=frozen_nu,
+            all_frames_converged=all_frames_converged,
+            integer_period_window=integer_period_window,
+            mechanical_angle_rad=mechanical_angle_rad)
+        if reason is None:
+            try:
+                work_mean = terminal_work_mean(
+                    pa, pb, pc, ia, ib, ic, mechanical_angle_rad, p, npar)
+                difference = work_mean - maxwell_mean
+                if not all(math.isfinite(v) for v in (work_mean, difference)):
+                    raise ValueError("terminal-work arithmetic was nonfinite")
+                result.update({
+                    "terminal_work_mean_candidate_Nm": work_mean,
+                    "terminal_work_minus_maxwell_mean_Nm": difference,
+                    "terminal_work_method_eligible": True,
+                    "terminal_work_eligibility_reason": None,
+                })
+            except Exception as exc:
+                result["terminal_work_eligibility_reason"] = str(exc)
+        else:
+            result["terminal_work_eligibility_reason"] = reason
         return result
     except Exception as exc:
         result["diagnostic_input_reason"] = (

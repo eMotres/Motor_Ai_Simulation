@@ -95,6 +95,13 @@ RTOL = 5e-3
 # absolute floor or the relative test divides noise by noise.
 ATOL = {"T_ripple_pct": 0.05, "P_shaft_W": 0.05, "P_solid_W": 0.05,
         "P_core_W": 0.05, "demag_br_min": 0.01, "demag_br_mean": 0.01,
+        # A selected zero-current terminal-work mean is machine zero; compare
+        # its roundoff absolutely rather than dividing 1e-21 by 1e-21.
+        "T_avg_Nm": 1e-12,
+        # Repeated identical p2_eddy runs alternate between 3.274 and 3.291 W
+        # as sparse/BLAS threads accumulate the coupled-copper solve.  The
+        # observed 0.017 W span is 0.52 %, just beyond the general 0.5 % band.
+        "P_cu_ac_solve_W": 0.02,
         # Honest (frequency-domain) rotor eddy: the shaft term is sub-watt for
         # the same reason P_shaft_solve_W is, so it needs an absolute floor.
         "P_shaft_honest_W": 0.05,
@@ -364,10 +371,14 @@ def _scalar(v: Any) -> float:
     return float(v)
 
 
-def _metrics(d: Dict[str, Any]) -> Dict[str, float]:
+def _metrics(d: Dict[str, Any]) -> Dict[str, Any]:
     out = {
         "T_avg_Nm": _scalar(d.get("T_avg_Nm", d.get("T_em_Nm", 0.0))),
-        "T_ripple_pct": float(d.get("T_ripple_pct", 0.0)),
+        "T_ripple_pct": (None if d.get("T_ripple_pct") is None
+                         else float(d["T_ripple_pct"])),
+        # Keep the physical peak-to-peak span pinned even when its percentage
+        # is undefined because the selected mean is zero or nearly zero.
+        "T_ripple_pp_Nm": float(d.get("T_ripple_pp_Nm", 0.0)),
         "P_cu_W": float(np.mean(d.get("P_cu_W", 0.0)) if isinstance(d.get("P_cu_W"), list)
                         else d.get("P_cu_W", 0.0)),
         "P_fe_W": float(np.mean(d.get("P_fe_W", 0.0)) if isinstance(d.get("P_fe_W"), list)
@@ -534,6 +545,10 @@ def test_case_matches_baseline(case: str, baseline: Dict[str, Dict[str, float]])
     bad = []
     for k, wv in want.items():
         gv = got.get(k)
+        if wv is None:
+            if gv is not None:
+                bad.append(f"  {k}: expected undefined, got {gv!r}")
+            continue
         if gv is None:
             bad.append(f"  {k}: MISSING (was {wv:.6g})")
             continue
@@ -543,7 +558,7 @@ def test_case_matches_baseline(case: str, baseline: Dict[str, Dict[str, float]])
             bad.append(f"  {k}: {wv:.6g} -> {gv:.6g}  ({drift:+.2f} %)")
     for k in got:
         if k not in want:
-            bad.append(f"  {k}: NEW ({got[k]:.6g})")
+            bad.append(f"  {k}: NEW ({got[k]!r})")
     assert not bad, (
         f"physics moved in case {case!r}:\n" + "\n".join(bad) +
         "\n\nIf the change is intended, regenerate with "
@@ -747,8 +762,8 @@ def regenerate_baseline() -> None:
         new[case] = _run(case)
         for k, v in sorted(new[case].items()):
             ov = old.get(case, {}).get(k)
-            if ov is None:
-                print(f"    {k:22s} {v:12.6g}   (new)")
+            if v is None or ov is None:
+                print(f"    {k:22s} {ov!r} -> {v!r}")
             elif abs(v - ov) > max(abs(ov) * RTOL, ATOL.get(k, 0.0)):
                 print(f"    {k:22s} {ov:12.6g} -> {v:12.6g}  "
                       f"({(v - ov) / ov * 100 if ov else float('inf'):+.2f} %)")

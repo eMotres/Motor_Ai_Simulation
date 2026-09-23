@@ -188,10 +188,26 @@ export const getLast = () =>
 // number boxes already use (Carrier / DC link).
 
 export interface ControllerCoolingSettings {
+  /** ``"liquid"`` (default, back-compatible with every save from before
+   * 2026-09-22) | ``"air_forced"`` | ``"air_still"`` — see
+   * ``inverter.losses.COOLING_MODES``. */
+  mode?: string | null;
   coolant?: string | null;
   flow_lpm?: number | null;
   t_in_c?: number | null;
   r_tim_k_w?: number | null;
+  /** air_forced only — a fan/slipstream, "wind speed" as in the thermal sim. */
+  air_speed_mps?: number | null;
+  /** air_forced / air_still — ambient air temperature. */
+  t_ambient_c?: number | null;
+  /** Wetted area, EITHER as one heatsink per device… */
+  heatsink_area_cm2_per_device?: number | null;
+  /** …or as one PCB pad shared by every device on it (wins if both are sent). */
+  plate_area_cm2?: number | null;
+  /** air_forced / air_still — stated constant, default 0.75. */
+  fin_efficiency?: number | null;
+  /** air_still only — stated constant, default 0.9. */
+  emissivity?: number | null;
 }
 
 export interface ControllerMappingRowSettings { coil: number; bridge: string; leg: string; }
@@ -252,6 +268,15 @@ export interface ControllerFormState {
   flow: NumOrBlank;
   tin: NumOrBlank;
   rtim: NumOrBlank;
+  /** ``"liquid" | "air_forced" | "air_still"``. */
+  coolingMode: string;
+  airSpeed: NumOrBlank;
+  tAmbient: NumOrBlank;
+  /** which of the two area fields ``areaCm2`` below is sent as. */
+  areaBasis: 'heatsink' | 'plate';
+  areaCm2: NumOrBlank;
+  finEff: NumOrBlank;
+  emissivity: NumOrBlank;
   mapping: Record<number, string>;
   coupleWithEm: boolean;
 }
@@ -283,6 +308,8 @@ export function formStateFromSettings(
   // save) is IGNORED here on purpose — the web only ever shows and writes the
   // one global `devices_parallel` (owner 2026-09-22: «Давай сделаем одно
   // общее число»). `settingsForSave` below then clears it on the next save.
+  const areaBasis: 'heatsink' | 'plate' = cooling.plate_area_cm2 != null ? 'plate'
+    : cooling.heatsink_area_cm2_per_device != null ? 'heatsink' : fallback.areaBasis;
   return {
     device: block.device || fallback.device,
     topology: block.topology || fallback.topology,
@@ -298,6 +325,14 @@ export function formStateFromSettings(
     flow: toFormNumber(cooling.flow_lpm),
     tin: toFormNumber(cooling.t_in_c),
     rtim: toFormNumber(cooling.r_tim_k_w),
+    coolingMode: cooling.mode || fallback.coolingMode,
+    airSpeed: toFormNumber(cooling.air_speed_mps),
+    tAmbient: toFormNumber(cooling.t_ambient_c),
+    areaBasis,
+    areaCm2: toFormNumber(areaBasis === 'plate' ? cooling.plate_area_cm2
+                                                : cooling.heatsink_area_cm2_per_device),
+    finEff: toFormNumber(cooling.fin_efficiency),
+    emissivity: toFormNumber(cooling.emissivity),
     mapping: rows.length ? mapping : fallback.mapping,
     coupleWithEm: block.couple_with_em ?? fallback.coupleWithEm,
   };
@@ -325,8 +360,12 @@ export function settingsForSave(s: ControllerFormState): ControllerSettings {
     dead_time_us: toSaveNumber(s.dead),
     f_carrier_hz: toSaveNumber(s.fsw),
     v_dc_V: toSaveNumber(s.vdc),
-    cooling: { coolant: s.coolant, flow_lpm: toSaveNumber(s.flow),
-              t_in_c: toSaveNumber(s.tin), r_tim_k_w: toSaveNumber(s.rtim) },
+    cooling: { mode: s.coolingMode, coolant: s.coolant, flow_lpm: toSaveNumber(s.flow),
+              t_in_c: toSaveNumber(s.tin), r_tim_k_w: toSaveNumber(s.rtim),
+              air_speed_mps: toSaveNumber(s.airSpeed), t_ambient_c: toSaveNumber(s.tAmbient),
+              heatsink_area_cm2_per_device: s.areaBasis === 'heatsink' ? toSaveNumber(s.areaCm2) : null,
+              plate_area_cm2: s.areaBasis === 'plate' ? toSaveNumber(s.areaCm2) : null,
+              fin_efficiency: toSaveNumber(s.finEff), emissivity: toSaveNumber(s.emissivity) },
     mapping,
     couple_with_em: s.coupleWithEm,
   };
@@ -436,7 +475,10 @@ export interface ControllerSolveBody {
   f_carrier_hz?: number;
   v_dc_V?: number;
   r_tim_k_w?: number;
-  cooling: { coolant: string; flow_lpm?: number; t_in_c?: number };
+  cooling: { mode: string; coolant?: string; flow_lpm?: number; t_in_c?: number;
+            air_speed_mps?: number; t_ambient_c?: number;
+            heatsink_area_cm2_per_device?: number; plate_area_cm2?: number;
+            fin_efficiency?: number; emissivity?: number };
   mapping?: ControllerMappingRowSettings[];
   // Deliberately no `devices_parallel_by_bridge` here — the web only ever
   // sends the one global `devices_parallel`; a per-bridge override remains a
@@ -450,6 +492,24 @@ export function controllerSolveBody(
   s: ControllerFormState,
   customRows: ControllerMappingRowSettings[],
 ): ControllerSolveBody {
+  const mode = s.coolingMode || 'liquid';
+  // Only the fields THIS mode reads — ``ControllerCoolingSpec`` on the
+  // backend ignores anything unused, but the wire body stays honest about
+  // what the chosen mode actually needs (owner: "exactly the fields each
+  // mode needs").
+  const cooling: ControllerSolveBody['cooling'] = { mode };
+  if (mode === 'liquid') {
+    cooling.coolant = s.coolant;
+    cooling.flow_lpm = blank(s.flow);
+    cooling.t_in_c = blank(s.tin);
+  } else {
+    cooling.t_ambient_c = blank(s.tAmbient);
+    cooling.fin_efficiency = blank(s.finEff);
+    if (s.areaBasis === 'plate') cooling.plate_area_cm2 = blank(s.areaCm2);
+    else cooling.heatsink_area_cm2_per_device = blank(s.areaCm2);
+    if (mode === 'air_forced') cooling.air_speed_mps = blank(s.airSpeed);
+    if (mode === 'air_still') cooling.emissivity = blank(s.emissivity);
+  }
   return {
     device: s.device,
     devices_parallel: blank(s.nPar),
@@ -460,7 +520,7 @@ export function controllerSolveBody(
     f_carrier_hz: blank(s.fsw),
     v_dc_V: blank(s.vdc),
     r_tim_k_w: blank(s.rtim),
-    cooling: { coolant: s.coolant, flow_lpm: blank(s.flow), t_in_c: blank(s.tin) },
+    cooling,
     mapping: s.topology === 'custom' ? customRows : undefined,
   };
 }
@@ -476,6 +536,9 @@ export interface ResolvedPoint {
   v_dc_V: number | null;
   f_carrier_hz: number | null;
   star_delta: string | null;
+  rpm: number | null;
+  modulation_index: number | null;
+  power_factor: number | null;
   sources: Record<string, string>;
   line: string | null;
 }

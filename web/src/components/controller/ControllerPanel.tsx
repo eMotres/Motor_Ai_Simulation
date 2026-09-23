@@ -65,6 +65,20 @@ const ControllerPanel: React.FC = () => {
   const [flow, setFlow] = useState<Nullable>(8);
   const [tin, setTin] = useState<Nullable>(65);
   const [rtim, setRtim] = useState<Nullable>(0.03);
+  // Owner 2026-09-22 evening: "надо добавить воздушное охлаждение и скорость
+  // ветра, как в термосимуляции" — the same liquid/forced-air/still-air
+  // choice the thermal tab already offers for the housing, now for the
+  // device heatsink/plate.  Defaults mirror inverter.losses' own module
+  // constants (air_speed_mps 5, t_ambient_c 40, fin_efficiency 0.75,
+  // emissivity 0.9); the area itself is left blank so a fresh choice falls
+  // back to the backend's stated "small finned heatsink" (40 cm^2/device).
+  const [coolingMode, setCoolingMode] = useState('liquid');
+  const [airSpeed, setAirSpeed] = useState<Nullable>(5);
+  const [tAmbient, setTAmbient] = useState<Nullable>(40);
+  const [areaBasis, setAreaBasis] = useState<'heatsink' | 'plate'>('heatsink');
+  const [areaCm2, setAreaCm2] = useState<Nullable>('');
+  const [finEff, setFinEff] = useState<Nullable>(0.75);
+  const [emissivity, setEmissivity] = useState<Nullable>(0.9);
   const [mapping, setMapping] = useState<Record<number, string>>({});
   /** Whether this controller is meant to feed its losses back into the
    * coupled EM/thermal loop — a SAVED setting; wiring it into the loop
@@ -138,13 +152,17 @@ const ControllerPanel: React.FC = () => {
     try {
       const block = await getControllerSettings(dieCtx.die, dieCtx.config);
       const fallback: ControllerFormState = { device, topology, setSplit, hbMod,
-        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
-        coupleWithEm };
+        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+        coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
+        mapping, coupleWithEm };
       const next = formStateFromSettings(block, fallback);
       setDevice(next.device); setTopology(next.topology); setSetSplit(next.setSplit);
       setHbMod(next.hbMod); setNPar(next.nPar); setRg(next.rg); setVgsOff(next.vgsOff);
       setDead(next.dead); setFsw(next.fsw); setVdc(next.vdc); setCoolant(next.coolant);
       setFlow(next.flow); setTin(next.tin); setRtim(next.rtim);
+      setCoolingMode(next.coolingMode); setAirSpeed(next.airSpeed);
+      setTAmbient(next.tAmbient); setAreaBasis(next.areaBasis);
+      setAreaCm2(next.areaCm2); setFinEff(next.finEff); setEmissivity(next.emissivity);
       setMapping(next.mapping);
       setCoupleWithEm(next.coupleWithEm);
       if (block && (block as any).saved_at) setSettingsSavedAt((block as any).saved_at);
@@ -163,15 +181,17 @@ const ControllerPanel: React.FC = () => {
     if (!dieCtx.die || !dieCtx.config) return;
     try {
       const state: ControllerFormState = { device, topology, setSplit, hbMod,
-        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
-        coupleWithEm };
+        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+        coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
+        mapping, coupleWithEm };
       localStorage.setItem('ctrl.settings', JSON.stringify({
         die: dieCtx.die, config: dieCtx.config, block: settingsForSave(state) }));
     } catch { /* private window — the auto-save-with-the-motor mirror just won't work this session */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
-      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
-      coupleWithEm]);
+      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+      coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
+      mapping, coupleWithEm]);
 
   const saveSettings = async () => {
     setSettingsErr(null);
@@ -181,8 +201,9 @@ const ControllerPanel: React.FC = () => {
     }
     try {
       const state: ControllerFormState = { device, topology, setSplit, hbMod,
-        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim, mapping,
-        coupleWithEm };
+        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+        coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
+        mapping, coupleWithEm };
       const r = await saveControllerSettings(dieCtx.die, dieCtx.config, settingsForSave(state));
       setSettingsSavedAt(r.controller?.saved_at || null);
     } catch (e) { setSettingsErr(String(e)); }
@@ -198,7 +219,9 @@ const ControllerPanel: React.FC = () => {
   // carrier / current / power resolution chain runs uncontested.
   const body = () => controllerSolveBody(
     { device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
-      coolant, flow, tin, rtim, mapping, coupleWithEm },
+      coolant, flow, tin, rtim,
+      coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
+      mapping, coupleWithEm },
     customRows);
 
   // The per-switch current — and so the catalogue's "parallel" suggestion —
@@ -226,11 +249,30 @@ const ControllerPanel: React.FC = () => {
   // resolution `POST /solve` runs (GET /point), so this line can never name
   // a different source than the answer that follows it.
   const [point, setPoint] = useState<ResolvedPoint | null>(null);
-  useEffect(() => { void (async () => {
-    if (!dieCtx.die || !dieCtx.config) { setPoint(null); return; }
-    try { setPoint(await getResolvedPoint(dieCtx.die, dieCtx.config)); }
-    catch { setPoint(null); }
-  })(); }, [dieCtx.die, dieCtx.config, dieCtx.active]);
+  useEffect(() => {
+    let alive = true;
+    const load = () => { void (async () => {
+      if (!dieCtx.die || !dieCtx.config) { if (alive) setPoint(null); return; }
+      try { const p = await getResolvedPoint(dieCtx.die, dieCtx.config); if (alive) setPoint(p); }
+      catch { if (alive) setPoint(null); }
+    })(); };
+    load();
+    // Same events the rest of this tab already reacts to for a new machine
+    // or a fresh electromagnetic/coupled answer (``useDieContext`` itself
+    // re-polls on ``family-changed``/``sim-design-applied``; this also
+    // catches a transient EM run finishing on the SAME die/config, where
+    // those two never fire) — the resolved point must never lag behind a
+    // Solve on the Simulation/Coupled tab.
+    window.addEventListener('sim-transient-done', load);
+    window.addEventListener('sim-design-applied', load);
+    window.addEventListener('family-changed', load);
+    return () => {
+      alive = false;
+      window.removeEventListener('sim-transient-done', load);
+      window.removeEventListener('sim-design-applied', load);
+      window.removeEventListener('family-changed', load);
+    };
+  }, [dieCtx.die, dieCtx.config, dieCtx.active]);
 
   const solve = async (fresh = false) => {
     setBusy(true); setErr(null);
@@ -343,20 +385,86 @@ const ControllerPanel: React.FC = () => {
             <Row label="V_GS off" tip="Gate-off voltage: 0 V or −5 V. It changes both the turn-off energy and the body-diode drop during dead time." unit="V"><Num v={vgsOff} set={setVgsOff} /></Row>
             <Row label="Dead time" tip="Both switches of a leg off. The current then runs through a SiC body diode at ~4 V, so this is expensive — and it is what distorts the output voltage at every current zero crossing." unit="µs"><Num v={dead} set={setDead} /></Row>
             <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
-            <Row label="Carrier" tip="PWM carrier frequency. Blank = the duty's own (its stored inverter block)." unit="Hz"><Num v={fsw} set={setFsw} /></Row>
-            <Row label="DC link" tip="Bus voltage. Blank = the duty's own — for this machine the battery pack the configuration carries." unit="V"><Num v={vdc} set={setVdc} /></Row>
+            <Row label="Carrier" tip={'PWM carrier frequency. Blank = the duty\'s own'
+                + (point?.f_carrier_hz != null
+                  ? ` — ${fmt(point.f_carrier_hz, 0)} Hz (${point.sources?.f_carrier_hz || 'resolved'}), shown below as a placeholder.`
+                  : ' (its stored inverter block).')} unit="Hz">
+              <Num v={fsw} set={setFsw}
+                placeholder={point?.f_carrier_hz != null ? fmt(point.f_carrier_hz, 0) : undefined} />
+            </Row>
+            <Row label="DC link" tip={'Bus voltage. Blank = the duty\'s own'
+                + (point?.v_dc_V != null
+                  ? ` — ${fmt(point.v_dc_V, 0)} V (${point.sources?.v_dc_V || 'resolved'}), shown below as a placeholder.`
+                  : ' — for this machine the battery pack the configuration carries.')} unit="V">
+              <Num v={vdc} set={setVdc}
+                placeholder={point?.v_dc_V != null ? fmt(point.v_dc_V, 0) : undefined} />
+            </Row>
+            {point && (point.i_phase_rms_A != null || point.rpm != null) && (
+              <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>
+                {point.i_phase_rms_A != null &&
+                  <Chip size="small" label={`I_phase ${fmt(point.i_phase_rms_A, 0)} A`} sx={{ fontSize: 10, height: 20 }} />}
+                {point.star_delta &&
+                  <Chip size="small" label={point.star_delta} sx={{ fontSize: 10, height: 20 }} />}
+                {point.rpm != null &&
+                  <Chip size="small" label={`${fmt(point.rpm, 0)} rpm`} sx={{ fontSize: 10, height: 20 }} />}
+                {point.p_ac_W != null &&
+                  <Chip size="small" label={`P_ac ${fmt(point.p_ac_W, 0)} W`} sx={{ fontSize: 10, height: 20 }} />}
+                {point.modulation_index != null &&
+                  <Chip size="small" label={`m ${fmt(point.modulation_index, 3)}`} sx={{ fontSize: 10, height: 20 }} />}
+                {point.power_factor != null &&
+                  <Chip size="small" label={`cos φ ${fmt(point.power_factor, 3)}`} sx={{ fontSize: 10, height: 20 }} />}
+                <HelpTip title={Object.entries(point.sources || {})
+                  .map(([k, v]) => `${k}: ${v}`).join('\n') || 'From the loaded duty\'s electromagnetic/coupled record.'} />
+              </Box>
+            )}
             <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
             <SectionLabel sx={{ mb: 0.5 }}>MOSFET cooling</SectionLabel>
-            <Row label="Coolant" tip="The coldplate fluid, from the same catalogue the motor jacket uses.">
-              <TextField select size="small" value={coolant} onChange={e => setCoolant(e.target.value)}
+            <Row label="Mode" tip="Liquid coldplate, forced air (fan/slipstream) or still air (no fan) — the same three the thermal simulation offers for the housing, now for the device heatsink/plate.">
+              <TextField select size="small" value={coolingMode} onChange={e => setCoolingMode(e.target.value)}
                 sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
-                {['water', 'water_glycol_50', 'ethylene_glycol', 'oil'].map(c =>
-                  <MenuItem key={c} value={c} sx={{ fontSize: 12 }}>{c}</MenuItem>)}
+                <MenuItem value="liquid" sx={{ fontSize: 12 }}>liquid coldplate</MenuItem>
+                <MenuItem value="air_forced" sx={{ fontSize: 12 }}>air — forced</MenuItem>
+                <MenuItem value="air_still" sx={{ fontSize: 12 }}>air — still</MenuItem>
               </TextField>
             </Row>
-            <Row label="Flow" tip="Coldplate flow. It sets the film coefficient AND the coolant's own temperature rise." unit="L/min"><Num v={flow} set={setFlow} /></Row>
-            <Row label="Inlet" tip="Coolant inlet temperature — the bottom of the whole thermal stack." unit="°C"><Num v={tin} set={setTin} /></Row>
-            <Row label="R_th TIM" tip="Thermal interface between the device tab and the plate, per device. It is comparable with R_th(j-c) itself, so it changes the answer." unit="K/W"><Num v={rtim} set={setRtim} /></Row>
+            {coolingMode === 'liquid' && (<>
+              <Row label="Coolant" tip="The coldplate fluid, from the same catalogue the motor jacket uses.">
+                <TextField select size="small" value={coolant} onChange={e => setCoolant(e.target.value)}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  {['water', 'water_glycol_50', 'ethylene_glycol', 'oil'].map(c =>
+                    <MenuItem key={c} value={c} sx={{ fontSize: 12 }}>{c}</MenuItem>)}
+                </TextField>
+              </Row>
+              <Row label="Flow" tip="Coldplate flow. It sets the film coefficient AND the coolant's own temperature rise." unit="L/min"><Num v={flow} set={setFlow} /></Row>
+              <Row label="Inlet" tip="Coolant inlet temperature — the bottom of the whole thermal stack." unit="°C"><Num v={tin} set={setTin} /></Row>
+            </>)}
+            {coolingMode !== 'liquid' && (<>
+              {coolingMode === 'air_forced' && (
+                <Row label="Wind speed" tip="Air speed over the device heatsink/plate — the same 'wind speed' input as the thermal simulation. Blank = 5 m/s." unit="m/s">
+                  <Num v={airSpeed} set={setAirSpeed} />
+                </Row>)}
+              <Row label="Ambient" tip="Ambient air temperature — the bottom of the whole thermal stack in this mode. Blank = 40 °C." unit="°C">
+                <Num v={tAmbient} set={setTAmbient} />
+              </Row>
+              <Row label="Area basis" tip="A heatsink bolted to EACH device, or one PCB pad shared by every device on it.">
+                <TextField select size="small" value={areaBasis} onChange={e => setAreaBasis(e.target.value as 'heatsink' | 'plate')}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="heatsink" sx={{ fontSize: 12 }}>per-device heatsink</MenuItem>
+                  <MenuItem value="plate" sx={{ fontSize: 12 }}>shared PCB plate</MenuItem>
+                </TextField>
+              </Row>
+              <Row label="Wetted area" tip="Blank = a small finned heatsink, 40 cm² per device (this module's stated assumption)." unit="cm²">
+                <Num v={areaCm2} set={setAreaCm2} />
+              </Row>
+              <Row label="Fin efficiency" tip="Stated constant, not fitted. Blank = 0.75 (a short aluminium pin/plate fin); a bare flat pad with no fins is 1.0.">
+                <Num v={finEff} set={setFinEff} />
+              </Row>
+              {coolingMode === 'air_still' && (
+                <Row label="Emissivity" tip="Blank = 0.9 (anodised aluminium / bare FR4 solder mask); a bare polished heatsink is far lower.">
+                  <Num v={emissivity} set={setEmissivity} />
+                </Row>)}
+            </>)}
+            <Row label="R_th TIM" tip="Thermal interface between the device tab and the plate/heatsink, per device, every mode. It is comparable with R_th(j-c) itself, so it changes the answer." unit="K/W"><Num v={rtim} set={setRtim} /></Row>
             <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
               <FormControlLabel sx={{ mr: 0, flex: 1 }}
@@ -489,8 +597,12 @@ const ControllerPanel: React.FC = () => {
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
                 <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
                   E_oss {L?.e_oss_policy === 'added' ? 'added' : 'in E_on'} ·
-                  coolant {fmt(T?.t_coolant_in_c, 0)} → {fmt(T?.t_coolant_in_c + (T?.coolant_rise_K ?? 0), 0)} °C ·
-                  case {fmt(T?.t_case_c, 0)} °C · R_plate {fmt(T?.r_coldplate_k_w, 4)} K/W
+                  {' '}{T?.cooling_mode === 'air_forced' ? 'air — forced'
+                       : T?.cooling_mode === 'air_still' ? 'air — still' : 'liquid coldplate'} ·
+                  {T?.cooling_mode === 'liquid'
+                    ? ` coolant ${fmt(T?.t_coolant_in_c, 0)} → ${fmt(T?.t_coolant_in_c + (T?.coolant_rise_K ?? 0), 0)} °C ·`
+                    : ` ambient ${fmt(T?.t_coolant_in_c, 0)} °C ·`}
+                  {' '}case {fmt(T?.t_case_c, 0)} °C · R_path {fmt(T?.r_coldplate_k_w, 4)} K/W
                 </Typography>
                 <HelpTip title={`E_oss reference ${fmt(L?.e_oss_reference_W, 0)} W.`} />
               </Box>
@@ -598,8 +710,9 @@ const Row: React.FC<{ label: string; tip: string; unit?: string; children: React
       {unit && <Typography sx={{ fontSize: 10, color: 'var(--text-3)', width: 32 }}>{unit}</Typography>}
     </Box>);
 
-const Num: React.FC<{ v: Nullable; set: (v: Nullable) => void }> = ({ v, set }) => (
-  <TextField type="number" size="small" value={v}
+const Num: React.FC<{ v: Nullable; set: (v: Nullable) => void; placeholder?: string }> =
+  ({ v, set, placeholder }) => (
+  <TextField type="number" size="small" value={v} placeholder={placeholder}
     onChange={e => set(e.target.value === '' ? '' : parseFloat(e.target.value))}
     sx={NUM} />);
 

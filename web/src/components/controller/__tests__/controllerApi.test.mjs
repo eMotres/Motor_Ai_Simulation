@@ -141,6 +141,15 @@ function formStateFromSettings(block, fallback) {
     flow: toFormNumber(cooling.flow_lpm),
     tin: toFormNumber(cooling.t_in_c),
     rtim: toFormNumber(cooling.r_tim_k_w),
+    coolingMode: cooling.mode || fallback.coolingMode,
+    airSpeed: toFormNumber(cooling.air_speed_mps),
+    tAmbient: toFormNumber(cooling.t_ambient_c),
+    areaBasis: cooling.plate_area_cm2 != null ? 'plate'
+      : cooling.heatsink_area_cm2_per_device != null ? 'heatsink' : fallback.areaBasis,
+    areaCm2: toFormNumber(cooling.plate_area_cm2 != null ? cooling.plate_area_cm2
+                                                          : cooling.heatsink_area_cm2_per_device),
+    finEff: toFormNumber(cooling.fin_efficiency),
+    emissivity: toFormNumber(cooling.emissivity),
     mapping: rows.length ? mapping : fallback.mapping,
     coupleWithEm: block.couple_with_em ?? fallback.coupleWithEm,
   };
@@ -165,8 +174,12 @@ function settingsForSave(s) {
     dead_time_us: toSaveNumber(s.dead),
     f_carrier_hz: toSaveNumber(s.fsw),
     v_dc_V: toSaveNumber(s.vdc),
-    cooling: { coolant: s.coolant, flow_lpm: toSaveNumber(s.flow),
-              t_in_c: toSaveNumber(s.tin), r_tim_k_w: toSaveNumber(s.rtim) },
+    cooling: { mode: s.coolingMode, coolant: s.coolant, flow_lpm: toSaveNumber(s.flow),
+              t_in_c: toSaveNumber(s.tin), r_tim_k_w: toSaveNumber(s.rtim),
+              air_speed_mps: toSaveNumber(s.airSpeed), t_ambient_c: toSaveNumber(s.tAmbient),
+              heatsink_area_cm2_per_device: s.areaBasis === 'heatsink' ? toSaveNumber(s.areaCm2) : null,
+              plate_area_cm2: s.areaBasis === 'plate' ? toSaveNumber(s.areaCm2) : null,
+              fin_efficiency: toSaveNumber(s.finEff), emissivity: toSaveNumber(s.emissivity) },
     mapping,
     couple_with_em: s.coupleWithEm,
   };
@@ -176,6 +189,8 @@ const DEFAULT_FORM = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
   nPar: 4, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
   coolant: 'water_glycol_50', flow: 8, tin: 65, rtim: 0.03,
+  coolingMode: 'liquid', airSpeed: 5, tAmbient: 40, areaBasis: 'heatsink',
+  areaCm2: '', finEff: 0.75, emissivity: 0.9,
   mapping: {}, coupleWithEm: false,
 };
 
@@ -256,6 +271,20 @@ test('settingsForSave round-trips through formStateFromSettings', () => {
 const blank = (v) => (v === '' ? undefined : v);
 
 function controllerSolveBody(s, customRows) {
+  const mode = s.coolingMode || 'liquid';
+  const cooling = { mode };
+  if (mode === 'liquid') {
+    cooling.coolant = s.coolant;
+    cooling.flow_lpm = blank(s.flow);
+    cooling.t_in_c = blank(s.tin);
+  } else {
+    cooling.t_ambient_c = blank(s.tAmbient);
+    cooling.fin_efficiency = blank(s.finEff);
+    if (s.areaBasis === 'plate') cooling.plate_area_cm2 = blank(s.areaCm2);
+    else cooling.heatsink_area_cm2_per_device = blank(s.areaCm2);
+    if (mode === 'air_forced') cooling.air_speed_mps = blank(s.airSpeed);
+    if (mode === 'air_still') cooling.emissivity = blank(s.emissivity);
+  }
   return {
     device: s.device,
     devices_parallel: blank(s.nPar),
@@ -266,7 +295,7 @@ function controllerSolveBody(s, customRows) {
     f_carrier_hz: blank(s.fsw),
     v_dc_V: blank(s.vdc),
     r_tim_k_w: blank(s.rtim),
-    cooling: { coolant: s.coolant, flow_lpm: blank(s.flow), t_in_c: blank(s.tin) },
+    cooling,
     mapping: s.topology === 'custom' ? customRows : undefined,
   };
 }
@@ -320,6 +349,143 @@ test('a custom mapping is sent only for the custom topology', () => {
   assert.deepEqual(custom.mapping, rows);
   const notCustom = controllerSolveBody({ ...DEFAULT_FORM, topology: 'one_3ph' }, rows);
   assert.equal(notCustom.mapping, undefined);
+});
+
+/* ── cooling.mode payload (owner 2026-09-22 evening) ─────────────────────────
+ * "надо добавить воздушное охлаждение и скорость ветра, как в
+ * термосимуляции" — the same liquid / forced-air / still-air choice the
+ * thermal tab already offers, now for the device heatsink/plate
+ * (``ControllerCoolingSpec`` on the backend, ``inverter.losses.COOLING_MODES``).
+ * ``ControllerCoolingSpec`` ignores whatever a mode does not use, but the
+ * wire body only ever sends what the CHOSEN mode reads, per mode.
+ */
+
+test('cooling mode "liquid" sends only coolant/flow/inlet, never an air field', () => {
+  const body = controllerSolveBody({ ...DEFAULT_FORM, coolingMode: 'liquid' }, []);
+  assert.equal(body.cooling.mode, 'liquid');
+  assert.equal(body.cooling.coolant, 'water_glycol_50');
+  assert.equal(body.cooling.flow_lpm, 8);
+  assert.equal(body.cooling.t_in_c, 65);
+  for (const k of ['air_speed_mps', 't_ambient_c', 'heatsink_area_cm2_per_device',
+                    'plate_area_cm2', 'fin_efficiency', 'emissivity']) {
+    assert.equal(body.cooling[k], undefined, `${k} must not be sent in liquid mode`);
+  }
+});
+
+test('cooling mode "air_forced" sends wind speed, ambient, area and fin '
+   + 'efficiency — never the coolant/flow/inlet triple or emissivity', () => {
+  const s = { ...DEFAULT_FORM, coolingMode: 'air_forced', airSpeed: 6, tAmbient: 35 };
+  const body = controllerSolveBody(s, []);
+  assert.equal(body.cooling.mode, 'air_forced');
+  assert.equal(body.cooling.air_speed_mps, 6);
+  assert.equal(body.cooling.t_ambient_c, 35);
+  assert.equal(body.cooling.fin_efficiency, 0.75);
+  // default area basis is "heatsink" (per device) with a blank area — the
+  // backend's own 40 cm^2/device default then applies.
+  assert.equal(body.cooling.heatsink_area_cm2_per_device, undefined);
+  assert.equal(body.cooling.plate_area_cm2, undefined);
+  for (const k of ['coolant', 'flow_lpm', 't_in_c', 'emissivity']) {
+    assert.equal(body.cooling[k], undefined, `${k} must not be sent in air_forced mode`);
+  }
+});
+
+test('cooling mode "air_still" sends emissivity and no air speed', () => {
+  const s = { ...DEFAULT_FORM, coolingMode: 'air_still', emissivity: 0.85 };
+  const body = controllerSolveBody(s, []);
+  assert.equal(body.cooling.mode, 'air_still');
+  assert.equal(body.cooling.emissivity, 0.85);
+  assert.equal(body.cooling.air_speed_mps, undefined,
+    'air_still has no fan — air_speed_mps is a forced-air-only field');
+  assert.equal(body.cooling.t_ambient_c, 40);
+});
+
+test('area basis "plate" sends plate_area_cm2 instead of the per-device area', () => {
+  const s = { ...DEFAULT_FORM, coolingMode: 'air_forced', areaBasis: 'plate', areaCm2: 120 };
+  const body = controllerSolveBody(s, []);
+  assert.equal(body.cooling.plate_area_cm2, 120);
+  assert.equal(body.cooling.heatsink_area_cm2_per_device, undefined);
+});
+
+test('a saved air-cooling block round-trips through formStateFromSettings / '
+   + 'settingsForSave, including the area basis it was saved with', () => {
+  const block = {
+    device: 'X', topology: 'one_3ph', devices_parallel: 1,
+    cooling: { mode: 'air_still', t_ambient_c: 30, emissivity: 0.8,
+              plate_area_cm2: 150, fin_efficiency: 0.6 },
+  };
+  const s = formStateFromSettings(block, DEFAULT_FORM);
+  assert.equal(s.coolingMode, 'air_still');
+  assert.equal(s.tAmbient, 30);
+  assert.equal(s.emissivity, 0.8);
+  assert.equal(s.areaBasis, 'plate');
+  assert.equal(s.areaCm2, 150);
+  assert.equal(s.finEff, 0.6);
+
+  const saved = settingsForSave(s);
+  assert.equal(saved.cooling.mode, 'air_still');
+  assert.equal(saved.cooling.plate_area_cm2, 150);
+  assert.equal(saved.cooling.heatsink_area_cm2_per_device, null);
+});
+
+test('an old configuration with no saved cooling.mode restores as "liquid" '
+   + '— bit-identical with every save from before 2026-09-22', () => {
+  const block = { device: 'X', topology: 'one_3ph', devices_parallel: 1,
+    cooling: { coolant: 'oil', flow_lpm: 10, t_in_c: 55 } };
+  const s = formStateFromSettings(block, DEFAULT_FORM);
+  assert.equal(s.coolingMode, 'liquid');
+  assert.equal(s.coolant, 'oil');
+});
+
+/* ── the resolved point pre-fills Carrier/DC link, never silently overrides
+ * (owner 2026-09-22 evening screenshots: "надо брать эти значения из
+ * электромагнитного моделирования или из батареи и рисовать значения") ────
+ * The panel shows the resolved value as a PLACEHOLDER (``carrierPlaceholder``
+ * / ``vdcPlaceholder`` below, verbatim copies of the JSX prop expressions —
+ * see ControllerPanel.tsx's Carrier/DC-link ``<Num>`` rows) while the actual
+ * form field stays at its blank-means-"the duty's own" sentinel, so
+ * ``controllerSolveBody`` keeps omitting the key exactly as it already does
+ * (tested above) — the prefill is cosmetic, not a hidden default that would
+ * stop a real duty-side change from being picked up on the next resolve. An
+ * EDITED value is a deliberate override and crosses the wire as typed,
+ * whether or not it matches the point.
+ */
+
+function carrierPlaceholder(point) {
+  return point && point.f_carrier_hz != null ? fmt(point.f_carrier_hz, 0) : undefined;
+}
+function vdcPlaceholder(point) {
+  return point && point.v_dc_V != null ? fmt(point.v_dc_V, 0) : undefined;
+}
+
+test('a resolved point renders as a placeholder, formatted like every other number', () => {
+  const point = { f_carrier_hz: 24000, v_dc_V: 750.4, sources: {} };
+  assert.equal(carrierPlaceholder(point), '24,000');
+  assert.equal(vdcPlaceholder(point), '750');
+});
+
+test('no resolved point (no duty loaded yet) leaves the placeholder undefined', () => {
+  assert.equal(carrierPlaceholder(null), undefined);
+  assert.equal(vdcPlaceholder({ f_carrier_hz: null, v_dc_V: null }), undefined);
+});
+
+test('a blank Carrier/DC-link field is OMITTED from the solve even with a '
+   + 'point resolved and shown as a placeholder — the prefill never becomes '
+   + 'a hidden value the wire sends on its own', () => {
+  const point = { f_carrier_hz: 24000, v_dc_V: 750.4, sources: {} };
+  assert.equal(carrierPlaceholder(point), '24,000'); // shown…
+  const body = controllerSolveBody({ ...DEFAULT_FORM, fsw: '', vdc: '' }, []); // …but blank stays blank
+  assert.equal(body.f_carrier_hz, undefined);
+  assert.equal(body.v_dc_V, undefined);
+});
+
+test('typing over the placeholder sends the typed value as a deliberate '
+   + 'override, even when it differs from the resolved point', () => {
+  const body = controllerSolveBody({ ...DEFAULT_FORM, fsw: 48000, vdc: 800 }, []);
+  assert.equal(body.f_carrier_hz, 48000);
+  assert.equal(body.v_dc_V, 800);
+  const saved = settingsForSave({ ...DEFAULT_FORM, fsw: 48000, vdc: 800 });
+  assert.equal(saved.f_carrier_hz, 48000, 'the override is what gets saved with the configuration');
+  assert.equal(saved.v_dc_V, 800);
 });
 
 /* ── controllerMirrorApplies (owner 2026-09-22, second round) ───────────────

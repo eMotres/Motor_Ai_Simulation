@@ -618,6 +618,13 @@ def get_resolved_point(die: Optional[str] = Query(None), config: Optional[str] =
     i_ph, p_ac = req.get("i_phase_rms_A"), req.get("p_ac_W")
     v_dc, f_sw, sd = req.get("v_dc_V"), req.get("f_carrier_hz"), req.get("star_delta")
     m, pf = req.get("modulation_index"), req.get("power_factor")
+    # The web's Carrier/DC-link inputs prefill from THIS point (owner
+    # 2026-09-22 evening screenshots: "надо брать эти значения из
+    # электромагнитного моделирования или из батареи и рисовать значения" —
+    # the chips row next to those inputs also names rpm), so it rides the
+    # same ``_build_request`` resolution as ``i_phase_rms_A``/``p_ac_W`` above
+    # rather than a second lookup that could disagree with it.
+    rpm = req.get("rpm")
     line = None
     if i_ph is not None and p_ac is not None:
         if m is not None and pf is not None:
@@ -641,7 +648,7 @@ def get_resolved_point(die: Optional[str] = Query(None), config: Optional[str] =
     return {"die": ctx.get("die"), "config": ctx.get("config"), "duty": ctx.get("duty"),
             "i_phase_rms_A": i_ph, "p_ac_W": p_ac, "v_dc_V": v_dc,
             "f_carrier_hz": f_sw, "star_delta": sd, "modulation_index": m,
-            "power_factor": pf, "sources": sources, "line": line}
+            "power_factor": pf, "rpm": rpm, "sources": sources, "line": line}
 
 
 @router.post("/schematic")

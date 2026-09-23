@@ -541,5 +541,31 @@ eddy term are now zeroed with that selected 0 W total, covered by a dedicated
 sub-floor test. Verification: the parent reran the three focused suites,
 87 passed in 5.93 s.
 No FEM run, live API access, restart, configuration edit, deployment, or push.
-The shared `fem_solver_2d.py` also contains unrelated uncommitted changes by
-another agent; do not commit that path until its ownership is separated.
+The core-loss commit was held until the other agent committed its overlapping
+`fem_solver_2d.py` work as `1c23f12`; the remaining raw-loss hunks were then
+committed separately as `c582449`.
+
+## One-ampere frozen-current torque discriminator (2026-09-23)
+
+Sol prepared and reviewed the guarded run and offline analyzer; Astra launched
+the bounded solve in an isolated clean checkout. No model escalation was
+needed. The first three attempts stopped before any field solve on provenance
+guards (clone ownership, one missing pinned config, then a post-guard Git
+call); the runner was hardened before the successful attempt.
+
+The successful run saved 96 converged equilibria (48 center-current pairs at
+one slip cell either side) for the GEO30 12-slot/14-pole NS2 case at 1 A peak
+per branch, mesh 1.4/0.35 mm. All source hashes were unchanged during the run.
+The 48 frozen-current coenergy secants have mean 0.005138892113 Nm. Independent
+all-bin terminal work from the archived raw currents, linkages and signed
+angles is 0.005140465326 Nm, 0.000001573213 Nm higher. Raw Maxwell mean is
+0.005226917746 Nm, 0.000088025633 Nm higher than the secants.
+
+Source/linkage mismatch was at most 1.63e-19 Wb; PM field/source pairing agreed
+within 3.33e-16 J; the reconstructed H law agreed to 4.66e-10 A/m with no
+permeability-floor activation. The integer-weld spatial error remains
+unbounded, and run15's mixed-EOL field_ops bytes were not archived, so this is
+strong diagnostic support for all-bin terminal work, not certification.
+
+Verification: both focused review files passed 7 tests in 0.49 s; the analyzer
+reproduced the saved result. No live API/config access, deployment or push.

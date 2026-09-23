@@ -1,0 +1,212 @@
+# ============================================================
+# Power-device card — Infineon IMCQ120R010M2H
+# CoolSiC(TM) 1200 V SiC MOSFET G2, Q-DPAK top-side cooled
+# Added 2026-09-23 (see IMCQ120R005M2H.yaml header for the full convention
+# note). Nothing invented; unpublished = null.
+# ============================================================
+
+part: IMCQ120R010M2H
+manufacturer: Infineon
+family: "CoolSiC MOSFET 1200 V G2"
+technology: sic_mosfet
+package: PG-HDSOP-22-U03
+package_common_name: Q-DPAK
+cooling: top_side
+marking: 12M2H010
+package_size_mm:
+  source: "Datasheet Figure 1 (section 5, Package outlines), MAX column — same package group as IMCQ120R004M2H"
+  length_mm: 15.10
+  width_mm: 21.11
+  height_mm: 2.35
+  body_width_mm: 15.50
+  lead_pitch_mm: 1.14
+  leads: 22
+weight_g: null
+datasheet_revision: "1.20, 2026-07-27"
+datasheet_url: "https://www.infineon.com/assets/row/public/documents/60/49/infineon-imcq120r010m2h-datasheet-en.pdf"
+
+ratings:
+  source: "Datasheet Table 2 (Maximum rated values); T_vj from Table 4"
+  v_dss_V: 1200
+  i_d_continuous:
+    - {t_case_c: 25,  i_a: 195, basis: table}
+    - {t_case_c: 100, i_a: 138, basis: table}
+  i_d_pulsed_A: 690
+  p_tot_W:
+    - {t_case_c: 25,  p_w: 880, basis: table}
+    - {t_case_c: 100, p_w: 440, basis: table}
+  t_j_max_c: 175
+  t_j_overload_c: 200
+  t_storage_c: {min: -55, max: 150}
+  v_gs_transient_V: {min: -10, max: 25}
+  v_gs_static_V:    {min: -7,  max: 23}
+  e_as_mJ: 868                 # I_D = 69 A, V_DD = 50 V, L = 0.4 mH
+  e_ar_mJ: 4.34
+  t_sc_us: 2
+
+gate:
+  source: "Datasheet Table 3 and Table 4"
+  v_gs_on_recommended_V:  {min: 15, max: 18}
+  v_gs_off_recommended_V: {min: -5, max: 0}
+  v_gs_th_V: {min: 3.5, typ: 4.2, max: 5.1, at_t_j_c: 25,
+              note: "I_D = 21.7 mA, V_DS = V_GS; typ 3.2 V at T_vj = 175 degC"}
+  q_g_nC: 150                  # V_DD = 800 V, I_D = 69 A, V_GS = -2/18 V
+  q_gs_pl_nC: 36
+  q_gd_nC: 35
+  r_g_internal_ohm: 2
+  r_g_ext_datasheet_ohm: 2.3
+  l_sigma_nH: 15
+
+r_ds_on:
+  source: "Datasheet Table 4 (T_vj = 25/150/175 degC at V_GS = 18 V; 25 degC at V_GS = 15 V), R_DS(on) = f(T_vj) figure, I_D = 69 A"
+  measured_at_i_d_A: 69
+  curves:
+    - v_gs_on_V: 18
+      points:
+        - {t_j_c: 25,  r_mohm: 10,   basis: table, anchor: true}
+        - {t_j_c: 150, r_mohm: 20.4, basis: table, anchor: true, r_mohm_max: 26}
+        - {t_j_c: 175, r_mohm: 23.7, basis: table, anchor: true}
+    - v_gs_on_V: 15
+      points:
+        - {t_j_c: 25,  r_mohm: 12.5, basis: table, anchor: true}
+
+capacitance:
+  source: "Datasheet Table 4; f = 100 kHz, V_AC = 25 mV, V_GS = 0 V"
+  at_v_ds_V: 800
+  c_iss_pF: 6320
+  c_oss_pF: 214
+  c_rss_pF: 19
+  c_o_er_pF: 281
+  c_o_tr_pF: 419
+  e_oss_uJ: 90
+  q_oss_nC: 335
+  e_oss_rule: "E_oss(V) = 0.5 * c_o_er * V^2   [AN2025-10 eq. (11), rearranged]"
+
+switching:
+  source: >-
+    Datasheet Table 4 (E_on/E_off/E_tot, T_vj = 25/175 degC) and Table 6
+    (E_fr); current dependence from the figure "E = f(I_D), T_vj = 175 degC,
+    R_G,ext = 2.3 ohm, V_DD = 800 V" (x-axis 0-140 A) — 3-point sparse read.
+  v_dd_ref_V: 800
+  i_d_ref_A: 69
+  r_g_ext_ref_ohm: 2.3
+  scaling:
+    voltage_exponent: 1.0
+    voltage_rule: "E(V_dc) = E(800 V) * (V_dc / 800)^1.0 — first-order hard-switching rule, ASSUMPTION as on IMCQ120R004M2H."
+    current_rule: "Linear interpolation between the tabulated points of `curves`."
+    temperature_rule: "Linear interpolation between the 25 degC and 175 degC curve sets."
+    r_g_rule: "Linear in R_G,ext through the datasheet point (2.3 ohm); E_fr held at its 2.3 ohm value."
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 175
+      e_on_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[8, 350], [69, 1153], [138, 2300]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 4, E_on at T_vj = 175 degC = 1153 uJ"
+      e_off_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[8, 150], [69, 550], [138, 1050]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 4, E_off at T_vj = 175 degC = 550 uJ"
+      e_fr_uJ:
+        basis: figure
+        tolerance_pct: 18
+        points: [[8, 300], [69, 1055], [138, 2000]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 6, E_fr at T_vj = 175 degC = 1055 uJ"
+    - v_gs_off_V: 0
+      t_j_c: 25
+      e_on_uJ:
+        basis: table
+        points: [[69, 648]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 4, E_on at T_vj = 25 degC = 648 uJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+      e_off_uJ:
+        basis: table
+        points: [[69, 451]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 4, E_off at T_vj = 25 degC = 451 uJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+      e_fr_uJ:
+        basis: table
+        points: [[69, 313]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 6, E_fr at T_vj = 25 degC = 313 uJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+    - v_gs_off_V: -5
+      t_j_c: 175
+      e_on_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[8, 380], [69, 1174], [138, 2500]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 175 degC = 1174 uJ"
+      e_off_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[8, 70], [69, 274], [138, 650]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 175 degC = 274 uJ"
+      e_fr_uJ:
+        basis: figure
+        tolerance_pct: 18
+        points: [[8, 300], [69, 1084], [138, 2100]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 6, E_fr at -5 V, T_vj = 175 degC = 1084 uJ"
+    - v_gs_off_V: -5
+      t_j_c: 25
+      e_on_uJ:
+        basis: table
+        points: [[69, 648]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 25 degC = 648 uJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+      e_off_uJ:
+        basis: table
+        points: [[69, 250]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 25 degC = 250 uJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+      e_fr_uJ:
+        basis: table
+        points: [[69, 313]]
+        anchor_i_d_A: 69
+        anchor_source: "Datasheet Table 6, E_fr at -5 V, T_vj = 25 degC = 313 uJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+  times_ns:
+    source: "Datasheet Table 4, V_DD = 800 V, I_D = 69 A, V_GS = 0/18 V, R_G,ext = 2.3 ohm"
+    t_d_on:  {t_j_25: 13.6, t_j_175: 10.4}
+    t_r:     {t_j_25: 9,    t_j_175: 8}
+    t_d_off: {t_j_25: 27.5, t_j_175: 32.1}
+    t_f:     {t_j_25: 12,   t_j_175: 14.1}
+
+third_quadrant:
+  source: "Datasheet Table 6 (V_SD at I_SD = 69 A, V_GS = 0 V) — figure not digitized (scope decision, see IMCQ120R005M2H.yaml)"
+  i_sd_continuous:
+    - {t_case_c: 25,  i_a: 155, basis: table}
+    - {t_case_c: 100, i_a: 88,  basis: table}
+  i_sm_A: 414
+  v_sd_at_69A:
+    - {t_j_c: 25,  v: 4.2, basis: table, v_max: 5.5}
+    - {t_j_c: 100, v: 4.1, basis: table}
+    - {t_j_c: 175, v: 4.0, basis: table}
+  q_fr_uC: {t_j_25: 0.6, t_j_175: 1.6}
+  i_frm_A: {t_j_25: 80,  t_j_175: 130}
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 175
+      basis: table
+      anchor_note: "Table 6 anchor (4.0 V / 69 A) plus the physical origin; the I_SD = f(V_SD) figure was not digitized."
+      points: [[0.0, 0.0], [4.0, 69]]
+  channel_on_note: "At V_GS = 15...18 V the third quadrant is the CHANNEL; the curve above applies only in dead time."
+
+thermal:
+  source: "Datasheet Table 1 (Package, Characteristic values)"
+  r_th_jc_k_w: {typ: 0.13, max: 0.17}
+  r_th_jc_note: "MOSFET/body diode, junction-case; the case is the TOP-SIDE tab"
+  r_th_ja_k_w: {max: 62}
+  z_th_jc_curve: null

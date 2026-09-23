@@ -809,3 +809,194 @@ and nothing else from this module.
 * Bus-bar and capacitor losses are not modelled.
 * `power_split` for two inverters is implemented but has not been checked
   against a rewound machine.
+
+---
+
+## 10 · MOTRES SiC concept doc — the whole 1200 V/750 V Q-DPAK lineup (2026-09-23)
+
+Owner, 2026-09-23 08:10: *«внеси все MOSFET, которые есть в документе, в
+нашу базу и проверь, как они работают»*, source document: MOTRES's
+"800 V / 400 V SiC Inverter Platform — Technical Concept". Nine new device
+cards were added to `config/devices/`, each transcribed from its own
+Infineon datasheet (PDF fetched live, not from the concept doc's summary
+numbers) with the same `basis: table`/`basis: figure` provenance convention
+as `IMCQ120R004M2H.yaml`:
+
+| part | V_DSS | R_DS(on) 25 C | package | notes |
+|---|---|---|---|---|
+| IMCQ120R005M2H | 1200 V | 5 mOhm | Q-DPAK (PG-HDSOP-22-U03) | rev 1.10, 2025-10-13 |
+| IMCQ120R007M2H | 1200 V | 7.5 mOhm | Q-DPAK (PG-HDSOP-22-U03) | rev 1.20, 2026-07-27 |
+| IMCQ120R010M2H | 1200 V | 10 mOhm | Q-DPAK (PG-HDSOP-22-U03) | rev 1.20 |
+| IMCQ120R017M2H | 1200 V | 17.1 mOhm | Q-DPAK (PG-HDSOP-22-U03) | rev 1.10; the ONE part where -5 V turn-off is NOT the default (E_tot higher at -5 V than at 0 V — confirmed: 1170 uJ vs 1373 uJ at T_j=175 C, I_D=40 A) |
+| IMCQ120R034M2H | 1200 V | 34 mOhm | Q-DPAK (PG-HDSOP-22-U03) | rev 1.10; DigiKey price $6.30@100 / $5.15@750 carried in the card |
+| IMCQ120R078M2H | 1200 V | 78.1 mOhm | Q-DPAK (PG-HDSOP-22-U03) | rev 1.10; too small a die for this platform's currents — see below |
+| IMDQ75R004M2H | 750 V | 3.5 mOhm | Q-DPAK (PG-HDSOP-22-U01) | rev 2.1, 2025-06-05; **DUAL-CHIP, datasheet's own cover page says "not recommended for high frequency (kHz) switching applications"** |
+| IMDQ75R007M2H | 750 V | 6.8 mOhm | Q-DPAK (PG-HDSOP-22-U01) | rev 2.1; datasheet carries NO such warning (see the card's `notes` — the concept doc's claim that it is "positioned the same way" as R004M2H is flagged, not inherited) |
+| AIMDQ75R016M2H | 750 V | 16 mOhm | Q-DPAK (PG-HDSOP-22-U01) | rev 2.1; AEC-Q101 automotive-qualified; the EVAL-QDPAK-FB V2.1 reference-design device (4x, full bridge) |
+
+Also added: a DigiKey `price` block on the pre-existing `IMCQ120R004M2H.yaml`
+($43.25 @750 pcs, the concept doc's other hard price anchor).
+
+**Package.** All nine share one footprint family (`packages.py`'s `q-dpak`
+alias already matches both `PG-HDSOP-22-U03` and `-U01` via the
+`hdsop[-_ ]*22` regex) — confirmed against each part's own Figure 1, not
+assumed: the 1200 V family's outline is bit-identical to IMCQ120R004M2H's
+card (D 14.90-15.10 / E 20.81-21.11 / A 2.25-2.35 mm); the 750 V family's
+U01 outline differs only in the overall envelope (H 20.86-21.06 vs
+21.11 mm) and was verified on all three cards' own Figure 1 pages.
+
+**Switching-energy curves.** The 1200 V family's datasheets publish an
+E=f(I_D) figure at T_j=175 C (both V_GS(off)=0 and -5 V) the same way
+IMCQ120R004M2H's does; for time reasons this batch of cards digitizes it
+SPARSELY (3 points: low current, the table's own test-current anchor,
+figure's right edge) with a wider `tolerance_pct` (15-18 % vs R004M2H's
+8-12 %) — stated once here and in every new card's `switching.source`, not
+silently narrowed. The three 750 V-class parts publish only ONE test point
+each (no current- or temperature-dependence figure at all) — their cards'
+`switching.curves` hold that single anchor and do NOT extrapolate across
+current or temperature; this is stated in each card, not defaulted
+silently. Every `third_quadrant.curves` on the new cards is likewise a
+single Table-6/Table-8 anchor plus the physical origin (no I_SD=f(V_SD)
+figure digitized) — a scope decision for this batch, named in each card.
+
+### 10.1 · How they perform — Controller solve, L155 rated + peak
+
+Sandbox run (`solve_controller()` called directly, in-process — no live
+API, no config write), topology `one_3ph`, cooling `liquid` (water-glycol,
+65 C inlet, 8 L/min, module-default R_TIM=0.03 K/W, R_spread=0), dead time
+0.5 us, V_GS(on)=18 V; V_GS(off) = -5 V for the 4/5/7/10/34/78 mOhm parts,
+0 V for the 17 mOhm part and all three 750 V-class parts (the doc's own
+rule, confirmed against each datasheet's own `switching`/`gate` block).
+Operating points from `config/.duty_results.json`,
+`CIANO10 200 opt / L155 motor`, delta, 12 slots / 10 poles:
+
+| duty | I_phase rms | rpm | m (@750.4 V) | power factor | f_elec |
+|---|---|---|---|---|---|
+| rated | 314.25 A | 14 200 | 0.6333 | 0.9926 | 1183.3 Hz |
+| peak | 439.61 A | 20 000 | 0.9427 | 0.7692 | 1666.7 Hz |
+
+`N` = devices in parallel per switch position, chosen as the smallest N
+(scanned 1..24) for which the model's own T_j stays <= 150 C (the doc's
+design limit) at BOTH points; 24 kHz carrier throughout (the stored L155
+records' own carrier). Owner's follow-up (2026-09-23 08:30): evaluate every
+card on BOTH lines — the 800 V line at the real 750.4 V bus AND the 400 V
+line at the doc's own 375 V bus (not 400) — same L155 load current on both
+(a device comparison, not a claim that L155 runs at 375 V).
+
+**800 V line (750.4 V bus):**
+
+| part | R_ds(on) 25/175 C mOhm | N | devices | rated: I/device (util. vs I_D@100C), T_j, cond/sw, eta_inv, verdict | peak: same |
+|---|---|---|---|---|---|
+| IMCQ120R004M2H | 3.7/8.9 | 5 | 30 | 108 A (37%) / T_j=100 C / cond=942 W / sw=1608 W / eta=99.02% / pass | 152 A (53%) / T_j=130 C / cond=2219 W / sw=2413 W / eta=98.91% / pass |
+| IMCQ120R005M2H | 5.0/11.9 | 6 | 36 | 90 A (37%) / T_j=106 C / cond=1093 W / sw=1959 W / eta=98.85% / pass | 126 A (52%) / T_j=141 C / cond=2713 W / sw=3005 W / eta=98.67% / pass |
+| IMCQ120R007M2H | 7.5/17.7 | 7 | 42 | 77 A (42%) / T_j=98 C / cond=1373 W / sw=1074 W / eta=99.06% / pass | 108 A (60%) / T_j=133 C / cond=3332 W / sw=1743 W / eta=98.80% / pass |
+| IMCQ120R010M2H | 10.0/23.7 | 8 | 48 | 68 A (49%) / T_j=103 C / cond=1790 W / sw=973 W / eta=98.94% / pass | 95 A (68%) / T_j=146 C / cond=4257 W / sw=1609 W / eta=98.62% / pass |
+| IMCQ120R017M2H | 17.1/40.6 | 13 | 78 | 41 A (49%) / T_j=100 C / cond=1861 W / sw=768 W / eta=98.98% / pass | 58 A (69%) / T_j=141 C / cond=4396 W / sw=1258 W / eta=98.66% / pass |
+| IMCQ120R034M2H | 34.0/80.4 | 23 | 138 | 23 A (52%) / T_j=103 C / cond=2107 W / sw=708 W / eta=98.91% / pass | 33 A (73%) / T_j=150 C / cond=5110 W / sw=1315 W / eta=98.48% / pass |
+| IMCQ120R078M2H | 78.1/184.8 | 24* | 144 | 22 A (103%) / T_j=182 C / cond=6679 W / sw=676 W / eta=97.23% / **fail** | 31 A (144%) / T_j=288 C / cond=13071 W / sw=936 W / eta=96.74% / **fail** |
+
+`*` R078M2H: no N up to 24 reaches T_j <= 150 C — table shows the N=24 cap, both points FAIL.
+
+**400 V line (375 V bus, same L155 load -- device comparison only, per the owner's 2026-09-23 08:30 clarification):**
+
+| part | R_ds(on) 25/175 C mOhm | N | devices | rated: I/device (util.), T_j, cond/sw, eta_inv, verdict | peak: same |
+|---|---|---|---|---|---|
+| IMCQ120R004M2H | 3.7/8.9 | 4 | 24 | 136 A (47%) / T_j=95 C / cond=1139 W / sw=783 W / eta=99.24% / pass | 190 A (66%) / T_j=124 C / cond=2659 W / sw=1214 W / eta=99.07% / pass |
+| IMCQ120R005M2H | 5.0/11.9 | 5 | 30 | 108 A (44%) / T_j=96 C / cond=1240 W / sw=897 W / eta=99.18% / pass | 152 A (62%) / T_j=126 C / cond=2908 W / sw=1326 W / eta=98.99% / pass |
+| IMCQ120R007M2H | 7.5/17.7 | 6 | 36 | 90 A (50%) / T_j=95 C / cond=1581 W / sw=533 W / eta=99.17% / pass | 126 A (70%) / T_j=133 C / cond=3883 W / sw=883 W / eta=98.86% / pass |
+| IMCQ120R010M2H | 10.0/23.7 | 7 | 42 | 77 A (56%) / T_j=102 C / cond=2031 W / sw=480 W / eta=99.02% / pass | 108 A (78%) / T_j=148 C / cond=4911 W / sw=810 W / eta=98.64% / pass |
+| IMCQ120R017M2H | 17.1/40.6 | 12 | 72 | 45 A (53%) / T_j=98 C / cond=1992 W / sw=378 W / eta=99.07% / pass | 63 A (75%) / T_j=139 C / cond=4728 W / sw=624 W / eta=98.72% / pass |
+| IMCQ120R034M2H | 34.0/80.4 | 22 | 132 | 24 A (54%) / T_j=99 C / cond=2167 W / sw=351 W / eta=99.02% / pass | 34 A (76%) / T_j=144 C / cond=5216 W / sw=645 W / eta=98.60% / pass |
+| IMCQ120R078M2H | 78.1/184.8 | 24* | 144 | 22 A (103%) / T_j=177 C / cond=6679 W / sw=338 W / eta=97.35% / **fail** | 31 A (144%) / T_j=281 C / cond=13071 W / sw=467 W / eta=96.84% / **fail** |
+| IMDQ75R004M2H | 3.5/6.5 | 3 | 18 | 181 A (64%) / T_j=96 C / cond=1374 W / sw=398 W / eta=99.30% / pass | 253 A (89%) / T_j=124 C / cond=2970 W / sw=398 W / eta=99.17% / pass |
+| IMDQ75R007M2H | 6.8/12.2 | 5 | 30 | 108 A (68%) / T_j=96 C / cond=1574 W / sw=208 W / eta=99.30% / pass | 152 A (95%) / T_j=129 C / cond=3433 W / sw=208 W / eta=99.12% / pass |
+| AIMDQ75R016M2H | 16.0/29.0 | 10 | 60 | 54 A (74%) / T_j=98 C / cond=1844 W / sw=99 W / eta=99.23% / pass | 76 A (104%) / T_j=136 C / cond=4068 W / sw=99 W / eta=98.99% / pass |
+
+Wall-to-shaft efficiency was not computed (`efficiency.shaft` is `null` for
+this sandbox run — no motor-side efficiency was piped in, per
+`solve_controller`'s own "no shaft efficiency is known for this point"
+note); `eta_inv` (inverter-only) is reported instead in every cell above.
+`limits` column = the card's own datasheet-derived continuous-current limit
+verdict (`pass`/`fail`) at the solved case temperature, not a separate
+judgement.
+
+`IMCQ120R078M2H` cannot reach T_j <= 150 C at 24 devices on either bus at
+this load (Tj = 182/288 C on the 800 V line) — the 78 mOhm die is simply
+too small for the L155 platform's current; flagged `fail`, not forced.
+Silicon-cost column is populated only where the concept doc (or DigiKey)
+gives a price — `IMCQ120R004M2H` ($43.25@750) and `IMCQ120R034M2H`
+($6.30@100/$5.15@750) — every other part's price is `null` in its card, per
+the "price is a quotation, never invented" rule.
+
+### 10.2 · Cross-checking the document's own claims
+
+**(a) 179 kW continuous, 6 x IMCQ120R004M2H, N=1, 800 V line.** The doc's
+own formula (`T_j = T_coolant + P_cond+P_sw*(R_ch)`) was reproduced directly
+— `r_tim_k_w` set to the doc's R_ch (0.2 / 0.15 K/W), coldplate flow cranked
+high so the model's own (separate, geometry-derived) shared channel term is
+negligible, `cos phi = 0.9`, `m = 0.95` (this model's own linear-modulation
+ceiling minus a 5 % margin — see the caveat below), star-connected so the
+model's `i_phase_rms_A` input IS the leg/device current (matching the doc's
+own "Phase current, A RMS" column, rather than L155's own delta winding):
+
+| R_ch | f_sw | I_phase (model) | I_phase (doc) | P_continuous (model) | P (doc) | ratio |
+|---|---|---|---|---|---|---|
+| 0.20 K/W | 16 kHz | 218.8 A | 227 A | 148.8 kW | 179 kW | 0.83 |
+| 0.20 K/W | 24 kHz | 198.9 A | 208 A | 135.3 kW | 163 kW | 0.83 |
+| 0.15 K/W | 16 kHz | 242.3 A | -- | 164.8 kW | 199 kW | 0.83 |
+| 0.15 K/W | 24 kHz | 221.8 A | -- | 150.8 kW | 183 kW | 0.82 |
+
+**Current agrees to within 4 %** at both R_ch values — the thermal/loss
+model itself (conduction + switching, R_th(j-c) + R_ch chain) checks out
+against the doc closely. **Power under-reads by a consistent ~17-20 %**,
+and multiplying by 2/sqrt(3) = 1.1547 (the classic SVPWM third-harmonic
+injection boost over plain sine-PWM) closes MOST of the gap (179 -> 171.8,
+163 -> 156.2, within ~4-5 %): this Controller module's `m` appears to
+implement a plain sine-triangle modulator capped at `m<=1`
+(`solve_controller` flags `m>1` as "OVERMODULATED"), not the extended-range
+SVPWM the doc assumes ("SVPWM, 5 % margin to the linear limit" implies the
+doc's own m allows ~15 % more fundamental voltage at the same DC bus). This
+is a MODEL LIMITATION worth a follow-up (the module has no SVPWM/third-
+harmonic-injection modulator yet), not a device-card error — the current
+figure, which depends only on the loss/thermal chain and not on the
+modulation scheme, matches the doc closely.
+
+**(b) ~100 kW continuous, 400-100 line (same die, 375 V bus).** Same method,
+375 V bus:
+
+| R_ch | f_sw | I_phase (model) | P_continuous (model) | P (doc) |
+|---|---|---|---|---|
+| 0.20 K/W | 16 kHz | 240.0 A | 81.6 kW | 100 kW |
+| 0.20 K/W | 24 kHz | 227.9 A | 77.5 kW | 97 kW |
+| 0.15 K/W | 16 kHz | 264.0 A | 89.8 kW | 110 kW |
+| 0.15 K/W | 24 kHz | 251.6 A | 85.6 kW | -- |
+
+Same pattern: model power under-reads by the same ~15-20 %, closing to
+within ~5 % once the SVPWM factor above is applied (81.6*1.1547=94.2 vs
+100 kW). Consistent with (a) — one modulation-scheme gap, not two separate
+disagreements.
+
+**(c) IMDQ75R004M2H E_off = 2044 uJ at 500 V / 262 A.** Transcribed
+DIRECTLY from this card's own datasheet, Table 6 (Dynamic characteristics):
+"Turn-OFF switching losses, E_off, typ = 2044 uJ, V_DD=500V, V_GS=0/18V,
+I_D=262.4A, R_G,ext=1.8 ohm, L_stray=15nH" — **exact match** to the concept
+doc's citation. E_on at the same point is 416 uJ (doc: "416 uJ"), also an
+exact match. The datasheet's cover page independently confirms the "dual
+chip product, not recommended for high frequency (kHz) switching
+applications" note the doc paraphrases (see `IMDQ75R004M2H.yaml`'s
+`notes:` field for the verbatim text).
+
+### 10.3 · What was NOT done
+
+* No current- or temperature-dependence figure was digitized for the three
+  750 V-class parts (single-point cards, stated above and in each card).
+* The 1200 V family's switching curves are a sparser 3-point read than
+  IMCQ120R004M2H's own dense digitization — a scope decision for nine cards
+  in one sitting, not a claim of equal precision.
+* No I_SD=f(V_SD) body-diode figure was digitized for any of the nine new
+  cards (Table-6/8 anchor only).
+* The model's plain sine-PWM modulator (no SVPWM/third-harmonic injection)
+  is the standing gap behind the ~17-20 % power under-read in section 10.2;
+  fixing it is a Controller-module change, out of this batch's scope
+  (device cards + read-only cross-checks only, "не подстраивай ничего под
+  документ").

@@ -1,0 +1,183 @@
+# ============================================================
+# Power-device card — Infineon IMDQ75R004M2H
+# CoolSiC(TM) MOSFET 750 V G2, Q-DPAK top-side cooled, DUAL-CHIP part
+# Added 2026-09-23 on the owner's instruction, from the MOTRES "800 V /
+# 400 V SiC Inverter Platform" concept doc's 400 V-line candidate list.
+# THE DOC'S OWN VERDICT (section 11): "The 750 V option for the 400 V line
+# was checked and rejected: IMDQ75R004M2H is a dual-chip product whose
+# datasheet states it is not recommended for kHz switching — Eoff 2044 uJ
+# at 500 V and 262 A against Eon 416 uJ, 0 V turn-on only ... Its field is
+# eFuses and solid-state breakers." Confirmed against the datasheet below —
+# see the `notes` field and the switching block's single 0 V-only point.
+# Same provenance convention as IMCQ120R004M2H.yaml: basis: table = exact
+# datasheet table; basis: figure = read off a plotted curve. Nothing
+# invented; unpublished = null.
+# ============================================================
+
+part: IMDQ75R004M2H
+manufacturer: Infineon
+family: "CoolSiC MOSFET 750 V G2"
+technology: sic_mosfet
+package: PG-HDSOP-22-U01
+package_common_name: Q-DPAK
+cooling: top_side
+marking: 75R004M2
+notes: >-
+  Datasheet cover page, "Product validation": "Please note: Dual chip
+  product, not recommended for high frequency (kHz) switching applications.
+  The source and driver source pins are not exchangeable. Their exchange
+  might lead to malfunction. When paralleling MOSFETs the placement of the
+  gate resistor is generally recommended to be in series to the Driver
+  Source instead of the Gate." Datasheet publishes only ONE switching-loss
+  test point (V_GS = 0/18 V, no -5 V turn-off option is offered at all,
+  unlike the 1200 V IMCQ family) — consistent with the doc's "0 V turn-off
+  only" and "not recommended for kHz switching" statements.
+package_size_mm:
+  source: "Datasheet Figure 1 (section 7, Package outlines), PG-HDSOP-22-U01, MAX column"
+  length_mm: 15.10
+  width_mm: 21.06
+  height_mm: 2.35
+  body_width_mm: 15.50
+  lead_pitch_mm: 1.14
+  leads: 22
+weight_g: null
+datasheet_revision: "2.1, 2025-06-05"
+datasheet_url: "https://www.infineon.com/dgdl/Infineon-IMDQ75R004M2H-DataSheet-v02_01-EN.pdf?fileId=8ac78c8c95d1335f0195eb5317ef6659"
+
+ratings:
+  source: "Datasheet Table 2 (Maximum ratings)"
+  v_dss_V: 750
+  i_d_continuous:
+    - {t_case_c: 25,  i_a: 357, basis: table}
+    - {t_case_c: 100, i_a: 283, basis: table}
+  i_d_pulsed_A: 1699
+  p_tot_W:
+    - {t_case_c: 25, p_w: 1499, basis: table}
+  t_j_max_c: 175
+  t_j_overload_c: 200          # "extended operating junction temperature", <=100h in the application lifetime
+  t_storage_c: {min: -55, max: 150}
+  v_gs_transient_V: {min: -11, max: 25}   # t_p <= 500 ns, duty cycle <= 1%
+  v_gs_static_V:    {min: -7,  max: 23}
+  e_as_mJ: 1071                 # I_D = 39.6 A, V_DD = 50 V; unclamped inductive load, Table 11
+  e_ar_mJ: 5.35
+  i_as_A: 500                   # avalanche current, single pulse, L = 1 uH, V_DD = 50 V
+  dv_dt_v_ns: 200                # MOSFET dv/dt ruggedness, V_DS = 0...500 V
+
+gate:
+  source: "Datasheet Table 4 (Operating range) and Table 5 (Static characteristics)"
+  v_gs_on_recommended_V:  {min: 18, max: 18}
+  v_gs_off_recommended_V: {min: 0,  max: 0}
+  v_gs_th_V: {min: 3.5, typ: 4.5, max: 5.6, at_t_j_c: 25,
+              note: "V_DS = V_GS, I_D = 57.7 mA; typ 3.3 V at T_vj = 175 degC"}
+  q_g_nC: 342                   # V_DD = 500 V, I_D = 262.4 A, V_GS = 0 to 18 V (Table 7)
+  q_gs_pl_nC: 86                # Q_GS(pl), same conditions
+  q_gd_nC: 74
+  r_g_internal_ohm: 0.8         # f = 1 MHz
+
+r_ds_on:
+  source: "Datasheet Table 5 (Static characteristics)"
+  measured_at_i_d_A: 170
+  curves:
+    - v_gs_on_V: 18
+      points:
+        - {t_j_c: 25,  r_mohm: 3.5,  basis: table, anchor: true, r_mohm_max: 5}
+        - {t_j_c: 150, r_mohm: 5.7,  basis: table, anchor: true, r_mohm_max: 8,
+           note: "specified by design, not subject to production test"}
+        - {t_j_c: 175, r_mohm: 6.5,  basis: table, anchor: true}
+    - v_gs_on_V: 15
+      points:
+        - {t_j_c: 25,  r_mohm: 4.6,  basis: table, anchor: true}
+    - v_gs_on_V: 20
+      points:
+        - {t_j_c: 25,  r_mohm: 3.2,  basis: table, anchor: true}
+
+capacitance:
+  source: "Datasheet Table 6 (Dynamic characteristics); V_GS = 0 V, V_DS = 500 V, f = 250 kHz"
+  at_v_ds_V: 500
+  c_iss_pF: 11844
+  c_oss_pF: 773
+  c_oss_max_pF: 1005
+  c_rss_pF: 62
+  c_o_er_pF: 991
+  c_o_tr_pF: 1447
+  e_oss_uJ: 123.9               # Table 1 key parameter, E_oss,typ @ 500 V
+  q_oss_nC: 723                 # Table 1 key parameter, Q_oss,typ @ 500 V
+  e_oss_rule: "E_oss(V) = 0.5 * c_o_er * V^2   [datasheet's own E_oss,typ @ 500 V = 123.9 uJ checks to 0.5*991pF*500V^2 = 123.9 uJ exactly]"
+
+# ── switching energies ─────────────────────────────────────────────────────
+# ONLY ONE test point is published (V_GS = 0/18 V; no -5 V option at all —
+# the doc's "0 V turn-off only"): a single [I_D, E] anchor per energy, at
+# T_vj unstated beyond the datasheet's blanket "T_j = 25 degC unless
+# otherwise specified" note at the top of section 4. No current-dependence
+# or temperature-dependence figure is published for this part (unlike the
+# 1200 V IMCQ family) — the model has no basis for extrapolating this card
+# across current or temperature, and none is attempted.
+switching:
+  source: "Datasheet Table 6 (Dynamic characteristics, switching losses)"
+  v_dd_ref_V: 500
+  i_d_ref_A: 262.4
+  r_g_ext_ref_ohm: 1.8
+  scaling:
+    voltage_exponent: 1.0
+    voltage_rule: "E(V_dc) = E(500 V) * (V_dc / 500)^1.0 — first-order hard-switching rule, ASSUMPTION (no V_DD sweep published)."
+    current_rule: "No current-dependence figure published — the single table point is held flat; NOT extrapolated across current."
+    temperature_rule: "No temperature-dependence figure published — treated as the datasheet's single stated T_j only."
+    r_g_rule: "No R_g sweep figure published for this part — E_on/E_off are NOT rescaled for a different R_g,ext."
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 25
+      e_on_uJ:
+        basis: table
+        points: [[262.4, 416]]
+        anchor_i_d_A: 262.4
+        anchor_source: "Datasheet Table 6, E_on = 416 uJ (V_DD=500V, I_D=262.4A, V_GS=0/18V, R_G,ext=1.8 ohm, L_stray=15nH)"
+      e_off_uJ:
+        basis: table
+        points: [[262.4, 2044]]
+        anchor_i_d_A: 262.4
+        anchor_source: "Datasheet Table 6, E_off = 2044 uJ, same conditions — this is the exact figure the concept doc cites for rejecting the part."
+      e_fr_uJ:
+        basis: table
+        points: [[262.4, 1]]
+        anchor_i_d_A: 262.4
+        anchor_source: >-
+          Not separately published for this part: E_tot (2461 uJ) =
+          E_on + E_off (416+2044=2460 uJ) to within rounding, i.e. the
+          datasheet's own E_tot carries essentially NO separate E_fr term
+          for this half-bridge test (footnote 11: "MOSFET used in
+          half-bridge configuration without external diode"). Held at a
+          nominal 1 uJ rather than exactly 0 so the model's honesty checks
+          (which flag an exact-zero E_fr) still see this as "reported, not
+          defaulted".
+
+third_quadrant:
+  source: "Datasheet Table 8 (Reverse diode characteristics)"
+  i_sd_continuous:
+    - {t_case_c: 25, i_a: 289, basis: table}   # V_GS = 0 V, T_c = 25 degC (the V_GS = 18 V row, 357 A, is channel conduction, not the diode)
+  i_sm_A: 1699
+  v_sd_at_170A:
+    - {t_j_c: 25,  v: 3.7, basis: table, v_max: 5}
+    - {t_j_c: 175, v: 3.4, basis: table}
+  reverse_recovery:
+    q_fr_nC: 1087               # includes Q_oss, per the datasheet footnote
+    t_fr_ns: 31
+    i_frm_A: 71
+    v_dd_ref_V: 500
+    i_sd_ref_A: 262.4
+    source: "Datasheet Table 8, V_DD=500V, I_SD=262.4A, R_G,ext=2.3 ohm"
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 25
+      basis: table
+      anchor_note: "Table 8 anchor (3.7 V / 170 A) plus the physical origin; no I_SD = f(V_SD) figure was digitized."
+      points: [[0.0, 0.0], [3.7, 170]]
+  channel_on_note: >-
+    At V_GS = 18 V the third quadrant is the CHANNEL, i.e. V = I * R_DS(on);
+    the curve above applies only in dead time (V_GS = 0 V).
+
+thermal:
+  source: "Datasheet Table 3 (Thermal characteristics)"
+  r_th_jc_k_w: {typ: 0.07, max: 0.1}
+  r_th_jc_note: "MOSFET/body diode, junction-case; the case is the TOP-SIDE tab"
+  r_th_ja_k_w: null
+  z_th_jc_curve: null

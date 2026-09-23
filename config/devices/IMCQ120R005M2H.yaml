@@ -1,0 +1,271 @@
+# ============================================================
+# Power-device card — Infineon IMCQ120R005M2H
+# CoolSiC(TM) 1200 V SiC MOSFET G2, Q-DPAK top-side cooled
+# Added 2026-09-23 on the owner's instruction to enter the whole 1200 V G2
+# Q-DPAK lineup (MOTRES "800 V / 400 V SiC Inverter Platform" concept doc)
+# into the device library. Same schema/provenance convention as
+# IMCQ120R004M2H.yaml (read first) — basis: table = numbered datasheet
+# table, exact; basis: figure = read off a plotted curve, tolerance_pct
+# states how far it may be out. Nothing invented; unpublished = null.
+# Units: V, A, ohm (`_ohm`), mOhm (`_mohm`), degC, W, K/W, nC, pF, uJ.
+# ============================================================
+
+part: IMCQ120R005M2H
+manufacturer: Infineon
+family: "CoolSiC MOSFET 1200 V G2"
+technology: sic_mosfet
+package: PG-HDSOP-22-U03
+package_common_name: Q-DPAK
+cooling: top_side
+marking: 12M2H005
+# Package outline — datasheet Figure 1 (section 5), PG-HDSOP-22-U03, MAX
+# column; identical to IMCQ120R004M2H's card (same package group, verified
+# against this card's own Figure 1: D 14.90-15.10, E 20.81-21.11,
+# A 2.25-2.35, E1 15.30-15.50, e 1.14, N=22 — bit-identical to the R004 card).
+package_size_mm:
+  source: "Datasheet Figure 1 (section 5, Package outlines), MAX column"
+  length_mm: 15.10
+  width_mm: 21.11
+  height_mm: 2.35
+  body_width_mm: 15.50
+  lead_pitch_mm: 1.14
+  leads: 22
+weight_g: null
+datasheet_revision: "1.10, 2025-10-13"
+datasheet_url: "https://www.infineon.com/assets/row/public/documents/60/49/infineon-imcq120r005m2h-datasheet-en.pdf"
+
+# ── ratings ────────────────────────────────────────────────────────────────
+ratings:
+  source: "Datasheet Table 2 (Maximum rated values); T_vj from Table 4"
+  v_dss_V: 1200
+  i_d_continuous:
+    - {t_case_c: 25,  i_a: 342, basis: table}
+    - {t_case_c: 100, i_a: 242, basis: table}
+  i_d_pulsed_A: 1210
+  p_tot_W:
+    - {t_case_c: 25,  p_w: 1364, basis: table}
+    - {t_case_c: 100, p_w: 682,  basis: table}
+  t_j_max_c: 175
+  t_j_overload_c: 200
+  t_storage_c: {min: -55, max: 150}
+  v_gs_transient_V: {min: -10, max: 25}
+  v_gs_static_V:    {min: -7,  max: 23}
+  e_as_mJ: 868                 # I_D = 69 A, V_DD = 50 V, L = 0.4 mH
+  e_ar_mJ: 4.34                # I_D = 69 A, V_DD = 50 V, L = 1.8 uH
+  short_circuit_note: >-
+    No short-circuit withstand time (t_SC) row in this datasheet revision —
+    same as IMCQ120R004M2H; the doc's "must be requested for the 4 mOhm
+    part" applies equally to this 5 mOhm bin (not in the datasheet).
+
+# ── gate ───────────────────────────────────────────────────────────────────
+gate:
+  source: "Datasheet Table 3 (Recommended values) and Table 4 (Characteristic values)"
+  v_gs_on_recommended_V:  {min: 15, max: 18}
+  v_gs_off_recommended_V: {min: -5, max: 0}
+  v_gs_th_V: {min: 3.5, typ: 4.2, max: 5.1, at_t_j_c: 25,
+              note: "I_D = 43.4 mA, V_DS = V_GS; typ 3.2 V at T_vj = 175 degC"}
+  q_g_nC:  261                 # V_DD = 800 V, I_D = 138.2 A, V_GS = 0/18 V
+  q_gs_pl_nC: 57.3
+  q_gd_nC: 64.2
+  r_g_internal_ohm: 2.55       # f = 1 MHz, V_AC = 25 mV
+  r_g_ext_datasheet_ohm: 2.3
+  l_sigma_nH: 15
+
+# ── on-state resistance ────────────────────────────────────────────────────
+r_ds_on:
+  source: >-
+    Datasheet Table 4 (rows T_vj = 25/150/175 degC at V_GS(on) = 18 V and the
+    T_vj = 25 degC row at V_GS(on) = 15 V) and the figure "Typical on-state
+    resistance as a function of junction temperature, R_DS(on) = f(T_vj),
+    I_D = 138.2 A" on datasheet page 10.
+  measured_at_i_d_A: 138.2
+  curves:
+    - v_gs_on_V: 18
+      points:
+        - {t_j_c: -50, r_mohm: 3.5,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 0,   r_mohm: 4.3,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 25,  r_mohm: 5.0,  basis: table, anchor: true}
+        - {t_j_c: 50,  r_mohm: 5.6,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 75,  r_mohm: 6.4,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 100, r_mohm: 7.3,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 125, r_mohm: 8.5,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 150, r_mohm: 10.2, basis: table, anchor: true, r_mohm_max: 13.6}
+        - {t_j_c: 175, r_mohm: 11.9, basis: table, anchor: true}
+        - {t_j_c: 200, r_mohm: 13.8, basis: figure, tolerance_pct: 10}
+    - v_gs_on_V: 15
+      points:
+        - {t_j_c: 25,  r_mohm: 6.3,  basis: table, anchor: true}
+
+# ── capacitances and output-capacitance energy ─────────────────────────────
+capacitance:
+  source: "Datasheet Table 4; f = 100 kHz, V_AC = 25 mV, V_GS = 0 V"
+  at_v_ds_V: 800
+  c_iss_pF: 9760
+  c_oss_pF: 428
+  c_rss_pF: 37.3
+  c_o_er_pF: 564
+  c_o_tr_pF: 838
+  e_oss_uJ: 181
+  q_oss_nC: 670
+  e_oss_rule: "E_oss(V) = 0.5 * c_o_er * V^2   [AN2025-10 eq. (11), rearranged]"
+
+# ── switching energies ─────────────────────────────────────────────────────
+# Table 4 anchor at I_D = 138.2 A, V_DD = 800 V, R_G,ext = 2.3 ohm (both
+# V_GS = 0/18 V and V_GS = -5/18 V, at T_vj = 25 and 175 degC — the datasheet
+# TABLE gives only this one current per temperature). The current-dependence
+# ("E = f(I_D)") figure on datasheet page 12 was read for a SPARSE 3-point
+# shape (low current, the table anchor, and the figure's right-hand edge) —
+# wider tolerance than IMCQ120R004M2H's card because of that sparser read.
+switching:
+  source: >-
+    Datasheet Table 4 (E_on/E_off/E_tot at V_GS = 0/18 V and -5/18 V, T_vj =
+    25 and 175 degC) and Table 6 (E_fr); current dependence from the figure
+    "Typical switching energy as a function of drain current ... E = f(I_D),
+    T_vj = 175 degC, R_G,ext = 2.3 ohm, V_DD = 800 V" on datasheet page 12
+    (3-point sparse read, not the dense digitization IMCQ120R004M2H's card
+    used).
+  v_dd_ref_V: 800
+  i_d_ref_A: 138.2
+  r_g_ext_ref_ohm: 2.3
+  scaling:
+    voltage_exponent: 1.0
+    voltage_rule: >-
+      E(V_dc) = E(800 V) * (V_dc / 800)^1.0 — first-order hard-switching
+      rule, same ASSUMPTION as IMCQ120R004M2H (no V_DD sweep published).
+    current_rule: "Linear interpolation between the tabulated points of `curves`."
+    temperature_rule: "Linear interpolation between the 25 degC and 175 degC curve sets."
+    r_g_rule: >-
+      Linear in R_G,ext through the datasheet point (2.3 ohm) — the same
+      rule as IMCQ120R004M2H; E_fr held at its 2.3 ohm value.
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 175
+      e_on_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[10, 900], [138.2, 4920], [275, 6000]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 4, E_on at T_vj = 175 degC = 4.92 mJ"
+      e_off_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[10, 800], [138.2, 4780], [275, 4700]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 4, E_off at T_vj = 175 degC = 4.78 mJ"
+      e_fr_uJ:
+        basis: figure
+        tolerance_pct: 18
+        points: [[10, 450], [138.2, 2990], [275, 4200]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 6, E_fr at T_vj = 175 degC = 2.99 mJ"
+    - v_gs_off_V: 0
+      t_j_c: 25
+      e_on_uJ:
+        basis: table
+        points: [[138.2, 2380]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 4, E_on at T_vj = 25 degC = 2.38 mJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+      e_off_uJ:
+        basis: table
+        points: [[138.2, 2530]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 4, E_off at T_vj = 25 degC = 2.53 mJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+      e_fr_uJ:
+        basis: table
+        points: [[138.2, 600]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 6, E_fr at T_vj = 25 degC = 0.6 mJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+    - v_gs_off_V: -5
+      t_j_c: 175
+      e_on_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[10, 950], [138.2, 4890], [275, 6800]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 175 degC = 4.89 mJ"
+      e_off_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[10, 380], [138.2, 2510], [275, 4600]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 175 degC = 2.51 mJ"
+      e_fr_uJ:
+        basis: figure
+        tolerance_pct: 18
+        points: [[10, 300], [138.2, 3100], [275, 5000]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 6, E_fr at -5 V, T_vj = 175 degC = 3.1 mJ"
+    - v_gs_off_V: -5
+      t_j_c: 25
+      e_on_uJ:
+        basis: table
+        points: [[138.2, 2360]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 25 degC = 2.36 mJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+      e_off_uJ:
+        basis: table
+        points: [[138.2, 1460]]
+        anchor_i_d_A: 138.2
+        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 25 degC = 1.46 mJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+      e_fr_uJ:
+        basis: table
+        points: [[138.2, 610]]
+        anchor_i_d_A: 138.2
+        anchor_source: >-
+          Datasheet Table 6, E_fr at -5 V, T_vj = 25 degC — printed as
+          "0.61" under a "uJ" column header, which is a printing
+          inconsistency in this datasheet revision (the sibling row directly
+          above, E_fr at V_GS = 0 V, prints "0.6" under "mJ" for the same
+          T_vj = 25 degC point, and 0.61 mJ closes the E_tot = E_on + E_off +
+          E_fr check on "Total switching energy at -5 V" = 4.43 [printed
+          "uJ", same apparent typo] to within 0.01 mJ). Read as 0.61 mJ =
+          610 uJ here; flagged, not silently "corrected" without saying so.
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+  times_ns:
+    source: "Datasheet Table 4, V_DD = 800 V, I_D = 138.2 A, V_GS = 0/18 V, R_G,ext = 2.3 ohm"
+    t_d_on:  {t_j_25: 32,   t_j_175: 24.4}
+    t_r:     {t_j_25: 21.3, t_j_175: 19}
+    t_d_off: {t_j_25: 64.4, t_j_175: 75.3}
+    t_f:     {t_j_25: 28.2, t_j_175: 33.3}
+
+# ── third quadrant (body diode / reverse conduction) ───────────────────────
+# Only the Table 6 anchor point was transcribed (V_SD at I_SD = 138.2 A);
+# the I_SD = f(V_SD) figure on datasheet page 11 was NOT digitized for this
+# card (scope decision, 2026-09-23) — the curve here is the anchor plus the
+# physical origin, same minimal-honesty pattern as IQE050N08NM5SC's card.
+third_quadrant:
+  source: "Datasheet Table 6 (V_SD at I_SD = 138.2 A, V_GS = 0 V)"
+  i_sd_continuous:
+    - {t_case_c: 25,  i_a: 250,   basis: table}
+    - {t_case_c: 100, i_a: 153.1, basis: table}
+  i_sm_A: 725
+  v_sd_at_138A:
+    - {t_j_c: 25,  v: 4.2, basis: table, v_max: 5.5}
+    - {t_j_c: 100, v: 4.1, basis: table}
+    - {t_j_c: 175, v: 4.0, basis: table}
+  q_fr_uC: {t_j_25: 0.74, t_j_175: 2.56}
+  i_frm_A: {t_j_25: 95,   t_j_175: 162}
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 175
+      basis: table
+      anchor_note: >-
+        Only the Table 6 anchor (4.0 V / 138.2 A) plus the physical origin —
+        the I_SD = f(V_SD) figure (datasheet page 11) was not digitized.
+      points: [[0.0, 0.0], [4.0, 138.2]]
+  channel_on_note: >-
+    At V_GS = 15...18 V the third quadrant is the CHANNEL, i.e.
+    V = I * R_DS(on); the curve above applies only in dead time.
+
+# ── thermal ────────────────────────────────────────────────────────────────
+thermal:
+  source: "Datasheet Table 1 (Package, Characteristic values)"
+  r_th_jc_k_w: {typ: 0.08, max: 0.11}
+  r_th_jc_note: "MOSFET/body diode, junction-case; the case is the TOP-SIDE tab"
+  r_th_ja_k_w: {max: 62}
+  z_th_jc_curve: null

@@ -1,0 +1,172 @@
+# ============================================================
+# Power-device card — Infineon AIMDQ75R016M2H
+# CoolSiC(TM) Automotive Power Device 750 V G2, Q-DPAK top-side cooled
+# Added 2026-09-23 (see IMDQ75R004M2H.yaml header for the full convention
+# note). This is the device the concept doc's section 8 reference design
+# (Infineon EVAL-QDPAK-FB V2.1) uses: "4 x AIMDQ75R016M2H (750 V, 16 mOhm)"
+# — a full bridge for double-pulse switching evaluation, "no overtemperature,
+# overcurrent or overvoltage protection ... the basis for the footprint and
+# layout rules only, not for the power stage." AEC-Q101 automotive-qualified
+# (unlike the industrial-only IMDQ75R0xx parts). Nothing invented;
+# unpublished = null.
+# ============================================================
+
+part: AIMDQ75R016M2H
+manufacturer: Infineon
+family: "CoolSiC Automotive Power Device 750 V G2"
+technology: sic_mosfet
+package: PG-HDSOP-22-U01
+package_common_name: Q-DPAK
+cooling: top_side
+marking: 75A016M2
+notes: >-
+  Automotive part (AEC-Q101 qualified, per JEDEC/AEC-Q101 in "Product
+  validation"). This is the EVAL-QDPAK-FB V2.1 reference-design device
+  (concept doc section 8: 4x this part in a 750 V full bridge for
+  double-pulse switching tests) — the doc explicitly states that board is
+  "the basis for the footprint and layout rules only, not for the power
+  stage" (no protection circuitry). Only V_GS(off) = 0 V is offered (no
+  -5 V option), same as the industrial IMDQ75R0xx parts. This datasheet
+  publishes a short-circuit withstand time (t_SC = 2 us, Table 5) that the
+  IMDQ75R004M2H/IMDQ75R007M2H cards do not carry.
+package_size_mm:
+  source: "Datasheet Figure 1 (section 7, Package outlines), PG-HDSOP-22-U01, MAX column"
+  length_mm: 15.10
+  width_mm: 21.06
+  height_mm: 2.35
+  body_width_mm: 15.50
+  lead_pitch_mm: 1.14
+  leads: 22
+weight_g: null
+datasheet_revision: "2.1, 2025-04-29 / 2025-06-25"
+datasheet_url: "https://www.infineon.com/dgdl/Infineon-AIMDQ75R016M2H-DataSheet-v02_00-EN.pdf?fileId=8ac78c8c95d1335f0195eb49b2bf6650"
+
+ratings:
+  source: "Datasheet Table 2 (Maximum ratings)"
+  v_dss_V: 750
+  i_d_continuous:
+    - {t_case_c: 25,  i_a: 103, basis: table}
+    - {t_case_c: 100, i_a: 73,  basis: table}
+  i_d_pulsed_A: 365
+  p_tot_W:
+    - {t_case_c: 25, p_w: 394, basis: table}
+  t_j_max_c: 175
+  t_j_overload_c: 200
+  t_storage_c: {min: -55, max: 150}
+  v_gs_transient_V: {min: -11, max: 25}
+  v_gs_static_V:    {min: -7,  max: 23}
+  e_as_mJ: 350                  # I_D = 13.1 A, V_DD = 50 V; Table 11
+  i_as_A: 13.1
+  dv_dt_v_ns: 200
+  t_sc_us: 2                    # short-circuit withstand time, Table 5: V_DD=500V, V_GS=18V, V_DS,peak<750V, R_G,ext=2.3 ohm
+  cosmic_radiation_note: >-
+    Datasheet Table 2 footnote: "For applications with applied blocking
+    voltage > 525 V, it is required that the customer evaluates the impact
+    of cosmic radiation effect in early design phase and contacts the
+    Infineon sales office" — relevant at the 800/900 V bus this platform
+    targets (this device is 750 V-rated, not part of the 800 V line).
+
+gate:
+  source: "Datasheet Table 4 (Operating range) and Table 5 (Static characteristics)"
+  v_gs_on_recommended_V:  {min: 18, max: 18}
+  v_gs_off_recommended_V: {min: 0,  max: 0}
+  v_gs_th_V: {min: 3.5, typ: 4.5, max: 5.6, at_t_j_c: 25,
+              note: "V_DS = V_GS, I_D = 12.3 mA; typ 3.3 V at T_vj = 175 degC"}
+  q_g_nC: 74                    # V_DD = 500 V, I_D = 55.8 A, V_GS = 0 to 18 V
+  q_gs_pl_nC: 19
+  q_gd_nC: 16
+  r_g_internal_ohm: 2.4
+
+r_ds_on:
+  source: "Datasheet Table 5 (Static characteristics)"
+  measured_at_i_d_A: 55.8
+  curves:
+    - v_gs_on_V: 18
+      points:
+        - {t_j_c: 25,  r_mohm: 16,   basis: table, anchor: true, r_mohm_max: 20}
+        - {t_j_c: 150, r_mohm: 25,   basis: table, anchor: true, r_mohm_max: 32,
+           note: "specified by design, not subject to production test"}
+        - {t_j_c: 175, r_mohm: 29,   basis: table, anchor: true}
+    - v_gs_on_V: 15
+      points:
+        - {t_j_c: 25,  r_mohm: 21,   basis: table, anchor: true}
+    - v_gs_on_V: 20
+      points:
+        - {t_j_c: 25,  r_mohm: 14,   basis: table, anchor: true}
+
+capacitance:
+  source: "Datasheet Table 6 (Dynamic characteristics); V_GS = 0 V, V_DS = 500 V, f = 250 kHz"
+  at_v_ds_V: 500
+  c_iss_pF: 2577
+  c_oss_pF: 173
+  c_oss_max_pF: 225
+  c_rss_pF: 13.5
+  c_o_er_pF: 219
+  c_o_tr_pF: 316
+  e_oss_uJ: 27.4                # Table 1 key parameter
+  q_oss_nC: 158                 # Table 1 key parameter
+  e_oss_rule: "E_oss(V) = 0.5 * c_o_er * V^2"
+
+switching:
+  source: "Datasheet Table 6 (Dynamic characteristics, switching losses) — single test point, no current/temperature-dependence figure published."
+  v_dd_ref_V: 500
+  i_d_ref_A: 55.8
+  r_g_ext_ref_ohm: 1.8
+  scaling:
+    voltage_exponent: 1.0
+    voltage_rule: "E(V_dc) = E(500 V) * (V_dc / 500)^1.0 — first-order hard-switching rule, ASSUMPTION."
+    current_rule: "No current-dependence figure published — the single table point is held flat; NOT extrapolated."
+    temperature_rule: "No temperature-dependence figure published."
+    r_g_rule: "No R_g sweep figure published — not rescaled."
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 25
+      e_on_uJ:
+        basis: table
+        points: [[55.8, 102]]
+        anchor_i_d_A: 55.8
+        anchor_source: "Datasheet Table 6, E_on = 102 uJ (V_DD=500V, I_D=55.8A, V_GS=0/18V, R_G,ext=1.8 ohm)"
+      e_off_uJ:
+        basis: table
+        points: [[55.8, 82]]
+        anchor_i_d_A: 55.8
+        anchor_source: "Datasheet Table 6, E_off = 82 uJ, same conditions"
+      e_fr_uJ:
+        basis: table
+        points: [[55.8, 1]]
+        anchor_i_d_A: 55.8
+        anchor_source: >-
+          Not separately published: E_tot (185 uJ) = E_on + E_off
+          (102+82=184 uJ, within 1 uJ rounding), i.e. no separate E_fr term
+          in this half-bridge test. Held at a nominal 1 uJ rather than an
+          exact zero (see IMDQ75R004M2H.yaml for why).
+
+third_quadrant:
+  source: "Datasheet Table 8 (Reverse diode characteristics)"
+  i_sd_continuous:
+    - {t_case_c: 25, i_a: 70, basis: table}   # V_GS = 0 V row
+  i_sm_A: 365
+  v_sd_at_56A:
+    - {t_j_c: 25,  v: 4.1, basis: table, v_max: 5}
+    - {t_j_c: 175, v: 3.8, basis: table}
+  reverse_recovery:
+    q_fr_nC: 205
+    t_fr_ns: 12.5
+    i_frm_A: 33
+    v_dd_ref_V: 500
+    i_sd_ref_A: 55.8
+    source: "Datasheet Table 8, V_DD=500V, I_SD=55.8A, R_G,ext=2.3 ohm"
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 25
+      basis: table
+      anchor_note: "Table 8 anchor (4.1 V / 55.8 A) plus the physical origin; no figure digitized."
+      points: [[0.0, 0.0], [4.1, 55.8]]
+  channel_on_note: "At V_GS = 18 V the third quadrant is the CHANNEL; the curve above applies only in dead time (V_GS = 0 V)."
+
+thermal:
+  source: "Datasheet Table 3 (Thermal characteristics)"
+  r_th_jc_k_w: {typ: 0.27, max: 0.38}
+  r_th_jc_note: "MOSFET/body diode, junction-case; the case is the TOP-SIDE tab"
+  r_th_ja_k_w: null
+  z_th_jc_curve: null

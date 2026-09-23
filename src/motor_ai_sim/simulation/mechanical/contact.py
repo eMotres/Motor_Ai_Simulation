@@ -1085,16 +1085,20 @@ def _solver():
     """
     try:
         from pypardiso import spsolve as _ps
+        from ..pardiso_lifetime import global_pardiso_session
 
         def _solve(A, b):
-            x = np.asarray(_ps(A.tocsr(), np.asarray(b, dtype=float)))
-            if not np.isfinite(x).all():
-                try:
-                    from pypardiso.scipy_aliases import pypardiso_solver as _pp
-                    _pp.remove_stored_factorization()
-                except Exception:  # noqa: BLE001
-                    pass
-                x = np.asarray(_ps(A.tocsr(), np.asarray(b, dtype=float)))
+            Ac = A.tocsr()
+            bb = np.asarray(b, dtype=float)
+            with global_pardiso_session():
+                x = np.asarray(_ps(Ac, bb))
+                if not np.isfinite(x).all():
+                    try:
+                        from pypardiso.scipy_aliases import pypardiso_solver as _pp
+                        _pp.remove_stored_factorization()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    x = np.asarray(_ps(Ac, bb))
             return x
         return "pypardiso", _solve
     except Exception:  # noqa: BLE001

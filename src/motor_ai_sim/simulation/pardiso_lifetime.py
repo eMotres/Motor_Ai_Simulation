@@ -6,15 +6,30 @@ everything on every exit, including failures before P2Nonlinear is created.
 """
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from functools import wraps
 import logging
+from threading import RLock
 
 
 _log = logging.getLogger(__name__)
 _scope: ContextVar[tuple[ExitStack, dict] | None] = ContextVar(
     "pardiso_lifetime", default=None)
+_global_solver_lock = RLock()
+
+
+@contextmanager
+def global_pardiso_session():
+    """Serialize use of pypardiso's shared ``spsolve`` solver.
+
+    Hold this lock through a solve, factorization reset, and retry as one
+    operation.  Its reentrancy also permits a reset helper to take the same
+    lock.  Explicit ``PyPardisoSolver`` instances have separate ownership and
+    do not use this session.
+    """
+    with _global_solver_lock:
+        yield
 
 
 class _Release:

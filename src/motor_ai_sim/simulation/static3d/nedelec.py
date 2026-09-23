@@ -642,8 +642,10 @@ def _cg(A, b, tol: float = 1e-10, maxiter: int = 40000, Mm=None):
 def _direct(A, b):
     try:
         from pypardiso import spsolve as _ps
-        return np.asarray(_ps(A.tocsr(), np.asarray(b, dtype=float))), \
-            "pypardiso(MKL PARDISO)"
+        from ..pardiso_lifetime import global_pardiso_session
+        with global_pardiso_session():
+            x = np.asarray(_ps(A.tocsr(), np.asarray(b, dtype=float)))
+        return x, "pypardiso(MKL PARDISO)"
     except Exception:
         from scipy.sparse.linalg import splu
         return splu(A.tocsc()).solve(b), "scipy.splu(SuperLU)"

@@ -325,11 +325,14 @@ def _drop_pardiso_factorization() -> None:
     same matrix inherits the damage instead of re-computing it.  Dropping the
     cache is what makes the retry below an actual second attempt.
     """
-    try:
-        from pypardiso.scipy_aliases import pypardiso_solver as _ps
-        _ps.remove_stored_factorization()
-    except Exception:                                # not installed / renamed
-        pass
+    from ..pardiso_lifetime import global_pardiso_session
+
+    with global_pardiso_session():
+        try:
+            from pypardiso.scipy_aliases import pypardiso_solver as _ps
+            _ps.remove_stored_factorization()
+        except Exception:                            # not installed / renamed
+            pass
 
 
 def _finite_or_raise(x: np.ndarray, A, name: str) -> np.ndarray:
@@ -383,6 +386,7 @@ def _linear_solver():
     """
     try:
         from pypardiso import spsolve as _pspsolve
+        from ..pardiso_lifetime import global_pardiso_session
 
         def _fac(A):
             Ac = A.tocsr()
@@ -390,11 +394,12 @@ def _linear_solver():
 
             def _solve(b):
                 bb = np.asarray(b, dtype=float)
-                x = np.asarray(_pspsolve(Ac, bb))
-                if not np.isfinite(x).all():
-                    # Do not let a damaged factorization be served twice.
-                    _drop_pardiso_factorization()
+                with global_pardiso_session():
                     x = np.asarray(_pspsolve(Ac, bb))
+                    if not np.isfinite(x).all():
+                        # Retry cannot interleave with another global solve.
+                        _drop_pardiso_factorization()
+                        x = np.asarray(_pspsolve(Ac, bb))
                 return _finite_or_raise(x, Ac, name)
             return _solve
         return "pypardiso(MKL PARDISO)", _fac

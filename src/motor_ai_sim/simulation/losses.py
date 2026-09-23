@@ -139,6 +139,7 @@ def surface_loss_density(
     fundamental_only: Optional[list] = None,
     wrap: Optional[dict] = None,
     raw_window_candidate: Optional[dict] = None,
+    select_raw_window: bool = False,
 ) -> np.ndarray:
     """Per-element iron loss density [W/m³ of STEEL] from the measured surface.
 
@@ -172,9 +173,14 @@ def surface_loss_density(
     ``fundamental_only``, when a list is passed, receives the m = 1 term alone,
     so the harmonic content's contribution can be reported rather than assumed.
     """
+    if select_raw_window and raw_window_candidate is None:
+        raise ValueError("raw-window selection requires a candidate accumulator")
     out = np.zeros(X.shape[1], float)
     raw_out = np.zeros(X.shape[1], float)
     fund = np.zeros(X.shape[1], float)
+    raw_fund = np.zeros(X.shape[1], float)
+    raw_excursion = excursion if select_raw_window else {}
+    legacy_excursion = {} if select_raw_window else excursion
     for H in (X, Y):
         raw_amp: list = []
         amp, freqs = harmonic_amplitudes(
@@ -183,22 +189,30 @@ def surface_loss_density(
         for m in range(amp.shape[0]):
             A = amp[m] * inv_kf
             if A.size and float(A.max()) >= HARMONIC_FLOOR_T:
-                p = surface.w_per_m3(A, float(freqs[m]), excursion, weight)
+                p = surface.w_per_m3(
+                    A, float(freqs[m]), legacy_excursion, weight)
                 out += p
                 if m == 0:                 # m is 0-based over harmonics 1, 2, …
                     fund += p
             if raw_window_candidate is not None:
                 raw_A = raw_amp[0][m] * inv_kf
                 if raw_A.size and float(raw_A.max()) >= HARMONIC_FLOOR_T:
-                    # Keep this candidate's envelope accounting separate from
-                    # the legacy detrended result and its caller-owned logs.
-                    raw_out += surface.w_per_m3(
-                        raw_A, float(freqs[m]), None, weight)
+                    raw_p = surface.w_per_m3(
+                        raw_A, float(freqs[m]), raw_excursion, weight)
+                    raw_out += raw_p
+                    if m == 0:
+                        raw_fund += raw_p
     if fundamental_only is not None:
-        fundamental_only.append(fund)
+        fundamental_only.append(raw_fund if select_raw_window else fund)
     if raw_window_candidate is not None:
         raw_window_candidate["density"] = raw_out
-    return out
+        raw_window_candidate["detrended_density"] = out
+        raw_window_candidate["raw_excursion"] = raw_excursion
+        raw_window_candidate["detrended_excursion"] = legacy_excursion
+        raw_window_candidate["legacy_wrap"] = wrap
+        raw_window_candidate["selected_candidate"] = (
+            "raw_window_unfiltered" if select_raw_window else "detrended_legacy")
+    return raw_out if select_raw_window else out
 
 
 def iron_loss_series(
@@ -361,17 +375,19 @@ def iron_loss_series(
         model = "measured_surface"
         exc: dict = {}
         fund: list = []
-        wrap: dict = {}
+        legacy_wrap: dict = {}
         raw_candidate: dict = {}
         # X/Y are ALREADY restricted to this half's iron elements — the
         # classical term above broadcasts them straight against vol_steel.
         dens = surface_loss_density(
             X, Y, surface, inv_kf, f_elec_hz, n_periods,
-            weight=vol_steel, excursion=exc, fundamental_only=fund, wrap=wrap,
-            raw_window_candidate=raw_candidate if terms is not None else None)
+            weight=vol_steel, excursion=exc, fundamental_only=fund,
+            wrap=legacy_wrap, raw_window_candidate=raw_candidate,
+            select_raw_window=True)
         P_surf = float(np.sum(dens * vol_steel))
-        P_surf_raw = (float(np.sum(raw_candidate["density"] * vol_steel))
-                      if raw_candidate else None)
+        P_surf_raw = float(np.sum(raw_candidate["density"] * vol_steel))
+        P_surf_detrended = float(np.sum(
+            raw_candidate["detrended_density"] * vol_steel))
         if P_surf_raw is not None and not np.isfinite(P_surf_raw):
             P_surf_raw = None
         P_fund = float(np.sum(fund[0] * vol_steel)) if fund else 0.0
@@ -385,9 +401,11 @@ def iron_loss_series(
         # series instead of reporting a negative remainder, and say so.
         if P_surf <= 0.0:
             # Every harmonic of this half is below HARMONIC_FLOOR_T — a half
-            # with no resolvable AC field at all. Nothing to bill on top of the
-            # (equally negligible) eddy series; the alternative is a NEGATIVE
-            # per-cycle remainder.
+            # with no selected measured-surface loss. The independent classical
+            # derivative can still be nonzero below that amplitude floor; do
+            # not return it on top of a selected surface total of zero.
+            classical = np.zeros_like(classical)
+            P_eddy = 0.0
             rest = 0.0
         elif P_eddy > P_surf:
             log.warning(
@@ -405,21 +423,22 @@ def iron_loss_series(
         # ['model'] carries that caveat downstream.
         share = hyst / (hyst + excess) if (hyst + excess) > 0 else 1.0
         hyst, excess = rest * share, rest * (1.0 - share)
-        _log_surface(material, surface, exc, P_surf, P_fund, P_bert, wrap)
+        _log_surface(material, surface, exc, P_surf, P_fund, P_bert,
+                     legacy_wrap, P_surf_detrended)
         if terms is not None:
             terms.update({
                 "hysteresis_W": hyst, "excess_W": excess, "eddy_W": P_eddy,
                 "k_f": kf, "model": model,
                 "surface_W": P_surf, "fundamental_only_W": P_fund,
                 "bertotti_W": P_bert,
-                "wrap_jump_frac": wrap.get("frac", 0.0),
-                "wrap_guard_weight": wrap.get("weight", 0.0),
+                "legacy_wrap_jump_frac": legacy_wrap.get("frac", 0.0),
+                "legacy_wrap_guard_weight": legacy_wrap.get("weight", 0.0),
                 "envelope_out_frac": (exc.get("w_out", 0.0)
                                       / max(exc.get("w_all", 0.0), 1e-30)),
                 **({
                     "surface_raw_window_candidate_W": P_surf_raw,
-                    "surface_detrended_candidate_W": P_surf,
-                    "surface_selected_candidate": "detrended_legacy",
+                    "surface_detrended_candidate_W": P_surf_detrended,
+                    "surface_selected_candidate": "raw_window_unfiltered",
                 } if P_surf_raw is not None else {})})
         return classical, rest
 
@@ -431,7 +450,8 @@ def iron_loss_series(
 
 
 def _log_surface(material: Any, surface: Any, exc: dict, P_surf: float,
-                 P_fund: float, P_bert: float, wrap: dict) -> None:
+                 P_fund: float, P_bert: float, wrap: dict,
+                 P_detrended: float) -> None:
     """ONE line per half per solve: what the surface did, and what left it.
 
     Loud on purpose when a solve leaves the measured envelope — outside it the
@@ -441,26 +461,25 @@ def _log_surface(material: Any, surface: Any, exc: dict, P_surf: float,
     """
     frac = exc.get("w_out", 0.0) / max(exc.get("w_all", 0.0), 1e-30)
     head = ("core loss | %s: measured P(B,f) surface, %d points over %d "
-            "frequency curves | %.4g W (harmonic sum) vs %.4g W (fundamental "
-            "only, %+.1f %%) vs %.4g W (3-coefficient Bertotti, %+.1f %%)"
+            "frequency curves | %.4g W (selected raw-window harmonic sum), "
+            "%.4g W (legacy detrended candidate) | %.4g W (fundamental only, "
+            "%+.1f %%) vs %.4g W (3-coefficient Bertotti, %+.1f %%)"
             % (getattr(material, "name", "?"), surface.n_points,
-               surface.f.size, P_surf, P_fund,
+               surface.f.size, P_surf, P_detrended, P_fund,
                100.0 * (P_surf / max(P_fund, 1e-30) - 1.0), P_bert,
                100.0 * (P_surf / max(P_bert, 1e-30) - 1.0)))
-    # The capture window's own periodicity — the rotor half's is poor by
-    # construction (slot passing is incommensurate with the electrical period),
-    # and the number below says how much ramp the leakage guard had to remove.
+    # These metrics describe the legacy detrended comparator only. The
+    # selected raw-window candidate above is evaluated without ramp correction.
     if wrap.get("weight", 0.0) > 0.02:
         log.warning(
-            "core loss | %s: the captured window does NOT close on itself — "
-            "end-to-start step is %.0f %% of peak-to-peak (p90 %.0f %%), so "
-            "the leakage guard removed it as a ramp on %.0f %% of the field "
-            "(mean weight). That makes this half's harmonic sum a LOWER "
-            "bracket: the removed drift is real flux the window is too short "
-            "to resolve. Slot passing is incommensurate with the electrical "
-            "period on a rotor half — this is expected there and nowhere else.",
-            getattr(material, "name", "?"), 100.0 * wrap.get("frac", 0.0),
-            100.0 * wrap.get("p90", 0.0), 100.0 * wrap["weight"])
+            "core loss | %s: raw-window harmonic sum selected; legacy "
+            "detrending comparator %.4g W estimates a step of %.0f %% of "
+            "peak-to-peak (p90 %.0f %%) and would subtract a ramp on %.0f %% "
+            "of the field (mean legacy weight); no ramp was applied to the "
+            "selected candidate.",
+            getattr(material, "name", "?"), P_detrended,
+            100.0 * wrap.get("frac", 0.0), 100.0 * wrap.get("p90", 0.0),
+            100.0 * wrap["weight"])
     if frac <= 0.0:
         log.info("%s | entirely INSIDE the measured envelope", head)
         return

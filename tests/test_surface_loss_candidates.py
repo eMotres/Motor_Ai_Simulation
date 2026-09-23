@@ -55,6 +55,7 @@ def test_closed_window_raw_and_detrended_surface_candidates_are_equal():
     assert selected_wrap["weight"] == 0.0
     assert selected_excursion["selected_evaluations"] > 0
     assert all(value is None or value is selected_excursion
+               or value is raw["raw_excursion"]
                for value in surface.excursion_calls)
 
 
@@ -82,10 +83,20 @@ def test_open_window_retains_unmodified_raw_dft_surface_candidate():
     assert wrap["weight"] > 0.9
     assert not np.allclose(candidate["density"], selected)
     assert all(value is None or value is selected_excursion
+               or value is candidate["raw_excursion"]
                for value in surface.excursion_calls)
+    selected_raw_candidate = {}
+    raw_selected_excursion = {}
+    selected_raw = losses.surface_loss_density(
+        X, Y, surface, 1.0, 933.33, 1.0,
+        excursion=raw_selected_excursion, raw_window_candidate=selected_raw_candidate,
+        select_raw_window=True)
+    np.testing.assert_allclose(selected_raw, selected_raw_candidate["density"])
+    assert selected_raw_candidate["selected_candidate"] == "raw_window_unfiltered"
+    assert raw_selected_excursion is selected_raw_candidate["raw_excursion"]
 
 
-def test_iron_terms_expose_json_safe_candidates_without_changing_selection(monkeypatch):
+def test_iron_terms_select_unfiltered_raw_candidate_and_serialize(monkeypatch):
     class Material:
         name = "test steel"
         stacking_factor = 0.92
@@ -103,12 +114,39 @@ def test_iron_terms_expose_json_safe_candidates_without_changing_selection(monke
         933.33, n, lambda values: np.gradient(values, axis=0),
         lambda material: (1.0, 1.0, 1.0), terms=terms)
 
-    assert terms["surface_selected_candidate"] == "detrended_legacy"
-    assert terms["surface_detrended_candidate_W"] == terms["surface_W"]
-    assert terms["surface_raw_window_candidate_W"] != pytest.approx(
-        terms["surface_detrended_candidate_W"])
+    assert terms["surface_selected_candidate"] == "raw_window_unfiltered"
+    assert terms["surface_raw_window_candidate_W"] == terms["surface_W"]
+    assert terms["surface_raw_window_candidate_W"] > terms[
+        "surface_detrended_candidate_W"]
+    assert terms["legacy_wrap_guard_weight"] > 0.9
     assert np.isfinite(classical).all() and np.isfinite(remainder)
+    # Both returned components are in watts: ``classical`` already includes
+    # steel volume (fixture area=1 m², stack=1 m, fill=0.92), while remainder
+    # is the per-cycle surface total minus mean classical eddy watts.
+    assert float(np.mean(classical)) + float(remainder) == pytest.approx(
+        terms["surface_W"], rel=1e-12, abs=1e-12)
     json.dumps(terms, allow_nan=False)
+
+
+def test_sub_floor_surface_zeroes_nonzero_classical_derivative(monkeypatch):
+    class Material:
+        name = "sub-floor steel"
+        stacking_factor = 1.0
+
+    monkeypatch.setattr(losses, "_get_surface", lambda material, coeff: QuadraticSurface())
+    n = 40
+    t = np.arange(n) / n
+    x = (0.4 * losses.HARMONIC_FLOOR_T * np.cos(2*np.pi*t))[:, None]
+    y = np.zeros_like(x)
+    derivative = lambda values: np.gradient(values, axis=0)
+    assert np.any(derivative(x))
+    terms = {}
+    classical, rest = losses.iron_loss_series(
+        list(x), list(y), np.array([0]), np.array([1.0]), Material(), 1.0,
+        933.33, n, derivative, lambda material: (1.0, 1.0, 1.0), terms=terms)
+    assert terms["surface_W"] == 0.0
+    assert terms["eddy_W"] == 0.0
+    assert float(np.mean(classical)) + rest == terms["surface_W"]
 
 
 def test_fem_result_has_one_entry_for_each_candidate_total():
@@ -132,3 +170,4 @@ def test_fem_result_has_one_entry_for_each_candidate_total():
                 "P_fe_detrended_candidate_avg_W",
                 "P_fe_surface_selected_candidate"):
         assert keys.count(key) == 1
+    assert '"raw_window_unfiltered" if _has_surface_candidates' in source

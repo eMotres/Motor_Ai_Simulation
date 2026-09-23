@@ -523,3 +523,23 @@ Artifacts: `scripts/torque_low_current_review.py`,
 Verification: 5 passed in 0.12 s; archived review reproduced all four saved
 cases and hashes. No live API access, restart, deployment, configuration edit,
 or push.
+
+## Raw measured-surface core-loss selection (2026-09-23)
+
+GPT-6 Luna implemented the bounded change; no model escalation was needed.
+For steels with a measured P(B,f) surface, the selected iron-loss result now
+uses the DFT of the captured raw field window. The former linear-ramp
+detrending remains available only as an explicitly labelled legacy diagnostic.
+The selected total, fundamental contribution, time series, loss balance and
+efficiency therefore all use the same unfiltered candidate. Top-level raw and
+legacy totals remain exposed for comparison.
+
+Sol independently reviewed the routing and found one edge inconsistency: when
+all surface harmonics were below the amplitude floor, the selected surface was
+0 W but a tiny classical derivative series could remain. The series and its
+eddy term are now zeroed with that selected 0 W total, covered by a dedicated
+sub-floor test. Verification: the parent reran the three focused suites,
+87 passed in 5.93 s.
+No FEM run, live API access, restart, configuration edit, deployment, or push.
+The shared `fem_solver_2d.py` also contains unrelated uncommitted changes by
+another agent; do not commit that path until its ownership is separated.

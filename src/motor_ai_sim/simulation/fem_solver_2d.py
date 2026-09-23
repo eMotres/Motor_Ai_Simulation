@@ -7343,10 +7343,10 @@ def fem_transient_sliding_band(
             if "surface_selected_candidate" in _tm:
                 _fe_row["surface_selected_candidate"] = _tm[
                     "surface_selected_candidate"]
-                _fe_row["wrap_jump_frac"] = float(
-                    _tm.get("wrap_jump_frac", 0.0))
-                _fe_row["wrap_guard_weight"] = float(
-                    _tm.get("wrap_guard_weight", 0.0))
+                _fe_row["legacy_wrap_jump_frac"] = float(
+                    _tm.get("legacy_wrap_jump_frac", 0.0))
+                _fe_row["legacy_wrap_guard_weight"] = float(
+                    _tm.get("legacy_wrap_guard_weight", 0.0))
             _fe_break[_half] = _fe_row
     _has_surface_candidates = any(
         (_tm.get("surface_raw_window_candidate_W") is not None)
@@ -7358,8 +7358,9 @@ def fem_transient_sliding_band(
             for _tm in (_fe_terms_s, _fe_terms_r)
             if _tm.get("surface_raw_window_candidate_W") is not None
             and _tm.get("surface_detrended_candidate_W") is not None)
-        P_fe_raw_window_candidate_avg2 = float(P_fe_avg2 + _raw_surface_delta)
-        P_fe_detrended_candidate_avg2 = float(P_fe_avg2)
+        # P_fe_avg2 already contains the selected raw-window surface values.
+        P_fe_raw_window_candidate_avg2 = float(P_fe_avg2)
+        P_fe_detrended_candidate_avg2 = float(P_fe_avg2 - _raw_surface_delta)
     else:
         P_fe_raw_window_candidate_avg2 = None
         P_fe_detrended_candidate_avg2 = None
@@ -8298,7 +8299,7 @@ def fem_transient_sliding_band(
         "P_fe_raw_window_candidate_avg_W": P_fe_raw_window_candidate_avg2,
         "P_fe_detrended_candidate_avg_W": P_fe_detrended_candidate_avg2,
         "P_fe_surface_selected_candidate": (
-            "detrended_legacy" if _has_surface_candidates else None),
+            "raw_window_unfiltered" if _has_surface_candidates else None),
         "P_loss_total_avg_W": round(float(P_loss_avg2), 3),
         "P_airgap_W": P_airgap_avg2, "P_mech_avg_W": P_mech_avg2,
         "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)

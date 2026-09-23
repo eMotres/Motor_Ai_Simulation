@@ -39,16 +39,28 @@ slot-passing-commensurate rotor capture (the source identifies seven electrical
 periods) before changing the reported model. No formula or tests were changed
 for the initial audit; no FEM run was launched by that audit.
 
-## Candidate visibility added
+## Raw-window selection added
 
-The measured-surface path now exposes `surface_raw_window_candidate_W` and
-`surface_detrended_candidate_W` per steel half, along with
-`surface_selected_candidate="detrended_legacy"`, `wrap_jump_frac`, and
-`wrap_guard_weight`. The top-level result also reports
+The measured-surface path now selects the unfiltered raw-window DFT and exposes
+`surface_raw_window_candidate_W` and `surface_detrended_candidate_W` per steel
+half, along with
+`surface_selected_candidate="raw_window_unfiltered"`,
+`legacy_wrap_jump_frac`, and `legacy_wrap_guard_weight`. The top-level result also reports
 `P_fe_raw_window_candidate_avg_W` and `P_fe_detrended_candidate_avg_W`; raw
 replaces only each measured-surface half's candidate total while keeping other
-halves' selected models intact. Existing `P_fe_avg_W`, time series, and selected
-formula still use the legacy detrended candidate. These are diagnostic
-comparisons, not a validation or selector change. Candidate evaluation uses a
-separate excursion context and leaves the selected surface's envelope logs
-unchanged.
+halves' selected models intact. `P_fe_avg_W`, time series, loss totals and
+efficiency now follow the raw-window candidate for measured-surface halves.
+The legacy detrended value remains visible for comparison and its wrap metrics
+are explicitly labeled legacy. No ramp is applied to the selected raw window.
+This implements the user's no-filter requirement; the raw finite-window
+estimate still carries spectral leakage uncertainty and is not a convergence
+certificate. Candidate evaluation uses separate envelope accumulators so each
+candidate's surface extrapolation metrics remain distinct.
+
+The four archived 0–1.001 A GEO30 cases provide a numerical impact check on
+the same 48-frame window. Their unfiltered totals are 4.685304–4.685447 W,
+versus 4.290440–4.290604 W after the legacy detrending, an increase of about
+0.395 W or 9.2%. Almost all of the difference is on the rotor half:
+0.820135–0.820148 W raw versus 0.424975–0.424987 W detrended. The stator
+candidate changes by less than 0.00032 W. These are saved-candidate
+comparisons, not a new FEM run and not a seven-period convergence study.

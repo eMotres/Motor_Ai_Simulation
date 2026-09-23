@@ -7,6 +7,7 @@ import pytest
 from skfem import Basis, ElementTriP2, MeshTri
 
 from motor_ai_sim.simulation.p2_projection import SlipProjection
+from scripts.continuous_p2_mortar_prototype import ContinuousMortarProjection
 from scripts.continuous_p2_projection_prototype import ContinuousSlipProjection
 
 
@@ -126,3 +127,89 @@ def test_fractional_collocation_does_not_match_trace_inside_crossed_edge():
               continuous.stator_vertices[2]]
     stator_trace = quadratic(location + .37 - 1., values[stator])
     assert abs(rotor_trace - stator_trace) == pytest.approx(.0456)
+
+
+@pytest.mark.parametrize("full_ring,sign", [(True, 1), (False, 1), (False, -1)])
+def test_mortar_mass_is_spd_and_integer_shifts_recover_existing_space(full_ring, sign):
+    discrete = annular_projection(5, full_ring, sign)
+    step = _spacing(5, full_ring)
+    mortar = ContinuousMortarProjection(discrete, step)
+    np.testing.assert_allclose(mortar.Mrr, mortar.Mrr.T, atol=1e-14)
+    assert np.linalg.eigvalsh(mortar.Mrr).min() > 0.
+    for shift in (-11, -5, -1, 0, 1, 5, 13):
+        old, old_outer = discrete.build(shift)
+        new, _, outer = mortar.build(shift * step)
+        assert old.shape == new.shape
+        np.testing.assert_array_equal(outer, old_outer)
+        dense = new.toarray()
+        for col in range(old.shape[1]):
+            members = old[:, col].tocoo()
+            reference = dense[members.row[0]] / members.data[0]
+            np.testing.assert_allclose(
+                dense[members.row], members.data[:, None] * reference,
+                rtol=0., atol=2e-13)
+        assert np.linalg.matrix_rank(dense) == new.shape[1]
+
+
+@pytest.mark.parametrize("full_ring,sign", [(True, 1), (False, 1), (False, -1)])
+def test_mortar_weak_residual_derivative_and_wrap(full_ring, sign):
+    discrete = annular_projection(5, full_ring, sign)
+    step = _spacing(5, full_ring)
+    mortar = ContinuousMortarProjection(discrete, step)
+    rng = np.random.default_rng(231)
+    z = rng.normal(size=mortar.shape[1])
+    period = mortar.trace.period
+    for slots in (0., 1., .37, period + .37, -.37, -period-.37):
+        theta = slots * step
+        p, dp, outer = mortar.build(theta)
+        mixed, dmixed = mortar.overlap(theta)
+        rotor = mortar.rotor_coordinates(p @ z)
+        drotor = mortar.rotor_coordinates(dp @ z)
+        np.testing.assert_allclose(mortar.Mrr @ rotor, mixed @ z,
+                                   rtol=0., atol=3e-13)
+        np.testing.assert_allclose(mortar.Mrr @ drotor, dmixed @ z,
+                                   rtol=0., atol=3e-12)
+        if slots % 1:
+            h = 1e-6 * step
+            finite_difference = ((mortar.build(theta+h)[0] -
+                                  mortar.build(theta-h)[0]) @ z) / (2*h)
+            np.testing.assert_allclose(dp @ z, finite_difference,
+                                       rtol=2e-8, atol=2e-8)
+        np.testing.assert_array_equal(outer, mortar.outer_columns)
+    base, base_derivative, _ = mortar.build(.37 * step)
+    wrap, wrap_derivative, _ = mortar.build((period + .37) * step)
+    negative_wrap, negative_wrap_derivative, _ = mortar.build(
+        (.37 - period) * step)
+    row_sign = np.ones(mortar.shape[0])
+    if not full_ring:
+        row_sign[np.isin(mortar.trace.root, mortar.rotor_roots)] = sign
+    np.testing.assert_allclose(wrap.toarray(),
+                               row_sign[:, None] * base.toarray(), atol=2e-13)
+    np.testing.assert_allclose(wrap_derivative.toarray(),
+                               row_sign[:, None] * base_derivative.toarray(),
+                               atol=2e-12)
+    np.testing.assert_allclose(negative_wrap.toarray(),
+                               row_sign[:, None] * base.toarray(), atol=2e-13)
+    np.testing.assert_allclose(negative_wrap_derivative.toarray(),
+                               row_sign[:, None] * base_derivative.toarray(),
+                               atol=2e-12)
+
+
+def test_mortar_removes_collocation_weak_residual_on_crossed_edge():
+    discrete = annular_projection(5, True, 1)
+    step = _spacing(5, True)
+    collocation = ContinuousSlipProjection(discrete, step)
+    mortar = ContinuousMortarProjection(discrete, step)
+    theta = .37 * step
+    z = np.zeros(mortar.shape[1])
+    dof = mortar.trace.stator_vertices[1]
+    z[mortar.trace.column[int(mortar.trace.root[dof])]] = 1.
+    mixed, _ = mortar.overlap(theta)
+    collocation_values = collocation.build(theta)[0] @ z
+    mortar_values = mortar.build(theta)[0] @ z
+    collocation_residual = (
+        mortar.Mrr @ mortar.rotor_coordinates(collocation_values) - mixed @ z)
+    mortar_residual = (
+        mortar.Mrr @ mortar.rotor_coordinates(mortar_values) - mixed @ z)
+    assert np.max(np.abs(collocation_residual)) > 1e-4
+    assert np.max(np.abs(mortar_residual)) < 1e-13

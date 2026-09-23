@@ -142,3 +142,9 @@ No production solver files claimed or edited; no deployment or live API use.
   Parent verified7-line diff and ran focused tests:11passed,12subtests,1.10s.
   Saved-state terminal virtual-work change ~-1.09e-6 Nm; no new motor solve.
   No escalation; no commit/deploy. Source/hash changed only after diagnostics.
+- Commit d785a4c:19 owned files (solver fixes, tests, audit notes);37tests and
+  12subtests passed in1.65s. Foreign files/config/scratch outputs excluded.
+- Continued Sol read-only symmetry audit:12s14p allows full/half, rejects quarter;
+  24s28p standard winding fixture supports1/2/4 (half periodic,quarter anti).
+  Parent checked existing guard tests/source; no FEM or guard-suite execution.
+  New note records common-angle/mesh requirements and limitations. No escalation.

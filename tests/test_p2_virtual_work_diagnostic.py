@@ -92,3 +92,36 @@ def test_virtual_work_series_is_post_solve_aligned_and_trimmed():
                            and t.id == "_p2_scalar_series" for t in node.targets))
     assert "torque_virtual_work_diagnostic_Nm" in [
         key.value for key in history.keys if isinstance(key, ast.Constant)]
+
+
+def test_virtual_work_is_opt_in_and_costs_nothing_when_off():
+    """a88ae64 held-item fix (2026-09-24): diagnostic behind SB_P2_VIRTUAL_WORK.
+
+    Off (the default) the trace-mass factorization is never built and no frame
+    re-assembles the pointwise stiffness: both calls sit under ``_vw_enabled``.
+    """
+    source = (Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim"
+              / "simulation" / "fem_solver_2d.py").read_text(encoding="utf-8")
+    assert '_os_sb.environ.get("SB_P2_VIRTUAL_WORK", "0") == "1"' in source
+    tree = ast.parse(source)
+    solver = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                  and node.name == "fem_transient_sliding_band")
+
+    def _guarded(call_name):
+        for node in ast.walk(solver):
+            if not isinstance(node, ast.If):
+                continue
+            test_names = {n.id for n in ast.walk(node.test) if isinstance(n, ast.Name)}
+            for inner in node.body:
+                for sub in ast.walk(inner):
+                    if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                            and sub.func.id == call_name):
+                        yield test_names
+
+    assert any("_vw_enabled" in names
+               for names in _guarded("_SlipMortarDerivativeAction"))
+    # The per-frame evaluation runs only when the reason is None, and the
+    # reason is "disabled…" whenever the flag is off.
+    assert 'if not _vw_enabled' in source
+    assert any("_vw_reason" in names
+               for names in _guarded("_p2_virtual_work_torque"))

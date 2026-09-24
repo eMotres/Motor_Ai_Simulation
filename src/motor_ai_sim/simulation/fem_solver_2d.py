@@ -5111,15 +5111,21 @@ def fem_transient_sliding_band(
         bc_sign=_bc_sign, Mn=Mn, Sn=Sn, dirichlet_dofs=_D2_ids)
     # The derivative is an independent, diagnostic L2 mortar trace action.
     # Prepare its rotor-trace mass factorization once for the entire run.
+    # OPT-IN (2026-09-24, held-item fix of a88ae64): the diagnostic costs a
+    # pointwise stiffness re-assembly per frame and a trace factorization per
+    # run, and no reported number reads it — so it runs only when
+    # SB_P2_VIRTUAL_WORK=1 (cross-checks). Off, nothing is built or evaluated.
+    _vw_enabled = _os_sb.environ.get("SB_P2_VIRTUAL_WORK", "0") == "1"
     _vw_action = None
     _vw_init_error = None
-    try:
-        _vw_action = _SlipMortarDerivativeAction(
-            _proj, math.radians(float(spacing)))
-    except Exception as _vw_exc:  # noqa: BLE001 — diagnostic must not abort FEM
-        _vw_init_error = type(_vw_exc).__name__
-        log.warning("P2 virtual-work diagnostic unavailable: derivative "
-                    "initialisation failed (%s: %s)", _vw_init_error, _vw_exc)
+    if _vw_enabled:
+        try:
+            _vw_action = _SlipMortarDerivativeAction(
+                _proj, math.radians(float(spacing)))
+        except Exception as _vw_exc:  # noqa: BLE001 — diagnostic must not abort FEM
+            _vw_init_error = type(_vw_exc).__name__
+            log.warning("P2 virtual-work diagnostic unavailable: derivative "
+                        "initialisation failed (%s: %s)", _vw_init_error, _vw_exc)
     log.info("P2 belt: N2=%d dofs, %s, ring=%d nodes, %d/%d ring-edge + "
              "%d cut-vertex + %d cut-edge midpoints paired",
              N2, "full ring" if _full_ring else "sector",
@@ -6874,10 +6880,11 @@ def fem_transient_sliding_band(
         # WHICH frame and by WHICH path, so log it (DEBUG — one line per frame).
         log.debug("P2 frame %d: %s, %d its, res=%.3e",
                   k, "newton" if _newton_ok else "picard", _nit, _res)
-        _vw_reason = _p2_virtual_work_ineligible_reason(
-            eddy=bool(eddy), voltage_drive=bool(_vdrive), demag=bool(demag),
-            frozen_nu=bool(frozen_nu), saturable=bool(_sat2),
-            newton_ok=bool(_newton_ok))
+        _vw_reason = ("disabled_set_SB_P2_VIRTUAL_WORK=1" if not _vw_enabled
+                      else _p2_virtual_work_ineligible_reason(
+                          eddy=bool(eddy), voltage_drive=bool(_vdrive),
+                          demag=bool(demag), frozen_nu=bool(frozen_nu),
+                          saturable=bool(_sat2), newton_ok=bool(_newton_ok)))
         _vw_torque = None
         if _vw_reason is None:
             if _vw_action is None:
@@ -8345,7 +8352,9 @@ def fem_transient_sliding_band(
         if _vw_reason is not None:
             _vw_reason_counts[_vw_reason] = _vw_reason_counts.get(_vw_reason, 0) + 1
     _vw_diagnostics = {
-        "status": "uncertified_diagnostic",
+        "status": ("uncertified_diagnostic" if _vw_enabled
+                   else "disabled (opt-in: SB_P2_VIRTUAL_WORK=1)"),
+        "enabled": bool(_vw_enabled),
         "frame_reasons": list(_T_vw_reason),
         "eligible_frame_count": sum(value is not None for value in _T_vw),
         "reported_frame_count": len(_T2),

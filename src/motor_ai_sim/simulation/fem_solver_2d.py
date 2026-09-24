@@ -236,6 +236,124 @@ _DAXIS_TLS = threading.local()
 _DAXIS_LOCK = threading.RLock()
 
 
+# ── Optimizer-candidate evaluation scope (owner 2026-09-24, fixes A + B) ─────
+# An optimizer candidate (refine_proc child of a sweep / descent / CMA / auto /
+# screen run) is scored on T, η, ripple and the loss split.  Two internal probes
+# it used to pay for do not feed any of those:
+#   A. the no-load ψ_PM probe in the Simulation summary — it only feeds the
+#      chord Ld/Lq and the saturation-droop row, and refine_proc never reads
+#      either (11–13 s per candidate on 68de0ca, measured
+#      docs/OPTIMIZER_SPEED_REVIEW_2026-09-24.md);
+#   B. a 24-frame d-axis calibration per new geometry.  θ* is a SYMMETRY
+#      property: the rotor pole and the stator phase belt are each mirror-
+#      symmetric about their own axis, so ψ_A(θ) is even about θ* and a change
+#      of any dimension that keeps both mirrors cannot move its peak.  Measured
+#      spread over 12 candidates: ±0.04° el (solver noise); 23–30 s per
+#      candidate.  Candidates therefore reuse the run's BASELINE (the config
+#      machine's) calibrated d-axis, unless their geometry differs from the
+#      baseline in a key outside `_DAXIS_SYMMETRIC_KEYS` — a pole/slot count,
+#      a segment form, or any key this list does not know (a future skew or
+#      pole offset) — in which case that candidate calibrates its own.
+# A ContextVar, not a module flag: the API process runs Simulation solves on
+# other threads, and they must never inherit a candidate's shortcuts.  Default
+# off, so every caller that does not ask (Simulation, coupled, passport,
+# reports, final validation) keeps both probes exactly as before.
+import contextlib as _ctxlib
+import contextvars as _ctxvars
+
+_OPT_CANDIDATE: "_ctxvars.ContextVar[bool]" = _ctxvars.ContextVar(
+    "motor_ai_sim_optimizer_candidate", default=False)
+
+
+@_ctxlib.contextmanager
+def optimizer_candidate_scope(active: bool = True):
+    """Run the enclosed solve as an optimizer CANDIDATE (see above)."""
+    _tok = _OPT_CANDIDATE.set(bool(active))
+    try:
+        yield
+    finally:
+        _OPT_CANDIDATE.reset(_tok)
+
+
+def optimizer_candidate_active() -> bool:
+    """True inside ``optimizer_candidate_scope(True)`` on THIS context only."""
+    return bool(_OPT_CANDIDATE.get())
+
+
+#: Geometry keys whose change keeps BOTH mirror symmetries (rotor pole about the
+#: d-axis, stator slot/phase belt about the phase axis), so they cannot move θ*.
+#: Checked against cadquery_geometry: every magnet / pocket / tooth / slot
+#: feature is drawn as ±x about its own axis (e.g. `_create_magnets` p1..p6),
+#: and there is no skew, pole-offset or asymmetric-pole parameter.  Anything
+#: NOT listed — the counts (num_poles, num_slots, num_seg, *_per_segment), the
+#: angles/pitches derived from them, magnet_lamination_tan (splits magnets in
+#: plane) or any key added later — forces the candidate to calibrate its own
+#: axis.  A whitelist, deliberately: an unknown key is presumed to move it.
+_DAXIS_SYMMETRIC_KEYS = frozenset({
+    # stator
+    "stator_diameter", "stator_outer_radius", "stator_inner_radius",
+    "core_thickness", "slot_height", "slot_hs", "slot_width", "tooth_width",
+    "tooth2_width", "cut_width", "stator_fillet_r", "stator_fillet_r1",
+    "air_gap", "insulation_thickness", "wire_width", "wire_height",
+    "wire_spacing_x", "wire_spacing_y", "num_wires_per_slot", "wire_parallel",
+    "wire_split",
+    # rotor
+    "rotor_outer_radius", "rotor_inner_radius", "rotor_house_height",
+    "rotor_hole", "rotor_fill_r", "magnet_height", "magnet_down_height",
+    "magnet_fill_down", "magnet_fill_up", "magnet_fill_radius",
+    "magnet_up_gap", "magnet_lamination", "shaft_height", "shaft_diameter",
+    "sleeve_thickness",
+    # 2-D solve: the stack length never enters the cross-section
+    "motor_length",
+})
+
+
+def daxis_reuse_blockers(base_geo, cand_geo) -> List[str]:
+    """Keys in which ``cand_geo`` differs from ``base_geo`` that COULD move θ*.
+
+    Both dicts are MERGED geometries (``merge_geo_override``).  Empty list =
+    the candidate may reuse the baseline's calibrated d-axis.
+    """
+    def _same(a, b) -> bool:
+        if isinstance(a, bool) or isinstance(b, bool):
+            return a == b
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            a, b = float(a), float(b)
+            return abs(a - b) <= 1e-9 * max(1.0, abs(a), abs(b))
+        return a == b
+    base_geo, cand_geo = dict(base_geo or {}), dict(cand_geo or {})
+    return sorted(k for k in set(base_geo) | set(cand_geo)
+                  if not _same(base_geo.get(k), cand_geo.get(k))
+                  and k not in _DAXIS_SYMMETRIC_KEYS)
+
+
+def _baseline_daxis_for_candidate(geo, wind, n_sectors, progress_cb=None):
+    """The run's BASELINE d-axis for an optimizer candidate, or ``(None, info)``.
+
+    Baseline = the config machine this candidate is an override of (merged the
+    same way the solver merges it), calibrated — or read from the memory/disk
+    cache the Simulation tab and earlier candidates fill — under ITS OWN key, so
+    the value is exactly what a Simulation run of the baseline uses.  ``info``
+    says what was decided and why; it rides in the result.
+    """
+    from motor_ai_sim.config import get_config as _gc_b
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override as _mgo_b
+    base_geo = _mgo_b(dict(_gc_b().get("geometry", {}) or {}), None)
+    blockers = daxis_reuse_blockers(base_geo, geo)
+    if blockers:
+        return None, {"daxis_calibration": "own",
+                      "daxis_reason": "geometry differs from the baseline in "
+                                      + ", ".join(blockers)
+                                      + " (can move the d-axis)"}
+    p_b = _params_from_geo_dict(base_geo)
+    daxis = _resolve_daxis_shift(p_b, base_geo, wind, int(p_b.num_poles) // 2,
+                                 None, n_sectors, progress_cb=progress_cb)
+    return float(daxis), {"daxis_calibration": "baseline",
+                          "daxis_reason": "dimension-only change (both mirror "
+                                          "symmetries kept) — baseline d-axis "
+                                          "reused"}
+
+
 def _winding_cache_identity(geo, wind, num_poles=None) -> str:
     """Versioned identity of the phase/sign basis actually used by the solver.
 
@@ -3540,6 +3658,7 @@ def fem_transient_sliding_band(
     # during which the progress bar showed nothing at all, so pressing Run
     # looked like pressing nothing.  It is not overhead to hide: it is what
     # gives the user's γ a zero to be measured from.
+    _daxis_policy = None     # fix B: set only for optimizer candidates
     if daxis_deg is not None:
         if not (isinstance(daxis_deg, (int, float)) and math.isfinite(float(daxis_deg))):
             raise ValueError("daxis_deg must be a finite angle in degrees; got %r"
@@ -3587,9 +3706,22 @@ def fem_transient_sliding_band(
         except Exception:   # noqa: BLE001 — the guard must never break a solve
             pass
     else:
-        daxis_eff = _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override,
-                                         n_sectors, progress_cb=progress_cb)
-        _daxis_src = "calibrated"
+        # Fix B: an optimizer candidate reuses its run's BASELINE d-axis when
+        # its geometry change keeps both mirror symmetries (see
+        # `_baseline_daxis_for_candidate`); otherwise — and for every
+        # non-candidate solve, and inside a nested calibration — it measures
+        # its own exactly as before.
+        _base_dax = None
+        if optimizer_candidate_active() and not getattr(_DAXIS_TLS, "calibrating", False):
+            _base_dax, _daxis_policy = _baseline_daxis_for_candidate(
+                geo, wind, n_sectors, progress_cb=progress_cb)
+        if _base_dax is not None:
+            daxis_eff = _base_dax
+            _daxis_src = "baseline"
+        else:
+            daxis_eff = _resolve_daxis_shift(p, geo, wind, pole_pairs, geo_override,
+                                             n_sectors, progress_cb=progress_cb)
+            _daxis_src = "calibrated"
 
     # Imposed excitation (both drives) — simulation/drive.py.  One object carries
     # the electrical frame both the current and the voltage waveform live in, so
@@ -8538,6 +8670,9 @@ def fem_transient_sliding_band(
         # gamma sweep; it is one float, and it belongs in every payload.
         "daxis_deg": round(float(daxis_eff), 4),
         "daxis_source": _daxis_src,
+        # Optimizer candidates only (fix B): baseline reuse or own calibration,
+        # and why.  Absent on every other solve.
+        **({"daxis_policy": dict(_daxis_policy)} if _daxis_policy else {}),
         "gamma_effective_deg": round(float(gamma_deg), 4),
         "loss_model": _lm2,
         "demag_coef_per_tri": (_dcoef2.tolist() if _dcoef2 is not None else None),

@@ -497,9 +497,86 @@ def _store_eval(key: str, res: Dict[str, Any]) -> None:
 _load_eval_cache()   # warm the cache from disk so it survives a backend restart
 # Concurrent FEM subprocesses.  Each refine_proc is one process pinned to a
 # single core, so this is effectively "how many cores the optimizer uses".
-# Default to (physical cores − 2): use most of the box but leave ~2 cores for
-# the uvicorn event loop + the descent daemon thread, so /progress polling and
-# the live charts stay responsive.  Override with FEM_SCAN_WORKERS.
+#
+# RULE (fix C, 2026-09-24):  workers = min(8, max(2, physical_available − 2)).
+#   * physical_available = PHYSICAL cores this process may actually run on —
+#     its CPU affinity (a container's cpuset) mapped to distinct cores via
+#     sysfs, capped by a cgroup CPU quota.  SMT siblings do not count: a
+#     candidate is a memory-bound single-thread FEM solve, and two on one core
+#     share its caches and FPU.
+#   * − 2 keeps two cores for the uvicorn event loop, the descent daemon and
+#     the owner's interactive Simulation run (the previous rule's reserve).
+#   * ≤ 8: MEASURED throughput ceiling.  Ryzen AI 9 HX 370 (12 cores / 24
+#     threads, dual-channel LPDDR5x), one wave of new-geometry candidates, 1
+#     BLAS thread each: 8 workers 238 cand/h, 12 workers 208 (−12 %); with the
+#     A+B candidates 575 vs 560.  Past ~8 concurrent solves the shared L3 and
+#     the two memory channels are the limit, not the cores, and both machines
+#     this runs on (the workstation, the Hetzner AX42 8C/16T Ryzen 7 PRO
+#     8700GE) are dual-channel desktop platforms.  6 × 2 BLAS threads measured
+#     worse than either, so the pool stays one thread per child.
+#   Workstation → min(8, 12 − 2) = 8.  AX42 container (cpuset 0-11 = all 8
+#   cores, quota 12 CPUs) → min(8, 8 − 2) = 6.
+# FEM_SCAN_WORKERS overrides the rule.
+_SCAN_WORKERS_CAP = 8
+
+
+def _cgroup_cpu_quota() -> Optional[float]:
+    """CPUs granted by a cgroup quota (v2 ``cpu.max`` / v1 cfs), or None."""
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as fh:
+            q, per = fh.read().split()[:2]
+        if q != "max" and float(per) > 0:
+            return float(q) / float(per)
+        return None
+    except (OSError, ValueError):
+        pass
+    try:
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as fh:
+            q = float(fh.read().strip())
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as fh:
+            per = float(fh.read().strip())
+        return (q / per) if q > 0 and per > 0 else None
+    except (OSError, ValueError):
+        return None
+
+
+def _physical_cores_available() -> int:
+    """Physical cores this process may run on (affinity ∩ quota), ≥ 1."""
+    logical = os.cpu_count() or 8
+    n: Optional[int] = None
+    try:
+        allowed = sorted(os.sched_getaffinity(0))      # Linux only
+    except (AttributeError, OSError):
+        allowed = None
+    if allowed:
+        try:
+            cores = set()
+            for c in allowed:
+                base = "/sys/devices/system/cpu/cpu%d/topology/" % int(c)
+                with open(base + "core_id") as fh:
+                    core = fh.read().strip()
+                with open(base + "physical_package_id") as fh:
+                    pkg = fh.read().strip()
+                cores.add((pkg, core))
+            n = len(cores) or None
+        except OSError:
+            n = None
+        if n is None:                                   # no sysfs: SMT guess
+            n = len(allowed) // 2 if len(allowed) > 4 else len(allowed)
+    if n is None:
+        try:
+            import psutil as _ps
+            n = _ps.cpu_count(logical=False) or None
+        except Exception:                               # noqa: BLE001
+            n = None
+    if n is None:
+        n = logical // 2 if logical > 4 else logical    # SMT/HT → physical ≈ logical/2
+    q = _cgroup_cpu_quota()
+    if q:
+        n = min(n, max(1, int(q)))
+    return max(1, int(n))
+
+
 def _scan_worker_count() -> int:
     env = os.environ.get("FEM_SCAN_WORKERS")
     if env:
@@ -507,10 +584,8 @@ def _scan_worker_count() -> int:
             return max(1, int(env))
         except ValueError:
             pass
-    logical = os.cpu_count() or 8
-    physical = logical // 2 if logical > 4 else logical   # SMT/HT → physical ≈ logical/2
-    return max(2, physical - 2)
-_SCAN_WORKERS = _scan_worker_count()   # e.g. 10 on a 12-physical-core box
+    return min(_SCAN_WORKERS_CAP, max(2, _physical_cores_available() - 2))
+_SCAN_WORKERS = _scan_worker_count()   # 8 on the 12-core workstation, 6 on the AX42
 
 
 # ── Measured eval cost ───────────────────────────────────────────────────────
@@ -1011,12 +1086,20 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      owner: str = "",
                      threads: Optional[int] = None,
                      sampling_purpose: Literal["standard", "optimization"] =
-                     "optimization") -> Dict[str, Any]:
+                     "optimization",
+                     optimizer_candidate: bool = True) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
     ``steps`` frames over ``n_periods`` of the electrical period.  n_sectors=-1
-    = full disk (accurate ripple); 4 = ¼ sector (≈3× faster, for quick debug)."""
+    = full disk (accurate ripple); 4 = ¼ sector (≈3× faster, for quick debug).
+
+    ``optimizer_candidate`` (default True — every caller here is a sweep /
+    descent / CMA / auto / screen candidate): skip the ψ_PM probe and reuse the
+    run's baseline d-axis where the geometry change cannot move it (fixes A + B,
+    see refine_proc.run_one).  Only ``sampling_purpose="optimization"`` evals
+    are sent as candidates; a standard (final-validation / Apply) eval keeps
+    both probes and re-calibrates its own d-axis."""
     import subprocess, sys, json, os as _os
     if sampling_purpose not in ("standard", "optimization"):
         raise ValueError("invalid sampling_purpose")
@@ -1036,6 +1119,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        "iron_template": bool(iron_template),
                        "geo_mesh": bool(geo_mesh),
                        "element_order": int(element_order),
+                       "optimizer_candidate": bool(optimizer_candidate)
+                       and sampling_purpose == "optimization",
                        # DEMAG: omitted (None) = the candidate subprocess falls
                        # back to the active config's simulation.demag, exactly
                        # as before.  Passed, the caller's flag wins.

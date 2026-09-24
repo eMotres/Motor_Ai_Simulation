@@ -133,17 +133,28 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             demag: bool | None = None,
             magnet_temp_c: float | None = None,
             sampling_purpose: Literal["standard", "optimization"] =
-            "optimization") -> Dict[str, Any]:
+            "optimization",
+            optimizer_candidate: bool = False) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
     ``steps`` is the number of FEM frames actually computed; ``n_periods`` is the
     fraction of the electrical period swept.  For a cheap ripple-amplitude probe
     the scan uses n_periods=1/6 (one 6·k ripple cycle) with ~6 frames; a full
-    refine uses n_periods=1 with more frames."""
+    refine uses n_periods=1 with more frames.
+
+    ``optimizer_candidate`` (fixes A + B, 2026-09-24): the solve runs inside
+    ``fem_solver_2d.optimizer_candidate_scope`` — no ψ_PM no-load probe (its
+    Ld/Lq are not in this result) and the run's BASELINE d-axis instead of a
+    per-candidate calibration when the geometry change cannot move it.  Default
+    False = a standard solve with both probes, exactly as before; the result
+    says which d-axis was used (``daxis_source`` / ``daxis_policy``).  Only an
+    ``sampling_purpose="optimization"`` eval can be a candidate: a standard
+    (final-validation) eval always keeps both probes and re-calibrates."""
     import numpy as np, json
     if sampling_purpose not in ("standard", "optimization"):
         raise ValueError("invalid sampling_purpose")
+    optimizer_candidate = bool(optimizer_candidate) and sampling_purpose == "optimization"
     from motor_ai_sim.optimization.design_eval import build_params, _masses
     from motor_ai_sim.config import get_config
 
@@ -256,7 +267,12 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # call below cannot raise past the disarm — an in-process caller (tests)
     # gets the budget disarmed again either way.
     from motor_ai_sim.simulation import geo_mesh as _geo_mesh_mod
+    from motor_ai_sim.simulation import fem_solver_2d as _fs_cand
     _geo_mesh_mod.set_tri_budget(_MESH_TRI_BUDGET)
+    # Fixes A + B: the candidate scope covers exactly this solve.  Set/reset
+    # like the mesh budget beside it — the kernel seam catches every exception,
+    # so the reset below always runs.
+    _cand_tok = _fs_cand._OPT_CANDIDATE.set(bool(optimizer_candidate))
     _out = _kernel().run("solver.em_transient", {
         "n_steps_per_period": nspp, "n_periods": nper, "gamma_deg": float(gamma_deg),
         "sampling_purpose": sampling_purpose,
@@ -319,6 +335,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "component_mesh": json.dumps(cfg.get("mesh", {}).get("component_mesh") or {}),
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
+    _fs_cand._OPT_CANDIDATE.reset(_cand_tok)
     _geo_mesh_mod.set_tri_budget(None)
     # TWO failure carriers, and both must be read.  The kernel ENVELOPE's ok is
     # False only when the module itself threw (Kernel.run's fault isolation);
@@ -596,6 +613,16 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             "cogging_sampling_final_quality_sufficient"),
         "cogging_sampling_auto_raised": d.get("cogging_sampling_auto_raised"),
         "cogging_sampling_reason": d.get("cogging_sampling_reason"),
+        # ── WHICH D-AXIS AND WHICH PROBES (fixes A + B, 2026-09-24) ──────────
+        # "baseline" = the run's baseline calibration was reused (dimension-only
+        # change); "calibrated" = this geometry measured its own; "manual" = a
+        # pinned DAXIS.  `daxis_policy` says why, for candidates.
+        "optimizer_candidate": bool(optimizer_candidate),
+        "daxis_deg": d.get("daxis_deg"),
+        "daxis_source": d.get("daxis_source"),
+        "daxis_policy": d.get("daxis_policy"),
+        "psi_pm_probe_skipped": bool((d.get("summary") or {})
+                                     .get("psi_pm_probe_skipped", False)),
     }
 
 
@@ -626,7 +653,9 @@ if __name__ == "__main__":
                       connection=spec.get("connection"),
                       demag=spec.get("demag"),
                       magnet_temp_c=spec.get("magnet_temp_c"),
-                      sampling_purpose=spec.get("sampling_purpose", "optimization"))
+                      sampling_purpose=spec.get("sampling_purpose", "optimization"),
+                      optimizer_candidate=bool(spec.get("optimizer_candidate",
+                                                        False)))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

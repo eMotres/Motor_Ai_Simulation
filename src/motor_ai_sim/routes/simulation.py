@@ -5603,10 +5603,16 @@ def get_fem_transient(
             # staleness check compares against the panel input, and the mode
             # chip says which way the 180 went; the solver result keeps the
             # effective angle in gamma_effective_deg.
+            # Fix A: an optimizer candidate skips the ψ_PM probe — but only when
+            # this result is NOT persisted as the live machine (ledger / last
+            # transient), so a stored Simulation card never lacks its Ld/Lq.
+            from motor_ai_sim.simulation.fem_solver_2d import (
+                optimizer_candidate_active as _opt_cand)
             _sbres["summary"] = _build_transient_summary(
                 _sbres, I_phase_rms=_I_wind, gamma_deg=_gamma_panel,
                 coil_temp_c=coil_temp_c, geo_override=_geo_ov,
-                mode_requested=_mode_eff)
+                mode_requested=_mode_eff,
+                skip_psi_pm_probe=bool(_opt_cand() and not _is_live_machine))
             # The exact build args, stashed WITH the cached result: a cache hit
             # re-serves the summary as stored, so a summary-shape change (a new
             # derived quantity like Km or the rotor inertia) never reached any
@@ -6781,6 +6787,12 @@ def _build_transient_summary(
     mode_requested: Optional[str] = None,   # the mode the REQUEST asked for
                                             # (motor/generator) — op_mode below
                                             # is derived from the power sign
+    skip_psi_pm_probe: bool = False,        # fix A (2026-09-24): an optimizer
+                                            # candidate that is NOT the live
+                                            # machine skips the no-load ψ_PM
+                                            # solve — it only feeds chord Ld/Lq
+                                            # and the droop row, which
+                                            # refine_proc never reads
 ) -> dict:
     """Build the Simulation summary block (masses, loss split, KV, efficiency,
     specific torque/power) from a finished transient result dict.
@@ -7080,7 +7092,11 @@ def _build_transient_summary(
         _psid = sbres.get("psi_d_Wb"); _psiq = sbres.get("psi_q_Wb")
         _idm = sbres.get("i_d_A"); _iqm = sbres.get("i_q_A")
         _chk = sbres.get("dq_torque_check_pct")
-        if None in (_psid, _psiq, _idm, _iqm):
+        if skip_psi_pm_probe:
+            _dq_note = ("optimizer candidate: the no-load ψ_PM probe is "
+                        "skipped (Ld/Lq are not ranked) — run the design in "
+                        "Simulation for Ld/Lq")
+        elif None in (_psid, _psiq, _idm, _iqm):
             _dq_note = "run predates the dq stamp — re-run to compute Ld/Lq"
         elif _chk is None or _chk > 5.0:
             _dq_note = ("dq frame failed its torque self-check (%.1f%% vs the "
@@ -7334,6 +7350,7 @@ def _build_transient_summary(
                                 if _Ld_mH not in (None, 0) and _Lq_mH is not None
                                 else None),
         "dq_note": _dq_note,
+        "psi_pm_probe_skipped": bool(skip_psi_pm_probe),
         "T_em_avg_Nm": round(_Tavg, 3),
         "T_ripple_pct": _summary_ripple_pct(sbres.get("T_ripple_pct", 0.0)),
         "T_ripple_raw_pct": _summary_ripple_pct(sbres.get("T_ripple_raw_pct", 0.0)),

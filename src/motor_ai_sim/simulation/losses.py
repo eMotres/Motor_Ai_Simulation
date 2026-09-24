@@ -44,6 +44,7 @@ DEFAULT_STACKING_FACTOR = 0.97
 def harmonic_amplitudes(H: np.ndarray, f_elec_hz: float, n_periods: float,
                         wrap: Optional[dict] = None,
                         raw_amplitudes: Optional[list] = None,
+                        legacy_ramp: bool = True,
                         ) -> Tuple[np.ndarray, np.ndarray]:
     """(amplitudes, frequencies) of one field COMPONENT's per-element history.
 
@@ -98,14 +99,26 @@ def harmonic_amplitudes(H: np.ndarray, f_elec_hz: float, n_periods: float,
 
     ``wrap``, when a dict is passed, receives the measured jump statistics so
     the run can say which half it was talking about.
+
+    STATUS 2026-09-24: the ramp-removed amplitudes are a LEGACY DIAGNOSTIC.
+    Nothing selects them (``surface_loss_density`` bills the raw amplitudes,
+    ``raw_amplitudes``), and the rotor is now evaluated on a commensurate
+    window (``simulation/rotor_window.py``), which is the honest cure for the
+    leakage this guard used to hide. ``legacy_ramp=False`` skips the ramp
+    entirely and returns the raw amplitudes as the first element.
     """
     n = int(H.shape[0])
-    if raw_amplitudes is not None:
+    if raw_amplitudes is not None or not legacy_ramp:
         raw_C = np.fft.rfft(H, axis=0) / max(n, 1)
         raw_amp = 2.0 * np.abs(raw_C)
         if n % 2 == 0 and raw_amp.shape[0] > 1:
             raw_amp[-1] = np.abs(raw_C[-1])
-        raw_amplitudes.append(raw_amp[1:])
+        if raw_amplitudes is not None:
+            raw_amplitudes.append(raw_amp[1:])
+        if not legacy_ramp:
+            freqs = (np.arange(raw_amp.shape[0])
+                     * (float(f_elec_hz) / max(float(n_periods), 1e-9)))
+            return raw_amp[1:], freqs[1:]
     if n >= 4:
         jump = 3.0 * H[-1] - 3.0 * H[-2] + H[-3] - H[0]
         ptp = np.maximum(H.max(0) - H.min(0), 1e-12)
@@ -139,7 +152,8 @@ def surface_loss_density(
     fundamental_only: Optional[list] = None,
     wrap: Optional[dict] = None,
     raw_window_candidate: Optional[dict] = None,
-    select_raw_window: bool = False,
+    select_raw_window: bool = True,
+    legacy_comparator: bool = True,
 ) -> np.ndarray:
     """Per-element iron loss density [W/m³ of STEEL] from the measured surface.
 
@@ -172,47 +186,56 @@ def surface_loss_density(
 
     ``fundamental_only``, when a list is passed, receives the m = 1 term alone,
     so the harmonic content's contribution can be reported rather than assumed.
+
+    NO FILTER (owner, 2026-09-23/24): the returned density is ALWAYS the DFT of
+    the captured window as solved — no ramp removal, detrending, taper or
+    harmonic truncation. ``select_raw_window`` survives only as an assertion
+    (``False`` is refused). The legacy linear-ramp "leakage guard" of
+    ``harmonic_amplitudes`` is evaluated only as a DIAGNOSTIC comparator
+    (``legacy_comparator=True``) into ``raw_window_candidate`` — never selected,
+    never a fallback — and not at all on a window the caller declares closed
+    (``legacy_comparator=False``: the stator's one period and the rotor's
+    commensurate window), where it has nothing honest to say.
     """
-    if select_raw_window and raw_window_candidate is None:
-        raise ValueError("raw-window selection requires a candidate accumulator")
-    out = np.zeros(X.shape[1], float)
-    raw_out = np.zeros(X.shape[1], float)
-    fund = np.zeros(X.shape[1], float)
+    if not select_raw_window:
+        raise ValueError("the detrended (ramp-removed) surface loss is a "
+                         "diagnostic only and cannot be selected")
+    out = np.zeros(X.shape[1], float)          # legacy detrended (diagnostic)
+    raw_out = np.zeros(X.shape[1], float)      # selected: raw window DFT
     raw_fund = np.zeros(X.shape[1], float)
-    raw_excursion = excursion if select_raw_window else {}
-    legacy_excursion = {} if select_raw_window else excursion
+    legacy_excursion: dict = {}
     for H in (X, Y):
         raw_amp: list = []
         amp, freqs = harmonic_amplitudes(
-            H, f_elec_hz, n_periods, wrap,
-            raw_amplitudes=raw_amp if raw_window_candidate is not None else None)
+            H, f_elec_hz, n_periods, wrap if legacy_comparator else None,
+            raw_amplitudes=raw_amp, legacy_ramp=bool(legacy_comparator))
         for m in range(amp.shape[0]):
-            A = amp[m] * inv_kf
-            if A.size and float(A.max()) >= HARMONIC_FLOOR_T:
-                p = surface.w_per_m3(
-                    A, float(freqs[m]), legacy_excursion, weight)
-                out += p
+            raw_A = raw_amp[0][m] * inv_kf
+            if raw_A.size and float(raw_A.max()) >= HARMONIC_FLOOR_T:
+                raw_p = surface.w_per_m3(
+                    raw_A, float(freqs[m]), excursion, weight)
+                raw_out += raw_p
                 if m == 0:                 # m is 0-based over harmonics 1, 2, …
-                    fund += p
-            if raw_window_candidate is not None:
-                raw_A = raw_amp[0][m] * inv_kf
-                if raw_A.size and float(raw_A.max()) >= HARMONIC_FLOOR_T:
-                    raw_p = surface.w_per_m3(
-                        raw_A, float(freqs[m]), raw_excursion, weight)
-                    raw_out += raw_p
-                    if m == 0:
-                        raw_fund += raw_p
+                    raw_fund += raw_p
+            if legacy_comparator:
+                A = amp[m] * inv_kf
+                if A.size and float(A.max()) >= HARMONIC_FLOOR_T:
+                    # Separate envelope accounting: the diagnostic must not
+                    # touch the selected result's excursion log.
+                    out += surface.w_per_m3(
+                        A, float(freqs[m]), legacy_excursion, weight)
     if fundamental_only is not None:
-        fundamental_only.append(raw_fund if select_raw_window else fund)
+        fundamental_only.append(raw_fund)
     if raw_window_candidate is not None:
         raw_window_candidate["density"] = raw_out
-        raw_window_candidate["detrended_density"] = out
-        raw_window_candidate["raw_excursion"] = raw_excursion
-        raw_window_candidate["detrended_excursion"] = legacy_excursion
-        raw_window_candidate["legacy_wrap"] = wrap
-        raw_window_candidate["selected_candidate"] = (
-            "raw_window_unfiltered" if select_raw_window else "detrended_legacy")
-    return raw_out if select_raw_window else out
+        raw_window_candidate["detrended_density"] = (
+            out if legacy_comparator else None)
+        raw_window_candidate["raw_excursion"] = excursion
+        raw_window_candidate["detrended_excursion"] = (
+            legacy_excursion if legacy_comparator else None)
+        raw_window_candidate["legacy_wrap"] = wrap if legacy_comparator else None
+        raw_window_candidate["selected_candidate"] = "raw_window_unfiltered"
+    return raw_out
 
 
 def iron_loss_series(
@@ -228,8 +251,15 @@ def iron_loss_series(
     bertotti: Callable[[Any], Tuple[float, float, float]],
     terms: Optional[dict] = None,
     n_periods: float = 1.0,
+    closed_window: bool = False,
 ) -> Tuple[np.ndarray, float]:
     """Iron loss from a per-element B(t) history — measured surface, or Bertotti.
+
+    ``closed_window=True`` declares that the history is periodic over the
+    window (stator: one electrical period; rotor: the commensurate window built
+    by ``rotor_window``). Nothing is filtered either way; it only decides
+    whether the legacy detrended DIAGNOSTIC comparator is evaluated (open
+    windows only) — on a closed window it has nothing to report.
 
     TWO models, chosen by the RECORD (see MEASURED SURFACE below). The Bertotti
     form is described first because it is still the fallback, still what every
@@ -383,11 +413,12 @@ def iron_loss_series(
             X, Y, surface, inv_kf, f_elec_hz, n_periods,
             weight=vol_steel, excursion=exc, fundamental_only=fund,
             wrap=legacy_wrap, raw_window_candidate=raw_candidate,
-            select_raw_window=True)
+            select_raw_window=True, legacy_comparator=not closed_window)
         P_surf = float(np.sum(dens * vol_steel))
         P_surf_raw = float(np.sum(raw_candidate["density"] * vol_steel))
-        P_surf_detrended = float(np.sum(
-            raw_candidate["detrended_density"] * vol_steel))
+        P_surf_detrended = (
+            None if raw_candidate.get("detrended_density") is None
+            else float(np.sum(raw_candidate["detrended_density"] * vol_steel)))
         if P_surf_raw is not None and not np.isfinite(P_surf_raw):
             P_surf_raw = None
         P_fund = float(np.sum(fund[0] * vol_steel)) if fund else 0.0
@@ -431,8 +462,11 @@ def iron_loss_series(
                 "k_f": kf, "model": model,
                 "surface_W": P_surf, "fundamental_only_W": P_fund,
                 "bertotti_W": P_bert,
-                "legacy_wrap_jump_frac": legacy_wrap.get("frac", 0.0),
-                "legacy_wrap_guard_weight": legacy_wrap.get("weight", 0.0),
+                "window_closed": bool(closed_window),
+                **({} if closed_window else {
+                    "legacy_wrap_jump_frac": legacy_wrap.get("frac", 0.0),
+                    "legacy_wrap_guard_weight": legacy_wrap.get("weight", 0.0),
+                }),
                 "envelope_out_frac": (exc.get("w_out", 0.0)
                                       / max(exc.get("w_all", 0.0), 1e-30)),
                 **({
@@ -445,7 +479,7 @@ def iron_loss_series(
     if terms is not None:
         terms.update({"hysteresis_W": hyst, "excess_W": excess,
                       "eddy_W": float(np.mean(classical)), "k_f": kf,
-                      "model": model})
+                      "model": model, "window_closed": bool(closed_window)})
     return classical, hyst + excess
 
 
@@ -462,15 +496,18 @@ def _log_surface(material: Any, surface: Any, exc: dict, P_surf: float,
     frac = exc.get("w_out", 0.0) / max(exc.get("w_all", 0.0), 1e-30)
     head = ("core loss | %s: measured P(B,f) surface, %d points over %d "
             "frequency curves | %.4g W (selected raw-window harmonic sum), "
-            "%.4g W (legacy detrended candidate) | %.4g W (fundamental only, "
+            "%s | %.4g W (fundamental only, "
             "%+.1f %%) vs %.4g W (3-coefficient Bertotti, %+.1f %%)"
             % (getattr(material, "name", "?"), surface.n_points,
-               surface.f.size, P_surf, P_detrended, P_fund,
+               surface.f.size, P_surf,
+               ("closed window, no legacy comparator" if P_detrended is None
+                else "%.4g W (legacy detrended diagnostic)" % P_detrended),
+               P_fund,
                100.0 * (P_surf / max(P_fund, 1e-30) - 1.0), P_bert,
                100.0 * (P_surf / max(P_bert, 1e-30) - 1.0)))
     # These metrics describe the legacy detrended comparator only. The
     # selected raw-window candidate above is evaluated without ramp correction.
-    if wrap.get("weight", 0.0) > 0.02:
+    if P_detrended is not None and wrap.get("weight", 0.0) > 0.02:
         log.warning(
             "core loss | %s: raw-window harmonic sum selected; legacy "
             "detrending comparator %.4g W estimates a step of %.0f %% of "
@@ -808,6 +845,7 @@ def loss_density_map(
     P_cu_end_winding_W: float = 0.0,
     log_line: Optional[Callable[[str], None]] = None,
     n_periods: float = 1.0,
+    n_periods_rotor: Optional[float] = None,
 ) -> Tuple[np.ndarray, str, list]:
     """Per-element loss DENSITY (W/m³) for the Ansys-style spatial map.
 
@@ -890,7 +928,7 @@ def loss_density_map(
     # the reported watts, so this does not move the total — it moves the SPLIT
     # between stator and rotor whenever the two halves are different steels
     # (different k_f), which is exactly what the picture is read for.
-    def _iron_shape(hx, hy, idx, mat, qp=None):
+    def _iron_shape(hx, hy, idx, mat, qp=None, periods=n_periods):
         if (mat is None or idx.size == 0 or not np.size(hx)
                 or np.asarray(hx[0]).size == 0):
             return np.zeros(idx.size)
@@ -904,15 +942,20 @@ def loss_density_map(
             # this cannot move P_fe — it moves the stator/rotor split and the
             # tooth-vs-yoke contrast, which is what the map is read for, and
             # those DO change when a saturating tooth stops obeying B².
+            # Raw window DFT, as the reported watts (no legacy ramp).
             return kf * surface_loss_density(
                 np.asarray(hx, float), np.asarray(hy, float), surface,
-                1.0 / kf, f_elec_hz, n_periods)
+                1.0 / kf, f_elec_hz, periods, legacy_comparator=False)
         b2 = _bac2(hx, hy) / kf ** 2
         return kf * (kh * f_elec_hz * b2
                      + ke * f_elec_hz ** 1.5 * np.power(np.maximum(b2, 0.0), 0.75)
                      + (kc / TWO_PI_SQ) * _mean_sq_ddt(hx, hy, qp) / kf ** 2)
     _sh_is = _iron_shape(hist_sx, hist_sy, iron_s_idx, steel_s)
-    _sh_ir = _iron_shape(hist_rx, hist_ry, iron_r_idx, steel_r)
+    # The rotor history may be the COMMENSURATE window (several electrical
+    # periods, see rotor_window) — its own period count sets its frequencies.
+    _sh_ir = _iron_shape(hist_rx, hist_ry, iron_r_idx, steel_r,
+                         periods=(n_periods if n_periods_rotor is None
+                                  else n_periods_rotor))
     _integ_fe = ((float(np.sum(_sh_is * areas_s[iron_s_idx])) if iron_s_idx.size else 0.0)
                  + (float(np.sum(_sh_ir * areas_r[iron_r_idx])) if iron_r_idx.size else 0.0)
                  ) * stack_length_m * sector_scale

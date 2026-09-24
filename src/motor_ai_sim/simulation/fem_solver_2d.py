@@ -107,6 +107,9 @@ from motor_ai_sim.simulation.losses import (
     loss_density_map as _loss_density_map,
     magnet_segmentation as _magnet_segmentation,
 )
+from motor_ai_sim.simulation.rotor_window import (
+    commensurate_rotor_window as _commensurate_rotor_window,
+)
 from motor_ai_sim.simulation.sb_postproc import (
     drop_settling_frames as _drop_settling_frames,
     retained_window_metadata as _retained_window_metadata,
@@ -7542,21 +7545,91 @@ def fem_transient_sliding_band(
     _fe_terms_s: dict = {}
     _fe_terms_r: dict = {}
 
-    def _iron_p2(hx, hy, idx, areas_half, mat, terms=None):
+    def _iron_p2(hx, hy, idx, areas_half, mat, terms=None, periods=None,
+                 closed=False):
         # n_periods: the DFT behind the measured-surface path needs to know how
         # many electrical periods the captured window spans, or it puts every
         # harmonic at the wrong frequency.  n_total/n_periods are the TRIMMED
         # values here — the voltage settling and demag prefixes were already
-        # dropped above, and both were decremented with them.
+        # dropped above, and both were decremented with them.  The rotor's
+        # commensurate window passes its own (longer) period count.
         return _iron_loss_series(
-            hx, hy, idx, areas_half, mat, p.stack_length, f_elec, n_total,
+            hx, hy, idx, areas_half, mat, p.stack_length, f_elec,
+            (len(hx) if hx is not None and len(hx) else n_total),
             _central_difference(dt), _mat_lib.effective_bertotti, terms=terms,
-            n_periods=float(n_periods))
+            n_periods=float(n_periods if periods is None else periods),
+            closed_window=bool(closed))
 
+    # STATOR: one electrical period is a closed window by construction.
     _pcl_s, _ph_s = _iron_p2(_hsx2, _hsy2, _iron_s_idx, areas_s, _steel_s,
-                             _fe_terms_s)
-    _pcl_r, _ph_r = _iron_p2(_hrx2, _hry2, _iron_r_idx, areas_r, _steel_r,
-                             _fe_terms_r)
+                             _fe_terms_s, closed=True)
+    # ROTOR: a COMMENSURATE window (simulation/rotor_window.py). One electrical
+    # period is NOT closed for a rotor element (it slides a non-integer number
+    # of slot pitches), so its DFT / periodic dB/dt / peak-to-peak read the
+    # end-to-start step as broadband loss that grows with the step count. The
+    # exact cure costs no solve: the rotor-frame history over q windows is the
+    # solved window of the element's pole-pair images (stator-frame
+    # periodicity + the pole-pair periodic rotor mesh). No ramp, no detrend,
+    # no taper — the legacy detrended number survives only as a labelled
+    # diagnostic of the OLD open window, never selected, never a fallback.
+    _rw = {"closed": False, "q": 1, "method": "open_one_period_window",
+           "reason": "no rotor iron history"}
+    if _iron_r_idx.size and _hrx2:
+        try:
+            _rmsh = half["r"]["mesh"]
+            _rw = _commensurate_rotor_window(
+                _hrx2, _hry2, _rmsh.p[:, _rmsh.t].mean(axis=1), _iron_r_idx,
+                areas_r, pole_pairs=int(pole_pairs), n_sectors=int(NS),
+                bc_sign=int(_bc_sign), theta_rad=_theta_samples,
+                window_periods=float(n_periods))
+        except Exception as _rw_e:      # noqa: BLE001 — fall back, loudly
+            _rw = {"closed": False, "q": 1,
+                   "method": "open_one_period_window",
+                   "reason": "commensurate window failed: %s: %s"
+                             % (type(_rw_e).__name__, _rw_e)}
+    _fe_terms_r_open: dict = {}
+    if _rw.get("closed"):
+        _q_rw = int(_rw["q"])
+        _pcl_r_long, _ph_r = _iron_p2(
+            _rw["X"], _rw["Y"], _iron_r_idx, areas_r, _steel_r, _fe_terms_r,
+            periods=float(_rw["window_periods_total"]), closed=True)
+        _pcl_r_long = np.asarray(_pcl_r_long, float)
+        # Per-frame series: the instantaneous rotor classical loss at stator-
+        # frame time θ_j is the same sum over the whole rotor in each of the q
+        # chained windows (the image map is a bijection of the iron), so the
+        # q copies are averaged back onto the reported frames — exact, and it
+        # replaces the open window's wrong wrap-around dB/dt at j = 0, N−1.
+        _pcl_r = (_pcl_r_long.reshape(_q_rw, -1).mean(axis=0)
+                  if _pcl_r_long.size == _q_rw * int(n_total)
+                  else np.full(int(n_total), float(np.mean(_pcl_r_long))))
+        # DIAGNOSTIC ONLY: the one-period open window as c582449 (raw) and
+        # 68de0ca (legacy ramp-removed) billed it. Never selected. Skipped
+        # when the captured window was already commensurate (nothing open).
+        if _q_rw > 1:
+            _pcl_r_open, _ph_r_open = _iron_p2(
+                _hrx2, _hry2, _iron_r_idx, areas_r, _steel_r,
+                _fe_terms_r_open, closed=False)
+        else:
+            _pcl_r_open, _ph_r_open = _pcl_r, _ph_r
+        log.info("rotor iron | commensurate window: %s, %d x %d frames = %g "
+                 "electrical periods (observed rotor period %s T_e) | %.4g W "
+                 "vs open one-period window %.4g W (diagnostic)",
+                 _rw["method"], _q_rw, int(n_total),
+                 float(_rw["window_periods_total"]),
+                 _rw.get("observed_period_electrical"),
+                 (float(np.mean(_pcl_r)) + _ph_r) * NS,
+                 (float(np.mean(_pcl_r_open)) + _ph_r_open) * NS)
+    else:
+        log.warning("rotor iron | commensurate window NOT available (%s) — "
+                    "the raw one-period window is used (no filter); the rotor "
+                    "loss carries open-window leakage that grows with the "
+                    "step count", _rw.get("reason"))
+        _pcl_r, _ph_r = _iron_p2(_hrx2, _hry2, _iron_r_idx, areas_r, _steel_r,
+                                 _fe_terms_r, closed=False)
+        _pcl_r_open, _ph_r_open = _pcl_r, _ph_r
+        _fe_terms_r_open = _fe_terms_r
+    _P_fe_rotor_window = {
+        k: v for k, v in _rw.items() if k not in ("X", "Y")}
     _P_fe_t = (_pcl_s + _pcl_r) * NS + (_ph_s + _ph_r) * NS
     _P_fe_t = np.maximum(_P_fe_t, 0.0)
     P_fe_ser2 = _P_fe_t.tolist(); P_fe_avg2 = float(np.mean(_P_fe_t))
@@ -7590,24 +7663,52 @@ def fem_transient_sliding_band(
             if "surface_selected_candidate" in _tm:
                 _fe_row["surface_selected_candidate"] = _tm[
                     "surface_selected_candidate"]
-                _fe_row["legacy_wrap_jump_frac"] = float(
-                    _tm.get("legacy_wrap_jump_frac", 0.0))
-                _fe_row["legacy_wrap_guard_weight"] = float(
-                    _tm.get("legacy_wrap_guard_weight", 0.0))
+            _fe_row["window_closed"] = bool(_tm.get("window_closed", False))
+            if _half == "rotor":
+                _fe_row["window_electrical_periods"] = float(
+                    _rw.get("window_periods_total", n_periods)
+                    if _rw.get("closed") else n_periods)
+                _fe_row["window_method"] = _rw.get("method")
             _fe_break[_half] = _fe_row
+    # The OLD one-period rotor window, kept as a labelled DIAGNOSTIC (never
+    # selected, never a fallback): its raw total (what c582449 selected) and,
+    # for a measured-surface steel, its legacy ramp-removed total (what 68de0ca
+    # selected). Machine totals (× sectors).
+    _rot_open_raw_W = None
+    _rot_open_legacy_W = None
+    if _fe_terms_r_open:
+        _rot_open_raw_W = float((float(np.mean(_pcl_r_open)) + _ph_r_open) * NS)
+        if _fe_terms_r_open.get("surface_detrended_candidate_W") is not None:
+            _rot_open_legacy_W = float(
+                _fe_terms_r_open["surface_detrended_candidate_W"] * NS)
+    _rot_sel_W = float((float(np.mean(_pcl_r)) + _ph_r) * NS) \
+        if np.size(_pcl_r) else 0.0
+    P_fe_rotor_open_window_diag = {
+        "selected": False,
+        "note": ("DIAGNOSTIC ONLY — the rotor iron on the one-period OPEN "
+                 "window (not commensurate with slot passing). raw_W is what "
+                 "c582449 selected, legacy_detrended_W what 68de0ca selected "
+                 "(linear-ramp removal, a filter). Neither feeds any reported "
+                 "number."),
+        "raw_W": _rot_open_raw_W,
+        "legacy_detrended_W": _rot_open_legacy_W,
+        "legacy_wrap_guard_weight": (
+            _fe_terms_r_open.get("legacy_wrap_guard_weight")
+            if _fe_terms_r_open else None),
+        "commensurate_selected_W": _rot_sel_W,
+    }
     _has_surface_candidates = any(
         (_tm.get("surface_raw_window_candidate_W") is not None)
         for _tm in (_fe_terms_s, _fe_terms_r))
     if _has_surface_candidates:
-        _raw_surface_delta = sum(
-            (_tm["surface_raw_window_candidate_W"]
-             - _tm["surface_detrended_candidate_W"]) * NS
-            for _tm in (_fe_terms_s, _fe_terms_r)
-            if _tm.get("surface_raw_window_candidate_W") is not None
-            and _tm.get("surface_detrended_candidate_W") is not None)
-        # P_fe_avg2 already contains the selected raw-window surface values.
+        # P_fe_avg2 IS the unfiltered raw-window value (stator one period,
+        # rotor commensurate). The "detrended" total is the 68de0ca-style
+        # diagnostic: the same stator plus the rotor's legacy open-window
+        # detrended value — None when the rotor has no such comparator.
         P_fe_raw_window_candidate_avg2 = float(P_fe_avg2)
-        P_fe_detrended_candidate_avg2 = float(P_fe_avg2 - _raw_surface_delta)
+        P_fe_detrended_candidate_avg2 = (
+            None if _rot_open_legacy_W is None
+            else float(P_fe_avg2 - _rot_sel_W + _rot_open_legacy_W))
     else:
         P_fe_raw_window_candidate_avg2 = None
         P_fe_detrended_candidate_avg2 = None
@@ -7843,7 +7944,12 @@ def fem_transient_sliding_band(
              _snap2["loss_dens_unmodelled"]) = _loss_density_map(
                 n_stator_elems=int(Tts.shape[1]),
                 n_elems=int(mesh_all.t.shape[1]),
-                hist_sx=_hsx2, hist_sy=_hsy2, hist_rx=_hrx2, hist_ry=_hry2,
+                hist_sx=_hsx2, hist_sy=_hsy2,
+                # Rotor: the SAME commensurate window the watts came from.
+                hist_rx=(_rw["X"] if _rw.get("closed") else _hrx2),
+                hist_ry=(_rw["Y"] if _rw.get("closed") else _hry2),
+                n_periods_rotor=(float(_rw["window_periods_total"])
+                                 if _rw.get("closed") else None),
                 hist_mx=_hmx2, hist_my=_hmy2, hist_cx=_hcx2, hist_cy=_hcy2,
                 iron_s_idx=_iron_s_idx, iron_r_idx=_iron_r_idx,
                 mag_idx=_mag_idx, coil_idx=_coil_idx,
@@ -8643,6 +8749,11 @@ def fem_transient_sliding_band(
         "P_fe_detrended_candidate_avg_W": P_fe_detrended_candidate_avg2,
         "P_fe_surface_selected_candidate": (
             "raw_window_unfiltered" if _has_surface_candidates else None),
+        # How the ROTOR iron window was closed (rotor_window.py): method,
+        # q windows chained, total electrical periods, the rotor period read
+        # off the data, or — closed False — why the open window was kept.
+        "P_fe_rotor_window": _P_fe_rotor_window,
+        "P_fe_rotor_open_window_diagnostic": P_fe_rotor_open_window_diag,
         "P_loss_total_avg_W": round(float(P_loss_avg2), 3),
         "P_airgap_W": P_airgap_avg2, "P_mech_avg_W": P_mech_avg2,
         "P_elec_in_W": P_elec_in2,               # ⟨Σ v·i⟩ (0 at no-load)

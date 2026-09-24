@@ -52,10 +52,14 @@ def test_closed_window_raw_and_detrended_surface_candidates_are_equal():
         raw_window_candidate=raw)
 
     np.testing.assert_allclose(raw["density"], selected, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(raw["detrended_density"], selected,
+                               rtol=1e-12, atol=1e-12)
     assert selected_wrap["weight"] == 0.0
     assert selected_excursion["selected_evaluations"] > 0
+    # 2026-09-24: the legacy comparator keeps its OWN envelope log.
     assert all(value is None or value is selected_excursion
                or value is raw["raw_excursion"]
+               or value is raw["detrended_excursion"]
                for value in surface.excursion_calls)
 
 
@@ -81,10 +85,20 @@ def test_open_window_retains_unmodified_raw_dft_surface_candidate():
         candidate["density"], _raw_surface_density(X, surface),
         rtol=1e-13, atol=1e-13)
     assert wrap["weight"] > 0.9
-    assert not np.allclose(candidate["density"], selected)
+    # 2026-09-24 (orchestrator's held-item fix, owner: no filter may feed a
+    # selected value): the DEFAULT selection is the raw window; the ramp-removed
+    # density is only the labelled diagnostic beside it. This line used to
+    # assert that the default returned the detrended value.
+    np.testing.assert_allclose(candidate["density"], selected)
+    assert not np.allclose(candidate["density"], candidate["detrended_density"])
+    assert candidate["selected_candidate"] == "raw_window_unfiltered"
     assert all(value is None or value is selected_excursion
                or value is candidate["raw_excursion"]
+               or value is candidate["detrended_excursion"]
                for value in surface.excursion_calls)
+    with pytest.raises(ValueError, match="diagnostic only"):
+        losses.surface_loss_density(X, Y, surface, 1.0, 933.33, 1.0,
+                                    select_raw_window=False)
     selected_raw_candidate = {}
     raw_selected_excursion = {}
     selected_raw = losses.surface_loss_density(

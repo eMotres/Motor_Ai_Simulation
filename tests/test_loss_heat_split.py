@@ -119,7 +119,13 @@ class TestTheTwoSidesAddUpToTheWholeLoss:
         want = half["stator"] / (half["stator"] + half["rotor"])
         got = (float(summary["P_core_stator_W"])
                / max(float(summary["P_core_W"]), 1e-9))
-        assert got == pytest.approx(want, rel=2e-3), (half, got, want)
+        # The summary rounds P_core_stator_W to 0.1 W; on this ~4.6 W fixture
+        # that alone is up to ±0.05/4.6 ≈ 1.1 % of the ratio, so a 2e-3 bound
+        # only held by rounding luck (it broke when the rotor iron moved onto a
+        # commensurate window, 2026-09-24, with the split itself exact). The
+        # tolerance is the rounding half-step plus the old 2e-3.
+        tol = 0.05 / max(float(summary["P_core_W"]), 1e-9) + 2e-3 * want
+        assert got == pytest.approx(want, abs=tol), (half, got, want)
 
     def test_the_solid_terms_all_land_on_the_rotor(self, solved, summary):
         """Magnet + shaft + sleeve eddy — the loss map's own series, meaned the

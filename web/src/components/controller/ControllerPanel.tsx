@@ -17,8 +17,9 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Paper, Typography, Button, TextField, MenuItem, Divider,
-         CircularProgress, Alert, Chip, Tooltip, Checkbox,
+         CircularProgress, Alert, Chip, Tooltip, Checkbox, IconButton,
          FormControlLabel } from '@mui/material';
+import DeviceThermostatIcon from '@mui/icons-material/DeviceThermostat';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
 import DeviceCatalog from './DeviceCatalog';
@@ -31,9 +32,11 @@ import { useDieContext } from '../common/useDieContext';
 import { listDevices, getTopologies, solveController, getLast, postSchematic,
          polyline, fmt, pct, statusLine, getControllerSettings,
          saveControllerSettings, formStateFromSettings, settingsForSave,
-         controllerSolveBody, getResolvedPoint,
+         controllerSolveBody, getResolvedPoint, DEFAULT_CONTROLLER_FORM,
+         getCoolingFromThermal,
          type DeviceRow, type CoilRow, type ControllerResult,
-         type ControllerFormState, type ResolvedPoint } from './controllerApi';
+         type ControllerFormState, type ResolvedPoint,
+         type CoolingFromThermal } from './controllerApi';
 
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 const NUM = { width: 120, '& input': { fontSize: 12, py: 0.5 } } as const;
@@ -52,19 +55,20 @@ const ControllerPanel: React.FC = () => {
   const [coils, setCoils] = useState<CoilRow[]>([]);
   const [machine, setMachine] = useState<Record<string, any>>({});
 
-  const [topology, setTopology] = useState('one_3ph');
-  const [setSplit, setSetSplit] = useState('series_split');
-  const [hbMod, setHbMod] = useState('unipolar');
-  const [nPar, setNPar] = useState<Nullable>(4);
-  const [rg, setRg] = useState<Nullable>(2.3);
-  const [vgsOff, setVgsOff] = useState<Nullable>(0);
-  const [dead, setDead] = useState<Nullable>(0.5);
-  const [fsw, setFsw] = useState<Nullable>('');
-  const [vdc, setVdc] = useState<Nullable>('');
-  const [coolant, setCoolant] = useState('water_glycol_50');
-  const [flow, setFlow] = useState<Nullable>(8);
-  const [tin, setTin] = useState<Nullable>(65);
-  const [rtim, setRtim] = useState<Nullable>(0.03);
+  const [topology, setTopology] = useState(DEFAULT_CONTROLLER_FORM.topology);
+  const [setSplit, setSetSplit] = useState(DEFAULT_CONTROLLER_FORM.setSplit);
+  const [hbMod, setHbMod] = useState(DEFAULT_CONTROLLER_FORM.hbMod);
+  // Owner 2026-09-24: default 1, not 4 — see DEFAULT_CONTROLLER_FORM's own doc.
+  const [nPar, setNPar] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.nPar);
+  const [rg, setRg] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.rg);
+  const [vgsOff, setVgsOff] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.vgsOff);
+  const [dead, setDead] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.dead);
+  const [fsw, setFsw] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.fsw);
+  const [vdc, setVdc] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.vdc);
+  const [coolant, setCoolant] = useState(DEFAULT_CONTROLLER_FORM.coolant);
+  const [flow, setFlow] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.flow);
+  const [tin, setTin] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.tin);
+  const [rtim, setRtim] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.rtim);
   // Owner 2026-09-22 evening: "надо добавить воздушное охлаждение и скорость
   // ветра, как в термосимуляции" — the same liquid/forced-air/still-air
   // choice the thermal tab already offers for the housing, now for the
@@ -72,18 +76,18 @@ const ControllerPanel: React.FC = () => {
   // constants (air_speed_mps 5, t_ambient_c 40, fin_efficiency 0.75,
   // emissivity 0.9); the area itself is left blank so a fresh choice falls
   // back to the backend's stated "small finned heatsink" (40 cm^2/device).
-  const [coolingMode, setCoolingMode] = useState('liquid');
-  const [airSpeed, setAirSpeed] = useState<Nullable>(5);
-  const [tAmbient, setTAmbient] = useState<Nullable>(40);
-  const [areaBasis, setAreaBasis] = useState<'heatsink' | 'plate'>('heatsink');
-  const [areaCm2, setAreaCm2] = useState<Nullable>('');
-  const [finEff, setFinEff] = useState<Nullable>(0.75);
-  const [emissivity, setEmissivity] = useState<Nullable>(0.9);
-  const [mapping, setMapping] = useState<Record<number, string>>({});
+  const [coolingMode, setCoolingMode] = useState(DEFAULT_CONTROLLER_FORM.coolingMode);
+  const [airSpeed, setAirSpeed] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.airSpeed);
+  const [tAmbient, setTAmbient] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.tAmbient);
+  const [areaBasis, setAreaBasis] = useState<'heatsink' | 'plate'>(DEFAULT_CONTROLLER_FORM.areaBasis);
+  const [areaCm2, setAreaCm2] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.areaCm2);
+  const [finEff, setFinEff] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.finEff);
+  const [emissivity, setEmissivity] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.emissivity);
+  const [mapping, setMapping] = useState<Record<number, string>>(DEFAULT_CONTROLLER_FORM.mapping);
   /** Whether this controller is meant to feed its losses back into the
    * coupled EM/thermal loop — a SAVED setting; wiring it into the loop
    * itself belongs to that loop's own owner, not this tab. */
-  const [coupleWithEm, setCoupleWithEm] = useState(false);
+  const [coupleWithEm, setCoupleWithEm] = useState(DEFAULT_CONTROLLER_FORM.coupleWithEm);
   const [settingsErr, setSettingsErr] = useState<string | null>(null);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [switchCurrent, setSwitchCurrent] = useState<
@@ -147,15 +151,46 @@ const ControllerPanel: React.FC = () => {
   // already poll — no new plumbing, and it answers before the first Solve,
   // so a saved controller restores the moment the tab opens.
   const dieCtx = useDieContext();
+
+  // ── "Use thermal air cooling" (owner 2026-09-24) — pulls Mode/wind-speed/
+  // ambient off the loaded duty's own saved thermal record.  `thermalCool`
+  // is the chip's own snapshot: set by the button, cleared the moment the
+  // owner edits Mode / wind speed / ambient by hand, so the chip can never
+  // claim a source for a value it no longer describes.
+  const [thermalCool, setThermalCool] = useState<CoolingFromThermal | null>(null);
+  const [thermalCoolBusy, setThermalCoolBusy] = useState(false);
+  const [thermalCoolErr, setThermalCoolErr] = useState<string | null>(null);
+  const useThermalCooling = async () => {
+    setThermalCoolBusy(true); setThermalCoolErr(null);
+    try {
+      const r = await getCoolingFromThermal(dieCtx.die || undefined,
+                                            dieCtx.config || undefined);
+      setCoolingMode(r.mode);
+      if (r.air_speed_m_s != null) setAirSpeed(r.air_speed_m_s);
+      setTAmbient(r.ambient_C);
+      setThermalCool(r);
+    } catch (e) { setThermalCoolErr(String(e)); }
+    setThermalCoolBusy(false);
+  };
+  // Any HAND edit of Mode / wind speed / ambient invalidates the chip — it
+  // must never keep naming a source for a value the owner has since typed
+  // over (the same "editing clears the chip" rule the owner asked for).
+  const onCoolingModeChange = (v: string) => { setThermalCool(null); setCoolingMode(v); };
+  const onAirSpeedChange = (v: Nullable) => { setThermalCool(null); setAirSpeed(v); };
+  const onTAmbientChange = (v: Nullable) => { setThermalCool(null); setTAmbient(v); };
+
   useEffect(() => { void (async () => {
     if (!dieCtx.die || !dieCtx.config) return;
     try {
       const block = await getControllerSettings(dieCtx.die, dieCtx.config);
-      const fallback: ControllerFormState = { device, topology, setSplit, hbMod,
-        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
-        coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-        mapping, coupleWithEm };
-      const next = formStateFromSettings(block, fallback);
+      // The fallback for a missing/partial saved block is the tab's OWN
+      // stated defaults, never the panel's live state: this fires on every
+      // die/config CHANGE, and building it from `device, topology, nPar, …`
+      // instead used whatever a PREVIOUSLY loaded machine had left on
+      // screen — a never-configured machine silently inherited another
+      // machine's "Devices / switch" count (root cause of the 2026-09-24
+      // "keeps resetting to 4" report; see DEFAULT_CONTROLLER_FORM's doc).
+      const next = formStateFromSettings(block, DEFAULT_CONTROLLER_FORM);
       setDevice(next.device); setTopology(next.topology); setSetSplit(next.setSplit);
       setHbMod(next.hbMod); setNPar(next.nPar); setRg(next.rg); setVgsOff(next.vgsOff);
       setDead(next.dead); setFsw(next.fsw); setVdc(next.vdc); setCoolant(next.coolant);
@@ -165,6 +200,9 @@ const ControllerPanel: React.FC = () => {
       setAreaCm2(next.areaCm2); setFinEff(next.finEff); setEmissivity(next.emissivity);
       setMapping(next.mapping);
       setCoupleWithEm(next.coupleWithEm);
+      // A chip naming a DIFFERENT machine's thermal record must never
+      // survive a die/config switch.
+      setThermalCool(null); setThermalCoolErr(null);
       if (block && (block as any).saved_at) setSettingsSavedAt((block as any).saved_at);
     } catch { /* nothing saved yet, or the read failed — the tab's own defaults stand */ }
   })(); }, [dieCtx.die, dieCtx.config]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -418,9 +456,33 @@ const ControllerPanel: React.FC = () => {
               </Box>
             )}
             <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
-            <SectionLabel sx={{ mb: 0.5 }}>MOSFET cooling</SectionLabel>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <SectionLabel sx={{ mb: 0.5, flex: 1 }}>MOSFET cooling</SectionLabel>
+              <Tooltip title={dieCtx.active
+                ? 'Use thermal air cooling — copy the housing air mode, wind '
+                  + 'speed and ambient temperature off this duty\'s own saved '
+                  + 'Thermal simulation.'
+                : 'Load a configuration first — this reads that duty\'s own '
+                  + 'saved thermal record.'}>
+                <span>
+                  <IconButton size="small" disabled={!dieCtx.active || thermalCoolBusy}
+                    onClick={() => void useThermalCooling()} sx={{ p: 0.4 }}>
+                    {thermalCoolBusy ? <CircularProgress size={14} /> : <DeviceThermostatIcon sx={{ fontSize: 16 }} />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+            {thermalCoolErr && <Alert severity="error" sx={{ fontSize: 11.5, py: 0 }}
+              onClose={() => setThermalCoolErr(null)}>{thermalCoolErr}</Alert>}
+            {thermalCool && !thermalCoolErr && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Chip size="small" label={`from Thermal: ${thermalCool.air_speed_m_s != null
+                  ? `${fmt(thermalCool.air_speed_m_s, 1)} m/s · ` : ''}${fmt(thermalCool.ambient_C, 1)} °C`}
+                  sx={{ fontSize: 10, height: 20 }} />
+                <HelpTip title={thermalCool.source} />
+              </Box>)}
             <Row label="Mode" tip="Liquid coldplate, forced air (fan/slipstream) or still air (no fan) — the same three the thermal simulation offers for the housing, now for the device heatsink/plate.">
-              <TextField select size="small" value={coolingMode} onChange={e => setCoolingMode(e.target.value)}
+              <TextField select size="small" value={coolingMode} onChange={e => onCoolingModeChange(e.target.value)}
                 sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
                 <MenuItem value="liquid" sx={{ fontSize: 12 }}>liquid coldplate</MenuItem>
                 <MenuItem value="air_forced" sx={{ fontSize: 12 }}>air — forced</MenuItem>
@@ -441,10 +503,10 @@ const ControllerPanel: React.FC = () => {
             {coolingMode !== 'liquid' && (<>
               {coolingMode === 'air_forced' && (
                 <Row label="Wind speed" tip="Air speed over the device heatsink/plate — the same 'wind speed' input as the thermal simulation. Blank = 5 m/s." unit="m/s">
-                  <Num v={airSpeed} set={setAirSpeed} />
+                  <Num v={airSpeed} set={onAirSpeedChange} />
                 </Row>)}
               <Row label="Ambient" tip="Ambient air temperature — the bottom of the whole thermal stack in this mode. Blank = 40 °C." unit="°C">
-                <Num v={tAmbient} set={setTAmbient} />
+                <Num v={tAmbient} set={onTAmbientChange} />
               </Row>
               <Row label="Area basis" tip="A heatsink bolted to EACH device, or one PCB pad shared by every device on it.">
                 <TextField select size="small" value={areaBasis} onChange={e => setAreaBasis(e.target.value as 'heatsink' | 'plate')}

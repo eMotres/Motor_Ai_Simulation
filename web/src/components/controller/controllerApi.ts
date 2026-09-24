@@ -281,6 +281,39 @@ export interface ControllerFormState {
   coupleWithEm: boolean;
 }
 
+/**
+ * The tab's own defaults — what a brand-new session, or a configuration that
+ * has never saved a controller block, shows.  The ONE source of truth for
+ * both the panel's initial ``useState``s and the ``fallback`` argument
+ * ``formStateFromSettings`` restores an empty/partial saved block against.
+ *
+ * Owner 2026-09-24 (production, CIANO14/CIANO28 duties): "Devices / switch"
+ * kept showing 4 on a fresh machine and his own edited count would not
+ * stick.  Root cause was the panel building `fallback` from its OWN LIVE
+ * STATE at the moment ``dieCtx.die``/``dieCtx.config`` changed — on a
+ * configuration that had never saved a controller block, that fallback (and
+ * so the restored ``nPar``) was whatever the PREVIOUSLY loaded machine had
+ * left on screen, not this tab's stated default; the literal "4" the owner
+ * saw was simply the panel's original ``useState`` seed leaking the same
+ * way on first load.  A fallback built from a constant instead of from
+ * `useState` can never carry a different machine's value across a switch,
+ * and it can never regress to a stale seed either — see
+ * ``ControllerPanel``'s settings-loading effect, which now passes this
+ * object instead of assembling one from its own state variables.  The
+ * default itself: 1, not a guess at how many devices a real stack needs —
+ * the catalogue's own "Parallel" column already suggests a count per
+ * duty/topology (``suggested_parallel``), and a machine with no solved duty
+ * yet has no current to size against.
+ */
+export const DEFAULT_CONTROLLER_FORM: ControllerFormState = {
+  device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
+  nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
+  coolant: 'water_glycol_50', flow: 8, tin: 65, rtim: 0.03,
+  coolingMode: 'liquid', airSpeed: 5, tAmbient: 40, areaBasis: 'heatsink',
+  areaCm2: '', finEff: 0.75, emissivity: 0.9,
+  mapping: {}, coupleWithEm: false,
+};
+
 const toFormNumber = (v: number | null | undefined): NumOrBlank =>
   (v === null || v === undefined) ? '' : v;
 
@@ -549,6 +582,38 @@ export const getResolvedPoint = (die?: string, config?: string, duty?: string) =
   if (config) p.set('config', config);
   if (duty) p.set('duty', duty);
   return fetch(`${API}/api/controller/point?${p}`).then(j<ResolvedPoint>);
+};
+
+/* ── "Use thermal air cooling" — takes the MOSFET cooling's Mode/wind-speed/
+ * ambient fields off the loaded duty's own saved thermal record (owner
+ * 2026-09-24: "нужна кнопка, чтобы взять состояние обдува воздуха из
+ * термо-моделирования").  `GET /api/controller/cooling_from_thermal`. ── */
+
+export interface CoolingFromThermal {
+  die: string | null;
+  config: string | null;
+  duty: string | null;
+  /** ``"air_forced" | "air_still"`` — the two COOLING_MODES this can ever
+   * resolve to; a liquid/manual/no-air housing refuses instead (422). */
+  mode: 'air_forced' | 'air_still';
+  /** ``air_forced`` only — ``null`` for ``air_still`` (not applicable). */
+  air_speed_m_s: number | null;
+  ambient_C: number;
+  /** the thermal tab's OWN cooling_mode word ("air" | "robotics") this was
+   * mapped from — shown in the HelpTip beside the chip. */
+  thermal_cooling_mode: string;
+  source: string;
+}
+
+/** Throws with the route's own plain-English refusal (no thermal state /
+ * liquid-only / manual h / no air path / missing air speed) on a 422 — the
+ * button's caller shows it exactly like any other Controller tab error. */
+export const getCoolingFromThermal = (die?: string, config?: string, duty?: string) => {
+  const p = new URLSearchParams();
+  if (die) p.set('die', die);
+  if (config) p.set('config', config);
+  if (duty) p.set('duty', duty);
+  return fetch(`${API}/api/controller/cooling_from_thermal?${p}`).then(j<CoolingFromThermal>);
 };
 
 /** One electrical period as an SVG polyline, scaled to its own axis. */

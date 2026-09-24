@@ -185,9 +185,13 @@ function settingsForSave(s) {
   };
 }
 
+// Verbatim copy of controllerApi.ts's DEFAULT_CONTROLLER_FORM (owner
+// 2026-09-24: the default is 1, not a guess at how many devices a real
+// stack needs — see that constant's own doc for the "resets to 4" bug this
+// fixed).
 const DEFAULT_FORM = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
-  nPar: 4, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
+  nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
   coolant: 'water_glycol_50', flow: 8, tin: 65, rtim: 0.03,
   coolingMode: 'liquid', airSpeed: 5, tAmbient: 40, areaBasis: 'heatsink',
   areaCm2: '', finEff: 0.75, emissivity: 0.9,
@@ -629,6 +633,146 @@ test('ActiveFamilyStrip checks the controller mirror against BOTH the '
     'must check the PRE-rename name the mirror was actually tagged with');
   assert.ok(block.includes('controllerMirrorApplies(mirrored, tDie, cfgName)'),
     'must also check the POST-rename name (an edit made after the rename)');
+});
+
+/* ── "Devices / switch" default + survives a machine switch (owner
+ * 2026-09-24, CIANO14/CIANO28 duties): "keeps resetting to 4" and "his value
+ * must stick".  Root cause: ControllerPanel built the `fallback` argument to
+ * `formStateFromSettings` from its OWN LIVE STATE at the moment
+ * `dieCtx.die`/`dieCtx.config` changed — so a configuration that had never
+ * saved a controller block silently inherited whatever a PREVIOUSLY loaded
+ * machine had left in `nPar` (or, on first load ever, the panel's original
+ * `useState` seed of 4).  Fixed by introducing `DEFAULT_CONTROLLER_FORM`, a
+ * module-level constant (nPar: 1) used for BOTH the panel's initial
+ * `useState`s and that `fallback` — neither can drift from the other, and
+ * neither can carry a different machine's edits across a switch.
+ * ControllerPanel.tsx / controllerApi.ts both import.meta.env, so this is
+ * source-checked rather than re-implemented, the same way the
+ * ActiveFamilyStrip test above is. */
+test('DEFAULT_CONTROLLER_FORM (controllerApi.ts) defaults devices/switch to '
+   + '1, not 4', () => {
+  const src = readFileSync(join(HERE, '..', 'controllerApi.ts'), 'utf8');
+  const start = src.indexOf('export const DEFAULT_CONTROLLER_FORM');
+  assert.ok(start > 0, 'DEFAULT_CONTROLLER_FORM must exist');
+  const end = src.indexOf('};', start);
+  const block = src.slice(start, end);
+  assert.ok(/nPar:\s*1\b/.test(block),
+    'the shipped default for "Devices / switch" must be 1');
+});
+
+test('ControllerPanel seeds "Devices / switch" from DEFAULT_CONTROLLER_FORM, '
+   + 'never a bare literal', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  assert.ok(src.includes("useState<Nullable>(DEFAULT_CONTROLLER_FORM.nPar)"),
+    'nPar must be seeded from the shared default, not an inline number');
+  assert.ok(!/useState<Nullable>\(4\)/.test(src),
+    'no state may be seeded with the old hardcoded default of 4');
+});
+
+test('ControllerPanel restores a saved/missing controller block against '
+   + 'DEFAULT_CONTROLLER_FORM, never against its own live state (the cross- '
+   + 'machine leak)', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  const start = src.indexOf('const block = await getControllerSettings(');
+  assert.ok(start > 0, 'the settings-loading effect must exist');
+  const end = src.indexOf('setDevice(next.device)', start);
+  const block = src.slice(start, end);
+  assert.ok(block.includes('formStateFromSettings(block, DEFAULT_CONTROLLER_FORM)'),
+    'the fallback for an empty/partial saved block must be the shared '
+    + 'default constant, never an object assembled from live `useState`s '
+    + '(that object silently carries a different machine\'s edits across '
+    + 'a die/config switch)');
+});
+
+test('a saved devices-per-switch count survives round-tripping through the '
+   + 'shared default fallback, even when "contaminated" state differs', () => {
+  // Simulates the exact bug: some OTHER machine left nPar at 6 in the
+  // panel's live state; this (different) machine has genuinely saved 1.
+  // Restoring against the hard default must ignore the contamination either
+  // way — the saved value wins, and a machine with nothing saved shows the
+  // stated default, never the leftover 6.
+  const savedBlock = { device: 'IMCQ120R004M2H', topology: 'one_3ph',
+    devices_parallel: 1 };
+  const contaminatedLiveState = { ...DEFAULT_FORM, nPar: 6 };
+  const restored = formStateFromSettings(savedBlock, contaminatedLiveState);
+  assert.equal(restored.nPar, 1, 'the saved count must win over live state');
+
+  const freshMachineRestored = formStateFromSettings({}, DEFAULT_FORM);
+  assert.equal(freshMachineRestored.nPar, DEFAULT_FORM.nPar,
+    'a never-configured machine must show the DEFAULT, never a leftover '
+    + 'value from whatever machine was loaded before it');
+});
+
+/* ── "Use thermal air cooling" button (owner 2026-09-24): "нужна кнопка,
+ * чтобы взять состояние обдува воздуха из термо-моделирования" — the
+ * MOSFET cooling's Mode/wind-speed/ambient fields, filled from
+ * `GET /api/controller/cooling_from_thermal`.  ControllerPanel.tsx imports
+ * import.meta.env and JSX, so this is source-checked (not re-implemented),
+ * the same way the ActiveFamilyStrip / DEFAULT_CONTROLLER_FORM tests above
+ * are. */
+test('the thermal-cooling button fills Mode/wind-speed/ambient from the '
+   + 'response and keeps the chip\'s own source snapshot', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  const start = src.indexOf('const useThermalCooling = async () => {');
+  assert.ok(start > 0, 'the button\'s handler must exist');
+  const end = src.indexOf('};', start);
+  const block = src.slice(start, end);
+  assert.ok(block.includes('getCoolingFromThermal('),
+    'must call the GET /api/controller/cooling_from_thermal wrapper');
+  assert.ok(block.includes('setCoolingMode(r.mode)'),
+    'must switch Mode to whatever the thermal record resolved to '
+    + '(air_forced or air_still)');
+  assert.ok(block.includes('setAirSpeed(r.air_speed_m_s)'),
+    'must fill the wind-speed field (air_forced only — the response is '
+    + 'null for air_still, and the guard above it must skip the field then)');
+  assert.ok(block.includes('setTAmbient(r.ambient_C)'),
+    'must fill the ambient field');
+  assert.ok(block.includes('setThermalCool(r)'),
+    'must keep the response so the chip can show its source');
+});
+
+test('editing Mode, wind speed or ambient by hand clears the thermal-'
+   + 'cooling chip — it must never keep naming a source for a value the '
+   + 'owner has since typed over', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  for (const fn of ['onCoolingModeChange', 'onAirSpeedChange', 'onTAmbientChange']) {
+    const start = src.indexOf(`const ${fn} = (`);
+    assert.ok(start > 0, `${fn} must exist`);
+    const end = src.indexOf(';', start);
+    assert.ok(src.slice(start, end).includes('setThermalCool(null)'),
+      `${fn} must clear the chip before applying the edit`);
+  }
+  // …and the three fields must actually be wired to these wrappers, not the
+  // bare setters, or the clear-on-edit rule above is dead code.
+  assert.ok(src.includes('onChange={e => onCoolingModeChange(e.target.value)}'),
+    'the Mode select must go through onCoolingModeChange');
+  assert.ok(src.includes('<Num v={airSpeed} set={onAirSpeedChange} />'),
+    'the Wind speed field must go through onAirSpeedChange');
+  assert.ok(src.includes('<Num v={tAmbient} set={onTAmbientChange} />'),
+    'the Ambient field must go through onTAmbientChange');
+});
+
+test('switching to a different machine/config clears the thermal-cooling '
+   + 'chip — it must never keep naming a source that belongs to a '
+   + 'DIFFERENT machine', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  const start = src.indexOf('const block = await getControllerSettings(');
+  const end = src.indexOf('}, [dieCtx.die, dieCtx.config]);', start);
+  assert.ok(start > 0 && end > start, 'the settings-loading effect must exist');
+  const settingsEffect = src.slice(start, end);
+  assert.ok(settingsEffect.includes('setThermalCool(null)'),
+    'a die/config change must clear the chip along with every other field');
+});
+
+test('the thermal-cooling button is disabled without an active die (it '
+   + 'reads THAT duty\'s own saved thermal record)', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  const start = src.indexOf('onClick={() => void useThermalCooling()}');
+  assert.ok(start > 0, 'the button must exist');
+  const iconButtonStart = src.lastIndexOf('<IconButton', start);
+  const block = src.slice(iconButtonStart, start);
+  assert.ok(block.includes('disabled={!dieCtx.active'),
+    'must be disabled while no configuration is loaded');
 });
 
 /* ── statusLine ──────────────────────────────────────────────────────────── */

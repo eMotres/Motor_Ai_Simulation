@@ -366,6 +366,110 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
 
 
 # ---------------------------------------------------------------------------
+# The MOSFET cooling's "take it from Thermal" button
+# ---------------------------------------------------------------------------
+
+#: The thermal tab's own housing ``cooling_mode`` vocabulary that HAS an air
+#: path this module can copy, mapped onto this module's own two air modes
+#: (``inverter.losses.COOLING_MODES``).  ``"air"`` is the thermal
+#: simulation's forced-convection housing film (a fan/slipstream,
+#: ``air_speed_mps`` a real number); ``"robotics"`` is its still-air housing
+#: film (Churchill-Chu natural convection + radiation) — the same physics
+#: this module's own "air — still" mode models for the device heatsink.
+#: ``"liquid"`` (a jacket), ``"manual"`` (an arbitrary h with no speed/
+#: correlation behind it) and ``"none"``/``""`` (the outer surface not
+#: modelled in air at all) have no air state to copy, and the resolver
+#: refuses by name rather than guessing.
+_THERMAL_AIR_MODES = {"air": "air_forced", "robotics": "air_still"}
+
+
+def _cooling_from_thermal(die: Optional[str], cfg: Optional[str],
+                          duty: Optional[str]) -> Dict[str, Any]:
+    """The Controller tab's "take it from Thermal" button — the loaded
+    duty's OWN saved thermal record's housing air state, read back exactly
+    the way :func:`_duty_defaults` reads the coupled record's electrical
+    point: never ``motor_config.yaml``, never a live re-solve (this module
+    never starts a field solve — see the module docstring's SOLVER
+    ISOLATION rule), only whatever the Thermal tab last saved for THIS duty.
+
+    Owner 2026-09-24: *"nuzhna knopka, chtoby vzyat' sostoyanie obduva
+    vozdukha iz termo-modelirovaniya"* — the MOSFET cooling's Mode/wind-
+    speed/ambient fields, filled from the SAME housing boundary condition
+    the thermal solve used, not retyped by hand and not silently out of
+    step with it.
+
+    Returns ``{mode, air_speed_m_s, ambient_C, source, thermal_cooling_mode}``
+    on success.  Refuses (422) when the duty has no saved thermal record at
+    all, or when its housing cooling has no AIR path to copy (liquid
+    jacket, a manual h, or no outer-surface model) — see
+    ``_THERMAL_AIR_MODES``.
+    """
+    if not (die and cfg and duty):
+        ctx = _DR.active_context()
+        if not ctx:
+            raise _refuse(
+                "no configuration is loaded — open the machine this "
+                "controller belongs to first", code="no_context")
+        die, cfg, duty = ctx
+    die, cfg, duty = str(die), str(cfg), str(duty)
+    try:
+        node = (_DR.get(die, cfg) or {}).get(duty) or {}
+    except Exception:                                       # noqa: BLE001
+        node = {}
+    thermal = node.get("thermal") if isinstance(node, dict) else None
+    if not isinstance(thermal, dict) or not thermal:
+        raise _refuse(
+            f"'{duty}' has no saved thermal state — run the Thermal "
+            "simulation for this duty first, then press this button again",
+            code="no_thermal_state")
+
+    point = thermal.get("point") if isinstance(thermal.get("point"), dict) else {}
+    cooling = thermal.get("cooling") if isinstance(thermal.get("cooling"), dict) else {}
+    outer = cooling.get("outer") if isinstance(cooling.get("outer"), dict) else {}
+
+    raw_mode = str(point.get("cooling_mode") or outer.get("mode") or "").strip().lower()
+    ctrl_mode = _THERMAL_AIR_MODES.get(raw_mode)
+    if ctrl_mode is None:
+        why = {"liquid": "the housing is liquid-cooled (a jacket) in the "
+                          "thermal simulation — no air state to copy",
+               "manual": "the thermal simulation used a manual h for the "
+                         "housing (no air-speed correlation behind it) — "
+                         "no air state to copy",
+               "none": "the thermal simulation's outer surface is not "
+                       "modelled in air at all (cooling_mode=none) — no "
+                       "air state to copy"}.get(
+            raw_mode, f"the thermal simulation's housing cooling_mode "
+                      f"({raw_mode or 'unset'}) has no air path this module "
+                      "can copy")
+        raise _refuse(f"'{duty}': {why}", code="no_air_path")
+
+    air_speed = _num(outer.get("air_speed_mps"))
+    ambient = _num(point.get("ambient_temp"))
+    if ambient is None:
+        raise _refuse(
+            f"'{duty}': its thermal record carries no ambient temperature "
+            "to copy", code="incomplete_thermal_state")
+    if ctrl_mode == "air_forced" and (air_speed is None or air_speed <= 0):
+        raise _refuse(
+            f"'{duty}': its thermal record carries no housing air speed to "
+            "copy (air_speed_mps missing or zero)",
+            code="incomplete_thermal_state")
+
+    computed_at = thermal.get("computed_at")
+    when = f", computed {computed_at}" if computed_at else ""
+    source = (f"the duty's saved thermal record ('{duty}'), housing "
+             f"cooling_mode={raw_mode}{when}")
+    return {
+        "die": die, "config": cfg, "duty": duty,
+        "mode": ctrl_mode,
+        "air_speed_m_s": air_speed if ctrl_mode == "air_forced" else None,
+        "ambient_C": ambient,
+        "thermal_cooling_mode": raw_mode,
+        "source": source,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Devices
 # ---------------------------------------------------------------------------
 
@@ -649,6 +753,15 @@ def get_resolved_point(die: Optional[str] = Query(None), config: Optional[str] =
             "i_phase_rms_A": i_ph, "p_ac_W": p_ac, "v_dc_V": v_dc,
             "f_carrier_hz": f_sw, "star_delta": sd, "modulation_index": m,
             "power_factor": pf, "rpm": rpm, "sources": sources, "line": line}
+
+
+@router.get("/cooling_from_thermal")
+def get_cooling_from_thermal(die: Optional[str] = Query(None),
+                             config: Optional[str] = Query(None),
+                             duty: Optional[str] = Query(None)) -> Dict[str, Any]:
+    """The "Use thermal air cooling" button — see
+    :func:`_cooling_from_thermal`."""
+    return _cooling_from_thermal(die, config, duty)
 
 
 @router.post("/schematic")

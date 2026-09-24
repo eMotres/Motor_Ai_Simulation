@@ -1437,6 +1437,114 @@ def test_route_add_device_validates(synth_dir):
     assert ok.status_code == 200 and ok.json()["ok"] is True
 
 
+# ---------------------------------------------------------------------------
+# "Use thermal air cooling" — the MOSFET cooling button that takes the
+# housing air state off the duty's OWN saved thermal record (owner
+# 2026-09-24: "nuzhna knopka, chtoby vzyat' sostoyanie obduva vozdukha iz
+# termo-modelirovaniya").  Uses the same ``_patch_duty``/``_DIE``/``_CFG``/
+# ``_DUTY`` fixtures the p_ac_W resolver tests above already exercise.
+# ---------------------------------------------------------------------------
+
+def _cooling_client():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.routes import controller as rc
+    app = FastAPI(); app.include_router(rc.router)
+    return TestClient(app)
+
+
+def _get_cooling_from_thermal(c):
+    return c.get("/api/controller/cooling_from_thermal",
+                 params={"die": _DIE, "config": _CFG, "duty": _DUTY})
+
+
+def test_cooling_from_thermal_reads_the_forced_air_housing_state(monkeypatch):
+    node = {"thermal": {
+        "computed_at": "2026-09-24T10:00:00",
+        "point": {"cooling_mode": "air", "ambient_temp": 30.9},
+        "cooling": {"outer": {"mode": "air", "air_speed_mps": 12.0}},
+    }}
+    _patch_duty(monkeypatch, node)
+    r = _get_cooling_from_thermal(_cooling_client())
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["mode"] == "air_forced"
+    assert out["air_speed_m_s"] == pytest.approx(12.0)
+    assert out["ambient_C"] == pytest.approx(30.9)
+    assert out["thermal_cooling_mode"] == "air"
+    assert _DUTY in out["source"]
+    assert "2026-09-24T10:00:00" in out["source"]
+
+
+def test_cooling_from_thermal_reads_the_still_air_robotics_housing_state(monkeypatch):
+    node = {"thermal": {
+        "point": {"cooling_mode": "robotics", "ambient_temp": 25.0},
+        "cooling": {"outer": {"mode": "robotics"}},
+    }}
+    _patch_duty(monkeypatch, node)
+    r = _get_cooling_from_thermal(_cooling_client())
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["mode"] == "air_still"
+    assert out["air_speed_m_s"] is None
+    assert out["ambient_C"] == pytest.approx(25.0)
+    assert out["thermal_cooling_mode"] == "robotics"
+
+
+def test_cooling_from_thermal_refuses_a_liquid_only_housing(monkeypatch):
+    node = {"thermal": {
+        "point": {"cooling_mode": "liquid", "ambient_temp": 25.0},
+        "cooling": {"outer": {"mode": "liquid"}},
+    }}
+    _patch_duty(monkeypatch, node)
+    r = _get_cooling_from_thermal(_cooling_client())
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "no_air_path"
+    assert "liquid" in detail["message"]
+
+
+def test_cooling_from_thermal_refuses_a_manual_h_housing(monkeypatch):
+    node = {"thermal": {
+        "point": {"cooling_mode": "manual", "ambient_temp": 25.0, "h_conv": 15.0},
+    }}
+    _patch_duty(monkeypatch, node)
+    r = _get_cooling_from_thermal(_cooling_client())
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["error"] == "no_air_path"
+
+
+def test_cooling_from_thermal_refuses_with_no_thermal_state_at_all(monkeypatch):
+    _patch_duty(monkeypatch, {})   # a coupled-only duty node, no "thermal" key
+    r = _get_cooling_from_thermal(_cooling_client())
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "no_thermal_state"
+    assert "Thermal simulation" in detail["message"]
+
+
+def test_cooling_from_thermal_refuses_a_missing_air_speed(monkeypatch):
+    node = {"thermal": {
+        "point": {"cooling_mode": "air", "ambient_temp": 25.0},
+        "cooling": {"outer": {"mode": "air"}},   # no air_speed_mps recorded
+    }}
+    _patch_duty(monkeypatch, node)
+    r = _get_cooling_from_thermal(_cooling_client())
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"]["error"] == "incomplete_thermal_state"
+
+
+def test_cooling_from_thermal_source_names_the_duty_and_the_cooling_mode(monkeypatch):
+    node = {"thermal": {
+        "point": {"cooling_mode": "air", "ambient_temp": 30.9},
+        "cooling": {"outer": {"mode": "air", "air_speed_mps": 12.0}},
+    }}
+    _patch_duty(monkeypatch, node)
+    out = _get_cooling_from_thermal(_cooling_client()).json()
+    assert "cooling_mode=air" in out["source"]
+    assert out["die"] == _DIE and out["config"] == _CFG and out["duty"] == _DUTY
+
+
 def test_duty_record_is_compact_and_drops_the_waveform(synth_dir):
     from motor_ai_sim import duty_results as dr
     out = lo.solve_controller(_synth_request())

@@ -1623,7 +1623,8 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
                            mat_ov, rotor_angle0_deg=0.0, rpm=None,
                            n_parallel=None, connection=None,
                            excitation="", magnet_temp_c=None,
-                           sampling_purpose: Literal["standard", "optimization"] =
+                           sampling_purpose: Literal["standard", "optimization",
+                                                     "cogging_quality"] =
                            "standard") -> "OrderedDict":
     """The snapshot key as NAMED fields, in key order.
 
@@ -4217,8 +4218,11 @@ def _mark_equivalent_star(sbres: Dict, *, v_bus_real: float,
                          "drive", "n_sectors", "demag", "rotor_eddy"))
 def get_fem_transient(
     n_steps_per_period:  int   = 60,   # FEM solves per electrical period
-    sampling_purpose: Literal["standard", "optimization"] = "standard",
-    n_periods:           float = 1.0,  # how many electrical periods to sim
+    # "cogging_quality" = opt-in >= 6 raw samples per cogging cycle (the
+    # dedicated cogging run); standard/optimization keep the requested steps.
+    sampling_purpose: Literal["standard", "optimization",
+                              "cogging_quality"] = "standard",
+    n_periods:          float = 1.0,  # how many electrical periods to sim
     gamma_deg:           float = 0.0,
     I_phase_rms:         float = 85.0,
     rpm:       Optional[float] = None,    # ← MECHANICAL SPEED [rpm].  Omitted (the UI's
@@ -4459,7 +4463,7 @@ def get_fem_transient(
     _route_kwargs = dict(locals())
     _route_kwargs.pop("_np", None)
     if type(sampling_purpose) is not str or sampling_purpose not in (
-            "standard", "optimization"):
+            "standard", "optimization", "cogging_quality"):
         raise HTTPException(status_code=422, detail="invalid sampling_purpose")
 
     # Per-request materials via the KERNEL path: same parse/validate/set as
@@ -5910,6 +5914,8 @@ def _bench_compute(geo_ov: Optional[dict], conn: str,
                   coil_temp_c=120.0, rotor_eddy=False, iron_template=True,
                   structured_gap=True, geo_mesh=True, element_order=2,
                   geo_override=geo_ov,
+                  # Bench probe (ψ sampler): exempt from the cogging policy.
+                  sampling_purpose="internal_probe",
                   **({} if not conn else {"connection": conn}))
     _t0 = _t2.time()
     # q-probe (γ = 0 → current on q).  daxis auto-calibrates (cached per

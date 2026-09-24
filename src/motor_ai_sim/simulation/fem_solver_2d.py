@@ -454,6 +454,9 @@ def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
         coil_temp_c=120.0, rotor_eddy=False, iron_template=True,
         structured_gap=True, geo_mesh=True, geo_override=geo_override,
         element_order=2, daxis_deg=float(daxis_deg), progress_cb=progress_cb,
+        # ψ sampler, not a cogging run: 6 frames, never raised (8997bb3 made
+        # this probe 96/120 frames — +50–70 s per new geometry).
+        sampling_purpose="internal_probe",
         # The same connection the LOADED run used — psi scales with n_series.
         **({} if not _conn_pm else {"connection": _conn_pm}))
     if not cal.get("picard_converged", False):
@@ -545,6 +548,7 @@ def noload_incremental_ldq(geo, wind, pole_pairs, daxis_deg,
         rotor_eddy=False, iron_template=True, structured_gap=True,
         geo_mesh=True, geo_override=geo_override, element_order=2,
         daxis_deg=float(daxis_deg), progress_cb=progress_cb, inc_ldq=True,
+        sampling_purpose="internal_probe",      # Ld/Lq probe: never raised
         **({} if not _conn else {"connection": _conn}))
     if not cal.get("picard_converged", False):
         raise RuntimeError("no-load Ld/Lq solve did not converge — an "
@@ -783,7 +787,9 @@ def _calibrate_daxis(p, geo, wind, pole_pairs, geo_override, n_sectors,
             n_sectors=_cal_ns if _cal_ns >= 2 else -1,
             coil_temp_c=120.0, rotor_eddy=False,
             iron_template=True, structured_gap=True, geo_mesh=True,
-            geo_override=geo_override, element_order=2)
+            geo_override=geo_override, element_order=2,
+            # ψ sampler, not a cogging run: never raised by the cogging policy.
+            sampling_purpose="internal_probe")
         psi = np.asarray(cal.get("psi_A_Wb") or [], float)
         ang = np.asarray(cal.get("rotor_angle_deg") or [], float)
         # CONVERGENCE GATE.  ψ_A of an unconverged field is not a measurement of
@@ -2902,12 +2908,20 @@ def _p2_virtual_work_ineligible_reason(*, eddy, voltage_drive, demag,
     return None
 
 
-SamplingPurpose = Literal["standard", "optimization"]
+SamplingPurpose = Literal["standard", "optimization", "cogging_quality",
+                          "internal_probe"]
+_SAMPLING_PURPOSES = ("standard", "optimization", "cogging_quality",
+                      "internal_probe")
+# Raw samples per cogging cycle each purpose is JUDGED against (record +
+# warning). Only "cogging_quality" RAISES the frame count to meet it.
+_COGGING_TARGET_SAMPLES = {"standard": 6, "optimization": 3,
+                           "cogging_quality": 6, "internal_probe": 6}
 
 
 def _sampling_purpose(value: SamplingPurpose) -> SamplingPurpose:
-    if type(value) is not str or value not in ("standard", "optimization"):
-        raise ValueError("sampling_purpose must be 'standard' or 'optimization'")
+    if type(value) is not str or value not in _SAMPLING_PURPOSES:
+        raise ValueError("sampling_purpose must be one of "
+                         + ", ".join(repr(v) for v in _SAMPLING_PURPOSES))
     return value
 
 
@@ -2915,14 +2929,29 @@ def _cogging_frame_policy(num_slots, num_poles, pole_pairs, actual_steps,
                           nodes_per_period, *, continuous_angle=False,
                           internal_daxis_calibration=False,
                           sampling_purpose: SamplingPurpose = "standard"):
-    """Use the explicit purpose's raw angle density for each cogging cycle.
+    """Judge (and, in cogging-quality mode only, raise) the raw angle density.
+
+    Held-item fix of 8997bb3 / 821f3df (2026-09-24, owner-approved review):
+    six raw samples per slot/pole cogging cycle is an OPT-IN quality mode, not
+    the default for every run.
+
+    * ``"cogging_quality"`` — the dedicated cogging run: the frame count is
+      raised to ≥ 6 raw samples per cogging cycle (existing slip-ring divisor,
+      never a mesh change), exactly as 8997bb3 did for every run.
+    * ``"standard"`` / ``"optimization"`` — the requested (snapped) steps are
+      kept, as in 68de0ca; a run below its target (6 / 3 samples per cycle) is
+      recorded as insufficient FOR COGGING and warned about, nothing else.
+    * ``"internal_probe"`` and the d-axis calibration — ψ_PM no-load probe,
+      Ld/Lq probe and bench, d-axis calibration: always exempt, never raised,
+      never warned about (they sample ψ, not cogging torque; 8997bb3 inflated
+      them 6 → 96/120 frames).
 
     ``actual_steps`` is the existing whole-node snap result. A nodal band may
     only move to another divisor of its *existing* ring; this policy never
     changes the mesh. An analytic continuous-angle band has no such divisor.
     """
     sampling_purpose = _sampling_purpose(sampling_purpose)
-    target = 3 if sampling_purpose == "optimization" else 6
+    target = _COGGING_TARGET_SAMPLES[sampling_purpose]
     values = (num_slots, num_poles, pole_pairs, actual_steps, nodes_per_period)
     if any(isinstance(value, (bool, np.bool_)) or
            not isinstance(value, (int, np.integer)) or value <= 0
@@ -2943,6 +2972,11 @@ def _cogging_frame_policy(num_slots, num_poles, pole_pairs, actual_steps,
         # changes its peak-ambiguity criterion and can reject a valid motor;
         # it is not a reported torque/cogging run.
         reason = "internal_daxis_calibration_exempt"
+    elif sampling_purpose == "internal_probe":
+        reason = "internal_probe_exempt"
+    elif steps < minimum and sampling_purpose != "cogging_quality":
+        # 68de0ca behaviour: the requested resolution is the run's resolution.
+        reason = "requested_steps_kept_below_cogging_target"
     elif steps < minimum:
         if continuous_angle:
             chosen = minimum
@@ -3875,8 +3909,24 @@ def fem_transient_sliding_band(
                     _cogging_sampling["min_required_steps_per_period"],
                     "continuous angles" if _macro_free_m else
                     "an existing whole-node divisor")
+    elif _cogging_sampling["reason"] == "requested_steps_kept_below_cogging_target":
+        # Standard / optimization run below the cogging target: the requested
+        # resolution is kept (68de0ca) and the RECORD says the cogging/ripple
+        # content is under-sampled. Opt in with sampling_purpose=
+        # "cogging_quality" for a cogging-grade waveform.
+        log.warning("SB: cogging angle resolution below target: %d raw "
+                    "frames/period for %d cogging cycles/period (%.3f "
+                    "samples/cycle, target %d for purpose %r) — requested "
+                    "resolution kept; ripple/cogging may be aliased. Use "
+                    "sampling_purpose='cogging_quality' for >= 6 samples/cycle",
+                    n_steps_per_period,
+                    _cogging_sampling["cycles_per_electrical_period"],
+                    _cogging_sampling["raw_samples_per_cycle"],
+                    _cogging_sampling["target_raw_samples_per_cycle"],
+                    sampling_purpose)
     elif (not _cogging_sampling["sufficient"] and
-          _cogging_sampling["reason"] != "internal_daxis_calibration_exempt"):
+          _cogging_sampling["reason"] not in ("internal_daxis_calibration_exempt",
+                                              "internal_probe_exempt")):
         log.warning("SB: INSUFFICIENT cogging angle resolution: %d raw "
                     "frames/period for %d cycles/period (%.3f samples/cycle; "
                     "target %d). The existing %d-node/period slip ring has "

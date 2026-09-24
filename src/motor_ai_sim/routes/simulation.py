@@ -17,7 +17,7 @@ import math
 import time
 import uuid
 from collections import OrderedDict
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
@@ -1622,7 +1622,9 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
                            demag, drive, element_order, cfg_fingerprint, geo_ov,
                            mat_ov, rotor_angle0_deg=0.0, rpm=None,
                            n_parallel=None, connection=None,
-                           excitation="", magnet_temp_c=None) -> "OrderedDict":
+                           excitation="", magnet_temp_c=None,
+                           sampling_purpose: Literal["standard", "optimization"] =
+                           "standard") -> "OrderedDict":
     """The snapshot key as NAMED fields, in key order.
 
     Named because the key is the thing that decides "is this the run the user
@@ -1660,6 +1662,7 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         ("structured_gap", int(bool(structured_gap))),
         ("airgap_macro", int(bool(airgap_macro))),
         ("n_steps_per_period", int(n_steps_per_period)),
+        ("sampling_purpose", sampling_purpose),
         ("n_periods", round(float(n_periods), 2)),
         ("eddy", int(bool(eddy))),
         ("rotor_eddy", int(bool(rotor_eddy))),
@@ -4214,6 +4217,7 @@ def _mark_equivalent_star(sbres: Dict, *, v_bus_real: float,
                          "drive", "n_sectors", "demag", "rotor_eddy"))
 def get_fem_transient(
     n_steps_per_period:  int   = 60,   # FEM solves per electrical period
+    sampling_purpose: Literal["standard", "optimization"] = "standard",
     n_periods:           float = 1.0,  # how many electrical periods to sim
     gamma_deg:           float = 0.0,
     I_phase_rms:         float = 85.0,
@@ -4454,6 +4458,9 @@ def get_fem_transient(
     # forward a half-resolved request.
     _route_kwargs = dict(locals())
     _route_kwargs.pop("_np", None)
+    if type(sampling_purpose) is not str or sampling_purpose not in (
+            "standard", "optimization"):
+        raise HTTPException(status_code=422, detail="invalid sampling_purpose")
 
     # Per-request materials via the KERNEL path: same parse/validate/set as
     # the router dependency does for ?mat= — per-task context, so the kernel
@@ -4776,6 +4783,7 @@ def get_fem_transient(
     _sb_key_fields = OrderedDict((
         ("kind", "sb"),
         ("n_steps_per_period", int(n_steps_per_period)),
+        ("sampling_purpose", sampling_purpose),
         ("n_periods", round(n_periods, 2)),
         ("gamma_deg", round(gamma_deg, 1)),
         ("I_phase_rms", round(I_phase_rms, 1)),
@@ -4891,6 +4899,7 @@ def get_fem_transient(
         pole_copy=pole_copy, iron_template=iron_template, geo_mesh=geo_mesh,
         structured_gap=structured_gap, airgap_macro=airgap_macro,
         n_steps_per_period=n_steps_per_period, n_periods=n_periods,
+        sampling_purpose=sampling_purpose,
         eddy=eddy, rotor_eddy=rotor_eddy, demag=demag,
         drive=_drive, element_order=element_order,
         magnet_temp_c=magnet_temp_c,
@@ -5206,6 +5215,7 @@ def get_fem_transient(
                 else 1.0)
             _sbres = em_transient_eval(
                 n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
+                sampling_purpose=sampling_purpose,
                 gamma_deg=float(gamma_deg), I_phase_rms=_I_wind,
                 rpm=(None if rpm is None else float(rpm)),
                 n_parallel=(None if n_parallel is None else int(n_parallel)),
@@ -5270,6 +5280,7 @@ def get_fem_transient(
                             "fem-solve (harm-ref, sinusoidal current)"
                         _ref = em_transient_eval(
                             n_steps_per_period=int(n_steps_per_period),
+                            sampling_purpose=sampling_purpose,
                             n_periods=float(n_periods),
                             gamma_deg=float(_fc["gamma1_deg"]),
                             I_phase_rms=float(_fc["I1_phase_rms_A"]),

@@ -21,7 +21,7 @@ import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -322,7 +322,11 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     structured_gap: bool = False, airgap_macro: bool = False,
                     iron_template: bool = True, geo_mesh: bool = True,
                     element_order: int = 2, demag: Optional[bool] = None,
-                    pins: Optional[Dict[str, Any]] = None) -> str:
+                    pins: Optional[Dict[str, Any]] = None,
+                    sampling_purpose: Literal["standard", "optimization"] =
+                    "optimization") -> str:
+    if sampling_purpose not in ("standard", "optimization"):
+        raise ValueError("invalid sampling_purpose")
     payload = {
         # Key-format version.  Bumped when the MEANING of a component changes:
         # v2 = end_winding_factor is now honored by refine_proc (it used to be
@@ -337,7 +341,8 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # for a multi-strand or delta machine carries the transposed / star
         # answer under a key that still matches its config, so the version is
         # the only honest way to retire them all.
-        "v": 3,
+        "v": 4,
+        "sampling_purpose": sampling_purpose,
         # Physics the CALLER pinned for the whole run (rpm / connection / demag
         # / eddy from a descent plan).  A pinned run solves the pinned values no
         # matter what the live config says, so the key must carry them — without
@@ -465,7 +470,14 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              # verdict here would hand the panel a point that silently reads
              # as settled while its P_mag / P_shaft / η are start-up values.
              "eddy_settled", "eddy_capped", "eddy_settle_residual",
-             "eddy_settle_tol")
+             "eddy_settle_tol",
+             "cogging_sampling_purpose", "cogging_target_raw_samples_per_cycle",
+             "cogging_cycles_per_electrical_period",
+             "cogging_min_required_steps_per_period",
+             "cogging_final_quality_min_required_steps_per_period",
+             "cogging_raw_samples_per_cycle", "cogging_sampling_sufficient",
+             "cogging_sampling_final_quality_sufficient",
+             "cogging_sampling_auto_raised", "cogging_sampling_reason")
 
 
 def _store_eval(key: str, res: Dict[str, Any]) -> None:
@@ -996,14 +1008,19 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      demag: Optional[bool] = None,
                      magnet_temp_c: Optional[float] = None,
                      owner: str = "",
-                     threads: Optional[int] = None) -> Dict[str, Any]:
+                     threads: Optional[int] = None,
+                     sampling_purpose: Literal["standard", "optimization"] =
+                     "optimization") -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
     in an isolated subprocess (FEM/LLVM crash → failed design, not a dead API).
     Rebuilds the CadQuery geometry + gmsh mesh for the candidate in-memory.
     ``steps`` frames over ``n_periods`` of the electrical period.  n_sectors=-1
     = full disk (accurate ripple); 4 = ¼ sector (≈3× faster, for quick debug)."""
     import subprocess, sys, json, os as _os
+    if sampling_purpose not in ("standard", "optimization"):
+        raise ValueError("invalid sampling_purpose")
     spec = json.dumps({"overrides": overrides, "current_a": current_a,
+                       "sampling_purpose": sampling_purpose,
                        "steps": int(steps), "coil_temp_c": float(coil_temp_c),
                        "n_periods": float(n_periods), "gamma_deg": float(gamma_deg),
                        "mesh_size_mm": float(mesh_size_mm), "min_size_mm": float(min_size_mm),
@@ -1309,7 +1326,8 @@ def _refine_worker(designs: List[Dict[str, Any]], steps: int, coil_temp_c: float
             break
         ov = {k: float(v) for k, v in (dz.get("overrides") or {}).items()}
         I = float(dz.get("current_a", 85.0))
-        payload = _subprocess_eval(ov, I, steps, coil_temp_c)
+        payload = _subprocess_eval(ov, I, steps, coil_temp_c,
+                                   sampling_purpose="optimization")
         if payload.get("ok"):
             res = {**payload["res"], "overrides": ov, "current_a": I,
                    "fem": True, "feasible": True, "eligible": True}
@@ -1638,7 +1656,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                  gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
                                  element_order=element_order, demag=demag,
-                                 pins=({"rpm": float(rpm)} if rpm else None))
+                                 pins=({"rpm": float(rpm)} if rpm else None),
+                                 sampling_purpose="optimization")
 
         def _mk_point(out, ov, I, gi, oi, g, rpm=None):
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
@@ -1676,7 +1695,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                    iron_template=iron_template, geo_mesh=geo_mesh,
                                    element_order=element_order, demag=demag,
                                    rpm=oprpm, owner="scan",
-                                   threads=_solo_ctx["threads"])
+                                   threads=_solo_ctx["threads"],
+                                   sampling_purpose="optimization")
             if out and out.get("ok"):
                 _store_eval(_cache_key(geo_ov, I, g, oprpm), out)   # cache successful evals only
             return i, _mk_point(out, ov, I, gi, oi, g, oprpm)
@@ -1871,7 +1891,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                             hi_fidelity=hi_fidelity, structured_gap=structured_gap,
                                        airgap_macro=airgap_macro,
                                        iron_template=iron_template, geo_mesh=geo_mesh,
-                                       element_order=element_order, demag=demag)
+                                       element_order=element_order, demag=demag,
+                                       sampling_purpose="optimization")
                 if base_out and base_out.get("ok"):
                     _store_eval(_bck, base_out)
             baseline = _point_from_eval(base_out, {}, _bI, -1, 0, ripple_max)
@@ -1919,7 +1940,8 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                             "hi_fidelity": bool(hi_fidelity), "structured_gap": bool(structured_gap),
                             "airgap_macro": bool(airgap_macro), "iron_template": bool(iron_template),
                             "geo_mesh": bool(geo_mesh), "element_order": int(element_order),
-                            "demag": bool(demag), "cfg_fp": _config_fingerprint()},
+                            "demag": bool(demag), "cfg_fp": _config_fingerprint(),
+                            "sampling_purpose": "optimization"},
         }
         with _scan_lock:
             if _scan_owns(run_id):
@@ -1995,17 +2017,10 @@ def scan_designs(req: ScanRequest):
                 "rpm": float(o.rpm)} for o in (req.operating_points or [])] or \
               [{"gamma_deg": 0.0, "current_a": 85.0, "rpm": 3950.0}]
         steps = max(4, min(int(req.steps_per_period), 180))
-        # Torque RIPPLE is a high-harmonic quantity — the 12s14p cogging sits at the
-        # 12th electrical harmonic, so < ~48 frames/period UNDERSAMPLES and ALIASES
-        # it.  The aliasing is geometry-dependent, so a coarse step count produced
-        # SPURIOUS ripple minima (e.g. magnet_fill_up=0.40 read 4.4 % at 24 steps
-        # but 5.4 % at 48) → the sweep "found" ripple wins that vanish at Simulation
-        # resolution.  For honest-ripple runs (P2 / structured belt) floor the frame
-        # count so the sweep's ripple equals the converged value.  Mean torque is
-        # step-insensitive, so this only fixes ripple; mesh is already converged at
-        # the 1.0 mm floor (1.0 and 0.5 mm agree to 0.03 % at 48 steps).
-        if int(getattr(req, "element_order", 2)) == 2 or bool(req.structured_gap):
-            steps = max(steps, 48)
+        # The explicit optimization purpose selects its topology-dependent
+        # raw cogging minimum in FEM after whole-node slip snapping. A fixed
+        # 48-frame floor here would mask that policy. Independent PWM/carrier
+        # resolution guards remain in place.
         max_geom = max(1, min(int(req.max_geometries), 400))
         mesh_size = max(1.0, min(float(req.mesh_size_mm), 12.0))
         min_size  = max(0.1, min(float(req.min_size_mm), 3.0))
@@ -2191,7 +2206,7 @@ def seed_cache(req: SeedCacheRequest):
     # poisoned cache costs a wrong answer).
     _FULL = ("n_sectors", "gap_layers", "end_winding", "rotor_eddy", "hi_fidelity",
              "structured_gap", "airgap_macro", "iron_template", "geo_mesh",
-             "element_order", "demag", "cfg_fp")
+             "element_order", "demag", "cfg_fp", "sampling_purpose")
     if not all(k in sp for k in _FULL):
         return {"seeded": 0, "cache_size": len(_EVAL_CACHE),
                 "error": "the stored sweep predates the full scan_params record "
@@ -2203,6 +2218,9 @@ def seed_cache(req: SeedCacheRequest):
     mn = float(sp.get("min_size_mm", req.min_size_mm))
     pc = sp.get("pole_copy", req.pole_copy)
     tf = bool(sp.get("torque_filter", req.torque_filter))
+    if sp["sampling_purpose"] != "optimization":
+        return {"seeded": 0, "cache_size": len(_EVAL_CACHE),
+                "error": "the stored sweep has a different sampling purpose"}
     # The fingerprint RECORDED AT SCAN TIME — never the current one: seeding
     # after a config edit must not stamp old-config results as current (they
     # will simply miss, which is the honest outcome).
@@ -2225,7 +2243,8 @@ def seed_cache(req: SeedCacheRequest):
                               iron_template=bool(sp["iron_template"]),
                               geo_mesh=bool(sp["geo_mesh"]),
                               element_order=int(sp["element_order"]),
-                              demag=bool(sp["demag"]))
+                              demag=bool(sp["demag"]),
+                              sampling_purpose="optimization")
         before = len(_EVAL_CACHE)
         _store_eval(key, {"ok": True, "res": res})
         seeded += int(len(_EVAL_CACHE) > before)
@@ -3129,7 +3148,8 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
         o = _subprocess_eval(geom, ref_I, steps, coil_temp, n_periods=1.0,
                              gamma_deg=float(gc), mesh_size_mm=mesh_size,
                              min_size_mm=min_size, n_sectors=n_sectors,
-                             element_order=element_order, owner="descent")
+                             element_order=element_order, owner="descent",
+                             sampling_purpose="optimization")
         return (float(gc), float(o["res"].get("T_em_Nm", 0.0) or 0.0)) if o.get("ok") else None
 
     with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
@@ -3213,7 +3233,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  # labeled with the request's rpm but solved at
                                  # whatever the Simulation tab said at eval time.
                                  rpm=(float(op.get("rpm")) if op.get("rpm") else None),
-                                 owner="descent")
+                                 owner="descent",
+                                 sampling_purpose="optimization")
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
@@ -3597,7 +3618,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  # Pin the run's own speed — same reason as the
                                  # gradient worker above.
                                  rpm=(float(op.get("rpm")) if op.get("rpm") else None),
-                                 owner="descent")
+                                 owner="descent",
+                                 sampling_purpose="optimization")
             # Stamp the SOLVED current onto the result so the best records the
             # operating point it was found at (target-torque solves for it) →
             # saving the design can persist current+γ for a reproducible sim.
@@ -4073,7 +4095,8 @@ def descent_baseline(req: BaselineRequest):
                                 airgap_macro=bool(req.airgap_macro),
                                 iron_template=bool(getattr(req, "iron_template", True)),
                                 geo_mesh=bool(getattr(req, "geo_mesh", True)),
-                                element_order=int(getattr(req, "element_order", 2) or 2))
+                                element_order=int(getattr(req, "element_order", 2) or 2),
+                                sampling_purpose="optimization")
 
     a = _ev(I)
     if not a.get("ok"):
@@ -4846,16 +4869,12 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         coil_temp = 120.0
     steps_pp = int(steps) if (steps and steps >= 8) else 36
     steps_pp = max(8, min(180, steps_pp))
-    # RIPPLE IS THE CONSTRAINT HERE, so it may not be aliased.  The 12s14p
-    # cogging sits at the 12th electrical harmonic; below ~48 frames/period the
-    # sampling folds it, geometry-dependently, and the optimizer "finds" ripple
-    # minima that do not survive a converged re-solve (the same reasoning that
-    # floors the sweep route).  A run whose whole job is holding ripple under a
-    # number cannot be allowed to measure that number wrong — so floor the frame
-    # count and SAY that we did.  Applying the result pins 48 back into the
-    # Simulation tab (eval_params), so the re-solve reproduces what was reported.
+    # Candidate evals carry sampling_purpose="optimization". Their
+    # topology-dependent minimum (3 raw samples/cogging cycle) is selected by
+    # FEM after whole-node slip snapping. A fixed 48-frame floor would hide it.
+    # Final/manual Simulation runs retain the standard 6-sample minimum, so
+    # candidate ripple is a coarse ranking measure requiring final re-solve.
     steps_requested = steps_pp
-    steps_pp = max(steps_pp, 48)
 
     # ── EVAL PARAMS: the Mesh tab's persisted settings + the P2 honest path ───
     n_sectors = int(mesh.get("n_sectors", 1) or 1)
@@ -5175,7 +5194,8 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             # Pinned from the plan (= the Simulation tab at launch), not re-read
             # per candidate: a switch toggled mid-run must not change the physics
             # under a search that is already half-converged.
-            demag=bool(ev.get("demag", False)))
+            demag=bool(ev.get("demag", False)),
+            sampling_purpose="optimization")
         if o.get("ok") and isinstance(o.get("res"), dict):
             o["res"]["current_a"] = float(cur)
         if isinstance(o, dict):
@@ -5633,7 +5653,8 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             # cache-hit old-rpm physics).
             demag=bool(ev.get("demag", False)),
             pins={"rpm": float(rpm) if rpm is not None else None,
-                  "connection": str(conn) if conn else None})
+                  "connection": str(conn) if conn else None},
+            sampling_purpose="optimization")
 
     def _eval_at(d: Dict[str, float], cur: float) -> Dict[str, Any]:
         """One FEM eval, through the persistent cache.  A cache HIT is not
@@ -5664,7 +5685,8 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             # Pinned from the plan (= the Simulation tab at launch), not re-read
             # per candidate: a switch toggled mid-run must not change the physics
             # under a search that is already half-converged.
-            demag=bool(ev.get("demag", False)))
+            demag=bool(ev.get("demag", False)),
+            sampling_purpose="optimization")
         state["n_evals"] += 1
         if o.get("ok") and isinstance(o.get("res"), dict):
             o["res"]["current_a"] = float(cur)

@@ -48,7 +48,7 @@ import logging
 import math
 import threading
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Tuple, Optional
+from typing import Dict, List, Mapping, Tuple, Optional, Literal
 
 import numpy as np
 
@@ -2900,15 +2900,27 @@ def _p2_virtual_work_ineligible_reason(*, eddy, voltage_drive, demag,
     return None
 
 
+SamplingPurpose = Literal["standard", "optimization"]
+
+
+def _sampling_purpose(value: SamplingPurpose) -> SamplingPurpose:
+    if type(value) is not str or value not in ("standard", "optimization"):
+        raise ValueError("sampling_purpose must be 'standard' or 'optimization'")
+    return value
+
+
 def _cogging_frame_policy(num_slots, num_poles, pole_pairs, actual_steps,
                           nodes_per_period, *, continuous_angle=False,
-                          internal_daxis_calibration=False):
-    """Keep at least six raw angle samples per slot/pole cogging cycle.
+                          internal_daxis_calibration=False,
+                          sampling_purpose: SamplingPurpose = "standard"):
+    """Use the explicit purpose's raw angle density for each cogging cycle.
 
     ``actual_steps`` is the existing whole-node snap result. A nodal band may
     only move to another divisor of its *existing* ring; this policy never
     changes the mesh. An analytic continuous-angle band has no such divisor.
     """
+    sampling_purpose = _sampling_purpose(sampling_purpose)
+    target = 3 if sampling_purpose == "optimization" else 6
     values = (num_slots, num_poles, pole_pairs, actual_steps, nodes_per_period)
     if any(isinstance(value, (bool, np.bool_)) or
            not isinstance(value, (int, np.integer)) or value <= 0
@@ -2921,7 +2933,7 @@ def _cogging_frame_policy(num_slots, num_poles, pole_pairs, actual_steps,
     if order % pairs:
         raise ValueError("cogging order must tile an electrical period")
     cycles = order // pairs
-    minimum = 6 * cycles
+    minimum = target * cycles
     chosen = steps
     reason = None
     if internal_daxis_calibration:
@@ -2932,7 +2944,7 @@ def _cogging_frame_policy(num_slots, num_poles, pole_pairs, actual_steps,
     elif steps < minimum:
         if continuous_angle:
             chosen = minimum
-            reason = "raised_continuous_angle_to_six_samples_per_cycle"
+            reason = "raised_continuous_angle_to_target_samples_per_cycle"
         else:
             divisor = next((d for d in range(minimum, nodes + 1)
                             if nodes % d == 0), None)
@@ -2942,11 +2954,15 @@ def _cogging_frame_policy(num_slots, num_poles, pole_pairs, actual_steps,
                 chosen = divisor
                 reason = "raised_to_existing_slip_ring_divisor"
     return {
+        "purpose": sampling_purpose,
+        "target_raw_samples_per_cycle": target,
         "cycles_per_electrical_period": cycles,
         "min_required_steps_per_period": minimum,
+        "final_quality_min_required_steps_per_period": 6 * cycles,
         "steps_per_period": chosen,
         "raw_samples_per_cycle": chosen / cycles,
         "sufficient": chosen >= minimum,
+        "final_quality_sufficient": chosen >= 6 * cycles,
         "auto_raised": chosen > steps,
         "reason": reason,
     }
@@ -2967,6 +2983,7 @@ def _select_voltage_settle_periods(source_periods, *, sinusoidal_voltage,
 @_pardiso_scope
 def fem_transient_sliding_band(
     n_steps_per_period: int = 12,
+    sampling_purpose: SamplingPurpose = "standard",
     n_periods: float = 1.0,
     gamma_deg: float = 0.0,
     I_phase_rms: float = 85.0,
@@ -3193,6 +3210,7 @@ def fem_transient_sliding_band(
     from motor_ai_sim.config import get_config
 
     t0 = _t.time()
+    sampling_purpose = _sampling_purpose(sampling_purpose)
     # Mesh density is driven ENTIRELY by the Mesh-tab sliders now (mesh_size,
     # min_size, gap_layers, normal_deviation) — no hidden clamp.  Earlier this
     # path hard-clamped iron to 2 mm and the gap floor to 0.1 mm "for smooth
@@ -3840,15 +3858,18 @@ def fem_transient_sliding_band(
         int(p.num_slots), int(p.num_poles), int(pole_pairs),
         int(n_steps_per_period), int(_nodes_per_period),
         continuous_angle=_macro_free_m,
+        sampling_purpose=sampling_purpose,
         internal_daxis_calibration=bool(
             getattr(_DAXIS_TLS, "calibrating", False)))
     n_steps_per_period = _cogging_sampling["steps_per_period"]
     if _cogging_sampling["auto_raised"]:
         log.warning("SB: cogging resolution raised to %d raw frames/period "
-                    "(requested %d, %d cycles/period, minimum %d frames); "
+                    "(requested %d, %d cycles/period, %d raw samples/cycle, "
+                    "minimum %d frames); "
                     "using %s without changing the slip ring",
                     n_steps_per_period, _req_steps,
                     _cogging_sampling["cycles_per_electrical_period"],
+                    _cogging_sampling["target_raw_samples_per_cycle"],
                     _cogging_sampling["min_required_steps_per_period"],
                     "continuous angles" if _macro_free_m else
                     "an existing whole-node divisor")
@@ -3856,12 +3877,12 @@ def fem_transient_sliding_band(
           _cogging_sampling["reason"] != "internal_daxis_calibration_exempt"):
         log.warning("SB: INSUFFICIENT cogging angle resolution: %d raw "
                     "frames/period for %d cycles/period (%.3f samples/cycle; "
-                    "minimum %d). The existing %d-node/period slip ring has "
+                    "target %d). The existing %d-node/period slip ring has "
                     "no admissible divisor; all samples are retained",
                     n_steps_per_period,
                     _cogging_sampling["cycles_per_electrical_period"],
                     _cogging_sampling["raw_samples_per_cycle"],
-                    _cogging_sampling["min_required_steps_per_period"],
+                    _cogging_sampling["target_raw_samples_per_cycle"],
                     _nodes_per_period)
     # Steps per SWITCHING period is the number that decides whether a PWM run
     # measured the ripple it reports.  The exact-mean voltage integration makes
@@ -8362,13 +8383,20 @@ def fem_transient_sliding_band(
         # for.  ``slip_nodes_per_period`` is the grid that decides the snap.
         "n_steps_per_period_requested": int(_req_steps),
         "steps_snapped": bool(int(n_steps_per_period) != int(_req_steps)),
+        "cogging_sampling_purpose": _cogging_sampling["purpose"],
+        "cogging_target_raw_samples_per_cycle": _cogging_sampling[
+            "target_raw_samples_per_cycle"],
         "cogging_cycles_per_electrical_period": _cogging_sampling[
             "cycles_per_electrical_period"],
         "cogging_min_required_steps_per_period": _cogging_sampling[
             "min_required_steps_per_period"],
+        "cogging_final_quality_min_required_steps_per_period": _cogging_sampling[
+            "final_quality_min_required_steps_per_period"],
         "cogging_raw_samples_per_cycle": _cogging_sampling[
             "raw_samples_per_cycle"],
         "cogging_sampling_sufficient": _cogging_sampling["sufficient"],
+        "cogging_sampling_final_quality_sufficient": _cogging_sampling[
+            "final_quality_sufficient"],
         "cogging_sampling_auto_raised": _cogging_sampling["auto_raised"],
         "cogging_sampling_reason": _cogging_sampling["reason"],
         # Build provenance (see the _mesh_build_trace() read after the build):
@@ -8772,6 +8800,7 @@ def _build_full_disk_from_halves(polys, rotor_angle_deg, mesh_size_mm,
 def em_transient_eval(
     *,
     n_steps_per_period: int,
+    sampling_purpose: SamplingPurpose = "standard",
     n_periods: float,
     gamma_deg: float,
     I_phase_rms: float,
@@ -8851,6 +8880,7 @@ def em_transient_eval(
     """
     return fem_transient_sliding_band(
         n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
+        sampling_purpose=_sampling_purpose(sampling_purpose),
         gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
         rpm=(None if rpm is None else float(rpm)),
         daxis_deg=(None if daxis_deg is None else float(daxis_deg)),

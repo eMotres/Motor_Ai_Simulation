@@ -100,10 +100,13 @@ class TestStandingObjective:
         assert ev["torque_filter"] is False      # RAW ripple, not band-limited
         assert ev["rotor_eddy"] is True          # same loss model as Simulation
 
-    def test_ripple_is_not_sampled_below_the_aliasing_floor(self):
-        # A run whose constraint IS ripple may not measure ripple on an aliased
-        # window, whatever the Simulation tab's frame count happens to be.
-        assert _plan()["eval"]["steps_per_period"] >= 48
+    def test_plan_does_not_mask_the_topology_dependent_sampling_policy(self):
+        # The solver applies 3 raw samples/cogging cycle to the optimization
+        # purpose after whole-node slip snapping; a fixed 48-frame route floor
+        # would prevent the 12s14p 36-frame candidate path.
+        ev = _plan()["eval"]
+        assert ev["steps_per_period"] == ev["steps_per_period_requested"]
+        assert ev["steps_per_period"] >= 8
 
 
 class TestSearchRangeIsNotBoxed:

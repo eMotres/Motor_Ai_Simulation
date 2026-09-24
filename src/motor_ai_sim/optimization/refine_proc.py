@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Literal
 
 log = logging.getLogger(__name__)
 
@@ -131,7 +131,9 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             n_parallel: int | None = None,
             connection: str | None = None,
             demag: bool | None = None,
-            magnet_temp_c: float | None = None) -> Dict[str, Any]:
+            magnet_temp_c: float | None = None,
+            sampling_purpose: Literal["standard", "optimization"] =
+            "optimization") -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
     performance metrics (torque, efficiency, ripple, losses, mass).
 
@@ -140,6 +142,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     the scan uses n_periods=1/6 (one 6·k ripple cycle) with ~6 frames; a full
     refine uses n_periods=1 with more frames."""
     import numpy as np, json
+    if sampling_purpose not in ("standard", "optimization"):
+        raise ValueError("invalid sampling_purpose")
     from motor_ai_sim.optimization.design_eval import build_params, _masses
     from motor_ai_sim.config import get_config
 
@@ -255,6 +259,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     _geo_mesh_mod.set_tri_budget(_MESH_TRI_BUDGET)
     _out = _kernel().run("solver.em_transient", {
         "n_steps_per_period": nspp, "n_periods": nper, "gamma_deg": float(gamma_deg),
+        "sampling_purpose": sampling_purpose,
         "I_phase_rms": float(current_a), "rpm": float(rpm),
         # WINDING: omitted (None) = the active config's connection, exactly as
         # before.  Passed, the candidate is driven at ITS parallel paths — the
@@ -574,6 +579,21 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "eddy_capped": bool(d.get("eddy_capped", False)),
         "eddy_settle_residual": d.get("eddy_settle_residual"),
         "eddy_settle_tol": d.get("eddy_settle_tol"),
+        "cogging_sampling_purpose": d.get("cogging_sampling_purpose"),
+        "cogging_target_raw_samples_per_cycle": d.get(
+            "cogging_target_raw_samples_per_cycle"),
+        "cogging_cycles_per_electrical_period": d.get(
+            "cogging_cycles_per_electrical_period"),
+        "cogging_min_required_steps_per_period": d.get(
+            "cogging_min_required_steps_per_period"),
+        "cogging_final_quality_min_required_steps_per_period": d.get(
+            "cogging_final_quality_min_required_steps_per_period"),
+        "cogging_raw_samples_per_cycle": d.get("cogging_raw_samples_per_cycle"),
+        "cogging_sampling_sufficient": d.get("cogging_sampling_sufficient"),
+        "cogging_sampling_final_quality_sufficient": d.get(
+            "cogging_sampling_final_quality_sufficient"),
+        "cogging_sampling_auto_raised": d.get("cogging_sampling_auto_raised"),
+        "cogging_sampling_reason": d.get("cogging_sampling_reason"),
     }
 
 
@@ -603,7 +623,8 @@ if __name__ == "__main__":
                       n_parallel=spec.get("n_parallel"),
                       connection=spec.get("connection"),
                       demag=spec.get("demag"),
-                      magnet_temp_c=spec.get("magnet_temp_c"))
+                      magnet_temp_c=spec.get("magnet_temp_c"),
+                      sampling_purpose=spec.get("sampling_purpose", "optimization"))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))

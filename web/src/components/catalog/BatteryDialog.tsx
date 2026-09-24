@@ -16,6 +16,7 @@ import {
   ToggleButton, ToggleButtonGroup, Box, Typography, Tooltip, Checkbox,
   FormControlLabel,
 } from '@mui/material';
+import HelpTip from '../common/HelpTip';
 
 export interface BatteryValue {
   chemistry?: string | null; cells?: number | null;
@@ -231,18 +232,17 @@ const BatteryDialog: React.FC<{
               sx={{ width: 138, '& .MuiFormHelperText-root': { fontSize: 9.5, color: '#f59e0b', mx: 0 } }} />
           </Tooltip>
         </Box>
-        <Typography sx={{ fontSize: 11.5, mt: 1, color: 'var(--text-2)' }}>
-          {Number.isFinite(rPack)
-            ? `Pack R ≈ ${(rPack * 1000).toFixed(1)} mΩ`
-              + (Number.isFinite(ic) && ic > 0
-                  ? ` · at ${ic.toFixed(0)} A the bus rises ${(rPack * ic).toFixed(2)} V above open circuit`
-                  : '')
-            : 'enter a sane cell count, string count and r_int'}
-        </Typography>
-        <Typography sx={{ fontSize: 10, mt: 0.5, color: 'var(--text-4)' }}>
-          No state-of-charge model: V_oc is taken as the pack nominal, so a charge
-          SESSION (V_oc walking from min to max) is a sweep of this, not a property of it.
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1 }}>
+          <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+            {Number.isFinite(rPack)
+              ? `Pack R ≈ ${(rPack * 1000).toFixed(1)} mΩ`
+                + (Number.isFinite(ic) && ic > 0
+                    ? ` · at ${ic.toFixed(0)} A the bus rises ${(rPack * ic).toFixed(2)} V above open circuit`
+                    : '')
+              : 'enter a sane cell count, string count and r_int'}
+          </Typography>
+          <HelpTip title="No state-of-charge model: V_oc is taken as the pack nominal, so a charge SESSION (V_oc walking from min to max) is a sweep of this, not a property of it." />
+        </Box>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}

@@ -105,6 +105,10 @@ interface Die {
   name: string; locked: boolean; created?: string;
   slots: number; poles: number; stator_diameter: number;
   thumb_svg?: string | null; configs: Cfg[];
+  /** "workspace" | "published" | "shared" — absent when layering is off
+   *  (single-catalog workstation). Only a catalog admin may delete a
+   *  published or shared die; see AGENTS.md / DELETE /api/family/die. */
+  layer?: string;
 }
 
 /** "21:24" today, "19.08 21:24" otherwise — the exact stamp lives in the tooltip. */
@@ -420,48 +424,62 @@ const FamilyCatalog: React.FC<{
         post('/api/family/duty', { die, config: cfg, duty: { name, mode, from_current: true } }));
     },
   });
-  const deleteDie = (die: string) => setAskConfirm({
-    title: `Delete die '${die}'?`,
-    body: 'An empty die is removed at once; a die that still has configurations asks once more.',
-    onConfirm: () => {
-      void (async () => {
-        setBusy(`delete ${die}`); setMsg(null);
-        try {
-          const r = await del(`/api/family/die/${encodeURIComponent(die)}`);
-          if (r.ok) {
-            setMsg(`✓ die '${die}' deleted`);
-            window.dispatchEvent(new CustomEvent('family-changed'));
+  const deleteDie = (die: Die) => {
+    const name = die.name;
+    // A shared/published die's files are the vendor's / another author's —
+    // deleting one reaches everybody, not just this workspace, so the dialog
+    // says so in one line before the (still-generic) empty/has-configs
+    // sentence.  A non-admin who tries anyway gets the backend's own 403
+    // detail below, not a silent nothing (live 2026-09-24: two 403s in the
+    // server log and no visible reason in the UI).
+    const wide = die.layer === 'shared' ? 'the shared catalog for every user'
+      : die.layer === 'published' ? 'the published catalog for everyone who sees it'
+      : null;
+    setAskConfirm({
+      title: `Delete die '${name}'?`,
+      body: (wide ? `Removes it from ${wide}. ` : '')
+        + 'An empty die is removed at once; a die that still has configurations asks once more.',
+      onConfirm: () => {
+        void (async () => {
+          setBusy(`delete ${name}`); setMsg(null);
+          try {
+            const r = await del(`/api/family/die/${encodeURIComponent(name)}`);
+            let data: any = null;
+            try { data = await r.json(); } catch { /* keep null */ }
+            if (r.ok) {
+              const note = data?.note ? ` (${data.note})` : '';
+              setMsg(`✓ die '${name}' deleted${note}`);
+              window.dispatchEvent(new CustomEvent('family-changed'));
+              return;
+            }
+            if (r.status !== 409) {
+              setMsg(`✗ ${data?.detail ?? `HTTP ${r.status}`}`);
+              return;
+            }
+            // 409 = the die still has configurations. Name them and ask ONCE
+            // more — then delete the whole subtree with force. (It used to stop
+            // here with a message the user could miss: "стираю а она не
+            // стирается", live 2026-08-20.)
+            const detail = String(data?.detail ?? '');
+            setBusy(null);
+            setAskConfirm({
+              title: `Delete '${name}' WITH its configurations?`,
+              body: (wide ? `Removes it from ${wide}. ` : '')
+                + (detail || 'The die still has configurations.')
+                + ' They and their duties are removed permanently.',
+              onConfirm: () => mutate(`die '${name}' deleted with its configurations`,
+                () => del(`/api/family/die/${encodeURIComponent(name)}?force=true`)),
+            });
             return;
+          } catch (e) {
+            setMsg(`✗ ${e}`);
+          } finally {
+            setBusy(null);
           }
-          if (r.status !== 409) {
-            let detail = `HTTP ${r.status}`;
-            try { detail = (await r.json()).detail ?? detail; } catch { /* keep */ }
-            setMsg(`✗ ${detail}`);
-            return;
-          }
-          // 409 = the die still has configurations. Name them and ask ONCE
-          // more — then delete the whole subtree with force. (It used to stop
-          // here with a message the user could miss: "стираю а она не
-          // стирается", live 2026-08-20.)
-          let detail = '';
-          try { detail = String((await r.json()).detail ?? ''); } catch { /* keep */ }
-          setBusy(null);
-          setAskConfirm({
-            title: `Delete '${die}' WITH its configurations?`,
-            body: (detail || 'The die still has configurations.')
-              + ' They and their duties are removed permanently.',
-            onConfirm: () => mutate(`die '${die}' deleted with its configurations`,
-              () => del(`/api/family/die/${encodeURIComponent(die)}?force=true`)),
-          });
-          return;
-        } catch (e) {
-          setMsg(`✗ ${e}`);
-        } finally {
-          setBusy(null);
-        }
-      })();
-    },
-  });
+        })();
+      },
+    });
+  };
   const renameDie = (die: string) => setAskText({
     title: `Rename die '${die}'`,
     label: 'New name', initial: die,
@@ -684,7 +702,7 @@ const FamilyCatalog: React.FC<{
               <Tooltip title="Delete die (configurations must be deleted first)">
                 <span>
                   <IconButton size="small" disabled={!!busy}
-                    onClick={() => deleteDie(die.name)}
+                    onClick={() => deleteDie(die)}
                     sx={{ color: 'var(--text-4)', fontSize: 13, p: 0.4 }}>🗑</IconButton>
                 </span>
               </Tooltip>

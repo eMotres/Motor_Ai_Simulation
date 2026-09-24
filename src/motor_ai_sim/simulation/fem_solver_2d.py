@@ -113,6 +113,8 @@ from motor_ai_sim.simulation.sb_postproc import (
     snapshot_scalar_history as _snapshot_scalar_history,
     eddy_settle_resid as _eddy_settle_resid,
     hybrid_torque as _hybrid_torque,
+    space_vector_hybrid_torque as _space_vector_hybrid_torque,
+    TORQUE_MEAN_SOURCE as _TORQUE_MEAN_SOURCE,
     torque_method_diagnostics as _torque_method_diagnostics,
     torque_harmonics as _torque_harmonics,
 )
@@ -7854,7 +7856,20 @@ def fem_transient_sliding_band(
             _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
             n_parallel=int(n_parallel), **_torque_method_args)
     except Exception as _te:
-        log.warning("P2 hybrid torque failed (%s) — using Maxwell series", _te)
+        # House rule: never fall to the Maxwell MEAN on a loaded run — the
+        # flux-linkage mean (68de0ca) is the fallback, exactly as for every
+        # run that is not terminal-work eligible.
+        log.warning("P2 terminal-work torque failed (%s) — using the "
+                    "flux-linkage (space-vector) mean", _te)
+        try:
+            _T2, _torque_method = _space_vector_hybrid_torque(
+                _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
+                n_parallel=int(n_parallel))
+        except Exception as _te2:   # noqa: BLE001
+            log.warning("P2 space-vector torque failed (%s) — using the raw "
+                        "Maxwell series", _te2)
+            _T2, _torque_method = list(_T2raw), "maxwell_stress"
+    _torque_mean_source = _TORQUE_MEAN_SOURCE.get(_torque_method, "raw_maxwell")
     try:
         _torque_method_diag = _torque_method_diagnostics(
             _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
@@ -8428,6 +8443,12 @@ def fem_transient_sliding_band(
         "T_noise_floor_pct": None, "torque_filter_applied": False,
         "T_em_raw_Nm": list(_T2), "T_em_filt_Nm": _T_report,
         "torque_method": _torque_method,
+        # Which MEAN the reported T_avg carries: "terminal_work" (eligible
+        # conservative current-drive runs), "flux_linkage_space_vector" (every
+        # other loaded run — eddy / demag / voltage / PWM) or "raw_maxwell"
+        # (≤ 1 A per branch on an ineligible run). The ripple is raw Maxwell AC
+        # in all three.
+        "T_mean_method": _torque_mean_source,
         "torque_method_diagnostics": _torque_method_diag,
         "T_avg_maxwell_Nm": T_maxwell_avg,
         "T_harm_order": T_harm_order, "T_harm_amp": T_harm_amp,

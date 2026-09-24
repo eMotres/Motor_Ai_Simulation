@@ -139,16 +139,24 @@ class TestTorqueMethodDiagnostics(unittest.TestCase):
                     rtol=0, atol=1e-14)
                 self.assertIsNone(diagnostic["certified_energy_balance_Nm"])
 
-    def test_ineligible_modes_keep_raw_maxwell_series_and_report_reason(self):
+    # 2026-09-24 (orchestrator's held-item fix of 909b014): an INELIGIBLE run
+    # (eddy / demag / voltage — every client report) no longer falls back to
+    # the raw Maxwell mean. It keeps 68de0ca's flux-linkage (space-vector)
+    # mean above 1 A per branch — house rule: energy / flux-linkage torque only
+    # — and 68de0ca's raw Maxwell series at or below it. This test pinned the
+    # Maxwell fallback at 0.5 A, which the 68de0ca rule still gives; the loaded
+    # case below pins the space-vector branch that replaced it above 1 A.
+    _INELIGIBLE = (
+        {"imposed_current_drive": False},
+        {"eddy": True}, {"rotor_eddy": True}, {"demag": True},
+        {"frozen_nu": True},
+        {"all_frames_converged": False},
+        {"integer_period_window": False},
+    )
+
+    def test_ineligible_modes_below_one_amp_keep_raw_maxwell_series(self):
         psi, current, maxwell, theta = _eligible_kwargs(0.5)
-        cases = (
-            {"imposed_current_drive": False},
-            {"eddy": True}, {"rotor_eddy": True}, {"demag": True},
-            {"frozen_nu": True},
-            {"all_frames_converged": False},
-            {"integer_period_window": False},
-        )
-        for override in cases:
+        for override in self._INELIGIBLE:
             with self.subTest(override=override):
                 flags = dict(imposed_current_drive=True, all_frames_converged=True,
                              integer_period_window=True)
@@ -166,6 +174,34 @@ class TestTorqueMethodDiagnostics(unittest.TestCase):
                 if override.get("frozen_nu"):
                     self.assertIn("frozen permeability", diagnostic[
                         "terminal_work_eligibility_reason"])
+
+    def test_ineligible_loaded_modes_select_the_space_vector_mean(self):
+        psi, current, maxwell, theta = _eligible_kwargs(2.0)
+        for override in self._INELIGIBLE:
+            with self.subTest(override=override):
+                flags = dict(imposed_current_drive=True, all_frames_converged=True,
+                             integer_period_window=True)
+                flags.update(override)
+                selected, method = hybrid_torque(
+                    *psi, *current, maxwell, 7, n_parallel=2,
+                    mechanical_angle_rad=theta, **flags)
+                diagnostic = torque_method_diagnostics(
+                    *psi, *current, maxwell, 7, n_parallel=2,
+                    mechanical_angle_rad=theta, **flags)
+                reference, ref_method = _MODULE.space_vector_hybrid_torque(
+                    *psi, *current, maxwell, 7, n_parallel=2)
+                self.assertEqual(method, "energy_mean+maxwell_ripple")
+                self.assertEqual(ref_method, method)
+                np.testing.assert_array_equal(selected, reference)
+                self.assertAlmostEqual(
+                    float(np.mean(selected)),
+                    diagnostic["space_vector_mean_candidate_Nm"], places=12)
+                # The AC is the raw Maxwell AC, untouched.
+                np.testing.assert_allclose(
+                    np.asarray(selected) - np.mean(selected),
+                    maxwell - np.mean(maxwell), rtol=0, atol=1e-14)
+                self.assertEqual(_MODULE.TORQUE_MEAN_SOURCE[method],
+                                 "flux_linkage_space_vector")
 
     def test_parallel_scaling_is_reported_without_claiming_validation(self):
         psi, current, maxwell = _fundamental(2.0)

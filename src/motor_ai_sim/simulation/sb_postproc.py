@@ -294,6 +294,48 @@ def _terminal_work_ineligibility(*, imposed_current_drive: bool, eddy: bool,
     return next((reason for ok, reason in checks if not ok), None)
 
 
+def space_vector_hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
+                               psi_c: Sequence[float], i_a: Sequence[float],
+                               i_b: Sequence[float], i_c: Sequence[float],
+                               t_maxwell: Sequence[float], pole_pairs: int,
+                               n_parallel: int = 1) -> Tuple[List[float], str]:
+    """Flux-linkage (space-vector) mean + raw Maxwell AC — 68de0ca verbatim.
+
+    The mean is ``(3/2)·p·n_parallel·<ψα·iβ − ψβ·iα>`` over the retained
+    window (PER-BRANCH ψ and i; ``n_parallel`` restores the phase current).
+    The AC is the raw Maxwell series, untouched. Above 1 A peak per branch
+    (and with aligned terminal data) the mean replaces the Maxwell mean;
+    otherwise the raw Maxwell series is returned unchanged, as it always was.
+    Arithmetic, order of operations and the 1 A gate are exactly 68de0ca's, so
+    every run that is not terminal-work eligible reproduces 68de0ca's mean
+    bit-for-bit on the same field.
+    """
+    _pa = np.asarray(psi_a, float); _pb = np.asarray(psi_b, float)
+    _pc = np.asarray(psi_c, float)
+    _ea = np.asarray(i_a, float); _eb = np.asarray(i_b, float)
+    _ec = np.asarray(i_c, float)
+    _Ipk = (float(np.max(np.abs(np.concatenate([_ea, _eb, _ec]))))
+            if _ea.size else 0.0)
+    if _pa.size and _pa.size == _ea.size and _Ipk > 1.0:
+        _s = 2.0 / 3.0; _kc = math.sqrt(3.0) / 2.0
+        _psial = _s * (_pa - 0.5 * _pb - 0.5 * _pc); _psibe = _s * _kc * (_pb - _pc)
+        _ial = _s * (_ea - 0.5 * _eb - 0.5 * _ec); _ibe = _s * _kc * (_eb - _ec)
+        _Te = (1.5 * float(pole_pairs) * float(max(1, int(n_parallel)))
+               * (_psial * _ibe - _psibe * _ial))
+        _emean = float(_Te.mean())
+        _mx = np.asarray(t_maxwell, float)     # raw Maxwell σ_rθ series
+        return (_mx - _mx.mean() + _emean).tolist(), "energy_mean+maxwell_ripple"
+    return list(t_maxwell), "maxwell_stress"
+
+
+# What each selected-method string means, for the result record.
+TORQUE_MEAN_SOURCE = {
+    "terminal_work_mean+maxwell_ripple": "terminal_work",
+    "energy_mean+maxwell_ripple": "flux_linkage_space_vector",
+    "maxwell_stress": "raw_maxwell",
+}
+
+
 def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                   psi_c: Sequence[float], i_a: Sequence[float],
                   i_b: Sequence[float], i_c: Sequence[float],
@@ -306,7 +348,22 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                   all_frames_converged: bool = False,
                   integer_period_window: bool = False
                   ) -> Tuple[List[float], str]:
-    """Eligible all-bin terminal-work mean + raw Maxwell AC, or raw Maxwell.
+    """Mean torque from terminal work or flux linkage, AC from raw Maxwell.
+
+    Two branches, chosen by eligibility (never by a filter):
+
+    * ELIGIBLE (imposed current, no eddy / rotor eddy / demag / frozen ν, every
+      retained frame converged, integer-period uniform window): the all-bin
+      terminal-work mean ``n_parallel * mean(Σ i_branch * dψ/dθ_m)``,
+      method ``"terminal_work_mean+maxwell_ripple"``.
+    * EVERY OTHER RUN (eddy, demag, voltage / PWM drive — every client report):
+      the flux-linkage space-vector mean ``(3/2)·p·n_par·<ψα iβ − ψβ iα>``,
+      computed exactly as 68de0ca did, method ``"energy_mean+maxwell_ripple"``.
+      House rule: energy / flux-linkage torque only, never the Maxwell mean.
+      As in 68de0ca, a run whose peak per-branch current is ≤ 1 A (no-load
+      cogging with eddy, say) keeps the raw Maxwell series
+      (``"maxwell_stress"``): the space-vector mean is identically 0 there and
+      cannot see cogging or eddy drag.
 
     ``psi_*`` and ``i_*`` are PER-BRANCH (one parallel path), which is how the
     solver carries them everywhere — ``_sc_psi2`` divides psi by n_parallel and
@@ -327,9 +384,9 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
     Historical mean discrepancies do not establish a fixed Maxwell bias for
     every geometry, material or operating point.
 
-    Selection is based on explicit conservative-periodic eligibility, never on a
-    current threshold. The fallback preserves the raw Maxwell series exactly.
-    Zero-current terminal work is not a cogging estimate.
+    Terminal-work eligibility is explicit conservative-periodic eligibility.
+    The ripple is the raw Maxwell AC in both branches (no filter); only the
+    mean is replaced. Zero-current terminal work is not a cogging estimate.
     """
     _ineligible = _terminal_work_ineligibility(
         imposed_current_drive=imposed_current_drive, eddy=eddy,
@@ -338,7 +395,9 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
         integer_period_window=integer_period_window,
         mechanical_angle_rad=mechanical_angle_rad)
     if _ineligible is not None:
-        return list(t_maxwell), "maxwell_stress"
+        return space_vector_hybrid_torque(
+            psi_a, psi_b, psi_c, i_a, i_b, i_c, t_maxwell, pole_pairs,
+            n_parallel=n_parallel)
     _mx = np.asarray(t_maxwell, float)
     _mean = terminal_work_mean(
         psi_a, psi_b, psi_c, i_a, i_b, i_c, mechanical_angle_rad,

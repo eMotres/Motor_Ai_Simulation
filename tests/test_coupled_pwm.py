@@ -21,7 +21,8 @@ So the loop learns a second drive, and this file pins what that must mean:
       ``get_fem_transient`` — the same function the Run button calls — so the
       star-equivalent substitution, the modulation gate and the settled DC
       anchor all come from the one implementation and not from a copy here.
-  (c) THE DEFAULTS ARE NAMED.  The carrier is the duty's ``sim.fSwitch``, the
+  (c) THE DEFAULTS ARE NAMED.  The carrier is the CONTROLLER's (since
+      2026-09-24; the retired ``sim.fSwitch`` is only its migration tier), the
       bus is the pack's ``v_nom``, the frame count is the study's 20 samples per
       carrier, and the fundamental is the duty's own ``V1_seed_peak_V``.  Each
       is recorded with WHERE it came from.
@@ -152,6 +153,20 @@ def loop(monkeypatch):
     monkeypatch.setattr(cp, "_pole_pairs", lambda body: 5)
     monkeypatch.setattr(cp, "_pack_nominal_v", lambda: 750.4)
     monkeypatch.setattr(cp, "_effective_f_switch", lambda body: 24000.0)
+    # 2026-09-24: the carrier and the bus are the CONTROLLER's
+    # (``inverter.drive_source``); stood in for here so the wiring under test
+    # never reads the catalog of whichever machine the server has loaded.  The
+    # bus still goes through ``_pack_nominal_v`` so the "no pack" refusal below
+    # keeps its meaning.
+    monkeypatch.setattr(cp, "_drive_carrier", lambda body, default=True: {
+        "hz": 24000.0, "origin": "controller",
+        "source": "the Controller settings (carrier)"})
+
+    def _vdc(body):
+        v = cp._pack_nominal_v()
+        return {"V": v, "origin": "controller" if v else None,
+                "source": "the machine's battery v_nom" if v else None}
+    monkeypatch.setattr(cp, "_drive_v_dc", _vdc)
     monkeypatch.setattr(cp, "_duty_summary",
                         lambda: {"V1_seed_peak_V": 572.1396,
                                  "V1_seed_delta_deg": 34.259})
@@ -226,7 +241,7 @@ def test_pwm_sends_the_routes_own_pwm_voltage_arguments(loop):
     kw = seen["em"][0]
     assert kw["drive"] == "pwm_voltage"
     assert kw["v_bus"] == pytest.approx(750.4)          # the pack's v_nom
-    assert kw["f_switch"] == pytest.approx(24000.0)     # the duty's sim.fSwitch
+    assert kw["f_switch"] == pytest.approx(24000.0)     # the Controller's carrier
     assert kw["v_phase_peak"] == pytest.approx(572.1396)
     assert kw["v_delta_deg"] == pytest.approx(34.259)
     # The resolution-matched sinusoidal reference is OFF by default: it is a
@@ -240,7 +255,8 @@ def test_pwm_sends_the_routes_own_pwm_voltage_arguments(loop):
     assert kw["n_steps_per_period"] == 280
     inv = out["coupling"]["inverter"]
     assert inv["f_carrier_hz"] == 24000.0 and inv["v_dc_V"] == 750.4
-    assert inv["sources"]["f_carrier_hz"].startswith("the duty")
+    assert inv["sources"]["f_carrier_hz"].startswith("the Controller")
+    assert inv["carrier_origin"] == "controller"
     assert inv["sources"]["v_dc_V"].startswith("the machine")
     assert "20 FEM steps per carrier" in inv["sources"]["n_steps_per_period"]
     assert inv["sources"]["v_phase_peak_V"].startswith("the duty")

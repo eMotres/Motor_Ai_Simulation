@@ -4021,11 +4021,16 @@ class ControllerPatch(BaseModel):
     ``duty_results``'s own ``controller`` kind, the losses/thermal/limits
     table a Solve produces).  This is the FORM the tab was left in: which
     device, how the bridges map onto the winding, how many devices in
-    parallel, the gate/dead-time numbers, the carrier and the bus (blank —
-    ``None`` — meaning "the duty's own", exactly the convention
-    ``routes.controller._duty_defaults`` already reports in its ``sources``
-    map), the coldplate, and whether this controller is meant to feed its
-    losses back into the coupled EM/thermal loop.
+    parallel, the gate/dead-time numbers, the carrier and the bus, the
+    coldplate, and whether this controller is meant to feed its losses back
+    into the coupled EM/thermal loop.
+
+    Since 2026-09-24 ``f_carrier_hz`` is THE machine's PWM carrier — the
+    Simulation tab no longer holds one — and every consumer reads it through
+    ``inverter.drive_source``.  ``None`` (a block saved before that) means
+    "not set": the retired Simulation-tab carrier is then read as a migration
+    tier until the tab is saved with a number.  ``v_dc_V`` ``None`` means "the
+    configuration's battery, nominal".
 
     Owner 2026-09-22: *"при сохранении мотора текущий контроллер тоже должен
     сохраняться со всеми настройками"* — saved WHOLE, the same footing as

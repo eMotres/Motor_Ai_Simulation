@@ -7811,8 +7811,13 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                      mag_lim: Optional[float], mag_note: str,
                      ins_lim: float, ins_note: str,
                      cold_k: float, cold_note: str,
-                     slots: Optional[int] = None) -> Dict[str, Any]:
+                     slots: Optional[int] = None,
+                     carrier_hz: Optional[float] = None) -> Dict[str, Any]:
     """The flat per-duty view :func:`duty_warnings` judges.
+
+    ``carrier_hz`` — the CONTROLLER's carrier for this duty
+    (:func:`duty_carrier_hz`, 2026-09-24); omitted = the duty's own saved
+    ``sim.fSwitch``, which is what every caller before that date passed.
 
     Every value is taken from the duty's OWN stored answers; where a quantity
     exists in more than one store the more specific one wins (a solved
@@ -8237,7 +8242,12 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # switched at 24,383 Hz (14) and 24,808 Hz (13).  Judged against the
     # request, mode #6 at 24,028 Hz came out 0.12 % away and red on both
     # duties; against the carriers the runs used it is 1.5 % and 3.1 % away.
-    _fs = _numf(_setting_of(col, "sim.fSwitch"))
+    # …AND THE CARRIER IS THE CONTROLLER'S (2026-09-24): ``carrier_hz`` is the
+    # configuration's Controller carrier (the retired ``sim.fSwitch`` only as
+    # the migration tier); a stored PWM run's own effective carrier still wins
+    # below, because that is what the bridge of THAT run really switched at.
+    _fs = (_numf(carrier_hz) if carrier_hz is not None
+           else _numf(_setting_of(col, "sim.fSwitch")))
     _fs_eff = effective_carrier_hz(col)
     _modes_rec = res.get("modes") if isinstance(res.get("modes"), dict) else None
     _tight = tightest_ring_mode(_modes_rec, rpm=rpm, slots=slots,
@@ -8255,13 +8265,13 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         if _rebuilt and _tight.get("synchronised"):
             _judged = (", re-judged against the carrier this duty's bridge "
                        "really switched at — %s, the synchronous modulator's "
-                       "lock on the electrical period, not the %s the panel "
-                       "asked for — and its own speed (%s)"
+                       "lock on the electrical period, not the %s the "
+                       "Controller asked for — and its own speed (%s)"
                        % (_fmt(_fs_eff, 0, "Hz"), _fmt(_fs, 0, "Hz"),
                           _fmt(rpm, 0, "rpm")))
         elif _rebuilt:
-            _judged = (", re-judged against this duty's own PWM carrier (%s) "
-                       "and speed (%s)"
+            _judged = (", re-judged against the Controller's PWM carrier (%s) "
+                       "and this duty's speed (%s)"
                        % (_fmt(_fs, 0, "Hz"), _fmt(rpm, 0, "rpm")))
         else:
             _judged = ", as the coupled run's modal step filed it"
@@ -8323,6 +8333,21 @@ def duty_setting(cfg_doc: Dict[str, Any], duty: Optional[str], key: str) -> Any:
                and str(d.get("name") or "") == str(duty or "")), None)
     m = (dd or {}).get("mesh")
     return m.get(key) if isinstance(m, dict) else None
+
+
+def duty_carrier_hz(cfg_doc: Optional[Dict[str, Any]],
+                    duty: Optional[str]) -> Optional[float]:
+    """The PWM carrier the report judges a duty's resonances against — the
+    configuration's CONTROLLER carrier (2026-09-24, owner: «Это значение нужно
+    задавать в контроллере; PWM нужно выкинуть из Electromagnetic»), else the
+    retired Simulation-tab ``sim.fSwitch`` the duty was saved with (the
+    migration tier), else ``None`` (no carrier line — never a made-up one).
+    ``inverter.drive_source`` is the one resolution every consumer uses."""
+    try:
+        from motor_ai_sim.inverter.drive_source import resolve_carrier
+        return resolve_carrier(cfg_doc or {}, duty=duty, default=False)["hz"]
+    except Exception:                                       # noqa: BLE001
+        return _numf(duty_setting(cfg_doc or {}, duty, "sim.fSwitch"))
 
 
 def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
@@ -8624,7 +8649,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
             (brg_assign or {}).get("temp_c"), c.get("em") or {}),
         max_speed_rpm=max_speed, mag_lim=mag_lim, mag_note=mag_note,
         ins_lim=ins_lim, ins_note=ins_note, cold_k=cold_k,
-        cold_note=cold_note, slots=_slots_poles(geo)[0]) for c in cols}
+        cold_note=cold_note, slots=_slots_poles(geo)[0],
+        carrier_hz=duty_carrier_hz(cfg_doc, c["duty"])) for c in cols}
     # …and HOW MUCH of the magnet is under the band, read from each duty's own
     # stored demagnetisation field (user 2026-09-14): a worst element of 18.4 %
     # is a corner or a pole, and only the field says which.  Read-only, cached,
@@ -8895,8 +8921,9 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "modes_duty": (me_map_duty or detail_duty or None),
         "modes_rpm": duty_point(cfg_doc, me_map_duty or detail_duty or "",
                                 cols)[0],
-        "modes_f_switch_hz": duty_setting(
-            cfg_doc, me_map_duty or detail_duty or "", "sim.fSwitch"),
+        # …the CONTROLLER's carrier since 2026-09-24 (``duty_carrier_hz``).
+        "modes_f_switch_hz": duty_carrier_hz(
+            cfg_doc, me_map_duty or detail_duty or ""),
         # …and the carrier that duty's bridge REALLY switched at (A2-1): the
         # synchronous modulator locks to the electrical period, so a 24 kHz
         # request came out 24,383 Hz on one duty and 24,808 Hz on the other.

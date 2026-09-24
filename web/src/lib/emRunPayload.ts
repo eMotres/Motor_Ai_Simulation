@@ -56,9 +56,8 @@ export interface EmRunInputs {
   /** voltage drives: fundamental phase-voltage amplitude [V peak] and its angle */
   vPeak: number;
   vDelta: number;
-  /** pwm_voltage: the DC link [V] and the carrier [Hz] */
-  vBus: number;
-  fSwitch: number;
+  // (no vBus / fSwitch: a pwm_voltage run takes its DC link and carrier
+  //  from the CONTROLLER, resolved by the backend — 2026-09-24)
   /** bldc_current: flat-top block amplitude [A] */
   iBlock: number;
   /** custom_current: JSON [[θe_deg, i_A], …] over one period */
@@ -110,7 +109,7 @@ const numOr = (v: unknown, def: number): number => {
  * how a run answers a different question than the one on screen.
  */
 export function driveFields(
-  inp: Pick<EmRunInputs, 'drive' | 'vPeak' | 'vDelta' | 'vBus' | 'fSwitch'
+  inp: Pick<EmRunInputs, 'drive' | 'vPeak' | 'vDelta'
   | 'iBlock' | 'waveform' | 'battery' | 'busCouple' | 'chargeMax'>,
 ): Record<string, unknown> {
   const { drive, battery } = inp;
@@ -124,7 +123,8 @@ export function driveFields(
     ...(imposedV
       ? { v_phase_peak: inp.vPeak, v_delta_deg: inp.vDelta, harm_ref: true }
       : { v_phase_peak: 0, v_delta_deg: 0, harm_ref: false }),
-    ...(drive === 'pwm_voltage' ? { v_bus: inp.vBus, f_switch: inp.fSwitch } : {}),
+    // pwm_voltage sends NO v_bus / f_switch (2026-09-24): the PWM drive is
+    // the Controller's, and the route resolves both from it.
     ...(drive === 'bldc_current' ? { i_block: inp.iBlock } : {}),
     ...(drive === 'custom_current' ? { waveform: inp.waveform } : {}),
     // ── THE PACK ON THE DC LINK ────────────────────────────────────
@@ -291,8 +291,6 @@ export function emRunInputsFromSettings(
       ? (drive as DriveKind) : 'current',
     vPeak: numOr(readSimSetting('vPeak', 30.0), 30.0),
     vDelta: numOr(readSimSetting('vDelta', 0), 0),
-    vBus: numOr(readSimSetting('vBus', 0), 0),
-    fSwitch: numOr(readSimSetting('fSwitch', 24000), 24000),
     iBlock: numOr(readSimSetting('iBlock', 0), 0),
     waveform: String(readSimSetting<string>('waveform', '') ?? ''),
     // NOT read from storage: the pack is loaded from the family context by the

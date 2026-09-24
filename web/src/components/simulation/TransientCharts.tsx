@@ -233,8 +233,8 @@ interface Props {
   drive?: 'current' | 'voltage' | 'pwm_voltage' | 'custom_current' | 'bldc_current';
   vPeak?: number;   // voltage drives: FUNDAMENTAL phase-voltage amplitude [V, peak]
   vDelta?: number;  // voltage drives: voltage angle δ [°el] in the γ frame
-  vBus?: number;    // pwm_voltage: DC link [V]
-  fSwitch?: number; // pwm_voltage: carrier [Hz]
+  // (no vBus / fSwitch — a pwm_voltage run's carrier and DC link are the
+  //  Controller's, resolved by the backend, 2026-09-24)
   iBlock?: number;  // bldc_current: flat-top block amplitude [A terminal]
   waveform?: string;// custom_current: JSON [[θe_deg, i_A], …] over one period
   // ── GENERATOR → BATTERY (boost mode) ─────────────────────────────────
@@ -330,7 +330,7 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
-const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, vBus = 0, fSwitch = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false }) => {
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false }) => {
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -487,7 +487,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     const p: Record<string, unknown> = buildEmRunPayload({
       restore: restoreOnly,
       steps, gamma_deg, I_phase_rms,
-      drive, vPeak, vDelta, vBus, fSwitch, iBlock, waveform,
+      drive, vPeak, vDelta, iBlock, waveform,
       battery, busCouple, chargeMax,
       fieldLosses, eddyCoupled, demag, torqueFilter: false,
       fresh: fresh || freshOnce,

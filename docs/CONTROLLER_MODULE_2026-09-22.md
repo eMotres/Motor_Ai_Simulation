@@ -630,6 +630,11 @@ is defined in Controller* — an "Open" button and a HelpTip.  A stored
 records stay readable and re-runnable, which is why the drive itself was left
 alone.  Pinned by `web/.../__tests__/pwmInController.test.mjs`.
 
+**Superseded 2026-09-24** (`PWM_IN_CONTROLLER_2026-09-24.md`): the PWM button,
+carrier and V_bus are gone from the Simulation tab altogether; the carrier is
+the Controller's saved field and every consumer resolves it through
+`inverter/drive_source.py`.
+
 **Open item:** the coupled panel has no drive selector of its own today (PWM
 coupled runs have always been driven from a script), so "the coupled loop's
 drive selector gets *inverter (Controller)*" has nothing to extend yet; the

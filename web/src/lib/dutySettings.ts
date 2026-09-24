@@ -46,6 +46,10 @@ export const DUTY_OP_KEYS: readonly string[] = [
   'sim.coilTemp', 'sim.opMode',
   'sim.targetKind', 'sim.targetValue',
   'sim.drive', 'sim.vPeak', 'sim.vDelta',
+  // LEGACY (2026-09-24): no panel writes these four any more — the PWM drive
+  // is the Controller's.  Kept in the list so a duty save still CARRIES the
+  // value an older save recorded: the Controller's carrier migration reads a
+  // duty's `sim.fSwitch` until the Controller tab is saved with its own.
   'sim.vBus', 'sim.fSwitch', 'sim.fSwGroup', 'sim.fSwCustom',
   'sim.iBlock',
   // WHICH QUESTION THE COUPLED LOOP IS ASKED for THIS duty (owner 2026-09-18):

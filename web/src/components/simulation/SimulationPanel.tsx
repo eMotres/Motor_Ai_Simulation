@@ -13,7 +13,7 @@ import {
   LinearProgress, Alert, Tooltip, IconButton, Paper,
   CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions,
   Checkbox, FormControlLabel, FormControl, InputLabel, Select, MenuItem,
-  InputAdornment, ListSubheader, Switch,
+  InputAdornment, Switch,
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
@@ -43,7 +43,7 @@ import { fetchCoupledLast, setCoupledControllerRef } from './coupledApi';
 import { useDieContext } from '../common/useDieContext';
 import {
   getControllerSettings, readControllerMirror, saveControllerFromMirror,
-  controllerSavedFieldsLine, type ControllerSettings,
+  controllerSavedFieldsLine, getResolvedPoint, type ControllerSettings,
 } from '../controller/controllerApi';
 import { syncActiveMotor, getActiveMotor } from '../common/motorSettings';
 import BatteryDialog, { type BatteryValue } from '../catalog/BatteryDialog';
@@ -95,58 +95,16 @@ interface FieldBusy {
 type DriveKind = 'current' | 'voltage' | 'pwm_voltage' | 'custom_current'
                | 'bldc_current';
 
-// Switching frequencies that real controllers actually offer, grouped by the
-// power stage they belong to.  A free-text kHz box invites numbers no inverter
-// runs at; these are the settings an engineer would find in the drive's own
-// menu.  'custom' reveals the numeric field for everything else — the backend
-// takes any frequency.
-const FSW_GROUPS: { label: string; hint: string; values: number[]; def: number }[] = [
-  { label: 'SiC MOSFET · 400–800 V',
-    hint: 'EV traction / industrial SiC stage — the CILN28 class (640–860 V pack)',
-    values: [16000, 24000, 32000, 48000], def: 24000 },
-  { label: 'IGBT · 400–800 V',
-    hint: 'classic traction inverter — switching loss keeps the carrier low',
-    values: [4000, 8000, 12000, 16000], def: 8000 },
-  { label: 'LV MOSFET ESC · < 100 V',
-    hint: 'drone / hobby controllers (BLHeli_32, AM32) and LV FOC stages — the 40 mm class',
-    values: [24000, 48000, 64000, 96000], def: 48000 },
-];
-const FSW_ALL = Array.from(new Set(FSW_GROUPS.flatMap(g => g.values)));
+// THE PWM DRIVE IS THE CONTROLLER'S (owner 2026-09-24, on the Controller
+// tab's greyed "Carrier 20,000 Hz": «Это значение нужно задавать в
+// контроллере; PWM нужно выкинуть из Electromagnetic»).  This tab no longer
+// holds a carrier, a DC link or a controller class: the carrier picker, the
+// V_bus field and the battery→V_bus prefill that lived here are gone, and
+// every number this panel still needs about the bridge (a restored PWM run's
+// step rule, the modulation gate, the charging row) is READ from the
+// Controller's resolved point (`GET /api/controller/point`).
 const fswLabel = (hz: number) =>
   (hz >= 1000 ? `${+(hz / 1000).toFixed(hz % 1000 ? 1 : 0)} kHz` : `${hz} Hz`);
-
-// The V_bus value WE last prefilled from the machine's pack.  Kept outside the
-// sim.* block on purpose: sim.* is snapshotted into duty saves and the per-die
-// settings memory, and this is bookkeeping about the panel, not a setting of
-// the machine.  It is what tells a battery change whether the field still
-// holds our prefill (safe to refresh) or a number the user typed (never
-// touched — an explicit DC link is an explicit answer).
-const BUS_SEED_KEY = 'battery.busSeed';
-const readBusSeed = (): number | null => {
-  try {
-    const raw = JSON.parse(localStorage.getItem(BUS_SEED_KEY) || 'null');
-    // Number(null) === 0 — the absent-key case must stay null, not become a
-    // phantom «0 V seed» that fails every prefill match (measured live:
-    // V_bus stuck on the previous machine's 750 because of exactly this).
-    if (raw == null) return null;
-    const v = Number(raw);
-    return Number.isFinite(v) && v > 0 ? v : null;
-  } catch { return null; }
-};
-const writeBusSeed = (v: number): void => {
-  try { localStorage.setItem(BUS_SEED_KEY, JSON.stringify(v)); } catch { /* quota */ }
-};
-/** True while V_bus is empty, still equal to the prefill we wrote, or a
- *  value with NO seed on record — that last case is a bus that travelled in
- *  with a duty-settings restore from before vBus was machine-scoped (measured
- *  live 2026-08-31: 750 V from the CILN28 duty sitting over a 6S 22 V pack).
- *  A hand-typed bus always has a seed mismatch WITH a seed present, and only
- *  that combination is protected. */
-const busIsPrefill = (vBus: number): boolean => {
-  if (!(vBus > 0)) return true;
-  const s = readBusSeed();
-  return s == null || Math.abs(vBus - s) <= 0.05;
-};
 
 // ── types ─────────────────────────────────────────────────────────────────────
 interface SimStatus {
@@ -423,8 +381,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [targetKind,  setTargetKind]  = usePersisted<'off' | 'nm' | 'kw'>('targetKind', 'off');
   // The SINUSOIDAL voltage drive is still hidden from the menu (user request) —
   // a persisted 'voltage' selection would strand the panel in an invisible
-  // mode, so it is rewritten on mount.  The PWM / BLDC / custom-current sources
-  // ARE on the menu, so they are left alone.
+  // mode, so it is rewritten on mount.  The BLDC / custom-current sources ARE
+  // on the menu, so they are left alone; a persisted 'pwm_voltage' (a stored
+  // PWM run) is left alone too — it shows its one-line "from Controller"
+  // notice and Sine current is one click away.
   useEffect(() => {
     if (drive === 'voltage') setDrive('current');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -453,26 +413,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [opMode,  setOpMode]  = usePersisted<'motor' | 'generator'>('opMode', 'motor');
   const [vPeak,   setVPeak]   = usePersisted('vPeak',  30.0);  // phase-voltage amplitude [V]
   const [vDelta,  setVDelta]  = usePersisted('vDelta',  0.0);  // voltage angle δ [°el], same frame as γ
-  // ── PWM inverter source ────────────────────────────────────────────────
-  // All persisted under sim.* like every other operating-point field, so they
-  // ride along into duty saves and the per-die settings memory for free.
-  const [vBus,    setVBus]    = usePersisted('vBus', 0);        // DC link [V]; 0 = not set yet
-  const [fSwitch, setFSwitch] = usePersisted('fSwitch', 24000); // carrier [Hz]
-  // Which controller class the carrier was picked from (index into FSW_GROUPS).
-  // Only a UI grouping — the backend takes the frequency — but it has to be
-  // remembered because the same kHz belongs to more than one class.
-  const [fSwGroup, setFSwGroup] = usePersisted('fSwGroup', 0);
-  const [fSwCustom, setFSwCustom] = usePersisted('fSwCustom', false);
-  // ── PWM MOVED TO THE CONTROLLER TAB (owner 2026-09-22) ─────────────────
+  // ── PWM IS THE CONTROLLER'S (owner 2026-09-22, removed here 2026-09-24) ─
   // *«как отладим каплинг с контроллером, нам не нужен будет PWM в
-  // электромагнитном моделировании — всё будет задаваться в меню Controller»*.
-  // A machine's carrier, bus and dead time are a property of its CONTROLLER,
-  // and having two places to type them is how one duty ends up with two
-  // answers.  So the button no longer switches the drive: it says where the
-  // setting lives and offers to go there.  A stored `pwm_voltage` run still
-  // restores into this panel with its controls — old records stay readable
-  // and re-runnable, which is the whole reason the drive itself is untouched.
-  const [pwmMoved, setPwmMoved] = useState(false);
+  // электромагнитном моделировании — всё будет задаваться в меню Controller»*
+  // and *«PWM нужно выкинуть из Electromagnetic»*.  No PWM button, carrier,
+  // V_bus or controller class lives here any more.  A stored `pwm_voltage`
+  // run still restores into this panel (old records stay readable and
+  // re-runnable); its carrier and DC link then come from the Controller —
+  // the backend resolves them, and `ctrlDrive` below is what this panel shows
+  // and gates on.
   const goToTab = useUIStore((st: any) => st.setActiveTab);
   // ── GENERATOR → BATTERY (boost mode) ───────────────────────────────────
   // Iterate the bus against the pack instead of assuming an infinitely stiff
@@ -564,42 +513,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       if (batRetry.current != null) window.clearTimeout(batRetry.current);
     };
   }, [loadBattery]);
-  // Prefill V_bus and the switching-frequency GROUP from that supply, once, and
-  // only while the user has not set a bus of their own: a typed DC link is a
-  // number nobody checks against the pack that is really there, and the ripple a
-  // PWM run reports scales directly with it.  The default is the NOMINAL pack
-  // voltage — v_min and v_max are the corners a duty is judged against, not the
-  // voltage the machine runs at.  ≥300 V reads as a traction stage (SiC
-  // default), <100 V as an ESC; no battery leaves the field empty and the SiC
-  // 24 kHz default standing.
-  const busSeeded = useRef(false);
-  // Write the pack's nominal into V_bus (and pick the controller class from
-  // it).  `force` is the after-a-save path: the battery CHANGED, so a field
-  // still holding the old prefill must follow it — but a hand-typed bus is
-  // never overwritten, which is what busIsPrefill() checks.
-  const seedBusFromBattery = useCallback((b: BatteryPack | null, force: boolean) => {
-    const vn = Number(b?.v_nom ?? 0);
-    if (!(vn > 0)) return;
-    if (!force && (busSeeded.current || vBus > 0)) return;
-    if (force && !busIsPrefill(vBus)) return;
-    const v = +vn.toFixed(1);
-    busSeeded.current = true;
-    setVBus(v);
-    writeBusSeed(v);
-    const gi = v >= 300 ? 0 : v < 100 ? 2 : 1;    // SiC | LV ESC | IGBT
-    setFSwGroup(gi);
-    setFSwitch(FSW_GROUPS[gi].def);
-  }, [vBus]);
-  useEffect(() => {
-    // Always the prefill-aware path: the battery under the panel CHANGES when
-    // the user loads another machine (CILN28's 750 V pack -> the L12's 6S
-    // 22 V), and the old `if (vBus > 0) bail` kept the previous machine's bus
-    // in the field (measured live 2026-08-31: V_bus 750 over a 22 V battery).
-    // busIsPrefill() still protects a hand-typed DC link — only a value WE
-    // wrote is ever replaced.
-    seedBusFromBattery(battery, true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [battery]);
+  // (The V_bus / carrier-class prefill from this pack that lived here is gone
+  // with the PWM controls, 2026-09-24: the pack is now the CONTROLLER's V_dc
+  // source, resolved server-side — `ctrlDrive` below.)
 
   // Saving the dialog = saving THE MACHINE's battery.
   const saveBattery = useCallback(async (spec: CellSpec) => {
@@ -622,7 +538,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         }
         const saved = ((await r.json())?.battery ?? pack) as BatteryPack;
         setBattery(saved);
-        seedBusFromBattery(saved, true);
         setBatMsg(`✓ battery saved on ${die}/${config}`);
         // Everyone else reads the same yaml — tell them it moved, then re-read
         // the context so this panel shows what the file actually holds.
@@ -641,9 +556,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }
     writeLocalBattery(key, pack);
     setBattery(pack);
-    seedBusFromBattery(pack, true);
     setBatMsg('✓ battery saved for this motor (this browser)');
-  }, [batCtx, loadBattery, seedBusFromBattery]);
+  }, [batCtx, loadBattery]);
 
   // The save note is one short line and it goes away by itself.
   useEffect(() => {
@@ -696,6 +610,33 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [coupledDrive,   setCoupledDrive]
     = usePersisted<'sine' | 'inverter'>('coupledDrive', 'sine');
   const dieCtx = useDieContext();
+  // THE CONTROLLER'S DRIVE, read-only here (2026-09-24): the carrier and DC
+  // link the backend will use for a restored PWM run — the same resolution
+  // `POST /api/controller/solve` and the coupled loop use.  Only what this
+  // panel still gates on (the step rule, the modulation gate, the charging
+  // row); nothing here can edit it.
+  const [ctrlDrive, setCtrlDrive] = useState<{ fsw: number; vdc: number }>({ fsw: 0, vdc: 0 });
+  useEffect(() => {
+    let alive = true;
+    const load = () => { void (async () => {
+      try {
+        const p = await getResolvedPoint(dieCtx.die || undefined, dieCtx.config || undefined);
+        if (alive) setCtrlDrive({ fsw: Number(p.f_carrier_hz) || 0, vdc: Number(p.v_dc_V) || 0 });
+      } catch { if (alive) setCtrlDrive({ fsw: 0, vdc: 0 }); }
+    })(); };
+    load();
+    window.addEventListener('family-changed', load);
+    window.addEventListener('sim-design-applied', load);
+    window.addEventListener('controller-settings-saved', load);
+    return () => {
+      alive = false;
+      window.removeEventListener('family-changed', load);
+      window.removeEventListener('sim-design-applied', load);
+      window.removeEventListener('controller-settings-saved', load);
+    };
+  }, [dieCtx.die, dieCtx.config]);
+  const ctrlFsw = ctrlDrive.fsw;
+  const ctrlVdc = ctrlDrive.vdc;
   const [ctrlSettings, setCtrlSettings] = useState<ControllerSettings | null>(null);
   // A one-shot bump that forces a re-render right when the Drive dropdown
   // opens (its `onOpen` below), so the mirror read a few lines down is
@@ -1285,11 +1226,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     end_winding_factor: endWinding, connection, star_delta: starDelta,
     demag, eddy: eddyCoupled, rotor_eddy: fieldLosses, torque_filter: torqueFilter,
     drive, v_phase_peak: vPeak, v_delta_deg: vDelta,
-    // The PWM inverter's bus and carrier and the BLDC block amplitude are
-    // PHYSICS, so they go where every other physics field goes: the shared
-    // config that the sweep / optimizer / descent read.  (The custom waveform
-    // does not — it is up to 20k samples and belongs to its run.)
-    v_bus: vBus, f_switch: fSwitch, i_block: iBlock,
+    // The BLDC block amplitude is PHYSICS, so it goes where every other
+    // physics field goes: the shared config that the sweep / optimizer /
+    // descent read.  (The custom waveform does not — it is up to 20k samples
+    // and belongs to its run.)  v_bus / f_switch are NOT sent any more: the
+    // PWM drive is the Controller's (2026-09-24).
+    i_block: iBlock,
     mode: opMode,
   });
 
@@ -1309,7 +1251,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     return () => clearTimeout(id);
   }, [current, frequency, rpm, phaseOffset, demag, eddyCoupled, fieldLosses,
       coilTemp, steps, endWinding, connection, starDelta, drive, opMode, vPeak,
-      vDelta, vBus, fSwitch, iBlock]);
+      vDelta, iBlock]);
 
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
@@ -1441,8 +1383,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // the exact-mean voltage integration averages the pulses away and the run
   // reproduces the ideal sinusoid at PWM cost.  Computed here so the panel can
   // say the number to set BEFORE the run is launched, not after it is refused.
-  const pwmCarriers = (drive === 'pwm_voltage' && fSwitch > 0 && frequency > 0)
-    ? Math.max(1, Math.round(fSwitch / frequency)) : 0;
+  // The carrier is the CONTROLLER's (2026-09-24) — `ctrlFsw`, what the
+  // backend will resolve for this run.
+  const pwmCarriers = (drive === 'pwm_voltage' && ctrlFsw > 0 && frequency > 0)
+    ? Math.max(1, Math.round(ctrlFsw / frequency)) : 0;
   const stepsPerSwitch = pwmCarriers ? steps / pwmCarriers : 0;
   // The step count to SET: 16 samples per switching period, snapped UP onto a
   // count the sliding band can actually run (a divisor of the slip ring, or —
@@ -1623,8 +1567,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           const _temp  = num('coil_temp_c');      if (_temp  !== null) setCoilTemp(_temp);
           const _vpk   = num('v_phase_peak');     if (_vpk   !== null) setVPeak(_vpk);
           const _vdl   = num('v_delta_deg');      if (_vdl   !== null) setVDelta(_vdl);
-          const _vbus  = num('v_bus');            if (_vbus  !== null) setVBus(_vbus);
-          const _fsw   = num('f_switch');         if (_fsw   !== null && _fsw > 0) setFSwitch(_fsw);
+          // v_bus / f_switch are no longer adopted: the PWM drive is the
+          // Controller's (2026-09-24).
           const _ibl   = num('i_block');          if (_ibl   !== null) setIBlock(_ibl);
           if (typeof s.demag === 'boolean') setDemag(s.demag);
           if (s.mode === 'motor' || s.mode === 'generator') setOpMode(s.mode);
@@ -1922,16 +1866,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Tooltip>
           )}
 
-          {/* The machine's SUPPLY, in the same chip form as the magnet: what
-              the PWM source's DC link is prefilled from, and what a duty's
-              voltage is judged against.  Click to edit — same dialog as the
-              Family catalog's 🔋. */}
+          {/* The machine's SUPPLY, in the same chip form as the magnet: the
+              Controller's DC-link source, and what a duty's voltage is judged
+              against.  Click to edit — same dialog as the Family catalog's 🔋. */}
           <Tooltip placement="right" title={
             (battery
               ? `${battery.cells ?? '?'} cells in series, `
                 + `${battery.v_min}–${battery.v_max} V pack`
                 + (battery.v_nom != null ? ` (nominal ${battery.v_nom} V)` : '')
-                + '. The PWM source’s V_bus is prefilled from the NOMINAL — v_min/v_max are '
+                + '. The Controller’s DC link is the NOMINAL unless set there — v_min/v_max are '
                 + 'the corners a duty is judged against, not the voltage it runs at. '
               : 'This machine has no battery yet. ')
             + (batCtx.canWrite && batCtx.die && batCtx.config
@@ -1990,9 +1933,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Box>
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               {/* The ideal sinusoidal VOLTAGE drive is HIDDEN from the menu,
-                  not deleted (user request) — everything behind it stays; the
-                  PWM source below drives the same circuit with a real
-                  inverter's chopped voltage. */}
+                  not deleted (user request) — everything behind it stays.  A
+                  real inverter's chopped voltage is the Controller's (Coupled,
+                  Drive = inverter), not a source on this tab. */}
               {(['current'] as const).map(m => (
                 <Button key={m} size="small" fullWidth disabled={isRunning || fitBusy}
                   variant={drive === m && targetKind === 'off' ? 'contained' : 'outlined'}
@@ -2008,26 +1951,23 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 Target T / P
               </Button>
               <HelpTip title={'Sine current: imposed sinusoidal phase currents — the ideal ' +
-                'source, and the right one for design work. PWM inverter: an ideal two-level ' +
-                'stage chops the DC bus, so the currents are the machine’s own response and ' +
-                'carry the real switching ripple (and what it costs in torque ripple, copper ' +
-                'and core loss) — the honest answer for a low-inductance machine. BLDC 120°: ' +
-                'six-step block commutation. Custom I: any periodic phase-current waveform.'} />
+                'reference, and the right one for design work. Target T / P: the current is ' +
+                'fitted to a torque or power. BLDC 120°: six-step block commutation. Custom I: ' +
+                'any periodic phase-current waveform. PWM is not set here: the carrier, DC ' +
+                'link and dead time are the Controller tab’s, and a coupled run with Drive = ' +
+                'inverter feeds the machine that Controller’s real waveform.'} />
             </Box>
-            {/* The non-ideal sources, on their own row so the labels fit. */}
+            {/* The non-ideal CURRENT sources, on their own row so the labels
+                fit.  No PWM button (2026-09-24: «PWM нужно выкинуть из
+                Electromagnetic») — the drive is the Controller's. */}
             <Box sx={{ display: 'flex', gap: 0.5 }}>
-              {([['pwm_voltage', 'PWM inverter'],
-                 ['bldc_current', 'BLDC 120°'],
+              {([['bldc_current', 'BLDC 120°'],
                  ['custom_current', 'Custom I']] as const).map(([m, label]) => (
                 <Button key={m} size="small" fullWidth disabled={isRunning || fitBusy}
                   variant={drive === m ? 'contained' : 'outlined'}
                   color="secondary"
                   onClick={() => {
-                    if (m === 'pwm_voltage' && drive !== 'pwm_voltage') {
-                      setPwmMoved(true);            // one line, below
-                      return;
-                    }
-                    setDrive(m); setTargetKind('off'); setPwmMoved(false);
+                    setDrive(m); setTargetKind('off');
                     // Seed the amplitudes from what is already on screen so the
                     // source arrives at the SAME operating point rather than at
                     // zero: the BLDC block that matches this run's copper loss
@@ -2041,86 +1981,26 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 </Button>
               ))}
             </Box>
-            {pwmMoved && (
+            {/* A STORED PWM RUN restored into this panel (old records stay
+                readable and re-runnable).  There are no PWM controls here any
+                more (2026-09-24): its carrier and DC link are the Controller's,
+                resolved by the backend — one line saying so, and the way there. */}
+            {drive === 'pwm_voltage' && (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                 <Typography variant="caption" sx={{ color: 'text.secondary' }}>
-                  PWM is defined in Controller
+                  Stored PWM run — carrier{ctrlFsw > 0 ? ` ${fswLabel(ctrlFsw)}` : ''} and DC link from Controller
                 </Typography>
                 <Button size="small" variant="text"
-                  onClick={() => { setPwmMoved(false); goToTab('controller'); }}
+                  onClick={() => goToTab('controller')}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0 }}>
                   Open
                 </Button>
-                <HelpTip title={'The carrier, the DC link, the dead time and the '
-                  + 'device are the CONTROLLER\u2019s, and a coupled run reads them '
-                  + 'from there (drive \u201cinverter\u201d): the machine is then fed the '
-                  + 'waveform that controller really applies, dead-time '
-                  + 'distortion and device drops included, and the devices are '
-                  + 'solved on the current it produces. Runs already stored on '
-                  + 'the ideal modulator keep their answer and still load here.'} />
+                <HelpTip title={'PWM is defined in the Controller tab: the carrier, the DC link, '
+                  + 'the dead time and the device. A re-run of this stored ideal-modulator run '
+                  + 'takes its carrier and bus from there; for the Controller’s real '
+                  + 'waveform run Coupled with Drive = inverter. Pick Sine current to leave it.'} />
               </Box>
             )}
-            {drive === 'pwm_voltage' && (<>
-              <Box sx={{ display: 'flex', gap: 1 }}>
-                <TextField label="V bus (V)" type="number" size="small" fullWidth
-                  value={vBus > 0 ? vBus : ''} onChange={e => setVBus(+e.target.value)}
-                  placeholder={battery?.v_nom ? String(battery.v_nom) : 'no battery set'}
-                  inputProps={{ step: 1, min: 0 }} disabled={isRunning}
-                  InputLabelProps={{ shrink: true }}
-                  InputProps={{ endAdornment: <HelpTip title={
-                    'DC link voltage — each leg swings ±V_bus/2. '
-                    + (battery?.v_nom
-                        ? `Prefilled from this machine's pack NOMINAL voltage (`
-                          + `${battery.cells ?? '?'}s, v_nom ${battery.v_nom} V; v_min/v_max are `
-                          + `the corners a duty is judged against, not the voltage it runs at). `
-                        : 'This machine has no battery yet — set one on the battery chip above, '
-                          + 'or type the link voltage here. ')
-                    + 'The switching ripple scales directly with it, and the modulation index '
-                    + 'm = 2·V₁/V_bus must stay ≤1.15 — above that the run is refused rather '
-                    + 'than silently overmodulated.'} /> }} />
-                {/* The same frequency appears in more than one controller
-                    class (16 kHz is both a SiC and an IGBT setting), so the
-                    option VALUE carries the group index too — a Select with
-                    duplicate values renders every match's label at once. */}
-                <FormControl size="small" fullWidth disabled={isRunning}>
-                  <InputLabel>f switch</InputLabel>
-                  <Select label="f switch"
-                    value={(!fSwCustom && FSW_GROUPS[fSwGroup]?.values.includes(fSwitch))
-                      ? `${fSwGroup}:${fSwitch}` : 'custom'}
-                    onChange={e => {
-                      const raw = String(e.target.value);
-                      if (raw === 'custom') { setFSwCustom(true); return; }
-                      const [gi, hz] = raw.split(':');
-                      setFSwCustom(false); setFSwGroup(+gi); setFSwitch(+hz);
-                    }}>
-                    {FSW_GROUPS.flatMap((g, gi) => [
-                      <ListSubheader key={g.label} sx={{ fontSize: 10.5, lineHeight: '22px' }}>
-                        {g.label}
-                      </ListSubheader>,
-                      ...g.values.map(v => (
-                        <MenuItem key={`${gi}:${v}`} value={`${gi}:${v}`} sx={{ fontSize: 12 }}>
-                          {fswLabel(v)}{v === g.def ? ' · typical' : ''}
-                        </MenuItem>
-                      )),
-                    ])}
-                    <MenuItem value="custom" sx={{ fontSize: 12 }}>custom…</MenuItem>
-                  </Select>
-                </FormControl>
-                <HelpTip title={'Carrier frequency, from the settings real controllers offer: '
-                  + FSW_GROUPS.map(g => `${g.label} — ${g.hint}`).join('; ')
-                  + '. It is SNAPPED to a whole number of carriers per electrical period '
-                  + '(synchronous PWM — the reported period has to repeat), and the effective '
-                  + 'value comes back with the result. Pick "custom…" for anything off the list.'} />
-              </Box>
-              {(fSwCustom || !FSW_ALL.includes(fSwitch)) && (
-                <TextField label="f switch (Hz)" type="number" size="small" fullWidth
-                  value={fSwitch} onChange={e => setFSwitch(+e.target.value)}
-                  inputProps={{ step: 1000, min: 0 }} disabled={isRunning}
-                  InputProps={{ endAdornment: <HelpTip title={
-                    'Any carrier the backend can build. Snapped to a whole number of carriers '
-                    + 'per electrical period; the effective frequency is reported.'} /> }} />
-              )}
-            </>)}
             {drive === 'bldc_current' && (
               <TextField label="I block, flat top (A)" type="number" size="small" fullWidth
                 value={iBlock} onChange={e => setIBlock(+e.target.value)}
@@ -2151,8 +2031,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   disabled={isRunning || wfBusy}
                   onClick={() => {
                     setWfBusy(true); setWfMsg(null);
+                    // No v_bus / f_switch: the calculator takes the
+                    // CONTROLLER's carrier and DC link (2026-09-24).
                     const q = new URLSearchParams({
-                      v_bus: String(vBus || 0), f_switch: String(fSwitch),
                       I_phase_rms: String(current), gamma_deg: String(phaseOffset),
                       rpm: String(rpm),
                     });
@@ -2192,12 +2073,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 </Button>
                 <HelpTip title={'“Generate from PWM model” calls the PWM calculator: it '
                   + 'integrates the inverter’s chopped voltage through THIS machine’s measured '
-                  + 'R, Ld, Lq and ψ_PM (constant-L circuit, no FEM, milliseconds) at the V_bus '
-                  + 'and f_switch set on the PWM source, and pastes the resulting phase current '
-                  + 'here. It is the cheap route the published PWM studies use; “PWM inverter” '
-                  + 'is the honest one — there the currents come out of the field solve with '
-                  + 'saturation and the real back-EMF in the loop. Upload takes a JSON array or '
-                  + 'a two-column CSV.'} />
+                  + 'R, Ld, Lq and ψ_PM (constant-L circuit, no FEM, milliseconds) at the '
+                  + 'Controller’s DC link and carrier, and pastes the resulting phase current '
+                  + 'here. It is the cheap route the published PWM studies use; a coupled run '
+                  + 'with Drive = inverter is the honest one — there the currents come out of the '
+                  + 'field solve with saturation and the real back-EMF in the loop. Upload takes '
+                  + 'a JSON array or a two-column CSV.'} />
               </Box>
               {wfMsg && (
                 <Typography sx={{ fontSize: 10, color: wfMsg.startsWith('✗') ? '#fca5a5' : '#38bdf8' }}>
@@ -2266,7 +2147,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       active: steps === suggestSteps },
                   ],
                 });
-                const m = vBus > 0 && vPeak > 0 ? 2 * vPeak / vBus : 0;
+                const m = ctrlVdc > 0 && vPeak > 0 ? 2 * vPeak / ctrlVdc : 0;
                 // Only when it BLOCKS: a legal m is not a launch criterion
                 // worth a standing row (user 2026-09-01: "вот это можно
                 // выбросить" — the amber 3rd-harmonic note was daily noise;
@@ -2278,8 +2159,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   tip: 'Modulation index m = 2·V_peak/V_bus. Up to 1.00 plain linear; '
                     + '1.00–1.15 needs third-harmonic injection (allowed); above 1.15 the '
                     + 'inverter cannot form the fundamental and the solver refuses the run.',
-                  actions: [{ text: 'set ' + (0.5 * vBus).toFixed(1) + ' V',
-                              onClick: () => setVPeak(+(0.5 * vBus).toFixed(1)) }],
+                  actions: [{ text: 'set ' + (0.5 * ctrlVdc).toFixed(1) + ' V',
+                              onClick: () => setVPeak(+(0.5 * ctrlVdc).toFixed(1)) }],
                 });
               }
               if ((drive === 'pwm_voltage' || drive === 'voltage') && v1Seed) {  // no seed -> no row: absence is not an alert
@@ -2317,7 +2198,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       ? 'no battery on this machine — set one to get the charging card'
                       : (busCouple
                           ? 'bus iterated against the pack (V_oc + I·R)'
-                          : 'stiff bus at ' + vBus.toFixed(1) + ' V — pack R ignored'),
+                          : 'stiff bus at ' + ctrlVdc.toFixed(1) + ' V — pack R ignored'),
                   tip: 'Generator into the machine’s own pack through the same bridge: the '
                     + 'winding IS the boost inductor and the modulation index sets the step-up, so '
                     + 'charging works with the EMF below V_bus. Bus coupling re-solves the whole '
@@ -2650,7 +2531,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 if (L > 0 && R > 0 && frequency > 0)
                   per = Math.min(12, Math.max(2, Math.ceil(3 * (L / R) * frequency)));
               } catch { /* no history → the static default */ }
-              const carriers = Math.max(1, Math.round(fSwitch / Math.max(frequency, 1e-9)));
+              const carriers = Math.max(1, Math.round(ctrlFsw / Math.max(frequency, 1e-9)));
               if (steps / carriers >= 16) return per * Math.max(2, steps);
               let coarse = 1;
               for (let d = 1; d <= steps; d++) if (steps % d === 0 && d <= 40) coarse = d;
@@ -3229,8 +3110,6 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           drive={drive}
           vPeak={vPeak}
           vDelta={vDelta}
-          vBus={vBus}
-          fSwitch={fSwitch}
           iBlock={iBlock}
           waveform={waveform}
           // ── the pack on the DC link ──────────────────────────────────

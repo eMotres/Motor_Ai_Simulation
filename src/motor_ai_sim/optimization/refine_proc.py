@@ -52,9 +52,17 @@ def _excitation_args(sim: Dict[str, Any]) -> Dict[str, Any]:
         # Simulation tab, not to a geometry search.  OPT_ALLOW_PWM=1 keeps the
         # old behaviour for a deliberately long study.
         if (os.environ.get("OPT_ALLOW_PWM") or "").strip() == "1":
+            # The carrier and the bus are the CONTROLLER's since 2026-09-24;
+            # the retired simulation.v_bus / f_switch are only the fallback.
+            try:
+                from motor_ai_sim.inverter import drive_source as _DS
+                _fc = _DS.resolve_carrier_for(default=True)["hz"]
+                _vd = _DS.resolve_v_dc_for()["V"]
+            except Exception:                               # noqa: BLE001
+                _fc = _vd = None
             return {"drive": d,
-                    "v_bus": float(sim.get("v_bus", 0.0) or 0.0),
-                    "f_switch": float(sim.get("f_switch", 0.0) or 0.0)}
+                    "v_bus": float(_vd or sim.get("v_bus", 0.0) or 0.0),
+                    "f_switch": float(_fc or sim.get("f_switch", 0.0) or 0.0)}
         log.warning("optimizer: the Simulation tab's excitation is the PWM "
                     "inverter (f_switch %s Hz), which cannot be resolved at the "
                     "optimizer's step count — candidates are evaluated on the "

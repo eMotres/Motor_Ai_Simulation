@@ -54,7 +54,8 @@ function driveFields(inp) {
     ...(imposedV
       ? { v_phase_peak: inp.vPeak, v_delta_deg: inp.vDelta, harm_ref: true }
       : { v_phase_peak: 0, v_delta_deg: 0, harm_ref: false }),
-    ...(drive === 'pwm_voltage' ? { v_bus: inp.vBus, f_switch: inp.fSwitch } : {}),
+    // pwm_voltage sends NO v_bus / f_switch (2026-09-24): the PWM drive is
+    // the Controller's, and the route resolves both from it.
     ...(drive === 'bldc_current' ? { i_block: inp.iBlock } : {}),
     ...(drive === 'custom_current' ? { waveform: inp.waveform } : {}),
     ...((imposedV && battery)
@@ -75,8 +76,6 @@ function emRunInputsFromSettings(over = {}) {
     drive: DRIVES.includes(drive) ? drive : 'current',
     vPeak: numOr(readSimSetting('vPeak', 30.0), 30.0),
     vDelta: numOr(readSimSetting('vDelta', 0), 0),
-    vBus: numOr(readSimSetting('vBus', 0), 0),
-    fSwitch: numOr(readSimSetting('fSwitch', 24000), 24000),
     iBlock: numOr(readSimSetting('iBlock', 0), 0),
     waveform: String(readSimSetting('waveform', '') ?? ''),
     battery: null,
@@ -108,7 +107,7 @@ test('the Thermal fallback and the Simulation panel build the same body', () => 
   // The Electromagnetic panel's own props, as `TransientCharts` receives them.
   const panel = {
     restore: false, steps: 36, gamma_deg: 12.5, I_phase_rms: 461.7,
-    drive: 'current', vPeak: 30, vDelta: 0, vBus: 750, fSwitch: 24000,
+    drive: 'current', vPeak: 30, vDelta: 0,
     iBlock: 0, waveform: '', battery: null, busCouple: true, chargeMax: false,
     fieldLosses: true, eddyCoupled: true, demag: true, torqueFilter: false,
     fresh: false, run_id: '',
@@ -150,7 +149,7 @@ test('a corrupt drive falls back to current rather than to nothing', () => {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 const base = {
-  drive: 'current', vPeak: 30, vDelta: 5, vBus: 750, fSwitch: 24000,
+  drive: 'current', vPeak: 30, vDelta: 5,
   iBlock: 120, waveform: '[[0,1]]', battery: null, busCouple: true,
   chargeMax: false,
 };
@@ -160,10 +159,12 @@ test('a current drive carries no voltage, no carrier and no pack', () => {
     drive: 'current', v_phase_peak: 0, v_delta_deg: 0, harm_ref: false });
 });
 
-test('a PWM run carries the bus and the carrier', () => {
+test('a PWM run carries NO bus and NO carrier — they are the Controller\'s', () => {
+  // 2026-09-24: «PWM нужно выкинуть из Electromagnetic» — the route resolves
+  // both from the Controller settings (inverter.drive_source).
   const d = driveFields({ ...base, drive: 'pwm_voltage' });
-  assert.equal(d.v_bus, 750);
-  assert.equal(d.f_switch, 24000);
+  assert.equal('v_bus' in d, false);
+  assert.equal('f_switch' in d, false);
   assert.equal(d.v_phase_peak, 30);
   assert.equal(d.harm_ref, true);
 });

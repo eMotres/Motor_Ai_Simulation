@@ -124,6 +124,12 @@ class EmTransientSolver:
     def run(self, payload: Optional[Dict[str, Any]] = None) -> ResultIR:
         try:
             from motor_ai_sim.routes.simulation import get_fem_transient
+            # The retired Simulation-tab PWM drive (2026-09-24): an old session
+            # still sends v_bus / f_switch with drive='pwm_voltage' — accepted,
+            # the Controller's saved values win, a deprecation is logged.
+            from motor_ai_sim.inverter.drive_source import pwm_request_fields
+            payload = pwm_request_fields(dict(payload or {}),
+                                         where="POST /api/kernel/run")
             res = _call_filtered(get_fem_transient, payload) or {}
             return result_ir_from_transient(res, provenance=stamp(self.NAME, version=self.VERSION))
         except Exception as e:  # noqa: BLE001

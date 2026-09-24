@@ -223,6 +223,11 @@ def _f_switch(explicit: Optional[float] = None) -> Optional[float]:
 
     ``None`` when the machine is not being driven by a PWM inverter, in which
     case no carrier line is drawn rather than a made-up 20 kHz.
+
+    2026-09-24: with nothing passed, the carrier is the loaded machine's
+    CONTROLLER carrier (``inverter.drive_source`` — the saved Controller
+    settings, else the retired Simulation-tab carrier as a migration tier),
+    never a default: the Controller is the one place a PWM drive is defined.
     """
     if explicit is not None:
         try:
@@ -231,9 +236,8 @@ def _f_switch(explicit: Optional[float] = None) -> Optional[float]:
             return None
         return v if v > 0 else None
     try:
-        from motor_ai_sim.config import get_config
-        v = ((get_config() or {}).get("simulation") or {}).get("f_switch")
-        return float(v) if v and float(v) > 0 else None
+        from motor_ai_sim.inverter.drive_source import resolve_carrier_for
+        return resolve_carrier_for(default=False)["hz"]
     except Exception:  # noqa: BLE001
         return None
 
@@ -2019,8 +2023,8 @@ def modes(
                                          description="inverter carrier the "
                                                      "excitation table is built "
                                                      "on; 0 = no PWM line; "
-                                                     "default = simulation."
-                                                     "f_switch"),
+                                                     "default = the "
+                                                     "Controller's carrier"),
     geo: Optional[str] = Query(default=None),
 ):
     """In-plane (per unit length) natural modes of the rotor or stator core.
@@ -2148,8 +2152,8 @@ def critical_speeds(
                                          description="inverter carrier the "
                                                      "excitation table is built "
                                                      "on; 0 = no PWM line; "
-                                                     "default = simulation."
-                                                     "f_switch"),
+                                                     "default = the "
+                                                     "Controller's carrier"),
     geo: Optional[str] = Query(default=None),
 ):
     """Forward / backward whirl vs speed, and the shaft's critical speeds.

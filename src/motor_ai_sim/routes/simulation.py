@@ -488,6 +488,13 @@ def update_sim_config(patch: SimConfigPatch):
     updates = {k: v for k, v in patch.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+    # v_bus / f_switch: ACCEPTED (an old browser session still sends them) but
+    # retired — the PWM drive is the Controller's since 2026-09-24, and these
+    # two keys are read only as the Controller's migration tier.
+    if "v_bus" in updates or "f_switch" in updates:
+        from motor_ai_sim.inverter.drive_source import warn_deprecated
+        warn_deprecated("PATCH /api/simulation/config with v_bus/f_switch — the "
+                        "PWM carrier and DC link are set in the Controller tab")
     # What the block says NOW — so the cache flush below can tell a real
     # change from a re-save of the same values.  User 2026-09-07 ("опять то же
     # самое… сколько можно повторять?"): a panel re-saved unchanged settings
@@ -4534,6 +4541,51 @@ def get_fem_transient(
     # it unchanged, so the two travel together wherever the question is "is
     # this a chopped bridge".
     _pwm_like = ("pwm_voltage", "inverter")
+    # ── THE PWM DRIVE IS THE CONTROLLER'S (owner 2026-09-24: «Это значение
+    # нужно задавать в контроллере; PWM нужно выкинуть из Electromagnetic») ──
+    # The Simulation tab no longer holds a carrier or a DC link, so a
+    # ``pwm_voltage`` request (a stored PWM run re-run from that tab) arrives
+    # WITHOUT them and they are taken from the Controller here — the saved
+    # carrier / manual V_dc, else the battery, else the migration tier —
+    # through the one resolver every other consumer uses.  A caller that SENDS
+    # them (the coupled loop, the passport's carrier study, a script) is
+    # obeyed: those are explicit numbers, and a restore must look up the run
+    # it asked for.  ``_drive_sources`` names what was used in the result.
+    _drive_sources: Dict[str, str] = {}
+    if _drive == "pwm_voltage" and not (float(f_switch or 0.0) > 0.0
+                                        and float(v_bus or 0.0) > 0.0):
+        from motor_ai_sim.inverter import drive_source as _DSrc
+        if not (float(f_switch or 0.0) > 0.0):
+            _fc = _DSrc.resolve_carrier_for(default=True)
+            f_switch = float(_fc["hz"])
+            _drive_sources["f_switch"] = str(_fc["source"])
+        else:
+            _drive_sources["f_switch"] = "the request"
+        if not (float(v_bus or 0.0) > 0.0):
+            _vd = _DSrc.resolve_v_dc_for()
+            if _vd["V"] is None:
+                # A client's own copy keeps its pack in the browser and sends
+                # it as the `battery` payload — the same pack, nominal.
+                try:
+                    _bp = _parse_battery_payload(battery) or {}
+                except HTTPException:
+                    _bp = {}
+                for _bk in ("v_nom", "v_oc"):
+                    if float(_bp.get(_bk) or 0.0) > 0.0:
+                        _vd = {"V": float(_bp[_bk]),
+                               "source": "the battery sent with the request "
+                                         "(%s)" % _bk}
+                        break
+            if _vd["V"] is not None:
+                v_bus = float(_vd["V"])
+                _drive_sources["v_bus"] = str(_vd["source"])
+        else:
+            _drive_sources["v_bus"] = "the request"
+        # The outer loops (battery-coupled bus, max-charge search) re-enter
+        # this route from ``_route_kwargs``; they must re-enter with the SAME
+        # carrier and bus this pass resolved.
+        _route_kwargs["f_switch"] = f_switch
+        _route_kwargs["v_bus"] = v_bus
     # ── DELTA ON AN IMPOSED-VOLTAGE SOURCE — the EXACT star equivalent ────
     # The voltage circuit (drive.circuit_residual_ll) is the isolated-neutral
     # STAR one: it integrates DIFFERENCES of the applied phase voltages, so a
@@ -5382,6 +5434,10 @@ def get_fem_transient(
                 _mark_equivalent_star(_sbres, v_bus_real=float(v_bus),
                                       v_bus_model=float(_v_bus_model),
                                       drive=_drive)
+            # WHERE the carrier and the bus came from (2026-09-24): the
+            # Controller, or the migration tier — beside the numbers.
+            if _drive_sources and isinstance(_sbres.get("pwm"), dict):
+                _sbres["pwm"]["drive_sources"] = dict(_drive_sources)
         except _RunCancelled:
             _fem_transient_progress["current"] = {
                 "running": False, "step": 0, "total": 0, "elapsed_s": 0.0,
@@ -6014,8 +6070,11 @@ def catalogue_ldq0(geo_ov: Optional[dict], *, daxis_deg: float,
 
 @router.get("/pwm_waveform")
 def get_pwm_waveform(
-    v_bus:        float = Query(..., description="DC link voltage [V]"),
-    f_switch:     float = Query(..., description="carrier frequency [Hz]"),
+    v_bus:        Optional[float] = Query(None, description="DC link voltage [V]; "
+                                          "omitted = the Controller's (manual "
+                                          "V_dc, else the battery)"),
+    f_switch:     Optional[float] = Query(None, description="carrier frequency "
+                                          "[Hz]; omitted = the Controller's"),
     I_phase_rms:  float = Query(..., description="terminal phase current setpoint [A rms]"),
     gamma_deg:    float = 0.0,      # current angle, q-axis = 0 (panel convention)
     rpm:          Optional[float] = None,   # None = the shared config's speed
@@ -6054,6 +6113,22 @@ def get_pwm_waveform(
     from motor_ai_sim.simulation.pwm import (
         synthesize_pwm_current as _synth, ExcitationError as _ExcErr2,
         parse_waveform as _pwf)
+    # The carrier and the bus are the CONTROLLER's (2026-09-24) — the
+    # Simulation tab holds neither any more, so an omitted value is resolved
+    # exactly as every other PWM consumer resolves it; a sent one is obeyed.
+    _drv_src: Dict[str, str] = {}
+    if not (v_bus is not None and float(v_bus) > 0.0):
+        from motor_ai_sim.inverter import drive_source as _DSw
+        _vd = _DSw.resolve_v_dc_for()
+        if _vd["V"] is None:
+            raise HTTPException(422, detail=(
+                "no DC link known: set V_dc in the Controller tab or give the "
+                "machine a battery (or pass ?v_bus=)."))
+        v_bus, _drv_src["v_bus"] = float(_vd["V"]), str(_vd["source"])
+    if not (f_switch is not None and float(f_switch) > 0.0):
+        from motor_ai_sim.inverter import drive_source as _DSw
+        _fc = _DSw.resolve_carrier_for(default=True)
+        f_switch, _drv_src["f_switch"] = float(_fc["hz"]), str(_fc["source"])
     _geo_ov = _parse_geo_override(geo)
     _cfg = _gc_p()
     _geo = {**dict(_cfg.get("geometry") or {}), **(_geo_ov or {})}
@@ -6105,6 +6180,8 @@ def get_pwm_waveform(
         "psi_pm_mWb": round(_pm * 1e3, 4),
         "source": ("bench probe" if _need_bench else "caller"),
     }
+    if _drv_src:
+        out["drive_sources"] = _drv_src
     return out
 
 

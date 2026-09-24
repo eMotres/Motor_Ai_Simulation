@@ -29,6 +29,17 @@ GLOBAL_HZ = 48000.0          # the Ø85 on the server
 DUTY_HZ = 24000.0            # the duty actually being solved
 
 
+@pytest.fixture(autouse=True)
+def _no_catalog(monkeypatch):
+    """No catalogued machine is loaded — so ``inverter.drive_source`` (the
+    Controller's carrier, 2026-09-24) has no Controller block to read and falls
+    to its migration tier, the process-global ``simulation`` block.  Pinned so
+    a developer's own ``.family_context.json`` can never leak into this file."""
+    from motor_ai_sim.inverter import drive_source as ds
+    monkeypatch.setattr(ds, "_context",
+                        lambda die, cfg, duty: (None, None, None, True))
+
+
 @pytest.fixture
 def global_carrier(monkeypatch):
     """The process-global ``simulation`` block, holding ANOTHER machine."""
@@ -154,9 +165,31 @@ def test_effective_f_switch_prefers_the_bodys_own(global_carrier):
         {"f_switch_hz": DUTY_HZ}) == pytest.approx(DUTY_HZ)
     assert coupled._effective_f_switch(
         {"f_switch": DUTY_HZ}) == pytest.approx(DUTY_HZ)
-    # Nothing in the body: the shared configuration the ▶ route PATCHed.
+    # Nothing in the body and no Controller carrier: the migration tier (the
+    # retired simulation.f_switch of the machine that is loaded).
     assert coupled._effective_f_switch({}) == pytest.approx(GLOBAL_HZ)
     assert coupled._effective_f_switch({"f_switch_hz": 0}) is None
+
+
+def test_the_controllers_carrier_outranks_the_body_and_the_global(
+        global_carrier, monkeypatch):
+    """2026-09-24 (owner: «Это значение нужно задавать в контроллере»): a
+    carrier saved in the Controller — or sent with the run as its
+    ``controller`` block — is THE carrier; the retired body field is only
+    accepted below it."""
+    from motor_ai_sim.inverter import drive_source as ds
+    monkeypatch.setattr(ds, "_context",
+                        lambda die, cfg, duty: ("D", "C", "rated", True))
+    monkeypatch.setattr(ds, "load_config_doc", lambda die, cfg: {
+        "controller": {"f_carrier_hz": 32000.0}})
+    assert coupled._effective_f_switch(
+        {"f_switch_hz": DUTY_HZ}) == pytest.approx(32000.0)
+    assert coupled._effective_f_switch({}) == pytest.approx(32000.0)
+    assert coupled._effective_f_switch(
+        {"controller": {"f_carrier_hz": 16000.0}}) == pytest.approx(16000.0)
+    assert mech._f_switch() == pytest.approx(32000.0)
+    # …and an explicit carrier handed to the mechanical hook still wins.
+    assert mech._f_switch(DUTY_HZ) == pytest.approx(DUTY_HZ)
 
 
 def test_modal_steps_pass_the_runs_carrier_to_both_hooks(monkeypatch):

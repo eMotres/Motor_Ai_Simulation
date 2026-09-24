@@ -1160,15 +1160,29 @@ def test_v_dc_falls_back_to_the_battery_midpoint_with_no_nominal(synth_dir, monk
     assert "midpoint" in r.json()["sources"]["v_dc_V"]
 
 
-def test_v_dc_prefers_the_dutys_own_pwm_bus_over_battery_nominal(synth_dir, monkeypatch):
-    """A duty actually solved with PWM at 750.4 V knows its own real bus
-    better than a generic battery nominal — that real number wins."""
+def test_v_dc_battery_outranks_the_dutys_legacy_pwm_bus(synth_dir, monkeypatch):
+    """2026-09-24 (PWM moved to the Controller): the Controller's V_dc source
+    is the configuration's battery.  A duty's stored PWM bus is the retired
+    Simulation tab's number and only a MIGRATION tier — used when the
+    configuration has no battery at all (next test)."""
     node = _sine_node(inv_extra={"v_dc_V": 750.4})
     _patch_duty(monkeypatch, node, cfg_doc={"battery": _BATTERY})
     r = _solve(_duty_solve_body(v_dc_V=None))
     assert r.status_code == 200, r.text
+    assert r.json()["point"]["v_dc_V"] == pytest.approx(44.4)
+    assert "battery" in r.json()["sources"]["v_dc_V"]
+    assert r.json()["origins"]["v_dc_V"] == "controller"
+
+
+def test_v_dc_migrates_the_dutys_pwm_bus_when_there_is_no_battery(
+        synth_dir, monkeypatch):
+    node = _sine_node(inv_extra={"v_dc_V": 750.4})
+    _patch_duty(monkeypatch, node, cfg_doc={})
+    r = _solve(_duty_solve_body(v_dc_V=None))
+    assert r.status_code == 200, r.text
     assert r.json()["point"]["v_dc_V"] == pytest.approx(750.4)
     assert "PWM bus" in r.json()["sources"]["v_dc_V"]
+    assert r.json()["origins"]["v_dc_V"] == "legacy"
 
 
 def test_v_dc_prefers_a_saved_manual_override_over_everything(synth_dir, monkeypatch):
@@ -1199,34 +1213,59 @@ def test_missing_battery_and_no_pwm_bus_refuses_with_the_v_dc_sentence(
     assert detail["fields"] == ["v_dc_V"]
 
 
-def test_carrier_prefers_the_dutys_own_pwm_setup(synth_dir, monkeypatch):
+def test_carrier_the_saved_controller_carrier_outranks_the_dutys_pwm_record(
+        synth_dir, monkeypatch):
+    """2026-09-24 (owner: «Это значение нужно задавать в контроллере»): the
+    Controller's saved carrier IS the machine's carrier.  The duty's stored
+    PWM record is what an older run was solved at — a migration tier only."""
     node = _sine_node(inv_extra={"f_carrier_hz": 24_000.0})
     _patch_duty(monkeypatch, node,
                cfg_doc={"battery": _BATTERY, "controller": {"f_carrier_hz": 48_000.0}})
     r = _solve(_duty_solve_body(f_carrier_hz=None, v_dc_V=None))
     assert r.status_code == 200, r.text
+    assert r.json()["point"]["f_carrier_hz"] == pytest.approx(48_000.0)
+    assert r.json()["sources"]["f_carrier_hz"] == "the Controller settings (carrier)"
+    assert r.json()["origins"]["f_carrier_hz"] == "controller"
+
+
+def test_carrier_migrates_the_dutys_pwm_record_when_nothing_is_saved(
+        synth_dir, monkeypatch):
+    node = _sine_node(inv_extra={"f_carrier_hz": 24_000.0})
+    _patch_duty(monkeypatch, node,
+               cfg_doc={"battery": _BATTERY, "controller": {"f_carrier_hz": None}})
+    r = _solve(_duty_solve_body(f_carrier_hz=None, v_dc_V=None))
+    assert r.status_code == 200, r.text
     assert r.json()["point"]["f_carrier_hz"] == pytest.approx(24_000.0)
+    assert "migrated" in r.json()["sources"]["f_carrier_hz"]
     assert "PWM carrier" in r.json()["sources"]["f_carrier_hz"]
+    assert r.json()["origins"]["f_carrier_hz"] == "legacy"
 
 
-def test_carrier_falls_back_to_the_saved_controller_default(synth_dir, monkeypatch):
-    _patch_duty(monkeypatch, _sine_node(),
-               cfg_doc={"battery": _BATTERY, "controller": {"f_carrier_hz": 48_000.0}})
+def test_carrier_migrates_the_retired_simulation_tab_sim_fswitch(
+        synth_dir, monkeypatch):
+    """A duty solved on sine current never had a PWM record, but the
+    Simulation tab saved its carrier with the duty (``mesh['sim.fSwitch']``)
+    — that is the value the Controller adopts until it is saved."""
+    doc = {"battery": _BATTERY,
+           "duties": [{"name": _DUTY, "mesh": {"sim.fSwitch": 48_000}}]}
+    _patch_duty(monkeypatch, _sine_node(), cfg_doc=doc)
     r = _solve(_duty_solve_body(f_carrier_hz=None, v_dc_V=None))
     assert r.status_code == 200, r.text
     assert r.json()["point"]["f_carrier_hz"] == pytest.approx(48_000.0)
-    assert r.json()["sources"]["f_carrier_hz"] == "the saved controller settings"
+    assert "sim.fSwitch" in r.json()["sources"]["f_carrier_hz"]
+    assert r.json()["origins"]["f_carrier_hz"] == "legacy"
 
 
 def test_carrier_falls_back_to_the_modules_own_default(synth_dir, monkeypatch):
-    """No PWM history and no saved controller default: the module's own
+    """No PWM history and no saved controller carrier: the Controller's own
     plain constant — a solve must never die on a missing carrier."""
     from motor_ai_sim.routes import controller as rc
     _patch_duty(monkeypatch, _sine_node(), cfg_doc={"battery": _BATTERY})
     r = _solve(_duty_solve_body(f_carrier_hz=None, v_dc_V=None))
     assert r.status_code == 200, r.text
     assert r.json()["point"]["f_carrier_hz"] == pytest.approx(rc.DEFAULT_CARRIER_HZ)
-    assert "module's stated default" in r.json()["sources"]["f_carrier_hz"]
+    assert "Controller's stated default" in r.json()["sources"]["f_carrier_hz"]
+    assert r.json()["origins"]["f_carrier_hz"] == "default"
 
 
 def test_resolved_point_preview_names_every_source_before_solving(
@@ -1253,10 +1292,14 @@ def test_resolved_point_preview_names_every_source_before_solving(
     assert out["modulation_index"] is None and out["power_factor"] is None
     assert out["line"] == (
         f"solving for: {_DUTY} · 48.6 A rms · 44.4 V "
-        "(the configuration's battery block (pack nominal)) · star · "
+        "(the configuration's battery block (pack nominal) — the "
+        "Controller's V_dc source) · star · "
         f"{rc.DEFAULT_CARRIER_HZ / 1000.0:.0f} kHz "
-        "(this module's stated default (20 kHz — no PWM history and no "
-        "saved carrier)) · no modulation index known")
+        "(the Controller's stated default (20 kHz — no carrier saved in the "
+        "Controller and none left by the Simulation tab)) · no modulation "
+        "index known")
+    assert out["carrier_origin"] == "default"
+    assert out["v_dc_origin"] == "controller"
 
 
 # ---------------------------------------------------------------------------

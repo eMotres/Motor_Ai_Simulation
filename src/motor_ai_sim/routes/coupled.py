@@ -683,10 +683,13 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
     fundamental the bridge must apply (``v_phase_peak_V`` / ``v_delta_deg``).
     Each falls back, in order, to:
 
-      * the carrier — this run's own ``f_switch_hz`` / the shared
-        configuration's ``simulation.f_switch`` (``_effective_f_switch``),
-        i.e. the DUTY's ``sim.fSwitch``;
-      * the bus — the loaded machine's battery ``v_nom``;
+      * the carrier — the CONTROLLER's (``_drive_carrier``: the block sent
+        with the request, the saved Controller settings, the retired
+        Simulation-tab carrier as a migration tier, the Controller's stated
+        default); since 2026-09-24 the Controller is the one place a PWM
+        drive is defined;
+      * the bus — the Controller's manual V_dc, else the machine's battery
+        ``v_nom`` (``_drive_v_dc``);
       * the frame count — the study's 20 samples per carrier;
       * the fundamental — the duty's own saved ``V1_seed_peak_V`` /
         ``V1_seed_delta_deg``, which is what a current-drive run of this point
@@ -701,7 +704,7 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
     raw = body.get("inverter")
     inv = dict(raw) if isinstance(raw, dict) else {}
 
-    def _num(key, fallback, what):
+    def _num(key, fallback, what, fallback_src=None):
         v = inv.get(key)
         if v is not None:
             try:
@@ -720,11 +723,19 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
                 "drive='pwm' needs %s and none was given: send "
                 "inverter.%s, or %s." % (what, key, _INV_HINTS[key]),
                 ["inverter." + key], code="pwm_incomplete_inverter")
-        return float(fallback), _INV_SOURCES[key]
+        return float(fallback), (fallback_src or _INV_SOURCES[key])
 
-    f_c, f_c_src = _num("f_carrier_hz", _effective_f_switch(body),
-                        "a carrier frequency")
-    v_dc, v_dc_src = _num("v_dc_V", _pack_nominal_v(), "a DC link voltage")
+    # THE CARRIER AND THE BUS ARE THE CONTROLLER'S (2026-09-24).  An explicit
+    # ``inverter.f_carrier_hz`` / ``inverter.v_dc_V`` (a carrier study, an
+    # ``alt_carrier`` record) still wins; otherwise ``_drive_carrier`` /
+    # ``_drive_v_dc`` answer from the Controller — never a default the record
+    # cannot name.
+    _fc = _drive_carrier(body, default=True)
+    f_c, f_c_src = _num("f_carrier_hz", _fc["hz"], "a carrier frequency",
+                        fallback_src=_fc["source"])
+    _vd = _drive_v_dc(body)
+    v_dc, v_dc_src = _num("v_dc_V", _vd["V"], "a DC link voltage",
+                          fallback_src=_vd["source"])
     f_el = float(rpm) * _pole_pairs(body) / 60.0
     steps, steps_src = _num("n_steps_per_period",
                             _pwm_steps_per_period(f_c, f_el),
@@ -841,6 +852,11 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
         "f_elec_hz": round(f_el, 4),
         "carriers_per_period": nc,
         "samples_per_carrier": round(float(steps) / nc, 2),
+        # WHICH TIER the carrier came from (2026-09-24): ``controller`` is the
+        # rule; ``legacy`` = migrated from the retired Simulation-tab carrier,
+        # ``default`` = nothing named one — both say "save it in Controller".
+        "carrier_origin": ("request" if f_c_src == "the request"
+                           else _fc["origin"]),
         "sources": {"f_carrier_hz": f_c_src, "v_dc_V": v_dc_src,
                     "n_steps_per_period": steps_src,
                     "v_phase_peak_V": v1_src, "v_delta_deg": dl_src},
@@ -850,16 +866,16 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
 #: Where each inverter field comes from when the request does not name it —
 #: the words the refusal and the record use, so both say the same thing.
 _INV_SOURCES = {
-    "f_carrier_hz": "the duty's sim.fSwitch (the shared configuration)",
+    "f_carrier_hz": "the Controller settings (carrier)",
     "v_dc_V": "the machine's battery v_nom",
     "n_steps_per_period": ("the study's rule: %d FEM steps per carrier period"
                            % PWM_SAMPLES_PER_CARRIER),
     "v_phase_peak_V": "the duty's saved summary (V1_seed_peak_V)",
 }
 _INV_HINTS = {
-    "f_carrier_hz": ("set simulation.f_switch on the machine (the duty's "
-                     "sim.fSwitch)"),
-    "v_dc_V": "give the machine a battery with a v_nom",
+    "f_carrier_hz": "set the carrier in the Controller tab and save it",
+    "v_dc_V": ("give the machine a battery with a v_nom, or set V_dc in the "
+               "Controller tab"),
     "n_steps_per_period": "give the run a speed so the rule can be applied",
     "v_phase_peak_V": ("run this duty on the current drive once so its summary "
                        "carries V1_seed_peak_V"),
@@ -2044,7 +2060,8 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
     The carrier, the DC link and the fundamental are NOT here: they are the
     inverter block's, resolved by :func:`_inverter_settings` exactly as the
     ideal-PWM path resolves them, so the two drives cannot disagree about which
-    bus this machine runs on.
+    bus this machine runs on — and since 2026-09-24 both read them from the
+    Controller too (``_drive_carrier`` / ``_drive_v_dc``).
     """
     from motor_ai_sim.inverter.devices import CardError, get_device
     from motor_ai_sim.inverter.losses import (DEFAULT_TIM_K_W, E_OSS_POLICIES,
@@ -2055,12 +2072,24 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
     stored = _duty_controller_record()
     st_set = dict((stored.get("settings") or {})) if stored else {}
     st_top = dict((stored.get("topology") or {})) if stored else {}
+    # THE CONTROLLER SETTINGS SAVED WITH THE CONFIGURATION (2026-09-24 — the
+    # Controller is the one place the drive is defined): a request that sends
+    # no ``controller`` block (a script, an old session) reads the tab's saved
+    # form before the duty's last Stage-1 solve, which may be older than it.
+    try:
+        from motor_ai_sim.inverter import drive_source as _DS
+        saved = _DS.controller_block_for()
+    except Exception:                                       # noqa: BLE001
+        saved = {}
     src: Dict[str, str] = {}
 
     def _pick(key, stored_val, default, where_stored, where_default):
         if req.get(key) is not None:
             src[key] = "the request"
             return req[key]
+        if saved.get(key) is not None:
+            src[key] = "the Controller settings saved with the configuration"
+            return saved[key]
         if stored_val is not None:
             src[key] = where_stored
             return stored_val
@@ -2121,7 +2150,10 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
         raise _refuse("controller.set_split must be " + " or ".join(SET_SPLITS),
                       ["controller.set_split"])
     cooling = req.get("cooling")
-    if cooling is None and stored:
+    if cooling is None and isinstance(saved.get("cooling"), dict) and saved["cooling"]:
+        cooling = dict(saved["cooling"])
+        src["cooling"] = "the Controller settings saved with the configuration"
+    elif cooling is None and stored:
         cooling = ((stored.get("thermal") or {}).get("coldplate"))
         if isinstance(cooling, dict):
             cooling = {k: v for k, v in cooling.items()
@@ -2771,6 +2803,9 @@ def _inverter_record(em: Dict[str, Any], inv: Dict[str, Any],
     dq = s.get("delta_equivalent_star")
     out: Dict[str, Any] = {
         "f_carrier_hz": float(inv["f_carrier_hz"]),
+        # Which tier named the carrier (2026-09-24: the Controller is the rule;
+        # ``legacy`` / ``default`` mean "save a carrier in the Controller").
+        "carrier_origin": inv.get("carrier_origin"),
         "f_carrier_eff_hz": pwm.get("f_switch_eff_Hz"),
         "carriers_per_period": pwm.get("carriers_per_period",
                                        inv.get("carriers_per_period")),
@@ -3247,27 +3282,29 @@ def _compact_crit(r: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _effective_f_switch(body: Dict[str, Any]) -> Optional[float]:
-    """THE CARRIER OF THE RUN BEING SOLVED, for the excitation tables.
+def _drive_carrier(body: Dict[str, Any], *, default: bool) -> Dict[str, Any]:
+    """THE CARRIER OF THE RUN BEING SOLVED — ``{hz, origin, source}``.
 
-    The ring modes and the whirl branches are compared against slot passing and
-    against the inverter carrier, and the carrier is a SETTING of the duty, not
-    an output of the current-drive solve this loop makes.  Resolved once, with
-    the run, and passed down explicitly:
+    2026-09-24 (owner: «Это значение нужно задавать в контроллере; PWM нужно
+    выкинуть из Electromagnetic»): the CONTROLLER owns it.  In order —
 
-      * ``f_switch_hz`` / ``f_switch`` in the body — what the caller is solving
-        this duty at (the catalogue's ``sim.fSwitch``, which ``routes/family``
-        exposes as ``f_switch_hz``);
-      * failing that, the shared configuration's ``simulation.f_switch`` — the
-        block the ▶ route PATCHes from the duty before the electromagnetic run,
-        i.e. this run's own carrier.
-
-    Read HERE rather than inside the mechanical route, so the value that lands
-    in the modal record is the one this run was made with.  Before 2026-09-14
-    the modal step read the process-global itself, at whatever moment it ran,
-    and the Ø85's 48 kHz ended up in the Ø200 L155 rated duty's ring-mode
-    table.  ``None`` = no PWM line is drawn.
+      * ``body.controller.f_carrier_hz`` (the Controller block the Coupled
+        panel sends by reference) and the SAVED Controller settings of the
+        loaded configuration;
+      * ``f_switch_hz`` / ``f_switch`` in the body — the retired Simulation-tab
+        field an old browser session or a script may still send: ACCEPTED,
+        below the Controller, and logged as deprecated;
+      * the migration tier (``inverter.drive_source.legacy_carrier``: the
+        duty's saved ``sim.fSwitch``, then ``simulation.f_switch``);
+      * the Controller's stated default — only when ``default`` (a bridge
+        drive needs a carrier; the excitation table does not, and draws no
+        PWM line rather than a made-up one).
     """
+    from motor_ai_sim.inverter import drive_source as _DS
+    ctl = body.get("controller") if isinstance(body.get("controller"), dict) else None
+    ans = _DS.resolve_carrier_for(controller=ctl, default=False)
+    if ans["origin"] == _DS.ORIGIN_CONTROLLER:
+        return ans
     for k in ("f_switch_hz", "f_switch"):
         if body.get(k) is None:
             continue
@@ -3275,13 +3312,52 @@ def _effective_f_switch(body: Dict[str, Any]) -> Optional[float]:
             v = float(body.get(k))
         except (TypeError, ValueError):
             continue
-        return v if v > 0.0 else None
-    try:
-        from motor_ai_sim.config import get_config
-        v = ((get_config() or {}).get("simulation") or {}).get("f_switch")
-        return float(v) if v and float(v) > 0.0 else None
-    except Exception:  # noqa: BLE001
-        return None
+        _DS.warn_deprecated(
+            "coupled: '%s' in the request — the carrier is the Controller's "
+            "since 2026-09-24 (save it in the Controller tab)" % k)
+        if v > 0.0:
+            return {"hz": v, "origin": _DS.ORIGIN_REQUEST,
+                    "source": "the request's %s (deprecated field — no "
+                              "carrier saved in the Controller)" % k}
+        # 0 is "this run has no PWM line" — the caller said so explicitly.
+        return {"hz": None, "origin": _DS.ORIGIN_REQUEST,
+                "source": "the request's %s = 0 (no PWM line)" % k}
+    if ans["hz"] is not None or not default:
+        return ans
+    return _DS.resolve_carrier_for(controller=ctl, default=True)
+
+
+def _drive_v_dc(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The DC link — the Controller's manual V_dc, else the battery
+    (``inverter.drive_source.resolve_v_dc``).  ``{"V": None, ...}`` when the
+    machine names neither; the caller refuses by name."""
+    from motor_ai_sim.inverter import drive_source as _DS
+    ctl = body.get("controller") if isinstance(body.get("controller"), dict) else None
+    ans = _DS.resolve_v_dc_for(controller=ctl)
+    if ans["V"] is None:
+        v = _pack_nominal_v()
+        if v is not None:
+            return {"V": v, "origin": _DS.ORIGIN_CONTROLLER,
+                    "source": _INV_SOURCES["v_dc_V"]}
+    return ans
+
+
+def _effective_f_switch(body: Dict[str, Any]) -> Optional[float]:
+    """THE CARRIER OF THE RUN BEING SOLVED, for the excitation tables.
+
+    The ring modes and the whirl branches are compared against slot passing and
+    against the inverter carrier, and the carrier is a SETTING of the machine's
+    CONTROLLER (2026-09-24), not an output of the current-drive solve this loop
+    makes.  Resolved once, with the run, by :func:`_drive_carrier` (no default:
+    ``None`` = no PWM line is drawn), and passed down explicitly.
+
+    Read HERE rather than inside the mechanical route, so the value that lands
+    in the modal record is the one this run was made with.  Before 2026-09-14
+    the modal step read the process-global itself, at whatever moment it ran,
+    and the Ø85's 48 kHz ended up in the Ø200 L155 rated duty's ring-mode
+    table.
+    """
+    return _drive_carrier(body, default=False)["hz"]
 
 
 def _modal_steps(body: Dict[str, Any], *, authorization: Optional[str],

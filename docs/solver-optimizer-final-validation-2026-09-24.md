@@ -20,10 +20,17 @@ points. The status records that validation considered a shortlist, not the
 entire cloud; it cannot certify a global six-sample optimum.
 
 The one-off scan/sweep points and baseline preview are explicitly preliminary.
-The Sweep chart and table disable Apply/archive for them, including old saved
-results without a quality stamp. This fail-closed gate prevents publishing
-three-sample values as a finished motor; on-demand standard validation for a
-picked sweep point is still needed to restore that workflow. Standalone
+For a picked Sweep point, Apply now first asks the server to select the stored
+point by run and geometry/operating-point index, verify pinned scan provenance
+against the current machine, and run a fresh standard 6× FEM solve. The server
+checks the run/config again after the solve and returns standard metrics only
+with explicit nonlinear convergence and sufficient angular sampling. Geometry,
+operating-point and archive writes begin only after that succeeds. Old stored
+scans without point-level config and solver-parameter provenance fail closed
+and must be rerun. The server does not lock configuration between its final
+check and the subsequent UI writes; a concurrent config edit in that brief
+interval remains a race until application is made one atomic backend operation.
+Standalone
 `/refine` and `/descent/baseline` remain coarse optimization results and are
 not covered by winner finalization. A missing `picard_converged` stamp now
 fails the FEM evaluation rather than being inferred as successful.

@@ -1662,9 +1662,11 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                  pins=({"rpm": float(rpm)} if rpm else None),
                                  sampling_purpose="optimization")
 
-        def _mk_point(out, ov, I, gi, oi, g, rpm=None):
+        def _mk_point(out, ov, I, gi, oi, g, rpm=None, source_fp=None):
             pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
             pt["gamma_deg"] = g    # stamp γ so the chart can group/connect without the request
+            pt["source_cfg_fp"] = source_fp or _config_fingerprint(
+                tuple(k for k in ov if k != "gamma_deg"))
             # Stamp the SOLVED speed too: the frontend re-derives P = T·ω from
             # its live sim.rpm when the point carries none, which is wrong the
             # moment the user changes speed after the sweep.
@@ -1687,6 +1689,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             i, (gi, oi, ov, I, opg, oprpm) = i_t
             g = float(ov.get("gamma_deg", opg))
             geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
+            fp_before = _config_fingerprint(tuple(geo_ov))
             out = _subprocess_eval(geo_ov, I, steps, coil_temp_c,
                                    n_periods=_NPER, gamma_deg=g,
                                    mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
@@ -1698,11 +1701,13 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                    iron_template=iron_template, geo_mesh=geo_mesh,
                                    element_order=element_order, demag=demag,
                                    rpm=oprpm, owner="scan",
-                                   threads=_solo_ctx["threads"],
-                                   sampling_purpose="optimization")
+                                    threads=_solo_ctx["threads"],
+                                    sampling_purpose="optimization")
+            if _config_fingerprint(tuple(geo_ov)) != fp_before:
+                out = {"ok": False, "error": "source config changed during FEM scan"}
             if out and out.get("ok"):
                 _store_eval(_cache_key(geo_ov, I, g, oprpm), out)   # cache successful evals only
-            return i, _mk_point(out, ov, I, gi, oi, g, oprpm)
+            return i, _mk_point(out, ov, I, gi, oi, g, oprpm, fp_before)
 
         # PREFILL: instantly plot every point already in the cache (from prior
         # sweeps — survives a backend restart via .scan_cache.jsonl) with NO FEM
@@ -1936,7 +1941,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             # computed without those settings.  The run-time fingerprint is
             # stored too: seeding after a config edit must not stamp old-config
             # results as current.
-            "scan_params": {"coil_temp_c": float(coil_temp_c), "mesh_size_mm": float(mesh_size_mm),
+             "scan_params": {"coil_temp_c": float(coil_temp_c), "mesh_size_mm": float(mesh_size_mm),
                             "min_size_mm": float(min_size_mm), "pole_copy": pole_copy,
                             "torque_filter": bool(torque_filter),
                             "n_sectors": int(n_sectors), "gap_layers": float(gap_layers),
@@ -1944,8 +1949,9 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                             "hi_fidelity": bool(hi_fidelity), "structured_gap": bool(structured_gap),
                             "airgap_macro": bool(airgap_macro), "iron_template": bool(iron_template),
                             "geo_mesh": bool(geo_mesh), "element_order": int(element_order),
-                            "demag": bool(demag), "cfg_fp": _config_fingerprint(),
-                            "sampling_purpose": "optimization"},
+                             "demag": bool(demag), "cfg_fp": _config_fingerprint(),
+                             "validation_provenance_version": 1,
+                             "sampling_purpose": "optimization"},
         }
         with _scan_lock:
             if _scan_owns(run_id):
@@ -2157,6 +2163,131 @@ def scan_progress():
                 "total": int(resume.get("total", 0)),
             }
     return _json_sane(out)
+
+
+class ScanValidateRequest(BaseModel):
+    run_id: str
+    geom_id: int
+    op_index: int
+
+
+_SCAN_VALIDATION_PARAMS = (
+    "coil_temp_c", "mesh_size_mm", "min_size_mm", "pole_copy",
+    "torque_filter", "n_sectors", "gap_layers", "end_winding",
+    "rotor_eddy", "hi_fidelity", "structured_gap", "airgap_macro",
+    "iron_template", "geo_mesh", "element_order", "demag", "cfg_fp",
+    "sampling_purpose", "validation_provenance_version",
+)
+
+
+def _scan_validation_inputs(result: Dict[str, Any], req: ScanValidateRequest
+                            ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Read the exact finished scan point and pinned solve settings, or refuse.
+
+    Legacy scan results lack point/config provenance and cannot be certified.
+    No client-supplied geometry, current, or solver option is trusted here.
+    """
+    if not isinstance(result, dict) or not req.run_id or result.get("run_id") != req.run_id:
+        raise HTTPException(status_code=409, detail="Sweep run changed; select a point from the current run")
+    sp = result.get("scan_params")
+    if not isinstance(sp, dict) or any(k not in sp for k in _SCAN_VALIDATION_PARAMS) or \
+            sp.get("validation_provenance_version") != 1 or \
+            sp.get("sampling_purpose") != "optimization":
+        raise HTTPException(status_code=422, detail="Sweep lacks pinned validation provenance; run it again")
+    steps = result.get("steps_per_period")
+    ops = result.get("operating_points")
+    machine = result.get("machine")
+    if not isinstance(steps, int) or steps < 1 or not isinstance(ops, list) or \
+            not isinstance(machine, dict) or not machine.get("fingerprint"):
+        raise HTTPException(status_code=422, detail="Sweep lacks the original operating point or machine stamp")
+    if not 0 <= req.op_index < len(ops) or not isinstance(ops[req.op_index], dict):
+        raise HTTPException(status_code=422, detail="Selected operating point is absent")
+    hits = [p for p in (result.get("points") or []) if isinstance(p, dict) and
+            p.get("geom_id") == req.geom_id and p.get("op_index") == req.op_index]
+    if len(hits) != 1 or hits[0].get("feasible") is not True:
+        raise HTTPException(status_code=422, detail="Selected feasible Sweep point is absent or ambiguous")
+    point = dict(hits[0])
+    ov = point.get("overrides")
+    if not isinstance(ov, dict) or not point.get("source_cfg_fp"):
+        raise HTTPException(status_code=422, detail="Sweep point lacks source geometry provenance; run it again")
+    geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
+    op = ops[req.op_index]
+    try:
+        current = float(op["current_a"])
+        gamma = float(ov.get("gamma_deg", op["gamma_deg"]))
+        rpm = float(op["rpm"])
+        if not all(math.isfinite(v) for v in (current, gamma, rpm)) or rpm <= 0:
+            raise ValueError("non-finite operating point")
+        if not math.isclose(float(point["current_a"]), current) or \
+                not math.isclose(float(point["gamma_deg"]), gamma) or \
+                not math.isclose(float(point["rpm"]), rpm):
+            raise ValueError("point does not match request")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Sweep point operating provenance is incomplete: {exc}") from exc
+    swept = tuple(machine.get("swept") or _swept_geo_keys(result))
+    source_fp = _config_fingerprint(tuple(geo_ov))
+    if source_fp == "nofp" or point["source_cfg_fp"] != source_fp or \
+            sp["cfg_fp"] != _config_fingerprint() or \
+            machine["fingerprint"] != _machine_stamp(swept)["fingerprint"]:
+        raise HTTPException(status_code=409, detail="Machine/configuration changed since this Sweep; rerun it")
+    args = {"overrides": geo_ov, "current_a": current, "steps": steps,
+            "coil_temp_c": sp["coil_temp_c"], "n_periods": 1.0,
+            "gamma_deg": gamma, "rpm": rpm,
+            "mesh_size_mm": sp["mesh_size_mm"], "min_size_mm": sp["min_size_mm"],
+            "pole_copy": sp["pole_copy"], "torque_filter": sp["torque_filter"],
+            "n_sectors": sp["n_sectors"], "gap_layers": sp["gap_layers"],
+            "end_winding_factor": sp["end_winding"], "rotor_eddy": sp["rotor_eddy"],
+            "hi_fidelity": sp["hi_fidelity"], "structured_gap": sp["structured_gap"],
+            "airgap_macro": sp["airgap_macro"], "iron_template": sp["iron_template"],
+            "geo_mesh": sp["geo_mesh"], "element_order": sp["element_order"],
+            "demag": sp["demag"], "sampling_purpose": "standard",
+            "owner": "scan-validation"}
+    return point, args
+
+
+@router.post("/scan/validate_point")
+def scan_validate_point(req: ScanValidateRequest):
+    """Re-solve one picked screening point at final angular resolution."""
+    with _scan_lock:
+        if _scan_state.get("running"):
+            raise HTTPException(status_code=409, detail="Wait for the Sweep to finish before applying")
+        if _scan_state.get("validation_running"):
+            raise HTTPException(status_code=409, detail="A Sweep point is already being validated")
+        result = _scan_state.get("result")
+        point, args = _scan_validation_inputs(result, req)
+        validation_key = (req.run_id, req.geom_id, req.op_index)
+        _scan_state["validation_running"] = validation_key
+    try:
+        out = _subprocess_eval(**args)
+        good, reason = _standard_quality(out)
+        if not good:
+            raise HTTPException(status_code=422, detail=f"Standard 6× validation failed: {reason}")
+        with _scan_lock:
+            # A different run may have started during the (minutes-long) FEM solve.
+            if _scan_state.get("running") or _scan_state.get("result") is not result:
+                raise HTTPException(status_code=409, detail="Sweep changed during standard validation")
+            _scan_validation_inputs(result, req)  # re-check live config after solve
+        r = out["res"]
+        if args["rotor_eddy"] and r.get("eddy_settled") is not True:
+            raise HTTPException(status_code=422, detail="Standard coupled-eddy result is not settled")
+        for key in ("T_em_Nm", "T_ripple_pct", "efficiency", "mass_total_kg",
+                    "torque_per_mass_Nm_kg", "P_loss_total_W", "P_mech_W",
+                    "power_per_mass_W_kg", "V_peak", "V_line_peak_V",
+                    "KV_rpm_per_V_line", "P_cu_W", "P_fe_W"):
+            if not isinstance(r.get(key), (int, float)) or not math.isfinite(float(r[key])):
+                raise HTTPException(status_code=422, detail=f"Standard result lacks finite {key}")
+        return _json_sane({"point": {**r, "overrides": args["overrides"],
+                                     "current_a": point["current_a"],
+                                     "gamma_deg": point["gamma_deg"], "rpm": point["rpm"],
+                                     "geom_id": req.geom_id, "op_index": req.op_index,
+                                     "feasible": True, "fem": True,
+                                     "final_validation_status": "certified",
+                                     "apply_eligible": True},
+                           "run_id": req.run_id, "sampling_purpose": "standard"})
+    finally:
+        with _scan_lock:
+            if _scan_state.get("validation_running") == validation_key:
+                _scan_state["validation_running"] = None
 
 
 @router.post("/scan/cancel")

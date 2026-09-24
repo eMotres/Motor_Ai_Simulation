@@ -98,6 +98,6 @@ def test_scan_points_are_preliminary_and_old_saved_points_cannot_apply():
     panel = (Path(__file__).resolve().parents[1] / "web/src/components/sweep/SweepStudyPanel.tsx").read_text(encoding="utf-8")
     assert panel.count("apply_eligible: p.apply_eligible === true") == 2  # chart and table
     apply_body = panel.split("const applyPoint = async", 1)[1].split("// kU converts", 1)[0]
-    assert apply_body.index("if (p.apply_eligible !== true)") < apply_body.index("updateGeometryViaApi")
-    assert apply_body.index("if (p.apply_eligible !== true)") < apply_body.index("autoSaveAppliedDesign")
-    assert "disabled={selected.apply_eligible !== true}" in panel
+    assert apply_body.index("/api/optimization/scan/validate_point") < apply_body.index("updateGeometryViaApi")
+    assert apply_body.index("v?.apply_eligible !== true") < apply_body.index("autoSaveAppliedDesign")
+    assert "disabled={applying || running}" in panel

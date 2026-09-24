@@ -119,6 +119,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       return {
         ov: p.overrides || {}, overrides: p.overrides || {}, I, g, x: td, y: eff,
         apply_eligible: p.apply_eligible === true,
+        geom_id: p.geom_id, op_index: p.op_index,
         T, P, eff, Vpk,
         // Solved terminal numbers carried through UNDER THE BACKEND NAMES so
         // applyPoint can push them verbatim instead of re-synthesizing them from
@@ -295,6 +296,7 @@ const SweepStudyPanel: React.FC = () => {
   const [withBaseline, setWithBaseline] = useLS<boolean>('withBaseline', false);
   const [selected, setSelected] = useState<any>(null);   // hand-picked best point
   const [applyMsg, setApplyMsg] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
   // Where the applied point was ARCHIVED (its own motor) — or why it was not.
   const [saveRes, setSaveRes] = useState<AppliedSaveResult | null>(null);
   const [zoom, setZoom] = useState<{ x: [number, number]; y: [number, number] } | null>(null);   // mouse-wheel zoom
@@ -660,6 +662,7 @@ const SweepStudyPanel: React.FC = () => {
       const row = { x: s3.td, y: s3.eff,
                      I: cur, g: gam, gi, ripple: p.T_ripple_pct, T: s3.T,
                      apply_eligible: p.apply_eligible === true,
+                     geom_id: p.geom_id, op_index: p.op_index,
                     overrides: p.overrides || {}, _c: byCurrent ? cur : gam,
                     // Full per-design metrics so applying this point shows the
                     // sweep's already-computed numbers in Simulation — no re-run.
@@ -848,15 +851,49 @@ const SweepStudyPanel: React.FC = () => {
   // Hand-pick a point on the chart → apply its design: geometry (overrides) +
   // operating point (current/γ) → config + Simulation (same as "apply best").
   const applyPoint = async (p: any) => {
-    if (!p) return;
-    // Scan results use the 3× screening policy. A missing stamp (old saved
-    // result) also fails closed; never mutate live geometry or archive it.
-    if (p.apply_eligible !== true) {
-      setApplyMsg('This sweep point is preliminary (3× raw sampling). A standard 6× verification is required before Apply.');
-      return;
-    }
-    setApplyMsg('applying…'); setSaveRes(null);
+    if (!p || applying) return;
+    setApplying(true); setApplyMsg('Verifying this point at standard 6× resolution…'); setSaveRes(null);
     try {
+      if (!result?.run_id || !Number.isInteger(p.geom_id) || !Number.isInteger(p.op_index)) {
+        throw new Error('Sweep lacks point/run provenance; run the Sweep again');
+      }
+      // The server selects the stored point and re-solves its pinned geometry,
+      // operating point and mesh. No geometry/config write happens until it
+      // returns explicit standard-quality FEM metadata.
+      const verification = await fetch(`${API}/api/optimization/scan/validate_point`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_id: result.run_id, geom_id: p.geom_id, op_index: p.op_index }),
+      });
+      const verified = await verification.json().catch(() => null);
+      if (!verification.ok) throw new Error(String(verified?.detail ?? `HTTP ${verification.status}`));
+      const v = verified?.point;
+      if (v?.apply_eligible !== true || v?.cogging_sampling_purpose !== 'standard'
+          || v?.cogging_sampling_final_quality_sufficient !== true
+          || v?.nonlinear_converged !== true) {
+        throw new Error('Standard 6× convergence or angular-quality stamp is missing');
+      }
+      const k3d = readApply3dK();
+      const mass = Number(v.mass_total_kg) || 0;
+      const P2 = Number(v.P_mech_W) / 1000;
+      const pd2 = Number(v.power_per_mass_W_kg) / 1000;
+      const s3 = scale3d(k3d, Number(v.T_em_Nm), P2, Number(v.V_peak),
+        Number(v.V_line_peak_V), Number(v.KV_rpm_per_V_line),
+        Number(v.torque_per_mass_Nm_kg), pd2, Number(v.efficiency) * 100,
+        Number(v.P_loss_total_W));
+      p = { ...p, apply_eligible: true, overrides: v.overrides, I: v.current_a,
+        g: v.gamma_deg, rpm: v.rpm, T: s3.T, ripple: v.T_ripple_pct,
+        eff: s3.eff, mass, td: s3.td, Vpk: s3.Vpk,
+        V_line_peak_V: s3.Vl, KV_rpm_per_V_line: s3.KV,
+        P_mech_W: s3.P * 1000, power_per_mass_W_kg: s3.pd * 1000,
+        ploss: v.P_loss_total_W, core: v.P_fe_W, stranded: v.P_cu_W,
+        solid: (Number(v.P_mag_W) || 0) + (Number(v.P_shaft_W) || 0),
+        rawSamplesPerCycle: v.cogging_raw_samples_per_cycle,
+        raw2d: { T: v.T_em_Nm, P_mech_W: v.P_mech_W, Vpk: v.V_peak,
+          V_line_peak_V: v.V_line_peak_V, KV_rpm_per_V_line: v.KV_rpm_per_V_line,
+          td: v.torque_per_mass_Nm_kg, power_per_mass_W_kg: v.power_per_mass_W_kg,
+          eff: Number(v.efficiency) * 100 }, k3d };
+      setSelected(p);
+      setApplyMsg('Standard 6× FEM verified; applying…');
       // updateGeometryViaApi resolves normally even on a 422/423/500 refusal
       // (it never throws for those — see lib/geometryApplyOutcome.ts) so the
       // ONLY way to know the picked geometry actually landed is to read what
@@ -866,18 +903,18 @@ const SweepStudyPanel: React.FC = () => {
       // operating point (the PATCH below, which no lock touches) had moved.
       let geomOutcome: { ok: boolean; refused: { field: string; reason: string }[] } | null = null;
       if (p.overrides && Object.keys(p.overrides).length) geomOutcome = await updateGeometryViaApi(p.overrides);
-      await fetch(`${API}/api/simulation/config`, {
+      if (geomOutcome && !geomOutcome.ok) {
+        throw new Error('Validated geometry was refused by the active die/configuration lock');
+      }
+      const opResponse = await fetch(`${API}/api/simulation/config`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ max_current: p.I, phase_offset_deg: p.g }),
       });
+      if (!opResponse.ok) throw new Error(`Operating-point update failed (HTTP ${opResponse.status})`);
       window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: p.I, gamma: p.g } }));
-      // The sweep already computed this design's full FEM result — push those
-      // exact numbers into the Simulation summary so it shows them immediately,
-      // without a re-run (the user picks on these very numbers).
+      // Show the re-solved standard-quality numbers in Simulation.
       try {
-        // Scan points don't stamp their rpm yet (the refine result omits it), so
-        // the CURRENT sim.rpm stands in — correct unless the user changed rpm
-        // after launching the sweep.  `p.rpm` wins the moment the backend adds it.
+        // The validated result carries the pinned speed from the original Sweep.
         const rpm = Number(p.rpm) || readLS('sim.rpm', 4000);
         const omega = 2 * Math.PI * rpm / 60;
         // The SOLVER's 2-D numbers (raw2d) go into the summary; the Simulation
@@ -922,11 +959,7 @@ const SweepStudyPanel: React.FC = () => {
         const k = Number(dc?.end_winding_factor);
         if (Number.isFinite(k) && k > 0) localStorage.setItem('sim.endWinding', JSON.stringify(+k.toFixed(3)));
       } catch { /* non-fatal — the Simulation panel re-seeds on the geometry change */ }
-      // NO recompute.  This point is already solved — the summary pushed above IS
-      // its FEM result, at the settings it was computed with.  Re-solving it cost
-      // minutes and then overwrote those numbers with a run at the Simulation
-      // tab's own settings; press Run there when you want waveforms, fields or an
-      // independent check, and the panel will report the delta.
+      // The on-demand standard solve above is the source of these numbers.
       try {
         window.dispatchEvent(new CustomEvent('sim-design-applied'));
       } catch { /* SSR/no-window */ }
@@ -950,13 +983,16 @@ const SweepStudyPanel: React.FC = () => {
       setSaveRes(await autoSaveAppliedDesign({
         mode: 'sweep',
         runId: String(result?.run_id ?? ''),
+        objective: 'standard 6× validated Sweep point',
         operatingPoint: { current_a: Number(p.I), gamma_deg: Number(p.g),
-                          rpm: readLS('sim.rpm', 4000) },
+                          rpm: Number(p.rpm) },
         metrics: { T_avg_Nm: p.T, T_ripple_pct: p.ripple, efficiency: p.eff,
-                   torque_per_mass: p.td, mass_total_kg: p.mass },
+                   torque_per_mass: p.td, mass_total_kg: p.mass,
+                   raw_samples_per_cogging_cycle: p.rawSamplesPerCycle },
         overrides: p.overrides || {},
       }));
-    } catch (e: any) { setApplyMsg('✗ apply FAILED (' + String(e?.message ?? e) + ') — nothing was changed; try again'); }
+    } catch (e: any) { setApplyMsg('✗ Apply/verification failed: ' + String(e?.message ?? e)); }
+    finally { setApplying(false); }
   };
 
   // kU converts STORED values (Arms for current) into the DISPLAY unit — the
@@ -1289,17 +1325,15 @@ const SweepStudyPanel: React.FC = () => {
                   : '(base — no swept variables)'}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
-                <span title={selected.apply_eligible === true
-                  ? "Apply the standard-validated point and archive it as a new motor."
-                  : "Preliminary sweep: standard 6× verification is required before Apply or archive."}>
+                <span title="Re-solve this point at standard 6× resolution, then apply and archive only if FEM quality passes.">
                   <Button size="small" variant="outlined" color="success"
-                    disabled={selected.apply_eligible !== true}
+                    disabled={applying || running}
                     onClick={() => applyPoint(selected)}>
-                    ⤵ Apply to geometry
+                    {applying ? 'Verifying 6×…' : '⤵ Verify and apply'}
                   </Button>
                 </span>
                 {selected.apply_eligible !== true && <Typography sx={{ fontSize: 11, color: '#fbbf24' }}>
-                  Preliminary 3× result; verify at standard 6× before applying.
+                  Preliminary 3× result; standard 6× verification runs before applying.
                 </Typography>}
                 {applyMsg && <Typography sx={{ fontSize: 11,
                   color: applyMsg.startsWith('✓') ? '#4ade80' : applyMsg.startsWith('✗') ? '#fca5a5' : 'var(--text-3)' }}>

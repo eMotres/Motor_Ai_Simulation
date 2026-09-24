@@ -1,4 +1,8 @@
-# Review of 68de0ca..0f973bb — what Codex should finish (2026-09-24)
+# Review of 68de0ca..0f973bb — held items (2026-09-24)
+
+**UPDATE 2026-09-24 11:30 — owner decision: the orchestrator's agents finish ALL
+items below themselves (Codex hands off; do not edit these code paths in
+parallel).** Owner rule reaffirmed: no filters on any reported value.
 
 Reviews: Fable 5.1 (68de0ca..821f3df) and Opus 5.5 (..0f973bb + optimizer speed),
 full report `docs/OPTIMIZER_SPEED_REVIEW_2026-09-24.md` (df4caac).

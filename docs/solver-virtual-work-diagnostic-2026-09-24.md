@@ -61,3 +61,57 @@ difference is 0.00143753 Nm.  Both series have the same sign and nearly the
 same four-sample variation.  This is encouraging integration evidence, not a
 certification: four angular samples cannot validate torque harmonics or
 cogging, and both calculations share the same FEM field and polygonal mesh.
+
+## Raw angular sampling of cogging torque
+
+On the existing 12-slot, 14-pole no-load fixture, the measured peak-to-peak
+torque depends strongly on the **number of solved rotor angles**:
+
+| Frames/electrical period | Raw samples/cogging cycle | Maxwell pp (N·m) | Virtual-work pp (N·m) |
+| ---: | ---: | ---: | ---: |
+| 12 | 1 | 0.0000533965 | 0.0000906583 |
+| 24 | 2 | 0.00645013 | 0.00648410 |
+| 48 | 4 | 0.00982333 | 0.00987170 |
+| 72 | 6 | 0.00978534 | 0.00984232 |
+
+The 48-to-72 changes are about 0.39% (Maxwell) and 0.30% (virtual work),
+whereas 12 or 24 frames severely alias the waveform. This is one fixture,
+not a mesh-convergence or experimental validation. The solver now requires at
+least six **raw** samples per cogging cycle, where cycles per electrical period
+equal `lcm(num_slots, num_poles) / pole_pairs`. Both 12s14p and 24s28p have
+12 cycles and therefore need at least 72 frames per electrical period.
+
+For the whole-node band, the actual snapped step count is raised only to the
+smallest divisor of the **existing** slip-ring nodes per electrical period
+that meets this minimum. The mesh is never refined for this policy. The
+continuous-angle macro branch (currently unsupported by the P2 field solve)
+selects the exact minimum. If the existing ring
+cannot meet it, the solver keeps every available sample and reports an
+explicit insufficient flag and reason. No torque samples or Fourier orders
+are filtered or discarded. The private d-axis calibration solve is exempt:
+it samples flux linkage to locate an angle, and changing its sample grid can
+change its peak-ambiguity gate; it is not a reported cogging-torque run.
+
+The complete pinned physics baseline was then regenerated once with the new
+policy. All eight cases completed, and the voltage-drive circuit residuals
+remained below `5.5e-14 V`. The principal before/after changes are:
+
+| case | torque ripple before | torque ripple at 72 frames | mean torque change |
+| --- | ---: | ---: | ---: |
+| current load | 0.4047% | 3.7804% | +0.12% |
+| eddy current load | 0.3856% | 3.8320% | -0.24% |
+| demag | 0.5988% | 4.1200% | -0.76% |
+| demag + eddy | 0.6117% | 4.0913% | -0.81% |
+| voltage | 1.5089% | 2.6750% | -2.56% |
+| voltage + eddy | 1.6121% | 2.8075% | -2.70% |
+| voltage + eddy rotor | 1.5746% | 2.7856% | -2.77% |
+
+At no load the raw Maxwell peak-to-peak cogging torque changed from
+`0.00005340 N·m` to `0.00978534 N·m`. The higher angular resolution also
+changed quantities derived from temporal harmonics: across the pinned cases
+iron loss increased by roughly 14.5-18.4%, magnet eddy loss by up to 24.6%,
+and AC copper loss by roughly 7.3-9.7%. In demagnetising runs the area-weighted
+mean retained Br fell by about 3.6% and the minimum by about 10.4%, because the
+additional rotor positions expose field extrema that the 12-frame grid never
+visited. These are intended physics changes from retaining more raw states,
+not a change to material laws, spatial mesh, or post-processing filters.

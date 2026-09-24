@@ -2901,6 +2901,58 @@ def _p2_virtual_work_ineligible_reason(*, eddy, voltage_drive, demag,
     return None
 
 
+def _cogging_frame_policy(num_slots, num_poles, pole_pairs, actual_steps,
+                          nodes_per_period, *, continuous_angle=False,
+                          internal_daxis_calibration=False):
+    """Keep at least six raw angle samples per slot/pole cogging cycle.
+
+    ``actual_steps`` is the existing whole-node snap result. A nodal band may
+    only move to another divisor of its *existing* ring; this policy never
+    changes the mesh. An analytic continuous-angle band has no such divisor.
+    """
+    values = (num_slots, num_poles, pole_pairs, actual_steps, nodes_per_period)
+    if any(isinstance(value, (bool, np.bool_)) or
+           not isinstance(value, (int, np.integer)) or value <= 0
+           for value in values):
+        raise ValueError("cogging frame counts must be positive integers")
+    slots, poles, pairs, steps, nodes = map(int, values)
+    if poles != 2 * pairs:
+        raise ValueError("num_poles must equal twice pole_pairs")
+    order = math.lcm(slots, poles)
+    if order % pairs:
+        raise ValueError("cogging order must tile an electrical period")
+    cycles = order // pairs
+    minimum = 6 * cycles
+    chosen = steps
+    reason = None
+    if internal_daxis_calibration:
+        # This private solve samples psi_A to locate the d-axis. Resampling it
+        # changes its peak-ambiguity criterion and can reject a valid motor;
+        # it is not a reported torque/cogging run.
+        reason = "internal_daxis_calibration_exempt"
+    elif steps < minimum:
+        if continuous_angle:
+            chosen = minimum
+            reason = "raised_continuous_angle_to_six_samples_per_cycle"
+        else:
+            divisor = next((d for d in range(minimum, nodes + 1)
+                            if nodes % d == 0), None)
+            if divisor is None:
+                reason = "insufficient_existing_slip_ring_divisor"
+            else:
+                chosen = divisor
+                reason = "raised_to_existing_slip_ring_divisor"
+    return {
+        "cycles_per_electrical_period": cycles,
+        "min_required_steps_per_period": minimum,
+        "steps_per_period": chosen,
+        "raw_samples_per_cycle": chosen / cycles,
+        "sufficient": chosen >= minimum,
+        "auto_raised": chosen > steps,
+        "reason": reason,
+    }
+
+
 @_pardiso_scope
 def fem_transient_sliding_band(
     n_steps_per_period: int = 12,
@@ -3760,8 +3812,35 @@ def fem_transient_sliding_band(
             # / steps_snapped at the bottom of this function.
             log.warning("SB: snapped steps/period %d -> %d (divisor of %d slip "
                         "nodes/period -> whole-node rotor steps, periodic "
-                        "torque); the run is at the SNAPPED resolution",
+                        "torque); cogging minimum is checked next",
                         _req_steps, n_steps_per_period, _nodes_per_period)
+    _cogging_sampling = _cogging_frame_policy(
+        int(p.num_slots), int(p.num_poles), int(pole_pairs),
+        int(n_steps_per_period), int(_nodes_per_period),
+        continuous_angle=_macro_free_m,
+        internal_daxis_calibration=bool(
+            getattr(_DAXIS_TLS, "calibrating", False)))
+    n_steps_per_period = _cogging_sampling["steps_per_period"]
+    if _cogging_sampling["auto_raised"]:
+        log.warning("SB: cogging resolution raised to %d raw frames/period "
+                    "(requested %d, %d cycles/period, minimum %d frames); "
+                    "using %s without changing the slip ring",
+                    n_steps_per_period, _req_steps,
+                    _cogging_sampling["cycles_per_electrical_period"],
+                    _cogging_sampling["min_required_steps_per_period"],
+                    "continuous angles" if _macro_free_m else
+                    "an existing whole-node divisor")
+    elif (not _cogging_sampling["sufficient"] and
+          _cogging_sampling["reason"] != "internal_daxis_calibration_exempt"):
+        log.warning("SB: INSUFFICIENT cogging angle resolution: %d raw "
+                    "frames/period for %d cycles/period (%.3f samples/cycle; "
+                    "minimum %d). The existing %d-node/period slip ring has "
+                    "no admissible divisor; all samples are retained",
+                    n_steps_per_period,
+                    _cogging_sampling["cycles_per_electrical_period"],
+                    _cogging_sampling["raw_samples_per_cycle"],
+                    _cogging_sampling["min_required_steps_per_period"],
+                    _nodes_per_period)
     # Steps per SWITCHING period is the number that decides whether a PWM run
     # measured the ripple it reports.  The exact-mean voltage integration makes
     # an under-resolved run fail SAFE (it averages toward the sinusoid) rather
@@ -8257,6 +8336,15 @@ def fem_transient_sliding_band(
         # for.  ``slip_nodes_per_period`` is the grid that decides the snap.
         "n_steps_per_period_requested": int(_req_steps),
         "steps_snapped": bool(int(n_steps_per_period) != int(_req_steps)),
+        "cogging_cycles_per_electrical_period": _cogging_sampling[
+            "cycles_per_electrical_period"],
+        "cogging_min_required_steps_per_period": _cogging_sampling[
+            "min_required_steps_per_period"],
+        "cogging_raw_samples_per_cycle": _cogging_sampling[
+            "raw_samples_per_cycle"],
+        "cogging_sampling_sufficient": _cogging_sampling["sufficient"],
+        "cogging_sampling_auto_raised": _cogging_sampling["auto_raised"],
+        "cogging_sampling_reason": _cogging_sampling["reason"],
         # Build provenance (see the _mesh_build_trace() read after the build):
         # empty events = the requested build ran; anything listed = a silent
         # fallback fired and this result's ripple floor is NOT comparable with

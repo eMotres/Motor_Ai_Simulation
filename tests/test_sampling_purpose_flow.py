@@ -136,9 +136,10 @@ def test_every_optimizer_eval_and_cache_call_explicitly_names_purpose():
         purpose = [kw.value for kw in call.keywords
                    if kw.arg == "sampling_purpose"]
         assert len(purpose) == 1, (call.func.id, call.lineno)
-        if isinstance(purpose[0], ast.Constant) and purpose[0].value == "standard":
+        if isinstance(purpose[0], ast.Constant) and purpose[0].value == "cogging_quality":
             # Only the Sweep point's Apply check and the on-demand re-check of a
-            # stored optimizer point solve at standard by construction.
+            # stored optimizer point solve at final (cogging) quality by
+            # construction; the workers pass it as their `purpose`.
             standard.add(owner.get(id(call)))
         elif isinstance(purpose[0], ast.Constant):
             assert purpose[0].value == "optimization", (call.func.id, call.lineno)

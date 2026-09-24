@@ -78,7 +78,7 @@ def test_selected_operating_point_and_every_pinned_solver_knob(scan):
     assert args["overrides"] == {"magnet_fill_up": 0.3}
     assert (args["current_a"], args["gamma_deg"], args["rpm"]) == (43.8, 10.0, 13000.0)
     assert args["steps"] == 12 and args["n_periods"] == 1.0
-    assert args["sampling_purpose"] == "standard"
+    assert args["sampling_purpose"] == "cogging_quality"
     assert args["mesh_size_mm"] == result["scan_params"]["mesh_size_mm"]
     assert args["gap_layers"] == result["scan_params"]["gap_layers"]
     assert args["end_winding_factor"] == result["scan_params"]["end_winding"]
@@ -133,7 +133,7 @@ def test_legacy_sweep_is_rechecked_on_demand_not_refused(scan):
     result, _, fp, calls = scan
     _legacy(result)
     got = O.scan_validate_point(_req())
-    assert len(calls) == 1 and calls[0]["sampling_purpose"] == "standard"
+    assert len(calls) == 1 and calls[0]["sampling_purpose"] == "cogging_quality"
     assert got["provenance"] == "legacy_machine_stamp"
     assert got["point"]["apply_eligible"] is True
     # …and the machine stamp (swept keys excluded) is still the identity test.

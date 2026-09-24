@@ -867,7 +867,8 @@ const SweepStudyPanel: React.FC = () => {
       const verified = await verification.json().catch(() => null);
       if (!verification.ok) throw new Error(String(verified?.detail ?? `HTTP ${verification.status}`));
       const v = verified?.point;
-      if (v?.apply_eligible !== true || v?.cogging_sampling_purpose !== 'standard'
+      if (v?.apply_eligible !== true
+          || !['cogging_quality', 'standard'].includes(v?.cogging_sampling_purpose)
           || v?.cogging_sampling_final_quality_sufficient !== true
           || v?.nonlinear_converged !== true) {
         throw new Error('Standard 6× convergence or angular-quality stamp is missing');

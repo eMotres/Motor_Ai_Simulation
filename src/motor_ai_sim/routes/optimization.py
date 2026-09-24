@@ -323,9 +323,9 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     iron_template: bool = True, geo_mesh: bool = True,
                     element_order: int = 2, demag: Optional[bool] = None,
                     pins: Optional[Dict[str, Any]] = None,
-                    sampling_purpose: Literal["standard", "optimization"] =
+                    sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
                     "optimization") -> str:
-    if sampling_purpose not in ("standard", "optimization"):
+    if sampling_purpose not in ("standard", "optimization", "cogging_quality"):
         raise ValueError("invalid sampling_purpose")
     payload = {
         # Key-format version.  Bumped when the MEANING of a component changes:
@@ -970,6 +970,23 @@ def _eval_env_for(threads: Optional[int]) -> Dict[str, str]:
     return env
 
 
+# ── WHICH PURPOSE A FINAL-QUALITY RE-SOLVE USES (2026-09-24) ─────────────────
+# Since 1883ba7 six raw samples per cogging cycle is the OPT-IN purpose
+# "cogging_quality"; "standard" (like "optimization") now keeps the requested
+# steps, i.e. solves the SAME frames the candidates were ranked on (48 on the
+# Ø30 12s/14p, 40 on the 24s/28p).  A winner validation or Apply check at
+# "standard" would therefore only repeat the candidate solve and certify no
+# better angular sampling than the search had — the thing 110352a exists to
+# add is the final-quality ripple.  So every final re-solve (winner shortlist,
+# Sweep Apply, on-demand re-check) asks for "cogging_quality", and the
+# acceptance test (_standard_quality) requires the 6-samples flag on a
+# final-purpose result.  A "standard" result is accepted too when it already
+# carries the flag (its requested steps met 6 samples/cycle), because then it
+# IS the same resolution; the flag is what is certified, not the label.
+_FINAL_PURPOSE = "cogging_quality"
+_FINAL_OK_PURPOSES = ("cogging_quality", "standard")
+
+
 # ── FIX E: a standard re-solve continues the optimization run's warm state ───
 # The eddy warm seed is keyed on the SOLVED steps/period (a hard refusal in
 # fem_solver_2d._warm_seed_accept), and optimization candidates solve fewer
@@ -1259,7 +1276,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      magnet_temp_c: Optional[float] = None,
                      owner: str = "",
                      threads: Optional[int] = None,
-                     sampling_purpose: Literal["standard", "optimization"] =
+                     sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
                      "optimization",
                      optimizer_candidate: bool = True) -> Dict[str, Any]:
     """Evaluate ONE (geometry, current, γ) with the real sliding-band transient
@@ -1275,7 +1292,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
     are sent as candidates; a standard (final-validation / Apply) eval keeps
     both probes and re-calibrates its own d-axis."""
     import subprocess, sys, json, os as _os
-    if sampling_purpose not in ("standard", "optimization"):
+    if sampling_purpose not in ("standard", "optimization", "cogging_quality"):
         raise ValueError("invalid sampling_purpose")
     spec = json.dumps({"overrides": overrides, "current_a": current_a,
                        "sampling_purpose": sampling_purpose,
@@ -1389,7 +1406,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         # kills and reports "timeout" exactly as run(timeout=) did.
         from types import SimpleNamespace as _NS
         _env_eval = _eval_env_for(threads)
-        if sampling_purpose == "standard" and _final_warm_start_enabled():
+        if sampling_purpose == _FINAL_PURPOSE and _final_warm_start_enabled():
             # Fix E: this standard re-solve may continue the optimization
             # run's warm state although it was solved at another steps/period
             # (see _final_warm_start_enabled).  Standard evals only.
@@ -2567,7 +2584,7 @@ def scan_validate_point(req: ScanValidateRequest):
         # The purpose is named HERE, not carried inside `args`, so the one
         # place that decides a Sweep point's final quality is readable (and
         # checked by tests/test_sampling_purpose_flow.py).
-        out = _subprocess_eval(sampling_purpose="standard", **args)
+        out = _subprocess_eval(sampling_purpose="cogging_quality", **args)
         good, reason = _standard_quality(out)
         if not good:
             raise HTTPException(status_code=422, detail=f"Standard 6× validation failed: {reason}")
@@ -2592,7 +2609,7 @@ def scan_validate_point(req: ScanValidateRequest):
                                      "feasible": True, "fem": True,
                                      "final_validation_status": "certified",
                                      "apply_eligible": True},
-                           "run_id": req.run_id, "sampling_purpose": "standard",
+                           "run_id": req.run_id, "sampling_purpose": "cogging_quality",
                            # "pinned" = the point carried its own source
                            # fingerprint; "legacy_machine_stamp" = a Sweep from
                            # before 2026-09-24, re-checked on demand under the
@@ -3334,7 +3351,10 @@ def _pt(out: Dict[str, Any], kind: str):
             "overrides": {k: v for k, v in ov.items() if k != "gamma_deg"},
             "current_a": out.get("current_a") or r.get("current_a"),
             "gamma_deg": ov.get("gamma_deg"),
-            "sampling_quality": ("standard" if r.get("cogging_sampling_purpose") == "standard"
+            # "standard" is the UI's label for FINAL quality: a final-purpose
+            # re-solve with >= 6 raw samples per cogging cycle.
+            "sampling_quality": ("standard" if r.get("cogging_sampling_purpose")
+                                 in _FINAL_OK_PURPOSES
                                  and r.get("cogging_sampling_final_quality_sufficient") is True
                                  else "preliminary")}
 
@@ -3547,8 +3567,8 @@ def _standard_quality(out: Dict[str, Any]) -> tuple[bool, str]:
     r = out.get("res") or {}
     if r.get("nonlinear_converged") is not True:
         return False, "nonlinear convergence is unconfirmed"
-    if r.get("cogging_sampling_purpose") != "standard":
-        return False, "FEM result did not use standard sampling"
+    if r.get("cogging_sampling_purpose") not in _FINAL_OK_PURPOSES:
+        return False, "FEM result did not use final-quality (cogging) sampling"
     if r.get("cogging_sampling_final_quality_sufficient") is not True:
         return False, "raw angular sampling is below final-quality resolution"
     return True, ""
@@ -3604,7 +3624,7 @@ def _finalize_standard_shortlist(
         return out, ""
 
     timings: Dict[str, Any] = {}
-    initial = {"status": "failed", "reason": "", "sampling_purpose": "standard",
+    initial = {"status": "failed", "reason": "", "sampling_purpose": _FINAL_PURPOSE,
                "shortlist_limit": int(limit), "validated": [], "failed": [],
                "timings": timings}
     _t0 = _t_fin.monotonic()
@@ -3693,7 +3713,7 @@ def _finalize_standard_shortlist(
                     failed=failed, shortlist_count=len(shortlisted))
     validated.sort(key=lambda row: row["cost"])
     winner = validated[0]
-    return {"status": "certified", "reason": "", "sampling_purpose": "standard",
+    return {"status": "certified", "reason": "", "sampling_purpose": _FINAL_PURPOSE,
             "shortlist_limit": int(limit), "shortlist_count": len(shortlisted),
             "validated": validated, "failed": failed, "winner": winner,
             "baseline": standard_base, "baseline_bump": base_b["res"],
@@ -4203,7 +4223,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             base_current=float(base.get("current_a") or I),
             bump_pct=current_bump_pct,
             bump_current=I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0),
-            evaluate=lambda d, cur: _eval_at(d, cur, "standard"),
+            evaluate=lambda d, cur: _eval_at(d, cur, _FINAL_PURPOSE),
             score=lambda m, b: _descent_cost(
                 m, b, ripple_max, w_eff, w_td, lam, v_peak_limit))
         result = {"best": {"metrics": _msum(best_seen["metrics"]),
@@ -4603,7 +4623,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             base_current=float(base.get("current_a") or I),
             bump_pct=current_bump_pct,
             bump_current=I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0),
-            evaluate=lambda d, cur: _eval_at(d, cur, "standard"),
+            evaluate=lambda d, cur: _eval_at(d, cur, _FINAL_PURPOSE),
             score=lambda m, b: _descent_cost(
                 m, b, ripple_max, w_eff, w_td, lam, v_peak_limit))
         result = {
@@ -4997,7 +5017,7 @@ def descent_validate_point(req: DescentValidateRequest):
                                 detail="A point of this run is already being re-checked")
         _descent_recheck_running[ws] = key
     try:
-        out = _subprocess_eval(sampling_purpose="standard", **args)
+        out = _subprocess_eval(sampling_purpose="cogging_quality", **args)
         good, reason = _standard_quality(out)
         if not good:
             raise HTTPException(status_code=422,
@@ -5039,7 +5059,7 @@ def descent_validate_point(req: DescentValidateRequest):
                           sampling_quality="standard",
                           final_validation_status="certified",
                           apply_eligible=True, recheck_target=req.target),
-            "res": r, "run_id": req.run_id, "sampling_purpose": "standard",
+            "res": r, "run_id": req.run_id, "sampling_purpose": "cogging_quality",
             "provenance": provenance})
     finally:
         with _descent_recheck_lock:
@@ -6408,7 +6428,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         validation = _finalize_standard_shortlist(
             points=all_pts, best_x=best["x"], best_metrics=best["metrics"],
             coarse_base=base, base_x=to_geom(x0), base_current=I,
-            bump_pct=bump, evaluate=lambda d, cur: _eval_at(d, cur, "standard"),
+            bump_pct=bump, evaluate=lambda d, cur: _eval_at(d, cur, _FINAL_PURPOSE),
             score=lambda m, b: _descent_cost(m, b, ripple_max, 1.0, 1.0, 1.0, 1e9))
         rj = _reject_block()
         result = {
@@ -7011,7 +7031,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                           points=all_pts, best_x=best["x"],
                           best_metrics=best["metrics"], coarse_base=base,
                           base_x=baseline_x, base_current=I, bump_pct=bump,
-                          evaluate=lambda d, cur: _eval_at(d, cur, "standard"),
+                          evaluate=lambda d, cur: _eval_at(d, cur, _FINAL_PURPOSE),
                           score=lambda m, b: _descent_cost(
                               m, b, ripple_max, 1.0, 1.0, 1.0, 1e9)))
         rj = _reject_block()

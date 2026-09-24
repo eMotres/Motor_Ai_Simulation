@@ -2799,8 +2799,8 @@ def _warm_cache_meta() -> Optional[dict]:
 
 
 # ── Optimizer fix E (2026-09-24): SB_SEED_ACROSS_STEPS ──────────────────────
-# ONE separate hook, set only by routes/optimization for a STANDARD-purpose
-# optimizer eval (winner validation, Sweep Apply check) when
+# ONE separate hook, set only by routes/optimization for a final-quality
+# ("cogging_quality") optimizer eval (winner validation, Apply check) when
 # OPT_FINAL_WARM_START is on — never by the Simulation tab.  It lets such a run
 # continue the EDDY HISTORY of a warm state solved at ANOTHER steps/period (the
 # optimization candidates' coarser schedule); every other meta term must still

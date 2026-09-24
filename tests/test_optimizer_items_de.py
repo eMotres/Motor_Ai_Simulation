@@ -152,12 +152,13 @@ def test_every_eval_gives_its_slot_back(ax42, fake_popen):
             assert O._opt_jobs_inflight[job.token] == 0
 
 
-# ── E: the flag reaches only STANDARD evals ─────────────────────────────────
+# ── E: the flag reaches only FINAL-QUALITY (cogging_quality) evals ─────────
 
 @pytest.mark.parametrize("flag,purpose,expect", [
-    ("1", "standard", True),
+    ("1", "cogging_quality", True),
+    ("1", "standard", False),
     ("1", "optimization", False),
-    ("0", "standard", False),
+    ("0", "cogging_quality", False),
 ])
 def test_warm_start_across_steps_env_only_for_standard_evals(
         monkeypatch, fake_popen, flag, purpose, expect):
@@ -190,6 +191,37 @@ def test_solver_hook_relaxes_only_the_steps_term(monkeypatch):
     assert F._warm_seed_accept(dict(wc, nsect=1), meta, 32.0, 15000.0, 6.0,
                                n_sectors=2)[0] is False
     assert F._warm_seed_accept(wc, meta, 32.0, 12000.0, 6.0, n_sectors=2)[0] is False
+
+
+# ── final purpose after 1883ba7: "cogging_quality" carries the 6-sample flag ──
+
+def _final(purpose, flag):
+    return {"ok": True, "res": {"T_em_Nm": 1.0, "nonlinear_converged": True,
+                                "cogging_sampling_purpose": purpose,
+                                "cogging_sampling_final_quality_sufficient": flag}}
+
+
+def test_final_quality_is_the_six_sample_flag_on_a_final_purpose_solve():
+    assert O._FINAL_PURPOSE == "cogging_quality"
+    assert O._standard_quality(_final("cogging_quality", True))[0]
+    # "standard" keeps the requested steps since 1883ba7: without the flag it
+    # is the candidates' own resolution and certifies nothing
+    assert not O._standard_quality(_final("standard", False))[0]
+    assert O._standard_quality(_final("standard", True))[0]
+    assert not O._standard_quality(_final("optimization", True))[0]
+    assert not O._standard_quality(_final("cogging_quality", False))[0]
+    assert O._pt(dict(_final("cogging_quality", True), overrides={}),
+                 "x")["sampling_quality"] == "standard"
+    assert O._pt(dict(_final("standard", False), overrides={}),
+                 "x")["sampling_quality"] == "preliminary"
+
+
+def test_every_worker_validates_its_winner_at_the_final_purpose():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim" / "routes"
+           / "optimization.py").read_text(encoding="utf-8")
+    assert src.count("evaluate=lambda d, cur: _eval_at(d, cur, _FINAL_PURPOSE)") == 4
+    assert '_eval_at(d, cur, "standard")' not in src
 
 
 # ── D: A alone, then B + finalists in parallel ──────────────────────────────
@@ -295,7 +327,7 @@ def test_legacy_run_best_is_rechecked_with_its_own_eval_settings(stored):
     st, calls, _ = stored
     got = O.descent_validate_point(O.DescentValidateRequest(run_id="r-1", target="best"))
     kw = calls[0]
-    assert kw["sampling_purpose"] == "standard"
+    assert kw["sampling_purpose"] == "cogging_quality"
     assert kw["overrides"] == {"magnet_fill_up": 0.62}
     assert (kw["current_a"], kw["gamma_deg"], kw["rpm"]) == (32.0, 6.0, 15000.0)
     assert kw["steps"] == 48 and kw["n_sectors"] == 2 and kw["mesh_size_mm"] == 1.0

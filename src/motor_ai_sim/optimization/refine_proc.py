@@ -132,7 +132,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             connection: str | None = None,
             demag: bool | None = None,
             magnet_temp_c: float | None = None,
-            sampling_purpose: Literal["standard", "optimization"] =
+            sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
             "optimization",
             optimizer_candidate: bool = False) -> Dict[str, Any]:
     """Run the sliding-band transient for one candidate and return mean
@@ -152,7 +152,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     ``sampling_purpose="optimization"`` eval can be a candidate: a standard
     (final-validation) eval always keeps both probes and re-calibrates."""
     import numpy as np, json
-    if sampling_purpose not in ("standard", "optimization"):
+    if sampling_purpose not in ("standard", "optimization", "cogging_quality"):
         raise ValueError("invalid sampling_purpose")
     optimizer_candidate = bool(optimizer_candidate) and sampling_purpose == "optimization"
     from motor_ai_sim.optimization.design_eval import build_params, _masses
@@ -272,7 +272,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # Fix E provenance: which schedule the state this standard eval may
     # continue was solved at (read BEFORE the solve publishes its own).
     _across = (os.environ.get("SB_SEED_ACROSS_STEPS") == "1"
-               and sampling_purpose == "standard")
+               and sampling_purpose == "cogging_quality")
     _parent_nspp = None
     if _across:
         try:

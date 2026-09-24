@@ -299,9 +299,11 @@ def _body(text: str, start: str) -> str:
     enough to tell whether THIS handler calls the archive.  8000 chars, not
     4000: applyPoint grew (2026-08-22 it started preferring the point's own
     solved V/KV fields, with the reasoning in comments) and the archive call
-    slid past the old window while still being very much inside the handler."""
+    slid past the old window while still being very much inside the handler.
+    10000 since 0f973bb: the Sweep Apply now verifies the point at 6× first
+    (server re-solve + stamp checks), which moved the archive call to ~8.8 k."""
     i = text.index(start)
-    return text[i:i + 8000]
+    return text[i:i + 10000]
 
 
 def test_the_optimizers_apply_paths_call_the_archive():

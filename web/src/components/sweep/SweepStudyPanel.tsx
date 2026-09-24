@@ -893,7 +893,9 @@ const SweepStudyPanel: React.FC = () => {
           td: v.torque_per_mass_Nm_kg, power_per_mass_W_kg: v.power_per_mass_W_kg,
           eff: Number(v.efficiency) * 100 }, k3d };
       setSelected(p);
-      setApplyMsg('Standard 6× FEM verified; applying…');
+      setApplyMsg(verified?.provenance === 'legacy_machine_stamp'
+        ? 'Standard 6× FEM verified (older sweep, re-checked on this machine); applying…'
+        : 'Standard 6× FEM verified; applying…');
       // updateGeometryViaApi resolves normally even on a 422/423/500 refusal
       // (it never throws for those — see lib/geometryApplyOutcome.ts) so the
       // ONLY way to know the picked geometry actually landed is to read what

@@ -2798,6 +2798,43 @@ def _warm_cache_meta() -> Optional[dict]:
         return None
 
 
+# ── Optimizer fix E (2026-09-24): SB_SEED_ACROSS_STEPS ──────────────────────
+# ONE separate hook, set only by routes/optimization for a STANDARD-purpose
+# optimizer eval (winner validation, Sweep Apply check) when
+# OPT_FINAL_WARM_START is on — never by the Simulation tab.  It lets such a run
+# continue the EDDY HISTORY of a warm state solved at ANOTHER steps/period (the
+# optimization candidates' coarser schedule); every other meta term must still
+# match.  The same-angle reference is withheld automatically (its per-frame
+# samples have the parent's length), so the residual-trend settle test alone
+# decides the handoff, exactly as for a seed from another operating point.
+# The Br RATCHET map of such a state is NOT continued (_br_withheld_across_
+# steps): it is the optimization lineage's accumulated de-rating, and the A/B
+# (docs/OPTIMIZER_ITEMS_DE_2026-09-24.md) measured it moving the standard
+# torque by ~1 %; the standard run pays its own demag pre-pass on a fresh
+# magnet instead, exactly as a cold standard run does.
+def _br_withheld_across_steps(wc, wmeta) -> bool:
+    try:
+        return (_os_sb.environ.get("SB_SEED_ACROSS_STEPS") == "1"
+                and int((wc.get("meta") or {}).get("nspp", -1)) != int(wmeta.get("nspp")))
+    except Exception:           # unreadable meta: never continue that Br
+        return True
+
+
+def _seed_across_steps_ok(cached_meta, wmeta) -> bool:
+    if _os_sb.environ.get("SB_SEED_ACROSS_STEPS") != "1":
+        return False
+    if not isinstance(cached_meta, dict) or not isinstance(wmeta, dict):
+        return False
+    _a = {k: v for k, v in cached_meta.items() if k != "nspp"}
+    _b = {k: v for k, v in wmeta.items() if k != "nspp"}
+    if _a != _b:
+        return False
+    log.info("P2 eddy warm cache: seed solved at %s steps/period accepted for "
+             "this %s-step standard run (SB_SEED_ACROSS_STEPS, optimizer fix E)",
+             cached_meta.get("nspp"), wmeta.get("nspp"))
+    return True
+
+
 def _warm_seed_accept(wc: Optional[dict], wmeta: dict, I_phase_rms: float,
                       rpm: float, gamma_deg: float, n_sectors: Optional[int] = None):
     """May this cached state seed THIS run?  ``(ok, why_not)``.
@@ -2820,7 +2857,7 @@ def _warm_seed_accept(wc: Optional[dict], wmeta: dict, I_phase_rms: float,
     """
     if wc is None:
         return False, "no cached state"
-    if wc.get("meta") != wmeta:
+    if wc.get("meta") != wmeta and not _seed_across_steps_ok(wc.get("meta"), wmeta):
         return False, ("different schedule or machine (steps/period, periods, "
                        "winding, coil temperature or magnet scale)")
     # Symmetry is part of the discretisation: the eddy history `Ued` is one
@@ -4790,7 +4827,8 @@ def fem_transient_sliding_band(
     # publishes a Br map, so it must not consume one either.
     if (_seed_from_previous() and demag and _dmst is not None and eddy
             and not _vdrive and _wc_seed is not None
-            and _wc_seed.get("br_val") is not None and _mag_idx.size):
+            and _wc_seed.get("br_val") is not None and _mag_idx.size
+            and not _br_withheld_across_steps(_wc_seed, _wmeta)):
         try:
             _rm_seed = half["r"]["mesh"]
             _cen_r = np.asarray(_rm_seed.p, float)[:, np.asarray(_rm_seed.t, int)

@@ -242,6 +242,11 @@ interface MotorState {
   cancelDescent: () => Promise<void>;
   applyDescentBest: () => Promise<void>;
   applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
+  /** Re-solve a stored optimizer point (the run's best, or a picked cloud
+   *  point) at standard 6× on the server; on success apply the VERIFIED
+   *  point.  The only Apply path for a preliminary point. */
+  verifyAndApplyDescentPoint: (target: 'best' | 'point', pt?: any) =>
+    Promise<{ ok: boolean; error?: string; provenance?: string }>;
   /** Outcome of the AUTO-ARCHIVE that every apply performs (see
    *  lib/appliedAutoSave): the new motor's name, or the reason it was not
    *  saved.  The panels show it as one line — an apply whose archiving failed
@@ -1150,8 +1155,10 @@ export const useMotorStore = create<MotorState>()(
       // arbitrary evaluated design instead of the optimiser's auto-best.
       applyDescentPoint: async (pt: any) => {
         const st: any = get().descentState;
-        if (st?.running || st?.final_validation_status !== 'certified' ||
-            pt?.sampling_quality !== 'standard') return;
+        // A standard-quality point of a certified run, or one the server has
+        // just re-checked at 6× on demand (apply_eligible) — nothing else.
+        if (st?.running || pt?.sampling_quality !== 'standard' ||
+            (st?.final_validation_status !== 'certified' && pt?.apply_eligible !== true)) return;
         const overrides = pt?.overrides;
         if (!overrides || !Object.keys(overrides).length) return;
         if (get().connectedToApi) await get().updateGeometryViaApi(overrides);
@@ -1182,6 +1189,33 @@ export const useMotorStore = create<MotorState>()(
         set({ appliedSave: { ok: false, busy: true } });
         set({ appliedSave: await autoSaveAppliedDesign(
           descentProvenance(get().descentState, pt)) });
+      },
+      verifyAndApplyDescentPoint: async (target: 'best' | 'point', pt?: any) => {
+        const st: any = get().descentState;
+        if (!st || st.running) return { ok: false, error: 'The optimization is still running' };
+        try {
+          // The server looks the point up in the STORED run and re-solves it
+          // with the run's pinned settings; the body only names which point.
+          const r = await fetch(`${API_BASE_URL}/api/optimization/descent/validate_point`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              run_id: st.run_id ?? '', target,
+              ...(target === 'point' ? { overrides: pt?.overrides ?? {}, current_a: pt?.current_a } : {}),
+            }),
+          });
+          const d = await r.json().catch(() => null);
+          if (!r.ok) return { ok: false, error: String(d?.detail ?? `HTTP ${r.status}`) };
+          const v = d?.point;
+          if (v?.apply_eligible !== true || v?.sampling_quality !== 'standard'
+              || d?.res?.cogging_sampling_final_quality_sufficient !== true
+              || d?.res?.nonlinear_converged !== true) {
+            return { ok: false, error: 'Standard 6× convergence or angular-quality stamp is missing' };
+          }
+          await get().applyDescentPoint(v);
+          return { ok: true, provenance: d?.provenance };
+        } catch (e: any) {
+          return { ok: false, error: String(e?.message ?? e) };
+        }
       },
       loadLastDescent: async () => {
         // The backend keeps the last descent in memory — re-hydrate it so the

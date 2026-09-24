@@ -577,15 +577,161 @@ def _physical_cores_available() -> int:
     return max(1, int(n))
 
 
-def _scan_worker_count() -> int:
+def _scan_worker_env_override() -> Optional[int]:
+    """``FEM_SCAN_WORKERS`` as an int, or None when unset / unreadable."""
     env = os.environ.get("FEM_SCAN_WORKERS")
     if env:
         try:
             return max(1, int(env))
         except ValueError:
             pass
+    return None
+
+
+def _scan_worker_count() -> int:
+    env = _scan_worker_env_override()
+    if env is not None:
+        return env
     return min(_SCAN_WORKERS_CAP, max(2, _physical_cores_available() - 2))
 _SCAN_WORKERS = _scan_worker_count()   # 8 on the 12-core workstation, 6 on the AX42
+
+
+# ── ONE CPU BUDGET FOR ALL CONCURRENT OPTIMIZER JOBS (2026-09-24, item 4) ────
+# The rule above sizes ONE job for the machine.  The server runs the job queue
+# with QUEUE_WORKERS=2, so two optimizations (a sweep and an auto run, or two
+# accounts' descents) can run at once — and each sized itself for the whole
+# box: 2 × 6 eval children on the AX42's 8 cores, every one of them a
+# memory-bound single-thread FEM solve.  Past the core count that is not more
+# throughput, it is every candidate running slower and the hang cap pricing
+# them as hangs.
+#
+# So the rule is a BUDGET shared by the optimizer jobs that are running:
+#     share = max(1, budget // active_optimizer_jobs)
+# enforced per eval (not only per pool): every eval subprocess of a registered
+# job takes a slot before it starts and gives it back when it ends, and a job
+# may hold at most `share` slots.  The share is re-evaluated at every eval
+# start, so when a second job starts the first one drains down to its share
+# as its in-flight evals finish (nothing running is killed), and when the
+# second job ends the first one grows back.  A job sizes its thread pool with
+# the share it saw at start (wave arithmetic, quotes); the limiter is what
+# actually holds the total at the budget.
+#   Workstation, 1 job: 8.  AX42, 1 job: 6; 2 jobs: 3 + 3.
+# FEM_SCAN_WORKERS still OVERRIDES: set, it is every job's own worker count
+# and no sharing is applied — an explicit operator number is taken literally.
+# Evals outside a registered job (a Sweep point's Apply check, the baseline
+# line button, a picked point's re-check) are single solves and are not
+# throttled, exactly like an interactive Simulation run.
+import contextvars as _ctxv_o
+import itertools as _itertools_o
+
+_OPT_JOB = _ctxv_o.ContextVar("optimizer_job_token", default=None)
+_opt_jobs_cond = threading.Condition()
+_opt_jobs_inflight: Dict[int, int] = {}          # token -> evals in flight
+_opt_jobs_kind: Dict[int, str] = {}              # token -> "scan" / "descent" / …
+_opt_job_ids = _itertools_o.count(1)
+
+
+def _optimizer_worker_budget() -> int:
+    """The CPU budget (eval children) all optimizer jobs share."""
+    return min(_SCAN_WORKERS_CAP, max(2, _physical_cores_available() - 2))
+
+
+def _optimizer_active_jobs() -> int:
+    with _opt_jobs_cond:
+        return len(_opt_jobs_inflight)
+
+
+def _optimizer_share(n_active: Optional[int] = None) -> int:
+    """Eval children ONE job may run now (FEM_SCAN_WORKERS overrides)."""
+    env = _scan_worker_env_override()
+    if env is not None:
+        return env
+    if n_active is None:
+        n_active = _optimizer_active_jobs()
+    return max(1, _optimizer_worker_budget() // max(1, int(n_active)))
+
+
+class _OptimizerJob:
+    """Register the calling thread's optimizer job for the lifetime of a
+    ``with`` block.  ``workers`` = the share at start (pool size / quotes)."""
+
+    def __init__(self, kind: str):
+        self.kind = str(kind or "")
+        self.token: Optional[int] = None
+        self.workers = 1
+        self._ctx_tok = None
+
+    def __enter__(self) -> "_OptimizerJob":
+        with _opt_jobs_cond:
+            self.token = next(_opt_job_ids)
+            _opt_jobs_inflight[self.token] = 0
+            _opt_jobs_kind[self.token] = self.kind
+            n = len(_opt_jobs_inflight)
+        self.workers = _optimizer_share(n)
+        self._ctx_tok = _OPT_JOB.set(self.token)
+        log.info("optimizer job %s started: %d concurrent optimizer job(s), "
+                 "%d eval worker(s) for this one (budget %d%s)", self.kind, n,
+                 self.workers, _optimizer_worker_budget(),
+                 ", FEM_SCAN_WORKERS override" if _scan_worker_env_override()
+                 is not None else "")
+        return self
+
+    def __exit__(self, *exc) -> None:
+        try:
+            _OPT_JOB.reset(self._ctx_tok)
+        except (ValueError, RuntimeError):    # reset from another context
+            pass
+        with _opt_jobs_cond:
+            _opt_jobs_inflight.pop(self.token, None)
+            _opt_jobs_kind.pop(self.token, None)
+            _opt_jobs_cond.notify_all()
+
+
+def _optimizer_slot_acquire() -> Optional[int]:
+    """Take one eval slot for the calling job (blocks while the job is at its
+    share).  None when the caller is not inside a registered job."""
+    token = _OPT_JOB.get()
+    if token is None:
+        return None
+    with _opt_jobs_cond:
+        while token in _opt_jobs_inflight and \
+                _opt_jobs_inflight[token] >= _optimizer_share(len(_opt_jobs_inflight)):
+            _opt_jobs_cond.wait(timeout=1.0)
+        if token not in _opt_jobs_inflight:      # job ended under us: run anyway
+            return None
+        _opt_jobs_inflight[token] += 1
+    return token
+
+
+def _optimizer_slot_release(token: Optional[int]) -> None:
+    if token is None:
+        return
+    with _opt_jobs_cond:
+        if token in _opt_jobs_inflight:
+            _opt_jobs_inflight[token] = max(0, _opt_jobs_inflight[token] - 1)
+        _opt_jobs_cond.notify_all()
+
+
+def _optimizer_job(kind: str):
+    """Decorator: run a campaign worker as ONE registered optimizer job."""
+    def deco(fn):
+        import functools as _ft
+
+        @_ft.wraps(fn)
+        def _wrapped(*a, **kw):
+            with _OptimizerJob(kind):
+                return fn(*a, **kw)
+        return _wrapped
+    return deco
+
+
+def _job_workers() -> int:
+    """Pool size for the job running on this thread: its share at job start
+    (the limiter enforces the live share per eval).  Outside a job: the rule."""
+    token = _OPT_JOB.get()
+    if token is None:
+        return _scan_worker_count()
+    return _optimizer_share()
 
 
 # ── Measured eval cost ───────────────────────────────────────────────────────
@@ -822,6 +968,34 @@ def _eval_env_for(threads: Optional[int]) -> Dict[str, str]:
         "MKL_NUM_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS",
         "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")})
     return env
+
+
+# ── FIX E: a standard re-solve continues the optimization run's warm state ───
+# The eddy warm seed is keyed on the SOLVED steps/period (a hard refusal in
+# fem_solver_2d._warm_seed_accept), and optimization candidates solve fewer
+# frames than a standard (final-quality) run: 48 vs 72 on the Ø30 12s/14p,
+# 40 vs 120 on the 24s/28p.  So the first standard solve after a search —
+# the winner validation's baseline A, every Sweep "Verify and apply" — found
+# only a foreign-steps state and started COLD: the full eddy warm-up march
+# plus a whole demag pre-pass period (review 2026-09-24: 155 s on m12, 552 s
+# on m24, against ~65 / ~120 s seeded).
+# With E the solver may accept that state for a STANDARD eval (only): every
+# other meta term (periods, winding, coil temperature, magnet scale, sectors,
+# speed) must still match, the same-angle reference gauge is withheld (its
+# per-frame samples are at the other resolution), and the settle test at the
+# handoff decides as for any seed — a state it does not accept costs the
+# extension period, never an answer.  OPT_FINAL_WARM_START=1/0 overrides the
+# default; the default is set by the A/B in docs/OPTIMIZER_ITEMS_DE_2026-09-24.md.
+_FINAL_WARM_START_DEFAULT = False
+
+
+def _final_warm_start_enabled() -> bool:
+    v = (os.environ.get("OPT_FINAL_WARM_START") or "").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return bool(_FINAL_WARM_START_DEFAULT)
 
 
 def _solo_seed_threads() -> int:
@@ -1143,6 +1317,10 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        **({} if connection is None
                           else {"connection": str(connection)})})
     import time as _t_eval
+    # One CPU budget across concurrent optimizer jobs (item 4): wait for this
+    # job's slot BEFORE the clock starts, so a queued eval is neither timed nor
+    # hang-capped for the time it spent waiting.
+    _slot = _optimizer_slot_acquire()
     _t0_eval = _t_eval.monotonic()
     try:
         # Adaptive hang cap: 4x the MEASURED median eval, floored at 300 s and
@@ -1210,10 +1388,18 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         # semantics otherwise: stdin fed, both streams captured, the hang cap
         # kills and reports "timeout" exactly as run(timeout=) did.
         from types import SimpleNamespace as _NS
+        _env_eval = _eval_env_for(threads)
+        if sampling_purpose == "standard" and _final_warm_start_enabled():
+            # Fix E: this standard re-solve may continue the optimization
+            # run's warm state although it was solved at another steps/period
+            # (see _final_warm_start_enabled).  Standard evals only.
+            _env_eval["SB_SEED_ACROSS_STEPS"] = "1"
+        else:
+            _env_eval.pop("SB_SEED_ACROSS_STEPS", None)
         _p = subprocess.Popen(
             [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, env=_eval_env_for(threads))
+            text=True, env=_env_eval)
         with _live_eval_lock:
             _LIVE_EVAL_PROCS[_p.pid] = (_p, _eval_owner(owner))
         try:
@@ -1274,6 +1460,8 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
         return {"ok": False, "error": "timeout"}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
+    finally:
+        _optimizer_slot_release(_slot)
 
 
 class OptVariable(BaseModel):
@@ -1625,6 +1813,7 @@ def _scan_owns(run_id) -> bool:
     return str(_scan_state.get("run_id") or "") == str(run_id or "")
 
 
+@_optimizer_job("scan")
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
                  pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=3.0,
@@ -1877,7 +2066,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             int(steps), float(coil_temp_c), _sf_rpm, _NPER,
             need_br=bool(demag))
         _serial_first, _sf_why = serial_first_decision(
-            len(misses), _SCAN_WORKERS, bool(demag), bool(rotor_eddy),
+            len(misses), _job_workers(), bool(demag), bool(rotor_eddy),
             _seed_ok)
         log.info("sweep seeding: %s — %s%s",
                  "FIRST POINT SOLO, then fan out" if _serial_first
@@ -1904,7 +2093,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                     _scan_state["done"] = done
                     _scan_state["points"] = [p for p in points if p is not None]
 
-        ex = ThreadPoolExecutor(max_workers=_SCAN_WORKERS)
+        ex = ThreadPoolExecutor(max_workers=_job_workers())
         futs = [ex.submit(_do, it) for it in misses]
         try:
             # Poll with a 1 s timeout instead of blocking on as_completed(): a Stop
@@ -2186,7 +2375,9 @@ def scan_designs(req: ScanRequest):
                             "points": [], "run_id": req.run_id, "error": None, "cancel": False,
                             "cached": 0,
                             "ts_start": _t_scan.time(),
-                            "workers": int(_scan_worker_count()),
+                            # the share this job gets beside the optimizer
+                            # jobs already running (item 4)
+                            "workers": int(_optimizer_share(_optimizer_active_jobs() + 1)),
                             "s_per_eval": float(_rate0.get("s_per_eval", 0.0) or 0.0),
                             # A fresh, user-started run is NOT a resume — clear
                             # whatever a previous resumed run left here, or the
@@ -2256,12 +2447,22 @@ class ScanValidateRequest(BaseModel):
     op_index: int
 
 
-_SCAN_VALIDATION_PARAMS = (
+# The solver knobs a stored Sweep must carry to be re-solved exactly as it was
+# run (every one feeds the eval; a missing one cannot be defaulted honestly).
+_SCAN_SOLVE_PARAMS = (
     "coil_temp_c", "mesh_size_mm", "min_size_mm", "pole_copy",
     "torque_filter", "n_sectors", "gap_layers", "end_winding",
     "rotor_eddy", "hi_fidelity", "structured_gap", "airgap_macro",
-    "iron_template", "geo_mesh", "element_order", "demag", "cfg_fp",
-    "sampling_purpose", "validation_provenance_version",
+    "iron_template", "geo_mesh", "element_order", "demag",
+)
+# …plus the provenance a Sweep run since 0f973bb stamps.  A stored Sweep
+# WITHOUT these (every one before 2026-09-24, the owner's 22 Sep sweep among
+# them) is not refused any more: the Apply check IS a fresh standard solve of
+# the stored point on the machine as it is now, so it is re-checked on demand
+# with the machine stamp (swept keys excluded) as the identity test, and the
+# answer says it was a legacy re-check.
+_SCAN_VALIDATION_PARAMS = _SCAN_SOLVE_PARAMS + (
+    "cfg_fp", "sampling_purpose", "validation_provenance_version",
 )
 
 
@@ -2269,16 +2470,28 @@ def _scan_validation_inputs(result: Dict[str, Any], req: ScanValidateRequest
                             ) -> tuple[Dict[str, Any], Dict[str, Any]]:
     """Read the exact finished scan point and pinned solve settings, or refuse.
 
-    Legacy scan results lack point/config provenance and cannot be certified.
     No client-supplied geometry, current, or solver option is trusted here.
+
+    IDENTITY.  The machine the point was solved on is the sweep's machine stamp
+    — the config fingerprint with the SWEPT keys excluded — and, for a point
+    stamped since 0f973bb, its own ``source_cfg_fp`` (the same exclusion).
+    The FULL fingerprint (``scan_params.cfg_fp``) is deliberately NOT compared:
+    applying one point of a sweep writes that point's swept values into the
+    config, which changes the full fingerprint and used to refuse every other
+    point of the same sweep with 409 — although nothing but the swept keys had
+    moved, and those are exactly what each point overrides.
+
+    LEGACY sweeps (no ``validation_provenance_version``) are re-checked on
+    demand under the machine stamp alone; ``provenance`` says which case.
     """
     if not isinstance(result, dict) or not req.run_id or result.get("run_id") != req.run_id:
         raise HTTPException(status_code=409, detail="Sweep run changed; select a point from the current run")
     sp = result.get("scan_params")
-    if not isinstance(sp, dict) or any(k not in sp for k in _SCAN_VALIDATION_PARAMS) or \
-            sp.get("validation_provenance_version") != 1 or \
-            sp.get("sampling_purpose") != "optimization":
-        raise HTTPException(status_code=422, detail="Sweep lacks pinned validation provenance; run it again")
+    if not isinstance(sp, dict) or any(k not in sp for k in _SCAN_SOLVE_PARAMS):
+        raise HTTPException(status_code=422, detail="Sweep lacks its pinned solver settings; run it again")
+    pinned = sp.get("validation_provenance_version") == 1
+    if pinned and sp.get("sampling_purpose") not in (None, "optimization"):
+        raise HTTPException(status_code=422, detail="Sweep sampling provenance is unreadable; run it again")
     steps = result.get("steps_per_period")
     ops = result.get("operating_points")
     machine = result.get("machine")
@@ -2293,7 +2506,9 @@ def _scan_validation_inputs(result: Dict[str, Any], req: ScanValidateRequest
         raise HTTPException(status_code=422, detail="Selected feasible Sweep point is absent or ambiguous")
     point = dict(hits[0])
     ov = point.get("overrides")
-    if not isinstance(ov, dict) or not point.get("source_cfg_fp"):
+    if not isinstance(ov, dict):
+        raise HTTPException(status_code=422, detail="Sweep point lacks its geometry; run it again")
+    if pinned and not point.get("source_cfg_fp"):
         raise HTTPException(status_code=422, detail="Sweep point lacks source geometry provenance; run it again")
     geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
     op = ops[req.op_index]
@@ -2303,17 +2518,23 @@ def _scan_validation_inputs(result: Dict[str, Any], req: ScanValidateRequest
         rpm = float(op["rpm"])
         if not all(math.isfinite(v) for v in (current, gamma, rpm)) or rpm <= 0:
             raise ValueError("non-finite operating point")
+        # A legacy point may lack its own γ / rpm stamps; when present they
+        # must agree with the operating point it is filed under.
         if not math.isclose(float(point["current_a"]), current) or \
-                not math.isclose(float(point["gamma_deg"]), gamma) or \
-                not math.isclose(float(point["rpm"]), rpm):
+                (point.get("gamma_deg") is not None
+                 and not math.isclose(float(point["gamma_deg"]), gamma)) or \
+                (point.get("rpm") is not None
+                 and not math.isclose(float(point["rpm"]), rpm)):
             raise ValueError("point does not match request")
     except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"Sweep point operating provenance is incomplete: {exc}") from exc
     swept = tuple(machine.get("swept") or _swept_geo_keys(result))
-    source_fp = _config_fingerprint(tuple(geo_ov))
-    if source_fp == "nofp" or point["source_cfg_fp"] != source_fp or \
-            sp["cfg_fp"] != _config_fingerprint() or \
-            machine["fingerprint"] != _machine_stamp(swept)["fingerprint"]:
+    machine_ok = machine["fingerprint"] == _machine_stamp(swept)["fingerprint"]
+    if pinned:
+        source_fp = _config_fingerprint(tuple(geo_ov))
+        machine_ok = machine_ok and source_fp != "nofp" and \
+            point["source_cfg_fp"] == source_fp
+    if not machine_ok:
         raise HTTPException(status_code=409, detail="Machine/configuration changed since this Sweep; rerun it")
     args = {"overrides": geo_ov, "current_a": current, "steps": steps,
             "coil_temp_c": sp["coil_temp_c"], "n_periods": 1.0,
@@ -2325,8 +2546,8 @@ def _scan_validation_inputs(result: Dict[str, Any], req: ScanValidateRequest
             "hi_fidelity": sp["hi_fidelity"], "structured_gap": sp["structured_gap"],
             "airgap_macro": sp["airgap_macro"], "iron_template": sp["iron_template"],
             "geo_mesh": sp["geo_mesh"], "element_order": sp["element_order"],
-            "demag": sp["demag"], "sampling_purpose": "standard",
-            "owner": "scan-validation"}
+            "demag": sp["demag"], "owner": "scan-validation"}
+    point["_provenance"] = ("pinned" if pinned else "legacy_machine_stamp")
     return point, args
 
 
@@ -2343,7 +2564,10 @@ def scan_validate_point(req: ScanValidateRequest):
         validation_key = (req.run_id, req.geom_id, req.op_index)
         _scan_state["validation_running"] = validation_key
     try:
-        out = _subprocess_eval(**args)
+        # The purpose is named HERE, not carried inside `args`, so the one
+        # place that decides a Sweep point's final quality is readable (and
+        # checked by tests/test_sampling_purpose_flow.py).
+        out = _subprocess_eval(sampling_purpose="standard", **args)
         good, reason = _standard_quality(out)
         if not good:
             raise HTTPException(status_code=422, detail=f"Standard 6× validation failed: {reason}")
@@ -2363,12 +2587,17 @@ def scan_validate_point(req: ScanValidateRequest):
                 raise HTTPException(status_code=422, detail=f"Standard result lacks finite {key}")
         return _json_sane({"point": {**r, "overrides": args["overrides"],
                                      "current_a": point["current_a"],
-                                     "gamma_deg": point["gamma_deg"], "rpm": point["rpm"],
+                                     "gamma_deg": args["gamma_deg"], "rpm": args["rpm"],
                                      "geom_id": req.geom_id, "op_index": req.op_index,
                                      "feasible": True, "fem": True,
                                      "final_validation_status": "certified",
                                      "apply_eligible": True},
-                           "run_id": req.run_id, "sampling_purpose": "standard"})
+                           "run_id": req.run_id, "sampling_purpose": "standard",
+                           # "pinned" = the point carried its own source
+                           # fingerprint; "legacy_machine_stamp" = a Sweep from
+                           # before 2026-09-24, re-checked on demand under the
+                           # sweep's machine stamp.
+                           "provenance": point.get("_provenance")})
     finally:
         with _scan_lock:
             if _scan_state.get("validation_running") == validation_key:
@@ -3341,9 +3570,22 @@ def _finalize_standard_shortlist(
     """Re-solve baseline A/B and top-N preliminary designs at 6x quality.
 
     The shortlist is explicitly a *shortlist*, not a proof of a global 6x
-    optimum.  Fail closed if either reference or every finalist fails.  The
-    caller publishes this result only after the complete validation succeeds.
+    optimum.  Fail closed if either reference fails or if NO finalist passes;
+    a finalist that fails its standard solve DROPS OUT (it is listed in
+    ``failed`` with its reason) and the winner is chosen among the others
+    (review 2026-09-24, item 5a: one failing finalist used to kill the run).
+
+    ORDER (fix D): baseline A is solved ALONE first — it is the one solve that
+    may have to start from the optimization run's state (or cold) and it then
+    publishes a standard-resolution warm state; baseline B and every finalist
+    are then solved IN PARALLEL, each continuing that state (measured m12
+    wave of 4: 98 s against 4 × 62-67 s sequential).  Same solves, same
+    inputs; only the order changed.  ``timings`` records the wall seconds.
     """
+    import time as _t_fin
+    from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
+                                        as _FinPool)
+
     def key(x, current):
         return (tuple(sorted((str(k), round(float(v), 9)) for k, v in x.items())),
                 round(float(current), 9))
@@ -3361,21 +3603,17 @@ def _finalize_standard_shortlist(
         out["res"] = dict(out["res"], current_a=float(current))
         return out, ""
 
+    timings: Dict[str, Any] = {}
     initial = {"status": "failed", "reason": "", "sampling_purpose": "standard",
-               "shortlist_limit": int(limit), "validated": [], "failed": []}
+               "shortlist_limit": int(limit), "validated": [], "failed": [],
+               "timings": timings}
+    _t0 = _t_fin.monotonic()
     base_a, why = checked(base_x, base_current)
+    timings["baseline_a_s"] = round(_t_fin.monotonic() - _t0, 1)
     if base_a is None:
         return dict(initial, reason="standard baseline A: " + why)
     bump_current = (float(bump_current) if bump_current is not None else
                     float(base_current) * (1.0 + float(bump_pct) / 100.0))
-    base_b, why = checked(base_x, bump_current)
-    if base_b is None:
-        return dict(initial, reason="standard baseline B: " + why)
-    standard_base = dict(base_a["res"])
-    # Preserve the run's objective mode: product-mode legacy runs still solve B
-    # for provenance, but must not silently change their objective to a line.
-    if coarse_base.get("_bline"):
-        standard_base["_bline"] = _make_bline(standard_base, base_b["res"], bump_pct)
 
     candidates = []
     best_current = best_metrics.get("current_a") or base_current
@@ -3403,10 +3641,36 @@ def _finalize_standard_shortlist(
             seen.add(k)
         if len(shortlisted) >= max(1, int(limit)):
             break
+
+    # ── B and every finalist, in parallel, after A (fix D) ────────────────
+    # Job 0 is baseline B; jobs 1.. are the finalists in shortlist order.  The
+    # results are gathered by index, so the winner choice below does not
+    # depend on which solve finished first.
+    jobs = [(dict(base_x), float(bump_current))] + [(dict(x), float(c))
+                                                     for x, c in shortlisted]
+    n_par = max(1, min(len(jobs), _job_workers()))
+    _t1 = _t_fin.monotonic()
+    if n_par == 1:
+        outs = [checked(x, c) for x, c in jobs]
+    else:
+        with _FinPool(max_workers=n_par) as _pool:
+            outs = list(_pool.map(lambda xc: checked(xc[0], xc[1]), jobs))
+    timings["parallel_wave_s"] = round(_t_fin.monotonic() - _t1, 1)
+    timings["parallel_jobs"] = len(jobs)
+    timings["parallel_workers"] = n_par
+    base_b, why = outs[0]
+    if base_b is None:
+        return dict(initial, reason="standard baseline B: " + why,
+                    shortlist_count=len(shortlisted))
+    standard_base = dict(base_a["res"])
+    # Preserve the run's objective mode: product-mode legacy runs still solve B
+    # for provenance, but must not silently change their objective to a line.
+    if coarse_base.get("_bline"):
+        standard_base["_bline"] = _make_bline(standard_base, base_b["res"], bump_pct)
+
     validated = []
     failed = []
-    for x, current in shortlisted:
-        out, why = checked(x, current)
+    for (x, current), (out, why) in zip(shortlisted, outs[1:]):
         if out is None:
             failed.append({"overrides": x, "current_a": current, "reason": why})
             continue
@@ -3418,8 +3682,12 @@ def _finalize_standard_shortlist(
         validated.append({"x": x, "current_a": current, "res": out["res"],
                           "cost": float(cost), "F": float(F), "out": out})
     if failed:
-        return dict(initial, reason="a shortlisted design failed standard FEM",
-                    failed=failed, shortlist_count=len(shortlisted))
+        # A finalist that failed its standard solve drops out; it never
+        # certifies anything and it is reported by name with its reason.
+        log.warning("final validation: %d of %d finalist(s) DROPPED (%s)",
+                    len(failed), len(shortlisted),
+                    "; ".join("%s @ %.4g A: %s" % (f["overrides"], f["current_a"],
+                                                    f["reason"]) for f in failed))
     if not validated:
         return dict(initial, reason="no shortlisted design passed standard FEM",
                     failed=failed, shortlist_count=len(shortlisted))
@@ -3429,7 +3697,8 @@ def _finalize_standard_shortlist(
             "shortlist_limit": int(limit), "shortlist_count": len(shortlisted),
             "validated": validated, "failed": failed, "winner": winner,
             "baseline": standard_base, "baseline_bump": base_b["res"],
-            "shortlist_only": True}
+            "shortlist_only": True, "timings": timings,
+            "dropped_count": len(failed)}
 
 
 def _publish_standard_final(result: Dict[str, Any], validation: Dict[str, Any],
@@ -3440,9 +3709,12 @@ def _publish_standard_final(result: Dict[str, Any], validation: Dict[str, Any],
             validation = {"status": "failed", "reason": "run was cancelled"}
     public = {k: validation.get(k) for k in (
         "status", "reason", "sampling_purpose", "shortlist_limit",
-        "shortlist_count", "shortlist_only")}
+        "shortlist_count", "shortlist_only", "timings")}
     public["validated_count"] = len(validation.get("validated") or [])
+    # Finalists that failed their standard solve and DROPPED OUT (the run still
+    # certifies from the others) — by name, with the reason, never silently.
     public["failed"] = validation.get("failed") or []
+    public["dropped_count"] = len(public["failed"])
     result["screening_best"] = result.get("best")
     result["final_validation"] = public
     certified = validation.get("status") == "certified"
@@ -3549,7 +3821,7 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
                              sampling_purpose="optimization")
         return (float(gc), float(o["res"].get("T_em_Nm", 0.0) or 0.0)) if o.get("ok") else None
 
-    with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
+    with ThreadPoolExecutor(max_workers=_job_workers()) as ex:
         pts = [p for p in ex.map(_one, cand) if p]
     if not pts:
         return None
@@ -3571,6 +3843,7 @@ def _mtpa_gamma_sweep(geom, ref_I, steps, coil_temp, mesh_size, min_size, n_sect
     return round(min(hi, max(lo, float(gb))), 1)
 
 
+@_optimizer_job("descent")
 def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                     n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
@@ -3829,7 +4102,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             # ── central finite-difference gradient (parallel) ───────────────
             grad: Dict[str, float] = {}
             futs = {}
-            with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
+            with ThreadPoolExecutor(max_workers=_job_workers()) as ex:
                 for v in var_specs:
                     for sign in (+1, -1):
                         xx = dict(best["x"])
@@ -3979,6 +4252,7 @@ def _surrogate_seed_overrides(var_specs, ripple_max, min_n=20):
         return None
 
 
+@_optimizer_job("descent")
 def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   steps, coil_temp, mesh_size, min_size, max_iters, run_id,
                   n_sectors=-1, v_peak_limit=1e9, target_torque=0.0,
@@ -4202,7 +4476,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                         break
                 sols = es.ask()
                 cost_by_i = {}
-                with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
+                with ThreadPoolExecutor(max_workers=_job_workers()) as ex:
                     futs = {ex.submit(evalx, to_geom(s)): i for i, s in enumerate(sols)}
                     for fut in as_completed(futs):
                         i = futs[fut]
@@ -4450,6 +4724,15 @@ def descent_start(req: DescentRequest):
                                # left stamped here.
                                "interrupted_by_restart": None,
                                "walk_rounds": (max_rounds if auto_expand else 1),
+                               # WHICH MACHINE (item 5c): the fingerprint with
+                               # the run's own variables excluded, so a picked
+                               # point can be re-checked on demand later and a
+                               # foreign machine is refused.
+                               "machine_fp_excl": sorted(s["name"] for s in var_specs),
+                               "machine_fp": _config_fingerprint(
+                                   tuple(sorted(s["name"] for s in var_specs))),
+                               "operating_point": dict(op),
+                               "rechecks": [],
                                # Eval parameters this run used — pinned to the result so applying
                                # a point can RESTORE them into the Simulation tab (else re-running
                                # the Sim at toggled settings won't reproduce the picked design).
@@ -4463,6 +4746,10 @@ def descent_start(req: DescentRequest):
                                    "airgap_macro": bool(req.airgap_macro),
                                    "iron_template": bool(getattr(req, "iron_template", True)),
                                    "geo_mesh": bool(getattr(req, "geo_mesh", True)),
+                                   "element_order": int(getattr(req, "element_order", 2) or 2),
+                                   # descent evals leave demag to the config;
+                                   # record what that resolved to at launch
+                                   "demag": _effective_demag(None),
                                    "mesh_size_mm": mesh_size, "min_size_mm": min_size},
                                "run_id": req.run_id, "error": None, "cancel": False})
     threading.Thread(
@@ -4574,6 +4861,190 @@ def descent_cancel(run_id: str = ""):
     killed = _kill_live_evals("descent")
     return {"cancelled": True, "killed_workers": killed,
             "run_id": _cancel_campaign("descent", run_id, _descent_state)}
+
+
+# ── ON-DEMAND STANDARD RE-CHECK of a stored optimizer point (item 5c) ───────
+# Since 110352a a descent / CMA / auto / screen run certifies only its
+# standard-validated shortlist, and Apply is refused for everything else.
+# That left two dead ends: a run stored BEFORE the final validation existed
+# (its whole cloud and its best are preliminary forever), and any picked
+# point of a certified run that was not in the shortlist.  This endpoint
+# re-solves ONE stored point of the run in the optimizer state at standard
+# (6×) resolution with the run's own pinned eval settings and returns the
+# standard numbers; only that answer is apply-eligible.
+#
+# Nothing the client sends is solved as such: the request names a point, and
+# the server looks it up in the STORED run (best, or a cloud point matched by
+# its override map and current).  Identity: a run started since this change
+# carries `machine_fp` (the config fingerprint with its own variables
+# excluded — applying a point moves exactly those keys) and a mismatch is
+# 409; an older run has none, and is re-checked on the machine as it is now
+# (`provenance: "legacy_unpinned"`), which is exactly the machine Apply would
+# write the point into.
+class DescentValidateRequest(BaseModel):
+    run_id: str = ""
+    target: Literal["best", "point"] = "best"
+    overrides: Dict[str, float] = Field(default_factory=dict)
+    current_a: Optional[float] = None
+
+
+_descent_recheck_lock = threading.Lock()
+_descent_recheck_running: Dict[str, Any] = {}
+
+
+def _descent_recheck_inputs(st: Dict[str, Any], req: DescentValidateRequest
+                            ) -> tuple[Dict[str, Any], Dict[str, Any], str]:
+    """(stored point, _subprocess_eval kwargs, provenance) — or HTTPException."""
+    if st.get("running"):
+        raise HTTPException(status_code=409, detail="Wait for the optimization to finish")
+    if str(req.run_id or "") != str(st.get("run_id") or ""):
+        raise HTTPException(status_code=409,
+                            detail="Optimizer run changed; pick the point again")
+    ep = st.get("eval_params")
+    if not isinstance(ep, dict) or not ep.get("steps_per_period"):
+        raise HTTPException(status_code=422,
+                            detail="This run did not store its eval settings; run it again")
+    auto = st.get("auto") if isinstance(st.get("auto"), dict) else {}
+    result = st.get("result") if isinstance(st.get("result"), dict) else {}
+    op = (st.get("operating_point") or auto.get("operating_point")
+          or result.get("operating_point") or {})
+    if not isinstance(op, dict):
+        op = {}
+    if req.target == "best":
+        # The run's best; for a run whose final validation FAILED, the
+        # screening best it published before (best is None there).
+        best = None
+        for cand in (st.get("best"), result.get("best"), result.get("screening_best")):
+            if isinstance(cand, dict) and (cand.get("x") or cand.get("overrides")):
+                best = cand
+                break
+        if not best:
+            raise HTTPException(status_code=422, detail="This run has no best design")
+        x = best.get("x") or best.get("overrides")
+        cur = (best.get("metrics") or {}).get("current_a") or op.get("current_a")
+        point = {"overrides": dict(x or {}), "current_a": cur, "kind": "best"}
+    else:
+        want = _ov_sig(req.overrides or {})
+        try:
+            want_i = float(req.current_a)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Picked point lacks its current")
+        hits = [p for p in (st.get("points") or []) if isinstance(p, dict)
+                and p.get("overrides") and _ov_sig(p["overrides"]) == want
+                and _pareto._f(p.get("current_a")) is not None
+                and math.isclose(float(p["current_a"]), want_i, rel_tol=1e-9, abs_tol=1e-9)]
+        if not hits:
+            raise HTTPException(status_code=422,
+                                detail="Picked point is not a stored point of this run")
+        point = {"overrides": dict(hits[0]["overrides"]),
+                 "current_a": hits[0]["current_a"], "kind": hits[0].get("kind")}
+    ov = {k: float(v) for k, v in (point["overrides"] or {}).items() if k != "gamma_deg"}
+    if not ov:
+        raise HTTPException(status_code=422, detail="The point has no geometry to apply")
+    try:
+        cur = float(point["current_a"])
+        if not math.isfinite(cur) or cur <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="The point lacks a usable current")
+    g = st.get("mtpa_gamma_deg")
+    g = float(g) if isinstance(g, (int, float)) else float(op.get("gamma_deg") or 0.0)
+    rpm = op.get("rpm")
+    rpm = float(rpm) if isinstance(rpm, (int, float)) and rpm > 0 else None
+    # IDENTITY — see the block comment above.
+    if st.get("machine_fp"):
+        if st["machine_fp"] != _config_fingerprint(tuple(st.get("machine_fp_excl") or ())):
+            raise HTTPException(status_code=409,
+                                detail="Machine/configuration changed since this run; rerun it")
+        provenance = "pinned"
+    else:
+        provenance = "legacy_unpinned"
+    args = {"overrides": ov, "current_a": cur,
+            "steps": int(ep["steps_per_period"]),
+            "coil_temp_c": float(ep.get("coil_temp_c", 120.0)), "n_periods": 1.0,
+            "gamma_deg": g, "rpm": rpm,
+            "mesh_size_mm": float(ep.get("mesh_size_mm", 4.0)),
+            "min_size_mm": float(ep.get("min_size_mm", 0.3)),
+            "n_sectors": int(ep.get("n_sectors", -1)),
+            "pole_copy": ep.get("pole_copy"),
+            "torque_filter": bool(ep.get("torque_filter", False)),
+            "gap_layers": float(ep.get("gap_layers", 2.0)),
+            "end_winding_factor": float(ep.get("end_winding_factor", 0.0)),
+            "rotor_eddy": bool(ep.get("rotor_eddy", True)),
+            "structured_gap": bool(ep.get("structured_gap", False)),
+            "airgap_macro": bool(ep.get("airgap_macro", False)),
+            "iron_template": bool(ep.get("iron_template", True)),
+            "geo_mesh": bool(ep.get("geo_mesh", True)),
+            "element_order": int(ep.get("element_order", 2) or 2),
+            "connection": (op.get("connection") or None),
+            "demag": (None if ep.get("demag") is None else bool(ep["demag"])),
+            "owner": "descent-validation"}
+    return point, args, provenance
+
+
+@router.post("/descent/validate_point")
+def descent_validate_point(req: DescentValidateRequest):
+    """Re-solve one stored optimizer point (the best, or a picked cloud point)
+    at standard 6× resolution; the answer is what Apply may write."""
+    with _descent_lock:
+        st = dict(_descent_state)
+    point, args, provenance = _descent_recheck_inputs(st, req)
+    key = str(_ov_sig(args["overrides"])) + "@%.6g" % args["current_a"]
+    ws = _eval_owner("recheck")
+    with _descent_recheck_lock:
+        if _descent_recheck_running.get(ws):
+            raise HTTPException(status_code=409,
+                                detail="A point of this run is already being re-checked")
+        _descent_recheck_running[ws] = key
+    try:
+        out = _subprocess_eval(sampling_purpose="standard", **args)
+        good, reason = _standard_quality(out)
+        if not good:
+            raise HTTPException(status_code=422,
+                                detail=f"Standard 6× re-check failed: {reason}")
+        r = dict(out["res"])
+        if args["rotor_eddy"] and r.get("eddy_settled") is not True:
+            raise HTTPException(status_code=422,
+                                detail="Standard coupled-eddy result is not settled")
+        for k in ("T_em_Nm", "T_ripple_pct", "efficiency", "mass_total_kg",
+                  "torque_per_mass_Nm_kg", "P_loss_total_W"):
+            if not isinstance(r.get(k), (int, float)) or not math.isfinite(float(r[k])):
+                raise HTTPException(status_code=422,
+                                    detail=f"Standard result lacks finite {k}")
+        with _descent_lock:
+            # The run must still be the one that was asked about.
+            if _descent_state.get("running") or \
+                    str(_descent_state.get("run_id") or "") != str(req.run_id or ""):
+                raise HTTPException(status_code=409,
+                                    detail="Optimizer run changed during the re-check")
+            if provenance == "pinned" and _descent_state.get("machine_fp") != \
+                    _config_fingerprint(tuple(_descent_state.get("machine_fp_excl") or ())):
+                raise HTTPException(status_code=409,
+                                    detail="Machine/configuration changed during the re-check")
+            r["current_a"] = args["current_a"]
+            pub = _pt({"ok": True, "res": r, "overrides": dict(args["overrides"],
+                                                               gamma_deg=args["gamma_deg"])},
+                      "standard_recheck")
+            rec = dict(pub or {}, provenance=provenance, target=req.target,
+                       at=datetime.utcnow().isoformat() + "Z",
+                       metrics=_msum(r))
+            lst = list(_descent_state.get("rechecks") or [])
+            lst.append(rec)
+            _descent_state["rechecks"] = lst[-50:]
+        _save_descent_state()
+        return _json_sane({
+            "point": dict(pub or {}, metrics=_msum(r),
+                          overrides=dict(args["overrides"]),
+                          current_a=args["current_a"], gamma_deg=args["gamma_deg"],
+                          sampling_quality="standard",
+                          final_validation_status="certified",
+                          apply_eligible=True, recheck_target=req.target),
+            "res": r, "run_id": req.run_id, "sampling_purpose": "standard",
+            "provenance": provenance})
+    finally:
+        with _descent_recheck_lock:
+            if _descent_recheck_running.get(ws) == key:
+                _descent_recheck_running.pop(ws, None)
 
 
 @router.get("/surrogate")
@@ -5430,7 +5901,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
                   if _asked <= 0 else _asked)
         budget = max(2 + n_screen + len(_SCREEN_ALPHAS),
                      min(int(budget), _AUTO_BUDGET_MAX))
-        workers = max(1, min(_SCAN_WORKERS, n_screen))
+        workers = max(1, min(_optimizer_share(_optimizer_active_jobs() + 1), n_screen))
         # Wall-clock: the opening screen is fully parallel; after it, a "round"
         # is one line-search wave (≤ workers, so one wave) plus a re-screen of
         # the active set (k≈4 → 8 evals → one wave).  So ≈ 2 waves per
@@ -5502,7 +5973,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         generations = max(1, int(math.ceil((budget - 2) / float(pop))))
         budget = 2 + generations * pop
 
-    workers = max(1, min(_SCAN_WORKERS, pop))
+    workers = max(1, min(_optimizer_share(_optimizer_active_jobs() + 1), pop))
     waves = int(math.ceil(pop / float(workers)))
     est_wall = 2.0 * rate["s_per_eval"] + generations * waves * rate["s_per_eval"]
 
@@ -5532,6 +6003,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
     }
 
 
+@_optimizer_job("auto")
 def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                  point_name: str) -> None:
     """CMA-ES over the whitelist in PHYSICAL units with a per-variable sigma.
@@ -5821,7 +6293,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                 int(ev["steps_per_period"]), float(ev["coil_temp_c"]), rpm,
                 1.0, need_br=bool(ev.get("demag", False)))
             _serial_first, _sf_why = serial_first_decision(
-                len(_todo), _SCAN_WORKERS, bool(ev.get("demag", False)),
+                len(_todo), _job_workers(), bool(ev.get("demag", False)),
                 bool(ev["rotor_eddy"]), _seed_ok)
             log.info("AUTO gen %d seeding: %s — %s%s", it + 1,
                      "FIRST CANDIDATE SOLO, then fan out" if _serial_first
@@ -5847,7 +6319,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                     _descent_state["best"] = _bstate()
                     _descent_state["current"] = _msum(best["metrics"])
 
-            with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as pool:
+            with ThreadPoolExecutor(max_workers=_job_workers()) as pool:
                 futs = {pool.submit(_eval_at, to_geom(s), I): i
                         for i, s in enumerate(sols) if i not in cost_by_i}
                 for fut in as_completed(futs):
@@ -5993,6 +6465,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         _save_eval_rate()
 
 
+@_optimizer_job("auto")
 def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                    point_name: str) -> None:
     """Screening descent — the user's method, mechanised.  See the block comment
@@ -6179,7 +6652,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         if not todo:
             return
         from concurrent.futures import as_completed
-        with ThreadPoolExecutor(max_workers=max(1, _SCAN_WORKERS)) as pool:
+        with ThreadPoolExecutor(max_workers=max(1, _job_workers())) as pool:
             futs = {pool.submit(_eval_at, dict(d), I): k for k, d in todo.items()}
             for fut in as_completed(futs):
                 k = futs[fut]
@@ -6780,9 +7253,17 @@ def auto_start(req: AutoOptRequest, request: Request):
             # A fresh, user-started run was not interrupted by anything —
             # clear whatever a previous crashed run left stamped here.
             "interrupted_by_restart": None,
+            # WHICH MACHINE (item 5c) — see descent_start.
+            "machine_fp_excl": sorted(v["name"] for v in plan["variables"]),
+            "machine_fp": _config_fingerprint(
+                tuple(sorted(v["name"] for v in plan["variables"]))),
+            "operating_point": dict(plan["operating_point"]),
+            "rechecks": [],
             # Pinned so applying the result RESTORES the eval settings into the
             # Simulation tab — else re-running the Sim would not reproduce it.
             "eval_params": {
+                "element_order": plan["eval"]["element_order"],
+                "demag": bool(plan["eval"].get("demag", False)),
                 "steps_per_period": plan["eval"]["steps_per_period"],
                 "n_sectors": plan["eval"]["n_sectors"],
                 "gap_layers": plan["eval"]["gap_layers"],

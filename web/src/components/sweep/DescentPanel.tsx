@@ -90,8 +90,22 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
     descentRunning, descentState, descentError,
     baselineLine, baselineBusy, baselineError, computeBaselineLine,
     runDescent, cancelDescent, applyDescentBest, applyDescentPoint, loadLastDescent,
+    verifyAndApplyDescentPoint,
     updateSweepConstraints, lastOptSnapshot, setLastOptSnapshot, appliedSave,
   } = useMotorStore();
+  // On-demand 6× re-check of a preliminary point (stored run, or a picked
+  // point outside the validated shortlist) — the only way it can be applied.
+  const [verifying, setVerifying] = useState(false);
+  const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
+  const verifyAndApply = async (target: 'best' | 'point', pt?: any) => {
+    setVerifying(true); setVerifyMsg('Verifying at standard 6×…');
+    const r = await verifyAndApplyDescentPoint(target, pt);
+    setVerifying(false);
+    setVerifyMsg(r.ok ? (r.provenance === 'legacy_unpinned'
+      ? '6× verified on the current machine (run predates pinning); applied'
+      : '6× verified; applied') : `Not applied: ${r.error}`);
+    if (r.ok) setApplied(true);
+  };
 
   // Re-hydrate the last run's charts from the backend on mount (survives reload).
   useEffect(() => {
@@ -817,8 +831,17 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
 
       {st.final_validation_status === 'failed' && (
         <Typography variant="caption" color="error" sx={{ display: 'block', mb: 1 }}>
-          Preliminary 3× result only; final 6× validation failed. Apply is unavailable.
+          Final 6× validation failed; verify a point at 6× to apply it.
         </Typography>
+      )}
+      {st.final_validation_status === 'certified' && (st.final_validation?.dropped_count ?? 0) > 0 && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
+          <Typography variant="caption" sx={{ color: '#f59e0b' }}>
+            {st.final_validation.dropped_count} finalist(s) failed 6× and dropped out
+          </Typography>
+          <HelpTip title={(st.final_validation.failed || []).map((f: any) =>
+            `${Object.entries(f.overrides || {}).map(([k, v]) => `${k}=${v}`).join(', ')}: ${f.reason}`).join(' · ')} />
+        </Box>
       )}
 
       {/* Metrics table: baseline / current / best */}
@@ -1189,15 +1212,22 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
 
       {/* Apply — the optimiser's best, OR a user-picked scatter point if one is
           clicked. Click any point on the objective-space chart to pick it. */}
-      {best && !descentRunning && (
+      {(best || st?.result?.screening_best) && !descentRunning && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           {selectedPt && selectedPt.overrides ? (
             <>
-              <Button variant="outlined" color="success" size="small" startIcon={<PlayArrowIcon />}
-                disabled={!certified || selectedPt.sampling_quality !== 'standard'}
-                onClick={async () => { await applyDescentPoint(selectedPt); setApplied(true); }}>
-                Apply picked point to geometry
-              </Button>
+              {certified && selectedPt.sampling_quality === 'standard' ? (
+                <Button variant="outlined" color="success" size="small" startIcon={<PlayArrowIcon />}
+                  onClick={async () => { await applyDescentPoint(selectedPt); setApplied(true); }}>
+                  Apply picked point to geometry
+                </Button>
+              ) : (
+                <Button variant="outlined" color="success" size="small" startIcon={<PlayArrowIcon />}
+                  disabled={verifying || !connectedToApi}
+                  onClick={() => { void verifyAndApply('point', selectedPt); }}>
+                  {verifying ? 'Verifying at 6×…' : 'Verify at 6× & apply picked point'}
+                </Button>
+              )}
               <Typography variant="caption" sx={{ color: '#e879f9' }}>
                 ● η {selectedPt.eff != null ? Number(selectedPt.eff).toFixed(2) : '—'}% ·{' '}
                 {selectedPt.td != null ? Number(selectedPt.td).toFixed(2) : '—'} Nm/kg ·{' '}
@@ -1206,13 +1236,25 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
               <Button variant="text" size="small" color="inherit"
                 onClick={() => { setSelectedPt(null); setApplied(false); }}>clear pick</Button>
             </>
-          ) : (
+          ) : certified ? (
             <Button variant="outlined" color="success" size="small"
               startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />}
-              disabled={applied || !certified}
+              disabled={applied}
               onClick={async () => { await applyDescentBest(); setApplied(true); }}>
               {applied ? 'Applied to geometry' : 'Apply best to geometry'}
             </Button>
+          ) : (
+            <Button variant="outlined" color="success" size="small"
+              startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />}
+              disabled={applied || verifying || !connectedToApi}
+              onClick={() => { void verifyAndApply('best'); }}>
+              {applied ? 'Applied to geometry' : verifying ? 'Verifying at 6×…' : 'Verify best at 6× & apply'}
+            </Button>
+          )}
+          {verifyMsg && (
+            <Typography variant="caption" sx={{ color: verifyMsg.startsWith('Not') ? '#ef4444' : 'text.secondary' }}>
+              {verifyMsg}
+            </Typography>
           )}
           {/* Where the applied design was archived — one line, same wording as
               the one-click card. An apply that was NOT archived says so in red:

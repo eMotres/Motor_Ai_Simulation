@@ -88,7 +88,9 @@ type Plan = {
 
 const AutoOptimizePanel: React.FC = () => {
   const { connectedToApi, descentState, loadLastDescent, applyDescentBest, cancelDescent,
-          appliedSave } = useMotorStore();
+          appliedSave, verifyAndApplyDescentPoint } = useMotorStore();
+  const [verifying, setVerifying] = useState(false);
+  const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
 
   const [maxRipple, setMaxRipple] = useState<number>(() => {
     try { return Math.max(0.1, Number(JSON.parse(localStorage.getItem('auto.maxRipple') ?? '5')) || 5); }
@@ -602,7 +604,8 @@ const AutoOptimizePanel: React.FC = () => {
         )}
         {isAuto && best && !certified && (
           <Typography color="warning.main" variant="caption" sx={{ display: 'block', mt: 1 }}>
-            3× preliminary screening; 6× winner validation pending.
+            {running ? '3× preliminary screening; 6× winner validation pending.'
+                     : '3× preliminary result; verify at 6× before applying.'}
           </Typography>
         )}
 
@@ -712,11 +715,28 @@ const AutoOptimizePanel: React.FC = () => {
             </Table>
 
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Button variant="outlined" color="success" size="small"
-                 startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />} disabled={applied || !certified}
-                onClick={async () => { await applyDescentBest(); setApplied(true); }}>
-                {applied ? 'Applied to design' : 'Apply to design'}
-              </Button>
+              {certified ? (
+                <Button variant="outlined" color="success" size="small"
+                  startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />} disabled={applied}
+                  onClick={async () => { await applyDescentBest(); setApplied(true); }}>
+                  {applied ? 'Applied to design' : 'Apply to design'}
+                </Button>
+              ) : (
+                // A preliminary best (a run stored before the 6× validation,
+                // or one whose validation failed): the server re-solves it at
+                // 6× on demand and only that answer is applied.
+                <Button variant="outlined" color="success" size="small"
+                  startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />}
+                  disabled={applied || verifying || !connectedToApi}
+                  onClick={async () => {
+                    setVerifying(true); setVerifyMsg(null);
+                    const r = await verifyAndApplyDescentPoint('best');
+                    setVerifying(false);
+                    if (r.ok) setApplied(true); else setVerifyMsg(`Not applied: ${r.error}`);
+                  }}>
+                  {applied ? 'Applied to design' : verifying ? 'Verifying at 6×…' : 'Verify at 6× & apply'}
+                </Button>
+              )}
                <Button variant="outlined" size="small" startIcon={<BookmarkAddIcon />}
                  disabled={!certified}
                 onClick={savePoint}>
@@ -731,6 +751,9 @@ const AutoOptimizePanel: React.FC = () => {
                 <Typography variant="caption" color="error">
                   compare point not saved: {auto.compare_point_error}
                 </Typography>
+              )}
+              {verifyMsg && (
+                <Typography variant="caption" color="error">{verifyMsg}</Typography>
               )}
             </Box>
 

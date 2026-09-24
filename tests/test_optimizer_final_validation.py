@@ -41,9 +41,11 @@ def test_standard_refs_and_shortlist_rerank_before_publication(monkeypatch):
 
     final = _finalize(evaluate)
     assert final["status"] == "certified"
-    assert calls[:2] == [({"g": 0}, 10.0), ({"g": 0}, 11.0)]
-    assert {tuple(x.items()) for x, _ in calls[2:]} == {
-        (("g", 1),), (("g", 2),)}
+    # Baseline A first and alone; then B and the finalists (fix D: in parallel,
+    # so their order is not fixed).
+    assert calls[0] == ({"g": 0}, 10.0)
+    assert sorted((tuple(x.items()), c) for x, c in calls[1:]) == sorted([
+        ((("g", 0),), 11.0), ((("g", 1),), 10.0), ((("g", 2),), 10.0)])
     assert final["baseline"]["_bline"]["eff_a"] == 0.50
     assert final["baseline"]["_bline"]["eff_b"] == 0.45
     assert final["winner"]["x"] == {"g": 2}  # coarse incumbent was g=1
@@ -59,22 +61,51 @@ def test_standard_refs_and_shortlist_rerank_before_publication(monkeypatch):
     assert all(p["sampling_quality"] == "standard" for p in points)
 
 
-def test_reference_or_shortlisted_quality_failure_cannot_publish(monkeypatch):
+def test_reference_failure_or_no_passing_finalist_cannot_publish(monkeypatch):
     def bad_reference(x, current):
         return _out(x, current, quality=not (x["g"] == 0 and current > 10))
 
     assert _finalize(bad_reference)["status"] == "failed"
 
-    def bad_finalist(x, current):
-        return _out(x, current, quality=x["g"] != 1)
+    def bad_a(x, current):
+        return _out(x, current, quality=not (x["g"] == 0 and current <= 10))
 
-    failed = _finalize(bad_finalist)
+    assert _finalize(bad_a)["reason"].startswith("standard baseline A")
+
+    def every_finalist_fails(x, current):
+        return _out(x, current, quality=x["g"] == 0)
+
+    failed = _finalize(every_finalist_fails)
     assert failed["status"] == "failed"
+    assert {f["overrides"]["g"] for f in failed["failed"]} == {1, 2}
     monkeypatch.setattr(O, "_descent_state", {"cancel": False})
     result = {"best": {"overrides": {"g": 1}}}
     assert not O._publish_standard_final(result, failed, [])
     assert result["best"] is None
     assert O._descent_state["apply_eligible"] is False
+
+
+def test_one_failing_finalist_drops_out_and_is_reported(monkeypatch):
+    """Review item 5a: a finalist whose standard solve fails must not kill a
+    run whose baselines and other finalists passed."""
+    def bad_finalist(x, current):
+        if x["g"] == 2:
+            return {"ok": False, "error": "unconverged FEM frames [3] of 72"}
+        return _out(x, current)
+
+    final = _finalize(bad_finalist)
+    assert final["status"] == "certified"
+    assert final["winner"]["x"] == {"g": 1}
+    assert final["dropped_count"] == 1
+    assert final["failed"] == [{"overrides": {"g": 2}, "current_a": 10.0,
+                                "reason": "unconverged FEM frames [3] of 72"}]
+    monkeypatch.setattr(O, "_descent_state", {"cancel": False})
+    result = {"best": {"overrides": {"g": 1}}}
+    assert O._publish_standard_final(result, final, [])
+    pub = result["final_validation"]
+    assert pub["status"] == "certified" and pub["dropped_count"] == 1
+    assert pub["failed"][0]["reason"].startswith("unconverged")
+    assert O._descent_state["apply_eligible"] is True
 
 
 def test_standard_quality_requires_explicit_purpose_convergence_and_resolution():

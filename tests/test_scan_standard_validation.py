@@ -54,13 +54,13 @@ def _standard_result(*, converged=True, sufficient=True):
 def scan(monkeypatch):
     result = _result()
     state = {"running": False, "result": result}
-    fp = {"full": "fullfp"}
+    fp = {"full": "fullfp", "point": "pointfp", "machine": "machinefp"}
     calls = []
     monkeypatch.setattr(O, "_scan_state", state)
     monkeypatch.setattr(O, "_config_fingerprint",
-                        lambda exclude=(): "pointfp" if exclude else fp["full"])
+                        lambda exclude=(): fp["point"] if exclude else fp["full"])
     monkeypatch.setattr(O, "_machine_stamp",
-                        lambda exclude=(): {"fingerprint": "machinefp"})
+                        lambda exclude=(): {"fingerprint": fp["machine"]})
     monkeypatch.setattr(O, "_subprocess_eval",
                         lambda **kw: calls.append(kw) or _standard_result())
     return result, state, fp, calls
@@ -107,11 +107,10 @@ def test_forged_client_metrics_and_geometry_are_ignored(scan):
 
 @pytest.mark.parametrize("mutate", [
     lambda r: r["scan_params"].pop("demag"),
-    lambda r: r["scan_params"].pop("validation_provenance_version"),
-    lambda r: r["points"][1].pop("source_cfg_fp"),
+    lambda r: r["points"][1].pop("source_cfg_fp"),   # pinned sweep, point unstamped
     lambda r: r["points"].append(deepcopy(r["points"][1])),
 ])
-def test_legacy_incomplete_or_ambiguous_point_fails_before_solve(scan, mutate):
+def test_incomplete_or_ambiguous_point_fails_before_solve(scan, mutate):
     result, _, _, calls = scan
     mutate(result)
     with pytest.raises(HTTPException) as ei:
@@ -120,16 +119,58 @@ def test_legacy_incomplete_or_ambiguous_point_fails_before_solve(scan, mutate):
     assert not calls
 
 
+def _legacy(result):
+    """A stored Sweep from before 2026-09-24 (the owner's 22 Sep sweep): no
+    provenance version, no sampling purpose, no per-point source stamp."""
+    for k in ("validation_provenance_version", "sampling_purpose"):
+        result["scan_params"].pop(k)
+    for p in result["points"]:
+        p.pop("source_cfg_fp")
+    return result
+
+
+def test_legacy_sweep_is_rechecked_on_demand_not_refused(scan):
+    result, _, fp, calls = scan
+    _legacy(result)
+    got = O.scan_validate_point(_req())
+    assert len(calls) == 1 and calls[0]["sampling_purpose"] == "standard"
+    assert got["provenance"] == "legacy_machine_stamp"
+    assert got["point"]["apply_eligible"] is True
+    # …and the machine stamp (swept keys excluded) is still the identity test.
+    fp["machine"] = "another-motor"
+    with pytest.raises(HTTPException) as ei:
+        O.scan_validate_point(_req())
+    assert ei.value.status_code == 409
+    assert len(calls) == 1
+
+
+def test_second_point_of_the_same_sweep_after_applying_the_first(scan):
+    """Applying point 1 writes its swept values into the config: the FULL
+    fingerprint changes, the swept-excluded ones do not.  Point 2 must still
+    verify (it used to 409 on the full fingerprint)."""
+    result, _, fp, calls = scan
+    assert O.scan_validate_point(_req(1))["provenance"] == "pinned"
+    fp["full"] = "after-apply-of-point-1"          # magnet_fill_up now in config
+    got = O.scan_validate_point(_req(0))
+    assert got["point"]["apply_eligible"] is True
+    assert len(calls) == 2
+
+
 def test_stale_run_or_config_and_running_scan_fail_before_solve(scan):
     result, state, fp, calls = scan
     with pytest.raises(HTTPException) as ei:
         O.scan_validate_point(O.ScanValidateRequest(run_id="old", geom_id=2, op_index=1))
     assert ei.value.status_code == 409
-    fp["full"] = "edited"
+    fp["point"] = "edited"        # a non-swept key moved
     with pytest.raises(HTTPException) as ei:
         O.scan_validate_point(_req())
     assert ei.value.status_code == 409
-    fp["full"] = "fullfp"
+    fp["point"] = "pointfp"
+    fp["machine"] = "edited"
+    with pytest.raises(HTTPException) as ei:
+        O.scan_validate_point(_req())
+    assert ei.value.status_code == 409
+    fp["machine"] = "machinefp"
     state["running"] = True
     with pytest.raises(HTTPException) as ei:
         O.scan_validate_point(_req())
@@ -151,14 +192,14 @@ def test_failed_standard_quality_never_returns_apply_eligibility(scan, monkeypat
 def test_config_or_run_changed_during_solve_is_rejected(scan, monkeypatch):
     _, state, fp, _ = scan
     def edit_config(**kw):
-        fp["full"] = "edited"
+        fp["machine"] = "edited"
         return _standard_result()
     monkeypatch.setattr(O, "_subprocess_eval", edit_config)
     with pytest.raises(HTTPException) as ei:
         O.scan_validate_point(_req())
     assert ei.value.status_code == 409
 
-    fp["full"] = "fullfp"
+    fp["machine"] = "machinefp"
     def replace_scan(**kw):
         state["result"] = deepcopy(state["result"])
         return _standard_result()

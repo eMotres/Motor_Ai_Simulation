@@ -269,6 +269,17 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     from motor_ai_sim.simulation import geo_mesh as _geo_mesh_mod
     from motor_ai_sim.simulation import fem_solver_2d as _fs_cand
     _geo_mesh_mod.set_tri_budget(_MESH_TRI_BUDGET)
+    # Fix E provenance: which schedule the state this standard eval may
+    # continue was solved at (read BEFORE the solve publishes its own).
+    _across = (os.environ.get("SB_SEED_ACROSS_STEPS") == "1"
+               and sampling_purpose == "standard")
+    _parent_nspp = None
+    if _across:
+        try:
+            _wm = _fs_cand._warm_cache_meta() or {}
+            _parent_nspp = int((_wm.get("meta") or {}).get("nspp"))
+        except Exception:                               # noqa: BLE001
+            _parent_nspp = None
     # Fixes A + B: the candidate scope covers exactly this solve.  Set/reset
     # like the mesh budget beside it — the kernel seam catches every exception,
     # so the reset below always runs.
@@ -363,6 +374,22 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             "solver.em_transient returned no sliding-band payload (result.raw "
             "is empty) — the transient produced no frames for this candidate")
 
+    # The four fields every scored metric below is built from.  Checking them
+    # together, by name, means a payload that is short of one says so in words
+    # instead of surfacing as a bare `KeyError: 'T_avg_Nm'` in the run log — the
+    # difference between "10 designs couldn't be built ('T_avg_Nm')" and a
+    # sentence an engineer can act on.  Checked BEFORE the convergence stamp: a
+    # payload without torque is reported as exactly that (it is rejected either
+    # way; the stamp check below still refuses a scored payload without one).
+    _need = ("T_avg_Nm", "P_cu_W", "P_fe_W", "P_mag_eddy_W")
+    _miss = [k for k in _need if k not in d]
+    if _miss:
+        raise RuntimeError(
+            "solver.em_transient returned a payload without {} — the transient "
+            "produced {} frame(s) but no {} for them; the candidate cannot be "
+            "scored.".format(", ".join(_miss), int(d.get("n_steps", 0) or 0),
+                             "torque" if "T_avg_Nm" in _miss else "losses"))
+
     # ── nonlinear-solve honesty ──────────────────────────────────────────────
     # The Simulation card already refuses to present a window containing a frame
     # whose field never met its solver's convergence test (routes/simulation.py
@@ -405,20 +432,6 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         raise RuntimeError(
             "mesh build degraded (%s) — this candidate's discretization "
             "differs from the others'; eval rejected" % "; ".join(_bevents))
-
-    # The four fields every scored metric below is built from.  Checking them
-    # together, by name, means a payload that is short of one says so in words
-    # instead of surfacing as a bare `KeyError: 'T_avg_Nm'` in the run log — the
-    # difference between "10 designs couldn't be built ('T_avg_Nm')" and a
-    # sentence an engineer can act on.
-    _need = ("T_avg_Nm", "P_cu_W", "P_fe_W", "P_mag_eddy_W")
-    _miss = [k for k in _need if k not in d]
-    if _miss:
-        raise RuntimeError(
-            "solver.em_transient returned a payload without {} — the transient "
-            "produced {} frame(s) but no {} for them; the candidate cannot be "
-            "scored.".format(", ".join(_miss), int(d.get("n_steps", 0) or 0),
-                             "torque" if "T_avg_Nm" in _miss else "losses"))
 
     Tavg = float(d["T_avg_Nm"])
     cu = float(np.mean(d["P_cu_W"])); fe = float(np.mean(d["P_fe_W"]))
@@ -583,6 +596,10 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "demag_seed_from": d.get("demag_seed_from"),
         "eddy_warmup_frames": int(d.get("eddy_warmup_frames") or 0),
         "demag_prepass_frames": int(d.get("demag_prepass_frames") or 0),
+        # Fix E: a standard eval allowed to continue a state solved at another
+        # steps/period says so, and at which one (None = not allowed / no state).
+        "warm_seed_across_steps_allowed": bool(_across),
+        "warm_seed_parent_nspp": _parent_nspp,
         # ── DID THE EDDY TRANSIENT ACTUALLY SETTLE? (user, 2026-09-07) ─────
         # The frame count above only said what the warm-up COST.  In the
         # 90-point sweep of 2026-09-07 all 90 points read 57 frames — every

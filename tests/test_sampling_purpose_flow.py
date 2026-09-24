@@ -118,17 +118,29 @@ def test_every_optimizer_eval_and_cache_call_explicitly_names_purpose():
     path = (Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim"
             / "routes" / "optimization.py")
     tree = ast.parse(path.read_text(encoding="utf-8"))
+    # The enclosing top-level function of every call, so a literal "standard"
+    # can be pinned to the two routes whose job IS a standard re-solve.
+    owner = {}
+    for fn in tree.body:
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for node in ast.walk(fn):
+                owner[id(node)] = fn.name
     calls = [node for node in ast.walk(tree)
              if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Name)
              and node.func.id in ("_subprocess_eval", "_eval_cache_key")]
     assert len(calls) >= 10  # sweep, descent, current probes and auto search
     dynamic = 0
+    standard = set()
     for call in calls:
         purpose = [kw.value for kw in call.keywords
                    if kw.arg == "sampling_purpose"]
         assert len(purpose) == 1, (call.func.id, call.lineno)
-        if isinstance(purpose[0], ast.Constant):
+        if isinstance(purpose[0], ast.Constant) and purpose[0].value == "standard":
+            # Only the Sweep point's Apply check and the on-demand re-check of a
+            # stored optimizer point solve at standard by construction.
+            standard.add(owner.get(id(call)))
+        elif isinstance(purpose[0], ast.Constant):
             assert purpose[0].value == "optimization", (call.func.id, call.lineno)
         else:
             # The four worker-local _eval_at closures and screen cache key
@@ -138,3 +150,4 @@ def test_every_optimizer_eval_and_cache_call_explicitly_names_purpose():
             assert purpose[0].id == "purpose"
             dynamic += 1
     assert dynamic == 5
+    assert standard == {"scan_validate_point", "descent_validate_point"}

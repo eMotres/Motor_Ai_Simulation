@@ -92,6 +92,8 @@ from motor_ai_sim.simulation.drive import (
 from motor_ai_sim.simulation.excitation import (
     ExcitationSource as _ExcSource,
     Feedback as _Feedback,
+    SineVoltageSource as _SineVoltageSource,
+    _V_SETTLE_ENV as _SOURCE_V_SETTLE_ENV,
     make_source as _make_source,
 )
 from motor_ai_sim.simulation.losses import (
@@ -946,14 +948,11 @@ _SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or
 # state with an L/R start-up transient.  Every knob that used to live here is a
 # field of `excitation.SettlePolicy` now, read off `source.settle_policy()`:
 #
-#   periods_static       SB_V_SETTLE_PERIODS  — 10 for the sinusoid (every
-#                        pinned number was produced with it), 2 for PWM, 0 for
-#                        an imposed-current source; an EXPLICIT env value wins
-#                        for every source.  Never lower it in production: a
-#                        fine-step PWM study costs 11x its reported window in
-#                        settling, and whether a shorter settle buys anything is
-#                        an empirical question (compare v_dc_residual_A and the
-#                        reported metrics at 2 vs 10 before trusting one).
+#   periods_static       SB_V_SETTLE_PERIODS — source defaults: 10 for the
+#                        sinusoid, 2 for PWM, 0 for imposed current. The P2
+#                        solver selects 4 instead of 10 only for ordinary
+#                        sinusoidal voltage without eddy/demag, after a pinned
+#                        A/B run; an EXPLICIT env value always wins.
 #   adaptive_tau_mult    SB_V_SETTLE_TAU_MULT — periods = ceil(k·τ_e/T_e) with
 #   periods_cap          SB_V_SETTLE_MAX        τ_e = max(Ld,Lq)/R from the
 #                        phasor initialiser, floored at periods_static, capped.
@@ -2953,6 +2952,18 @@ def _cogging_frame_policy(num_slots, num_poles, pole_pairs, actual_steps,
     }
 
 
+def _select_voltage_settle_periods(source_periods, *, sinusoidal_voltage,
+                                   eddy, demag, explicit_override):
+    """Narrow A/B-supported default; never shorten a source's explicit count."""
+    periods = int(source_periods)
+    if periods < 0 or periods != source_periods:
+        raise ValueError("voltage settle periods must be a nonnegative integer")
+    if (sinusoidal_voltage and not eddy and not demag and
+            not explicit_override and periods == 10):
+        return 4, "plain_sinusoidal_voltage_default_ab_validated"
+    return periods, "source_policy_unchanged"
+
+
 @_pardiso_scope
 def fem_transient_sliding_band(
     n_steps_per_period: int = 12,
@@ -3581,6 +3592,17 @@ def fem_transient_sliding_band(
     # How long this source's circuit state takes to reach its orbit, and which
     # accelerators apply.  Everything the schedule below derives comes from it.
     _settle = _src.settle_policy()
+    _settle_static_effective, _settle_selection_reason = (
+        _select_voltage_settle_periods(
+            _settle.periods_static,
+            sinusoidal_voltage=(type(_src) is _SineVoltageSource),
+            eddy=bool(eddy), demag=bool(demag),
+            explicit_override=bool(_SOURCE_V_SETTLE_ENV)))
+    if _settle_static_effective != int(_settle.periods_static):
+        log.info("P2 plain sinusoidal voltage: %d -> %d default settling "
+                 "periods (A/B validated, no eddy/demag); explicit "
+                 "SB_V_SETTLE_PERIODS still wins",
+                 _settle.periods_static, _settle_static_effective)
     # Carrier periods per electrical period; 0 = this source has no carrier.
     # The time-resolution gate, the mixed-settle geometry and the eddy gauge's
     # block width are all carrier questions, so they ask THIS rather than
@@ -4663,7 +4685,7 @@ def fem_transient_sliding_band(
     # settle count in either scheme, which is what lets the eddy operators
     # and the drive object built between the two calls stay valid.
     #
-    # The COUNT is the source's (`_settle.periods_static`, adapted below); the
+    # The COUNT is the selected source policy (adapted below for PWM); the
     # schedule maths is the solver's and is unchanged.
     _n_periods0 = float(n_periods)
 
@@ -4674,12 +4696,13 @@ def fem_transient_sliding_band(
         _vskip = 0
         _v_nspp = int(round(n_steps_per_period))
         if _vdrive:
-            # TEN settling periods with ITERATED Aitken.  The electrical time
+            # Settling periods with ITERATED Aitken. The electrical time
             # constant L/R spans many periods on a low-R machine, so a marched DC
             # start-up decays too slowly to shed by brute force.  Instead: the
             # phasor init lands near the orbit, then the period-boundary flux
             # (which converges GEOMETRICALLY) is Δ²-extrapolated to its limit at
-            # every 3rd boundary (anchors at periods 3, 6, 9 — each application
+            # every 3rd boundary (anchors at periods 3, 6, 9 when reached;
+            # each application
             # cuts the residual DC ~3×), and the final settling period runs after
             # the last anchor so the reported window starts on a clean orbit.
             # Settling frames use a REDUCED Picard depth (the DC dynamics only
@@ -4867,7 +4890,7 @@ def fem_transient_sliding_band(
                    '_c_nspp', '_settle_bounds', '_sched_mixed', '_sched_th',
                    '_sched_dth', '_sched_dt', '_sched_t', '_sched_fine',
                    '_dc_win', '_vskip_periods', '_progress_comp')
-    _S = _build_schedule(_settle.periods_static)
+    _S = _build_schedule(_settle_static_effective)
     (_vskip, _v_nspp, _v_settle_periods, n_periods, n_total, _dmskip,
      period_mech, dt, _fine_frames, _c_nspp, _settle_bounds, _sched_mixed,
      _sched_th, _sched_dth, _sched_dt, _sched_t, _sched_fine, _dc_win,
@@ -8328,6 +8351,9 @@ def fem_transient_sliding_band(
         # sit outside it, so this UNDERSTATES the click-to-chart wait slightly
         # and can never overstate it.
         "n_frames_solved": int(_n_solved),
+        "voltage_settle_periods": int(_v_settle_periods),
+        "voltage_settle_source_policy_periods": int(_settle.periods_static),
+        "voltage_settle_selection_reason": _settle_selection_reason,
         "solve_wall_s": round(float(_t.time() - t0), 1),
         # What the caller ASKED for, beside what actually ran.  The whole-node
         # snap silently changed the time resolution of every run whose requested
@@ -8596,6 +8622,7 @@ def fem_transient_sliding_band(
             "kind": _drv_name,
             "series": ("V" if _vdrive else "I"),
             "quantity": _desc.get("quantity"),
+            "settle_periods": int(_v_settle_periods),
             **({"A": _vapp['A'], "B": _vapp['B'], "C": _vapp['C']}
                if _vdrive else {}),
         },

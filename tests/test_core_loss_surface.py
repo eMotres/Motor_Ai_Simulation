@@ -497,5 +497,9 @@ class TestHarmonicSummation:
         X = _sine_history(self.N, {1: 0.9})
         with caplog.at_level("INFO"):
             _, terms = self._run(X, np.zeros_like(X), s)
-        assert "entirely INSIDE the measured envelope" in caplog.text
-        assert terms["envelope_out_frac"] == 0.0
+        # Every harmonic is billed since 2026-09-24 (no floor): the sine's
+        # FFT round-off lines above the table's frequencies put ~1e-30 of the
+        # watts in the extrapolation — reported exactly, logged quietly.
+        assert "INSIDE the measured envelope" in caplog.text
+        assert "OUTSIDE" not in caplog.text
+        assert terms["envelope_out_frac"] < 1e-12

@@ -196,6 +196,7 @@ NOT_PER_FRAME = {
     "_pic_fallback", "_pic_unconv",    # frame INDEX lists (diagnostics)
     "_v_bpsi",        # period-boundary flux samples (Aitken anchor)
     "_warm_ks", "_warm_solid",         # eddy warm-up (k < 0) samples only
+    "_warm_grp.setdefault(_gk, [])",   # …per conductor group (period gauge)
     "_v_diag.setdefault('dc_anchor_A', [])",   # one entry per anchor event
 }
 

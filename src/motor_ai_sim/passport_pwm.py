@@ -46,9 +46,9 @@ I_ripple is measured, not modelled:
     I_ripple_rms = sqrt( I_phase_rms_solved^2 - I1_winding_rms^2 )
 
 i.e. everything in the solved phase current that is not the fundamental.  (The
-summary's THD_I is truncated at the 25th harmonic and therefore misses the
-sidebands of a low pulse ratio — it is reported alongside, never used for the
-fit.)
+summary's THD_I is reported alongside, never used for the fit; it covers every
+harmonic of the window since 2026-09-24 — before that it stopped at the 25th
+and missed the sidebands of a low pulse ratio.)
 
 BOTH TERMS ARE WINDING (PHASE) CURRENTS, and that is not free.  The summary's
 ``I1_A`` is the amplitude of ONE PARALLEL BRANCH (routes/simulation.py: "branch
@@ -625,10 +625,10 @@ def _measure_pwm(*, solve, I0_A, rpm0, rpms, pole_pairs, v_bus_V, v_nom_V,
                             if p_rc["I1_winding_rms_A"] is not None else None),
                         "n_parallel_eff": p_rc["n_parallel_eff"],
                         "THD_I_pct": ps.get("THD_I_pct"),
-                        "THD_I_note": ("truncated at the 25th harmonic — it "
-                                       "misses the carrier sidebands and "
-                                       "under-reads the ripple; I_nonfund_A is "
-                                       "the rms-difference number to quote"),
+                        "THD_I_note": ("every harmonic of the window to Nyquist "
+                                       "(the 25th-harmonic cap was removed "
+                                       "2026-09-24); I_nonfund_A is the "
+                                       "rms-difference number the fit uses"),
                     },
                     # ── THE DELTAS — what the tuner adds ──────────────────
                     "dP_mag_W": round(pl["P_mag_W"] - sl["P_mag_W"], 2),

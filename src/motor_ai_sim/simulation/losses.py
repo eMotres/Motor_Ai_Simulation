@@ -23,11 +23,10 @@ log = logging.getLogger(__name__)
 # 2*pi^2 — the classical-eddy denominator in the Bertotti form below.
 TWO_PI_SQ = 2.0 * math.pi ** 2
 
-# Harmonics whose amplitude is below this ANYWHERE in the half are skipped in
-# the measured-surface sum. 1 mT against a ~1 T fundamental is a 1e-6 relative
-# loss contribution — below the noise of the field snapshot it came from — and
-# skipping them is what keeps the per-harmonic surface evaluation cheap.
-HARMONIC_FLOOR_T = 1e-3
+# (HARMONIC_FLOOR_T — the 1 mT floor under which a measured-surface harmonic was
+# skipped everywhere in a half — was removed 2026-09-24, owner: no amplitude
+# floor may shape a reported value.  Every harmonic of the window is billed;
+# an exactly-zero amplitude contributes exactly zero.)
 
 # Leakage guard taper on |end-to-start step| / peak-to-peak: nothing removed
 # below the first, all of it above the second. See ``harmonic_amplitudes``.
@@ -211,7 +210,7 @@ def surface_loss_density(
             raw_amplitudes=raw_amp, legacy_ramp=bool(legacy_comparator))
         for m in range(amp.shape[0]):
             raw_A = raw_amp[0][m] * inv_kf
-            if raw_A.size and float(raw_A.max()) >= HARMONIC_FLOOR_T:
+            if raw_A.size and float(raw_A.max()) > 0.0:
                 raw_p = surface.w_per_m3(
                     raw_A, float(freqs[m]), excursion, weight)
                 raw_out += raw_p
@@ -219,7 +218,7 @@ def surface_loss_density(
                     raw_fund += raw_p
             if legacy_comparator:
                 A = amp[m] * inv_kf
-                if A.size and float(A.max()) >= HARMONIC_FLOOR_T:
+                if A.size and float(A.max()) > 0.0:
                     # Separate envelope accounting: the diagnostic must not
                     # touch the selected result's excursion log.
                     out += surface.w_per_m3(
@@ -431,10 +430,10 @@ def iron_loss_series(
         # integral (it should not — a real steel has hysteresis), rescale the
         # series instead of reporting a negative remainder, and say so.
         if P_surf <= 0.0:
-            # Every harmonic of this half is below HARMONIC_FLOOR_T — a half
-            # with no selected measured-surface loss. The independent classical
-            # derivative can still be nonzero below that amplitude floor; do
-            # not return it on top of a selected surface total of zero.
+            # A half whose field has no AC content at all — the measured
+            # surface bills exactly zero; the classical derivative of the same
+            # (constant) history is zero too, so zero it explicitly rather than
+            # return round-off on top of a selected total of zero.
             classical = np.zeros_like(classical)
             P_eddy = 0.0
             rest = 0.0
@@ -519,6 +518,15 @@ def _log_surface(material: Any, surface: Any, exc: dict, P_surf: float,
             100.0 * wrap["weight"])
     if frac <= 0.0:
         log.info("%s | entirely INSIDE the measured envelope", head)
+        return
+    # Every harmonic is billed since 2026-09-24 (no amplitude floor), so the
+    # window's round-off lines up to Nyquist — nanotesla at frequencies above
+    # the table — always put SOME watts in the extrapolation.  The share is
+    # reported exactly (terms['envelope_out_frac']); only the LOG LEVEL asks
+    # whether it is worth a warning.
+    if frac < 1e-6:
+        log.info("%s | INSIDE the measured envelope (%.2g of the watts from "
+                 "extrapolated round-off lines)", head, frac)
         return
     log.warning(
         "%s | OUTSIDE the measured envelope: %.2f %% of these WATTS came from "
@@ -785,8 +793,8 @@ def proximity_loss_series(
     otherwise.
 
     ``scale`` multiplies up from the modelled sector to the whole machine.
-    ``post`` is the caller's outlier treatment (P1 clips to median +- 5 MAD to
-    catch a single bad frame; P2's field is smooth and only needs a floor at 0).
+    ``post`` is an optional caller hook (the retired P1 path clipped to median
+    ± 5 MAD); the P2 solver passes none — its series is reported as computed.
     """
     if sigma <= 0.0 or idx.size == 0 or len(hist_x) == 0:
         return [0.0] * n_frames, 0.0
@@ -805,7 +813,10 @@ def proximity_loss_series(
     Pt = (sigma / 12.0) * np.sum(
         (d_for_Br ** 2 * ddt(Br) ** 2 + d_for_Bt ** 2 * ddt(Bt) ** 2)
         * vol[None, :], axis=1) * scale
-    Pt = (post or (lambda a: np.maximum(a, 0.0)))(Pt)
+    # No default post-treatment: a sum of squares is non-negative as computed
+    # (the np.maximum(…, 0) default was inert and is gone, 2026-09-24).
+    if post is not None:
+        Pt = post(Pt)
     return Pt.tolist(), float(np.mean(Pt))
 
 

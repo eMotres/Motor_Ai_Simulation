@@ -209,6 +209,75 @@ def eddy_settle_resid(p_solid: Sequence[float], n_steps_per_period: int,
     return abs(d2) / ref, None
 
 
+#: Tail ratio assumed when only TWO whole periods exist (a slower decay cannot
+#: be ruled out from two means): the residual is then 9x the last change.
+EDDY_PERIOD_Q_CAP = 0.9
+
+
+def eddy_period_resid(groups: Mapping[str, Sequence[float]],
+                      n_per_period: int,
+                      floor_frac: float = 1e-3
+                      ) -> Tuple[float, Dict[str, Optional[float]], int]:
+    """Remaining start-up transient judged on WHOLE ELECTRICAL PERIODS, per body.
+
+    ``groups`` maps a conductor group (magnet / shaft / sleeve / copper) to its
+    solved σE² per warm-up frame [W], chronological and CONTINUOUS in time (the
+    march splices whole periods with the pole-pair remap, so consecutive
+    samples are consecutive steps).  The last whole periods are averaged: on
+    the periodic steady state every period has the SAME mean — the angular
+    ripple, the 6th harmonic, slotting, any carrier of a synchronous PWM, all
+    cancel exactly inside one electrical period — so the change of the period
+    mean IS the transient, with nothing left for a block average to mistake
+    for decay (the defect of ``eddy_settle_resid`` on short records: three
+    probe samples read "settled" on a shaft whose loss later halved).
+
+    Per group, with ``m`` the last (up to four) period means and Δ their
+    changes:
+      * four or more periods: geometric tail max(|Δ|)·q/(1−q) over the last
+        TWO changes, with q the LARGER of the last two ratios when all three
+        changes share a sign and both ratios lie in (0, 1) (q capped at
+        ``EDDY_PERIOD_Q_CAP``); otherwise the cap is assumed.  Two ratios, not
+        one: a multi-mode decay can flatten for one period and steepen again
+        (measured on the L155 shaft: −1.10, −0.14, then −0.5 W per period), and
+        a single ratio read that flat step as "settled";
+      * two or three periods: q is unknown, the tail is bounded with q = cap
+        (9× the largest of the last changes);
+      * fewer: infinite.
+    Each group is judged against its OWN level, floored at ``floor_frac`` of
+    the total solid loss (a milliwatt group beside kilowatts is judged on the
+    watts it could move, not divided noise by noise).  Returns
+    ``(worst_residual, per_group_residual, n_whole_periods)``.
+    """
+    N = max(1, int(n_per_period))
+    per: Dict[str, Optional[float]] = {}
+    series = {k: np.asarray(v, float) for k, v in groups.items()}
+    n = min((s.size for s in series.values()), default=0)
+    nP = n // N
+    if nP < 2 or not series:
+        return float("inf"), {k: None for k in series}, int(nP)
+    use = min(nP, 4)
+    means = {k: [float(np.mean(s[s.size - (j + 1) * N: s.size - j * N]))
+                 for j in range(use - 1, -1, -1)] for k, s in series.items()}
+    total = sum(abs(m[-1]) for m in means.values())
+    worst = 0.0
+    cap = EDDY_PERIOD_Q_CAP
+    for k, m in means.items():
+        ref = max(abs(m[-1]), floor_frac * total, 1e-30)
+        d = [m[i + 1] - m[i] for i in range(len(m) - 1)]
+        dmax = max(abs(d[-1]), abs(d[-2]) if len(d) >= 2 else 0.0)
+        qq = cap
+        if len(d) >= 3:
+            same = (d[-1] * d[-2] > 0.0) and (d[-2] * d[-3] > 0.0)
+            q1 = (d[-2] / d[-3]) if d[-3] != 0.0 else 1.0
+            q2 = (d[-1] / d[-2]) if d[-2] != 0.0 else 1.0
+            if same and 0.0 < q1 < 1.0 and 0.0 < q2 < 1.0:
+                qq = min(max(q1, q2), cap)
+        r = dmax * qq / (1.0 - qq) / ref
+        per[k] = float(r)
+        worst = max(worst, float(r))
+    return worst, per, int(nP)
+
+
 def terminal_work_mean(psi_a: Sequence[float], psi_b: Sequence[float],
                        psi_c: Sequence[float], i_a: Sequence[float],
                        i_b: Sequence[float], i_c: Sequence[float],

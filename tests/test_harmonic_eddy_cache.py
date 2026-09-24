@@ -147,18 +147,21 @@ def history_case():
 
 
 def original_history(p, t, nu, sigma, bodies, nodes, history, period, length,
-                     currents=None, n_harm=8, amp_floor=5e-4):
+                     currents=None):
+    """Independent oracle: EVERY bin to Nyquist (no cap, no amplitude floor —
+    owner 2026-09-24), Nyquist bin of an even window at |C|, a bin skipped only
+    when its whole drive is exactly zero."""
     count = history.shape[0]
     Ah = np.fft.rfft(history, axis=0)/count
     Ih = [np.fft.rfft(np.asarray(i, float))/count for i in currents] if currents is not None else None
-    maximum = float(np.abs(Ah[1:, nodes]).max()) if Ah.shape[0] > 1 else 0.
     losses, used = np.zeros(len(bodies)), []
-    for k in range(1, min(n_harm, Ah.shape[0])):
-        amplitude = 2.*Ah[k]
-        if maximum > 0 and float(np.abs(amplitude[nodes]).max()) < amp_floor*2.*maximum:
+    for k in range(1, Ah.shape[0]):
+        a_k = 1. if (count % 2 == 0 and k == count//2) else 2.
+        amplitude = a_k*Ah[k]
+        imposed = [complex(a_k*Ih[b][k]) for b in range(len(bodies))] if Ih is not None else [0.]*len(bodies)
+        if not np.any(amplitude[nodes]) and not any(imposed):
             continue
         omega = 2.*math.pi*k/period
-        imposed = [complex(2.*Ih[b][k]) for b in range(len(bodies))] if Ih is not None else [0.]*len(bodies)
         A, E0 = original_solve(p, t, nu, sigma, bodies, imposed, omega, nodes, amplitude[nodes])
         losses += eddy.eddy_loss_per_body(p, t, sigma, A, E0, bodies, omega, length)
         used.append(k/period)
@@ -170,11 +173,36 @@ def test_history_losses_and_frequency_selection_match_original(with_currents):
     p, t, nu, sigma, bodies, nodes, mask, history, currents = history_case()
     currents = currents if with_currents else None
     actual = eddy.region_eddy_from_history(p, t, nu, sigma, bodies, mask,
-                                          history, .01, .03, currents, n_harm=8)
+                                          history, .01, .03, currents)
     reference = original_history(p, t, nu, sigma, bodies, nodes,
                                  history, .01, .03, currents)
     np.testing.assert_array_equal(actual[0], reference[0])
-    assert actual[1] == reference[1] == [100., 300.]
+    assert actual[1] == reference[1]
+    # the 1e-8 fifth harmonic is SOLVED now (it used to fall under the 5e-4
+    # amplitude floor), and nothing is capped below Nyquist
+    assert {100., 300., 500.} <= set(actual[1])
+
+
+def test_no_cap_and_no_floor_every_physical_line_is_billed():
+    """An order-20 line (above the retired k <= 16 cap) and a line at 1e-6 of
+    the fundamental (below the retired 5e-4 amplitude floor) both reach the
+    loss, each exactly as its own single-line history would bill it."""
+    p, t, nu, sigma, bodies, nodes, mask, _, _ = history_case()
+    n = 64
+    ph = 2*math.pi*np.arange(n)/n
+
+    def run(wave):
+        return eddy.region_eddy_from_history(
+            p, t, nu, sigma, bodies, mask, wave[:, None]*p[1][None, :], .01, .03)
+    base, _ = run(np.cos(ph))
+    for order, amp in ((20, 1.), (3, 1e-6)):
+        both, used = run(np.cos(ph) + amp*np.cos(order*ph))
+        alone, _ = run(amp*np.cos(order*ph))
+        assert order/.01 in used
+        assert float(np.sum(alone)) > 0.
+        if amp == 1.:          # (a 1e-12-relative sum cannot be read by subtraction)
+            np.testing.assert_allclose(np.sum(both) - np.sum(base),
+                                       np.sum(alone), rtol=1e-6)
 
 
 def test_each_history_assembles_once_but_factorizes_every_frequency(monkeypatch):
@@ -188,14 +216,16 @@ def test_each_history_assembles_once_but_factorizes_every_frequency(monkeypatch)
             return _original(*args, **kwargs)
 
         monkeypatch.setattr(eddy, name, counted)
+    solved = 0
     for expected_calls in (1, 2):
         result = eddy.region_eddy_from_history(p, t, nu, sigma, bodies, mask,
-                                              history, .01, .03, currents, n_harm=8)
-        assert result[1] == [100., 300.]
-        assert counts == dict(K=expected_calls, M=expected_calls, solve=2*expected_calls)
+                                              history, .01, .03, currents)
+        solved += len(result[1])
+        assert {100., 300.} <= set(result[1])
+        assert counts == dict(K=expected_calls, M=expected_calls, solve=solved)
 
 
-@pytest.mark.parametrize("mode", ["single-frame", "no-harmonics", "all-filtered"])
+@pytest.mark.parametrize("mode", ["single-frame", "zero-history"])
 def test_history_without_retained_harmonics_does_not_prepare(monkeypatch, mode):
     p, t, nu, sigma, bodies, _, mask, history, _ = history_case()
 
@@ -203,14 +233,11 @@ def test_history_without_retained_harmonics_does_not_prepare(monkeypatch, mode):
         raise AssertionError("assembly attempted without a retained harmonic")
 
     monkeypatch.setattr(eddy, "_PreparedHarmonicEddy", forbidden)
-    kwargs = {}
     if mode == "single-frame":
         history = history[:1]
-    elif mode == "no-harmonics":
-        kwargs["n_harm"] = 1
     else:
-        kwargs["amp_floor"] = 2.
+        history = np.zeros_like(history)     # no drive at all: exactly zero
     losses, used = eddy.region_eddy_from_history(
-        p, t, nu, sigma, bodies, mask, history, .01, .03, **kwargs)
+        p, t, nu, sigma, bodies, mask, history, .01, .03)
     np.testing.assert_array_equal(losses, np.zeros(len(bodies)))
     assert used == []

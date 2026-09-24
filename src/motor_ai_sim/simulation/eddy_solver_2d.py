@@ -292,7 +292,6 @@ def region_eddy_from_history(
     p: np.ndarray, t: np.ndarray, nu_elem: np.ndarray, sigma_elem: np.ndarray,
     bodies: Sequence[np.ndarray], bound_mask: np.ndarray, A_hist: np.ndarray,
     period_s: float, L: float, I_hists: Sequence[np.ndarray] | None = None,
-    n_harm: int = 80, amp_floor: float = 5e-4,
 ) -> Tuple[np.ndarray, List[float]]:
     """Honest eddy loss per conductor body over a REGION (e.g. the whole rotor:
     magnets + shaft + iron), driven by the REAL field time-history the production
@@ -307,27 +306,37 @@ def region_eddy_from_history(
     bound_mask  : (Nn,) bool — region OUTER boundary (the air-gap interface); the field
                   the rotor sees enters here as a Dirichlet BC.  Internal screening +
                   inter-body coupling are SOLVED — no shape factor, no cap.
-    A_hist      : (Nframes, Nn) real A_z at the region nodes over ONE electrical period.
+    A_hist      : (Nframes, Nn) real A_z at the region nodes over a window of
+                  length ``period_s`` that CLOSES on itself (a whole period of the
+                  rotor-frame field — see simulation/rotor_window.py; an open
+                  window reads its end-to-start step as broadband content).
     I_hists[b]  : (Nframes,) net current per body (coils); None → all floating (I=0).
 
     rFFT the boundary history → harmonics; per harmonic solve the coupled multi-body
     system; sum per-harmonic losses (orthogonal → add in power).  Returns
-    (loss_per_body [W], freqs_used)."""
+    (loss_per_body [W], freqs_used).
+
+    EVERY bin up to Nyquist is solved — no harmonic cap, no amplitude floor
+    (owner 2026-09-24: no filter may shape a reported value).  A bin is skipped
+    only when its drive is EXACTLY zero (boundary A and every body current),
+    whose solution is exactly zero.  Peak amplitudes: 2|C_k|, except the
+    Nyquist bin of an even-length window, a single real cosine of |C_k|."""
     Nf = A_hist.shape[0]
     Ah = np.fft.rfft(A_hist, axis=0) / Nf
     Ih = ([np.fft.rfft(np.asarray(I, float)) / Nf for I in I_hists]
           if I_hists is not None else None)
     bnodes = np.where(bound_mask)[0]
-    amax = float(np.abs(Ah[1:, bnodes]).max()) if Ah.shape[0] > 1 else 0.0
+    nyq = Nf // 2 if Nf % 2 == 0 else -1
     P = np.zeros(len(bodies)); used: List[float] = []
     prepared = None
-    for k in range(1, min(n_harm, Ah.shape[0])):
-        Abk = 2.0 * Ah[k]
-        if amax > 0 and float(np.abs(Abk[bnodes]).max()) < amp_floor * 2.0 * amax:
-            continue
-        omega = 2.0 * math.pi * k / period_s
-        I_k = ([complex(2.0 * Ih[b][k]) for b in range(len(bodies))]
+    for k in range(1, Ah.shape[0]):
+        a_k = 1.0 if k == nyq else 2.0
+        Abk = a_k * Ah[k]
+        I_k = ([complex(a_k * Ih[b][k]) for b in range(len(bodies))]
                if Ih is not None else [0.0] * len(bodies))
+        if not np.any(Abk[bnodes]) and not any(I_k):
+            continue                      # exactly zero drive → exactly zero loss
+        omega = 2.0 * math.pi * k / period_s
         if prepared is None:
             prepared = _PreparedHarmonicEddy(
                 p, t, nu_elem, sigma_elem, bodies, bnodes)
@@ -340,7 +349,7 @@ def region_eddy_from_history(
 def honest_rotor_eddy(
     p: np.ndarray, t: np.ndarray, tags: np.ndarray, mu_r_of_tag, sigma_of_tag,
     mag_tags: Sequence[int], shaft_tag: int, A_hist: np.ndarray, period_s: float,
-    L: float, NS: float = 1.0, n_harm: int = 17,
+    L: float, NS: float = 1.0,
 ) -> Tuple[float, float, List[float]]:
     """Honest (reaction-included) eddy loss of the ROTOR conductors, computed on the
     production transient's REAL rotor mesh, driven by the rotor-node A history it
@@ -351,7 +360,9 @@ def honest_rotor_eddy(
     mu_r_of_tag, sigma_of_tag : callables tag -> mu_r / sigma.
     mag_tags  : one tag per magnet (each is a floating body, ∮J=0).
     shaft_tag : the shaft's tag (one floating body).
-    A_hist    : (Nframes, Nn) rotor-node A_z over the captured window of length period_s.
+    A_hist    : (Nframes, Nn) rotor-node A_z over a window of length period_s that
+                closes on itself — the solver passes the COMMENSURATE rotor
+                window (rotor_window.commensurate_rotor_potential_window).
     NS        : sector->full-ring multiplier (=1 for a full-ring solve).
 
     Returns (P_magnet_W, P_shaft_W, freqs_used)."""
@@ -390,27 +401,23 @@ def honest_rotor_eddy(
     # A filter that only acts where the underlying result is unusable is a bias
     # nobody is watching, which is exactly what it was.
     #
-    # Fixed PHYSICAL harmonic ceiling — KEPT, and measured necessary.  The
-    # rotor-frame drive physically contains only the low orders per electrical
-    # period — armature MMF 6f/12f (k=6, 12) and stator-slotting multiples
-    # (k = slots/pp ≈ 2.4, 4.8, … ≤ ~14.4 for 24s/20p) — while the slip-band
-    # node-identification jitter is broadband.  Without the cap the rFFT's kmax
-    # grows with the step count, so the jitter band ADDS loss with resolution.
-    # Same ablation, p2_load + rotor_eddy at 36 steps/period:
-    #
-    #     n_harm=17 (k ≤ 16)   P_mag 2.1325 W
-    #     n_harm=80 (no cap)   P_mag 2.3504 W   +10.22 %
-    #
-    # i.e. the cap is worth 10 % of the magnet loss at a usable step count, and
-    # is inert at 12 steps (the rFFT only reaches k=6 there — measured 0.00 %),
-    # which is why the ablation had to be run at both.  The ceiling is a
-    # constant and NOT topology-derived: 17 comes from the 24s20p line list
-    # above (6 × 24/20 = 14.4), and for the active 12s14p the physical lines sit
-    # at 6 × 12/7 ≈ 10.3, so 17 is loose here rather than wrong.  Tightening it
-    # per topology is a change with its own measurement to make; it has not been
-    # made, so the number is documented rather than quietly re-derived.
+    # ── the k ≤ 16 harmonic ceiling and the 5e-4 amplitude floor are DELETED
+    # (owner 2026-09-24: "убираем все фильтры").  The ceiling was "measured
+    # necessary" because without it the loss grew with the step count
+    # (p2_load + rotor_eddy, 36 steps: 2.1325 W capped vs 2.3504 W uncapped).
+    # That growth was not slip-band jitter: it was the OPEN one-period window.
+    # A rotor node slides a non-integer number of slot pitches per electrical
+    # period, so its one-period A(t) ends mid slot-passing cycle and the DFT
+    # bills the end-to-start step as broadband content up to Nyquist — the
+    # same leakage the rotor iron had (docs/SOLVER_HELD_ITEMS_FIX_2026-09-24.md
+    # §2).  The cure is the defect's, not the symptom's: the caller hands this
+    # function the COMMENSURATE window (rotor_window.
+    # commensurate_rotor_potential_window — q windows chained from the solved
+    # frames of the pole-pair image nodes, exact, no extra solve), on which
+    # every bin up to Nyquist is solved.  Convergence with the step count is
+    # in docs/NO_FILTERS_2026-09-24.md.
     Pbod, freqs = region_eddy_from_history(p, t, nu, sig, bodies, bmask, A_hist,
-                                           period_s, L, n_harm=n_harm)
+                                           period_s, L)
     P_mag = float(np.sum(Pbod[:n_mag])) * NS
     P_shaft = (float(np.sum(Pbod[n_mag:])) * NS) if has_shaft else 0.0
     return P_mag, P_shaft, freqs

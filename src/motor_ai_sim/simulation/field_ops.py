@@ -151,35 +151,10 @@ def _mu_r_from_bh_vec(bh_curve, B_arr):
     mu = np.where(B <= 1e-12, 1.0, B / (MU0 * H))
     return np.maximum(mu, 1.0)
 
-def _smooth_demag_H(mesh, idx: np.ndarray, H_el: np.ndarray) -> np.ndarray:
-    """Area-weighted nodal smoothing of the demagnetising field inside ONE magnet.
-
-    H is recovered from B = mu0*(H + M), and on P1 elements B is constant per
-    triangle, so the value in a sharp magnet corner is a mesh artefact: it grows
-    without bound as the mesh is refined and de-rates that element to ~0 Br.  That
-    is why the corner minimum read 0.037 against Ansys' 0.558 on the same design.
-
-    Averaging onto the NODES (weighted by element area) and back gives the
-    continuous field the de-rating should be judged on — mesh-independent and the
-    same post-processing Ansys plots.  Smoothing is confined to this magnet's own
-    elements so nothing leaks across the magnet/iron boundary.
-
-    NOTE this makes the model LESS conservative than the raw peak: the corner is no
-    longer driven to zero.  The raw per-element worst is still reported alongside.
-    """
-    t = np.asarray(mesh.t)[:, idx]                 # 3 x n nodes of this magnet
-    x, y = np.asarray(mesh.p)[0], np.asarray(mesh.p)[1]
-    ax, ay = x[t[0]], y[t[0]]
-    bx, by = x[t[1]], y[t[1]]
-    cx, cy = x[t[2]], y[t[2]]
-    area = 0.5 * np.abs((bx - ax) * (cy - ay) - (cx - ax) * (by - ay))
-    area = np.maximum(area, 1e-30)
-    nsum = np.zeros(x.size); wsum = np.zeros(x.size)
-    for k in range(3):
-        np.add.at(nsum, t[k], H_el * area)
-        np.add.at(wsum, t[k], area)
-    Hn = nsum / np.maximum(wsum, 1e-30)
-    return Hn[t].mean(axis=0)
+# (_smooth_demag_H — area-weighted nodal smoothing of H inside each magnet before
+# the Br ratchet — was removed 2026-09-24, owner: no filter may shape a reported
+# value.  demag.MagnetDemag judges each element on its own solved mean H; the
+# mesh convergence of the reported demag numbers is in docs/NO_FILTERS_2026-09-24.md.)
 
 def _per_triangle_B(mesh, A_nodal: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Compute B = (B_x, B_y) per triangle from P1 nodal A_z.

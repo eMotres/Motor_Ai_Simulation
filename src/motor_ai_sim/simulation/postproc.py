@@ -5,24 +5,29 @@ paths (the opt↔sim byte-identity rule).
 from __future__ import annotations
 
 import math
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import numpy as np
 
 
-def voltage_harmonics(d: Dict[str, Any], h_max: int = 25) -> Dict[str, Any]:
+def voltage_harmonics(d: Dict[str, Any],
+                      h_max: Optional[int] = None) -> Dict[str, Any]:
     """Harmonic analysis of the phase voltages of a finished transient dict.
 
     Returns
       V1_phase_V   — fundamental phase-voltage amplitude [V]
-      THD_pct      — phase-to-neutral THD, all harmonics 2..h_max
+      THD_pct      — phase-to-neutral THD, EVERY harmonic the window resolves
+                     (2 .. Nyquist).  No order cap (owner 2026-09-24: no
+                     truncation may shape a reported value; this used to stop
+                     at the 25th).  ``h_max`` is kept only for a caller that
+                     asks for a named band explicitly.
       THD_LL_pct   — line-to-line THD: non-triplen harmonics only.  For a
                      balanced 3-phase set the line-to-line amplitude of
                      harmonic h is 2·sin(h·π/3)·V_h — √3·V_h for non-triplen
                      and 0 for triplen — so the √3 cancels in the ratio and
                      THD_LL is simply RSS(non-triplen V_h) / V1.  This is what
                      a wye-connected FOC drive actually fights.
-      V_harm_amp   — per-order amplitude list [V], orders 1..h_max
+      V_harm_amp   — per-order amplitude list [V], orders 1..Nyquist
 
     Harmonic h of the ELECTRICAL frequency lives in DFT bin h·P where
     P = round(n_periods) (the stored window may span several periods).
@@ -65,7 +70,7 @@ def voltage_harmonics(d: Dict[str, Any], h_max: int = 25) -> Dict[str, Any]:
     return out
 
 
-def _line_harmonics(d: Dict[str, Any], h_max: int) -> list:
+def _line_harmonics(d: Dict[str, Any], h_max: Optional[int]) -> list:
     """Per-order amplitudes of the ACTUAL line-to-line voltages (3-pair
     magnitude average) — None-safe wrapper building A−B/B−C/C−A on the fly."""
     keys = ("V_A", "V_B", "V_C")
@@ -97,15 +102,21 @@ def _line_harmonics(d: Dict[str, Any], h_max: int) -> list:
     return _phase_harmonics(dd, ("LL_ab", "LL_bc", "LL_ca"), h_max)
 
 
-def _phase_harmonics(d: Dict[str, Any], keys, h_max: int) -> list:
+def _phase_harmonics(d: Dict[str, Any], keys, h_max: Optional[int]) -> list:
     """Per-order harmonic amplitudes (3-phase magnitude average) of any balanced
     triple of per-frame series in ``d`` — shared by the voltage and current
     analyses.  Harmonic h of the electrical frequency lives in bin h·n_periods;
-    non-finite samples are zeroed (dψ/dt edge artifacts in older stored runs)."""
+    non-finite samples are zeroed (dψ/dt edge artifacts in older stored runs).
+
+    Every order up to Nyquist (h·P ≤ N/2) unless ``h_max`` names a band.
+    Peak amplitude 2|X|/N, except the Nyquist bin of an even window — a
+    single real cosine — at |X|/N."""
     va = d.get(keys[0]) or []
     N = len(va)
     P = max(1, int(round(float(d.get("n_periods", 1.0) or 1.0))))
-    hmax = min(int(h_max), N // (2 * P) - 1) if N else 0
+    hmax = (N // 2) // P if N else 0
+    if h_max is not None:
+        hmax = min(int(h_max), hmax)
     if hmax < 1:
         return []
     phases = [np.nan_to_num(np.asarray(d.get(k), dtype=float),
@@ -119,11 +130,27 @@ def _phase_harmonics(d: Dict[str, Any], keys, h_max: int) -> list:
     for h in range(1, hmax + 1):
         w = 2.0 * np.pi * h * P / N
         c, s = np.cos(w * n), np.sin(w * n)
+        scale = (1.0 / N) if 2 * h * P == N else (2.0 / N)
         m = 0.0
         for v in phases:
-            m += (2.0 / N) * math.hypot(float(v @ c), float(-(v @ s)))
+            m += scale * math.hypot(float(v @ c), float(-(v @ s)))
         amps.append(m / len(phases))
     return amps
+
+
+def _angles_for(d: Dict[str, Any], key: str) -> list:
+    """Rotor angles the samples of series ``key`` belong to.
+
+    The winding VOLTAGE is a per-STEP quantity (the Crank–Nicolson row over
+    (t_{k-1}, t_k], see fem_solver_2d._step_voltage_series) and sits at the
+    step MIDPOINT, which the solver ships as ``V_rotor_angle_deg``; currents,
+    flux linkages and torque sit on the frames.  Older results have no
+    midpoint angles and fall back to the frame angles."""
+    if str(key).startswith("V_"):
+        va = d.get("V_rotor_angle_deg")
+        if isinstance(va, (list, tuple)) and len(va) == len(d.get(key) or []):
+            return list(va)
+    return list(d.get("rotor_angle_deg") or [])
 
 
 def _drive_frame_phasor(d: Dict[str, Any], keys) -> "complex":
@@ -149,7 +176,7 @@ def _drive_frame_phasor(d: Dict[str, Any], keys) -> "complex":
     run at a load angle nobody asked for.  The constant survives only as the
     fallback for a result dict too old to carry ``daxis_deg``.
     """
-    ang = d.get("rotor_angle_deg") or []
+    ang = _angles_for(d, keys[0])
     N = len(ang)
     if N < 8:
         return 0j
@@ -259,7 +286,7 @@ def complex_fundamental(d: Dict[str, Any], key: str) -> complex:
     so e.g. Ê₁ of a no-load run can be subtracted from V̂₁ of a loaded run —
     the basis of the analytic L̂ estimate for ΔP_harm screening."""
     v = d.get(key) or []
-    ang = d.get("rotor_angle_deg") or []
+    ang = _angles_for(d, key)
     N = len(v)
     if N < 4 or len(ang) != N:
         return 0j
@@ -274,7 +301,8 @@ def complex_fundamental(d: Dict[str, Any], key: str) -> complex:
     return (2.0 / N) * complex(vv @ np.exp(-1j * th))
 
 
-def current_harmonics(d: Dict[str, Any], h_max: int = 25) -> Dict[str, Any]:
+def current_harmonics(d: Dict[str, Any],
+                      h_max: Optional[int] = None) -> Dict[str, Any]:
     """Harmonic analysis of the phase CURRENTS of a finished transient dict.
 
     In current drive the currents are imposed sinusoids (THD_I ≈ 0 confirms a

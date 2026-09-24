@@ -339,6 +339,59 @@ class P2Drive:
     # (frozen_nu / no saturable iron) the system is linear and one bordered
     # solve is exact — there is no Picard variant, by design: this branch
     # solves by Newton and code parked in the Picard fallback never runs.
+    def eddy_static_state(self, Pro, free, A_start, I_vec, nu_fix, maxit):
+        """The ∂A/∂t = 0 limit of the bordered system — the field the eddy
+        march STARTS from on a cold run (no-filter pass 2026-09-24, item 7).
+
+        With A_prev = A the constraint rows give U_b = I_b/S_b (uniform current
+        in every wire, no current in a floating magnet or shaft) and the field
+        rows the magnetostatic problem K(A)·A = f_mag + G·U.  A cold march used
+        to start from A_prev = 0 instead: its first step switched the whole
+        field on in one Δt, and the rotor-frame DC field then had to DIFFUSE
+        into a conducting, magnetic shaft — on the L155 (steel shaft) a mode of
+        seconds, i.e. hundreds of electrical periods, and the shaft loss read
+        29 W, 15 W, 8.4 W after 2, 5 and 16 periods.  Starting from the static
+        field puts that DC in place, as it is on the machine's periodic orbit,
+        and leaves only the AC reaction to settle.  Returns (ok, A).
+        """
+        _Iv = np.asarray(I_vec, float)
+        S = np.asarray(self.Sdt, float) / max(float(self.dt), 1e-300)
+        U = np.where(np.abs(S) > 0.0, _Iv / np.where(S != 0.0, S, 1.0), 0.0)
+        f = self.f_mag + np.asarray(self.G @ U).ravel()
+        _bf = np.asarray(Pro.T @ f).ravel()[free]
+        _bn = max(float(np.linalg.norm(_bf)), 1e-30)
+        A = np.array(A_start, float, copy=True)
+        for _it in range(max(int(maxit), 2)):
+            if nu_fix is not None:
+                K = self.p2.asmK(nu_fix); info = None
+            else:
+                K, info = self.p2.Kpw(A)
+            r = np.asarray(Pro.T @ (K @ A - f)).ravel()[free]
+            if float(np.linalg.norm(r)) / _bn < 1e-7:
+                return True, A
+            J = K
+            if info is not None:
+                T = self.p2.tangent2(info)
+                if T is not None:
+                    J = K + T
+            Jff = (Pro.T @ J @ Pro).tocsr()[free][:, free].tocsc()
+            dA = self.p2.pad2(Pro, free, self.p2.solve_ff(Jff, -r))
+            if nu_fix is not None:
+                A = A + dA
+                continue
+            _r0 = float(np.linalg.norm(r)); lam = 1.0; acc = False
+            for _ls in range(8):
+                At = A + lam * dA
+                _Kt = self.p2.Kpw(At)[0]
+                if float(np.linalg.norm(np.asarray(
+                        Pro.T @ (_Kt @ At - f)).ravel()[free])) < _r0:
+                    A = At; acc = True
+                    break
+                lam *= 0.5
+            if not acc:
+                return False, A
+        return False, A
+
     def eddy_solve(self, Pro, free, A_start, U_start, I_vec, Aprev, nu_fix,
                     maxit):
         """Bordered (A, U) Newton.  Returns (ok, A, U, rrel, nit).

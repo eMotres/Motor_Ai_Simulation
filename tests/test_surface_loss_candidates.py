@@ -31,7 +31,9 @@ def _raw_surface_density(signal, surface, f_elec=933.33, n_periods=1.0):
     freq = np.arange(amp.shape[0]) * f_elec / n_periods
     density = np.zeros(signal.shape[1])
     for m in range(1, amp.shape[0]):
-        if float(amp[m].max()) >= losses.HARMONIC_FLOOR_T:
+        # every harmonic (no amplitude floor since 2026-09-24); an exactly
+        # zero one contributes exactly zero
+        if float(amp[m].max()) > 0.0:
             density += surface.w_per_m3(amp[m], float(freq[m]), None, None)
     return density
 
@@ -142,25 +144,37 @@ def test_iron_terms_select_unfiltered_raw_candidate_and_serialize(monkeypatch):
     json.dumps(terms, allow_nan=False)
 
 
-def test_sub_floor_surface_zeroes_nonzero_classical_derivative(monkeypatch):
+def test_small_amplitudes_are_billed_no_floor(monkeypatch):
+    """0.4 mT used to fall under the 1 mT HARMONIC_FLOOR_T and bill 0 W while
+    its dB/dt did not vanish; with no floor (owner 2026-09-24) it is billed,
+    and a CONSTANT field (no AC at all) still bills exactly zero."""
     class Material:
-        name = "sub-floor steel"
+        name = "small-field steel"
         stacking_factor = 1.0
 
     monkeypatch.setattr(losses, "_get_surface", lambda material, coeff: QuadraticSurface())
     n = 40
     t = np.arange(n) / n
-    x = (0.4 * losses.HARMONIC_FLOOR_T * np.cos(2*np.pi*t))[:, None]
-    y = np.zeros_like(x)
     derivative = lambda values: np.gradient(values, axis=0)
-    assert np.any(derivative(x))
+    x = (4e-4 * np.cos(2*np.pi*t))[:, None]
     terms = {}
     classical, rest = losses.iron_loss_series(
-        list(x), list(y), np.array([0]), np.array([1.0]), Material(), 1.0,
-        933.33, n, derivative, lambda material: (1.0, 1.0, 1.0), terms=terms)
-    assert terms["surface_W"] == 0.0
-    assert terms["eddy_W"] == 0.0
-    assert float(np.mean(classical)) + rest == terms["surface_W"]
+        list(x), list(np.zeros_like(x)), np.array([0]), np.array([1.0]),
+        Material(), 1.0, 933.33, n, derivative,
+        lambda material: (1.0, 1.0, 1.0), terms=terms)
+    assert terms["surface_W"] == pytest.approx(
+        float(np.sum(_raw_surface_density(x, QuadraticSurface()))), rel=1e-12)
+    assert terms["surface_W"] > 0.0
+    x0 = np.full((n, 1), 0.7)
+    terms0 = {}
+    classical0, rest0 = losses.iron_loss_series(
+        list(x0), list(np.zeros_like(x0)), np.array([0]), np.array([1.0]),
+        Material(), 1.0, 933.33, n, derivative,
+        lambda material: (1.0, 1.0, 1.0), terms=terms0)
+    # (FFT round-off of a constant is ~1e-17 T, billed as its square)
+    assert terms0["surface_W"] == pytest.approx(0.0, abs=1e-20)
+    assert terms0["eddy_W"] == 0.0
+    assert float(np.mean(classical0)) + rest0 == pytest.approx(0.0, abs=1e-20)
 
 
 def test_fem_result_has_one_entry_for_each_candidate_total():

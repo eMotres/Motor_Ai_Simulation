@@ -102,8 +102,11 @@ F_BLEND_OCTAVES = 1.0
 MIN_FREQ_CURVES = 3
 MIN_POINTS_PER_CURVE = 3
 
-# Below this induction an element contributes nothing worth an interpolation.
-B_FLOOR_T = 1e-6
+# Guard for log() inside ``outsideness`` only — the ABOVE-envelope test, where
+# any B this small is inside by a margin of many decades, so it never decides
+# a value.  (It used to double as an amplitude floor in ``w_per_m3``; that use
+# was removed 2026-09-24.)
+B_FLOOR_T = 1e-300
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +308,12 @@ class MeasuredLossSurface:
         """
         B = np.asarray(B, float)
         out = np.zeros(B.shape, float)
-        live = B > B_FLOOR_T
+        # Every nonzero induction is billed (no amplitude floor — owner
+        # 2026-09-24); below the lowest measured point the curve continues as
+        # the measured end power law, so a tiny B gives a tiny loss, and B = 0
+        # is exactly zero loss (the limit), the only point excluded — its log
+        # does not exist.
+        live = B > 0.0
         if not live.any():
             return out
         Bl = B[live]

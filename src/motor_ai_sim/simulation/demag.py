@@ -47,7 +47,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from motor_ai_sim.simulation.field_ops import MU0, _smooth_demag_H
+from motor_ai_sim.simulation.field_ops import MU0
 
 log = logging.getLogger(__name__)
 
@@ -138,8 +138,18 @@ class MagnetDemag:
             # the curve's own slope (``mu_rec_c``) would invert a law nothing
             # solved.  The two differ by a few percent and that difference belongs
             # to the recoil intercept below, not to this inversion.
-            H_raw = (BdotM / d["Mm"] - d["Br0"] * cur) / (MU0 * d["mu_r"])
-            H = _smooth_demag_H(self.mesh, ix, H_raw)
+            # ELEMENT-LEVEL H, as solved: B here is the exact area average of
+            # the FE field over the element (the P2 caller integrates its
+            # quadrature), so H is the element's own mean demagnetising field.
+            # The area-weighted nodal SMOOTHING that used to sit here is gone
+            # (owner 2026-09-24: no filter may shape a reported value). It
+            # averaged every element with its neighbours before the ratchet,
+            # i.e. it moved Br by a mesh-dependent stencil. A sharp magnet
+            # corner is a genuine field concentration of the modelled geometry;
+            # its element de-rates as the solved field says, and the reported
+            # magnet-level numbers converge with the mesh (Br kept by volume,
+            # de-rated area) — see docs/NO_FILTERS_2026-09-24.md.
+            H = (BdotM / d["Mm"] - d["Br0"] * cur) / (MU0 * d["mu_r"])
 
             fresh = np.isnan(self.H_first[ix])
             if np.any(fresh):

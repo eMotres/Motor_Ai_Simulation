@@ -157,6 +157,61 @@ def test_misaligned_or_partial_windows_are_refused():
     assert not r["closed"] and "whole number" in r["reason"]
 
 
+def _potential(x, y, theta, pp):
+    """Stator-frame scalar A_z with the same symmetries as ``_field``."""
+    phi = np.arctan2(y, x)
+    r = np.hypot(x, y)
+    return r * (np.cos(pp * phi - pp * theta)
+                + 0.3 * np.cos((pp - 2) * phi + pp * theta + 0.4)
+                + 0.2 * np.cos((pp + 12) * phi - pp * theta - 1.1))
+
+
+def _rotor_potential(pts, thetas, pp):
+    out = []
+    for th in thetas:
+        c, s = math.cos(th), math.sin(th)
+        out.append(_potential(c * pts[0] - s * pts[1], s * pts[0] + c * pts[1],
+                              th, pp))
+    return np.array(out)
+
+
+@pytest.mark.parametrize("pp,ns,sign", [(7, 2, -1), (5, 2, -1), (7, 1, 1)])
+def test_potential_window_equals_the_long_solve(pp, ns, sign):
+    """The nodal-A window (honest magnet/shaft eddy, no-filter 2026-09-24):
+    a scalar under rotation, with the boundary sign; NODES on both sector
+    boundaries (the same line seen twice) are allowed to share an image."""
+    from motor_ai_sim.simulation.rotor_window import (
+        commensurate_rotor_potential_window)
+    pts = _rotor_points(pp, ns)
+    if ns > 1:     # a pole-pitch node ring INCLUDING both boundaries 0, 2π/ns
+        aj = np.arange(0, 2 * pp // ns + 1) * math.pi / pp
+        pts = np.hstack([pts, 0.012 * np.vstack([np.cos(aj), np.sin(aj)])])
+    n = 24
+    step = 2 * math.pi / pp / n
+    q = model_window_count(pp, ns, sign, 1)
+    Al = _rotor_potential(pts, np.arange(q * n) * step, pp)
+    r = commensurate_rotor_potential_window(
+        Al[:n], pts, 1e-4, pole_pairs=pp, n_sectors=ns, bc_sign=sign,
+        theta_rad=np.arange(n) * step, window_periods=1.0)
+    assert r["closed"] and r["q"] == q, r
+    np.testing.assert_allclose(r["A"], Al, atol=1e-12)
+
+
+def test_potential_window_refuses_a_non_periodic_node_set():
+    from motor_ai_sim.simulation.rotor_window import (
+        commensurate_rotor_potential_window)
+    pp = 7
+    pts = _rotor_points(pp, 2)
+    pts[:, 2] *= 1.001
+    n = 12
+    step = 2 * math.pi / pp / n
+    A = _rotor_potential(pts, np.arange(n) * step, pp)
+    r = commensurate_rotor_potential_window(
+        A, pts, 1e-4, pole_pairs=pp, n_sectors=2, bc_sign=-1,
+        theta_rad=np.arange(n) * step, window_periods=1.0)
+    assert not r["closed"] and "not pole-pair periodic" in r["reason"]
+
+
 def test_observed_period_of_a_pure_fundamental():
     t = np.arange(35) / 35.0 * 7.0                  # 7 periods, 5 per period
     X = np.cos(2 * np.pi * t)[:, None]

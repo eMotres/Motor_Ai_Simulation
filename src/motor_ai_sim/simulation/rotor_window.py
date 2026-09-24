@@ -54,9 +54,14 @@ are empty). ``observed_period_electrical`` reports the period read off the
 assembled data (the gcd of the populated DFT bins), so this is checked on
 every run rather than asserted.
 
-Only the rotor IRON loss uses it. Totals that are instantaneous sums over the
-whole rotor (magnet / shaft σE², torque) are already exact over one period:
-the sum over all rotor elements is invariant under the pole-pair image map.
+The rotor IRON loss uses it on the element B history; the frequency-domain
+magnet/shaft eddy solve (``eddy_solver_2d.honest_rotor_eddy``) uses it on the
+rotor-NODE A_z history (``commensurate_rotor_potential_window``) — that solve
+takes the DFT of each boundary node's history, so an open window leaks there
+exactly as it does in the iron. Totals that are instantaneous sums over the
+whole rotor (the coupled solve's magnet / shaft σE², torque) are already exact
+over one period: the sum over all rotor elements is invariant under the
+pole-pair image map.
 """
 from __future__ import annotations
 
@@ -67,7 +72,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 __all__ = ["model_window_count", "pole_pair_image_maps", "assemble_history",
-           "observed_period_electrical", "commensurate_rotor_window"]
+           "observed_period_electrical", "commensurate_rotor_window",
+           "assemble_scalar_history", "commensurate_rotor_potential_window",
+           "period_shift_map"]
 
 #: Centroid match tolerance, relative to the smallest iron element's size.
 MATCH_REL_TOL = 1e-6
@@ -102,7 +109,6 @@ def pole_pair_image_maps(centroids: np.ndarray, iron_idx: np.ndarray,
     the element areas (for the tolerance). Returns ``(None, info)`` when any
     image is missing or ambiguous — the caller then keeps the open window.
     """
-    from scipy.spatial import cKDTree
     idx = np.asarray(iron_idx, int)
     info: Dict = {"n_elements": int(idx.size)}
     if idx.size == 0 or q <= 1:
@@ -110,6 +116,24 @@ def pole_pair_image_maps(centroids: np.ndarray, iron_idx: np.ndarray,
     cen = np.asarray(centroids, float)[:, idx]
     h = float(np.sqrt(np.min(np.asarray(areas, float)[idx])))
     tol = MATCH_REL_TOL * max(h, 1e-12)
+    return _image_maps(cen, tol, n_sectors, bc_sign, window_rot_rad, q, info,
+                       bijective=True)
+
+
+def _image_maps(cen: np.ndarray, tol: float, n_sectors: int, bc_sign: int,
+                window_rot_rad: float, q: int, info: Dict, *, bijective: bool):
+    """Core of the image search on any point set (element centroids, nodes).
+
+    ``bijective`` demands a permutation (element centroids). NODES on the two
+    sector boundaries are the same physical line seen twice (A there obeys the
+    boundary condition exactly), so a node set may legitimately map two
+    boundary nodes onto one image; for nodes every point must still find an
+    image within ``tol``.
+    """
+    from scipy.spatial import cKDTree
+    n = int(cen.shape[1])
+    if n == 0 or q <= 1:
+        return [], info
     tree = cKDTree(cen.T)
     ns = max(1, int(n_sectors))
     phi = 2.0 * math.pi / ns
@@ -120,9 +144,9 @@ def pole_pair_image_maps(centroids: np.ndarray, iron_idx: np.ndarray,
         a = k * float(window_rot_rad)
         c, sn = math.cos(a), math.sin(a)
         xr = np.vstack([c * cen[0] - sn * cen[1], sn * cen[0] + c * cen[1]])
-        best_d = np.full(idx.size, np.inf)
-        best_j = np.zeros(idx.size, int)
-        best_f = np.zeros(idx.size, int)
+        best_d = np.full(n, np.inf)
+        best_j = np.zeros(n, int)
+        best_f = np.zeros(n, int)
         for f in range(ns):
             b = -f * phi
             cb, sb = math.cos(b), math.sin(b)
@@ -133,14 +157,15 @@ def pole_pair_image_maps(centroids: np.ndarray, iron_idx: np.ndarray,
             best_j[better] = j[better]
             best_f[better] = f
         worst = max(worst, float(best_d.max()))
-        if not np.all(best_d < tol) or np.unique(best_j).size != idx.size:
+        if not np.all(best_d < tol) or (bijective
+                                        and np.unique(best_j).size != n):
             info.update({"failed_k": k, "max_match_distance_m": worst,
                          "tolerance_m": tol,
                          "unmatched": int(np.sum(best_d >= tol))})
             return None, info
         ang = best_f * phi - a
         sign = np.where(best_f % 2 == 1, s, 1).astype(float) if s < 0 \
-            else np.ones(idx.size)
+            else np.ones(n)
         maps.append((best_j, ang, sign))
     info.update({"max_match_distance_m": worst, "tolerance_m": tol})
     return maps, info
@@ -202,28 +227,15 @@ def commensurate_rotor_window(hist_x: Sequence, hist_y: Sequence,
                  "reason": None, "window_periods_captured": float(window_periods)}
     X = np.asarray(hist_x, float); Y = np.asarray(hist_y, float)
     n = int(X.shape[0]) if X.ndim == 2 else 0
-    th = np.asarray(theta_rad, float)
-    if n < 2 or X.shape != Y.shape or th.size != n:
+    if X.shape != Y.shape:
         out["reason"] = "rotor history and angle samples are not aligned"
         return out
-    m = float(window_periods)
-    if not (m > 0 and abs(m - round(m)) < 1e-9):
-        out["reason"] = "captured window is not a whole number of electrical periods"
+    chk = _window_geometry(n, theta_rad, window_periods, pole_pairs,
+                           n_sectors, bc_sign)
+    if isinstance(chk, str):
+        out["reason"] = chk
         return out
-    M = int(round(m))
-    steps = np.diff(th)
-    step = float(steps[0])
-    if step == 0.0 or not np.allclose(steps, step, rtol=1e-9,
-                                      atol=1e-12 * max(1.0, abs(step))):
-        out["reason"] = "rotor angles are not uniformly spaced"
-        return out
-    theta_w = n * step                                    # signed, mechanical
-    if not math.isclose(abs(theta_w), M * 2.0 * math.pi / int(pole_pairs),
-                        rel_tol=1e-9, abs_tol=1e-12):
-        out["reason"] = ("rotor angles do not span the %d electrical period(s) "
-                         "the window claims" % M)
-        return out
-    q = model_window_count(pole_pairs, n_sectors, bc_sign, M)
+    q, M, theta_w = chk
     out.update({"q": int(q), "window_periods_total": float(q * M),
                 "window_rotation_mech_deg": math.degrees(theta_w)})
     if q == 1:
@@ -243,4 +255,110 @@ def commensurate_rotor_window(hist_x: Sequence, hist_y: Sequence,
                     "method": "pole_pair_image_mapping"})
     per = observed_period_electrical(out["X"], out["Y"], q * M)
     out["observed_period_electrical"] = (None if per is None else str(per))
+    return out
+
+
+def _window_geometry(n: int, theta_rad: Sequence[float], window_periods: float,
+                     pole_pairs: int, n_sectors: int, bc_sign: int):
+    """(q, M, signed window rotation) of a captured window, or the reason why
+    the window cannot be chained (a string)."""
+    th = np.asarray(theta_rad, float)
+    if n < 2 or th.size != n:
+        return "rotor history and angle samples are not aligned"
+    m = float(window_periods)
+    if not (m > 0 and abs(m - round(m)) < 1e-9):
+        return "captured window is not a whole number of electrical periods"
+    M = int(round(m))
+    steps = np.diff(th)
+    step = float(steps[0])
+    if step == 0.0 or not np.allclose(steps, step, rtol=1e-9,
+                                      atol=1e-12 * max(1.0, abs(step))):
+        return "rotor angles are not uniformly spaced"
+    theta_w = n * step                                    # signed, mechanical
+    if not math.isclose(abs(theta_w), M * 2.0 * math.pi / int(pole_pairs),
+                        rel_tol=1e-9, abs_tol=1e-12):
+        return ("rotor angles do not span the %d electrical period(s) "
+                "the window claims" % M)
+    return model_window_count(pole_pairs, n_sectors, bc_sign, M), M, theta_w
+
+
+def period_shift_map(points: np.ndarray, h_ref_m: float, *, n_sectors: int,
+                     bc_sign: int, rot_rad: float
+                     ) -> Tuple[Optional[Tuple[np.ndarray, np.ndarray]], Dict]:
+    """(image index, sign) of every rotor point for a rotation of the rotor
+    by ``rot_rad`` — the map that carries a rotor-frame SCALAR state (A_z per
+    dof) from one rotor angle to the angle ``rot_rad`` away, exactly, when the
+    stator-frame field is periodic over that rotation (one electrical period):
+
+        state_new(y) = s^f · state_old(z),   z = R(rot_rad) y folded into the sector
+
+    (equation (1) of this module with k = 1). Used by the eddy warm-up to
+    splice the march back one electrical period WITHOUT a jump in the eddy
+    history. ``None`` when a point has no image within 1e-6 of ``h_ref_m``.
+    """
+    pts = np.asarray(points, float)
+    info: Dict = {"n_points": int(pts.shape[1])}
+    tol = MATCH_REL_TOL * max(float(h_ref_m), 1e-12)
+    maps, info = _image_maps(pts, tol, n_sectors, bc_sign, float(rot_rad), 2,
+                             info, bijective=False)
+    if maps is None:
+        return None, info
+    j, _ang, sign = maps[0]
+    return (np.asarray(j, int), np.asarray(sign, float)), info
+
+
+def assemble_scalar_history(A: np.ndarray,
+                            maps: Sequence[Tuple[np.ndarray, np.ndarray,
+                                                 np.ndarray]]) -> np.ndarray:
+    """Equation (1) for the out-of-plane potential A_z: a SCALAR under the
+    in-plane rotation, so an image contributes ``s^f · A_z(image)`` with no
+    rotation of the value. No filter."""
+    A = np.asarray(A, float)
+    return np.vstack([A] + [sign[None, :] * A[:, j] for j, _ang, sign in maps])
+
+
+def commensurate_rotor_potential_window(hist_A: Sequence, nodes_xy: np.ndarray,
+                                        h_ref_m: float, *, pole_pairs: int,
+                                        n_sectors: int, bc_sign: int,
+                                        theta_rad: Sequence[float],
+                                        window_periods: float) -> Dict:
+    """The commensurate window for the rotor-node A_z history (the magnet and
+    shaft eddy solve of ``eddy_solver_2d.honest_rotor_eddy``).
+
+    Same construction as :func:`commensurate_rotor_window`, on the mesh NODES:
+    what node y sees k windows later is what its pole-pair image node sees now,
+    times the sector boundary sign ``s^f``. ``h_ref_m`` is a mesh length (the
+    smallest element size) setting the 1e-6 match tolerance. Returns
+    ``{"closed", "A", "q", "window_periods_total", "method", "reason", ...}``;
+    ``closed=False`` keeps the raw one-period window and says why.
+    """
+    out: Dict = {"closed": False, "q": 1, "method": "open_one_period_window",
+                 "reason": None, "window_periods_captured": float(window_periods)}
+    A = np.asarray(hist_A, float)
+    n = int(A.shape[0]) if A.ndim == 2 else 0
+    chk = _window_geometry(n, theta_rad, window_periods, pole_pairs,
+                           n_sectors, bc_sign)
+    if isinstance(chk, str):
+        out["reason"] = chk
+        return out
+    q, M, theta_w = chk
+    out.update({"q": int(q), "window_periods_total": float(q * M),
+                "window_rotation_mech_deg": math.degrees(theta_w)})
+    if q == 1:
+        out.update({"closed": True, "A": A,
+                    "method": "captured_window_already_commensurate"})
+        return out
+    pts = np.asarray(nodes_xy, float)
+    info: Dict = {"n_nodes": int(pts.shape[1])}
+    tol = MATCH_REL_TOL * max(float(h_ref_m), 1e-12)
+    maps, info = _image_maps(pts, tol, n_sectors, bc_sign, theta_w, q, info,
+                             bijective=False)
+    out["mesh_match"] = info
+    if maps is None:
+        out["reason"] = ("rotor mesh nodes are not pole-pair periodic (%d nodes "
+                         "without an exact image at k=%s)"
+                         % (info.get("unmatched", -1), info.get("failed_k")))
+        return out
+    out.update({"closed": True, "A": assemble_scalar_history(A, maps),
+                "method": "pole_pair_image_mapping"})
     return out

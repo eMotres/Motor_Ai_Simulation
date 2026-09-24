@@ -48,7 +48,7 @@ import logging
 import math
 import threading
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Tuple, Optional, Literal
+from typing import Any, Dict, List, Mapping, Tuple, Optional, Literal
 
 import numpy as np
 
@@ -109,12 +109,15 @@ from motor_ai_sim.simulation.losses import (
 )
 from motor_ai_sim.simulation.rotor_window import (
     commensurate_rotor_window as _commensurate_rotor_window,
+    commensurate_rotor_potential_window as _commensurate_rotor_potential_window,
+    period_shift_map as _period_shift_map,
 )
 from motor_ai_sim.simulation.sb_postproc import (
     drop_settling_frames as _drop_settling_frames,
     retained_window_metadata as _retained_window_metadata,
     snapshot_scalar_history as _snapshot_scalar_history,
     eddy_settle_resid as _eddy_settle_resid,
+    eddy_period_resid as _eddy_period_resid,
     hybrid_torque as _hybrid_torque,
     space_vector_hybrid_torque as _space_vector_hybrid_torque,
     TORQUE_MEAN_SOURCE as _TORQUE_MEAN_SOURCE,
@@ -129,7 +132,7 @@ from motor_ai_sim.simulation.p2_state_capture import (
 from motor_ai_sim.simulation.field_ops import (  # noqa: F401  (re-export)
     MU0, RHO_CU_20, ALPHA_CU,
     _snap_steps_to_nodes, _build_magnet_bh_curve_payload, _b_from_bh_at_H,
-    _mu_r_from_bh, _mu_r_from_bh_vec, _smooth_demag_H,
+    _mu_r_from_bh, _mu_r_from_bh_vec,
     _per_triangle_B, _triangle_areas, _maxwell_stress_torque,
     _arkkio_torque, _p2_B_at_quad, _arkkio_torque_p2,
     _prepare_arkkio_torque_p2,
@@ -2523,29 +2526,48 @@ def _params_from_geo_dict(g: dict):
         num_wires_per_slot=int(g["num_wires_per_slot"]))
 
 
-def _spectral_ddt_series(x, kmax, dt):
-    """Periodic time-derivative of a one-period series, truncated to `kmax`
-    harmonics.
+def _step_voltage_series(psi, cur, R, dts, prev=None):
+    """Winding voltage per time STEP, exactly as the time integration sees it.
 
-    The rotor advances in DISCRETE slip-node steps, so psi(t) carries a
-    frame-to-frame quantisation jitter that a raw finite difference amplifies
-    into a jagged back-EMF.  Reconstructing the derivative from the LOW
-    harmonics keeps the genuine fundamental + slot-ripple content and drops the
-    quantisation floor near Nyquist.  It is also PERIODIC by construction,
-    which np.gradient is not: np.gradient falls back to a ONE-SIDED difference
-    at the two end frames, and V_peak is a max over the series, so those two
-    frames set the reported peak (this is why the P1 and P2 branches reported
-    V_peak ~11 % apart on the same physics).  ONE implementation, shared by
-    both element orders.
+    For the step (t_{k-1}, t_k] ending at frame k:
+
+        v_{k-1/2} = R · (i_k + i_{k-1}) / 2  +  (ψ_k − ψ_{k-1}) / Δt_k
+
+    This is the Crank–Nicolson circuit row the voltage drive SOLVES
+    (simulation/drive.circuit_residual_ll): on an imposed-voltage run it is
+    the applied voltage itself, to the Newton residual.  On an imposed-current
+    run it is the voltage a CN voltage drive would have to apply to reproduce
+    the solved currents.  And whatever the drive, (ψ_k − ψ_{k-1})/Δt_k is not
+    an approximation of anything: by Faraday it is the EXACT mean EMF over the
+    step (∫dψ = Δψ).  No truncation, no smoothing — every harmonic the solve
+    resolved is in it, and it converges with the step count like the solve
+    itself (O(Δt²) against the instantaneous voltage at the step midpoint).
+
+    It replaces a spectral derivative truncated above the second slot
+    harmonic (owner 2026-09-24: no filter may shape a reported value).
+
+    ``prev`` = (ψ, i) of the frame solved immediately BEFORE the window (the
+    settling prefix / eddy warm-up), or None for a window with no solved
+    predecessor, which is then closed periodically (frame N−1 is one step
+    before frame 0 of the next period — exact for an imposed-current run,
+    whose field is periodic).  Returns ``(v, i_mid)``: the step voltages and the
+    step-mean currents they multiply in the power ⟨v·i⟩ — the pairing under
+    which a lossless inductor exchanges exactly zero energy over a period.
     """
-    x = np.asarray(x, float); N = x.size
-    if N < 4:
-        return np.array([(x[(i + 1) % N] - x[(i - 1) % N]) / (2 * dt)
-                         for i in range(N)])
-    F = np.fft.rfft(x)
-    if kmax + 1 < F.size:
-        F[kmax + 1:] = 0.0
-    return np.fft.irfft(F * (1j * 2 * np.pi * np.fft.rfftfreq(N, d=dt)), n=N)
+    x = np.asarray(psi, float)
+    i = np.asarray(cur, float)
+    d = np.asarray(dts, float)
+    N = x.size
+    if N == 0:
+        return np.zeros(0), np.zeros(0)
+    if prev is None:
+        x0, i0 = float(x[-1]), float(i[-1])
+    else:
+        x0, i0 = float(prev[0]), float(prev[1])
+    xm = np.concatenate([[x0], x[:-1]])
+    im = np.concatenate([[i0], i[:-1]])
+    i_mid = 0.5 * (i + im)
+    return R * i_mid + (x - xm) / d, i_mid
 
 
 def _vdrive_copper_loss(p, geo, IA, IB, IC, n_parallel, coil_temp_c,
@@ -2719,6 +2741,9 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
                 wc["br_val"] = np.asarray(z["br_val"], float)
                 wc["br_cen"] = np.asarray(z["br_cen"], float)
                 wc["br_tag"] = np.asarray(z["br_tag"], int)
+            # per-group same-angle reference (2026-09-24); optional
+            wc["solid_grp"] = {_fk[len("solid_grp_"):]: np.asarray(z[_fk], float)
+                               for _fk in _f if _fk.startswith("solid_grp_")}
         return wc
     except Exception:
         return None
@@ -2732,6 +2757,8 @@ def _warm_cache_store(wc: dict) -> None:
         m = wc["meta"]
         _extra = {_k: wc[_k] for _k in ("br_val", "br_cen", "br_tag")
                   if wc.get(_k) is not None}
+        for _gk, _gv in (wc.get("solid_grp") or {}).items():
+            _extra["solid_grp_" + str(_gk)] = np.asarray(_gv, float)
         np.savez(tmp, doflocs=wc["doflocs"], A=wc["A"], Ued=wc["Ued"],
                  solid=wc["solid"],
                  nspp=m["nspp"], npd=m["npd"], conn=m["conn"], temp=m["temp"],
@@ -5904,6 +5931,8 @@ def fem_transient_sliding_band(
     # ── frame loop ───────────────────────────────────────────────────────
     _T2 = []; _T_vw = []; _T_vw_reason = []
     _psiA = []; _psiB = []; _psiC = []; _tt = []; _theta_samples = []
+    _dt_steps = []          # Δt each reported frame's step was solved with
+    _pre_frame = None       # (ψ, i) of the frame solved just before frame 0
     _IA = []; _IB = []; _IC = []
     # APPLIED terminal voltage per solved step (imposed-voltage sources only) —
     # the excitation chart's series.  Empty on the imposed-current sources,
@@ -6010,13 +6039,13 @@ def fem_transient_sliding_band(
     # at the new handoff.  The abort happens BEFORE anything is recorded for
     # the frame, so there is nothing to un-append.
     #
-    # Why the extension is a whole period and not "as many as it takes": a
+    # The extension is whole periods, "as many as it takes" (2026-09-24): a
     # march must END at θ = −dθ to hand frame 0 a field exactly one dt old, so
-    # its LENGTH has to be known before it starts.  It cannot be discovered on
-    # the way, and it cannot be extrapolated either — the probe's early decay
-    # ratio on the 150 mm is 0.59 while its tail runs at 0.9, so a fit off the
-    # first frames under-warms by 3×.  n_warmup and the measured residual
-    # travel out in the result dict either way.
+    # each extension splices one more whole period in front and carries the
+    # rotor eddy state across it with the exact pole-pair map (below), which
+    # keeps the march continuous in time however many periods it takes — up
+    # to SB_EDDY_MAX_PERIODS (16), after which the run says it is capped.
+    # n_warmup and the measured residual travel out in the result dict.
     _EDDY_SETTLE_TOL = 0.02
     _eddy_probe = 2 if (eddy and not _vdrive) else 0
     _eddy_cap = int(n_steps_per_period) if (eddy and not _vdrive) else 0
@@ -6028,6 +6057,68 @@ def fem_transient_sliding_band(
         _eddy_probe = max(0, int(_ew_env)); _eddy_cap = 0
     _warm_solid: List[float] = []   # solid σE² per frame of the CURRENT march
     _warm_ks: List[int] = []        # frame index of each sample (for angles)
+    # ── HONEST SETTLING (no-filter pass, 2026-09-24) ─────────────────────────
+    # Measured on the owner's duties: the 3-sample probe above read "settled"
+    # on L13 / Ø40 (0.7-1.3 %) while the shaft loss of the same run, marched 5
+    # continuous periods, came out HALF (L13 without demag 0.83 -> 0.41 W; L155
+    # rated 29.1 -> 15.0 W with the old one-period extension).  Two defects:
+    #  (1) the gauge: three samples, or block means over half a period of the
+    #      magnet+shaft SUM, cannot see a slow body (the shaft ring, τ ≈ 1-3 ms)
+    #      behind a fast dominant one;
+    #  (2) the splices: every extension / pre-pass jumped the rotor back one
+    #      electrical period while keeping the per-dof eddy history, which is
+    #      the history of a DIFFERENT rotor position — a fresh kick each time.
+    # The cure, not a filter: every splice carries the rotor-dof state across
+    # the period with the exact pole-pair map (rotor_window.period_shift_map:
+    # on the periodic steady state the state at θ−Θe IS the image of the state
+    # at θ), so the march is CONTINUOUS in time; and the verdict is taken on
+    # WHOLE-PERIOD means per conductor group (sb_postproc.eddy_period_resid),
+    # extending period by period until each body is quiet or the cap is hit —
+    # a capped run says so (eddy_settled False).
+    _EDDY_MAX_WARM_PERIODS = max(1, int(
+        _os_sb.environ.get("SB_EDDY_MAX_PERIODS", "16") or 16))
+    _warm_grp: Dict[str, List[float]] = {}   # per conductor group, continuous
+    _warm_ext_periods = 0           # whole periods spliced in (extensions)
+    _warm_gauge: Dict[str, Any] = {}          # the verdict's own numbers
+    _shift_cache: Dict[str, Any] = {}
+
+    def _period_shift(vec):
+        """Rotor part of a per-dof state carried one electrical period BACK
+        (θ → θ − Θe), exactly on the periodic steady state; the stator part is
+        stator-frame periodic and stays.  Identity (with a warning) if the
+        rotor dofs are not pole-pair periodic."""
+        if "map" not in _shift_cache:
+            try:
+                _edf = np.asarray(b2.element_dofs)
+                _rdf = np.unique(_edf[:, nst:].ravel())
+                _sdf = np.unique(_edf[:, :nst].ravel())
+                if np.intersect1d(_rdf, _sdf).size:
+                    raise RuntimeError("stator and rotor halves share dofs")
+                _sgn_th = (1.0 if (float(period_mech) * float(n_periods)
+                                   / max(float(n_total), 1.0)) >= 0.0 else -1.0)
+                _mp, _mi = _period_shift_map(
+                    np.asarray(b2.doflocs, float)[:, _rdf],
+                    float(np.sqrt(np.min(_triangle_areas(half["r"]["mesh"])))),
+                    n_sectors=int(NS), bc_sign=int(_bc_sign),
+                    rot_rad=-_sgn_th * math.radians(float(period_mech)))
+                _shift_cache["map"] = (None if _mp is None
+                                       else (_rdf, _mp[0], _mp[1]))
+                _shift_cache["info"] = _mi
+            except Exception as _e_sh:        # noqa: BLE001 — identity, loudly
+                _shift_cache["map"] = None
+                _shift_cache["info"] = {"error": "%s: %s"
+                                        % (type(_e_sh).__name__, _e_sh)}
+            if _shift_cache["map"] is None:
+                log.warning("P2 eddy warm-up: rotor dofs are not pole-pair "
+                            "periodic (%s) — splices keep the raw per-dof "
+                            "history (a kick per splice)", _shift_cache["info"])
+        _m = _shift_cache["map"]
+        if _m is None:
+            return np.array(vec, float, copy=True)
+        _rdf, _jj, _ss = _m
+        _out = np.array(vec, float, copy=True)
+        _out[_rdf] = _ss * np.asarray(vec, float)[_rdf[_jj]]
+        return _out
     _n_warm = 0                     # warm-up frames actually solved (all marches)
     _dm_moved_in_warm = False       # Br ratcheted during the current warm-up window
     _warm_resid = None              # remaining transient at the handoff [rel]
@@ -6194,6 +6285,7 @@ def fem_transient_sliding_band(
     _wc_A = None          # near-final frame stashed for the NEXT run's seed
     _wc_Ued = None
     _warm_ref = None      # previous run's per-frame solid loss (same angles)
+    _warm_ref_grp: Dict[str, Any] = {}   # …and per conductor group
     if eddy and not _vdrive and n_total >= 8 and _wc_seed is not None:
         _wc = _wc_seed
         try:
@@ -6217,6 +6309,10 @@ def fem_transient_sliding_band(
                         <= 0.05 * max(abs(float(I_phase_rms)), 1e-9)
                     and abs(float(_wc["gam"]) - float(gamma_deg)) <= 5.0):
                 _warm_ref = np.asarray(_wc["solid"], float)
+                _wrg = _wc.get("solid_grp") or {}
+                _warm_ref_grp = {str(_gk): np.asarray(_gv, float)
+                                 for _gk, _gv in _wrg.items()
+                                 if len(_gv) == n_total}
             _warm_seeded = True
             log.info("P2 eddy warm cache: eddy history seeded from the "
                      "previous run (%d → %d dofs; parent %.4g A / %.4g deg%s)",
@@ -6250,6 +6346,63 @@ def fem_transient_sliding_band(
     _warm_dth = float(_sched_dth[0])
     _warm_dt = float(_sched_dt[0])
     _fseq = list(range(-_eddy_probe, 0)) + list(range(n_total))
+    # ── COLD START FROM THE STATIC FIELD, NOT FROM ZERO (2026-09-24) ─────────
+    # See p2_drive.eddy_static_state: the history handed to the first march
+    # frame is the ∂A/∂t = 0 field one step before it, so the rotor-frame DC
+    # flux is already in the conducting shaft/magnets (as on the periodic
+    # orbit) instead of being switched on in one Δt and left to diffuse — on
+    # the L155's steel shaft that diffusion alone would take hundreds of
+    # electrical periods.  Seeded runs keep their seed; frozen-ν runs keep the
+    # reference-frame semantics; voltage runs already start from the phasor
+    # initialiser's operating field.
+    _static_seed_info = None
+    # SB_EDDY_ZERO_START=1: the pre-2026-09-24 cold start from A = 0 — for the
+    # test that reproduces the start-up transient, never a production knob.
+    if (eddy and not _vdrive and not _warm_seeded and not frozen_nu
+            and _fseq and _ed_con
+            and _os_sb.environ.get("SB_EDDY_ZERO_START") != "1"):
+        try:
+            _ks = int(_fseq[0]) - 1
+            _ths = (_ks / n_total) * period_mech * n_periods
+            _ms_s = int(round(_ths / spacing))
+            _the_s = _ms_s * spacing
+            _dth_s = period_mech * n_periods / n_total
+            _fb_s = _Feedback(k=_ks, theta_prev_deg=_the_s - _dth_s,
+                              theta_deg=_the_s, t0_s=float(_ks * dt),
+                              t1_s=float((_ks + 1) * dt), fine=True,
+                              i_abc=None, psi_abc=None, v_bus=_fb_v_bus)
+            _Ist_s = _src.mean_over(_fb_s)
+            _Pro_s, _out_s = _proj.build(_ms_s)
+            _free_s = np.setdiff1d(np.arange(_Pro_s.shape[1]), _out_s)
+            _f_s = (f_mag2 + _Ist_s['A'] * f_coil2['A']
+                    + _Ist_s['B'] * f_coil2['B'] + _Ist_s['C'] * f_coil2['C'])
+            _nu_s = nu_base2.copy()
+            _A_s0 = np.zeros(N2)
+            if _sat2:
+                _A_s0, _nu_s, _, _ = _p2.pic2_sweeps(
+                    _Pro_s, _free_s, np.asarray(_Pro_s.T @ _f_s).ravel()[_free_s],
+                    _nu_s, _PIC_SEED_MAX, _PIC_SEED_TOL)
+            _I_vec_s = np.array(
+                [_Ist_s[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
+                 for c in _ed_con], float)
+            _ok_s, _A_static = _drv.eddy_static_state(
+                _Pro_s, _free_s, _A_s0, _I_vec_s,
+                (None if _sat2 else nu_base2), max(int(nonlinear_iterations), 20))
+            if _ok_s:
+                _Aed_prev = _A_static.copy()
+                _A2_prev = _A_static.copy()
+                _nu_conv2 = _nu_s.copy()
+                _static_seed_info = {"frame": _ks, "converged": True}
+                log.info("P2 eddy warm-up: cold start from the STATIC field at "
+                         "frame %d (∂A/∂t = 0 limit), not from A = 0", _ks)
+            else:
+                _static_seed_info = {"frame": _ks, "converged": False}
+                log.warning("P2 eddy warm-up: static start field did not "
+                            "converge — starting from A = 0 (longer settle)")
+        except Exception as _e_ss:          # noqa: BLE001 — a start, not a result
+            _static_seed_info = {"error": "%s: %s" % (type(_e_ss).__name__, _e_ss)}
+            log.warning("P2 eddy warm-up: static start failed (%s) — starting "
+                        "from A = 0", _e_ss)
     _fi = 0
     while _fi < len(_fseq):
         k = _fseq[_fi]; _fi += 1
@@ -6482,6 +6635,7 @@ def fem_transient_sliding_band(
                     _seed_cold_retry_done = True
                     _warm_seeded = False
                     _warm_ref = None
+                    _warm_ref_grp = {}
                     _Aed_prev = np.zeros(N2)
                     _Ued = np.zeros(len(_ed_con))
                     continue
@@ -6840,11 +6994,32 @@ def fem_transient_sliding_band(
                     _warm_solid.append(
                         (_pg.get("mag", 0.0) + _pg.get("shaft", 0.0)) * _wsc)
                     _warm_ks.append(int(k))
+                    for _gk, _gv in _pg.items():
+                        _warm_grp.setdefault(_gk, []).append(float(_gv) * _wsc)
                 if k >= _vskip - 1:
                     _warm_done = True
-                    if len(_warm_solid) >= 3:
+                    # WHOLE-PERIOD means per group when the prefix holds two
+                    # or more periods at the gauge resolution (every carrier
+                    # of a synchronous PWM cancels inside a period, so no
+                    # block-width caveat applies); the block gauge only for a
+                    # prefix too short for that.
+                    _ve_per = int(_c_nspp if _sched_mixed else _v_nspp)
+                    _pres, _pgres, _pnp = _eddy_period_resid(_warm_grp, _ve_per)
+                    _ve_period_gauge = bool(_pnp >= 2)
+                    if _ve_period_gauge:
+                        _warm_resid, _warm_tau_s = float(_pres), None
+                        _warm_gauge = {
+                            "method": "whole_period_means_per_group",
+                            "whole_periods": int(_pnp),
+                            "per_group": {_gk: (None if _gr is None
+                                                else float("%.3g" % _gr))
+                                          for _gk, _gr in _pgres.items()},
+                            "extension_periods": 0}
+                    elif len(_warm_solid) >= 3:
                         _warm_resid, _warm_tau_s = _eddy_settle_resid(
                             _warm_solid, _ve_gauge_nspp, _ve_gauge_dt)
+                        _warm_gauge = {"method": "block_trend_short_prefix",
+                                       "whole_periods": int(_pnp)}
                     # The eddy verdict that travels out in the result dict.
                     # No extension path here (the length IS the schedule), so
                     # a False here is by definition "ended at the cap".
@@ -6865,7 +7040,8 @@ def fem_transient_sliding_band(
                     # (None → reported settled, i.e. exactly as these runs
                     # have always read) rather than a false alarm.
                     _warm_quiet = (None if (not _wq and _carriers
-                                            and not _ve_gauge_carrier_ok)
+                                            and not _ve_gauge_carrier_ok
+                                            and not _ve_period_gauge)
                                    else _wq)
                     _quiet = (_wq
                               and not (demag and _dm_moved_in_warm))
@@ -6913,12 +7089,22 @@ def fem_transient_sliding_band(
                      if ("mag" in _Msig_grp or "shaft" in _Msig_grp)
                      else _pg.get("cu", 0.0)) * _wsc)
                 _warm_ks.append(int(k))   # its electrical angle ≡ k mod n_total
+                # Per conductor group, continuous across splices (the period
+                # remap below keeps the march continuous in time).
+                for _gk, _gv in _pg.items():
+                    _warm_grp.setdefault(_gk, []).append(float(_gv) * _wsc)
                 # Decision point: the probe's third sample IS frame 0; an
                 # extension march decides at its own last frame (θ = −dθ),
                 # where it already has a whole period of samples.
                 if (k == -1) if _warm_extended else (k >= 0):
-                    _warm_resid, _warm_tau_s = _eddy_settle_resid(
-                        _warm_solid, int(n_steps_per_period), dt)
+                    # WHOLE-PERIOD means per group — never three samples: on a
+                    # cold probe this is "not yet measurable" (inf) and the
+                    # march extends; only a seed's same-angle reference can
+                    # pass a probe, because it compares against the settled
+                    # level at the same rotor angle.
+                    _warm_resid, _warm_gres, _warm_nper = _eddy_period_resid(
+                        _warm_grp, int(n_steps_per_period))
+                    _warm_tau_s = None
                     # Same-angle reference test (warm cache): three probe
                     # samples cannot average away the 6th-harmonic angular
                     # ripple, so the trend gauge above reads ripple as an
@@ -6933,10 +7119,24 @@ def fem_transient_sliding_band(
                     _ref_dev = None
                     if _warm_ref is not None and not _warm_extended:
                         try:
-                            _ref_dev = max(
-                                abs(_s - _warm_ref[_k2 % n_total])
-                                / max(abs(_warm_ref[_k2 % n_total]), 1e-12)
-                                for _s, _k2 in zip(_warm_solid, _warm_ks))
+                            if _warm_ref_grp:
+                                # per group, like the period gauge: a slow
+                                # shaft must not hide behind the magnets
+                                _rtot = sum(float(np.mean(np.abs(_rv)))
+                                            for _rv in _warm_ref_grp.values())
+                                _ref_dev = max(
+                                    abs(_s - _rv[_k2 % n_total])
+                                    / max(abs(_rv[_k2 % n_total]),
+                                          1e-3 * _rtot, 1e-12)
+                                    for _gk2, _rv in _warm_ref_grp.items()
+                                    for _s, _k2 in zip(
+                                        _warm_grp.get(_gk2, [])[
+                                            -len(_warm_ks):], _warm_ks))
+                            else:
+                                _ref_dev = max(
+                                    abs(_s - _warm_ref[_k2 % n_total])
+                                    / max(abs(_warm_ref[_k2 % n_total]), 1e-12)
+                                    for _s, _k2 in zip(_warm_solid, _warm_ks))
                         except Exception:
                             _ref_dev = None
                     _ref_ok = (_ref_dev is not None
@@ -6960,30 +7160,67 @@ def fem_transient_sliding_band(
                                        or _ref_ok)
                     _quiet = (_warm_quiet
                               and not (demag and _dm_moved_in_warm))
-                    log.info("P2 eddy warm-up: %d frame(s) solved, remaining "
-                             "start-up transient %.3g %% of the settled solid "
-                             "loss (tol %.1f %%)%s", _n_warm,
-                             100.0 * _warm_resid, 100.0 * _EDDY_SETTLE_TOL,
-                             "" if _warm_tau_s is None
-                             # LOCAL slope of the three samples this decision
-                             # saw — not the settling time (the decay is
-                             # multi-mode: 35 us at the head, 680 us at the
-                             # tail, ~0.4 ms end to end on the 150 mm).
-                             else ", local tail fit tau=%.3g s" % _warm_tau_s)
-                    if (not _quiet) and (not _warm_extended) and _eddy_cap >= 3:
-                        # Not settled → THIS frame is warm-up too, and a whole
-                        # electrical period of warm-up goes in front of the
-                        # window before frame 0 is solved again.  The eddy
-                        # history is NOT reset: everything solved so far keeps
-                        # its settling; the march only repositions the rotor.
+                    if _ref_ok and not (_warm_resid <= _EDDY_SETTLE_TOL):
+                        # the verdict came from the seed's same-angle reference
+                        _warm_resid = float(_ref_dev)
+                    _warm_gauge = {
+                        "method": ("same_angle_reference"
+                                   if (_ref_ok and _warm_nper < 2)
+                                   else "whole_period_means_per_group"),
+                        "whole_periods": int(_warm_nper),
+                        "per_group": {_gk: (None if _gr is None
+                                            else float("%.3g" % _gr))
+                                      for _gk, _gr in _warm_gres.items()},
+                        "extension_periods": int(_warm_ext_periods),
+                        "max_extension_periods": int(_EDDY_MAX_WARM_PERIODS),
+                        "period_remap": (None if "map" not in _shift_cache
+                                         else bool(_shift_cache["map"]
+                                                   is not None)),
+                    }
+                    _Npm = int(n_steps_per_period)
+                    log.info("P2 eddy warm-up: %d frame(s) solved (%d whole "
+                             "period(s) continuous), remaining start-up "
+                             "transient %s (tol %.1f %%) per group %s; last "
+                             "period means [W] %s",
+                             _n_warm, _warm_nper,
+                             ("unmeasured" if not math.isfinite(_warm_resid)
+                              else "%.3g %%" % (100.0 * _warm_resid)),
+                             100.0 * _EDDY_SETTLE_TOL,
+                             {_gk: (None if _gr is None else "%.3g %%"
+                                    % (100.0 * _gr))
+                              for _gk, _gr in _warm_gres.items()},
+                             {_gk: ["%.6g" % float(np.mean(
+                                 _gv[len(_gv) - (_j + 1) * _Npm:
+                                     len(_gv) - _j * _Npm]))
+                                 for _j in range(min(3, len(_gv) // _Npm) - 1,
+                                                 -1, -1)]
+                              for _gk, _gv in _warm_grp.items()})
+                    if ((not _quiet) and _eddy_cap >= 3
+                            and _warm_ext_periods < _EDDY_MAX_WARM_PERIODS):
+                        # Not settled → march ANOTHER whole electrical period
+                        # in front of the window.  The rotor goes back one
+                        # period, and its eddy state goes with it through the
+                        # exact pole-pair map (`_period_shift`), so the march
+                        # stays continuous in time: no kick, and the gauge's
+                        # period means stay comparable.  Decided on frame 0
+                        # (the probe), frame 0 itself is the step before the
+                        # spliced one; decided on θ = −dθ, the period ends
+                        # there.
                         _warm_extended = True
-                        _n_warm += 1
-                        _fseq[_fi:_fi] = list(range(-_eddy_cap, 0)) + [0]
-                        _warm_solid = []
+                        _warm_ext_periods += 1
+                        if k >= 0:
+                            _n_warm += 1           # frame 0 was warm-up too
+                            _fseq[_fi:_fi] = (list(range(-_eddy_cap + 1, 0))
+                                              + [0])
+                        else:
+                            _fseq[_fi:_fi] = list(range(-_eddy_cap, 0))
                         _dm_moved_in_warm = False   # a fresh window judges fresh
-                        _Aed_prev = A2.copy()
+                        _Aed_prev = _period_shift(A2)
+                        _A2_prev = _period_shift(A2)
                         log.info("P2 eddy warm-up: not settled — extending by "
-                                 "one electrical period (%d frames)", _eddy_cap)
+                                 "one electrical period (%d frames, extension "
+                                 "%d of at most %d)", _eddy_cap,
+                                 _warm_ext_periods, _EDDY_MAX_WARM_PERIODS)
                         continue
                     _warm_done = True
                     if not _quiet:
@@ -7033,9 +7270,24 @@ def fem_transient_sliding_band(
                         _n_dmpre += _dm_pre_len
                         if k >= 0:
                             _n_warm += 1            # this frame is re-solved
-                        _fseq[_fi:_fi] = (list(range(-_dm_pre_len, 0))
-                                          + ([0] if k >= 0 else []))
-                        _Aed_prev = A2.copy()
+                        # Continuous in time, like the extension: the eddy
+                        # state crosses the period through the pole-pair map
+                        # (the Br map does NOT move — it is the material's).
+                        if _dm_pre_len > 0:
+                            if k >= 0:
+                                _fseq[_fi:_fi] = (
+                                    list(range(-_dm_pre_len + 1, 0)) + [0])
+                            else:
+                                _fseq[_fi:_fi] = list(range(-_dm_pre_len, 0))
+                            _Aed_prev = _period_shift(A2)
+                            _A2_prev = _period_shift(A2)
+                        elif k >= 0:
+                            # Seeded magnet, no pre-pass: re-solve THIS frame
+                            # with the ratchet on, from the SAME history it was
+                            # just solved from (`_Aed_prev` is untouched).
+                            _fseq[_fi:_fi] = [0]
+                        else:
+                            _Aed_prev = A2.copy()   # plain continuation
                         log.info(
                             "P2 demag %s: %d frame(s) at θ<0 with the Br "
                             "ratchet ACTIVE, on the settled eddy field (the "
@@ -7082,6 +7334,13 @@ def fem_transient_sliding_band(
                     [(Ist[c["phase"]] * c["Iunit"]) ** 2 / max(c["S"], 1e-30)
                      for c in _ed_con if c["key"] == "cu"])) * _wsc)
         if k < 0:
+            if k == -1:
+                # The frame solved immediately before frame 0 (eddy warm-up /
+                # demag pre-pass): the step voltage of frame 0 is measured
+                # against it, as the time march itself did.
+                _pa_m, _pb_m, _pc_m = _psi2(A2)
+                _pre_frame = {"psi": (_pa_m, _pb_m, _pc_m),
+                              "I": (Ist['A'], Ist['B'], Ist['C'])}
             continue          # eddy warm-up frame: solved, not reported (it
                               # was counted where the settling gauge read it)
         _pic_iters.append(_nit); _pic_res_max = max(_pic_res_max, _res)
@@ -7130,6 +7389,9 @@ def fem_transient_sliding_band(
         _pa, _pb, _pc = _psi2(A2)
         _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
         _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
+        # The Δt this frame's step was SOLVED with (rotor time on a voltage
+        # run, the nominal step otherwise) — the step voltage divides by it.
+        _dt_steps.append(float(_dt_k if _vdrive else dt))
         _p2_capture = _current_p2_state_capture()
         if _p2_capture is not None:
             _emit_selected_p2_state(
@@ -7472,7 +7734,18 @@ def fem_transient_sliding_band(
                  _histA_rot2, _pic_iters, _frame_converged, _bgap2,
                  _ed_cu, _ed_mag, _ed_sh, _ed_sl, _ed_dc2d, _ed_dens_hist,
                  _v_diag["iters"], _v_diag["resid"],
-                 _vapp['A'], _vapp['B'], _vapp['C'])
+                 _vapp['A'], _vapp['B'], _vapp['C'], _dt_steps)
+    # The frame solved immediately before the REPORTED window, captured before
+    # the prefixes are dropped: the first reported step voltage is measured
+    # against it (see _step_voltage_series).  The settling prefix is later in
+    # time than any eddy warm-up, so it wins when both exist.
+    _n_prefix = ((int(_vskip) if (_vdrive and _vskip) else 0)
+                 + (int(_dmskip) if (_dmskip and demag and _dmst is not None)
+                    else 0))
+    if _n_prefix > 0 and len(_psiA) > _n_prefix:
+        _jp = _n_prefix - 1
+        _pre_frame = {"psi": (_psiA[_jp], _psiB[_jp], _psiC[_jp]),
+                      "I": (_IA[_jp], _IB[_jp], _IC[_jp])}
     # Keep the compact scalar traces that the settle trims are about to erase.
     # The per-frame element/DOF arrays below remain un-copied; preserving their
     # discarded prefixes would duplicate the largest histories in the result.
@@ -7800,8 +8073,10 @@ def fem_transient_sliding_band(
         _fe_terms_r_open = _fe_terms_r
     _P_fe_rotor_window = {
         k: v for k, v in _rw.items() if k not in ("X", "Y")}
+    # (No clamp at 0: every term is a sum of non-negative contributions, so the
+    # np.maximum(…, 0) that sat here was inert — removed 2026-09-24 with the
+    # other filter-like operations.)
     _P_fe_t = (_pcl_s + _pcl_r) * NS + (_ph_s + _ph_r) * NS
-    _P_fe_t = np.maximum(_P_fe_t, 0.0)
     P_fe_ser2 = _P_fe_t.tolist(); P_fe_avg2 = float(np.mean(_P_fe_t))
     # Per-term, per-half split of the iron loss (scaled to the whole machine).
     # Reported rather than re-derived: "the core loss looks low" is answerable
@@ -7930,6 +8205,11 @@ def fem_transient_sliding_band(
                                           dtype=np.float32).copy(),
                     "A": _wc_A, "Ued": _wc_Ued,
                     "solid": np.asarray(_solid_ref, float),
+                    # per conductor group, for the per-group same-angle test
+                    "solid_grp": {_gk: np.asarray(_gl, float) for _gk, _gl in
+                                  (("cu", _ed_cu), ("mag", _ed_mag),
+                                   ("shaft", _ed_sh), ("sleeve", _ed_sl))
+                                  if _gk in _warm_grp and len(_gl) == n_total},
                     "meta": dict(_wmeta),
                     "I": float(I_phase_rms), "rpm": float(rpm),
                     "gam": float(gamma_deg), "geo_fp": _geo_fp,
@@ -7982,11 +8262,42 @@ def fem_transient_sliding_band(
             _seg_k, _seg_rep = 1.0, {}
     # magnet + shaft eddy: honest (reaction-included) rotor solve on the
     # rotor-frame A(t) history — the SAME function the P1 path uses.
+    # The history is the COMMENSURATE rotor window (rotor_window.py), the same
+    # construction as the rotor iron's but on the nodal potential: one
+    # electrical period is open for a rotor node, and the frequency-domain
+    # solve takes the DFT of every boundary node's history, so an open window
+    # would bill its end-to-start step as broadband loss (that growth with the
+    # step count is what the retired k ≤ 16 cap was hiding).
+    _P_rot_eddy_window = {"closed": False, "q": 1,
+                          "method": "open_one_period_window",
+                          "reason": ("no rotor potential history"
+                                     if not _histA_rot2 else None)}
     if _histA_rot2:
         try:
             from motor_ai_sim.simulation.eddy_solver_2d import (
                 honest_rotor_eddy as _hre2)
             _rm = half["r"]["mesh"]
+            _hA2 = np.asarray(_histA_rot2, float)
+            try:
+                _rwA = _commensurate_rotor_potential_window(
+                    _hA2, np.asarray(_rm.p, float),
+                    float(np.sqrt(np.min(_triangle_areas(_rm)))),
+                    pole_pairs=int(pole_pairs), n_sectors=int(NS),
+                    bc_sign=int(_bc_sign), theta_rad=_theta_samples,
+                    window_periods=float(n_periods))
+            except Exception as _rwa_e:   # noqa: BLE001 — fall back, loudly
+                _rwA = {"closed": False, "q": 1,
+                        "method": "open_one_period_window",
+                        "reason": "commensurate window failed: %s: %s"
+                                  % (type(_rwa_e).__name__, _rwa_e)}
+            if _rwA.get("closed"):
+                _hA2 = np.asarray(_rwA["A"], float)
+            else:
+                log.warning("P2 honest rotor eddy | commensurate window NOT "
+                            "available (%s) — the raw one-period window is used "
+                            "(no filter); its open-window leakage grows with "
+                            "the step count", _rwA.get("reason"))
+            _P_rot_eddy_window = {k: v for k, v in _rwA.items() if k != "A"}
             # Tags + magnet list + mu lookup: shared with P1 (losses.py).
             _tags_r2, _magt2 = _rotor_eddy_tags(
                 half["r"]["cells"], _rm.t.shape[1], DOM_MAG_BASE)
@@ -7996,17 +8307,26 @@ def fem_transient_sliding_band(
                 nu_all2[np.asarray(_rir, int) + nst])))
                 if _rir is not None and np.size(_rir) else 1000.0)
             _muf2 = _rotor_mu_lookup(_mur_bi, DOM_MAG_BASE, DOM_ROTOR)
+            import time as _time_hre
+            _t_hre = _time_hre.time()
             P_mag_avg2, P_shaft_avg2, _hf2 = _hre2(
                 np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r2,
                 _muf2, _sigma_of_tag, _magt2, DOM_SHAFT,
-                np.asarray(_histA_rot2, float), float(n_total) * dt,
+                _hA2, float(_hA2.shape[0]) * dt,
                 float(p.stack_length), float(NS))
+            _P_rot_eddy_window.update({
+                "n_frames": int(_hA2.shape[0]),
+                "n_harmonics_solved": len(_hf2),
+                "wall_s": round(_time_hre.time() - _t_hre, 2)})
             P_mag_ser2 = [float(P_mag_avg2)] * n_total
             P_shaft_ser2 = [float(P_shaft_avg2)] * n_total
             _lm2 = "field+honest (P2 magnetostatic + coupled rotor eddy)"
-            log.info("P2 rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics); "
-                     "iron=%.3f W, copper(dc)=%.1f W", P_mag_avg2,
-                     P_shaft_avg2, len(_hf2), P_fe_avg2, P_cu_dc2)
+            log.info("P2 rotor eddy: mag=%.3f shaft=%.3f W (%d harmonics, "
+                     "%s window x%d, %.1f s); iron=%.3f W, copper(dc)=%.1f W",
+                     P_mag_avg2, P_shaft_avg2, len(_hf2),
+                     _P_rot_eddy_window.get("method"),
+                     int(_P_rot_eddy_window.get("q", 1)),
+                     _time_hre.time() - _t_hre, P_fe_avg2, P_cu_dc2)
         except Exception as _e2:
             log.warning("P2 honest rotor eddy failed: %s", _e2)
 
@@ -8237,57 +8557,81 @@ def fem_transient_sliding_band(
     P_airgap_avg2 = float(Tavg * _omega_m2)
     P_mech_avg2 = P_airgap_avg2 - (P_fe_avg2 + P_mag_avg2 + P_shaft_avg2
                                    + P_sleeve_avg2)
-    # Terminal voltage V = R·i + dψ/dt — the SAME two-term formula and the
-    # SAME spectral estimator the P1 path uses.  Two reporting-only bugs
-    # lived here, and together they made the two element orders disagree on
-    # V_peak by ~11-13 % for runs whose FIELDS agree to ~1.5 %:
-    #   • np.gradient is NOT periodic — it drops to a one-sided difference
-    #     at the first and last frame, and V_peak is a max over the series,
-    #     so those two edge frames set the reported peak.  The spectral
-    #     derivative (`_spectral_ddt_series`, shared with P1) is periodic by
-    #     construction and truncates the slip-node quantisation jitter.
-    #   • the R·i drop was in the comment but never in the code, so P2
-    #     reported the back-EMF where P1 reports the terminal voltage.
-    # ψ and I are per-branch on BOTH paths (identical sc_psi = L·NS/n_par),
-    # so the two are directly comparable.  Reporting only: the circuit solve
-    # closes on its own residual and never reads this series.
-    #
-    # TRUNCATION ORDER.  This was a hard `min(5, …)`, which contradicted the
-    # docstring above it: the SLOT ripple of the back-EMF sits at k_slot±1
-    # (11 and 13 on 24s/28p), so a cap of 5 dropped exactly the content the
-    # comment promised to keep, and every reported voltage waveform came out
-    # harmonic-free above the 5th — an impossible spectrum for an FE solve.
-    # Measured against ANSYS on the 150 mm machine at no load (2026-08-22):
-    # ours h7/h9/h11/h13 = 0.30/1.17/0.22/0.18 % of fundamental vs ANSYS
-    # 0.80/1.00/0.28/0.26 %, and the spectrum is STABLE from k=13 all the way
-    # to Nyquist (k=29 on 60 frames) — the quantisation floor the truncation
-    # was guarding against is not there at usable step counts.
-    # So keep through the SECOND slot harmonic (physics, not a magic number)
-    # and clamp below Nyquist; the guard band only ever binds on short runs.
-    _k_slot = max(1, math.lcm(int(p.num_slots), int(p.num_poles))
-                  // max(1, int(pole_pairs)))       # cogging order / elec period
-    _Kv2 = max(1, min(2 * _k_slot + 1, (int(n_total) // 2) - 1))
+    # Terminal (winding) voltage V = R·i + dψ/dt, per STEP, exactly as the
+    # time integration sees it (`_step_voltage_series`): the Crank–Nicolson
+    # circuit row R·(i_k + i_{k−1})/2 + (ψ_k − ψ_{k−1})/Δt_k, i.e. the EXACT
+    # step-mean EMF plus the resistive drop at the step-mean current.  On a
+    # voltage run it is the applied voltage to the Newton residual; on a
+    # current run it is what a CN voltage drive would apply to reproduce the
+    # solved currents.  No harmonic is truncated (it replaced a spectral
+    # derivative cut above the second slot harmonic — owner 2026-09-24).
+    # Periodic by construction on an imposed-current window (the predecessor
+    # of frame 0 is frame N−1); a run with a solved settling prefix / eddy
+    # warm-up measures frame 0 against the frame it actually followed.
+    # ψ and I are per-branch (sc_psi = L·NS/n_par).  Each voltage sample sits
+    # at its step's MIDPOINT: `V_rotor_angle_deg` carries those angles.
+    _dts_v = (np.asarray(_dt_steps, float) if len(_dt_steps) == len(_psiA)
+              else np.full(len(_psiA), float(dt)))
 
-    def _ddt(arr):
-        a = np.asarray(arr, float)
-        return (_spectral_ddt_series(a, _Kv2, dt).tolist() if a.size > 1
-                else [0.0] * a.size)
-    VA = [R_phase * i + e for i, e in zip(_IA, _ddt(_psiA))]
-    VB = [R_phase * i + e for i, e in zip(_IB, _ddt(_psiB))]
-    VC = [R_phase * i + e for i, e in zip(_IC, _ddt(_psiC))]
+    def _vser(psi, cur, j):
+        _pv = (None if _pre_frame is None
+               else (_pre_frame["psi"][j], _pre_frame["I"][j]))
+        return _step_voltage_series(psi, cur, R_phase, _dts_v, _pv)
+    if _psiA:
+        (_vA, _iAm), (_vB, _iBm), (_vC, _iCm) = (
+            _vser(_psiA, _IA, 0), _vser(_psiB, _IB, 1), _vser(_psiC, _IC, 2))
+    else:
+        _vA = _vB = _vC = _iAm = _iBm = _iCm = np.zeros(0)
+    VA, VB, VC = _vA.tolist(), _vB.tolist(), _vC.tolist()
     Vpk = float(np.max(np.abs(VA + VB + VC))) if _psiA else 0.0
-    # Terminal electrical input ⟨Σ v·i⟩ (EXACTLY 0 at no-load).  IA/IB/IC are
-    # PER-BRANCH conductor currents, so one branch per phase is what ⟨Σ v·i⟩
-    # measures and the machine total carries the n_parallel factor — the same
-    # correction the P1 path has.  The P2 return simply did not have this key,
-    # so every consumer that computes efficiency as (P_elec−P_loss)/P_elec —
-    # the field view's sidebar among them — read a missing 0.0 and reported
-    # 0 % efficiency for a machine doing real work.
-    P_elec_in2 = (float(np.mean(np.asarray(VA) * np.asarray(_IA)
-                                + np.asarray(VB) * np.asarray(_IB)
-                                + np.asarray(VC) * np.asarray(_IC)))
-                  * float(n_parallel) if _IA else 0.0)
+    # Terminal electrical input ⟨Σ v·i⟩ (EXACTLY 0 at no-load), time-weighted
+    # over the window, each step's voltage times the SAME step's mean current —
+    # the CN pairing, under which stored magnetic energy telescopes away over a
+    # closed period, so what is left is the power the field converted or
+    # dissipated.  IA/IB/IC are PER-BRANCH conductor currents, so the machine
+    # total carries the n_parallel factor.
+    if _IA:
+        _pw_v = (_vA * _iAm + _vB * _iBm + _vC * _iCm)
+        P_elec_in2 = float(np.sum(_pw_v * _dts_v) / np.sum(_dts_v)) \
+            * float(n_parallel)
+        _P_R2 = float(np.sum(R_phase * (_iAm ** 2 + _iBm ** 2 + _iCm ** 2)
+                             * _dts_v) / np.sum(_dts_v)) * float(n_parallel)
+    else:
+        P_elec_in2 = 0.0
+        _P_R2 = 0.0
     _ang = [(k / n_total) * period_mech * n_periods for k in range(n_total)]
+    _V_ang = [a - 0.5 * period_mech * n_periods / max(n_total, 1) for a in _ang]
+    # POWER BALANCE of the field, from the SAME terminal quantities: what the
+    # winding put into the field (P_in minus the R·i² it burned itself) against
+    # the air-gap power T·ω plus every loss the field solve itself dissipated
+    # (coupled eddy: copper AC, magnet, shaft, sleeve).  The post-processed
+    # iron loss is NOT in the field (laminated iron is σ = 0 in the solve), so
+    # it is not in this balance.  Its residual is the discretisation's.
+    _p_eddy_solved = ((float(P_cu_ac_avg2) if eddy else 0.0)
+                      + ((float(np.mean(_ed_mag)) + float(np.mean(_ed_sh))
+                          + (float(np.mean(_ed_sl)) if _ed_sl else 0.0))
+                         if (eddy and rotor_eddy and _ed_mag) else 0.0))
+    _p_em_in2 = float(P_elec_in2 - _P_R2)
+    _p_gap_bal = float(Tavg * _omega_m2)
+    _power_balance = {
+        "P_in_W": float(P_elec_in2),
+        "P_winding_R_W": float(_P_R2),
+        "P_field_in_W": _p_em_in2,
+        "P_airgap_W": _p_gap_bal,
+        "P_field_solved_loss_W": float(_p_eddy_solved),
+        "residual_W": float(_p_em_in2 - _p_gap_bal - _p_eddy_solved),
+        "residual_rel": (float((_p_em_in2 - _p_gap_bal - _p_eddy_solved)
+                               / abs(P_elec_in2)) if abs(P_elec_in2) > 0 else None),
+        "note": ("P_field_in = P_in − R·⟨ī²⟩ (winding power into the field); "
+                 "balance against T_mean·ω + the field's own solved eddy "
+                 "losses. Post-processed iron loss is outside the field."),
+    }
+    log.info("P2 power balance | P_in %.4g W = R·i² %.4g + field %.4g; field "
+             "vs T·ω %.4g + solved eddy %.4g -> residual %.4g W (%s)",
+             P_elec_in2, _P_R2, _p_em_in2, _p_gap_bal, _p_eddy_solved,
+             _power_balance["residual_W"],
+             ("%.3g %%" % (100.0 * _power_balance["residual_rel"])
+              if _power_balance["residual_rel"] is not None else "n/a"))
 
     # ═══════════════════════════════════════════════════════════════════════
     #  STAR / DELTA — the terminal connection
@@ -8383,13 +8727,21 @@ def fem_transient_sliding_band(
                    + np.asarray(_psiC, float)) / 3.0
             _nz = _pz.size
             _Fz = np.abs(np.fft.rfft(_pz) / _nz * 2.0)
+            if _nz % 2 == 0 and _Fz.size > 1:
+                _Fz[-1] *= 0.5          # Nyquist bin: one real cosine, |C|
             _w_e = 2.0 * math.pi * float(f_elec)
             _Iph2 = (float(_I_ph_rms_solved or I_phase_rms) ** 2) or 1.0
             _Rac1 = (float(P_cu_ac_avg2) / (3.0 * _Iph2)) if eddy else 0.0
-            for _h in (3, 9, 15):
-                if _h >= _Fz.size:
-                    break
-                _Eh = _h * _w_e * float(_Fz[_h]) / math.sqrt(2.0)   # V rms
+            # EVERY bin of the zero-sequence flux the window resolves — no
+            # harmonic list (it was 3, 9, 15 only; owner 2026-09-24: no
+            # truncation).  Balanced windings put the zero sequence at the
+            # triplens; whatever sits elsewhere is zero-sequence EMF all the
+            # same and circulates the same way.  The window spans n_periods
+            # electrical periods, so bin m is harmonic m / n_periods.
+            _npz = max(1.0, float(n_periods))
+            for _m in range(1, _Fz.size):
+                _h = _m / _npz
+                _Eh = _h * _w_e * float(_Fz[_m]) / math.sqrt(2.0)   # V rms
                 if _Eh <= 0.0:
                     continue
                 _Rh = float(R_phase) + _Rac1 * (_h ** 2)
@@ -8397,7 +8749,8 @@ def fem_transient_sliding_band(
                 _Ih = _Eh / max(_Zh, 1e-12)
                 _Ph = 3.0 * _Ih * _Ih * _Rh
                 _P_circ += _Ph
-                _circ_rows.append({"harmonic": _h, "E_rms_V": round(_Eh, 2),
+                _circ_rows.append({"harmonic": round(_h, 4),
+                                   "E_rms_V": round(_Eh, 2),
                                    "R_ohm": round(_Rh, 6),
                                    "X_ohm": round(_h * _w_e * _L0, 5),
                                    "I_circ_rms_A": round(_Ih, 2),
@@ -8405,8 +8758,9 @@ def fem_transient_sliding_band(
             log.info("%s connection: L0 = %.5g mH (rotor-angle mean, run's own "
                      "iron), circulating %s -> %.0f W added to the copper",
                      _sd_mode.upper(), _L0_mH,
-                     ", ".join("h%d %.1f A" % (r["harmonic"], r["I_circ_rms_A"])
-                               for r in _circ_rows) or "none",
+                     ", ".join("h%g %.1f A" % (r["harmonic"], r["I_circ_rms_A"])
+                               for r in _circ_rows
+                               if r["I_circ_rms_A"] >= 0.05) or "none",
                      _P_circ)
         except Exception as _e_sd:
             log.warning("star/delta zero-sequence step failed (%s) — the "
@@ -8793,6 +9147,11 @@ def fem_transient_sliding_band(
         "T_em_maxwell_Nm": list(_T2raw),
         "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
         "V_A": VA, "V_B": VB, "V_C": VC, "V_peak": Vpk,
+        # Each V sample is its STEP's voltage (the Crank–Nicolson row, see
+        # _step_voltage_series), located at the step midpoint — these angles.
+        "V_rotor_angle_deg": _V_ang,
+        "voltage_derivative": "crank_nicolson_step_mean",
+        "power_balance": _power_balance,
         "I_A": _IA, "I_B": _IB, "I_C": _IC,
         # rms terminal phase current, SOLVED — present only where the current
         # was an answer rather than the input (see the copper recompute above).
@@ -8882,6 +9241,14 @@ def fem_transient_sliding_band(
                                           or not math.isfinite(_warm_resid))
                                  else float("%.3g" % _warm_resid)),
         "eddy_settle_tol": float(_EDDY_SETTLE_TOL),
+        # HOW the verdict was reached (2026-09-24): whole-period means per
+        # conductor group (or a seed's same-angle reference), the per-group
+        # residuals, the periods marched and whether the splices carried the
+        # eddy state across the period with the pole-pair map.
+        "eddy_settle_gauge": (dict(_warm_gauge) if _warm_gauge else None),
+        # what a COLD march started from: the static (∂A/∂t = 0) field one
+        # step before its first frame, or None (seeded / voltage / frozen-ν)
+        "eddy_cold_start": _static_seed_info,
         # NO tau here on purpose.  The decay is not one exponential: on the
         # 150 mm the fit off the first frames reads 35 us and the fit off the
         # settled tail reads 680 us, while the transient actually needed ~0.4
@@ -8911,6 +9278,9 @@ def fem_transient_sliding_band(
         "eddy_conductor_check": _eddy_con_check,
         "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
         "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
+        # The window the two numbers above were solved on (rotor_window.py on
+        # the nodal potential): method, q windows chained, harmonics solved.
+        "P_rotor_eddy_honest_window": _P_rot_eddy_window,
         # AXIAL magnet segmentation — what `magnet_lamination` did to the two
         # magnet numbers above.  Always present (factor 1.0 + the measured loop
         # width on a solid magnet), so the card can say "solid" rather than say

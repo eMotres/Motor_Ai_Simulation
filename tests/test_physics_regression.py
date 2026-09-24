@@ -646,10 +646,14 @@ def test_eddy_warmup_leaves_no_start_up_transient_in_the_window(monkeypatch):
     """
     tol = 0.02
 
-    # The bug, reproduced: no warm-up at all -> frame 0 IS the cold start.
+    # The bug, reproduced: no warm-up at all -> frame 0 IS the cold start (from
+    # A = 0: since 2026-09-24 a cold march starts from the static field, which
+    # SB_EDDY_ZERO_START=1 turns off for exactly this reproduction).
     monkeypatch.setenv("SB_EDDY_WARM", "0")
+    monkeypatch.setenv("SB_EDDY_ZERO_START", "1")
     cold = _solid_series(_eddy_run())
     monkeypatch.delenv("SB_EDDY_WARM")
+    monkeypatch.delenv("SB_EDDY_ZERO_START")
     assert cold.size > 3
     assert cold[0] > 10.0 * cold[1:].max(), (
         "the cold-start leg no longer shows a start-up transient, so the test "

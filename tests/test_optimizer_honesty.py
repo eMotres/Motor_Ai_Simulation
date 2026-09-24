@@ -90,6 +90,15 @@ def test_unconverged_frame_fails_the_eval(fake_solver):
     assert "4.5e-03" in msg or "0.0045" in msg   # the residual it failed at
 
 
+def test_missing_convergence_stamp_fails_the_eval(fake_solver):
+    """A legacy/malformed result cannot be promoted to converged by default."""
+    raw = _raw(converged=True)
+    del raw["picard_converged"]
+    fake_solver(raw)
+    with pytest.raises(RuntimeError, match="missing explicit picard_converged"):
+        refine_proc.run_one({}, current_a=60.0, steps=12, coil_temp_c=120.0)
+
+
 def test_converged_eval_carries_the_stamp(fake_solver):
     """A healthy eval still returns numbers, plus the convergence provenance."""
     fake_solver(_raw(converged=True))

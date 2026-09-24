@@ -356,7 +356,9 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # back {"ok": False, "error": ...} and the candidate is DROPPED, never ranked.
     # The offending frame indices travel in the message so the run log names them
     # instead of saying "eval failed".
-    if not bool(d.get("picard_converged", True)):
+    if "picard_converged" not in d:
+        raise RuntimeError("missing explicit picard_converged stamp — eval rejected")
+    if d["picard_converged"] is not True:
         _bad = list(d.get("picard_unconverged_frames") or [])
         raise RuntimeError(
             "unconverged FEM frames {} of {} (max nonlinear resid {:.3g} vs tol "

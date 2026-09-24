@@ -119,6 +119,7 @@ const AutoOptimizePanel: React.FC = () => {
   const running = !!st.running;
   const result = st.result;
   const best = st.best?.metrics;
+  const certified = st.final_validation_status === 'certified' && st.apply_eligible === true;
   const base = st.baseline;
   // Pareto-dominance over the run's OWN cloud, at the run's OWN operating point
   // (backend: motor_ai_sim/optimization/pareto.py).
@@ -599,6 +600,11 @@ const AutoOptimizePanel: React.FC = () => {
             {st.error}
           </Typography>
         )}
+        {isAuto && best && !certified && (
+          <Typography color="warning.main" variant="caption" sx={{ display: 'block', mt: 1 }}>
+            3× preliminary screening; 6× winner validation pending.
+          </Typography>
+        )}
 
         {/* ── Result: the optimized design NEXT TO the one it started from ── */}
         {isAuto && !running && best && base && (
@@ -707,11 +713,12 @@ const AutoOptimizePanel: React.FC = () => {
 
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
               <Button variant="outlined" color="success" size="small"
-                startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />} disabled={applied}
+                 startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />} disabled={applied || !certified}
                 onClick={async () => { await applyDescentBest(); setApplied(true); }}>
                 {applied ? 'Applied to design' : 'Apply to design'}
               </Button>
-              <Button variant="outlined" size="small" startIcon={<BookmarkAddIcon />}
+               <Button variant="outlined" size="small" startIcon={<BookmarkAddIcon />}
+                 disabled={!certified}
                 onClick={savePoint}>
                 Save as Compare point
               </Button>

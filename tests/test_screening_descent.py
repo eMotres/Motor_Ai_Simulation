@@ -374,7 +374,7 @@ class TestPlanAssembly:
     def test_the_eval_path_is_the_same_honest_one(self):
         ev = _plan()["eval"]
         assert ev["element_order"] == 2 and ev["geo_mesh"] and ev["iron_template"]
-        assert ev["steps_per_period"] >= 48      # ripple must not alias
+        assert ev["steps_per_period"] >= 8  # FEM applies the 3x optimization policy
 
     def test_an_unknown_mode_is_refused_loudly(self):
         r = client.post("/api/optimization/auto/plan",
@@ -445,6 +445,17 @@ def synthetic_fem(monkeypatch):
     monkeypatch.setattr(O, "_EVAL_CACHE", {})
     monkeypatch.setattr(O, "_auto_compare_point",
                         lambda bucket, name, plan, result: {"id": "x", "name": name})
+    # This suite isolates search arithmetic and memo/budget behavior. The
+    # separate final-validation tests exercise the 6x FEM metadata gate; do
+    # not charge synthetic extra solves to the screening search's budget.
+    def final_stub(*, best_x, best_metrics, coarse_base, score, **_kwargs):
+        cost, F = score(best_metrics, coarse_base)
+        return {"status": "certified", "sampling_purpose": "standard",
+                "shortlist_only": True, "shortlist_limit": 3,
+                "shortlist_count": 1, "validated": [], "failed": [],
+                "winner": {"x": dict(best_x), "res": dict(best_metrics),
+                           "cost": cost, "F": F}, "baseline": coarse_base}
+    monkeypatch.setattr(O, "_finalize_standard_shortlist", final_stub)
     O._descent_state["cancel"] = False
     yield monkeypatch
     O._RIPPLE_PEN_LAM["v"] = 0.0

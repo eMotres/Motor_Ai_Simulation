@@ -278,6 +278,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
   const base = st.baseline;
   const cur  = st.current;
   const best = st.best?.metrics;
+  const certified = st.final_validation_status === 'certified' && st.apply_eligible === true;
   const history: any[] = st.history || [];
   const chartData = history.map((h: any) => ({ ...h, eff_pct: (h.efficiency ?? 0) * 100 }));
 
@@ -417,7 +418,8 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
                : (typeof best?.gamma_deg === 'number' ? best.gamma_deg : undefined);
   const bestPt = best?.torque_per_mass != null
     ? [{ td: best.torque_per_mass, eff: (best.efficiency ?? 0) * 100, ripple: best.T_ripple_pct, z: 6,
-         overrides: _bestX, current_a: best.current_a, gamma_deg: _bestG }] : [];
+          overrides: _bestX, current_a: best.current_a, gamma_deg: _bestG,
+          sampling_quality: st.final_validation_status === 'certified' ? 'standard' : 'preliminary' }] : [];
 
   // ── Baseline (current-only) line A–B ── from a run (st.baseline_line) OR the
   // standalone "Draw baseline" button (baselineLine). Computed here so the axes
@@ -489,7 +491,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
 
   // Manual "continue in the same direction": re-center on the optimum, run once more
   // (Auto-walk off → a single backend round).
-  const continueWalk = async () => { await applyDescentBest(); await launch(); };
+  const continueWalk = async () => { if (!certified) return; await applyDescentBest(); await launch(); };
   // Change-diff actions: warm-start re-uses continueWalk (apply best → relaunch on the
   // new inputs); "from scratch" relaunches from the current geometry; dismiss snoozes.
   const reoptScratch = () => { void launch(); };
@@ -805,13 +807,19 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           <Chip size="small" variant="outlined"
             label={`${st.n_evals ?? 0} FEM evals`} sx={{ height: 20, fontSize: 10 }} />
           {best && (
-            <Chip size="small" color="success" variant="outlined"
-              label={`best F = ${st.best?.F?.toFixed?.(4) ?? '—'}`} sx={{ height: 20, fontSize: 10 }} />
+             <Chip size="small" color={certified ? 'success' : 'warning'} variant="outlined"
+               label={`${certified ? '6× validated' : '3× preliminary'} best F = ${st.best?.F?.toFixed?.(4) ?? '—'}`} sx={{ height: 20, fontSize: 10 }} />
           )}
         </Box>
       )}
 
       </>)}
+
+      {st.final_validation_status === 'failed' && (
+        <Typography variant="caption" color="error" sx={{ display: 'block', mb: 1 }}>
+          Preliminary 3× result only; final 6× validation failed. Apply is unavailable.
+        </Typography>
+      )}
 
       {/* Metrics table: baseline / current / best */}
       {base && (
@@ -1171,7 +1179,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           ))}
           {softPinned.length > 0 && (
             <Button variant="outlined" color="warning" size="small" sx={{ mt: 0.75 }}
-              startIcon={<TrendingDownIcon />} disabled={!connectedToApi}
+              startIcon={<TrendingDownIcon />} disabled={!connectedToApi || !certified}
               onClick={continueWalk}>
               Shift window & continue ({softPinned.length})
             </Button>
@@ -1186,6 +1194,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           {selectedPt && selectedPt.overrides ? (
             <>
               <Button variant="outlined" color="success" size="small" startIcon={<PlayArrowIcon />}
+                disabled={!certified || selectedPt.sampling_quality !== 'standard'}
                 onClick={async () => { await applyDescentPoint(selectedPt); setApplied(true); }}>
                 Apply picked point to geometry
               </Button>
@@ -1200,7 +1209,7 @@ const DescentPanel: React.FC<{ chartsOnly?: boolean }> = ({ chartsOnly = false }
           ) : (
             <Button variant="outlined" color="success" size="small"
               startIcon={applied ? <CheckCircleIcon /> : <PlayArrowIcon />}
-              disabled={applied}
+              disabled={applied || !certified}
               onClick={async () => { await applyDescentBest(); setApplied(true); }}>
               {applied ? 'Applied to geometry' : 'Apply best to geometry'}
             </Button>

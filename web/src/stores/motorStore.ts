@@ -1102,6 +1102,9 @@ export const useMotorStore = create<MotorState>()(
       },
       applyDescentBest: async () => {
         const st: any = get().descentState;
+        if (st?.running || st?.final_validation_status !== 'certified' ||
+            st?.apply_eligible !== true ||
+            st?.best?.metrics?.cogging_sampling_final_quality_sufficient !== true) return;
         const overrides = st?.best?.x || st?.result?.best?.overrides;
         if (!overrides || !Object.keys(overrides).length) return;
         if (get().connectedToApi) await get().updateGeometryViaApi(overrides);
@@ -1146,6 +1149,9 @@ export const useMotorStore = create<MotorState>()(
       // same geometry + operating-point write as applyDescentBest, but for an
       // arbitrary evaluated design instead of the optimiser's auto-best.
       applyDescentPoint: async (pt: any) => {
+        const st: any = get().descentState;
+        if (st?.running || st?.final_validation_status !== 'certified' ||
+            pt?.sampling_quality !== 'standard') return;
         const overrides = pt?.overrides;
         if (!overrides || !Object.keys(overrides).length) return;
         if (get().connectedToApi) await get().updateGeometryViaApi(overrides);

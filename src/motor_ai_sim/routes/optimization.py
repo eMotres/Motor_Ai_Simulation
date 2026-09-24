@@ -694,7 +694,8 @@ def _base_eval_env() -> Dict[str, str]:
                 "subprocess (%s) — refusing to evaluate on the process "
                 "machine" % _exc) from _exc
     env["SB_SEED_FROM_PREVIOUS"] = "1"
-    return env
+    from motor_ai_sim.simulation.pardiso_runtime import pardiso_subprocess_env
+    return pardiso_subprocess_env(env)
 
 
 def __getattr__(name):
@@ -1515,10 +1516,12 @@ def _point_from_eval(out: Dict[str, Any], ov: Dict[str, float], I: float,
         # the panel flags it rather than the coordinator vetoing it.
         return {**r, "overrides": ov, "current_a": I, "geom_id": gi,
                 "op_index": oi, "fem": True, "feasible": True,
+                "final_validation_status": "preliminary", "apply_eligible": False,
                 "eligible": bool(_defined_ripple_pct(r) is not None
-                                 and _defined_ripple_pct(r) <= ripple_max)}
+                                  and _defined_ripple_pct(r) <= ripple_max)}
     return {"overrides": ov, "current_a": I, "geom_id": gi, "op_index": oi,
             "fem": True, "feasible": False, "eligible": False,
+            "final_validation_status": "failed", "apply_eligible": False,
             "error": out.get("error", "eval failed")}
 
 
@@ -1915,6 +1918,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             "operating_points": operating_points, "ripple_max_pct": float(ripple_max),
             "objective": "pareto_torque_density_vs_efficiency_FEM",
             "steps_per_period": int(steps), "fem": True,
+            "final_validation_status": "preliminary",
             # WHICH RUN THIS IS.  The panel polls one endpoint for "is my run
             # done" and "here is the result", and those were only ever the same
             # thing by luck: after a restart the state holds the RESTORED last
@@ -2366,6 +2370,7 @@ _descent_state = _WSP.ws_map(
     seed=lambda: {
         "running": False, "iter": 0, "max_iters": 0, "n_evals": 0,
         "best": None, "current": None, "history": [], "baseline": None,
+        "final_validation_status": "preliminary", "apply_eligible": False,
         "baseline_line": None,
         "phase": "", "run_id": "", "error": None, "cancel": False,
     },
@@ -2842,6 +2847,11 @@ def _msum(m: Dict[str, Any]) -> Dict[str, Any]:
         "THD_LL_pct":      m.get("THD_LL_pct"),      # line-to-line voltage THD (FOC)
         "Kt_Nm_per_Arms":  m.get("Kt_Nm_per_Arms"),
         "current_a":       m.get("current_a"),   # current the design was solved at
+        "cogging_sampling_purpose": m.get("cogging_sampling_purpose"),
+        "cogging_raw_samples_per_cycle": m.get("cogging_raw_samples_per_cycle"),
+        "cogging_cycles_per_electrical_period": m.get("cogging_cycles_per_electrical_period"),
+        "cogging_sampling_final_quality_sufficient": m.get(
+            "cogging_sampling_final_quality_sufficient"),
                                                  # (auto-adjusted to hit the target torque)
     }
 
@@ -2878,7 +2888,10 @@ def _pt(out: Dict[str, Any], kind: str):
             "j_coil": r.get("J_coil_A_per_mm2"),
             "overrides": {k: v for k, v in ov.items() if k != "gamma_deg"},
             "current_a": out.get("current_a") or r.get("current_a"),
-            "gamma_deg": ov.get("gamma_deg")}
+            "gamma_deg": ov.get("gamma_deg"),
+            "sampling_quality": ("standard" if r.get("cogging_sampling_purpose") == "standard"
+                                 and r.get("cogging_sampling_final_quality_sufficient") is True
+                                 else "preliminary")}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3081,6 +3094,174 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
     return (-F + pen), F
 
 
+def _standard_quality(out: Dict[str, Any]) -> tuple[bool, str]:
+    """A successful coarse FEM eval is never a final-quality result."""
+    if not isinstance(out, dict) or not out.get("ok") or not _eval_healthy(out):
+        return False, str(out.get("error") if isinstance(out, dict)
+                          else "FEM evaluation failed")
+    r = out.get("res") or {}
+    if r.get("nonlinear_converged") is not True:
+        return False, "nonlinear convergence is unconfirmed"
+    if r.get("cogging_sampling_purpose") != "standard":
+        return False, "FEM result did not use standard sampling"
+    if r.get("cogging_sampling_final_quality_sufficient") is not True:
+        return False, "raw angular sampling is below final-quality resolution"
+    return True, ""
+
+
+def _point_as_metrics(pt: Dict[str, Any]) -> Dict[str, Any]:
+    """The objective fields retained on each preliminary chart point."""
+    return {"torque_per_mass_Nm_kg": pt.get("td"),
+            "efficiency": pt.get("eff"), "T_ripple_pct": pt.get("ripple"),
+            "V_peak": pt.get("v_peak"), "THD_LL_pct": pt.get("thd")}
+
+
+def _finalize_standard_shortlist(
+        *, points: list[Dict[str, Any]], best_x: Dict[str, float],
+        best_metrics: Dict[str, Any], coarse_base: Dict[str, Any],
+        base_x: Dict[str, float], base_current: float, bump_pct: float,
+        evaluate, score, limit: int = 3,
+        bump_current: Optional[float] = None) -> Dict[str, Any]:
+    """Re-solve baseline A/B and top-N preliminary designs at 6x quality.
+
+    The shortlist is explicitly a *shortlist*, not a proof of a global 6x
+    optimum.  Fail closed if either reference or every finalist fails.  The
+    caller publishes this result only after the complete validation succeeds.
+    """
+    def key(x, current):
+        return (tuple(sorted((str(k), round(float(v), 9)) for k, v in x.items())),
+                round(float(current), 9))
+
+    def checked(x, current):
+        try:
+            out = evaluate(dict(x), float(current))
+            good, why = _standard_quality(out)
+        except Exception as exc:  # a failed final solve must never certify
+            return None, str(exc)
+        if not good:
+            return None, why
+        out = dict(out)
+        out["overrides"] = dict(x)
+        out["res"] = dict(out["res"], current_a=float(current))
+        return out, ""
+
+    initial = {"status": "failed", "reason": "", "sampling_purpose": "standard",
+               "shortlist_limit": int(limit), "validated": [], "failed": []}
+    base_a, why = checked(base_x, base_current)
+    if base_a is None:
+        return dict(initial, reason="standard baseline A: " + why)
+    bump_current = (float(bump_current) if bump_current is not None else
+                    float(base_current) * (1.0 + float(bump_pct) / 100.0))
+    base_b, why = checked(base_x, bump_current)
+    if base_b is None:
+        return dict(initial, reason="standard baseline B: " + why)
+    standard_base = dict(base_a["res"])
+    # Preserve the run's objective mode: product-mode legacy runs still solve B
+    # for provenance, but must not silently change their objective to a line.
+    if coarse_base.get("_bline"):
+        standard_base["_bline"] = _make_bline(standard_base, base_b["res"], bump_pct)
+
+    candidates = []
+    best_current = best_metrics.get("current_a") or base_current
+    candidates.append((float("-inf"), dict(best_x), float(best_current)))
+    for pt in points:
+        if pt.get("kind") == "baseline_bump" or not pt.get("overrides"):
+            continue
+        current = pt.get("current_a")
+        if current is None:
+            continue
+        try:
+            coarse_cost, _ = score(_point_as_metrics(pt), coarse_base)
+            if math.isfinite(float(coarse_cost)):
+                candidates.append((float(coarse_cost), dict(pt["overrides"]),
+                                   float(current)))
+        except (TypeError, ValueError, OverflowError):
+            continue
+    candidates.sort(key=lambda row: row[0])
+    shortlisted = []
+    seen = set()
+    for _, x, current in candidates:
+        k = key(x, current)
+        if k not in seen:
+            shortlisted.append((x, current))
+            seen.add(k)
+        if len(shortlisted) >= max(1, int(limit)):
+            break
+    validated = []
+    failed = []
+    for x, current in shortlisted:
+        out, why = checked(x, current)
+        if out is None:
+            failed.append({"overrides": x, "current_a": current, "reason": why})
+            continue
+        cost, F = score(out["res"], standard_base)
+        if not math.isfinite(float(cost)) or not math.isfinite(float(F)):
+            failed.append({"overrides": x, "current_a": current,
+                           "reason": "non-finite final objective"})
+            continue
+        validated.append({"x": x, "current_a": current, "res": out["res"],
+                          "cost": float(cost), "F": float(F), "out": out})
+    if failed:
+        return dict(initial, reason="a shortlisted design failed standard FEM",
+                    failed=failed, shortlist_count=len(shortlisted))
+    if not validated:
+        return dict(initial, reason="no shortlisted design passed standard FEM",
+                    failed=failed, shortlist_count=len(shortlisted))
+    validated.sort(key=lambda row: row["cost"])
+    winner = validated[0]
+    return {"status": "certified", "reason": "", "sampling_purpose": "standard",
+            "shortlist_limit": int(limit), "shortlist_count": len(shortlisted),
+            "validated": validated, "failed": failed, "winner": winner,
+            "baseline": standard_base, "baseline_bump": base_b["res"],
+            "shortlist_only": True}
+
+
+def _publish_standard_final(result: Dict[str, Any], validation: Dict[str, Any],
+                            points: list[Dict[str, Any]]) -> bool:
+    """Publish a winner only after all standard-reference checks succeeded."""
+    with _descent_lock:
+        if _descent_state.get("cancel"):
+            validation = {"status": "failed", "reason": "run was cancelled"}
+    public = {k: validation.get(k) for k in (
+        "status", "reason", "sampling_purpose", "shortlist_limit",
+        "shortlist_count", "shortlist_only")}
+    public["validated_count"] = len(validation.get("validated") or [])
+    public["failed"] = validation.get("failed") or []
+    result["screening_best"] = result.get("best")
+    result["final_validation"] = public
+    certified = validation.get("status") == "certified"
+    if certified:
+        winner = validation["winner"]
+        best_state = {"x": dict(winner["x"]),
+                      "overrides": {k: round(float(v), 4)
+                                    for k, v in winner["x"].items()},
+                      "metrics": _msum(winner["res"]),
+                      "cost": round(winner["cost"], 6),
+                      "F": round(winner["F"], 6)}
+        result["best"] = best_state
+        result["baseline"] = _msum(validation["baseline"])
+        result["baseline_line"] = validation["baseline"].get("_bline")
+        for candidate in validation["validated"]:
+            _pub_pt(points, candidate["out"], "final_validation", F=candidate["F"])
+        with _descent_lock:
+            _descent_state.update(result=result, best=best_state,
+                                  baseline=result["baseline"],
+                                  baseline_line=result["baseline_line"],
+                                  points=list(points), final_validation=public,
+                                  final_validation_status="certified",
+                                  apply_eligible=True)
+    else:
+        result["best"] = None
+        with _descent_lock:
+            _descent_state.update(result=result, best=None,
+                                  final_validation=public,
+                                  final_validation_status="failed",
+                                  apply_eligible=False,
+                                  error="final 6x FEM validation failed: " +
+                                  str(validation.get("reason") or "unknown error"))
+    return certified
+
+
 def _boundary_flags(specs, best_x, margin=0.05):
     """Variables whose optimum landed within `margin` of a window edge → the true
     optimum is probably OUTSIDE the ±deviation window.  at_hard_limit = the window
@@ -3217,7 +3398,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         _torque_tol = 0.02       # probe within ±2 % of target → accept, no 2nd solve
         warm = [I]               # warm-start probe current (last geometry's rated current)
 
-        def _eval_at(d, cur):
+        def _eval_at(d, cur, purpose="optimization"):
             o = _subprocess_eval(d, cur, steps, coil_temp, n_periods=1.0,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
                                  min_size_mm=min_size, n_sectors=n_sectors,
@@ -3234,7 +3415,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  # whatever the Simulation tab said at eval time.
                                  rpm=(float(op.get("rpm")) if op.get("rpm") else None),
                                  owner="descent",
-                                 sampling_purpose="optimization")
+                                  sampling_purpose=purpose)
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
@@ -3525,21 +3706,31 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     break              # step too small, nothing pinned → converged
 
         with _descent_lock:
-            # Final boundary flags (the UI banner reads these for the gradient
-            # path too — previously only CMA-ES published them).
+            _descent_state["phase"] = "final_validation"
+        _save_descent_state()
+        validation = _finalize_standard_shortlist(
+            points=all_pts, best_x=best_seen["x"], best_metrics=best_seen["metrics"],
+            coarse_base=base, base_x=x,
+            base_current=float(base.get("current_a") or I),
+            bump_pct=current_bump_pct,
+            bump_current=I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0),
+            evaluate=lambda d, cur: _eval_at(d, cur, "standard"),
+            score=lambda m, b: _descent_cost(
+                m, b, ripple_max, w_eff, w_td, lam, v_peak_limit))
+        result = {"best": {"metrics": _msum(best_seen["metrics"]),
+                           "cost": round(best_seen["cost"], 5),
+                           "F": round(best_seen["F"], 5),
+                           "overrides": {k: round(float(val), 4)
+                                         for k, val in best_seen["x"].items()}},
+                  "baseline": _msum(base), "history": list(history),
+                  "n_evals": n_evals, "operating_point": op,
+                  "ripple_max_pct": ripple_max,
+                  "weights": {"w_eff": w_eff, "w_td": w_td, "lambda": lam},
+                  "baseline_line": base.get("_bline")}
+        with _descent_lock:
             _descent_state["boundary"] = _boundary_flags(var_specs, best_seen["x"],
                                                          boundary_margin)
-            _descent_state.update(
-                result={"best": {"metrics": _msum(best_seen["metrics"]),
-                                 "cost": round(best_seen["cost"], 5),
-                                 "F": round(best_seen["F"], 5),
-                                 "overrides": {k: round(float(val), 4) for k, val in best_seen["x"].items()}},
-                        "baseline": _msum(base), "history": list(history),
-                        "n_evals": n_evals,
-                        "operating_point": op, "ripple_max_pct": ripple_max,
-                        "weights": {"w_eff": w_eff, "w_td": w_td, "lambda": lam},
-                        "baseline_line": base.get("_bline")},
-                best=_best_state())
+        _publish_standard_final(result, validation, all_pts)
     except Exception as e:  # noqa: BLE001
         log.exception("descent failed")
         with _descent_lock:
@@ -3605,7 +3796,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
         _torque_tol = 0.02       # probe within ±2 % of target → accept, no 2nd solve
         warm = [I]               # warm-start probe current (shared starting guess)
 
-        def _eval_at(dd, cur):
+        def _eval_at(dd, cur, purpose="optimization"):
             o = _subprocess_eval(dd, cur, steps, coil_temp, n_periods=1.0,
                                  gamma_deg=g, mesh_size_mm=mesh_size,
                                  min_size_mm=min_size, n_sectors=n_sectors,
@@ -3619,7 +3810,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  # gradient worker above.
                                  rpm=(float(op.get("rpm")) if op.get("rpm") else None),
                                  owner="descent",
-                                 sampling_purpose="optimization")
+                                  sampling_purpose=purpose)
             # Stamp the SOLVED current onto the result so the best records the
             # operating point it was found at (target-torque solves for it) →
             # saving the design can persist current+γ for a reproducible sim.
@@ -3726,6 +3917,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                         _descent_state.update(error=f"baseline eval failed: {b.get('error')}", running=False)
                     return
                 base = b["res"]
+                baseline_x = dict(b.get("overrides") or to_geom(x0n))
                 _bb_pub: Optional[Dict[str, Any]] = None
                 # ── Baseline (current-only) line: 2nd FEM sim of the START geometry
                 #    at I·(1+bump) → point B; A–B fixes the perpendicular-distance
@@ -3913,7 +4105,18 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  o[0], o[1], float(v["lo"]), float(v["hi"]))
 
         with _descent_lock:
-            _descent_state["result"] = {
+            _descent_state["phase"] = "final_validation"
+        _save_descent_state()
+        validation = _finalize_standard_shortlist(
+            points=all_pts, best_x=best["x"], best_metrics=best["metrics"],
+            coarse_base=base, base_x=baseline_x,
+            base_current=float(base.get("current_a") or I),
+            bump_pct=current_bump_pct,
+            bump_current=I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0),
+            evaluate=lambda d, cur: _eval_at(d, cur, "standard"),
+            score=lambda m, b: _descent_cost(
+                m, b, ripple_max, w_eff, w_td, lam, v_peak_limit))
+        result = {
                 "best": {"x": best["x"],
                          "overrides": {k: round(float(v), 4) for k, v in best["x"].items()},
                          "metrics": _msum(best["metrics"]), "cost": round(best["cost"], 5),
@@ -3924,6 +4127,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                 "baseline_line": base.get("_bline"),
                 "boundary": boundary, "walk_rounds": rounds,
                 "algorithm": "cmaes"}
+        _publish_standard_final(result, validation, all_pts)
     except Exception as e:  # noqa: BLE001
         log.exception("CMA-ES failed")
         with _descent_lock:
@@ -4018,7 +4222,9 @@ def descent_start(req: DescentRequest):
         _descent_state.update({"running": True, "iter": 0, "max_iters": max_iters,
                                "n_evals": 0, "best": None, "current": None,
                                "history": [], "baseline": None, "baseline_line": None,
-                               "result": None, "phase": "starting",
+                                "result": None, "phase": "starting",
+                                "final_validation_status": "preliminary",
+                                "apply_eligible": False, "final_validation": None,
                                "points": [], "grad": {}, "mtpa_gamma_deg": None, "variables": [],
                                "boundary": [], "walk_round": 1, "converged": False,
                                "range_events": [],   # auto-expansions of pinned variables (info feed)
@@ -5179,7 +5385,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     def to_geom(xv):
         return {names[i]: _fit(i, float(xv[i])) for i in range(len(names))}
 
-    def _eval_at(d, cur):
+    def _eval_at(d, cur, purpose="optimization"):
         o = _subprocess_eval(
             d, cur, int(ev["steps_per_period"]), float(ev["coil_temp_c"]),
             n_periods=1.0, gamma_deg=g,
@@ -5195,15 +5401,16 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             # per candidate: a switch toggled mid-run must not change the physics
             # under a search that is already half-converged.
             demag=bool(ev.get("demag", False)),
-            sampling_purpose="optimization")
+            sampling_purpose=purpose)
         if o.get("ok") and isinstance(o.get("res"), dict):
             o["res"]["current_a"] = float(cur)
         if isinstance(o, dict):
             o["overrides"] = dict(d)
-        if o.get("ok"):
-            counts["ok"] += 1
-        else:
-            counts[_auto_classify_error(o.get("error"))] += 1
+        if purpose == "optimization":
+            if o.get("ok"):
+                counts["ok"] += 1
+            else:
+                counts[_auto_classify_error(o.get("error"))] += 1
         return o
 
     def _reject_block():
@@ -5507,6 +5714,14 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                     _descent_state.setdefault("range_events", []).append(dict(ramp))
                     _descent_state["best"] = _bstate()
 
+        with _descent_lock:
+            _descent_state["phase"] = "final_validation"
+        _save_descent_state()
+        validation = _finalize_standard_shortlist(
+            points=all_pts, best_x=best["x"], best_metrics=best["metrics"],
+            coarse_base=base, base_x=to_geom(x0), base_current=I,
+            bump_pct=bump, evaluate=lambda d, cur: _eval_at(d, cur, "standard"),
+            score=lambda m, b: _descent_cost(m, b, ripple_max, 1.0, 1.0, 1.0, 1e9))
         rj = _reject_block()
         result = {
             "best": {"x": best["x"],
@@ -5519,10 +5734,12 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             "algorithm": "cmaes_auto", "auto": True, "rejects": rj,
             "sigma": dict(zip(names, sigmas)),
         }
+        certified = _publish_standard_final(result, validation, all_pts)
         with _descent_lock:
-            _descent_state["result"] = result
             _descent_state["auto"] = dict(_descent_state.get("auto") or {},
                                           rejects=rj, n_evals=n_evals)
+        if not certified:
+            return
         log.info("AUTO done | %d evals, %d fenced (%.0f%%) | best ripple %s "
                  "(gate %.3g%%) T=%.4g Nm eff=%.4g",
                  n_evals, rj["rejected"], rj["reject_pct"],
@@ -5636,7 +5853,8 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     def _pkey(d: Dict[str, float]):
         return tuple(round(float(d[nm]), 6) for nm in names)
 
-    def _cache_key(d: Dict[str, float], cur: float) -> str:
+    def _cache_key(d: Dict[str, float], cur: float,
+                   purpose: str = "optimization") -> str:
         return _eval_cache_key(
             d, cur, int(ev["steps_per_period"]), float(ev["coil_temp_c"]), 1.0, g,
             float(ev["mesh_size_mm"]), float(ev["min_size_mm"]),
@@ -5654,14 +5872,15 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             demag=bool(ev.get("demag", False)),
             pins={"rpm": float(rpm) if rpm is not None else None,
                   "connection": str(conn) if conn else None},
-            sampling_purpose="optimization")
+            sampling_purpose=purpose)
 
-    def _eval_at(d: Dict[str, float], cur: float) -> Dict[str, Any]:
+    def _eval_at(d: Dict[str, float], cur: float,
+                 purpose: str = "optimization") -> Dict[str, Any]:
         """One FEM eval, through the persistent cache.  A cache HIT is not
         counted as an eval — it cost nothing, and folding it into the budget
         would make the run look like it spent money it did not."""
-        ck = _cache_key(d, cur)
-        hit = _EVAL_CACHE.get(ck)
+        ck = _cache_key(d, cur, purpose)
+        hit = _EVAL_CACHE.get(ck) if purpose == "optimization" else None
         if hit is not None and _eval_healthy(hit):
             out = dict(hit)
             out["overrides"] = dict(d)
@@ -5686,14 +5905,16 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             # per candidate: a switch toggled mid-run must not change the physics
             # under a search that is already half-converged.
             demag=bool(ev.get("demag", False)),
-            sampling_purpose="optimization")
-        state["n_evals"] += 1
+            sampling_purpose=purpose)
+        if purpose == "optimization":
+            state["n_evals"] += 1
         if o.get("ok") and isinstance(o.get("res"), dict):
             o["res"]["current_a"] = float(cur)
-            _store_eval(ck, {"ok": True, "res": o["res"]})
-            own_keys.add(ck)
-            counts["ok"] += 1
-        else:
+            if purpose == "optimization":
+                _store_eval(ck, {"ok": True, "res": o["res"]})
+                own_keys.add(ck)
+                counts["ok"] += 1
+        elif purpose == "optimization":
             counts[_auto_classify_error(o.get("error"))] += 1
         if isinstance(o, dict):
             o["overrides"] = dict(d)
@@ -5799,6 +6020,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             return
         base = b["res"]
         memo[_pkey(x_cur)] = base
+        baseline_x = dict(x_cur)
         _pub_pt(all_pts, b, "baseline")
         bump = float(plan["current_bump_pct"])
         bb = _eval_at(x_cur, I * (1.0 + bump / 100.0))
@@ -6091,6 +6313,18 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             stop_reason = "cancelled"
         log.info("SCREEN: stopping — %s", stop_reason)
 
+        with _descent_lock:
+            _descent_state["phase"] = "final_validation"
+        _save_descent_state()
+        validation = ({"status": "failed", "reason": "run was cancelled"}
+                      if stop_reason == "cancelled" else
+                      _finalize_standard_shortlist(
+                          points=all_pts, best_x=best["x"],
+                          best_metrics=best["metrics"], coarse_base=base,
+                          base_x=baseline_x, base_current=I, bump_pct=bump,
+                          evaluate=lambda d, cur: _eval_at(d, cur, "standard"),
+                          score=lambda m, b: _descent_cost(
+                              m, b, ripple_max, 1.0, 1.0, 1.0, 1e9)))
         rj = _reject_block()
         result = {
             "best": {"x": best["x"],
@@ -6109,11 +6343,13 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             "active_set": list(active),
             "delta": dict(base_delta),
         }
+        certified = _publish_standard_final(result, validation, all_pts)
         with _descent_lock:
-            _descent_state["result"] = result
             _descent_state["auto"] = dict(_descent_state.get("auto") or {},
                                           rejects=rj, n_evals=state["n_evals"],
                                           stop_reason=stop_reason)
+        if not certified:
+            return
         log.info("SCREEN done | %d FEM evals + %d cache hits | %d fenced | best "
                  "F=%+.6g ripple %s (gate %.3g%%) td=%.4g eff=%.5g",
                  state["n_evals"], rj["cache_hits"], rj["rejected"], best["F"],
@@ -6190,6 +6426,9 @@ def _auto_compare_point(bucket: str, name: str, plan: Dict[str, Any],
     Stamped with the geometry signature of the OPTIMIZED cross-section — both
     `geo_sig` and `geo_sig_solved`, because for this row they are by construction
     the same machine (the numbers came from evaluating exactly this geometry)."""
+    if (result.get("final_validation") or {}).get("status") != "certified" \
+            or not result.get("best"):
+        raise ValueError("standard 6x validation is required before saving a winner")
     from motor_ai_sim.routes.saved_sims import append_sim
 
     cfg = get_config()
@@ -6216,7 +6455,12 @@ def _auto_compare_point(bucket: str, name: str, plan: Dict[str, Any],
         # the time the result is written — a 12-hour run outlives the panel.
         "connection": (op.get("connection")
                        or (cfg.get("simulation") or {}).get("connection")),
-        "steps_per_period": ev["steps_per_period"],
+        "steps_per_period": int(round(float(m["cogging_cycles_per_electrical_period"])
+                                      * float(m["cogging_raw_samples_per_cycle"]))),
+        "steps_per_period_requested": ev["steps_per_period"],
+        "src_sampling_purpose": m["cogging_sampling_purpose"],
+        "src_final_quality_sufficient": m["cogging_sampling_final_quality_sufficient"],
+        "src_final_shortlist_only": bool((result.get("final_validation") or {}).get("shortlist_only")),
         "n_sectors": ev["n_sectors"], "mesh_size_mm": ev["mesh_size_mm"],
         "min_size_mm": ev["min_size_mm"],
         # ── provenance: what produced this row ──────────────────────────────
@@ -6312,6 +6556,8 @@ def auto_start(req: AutoOptRequest, request: Request):
             "running": True, "iter": 0, "max_iters": int(plan["generations"]),
             "n_evals": 0, "best": None, "current": None, "history": [],
             "baseline": None, "baseline_line": None, "result": None,
+            "final_validation_status": "preliminary",
+            "apply_eligible": False, "final_validation": None,
             "phase": "starting", "points": [], "grad": {}, "mtpa_gamma_deg": None,
             "variables": [], "boundary": [], "walk_round": 1, "walk_rounds": 1,
             "converged": False, "range_events": [], "seeded_from_surrogate": False,
@@ -6421,6 +6667,9 @@ def auto_status():
         "compare_point": auto.get("compare_point"),
         "baseline": st.get("baseline"),
         "best": st.get("best"), "F": F,
+        "final_validation_status": st.get("final_validation_status", "preliminary"),
+        "apply_eligible": bool(st.get("apply_eligible")),
+        "final_validation": st.get("final_validation"),
         "above_baseline_line": (None if F is None else bool(F > 0)),
         # Pareto-dominance over the run's own cloud, at the run's own operating
         # point (counts only — the flagged points themselves ride on
@@ -6453,6 +6702,9 @@ def auto_save_compare_point(req: AutoPointRequest, request: Request):
     if not result or not result.get("auto"):
         raise HTTPException(status_code=404,
                             detail="no finished auto-optimization to save")
+    if (result.get("final_validation") or {}).get("status") != "certified":
+        raise HTTPException(status_code=409,
+                            detail="final standard 6x validation did not pass")
     plan = _auto_assemble(float(auto.get("max_ripple_pct", 5.0)),
                           int(auto.get("budget_evals", 0) or 0),
                           str(auto.get("mode") or _AUTO_DEFAULT_MODE))

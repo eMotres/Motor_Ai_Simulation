@@ -123,9 +123,18 @@ def test_every_optimizer_eval_and_cache_call_explicitly_names_purpose():
              and isinstance(node.func, ast.Name)
              and node.func.id in ("_subprocess_eval", "_eval_cache_key")]
     assert len(calls) >= 10  # sweep, descent, current probes and auto search
+    dynamic = 0
     for call in calls:
         purpose = [kw.value for kw in call.keywords
                    if kw.arg == "sampling_purpose"]
         assert len(purpose) == 1, (call.func.id, call.lineno)
-        assert isinstance(purpose[0], ast.Constant), (call.func.id, call.lineno)
-        assert purpose[0].value == "optimization", (call.func.id, call.lineno)
+        if isinstance(purpose[0], ast.Constant):
+            assert purpose[0].value == "optimization", (call.func.id, call.lineno)
+        else:
+            # The four worker-local _eval_at closures and screen cache key
+            # explicitly forward the caller's validated purpose so final
+            # standard re-evals can reuse the exact pinned solve arguments.
+            assert isinstance(purpose[0], ast.Name)
+            assert purpose[0].id == "purpose"
+            dynamic += 1
+    assert dynamic == 5

@@ -118,6 +118,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       const { T, P, eff, Vpk, td, pd } = s3;
       return {
         ov: p.overrides || {}, overrides: p.overrides || {}, I, g, x: td, y: eff,
+        apply_eligible: p.apply_eligible === true,
         T, P, eff, Vpk,
         // Solved terminal numbers carried through UNDER THE BACKEND NAMES so
         // applyPoint can push them verbatim instead of re-synthesizing them from
@@ -657,7 +658,8 @@ const SweepStudyPanel: React.FC = () => {
                          Number(p.torque_per_mass_Nm_kg) || 0, pd2,
                          (p.efficiency ?? 0) * 100, Number(p.P_loss_total_W) || 0);
       const row = { x: s3.td, y: s3.eff,
-                    I: cur, g: gam, gi, ripple: p.T_ripple_pct, T: s3.T,
+                     I: cur, g: gam, gi, ripple: p.T_ripple_pct, T: s3.T,
+                     apply_eligible: p.apply_eligible === true,
                     overrides: p.overrides || {}, _c: byCurrent ? cur : gam,
                     // Full per-design metrics so applying this point shows the
                     // sweep's already-computed numbers in Simulation — no re-run.
@@ -847,6 +849,12 @@ const SweepStudyPanel: React.FC = () => {
   // operating point (current/γ) → config + Simulation (same as "apply best").
   const applyPoint = async (p: any) => {
     if (!p) return;
+    // Scan results use the 3× screening policy. A missing stamp (old saved
+    // result) also fails closed; never mutate live geometry or archive it.
+    if (p.apply_eligible !== true) {
+      setApplyMsg('This sweep point is preliminary (3× raw sampling). A standard 6× verification is required before Apply.');
+      return;
+    }
     setApplyMsg('applying…'); setSaveRes(null);
     try {
       // updateGeometryViaApi resolves normally even on a 422/423/500 refusal
@@ -1023,7 +1031,7 @@ const SweepStudyPanel: React.FC = () => {
           <label title="Also solve the current motor un-varied at operating point 0 as a reference point on the chart — one more full FEM eval, run last. Off: the sweep ends with its grid."
             style={{ cursor: 'pointer', color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={withBaseline} onChange={e => setWithBaseline(e.target.checked)}
-              style={{ verticalAlign: 'middle', marginLeft: 6 }} /> baseline point
+              style={{ verticalAlign: 'middle', marginLeft: 6 }} /> baseline point (preliminary 3×)
           </label>
         </Typography>
       </Box>
@@ -1281,12 +1289,18 @@ const SweepStudyPanel: React.FC = () => {
                   : '(base — no swept variables)'}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
-                <span title="WRITES this point's swept values into the live geometry (and archives an applied_sweep preset). It does not run anything. The sweep stays on screen: its own variables are not part of the machine fingerprint.">
+                <span title={selected.apply_eligible === true
+                  ? "Apply the standard-validated point and archive it as a new motor."
+                  : "Preliminary sweep: standard 6× verification is required before Apply or archive."}>
                   <Button size="small" variant="outlined" color="success"
+                    disabled={selected.apply_eligible !== true}
                     onClick={() => applyPoint(selected)}>
                     ⤵ Apply to geometry
                   </Button>
                 </span>
+                {selected.apply_eligible !== true && <Typography sx={{ fontSize: 11, color: '#fbbf24' }}>
+                  Preliminary 3× result; verify at standard 6× before applying.
+                </Typography>}
                 {applyMsg && <Typography sx={{ fontSize: 11,
                   color: applyMsg.startsWith('✓') ? '#4ade80' : applyMsg.startsWith('✗') ? '#fca5a5' : 'var(--text-3)' }}>
                   {applyMsg}</Typography>}

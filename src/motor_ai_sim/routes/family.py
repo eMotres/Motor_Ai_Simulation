@@ -432,6 +432,31 @@ def _require_writable_die(die: str) -> None:
         + ("author's" if lay == _WS.LAYER_PUBLISHED else "vendor's") + " call"))
 
 
+def _require_deletable_die(die: str, who: dict) -> str:
+    """May THIS caller structurally DELETE the named die — and which layer is
+    it in right now?
+
+    Unlike :func:`_require_writable_die` (rename, and the general "may I aim a
+    write at the curated layer" gate behind ``?layer=shared``), a DELETE by an
+    admin needs no query-string opt-in: the owner's own words were "я же
+    админ" — the confirmation dialog already asks twice for a die with
+    configurations, and ``who["is_admin"]`` is a stronger promise than a query
+    parameter a UI call forgot to add (that gap is exactly what left a 403 with
+    no way through it, 2026-09-24).  A non-admin gets the same refusal
+    :func:`_require_writable_die` always gave, reworded to say plainly why.
+    """
+    lay = _die_layer(die)
+    if lay == _WS.LAYER_WORKSPACE:
+        return lay
+    if who.get("is_admin"):
+        return lay
+    raise HTTPException(403, detail=(
+        f"'{die}' is a shared catalog die — only a catalog admin can delete it"
+        if lay == _WS.LAYER_SHARED else
+        f"'{die}' is a published catalog die — only a catalog admin can "
+        "delete it"))
+
+
 def _ensure_writable_die(die: str) -> Path:
     """The folder a STRUCTURAL edit of this die must happen in.
 
@@ -2009,29 +2034,78 @@ def rename_die(die: str, req: DieRename, _w: dict = Depends(require_catalog_writ
 
 @router.delete("/die/{die}")
 def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog_write)):
+    """Delete a die.  Three shapes, one route — the layer decides which:
+
+    * **workspace** — the ordinary case, unchanged: unlink the yaml, drop the
+      ``runs/`` sidecars, remove the folder.
+    * **shared** (admin only) — ``/srv/motres/shared`` is mounted READ-ONLY in
+      the API container (``deploy/docker-compose.yml``), so the files cannot
+      be unlinked at all; a TOMBSTONE hides the die for everyone instead
+      (:func:`motor_ai_sim.workspace.add_tombstone`), reversible with
+      ``remove_tombstone`` since nothing on disk is touched.
+    * **published** (admin only) — writable, but it is someone else's publish,
+      so it is moved to ``<published_root>/.trash/<owner>/<die>-<stamp>/``
+      rather than unlinked, for the same reversibility.
+
+    A non-admin reaching for a shared or published die gets 403 with a plain
+    reason (:func:`_require_deletable_die`); a workspace die is exactly as
+    permissive as before.
+    """
     die = _check_name(die, "die")
     _require_die_write(die, _w)
     dd = _die_dir(die)
     if not (dd / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
-    _require_writable_die(die)
+    lay = _require_deletable_die(die, _w)
     cfgs = [p.stem for p in dd.glob("*.yaml") if p.name != "die.yaml"]
     if cfgs and not force:
         raise HTTPException(409, detail=(
             f"die '{die}' still has {len(cfgs)} configuration(s): "
             f"{', '.join(cfgs)} — delete them first (or pass force=true)"))
-    for p in dd.glob("*.yaml"):
-        p.unlink()
-    # …and the stored-run sidecars of every duty that went with them.
-    import shutil as _sh
-    _sh.rmtree(dd / "runs", ignore_errors=True)
-    try:
-        dd.rmdir()
-    except OSError:
-        pass                             # non-yaml leftovers — keep the folder
-    log.warning("family: die '%s' deleted (%d configuration(s) with it)",
-                die, len(cfgs))
-    return {"ok": True, "deleted_configs": cfgs}
+
+    admin_email = str((_w.get("user") or {}).get("email") or "")
+    note = None
+    if lay == _WS.LAYER_WORKSPACE:
+        for p in dd.glob("*.yaml"):
+            p.unlink()
+        # …and the stored-run sidecars of every duty that went with them.
+        import shutil as _sh
+        _sh.rmtree(dd / "runs", ignore_errors=True)
+        try:
+            dd.rmdir()
+        except OSError:
+            pass                         # non-yaml leftovers — keep the folder
+        # A published/shared die of the SAME name may still sit right behind
+        # this one — resolution always prefers the workspace copy, so only
+        # THAT copy just went away and the admin must be told as much.
+        if _ws_layering():
+            behind = _WS.source_die_dir(die)
+            if behind is not None:
+                note = (f"only the workspace copy of '{die}' was deleted — a "
+                        f"{_classify_die_dir(behind)[0]} catalog die of the "
+                        "same name still exists")
+        log.warning("family: die '%s' deleted (%d configuration(s) with it)",
+                    die, len(cfgs))
+    elif lay == _WS.LAYER_SHARED:
+        _WS.add_tombstone(die, admin_email)
+        log.warning("family: shared die '%s' tombstoned by admin %s "
+                    "(%d configuration(s) hidden with it)",
+                    die, admin_email or "?", len(cfgs))
+    else:  # LAYER_PUBLISHED
+        import shutil as _sh
+        import time as _time
+        stamp = _time.strftime("%Y%m%dT%H%M%SZ", _time.gmtime())
+        trash = _WS.published_root() / ".trash" / dd.parent.name / f"{dd.name}-{stamp}"
+        trash.parent.mkdir(parents=True, exist_ok=True)
+        _sh.move(str(dd), str(trash))
+        log.warning("family: published die '%s' moved to trash by admin %s "
+                    "(%d configuration(s) with it) -> %s",
+                    die, admin_email or "?", len(cfgs), trash)
+
+    out = {"ok": True, "deleted_configs": cfgs, "layer": lay}
+    if note:
+        out["note"] = note
+    return out
 
 
 # ── configuration ────────────────────────────────────────────────────────────

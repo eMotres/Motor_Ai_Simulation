@@ -82,6 +82,8 @@ __all__ = [
     "source_die_dir", "caller", "use_caller",
     "split_published_label", "write_layer", "use_write_layer",
     "LAYER_WORKSPACE", "LAYER_PUBLISHED", "LAYER_SHARED",
+    # Stage 5 — admin deletion of a read-only SHARED die
+    "is_tombstoned", "add_tombstone", "remove_tombstone",
     # Stage 3 — the in-memory stores
     "BoundedStore", "StateMapping", "StateList", "StateLock",
     "state", "ws_map", "ws_list", "ws_lock", "bind", "bind_thread",
@@ -475,6 +477,79 @@ def published_root() -> Path:
     if base is not None:
         return base.parent / "published"
     return workspace().root
+
+
+# ── admin tombstones for the read-only SHARED layer ──────────────────────────
+# ``deploy/docker-compose.yml`` mounts ``/srv/motres/shared`` ``:ro`` in the API
+# container on purpose (its own comment: "if the overlay direction is ever
+# wrong, the failure must be a visible EROFS and not a customer's solve quietly
+# rewriting the vendor catalog") — so an admin can never unlink a shared die's
+# files.  Deleting one is therefore a TOMBSTONE: its name recorded in a small
+# JSON file beside ``users.json`` in the process config directory (identity/ on
+# the server) — the one writable, catalog-level admin file this module already
+# keeps outside every per-user workspace — and every read-through below hides a
+# tombstoned name.  Nothing under ``shared/`` is ever touched, so it is
+# reversible: :func:`remove_tombstone` and the die reappears exactly as it was.
+
+_TOMBSTONES_FILENAME = "shared_die_tombstones.json"
+
+
+def _tombstones_file() -> Path:
+    from motor_ai_sim import config as _config       # late: config imports us back
+    return Path(str(_config.DEFAULT_CONFIG_PATH)).parent / _TOMBSTONES_FILENAME
+
+
+def _load_tombstones() -> Dict[str, Any]:
+    p = _tombstones_file()
+    try:
+        import json
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        return raw if isinstance(raw, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except Exception:                                       # noqa: BLE001
+        log.warning("workspace: could not read %s", p, exc_info=True)
+        return {}
+
+
+def _write_tombstones(data: Dict[str, Any]) -> None:
+    import json
+    p = _tombstones_file()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False),
+                    encoding="utf-8")
+    tmp.replace(p)
+
+
+def is_tombstoned(die: str) -> bool:
+    """Has an admin removed this SHARED die without touching its read-only
+    files?  Only the shared layer is ever tombstoned — a workspace or
+    published die is writable, so deleting one really removes it."""
+    return str(die) in _load_tombstones()
+
+
+def add_tombstone(die: str, by: str = "") -> None:
+    """Hide a shared die for every caller — the admin's DELETE, recorded."""
+    import datetime
+    data = _load_tombstones()
+    data[str(die)] = {"by": str(by or ""),
+                       "at": datetime.datetime.now(datetime.timezone.utc)
+                       .strftime("%Y-%m-%dT%H:%M:%SZ")}
+    _write_tombstones(data)
+    log.warning("workspace: shared die '%s' tombstoned by %s", die, by or "?")
+
+
+def remove_tombstone(die: str) -> bool:
+    """Undo :func:`add_tombstone` — the die reappears for everyone.  ``True``
+    iff it had been tombstoned."""
+    data = _load_tombstones()
+    if str(die) not in data:
+        return False
+    del data[str(die)]
+    _write_tombstones(data)
+    log.warning("workspace: shared die '%s' tombstone removed — restored", die)
+    return True
 
 
 def layering() -> bool:
@@ -906,6 +981,7 @@ def iter_dies() -> list:
     """
     seen = {}
     ws = workspace()
+    tomb = _load_tombstones()          # one read, not one per shared die
     for lay in layers():
         try:
             entries = sorted(lay.dies_dir.iterdir())
@@ -913,6 +989,8 @@ def iter_dies() -> list:
             continue
         for dd in entries:
             if not dd.is_dir() or not (dd / "die.yaml").is_file():
+                continue
+            if lay.name == LAYER_SHARED and dd.name in tomb:
                 continue
             name = dd.name
             if lay.name == LAYER_PUBLISHED and lay.owner_id != ws.id:
@@ -944,6 +1022,8 @@ def resolve_die_dir(die: str):
             cand = lay.dies_dir / base
         else:
             cand = lay.dies_dir / want
+        if lay.name == LAYER_SHARED and is_tombstoned(cand.name):
+            continue
         if (cand / "die.yaml").is_file():
             return cand
     return None
@@ -970,6 +1050,8 @@ def source_die_dir(die: str):
             cand = lay.dies_dir / base
         else:
             cand = lay.dies_dir / str(die)
+        if lay.name == LAYER_SHARED and is_tombstoned(cand.name):
+            continue
         if (cand / "die.yaml").is_file():
             return cand
     return None

@@ -172,6 +172,11 @@ def test_warm_start_across_steps_env_only_for_standard_evals(
 def test_warm_start_default_is_the_documented_constant(monkeypatch):
     monkeypatch.delenv("OPT_FINAL_WARM_START", raising=False)
     assert O._final_warm_start_enabled() is bool(O._FINAL_WARM_START_DEFAULT)
+    # E is ON by default (owner decision 2026-09-24); the env still turns it off
+    assert O._FINAL_WARM_START_DEFAULT is True
+    assert O._final_warm_start_enabled() is True
+    monkeypatch.setenv("OPT_FINAL_WARM_START", "0")
+    assert O._final_warm_start_enabled() is False
 
 
 def test_solver_hook_relaxes_only_the_steps_term(monkeypatch):
@@ -195,10 +200,11 @@ def test_solver_hook_relaxes_only_the_steps_term(monkeypatch):
 
 # ── final purpose after 1883ba7: "cogging_quality" carries the 6-sample flag ──
 
-def _final(purpose, flag):
+def _final(purpose, flag, settled=True):
     return {"ok": True, "res": {"T_em_Nm": 1.0, "nonlinear_converged": True,
                                 "cogging_sampling_purpose": purpose,
-                                "cogging_sampling_final_quality_sufficient": flag}}
+                                "cogging_sampling_final_quality_sufficient": flag,
+                                "eddy_settled": settled}}
 
 
 def test_final_quality_is_the_six_sample_flag_on_a_final_purpose_solve():
@@ -210,6 +216,10 @@ def test_final_quality_is_the_six_sample_flag_on_a_final_purpose_solve():
     assert O._standard_quality(_final("standard", True))[0]
     assert not O._standard_quality(_final("optimization", True))[0]
     assert not O._standard_quality(_final("cogging_quality", False))[0]
+    # owner 2026-09-24: the winner validation also requires a settled eddy
+    # result, like Apply and the re-check
+    assert not O._standard_quality(_final("cogging_quality", True,
+                                          settled=False))[0]
     assert O._pt(dict(_final("cogging_quality", True), overrides={}),
                  "x")["sampling_quality"] == "standard"
     assert O._pt(dict(_final("standard", False), overrides={}),
@@ -234,7 +244,8 @@ def _std(x, current):
         "T_em_Nm": 1.0, "efficiency": eff, "torque_per_mass_Nm_kg": 2.0 + x["g"],
         "T_ripple_pct": 4.0, "current_a": current, "nonlinear_converged": True,
         "cogging_sampling_purpose": "standard",
-        "cogging_sampling_final_quality_sufficient": True}}
+        "cogging_sampling_final_quality_sufficient": True,
+        "eddy_settled": True}}
 
 
 def test_b_and_finalists_run_concurrently_after_a(monkeypatch):

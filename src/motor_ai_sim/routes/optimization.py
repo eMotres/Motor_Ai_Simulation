@@ -1002,8 +1002,12 @@ _FINAL_OK_PURPOSES = ("cogging_quality", "standard")
 # per-frame samples are at the other resolution), and the settle test at the
 # handoff decides as for any seed — a state it does not accept costs the
 # extension period, never an answer.  OPT_FINAL_WARM_START=1/0 overrides the
-# default; the default is set by the A/B in docs/OPTIMIZER_ITEMS_DE_2026-09-24.md.
-_FINAL_WARM_START_DEFAULT = False
+# default.  ON by owner decision (2026-09-24, docs/NO_FILTERS_2026-09-24.md):
+# the A/B in docs/OPTIMIZER_ITEMS_DE_2026-09-24.md measured 41 of 42 values
+# identical and the one last-digit difference on the COLD side's unsettled
+# transient; cold final solves on the Ø30 12s/14p and the 24s/28p did not
+# settle (2.5-3.1 % / 20-31 % against the 2 % tolerance), warm ones did.
+_FINAL_WARM_START_DEFAULT = True
 
 
 def _final_warm_start_enabled() -> bool:
@@ -3571,6 +3575,15 @@ def _standard_quality(out: Dict[str, Any]) -> tuple[bool, str]:
         return False, "FEM result did not use final-quality (cogging) sampling"
     if r.get("cogging_sampling_final_quality_sufficient") is not True:
         return False, "raw angular sampling is below final-quality resolution"
+    # A coupled-eddy result must be SETTLED to certify — the same rule the
+    # Sweep Apply check and the on-demand re-check apply (owner 2026-09-24:
+    # the winner validation used to certify a capped cold baseline A).
+    # refine_proc reports True for a run with no coupled-eddy march.
+    if r.get("eddy_settled") is not True:
+        return False, ("coupled-eddy result is not settled (residual %s of "
+                       "the settled solid loss, tol %s)"
+                       % (r.get("eddy_settle_residual"),
+                          r.get("eddy_settle_tol")))
     return True, ""
 
 

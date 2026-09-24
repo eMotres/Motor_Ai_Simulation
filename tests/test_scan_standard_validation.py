@@ -47,7 +47,9 @@ def _standard_result(*, converged=True, sufficient=True):
         "power_per_mass_W_kg": 1000.0,
         "nonlinear_converged": converged,
         "cogging_sampling_purpose": "standard",
-        "cogging_sampling_final_quality_sufficient": sufficient}}
+        "cogging_sampling_final_quality_sufficient": sufficient,
+        # refine_proc stamps it on every payload (True with no eddy march)
+        "eddy_settled": True}}
 
 
 @pytest.fixture

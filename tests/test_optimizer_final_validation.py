@@ -15,6 +15,7 @@ def _out(x, current, *, quality=True):
         "T_ripple_pct": 4.0, "current_a": current,
         "nonlinear_converged": True, "cogging_sampling_purpose": "standard",
         "cogging_sampling_final_quality_sufficient": quality,
+        "eddy_settled": True,
     }}
 
 
@@ -115,9 +116,27 @@ def test_standard_quality_requires_explicit_purpose_convergence_and_resolution()
         ("cogging_sampling_purpose", "optimization"),
         ("nonlinear_converged", False),
         ("cogging_sampling_final_quality_sufficient", False),
+        # owner 2026-09-24: an unsettled coupled-eddy result never certifies —
+        # the same rule the Sweep Apply check and the re-check apply.
+        ("eddy_settled", False),
+        ("eddy_settled", None),
     ):
         bad = {"ok": True, "res": dict(good["res"], **{field: value})}
         assert not O._standard_quality(bad)[0]
+
+
+def test_unsettled_baseline_a_fails_closed():
+    """A capped (unsettled) cold baseline A must not be certified."""
+    def unsettled_a(x, current):
+        out = _out(x, current)
+        if x["g"] == 0 and current <= 10:
+            out["res"]["eddy_settled"] = False
+        return out
+
+    final = _finalize(unsettled_a)
+    assert final["status"] == "failed"
+    assert final["reason"].startswith("standard baseline A")
+    assert "not settled" in final["reason"]
 
 
 def test_scan_points_are_preliminary_and_old_saved_points_cannot_apply():

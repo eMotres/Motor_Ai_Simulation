@@ -343,6 +343,9 @@ const VisitorRequests: React.FC<{ onInvite: (email: string) => void; onCount?: (
         {/* ── daily log ── */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mt: 3, mb: 1 }}>
           <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)' }}>Visitor chats</Typography>
+          <Tooltip arrow title="Every conversation a signed-out visitor has with the assistant. Signed-in users' chats are not logged.">
+            <HelpOutlineIcon sx={{ fontSize: 13, color: 'var(--text-4)', cursor: 'help' }} />
+          </Tooltip>
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
             {convs.length} {convs.length === 1 ? 'conversation' : 'conversations'}
           </Typography>
@@ -360,9 +363,6 @@ const VisitorRequests: React.FC<{ onInvite: (email: string) => void; onCount?: (
             {days.map((d) => <MenuItem key={d} value={d} sx={{ fontSize: 12 }}>{d}</MenuItem>)}
           </Select>
         </Box>
-        <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mb: 0.75 }}>
-          Every conversation a signed-out visitor has with the assistant. Signed-in users' chats are not logged.
-        </Typography>
 
         <Paper sx={{ ...PANEL, p: 0, overflow: 'hidden' }}>
           {convs.map((c) => <ConversationBlock key={c.conv} c={c} />)}

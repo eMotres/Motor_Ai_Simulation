@@ -30,6 +30,7 @@ import VisitorRequests from './VisitorRequests';
 import ModulesPanel from './ModulesPanel';
 import PassportManager from './PassportManager';
 import { ConfirmDialog, type ConfirmState } from '../common/PromptDialogs';
+import HelpTip from '../common/HelpTip';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -275,10 +276,11 @@ const MotorsDialog: React.FC<{
 
   return (
     <Dialog open={!!user} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ fontSize: '1rem' }}>
+      <DialogTitle sx={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 0.75 }}>
         Motors — {user?.email}
-        <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
-          The catalog this account sees. Nothing granted = empty catalog.
+        <HelpTip title="The catalog this account sees." />
+        <Typography component="span" sx={{ fontSize: 11, color: 'var(--text-4)', ml: 'auto' }}>
+          Nothing granted = empty catalog.
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ pt: '8px !important' }}>
@@ -345,10 +347,11 @@ const InviteDialog: React.FC<{
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ fontSize: '1rem' }}>
+      <DialogTitle sx={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 0.75 }}>
         Invite
-        <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
-          Creates the account, its plan and its motors. No e-mail is sent — they sign in with Google.
+        <HelpTip title="Creates the account, its plan and its motors." />
+        <Typography component="span" sx={{ fontSize: 11, color: 'var(--text-4)', ml: 'auto' }}>
+          No e-mail is sent — they sign in with Google.
         </Typography>
       </DialogTitle>
       <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: '8px !important' }}>

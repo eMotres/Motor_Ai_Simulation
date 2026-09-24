@@ -33,7 +33,7 @@ import { listDevices, getTopologies, solveController, getLast, postSchematic,
          polyline, fmt, pct, statusLine, getControllerSettings,
          saveControllerSettings, formStateFromSettings, settingsForSave,
          controllerSolveBody, getResolvedPoint, DEFAULT_CONTROLLER_FORM,
-         getCoolingFromThermal,
+         getCoolingFromThermal, carrierPrefill, carrierOriginLine,
          type DeviceRow, type CoilRow, type ControllerResult,
          type ControllerFormState, type ResolvedPoint,
          type CoolingFromThermal } from './controllerApi';
@@ -64,6 +64,12 @@ const ControllerPanel: React.FC = () => {
   const [vgsOff, setVgsOff] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.vgsOff);
   const [dead, setDead] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.dead);
   const [fsw, setFsw] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.fsw);
+  // Where the Carrier box's value came from while it is NOT yet this
+  // Controller's own (2026-09-24): 'legacy' = migrated from the retired
+  // Simulation-tab PWM carrier, 'default' = the stated default.  Cleared by a
+  // hand edit and by Save — then the value IS the Controller's.
+  const [fswOrigin, setFswOrigin] = useState<string | null>(null);
+  const onFswChange = (v: Nullable) => { setFswOrigin(null); setFsw(v); };
   const [vdc, setVdc] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.vdc);
   const [coolant, setCoolant] = useState(DEFAULT_CONTROLLER_FORM.coolant);
   const [flow, setFlow] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.flow);
@@ -193,7 +199,8 @@ const ControllerPanel: React.FC = () => {
       const next = formStateFromSettings(block, DEFAULT_CONTROLLER_FORM);
       setDevice(next.device); setTopology(next.topology); setSetSplit(next.setSplit);
       setHbMod(next.hbMod); setNPar(next.nPar); setRg(next.rg); setVgsOff(next.vgsOff);
-      setDead(next.dead); setFsw(next.fsw); setVdc(next.vdc); setCoolant(next.coolant);
+      setDead(next.dead); setFsw(next.fsw); setFswOrigin(null);
+      setVdc(next.vdc); setCoolant(next.coolant);
       setFlow(next.flow); setTin(next.tin); setRtim(next.rtim);
       setCoolingMode(next.coolingMode); setAirSpeed(next.airSpeed);
       setTAmbient(next.tAmbient); setAreaBasis(next.areaBasis);
@@ -244,6 +251,11 @@ const ControllerPanel: React.FC = () => {
         mapping, coupleWithEm };
       const r = await saveControllerSettings(dieCtx.die, dieCtx.config, settingsForSave(state));
       setSettingsSavedAt(r.controller?.saved_at || null);
+      // The carrier on screen is now the Controller's own — no origin line.
+      if (r.controller?.f_carrier_hz != null) setFswOrigin(null);
+      // Every other tab that shows the Controller's drive re-reads it.
+      try { window.dispatchEvent(new CustomEvent('controller-settings-saved')); }
+      catch { /* SSR/no-window */ }
     } catch (e) { setSettingsErr(String(e)); }
   };
 
@@ -312,6 +324,15 @@ const ControllerPanel: React.FC = () => {
     };
   }, [dieCtx.die, dieCtx.config, dieCtx.active]);
 
+  // THE CARRIER BOX HOLDS A REAL VALUE (owner 2026-09-24).  Nothing saved in
+  // it yet → the value the backend resolved (the retired Simulation-tab
+  // carrier, migrated, or the stated default) is written in, with its origin
+  // shown on one line until a Save makes it this Controller's own.
+  useEffect(() => {
+    const next = carrierPrefill(fsw, point);
+    if (next.fsw !== fsw) { setFsw(next.fsw); setFswOrigin(next.origin); }
+  }, [point, fsw]);
+
   const solve = async (fresh = false) => {
     setBusy(true); setErr(null);
     try {
@@ -331,7 +352,7 @@ const ControllerPanel: React.FC = () => {
     <Box sx={{ height: '100%', overflowY: 'auto', p: 2.5, bgcolor: 'var(--panel-2)' }}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, mb: 1, flexWrap: 'wrap' }}>
         <Typography sx={{ fontSize: 20, fontWeight: 800, color: 'var(--text-0)' }}>Controller</Typography>
-        <HelpTip title="The inverter that drives this motor: which device, how many in parallel per switch, how the bridges map onto the winding's coils, and what that costs in watts and junction temperature. The operating point comes from the loaded duty's own coupled record — current, DC link, carrier and the one shaft efficiency." />
+        <HelpTip title="The inverter that drives this motor: which device, how many in parallel per switch, how the bridges map onto the winding's coils, and what that costs in watts and junction temperature. The PWM drive is defined HERE — carrier, DC link, dead time — and every coupled run, loss map and report reads it from here. The operating point (current, power, shaft efficiency) comes from the loaded duty's own record." />
         {res?.context && (
           <Typography sx={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'monospace' }}>
             {res.context.die} · {res.context.config} · {res.context.duty}
@@ -423,19 +444,23 @@ const ControllerPanel: React.FC = () => {
             <Row label="V_GS off" tip="Gate-off voltage: 0 V or −5 V. It changes both the turn-off energy and the body-diode drop during dead time." unit="V"><Num v={vgsOff} set={setVgsOff} /></Row>
             <Row label="Dead time" tip="Both switches of a leg off. The current then runs through a SiC body diode at ~4 V, so this is expensive — and it is what distorts the output voltage at every current zero crossing." unit="µs"><Num v={dead} set={setDead} /></Row>
             <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
-            <Row label="Carrier" tip={'PWM carrier frequency. Blank = the duty\'s own'
-                + (point?.f_carrier_hz != null
-                  ? ` — ${fmt(point.f_carrier_hz, 0)} Hz (${point.sources?.f_carrier_hz || 'resolved'}), shown below as a placeholder.`
-                  : ' (its stored inverter block).')} unit="Hz">
-              <Num v={fsw} set={setFsw}
-                placeholder={point?.f_carrier_hz != null ? fmt(point.f_carrier_hz, 0) : undefined} />
+            <Row label="Carrier" tip={'PWM carrier frequency — THE machine\'s carrier: the coupled '
+                + 'run (drive inverter/PWM), the thermal loss map and the report\'s resonance '
+                + 'checks all read it from here. Saved with the configuration. '
+                + 'A configuration with none saved starts from the old Simulation-tab carrier, else 20 kHz.'}
+                unit="Hz">
+              <Num v={fsw} set={onFswChange} />
             </Row>
-            <Row label="DC link" tip={'Bus voltage. Blank = the duty\'s own'
+            {carrierOriginLine(fswOrigin) && (
+              <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mt: -0.6, ml: 0.5 }}>
+                {carrierOriginLine(fswOrigin)}</Typography>)}
+            <Row label="DC link" tip={'Bus voltage. Blank = the configuration\'s battery, nominal'
                 + (point?.v_dc_V != null
-                  ? ` — ${fmt(point.v_dc_V, 0)} V (${point.sources?.v_dc_V || 'resolved'}), shown below as a placeholder.`
-                  : ' — for this machine the battery pack the configuration carries.')} unit="V">
+                  ? ` — ${fmt(point.v_dc_V, 0)} V now (${point.sources?.v_dc_V || 'resolved'}).`
+                  : ' — this configuration has none yet.')
+                + ' Type a value to override it.'} unit="V">
               <Num v={vdc} set={setVdc}
-                placeholder={point?.v_dc_V != null ? fmt(point.v_dc_V, 0) : undefined} />
+                placeholder={point?.v_dc_V != null ? `battery ${fmt(point.v_dc_V, 0)}` : undefined} />
             </Row>
             {point && (point.i_phase_rms_A != null || point.rpm != null) && (
               <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 0.5 }}>

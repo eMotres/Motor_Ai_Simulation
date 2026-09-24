@@ -247,7 +247,9 @@ export const saveControllerSettings = (die: string, config: string,
     body: JSON.stringify(settings),
   }).then(j<{ ok: boolean; controller: ControllerSettings }>);
 
-/** The panel's own blank-field sentinel: ``''`` means "the duty's own". */
+/** The panel's own blank-field sentinel: ``''`` means "not set here" — the
+ *  route resolves it (for the carrier the panel fills the resolved value in,
+ *  see ``carrierPrefill``; for the DC link, blank = the battery). */
 type NumOrBlank = number | '';
 
 /** The panel's full editable state — every ``useState`` the settings column
@@ -573,7 +575,46 @@ export interface ResolvedPoint {
   modulation_index: number | null;
   power_factor: number | null;
   sources: Record<string, string>;
+  /** Which tier named the carrier / the bus (2026-09-24): ``controller``
+   *  (saved here, or the battery), ``legacy`` (migrated from the retired
+   *  Simulation-tab PWM carrier), ``default`` (nothing named one),
+   *  ``request``.  Absent on an older backend. */
+  carrier_origin?: string | null;
+  v_dc_origin?: string | null;
   line: string | null;
+}
+
+/**
+ * THE CARRIER IS THE CONTROLLER'S (owner 2026-09-24, on a screenshot of the
+ * greyed "Carrier 20,000 Hz" placeholder: «Это значение нужно задавать в
+ * контроллере; PWM нужно выкинуть из Electromagnetic»).
+ *
+ * The Carrier box is a NORMAL value, never a greyed placeholder borrowed from
+ * another tab.  A configuration whose saved block has no carrier yet gets the
+ * one the backend resolved — the retired Simulation-tab carrier (migration) or
+ * the Controller's stated default — written INTO the field, with its origin,
+ * so the next Save makes it the Controller's own.  A value already in the box
+ * (saved, or typed) is never replaced.
+ *
+ * Copied verbatim into `__tests__/carrierField.test.mjs`.
+ */
+export function carrierPrefill(
+  fsw: number | '',
+  point: { f_carrier_hz: number | null; carrier_origin?: string | null } | null,
+): { fsw: number | ''; origin: string | null } {
+  if (fsw !== '' || !point || point.f_carrier_hz == null) {
+    return { fsw, origin: null };
+  }
+  return { fsw: point.f_carrier_hz, origin: point.carrier_origin ?? null };
+}
+
+/** The ONE short line under the Carrier box while its value is not yet the
+ *  Controller's own — ``null`` once it is (saved or typed).  Copied verbatim
+ *  into `__tests__/carrierField.test.mjs`. */
+export function carrierOriginLine(origin: string | null): string | null {
+  if (origin === 'legacy') return 'from the old Simulation-tab PWM — Save to keep';
+  if (origin === 'default') return 'default — Save to keep';
+  return null;
 }
 
 export const getResolvedPoint = (die?: string, config?: string, duty?: string) => {

@@ -65,8 +65,8 @@ interface Props {
                   | 'bldc_current';
   vPeak?:         number;
   vDelta?:        number;
-  vBus?:          number;   // pwm_voltage: DC link [V]
-  fSwitch?:       number;   // pwm_voltage: carrier [Hz]
+  // (no vBus / fSwitch: the PWM carrier and DC link are the Controller's,
+  //  resolved by the backend — 2026-09-24)
   iBlock?:        number;   // bldc_current: flat-top block amplitude [A]
   waveform?:      string;   // custom_current: JSON [[θe_deg, i_A], …]
   // ── GENERATOR → BATTERY ─────────────────────────────────────────────
@@ -84,7 +84,7 @@ interface Props {
 
 
 // ── main component ────────────────────────────────────────────────────────────
-const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection = '', runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = false, eddyCoupled = true, drive = 'current', vPeak = 0, vDelta = 0, vBus = 0, fSwitch = 0, iBlock = 0, waveform = '', battery = null, busCouple = false, chargeMax = false, rpm }) => {
+const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection = '', runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = false, eddyCoupled = true, drive = 'current', vPeak = 0, vDelta = 0, iBlock = 0, waveform = '', battery = null, busCouple = false, chargeMax = false, rpm }) => {
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
@@ -258,7 +258,7 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms} fieldLosses={fieldLosses}
         demag={demag} torqueFilter={torqueFilter} eddyCoupled={eddyCoupled}
         drive={drive} vPeak={vPeak} vDelta={vDelta}
-        vBus={vBus} fSwitch={fSwitch} iBlock={iBlock} waveform={waveform}
+        iBlock={iBlock} waveform={waveform}
         battery={battery as never} busCouple={busCouple} chargeMax={chargeMax}
         steps={steps} runNonce={runNonce} fresh={fresh} onBusyChange={onBusyChange}
         appliedFromSweep={!!appliedSummary}

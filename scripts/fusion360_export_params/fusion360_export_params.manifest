@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion",
+    "type": "script",
+    "author": "MOTRES",
+    "description": {
+        "": "Export this design's 33 canonical geometry-input user parameters to a Parameter I/O CSV file -- the format motor_ai_sim's Geometry tab 'Fusion CSV' upload button already accepts (POST /api/fusion/import). Legacy-name designs are read via the same fallback conversions as fusion360_rename_params."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

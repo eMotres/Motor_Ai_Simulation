@@ -1,40 +1,43 @@
-# Fusion 360 SCRIPT (runs INSIDE Fusion: Utilities → Scripts and Add-Ins →
-# "+" → this file).  One click: pull the live geometry of motor_ai_sim from the
-# local API and write it into this design's User Parameters — existing ones
-# updated, missing ones created — then let the model rebuild.
+# Fusion 360 SCRIPT (runs INSIDE Fusion: Utilities -> Scripts and Add-Ins ->
+# "+" -> this file).  Pulls the LIVE geometry of motor_ai_sim from the local
+# API and writes it into this design's User Parameters, by canonical name --
+# existing ones updated, missing ones created -- then lets the model rebuild.
 #
-# 2026-09-25: renamed/refactored (logic unchanged) into
-# scripts/fusion360_import_params/ as part of a three-script Fusion package
-# (fusion360_rename_params, fusion360_export_params, fusion360_import_params)
-# — see docs/FUSION_SCRIPTS_HOWTO.md.  This copy is left in place, working
-# exactly as before, for any existing Fusion add-in registration that already
-# points at it; use fusion360_import_params/ going forward.
+# THIS IS THE RENAMED/REFACTORED scripts/fusion360_sync_params.py (2026-09-25
+# packaging: three scripts under the fusion360_*_params/ naming --
+# fusion360_rename_params (legacy -> canonical, once per legacy design),
+# fusion360_export_params (design -> CSV, the reverse direction),
+# fusion360_import_params (this file, our app -> design)).  The logic is
+# UNCHANGED from fusion360_sync_params.py -- /api/fusion/params.json already
+# emits canonical names (config/fusion_param_map.yaml's `map:` section is
+# identity for all 33 approved geometry inputs), so nothing about how this
+# script writes parameters needed to change, only where it lives.
+# scripts/fusion360_sync_params/ is left in place, unchanged, for any
+# existing Fusion add-in registration that already points at it -- both
+# work identically; this is the one to use going forward.
 #
 # The same values are available as a Parameter I/O CSV from
 # http://localhost:8001/api/fusion/params.csv when the script route is not
-# wanted.  Nothing is sent back to motor_ai_sim from here; the reverse
-# direction is Parameter I/O → Export → "Import Fusion CSV" in the app, which
-# reports every change before it lands.
+# wanted.  Nothing is sent back to motor_ai_sim from here; for that see
+# fusion360_export_params.py (write a CSV from this design) or, in the app,
+# the Geometry tab's "Fusion CSV" upload button / `POST /api/fusion/import`.
 #
 # UNITS (2026-09-14).  A Fusion user parameter is either a LENGTH parameter
 # (unit "mm") or a UNITLESS one (unit "", the counts and the ratios).  The two
 # are not interchangeable and the API is blunt about it:
-#   * UnitsManager.convert(v, "", "") raises "3 : Bad units parameter" — a
+#   * UnitsManager.convert(v, "", "") raises "3 : Bad units parameter" -- a
 #     unitless quantity has no unit to convert between, so the comparison has
 #     to read Parameter.value directly (it IS the number);
-#   * a unitless parameter's expression must be a BARE number — assigning
+#   * a unitless parameter's expression must be a BARE number -- assigning
 #     "0.13 mm" raises "3 : Expression is invalid";
 #   * .unit is only assigned when the model's unit DIFFERS from ours, and a
 #     refusal there is reported as a unit mismatch the user has to resolve in
 #     Fusion, not as a raw API error.
-# That is the whole of the 2026-09-14 run's 8 failures: the 7 unitless rows
-# died in the convert(), slot_hs died on "0.13 mm" written into a parameter the
-# model keeps unitless.
 #
 # COMMENTS (2026-09-14).  The model's user parameters mostly have an empty
 # Comment, so every parameter also gets OUR schema description: written on
 # creation as before, and written onto an existing parameter whenever the
-# model's comment is empty or says something else — including a parameter whose
+# model's comment is empty or says something else -- including a parameter whose
 # VALUE is unchanged.  A comment-only change is counted on its own line
 # ("comment set") and is never reported as a value update.
 #
@@ -71,7 +74,7 @@ def _expr(value, unit):
 def _current(um, existing, unit):
     """`existing` read back in OUR unit, or None when it cannot be read.
 
-    Parameter.value is in DATABASE units — cm for a length, the plain number
+    Parameter.value is in DATABASE units -- cm for a length, the plain number
     for a unitless parameter.  Only the length case goes through the units
     manager; convert() with an empty unit string is the "Bad units parameter"
     error, not a no-op.
@@ -80,13 +83,13 @@ def _current(um, existing, unit):
         if not unit:
             return float(existing.value)
         return float(um.convert(existing.value, um.internalUnits, unit))
-    except Exception:      # noqa: BLE001 — an unreadable value just means "not comparable"
+    except Exception:      # noqa: BLE001 - an unreadable value just means "not comparable"
         return None
 
 
 def _clip(text, n=48):
     text = " ".join(str(text).split())
-    return text if len(text) <= n else text[:n - 1] + "…"
+    return text if len(text) <= n else text[:n - 1] + "..."
 
 
 def _write_value(um, existing, name, value, unit, expr):
@@ -105,14 +108,14 @@ def _write_value(um, existing, name, value, unit, expr):
         if old is not None and abs(old - value) <= TOL:
             return "same", name
         existing.expression = expr
-        return "updated", "%s: %s → %s" % (name, _num(old) if old is not None else "?", expr)
+        return "updated", "%s: %s -> %s" % (name, _num(old) if old is not None else "?", expr)
 
-    # Different unit in the model.  The unit has to move FIRST — an expression
-    # carrying a unit is invalid while the parameter is unitless — and if
+    # Different unit in the model.  The unit has to move FIRST -- an expression
+    # carrying a unit is invalid while the parameter is unitless -- and if
     # Fusion refuses, leave the parameter exactly as found and say what has to
     # be changed by hand.
     old_raw = _current(um, existing, cur_unit)
-    mismatch = ("%s: unit mismatch: model %r vs ours %r — change the unit in Fusion"
+    mismatch = ("%s: unit mismatch: model %r vs ours %r -- change the unit in Fusion"
                 % (name, cur_unit, unit))
     try:
         existing.unit = unit
@@ -126,7 +129,7 @@ def _write_value(um, existing, name, value, unit, expr):
         except Exception:      # noqa: BLE001
             pass
         return "failed", mismatch
-    return "updated", ("%s: %s → %s"
+    return "updated", ("%s: %s -> %s"
                        % (name, ("%s %s" % (_num(old_raw), cur_unit)).strip()
                           if old_raw is not None else "?", expr))
 
@@ -169,7 +172,7 @@ def run(context):
                 # model's user parameters mostly carry no Comment at all and
                 # the schema description is what makes the list readable, so an
                 # otherwise unchanged parameter still gets its text (user
-                # 2026-09-14 — dirtying the timeline for that is accepted).  A
+                # 2026-09-14 -- dirtying the timeline for that is accepted).  A
                 # comment-only change is counted on its own and is NEVER
                 # reported as a value update.
                 wrote_comment = False
@@ -184,7 +187,7 @@ def run(context):
                     noted.append("%s: %s" % (name, _clip(comment)))
                 elif verdict == "same":
                     same.append(name)
-            except Exception as e:      # noqa: BLE001 — one bad row must not stop the rest
+            except Exception as e:      # noqa: BLE001 - one bad row must not stop the rest
                 failed.append("%s: %s" % (name, e))
         adsk.doEvents()
         ui.messageBox(_summary(payload, updated, created, same, failed, noted))
@@ -198,16 +201,16 @@ def _block(title, lines, limit=40):
         return ""
     shown = ["  " + s for s in lines[:limit]]
     if len(lines) > limit:
-        shown.append("  … and %d more" % (len(lines) - limit))
+        shown.append("  ... and %d more" % (len(lines) - limit))
     return "\n\n%s\n%s" % (title, "\n".join(shown))
 
 
 def _summary(payload, updated, created, same, failed, noted):
-    head = ("motor_ai_sim → Fusion parameters (%s)\n\n"
+    head = ("motor_ai_sim -> Fusion parameters (%s)\n\n"
             "updated: %d\ncreated: %d\ncomment set: %d\nunchanged: %d\nfailed: %d"
             % (payload.get("machine", "?"), len(updated), len(created),
                len(noted), len(same), len(failed)))
-    body = (_block("UPDATED (old → new)", updated)
+    body = (_block("UPDATED (old -> new)", updated)
             + _block("CREATED", created)
             + _block("COMMENT SET", noted)
             + _block("FAILED", failed))

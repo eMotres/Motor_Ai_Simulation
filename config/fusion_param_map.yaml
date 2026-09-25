@@ -48,562 +48,203 @@ map:
   shaft_height: shaft_height
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PROPOSAL, not yet applied — 2026-09-25.  Old Fusion user-parameter names from
-# the owner's earlier Fusion models (C:\Users\vadim\Downloads\ExportedParameters.csv,
-# 65 rows) mapped to our canonical names.  See
-# docs/FUSION_PARAMETER_MAP_2026-09-25.md for the full write-up, including the
-# evidence for each row and the "unsure" list the owner still has to confirm.
+# APPROVED 2026-09-25 -- owner reviewed docs/FUSION_PARAMETER_MAP_2026-09-25.md
+# (built from his own file, C:\Users\vadim\Downloads\Fusion_map_geometry_inputs_v2.xlsx)
+# and confirmed this final mapping for the 33 geometry INPUTS only (the 32
+# geometry_schema keys + sleeve_thickness; derived/internal names are never
+# renamed).  This supersedes the earlier "legacy_fusion_names_2026_09_25"
+# proposal section (removed).
 #
-# This key is INERT: only `map:` above is read by
-# src/motor_ai_sim/routes/fusion.py (`_name_map()` does `d.get("map")`), so
-# nothing here changes the live /api/fusion export or import. It exists so the
-# table is machine-readable for the converter/rename scripts the owner asked
-# for — those come after this table is reviewed and corrected.
+# SOURCE OF TRUTH FOR CODE: scripts/fusion_param_common.py (ENTRIES) -- the
+# stdlib-only module scripts/fusion_param_rename.py (the offline CSV converter)
+# and all three scripts/fusion360_*_params/ Fusion scripts import.  It is
+# stdlib-only because Fusion's sandboxed Python cannot be assumed to have
+# PyYAML, so those scripts cannot load THIS file at runtime; this section is
+# the human-reviewed record of the exact same 33 rows, generated from that
+# module and kept in sync with it by hand (small, stable table -- see
+# tests/test_fusion_param_rename.py for the executable proof they agree).
 #
-# Per entry:
-#   canonical           our geometry key, or a proposed mech_-prefixed name
-#                        when the old parameter has no solver counterpart
-#   unit                 mm | "" (unitless count/ratio) | deg
-#   confidence            exact | likely | unsure
-#   fusion_only          true when `canonical` is not a solver geometry key
-#   derived               true when the old value came from a formula, not a
-#                        leaf constant
-#   expression            the old Fusion expression, verbatim
-#   canonical_expression  the same formula rewritten with canonical names
-#                        (derived rows only)
-#   note                  short reason for the confidence / open question
-legacy_fusion_names_2026_09_25:
-  motor_d:
-    canonical: mech_motor_od
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: true
-    expression: "( stator_up_r + housing_h ) * 2"
-    canonical_expression: "( stator_diameter / 2 + mech_housing_h ) * 2"
-    note: overall motor OD including housing; no solver counterpart
-  rotor_r:
-    canonical: mech_rotor_shell_r
-    unit: mm
-    confidence: unsure
-    fusion_only: true
-    derived: true
-    expression: "motor_d / 2"
-    canonical_expression: "mech_motor_od / 2"
-    note: scale conflicts with the rotor_up_r/rotor_down_r chain; may be an
-      outrunner shell/bell radius, a resolver-rotor radius, or unused
-  rotor_h:
-    canonical: magnet_height
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: magnet_h
-    note: duplicate alias of magnet_h, used in rotor_down_r like our magnet_height
-  rotor_w:
-    canonical: motor_length
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: stator_w
-    note: stack length applied to a rotor-side dimension
-  magnet_h:
-    canonical: magnet_height
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "2 mm"
-    note: name and meaning identical
-  magnet_w:
-    canonical: motor_length
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: rotor_w
-    note: same stack-length equality chain as rotor_w/stator_w
-  gap:
-    canonical: air_gap
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.1 mm"
-    note: "rotor_up_r = stator_down_r - gap matches our rotor_outer_radius = stator_inner_radius - air_gap term-for-term"
-  stator_w:
-    canonical: motor_length
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: "40 mm"
-    note: root of the rotor_w/magnet_w/mag_step equality chain
-  stator_up_r:
-    canonical: stator_diameter
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: "12 mm / 2"
-    note: "radius -> diameter conversion, factor x2; plays the role of our derived stator_outer_radius = stator_diameter/2"
-  stator_mid_r:
-    canonical: mech_stator_mid_r
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: true
-    expression: "stator_up_r - slot_h - core_h / 2"
-    canonical_expression: "stator_outer_radius - slot_height - core_thickness / 2"
-    note: mid-yoke construction radius, no counterpart in our schema
-  slot_h:
-    canonical: slot_height
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "1.842 mm"
-    note: name and meaning identical
-  core_h:
-    canonical: core_thickness
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.7 mm"
-    note: name and meaning identical
-  stator_down_r:
-    canonical: stator_inner_radius
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: true
-    expression: "stator_up_r - slot_h - core_h"
-    canonical_expression: "stator_outer_radius - core_thickness - slot_height"
-    note: same terms as our derived stator_inner_radius, order swapped (algebraically identical)
-  rotor_down_h:
-    canonical: rotor_house_height
-    unit: mm
-    confidence: unsure
-    fusion_only: false
-    derived: false
-    expression: "0.5 mm"
-    note: orphan constant (never referenced by another row); competes with r_housing_h for the same canonical name
-  rotor_down_r:
-    canonical: rotor_inner_radius
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: true
-    expression: "rotor_up_r - rotor_h"
-    canonical_expression: "rotor_outer_radius - magnet_height"
-    note: reaches the same post-magnet radius as our rotor_inner_radius, but omits a separate rotor-housing term
-  glue:
-    canonical: mech_magnet_glue_gap
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "0.1 mm"
-    note: adhesive bond-line gap, manufacturing tolerance not modeled by the solver
-  magnet_fill_up:
-    canonical: magnet_fill_up
+# This key is INERT for the LIVE /api/fusion route: `map:` above (already
+# identity for all 33 of these) is the only section that route reads, and it
+# was not changed -- after a design is renamed with fusion360_rename_params.py
+# its Fusion parameters ARE named canonically, so identity is exactly right.
+#
+# action: rename | rename_or_create | create | not_mapped (see
+# scripts/fusion_param_common.py's module docstring for what each means).
+# conversion: null, or [linear, factor] (canonical = old * factor), or
+# [lamination, null] (magnet_lamination's non-linear mag_step rule).
+legacy_fusion_names_approved_2026_09_25:
+  stator_diameter:
+    old: stator_up_r
+    unit: "mm"
+    action: rename
+    conversion: [linear, 2.0]
+    note: "old was a RADIUS; canonical is the DIAMETER"
+  slot_height:
+    old: slot_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  core_thickness:
+    old: core_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  num_seg:
+    old: N1
     unit: ""
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.6"
-    note: identical name and ratio meaning
-  N1:
-    canonical: num_seg
+    action: rename
+    conversion: null
+  num_slots_per_segment:
+    old: null
     unit: ""
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "2"
-    note: "N1*6 = num_slots and N1*Nm = num_poles, matching num_seg's role in both our derived formulas"
-  angle:
-    canonical: mech_segment_angle_deg
-    unit: deg
-    confidence: likely
-    fusion_only: true
-    derived: true
-    expression: "( 360 / N1 ) * 1 deg"
-    canonical_expression: "360 / num_seg"
-    note: sketch construction angle (segment pitch), no exported counterpart
-  angle_wire:
-    canonical: angle_slot
-    unit: deg
-    confidence: exact
-    fusion_only: false
-    derived: true
-    expression: "( 360 / ( N1 * 6 ) ) * 1 deg"
-    canonical_expression: "360 / num_slots"
-    note: "360/(N1*6) = 360/num_slots, exactly our derived angle_slot"
-  angle_mag:
-    canonical: angle_pole
-    unit: deg
-    confidence: exact
-    fusion_only: false
-    derived: true
-    expression: "( ( 360 / ( N1 * Nm ) ) * 1 deg )"
-    canonical_expression: "360 / num_poles"
-    note: "360/(N1*Nm) = 360/num_poles, exactly our derived angle_pole"
-  bearing_6005_d:
-    canonical: mech_bearing_6005_seat_d
-    unit: mm
-    confidence: unsure
-    fusion_only: true
-    derived: false
-    expression: "30 mm"
-    note: standard 6005 bearing bore is 25mm / OD 47mm; 30mm matches neither, likely a seat diameter
-  resolver_w:
-    canonical: mech_resolver_w
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "16 mm"
-    note: resolver width, mechanical only
-  sealing_ring_d:
-    canonical: mech_sealing_ring_w
-    unit: mm
-    confidence: unsure
-    fusion_only: true
-    derived: false
-    expression: "0.9 mm"
-    note: too small for most seal diameters; may be a groove width, not a diameter
-  wire_dist_y:
-    canonical: wire_spacing_y
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.05 mm"
-    note: name and meaning identical
-  ins_w:
-    canonical: insulation_thickness
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: "0.05 mm"
-    note: "width vs thickness naming differs, meaning (insulation layer around the slot) matches"
+    action: create
+    conversion: null
+    note: "old model hardcoded 6 slots/segment (N1*6) in angle_wire; no user parameter existed for it"
+  num_poles_per_segment:
+    old: Nm
+    unit: ""
+    action: rename
+    conversion: null
+  air_gap:
+    old: gap
+    unit: "mm"
+    action: rename
+    conversion: null
+  tooth_width:
+    old: teeth_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  tooth2_width:
+    old: tooth2_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  cut_width:
+    old: cut_down
+    unit: "mm"
+    action: rename
+    conversion: null
+  insulation_thickness:
+    old: ins_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  wire_width:
+    old: wire_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  wire_height:
+    old: wire_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  wire_spacing_x:
+    old: wire_dist_x
+    unit: "mm"
+    action: rename
+    conversion: null
+  wire_spacing_y:
+    old: wire_dist_y
+    unit: "mm"
+    action: rename
+    conversion: null
+  num_wires_per_slot:
+    old: wire_N
+    unit: ""
+    action: rename
+    conversion: null
+  wire_split:
+    old: null
+    unit: ""
+    action: not_mapped
+    conversion: null
+    note: "ours defaults to 1; do not create unless already present under this exact name"
   slot_hs:
-    canonical: slot_hs
+    old: slot_hs
     unit: ""
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.11"
-    note: identical name; already excluded/hidden on our side (FUSION_EXCLUDED_NAMES, owner 2026-09-14)
-  mag_r:
-    canonical: magnet_fill_radius
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: "0.2 mm"
-    note: "mag+r name pattern matches schema label Magnet Fillet Radius"
-  slot_r:
-    canonical: stator_fillet_r1
-    unit: mm
-    confidence: unsure
-    fusion_only: false
-    derived: false
-    expression: "0.1 mm"
-    note: competes with slot_up_r for the one air-gap-side fillet we have; can't tell which from the CSV
-  slot_up_r:
-    canonical: stator_fillet_r1
-    unit: mm
-    confidence: unsure
-    fusion_only: false
-    derived: false
-    expression: "0.1 mm"
-    note: competes with slot_r for the one air-gap-side fillet we have; can't tell which from the CSV
-  teeth_w:
-    canonical: tooth_width
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "1 mm"
-    note: name and meaning identical
-  slot_ds:
-    canonical: mech_slot_ds
-    unit: ""
-    confidence: unsure
-    fusion_only: true
-    derived: false
-    expression: "0.8"
-    note: no obvious schema counterpart; possibly a slot-depth scale ratio
-  slot_hs1:
-    canonical: mech_slot_hs1
-    unit: ""
-    confidence: unsure
-    fusion_only: true
-    derived: false
-    expression: "0.02"
-    note: relationship to slot_hs (0.11, our exact match) not stated in the file
-  housing_h:
-    canonical: mech_housing_h
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "6 mm"
-    note: overall housing wall, feeds motor_d, not modeled by the solver
+    action: rename
+    conversion: null
+    note: "identity -- already matches"
+  magnet_height:
+    old: magnet_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  rotor_house_height:
+    old: r_housing_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  shaft_height:
+    old: null
+    unit: "mm"
+    action: create
+    conversion: null
   magnet_fill_down:
-    canonical: magnet_fill_down
+    old: magnet_fill_down
     unit: ""
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.85"
-    note: identical name and ratio meaning
-  rotor_up_r:
-    canonical: rotor_outer_radius
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: true
-    expression: "stator_down_r - gap"
-    canonical_expression: "stator_inner_radius - air_gap"
-    note: term-for-term match with our derived rotor_outer_radius
-  r_housing_h:
-    canonical: rotor_house_height
-    unit: mm
-    confidence: unsure
-    fusion_only: false
-    derived: false
-    expression: "0.3 mm"
-    note: "name contains housing (favors rotor_house_height) but 0.3mm also fits sleeve_thickness; conflicts with rotor_down_h"
-  arc:
-    canonical: mech_slot_arc_w
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: true
-    expression: "stator_down_r * 2 * PI * ( angle_wire / 360 deg ) - teeth_w"
-    canonical_expression: "stator_inner_radius * 2 * PI * ( angle_slot / 360 deg ) - tooth_width"
-    note: slot arc-width construction helper
-  wire_h:
-    canonical: wire_height
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.2 mm"
-    note: name and meaning identical
-  wire_w:
-    canonical: wire_width
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.8 mm"
-    note: name and meaning identical
-  bolt_head_d:
-    canonical: mech_bolt_head_d
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "8.8 mm"
-    note: mechanical bolt cutout
-  offset_core:
-    canonical: mech_offset_core
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "0.006 mm"
-    note: CAD fit/assembly tolerance
-  wire_N:
-    canonical: num_wires_per_slot
+    action: rename
+    conversion: null
+    note: "identity"
+  magnet_fill_up:
+    old: magnet_fill_up
     unit: ""
-    confidence: unsure
-    fusion_only: false
-    derived: false
-    expression: "3"
-    note: "feeds coil_w = ins_w*2 + (wire_h+wire_dist_x)*wire_N; could equally be wire_split or wire_parallel"
-  dov_d:
-    canonical: mech_dowel_d
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "3 mm"
-    note: "dov reads as dowel"
-  wire_beng_r:
-    canonical: mech_wire_bend_r
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: true
-    expression: "wire_h * 2"
-    canonical_expression: "2 * wire_height"
-    note: wire bend-radius manufacturing constraint
-  bolt_h:
-    canonical: mech_bolt_h
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "3 mm"
-    note: mechanical bolt cutout
-  bolt_d:
-    canonical: mech_bolt_d
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "2.5 mm"
-    note: mechanical bolt cutout
-  offset_tooth:
-    canonical: mech_offset_tooth
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "0.009 mm"
-    note: CAD fit/assembly tolerance
-  tooth_r:
-    canonical: null
-    unit: mm
-    confidence: unsure
-    fusion_only: true
-    derived: true
-    expression: "wire_beng_r - 0.5 mm"
-    canonical_expression: "mech_wire_bend_r - 0.5 mm"
-    note: "evaluates negative (-0.10mm); looks like an unused/broken leftover formula"
-  AWG:
-    canonical: mech_wire_insulated_od
-    unit: mm
-    confidence: unsure
-    fusion_only: true
-    derived: false
-    expression: "1.2 mm + 0.2 mm"
-    note: "named like a wire gauge but carries a mm value; our winding model is rectangular (wire_width x wire_height), may have no counterpart"
-  offset_rotor:
-    canonical: mech_offset_rotor
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "0.025 mm"
-    note: CAD fit/assembly tolerance
-  offset_bearing:
-    canonical: mech_offset_bearing
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "0.04 mm"
-    note: CAD fit/assembly tolerance
-  offset_radiator:
-    canonical: mech_offset_radiator
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "0.15 mm"
-    note: CAD fit/assembly tolerance
-  offset_holder:
-    canonical: mech_offset_holder
-    unit: mm
-    confidence: likely
-    fusion_only: true
-    derived: false
-    expression: "0.08 mm"
-    note: CAD fit/assembly tolerance
-  coil_w:
-    canonical: mech_coil_bundle_w
-    unit: mm
-    confidence: unsure
-    fusion_only: true
-    derived: true
-    expression: "ins_w * 2 + ( wire_h + wire_dist_x ) * wire_N"
-    canonical_expression: "insulation_thickness * 2 + ( wire_height + wire_spacing_x ) * num_wires_per_slot"
-    note: "stacks wire_N wires along the height axis; doesn't align cleanly with our derived slot_width (no count multiplier), tied to the wire_N ambiguity"
-  wire_dist_x:
-    canonical: wire_spacing_x
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.05 mm"
-    note: name and meaning identical
-  stator_r:
-    canonical: stator_fillet_r
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: "0.5 mm"
-    note: the "other" fillet, complementing slot_r/slot_up_r (air-gap side) as the outer-corner one
-  mag_sh:
-    canonical: magnet_up_gap
-    unit: mm
-    confidence: unsure
-    fusion_only: false
-    derived: false
-    expression: "0.1 mm"
-    note: value is plausible but the name (magnet shim/shell?) doesn't clearly mean "radial gap from rotor OD to magnet top"
-  mag_hole:
-    canonical: rotor_hole
+    action: rename
+    conversion: null
+    note: "identity"
+  magnet_fill_radius:
+    old: mag_r
+    unit: "mm"
+    action: rename
+    conversion: null
+  magnet_up_gap:
+    old: mag_sh
+    unit: "mm"
+    action: rename
+    conversion: null
+  rotor_hole:
+    old: mag_hole
     unit: ""
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: "0.7"
-    note: unitless ratio, name meaning matches schema label Rotor Hole
-  tooth2_w:
-    canonical: tooth2_width
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "0.5 mm"
-    note: name and meaning identical
-  cut_down:
-    canonical: cut_width
-    unit: mm
-    confidence: likely
-    fusion_only: false
-    derived: false
-    expression: "1 mm"
-    note: "down vs width naming differs, both describe the slot-opening cut feature"
-  mag_down_h:
-    canonical: magnet_down_height
-    unit: mm
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "2 mm"
-    note: name and meaning identical
-  mag_step:
-    canonical: magnet_lamination
-    unit: mm
-    confidence: unsure
-    fusion_only: false
-    derived: false
-    expression: stator_w
-    note: "equals the full stack length; plausible but semantics look inverted (ours: 0 = solid; here: full length = solid?)"
-  Nm:
-    canonical: num_poles_per_segment
-    unit: ""
-    confidence: exact
-    fusion_only: false
-    derived: false
-    expression: "5"
-    note: "N1*Nm = 10 poles, matching num_seg*num_poles_per_segment = num_poles"
-  ins_gap:
-    canonical: mech_insulation_gap
-    unit: mm
-    confidence: unsure
-    fusion_only: true
-    derived: false
-    expression: "0.1 mm"
-    note: a second, distinct insulation dimension alongside ins_w; unclear which (if either) is insulation_thickness
+    action: rename
+    conversion: null
+  magnet_down_height:
+    old: mag_down_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  magnet_lamination:
+    old: mag_step
+    unit: "mm"
+    action: rename
+    conversion: [lamination, null]
+    note: "mag_step is the axial lamination SEGMENT LENGTH; if it equals the motor length -> no slicing -> our magnet_lamination = 0"
+  stator_fillet_r:
+    old: stator_r
+    unit: "mm"
+    action: rename
+    conversion: null
+  stator_fillet_r1:
+    old: stator_r1
+    unit: "mm"
+    action: rename_or_create
+    conversion: null
+    note: "create with our value if stator_r1 is not in the design"
+  rotor_fill_r:
+    old: rotor_r1
+    unit: "mm"
+    action: rename_or_create
+    conversion: null
+    note: "create with our value if rotor_r1 is not in the design"
+  motor_length:
+    old: stator_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  sleeve_thickness:
+    old: null
+    unit: "mm"
+    action: create
+    conversion: null

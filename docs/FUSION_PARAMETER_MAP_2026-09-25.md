@@ -1,5 +1,119 @@
 # Fusion 360 parameter correspondence — owner's older Fusion models (2026-09-25)
 
+## APPROVED mapping (owner decision, 2026-09-25) — read this first
+
+The owner reviewed the proposal below in his own file
+(`C:\Users\vadim\Downloads\Fusion_map_geometry_inputs_v2.xlsx`, built from the
+table below) and confirmed the final mapping for the **33 geometry INPUTS
+only** — the 32 `geometry_schema` keys + `sleeve_thickness`. Derived/internal
+names (radii, angles, pitches, sketch-construction helpers) are **not**
+renamed by any of the tools below; only these 33 primary parameters are.
+
+Executable source of truth: `scripts/fusion_param_common.py` (`ENTRIES`).
+Human-reviewed copy: `config/fusion_param_map.yaml`,
+`legacy_fusion_names_approved_2026_09_25` — the two are checked to agree by
+`tests/test_fusion_param_rename.py::test_approved_yaml_section_matches_fusion_param_common`.
+
+| Canonical | Old (legacy) | Unit | Action | Conversion |
+|---|---|---|---|---|
+| `stator_diameter` | `stator_up_r` | mm | rename | ×2 (old was a RADIUS, canonical is the DIAMETER) |
+| `slot_height` | `slot_h` | mm | rename | — |
+| `core_thickness` | `core_h` | mm | rename | — |
+| `num_seg` | `N1` | — | rename | — |
+| `num_slots_per_segment` | *(none)* | — | **create** | value from the running app (or config default) — old model hardcoded 6 slots/segment (`N1*6`) with no user parameter for it |
+| `num_poles_per_segment` | `Nm` | — | rename | — |
+| `air_gap` | `gap` | mm | rename | — |
+| `tooth_width` | `teeth_w` | mm | rename | — |
+| `tooth2_width` | `tooth2_w` | mm | rename | — |
+| `cut_width` | `cut_down` | mm | rename | — |
+| `insulation_thickness` | `ins_w` | mm | rename | — |
+| `wire_width` | `wire_w` | mm | rename | — |
+| `wire_height` | `wire_h` | mm | rename | — |
+| `wire_spacing_x` | `wire_dist_x` | mm | rename | — |
+| `wire_spacing_y` | `wire_dist_y` | mm | rename | — |
+| `num_wires_per_slot` | `wire_N` | — | rename | — |
+| `wire_split` | *(none)* | — | **not mapped** | ours defaults to 1; never created, only touched if already present under this exact name |
+| `slot_hs` | `slot_hs` | — | rename (identity) | — |
+| `magnet_height` | `magnet_h` | mm | rename | — |
+| `rotor_house_height` | `r_housing_h` | mm | rename | — |
+| `shaft_height` | *(none)* | mm | **create** | value from the running app / config default |
+| `magnet_fill_down` | `magnet_fill_down` | — | rename (identity) | — |
+| `magnet_fill_up` | `magnet_fill_up` | — | rename (identity) | — |
+| `magnet_fill_radius` | `mag_r` | mm | rename | — |
+| `magnet_up_gap` | `mag_sh` | mm | rename | — |
+| `rotor_hole` | `mag_hole` | — | rename | — |
+| `magnet_down_height` | `mag_down_h` | mm | rename | — |
+| `magnet_lamination` | `mag_step` | mm | rename | non-linear: `mag_step` is the lamination SEGMENT LENGTH; **0** when it equals the motor length (old: full length = one slice = solid), otherwise carried over as-is |
+| `stator_fillet_r` | `stator_r` | mm | rename | — |
+| `stator_fillet_r1` | `stator_r1` | mm | **rename_or_create** | rename if `stator_r1` exists in the design/CSV, else create with our value |
+| `rotor_fill_r` | `rotor_r1` | mm | **rename_or_create** | rename if `rotor_r1` exists in the design/CSV, else create with our value |
+| `motor_length` | `stator_w` | mm | rename | — |
+| `sleeve_thickness` | *(none)* | mm | **create** | value from the running app / config default |
+
+Everything else in the old file (mechanical parts: bearings, resolver,
+sealing ring, bolts, offsets, `AWG`; derived sketch helpers: `motor_d`,
+`stator_mid_r`, `arc`, `coil_w`, `wire_beng_r`, `angle*`; ambiguous leftovers:
+`rotor_r`, `slot_r`/`slot_up_r`, `tooth_r`, `mag_step`'s own row once
+converted, `ins_gap`, `slot_hs1`, `slot_ds`, `glue`, `housing_h`) is left
+**untouched by name**, except that any of its expressions referencing a
+renamed parameter are rewritten token-safely (see "How the tools apply
+this" below).
+
+### Tools built for this (2026-09-25)
+
+Our app's own `/api/fusion` export/import and the Geometry tab's "Fusion CSV"
+buttons already existed and already use these canonical names as-is (`map:`
+in `config/fusion_param_map.yaml` was already identity for all 33) — **no
+backend or web change was needed there.** What was missing was the Fusion
+side and an offline converter for an *already-legacy* CSV:
+
+1. **`scripts/fusion_param_rename.py`** — offline CLI: renames an old
+   Parameter I/O CSV (like `ExportedParameters.csv`) to canonical names,
+   applies the two conversions, creates the missing rows, rewrites dependent
+   expressions token-safely, refuses on name collisions, `--dry-run`.
+2. **`scripts/fusion360_rename_params/`** — Fusion script: the same rename,
+   done in place on the OPEN design's User Parameters (dry-run dialog first).
+3. **`scripts/fusion360_export_params/`** — Fusion script: writes the open
+   design's 33 canonical geometry inputs to a Parameter I/O CSV file — the
+   *existing* "Fusion CSV" upload button / `POST /api/fusion/import` already
+   accepts it as-is.
+4. **`scripts/fusion360_import_params/`** — the renamed/refactored
+   `scripts/fusion360_sync_params/` (logic unchanged): pulls our app's live
+   geometry into the open design by canonical name. The old folder is left
+   in place, unchanged, for any existing Fusion registration.
+
+All three Fusion scripts and the CLI import one shared, stdlib-only module,
+**`scripts/fusion_param_common.py`** (the map + the conversions + the
+token-safe rewriter) — Fusion's sandboxed Python cannot be assumed to have
+PyYAML, so that module (not this YAML file) is what actually runs; see its
+own docstring for why.  See `docs/FUSION_SCRIPTS_HOWTO.md` (in Russian) for
+where to install each script and in what order to run them.
+
+### How the tools apply this (worked example)
+
+`stator_diameter = 2 * stator_up_r`. The CLI converter and the in-Fusion
+renamer both (a) convert the row's own value, and (b) fix up every OTHER
+expression that referenced the old name so it keeps computing the same
+number — e.g. the old, untouched-by-name helper
+`stator_mid_r = stator_up_r - slot_h - core_h/2` becomes
+`stator_mid_r = (stator_diameter/2) - slot_height - core_thickness/2` after
+the rename, not a broken `stator_diameter - slot_height - core_thickness/2`.
+`magnet_lamination`'s conversion is non-linear (an equality test, not a
+ratio), so a reference to it elsewhere cannot be algebraically fixed up the
+same way and is instead flagged for the owner to check by hand (none exist
+in the owner's file).
+
+---
+
+## Proposal (superseded for the 33 geometry inputs — kept for reference)
+
+Everything from here down is the original 65-row, three-tier
+(exact/likely/unsure) analysis this approved mapping above was built from.
+It still documents the reasoning and evidence for every old name, including
+the 32 that are **not** among the 33 approved geometry inputs (mechanical
+parts and derived sketch helpers) — those were never meant to be renamed and
+still aren't; this appendix is what explains what each of them probably is.
+
 Source: `C:\Users\vadim\Downloads\ExportedParameters.csv` — a Fusion 360 "Parameter
 I/O" export (Name, Unit, Expression, Value, Comments, Favorite), 65 user
 parameters, from a Fusion model the owner built before motor_ai_sim's own
@@ -11,13 +125,14 @@ Canonical side (never renamed): `MotorGeometryParams`
 (`src/motor_ai_sim/routes/_validation.py`), and the live Fusion round-trip at
 `src/motor_ai_sim/routes/fusion.py` + `scripts/fusion360_sync_params/`.
 
-**Status: PROPOSAL — not yet applied anywhere.** This is item 1 of the task
-only (correspondence table for the owner to review); the CSV converter script,
-the in-Fusion rename script, and their tests come after the owner confirms or
-corrects the rows below, especially the "unsure" ones. The live
+**Status: the 33-row table above is APPROVED and built** (owner decision,
+2026-09-25) — see "Tools built for this" above. Everything below this point
+is the ORIGINAL 65-row proposal the approved table was reviewed against; it
+is now historical background/evidence, superseded for the 33 geometry inputs
+by the table at the top of this document. The live
 `config/fusion_param_map.yaml` `map:` section (read by the running
-`/api/fusion` route) has **not** been touched — this table lives in a new,
-inert section of that file that nothing reads yet.
+`/api/fusion` route) was **not** touched — it was already identity for all
+33 approved names, which is exactly correct once a design is renamed.
 
 Method: every row's canonical guess is derived from (a) the old Fusion
 **expression** — several old names are defined *in terms of* other old names,
@@ -144,11 +259,13 @@ owner's confirmation, not just their canonical spelling.
 
 ---
 
-## Machine-readable form
+## Machine-readable form (of this 65-row proposal)
 
-The same table (all 65 rows, with `confidence`, `fusion_only`, `derived`,
-the old `expression`, and a `canonical_expression` for every derived row) is
-in `config/fusion_param_map.yaml` under the new `legacy_fusion_names_2026_09_25`
-key. That key is **not** read by `src/motor_ai_sim/routes/fusion.py` (which
-only reads `map:`) — it is inert data for the owner to review and for the
-future converter/rename scripts to consume once confirmed.
+The same 65-row table (with `confidence`, `fusion_only`, `derived`, the old
+`expression`, and a `canonical_expression` for every derived row) used to be
+in `config/fusion_param_map.yaml` under a `legacy_fusion_names_2026_09_25`
+key. That section was **removed** once the owner approved the 33-row subset
+above; it is fully superseded by `legacy_fusion_names_approved_2026_09_25`
+(and by `scripts/fusion_param_common.py`, the executable source of truth) —
+see "APPROVED mapping" at the top of this document. `map:`, the only section
+`src/motor_ai_sim/routes/fusion.py` reads, was never touched by either.

@@ -37,6 +37,7 @@ class _FakeCtl:
 
     def __init__(self, cfg=None, **kw):
         self.t_j_c = 100.0
+        self.star_delta = "star"
         self.solve = {}
         self.passes = []
         self.steps = []
@@ -131,9 +132,11 @@ def _run(client, **body):
     r = client.post("/api/coupled/run",
                     json={**LOOP_BODY, "max_iter": 3, "tol_k": 1.0,
                           "cold_constants": False, "drive": "inverter",
-                          # the sine-vs-inverter pass is its own feature
-                          # (tests/test_coupled_sine_comparison.py)
-                          "sine_compare": False,
+                          # the OLD loop (every pass on the PWM) — the path
+                          # these fixes are about; the default since
+                          # 2026-09-25 is `final_pass`
+                          # (tests/test_coupled_inverter_final_pass.py)
+                          "inverter_coupling": "full", "sine_compare": False,
                           **body})
     assert r.status_code == 200, r.text[:800]
     return r.json()["coupling"]

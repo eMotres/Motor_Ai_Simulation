@@ -247,6 +247,16 @@ def rename(rows: List[Dict[str, str]], create_defaults: Dict[str, float],
                 "%s (used to compute %s, left as-is -- see "
                 "fusion_param_common.lamination_backward for why)"
                 % (old_name, entry["canonical"]))
+            # Its NAME and meaning stay, but a reference to a renamed
+            # parameter must follow the rename (mag_step = stator_w would
+            # otherwise point at a name that no longer exists -- Fusion's own
+            # in-place rename does the same automatically).
+            expr = str(r.get(expr_col, "") or "")
+            new_expr, _touched = FPC.rewrite_expression(expr, subs)
+            if new_expr != expr:
+                out[expr_col] = new_expr
+                res.rewritten_exprs.append("%s: %r -> %r" % (old_name, expr, new_expr))
+                res.diffs.append((_to_row6(before, cols), _to_row6(out, cols)))
             final_names.append(old_name)
             new_rows.append(out)
             continue

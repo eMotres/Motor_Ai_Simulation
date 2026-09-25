@@ -131,11 +131,13 @@ def test_mag_step_shorter_than_motor_length_is_carried_over(tmp_path, defaults):
 
 
 def test_mag_step_row_itself_is_left_completely_as_is(tmp_path, defaults):
+    # mag_step keeps its NAME and its formula; only a reference to a renamed
+    # parameter follows the rename (stator_w -> motor_length), otherwise the
+    # imported CSV would point at a name that no longer exists.
     rows = [_row("stator_w", "40"), _row("mag_step", "stator_w", comment="orig")]
     res = _run(tmp_path, rows, defaults)
-    mag_step_before = next(r for r in rows if r["Name"] == "mag_step")
     mag_step_after = _by_name(res, "mag_step")
-    assert mag_step_after["Expression"] == mag_step_before["Expression"] == "stator_w"
+    assert mag_step_after["Expression"] == "motor_length"
     assert mag_step_after["Name"] == "mag_step"  # never renamed
     assert "mag_step" in " ".join(res.unchanged_legacy)[0:2000] or any(
         "mag_step" in line for line in res.unchanged_legacy)

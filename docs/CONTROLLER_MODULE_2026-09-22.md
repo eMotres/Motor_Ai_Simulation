@@ -793,6 +793,89 @@ carrier, so the peak duty did not fit the session.  It needs the same run with
 
 ---
 
+## 7c · The loop on the SINE, the controller's PWM once (2026-09-25)
+
+Owner: *«очень долго идёт каплинг с контроллером, нужно сменить алгоритм:
+каплинг делается только с синусоидой, а последний прогон — с PWM из
+контроллера»* and *«если уже есть каплинг с синусом — просто запускается расчёт
+с PWM из контроллера»*.
+
+`inverter_coupling: "final_pass"` is now the default for `drive: "inverter"`
+(`"full"` keeps §7a's loop — every pass on the PWM — for validation):
+
+1. the whole EM ↔ thermal (↔ mechanical) loop, the pass at the limit and the
+   S1 search/verification run on the ideal SINE current;
+2. ONE PWM pass on the controller's bridge at the sine state's temperatures
+   and current, the fundamental seeded from the sine run's own terminal
+   voltage, `T_j` seeded by a controller solve on the sine state (no EM run);
+3. that pass's own loss map → one thermal re-solve; if a temperature moved by
+   more than `tol_K` (or the current is outside `i_tol_pct`) ONE more PWM pass
+   at the new temperatures, re-aimed — never more than two, never the loop;
+4. the record is the final PWM state; `pwm_final` holds the passes, ΔT vs the
+   sine state and the residual; `sine_comparison` gets the sine state as its
+   reference column (same-T = PWM pass 1, own-T = the final pass).
+   At the limit only the current is re-aimed (the instant's temperatures are
+   the answer) and the PWM map re-reads the time to the limit (`limited.pwm`);
+   at the S1 point a part the PWM losses push over its limit is reported with
+   its margin and a first-order corrected current (an estimate, not re-searched).
+
+The converged sine state is filed under a DRIVE-INDEPENDENT key
+(`run_history` kind `coupled.sine_state`: machine fingerprint, point, mesh,
+cooling, solve_to, max_iter, code version — everything but the drive); a later
+inverter run of the same inputs skips step 1 and says so
+(`pwm_final.sine_state_reused`), a near miss names the input that differed
+(`sine_state_not_reused`).  The duty's saved coupled record is NOT used as a
+source: it does not carry the inputs needed to prove it is the same state.
+
+### Measured — Ø40 L12, IQE050N08NM5SC ×1, 24 kHz, 22.2 V, 0.2 µs, 96 steps/period
+
+Solver-direct in a sandbox, mesh 2 mm, 2–3 iterations; wall times are under
+heavy CPU contention (other campaigns on the same workstation) and are
+indicative only — the pass counts are the robust measure.
+
+| steady, water 40 °C 2 L/min | old (6317c41) | `full` | `final_pass` |
+|---|---|---|---|
+| EM passes (sine + PWM) | 0 + 3 | 0 + 3 (+1 sine ref.) | 3 + 2 |
+| wall | 1 813 s | 3 860 s | 2 292 s (PWM part 1 328 s) |
+| current vs 43.84 A | +5.47 % (overshoot) | +0.2 % | −3.4 % (2-pass cap) |
+| coil / magnet °C | 77.1 / 110.5 | 78.0 / 108.7 | 76.9 / 108.6 |
+| T_j, P_inv, η_inv | never solved (bug) | 48.2 °C, 30.3 W, 96.71 % | 47.6 °C, 28.2 W, 96.78 % |
+
+With the sine state already in the history (a sine run of the same inputs
+first), the `final_pass` run skipped the loop and made only its 2 PWM passes:
+1 488 s, and the answer was identical to the run that solved its own sine loop
+(42.367 A, 68.8 W, 76.9 / 108.6 °C).
+
+| limits, air 20 m/s (winding 200 °C after 63 s) | old | `full` | `final_pass` |
+|---|---|---|---|
+| pass at the limit on | the IDEAL bridge | the controller | sine, then 2 PWM (current re-aimed) |
+| current / torque / loss | 45.02 A / 0.624 N·m / 93.4 W | 42.23 A / 0.565 / 83.7 W | 42.53 A / 0.582 / 85.2 W |
+| controller | never solved | T_j 47.6 °C, 28.0 W, residual 0.4 K | T_j 47.7 °C, 28.4 W, residual 0.4 K |
+
+The S1 rating could not be tested on this machine: at air 20 m/s the cooling
+cannot hold even the current-independent losses (sine loop's own verdict); on
+the old / `full` loops the rating refuses earlier still — its steady-map lookup
+is keyed on a sine current and never finds a voltage-fed run (open item).
+
+At equal temperatures and fundamental current (`full`'s comparison pass) the
+controller's waveform costs the machine +14.6 % loss (copper AC +57 %, stator
+iron +47 %, magnets +38 %), torque ripple 6.3 → 34.8 %, THD_I 13.1 %, shaft
+η −0.97 pp.  The sine state is +15.8 K cooler in the magnets than the
+PWM-corrected state.
+
+**Bug found on the way:** on a machine with no bearings the summary has no
+`efficiency_shaft`, `_ControllerLoop._solve_request` returned `None` and the
+devices were silently never solved (T_j frozen at the 120 °C start).  The
+electromagnetic efficiency is used now, with a warning.
+
+**L155 (estimate, not run):** §7b's 2 PWM passes took 3 h 10; `final_pass` is
+the sine loop (36 steps/period, minutes per pass) + 1–2 PWM passes, i.e.
+≈ 1 h 40 – 3 h 20 — the saving is the PWM passes the old loop spent walking
+from the start temperatures (it was one pass short of T_j convergence), and all
+of the sine loop when a sine state of the duty already exists.
+
+---
+
 ## 8 · Stage 3 — the six-coil H-bridge study
 
 The topology is already available and already costed (§6). What Stage 3 adds

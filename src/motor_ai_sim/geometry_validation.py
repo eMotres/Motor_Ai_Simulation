@@ -1192,12 +1192,17 @@ _ABSURD_MM = 10_000.0        # 10 m — no motor cross-section this codebase mea
 _POSITIVE_MM = (
     "stator_diameter", "slot_height", "core_thickness", "tooth_width",
     "wire_width", "wire_height", "magnet_height", "air_gap", "motor_length",
-    "rotor_house_height", "shaft_height", "magnet_down_height", "cut_width",
+    "rotor_house_height", "shaft_height", "cut_width",
     "tooth2_width",
 )
 _NON_NEGATIVE_MM = (
     "insulation_thickness", "wire_spacing_x", "wire_spacing_y",
     "magnet_up_gap", "stator_fillet_r", "stator_fillet_r1", "rotor_fill_r",
+    # 0 = no radial foot: the magnet is the plain trapezoid from its
+    # fill_down corners at the bottom to its fill_up corners at the top — the
+    # owner's Fusion Ø12 12s10p rotor (2026-09-25).  The schema has always
+    # allowed 0 (config/motor_config.yaml min: 0); only this list refused it.
+    "magnet_down_height",
     "magnet_fill_radius", "magnet_lamination", "magnet_lamination_tan",
     # 0 = no retaining sleeve, which is the default and every machine but one.
     "sleeve_thickness",

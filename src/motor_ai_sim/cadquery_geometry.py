@@ -597,7 +597,18 @@ def _pocket_cut_depth(p: Dict) -> float:
     run the full magnet height protruded past the magnet's inner corners
     whenever the magnet narrows toward the hub (measured 2026-09-05 on the
     optimised Ø200: 2 × 0.13 mm² air slivers beside the magnet's inner end).
-    Clamped to the magnet height for a magnet shorter than the overlap."""
+    Clamped to the magnet height for a magnet shorter than the overlap.
+
+    ALSO clamped so the rectangle never reaches below the height where the
+    magnet's side becomes narrower than the opening (2026-09-25, owner's Ø12
+    12s10p Fusion rotor, magnet 2 mm tall): the fixed 2 mm overlap ran the
+    0.88 mm opening down to the magnet's 0.72 mm-wide inner end, its corners
+    cut 0.08 mm into both 0.13 mm iron webs between neighbouring pockets and
+    every iron spoke came off the hub — the rotor core in 11 pieces.  That is
+    the 2026-09-05 "косяк внизу магнитов" again, back on any machine whose
+    magnet is shorter than ~2 mm + the opening's own taper.  Where the magnet
+    is at least as wide as the opening all the way down to the fixed overlap
+    (every machine built before this) the depth is exactly what it was."""
     try:
         mag_h = float(p.get('magnet_height', 0.0) or 0.0)
         gap = float(p.get('magnet_up_gap', 0.0) or 0.0)
@@ -605,7 +616,66 @@ def _pocket_cut_depth(p: Dict) -> float:
         return 0.0
     if _extended_pocket(p):
         return 0.0
-    return max(0.0, min(mag_h, gap + 2.0))
+    depth = max(0.0, min(mag_h, gap + 2.0))
+    limit = _pocket_cut_depth_limit(p)
+    if limit is not None and limit < depth:
+        depth = limit
+    return depth
+
+
+def _pocket_cut_depth_limit(p: Dict) -> Optional[float]:
+    """The deepest the rotor_hole < 1 opening may go (measured, like the cut
+    itself, along the pole axis from y = rotor_or) without its corners
+    leaving the magnet outline.
+
+    Pole-local frame (pole on +y), the same one `rect_local` and `mag_local`
+    are built in: the magnet's +x side is the polyline mp1 → mp2 → mp3 (radial
+    foot of magnet_down_height, then the slanted face to the top corner).  The
+    opening's half-width is w = rotor_or·sin(pole·fill_up·rotor_hole/2).  The
+    cut is safe down to the lowest y from which the side stays at x ≥ w all
+    the way up to mp3; below that the rectangle's corner is in rotor iron.
+
+    None when the parameters needed are missing (a partial dict), or when the
+    magnet is narrower than the opening even at its top corner (mp3.x < w) —
+    then no depth keeps the corners inside it, the opening is a wider slot
+    than the magnet and the depth stays what it was (the tabs over the magnet
+    corners are then zero-thickness, which `rotor_hole_gap_error` owns)."""
+    try:
+        rotor_or = float(p['rotor_outer_radius'])
+        magnet_r = float(p['rotor_inner_radius']) + float(p['rotor_house_height'])
+        n_poles = int(p['num_poles'])
+        fd = float(p['magnet_fill_down'])
+        fu = float(p['magnet_fill_up'])
+        hole = float(p['rotor_hole'])
+        down_h = float(p.get('magnet_down_height', 0.0) or 0.0)
+        gap = float(p.get('magnet_up_gap', 0.0) or 0.0)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if n_poles <= 0 or rotor_or <= 0.0:
+        return None
+    pole = 2.0 * pi / n_poles
+    a_dn = pole * fd / 2.0
+    a_up = pole * fu / 2.0
+    w = rotor_or * sin(pole * fu * hole / 2.0)
+    # the +x side, bottom to top — the SAME expressions as mag_local
+    side = [(magnet_r * sin(a_dn), magnet_r * cos(a_dn)),
+            ((magnet_r + down_h) * sin(a_dn), (magnet_r + down_h) * cos(a_dn)),
+            ((rotor_or - gap) * sin(a_up), (rotor_or - gap) * cos(a_up))]
+    if side[2][0] < w:
+        return None
+    # walk down from the top corner; the first segment whose lower end is
+    # narrower than w holds the lowest admissible y
+    y_ok = side[2][1]
+    for (x0, y0), (x1, y1) in ((side[1], side[2]), (side[0], side[1])):
+        if x0 >= w:
+            y_ok = min(y_ok, y0)
+            continue
+        if x1 > x0:
+            y_ok = min(y_ok, y0 + (w - x0) * (y1 - y0) / (x1 - x0))
+        break
+    else:
+        return None          # the whole side is at least as wide as the opening
+    return max(0.0, rotor_or - y_ok)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

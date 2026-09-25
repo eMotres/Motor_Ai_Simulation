@@ -8,6 +8,7 @@
 import React, { useState } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
+import { formatApiErrorDetail } from '../../lib/apiErrorDetail';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -20,7 +21,7 @@ const FreeCADRoundTrip: React.FC = () => {
     setBusy(true); setMsg('exporting…');
     try {
       const r = await fetch(`${API}/api/freecad/export`);
-      if (!r.ok) throw new Error(String((await r.json())?.detail ?? r.status));
+      if (!r.ok) throw new Error(formatApiErrorDetail((await r.json())?.detail) || String(r.status));
       const blob = await r.blob();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -43,7 +44,7 @@ const FreeCADRoundTrip: React.FC = () => {
       const fd = new FormData(); fd.append('file', f);
       const r = await fetch(`${API}/api/freecad/import`, { method: 'POST', body: fd });
       const j = await r.json();
-      if (!r.ok) throw new Error(typeof j?.detail === 'string' ? j.detail : JSON.stringify(j?.detail));
+      if (!r.ok) throw new Error(formatApiErrorDetail(j?.detail) || `HTTP ${r.status}`);
       const n = Object.keys(j.applied ?? {}).length;
       setMsg(`✓ ${n} parameter(s) applied`
         + (j.unknown?.length ? ` · ${j.unknown.length} alias(es) not ours — ignored` : ''));

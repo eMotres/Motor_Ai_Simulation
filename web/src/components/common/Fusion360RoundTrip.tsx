@@ -7,6 +7,7 @@
 import React, { useState } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
+import { formatApiErrorDetail } from '../../lib/apiErrorDetail';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -35,7 +36,7 @@ const Fusion360RoundTrip: React.FC = () => {
     const fd = new FormData(); fd.append('file', f);
     const r = await fetch(`${API}/api/fusion/import?dry_run=${dry ? 1 : 0}`, { method: 'POST', body: fd });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j?.detail ?? `HTTP ${r.status}`);
+    if (!r.ok) throw new Error(formatApiErrorDetail(j?.detail) || `HTTP ${r.status}`);
     return j;
   };
 
@@ -43,6 +44,16 @@ const Fusion360RoundTrip: React.FC = () => {
     setBusy(true); setMsg('reading…');
     try {
       const d = await post(f, true);
+      // The dry run runs the SAME schema/value validation the real write
+      // would (routes.geometry.check_geometry_submission): a CSV whose
+      // values, applied together, do not describe a buildable machine comes
+      // back `ok: false` here, before any confirm dialog — never "apply N
+      // parameters?" for a machine that would then be refused on the second
+      // click.
+      if (d.ok === false) {
+        setMsg(`✗ refused — ${formatApiErrorDetail({ error: d.error, invalid_parameters: d.invalid_parameters }) || d.note || 'invalid geometry'}`);
+        setBusy(false); return;
+      }
       const n = Object.keys(d.applied ?? {}).length;
       const lines = Object.entries(d.applied ?? {}).map(([k, v]) => `${k}: ${d.before?.[k]} → ${v}`);
       const extra = [
@@ -54,9 +65,16 @@ const Fusion360RoundTrip: React.FC = () => {
         setMsg('cancelled — nothing written'); setBusy(false); return;
       }
       const a = await post(f, false);
+      if (a.ok === false) {
+        // Should not happen — the dry run above already refused a bad
+        // combination — but the write path is the one that must never be
+        // wrong, so it is still checked rather than assumed.
+        setMsg(`✗ refused — ${formatApiErrorDetail({ error: a.error, invalid_parameters: a.invalid_parameters }) || a.note || 'invalid geometry'}`);
+        setBusy(false); return;
+      }
       await fetchGeometryFromApi();
       setMsg(`✓ applied ${Object.keys(a.applied ?? {}).length}, unchanged ${a.unchanged?.length ?? 0}, skipped ${a.unknown?.length ?? 0}`);
-    } catch (err: any) { setMsg('✗ import failed: ' + String(err?.message ?? err)); }
+    } catch (err: any) { setMsg('✗ import failed: ' + formatApiErrorDetail(err?.message ?? err)); }
     setBusy(false);
   };
 

@@ -30,10 +30,35 @@ import json
 import pytest
 from fastapi import HTTPException
 
-GEO_A = {"stator_diameter": 40.0, "num_seg": 1, "num_slots_per_segment": 12,
-         "num_poles_per_segment": 14, "motor_length": 35.0}
-GEO_B = {"stator_diameter": 30.0, "num_seg": 1, "num_slots_per_segment": 12,
-         "num_poles_per_segment": 10, "motor_length": 35.0}
+# Full, buildable geometries (not just the 5 keys that distinguish A from B):
+# test_apply_reports_writability_to_the_editor pushes these through the real
+# apply_preset(), which now runs check_geometry_submission() -- the SAME
+# guard PUT /api/geometry refuses an impossible machine with (2026-09-25) --
+# and check_geometry_submission merges a partial dict over the SANDBOX's own
+# live geometry, not over these five keys alone.  A partial override (just
+# stator_diameter + topology) landed on top of an unrelated base machine and
+# came out with a shaft wider than its own rotor bore.  Every other primary
+# below is copied from tests/test_geometry_validation.py's GEO_30MM (proven
+# buildable there); only the five keys this file's identity assertions and
+# docstring care about — stator_diameter, the segment/slot/pole topology,
+# motor_length — still vary between A and B.
+_GEO_BASE = {
+    "slot_height": 4.3, "core_thickness": 1.5,
+    "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.4, "cut_width": 1.5,
+    "insulation_thickness": 0.05, "wire_width": 2, "wire_height": 0.5,
+    "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 6,
+    "wire_parallel": 1, "wire_split": 1, "slot_hs": 0.267, "magnet_height": 4.5,
+    "rotor_house_height": 0.8, "shaft_height": 2, "magnet_fill_down": 0.9,
+    "magnet_fill_up": 0.3, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
+    "rotor_hole": 0.7, "magnet_down_height": 1.4, "magnet_lamination": 0,
+    "stator_fillet_r": 1.2, "stator_fillet_r1": 0, "rotor_fill_r": 0.2,
+}
+GEO_A = {**_GEO_BASE, "stator_diameter": 40.0, "num_seg": 1,
+         "num_slots_per_segment": 12, "num_poles_per_segment": 14,
+         "motor_length": 35.0}
+GEO_B = {**_GEO_BASE, "stator_diameter": 30.0, "num_seg": 1,
+         "num_slots_per_segment": 12, "num_poles_per_segment": 10,
+         "motor_length": 35.0}
 
 ADMIN = "Bearer admin@example.com"
 ALICE = "Bearer alice@example.com"

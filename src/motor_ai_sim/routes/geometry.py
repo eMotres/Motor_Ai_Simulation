@@ -40,6 +40,53 @@ class GeometryUpdateModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+def check_geometry_submission(submitted_raw: dict) -> "dict[str, list]":
+    """Every content guard ``PUT /api/geometry`` refuses a write with —
+    unknown fields, the schema's own min/max, and unusable/impossible
+    derived values (a bore or rotor radius that comes out <= 0, a winding
+    that no longer fits) — evaluated WITHOUT writing or raising, keyed by
+    the same ``error`` string the route raises with.
+
+    THE one place these three checks run, so a caller that wants to know
+    whether a write WOULD be refused (a confirm dialog previewing a batch of
+    changes before the user commits to them, e.g. the Fusion import's
+    ``dry_run=1``) sees the identical verdict and message the write itself
+    refuses with, rather than finding out only after the write was
+    attempted.  Family locks (guard 4, "who may change this key") are
+    deliberately NOT here: whether the resulting machine can even exist does
+    not depend on who is editing it, and a locked field previewed here must
+    not be reported as "impossible" just because a lock would separately
+    refuse it.
+
+    ``submitted_raw`` is the {key: value} dict of the fields this write
+    would touch — exactly ``update.model_dump()`` with ``None`` dropped, or
+    (for a preview) the same dict a real write would receive.  Returns a
+    dict of ``error string -> [param_error, ...]``; empty when nothing is
+    wrong.  Iterate ``("unknown geometry field", "geometry parameter out of
+    range", "invalid geometry parameter value")`` for the order a real write
+    raises in (fails on the first non-empty one).
+    """
+    out: "dict[str, list]" = {}
+    unknown = check_unknown_geometry_keys(submitted_raw)
+    if unknown:
+        out["unknown geometry field"] = unknown
+    out_of_range = check_schema_bounds(submitted_raw)
+    if out_of_range:
+        out["geometry parameter out of range"] = out_of_range
+    try:
+        from motor_ai_sim.geometry_validation import validate_parameter_values
+        merged = {**get_current_geometry().to_dict(), **submitted_raw}
+        bad = [r for r in validate_parameter_values(merged)
+               if r.get("kind") == "derived" or r.get("field") in submitted_raw]
+    except HTTPException:
+        raise
+    except Exception:
+        bad = []   # the guard must never be the reason an edit cannot be saved
+    if bad:
+        out["invalid geometry parameter value"] = bad
+    return out
+
+
 class AddParameterRequest(BaseModel):
     name: str
     label: str
@@ -95,42 +142,26 @@ def update_geometry(update: GeometryUpdateModel, request: Request = None):
         _prev_geo = dict(_gc_prev().get("geometry", {}) or {})
     except Exception:   # noqa: BLE001
         _prev_geo = None
-    _unknown = check_unknown_geometry_keys(_submitted_raw)
-    if _unknown:
-        raise reject("unknown geometry field", _unknown)
-
-    # ── Input guard 2: the schema's OWN min/max, enforced server-side ────────
-    # The frontend clamps its sliders to these numbers (GET /api/geometry/schema
-    # serves them); anything that is not the frontend did not.  GEO_UNBOUNDED=1
-    # is the documented escape hatch and logs a warning while it is on.
-    _out_of_range = check_schema_bounds(_submitted_raw)
-    if _out_of_range:
-        raise reject("geometry parameter out of range", _out_of_range)
-
-    # ── Input guard 3: reject unusable VALUES before anything is written ─────
-    # A zero / negative / non-finite dimension does not produce an interesting
-    # cross-section, it produces a crash several layers down in the mesher (or,
-    # worse, a mirrored polygon that meshes fine and solves to nonsense).  422
-    # names the field so the client can highlight it, and nothing is persisted.
-    # Judged on the MERGED geometry, but only the fields this request actually
-    # touched are held against it — plus every multi-parameter ("derived") rule,
-    # since a bore radius that comes out negative is broken regardless of which
-    # knob was the last one typed.
-    try:
-        from motor_ai_sim.geometry_validation import validate_parameter_values
-        _submitted = _submitted_raw
-        _merged = {**get_current_geometry().to_dict(), **_submitted}
-        _bad = [r for r in validate_parameter_values(_merged)
-                if r.get("kind") == "derived" or r.get("field") in _submitted]
-    except HTTPException:
-        raise
-    except Exception:
-        _bad = []   # the guard must never be the reason an edit cannot be saved
-    if _bad:
-        raise HTTPException(status_code=422, detail={
-            "error": "invalid geometry parameter value",
-            "invalid_parameters": _bad,
-        })
+    # ── Input guards 2-3: schema bounds + unusable/impossible VALUES ─────────
+    # Guard 2 is the schema's OWN min/max, enforced server-side (the frontend
+    # clamps its sliders to these numbers — GET /api/geometry/schema serves
+    # them — so anything that is not the frontend did not; GEO_UNBOUNDED=1 is
+    # the documented escape hatch and logs a warning while it is on).  Guard 3
+    # rejects a zero / negative / non-finite dimension, and every DERIVED
+    # combination that does not survive the arithmetic (a bore or rotor
+    # radius <= 0, a winding that no longer fits) regardless of which single
+    # knob in the combination this request actually touched — a bore radius
+    # that comes out negative is broken no matter which parameter was the one
+    # just typed.  Both live in ``check_geometry_submission`` so a caller
+    # PREVIEWING a write (the Fusion import's ``dry_run=1``) sees the exact
+    # same verdict and message a real write would refuse with, instead of
+    # only finding out after the write was attempted.  This route still fails
+    # FAST, in the same order, on the first non-empty one.
+    _checks = check_geometry_submission(_submitted_raw)
+    for _err_name in ("unknown geometry field", "geometry parameter out of range",
+                      "invalid geometry parameter value"):
+        if _err_name in _checks:
+            raise reject(_err_name, _checks[_err_name])
 
     # ── Input guard 4: family locks ──────────────────────────────────────────
     # The machine on screen may BE a stamped product (die) or a frozen build

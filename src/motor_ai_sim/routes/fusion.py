@@ -18,7 +18,15 @@ POST /api/fusion/import       → a CSV exported by Parameter I/O, applied by
                                  guard, validator, family locks, die snapshot
                                  sync — exactly as if typed into the form).
                                  `?dry_run=1` reports what WOULD change and
-                                 writes nothing.
+                                 writes nothing — but it DOES run the same
+                                 schema/value validation the real write would
+                                 (`check_geometry_submission`), so a CSV that
+                                 describes a machine that cannot be built
+                                 (e.g. a stator too small for its own slot +
+                                 core + gap + magnet stack) is refused —
+                                 `ok: false` and `invalid_parameters` — before
+                                 the confirm dialog ever tells the user
+                                 anything is safe to apply.
 
 NAMES.  Fusion user parameters must be alphanumeric/underscore and not start
 with a digit — every geometry key qualifies, so the default map is identity:
@@ -51,6 +59,7 @@ from fastapi.responses import Response
 
 from motor_ai_sim.auth import require_admin
 from motor_ai_sim.config import get_config
+from motor_ai_sim.routes._validation import reject
 from motor_ai_sim.workspace import shared_root as _ws_shared
 
 log = logging.getLogger(__name__)
@@ -203,6 +212,19 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
     FUSION_EXCLUDED_NAMES (slot_hs) — a row we no longer export but that an
     older CSV still carries; every pre-existing field keeps its meaning.
 
+    Before anything is applied — dry_run=1 as much as dry_run=0 — every
+    changed value is checked TOGETHER through
+    ``routes.geometry.check_geometry_submission``: the same unknown-field /
+    schema-bounds / impossible-derived-value guard ``PUT /api/geometry``
+    refuses a write with.  A CSV that describes a machine that cannot exist
+    (e.g. stator_diameter too small for its own slot_height + core_thickness
+    + air_gap + magnet_height + rotor_house_height, so the rotor bore comes
+    out negative) is refused on BOTH calls, with the same
+    `invalid_parameters` list either way: `ok: false` and nothing applied on
+    dry_run=1 (so the confirm dialog can show the errors and disable OK), a
+    422 on dry_run=0 (so a client that skips the dry run cannot write it
+    either).
+
     Columns are matched by HEADER NAME, not by position, so both shapes of the
     file work: the six-column one Parameter I/O writes (Name, Unit, Expression,
     Value, Comment, Favorite) and our older four-column one.  Only Name,
@@ -258,6 +280,37 @@ async def import_params(file: UploadFile = File(...), dry_run: int = 0,
         "unknown": sorted(unknown),
         "refused": refused,
     }
+    # ── Validate the RESULTING machine — every imported value APPLIED
+    # TOGETHER — before dry_run=1 (the confirm dialog) tells the user
+    # anything is fine to apply.  Before this, the dry run only diffed
+    # values against the live machine: it never asked whether the numbers it
+    # was about to show describe a machine that can exist, so a CSV whose
+    # stator_diameter is too small for its own slot_height + core_thickness +
+    # air_gap + magnet_height + rotor_house_height (a negative rotor bore)
+    # produced a clean "apply 30 parameters?" dialog, and only the SECOND
+    # click — the real write, through update_geometry's own guard — was
+    # refused.  ``check_geometry_submission`` is the exact same three checks
+    # that write refuses with (unknown fields / schema bounds / impossible
+    # derived values), so dry_run and the real write always agree, and dry_run
+    # now reports it too — the confirm dialog must see this before the user
+    # ever gets to click OK.
+    from motor_ai_sim.routes.geometry import check_geometry_submission
+    _checks = check_geometry_submission(changed) if changed else {}
+    _invalid: list = []
+    for _records in _checks.values():
+        _invalid.extend(_records)
+    if _invalid:
+        _error = next(iter(_checks))
+        out["ok"] = False
+        out["error"] = _error
+        out["invalid_parameters"] = _invalid
+        out["note"] = ("refused — applying every imported parameter together "
+                       "describes a machine that cannot be built; see "
+                       "invalid_parameters (nothing was written)")
+        if dry_run:
+            return out
+        raise reject(_error, _invalid)
+
     if not changed or dry_run:
         out["note"] = ("nothing to apply — every recognised parameter already has this value"
                        if not changed else "dry run — nothing written")

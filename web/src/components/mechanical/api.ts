@@ -339,9 +339,11 @@ export interface FieldPayload {
  *  temperatures, mesh, order.  Owner 2026-09-21: "нужно искать ещё
  *  максимальную скорость вращения ... она будет, когда достигает SF = 1".
  *
- *  `rpm_sf1` is null when the search did not bracket a crossing within
- *  `max_factor` of the analysed speed (`reached: false`) — a real answer
- *  ("not within the range searched"), not a failed request.
+ *  `rpm_sf1` is null only when the search hit its runaway guard (20× the
+ *  analysed speed, or the 1500 m/s rim-speed bound) or its solve budget
+ *  without a crossing (`reached: false`); `searched_to_rpm` /
+ *  `sf_at_searched_to` / `cap_reason` then say how far it looked and why it
+ *  stopped (v2 search, 2026-09-25 — absent on older results).
  *  `omega2_extrapolation_rpm` is a pure ω² cross-check only (SF ∝ 1/rpm² if
  *  every load were centrifugal) — the real answer is `rpm_sf1`, which is
  *  interpolated between two actual solves, never extrapolated. */
@@ -364,6 +366,13 @@ export interface LimitSpeedResult {
   geo_fingerprint: string | null;
   /** the rpm this search started from — the case `sf_at_rpm0` describes */
   analysed_rpm: number;
+  /** v2 search: the runaway guard in the search direction and what set it */
+  search_cap_rpm?: number | null;
+  cap_reason?: string;
+  /** v2 search, only when not reached: farthest speed solved + its SF */
+  searched_to_rpm?: number | null;
+  sf_at_searched_to?: number | null;
+  stopped_by?: 'cap' | 'budget' | null;
 }
 
 export interface RotorStress {

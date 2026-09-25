@@ -110,6 +110,12 @@ def limit_speed_datasheet_row(mech_by_duty: Dict[str, Dict[str, Any]]
                 "the case analysed; limited by the %s. Not a burst test"
                 % (ls.get("limiting_part") or "—"), 0)
     if isinstance(ls, dict):
+        to = ls.get("searched_to_rpm")
+        if isinstance(to, (int, float)) and math.isfinite(to):
+            return (label, "not reached",
+                    "SF = 1 not crossed; searched to %s rpm, stopped at %s"
+                    % (f"{to:,.0f}", ls.get("cap_reason") or "the search cap"),
+                    0)
         return (label, "not reached",
                 "the search did not bracket SF = 1 within the range tried", 0)
     return (label, "not solved",

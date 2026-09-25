@@ -17972,6 +17972,17 @@ def _limit_speed_words(ls: Optional[Dict[str, Any]]) -> Optional[str]:
     if not isinstance(ls, dict):
         return None
     if not ls.get("reached"):
+        # v2 search (2026-09-25) records how far it actually looked; a
+        # record from the old ×1.5 search does not, and keeps its old words.
+        to = _numf(ls.get("searched_to_rpm"))
+        if to is not None:
+            sf_to = _numf(ls.get("sf_at_searched_to"))
+            sf_txt = f", SF {sf_to:.2f} there" if sf_to is not None else ""
+            if ls.get("stopped_by") == "budget":
+                return f"not bracketed by {to:,.0f} rpm (solve budget{sf_txt})"
+            return (f"> {to:,.0f} rpm (search cap{sf_txt})"
+                    if to >= _numf(ls.get("analysed_rpm") or 0.0)
+                    else f"< {to:,.0f} rpm (fails at every speed tried{sf_txt})")
         return "not reached in the searched range"
     rpm1 = _numf(ls.get("rpm_sf1"))
     if rpm1 is None:

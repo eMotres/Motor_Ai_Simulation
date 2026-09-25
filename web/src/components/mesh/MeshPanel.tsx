@@ -640,11 +640,21 @@ const MeshPanel: React.FC = () => {
   // were dead — the "Max size doesn't change the mesh" report).  Bounding the
   // slider to the floor makes its ENTIRE range live.  Floor comes from the last
   // mesh build (feature_floor_mm); fall back to the old fixed range until then.
-  const _floor = (femMesh?.feature_floor_mm && femMesh.feature_floor_mm > 0.4)
+  // The gate used to require floor > 0.4 mm — meant to ignore a missing/zero
+  // floor, it instead excluded every genuinely tiny motor (Ø12 CIANO14:
+  // floor ~0.3-0.5 mm), which fell through to the 1.5-8 mm fallback range —
+  // entirely ABOVE the real floor, so the backend clamped every slider
+  // position to the same effective size and dragging did nothing
+  // (2026-09-25: "изменяю на моторе, а ничего не меняется").  Any positive
+  // floor is real and must bind the slider.
+  const _floor = (femMesh?.feature_floor_mm && femMesh.feature_floor_mm > 0)
     ? femMesh.feature_floor_mm : null;
   const meshMax  = _floor ?? 8;
-  const meshMin  = _floor ? Math.max(0.2, +(_floor / 6).toFixed(2)) : 1.5;
-  const meshStep = _floor ? Math.max(0.05, +((meshMax - meshMin) / 18).toFixed(2)) : 0.5;
+  // meshMin must never exceed meshMax: for a floor small enough that
+  // floor/6 rounds under 0.2, clamp the lower bound down to the floor
+  // itself rather than letting min > max collapse the MUI slider.
+  const meshMin  = _floor ? Math.min(meshMax, Math.max(0.05, +(_floor / 6).toFixed(2))) : 1.5;
+  const meshStep = _floor ? Math.max(0.02, +((meshMax - meshMin) / 18).toFixed(2)) : 0.5;
   // Snap a persisted value sitting above the floor down onto it, so the Chip and
   // the transient solve use the size that is ACTUALLY meshed (not a dead 8 mm).
   // NOT marked dirty: this is the mesher clamping the user's value, not the user
@@ -916,6 +926,18 @@ const MeshPanel: React.FC = () => {
                 onChange={(_, v) => { setMeshSizeMm(v as number); markDirty('mesh_size_mm'); }}
                 sx={{ color: '#3b82f6' }}
               />
+              {/* Owner UI rule: never let an overridden control read as broken —
+                  one short ALWAYS-VISIBLE line, not just a hover tooltip.  On a
+                  small motor the floor pins the whole slider into a narrow band
+                  (e.g. 0.2-0.5 mm) — every position is live, but the range looks
+                  "stuck" without this line (2026-09-25 report: "меняю, а ничего
+                  не меняется" on the Ø12 CIANO14). */}
+              {_floor && (
+                <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mt: 0.25 }}>
+                  Capped at {_floor.toFixed(2)} mm — this motor's smallest tooth/slot
+                  limits the range; every position above it meshes the same.
+                </Typography>
+              )}
             </Box>
 
             {/* min_size_mm — a LEGACY gmsh parameter.  The geometry-driven

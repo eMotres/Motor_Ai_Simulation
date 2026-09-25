@@ -91,7 +91,15 @@ FALLBACK_DEFAULTS = {
 
 # The ONLY operation kinds this script is allowed to plan. Checked before
 # anything is written -- see the module docstring's GUARD paragraph.
-ALLOWED_OP_KINDS = frozenset(("rename", "create", "derive_stator_up_r"))
+# "repair_rename" (2026-09-25) is the ONE addition: undoing the FIRST
+# version of this script (commit e65e16e), which plainly renamed
+# stator_up_r -> stator_diameter (keeping the RADIUS value) and
+# mag_step -> magnet_lamination (keeping the motor-length value) instead of
+# doing the CREATE + one-expression-edit / CREATE-from-legacy this version
+# does. A repair_rename is still just a plain Name change (Fusion rewrites
+# dependents automatically) -- never a delete, never a value edit -- so it
+# fits the same "nothing is ever deleted" guarantee as an ordinary rename.
+ALLOWED_OP_KINDS = frozenset(("rename", "create", "derive_stator_up_r", "repair_rename"))
 
 
 def _fetch_defaults():
@@ -125,6 +133,88 @@ def _read_value(um, param, unit):
         return float(um.convert(param.value, um.internalUnits, unit))
     except Exception:  # noqa: BLE001
         return None
+
+
+class _PostRepairView:
+    """A view of `up.itemByName` as the design will look AFTER the planned
+    REPAIR renames (undo of the v1 script bug) are applied -- used only to
+    build the dry-run PLAN/text before anything is actually written. The
+    APPLY phase always re-reads the real `up` fresh, after the repair
+    renames have genuinely happened, so a mistake in this view could at
+    worst mislead the preview text -- it can never cause a wrong write.
+    """
+    def __init__(self, up, hide, alias_to_real):
+        self._up = up
+        self._hide = set(hide)          # names to report as absent
+        self._alias = dict(alias_to_real)  # alias name -> the real param to return for it
+
+    def itemByName(self, name):
+        if name in self._alias:
+            return self._up.itemByName(self._alias[name])
+        if name in self._hide:
+            return None
+        return self._up.itemByName(name)
+
+
+def _enumerate_names_and_expressions(up):
+    """Every user-parameter Name in the design, and a {name: expression}
+    map -- used to look for a formula that references `stator_diameter`
+    without dividing it by 2 (the v1-broken signature; see
+    fusion_param_common.stator_diameter_used_as_radius)."""
+    names = []
+    exprs = {}
+    try:
+        count = up.count
+    except Exception:  # noqa: BLE001
+        count = 0
+    for i in range(count):
+        try:
+            p = up.item(i)
+            names.append(p.name)
+            exprs[p.name] = str(p.expression)
+        except Exception:  # noqa: BLE001
+            continue
+    return names, exprs
+
+
+def _plan_repair(up, um):
+    """Detect whether this design is in the v1-broken state (see
+    fusion_param_common.plan_v1_repair's docstring) and, if so, what to
+    repair before running the normal v2 plan."""
+    names, exprs = _enumerate_names_and_expressions(up)
+    present = set(names)
+
+    stator_diameter_val = None
+    sd_param = up.itemByName("stator_diameter")
+    if sd_param is not None:
+        stator_diameter_val = _read_value(um, sd_param, "mm")
+
+    stack = {}
+    for canonical, key in (("slot_height", "slot_height_mm"),
+                           ("core_thickness", "core_thickness_mm"),
+                           ("air_gap", "air_gap_mm"),
+                           ("magnet_height", "magnet_height_mm"),
+                           ("rotor_house_height", "rotor_house_height_mm"),
+                           ("shaft_height", "shaft_height_mm")):
+        p = up.itemByName(canonical)
+        stack[key] = _read_value(um, p, "mm") if p is not None else 0.0
+
+    dependent_exprs = [expr for pname, expr in exprs.items() if pname != "stator_diameter"]
+
+    motor_length_val = None
+    mlp = up.itemByName("motor_length") or up.itemByName("stator_w")
+    if mlp is not None:
+        motor_length_val = _read_value(um, mlp, "mm")
+
+    magnet_lamination_val = None
+    mlam = up.itemByName("magnet_lamination")
+    if mlam is not None:
+        magnet_lamination_val = _read_value(um, mlam, "mm")
+
+    return FPC.plan_v1_repair(
+        present, dependent_expressions=dependent_exprs,
+        stator_diameter_value=stator_diameter_val, stack_components=stack,
+        motor_length_value=motor_length_val, magnet_lamination_value=magnet_lamination_val)
 
 
 def _plan(up, defaults):
@@ -232,31 +322,84 @@ def run(context):
             defaults_note += (("; " if defaults_note else "")
                                + "API unreachable (%s) -- used built-in fallback defaults" % err)
 
-        plan, ops = _plan(up, defaults)
+        # REPAIR DETECTION (2026-09-25).  Undo of the FIRST version of this
+        # script (commit e65e16e), which plainly renamed stator_up_r ->
+        # stator_diameter (keeping the RADIUS value) and mag_step ->
+        # magnet_lamination (keeping the motor-length value). See
+        # fusion_param_common.plan_v1_repair's docstring.
+        repair = _plan_repair(up, um)
+        hide, alias = set(), {}
+        if repair["repair_stator_diameter"]:
+            hide.add("stator_diameter")
+            alias["stator_up_r"] = "stator_diameter"
+        if repair["repair_magnet_lamination"]:
+            hide.add("magnet_lamination")
+            alias["mag_step"] = "magnet_lamination"
+        view = _PostRepairView(up, hide, alias) if (hide or alias) else up
+
+        # The normal v2 plan, computed against `view` -- i.e. as the design
+        # will look AFTER the repair renames (if any) are applied.
+        plan, ops = _plan(view, defaults)
+
+        repair_ops = []
+        if repair["repair_stator_diameter"]:
+            repair_ops.append({"kind": "repair_rename", "old": "stator_diameter",
+                                "canonical": "stator_up_r", "evidence": repair["stator_evidence"]})
+        if repair["repair_magnet_lamination"]:
+            repair_ops.append({"kind": "repair_rename", "old": "magnet_lamination",
+                                "canonical": "mag_step", "evidence": []})
+        all_ops = repair_ops + ops
 
         # GUARD: refuse outright if the plan contains anything outside the
         # allowed operation kinds (rename / create / the one expression
-        # edit) -- see the module docstring.
-        bad = sorted({o["kind"] for o in ops} - ALLOWED_OP_KINDS)
+        # edit / the v1-bug repair rename) -- see the module docstring.
+        bad = sorted({o["kind"] for o in all_ops} - ALLOWED_OP_KINDS)
         if bad:
             ui.messageBox("REFUSING TO RUN: the plan contains operation kind(s) %s, "
-                           "outside the allowed rename/create/one-expression-edit set. "
+                           "outside the allowed rename/create/one-expression-edit/repair set. "
                            "Nothing was changed." % bad)
             return
 
-        if not ops:
+        if not all_ops:
             ui.messageBox("Nothing to do: no legacy names found and every canonical "
                            "parameter already exists.\n" + _plan_text(plan, defaults, defaults_note))
             return
 
-        answer = ui.messageBox(_plan_text(plan, defaults, defaults_note) +
+        plan_text = _plan_text(plan, defaults, defaults_note)
+        if repair_ops:
+            repair_lines = []
+            for op in repair_ops:
+                line = "  %s -> %s" % (op["old"], op["canonical"])
+                if op["evidence"]:
+                    line += "  [%s]" % "; ".join(op["evidence"])
+                repair_lines.append(line)
+            plan_text = ("REPAIR (undo of the first script version) (%d)\n%s\n\n"
+                         "This undoes commit e65e16e's original, WRONG plain rename of these "
+                         "two parameters (it kept the old radius/segment-length value under the "
+                         "new canonical name); the normal plan below then runs on the "
+                         "now-correctly-legacy-named design.\n"
+                         % (len(repair_ops), "\n".join(repair_lines))) + plan_text
+
+        answer = ui.messageBox(plan_text +
                                 "\n\nApply these changes?", "motor_ai_sim: rename parameters",
                                 adsk.core.MessageBoxButtonTypes.YesNoButtonType)
         if answer != adsk.core.DialogResults.DialogYes:
             ui.messageBox("Cancelled -- nothing changed.")
             return
 
-        log = {"renamed": [], "created": [], "derived": [], "failed": []}
+        log = {"repaired": [], "renamed": [], "created": [], "derived": [], "failed": []}
+
+        # 0) REPAIR renames first -- on the REAL `up` (not the view), so the
+        #    plain-rename step right after this sees the truly-repaired
+        #    design. A repair rename only changes the Name (never deletes,
+        #    never edits the value) -- Fusion rewrites dependent formulas
+        #    automatically, exactly as it did for the original wrong rename.
+        for op in repair_ops:
+            try:
+                up.itemByName(op["old"]).name = op["canonical"]
+                log["repaired"].append("%s -> %s" % (op["old"], op["canonical"]))
+            except Exception as ex:  # noqa: BLE001
+                log["failed"].append("repair %s: %s" % (op["old"], ex))
 
         # 1) plain renames (Fusion auto-updates every dependent reference;
         #    nothing else in the design is touched for these).
@@ -327,9 +470,12 @@ def _block(title, lines, limit=40):
 
 def _summary(log):
     head = ("motor_ai_sim: legacy parameters renamed (nothing deleted)\n\n"
-            "renamed: %d\ncreated: %d\nderived (formula changed): %d\nfailed: %d"
-            % (len(log["renamed"]), len(log["created"]), len(log["derived"]), len(log["failed"])))
-    body = (_block("RENAMED", log["renamed"])
+            "repaired (v1-bug undo): %d\nrenamed: %d\ncreated: %d\n"
+            "derived (formula changed): %d\nfailed: %d"
+            % (len(log["repaired"]), len(log["renamed"]), len(log["created"]),
+               len(log["derived"]), len(log["failed"])))
+    body = (_block("REPAIRED", log["repaired"])
+            + _block("RENAMED", log["renamed"])
             + _block("CREATED", log["created"])
             + _block("DERIVED", log["derived"])
             + _block("FAILED", log["failed"]))

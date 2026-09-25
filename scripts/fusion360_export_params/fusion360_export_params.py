@@ -70,6 +70,8 @@ def _collect(up, um):
                     return v, "legacy:%s" % old
         return None, None
 
+    notes = {}
+
     motor_length_entry = FPC.BY_CANONICAL["motor_length"]
     motor_length_val, ml_src = _get_canonical_or_legacy(motor_length_entry)
 
@@ -87,6 +89,31 @@ def _collect(up, um):
                 found[canonical] = (motor_length_val, ml_src)
             else:
                 missing.append(canonical)
+            continue
+        if canonical == "magnet_lamination":
+            raw, src = _get_canonical_or_legacy(e)
+            if raw is None:
+                missing.append(canonical)
+                continue
+            if src == "canonical":
+                # Found directly under its own canonical name -- guard
+                # against the v1-bug signature (or simply never having been
+                # set): a magnet_lamination that still equals the motor
+                # length is exported as 0 ("no slicing"), not carried over
+                # as a bogus non-zero lamination step.
+                val, overridden = FPC.magnet_lamination_export_value(raw, motor_length_val)
+                found[canonical] = (val, src)
+                if overridden:
+                    notes[canonical] = ("guard: canonical magnet_lamination equaled "
+                                        "motor_length -> exported as 0")
+                continue
+            # legacy value (mag_step) -- forward-convert as usual.
+            if motor_length_val is None:
+                missing.append(canonical)
+                continue
+            val = FPC.convert_forward(e, raw, motor_length_value=motor_length_val)
+            found[canonical] = (val, src)
+            legacy_used.append("%s (from %s)" % (canonical, src))
             continue
 
         raw, src = _get_canonical_or_legacy(e)
@@ -108,7 +135,7 @@ def _collect(up, um):
         found[canonical] = (val, src)
         legacy_used.append("%s (from %s)" % (canonical, src))
 
-    return found, legacy_used, missing
+    return found, legacy_used, missing, notes
 
 
 def _num(v):
@@ -127,11 +154,37 @@ def run(context):
         up = design.userParameters
         um = design.unitsManager
 
-        found, legacy_used, missing = _collect(up, um)
+        found, legacy_used, missing, notes = _collect(up, um)
         if not found:
             ui.messageBox("No canonical or legacy geometry parameters found in this "
                            "design -- nothing to export.")
             return
+
+        # SANITY GUARD (2026-09-25).  Before writing anything, compute the
+        # same derived radii motor_ai_sim's own geometry solver does and
+        # check they are positive and correctly ordered -- this is exactly
+        # what catches the v1-bug signature (stator_diameter holding a
+        # RADIUS value) instead of it silently reaching a CSV file and then
+        # the app.
+        check_values = {k: v for k, (v, _src) in found.items()
+                        if k in ("stator_diameter", "slot_height", "core_thickness", "air_gap",
+                                 "magnet_height", "rotor_house_height", "shaft_height")}
+        stator_up_r_param = up.itemByName("stator_up_r")
+        if stator_up_r_param is not None:
+            su_val = _read_value(um, stator_up_r_param, "mm")
+            if su_val is not None:
+                check_values["stator_up_r"] = su_val
+        guard = FPC.export_sanity_check(check_values)
+        if not guard["skipped"] and not guard["ok"]:
+            msg = ("motor_ai_sim: EXPORT SANITY CHECK FAILED\n\n"
+                   + "\n".join("  - " + f for f in guard["failures"])
+                   + "\n\nlikely cause: %s" % guard["likely_cause"]
+                   + "\n\nWrite the CSV anyway?")
+            answer = ui.messageBox(msg, "motor_ai_sim: export guard",
+                                    adsk.core.MessageBoxButtonTypes.YesNoButtonType)
+            if answer != adsk.core.DialogResults.DialogYes:
+                ui.messageBox("Cancelled -- nothing written.")
+                return
 
         dlg = ui.createFileDialog()
         dlg.isMultiSelectEnabled = False
@@ -149,7 +202,8 @@ def run(context):
         for canonical in sorted(found):
             value, src = found[canonical]
             unit = FPC.BY_CANONICAL[canonical]["unit"]
-            comment = "" if src == "canonical" else ("exported via legacy fallback: " + src)
+            comment = notes.get(canonical) or (
+                "" if src == "canonical" else ("exported via legacy fallback: " + src))
             w.writerow([canonical, unit, _num(value), _num(value), comment, "False"])
         with open(out_path, "wb") as f:
             f.write(buf.getvalue().encode("utf-8-sig"))
@@ -159,6 +213,8 @@ def run(context):
                "button, or POST it to /api/fusion/import." % (len(found), out_path))
         if legacy_used:
             msg += "\n\nfrom LEGACY names (conversion applied):\n  " + "\n  ".join(legacy_used)
+        if notes:
+            msg += "\n\nNOTES:\n  " + "\n  ".join("%s: %s" % (k, v) for k, v in sorted(notes.items()))
         if missing:
             msg += "\n\nNOT FOUND in this design (%d):\n  " % len(missing) + ", ".join(sorted(missing))
         ui.messageBox(msg)

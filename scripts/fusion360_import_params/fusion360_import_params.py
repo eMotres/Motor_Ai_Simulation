@@ -43,12 +43,21 @@
 #
 # Replaces fusion360_controller.py (2026-02): that one carried eleven names
 # the geometry no longer has.
+import csv
+import io
 import json
+import os
+import sys
 import traceback
 import urllib.request
 
 import adsk.core
 import adsk.fusion
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import fusion_param_common as FPC  # noqa: E402
+import importlib  # noqa: E402
+importlib.reload(FPC)  # Fusion keeps modules in memory between runs: always load the current map
 
 API = "http://localhost:8001/api/fusion/params.json"
 TOL = 1e-6
@@ -93,45 +102,81 @@ def _clip(text, n=48):
 
 
 def _write_value(um, existing, name, value, unit, expr):
-    """Write the VALUE of an existing parameter.  ('same'|'updated'|'failed', detail)."""
+    """Write the VALUE of an existing parameter.  ('same'|'updated'|'failed', detail).
+
+    API AUDIT (2026-09-25, owner: "исправь все эти косяки в скриптах").
+    `Parameter.unit` is READ-ONLY in the Fusion API (help.autodesk.com's own
+    Parameter.unit reference page, corroborated on the Autodesk community
+    forum: assigning it always raises) -- an earlier version of this
+    function assigned `existing.unit = unit` and therefore ALWAYS failed on
+    the "different unit" branch, even in the common, perfectly fixable case
+    of the same DIMENSION (length vs length) just displayed in a different
+    unit (e.g. the model has "in", we want "mm"): Fusion parses the unit
+    token INSIDE the expression string regardless of the parameter's
+    current display unit, so writing `existing.expression = "12 mm"`
+    already handles that case with no separate unit-assignment step at all.
+    Only a genuine DIMENSION mismatch (length vs unitless) cannot be
+    bridged this way -- Fusion then rejects the expression
+    ("Expression is invalid"), which is reported as a mismatch for the
+    user to resolve by hand in Fusion (recreating the parameter under the
+    right type) rather than guessed at automatically.
+    """
     try:
         cur_unit = str(existing.unit or "")
     except Exception:      # noqa: BLE001
-        cur_unit = unit    # unreadable -> assume ours, let the setters decide
+        cur_unit = unit    # unreadable -> assume ours, let the setter decide
 
+    # Compare in the parameter's OWN current unit so an unchanged value is
+    # not rewritten (keeps the timeline clean) -- only when the units
+    # already match; a genuine unit difference always needs a write attempt
+    # since a value that happens to be numerically equal in two different
+    # units usually is not the same length.
     if cur_unit == unit:
-        # Same unit on both sides: never touch .unit (assigning it on a
-        # unitless parameter is the "Bad units parameter" error), compare in
-        # the parameter's own unit so an unchanged 36 mm is not rewritten and
-        # the timeline stays clean, and write only the expression.
         old = _current(um, existing, unit)
         if old is not None and abs(old - value) <= TOL:
             return "same", name
-        existing.expression = expr
-        return "updated", "%s: %s -> %s" % (name, _num(old) if old is not None else "?", expr)
+    else:
+        old = _current(um, existing, cur_unit)
 
-    # Different unit in the model.  The unit has to move FIRST -- an expression
-    # carrying a unit is invalid while the parameter is unitless -- and if
-    # Fusion refuses, leave the parameter exactly as found and say what has to
-    # be changed by hand.
-    old_raw = _current(um, existing, cur_unit)
-    mismatch = ("%s: unit mismatch: model %r vs ours %r -- change the unit in Fusion"
-                % (name, cur_unit, unit))
-    try:
-        existing.unit = unit
-    except Exception:      # noqa: BLE001
-        return "failed", mismatch
     try:
         existing.expression = expr
-    except Exception:      # noqa: BLE001
-        try:
-            existing.unit = cur_unit        # put it back as found
-        except Exception:      # noqa: BLE001
-            pass
+    except Exception as ex:      # noqa: BLE001
+        mismatch = ("%s: unit mismatch: model %r vs ours %r -- change the parameter's "
+                    "type in Fusion by hand (%s)" % (name, cur_unit, unit, ex))
         return "failed", mismatch
     return "updated", ("%s: %s -> %s"
-                       % (name, ("%s %s" % (_num(old_raw), cur_unit)).strip()
-                          if old_raw is not None else "?", expr))
+                       % (name, ("%s %s" % (_num(old), cur_unit)).strip()
+                          if old is not None else "?", expr))
+
+
+def _load_from_csv_dialog(ui):
+    """Fallback (2026-09-25, owner audit) for when the local API is not
+    running: let the user pick a Parameter I/O-shaped CSV file instead --
+    either our own export's six columns or a plain export from the add-in
+    itself, tolerant of both (FPC.parse_param_io_csv_rows matches columns
+    by header NAME). Returns (params, source_text) with `params` shaped
+    exactly like the API's own `parameters` list, or (None, None) if the
+    user cancelled."""
+    dlg = ui.createFileDialog()
+    dlg.isMultiSelectEnabled = False
+    dlg.title = "Import Parameter I/O CSV (our own export, or the add-in's own)"
+    dlg.filter = "CSV files (*.csv)"
+    if dlg.showOpen() != adsk.core.DialogResults.DialogOK:
+        return None, None
+    path = dlg.filename
+    with open(path, "rb") as f:
+        raw = f.read()
+    text = raw.decode("utf-8-sig", errors="replace")
+    rdr = csv.DictReader(io.StringIO(text))
+    rows = list(rdr)
+    values, refused = FPC.parse_param_io_csv_rows(rows, rdr.fieldnames)
+    params = [{"name": n, "unit": u, "value": v, "comment": c}
+              for n, (v, u, c) in values.items()]
+    source = "CSV %s" % path
+    if refused:
+        source += " (%d row(s) not a plain number, skipped: %s)" % (
+            len(refused), ", ".join(sorted(refused)))
+    return params, source
 
 
 def run(context):
@@ -143,9 +188,30 @@ def run(context):
         if not design:
             ui.messageBox("Open a Fusion design first.")
             return
-        with urllib.request.urlopen(API, timeout=10) as r:
-            payload = json.load(r)
-        params = payload.get("parameters") or []
+
+        source = "the running motor_ai_sim API"
+        try:
+            with urllib.request.urlopen(API, timeout=10) as r:
+                payload = json.load(r)
+            params = payload.get("parameters") or []
+        except Exception as api_err:  # noqa: BLE001
+            answer = ui.messageBox(
+                "motor_ai_sim API unreachable at %s\n(%s)\n\n"
+                "Import from a Parameter I/O CSV file instead?" % (API, api_err),
+                "motor_ai_sim: import parameters",
+                adsk.core.MessageBoxButtonTypes.YesNoButtonType)
+            if answer != adsk.core.DialogResults.DialogYes:
+                ui.messageBox("Cancelled -- nothing changed.")
+                return
+            try:
+                params, source = _load_from_csv_dialog(ui)
+            except ValueError as ve:
+                ui.messageBox("Could not read this CSV: %s" % ve)
+                return
+            if params is None:
+                return  # file dialog cancelled
+            payload = {"machine": source}
+
         up = design.userParameters
         um = design.unitsManager
         created, updated, same, failed, noted = [], [], [], [], []

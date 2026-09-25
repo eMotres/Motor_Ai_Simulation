@@ -282,3 +282,261 @@ def derive_stator_up_r_expression(factor: float = 2.0) -> str:
     stands alone as stator_up_r's entire new definition rather than being
     substituted into a larger formula."""
     return "stator_diameter / %g" % (factor,)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# V1-BUG REPAIR (2026-09-25).  The FIRST version of fusion360_rename_params
+# (commit e65e16e) did a plain 1:1 rename of stator_up_r -> stator_diameter
+# and mag_step -> magnet_lamination -- WRONG for exactly those two, because
+# their whole point is that the VALUE has to change meaning (radius ->
+# diameter) or be recomputed (segment length -> our 0-means-solid
+# convention), not just carry over verbatim under a new Name. Once a design
+# has been through that first version, the CURRENT (v2) script sees
+# `stator_diameter`/`magnet_lamination` already present and does nothing,
+# permanently baking in an impossible machine (stator_diameter holding a
+# RADIUS value, e.g. 6 mm instead of 12 mm; magnet_lamination holding the
+# motor length instead of 0).
+#
+# These two functions detect that specific v1-broken state (never a false
+# positive on a healthy, never-renamed, or correctly v2-renamed design) so
+# the rename script can REPAIR it first -- renaming the canonical name back
+# to the legacy one (Fusion rewrites dependents automatically, exactly as
+# it did for the original, wrong, forward rename) -- and only then run the
+# normal v2 plan on the now-correctly-legacy-named design.
+# ─────────────────────────────────────────────────────────────────────────
+_STATOR_DIAMETER_HALVED_RE = re.compile(
+    r"\bstator_diameter\s*/\s*2(?:\.0*)?\b|\bstator_diameter\s*\*\s*0\.5\b")
+_STATOR_DIAMETER_REF_RE = re.compile(r"\bstator_diameter\b")
+
+
+def stator_diameter_used_as_radius(dependent_expressions: List[str]) -> bool:
+    """True if any of `dependent_expressions` (the Expression text of OTHER
+    user parameters that reference the `stator_diameter` token) uses it as
+    though it were still a RADIUS -- i.e. references the bare token without
+    ever dividing it by 2 (or multiplying by 0.5) first. A healthy v2
+    design's only reference to `stator_diameter` is `stator_up_r`'s own
+    `"stator_diameter / 2"`, which is excluded by the caller (it is not an
+    *other* parameter's expression); anything else that uses the bare token
+    (e.g. `stator_diameter - slot_height - core_thickness`, the v1-broken
+    signature) is a radius-shaped use of a name that means diameter."""
+    for expr in dependent_expressions:
+        if _STATOR_DIAMETER_REF_RE.search(expr) and not _STATOR_DIAMETER_HALVED_RE.search(expr):
+            return True
+    return False
+
+
+def stator_diameter_value_too_small(stator_diameter_mm: float, *, slot_height_mm: float = 0.0,
+                                     core_thickness_mm: float = 0.0, air_gap_mm: float = 0.0,
+                                     magnet_height_mm: float = 0.0, rotor_house_height_mm: float = 0.0,
+                                     shaft_height_mm: float = 0.0) -> bool:
+    """Secondary/fallback evidence (used when no dependent expression is
+    available to inspect, e.g. from an exported CSV): the radial stack
+    (slot_height + core_thickness + air_gap + magnet_height +
+    rotor_house_height + shaft_height) must fit inside HALF of a genuine
+    stator_diameter. Here we check something weaker but still damning: that
+    the stack does not even fit inside stator_diameter taken at FACE VALUE
+    (undivided) -- exactly what happens when a radius value (e.g. 6 mm) is
+    relabelled as if it were the diameter, which is smaller than a real
+    diameter would be by a factor of ~2. A `stator_diameter` that fails even
+    this weaker, undivided check cannot be a genuine diameter for this
+    machine -- "its value < the value of a quantity that must be smaller
+    than the stator OUTER radius" does not hold."""
+    stack = (slot_height_mm + core_thickness_mm + air_gap_mm + magnet_height_mm
+             + rotor_house_height_mm + shaft_height_mm)
+    return float(stator_diameter_mm) < stack
+
+
+def plan_v1_repair(present_names, *, dependent_expressions: Optional[List[str]] = None,
+                    stator_diameter_value: Optional[float] = None,
+                    stack_components: Optional[dict] = None,
+                    motor_length_value: Optional[float] = None,
+                    magnet_lamination_value: Optional[float] = None,
+                    tol: float = 1e-6) -> dict:
+    """Decide whether the design in front of us is v1-broken and needs
+    repairing before the normal v2 plan runs.
+
+    `present_names`: every user-parameter Name that currently exists in the
+    design (or CSV). Nothing here is ever true unless BOTH the canonical
+    name is present AND its legacy counterpart is absent -- a design that
+    already has both (hand-fixed, or a genuine conflict) is left for the
+    existing conflict handling, never touched by repair.
+
+    Returns {"repair_stator_diameter": bool, "stator_evidence": [str, ...],
+             "repair_magnet_lamination": bool}.
+    """
+    present = set(present_names)
+    repair_stator = False
+    stator_evidence: List[str] = []
+    if "stator_diameter" in present and "stator_up_r" not in present:
+        deps = dependent_expressions or []
+        if stator_diameter_used_as_radius(deps):
+            repair_stator = True
+            stator_evidence.append(
+                "another parameter's formula references stator_diameter without "
+                "dividing it by 2 -- it is being used as a radius")
+        elif (stator_diameter_value is not None and stack_components is not None
+              and stator_diameter_value_too_small(stator_diameter_value, **stack_components)):
+            repair_stator = True
+            stator_evidence.append(
+                "stator_diameter (%.4g mm) is smaller than the radial stack that must "
+                "fit inside half of it -- too small to be a genuine diameter"
+                % stator_diameter_value)
+
+    repair_magnet = (
+        "magnet_lamination" in present and "mag_step" not in present
+        and magnet_lamination_value is not None and motor_length_value is not None
+        and abs(float(magnet_lamination_value) - float(motor_length_value)) <= tol)
+
+    return {"repair_stator_diameter": repair_stator, "stator_evidence": stator_evidence,
+            "repair_magnet_lamination": bool(repair_magnet)}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# EXPORT SANITY GUARD (2026-09-25).  Before fusion360_export_params.py
+# writes a CSV, it computes the same derived radii motor_ai_sim's own
+# geometry solver does and checks they are positive and correctly ordered
+# -- catching an impossible machine (e.g. the v1-bug signature: exported
+# stator_diameter = 6 with the CIAN 40_12 values) before it ever reaches a
+# CSV file instead of failing silently downstream in the app.
+# ─────────────────────────────────────────────────────────────────────────
+_RADIUS_STACK_KEYS = ("stator_diameter", "slot_height", "core_thickness", "air_gap",
+                      "magnet_height", "rotor_house_height", "shaft_height")
+
+
+def compute_derived_radii(values: Dict[str, float]) -> Dict[str, float]:
+    """The same derived-radius chain the app itself builds the geometry
+    from, in order from the outside in."""
+    stator_outer = float(values["stator_diameter"]) / 2.0
+    stator_inner = stator_outer - values["slot_height"] - values["core_thickness"]
+    rotor_outer = stator_inner - values["air_gap"]
+    rotor_inner = rotor_outer - values["magnet_height"] - values["rotor_house_height"]
+    shaft_inner = rotor_inner - values["shaft_height"]
+    return {"stator_outer": stator_outer, "stator_inner": stator_inner,
+            "rotor_outer": rotor_outer, "rotor_inner": rotor_inner,
+            "shaft_inner": shaft_inner}
+
+
+def export_sanity_check(values: Dict[str, float], tol: float = 1e-6) -> dict:
+    """`values`: canonical name -> mm value, for whichever of
+    `_RADIUS_STACK_KEYS` (plus, optionally, `stator_up_r`) are available.
+
+    Returns {"ok": bool, "skipped": bool, "failures": [str, ...],
+             "derived": {...}, "likely_cause": str}. `skipped` is True (and
+    `ok` True) only when there is not enough data to run the check at all --
+    that is never itself treated as a failure."""
+    missing = [k for k in _RADIUS_STACK_KEYS if k not in values]
+    if missing:
+        return {"ok": True, "skipped": True,
+                "failures": [], "derived": {}, "likely_cause": "",
+                "reason": "not enough data (missing %s)" % ", ".join(missing)}
+
+    derived = compute_derived_radii(values)
+    order = [("stator_outer", derived["stator_outer"]),
+             ("stator_inner", derived["stator_inner"]),
+             ("rotor_outer", derived["rotor_outer"]),
+             ("rotor_inner", derived["rotor_inner"]),
+             ("shaft_inner", derived["shaft_inner"])]
+
+    failures: List[str] = []
+    for name, val in order:
+        if val <= 0:
+            failures.append("%s = %.4g mm is not positive" % (name, val))
+    for (n1, v1), (n2, v2) in zip(order, order[1:]):
+        if v1 <= v2:
+            failures.append("%s (%.4g mm) is not greater than %s (%.4g mm)" % (n1, v1, n2, v2))
+
+    if "stator_up_r" in values:
+        su = float(values["stator_up_r"])
+        sd = float(values["stator_diameter"])
+        if abs(sd - 2.0 * su) > max(tol, 1e-6 * abs(su)):
+            failures.append("stator_diameter (%.4g mm) != 2 x stator_up_r (%.4g mm -> %.4g mm)"
+                             % (sd, su, 2.0 * su))
+
+    likely_cause = ("run fusion360_rename_params -- it repairs a design renamed by the "
+                     "first script version" if failures else "")
+    return {"ok": not failures, "skipped": False, "failures": failures,
+            "derived": derived, "likely_cause": likely_cause, "reason": ""}
+
+
+def magnet_lamination_export_value(raw_value: float, motor_length_value: Optional[float],
+                                    tol: float = 1e-6) -> Tuple[float, bool]:
+    """Guard for exporting an EXISTING `magnet_lamination` parameter found
+    under its own canonical name (as opposed to one computed fresh from
+    legacy `mag_step`, which already goes through `lamination_forward`): if
+    its value still equals the motor length -- the exact signature of the
+    v1-script bug, or a design where it was created but never actually set
+    -- treat it as "no slicing" (0) rather than exporting a bogus non-zero
+    lamination step. Returns (value_to_export, was_overridden)."""
+    if motor_length_value is not None and abs(float(raw_value) - float(motor_length_value)) <= tol:
+        return 0.0, True
+    return float(raw_value), False
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# PARAMETER I/O CSV PARSING (2026-09-25, owner audit: "исправь все эти
+# косяки в скриптах").  fusion360_import_params.py normally pulls JSON from
+# the running app, but when the API is unreachable it falls back to reading
+# a CSV file instead -- either our own export's six columns (Name, Unit,
+# Expression, Value, Comment, Favorite) or a plain export from the
+# Parameter I/O add-in itself. Both are read by HEADER NAME, not position,
+# mirroring motor_ai_sim.routes.fusion._parse_expression /
+# import_params exactly (duplicated here, not imported, because this module
+# is stdlib-only and importable from inside Fusion's sandboxed
+# interpreter, and the routes module is not).
+# ─────────────────────────────────────────────────────────────────────────
+_UNIT_RE = re.compile(r"^\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s*([A-Za-z]*)\s*$")
+
+
+def parse_param_io_expression(expr, unit: str = "") -> Tuple[Optional[float], str]:
+    """A Parameter I/O 'Expression' cell -> a value in mm / count: a plain
+    number, optionally with a unit suffix ("36", "36 mm", "3.6 cm",
+    "0.05 m"). Refuses anything else (a formula referencing other
+    parameters, an angle, an unsupported unit) and says why -- a silently
+    mis-scaled dimension is worse than a refused row."""
+    m = _UNIT_RE.match(str(expr or ""))
+    if not m:
+        return None, "not a plain number (formula or unsupported form)"
+    val = float(m.group(1))
+    u = (m.group(2) or unit or "").strip().lower()
+    if u in ("", "mm"):
+        return val, ""
+    if u == "cm":
+        return val * 10.0, ""
+    if u == "m":
+        return val * 1000.0, ""
+    return None, "unit %r not supported (mm / cm / m or unitless only)" % (u,)
+
+
+def parse_param_io_csv_rows(rows: List[dict], fieldnames: Optional[List[str]]):
+    """Parameter I/O CSV rows (a list of dict, as `csv.DictReader` yields)
+    -> (values, refused).
+
+    `values` is {Name: (value, unit, comment)} for every row whose Name and
+    Expression parsed; `refused` is {Name: reason} for a row with a Name
+    but an unparseable Expression (a formula, an unsupported unit).
+    Columns are matched by HEADER NAME, case-insensitively, not position --
+    tolerant of both our own export's six columns and any other
+    Parameter I/O-shaped CSV, including one whose comment column is spelled
+    differently ("Comment" vs the add-in's own "Comments") since only Name,
+    Expression and (optionally) Unit/Comment are ever read."""
+    cols = {c.strip().lower(): c for c in (fieldnames or [])}
+    if "name" not in cols or "expression" not in cols:
+        raise ValueError(
+            "expected Parameter I/O columns Name, Unit, Expression, Value, Comment, "
+            "Favorite (Name and Expression are the ones actually read) -- got %r"
+            % (fieldnames,))
+    comment_col = cols.get("comment") or cols.get("comments")
+    values: Dict[str, Tuple[float, str, str]] = {}
+    refused: Dict[str, str] = {}
+    for r in rows:
+        name = str(r.get(cols["name"]) or "").strip()
+        if not name:
+            continue
+        unit = str(r.get(cols["unit"]) or "").strip() if "unit" in cols else ""
+        val, why = parse_param_io_expression(r.get(cols["expression"]), unit)
+        if val is None:
+            refused[name] = why
+            continue
+        comment = str(r.get(comment_col) or "").strip() if comment_col else ""
+        values[name] = (val, unit, comment)
+    return values, refused

@@ -1931,6 +1931,44 @@ def _stitch_skin_patch(V, T, patch, tol: float = 6e-3):
     return np.vstack([V, Vp[free]]), np.vstack([T, gid[Tp]]), n_split
 
 
+def _iron_grade_points(steel, r0: float, h0: float, growth: float,
+                       h_end: float, span: Optional[float] = None) -> np.ndarray:
+    """Free PSLG points (mm) that grade the rotor IRON outward from the skin
+    patch: rings at r0 + h0, + h0·g, … with the same chord as their radial
+    step, until the step reaches the iron's own cell size h_end.
+
+    Why: the shaft sees the field the iron between it and the magnets carries.
+    A fine skin patch against coarse iron cells meets a discretised field
+    whose error is largest exactly at the interface — measured on the Ø40,
+    the fine patch alone read the shaft 2x the rotor-refined value.  The
+    transition is sized by the patch's own chord (a physical length), not by
+    the machine.  Points stay 0.5·h inside the iron (no slivers against the
+    pockets/magnets) and, on a sector cell, 0.5·h off the two cut rays (the
+    -Y-frozen chains).  Deterministic per cell, so tiled copies stay clones."""
+    from shapely import contains_xy
+    if steel is None or getattr(steel, "is_empty", True):
+        return np.zeros((0, 2))
+    g = max(float(growth), 1.05)
+    h = float(h0)
+    r = float(r0)
+    out = []
+    full = span is None
+    sp = 2.0 * math.pi if full else float(span)
+    while h < float(h_end) - 1e-12:
+        r += h
+        n = max(1, int(round(sp * r / h)))
+        th = (np.arange(n) + (0.0 if full else 0.5)) * sp / n
+        if not full:
+            th = th[(r * th > 0.5 * h) & (r * (sp - th) > 0.5 * h)]
+        P = np.c_[r * np.cos(th), r * np.sin(th)]
+        if len(P):
+            inner = steel.buffer(-0.5 * h)
+            if not inner.is_empty:
+                out.append(P[np.asarray(contains_xy(inner, P[:, 0], P[:, 1]), bool)])
+        h *= g
+    return np.vstack(out) if out else np.zeros((0, 2))
+
+
 def _sleeve_layers(skin: Optional[Dict]) -> float:
     """Element layers across the retaining sleeve: 2 (the long-standing target
     area 0.433·(t/2)²) unless the skin spec asks for more."""
@@ -1972,7 +2010,8 @@ def _shaft_skin_plan(spec: Optional[Dict], r_shaft: float, r_bore: float,
     if len(radii) < 2:
         return None
     return dict(n_sh=n, r_in=float(r_in), radii=radii, h1=h1, growth=g,
-                chord=2.0 * math.pi * r_shaft / n, h_max=h_max)
+                chord=2.0 * math.pi * r_shaft / n, h_max=h_max,
+                iron_grade=bool(spec.get("iron_grade", False)))
 
 
 def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
@@ -2060,6 +2099,10 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
             add(_grid_circle(_r_in, n_sh))                      # patch inner ring
         _patch_r = _skin_patch(_sk["radii"], n_sh, 2.0 * math.pi, True)
     V, S = _build_pslg(lines)
+    if _sk is not None and _sk["iron_grade"]:
+        _h_end = math.sqrt(max(a_steel, 1e-9) / 0.4330)
+        V = _add_free_points(V, _iron_grade_points(
+            iron, r_shaft, _sk["chord"], _sk["growth"], _h_end, None))
 
     # region seeds: steel + each magnet fine; shaft bore + flux barriers coarse
     _core_top = r_bore if r_bore > 0.0 else (
@@ -2510,6 +2553,12 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     add(_cut_pts(0.0, rk_all)); add(_cut_pts(span, rk_all))
     V, S = _build_pslg(lines)
     V, S = _symmetrize_cuts(V, S, span)                 # clone-identical seam
+    if _sk is not None and _sk["iron_grade"]:
+        # grade the iron outward from the patch (free points, no segments:
+        # the cut symmetrisation above never sees them, -Y is unaffected)
+        _h_end = math.sqrt(max(a_steel, 1e-9) / 0.4330)
+        V = _add_free_points(V, _iron_grade_points(
+            iron, r_shaft, _sk["chord"], _sk["growth"], _h_end, span))
 
     _core_top = r_bore if r_bore > 0.0 else (
         _sk["r_in"] if _sk is not None else r_shaft)

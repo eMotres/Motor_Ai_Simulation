@@ -121,8 +121,10 @@ def shaft_skin_spec(sigma: float, mu_r_max: float, f_ref_hz: float,
     h1 = max(1e-3, h1f * delta_mm)
     h1 = min(h1, chord)
     h_max = chord * max(1.0, _env_float("SB_SKIN_HMAX_CHORDS", SKIN_HMAX_CHORDS))
+    iron_grade = os.environ.get("SB_SKIN_IRON_GRADE", "1").strip().lower() not in (
+        "0", "false", "no", "off")
     return {"h1_mm": h1, "growth": max(1.0, g), "chord_mm": chord,
-            "h_max_mm": h_max,
+            "h_max_mm": h_max, "iron_grade": iron_grade,
             "depth_solid_mm": max(10.0 * delta_mm, 4.0 * chord),
             "delta_mm": delta_mm, "f_ref_hz": float(f_ref_hz),
             "mu_r_max": float(mu_r_max), "sigma": float(sigma)}

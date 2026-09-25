@@ -1,15 +1,15 @@
 """Shaft skin layer: the skin-depth-driven structured wall mesh.
 
 docs/CONDUCTIVE_BODY_MESH_CONVERGENCE_2026-09-24.md.  A 42CrMo4 shaft carries
-its eddy current in Î´ = sqrt(2/(Ï‰Î¼Ïƒ)) â‰ˆ 0.05-0.3 mm under its OD; the CDT
+its eddy current in δ = sqrt(2/(ωμσ)) ≈ 0.05-0.3 mm under its OD; the CDT
 meshed the wall with 2-3 mm cells (1-2 across a 5 mm wall), which reads the
-loss low.  `conductor_skin.shaft_skin_spec` sizes a layered wall on Î´ and
+loss low.  `conductor_skin.shaft_skin_spec` sizes a layered wall on δ and
 `geo_mesh` builds it as a structured patch stitched into the CDT.
 
 Asserted here:
-  * the rule's arithmetic (Î´, Î¼_r,max of a B-H curve, the reference frequency,
-    the spec) â€” against closed forms, not restatements;
-  * the 1-D P2 accuracy the rule's h1 = Î´, growth 1.5 rests on (â‰¤ 0.5 %);
+  * the rule's arithmetic (δ, μ_r,max of a B-H curve, the reference frequency,
+    the spec) — against closed forms, not restatements;
+  * the 1-D P2 accuracy the rule's h1 = δ, growth 1.5 rests on (≤ 0.5 %);
   * the layer radii (first layer h1, geometric growth, capped, no sliver);
   * the built mesh on two real rotors, full ring and half-model sector:
     the shaft region is still the CAD tube, the first layer is h1 thick, the
@@ -53,7 +53,7 @@ G150 = {
 G40 = _PRESETS["my_40mm_last"]["geometry"]
 
 
-# â”€â”€ the rule â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── the rule ─────────────────────────────────────────────────────────────────
 def test_skin_depth_closed_form():
     # copper at 50 Hz: 9.2 mm (textbook); steel sigma 4.4e6, mu_r 1000, 2840 Hz
     assert cs.skin_depth_m(50.0, 5.8e7, 1.0) == pytest.approx(9.35e-3, rel=5e-3)
@@ -99,10 +99,10 @@ def test_spec_values(monkeypatch):
     assert sp2["h1_mm"] <= sp2["chord_mm"] + 1e-12
 
 
-# â”€â”€ why h1 = Î´, growth 1.5 is enough: the 1-D P2 skin loss â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── why h1 = δ, growth 1.5 is enough: the 1-D P2 skin loss ──────────────────
 def _p2_skin_loss(x, mu, sig, w):
-    """P2 FE of -(1/Î¼)A'' + jÏ‰ÏƒA = 0, (1/Î¼)A'(0) = -1, A(x_end) = 0; returns
-    the loss per unit area Â½âˆ«ÏƒÏ‰Â²|A|Â²."""
+    """P2 FE of -(1/μ)A'' + jωσA = 0, (1/μ)A'(0) = -1, A(x_end) = 0; returns
+    the loss per unit area ½∫σω²|A|²."""
     ne = len(x) - 1
     N = 2 * ne + 1
     K = np.zeros((N, N), complex)
@@ -132,7 +132,7 @@ def test_one_skin_depth_first_layer_resolves_the_loss(f_hz):
     sig, mur = 4.4e6, 1000.0
     mu = MU0 * mur
     w = 2 * math.pi * f_hz
-    d_ref = cs.skin_depth_m(2840.0, sig, mur)          # the rule's reference Î´
+    d_ref = cs.skin_depth_m(2840.0, sig, mur)          # the rule's reference δ
     d = cs.skin_depth_m(f_hz, sig, mur)
     exact = 1.0 / (2.0 * sig * d)
     r = skin_layer_radii(5e-3, 0.0, d_ref, cs.SKIN_GROWTH, 5e-3)
@@ -143,7 +143,7 @@ def test_one_skin_depth_first_layer_resolves_the_loss(f_hz):
     assert coarse / exact < 0.85
 
 
-# â”€â”€ the layer radii â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── the layer radii ──────────────────────────────────────────────────────────
 def test_layer_radii_grow_geometrically_to_the_cap():
     r = skin_layer_radii(25.0, 20.0, 0.1, 1.5, 0.6)
     t = -np.diff(r)
@@ -174,7 +174,7 @@ def test_patch_sector_is_conforming_and_clones_the_rays():
     assert np.allclose(np.sort(r0), np.sort(rS), atol=1e-12)
 
 
-# â”€â”€ the built mesh on real rotors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── the built mesh on real rotors ────────────────────────────────────────────
 SPEC = {"shaft": {"h1_mm": 0.05, "growth": 1.5, "chord_mm": 0.4,
                   "h_max_mm": 0.4}}
 
@@ -218,7 +218,7 @@ def test_first_layer_is_h1_thick(built):
     r_sh = float(p["rotor_inner_radius"])
     nodes = np.unique(T[tags == DOM_SHAFT])
     rr = np.unique(np.round(np.hypot(V[nodes, 0], V[nodes, 1]), 5))
-    below = rr[rr < r_sh - 0.01]          # the OD ring sits within 1 Âµm snap
+    below = rr[rr < r_sh - 0.01]          # the OD ring sits within 1 µm snap
     assert below.max() == pytest.approx(r_sh - 0.05, abs=2e-3)
 
 
@@ -276,7 +276,7 @@ def test_every_other_region_keeps_its_section(built):
     """Every region but the shaft keeps its area (the bore and the iron next to
     the finer shaft ring move by the polygon-vs-circle chord only).  Triangle
     re-plans the whole CDT when one ring changes, so element COUNTS elsewhere
-    may move by a few per cent â€” the section may not."""
+    may move by a few per cent — the section may not."""
     ns, (p, polys, V, T, tags), (_p0, _pl0, V0, T0, tags0) = built
     a, a0 = _areas(V, T), _areas(V0, T0)
     for tg in np.unique(tags0):
@@ -286,9 +286,9 @@ def test_every_other_region_keeps_its_section(built):
             float(a0[tags0 == tg].sum()), rel=1e-2, abs=1e-6)
 
 
-# â”€â”€ scale check: the same physics gets the same resolution on any machine â”€â”€
+# ── scale check: the same physics gets the same resolution on any machine ──
 def _resolution(geo, rpm):
-    """(first layer / Î´, node rings within 3 Î´, OD cells per field wavelength)
+    """(first layer / δ, node rings within 3 δ, OD cells per field wavelength)
     of the mesh the solver's rule builds on this rotor."""
     motor = CadQueryMotor()
     motor.set_parameters(dict(geo))
@@ -300,8 +300,9 @@ def _resolution(geo, rpm):
     _p, _pl, V, T, tags = _build(geo, 1, {"shaft": sp})
     d = sp["delta_mm"]
     nodes = np.unique(T[tags == DOM_SHAFT])
-    rr = np.unique(np.round(np.hypot(V[nodes, 0], V[nodes, 1]), 5))
-    rr = rr[::-1]
+    # rings, not nodes: the OD ring sits within the 1 µm snap of r_shaft
+    rr = np.sort(np.hypot(V[nodes, 0], V[nodes, 1]))[::-1]
+    rr = rr[np.concatenate([[True], -np.diff(rr) > 0.01])]
     od = rr[0]
     first = od - rr[rr < od - 1e-3].max()
     n3 = int(np.sum(rr > od - 3.0 * d)) - 1
@@ -312,10 +313,11 @@ def _resolution(geo, rpm):
 
 
 def test_same_rule_same_resolution_on_every_scale(monkeypatch):
-    """Owner 2026-09-25: Â«Ð²ÑÐµ Ñ„Ð¸Ð·Ð¸Ñ‡ÐµÑÐºÐ¸Ðµ Ð·Ð°ÐºÐ¾Ð½Ñ‹ Ð´Ð¾Ð»Ð¶Ð½Ñ‹ Ñ€Ð°Ð±Ð¾Ñ‚Ð°Ñ‚ÑŒ Ð¾Ð´Ð¸Ð½Ð°ÐºÐ¾Ð²Ð¾ Ð½Ð°
-    Ð»ÑŽÐ±Ñ‹Ñ… Ð¼Ð°ÑÑˆÑ‚Ð°Ð±Ð°Ñ…Â».  The Ã˜150 and the Ã˜40 rotors at speeds that put their
-    skin depths 3x apart get the SAME first layer in Î´, the same number of
-    layers inside 3 Î´ and the same cells per field wavelength."""
+    """Owner 2026-09-25: «все физические законы должны работать одинаково на
+    любых масштабах».  The Ø150 and the Ø40 rotors, at speeds that put their
+    skin depths 3x apart, get at least one layer per δ at the surface (exactly
+    one unless the chord caps it finer), at least two layers inside 3 δ and
+    the same cells per field wavelength."""
     for k in ("SB_SKIN_H1_FRAC", "SB_SKIN_GROWTH", "SB_SKIN_CELLS_PER_WL",
               "SB_SKIN_CHORD_MM", "SB_SKIN_HMAX_CHORDS"):
         monkeypatch.delenv(k, raising=False)
@@ -324,6 +326,29 @@ def test_same_rule_same_resolution_on_every_scale(monkeypatch):
     # first layer = h1_frac·δ, or finer where the chord caps it (aspect ≤ 1)
     assert a[0] <= cs.SKIN_H1_FRAC * 1.02 and b[0] <= cs.SKIN_H1_FRAC * 1.02
     assert min(a[0], b[0]) > 0.25
-    assert a[1] >= 3 and b[1] >= 3
+    assert a[1] >= 2 and b[1] >= 2
     assert a[2] == pytest.approx(cs.SKIN_CELLS_PER_WAVELENGTH, rel=0.1)
     assert b[2] == pytest.approx(cs.SKIN_CELLS_PER_WAVELENGTH, rel=0.1)
+
+
+def test_iron_grading_points_stay_in_iron_and_off_the_rays():
+    """The iron transition from the skin patch: rings at r0 + h0·g^k with a
+    chord about equal to their step, half a step inside the iron, half a step
+    off the cut rays of a sector cell, and none once the step reaches the
+    iron's own cell size."""
+    from shapely.geometry import Point
+    from motor_ai_sim.simulation.geo_mesh import _iron_grade_points
+    ring = Point(0, 0).buffer(20.0, 512).difference(Point(0, 0).buffer(10.0, 512))
+    span = 2 * math.pi / 10
+    P = _iron_grade_points(ring, 10.0, 0.1, 1.5, 1.0, span)
+    r = np.hypot(P[:, 0], P[:, 1])
+    th = np.arctan2(P[:, 1], P[:, 0])
+    radii = np.unique(np.round(r, 6))
+    steps = np.diff(np.concatenate([[10.0], radii]))
+    assert steps[0] == pytest.approx(0.1) and steps[1] == pytest.approx(0.15)
+    assert steps.max() < 1.0
+    assert np.all(r * th > 0.049) and np.all(r * (span - th) > 0.049)
+    for rr, h in zip(radii, steps):
+        n = int(np.sum(np.isclose(r, rr, atol=1e-6)))
+        assert span * rr / n == pytest.approx(h, rel=0.35)
+    assert _iron_grade_points(ring, 10.0, 1.0, 1.5, 1.0, span).size == 0

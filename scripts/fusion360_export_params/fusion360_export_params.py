@@ -135,7 +135,6 @@ def run(context):
         dlg.isMultiSelectEnabled = False
         dlg.title = "Export motor_ai_sim geometry parameters"
         dlg.filter = "CSV files (*.csv)"
-        dlg.filenameList
         default_name = (design.rootComponent.name or "motor").replace(" ", "_") + "_canonical_params.csv"
         dlg.initialFilename = default_name
         if dlg.showSave() != adsk.core.DialogResults.DialogOK:

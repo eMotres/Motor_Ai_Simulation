@@ -850,38 +850,43 @@ const SweepStudyPanel: React.FC = () => {
 
   // Hand-pick a point on the chart → apply its design: geometry (overrides) +
   // operating point (current/γ) → config + Simulation (same as "apply best").
+  // 2026-09-25 (owner): Apply is DIRECT — the point's own sweep-resolution
+  // (screening) numbers apply immediately, no server re-solve at standard/
+  // cogging_quality resolution first. The standard-resolution answer comes
+  // from the owner's next Electromagnetic run of the applied machine.
   const applyPoint = async (p: any) => {
     if (!p || applying) return;
-    setApplying(true); setApplyMsg('Verifying this point at standard 6× resolution…'); setSaveRes(null);
+    setApplying(true); setApplyMsg('Applying…'); setSaveRes(null);
     try {
       if (!result?.run_id || !Number.isInteger(p.geom_id) || !Number.isInteger(p.op_index)) {
         throw new Error('Sweep lacks point/run provenance; run the Sweep again');
       }
-      // The server selects the stored point and re-solves its pinned geometry,
-      // operating point and mesh. No geometry/config write happens until it
-      // returns explicit standard-quality FEM metadata.
-      const verification = await fetch(`${API}/api/optimization/scan/validate_point`, {
+      // The server re-reads the stored point from the CURRENT sweep result and
+      // refuses it if the machine it was solved on no longer matches the
+      // machine as it is now (fingerprint with the swept keys excluded) — no
+      // re-solve happens, so no geometry/config write happens until this
+      // machine-mismatch check has passed.
+      const verification = await fetch(`${API}/api/optimization/scan/apply_point`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ run_id: result.run_id, geom_id: p.geom_id, op_index: p.op_index }),
       });
       const verified = await verification.json().catch(() => null);
       if (!verification.ok) throw new Error(String(verified?.detail ?? `HTTP ${verification.status}`));
       const v = verified?.point;
-      if (v?.apply_eligible !== true
-          || !['cogging_quality', 'standard'].includes(v?.cogging_sampling_purpose)
-          || v?.cogging_sampling_final_quality_sufficient !== true
-          || v?.nonlinear_converged !== true) {
-        throw new Error('Standard 6× convergence or angular-quality stamp is missing');
+      if (!v || typeof v.overrides !== 'object') {
+        throw new Error('Sweep point lacks its geometry; run the Sweep again');
       }
       const k3d = readApply3dK();
       const mass = Number(v.mass_total_kg) || 0;
-      const P2 = Number(v.P_mech_W) / 1000;
-      const pd2 = Number(v.power_per_mass_W_kg) / 1000;
-      const s3 = scale3d(k3d, Number(v.T_em_Nm), P2, Number(v.V_peak),
-        Number(v.V_line_peak_V), Number(v.KV_rpm_per_V_line),
-        Number(v.torque_per_mass_Nm_kg), pd2, Number(v.efficiency) * 100,
-        Number(v.P_loss_total_W));
-      p = { ...p, apply_eligible: true, overrides: v.overrides, I: v.current_a,
+      const P2 = v.P_mech_W != null ? Number(v.P_mech_W) / 1000
+                                    : (Number(v.T_em_Nm) || 0) * (2 * Math.PI * (Number(v.rpm) || 0) / 60) / 1000;
+      const pd2 = v.power_per_mass_W_kg != null ? Number(v.power_per_mass_W_kg) / 1000
+                                               : (mass > 0 ? P2 / mass : 0);
+      const s3 = scale3d(k3d, Number(v.T_em_Nm) || 0, P2, Number(v.V_peak) || 0,
+        Number(v.V_line_peak_V) || 0, Number(v.KV_rpm_per_V_line) || 0,
+        Number(v.torque_per_mass_Nm_kg) || 0, pd2, (Number(v.efficiency) || 0) * 100,
+        Number(v.P_loss_total_W) || 0);
+      p = { ...p, overrides: v.overrides, I: v.current_a,
         g: v.gamma_deg, rpm: v.rpm, T: s3.T, ripple: v.T_ripple_pct,
         eff: s3.eff, mass, td: s3.td, Vpk: s3.Vpk,
         V_line_peak_V: s3.Vl, KV_rpm_per_V_line: s3.KV,
@@ -895,8 +900,8 @@ const SweepStudyPanel: React.FC = () => {
           eff: Number(v.efficiency) * 100 }, k3d };
       setSelected(p);
       setApplyMsg(verified?.provenance === 'legacy_machine_stamp'
-        ? 'Standard 6× FEM verified (older sweep, re-checked on this machine); applying…'
-        : 'Standard 6× FEM verified; applying…');
+        ? 'Sweep-resolution result (older sweep, re-checked on this machine); applying…'
+        : 'Sweep-resolution result; applying…');
       // updateGeometryViaApi resolves normally even on a 422/423/500 refusal
       // (it never throws for those — see lib/geometryApplyOutcome.ts) so the
       // ONLY way to know the picked geometry actually landed is to read what
@@ -962,7 +967,8 @@ const SweepStudyPanel: React.FC = () => {
         const k = Number(dc?.end_winding_factor);
         if (Number.isFinite(k) && k > 0) localStorage.setItem('sim.endWinding', JSON.stringify(+k.toFixed(3)));
       } catch { /* non-fatal — the Simulation panel re-seeds on the geometry change */ }
-      // The on-demand standard solve above is the source of these numbers.
+      // These sweep-resolution numbers are the source shown in Simulation now;
+      // a standard-resolution answer comes only from a Run there.
       try {
         window.dispatchEvent(new CustomEvent('sim-design-applied'));
       } catch { /* SSR/no-window */ }
@@ -978,7 +984,7 @@ const SweepStudyPanel: React.FC = () => {
           + `catalog (admin) or load another configuration, then apply again.`);
       } else {
         setApplyMsg(`✓ applied${ovStr ? ': ' + ovStr : ' (base geometry)'} · I=${iShown} · γ=${p.g}° `
-          + `— its own FEM numbers are shown in Simulation; Run there only for waveforms or a re-check`);
+          + `— its own sweep-resolution numbers are shown in Simulation; Run there for the standard result`);
       }
       // ARCHIVE IT — a picked sweep design is applied into the editor and would
       // otherwise live only there until someone remembered to save it.  New
@@ -986,7 +992,7 @@ const SweepStudyPanel: React.FC = () => {
       setSaveRes(await autoSaveAppliedDesign({
         mode: 'sweep',
         runId: String(result?.run_id ?? ''),
-        objective: 'standard 6× validated Sweep point',
+        objective: 'Sweep point (screening resolution)',
         operatingPoint: { current_a: Number(p.I), gamma_deg: Number(p.g),
                           rpm: Number(p.rpm) },
         metrics: { T_avg_Nm: p.T, T_ripple_pct: p.ripple, efficiency: p.eff,
@@ -994,7 +1000,7 @@ const SweepStudyPanel: React.FC = () => {
                    raw_samples_per_cogging_cycle: p.rawSamplesPerCycle },
         overrides: p.overrides || {},
       }));
-    } catch (e: any) { setApplyMsg('✗ Apply/verification failed: ' + String(e?.message ?? e)); }
+    } catch (e: any) { setApplyMsg('✗ Apply failed: ' + String(e?.message ?? e)); }
     finally { setApplying(false); }
   };
 
@@ -1328,16 +1334,20 @@ const SweepStudyPanel: React.FC = () => {
                   : '(base — no swept variables)'}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
-                <span title="Re-solve this point at standard 6× resolution, then apply and archive only if FEM quality passes.">
+                <span title="Apply this point's geometry and operating point immediately — its own sweep-resolution numbers, no re-solve.">
                   <Button size="small" variant="outlined" color="success"
                     disabled={applying || running}
                     onClick={() => applyPoint(selected)}>
-                    {applying ? 'Verifying 6×…' : '⤵ Verify and apply'}
+                    {applying ? 'Applying…' : '⤵ Apply'}
                   </Button>
                 </span>
-                {selected.apply_eligible !== true && <Typography sx={{ fontSize: 11, color: '#fbbf24' }}>
-                  Preliminary 3× result; standard 6× verification runs before applying.
-                </Typography>}
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)', display: 'flex', alignItems: 'center', gap: 0.25 }}>
+                  Sweep (screening) resolution — Run Electromagnetic after applying for the standard result.
+                  <HelpTip title="A Sweep point is computed at the Sweep tab's own angular resolution, coarser than a normal
+                    Electromagnetic run (screening speed over many points). Apply writes this point's geometry and operating
+                    point into the machine immediately, with the numbers shown here — no server re-solve. The standard-
+                    resolution number comes from your next run in Electromagnetic on the applied machine." />
+                </Typography>
                 {applyMsg && <Typography sx={{ fontSize: 11,
                   color: applyMsg.startsWith('✓') ? '#4ade80' : applyMsg.startsWith('✗') ? '#fca5a5' : 'var(--text-3)' }}>
                   {applyMsg}</Typography>}

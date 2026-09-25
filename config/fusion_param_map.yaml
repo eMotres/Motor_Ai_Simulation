@@ -52,8 +52,18 @@ map:
 # (built from his own file, C:\Users\vadim\Downloads\Fusion_map_geometry_inputs_v2.xlsx)
 # and confirmed this final mapping for the 33 geometry INPUTS only (the 32
 # geometry_schema keys + sleeve_thickness; derived/internal names are never
-# renamed).  This supersedes the earlier "legacy_fusion_names_2026_09_25"
-# proposal section (removed).
+# renamed).
+#
+# CONVERSION HANDLING (revised 2026-09-25, owner: "формулы не меняй, только
+# одну: stator_up_r = stator_diameter/2"): the two rows with a `conversion`
+# never rename their old parameter. stator_diameter is CREATED fresh (value =
+# stator_up_r * 2, explicit unit) and stator_up_r is turned into the ONE
+# formula this tooling ever changes ("stator_diameter / 2") -- its NAME stays,
+# so every other row that referenced it needs no change. magnet_lamination is
+# likewise CREATED fresh from mag_step's value, but mag_step itself is left
+# completely untouched (no rename, no rewritten expression) -- no clean,
+# always-valid inverse formula exists for it (see
+# fusion_param_common.lamination_backward's docstring).
 #
 # SOURCE OF TRUTH FOR CODE: scripts/fusion_param_common.py (ENTRIES) -- the
 # stdlib-only module scripts/fusion_param_rename.py (the offline CSV converter)
@@ -69,17 +79,20 @@ map:
 # was not changed -- after a design is renamed with fusion360_rename_params.py
 # its Fusion parameters ARE named canonically, so identity is exactly right.
 #
-# action: rename | rename_or_create | create | not_mapped (see
+# action: rename | rename_or_create | create | create_and_derive_old |
+#         create_from_legacy | not_mapped (see
 # scripts/fusion_param_common.py's module docstring for what each means).
-# conversion: null, or [linear, factor] (canonical = old * factor), or
-# [lamination, null] (magnet_lamination's non-linear mag_step rule).
+# conversion: null, or [linear, factor] (canonical = old * factor, and old
+# becomes derived as "canonical / factor" -- stator_diameter only), or
+# [lamination, null] (magnet_lamination's value from mag_step; mag_step itself
+# is never touched).
 legacy_fusion_names_approved_2026_09_25:
   stator_diameter:
     old: stator_up_r
     unit: "mm"
-    action: rename
+    action: create_and_derive_old
     conversion: [linear, 2.0]
-    note: "old was a RADIUS; canonical is the DIAMETER"
+    note: "old was a RADIUS; canonical is the DIAMETER. old (stator_up_r) is turned into a derived parameter ('stator_diameter / 2'), not renamed -- every other row that referenced stator_up_r keeps working unmodified."
   slot_height:
     old: slot_h
     unit: "mm"
@@ -218,9 +231,9 @@ legacy_fusion_names_approved_2026_09_25:
   magnet_lamination:
     old: mag_step
     unit: "mm"
-    action: rename
+    action: create_from_legacy
     conversion: [lamination, null]
-    note: "mag_step is the axial lamination SEGMENT LENGTH; if it equals the motor length -> no slicing -> our magnet_lamination = 0"
+    note: "mag_step is the axial lamination SEGMENT LENGTH; if it equals the motor length -> no slicing -> our magnet_lamination = 0. mag_step itself is left completely as-is -- no clean, always-valid inverse formula exists (see lamination_forward)."
   stator_fillet_r:
     old: stator_r
     unit: "mm"

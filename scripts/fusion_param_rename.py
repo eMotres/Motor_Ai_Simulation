@@ -15,25 +15,39 @@ ExportedParameters.csv) into one that uses them, so it can be edited in
 Fusion, exported with Parameter I/O, and uploaded through the existing
 "Fusion CSV" import button like any other model.
 
-WHAT IT DOES
-  * renames the 33 mapped rows (Name column) to their canonical name;
-  * converts VALUES where the old and new parameter use a different basis
-    (stator_up_r a RADIUS -> stator_diameter a DIAMETER, x2; mag_step a
-    lamination SEGMENT LENGTH -> magnet_lamination, 0 when it equals the
-    motor length);
-  * rewrites every OTHER row's Expression TOKEN-SAFELY wherever it
-    references a renamed name, so a derived/mechanical helper that is not
-    itself renamed (e.g. `stator_mid_r = stator_up_r - slot_h - core_h/2`)
-    still computes the same result after the primaries it depends on change
-    name and, for stator_up_r, basis;
+WHAT IT DOES (revised 2026-09-25 per the owner's correction -- formulas are
+not to be changed except the one named below; see docs/FUSION_SCRIPTS_HOWTO.md)
+  * renames the 27 plain 1:1 rows (Name column only -- Expression/Value are
+    carried over VERBATIM, byte for byte, never reformatted);
+  * rewrites, TOKEN-SAFELY, every OTHER row's Expression wherever it
+    references one of those 27 renamed names (e.g. the untouched-by-name
+    helper `stator_mid_r = stator_up_r - slot_h - core_h/2` has its
+    `slot_h`/`core_h` tokens renamed to `slot_height`/`core_thickness`,
+    nothing else about it changes) -- a plain identifier substitution, no
+    other rewriting, no parenthesising, no reformatting;
+  * `stator_diameter` <- `stator_up_r`: CREATES `stator_diameter` fresh,
+    holding OUR value with an explicit unit ("12 mm", never a bare number
+    for a length) computed as `stator_up_r * 2` (old was a RADIUS, canonical
+    is the DIAMETER) -- and changes exactly ONE existing formula, per the
+    owner: `stator_up_r`'s own Expression becomes `"stator_diameter / 2"`.
+    `stator_up_r` itself is NEVER renamed, so every OTHER row that already
+    referenced it (motor_d, stator_mid_r, stator_down_r, rotor_up_r, ...)
+    needs no change at all and gets none;
+  * `magnet_lamination` <- `mag_step`: CREATES `magnet_lamination` fresh,
+    its value computed from `mag_step`'s current value (0 when it equals
+    the motor length, i.e. no axial slicing; otherwise carried over as the
+    segment length) -- `mag_step` itself is left COMPLETELY untouched (no
+    rename, no rewritten expression: there is no clean, always-valid
+    inverse formula for it, see fusion_param_common.lamination_backward);
   * creates the rows that have no legacy counterpart at all
     (num_slots_per_segment, shaft_height, sleeve_thickness) or only
     conditionally (stator_fillet_r1 <- stator_r1, rotor_fill_r <- rotor_r1,
     created fresh if the legacy name is absent), using motor_ai_sim's
-    current default geometry (config/motor_config.yaml) as the value;
+    current default geometry (config/motor_config.yaml) as the value, with
+    an explicit unit in the Expression;
   * leaves every other row (mechanical parts, offsets, derived sketch
-    helpers, `wire_split`) exactly as it was, apart from the token rewrite
-    above;
+    helpers, `wire_split`, `mag_step`) exactly as it was, apart from the
+    token rewrite of renamed references described above;
   * refuses the whole run on any name collision (two input rows that would
     end up with the same Name) instead of silently overwriting one.
 
@@ -42,7 +56,7 @@ USAGE
     python scripts/fusion_param_rename.py IN.csv OUT.csv --dry-run
     python scripts/fusion_param_rename.py IN.csv OUT.csv --config path/to/motor_config.yaml
 
-`--dry-run` prints the full diff (renamed / converted / created / unknown)
+`--dry-run` prints the full diff (renamed / created / rewritten-references)
 and writes nothing.
 """
 from __future__ import annotations
@@ -96,14 +110,18 @@ def write_param_csv(path: Path, rows: List[Dict[str, str]]) -> None:
 
 
 def load_create_defaults(config_path: Path) -> Dict[str, float]:
-    """Current default geometry values for the CREATE / rename_or_create
-    entries, read straight from motor_config.yaml -- no motor_ai_sim import
-    needed, just its config file."""
+    """Current default geometry values for every CREATE-capable entry
+    (create / rename_or_create / create_and_derive_old / create_from_legacy
+    -- the last two only as a FALLBACK when the legacy name is absent, so
+    the canonical parameter can still always be created), read straight
+    from motor_config.yaml -- no motor_ai_sim import needed, just its
+    config file."""
     import yaml
     d = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     geo = dict(d.get("geometry") or {})
     wanted = [e["canonical"] for e in FPC.ENTRIES
-              if e["action"] in ("create", "rename_or_create")]
+              if e["action"] in ("create", "rename_or_create",
+                                  "create_and_derive_old", "create_from_legacy")]
     missing = [k for k in wanted if k not in geo]
     if missing:
         raise FusionRenameError(
@@ -118,11 +136,16 @@ def load_create_defaults(config_path: Path) -> Dict[str, float]:
 class RenameResult:
     def __init__(self) -> None:
         self.rows: List[Dict[str, str]] = []
-        self.renamed: List[str] = []       # "old -> new: val1 -> val2" lines
+        self.renamed: List[str] = []       # "old -> new" lines (Name only)
+        self.derived: List[str] = []       # "old: expr -> expr" (stator_up_r)
         self.created: List[str] = []       # "new = val (created)" lines
         self.unknown: List[str] = []       # names left exactly as-is
         self.rewritten_exprs: List[str] = []  # "name: expr -> expr" lines
-        self.nonlinear_flags: List[str] = []  # names needing manual review
+        self.unchanged_legacy: List[str] = []  # e.g. mag_step, left as-is on purpose
+        # (before, after) row snapshots for every row that changed in any
+        # way, `before` is None for a freshly created row -- for
+        # `format_full_diff()`.
+        self.diffs: List[Tuple[Optional[Dict[str, str]], Dict[str, str]]] = []
 
 
 def _row_value(row: Dict[str, str], cols: Dict[str, str]) -> Optional[float]:
@@ -133,6 +156,27 @@ def _row_value(row: Dict[str, str], cols: Dict[str, str]) -> Optional[float]:
         return None
 
 
+def _to_row6(out: Dict[str, str], cols: Dict[str, str]) -> Dict[str, str]:
+    """Normalise a (possibly source-column-keyed) row dict to the canonical
+    six-column HEADER shape."""
+    row6 = {h: "" for h in HEADER}
+    for h in HEADER:
+        src = cols.get(h.lower(), h)
+        if src in out:
+            row6[h] = out[src]
+        elif h in out:
+            row6[h] = out[h]
+    if not row6.get("Favorite"):
+        row6["Favorite"] = "False"
+    return row6
+
+
+def _new_row6(name: str, unit: str, value: float, comment: str) -> Dict[str, str]:
+    expr = FPC.expr_str(value, unit)
+    return {"Name": name, "Unit": unit, "Expression": expr, "Value": FPC.num(value),
+            "Comment": comment, "Favorite": "False"}
+
+
 def rename(rows: List[Dict[str, str]], create_defaults: Dict[str, float],
            fieldnames: List[str]) -> RenameResult:
     cols = {c.strip().lower(): c for c in fieldnames}
@@ -141,10 +185,23 @@ def rename(rows: List[Dict[str, str]], create_defaults: Dict[str, float],
     value_col = cols.get("value", "Value")
 
     res = RenameResult()
-    subs, nonlinear_names = FPC.substitution_map()
 
-    # motor_length's OLD value (stator_w) is needed for the magnet_lamination
-    # conversion -- find it up front, before any row is rewritten.
+    present_names = {str(r.get(name_col, "")).strip() for r in rows}
+    present_names.discard("")
+
+    # The old->canonical substitution table for TOKEN-SAFE reference rewrites
+    # in OTHER rows' expressions -- built dynamically, only from names that
+    # are ACTUALLY renamed in this run (a rename_or_create entry only
+    # renames when its old name happens to be present; stator_up_r and
+    # mag_step are NEVER in this table -- they are never renamed).
+    subs: Dict[str, str] = {}
+    for old in FPC.plain_rename_old_names():
+        if old in present_names:
+            subs[old] = FPC.BY_OLD[old]["canonical"]
+
+    # motor_length's value is needed for the magnet_lamination conversion --
+    # read from its OLD row (stator_w, itself a plain rename so its VALUE is
+    # unaffected either way) up front, before any row is processed.
     motor_length_value: Optional[float] = None
     for r in rows:
         if str(r.get(name_col, "")).strip() == "stator_w":
@@ -153,88 +210,117 @@ def rename(rows: List[Dict[str, str]], create_defaults: Dict[str, float],
     if motor_length_value is None:
         motor_length_value = create_defaults.get("motor_length")
 
-    used_old_names = set()
     new_rows: List[Dict[str, str]] = []
     final_names: List[str] = []
+    stator_up_r_value: Optional[float] = None
+    mag_step_value: Optional[float] = None
 
     for r in rows:
         old_name = str(r.get(name_col, "")).strip()
         if not old_name:
             continue
         entry = FPC.BY_OLD.get(old_name)
+        before = dict(r)
         out = dict(r)
-        if entry is not None:
-            used_old_names.add(old_name)
-            canonical = entry["canonical"]
-            old_val = _row_value(r, cols)
-            if old_val is None:
+
+        if entry is not None and entry["action"] == "create_and_derive_old":
+            # stator_up_r: keep the NAME, change ONLY this one formula.
+            stator_up_r_value = _row_value(r, cols)
+            if stator_up_r_value is None:
                 raise FusionRenameError(
-                    "%s: could not read a numeric value from %r -- refusing "
-                    "to guess" % (old_name, r.get(value_col) or r.get(expr_col)))
-            new_val = FPC.convert_forward(entry, old_val,
-                                           motor_length_value=motor_length_value)
-            out[name_col] = canonical
-            out[expr_col] = FPC.num(new_val)
-            out[value_col] = FPC.num(new_val)
-            final_names.append(canonical)
-            if abs(new_val - old_val) > 1e-9:
-                res.renamed.append("%s -> %s: %s -> %s (converted)"
-                                    % (old_name, canonical, FPC.num(old_val), FPC.num(new_val)))
-            else:
-                res.renamed.append("%s -> %s: %s" % (old_name, canonical, FPC.num(new_val)))
-        else:
-            # Not one of the 33 -- left alone by name, but its Expression may
-            # still reference a renamed token (e.g. a derived helper like
-            # stator_mid_r or arc): rewrite that, token-safely.
-            expr = str(r.get(expr_col, "") or "")
-            new_expr, touched = FPC.rewrite_expression(expr, subs)
-            if new_expr != expr:
-                out[expr_col] = new_expr
-                res.rewritten_exprs.append("%s: %r -> %r" % (old_name, expr, new_expr))
-                for t in touched:
-                    if t in nonlinear_names:
-                        res.nonlinear_flags.append(
-                            "%s: references %s (non-linear conversion) via "
-                            "the renamed token -- verify by hand" % (old_name, t))
-            else:
-                res.unknown.append(old_name)
+                    "%s: could not read a numeric value -- refusing to guess" % old_name)
+            factor = entry["conversion"][1]
+            out[expr_col] = FPC.derive_stator_up_r_expression(factor)
+            out[value_col] = FPC.num(stator_up_r_value)  # unchanged, now via formula
+            res.derived.append("%s: %r -> %r" % (old_name, r.get(expr_col, ""), out[expr_col]))
             final_names.append(old_name)
+            new_rows.append(out)
+            row6 = _to_row6(out, cols)
+            res.diffs.append((_to_row6(before, cols), row6))
+            continue
+
+        if entry is not None and entry["action"] == "create_from_legacy":
+            # mag_step: read its value (to compute magnet_lamination below),
+            # otherwise leave the row COMPLETELY as it was.
+            mag_step_value = _row_value(r, cols)
+            res.unchanged_legacy.append(
+                "%s (used to compute %s, left as-is -- see "
+                "fusion_param_common.lamination_backward for why)"
+                % (old_name, entry["canonical"]))
+            final_names.append(old_name)
+            new_rows.append(out)
+            continue
+
+        if entry is not None and entry["action"] in ("rename", "rename_or_create"):
+            # Plain 1:1: Name changes, Expression/Value carried over VERBATIM.
+            out[name_col] = entry["canonical"]
+            final_names.append(entry["canonical"])
+            res.renamed.append("%s -> %s" % (old_name, entry["canonical"]))
+            new_rows.append(out)
+            res.diffs.append((_to_row6(before, cols), _to_row6(out, cols)))
+            continue
+
+        # Not one of the 33 -- left alone by NAME, but its Expression may
+        # reference one of the 27 plainly-renamed names (e.g. the
+        # untouched-by-name helper `stator_mid_r`): rewrite ONLY those
+        # tokens, nothing else.
+        expr = str(r.get(expr_col, "") or "")
+        new_expr, _touched = FPC.rewrite_expression(expr, subs)
+        if new_expr != expr:
+            out[expr_col] = new_expr
+            res.rewritten_exprs.append("%s: %r -> %r" % (old_name, expr, new_expr))
+            res.diffs.append((_to_row6(before, cols), _to_row6(out, cols)))
+        else:
+            res.unknown.append(old_name)
+        final_names.append(old_name)
         new_rows.append(out)
 
-    # rename_or_create + create entries not satisfied by the input file.
+    # CREATE-capable entries not yet satisfied.
     for entry in FPC.ENTRIES:
         canonical = entry["canonical"]
-        if entry["action"] == "not_mapped":
+        action = entry["action"]
+        if action in ("not_mapped", "rename"):
             continue
-        if entry["action"] == "create":
-            already = any(str(r.get(name_col, "")).strip() == canonical for r in rows)
-            if already:
-                continue
+        if canonical in final_names or canonical in present_names:
+            continue  # already present under the canonical name
+
+        if action == "create":
             val = create_defaults[canonical]
-            new_rows.append({name_col: canonical, cols.get("unit", "Unit"): entry["unit"],
-                              expr_col: FPC.num(val), value_col: FPC.num(val),
-                              cols.get("comment", "Comment"):
-                                  "created by fusion_param_rename.py (owner-approved "
-                                  "2026-09-25 mapping) -- no equivalent parameter in the source file",
-                              cols.get("favorite", "Favorite"): "False"})
-            final_names.append(canonical)
-            res.created.append("%s = %s" % (canonical, FPC.num(val)))
-        elif entry["action"] == "rename_or_create":
-            if entry["old"] in used_old_names or canonical in final_names:
-                continue  # renamed above already
-            already = any(str(r.get(name_col, "")).strip() == canonical for r in rows)
-            if already:
-                continue
+            comment = ("created by fusion_param_rename.py (owner-approved 2026-09-25 "
+                       "mapping) -- no equivalent parameter in the source file")
+        elif action == "rename_or_create":
+            if entry["old"] in present_names:
+                continue  # was renamed above already
             val = create_defaults[canonical]
-            new_rows.append({name_col: canonical, cols.get("unit", "Unit"): entry["unit"],
-                              expr_col: FPC.num(val), value_col: FPC.num(val),
-                              cols.get("comment", "Comment"):
-                                  "created by fusion_param_rename.py (owner-approved "
-                                  "2026-09-25 mapping) -- %r not found in the source file"
-                                  % (entry["old"],),
-                              cols.get("favorite", "Favorite"): "False"})
-            final_names.append(canonical)
-            res.created.append("%s = %s (no %s in the source)" % (canonical, FPC.num(val), entry["old"]))
+            comment = ("created by fusion_param_rename.py (owner-approved 2026-09-25 "
+                       "mapping) -- %r not found in the source file" % (entry["old"],))
+        elif action == "create_and_derive_old":
+            if stator_up_r_value is not None:
+                val = FPC.convert_forward(entry, stator_up_r_value)
+                comment = ("created by fusion_param_rename.py -- value = stator_up_r * "
+                           "%g (owner-approved 2026-09-25 mapping)" % entry["conversion"][1])
+            else:
+                val = create_defaults[canonical]
+                comment = ("created by fusion_param_rename.py -- no stator_up_r in the "
+                           "source file, used motor_ai_sim's default")
+        elif action == "create_from_legacy":
+            if mag_step_value is not None:
+                val = FPC.convert_forward(entry, mag_step_value,
+                                           motor_length_value=motor_length_value)
+                comment = ("created by fusion_param_rename.py -- value from mag_step "
+                           "(owner-approved 2026-09-25 mapping); mag_step itself left as-is")
+            else:
+                val = create_defaults[canonical]
+                comment = ("created by fusion_param_rename.py -- no mag_step in the "
+                           "source file, used motor_ai_sim's default")
+        else:  # pragma: no cover - guarded by the ENTRIES action set itself
+            raise FusionRenameError("unknown action %r for %s" % (action, canonical))
+
+        row6 = _new_row6(canonical, entry["unit"], val, comment)
+        new_rows.append(row6)
+        final_names.append(canonical)
+        res.created.append("%s = %s" % (canonical, row6["Expression"]))
+        res.diffs.append((None, row6))
 
     # Collision guard: refuse rather than silently drop/overwrite a row.
     seen: Dict[str, int] = {}
@@ -248,16 +334,21 @@ def rename(rows: List[Dict[str, str]], create_defaults: Dict[str, float],
 
     # Normalise every output row to the canonical HEADER shape.
     for out in new_rows:
-        row6 = {h: "" for h in HEADER}
-        for h in HEADER:
-            src = cols.get(h.lower(), h)
-            if src in out:
-                row6[h] = out[src]
-            elif h in out:
-                row6[h] = out[h]
-        if not row6.get("Favorite"):
-            row6["Favorite"] = "False"
-        res.rows.append(row6)
+        res.rows.append(out if set(out) == set(HEADER) else _to_row6(out, cols))
+
+    # NO PARAMETER IS EVER DELETED (owner, 2026-09-25: "чтобы никаких
+    # переменных не уничтожалось, только переименования") -- every input
+    # row survives (unchanged, renamed, or with its Expression's referenced
+    # tokens rewritten), and the only rows added are the ones this run
+    # explicitly created. A count mismatch here means a row silently
+    # vanished, which must never happen -- refuse rather than write a
+    # lossy file.
+    n_in = sum(1 for r in rows if str(r.get(name_col, "")).strip())
+    n_out = len(res.rows)
+    if n_out != n_in + len(res.created):
+        raise FusionRenameError(
+            "internal error: %d input row(s) + %d created != %d output row(s) "
+            "-- refusing a write that would lose a parameter" % (n_in, len(res.created), n_out))
 
     return res
 
@@ -269,13 +360,27 @@ def format_diff(res: RenameResult) -> str:
         return "\n%s (%d)\n  %s" % (title, len(lines), "\n  ".join(lines))
 
     return (
-        block("RENAMED", res.renamed)
+        block("RENAMED (Name only, Expression/Value unchanged)", res.renamed)
+        + block("DERIVED (the one formula the owner asked to change)", res.derived)
         + block("CREATED", res.created)
-        + block("EXPRESSIONS REWRITTEN (dependent rows)", res.rewritten_exprs)
-        + block("NEEDS MANUAL REVIEW (non-linear conversion referenced elsewhere)",
-                res.nonlinear_flags)
+        + block("EXPRESSIONS REWRITTEN (referenced a renamed name)", res.rewritten_exprs)
+        + block("LEFT AS-IS ON PURPOSE (no clean inverse)", res.unchanged_legacy)
         + block("UNCHANGED (not one of the 33, no reference to a renamed name)", res.unknown)
     ).lstrip("\n")
+
+
+def format_full_diff(res: RenameResult) -> str:
+    """Every row that changed in ANY way, old -> new, Name/Expression/Value."""
+    lines = []
+    for before, after in res.diffs:
+        if before is None:
+            lines.append("+ %-22s %-30s = %s" % (after["Name"], after["Expression"], after["Value"]))
+            continue
+        b = "%-22s %-30s = %s" % (before["Name"], before["Expression"], before["Value"])
+        a = "%-22s %-30s = %s" % (after["Name"], after["Expression"], after["Value"])
+        if b != a:
+            lines.append("  %s\n    -> %s" % (b, a))
+    return "\n".join(lines)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -298,6 +403,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     print(format_diff(res))
+    print("\nFULL DIFF (every changed row, old -> new)\n" + format_full_diff(res))
     if args.dry_run:
         print("\n(dry run -- nothing written)")
         return 0

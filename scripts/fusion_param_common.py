@@ -29,31 +29,62 @@ import re
 from typing import Dict, List, Optional, Tuple
 
 # ─────────────────────────────────────────────────────────────────────────
-# THE APPROVED TABLE (owner decision 2026-09-25) -- 33 rows.
+# THE APPROVED TABLE (owner decision 2026-09-25; conversion handling revised
+# 2026-09-25 per the owner's correction below) -- 33 rows.
 #
 #   canonical    our geometry_schema key (or "sleeve_thickness")
 #   old          the owner's legacy Fusion parameter name, or None
 #   unit         "mm" | "" (count/ratio) -- matches geometry_schema
-#   action       "rename"          old name -> canonical, values carried over
-#                                   (optionally through `conversion`)
-#                "rename_or_create" rename if `old` is present in the design/
-#                                   CSV, otherwise create canonical fresh
-#                "create"           `old` is always None; always create
-#                "not_mapped"       leave alone; never rename, never create
-#                                   (wire_split only -- ours defaults to 1)
-#   conversion   None, or ("linear", factor) meaning canonical = old * factor
-#                (and, symmetrically, old = canonical / factor -- used both
-#                to convert the renamed row's own value and to fix any OTHER
-#                expression that still references the old name), or
-#                ("lamination", None) for the magnet_lamination special case
-#                (see `lamination_forward` below) -- not a simple ratio, so
-#                references to `old` inside other expressions are substituted
-#                with the canonical name as-is and flagged for manual review.
+#   action       "rename"             old name -> canonical, Name changes,
+#                                      Expression/Value carried over VERBATIM
+#                                      (no reformatting) -- plain 1:1 only,
+#                                      `conversion` is always None for these
+#                "rename_or_create"   rename (as above) if `old` is present
+#                                      in the design/CSV, otherwise create
+#                                      canonical fresh with our own value
+#                "create"             `old` is always None; always create
+#                                      fresh with our own value
+#                "create_and_derive_old"  (stator_diameter only) CREATE the
+#                                      canonical parameter fresh, holding OUR
+#                                      value ("12 mm", explicit unit, never a
+#                                      bare number for a length) -- and,
+#                                      because the owner asked for exactly
+#                                      ONE existing formula to change, turn
+#                                      `old` (stator_up_r) into a DERIVED
+#                                      parameter referencing it
+#                                      (`stator_up_r = "stator_diameter / 2"`)
+#                                      instead of renaming it away. Nothing
+#                                      else about `old` changes: its NAME is
+#                                      untouched, so every other row that
+#                                      already referenced `stator_up_r`
+#                                      keeps working unmodified.
+#                "create_from_legacy" (magnet_lamination only) CREATE the
+#                                      canonical parameter fresh, its value
+#                                      computed FROM `old` (mag_step) via
+#                                      `lamination_forward` -- but `old`
+#                                      itself, and every row that references
+#                                      it, is left COMPLETELY UNTOUCHED (no
+#                                      clean, always-valid algebraic inverse
+#                                      exists for this one -- see
+#                                      `lamination_forward`'s docstring and
+#                                      docs/FUSION_SCRIPTS_HOWTO.md).
+#                "not_mapped"         leave alone; never rename, never create
+#                                      (wire_split only -- ours defaults to 1)
+#   conversion   None for "rename"/"rename_or_create"/"create"/"not_mapped".
+#                ("linear", factor) for stator_diameter: canonical = old *
+#                factor when computing the value to CREATE it with, and
+#                old's own new expression is `"%s / %g" % (canonical, factor)`
+#                (the algebraic inverse) -- used ONLY for that single formula.
+#                ("lamination", None) for magnet_lamination: see
+#                `lamination_forward`. `old` is never rewritten for this one.
 # ─────────────────────────────────────────────────────────────────────────
 ENTRIES: List[dict] = [
     {"canonical": "stator_diameter", "old": "stator_up_r", "unit": "mm",
-     "action": "rename", "conversion": ("linear", 2.0),
-     "note": "old was a RADIUS; canonical is the DIAMETER"},
+     "action": "create_and_derive_old", "conversion": ("linear", 2.0),
+     "note": "old was a RADIUS; canonical is the DIAMETER. old (stator_up_r) "
+             "is turned into a derived parameter (\"stator_diameter / 2\"), "
+             "not renamed -- every other row that referenced stator_up_r "
+             "keeps working unmodified."},
     {"canonical": "slot_height", "old": "slot_h", "unit": "mm",
      "action": "rename", "conversion": None, "note": ""},
     {"canonical": "core_thickness", "old": "core_h", "unit": "mm",
@@ -111,9 +142,11 @@ ENTRIES: List[dict] = [
     {"canonical": "magnet_down_height", "old": "mag_down_h", "unit": "mm",
      "action": "rename", "conversion": None, "note": ""},
     {"canonical": "magnet_lamination", "old": "mag_step", "unit": "mm",
-     "action": "rename", "conversion": ("lamination", None),
+     "action": "create_from_legacy", "conversion": ("lamination", None),
      "note": "mag_step is the axial lamination SEGMENT LENGTH; if it equals "
-             "the motor length -> no slicing -> our magnet_lamination = 0"},
+             "the motor length -> no slicing -> our magnet_lamination = 0. "
+             "mag_step itself is left completely as-is -- no clean, "
+             "always-valid inverse formula exists (see lamination_forward)."},
     {"canonical": "stator_fillet_r", "old": "stator_r", "unit": "mm",
      "action": "rename", "conversion": None, "note": ""},
     {"canonical": "stator_fillet_r1", "old": "stator_r1", "unit": "mm",
@@ -155,10 +188,16 @@ def lamination_forward(mag_step_value: float, motor_length_value: float,
 
 
 def lamination_backward(magnet_lamination_value: float, motor_length_value: float) -> float:
-    """Our `magnet_lamination` -> the legacy `mag_step` convention (only used
-    if a caller ever needs to emit the OLD name/semantics again -- the three
-    Fusion scripts never do this, since they only ever write canonical
-    names, but it documents the inverse for completeness / testing)."""
+    """Documents why `mag_step` is left untouched rather than turned into a
+    derived parameter like `stator_up_r` is: this is the inverse of
+    `lamination_forward`, and it is NOT one clean, always-valid formula --
+    it is a value of `motor_length` when `magnet_lamination` is (at this
+    instant) zero, and `magnet_lamination` itself otherwise. A Fusion
+    parameter expression has no conditional/branching operator, so there is
+    no single formula for `mag_step` that stays correct across both states
+    as either value is edited later. Per the owner's decision, `mag_step` is
+    therefore left completely as-is (no rename, no rewritten expression);
+    only used here to document the reasoning and for tests."""
     v = float(magnet_lamination_value)
     return float(motor_length_value) if v <= 0 else v
 
@@ -190,38 +229,17 @@ def convert_forward(entry: dict, old_value: float, *,
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
-def substitution_map() -> Tuple[Dict[str, str], List[str]]:
-    """old-name -> replacement TEXT for use inside some OTHER row's formula
-    (not the renamed row's own value, which is converted separately).
-
-    A plain rename substitutes the bare canonical name.  A LINEAR conversion
-    substitutes an algebraic expression that reproduces the OLD value from
-    the NEW one (`stator_up_r` -> `(stator_diameter / 2)`), so a dependent
-    formula that used to read the old radius keeps computing the same number
-    after the source parameter's own value is converted to a diameter.  A
-    NON-LINEAR conversion (lamination) has no such algebraic inverse, so the
-    bare canonical name is substituted and the name is returned in the
-    second element for the caller to flag as needing manual review.
-
-    Returns (substitutions, nonlinear_names).
-    """
-    subs: Dict[str, str] = {}
-    nonlinear: List[str] = []
-    for e in ENTRIES:
-        old = e.get("old")
-        if not old:
-            continue
-        conv = e.get("conversion")
-        if conv is None:
-            subs[old] = e["canonical"]
-        elif conv[0] == "linear":
-            subs[old] = "(%s / %g)" % (e["canonical"], conv[1])
-        elif conv[0] == "lamination":
-            subs[old] = e["canonical"]
-            nonlinear.append(old)
-        else:  # pragma: no cover - guarded by convert_forward already
-            subs[old] = e["canonical"]
-    return subs, nonlinear
+def plain_rename_old_names() -> List[str]:
+    """Old names that are ever plainly renamed (action "rename" or
+    "rename_or_create") -- i.e. every old name EXCEPT stator_up_r and
+    mag_step, whose entries use "create_and_derive_old" /
+    "create_from_legacy" and are never renamed at all. A caller builds the
+    actual old->canonical substitution table from only the subset of these
+    that are truly present and renamed in a given file/design (not every
+    entry here is necessarily renamed in every run -- `rename_or_create`
+    entries are only renamed when `old` happens to be present)."""
+    return [e["old"] for e in ENTRIES
+            if e["old"] and e["action"] in ("rename", "rename_or_create")]
 
 
 def rewrite_expression(expr: str, subs: Dict[str, str]) -> Tuple[str, List[str]]:
@@ -241,37 +259,26 @@ def rewrite_expression(expr: str, subs: Dict[str, str]) -> Tuple[str, List[str]]
     return _TOKEN_RE.sub(_sub, expr), touched
 
 
-def post_rename_fixups() -> Tuple[Dict[str, str], List[str]]:
-    """For the IN-FUSION scripts only (never the CSV converter).
-
-    Fusion's own `UserParameter.name = ...` already rewrites every OTHER
-    parameter's expression to use the NEW name automatically (per the
-    Fusion API), so by the time a rename has happened every dependent
-    expression already reads e.g. `stator_diameter` where it used to read
-    `stator_up_r` -- textually correct, but still numerically wrong until
-    the source parameter's own value is converted (still the old radius at
-    that point). This returns canonical-name -> replacement TEXT to apply
-    to every OTHER parameter's (already-renamed) expression BEFORE
-    converting the source value, so the compensation lands first:
-    `stator_diameter` -> `(stator_diameter / 2)`.
-
-    Returns (substitutions, nonlinear_names) -- same shape as
-    `substitution_map()`, but keyed by the CANONICAL (post-rename) name.
-    """
-    subs: Dict[str, str] = {}
-    nonlinear: List[str] = []
-    for e in ENTRIES:
-        conv = e.get("conversion")
-        if conv is None:
-            continue
-        canonical = e["canonical"]
-        if conv[0] == "linear":
-            subs[canonical] = "(%s / %g)" % (canonical, conv[1])
-        elif conv[0] == "lamination":
-            nonlinear.append(canonical)
-    return subs, nonlinear
-
-
 def num(value: float) -> str:
     """The number the way Fusion/Parameter I/O writes it: no trailing zeros."""
     return "%g" % float(value)
+
+
+def expr_str(value: float, unit: str) -> str:
+    """A bare-number Expression the way Fusion actually requires it: a
+    LENGTH parameter's expression carries its unit explicitly ("12 mm",
+    never a bare "12" -- owner correction, 2026-09-25); a UNITLESS
+    parameter's expression must be a bare number (Fusion raises "Expression
+    is invalid" on "0.13 mm" for one of those). Used only for brand-new
+    leaf values this tooling writes (CREATE rows); an existing expression
+    that already has its own text is never reformatted through this."""
+    return ("%s %s" % (num(value), unit)).strip()
+
+
+def derive_stator_up_r_expression(factor: float = 2.0) -> str:
+    """The ONE existing formula this tooling ever changes (owner, 2026-09-25:
+    "формулы не меняй, только одну: stator_up_r = stator_diameter/2"): no
+    parentheses, no reformatting -- just this exact expression, since it
+    stands alone as stator_up_r's entire new definition rather than being
+    substituted into a larger formula."""
+    return "stator_diameter / %g" % (factor,)

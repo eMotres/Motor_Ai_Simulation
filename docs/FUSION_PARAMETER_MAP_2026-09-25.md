@@ -16,7 +16,7 @@ Human-reviewed copy: `config/fusion_param_map.yaml`,
 
 | Canonical | Old (legacy) | Unit | Action | Conversion |
 |---|---|---|---|---|
-| `stator_diameter` | `stator_up_r` | mm | rename | ×2 (old was a RADIUS, canonical is the DIAMETER) |
+| `stator_diameter` | `stator_up_r` | mm | **create** (old NOT renamed) | value = old ×2 (RADIUS -> DIAMETER); old's own formula becomes `"stator_diameter / 2"` — the one formula this tooling ever changes |
 | `slot_height` | `slot_h` | mm | rename | — |
 | `core_thickness` | `core_h` | mm | rename | — |
 | `num_seg` | `N1` | — | rename | — |
@@ -43,7 +43,7 @@ Human-reviewed copy: `config/fusion_param_map.yaml`,
 | `magnet_up_gap` | `mag_sh` | mm | rename | — |
 | `rotor_hole` | `mag_hole` | — | rename | — |
 | `magnet_down_height` | `mag_down_h` | mm | rename | — |
-| `magnet_lamination` | `mag_step` | mm | rename | non-linear: `mag_step` is the lamination SEGMENT LENGTH; **0** when it equals the motor length (old: full length = one slice = solid), otherwise carried over as-is |
+| `magnet_lamination` | `mag_step` | mm | **create** (old left untouched) | value: **0** when `mag_step` equals the motor length (old: full length = one slice = solid), otherwise carried over as-is; `mag_step` itself is never renamed or rewritten — no clean inverse formula exists |
 | `stator_fillet_r` | `stator_r` | mm | rename | — |
 | `stator_fillet_r1` | `stator_r1` | mm | **rename_or_create** | rename if `stator_r1` exists in the design/CSV, else create with our value |
 | `rotor_fill_r` | `rotor_r1` | mm | **rename_or_create** | rename if `rotor_r1` exists in the design/CSV, else create with our value |
@@ -89,19 +89,60 @@ PyYAML, so that module (not this YAML file) is what actually runs; see its
 own docstring for why.  See `docs/FUSION_SCRIPTS_HOWTO.md` (in Russian) for
 where to install each script and in what order to run them.
 
-### How the tools apply this (worked example)
+### How the tools apply this (revised 2026-09-25 — nothing is ever renamed
+away or deleted; only ONE existing formula is ever changed)
 
-`stator_diameter = 2 * stator_up_r`. The CLI converter and the in-Fusion
-renamer both (a) convert the row's own value, and (b) fix up every OTHER
-expression that referenced the old name so it keeps computing the same
-number — e.g. the old, untouched-by-name helper
-`stator_mid_r = stator_up_r - slot_h - core_h/2` becomes
-`stator_mid_r = (stator_diameter/2) - slot_height - core_thickness/2` after
-the rename, not a broken `stator_diameter - slot_height - core_thickness/2`.
-`magnet_lamination`'s conversion is non-linear (an equality test, not a
-ratio), so a reference to it elsewhere cannot be algebraically fixed up the
-same way and is instead flagged for the owner to check by hand (none exist
-in the owner's file).
+Two owner corrections, same day, narrowed this considerably:
+
+> «так должно быть: stator_up_r = stator_diameter/2» — for a mapping WITH a
+> conversion, do NOT rename the old parameter. CREATE the canonical
+> parameter holding OUR value ("12 mm", explicit unit — never a bare number
+> for a length), and turn the OLD parameter into a DERIVED one referencing
+> the new one. Every other old expression stays exactly as it was.
+
+> «формулы не меняй, только одну: stator_up_r = stator_diameter/2» — do not
+> change `mag_step`'s formula either; if `magnet_lamination` needs a
+> conversion, create it with its own value and leave `mag_step` as is.
+
+> «чтобы никаких переменных не уничтожалось, только переименования» — never
+> delete a parameter. The converter's output always contains every input
+> row (`rows_out = rows_in + created`, asserted in code); the Fusion script
+> refuses to run if its plan contains anything other than rename / create /
+> that one expression edit.
+
+So, concretely:
+
+* **`stator_diameter` (from `stator_up_r`, a RADIUS -> a DIAMETER, ×2):**
+  `stator_up_r` is **never renamed**. `stator_diameter` is **created** fresh,
+  `"12 mm"` (explicit unit). `stator_up_r`'s own Expression is set to
+  `"stator_diameter / 2"` — the **one** formula this tooling ever changes.
+  Its Name stays `stator_up_r`, so every OTHER row that already referenced
+  it (`motor_d`, `stator_mid_r`, `stator_down_r`, `rotor_up_r`, ...) needs
+  **no change and gets none** — no substitution, no parentheses, no
+  reformatting. (Those rows' OTHER tokens can still change if they
+  reference a plainly-renamed name, e.g. `stator_mid_r`'s `slot_h`/`core_h`
+  become `slot_height`/`core_thickness` — a plain identifier swap, nothing
+  more.)
+* **`magnet_lamination` (from `mag_step`):** `magnet_lamination` is created
+  fresh, its value computed from `mag_step`'s current value (0 when it
+  equals the motor length — no axial slicing; the segment length
+  otherwise). `mag_step` itself is left
+  **completely untouched**: no rename, no rewritten expression. Why no
+  derived formula here, unlike `stator_up_r`: there is no clean,
+  always-valid algebraic inverse — `mag_step` would need to equal
+  `motor_length` when `magnet_lamination` is 0 and `magnet_lamination`
+  itself otherwise, a branch that a Fusion parameter expression (no
+  conditional operator) cannot express as one formula that stays correct
+  under a later edit in either direction. See
+  `fusion_param_common.lamination_backward`'s docstring for the full
+  reasoning, and `docs/FUSION_SCRIPTS_HOWTO.md`.
+* **Plain 1:1 renames (27 of the 33):** just `Name` changes, `Expression`/
+  `Value` carried over **verbatim**. In Fusion, the native API rewrites
+  every dependent expression automatically on rename. In the offline CSV
+  converter (no live recompute engine), the same references are rewritten
+  **token-safely, name-for-name only** — no other rewriting, no
+  parenthesising, no reformatting of any expression that wasn't itself
+  renamed.
 
 ---
 

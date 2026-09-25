@@ -2542,6 +2542,28 @@ class _NoLossMap(Exception):
         self.reason = reason
 
 
+def _em_call(fn, kw: Dict[str, Any]) -> Dict[str, Any]:
+    """The transient call, with a CANCEL turned back into a cancel.
+
+    THE STOP BUTTON THAT DID NOT STOP (owner, production 2026-09-25): the frame
+    march answers a cancel with ``HTTPException(499)`` — and this loop's
+    passes catch ``HTTPException`` to keep a solved state when a LATER pass is
+    refused (a magnet off its card, an unsettled DC).  A 499 is not a refusal:
+    read as one, the loop kept the previous pass and went on to the pass at
+    the limit, the S1 verification, the 20 °C constants, the rotor stress and
+    the modal sweep — minutes of solving after the user pressed Stop.  So a
+    499 leaves here as :class:`_LoopCancelled`, a ``BaseException`` no
+    ``except HTTPException`` / ``except Exception`` on the way can swallow.
+    """
+    from motor_ai_sim.modules.solvers import _call_filtered
+    try:
+        return _call_filtered(fn, kw) or {}
+    except HTTPException as exc:
+        if int(getattr(exc, "status_code", 0) or 0) == 499:
+            raise _LoopCancelled() from exc
+        raise
+
+
 def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
             magnet_temp_c: Optional[float],
             inverter: Optional[Dict[str, Any]] = None,
@@ -2631,7 +2653,7 @@ def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
         # transient route knows only "current" — forwarding the synonym would
         # 422 with "unknown excitation source 'sine'".
         kw["drive"] = "current"
-        return _call_filtered(get_fem_transient, kw) or {}
+        return _em_call(get_fem_transient, kw)
     # ── THE INVERTER ────────────────────────────────────────────────────────
     # The settle SCHEDULE is an environment switch of the solver (the B5 fix's
     # own `SB_PWM_COARSE_SETTLE`), so it is set around this one call and put
@@ -2651,7 +2673,7 @@ def _em_run(body: Dict[str, Any], *, coil_temp_c: float,
     _prev = os.environ.get("SB_PWM_COARSE_SETTLE")
     os.environ["SB_PWM_COARSE_SETTLE"] = _PWM_SCHEDULES[inverter["schedule"]]
     try:
-        return _call_filtered(get_fem_transient, kw) or {}
+        return _em_call(get_fem_transient, kw)
     finally:
         if _prev is None:
             os.environ.pop("SB_PWM_COARSE_SETTLE", None)
@@ -4967,7 +4989,10 @@ def _run(body: Dict[str, Any],
         # sticks at 100 % while the solver is still working.
         _done = max(len(history), 1) * 2
         _progress.update(done=_done, total=_done)
-    except _LoopCancelled:
+    except (_LoopCancelled, _JOBS.JobCancelled):
+        # …a JobCancelled too: the mechanical / thermal / rating steps check
+        # the job's own cancel flag (`jobs.check_cancelled`) inside their
+        # loops, and raise the queue's exception rather than this router's.
         _progress.update(phase="cancelled")
         log.info("coupled run %s cancelled", run_id)
         raise HTTPException(status_code=499, detail="coupled run stopped")

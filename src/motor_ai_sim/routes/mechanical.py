@@ -1327,6 +1327,7 @@ def limit_speed(
 
         def _solve_rpm(cand_rpm: float):
             nonlocal solves_done
+            _JOBS.check_cancelled()          # Stop reaches every search solve
             solves_done += 1
             _progress.update(
                 done=min(solves_done, int(max_solves)), total=int(max_solves),
@@ -1642,6 +1643,7 @@ def _auto_limit_speed(out: Dict[str, Any],
 
             def _solve_rpm(cand_rpm: float):
                 nonlocal solves_done
+                _JOBS.check_cancelled()      # Stop reaches every search solve
                 solves_done += 1
                 _progress.update(
                     done=min(solves_done, max_solves), total=max_solves,

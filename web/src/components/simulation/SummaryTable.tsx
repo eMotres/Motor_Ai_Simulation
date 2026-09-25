@@ -20,6 +20,7 @@ import { couplingLine, couplingTooltip, coupledStateLine,
          coupledStateTip, continuousRatingLine,
          continuousRatingTip, s1ResultsAtLine, controllerTerm } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
+import SineVsInverterTable from './SineVsInverterTable';
 
 /** Bench-probe result riding in the summary (backend measures it once per
  *  machine during the run) — small-signal Ld/Lq at the I≈0 iron state, the
@@ -1184,6 +1185,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               noticed at the end of this row. */}
         </Box>
       )}
+      {/* ── SINE | INVERTER | Δ (owner 2026-09-25) ─────────────────────────
+          On a drive=inverter coupled run: the same point on the ideal sine
+          current beside the controller's PWM.  One caption + HelpTip. */}
+      {s.coupling?.sine_comparison?.rows?.length ? (
+        <Box sx={{ opacity: stale ? 0.55 : 1 }}>
+          <SineVsInverterTable sc={s.coupling.sine_comparison}/>
+        </Box>
+      ) : null}
 
       {/* ── Row 1 — torque, power, mass, efficiency, ripple ───────────────── */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>

@@ -2114,6 +2114,46 @@ def _excluded_parts() -> frozenset:
         return frozenset()
 
 
+def _shaft_skin_material() -> Tuple[float, float]:
+    """(σ [S/m], μ_r,max) of the shaft as the eddy solve will see it — the
+    same assignment precedence as the σ block in fem_transient_sliding_band
+    (shared config, then the request's material context, override-carried
+    props first).  σ = 0 for an EXCLUDED shaft (it is air).  μ_r,max is the
+    largest secant μ of the assigned B-H curve (1 for a non-magnetic card):
+    the thinnest skin the steel can have, which is what a mesh must resolve."""
+    if "shaft" in _excluded_parts():
+        return 0.0, 1.0
+    from motor_ai_sim import materials as _ml
+    from motor_ai_sim.config import get_material_assignments as _gma_s
+    from motor_ai_sim.simulation.conductor_skin import bh_mu_r_max
+    _ma_s = dict(_gma_s() or {})
+    try:
+        from motor_ai_sim.material_context import get_request_materials as _grm_s
+        _ctx = _grm_s() or {}
+    except Exception:      # noqa: BLE001
+        _ctx = {}
+    _ma_s.update({k: v for k, v in (_ctx.get("assignment") or {}).items() if v})
+    _props = _ctx.get("materials") or {}
+    name = str(_ma_s.get("shaft", "") or "")
+    obj = None
+    for _cat in ("conductor", "steel", "magnet", "insulator"):
+        try:
+            if name and name in _props:
+                _c = (_props[name] or {}).get("category") or _cat
+                obj = _ml.material_from_dict(_c, name, _props[name])
+            else:
+                obj = _ml.get_material(_cat, name)
+            break
+        except Exception:  # noqa: BLE001
+            obj = None
+    sig = float(getattr(obj, "sigma", 0.0) or 0.0) if obj is not None else 0.0
+    if not sig:
+        sig = SIGMA_SHAFT
+    mu = bh_mu_r_max(getattr(obj, "bh_curve", None)) if obj is not None else 1.0
+    mu = max(mu, float(getattr(obj, "mu_r", 1.0) or 1.0) if obj is not None else 1.0)
+    return sig, mu
+
+
 def _field2d_static_inputs(
     rotor_angle_deg: float = 0.0,
     gamma_deg: float = 0.0,
@@ -4268,6 +4308,44 @@ def fem_transient_sliding_band(
                             n_slip=n_slip_eff, gap_layers=gap_layers,
                             structured_gap=structured_gap,
                             band_mode=_band_mode)
+    # ── Conductor SKIN LAYER (docs/CONDUCTIVE_BODY_MESH_CONVERGENCE_2026-09-24)
+    # The shaft's eddy current flows in δ = sqrt(2/(ωμσ)) under its OD; the
+    # CDT wall cells are 5-50 δ thick, which reads the shaft loss low.  When
+    # the rotor conductors are solved (rotor_eddy), size a structured layered
+    # wall on δ at the highest rotor-frame frequency the duty drives (slot
+    # passing, or the PWM carrier) and the steel's largest μ.
+    _skin = None
+    _skin_info = None
+    if rotor_eddy:
+        from motor_ai_sim.simulation.conductor_skin import (
+            skin_layer_enabled as _sk_on, shaft_skin_spec as _sk_spec,
+            rotor_frame_ref_hz as _sk_f, sleeve_layers as _sk_sl)
+        if _sk_on():
+            try:
+                _sig_sk, _mu_sk = _shaft_skin_material()
+                _f_sk = _sk_f(int(p.num_slots), float(rpm),
+                              float(f_switch) if _carriers else None)
+                _r_sk = float(motor.parameters.get("rotor_inner_radius") or 0.0)
+                _sp = _sk_spec(_sig_sk, _mu_sk, _f_sk, _r_sk, int(p.num_slots),
+                               int(pole_pairs))
+                if _sp is not None:
+                    _skin = {"shaft": _sp}
+                    _skin_info = {k: (round(float(v), 6)
+                                      if isinstance(v, (int, float)) else v)
+                                  for k, v in _sp.items()}
+                    log.info("shaft skin layer: delta=%.4g mm at %.4g Hz "
+                             "(sigma %.3g S/m, mu_r,max %.0f) -> h1 %.4g mm, "
+                             "growth %.3g, chord %.3g mm",
+                             _sp["delta_mm"], _f_sk, _sig_sk, _mu_sk,
+                             _sp["h1_mm"], _sp["growth"], _sp["chord_mm"])
+            except Exception as _sk_e:   # noqa: BLE001 — loud, never silent
+                log.warning("shaft skin layer spec failed (%s: %s) — the shaft "
+                            "wall is meshed without it", type(_sk_e).__name__,
+                            _sk_e)
+            _nsl = _sk_sl()
+            if _nsl:
+                _skin = dict(_skin or {})
+                _skin["sleeve"] = {"layers": float(_nsl)}
     ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(
         polys, 0.0, mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, band_thickness_mm=0.4,
@@ -4276,7 +4354,8 @@ def fem_transient_sliding_band(
         gap_layers=gap_layers,
         component_mesh_mm=component_mesh_mm,
         full_ring=_full_ring, pole_copy=pole_copy,
-        iron_template=iron_template, geo_mesh=_geo_mesh_eff)
+        iron_template=iron_template, geo_mesh=_geo_mesh_eff,
+        skin_layers=_skin)
     # Build provenance — captured IMMEDIATELY after the build (thread-local in
     # the mesher, so a later build on this thread would overwrite it).  Reported
     # in the result dict: a fallback-built mesh moves the ripple noise floor by
@@ -9246,6 +9325,9 @@ def fem_transient_sliding_band(
         # residuals, the periods marched and whether the splices carried the
         # eddy state across the period with the pole-pair map.
         "eddy_settle_gauge": (dict(_warm_gauge) if _warm_gauge else None),
+        # the shaft skin-layer mesh spec this run was built with (None = the
+        # wall was meshed by the CDT alone: rule off, or no rotor conductors)
+        "shaft_skin_layer": _skin_info,
         # what a COLD march started from: the static (∂A/∂t = 0) field one
         # step before its first frame, or None (seeded / voltage / frozen-ν)
         "eddy_cold_start": _static_seed_info,

@@ -1771,10 +1771,214 @@ def _sleeve_radii(polys: Dict) -> Tuple[float, float]:
     return float(r_lo), float(r_hi)
 
 
+# ── conductor SKIN LAYER: a structured boundary-layer patch in the shaft ─────
+# A solid, conductive (and on most machines magnetic) shaft carries its eddy
+# current in a skin layer δ = sqrt(2/(ω μ σ)) under the surface that faces the
+# rotor iron — 0.05-0.5 mm on a 42CrMo4 shaft at the rotor-frame slot frequency.
+# The CDT meshes the tube wall at half its thickness (2.5 mm cells on the L155's
+# 5 mm wall, 3.3 mm chords on its OD), i.e. 5-50 δ per element: the current
+# cannot be represented where it flows and the solved σE² reads LOW (1-D P2
+# check: 17 δ-thick cells give 0.48 of the exact surface loss, one-δ cells
+# +0.3 %).  Triangle cannot build the thin graded layers the skin needs — its
+# quality refinement would split them into a cascade — so the wall is meshed
+# OUTSIDE Triangle as a structured patch of concentric layers (first layer
+# h1 at the OD, growing geometrically to a cap) and stitched to the CDT by node
+# identity on its two arcs, exactly like the winding patches.  The spec comes
+# from the solver (`skin_layer_spec`, which knows σ, μ and the frequencies);
+# the mesher only builds what it is told.  No spec → the previous mesh,
+# bit-for-bit.
+def skin_layer_radii(r_out: float, r_in: float, h1: float, growth: float,
+                     h_max: float) -> np.ndarray:
+    """Descending ring radii r_out = r_0 > r_1 > … > r_n = r_in (mm).
+
+    Layer k (from the surface) is ``h1·growth**k`` thick, capped at ``h_max``;
+    once capped the layers stay ``h_max`` down to ``r_in``.  The remainder that
+    does not fill a whole layer is merged into the last layer when it is thinner
+    than half of it (no sliver layer), otherwise kept as its own layer."""
+    t_tot = float(r_out) - float(r_in)
+    if not (t_tot > 0.0):
+        return np.array([float(r_out)])
+    h = max(float(h1), 1e-6)
+    g = max(float(growth), 1.0)
+    hm = max(float(h_max), h)
+    x = [0.0]
+    while x[-1] + h < t_tot - 1e-9:
+        x.append(x[-1] + h)
+        h = min(h * g, hm)
+    if len(x) > 1 and (t_tot - x[-1]) < 0.5 * (x[-1] - x[-2]):
+        x.pop()
+    x.append(t_tot)
+    return float(r_out) - np.asarray(x, float)
+
+
+def _skin_patch(radii, n_theta: int, span: float, full_ring: bool) -> Dict:
+    """Structured layers between the ring radii (descending, radii[0] = the
+    conductor surface), ``n_theta`` equal angular cells over [0, span].
+
+    Returns dict(V mm, T, loops, arc) — `loops` are the closed boundary loops
+    (node ids), `arc[i]` marks the nodes on the first and last ring, the only
+    ones that have a CDT counterpart.  On a sector the two radial sides sit
+    EXACTLY on the cut rays (θ = 0 at (r, 0), θ = span at (r cos, r sin) — the
+    same arithmetic `_symmetrize_cuts` uses), so the anti-periodic pairing and
+    the cell-to-cell weld find clone-identical radii there."""
+    radii = np.asarray(radii, float)
+    L = len(radii)
+    n = max(1, int(n_theta))
+    nj = n if full_ring else n + 1
+    cs, ss = math.cos(span), math.sin(span)
+    V = np.zeros((L * nj, 2))
+    for i, r in enumerate(radii):
+        for j in range(nj):
+            if not full_ring and j == 0:
+                V[i * nj + j] = (r, 0.0)
+            elif not full_ring and j == n:
+                V[i * nj + j] = (r * cs, r * ss)
+            else:
+                th = j * span / n
+                V[i * nj + j] = (r * math.cos(th), r * math.sin(th))
+
+    def nid(i, j):
+        return i * nj + (j % nj)
+
+    tri = []
+    for i in range(L - 1):
+        for j in range(n):
+            a, b = nid(i, j), nid(i, j + 1)
+            c, d = nid(i + 1, j + 1), nid(i + 1, j)
+            if (i + j) % 2 == 0:
+                tri.append((a, b, c)); tri.append((a, c, d))
+            else:
+                tri.append((a, b, d)); tri.append((b, c, d))
+    T = np.asarray(tri, np.int64).reshape(-1, 3)
+    p0, p1, p2 = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    neg = ((p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+           - (p2[:, 0] - p0[:, 0]) * (p1[:, 1] - p0[:, 1])) < 0.0
+    T[neg] = T[neg][:, [0, 2, 1]]
+    arc = np.zeros(len(V), bool)
+    arc[[nid(0, j) for j in range(nj)]] = True
+    arc[[nid(L - 1, j) for j in range(nj)]] = True
+    if full_ring:
+        loops = [[nid(0, j) for j in range(n)],
+                 [nid(L - 1, j) for j in range(n)]]
+    else:
+        loops = [[nid(0, j) for j in range(n + 1)]
+                 + [nid(i, n) for i in range(1, L)]
+                 + [nid(L - 1, j) for j in range(n - 1, -1, -1)]
+                 + [nid(i, 0) for i in range(L - 2, 0, -1)]]
+    return dict(V=V, T=T, loops=loops, arc=arc, radii=radii, n_theta=n)
+
+
+def _stitch_skin_patch(V, T, patch, tol: float = 6e-3):
+    """Merge a skin patch into the CDT output (V mm, T) by node identity on its
+    two ARCS.  Triangle got both arcs as input segments and a hole marker inside
+    the patch, so the CDT stops on them and every arc node is a CDT node; a node
+    Triangle additionally put on an arc is fanned into the patch triangle behind
+    it (same rule as the winding patches).  The patch's radial sides lie on the
+    cut rays, where nothing else is meshed, so their nodes are new.
+    Returns (V, T, n_split)."""
+    from scipy.spatial import cKDTree
+    V = np.asarray(V, float)
+    T = np.asarray(T, np.int64)
+    kd = cKDTree(V)
+    Vp = np.asarray(patch["V"], float)
+    Tp = np.asarray(patch["T"], np.int64)
+    arc = np.asarray(patch["arc"], bool)
+    n_split = 0
+    for loop in patch["loops"]:
+        M = len(loop)
+        inserts = {}
+        for k in range(M):
+            p, q = int(loop[k]), int(loop[(k + 1) % M])
+            if not (arc[p] and arc[q]):
+                continue                       # a ray side: no CDT counterpart
+            A, B = Vp[p], Vp[q]
+            AB = B - A
+            Lab = float(np.hypot(*AB))
+            if Lab <= 1e-9:
+                continue
+            hits = []
+            for ci in kd.query_ball_point(0.5 * (A + B), 0.5 * Lab + tol):
+                w = V[ci] - A
+                if float(w @ w) <= tol * tol:
+                    continue
+                wb = V[ci] - B
+                if float(wb @ wb) <= tol * tol:
+                    continue
+                t = float(w @ AB) / (Lab * Lab)
+                if t <= 1e-6 or t >= 1.0 - 1e-6:
+                    continue
+                if abs(float(AB[0] * w[1] - AB[1] * w[0])) / Lab <= tol:
+                    hits.append((t, V[ci]))
+            if hits:
+                hits.sort(key=lambda h: h[0])
+                inserts[k] = np.array([h[1] for h in hits])
+        if inserts:
+            n0 = len(Vp)
+            n_split += int(sum(len(x) for x in inserts.values()))
+            Vp, Tp, _ = _patch_fan(Vp, Tp, loop, inserts)
+            arc = np.concatenate([arc, np.ones(len(Vp) - n0, bool)])
+    ids = np.where(arc)[0]
+    d, j = kd.query(Vp[ids])
+    if float(np.max(d)) > tol:
+        raise _PatchError("skin patch arc node {:.4g} mm from any CDT node".format(
+            float(np.max(d))))
+    if len(set(j.tolist())) != len(j):
+        raise _PatchError("two skin patch arc nodes welded onto one CDT node")
+    gid = np.full(len(Vp), -1, np.int64)
+    gid[ids] = j
+    free = np.where(gid < 0)[0]
+    gid[free] = len(V) + np.arange(len(free))
+    return np.vstack([V, Vp[free]]), np.vstack([T, gid[Tp]]), n_split
+
+
+def _sleeve_layers(skin: Optional[Dict]) -> float:
+    """Element layers across the retaining sleeve: 2 (the long-standing target
+    area 0.433·(t/2)²) unless the skin spec asks for more."""
+    try:
+        n = float(((skin or {}).get("sleeve") or {}).get("layers") or 2.0)
+    except (TypeError, ValueError, AttributeError):
+        n = 2.0
+    return max(1.0, n)
+
+
+def _shaft_skin_plan(spec: Optional[Dict], r_shaft: float, r_bore: float,
+                     n_sh: int, multiple: int) -> Optional[Dict]:
+    """Resolve the solver's shaft skin spec against this rotor: the OD ring
+    count (at least 2πr/chord, a multiple of `multiple` so the grid lands on
+    the cell/sector rays), the patch's inner radius and its ring radii.
+    None when there is no spec or no conductor to layer."""
+    if not spec or not (r_shaft > 0.0):
+        return None
+    try:
+        h1 = float(spec["h1_mm"])
+        g = float(spec.get("growth", 1.3))
+        chord = float(spec["chord_mm"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (h1 > 0.0 and chord > 0.0):
+        return None
+    h_max = float(spec.get("h_max_mm") or chord)
+    if r_bore > 0.0:
+        r_in = r_bore                                  # the whole tube wall
+    else:
+        depth = float(spec.get("depth_solid_mm") or 0.0)
+        if not (depth > 0.0):
+            return None
+        r_in = max(0.3 * r_shaft, r_shaft - depth)     # solid: an outer layer
+    m = max(1, int(multiple))
+    n = max(int(n_sh), int(math.ceil(2.0 * math.pi * r_shaft / chord)))
+    n = int(math.ceil(n / m)) * m
+    radii = skin_layer_radii(r_shaft, r_in, h1, g, h_max)
+    if len(radii) < 2:
+        return None
+    return dict(n_sh=n, r_in=float(r_in), radii=radii, h1=h1, growth=g,
+                chord=2.0 * math.pi * r_shaft / n, h_max=h_max)
+
+
 def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
                      n_slip: int, area: float, air_mm: float, quality: int,
                      r1_band: float = 0.0, part_area: Optional[Dict] = None,
-                     r_sleeve_in: float = 0.0):
+                     r_sleeve_in: float = 0.0, skin: Optional[Dict] = None):
     """(V mm, T) for the rotor disk [0, r_od].  Steel and magnets mesh at
     `area`; the solid shaft core (r < r_shaft) and the flux-barrier air pockets
     get the coarse air size — the rotor centre carries little flux.
@@ -1805,17 +2009,22 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     iron = _resample(steel, r_iron_od, n_slip)                  # OD → slip grid
     # shaft seam is internal (not a belt boundary) → discretise at the air size
     n_sh = max(48, int(2 * math.pi * r_shaft / max(0.35, air_mm)))
-    iron = _resample(iron, r_shaft, n_sh)                       # shaft → own grid
     # HOLLOW shaft (see _shaft_bore_r): mesh the tube wall as its own region and
     # leave the bore inside it to the coarse air size — _tag_rotor then tags the
     # bore DOM_AIR, so sigma = 0 there.
     r_bore = _shaft_bore_r(polys, r_shaft)
+    _sk = _shaft_skin_plan((skin or {}).get("shaft"), r_shaft, r_bore, n_sh, 1)
+    if _sk is not None:
+        n_sh = _sk["n_sh"]                     # OD ring at the skin chord
+    iron = _resample(iron, r_shaft, n_sh)                       # shaft → own grid
     a_tube = air_area
     n_bore = 0
     if r_bore > 0.0:
         t_tube = r_shaft - r_bore
         a_tube = max(1e-3, min(air_area, 0.4330 * (0.5 * t_tube) ** 2))
         n_bore = max(48, int(2 * math.pi * r_bore / max(0.35, 0.5 * t_tube)))
+    if _sk is not None and r_bore > 0.0 and _sk["r_in"] <= r_bore + 1e-9:
+        n_bore = n_sh                          # the patch's inner ring IS the bore
     mags = [mg for mg, _pol in (polys.get("magnets") or [])]
     mags = [_resample(mg, r_iron_od, n_slip) for mg in mags]   # top on the OD → slip grid (see sector)
     mags = [_weld_outline(mg, iron, 0.01) for mg in mags]  # см. sector (zipper)
@@ -1844,13 +2053,22 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     add(_grid_circle(r_shaft, n_sh))                            # iron|shaft seam
     if r_bore > 0.0:
         add(_grid_circle(r_bore, n_bore))                       # shaft tube bore
+    _patch_r = None
+    if _sk is not None:
+        _r_in = _sk["r_in"]
+        if _r_in > r_bore + 1e-9:
+            add(_grid_circle(_r_in, n_sh))                      # patch inner ring
+        _patch_r = _skin_patch(_sk["radii"], n_sh, 2.0 * math.pi, True)
     V, S = _build_pslg(lines)
 
     # region seeds: steel + each magnet fine; shaft bore + flux barriers coarse
-    _core_r = 0.5 * (r_bore if r_bore > 0.0 else r_shaft)
+    _core_top = r_bore if r_bore > 0.0 else (
+        _sk["r_in"] if _sk is not None else r_shaft)
+    _core_r = 0.5 * _core_top
     _air_reg = [[_core_r, 0.0, 7, air_area]]                   # inside the tube
-    if r_bore > 0.0:                                           # the tube wall
-        _air_reg += [[0.5 * (r_bore + r_shaft), 0.0, 10, a_tube]]
+    _wall_top = _sk["r_in"] if _sk is not None else r_shaft
+    if r_bore > 0.0 and _wall_top > r_bore + 1e-9:             # the tube wall
+        _air_reg += [[0.5 * (r_bore + _wall_top), 0.0, 10, a_tube]]
     ann = Polygon(_grid_circle(r_iron_od, n_slip)[:-1]).difference(
           Polygon(_grid_circle(r_shaft, n_sh)[:-1]))
     _air_reg += [[*a.representative_point().coords[0], 8, air_area]
@@ -1861,7 +2079,8 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
         # loss is integrated, so it needs ~2 elements across its thickness —
         # and no finer, because a 0.4 mm ring at the gap cell size costs more
         # triangles than the rotor iron it sits on.
-        _a_sl = max(1e-3, min(area, 0.4330 * (0.5 * (r_od - r_iron_od)) ** 2))
+        _a_sl = max(1e-3, min(area, 0.4330 * ((r_od - r_iron_od)
+                                               / _sleeve_layers(skin)) ** 2))
         _air_reg += [[0.5 * (r_iron_od + r_od), 0.0, 11, _a_sl]]
     if r1_band > r_od + 1e-6:
         # gap-air annulus [r_od, R1] — FINE (it carries the gap field)
@@ -1869,8 +2088,17 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
     reg = _seeds(_air_reg,
                  [[*steel.representative_point().coords[0], 5, a_steel]]
                  + [[mg.centroid.x, mg.centroid.y, 6, a_mag] for mg in mags])
+    _xh = None
+    if _patch_r is not None:                  # the patch annulus is a CDT hole
+        _xh = [[0.5 * (_sk["r_in"] + r_shaft), 0.0]]
     V, T = _triangulate(V, S, area, quality, hole=False, regions=reg,
-                        rotor_bridge=True)  # shaft solid
+                        rotor_bridge=True, extra_holes=_xh)  # shaft solid
+    if _patch_r is not None:
+        V, T, _ns = _stitch_skin_patch(V, T, _patch_r)
+        log.info("shaft skin layer: %d rings (h1 %.4g mm, x%.3g, cap %.3g mm), "
+                 "chord %.3g mm, %d tris, %d CDT split(s) fanned",
+                 len(_sk["radii"]), _sk["h1"], _sk["growth"], _sk["h_max"],
+                 _sk["chord"], len(_patch_r["T"]), _ns)
     return V, T
 
 
@@ -2142,7 +2370,7 @@ def _stator_sector_impl(polys, r_bore, r_out_iron, r_outer, n_slip, span,
 def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality,
                        r1_band: float = 0.0, cell_copies: int = 0,
                        part_area: Optional[Dict] = None,
-                       r_sleeve_in: float = 0.0):
+                       r_sleeve_in: float = 0.0, skin: Optional[Dict] = None):
     """(V mm, T) for a rotor WEDGE [0, span] × [0, r_od] (shaft solid to centre).
     r1_band > r_od extends the wedge with the gap-air annulus ending on the
     uniform moving-band ring R1 (harmonic-macro boundary).
@@ -2169,6 +2397,14 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     # HOLLOW shaft (see _shaft_bore_r): the tube wall is a region of its own,
     # the bore inside it stays coarse air.
     r_bore = _shaft_bore_r(polys, r_shaft)
+    # skin layer: the OD ring count must keep landing on the rays — a multiple
+    # of the copy count on a tiled cell, of the sector count on a whole wedge
+    _mult = (int(cell_copies) if cell_copies > 0
+             else max(1, int(round(2.0 * math.pi / span))))
+    _sk = _shaft_skin_plan((skin or {}).get("shaft"), r_shaft, r_bore, n_sh,
+                           _mult)
+    if _sk is not None:
+        n_sh = _sk["n_sh"]
     a_tube = air_area
     n_bore = 0
     if r_bore > 0.0:
@@ -2177,6 +2413,8 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         n_bore = max(48, int(2 * math.pi * r_bore / max(0.35, 0.5 * t_tube)))
         if cell_copies > 0:
             n_bore = int(math.ceil(n_bore / cell_copies)) * cell_copies
+    if _sk is not None and r_bore > 0.0 and _sk["r_in"] <= r_bore + 1e-9:
+        n_bore = n_sh                          # the patch's inner ring IS the bore
     # With a sleeve, the iron ends at the ring's ID and r_od is the ring's OD.
     r_iron_od = float(r_sleeve_in) if r_sleeve_in > 0.0 else float(r_od)
     iron = _resample(steel, r_iron_od, n_slip)
@@ -2215,9 +2453,24 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     rk = _graded_radii(_rk_segs)
     # shaft-core cut nodes from the ORIGIN out (the pie tip must close at r=0,
     # else near-centre nodes are left isolated → singular matrix).
-    rk_sh = _graded_radii(
-        [(0.0, r_bore, air_mm), (r_bore, r_shaft, 0.5 * (r_shaft - r_bore))]
-        if r_bore > 0.0 else [(0.0, r_shaft, air_mm)])
+    if _sk is None:
+        rk_sh = _graded_radii(
+            [(0.0, r_bore, air_mm), (r_bore, r_shaft, 0.5 * (r_shaft - r_bore))]
+            if r_bore > 0.0 else [(0.0, r_shaft, air_mm)])
+    else:
+        # The skin patch owns (r_in, r_shaft) on both rays: NO cut node in
+        # there (its layers are finer than _symmetrize_cuts' 0.06 mm cluster),
+        # the chain runs origin..r_in and r_shaft..out, and the patch's radial
+        # sides supply the nodes in between.
+        _r_in = _sk["r_in"]
+        if r_bore > 0.0 and _r_in > r_bore + 1e-9:
+            _segs = [(0.0, r_bore, air_mm),
+                     (r_bore, _r_in, 0.5 * (_r_in - r_bore))]
+        elif r_bore > 0.0:
+            _segs = [(0.0, r_bore, air_mm)]
+        else:
+            _segs = [(0.0, _r_in, air_mm)]
+        rk_sh = np.concatenate([_graded_radii(_segs), [r_shaft]])
     rk_all = np.array(sorted(set(np.round(np.concatenate([rk_sh, rk]), 4))))
 
     lines = []
@@ -2247,15 +2500,25 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         # leave a ragged seam.
         add(_lin_arc(r_bore, max(2, int(round(n_bore * span / (2.0 * math.pi)))),
                      span))
+    _patch_r = None
+    if _sk is not None:
+        _nth = int(round(n_sh * span / (2.0 * math.pi)))
+        add(_lin_arc(r_shaft, _nth, span))              # iron|shaft seam, explicit
+        if _sk["r_in"] > r_bore + 1e-9:
+            add(_lin_arc(_sk["r_in"], _nth, span))      # patch inner ring
+        _patch_r = _skin_patch(_sk["radii"], _nth, span, False)
     add(_cut_pts(0.0, rk_all)); add(_cut_pts(span, rk_all))
     V, S = _build_pslg(lines)
     V, S = _symmetrize_cuts(V, S, span)                 # clone-identical seam
 
-    _core_r = 0.5 * (r_bore if r_bore > 0.0 else r_shaft)
+    _core_top = r_bore if r_bore > 0.0 else (
+        _sk["r_in"] if _sk is not None else r_shaft)
+    _core_r = 0.5 * _core_top
     _air_reg = [[_core_r * math.cos(span / 2),
                  _core_r * math.sin(span / 2), 7, air_area]]   # inside the tube
-    if r_bore > 0.0:                                           # the tube wall
-        _rt = 0.5 * (r_bore + r_shaft)
+    _wall_top = _sk["r_in"] if _sk is not None else r_shaft
+    if r_bore > 0.0 and _wall_top > r_bore + 1e-9:             # the tube wall
+        _rt = 0.5 * (r_bore + _wall_top)
         _air_reg += [[_rt * math.cos(span / 2), _rt * math.sin(span / 2),
                       10, a_tube]]
     ann = W.intersection(Polygon(_grid_circle(r_iron_od, n_slip)[:-1]).difference(
@@ -2264,7 +2527,8 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
                  for a in _air_parts(ann, steel, mags)]
     if r_iron_od < r_od - 1e-9:                         # the sleeve annulus
         _rs = 0.5 * (r_iron_od + r_od)
-        _a_sl = max(1e-3, min(area, 0.4330 * (0.5 * (r_od - r_iron_od)) ** 2))
+        _a_sl = max(1e-3, min(area, 0.4330 * ((r_od - r_iron_od)
+                                               / _sleeve_layers(skin)) ** 2))
         _air_reg += [[_rs * math.cos(span / 2), _rs * math.sin(span / 2),
                       11, _a_sl]]
     if r1_band > r_od + 1e-6:
@@ -2274,8 +2538,19 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         _air_reg,
         [[*steel.intersection(W).representative_point().coords[0], 5, a_steel]]
         + [[g.centroid.x, g.centroid.y, 6, a_mag] for g in mags])
+    _xh = None
+    if _patch_r is not None:                  # the patch is a CDT hole
+        _rh = 0.5 * (_sk["r_in"] + r_shaft)
+        _xh = [[_rh * math.cos(span / 2), _rh * math.sin(span / 2)]]
     V, T = _triangulate(V, S, area, quality, hole=False, regions=reg,
-                        no_bnd_steiner=True, rotor_bridge=True)  # shaft solid
+                        no_bnd_steiner=True, rotor_bridge=True,
+                        extra_holes=_xh)  # shaft solid
+    if _patch_r is not None:
+        V, T, _ns = _stitch_skin_patch(V, T, _patch_r)
+        log.info("shaft skin layer: %d rings (h1 %.4g mm, x%.3g, cap %.3g mm), "
+                 "chord %.3g mm, %d tris/cell, %d CDT split(s) fanned",
+                 len(_sk["radii"]), _sk["h1"], _sk["growth"], _sk["h_max"],
+                 _sk["chord"], len(_patch_r["T"]), _ns)
     return V, T
 
 
@@ -2355,7 +2630,8 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
                     air_mesh_mm: float = 0.0,
                     r1_band: float = 0.0, r2_band: float = 0.0,
                     mesh_edge_mm: float = 0.0,
-                    part_mesh_mm: Optional[Dict] = None):
+                    part_mesh_mm: Optional[Dict] = None,
+                    skin_layers: Optional[Dict] = None):
     """Solver-ready halves in DOM_* tags, geometry-driven CDT:
     (mesh_s, tags_s, cls_s, mesh_r, tags_r, cls_r) — same signature as
     iron_template.template_solver_halves.  Full ring only for now (n_sectors
@@ -2490,7 +2766,8 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
                                           area, air_mm, _Q, r1_band=r1_band,
                                           cell_copies=_n_poles,
                                           part_area=part_area,
-                                          r_sleeve_in=r_sleeve_in)
+                                          r_sleeve_in=r_sleeve_in,
+                                          skin=skin_layers)
             Vr, Tr = _tile_cells(Vcr, Tcr, _span_r, _n_poles // _ns)
             log.info("geo tile: stator %d x pair-cell(%dtri) = %dtri, rotor "
                      "%d x cell(%dtri) = %dtri (1/%d)", _n_pairs // _ns,
@@ -2513,7 +2790,8 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             Vr, Tr = _mesh_rotor_sector(polys, r_od, r_sh, n_slip, span,
                                         area, air_mm, _Q, r1_band=r1_band,
                                         part_area=part_area,
-                                        r_sleeve_in=r_sleeve_in)
+                                        r_sleeve_in=r_sleeve_in,
+                                        skin=skin_layers)
         else:                                          # full ring
             Vs, Ts = _mesh_stator_half(polys, r_bore, r_out_iron,
                                        r_outer, n_slip, area, air_mm, _Q,
@@ -2521,7 +2799,8 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
                                        coil_rel=coil_rel)
             Vr, Tr = _mesh_rotor_half(polys, r_od, r_sh, n_slip, area, air_mm, _Q,
                                       r1_band=r1_band, part_area=part_area,
-                                      r_sleeve_in=r_sleeve_in)
+                                      r_sleeve_in=r_sleeve_in,
+                                      skin=skin_layers)
     # Armed budget, second gate: the per-cell Steiner cap bounds each Triangle
     # RUN, but tiling multiplies a cell by its copy count and the two halves
     # add — the number the FEM will actually assemble is checked here, before

@@ -1382,6 +1382,7 @@ def _build_sliding_band_meshes(
         pole_copy: Optional[bool] = None,   # template-copy poles/slots; None=env default
         iron_template: Optional[bool] = None,  # deterministic template iron; None=env default
         geo_mesh: Optional[bool] = None,    # geometry-driven CDT mesh; None=env default
+        skin_layers: Optional[dict] = None,  # conductor skin-layer spec (geo path)
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
 
@@ -1512,6 +1513,16 @@ def _build_sliding_band_meshes(
 
     _use_tpl = _SB_IRON_TEMPLATE if iron_template is None else bool(iron_template)
     _use_geo = _SB_GEO_MESH if geo_mesh is None else bool(geo_mesh)
+    # Did the geometry-driven mesher (the only one that builds the conductor
+    # skin layer) produce the halves?  Checked before each return.
+    _skin_geo = [False]
+
+    def _skin_check():
+        if (skin_layers or {}).get("shaft") and not _skin_geo[0]:
+            log.warning("shaft skin layer requested but this build did not use "
+                        "the geometry-driven mesher — the shaft wall is meshed "
+                        "WITHOUT it (its eddy loss is not resolved)")
+            _trace_note("shaft skin layer not built (non-geo mesher)")
     # ── THE TENSOR TEMPLATE CANNOT BUILD A RETAINING SLEEVE ─────────────────
     # iron_template.py assembles an IDEALISED cross-section from the radii —
     # yoke, magnet bars, bridge band, gap — and then re-classifies iron/air
@@ -1595,7 +1606,9 @@ def _build_sliding_band_meshes(
                         # MOVING-band spec (harmonic macro): halves end on the
                         # uniform R1/R2 rings; merged spec has no r1/r2 → 0.
                         r1_band=float(_sgspec.get("r1", 0.0)),
-                        r2_band=float(_sgspec.get("r2", 0.0)))
+                        r2_band=float(_sgspec.get("r2", 0.0)),
+                        skin_layers=skin_layers)
+                    _skin_geo[0] = True
                     log.info("geo-driven halves: stator %d tris, rotor %d tris",
                              mesh_s.t.shape[1], mesh_r.t.shape[1])
                 elif "r1" in _sgspec:
@@ -1669,6 +1682,7 @@ def _build_sliding_band_meshes(
         if abs(rotor_angle_deg) > 1e-9:
             mesh_r = type(mesh_r)(_rotate_mesh_points(mesh_r.p, rotor_angle_deg),
                                    mesh_r.t)
+        _skin_check()
         return mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r
 
     # Build stator half at the FIXED lab position (rotor_angle_deg ignored
@@ -1720,7 +1734,9 @@ def _build_sliding_band_meshes(
                     r_ro=float(_sgspec.get("r_ro", 0.0)), air_mesh_mm=_air_mm,
                     part_mesh_mm=_user_cm,   # per-part sizes (see full-ring)
                     r1_band=float(_sgspec.get("r1", 0.0)),
-                    r2_band=float(_sgspec.get("r2", 0.0)))
+                    r2_band=float(_sgspec.get("r2", 0.0)),
+                    skin_layers=skin_layers)
+                _skin_geo[0] = True
                 log.info("geo-driven wedge 1/%d: stator %d tris, rotor %d tris",
                          _ns_i, mesh_s.t.shape[1], mesh_r.t.shape[1])
             elif "r1" in _sgspec:
@@ -1806,6 +1822,7 @@ def _build_sliding_band_meshes(
         mesh_r = type(mesh_r)(_rotate_mesh_points(mesh_r.p, rotor_angle_deg),
                                mesh_r.t)
 
+    _skin_check()
     return mesh_s, tags_s, classify_s, mesh_r, tags_r, classify_r
 
 def _find_ring_nodes(mesh, r_target_m: float, tol_m: float = 1e-5

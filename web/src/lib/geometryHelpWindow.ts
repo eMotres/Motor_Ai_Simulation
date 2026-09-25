@@ -148,10 +148,14 @@ function wrapperHtml(tabs: GeometryHelpTab[]): string {
 export function openGeometryHelpWindow(): string | null {
   try {
     const tabs = geometryHelpTabs(window.location.origin);
-    const win = window.open('', '_blank', 'noopener,width=1500,height=950');
+    // NOT 'noopener' in the features: with it window.open() returns null by
+    // spec, so the window opened blank and nothing could be written into it
+    // (owner 2026-09-25: "пустая картинка"). The opener link is cut by hand.
+    const win = window.open('', '_blank', 'width=1500,height=950');
     if (!win) {
       return 'Popup blocked — allow popups for this site to open the geometry help picture.';
     }
+    win.opener = null;
     win.document.open();
     win.document.write(wrapperHtml(tabs));
     win.document.close();

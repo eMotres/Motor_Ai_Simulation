@@ -1588,6 +1588,172 @@ def test_cooling_from_thermal_source_names_the_duty_and_the_cooling_mode(monkeyp
     assert out["die"] == _DIE and out["config"] == _CFG and out["duty"] == _DUTY
 
 
+# ---------------------------------------------------------------------------
+# Cooling INHERITS from Thermal, per field, per mode (owner 2026-09-25:
+# "Когда я ставлю air или liquid, он должен брать параметры охлаждения из
+# Thermal... но можно изменить, чтобы сделать разными") — the automatic
+# default that replaces the 542c930 button above as the tab's DEFAULT
+# behaviour.  ``_thermal_cooling_for_mode`` unit tests first (no route, no
+# device card), then ``_build_request``'s override precedence, then the
+# ``/thermal_cooling`` route itself.
+# ---------------------------------------------------------------------------
+
+def _live_thermal(monkeypatch, **fields):
+    """Stand in for the Thermal tab's CURRENT (per-user) settings — the
+    panel's own raw field names (``coolMode``/``ambientT``/``airSpeed``/
+    ``fluid``/``tIn``/``flowLpm``), exactly as ``thermal_panel_settings``
+    would hand them back."""
+    from motor_ai_sim import thermal_settings as ts
+    from motor_ai_sim.routes import controller as rc
+    monkeypatch.setattr(rc, "_thermal_live_cooling",
+                        lambda authorization=None: ts.cooling_fields(fields))
+
+
+def test_thermal_cooling_for_mode_air_forced_from_the_live_thermal_tab(monkeypatch):
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="air", ambientT="35", airSpeed="9")
+    out = rc._thermal_cooling_for_mode("air_forced", None, None, None, None)
+    assert out["fields"] == {"air_speed_mps": 9.0, "t_ambient_c": 35.0}
+    assert out["thermal_mode"] == "air"
+    assert "current settings" in out["source"]
+    assert out["note"] is None
+
+
+def test_thermal_cooling_for_mode_air_still_ambient_only(monkeypatch):
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="robotics", ambientT="22.5")
+    out = rc._thermal_cooling_for_mode("air_still", None, None, None, None)
+    assert out["fields"] == {"t_ambient_c": 22.5}
+    assert out["thermal_mode"] == "robotics"
+
+
+def test_thermal_cooling_for_mode_liquid_from_the_live_thermal_tab(monkeypatch):
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="liquid", ambientT="40",
+                  fluid="ethylene_glycol", tIn="55", flowLpm="6")
+    out = rc._thermal_cooling_for_mode("liquid", None, None, None, None)
+    assert out["fields"] == {"coolant": "ethylene_glycol", "flow_lpm": 6.0,
+                             "t_in_c": 55.0}
+    assert out["thermal_mode"] == "liquid"
+
+
+def test_thermal_cooling_for_mode_falls_back_to_the_saved_thermal_record(monkeypatch):
+    """The live Thermal panel is set to something ELSE ('liquid') — the
+    controller mode being asked about ('air_forced') has nothing to inherit
+    from it, so the FALLBACK tier (the duty's own saved thermal record)
+    supplies it instead."""
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="liquid", fluid="water", tIn="65", flowLpm="8")
+    node = {"thermal": {
+        "computed_at": "2026-09-24T10:00:00",
+        "point": {"cooling_mode": "air", "ambient_temp": 30.9},
+        "cooling": {"outer": {"mode": "air", "air_speed_mps": 12.0}},
+    }}
+    _patch_duty(monkeypatch, node)
+    out = rc._thermal_cooling_for_mode("air_forced", _DIE, _CFG, _DUTY, None)
+    assert out["fields"] == {"air_speed_mps": 12.0, "t_ambient_c": 30.9}
+    assert "saved thermal record" in out["source"]
+    assert "2026-09-24T10:00:00" in out["source"]
+
+
+def test_thermal_cooling_for_mode_liquid_falls_back_to_the_saved_thermal_record(monkeypatch):
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="air", ambientT="30", airSpeed="5")
+    node = {"thermal": {
+        "point": {"cooling_mode": "liquid", "ambient_temp": 25.0},
+        "cooling": {"outer": {"mode": "liquid", "fluid": "oil",
+                              "flow_lpm": 6.0, "t_in_c": 55.0}},
+    }}
+    _patch_duty(monkeypatch, node)
+    out = rc._thermal_cooling_for_mode("liquid", _DIE, _CFG, _DUTY, None)
+    assert out["fields"] == {"coolant": "oil", "flow_lpm": 6.0, "t_in_c": 55.0}
+
+
+def test_thermal_cooling_for_mode_notes_when_neither_source_matches(monkeypatch):
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="manual")
+    _patch_duty(monkeypatch, {})   # no saved thermal record either
+    out = rc._thermal_cooling_for_mode("liquid", _DIE, _CFG, _DUTY, None)
+    assert out["fields"] == {}
+    assert out["source"] is None
+    assert "manual" in out["note"]
+
+
+# ── the route: what EVERY mode would inherit, right now ────────────────────
+
+def test_thermal_cooling_route_reports_all_three_modes(monkeypatch):
+    _live_thermal(monkeypatch, coolMode="air", ambientT="35", airSpeed="9")
+    _patch_duty(monkeypatch, {})
+    c = _cooling_client()
+    r = c.get("/api/controller/thermal_cooling",
+             params={"die": _DIE, "config": _CFG, "duty": _DUTY})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["die"] == _DIE and out["config"] == _CFG and out["duty"] == _DUTY
+    modes = out["modes"]
+    assert modes["air_forced"]["fields"] == {"air_speed_mps": 9.0, "t_ambient_c": 35.0}
+    assert modes["air_still"]["fields"] == {}
+    assert modes["air_still"]["note"]
+    assert modes["liquid"]["fields"] == {}
+    assert modes["liquid"]["note"]
+
+
+# ── _build_request: override precedence (request > saved > thermal) ───────
+
+def test_build_request_cooling_inherits_from_thermal_when_nothing_overrides(monkeypatch):
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="air", ambientT="35", airSpeed="9")
+    _patch_duty(monkeypatch, {}, cfg_doc={"controller": {"cooling": {"mode": "air_forced"}}})
+    req, _sources = rc._build_request(
+        {"die": _DIE, "config": _CFG, "duty": _DUTY}, None)
+    assert req["cooling"]["mode"] == "air_forced"
+    assert req["cooling"]["air_speed_mps"] == pytest.approx(9.0)
+    assert req["cooling"]["t_ambient_c"] == pytest.approx(35.0)
+    assert req["_cooling_sources"]["air_speed_mps"].startswith("thermal")
+    assert req["_thermal_cooling"]["thermal_mode"] == "air"
+
+
+def test_build_request_cooling_saved_override_beats_thermal(monkeypatch):
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="air", ambientT="35", airSpeed="9")
+    _patch_duty(monkeypatch, {}, cfg_doc={"controller": {"cooling": {
+        "mode": "air_forced", "t_ambient_c": 50.0}}})
+    req, _sources = rc._build_request(
+        {"die": _DIE, "config": _CFG, "duty": _DUTY}, None)
+    # overridden field keeps the saved value...
+    assert req["cooling"]["t_ambient_c"] == pytest.approx(50.0)
+    assert req["_cooling_sources"]["t_ambient_c"] == "override (the saved controller settings)"
+    # ...the field nobody overrode still inherits from Thermal.
+    assert req["cooling"]["air_speed_mps"] == pytest.approx(9.0)
+    assert req["_cooling_sources"]["air_speed_mps"].startswith("thermal")
+
+
+def test_build_request_cooling_request_override_beats_everything(monkeypatch):
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="air", ambientT="35", airSpeed="9")
+    _patch_duty(monkeypatch, {}, cfg_doc={"controller": {"cooling": {
+        "mode": "air_forced", "t_ambient_c": 50.0}}})
+    req, _sources = rc._build_request(
+        {"die": _DIE, "config": _CFG, "duty": _DUTY,
+         "cooling": {"mode": "air_forced", "air_speed_mps": 2.0}}, None)
+    assert req["cooling"]["air_speed_mps"] == pytest.approx(2.0)
+    assert req["_cooling_sources"]["air_speed_mps"] == "override (the request)"
+
+
+def test_build_request_cooling_field_with_no_thermal_counterpart_keeps_old_precedence(monkeypatch):
+    """R_th TIM / area basis / wetted area / fin efficiency / emissivity have
+    no Thermal counterpart at all — unaffected by any of the above, still
+    request > saved controller settings."""
+    from motor_ai_sim.routes import controller as rc
+    _live_thermal(monkeypatch, coolMode="air", ambientT="35", airSpeed="9")
+    _patch_duty(monkeypatch, {}, cfg_doc={"controller": {"cooling": {
+        "mode": "air_forced", "fin_efficiency": 0.6}}})
+    req, _sources = rc._build_request(
+        {"die": _DIE, "config": _CFG, "duty": _DUTY}, None)
+    assert req["cooling"]["fin_efficiency"] == pytest.approx(0.6)
+    assert req["_cooling_sources"]["fin_efficiency"] == "the saved controller settings"
+
+
 def test_duty_record_is_compact_and_drops_the_waveform(synth_dir):
     from motor_ai_sim import duty_results as dr
     out = lo.solve_controller(_synth_request())

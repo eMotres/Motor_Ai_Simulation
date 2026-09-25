@@ -471,6 +471,155 @@ def _cooling_from_thermal(die: Optional[str], cfg: Optional[str],
 
 
 # ---------------------------------------------------------------------------
+# Cooling INHERITANCE from Thermal — automatic, per field, per mode
+# ---------------------------------------------------------------------------
+# Owner 2026-09-25: *"Когда я ставлю air или liquid, он должен брать параметры
+# охлаждения из Thermal. Я там их устанавливаю для мотора — те же и для
+# контроллера по умолчанию, но можно изменить, чтобы сделать разными."*
+#
+# Replaces the 542c930 button (:func:`_cooling_from_thermal`, kept below
+# unchanged for API/back-compat and its own passing tests) as the tab's
+# DEFAULT behaviour: every cooling field that has a Thermal counterpart
+# starts INHERITED — filled from Thermal, following it — until the owner
+# types a value, at which point it is an OVERRIDE (the web's blank-means-
+# inherited convention, the SAME one ``vdc``/``fsw`` already use here).
+#
+# THE SOURCE, in order:
+#   1. the Thermal tab's CURRENT settings (:func:`_thermal_live_cooling` —
+#      whatever the owner has set there right now, the same store the
+#      coupled orchestrator reads to run a fresh thermal solve), when its
+#      OWN cooling_mode matches the controller mode being asked about;
+#   2. the duty's saved thermal record (:func:`_thermal_saved_cooling`),
+#      same test, when the live panel does not match (or cannot be read);
+#   3. nothing — the field stays empty/default and the caller is told why,
+#      NEVER a guess across cooling modes (a liquid Thermal state has no
+#      wind speed to hand an ``air_forced`` controller, for instance).
+#
+# Fields with no Thermal counterpart at all — R_th TIM, area basis, wetted
+# area, fin efficiency, emissivity — are never touched here; they keep the
+# Controller's own default/saved value, exactly as before.
+
+#: Which of the Thermal tab's own ``cooling_mode`` words supplies THIS
+#: module's cooling mode — the same pairing ``_THERMAL_AIR_MODES`` above
+#: states for the legacy button, plus ``liquid`` <-> ``liquid``.
+_CONTROLLER_MODE_FROM_THERMAL = {"air_forced": "air", "air_still": "robotics",
+                                 "liquid": "liquid"}
+
+#: The cooling fields Thermal can ever fill — the ONLY keys
+#: :func:`_build_request` ever resolves through the chain above; every other
+#: ``inverter.losses`` cooling field (R_th TIM, area basis/wetted area, fin
+#: efficiency, emissivity) has no Thermal counterpart and keeps the
+#: Controller's own default/saved value untouched.
+COOLING_THERMAL_FIELDS = ("air_speed_mps", "t_ambient_c", "coolant",
+                          "flow_lpm", "t_in_c")
+
+
+def _thermal_live_cooling(authorization: Optional[str]) -> Dict[str, Any]:
+    """``thermal_settings.cooling_fields()`` of whatever the Thermal tab is
+    CURRENTLY set to for this user — ``{}`` on any failure (a missing store
+    is an empty store, never a 500, the same rule ``thermal_panel_settings``
+    itself states)."""
+    try:
+        from motor_ai_sim import thermal_settings as _TS
+        raw = _TS.thermal_panel_settings(authorization)
+        return _TS.cooling_fields(raw) if raw else {}
+    except Exception:                                       # noqa: BLE001
+        return {}
+
+
+def _thermal_saved_cooling(die: Optional[str], cfg: Optional[str],
+                           duty: Optional[str]
+                           ) -> Tuple[Dict[str, Any], Optional[str]]:
+    """The duty's saved thermal record's cooling, in the SAME shape
+    :func:`_thermal_live_cooling` returns (``cooling_mode``/``ambient_temp``/
+    ``air_speed_mps``/``fluid``/``flow_lpm``/``fluid_temp_in_c``) — ``({},
+    None)`` when there is none.  The FALLBACK tier: only consulted when the
+    live Thermal panel is set to a different mode than the one being asked
+    for (see :func:`_thermal_cooling_for_mode`)."""
+    if not (die and cfg and duty):
+        ctx = _DR.active_context()
+        if not ctx:
+            return {}, None
+        die, cfg, duty = ctx
+    try:
+        node = (_DR.get(str(die), str(cfg)) or {}).get(str(duty)) or {}
+    except Exception:                                       # noqa: BLE001
+        node = {}
+    thermal = node.get("thermal") if isinstance(node, dict) else None
+    if not isinstance(thermal, dict) or not thermal:
+        return {}, None
+    point = thermal.get("point") if isinstance(thermal.get("point"), dict) else {}
+    cooling = thermal.get("cooling") if isinstance(thermal.get("cooling"), dict) else {}
+    outer = cooling.get("outer") if isinstance(cooling.get("outer"), dict) else {}
+    out: Dict[str, Any] = {"cooling_mode": str(point.get("cooling_mode")
+                                              or outer.get("mode") or "").strip().lower()}
+    if _num(point.get("ambient_temp")) is not None:
+        out["ambient_temp"] = _num(point.get("ambient_temp"))
+    if _num(outer.get("air_speed_mps")) is not None:
+        out["air_speed_mps"] = _num(outer.get("air_speed_mps"))
+    if outer.get("fluid"):
+        out["fluid"] = str(outer["fluid"])
+    if _num(outer.get("flow_lpm")) is not None:
+        out["flow_lpm"] = _num(outer.get("flow_lpm"))
+    if _num(outer.get("t_in_c")) is not None:
+        out["fluid_temp_in_c"] = _num(outer.get("t_in_c"))
+    return out, thermal.get("computed_at")
+
+
+def _map_thermal_to_controller_cooling(mode: str, t: Dict[str, Any]) -> Dict[str, Any]:
+    """Thermal's ``cooling_fields()`` shape -> this module's cooling field
+    names (``COOLING_THERMAL_FIELDS``), for ONE controller cooling mode."""
+    out: Dict[str, Any] = {}
+    if mode == "air_forced":
+        if t.get("air_speed_mps") is not None:
+            out["air_speed_mps"] = float(t["air_speed_mps"])
+        if t.get("ambient_temp") is not None:
+            out["t_ambient_c"] = float(t["ambient_temp"])
+    elif mode == "air_still":
+        if t.get("ambient_temp") is not None:
+            out["t_ambient_c"] = float(t["ambient_temp"])
+    elif mode == "liquid":
+        if t.get("fluid"):
+            out["coolant"] = str(t["fluid"])
+        if t.get("flow_lpm") is not None:
+            out["flow_lpm"] = float(t["flow_lpm"])
+        if t.get("fluid_temp_in_c") is not None:
+            out["t_in_c"] = float(t["fluid_temp_in_c"])
+    return out
+
+
+def _thermal_cooling_for_mode(mode: str, die: Optional[str], cfg: Optional[str],
+                              duty: Optional[str], authorization: Optional[str]
+                              ) -> Dict[str, Any]:
+    """What THIS controller cooling ``mode`` would inherit from Thermal right
+    now: ``{fields, source, thermal_mode, note}`` — see the module docstring
+    just above for the tier order."""
+    want = _CONTROLLER_MODE_FROM_THERMAL.get(mode)
+    if want is None:
+        return {"fields": {}, "source": None, "thermal_mode": None,
+                "note": f"unknown cooling mode {mode!r}"}
+    live = _thermal_live_cooling(authorization)
+    live_mode = str(live.get("cooling_mode") or "").strip().lower()
+    if live_mode == want:
+        return {"fields": _map_thermal_to_controller_cooling(mode, live),
+                "source": "the Thermal tab's current settings",
+                "thermal_mode": want, "note": None}
+    saved, computed_at = _thermal_saved_cooling(die, cfg, duty)
+    saved_mode = str(saved.get("cooling_mode") or "").strip().lower()
+    if saved_mode == want:
+        when = f", computed {computed_at}" if computed_at else ""
+        return {"fields": _map_thermal_to_controller_cooling(mode, saved),
+                "source": f"the duty's saved thermal record{when}",
+                "thermal_mode": want, "note": None}
+    current = live_mode or saved_mode or "unset"
+    return {"fields": {}, "source": None, "thermal_mode": None,
+            "note": (f"the Thermal tab is set to '{current}' cooling — it "
+                     f"has no {mode.replace('_', ' ')} state to inherit; set "
+                     "Thermal's cooling mode to match, or fill this field "
+                     "by hand")}
+
+
+# ---------------------------------------------------------------------------
 # Devices
 # ---------------------------------------------------------------------------
 
@@ -697,7 +846,8 @@ def get_controller_settings(die: Optional[str] = Query(None),
 
 @router.get("/point")
 def get_resolved_point(die: Optional[str] = Query(None), config: Optional[str] = Query(None),
-                       duty: Optional[str] = Query(None)) -> Dict[str, Any]:
+                       duty: Optional[str] = Query(None),
+                       authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """The point ``POST /solve`` WOULD use right now — before anything is
     solved, and without a device/topology chosen yet.
 
@@ -706,7 +856,7 @@ def get_resolved_point(die: Optional[str] = Query(None), config: Optional[str] =
     :func:`_build_request` a real solve runs, so the preview line can never
     name a different source than the answer that follows it.
     """
-    req, sources = _build_request({"die": die, "config": config, "duty": duty})
+    req, sources = _build_request({"die": die, "config": config, "duty": duty}, authorization)
     ctx = req.get("_context") or {}
     i_ph, p_ac = req.get("i_phase_rms_A"), req.get("p_ac_W")
     v_dc, f_sw, sd = req.get("v_dc_V"), req.get("f_carrier_hz"), req.get("star_delta")
@@ -758,9 +908,29 @@ def get_resolved_point(die: Optional[str] = Query(None), config: Optional[str] =
 def get_cooling_from_thermal(die: Optional[str] = Query(None),
                              config: Optional[str] = Query(None),
                              duty: Optional[str] = Query(None)) -> Dict[str, Any]:
-    """The "Use thermal air cooling" button — see
-    :func:`_cooling_from_thermal`."""
+    """The (legacy) "Use thermal air cooling" button — see
+    :func:`_cooling_from_thermal`.  Superseded as the tab's DEFAULT by the
+    automatic per-field inheritance below (:func:`get_thermal_cooling` /
+    ``_build_request``); kept for API/back-compat and its own passing tests."""
     return _cooling_from_thermal(die, config, duty)
+
+
+@router.get("/thermal_cooling")
+def get_thermal_cooling(die: Optional[str] = Query(None), config: Optional[str] = Query(None),
+                        duty: Optional[str] = Query(None),
+                        authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    """What EACH controller cooling mode (``air_forced`` / ``air_still`` /
+    ``liquid``) would inherit from Thermal RIGHT NOW — the tab calls this
+    once and shows whichever entry matches the Mode selector, so a field's
+    "from Thermal" chip and placeholder are never a stale snapshot from a
+    button press.  See :func:`_thermal_cooling_for_mode`."""
+    if die and config and duty:
+        d, c, u = die, config, duty
+    else:
+        d, c, u = _DR.active_context() or (None, None, None)
+    modes = {m: _thermal_cooling_for_mode(m, d, c, u, authorization)
+             for m in _CONTROLLER_MODE_FROM_THERMAL}
+    return {"die": d, "config": c, "duty": u, "modes": modes}
 
 
 @router.post("/schematic")
@@ -854,7 +1024,8 @@ def _summary(req: Dict[str, Any], out: Dict[str, Any]) -> str:
             f"eta_inv {e.get('inverter')}")
 
 
-def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
+def _build_request(body: Dict[str, Any],
+                   authorization: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """The solver's request, with a ``sources`` map for every resolved field.
 
     AUDIT, owner 2026-09-22 (production, "Error: v_dc_V is required" —
@@ -878,6 +1049,10 @@ def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]
     duty's PWM record — that record, and the retired Simulation-tab
     ``sim.fSwitch``, are only a MIGRATION tier read while the Controller has
     no carrier of its own; and the battery outranks a record's PWM bus.
+
+    ``authorization`` is only for the COOLING'S thermal-inheritance tier
+    (owner 2026-09-25) — see :func:`_thermal_cooling_for_mode` — since the
+    Thermal tab's CURRENT settings are stored per signed-in user.
     """
     mach = _live_machine(body)
     req: Dict[str, Any] = dict(mach["values"])
@@ -887,6 +1062,7 @@ def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]
     duty_src = duty.pop("_sources", {}) if duty else {}
     ctrl = _controller_settings_for(body.get("die"), body.get("config"))
     ctrl_cooling = ctrl.get("cooling") if isinstance(ctrl.get("cooling"), dict) else {}
+    body_cooling = dict(body.get("cooling") or {})
 
     for key in ("star_delta", "i_phase_rms_A", "p_ac_W", "f_elec_hz",
                 "modulation_index", "efficiency_shaft", "rpm"):
@@ -1036,8 +1212,7 @@ def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]
                 "mapping": body.get("mapping") or (ctrl.get("mapping") or None),
                 "devices_parallel_by_bridge":
                     dict(body.get("devices_parallel_by_bridge")
-                         or ctrl.get("devices_parallel_by_bridge") or {}) or None,
-                "cooling": {**ctrl_cooling, **dict(body.get("cooling") or {})}}
+                         or ctrl.get("devices_parallel_by_bridge") or {}) or None}
     for k, v in defaults.items():
         if v is not None:
             req[k] = v
@@ -1045,6 +1220,52 @@ def _build_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]
                                else "the saved controller settings"
                                if (k in ctrl or (k == "r_tim_k_w" and "r_tim_k_w" in ctrl_cooling))
                                else "this module's stated default")
+
+    # ── COOLING (owner 2026-09-25): mode itself, request > saved, "liquid" the
+    # module's long-standing default when NEITHER names one (``_build_cooling``'s
+    # own back-compat rule).  The five fields Thermal can fill
+    # (``COOLING_THERMAL_FIELDS``) then resolve request > saved override >
+    # THERMAL (live Thermal tab settings, else the duty's saved thermal
+    # record) > absent (the ``inverter.losses`` dataclass's own stated
+    # default fills in downstream).  Every OTHER cooling field (area basis/
+    # wetted area, fin efficiency, emissivity, coldplate geometry) has no
+    # Thermal counterpart and keeps the old request > saved precedence.
+    cooling_mode = str(body_cooling.get("mode") or ctrl_cooling.get("mode")
+                       or "liquid").strip().lower()
+    thermal_cool = _thermal_cooling_for_mode(
+        cooling_mode, body.get("die"), body.get("config"), body.get("duty"),
+        authorization)
+    cooling_out: Dict[str, Any] = {"mode": cooling_mode}
+    cooling_src: Dict[str, str] = {}
+    for k in COOLING_THERMAL_FIELDS:
+        if body_cooling.get(k) is not None:
+            cooling_out[k] = body_cooling[k]
+            cooling_src[k] = "override (the request)"
+        elif ctrl_cooling.get(k) is not None:
+            cooling_out[k] = ctrl_cooling[k]
+            cooling_src[k] = "override (the saved controller settings)"
+        elif thermal_cool["fields"].get(k) is not None:
+            cooling_out[k] = thermal_cool["fields"][k]
+            cooling_src[k] = f"thermal ({thermal_cool['source']})"
+        # else left absent: this module's own stated default fills in.
+    for k in ("n_channels", "channel_w_mm", "channel_h_mm", "length_mm",
+             "fin_area_factor", "r_override_k_w",
+             "heatsink_area_cm2_per_device", "plate_area_cm2",
+             "fin_efficiency", "emissivity"):
+        if body_cooling.get(k) is not None:
+            cooling_out[k] = body_cooling[k]
+            cooling_src[k] = "the request"
+        elif ctrl_cooling.get(k) is not None:
+            cooling_out[k] = ctrl_cooling[k]
+            cooling_src[k] = "the saved controller settings"
+    req["cooling"] = cooling_out
+    sources["cooling"] = "resolved per field — see cooling_sources"
+    req["_cooling_sources"] = cooling_src
+    req["_thermal_cooling"] = {"mode": cooling_mode,
+                               "thermal_mode": thermal_cool["thermal_mode"],
+                               "source": thermal_cool["source"],
+                               "note": thermal_cool["note"]}
+
     if duty.get("die"):
         req["_context"] = {"die": duty["die"], "config": duty["config"],
                            "duty": duty["duty"]}
@@ -1064,14 +1285,17 @@ def _default_device() -> str:
 @router.post("/solve")
 def post_solve(body: Dict[str, Any] = Body(default={}),
                fresh: bool = Query(False, description="ignore the stored answer"),
+               authorization: Optional[str] = Header(default=None),
                ) -> Dict[str, Any]:
     """Solve this controller on this duty's point."""
     t0 = time.time()
-    req, sources = _build_request(body or {})
+    req, sources = _build_request(body or {}, authorization)
     ctx = req.pop("_context", None)
     solved_for = req.pop("_solved_for", None)
     em_source = req.pop("_em_source", None)
     origins = req.pop("_origins", None)
+    cooling_sources = req.pop("_cooling_sources", None)
+    thermal_cooling = req.pop("_thermal_cooling", None)
     # AUDIT, owner 2026-09-22 ("Error: v_dc_V is required" — «проверь всё»):
     # every value that is genuinely missing gets ONE plain sentence here,
     # never the physics module's raw "<field> is required" — the panel would
@@ -1138,6 +1362,11 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
     out["sources"] = sources
     out["origins"] = origins
     out["context"] = ctx
+    # THE COOLING'S OWN sources (owner 2026-09-25): which of the resolved
+    # fields is inherited from Thermal vs. an override, and where the
+    # Thermal-mode data (if any) came from — see ``_thermal_cooling_for_mode``.
+    out["cooling_sources"] = cooling_sources
+    out["thermal_cooling"] = thermal_cooling
     # WHICH POINT this answer is for — printed as the tab's header line so a
     # run that used the S1-verified machine (or one at a limit) never reads
     # like a plain solve of the setpoint that was typed on the Simulation tab.

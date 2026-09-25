@@ -27,6 +27,7 @@ from motor_ai_sim.json_store import (
     mutate_json as _mutate_json,
     read_json as _read_json,
 )
+from motor_ai_sim.routes._validation import reject as _reject
 
 log = logging.getLogger(__name__)
 
@@ -764,6 +765,29 @@ def apply_preset(preset_id: str,
     geometry = p.get("geometry", {}) or {}
     simulation = p.get("simulation", {}) or {}
     mesh = p.get("mesh", {}) or {}
+
+    # ── Loud validation before ANYTHING is written ───────────────────────────
+    # Every other path that changes geometry (PUT /api/geometry, the Fusion
+    # and FreeCAD imports) refuses through
+    # routes.geometry.check_geometry_submission before writing a byte; this
+    # one used to write geo_sec[k] = v for every key straight into
+    # motor_config.yaml with no check at all — a preset saved (or hand-
+    # edited, or dropped in by a script) with an impossible combination
+    # applied cleanly and built garbage, exactly the bug class the Fusion
+    # import had.  LOADING a preset (GET /api/presets, GET /api/presets/{id},
+    # the Motors list) is untouched and must never crash on a bad one — only
+    # APPLY, which is the one call that actually changes the live machine,
+    # is gated here.
+    if geometry:
+        from motor_ai_sim.routes.geometry import check_geometry_submission
+        _checks = check_geometry_submission(dict(geometry))
+        _invalid: list = []
+        for _records in _checks.values():
+            _invalid.extend(_records)
+        if _invalid:
+            raise _reject(
+                "preset '%s' is not a buildable machine — %s"
+                % (_label(p, preset_id), next(iter(_checks))), _invalid)
 
     try:
         config = yaml.safe_load(_config_path().read_text(encoding="utf-8"))

@@ -5,8 +5,9 @@
 // Electromagnetic.»  So the carrier is a normal editable field saved with the
 // controller settings; a configuration with none saved starts from the value
 // the backend resolved (the retired Simulation-tab carrier — migration — or the
-// stated default), WRITTEN INTO the field with its origin on one line, so the
-// next Save makes it the Controller's own.
+// stated default), WRITTEN INTO the field with its origin on one line, until
+// the auto-save (any edit, or the next Solve — 2026-09-25) makes it the
+// Controller's own.
 //
 // `carrierPrefill` / `carrierOriginLine` are copied verbatim from
 // `controllerApi.ts` (node cannot load the TS module — see the other tests in
@@ -32,30 +33,36 @@ function carrierPrefill(fsw, point) {
 }
 
 function carrierOriginLine(origin) {
-  if (origin === 'legacy') return 'from the old Simulation-tab PWM — Save to keep';
-  if (origin === 'default') return 'default — Save to keep';
+  if (origin === 'legacy') return 'from the old Simulation-tab PWM';
+  if (origin === 'default') return 'default';
   return null;
 }
 
 /* ── the copies are still the shipped code ───────────────────────────────── */
 
 test('the copies match controllerApi.ts', () => {
-  assert.ok(API.includes("if (origin === 'legacy') return 'from the old Simulation-tab PWM — Save to keep';"));
+  assert.ok(API.includes("if (origin === 'legacy') return 'from the old Simulation-tab PWM';"));
   assert.ok(API.includes("return { fsw: point.f_carrier_hz, origin: point.carrier_origin ?? null };"));
 });
 
 /* ── behaviour ───────────────────────────────────────────────────────────── */
 
+// 2026-09-25: the "— Save to keep" hint is gone — ControllerPanel now
+// auto-saves on every edit and on every Solve (persistSettings), so there is
+// no separate step left to remind anyone about; the line only still says
+// WHERE the value came from.
 test('an empty box takes the migrated carrier, with its origin', () => {
   assert.deepEqual(carrierPrefill('', { f_carrier_hz: 24000, carrier_origin: 'legacy' }),
                    { fsw: 24000, origin: 'legacy' });
-  assert.equal(carrierOriginLine('legacy'), 'from the old Simulation-tab PWM — Save to keep');
+  assert.equal(carrierOriginLine('legacy'), 'from the old Simulation-tab PWM');
+  assert.ok(!carrierOriginLine('legacy').includes('Save'));
 });
 
 test('an empty box on a machine with no history takes the stated default', () => {
   assert.deepEqual(carrierPrefill('', { f_carrier_hz: 20000, carrier_origin: 'default' }),
                    { fsw: 20000, origin: 'default' });
-  assert.ok(carrierOriginLine('default').includes('Save'));
+  assert.equal(carrierOriginLine('default'), 'default');
+  assert.ok(!carrierOriginLine('default').includes('Save'));
 });
 
 test('a saved or typed carrier is never replaced, and says nothing', () => {

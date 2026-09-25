@@ -593,8 +593,9 @@ export interface ResolvedPoint {
  * another tab.  A configuration whose saved block has no carrier yet gets the
  * one the backend resolved — the retired Simulation-tab carrier (migration) or
  * the Controller's stated default — written INTO the field, with its origin,
- * so the next Save makes it the Controller's own.  A value already in the box
- * (saved, or typed) is never replaced.
+ * so the auto-save (any edit, or the next Solve, 2026-09-25 — see
+ * ControllerPanel's `persistSettings`) makes it the Controller's own.  A
+ * value already in the box (saved, or typed) is never replaced.
  *
  * Copied verbatim into `__tests__/carrierField.test.mjs`.
  */
@@ -612,8 +613,13 @@ export function carrierPrefill(
  *  Controller's own — ``null`` once it is (saved or typed).  Copied verbatim
  *  into `__tests__/carrierField.test.mjs`. */
 export function carrierOriginLine(origin: string | null): string | null {
-  if (origin === 'legacy') return 'from the old Simulation-tab PWM — Save to keep';
-  if (origin === 'default') return 'default — Save to keep';
+  // No "Save to keep" hint (owner 2026-09-24 follow-up, "Devices / switch"
+  // reset report): the panel auto-saves on every edit and on every Solve
+  // (see ControllerPanel's debounced settings effect), so this value becomes
+  // the Controller's own on the very next keystroke or Solve — there is
+  // nothing left for the owner to remember to click.
+  if (origin === 'legacy') return 'from the old Simulation-tab PWM';
+  if (origin === 'default') return 'default';
   return null;
 }
 
@@ -696,4 +702,63 @@ export const pct = (v: any, digits = 2): string =>
 export function statusLine(res: ControllerResult | null, err: string | null): string | null {
   if (err) return err;
   return res?.solved_for || null;
+}
+
+/* ── stale result vs. live form (owner 2026-09-25, "Devices / switch keeps
+ * resetting to 4") ──────────────────────────────────────────────────────
+ * The production report turned out to be TWO bugs, not one: the saved
+ * default was already fixed (DEFAULT_CONTROLLER_FORM, 2026-09-24), but the
+ * results CARD never said whether what it was showing still matched the
+ * FORM on screen — a result served from history (``fresh=false``) can be
+ * for settings the owner has since edited, and the card kept quoting THOSE
+ * old numbers ("1 device(s) per switch") right next to a form reading "4",
+ * with nothing on screen saying which one is true.  ``staleResultFields``
+ * finds the mismatch; ``staleResultLine`` is the one line the results card
+ * shows instead of silently presenting a pair that disagrees.
+ *
+ * A BLANK form field is never flagged: blank means "the duty's own" (the
+ * same convention ``carrierPrefill`` already uses), and the result's
+ * resolved value for it is exactly what blank asked for, not a mismatch.
+ */
+
+/** The (human) names of the settings the shown `res` disagrees with, given
+ *  what the form currently holds. `[]` when nothing has been solved yet, or
+ *  the result still matches every field the form has an opinion on. */
+export function staleResultFields(
+  s: ControllerFormState, res: ControllerResult | null,
+): string[] {
+  if (!res) return [];
+  const out: string[] = [];
+  if (s.device && res.device != null && s.device !== res.device) out.push('device');
+  if (s.topology && res.topology?.preset != null && s.topology !== res.topology.preset)
+    out.push('topology');
+  if (s.nPar !== '' && res.settings?.devices_parallel != null
+      && s.nPar !== res.settings.devices_parallel) out.push('N');
+  if (s.dead !== '' && res.settings?.dead_time_us != null
+      && s.dead !== res.settings.dead_time_us) out.push('dead time');
+  if (s.rg !== '' && res.settings?.r_g_ext_ohm != null
+      && s.rg !== res.settings.r_g_ext_ohm) out.push('R_G');
+  if (s.vgsOff !== '' && res.settings?.v_gs_off_V != null
+      && s.vgsOff !== res.settings.v_gs_off_V) out.push('V_GS off');
+  if (s.fsw !== '' && res.point?.f_carrier_hz != null
+      && s.fsw !== res.point.f_carrier_hz) out.push('carrier');
+  if (s.vdc !== '' && res.point?.v_dc_V != null
+      && s.vdc !== res.point.v_dc_V) out.push('DC link');
+  if (s.coolingMode && res.thermal?.cooling_mode != null
+      && s.coolingMode !== res.thermal.cooling_mode) out.push('cooling');
+  return out;
+}
+
+/** The ONE line the results card shows for a non-empty `staleResultFields` —
+ *  "Devices / switch" ("N") is spelled out exactly (the reported production
+ *  case), everything else names the field(s) that differ. `null` when there
+ *  is nothing to say (nothing solved yet, or the result still agrees). */
+export function staleResultLine(
+  fields: string[], res: ControllerResult | null,
+): string | null {
+  if (!fields.length || !res) return null;
+  if (fields.length === 1 && fields[0] === 'N') {
+    return `result for N=${res.settings?.devices_parallel} — press Solve`;
+  }
+  return `result computed with a different ${fields.join(', ')} — press Solve`;
 }

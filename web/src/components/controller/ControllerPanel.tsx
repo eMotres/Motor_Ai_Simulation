@@ -15,7 +15,7 @@
  * coupled record and sends a `sources` map back); a field left blank here is a
  * field the duty answers.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Paper, Typography, Button, TextField, MenuItem, Divider,
          CircularProgress, Alert, Chip, Tooltip, Checkbox, IconButton,
          FormControlLabel } from '@mui/material';
@@ -34,6 +34,7 @@ import { listDevices, getTopologies, solveController, getLast, postSchematic,
          saveControllerSettings, formStateFromSettings, settingsForSave,
          controllerSolveBody, getResolvedPoint, DEFAULT_CONTROLLER_FORM,
          getCoolingFromThermal, carrierPrefill, carrierOriginLine,
+         staleResultFields, staleResultLine,
          type DeviceRow, type CoilRow, type ControllerResult,
          type ControllerFormState, type ResolvedPoint,
          type CoolingFromThermal } from './controllerApi';
@@ -185,7 +186,16 @@ const ControllerPanel: React.FC = () => {
   const onAirSpeedChange = (v: Nullable) => { setThermalCool(null); setAirSpeed(v); };
   const onTAmbientChange = (v: Nullable) => { setThermalCool(null); setTAmbient(v); };
 
+  // Gates the debounced auto-save below: `"<die>::<config>"` once THIS
+  // configuration's settings have actually landed, `null` while a load is in
+  // flight or none is loaded — the same `simReady`-style gate
+  // `SimulationPanel`'s own debounced config PATCH uses, so a die/config
+  // switch can never auto-save before the just-loaded block has replaced the
+  // previous machine's state on screen (it would otherwise PATCH one
+  // machine's settings onto another's file for the ~1 s the load is async).
+  const settingsLoadedFor = useRef<string | null>(null);
   useEffect(() => { void (async () => {
+    settingsLoadedFor.current = null;
     if (!dieCtx.die || !dieCtx.config) return;
     try {
       const block = await getControllerSettings(dieCtx.die, dieCtx.config);
@@ -211,7 +221,8 @@ const ControllerPanel: React.FC = () => {
       // survive a die/config switch.
       setThermalCool(null); setThermalCoolErr(null);
       if (block && (block as any).saved_at) setSettingsSavedAt((block as any).saved_at);
-    } catch { /* nothing saved yet, or the read failed — the tab's own defaults stand */ }
+    } catch { /* nothing saved yet, or the read failed — the tab's own defaults stand */
+    } finally { settingsLoadedFor.current = `${dieCtx.die}::${dieCtx.config}`; }
   })(); }, [dieCtx.die, dieCtx.config]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── mirror the current form to localStorage, TAGGED with the active
@@ -238,17 +249,25 @@ const ControllerPanel: React.FC = () => {
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping, coupleWithEm]);
 
-  const saveSettings = async () => {
+  // ── AUTO-SAVE (owner 2026-09-25, "Devices / switch keeps resetting to 4")
+  // ─────────────────────────────────────────────────────────────────────
+  // The form used to persist only on an explicit "Save settings" click — a
+  // solve (``POST /solve``) never wrote the settings block at all, so typing
+  // 1 and pressing Solve left the FILE at whatever stale default (4) an
+  // earlier session had saved; the next reload or machine switch read that
+  // stale file straight back.  `persistSettings` is now the ONE writer this
+  // tab has (the same PATCH the button always used), called from three
+  // places: the button itself, every Solve, and a ~1 s debounce after the
+  // last edit of any field — so the file can never again be older than what
+  // is on screen.
+  const persistSettings = useCallback(async () => {
+    if (!dieCtx.die || !dieCtx.config) return null;
     setSettingsErr(null);
-    if (!dieCtx.die || !dieCtx.config) {
-      setSettingsErr('no motor is loaded — load a configuration first');
-      return;
-    }
+    const state: ControllerFormState = { device, topology, setSplit, hbMod,
+      nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+      coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
+      mapping, coupleWithEm };
     try {
-      const state: ControllerFormState = { device, topology, setSplit, hbMod,
-        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
-        coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-        mapping, coupleWithEm };
       const r = await saveControllerSettings(dieCtx.die, dieCtx.config, settingsForSave(state));
       setSettingsSavedAt(r.controller?.saved_at || null);
       // The carrier on screen is now the Controller's own — no origin line.
@@ -256,8 +275,37 @@ const ControllerPanel: React.FC = () => {
       // Every other tab that shows the Controller's drive re-reads it.
       try { window.dispatchEvent(new CustomEvent('controller-settings-saved')); }
       catch { /* SSR/no-window */ }
-    } catch (e) { setSettingsErr(String(e)); }
+      return r;
+    } catch (e) { setSettingsErr(String(e)); return null; }
+  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
+      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+      coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
+      mapping, coupleWithEm]);
+
+  const saveSettings = async () => {
+    if (!dieCtx.die || !dieCtx.config) {
+      setSettingsErr('no motor is loaded — load a configuration first');
+      return;
+    }
+    await persistSettings();
   };
+
+  // Debounced: ~1 s after the last edit of ANY Controller field, not only on
+  // Solve or the button — `settingsLoadedFor` blocks this until the current
+  // die/config's OWN settings have loaded (never overwrite it with whatever
+  // a previous machine left on screen mid-switch).
+  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!dieCtx.die || !dieCtx.config) return;
+    if (settingsLoadedFor.current !== `${dieCtx.die}::${dieCtx.config}`) return;
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => { void persistSettings(); }, 1000);
+    return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
+      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+      coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
+      mapping, coupleWithEm]);
 
   const customRows = useMemo(() =>
     coils.map(c => ({ coil: c.index, bridge: (mapping[c.index] || 'INV1').split('/')[0],
@@ -327,7 +375,8 @@ const ControllerPanel: React.FC = () => {
   // THE CARRIER BOX HOLDS A REAL VALUE (owner 2026-09-24).  Nothing saved in
   // it yet → the value the backend resolved (the retired Simulation-tab
   // carrier, migrated, or the stated default) is written in, with its origin
-  // shown on one line until a Save makes it this Controller's own.
+  // shown on one line until the auto-save (any edit, or the next Solve,
+  // 2026-09-25) makes it this Controller's own.
   useEffect(() => {
     const next = carrierPrefill(fsw, point);
     if (next.fsw !== fsw) { setFsw(next.fsw); setFswOrigin(next.origin); }
@@ -335,6 +384,11 @@ const ControllerPanel: React.FC = () => {
 
   const solve = async (fresh = false) => {
     setBusy(true); setErr(null);
+    // Every Solve persists the settings it is about to run with — the same
+    // writer as the button/debounce — so a result can never outlive the file
+    // it should have written (owner 2026-09-25 report's root cause: Solve
+    // alone never saved anything).
+    void persistSettings();
     try {
       const r = await solveController(body(), fresh);
       setRes(r);
@@ -347,6 +401,21 @@ const ControllerPanel: React.FC = () => {
   const E = res?.efficiency; const P = res?.point as any;
   const wave = res?.waveforms;
   const firstCoil = wave ? Object.keys(wave.coils)[0] : null;
+
+  // ── stale result vs. the live form (owner 2026-09-25) ───────────────────
+  // A result served from history (``fresh=false``) — or simply left on
+  // screen after the owner edited a field without pressing Solve again — can
+  // describe settings the form no longer shows.  Never present that pair
+  // silently: one short line names what disagrees, in place of a result the
+  // owner would otherwise read as a plain answer to what is on screen now.
+  const staleFields = useMemo(() => staleResultFields(
+    { device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
+      coolant, flow, tin, rtim, coolingMode, airSpeed, tAmbient, areaBasis,
+      areaCm2, finEff, emissivity, mapping, coupleWithEm }, res),
+    [device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
+     coolant, flow, tin, rtim, coolingMode, airSpeed, tAmbient, areaBasis,
+     areaCm2, finEff, emissivity, mapping, coupleWithEm, res]);
+  const staleLine = staleResultLine(staleFields, res);
 
   return (
     <Box sx={{ height: '100%', overflowY: 'auto', p: 2.5, bgcolor: 'var(--panel-2)' }}>
@@ -374,15 +443,15 @@ const ControllerPanel: React.FC = () => {
           onClick={addRow} sx={{ textTransform: 'none', fontSize: 11 }}>
           + Add to comparison</Button>
         <Tooltip title={dieCtx.active
-          ? 'Save this controller — device, topology, mapping, N parallel, '
-            + 'R_G, dead time, carrier, DC link and cooling — with the loaded '
-            + 'configuration, the same way the battery is saved. Restored the '
-            + 'next time this configuration is loaded.'
+          ? 'Every edit and every Solve already saves this controller — '
+            + 'device, topology, mapping, N parallel, R_G, dead time, '
+            + 'carrier, DC link and cooling — with the loaded configuration. '
+            + 'This button just does it right now instead of waiting ~1 s.'
           : 'Load a configuration first — the controller is saved WITH it.'}>
           <span>
             <Button size="small" variant="outlined" disabled={!dieCtx.active}
               onClick={() => void saveSettings()} sx={{ textTransform: 'none', fontSize: 11 }}>
-              Save settings</Button>
+              Save now</Button>
           </span>
         </Tooltip>
         {settingsSavedAt && !settingsErr && (
@@ -580,6 +649,11 @@ const ControllerPanel: React.FC = () => {
           )}
           {res && (
             <>
+              {/* The result must never disagree with the form silently
+                  (owner 2026-09-25) — ONE line, before anything else. */}
+              {staleLine && (
+                <Alert severity="warning" sx={{ mb: 1, fontSize: 12.5 }}>{staleLine}</Alert>
+              )}
               {/* ONE LINE for the whole model, the full text behind the ⓘ.
                   Owner 2026-09-22: «не пиши это всё, никто это не читает». */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>

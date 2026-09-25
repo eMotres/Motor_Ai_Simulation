@@ -796,3 +796,129 @@ test('nothing solved yet and no error is a blank status line, never "null"', () 
   assert.equal(statusLine(null, null), null);
   assert.equal(statusLine({}, null), null);
 });
+
+/* ── staleResultFields / staleResultLine (owner 2026-09-25, "Devices /
+ * switch keeps resetting to 4") ─────────────────────────────────────────
+ * The screenshot showed the form reading "4" next to a results card saying
+ * "1 device(s) per switch" — a result served from history (or simply left
+ * on screen after an edit with no re-Solve) can describe settings the form
+ * no longer shows. Verbatim copies, same reason as every other helper here.
+ */
+
+function staleResultFields(s, res) {
+  if (!res) return [];
+  const out = [];
+  if (s.device && res.device != null && s.device !== res.device) out.push('device');
+  if (s.topology && res.topology?.preset != null && s.topology !== res.topology.preset)
+    out.push('topology');
+  if (s.nPar !== '' && res.settings?.devices_parallel != null
+      && s.nPar !== res.settings.devices_parallel) out.push('N');
+  if (s.dead !== '' && res.settings?.dead_time_us != null
+      && s.dead !== res.settings.dead_time_us) out.push('dead time');
+  if (s.rg !== '' && res.settings?.r_g_ext_ohm != null
+      && s.rg !== res.settings.r_g_ext_ohm) out.push('R_G');
+  if (s.vgsOff !== '' && res.settings?.v_gs_off_V != null
+      && s.vgsOff !== res.settings.v_gs_off_V) out.push('V_GS off');
+  if (s.fsw !== '' && res.point?.f_carrier_hz != null
+      && s.fsw !== res.point.f_carrier_hz) out.push('carrier');
+  if (s.vdc !== '' && res.point?.v_dc_V != null
+      && s.vdc !== res.point.v_dc_V) out.push('DC link');
+  if (s.coolingMode && res.thermal?.cooling_mode != null
+      && s.coolingMode !== res.thermal.cooling_mode) out.push('cooling');
+  return out;
+}
+
+function staleResultLine(fields, res) {
+  if (!fields.length || !res) return null;
+  if (fields.length === 1 && fields[0] === 'N') {
+    return `result for N=${res.settings?.devices_parallel} — press Solve`;
+  }
+  return `result computed with a different ${fields.join(', ')} — press Solve`;
+}
+
+test('staleResultFields/staleResultLine are copied verbatim from controllerApi.ts', () => {
+  const src = readFileSync(join(HERE, '..', 'controllerApi.ts'), 'utf8');
+  assert.ok(src.includes("if (s.nPar !== '' && res.settings?.devices_parallel != null"));
+  assert.ok(src.includes(
+    "&& s.nPar !== res.settings.devices_parallel) out.push('N');"));
+  assert.ok(src.includes(
+    "return `result for N=${res.settings?.devices_parallel} — press Solve`;"));
+});
+
+test('the reported production case: form N=1, a result solved with N=4', () => {
+  const form = { ...DEFAULT_FORM, device: 'IQE050N08NM5SC', nPar: 1 };
+  const res = { device: 'IQE050N08NM5SC', topology: { preset: 'one_3ph' },
+    settings: { devices_parallel: 4 }, point: {}, thermal: {} };
+  const fields = staleResultFields(form, res);
+  assert.deepEqual(fields, ['N']);
+  assert.equal(staleResultLine(fields, res), 'result for N=4 — press Solve');
+});
+
+test('a result that matches every field the form has an opinion on is never '
+   + 'flagged stale', () => {
+  const form = { ...DEFAULT_FORM, device: 'X', nPar: 1, fsw: 24000, vdc: 750.4 };
+  const res = { device: 'X', topology: { preset: 'one_3ph' },
+    settings: { devices_parallel: 1 }, point: { f_carrier_hz: 24000, v_dc_V: 750.4 },
+    thermal: { cooling_mode: 'liquid' } };
+  assert.deepEqual(staleResultFields(form, res), []);
+  assert.equal(staleResultLine([], res), null);
+});
+
+test('nothing solved yet (res === null) is never flagged stale', () => {
+  assert.deepEqual(staleResultFields(DEFAULT_FORM, null), []);
+  assert.equal(staleResultLine([], null), null);
+});
+
+test('a BLANK form field is never flagged — blank means "the duty\'s own", '
+   + 'and the result\'s resolved value is exactly what that asked for', () => {
+  const form = { ...DEFAULT_FORM, fsw: '', vdc: '' };
+  const res = { device: DEFAULT_FORM.device || null, topology: { preset: form.topology },
+    settings: { devices_parallel: form.nPar }, point: { f_carrier_hz: 48000, v_dc_V: 800 },
+    thermal: {} };
+  assert.deepEqual(staleResultFields(form, res), []);
+});
+
+test('two or more mismatched fields get one generic line, still ONE line', () => {
+  const form = { ...DEFAULT_FORM, nPar: 1, dead: 0.5 };
+  const res = { topology: {}, settings: { devices_parallel: 4, dead_time_us: 1.0 },
+    point: {}, thermal: {} };
+  const fields = staleResultFields(form, res);
+  assert.deepEqual(fields, ['N', 'dead time']);
+  const line = staleResultLine(fields, res);
+  assert.equal(line, 'result computed with a different N, dead time — press Solve');
+});
+
+/* ── auto-save wiring (owner 2026-09-25) ─────────────────────────────────
+ * ControllerPanel.tsx imports import.meta.env and JSX, so this is
+ * source-checked rather than re-implemented, the same way the
+ * ActiveFamilyStrip / DEFAULT_CONTROLLER_FORM tests above are.
+ */
+
+test('persistSettings is the ONE writer — called by the button, by every '
+   + 'Solve, and by the debounced field-change effect', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  assert.ok(src.includes('const persistSettings = useCallback(async () => {'),
+    'persistSettings must exist');
+  assert.ok(src.includes('await persistSettings();'),
+    'the "Save now" button must call it');
+  const solveStart = src.indexOf('const solve = async (fresh = false) => {');
+  const solveEnd = src.indexOf('\n  };', solveStart);
+  assert.ok(src.slice(solveStart, solveEnd).includes('void persistSettings();'),
+    'every Solve must persist the settings it runs with — this is the '
+    + 'reported bug\'s root cause (Solve alone never saved anything)');
+});
+
+test('the debounced auto-save effect is gated on the CURRENT die/config\'s '
+   + 'own settings having already loaded — it must never fire mid-switch '
+   + 'and PATCH one machine\'s form onto another\'s file', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  const start = src.indexOf('const autoSaveTimer = useRef');
+  assert.ok(start > 0, 'the debounce timer ref must exist');
+  const end = src.indexOf('}, [dieCtx.die, dieCtx.config, device, topology,', start);
+  assert.ok(end > start, 'the debounce effect must exist');
+  const block = src.slice(start, end);
+  assert.ok(block.includes('settingsLoadedFor.current !=='),
+    'must check the load-landed gate before scheduling a save');
+  assert.ok(block.includes('setTimeout(() => { void persistSettings(); }, 1000)'),
+    'must debounce ~1 s after the last edit');
+});

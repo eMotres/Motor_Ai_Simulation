@@ -31,6 +31,8 @@ import adsk.fusion
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import fusion_param_common as FPC  # noqa: E402
+import importlib  # noqa: E402
+importlib.reload(FPC)  # Fusion keeps modules in memory between runs: always load the current map
 
 HEADER = ["Name", "Unit", "Expression", "Value", "Comment", "Favorite"]
 

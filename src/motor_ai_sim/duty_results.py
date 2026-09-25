@@ -1353,6 +1353,19 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         **({"continuous_rating": dict(c["continuous_rating"])}
            if isinstance(c.get("continuous_rating"), dict)
            and c["continuous_rating"] else {}),
+        # ── THE CONTROLLER AND THE SINE BESIDE IT (2026-09-25) ──────────────
+        # A drive=inverter record's device block (Stage 2) and the same point
+        # on an ideal sinusoid at the same temperatures.  Both were dropped
+        # here, so the report's Controller section — which reads the DUTY's
+        # record — could never print the coupled answer or the comparison the
+        # owner asked for.  Kept whole: a few dozen scalars and small tables;
+        # the waveform arrays were already stripped by the route.
+        **({"controller": dict(c["controller"])}
+           if isinstance(c.get("controller"), dict) and c["controller"]
+           else {}),
+        **({"sine_comparison": dict(c["sine_comparison"])}
+           if isinstance(c.get("sine_comparison"), dict)
+           and c["sine_comparison"] else {}),
         "iterations": c.get("iterations"),
         "em_runs": c.get("em_runs"),
         "converged": bool(c.get("converged")) if c else None,

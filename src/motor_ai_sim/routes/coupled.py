@@ -1433,6 +1433,210 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
     }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  SINE vs INVERTER, at the SAME point and the SAME temperatures (2026-09-25)
+# ─────────────────────────────────────────────────────────────────────────────
+# Owner: «нужно давать сравнение, как изменились характеристики мотора с
+# контроллером по сравнению с синусоидой, и тоже указывать это в отчёте».
+#
+# ONE extra electromagnetic pass after the loop has finished, on the IDEAL
+# sinusoidal current source, at the operating point and the temperatures of the
+# state the record reports (the loop's last pass, the pass at the limit, or the
+# S1 pass).  EQUAL TEMPERATURES, deliberately: letting the sine reference find
+# its own thermal state would change the copper resistance, the magnet
+# remanence and the iron at once, and the difference printed would then be the
+# carrier's AND a colder machine's — two causes in one number.  Held at the
+# inverter state's own temperatures, the only thing that differs between the
+# columns is the drive, which is the question.  (A separately converged sine
+# run, where the duty has one, is still the `reference_sine` record — a
+# different question: what each supply reaches on its own.)
+#
+# THE SAME FUNDAMENTAL, not the same setpoint: the sine pass is fed the
+# fundamental current PHASOR the inverter run actually produced (I₁, γ₁ from
+# `postproc.fundamental_current`), exactly as the transient route's own
+# `harm_ref` reference does — so the torque, voltage and loss differences are
+# the harmonics' and the devices' and not a regulator's miss.  Resolution-
+# matched: the sine pass uses the inverter run's own steps per period.  Run as
+# a BACKGROUND solve, so it never becomes the Electromagnetic tab's last run.
+
+#: (key, label, unit, how the difference is stated) — "pct" = relative change
+#: of the value, "pp" = the difference itself (for quantities already in %).
+SINE_CMP_ROWS: Tuple[Tuple[str, str, str, str], ...] = (
+    ("T_em_avg_Nm", "Torque, mean", "N·m", "pct"),
+    ("T_ripple_pct", "Torque ripple", "%", "pp"),
+    ("V1_LL_V", "Line voltage, fundamental", "V", "pct"),
+    ("V_line_peak_V", "Line voltage, peak", "V", "pct"),
+    ("I_phase_rms_A", "Phase current, rms", "A", "pct"),
+    ("I1_phase_rms_A", "Phase current, fundamental", "A", "pct"),
+    ("THD_I_pct", "Current THD", "%", "pp"),
+    ("P_cu_dc_W", "Copper, DC", "W", "pct"),
+    ("P_cu_ac_W", "Copper, AC (skin + proximity)", "W", "pct"),
+    ("P_stranded_W", "Copper, total", "W", "pct"),
+    ("P_core_stator_W", "Iron, stator", "W", "pct"),
+    ("P_core_rotor_W", "Iron, rotor", "W", "pct"),
+    ("P_mag_W", "Magnets, eddy", "W", "pct"),
+    ("P_shaft_W", "Shaft", "W", "pct"),
+    ("P_sleeve_W", "Sleeve", "W", "pct"),
+    ("P_loss_total_W", "Motor loss, total", "W", "pct"),
+    ("eta_shaft_pct", "Shaft efficiency", "%", "pp"),
+)
+
+
+def _sine_cmp_values(em: Dict[str, Any]) -> Dict[str, Optional[float]]:
+    """One run's numbers in :data:`SINE_CMP_ROWS`' keys — ``None`` where the
+    run did not report the quantity (never a zero standing in for it)."""
+    from motor_ai_sim.simulation.postproc import fundamental_current
+
+    s = (em or {}).get("summary") or {}
+
+    def _num(v: Any) -> Optional[float]:
+        if isinstance(v, (list, tuple)):
+            vals = [float(x) for x in v if isinstance(x, (int, float))
+                    and math.isfinite(float(x))]
+            return (sum(vals) / len(vals)) if vals else None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if math.isfinite(f) else None
+
+    out: Dict[str, Optional[float]] = {k: _num(s.get(k)) for k, *_r in
+                                       SINE_CMP_ROWS}
+    out["I_phase_rms_A"] = _num(em.get("I_phase_rms_solved_A")) \
+        or _num(s.get("I_phase_rms_A"))
+    try:
+        fc = fundamental_current(em or {})
+        out["I1_phase_rms_A"] = (float(fc["I1_phase_rms_A"])
+                                 if fc.get("I1_phase_rms_A") else None)
+    except Exception:                                   # noqa: BLE001
+        out["I1_phase_rms_A"] = None
+    dc = _num((em or {}).get("P_cu_dc_W"))
+    out["P_cu_dc_W"] = dc
+    cu = out.get("P_stranded_W")
+    out["P_cu_ac_W"] = (None if (dc is None or cu is None)
+                        else max(cu - dc, 0.0))
+    eta = _num(s.get("efficiency_shaft"))
+    if eta is None:
+        eta = _num(s.get("efficiency"))
+    out["eta_shaft_pct"] = None if eta is None else 100.0 * eta
+    return out
+
+
+def _sine_cmp_rows(sine: Dict[str, Optional[float]],
+                   inv: Dict[str, Optional[float]]) -> List[Dict[str, Any]]:
+    """The table rows: both values and the difference, stated per row."""
+    rows: List[Dict[str, Any]] = []
+    for key, label, unit, kind in SINE_CMP_ROWS:
+        a, b = sine.get(key), inv.get(key)
+        if a is None and b is None:
+            continue
+        d: Optional[float] = None
+        if a is not None and b is not None:
+            if kind == "pp":
+                d = b - a
+            elif abs(a) > 1e-12:
+                d = 100.0 * (b - a) / abs(a)
+        rows.append({"key": key, "label": label, "unit": unit,
+                     "sine": None if a is None else round(a, 4),
+                     "inverter": None if b is None else round(b, 4),
+                     "delta": None if d is None else round(d, 3),
+                     "delta_kind": kind})
+    return rows
+
+
+def _sine_comparison_step(body: Dict[str, Any], em: Dict[str, Any], *,
+                          coil_temp_c: float, magnet_temp_c: Optional[float],
+                          bearing_temp_c: Optional[float],
+                          inverter: Dict[str, Any],
+                          ctl: Optional["_ControllerLoop"],
+                          state_phase: str) -> Optional[Dict[str, Any]]:
+    """The ``sine_comparison`` block — never raising (a comparison that could
+    not be made is absent and says nothing, never a column of invented
+    numbers)."""
+    from motor_ai_sim import mech_losses as _ml
+    from motor_ai_sim.routes.simulation import _BACKGROUND_RUN
+    from motor_ai_sim.simulation.postproc import fundamental_current
+
+    try:
+        fc = fundamental_current(em or {})
+    except Exception:                                   # noqa: BLE001
+        fc = {}
+    i1 = _f(fc, "I1_phase_rms_A", 0.0)
+    g1 = fc.get("gamma1_deg")
+    basis_i = "the inverter run's own fundamental current phasor"
+    if not (i1 > 0.0) or g1 is None:
+        # No waveform to take the phasor from: the solved rms and the duty's
+        # own angle, said so.
+        i1 = _f(em or {}, "I_phase_rms_solved_A", 0.0) or _f(body, "I_phase_rms",
+                                                              0.0)
+        g1 = _f(body, "gamma_deg", 0.0)
+        basis_i = "the inverter run's rms current at the duty's own angle"
+    else:
+        g1 = float(g1)
+        if str(body.get("mode") or "motor").strip().lower() == "generator":
+            # The transient folds the generator's 180° in itself.
+            g1 = ((g1 - 180.0 + 180.0) % 360.0) - 180.0
+    if not (i1 > 0.0):
+        return None
+    ref_body = dict(body)
+    ref_body.update(I_phase_rms=round(float(i1), 4), gamma_deg=round(float(g1), 3),
+                    n_steps_per_period=int(inverter.get("n_steps_per_period")
+                                           or body.get("n_steps_per_period")
+                                           or 36))
+    tok_bg = _BACKGROUND_RUN.set(True)
+    tok_brg = _ml.BEARING_TEMP_C.set(None if bearing_temp_c is None
+                                     else float(bearing_temp_c))
+    try:
+        em_sine = _em_run(ref_body, coil_temp_c=float(coil_temp_c),
+                          magnet_temp_c=magnet_temp_c, inverter=None)
+    except HTTPException as exc:
+        log.warning("coupled: the sine reference pass was refused (%s) — the "
+                    "record carries no sine comparison", _detail_text(exc))
+        return None
+    except Exception:                                   # noqa: BLE001
+        log.debug("coupled: the sine reference pass failed", exc_info=True)
+        return None
+    finally:
+        _ml.BEARING_TEMP_C.reset(tok_brg)
+        _BACKGROUND_RUN.reset(tok_bg)
+    v_s, v_i = _sine_cmp_values(em_sine), _sine_cmp_values(em)
+    blk: Dict[str, Any] = {
+        "state": str(state_phase),
+        "basis": {
+            "I1_phase_rms_A": round(float(i1), 4),
+            "gamma1_deg": round(float(g1), 3),
+            "gamma_duty_deg": _f(body, "gamma_deg", 0.0),
+            "current_basis": basis_i,
+            "coil_temp_c": round(float(coil_temp_c), 2),
+            "magnet_temp_c": (None if magnet_temp_c is None
+                              else round(float(magnet_temp_c), 2)),
+            "bearing_temp_c": (None if bearing_temp_c is None
+                               else round(float(bearing_temp_c), 2)),
+            "rpm": _f(body, "rpm", 0.0) or None,
+            "n_steps_per_period": int(ref_body["n_steps_per_period"]),
+            "temperatures": ("equal — the sine pass is solved at the reported "
+                             "state's own winding and magnet temperatures, so "
+                             "the drive is the only difference"),
+        },
+        "rows": _sine_cmp_rows(v_s, v_i),
+        "caption": ("Ideal sine current vs the controller's waveform at the "
+                    "same fundamental current, speed and temperatures."),
+    }
+    if ctl is not None and ctl.solve:
+        L = ctl.solve.get("losses") or {}
+        E = ctl.solve.get("efficiency") or {}
+        blk["inverter"] = {
+            "P_inverter_W": L.get("total_W"),
+            "eta_inverter_pct": (None if E.get("inverter") is None
+                                 else round(100.0 * float(E["inverter"]), 3)),
+            "eta_wall_to_shaft_pct": (
+                None if E.get("wall_to_shaft") is None
+                else round(100.0 * float(E["wall_to_shaft"]), 3)),
+            "t_j_c": round(float(ctl.t_j_c), 2),
+        }
+    return blk
+
+
 def _cold_constants_step(body: Dict[str, Any], *, rpm: float, drive: str,
                          inverter: Optional[Dict[str, Any]]
                          ) -> Optional[Dict[str, Any]]:
@@ -5036,6 +5240,34 @@ def _run(body: Dict[str, Any],
                     continuous_rating.get("headline")
                     or (continuous_rating.get("refusal") or {}).get("error")
                     or "")
+        sine_cmp: Optional[Dict[str, Any]] = None
+        # ── SINE vs INVERTER (owner 2026-09-25) ────────────────────────────
+        # One background pass on the ideal sinusoid, at the reported state's
+        # own fundamental current and temperatures — see
+        # `_sine_comparison_step`.  Only on the Controller's drive, and only on
+        # a run whose answer is filed (not an errand); `sine_compare: false`
+        # in the body skips it.
+        if (ctl is not None and inverter is not None and history and em
+                and not _rr.suppressed()
+                and _coupled_body_bool(body, "sine_compare", True)):
+            _check_cancelled(run_id)
+            _progress.update(phase="sine reference — the same point on an "
+                                   "ideal sinusoid, same temperatures")
+            _state_phase = (
+                "s1_verify" if (continuous_rating or {}).get("record_is_s1")
+                else "limit" if (limited and limited.get("em_run"))
+                else "loop")
+            sine_cmp = _sine_comparison_step(
+                body, em, coil_temp_c=float(em_at[0]),
+                magnet_temp_c=(None if em_at[1] is None else float(em_at[1])),
+                bearing_temp_c=t_brg, inverter=inverter, ctl=ctl,
+                state_phase=_state_phase)
+            if sine_cmp:
+                log.info("coupled: sine comparison (%s state) — %s",
+                         _state_phase, "; ".join(
+                             "%s %s→%s" % (r["key"], r["sine"], r["inverter"])
+                             for r in sine_cmp["rows"]
+                             if r["key"] in ("T_em_avg_Nm", "P_loss_total_W")))
         # ── AND THE SAME MACHINE AT 20 °C (owner 2026-09-18) ────────────────
         # *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить
         # все коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех
@@ -5200,6 +5432,9 @@ def _run(body: Dict[str, Any],
         # meaning unchanged — carrier, link, modulation, the settled DC — and
         # this block says which power stage applied them.
         **({"controller": ctl.record(em)} if ctl is not None else {}),
+        # …and the same point on an ideal sinusoid, at the same temperatures
+        # (owner 2026-09-25) — see `_sine_comparison_step`.
+        **({"sine_comparison": sine_cmp} if sine_cmp else {}),
         # THE LAST RUN's electromagnetic numbers, in the block itself.  Not a
         # duplicate for its own sake: the per-duty record keeps this block and
         # drops the transient beside it, and "sine → PWM at the same point"

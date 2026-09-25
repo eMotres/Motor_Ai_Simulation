@@ -28,6 +28,32 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const BASE = `${API.replace(/\/$/, '')}/api/coupled`;
 
 /** One pass of the loop, as the backend records it. */
+/** One row of the sine-vs-inverter table (`coupling.sine_comparison`). */
+export interface SineComparisonRow {
+  key: string; label: string; unit: string;
+  sine: number | null; inverter: number | null;
+  /** relative change (`delta_kind: 'pct'`) or the difference itself for a
+   *  quantity already in % (`'pp'`) */
+  delta: number | null; delta_kind: 'pct' | 'pp';
+  inverter_corrected?: number | null; delta_corrected?: number | null;
+}
+export interface SineComparison {
+  state?: string; algorithm?: string; caption?: string;
+  has_corrected?: boolean;
+  basis?: Record<string, unknown>;
+  rows: SineComparisonRow[];
+  inverter?: { P_inverter_W?: number | null; eta_inverter_pct?: number | null;
+               eta_wall_to_shaft_pct?: number | null; t_j_c?: number | null };
+}
+
+/** `+1.2 %` / `+0.35 pp` / `—` — the Δ cell of the sine-vs-inverter table. */
+export function sineCmpDelta(d: number | null | undefined,
+                             kind: 'pct' | 'pp'): string {
+  if (d == null || !Number.isFinite(d)) return '—';
+  const s = d >= 0 ? '+' : '';
+  return kind === 'pp' ? `${s}${d.toFixed(2)} pp` : `${s}${d.toFixed(1)} %`;
+}
+
 export interface CoupledIteration {
   iter: number;
   /** the temperatures THIS pass's electromagnetic run was solved at */
@@ -97,6 +123,24 @@ export interface CouplingBlock {
     thermal?: { t_j_max_c?: number | null; margin_K?: number | null };
     limits_verdict?: string;
     passes?: Array<Record<string, unknown>>;
+  } | null;
+  /** SINE vs INVERTER (owner 2026-09-25): the same point on the ideal sine
+   *  current beside the controller's PWM.  `inverter` = the PWM at the sine
+   *  state's temperatures (the drive the only difference); on the final-pass
+   *  algorithm `inverter_corrected` = the PWM state after its own losses were
+   *  fed back (present only when that moved the temperatures). */
+  sine_comparison?: SineComparison | null;
+  /** How a drive=inverter run was coupled: `final_pass` (the loop on the sine,
+   *  then the controller's PWM on the converged state — the default) or
+   *  `full` (every pass on the PWM, kept for validation). */
+  inverter_coupling?: 'final_pass' | 'full';
+  pwm_final?: {
+    n_pwm_passes?: number; converged?: boolean; wall_s?: number;
+    dT_vs_sine_K?: { winding?: number | null; magnet?: number | null;
+                     bearing?: number | null };
+    sine_state_reused?: { computed_at?: string; source?: string } | null;
+    sine_state_not_reused?: string;
+    refusal?: string;
   } | null;
   /** The mechanical step's verdict (phase 3), or its recorded refusal, or
    *  absent when the caller skipped it.  Loosely typed on purpose: the

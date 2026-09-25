@@ -1460,7 +1460,12 @@ def _controller(doc, D: Dict[str, Any]) -> None:
                widths_cm=[5.4, 4.0, 17.3])
         crows = R.controller_coupled_rows(rec, c)
         if crows:
-            _table(doc, crows, size=10.5, widths_cm=[4.6, 3.6, 5.2, 13.3])
+            _table(doc, crows, size=10.5,
+                   widths_cm=([4.6, 3.4, 4.0, 4.0, 10.7] if len(crows[0]) == 5
+                              else [4.6, 3.6, 5.2, 13.3]))
+            _cap = R.controller_coupled_caption(c)
+            if _cap:
+                _p(doc, _cap, size=9, italic=True, color=NOTE)
             _cv = R.controller_convergence_text(rec)
             if _cv:
                 _p(doc, _cv, size=9, italic=True, color=NOTE)

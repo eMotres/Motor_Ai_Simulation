@@ -15064,6 +15064,14 @@ def controller_coupled_rows(rec: Dict[str, Any],
     cp = (col.get("res") or {}).get("coupled")
     if not isinstance(cp, dict):
         return []
+    # THE SAME-TEMPERATURE COMPARISON WINS (owner 2026-09-25): a drive=inverter
+    # run now carries its own sine pass at the reported state's fundamental
+    # current and temperatures, so the drive is the only difference.  The
+    # older path below compares against a separately converged sine record,
+    # which differs in temperature too; it stays for records without the block.
+    sc = cp.get("sine_comparison")
+    if isinstance(sc, dict) and sc.get("rows"):
+        return controller_sine_comparison_rows(sc, rec)
     em = cp.get("em") if isinstance(cp.get("em"), dict) else {}
     sine = (cp.get("reference_sine")
             if isinstance(cp.get("reference_sine"), dict) else {})
@@ -15106,6 +15114,98 @@ def controller_coupled_rows(rec: Dict[str, Any],
         else f"{_fmt(float(E['wall_to_shaft']) * 100.0, 2)} %",
         "inverter × shaft: DC link in, shaft out"])
     return rows
+
+
+#: Decimals per unit in the sine-vs-inverter table.
+_SC_DIGITS = {"N·m": 3, "W": 1, "V": 2, "A": 2, "%": 2}
+
+
+def controller_sine_comparison_rows(sc: Dict[str, Any],
+                                    rec: Optional[Dict[str, Any]] = None
+                                    ) -> List[List[str]]:
+    """``Quantity | Sine | Inverter | Δ`` from a record's ``sine_comparison``
+    block, then the inverter's own watts and efficiencies (sine column "—":
+    an ideal current source has no devices)."""
+    # Two inverter columns when the PWM's own losses moved the temperatures
+    # (final-pass algorithm): the same-temperature pass — the drive alone —
+    # and the thermally corrected state the record reports.
+    corr = bool(sc.get("has_corrected"))
+    rows: List[List[str]] = [
+        ["Quantity", "Sine", "Inverter, same T", "Inverter, own T", "Δ same T"]
+        if corr else ["Quantity", "Sine", "Inverter", "Δ"]]
+
+    def _dtxt(d, kind):
+        d = _numf(d)
+        if d is None:
+            return "—"
+        if kind == "pp":
+            return f"{'+' if d >= 0 else ''}{_fmt(d, 2)} pp"
+        return f"{'+' if d >= 0 else ''}{_fmt(d, 1)} %"
+    for r in sc.get("rows") or []:
+        unit = str(r.get("unit") or "")
+        dg = _SC_DIGITS.get(unit, 2)
+
+        def _v(x):
+            return "—" if x is None else f"{_fmt(x, dg)} {unit}".strip()
+        row = [str(r.get("label") or r.get("key")), _v(r.get("sine")),
+               _v(r.get("inverter"))]
+        if corr:
+            row.append(_v(r.get("inverter_corrected")))
+        row.append(_dtxt(r.get("delta"), r.get("delta_kind")))
+        rows.append(row)
+    inv = sc.get("inverter") or {}
+    if not inv and isinstance(rec, dict):
+        L, E = rec.get("losses") or {}, rec.get("efficiency") or {}
+        inv = {"P_inverter_W": L.get("total_W"),
+               "eta_inverter_pct": (None if E.get("inverter") is None
+                                    else 100.0 * float(E["inverter"])),
+               "eta_wall_to_shaft_pct": (None if E.get("wall_to_shaft") is None
+                                         else 100.0 * float(E["wall_to_shaft"]))}
+    def _inv_row(label, val, note):
+        # The devices are solved on the REPORTED state (the last column).
+        rows.append([label, "—"] + (["—"] if corr else []) + [val, note])
+    if inv.get("P_inverter_W") is not None:
+        _inv_row("Inverter loss", f"{_fmt(inv['P_inverter_W'], 1)} W",
+                 "devices only")
+    if inv.get("eta_inverter_pct") is not None:
+        _inv_row("Inverter efficiency", f"{_fmt(inv['eta_inverter_pct'], 2)} %",
+                 "—")
+    if inv.get("eta_wall_to_shaft_pct") is not None:
+        _inv_row("Wall-to-shaft efficiency",
+                 f"{_fmt(inv['eta_wall_to_shaft_pct'], 2)} %",
+                 "DC link in, shaft out")
+    return rows
+
+
+def controller_coupled_caption(col: Dict[str, Any]) -> str:
+    """One sentence under the coupled table: what the two columns share."""
+    cp = (col.get("res") or {}).get("coupled")
+    sc = cp.get("sine_comparison") if isinstance(cp, dict) else None
+    if not isinstance(sc, dict) or not sc.get("rows"):
+        return ""
+    b = sc.get("basis") or {}
+    state = {"limit": "the machine at its limit",
+             "s1_verify": "the continuous (S1) point"}.get(
+        str(sc.get("state") or ""), "the converged state")
+    mag = b.get("magnet_temp_c")
+    if sc.get("algorithm") == "final_pass":
+        t_s = (f"winding {_fmt(b.get('coil_temp_c'), 1)} °C"
+               + ("" if mag is None else f", magnets {_fmt(mag, 1)} °C"))
+        if sc.get("has_corrected"):
+            cm = b.get("corrected_magnet_temp_c")
+            t_c = (f"{_fmt(b.get('corrected_coil_temp_c'), 1)} °C"
+                   + ("" if cm is None else f" / {_fmt(cm, 1)} °C"))
+            return (f"Sine loop vs the controller's PWM at {state}: same T "
+                    f"= the sine state's ({t_s}), own T = after the PWM "
+                    f"losses were fed back ({t_c}); Δ is at the same T.")
+        return (f"Sine loop vs the controller's PWM at {state}, at the same "
+                f"temperatures ({t_s}) — the supply is the only difference.")
+    return ("Sine vs inverter at the same fundamental current "
+            f"({_fmt(b.get('I1_phase_rms_A'), 2)} A rms, "
+            f"γ₁ {_fmt(b.get('gamma1_deg'), 1)}°), speed and temperatures of "
+            f"{state} (winding {_fmt(b.get('coil_temp_c'), 1)} °C"
+            + ("" if mag is None else f", magnets {_fmt(mag, 1)} °C")
+            + ") — the supply is the only difference.")
 
 
 def controller_convergence_text(rec: Dict[str, Any]) -> str:
@@ -15351,11 +15451,21 @@ def _controller_page(st, cols: List[Dict[str, Any]],
         # together with the machine, because only then is the comparison the
         # same run.
         crows = controller_coupled_rows(rec, c)
-        if crows:
+        if crows and len(crows[0]) == 5:
+            # same-T and own-T inverter columns (final-pass algorithm)
+            out.append(_table([r[:4] + [_para(str(r[4]), st["cell"])]
+                               for r in crows],
+                              [120, 80, 100, 100, CONTENT_W - 400],
+                              header=True, size=7.6))
+        elif crows:
             out.append(_table([[r[0], r[1], r[2],
                                 _para(str(r[3]), st["cell"])] for r in crows],
                               [120, 92, 132, CONTENT_W - 344],
                               header=True, size=7.6))
+        if crows:
+            _cap = controller_coupled_caption(c)
+            if _cap:
+                out.append(_para(_cap, st["note"]))
             _cv = controller_convergence_text(rec)
             if _cv:
                 out.append(_para(_cv, st["note"]))

@@ -131,6 +131,9 @@ def _run(client, **body):
     r = client.post("/api/coupled/run",
                     json={**LOOP_BODY, "max_iter": 3, "tol_k": 1.0,
                           "cold_constants": False, "drive": "inverter",
+                          # the sine-vs-inverter pass is its own feature
+                          # (tests/test_coupled_sine_comparison.py)
+                          "sine_compare": False,
                           **body})
     assert r.status_code == 200, r.text[:800]
     return r.json()["coupling"]

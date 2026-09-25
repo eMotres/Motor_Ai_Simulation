@@ -2292,13 +2292,57 @@ class _ControllerLoop:
                    float(d.r_ds_ohm), float(d.v_sd_v0_V),
                    float(d.v_sd_rd_ohm), float(d.dead_time_s) * 1e6))
 
+    def reseed(self, i_phase_rms_A: float) -> None:
+        """Re-place the body-diode fit at a NEW operating current, before an
+        electromagnetic pass solved at that current (2026-09-25).
+
+        The loop's own passes all sit at the duty's current, so the fit the
+        last :meth:`step` made is placed where the next pass needs it.  The
+        continuous (S1) verification pass is solved at ``I_cont`` instead —
+        a different current, often far from the duty's — and a diode line
+        fitted over ``0.1·i_peak … i_peak`` of the OLD current would be read
+        outside its span.  So the drop is refitted at the new current and the
+        junction temperature the controller last converged on; :meth:`step`
+        on that pass then re-converges ``T_j`` at the new current itself.
+        """
+        from motor_ai_sim.inverter.coupling import fit_device_drop
+
+        i_leg = abs(float(i_phase_rms_A or 0.0)) * (
+            math.sqrt(3.0) if self.star_delta == "delta" else 1.0)
+        if not (i_leg > 0.0):
+            return
+        self.drop = fit_device_drop(
+            self.card, t_j_c=self.t_j_c,
+            n_parallel=int(self.cfg["devices_parallel"]),
+            i_leg_peak_A=max(i_leg * math.sqrt(2.0), 1.0),
+            v_gs_on_V=float(self.cfg["v_gs_on_V"]),
+            v_gs_off_V=float(self.cfg["v_gs_off_V"]),
+            dead_time_s=float(self.cfg["dead_time_us"]) * 1e-6)
+
+    def state(self) -> tuple:
+        """What :meth:`restore` puts back — so a pass that REFUSED leaves the
+        controller describing the last pass that solved, never a drop fitted
+        for a machine nobody reports."""
+        return (self.drop, self.t_j_c, self.solve, len(self.passes))
+
+    def restore(self, st: tuple) -> None:
+        self.drop, self.t_j_c, self.solve, n = st
+        del self.passes[n:]
+
     # ── and what comes back ───────────────────────────────────────────────
-    def step(self, em: Dict[str, Any], *, it: int) -> Optional[float]:
+    def step(self, em: Dict[str, Any], *, it: int,
+             phase: str = "loop") -> Optional[float]:
         """Solve the controller on THIS pass's answer; return ``ΔT_j`` [K].
 
         ``None`` when the pass carried nothing to solve on — the loop then
         treats the junction temperature as un-moved rather than inventing a
         residual.
+
+        ``phase`` names which pass this is — ``"loop"`` (the fixed-point
+        iteration), ``"limit"`` (the one pass AT the limit) or
+        ``"s1_verify"`` (a continuous-rating verification pass) — so the
+        record's ``passes`` table and its ``state`` say which machine the
+        devices were solved on (2026-09-25).
         """
         from motor_ai_sim.inverter.coupling import fit_device_drop
         from motor_ai_sim.inverter.losses import ControllerRefusal, solve_controller
@@ -2332,6 +2376,11 @@ class _ControllerLoop:
             dead_time_s=float(self.cfg["dead_time_us"]) * 1e-6)
         self.passes.append({
             "iter": int(it),
+            "phase": str(phase),
+            # The current the devices were solved at — the pass's own.
+            "i_phase_rms_A": (round(float(req["i_phase_rms_A"]), 4)
+                              if req.get("i_phase_rms_A") is not None
+                              else None),
             "t_j_c": round(t_new, 2),
             "d_t_j_K": round(d_tj, 3),
             "p_inverter_W": (out.get("losses") or {}).get("total_W"),
@@ -2476,10 +2525,36 @@ class _ControllerLoop:
         if isinstance(pwm.get("nonideal"), dict):
             nonideal = dict(pwm["nonideal"])
         d = self.drop
+        # WHICH MACHINE THESE DEVICE NUMBERS ARE (2026-09-25).  The record's
+        # machine may be the loop's last pass, the pass AT the limit, or the
+        # continuous-rating (S1) pass — and the controller block must be the
+        # devices of THAT pass, at its current, not of an earlier one.  Stated
+        # rather than implied, and checked against the run it rides beside.
+        last = self.passes[-1] if self.passes else {}
+        i_em = em.get("I_phase_rms_solved_A") or (em.get("summary") or {}).get(
+            "I1_phase_rms_A")
+        state = {"phase": last.get("phase"), "iter": last.get("iter"),
+                 "I_phase_rms_A": last.get("i_phase_rms_A")}
+        warnings_extra: List[str] = []
+        try:
+            if (i_em is not None and last.get("i_phase_rms_A") is not None
+                    and abs(float(i_em) - float(last["i_phase_rms_A"]))
+                    > 1e-3 * max(abs(float(i_em)), 1.0)):
+                state["matches_record"] = False
+                warnings_extra.append(
+                    "the devices were last solved at %.3f A but the machine "
+                    "this record reports drew %.3f A — the controller block "
+                    "does not describe the reported state"
+                    % (float(last["i_phase_rms_A"]), float(i_em)))
+            elif i_em is not None and last:
+                state["matches_record"] = True
+        except (TypeError, ValueError):
+            pass
         out.update({
             "source": "controller",
             "stage": 2,
             "coupled": True,
+            "state": state,
             "settings_resolved": {
                 k: self.cfg.get(k) for k in
                 ("device", "topology", "devices_parallel", "dead_time_us",
@@ -2493,7 +2568,7 @@ class _ControllerLoop:
             "passes": list(self.passes),
             "excitation": nonideal,
             "device_drop": d.as_dict(),
-            "warnings": list(self.warnings)
+            "warnings": list(self.warnings) + warnings_extra
                         + list((self.solve or {}).get("warnings") or []),
             "note": (
                 "the machine was solved on the CONTROLLER's own waveform — "
@@ -4629,9 +4704,14 @@ def _run(body: Dict[str, Any],
                      "n/a" if _t_at.get("magnet") is None
                      else "%.1f" % float(_t_at["magnet"]), limited["line"])
             _tok = _ml.BEARING_TEMP_C.set(None if _t_b is None else float(_t_b))
+            # THE CONTROLLER'S BRIDGE, on this pass too (2026-09-25).  Without
+            # `controller=` `_em_run` falls back to the IDEAL two-level bridge,
+            # so an inverter duty's "machine at the limit" was solved with no
+            # device drops and no dead time while its record still printed the
+            # loop's T_j beside it.  The drop is the one the loop converged on.
             try:
                 _em_lim = _em_run(body, coil_temp_c=_t_c, magnet_temp_c=_t_m,
-                                  inverter=inverter)
+                                  inverter=inverter, controller=ctl)
             except HTTPException as exc:
                 # The machine could not be solved AT its limit.  The steady
                 # answer above is a solved state and stays — said loudly, with
@@ -4710,7 +4790,30 @@ def _run(body: Dict[str, Any],
                            if _pe is not None else {}),
                     })
                     v1_ran = float(inverter["v_phase_peak_V"])
-                    limited["drive_held"] = "pwm"
+                    # …AND THE DEVICES AT THIS PASS'S CURRENT: the controller is
+                    # re-solved on the limit pass itself (arithmetic over the
+                    # card, no extra EM run), so the record's controller block —
+                    # losses, T_j, eta_inv — is this machine's, not the
+                    # loop's last pass's.  T_j is NOT iterated here: the pass is
+                    # one by contract, the fundamental is the loop's, and the
+                    # current moves only as far as the colder/hotter copper
+                    # moves it; the step it would still take is recorded.
+                    if ctl is not None:
+                        _d_tj_lim = ctl.step(em, it=len(history), phase="limit")
+                        history[-1]["T_junction_c"] = round(float(ctl.t_j_c), 2)
+                        if _d_tj_lim is not None:
+                            history[-1]["d_T_junction_K"] = round(
+                                float(_d_tj_lim), 3)
+                            limited["controller_t_j_residual_K"] = round(
+                                float(_d_tj_lim), 3)
+                        if ctl.solve:
+                            history[-1]["P_inverter_W"] = (
+                                ctl.solve.get("losses") or {}).get("total_W")
+                            history[-1]["eta_wall_to_shaft"] = (
+                                ctl.solve.get("efficiency") or {}).get(
+                                    "wall_to_shaft")
+                    limited["drive_held"] = ("inverter" if ctl is not None
+                                             else "pwm")
                     limited["v_phase_peak_V"] = round(
                         float(inverter["v_phase_peak_V"]), 4)
                     limited["I_phase_rms_solved_A"] = _i_lim
@@ -4814,7 +4917,8 @@ def _run(body: Dict[str, Any],
                             inverter=inverter, i_estimate=i_est,
                             coil_temp_c_guess=_coil_guess,
                             magnet_temp_c_guess=_mag_guess,
-                            limiting_part=part, limit_c=float(lim_c))
+                            limiting_part=part, limit_c=float(lim_c),
+                            controller=ctl)
                     except HTTPException as exc:
                         v = None
                         continuous_rating["verified"] = False
@@ -4884,6 +4988,29 @@ def _run(body: Dict[str, Any],
                                 "bearing_temp_source"),
                             "P_mech_extra_W": _s_v.get("P_mech_extra_W"),
                         })
+                        if ctl is not None:
+                            # The devices were re-solved on THIS pass (see
+                            # `_s1_verify`), so the history row and the
+                            # rating say which T_j / inverter watts go with
+                            # the S1 machine.
+                            history[-1].update({
+                                "I_phase_rms_solved_A": v.get("I_cont_A_rms"),
+                                "T_junction_c": v.get("controller_t_j_c"),
+                                "d_T_junction_K": v.get(
+                                    "controller_t_j_residual_K"),
+                                "P_inverter_W": v.get(
+                                    "controller_P_inverter_W"),
+                            })
+                            continuous_rating["controller"] = {
+                                "t_j_c": v.get("controller_t_j_c"),
+                                "t_j_residual_K": v.get(
+                                    "controller_t_j_residual_K"),
+                                "P_inverter_W": v.get(
+                                    "controller_P_inverter_W"),
+                                "basis": ("the controller re-solved on the S1 "
+                                          "verification pass itself, at its "
+                                          "own current"),
+                            }
                         continuous_rating["record_is_s1"] = True
                         # …AND THE SETPOINT'S OWN "AT THE LIMIT" LINE MUST STOP
                         # CLAIMING TO DESCRIBE THE NUMBERS BELOW IT (owner
@@ -5713,7 +5840,8 @@ def _setpoint_only_limited_line(i_duty: Optional[float],
 def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                inverter: Optional[Dict[str, Any]], i_estimate: float,
                coil_temp_c_guess: float, magnet_temp_c_guess: Optional[float],
-               limiting_part: str, limit_c: float, max_passes: int = 2
+               limiting_part: str, limit_c: float, max_passes: int = 2,
+               controller: Optional["_ControllerLoop"] = None
                ) -> Dict[str, Any]:
     """CONFIRM the S1 network estimate with a real EM pass, at the current
     the estimate found — never trust the network alone.
@@ -5739,6 +5867,21 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
     Never raises: a pass that cannot be solved stops the loop where it is and
     reports the miss against the last pass that DID solve, or — on the very
     first pass — re-raises so the caller can fall back to the estimate.
+
+    ``controller`` — the drive=inverter loop's :class:`_ControllerLoop`
+    (2026-09-25).  Every verification pass is then solved on the
+    CONTROLLER's bridge (device drops, dead time), not the ideal one: the
+    body-diode fit is re-placed at the pass's own current
+    (:meth:`_ControllerLoop.reseed`), the thermal map is that run's OWN
+    per-element loss map (``_pwm_loss_map``, as the loop's passes use —
+    never a lookup keyed on a sine current), and after the map the
+    controller is re-solved on that pass (:meth:`_ControllerLoop.step`), so
+    ``T_j``, the device losses and ``eta_inv`` are re-converged AT the S1
+    current.  ``T_j`` therefore iterates with the verification passes: pass
+    k+1 reads the card at the ``T_j`` pass k's current set, exactly as the
+    loop's own passes do; the last pass's remaining step is the record's
+    ``t_j_residual_K``.  A pass that refuses puts the controller back to
+    the last pass that solved.
     """
     amb = _ccr._num((cooling or {}).get("ambient_temp"))
     if amb is None:
@@ -5764,21 +5907,60 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
             if _ccr._num(inv_at.get("v_phase_peak_V")):
                 inv_at["v_phase_peak_V"] = float(inv_at["v_phase_peak_V"]) * ratio
             inv_at["target_I_phase_rms_A"] = i_now
+        _ctl_st = controller.state() if controller is not None else None
         try:
+            if controller is not None:
+                controller.reseed(i_now)
             em_v = _em_run(body_at, coil_temp_c=coil_temp_c_guess,
-                           magnet_temp_c=magnet_temp_c_guess, inverter=inv_at)
+                           magnet_temp_c=magnet_temp_c_guess, inverter=inv_at,
+                           controller=controller)
+            _map_v, _src_v = None, None
+            if inv_at is not None:
+                # THE RUN'S OWN LOSS MAP, handed over exactly as the loop's
+                # passes hand theirs: a voltage-fed run's map is not findable
+                # by a lookup keyed on a requested sine current.
+                try:
+                    _map_v, _src_v = _pwm_loss_map(
+                        body_at, em_v, inv_at, coil_temp_c=coil_temp_c_guess,
+                        magnet_temp_c=magnet_temp_c_guess,
+                        controller=controller)
+                except _NoLossMap:
+                    em_v = _em_run(body_at, coil_temp_c=coil_temp_c_guess,
+                                   magnet_temp_c=magnet_temp_c_guess,
+                                   inverter=inv_at, controller=controller,
+                                   fresh=True)
+                    try:
+                        _map_v, _src_v = _pwm_loss_map(
+                            body_at, em_v, inv_at,
+                            coil_temp_c=coil_temp_c_guess,
+                            magnet_temp_c=magnet_temp_c_guess,
+                            controller=controller)
+                    except _NoLossMap as _nm:
+                        raise _refuse(
+                            "the S1 verification run left no per-element loss "
+                            "map (%s)" % _nm.reason, ["drive"],
+                            code="pwm_no_loss_map")
             _progress.update(phase="S1 verification %d/%d — thermal"
                                    % (k + 1, max_passes))
-            field_v = _thermal_solve(body_at, cooling,
-                                     coil_temp_c=coil_temp_c_guess,
-                                     magnet_temp_c=magnet_temp_c_guess, rpm=rpm)
+            field_v = _thermal_solve(
+                body_at, cooling, coil_temp_c=coil_temp_c_guess,
+                magnet_temp_c=magnet_temp_c_guess, rpm=rpm,
+                n_steps_per_period=(inv_at["n_steps_per_period"]
+                                    if inv_at is not None else None),
+                em_map=_map_v, em_loss_source=_src_v)
         except HTTPException as exc:
+            if controller is not None:
+                controller.restore(_ctl_st)
             if not last:
                 raise
             last["verified"] = False
             last["note"] = ("pass %d could not be solved (%s) — the last "
                             "verified state stands" % (k + 1, _detail_text(exc)))
             break
+        _d_tj_v = None
+        if controller is not None:
+            # THE DEVICES AT THE S1 CURRENT: re-converged on this pass.
+            _d_tj_v = controller.step(em_v, it=k + 1, phase="s1_verify")
         i_solved = _ccr._num((em_v.get("summary") or {}).get("I_phase_rms_A")) \
             or _ccr._num(em_v.get("I_phase_rms_solved_A")) or i_now
         comp = (field_v.get("components") or {})
@@ -5792,6 +5974,12 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                 "coil_temp_c": coil_temp_c_guess,
                 "magnet_temp_c": magnet_temp_c_guess,
                 "actual_c": actual}
+        if controller is not None:
+            last["controller_t_j_c"] = round(float(controller.t_j_c), 2)
+            last["controller_t_j_residual_K"] = (
+                None if _d_tj_v is None else round(float(_d_tj_v), 3))
+            last["controller_P_inverter_W"] = (
+                (controller.solve or {}).get("losses") or {}).get("total_W")
         if last["verified"] or actual is None or k >= max_passes - 1:
             if actual is None:
                 last["note"] = ("the verification map carries no %s reading, "

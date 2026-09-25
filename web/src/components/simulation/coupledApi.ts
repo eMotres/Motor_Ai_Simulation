@@ -226,7 +226,7 @@ export interface LimitedState {
   /** the duty's OWN cooling — the boundary this answer is conditional on */
   cooling_words?: string;
   point_error_pct?: number | null;
-  drive_held?: 'sine' | 'pwm';
+  drive_held?: 'sine' | 'pwm' | 'inverter';
   /** the block's own one sentence, verbatim */
   line?: string;
   note?: string;

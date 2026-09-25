@@ -144,31 +144,49 @@ class _PreparedHarmonicEddy:
     Matrices and body constraints own their assembled data; no solution, source
     or boundary-value array is retained between frequencies. A changed mesh,
     material, body incidence or boundary-node set needs a new instance.
-    """
-    def __init__(self, p, t, nu_elem, sigma_elem, bodies, dir_nodes):
-        Nn = p.shape[1]
-        B = len(bodies)
-        self.Nn, self.B = Nn, B
-        self.K = assemble_K(p, t, nu_elem).astype(complex)
-        self.M = assemble_Msigma(p, t, sigma_elem).astype(complex)
 
-        # P[:,b] = M · 1_b where 1_b marks nodes touched by body b.
-        Pcols = []
-        S = np.zeros(B, complex)
-        for b in range(B):
-            ind = np.zeros(Nn)
-            ind[np.unique(t[:, bodies[b]].ravel())] = 1.0
-            col = self.M @ ind
-            Pcols.append(col)
-            S[b] = ind @ col                  # 1_bᵀ M 1_b = ∫_b σ dA
-        self.P = np.array(Pcols).T if B else np.zeros((Nn, 0), complex)
-        self.S = S
+    ``cols`` (optional) gives each body's constraint column EXACTLY as the
+    coupled time-domain solve builds it — g_b = σ-mass of body b's OWN
+    elements · 1 (a signed sum for a magnet bisected by the sector cut) — in
+    place of the full σ-mass times a node indicator, which also picks up the
+    σ of a NEIGHBOURING conductor on shared nodes.  ``Pm`` (optional, Nn ×
+    Nr) is the (anti)periodic sector projection: A = Pm·a on the reduced
+    dofs a, the cut ray θ = φ slaved to θ = 0 with the sector sign.
+    """
+    def __init__(self, p, t, nu_elem, sigma_elem, bodies, dir_nodes,
+                 cols=None, Pm=None):
+        Nn = p.shape[1]
+        B = len(bodies) if cols is None else len(cols)
+        self.Nn, self.B = Nn, B
+        K = assemble_K(p, t, nu_elem).astype(complex)
+        M = assemble_Msigma(p, t, sigma_elem).astype(complex)
+        if cols is None:
+            # P[:,b] = M · 1_b where 1_b marks nodes touched by body b.
+            Pcols = []
+            S = np.zeros(B, complex)
+            for b in range(B):
+                ind = np.zeros(Nn)
+                ind[np.unique(t[:, bodies[b]].ravel())] = 1.0
+                col = M @ ind
+                Pcols.append(col)
+                S[b] = ind @ col                  # 1_bᵀ M 1_b = ∫_b σ dA
+            P = np.array(Pcols).T if B else np.zeros((Nn, 0), complex)
+        else:
+            P = (np.array([np.asarray(c[0], float) for c in cols]).T
+                 if B else np.zeros((Nn, 0))).astype(complex)
+            S = np.array([float(c[1]) for c in cols], complex)
+        self.Pm = Pm
+        if Pm is not None:
+            K = (Pm.T @ K @ Pm).tocsr(); M = (Pm.T @ M @ Pm).tocsr()
+            P = np.asarray(Pm.T @ P)
+        self.K, self.M, self.P, self.S = K, M, P, S
+        self.Nr = K.shape[0]
         self.dir_nodes = copy(dir_nodes)
-        self.free = np.ones(Nn + B, bool)
+        self.free = np.ones(self.Nr + B, bool)
         self.free[self.dir_nodes] = False
 
     def solve(self, I_bodies, omega, dir_vals, f_src=None):
-        Nn, B = self.Nn, self.B
+        Nn, B = self.Nr, self.B
         P, S, free = self.P, self.S, self.free
         A_block = self.K + 1j * omega * self.M
 
@@ -180,7 +198,7 @@ class _PreparedHarmonicEddy:
         KK = sp.vstack([top, bot], format="csr").tolil()
         rhs = np.zeros(Nn + B, complex)
         if f_src is not None:
-            rhs[:Nn] = f_src
+            rhs[:Nn] = f_src if self.Pm is None else self.Pm.T @ f_src
         rhs[Nn:] = np.asarray(I_bodies, complex)
 
         # Dirichlet on A (penalty-free: eliminate rows/cols).
@@ -192,7 +210,8 @@ class _PreparedHarmonicEddy:
         sol = spsolve(KKf.tocsc(), rhs[free])
         out = A_full.copy()
         out[free] = sol
-        return out[:Nn], out[Nn:]
+        A = out[:Nn] if self.Pm is None else np.asarray(self.Pm @ out[:Nn])
+        return A, out[Nn:]
 
 
 def eddy_loss_per_body(
@@ -344,6 +363,164 @@ def region_eddy_from_history(
         P += eddy_loss_per_body(p, t, sigma_elem, A, E0, bodies, omega, L)
         used.append(k / period_s)
     return P, used
+
+
+def sector_projection(p: np.ndarray, n_sectors: int, bc_sign: int,
+                      tol: float):
+    """(Pm, keep, slave, master) of the (anti)periodic sector wedge 0 ≤ θ ≤
+    φ = 2π/NS on nodes ``p`` (2, N): every node on the ray θ = φ is slaved to
+    the node on θ = 0 at the same radius, A_slave = s·A_master — the coupled
+    solve's boundary condition.  Raises when a slave has no master."""
+    ns = int(n_sectors)
+    Nn = p.shape[1]
+    phi = 2.0 * math.pi / ns
+    r = np.hypot(p[0], p[1])
+    c, s_ = math.cos(phi), math.sin(phi)
+    d0 = np.where(p[0] > 0.0, np.abs(p[1]), np.inf)
+    along = c * p[0] + s_ * p[1]
+    d1 = np.where(along > 0.0, np.abs(-s_ * p[0] + c * p[1]), np.inf)
+    on0 = np.where(d0 < tol)[0]; on1 = np.where(d1 < tol)[0]
+    if on1.size == 0:
+        return None, np.arange(Nn), np.zeros(0, int), np.zeros(0, int)
+    r0 = r[on0]; o = np.argsort(r0)
+    k = np.searchsorted(r0[o], r[on1])
+    k = np.clip(k, 0, max(len(o) - 1, 0))
+    kl = np.clip(k - 1, 0, max(len(o) - 1, 0))
+    pick = np.where(np.abs(r0[o][kl] - r[on1]) < np.abs(r0[o][k] - r[on1]),
+                    kl, k)
+    master = on0[o][pick]
+    if np.any(np.abs(r[master] - r[on1]) > tol):
+        raise ValueError("sector projection: a node on the ray θ = 2π/NS has "
+                         "no partner on θ = 0 (%d of %d unmatched)"
+                         % (int(np.sum(np.abs(r[master] - r[on1]) > tol)),
+                            int(on1.size)))
+    slave = on1
+    keep = np.setdiff1d(np.arange(Nn), slave)
+    col = np.full(Nn, -1, int); col[keep] = np.arange(keep.size)
+    sg = -1.0 if int(bc_sign) < 0 else 1.0
+    rows = np.concatenate([keep, slave])
+    cols = np.concatenate([col[keep], col[master]])
+    vals = np.concatenate([np.ones(keep.size), np.full(slave.size, sg)])
+    Pm = sp.csr_matrix((vals, (rows, cols)), shape=(Nn, keep.size))
+    return Pm, keep, slave, master
+
+
+def rotor_eddy_solver_bc(
+    p: np.ndarray, t: np.ndarray, tags: np.ndarray, nu_elem: np.ndarray,
+    sigma_of_tag, mag_tags: Sequence[int], shaft_tag: int,
+    A_hist: np.ndarray, period_s: float, L: float, NS: float,
+    n_sectors: int, bc_sign: int,
+    mag_pairs: Sequence[Tuple[int, int]] = (),
+) -> Tuple[float, float, List[float], Dict]:
+    """The frequency-domain rotor eddy loss on the COUPLED SOLVE'S OWN terms
+    (2026-09-25): per-element reluctivity ``nu_elem`` (the solve's converged
+    secant ν, window mean — the frozen-permeability linearisation), and the
+    solve's boundary conditions and body constraints:
+
+    * sector runs: the (anti)periodic cut (``sector_projection``); the shaft
+      (a closed ring, its own image) carries U ≡ 0, no row — as in the
+      coupled solve; full ring: one ∫J = 0 row;
+    * every magnet one ∫J = 0 row, a magnet bisected by the cut ONE row over
+      its two pieces (cut_bodies; ``mag_pairs`` = (tag on θ=0⁺, tag of the
+      image piece)), the image piece carrying s·E0;
+    * constraint columns from each body's OWN σ-mass (never a neighbour's σ
+      on shared nodes).
+
+    It remains a LINEAR (fixed-μ) phasor model: the μ(B) modulation of a
+    saturable conductor — the wall of a steel shaft — is outside it, so on a
+    magnetic shaft the shaft figure is a linear estimate, not a cross-check of
+    the coupled value (docs/EDDY_TIME_INTEGRATION_2026-09-25.md §3).
+    Returns (P_magnet_W, P_shaft_W, freqs_used, info)."""
+    ne = t.shape[1]; Nn = p.shape[1]
+    sig = np.array([float(sigma_of_tag(int(tg))) for tg in tags])
+    cells: Dict[int, np.ndarray] = {}
+    for tg in np.unique(tags):
+        cells[int(tg)] = np.where(tags == int(tg))[0]
+    s = -1.0 if int(bc_sign) < 0 else 1.0
+    paired = {}
+    for a, b in (mag_pairs or ()):
+        if int(a) in cells and int(b) in cells:
+            paired[int(a)] = (int(b), 0); paired[int(b)] = (int(a), 1)
+    # conductor bodies: (group, [(tag, sign)], constrained)
+    groups = []
+    for tg in mag_tags:
+        tg = int(tg)
+        if tg not in cells:
+            continue
+        if tg in paired:
+            if paired[tg][1] == 0:
+                groups.append(("mag", [(tg, 1.0), (paired[tg][0], s)], True))
+            continue
+        groups.append(("mag", [(tg, 1.0)], True))
+    has_shaft = (int(shaft_tag) in cells
+                 and sig[cells[int(shaft_tag)]].max() > 0)
+    full_ring = int(n_sectors) <= 1
+    if has_shaft:
+        groups.append(("shaft", [(int(shaft_tag), 1.0)], bool(full_ring)))
+    info = {"bodies_constrained": sum(1 for g in groups if g[2]),
+            "shaft_u0": bool(has_shaft and not full_ring),
+            "bisected_pairs": len([1 for v in paired.values() if v[1] == 0])}
+    if not groups:
+        return 0.0, 0.0, [], info
+    # per-element sign of E0 and the body each element's E0 comes from
+    e_body = np.full(ne, -1, int); e_sgn = np.zeros(ne)
+    cols = []
+    for gi, (_k, members, con) in enumerate(groups):
+        if not con:
+            continue
+        ci = len(cols)
+        col = np.zeros(Nn); S = 0.0
+        for tg, sg_ in members:
+            w = np.zeros(ne); w[cells[tg]] = sig[cells[tg]]
+            g = np.asarray(assemble_Msigma(p, t, w) @ np.ones(Nn)).ravel()
+            col += sg_ * g; S += float(g.sum())
+            e_body[cells[tg]] = ci; e_sgn[cells[tg]] = sg_
+        cols.append((col, S))
+    r = np.hypot(p[0], p[1]); rmax = float(r.max())
+    bmask = r > 0.985 * rmax
+    Pm = None; red_of = np.arange(Nn)
+    if not full_ring:
+        h = float(np.sqrt(np.min(np.abs(
+            (p[0, t[1]] - p[0, t[0]]) * (p[1, t[2]] - p[1, t[0]])
+            - (p[0, t[2]] - p[0, t[0]]) * (p[1, t[1]] - p[1, t[0]])))))
+        Pm, keep, slave, master = sector_projection(
+            p, int(n_sectors), int(bc_sign), max(1e-9, 1e-4 * h))
+        if Pm is not None:
+            col_of = np.full(Nn, -1, int); col_of[keep] = np.arange(keep.size)
+            red_of = col_of.copy(); red_of[slave] = col_of[master]
+    bnodes = np.where(bmask)[0]
+    brep = bnodes[red_of[bnodes] >= 0]
+    # one representative full node per reduced boundary dof (a slave's value
+    # is s × its master's — the history obeys the BC, so the master speaks)
+    _, first = np.unique(red_of[brep], return_index=True)
+    brep = brep[first]; bred = red_of[brep]
+    area, _, _ = _tri_geom(p, t)
+    Nf = A_hist.shape[0]
+    Ah = np.fft.rfft(A_hist, axis=0) / Nf
+    nyq = Nf // 2 if Nf % 2 == 0 else -1
+    prep = None
+    P_g = {"mag": 0.0, "shaft": 0.0}
+    used: List[float] = []
+    for k in range(1, Ah.shape[0]):
+        a_k = 1.0 if k == nyq else 2.0
+        Abk = a_k * Ah[k]
+        if not np.any(Abk[bnodes]):
+            continue
+        omega = 2.0 * math.pi * k / period_s
+        if prep is None:
+            prep = _PreparedHarmonicEddy(p, t, nu_elem, sig, [], bred,
+                                         cols=cols, Pm=Pm)
+        A, E0 = prep.solve([0.0] * len(cols), omega, Abk[brep])
+        Ael = A[t].mean(axis=0)
+        E0e = (np.where(e_body >= 0, E0[np.maximum(e_body, 0)] * e_sgn, 0.0)
+               if len(cols) else np.zeros(ne))
+        J = sig * (-1j * omega * Ael + E0e)
+        dens = np.abs(J) ** 2 / np.maximum(sig, 1e-30) * area
+        for gname, members, _con in groups:
+            for tg, _sg in members:
+                P_g[gname] += 0.5 * L * float(np.sum(dens[cells[tg]]))
+        used.append(k / period_s)
+    return P_g["mag"] * NS, P_g["shaft"] * NS, used, info
 
 
 def honest_rotor_eddy(

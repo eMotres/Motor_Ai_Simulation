@@ -692,29 +692,85 @@ def char_width_m(xy: np.ndarray) -> float:
     return max(ext)
 
 
+def polygon_char_width_m(xy: np.ndarray) -> float:
+    """``char_width_m`` of a magnet's CAD POLYGON (closed outline, (2, N), m).
+
+    The principal axes are the polygon AREA's second moments (Green's theorem
+    over the outline), not the covariance of a point cloud: a point cloud's
+    axes follow wherever its points are dense, so the same magnet read
+    through two meshes gave two widths (32.548 vs 32.724 mm on the L155, i.e.
+    the reported magnet loss moved −0.96 % while the solved 2-D loss moved
+    +0.03 %; docs/CONDUCTIVE_BODY_MESH_CONVERGENCE_2026-09-24.md §7.3).  The
+    extent along each axis is the outline's own (its vertices are the extreme
+    points of a polygon), so the width is a property of the CAD alone.
+    """
+    P = np.asarray(xy, float)
+    if P.ndim != 2 or P.shape[0] != 2 or P.shape[1] < 3:
+        return 0.0
+    if np.allclose(P[:, 0], P[:, -1]):
+        P = P[:, :-1]                       # drop the closing vertex
+    x, y = P[0], P[1]
+    x1, y1 = np.roll(x, -1), np.roll(y, -1)
+    cr = x * y1 - x1 * y
+    A = 0.5 * float(np.sum(cr))
+    if abs(A) <= 0.0:
+        return char_width_m(P)
+    cx = float(np.sum((x + x1) * cr)) / (6.0 * A)
+    cy = float(np.sum((y + y1) * cr)) / (6.0 * A)
+    # second moments about the origin, then the parallel-axis shift
+    Ixx = float(np.sum((y * y + y * y1 + y1 * y1) * cr)) / 12.0 - A * cy * cy
+    Iyy = float(np.sum((x * x + x * x1 + x1 * x1) * cr)) / 12.0 - A * cx * cx
+    Ixy = (float(np.sum((x * y1 + 2 * x * y + 2 * x1 * y1 + x1 * y) * cr))
+           / 24.0 - A * cx * cy)
+    # covariance of the AREA: [[∫x², ∫xy], [∫xy, ∫y²]] (sign of A cancels)
+    C = np.array([[Iyy, Ixy], [Ixy, Ixx]]) * np.sign(A)
+    _, V = np.linalg.eigh(C)
+    Q = P - np.array([[cx], [cy]])
+    return max(float(np.ptp(V[:, i] @ Q)) for i in (0, 1))
+
+
 def magnet_segmentation(geo: dict, points_by_body: Sequence[np.ndarray],
-                        stack_length_m: float) -> Tuple[float, dict]:
+                        stack_length_m: float,
+                        polygons_by_body: Optional[Sequence] = None
+                        ) -> Tuple[float, dict]:
     """(factor, report) for the whole magnet set — the solver's one entry point.
 
-    ``points_by_body`` is one (2, N) point cloud per magnet body (mesh nodes of
-    that body's elements, in metres).  Each body gets its OWN width and its own
-    factor; the returned factor is their AREA-BLIND arithmetic mean, because the
-    per-body loss split is not exposed by either eddy route and every magnet on
-    a symmetric rotor is the same block anyway.  The report carries the spread,
-    so a rotor with genuinely different magnets says so instead of hiding behind
-    a mean.
+    ``polygons_by_body`` is one CAD outline per magnet body ((2, N), metres, or
+    None where the body could not be matched to one); ``points_by_body`` is the
+    same body's mesh-node cloud, used ONLY for a body without an outline and
+    said so in the report (``width_source``).  The outline makes the width a
+    property of the geometry, not of the mesh (``polygon_char_width_m``).  Each
+    body gets its OWN width and its own factor; the returned factor is their
+    AREA-BLIND arithmetic mean, because the per-body loss split is not exposed
+    by either eddy route and every magnet on a symmetric rotor is the same
+    block anyway.  The report carries the spread, so a rotor with genuinely
+    different magnets says so instead of hiding behind a mean.
 
     ``report`` is what the result dict and the card's tooltip quote: ``slice_mm``,
     ``width_mm`` (mean), ``width_min_mm``/``width_max_mm``, ``factor``,
-    ``n_bodies``, and ``model``.
+    ``n_bodies``, ``width_source`` and ``model``.
     """
     slice_mm = float(geo.get("magnet_lamination", 0.0) or 0.0)
     L_mm = float(stack_length_m) * 1e3
-    widths = [char_width_m(P) * 1e3 for P in (points_by_body or [])]
+    _pts = list(points_by_body or [])
+    _pol = list(polygons_by_body or [])
+    widths, n_cad = [], 0
+    for _i, P in enumerate(_pts if _pts else [None] * len(_pol)):
+        _pg = _pol[_i] if _i < len(_pol) else None
+        if _pg is not None:
+            w = polygon_char_width_m(_pg) * 1e3
+            if w > 0.0:
+                widths.append(w); n_cad += 1
+                continue
+        if P is not None:
+            widths.append(char_width_m(P) * 1e3)
     widths = [w for w in widths if w > 0.0]
     rep = {"slice_mm": slice_mm, "stack_mm": round(L_mm, 4),
            "n_bodies": len(widths), "factor": 1.0,
            "width_mm": 0.0, "width_min_mm": 0.0, "width_max_mm": 0.0,
+           "width_source": ("cad_polygon" if widths and n_cad == len(widths)
+                            else "mesh_nodes" if not n_cad
+                            else "cad_polygon+mesh_nodes"),
            "model": ("Russell-Norsworthy axial segmentation, normalised to the "
                      "solid stack — MODEL, pending 3-D validation")}
     if not widths:

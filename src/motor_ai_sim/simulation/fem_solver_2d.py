@@ -2784,6 +2784,12 @@ def _warm_cache_load(disk_only: bool = False) -> Optional[dict]:
             # per-group same-angle reference (2026-09-24); optional
             wc["solid_grp"] = {_fk[len("solid_grp_"):]: np.asarray(z[_fk], float)
                                for _fk in _f if _fk.startswith("solid_grp_")}
+            # eddy time scheme (2026-09-25): only a BDF2 state carries the key
+            # and its second history level; an older mirror is backward Euler
+            if "ts" in _f:
+                wc["meta"]["ts"] = str(z["ts"])
+            if "A2" in _f:
+                wc["A2"] = z["A2"]
         return wc
     except Exception:
         return None
@@ -2799,6 +2805,10 @@ def _warm_cache_store(wc: dict) -> None:
                   if wc.get(_k) is not None}
         for _gk, _gv in (wc.get("solid_grp") or {}).items():
             _extra["solid_grp_" + str(_gk)] = np.asarray(_gv, float)
+        if m.get("ts"):
+            _extra["ts"] = str(m["ts"])
+        if wc.get("A2") is not None:
+            _extra["A2"] = wc["A2"]
         np.savez(tmp, doflocs=wc["doflocs"], A=wc["A"], Ued=wc["Ued"],
                  solid=wc["solid"],
                  nspp=m["nspp"], npd=m["npd"], conn=m["conn"], temp=m["temp"],
@@ -2848,9 +2858,12 @@ def _warm_cache_meta() -> Optional[dict]:
             return None
         with np.load(p, allow_pickle=False) as z:
             _f = set(z.files)
-            return {"meta": {"nspp": int(z["nspp"]), "npd": float(z["npd"]),
-                             "conn": str(z["conn"]), "temp": float(z["temp"]),
-                             "mscale": float(z["mscale"])},
+            _mt = {"nspp": int(z["nspp"]), "npd": float(z["npd"]),
+                   "conn": str(z["conn"]), "temp": float(z["temp"]),
+                   "mscale": float(z["mscale"])}
+            if "ts" in _f:
+                _mt["ts"] = str(z["ts"])
+            return {"meta": _mt,
                     "I": float(z["I"]), "rpm": float(z["rpm"]),
                     "gam": float(z["gam"]),
                     "geo_fp": (str(z["geo_fp"]) if "geo_fp" in _f else ""),
@@ -4912,6 +4925,12 @@ def fem_transient_sliding_band(
               "conn": "np%d" % int(n_parallel),
               "temp": round(float(coil_temp_c), 1),
               "mscale": float(magnet_scale)}
+    # The eddy TIME SCHEME is part of the discretisation too: a backward-Euler
+    # state (and its same-angle loss reference, ~10 % lower on the L155
+    # magnets) is not the BDF2 orbit.  Only the BDF2 key carries it, so a
+    # backward-Euler run (SB_EDDY_BE=1) reads and writes exactly the old key.
+    if bool(eddy) and _os_sb.environ.get("SB_EDDY_BE") != "1":
+        _wmeta["ts"] = "bdf2"
     # Loaded ONLY on the path that can use it (coupled eddy, current drive) —
     # the mirror holds the whole A vector, and reading megabytes on a
     # magnetostatic or voltage run that will never consume them is work for
@@ -5490,8 +5509,50 @@ def fem_transient_sliding_band(
     #
     # Assembled on the SAME stitched mesh as the field (stator elements
     # 0…nst−1, rotor elements +nst), so no interpolation ever enters.
+    def _bisected_magnet_pairs(mag_items):
+        """[(tag on θ=0⁺, tag of the image piece)], info — the magnets the
+        sector cut bisects (simulation/cut_bodies.py).  ``mag_items`` =
+        [(tag, rotor-local element ids)].  A piece counts only when the mesh
+        holds LESS than its CAD outline and it has a partner with the same
+        cut-face radii on the other ray; failure → no pairs, said loudly."""
+        if _full_ring or not mag_items:
+            return [], {"pairs": 0}
+        try:
+            from motor_ai_sim.simulation.cut_bodies import (
+                pair_bisected_bodies as _pair_cut,
+                match_outlines as _match_ol2, meshed_area_m2 as _mA2)
+            _rp_c = np.asarray(half["r"]["mesh"].p, float)
+            _rt_c = np.asarray(half["r"]["mesh"].t, int)
+            _loc_c = [np.asarray(_e, int) for _t, _e in mag_items]
+            _ol_c = _match_ol2(
+                _rp_c, _rt_c, _loc_c,
+                [mp for mp, _pl in (polys.get("magnets") or [])],
+                tags=[_t for _t, _e in mag_items], tag_base=int(DOM_MAG_BASE))
+            _part_c = [(_g is None) or (_mA2(_rp_c, _rt_c, _e)
+                                        < 0.99 * float(_g.area) * 1e-6)
+                       for _g, _e in zip(_ol_c, _loc_c)]
+            _pairs_c, _inf = _pair_cut(_rp_c, _rt_c, _loc_c, int(NS), 1e-6,
+                                       is_partial=_part_c)
+            _pt = [(int(mag_items[_i][0]), int(mag_items[_j][0]))
+                   for _i, _j in _pairs_c]
+            _inf = dict(_inf, pairs=len(_pt), pair_tags=_pt,
+                        unpaired=[int(mag_items[_u][0])
+                                  for _u in _inf.get("unpaired", [])])
+            if _pt or _inf["unpaired"]:
+                log.info("magnets bisected by the sector cut: %d pair(s) %s, "
+                         "image sign %+d; unpaired cut-touching bodies %s "
+                         "(own row)", len(_pt), _pt, int(_bc_sign),
+                         _inf["unpaired"])
+            return _pt, _inf
+        except Exception as _e_cut:        # noqa: BLE001 — loud
+            log.warning("bisected-magnet pairing failed (%s: %s) — every "
+                        "magnet gets its own ∫J=0 row",
+                        type(_e_cut).__name__, _e_cut)
+            return [], {"pairs": 0, "error": str(_e_cut)}
+
     _ed_con = []             # constrained bodies: dicts(key, tag, g, S, …)
     _ed_paths = None         # series strand paths (strand_bonding="series")
+    _cut_info = None         # magnets bisected by the sector cut (cut_bodies)
     _Msig2 = _csr((N2, N2))  # Σ σ·∫u·v over ALL conductors (backward-Euler term)
     _Msig_grp = {}           # loss split: "cu" / "mag" / "shaft" → σ-mass block
     _Msd2 = _csr((N2, N2))   # Msig/dt
@@ -5517,17 +5578,42 @@ def fem_transient_sliding_band(
                      else "sleeve" if int(_tg) == int(DOM_SLEEVE) else "mag",
                      int(_tg), np.asarray(_ix, int) + nst, _sg))
         _n_free_b = 0
+        # ── MAGNETS BISECTED BY THE SECTOR CUT: one row per PHYSICAL magnet ──
+        # (simulation/cut_bodies.py).  The two meshed pieces of a cut magnet —
+        # its 0⁺ piece and the image of its other piece below θ = 2π/NS —
+        # share ONE U (the image carrying s·U) and ONE net-current row with
+        # g = g_0 + s·g_φ, S = S_0 + S_φ.  This replaces "U ≡ 0 on both halves",
+        # which fixed U instead of the net current and was exact only for a
+        # closed ring (2026-09-25; no catalogue machine has a cut magnet).
+        # Every magnet that is NOT a paired piece — the interior ones, and a
+        # piece whose partner cannot be found — carries its own ∫J = 0 row.
+        _cut_pair_of: Dict[int, Tuple[int, int]] = {}
+        _cut_info = {"pairs": 0}
+        _mag_b = [(_tg, _ids) for _ky, _tg, _ids, _sg in _bodies if _ky == "mag"]
+        if _mag_b and not _full_ring:
+            _pairs_t, _cut_info = _bisected_magnet_pairs(
+                [(_tg, np.asarray(_ids, int) - nst) for _tg, _ids in _mag_b])
+            for _ta, _tb in _pairs_t:
+                _cut_pair_of[int(_ta)] = (int(_tb), 0)
+                _cut_pair_of[int(_tb)] = (int(_ta), 1)
+        _n_old_half = sum(1 for _tg, _ids in _mag_b if _tg not in _int_mag)
+        if _n_old_half and _n_old_half != 2 * len(
+                [1 for _v in _cut_pair_of.values() if _v[1] == 0]):
+            log.warning("P2 eddy: the area rule calls %d magnet(s) 'edge "
+                        "halves' but the cut-geometry test paired %d piece(s) — "
+                        "the geometry test decides", _n_old_half,
+                        len(_cut_pair_of))
+        _pair_gs: Dict[int, Tuple[Any, float]] = {}
         for _ky, _tg, _ids, _sg in _bodies:
             _Mb = (asm(_massform, Basis(mesh_all, _P2E(), elements=_ids))
                    * float(_sg)).tocsr()
             _Msig2 = _Msig2 + _Mb
             _Msig_grp[_ky] = (_Mb if _ky not in _Msig_grp
                               else _Msig_grp[_ky] + _Mb)
-            # U ≡ 0 bodies: cut by the anti-periodic boundary (their image
-            # cancels the net current identically) — no constraint row.
-            if _ky == "mag" and _tg not in _int_mag:
-                _n_free_b += 1
-                continue
+            if _ky == "mag" and int(_tg) in _cut_pair_of:
+                _g_c = np.asarray(_Mb @ _ones_e).ravel()
+                _pair_gs[int(_tg)] = (_g_c, float(_g_c.sum()))
+                continue                 # its row is the pair's, below
             if _ky in ("shaft", "sleeve") and not _full_ring:
                 # Cut by the anti-periodic boundary: the image half carries the
                 # equal and opposite current, so the net axial current of the
@@ -5546,6 +5632,20 @@ def fem_transient_sliding_band(
                 "slot": (int(_cm.get("slot", -1)) if _cm else -1),
                 "coil": (int(_cm.get("coil", -1)) if _cm else -1),
             })
+        # the bisected magnets' rows: one per physical magnet
+        from motor_ai_sim.simulation.cut_bodies import (
+            merge_pair_constraint as _merge_cut)
+        for _t0, (_t1, _role) in sorted(_cut_pair_of.items()):
+            if _role != 0:
+                continue
+            _g_m, _S_m = _merge_cut(_pair_gs[_t0][0], _pair_gs[_t0][1],
+                                    _pair_gs[_t1][0], _pair_gs[_t1][1],
+                                    int(_bc_sign))
+            _ed_con.append({
+                "key": "mag", "tag": _t0, "tags": [_t0, _t1],
+                "signs": [1.0, (-1.0 if int(_bc_sign) < 0 else 1.0)],
+                "g": _g_m, "S": _S_m, "Iunit": 0.0, "phase": None,
+                "slot": -1, "coil": -1})
 
         # ── STRANDS IN HAND: one U per GROUP, not per strand ───────────────
         # Each conductor above carries its own ∫J = I row, which is the
@@ -5707,6 +5807,8 @@ def fem_transient_sliding_band(
                           format="csr")
             _Sdt2 = np.array([c["S"] for c in _ed_con], float) * dt
         _Msd2 = (_Msig2 * (1.0 / dt)).tocsr()
+        # per-constraint S_b = ∫σ dΩ (the midpoint loss sampling reads it)
+        _S_con = np.array([c["S"] for c in _ed_con], float)
         log.info("P2 eddy: %d constrained bodies (%d copper wires, %d rotor "
                  "∫J=0), %d U=0 cut bodies | σ_cu=%.3g σ_mag=%.3g "
                  "σ_shaft=%.3g S/m",
@@ -5752,6 +5854,14 @@ def fem_transient_sliding_band(
         # NB `_t` is this module's alias for `time` — never a loop variable here.
         _ed_uloc = [np.concatenate([_ed_loc_by_tag[int(_tg_i)]
                                     for _tg_i in _c.get("tags", [_c["tag"]])])
+                    for _c in _ed_con]
+        # …and the sign U takes there: +1, except on the image piece of a
+        # magnet bisected by the sector cut, which carries s·U (cut_bodies).
+        _ed_usgn = [np.concatenate([
+            np.full(_ed_loc_by_tag[int(_tg_i)].size, float(_sg_i))
+            for _tg_i, _sg_i in zip(_c.get("tags", [_c["tag"]]),
+                                    _c.get("signs", [1.0] * len(
+                                        _c.get("tags", [_c["tag"]]))))])
                     for _c in _ed_con]
         _ed_gmask = {_k: (_ed_key_e == _k)
                      for _k in ("cu", "mag", "shaft", "sleeve")}
@@ -6073,6 +6183,10 @@ def fem_transient_sliding_band(
     # converged field A and ν (a near-perfect Newton initial guess).
     _use_newton = (_os_sb.environ.get("SB_NO_NEWTON") != "1")
     _A2_prev = None; _nu_conv2 = None
+    # Window-mean element ν of the ROTOR over the reported frames: the frozen
+    # permeability the frequency-domain rotor route linearises on (2026-09-25;
+    # it used μ_r = 1 in the shaft and ONE mean μ_r for the back iron).
+    _nu_rot_sum = None; _nu_rot_n = 0
     # ── coupled-eddy state ───────────────────────────────────────────────
     # A_prev starts at ZERO, which is not a field the machine was ever in, so
     # the first step carries a fake ∂A/∂t.  The eddy run therefore gets its own
@@ -6336,6 +6450,45 @@ def fem_transient_sliding_band(
     # inside the discarded settling window; this one just does not spend the
     # first frames unwinding an ∂A/∂t that never happened.
     _Aed_prev = (_Aop.copy() if (eddy and _vdrive) else np.zeros(N2))
+    # ── SECOND-ORDER TIME INTEGRATION OF σ·∂A/∂t (2026-09-25) ────────────────
+    # Backward Euler read every conductive-body loss low at the default 36
+    # steps/period, by O(Δt): L155 rated magnets −10.5 % against the Δt → 0
+    # extrapolation, sleeve −4 %, copper AC −2.5 %, torque ripple 25-30 % low
+    # (docs/CONDUCTIVE_BODY_MESH_CONVERGENCE_2026-09-24.md §7.1).  The eddy term
+    # is now BDF2 on the ACTUAL step sequence (variable-step coefficients, see
+    # p2_drive.bdf2_history): A-stable and stiffly decaying, so the saturating
+    # iron and the algebraic (σ = 0) rows are damped instead of ringing, as
+    # Crank–Nicolson would on them.  A march starts with ONE backward-Euler
+    # step (no second history level yet: cold/static start, voltage initialiser,
+    # cold retry, a step-ratio jump beyond the BDF2 stability bound) and is
+    # BDF2 from the next step on.  Splices (warm-up extension, demag pre-pass)
+    # carry BOTH history levels through the exact pole-pair map, so they stay
+    # continuous in time and second order.  SB_EDDY_BE=1 restores backward
+    # Euler everywhere (bit-for-bit the pre-2026-09-25 march) for A/B.
+    # docs/EDDY_TIME_INTEGRATION_2026-09-25.md.
+    _eddy_bdf2 = bool(eddy) and _os_sb.environ.get("SB_EDDY_BE") != "1"
+    # WHERE THE JOULE LOSS IS SAMPLED.  BDF2's own derivative at t_k over-reads
+    # |∂A/∂t| of an under-resolved harmonic by ~(ωΔt)²/3 (L155 rated magnets
+    # +7 % at 36 steps/period).  The loss is therefore sampled at the step
+    # MIDPOINT t_{k−½}: ∂A/∂t by the centred difference (A_k − A_{k−1})/Δt of
+    # the BDF2 states, U_b from the body's own constraint at that instant
+    # (S_b·U_b = I_b(t_{k−½}) + g_b·∂A/∂t, I_b the mean of the two solved net
+    # currents) — second order, error ~(ωΔt)²/24 on a resistance-limited body,
+    # the same midpoint convention the CN step voltage uses.  The step itself
+    # is unchanged.  SB_EDDY_LOSS_AT=step samples BDF2's own derivative at t_k
+    # (A/B only).  docs/EDDY_TIME_INTEGRATION_2026-09-25.md §1.
+    _ed_loss_mid = (_eddy_bdf2
+                    and _os_sb.environ.get("SB_EDDY_LOSS_AT", "mid") != "step")
+    _Ib_prev = None                # per-constraint net current at t_{k−1}
+    _Ib_prev2 = None               # …and at t_{k−2}
+    _BDF2_MAX_RATIO = 1.8          # variable-step BDF2 zero/A-stability bound
+    _Aed_prev2 = None              # A_{k−2}: None → next step is backward Euler
+    _hed_prev = None               # the step h_{k−1} between A_{k−2} and A_{k−1}
+    _ed_ts = {"scheme": ("bdf2" if _eddy_bdf2 else "backward_euler"),
+              "loss_sampled_at": ("step_midpoint" if _ed_loss_mid
+                                  else "step_end"),
+              "be_steps": 0, "bdf2_steps": 0, "ratio_min": None,
+              "ratio_max": None}
     _Ued = np.zeros(len(_ed_con))         # per-body conductor voltages
     # Cross-run warm seed (see _SB_WARM_CACHE above).  The cached frame is the
     # one at electrical angle ≡ −3 steps, i.e. EXACTLY the one-dt-old history
@@ -6362,6 +6515,7 @@ def fem_transient_sliding_band(
     # settle test then extends the march as it would on any cold run.
     _seed_cold_retry_done = False
     _wc_A = None          # near-final frame stashed for the NEXT run's seed
+    _wc_A2 = None         # …and the one before it (BDF2's second level)
     _wc_Ued = None
     _warm_ref = None      # previous run's per-frame solid loss (same angles)
     _warm_ref_grp: Dict[str, Any] = {}   # …and per conductor group
@@ -6372,6 +6526,13 @@ def fem_transient_sliding_band(
             _widx = _KDT(_wc["doflocs"]).query(
                 np.asarray(b2.doflocs.T, dtype=np.float32), k=1)[1]
             _Aed_prev = np.asarray(_wc["A"], float)[_widx]
+            # BDF2 needs the level before it too; a seed published by a BDF2
+            # run carries it (frame n_total−4), an older one does not → the
+            # first step is backward Euler.
+            if (_eddy_bdf2 and _wc.get("A2") is not None
+                    and len(_wc["A2"]) == len(_wc["A"])):
+                _Aed_prev2 = np.asarray(_wc["A2"], float)[_widx]
+                _hed_prev = float(dt)
             if len(_wc["Ued"]) == len(_ed_con):
                 _Ued = np.asarray(_wc["Ued"], float).copy()
             # SAME-ANGLE REFERENCE — only from a parent at the SAME operating
@@ -6399,6 +6560,7 @@ def fem_transient_sliding_band(
                      ", sweep mode" if _seed_from_previous() else "")
         except Exception as _wce:   # a bad seed must never fail the run
             _warm_seeded = False
+            _Aed_prev2 = None; _hed_prev = None
             log.info("P2 eddy warm cache: seed skipped (%s)", _wce)
     elif eddy and not _vdrive and n_total >= 8:
         log.info("P2 eddy warm cache: COLD start (%s)", _wc_why or "no seed")
@@ -6469,6 +6631,8 @@ def fem_transient_sliding_band(
                 (None if _sat2 else nu_base2), max(int(nonlinear_iterations), 20))
             if _ok_s:
                 _Aed_prev = _A_static.copy()
+                _Aed_prev2 = None; _hed_prev = None   # first step: BE
+                _Ib_prev = None; _Ib_prev2 = None
                 _A2_prev = _A_static.copy()
                 _nu_conv2 = _nu_s.copy()
                 _static_seed_info = {"frame": _ks, "converged": True}
@@ -6680,6 +6844,21 @@ def fem_transient_sliding_band(
         # is monotone and self-arresting — a weaker magnet makes a weaker
         # demagnetising field — so this settles in a few passes; the cap is a
         # backstop, not a schedule.
+        # The eddy step of THIS frame: the rotor-time Δt_k under voltage drive
+        # (see p2_drive.ve_newton), the nominal dt otherwise — and the history
+        # it is taken against (backward Euler or BDF2, see _eddy_bdf2).
+        _h_ed = float(_dt_k if _vdrive else dt)
+
+        def _ed_history():
+            """(A_hist, Δt_eff or None, scheme) for this frame's eddy step."""
+            if (_eddy_bdf2 and _Aed_prev2 is not None and _hed_prev
+                    and 0.0 < _h_ed / _hed_prev <= _BDF2_MAX_RATIO):
+                _dte_b, _Ah_b = _P2Drive.bdf2_history(
+                    _h_ed, _hed_prev, _Aed_prev, _Aed_prev2)
+                return _Ah_b, _dte_b, "bdf2"
+            # backward Euler: current drive keeps the construction operators
+            # (dte None → the identical objects), voltage drive its Δt_k
+            return _Aed_prev, (_h_ed if _vdrive else None), "be"
         _dm_pass = 0
         while True:
             _res = 0.0; _nit = 0; _newton_ok = False
@@ -6699,9 +6878,10 @@ def fem_transient_sliding_band(
                 _I_vec = np.array(
                     [Ist[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
                      for c in _ed_con], float)
+                _Ahist, _dte, _ts_k = _ed_history()
                 (_eok, A2, _Ued, _res, _nit) = _drv.eddy_solve(
-                    Pro, _free2, _A_start, _Ued, _I_vec, _Aed_prev,
-                    _nu_fix, max(int(nonlinear_iterations), 20))
+                    Pro, _free2, _A_start, _Ued, _I_vec, _Ahist,
+                    _nu_fix, max(int(nonlinear_iterations), 20), dte=_dte)
                 if not _eok and k < 0 and _warm_seeded and not _seed_cold_retry_done:
                     # The seeded start (projected from another geometry /
                     # operating point) did not converge on a WARM-UP frame:
@@ -6716,6 +6896,7 @@ def fem_transient_sliding_band(
                     _warm_ref = None
                     _warm_ref_grp = {}
                     _Aed_prev = np.zeros(N2)
+                    _Aed_prev2 = None; _hed_prev = None; _Ib_prev = None; _Ib_prev2 = None
                     _Ued = np.zeros(len(_ed_con))
                     continue
                 if not _eok:
@@ -6753,11 +6934,12 @@ def fem_transient_sliding_band(
                 # fallback: the magnetostatic Picard solves different physics
                 # and the current-drive eddy solve ignores the circuit, so
                 # either one would report a different machine as this run.
+                _Ahist, _dte, _ts_k = _ed_history()
                 (_eok, A2, _Ued, _viA, _viB, _res, _nit,
                  _vrc) = _drv.ve_newton(
                     Pro, _free2, _A_start, _Ued, (Ist['A'], Ist['B']),
-                    _Aed_prev, _Vt, _dt_k, _iv_prev, _psi_prev,
-                    _nu_fix, max(int(nonlinear_iterations), 25))
+                    _Ahist, _Vt, _dt_k, _iv_prev, _psi_prev,
+                    _nu_fix, max(int(nonlinear_iterations), 25), dte=_dte)
                 if not _eok:
                     raise RuntimeError(
                         f"P2 coupled eddy + voltage drive: bordered (A, U, i) "
@@ -7044,12 +7226,60 @@ def fem_transient_sliding_band(
             # under voltage drive (see p2_drive.ve_newton), the nominal dt otherwise.
             # Dividing by a different Δt than the solve used would put the
             # slip-node sawtooth straight into E = −∂A/∂t + U.
-            _dt_e = _dt_k if _vdrive else dt
-            _dAe = (A2 - _Aed_prev) * (1.0 / _dt_e)       # ∂A/∂t [V/m]
+            # …and the SAME derivative the step solved: backward Euler
+            # (A_k − A_{k−1})/Δt, or BDF2 (A_k − A_hist)/Δt_eff.
+            _dt_e = (_dte if _dte is not None
+                     else (_dt_k if _vdrive else dt))
+            _dAe = (A2 - _Ahist) * (1.0 / _dt_e)          # ∂A/∂t [V/m]
+            if _ts_k == "bdf2":
+                _ed_ts["bdf2_steps"] += 1
+                _w_k = _h_ed / _hed_prev
+                _ed_ts["ratio_min"] = (_w_k if _ed_ts["ratio_min"] is None
+                                       else min(_ed_ts["ratio_min"], _w_k))
+                _ed_ts["ratio_max"] = (_w_k if _ed_ts["ratio_max"] is None
+                                       else max(_ed_ts["ratio_max"], _w_k))
+            else:
+                _ed_ts["be_steps"] += 1
+            # net current of every constrained body at t_k, from its own row
+            # (S_b·U_b − g_b·∂A/∂t — imposed, path or ∫J = 0 alike)
+            # …and the imposed (transposed) wire currents the 2-D DC
+            # reference below bills
+            _Ib_k = (_S_con * np.asarray(_Ued, float)
+                     - np.asarray(_G2.T @ _dAe).ravel(),
+                     np.array([Ist[c["phase"]] * c["Iunit"]
+                               if c["key"] == "cu" else 0.0
+                               for c in _ed_con], float))
+            _Uev = _Ued                  # the U the loss is evaluated with
+            _Idc_e = _Ib_k[1]            # the currents the DC reference bills
+            if _ed_loss_mid and _ts_k == "bdf2" and _Ib_prev is not None:
+                _dAe = (A2 - _Aed_prev) * (1.0 / _h_ed)   # centred at t_{k−½}
+                # the net currents AT t_{k−½}: quadratic through the last three
+                # levels (3/8, 6/8, −1/8 on a uniform step — third order; the
+                # two-point mean would read I² low by cos²(ωΔt/2), −6.7 % at
+                # 12 steps), the two-point mean only on the first step
+                if _Ib_prev2 is not None and _hed_prev:
+                    _Imid = [None, None]
+                    for _jq in (0, 1):
+                        # Lagrange weights at t = t_k − h/2 through
+                        # t_k, t_{k−1} = t_k − h, t_{k−2} = t_k − h − h_prev
+                        _h1 = _h_ed; _h2 = _h_ed + _hed_prev; _x = 0.5 * _h_ed
+                        _l0 = (_x - _h1) * (_x - _h2) / (_h1 * _h2)
+                        _l1 = _x * (_x - _h2) / (_h1 * (_h1 - _h2))
+                        _l2 = _x * (_x - _h1) / (_h2 * (_h2 - _h1))
+                        _Imid[_jq] = (_l0 * _Ib_k[_jq] + _l1 * _Ib_prev[_jq]
+                                      + _l2 * _Ib_prev2[_jq])
+                else:
+                    _Imid = [0.5 * (_Ib_k[0] + _Ib_prev[0]),
+                             0.5 * (_Ib_k[1] + _Ib_prev[1])]
+                _Uev = ((_Imid[0] + np.asarray(_G2.T @ _dAe).ravel())
+                        / np.maximum(_S_con, 1e-300))
+                _Idc_e = _Imid[1]
+                _ed_ts["loss_midpoint_steps"] = _ed_ts.get(
+                    "loss_midpoint_steps", 0) + 1
             _pg = {_kk: float(_dAe @ (_Mg @ _dAe))
                    for _kk, _Mg in _Msig_grp.items()}
             for _ci, _c in enumerate(_ed_con):
-                _u = float(_Ued[_ci])
+                _u = float(_Uev[_ci])
                 _pg[_c["key"]] += _u * (_u * _c["S"]
                                         - 2.0 * float(_c["g"] @ _dAe))
             _wsc = float(NS) * float(p.stack_length)   # sector·2-D → machine
@@ -7294,6 +7524,13 @@ def fem_transient_sliding_band(
                         else:
                             _fseq[_fi:_fi] = list(range(-_eddy_cap, 0))
                         _dm_moved_in_warm = False   # a fresh window judges fresh
+                        # BOTH history levels cross the period (BDF2 needs
+                        # A_{k−2} too): the frame before this one, shifted,
+                        # is the level before the spliced march's first step.
+                        if _eddy_bdf2:
+                            _Aed_prev2 = _period_shift(_Aed_prev)
+                            _hed_prev = _h_ed
+                        _Ib_prev2 = _Ib_prev; _Ib_prev = _Ib_k        # stator currents; rotor ∫J=0
                         _Aed_prev = _period_shift(A2)
                         _A2_prev = _period_shift(A2)
                         log.info("P2 eddy warm-up: not settled — extending by "
@@ -7358,14 +7595,22 @@ def fem_transient_sliding_band(
                                     list(range(-_dm_pre_len + 1, 0)) + [0])
                             else:
                                 _fseq[_fi:_fi] = list(range(-_dm_pre_len, 0))
+                            if _eddy_bdf2:           # both levels, as above
+                                _Aed_prev2 = _period_shift(_Aed_prev)
+                                _hed_prev = _h_ed
+                            _Ib_prev2 = _Ib_prev; _Ib_prev = _Ib_k
                             _Aed_prev = _period_shift(A2)
                             _A2_prev = _period_shift(A2)
                         elif k >= 0:
                             # Seeded magnet, no pre-pass: re-solve THIS frame
                             # with the ratchet on, from the SAME history it was
-                            # just solved from (`_Aed_prev` is untouched).
+                            # just solved from (`_Aed_prev`, `_Aed_prev2` are
+                            # untouched).
                             _fseq[_fi:_fi] = [0]
                         else:
+                            if _eddy_bdf2:
+                                _Aed_prev2 = _Aed_prev; _hed_prev = _h_ed
+                            _Ib_prev2 = _Ib_prev; _Ib_prev = _Ib_k
                             _Aed_prev = A2.copy()   # plain continuation
                         log.info(
                             "P2 demag %s: %d frame(s) at θ<0 with the Br "
@@ -7386,12 +7631,18 @@ def fem_transient_sliding_band(
             if return_field and _ed_elems.size and k >= 0:
                 _Uel = np.zeros(_ed_elems.size)
                 for _ci, _c in enumerate(_ed_con):
-                    _Uel[_ed_uloc[_ci]] = float(_Ued[_ci])
+                    _Uel[_ed_uloc[_ci]] = float(_Uev[_ci]) * _ed_usgn[_ci]
                 _Eq = -np.asarray(_ed_basis.interpolate(_dAe)) + _Uel[:, None]
                 _ed_dens_hist.append(
                     _ed_sig_e * np.sum(_Eq ** 2 * _ed_dx, axis=1)
                     / np.maximum(_ed_area, 1e-30))
+            if _eddy_bdf2:
+                _Aed_prev2 = _Aed_prev; _hed_prev = _h_ed
+            _Ib_prev2 = _Ib_prev; _Ib_prev = _Ib_k
             _Aed_prev = A2.copy()
+            if (_eddy_bdf2 and not _vdrive and k == n_total - 4
+                    and n_total >= 8 and not _warm_cache_disabled()):
+                _wc_A2 = A2.astype(float, copy=True)   # the seed's A_{k−2}
             if (eddy and not _vdrive and k == n_total - 3 and n_total >= 8
                     and not _warm_cache_disabled()):
                 # Stash this frame (angle ≡ −3 steps) for the NEXT run's seed;
@@ -7409,9 +7660,12 @@ def fem_transient_sliding_band(
                 # gives U_b = I_b/S_b and P = ΣI_b²/S_b — the 2-D (active
                 # length only) I²R, so total − this is the honest AC increment
                 # to add to the end-winding-corrected DC below.
+                # (at the instant the loss was sampled — the step midpoint
+                # under BDF2, so total − DC stays the AC increment)
                 _ed_dc2d.append(float(np.sum(
-                    [(Ist[c["phase"]] * c["Iunit"]) ** 2 / max(c["S"], 1e-30)
-                     for c in _ed_con if c["key"] == "cu"])) * _wsc)
+                    [_Idc_e[_ci] ** 2 / max(c["S"], 1e-30)
+                     for _ci, c in enumerate(_ed_con)
+                     if c["key"] == "cu"])) * _wsc)
         if k < 0:
             if k == -1:
                 # The frame solved immediately before frame 0 (eddy warm-up /
@@ -7463,6 +7717,11 @@ def fem_transient_sliding_band(
                                 "(%s: %s)", k, type(_vw_exc).__name__, _vw_exc)
         _T_vw.append(_vw_torque)
         _T_vw_reason.append(_vw_reason)
+        if k >= int(_vskip) + int(_dmskip):
+            _nu_r_k = np.asarray(nu_all2, float)[nst:]
+            _nu_rot_sum = (_nu_r_k.copy() if _nu_rot_sum is None
+                           else _nu_rot_sum + _nu_r_k)
+            _nu_rot_n += 1
         Tq = _torque2(A2) * NS
         _T2.append(Tq)
         _pa, _pb, _pc = _psi2(A2)
@@ -7768,8 +8027,10 @@ def fem_transient_sliding_band(
                     _elm[_tg] = _ids
                     _sig_n[_bdofs(_ids)] = _sg
                 for _ci, _c in enumerate(_ed_con):
-                    for _tg_i in _c.get("tags", [_c["tag"]]):
-                        _u_n[_bdofs(_elm[_tg_i])] = float(_Ued[_ci])
+                    _tgs_i = _c.get("tags", [_c["tag"]])
+                    for _tg_i, _sg_i in zip(_tgs_i, _c.get(
+                            "signs", [1.0] * len(_tgs_i))):
+                        _u_n[_bdofs(_elm[_tg_i])] = float(_Uev[_ci]) * _sg_i
                 _snap2["Jeddy"] = (_sig_n * (-_dAe + _u_n))[vdof].copy()
     # ── What the run COST, captured before the settling frames are stripped ──
     # `n_total` is about to be decremented back to the REPORTED window, and both
@@ -8283,6 +8544,7 @@ def fem_transient_sliding_band(
                     "doflocs": np.asarray(b2.doflocs.T,
                                           dtype=np.float32).copy(),
                     "A": _wc_A, "Ued": _wc_Ued,
+                    "A2": _wc_A2,
                     "solid": np.asarray(_solid_ref, float),
                     # per conductor group, for the per-group same-angle test
                     "solid_grp": {_gk: np.asarray(_gl, float) for _gk, _gl in
@@ -8324,11 +8586,37 @@ def fem_transient_sliding_band(
             _rm_seg = half["r"]["mesh"]
             _pt_seg = np.asarray(_rm_seg.p, float)
             _tt_seg = np.asarray(_rm_seg.t, int)
-            _bodies_seg = [_pt_seg[:, np.unique(_tt_seg[:, np.asarray(_e, int)])]
-                           for _tg, _e in half["r"]["cells"].items()
-                           if int(_tg) >= DOM_MAG_BASE and np.size(_e)]
+            _mag_items_seg = [(int(_tg), np.asarray(_e, int))
+                              for _tg, _e in half["r"]["cells"].items()
+                              if int(_tg) >= DOM_MAG_BASE and np.size(_e)]
+            _bodies_seg = [_pt_seg[:, np.unique(_tt_seg[:, _e])]
+                           for _tg, _e in _mag_items_seg]
+            # The loop width comes from the magnet's CAD OUTLINE — the polygon
+            # the mesher tagged this body from — so it is a property of the
+            # geometry, not of where Triangle put the nodes (2026-09-25; the
+            # node cloud moved the reported loss −1 % under remeshing).  A body
+            # is matched to the outline that CONTAINS its area centroid (the
+            # tag index is tried first); a magnet cut by the sector boundary
+            # therefore gets its WHOLE outline, which is the physical block.
+            _polys_seg = []
+            try:
+                from motor_ai_sim.simulation.cut_bodies import (
+                    match_outlines as _match_ol)
+                _ol_seg = _match_ol(
+                    _pt_seg, _tt_seg, [_e for _tg, _e in _mag_items_seg],
+                    [mp for mp, _pl in (polys.get("magnets") or [])],
+                    tags=[_tg for _tg, _e in _mag_items_seg],
+                    tag_base=int(DOM_MAG_BASE))
+                _polys_seg = [None if _g is None else
+                              np.asarray(_g.exterior.coords, float).T * 1e-3
+                              for _g in _ol_seg]
+            except Exception as _e_pl:     # noqa: BLE001 — node fallback, said so
+                log.warning("magnet segmentation: CAD outlines unavailable "
+                            "(%s) — width from the mesh nodes", _e_pl)
+                _polys_seg = []
             _seg_k, _seg_rep = _magnet_segmentation(
-                geo, _bodies_seg, float(p.stack_length))
+                geo, _bodies_seg, float(p.stack_length),
+                polygons_by_body=_polys_seg)
             if _seg_k < 1.0:
                 log.info("magnet segmentation | %.4g mm slices of a %.4g mm "
                          "stack, loop width %.4g mm (%d bodies) -> magnet eddy "
@@ -8353,8 +8641,6 @@ def fem_transient_sliding_band(
                                      if not _histA_rot2 else None)}
     if _histA_rot2:
         try:
-            from motor_ai_sim.simulation.eddy_solver_2d import (
-                honest_rotor_eddy as _hre2)
             _rm = half["r"]["mesh"]
             _hA2 = np.asarray(_histA_rot2, float)
             try:
@@ -8380,22 +8666,60 @@ def fem_transient_sliding_band(
             # Tags + magnet list + mu lookup: shared with P1 (losses.py).
             _tags_r2, _magt2 = _rotor_eddy_tags(
                 half["r"]["cells"], _rm.t.shape[1], DOM_MAG_BASE)
-            # rotor back-iron μ_r from the CONVERGED P2 ν (last frame)
-            _rir = half["r"]["cells"].get(int(DOM_ROTOR))
-            _mur_bi = (1.0 / (MU0 * float(np.mean(
-                nu_all2[np.asarray(_rir, int) + nst])))
-                if _rir is not None and np.size(_rir) else 1000.0)
-            _muf2 = _rotor_mu_lookup(_mur_bi, DOM_MAG_BASE, DOM_ROTOR)
             import time as _time_hre
             _t_hre = _time_hre.time()
-            P_mag_avg2, P_shaft_avg2, _hf2 = _hre2(
+            # ── THE COUPLED SOLVE'S OWN TERMS (2026-09-25) ────────────────
+            # This route used μ_r = 1 in the shaft (losses.rotor_mu_lookup:
+            # "shaft aluminium"), ONE mean μ_r for the whole back iron, a
+            # ∫J = 0 row on the half shaft and Neumann on the cut — none of
+            # which is the machine the coupled solve models, and on the L155
+            # it read 82 W of shaft loss against 3.9 W coupled
+            # (docs/CONDUCTIVE_BODY_MESH_CONVERGENCE_2026-09-24.md §5).  Now:
+            # the window-mean per-element ν the solve converged (frozen
+            # permeability), the (anti)periodic cut, U ≡ 0 on the cut ring,
+            # a bisected magnet as ONE body, each body's own σ-mass.  Still a
+            # LINEAR model: on a saturable shaft its shaft figure is a linear
+            # estimate, not a check of the coupled value — said in the result.
+            _nu_hre = (None if not _nu_rot_n
+                       else np.asarray(_nu_rot_sum, float) / float(_nu_rot_n))
+            if _nu_hre is None or _nu_hre.size != int(_rm.t.shape[1]):
+                _nu_hre = np.asarray(nu_all2, float)[nst:]
+            from motor_ai_sim.simulation.eddy_solver_2d import (
+                rotor_eddy_solver_bc as _hre_bc)
+            _mag_items_h = [(int(_t_h), np.asarray(_e_h, int))
+                            for _t_h, _e_h in half["r"]["cells"].items()
+                            if int(_t_h) in {int(x) for x in _magt2}]
+            _pairs_h, _ = _bisected_magnet_pairs(_mag_items_h)
+            P_mag_avg2, P_shaft_avg2, _hf2, _hre_info = _hre_bc(
                 np.asarray(_rm.p, float), np.asarray(_rm.t, int), _tags_r2,
-                _muf2, _sigma_of_tag, _magt2, DOM_SHAFT,
+                _nu_hre, _sigma_of_tag, _magt2, DOM_SHAFT,
                 _hA2, float(_hA2.shape[0]) * dt,
-                float(p.stack_length), float(NS))
+                float(p.stack_length), float(NS), int(NS), int(_bc_sign),
+                mag_pairs=_pairs_h)
+            # is the shaft a saturable (magnetic) conductor?  then its figure
+            # here is a linear estimate only (no μ(B) modulation)
+            _sh_mag = bool(half["r"]["cells"].get(int(DOM_SHAFT)) is not None
+                           and np.size(half["r"]["cells"][int(DOM_SHAFT)])
+                           and int(DOM_SHAFT) in sat_bh["r"])
+            # …and the field reaching ANY shaft passes the saturating back
+            # iron, whose μ(B) modulation makes rotor-frame harmonics a frozen
+            # μ cannot: measured on the 30 mm fixture's aluminium shaft,
+            # 0.001 W linear against 0.016 W coupled.  So the shaft figure is
+            # a linear estimate whenever the iron in front of it saturates.
+            _bi_sat = bool(int(DOM_ROTOR) in sat_bh["r"])
             _P_rot_eddy_window.update({
                 "n_frames": int(_hA2.shape[0]),
                 "n_harmonics_solved": len(_hf2),
+                "model": ("frequency-domain LINEAR phasor solve on the coupled "
+                          "solve's terms: window-mean per-element secant ν "
+                          "(frozen permeability), (anti)periodic cut, U=0 cut "
+                          "ring, bisected magnets as one body"),
+                "constraints": _hre_info,
+                "shaft_magnetic": _sh_mag,
+                # the linear route omits the μ(B) modulation the coupled
+                # solve carries (in a steel shaft, and in the back iron in
+                # front of any shaft): its shaft figure is not a cross-check
+                "shaft_is_linear_estimate": bool(_sh_mag or _bi_sat),
                 "wall_s": round(_time_hre.time() - _t_hre, 2)})
             P_mag_ser2 = [float(P_mag_avg2)] * n_total
             P_shaft_ser2 = [float(P_shaft_avg2)] * n_total
@@ -8448,9 +8772,13 @@ def fem_transient_sliding_band(
                 P_sleeve_ser2 = list(_ed_sl)
                 P_sleeve_avg2 = float(np.mean(_ed_sl))
             log.info("EDDY-SOLVE(P2) magnet=%.3f shaft=%.3f sleeve=%.4f W vs "
-                     "honest frequency-domain magnet=%.3f shaft=%.3f W",
+                     "frequency-domain LINEAR route magnet=%.3f shaft=%.3f W%s",
                      P_mag_avg2, P_shaft_avg2, P_sleeve_avg2, P_mag_prox_avg2,
-                     P_shaft_prox_avg2)
+                     P_shaft_prox_avg2,
+                     (" (shaft behind saturating iron: its linear figure is an "
+                      "estimate, not a check — no μ(B) modulation)"
+                      if _P_rot_eddy_window.get("shaft_is_linear_estimate")
+                      else ""))
     # The segmentation factor multiplies whichever magnet number is REPORTED —
     # coupled or frequency-domain — and the other one too, because they are two
     # routes to the same physical watts and are read against each other.  The
@@ -9325,6 +9653,13 @@ def fem_transient_sliding_band(
         # residuals, the periods marched and whether the splices carried the
         # eddy state across the period with the pole-pair map.
         "eddy_settle_gauge": (dict(_warm_gauge) if _warm_gauge else None),
+        # how σ·∂A/∂t was integrated in time: "bdf2" (default, 2nd order;
+        # be_steps = the backward-Euler start steps of each march) or
+        # "backward_euler" (SB_EDDY_BE=1).  None without the coupled solve.
+        "eddy_time_scheme": (dict(_ed_ts) if eddy else None),
+        # magnets bisected by the sector cut, paired into one ∫J=0 row each
+        # (simulation/cut_bodies.py); None without the coupled solve
+        "bisected_magnets": _cut_info,
         # the shaft skin-layer mesh spec this run was built with (None = the
         # wall was meshed by the CDT alone: rule off, or no rotor conductors)
         "shaft_skin_layer": _skin_info,

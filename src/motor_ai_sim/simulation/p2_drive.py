@@ -79,6 +79,7 @@ class P2Drive:
         self.Msig = Msig
         self.Msd = Msd
         self.Sdt = Sdt
+        self._ops_cache = None           # (dte, Msig/dte, S·dte) — see eddy_ops
         self.S_raw = None
         self.ed_ca = self.ed_cb = None
         self.pT = self.pQ = self.p_rep = self.p_mask = None
@@ -313,8 +314,9 @@ class P2Drive:
     # ═══════════════════════════════════════════════════════════════════
     #  COUPLED EDDY-CURRENT SOLVE (σ·∂A/∂t) — BORDERED NEWTON, P2
     # ═══════════════════════════════════════════════════════════════════
-    # Backward Euler on the magnetodynamic system, bordered by ONE integral
-    # constraint per current-carrying body:
+    # The magnetodynamic system on one time step, bordered by ONE integral
+    # constraint per current-carrying body (dt = the step's EFFECTIVE Δt and
+    # A_prev its history A_hist — backward Euler or BDF2, see bdf2_history):
     #
     #   [ K(A) + Msig/dt      −G  ] [A]   [ f_mag + (Msig/dt)·A_prev ]
     #   [      −Gᵀ          S·dt  ] [U] = [ dt·I − Gᵀ·A_prev         ]
@@ -392,18 +394,67 @@ class P2Drive:
                 return False, A
         return False, A
 
+    # ═══════════════════════════════════════════════════════════════════
+    #  TIME DISCRETISATION OF σ·∂A/∂t — ONE EFFECTIVE STEP, ONE HISTORY
+    # ═══════════════════════════════════════════════════════════════════
+    # Every scheme used here writes the step's derivative as
+    #
+    #     ∂A/∂t |_k  ≈  (A_k − A_hist) / Δt_eff
+    #
+    # Backward Euler:  Δt_eff = Δt_k,   A_hist = A_{k−1}          (1st order)
+    # BDF2 (variable step, ω = Δt_k/Δt_{k−1}):
+    #     Δt_eff = Δt_k·(1+ω)/(1+2ω)
+    #     A_hist = [(1+ω)²·A_{k−1} − ω²·A_{k−2}] / (1+2ω)          (2nd order)
+    # (ω = 1: Δt_eff = 2Δt/3, A_hist = (4A_{k−1} − A_{k−2})/3.)
+    #
+    # So the bordered system keeps its exact shape — the σ-mass is divided by
+    # Δt_eff, the constraint rows are scaled by Δt_eff, and A_prev becomes
+    # A_hist — and the Joule loss ∫σ(−∂A/∂t + U)² is evaluated with the SAME
+    # derivative the step solved.  The caller (fem_solver_2d) owns the two
+    # history levels and the step ratio; this object only needs Δt_eff.
+    # docs/EDDY_TIME_INTEGRATION_2026-09-25.md.
+    @staticmethod
+    def bdf2_history(h, h_prev, A1, A2):
+        """(Δt_eff, A_hist) of the variable-step BDF2 derivative at a step h
+        whose predecessor was h_prev, with A1 = A_{k−1}, A2 = A_{k−2}."""
+        w = float(h) / float(h_prev)
+        dte = float(h) * (1.0 + w) / (1.0 + 2.0 * w)
+        Ah = ((1.0 + w) ** 2 * np.asarray(A1, float)
+              - w * w * np.asarray(A2, float)) / (1.0 + 2.0 * w)
+        return dte, Ah
+
+    def eddy_ops(self, dte):
+        """(Msig/Δt_eff, S·Δt_eff, Δt_eff) for an effective step.  ``None`` or
+        the construction step returns the matrices built by the caller, so a
+        backward-Euler run uses the identical objects it always did."""
+        if dte is None or float(dte) == float(self.dt):
+            return self.Msd, self.Sdt, self.dt
+        dte = float(dte)
+        c = self._ops_cache
+        if c is None or c[0] != dte:
+            _S = (self.S_raw if self.S_raw is not None
+                  else np.asarray(self.Sdt, float) / float(self.dt))
+            c = (dte, (self.Msig * (1.0 / dte)).tocsr(), _S * dte)
+            self._ops_cache = c
+        return c[1], c[2], dte
+
     def eddy_solve(self, Pro, free, A_start, U_start, I_vec, Aprev, nu_fix,
-                    maxit):
+                    maxit, dte=None):
         """Bordered (A, U) Newton.  Returns (ok, A, U, rrel, nit).
+
+        ``Aprev`` is the step's history A_hist and ``dte`` its effective step
+        Δt_eff (see ``bdf2_history``); ``dte=None`` is backward Euler on the
+        construction step with ``Aprev`` = A_{k−1}.
 
         With series strand paths bound (``strand_bonding="series"``) the system
         is the augmented (A, U, i, W) one described at ``_init_strand_paths``:
         the bodies on a path no longer carry an imposed current, they carry
         their path's unknown one.
         """
+        _Msd, _Sdt, _dt = self.eddy_ops(dte)
         Ae = A_start.copy(); Ue = U_start.copy()
         _Iv = np.asarray(I_vec, float)
-        cr = self.dt * _Iv - np.asarray(self.G.T @ Aprev).ravel()
+        cr = _dt * _Iv - np.asarray(self.G.T @ Aprev).ravel()
         _sp = self.pT is not None
         if _sp:
             # A path body's current is an UNKNOWN: strip the imposed term from
@@ -413,15 +464,15 @@ class P2Drive:
             cr = np.where(self.p_mask,
                           -np.asarray(self.G.T @ Aprev).ravel(), cr)
             _npth = self.pT.shape[1]; _ngr = self.pQ.shape[1]
-            _dtT = (self.pT * self.dt).tocsr()
-            _dtQ = (self.pQ * self.dt).tocsr()
+            _dtT = (self.pT * _dt).tocsr()
+            _dtQ = (self.pQ * _dt).tocsr()
             # coil current = Σ of its paths' TRANSPOSED currents: the same
             # ampere-turns the per-strand rows imposed, redistributed instead
             # of removed.  (Kirchhoff at the joint cannot change the total.)
             _Ig = np.asarray(self.pQ.T @ _Iv[self.p_rep]).ravel()
             _ip = _Iv[self.p_rep].copy()          # transposed start for i
             _Wg = np.zeros(_ngr)
-        rhs_e = self.f_mag + self.Msd @ Aprev
+        rhs_e = self.f_mag + _Msd @ Aprev
         _rf0 = np.asarray(Pro.T @ rhs_e).ravel()[free]
         _bn = max(float(np.linalg.norm(_rf0)), 1e-30)
         # The constraint residual is judged RELATIVE to the size of the
@@ -434,7 +485,7 @@ class P2Drive:
         # iterate below, so the criterion means the same thing at 0 A and at
         # 600 A.
         _cn = max(float(np.linalg.norm(cr)),
-                  float(np.linalg.norm(self.dt * _Iv)),
+                  float(np.linalg.norm(_dt * _Iv)),
                   float(np.linalg.norm(np.asarray(self.G.T @ A_start).ravel())),
                   1e-30)
         Bf = (Pro.T @ self.G).tocsr()[free, :]
@@ -449,27 +500,27 @@ class P2Drive:
             _Pt = Pro.T.tocsr()
             _Pf = Pro.tocsc()[:, free].tocsr()
             _PfT = _Pf.T.tocsr()
-            _Msd_ff = (_PfT @ (self.Msd @ _Pf)).tocsr()
+            _Msd_ff = (_PfT @ (_Msd @ _Pf)).tocsr()
 
         def _res_e(Av, Uv, Km, iv=None, Wv=None):
             if _SB_FAST_LA:
-                _t = Km @ Av + self.Msd @ Av - self.G @ Uv - rhs_e
+                _t = Km @ Av + _Msd @ Av - self.G @ Uv - rhs_e
                 rf = np.asarray(_Pt @ _t).ravel()[free]
             else:
-                rf = np.asarray(Pro.T @ ((Km + self.Msd) @ Av - self.G @ Uv
+                rf = np.asarray(Pro.T @ ((Km + _Msd) @ Av - self.G @ Uv
                                          - rhs_e)).ravel()[free]
             _GtA = np.asarray(self.G.T @ Av).ravel()
-            rc = self.Sdt * Uv - _GtA - cr
+            rc = _Sdt * Uv - _GtA - cr
             # scale of the constraint equation at THIS iterate (see _cn)
             _cden = max(_cn, float(np.linalg.norm(_GtA)),
-                        float(np.linalg.norm(self.Sdt * Uv)))
+                        float(np.linalg.norm(_Sdt * Uv)))
             if not _sp:
                 return rf, rc, max(float(np.linalg.norm(rf)) / _bn,
                                    float(np.linalg.norm(rc)) / _cden)
             rc = rc - np.asarray(_dtT @ iv).ravel()
             rp = (-np.asarray(_dtT.T @ Uv).ravel()
                   + np.asarray(_dtQ @ Wv).ravel())
-            rg = np.asarray(_dtQ.T @ iv).ravel() - self.dt * _Ig
+            rg = np.asarray(_dtQ.T @ iv).ravel() - _dt * _Ig
             return rf, np.concatenate([rc, rp, rg]), max(
                 float(np.linalg.norm(rf)) / _bn,
                 float(np.linalg.norm(np.concatenate([rc, rp, rg]))) / _cden)
@@ -480,8 +531,8 @@ class P2Drive:
         # the whole ampere-turn drive in the first Newton step, and at 60 A
         # that step lands past the BH knee from an unsaturated start.
         if not np.any(Ue):
-            Ue = (np.asarray(I_vec, float) * self.dt
-                  / np.maximum(self.Sdt, 1e-30))
+            Ue = (np.asarray(I_vec, float) * _dt
+                  / np.maximum(_Sdt, 1e-30))
 
         for it in range(max(int(maxit), 2)):
             nit = it + 1
@@ -517,21 +568,21 @@ class P2Drive:
             if _SB_FAST_LA:
                 Jff = ((_PfT @ (J @ _Pf)) + _Msd_ff).tocsr()
             else:
-                Jff = (Pro.T @ (J + self.Msd) @ Pro).tocsr()[free][:, free]
+                Jff = (Pro.T @ (J + _Msd) @ Pro).tocsr()[free][:, free]
             if _sp:
                 Mb = _bmat([[Jff,   -Bf,               None,     None],
-                            [-Bf.T, _diags(self.Sdt),  -_dtT,    None],
+                            [-Bf.T, _diags(_Sdt),  -_dtT,    None],
                             [None,  -_dtT.T,           None,     _dtQ],
                             [None,  None,              _dtQ.T,   None]]).tocsc()
             else:
-                Mb = _bmat([[Jff, -Bf], [-Bf.T, _diags(self.Sdt)]]).tocsc()
+                Mb = _bmat([[Jff, -Bf], [-Bf.T, _diags(_Sdt)]]).tocsc()
             try:
                 sol = self.p2.solve_ff(Mb, -np.concatenate([rf, rc]))
             except Exception as _je:
                 self.log.info("P2 eddy bordered solve failed (%s)", _je)
                 return False, Ae, Ue, rrel, nit
             dA = self.p2.pad2(Pro, free, sol[:free.size])
-            _nU = self.Sdt.size
+            _nU = _Sdt.size
             dU = sol[free.size:free.size + _nU]
             if _sp:
                 _di = sol[free.size + _nU:free.size + _nU + _npth]
@@ -631,10 +682,20 @@ class P2Drive:
                 self.ed_ca[_ci] = -_iu; self.ed_cb[_ci] = -_iu
 
     def ve_newton(self, Pro, free, A_start, U_start, i_start, Aprev, Vt, dtk,
-                   iv_prev, psi_prev, nu_fix, maxit):
+                   iv_prev, psi_prev, nu_fix, maxit, dte=None):
         """Bordered (A, U, i_A, i_B) Newton: coupled σ·∂A/∂t eddy solve WITH
         the line-to-line voltage circuit.  Returns
-        (ok, A, U, iA, iB, rrel, nit, rc_circ)."""
+        (ok, A, U, iA, iB, rrel, nit, rc_circ).
+
+        TWO STEPS, ONE TIME LEVEL.  ``dtk`` is the rotor-time step the circuit
+        integrates its volt-seconds over (Crank–Nicolson, drive.
+        circuit_residual_ll — second order, and exact for the piecewise-
+        constant inverter voltage because it integrates the step's MEAN
+        voltage).  ``dte`` is the eddy term's effective step and ``Aprev`` its
+        history (``bdf2_history``; ``None`` = backward Euler, dte = dtk,
+        Aprev = A_{k−1}).  Both close at t_k: the constraint rows impose the
+        wire currents i_k the circuit solves for, so the two second-order
+        discretisations meet at the same instant."""
         if self.pT is not None:
             raise RuntimeError(
                 "strand_bonding='series' is implemented on the current-drive "
@@ -644,8 +705,10 @@ class P2Drive:
                 "soldered one")
         Ae = A_start.copy(); Ue = U_start.copy()
         iA = float(i_start[0]); iB = float(i_start[1])
-        Msd_k = (self.Msig * (1.0 / dtk)).tocsr()   # backward Euler on Δt_k
-        Sdt_k = self.S_raw * dtk
+        # eddy term on its effective step (backward Euler: dte = Δt_k)
+        dte = float(dtk) if dte is None else float(dte)
+        Msd_k = (self.Msig * (1.0 / dte)).tocsr()
+        Sdt_k = self.S_raw * dte
         rhs_e = self.f_mag + Msd_k @ Aprev
         _GtAp = np.asarray(self.G.T @ Aprev).ravel()
         _rf0 = np.asarray(Pro.T @ rhs_e).ravel()[free]
@@ -653,7 +716,7 @@ class P2Drive:
         Bf = (Pro.T @ self.G).tocsr()[free, :]
         # constraint-residual scale: the ampere-seconds the terminal current
         # imposes at the DRIVING amplitude, never the instantaneous value.
-        _cn = max(float(np.linalg.norm(dtk * (self.ed_ca + self.ed_cb))),
+        _cn = max(float(np.linalg.norm(dte * (self.ed_ca + self.ed_cb))),
                   float(np.linalg.norm(_GtAp)), 1e-30)
         # voltage scale for the circuit residual test — the driving line-to-
         # line amplitude (the instantaneous value passes through 0).
@@ -679,7 +742,7 @@ class P2Drive:
                 rf = np.asarray(Pro.T @ ((Km + Msd_k) @ Av - self.G @ Uv
                                          - rhs_e)).ravel()[free]
             rc = (Sdt_k * Uv - np.asarray(self.G.T @ Av).ravel()
-                  - (dtk * (ia * self.ed_ca + ib * self.ed_cb) - _GtAp))
+                  - (dte * (ia * self.ed_ca + ib * self.ed_cb) - _GtAp))
             rcv = self.circ_r(self.psi(Av), ia, ib, iv_prev, psi_prev, Vt, dtk)
             return rf, rc, rcv, max(float(np.linalg.norm(rf)) / _bn,
                                     float(np.linalg.norm(rc)) / _cn)
@@ -716,8 +779,8 @@ class P2Drive:
             try:
                 X = self.p2.solve_ff(Mb, np.column_stack([
                     -np.concatenate([rf, rc]),
-                    np.concatenate([_z, dtk * self.ed_ca]),
-                    np.concatenate([_z, dtk * self.ed_cb])]))
+                    np.concatenate([_z, dte * self.ed_ca]),
+                    np.concatenate([_z, dte * self.ed_cb])]))
             except Exception as _je:
                 self.log.info("P2 eddy+vdrive bordered solve failed (%s)", _je)
                 return False, Ae, Ue, iA, iB, rrel, nit, rcc

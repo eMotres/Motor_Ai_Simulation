@@ -1137,6 +1137,12 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
                 "n_solves": _ls.get("n_solves"),
                 "omega2_extrapolation_rpm": _f(_ls.get("omega2_extrapolation_rpm")),
                 "note": _ls.get("note"),
+                # v2 search (2026-09-25): when NOT reached, how far it looked
+                # and which guard stopped it — the report row says so.
+                "searched_to_rpm": _f(_ls.get("searched_to_rpm")),
+                "sf_at_searched_to": _f(_ls.get("sf_at_searched_to")),
+                "cap_reason": _ls.get("cap_reason"),
+                "stopped_by": _ls.get("stopped_by"),
             }
     elif kind == "critical_speeds":
         base.update({

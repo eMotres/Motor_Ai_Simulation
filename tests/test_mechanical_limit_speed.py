@@ -133,6 +133,162 @@ def test_bad_inputs_raise(rpm0, sf0):
 
 
 # ---------------------------------------------------------------------------
+# (a1) v2 bracketing (2026-09-25) — owner, Ø30 L10: "Limit speed: not reached
+# within the searched range (SF 10.38 at 15,000 rpm)".  v1's ×1.5 ladder
+# stopped at 3.375× (the next step, 5.06×, passed max_factor 5), whatever SF
+# said.  Real rotors carry a speed-independent stress (torque on the bridges,
+# the shaft fit, thermal), so 1/SF = a + b·ω² — the crossing lies BEYOND the
+# pure-ω² estimate.  The search must always bracket it.
+# ---------------------------------------------------------------------------
+
+def _affine_curve(rpm0, sf0, frac_const):
+    """1/SF = a + b·rpm², calibrated so SF(rpm0) = sf0 and ``frac_const`` of
+    the stress at rpm0 is speed-independent.  Returns (solve, calls, root)."""
+    y0 = 1.0 / sf0
+    a = frac_const * y0
+    b = (y0 - a) / rpm0 ** 2
+    root = math.sqrt((1.0 - a) / b)
+    calls = []
+
+    def solve(rpm):
+        calls.append(rpm)
+        sf = 1.0 / (a + b * rpm * rpm)
+        return sf, "rotor", {"rotor": {"averaged": sf}}
+    return solve, calls, root
+
+
+def test_v1_regression_ciano14_30_10_crossing_beyond_old_range():
+    """The measured Ø30 L10 shape (18.1 @ 15k, 10.3 @ 22.5k, 5.38 @ 33.75k,
+    2.63 @ 50.6k → a ≈ 0.39 of the stress at 15k is speed-independent):
+    SF = 1 at ≈ 5.6×, past anything v1 could reach."""
+    solve, calls, root = _affine_curve(15_000.0, 18.14, 0.39)
+    assert root / 15_000.0 > 5.0
+    out = find_limit_speed(solve, 15_000.0, 18.14)
+    assert out["reached"] is True
+    assert out["rpm_sf1"] == pytest.approx(root, rel=0.01)
+    assert out["bracket"][0] <= root <= out["bracket"][1]
+    assert out["n_solves"] <= 6
+
+
+@pytest.mark.parametrize("sf0", [10.38, 50.0, 300.0])
+def test_owner_case_sf_10_38_and_far_larger_always_bracketed(sf0):
+    for frac in (0.0, 0.3, 0.6):
+        solve, _calls, root = _affine_curve(15_000.0, sf0, frac)
+        if root > 20 * 15_000.0:
+            continue            # beyond the runaway guard — tested below
+        out = find_limit_speed(solve, 15_000.0, sf0)
+        assert out["reached"] is True, (sf0, frac, out["note"])
+        assert out["rpm_sf1"] == pytest.approx(root, rel=0.01)
+
+
+def test_pure_omega2_is_found_in_very_few_solves():
+    root = 48_300.0
+    solve, calls = _sf_curve(root)
+    sf0 = (root / 15_000.0) ** 2          # 10.37 — the owner's number
+    out = find_limit_speed(solve, 15_000.0, sf0)
+    assert out["reached"] is True
+    assert out["rpm_sf1"] == pytest.approx(root, rel=0.005)
+    assert out["n_solves"] <= 3
+
+
+def test_contact_stiffening_curve_is_bracketed():
+    """A separation joint that opens at 30k: below it the band shares the
+    load (SF falls slowly), above it the part carries its own mass and SF
+    drops much faster — non-linear in ω², still monotonic."""
+    def sf_of(rpm):
+        w2 = (rpm / 10_000.0) ** 2
+        stress = 0.02 + 0.004 * w2 + (0.012 * ((rpm - 30_000.0) / 10_000.0) ** 2
+                                      if rpm > 30_000.0 else 0.0)
+        return 1.0 / stress
+    calls = []
+
+    def solve(rpm):
+        calls.append(rpm)
+        sf = sf_of(rpm)
+        return sf, "magnet", {}
+    lo, hi = 10_000.0, 200_000.0
+    for _ in range(80):                   # the true root, by bisection
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if sf_of(mid) >= 1.0 else (lo, mid)
+    root = 0.5 * (lo + hi)
+    out = find_limit_speed(solve, 10_000.0, sf_of(10_000.0))
+    assert out["reached"] is True
+    assert out["rpm_sf1"] == pytest.approx(root, rel=0.01)
+    assert out["bracket"][0] <= root <= out["bracket"][1]
+    assert out["non_monotonic"] is False
+
+
+def test_contact_softening_below_the_omega2_estimate_is_bracketed():
+    """A curve whose crossing lies BELOW the pure-ω² estimate (stress rises
+    faster than ω² once a joint lifts off) — the first aimed candidate
+    overshoots, the refinement comes back down."""
+    def sf_of(rpm):
+        w = rpm / 10_000.0
+        return 1.0 / (0.05 * w * w + 0.002 * w ** 4)
+    out = find_limit_speed(lambda r: (sf_of(r), "sleeve", {}), 10_000.0,
+                           sf_of(10_000.0))
+    lo, hi = 10_000.0, 100_000.0
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if sf_of(mid) >= 1.0 else (lo, mid)
+    assert out["reached"] is True
+    assert out["rpm_sf1"] == pytest.approx(0.5 * (lo + hi), rel=0.01)
+    assert out["rpm_sf1"] < out["omega2_extrapolation_rpm"]
+
+
+def test_downward_affine_with_speed_independent_part():
+    solve, calls, root = _affine_curve(40_000.0, 0.4, 0.2)
+    out = find_limit_speed(solve, 40_000.0, 0.4)
+    assert out["reached"] is True
+    assert out["rpm_sf1"] == pytest.approx(root, rel=0.01)
+    assert all(c <= 40_000.0 for c in calls)
+
+
+def test_cap_hit_says_so_with_the_reason_and_how_far():
+    def always_safe(rpm):
+        return 50.0, "magnet", {}
+    out = find_limit_speed(always_safe, 10_000.0, 50.0)
+    assert out["reached"] is False
+    assert out["stopped_by"] == "cap"
+    assert out["searched_to_rpm"] == pytest.approx(200_000.0)   # 20× guard
+    assert out["sf_at_searched_to"] == pytest.approx(50.0)
+    assert "20x the analysed speed" in out["cap_reason"]
+    assert "not reached up to 200,000 rpm" in out["note"]
+
+
+def test_physical_rpm_cap_takes_over_with_its_own_words():
+    def always_safe(rpm):
+        return 50.0, "magnet", {}
+    out = find_limit_speed(always_safe, 10_000.0, 50.0, rpm_cap=90_000.0,
+                           rpm_cap_reason="the 1,500 m/s rim-speed bound")
+    assert out["reached"] is False
+    assert out["searched_to_rpm"] == pytest.approx(90_000.0)
+    assert out["cap_reason"] == "the 1,500 m/s rim-speed bound"
+    assert "rim-speed bound" in out["note"]
+
+
+def test_fails_even_at_standstill_is_said_plainly():
+    """sf0 < 1 and the speed-independent part alone is over the strength —
+    no speed is safe; the search goes down to the guard and says why."""
+    def solve(rpm):
+        return 1.0 / (1.2 + 1e-10 * rpm * rpm), "rotor", {}
+    sf0 = solve(20_000.0)[0]
+    out = find_limit_speed(solve, 20_000.0, sf0)
+    assert out["reached"] is False
+    assert out["stopped_by"] == "cap"
+    assert out["searched_to_rpm"] == pytest.approx(1_000.0)
+    assert "speed-independent loads alone exceed the strength" in out["note"]
+
+
+def test_tip_speed_cap_rpm():
+    from motor_ai_sim.simulation.mechanical.limit_speed import tip_speed_cap_rpm
+    # r = 8.7 mm (the Ø30 rotor) at 1500 m/s
+    assert tip_speed_cap_rpm(8.7) == pytest.approx(1500 / 0.0087 * 60 / (2 * math.pi))
+    assert tip_speed_cap_rpm(None) is None
+    assert tip_speed_cap_rpm(0.0) is None
+
+
+# ---------------------------------------------------------------------------
 # (a2) non-monotonic SF near lift-off / a contact-state change (2026-09-21
 # addendum — measured on the Ø50: 45,000 -> 1.51, 47,188 -> 5.78,
 # 47,461 -> 0.86, 48,281 -> 0.75; a separation contact lands on a different
@@ -627,3 +783,65 @@ def test_datasheet_pick_limit_speed_takes_any_duty_that_has_it():
     mech_by_duty = {"continuous": {"rotor_stress": {"sf_min": 3.0}},
                     "peak": {"rotor_stress": {"limit_speed": _LS_BLOCK}}}
     assert DS.pick_limit_speed(mech_by_duty) == _LS_BLOCK
+
+
+# ---------------------------------------------------------------------------
+# v2 (2026-09-25): a search that hit its guard says how far it looked
+# ---------------------------------------------------------------------------
+
+_LS_CAPPED = {**_LS_BLOCK, "reached": False, "rpm_sf1": None,
+              "limiting_part": None, "searched_to_rpm": 400_000.0,
+              "sf_at_searched_to": 1.7, "stopped_by": "cap",
+              "cap_reason": "20x the analysed speed (max_factor runaway guard)"}
+
+
+def test_report_row_capped_search_names_how_far_it_looked():
+    from motor_ai_sim import report as R
+
+    cols = [_mech_col("rated", {"limit_speed": _LS_CAPPED})]
+    rows = {r[0]: r[1:] for r in R.mech_compare_rows(cols)[1]}
+    assert rows["Speed at SF = 1 (same loads)"] == [
+        "> 400,000 rpm (search cap, SF 1.70 there)"]
+
+
+def test_datasheet_row_capped_search_names_the_guard():
+    from motor_ai_sim import datasheet as DS
+
+    label, value, note, d = DS.limit_speed_datasheet_row(
+        {"rated": {"rotor_stress": {"limit_speed": _LS_CAPPED}}})
+    assert value == "not reached"
+    assert "400,000 rpm" in note and "runaway guard" in note
+
+
+def test_compact_mechanical_carries_the_v2_fields():
+    from motor_ai_sim import duty_results as DR
+
+    result = {"primary_case": "20,000 rpm",
+              "cases": {"20,000 rpm": {"rpm": 20000.0, "sf_min": 30.0,
+                                       "sf_min_part": "rotor", "parts": {},
+                                       "interfaces": {}}},
+              "limit_speed": _LS_CAPPED}
+    c = DR.compact_mechanical("rotor_stress", result, {}, None, None)
+    assert c["limit_speed"]["searched_to_rpm"] == pytest.approx(400_000.0)
+    assert c["limit_speed"]["stopped_by"] == "cap"
+
+
+def test_route_passes_the_rim_speed_bound(client, monkeypatch):
+    from motor_ai_sim.routes import mechanical as M
+    from motor_ai_sim.simulation.mechanical import limit_speed as lsm
+    from motor_ai_sim.simulation.mechanical import rotor_stress as rsm
+    monkeypatch.setattr(rsm, "solve_rotor_stress", _fake_solve_rotor_stress(20_000.0))
+    seen = {}
+    real = lsm.find_limit_speed
+
+    def spy(*a, **kw):
+        seen.update(kw)
+        return real(*a, **kw)
+    monkeypatch.setattr(lsm, "find_limit_speed", spy)
+    r = client.post("/api/mechanical/limit_speed",
+                    params={"rpm": 10_000, "loads": "centrifugal", "torque_nm": 0,
+                            "fresh": True})
+    assert r.status_code == 200, r.text
+    assert seen.get("max_factor") == pytest.approx(20.0)
+    assert seen.get("rpm_cap") and seen["rpm_cap"] > 0
+    assert "rim-speed bound" in seen.get("rpm_cap_reason", "")

@@ -871,7 +871,9 @@ const MechanicalPanel: React.FC = () => {
                   ? `Limit speed: ${Math.round(res.limit_speed.rpm_sf1 ?? 0).toLocaleString()} rpm — ${
                       PART_LABEL[res.limit_speed.limiting_part ?? ''] ?? res.limit_speed.limiting_part ?? '—'
                     }, SF ${res.limit_speed.sf_at_rpm0.toFixed(2)} at ${Math.round(res.limit_speed.analysed_rpm).toLocaleString()}`
-                  : `Limit speed: not reached within the searched range (SF ${res.limit_speed.sf_at_rpm0.toFixed(2)} at ${Math.round(res.limit_speed.analysed_rpm).toLocaleString()} rpm)`}
+                  : res.limit_speed.searched_to_rpm != null
+                    ? `Limit speed: SF = 1 not crossed by ${Math.round(res.limit_speed.searched_to_rpm).toLocaleString()} rpm (SF ${(res.limit_speed.sf_at_searched_to ?? 0).toFixed(2)} there) — ${res.limit_speed.stopped_by === 'budget' ? 'solve budget' : 'search cap'}`
+                    : `Limit speed: not reached within the searched range (SF ${res.limit_speed.sf_at_rpm0.toFixed(2)} at ${Math.round(res.limit_speed.analysed_rpm).toLocaleString()} rpm)`}
               </Typography>
             </Tooltip>
           )}

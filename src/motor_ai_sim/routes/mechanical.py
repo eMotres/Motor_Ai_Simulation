@@ -1106,6 +1106,25 @@ def _limit_speed_history_key(geo_ov, assign, rpm0, interference_mm,
     return _RH.make_key("mechanical.limit_speed", base + extra)
 
 
+def _tip_speed_cap(motor) -> tuple:
+    """(rpm, words) of the physical runaway bound for the limit-speed search:
+    the rim of the rotor (sleeve included) at
+    :data:`limit_speed.TIP_SPEED_CAP_M_S`.  ``(None, "")`` when the radius is
+    unknown — the search then keeps only its ``max_factor`` guard."""
+    from motor_ai_sim.cadquery_geometry import _sleeve_thickness
+    from motor_ai_sim.simulation.mechanical import limit_speed as lsm
+    try:
+        p = motor.parameters
+        r_mm = float(p.get("rotor_outer_radius") or 0.0) + _sleeve_thickness(p)
+    except Exception:                                       # noqa: BLE001
+        return None, ""
+    cap = lsm.tip_speed_cap_rpm(r_mm)
+    if cap is None:
+        return None, ""
+    return cap, (f"the {lsm.TIP_SPEED_CAP_M_S:,.0f} m/s rim-speed bound "
+                 f"(r = {r_mm:.1f} mm) — no rotor steel survives beyond it")
+
+
 def _limit_speed_summary(out0: Dict[str, Any]) -> str:
     try:
         blk = out0.get("limit_speed") or {}
@@ -1169,9 +1188,11 @@ def limit_speed(
         description="the safety factor searched for; 1.0 = the rotor's "
                     "structural limit"),
     max_factor: float = Query(
-        default=5.0, gt=1.0, le=20.0,
-        description="how far from the analysed speed (as a multiple of it) "
-                    "the bracket search may range before giving up"),
+        default=20.0, gt=1.0, le=100.0,
+        description="runaway guard only: the farthest the search may go from "
+                    "the analysed speed, as a multiple of it (the range itself "
+                    "comes from the SF(ω) estimate; a 1500 m/s rim-speed bound "
+                    "applies as well)"),
     max_solves: int = Query(
         default=12, ge=2, le=30,
         description="the whole search's solve budget, bracket + bisection"),
@@ -1393,10 +1414,12 @@ def limit_speed(
             sf, part, per_part, _out = _solve_rpm(cand_rpm)
             return sf, part, per_part
 
+        _cap_rpm, _cap_why = _tip_speed_cap(motor)
         try:
             search = lsm.find_limit_speed(
                 _solve_for_search, rpm0, sf0, target=float(target_sf),
-                max_factor=float(max_factor), max_solves=int(max_solves))
+                max_factor=float(max_factor), max_solves=int(max_solves),
+                rpm_cap=_cap_rpm, rpm_cap_reason=_cap_why)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail={"error": str(exc),
                                                          "invalid_parameters": []})
@@ -1667,8 +1690,15 @@ def _auto_limit_speed(out: Dict[str, Any],
                 return (sol_case["sf_min"], sol_case["sf_min_part"],
                        sol_case["sf_min_per_part"])
 
+            # max_factor was a hard-coded 5.0 here, and v1's ×1.5 ladder
+            # really searched only 3.4× under it — the Ø30 L10 "not reached"
+            # (owner 2026-09-25).  The module default guard + the rim-speed
+            # bound now, the range itself from the SF(ω) estimate.
+            _cap_rpm, _cap_why = _tip_speed_cap(motor)
             search = lsm.find_limit_speed(_solve_rpm, rpm0, sf0, target=1.0,
-                                          max_factor=5.0, max_solves=max_solves)
+                                          max_solves=max_solves,
+                                          rpm_cap=_cap_rpm,
+                                          rpm_cap_reason=_cap_why)
         finally:
             _progress.finish()
 

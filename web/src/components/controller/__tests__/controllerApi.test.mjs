@@ -151,7 +151,6 @@ function formStateFromSettings(block, fallback) {
     finEff: toFormNumber(cooling.fin_efficiency),
     emissivity: toFormNumber(cooling.emissivity),
     mapping: rows.length ? mapping : fallback.mapping,
-    coupleWithEm: block.couple_with_em ?? fallback.coupleWithEm,
   };
 }
 
@@ -181,7 +180,6 @@ function settingsForSave(s) {
               plate_area_cm2: s.areaBasis === 'plate' ? toSaveNumber(s.areaCm2) : null,
               fin_efficiency: toSaveNumber(s.finEff), emissivity: toSaveNumber(s.emissivity) },
     mapping,
-    couple_with_em: s.coupleWithEm,
   };
 }
 
@@ -197,7 +195,7 @@ const DEFAULT_FORM = {
   coolant: '', flow: '', tin: '', rtim: 0.03,
   coolingMode: 'liquid', airSpeed: '', tAmbient: '', areaBasis: 'heatsink',
   areaCm2: '', finEff: 0.75, emissivity: 0.9,
-  mapping: {}, coupleWithEm: false,
+  mapping: {},
 };
 
 test('an empty saved block leaves the tab at its own defaults', () => {
@@ -214,6 +212,9 @@ test('a saved block restores the panel state field by field', () => {
     dead_time_us: 1.0, f_carrier_hz: 24000, v_dc_V: 750.4,
     cooling: { coolant: 'oil', flow_lpm: 10, t_in_c: 55, r_tim_k_w: 0.02 },
     mapping: [{ coil: 1, bridge: 'INV1', leg: 'A' }, { coil: 2, bridge: 'INV2', leg: 'B' }],
+    // couple_with_em: an old saved block may still carry this (the removed
+    // "Couple with EM" checkbox) — it must be silently ignored on read, not
+    // restored into any panel state.
     couple_with_em: true,
   };
   const s = formStateFromSettings(block, DEFAULT_FORM);
@@ -230,7 +231,8 @@ test('a saved block restores the panel state field by field', () => {
   assert.equal(s.coolant, 'oil');
   assert.equal(s.flow, 10);
   assert.deepEqual(s.mapping, { 1: 'INV1/A', 2: 'INV2/B' });
-  assert.equal(s.coupleWithEm, true);
+  assert.equal(s.coupleWithEm, undefined,
+    'the removed "Couple with EM" checkbox must not be restored into panel state');
 });
 
 test('settingsForSave always clears a per-bridge override — the global '
@@ -251,11 +253,13 @@ test('a blank saved carrier/DC link restores as blank — "the duty\'s own"', ()
 
 test('settingsForSave round-trips through formStateFromSettings', () => {
   const edited = { ...DEFAULT_FORM, device: 'IMCQ120R004M2H', nPar: 3,
-    fsw: 24000, vdc: '', mapping: { 1: 'INV1/A' }, coupleWithEm: true };
+    fsw: 24000, vdc: '', mapping: { 1: 'INV1/A' } };
   const saved = settingsForSave(edited);
   assert.equal(saved.v_dc_V, null);           // blank -> null on the wire
   assert.equal(saved.f_carrier_hz, 24000);
   assert.deepEqual(saved.mapping, [{ coil: 1, bridge: 'INV1', leg: 'A' }]);
+  assert.equal('couple_with_em' in saved, false,
+    'the web must never send the removed "Couple with EM" flag');
 
   const restored = formStateFromSettings(saved, DEFAULT_FORM);
   assert.equal(restored.device, 'IMCQ120R004M2H');
@@ -263,7 +267,6 @@ test('settingsForSave round-trips through formStateFromSettings', () => {
   assert.equal(restored.fsw, 24000);
   assert.equal(restored.vdc, '');
   assert.deepEqual(restored.mapping, { 1: 'INV1/A' });
-  assert.equal(restored.coupleWithEm, true);
 });
 
 /* ── controllerSolveBody — the wire payload (owner 2026-09-22, third round:
@@ -788,6 +791,37 @@ test('the Coolant select offers an explicit "(from Thermal)" option for the '
   const block = src.slice(start, end);
   assert.ok(block.includes('<MenuItem value="" sx={{ fontSize: 12, fontStyle: \'italic\' }}>(from Thermal)</MenuItem>'),
     'a blank option must exist so the select can represent "inherited"');
+});
+
+/* ── "Couple with EM" checkbox removed (owner 2026-09-25): «весь каплинг
+ * нужно настраивать через меню в Электромагнитном» — all coupling (drive,
+ * Solve to, Re-run) is configured ONLY in the EM-side Coupled panel. The
+ * Controller tab's checkbox only ever SAVED a flag the backend never read
+ * (`src/motor_ai_sim/routes/family.py` stored `couple_with_em` and nothing
+ * consumed it), so it is a dead control, gone along with its state/HelpTip.
+ * The backend field itself is untouched (back-compat; an old saved block may
+ * still carry it, tolerated and ignored on read — see formStateFromSettings
+ * above). ControllerPanel.tsx imports import.meta.env and JSX, so this is
+ * source-checked, the same way the other "gone" test above is. */
+test('the "Couple with EM" checkbox, its state and its HelpTip are gone from '
+   + 'ControllerPanel — all coupling now lives in the EM-side Coupled menu', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  for (const gone of ['coupleWithEm', 'setCoupleWithEm', 'Couple with EM']) {
+    assert.ok(!src.includes(gone), `${gone} must no longer appear`);
+  }
+});
+
+test('controllerSolveBody / settingsForSave never send couple_with_em on '
+   + 'the wire', () => {
+  const src = readFileSync(join(HERE, '..', 'controllerApi.ts'), 'utf8');
+  const saveStart = src.indexOf('export function settingsForSave');
+  const saveEnd = src.indexOf('\n}', saveStart);
+  assert.ok(!src.slice(saveStart, saveEnd).includes('couple_with_em'),
+    'settingsForSave must not write couple_with_em into the saved block');
+  const bodyStart = src.indexOf('export function controllerSolveBody');
+  const bodyEnd = src.indexOf('\n}', bodyStart);
+  assert.ok(!src.slice(bodyStart, bodyEnd).includes('couple_with_em'),
+    'the solve body must not send couple_with_em either');
 });
 
 /* ── statusLine ──────────────────────────────────────────────────────────── */

@@ -17,8 +17,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Paper, Typography, Button, TextField, MenuItem, Divider,
-         CircularProgress, Alert, Chip, Tooltip, Checkbox, IconButton,
-         FormControlLabel } from '@mui/material';
+         CircularProgress, Alert, Chip, Tooltip, IconButton } from '@mui/material';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
@@ -91,10 +90,6 @@ const ControllerPanel: React.FC = () => {
   const [finEff, setFinEff] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.finEff);
   const [emissivity, setEmissivity] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.emissivity);
   const [mapping, setMapping] = useState<Record<number, string>>(DEFAULT_CONTROLLER_FORM.mapping);
-  /** Whether this controller is meant to feed its losses back into the
-   * coupled EM/thermal loop — a SAVED setting; wiring it into the loop
-   * itself belongs to that loop's own owner, not this tab. */
-  const [coupleWithEm, setCoupleWithEm] = useState(DEFAULT_CONTROLLER_FORM.coupleWithEm);
   const [settingsErr, setSettingsErr] = useState<string | null>(null);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [switchCurrent, setSwitchCurrent] = useState<
@@ -257,7 +252,6 @@ const ControllerPanel: React.FC = () => {
       setTAmbient(next.tAmbient); setAreaBasis(next.areaBasis);
       setAreaCm2(next.areaCm2); setFinEff(next.finEff); setEmissivity(next.emissivity);
       setMapping(next.mapping);
-      setCoupleWithEm(next.coupleWithEm);
       if (block && (block as any).saved_at) setSettingsSavedAt((block as any).saved_at);
     } catch { /* nothing saved yet, or the read failed — the tab's own defaults stand */
     } finally { settingsLoadedFor.current = `${dieCtx.die}::${dieCtx.config}`; }
@@ -277,7 +271,7 @@ const ControllerPanel: React.FC = () => {
       const state: ControllerFormState = { device, topology, setSplit, hbMod,
         nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
         coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-        mapping, coupleWithEm };
+        mapping };
       localStorage.setItem('ctrl.settings', JSON.stringify({
         die: dieCtx.die, config: dieCtx.config, block: settingsForSave(state) }));
     } catch { /* private window — the auto-save-with-the-motor mirror just won't work this session */ }
@@ -285,7 +279,7 @@ const ControllerPanel: React.FC = () => {
   }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
       vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-      mapping, coupleWithEm]);
+      mapping]);
 
   // ── AUTO-SAVE (owner 2026-09-25, "Devices / switch keeps resetting to 4")
   // ─────────────────────────────────────────────────────────────────────
@@ -304,7 +298,7 @@ const ControllerPanel: React.FC = () => {
     const state: ControllerFormState = { device, topology, setSplit, hbMod,
       nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-      mapping, coupleWithEm };
+      mapping };
     try {
       const r = await saveControllerSettings(dieCtx.die, dieCtx.config, settingsForSave(state));
       setSettingsSavedAt(r.controller?.saved_at || null);
@@ -318,7 +312,7 @@ const ControllerPanel: React.FC = () => {
   }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
       vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-      mapping, coupleWithEm]);
+      mapping]);
 
   const saveSettings = async () => {
     if (!dieCtx.die || !dieCtx.config) {
@@ -343,7 +337,7 @@ const ControllerPanel: React.FC = () => {
   }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
       vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-      mapping, coupleWithEm]);
+      mapping]);
 
   const customRows = useMemo(() =>
     coils.map(c => ({ coil: c.index, bridge: (mapping[c.index] || 'INV1').split('/')[0],
@@ -357,7 +351,7 @@ const ControllerPanel: React.FC = () => {
     { device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
       coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-      mapping, coupleWithEm },
+      mapping },
     customRows);
 
   // The per-switch current — and so the catalogue's "parallel" suggestion —
@@ -449,10 +443,10 @@ const ControllerPanel: React.FC = () => {
   const staleFields = useMemo(() => staleResultFields(
     { device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
       coolant, flow, tin, rtim, coolingMode, airSpeed, tAmbient, areaBasis,
-      areaCm2, finEff, emissivity, mapping, coupleWithEm }, res),
+      areaCm2, finEff, emissivity, mapping }, res),
     [device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
      coolant, flow, tin, rtim, coolingMode, airSpeed, tAmbient, areaBasis,
-     areaCm2, finEff, emissivity, mapping, coupleWithEm, res]);
+     areaCm2, finEff, emissivity, mapping, res]);
   const staleLine = staleResultLine(staleFields, res);
 
   return (
@@ -663,15 +657,6 @@ const ControllerPanel: React.FC = () => {
                 </Row>)}
             </>)}
             <Row label="R_th TIM" tip="Thermal interface between the device tab and the plate/heatsink, per device, every mode. It is comparable with R_th(j-c) itself, so it changes the answer." unit="K/W"><Num v={rtim} set={setRtim} /></Row>
-            <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-              <FormControlLabel sx={{ mr: 0, flex: 1 }}
-                slotProps={{ typography: { sx: { fontSize: 12, color: 'var(--text-1)' } } }}
-                control={<Checkbox size="small" checked={coupleWithEm}
-                  onChange={e => setCoupleWithEm(e.target.checked)} />}
-                label="Couple with EM" />
-              <HelpTip title="Whether this controller is meant to feed its losses back into the coupled electromagnetic/thermal loop. This tab only SAVES the choice with the configuration — it does not itself run the coupled loop." />
-            </Box>
           </Box>
         </Paper>
 

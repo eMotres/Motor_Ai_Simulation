@@ -188,12 +188,14 @@ function settingsForSave(s) {
 // Verbatim copy of controllerApi.ts's DEFAULT_CONTROLLER_FORM (owner
 // 2026-09-24: the default is 1, not a guess at how many devices a real
 // stack needs — see that constant's own doc for the "resets to 4" bug this
-// fixed).
+// fixed). Owner 2026-09-25: coolant/flow/tin/airSpeed/tAmbient default to
+// blank ('') — they INHERIT the Thermal tab's own settings by default, the
+// same "blank means not overridden" convention fsw/vdc already use here.
 const DEFAULT_FORM = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
   nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
-  coolant: 'water_glycol_50', flow: 8, tin: 65, rtim: 0.03,
-  coolingMode: 'liquid', airSpeed: 5, tAmbient: 40, areaBasis: 'heatsink',
+  coolant: '', flow: '', tin: '', rtim: 0.03,
+  coolingMode: 'liquid', airSpeed: '', tAmbient: '', areaBasis: 'heatsink',
   areaCm2: '', finEff: 0.75, emissivity: 0.9,
   mapping: {}, coupleWithEm: false,
 };
@@ -278,7 +280,9 @@ function controllerSolveBody(s, customRows) {
   const mode = s.coolingMode || 'liquid';
   const cooling = { mode };
   if (mode === 'liquid') {
-    cooling.coolant = s.coolant;
+    // Blank ('') is "inherit the Thermal tab's coolant" — never sent as an
+    // empty string (owner 2026-09-25's per-field inheritance).
+    if (s.coolant) cooling.coolant = s.coolant;
     cooling.flow_lpm = blank(s.flow);
     cooling.t_in_c = blank(s.tin);
   } else {
@@ -364,20 +368,32 @@ test('a custom mapping is sent only for the custom topology', () => {
  * wire body only ever sends what the CHOSEN mode reads, per mode.
  */
 
-test('cooling mode "liquid" sends only coolant/flow/inlet, never an air field', () => {
+test('cooling mode "liquid" with nothing overridden OMITS coolant/flow/inlet '
+   + '— they inherit from Thermal server-side', () => {
   const body = controllerSolveBody({ ...DEFAULT_FORM, coolingMode: 'liquid' }, []);
   assert.equal(body.cooling.mode, 'liquid');
-  assert.equal(body.cooling.coolant, 'water_glycol_50');
-  assert.equal(body.cooling.flow_lpm, 8);
-  assert.equal(body.cooling.t_in_c, 65);
+  for (const k of ['coolant', 'flow_lpm', 't_in_c', 'air_speed_mps', 't_ambient_c',
+                    'heatsink_area_cm2_per_device', 'plate_area_cm2',
+                    'fin_efficiency', 'emissivity']) {
+    assert.equal(body.cooling[k], undefined, `${k} must not be sent`);
+  }
+});
+
+test('cooling mode "liquid" sends an OVERRIDDEN coolant/flow/inlet, never an '
+   + 'air field', () => {
+  const s = { ...DEFAULT_FORM, coolingMode: 'liquid', coolant: 'oil', flow: 10, tin: 55 };
+  const body = controllerSolveBody(s, []);
+  assert.equal(body.cooling.coolant, 'oil');
+  assert.equal(body.cooling.flow_lpm, 10);
+  assert.equal(body.cooling.t_in_c, 55);
   for (const k of ['air_speed_mps', 't_ambient_c', 'heatsink_area_cm2_per_device',
                     'plate_area_cm2', 'fin_efficiency', 'emissivity']) {
     assert.equal(body.cooling[k], undefined, `${k} must not be sent in liquid mode`);
   }
 });
 
-test('cooling mode "air_forced" sends wind speed, ambient, area and fin '
-   + 'efficiency — never the coolant/flow/inlet triple or emissivity', () => {
+test('cooling mode "air_forced" sends an OVERRIDDEN wind speed/ambient, area '
+   + 'and fin efficiency — never the coolant/flow/inlet triple or emissivity', () => {
   const s = { ...DEFAULT_FORM, coolingMode: 'air_forced', airSpeed: 6, tAmbient: 35 };
   const body = controllerSolveBody(s, []);
   assert.equal(body.cooling.mode, 'air_forced');
@@ -393,6 +409,13 @@ test('cooling mode "air_forced" sends wind speed, ambient, area and fin '
   }
 });
 
+test('cooling mode "air_forced" with nothing overridden OMITS wind speed/'
+   + 'ambient — they inherit from Thermal server-side', () => {
+  const body = controllerSolveBody({ ...DEFAULT_FORM, coolingMode: 'air_forced' }, []);
+  assert.equal(body.cooling.air_speed_mps, undefined);
+  assert.equal(body.cooling.t_ambient_c, undefined);
+});
+
 test('cooling mode "air_still" sends emissivity and no air speed', () => {
   const s = { ...DEFAULT_FORM, coolingMode: 'air_still', emissivity: 0.85 };
   const body = controllerSolveBody(s, []);
@@ -400,7 +423,8 @@ test('cooling mode "air_still" sends emissivity and no air speed', () => {
   assert.equal(body.cooling.emissivity, 0.85);
   assert.equal(body.cooling.air_speed_mps, undefined,
     'air_still has no fan — air_speed_mps is a forced-air-only field');
-  assert.equal(body.cooling.t_ambient_c, 40);
+  assert.equal(body.cooling.t_ambient_c, undefined,
+    'nothing overridden — ambient inherits from Thermal server-side');
 });
 
 test('area basis "plate" sends plate_area_cm2 instead of the per-device area', () => {
@@ -703,76 +727,67 @@ test('a saved devices-per-switch count survives round-tripping through the '
     + 'value from whatever machine was loaded before it');
 });
 
-/* ── "Use thermal air cooling" button (owner 2026-09-24): "нужна кнопка,
- * чтобы взять состояние обдува воздуха из термо-моделирования" — the
- * MOSFET cooling's Mode/wind-speed/ambient fields, filled from
- * `GET /api/controller/cooling_from_thermal`.  ControllerPanel.tsx imports
+/* ── automatic cooling inheritance from Thermal (owner 2026-09-25): "Когда я
+ * ставлю air или liquid, он должен брать параметры охлаждения из Thermal...
+ * но можно изменить, чтобы сделать разными" — replaces the 2026-09-24
+ * button (`useThermalCooling`/`getCoolingFromThermal`/the chip state), now
+ * gone from ControllerPanel entirely. ControllerPanel.tsx imports
  * import.meta.env and JSX, so this is source-checked (not re-implemented),
  * the same way the ActiveFamilyStrip / DEFAULT_CONTROLLER_FORM tests above
  * are. */
-test('the thermal-cooling button fills Mode/wind-speed/ambient from the '
-   + 'response and keeps the chip\'s own source snapshot', () => {
-  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
-  const start = src.indexOf('const useThermalCooling = async () => {');
-  assert.ok(start > 0, 'the button\'s handler must exist');
-  const end = src.indexOf('};', start);
-  const block = src.slice(start, end);
-  assert.ok(block.includes('getCoolingFromThermal('),
-    'must call the GET /api/controller/cooling_from_thermal wrapper');
-  assert.ok(block.includes('setCoolingMode(r.mode)'),
-    'must switch Mode to whatever the thermal record resolved to '
-    + '(air_forced or air_still)');
-  assert.ok(block.includes('setAirSpeed(r.air_speed_m_s)'),
-    'must fill the wind-speed field (air_forced only — the response is '
-    + 'null for air_still, and the guard above it must skip the field then)');
-  assert.ok(block.includes('setTAmbient(r.ambient_C)'),
-    'must fill the ambient field');
-  assert.ok(block.includes('setThermalCool(r)'),
-    'must keep the response so the chip can show its source');
-});
 
-test('editing Mode, wind speed or ambient by hand clears the thermal-'
-   + 'cooling chip — it must never keep naming a source for a value the '
-   + 'owner has since typed over', () => {
+test('the old "Use thermal air cooling" button and its chip state are gone '
+   + '— replaced by automatic per-field inheritance', () => {
   const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
-  for (const fn of ['onCoolingModeChange', 'onAirSpeedChange', 'onTAmbientChange']) {
-    const start = src.indexOf(`const ${fn} = (`);
-    assert.ok(start > 0, `${fn} must exist`);
-    const end = src.indexOf(';', start);
-    assert.ok(src.slice(start, end).includes('setThermalCool(null)'),
-      `${fn} must clear the chip before applying the edit`);
+  for (const gone of ['useThermalCooling', 'getCoolingFromThermal',
+                       'thermalCool', 'thermalCoolBusy', 'thermalCoolErr',
+                       'onCoolingModeChange', 'onAirSpeedChange', 'onTAmbientChange',
+                       'DeviceThermostatIcon']) {
+    assert.ok(!src.includes(gone), `${gone} must no longer appear — superseded`);
   }
-  // …and the three fields must actually be wired to these wrappers, not the
-  // bare setters, or the clear-on-edit rule above is dead code.
-  assert.ok(src.includes('onChange={e => onCoolingModeChange(e.target.value)}'),
-    'the Mode select must go through onCoolingModeChange');
-  assert.ok(src.includes('<Num v={airSpeed} set={onAirSpeedChange} />'),
-    'the Wind speed field must go through onAirSpeedChange');
-  assert.ok(src.includes('<Num v={tAmbient} set={onTAmbientChange} />'),
-    'the Ambient field must go through onTAmbientChange');
 });
 
-test('switching to a different machine/config clears the thermal-cooling '
-   + 'chip — it must never keep naming a source that belongs to a '
-   + 'DIFFERENT machine', () => {
+test('the tab fetches what each cooling mode would inherit from Thermal, '
+   + 're-fetching on a die/config switch and on a Thermal-tab save', () => {
   const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
-  const start = src.indexOf('const block = await getControllerSettings(');
-  const end = src.indexOf('}, [dieCtx.die, dieCtx.config]);', start);
-  assert.ok(start > 0 && end > start, 'the settings-loading effect must exist');
-  const settingsEffect = src.slice(start, end);
-  assert.ok(settingsEffect.includes('setThermalCool(null)'),
-    'a die/config change must clear the chip along with every other field');
+  const start = src.indexOf('const [thermalByMode, setThermalByMode] = useState');
+  assert.ok(start > 0, 'the thermalByMode state must exist');
+  const end = src.indexOf('const thermalField = ', start);
+  assert.ok(end > start, 'the fetch effect must exist');
+  const block = src.slice(start, end);
+  assert.ok(block.includes('getThermalCooling(dieCtx.die, dieCtx.config)'),
+    'must call GET /api/controller/thermal_cooling for the active machine');
+  assert.ok(block.includes("addEventListener('thermal-cooling-saved', load)"),
+    'must react to a Thermal-tab save, not only poll on mount');
+  assert.ok(block.includes("addEventListener('family-changed', load)"),
+    'must react to a machine switch');
 });
 
-test('the thermal-cooling button is disabled without an active die (it '
-   + 'reads THAT duty\'s own saved thermal record)', () => {
+test('a still-blank (not overridden) field shows the inherited value as a '
+   + 'placeholder and a "from Thermal" chip, with a reset once overridden', () => {
   const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
-  const start = src.indexOf('onClick={() => void useThermalCooling()}');
-  assert.ok(start > 0, 'the button must exist');
-  const iconButtonStart = src.lastIndexOf('<IconButton', start);
-  const block = src.slice(iconButtonStart, start);
-  assert.ok(block.includes('disabled={!dieCtx.active'),
-    'must be disabled while no configuration is loaded');
+  assert.ok(src.includes("<Num v={airSpeed} set={setAirSpeed}"),
+    'Wind speed must go through the plain setter now (no wrapper needed — '
+    + 'blank IS "not overridden")');
+  assert.ok(src.includes("thermalField('air_forced', 'air_speed_mps')"),
+    'Wind speed\'s placeholder must read the air_forced inheritance');
+  assert.ok(src.includes("{airSpeed !== '' && <ResetToThermal onReset={() => setAirSpeed('')} />}"),
+    'an overridden Wind speed must offer a reset back to blank (inherited)');
+  assert.ok(src.includes("thermalHint('air_forced', 'air_speed_mps', airSpeed !== '',"),
+    'the chip/note must be shown only while the field is NOT overridden');
+  assert.ok(src.includes("{coolant !== '' && <ResetToThermal onReset={() => setCoolant('')} />}"),
+    'Coolant must offer the same reset once overridden');
+});
+
+test('the Coolant select offers an explicit "(from Thermal)" option for the '
+   + 'inherited (blank) state, never a silently-selected real fluid', () => {
+  const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
+  const start = src.indexOf('<Row label="Coolant"');
+  const end = src.indexOf('</Row>', start);
+  assert.ok(start > 0 && end > start, 'the Coolant row must exist');
+  const block = src.slice(start, end);
+  assert.ok(block.includes('<MenuItem value="" sx={{ fontSize: 12, fontStyle: \'italic\' }}>(from Thermal)</MenuItem>'),
+    'a blank option must exist so the select can represent "inherited"');
 });
 
 /* ── statusLine ──────────────────────────────────────────────────────────── */

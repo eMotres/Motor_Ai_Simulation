@@ -300,6 +300,13 @@ const PERSISTED: (keyof ThermalState)[] = [
   'compareRows',
 ];
 
+/** The subset of ``PERSISTED`` the Controller tab's MOSFET cooling can
+ *  INHERIT (owner 2026-09-25) — a change to any of these fires
+ *  ``thermal-cooling-saved`` so that tab re-fetches instead of polling. */
+const COOLING_INHERITANCE_KEYS = new Set<string>([
+  'coolMode', 'ambientT', 'airSpeed', 'fluid', 'tIn', 'flowLpm',
+]);
+
 /** Remember how long this kind of solve took, so the NEXT one can say "~40 s".
  *
  *  Written both to the store (the timer re-renders) and to localStorage (the
@@ -716,6 +723,12 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       for (const pk of PERSISTED) snap[pk as string] = (st as unknown as Record<string, unknown>)[pk as string];
       snap[k as string] = v;
       savePanelSettings('thermal', snap);
+      // The Controller tab's cooling INHERITS these from here (owner
+      // 2026-09-25) — tell it to re-fetch rather than making it poll.
+      if (COOLING_INHERITANCE_KEYS.has(k as string)) {
+        try { window.dispatchEvent(new CustomEvent('thermal-cooling-saved')); }
+        catch { /* SSR/no-window */ }
+      }
     }
   },
 

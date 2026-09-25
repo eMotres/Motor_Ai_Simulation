@@ -310,8 +310,15 @@ export interface ControllerFormState {
 export const DEFAULT_CONTROLLER_FORM: ControllerFormState = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
   nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
-  coolant: 'water_glycol_50', flow: 8, tin: 65, rtim: 0.03,
-  coolingMode: 'liquid', airSpeed: 5, tAmbient: 40, areaBasis: 'heatsink',
+  // Owner 2026-09-25: these five INHERIT from the Thermal tab by default —
+  // blank is "not overridden yet", the SAME convention ``vdc``/``fsw``
+  // already use here (a placeholder shows the resolved value; typing a real
+  // one makes it a deliberate override). See ``getThermalCooling`` and the
+  // "MOSFET cooling" section of ControllerPanel for how the placeholder is
+  // filled. R_th TIM/area/fin efficiency/emissivity have no Thermal
+  // counterpart and keep a real stated default below, unaffected.
+  coolant: '', flow: '', tin: '', rtim: 0.03,
+  coolingMode: 'liquid', airSpeed: '', tAmbient: '', areaBasis: 'heatsink',
   areaCm2: '', finEff: 0.75, emissivity: 0.9,
   mapping: {}, coupleWithEm: false,
 };
@@ -534,7 +541,10 @@ export function controllerSolveBody(
   // mode needs").
   const cooling: ControllerSolveBody['cooling'] = { mode };
   if (mode === 'liquid') {
-    cooling.coolant = s.coolant;
+    // Blank ('') is "inherit the Thermal tab's coolant" — never sent as an
+    // empty string (owner 2026-09-25's per-field inheritance; see
+    // DEFAULT_CONTROLLER_FORM's doc).
+    if (s.coolant) cooling.coolant = s.coolant;
     cooling.flow_lpm = blank(s.flow);
     cooling.t_in_c = blank(s.tin);
   } else {
@@ -631,10 +641,12 @@ export const getResolvedPoint = (die?: string, config?: string, duty?: string) =
   return fetch(`${API}/api/controller/point?${p}`).then(j<ResolvedPoint>);
 };
 
-/* ── "Use thermal air cooling" — takes the MOSFET cooling's Mode/wind-speed/
- * ambient fields off the loaded duty's own saved thermal record (owner
- * 2026-09-24: "нужна кнопка, чтобы взять состояние обдува воздуха из
- * термо-моделирования").  `GET /api/controller/cooling_from_thermal`. ── */
+/* ── legacy "Use thermal air cooling" button (owner 2026-09-24) — takes the
+ * MOSFET cooling's Mode/wind-speed/ambient off the loaded duty's own SAVED
+ * thermal record.  `GET /api/controller/cooling_from_thermal`.  Superseded
+ * as the tab's DEFAULT by the automatic per-field inheritance below
+ * (owner 2026-09-25); kept exported for API/back-compat — nothing in
+ * ControllerPanel calls it any more. ── */
 
 export interface CoolingFromThermal {
   die: string | null;
@@ -653,14 +665,57 @@ export interface CoolingFromThermal {
 }
 
 /** Throws with the route's own plain-English refusal (no thermal state /
- * liquid-only / manual h / no air path / missing air speed) on a 422 — the
- * button's caller shows it exactly like any other Controller tab error. */
+ * liquid-only / manual h / no air path / missing air speed) on a 422. */
 export const getCoolingFromThermal = (die?: string, config?: string, duty?: string) => {
   const p = new URLSearchParams();
   if (die) p.set('die', die);
   if (config) p.set('config', config);
   if (duty) p.set('duty', duty);
   return fetch(`${API}/api/controller/cooling_from_thermal?${p}`).then(j<CoolingFromThermal>);
+};
+
+/* ── AUTOMATIC cooling inheritance from Thermal (owner 2026-09-25): "Когда я
+ * ставлю air или liquid, он должен брать параметры охлаждения из Thermal.
+ * Я там их устанавливаю для мотора — те же и для контроллера по умолчанию,
+ * но можно изменить, чтобы сделать разными."
+ *
+ * `GET /api/controller/thermal_cooling` reports, for EACH of the three
+ * cooling modes, what it would inherit from Thermal right now — the panel
+ * fetches this once (on mount / die-config change / a Thermal-tab save) and
+ * shows whichever entry matches the Mode selector as a placeholder + "from
+ * Thermal" chip on every field that still has NO override (blank on
+ * screen — the same convention `vdc`/`fsw` already use). Typing a value
+ * makes that ONE field an override; the small "↺" resets it back to blank
+ * (see ControllerPanel's cooling rows). ── */
+
+export interface ThermalCoolingModeInfo {
+  /** Only the keys THIS mode can inherit — ``air_speed_mps``/``t_ambient_c``
+   * (air_forced), ``t_ambient_c`` (air_still), or ``coolant``/``flow_lpm``/
+   * ``t_in_c`` (liquid); ``{}`` when Thermal has nothing for this mode. */
+  fields: Record<string, number | string>;
+  /** Human sentence naming where ``fields`` came from — the Thermal tab's
+   * current settings, or the duty's saved thermal record — ``null`` with
+   * an empty ``fields``. */
+  source: string | null;
+  /** The Thermal tab's OWN cooling_mode word this was mapped from
+   * ("air" | "robotics" | "liquid") — ``null`` when nothing matched. */
+  thermal_mode: string | null;
+  /** One line explaining why ``fields`` is empty — ``null`` when it is not. */
+  note: string | null;
+}
+
+export interface ThermalCoolingByMode {
+  die: string | null; config: string | null; duty: string | null;
+  modes: { air_forced: ThermalCoolingModeInfo; air_still: ThermalCoolingModeInfo;
+          liquid: ThermalCoolingModeInfo };
+}
+
+export const getThermalCooling = (die?: string, config?: string, duty?: string) => {
+  const p = new URLSearchParams();
+  if (die) p.set('die', die);
+  if (config) p.set('config', config);
+  if (duty) p.set('duty', duty);
+  return fetch(`${API}/api/controller/thermal_cooling?${p}`).then(j<ThermalCoolingByMode>);
 };
 
 /** One electrical period as an SVG polyline, scaled to its own axis. */

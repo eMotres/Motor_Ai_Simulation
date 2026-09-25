@@ -19,7 +19,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Paper, Typography, Button, TextField, MenuItem, Divider,
          CircularProgress, Alert, Chip, Tooltip, Checkbox, IconButton,
          FormControlLabel } from '@mui/material';
-import DeviceThermostatIcon from '@mui/icons-material/DeviceThermostat';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
 import DeviceCatalog from './DeviceCatalog';
@@ -33,11 +33,11 @@ import { listDevices, getTopologies, solveController, getLast, postSchematic,
          polyline, fmt, pct, statusLine, getControllerSettings,
          saveControllerSettings, formStateFromSettings, settingsForSave,
          controllerSolveBody, getResolvedPoint, DEFAULT_CONTROLLER_FORM,
-         getCoolingFromThermal, carrierPrefill, carrierOriginLine,
+         getThermalCooling, carrierPrefill, carrierOriginLine,
          staleResultFields, staleResultLine,
          type DeviceRow, type CoilRow, type ControllerResult,
          type ControllerFormState, type ResolvedPoint,
-         type CoolingFromThermal } from './controllerApi';
+         type ThermalCoolingByMode } from './controllerApi';
 
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 const NUM = { width: 120, '& input': { fontSize: 12, py: 0.5 } } as const;
@@ -159,32 +159,73 @@ const ControllerPanel: React.FC = () => {
   // so a saved controller restores the moment the tab opens.
   const dieCtx = useDieContext();
 
-  // ── "Use thermal air cooling" (owner 2026-09-24) — pulls Mode/wind-speed/
-  // ambient off the loaded duty's own saved thermal record.  `thermalCool`
-  // is the chip's own snapshot: set by the button, cleared the moment the
-  // owner edits Mode / wind speed / ambient by hand, so the chip can never
-  // claim a source for a value it no longer describes.
-  const [thermalCool, setThermalCool] = useState<CoolingFromThermal | null>(null);
-  const [thermalCoolBusy, setThermalCoolBusy] = useState(false);
-  const [thermalCoolErr, setThermalCoolErr] = useState<string | null>(null);
-  const useThermalCooling = async () => {
-    setThermalCoolBusy(true); setThermalCoolErr(null);
-    try {
-      const r = await getCoolingFromThermal(dieCtx.die || undefined,
-                                            dieCtx.config || undefined);
-      setCoolingMode(r.mode);
-      if (r.air_speed_m_s != null) setAirSpeed(r.air_speed_m_s);
-      setTAmbient(r.ambient_C);
-      setThermalCool(r);
-    } catch (e) { setThermalCoolErr(String(e)); }
-    setThermalCoolBusy(false);
+  // ── COOLING INHERITS FROM THERMAL, per field, per mode (owner 2026-09-25:
+  // "Когда я ставлю air или liquid, он должен брать параметры охлаждения из
+  // Thermal... но можно изменить, чтобы сделать разными") — replaces the
+  // 2026-09-24 button.  `thermalByMode` is what EACH of the three cooling
+  // modes would inherit right now (`GET /api/controller/thermal_cooling`);
+  // a field left BLANK on screen shows its entry as a placeholder + "from
+  // Thermal" chip and follows it live, exactly like Carrier/DC-link already
+  // do for the duty's own record — typing a value makes that one field an
+  // override (see the "MOSFET cooling" rows below for the reset control).
+  const [thermalByMode, setThermalByMode] = useState<ThermalCoolingByMode | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => { void (async () => {
+      if (!dieCtx.die || !dieCtx.config) { if (alive) setThermalByMode(null); return; }
+      try {
+        const t = await getThermalCooling(dieCtx.die, dieCtx.config);
+        if (alive) setThermalByMode(t);
+      } catch { if (alive) setThermalByMode(null); }
+    })(); };
+    load();
+    // A Thermal-tab edit (thermalStore's own dispatch) or a machine switch
+    // must refresh this without waiting for the next mount.
+    window.addEventListener('thermal-cooling-saved', load);
+    window.addEventListener('family-changed', load);
+    return () => {
+      alive = false;
+      window.removeEventListener('thermal-cooling-saved', load);
+      window.removeEventListener('family-changed', load);
+    };
+  }, [dieCtx.die, dieCtx.config]);
+
+  /** What the given cooling mode would inherit for ONE field right now —
+   *  ``null`` when Thermal has nothing for it. */
+  const thermalField = (mode: 'air_forced' | 'air_still' | 'liquid', field: string
+                        ): number | string | null => {
+    const v = thermalByMode?.modes?.[mode]?.fields?.[field];
+    return v === undefined ? null : v;
   };
-  // Any HAND edit of Mode / wind speed / ambient invalidates the chip — it
-  // must never keep naming a source for a value the owner has since typed
-  // over (the same "editing clears the chip" rule the owner asked for).
-  const onCoolingModeChange = (v: string) => { setThermalCool(null); setCoolingMode(v); };
-  const onAirSpeedChange = (v: Nullable) => { setThermalCool(null); setAirSpeed(v); };
-  const onTAmbientChange = (v: Nullable) => { setThermalCool(null); setTAmbient(v); };
+  /** The chip + HelpTip (Thermal HAS a value) or the one-line note (it does
+   *  not) for a still-blank (not overridden) field — ``null`` once the
+   *  field is overridden, so an edited value never keeps showing a stale
+   *  "from Thermal" claim. */
+  const thermalHint = (mode: 'air_forced' | 'air_still' | 'liquid', field: string,
+                       overridden: boolean, label: (v: number | string) => string) => {
+    if (overridden) return null;
+    const info = thermalByMode?.modes?.[mode];
+    if (!info) return null;
+    const v = info.fields[field];
+    if (v != null) {
+      return (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: -0.4, mb: 0.2 }}>
+          <Chip size="small" label={`from Thermal: ${label(v)}`} sx={{ fontSize: 10, height: 18 }} />
+          <HelpTip title={info.source || ''} />
+        </Box>);
+    }
+    return info.note ? (
+      <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mt: -0.4, mb: 0.2 }}>
+        {info.note}</Typography>) : null;
+  };
+  /** The small "↺ use Thermal" reset next to an OVERRIDDEN field — clears it
+   *  back to blank (inherited) rather than the caller having to retype
+   *  whatever Thermal is showing. */
+  const ResetToThermal: React.FC<{ onReset: () => void }> = ({ onReset }) => (
+    <Tooltip title="Use Thermal's value again">
+      <IconButton size="small" sx={{ p: 0.2 }} onClick={onReset}>
+        <RestartAltIcon sx={{ fontSize: 14 }} /></IconButton>
+    </Tooltip>);
 
   // Gates the debounced auto-save below: `"<die>::<config>"` once THIS
   // configuration's settings have actually landed, `null` while a load is in
@@ -217,9 +258,6 @@ const ControllerPanel: React.FC = () => {
       setAreaCm2(next.areaCm2); setFinEff(next.finEff); setEmissivity(next.emissivity);
       setMapping(next.mapping);
       setCoupleWithEm(next.coupleWithEm);
-      // A chip naming a DIFFERENT machine's thermal record must never
-      // survive a die/config switch.
-      setThermalCool(null); setThermalCoolErr(null);
       if (block && (block as any).saved_at) setSettingsSavedAt((block as any).saved_at);
     } catch { /* nothing saved yet, or the read failed — the tab's own defaults stand */
     } finally { settingsLoadedFor.current = `${dieCtx.die}::${dieCtx.config}`; }
@@ -552,31 +590,10 @@ const ControllerPanel: React.FC = () => {
             <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
               <SectionLabel sx={{ mb: 0.5, flex: 1 }}>MOSFET cooling</SectionLabel>
-              <Tooltip title={dieCtx.active
-                ? 'Use thermal air cooling — copy the housing air mode, wind '
-                  + 'speed and ambient temperature off this duty\'s own saved '
-                  + 'Thermal simulation.'
-                : 'Load a configuration first — this reads that duty\'s own '
-                  + 'saved thermal record.'}>
-                <span>
-                  <IconButton size="small" disabled={!dieCtx.active || thermalCoolBusy}
-                    onClick={() => void useThermalCooling()} sx={{ p: 0.4 }}>
-                    {thermalCoolBusy ? <CircularProgress size={14} /> : <DeviceThermostatIcon sx={{ fontSize: 16 }} />}
-                  </IconButton>
-                </span>
-              </Tooltip>
+              <HelpTip title="Wind speed / ambient (air) and coolant / flow / inlet (liquid) inherit the Thermal tab's own settings by default, per mode — the same air or coolant the housing sits in, set once. Type a value to override just that field; the ↺ next to an overridden field resets it back to Thermal." />
             </Box>
-            {thermalCoolErr && <Alert severity="error" sx={{ fontSize: 11.5, py: 0 }}
-              onClose={() => setThermalCoolErr(null)}>{thermalCoolErr}</Alert>}
-            {thermalCool && !thermalCoolErr && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <Chip size="small" label={`from Thermal: ${thermalCool.air_speed_m_s != null
-                  ? `${fmt(thermalCool.air_speed_m_s, 1)} m/s · ` : ''}${fmt(thermalCool.ambient_C, 1)} °C`}
-                  sx={{ fontSize: 10, height: 20 }} />
-                <HelpTip title={thermalCool.source} />
-              </Box>)}
             <Row label="Mode" tip="Liquid coldplate, forced air (fan/slipstream) or still air (no fan) — the same three the thermal simulation offers for the housing, now for the device heatsink/plate.">
-              <TextField select size="small" value={coolingMode} onChange={e => onCoolingModeChange(e.target.value)}
+              <TextField select size="small" value={coolingMode} onChange={e => setCoolingMode(e.target.value)}
                 sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
                 <MenuItem value="liquid" sx={{ fontSize: 12 }}>liquid coldplate</MenuItem>
                 <MenuItem value="air_forced" sx={{ fontSize: 12 }}>air — forced</MenuItem>
@@ -584,24 +601,49 @@ const ControllerPanel: React.FC = () => {
               </TextField>
             </Row>
             {coolingMode === 'liquid' && (<>
-              <Row label="Coolant" tip="The coldplate fluid, from the same catalogue the motor jacket uses.">
+              <Row label="Coolant" tip="The coldplate fluid, from the same catalogue the motor jacket uses. Inherits the Thermal tab's jacket fluid by default.">
                 <TextField select size="small" value={coolant} onChange={e => setCoolant(e.target.value)}
                   sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="" sx={{ fontSize: 12, fontStyle: 'italic' }}>(from Thermal)</MenuItem>
                   {['water', 'water_glycol_50', 'ethylene_glycol', 'oil'].map(c =>
                     <MenuItem key={c} value={c} sx={{ fontSize: 12 }}>{c}</MenuItem>)}
                 </TextField>
+                {coolant !== '' && <ResetToThermal onReset={() => setCoolant('')} />}
               </Row>
-              <Row label="Flow" tip="Coldplate flow. It sets the film coefficient AND the coolant's own temperature rise." unit="L/min"><Num v={flow} set={setFlow} /></Row>
-              <Row label="Inlet" tip="Coolant inlet temperature — the bottom of the whole thermal stack." unit="°C"><Num v={tin} set={setTin} /></Row>
+              {thermalHint('liquid', 'coolant', coolant !== '', v => String(v))}
+              <Row label="Flow" tip="Coldplate flow. It sets the film coefficient AND the coolant's own temperature rise. Inherits the Thermal tab's jacket flow by default." unit="L/min">
+                <Num v={flow} set={setFlow}
+                  placeholder={thermalField('liquid', 'flow_lpm') != null
+                    ? fmt(thermalField('liquid', 'flow_lpm') as number, 1) : undefined} />
+                {flow !== '' && <ResetToThermal onReset={() => setFlow('')} />}
+              </Row>
+              {thermalHint('liquid', 'flow_lpm', flow !== '', v => `${fmt(v as number, 1)} L/min`)}
+              <Row label="Inlet" tip="Coolant inlet temperature — the bottom of the whole thermal stack. Inherits the Thermal tab's jacket inlet by default." unit="°C">
+                <Num v={tin} set={setTin}
+                  placeholder={thermalField('liquid', 't_in_c') != null
+                    ? fmt(thermalField('liquid', 't_in_c') as number, 1) : undefined} />
+                {tin !== '' && <ResetToThermal onReset={() => setTin('')} />}
+              </Row>
+              {thermalHint('liquid', 't_in_c', tin !== '', v => `${fmt(v as number, 1)} °C`)}
             </>)}
             {coolingMode !== 'liquid' && (<>
-              {coolingMode === 'air_forced' && (
-                <Row label="Wind speed" tip="Air speed over the device heatsink/plate — the same 'wind speed' input as the thermal simulation. Blank = 5 m/s." unit="m/s">
-                  <Num v={airSpeed} set={onAirSpeedChange} />
-                </Row>)}
-              <Row label="Ambient" tip="Ambient air temperature — the bottom of the whole thermal stack in this mode. Blank = 40 °C." unit="°C">
-                <Num v={tAmbient} set={onTAmbientChange} />
+              {coolingMode === 'air_forced' && (<>
+                <Row label="Wind speed" tip="Air speed over the device heatsink/plate — the same 'wind speed' input as the thermal simulation. Inherits the Thermal tab's forced-air speed by default; blank with nothing to inherit = 5 m/s." unit="m/s">
+                  <Num v={airSpeed} set={setAirSpeed}
+                    placeholder={thermalField('air_forced', 'air_speed_mps') != null
+                      ? fmt(thermalField('air_forced', 'air_speed_mps') as number, 1) : undefined} />
+                  {airSpeed !== '' && <ResetToThermal onReset={() => setAirSpeed('')} />}
+                </Row>
+                {thermalHint('air_forced', 'air_speed_mps', airSpeed !== '', v => `${fmt(v as number, 1)} m/s`)}
+              </>)}
+              <Row label="Ambient" tip="Ambient air temperature — the bottom of the whole thermal stack in this mode. Inherits the Thermal tab's ambient by default; blank with nothing to inherit = 40 °C." unit="°C">
+                <Num v={tAmbient} set={setTAmbient}
+                  placeholder={thermalField(coolingMode as 'air_forced' | 'air_still', 't_ambient_c') != null
+                    ? fmt(thermalField(coolingMode as 'air_forced' | 'air_still', 't_ambient_c') as number, 1) : undefined} />
+                {tAmbient !== '' && <ResetToThermal onReset={() => setTAmbient('')} />}
               </Row>
+              {thermalHint(coolingMode as 'air_forced' | 'air_still', 't_ambient_c', tAmbient !== '',
+                v => `${fmt(v as number, 1)} °C`)}
               <Row label="Area basis" tip="A heatsink bolted to EACH device, or one PCB pad shared by every device on it.">
                 <TextField select size="small" value={areaBasis} onChange={e => setAreaBasis(e.target.value as 'heatsink' | 'plate')}
                   sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>

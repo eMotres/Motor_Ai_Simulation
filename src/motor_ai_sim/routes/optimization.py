@@ -2572,6 +2572,72 @@ def _scan_validation_inputs(result: Dict[str, Any], req: ScanValidateRequest
     return point, args
 
 
+def _scan_point_for_apply(result: Dict[str, Any], req: ScanValidateRequest) -> Dict[str, Any]:
+    """Read one finished Sweep point exactly as the Sweep computed it, refusing
+    only if the machine has changed since the Sweep ran.
+
+    2026-09-25 (owner): Apply must not re-solve a picked Sweep point at
+    standard/cogging_quality resolution before writing it into the machine —
+    a pick applies its OWN (screening-resolution) numbers immediately; the
+    standard-resolution answer comes from the owner's next Electromagnetic
+    run of the applied machine.  This keeps only the machine-mismatch
+    protection ``_scan_validation_inputs`` also enforces (the config
+    fingerprint with the swept keys excluded, plus the point's own source
+    fingerprint for sweeps stamped since 0f973bb) — it does not require the
+    sweep's pinned solver knobs (those exist only to reproduce an eval, which
+    nothing here does) and it never calls ``_subprocess_eval``.
+    """
+    if not isinstance(result, dict) or not req.run_id or result.get("run_id") != req.run_id:
+        raise HTTPException(status_code=409, detail="Sweep run changed; select a point from the current run")
+    machine = result.get("machine")
+    if not isinstance(machine, dict) or not machine.get("fingerprint"):
+        raise HTTPException(status_code=422, detail="Sweep lacks its machine stamp; run it again")
+    hits = [p for p in (result.get("points") or []) if isinstance(p, dict) and
+            p.get("geom_id") == req.geom_id and p.get("op_index") == req.op_index]
+    if len(hits) != 1 or hits[0].get("feasible") is not True:
+        raise HTTPException(status_code=422, detail="Selected feasible Sweep point is absent or ambiguous")
+    point = dict(hits[0])
+    ov = point.get("overrides")
+    if not isinstance(ov, dict):
+        raise HTTPException(status_code=422, detail="Sweep point lacks its geometry; run it again")
+    geo_ov = {k: v for k, v in ov.items() if k != "gamma_deg"}
+    sp = result.get("scan_params") if isinstance(result.get("scan_params"), dict) else {}
+    pinned = sp.get("validation_provenance_version") == 1
+    swept = tuple(machine.get("swept") or _swept_geo_keys(result))
+    machine_ok = machine["fingerprint"] == _machine_stamp(swept)["fingerprint"]
+    if pinned:
+        if not point.get("source_cfg_fp"):
+            raise HTTPException(status_code=422, detail="Sweep point lacks source geometry provenance; run it again")
+        source_fp = _config_fingerprint(tuple(geo_ov))
+        machine_ok = machine_ok and source_fp != "nofp" and point["source_cfg_fp"] == source_fp
+    if not machine_ok:
+        raise HTTPException(status_code=409, detail="Machine/configuration changed since this Sweep; rerun it")
+    point["_provenance"] = "pinned" if pinned else "legacy_machine_stamp"
+    # γ, when swept, rides as its own top-level `gamma_deg` (stamped by the
+    # scan worker) — strip it back out of `overrides` so Apply never sends it
+    # to the GEOMETRY endpoint as if it were a shape variable (mirrors
+    # `_scan_validation_inputs`'s `geo_ov`, which is what the old re-solve
+    # path applied).
+    point["overrides"] = geo_ov
+    return point
+
+
+@router.post("/scan/apply_point")
+def scan_apply_point(req: ScanValidateRequest):
+    """Return one picked Sweep point's own (screening-resolution) result for
+    DIRECT Apply — no re-solve.  Identity is still enforced: the point is
+    refused if the machine it was solved on (fingerprint with the swept keys
+    excluded) does not match the machine as it is now.  The standard-
+    resolution answer comes from the owner's next Electromagnetic run of the
+    applied machine (see ``/descent/validate_point`` for the unrelated
+    Descent/Auto on-demand re-check, unchanged by this)."""
+    with _scan_lock:
+        result = _scan_state.get("result")
+        point = _scan_point_for_apply(result, req)
+    return _json_sane({"point": point, "run_id": req.run_id,
+                        "provenance": point.get("_provenance")})
+
+
 @router.post("/scan/validate_point")
 def scan_validate_point(req: ScanValidateRequest):
     """Re-solve one picked screening point at final angular resolution."""

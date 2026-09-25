@@ -139,15 +139,22 @@ def test_unsettled_baseline_a_fails_closed():
     assert "not settled" in final["reason"]
 
 
-def test_scan_points_are_preliminary_and_old_saved_points_cannot_apply():
+def test_scan_points_are_preliminary_and_apply_is_direct():
     point = O._point_from_eval(_out({"g": 1}, 10.0), {}, 10.0, 0, 0, 100.0)
     assert point["feasible"] is True
     assert point["final_validation_status"] == "preliminary"
     assert point["apply_eligible"] is False
 
+    # 2026-09-25 (owner): Sweep Apply is direct — it reads the stored point
+    # (machine-mismatch checked, see O._scan_point_for_apply) and writes it
+    # into the machine immediately, with NO re-solve at standard/
+    # cogging_quality resolution first (that stays a Descent/Auto-only path).
     panel = (Path(__file__).resolve().parents[1] / "web/src/components/sweep/SweepStudyPanel.tsx").read_text(encoding="utf-8")
     assert panel.count("apply_eligible: p.apply_eligible === true") == 2  # chart and table
     apply_body = panel.split("const applyPoint = async", 1)[1].split("// kU converts", 1)[0]
-    assert apply_body.index("/api/optimization/scan/validate_point") < apply_body.index("updateGeometryViaApi")
-    assert apply_body.index("v?.apply_eligible !== true") < apply_body.index("autoSaveAppliedDesign")
+    assert apply_body.index("/api/optimization/scan/apply_point") < apply_body.index("updateGeometryViaApi")
+    assert "/api/optimization/scan/validate_point" not in apply_body
+    assert "v?.apply_eligible" not in apply_body
+    assert "v?.cogging_sampling_final_quality_sufficient" not in apply_body
+    assert "v?.nonlinear_converged" not in apply_body
     assert "disabled={applying || running}" in panel

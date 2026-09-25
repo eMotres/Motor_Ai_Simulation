@@ -105,6 +105,7 @@ __all__ = [
     "RedisQueue", "JobCancelled", "JobAccepted", "NotOwner",
     "queue", "reset_queue", "run_job", "admit", "queued",
     "cancel_run", "is_cancelled", "clear_cancelled", "current_run_id",
+    "check_cancelled",
     "current_owner", "current_tier", "priority_for",
     "new_run_id", "async_mode", "store_path",
     "HANDLERS", "register_handler", "register_cancel_hook",
@@ -1217,6 +1218,20 @@ def is_cancelled(run_id: str) -> bool:
     q = queue()
     getter = getattr(q, "is_cancelled", None)
     return bool(getter(run_id)) if getter is not None else False
+
+
+def check_cancelled(run_id: Optional[str] = None) -> None:
+    """Raise :class:`JobCancelled` if THIS job (or ``run_id``) was asked to stop.
+
+    For the long loops that sit INSIDE a job and have no progress callback of
+    their own to carry a cancel — the rotor-stress contact iterations, the
+    limit-speed search, the modal sweep, the thermal solves of a coupled run
+    (owner 2026-09-25: Stop must stop every phase, not only the frame march).
+    Outside a job, with no id given, it does nothing.
+    """
+    rid = run_id if run_id is not None else current_run_id()
+    if rid and is_cancelled(rid):
+        raise JobCancelled(str(rid))
 
 
 def clear_cancelled(run_id: str = "") -> None:

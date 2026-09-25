@@ -5230,6 +5230,10 @@ def get_fem_transient(
                       else "fem-solve (sliding-band)"),
             "composition": "",
         }
+        def _sb_cancel_only(*_a, **_k):
+            if run_id and _JOBS.is_cancelled(run_id):
+                raise _RunCancelled(run_id)
+
         def _sb_progress(_done, _total, _phase=None, _composition=None):
             # Cooperative cancel: this callback is the one hook that fires at
             # the top of EVERY frame (settling, warm-up and demag pre-pass
@@ -5411,7 +5415,12 @@ def get_fem_transient(
                             component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
                             hi_fidelity=bool(hi_fidelity),
                             structured_gap=bool(structured_gap),
-                            airgap_macro=bool(airgap_macro))
+                            airgap_macro=bool(airgap_macro),
+                            # A WHOLE second transient, and it had no
+                            # progress callback — so no cancel check: a
+                            # Stop pressed during the reference solve was
+                            # ignored until it finished (2026-09-25).
+                            progress_cb=_sb_cancel_only)
                         import numpy as _np_hr
                         _pl_v = float(_np_hr.mean(_sbres.get(
                             "P_loss_total_W") or [0.0]))

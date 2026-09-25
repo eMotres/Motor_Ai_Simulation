@@ -1806,7 +1806,11 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
     stall = 0
     viol = 0.0
     it = 0
+    from motor_ai_sim import jobs as _jobs
     for it in range(1, max_iter * n_steps + 1):
+        # STOP REACHES THE CONTACT ITERATION (2026-09-25): inside a job whose
+        # run was cancelled, the next iteration is not solved.
+        _jobs.check_cancelled()
         it_step += 1
         if progress is not None:
             # Reported BEFORE the solve, not after: the step the user is waiting

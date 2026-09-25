@@ -3409,6 +3409,10 @@ def solve_thermal_field(
     _comp_str = "conduction + post-processing"
 
     def _report(done, total=None, phase=None):
+        # Every phase of the thermal solve passes here — so a Stop pressed
+        # while a coupled run (or any job) is inside a thermal solve takes
+        # effect at the next phase instead of after the whole map (2026-09-25).
+        _JOBS.check_cancelled()
         if progress is None:
             return
         progress(int(done), _TOTAL, phase, _comp_str)

@@ -227,6 +227,11 @@ export interface ControllerSettings {
   v_dc_V?: number | null;
   cooling?: ControllerCoolingSettings;
   mapping?: ControllerMappingRowSettings[];
+  /** Old saved blocks may still carry this (the Controller tab's "Couple
+   * with EM" checkbox, removed 2026-09-25 — the backend never read it; all
+   * coupling is configured on the Electromagnetic side's own Coupled menu).
+   * Kept optional here only so reading an old block doesn't error; the web
+   * never sets or sends it any more. */
   couple_with_em?: boolean;
 }
 
@@ -280,7 +285,6 @@ export interface ControllerFormState {
   finEff: NumOrBlank;
   emissivity: NumOrBlank;
   mapping: Record<number, string>;
-  coupleWithEm: boolean;
 }
 
 /**
@@ -320,7 +324,7 @@ export const DEFAULT_CONTROLLER_FORM: ControllerFormState = {
   coolant: '', flow: '', tin: '', rtim: 0.03,
   coolingMode: 'liquid', airSpeed: '', tAmbient: '', areaBasis: 'heatsink',
   areaCm2: '', finEff: 0.75, emissivity: 0.9,
-  mapping: {}, coupleWithEm: false,
+  mapping: {},
 };
 
 const toFormNumber = (v: number | null | undefined): NumOrBlank =>
@@ -376,7 +380,6 @@ export function formStateFromSettings(
     finEff: toFormNumber(cooling.fin_efficiency),
     emissivity: toFormNumber(cooling.emissivity),
     mapping: rows.length ? mapping : fallback.mapping,
-    coupleWithEm: block.couple_with_em ?? fallback.coupleWithEm,
   };
 }
 
@@ -409,7 +412,6 @@ export function settingsForSave(s: ControllerFormState): ControllerSettings {
               plate_area_cm2: s.areaBasis === 'plate' ? toSaveNumber(s.areaCm2) : null,
               fin_efficiency: toSaveNumber(s.finEff), emissivity: toSaveNumber(s.emissivity) },
     mapping,
-    couple_with_em: s.coupleWithEm,
   };
 }
 

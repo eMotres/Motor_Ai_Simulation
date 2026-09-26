@@ -1782,6 +1782,7 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
             log.warning("coupled: %s", out["refusal"])
             break
         _ml.BEARING_TEMP_C.reset(tok)
+        _drv_k, _exc_k = _pass_excitation(inv, ctl)
         d_tj = ctl.step(em_k, it=k, phase="pwm_final")
         _progress.update(phase="controller PWM pass %d/%d — thermal with the "
                                "PWM losses" % (k, n))
@@ -1816,7 +1817,12 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
                    "total_W")}
         out["passes"].append(row)
         out.update(em=em_k, field=field_k, coil_c=c_in, magnet_c=m_in,
-                   bearing_c=b_in, inverter=inv)
+                   bearing_c=b_in, inverter=inv,
+                   register=dict(body=body_k, em=em_k, coil_temp_c=c_in,
+                                 magnet_temp_c=m_in,
+                                 n_steps_per_period=inv["n_steps_per_period"],
+                                 em_map=_map, drive=_drv_k,
+                                 excitation=_exc_k))
         if k == 1:
             out["em_first"] = em_k
         d_c = None if c_out is None else float(c_out) - c_in
@@ -3521,9 +3527,15 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
                    n_steps_per_period: Optional[int] = None,
                    em_map: Optional[Dict[str, Any]] = None,
                    em_loss_source: Optional[Dict[str, Any]] = None,
-                   params_out: Optional[Dict[str, Any]] = None
+                   params_out: Optional[Dict[str, Any]] = None,
+                   capture: Optional[Dict[str, Any]] = None
                    ) -> Dict[str, Any]:
     """ONE thermal solve at the same temperatures the EM run was made at.
+
+    ``capture`` — a dict filled with the loss map this solve used
+    (``solve_thermal_field``'s own ``_em_capture``), so the pass can be
+    registered for the Thermal tab (``_register_answer_pass``) without a
+    second lookup.
 
     ``routes.thermal.solve_thermal_field`` — the function all three thermal
     callers share — with this loop's cooling and the EM identity that selects the
@@ -3575,6 +3587,8 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
         # conduction solve below it is byte-for-byte the one a sine map gets.
         kw["_em_map"] = em_map
         kw["_em_loss_source"] = dict(em_loss_source or {})
+    if capture is not None:
+        kw["_em_capture"] = capture
 
     th._progress.start(total=2, kind="field",
                        phase="loss map — the coupled run's own solve",
@@ -3590,7 +3604,8 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
         # store is a pickle that sits next to the user's config.
         _p = th._field_params(**{k: v for k, v in kw.items()
                                  if k not in ("geo", "bearing_temp_c",
-                                              "_em_map", "_em_loss_source")})
+                                              "_em_map", "_em_loss_source",
+                                              "_em_capture")})
         # …and handed BACK, so a caller that goes on to change the map can
         # re-remember it under the very same params (the limited mode's
         # transient snapshot — see `_run`).  Re-deriving them at the second
@@ -3603,6 +3618,81 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
     except Exception:  # noqa: BLE001 — a memory is not worth losing an answer over
         log.exception("could not remember the coupled run's thermal map")
     return out
+
+
+def _pass_excitation(inverter: Optional[Dict[str, Any]],
+                     controller: Optional["_ControllerLoop"]
+                     ) -> Tuple[Optional[str], Optional[str]]:
+    """``(drive, excitation)`` of a pass's snapshot key — ``(None, None)`` on
+    the sine.  Read at the moment of the pass: the controller's drop moves
+    with every ``step``."""
+    if inverter is None:
+        return None, None
+    if controller is not None:
+        return "inverter", controller.snap_excitation()
+    return "pwm_voltage", _pwm_snap_excitation(inverter)
+
+
+def _register_answer_pass(phase: str, body: Dict[str, Any],
+                          em: Dict[str, Any], *, coil_temp_c: float,
+                          magnet_temp_c: Optional[float],
+                          n_steps_per_period: Optional[int] = None,
+                          em_map: Optional[Dict[str, Any]] = None,
+                          drive: Optional[str] = None,
+                          excitation: Optional[str] = None
+                          ) -> Dict[str, Any]:
+    """File a pass the loop REPORTS AS ITS ANSWER where the Thermal tab looks
+    (``routes.thermal.register_coupled_pass``), at its exact point.
+
+    Task 6 (2026-09-26): the Thermal tab refused ``no_electromagnetic_run`` at
+    the loop's own S1 point because the run snapshot store keeps one entry and
+    the loop makes more runs after its answer.  ``em_map`` is the pass's own
+    loss map when the caller already holds it; otherwise (the sine limit pass)
+    it is replayed from the snapshot the pass just stored — a lookup, never a
+    solve.  Never raises: filing is bookkeeping, and a pass that cannot be
+    filed returns ``{"registered": False, "reason": …}`` for the record.
+    """
+    from motor_ai_sim.routes import thermal as _th
+
+    rec: Dict[str, Any] = {"phase": phase, "registered": False,
+                           "run_id": (em or {}).get("computed_at")}
+    try:
+        kw = dict(
+            gamma_deg=_f(body, "gamma_deg", 0.0),
+            I_phase_rms=_f(body, "I_phase_rms", 0.0),
+            n_steps_per_period=int(n_steps_per_period
+                                   or body.get("n_steps_per_period") or 12),
+            n_periods=_f(body, "n_periods", 1.0),
+            mesh_size_mm=_f(body, "mesh_size_mm", 3.0),
+            min_size_mm=_f(body, "min_size_mm", 0.3),
+            outer_air_factor=_f(body, "outer_air_factor", 1.3),
+            n_sectors=int(body.get("n_sectors") or 1),
+            coil_temp_c=float(coil_temp_c),
+            component_mesh=str(body.get("component_mesh") or ""),
+            geo=body.get("geo"),
+            magnet_temp_c=(None if magnet_temp_c is None
+                           else float(magnet_temp_c)),
+            op_mode=body.get("mode"))
+        probe = _th.coupled_pass_probe(**kw, drive=drive, excitation=excitation,
+                                       rpm=(None if body.get("rpm") in (None, "")
+                                            else body["rpm"]))
+        if em_map is None:
+            if drive:
+                raise ValueError("a PWM pass must hand its own loss map over")
+            from motor_ai_sim.routes.simulation import _parse_geo_override
+            _kw = dict(kw)
+            _geo = _kw.pop("geo")
+            em_map, _src = _th._em_loss_map(
+                **_kw, geo=_geo, geo_ov=_parse_geo_override(_geo))
+        rec["point"] = _th.register_coupled_pass(
+            phase=phase, probe=probe, em=em_map, run_id=rec["run_id"])
+        rec["registered"] = True
+    except Exception as exc:  # noqa: BLE001 — HTTPException included
+        rec["reason"] = (_detail_text(exc) if isinstance(exc, HTTPException)
+                         else str(exc))
+        log.warning("coupled: the %s could not be registered for the Thermal "
+                    "tab: %s", phase, rec["reason"])
+    return rec
 
 
 def _shaft_torque_nm(summary: Dict[str, Any]) -> tuple:
@@ -4696,6 +4786,11 @@ def _run(body: Dict[str, Any],
     damping_eff = float(damping)     # the step actually taken; halves on oscillation
     prev_d: Optional[tuple] = None   # the previous (Δcoil, Δmagnet) corrections
     em_at = (t_coil, t_mag)          # what the LAST EM run was actually solved at
+    #: The loop's last solved pass, spelled for `_register_answer_pass`, and
+    #: every pass the record reports as its answer, as filed for the Thermal
+    #: tab (`em_passes` in the record).
+    last_pass: Optional[Dict[str, Any]] = None
+    em_passes: List[Dict[str, Any]] = []
     try:
         _progress.start(
             total=max_iter * 2, kind="coupled",
@@ -4876,6 +4971,7 @@ def _run(body: Dict[str, Any],
                             ["drive"], code="pwm_no_loss_map")
             _progress.update(done=(it - 1) * 2 + 1,
                              phase="iteration %d/%d — thermal" % (it, max_iter))
+            _cap_it: Dict[str, Any] = {}
             field = _thermal_solve(body, cooling, coil_temp_c=t_coil,
                                    magnet_temp_c=t_mag, rpm=rpm_eff,
                                    bearing_temp_c=t_brg,
@@ -4883,7 +4979,16 @@ def _run(body: Dict[str, Any],
                                        inverter["n_steps_per_period"]
                                        if inverter else None),
                                    em_map=_em_map, em_loss_source=_em_src,
-                                   params_out=field_params)
+                                   params_out=field_params, capture=_cap_it)
+            # THIS pass, as it would be filed for the Thermal tab if it turns
+            # out to be the loop's last (see `_register_answer_pass`).
+            _drv_it, _exc_it = _pass_excitation(inverter, ctl)
+            last_pass = dict(
+                body=body, em=em, coil_temp_c=t_coil, magnet_temp_c=t_mag,
+                n_steps_per_period=(inverter["n_steps_per_period"]
+                                    if inverter else None),
+                em_map=_cap_it.get("em"), drive=_drv_it,
+                excitation=_exc_it)
 
             w = _component(field, "winding")
             m = _component(field, "magnet")
@@ -5248,6 +5353,9 @@ def _run(body: Dict[str, Any],
                         else "; the next pass would have been aimed at "
                              "%.3f V" % float(inverter["v_phase_peak_V"]))))
                 log.warning("coupled: %s", refusal)
+        # ── THE FINAL PASS, FILED FOR THE THERMAL TAB (Task 6) ──────────────
+        if last_pass is not None and em:
+            em_passes.append(_register_answer_pass("final", **last_pass))
         # ── THE FOUND REGIME, at the resolution the record keeps ────────────
         # The loop searched at the coarse resolution because it was going to
         # search again next pass; what is STORED — the cycle the report draws,
@@ -5390,6 +5498,26 @@ def _run(body: Dict[str, Any],
             finally:
                 _ml.BEARING_TEMP_C.reset(_tok)
             if limited and _em_lim:
+                # FILED FOR THE THERMAL TAB before anything else runs: its
+                # snapshot is the newest one right now (Task 6).
+                _drv_l, _exc_l = _pass_excitation(inverter, ctl)
+                _map_l = None
+                if inverter is not None:
+                    try:
+                        _map_l, _ = _pwm_loss_map(
+                            body, _em_lim, inverter, coil_temp_c=_t_c,
+                            magnet_temp_c=_t_m, controller=ctl)
+                    except (_NoLossMap, HTTPException) as _nm_l:
+                        log.warning("coupled: the limit pass left no loss "
+                                    "map to file: %s", getattr(
+                                        _nm_l, "reason", _nm_l))
+                if inverter is None or _map_l is not None:
+                    em_passes.append(_register_answer_pass(
+                        "limit", body, _em_lim, coil_temp_c=_t_c,
+                        magnet_temp_c=_t_m,
+                        n_steps_per_period=(inverter["n_steps_per_period"]
+                                            if inverter else None),
+                        em_map=_map_l, drive=_drv_l, excitation=_exc_l))
                 em = _em_lim
                 em_at = (_t_c, _t_m)
                 t_coil, t_mag = _t_c, _t_m
@@ -5638,6 +5766,9 @@ def _run(body: Dict[str, Any],
                         t_coil = v["coil_temp_c"]
                         t_mag = v["magnet_temp_c"]
                         em_at = (t_coil, t_mag)
+                        if v.get("register"):
+                            em_passes.append(_register_answer_pass(
+                                "s1_verify", **v["register"]))
                         history.append({
                             "iter": len(history) + 1, "phase": "s1_verify",
                             "T_coil_in": round(float(t_coil), 2),
@@ -5779,6 +5910,9 @@ def _run(body: Dict[str, Any],
             elif sine_reuse_note:
                 pwm_final_blk["sine_state_not_reused"] = sine_reuse_note
             if fin.get("em") is not None:
+                if fin.get("register"):
+                    em_passes.append(_register_answer_pass(
+                        "pwm_final", **fin["register"]))
                 inverter, ctl = fin["inverter"], ctl_final
                 em = fin["em"]
                 t_coil, t_mag = float(fin["coil_c"]), fin["magnet_c"]
@@ -6196,6 +6330,10 @@ def _run(body: Dict[str, Any],
                            - float(last_row["bearing_temp_c"])), 2)),
         "tol_bearing_K": float(BEARING_TOL_K),
         "history": history,
+        # Every pass this record reports as its answer (final, limit, S1
+        # verification, PWM final), as filed for the Thermal tab — with the
+        # exact point a Thermal Solve must name to be answered from it.
+        "em_passes": em_passes,
         # The mechanical step's verdict (phase 3), or its refusal, or None when
         # the caller skipped it — the Mechanical tab's last result is the full
         # answer, this is the line the summary quotes.
@@ -6847,12 +6985,14 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                             code="pwm_no_loss_map")
             _progress.update(phase="S1 verification %d/%d — thermal"
                                    % (k + 1, max_passes))
+            _cap_v: Dict[str, Any] = {}
             field_v = _thermal_solve(
                 body_at, cooling, coil_temp_c=coil_temp_c_guess,
                 magnet_temp_c=magnet_temp_c_guess, rpm=rpm,
                 n_steps_per_period=(inv_at["n_steps_per_period"]
                                     if inv_at is not None else None),
-                em_map=_map_v, em_loss_source=_src_v)
+                em_map=_map_v, em_loss_source=_src_v, capture=_cap_v)
+            _drv_v, _exc_v = _pass_excitation(inv_at, controller)
         except HTTPException as exc:
             if controller is not None:
                 controller.restore(_ctl_st)
@@ -6878,7 +7018,16 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                 "em": em_v, "field": field_v,
                 "coil_temp_c": coil_temp_c_guess,
                 "magnet_temp_c": magnet_temp_c_guess,
-                "actual_c": actual}
+                "actual_c": actual,
+                # …and how to file it for the Thermal tab, should the caller
+                # adopt it (`_register_answer_pass`).
+                "register": dict(
+                    body=body_at, em=em_v, coil_temp_c=coil_temp_c_guess,
+                    magnet_temp_c=magnet_temp_c_guess,
+                    n_steps_per_period=(inv_at["n_steps_per_period"]
+                                        if inv_at is not None else None),
+                    em_map=_cap_v.get("em"), drive=_drv_v,
+                    excitation=_exc_v)}
         if controller is not None:
             last["controller_t_j_c"] = round(float(controller.t_j_c), 2)
             last["controller_t_j_residual_K"] = (

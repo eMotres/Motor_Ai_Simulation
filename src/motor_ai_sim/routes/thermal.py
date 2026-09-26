@@ -1873,6 +1873,7 @@ def _loss_maps_load() -> None:
         pass
     except Exception as exc:  # noqa: BLE001
         log.warning("thermal: could not read the stored loss maps: %s", exc)
+    _coupled_passes_load()
 
 
 def _loss_maps_persist() -> None:
@@ -1921,15 +1922,207 @@ def clear_thermal_loss_maps() -> int:
     wants the Electromagnetic run consulted again regardless (the identity
     carries the geometry and material fingerprints, so a changed machine never
     gets an old map anyway)."""
-    n = len(_LOSS_MAPS)
+    n = len(_LOSS_MAPS) + len(_COUPLED_PASSES)
     _LOSS_MAPS.clear()
+    _COUPLED_PASSES.clear()
+    for _p in (_loss_maps_path(), _coupled_passes_path()):
+        try:
+            os.remove(_p)
+        except FileNotFoundError:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+    return n
+
+
+# ── THE COUPLED LOOP'S ANSWER PASSES (2026-09-26) ─────────────────────────────
+# WHY: the Thermal tab refused `no_electromagnetic_run` at the coupled loop's
+# own S1 point (20.4 A, coil 200.2 °C) minutes after the loop had solved it.
+# Every coupled pass IS an ordinary Electromagnetic run (`coupled._em_run` is
+# the Run button's own call), but the run snapshot store keeps ONE entry per
+# finished run and the loop makes several after its answer (the 20 °C
+# constants, the PWM passes …), and this router's own `_LOSS_MAPS` holds four
+# maps that the loop's iterations fill on the way.  So the pass the record
+# reports was gone by the time anybody asked for it.
+#
+# This store keeps exactly the passes the loop REPORTS AS ITS ANSWER (final,
+# limit, S1 verification), each under the same physics identity the lookup
+# uses, with its exact point.  Written only by `register_coupled_pass`; read by
+# `_em_loss_map` as one more source of the SAME map — never a solve, never a
+# near match.  Loaded with `_LOSS_MAPS` (the same `_LOSS_MAPS_LOADED` flag),
+# mirrored to a dot-file beside it.
+_COUPLED_PASSES_CAP = 8
+_COUPLED_PASSES = _WSP.ws_map("thermal.coupled_passes", _COUPLED_PASSES_CAP)
+
+#: What a pass is called where a person reads it.
+_COUPLED_PHASE_WORDS = {"final": "final pass", "limit": "pass at the limit",
+                        "s1_verify": "S1 verification pass",
+                        "pwm_final": "PWM final pass"}
+
+
+def _coupled_passes_path() -> str:
+    return os.path.join(os.path.dirname(_loss_maps_path()),
+                        ".thermal_coupled_passes.pkl")
+
+
+def _coupled_passes_load() -> None:
+    """Called from ``_loss_maps_load`` only, so the one restore flag governs
+    both stores (tests pin it to keep the disk out)."""
     try:
-        os.remove(_loss_maps_path())
+        import pickle as pk
+        with open(_coupled_passes_path(), "rb") as fh:
+            d = pk.load(fh)
+        if isinstance(d, dict):
+            for k, v in list(d.items())[-_COUPLED_PASSES_CAP:]:
+                _COUPLED_PASSES[k] = v
     except FileNotFoundError:
         pass
-    except Exception:  # noqa: BLE001
-        pass
-    return n
+    except Exception as exc:  # noqa: BLE001
+        log.warning("thermal: could not read the coupled passes: %s", exc)
+
+
+def _coupled_passes_persist() -> None:
+    import threading
+
+    snapshot = dict(_COUPLED_PASSES)
+
+    def _write():
+        try:
+            import pickle as pk
+            p = _coupled_passes_path()
+            with open(p + ".tmp", "wb") as fh:
+                pk.dump(snapshot, fh, protocol=pk.HIGHEST_PROTOCOL)
+            os.replace(p + ".tmp", p)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("thermal: could not persist the coupled passes: %s", exc)
+
+    threading.Thread(target=_WSP.bind(_write), daemon=True).start()
+
+
+def _pass_point(probe) -> Dict[str, Any]:
+    """The exact point a probe names, in the precision the key compares at."""
+    return {"I_phase_rms": probe.get("I_phase_rms"),
+            "gamma_deg": probe.get("gamma_deg"),
+            "rpm": probe.get("rpm"),
+            "coil_temp_c": probe.get("coil_temp_c"),
+            "magnet_temp_c": probe.get("magnet_temp_c"),
+            "n_steps_per_period": probe.get("n_steps_per_period"),
+            "n_periods": probe.get("n_periods"),
+            "drive": probe.get("drive"),
+            "excitation": probe.get("excitation") or ""}
+
+
+def _same_machine(a, b) -> bool:
+    return (a.get("cfg_fingerprint") == b.get("cfg_fingerprint")
+            and _freeze(a.get("geo_ov")) == _freeze(b.get("geo_ov"))
+            and _em_material_names(a.get("mat_ov"))
+            == _em_material_names(b.get("mat_ov")))
+
+
+def coupled_pass_probe(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
+                       mesh_size_mm, min_size_mm, outer_air_factor, n_sectors,
+                       coil_temp_c, component_mesh, geo=None,
+                       magnet_temp_c=None, op_mode=None, drive=None,
+                       excitation=None, rpm=None):
+    """A coupled pass, spelled as the probe the Thermal tab builds for the
+    same request — so the two are compared by one function, not two.
+
+    ``drive`` / ``excitation`` are the PWM pass's own (``inverter`` /
+    ``pwm_voltage`` and the snapshot's excitation string).  A Thermal request
+    always probes the sinusoidal current drive, so a PWM pass never answers
+    one: its map carries the carrier's losses, and serving it as the sine
+    point's would be a silent substitution.  It is still registered, so the
+    refusal can name it.
+
+    ``rpm`` is the speed the pass was SOLVED at (the body's, resolved the way
+    the transient resolves it).  The Thermal probe keys on the config's
+    ``simulation.rpm``; a pass at another speed is filed under its own, so it
+    answers only a request at that speed — never one at the config's."""
+    from motor_ai_sim.routes.simulation import (_effective_rpm,
+                                                _parse_geo_override)
+    probe = _loss_snapshot_probe(
+        gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
+        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor, n_sectors=n_sectors,
+        coil_temp_c=coil_temp_c, component_mesh=component_mesh,
+        n_steps_per_period=n_steps_per_period, n_periods=n_periods,
+        geo_ov=_parse_geo_override(geo), magnet_temp_c=magnet_temp_c,
+        op_mode=op_mode)
+    if rpm is not None:
+        probe["rpm"] = round(_effective_rpm(rpm), 3)
+    if drive:
+        probe["drive"] = str(drive)
+        probe["excitation"] = str(excitation or "")
+    return probe
+
+
+def register_coupled_pass(*, phase: str, probe, em: Dict[str, Any],
+                          run_id: Optional[str] = None) -> Dict[str, Any]:
+    """File ONE coupled answer pass where the Thermal tab looks.
+
+    ``em`` is that pass's own cycle-averaged loss map (the field payload the
+    thermal solve reads).  Raises ``ValueError`` when it carries no per-element
+    loss map — a pass with component totals only is not a map, and filing it
+    would let the Thermal tab spread watts nobody measured.  Returns the
+    registered point."""
+    n_ld = len(em.get("loss_density_per_tri") or []) if isinstance(em, dict) else 0
+    n_tri = int((em or {}).get("n_triangles")
+                or len((em or {}).get("triangles") or []) or -1)
+    if n_ld <= 0 or n_ld != n_tri:
+        raise ValueError("the %s carries no per-element loss map (%d values "
+                         "on %d triangles)" % (phase, n_ld, n_tri))
+    _loss_maps_load()
+    identity = _physics_identity(probe)
+    point = _pass_point(probe)
+    _COUPLED_PASSES[identity] = {
+        "em": _slim_em(em), "phase": str(phase), "point": point,
+        "machine": {k: probe.get(k) for k in ("cfg_fingerprint", "geo_ov",
+                                              "mat_ov")},
+        "run_id": run_id,
+        "computed_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    _COUPLED_PASSES.move_to_end(identity)
+    while len(_COUPLED_PASSES) > _COUPLED_PASSES_CAP:
+        _COUPLED_PASSES.popitem(last=False)
+    _coupled_passes_persist()
+    log.info("thermal: coupled %s registered at %s", phase, point)
+    return point
+
+
+def _coupled_pass_get(identity):
+    _loss_maps_load()
+    return _COUPLED_PASSES.get(identity)
+
+
+def _coupled_pass_words(entry) -> str:
+    pt = entry.get("point") or {}
+    words = _operating_point_words(
+        I_phase_rms=pt.get("I_phase_rms"), gamma_deg=pt.get("gamma_deg"),
+        rpm=pt.get("rpm"), coil_temp_c=pt.get("coil_temp_c"),
+        n_steps_per_period=pt.get("n_steps_per_period"))
+    if pt.get("magnet_temp_c") is not None:
+        words += ", magnet %s °C" % pt["magnet_temp_c"]
+    drv = str(pt.get("drive") or "current")
+    if drv != "current":
+        words += " (%s drive — not a sine-current map)" % drv
+    return "%s at %s" % (_COUPLED_PHASE_WORDS.get(entry.get("phase"),
+                                                  str(entry.get("phase"))),
+                         words)
+
+
+def _coupled_passes_hint(probe) -> str:
+    """The coupled passes of THIS machine that are filed, newest first — so a
+    refusal at 20.4 A can say the loop's S1 pass is at 20.44 A.  Empty when
+    there are none."""
+    try:
+        _loss_maps_load()
+        got = [e for e in reversed(list(_COUPLED_PASSES.values()))
+               if _same_machine(e.get("machine") or {}, probe)]
+    except Exception:  # noqa: BLE001 - a hint never fails the refusal
+        return ""
+    if not got:
+        return ""
+    return ("the coupled loop's passes of this machine are at: %s"
+            % "; ".join(_coupled_pass_words(e) for e in got[:3]))
 
 
 #: The machine-readable tag on the ONE refusal this router owns.  A panel keys
@@ -1961,10 +2154,19 @@ def _operating_point_words(*, I_phase_rms, gamma_deg, rpm, coil_temp_c,
             return "?"
         return "%d" % round(v) if abs(v - round(v)) < 5e-4 else "%.1f" % v
 
+    def _i(x) -> str:
+        # The current at the precision the run key compares it at (0.01 A):
+        # "20.4 A" for a pass solved at 20.44 A sends the user to run a point
+        # that will never match.
+        try:
+            return ("%.2f" % float(x)).rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return "?"
+
     _rpm = ("?" if rpm is None
             else format(int(round(float(rpm))), ",d").replace(",", " "))
     out = ("I = %s A, γ = %s°, %s rpm, coil %s °C"
-           % (_n(I_phase_rms), _n(gamma_deg), _rpm, _n(coil_temp_c)))
+           % (_i(I_phase_rms), _n(gamma_deg), _rpm, _n(coil_temp_c)))
     if n_steps_per_period:
         _st = int(n_steps_per_period)
         out += ", %d step%s/period" % (_st, "" if _st == 1 else "s")
@@ -2181,6 +2383,27 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
         why = ("the matching Electromagnetic run could not be replayed into a "
                "loss map (%s)" % (em.get("reason") if em else "no payload"))
 
+    # ── (c) a pass the COUPLED loop reported as its answer ──────────────────
+    _cp = _coupled_pass_get(_identity)
+    if _cp and isinstance(_cp.get("em"), dict):
+        if callable(phase_cb):
+            phase_cb("loss map — coupled %s" % _cp.get("phase"))
+        log.info("thermal: cycle-averaged loss map taken from the coupled "
+                 "loop's %s (%s) — no EM solve", _cp.get("phase"),
+                 _cp.get("run_id"))
+        return dict(_cp["em"]), {
+            "kind": "coupled_pass",
+            "phase": _cp.get("phase"),
+            "run_id": _cp.get("run_id") or _cp.get("computed_at"),
+            "computed_at": _cp.get("run_id") or _cp.get("computed_at"),
+            "note": ("cycle-averaged loss density of the coupled loop's %s "
+                     "(Electromagnetic run %s) — the same machine, operating "
+                     "point, coil temperature and frame count; no "
+                     "electromagnetic solve ran for this temperature map"
+                     % (_coupled_pass_words(_cp),
+                        _cp.get("run_id") or "of an earlier session")),
+        }
+
     # ── (b') this router's OWN remembered map for the same physics ──────────
     _stored = _loss_maps_get(_identity)
     if _stored and isinstance(_stored.get("em"), dict):
@@ -2200,6 +2423,11 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
         }
 
     # Neither source has it.  This is where a six-minute solve used to start.
+    # When the coupled loop filed passes of this machine, name them: the
+    # usual cause is a point typed off the record's rounded display.
+    _hint = _coupled_passes_hint(probe)
+    if _hint:
+        why = ("%s; %s" % (why, _hint)) if why else _hint
     raise _no_electromagnetic_run(words=_words, why=why)
 
 

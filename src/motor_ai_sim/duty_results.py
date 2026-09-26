@@ -770,6 +770,17 @@ def compact_thermal(result: Dict[str, Any], params: Dict[str, Any],
                             "t_housing_mean_c", "heat_removed_W", "attached_to",
                             "note")),
             "end_faces": _end_faces(cooling.get("end_faces")),
+            # THE ROBOTICS HEAT PATH (2026-09-26): the one conduction choice
+            # and the housing / structure body it lands on, with its touch
+            # limit — what `part_limits` judges and `cooling_from_duty_thermal`
+            # reads the choice back from.
+            "heat_path": _pick(cooling.get("heat_path"),
+                               ("option", "body", "rides_node", "t_body_c",
+                                "touch_limit_c", "over_touch_K",
+                                "binds_touch_limit", "diameter_mm",
+                                "length_mm", "area_m2", "G_film_W_per_K",
+                                "heat_to_room_W", "contact", "bearings",
+                                "note")),
             "gap": _pick(cooling.get("gap"), ("k_eff", "Ta", "Nu", "mode")),
             # THE WHOLE BUDGET, not five legacy names.  `P_in_W` / `P_out_W`
             # are not keys this route has produced for a long time, so the
@@ -798,7 +809,7 @@ def compact_thermal(result: Dict[str, Any], params: Dict[str, Any],
                                   # unanswerable without the last of them.
                                   "mount_W", "housing_convection_W",
                                   "housing_radiation_W", "end_faces_W",
-                                  "stator_heat_split",
+                                  "stator_heat_split", "bearings_W",
                                   # legacy names, kept so an old record still
                                   # reads back the way it was written
                                   "P_in_W", "P_out_W", "P_gap_W", "closed")),
@@ -816,7 +827,7 @@ def compact_thermal(result: Dict[str, Any], params: Dict[str, Any],
                                 # not at which ε, against which structure, or
                                 # with how many ends open
                                 "emissivity", "mount_g_w_per_k", "mount_temp_c",
-                                "end_faces", "end_face_sides")),
+                                "heat_path", "end_faces", "end_face_sides")),
     }
     return out
 
@@ -873,12 +884,14 @@ _DC_SPLIT_KEYS = ("basis", "generated_W", "generated_total_W", "stator_side_W",
                   "rotor_side_W", "stator_pct", "rotor_pct", "housing_W",
                   "mount_W", "winding_end_faces_W", "stator_end_faces_W",
                   "rotor_end_faces_W", "magnet_end_faces_W", "bore_W",
-                  "shaft_ends_W", "gap_W", "winding_to_core_W", "closure_W",
+                  "shaft_ends_W", "bearings_W", "gap_W", "winding_to_core_W",
+                  "closure_W",
                   "closure_pct", "note")
 _DC_POINT_KEYS = ("rpm", "I_phase_rms", "current_arms", "gamma_deg",
                   "coil_temp_c", "magnet_temp_c", "cooling_mode",
                   "ambient_temp", "bore_mode", "end_faces", "end_face_sides",
-                  "emissivity", "mount_g_w_per_k", "mount_temp_c", "h_conv",
+                  "emissivity", "mount_g_w_per_k", "mount_temp_c", "heat_path",
+                  "h_conv",
                   "calibration_duty", "calibration_source",
                   "n_steps_per_period", "n_periods", "mesh_size_mm",
                   "min_size_mm", "n_sectors")

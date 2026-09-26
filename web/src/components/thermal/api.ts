@@ -162,14 +162,10 @@ export interface ThermalRequest {
   /** the temperature the mount is HELD at, °C — omitted means the ambient, and
    *  sending the ambient in its place would make a default look like a choice */
   mount_temp_c?: number;
-  /** the mount's far side (2026-09-26): 'link' says it is a robot arm that
-   *  heats up (see `link_preset`/`link_material`); omitted = 'sink', today's
-   *  behaviour — the mount held at `mount_temp_c` for ever. */
-  mount_mode?: 'sink' | 'link';
-  /** the link's size, only read with `mount_mode: 'link'` */
-  link_preset?: 'finger' | 'wrist' | 'arm';
-  /** the link's material, only read with `mount_mode: 'link'` */
-  link_material?: 'aluminium' | 'steel' | 'plastic';
+  /** robotics only (2026-09-26): where the heat goes by conduction —
+   *  'housing' | 'shaft' | 'both'; omitted = 'none' (still air + radiation
+   *  everywhere).  Replaces the retired mount_mode / link_* fields. */
+  heat_path?: 'housing' | 'shaft' | 'both';
 
   /** effective in-slot conductivity, W/m·K — omitted means the solver's own
    *  default, which is what this tab always sends today.  There is deliberately

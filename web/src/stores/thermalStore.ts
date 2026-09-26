@@ -93,11 +93,32 @@ const COOL_MODES: readonly CoolMode[] = ['air', 'liquid', 'manual', 'none',
 const BORE_MODES: readonly BoreMode[] = ['none', 'air', 'liquid', 'still'];
 const END_FACE_MODES: readonly EndFaceMode[] = ['still', 'none'];
 const FRAME_MODES: readonly FrameMode[] = ['housed', 'open'];
-const MOUNT_MODES: readonly ('sink' | 'link')[] = ['sink', 'link'];
-const LINK_PRESETS: readonly ('finger' | 'wrist' | 'arm')[] =
-  ['finger', 'wrist', 'arm'];
-const LINK_MATERIALS: readonly ('aluminium' | 'steel' | 'plastic')[] =
-  ['aluminium', 'steel', 'plastic'];
+
+/** The robotics mode's ONE conduction choice (2026-09-26, owner: «давай
+ *  упростим») — replaces mount W/K, mount °C, sink-or-link, link size and link
+ *  material.  See `ROBOTICS_HELP.heatPath` for what each one is. */
+export type HeatPath = 'housing' | 'shaft' | 'both' | 'none';
+export const HEAT_PATHS: readonly HeatPath[] = ['housing', 'shaft', 'both', 'none'];
+
+/** The Heat path from a saved settings object, OLD ones mapped to the nearest
+ *  option.  Mirrors `thermal_settings.heat_path_of`: `heatPath` wins when it is
+ *  one of the four; a store saved before it existed carries the mount fields
+ *  instead — any mount (a conductance > 0, or the robot-link mode) was heat
+ *  leaving the stator by conduction, i.e. 'housing'; a mount typed as 0 was a
+ *  machine bolted to nothing, i.e. 'none'.  Neither → the default, 'housing'
+ *  (the default it replaces was a 2 W/K mount). */
+export function heatPathOf(saved: Record<string, unknown> | null | undefined): HeatPath {
+  const src = saved ?? {};
+  const hp = String(src.heatPath ?? '').trim().toLowerCase();
+  if ((HEAT_PATHS as readonly string[]).includes(hp)) return hp as HeatPath;
+  if (String(src.mountMode ?? '').trim().toLowerCase() === 'link') return 'housing';
+  const g = src.mountG;
+  if (g !== undefined && g !== null && String(g).trim() !== '') {
+    const n = Number(String(g).trim());
+    return Number.isFinite(n) && n > 0 ? 'housing' : 'none';
+  }
+  return 'housing';
+}
 
 interface Slice<T> {
   data: T | null;
@@ -224,25 +245,9 @@ export interface ThermalState {
    *  in still air radiation carries MORE than convection does, so this decides
    *  over half of what the housing loses. */
   emissivity: string;
-  /** the bolted flange's contact conductance to the arm, W/K — '0' = bolted to
-   *  nothing.  Assumed until somebody measures the joint: the panel says so. */
-  mountG: string;
-  /** the temperature the mount is HELD at, °C — BLANK means the ambient, and a
-   *  blank field must stay blank rather than being filled with it, or a default
-   *  would read as a number somebody chose. */
-  mountT: string;
-  /** the mount's FAR SIDE (2026-09-26): 'sink' (default, unchanged — the mount
-   *  is held at mountT for ever) or 'link' (the far side is a robot ARM that
-   *  itself heats up — one extra node, still air + radiation off ONE preset
-   *  shape, judged against a fixed 70 °C touch limit).  Rides with mountG the
-   *  same way mountT does — no conductance, no link to speak of. */
-  mountMode: 'sink' | 'link';
-  /** the link's size, 'finger' | 'wrist' | 'arm' — see roboticsHelp for the
-   *  preset's own dimensions/mass/area. */
-  linkPreset: 'finger' | 'wrist' | 'arm';
-  /** the link's material, 'aluminium' | 'steel' | 'plastic' — only its mass
-   *  (hence heat capacity) is material-specific; the still-air film is not. */
-  linkMaterial: 'aluminium' | 'steel' | 'plastic';
+  /** where a robotics joint's heat goes by conduction (2026-09-26) — see
+   *  `HeatPath`.  Replaces the five mount / robot-link fields. */
+  heatPath: HeatPath;
   /** are the machine's AXIAL faces exposed?  'still' = the end turns and the
    *  core / magnet end faces are in the room's air. */
   endFaces: EndFaceMode;
@@ -309,7 +314,7 @@ const PERSISTED: (keyof ThermalState)[] = [
   'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
   'shaftExtMm', 'shaftExtSides',
   'frame', 'openAirSpeed',
-  'emissivity', 'mountG', 'mountT', 'mountMode', 'linkPreset', 'linkMaterial',
+  'emissivity', 'heatPath',
   'endFaces', 'endFaceSides',
   'maxIter', 'view', 'eqTemp', 'showFlux',
   // The local comparison stack rides the SAME path as every other remembered
@@ -360,10 +365,7 @@ export interface CoolingInputs {
   boreTIn: string; boreFlowLpm: string;
   shaftExtMm: string; shaftExtSides: string;
   frame: FrameMode; openAirSpeed: string;
-  emissivity: string; mountG: string; mountT: string;
-  mountMode: 'sink' | 'link';
-  linkPreset: 'finger' | 'wrist' | 'arm';
-  linkMaterial: 'aluminium' | 'steel' | 'plastic';
+  emissivity: string; heatPath: HeatPath;
   endFaces: EndFaceMode; endFaceSides: string;
 }
 
@@ -372,8 +374,7 @@ type CoolingRequest = Pick<ThermalRequest,
   | 'fluid_temp_in_c' | 'flow_lpm' | 'bore_mode' | 'bore_air_speed_mps'
   | 'bore_fluid' | 'bore_fluid_temp_in_c' | 'bore_flow_lpm'
   | 'shaft_ext_length_mm' | 'shaft_ext_sides' | 'frame' | 'open_air_speed_mps'
-  | 'emissivity' | 'end_faces' | 'end_face_sides' | 'mount_g_w_per_k'
-  | 'mount_temp_c' | 'mount_mode' | 'link_preset' | 'link_material'>;
+  | 'emissivity' | 'end_faces' | 'end_face_sides' | 'heat_path'>;
 
 export function coolingFields(s: CoolingInputs): CoolingRequest {
   const ambient = num(s.ambientT, 40);
@@ -384,19 +385,12 @@ export function coolingFields(s: CoolingInputs): CoolingRequest {
   // is not sent.  `emissivity` and the two end-face flags ride with the mode;
   // `end_face_sides` does not ride alone, because a side count beside
   // `end_faces: none` is exactly the unused cache-splitting parameter this
-  // function exists to keep off the wire.  The MOUNT is gated on being > 0 —
-  // the same gate the exposed shaft length has — and the mount TEMPERATURE only
-  // when it was typed: blank means the ambient, and sending the ambient in its
-  // place would make a default look like a number somebody chose.
-  //
-  // ASYMMETRY, ON PURPOSE (mirrored from `thermal_settings.cooling_fields`):
-  // the ROUTER reads `mount_g_w_per_k` in every cooling mode, but the PANEL only
-  // offers the field with the robotics mode, so that is the only mode this
-  // builder can send it from.
+  // function exists to keep off the wire.  The HEAT PATH (2026-09-26) rides
+  // with the mode too, and 'none' is not sent: it is the router's default.
+  // The panel no longer sends a mount conductance at all (mirrored from
+  // `thermal_settings.cooling_fields`).
   const robot = s.coolMode === 'robotics';
   const endFaces: EndFaceMode = s.endFaces === 'none' ? 'none' : 'still';
-  const mountG = robot ? Math.max(0, num(s.mountG, 0)) : 0;
-  const mountTyped = (s.mountT ?? '').trim() !== '';
   // The exposed shaft is OFF at 0 mm, and off means the two shaft fields are
   // not sent at all — `shaft_ext_sides` beside a length of zero is a parameter
   // the solver keys its cache on and never uses, exactly like an `air_speed_mps`
@@ -442,16 +436,7 @@ export function coolingFields(s: CoolingInputs): CoolingRequest {
     end_faces: robot ? endFaces : undefined,
     end_face_sides: (robot && endFaces !== 'none')
       ? (num(s.endFaceSides, 2) === 1 ? 1 : 2) : undefined,
-    mount_g_w_per_k: mountG > 0 ? mountG : undefined,
-    mount_temp_c: (mountG > 0 && mountTyped) ? num(s.mountT, ambient) : undefined,
-    // THE MOUNT'S FAR SIDE (2026-09-26).  Same gate as `mountT`: a link
-    // preset beside no conductance is the unused parameter this function
-    // exists to keep off the wire.  'sink' is not sent at all — it is the
-    // server's own default and today's bit-identical behaviour.
-    mount_mode: (mountG > 0 && s.mountMode === 'link') ? 'link' : undefined,
-    link_preset: (mountG > 0 && s.mountMode === 'link') ? s.linkPreset : undefined,
-    link_material: (mountG > 0 && s.mountMode === 'link')
-      ? s.linkMaterial : undefined,
+    heat_path: (robot && s.heatPath !== 'none') ? s.heatPath : undefined,
   };
 }
 
@@ -474,14 +459,11 @@ export function coolingIssue(s: CoolingInputs): string | null {
     const eps = num(s.emissivity, 0.9);
     if (!(eps >= 0 && eps <= 1)) return 'emissivity must be between 0 and 1';
   }
-  const mountG = s.coolMode === 'robotics' ? num(s.mountG, 0) : 0;
-  if (mountG < 0) return 'the mount conductance cannot be negative';
-  // WIDENED 2026-09-14 (mirrors `thermal_settings.cooling_issue`): a machine
-  // bolted to a cold arm IS cooled, even with every film switched off — the
-  // mount is a conductance to a held temperature and the steady problem has a
-  // solution.  What has nowhere to send its heat is the machine with no door.
-  if (s.coolMode === 'none' && s.boreMode === 'none' && !(mountG > 0))
-    return 'no cooled surface and no mount conductance — the heat has nowhere to leave';
+  // The panel no longer offers a mount (2026-09-26 — the robotics heat path
+  // replaced it; mirrors `thermal_settings.cooling_issue`), so a machine with
+  // no film and no bore has no door at all.
+  if (s.coolMode === 'none' && s.boreMode === 'none')
+    return 'no cooled surface — the heat has nowhere to leave';
   return null;
 }
 
@@ -535,11 +517,8 @@ function panelCooling(s: ThermalState): Record<string, string> {
     'coolMode', 'ambientT', 'airSpeed', 'fluid', 'tIn', 'hConv', 'flowLpm',
     'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
     'shaftExtMm', 'shaftExtSides', 'frame', 'openAirSpeed',
-    // …and the robotics block (2026-09-14).  `mountT` is included and may be
-    // BLANK: the loop below drops empty strings, and an absent `mountT` is what
-    // `cooling_fields` reads as "the ambient".
-    'emissivity', 'mountG', 'mountT', 'mountMode', 'linkPreset',
-    'linkMaterial', 'endFaces', 'endFaceSides'] as const;
+    // …and the robotics block (2026-09-14; the heat path since 2026-09-26).
+    'emissivity', 'heatPath', 'endFaces', 'endFaceSides'] as const;
   const out: Record<string, string> = {};
   for (const k of KEYS) {
     const v = s[k];
@@ -715,22 +694,13 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   // polished metal is 0.1 and would remove most of the housing's loss, which is
   // exactly why it is an input and not a constant.
   emissivity: readStr('emissivity', '0.9'),
-  // 2 W/K is an ASSUMPTION — nobody has measured this flange yet (plan decision
-  // 7) — and the panel says so out loud.  It is not zero, because a joint
-  // bolted to nothing is not the machine anybody is designing.
-  mountG: readStr('mountG', '2'),
-  // BLANK on purpose: the mount sits at the ambient until somebody states
-  // otherwise, and pre-filling it would turn that default into a claim.
-  // `readStr` would swallow a blank into its default, so it is read raw.
-  mountT: (() => {
-    const v = readTherm<unknown>('mountT', '');
-    return typeof v === 'number' ? String(v) : (typeof v === 'string' ? v : '');
-  })(),
-  // "sink" by default and it has to be: today's behaviour, bit-identical,
-  // until somebody explicitly says the mount is a robot arm.
-  mountMode: readMode('mountMode', MOUNT_MODES, 'sink'),
-  linkPreset: readMode('linkPreset', LINK_PRESETS, 'wrist'),
-  linkMaterial: readMode('linkMaterial', LINK_MATERIALS, 'aluminium'),
+  // THE HEAT PATH (2026-09-26).  A browser that saved the old mount fields
+  // gets the nearest option (see `heatPathOf`); a fresh one gets 'housing'.
+  heatPath: heatPathOf({
+    heatPath: readTherm<unknown>('heatPath', ''),
+    mountMode: readTherm<unknown>('mountMode', ''),
+    mountG: readTherm<unknown>('mountG', ''),
+  }),
   endFaces: readMode('endFaces', END_FACE_MODES, 'still' as EndFaceMode),
   endFaceSides: readStr('endFaceSides', '2'),
 
@@ -792,6 +762,12 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       // reach the table (`adoptSettings` only checks the shape is an array).
       if ('compareRows' in adopted) {
         adopted.compareRows = normalizeLocalRows(adopted.compareRows);
+      }
+      // THE HEAT PATH (2026-09-26): validated like an enum, and a server copy
+      // saved before it existed maps its old mount fields to the nearest one.
+      const srvS = (srv?.settings ?? null) as Record<string, unknown> | null;
+      if (srvS && ('heatPath' in srvS || 'mountG' in srvS || 'mountMode' in srvS)) {
+        (adopted as Record<string, unknown>).heatPath = heatPathOf(srvS);
       }
       if (Object.keys(adopted).length) set(adopted as Partial<ThermalState>);
     } catch { /* offline: localStorage already seeded the state */ }

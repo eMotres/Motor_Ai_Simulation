@@ -714,53 +714,61 @@ def test_the_mount_is_an_input_and_its_absence_is_a_statement():
 
 
 # ---------------------------------------------------------------------------
-# (g-2) the robot link — the arm itself heats up (2026-09-26)
+# (g-2) the robotics heat path — one choice, fixed defaults (2026-09-26)
 # ---------------------------------------------------------------------------
 
-def test_a_link_carrying_no_heat_sits_at_ambient_and_never_binds():
-    r = cm.robot_link_path(q_w=0.0, t_ambient_c=40.0, preset="wrist",
-                           material="aluminium")
-    assert r["t_link_c"] == pytest.approx(40.0)
-    assert r["G_W_per_K"] == 0.0
-    assert r["binds_touch_limit"] is False
+def test_the_heat_path_body_is_sized_from_the_stator():
+    # Ø30 × 10 mm: wall max(2 mm, 8 % of 30) = 2.4 mm, end room max(5 mm,
+    # 30 % of 30) = 9 mm each side — a Ø34.8 × 28 mm cylinder, ends included.
+    b = cm.heat_path_body(d_stator_m=0.030, stack_m=0.010)
+    assert b["diameter_m"] == pytest.approx(0.0348)
+    assert b["length_m"] == pytest.approx(0.028)
+    assert b["area_m2"] == pytest.approx(
+        math.pi * 0.0348 * 0.028 + 2.0 * math.pi * 0.0174 ** 2)
+    # the floors hold on a tiny machine
+    t = cm.heat_path_body(d_stator_m=0.012, stack_m=0.005)
+    assert t["wall_m"] == pytest.approx(cm.HOUSING_WALL_MIN_M)
+    assert t["end_room_each_side_m"] == pytest.approx(cm.HOUSING_END_MIN_M)
 
 
-def test_a_small_link_under_the_mount_heat_of_a_finger_motor_blows_past_touch():
-    # The owner's Ø12 case: ~200 W into the mount, a finger-sized link.  The
-    # whole point of this feature — a link this small cannot shed that much.
-    r = cm.robot_link_path(q_w=200.0, t_ambient_c=40.0, preset="finger",
-                           material="aluminium")
-    assert r["t_link_c"] > cm.LINK_TOUCH_LIMIT_C
-    assert r["binds_touch_limit"] is True
-    assert r["G_W_per_K"] > 0.0
+def test_the_heat_path_film_is_still_air_plus_radiation_on_the_whole_skin():
+    b = cm.heat_path_body(d_stator_m=0.030, stack_m=0.010)
+    f = cm.heat_path_film(t_body_c=70.0, t_ambient_c=25.0, body=b,
+                          emissivity=0.9)
+    assert f["h_conv"] > 0.0 and f["h_rad"] > 0.0
+    assert f["G_W_per_K"] == pytest.approx((f["h_conv"] + f["h_rad"])
+                                           * b["area_m2"])
+    # ε = 0 removes exactly the radiation half
+    f0 = cm.heat_path_film(t_body_c=70.0, t_ambient_c=25.0, body=b,
+                           emissivity=0.0)
+    assert f0["h_rad"] == 0.0
+    assert f0["h_conv"] == pytest.approx(f["h_conv"])
 
 
-def test_a_bigger_link_of_the_same_material_runs_cooler():
-    small = cm.robot_link_path(q_w=20.0, t_ambient_c=40.0, preset="finger",
-                               material="aluminium")
-    big = cm.robot_link_path(q_w=20.0, t_ambient_c=40.0, preset="arm",
-                             material="aluminium")
-    assert big["t_link_c"] < small["t_link_c"]
-    assert big["area_m2"] > small["area_m2"]
-    assert big["mass_kg"] > small["mass_kg"]
+def test_the_housing_contact_is_the_stated_h_on_the_od():
+    g = cm.housing_contact_g(d_stator_m=0.030, stack_m=0.010)
+    assert g == pytest.approx(cm.HOUSING_CONTACT_H * math.pi * 0.030 * 0.010)
 
 
-def test_a_steel_link_has_more_capacity_than_aluminium_of_the_same_size():
-    al = cm.robot_link_path(q_w=10.0, t_ambient_c=40.0, preset="wrist",
-                            material="aluminium")
-    steel = cm.robot_link_path(q_w=10.0, t_ambient_c=40.0, preset="wrist",
-                               material="steel")
-    assert steel["mass_kg"] > al["mass_kg"]
-    assert steel["C_J_per_K"] > al["C_J_per_K"]
-    # Same shape, same film — the steady temperature should match closely.
-    assert steel["t_link_c"] == pytest.approx(al["t_link_c"], abs=0.5)
+def test_the_bearing_path_is_shaft_and_bearing_in_series_on_two_sides():
+    r = cm.bearing_path(d_out_m=0.005, d_in_m=0.0, k_shaft=45.0,
+                        stack_m=0.012)
+    l_ax = 0.012 / 6.0 + cm.BEARING_STANDOFF_M
+    g_sh = 45.0 * math.pi * 0.0025 ** 2 / l_ax
+    g_b = cm.BEARING_G_PER_MM * 5.0
+    assert r["axial_length_m"] == pytest.approx(l_ax)
+    assert r["G_shaft_each_W_per_K"] == pytest.approx(g_sh)
+    assert r["G_bearing_each_W_per_K"] == pytest.approx(g_b)
+    assert r["G_W_per_K"] == pytest.approx(2.0 / (1.0 / g_sh + 1.0 / g_b))
+    # a hollow shaft conducts less
+    hollow = cm.bearing_path(d_out_m=0.005, d_in_m=0.003, k_shaft=45.0,
+                             stack_m=0.012)
+    assert hollow["G_W_per_K"] < r["G_W_per_K"]
 
 
-def test_an_unknown_preset_or_material_falls_back_rather_than_raising():
-    r = cm.robot_link_path(q_w=10.0, t_ambient_c=40.0, preset="huge",
-                           material="unobtainium")
-    assert r["preset"] == "wrist"
-    assert r["material"] == "aluminium"
+def test_the_touch_limit_is_the_fixed_70_c():
+    assert cm.TOUCH_LIMIT_C == 70.0
+    assert cm.HEAT_PATHS == ("housing", "shaft", "both", "none")
 
 
 # ---------------------------------------------------------------------------

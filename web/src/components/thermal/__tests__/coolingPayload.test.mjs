@@ -134,8 +134,6 @@ function coolingFields(s) {
   const shaftMm = Math.max(0, num(s.shaftExtMm, 0));
   const robot = s.coolMode === 'robotics';
   const endFaces = s.endFaces === 'none' ? 'none' : 'still';
-  const mountG = robot ? Math.max(0, num(s.mountG, 0)) : 0;
-  const mountTyped = (s.mountT ?? '').trim() !== '';
   return {
     cooling_mode: s.coolMode,
     ambient_temp: ambient,
@@ -164,9 +162,23 @@ function coolingFields(s) {
     end_faces: robot ? endFaces : undefined,
     end_face_sides: (robot && endFaces !== 'none')
       ? (num(s.endFaceSides, 2) === 1 ? 1 : 2) : undefined,
-    mount_g_w_per_k: mountG > 0 ? mountG : undefined,
-    mount_temp_c: (mountG > 0 && mountTyped) ? num(s.mountT, ambient) : undefined,
+    heat_path: (robot && s.heatPath !== 'none') ? s.heatPath : undefined,
   };
+}
+
+const HEAT_PATHS = ['housing', 'shaft', 'both', 'none'];
+
+function heatPathOf(saved) {
+  const src = saved ?? {};
+  const hp = String(src.heatPath ?? '').trim().toLowerCase();
+  if (HEAT_PATHS.includes(hp)) return hp;
+  if (String(src.mountMode ?? '').trim().toLowerCase() === 'link') return 'housing';
+  const g = src.mountG;
+  if (g !== undefined && g !== null && String(g).trim() !== '') {
+    const n = Number(String(g).trim());
+    return Number.isFinite(n) && n > 0 ? 'housing' : 'none';
+  }
+  return 'housing';
 }
 
 function coolingIssue(s) {
@@ -184,10 +196,8 @@ function coolingIssue(s) {
     const eps = num(s.emissivity, 0.9);
     if (!(eps >= 0 && eps <= 1)) return 'emissivity must be between 0 and 1';
   }
-  const mountG = s.coolMode === 'robotics' ? num(s.mountG, 0) : 0;
-  if (mountG < 0) return 'the mount conductance cannot be negative';
-  if (s.coolMode === 'none' && s.boreMode === 'none' && !(mountG > 0))
-    return 'no cooled surface and no mount conductance — the heat has nowhere to leave';
+  if (s.coolMode === 'none' && s.boreMode === 'none')
+    return 'no cooled surface — the heat has nowhere to leave';
   return null;
 }
 
@@ -199,7 +209,7 @@ const DEFAULTS = {
   boreTIn: '40', boreFlowLpm: '4',
   shaftExtMm: '0', shaftExtSides: '2',
   frame: 'housed', openAirSpeed: '0',
-  emissivity: '0.9', mountG: '2', mountT: '', endFaces: 'still',
+  emissivity: '0.9', heatPath: 'housing', endFaces: 'still',
   endFaceSides: '2',
 };
 const inputs = (over = {}) => ({ ...DEFAULTS, ...over });
@@ -442,35 +452,44 @@ test('robotics sends exactly its five fields beside the two constants', () => {
   const r = coolingFields(inputs({ coolMode: 'robotics', boreMode: 'still' }));
   assert.deepEqual(keys(r), [
     'ambient_temp', 'bore_mode', 'cooling_mode',
-    'emissivity', 'end_faces', 'end_face_sides', 'mount_g_w_per_k',
+    'emissivity', 'end_faces', 'end_face_sides', 'heat_path',
   ].sort());
   assert.equal(r.cooling_mode, 'robotics');
   assert.equal(r.bore_mode, 'still');
   assert.equal(r.emissivity, 0.9);
   assert.equal(r.end_faces, 'still');
   assert.equal(r.end_face_sides, 2);
-  assert.equal(r.mount_g_w_per_k, 2);
-  // BLANK mount temperature = the ambient, and the KEY stays off the wire:
-  // sending the ambient in its place would make a default look like a choice.
+  assert.equal(r.heat_path, 'housing');
+  // The panel sends no mount any more (2026-09-26 — the heat path replaced it).
+  assert.ok(!('mount_g_w_per_k' in sent(r)));
   assert.ok(!('mount_temp_c' in sent(r)));
 });
 
-test('a typed mount temperature rides with the conductance, and only then', () => {
-  const r = coolingFields(inputs({ coolMode: 'robotics', mountT: '22' }));
-  assert.equal(r.mount_temp_c, 22);
-  // 0 °C is a cold store, not "not typed" — it must survive.
-  assert.equal(coolingFields(inputs({ coolMode: 'robotics', mountT: '0' })).mount_temp_c, 0);
-  // …but with no mount there is no temperature to state.
-  const none = coolingFields(inputs({ coolMode: 'robotics', mountG: '0', mountT: '22' }));
-  assert.ok(!('mount_g_w_per_k' in sent(none)));
-  assert.ok(!('mount_temp_c' in sent(none)));
+test('each heat path rides as itself, and none stays off the wire', () => {
+  for (const hp of ['housing', 'shaft', 'both']) {
+    assert.equal(coolingFields(inputs({ coolMode: 'robotics', heatPath: hp })).heat_path, hp);
+  }
+  // 'none' is the router's own default: sending it would split the cache.
+  assert.ok(!('heat_path' in sent(coolingFields(inputs({ coolMode: 'robotics',
+                                                         heatPath: 'none' })))));
 });
 
-test('a zero or negative mount is the machine bolted to nothing', () => {
-  for (const g of ['0', '', '   ', '-4', 'abc']) {
-    const r = sent(coolingFields(inputs({ coolMode: 'robotics', mountG: g })));
-    assert.ok(!('mount_g_w_per_k' in r), `mountG ${JSON.stringify(g)} was sent`);
-  }
+test('old saved mount settings map to the nearest heat path', () => {
+  // Mirrors thermal_settings.heat_path_of — the two must agree.
+  assert.equal(heatPathOf({ mountG: '2' }), 'housing');
+  assert.equal(heatPathOf({ mountG: '2', mountT: '25' }), 'housing');
+  assert.equal(heatPathOf({ mountG: '0' }), 'none');
+  assert.equal(heatPathOf({ mountG: '0', mountMode: 'link', linkPreset: 'finger' }), 'housing');
+  assert.equal(heatPathOf({ mountG: '5', mountMode: 'link', linkPreset: 'arm',
+                           linkMaterial: 'steel' }), 'housing');
+  assert.equal(heatPathOf({ mountG: 2 }), 'housing');
+  // …a saved heat path wins over anything left over beside it
+  assert.equal(heatPathOf({ heatPath: 'shaft', mountG: '2' }), 'shaft');
+  assert.equal(heatPathOf({ heatPath: 'none', mountMode: 'link' }), 'none');
+  // …and nothing saved at all is the panel's default
+  assert.equal(heatPathOf({}), 'housing');
+  assert.equal(heatPathOf(null), 'housing');
+  assert.equal(heatPathOf({ heatPath: 'bogus' }), 'housing');
 });
 
 test('end_face_sides never rides alone beside end_faces: none', () => {
@@ -503,9 +522,9 @@ test('every other mode ships none of the robotics fields', () => {
   // an emissivity left over from a robotics session may not travel with it.
   for (const coolMode of ['air', 'liquid', 'manual', 'none']) {
     const r = sent(coolingFields(inputs({ coolMode, boreMode: 'air',
-                                          emissivity: '0.4', mountG: '9',
-                                          mountT: '18', endFaces: 'none' })));
-    for (const k of ['emissivity', 'end_faces', 'end_face_sides',
+                                          emissivity: '0.4', heatPath: 'both',
+                                          endFaces: 'none' })));
+    for (const k of ['emissivity', 'end_faces', 'end_face_sides', 'heat_path',
                      'mount_g_w_per_k', 'mount_temp_c']) {
       assert.ok(!(k in r), `${coolMode} shipped ${k}`);
     }
@@ -529,19 +548,13 @@ test('an unphysical emissivity is refused before the solver sees it', () => {
   assert.equal(coolingIssue(inputs({ coolMode: 'robotics', emissivity: '0' })), null);
 });
 
-test('a negative mount conductance is refused, not silently clamped', () => {
-  assert.match(coolingIssue(inputs({ coolMode: 'robotics', mountG: '-2' })),
-               /mount conductance/);
-});
-
-test('a machine bolted to a cold arm IS cooled, films or no films', () => {
-  // WIDENED 2026-09-14: the mount is a conductance to a HELD temperature, so
-  // the steady problem has a solution even with every surface adiabatic.  What
-  // has nowhere to send its heat is the machine with no door at all.
-  assert.equal(coolingIssue(inputs({ coolMode: 'robotics', boreMode: 'none',
-                                     mountG: '2' })), null);
+test('a machine with no film and no bore is refused, by name', () => {
+  // The panel offers no mount any more (2026-09-26), so nothing else can
+  // carry the heat of an uncooled housing with a closed bore.
   assert.match(coolingIssue(inputs({ coolMode: 'none', boreMode: 'none' })),
-               /no mount conductance/);
+               /no cooled surface/);
+  assert.equal(coolingIssue(inputs({ coolMode: 'robotics', boreMode: 'none',
+                                     heatPath: 'none' })), null);
 });
 
 test('the robotics defaults are solvable and describe a whole joint', () => {
@@ -554,5 +567,5 @@ test('the robotics defaults are solvable and describe a whole joint', () => {
   assert.equal(r.emissivity, 0.9);
   assert.equal(r.bore_mode, 'still');
   assert.equal(r.end_faces, 'still');
-  assert.ok(r.mount_g_w_per_k > 0);
+  assert.equal(r.heat_path, 'housing');
 });

@@ -79,10 +79,18 @@ function sinkLabel(sink, setting) {
   return `${sink.short}${set ? `${set} ·` : ''} ${fmtW(sink.W)}${parts}${pct}`;
 }
 
+const HEAT_PATH_LABEL = {
+  housing: 'Stator → housing',
+  shaft: 'Through the shaft (bearings)',
+  both: 'Housing + shaft',
+  none: 'No contact — still air only',
+};
+
 function editorFor(id) {
   switch (id) {
     case 'housing': return 'housing';
-    case 'mount': return 'mount';
+    case 'mount': return null;
+    case 'bearings': return 'heat_path';
     case 'end_face_winding': case 'end_face_stator':
     case 'end_face_rotor': case 'end_face_magnet': return 'end_faces';
     case 'bore': return 'bore';
@@ -104,11 +112,9 @@ function settingLabel(id, s) {
       if (s.coolMode === 'liquid') return `${nz(s.flowLpm, '8')} L/min @ ${nz(s.tIn, amb)} °C`;
       if (s.coolMode === 'manual') return `h ${nz(s.hConv, '—')} W/m²K`;
       return 'no cooling';
-    case 'mount': {
-      const g = Number(s.mountG);
-      if (!(g > 0)) return 'off';
-      return `${s.mountG} W/K @ ${nz(s.mountT, amb)} °C`;
-    }
+    case 'heat_path':
+      return s.coolMode === 'robotics'
+        ? (HEAT_PATH_LABEL[s.heatPath] ?? s.heatPath) : 'off';
     case 'end_faces':
       if (s.coolMode !== 'robotics' || s.endFaces === 'none') return 'closed';
       return `${nz(s.endFaceSides, '2')} end${nz(s.endFaceSides, '2') === '1' ? '' : 's'} open`;
@@ -156,6 +162,7 @@ function arrowMechanism(sink) {
   const mode = sink.mode ?? '';
   switch (sink.id) {
     case 'mount': return 'conduction into the mount';
+    case 'bearings': return 'conduction through the shaft and bearings';
     case 'housing':
       return mode === 'liquid' ? 'liquid jacket on the housing'
         : mode === 'air' ? 'forced air over the housing'
@@ -179,6 +186,7 @@ function arrowMechanism(sink) {
 
 const TEMP_NAMES = {
   mount: ['housing', 'mount'],
+  bearings: ['shaft', 'body'],
   housing: ['wall', 'air'],
   bore: ['wall', 'air'],
   shaft_ends: ['shaft', 'air'],
@@ -434,25 +442,16 @@ const L13_SETTINGS = {
   boreMode: 'still', boreAirSpeed: '0', boreTIn: '', boreFlowLpm: '',
   shaftExtMm: '0', shaftExtSides: '2',
   frame: 'housed', openAirSpeed: '0',
-  emissivity: '0.9', mountG: '2', mountT: '', endFaces: 'still', endFaceSides: '2',
+  emissivity: '0.9', heatPath: 'housing', endFaces: 'still', endFaceSides: '2',
 };
 
-test('settingLabel: the mount says its conductance AND its sink temperature', () => {
-  // mount_W = G · (T_stator − T_mount): both halves of it have to be on the
-  // label, or the number below cannot be checked against anything.
-  assert.equal(settingLabel('mount', L13_SETTINGS), '2 W/K @ 40 °C');
-});
-
-test('settingLabel: a BLANK mount temperature reads as the ambient, not as 0', () => {
-  // The panel's own rule — blank means "the room" — said out loud on the model.
-  // Number('') === 0 would put a 0 °C sink on a machine in a 40 °C room.
-  assert.equal(settingLabel('mount', { ...L13_SETTINGS, mountT: '' }), '2 W/K @ 40 °C');
-  assert.equal(settingLabel('mount', { ...L13_SETTINGS, mountT: '25' }), '2 W/K @ 25 °C');
-});
-
-test('settingLabel: a mount bolted to nothing says off, not 0 W/K', () => {
-  assert.equal(settingLabel('mount', { ...L13_SETTINGS, mountG: '0' }), 'off');
-  assert.equal(settingLabel('mount', { ...L13_SETTINGS, mountG: '' }), 'off');
+test('settingLabel: the bearings name the heat path, and a mount is not a setting', () => {
+  // 2026-09-26: the five mount fields became ONE Heat path; the bearings are
+  // the only drawn surface of it, the housing carries it on its popover.
+  assert.equal(settingLabel('bearings', { ...L13_SETTINGS, heatPath: 'shaft' }),
+               'Through the shaft (bearings)');
+  assert.equal(settingLabel('bearings', { ...L13_SETTINGS, coolMode: 'air' }), 'off');
+  assert.equal(settingLabel('mount', L13_SETTINGS), null);
 });
 
 test('settingLabel: the housing follows the cooling MODE', () => {
@@ -480,14 +479,15 @@ test('settingLabel: end faces, bore and shaft ends', () => {
 });
 
 test('settingLabel: no settings in hand is null, not a guess', () => {
-  for (const id of ['mount', 'housing', 'bore', 'shaft_ends', 'end_face_winding']) {
+  for (const id of ['bearings', 'housing', 'bore', 'shaft_ends', 'end_face_winding']) {
     assert.equal(settingLabel(id, null), null);
   }
 });
 
 test('editorFor: every drawn path opens the popover that owns its fields', () => {
   assert.equal(editorFor('housing'), 'housing');
-  assert.equal(editorFor('mount'), 'mount');
+  assert.equal(editorFor('mount'), null);
+  assert.equal(editorFor('bearings'), 'heat_path');
   assert.equal(editorFor('bore'), 'bore');
   assert.equal(editorFor('shaft_ends'), 'shaft_ends');
   assert.equal(editorFor('end_windings'), 'frame');
@@ -502,8 +502,9 @@ test('editorFor: every drawn path opens the popover that owns its fields', () =>
 
 test('sinkLabel with a setting: what it is set to AND what that bought', () => {
   // the shape the user asked for on 2026-09-15
+  // (a mount on a map is shown, not set, so it carries no setting)
   assert.equal(sinkLabel(MOUNT, settingLabel('mount', L13_SETTINGS)),
-               'mount 2 W/K @ 40 °C · 48.5 W · 86 %');
+               'mount 48.5 W · 86 %');
   assert.equal(sinkLabel(HOUSING, settingLabel('housing', L13_SETTINGS)),
                'housing ε 0.9 @ 40 °C · 1.11 W (0.45 + 0.67) · 2 %');
 });

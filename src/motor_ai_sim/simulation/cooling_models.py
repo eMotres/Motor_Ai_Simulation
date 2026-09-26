@@ -83,7 +83,7 @@ loop; they are deliberately stateless so the loop lives with the solver.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, NamedTuple, Optional, Tuple
+from typing import Any, Dict, Mapping, NamedTuple, Optional, Tuple
 
 
 class FluidProps(NamedTuple):
@@ -1084,142 +1084,113 @@ def mount_path(*, g_w_per_k: float,
 
 
 # ---------------------------------------------------------------------------
-# The ROBOT LINK — the arm itself heats up (2026-09-26)
+# The robotics HEAT PATH — one choice, fixed defaults (2026-09-26)
 # ---------------------------------------------------------------------------
-# ``mount_path`` above is the machine bolted to an INFINITE sink: correct for a
-# machined test bench, wrong for a robot joint, whose "sink" is a few hundred
-# grams of aluminium (or steel, or moulded plastic) that itself only loses heat
-# to the room by natural convection and radiation off its own skin.  On a small
-# machine (e.g. a 25 g Ø12 finger motor at ~200 W into the mount) that arm does
-# not sit at ambient — it climbs until ITS OWN surface sheds what the motor is
-# handing it, and a person's finger on it is limited by IEC 60335's 70 °C touch
-# rule, not by the winding's insulation class.
+# Owner, 2026-09-26: «давай упростим».  The robotics mode used to ask for a
+# mount conductance in W/K, a mount temperature, "ideal sink or robot link", a
+# link size and a link material — five numbers nobody on the Thermal tab can
+# measure.  It now asks ONE question, where the heat goes by conduction:
 #
-# The model adds exactly ONE extra node: the link is a solid cylinder (one of
-# three fixed presets), still air + radiation off its own surface (the same
-# Churchill–Chu + linearised-radiation pair ``outer_still`` uses, on a smaller
-# diameter), and its own Σm·c_p for a duty cycle's transient.  The bolted
-# contact conductance (``mount_g_w_per_k``) is UNCHANGED — it is still an INPUT
-# nobody here can predict (bolt pattern, contact area, interface) — this
-# section only answers "how hot does the arm get, and how fast does it move".
+#   housing — the stator OD sits in a housing (press/glue fit); the housing is
+#             one lumped body that sheds heat by still air + radiation;
+#   shaft   — rotor → shaft → two bearings → the structure the bearings sit
+#             in, the same kind of lumped body, same film;
+#   both    — both paths into ONE body (the bearings sit in the housing's end
+#             caps, so the two paths share its temperature);
+#   none    — no conduction path at all: still air + radiation off the stator
+#             OD, the bore and the end faces, nothing else.
+#
+# Every number below is a DEFAULT, stated in the Thermal tab's HelpTip, never a
+# field.  The body is judged against a fixed 70 °C touch limit.
 
-#: Three sizes, as one solid cylinder standing in for the arm segment the motor
-#: is bolted to.  Deliberately a crude shape (a real link is a hollow, ribbed
-#: casting with a far larger cooling surface per kilogram) — stated in the
-#: HelpTip so a chosen preset is never mistaken for a CAD measurement:
-#:   finger — 60 mm long,  16 mm across (a small end-effector segment)
-#:   wrist  — 120 mm long, 40 mm across (a wrist/forearm link)
-#:   arm    — 250 mm long, 80 mm across (an upper-arm link)
-LINK_PRESETS: Dict[str, Dict[str, float]] = {
-    "finger": {"length_m": 0.060, "diameter_m": 0.016},
-    "wrist":  {"length_m": 0.120, "diameter_m": 0.040},
-    "arm":    {"length_m": 0.250, "diameter_m": 0.080},
-}
+HEAT_PATHS = ("housing", "shaft", "both", "none")
 
-#: {material: (density kg/m³, specific heat J/kg·K)} — textbook room-temperature
-#: figures, the same standard this project already keeps in
-#: ``thermal_capacities.CP_DEFAULT`` for the machine's own parts.  Only mass
-#: (hence heat capacity) is material-specific here: the link's OWN surface
-#: film (still air + radiation) does not know what is inside the skin.
-LINK_MATERIALS: Dict[str, Dict[str, float]] = {
-    "aluminium": {"density_kg_m3": 2700.0, "cp_j_per_kgk": 896.0},
-    "steel":     {"density_kg_m3": 7850.0, "cp_j_per_kgk": 480.0},
-    "plastic":   {"density_kg_m3": 1200.0, "cp_j_per_kgk": 1500.0},
-}
+#: Stator OD ↔ housing contact, W/m²·K on the OD area π·D·L_stack.  A press or
+#: bonded fit of laminations in an aluminium housing is quoted at roughly
+#: 1000–5000 W/m²·K; the lower-middle of that band.
+HOUSING_CONTACT_H = 2000.0
 
-#: IEC 60335-1 Annex, metal handle touched briefly in normal use — the fixed
-#: limit this joint is judged against, beside the winding's insulation class
-#: and the magnet's card.  Not a setting: the owner's ask is a machine that
-#: cannot be rated hot enough to burn whoever picks up the arm.
-LINK_TOUCH_LIMIT_C = 70.0
+#: The housing / structure body, sized from the stator: wall thickness
+#: max(2 mm, 8 % of the stator OD), and max(5 mm, 30 % of the stator OD) of
+#: end-cap room beyond the stack on EACH side (end turns, bearings).  A plain
+#: cylinder, both end discs included in the cooled area — a real housing has
+#: ribs and flanges, so this is the hot (conservative) side.
+HOUSING_WALL_MIN_M = 0.002
+HOUSING_WALL_FRAC = 0.08
+HOUSING_END_MIN_M = 0.005
+HOUSING_END_FRAC = 0.30
+
+#: One greased deep-groove ball bearing, W/K per millimetre of shaft OD —
+#: 0.5 W/K on a Ø5 shaft, 2 W/K on a Ø20 (a 6204 is quoted near 0.5 K/W).  An
+#: estimate: a bearing's conductance moves with preload, speed and grease.
+BEARING_G_PER_MM = 0.1
+BEARINGS_N = 2
+#: From the end of the stack to the bearing's inner race, each side.
+BEARING_STANDOFF_M = 0.005
+
+#: IEC 60335-1, metal surface touched in normal use — the fixed limit the
+#: housing / structure body is judged against, beside the winding's
+#: insulation class and the magnet's card.  Not a setting.
+TOUCH_LIMIT_C = 70.0
 
 
-def robot_link_geometry(preset: str, material: str) -> Dict[str, Any]:
-    """The preset's fixed numbers, resolved — dimensions, area, mass, capacity.
+def heat_path_body(*, d_stator_m: float, stack_m: float) -> Dict[str, Any]:
+    """The housing / structure cylinder, sized from the stator OD and stack."""
+    d_s = max(float(d_stator_m), 1e-4)
+    stack = max(float(stack_m), 1e-4)
+    wall = max(HOUSING_WALL_MIN_M, HOUSING_WALL_FRAC * d_s)
+    end = max(HOUSING_END_MIN_M, HOUSING_END_FRAC * d_s)
+    d = d_s + 2.0 * wall
+    length = stack + 2.0 * end
+    area = math.pi * d * length + 2.0 * math.pi * (0.5 * d) ** 2
+    return {"diameter_m": d, "length_m": length, "area_m2": area,
+            "wall_m": wall, "end_room_each_side_m": end}
 
-    An unknown preset/material name falls back to the middle of each table
-    ("wrist" / "aluminium") rather than raising: this is a UI default, not a
-    request the router refuses, so it degrades gracefully to a debug tool
-    (unit test, curl, stale query string) that types nothing at all.
+
+def heat_path_film(*, t_body_c: float, t_ambient_c: float,
+                   body: Mapping[str, Any],
+                   emissivity: float = EMISSIVITY_DEFAULT,
+                   props: Optional[FluidProps] = None) -> Dict[str, Any]:
+    """The body's own still-air + radiation film at ``t_body_c``, as W/K.
+
+    The same Churchill–Chu + linearised-radiation pair ``outer_still`` puts on
+    a housing, evaluated on the body's diameter and over its whole skin.
     """
-    preset_key = str(preset or "").strip().lower()
-    material_key = str(material or "").strip().lower()
-    if preset_key not in LINK_PRESETS:
-        preset_key = "wrist"
-    if material_key not in LINK_MATERIALS:
-        material_key = "aluminium"
-    p = LINK_PRESETS[preset_key]
-    m = LINK_MATERIALS[material_key]
-    length_m = float(p["length_m"])
-    diameter_m = float(p["diameter_m"])
-    # Cylinder, both round ends included: the whole skin the film acts on.
-    area_m2 = (math.pi * diameter_m * length_m
-              + 2.0 * math.pi * (diameter_m / 2.0) ** 2)
-    volume_m3 = math.pi * (diameter_m / 2.0) ** 2 * length_m
-    mass_kg = volume_m3 * float(m["density_kg_m3"])
-    return {
-        "preset": preset_key,
-        "material": material_key,
-        "length_mm": round(length_m * 1e3, 1),
-        "diameter_mm": round(diameter_m * 1e3, 1),
-        "area_m2": area_m2,
-        "volume_m3": volume_m3,
-        "mass_kg": mass_kg,
-        "cp_J_per_kgK": float(m["cp_j_per_kgk"]),
-        "C_J_per_K": mass_kg * float(m["cp_j_per_kgk"]),
-    }
+    d = float(body["diameter_m"])
+    area = float(body["area_m2"])
+    film = _still_film(t_wall_c=float(t_body_c), t_ambient_c=float(t_ambient_c),
+                       d_m=d, nu_floor=0.0, props=props)
+    h_conv = float(film["h"])
+    h_rad = float(radiation_h(float(t_body_c), float(t_ambient_c),
+                              float(emissivity)))
+    return {"h_conv": h_conv, "h_rad": h_rad, "h_total": h_conv + h_rad,
+            "G_W_per_K": (h_conv + h_rad) * area, "area_m2": area}
 
 
-def robot_link_path(*, q_w: float, t_ambient_c: float,
-                    preset: str = "wrist", material: str = "aluminium",
-                    emissivity: float = EMISSIVITY_DEFAULT,
-                    props: Optional[FluidProps] = None) -> Dict[str, Any]:
-    """The link, as a Robin sink to ambient — ``t_link_c`` solved so that its
-    own still-air + radiation film carries exactly ``q_w`` off its surface.
+def housing_contact_g(*, d_stator_m: float, stack_m: float) -> float:
+    """Stator OD → housing, W/K: ``HOUSING_CONTACT_H`` over π·D·L_stack."""
+    return HOUSING_CONTACT_H * math.pi * float(d_stator_m) * float(stack_m)
 
-    Same fixed-point shape as ``outer_still``/``_still_film`` (Nu depends on
-    ΔT, so ``h`` is only known once ``t_link_c`` is), but solved HERE rather
-    than left to the caller's own pass loop: the link is not a meshed surface,
-    it is one extra lumped node, and closing this one small loop locally is
-    simpler than threading a fifth wall into ``routes.thermal``'s iteration.
-    Five picard passes land within a hundredth of a kelvin on every case this
-    module's own tests run (h moves as ΔT^0.15 once radiation is in it, the
-    same weak dependence ``outer_still`` documents).
 
-    ``q_w`` ≤ 0 is a link nobody is heating — it sits at ambient and the touch
-    limit cannot bind.
+def bearing_path(*, d_out_m: float, d_in_m: float, k_shaft: float,
+                 stack_m: float) -> Dict[str, Any]:
+    """Shaft (in the stack) → both bearings → the structure, as ONE W/K.
+
+    Per side, in series: the shaft conducting axially from the section's mean
+    to the bearing — stack/6 (the mean-temperature distance of a uniformly
+    heated half-stack) plus ``BEARING_STANDOFF_M`` — and one bearing at
+    ``BEARING_G_PER_MM`` × shaft OD.  Two sides in parallel.
     """
-    geo = robot_link_geometry(preset, material)
-    area = max(float(geo["area_m2"]), 1e-6)
-    d = max(float(geo["diameter_mm"]) * 1e-3, 1e-4)
-    amb = float(t_ambient_c)
-    q = max(float(q_w), 0.0)
-    if q <= 0.0:
-        t_link = amb
-        h_conv = h_rad = 0.0
-    else:
-        t_link = amb + 10.0
-        for _ in range(25):
-            film = _still_film(t_wall_c=t_link, t_ambient_c=amb, d_m=d,
-                               nu_floor=0.36, props=props)
-            h_conv = float(film["h"])
-            h_rad = radiation_h(t_link, amb, emissivity)
-            h_tot = max(h_conv + h_rad, 1e-9)
-            t_new = amb + q / (h_tot * area)
-            if abs(t_new - t_link) < 1e-4:
-                t_link = t_new
-                break
-            t_link = 0.5 * (t_link + t_new)
-    g_eff = q / max(t_link - amb, 1e-9) if q > 0.0 else 0.0
-    over_k = t_link - LINK_TOUCH_LIMIT_C
-    return dict(geo, t_link_c=t_link, h_conv=h_conv, h_rad=h_rad,
-               G_W_per_K=g_eff, heat_removed_W=q,
-               touch_limit_c=LINK_TOUCH_LIMIT_C, over_touch_K=over_k,
-               binds_touch_limit=bool(over_k > 0.0),
-               note=(f"{geo['preset']} link ({geo['material']}): "
-                     f"{geo['area_m2'] * 1e4:.0f} cm², {geo['mass_kg'] * 1e3:.0f} g "
-                     f"-> {t_link:.1f} °C carrying {q:.1f} W in {amb:.0f} °C air "
-                     f"(touch limit {LINK_TOUCH_LIMIT_C:.0f} °C)"))
+    d_o = max(float(d_out_m), 1e-4)
+    d_i = min(max(float(d_in_m), 0.0), 0.99 * d_o)
+    a_x = 0.25 * math.pi * (d_o ** 2 - d_i ** 2)
+    l_ax = float(stack_m) / 6.0 + BEARING_STANDOFF_M
+    g_shaft = max(float(k_shaft), 1e-9) * a_x / max(l_ax, 1e-6)
+    g_brg = BEARING_G_PER_MM * d_o * 1e3
+    g_side = 1.0 / (1.0 / g_shaft + 1.0 / g_brg)
+    return {"G_W_per_K": BEARINGS_N * g_side, "G_shaft_each_W_per_K": g_shaft,
+            "G_bearing_each_W_per_K": g_brg, "n_bearings": BEARINGS_N,
+            "axial_length_m": l_ax, "d_out_m": d_o, "d_in_m": d_i}
 
 
 # ---------------------------------------------------------------------------

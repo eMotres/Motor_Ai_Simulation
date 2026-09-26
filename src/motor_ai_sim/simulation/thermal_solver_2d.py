@@ -87,6 +87,7 @@ def solve_steady_thermal(
     slip_r_m: float = 0.0,      # sliding-band radius [m] — 0 = no slip-line tie
     coil_mask: Optional[np.ndarray] = None,   # (n_elem,) bool — the winding
     volume_sinks: Optional[Sequence[Dict[str, Any]]] = None,
+    lumped_nodes: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Return the solved sub-mesh, its temperature field and its heat budget.
 
@@ -158,6 +159,21 @@ def solve_steady_thermal(
     ``heat_removed_W`` is the sum of the surfaces AND the sinks — everything
     that actually leaves the model — so the residual stays the solve's own
     closure error.
+
+    ``lumped_nodes`` (2026-09-26) are ONE-TEMPERATURE bodies outside the
+    cross-section — a robot joint's housing, the structure its bearings sit in —
+    each ``{"name": str, "G_W_per_K": float, "t_sink_c": float,
+    "symmetry_mult": int}`` with ``G`` the WHOLE body's film to its own sink.  A
+    surface or a volume sink that carries ``"node": name`` has that node's
+    temperature as its sink instead of a fixed number, and the node's
+    temperature is an UNKNOWN of the same linear system (one extra row and
+    column per node), not a value the caller iterates on: a contact conductance
+    ~30× the housing's own still-air film makes a lagged sink temperature
+    diverge, while the bordered system is exact in one solve.  Result key
+    ``nodes``: per-node ``t_c``, ``G_W_per_K``, ``t_sink_c`` and
+    ``heat_removed_W`` (wedge watts, the same ``× symmetry_mult`` as every
+    other flow); the surfaces and sinks attached to a node report its solved
+    temperature as their ``t_sink_c``.
 
     ``surfaces[i]["t_mean_c"]`` (2026-09-14) is the AREA-MEAN WALL TEMPERATURE of
     that surface, ∫T dA / A over the facets the film acts on — the surface-side
@@ -357,6 +373,35 @@ def solve_steady_thermal(
     else:
         r_inner = 0.0                       # solid to the axis: there is no bore
 
+    # ── the LUMPED NODES (2026-09-26) — see the docstring.  Registered before the
+    # films and sinks that attach to them; each keeps the coupling column its
+    # entries build (``∫h·φ dA`` / ``∫g·φ dV``) and the diagonal they add.
+    n_dof = int(mesh.p.shape[1])
+    node_spec: List[Dict[str, Any]] = []
+    node_idx: Dict[str, int] = {}
+    for _nd in list(lumped_nodes or ()):
+        _nm = str(_nd.get("name", "node"))
+        _g = float(_nd.get("G_W_per_K", 0.0) or 0.0)
+        if not (np.isfinite(_g) and _g > 0.0):
+            raise ValueError(
+                "lumped node %r has no film to its sink (G = %r W/K): a body "
+                "that cannot lose heat has no steady temperature" % (_nm, _g))
+        node_idx[_nm] = len(node_spec)
+        node_spec.append({"name": _nm, "G_W_per_K": _g,
+                          "t_sink": float(_nd.get("t_sink_c", t_ambient)),
+                          "symmetry_mult": max(int(_nd.get("symmetry_mult", 1)
+                                                   or 1), 1),
+                          "col": np.zeros(n_dof), "diag": 0.0, "fed_by": []})
+
+    def _node_of(entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        nm = entry.get("node")
+        if nm is None:
+            return None
+        if str(nm) not in node_idx:
+            raise ValueError("%r is attached to lumped node %r, which is not "
+                             "in lumped_nodes" % (entry.get("name"), nm))
+        return node_spec[node_idx[str(nm)]]
+
     spec: List[Dict[str, Any]] = list(surfaces or [
         {"name": "outer", "h": float(h_conv), "t_sink": float(t_ambient)}])
     facet_sets = {"outer": outer_sel, "bore": bore_sel}
@@ -372,11 +417,19 @@ def solve_steady_thermal(
                            "basis": None})
             continue
         fb = FacetBasis(mesh, ElementTriP1(), facets=fset)
-        robin, robin_rhs = _robin_forms(h, ts)
+        _nd = _node_of(s)
+        robin, robin_rhs = _robin_forms(h, 1.0 if _nd is not None else ts)
         K = K + robin.assemble(fb)
-        f = f + robin_rhs.assemble(fb)
+        if _nd is None:
+            f = f + robin_rhs.assemble(fb)
+        else:
+            _c = np.asarray(robin_rhs.assemble(fb), float)
+            _nd["col"] = _nd["col"] + _c
+            _nd["diag"] += float(_c.sum())
+            _nd["fed_by"].append(name)
         active.append({"name": name, "h": h, "t_sink": ts, "facets": fset,
-                       "basis": fb})
+                       "basis": fb, "node": (None if _nd is None
+                                             else _nd["name"])})
 
     # ── 2a'. VOLUME SINKS: a heat path that leaves along the third dimension ──
     # See the docstring.  A lumped G [W/K] between the mean temperature of a set
@@ -417,17 +470,27 @@ def solve_steady_thermal(
         # g·(A_tags·L·sym) = G  →  the WEDGE carries G/sym, which is its share.
         g_vol = g_tot / (a_tags * L * sym_s)
         g_elem = np.where(mask, g_vol, 0.0)
-        mass, mass_rhs = _volume_sink_forms(ts)
+        _nd = _node_of(s)
+        mass, mass_rhs = _volume_sink_forms(1.0 if _nd is not None else ts)
         g_field = p0.interpolate(g_elem)
         K = K + mass.assemble(basis, g=g_field)
-        f = f + mass_rhs.assemble(basis, g=g_field)
+        if _nd is None:
+            f = f + mass_rhs.assemble(basis, g=g_field)
+        else:
+            _c = np.asarray(mass_rhs.assemble(basis, g=g_field), float)
+            _nd["col"] = _nd["col"] + _c
+            _nd["diag"] += float(_c.sum())
+            _nd["fed_by"].append(name)
         sinks_active.append({"name": name, "G_W_per_K": g_tot, "t_sink": ts,
                              "mask": mask, "g": g_vol, "area": a_tags,
-                             "symmetry_mult": sym_s})
+                             "symmetry_mult": sym_s,
+                             "node": None if _nd is None else _nd["name"]})
     K = K.tolil()
 
     if not (any(a["basis"] is not None for a in active)
             or any(s["g"] > 0.0 for s in sinks_active)):
+        # (A lumped node is only ever reached THROUGH a film or a sink, so a
+        # machine cooled only through one still passes this test above.)
         raise ValueError(
             "no cooled surface reached the conduction solve: with every "
             "boundary adiabatic the steady problem has no solution (the machine "
@@ -548,7 +611,34 @@ def solve_steady_thermal(
             n_bridge += int(cb.size)
 
     # ── 3. solve  K · T = f  (Robin BC makes K SPD, no Dirichlet needed) ───────
-    T = np.asarray(spsolve(K.tocsr(), f), float)
+    # Each lumped node borders K with its coupling column and closes its own
+    # row on its film:  −cᵀ·T + (Σc + G/(sym·L))·T_node = G/(sym·L)·T_sink,
+    # per metre of stack like every other row here.  Symmetric, and SPD
+    # whenever the node's film is > 0 (checked when it was registered).
+    t_node = np.zeros(len(node_spec))
+    if node_spec:
+        from scipy.sparse import bmat as _bmat, csr_matrix as _csr
+        _cols = np.column_stack([nd["col"] for nd in node_spec])
+        _gpl = np.array([nd["G_W_per_K"] / (nd["symmetry_mult"] * L)
+                         for nd in node_spec])
+        _D = _csr(np.diag([nd["diag"] for nd in node_spec]) + np.diag(_gpl))
+        _C = _csr(-_cols)
+        K_aug = _bmat([[K.tocsr(), _C], [_C.T, _D]], format="csr")
+        f_aug = np.concatenate([np.asarray(f, float),
+                                _gpl * np.array([nd["t_sink"]
+                                                 for nd in node_spec])])
+        T_full = np.asarray(spsolve(K_aug, f_aug), float)
+        T = T_full[:n_dof]
+        t_node = T_full[n_dof:]
+        for _j, nd in enumerate(node_spec):
+            for a in active:
+                if a.get("node") == nd["name"]:
+                    a["t_sink"] = float(t_node[_j])
+            for s_ in sinks_active:
+                if s_.get("node") == nd["name"]:
+                    s_["t_sink"] = float(t_node[_j])
+    else:
+        T = np.asarray(spsolve(K.tocsr(), f), float)
     n_bad = int((~np.isfinite(T)).sum())          # >0 ⇒ a still-disconnected island
     if n_bad:
         T = np.nan_to_num(T, nan=float(t_ambient),
@@ -710,6 +800,16 @@ def solve_steady_thermal(
         "n_nonfinite": int(n_bad),
         "surfaces": surf_out,
         "sinks": sink_out,
+        # The lumped nodes (2026-09-26): what each one hands its OWN sink, in
+        # the same wedge watts as the films and sinks that feed it (the node
+        # has no source, so this equals the sum of what reaches it).
+        "nodes": [{"name": nd["name"], "t_c": float(t_node[_j]),
+                   "G_W_per_K": nd["G_W_per_K"], "t_sink_c": nd["t_sink"],
+                   "heat_removed_W": (nd["G_W_per_K"] / nd["symmetry_mult"]
+                                      * (float(t_node[_j]) - nd["t_sink"])),
+                   "fed_by": list(nd["fed_by"]),
+                   "symmetry_mult": nd["symmetry_mult"]}
+                  for _j, nd in enumerate(node_spec)],
         "gap_heat_W": gap_w,
         "q_generated_W": q_gen,
         "q_rotor_W": q_rotor,

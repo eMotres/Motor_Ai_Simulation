@@ -295,25 +295,40 @@ def test_part_limits_read_the_offsets_off_the_map():
         thermal_result=PEAK_MAP, bearing_limit_c=150.0)}
 
 
-def test_the_robot_link_rides_the_stator_node_only_when_the_map_has_one():
-    """mount_mode='link' (2026-09-26) leaves cooling.mount.link on the map;
-    part_limits reads it as a fixed 70 degC touch limit offset from stator,
-    the same way the bearing seat rides the rotor."""
-    tr = dict(PEAK_MAP)
-    tr["cooling"] = {"mount": {"link": {"t_link_c": 95.0,
-                                        "touch_limit_c": 70.0}}}
-    got = {p.part: p for p in ttl.part_limits(thermal_result=tr)}
-    assert "link" in got
-    assert got["link"].node == "stator"
-    assert got["link"].limit_c == pytest.approx(70.0)
-    assert got["link"].at_point_c == pytest.approx(95.0)
-    assert got["link"].over is True
-    assert "touch 70" in ttl.part_label("link")
+def test_the_heat_path_body_is_judged_on_its_own_node_only_when_the_map_has_one():
+    """heat_path (2026-09-26) leaves cooling.heat_path on the map; part_limits
+    reads its body as a fixed 70 degC touch limit carried as an offset from the
+    node its heat comes from — the stator for a housing, the rotor for the
+    shaft-only structure — the same way the bearing seat rides the rotor."""
+    s_mean = float(PEAK_MAP["components"]["stator"]["avg"])
+    r_mean = float(PEAK_MAP["components"]["rotor"]["avg"])
 
-    # A machine with no link block (mount_mode='sink', the default) grows no
-    # link row at all — bit-identical to before this feature existed.
-    assert "link" not in {p.part for p in ttl.part_limits(
-        thermal_result=PEAK_MAP)}
+    tr = dict(PEAK_MAP)
+    tr["cooling"] = {"heat_path": {"option": "housing", "body": "housing",
+                                   "t_body_c": 95.0, "touch_limit_c": 70.0}}
+    got = {p.part: p for p in ttl.part_limits(thermal_result=tr)}
+    assert "housing" in got and "structure" not in got
+    assert got["housing"].node == "stator"
+    assert got["housing"].limit_c == pytest.approx(70.0)
+    assert got["housing"].at_point_c == pytest.approx(95.0)
+    assert got["housing"].offset_k == pytest.approx(95.0 - s_mean)
+    assert got["housing"].over is True
+    assert ttl.part_label("housing") == "housing (touch 70 °C)"
+
+    tr["cooling"] = {"heat_path": {"option": "shaft", "body": "structure",
+                                   "t_body_c": 55.0, "touch_limit_c": 70.0}}
+    got = {p.part: p for p in ttl.part_limits(thermal_result=tr)}
+    assert got["structure"].node == "rotor"
+    assert got["structure"].offset_k == pytest.approx(55.0 - r_mean)
+    assert got["structure"].over is False
+    assert ttl.part_label("structure") == "structure (touch 70 °C)"
+
+    # heat_path 'none' (body null) and every map before it grow no row at all.
+    tr["cooling"] = {"heat_path": {"option": "none", "body": None}}
+    assert not ({"housing", "structure"}
+                & {p.part for p in ttl.part_limits(thermal_result=tr)})
+    assert not ({"housing", "structure"}
+                & {p.part for p in ttl.part_limits(thermal_result=PEAK_MAP)})
 
 
 def test_the_duration_words_are_the_ones_the_panel_prints():

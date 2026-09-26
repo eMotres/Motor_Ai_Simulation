@@ -243,6 +243,30 @@ export interface ThermalMount {
   [k: string]: unknown;
 }
 
+/** The robotics HEAT PATH (2026-09-26): the one conduction choice and the
+ *  housing / structure body it lands on, judged against a 70 °C touch limit.
+ *  `body: null` when the option is 'none'. */
+export interface ThermalHeatPath {
+  option?: 'housing' | 'shaft' | 'both' | 'none';
+  body?: 'housing' | 'structure' | null;
+  rides_node?: string;
+  t_body_c?: number | null;
+  touch_limit_c?: number;
+  over_touch_K?: number;
+  binds_touch_limit?: boolean;
+  diameter_mm?: number;
+  length_mm?: number;
+  area_m2?: number;
+  h_conv?: number;
+  h_rad?: number;
+  G_film_W_per_K?: number;
+  heat_to_room_W?: number;
+  contact?: { h_W_per_m2K?: number; G_W_per_K?: number; heat_W?: number } | null;
+  bearings?: { G_W_per_K?: number; heat_W?: number; n_bearings?: number;
+               shaft_od_mm?: number; [k: string]: unknown } | null;
+  note?: string;
+}
+
 /** ONE of the four AXIAL end faces (2026-09-14): the end turns, the stator core
  *  end annulus, the rotor core's and the magnets'.  `mode: 'off'` on a housed
  *  machine, where whatever they hand to the air inside the housing comes
@@ -387,6 +411,9 @@ export interface ThermalHeatBudget {
   /** the bolted flange: G·(T_stator − T_mount).  0 on a machine bolted to
    *  nothing — which is what every answer before 2026-09-14 assumed silently. */
   mount_W?: number;
+  /** the robotics heat path's bearings (2026-09-26): rotor → shaft →
+   *  bearings → housing / structure.  0 unless heat_path is 'shaft'/'both'. */
+  bearings_W?: number;
   /** the four AXIAL end faces summed (end turns, both cores, the magnets).
    *  0 on a housed machine. */
   end_faces_W?: number;
@@ -469,6 +496,8 @@ export interface ThermalCooling extends ThermalCoolingSurface {
   shaft_ends?: ThermalShaftEnds;
   /** the bolted MOUNT (2026-09-14); `mode: 'off'` = bolted to nothing */
   mount?: ThermalMount;
+  /** the robotics heat path's body (2026-09-26) */
+  heat_path?: ThermalHeatPath;
   /** the four AXIAL end faces (2026-09-14); `mode: 'off'` when housed */
   end_faces?: ThermalEndFaces;
   /** 'housed' | 'open' — how the machine is built (2026-09-09) */

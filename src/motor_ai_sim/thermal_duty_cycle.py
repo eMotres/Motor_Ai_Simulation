@@ -1191,6 +1191,10 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     gap_w = float(budget.get("gap_W") or 0.0)
     bore_w = float(budget.get("bore_W") or 0.0)
     shaft_w = float(budget.get("shaft_ends_W") or 0.0)
+    # THE BEARINGS (2026-09-26, the robotics heat path 'shaft' / 'both'): the
+    # rotor's conduction path out through the shaft into the housing /
+    # structure.  0 on every map before it.
+    bearings_w = float(budget.get("bearings_W") or 0.0)
     housing_w = float(budget.get("housing_W") or 0.0)
     # ── THE OPEN FRAME's two winding-side paths (2026-09-20) ────────────────
     # On a machine built WITHOUT a housing the map cools the end turns in the
@@ -1391,6 +1395,20 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     dt_rotor = means["rotor"] - t_amb
     G["r_bore"] = bore_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
     G["r_shaft"] = shaft_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
+    G["r_bearings"] = bearings_w / dt_rotor if abs(dt_rotor) > 1e-6 else 0.0
+    _hp = dict(cooling.get("heat_path") or {})
+    if _hp.get("body"):
+        # The housing / structure is a NODE of the 2-D solve but not of this
+        # network: its path is carried as the map's own watts over the
+        # stator's / rotor's ΔT to the room (the housing film, `r_bearings`).
+        # Right at the calibration point; its heat capacity is left out, so a
+        # pull from cold heats the machine FASTER than the real one would.
+        notes.append(
+            "the %s (heat_path %r, %.1f °C on the map) is folded into the "
+            "fitted conductances to the room — its own heat capacity is not a "
+            "node here, so a transient from cold is pessimistic (fast)"
+            % (_hp.get("body"), _hp.get("option"),
+               float(_hp.get("t_body_c") or t_amb)))
     # THE VENTILATED GAP, one conductance per side, fitted the same way every
     # surface path here is: the WATTS the map removed over the node's own ΔT.
     G["r_gap_flow"] = (gf_rot_w / dt_rotor
@@ -1541,6 +1559,7 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
             "P_cu_W": round(P_cu, 3), "P_mag_W": round(P_mag, 3),
             "gap_W": round(gap_w, 3), "bore_W": round(bore_w, 3),
             "shaft_ends_W": round(shaft_w, 3), "housing_W": round(housing_w, 3),
+            "bearings_W": round(bearings_w, 3),
             "end_windings_W": round(ew_w, 3), "slot_channels_W": round(ch_w, 3),
             "gap_flow_rotor_W": round(gf_rot_w, 3),
             "gap_flow_stator_W": round(gf_sta_w, 3),
@@ -1689,6 +1708,7 @@ def _flows(T: Mapping[str, float], network: Network) -> Dict[str, float]:
         "mount": float(network.G.get("s_mount") or 0.0) * (ts - mnt),
         "bore": float(network.G.get("r_bore") or 0.0) * (tr - amb),
         "shaft_ends": float(network.G.get("r_shaft") or 0.0) * (tr - amb),
+        "bearings": float(network.G.get("r_bearings") or 0.0) * (tr - amb),
         # THE OPEN FRAME (2026-09-20): the end turns in the airflow and the
         # ventilated slot channels.  Zero on every housed machine, and on this
         # Ø50 open-frame joint 207 of the 262 W the machine makes — see
@@ -1715,7 +1735,7 @@ def _flows(T: Mapping[str, float], network: Network) -> Dict[str, float]:
 #: Which node each external flow leaves FROM.
 _FLOW_NODE: Dict[str, str] = {
     "housing": "stator", "mount": "stator", "bore": "rotor",
-    "shaft_ends": "rotor", "winding_ends": "winding",
+    "shaft_ends": "rotor", "bearings": "rotor", "winding_ends": "winding",
     "stator_ends": "stator", "rotor_ends": "rotor", "magnet_ends": "magnet",
     "winding_open": "winding",
     "rotor_gap_flow": "rotor", "stator_gap_flow": "stator",
@@ -1724,7 +1744,8 @@ EXTERNAL_FLOWS: Tuple[str, ...] = tuple(_FLOW_NODE)
 #: Which side of the machine each external path belongs to (for the split).
 STATOR_SIDE_FLOWS = ("housing", "mount", "winding_ends", "stator_ends",
                      "winding_open", "stator_gap_flow")
-ROTOR_SIDE_FLOWS = ("bore", "shaft_ends", "rotor_ends", "magnet_ends",
+ROTOR_SIDE_FLOWS = ("bore", "shaft_ends", "bearings", "rotor_ends",
+                    "magnet_ends",
                     "rotor_gap_flow")
 
 
@@ -1958,7 +1979,8 @@ def periodic_steady_state(profile: Profile, network: Network,
                 "duty_cycle_no_periodic_state",
                 "this cycle has no periodic state: the machine passes %.0f °C "
                 "on cycle %d and is still rising." % (RUNAWAY_C, n_done),
-                "Lower the ED, shorten t_on, or raise the mount conductance.")
+                "Lower the ED, shorten t_on, or cool the machine harder — a "
+                "robotics heat path (housing / shaft) or a mount conductance.")
         residual = max(abs(end[n] - state[n]) for n in NODES)
         history.append(dict(end))
         state = dict(end)
@@ -1980,8 +2002,9 @@ def periodic_steady_state(profile: Profile, network: Network,
                 "the cycle had not repeated itself after %d cycles and the "
                 "peak is still rising by %.2f K per cycle."
                 % (n_max, peaks[-1] - peaks[-2]),
-                "Lower the ED, shorten t_on, raise the mount conductance, or "
-                "raise n_cycles_max if the machine is merely slow.")
+                "Lower the ED, shorten t_on, cool the machine harder (a "
+                "robotics heat path or a mount conductance), or raise "
+                "n_cycles_max if the machine is merely slow.")
 
     # One last cycle FROM the converged state — the series that is reported is
     # a real cycle, never an extrapolated one.
@@ -2261,6 +2284,7 @@ def _time_constant(network: Network, C: Mapping[str, float]) -> float:
     g = (float(network.G.get("s_mount") or 0.0)
          + float(network.G.get("r_bore") or 0.0)
          + float(network.G.get("r_shaft") or 0.0)
+         + float(network.G.get("r_bearings") or 0.0)
          + still_air_G(network.t_ambient_c + 60.0, network, "housing")
          + sum(still_air_G(network.t_ambient_c + 60.0, network, k)
                for k in _SIDE_KEY.values()))
@@ -2568,6 +2592,7 @@ def average_split(trace: Trace, network: Network) -> Dict[str, Any]:
         "magnet_end_faces_W": round(flows.get("magnet_ends", 0.0), 3),
         "bore_W": round(flows.get("bore", 0.0), 3),
         "shaft_ends_W": round(flows.get("shaft_ends", 0.0), 3),
+        "bearings_W": round(flows.get("bearings", 0.0), 3),
         # The OPEN frame's three forced paths (end turns + slot channels are one
         # line, the ventilated gap is two).  0 on every housed machine.
         "winding_open_W": round(flows.get("winding_open", 0.0), 3),

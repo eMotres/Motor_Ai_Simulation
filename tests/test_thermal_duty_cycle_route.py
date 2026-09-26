@@ -97,11 +97,13 @@ PEAK_SUMMARY = dict(RATED_SUMMARY, **{
 S3 = {"kind": "S3", "duty": PEAK, "ed_pct": 25.0, "cycle_s": 60.0,
       "rest_duty": None, "t_start_c": 40.0, "calibration_duty": RATED}
 
-#: The room the joint stands in and the arm it is bolted to, in the Thermal
-#: panel's own field names (this is what `cooling_fields` maps).
+#: The room the joint stands in and where its heat is conducted, in the Thermal
+#: panel's own field names (this is what `cooling_fields` maps).  The heat path
+#: replaced the 2 W/K mount on 2026-09-26: the stator OD sits in a housing that
+#: sheds its heat by still air + radiation.
 ROBOT_SETTINGS = {"coolMode": "robotics", "ambientT": "40", "boreMode": "still",
                   "emissivity": "0.9", "endFaces": "still", "endFaceSides": "2",
-                  "mountG": "2", "mountT": "40", "maxIter": "6"}
+                  "heatPath": "housing", "maxIter": "6"}
 
 #: The L13's rated point, on the cheapest honest cycle — four frames over one
 #: electrical period.  The same settings tests/test_thermal_robotics.py uses.
@@ -125,9 +127,16 @@ def _canned_map(**over) -> dict:
                        "rotor": {"max": 95.7, "avg": 95.7},
                        "magnet": {"max": 95.7, "avg": 95.6}},
         "cooling": {
+            # A heat_path='housing' map: the OD's film is the contact into the
+            # housing, so the housing line carries what the 2 W/K mount did.
             "outer": {"mode": "robotics", "h_conv": 6.1, "h_rad": 8.3,
                       "h_total": 14.4, "t_sink_c": 40.0, "area_m2": 0.003471,
-                      "emissivity": 0.9, "heat_removed_W": 2.7},
+                      "emissivity": 0.9, "heat_removed_W": 41.1},
+            "heat_path": {"option": "housing", "body": "housing",
+                          "rides_node": "stator", "t_body_c": 62.0,
+                          "touch_limit_c": 70.0, "binds_touch_limit": False,
+                          "heat_to_room_W": 41.1,
+                          "contact": {"heat_W": 41.1}, "bearings": None},
             "end_faces": {
                 "mode": "still", "sides": 2, "k_end": 2.027,
                 "winding": {"area_m2": 0.00540, "char_len_mm": 1.1,
@@ -138,9 +147,10 @@ def _canned_map(**over) -> dict:
                           "heat_removed_W": 3.1},
                 "magnet": {"area_m2": 0.00143, "char_len_mm": 37.8,
                            "heat_removed_W": 2.3}},
-            "heat_budget": {"losses_W": 62.0, "housing_W": 2.7, "bore_W": 1.69,
+            "heat_budget": {"losses_W": 62.0, "housing_W": 41.1, "bore_W": 1.69,
                             "gap_W": -0.47, "shaft_ends_W": 0.0,
-                            "mount_W": 38.4, "end_faces_W": 19.0,
+                            "mount_W": 0.0, "bearings_W": 0.0,
+                            "end_faces_W": 19.0,
                             "coil_W": 55.33, "residual_pct": 0.0},
             "mech_losses": {"P_bearings_W": 0.0, "P_windage_gap_W": 0.0,
                             "shaft_ends_open": False}},
@@ -380,14 +390,14 @@ def test_a_malformed_block_is_refused_by_its_own_name(client, mock_map):
 
 def test_a_cycle_with_no_periodic_state_is_refused_with_a_remedy(client,
                                                                  mock_map):
-    """100 % duty at the peak point through a 0.1 W/K mount: there is no
-    equilibrium below 400 °C, and "186 °C" would be the worst possible answer."""
+    """100 % duty at the peak point: there is no equilibrium below 400 °C,
+    and "186 °C" would be the worst possible answer."""
     d = _refusal(_post(client, duty=PEAK,
                        duty_cycle=dict(S3, ed_pct=100.0),
-                       thermal_settings=dict(ROBOT_SETTINGS, mountG="0.1")),
+                       thermal_settings=dict(ROBOT_SETTINGS, heatPath="none")),
                  "duty_cycle_no_periodic_state")
     assert "400" in d["text"] or "rising" in d["text"]
-    assert "mount conductance" in d["text"]          # what to change
+    assert "heat path" in d["text"]                  # what to change
 
 
 def test_a_map_with_no_components_is_no_steady_thermal_map(client, sandbox,
@@ -426,9 +436,9 @@ def test_the_remembered_map_is_reused_when_it_is_this_duty_at_these_BCs(
     assert out["calibration_map"]["reused"] is True
     assert not calls, "a remembered map at these BCs must not be re-solved"
 
-    # …and a map solved with a DIFFERENT mount is not this machine.
+    # …and a map solved with a DIFFERENT heat path is not this machine.
     out2 = _post(client, duty=PEAK,
-                 thermal_settings=dict(ROBOT_SETTINGS, mountG="5")).json()
+                 thermal_settings=dict(ROBOT_SETTINGS, heatPath="shaft")).json()
     assert out2["cached"] is False and len(calls) == 1
 
 
@@ -443,7 +453,8 @@ def test_the_calibration_solve_is_at_the_calibration_dutys_own_point(
     assert kw["coil_temp_c"] == pytest.approx(120.0)
     assert kw["rpm"] == pytest.approx(1000.0)
     assert kw["cooling_mode"] == "robotics" and kw["bore_mode"] == "still"
-    assert kw["mount_g_w_per_k"] == pytest.approx(2.0)
+    assert kw["heat_path"] == "housing"
+    assert "mount_g_w_per_k" not in kw
     assert out["spec"]["calibration_duty"] == RATED
     assert out["network"]["calibration"]["duty"] == RATED
 
@@ -467,7 +478,7 @@ def test_the_record_has_the_shape_B3_promises(client, mock_map):
     net = out["network"]
     assert net["C_J_per_K"]["winding"] == pytest.approx(41.2, abs=0.1)
     assert net["cp_sources"]["stator"] == "default"      # 20SW1200 has no c_p
-    assert net["G_W_per_K"]["s_mount"] == 2.0
+    assert net["G_W_per_K"]["s_mount"] == 0.0           # no mount: a housing
     assert net["hot_spot_offset_K"] == pytest.approx(2.4, abs=0.01)
     assert net["areas_m2"]["winding_ends"] == pytest.approx(0.00540)
     assert "measured end-face areas" in net["side_area_basis"]["source"]

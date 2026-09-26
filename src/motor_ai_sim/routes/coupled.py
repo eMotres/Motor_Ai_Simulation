@@ -6667,6 +6667,10 @@ def _cooling_label(cooling: Mapping[str, Any]) -> str:
         parts.append("bore liquid" + ("" if v is None else " %.1f L/min" % v))
     if _ccr._num(c.get("mount_g_w_per_k")):
         parts.append("mount %.1f W/K" % _ccr._num(c.get("mount_g_w_per_k")))
+    _hp = str(c.get("heat_path") or "none").strip().lower()
+    if _hp != "none":
+        parts.append({"housing": "stator → housing", "shaft": "via shaft",
+                      "both": "housing + shaft"}.get(_hp, _hp))
     label = " + ".join(p for p in parts if p)
     amb = _ccr._num(c.get("ambient_temp"))
     if amb is not None:

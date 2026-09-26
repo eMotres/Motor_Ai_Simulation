@@ -29,6 +29,7 @@ import { tileFullRing } from './fem-types';
 import { useMotorStore } from '../../stores/motorStore';
 import { geoSignature } from '../common/geoSig';
 import { matOverrideReady } from '../../lib/apiAuth';
+import { EDDY_DEFAULT_STEPS } from '../../lib/eddySteps';
 export type { FemPayload } from './fem-types';
 
 /** True once a physics request would carry the page's `mat=` override — the
@@ -452,7 +453,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // already solved and hand back that run's field instead of solving again.
   // (Same localStorage keys the Simulation panel writes and TransientCharts
   // sends — one source, or the keys would never match.)
-  const simSteps    = () => Number(readSimSetting('stepsPP', 24)) || 24;
+  const simSteps    = () => Number(readSimSetting('stepsPP', EDDY_DEFAULT_STEPS)) || EDDY_DEFAULT_STEPS;
   const simCoilTemp = () => Number(readSimSetting('coilTemp', 120.0));
   const simEddy     = () => readSimSetting<boolean>('eddyCoupled', true) !== false;
 

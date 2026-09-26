@@ -28,8 +28,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
 
-__all__ = ["COOL_MODES", "BORE_MODES", "END_FACE_MODES", "MOUNT_MODES",
-           "LINK_PRESETS", "LINK_MATERIALS", "cooling_fields",
+__all__ = ["COOL_MODES", "BORE_MODES", "END_FACE_MODES", "HEAT_PATHS",
+           "heat_path_of", "cooling_fields",
            "cooling_issue", "thermal_panel_settings",
            "coupled_iteration_settings"]
 
@@ -55,11 +55,10 @@ END_FACE_MODES = ("still", "none")
 #: the airflow — is the 40 mm CIANO14; ``housed`` is every other machine and the
 #: model this project has always solved.
 FRAME_MODES = ("housed", "open")
-#: The mount's far side (2026-09-26): "sink" (today's model, unchanged) or
-#: "link" (the arm heats up — see cooling_models.robot_link_path).
-MOUNT_MODES = ("sink", "link")
-LINK_PRESETS = ("finger", "wrist", "arm")
-LINK_MATERIALS = ("aluminium", "steel", "plastic")
+#: The robotics mode's ONE conduction choice (2026-09-26, owner: «давай
+#: упростим») — replaces the mount W/K, mount °C, sink-or-link, link size and
+#: link material fields.  See ``cooling_models.HEAT_PATHS``.
+HEAT_PATHS = ("housing", "shaft", "both", "none")
 
 
 def _num(v: Any, default: float) -> float:
@@ -81,6 +80,27 @@ def _num(v: Any, default: float) -> float:
 def _mode(v: Any, allowed, default: str) -> str:
     s = str(v or "").strip().lower()
     return s if s in allowed else default
+
+
+def heat_path_of(s: Mapping[str, Any]) -> str:
+    """The panel's Heat path, with OLD saved settings mapped to the nearest one.
+
+    ``heatPath`` wins when it is one of the four.  A store saved before it
+    existed (2026-09-26) carries the mount fields instead: any mount — a
+    conductance > 0, or the one-day-old robot-link mode — was heat leaving the
+    stator by conduction into the structure, which is ``housing``; a mount
+    typed as 0 was a machine bolted to nothing, which is ``none``.  A store
+    with neither is the panel's default, ``housing`` (the default it replaces
+    was a 2 W/K mount).  Mirrors ``thermalStore``'s ``readHeatPath``.
+    """
+    hp = str(s.get("heatPath") or "").strip().lower()
+    if hp in HEAT_PATHS:
+        return hp
+    if str(s.get("mountMode") or "").strip().lower() == "link":
+        return "housing"
+    if str(s.get("mountG") if s.get("mountG") is not None else "").strip():
+        return "housing" if _num(s.get("mountG"), 0.0) > 0.0 else "none"
+    return "housing"
 
 
 def cooling_fields(s: Mapping[str, Any]) -> Dict[str, Any]:
@@ -155,40 +175,13 @@ def cooling_fields(s: Mapping[str, Any]) -> Dict[str, Any]:
         if out["end_faces"] != "none":
             out["end_face_sides"] = (
                 1 if _num(s.get("endFaceSides"), 2.0) == 1 else 2)
-        # THE MOUNT is the path this machine's temperature actually hangs on,
-        # and it is sent when there IS one — a zero conductance is the machine
-        # bolted to nothing, which is what the request without the field already
-        # means (the router still reports it, as `mount.mode: off` with a note,
-        # so "nobody has typed the mount conductance yet" stays visible).  Same
-        # gate the exposed shaft length has had since 2026-09-07.  The mount
-        # TEMPERATURE rides with it only when it was typed: blank means the
-        # ambient, and sending the ambient in its place would make a default look
-        # like a number somebody chose.
-        #
-        # ASYMMETRY, ON PURPOSE: the ROUTER reads `mount_g_w_per_k` in every
-        # cooling mode (a jacketed machine is bolted to something too, and the
-        # cache key carries it whenever it is non-zero), but the PANEL only
-        # offers the field with the robotics mode — so that is the only mode
-        # this mapper can send it from.  Nothing is lost: a direct caller can
-        # still ask for a mount beside a jacket.
-        mount_g = max(0.0, _num(s.get("mountG"), 0.0))
-        if mount_g > 0.0:
-            out["mount_g_w_per_k"] = mount_g
-            if str(s.get("mountT") or "").strip():
-                out["mount_temp_c"] = _num(s.get("mountT"), ambient)
-            # THE MOUNT'S OTHER SIDE (2026-09-26): "sink" (default) is the rule
-            # above, unchanged.  "link" says the far side of the joint is a
-            # robot ARM that heats up — see cooling_models.robot_link_path —
-            # and rides ONLY with a mount conductance already typed, same gate
-            # as `mountT`: a link preset beside no conductance is exactly the
-            # unused cache-splitting parameter the module docstring is about.
-            mount_mode = str(s.get("mountMode") or "sink").strip().lower()
-            if mount_mode == "link":
-                out["mount_mode"] = "link"
-                out["link_preset"] = _mode(s.get("linkPreset"), LINK_PRESETS,
-                                           "wrist")
-                out["link_material"] = _mode(s.get("linkMaterial"),
-                                             LINK_MATERIALS, "aluminium")
+        # THE HEAT PATH (2026-09-26) replaces the five mount fields.  'none'
+        # is the router's default and is not sent, so a no-conduction request
+        # keys the cache on exactly the tuple it always did; the old mount
+        # fields are READ (heat_path_of maps them) but never sent again.
+        hp = heat_path_of(s)
+        if hp != "none":
+            out["heat_path"] = hp
     return out
 
 
@@ -201,7 +194,6 @@ def cooling_issue(s: Mapping[str, Any]) -> Optional[str]:
     """
     cool = _mode(s.get("coolMode"), COOL_MODES, "air")
     bore = _mode(s.get("boreMode"), BORE_MODES, "none")
-    mount_g = _num(s.get("mountG"), 0.0)
     if cool == "liquid" and not _num(s.get("flowLpm"), 0.0) > 0:
         return "coolant flow must be greater than 0 L/min"
     if cool == "manual" and not _num(s.get("hConv"), 0.0) > 0:
@@ -216,15 +208,10 @@ def cooling_issue(s: Mapping[str, Any]) -> Optional[str]:
         eps = _num(s.get("emissivity"), 0.9)
         if not 0.0 <= eps <= 1.0:
             return "emissivity must be between 0 and 1"
-    if mount_g < 0.0:
-        return "the mount conductance cannot be negative"
-    # WIDENED 2026-09-14: a machine bolted to a cold arm IS cooled, even with
-    # every film switched off — the mount is a conductance to a held temperature
-    # and the steady problem has a solution.  What has nowhere to send its heat
-    # is the machine with no door at all.
-    if cool == "none" and bore == "none" and not mount_g > 0:
-        return ("no cooled surface and no mount conductance — the heat has "
-                "nowhere to leave")
+    # The panel no longer offers a mount (2026-09-26 — the robotics heat path
+    # replaced it), so a machine with no film and no bore has no door at all.
+    if cool == "none" and bore == "none":
+        return "no cooled surface — the heat has nowhere to leave"
     return None
 
 
@@ -264,15 +251,16 @@ def cooling_words(c: Mapping[str, Any]) -> str:
         bits.append("still air at %g °C" % amb if v <= 0.0
                     else "air %g m/s at %g °C" % (v, amb))
     if _num(c.get("mount_g_w_per_k"), 0.0) > 0.0:
-        if str(c.get("mount_mode") or "sink") == "link":
-            bits.append("mount %g W/K into a %s %s link"
-                        % (_num(c.get("mount_g_w_per_k"), 0.0),
-                           str(c.get("link_preset") or "wrist"),
-                           str(c.get("link_material") or "aluminium")))
-        else:
-            bits.append("mount %g W/K at %g °C"
-                        % (_num(c.get("mount_g_w_per_k"), 0.0),
-                           _num(c.get("mount_temp_c"), amb)))
+        bits.append("mount %g W/K at %g °C"
+                    % (_num(c.get("mount_g_w_per_k"), 0.0),
+                       _num(c.get("mount_temp_c"), amb)))
+    hp = str(c.get("heat_path") or "none")
+    if hp != "none":
+        bits.append({"housing": "stator → housing (touch 70 °C)",
+                     "shaft": "rotor → shaft → bearings → structure "
+                              "(touch 70 °C)",
+                     "both": "stator → housing + shaft → bearings "
+                             "(touch 70 °C)"}.get(hp, hp))
     bore = str(c.get("bore_mode") or "none")
     if bore == "air":
         bits.append("bore air %g m/s" % _num(c.get("bore_air_speed_mps"), 0.0))

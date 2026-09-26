@@ -56,8 +56,7 @@ export const L13_SHARES = {
  *  `thermalStore` field names wherever one exists, so a reader of the panel can
  *  jump straight to the state. */
 export type RoboticsControlKey =
-  | 'coolMode' | 'ambientT' | 'emissivity' | 'mountG' | 'mountT'
-  | 'mountMode' | 'linkPreset' | 'linkMaterial'
+  | 'coolMode' | 'ambientT' | 'emissivity' | 'heatPath'
   | 'endFaces' | 'endFaceSides'
   | 'boreMode' | 'shaftExtMm' | 'shaftExtSides'
   | 'frame' | 'openAirSpeed';
@@ -73,48 +72,28 @@ export interface RoboticsControl {
 
 /** The one line under the mode select, when the robotics mode is chosen. */
 export const ROBOTICS_SUBTITLE =
-  'still air + radiation + heat into the mount; no fan, no liquid';
+  'still air + radiation + one conduction path; no fan, no liquid';
 
 export const ROBOTICS_HELP: Record<RoboticsControlKey, RoboticsControl> = {
   coolMode: {
     label: 'Outer surface',
     short: 'mode',
-    tip: 'How heat leaves the OUTER surface of the stator — the housing, or whatever the machine is wrapped in. Robotics is a joint standing in a room: natural convection plus radiation off the housing, and conduction into the arm it is bolted to — no fan, no jacket, no slipstream. Air, Liquid and Manual h are the blown, jacketed and imposed-film machines; No cooling is adiabatic and only solves when the bore or the mount takes the heat instead.',
+    tip: 'How heat leaves the OUTER surface of the stator — the housing, or whatever the machine is wrapped in. Robotics is a joint standing in a room: natural convection plus radiation, and one conduction path chosen under Heat path — no fan, no jacket, no slipstream. Air, Liquid and Manual h are the blown, jacketed and imposed-film machines; No cooling is adiabatic and only solves when the bore takes the heat instead.',
   },
   ambientT: {
     label: 'room air °C',
     short: 'room °C',
-    tip: 'Temperature of the still air the machine stands in, °C — the room, and the default is 40 °C. Every robotics path works against it: the housing film, the T∞ of the radiation term, the end faces, the open bore, and the mount whenever its own temperature is blank. Raising it moves every temperature in the result up almost one for one; it barely changes any coefficient.',
+    tip: 'Temperature of the still air the machine stands in, °C — the room, and the default is 40 °C. Every robotics path works against it: the housing film, the T∞ of the radiation term, the end faces, the open bore, and the housing / structure the heat path conducts into. Raising it moves every temperature in the result up almost one for one; it barely changes any coefficient.',
   },
   emissivity: {
     label: 'ε (radiation)',
     short: 'ε (radiation)',
     tip: 'THIS IS THE RADIATION PARAMETER: the total hemispherical emissivity of the housing surface, 0…1, default 0.9. Heat leaves as light at ε·σ·A·(T⁴ − T_room⁴), and on a small machine in still air that beats the air film — on the Ø85 L13 joint the housing loses 2.91 W by radiation against 2.05 W by convection. 0.9 is anodised, painted or oxidised metal and most real housings; 0.2 is bare machined aluminium and 0.05 polished. Lower it and the housing arrow in the 3-D view shrinks by exactly that much — ε = 0 removes the radiation half and nothing else.',
   },
-  mountG: {
-    label: 'mount to arm, W/K',
-    short: 'mount, W/K',
-    tip: 'Contact conductance of the bolted flange into the robot\'s own structure, W/K — heat CONDUCTED out of the stator as G·(T_housing − T_mount), not a film on a surface. On a joint in still air this is the path: 163 W of the Ø85 L13\'s 196 W, 83 % of everything that leaves, against 5 W off the whole housing skin. 0 means bolted to nothing, and the answer then says so; the shipped 2 W/K is an ASSUMPTION — nobody has measured this flange (its material, bolt pattern, contact area, pad or grease) — so any mount line is provisional. Raise it and every temperature in the machine falls: it is the cheapest cooling a joint has.',
-  },
-  mountT: {
-    label: 'mount °C (blank = room air)',
-    short: 'mount °C',
-    tip: 'The temperature the mount is HELD at, °C — it enters as an infinite sink at exactly this value. BLANK means the room air temperature above, and blank is the honest default: the arm is not a heat source of its own, and pre-filling the field would make a default look like a number somebody measured. Type one when the arm is known to run warm — a neighbouring joint, a hot enclosure — and the mount then carries G·(T_housing − this) instead.',
-  },
-  mountMode: {
-    label: 'Mount into',
-    short: 'mount into',
-    tip: '"Ideal heat sink" is today\'s model: the mount is held at mount °C for ever, as if the arm behind it were infinitely massive. "Robot link (heats up)" is honest about a small joint: the arm itself only sheds heat by still air + radiation off ONE fixed shape (a size preset and a material below), so it climbs until its own skin balances what the mount hands it — and it is judged against a fixed 70 °C touch limit, the same rule everything else on this joint is judged against.',
-  },
-  linkPreset: {
-    label: 'Link size',
-    short: 'link size',
-    tip: 'The arm segment the motor is bolted to, as ONE solid cylinder: finger — 60 mm long, Ø16 mm (a small end-effector segment); wrist — 120 mm long, Ø40 mm; arm — 250 mm long, Ø80 mm. A real link is a hollow, ribbed casting with more cooling surface per kilogram than a bare cylinder, so these are a conservative (hot) stand-in, not a CAD measurement.',
-  },
-  linkMaterial: {
-    label: 'Link material',
-    short: 'link material',
-    tip: 'What the arm segment is made of — only its MASS (hence heat capacity, for how fast it warms up in a duty cycle) is material-specific here; the still-air film on its skin does not know what is inside. Aluminium 2700 kg/m³, steel 7850 kg/m³, plastic 1200 kg/m³ — a steel link of the same size takes about 3× longer to reach the same temperature as aluminium.',
+  heatPath: {
+    label: 'Heat path',
+    short: 'heat path',
+    tip: 'Where the heat goes by conduction: Stator → housing puts the stator OD in a housing (contact 2000 W/m²K on the OD), a plain cylinder sized from the stator — wall max(2 mm, 8 % of OD), max(5 mm, 30 % of OD) of end room each side — that sheds heat by still air + radiation at ε off its whole skin. Through the shaft is rotor → shaft (stack/6 + 5 mm each side) → 2 bearings (0.1 W/K per mm of shaft OD each) → a structure of the same size and film, while the stator OD keeps its own still-air film. Housing + shaft sends both paths into one housing; No contact leaves still air + radiation everywhere and conducts nothing. The housing / structure is judged against a fixed 70 °C touch limit, beside the winding and the magnets. Every number here is a stated default, not a measurement.',
   },
   endFaces: {
     label: 'End faces',
@@ -160,7 +139,7 @@ export const COOL_MODE_LABEL: Record<string, string> = {
   liquid: 'Liquid — jacket on the housing',
   manual: 'Manual h — imposed film',
   none: 'No cooling — adiabatic outside',
-  robotics: 'Robotics — still air + radiation + mount',
+  robotics: 'Robotics — still air + radiation + heat path',
 };
 
 export const BORE_MODE_LABEL: Record<string, string> = {
@@ -168,6 +147,14 @@ export const BORE_MODE_LABEL: Record<string, string> = {
   air: 'Forced air through the bore',
   liquid: 'Liquid through the bore',
   still: 'Open bore — still air + radiation',
+};
+
+/** The robotics Heat path's four options (2026-09-26). */
+export const HEAT_PATH_LABEL: Record<string, string> = {
+  housing: 'Stator → housing',
+  shaft: 'Through the shaft (bearings)',
+  both: 'Housing + shaft',
+  none: 'No contact — still air only',
 };
 
 export const FRAME_LABEL: Record<string, string> = {
@@ -214,8 +201,8 @@ export const HOW_IT_WORKS: HowLine[] = [
     text: 'Churchill–Chu natural convection, roughly 6 W/m²K at ΔT 60 K. No fan is involved in this mode.' },
   { path: 'housing → radiation', param: 'ε (radiation)',
     text: 'ε·σ·A·(T⁴ − T_room⁴). Bigger than the air film here: 2.91 W against 2.05 W on the Ø85 L13.' },
-  { path: 'housing → the arm', param: 'mount to arm, W/K',
-    text: 'G·(T_housing − T_mount) into the structure, sinking to mount °C (blank = room air). 83 % of everything on the Ø85 L13 — the bolts, not the air.' },
+  { path: 'stator / shaft → housing or structure → room', param: 'Heat path',
+    text: 'conduction into one body sized from the stator, which sheds it by still air + radiation; judged against a 70 °C touch limit.' },
   { path: 'end turns + core and magnet end annuli → still air', param: 'End faces',
     text: 'four lumped conductances G = h·A·n_faces, scaled by Ends open. 13 % together on the Ø85 L13.' },
   { path: 'end turns + slot ducts → wash', param: 'Frame',
@@ -237,7 +224,9 @@ export const HOW_IT_WORKS: HowLine[] = [
  *  path that is a CONSEQUENCE of the others and is set nowhere. */
 export const PARAM_BY_SINK: Record<string, RoboticsControlKey | null> = {
   housing: 'coolMode',
-  mount: 'mountG',
+  mount: null,
+  heat_path: 'heatPath',
+  bearings: 'heatPath',
   end_face_winding: 'endFaces',
   end_face_stator: 'endFaces',
   end_face_rotor: 'endFaces',

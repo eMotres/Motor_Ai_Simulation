@@ -61,7 +61,7 @@ import type {
    menu must say what each parameter is for).  Imported, not re-typed: a
    surface's popover and the row it mirrors cannot be allowed to explain one
    parameter two different ways. */
-import { ROBOTICS_HELP, setByLine } from './roboticsHelp';
+import { HEAT_PATH_LABEL, ROBOTICS_HELP, setByLine } from './roboticsHelp';
 
 const lbl = { fontSize: 11, color: 'var(--text-3)' } as const;
 
@@ -408,14 +408,14 @@ const SinkEditorCard: React.FC<{
                        : 'The temperature this surface works against. It is also the sink the end faces, the bore and the mount fall back to.'}
                      onChange={(v) => onChange('ambientT', v)} />);
     }
-  } else if (editor === 'mount') {
-    rows.push(<Num key="g" cap={ROBOTICS_HELP.mountG.short} value={s.mountG} width={62}
-                   hint={ROBOTICS_HELP.mountG.tip}
-                   onChange={(v) => onChange('mountG', v)} />);
-    rows.push(<Num key="t" cap={ROBOTICS_HELP.mountT.short} value={s.mountT} width={62}
-                   hint={ROBOTICS_HELP.mountT.tip}
-                   onChange={(v) => onChange('mountT', v)} />);
-  } else if (editor === 'end_faces') {
+  }
+  if ((editor === 'housing' || editor === 'heat_path') && s.coolMode === 'robotics') {
+    rows.push(<Sel key="hp" cap={ROBOTICS_HELP.heatPath.short} value={s.heatPath}
+                   hint={ROBOTICS_HELP.heatPath.tip}
+                   opts={Object.entries(HEAT_PATH_LABEL) as [string, string][]}
+                   onChange={(v) => onChange('heatPath', v)} />);
+  }
+  if (editor === 'end_faces') {
     rows.push(<Sel key="m" cap={ROBOTICS_HELP.endFaces.short}
                    value={s.endFaces === 'none' ? 'none' : 'still'}
                    hint={ROBOTICS_HELP.endFaces.tip}
@@ -795,7 +795,7 @@ const HeatPathView3D: React.FC<HeatPathView3DProps> = ({
           Heat paths
         </Typography>
         {/* One short line, the rest in the tooltip — the project's rule. */}
-        <Tooltip {...TIP_PROPS} title={`${editable ? 'Click a surface to set what it is — ε and the room on the housing, W/K and its temperature on the mount, open/closed on the end faces, the mode in the bore, millimetres on the shaft ends. Every field writes the same setting as the boxes above, and nothing here solves: press Solve when you are done. ' : ''}${solved ? `Each surface also carries what LEFT through it on the last solve. The colour and the arrow follow the share of the BIGGEST path (here ${active[0]?.short ?? '—'}), not of the total — on a joint whose mount takes 86 % a share scale would make every other path invisible. Shares are of what left, so they add to 100 % whatever the closure error is; the residual is on the line above. Hover an ARROW for what that channel is — the mechanism, its coefficient and the two temperatures — and how much goes down it. ` :'Nothing has been solved for this machine yet, so there are no watts on it — the labels are the settings. '}Off paths are grey and named: "nothing sticks out of this housing" is an answer about the machine, not a missing number.`}>
+        <Tooltip {...TIP_PROPS} title={`${editable ? 'Click a surface to set what it is — ε, the room and the heat path on the housing, open/closed on the end faces, the mode in the bore, millimetres on the shaft ends. Every field writes the same setting as the boxes above, and nothing here solves: press Solve when you are done. ' : ''}${solved ? `Each surface also carries what LEFT through it on the last solve. The colour and the arrow follow the share of the BIGGEST path (here ${active[0]?.short ?? '—'}), not of the total — on a joint whose mount takes 86 % a share scale would make every other path invisible. Shares are of what left, so they add to 100 % whatever the closure error is; the residual is on the line above. Hover an ARROW for what that channel is — the mechanism, its coefficient and the two temperatures — and how much goes down it. ` :'Nothing has been solved for this machine yet, so there are no watts on it — the labels are the settings. '}Off paths are grey and named: "nothing sticks out of this housing" is an answer about the machine, not a missing number.`}>
           <Typography sx={{ ...lbl, cursor: 'help', fontFamily: 'monospace',
                             borderBottom: '1px dotted var(--text-4)' }}>
             {solved

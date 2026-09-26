@@ -289,40 +289,129 @@ def test_b_the_mount_carries_the_machine(robot):
     assert b["housing_W"] < 0.15 * b["losses_W"], b
 
 
-def test_b1b_mount_mode_link_reduces_the_mount_heat_flow_and_binds_touch(robot):
-    """mount_mode='link' (2026-09-26): the mount's far side is a small robot
-    link instead of an infinite sink held at 40 degC.  On this same machine and
-    the same 2 W/K, a FINGER-sized link cannot shed what the mount hands it —
-    it climbs past the fixed 70 degC touch limit and that reduces the mount's
-    own heat flow (a hotter sink means a smaller Delta T across the same G).
+# ---------------------------------------------------------------------------
+# (b1b) THE HEAT PATH — one choice, four options (2026-09-26)
+# ---------------------------------------------------------------------------
+# Owner: «давай упростим».  The five mount / robot-link fields became ONE
+# select; each option must change the heat paths exactly as its name says, and
+# 'none' must have no conduction path at all.
 
-    The default ('sink') path must stay BIT-IDENTICAL: mount_mode is a new
-    parameter with a default that reproduces every payload from before it
-    existed.
-    """
-    linked = _solve(**ROBOT, mount_g_w_per_k=MOUNT_G, mount_temp_c=AMBIENT_C,
-                    mount_mode="link", link_preset="finger",
-                    link_material="aluminium")
-    m_link = linked["cooling"]["mount"]
-    m_sink = robot["cooling"]["mount"]
+@pytest.fixture(scope="module")
+def hp_housing(em_run):
+    return _solve(**ROBOT, heat_path="housing")
 
-    assert m_link["mount_mode"] == "link"
-    assert m_link["link"] is not None
-    assert m_link["link"]["preset"] == "finger"
-    assert m_link["link"]["binds_touch_limit"] is True
-    assert m_link["link"]["t_link_c"] > m_link["link"]["touch_limit_c"]
-    assert m_link["t_sink_c"] == pytest.approx(m_link["link"]["t_link_c"], abs=0.05)
 
-    # A hotter sink under the same conductance carries LESS heat away.
-    assert m_link["heat_removed_W"] < m_sink["heat_removed_W"]
+@pytest.fixture(scope="module")
+def hp_shaft(em_run):
+    return _solve(**ROBOT, heat_path="shaft")
 
-    # THE IDEAL-SINK PATH IS UNCHANGED: no mount_mode given == 'sink' given.
-    default_sink = _solve(**ROBOT, mount_g_w_per_k=MOUNT_G,
-                          mount_temp_c=AMBIENT_C)
-    assert default_sink["cooling"]["mount"]["link"] is None
-    assert default_sink["cooling"]["mount"]["heat_removed_W"] == pytest.approx(
-        m_sink["heat_removed_W"], rel=1e-9)
-    assert default_sink["cooling"]["mount"]["mount_mode"] == "sink"
+
+@pytest.fixture(scope="module")
+def hp_both(em_run):
+    return _solve(**ROBOT, heat_path="both")
+
+
+def _body_film_closes(hp):
+    """The body's own film carries what reaches it: G_film·(T − T_∞)."""
+    assert hp["heat_to_room_W"] == pytest.approx(
+        hp["G_film_W_per_K"] * (hp["t_body_c"] - AMBIENT_C), rel=0.05, abs=0.02)
+
+
+def test_b1b_heat_path_none_has_no_conduction_path(unbolted):
+    """'none' is the robotics mode with nothing conducted: no contact, no
+    bearings, no mount — the OD keeps its still-air film and nothing else."""
+    c = unbolted["cooling"]
+    b = c["heat_budget"]
+    assert c["heat_path"]["option"] == "none"
+    assert c["heat_path"]["body"] is None
+    assert b["bearings_W"] == 0.0 and b["mount_W"] == 0.0
+    assert c["mount"]["mode"] == "off"
+    assert "contact" not in str(c["outer"].get("model") or "")
+    assert c["outer"]["h_rad"] > 0.0        # the OD sees the room directly
+    # …and no touch limit is judged: there is no housing / structure node.
+    from motor_ai_sim import coupled_time_to_limit as ttl
+    assert not ({"housing", "structure"}
+                & {p.part for p in ttl.part_limits(thermal_result=unbolted)})
+
+
+def test_b1c_heat_path_housing_puts_the_od_into_the_housing(hp_housing, unbolted):
+    c = hp_housing["cooling"]
+    hp, b = c["heat_path"], c["heat_budget"]
+    assert hp["option"] == "housing" and hp["body"] == "housing"
+    assert hp["rides_node"] == "stator"
+    # The OD's film IS the contact now, and every watt through it reaches the
+    # housing, which is what sheds it — nothing goes through the bearings.
+    assert "contact" in c["outer"]["model"]
+    assert hp["contact"]["heat_W"] == pytest.approx(b["housing_W"], abs=0.01)
+    assert hp["bearings"] is None and b["bearings_W"] == 0.0
+    assert hp["heat_to_room_W"] == pytest.approx(b["housing_W"], rel=1e-3,
+                                                 abs=1e-3)
+    _body_film_closes(hp)
+    assert AMBIENT_C < hp["t_body_c"]
+    # The housing is a BIGGER skin than the bare OD it covers: the stator
+    # side runs cooler than with no contact at all.
+    assert (hp_housing["components"]["stator"]["avg"]
+            < unbolted["components"]["stator"]["avg"])
+    assert b["residual_pct"] < 1.0, b
+
+
+def test_b1d_heat_path_shaft_goes_rotor_shaft_bearings_structure(hp_shaft,
+                                                                 unbolted):
+    c = hp_shaft["cooling"]
+    hp, b = c["heat_path"], c["heat_budget"]
+    assert hp["option"] == "shaft" and hp["body"] == "structure"
+    assert hp["rides_node"] == "rotor"
+    assert hp["contact"] is None
+    assert hp["bearings"]["heat_W"] == pytest.approx(b["bearings_W"], abs=1e-3)
+    assert b["bearings_W"] > 0.0
+    assert hp["heat_to_room_W"] == pytest.approx(b["bearings_W"], rel=1e-3,
+                                                 abs=1e-3)
+    _body_film_closes(hp)
+    # The stator OD keeps its own still-air film (no housing on it).
+    assert "contact" not in str(c["outer"].get("model") or "")
+    assert c["outer"]["h_rad"] > 0.0
+    # It is a ROTOR path: on the rotor's own balance, and the magnets cooler.
+    rs = b["rotor_heat_split"]
+    assert rs["axial_bearings_W"] == pytest.approx(b["bearings_W"], abs=1e-3)
+    assert abs(rs["closure_W"]) < 0.02 * max(rs["rotor_W"], 1.0) + 0.05, rs
+    assert (hp_shaft["components"]["magnet"]["avg"]
+            < unbolted["components"]["magnet"]["avg"])
+    assert b["residual_pct"] < 1.0, b
+
+
+def test_b1e_heat_path_both_shares_one_housing(hp_both, hp_housing):
+    c = hp_both["cooling"]
+    hp, b = c["heat_path"], c["heat_budget"]
+    assert hp["option"] == "both" and hp["body"] == "housing"
+    assert hp["contact"]["heat_W"] > 0.0
+    # The bearings COUPLE the rotor to the housing, and the heat goes the way
+    # the temperatures say: on this joint the stator heats the housing above
+    # the rotor, so the bearings carry heat INTO the rotor (measured −0.6 W),
+    # which is physics, not a sign error.
+    assert hp["bearings"]["heat_W"] != 0.0
+    assert (hp["bearings"]["heat_W"] > 0.0) == (
+        hp_both["components"]["rotor"]["avg"] > hp["t_body_c"])
+    # ONE body: what reaches it through the OD and through the bearings is
+    # what it hands the room.
+    assert hp["heat_to_room_W"] == pytest.approx(
+        hp["contact"]["heat_W"] + hp["bearings"]["heat_W"], rel=1e-3, abs=1e-3)
+    _body_film_closes(hp)
+    assert b["residual_pct"] < 1.0, b
+    # The winding still gets the housing: it is no hotter than with the
+    # housing alone beyond the pass tolerance.
+    assert (hp_both["components"]["winding"]["max"]
+            <= hp_housing["components"]["winding"]["max"] + 0.5)
+
+
+def test_b1f_the_body_is_judged_against_the_70_c_touch_limit(hp_housing):
+    from motor_ai_sim import coupled_time_to_limit as ttl
+    hp = hp_housing["cooling"]["heat_path"]
+    assert hp["touch_limit_c"] == 70.0
+    assert hp["binds_touch_limit"] is (hp["t_body_c"] > 70.0)
+    got = {p.part: p for p in ttl.part_limits(thermal_result=hp_housing)}
+    assert got["housing"].limit_c == 70.0
+    assert got["housing"].at_point_c == pytest.approx(hp["t_body_c"])
+    assert ttl.part_label("housing") == "housing (touch 70 °C)"
 
 
 def test_b2_the_budget_closes_on_the_four_paths(robot):
@@ -638,6 +727,9 @@ def test_g2_a_still_bore_outside_the_robotics_mode_is_refused():
     ({"end_faces": "open"}, "end_faces"),
     ({"end_face_sides": 3}, "end_face_sides"),
     ({"cooling_mode": "robot"}, "cooling_mode"),
+    ({"heat_path": "arm"}, "heat_path"),
+    ({"heat_path": "housing", "cooling_mode": "air", "bore_mode": "none"},
+     "heat_path"),
 ])
 def test_g3_every_new_input_is_refused_by_name(over, field):
     """Never clamped: an ε of 1.4 is a typo, and a typo that solves is a result
@@ -702,6 +794,15 @@ def test_h2_the_robotics_inputs_and_the_mount_key_two_answers():
     assert air != _field_cache_key(None, {}, cooling_mode="air",
                                    air_speed_mps=5.0, mount_g_w_per_k=2.0,
                                    **_KEY_KW)
+    # …and the HEAT PATH (2026-09-26): every option but 'none' is its own
+    # answer, and 'none' keys exactly like a request from before it existed.
+    hps = {_field_cache_key(None, {}, cooling_mode="robotics",
+                            air_speed_mps=0.0, heat_path=hp, **_KEY_KW)
+           for hp in ("housing", "shaft", "both")}
+    assert len(hps) == 3 and r not in hps
+    assert _field_cache_key(None, {}, cooling_mode="robotics",
+                            air_speed_mps=0.0, heat_path="none",
+                            **_KEY_KW) == r
     # …and the mount TEMPERATURE is part of it: the same flange onto a 20 °C arm
     # and onto a 60 °C one are two answers.
     assert (_field_cache_key(None, {}, cooling_mode="robotics",
@@ -727,15 +828,29 @@ def test_h3_the_panel_mirror_sends_the_robotics_fields_only_in_robotics():
 
     rob = cooling_fields({"coolMode": "robotics", "boreMode": "still",
                           "ambientT": "40", "emissivity": "0.9",
-                          "mountG": "2", "mountT": "40"})
+                          "heatPath": "shaft"})
     assert rob == {"cooling_mode": "robotics", "ambient_temp": 40.0,
                    "bore_mode": "still", "emissivity": 0.9,
                    "end_faces": "still", "end_face_sides": 2,
-                   "mount_g_w_per_k": 2.0, "mount_temp_c": 40.0}
+                   "heat_path": "shaft"}
 
-    # A blank mount temperature means the AMBIENT and is not sent; a side count
-    # beside `end_faces: none` is the unused cache-splitting parameter the rule
-    # is about.
+    # OLD SAVED SETTINGS (2026-09-26): a store written before the heat path
+    # carries the mount fields — any mount, the robot link included, maps to
+    # the housing; a mount of 0 to no contact.  No mount key is ever sent.
+    old = cooling_fields({"coolMode": "robotics", "boreMode": "still",
+                          "ambientT": "40", "emissivity": "0.9",
+                          "mountG": "2", "mountT": "40"})
+    assert old["heat_path"] == "housing"
+    assert "mount_g_w_per_k" not in old and "mount_temp_c" not in old
+    link = cooling_fields({"coolMode": "robotics", "mountG": "2",
+                           "mountMode": "link", "linkPreset": "finger",
+                           "linkMaterial": "steel"})
+    assert link["heat_path"] == "housing"
+    assert not {"mount_mode", "link_preset", "link_material"} & set(link)
+
+    # 'none' is not sent (the router's default); a side count beside
+    # `end_faces: none` is the unused cache-splitting parameter the rule is
+    # about.
     bare = cooling_fields({"coolMode": "robotics", "boreMode": "still",
                            "ambientT": "40", "endFaces": "none",
                            "endFaceSides": "1", "mountG": "0"})
@@ -744,12 +859,12 @@ def test_h3_the_panel_mirror_sends_the_robotics_fields_only_in_robotics():
                     "end_faces": "none"}
 
     # …and the orchestrator refuses the impossible before it spends an
-    # electromagnetic run on it — including the widened sentence.
+    # electromagnetic run on it.  The panel offers no mount any more, so a
+    # saved mountG no longer rescues a machine with no film and no bore.
     assert cooling_issue({"coolMode": "none", "boreMode": "none"}) == (
-        "no cooled surface and no mount conductance — the heat has nowhere to "
-        "leave")
+        "no cooled surface — the heat has nowhere to leave")
     assert cooling_issue({"coolMode": "none", "boreMode": "none",
-                          "mountG": "2"}) is None
+                          "mountG": "2"}) is not None
     assert "robotics" in (cooling_issue({"coolMode": "air",
                                          "boreMode": "still"}) or "")
     assert cooling_issue({"coolMode": "robotics", "boreMode": "still",

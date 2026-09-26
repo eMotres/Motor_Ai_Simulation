@@ -56,6 +56,64 @@ MAX_WAVEFORM_GAP_DEG = 30.0
 # of scope for this source.
 MAX_MODULATION_INDEX = 1.15
 
+# ── THE MODULATION, selectable (Controller settings, 2026-09-26) ──────────────
+# ``sine``            plain sine-triangle, each leg on its own reference — the
+#                     default, byte-for-byte the modulator every record so far
+#                     was made with.  Linear up to m = 1; between 1 and the
+#                     1.15 ceiling above its duty clamps (real pulse dropping,
+#                     measured by ``applied_fundamental`` and compensated).
+# ``svpwm``           the same comparator with the MIN-MAX zero sequence added to
+#                     all three references at the SAME sample,
+#                     v0 = -(max + min)/2 — the carrier-based form of centred
+#                     space-vector PWM (equal zero-vector split).
+# ``third_harmonic``  v0 = -(m/6)*cos(3x) — the classic 1/6 third-harmonic
+#                     injection.
+# Both injections are ZERO SEQUENCE: the same number added to every leg at the
+# same instant, so every line-to-line voltage is exactly the sine modulator's,
+# and a star machine's floating neutral (or, in delta, the line-to-line
+# difference the branch sees) removes it.  What they buy is range: the largest
+# reference now peaks at (sqrt(3)/2)*m, so the leg stays inside its [0, 1] duty
+# up to m = 2/sqrt(3) — 15.5 % more fundamental on the same link.
+PWM_MODULATIONS = ("sine", "svpwm", "third_harmonic")
+#: Linear limit of the zero-sequence-injected modulators, m = 2/sqrt(3).
+SVPWM_LINEAR_LIMIT = 2.0 / math.sqrt(3.0)
+
+
+def normalize_modulation(modulation: Optional[str]) -> str:
+    """``None``/blank -> ``"sine"``; anything not in :data:`PWM_MODULATIONS`
+    is refused by name (never read as the default)."""
+    m = str(modulation if modulation is not None else "sine").strip().lower()
+    if not m:
+        m = "sine"
+    if m not in PWM_MODULATIONS:
+        raise ExcitationError(
+            "pwm modulation must be one of %s; got %r"
+            % (", ".join(PWM_MODULATIONS), modulation))
+    return m
+
+
+def modulation_ceiling(modulation: Optional[str] = "sine") -> float:
+    """The modulation-index ceiling a source of this modulation is built up to:
+    :data:`MAX_MODULATION_INDEX` for sine (unchanged), 2/sqrt(3) for the two
+    zero-sequence-injected modulators (their exact linear limit)."""
+    return (MAX_MODULATION_INDEX if normalize_modulation(modulation) == "sine"
+            else SVPWM_LINEAR_LIMIT)
+
+
+def zero_sequence(refs: Sequence[float], modulation: str, *,
+                  m: float = 0.0, x_deg: float = 0.0) -> float:
+    """The zero-sequence term added to every leg's reference at one sample.
+
+    ``refs`` are the three plain references at that sample; ``x_deg`` is phase
+    A's reference angle (cos form), used by ``third_harmonic`` — cos(3x) is the
+    same for all three phases because their shifts are multiples of 120 deg.
+    """
+    if modulation == "svpwm":
+        return -0.5 * (max(refs) + min(refs))
+    if modulation == "third_harmonic":
+        return -(float(m) / 6.0) * math.cos(3.0 * math.radians(x_deg))
+    return 0.0
+
 
 class ExcitationError(ValueError):
     """A source the caller asked for cannot be built as described.
@@ -209,6 +267,10 @@ class PwmVoltageSource:
     # source wants.
     v1_peak: float = 0.0
     v1_delta_deg: float = 0.0
+    # "sine" | "svpwm" | "third_harmonic" (see PWM_MODULATIONS).  A zero
+    # sequence only: the line-to-line voltages it produces are the sine
+    # modulator's, the range is not.
+    modulation: str = "sine"
 
     # Phase shifts of the three references, in the order the abc quantities are
     # written everywhere else in this package (A, B-120, C+120).
@@ -232,9 +294,17 @@ class PwmVoltageSource:
         this electrical angle.  The clamp to [0, 1] is the leg's physical
         pulse-dropping limit; it is reachable only at m > 1, which the factory
         refuses, so on any accepted source it never bites.
+
+        With a zero-sequence modulation the term is computed from ALL THREE
+        references at the same sample instant and added to this leg's — so it
+        is common to the three legs of every carrier period and cancels from
+        every line-to-line voltage exactly, pulse by pulse.
         """
-        ref = self.m * math.cos(math.radians(
-            psi_sample_deg + self.v_delta_deg + self.daxis_deg + shift_deg))
+        x = psi_sample_deg + self.v_delta_deg + self.daxis_deg
+        ref = self.m * math.cos(math.radians(x + shift_deg))
+        if self.modulation != "sine":
+            refs = [self.m * math.cos(math.radians(x + s)) for s in self._SHIFT]
+            ref += zero_sequence(refs, self.modulation, m=self.m, x_deg=x)
         return min(1.0, max(0.0, 0.5 * (1.0 + ref)))
 
     def _pulse(self, carrier_index: int, shift_deg: float
@@ -582,12 +652,26 @@ class PwmVoltageSource:
 
         Cheap: ``carriers * n_per_carrier`` closed-form interval means, i.e.
         microseconds — no FEM, no sampling error beyond the projection grid.
+
+        WITH A ZERO-SEQUENCE MODULATION it is phase A's DIFFERENTIAL part,
+        ``v_A − (v_A + v_B + v_C)/3`` — the only part a floating-neutral star
+        (or, in delta, a line-to-line branch) receives.  Sampled on a carrier
+        count that is not a multiple of 3, the held zero sequence is not
+        exactly 120°-periodic and leaks a COMMON-MODE fundamental into the pole
+        voltage (0.08 % at 20 carriers, 0.8 % at 7 for svpwm); measured on the
+        pole, the compensation below would chase volts no winding sees.  For
+        sine the two measures agree to 2e-6 and the pole one is kept, so
+        every sine source is bit-identical to before.
         """
         n = max(8, int(n_per_carrier)) * self.carriers
         d = 360.0 / n
         acc_c = acc_s = 0.0
+        diff = self.modulation != "sine"
         for k in range(n):
             v = self._pole_mean(k * d, (k + 1) * d, 0.0)
+            if diff:
+                v -= (v + self._pole_mean(k * d, (k + 1) * d, -120.0)
+                      + self._pole_mean(k * d, (k + 1) * d, 120.0)) / 3.0
             th = math.radians((k + 0.5) * d + self.v_delta_deg + self.daxis_deg)
             acc_c += v * math.cos(th)
             acc_s += v * math.sin(th)
@@ -609,7 +693,8 @@ def carriers_per_period(f_switch_hz: float, f_elec_hz: float) -> int:
 
 def build_pwm_source(*, pole_pairs: int, daxis_deg: float, v_phase_peak: float,
                      v_delta_deg: float, v_bus: float, f_switch_hz: float,
-                     f_elec_hz: float, v_bus_real: float = 0.0
+                     f_elec_hz: float, v_bus_real: float = 0.0,
+                     modulation: Optional[str] = "sine"
                      ) -> PwmVoltageSource:
     """Validate the inverter description and build the source.
 
@@ -625,7 +710,14 @@ def build_pwm_source(*, pole_pairs: int, daxis_deg: float, v_phase_peak: float,
     study B2).  Left at 0 it IS ``v_bus`` — every existing caller unchanged.
     NB the modulation index needs no such correction: m = 2·V₁_branch/(√3·V_dc)
     is already the real bridge's index.
+
+    ``modulation`` — :data:`PWM_MODULATIONS`; ``"sine"`` (the default) is the
+    source every record so far was built on, unchanged.  The zero-sequence
+    modulators are refused above their exact linear limit 2/sqrt(3).
     """
+    modulation = normalize_modulation(modulation)
+    _max_m = modulation_ceiling(modulation)
+    _mod_txt = ("" if modulation == "sine" else " (%s)" % modulation)
     _vb_real = float(v_bus_real) if float(v_bus_real) > 0.0 else float(v_bus)
     _eq_star = abs(_vb_real - float(v_bus)) > 1e-9
     _bus_txt = ("%.1f V bus" % float(v_bus) if not _eq_star else
@@ -646,16 +738,16 @@ def build_pwm_source(*, pole_pairs: int, daxis_deg: float, v_phase_peak: float,
             "PWM drive needs a switching frequency; got f_switch = %r Hz."
             % (f_switch_hz,))
     m = 2.0 * float(v_phase_peak) / float(v_bus)
-    if m > MAX_MODULATION_INDEX:
+    if m > _max_m:
         raise ExcitationError(
             "modulation index m = 2*V_phase_peak/V_bus = %.3f exceeds the "
-            "%.2f linear-modulation limit (V_phase_peak %.1f V on a %s).  "
+            "%.4g linear-modulation limit%s (V_phase_peak %.1f V on a %s).  "
             "Overmodulation (pulse dropping / six-step) is out of "
             "scope for this source: raise V_bus above %.0f V, or lower "
             "V_phase_peak below %.1f V."
-            % (m, MAX_MODULATION_INDEX, float(v_phase_peak), _bus_txt,
-               math.ceil(_vb_real * m / MAX_MODULATION_INDEX),
-               0.5 * MAX_MODULATION_INDEX * float(v_bus)))
+            % (m, _max_m, _mod_txt, float(v_phase_peak), _bus_txt,
+               math.ceil(_vb_real * m / _max_m),
+               0.5 * _max_m * float(v_bus)))
     nc = carriers_per_period(f_switch_hz, f_elec_hz)
 
     # ── MODULATOR DELAY / GAIN COMPENSATION ──────────────────────────────
@@ -677,7 +769,7 @@ def build_pwm_source(*, pole_pairs: int, daxis_deg: float, v_phase_peak: float,
     src = PwmVoltageSource(
         pole_pairs=int(pole_pairs), daxis_deg=float(daxis_deg),
         v_delta_deg=req_delta, v_bus=float(v_bus), carriers=int(nc), m=req_m,
-        v1_peak=tgt_pk, v1_delta_deg=float(v_delta_deg))
+        v1_peak=tgt_pk, v1_delta_deg=float(v_delta_deg), modulation=modulation)
     for _ in range(6):
         got_pk, got_delta = src.applied_fundamental()
         if got_pk < 0.5 * tgt_pk:
@@ -693,17 +785,18 @@ def build_pwm_source(*, pole_pairs: int, daxis_deg: float, v_phase_peak: float,
             break
         req_m *= tgt_pk / max(got_pk, 1e-9)
         req_delta += float(v_delta_deg) - got_delta
-        if req_m > MAX_MODULATION_INDEX:
+        if req_m > _max_m:
             raise ExcitationError(
                 "compensating the modulator's sampled-reference gain for %d "
-                "carriers per period needs m = %.3f, past the %.2f linear "
-                "limit (the uncompensated request was m = %.3f).  Raise "
+                "carriers per period needs m = %.3f, past the %.4g linear "
+                "limit%s (the uncompensated request was m = %.3f).  Raise "
                 "V_bus or f_switch."
-                % (nc, req_m, MAX_MODULATION_INDEX, m))
+                % (nc, req_m, _max_m, _mod_txt, m))
         src = PwmVoltageSource(
             pole_pairs=int(pole_pairs), daxis_deg=float(daxis_deg),
             v_delta_deg=req_delta, v_bus=float(v_bus), carriers=int(nc),
-            m=req_m, v1_peak=tgt_pk, v1_delta_deg=float(v_delta_deg))
+            m=req_m, v1_peak=tgt_pk, v1_delta_deg=float(v_delta_deg),
+            modulation=modulation)
     return src
 
 

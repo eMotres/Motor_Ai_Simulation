@@ -4409,6 +4409,9 @@ def get_fem_transient(
     inv_devices_parallel: int  = 1,       # ← provenance: devices per switch
     inv_t_j_c:           float = 0.0,     # ← provenance: T_j the card was read at
     inv_topology:        str   = "",      # ← provenance: the coil->bridge map
+    inv_modulation:      str   = "sine",  # ← the Controller's three-phase modulation:
+                                          #   sine | svpwm | third_harmonic (zero-sequence
+                                          #   injection, linear to m = 2/√3).  inverter only.
     harm_ref:            bool  = True,    # ← voltage drive: ALSO run a current-drive reference at
                                           #   the extracted fundamental (I₁, γ₁) → ΔP_harm = the
                                           #   watt cost of the parasitic harmonic currents
@@ -4531,9 +4534,22 @@ def get_fem_transient(
     # the ExcitationError handler around the solve below.
     from motor_ai_sim.simulation.pwm import (
         ExcitationError as _ExcErr, parse_waveform as _parse_wf,
-        MAX_MODULATION_INDEX as _MAX_M,
+        modulation_ceiling as _mod_ceiling,
+        normalize_modulation as _norm_mod,
         star_equivalent_bus as _sq_bus, modulation_index as _mod_idx)
     _drive = str(drive or "current").strip().lower()
+    # THE CONTROLLER'S MODULATION (2026-09-26).  Validated loudly, and only on
+    # the Controller's bridge: the ideal pwm_voltage drive stays sine.
+    try:
+        _inv_mod = _norm_mod(inv_modulation)
+    except _ExcErr as _e_mod:
+        raise HTTPException(status_code=422, detail=str(_e_mod))
+    if _inv_mod != "sine" and _drive != "inverter":
+        raise HTTPException(status_code=422, detail=(
+            "inv_modulation=%r was sent with drive=%r; the modulation is the "
+            "Controller's and only means something for drive='inverter'."
+            % (inv_modulation, _drive)))
+    _MAX_M = _mod_ceiling(_inv_mod)
     _DRIVES = ("current", "voltage", "pwm_voltage", "inverter",
                "custom_current", "bldc_current")
     # The Controller's bridge is the ideal one PLUS the device: every gate,
@@ -4664,13 +4680,14 @@ def get_fem_transient(
         # sits at 0.88 (user 2026-09-14 / PWM study §0.2).  `modulation_index`
         # divides by √3 in delta — equivalently, it is the branch V₁ against the
         # √3-scaled model bus, which is exactly what the source will chop.  The
-        # 1.15 ceiling (sine-triangle WITH zero-sequence injection) is unchanged.
+        # ceiling is the modulation's own (`pwm.modulation_ceiling`): 1.15 for
+        # sine, unchanged, and 2/√3 for svpwm / third_harmonic.
         _m_req = _mod_idx(float(v_phase_peak), float(v_bus),
                           star_delta=_sd_eff)
         if _m_req > _MAX_M:
             raise HTTPException(status_code=422, detail=(
                 "modulation index m = 2·V_phase/V_bus = %.3f exceeds the "
-                "%.2f linear-modulation limit (%s on the REAL %.1f V DC link)."
+                "%.4g linear-modulation limit (%s on the REAL %.1f V DC link)."
                 "  Overmodulation (pulse dropping / six-step) is out of scope: "
                 "raise V_bus above %.0f V, or lower %s below %.1f V."
                 % (_m_req, _MAX_M,
@@ -4716,11 +4733,16 @@ def get_fem_transient(
             "t_j_c": float(inv_t_j_c),
             "devices_parallel": int(inv_devices_parallel or 1),
             "topology": str(inv_topology or "one_3ph"),
+            "modulation": _inv_mod,
         }
         _inv_key = ("%g/%g/%g/%g/%g/%g"
                     % (float(v_bus), float(f_switch), float(inv_r_ds_ohm),
                        float(inv_v_sd_v0_V), float(inv_v_sd_rd_ohm),
                        float(inv_dead_time_us)))
+        # Keyed only when not sine, so every key written before the choice
+        # existed stays the same key (routes/coupled.py spells it the same).
+        if _inv_mod != "sine":
+            _inv_key += "/" + _inv_mod
 
     # Content hash of the imposed waveform for the transient cache key — the
     # samples themselves are physics, and a 20k-point list is not a dict key.

@@ -70,7 +70,7 @@ function emRunInputsFromSettings(over = {}) {
   const drive = readSimSetting('drive', 'current');
   return {
     restore: false,
-    steps: numOr(readSimSetting('stepsPP', 40), 40),
+    steps: numOr(readSimSetting('stepsPP', 72), 72),
     gamma_deg: numOr(readSimSetting('gamma', 0), 0),
     I_phase_rms: Math.max(0, numOr(readSimSetting('current', 0), 0)),
     drive: DRIVES.includes(drive) ? drive : 'current',

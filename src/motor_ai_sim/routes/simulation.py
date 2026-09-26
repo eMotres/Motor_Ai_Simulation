@@ -302,6 +302,10 @@ class SimConfigPatch(BaseModel):
     # (sweep / optimizer / descent) reads.
     coil_temp_c:        Optional[float] = None   # copper temperature -> rho_Cu(T)
     steps_per_period:   Optional[int]   = None   # transient frames per electrical period
+    # WHO set steps_per_period: "eddy_default" = the panel's eddy-run default (72,
+    # owner 2026-09-26), "user" = picked by the user.  The optimizer screens at
+    # its own count when the tab holds only the default (routes/optimization.py).
+    steps_per_period_source: Optional[Literal["eddy_default", "user"]] = None
     end_winding_factor: Optional[float] = None   # k_end (0 = auto from geometry)
     connection:         Optional[str]   = None   # winding: "4S" | "2S-2P" | "4P"
     # TERMINAL connection of the three phases — orthogonal to `connection`,
@@ -677,7 +681,11 @@ def update_sim_config(patch: SimConfigPatch):
             return a == b
         except Exception:  # noqa: BLE001
             return False
-    _changed = sorted(k for k, v in updates.items() if not _same(_before_sim.get(k), v))
+    # steps_per_period_source is bookkeeping (who set the count), not physics:
+    # flipping it must not throw away a solved field.
+    _changed = sorted(k for k, v in updates.items()
+                      if k != "steps_per_period_source"
+                      and not _same(_before_sim.get(k), v))
     if _changed:
         try:
             clear_simulation_caches(reason="simulation config patched (%s)"
@@ -4224,7 +4232,9 @@ def _mark_equivalent_star(sbres: Dict, *, v_bus_real: float,
               body_keys=("current_a", "rpm", "steps", "n_periods", "gamma_deg",
                          "drive", "n_sectors", "demag", "rotor_eddy"))
 def get_fem_transient(
-    n_steps_per_period:  int   = 60,   # FEM solves per electrical period
+    n_steps_per_period: Optional[int] = None,  # FEM solves per electrical period;
+                                          #   omitted = 72 with eddy on, 60 without
+                                          #   (simulation/eddy_steps.py)
     # "cogging_quality" = opt-in >= 6 raw samples per cogging cycle (the
     # dedicated cogging run); standard/optimization keep the requested steps.
     sampling_purpose: Literal["standard", "optimization",
@@ -4472,6 +4482,18 @@ def get_fem_transient(
     if type(sampling_purpose) is not str or sampling_purpose not in (
             "standard", "optimization", "cogging_quality"):
         raise HTTPException(status_code=422, detail="invalid sampling_purpose")
+    # The step count: the caller's, validated, else the eddy-aware default
+    # (owner 2026-09-26: 72 with the coupled eddy solve, BDF2 reads the magnet
+    # loss -4.3 % at 36 and -1 % at 72).  Resolved before anything reads it,
+    # and written back into the captured kwargs so the outer loops (battery
+    # bus, max-charge search) re-enter with the number this run solved.
+    from motor_ai_sim.simulation.eddy_steps import (
+        resolve_steps_per_period as _resolve_steps)
+    try:
+        n_steps_per_period = _resolve_steps(n_steps_per_period, eddy=bool(eddy))
+    except ValueError as _se:
+        raise HTTPException(status_code=422, detail=str(_se))
+    _route_kwargs["n_steps_per_period"] = n_steps_per_period
 
     # Per-request materials via the KERNEL path: same parse/validate/set as
     # the router dependency does for ?mat= — per-task context, so the kernel

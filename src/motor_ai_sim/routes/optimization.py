@@ -819,6 +819,11 @@ def _record_eval_seconds(dt: float, seeded: bool = False) -> None:
 _EVAL_S_PER_FRAME_DEFAULT = 2.4
 
 
+#: steps/period an optimizer candidate screens at when the Simulation tab holds
+#: only its eddy-run default (72) — the tab default screening has always used.
+OPT_SCREEN_STEPS_PER_PERIOD = 40
+
+
 def measured_eval_seconds(steps_per_period: int = 36,
                           seeded: Optional[bool] = None) -> Dict[str, Any]:
     """Median measured seconds per FEM eval + how many samples back it.
@@ -5859,6 +5864,15 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         gamma = 0.0
     if coil_temp is None or coil_temp <= -273.0:
         coil_temp = 120.0
+    # SCREENING KEEPS ITS OWN COUNT (owner 2026-09-26).  The Simulation tab's
+    # step count defaults to 72 for its eddy runs; a tab that holds that number
+    # only AS the default (steps_per_period_source "eddy_default", written by the
+    # panel) did not ask the optimizer for 72, so candidates screen at the count
+    # they always screened at.  A count the user picked on the tab is obeyed.
+    steps_src = str(sim.get("steps_per_period_source") or "").strip().lower()
+    steps_tab = steps
+    if steps_src == "eddy_default":
+        steps = float(OPT_SCREEN_STEPS_PER_PERIOD)
     steps_pp = int(steps) if (steps and steps >= 8) else 36
     steps_pp = max(8, min(180, steps_pp))
     # Candidate evals carry sampling_purpose="optimization". Their
@@ -5876,6 +5890,12 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         # What the Simulation tab asked for, when the ripple floor raised it —
         # so the card can explain the difference instead of silently disagreeing.
         "steps_per_period_requested": steps_requested,
+        # Where the screening count came from: "optimizer" = its own screening
+        # count because the tab held only the eddy-run default; "simulation_tab"
+        # = the count the user set there.  `steps_per_period_tab` is that tab's value.
+        "steps_per_period_source": ("optimizer" if steps_src == "eddy_default"
+                                    else "simulation_tab"),
+        "steps_per_period_tab": (None if steps_tab is None else int(steps_tab)),
         "coil_temp_c": float(coil_temp),
         "mesh_size_mm": max(1.0, min(float(mesh.get("mesh_size_mm", 4.0) or 4.0), 12.0)),
         "min_size_mm": max(0.1, min(float(mesh.get("min_size_mm", 0.3) or 0.3), 3.0)),

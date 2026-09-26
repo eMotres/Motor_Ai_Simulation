@@ -9,10 +9,11 @@
  */
 import React, { useMemo, useState } from 'react';
 import { Box, Paper, Typography, Button, TextField, Dialog, DialogTitle,
-         DialogContent, DialogActions, Link, Chip } from '@mui/material';
+         DialogContent, DialogActions, Link, Chip, MenuItem } from '@mui/material';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
 import { addDevice, getDevice, fmt, type DeviceRow } from './controllerApi';
+import { ANY_BOARD, boardGroups, fitsBoard, boardWarning } from './footprintFilter';
 
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 const TH = { fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap' } as const;
@@ -73,9 +74,13 @@ const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged
   const [yaml, setYaml] = useState(BLANK_CARD);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [board, setBoard] = useState<string>(ANY_BOARD);
 
   const rows = useMemo(() => devices.filter(d => !d.error), [devices]);
   const broken = useMemo(() => devices.filter(d => d.error), [devices]);
+  const groups = useMemo(() => boardGroups(rows), [rows]);
+  const shown = useMemo(() => fitsBoard(rows, board), [rows, board]);
+  const boardWarn = boardWarning(rows, board);
 
   const open = async (part: string) => {
     setErr(null);
@@ -100,16 +105,26 @@ const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged
         <SectionLabel sx={{ m: 0 }}>Device catalogue</SectionLabel>
         <HelpTip title="Every power device this project has a transcribed datasheet card for (config/devices/*.yaml). Click a row for the card, including which block came from which table or figure. Add a card by pasting its YAML — nothing is scraped; a value the datasheet does not publish stays empty and the loss model says so." />
         <Box sx={{ flex: 1 }} />
+        <TextField select size="small" label="Fits board" value={board}
+          onChange={e => setBoard(e.target.value)}
+          sx={{ minWidth: 170, '& .MuiInputBase-input': { fontSize: 12, py: 0.5 } }}>
+          <MenuItem value={ANY_BOARD} sx={{ fontSize: 12 }}>any board</MenuItem>
+          {groups.map(g => <MenuItem key={g} value={g} sx={{ fontSize: 12 }}>{g}</MenuItem>)}
+        </TextField>
+        <HelpTip title="Show only the parts whose card puts them in this footprint compatibility group — one land pattern, so they drop onto the same board. Height and top cooling tab may still differ; the line below says when they do or when a card does not publish them. The group itself is stated on each card (compatibility_basis), not derived." />
         <Button size="small" variant="outlined" onClick={() => setAdding(true)}
           sx={{ textTransform: 'none', fontSize: 11 }}>Add device</Button>
       </Box>
 
+      {boardWarn && (
+        <Typography sx={{ fontSize: 11.5, color: '#fbbf24', mb: 1 }}>{boardWarn}</Typography>)}
       <Box sx={{ overflowX: 'auto' }}>
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(11, auto)', rowGap: 0.5, columnGap: 1.5, alignItems: 'center', minWidth: 900 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(12, auto)', rowGap: 0.5, columnGap: 1.5, alignItems: 'center', minWidth: 900 }}>
           <Typography sx={TH} />
           <Typography sx={TH}>Part</Typography>
           <Typography sx={TH}>Package</Typography>
           <Typography sx={TH}>Size L×W×H</Typography>
+          <Typography sx={TH}>Footprint</Typography>
           <Typography sx={TH}>Weight</Typography>
           <Typography sx={TH}>V_DSS</Typography>
           <Typography sx={TH}>I_D @100 °C</Typography>
@@ -121,7 +136,7 @@ const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged
             <HelpTip title={switchCurrent?.note
               || 'Devices per switch position on the continuous current rating alone.'} />
           </Box>
-          {rows.map(d => (
+          {shown.map(d => (
             <React.Fragment key={d.part}>
               <Box sx={{ width: 52, height: 52, color: 'var(--text-2)', display: 'flex',
                          alignItems: 'center', justifyContent: 'center' }}
@@ -138,6 +153,11 @@ const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged
                 {d.package_size_mm?.length_mm != null
                   ? `${fmt(d.package_size_mm.length_mm, 2)} × ${fmt(d.package_size_mm.width_mm, 2)} × ${fmt(d.package_size_mm.height_mm, 2)} mm`
                   : '—'}
+              </Typography>
+              <Typography sx={TD} title={d.footprint
+                  ? `${d.footprint.package_outline_id ?? '—'} · land pattern: ${d.footprint.land_pattern_ref ?? 'not transcribed'}`
+                  : 'no footprint block on this card'}>
+                {d.footprint?.compatibility_group ?? '—'}
               </Typography>
               <Typography sx={TD}>{d.weight_g != null ? `${fmt(d.weight_g, 1)} g` : '—'}</Typography>
               <Typography sx={TD}>{fmt(d.v_dss_V, 0)} V</Typography>

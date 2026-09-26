@@ -121,6 +121,13 @@ E_OSS_POLICIES = ("included_in_eon", "added")
 #: in device current.  Both are offered and the response says which was taken.
 SET_SPLITS = ("series_split", "power_split")
 
+#: The three-phase modulations (``simulation.pwm.PWM_MODULATIONS``) and the
+#: LINEAR limit of each: past it the [0, 1] duty clamps and the switching
+#: functions integrated here are no longer what the bridge does.
+PWM_LINEAR_LIMIT = {"sine": 1.0,
+                    "svpwm": 2.0 / math.sqrt(3.0),
+                    "third_harmonic": 2.0 / math.sqrt(3.0)}
+
 
 # ---------------------------------------------------------------------------
 # The coldplate
@@ -711,7 +718,9 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                 ``power_factor``)
       devices   ``device``, ``devices_parallel``, ``r_g_ext_ohm``,
                 ``v_gs_on_V``, ``v_gs_off_V``, ``dead_time_us``
-      topology  ``topology``, ``mapping``, ``h_bridge_modulation``, ``set_split``
+      topology  ``topology``, ``mapping``, ``h_bridge_modulation``, ``set_split``,
+                ``pwm_modulation`` (three-phase bridges: ``sine`` default,
+                ``svpwm``, ``third_harmonic`` — linear to m = 2/sqrt(3))
       cooling   ``cooling.mode`` -> ``"liquid"`` (default, :class:`ColdPlate`
                 fields — coolant/flow/inlet/channels), ``"air_forced"``
                 (:class:`AirForcedCooling` — air_speed_mps/t_ambient_c/
@@ -776,6 +785,23 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     root3 = math.sqrt(3.0)
     i_leg_3ph = i_ph * (root3 if sd == "delta" else 1.0)
 
+    # ── the three-phase modulation (2026-09-26) ────────────────────────────
+    pmod = str(req.get("pwm_modulation") or "sine").strip().lower()
+    if pmod not in PWM_LINEAR_LIMIT:
+        raise ControllerRefusal(
+            "pwm_modulation must be " + " or ".join(PWM_LINEAR_LIMIT)
+            + f"; got {req.get('pwm_modulation')!r}", ["pwm_modulation"],
+            code="bad_modulation")
+    if pmod != "sine" and not any(b.kind == "three_phase_2l"
+                                  for b in topo.bridges):
+        raise ControllerRefusal(
+            f"pwm_modulation {pmod!r} is a zero sequence shared by the three "
+            "legs of a three-phase bridge, and this topology has none (every "
+            "coil is on its own H-bridge) — use sine with the H-bridge's own "
+            "unipolar/bipolar choice", ["pwm_modulation", "topology"],
+            code="modulation_needs_three_phase")
+    m_lin = PWM_LINEAR_LIMIT[pmod]
+
     m_req = req.get("modulation_index")
     pf_req = req.get("power_factor")
     if m_req is not None:
@@ -800,11 +826,12 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             f"{p_ac / 1e3:.0f} kW this duty draws (power factor {pf:.3f} > 1): "
             "one of the three does not belong to this operating point")
         pf = 1.0
-    if m > 1.0:
+    if m > m_lin:
         warnings.append(
-            f"modulation index {m:.3f} > 1 — the bridge is OVERMODULATED; the "
-            "sine-triangle switching functions this model integrates are not "
-            "what such a bridge does, and the losses below read low")
+            f"modulation index {m:.3f} > {m_lin:.4g} — the bridge is "
+            f"OVERMODULATED for {pmod} modulation (linear to {m_lin:.4g}); the "
+            "switching functions this model integrates are not what such a "
+            "bridge does, and the losses below read low")
     phi_deg = math.degrees(math.acos(min(max(pf, -1.0), 1.0)))
 
     coils_per_phase = max(1, len(coils) // 3)
@@ -822,7 +849,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                 i_b, m_b = i_leg_3ph, m / n_3ph
             else:
                 i_b, m_b = i_leg_3ph, m
-            b.modulation = "sine_triangle"
+            b.modulation = {"sine": "sine_triangle", "svpwm": "svpwm",
+                            "third_harmonic": "third_harmonic"}[pmod]
             for k, lg in enumerate(b.legs):
                 legs_spec[(b.id, lg.name)] = {
                     "i_peak_A": i_b * math.sqrt(2.0),
@@ -842,12 +870,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                 }
     m_by_bridge = {b.id: legs_spec[(b.id, b.legs[0].name)]["m"]
                    for b in topo.bridges}
-    over = [b.id for b in topo.bridges if m_by_bridge[b.id] > 1.0]
+    def _lin(b: Bridge) -> float:
+        return m_lin if b.kind == "three_phase_2l" else 1.0
+    over = [b.id for b in topo.bridges if m_by_bridge[b.id] > _lin(b)]
     if over:
         warnings.append(
-            "bridge(s) " + ", ".join(over) + " need a modulation index above 1 "
-            f"on a {v_dc:.0f} V link — this topology cannot make the voltage "
-            "this operating point needs without overmodulation or a higher bus")
+            "bridge(s) " + ", ".join(over) + " need a modulation index above "
+            "their linear limit (" + ", ".join(
+                f"{b.id} {_lin(b):.4g}" for b in topo.bridges if b.id in over)
+            + f") on a {v_dc:.0f} V link — this topology cannot make the "
+            "voltage this operating point needs without overmodulation or a "
+            "higher bus")
 
     # ── the thermal loop ───────────────────────────────────────────────────
     plate = _build_cooling(req.get("cooling") or {})
@@ -895,7 +928,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             f_elec_hz=f_el, f_carrier_hz=f_sw, v_dc_V=v_dc,
             modulation_index=m_by_bridge[b.id],
             samples_per_carrier=int(req.get("samples_per_carrier") or 24),
-            dead_time_s=dead_s)
+            dead_time_s=dead_s,
+            modulation=(pmod if b.kind == "three_phase_2l" else "sine"))
     u = setups[topo.bridges[0].id].grid()
     leg_current: Dict[Tuple[str, str], np.ndarray] = {}
     for (bid, lname), spec in legs_spec.items():
@@ -1079,7 +1113,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     st0 = wf.ModulatorSetup(
         f_elec_hz=base.f_elec_hz, f_carrier_hz=base.f_carrier_hz,
         v_dc_V=base.v_dc_V, modulation_index=base.modulation_index,
-        samples_per_carrier=spc, dead_time_s=dead_s)
+        samples_per_carrier=spc, dead_time_s=dead_s,
+        modulation=base.modulation)
     t_draw = min(t_j_max_seen, t_cap)
     r_ds = card.r_ds_on_ohm(t_draw, v_gs_on)
 
@@ -1222,6 +1257,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "f_carrier_hz": round(f_sw, 1),
             "f_carrier_eff_hz": round(st0.f_carrier_eff_hz, 1),
             "modulation_index": round(m, 4),
+            "pwm_modulation": pmod,
+            "modulation_linear_limit": round(m_lin, 4),
             "power_factor": round(pf, 4),
             "load_angle_deg": round(phi_deg, 2),
             "v_dc_V": round(v_dc, 2),
@@ -1238,6 +1275,7 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "r_g_off_ext_ohm": r_g_off,
             "l_sigma_nH": l_sig,
             "switching_source": sw_src,
+            "pwm_modulation": pmod,
             "samples_per_carrier": st0.samples_per_carrier,
             "grid_points": int(u.size),
         },
@@ -1275,5 +1313,12 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "curves are extrapolated on the straight line through their two "
             "lowest points — that is where a sinusoidal current's zero "
             "crossings live",
-        ] + cooling_notes,
+        ] + ([
+            f"{pmod}: a CONTINUOUS zero-sequence modulation — every leg still "
+            "switches once per carrier, the leg current is the load's and the "
+            "zero sequence is half-wave symmetric, so conduction, switching "
+            "and the per-switch split are the sine modulator's at the same "
+            "point; what it changes is the reachable modulation index (linear "
+            "to 2/sqrt(3) instead of 1) and the DC-link ripple"]
+            if pmod != "sine" else []) + cooling_notes,
     }

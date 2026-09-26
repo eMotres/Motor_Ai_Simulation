@@ -233,6 +233,8 @@ export interface ControllerSettings {
   topology?: string;
   set_split?: string;
   h_bridge_modulation?: string;
+  /** Three-phase bridges: ``"sine" | "svpwm" | "third_harmonic"``. */
+  pwm_modulation?: string;
   devices_parallel?: number;
   devices_parallel_by_bridge?: Record<string, number>;
   r_g_ext_ohm?: number | null;
@@ -280,6 +282,8 @@ export interface ControllerFormState {
   topology: string;
   setSplit: string;
   hbMod: string;
+  /** Three-phase modulation — ``"sine" | "svpwm" | "third_harmonic"``. */
+  pwmMod: string;
   nPar: NumOrBlank;
   rg: NumOrBlank;
   vgsOff: NumOrBlank;
@@ -328,6 +332,7 @@ export interface ControllerFormState {
  */
 export const DEFAULT_CONTROLLER_FORM: ControllerFormState = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
+  pwmMod: 'sine',
   nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
   // Owner 2026-09-25: these five INHERIT from the Thermal tab by default —
   // blank is "not overridden yet", the SAME convention ``vdc``/``fsw``
@@ -376,6 +381,7 @@ export function formStateFromSettings(
     topology: block.topology || fallback.topology,
     setSplit: block.set_split || fallback.setSplit,
     hbMod: block.h_bridge_modulation || fallback.hbMod,
+    pwmMod: block.pwm_modulation || fallback.pwmMod,
     nPar: block.devices_parallel ?? fallback.nPar,
     rg: toFormNumber(block.r_g_ext_ohm),
     vgsOff: toFormNumber(block.v_gs_off_V),
@@ -410,6 +416,7 @@ export function settingsForSave(s: ControllerFormState): ControllerSettings {
     topology: s.topology,
     set_split: s.setSplit,
     h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
     devices_parallel: s.nPar === '' ? 1 : s.nPar,
     // ALWAYS {} — the tab has only the one global count now; this REPLACES
     // (never merges into) whatever a saved block held, so a stale per-bridge
@@ -528,6 +535,7 @@ export interface ControllerSolveBody {
   topology: string;
   set_split: string;
   h_bridge_modulation: string;
+  pwm_modulation: string;
   r_g_ext_ohm?: number;
   v_gs_off_V?: number;
   dead_time_us?: number;
@@ -576,6 +584,7 @@ export function controllerSolveBody(
     device: s.device,
     devices_parallel: blank(s.nPar),
     topology: s.topology, set_split: s.setSplit, h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
     r_g_ext_ohm: blank(s.rg),
     v_gs_off_V: blank(s.vgsOff),
     dead_time_us: blank(s.dead),
@@ -818,6 +827,9 @@ export function staleResultFields(
       && s.vdc !== res.point.v_dc_V) out.push('DC link');
   if (s.coolingMode && res.thermal?.cooling_mode != null
       && s.coolingMode !== res.thermal.cooling_mode) out.push('cooling');
+  // A result from before the choice existed carries no pwm_modulation: sine.
+  if (s.pwmMod && res.settings && s.pwmMod !== (res.settings.pwm_modulation || 'sine'))
+    out.push('modulation');
   return out;
 }
 

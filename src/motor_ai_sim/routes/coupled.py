@@ -628,7 +628,8 @@ _MODULATION_HEADROOM = 0.005
 
 
 @functools.lru_cache(maxsize=256)
-def _modulator_gain(carriers: int, v_delta_deg: float) -> float:
+def _modulator_gain(carriers: int, v_delta_deg: float,
+                    modulation: str = "sine") -> float:
     """Fundamental the bridge APPLIES per volt of linear-modulation reference,
     at the linear limit m = 1.15 and this many carriers per electrical period.
 
@@ -663,12 +664,18 @@ def _modulator_gain(carriers: int, v_delta_deg: float) -> float:
     projection swings 0.81-1.10 with phase, and a source that thin is refused by
     the factory's own "cannot synthesise this fundamental" branch anyway.
 
+    ``modulation`` (2026-09-26) — the Controller's.  With a zero-sequence
+    modulation the gain is measured at ITS ceiling, 2/sqrt(3), where the duty
+    clamp does not bite, so what is left is the sampled hold alone.
+
     Cached: a few milliseconds each, and a loop asks for one carrier count.
     """
-    from motor_ai_sim.simulation.pwm import (MAX_MODULATION_INDEX as _MAX_M,
-                                             PwmVoltageSource as _Src)
+    from motor_ai_sim.simulation.pwm import (PwmVoltageSource as _Src,
+                                             modulation_ceiling)
+    _MAX_M = modulation_ceiling(modulation)
     src = _Src(pole_pairs=1, daxis_deg=0.0, v_delta_deg=float(v_delta_deg),
-               v_bus=2.0, carriers=max(1, int(carriers)), m=_MAX_M)
+               v_bus=2.0, carriers=max(1, int(carriers)), m=_MAX_M,
+               modulation=str(modulation))
     applied, _ = src.applied_fundamental()
     # v_bus = 2 V, so the LINEAR reference peak is 0.5·m·v_bus = m.
     return min(1.0, max(1e-3, float(applied) / _MAX_M))
@@ -804,7 +811,12 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
     # sits 0.8 % under its own ceiling (789.7 V of 795.9 V on a 799.2 V pack),
     # which is exactly where one honest correction runs out of inverter.
     from motor_ai_sim.simulation.pwm import (
-        MAX_MODULATION_INDEX as _MAX_M, is_delta as _is_delta)
+        modulation_ceiling as _mod_ceiling, is_delta as _is_delta)
+    # The ceiling is the MODULATION's (2026-09-26): on the Controller's bridge
+    # the Controller's choice, on the ideal bridge always sine.
+    _pmod = (_controller_pwm_modulation(body)[0]
+             if _coupled_drive(body) == "inverter" else "sine")
+    _MAX_M = _mod_ceiling(_pmod)
     _sd = str(body.get("star_delta") or "").strip().lower()
     if not _sd:
         from motor_ai_sim.routes.simulation import _effective_star_delta as _esd
@@ -817,7 +829,7 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
     # first fix clamped to the uncompensated number, so pass 4 was aimed at
     # 761.7 V of a 795.9 V "ceiling" whose real value was 747.2 V — inside the
     # clamp, outside the inverter, and the 422 killed the pass anyway.
-    _gain = _modulator_gain(nc, round(float(dl), 3))
+    _gain = _modulator_gain(nc, round(float(dl), 3), _pmod)
     v1_max = v1_max_unc * _gain * (1.0 - _MODULATION_HEADROOM)
     # …AND IT IS ONLY HANDED ON WHEN THE RUN ITSELF FITS UNDER IT.  The
     # connection is resolved here from the body, and a body that does not name
@@ -839,6 +851,7 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
         # a report comparing two carriers needs the gain that separates them.
         "v_phase_peak_max_uncompensated_V": round(float(v1_max_unc), 4),
         "modulator_gain_factor": round(float(_gain), 6),
+        "pwm_modulation": _pmod,
         "record_as": rec_as,
         "harm_ref": bool(inv.get("harm_ref", False)),
         "target_I_phase_rms_A": tgt,
@@ -2567,6 +2580,43 @@ def _dead_time_floor_ns(card) -> Optional[float]:
         return None
 
 
+def _controller_pwm_modulation(body: Dict[str, Any]) -> Tuple[str, str]:
+    """The Controller's three-phase modulation and where it came from.
+
+    Same tiers as every other controller field: the request's ``controller``
+    block, the Controller settings saved with the configuration, the duty's
+    stored controller solve, then the stated default ``"sine"``.  Anything not
+    in ``pwm.PWM_MODULATIONS`` is a 422 by name, never read as sine.
+    """
+    from motor_ai_sim.simulation.pwm import ExcitationError, normalize_modulation
+    raw = body.get("controller")
+    req = dict(raw) if isinstance(raw, dict) else {}
+    if req.get("pwm_modulation") is not None:
+        val, where = req["pwm_modulation"], "the request"
+    else:
+        try:
+            from motor_ai_sim.inverter import drive_source as _DS
+            saved = _DS.controller_block_for()
+        except Exception:                                   # noqa: BLE001
+            saved = {}
+        if saved.get("pwm_modulation") is not None:
+            val, where = (saved["pwm_modulation"],
+                          "the Controller settings saved with the configuration")
+        else:
+            stored = _duty_controller_record()
+            st_val = ((stored.get("settings") or {}).get("pwm_modulation")
+                      if stored else None)
+            if st_val is not None:
+                val, where = st_val, "the duty's stored controller solve"
+            else:
+                val, where = "sine", "the module default (sine-triangle)"
+    try:
+        return normalize_modulation(val), where
+    except ExcitationError as exc:
+        raise _refuse(str(exc), ["controller.pwm_modulation"],
+                      code="bad_controller")
+
+
 def _controller_settings(body: Dict[str, Any], *, rpm: float,
                          inverter: Dict[str, Any]) -> Dict[str, Any]:
     """The CONTROLLER this coupled run is driven by, fully resolved.
@@ -2691,6 +2741,7 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
                         "the duty's stored controller solve",
                         "the module's stated default thermal interface"))
 
+    pmod, src["pwm_modulation"] = _controller_pwm_modulation(body)
     floor_ns = _dead_time_floor_ns(card)
     notes: List[str] = []
     if floor_ns and dead_us * 1e3 < floor_ns:
@@ -2713,6 +2764,7 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
         "h_bridge_modulation": str(req.get("h_bridge_modulation")
                                    or st_top.get("h_bridge_modulation")
                                    or "unipolar"),
+        "pwm_modulation": pmod,
         "mapping": req.get("mapping"),
         "devices_parallel_by_bridge": req.get("devices_parallel_by_bridge"),
         # The junction temperature the FIRST pass reads the card at.  A start,
@@ -2794,7 +2846,12 @@ class _ControllerLoop:
     def run_kwargs(self) -> Dict[str, Any]:
         """The four physics scalars and the provenance beside them."""
         d = self.drop
+        # The modulation rides along only off sine: a sine run's keywords (and
+        # so every call a pinned test inspects) stay exactly what they were;
+        # get_fem_transient's own default is sine.
+        mod = self._pwm_modulation()
         return dict(
+            **({"inv_modulation": mod} if mod != "sine" else {}),
             inv_r_ds_ohm=float(d.r_ds_ohm),
             inv_v_sd_v0_V=float(d.v_sd_v0_V),
             inv_v_sd_rd_ohm=float(d.v_sd_rd_ohm),
@@ -2804,15 +2861,21 @@ class _ControllerLoop:
             inv_t_j_c=float(d.t_j_c),
             inv_topology=str(self.cfg.get("topology") or "one_3ph"))
 
+    def _pwm_modulation(self) -> str:
+        return str(self.cfg.get("pwm_modulation") or "sine")
+
     def snap_excitation(self) -> str:
         """The snapshot key's ``excitation`` field — spelled EXACTLY as
         ``get_fem_transient`` spells it for this drive."""
         d = self.drop
-        return ("%g/%g/%g/%g/%g/%g"
-                % (float(self.inverter["v_dc_V"]),
-                   float(self.inverter["f_carrier_hz"]),
-                   float(d.r_ds_ohm), float(d.v_sd_v0_V),
-                   float(d.v_sd_rd_ohm), float(d.dead_time_s) * 1e6))
+        key = ("%g/%g/%g/%g/%g/%g"
+               % (float(self.inverter["v_dc_V"]),
+                  float(self.inverter["f_carrier_hz"]),
+                  float(d.r_ds_ohm), float(d.v_sd_v0_V),
+                  float(d.v_sd_rd_ohm), float(d.dead_time_s) * 1e6))
+        # Suffixed only off sine — get_fem_transient's own spelling.
+        mod = self._pwm_modulation()
+        return key if mod == "sine" else key + "/" + mod
 
     def reseed(self, i_phase_rms_A: float) -> None:
         """Re-place the body-diode fit at a NEW operating current, before an
@@ -2988,6 +3051,7 @@ class _ControllerLoop:
             "topology": cfg["topology"],
             "set_split": cfg["set_split"],
             "h_bridge_modulation": cfg["h_bridge_modulation"],
+            "pwm_modulation": cfg.get("pwm_modulation") or "sine",
             "mapping": cfg.get("mapping"),
             "devices_parallel_by_bridge": cfg.get("devices_parallel_by_bridge"),
             "v_dc_V": float(self.inverter["v_dc_V"]),
@@ -3457,13 +3521,16 @@ def _inverter_record(em: Dict[str, Any], inv: Dict[str, Any],
         # limit (delta: the branch = line value, √3 above the per-phase one).
         # Printed so "off point" can be read as "out of inverter" where it is.
         "v_phase_peak_max_V": inv.get("v_phase_peak_max_V"),
-        # The two halves of that ceiling: what the bridge could chop at m = 1.15,
+        # The two halves of that ceiling: what the bridge could chop at the
+        # modulation's own limit (1.15 sine, 2/√3 svpwm / third_harmonic),
         # and the factor the modulator's sampled-reference gain costs on top of
         # it (`coupled._modulator_gain`).  Printed so a point that ran out of
         # inverter can be told from one that ran out of iterations.
         "v_phase_peak_max_uncompensated_V": inv.get(
             "v_phase_peak_max_uncompensated_V"),
         "modulator_gain_factor": inv.get("modulator_gain_factor"),
+        # sine | svpwm | third_harmonic — which ceiling the two above are.
+        "pwm_modulation": inv.get("pwm_modulation") or "sine",
         "at_modulation_ceiling": inv.get(
             "v_phase_peak_at_modulation_ceiling") or None,
         "v_delta_deg": float(inv["v_delta_deg"]),
@@ -5209,8 +5276,9 @@ def _run(body: Dict[str, Any],
                        if history else None)
             if (_cap_v > 0.0 and v1_ran is not None
                     and float(v1_ran) >= _cap_v - 1e-6):
-                from motor_ai_sim.simulation.pwm import (
-                    MAX_MODULATION_INDEX as _MAX_M_MSG)
+                from motor_ai_sim.simulation.pwm import modulation_ceiling
+                _MAX_M_MSG = modulation_ceiling(
+                    (inverter or {}).get("pwm_modulation") or "sine")
                 refusal_code = "point_limited_by_modulation"
                 refusal = (
                     "the point is out of INVERTER, not out of iterations: the "

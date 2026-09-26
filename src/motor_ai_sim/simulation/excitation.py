@@ -545,6 +545,9 @@ class PwmVoltageSource(_VoltageSourceBase):
         pwm: Dict[str, Any] = {
             "v_bus_V": float(src.v_bus),
             "modulation_index": round(float(src.m), 4),
+            # sine | svpwm | third_harmonic — the zero sequence the three
+            # references carry (simulation/pwm.py, PWM_MODULATIONS).
+            "modulation": str(getattr(src, "modulation", "sine")),
             # Sampled-reference delay/gain compensation (simulation/pwm.py):
             # what the modulator was HANDED so that what it APPLIES is the
             # requested v_phase_peak / v_delta_deg.
@@ -557,8 +560,10 @@ class PwmVoltageSource(_VoltageSourceBase):
             "steps_per_switching_period": round(
                 float(nspp) / float(src.carriers), 2),
             "modulator": ("ideal two-level, synchronous regular-sampled "
-                          "centre-aligned sine-triangle; no dead time, no "
-                          "device drops, ideal bus"),
+                          "centre-aligned %s; no dead time, no "
+                          "device drops, ideal bus"
+                          % _modulator_words(getattr(src, "modulation",
+                                                     "sine"))),
             # MIXED-RESOLUTION SETTLING — present only when it was used.
             "mixed_settle": ({
                 "composition": c.get("progress_comp"),
@@ -593,6 +598,14 @@ class PwmVoltageSource(_VoltageSourceBase):
                 "v_phase_peak_V": float(self.v_phase_peak),
                 "v_delta_deg": float(self.v_delta_deg),
                 "pwm": pwm, "custom_current": None, "bldc": None}
+
+
+def _modulator_words(modulation: str) -> str:
+    """How the record names the comparator's reference."""
+    return {"svpwm": "sine-triangle with min-max zero-sequence injection "
+                     "(carrier-based SVPWM)",
+            "third_harmonic": "sine-triangle with 1/6 third-harmonic "
+                              "injection"}.get(str(modulation), "sine-triangle")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -664,7 +677,8 @@ def make_source(drive: str, *, pole_pairs: int, daxis_deg: float,
             f_switch_hz=float(f_switch), f_elec_hz=float(f_elec), drop=drop,
             star_delta=str(star_delta or "star"), n_parallel=n_parallel,
             I_phase_rms=float(I_phase_rms), gamma_deg=float(gamma_deg),
-            topology=str(nid.get("topology") or "one_3ph"))
+            topology=str(nid.get("topology") or "one_3ph"),
+            modulation=nid.get("modulation"))
     if name == "custom_current":
         return CustomCurrentSource(_SampledCurrent.build(
             parse_waveform(waveform), pole_pairs=int(pole_pairs),

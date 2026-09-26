@@ -1088,3 +1088,34 @@ applications" note the doc paraphrases (see `IMDQ75R004M2H.yaml`'s
   fixing it is a Controller-module change, out of this batch's scope
   (device cards + read-only cross-checks only, "не подстраивай ничего под
   документ").
+
+### 10.4 · SVPWM / third-harmonic injection — the §10.2 gap closed (2026-09-26)
+
+`pwm_modulation` in the Controller settings: `sine` (default, unchanged),
+`svpwm` (carrier-based, min-max zero sequence `v0 = −(max+min)/2`) or
+`third_harmonic` (`v0 = −(m/6)·cos 3x`). One comparator implements it
+(`simulation/pwm.py::PwmVoltageSource._duty_at`), read by BOTH the loss model
+(`inverter/waveforms.leg_duty`) and the `drive: "inverter"` source the coupled
+EM loop marches (`inverter_nonideal["modulation"]`, route `inv_modulation`).
+
+* **Linear range** m ≤ 2/√3 (sine: 1). The loss model's OVERMODULATED flag and
+  the coupled regulator's voltage ceiling are the modulation's own; the EM
+  source refuses m > 2/√3 for the injected modulators (sine keeps its 1.15).
+* **Line voltages are the sine modulator's**: the zero sequence is sampled at
+  the same instant for all three legs, so every carrier's line volt-seconds
+  are identical below m = 1, and the line fundamental stays √3·m·V_dc/2 up to
+  2/√3 where sine clips (−5.5 % at m = 1.15, 48 carriers).
+* **Star / delta**: the injection is common mode — a star's floating neutral
+  drops it, a delta branch sees a line voltage with zero zero-sequence. The
+  triplen that circulates in a delta is the winding's own and still never
+  reaches a device (`leg_currents` differences it out).
+* **Devices and losses at a given point are unchanged**: same leg current,
+  one hard on/off per carrier (continuous modulation), half-wave-symmetric
+  zero sequence so the per-switch split stays ½, same DC-link mean
+  (`Σ v0·i = 0`). What changes is the reachable m (+15.5 % fundamental on the
+  same link, so the §10.2 power at the same current and losses) and the ripple.
+* The applied fundamental of an injected source is measured on `v_A − CM`: on
+  a carrier count not divisible by 3 the held zero sequence leaks a common-mode
+  fundamental into the pole (0.8 % at 7 carriers) that no winding sees.
+
+Tests: `tests/test_controller_svpwm.py`.

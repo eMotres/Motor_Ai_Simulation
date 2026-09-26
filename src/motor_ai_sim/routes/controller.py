@@ -994,7 +994,8 @@ _KEY_FIELDS = ("num_slots", "num_poles", "single_layer", "winding_layout",
                "samples_per_carrier")
 #: Keyed only when SET (2026-09-23), so every key written before these
 #: fields existed stays the same key.
-_KEY_FIELDS_OPTIONAL = ("switching_source", "r_g_off_ext_ohm", "l_sigma_nH")
+_KEY_FIELDS_OPTIONAL = ("switching_source", "r_g_off_ext_ohm", "l_sigma_nH",
+                        "pwm_modulation")
 
 
 def _history_key(req: Dict[str, Any]) -> str:
@@ -1002,8 +1003,9 @@ def _history_key(req: Dict[str, Any]) -> str:
     for k in _KEY_FIELDS:
         p[k] = _RH.round_floats(req.get(k), 6) if req.get(k) is not None else None
     for k in _KEY_FIELDS_OPTIONAL:
-        if req.get(k) is not None and not (k == "switching_source"
-                                           and str(req[k]).lower() == "datasheet"):
+        if req.get(k) is not None and not (
+                (k == "switching_source" and str(req[k]).lower() == "datasheet")
+                or (k == "pwm_modulation" and str(req[k]).lower() == "sine")):
             p[k] = _RH.round_floats(req.get(k), 6)
     p["cooling"] = _RH.round_floats(dict(req.get("cooling") or {}), 6)
     p["par_by_bridge"] = sorted(
@@ -1182,6 +1184,10 @@ def _build_request(body: Dict[str, Any],
                 "h_bridge_modulation": (body.get("h_bridge_modulation")
                                         or ctrl.get("h_bridge_modulation")
                                         or "unipolar"),
+                # 2026-09-26: the three-phase modulation (sine default;
+                # svpwm / third_harmonic — linear to m = 2/sqrt(3)).
+                "pwm_modulation": (body.get("pwm_modulation")
+                                   or ctrl.get("pwm_modulation") or "sine"),
                 "dead_time_us": (body.get("dead_time_us")
                                  if body.get("dead_time_us") is not None
                                  else ctrl.get("dead_time_us")),

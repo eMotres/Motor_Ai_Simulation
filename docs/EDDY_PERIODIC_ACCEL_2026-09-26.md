@@ -176,8 +176,9 @@ null in the result.
 
 - The accelerator adds per jump: one sector decomposition (q = 5 images of ≤ 10 k dofs) and a
   least-squares problem of at most 5 columns. That is milliseconds against about 1.4 s per frame.
-- The frame count at the default cap is unchanged (650). So the wall time equals today's. The
-  paired timing (base vs accelerator, L155, 4 threads each, simultaneous) is in the PR description.
+- The frame count at the default cap is unchanged (650). Paired timing, L155 rated, base against
+  accelerator, 4 threads each, simultaneous: **667 s against 670 s** (+0.4 %, noise). The shaft
+  goes 5.255 → 4.088 W.
 - The gain is in the value, not the time. To settle, the accelerator needs about 22 periods,
   against more than 70 for the plain march.
 

@@ -134,6 +134,11 @@ class _Ctl:
         self.steps.append(phase)
         return 0.0
 
+    def snap_excitation(self):
+        # The real _ControllerLoop's snapshot-key spelling (PR #5 files each
+        # PWM pass for the Thermal tab under it); any fixed string will do.
+        return "fake-controller"
+
 
 def _true_e1_cos():
     g = _guess()

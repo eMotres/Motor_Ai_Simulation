@@ -439,7 +439,16 @@ def test_the_controller_loop_feeds_the_run_four_scalars():
     assert lp.snap_excitation().count("/") == 5
 
 
-def test_the_record_carries_the_excitation_and_the_passes():
+def test_the_record_carries_the_excitation_and_the_passes(monkeypatch):
+    # The controller solve reads the WINDING (slots, poles, layers) from the
+    # live machine config, as a real coupled run must.  This test's machine is
+    # a 12-slot / 10-pole single-layer winding (pole_pairs=5 below): six coils.
+    # Pin it here so the test does not depend on whatever machine
+    # config/motor_config.yaml currently holds (a 24s/28p file gives 12 coils).
+    import motor_ai_sim.config as _mc
+    monkeypatch.setattr(_mc, "get_config", lambda *a, **k: {
+        "geometry": {"num_slots": 12, "num_poles": 10},
+        "winding": {"layers": 1}})
     lp = _loop()
     em = {
         "summary": {"I1_phase_rms_A": 314.3, "efficiency_shaft": 0.9771,

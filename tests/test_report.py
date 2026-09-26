@@ -6511,17 +6511,19 @@ class TestAuditV7:
         col = self._col()
         rows = {r[0]: r[1:] for r in R.em_compare_rows([col], {})[1]}
         assert rows["Br kept in the magnets [%]"][0] == "86.509"
-        assert rows["Worst magnet element, Br [%]"][0] == "6.9"
+        # PR #2 (2026-09-26): the worst element is a flagged CORNER
+        # diagnostic, judged against nothing.
+        assert rows[R.CORNER_ROW_LABEL][0].startswith("6.9")
         # the rules fire on the same numbers — the duty's own condition
         ws = R.duty_warnings(self._ctx(col))
         loss = _rule(ws, "demag_br_loss")
-        worst = _rule(ws, "demag_worst_element")
+        worst = _rule(ws, "demag_corner")
         assert abs(loss["value"] - 13.491) < 1e-3 and loss["level"] == "red"
-        assert worst["value"] == 6.9 and worst["level"] == "red"
+        assert worst["value"] == 6.9 and worst["level"] == "info"
         # …and the paragraph's headline is the same block again
         txt = R.em_demag_text(col["em"])
         assert "Br kept 86.509 %" in txt
-        assert "worst single element KEPT 6.9 %" in txt
+        assert "6.9 %" in txt
         assert "97.617" not in txt and "18.4" not in txt
 
     def test_bl1_the_caption_number_and_the_table_number_agree(self):

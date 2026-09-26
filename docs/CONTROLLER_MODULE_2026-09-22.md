@@ -874,6 +874,41 @@ the sine loop (36 steps/period, minutes per pass) + 1–2 PWM passes, i.e.
 from the start temperatures (it was one pass short of T_j convergence), and all
 of the sine loop when a sine state of the duty already exists.
 
+### 7d · The first PWM command carries the bridge's drops (2026-09-26)
+
+§7c's −3.4 % was the SEED, not the thermal: pass 1 commanded the sine state's
+TERMINAL fundamental, the bridge lost its channel drop and dead time between
+command and terminals, and the damped first regulator step (gain 0.3) could
+not recover it inside the 2-pass cap.
+
+* **First command, closed form** (`coupled._pwm_v1_first_guess`, placed after
+  the `T_j` seed so `R_DS(on)` and `V_SD` are read at the seeded junction).
+  The leg's pole error `e(i) = −i·R_DS − sign(i)·t_d·f_sw·(V_dc + 2·(v0 + r_d·|i|))`
+  has, on a sinusoidal leg current of peak `Î`, the fundamental
+  `E1 = Î·R_DS + (4/π)·t_d·f_sw·(V_dc + 2·v0) + 2·t_d·f_sw·r_d·Î`, in phase
+  with the current and opposing it (in delta `√3·E1` at `Î_leg = √3·Î_branch`,
+  along the branch current).  The load angle is held, so the command is the
+  projection `V_cmd = V1 + E1·cos φ`, `φ = δ_V − γ_I` (below `V1` on a
+  generator).  The ceiling clamp applies; the record carries every term
+  (`pwm_final.v1_first_guess`).  Left out, and said: dead-time windows clipped
+  near the rails, the channel drop absent during the dead time, and the
+  harmonic currents the drops drive — the regulator takes that residual.
+* **Third pass for the current only**: after the 2-pass cap, ONE more PWM
+  pass when `|point_error_pct| > i_tol_pct`; a temperature residual alone
+  never buys it (`pwm_final.current_extra_pass`, `final_point_error_pct`).
+
+Mocked affine machine (`tests/test_coupled_pwm_first_guess.py`; Ø40 L12-like
+bridge, the true drop 10 % above the closed form, `dI/I = 1.5·dV/V`, +5 K
+from the PWM map on pass 1):
+
+| seed / cap | PWM passes | current error per pass |
+|---|---|---|
+| terminal V1, 2-pass cap (before) | 2 | −7.19 %, −3.95 % |
+| terminal V1, + current pass | 3 | −7.19 %, −3.95 %, +0.29 % |
+| closed form (now) | 2 | −0.65 %, −0.90 % (pass 2 for the +5 K) |
+
+Not yet re-measured on the FEM machine.
+
 ---
 
 ## 8 · Stage 3 — the six-coil H-bridge study

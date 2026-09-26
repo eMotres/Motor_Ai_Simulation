@@ -2083,6 +2083,14 @@ def default_limits(magnet_limit_c: Optional[float] = None) -> Dict[str, float]:
     return out
 
 
+def _runaway_stop_c(limits) -> float:
+    """Where a step response is stopped as a RUNAWAY: ``RUNAWAY_C``, or 100 K
+    past the highest limit being judged if that is higher — so the stop can
+    never fire before a part it is asked about has had its chance to cross."""
+    vals = [float(v) for v in limits]
+    return max([RUNAWAY_C] + [v + 100.0 for v in vals])
+
+
 def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
                   *, limits: Optional[Mapping[str, float]] = None,
                   T0: Optional[Mapping[str, float]] = None,
@@ -2127,20 +2135,40 @@ def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
         _ev.direction = 1.0
         events.append(_ev)
         names.append(node)
+    # THE RUNAWAY STOP (2026-09-26), the same RUNAWAY_C the periodic solver
+    # refuses at.  With the copper feedback on, a weakly cooled machine at a
+    # hot point makes more watts per kelvin than it sheds (the L13 at its
+    # 686 W peak behind a still-air housing: ~1.6 W/K of copper against
+    # ~1.2 W/K to the room), so there is no equilibrium below ~800 °C — and
+    # LSODA stalls there for good (measured: > 500 000 evaluations without
+    # advancing).  Every limit is far below 400 °C, so the answer this
+    # function exists for is already in hand when a node passes it; the
+    # integration ENDS there and the result says so.  Nothing is clamped.
+    _stop_c = _runaway_stop_c(lims.values())
+
+    def _runaway(_t, y):
+        return max(float(v) for v in y) - _stop_c
+    _runaway.terminal = True
+    _runaway.direction = 1.0
 
     sol = solve_ivp(rhs, (0.0, t_end), [state[r] for r in active],
-                    method="LSODA", rtol=1e-9, atol=1e-9, events=events,
+                    method="LSODA", rtol=1e-9, atol=1e-9, events=events + [_runaway],
                     dense_output=True, max_step=max(t_end / 200.0, 1e-6))
     if not sol.success:
         raise DutyCycleError("duty_cycle_integration_failed",
                              "the S2 integration failed: %s" % sol.message)
-    hits = [(float(te[0]), names[i]) for i, te in enumerate(sol.t_events)
-            if len(te)]
+    runaway_t = (float(sol.t_events[-1][0]) if len(sol.t_events[-1])
+                 else None)
+    hits = [(float(te[0]), names[i]) for i, te in
+            enumerate(sol.t_events[:-1]) if len(te)]
     end_state = {r: float(sol.y[i][-1]) for i, r in enumerate(active)}
     out = {
         "s2_time_to_limit_s": None,
         "s2_limiting_part": None,
         "t_horizon_s": round(t_end, 3),
+        # When the runaway stop fired: the end state is the machine at that
+        # instant, not a settled one.
+        "runaway_at_s": (None if runaway_t is None else round(runaway_t, 3)),
         "end_state_c": {n: round(end_state[network.rep(n)], 2) for n in NODES},
         "winding_hot_end_c": round(end_state[network.rep("winding")]
                                    + network.hot_spot_offset_k, 2),
@@ -2153,6 +2181,10 @@ def time_to_limit(profile: Profile, network: Network, caps: Mapping[str, Any],
         out["s2_limiting_part"] = part
         out["note"] = ("%s reaches %.0f °C after %.1f s from %.0f °C"
                        % (part, lims[part], t_hit, t_start))
+        if runaway_t is not None:
+            out["note"] += ("; the machine has no equilibrium at this point — "
+                            "it passes %.0f °C after %.1f s and the "
+                            "integration stops there" % (_stop_c, runaway_t))
     else:
         out["note"] = ("no part reaches its limit within %.0f s — at this "
                        "operating point the machine settles below every limit, "
@@ -2223,10 +2255,27 @@ def time_to_limits(segment: Segment, network: Network, caps: Mapping[str, Any],
         _ev.direction = 1.0
         events.append(_ev)
         labels.append(str(label))
+    # THE RUNAWAY STOP (2026-09-26) — see ``time_to_limit``: a machine with
+    # no equilibrium below ~800 °C stalls LSODA for good.  Here EVERY target's
+    # own crossing time is reported, so the stop fires only once every target
+    # is past its limit AND a node is past the stop — no crossing is lost.
+    _stop_c = _runaway_stop_c(t[2] for t in targets)
+    _tg_idx = [(active.index(network.rep(node)), float(lim), float(off))
+               for _l, node, lim, off in targets]
+
+    def _runaway(_t, y):
+        margin = min((float(y[i]) + o - l for i, l, o in _tg_idx),
+                     default=0.0)
+        return min(margin, max(float(v) for v in y) - _stop_c)
+    _runaway.terminal = True
+    _runaway.direction = 1.0
 
     sol = solve_ivp(rhs, (0.0, t_end), [state[r] for r in active],
-                    method="LSODA", rtol=1e-9, atol=1e-9, events=events,
+                    method="LSODA", rtol=1e-9, atol=1e-9,
+                    events=events + [_runaway],
                     dense_output=False, max_step=max(t_end / 200.0, 1e-6))
+    runaway_t = (float(sol.t_events[-1][0]) if len(sol.t_events[-1])
+                 else None)
     # NOTE ON `y_events`: SciPy hands back the WHOLE state vector at each event,
     # which is what makes "the machine AT the limit" a state and not a single
     # temperature — every other node is read off the same instant of the same
@@ -2244,8 +2293,11 @@ def time_to_limits(segment: Segment, network: Network, caps: Mapping[str, Any],
 
     out: Dict[str, Any] = {
         "t_horizon_s": round(t_end, 3),
+        # When the runaway stop fired the end state is that instant, and the
+        # machine is (by construction) NOT settled.
+        "runaway_at_s": (None if runaway_t is None else round(runaway_t, 3)),
         "end_state_c": {n: round(end_state[network.rep(n)], 2) for n in NODES},
-        "settled": bool(drift_k_per_h < 1.0),
+        "settled": bool(drift_k_per_h < 1.0 and runaway_t is None),
         "drift_K_per_h": round(drift_k_per_h, 4),
         "start_state_c": {n: round(state[network.rep(n)], 2) for n in NODES},
         "targets": {},

@@ -1655,7 +1655,11 @@ def _sine_comparison_step(body: Dict[str, Any], em: Dict[str, Any], *,
 #      magnet / bearing temperatures move by more than the loop's tolerance (or
 #      the current landed outside the inverter's band), ONE more PWM pass at the
 #      new temperatures (re-aimed), then its thermal map — never more than two
-#      PWM passes and never the full loop on PWM;
+#      PWM passes for the temperatures and never the full loop on PWM; a THIRD
+#      pass only when the current is still outside ``i_tol_pct`` after the
+#      second (``PWM_FINAL_CURRENT_EXTRA_PASSES``).  Pass 1's command is the
+#      sine's terminal fundamental + the bridge's own drops, in closed form
+#      (``_pwm_v1_first_guess``);
 #   4. the reported machine is the final PWM state; the sine state is the
 #      reference column of ``sine_comparison`` (equal temperatures = pass 1,
 #      thermally corrected = the final pass).
@@ -1664,6 +1668,114 @@ def _sine_comparison_step(body: Dict[str, Any], em: Dict[str, Any], *,
 # validation.
 INVERTER_COUPLING_MODES = ("final_pass", "full")
 PWM_FINAL_MAX_PASSES = 2
+#: ONE more PWM pass past the cap above, and ONLY when the last pass's current
+#: is still outside ``inverter.i_tol_pct`` (2026-09-26).  With the 2-pass cap
+#: the damped regulator left the Ø40 L12 steady answer at −3.4 % of its
+#: current; a temperature residual alone never buys this pass.
+PWM_FINAL_CURRENT_EXTRA_PASSES = 1
+
+
+def _pwm_v1_first_guess(*, v_sine_peak_V: float, v_delta_deg: float,
+                        gamma_deg: float, i_phase_rms_A: float, drop: Any,
+                        v_dc_V: float, f_carrier_hz: float,
+                        star_delta: str) -> Dict[str, Any]:
+    """The fundamental to COMMAND so the bridge's terminals carry the sine
+    state's own fundamental — the device drops and the dead time added back,
+    in closed form from the controller's model (``inverter/coupling.py``).
+
+    One leg's pole error (``pole_error_volts``) is
+    ``e(i) = −i·R_DS − sign(i)·t_d·f_sw·(V_dc + 2·(v0 + r_d·|i|))``.  On a
+    sinusoidal leg current of peak ``Î`` its fundamental is IN PHASE with the
+    current and opposing it, of amplitude
+
+        E₁ = Î·R_DS + (4/π)·t_d·f_sw·(V_dc + 2·v0) + 2·t_d·f_sw·r_d·Î
+
+    (the fundamental of ``sign(i)`` is 4/π, of ``|i|·sign(i)`` is ``i``).  In
+    star the leg current is the phase current and the floating neutral takes
+    only the zero sequence, so the phase error is ``E₁`` along the current.  In
+    delta the leg carries √3 × the branch current and the model's coordinate is
+    ``v_AB = e_A − e_B``: ``√3·E₁`` (at ``Î_leg = √3·Î_branch``), 30° back onto
+    the BRANCH current — along it, exactly.
+
+    The regulator holds ``v_delta_deg`` (the duty's load angle), so the
+    magnitude that puts the terminal phasor closest to the sine's is the
+    projection ``V_cmd = V₁ + E₁·cos φ`` with ``φ = δ_V − γ_I`` in the solver's
+    one frame (``postproc.fundamental_voltage`` / ``fundamental_current``).  On
+    a generator ``cos φ < 0`` and the command comes out BELOW the terminal
+    voltage, which is the physics.
+
+    What the closed form leaves out, and says: the dead-time windows clipped
+    near the modulator's rails, the channel drop absent during the dead time
+    (a ``t_d·f_sw`` fraction of it) and the harmonic currents the drops
+    themselves drive.  The passes' own regulator takes the residual.
+
+    Every input is checked; a non-finite or non-positive one refuses by name
+    rather than seeding a pass with a number nobody can explain.
+    """
+    vals = {"v_sine_peak_V": v_sine_peak_V, "i_phase_rms_A": i_phase_rms_A,
+            "v_dc_V": v_dc_V, "f_carrier_hz": f_carrier_hz}
+    for k, v in vals.items():
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            fv = float("nan")
+        if not (math.isfinite(fv) and fv > 0.0):
+            raise _refuse("the PWM first-voltage guess needs a positive %s; "
+                          "got %r" % (k, v), ["inverter"],
+                          code="pwm_first_guess_input")
+    drop_vals = {}
+    for k in ("r_ds_ohm", "v_sd_v0_V", "v_sd_rd_ohm", "dead_time_s"):
+        try:
+            fv = float(getattr(drop, k))
+        except (AttributeError, TypeError, ValueError):
+            fv = float("nan")
+        if not (math.isfinite(fv) and fv >= 0.0):
+            raise _refuse("the PWM first-voltage guess needs the controller's "
+                          "device drop %s (finite, ≥ 0); got %r"
+                          % (k, getattr(drop, k, None)), ["controller"],
+                          code="pwm_first_guess_input")
+        drop_vals[k] = fv
+    for k, v in (("v_delta_deg", v_delta_deg), ("gamma_deg", gamma_deg)):
+        try:
+            if not math.isfinite(float(v)):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise _refuse("the PWM first-voltage guess needs a finite %s; got "
+                          "%r" % (k, v), ["inverter"],
+                          code="pwm_first_guess_input")
+    delta = str(star_delta or "star").strip().lower() == "delta"
+    k_leg = math.sqrt(3.0) if delta else 1.0
+    i_leg_pk = float(i_phase_rms_A) * math.sqrt(2.0) * k_leg
+    td_fsw = drop_vals["dead_time_s"] * float(f_carrier_hz)
+    e_channel = i_leg_pk * drop_vals["r_ds_ohm"]
+    e_dead = ((4.0 / math.pi) * td_fsw
+              * (float(v_dc_V) + 2.0 * drop_vals["v_sd_v0_V"])
+              + 2.0 * td_fsw * drop_vals["v_sd_rd_ohm"] * i_leg_pk)
+    e1 = k_leg * (e_channel + e_dead)
+    phi = float(v_delta_deg) - float(gamma_deg)
+    cos_phi = math.cos(math.radians(phi))
+    v_cmd = float(v_sine_peak_V) + e1 * cos_phi
+    if not (math.isfinite(v_cmd) and v_cmd > 0.0):
+        raise _refuse("the PWM first-voltage guess came out non-positive "
+                      "(%.4g V from a %.4g V terminal and a %.4g V drop at "
+                      "cos φ %.3f)" % (v_cmd, float(v_sine_peak_V), e1,
+                                       cos_phi), ["inverter"],
+                      code="pwm_first_guess_input")
+    return {
+        "v_sine_peak_V": round(float(v_sine_peak_V), 4),
+        "v_command_peak_V": round(v_cmd, 4),
+        "E1_drop_peak_V": round(e1, 4),
+        "E1_channel_V": round(k_leg * e_channel, 4),
+        "E1_dead_time_V": round(k_leg * e_dead, 4),
+        "cos_phi": round(cos_phi, 5),
+        "phi_deg": round(phi, 3),
+        "i_leg_peak_A": round(i_leg_pk, 4),
+        "star_delta": "delta" if delta else "star",
+        "t_j_c": getattr(drop, "t_j_c", None),
+        "model": ("closed form: E1 = Î·R_DS + (4/π)·t_d·f_sw·(V_dc + 2·v0) + "
+                  "2·t_d·f_sw·r_d·Î (×√3 in delta), projected on the held "
+                  "load angle: V_cmd = V1 + E1·cos φ"),
+    }
 
 
 def _inverter_coupling_mode(body: Dict[str, Any]) -> str:
@@ -1687,7 +1799,8 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
                       run_id: str = "") -> Dict[str, Any]:
     """Steps 2–3 above.  Returns ``{"passes": [...], "em", "em_first", "field",
     "coil_c", "magnet_c", "bearing_c", "inverter", "v1_pts", "dc_notes",
-    "ripple_quotable", "refusal", "refusal_code", "converged"}``; ``em`` is
+    "ripple_quotable", "refusal", "refusal_code", "converged",
+    "v1_first_guess", "current_extra_pass"}``; ``em`` is
     ``None`` when not even the first PWM pass could be solved (the caller then
     keeps the sine state and says why).  ``adjust_temps`` False (``limits``):
     ONE pass only — the limit instant's temperatures are the answer by
@@ -1730,17 +1843,61 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
         ctl.step(_seed, it=0, phase="sine_seed")
     except Exception:                                       # noqa: BLE001
         log.debug("coupled: no T_j seed from the sine state", exc_info=True)
+    # THE FIRST COMMAND, WITH THE BRIDGE'S OWN DROPS ADDED BACK (2026-09-26).
+    # The sine run measured the TERMINAL fundamental; the controller's bridge
+    # loses its channel drop and dead time between the command and the
+    # terminals, so commanding the terminal value landed pass 1 short (−3.4 %
+    # of the current on Ø40 L12 after two passes).  Placed AFTER the T_j seed,
+    # so R_DS(on) and V_SD are read where the junction is about to sit.
+    v1_guess: Dict[str, Any] = {"applied": False}
+    _drop = getattr(ctl, "drop", None)
+    if _f(s0, "V1_seed_peak_V", 0.0) <= 0.0:
+        v1_guess["reason"] = ("the sine state carries no terminal fundamental "
+                              "(V1_seed_peak_V); the inverter's own "
+                              "fundamental is commanded as given")
+    elif _drop is None:
+        v1_guess["reason"] = ("the controller carries no device drop to "
+                              "correct the command with")
+    else:
+        g = _pwm_v1_first_guess(
+            v_sine_peak_V=float(s0["V1_seed_peak_V"]),
+            v_delta_deg=float(inv.get("v_delta_deg") or 0.0),
+            gamma_deg=_f(body_k, "gamma_deg", 0.0),
+            i_phase_rms_A=float(i_target), drop=_drop,
+            v_dc_V=float(inv["v_dc_V"]),
+            f_carrier_hz=(float(inv["carriers_per_period"])
+                          * float(inv["f_elec_hz"])
+                          if inv.get("carriers_per_period")
+                          and inv.get("f_elec_hz")
+                          else float(inv["f_carrier_hz"])),
+            star_delta=str(getattr(ctl, "star_delta", "star")))
+        v_cmd = float(g["v_command_peak_V"])
+        cap = inv.get("v_phase_peak_max_V")
+        g["at_modulation_ceiling"] = bool(cap and v_cmd > float(cap) > 0.0)
+        if g["at_modulation_ceiling"]:
+            v_cmd = float(cap)
+        inv["v_phase_peak_V"] = v_cmd
+        inv["v_phase_peak_at_modulation_ceiling"] = g["at_modulation_ceiling"]
+        inv["sources"] = dict(inv.get("sources") or {},
+                              v_phase_peak_V=("the sine-converged state's own "
+                                              "terminal fundamental + the "
+                                              "controller's device drop and "
+                                              "dead time (closed form)"))
+        v1_guess.update(g, applied=True)
     out: Dict[str, Any] = {"passes": [], "em": None, "em_first": None,
                            "field": None, "inverter": inv, "v1_pts": [],
                            "dc_notes": [], "ripple_quotable": True,
                            "refusal": None, "refusal_code": None,
-                           "converged": False}
+                           "converged": False, "v1_first_guess": v1_guess,
+                           "current_extra_pass": False}
     c_in, m_in, b_in = float(coil_c), magnet_c, bearing_c
     n = max(1, int(max_passes))
-    for k in range(1, n + 1):
+    # The hard cap: `n`, plus the current-only pass(es) below.
+    n_hard = n + max(0, int(PWM_FINAL_CURRENT_EXTRA_PASSES))
+    for k in range(1, n_hard + 1):
         _check_cancelled(run_id)
         _progress.update(phase="controller PWM pass %d/%d — coil %.1f °C"
-                               % (k, n, c_in))
+                               % (k, max(n, k), c_in))
         tok = _ml.BEARING_TEMP_C.set(None if b_in is None else float(b_in))
         st = ctl.state()
         try:
@@ -1784,7 +1941,7 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
         _ml.BEARING_TEMP_C.reset(tok)
         d_tj = ctl.step(em_k, it=k, phase="pwm_final")
         _progress.update(phase="controller PWM pass %d/%d — thermal with the "
-                               "PWM losses" % (k, n))
+                               "PWM losses" % (k, max(n, k)))
         field_k = _thermal_solve(body_k, cooling, coil_temp_c=c_in,
                                  magnet_temp_c=m_in, rpm=rpm,
                                  bearing_temp_c=b_in,
@@ -1836,8 +1993,14 @@ def _pwm_final_passes(body: Dict[str, Any], *, cooling: Dict[str, Any],
             # fundamental lands short by the devices' drop and dead time).
             settled = not point_off
         out["converged"] = bool(settled)
-        if settled or k >= n or c_out is None:
+        if settled or c_out is None or k >= n_hard:
             break
+        if k >= n:
+            # PAST THE CAP: one more pass ONLY for a current still outside the
+            # band — a temperature residual alone is reported, not chased.
+            if not point_off:
+                break
+            out["current_extra_pass"] = True
         # ONE MORE PWM PASS — at the temperatures the PWM losses produced
         # (not on `limits`), re-aimed at the current when it landed outside
         # the band.
@@ -1869,6 +2032,12 @@ def _pwm_final_block(fin: Dict[str, Any], *, sine_coil_c: float,
         "passes": p,
         "n_pwm_passes": len(p),
         "converged": bool(fin.get("converged")),
+        # The first command and how it was built (the sine's terminal
+        # fundamental + the bridge's drops), and whether the current-only
+        # pass past the 2-pass cap was spent.
+        "v1_first_guess": fin.get("v1_first_guess"),
+        "current_extra_pass": bool(fin.get("current_extra_pass")),
+        "final_point_error_pct": last.get("point_error_pct"),
         "tol_K": float(tol),
         # How far the PWM losses moved the machine from the sine state — the
         # final PWM pass's own thermal map against the sine-converged temps.

@@ -768,11 +768,12 @@ def solved(client, em_run):
 
 
 def test_the_L13_robot_joint_cycle(solved):
-    """25 % of 60 s at 46 A, in a 40 °C room, bolted to a 40 °C arm at 2 W/K."""
+    """25 % of 60 s at 46 A, in a 40 °C room, the stator OD in a housing
+    (heat_path='housing', 2026-09-26 — it replaced the 2 W/K mount)."""
     cyc, split, lim = solved["cycle"], solved["split"], solved["limits"]
     # Printed (visible under -s, and on any failure): the numbers this whole
     # feature exists to produce, so a regression is read rather than guessed at.
-    print("\nL13 S3 25 %%/60 s, robotics 40 C, mount 2 W/K: winding hot peak "
+    print("\nL13 S3 25 %%/60 s, robotics 40 C, heat path housing: winding hot peak "
           "%.1f C (mean %.1f), stator peak %.1f C, %d cycles, ED allowable "
           "%.1f %%, S2 to 200 C %.1f s, stator side %.1f %% (mount %.1f W, "
           "housing %.1f W, coil ends %.1f W, bore %.1f W)"
@@ -789,16 +790,19 @@ def test_the_L13_robot_joint_cycle(solved):
     assert cyc["residual_K"] < 0.05
     assert abs(cyc["closure_pct"]) < 0.5
 
-    # THE MOUNT AND THE END FACES ARE THE MACHINE's cooling: the housing
-    # cylinder of an Ø85 × 13 joint is 35 cm², the exposed axial faces are four
-    # times that, and the bolts take the rest.
+    # THE HOUSING AND THE END FACES ARE THE MACHINE's cooling: the stator OD
+    # hands its heat to the housing (the network's fitted housing path), the
+    # exposed coil ends take most of the rest, and there is no mount.
     assert split["stator_pct"] > 90.0, split
-    assert split["mount_W"] > split["housing_W"] > 0.0
-    assert split["winding_end_faces_W"] > split["housing_W"]
+    assert split["mount_W"] == 0.0
+    assert split["housing_W"] > split["winding_end_faces_W"] > 0.0
     assert abs(split["closure_pct"]) < 0.5
 
-    # THE ANSWER the feature exists for.
-    assert 20.0 < lim["ed_allowable_pct"] < 40.0, lim
+    # THE ANSWER the feature exists for.  It MOVED on 2026-09-26: a still-air
+    # housing (~1.2 W/K to the room at this point) is a weaker door than the
+    # 2 W/K mount held at 40 °C it replaced — 13.1 % where the mount allowed
+    # 20–40 %.
+    assert 8.0 < lim["ed_allowable_pct"] < 20.0, lim
     assert lim["ed_limiting_part"] == "winding"
     assert lim["winding_limit_c"] == 200.0
     peaks = [p for _ed, p in lim["ed_curve"] if p is not None]
@@ -812,7 +816,7 @@ def test_the_L13_numbers_are_the_machines_own(solved):
     assert net["C_total_J_per_K"] == pytest.approx(171.7, abs=0.5)
     assert net["t_ambient_c"] == 40.0 and net["t_mount_c"] == 40.0
     assert net["emissivity"] == 0.9
-    assert net["G_W_per_K"]["s_mount"] == 2.0
+    assert net["G_W_per_K"]["s_mount"] == 0.0          # a housing, no mount
     assert net["d_housing_m"] == pytest.approx(0.085, abs=1e-6)
     # the end-face areas are the SOLVED map's own, not a second derivation
     assert net["areas_m2"]["winding_ends"] * 1e4 == pytest.approx(54.0, abs=8.0)

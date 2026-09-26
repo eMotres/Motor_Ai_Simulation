@@ -66,7 +66,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from motor_ai_sim.simulation.excitation import (Feedback,
-                                                PwmVoltageSource as _ExcPwm)
+                                                PwmVoltageSource as _ExcPwm,
+                                                _modulator_words)
 
 __all__ = ["DeviceDrop", "fit_device_drop", "leg_currents",
            "InverterVoltageSource", "build_inverter_source",
@@ -362,9 +363,10 @@ class InverterVoltageSource(_ExcPwm):
         pwm = dict(d.get("pwm") or {})
         pwm["modulator"] = (
             "the CONTROLLER's bridge: synchronous regular-sampled "
-            "centre-aligned sine-triangle WITH dead time and device drops "
+            "centre-aligned %s WITH dead time and device drops "
             "(%s, %d per switch, %.3g us dead time on a %.1f V link)"
-            % (self.drop.device or "?", self.drop.devices_parallel,
+            % (_modulator_words(getattr(self._mod, "modulation", "sine")),
+               self.drop.device or "?", self.drop.devices_parallel,
                self.drop.dead_time_s * 1e6, self.v_dc_real_V))
         pwm["nonideal"] = {
             "source": "controller",
@@ -432,7 +434,8 @@ def build_inverter_source(*, pole_pairs: int, daxis_deg: float,
                           f_switch_hz: float, f_elec_hz: float,
                           drop: DeviceDrop, star_delta: str,
                           n_parallel: int = 1, I_phase_rms: float = 0.0,
-                          gamma_deg: float = 0.0, topology: str = "one_3ph"
+                          gamma_deg: float = 0.0, topology: str = "one_3ph",
+                          modulation: Optional[str] = "sine"
                           ) -> InverterVoltageSource:
     """Build the Stage-2 source through the SAME factory the ideal one uses.
 
@@ -441,6 +444,11 @@ def build_inverter_source(*, pole_pairs: int, daxis_deg: float,
     are actually bolted across, and it is the one the drops and the dead-time
     clamp are computed on.  Keeping the two apart is the whole reason this
     signature is not shorter.
+
+    ``modulation`` — the Controller's three-phase modulation (``sine``,
+    ``svpwm``, ``third_harmonic``).  The dead-time clamp below reads the
+    edges of the SAME comparator, so it follows the injected references with
+    no second model of them.
     """
     from motor_ai_sim.simulation.drive import Excitation
     from motor_ai_sim.simulation.pwm import build_pwm_source
@@ -454,7 +462,8 @@ def build_inverter_source(*, pole_pairs: int, daxis_deg: float,
         pole_pairs=int(pole_pairs), daxis_deg=float(daxis_deg),
         v_phase_peak=float(v_phase_peak), v_delta_deg=float(v_delta_deg),
         v_bus=float(v_bus_model), f_switch_hz=float(f_switch_hz),
-        f_elec_hz=float(f_elec_hz), v_bus_real=float(v_dc_real))
+        f_elec_hz=float(f_elec_hz), v_bus_real=float(v_dc_real),
+        modulation=modulation)
     return InverterVoltageSource(
         exc, mod, v_phase_peak=float(v_phase_peak),
         v_delta_deg=float(v_delta_deg),

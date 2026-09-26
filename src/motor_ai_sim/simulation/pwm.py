@@ -292,8 +292,10 @@ class PwmVoltageSource:
     def _duty_at(self, psi_sample_deg: float, shift_deg: float) -> float:
         """Duty the modulator would command from a reference sample taken at
         this electrical angle.  The clamp to [0, 1] is the leg's physical
-        pulse-dropping limit; it is reachable only at m > 1, which the factory
-        refuses, so on any accepted source it never bites.
+        pulse-dropping limit.  For sine it bites at 1 < m <= 1.15, which the
+        factory accepts: that is real pulse dropping, measured by
+        :meth:`applied_fundamental` and compensated.  For svpwm and
+        third_harmonic it never bites below their 2/sqrt(3) ceiling.
 
         With a zero-sequence modulation the term is computed from ALL THREE
         references at the same sample instant and added to this leg's — so it

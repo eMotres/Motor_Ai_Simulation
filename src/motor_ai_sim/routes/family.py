@@ -4043,6 +4043,9 @@ class ControllerPatch(BaseModel):
     topology: str = "one_3ph"
     set_split: str = "series_split"
     h_bridge_modulation: str = "unipolar"
+    # The three-phase bridges' modulation: "sine" (default) | "svpwm" |
+    # "third_harmonic" — read by the loss model AND the coupled drive.
+    pwm_modulation: str = "sine"
     devices_parallel: int = 1
     devices_parallel_by_bridge: dict[str, int] = {}
     r_g_ext_ohm: Optional[float] = None
@@ -4096,6 +4099,11 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
     if req.power_factor is not None and float(req.power_factor) > 1.0:
         raise HTTPException(422, detail=(
             f"controller.power_factor cannot exceed 1; got {req.power_factor}"))
+    from motor_ai_sim.inverter.losses import PWM_LINEAR_LIMIT
+    if str(req.pwm_modulation).strip().lower() not in PWM_LINEAR_LIMIT:
+        raise HTTPException(422, detail=(
+            "controller.pwm_modulation must be " + " or ".join(PWM_LINEAR_LIMIT)
+            + f"; got {req.pwm_modulation!r}"))
     if req.cooling.mode is not None:
         from motor_ai_sim.inverter.losses import COOLING_MODES
         if str(req.cooling.mode).strip().lower() not in COOLING_MODES:
@@ -4109,6 +4117,7 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
         "topology": req.topology,
         "set_split": req.set_split,
         "h_bridge_modulation": req.h_bridge_modulation,
+        "pwm_modulation": str(req.pwm_modulation).strip().lower(),
         "devices_parallel": int(req.devices_parallel),
         "devices_parallel_by_bridge": {str(k): int(v) for k, v in
                                        (req.devices_parallel_by_bridge or {}).items()},

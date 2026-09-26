@@ -131,6 +131,7 @@ function formStateFromSettings(block, fallback) {
     topology: block.topology || fallback.topology,
     setSplit: block.set_split || fallback.setSplit,
     hbMod: block.h_bridge_modulation || fallback.hbMod,
+    pwmMod: block.pwm_modulation || fallback.pwmMod,
     nPar: block.devices_parallel ?? fallback.nPar,
     rg: toFormNumber(block.r_g_ext_ohm),
     vgsOff: toFormNumber(block.v_gs_off_V),
@@ -164,6 +165,7 @@ function settingsForSave(s) {
     topology: s.topology,
     set_split: s.setSplit,
     h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
     devices_parallel: s.nPar === '' ? 1 : s.nPar,
     // ALWAYS {} — the whole-replace PATCH clears any per-bridge override a
     // saved block held, since the web has only the one global count now.
@@ -191,6 +193,7 @@ function settingsForSave(s) {
 // same "blank means not overridden" convention fsw/vdc already use here.
 const DEFAULT_FORM = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
+  pwmMod: 'sine',
   nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
   coolant: '', flow: '', tin: '', rtim: 0.03,
   coolingMode: 'liquid', airSpeed: '', tAmbient: '', areaBasis: 'heatsink',
@@ -300,6 +303,7 @@ function controllerSolveBody(s, customRows) {
     device: s.device,
     devices_parallel: blank(s.nPar),
     topology: s.topology, set_split: s.setSplit, h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
     r_g_ext_ohm: blank(s.rg),
     v_gs_off_V: blank(s.vgsOff),
     dead_time_us: blank(s.dead),
@@ -874,6 +878,9 @@ function staleResultFields(s, res) {
       && s.vdc !== res.point.v_dc_V) out.push('DC link');
   if (s.coolingMode && res.thermal?.cooling_mode != null
       && s.coolingMode !== res.thermal.cooling_mode) out.push('cooling');
+  // A result from before the choice existed carries no pwm_modulation: sine.
+  if (s.pwmMod && res.settings && s.pwmMod !== (res.settings.pwm_modulation || 'sine'))
+    out.push('modulation');
   return out;
 }
 
@@ -935,6 +942,43 @@ test('two or more mismatched fields get one generic line, still ONE line', () =>
   assert.deepEqual(fields, ['N', 'dead time']);
   const line = staleResultLine(fields, res);
   assert.equal(line, 'result computed with a different N, dead time — press Solve');
+});
+
+/* ── three-phase modulation (2026-09-26): sine | svpwm | third_harmonic ── */
+
+test('the PWM modulation is saved, restored and sent on the solve body', () => {
+  const edited = { ...DEFAULT_FORM, device: 'X', pwmMod: 'svpwm' };
+  const saved = settingsForSave(edited);
+  assert.equal(saved.pwm_modulation, 'svpwm');
+  assert.equal(formStateFromSettings(saved, DEFAULT_FORM).pwmMod, 'svpwm');
+  assert.equal(controllerSolveBody(edited, []).pwm_modulation, 'svpwm');
+});
+
+test('an old saved block with no pwm_modulation restores as sine', () => {
+  const s = formStateFromSettings({ device: 'X', topology: 'one_3ph' }, DEFAULT_FORM);
+  assert.equal(s.pwmMod, 'sine');
+});
+
+test('a result solved with another modulation is flagged; an old result '
+   + '(no pwm_modulation) reads as sine', () => {
+  const res = { topology: {}, settings: { devices_parallel: 1 }, point: {}, thermal: {} };
+  assert.deepEqual(staleResultFields({ ...DEFAULT_FORM, pwmMod: 'sine' }, res), []);
+  assert.deepEqual(staleResultFields({ ...DEFAULT_FORM, pwmMod: 'svpwm' }, res),
+    ['modulation']);
+  const res2 = { ...res, settings: { devices_parallel: 1, pwm_modulation: 'svpwm' } };
+  assert.deepEqual(staleResultFields({ ...DEFAULT_FORM, pwmMod: 'svpwm' }, res2), []);
+});
+
+test('the shipped default modulation is sine, and the helpers above match '
+   + 'controllerApi.ts', () => {
+  const src = readFileSync(join(HERE, '..', 'controllerApi.ts'), 'utf8');
+  const start = src.indexOf('export const DEFAULT_CONTROLLER_FORM');
+  const block = src.slice(start, src.indexOf('};', start));
+  assert.ok(/pwmMod:\s*'sine'/.test(block), 'default must stay sine');
+  assert.ok(src.includes('pwmMod: block.pwm_modulation || fallback.pwmMod,'));
+  assert.ok(src.includes('    pwm_modulation: s.pwmMod,'));
+  assert.ok(src.includes(
+    "if (s.pwmMod && res.settings && s.pwmMod !== (res.settings.pwm_modulation || 'sine'))"));
 });
 
 /* ── auto-save wiring (owner 2026-09-25) ─────────────────────────────────

@@ -58,6 +58,7 @@ const ControllerPanel: React.FC = () => {
   const [topology, setTopology] = useState(DEFAULT_CONTROLLER_FORM.topology);
   const [setSplit, setSetSplit] = useState(DEFAULT_CONTROLLER_FORM.setSplit);
   const [hbMod, setHbMod] = useState(DEFAULT_CONTROLLER_FORM.hbMod);
+  const [pwmMod, setPwmMod] = useState(DEFAULT_CONTROLLER_FORM.pwmMod);
   // Owner 2026-09-24: default 1, not 4 — see DEFAULT_CONTROLLER_FORM's own doc.
   const [nPar, setNPar] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.nPar);
   const [rg, setRg] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.rg);
@@ -244,7 +245,7 @@ const ControllerPanel: React.FC = () => {
       // "keeps resetting to 4" report; see DEFAULT_CONTROLLER_FORM's doc).
       const next = formStateFromSettings(block, DEFAULT_CONTROLLER_FORM);
       setDevice(next.device); setTopology(next.topology); setSetSplit(next.setSplit);
-      setHbMod(next.hbMod); setNPar(next.nPar); setRg(next.rg); setVgsOff(next.vgsOff);
+      setHbMod(next.hbMod); setPwmMod(next.pwmMod); setNPar(next.nPar); setRg(next.rg); setVgsOff(next.vgsOff);
       setDead(next.dead); setFsw(next.fsw); setFswOrigin(null);
       setVdc(next.vdc); setCoolant(next.coolant);
       setFlow(next.flow); setTin(next.tin); setRtim(next.rtim);
@@ -268,7 +269,7 @@ const ControllerPanel: React.FC = () => {
   useEffect(() => {
     if (!dieCtx.die || !dieCtx.config) return;
     try {
-      const state: ControllerFormState = { device, topology, setSplit, hbMod,
+      const state: ControllerFormState = { device, topology, setSplit, hbMod, pwmMod,
         nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
         coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
         mapping };
@@ -276,7 +277,7 @@ const ControllerPanel: React.FC = () => {
         die: dieCtx.die, config: dieCtx.config, block: settingsForSave(state) }));
     } catch { /* private window — the auto-save-with-the-motor mirror just won't work this session */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
+  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, pwmMod, nPar, rg,
       vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping]);
@@ -295,7 +296,7 @@ const ControllerPanel: React.FC = () => {
   const persistSettings = useCallback(async () => {
     if (!dieCtx.die || !dieCtx.config) return null;
     setSettingsErr(null);
-    const state: ControllerFormState = { device, topology, setSplit, hbMod,
+    const state: ControllerFormState = { device, topology, setSplit, hbMod, pwmMod,
       nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping };
@@ -309,7 +310,7 @@ const ControllerPanel: React.FC = () => {
       catch { /* SSR/no-window */ }
       return r;
     } catch (e) { setSettingsErr(String(e)); return null; }
-  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
+  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, pwmMod, nPar, rg,
       vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping]);
@@ -334,7 +335,7 @@ const ControllerPanel: React.FC = () => {
     autoSaveTimer.current = setTimeout(() => { void persistSettings(); }, 1000);
     return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
+  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, pwmMod, nPar, rg,
       vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping]);
@@ -348,7 +349,7 @@ const ControllerPanel: React.FC = () => {
   // box is OMITTED, never sent as '' or null, so the route's own V_dc /
   // carrier / current / power resolution chain runs uncontested.
   const body = () => controllerSolveBody(
-    { device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
+    { device, topology, setSplit, hbMod, pwmMod, nPar, rg, vgsOff, dead, fsw, vdc,
       coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping },
@@ -441,10 +442,10 @@ const ControllerPanel: React.FC = () => {
   // silently: one short line names what disagrees, in place of a result the
   // owner would otherwise read as a plain answer to what is on screen now.
   const staleFields = useMemo(() => staleResultFields(
-    { device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
+    { device, topology, setSplit, hbMod, pwmMod, nPar, rg, vgsOff, dead, fsw, vdc,
       coolant, flow, tin, rtim, coolingMode, airSpeed, tAmbient, areaBasis,
       areaCm2, finEff, emissivity, mapping }, res),
-    [device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
+    [device, topology, setSplit, hbMod, pwmMod, nPar, rg, vgsOff, dead, fsw, vdc,
      coolant, flow, tin, rtim, coolingMode, airSpeed, tAmbient, areaBasis,
      areaCm2, finEff, emissivity, mapping, res]);
   const staleLine = staleResultLine(staleFields, res);
@@ -530,6 +531,15 @@ const ControllerPanel: React.FC = () => {
                   sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
                   <MenuItem value="series_split" sx={{ fontSize: 12 }}>series split</MenuItem>
                   <MenuItem value="power_split" sx={{ fontSize: 12 }}>power split</MenuItem>
+                </TextField>
+              </Row>)}
+            {topology !== 'h_bridge' && (
+              <Row label="PWM" tip="Three-phase modulation. Sine is linear to m = 1; SVPWM (min-max zero sequence) and third-harmonic injection add the same common-mode term to all three legs, so the line voltages are unchanged and the linear range extends to m = 2/√3 (+15.5 % voltage on the same DC link). Used by the loss model and by the coupled drive=inverter run.">
+                <TextField select size="small" value={pwmMod} onChange={e => setPwmMod(e.target.value)}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="sine" sx={{ fontSize: 12 }}>sine</MenuItem>
+                  <MenuItem value="svpwm" sx={{ fontSize: 12 }}>SVPWM</MenuItem>
+                  <MenuItem value="third_harmonic" sx={{ fontSize: 12 }}>third-harmonic</MenuItem>
                 </TextField>
               </Row>)}
             {topology === 'h_bridge' && (

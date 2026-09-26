@@ -36,7 +36,8 @@ log = logging.getLogger(__name__)
 __all__ = [
     "CardError", "DeviceCard", "devices_dir", "library", "list_devices",
     "get_device", "validate_card", "write_card", "REQUIRED_BLOCKS",
-    "SWITCHING_SOURCES",
+    "SWITCHING_SOURCES", "FOOTPRINT_KEYS", "validate_footprint",
+    "footprint_groups",
 ]
 
 
@@ -126,6 +127,13 @@ def list_devices(*, i_switch_rms_A: Optional[float] = None
             out.append({"part": p.stem, "error": str(exc)})
             continue
         out.append(card.row(i_switch_rms_A=i_switch_rms_A))
+    groups = footprint_groups(out)
+    for r in out:
+        fp = r.get("footprint")
+        if fp and fp.get("compatibility_group") in groups:
+            g = groups[fp["compatibility_group"]]
+            fp["group_parts"] = list(g["parts"])
+            fp["group_warning"] = g["warning"]
     return out
 
 
@@ -215,7 +223,180 @@ def validate_card(doc: Any) -> List[str]:
                                      and tq.get("curves")):
         bad.append("third_quadrant.curves needs at least one I_SD(V_SD) curve "
                    "(the dead-time drop)")
+    if "footprint" in doc:
+        bad.extend(validate_footprint(doc))
     return bad
+
+
+# ---------------------------------------------------------------------------
+# Footprint — what the PCB has to carry (owner 2026-09-26, Task 9)
+# ---------------------------------------------------------------------------
+
+#: Every key a ``footprint`` block has, and only these.  A value the datasheet
+#: does not publish is ``null`` and its ``*_note`` says so — the block is
+#: OPTIONAL on a card (the loss model does not read it), but once present it is
+#: complete, so a half-filled one is refused rather than shown as "fits".
+FOOTPRINT_KEYS = (
+    "package_outline_id",     # the datasheet's package-group number, e.g. PG-HDSOP-22-U03
+    "outline_source",         # which figure/page of the datasheet gives it
+    "land_pattern_ref",       # datasheet figure/page of the land pattern, or null
+    "land_pattern_note",      # required when land_pattern_ref is null
+    "body_height_mm",         # seating plane to top, MAX column, or null
+    "body_height_source",     # figure + dimension letter, or why it is null
+    "top_tab_mm",             # {length_mm, width_mm, source} of the top cooling tab, or null
+    "top_tab_note",           # required when top_tab_mm is null
+    "compatibility_group",    # parts that share ONE land pattern, e.g. qdpak_750_1200
+    "compatibility_basis",    # who/what says they share it
+)
+
+_GROUP_RE = re.compile(r"^[a-z0-9][a-z0-9_]{1,63}$")
+
+
+def _blank(v: Any) -> bool:
+    return v is None or (isinstance(v, str) and not v.strip())
+
+
+def validate_footprint(doc: Dict[str, Any]) -> List[str]:
+    """Everything wrong with ``doc['footprint']`` (empty = fine)."""
+    fp = doc.get("footprint")
+    if not isinstance(fp, dict):
+        return ["footprint must be a mapping with the keys "
+                + ", ".join(FOOTPRINT_KEYS)]
+    bad: List[str] = []
+    extra = sorted(set(fp) - set(FOOTPRINT_KEYS))
+    if extra:
+        bad.append("footprint has unknown key(s) " + ", ".join(extra)
+                   + " — allowed: " + ", ".join(FOOTPRINT_KEYS))
+    missing = [k for k in FOOTPRINT_KEYS if k not in fp]
+    if missing:
+        bad.append("footprint is missing " + ", ".join(missing)
+                   + " (write null with a note where the datasheet is silent)")
+
+    oid = fp.get("package_outline_id")
+    pkg = str(doc.get("package") or "").strip()
+    if _blank(oid):
+        bad.append("footprint.package_outline_id is required (the datasheet's "
+                   "package-group number)")
+    elif pkg and not str(oid).strip().upper().startswith(pkg.upper()):
+        bad.append(f"footprint.package_outline_id {oid!r} is not a variant of "
+                   f"the card's package {pkg!r}")
+    if _blank(fp.get("outline_source")):
+        bad.append("footprint.outline_source is required (datasheet figure/page)")
+
+    if _blank(fp.get("land_pattern_ref")) and _blank(fp.get("land_pattern_note")):
+        bad.append("footprint.land_pattern_ref is null — land_pattern_note "
+                   "must say why")
+
+    h = fp.get("body_height_mm")
+    if h is None:
+        if _blank(fp.get("body_height_source")):
+            bad.append("footprint.body_height_mm is null — body_height_source "
+                       "must say why")
+    else:
+        hv = _num(h)
+        if hv is None or hv <= 0 or isinstance(h, bool):
+            bad.append(f"footprint.body_height_mm must be a positive number "
+                       f"[mm] or null; got {h!r}")
+        else:
+            if _blank(fp.get("body_height_source")):
+                bad.append("footprint.body_height_source is required "
+                           "(figure + dimension)")
+            size = doc.get("package_size_mm")
+            ph = _num(size.get("height_mm")) if isinstance(size, dict) else None
+            if ph is not None and abs(ph - hv) > 1e-9:
+                bad.append(f"footprint.body_height_mm {hv} disagrees with "
+                           f"package_size_mm.height_mm {ph} — one of them is "
+                           f"mis-transcribed")
+
+    tab = fp.get("top_tab_mm")
+    if tab is None:
+        if _blank(fp.get("top_tab_note")):
+            bad.append("footprint.top_tab_mm is null — top_tab_note must say "
+                       "why (not published / no top tab)")
+    elif not isinstance(tab, dict):
+        bad.append(f"footprint.top_tab_mm must be a mapping "
+                   f"{{length_mm, width_mm, source}} or null; got {tab!r}")
+    else:
+        for k in ("length_mm", "width_mm"):
+            v = _num(tab.get(k))
+            if v is None or v <= 0:
+                bad.append(f"footprint.top_tab_mm.{k} must be a positive "
+                           f"number [mm]; got {tab.get(k)!r}")
+        if _blank(tab.get("source")):
+            bad.append("footprint.top_tab_mm.source is required "
+                       "(datasheet figure/page)")
+
+    g = fp.get("compatibility_group")
+    if _blank(g) or not _GROUP_RE.match(str(g)):
+        bad.append(f"footprint.compatibility_group must be lower-case letters, "
+                   f"digits and underscores (e.g. qdpak_750_1200); got {g!r}")
+    if _blank(fp.get("compatibility_basis")):
+        bad.append("footprint.compatibility_basis is required (who or which "
+                   "document says these parts share one land pattern)")
+    return bad
+
+
+def _footprint_of(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The row's footprint summary — ``None`` when the card has no block."""
+    fp = doc.get("footprint")
+    if not isinstance(fp, dict):
+        return None
+    tab = fp.get("top_tab_mm")
+    return {
+        "package_outline_id": fp.get("package_outline_id"),
+        "land_pattern_ref": fp.get("land_pattern_ref"),
+        "body_height_mm": _num(fp.get("body_height_mm")),
+        "top_tab_mm": ({"length_mm": _num(tab.get("length_mm")),
+                        "width_mm": _num(tab.get("width_mm"))}
+                       if isinstance(tab, dict) else None),
+        "compatibility_group": fp.get("compatibility_group"),
+    }
+
+
+def _fmt_mm(v: float) -> str:
+    return f"{v:g}"
+
+
+def footprint_groups(rows: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Catalogue rows -> ``{group: {parts, heights_mm, top_tabs_mm, warning}}``.
+
+    ``warning`` is ONE line, or ``None`` when every part in the group has the
+    same published height and the same published top tab.  A value no card
+    publishes is never read as "equal": the line says how many are unknown.
+    """
+    groups: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        fp = r.get("footprint") if isinstance(r, dict) else None
+        if not fp or not fp.get("compatibility_group"):
+            continue
+        g = groups.setdefault(str(fp["compatibility_group"]),
+                              {"parts": [], "heights_mm": {}, "top_tabs_mm": {}})
+        g["parts"].append(r["part"])
+        g["heights_mm"][r["part"]] = fp.get("body_height_mm")
+        g["top_tabs_mm"][r["part"]] = fp.get("top_tab_mm")
+    for g in groups.values():
+        n = len(g["parts"])
+        clauses: List[str] = []
+        hs = sorted({h for h in g["heights_mm"].values() if h is not None})
+        if len(hs) > 1:
+            clauses.append("body height differs ("
+                           + " / ".join(_fmt_mm(h) for h in hs) + " mm)")
+        tabs = sorted({(t["length_mm"], t["width_mm"])
+                       for t in g["top_tabs_mm"].values() if t})
+        if len(tabs) > 1:
+            clauses.append("top tab differs ("
+                           + " / ".join(f"{_fmt_mm(a)}×{_fmt_mm(b)}"
+                                        for a, b in tabs) + " mm)")
+        n_h_unk = sum(1 for h in g["heights_mm"].values() if h is None)
+        n_t_unk = sum(1 for t in g["top_tabs_mm"].values() if not t)
+        if n > 1 and n_h_unk:
+            clauses.append(f"height not published on {n_h_unk} of {n}")
+        if n > 1 and n_t_unk:
+            clauses.append(f"top tab not published on {n_t_unk} of {n}")
+        g["warning"] = ("Same land pattern, but " + "; ".join(clauses)
+                        + " — check heatsink contact and clearance."
+                        if clauses else None)
+    return groups
 
 
 def write_card(doc: Dict[str, Any], *, overwrite: bool = False) -> Path:
@@ -1064,6 +1245,10 @@ class DeviceCard:
             "price": self.unit_price(),
             "image": self.doc.get("image"),
             "package_svg": self.package_outline_svg(),
+            # The PCB side (owner 2026-09-26): outline ID, land-pattern
+            # reference, height, top tab and the compatibility group the
+            # catalogue's "fits the selected board" filter reads.
+            "footprint": _footprint_of(self.doc),
             "suggested_parallel": (None if i_switch_rms_A is None else
                                    self.suggested_parallel(i_switch_rms_A)),
             "datasheet_url": self.doc.get("datasheet_url"),

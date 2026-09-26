@@ -1084,6 +1084,145 @@ def mount_path(*, g_w_per_k: float,
 
 
 # ---------------------------------------------------------------------------
+# The ROBOT LINK — the arm itself heats up (2026-09-26)
+# ---------------------------------------------------------------------------
+# ``mount_path`` above is the machine bolted to an INFINITE sink: correct for a
+# machined test bench, wrong for a robot joint, whose "sink" is a few hundred
+# grams of aluminium (or steel, or moulded plastic) that itself only loses heat
+# to the room by natural convection and radiation off its own skin.  On a small
+# machine (e.g. a 25 g Ø12 finger motor at ~200 W into the mount) that arm does
+# not sit at ambient — it climbs until ITS OWN surface sheds what the motor is
+# handing it, and a person's finger on it is limited by IEC 60335's 70 °C touch
+# rule, not by the winding's insulation class.
+#
+# The model adds exactly ONE extra node: the link is a solid cylinder (one of
+# three fixed presets), still air + radiation off its own surface (the same
+# Churchill–Chu + linearised-radiation pair ``outer_still`` uses, on a smaller
+# diameter), and its own Σm·c_p for a duty cycle's transient.  The bolted
+# contact conductance (``mount_g_w_per_k``) is UNCHANGED — it is still an INPUT
+# nobody here can predict (bolt pattern, contact area, interface) — this
+# section only answers "how hot does the arm get, and how fast does it move".
+
+#: Three sizes, as one solid cylinder standing in for the arm segment the motor
+#: is bolted to.  Deliberately a crude shape (a real link is a hollow, ribbed
+#: casting with a far larger cooling surface per kilogram) — stated in the
+#: HelpTip so a chosen preset is never mistaken for a CAD measurement:
+#:   finger — 60 mm long,  16 mm across (a small end-effector segment)
+#:   wrist  — 120 mm long, 40 mm across (a wrist/forearm link)
+#:   arm    — 250 mm long, 80 mm across (an upper-arm link)
+LINK_PRESETS: Dict[str, Dict[str, float]] = {
+    "finger": {"length_m": 0.060, "diameter_m": 0.016},
+    "wrist":  {"length_m": 0.120, "diameter_m": 0.040},
+    "arm":    {"length_m": 0.250, "diameter_m": 0.080},
+}
+
+#: {material: (density kg/m³, specific heat J/kg·K)} — textbook room-temperature
+#: figures, the same standard this project already keeps in
+#: ``thermal_capacities.CP_DEFAULT`` for the machine's own parts.  Only mass
+#: (hence heat capacity) is material-specific here: the link's OWN surface
+#: film (still air + radiation) does not know what is inside the skin.
+LINK_MATERIALS: Dict[str, Dict[str, float]] = {
+    "aluminium": {"density_kg_m3": 2700.0, "cp_j_per_kgk": 896.0},
+    "steel":     {"density_kg_m3": 7850.0, "cp_j_per_kgk": 480.0},
+    "plastic":   {"density_kg_m3": 1200.0, "cp_j_per_kgk": 1500.0},
+}
+
+#: IEC 60335-1 Annex, metal handle touched briefly in normal use — the fixed
+#: limit this joint is judged against, beside the winding's insulation class
+#: and the magnet's card.  Not a setting: the owner's ask is a machine that
+#: cannot be rated hot enough to burn whoever picks up the arm.
+LINK_TOUCH_LIMIT_C = 70.0
+
+
+def robot_link_geometry(preset: str, material: str) -> Dict[str, Any]:
+    """The preset's fixed numbers, resolved — dimensions, area, mass, capacity.
+
+    An unknown preset/material name falls back to the middle of each table
+    ("wrist" / "aluminium") rather than raising: this is a UI default, not a
+    request the router refuses, so it degrades gracefully to a debug tool
+    (unit test, curl, stale query string) that types nothing at all.
+    """
+    preset_key = str(preset or "").strip().lower()
+    material_key = str(material or "").strip().lower()
+    if preset_key not in LINK_PRESETS:
+        preset_key = "wrist"
+    if material_key not in LINK_MATERIALS:
+        material_key = "aluminium"
+    p = LINK_PRESETS[preset_key]
+    m = LINK_MATERIALS[material_key]
+    length_m = float(p["length_m"])
+    diameter_m = float(p["diameter_m"])
+    # Cylinder, both round ends included: the whole skin the film acts on.
+    area_m2 = (math.pi * diameter_m * length_m
+              + 2.0 * math.pi * (diameter_m / 2.0) ** 2)
+    volume_m3 = math.pi * (diameter_m / 2.0) ** 2 * length_m
+    mass_kg = volume_m3 * float(m["density_kg_m3"])
+    return {
+        "preset": preset_key,
+        "material": material_key,
+        "length_mm": round(length_m * 1e3, 1),
+        "diameter_mm": round(diameter_m * 1e3, 1),
+        "area_m2": area_m2,
+        "volume_m3": volume_m3,
+        "mass_kg": mass_kg,
+        "cp_J_per_kgK": float(m["cp_j_per_kgk"]),
+        "C_J_per_K": mass_kg * float(m["cp_j_per_kgk"]),
+    }
+
+
+def robot_link_path(*, q_w: float, t_ambient_c: float,
+                    preset: str = "wrist", material: str = "aluminium",
+                    emissivity: float = EMISSIVITY_DEFAULT,
+                    props: Optional[FluidProps] = None) -> Dict[str, Any]:
+    """The link, as a Robin sink to ambient — ``t_link_c`` solved so that its
+    own still-air + radiation film carries exactly ``q_w`` off its surface.
+
+    Same fixed-point shape as ``outer_still``/``_still_film`` (Nu depends on
+    ΔT, so ``h`` is only known once ``t_link_c`` is), but solved HERE rather
+    than left to the caller's own pass loop: the link is not a meshed surface,
+    it is one extra lumped node, and closing this one small loop locally is
+    simpler than threading a fifth wall into ``routes.thermal``'s iteration.
+    Five picard passes land within a hundredth of a kelvin on every case this
+    module's own tests run (h moves as ΔT^0.15 once radiation is in it, the
+    same weak dependence ``outer_still`` documents).
+
+    ``q_w`` ≤ 0 is a link nobody is heating — it sits at ambient and the touch
+    limit cannot bind.
+    """
+    geo = robot_link_geometry(preset, material)
+    area = max(float(geo["area_m2"]), 1e-6)
+    d = max(float(geo["diameter_mm"]) * 1e-3, 1e-4)
+    amb = float(t_ambient_c)
+    q = max(float(q_w), 0.0)
+    if q <= 0.0:
+        t_link = amb
+        h_conv = h_rad = 0.0
+    else:
+        t_link = amb + 10.0
+        for _ in range(25):
+            film = _still_film(t_wall_c=t_link, t_ambient_c=amb, d_m=d,
+                               nu_floor=0.36, props=props)
+            h_conv = float(film["h"])
+            h_rad = radiation_h(t_link, amb, emissivity)
+            h_tot = max(h_conv + h_rad, 1e-9)
+            t_new = amb + q / (h_tot * area)
+            if abs(t_new - t_link) < 1e-4:
+                t_link = t_new
+                break
+            t_link = 0.5 * (t_link + t_new)
+    g_eff = q / max(t_link - amb, 1e-9) if q > 0.0 else 0.0
+    over_k = t_link - LINK_TOUCH_LIMIT_C
+    return dict(geo, t_link_c=t_link, h_conv=h_conv, h_rad=h_rad,
+               G_W_per_K=g_eff, heat_removed_W=q,
+               touch_limit_c=LINK_TOUCH_LIMIT_C, over_touch_K=over_k,
+               binds_touch_limit=bool(over_k > 0.0),
+               note=(f"{geo['preset']} link ({geo['material']}): "
+                     f"{geo['area_m2'] * 1e4:.0f} cm², {geo['mass_kg'] * 1e3:.0f} g "
+                     f"-> {t_link:.1f} °C carrying {q:.1f} W in {amb:.0f} °C air "
+                     f"(touch limit {LINK_TOUCH_LIMIT_C:.0f} °C)"))
+
+
+# ---------------------------------------------------------------------------
 # The AXIAL FACES — what a still-air machine loses off its two ends
 # ---------------------------------------------------------------------------
 # User, 2026-09-14: on this joint the 24 coils stand PROUD of the core on both

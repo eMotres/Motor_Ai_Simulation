@@ -28,7 +28,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
 
-__all__ = ["COOL_MODES", "BORE_MODES", "END_FACE_MODES", "cooling_fields",
+__all__ = ["COOL_MODES", "BORE_MODES", "END_FACE_MODES", "MOUNT_MODES",
+           "LINK_PRESETS", "LINK_MATERIALS", "cooling_fields",
            "cooling_issue", "thermal_panel_settings",
            "coupled_iteration_settings"]
 
@@ -54,6 +55,11 @@ END_FACE_MODES = ("still", "none")
 #: the airflow — is the 40 mm CIANO14; ``housed`` is every other machine and the
 #: model this project has always solved.
 FRAME_MODES = ("housed", "open")
+#: The mount's far side (2026-09-26): "sink" (today's model, unchanged) or
+#: "link" (the arm heats up — see cooling_models.robot_link_path).
+MOUNT_MODES = ("sink", "link")
+LINK_PRESETS = ("finger", "wrist", "arm")
+LINK_MATERIALS = ("aluminium", "steel", "plastic")
 
 
 def _num(v: Any, default: float) -> float:
@@ -170,6 +176,19 @@ def cooling_fields(s: Mapping[str, Any]) -> Dict[str, Any]:
             out["mount_g_w_per_k"] = mount_g
             if str(s.get("mountT") or "").strip():
                 out["mount_temp_c"] = _num(s.get("mountT"), ambient)
+            # THE MOUNT'S OTHER SIDE (2026-09-26): "sink" (default) is the rule
+            # above, unchanged.  "link" says the far side of the joint is a
+            # robot ARM that heats up — see cooling_models.robot_link_path —
+            # and rides ONLY with a mount conductance already typed, same gate
+            # as `mountT`: a link preset beside no conductance is exactly the
+            # unused cache-splitting parameter the module docstring is about.
+            mount_mode = str(s.get("mountMode") or "sink").strip().lower()
+            if mount_mode == "link":
+                out["mount_mode"] = "link"
+                out["link_preset"] = _mode(s.get("linkPreset"), LINK_PRESETS,
+                                           "wrist")
+                out["link_material"] = _mode(s.get("linkMaterial"),
+                                             LINK_MATERIALS, "aluminium")
     return out
 
 
@@ -245,9 +264,15 @@ def cooling_words(c: Mapping[str, Any]) -> str:
         bits.append("still air at %g °C" % amb if v <= 0.0
                     else "air %g m/s at %g °C" % (v, amb))
     if _num(c.get("mount_g_w_per_k"), 0.0) > 0.0:
-        bits.append("mount %g W/K at %g °C"
-                    % (_num(c.get("mount_g_w_per_k"), 0.0),
-                       _num(c.get("mount_temp_c"), amb)))
+        if str(c.get("mount_mode") or "sink") == "link":
+            bits.append("mount %g W/K into a %s %s link"
+                        % (_num(c.get("mount_g_w_per_k"), 0.0),
+                           str(c.get("link_preset") or "wrist"),
+                           str(c.get("link_material") or "aluminium")))
+        else:
+            bits.append("mount %g W/K at %g °C"
+                        % (_num(c.get("mount_g_w_per_k"), 0.0),
+                           _num(c.get("mount_temp_c"), amb)))
     bore = str(c.get("bore_mode") or "none")
     if bore == "air":
         bits.append("bore air %g m/s" % _num(c.get("bore_air_speed_mps"), 0.0))

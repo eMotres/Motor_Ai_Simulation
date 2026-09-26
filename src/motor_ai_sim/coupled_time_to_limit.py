@@ -77,15 +77,19 @@ from motor_ai_sim.thermal_duty_cycle import DutyCycleError
 #: The part names this module judges, in the order a reader meets them.
 PARTS: Tuple[str, ...] = ("winding", "magnet", "bearing")
 
-#: Which network NODE each part's transient rides.
+#: Which network NODE each part's transient rides.  ``link`` (2026-09-26) rides
+#: the STATOR node — the mount is bolted to the stator's own end annulus, so
+#: that is the node its temperature tracks as the current moves, the same way
+#: the bearing seat rides the rotor.
 PART_NODE: Dict[str, str] = {"winding": "winding", "magnet": "magnet",
-                             "bearing": "rotor"}
+                             "bearing": "rotor", "link": "stator"}
 
 #: What each part's judged quantity IS, for the notes.
 PART_QUANTITY: Dict[str, str] = {
     "winding": "the winding hot spot",
     "magnet": "the hottest magnet element",
     "bearing": "the bearing seat",
+    "link": "the robot link (mount_mode='link') — touch temperature",
 }
 
 #: A part is "over its limit" only past this much — a tenth of a kelvin over a
@@ -291,6 +295,25 @@ def part_limits(*, thermal_result: Mapping[str, Any],
             "bearing", "rotor", float(b_lim), seat - r_mean, seat,
             "%s; the seat is carried as a constant %.2f K from the rotor node, "
             "fitted to this map" % (b_src, seat - r_mean)))
+
+    # THE ROBOT LINK (2026-09-26): only present when this map was solved with
+    # mount_mode='link' — cooling_models.robot_link_path's own fixed IEC 60335
+    # touch limit (70 °C), carried as a constant offset from the STATOR node
+    # exactly like the bearing seat rides the rotor's.  Absent (not judged) on
+    # every machine bolted to an ideal sink, which is every machine before
+    # today.
+    link_blk = ((thermal_result or {}).get("cooling") or {}).get("mount")
+    link_blk = (link_blk or {}).get("link") if isinstance(link_blk, Mapping) else None
+    s_mean = _comp(thermal_result, "stator", "avg")
+    if isinstance(link_blk, Mapping) and link_blk.get("t_link_c") is not None \
+            and s_mean is not None:
+        t_link = float(link_blk["t_link_c"])
+        touch_lim = float(link_blk.get("touch_limit_c") or 70.0)
+        out.append(PartLimit(
+            "link", "stator", touch_lim, t_link - s_mean, t_link,
+            "fixed touch limit, IEC 60335 (%.0f °C); the link's temperature is "
+            "carried as a constant %.2f K from the stator node, fitted to this "
+            "map" % (touch_lim, t_link - s_mean)))
     return out
 
 
@@ -319,6 +342,24 @@ def _start_words(start: str) -> str:
     return "cold" if start == "cold" else "rated"
 
 
+def part_label(part: str) -> str:
+    """The name a reader sees for one judged part.
+
+    Every other part names a card (the insulation class, the magnet grade, the
+    grease) that a reader can look up; ``link`` names none — it is a fixed
+    policy limit (IEC 60335 touch temperature), not a machine property — so it
+    states the number inline rather than leaving a bare word the reader has to
+    chase back to this module.
+    """
+    return "link (touch %.0f °C)" % LINK_TOUCH_LIMIT_C if part == "link" else str(part)
+
+
+#: Mirrors ``cooling_models.LINK_TOUCH_LIMIT_C`` for the label above — not
+#: imported at module load (this module must not need the FEM stack to answer
+#: a pure string), only where it is actually printed.
+LINK_TOUCH_LIMIT_C = 70.0
+
+
 def headline(block: Optional[Mapping[str, Any]]) -> str:
     """The ONE sentence — the loop logs it and the panel prints it.
 
@@ -339,7 +380,7 @@ def headline(block: Optional[Mapping[str, Any]]) -> str:
         t = _num(blk.get("time_to_limit_s"))
         if t is not None:
             times.append("%s from %s" % (fmt_seconds(t), _start_words(start)))
-    head = ("over the %s limit by %s K" % (part, "%.0f" % over)
+    head = ("over the %s limit by %s K" % (part_label(part), "%.0f" % over)
             if (part and over is not None) else "over a limit")
     if not times:
         return ("%s — the step response of this network never reaches %s, so no "

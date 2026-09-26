@@ -406,7 +406,7 @@ def _search_scale(loss: Mapping[str, Any], p_cu_ref_w: float,
                          "come from the current: at s → 0 (iron, magnet eddy and "
                          "the mechanical watts alone) the %s is already %.1f K "
                          "over its limit, so there is no continuous rating at "
-                         "this speed" % (part, _worst(lo_rows)[0]))}
+                         "this speed" % (_ttl.part_label(part), _worst(lo_rows)[0]))}
 
     hi = 1.0
     while over(hi) < -tol_k and hi < s_max:

@@ -714,6 +714,56 @@ def test_the_mount_is_an_input_and_its_absence_is_a_statement():
 
 
 # ---------------------------------------------------------------------------
+# (g-2) the robot link — the arm itself heats up (2026-09-26)
+# ---------------------------------------------------------------------------
+
+def test_a_link_carrying_no_heat_sits_at_ambient_and_never_binds():
+    r = cm.robot_link_path(q_w=0.0, t_ambient_c=40.0, preset="wrist",
+                           material="aluminium")
+    assert r["t_link_c"] == pytest.approx(40.0)
+    assert r["G_W_per_K"] == 0.0
+    assert r["binds_touch_limit"] is False
+
+
+def test_a_small_link_under_the_mount_heat_of_a_finger_motor_blows_past_touch():
+    # The owner's Ø12 case: ~200 W into the mount, a finger-sized link.  The
+    # whole point of this feature — a link this small cannot shed that much.
+    r = cm.robot_link_path(q_w=200.0, t_ambient_c=40.0, preset="finger",
+                           material="aluminium")
+    assert r["t_link_c"] > cm.LINK_TOUCH_LIMIT_C
+    assert r["binds_touch_limit"] is True
+    assert r["G_W_per_K"] > 0.0
+
+
+def test_a_bigger_link_of_the_same_material_runs_cooler():
+    small = cm.robot_link_path(q_w=20.0, t_ambient_c=40.0, preset="finger",
+                               material="aluminium")
+    big = cm.robot_link_path(q_w=20.0, t_ambient_c=40.0, preset="arm",
+                             material="aluminium")
+    assert big["t_link_c"] < small["t_link_c"]
+    assert big["area_m2"] > small["area_m2"]
+    assert big["mass_kg"] > small["mass_kg"]
+
+
+def test_a_steel_link_has_more_capacity_than_aluminium_of_the_same_size():
+    al = cm.robot_link_path(q_w=10.0, t_ambient_c=40.0, preset="wrist",
+                            material="aluminium")
+    steel = cm.robot_link_path(q_w=10.0, t_ambient_c=40.0, preset="wrist",
+                               material="steel")
+    assert steel["mass_kg"] > al["mass_kg"]
+    assert steel["C_J_per_K"] > al["C_J_per_K"]
+    # Same shape, same film — the steady temperature should match closely.
+    assert steel["t_link_c"] == pytest.approx(al["t_link_c"], abs=0.5)
+
+
+def test_an_unknown_preset_or_material_falls_back_rather_than_raising():
+    r = cm.robot_link_path(q_w=10.0, t_ambient_c=40.0, preset="huge",
+                           material="unobtainium")
+    assert r["preset"] == "wrist"
+    assert r["material"] == "aluminium"
+
+
+# ---------------------------------------------------------------------------
 # (h) the axial faces — the end turns and the core ends of an open joint
 # ---------------------------------------------------------------------------
 # User 2026-09-14: the 24 coils stand PROUD of the core on both sides and the

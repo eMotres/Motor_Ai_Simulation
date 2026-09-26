@@ -295,6 +295,27 @@ def test_part_limits_read_the_offsets_off_the_map():
         thermal_result=PEAK_MAP, bearing_limit_c=150.0)}
 
 
+def test_the_robot_link_rides_the_stator_node_only_when_the_map_has_one():
+    """mount_mode='link' (2026-09-26) leaves cooling.mount.link on the map;
+    part_limits reads it as a fixed 70 degC touch limit offset from stator,
+    the same way the bearing seat rides the rotor."""
+    tr = dict(PEAK_MAP)
+    tr["cooling"] = {"mount": {"link": {"t_link_c": 95.0,
+                                        "touch_limit_c": 70.0}}}
+    got = {p.part: p for p in ttl.part_limits(thermal_result=tr)}
+    assert "link" in got
+    assert got["link"].node == "stator"
+    assert got["link"].limit_c == pytest.approx(70.0)
+    assert got["link"].at_point_c == pytest.approx(95.0)
+    assert got["link"].over is True
+    assert "touch 70" in ttl.part_label("link")
+
+    # A machine with no link block (mount_mode='sink', the default) grows no
+    # link row at all — bit-identical to before this feature existed.
+    assert "link" not in {p.part for p in ttl.part_limits(
+        thermal_result=PEAK_MAP)}
+
+
 def test_the_duration_words_are_the_ones_the_panel_prints():
     assert ttl.fmt_seconds(0.83) == "0.8 s"
     assert ttl.fmt_seconds(48.2) == "48 s"

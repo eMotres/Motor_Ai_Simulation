@@ -93,6 +93,11 @@ const COOL_MODES: readonly CoolMode[] = ['air', 'liquid', 'manual', 'none',
 const BORE_MODES: readonly BoreMode[] = ['none', 'air', 'liquid', 'still'];
 const END_FACE_MODES: readonly EndFaceMode[] = ['still', 'none'];
 const FRAME_MODES: readonly FrameMode[] = ['housed', 'open'];
+const MOUNT_MODES: readonly ('sink' | 'link')[] = ['sink', 'link'];
+const LINK_PRESETS: readonly ('finger' | 'wrist' | 'arm')[] =
+  ['finger', 'wrist', 'arm'];
+const LINK_MATERIALS: readonly ('aluminium' | 'steel' | 'plastic')[] =
+  ['aluminium', 'steel', 'plastic'];
 
 interface Slice<T> {
   data: T | null;
@@ -226,6 +231,18 @@ export interface ThermalState {
    *  blank field must stay blank rather than being filled with it, or a default
    *  would read as a number somebody chose. */
   mountT: string;
+  /** the mount's FAR SIDE (2026-09-26): 'sink' (default, unchanged — the mount
+   *  is held at mountT for ever) or 'link' (the far side is a robot ARM that
+   *  itself heats up — one extra node, still air + radiation off ONE preset
+   *  shape, judged against a fixed 70 °C touch limit).  Rides with mountG the
+   *  same way mountT does — no conductance, no link to speak of. */
+  mountMode: 'sink' | 'link';
+  /** the link's size, 'finger' | 'wrist' | 'arm' — see roboticsHelp for the
+   *  preset's own dimensions/mass/area. */
+  linkPreset: 'finger' | 'wrist' | 'arm';
+  /** the link's material, 'aluminium' | 'steel' | 'plastic' — only its mass
+   *  (hence heat capacity) is material-specific; the still-air film is not. */
+  linkMaterial: 'aluminium' | 'steel' | 'plastic';
   /** are the machine's AXIAL faces exposed?  'still' = the end turns and the
    *  core / magnet end faces are in the room's air. */
   endFaces: EndFaceMode;
@@ -292,7 +309,8 @@ const PERSISTED: (keyof ThermalState)[] = [
   'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
   'shaftExtMm', 'shaftExtSides',
   'frame', 'openAirSpeed',
-  'emissivity', 'mountG', 'mountT', 'endFaces', 'endFaceSides',
+  'emissivity', 'mountG', 'mountT', 'mountMode', 'linkPreset', 'linkMaterial',
+  'endFaces', 'endFaceSides',
   'maxIter', 'view', 'eqTemp', 'showFlux',
   // The local comparison stack rides the SAME path as every other remembered
   // field (localStorage + the server), so there is one way this tab remembers
@@ -343,6 +361,9 @@ export interface CoolingInputs {
   shaftExtMm: string; shaftExtSides: string;
   frame: FrameMode; openAirSpeed: string;
   emissivity: string; mountG: string; mountT: string;
+  mountMode: 'sink' | 'link';
+  linkPreset: 'finger' | 'wrist' | 'arm';
+  linkMaterial: 'aluminium' | 'steel' | 'plastic';
   endFaces: EndFaceMode; endFaceSides: string;
 }
 
@@ -352,7 +373,7 @@ type CoolingRequest = Pick<ThermalRequest,
   | 'bore_fluid' | 'bore_fluid_temp_in_c' | 'bore_flow_lpm'
   | 'shaft_ext_length_mm' | 'shaft_ext_sides' | 'frame' | 'open_air_speed_mps'
   | 'emissivity' | 'end_faces' | 'end_face_sides' | 'mount_g_w_per_k'
-  | 'mount_temp_c'>;
+  | 'mount_temp_c' | 'mount_mode' | 'link_preset' | 'link_material'>;
 
 export function coolingFields(s: CoolingInputs): CoolingRequest {
   const ambient = num(s.ambientT, 40);
@@ -423,6 +444,14 @@ export function coolingFields(s: CoolingInputs): CoolingRequest {
       ? (num(s.endFaceSides, 2) === 1 ? 1 : 2) : undefined,
     mount_g_w_per_k: mountG > 0 ? mountG : undefined,
     mount_temp_c: (mountG > 0 && mountTyped) ? num(s.mountT, ambient) : undefined,
+    // THE MOUNT'S FAR SIDE (2026-09-26).  Same gate as `mountT`: a link
+    // preset beside no conductance is the unused parameter this function
+    // exists to keep off the wire.  'sink' is not sent at all — it is the
+    // server's own default and today's bit-identical behaviour.
+    mount_mode: (mountG > 0 && s.mountMode === 'link') ? 'link' : undefined,
+    link_preset: (mountG > 0 && s.mountMode === 'link') ? s.linkPreset : undefined,
+    link_material: (mountG > 0 && s.mountMode === 'link')
+      ? s.linkMaterial : undefined,
   };
 }
 
@@ -509,7 +538,8 @@ function panelCooling(s: ThermalState): Record<string, string> {
     // …and the robotics block (2026-09-14).  `mountT` is included and may be
     // BLANK: the loop below drops empty strings, and an absent `mountT` is what
     // `cooling_fields` reads as "the ambient".
-    'emissivity', 'mountG', 'mountT', 'endFaces', 'endFaceSides'] as const;
+    'emissivity', 'mountG', 'mountT', 'mountMode', 'linkPreset',
+    'linkMaterial', 'endFaces', 'endFaceSides'] as const;
   const out: Record<string, string> = {};
   for (const k of KEYS) {
     const v = s[k];
@@ -696,6 +726,11 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     const v = readTherm<unknown>('mountT', '');
     return typeof v === 'number' ? String(v) : (typeof v === 'string' ? v : '');
   })(),
+  // "sink" by default and it has to be: today's behaviour, bit-identical,
+  // until somebody explicitly says the mount is a robot arm.
+  mountMode: readMode('mountMode', MOUNT_MODES, 'sink'),
+  linkPreset: readMode('linkPreset', LINK_PRESETS, 'wrist'),
+  linkMaterial: readMode('linkMaterial', LINK_MATERIALS, 'aluminium'),
   endFaces: readMode('endFaces', END_FACE_MODES, 'still' as EndFaceMode),
   endFaceSides: readStr('endFaceSides', '2'),
 

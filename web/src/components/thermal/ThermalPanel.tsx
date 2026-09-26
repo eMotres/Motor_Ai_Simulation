@@ -568,7 +568,8 @@ const ThermalPanel: React.FC = () => {
     coolMode, ambientT, airSpeed, fluid, tIn, hConv, flowLpm,
     boreMode, boreAirSpeed, boreFluid, boreTIn, boreFlowLpm,
     shaftExtMm, shaftExtSides, frame, openAirSpeed,
-    emissivity, mountG, mountT, endFaces, endFaceSides,
+    emissivity, mountG, mountT, mountMode, linkPreset, linkMaterial,
+    endFaces, endFaceSides,
     view, eqTemp, showFlux, geom, geomBusy, geomErr,
   } = st;
   const res = st.field.data;
@@ -1026,6 +1027,39 @@ const ThermalPanel: React.FC = () => {
               <NumField label={ROBOTICS_HELP.mountT.label} value={mountT}
                 onChange={(v) => setField('mountT', v)} width={196}
                 tip={ROBOTICS_HELP.mountT.tip} />
+              <Box sx={CTRL_ROW}>
+                <Select size="small" value={mountMode}
+                  onChange={(e) => setField('mountMode', e.target.value as 'sink' | 'link')}
+                  sx={{ fontSize: 11, height: 30, minWidth: 210 }}>
+                  <MenuItem value="sink" sx={{ fontSize: 11 }}>Mount into: ideal heat sink</MenuItem>
+                  <MenuItem value="link" sx={{ fontSize: 11 }}>Mount into: robot link (heats up)</MenuItem>
+                </Select>
+                <HelpTip title={ROBOTICS_HELP.mountMode.tip} />
+              </Box>
+              {mountMode === 'link' && (
+                <>
+                  <Box sx={CTRL_ROW}>
+                    <Select size="small" value={linkPreset}
+                      onChange={(e) => setField('linkPreset', e.target.value as typeof linkPreset)}
+                      sx={{ fontSize: 11, height: 30, minWidth: 140 }}>
+                      <MenuItem value="finger" sx={{ fontSize: 11 }}>finger</MenuItem>
+                      <MenuItem value="wrist" sx={{ fontSize: 11 }}>wrist</MenuItem>
+                      <MenuItem value="arm" sx={{ fontSize: 11 }}>arm</MenuItem>
+                    </Select>
+                    <HelpTip title={ROBOTICS_HELP.linkPreset.tip} />
+                  </Box>
+                  <Box sx={CTRL_ROW}>
+                    <Select size="small" value={linkMaterial}
+                      onChange={(e) => setField('linkMaterial', e.target.value as typeof linkMaterial)}
+                      sx={{ fontSize: 11, height: 30, minWidth: 140 }}>
+                      <MenuItem value="aluminium" sx={{ fontSize: 11 }}>aluminium</MenuItem>
+                      <MenuItem value="steel" sx={{ fontSize: 11 }}>steel</MenuItem>
+                      <MenuItem value="plastic" sx={{ fontSize: 11 }}>plastic</MenuItem>
+                    </Select>
+                    <HelpTip title={ROBOTICS_HELP.linkMaterial.tip} />
+                  </Box>
+                </>
+              )}
               <Box sx={CTRL_ROW}>
                 <Select size="small" value={endFaces}
                   onChange={(e) => setField('endFaces', e.target.value as EndFaceMode)}

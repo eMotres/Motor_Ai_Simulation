@@ -289,6 +289,42 @@ def test_b_the_mount_carries_the_machine(robot):
     assert b["housing_W"] < 0.15 * b["losses_W"], b
 
 
+def test_b1b_mount_mode_link_reduces_the_mount_heat_flow_and_binds_touch(robot):
+    """mount_mode='link' (2026-09-26): the mount's far side is a small robot
+    link instead of an infinite sink held at 40 degC.  On this same machine and
+    the same 2 W/K, a FINGER-sized link cannot shed what the mount hands it —
+    it climbs past the fixed 70 degC touch limit and that reduces the mount's
+    own heat flow (a hotter sink means a smaller Delta T across the same G).
+
+    The default ('sink') path must stay BIT-IDENTICAL: mount_mode is a new
+    parameter with a default that reproduces every payload from before it
+    existed.
+    """
+    linked = _solve(**ROBOT, mount_g_w_per_k=MOUNT_G, mount_temp_c=AMBIENT_C,
+                    mount_mode="link", link_preset="finger",
+                    link_material="aluminium")
+    m_link = linked["cooling"]["mount"]
+    m_sink = robot["cooling"]["mount"]
+
+    assert m_link["mount_mode"] == "link"
+    assert m_link["link"] is not None
+    assert m_link["link"]["preset"] == "finger"
+    assert m_link["link"]["binds_touch_limit"] is True
+    assert m_link["link"]["t_link_c"] > m_link["link"]["touch_limit_c"]
+    assert m_link["t_sink_c"] == pytest.approx(m_link["link"]["t_link_c"], abs=0.05)
+
+    # A hotter sink under the same conductance carries LESS heat away.
+    assert m_link["heat_removed_W"] < m_sink["heat_removed_W"]
+
+    # THE IDEAL-SINK PATH IS UNCHANGED: no mount_mode given == 'sink' given.
+    default_sink = _solve(**ROBOT, mount_g_w_per_k=MOUNT_G,
+                          mount_temp_c=AMBIENT_C)
+    assert default_sink["cooling"]["mount"]["link"] is None
+    assert default_sink["cooling"]["mount"]["heat_removed_W"] == pytest.approx(
+        m_sink["heat_removed_W"], rel=1e-9)
+    assert default_sink["cooling"]["mount"]["mount_mode"] == "sink"
+
+
 def test_b2_the_budget_closes_on_the_four_paths(robot):
     """Every watt that leaves is on a named line, and they add up.
 

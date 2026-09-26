@@ -57,6 +57,7 @@ export const L13_SHARES = {
  *  jump straight to the state. */
 export type RoboticsControlKey =
   | 'coolMode' | 'ambientT' | 'emissivity' | 'mountG' | 'mountT'
+  | 'mountMode' | 'linkPreset' | 'linkMaterial'
   | 'endFaces' | 'endFaceSides'
   | 'boreMode' | 'shaftExtMm' | 'shaftExtSides'
   | 'frame' | 'openAirSpeed';
@@ -99,6 +100,21 @@ export const ROBOTICS_HELP: Record<RoboticsControlKey, RoboticsControl> = {
     label: 'mount °C (blank = room air)',
     short: 'mount °C',
     tip: 'The temperature the mount is HELD at, °C — it enters as an infinite sink at exactly this value. BLANK means the room air temperature above, and blank is the honest default: the arm is not a heat source of its own, and pre-filling the field would make a default look like a number somebody measured. Type one when the arm is known to run warm — a neighbouring joint, a hot enclosure — and the mount then carries G·(T_housing − this) instead.',
+  },
+  mountMode: {
+    label: 'Mount into',
+    short: 'mount into',
+    tip: '"Ideal heat sink" is today\'s model: the mount is held at mount °C for ever, as if the arm behind it were infinitely massive. "Robot link (heats up)" is honest about a small joint: the arm itself only sheds heat by still air + radiation off ONE fixed shape (a size preset and a material below), so it climbs until its own skin balances what the mount hands it — and it is judged against a fixed 70 °C touch limit, the same rule everything else on this joint is judged against.',
+  },
+  linkPreset: {
+    label: 'Link size',
+    short: 'link size',
+    tip: 'The arm segment the motor is bolted to, as ONE solid cylinder: finger — 60 mm long, Ø16 mm (a small end-effector segment); wrist — 120 mm long, Ø40 mm; arm — 250 mm long, Ø80 mm. A real link is a hollow, ribbed casting with more cooling surface per kilogram than a bare cylinder, so these are a conservative (hot) stand-in, not a CAD measurement.',
+  },
+  linkMaterial: {
+    label: 'Link material',
+    short: 'link material',
+    tip: 'What the arm segment is made of — only its MASS (hence heat capacity, for how fast it warms up in a duty cycle) is material-specific here; the still-air film on its skin does not know what is inside. Aluminium 2700 kg/m³, steel 7850 kg/m³, plastic 1200 kg/m³ — a steel link of the same size takes about 3× longer to reach the same temperature as aluminium.',
   },
   endFaces: {
     label: 'End faces',

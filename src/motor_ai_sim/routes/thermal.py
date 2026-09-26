@@ -1064,6 +1064,8 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
                      shaft_ext_diameter_mm=0.0, shaft_ext_sides=2,
                      frame="housed", open_air_speed_mps=0.0,
                      emissivity=0.9, mount_g_w_per_k=0.0, mount_temp_c=None,
+                     mount_mode="sink", link_preset="wrist",
+                     link_material="aluminium",
                      end_faces="still", end_face_sides=2) -> tuple:
     """What makes two thermal requests the SAME request.
 
@@ -1165,6 +1167,14 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
         _base = _base + ("mount", round(_g, 5),
                          (None if mount_temp_c is None
                           else round(float(mount_temp_c), 2)))
+        # THE MOUNT'S FAR SIDE (2026-09-26): 'sink' is not appended at all — it
+        # is the tuple every cache entry from before this feature was stored
+        # under — but 'link' is a genuinely different boundary condition (the
+        # sink temperature is now SOLVED, not held), and its own preset and
+        # material pick a different film and a different capacity.
+        if str(mount_mode or "sink").strip().lower() == "link":
+            _base = _base + ("link", str(link_preset).strip().lower(),
+                             str(link_material).strip().lower())
     return _base
 
 
@@ -3025,6 +3035,15 @@ def solve_thermal_field(
     emissivity:         float = 0.9,
     mount_g_w_per_k:    float = 0.0,
     mount_temp_c:       Optional[float] = None,
+    # "sink" (default, unchanged) holds the mount at `mount_temp_c` (or
+    # ambient) for ever — the machined-test-bench case.  "link" (2026-09-26)
+    # instead treats the far side of `mount_g_w_per_k` as a robot ARM that
+    # heats up: one extra lumped node, still air + radiation off its own
+    # surface (cooling_models.robot_link_path), judged against the fixed
+    # IEC 60335 70 °C touch limit.  See THE ROBOT LINK in cooling_models.
+    mount_mode:         str   = "sink",
+    link_preset:        str   = "wrist",
+    link_material:      str   = "aluminium",
     end_faces:          str   = "still",
     end_face_sides:     int   = 2,
     magnet_temp_c:      Optional[float] = None,
@@ -3294,6 +3313,22 @@ def solve_thermal_field(
     # bolted to an arm in the same room is the answer nobody has to type.
     mount_g_w_per_k = float(mount_g_w_per_k or 0.0)
     t_mount_c = float(ambient_temp if mount_temp_c is None else mount_temp_c)
+    # THE MOUNT'S OWN OTHER SIDE (2026-09-26).  "sink" is today's model,
+    # unchanged: the far side of `mount_g_w_per_k` is held at `t_mount_c` for
+    # ever.  "link" instead treats it as a robot ARM that itself only loses
+    # heat to the room by natural convection + radiation off ONE fixed preset
+    # shape — see cooling_models.robot_link_path.  `t_mount_c` then becomes a
+    # SEED (ambient) that the wall-iteration loop below walks to the fixed
+    # point, exactly like the housing's own still-air film.
+    _mount_mode_in = str(mount_mode or "sink").strip().lower()
+    if _mount_mode_in not in ("sink", "link"):
+        raise _bad("mount_mode", mount_mode, "bad_value",
+                   "mount_mode must be 'sink' (the mount is held at "
+                   "mount_temp_c for ever) or 'link' (the mount is a robot "
+                   "arm that heats up — link_preset + link_material pick its "
+                   "shape and material)",
+                   error=f"unknown mount_mode {mount_mode!r}")
+    _mount_link_mode = _mount_mode_in == "link"
 
     # Two parameters survive only so an old client is not broken by a 422 for
     # sending them; both are IGNORED and both say so in the payload.  Silence
@@ -3333,8 +3368,9 @@ def solve_thermal_field(
         shaft_ext_sides=shaft_ext_sides,
         frame=frame, open_air_speed_mps=open_air_speed_mps,
         emissivity=emissivity, mount_g_w_per_k=mount_g_w_per_k,
-        mount_temp_c=mount_temp_c, end_faces=end_faces,
-        end_face_sides=end_face_sides)
+        mount_temp_c=mount_temp_c, mount_mode=mount_mode,
+        link_preset=link_preset, link_material=link_material,
+        end_faces=end_faces, end_face_sides=end_face_sides)
     # THE MAGNET TEMPERATURE, appended only when the request carries one — the
     # same rule `_field_snap_key_fields` follows, and for the same reason: with
     # no magnet temperature the key must stay byte-identical to the one every
@@ -3958,6 +3994,8 @@ def solve_thermal_field(
     from motor_ai_sim.simulation import cooling_models as _cm3
     _mount_path = _cm3.mount_path(g_w_per_k=mount_g_w_per_k, t_mount_c=t_mount_c)
     _mount_on = bool(float(_mount_path["G_W_per_K"]) > 0.0)
+    _mount_sink_entry: Optional[Dict[str, Any]] = None
+    _link_report: Optional[Dict[str, Any]] = None
     if _mount_on:
         if not (tags == DOM_STATOR).any():
             raise _bad("mount_g_w_per_k", mount_g_w_per_k, "bad_value",
@@ -3966,13 +4004,15 @@ def solve_thermal_field(
                        "model, or this mesh resolved none).  Include the stator, "
                        "or set mount_g_w_per_k = 0.",
                        error="no stator elements in this cross-section")
-        _sinks.append({"name": "mount", "tags": [DOM_STATOR],
-                       "G_W_per_K": float(_mount_path["G_W_per_K"]),
-                       "t_sink_c": float(t_mount_c),
-                       # A WHOLE-MACHINE conductance (one real flange, real
-                       # bolts) on a possibly 1/sym wedge — the same bookkeeping
-                       # the shaft ends and the open frame's two paths use.
-                       "symmetry_mult": sym})
+        _mount_sink_entry = {"name": "mount", "tags": [DOM_STATOR],
+                            "G_W_per_K": float(_mount_path["G_W_per_K"]),
+                            "t_sink_c": float(t_mount_c),
+                            # A WHOLE-MACHINE conductance (one real flange, real
+                            # bolts) on a possibly 1/sym wedge — the same
+                            # bookkeeping the shaft ends and the open frame's
+                            # two paths use.
+                            "symmetry_mult": sym}
+        _sinks.append(_mount_sink_entry)
 
     # ── THE AXIAL END FACES (2026-09-14) ─────────────────────────────────────
     # User, 2026-09-14, with the Fusion model in front of him: the 24 coils stand
@@ -4346,6 +4386,12 @@ def solve_thermal_field(
                                        ("bore", bore_mode))
                         if (n == "outer" and m == "robotics")
                         or (n == "bore" and m == "still")])
+    # …and the MOUNT, when its far side is a robot link rather than an ideal
+    # sink (2026-09-26): the link's own still-air + radiation film depends on
+    # its OWN temperature, which depends on the heat the mount carries, which
+    # the conduction solve has not produced yet.  Same fixed-point shape.
+    if _mount_on and _mount_link_mode:
+        _wall_iterating = _wall_iterating + ["mount"]
     _iterating = _outlet_iterating + _wall_iterating
     if (_ef_specs or _gf_on) and not _wall_iterating:
         # The open frame (2026-09-21) reaches this too: its rotor-face film is
@@ -4383,6 +4429,10 @@ def solve_thermal_field(
     _t_wall: Dict[str, float] = {"outer": _t_wall_seed, "bore": _t_wall_seed}
     for _s in _ef_specs:
         _t_wall[_s["name"]] = _t_wall_seed
+    if "mount" in _wall_iterating:
+        # Seeded at t_mount_c (ambient, unless mount_temp_c was typed anyway) —
+        # the pass loop below walks it to the fixed point.
+        _t_wall["mount"] = t_mount_c
     # The two gap streams (2026-09-21) iterate on the AIR's own mean
     # temperature, not on a wall: that is the temperature their density and
     # their enthalpy balance are evaluated at.  Seeded halfway between ambient
@@ -4687,6 +4737,21 @@ def solve_thermal_field(
             if "bore" in _wall_iterating:
                 _d = max(_d, _wall_move(
                     "bore", _by_name.get("bore", {}).get("t_mean_c")))
+            if "mount" in _wall_iterating:
+                # Not a wall's own t_mean_c: the link is not a meshed surface,
+                # it is what the mount's OWN volume-sink heat drives, off its
+                # own preset shape (cooling_models.robot_link_path).
+                _mount_w_now = float(
+                    (_sk_by_name.get("mount") or {}).get("heat_removed_W")
+                    or 0.0) * sym
+                _link_report = _cm3.robot_link_path(
+                    q_w=_mount_w_now, t_ambient_c=ambient_temp,
+                    preset=link_preset, material=link_material,
+                    emissivity=emissivity)
+                t_mount_c = float(_link_report["t_link_c"])
+                if _mount_sink_entry is not None:
+                    _mount_sink_entry["t_sink_c"] = t_mount_c
+                _d = max(_d, _wall_move("mount", t_mount_c))
             for _s in _ef_specs:
                 _d = max(_d, _wall_move(
                     _s["name"],
@@ -4904,9 +4969,12 @@ def solve_thermal_field(
     _mount_w = float((_mt_sink or {}).get("heat_removed_W") or 0.0) * sym
     mount = {
         "mode": str(_mount_path.get("mode") or "off"),
+        "mount_mode": _mount_mode_in,
         "G_W_per_K": round(float(_mount_path.get("G_W_per_K") or 0.0), 5),
         "t_sink_c": round(float(t_mount_c), 2),
-        "t_sink_source": ("ambient (mount_temp_c not given)"
+        "t_sink_source": ("robot link (computed, see link below)"
+                          if _mount_link_mode else
+                          "ambient (mount_temp_c not given)"
                           if mount_temp_c is None else "given"),
         "t_housing_mean_c": (None if (_mt_sink or {}).get("t_mean_c") is None
                              else round(float(_mt_sink["t_mean_c"]), 2)),
@@ -4914,6 +4982,26 @@ def solve_thermal_field(
         "n_elements": int((_mt_sink or {}).get("n_elements") or 0),
         "attached_to": "stator",
         "note": str(_mount_path.get("note") or ""),
+        # THE LINK (2026-09-26): only present in mount_mode='link'.  Carries
+        # its own fixed 70 °C touch limit — the report/route reads
+        # `link.binds_touch_limit` beside the winding/magnet limits, and
+        # names it "link (touch 70 °C)" when it is the one that binds.
+        "link": (None if _link_report is None else {
+            "preset": _link_report["preset"],
+            "material": _link_report["material"],
+            "length_mm": _link_report["length_mm"],
+            "diameter_mm": _link_report["diameter_mm"],
+            "area_m2": round(float(_link_report["area_m2"]), 6),
+            "mass_kg": round(float(_link_report["mass_kg"]), 4),
+            "C_J_per_K": round(float(_link_report["C_J_per_K"]), 2),
+            "t_link_c": round(float(_link_report["t_link_c"]), 2),
+            "h_conv": round(float(_link_report["h_conv"]), 3),
+            "h_rad": round(float(_link_report["h_rad"]), 3),
+            "touch_limit_c": float(_link_report["touch_limit_c"]),
+            "over_touch_K": round(float(_link_report["over_touch_K"]), 2),
+            "binds_touch_limit": bool(_link_report["binds_touch_limit"]),
+            "note": str(_link_report["note"]),
+        }),
     }
 
     # ── THE AXIAL END FACES, as the solve measured them (2026-09-14) ────────
@@ -6186,6 +6274,9 @@ def coupled(
     emissivity:         float = Query(default=0.9, ge=0.0, le=1.0),
     mount_g_w_per_k:    float = Query(default=0.0, ge=0.0),
     mount_temp_c: Optional[float] = Query(default=None),
+    mount_mode:         str = Query(default="sink"),
+    link_preset:        str = Query(default="wrist"),
+    link_material:      str = Query(default="aluminium"),
     end_faces:          str = Query(default="still"),
     end_face_sides:     int = Query(default=2, ge=1, le=2),
 ):
@@ -6259,6 +6350,10 @@ def coupled(
             _robot_kw["mount_g_w_per_k"] = float(mount_g_w_per_k)
             if mount_temp_c is not None:
                 _robot_kw["mount_temp_c"] = float(mount_temp_c)
+            if str(mount_mode or "sink").strip().lower() == "link":
+                _robot_kw["mount_mode"] = "link"
+                _robot_kw["link_preset"] = str(link_preset)
+                _robot_kw["link_material"] = str(link_material)
         _cool_kw = dict(cooling_mode=mode, air_speed_mps=air_speed_mps,
                         fluid=fluid, fluid_temp_in_c=fluid_temp_in_c,
                         flow_lpm=flow_lpm, bore_mode=bmode,

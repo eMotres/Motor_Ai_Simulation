@@ -27,6 +27,8 @@ export interface DeviceRow {
   image?: string | null;
   /** A GENERATED outline of the package — never vendor artwork. */
   package_svg?: string;
+  /** The PCB side of the card — null when the card has no footprint block. */
+  footprint?: DeviceFootprint | null;
   /** ceil(I_switch_rms / I_DDC@100 °C) for the duty the catalogue was asked for. */
   suggested_parallel?: number | null;
   /** A quotation somebody typed on the card, never a datasheet value. */
@@ -35,6 +37,19 @@ export interface DeviceRow {
   datasheet_url?: string | null;
   datasheet_revision?: string | null;
   error?: string;
+}
+
+/** A card's `footprint` block as the catalogue row carries it. */
+export interface DeviceFootprint {
+  package_outline_id: string | null;
+  land_pattern_ref: string | null;
+  body_height_mm: number | null;
+  top_tab_mm: { length_mm: number | null; width_mm: number | null } | null;
+  /** Parts sharing ONE land pattern, e.g. `qdpak_750_1200`. */
+  compatibility_group: string | null;
+  group_parts?: string[];
+  /** One line when parts in the group differ (or are unknown) in height / top tab. */
+  group_warning?: string | null;
 }
 
 export interface CoilRow {

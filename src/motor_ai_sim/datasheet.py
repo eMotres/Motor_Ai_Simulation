@@ -1258,10 +1258,29 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             "volume-weighted remanence left in the magnets after this point — "
             "below 100 % the loss is IRREVERSIBLE and the machine does not "
             "recover it by cooling down", 3)
-        row("Worst magnet element Br (%)",
-            [_g(d, "summary.demag.br_worst_pct") for d in duties],
-            "the single most demagnetised element — where a knee crossing "
-            "starts, usually a pole corner facing the slot opening", 1)
+        # The worst element is a flagged CORNER diagnostic, not the magnet's
+        # figure: a sharp-corner value that does not converge with the mesh
+        # (docs/NO_FILTERS_2026-09-24.md §3).  Solver key `br_corner` since
+        # 2026-09-26; stored duties carry the same number as `br_worst_pct`.
+        def _corner(d):
+            c = _g(d, "summary.demag.br_corner")
+            v = c.get("br_pct") if isinstance(c, dict) else None
+            return v if v is not None else _g(d, "summary.demag.br_worst_pct")
+
+        def _where(d):
+            c = _g(d, "summary.demag.br_corner")
+            if not isinstance(c, dict) or c.get("r_mm") is None:
+                return None
+            return "r %.2f mm, %.1f°" % (float(c["r_mm"]),
+                                         float(c.get("theta_deg") or 0.0))
+        _locs = [w for w in (_where(d) for d in duties) if w]
+        row("⚑ Br corner diagnostic, worst element (%)",
+            [_corner(d) for d in duties],
+            "FLAG, not the magnet's figure (that is Br kept above): the single "
+            "worst element, a sharp-corner value that does not converge with "
+            "mesh refinement"
+            + ("; at " + " / ".join(_locs) + " (rotor frame)" if _locs else ""),
+            1)
     if any(_setting(d, "sim.magnetTempC") is not None for d in duties):
         row("Magnet temperature (°C)",
             [_setting(d, "sim.magnetTempC") for d in duties],

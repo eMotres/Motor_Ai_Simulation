@@ -85,7 +85,34 @@ class _Stop(Exception):
 
 
 @pytest.fixture
-def daxis_probe(monkeypatch):
+def fixture_machine(monkeypatch):
+    """Pin the baseline machine to this suite's OWN geometry.
+
+    The d-axis decision reads the baseline machine from ``get_config()``, and
+    the solver's default sector count is 4.  Left on the live
+    ``config/motor_config.yaml`` these tests broke whenever that file held a
+    machine 4 does not divide (e.g. 12s/14p).  The fixture machine is the
+    30 mm, 12-slot / 14-pole regression geometry, and ``_decide`` solves it on
+    half the ring (n_sectors=2 — a true symmetry of 12/14).  Every other config
+    section is the live one, unchanged.
+    """
+    from omegaconf import OmegaConf
+    import motor_ai_sim.config as _mc
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+    from tests.test_physics_regression import GEO_30MM
+
+    live = _mc.get_config()
+    cfg = (OmegaConf.to_container(live, resolve=True)
+           if OmegaConf.is_config(live) else dict(live))
+    cfg["geometry"] = merge_geo_override(dict(cfg.get("geometry") or {}),
+                                         dict(GEO_30MM))
+    assert (cfg["geometry"]["num_slots"], cfg["geometry"]["num_poles"]) == (12, 14)
+    monkeypatch.setattr(_mc, "get_config", lambda *a, **k: cfg)
+    return cfg
+
+
+@pytest.fixture
+def daxis_probe(monkeypatch, fixture_machine):
     """Stop fem_transient_sliding_band right after the d-axis decision (before
     any mesh) and record every _resolve_daxis_shift call."""
     calls, used = [], []
@@ -106,7 +133,8 @@ def daxis_probe(monkeypatch):
 def _decide(ov):
     with pytest.raises(_Stop):
         F.fem_transient_sliding_band(geo_override=dict(ov), I_phase_rms=10.0,
-                                     n_steps_per_period=2, element_order=2)
+                                     n_steps_per_period=2, element_order=2,
+                                     n_sectors=2)   # a symmetry of the 12s/14p fixture
 
 
 def _cfg_geo():
@@ -153,7 +181,7 @@ def test_inside_a_nested_calibration_the_candidate_path_is_off(daxis_probe):
     assert calls and calls[0]["geo_override"]      # not the baseline lookup
 
 
-def test_baseline_helper_reports_its_decision(monkeypatch):
+def test_baseline_helper_reports_its_decision(monkeypatch, fixture_machine):
     monkeypatch.setattr(F, "_resolve_daxis_shift", lambda *a, **k: 60.0)
     from motor_ai_sim.simulation.geometry_2d import merge_geo_override
     base = merge_geo_override(_cfg_geo(), None)

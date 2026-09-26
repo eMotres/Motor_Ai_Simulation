@@ -5241,8 +5241,13 @@ def get_fem_transient(
             if run_id and _JOBS.is_cancelled(run_id):
                 raise _RunCancelled(run_id)
             _cur = _fem_transient_progress["current"]
-            _cur["step"] = int(_done)
-            _cur["total"] = int(_total)
+            # done/total None = a SET-UP checkpoint (mesh, projections, phasor
+            # initialiser, static start field): it exists so the cancel check
+            # above runs before frame 0, and it keeps what the bar shows.
+            if _done is not None:
+                _cur["step"] = int(_done)
+            if _total is not None:
+                _cur["total"] = int(_total)
             # HOW that total is made up, in the SOLVER's own words.  The strip
             # used to derive this client-side from "total = 3 x steps/period",
             # which the PWM mixed-resolution schedule (coarse sinusoid settle +

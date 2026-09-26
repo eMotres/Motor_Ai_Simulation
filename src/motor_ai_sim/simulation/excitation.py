@@ -22,7 +22,7 @@ three questions and nothing else:
   waveform has no meaning in a fundamental-frequency phasor problem).
 * :meth:`ExcitationSource.settle_policy` — how many periods of start-up the
   circuit state needs before the reported window, and which accelerators
-  (coarse settle, Aitken flux anchors, the period-mean DC anchor) apply.
+  (coarse settle, Aitken flux anchors, the DC-orbit solve) apply.
 
 ``kind`` ('I' or 'V') is the ONE thing the solver switches on, and it switches
 on it for a reason that is not a mode flag: an imposed current is a source term
@@ -98,8 +98,8 @@ _SETTLE_MAX = max(1, int(os.environ.get("SB_V_SETTLE_MAX", "12") or 12))
 # trigonometric interpolant of the last COARSE settle period, and it
 # over-corrected on CILN28/G2-L40 (residual +3.3 A -> -15.6 A, ripple 50 ->
 # 89 %) because the interpolant leaks ripple into the estimate.  Superseded by
-# SettlePolicy.dc_anchor, which needs no reference orbit at all.  B5 / PWM
-# study 2026-09-13.)
+# the period-mean DC anchor (B5 / PWM study 2026-09-13), itself superseded by
+# SettlePolicy.dc_orbit_solve — simulation/dc_orbit.py, 2026-09-26.)
 # SB_PWM_COARSE_SETTLE: "0" forces the all-fine march, "1" forces the mixed
 # scheme, unset -> AUTO (mixed only while the run is itself a coarse pass; the
 # steps-per-carrier test needs the run's step count and stays in the solver).
@@ -110,10 +110,20 @@ _PWM_COARSE_SETTLE_ENV = (
 # a whole period cannot be measured at all.  SB_PWM_FINE_SETTLE below marches
 # WHOLE fine periods instead.)
 # SB_PWM_FINE_SETTLE: WHOLE fine settling periods at the end of a mixed
-# coarse/fine settle — the window the period-mean DC anchor measures the
-# switching turn-on DC over.  Two, measured: one anchor takes 40 A to ~3 A
-# (the operating-point inductance columns are ~10 % off), the second to <0.5 A.
+# coarse/fine settle.  The first carries the modulator's turn-on DC, which the
+# DC-orbit solve (simulation/dc_orbit.py) takes out at its end; the last runs
+# free and is the solve's verification.  Two is the least that holds both.
 _PWM_FINE_SETTLE = max(1, int(os.environ.get("SB_PWM_FINE_SETTLE", "2") or 2))
+# SB_V_DC_SOLVE: "0" switches the PWM DC-orbit CORRECTIONS off — for the long
+# free settle a reference run needs, never for a result; the solve still
+# measures and reports every settling period's drift and Jacobian.  Unset or
+# "1" = on.  Any other value is refused at import: a typo must not silently
+# pick a physics.
+_DC_SOLVE_ENV = (os.environ.get("SB_V_DC_SOLVE") or "").strip()
+if _DC_SOLVE_ENV not in ("", "0", "1"):
+    raise ValueError("SB_V_DC_SOLVE=%r: expected '0' (off) or '1' (on)"
+                     % _DC_SOLVE_ENV)
+_DC_SOLVE = _DC_SOLVE_ENV != "0"
 
 
 def _settle_periods(default: int) -> int:
@@ -184,21 +194,29 @@ class SettlePolicy:
     # WHOLE fine settling periods at the END of a mixed coarse/fine settle.
     # The modulator turning on injects a DC of about half the ripple amplitude
     # (the settle hands over a ripple-FREE orbit), and on a τ_e ≈ 27-period
-    # machine nothing decays — it has to be MEASURED and removed, and a mean is
-    # only a measurement over a whole electrical period.  Two: the first
-    # anchors the turn-on DC, the second the ~10 % the operating-point
-    # inductance columns got wrong.  (B5 / PWM study 2026-09-13.)
+    # machine nothing decays — it has to be SOLVED for, and the drift that
+    # measures it is only defined over a whole electrical period.  Two: the
+    # first carries the turn-on DC that the DC-orbit solve removes at its end,
+    # the second runs free and verifies.  (B5 / PWM study 2026-09-13.)
     fine_settle_periods: int = 0
     # Δ² period-boundary flux anchors during the settle (voltage sources only:
     # they anchor circuit STATE, which an imposed-current run does not have).
     aitken: bool = False
-    # PERIOD-MEAN DC anchor at every whole settling period (voltage sources).
-    # On a periodic orbit ∮dψ = 0, so R·⟨i⟩ = ⟨v⟩ over a whole electrical
-    # period — and ⟨v⟩ is exactly 0 for both the sinusoid and the synchronous
-    # regular-sampled PWM (measured: 0.0000 V on the L155 runs).  ⟨i⟩ over a
-    # whole period IS therefore the DC error, with no interpolant to leak
-    # ripple into it — which is what made the handover estimate over-correct.
-    dc_anchor: bool = False
+    # PERIODIC-ORBIT SOLVE of the circuit's DC mode at the whole settling
+    # periods (voltage sources) — simulation/dc_orbit.py.  On a periodic orbit
+    # ∮dψ = 0, and the CN rows summed over a whole period make the flux drift
+    # an EXACT measurement of how far the state is from that orbit; the solve
+    # is a Newton step on the period map of the line-to-line flux, its 2×2
+    # Jacobian the product of the linearised CN rows over the period (each
+    # frame's own incremental ∂ψ/∂i), and the last settling period runs free
+    # as the verification.  It replaced the period-mean DC
+    # ANCHOR (2026-09-26, docs/NO_FILTERS_2026-09-24.md item 5), whose model
+    # had no free decay in it and which left 1.1-1.2 A of DC on a short-τ_e
+    # machine however long the settle was.
+    dc_orbit_solve: bool = False
+    # …and whether it may CORRECT the state (False: it only measures and
+    # reports — SB_V_DC_SOLVE=0, for a reference run's long free settle).
+    dc_orbit_correct: bool = True
 
 
 class ExcitationSource(Protocol):
@@ -516,14 +534,16 @@ class PwmVoltageSource(_VoltageSourceBase):
             coarse_settle=(_PWM_COARSE_SETTLE_ENV != "0"),
             coarse_settle_forced=(_PWM_COARSE_SETTLE_ENV == "1"),
             fine_settle_periods=_PWM_FINE_SETTLE,
-            # The Δ² FLUX anchor is off on PWM since B5: it extrapolates the
-            # period-boundary flux, and on a rippled orbit the sample it
-            # extrapolates from carries the carrier.  The DC anchor below
-            # measures the same DC directly and exactly.  (It never fired here
-            # anyway — v_anchor_applied 0 of 3 on the L155 diagnostics.)  The
-            # sinusoidal drive keeps it: every pinned number was made with it.
+            # The Δ² FLUX anchor is off on PWM since B5: it extrapolates each
+            # phase's boundary flux as a SCALAR geometric sequence and fires
+            # only past its guards.  The DC-orbit solve below solves the same
+            # fixed point as a 2×2 map, verified.  (The Δ² anchor never fired
+            # here anyway — v_anchor_applied 0 of 3 on the L155 diagnostics.)
+            # The sinusoidal drive keeps it: every pinned number was made with
+            # it.
             aitken=False,
-            dc_anchor=True)
+            dc_orbit_solve=True,
+            dc_orbit_correct=_DC_SOLVE)
 
     def on_steps_snapped(self, n_steps_per_period: int) -> "PwmVoltageSource":
         return self
@@ -563,13 +583,13 @@ class PwmVoltageSource(_VoltageSourceBase):
             "mixed_settle": ({
                 "composition": c.get("progress_comp"),
                 "coarse_steps_per_period": int(c.get("c_nspp", 0)),
-                # WHOLE fine settling periods at the end of the prefix, and the
-                # period-mean DC anchors that fired on them — the pair that
-                # replaced the two-carrier pre-roll (B5 / PWM study
-                # 2026-09-13); v_dc_residual_A is what they achieved.
+                # WHOLE fine settling periods at the end of the prefix (they
+                # replaced the two-carrier pre-roll, B5 / PWM study
+                # 2026-09-13), and the DC-orbit corrections applied over the
+                # whole settle; v_dc_residual_A is what they achieved.
                 "fine_settle_periods": int(c.get("fine_settle_periods", 0)),
                 "fine_settle_frames": int(c.get("fine_frames", 0)),
-                "dc_anchors_applied": int(c.get("dc_anchors", 0)),
+                "dc_orbit_corrections": int(c.get("dc_orbit_corrections", 0)),
                 "disable_with": "SB_PWM_COARSE_SETTLE=0",
             } if c.get("sched_mixed") else None),
         }

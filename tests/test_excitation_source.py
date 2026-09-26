@@ -207,8 +207,10 @@ def test_pwm_coarse_settle_frames_see_the_smooth_fundamental():
 
 
 # ── settle policies ─────────────────────────────────────────────────────────
-@pytest.mark.skipif(bool(ex._V_SETTLE_ENV or ex._PWM_COARSE_SETTLE_ENV),
-                    reason="SB_V_SETTLE_PERIODS / SB_PWM_COARSE_SETTLE set")
+@pytest.mark.skipif(bool(ex._V_SETTLE_ENV or ex._PWM_COARSE_SETTLE_ENV
+                         or ex._DC_SOLVE_ENV),
+                    reason="SB_V_SETTLE_PERIODS / SB_PWM_COARSE_SETTLE / "
+                           "SB_V_DC_SOLVE set")
 def test_settle_policy_defaults_per_source():
     wf = [(x * 10.0, 40.0 * math.cos(math.radians(x * 10.0))) for x in range(36)]
     imposed = [make_source("current", **_common()),
@@ -220,16 +222,16 @@ def test_settle_policy_defaults_per_source():
         assert p.periods_static == 0
         assert p.adaptive_tau_mult is None
         assert not p.aitken and not p.coarse_settle
-        assert not p.dc_anchor
+        assert not p.dc_orbit_solve
 
     p = make_source("voltage", **_common(v_phase_peak=7.0,
                                          v_delta_deg=10.0)).settle_policy()
     # TEN periods, never adaptive — every pinned voltage number used them.
     assert p.periods_static == 10
     assert p.adaptive_tau_mult is None
-    # …and the Δ² flux anchor, not the period-mean DC one: every pinned
+    # …and the Δ² flux anchor, not the DC-orbit solve: every pinned
     # sinusoid number was produced with exactly this pair.
-    assert p.aitken and not p.coarse_settle and not p.dc_anchor
+    assert p.aitken and not p.coarse_settle and not p.dc_orbit_solve
 
     p = make_source("pwm_voltage", **_common(
         v_phase_peak=7.0, v_delta_deg=10.0, v_bus=48.0,
@@ -237,12 +239,41 @@ def test_settle_policy_defaults_per_source():
     assert p.periods_static == 2          # a PWM window is mostly carrier ripple
     assert p.adaptive_tau_mult == pytest.approx(3.0)   # ceil(3·tau_e/T_e)
     assert p.periods_cap == 12
-    # PWM anchors its DC on the PERIOD MEAN (exact) instead of Δ²-extrapolating
-    # the period-boundary flux (which reads the carrier on a rippled sample),
-    # and its settle ends in WHOLE fine periods so that mean is measurable.
-    # B5 / PWM study 2026-09-13.
-    assert p.coarse_settle and p.dc_anchor and not p.aitken
+    # PWM SOLVES its DC mode's periodic orbit on the exact whole-period flux
+    # drift (simulation/dc_orbit.py) instead of Δ²-extrapolating each phase's
+    # boundary flux, and its settle ends in WHOLE fine periods: the first
+    # carries the modulator's turn-on DC out, the last runs free and verifies.
+    assert p.coarse_settle and p.dc_orbit_solve and not p.aitken
+    assert p.dc_orbit_correct
     assert p.fine_settle_periods == 2
+
+
+def test_the_dc_solve_can_be_switched_off_for_a_reference_run(monkeypatch):
+    """SB_V_DC_SOLVE=0: the long free settle a reference run needs.  The solve
+    still MEASURES every settling period (drift, Jacobian) — it only stops
+    correcting the state."""
+    monkeypatch.setattr(ex, "_DC_SOLVE", False)
+    p = make_source("pwm_voltage", **_common(
+        v_phase_peak=7.0, v_delta_deg=10.0, v_bus=48.0,
+        f_switch=28000.0)).settle_policy()
+    assert p.dc_orbit_solve and not p.dc_orbit_correct and p.coarse_settle
+
+
+@pytest.mark.parametrize("value", ["yes", "off", "2", "true"])
+def test_a_dc_solve_knob_that_is_not_0_or_1_is_refused(value):
+    """A typo must not silently pick a physics: refused at import, by name."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env = dict(os.environ, SB_V_DC_SOLVE=value,
+               PYTHONPATH=src + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    r = subprocess.run([sys.executable, "-c",
+                        "import motor_ai_sim.simulation.excitation"],
+                       env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode != 0
+    assert "SB_V_DC_SOLVE" in r.stderr
 
 
 def test_settle_policy_env_override_wins_for_every_source(monkeypatch):

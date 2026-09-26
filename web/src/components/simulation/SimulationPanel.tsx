@@ -35,6 +35,10 @@ import SolveProgressStrip from './SolveProgressStrip';
 import CommonProgressStrip from '../common/SolveProgressStrip';
 import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
+import {
+  EDDY_DEFAULT_STEPS, adoptSteps, isStepsSource, snapStepsToRing, stepsNote,
+  type StepsSource,
+} from '../../lib/eddySteps';
 import { fetchCoupledLast, setCoupledControllerRef } from './coupledApi';
 // The Drive selector (2026-09-22, Stage 2's open item): whether the CONTROLLER
 // has a device saved for this configuration at all — the same read the
@@ -1146,7 +1150,28 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // Defaults follow the user's standing practice (2026-09-03): 40 steps per
   // period minimum and demag ON on every machine — a fresh browser profile
   // must not silently solve at 24 steps without the de-rate.
-  const [steps,    setSteps]    = usePersisted('stepsPP', 40);   // transient frames/period — single source (optimizer reads this too)
+  // EDDY RUNS DEFAULT TO 72 (owner 2026-09-26; eddy is always on here): BDF2
+  // reads the L155 magnet loss −4.3 % at 36 steps and −1 % at 72
+  // (docs/EDDY_TIME_INTEGRATION_2026-09-25.md).  A default, never a force:
+  // `stepsSource` records who set the count — 'eddy_default' or 'user' — and a
+  // user's count is never replaced.  It rides the config PATCH so the optimizer
+  // can keep its own screening count while the tab holds only the default.
+  const [steps,    setSteps]    = usePersisted('stepsPP', EDDY_DEFAULT_STEPS);   // transient frames/period — single source (optimizer reads this too)
+  const [stepsSource, setStepsSource] = usePersisted<StepsSource | null>('stepsSource', null);
+  // The old factory default this panel moved to 72 on adoption (one line says so).
+  const [stepsMigratedFrom, setStepsMigratedFrom] = useState<number | null>(null);
+  // The user picks a count → it is theirs.  Picking the item marked as the
+  // eddy default hands the count back to the default.
+  const pickSteps = (v: number, isDefault = false) => {
+    setStepsMigratedFrom(null);
+    if (isDefault) { setSteps(EDDY_DEFAULT_STEPS); setStepsSource('eddy_default'); }
+    else { setSteps(v); setStepsSource('user'); }
+  };
+  // Anything else that writes the count (a duty load, an optimizer Apply,
+  // another window) wrote a choice, not the default.
+  useEffect(() => {
+    if (stepsSource === 'eddy_default' && steps !== EDDY_DEFAULT_STEPS) setStepsSource('user');
+  }, [steps, stepsSource, setStepsSource]);
   // Magnet/shaft eddy losses ALWAYS come from the real field solve
   // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the Ansys way),
   // never the classical slab d²/12 estimate.  No toggle: real fields only.
@@ -1223,6 +1248,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const simPhysicsPatch = () => ({
     max_current: current, frequency, rpm, phase_offset_deg: phaseOffset,
     coil_temp_c: coilTemp, steps_per_period: steps,
+    ...(stepsSource ? { steps_per_period_source: stepsSource } : {}),
     end_winding_factor: endWinding, connection, star_delta: starDelta,
     demag, eddy: eddyCoupled, rotor_eddy: fieldLosses, torque_filter: torqueFilter,
     drive, v_phase_peak: vPeak, v_delta_deg: vDelta,
@@ -1250,7 +1276,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }, 700);
     return () => clearTimeout(id);
   }, [current, frequency, rpm, phaseOffset, demag, eddyCoupled, fieldLosses,
-      coilTemp, steps, endWinding, connection, starDelta, drive, opMode, vPeak,
+      coilTemp, steps, stepsSource, endWinding, connection, starDelta, drive, opMode, vPeak,
       vDelta, iBlock]);
 
   // Auto-save EVERY simulation change into the active motor ("my copy").
@@ -1278,26 +1304,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // valid step counts shown in the helper (divisors of stepsMax, ≥12)
   const validSteps = Array.from({ length: stepsMax }, (_, i) => i + 1)
     .filter(d => stepsMax % d === 0 && d >= 12);
-  const snapSteps = (v: number) => {
-    // ABOVE the ring is legal now: the solver RAISES the slip density to the
-    // requested count (fine PWM steps must be honoured, not capped), so a
-    // count past stepsMax is run exactly as asked and must not be pulled back.
-    if (v > stepsMax) return v;
-    if (stepsMax % v === 0) return v;       // already a divisor
-    let best = stepsMax;
-    for (let d = 1; d <= stepsMax; d++)
-      if (stepsMax % d === 0 && (Math.abs(d - v) < Math.abs(best - v)
-          || (Math.abs(d - v) === Math.abs(best - v) && d > best))) best = d;
-    return best;
-  };
-  // Snap the persisted steps onto the valid grid whenever it changes (motor /
-  // gap_layers change) or on mount — the divisor set depends on the machine, so
-  // a stored value can fall off the list.
-  useEffect(() => {
-    const s = snapSteps(steps);
-    if (s !== steps) setSteps(s);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stepsMax]);
+  // ABOVE the ring is legal now: the solver RAISES the slip density to the
+  // requested count (fine PWM steps must be honoured, not capped), so a count
+  // past stepsMax is run exactly as asked and must not be pulled back.
+  const snapSteps = (v: number) => snapStepsToRing(v, stepsMax);
+  // The stored count is NOT rewritten onto the ring any more (it used to be,
+  // on mount, before the geometry had loaded — against the placeholder pole
+  // count).  It is the REQUEST; the solver snaps it and reports the snap
+  // (n_steps_per_period_requested / steps_snapped), and the line under the
+  // picker says so before the run.
+  const stepsRan  = snapSteps(steps);
+  const stepsLine = stepsNote(steps, stepsRan, stepsMax, stepsMigratedFrom);
   // ── V₁ SEED from the last CURRENT-drive run of THIS machine ────────────
   // The two-pass workflow the user works in: fix the point on the current
   // drive, where the torque is what you dial in; then run the inverter at the
@@ -1465,7 +1482,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       // and the Re-run solved at another: the exact silent divergence this
       // pin exists to prevent.  (vite build ships without a type-check, so a
       // missing name here reaches production.)
-      if (typeof p.steps_per_period === 'number') setSteps(p.steps_per_period);
+      if (typeof p.steps_per_period === 'number') pickSteps(p.steps_per_period);
       if (typeof p.coil_temp_c === 'number') setCoilTemp(p.coil_temp_c);
       // 0 = "auto" (the descent let the solver derive k_end per candidate); adopting
       // that 0 would blank a cell that must always show the geometry's real factor.
@@ -1563,7 +1580,25 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             const v = Number(s[k]);
             return Number.isFinite(v) ? v : null;
           };
-          const _steps = num('steps_per_period'); if (_steps && _steps > 0) setSteps(_steps);
+          // Steps: the config's count and its record of who set it.  With no
+          // record, an old factory default (36/40) becomes the eddy default of
+          // 72 — said on screen — and any other count stays the user's.
+          {
+            const _src = s['steps_per_period_source'];
+            let _local: StepsSource | null = null;
+            try {
+              const _r = JSON.parse(localStorage.getItem('sim.stepsSource') ?? 'null');
+              if (isStepsSource(_r)) _local = _r;
+            } catch { /* none */ }
+            const _srv = num('steps_per_period');
+            // This browser's record counts only for the count it was made for.
+            const _ad = adoptSteps(_srv ?? steps,
+                                   isStepsSource(_src) ? _src
+                                     : ((_srv === null || _srv === steps) ? _local : null));
+            setSteps(_ad.steps);
+            setStepsSource(_ad.source);
+            setStepsMigratedFrom(_ad.migratedFrom);
+          }
           const _temp  = num('coil_temp_c');      if (_temp  !== null) setCoilTemp(_temp);
           const _vpk   = num('v_phase_peak');     if (_vpk   !== null) setVPeak(_vpk);
           const _vdl   = num('v_delta_deg');      if (_vdl   !== null) setVDelta(_vdl);
@@ -2446,20 +2481,29 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               labelId="steps-pp-label"
               label="Steps per electrical period"
               value={stepsOptions.includes(steps) ? steps : snapSteps(steps)}
-              onChange={e => setSteps(Number(e.target.value))}
+              onChange={e => {
+                const v = Number(e.target.value);
+                pickSteps(v, v === snapSteps(EDDY_DEFAULT_STEPS));
+              }}
               endAdornment={
                 <InputAdornment position="end" sx={{ mr: 2.5 }}>
-                  <HelpTip title={`Transient time resolution. Up to ${stepsMax} the count must be a DIVISOR of ${stepsMax} — the slip-ring nodes per electrical period for this machine — so the rotor lands on whole mesh nodes. ABOVE ${stepsMax} the solver raises the slip-ring density to match the request exactly (needed to resolve a PWM carrier); the band mesh is then denser and the run slower.`} />
+                  <HelpTip title={`Transient time resolution. Eddy-current runs default to ${EDDY_DEFAULT_STEPS} steps per period (BDF2 reads the magnet loss about −4 % at 36 steps, −1 % at 72); any count in the list is solved exactly as picked. Up to ${stepsMax} the count must be a DIVISOR of ${stepsMax} — the slip-ring nodes per electrical period for this machine — so the rotor lands on whole mesh nodes. ABOVE ${stepsMax} the solver raises the slip-ring density to match the request exactly (needed to resolve a PWM carrier); the band mesh is then denser and the run slower.`} />
                 </InputAdornment>
               }
             >
               {stepsOptions.map(v => (
                 <MenuItem key={v} value={v}>
                   {v}{v > stepsMax ? '  · raises the slip ring' : ''}
+                  {v === snapSteps(EDDY_DEFAULT_STEPS) ? '  · eddy default' : ''}
                 </MenuItem>
               ))}
             </Select>
           </FormControl>
+          {stepsLine && (
+            <Typography sx={{ fontSize: 10.5, color: 'text.secondary', mt: -0.75, mb: 1 }}>
+              {stepsLine}
+            </Typography>
+          )}
           {/* Per-element irreversible demagnetisation (Ansys-style).  A pre-pass
               sweeps the period at full Br, finds the worst demag field at every
               magnet element, and de-rates Br on the recoil line → the torque /

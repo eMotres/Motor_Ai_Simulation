@@ -21,6 +21,7 @@
  * this app has always sent.
  */
 import { currentGeoJson, currentMatJson } from './apiAuth';
+import { EDDY_DEFAULT_STEPS } from './eddySteps';
 
 /** The excitation sources the transient accepts. */
 export type DriveKind =
@@ -284,7 +285,8 @@ export function emRunInputsFromSettings(
   const drive = readSimSetting<string>('drive', 'current');
   return {
     restore: false,
-    steps: numOr(readSimSetting('stepsPP', 40), 40),
+    // No stored count = the panel's own default (eddy runs: 72, lib/eddySteps).
+    steps: numOr(readSimSetting('stepsPP', EDDY_DEFAULT_STEPS), EDDY_DEFAULT_STEPS),
     gamma_deg: numOr(readSimSetting('gamma', 0), 0),
     I_phase_rms: Math.max(0, numOr(readSimSetting('current', 0), 0)),
     drive: (DRIVES as readonly string[]).includes(drive)

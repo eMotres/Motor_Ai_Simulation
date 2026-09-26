@@ -3242,15 +3242,144 @@ def _cogging_frame_policy(num_slots, num_poles, pole_pairs, actual_steps,
     }
 
 
+#: What the worst demag element IS, shipped with it so no reader has to know.
+BR_CORNER_NOTE = (
+    "Worst single magnet element: a sharp-corner value that does not converge "
+    "with mesh refinement (docs/NO_FILTERS_2026-09-24.md §3). A corner "
+    "diagnostic, not the magnet's figure; the magnet's figure is the "
+    "volume-weighted Br kept.")
+
+
+def _demag_corner_diag(rotor_mesh, mag_idx, brm, ar_mag, mags):
+    """The worst demagnetised element as a flagged CORNER diagnostic.
+
+    ``100·min(Br factor)`` sits on the material curve's floor at every magnet
+    mesh on Ø40/L13 and swings 98 → 79 % with the mesh on L155 (NO_FILTERS
+    §3): it is the field singularity at a sharp magnet corner, the demag twin
+    of the mechanical module's unaveraged peak stress.  So it ships with WHERE
+    it is and how little of the magnet it covers, flagged, and never under a
+    name a reader would take for the magnet's number.  The coordinates are the
+    rotor mesh's own (rotor at 0°, the modelled sector), in mm.
+    """
+    brm = np.asarray(brm, float)
+    iw = int(np.argmin(brm))
+    el = int(np.asarray(mag_idx, int)[iw])
+    xy = np.asarray(rotor_mesh.p, float)[:, np.asarray(rotor_mesh.t)[:, el]].mean(axis=1)
+    x_mm, y_mm = 1e3 * float(xy[0]), 1e3 * float(xy[1])
+    magnet = None
+    for j, d in enumerate(mags or []):
+        if el in set(np.asarray(d.get("idx", ()), int).tolist()):
+            magnet = int(d.get("tag", j))
+            break
+    return {
+        "flag": "corner",
+        "br_pct": round(100.0 * float(brm[iw]), 1),
+        "element": el,
+        "magnet_tag": magnet,
+        "x_mm": round(x_mm, 3), "y_mm": round(y_mm, 3),
+        "r_mm": round(math.hypot(x_mm, y_mm), 3),
+        "theta_deg": round(math.degrees(math.atan2(y_mm, x_mm)), 2),
+        "element_area_pct": round(
+            100.0 * float(ar_mag[iw]) / max(float(np.sum(ar_mag)), 1e-30), 4),
+        "note": BR_CORNER_NOTE,
+    }
+
+
+# ── CONVERGED SETTLE for the plain sinusoidal voltage drive (2026-09-26) ────
+# f83e60f cut the sinusoid's settle from 10 to a FIXED 4 periods (A/B on the
+# fixtures); that count left ~1 % on the torque ripple (7.126 → 7.202 % at 40
+# periods, docs/NO_FILTERS_2026-09-24.md open item 3).  A count is a guess about
+# THIS machine's circuit; the period-to-period change of what is reported is a
+# measurement of it.  So the settle now marches whole periods until the three
+# reported quantities — phase-current amplitude, mean torque, torque ripple —
+# each move by less than SB_V_SETTLE_TOL (relative) between consecutive
+# settling periods, capped at SB_V_SETTLE_CAP periods.  The run records how
+# many it used and the final residual, and says so when it hit the cap.
+# An explicit SB_V_SETTLE_PERIODS still wins (a fixed count, as before).
+_V_SETTLE_TOL_DEFAULT = 1e-3
+_V_SETTLE_CAP_DEFAULT = 40
+
+
+def _sine_settle_criterion():
+    """(tol, cap) of the converged sine settle — validated loudly."""
+    raw_t = (_os_sb.environ.get("SB_V_SETTLE_TOL") or "").strip()
+    raw_c = (_os_sb.environ.get("SB_V_SETTLE_CAP") or "").strip()
+    try:
+        tol = float(raw_t) if raw_t else _V_SETTLE_TOL_DEFAULT
+    except ValueError:
+        raise ValueError("SB_V_SETTLE_TOL=%r is not a number" % raw_t) from None
+    if not (math.isfinite(tol) and 0.0 < tol < 1.0):
+        raise ValueError("SB_V_SETTLE_TOL must be a relative tolerance in "
+                         "(0, 1), got %r" % tol)
+    try:
+        cap = int(raw_c) if raw_c else _V_SETTLE_CAP_DEFAULT
+    except ValueError:
+        raise ValueError("SB_V_SETTLE_CAP=%r is not an integer" % raw_c) from None
+    if cap < 2:
+        raise ValueError("SB_V_SETTLE_CAP must be >= 2 (two periods are the "
+                         "least a period-to-period change needs), got %d" % cap)
+    return tol, cap
+
+
+def _settle_period_metrics(T, IA, IB, IC, dt_w):
+    """The three reported quantities over ONE electrical period.
+
+    Current amplitude = √2 × the phase rms (mean of the three phases' squares,
+    weighted by each step's solved Δt — the rms the copper loss uses); torque
+    mean and ripple of the per-frame torque series through ``torque_metrics``,
+    the function the reported ripple comes from (plain mean, raw
+    peak-to-peak / |mean|).  The reported T_avg is the energy-method mean,
+    which differs from this series' mean by a fixed offset of the method, not
+    by settling — so the period-to-period CHANGE of either measures the same
+    drift.
+    """
+    T = np.asarray(T, float)
+    w = np.asarray(dt_w, float)
+    i2 = (np.asarray(IA, float) ** 2 + np.asarray(IB, float) ** 2
+          + np.asarray(IC, float) ** 2) / 3.0
+    i2m = float((i2 * w).sum() / max(float(w.sum()), 1e-300))
+    _, rip = torque_metrics(T)
+    return {"I_amp_A": math.sqrt(2.0 * i2m), "T_mean_Nm": float(T.mean()),
+            "T_ripple_pct": (None if rip is None else float(rip)),
+            "T_pp_Nm": float(np.ptp(T))}
+
+
+def _settle_period_residual(prev, cur):
+    """Relative period-to-period change of each reported quantity.
+
+    Torque mean is scaled by max(|mean|, peak-to-peak) so a no-load run (mean
+    ≈ 0) is judged on its waveform instead of dividing by nothing; the ripple
+    is compared as the reported per cent when both periods have one, else as
+    the peak-to-peak.  ``max`` is what the criterion reads.
+    """
+    def _rel(a, b, scale):
+        return abs(float(b) - float(a)) / max(abs(float(scale)), 1e-300)
+    r_i = _rel(prev["I_amp_A"], cur["I_amp_A"], cur["I_amp_A"])
+    r_t = _rel(prev["T_mean_Nm"], cur["T_mean_Nm"],
+               max(abs(cur["T_mean_Nm"]), cur["T_pp_Nm"]))
+    if prev.get("T_ripple_pct") is not None and cur.get("T_ripple_pct") is not None:
+        r_r = _rel(prev["T_ripple_pct"], cur["T_ripple_pct"], cur["T_ripple_pct"])
+    else:
+        r_r = _rel(prev["T_pp_Nm"], cur["T_pp_Nm"], cur["T_pp_Nm"])
+    return {"I_amp": r_i, "T_mean": r_t, "T_ripple": r_r,
+            "max": max(r_i, r_t, r_r)}
+
+
 def _select_voltage_settle_periods(source_periods, *, sinusoidal_voltage,
-                                   eddy, demag, explicit_override):
-    """Narrow A/B-supported default; never shorten a source's explicit count."""
+                                   eddy, demag, explicit_override,
+                                   converged_cap=_V_SETTLE_CAP_DEFAULT):
+    """Settle count to SCHEDULE, and why.
+
+    The plain sinusoidal voltage drive (no eddy, no demag, no explicit count)
+    schedules ``converged_cap`` periods and stops early on the convergence
+    criterion above; every other source keeps its own count unchanged.
+    """
     periods = int(source_periods)
     if periods < 0 or periods != source_periods:
         raise ValueError("voltage settle periods must be a nonnegative integer")
     if (sinusoidal_voltage and not eddy and not demag and
             not explicit_override and periods == 10):
-        return 4, "plain_sinusoidal_voltage_default_ab_validated"
+        return int(converged_cap), "plain_sinusoidal_voltage_converged_settle"
     return periods, "source_policy_unchanged"
 
 
@@ -3898,17 +4027,25 @@ def fem_transient_sliding_band(
     # How long this source's circuit state takes to reach its orbit, and which
     # accelerators apply.  Everything the schedule below derives comes from it.
     _settle = _src.settle_policy()
+    _conv_tol, _conv_cap = _sine_settle_criterion()
     _settle_static_effective, _settle_selection_reason = (
         _select_voltage_settle_periods(
             _settle.periods_static,
             sinusoidal_voltage=(type(_src) is _SineVoltageSource),
             eddy=bool(eddy), demag=bool(demag),
-            explicit_override=bool(_SOURCE_V_SETTLE_ENV)))
-    if _settle_static_effective != int(_settle.periods_static):
-        log.info("P2 plain sinusoidal voltage: %d -> %d default settling "
-                 "periods (A/B validated, no eddy/demag); explicit "
-                 "SB_V_SETTLE_PERIODS still wins",
-                 _settle.periods_static, _settle_static_effective)
+            explicit_override=bool(_SOURCE_V_SETTLE_ENV),
+            converged_cap=_conv_cap))
+    # The converged settle's state: None = a fixed count (every other source).
+    _conv_settle = None
+    if _settle_selection_reason == "plain_sinusoidal_voltage_converged_settle":
+        _conv_settle = {"mode": "converged", "tol_rel": float(_conv_tol),
+                        "cap_periods": int(_conv_cap), "converged": None,
+                        "periods_used": None, "stop_residual": None,
+                        "history": [], "last_anchor_period": 0}
+        log.info("P2 plain sinusoidal voltage: settling until the period-to-"
+                 "period change of I amplitude, T mean and T ripple is < %.3g "
+                 "(cap %d periods); explicit SB_V_SETTLE_PERIODS still wins",
+                 _conv_tol, _conv_cap)
     # Carrier periods per electrical period; 0 = this source has no carrier.
     # The time-resolution gate, the mixed-settle geometry and the eddy gauge's
     # block width are all carrier questions, so they ask THIS rather than
@@ -6133,7 +6270,9 @@ def fem_transient_sliding_band(
     # whole reported window; `_INC_LDQ_SAMPLES` says why four.
     _inc_rows: list = []
     _inc_at: set = set()
-    if inc_ldq and n_total > 0:
+    # (A converged settle does not know its reported window yet: it picks the
+    # probed frames inside that window when the settle stops — see the loop.)
+    if inc_ldq and n_total > 0 and _conv_settle is None:
         _ns_inc = max(1, min(int(_INC_LDQ_SAMPLES), int(n_total)))
         _inc_at = {int(round(_j * n_total / _ns_inc)) % int(n_total)
                    for _j in range(_ns_inc)}
@@ -7929,6 +8068,97 @@ def fem_transient_sliding_band(
                          "scale %.3f", k, "fine" if _sched_fine[k] else "coarse",
                          k + 1 - _k0, _dc_p['A'], _dc_p['B'], _dc_p['C'],
                          _dc_scale)
+            # ── CONVERGED SETTLE (plain sinusoidal voltage, 2026-09-26) ──
+            # At the end of every settling period, measure the three reported
+            # quantities over it and compare with the period before.  A pair
+            # counts only when BOTH periods ran after the last Aitken anchor
+            # (an anchor moves the state; a pair straddling it measures the
+            # anchor, not the orbit), and the settle never stops on a boundary
+            # where an anchor just fired (the next period would start on an
+            # unmeasured state).  On a stop the schedule is rebuilt for the
+            # periods actually marched — a prefix of the capped one, frame for
+            # frame — so the run is the fixed-count run with that count.
+            if (_conv_settle is not None and _conv_settle["periods_used"] is None
+                    and _v_nspp > 0 and 0 <= k < int(_vskip)
+                    and (k + 1) % int(_v_nspp) == 0):
+                _cs_p = (k + 1) // int(_v_nspp)         # settle periods done
+                _cs_o = len(_IA) - 1 - k                # list index of frame k
+                _cs_a, _cs_b = _cs_o + k + 1 - int(_v_nspp), _cs_o + k + 1
+                _cs_met = _settle_period_metrics(
+                    _T2[_cs_a:_cs_b], _IA[_cs_a:_cs_b], _IB[_cs_a:_cs_b],
+                    _IC[_cs_a:_cs_b], _dt_steps[_cs_a:_cs_b])
+                _cs_anch = int(_v_anchor_applied) != int(
+                    _conv_settle.get("_anchors_seen", 0))
+                _cs_row = {"period": int(_cs_p),
+                           **{_kk: (None if _vv is None else round(float(_vv), 9))
+                              for _kk, _vv in _cs_met.items()},
+                           "anchor_after": bool(_cs_anch), "residual": None}
+                _cs_hist = _conv_settle["history"]
+                if _cs_hist and _cs_p - 1 > int(_conv_settle["last_anchor_period"]):
+                    _cs_rs = _settle_period_residual(_cs_hist[-1]["_m"], _cs_met)
+                    _cs_row["residual"] = {_kk: float(_vv)
+                                           for _kk, _vv in _cs_rs.items()}
+                _cs_row["_m"] = _cs_met
+                _cs_hist.append(_cs_row)
+                if _cs_anch:
+                    _conv_settle["last_anchor_period"] = int(_cs_p)
+                    _conv_settle["_anchors_seen"] = int(_v_anchor_applied)
+                _cs_ok = (_cs_row["residual"] is not None and not _cs_anch
+                          and _cs_row["residual"]["max"]
+                          <= float(_conv_settle["tol_rel"]))
+                if _cs_ok or (k + 1) == int(_vskip):
+                    _conv_settle["periods_used"] = int(_cs_p)
+                    _conv_settle["converged"] = bool(_cs_ok)
+                    _conv_settle["stop_residual"] = _cs_row["residual"]
+                    if _cs_ok:
+                        log.info("P2 sine settle CONVERGED after %d period(s): "
+                                 "period-to-period dI %.2e, dT %.2e, dripple "
+                                 "%.2e (tol %.1e)", _cs_p,
+                                 _cs_row["residual"]["I_amp"],
+                                 _cs_row["residual"]["T_mean"],
+                                 _cs_row["residual"]["T_ripple"],
+                                 _conv_settle["tol_rel"])
+                    else:
+                        log.warning(
+                            "P2 sine settle hit its CAP of %d periods without "
+                            "converging (last period-to-period change %s, tol "
+                            "%.1e): the reported window is what the cap "
+                            "reached, and the result says so", _cs_p,
+                            ("%.2e" % _cs_row["residual"]["max"])
+                            if _cs_row["residual"] else "not measurable",
+                            _conv_settle["tol_rel"])
+                    if _cs_ok and (k + 1) < int(_vskip):
+                        _cs_th = list(_sched_th[:k + 1])
+                        _S = _build_schedule(int(_cs_p))
+                        (_vskip, _v_nspp, _v_settle_periods, n_periods, n_total,
+                         _dmskip, period_mech, dt, _fine_frames, _c_nspp,
+                         _settle_bounds, _sched_mixed, _sched_th, _sched_dth,
+                         _sched_dt, _sched_t, _sched_fine, _dc_win,
+                         _vskip_periods, _progress_comp) = [
+                            _S[_kk] for _kk in _SCHED_KEYS]
+                        if (int(_vskip) != k + 1 or _sched_mixed or
+                                not np.allclose(_sched_th[:k + 1], _cs_th,
+                                                rtol=0.0, atol=1e-9)):
+                            raise RuntimeError(
+                                "converged settle: the rebuilt schedule is not "
+                                "a prefix of the one marched (vskip %d, frame "
+                                "%d) — refusing to splice" % (_vskip, k))
+                        _fseq = _fseq[:_fi] + list(range(k + 1, int(n_total)))
+                    # The reported window is known now: the incremental-Ldq
+                    # probes are evenly spaced over it, and the animation
+                    # keyframes span it, as the pre-loop selection does.
+                    if inc_ldq:
+                        _k0r = int(_vskip) + int(_dmskip)
+                        _nrep = max(1, int(n_total) - _k0r)
+                        _ns_inc = max(1, min(int(_INC_LDQ_SAMPLES), _nrep))
+                        _inc_at = {_k0r + int(round(_j * _nrep / _ns_inc)) % _nrep
+                                   for _j in range(_ns_inc)}
+                    if int(return_frames) > 0 and n_total > 1:
+                        _anim_k0 = int(_vskip) + int(_dmskip)
+                        _nf = max(2, min(int(return_frames), n_total - _anim_k0))
+                        _anim_idx = {_anim_k0 + int(round(
+                            i * (n_total - 1 - _anim_k0) / (_nf - 1)))
+                            for i in range(_nf)}
         # Element-mean B in the iron and the coils, captured on EVERY frame —
         # the same thing the P1 path does unconditionally.  This used to sit
         # inside `if rotor_eddy:`, which meant P2 reported ZERO core loss and
@@ -8049,6 +8279,31 @@ def fem_transient_sliding_band(
     # θ<0 on an eddy+demag run, solved and discarded so the Br ratchet only ever
     # sees the settled state (the user's two-identical-runs-disagree bug).
     _n_solved = int(n_total) + int(_n_warm) + int(_n_dmpre)
+    # ── CONVERGED SETTLE: what the REPORTED period moved against the last
+    # settling one, measured the same way the criterion measured — the honest
+    # final residual, including any drift the criterion's last pair missed.
+    _voltage_settle = None
+    if _conv_settle is not None:
+        _voltage_settle = {
+            _kk: _vv for _kk, _vv in _conv_settle.items()
+            if not _kk.startswith("_") and _kk != "history"}
+        _voltage_settle["history"] = [
+            {_kk: _vv for _kk, _vv in _r.items() if _kk != "_m"}
+            for _r in _conv_settle["history"]]
+        _voltage_settle["reported_vs_last_settle"] = None
+        _nw = int(_v_nspp)
+        _o = len(_IA) - int(n_total)
+        _r0 = _o + int(_vskip)
+        if _nw > 0 and _r0 - _nw >= 0 and _r0 + _nw <= len(_IA):
+            _ms = _settle_period_metrics(
+                _T2[_r0 - _nw:_r0], _IA[_r0 - _nw:_r0], _IB[_r0 - _nw:_r0],
+                _IC[_r0 - _nw:_r0], _dt_steps[_r0 - _nw:_r0])
+            _mr = _settle_period_metrics(
+                _T2[_r0:_r0 + _nw], _IA[_r0:_r0 + _nw], _IB[_r0:_r0 + _nw],
+                _IC[_r0:_r0 + _nw], _dt_steps[_r0:_r0 + _nw])
+            _voltage_settle["reported_vs_last_settle"] = {
+                _kk: float(_vv)
+                for _kk, _vv in _settle_period_residual(_ms, _mr).items()}
 
     # ── Voltage drive: drop the SETTLING periods ─────────────────────────
     # The currents are STATE, so the run carries an electrical start-up
@@ -9325,9 +9580,11 @@ def fem_transient_sliding_band(
             "bh_loss_pct": round(100.0 * (1.0 - _kept_bh), 3),
             "br_kept_vol_pct": round(100.0 * _kept, 3),
             "loss_pct": round(100.0 * (1.0 - _kept), 3),
-            "br_worst_pct": round(100.0 * float(_brm.min()), 1),
             "area_derated_pct": round(100.0 * float(
                 np.sum(_ar_mag[_brm < 0.999]) / _wsum), 2),
+            "br_corner": _demag_corner_diag(
+                half["r"]["mesh"], _mag_idx, _brm, _ar_mag,
+                getattr(_dmst, "mags", [])),
         }
     # ── dq QUANTITIES of this operating point ────────────────────────────────
     # Mean flux linkages and currents in the rotor (d-q) frame, from the same
@@ -9489,6 +9746,11 @@ def fem_transient_sliding_band(
         "voltage_settle_periods": int(_v_settle_periods),
         "voltage_settle_source_policy_periods": int(_settle.periods_static),
         "voltage_settle_selection_reason": _settle_selection_reason,
+        # The converged settle (plain sinusoidal voltage): periods used, the
+        # criterion, the stopping residual, each period's three quantities,
+        # and what the reported period moved against the last settling one.
+        # None on every fixed-count run.
+        "voltage_settle": _voltage_settle,
         "solve_wall_s": round(float(_t.time() - t0), 1),
         # What the caller ASKED for, beside what actually ran.  The whole-node
         # snap silently changed the time resolution of every run whose requested

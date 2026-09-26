@@ -198,7 +198,6 @@ NOT_PER_FRAME = {
     "_cs_hist",       # one row per settling PERIOD (converged sine settle)
     "_warm_ks", "_warm_solid",         # eddy warm-up (k < 0) samples only
     "_warm_grp.setdefault(_gk, [])",   # …per conductor group (period gauge)
-    "_v_diag.setdefault('dc_anchor_A', [])",   # one entry per anchor event
 }
 
 

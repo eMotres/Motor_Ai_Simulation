@@ -20,7 +20,7 @@ tree (`s1` items 1-4/6, `s5` all items).
 | 2 | `_spectral_ddt_series` (dψ/dt cut above the 2nd slot harmonic) | — | Crank–Nicolson step voltage R·ī + Δψ/Δt (the circuit row the voltage drive solves) | V_peak −0.2 %, THD_LL −0.07 pp at 36 steps; ⟨v·i⟩ balances T·ω + solved losses to O(Δt²) |
 | 3 | `_smooth_demag_H` (nodal smoothing of H in each magnet) | mesh bias of the corner elements | removed; element-mean H of the solved field | Br kept −0.3 to −0.7 pp at default mesh, converges with the magnet mesh to the same limit the smoothed code reaches only when refined |
 | 4 | `HARMONIC_FLOOR_T` 1 mT (and `B_FLOOR_T` 1 µT) in the measured-surface core loss | — | every nonzero amplitude billed | < 1e-3 W (identical to 3 decimals on L155/Ø40) |
-| 5 | voltage-drive anchors (Aitken Δ², period-mean DC) | settling | Aitken: proven inert, kept. PWM DC anchor: **stopped** — biases a short-τ machine (1.1 A DC left, P_cu −0.9 %), needed on the L155; options in §5 | unchanged |
+| 5 | voltage-drive anchors (Aitken Δ², period-mean DC) | settling | Aitken: proven inert, kept. PWM DC anchor: **stopped** — biases a short-τ machine (1.1 A DC left, P_cu −0.9 %), needed on the L155; options in §5. **Resolved 2026-09-26: option (c), replaced by the DC-orbit solve** (`docs/PWM_DC_ORBIT_SOLVE_2026-09-26.md`) | unchanged → see that doc |
 | 6 | inventory | | THD 25th-harmonic cap, delta circulating h ∈ {3, 9, 15}, two inert clamps removed | THD now to Nyquist; P_cu_circulating over every zero-sequence bin |
 | 7 | eddy settling | 3-sample probe verdict, per-splice kicks, cold start from A = 0 | whole-period per-body gauge, exact pole-pair remap at every splice, static cold start | L155 rated P_shaft 29.1 → 7.2 W (and flagged when capped), L13 no-demag 0.83 → 0.41 W |
 | 8 | optimizer E | | `OPT_FINAL_WARM_START` default ON; winner validation requires `eddy_settled` | — |
@@ -177,6 +177,14 @@ Both act on the circuit STATE during the discarded settling prefix only.
   state, then the 2×2 linear solve, verified by a following period) — the honest accelerator,
   measured against a long no-anchor reference on the L155 before it ships. The Ø40 numbers above
   are the first half of that proof.
+
+  **Resolved 2026-09-26 — option (c).** The anchor is gone; the settle now
+  solves the fixed point of the line-to-line flux's period map by Newton
+  shooting (exact period drift, period Jacobian from the frames' own incremental
+  ∂ψ/∂i, the modulator's turn-on flux predicted from its volt-seconds, the last
+  settling period free as the verification).  `simulation/dc_orbit.py`;
+  derivation, synthetic proof and FEM A/B in
+  `docs/PWM_DC_ORBIT_SOLVE_2026-09-26.md`.
 
 ## 6. Filter-like operations on the reported path — inventory
 

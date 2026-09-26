@@ -34,6 +34,7 @@ import type { ThermalPayload } from './types';
    to stop (2026-09-06). */
 export { fmt, fmtSecs, fmtClock, readSimSetting } from '../mechanical/api';
 import { readSimSetting } from '../mechanical/api';
+import { EDDY_DEFAULT_STEPS } from '../../lib/eddySteps';
 
 /** How the OUTER stator surface is cooled: air blown at a speed, a liquid loop,
  *  a hand-typed film coefficient — or nothing at all.
@@ -781,7 +782,7 @@ export function simOperatingPoint(): {
     gamma_deg: Number(readSimSetting('gamma', 0)) || 0,
     I_phase_rms: Math.max(0, Number(readSimSetting('current', 0)) || 0),
     coil_temp_c: Number(readSimSetting('coilTemp', 120)) || 120,
-    n_steps_per_period: Number(readSimSetting('stepsPP', 24)) || 24,
+    n_steps_per_period: Number(readSimSetting('stepsPP', EDDY_DEFAULT_STEPS)) || EDDY_DEFAULT_STEPS,
   };
 }
 

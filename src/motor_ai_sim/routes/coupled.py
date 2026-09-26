@@ -100,6 +100,9 @@ from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim.progress import poll as _progress_poll
 from motor_ai_sim.progress import route_progress as _route_progress
 
+from motor_ai_sim.simulation.eddy_steps import (
+    EDDY_DEFAULT_STEPS_PER_PERIOD as _EDDY_STEPS)
+
 log = logging.getLogger(__name__)
 
 
@@ -395,6 +398,33 @@ def _refuse(message: str, fields: List[str], *, code: str = "coupled_refused"):
     return HTTPException(status_code=422, detail={
         "error": message, "error_code": code,
         "invalid_parameters": [{"field": f} for f in fields]})
+
+
+def _with_eddy_steps(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The body with its step count named: the caller's, else the eddy default.
+
+    Every pass of this loop runs the coupled eddy solve (``_em_run`` spells both
+    switches ON), so a body that names no ``n_steps_per_period`` solves at
+    ``EDDY_DEFAULT_STEPS_PER_PERIOD`` (72, owner 2026-09-26) — the same number
+    the Electromagnetic tab defaults to, so the run this loop makes is the run
+    the thermal half looks up.  A named count is validated and kept as sent.
+    The PWM inverter's own frame rule (``inverter.n_steps_per_period``) is a
+    separate key and is not touched.
+    """
+    from motor_ai_sim.simulation.eddy_steps import (
+        EDDY_DEFAULT_STEPS_PER_PERIOD, validate_steps_per_period)
+    out = dict(body or {})
+    v = out.get("n_steps_per_period")
+    if v is None or (isinstance(v, str) and not v.strip()):
+        out["n_steps_per_period"] = EDDY_DEFAULT_STEPS_PER_PERIOD
+        log.info("coupled: no n_steps_per_period in the request — the eddy "
+                 "default %d steps/period is used", EDDY_DEFAULT_STEPS_PER_PERIOD)
+        return out
+    try:
+        out["n_steps_per_period"] = validate_steps_per_period(v)
+    except ValueError as exc:
+        raise _refuse(str(exc), ["n_steps_per_period"])
+    return out
 
 
 def _f(body: Dict[str, Any], key: str, default: float) -> float:
@@ -1582,7 +1612,7 @@ def _sine_comparison_step(body: Dict[str, Any], em: Dict[str, Any], *,
     ref_body.update(I_phase_rms=round(float(i1), 4), gamma_deg=round(float(g1), 3),
                     n_steps_per_period=int(inverter.get("n_steps_per_period")
                                            or body.get("n_steps_per_period")
-                                           or 36))
+                                           or _EDDY_STEPS))
     tok_bg = _BACKGROUND_RUN.set(True)
     tok_brg = _ml.BEARING_TEMP_C.set(None if bearing_temp_c is None
                                      else float(bearing_temp_c))
@@ -3552,7 +3582,7 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
         gamma_deg=_f(body, "gamma_deg", 0.0),
         I_phase_rms=_f(body, "I_phase_rms", 0.0),
         n_steps_per_period=int(n_steps_per_period
-                               or body.get("n_steps_per_period") or 12),
+                               or body.get("n_steps_per_period") or _EDDY_STEPS),
         n_periods=_f(body, "n_periods", 1.0),
         mesh_size_mm=_f(body, "mesh_size_mm", 3.0),
         min_size_mm=_f(body, "min_size_mm", 0.3),
@@ -4382,6 +4412,7 @@ def run(body: Dict[str, Any] = Body(default_factory=dict),
 
     Everything below is the contract the loop always had.
     """
+    body = _with_eddy_steps(body)
     tok = None if _record_wanted(body) else _rr.suppress()
     try:
         return _run(body, authorization)
@@ -6335,6 +6366,7 @@ def constants_20c(body: Dict[str, Any] = Body(default_factory=dict),
     from motor_ai_sim import material_context as _mc
     from motor_ai_sim.routes.simulation import _effective_rpm, _parse_mat_override
 
+    body = _with_eddy_steps(body)
     tok_rec = None if _record_wanted(body) else _rr.suppress()
     try:
         if body.get("mat") is not None:
@@ -6462,7 +6494,7 @@ def _cr_point_kwargs(body: Dict[str, Any]) -> Dict[str, Any]:
         rpm=_effective_rpm(body.get("rpm")),
         gamma_deg=_f(body, "gamma_deg", 0.0),
         I_phase_rms=_f(body, "I_phase_rms", 0.0),
-        n_steps_per_period=int(body.get("n_steps_per_period") or 12),
+        n_steps_per_period=int(body.get("n_steps_per_period") or _EDDY_STEPS),
         n_periods=_f(body, "n_periods", 1.0),
         mesh_size_mm=_f(body, "mesh_size_mm", 3.0),
         min_size_mm=_f(body, "min_size_mm", 0.3),
@@ -7150,6 +7182,9 @@ def continuous_rating(body: Dict[str, Any] = Body(default_factory=dict),
     from motor_ai_sim.routes.simulation import _parse_mat_override
     from motor_ai_sim.routes.thermal import _assignments, _dc_geometry
 
+    # The EM run this table stands on is looked up by the body's point, so its
+    # step count defaults exactly as the loop that made that run defaulted it.
+    body = _with_eddy_steps(body)
     ref = body.get("reference")
     ref_sel = "explicit" if isinstance(ref, dict) else str(
         ref or "last_run").strip().lower()

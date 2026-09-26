@@ -5110,13 +5110,13 @@ def retention_interface(case: Dict[str, Any]) -> Tuple[Optional[str],
 #: maximum in the table.
 DEMAG_LOSS_LIMIT_PCT = 1.0
 
-#: …and the WORST SINGLE ELEMENT of the map, which is a different question
-#: (reviewer 2026-09-14, B6).  The volume average is a design criterion; one
-#: element down to a fifth of its Br is a pole corner that has stopped being a
-#: magnet, and it happens at a corner facing a slot opening long before the
-#: average moves.  Both bands are this report's own — no standard fixes them.
-DEMAG_WORST_RED_PCT = 80.0
-DEMAG_WORST_AMBER_PCT = 90.0
+#: (The worst SINGLE element used to carry red/amber bands of its own here —
+#: 80 / 90 %, reviewer 2026-09-14, B6.  It is a sharp-corner singularity that
+#: does not converge with the mesh — 11.7 % at every magnet mesh on Ø40/L13,
+#: 98 → 79 % with the mesh on L155 (docs/NO_FILTERS_2026-09-24.md §3) — so a
+#: band on it judged the mesh, not the magnet.  It is now a flagged corner
+#: diagnostic with its location and no limit, like the mechanical table's
+#: unaveraged peak stress; the magnet's figure is the volume-weighted Br kept.)
 
 #: How close to a limit is "close" — per cent of the limit.
 NEAR_PCT = 10.0
@@ -5417,31 +5417,25 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         "Higher-coercivity grade, cooler magnets, or the load line off the "
         "knee: less current, less negative gamma, a thicker magnet.",
         note="the design criterion is Br kept >= 99 % of the card value"))
-    # …and the WORST SINGLE ELEMENT beside it (reviewer 2026-09-14, B6).  A
-    # volume average of 97.6 % and one pole corner at 18.4 % of Br are two
-    # different machines, and only the first had a rule.
-    _worst = _numf(ctx.get("br_worst_pct"))
+    # …and the WORST SINGLE ELEMENT beside it, as what it is: a CORNER
+    # diagnostic (task 2026-09-26).  It was a red/amber rule (B6), but that
+    # number is a sharp-corner singularity that does not converge with the
+    # mesh (docs/NO_FILTERS_2026-09-24.md §3), so it is flagged with WHERE it
+    # sits and judged against nothing; the volume average above is the rule.
+    _cc = br_corner_of({"br_corner": ctx.get("br_corner"),
+                        "br_worst_pct": ctx.get("br_worst_pct")})
     _corner = demag_corner_clause(ctx.get("demag_corner"))
-    if _worst is not None:
-        _lvl = ("red" if _worst < DEMAG_WORST_RED_PCT else
-                ("amber" if _worst < DEMAG_WORST_AMBER_PCT else "green"))
+    if _cc is not None:
+        _where = br_corner_where(_cc)
         out.append({
-            "rule": "demag_worst_element", "level": _lvl, "duty": duty,
-            "quantity": "Worst magnet element, Br retained",
-            "value": _worst, "limit": DEMAG_WORST_RED_PCT, "unit": "%",
-            "kind": "min",
-            "margin_pct": round(100.0 * (_worst - DEMAG_WORST_RED_PCT)
-                                / DEMAG_WORST_RED_PCT, 1),
-            "remedy": ("ONE element, not the average, and it does not come "
-                       "back: chamfer or shorten the pole arc at that corner, "
-                       "or take the load line off the knee."),
-            "note": ("the worst SINGLE element of the demagnetisation map, not "
-                     "the volume average — that is the row above. Below %s %% "
-                     "of Br that corner has stopped being a magnet; %s to %s %% "
-                     "is amber. This report's own band, no standard fixes it"
-                     % (_fmt(DEMAG_WORST_RED_PCT, 0),
-                        _fmt(DEMAG_WORST_RED_PCT, 0),
-                        _fmt(DEMAG_WORST_AMBER_PCT, 0)))
+            "rule": "demag_corner", "level": "info", "duty": duty,
+            "quantity": "Br corner diagnostic (worst single magnet element)",
+            "value": _numf(_cc.get("br_pct")), "limit": None, "unit": "%",
+            "kind": "info", "margin_pct": None, "remedy": "",
+            "note": ("a sharp-corner value%s that does not converge with mesh "
+                     "refinement: a corner flag, not the magnet's figure — "
+                     "that is the volume-weighted Br kept above"
+                     % ((" " + _where) if _where else ""))
             + ((". " + _corner) if _corner else "")})
     out.append(_warn(
         "torque_ripple", duty, "Torque ripple, low-order (cogging + slotting)",
@@ -6288,10 +6282,18 @@ def demag_corner_stats(die: str, cfg: str,
                     - (x[tri[:, 2]] - x[tri[:, 0]]) * (y[tri[:, 1]] - y[tri[:, 0]]))
                 m = coef[mag]
                 tot = float(ar.sum()) or 1.0
+                # WHERE the worst element sits on this map (its centroid, in
+                # the stored field's mm): the corner diagnostic ships with its
+                # location, not as a bare number (task 2026-09-26).
+                _iw = int(np.argmin(m))
+                _cx = float(x[tri[_iw]].mean())
+                _cy = float(y[tri[_iw]].mean())
                 out = {
                     "n_elements": int(m.size),
                     "min_pct": round(100.0 * float(m.min()), 2),
                     "p1_pct": round(100.0 * float(np.percentile(m, 1.0)), 2),
+                    "min_x_mm": round(_cx, 3), "min_y_mm": round(_cy, 3),
+                    "min_area_pct": round(100.0 * float(ar[_iw]) / tot, 4),
                 }
                 for thr, tag in ((0.5, "50"), (0.8, "80"), (0.9, "90")):
                     sel = m < thr
@@ -6325,6 +6327,66 @@ def demag_corner_stats(die: str, cfg: str,
         out = None
     _DEMAG_CORNER_CACHE[key] = out
     return out
+
+
+def br_corner_from_stats(st: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The corner diagnostic rebuilt from a duty's stored map
+    (:func:`demag_corner_stats`), in the solver's ``br_corner`` shape."""
+    if not st or st.get("min_pct") is None:
+        return None
+    out = {"flag": "corner", "br_pct": round(float(st["min_pct"]), 1),
+           "location_frame": "this duty's stored map"}
+    if st.get("min_x_mm") is not None and st.get("min_y_mm") is not None:
+        x, y = float(st["min_x_mm"]), float(st["min_y_mm"])
+        out.update(x_mm=x, y_mm=y, r_mm=round(math.hypot(x, y), 3),
+                   theta_deg=round(math.degrees(math.atan2(y, x)), 2))
+    if st.get("min_area_pct") is not None:
+        out["element_area_pct"] = st["min_area_pct"]
+    return out
+
+
+def br_corner_of(dem: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The worst-element CORNER diagnostic of a demag block, or ``None``.
+
+    The worst single element is a sharp-corner singularity that does not
+    converge with the mesh (docs/NO_FILTERS_2026-09-24.md §3): the magnet's
+    figure is the volume-weighted Br kept, and this is only ever shown as a
+    flagged corner diagnostic.  The solver writes it as ``br_corner`` (value +
+    location) since 2026-09-26; a result stored before that carries the same
+    number as ``br_worst_pct`` with no location, and is read as exactly that.
+    """
+    if not isinstance(dem, dict):
+        return None
+    c = dem.get("br_corner")
+    if isinstance(c, dict) and _numf(c.get("br_pct")) is not None:
+        return dict(c)
+    v = _numf(dem.get("br_worst_pct"))
+    if v is None:
+        return None
+    return {"flag": "corner", "br_pct": v, "location_frame": None}
+
+
+#: Table row of the corner value: a diagnostic, not a magnet figure.
+CORNER_ROW_LABEL = "Br corner diagnostic, worst element [%] (not the magnet's figure)"
+
+#: The per-side caption label of the corner value — named as the corner it
+#: is, so neither side's number reads as its magnet's figure.
+CORNER_CLAUSE_LABEL = "corner diagnostic (worst element) keeps"
+
+
+def br_corner_where(c: Optional[Dict[str, Any]]) -> str:
+    """``"at r 7.84 mm, 31.2°"`` or ``""`` when the corner has no location."""
+    if not c or c.get("r_mm") is None or c.get("theta_deg") is None:
+        return ""
+    return "at r %s, %s°" % (_fmt(c.get("r_mm"), 2, "mm"),
+                             _fmt(c.get("theta_deg"), 1))
+
+
+def br_corner_cell(c: Optional[Dict[str, Any]]) -> str:
+    """Table cell: the value, marked as the corner diagnostic it is."""
+    if not c or _numf(c.get("br_pct")) is None:
+        return "—"
+    return "%s (corner)" % _fmt(_numf(c.get("br_pct")), 1)
 
 
 def demag_corner_clause(st: Optional[Dict[str, Any]]) -> str:
@@ -7282,7 +7344,8 @@ def demag_from_field(die: str, cfg: str, duty: Optional[str],
     out["bh_kept_vol_pct"] = st["bh_kept_vol_pct"]
     out["bh_loss_pct"] = round(100.0 - float(st["bh_kept_vol_pct"]), 3)
     out["area_derated_pct"] = st["area_derated_pct"]
-    out["br_worst_pct"] = st["min_pct"]
+    out.pop("br_worst_pct", None)          # a legacy key never outlives its map
+    out["br_corner"] = br_corner_from_stats(st)
     e_tot = _numf(out.get("energy_total_J"))
     if e_tot is not None:
         out["energy_lost_J"] = round(
@@ -7941,11 +8004,11 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
 
     # ── electromagnetic ─────────────────────────────────────────────────────
     ctx["br_kept_pct"] = _numf(_g(em, "demag.br_kept_vol_pct"))
-    # …and the WORST single element beside the volume average (reviewer
-    # 2026-09-14, B6): on the L155 peak duty one pole corner keeps 18.4 % of
-    # its Br — a corner that is gone — and the document stated it three times
-    # in passing and never as a finding.
-    ctx["br_worst_pct"] = _numf(_g(em, "demag.br_worst_pct"))
+    # …and the worst single element beside the volume average — as the
+    # flagged CORNER diagnostic it is (value + location, no limit; see
+    # br_corner_of).  B6 made it a finding; NO_FILTERS §3 showed it is a
+    # mesh-dependent corner singularity, not a magnet-level number.
+    ctx["br_corner"] = br_corner_of(_g(em, "demag"))
     # …AND WHETHER THE EDDY SOLVE ITSELF SETTLED (item 5, owner review
     # 2026-09-19).  A capped pass prints its losses and its efficiency as
     # physics with no sign it stopped short of the periodic steady state.
@@ -11377,9 +11440,10 @@ def em_demag_text(em: Dict[str, Any],
 
     The headline the app quotes is the volume-weighted ENERGY-product deficit
     ((BH)max goes as Br², which is the user's criterion): nominal grade × kept
-    energy is the grade the magnet has effectively become.  ``br_worst_pct`` is
-    the worst single element, and the per-magnet report carries the knee field
-    of the magnets close enough to it to be worth naming.
+    energy is the grade the magnet has effectively become.  The worst single
+    element follows as a flagged CORNER diagnostic (value + location), never as
+    the magnet's figure: it is a sharp-corner singularity that does not converge
+    with the mesh (docs/NO_FILTERS_2026-09-24.md §3).
     """
     dem = _g(em, "demag")
     if not (isinstance(dem, dict) and dem):
@@ -11409,13 +11473,20 @@ def em_demag_text(em: Dict[str, Any],
     # note says there is nothing stored to check the recomputed figure
     # against, instead of implying one.
     _recomp = _demag_recompute_clause(dem)
-    return ("Br kept %s of the magnet volume, energy ((BH)max) lost %s, worst "
-            "single element KEPT %s of its Br%s.%s%s%s" % (
-                _fmt(dem.get("br_kept_vol_pct"), 3, "%"),
-                _fmt(dem.get("bh_loss_pct"), 3, "%"),
-                _fmt(dem.get("br_worst_pct"), 1, "%"),
-                (", knee field %s kA/m" % _fmt(knee, 1)) if knee is not None else "",
-                grade, (" " + _corner) if _corner else "", _recomp))
+    _cc = br_corner_of(dem)
+    _cc_txt = ""
+    if _cc is not None:
+        _where = br_corner_where(_cc)
+        _cc_txt = (" Corner diagnostic (flagged, not the magnet's figure): the "
+                   "worst single element keeps %s of its Br%s — a sharp-corner "
+                   "value that does not converge with mesh refinement."
+                   % (_fmt(_cc.get("br_pct"), 1, "%"),
+                      (" " + _where) if _where else ""))
+    return ("Br kept %s of the magnet volume, energy ((BH)max) lost %s%s.%s%s%s%s"
+            % (_fmt(dem.get("br_kept_vol_pct"), 3, "%"),
+               _fmt(dem.get("bh_loss_pct"), 3, "%"),
+               (", knee field %s kA/m" % _fmt(knee, 1)) if knee is not None else "",
+               grade, _cc_txt, (" " + _corner) if _corner else "", _recomp))
 
 
 def demag_pair_note(left: Optional[Dict[str, Any]],
@@ -11439,9 +11510,10 @@ def demag_pair_note(left: Optional[Dict[str, Any]],
         loss = _numf(dem.get("loss_pct"))
         bh = _numf(dem.get("bh_loss_pct"))
         area = _numf(dem.get("area_derated_pct"))
-        worst = _numf(dem.get("br_worst_pct"))
+        worst = _numf((br_corner_of(dem) or {}).get("br_pct"))
         words = ("duty '%s': magnets %s, Br lost %s, (BH)max lost %s, "
-                "affected area %s, worst element kept %s"
+                "affected area %s, corner diagnostic (worst element, not the "
+                "magnet's figure) kept %s"
                 % (side.get("duty") or "—",
                    _fmt(t, 0, "°C") if t is not None else "—",
                    _fmt(loss, 2, "%") if loss is not None else "—",
@@ -11501,10 +11573,10 @@ def em_map_numbers(key: str, maps: Dict[str, Any],
     if not other:
         return ""
     if key == "demag":
-        l_worst = _numf(_g((left_side or {}).get("em") or {},
-                           "demag.br_worst_pct"))
-        r_worst = _numf(_g((right_side or {}).get("em") or {},
-                           "demag.br_worst_pct"))
+        l_worst = _numf((br_corner_of(_g((left_side or {}).get("em") or {},
+                                         "demag")) or {}).get("br_pct"))
+        r_worst = _numf((br_corner_of(_g((right_side or {}).get("em") or {},
+                                         "demag")) or {}).get("br_pct"))
         # SAME ROUNDING AS THE TABLE (L155 audit, 2026-09-20, CS-1): at one
         # decimal place `_fmt` strips a trailing ".0", so 6.95 rounds to
         # "7.0" and then prints as bare "7" — a different-LOOKING number
@@ -11513,9 +11585,9 @@ def em_map_numbers(key: str, maps: Dict[str, Any],
         # tables use for this one quantity and what this caption now
         # matches.
         if l_worst is not None or r_worst is not None:
-            return pair_number_clause("worst element keeps", l_worst,
+            return pair_number_clause(CORNER_CLAUSE_LABEL, l_worst,
                                       r_worst, 2, "%")
-        return pair_number_clause("worst element keeps",
+        return pair_number_clause(CORNER_CLAUSE_LABEL,
                                   maps.get("demag_min_pct"),
                                   other.get("demag_min_pct"), 2, "%")
     if key == "b":
@@ -11565,8 +11637,9 @@ def em_map_figures(maps: Dict[str, Any],
     if maps.get("demag_min_pct") is not None and not other:
         # SAME ROUNDING AS THE TABLE (CS-1, L155 audit 2026-09-20) — see
         # `em_map_numbers`'s own note.
-        demag_cap += " Worst element keeps %s of Br." % _fmt(
-            maps["demag_min_pct"], 2, "%")
+        demag_cap += (" Corner diagnostic (worst element, not the magnet's "
+                      "figure) keeps %s of Br." % _fmt(
+                          maps["demag_min_pct"], 2, "%"))
     # The |B| scale is capped, and a capped scale says so beside the picture
     # (reviewer 2026-09-14: a bar ending at 3.599 T on a 2.3 T machine).  A pair
     # shares ONE cap — the wider of the two, so neither side is clipped harder
@@ -13752,8 +13825,8 @@ def pwm_coupled_rows(col: Dict[str, Any]) -> Dict[str, Any]:
                             _numf(_em(r).get("T_em_avg_Nm"))), 3))
     _row("Br kept in the magnets [%]",
          lambda r: _fmt(_numf((_dem(r) or {}).get("br_kept_vol_pct")), 3))
-    _row("Worst magnet element, Br [%]",
-         lambda r: _fmt(_numf((_dem(r) or {}).get("br_worst_pct")), 1))
+    _row(CORNER_ROW_LABEL,
+         lambda r: br_corner_cell(br_corner_of(_dem(r))))
     # ONE DC LINK, ONE FIGURE (CS-2, audit v7): 750 V here against the 750.4 V
     # sections 3, 4 and 8 print is the same link, rounded twice.
     _row("DC link [V]", lambda r: _fmt(_cpl_inv(r).get("v_dc_V"), 1))
@@ -17550,8 +17623,11 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     R("Shaft efficiency [%]", _eta_sh, 2)
     R("Br kept in the magnets [%]",
       lambda c: _g(c["em"], "demag.br_kept_vol_pct"), 3)
-    R("Worst magnet element, Br [%]",
-      lambda c: _g(c["em"], "demag.br_worst_pct"), 1)
+    # The worst element as the flagged CORNER diagnostic it is (value marked
+    # "(corner)", no limit) — never a magnet-level row (task 2026-09-26).
+    rows.append([CORNER_ROW_LABEL] + _col_vals(
+        cols, lambda c: (NOT_SOLVED if not c["em"] else
+                         br_corner_cell(br_corner_of(_g(c["em"], "demag"))))))
     R("Mass [kg]",
       lambda c: _e(c, "mass_total_kg") or (c.get("result") or {}).get("mass_kg"), 3)
     # ONE BUILD, ONE MASS.  Two columns quoting two masses is a data defect, not
@@ -19243,11 +19319,10 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
         ["Irreversible demagnetisation",
          _fmt(DEMAG_LOSS_LIMIT_PCT, 1, "% of Br"),
          "the project's criterion, volume-averaged over the magnets"],
-        ["Worst magnet element, Br retained",
-         "%s (red), %s (amber)" % (_fmt(DEMAG_WORST_RED_PCT, 0, "%"),
-                                   _fmt(DEMAG_WORST_AMBER_PCT, 0, "%")),
-         "the worst SINGLE element, not the volume average; this report's own "
-         "bands"],
+        ["Br corner diagnostic (worst single element)", "none — a flag",
+         "a sharp-corner value that does not converge with mesh refinement; "
+         "shown with its location, never judged — the magnet's figure is the "
+         "volume average above"],
         ["Mechanical safety factor", _fmt(2.0, 1),
          "the project's acceptance level, on the AVERAGED PEAK of each part's "
          "criterion"],
@@ -19400,8 +19475,8 @@ def _warnings_page(st, cols: List[Dict[str, Any]],
     out.append(_para("The rules, and where each limit comes from", st["h2"]))
     ex: Dict[str, Any] = limit_rules_context(ctxs)
     lim_rows = limit_rules_rows(ex)
-    # The Limit column carries "80 % (red), 90 % (amber)" and the Quantity
-    # column "Worst magnet element, Br retained": both need room to wrap
+    # The Quantity column carries "Br corner diagnostic (worst single
+    # element)" and long source notes: both need room to wrap
     # (reviewer 2026-09-14, BL-1).
     out.append(_table([[r[0], r[1], _para(str(r[2]), st["cell"])]
                        for r in lim_rows],

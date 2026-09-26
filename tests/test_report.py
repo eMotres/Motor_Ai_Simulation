@@ -2471,51 +2471,64 @@ class TestB4B5OneStressBehindEverySafetyFactor:
         assert "Thicken the sleeve" in w["remedy"]
 
 
-class TestB6TheWorstMagnetElementHasARuleOfItsOwn:
-    """B6 — the peak duty loses 81.6 % of Br in one pole corner and only the
-    VOLUME AVERAGE had a rule; the number was stated three times in passing."""
+class TestB6TheWorstMagnetElementIsACornerDiagnostic:
+    """B6 (2026-09-14) gave the worst single element a red/amber rule of its
+    own.  NO_FILTERS §3 (2026-09-24) showed it is a sharp-corner singularity
+    that never converges with the mesh, so since 2026-09-26 it is a flagged
+    CORNER diagnostic — value + location, no limit — and the volume-weighted
+    Br kept is the magnet's figure."""
 
-    def test_red_below_eighty(self):
+    CORNER = {"flag": "corner", "br_pct": 18.4, "x_mm": 6.1, "y_mm": 3.5,
+              "r_mm": 7.033, "theta_deg": 29.85, "element_area_pct": 0.012}
+
+    def test_it_is_info_with_no_limit_whatever_the_value(self):
+        from motor_ai_sim import report as R
+
+        for v in (18.4, 85.0, 98.4):
+            w = _rule(R.duty_warnings({"duty": "d", "br_corner": dict(
+                self.CORNER, br_pct=v)}), "demag_corner")
+            assert w["level"] == "info" and w["kind"] == "info"
+            assert w["limit"] is None and w["value"] == v
+
+    def test_it_carries_its_location(self):
+        from motor_ai_sim import report as R
+
+        w = _rule(R.duty_warnings({"duty": "peak", "br_corner": self.CORNER}),
+                  "demag_corner")
+        assert "at r 7.03 mm, 29.9°" in w["note"]
+        assert "not the magnet's figure" in w["note"]
+
+    def test_a_stored_legacy_value_is_read_as_the_same_diagnostic(self):
         from motor_ai_sim import report as R
 
         w = _rule(R.duty_warnings({"duty": "peak", "br_worst_pct": 18.4}),
-                  "demag_worst_element")
-        assert w["level"] == "red" and w["value"] == 18.4
-        assert w["limit"] == R.DEMAG_WORST_RED_PCT
+                  "demag_corner")
+        assert w["level"] == "info" and w["value"] == 18.4
+        assert "at r" not in w["note"]           # no location was stored
+        assert R.br_corner_of({"br_worst_pct": 18.4})["br_pct"] == 18.4
+        assert R.br_corner_of({"br_kept_vol_pct": 99.0}) is None
 
-    def test_amber_between_eighty_and_ninety(self):
-        from motor_ai_sim import report as R
-
-        assert _rule(R.duty_warnings({"duty": "d", "br_worst_pct": 85.0}),
-                     "demag_worst_element")["level"] == "amber"
-
-    def test_green_above_ninety(self):
-        from motor_ai_sim import report as R
-
-        ws = R.duty_warnings({"duty": "d", "br_worst_pct": 98.4})
-        assert _rule(ws, "demag_worst_element")["level"] == "green"
-
-    def test_it_sits_beside_the_volume_average_and_says_so(self):
+    def test_the_volume_average_keeps_the_rule(self):
         from motor_ai_sim import report as R
 
         ws = R.duty_warnings({"duty": "peak", "br_kept_pct": 97.62,
-                              "br_worst_pct": 18.4})
-        rules = [w["rule"] for w in ws]
-        assert "demag_br_loss" in rules and "demag_worst_element" in rules
-        note = _rule(ws, "demag_worst_element")["note"]
-        assert "SINGLE element" in note and "volume average" in note
+                              "br_corner": self.CORNER})
+        rules = {w["rule"]: w for w in ws}
+        assert rules["demag_br_loss"]["level"] in ("red", "amber")
+        assert "demag_worst_element" not in rules
 
-    def test_no_rule_without_the_number(self):
+    def test_no_row_without_the_number(self):
         from motor_ai_sim import report as R
 
-        assert _rule(R.duty_warnings({"duty": "d"}),
-                     "demag_worst_element") is None
+        assert _rule(R.duty_warnings({"duty": "d"}), "demag_corner") is None
 
-    def test_the_limits_table_carries_the_rule(self):
+    def test_the_limits_table_says_it_has_no_limit(self):
         from motor_ai_sim import report as R
 
         rows = dict((r[0], r[1]) for r in R.limit_rules_rows({}))
-        assert "Worst magnet element, Br retained" in rows
+        assert rows["Br corner diagnostic (worst single element)"] == \
+            "none — a flag"
+        assert "Worst magnet element, Br retained" not in rows
 
 
 class TestB9EveryFigureCaptionCarriesItsDuty:
@@ -2974,16 +2987,24 @@ class TestTheClientReviewOf20260914:
         txt = R.em_demag_text({"demag": {"br_kept_vol_pct": 97.617,
                                          "bh_loss_pct": 4.267,
                                          "br_worst_pct": 18.4}}, self.CORNER)
-        assert "worst single element KEPT 18.4 %" in txt
+        assert txt.startswith("Br kept 97.617 % of the magnet volume")
+        assert ("Corner diagnostic (flagged, not the magnet's figure): the "
+                "worst single element keeps 18.4 % of its Br") in txt
         assert "It is a CORNER, not a pole" in txt
+        # …and with the solver's location when the result carries one
+        txt = R.em_demag_text({"demag": {"br_kept_vol_pct": 97.617,
+                                         "br_corner": {"br_pct": 18.4,
+                                                       "r_mm": 7.03,
+                                                       "theta_deg": 29.85}}})
+        assert "keeps 18.4 % of its Br at r 7.03 mm, 29.9°" in txt
 
-    def test_the_rule_carries_the_corner_and_stays_red(self):
+    def test_the_corner_row_carries_the_map_stats_and_is_info(self):
         from motor_ai_sim import report as R
 
         w = _rule(R.duty_warnings({"duty": "peak", "br_worst_pct": 18.4,
                                    "demag_corner": self.CORNER}),
-                  "demag_worst_element")
-        assert w["level"] == "red"
+                  "demag_corner")
+        assert w["level"] == "info"
         assert "160 of the 1380 magnet elements of this duty's mesh" in w["note"]
 
     # ── 3 · a bonded tie that goes into tension ─────────────────────────────
@@ -3908,7 +3929,7 @@ class TestTheFiguresAreDrawnForBothDuties:
 
         assert R.em_map_numbers("demag", {"demag_min_pct": 98.4},
                                 {"demag_min_pct": 18.4}) == \
-            "worst element keeps 98.4 % / 18.4 %"
+            "corner diagnostic (worst element) keeps 98.4 % / 18.4 %"
         assert R.em_map_numbers("demag", {"demag_min_pct": 98.4}, None) == ""
         assert R.em_map_numbers("az", {}, {}) == ""
 
@@ -3938,8 +3959,9 @@ class TestTheFiguresAreDrawnForBothDuties:
         _pair = dict((k, c) for k, c, _m in
                      R.em_map_figures({"demag_min_pct": 98.4},
                                       {"demag_min_pct": 18.4}))["demag"]
-        assert "Worst element keeps" in _cap
-        assert "Worst element keeps" not in _pair
+        assert ("Corner diagnostic (worst element, not the magnet's figure) "
+                "keeps 98.4 % of Br") in _cap
+        assert "Corner diagnostic (worst element" not in _pair
 
     # ── the layout ──────────────────────────────────────────────────────────
     def test_the_pdf_pair_is_two_cells_of_one_row(self):
@@ -7094,7 +7116,7 @@ class TestButtonAuditOf20260916:
         rows = {r[0]: r[1:] for r in blk["rows"]}
         assert "Torque × k_3d [N·m]" in rows
         assert "Br kept in the magnets [%]" in rows
-        assert "Worst magnet element, Br [%]" in rows
+        assert R.CORNER_ROW_LABEL in rows
 
         def _f(s):
             return float(str(s).replace(",", "").replace("−", "-"))
@@ -7104,8 +7126,8 @@ class TestButtonAuditOf20260916:
         assert abs(t_pwm - 176.679 * self.K) < 0.01
         assert [_f(x) for x in rows["Br kept in the magnets [%]"]] \
             == [97.927, 80.826]
-        assert [_f(x) for x in rows["Worst magnet element, Br [%]"]] \
-            == [36.2, 7.1]
+        # the worst element is a flagged corner cell, never a bare figure
+        assert rows[R.CORNER_ROW_LABEL] == ["36.2 (corner)", "7.1 (corner)"]
 
     def test_bt4_the_note_names_the_magnets_when_they_are_the_cause(self):
         from motor_ai_sim import report as R
@@ -8654,7 +8676,9 @@ class TestDutyEmSource:
             "br_kept_vol_pct": 99.914, "bh_kept_vol_pct": 99.852,
             "area_derated_pct": 0.545})
         dem = self._src()["em"]["demag"]
-        assert dem["br_worst_pct"] == 59.19          # not the stale 11.7
+        assert dem["br_corner"]["br_pct"] == 59.2    # not the stale 11.7
+        assert dem["br_corner"]["flag"] == "corner"
+        assert "br_worst_pct" not in dem
         assert dem["br_kept_vol_pct"] == 99.914
         assert round(dem["bh_loss_pct"], 3) == 0.148
         assert dem["area_derated_pct"] == 0.545

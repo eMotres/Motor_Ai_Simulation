@@ -423,9 +423,13 @@ smoothing restored) and the final tree. Lines moving beyond the suite's 0.5 % to
    shaft mode is physical (a 2-D floating body with ∫J = 0 in a magnetic, conducting shaft) or a
    2-D artefact is worth a separate look.
 3. **Sine-voltage default settle (4 periods, f83e60f)** leaves 1 % on the ripple (7.126 → 7.202 %
-   at 40 periods; T −0.004 %).
+   at 40 periods; T −0.004 %). *Addressed 2026-09-26: the fixed count is replaced by a
+   period-to-period convergence criterion with a cap (`voltage_settle` in the result) — see
+   `docs/BR_CORNER_AND_SINE_SETTLE_2026-09-26.md`.*
 4. **Br worst element** is a corner-singularity gauge (§3); consider presenting it like the
-   unaveraged stress (a flag, not a magnet-level number).
+   unaveraged stress (a flag, not a magnet-level number). *Addressed 2026-09-26:
+   `demag_summary.br_corner` (value + location, flagged); the report, datasheet and web summary
+   show it as a corner diagnostic with no limit — same doc.*
 5. **Optimizer E** is on; with the honest gauge a final solve that continues an optimization
    state still needs whole periods unless the seed is at the same operating point, so E's measured
    saving (−12 %) shrinks. The validation is now correct (settled) rather than fast.

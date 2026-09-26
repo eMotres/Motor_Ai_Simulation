@@ -81,6 +81,13 @@ from motor_ai_sim.simulation.drive import (
     inverse_park as _ipark_dq,
     aitken_flux_anchor as _aitken_flux_anchor,
 )
+from motor_ai_sim.simulation.dc_orbit import (
+    DcOrbitSolve as _DcOrbitSolve,
+    flux_shift_to_state as _flux_shift_to_state,
+    handover_flux_offset as _handover_flux_offset,
+    ll_flux as _ll_flux,
+    ll_inductance as _ll_inductance,
+)
 # THE EXCITATION SOURCE INTERFACE.  Everything that decides WHAT this solver
 # applies — waveform, settle schedule, report block — is behind it, so the
 # five shipped drives are five implementations rather than a dozen if-branches,
@@ -896,6 +903,11 @@ def _calibrate_daxis(p, geo, wind, pole_pairs, geo_override, n_sectors,
             if progress_cb is None:
                 return
             try:
+                if _done is None:
+                    # the nested solve's SET-UP checkpoint: pass it through
+                    # as one (keeps the bar), so a Stop reaches this stage too
+                    progress_cb(None, None)
+                    return
                 progress_cb(int(_done), _CAL_FRAMES,
                             "calibrating the d-axis reference (no-load, "
                             "%d frames) — once per geometry" % _CAL_FRAMES)
@@ -1090,14 +1102,17 @@ _SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or
 #                        phasor initialiser, floored at periods_static, capped.
 #   coarse_settle        SB_PWM_COARSE_SETTLE — mixed coarse/fine settle.
 #   fine_settle_periods  SB_PWM_FINE_SETTLE   — WHOLE fine settling periods at
-#                        the end of that prefix; the window the DC anchor
-#                        measures the switching turn-on DC over (B5).
+#                        the end of that prefix: the switching turn-on DC is
+#                        solved out on the first, the last verifies (B5).
 #   aitken               Δ² period-boundary flux anchors (the sinusoid only).
-#   dc_anchor            period-mean DC anchor (PWM) — no knob, it is the fix.
+#   dc_orbit_solve       periodic-orbit solve of the DC mode (PWM) —
+#   dc_orbit_correct     simulation/dc_orbit.py; SB_V_DC_SOLVE=0 leaves it
+#                        measuring only, for a reference run.
 #
 # The MATH driven by those fields — _build_schedule, the adaptive block after
-# the phasor initialiser, the two anchors in the frame loop — lives here; only
-# the decision of WHICH numbers to feed it moved.  See simulation/excitation.py.
+# the phasor initialiser, the Δ² anchor and the DC-orbit solve in the frame
+# loop — lives here; only the decision of WHICH numbers to feed it moved.  See
+# simulation/excitation.py.
 
 # ── MIXED-RESOLUTION SETTLING ────────────────────────────────────────────────
 # The settling periods exist to land the FUNDAMENTAL current orbit (and, when
@@ -1115,10 +1130,10 @@ _SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or
 # pre-roll got wrong is the DC the turn-on leaves behind (about half the ripple
 # amplitude), which decays with τ_e — ~27 electrical periods on the L155 — and
 # therefore does not decay at all inside the reported window.  The fine part of
-# the settle is now whole PERIODS so the period-mean anchor can measure that DC
-# and remove it; two of them take 40 A to under 0.5 A.  (B5 / PWM study
-# 2026-09-13; before it, this scheme's torque ripple read 55 % against the
-# machine's own 0.9 %.)
+# the settle is now whole PERIODS, so the flux drift over one is an exact
+# measurement of that DC and the DC-orbit solve takes it out at the end of the
+# first; the last runs free and verifies.  (B5 / PWM study 2026-09-13; before
+# it, this scheme's torque ripple read 55 % against the machine's own 0.9 %.)
 #
 # SB_PWM_COARSE_SETTLE: "0" forces the all-fine march, "1" forces the mixed
 # scheme, unset -> AUTO: mixed only while the run is itself a coarse/partial
@@ -1154,8 +1169,8 @@ def _period_dc(series, i0: int, i1: int, dt_w) -> float:
     so the ½(i_k + i_{k−1}) mean is 0 on a converged orbit IDENTICALLY — it is
     pinned by the equations that were solved, whatever the carrier does between
     samples.  A plain sample mean is not: at 1.4 steps per carrier (the 30 mm
-    fixture) the aliased ripple walks into it and the anchor built on it
-    over-corrected by 1.8x.  (B5 / PWM study 2026-09-13.)
+    fixture) the aliased ripple walks into it and the (retired) DC anchor
+    built on it over-corrected by 1.8x.  (B5 / PWM study 2026-09-13.)
     """
     x = np.asarray(series[max(i0 - 1, 0):i1 + 1], float)
     if x.size < (i1 - i0 + 2):          # no frame before the window: fall back
@@ -3484,6 +3499,36 @@ def fem_transient_sliding_band(
     from motor_ai_sim.config import get_config
 
     t0 = _t.time()
+
+    # ── STOP DURING SET-UP (2026-09-26) ──────────────────────────────────
+    # The Stop button is honoured by the progress callback RAISING (the
+    # route's _RunCancelled, a BaseException so no `except Exception` on the
+    # way swallows it) — and the callback used to fire for the first time at
+    # frame 0.  Everything before it — the d-axis calibration's own set-up,
+    # the CAD polygons and the mesh, the per-tag assembly, the sliding-band
+    # projections, the phasor initialiser's Picard, the static start field —
+    # ran deaf: up to ~30 s after Stop on a large machine.  Each stage now
+    # starts with a checkpoint.  It calls the callback with done = total =
+    # None, which every progress consumer reads as "keep what you show"
+    # (progress.ProgressTracker.update), so the bar does not move; a callback
+    # written before the phase argument gets the two-argument form.  An
+    # ordinary exception from a callback is not a cancel and is dropped, as
+    # in the frame loop.
+    def _cancel_point(stage: str) -> None:
+        if progress_cb is None:
+            return
+        log.debug("set-up checkpoint: %s (%.2f s)", stage, _t.time() - t0)
+        for _args in ((None, None, None, None), (None, None, None),
+                      (None, None)):
+            try:
+                progress_cb(*_args)
+                return
+            except TypeError:
+                continue
+            except Exception:           # noqa: BLE001 — not a cancel
+                return
+
+    _cancel_point("start")
     sampling_purpose = _sampling_purpose(sampling_purpose)
     # Mesh density is driven ENTIRELY by the Mesh-tab sliders now (mesh_size,
     # min_size, gap_layers, normal_deviation) — no hidden clamp.  Earlier this
@@ -3840,6 +3885,7 @@ def fem_transient_sliding_band(
                                              n_sectors, progress_cb=progress_cb)
             _daxis_src = "calibrated"
 
+    _cancel_point("d-axis reference resolved")
     # Imposed excitation (both drives) — simulation/drive.py.  One object carries
     # the electrical frame both the current and the voltage waveform live in, so
     # they cannot drift apart.  It was written TWICE, once per element order, and
@@ -4262,6 +4308,7 @@ def fem_transient_sliding_band(
                         _sp_sw, n_steps_per_period, _nc_sw, 16 * _nc_sw)
 
     # ── Build the two halves ONCE ────────────────────────────────────────
+    _cancel_point("CAD polygons")
     motor = CadQueryMotor()
     if geo_override:
         motor.set_parameters(geo_override)   # in-memory candidate geometry
@@ -4359,6 +4406,7 @@ def fem_transient_sliding_band(
             if _nsl:
                 _skin = dict(_skin or {})
                 _skin["sleeve"] = {"layers": float(_nsl)}
+    _cancel_point("mesh")
     ms, ts, cs, mr, tr, cr = _build_sliding_band_meshes(
         polys, 0.0, mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, band_thickness_mm=0.4,
@@ -4468,6 +4516,7 @@ def fem_transient_sliding_band(
     def _msrc(v, w):            # magnet source with PER-ELEMENT M (P0 fields):
         return w["mx"] * _grad(v)[1] - w["my"] * _grad(v)[0]   # ∫(Mx·∂v/∂y − My·∂v/∂x)
 
+    _cancel_point("materials and per-tag assembly")
     # ── Pre-assemble per-tag stiffness K0 + constant magnet source ───────
     # The ROTOR half's material map — the one the magnet domains come out of, so
     # this is the single build that carries `magnet_temp_c`.  The three stator
@@ -4661,6 +4710,7 @@ def fem_transient_sliding_band(
                               (_coil_areas.get(int(tag))
                                or (0.0, float(areas_s[idx].sum())))[1]))
 
+    _cancel_point("eddy conductor data")
     # ── Stage 2: solid-copper current-constrained eddy data ──────────────────
     # Each coil is a SOLID bar: J = σ(−∂A/∂t + U_c) with ∫J dA = I_c imposed.
     # Per coil store: g_c (σ-lumped load, full DOF space), S_c = ∫σ dA, and the
@@ -4904,6 +4954,7 @@ def fem_transient_sliding_band(
              if (demag and _mag_idx.size) else None)
     if _dmst is not None and not _dmst.active:
         _dmst = None                      # no magnet carries a usable curve
+    _cancel_point("warm-start and demag seeds")
     # ── The seed's identity, and the Br half of it ───────────────────────────
     # `_wmeta` is built HERE rather than beside the eddy-history seed further
     # down, because the Br map has to be in `_br_glob` BEFORE the magnet source
@@ -5125,9 +5176,9 @@ def fem_transient_sliding_band(
         _c_nspp = _v_nspp
         _settle_bounds: set = set()      # frames that END a settle period (Aitken)
         # {last frame of a WHOLE settling period -> its first frame}, for the
-        # period-mean DC anchor.  Only periods of UNIFORM resolution go in: the
-        # mean is a measurement of the DC only if every frame of it rode the
-        # same orbit.  (B5 / PWM study 2026-09-13.)
+        # DC-orbit solve.  Only periods of UNIFORM resolution go in: the flux
+        # drift over a period measures the distance from ONE orbit only if
+        # every frame of it rode that orbit.  (B5 / PWM study 2026-09-13.)
         _dc_win: dict = {}
         _sched_mixed = False
         # The source says whether the mixed scheme is ALLOWED at all
@@ -5168,10 +5219,33 @@ def fem_transient_sliding_band(
             # be MEASURED (every estimator has to compare against an
             # interpolated orbit, which is what made SB_PWM_HANDOVER_DC
             # over-correct).  Now the last `_fine_settle` settling periods are
-            # marched WHOLE and fine, and the period-mean anchor below takes
-            # their DC out exactly.  (B5 / PWM study 2026-09-13.)
+            # marched WHOLE and fine, and the DC-orbit solve takes their DC
+            # out on the flux drift, which is exact over a whole period.
+            # (B5 / PWM study 2026-09-13; solve 2026-09-26.)
+            _n_handover = 0
             for _pi in range(_settle_periods_total):
                 _isf = (_pi >= _settle_periods_total - _fine_settle)
+                if _isf and _pi == _settle_periods_total - _fine_settle and _pi:
+                    # THE HANDOVER STEP ON THE FINE GRID (2026-09-26).  The
+                    # last coarse frame sits at nP − Δθ_c; the fine periods
+                    # end on nP − Δθ_f.  The first fine frame used to be put
+                    # at nP, one COARSE-length step on, so the first fine
+                    # "period" spanned P + Δθ_f − … — not a whole period:
+                    # its flux drift carried the orbit's own motion over the
+                    # extra step (measured, 30 mm fixture: 1.1e-4 Wb against
+                    # 6e-6 from its DC) and the old DC anchor measured its
+                    # DC over the same crooked window.  The r − 1 fine frames
+                    # that complete the last coarse step close it: every
+                    # solved period is whole, and every frame from nP on —
+                    # the reported window's included — keeps its angle.
+                    _th_h = _th - _dth_c
+                    for _j in range(_ratio - 1):
+                        _th_h += _dth_f
+                        _sched_th.append(_th_h)
+                        _sched_dth.append(_dth_f)
+                        _sched_dt.append(_dt_f)
+                        _sched_fine.append(True)
+                        _n_handover += 1
                 for _j in range(_v_nspp if _isf else _c_nspp):
                     _sched_th.append(_th)
                     _sched_dth.append(_dth_f if _isf else _dth_c)
@@ -5181,15 +5255,17 @@ def fem_transient_sliding_band(
                 # End of this settling period.  Recorded as the index of its
                 # LAST frame, so the test in the loop is a membership check
                 # instead of a modulo that no longer holds.  Every period here
-                # is whole AND of uniform resolution, so both anchors may look
-                # at it — the Δ² flux one only where the source still asks for
-                # it (the sinusoid; it is off on PWM since B5).
-                if _settle.dc_anchor:
+                # is whole AND of uniform resolution, so both the DC-orbit
+                # solve and the Δ² flux anchor may look at it — the latter only
+                # where the source still asks for it (the sinusoid; it is off
+                # on PWM since B5).
+                if _settle.dc_orbit_solve:
                     _dc_win[len(_sched_th) - 1] = len(_sched_th) - (
                         _v_nspp if _isf else _c_nspp)
                 if _settle.aitken:
                     _settle_bounds.add(len(_sched_th) - 1)
-            _fine_frames = _fine_settle * _v_nspp   # fine frames in the prefix
+            # fine frames in the prefix (the handover step's included)
+            _fine_frames = _fine_settle * _v_nspp + _n_handover
             _skip_total = len(_sched_th)
             for _j in range(_rep_frames):
                 _sched_th.append(_th); _sched_dth.append(_dth_f)
@@ -5225,11 +5301,11 @@ def fem_transient_sliding_band(
             if _settle.aitken and _v_nspp > 0:
                 _settle_bounds = {k for k in range(n_total)
                                   if (k + 1) % _v_nspp == 0 and (k + 1) < _vskip}
-            # …and the whole settling periods the DC anchor measures over —
-            # every discarded period, the demag settling one included (it is a
-            # whole electrical period too, and it sits between the last anchor
-            # and the reported window).
-            if _settle.dc_anchor and _v_nspp > 0:
+            # …and the whole settling periods the DC-orbit solve reads — every
+            # discarded period, the demag settling one included (it is a whole
+            # electrical period too, and the last of them runs free as the
+            # solve's verification).
+            if _settle.dc_orbit_solve and _v_nspp > 0:
                 _dc_win = {k: k + 1 - _v_nspp for k in range(n_total)
                            if (k + 1) % _v_nspp == 0
                            and (k + 1) <= _vskip + _dmskip}
@@ -5267,6 +5343,7 @@ def fem_transient_sliding_band(
      _sched_th, _sched_dth, _sched_dt, _sched_t, _sched_fine, _dc_win,
      _vskip_periods, _progress_comp) = [_S[_k] for _k in _SCHED_KEYS]
 
+    _cancel_point("P2 sliding band: stitching and projections")
     # ═══════════════════════════════════════════════════════════════════════
     #  SLIDING-BAND TRANSIENT — P2 (quadratic) elements
     # ═══════════════════════════════════════════════════════════════════════
@@ -5381,6 +5458,7 @@ def fem_transient_sliding_band(
     nst = int(Tts.shape[1])                      # rotor elems in mesh_all are +nst
     n_all_el = int(mesh_all.t.shape[1])
 
+    _cancel_point("P2 dof maps and sources")
     # ── vertex & edge dof maps ───────────────────────────────────────────
     vdof = b2.nodal_dofs[0]                       # global vertex id -> P2 dof
     fdof = b2.facet_dofs[0]                       # facet (edge) id  -> P2 dof
@@ -5866,6 +5944,7 @@ def fem_transient_sliding_band(
         _ed_gmask = {_k: (_ed_key_e == _k)
                      for _k in ("cu", "mag", "shaft", "sleeve")}
 
+    _cancel_point("P2 flux linkage and circuit")
     # ── P2 flux linkage (EXACT area-average per stator coil element) ─────
     # A P2 field's area average over a triangle is the mean of its three
     # EDGE-MIDPOINT dofs, NOT the mean of its vertex dofs: the quadratic
@@ -5947,7 +6026,7 @@ def fem_transient_sliding_band(
     # ── WHAT THE SOURCE IS TOLD ABOUT THE MACHINE ────────────────────────
     # The last CONVERGED step's terminal currents and flux linkages, handed to
     # the source in its Feedback.  Kept SEPARATE from _iv_state / _psi_prev,
-    # which the Aitken anchor and the handover DC removal deliberately move off
+    # which the Aitken anchor and the DC-orbit solve deliberately move off
     # the solved values: a controller must see what the machine DID, not the
     # solver's settling bookkeeping.  None on the first frame — there is no
     # previous step, and a source that closes a loop must handle that.
@@ -5963,12 +6042,13 @@ def fem_transient_sliding_band(
     # only discoverable by removing it and comparing.  Now it is a number.
     _v_anchor_tries = 0
     _v_anchor_applied = 0
-    # …and how many PERIOD-MEAN DC anchors fired (B5).  A different measurement
-    # from the Δ² one and a different counter, so a run states which of the two
-    # actually moved its state.
-    _dc_anchor_applied = 0
-    _dc_last = None          # (dc vector, scale) of the previous DC anchor
-    _dc_scale = 1.0          # learned ψ-correction gain (see the anchor)
+    # …and the DC-orbit solve (simulation/dc_orbit.py), built on the final
+    # schedule after the phasor initialiser.  None = this run does not solve
+    # for it (imposed current, the sinusoid's Δ² anchor, no whole settling
+    # period).
+    _dc_orbit = None
+    _dc_starts: dict = {}    # first frame of a solved period -> its last frame
+    _dc_verify_k = None      # last frame of the free (verification) period
 
     # The voltage-drive, eddy and coupled eddy+voltage Newtons —
     # simulation/p2_drive.py.  ONE object rather than three closures: the
@@ -6012,6 +6092,8 @@ def fem_transient_sliding_band(
         _psi_pm_d = 0.0; _Ldd = _Lqq = _Ldq = _Lqd = 1e-6
         _Aop = np.zeros(N2)
         for _it in range(max(int(nonlinear_iterations), 20)):
+            # one factorisation + solve per sweep — a Stop may land in any
+            _cancel_point("phasor initialiser, sweep %d" % _it)
             _Kph = _p2.asmK(_nu_ph)
             _Kff0 = (_Pro0v.T @ _Kph @ _Pro0v).tocsr()[_free0v][:, _free0v].tocsc()
             _X0 = _p2.solve_ff(_Kff0, _RHS0)
@@ -6116,6 +6198,19 @@ def fem_transient_sliding_band(
         # PWM one moves.
         _psi_prev = dict(zip(('A', 'B', 'C'),
                              _ipark(_psd, _psq, _thal - _w * float(_sched_dt[0]))))
+        # ── THE DC-ORBIT SOLVE (simulation/dc_orbit.py, 2026-09-26) ─────
+        # On the FINAL schedule (the adaptive block above may have rebuilt
+        # it): every whole settling period is solved on, the last runs free.
+        if _settle.dc_orbit_solve and _dc_win:
+            _dc_starts = {int(_k0): int(_k1) for _k1, _k0 in _dc_win.items()}
+            _dc_verify_k = max(_dc_win)
+            _dc_orbit = _DcOrbitSolve(R_phase=float(R_phase),
+                                      correcting=bool(_settle.dc_orbit_correct))
+            log.info("P2 vdrive DC-orbit solve: %d whole settling period(s), "
+                     "%s", len(_dc_win),
+                     ("%d corrected + 1 free (verification)" % (len(_dc_win) - 1)
+                      if _dc_orbit.correcting else
+                      "MEASURED ONLY — corrections off (SB_V_DC_SOLVE=0)"))
 
     # ── frame loop ───────────────────────────────────────────────────────
     _T2 = []; _T_vw = []; _T_vw_reason = []
@@ -6626,6 +6721,7 @@ def fem_transient_sliding_band(
             _I_vec_s = np.array(
                 [_Ist_s[c["phase"]] * c["Iunit"] if c["key"] == "cu" else 0.0
                  for c in _ed_con], float)
+            _cancel_point("static start field")
             _ok_s, _A_static = _drv.eddy_static_state(
                 _Pro_s, _free_s, _A_s0, _I_vec_s,
                 (None if _sat2 else nu_base2), max(int(nonlinear_iterations), 20))
@@ -6646,6 +6742,7 @@ def fem_transient_sliding_band(
             _static_seed_info = {"error": "%s: %s" % (type(_e_ss).__name__, _e_ss)}
             log.warning("P2 eddy warm-up: static start failed (%s) — starting "
                         "from A = 0", _e_ss)
+    _cancel_point("first time step")
     _fi = 0
     while _fi < len(_fseq):
         k = _fseq[_fi]; _fi += 1
@@ -6775,6 +6872,10 @@ def fem_transient_sliding_band(
             _vapp['B'].append(_Vt['B'])
             _vapp['C'].append(_Vt['C'])
             _th_eff_prev = theta_eff
+            # DC-orbit solve: the CN flux state this whole period starts from —
+            # AFTER any correction applied at the end of the previous one.
+            if _dc_orbit is not None and k in _dc_starts:
+                _dc_orbit.period_start(_ll_flux(_psi_prev))
             _iv_prev = dict(_iv_state)      # i_{k−1} for the R/2 term
             Ist = dict(_iv_state)           # warm start for the coupled solve
         else:
@@ -7209,6 +7310,8 @@ def fem_transient_sliding_band(
                     # rare, so the honest path costs almost nothing.
                     if not _warm_done:
                         break                    # carry into the NEXT frame
+                    # a re-solve is a whole Newton; up to 11 per frame
+                    _cancel_point("demag re-solve of frame %d" % k)
                     continue                     # re-solve THIS frame
             break
 
@@ -7848,87 +7951,112 @@ def fem_transient_sliding_band(
                         log.info("P2 vdrive Aitken anchor at period %d: psiA "
                                  "%.4g -> %.4g (|corr| %.3g Wb)",
                                  _v_anchor_applied, _pa, _new['A'], _corr)
-            # ── PERIOD-MEAN DC ANCHOR (B5 / PWM study 2026-09-13) ────────
+            # ── PERIODIC-ORBIT SOLVE OF THE DC MODE (2026-09-26) ─────────
             # The phasor init lands NEAR the orbit, not on it, and the
             # modulator turning on kicks the state off it again by about half
             # the ripple amplitude.  Both leave a stationary-frame DC that
-            # decays with τ_e — 27 electrical periods on the L155, measured
-            # from the settle itself (0.9637 per period) — so neither a 12-
-            # period settle nor a 2-carrier pre-roll sheds it: the reported
-            # window opened with 43 A of DC on a 433 A fundamental, and that
-            # DC is the reported torque ripple.
+            # decays with τ_e — 27 electrical periods on the L155 — so neither
+            # a 12-period settle nor a 2-carrier pre-roll sheds it (B5: the
+            # window opened with 43 A of DC on a 433 A fundamental).
             #
-            # It does not have to be waited out; it can be MEASURED.  On a
-            # periodic orbit ∮dψ = 0, so over a whole electrical period the
-            # line-to-line equations give R·⟨i_A−i_B⟩ = ⟨v_A−v_B⟩ — and the
-            # applied volt-seconds over a whole period are exactly zero for
-            # the sinusoid AND for the synchronous regular-sampled PWM
-            # (measured on every study run: 0.0000 V).  With Σi = 0 that makes
-            # ⟨i_ph⟩ over a whole period the DC error itself, with no
-            # interpolated reference to leak ripple into it — which is what
-            # made the 2026-09-02 handover estimate over-correct.
+            # It is SOLVED for, not waited out and not anchored.  Over a whole
+            # period the CN rows telescope: the flux drift y(end) − y(start)
+            # is exactly Σv·Δt − R·Σī·Δt, zero on the orbit.  The drift is the
+            # measurement, the fixed point of the line-to-line flux's period
+            # map is the unknown, and the correction is its Newton step,
+            # w = M(I−M)⁻¹·drift, in FLUX.  M is the period map's Jacobian:
+            # the product of the linearised CN rows over the period, built
+            # from each frame's own INCREMENTAL ∂ψ/∂i (the columns its Newton
+            # solved for — no extra solve).  simulation/dc_orbit.py has the
+            # derivation.  The same columns move the CN current memory with
+            # the flux (it enters the next step through R·Δt/2 only).
             #
-            # Take it out of the circuit STATE, exactly as the Aitken anchor
-            # does, with the frame's own ∂ψ/∂i columns (i_C = −i_A−i_B, so two
-            # columns; the anchor only ever fires at a whole electrical period,
-            # where the machine is back in the same magnetic position):
-            #   ψ_prev −= s·Σ_j (∂ψ/∂i_j)·dc_j ;  i_state −= s·dc
+            # The period-mean ANCHOR this replaces subtracted the measured DC
+            # with a gain learned from its own previous firing, clamped to
+            # [0.2, 3].  Its model had no free decay: on a short-τ_e machine
+            # the DC it measured over a period was mostly gone by the period's
+            # end, it over-corrected, and the reported window opened on its
+            # last correction — 1.10 A of DC left on the Ø40 against 0.025 A
+            # with it switched off, P_cu −0.9 % (docs/NO_FILTERS_2026-09-24.md
+            # item 5).  Here the last settling period is never corrected: it
+            # runs free and its drift is the solve's verification.
             #
-            # s is LEARNED, not assumed.  The linearised response says s = 1
-            # exactly, and it is not: s = 1 left 11.6 A on the 30 mm fixture,
-            # the DC returning with its sign flipped and ~60 % of its size, i.e.
-            # the state jump meets an effective inductance smaller than the
-            # columns say (the eddy history is not corrected with them).  So
-            # each anchor watches what the previous one achieved —
-            # g = (dc_n − dc_{n+1})·dc_n / (s_n·|dc_n|²) — and uses s = 1/g next
-            # time, clamped to [0.2, 3].  Measured, same fixture at a brutal 1.4
-            # steps per carrier: 11.6 A with s = 1, 0.48 A with the learned s.
-            # That is also why the mixed schedule ends in TWO whole fine
-            # periods: the first anchor is the one that pays for the lesson.
-            if _settle.dc_anchor and k in _dc_win:
+            # THIS frame's ∂ψ/∂i (the Newton's last columns — incremental, at
+            # this frame's saturation, eddy reaction included on the coupled
+            # path); the phasor initialiser's only if no Newton has set any.
+            _qaL = getattr(_drv, "last_qa", None)
+            _qbL = getattr(_drv, "last_qb", None)
+            if _qaL is None or _qbL is None:
+                _qaL, _qbL = _qa, _qb
+            if _dc_orbit is not None and k <= _dc_verify_k:
+                _dc_orbit.frame(_ll_inductance(_qaL, _qbL), _dt_k)
+            if _dc_orbit is not None and k in _dc_win:
                 _k0 = int(_dc_win[k])                   # first frame of the period
                 _off = len(_IA) - 1 - k                 # list index of frame k
                 _w = np.asarray(_sched_dt[_k0:k + 1], float)
-                _dc_p = {_ph: _period_dc(_ser, _off + _k0, _off + k, _w)
-                         for _ph, _ser in (('A', _IA), ('B', _IB), ('C', _IC))}
-                _dc_v = np.array([_dc_p['A'], _dc_p['B']], float)
-                # What the PREVIOUS anchor achieved, and the gain that would
-                # have zeroed it — clamped, believed only when the correction
-                # moved the DC the way it was meant to, and only when there was
-                # a DC worth measuring.  That last guard is the Δ² anchor's
-                # lesson: once the boundary is at noise this quotient divides
-                # noise by noise and walks to the clamp (measured, 280-step
-                # L155: a 0.37 A coarse boundary asked for s = 3), and the
-                # scale it learns there is the one the FINE anchors inherit.
-                if _dc_last is not None:
-                    _p0, _s0 = _dc_last
-                    _den = _s0 * float(_p0 @ _p0)
-                    _num = float((_p0 - _dc_v) @ _p0)
-                    if (_den > 1e-9 and _num > 1e-9
-                            and float(_p0 @ _p0) > (5.0 * _V_DC_RESIDUAL_TOL_A) ** 2):
-                        _dc_scale = float(min(3.0, max(0.2, _den / _num)))
-                _dA, _dB = _dc_scale * _dc_v[0], _dc_scale * _dc_v[1]
-                # THIS frame's ∂ψ/∂i (eddy reaction included) when the Newton
-                # left them; the phasor initialiser's small-signal columns only
-                # as a fallback.
-                _qaL = getattr(_drv, "last_qa", None)
-                _qbL = getattr(_drv, "last_qb", None)
-                if _qaL is None or _qbL is None:
-                    _qaL, _qbL = _qa, _qb
-                _psi_prev = {_ph: _psi_prev[_ph] - (_qaL[_i] * _dA + _qbL[_i] * _dB)
-                             for _i, _ph in enumerate(('A', 'B', 'C'))}
-                _iv_state = {_ph: _iv_state[_ph] - _dc_scale * _dc_p[_ph]
-                             for _ph in ('A', 'B', 'C')}
-                _dc_last = (_dc_v, _dc_scale)
-                _dc_anchor_applied += 1
-                _v_diag.setdefault("dc_anchor_A", []).append(
-                    [round(_dc_p[_ph], 4) for _ph in ('A', 'B', 'C')]
-                    + [round(_dc_scale, 3)])
-                log.info("P2 vdrive period-mean DC anchor at frame %d (%s period "
-                         "%d frames): iA %+.3f iB %+.3f iC %+.3f A measured, "
-                         "scale %.3f", k, "fine" if _sched_fine[k] else "coarse",
-                         k + 1 - _k0, _dc_p['A'], _dc_p['B'], _dc_p['C'],
-                         _dc_scale)
+                _dc_p = [_period_dc(_ser, _off + _k0, _off + k, _w)
+                         for _ser in (_IA, _IB, _IC)]
+                _corr = (k != _dc_verify_k) and _dc_orbit.correcting
+                _wll = _dc_orbit.period_end(
+                    _ll_flux((_pa, _pb, _pc)),
+                    tag=("fine" if _sched_fine[k] else "coarse"),
+                    correct=_corr, frame=int(k), dc_phase_A=_dc_p)
+                # THE MODULATOR'S TURN-ON (mixed settle): the next period is
+                # the first chopped one.  Its orbit carries the ripple's
+                # periodic flux, whose value here is predicted exactly (for a
+                # constant inductance) from the modulator's own volt-seconds
+                # over that period — dc_orbit.handover_flux_offset — and taken
+                # as the Newton predictor; the fine period's drift measures
+                # what it missed.  The ideal bridge's volt-seconds: a device's
+                # current-dependent dead-time error is left to that drift.
+                _mod_h = getattr(_src, "modulator", None)
+                if (_corr and _mod_h is not None and not _sched_fine[k]
+                        and k + 1 < n_total and _sched_fine[k + 1]):
+                    # ONE WHOLE PERIOD on the fine grid from this boundary —
+                    # the grid the fine march (its handover step included)
+                    # takes: whole slip nodes, so no snapping moves it.
+                    _dthf_h = float(period_mech) / float(_v_nspp)
+                    _th_h = float(theta_eff) + _dthf_h * np.arange(
+                        int(_v_nspp) + 1)
+
+                    def _ripple_h(_a_h, _b_h):
+                        # chopped step mean − the fundamental's (Simpson)
+                        _vp_h = _mod_h.mean_voltages(_a_h, _b_h)
+                        _f_h = [_mod_h.fundamental(_x) for _x in
+                                (_a_h, 0.5 * (_a_h + _b_h), _b_h)]
+                        return [_vp_h[_ph] - (_f_h[0][_ph] + 4.0 * _f_h[1][_ph]
+                                              + _f_h[2][_ph]) / 6.0
+                                for _ph in ('A', 'B', 'C')]
+
+                    _wh = _handover_flux_offset(
+                        np.asarray([_ripple_h(_th_h[_j], _th_h[_j + 1])
+                                    for _j in range(int(_v_nspp))]),
+                        np.full(int(_v_nspp), 1.0 / (
+                            max(float(f_elec), 1e-9) * float(_v_nspp))))
+                    _dc_orbit.note_handover(_wh)
+                    _wll = _wh if _wll is None else _wll + _wh
+                if _wll is not None:
+                    _dpsi, _di = _flux_shift_to_state(_wll, _qaL, _qbL)
+                    _psi_prev = {_ph: _psi_prev[_ph] + _dpsi[_ph]
+                                 for _ph in ('A', 'B', 'C')}
+                    _iv_state = {_ph: _iv_state[_ph] + _di[_ph]
+                                 for _ph in ('A', 'B', 'C')}
+                _rec = _dc_orbit.records[-1]
+                (log.warning if _rec["verdict"].startswith("REFUSED")
+                 else log.info)(
+                    "P2 vdrive DC-orbit solve at frame %d (%s period, %d "
+                    "frames): DC iA %+.4f iB %+.4f iC %+.4f A, drift %.4g Wb, "
+                    "period Jacobian eigenvalues %s -> %s%s%s", k,
+                    _rec["resolution"], k + 1 - _k0, _dc_p[0], _dc_p[1],
+                    _dc_p[2], float(np.max(np.abs(_rec["drift_Wb"]))),
+                    ", ".join("%.4f%+.4fj" % tuple(_e)
+                              for _e in _rec["decay_per_period"]),
+                    _rec["verdict"],
+                    ("" if _wll is None else " (%.4g Wb)" % float(
+                        np.max(np.abs(_wll)))),
+                    ("" if "handover_prediction_Wb" not in _rec else
+                     "; incl. the modulator turn-on predictor %.4g Wb"
+                     % float(np.max(np.abs(_rec["handover_prediction_Wb"])))))
         # Element-mean B in the iron and the coils, captured on EVERY frame —
         # the same thing the P1 path does unconditionally.  This used to sit
         # inside `if rotor_eddy:`, which meant P2 reported ZERO core loss and
@@ -8157,9 +8285,13 @@ def fem_transient_sliding_band(
                 "P2 vdrive: %.2f A of DC left in phase %s over the reported "
                 "electrical period (tol %.2f A).  The reported TORQUE RIPPLE "
                 "and current ripple are that DC, not the machine — the loss "
-                "terms are barely touched by it.  %d period-mean DC anchor(s) "
-                "fired.", _dc_res, _dc_res_ph, _V_DC_RESIDUAL_TOL_A,
-                _dc_anchor_applied)
+                "terms are barely touched by it.  DC-orbit solve: %s.",
+                _dc_res, _dc_res_ph, _V_DC_RESIDUAL_TOL_A,
+                ("off for this run" if _dc_orbit is None else
+                 "corrections off (SB_V_DC_SOLVE=0)"
+                 if not _dc_orbit.correcting else
+                 "%d correction(s), %d refused"
+                 % (_dc_orbit.corrections, _dc_orbit.refused)))
     # DEBUG DUMP of every solved frame INCLUDING the settle prefix and the eddy
     # warm-up (SB_DEBUG_DUMP_FRAMES=<path>) — the trimmed payload cannot show
     # where a DC current is born.  Read-only diagnostics; off by default.
@@ -9231,7 +9363,8 @@ def fem_transient_sliding_band(
         "sched_mixed": bool(_sched_mixed), "progress_comp": _progress_comp,
         "c_nspp": int(_c_nspp), "fine_frames": int(_fine_frames),
         "fine_settle_periods": int(_fine_frames // max(int(_v_nspp), 1)),
-        "dc_anchors": int(_dc_anchor_applied),
+        "dc_orbit_corrections": int(0 if _dc_orbit is None
+                                    else _dc_orbit.corrections),
         "v_nspp": int(_v_nspp), "dc_link": _dc_link,
         "settle_periods": int(_v_settle_periods), "n_parallel": int(n_parallel),
     }
@@ -9833,8 +9966,14 @@ def fem_transient_sliding_band(
         # nothing for this run — the measured state on the pinned machine.
         "v_anchor_attempts": int(_v_anchor_tries),
         "v_anchor_applied": int(_v_anchor_applied),
-        # …and the period-mean DC anchor's applications (B5).
-        "v_dc_anchor_applied": int(_dc_anchor_applied),
+        # …and the DC-orbit solve (simulation/dc_orbit.py): every whole
+        # settling period's exact flux drift and DC, the correction applied at
+        # its end (None on the free verification period, and throughout under
+        # SB_V_DC_SOLVE=0), the period Jacobian's eigenvalues, the turn-on
+        # predictor where applied.  None when the run did not solve for the DC
+        # (imposed current, the sinusoid's Δ² anchor, no whole settling
+        # period).
+        "v_dc_orbit": (None if _dc_orbit is None else _dc_orbit.describe()),
         # circuit-iteration convergence stats, one entry per frame of the
         # REPORTED window (settling frames stripped with every other series,
         # so the indices line up with I/psi/T) + the honest steady-state

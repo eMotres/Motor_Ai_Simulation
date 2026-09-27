@@ -116,7 +116,7 @@ def test_the_loop_stops_on_the_criterion_and_splices_a_prefix():
     assert "sinusoidal_voltage=(type(_src) is _SineVoltageSource)" in source
     assert "explicit_override=bool(_SOURCE_V_SETTLE_ENV)" in source
     # the convergence test, the anchor guard and the prefix splice
-    assert "_cs_p - 1 > int(_conv_settle[\"last_anchor_period\"])" in source
+    assert "if _cs_hist and (_cs_la == 0 or _cs_p - 1 > _cs_la + 1):" in source
     assert "_S = _build_schedule(int(_cs_p))" in source
     assert "_fseq = _fseq[:_fi] + list(range(k + 1, int(n_total)))" in source
     assert "refusing to splice" in source
@@ -131,3 +131,26 @@ def test_the_loop_stops_on_the_criterion_and_splices_a_prefix():
     assert '"voltage_settle_selection_reason": _settle_selection_reason' in source
     assert '"voltage_settle": _voltage_settle' in source
     assert '"settle_periods": int(_v_settle_periods)' in source
+
+
+def test_one_settling_mechanism_the_anchor_is_off_under_the_converged_settle():
+    # Real Ø40 L12 sine-voltage point (2026-09-26): with the Δ² anchor firing
+    # every 3rd period the converged settle never saw two unperturbed periods
+    # and ran to its 40-period cap.  The anchor is off whenever the converged
+    # settle is on, and ONLY then (every other source keeps its policy).
+    source = (Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim"
+              / "simulation" / "fem_solver_2d.py").read_text(encoding="utf-8")
+    assert ("_aitken_on = bool(_settle.aitken) and _conv_settle is None"
+            in source)
+    assert source.index("_conv_settle = None") < source.index("_aitken_on = ")
+    # every place that plants an anchor boundary asks _aitken_on, none the
+    # raw policy flag
+    assert "if _settle.aitken" not in source
+    assert source.count("if _aitken_on") == 2
+    # the result says the anchor was off
+    assert '"aitken_anchor": False' in source
+    # the sinusoid's OWN policy still asks for anchors (fixed-count runs:
+    # eddy / demag / explicit SB_V_SETTLE_PERIODS keep them)
+    assert "aitken=True" in (Path(__file__).resolve().parents[1] / "src"
+                             / "motor_ai_sim" / "simulation"
+                             / "excitation.py").read_text(encoding="utf-8")

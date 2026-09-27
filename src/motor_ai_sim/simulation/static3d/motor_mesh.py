@@ -113,6 +113,42 @@ def _poly_parts(poly) -> List[object]:
     return list(poly.geoms) if hasattr(poly, "geoms") else [poly]
 
 
+GAP_ELEMENTS = 3          # elements across the air gap (P2) — physical rule
+MAGNET_ELEMENTS = 2       # elements across the thinnest magnet
+H_SOLID_CAP_MM = 1.6      # never coarser than this in the iron/magnets
+
+
+def physical_mesh_sizes(section: MotorSection,
+                        n_gap: int = GAP_ELEMENTS,
+                        n_magnet: int = MAGNET_ELEMENTS) -> Dict[str, float]:
+    """Mesh sizes from the machine's PHYSICAL length scales, not its size.
+
+    ``h_gap`` = air gap / ``n_gap``: the gap is where B1 is sampled and the
+    thinnest field-carrying layer, so it must hold several elements whatever
+    the machine diameter.  The old driver rule ``max(0.28, min(0.6, gap))`` put
+    ONE element across a 0.28 mm gap and 0.36 of one across the Ø12 machine's
+    0.1 mm gap (2026-09-27: k_flux 1.015-1.109, non-physical).
+
+    ``h_solid`` = thinnest magnet (2*area/perimeter, the width of a long
+    rectangle) / ``n_magnet``, never finer than ``h_gap`` and never coarser
+    than ``H_SOLID_CAP_MM``.
+    """
+    gap = float(section.r_stator_in_mm - section.r_rotor_out_mm)
+    if not gap > 0.0:
+        raise ValueError(f"air gap {gap:.4f} mm is not positive")
+    h_gap = gap / float(max(int(n_gap), 1))
+    widths = []
+    for r in section.magnet_regions():
+        for part in _poly_parts(r.polygon):
+            if part.length > 0:
+                widths.append(2.0 * part.area / part.length)
+    t_min = min(widths) if widths else 4.0 * H_SOLID_CAP_MM
+    h_solid = min(H_SOLID_CAP_MM, max(h_gap, t_min / float(max(int(n_magnet), 1))))
+    return dict(h_gap=h_gap, h_solid=h_solid, gap_mm=gap,
+                magnet_width_mm=float(t_min), n_gap=int(n_gap),
+                n_magnet=int(n_magnet))
+
+
 def build_section_mesh_2d(section: MotorSection,
                           r_box_mm: Optional[float] = None,
                           box_factor: float = 4.0,
@@ -725,6 +761,24 @@ def extrude_section(sect: Section2D, z_levels_mm: Sequence[float],
     return tm
 
 
+def axial_box_mm(r_box_mm: float, r_stator_out_mm: float,
+                 stack_half_mm: float) -> float:
+    """Axial truncation height: the radial box, but never less air above the
+    end face than there is outside the stator radially.
+
+    ``z_box = r_box`` alone assumed the stack is short against the box.  For a
+    long slim machine it is not: the Ø12 x 40 mm CIANO14 has r_box = 24 mm and
+    L/2 = 20 mm, so the end cap was 4 mm of air under a phi = 0 lid, and at
+    1.5 L the stack came out THROUGH the box (no cap at all, fewer layers —
+    the ``mu_init must be one value per element`` crash, 2026-09-27).  Every
+    machine where L/2 + (r_box - R_out) <= r_box keeps its old box bit for bit.
+    """
+    margin = float(r_box_mm) - float(r_stator_out_mm)
+    if margin <= 0:
+        raise ValueError("air box does not enclose the stator")
+    return max(float(r_box_mm), float(stack_half_mm) + margin)
+
+
 def build_motor_mesh(section: MotorSection,
                      stack_mm: Optional[float] = None,
                      box_factor: float = 4.0,
@@ -746,7 +800,7 @@ def build_motor_mesh(section: MotorSection,
                                      h_gap=h_gap, h_solid=h_solid,
                                      verbose=verbose)
     L = float(stack_mm if stack_mm else section.stack_mm)
-    z_box = sect.r_box_mm
+    z_box = axial_box_mm(sect.r_box_mm, section.r_stator_out_mm, 0.5 * L)
     zl = axial_levels(0.5 * L, z_box, n_stack=n_stack, n_cap=n_cap,
                       end_bias=end_bias, h_ew_mm=h_ew_mm, n_ew=n_ew)
     tm = extrude_section(sect, zl, 0.5 * L, section)

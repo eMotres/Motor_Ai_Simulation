@@ -113,7 +113,7 @@ def _poly_parts(poly) -> List[object]:
     return list(poly.geoms) if hasattr(poly, "geoms") else [poly]
 
 
-GAP_ELEMENTS = 3          # elements across the air gap (P2) — physical rule
+GAP_ELEMENTS = 2          # P2 elements across the air gap (5 nodes) — physical rule
 MAGNET_ELEMENTS = 2       # elements across the thinnest magnet
 H_SOLID_CAP_MM = 1.6      # never coarser than this in the iron/magnets
 
@@ -144,7 +144,13 @@ def physical_mesh_sizes(section: MotorSection,
                 widths.append(2.0 * part.area / part.length)
     t_min = min(widths) if widths else 4.0 * H_SOLID_CAP_MM
     h_solid = min(H_SOLID_CAP_MM, max(h_gap, t_min / float(max(int(n_magnet), 1))))
+    # Axial: the end-face layer on the gap scale, the stack interior never
+    # coarser than one pole pitch at the gap (what B1 varies over).
+    pitch = 2.0 * math.pi * 0.5 * (section.r_rotor_out_mm
+                                   + section.r_stator_in_mm) / max(
+        int(getattr(section, "num_poles", 0) or 0), 1)
     return dict(h_gap=h_gap, h_solid=h_solid, gap_mm=gap,
+                h_axial_end=2.0 * gap, h_axial_max=pitch, pole_pitch_mm=pitch,
                 magnet_width_mm=float(t_min), n_gap=int(n_gap),
                 n_magnet=int(n_magnet))
 
@@ -601,11 +607,48 @@ def _pair_cut_nodes(p: np.ndarray, a_sec: float, tol: float = 1e-5
 # axial layers
 # --------------------------------------------------------------------------
 
+def physical_stack_levels(stack_half_mm: float, h_end: float, h_max: float,
+                          n_min: int = 4, growth: float = 1.5) -> np.ndarray:
+    """Stack z levels from the PHYSICAL axial scales.
+
+    The layer at the end face is ``h_end`` (the fringing there lives on the
+    air-gap scale), layers grow by ``growth`` toward the mid-plane and never
+    exceed ``h_max`` (a fraction of the pole pitch, the scale the gap field
+    varies on).  A fixed count with a power grading gave the Ø12 x 40 mm an
+    11.6 mm first layer against a 2.1 mm pole pitch, and a spurious 2 % rise of
+    B1 inside that one element (k_flux_self 1.007, 2026-09-28).
+    Returns levels 0 .. stack_half_mm ascending; at least ``n_min`` layers.
+    """
+    L = float(stack_half_mm)
+    h_end = min(float(h_end), L)
+    h_max = max(float(h_max), h_end)
+    steps, tot, h = [], 0.0, h_end
+    while tot + h < L - 1e-9:
+        steps.append(h)
+        tot += h
+        h = min(h * growth, h_max)
+    rest = L - tot
+    if steps and rest < 0.5 * steps[-1]:
+        steps[-1] += rest                      # no sliver next to mid-plane
+    else:
+        steps.append(rest)
+    while len(steps) < int(n_min):             # split the thickest
+        i = int(np.argmax(steps))
+        steps[i:i + 1] = [steps[i] / 2.0, steps[i] / 2.0]
+    # steps run end -> mid; levels run mid -> end
+    lv = L - np.concatenate([[0.0], np.cumsum(steps)])
+    lv = np.sort(np.clip(lv, 0.0, L))
+    lv[0] = 0.0
+    return lv
+
+
 def axial_levels(stack_half_mm: float, z_box_mm: float,
                  n_stack: int = 8, n_cap: int = 12,
                  end_bias: float = 3.0,
                  h_ew_mm: Optional[float] = None,
-                 n_ew: int = 4) -> np.ndarray:
+                 n_ew: int = 4,
+                 h_axial_end: Optional[float] = None,
+                 h_axial_max: Optional[float] = None) -> np.ndarray:
     """z levels from 0 (mirror plane) to ``z_box_mm``, with a node EXACTLY on
     ``stack_half_mm``.
 
@@ -633,8 +676,12 @@ def axial_levels(stack_half_mm: float, z_box_mm: float,
     the 3D model exists to see would be a discretisation of nothing.  Omitted
     (``None``) the levels are exactly the Stage A ones, bit for bit.
     """
-    s = np.linspace(0.0, 1.0, int(n_stack) + 1)
-    inside = stack_half_mm * (1.0 - (1.0 - s) ** end_bias)
+    if h_axial_end and h_axial_max:
+        inside = physical_stack_levels(stack_half_mm, float(h_axial_end),
+                                       float(h_axial_max), int(n_stack))
+    else:
+        s = np.linspace(0.0, 1.0, int(n_stack) + 1)
+        inside = stack_half_mm * (1.0 - (1.0 - s) ** end_bias)
     inside[-1] = stack_half_mm
     if h_ew_mm and float(h_ew_mm) > 0.0 and int(n_ew) > 0:
         top = float(stack_half_mm) + float(h_ew_mm)
@@ -790,6 +837,8 @@ def build_motor_mesh(section: MotorSection,
                      sect: Optional[Section2D] = None,
                      h_ew_mm: Optional[float] = None,
                      n_ew: int = 4,
+                     h_axial_end: Optional[float] = None,
+                     h_axial_max: Optional[float] = None,
                      verbose: bool = False) -> Tuple[TaggedTetMesh, Section2D]:
     """One call: cross-section (or a cached one) + axial levels + extrusion.
 
@@ -802,7 +851,8 @@ def build_motor_mesh(section: MotorSection,
     L = float(stack_mm if stack_mm else section.stack_mm)
     z_box = axial_box_mm(sect.r_box_mm, section.r_stator_out_mm, 0.5 * L)
     zl = axial_levels(0.5 * L, z_box, n_stack=n_stack, n_cap=n_cap,
-                      end_bias=end_bias, h_ew_mm=h_ew_mm, n_ew=n_ew)
+                      end_bias=end_bias, h_ew_mm=h_ew_mm, n_ew=n_ew,
+                      h_axial_end=h_axial_end, h_axial_max=h_axial_max)
     tm = extrude_section(sect, zl, 0.5 * L, section)
     tm.meta["h_ew_mm"] = None if h_ew_mm is None else float(h_ew_mm)
     tm.meta["n_ew"] = int(n_ew) if h_ew_mm else 0

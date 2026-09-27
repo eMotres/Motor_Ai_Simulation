@@ -155,13 +155,16 @@ def solve_sector(section: MotorSection,
                  linear_solver: Optional[str] = None,
                  mu_init: Optional[np.ndarray] = None,
                  laminated_iron: bool = True,
+                 h_axial_end: Optional[float] = None,
+                 h_axial_max: Optional[float] = None,
                  verbose: bool = False) -> SectorSolve:
     """Mesh + solve one stack length on a prebuilt cross-section."""
     from skfem import Basis, ElementTetP1, ElementTetP2
 
     t0 = time.perf_counter()
     tm, _ = build_motor_mesh(section, stack_mm=stack_mm, sect=sect2d,
-                             n_stack=n_stack, n_cap=n_cap)
+                             n_stack=n_stack, n_cap=n_cap,
+                             h_axial_end=h_axial_end, h_axial_max=h_axial_max)
     regs = _regions_for(tm, section, linear_iron=linear_iron,
                         iron_mu_r=iron_mu_r, laminated_iron=laminated_iron)
     linear_iron = linear_iron or iron_mu_r is not None
@@ -500,6 +503,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
     h_solid = (phys["h_solid"] if h_solid is None
                else min(float(h_solid), phys["h_solid"]))
     h_solid = max(h_solid, h_gap)
+    ax = dict(h_axial_end=phys["h_axial_end"], h_axial_max=phys["h_axial_max"])
     if verbose:
         print(f"mesh from physical scales: gap {phys['gap_mm']:.3f} mm -> "
               f"h_gap {h_gap:.4f} mm ({phys['n_gap']} across); thinnest magnet "
@@ -537,7 +541,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
         print(f"\n[1] reference stack {section.stack_mm:.2f} mm", flush=True)
     ss = solve_sector(section, sect2d, stack_mm=section.stack_mm, order=order,
                       n_stack=n_stack, n_cap=n_cap, tol=tol, max_iter=max_iter,
-                      laminated_iron=laminated_iron,
+                      laminated_iron=laminated_iron, **ax,
                       linear_solver=linear_solver, verbose=verbose)
     _record("reference", ss)
     mu_ref = getattr(ss.sol, "mu_converged", None)
@@ -558,7 +562,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
         ssn = solve_sector(section, sect2d, stack_mm=section.stack_mm,
                            order=order, n_stack=n_stack, n_cap=n_cap, tol=tol,
                            max_iter=max_iter, neumann_outer=True,
-                           mu_init=mu_ref, laminated_iron=laminated_iron,
+                           mu_init=mu_ref, laminated_iron=laminated_iron, **ax,
                            linear_solver=linear_solver, verbose=False)
         _record("neumann_outer", ssn)
         pn = spill_profile(ssn, n_theta=n_theta)
@@ -592,7 +596,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
             ss_i = solve_sector(section, sect2d, stack_mm=Lm, order=order,
                                 n_stack=n_stack, n_cap=n_cap, tol=tol,
                                 max_iter=max_iter, mu_init=mu_prev,
-                                laminated_iron=laminated_iron,
+                                laminated_iron=laminated_iron, **ax,
                                 linear_solver=linear_solver, verbose=False)
             _record(f"L={Lm:g}mm", ss_i)
             mu_prev = getattr(ss_i.sol, "mu_converged", mu_prev)
@@ -710,7 +714,9 @@ def run_stage_a(geo_override: Optional[dict] = None,
             box_r_mm=sect2d.r_box_mm, box_z_mm=ss.tm.meta["z_box_mm"],
             h_gap_mm=h_gap, h_solid_mm=h_solid,
             mesh_rule=("physical: air gap / %d, thinnest magnet / %d"
-                       % (phys["n_gap"], phys["n_magnet"])),
+                       % (phys["n_gap"], phys["n_magnet"])
+                       + "; axial: end layer 2 x gap growing x1.5 to one pole pitch"),
+            h_axial_end_mm=ax["h_axial_end"], h_axial_max_mm=ax["h_axial_max"],
             iron_stack_kf={r.name: float(r.stack_kf) for r in section.regions
                            if r.kind == "iron"},
             cross_section_tri=sect2d.n_tri,

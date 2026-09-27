@@ -102,7 +102,7 @@ def _fake_section(gap, magnet_w, r_rot=10.0):
 @pytest.mark.parametrize("gap", [0.1, 0.25, 0.5, 1.0])
 def test_mesh_resolves_the_gap_whatever_the_machine_size(gap):
     ph = physical_mesh_sizes(_fake_section(gap, 2.0))
-    assert gap / ph["h_gap"] >= 3.0 - 1e-9       # >= 3 elements across the gap
+    assert gap / ph["h_gap"] >= 2.0 - 1e-9       # >= 2 P2 elements across the gap
     assert ph["h_solid"] >= ph["h_gap"]
 
 
@@ -128,3 +128,18 @@ def test_warm_start_from_another_mesh_is_dropped_not_fatal():
     assert compatible_mu_init(mu, 15) is None
     assert compatible_mu_init(np.ones((3, 12)), 12) is not None
     assert compatible_mu_init(None, 12) is None
+
+
+def test_stack_layers_follow_the_pole_pitch_not_a_fixed_count():
+    from motor_ai_sim.simulation.static3d.motor_mesh import (
+        axial_levels, physical_stack_levels)
+    # Ø12 x 40 mm: gap 0.1, pole pitch 2.14 mm
+    lv = physical_stack_levels(20.0, 0.2, 2.14)
+    d = np.diff(lv)
+    assert lv[0] == 0.0 and lv[-1] == pytest.approx(20.0)
+    assert d.max() <= 2.14 * 1.5 + 1e-9          # never a 11.6 mm layer again
+    assert d[-1] == pytest.approx(0.2)            # end-face layer on gap scale
+    assert np.all(d > 0)
+    # the old power grading is unchanged when the physical sizes are not given
+    old = axial_levels(20.0, 38.0, n_stack=4, n_cap=6)
+    assert old[1] == pytest.approx(20.0 * (1 - 0.75 ** 3))

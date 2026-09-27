@@ -6871,7 +6871,19 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
         comp = (field_v.get("components") or {})
         node = "winding" if limiting_part == "winding" else (
             "magnet" if limiting_part == "magnet" else limiting_part)
-        actual = _ccr._num((comp.get(node) or {}).get("max"))
+        if limiting_part == "link":
+            # The housing/touch-limit node is not a solved FEM component — it
+            # is `cooling_models.robot_link_path`'s own lumped node, read back
+            # from THIS pass's fresh steady solve exactly as
+            # `coupled_time_to_limit.part_limits` reads it off the reference
+            # map (`cooling.mount.link.t_link_c`). `comp.get("link")` is
+            # always empty, which is why S1 stayed "estimate, not verified"
+            # under the housing heat path (PR #9) — fixed 2026-09-27.
+            _link_blk = ((field_v.get("cooling") or {}).get("mount") or {}
+                        ).get("link")
+            actual = _ccr._num((_link_blk or {}).get("t_link_c"))
+        else:
+            actual = _ccr._num((comp.get(node) or {}).get("max"))
         miss = None if actual is None else round(actual - float(limit_c), 3)
         last = {"verified": (miss is not None and abs(miss) <= 3.0),
                 "passes": k + 1, "miss_K": miss, "I_cont_A_rms": round(i_solved, 3),

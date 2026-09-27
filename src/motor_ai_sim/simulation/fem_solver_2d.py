@@ -10412,8 +10412,10 @@ def fem_transient_sliding_band(
         # n_wires bodies as built, and the in-slot area spread with any
         # clipped-stack warnings — see check_eddy_conductor_bodies.
         "eddy_conductor_check": _eddy_con_check,
-        "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
-        "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
+        # a LINEAR frequency-domain estimate (renamed from *_honest_W
+        # 2026-09-27; contracts/adapters.py reads old records)
+        "P_mag_linear_W": round(float(P_mag_prox_avg2), 3),
+        "P_shaft_linear_W": round(float(P_shaft_prox_avg2), 3),
         # The window the two numbers above were solved on (rotor_window.py on
         # the nodal potential): method, q windows chained, harmonics solved.
         "P_rotor_eddy_honest_window": _P_rot_eddy_window,

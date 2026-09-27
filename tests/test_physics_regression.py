@@ -58,6 +58,7 @@ from typing import Any, Dict
 import numpy as np
 import pytest
 
+from motor_ai_sim.contracts.adapters import read_linear_cross_check
 from motor_ai_sim.material_context import set_request_materials
 from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
 
@@ -104,7 +105,7 @@ ATOL = {"T_ripple_pct": 0.05, "P_shaft_W": 0.05, "P_solid_W": 0.05,
         "P_cu_ac_solve_W": 0.02,
         # Honest (frequency-domain) rotor eddy: the shaft term is sub-watt for
         # the same reason P_shaft_solve_W is, so it needs an absolute floor.
-        "P_shaft_honest_W": 0.05,
+        "P_shaft_linear_W": 0.05,
         # Coupled-eddy shaft loss: the shaft sits under the magnets and the
         # back iron, so in the rotor frame it sees almost no AC field at all —
         # milliwatts, i.e. a relative test on it divides noise by noise.
@@ -420,9 +421,13 @@ def _metrics(d: Dict[str, Any]) -> Dict[str, Any]:
     # chain moved no pin at all. It does now. Gated on the honest path's own
     # flag so no other case grows a key. (Its value is already computed in
     # p2_eddy, so this pins it at zero extra runtime.)
-    if float(d.get("P_mag_honest_W") or 0.0) > 0.0:
-        out["P_mag_honest_W"] = float(d["P_mag_honest_W"])
-        out["P_shaft_honest_W"] = float(d.get("P_shaft_honest_W") or 0.0)
+    # (Keys renamed *_honest_W -> *_linear_W 2026-09-27: a linear estimate;
+    # same values, no re-pin. read_linear_cross_check reads either name.)
+    _pm = read_linear_cross_check(d, "P_mag")
+    if float(_pm or 0.0) > 0.0:
+        out["P_mag_linear_W"] = float(_pm)
+        out["P_shaft_linear_W"] = float(read_linear_cross_check(d, "P_shaft")
+                                        or 0.0)
     f = d.get("demag_field")
     if f:
         br = np.asarray(f["demag_coef_per_tri"], float)
@@ -731,7 +736,7 @@ def test_axial_slices_cut_the_magnet_eddy_loss_by_the_modelled_factor(
                                    GEO_30MM["motor_length"]), rel=1e-4), seg
 
     want = baseline["p2_eddy"]
-    for key in ("P_mag_solve_W", "P_mag_honest_W"):
+    for key in ("P_mag_solve_W", "P_mag_linear_W"):
         got = float(d[key])
         assert got == pytest.approx(want[key] * k, rel=RTOL, abs=1e-4), (
             f"{key}: {want[key]:.6g} W solid x {k:.4g} = "

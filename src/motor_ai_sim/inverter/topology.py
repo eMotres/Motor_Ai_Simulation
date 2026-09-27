@@ -362,9 +362,9 @@ def build_topology(*, preset: str, coils: Sequence[Coil],
             "coil across the FULL DC link, no star point and no circulating "
             "path between coils")
         notes.append(
-            "the coil current is taken as the machine's phase current (the "
-            "coils of one phase carry it in series in this winding); a per-coil "
-            "current the EM solver produces replaces it in Stage 2")
+            "the coil current is the machine's phase current divided by the "
+            "winding's parallel paths (winding_n_parallel), at the phase "
+            "voltage divided by the coils in series per path")
     else:                                            # custom
         if not mapping:
             raise TopologyError(

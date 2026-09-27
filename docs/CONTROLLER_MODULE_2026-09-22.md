@@ -324,35 +324,49 @@ coldplate **water-glycol 50/50, 8 L/min, 65 °C inlet**, R_TIM 0.03 K/W.
 Operating point, shaft efficiency and modulation index read from the duty's
 stored coupled record (2026-09-15/16); nothing was re-solved.
 
-### rated 1×9 mm — 14 200 rpm, 266.0 kW shaft, 272.2 kW AC, η_shaft 97.71 %, 314.3 A per delta phase (544.3 A per leg), m 0.633
+**Corrected 2026-09-27.** The first version of this section costed every
+winding as all-series. L155 is **2P**: the two coils of a phase are in
+parallel, so each coil carries half the phase current at the full phase
+voltage. The H-bridge rows were at twice the real coil current (7.26 kW with
+96 devices at rated) and the two-inverter rows used `series_split`, which a 2P
+winding cannot be wired as. `solve_controller` now reads the winding's
+parallel paths (`winding_n_parallel`, from `winding.n_parallel`) and splits
+the current for every topology. The tables below are re-solved on the current
+code (loss basis `spice-uniform-2026-09-27`, so the one-inverter rows moved
+too, by +4 % at rated), same operating points.
 
-| topology | N | devices | conduction | 3rd quadrant | switching | total | T_j | η_inv | η_wall-to-shaft | DC ripple |
-|---|---|---|---|---|---|---|---|---|---|---|
-| One 3-phase inverter | 3 | 6 × 3 = 18 | 1 929 W | 145 W | 2 078 W | **4 151 W** | 132 °C | **98.50 %** | **96.24 %** | 351 A rms |
-| Two 3-phase inverters (series split) | 5 | 12 × 5 = 60 | 2 518 W | 254 W | 4 276 W | 7 048 W | 144 °C | 97.48 % | 95.24 % | 583 A rms |
-| H-bridge per coil (unipolar) | 4 | 24 × 4 = 96 | 2 045 W | 276 W | 4 936 W | 7 256 W | 140 °C | 97.40 % | 95.17 % | 644 A rms |
+### rated 1×9 mm — 14 200 rpm, 266.0 kW shaft, 272.2 kW AC, η_shaft 97.71 %, 314.3 A per delta phase (544.3 A per leg), m 0.633, 2P (157.2 A per coil)
 
-### peak 1×9 mm — 20 000 rpm, 428.3 kW shaft, 439.5 kW AC, η_shaft 97.46 %, 439.6 A per delta phase (761.4 A per leg), m 0.943
+| topology | N | devices | conduction | 3rd quadrant | switching | total | T_j | η_inv | η_wall-to-shaft |
+|---|---|---|---|---|---|---|---|---|---|
+| One 3-phase inverter | 3 | 6 × 3 = 18 | 2 256 W | 152 W | 1 899 W | **4 308 W** | 135 °C | 98.44 % | 96.19 % |
+| Two 3-phase inverters (one parallel path each) | 2 | 12 × 2 = 24 | 1 520 W | 142 W | 1 752 W | **3 413 W** | 114 °C | **98.76 %** | **96.50 %** |
+| H-bridge per coil (unipolar) | 1 | 24 × 1 = 24 | 2 191 W | 169 W | 2 126 W | 4 486 W | 130 °C | 98.38 % | 96.13 % |
 
-| topology | N | devices | conduction | 3rd quadrant | switching | total | T_j | η_inv | η_wall-to-shaft | DC ripple |
-|---|---|---|---|---|---|---|---|---|---|---|
-| One 3-phase inverter | 5 | 6 × 5 = 30 | 2 372 W | 192 W | 2 945 W | **5 510 W** | 138 °C | **98.76 %** | **96.25 %** | 406 A rms |
-| Two 3-phase inverters (series split) | 13 | 12 × 13 = 156 | 1 970 W | 320 W | 6 281 W | 8 571 W | 149 °C | 98.09 % | 95.60 % | 785 A rms |
-| H-bridge per coil (unipolar) | — | — | — | — | — | no solution on this coldplate | ≥ 160 °C | — | — | — |
+### peak 1×9 mm — 20 000 rpm, 428.3 kW shaft, 439.5 kW AC, η_shaft 97.46 %, 439.6 A per delta phase (761.4 A per leg), m 0.943, 2P (219.8 A per coil)
+
+| topology | N | devices | conduction | 3rd quadrant | switching | total | T_j | η_inv | η_wall-to-shaft |
+|---|---|---|---|---|---|---|---|---|---|
+| One 3-phase inverter | 5 | 6 × 5 = 30 | 2 702 W | 203 W | 2 611 W | **5 516 W** | 138 °C | 98.76 % | 96.25 % |
+| Two 3-phase inverters (one parallel path each) | 3 | 12 × 3 = 36 | 2 090 W | 194 W | 2 503 W | **4 788 W** | 125 °C | **98.92 %** | **96.41 %** |
+| H-bridge per coil (unipolar) | 2 | 24 × 2 = 48 | 2 095 W | 216 W | 2 881 W | 5 192 W | 126 °C | 98.83 % | 96.32 % |
 
 ### Sized on the WHOLE limit table instead (T_j ≤ 175 °C, the datasheet)
 
 The table above sizes to a 150 °C DESIGN TARGET. Asked instead for the
 smallest N that passes every published limit — which lets T_j run to the
-datasheet's own 175 °C — the answer is smaller silicon and thinner margin.
-Connection delta, taken from the duty. Same device, same coldplate.
+datasheet's own 175 °C — only the one-inverter peak row gets smaller silicon;
+every other row is already limit-sized at the 150 °C N.
 
-| duty | topology | N | devices | I rms/device vs I_D | I peak/device vs I_DM | T_j (margin) | V utilisation | losses | η_inv | η wall-to-shaft | limits |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| rated | One 3-phase inverter | 3 | 6×3 = 18 | 128.3 / 285.9 A | 257 / 1433 A | 132 °C (+43 K) | 62 % | 4 151 W | 98.50 % | 96.24 % | PASS |
-| rated | H-bridge per coil | 3 | 24×3 = 72 | 74.1 / 197.1 A | 148 / 1433 A | 156 °C (+19 K) | 62 % | 8 413 W | 97.00 % | 94.78 % | PASS |
-| peak | One 3-phase inverter | 4 | 6×4 = 24 | 134.6 / 233.6 A | 269 / 1433 A | 164 °C (+11 K) | 62 % | 6 852 W | 98.47 % | 95.96 % | PASS |
-| peak | H-bridge per coil | 7 | 24×7 = 168 | 44.4 / 127.0 A | 89 / 1433 A | 169 °C (+6 K) | 62 % | 10 665 W | 97.63 % | 95.15 % | PASS |
+| duty | topology | N | devices | losses | T_j | η_inv | η wall-to-shaft | limits |
+|---|---|---|---|---|---|---|---|---|
+| rated | One 3-phase inverter | 3 | 18 | 4 308 W | 135 °C | 98.44 % | 96.19 % | PASS |
+| rated | H-bridge per coil | 1 | 24 | 4 486 W | 130 °C | 98.38 % | 96.13 % | PASS |
+| peak | One 3-phase inverter | 4 | 24 | 6 955 W | 165 °C | 98.44 % | 95.94 % | PASS |
+| peak | H-bridge per coil | 2 | 48 | 5 192 W | 126 °C | 98.83 % | 96.32 % | PASS |
+
+(Superseded 2026-09-27: the DC-ripple and per-device current columns of the
+first version were for the series reading and are not re-quoted.)
 
 Read the two tables together: **the current rating never binds** — at every
 feasible point the devices run at 45…55 % of their continuous rating and at
@@ -369,21 +383,16 @@ The bus sits at 62 % of V_DSS on all of them — comfortable, and the reason a
 
 1. **One three-phase inverter wins on every count** for this machine: fewest
    devices, lowest loss, lowest DC-link ripple, highest efficiency.
-2. **A second inverter costs.** On an unchanged winding (`series_split`) each
-   set keeps the per-coil current, so twice the switches carry the same amps
-   and the conduction loss doubles; the switching loss more than doubles
-   because each device still pays the current-independent part of E_on. The
-   reason to build two is redundancy, not efficiency. `power_split` — the
-   winding reconnected so each inverter takes half the power at the full bus —
-   is the case where the split pays, and it is a knob.
-3. **H-bridge per coil is the expensive topology here.** Both legs of a bridge
-   carry the full coil current, so there are 12 current-carrying legs instead
-   of 3: 1.33× the conduction of the delta three-phase and ~2.4× the switching.
-   At peak the default coldplate saturates — the plate's own resistance does
-   not fall when you add devices — and T_case sits at 155 °C for any N. With a
-   doubled plate (80 channels, 16 L/min) it solves: N = 6, 144 devices,
-   9.12 kW, T_j 114 °C, η_inv 97.97 %, η_wall-to-shaft 95.48 %. Its virtue is
-   not efficiency; it is six independent coils, which is what Stage 3 is for.
+2. **(Corrected 2026-09-27.)** On the 2P winding a second inverter takes one
+   parallel path each: half the current at the full modulation. At equal
+   silicon (24 devices) it beats one inverter at rated, 3.41 kW against the
+   one inverter's 4.31 kW with 18 devices.
+3. **(Corrected 2026-09-27.)** The H-bridge per coil is NOT the expensive
+   topology once each coil carries its real I/2: 4.49 kW with 24 devices at
+   rated, 5.19 kW with 48 at peak, and it solves on the default coldplate.
+   It still loses to a three-phase inverter given the same silicon
+   (docs/SIX_COIL_STUDY_2026-09-27.md §5). Its virtue is six independent
+   coils.
 4. **Switching dominates at 24 kHz.** It is half the loss at rated on one
    inverter and more than half on every split topology. The PWM study already
    found +2.2 kW in the MOTOR at that carrier
@@ -402,7 +411,7 @@ The bus sits at 62 % of V_DSS on all of them — comfortable, and the reason a
 | **datasheet (figure-read, ±8…12 %)** | the current dependence of E_on/E_off/E_fr, the temperature dependence of R_DS(on) between the table points, the I_SD(V_SD) curves |
 | **application-note rule** | E_fr belongs to the commutation (§6.1), E_oss is inside a hard-switching E_on (§4.3.8.3), `E_oss = ½·C_o(er)·V²` (eq. 11) |
 | **correlation** | the coldplate film — `cooling_models.pipe_nusselt`, the motor jacket's own ladder |
-| **assumption** | the bus-voltage scaling exponent (1.0); linear R_G scaling; equal current sharing between parallel devices; equal loss sharing between the two switches of a leg; R_TIM 0.03 K/W; the coldplate geometry; `series_split` for two inverters; the operating point is the stored coupled record's, not re-solved |
+| **assumption** | the bus-voltage scaling exponent (1.0); linear R_G scaling; equal current sharing between parallel devices; equal loss sharing between the two switches of a leg; R_TIM 0.03 K/W; the coldplate geometry; the two-inverter split follows the winding's parallel paths; the operating point is the stored coupled record's, not re-solved |
 
 ---
 
@@ -920,10 +929,10 @@ coil, fault tolerance with a coil open, and torque-ripple cancellation that a
 three-wire machine cannot reach. That study needs Stage 2's per-coil interface
 and nothing else from this module.
 
-**Done 2026-09-27: `docs/SIX_COIL_STUDY_2026-09-27.md`.** It also finds that §6
-costs the H-bridge at the PHASE current. L155 is 2P, so each coil carries half
-of it: correctly costed, the H-bridge at rated is 4.41 kW with 24 devices, not
-7.26 kW with 96.
+**Done 2026-09-27: `docs/SIX_COIL_STUDY_2026-09-27.md`.** It also found that §6
+costed the H-bridge at the PHASE current. L155 is 2P, so each coil carries half
+of it. Fixed the same day: `solve_controller` reads `winding_n_parallel` and §6
+is re-solved (H-bridge at rated 4.49 kW with 24 devices, not 7.26 kW with 96).
 
 ## 9 · Open items
 
@@ -935,8 +944,9 @@ of it: correctly costed, the H-bridge at rated is 4.41 kW with 24 devices, not
   24 kHz and 18/0 V) are NOT in the totals — they are the driver's supply, not
   the device's junction, and mixing them in would corrupt T_j.
 * Bus-bar and capacitor losses are not modelled.
-* `power_split` for two inverters is implemented but has not been checked
-  against a rewound machine.
+* `power_split` / `series_split` for two inverters apply only to an all-series
+  (1P) winding; on a winding with parallel paths the split follows the
+  winding (`set_split` reported as `winding`).
 
 ---
 

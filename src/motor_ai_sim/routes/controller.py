@@ -100,6 +100,14 @@ def _live_machine(body: Dict[str, Any]) -> Dict[str, Any]:
     out["winding_layout"] = body.get("winding_layout")
     if out["winding_layout"]:
         src["winding_layout"] = "the request"
+    # 2026-09-27: the winding's parallel paths — every coil carries
+    # I_phase / n_parallel, and a per-coil bridge must be costed at THAT.
+    if body.get("winding_n_parallel") is not None:
+        out["winding_n_parallel"] = body["winding_n_parallel"]
+        src["winding_n_parallel"] = "the request"
+    elif wnd.get("n_parallel") is not None:
+        out["winding_n_parallel"] = int(wnd.get("n_parallel") or 1)
+        src["winding_n_parallel"] = "the loaded machine's winding block"
     return {"values": out, "sources": src, "winding": wnd}
 
 
@@ -995,7 +1003,7 @@ _KEY_FIELDS = ("num_slots", "num_poles", "single_layer", "winding_layout",
 #: Keyed only when SET (2026-09-23), so every key written before these
 #: fields existed stays the same key.
 _KEY_FIELDS_OPTIONAL = ("switching_source", "r_g_off_ext_ohm", "l_sigma_nH",
-                        "pwm_modulation")
+                        "pwm_modulation", "winding_n_parallel")
 
 
 def _history_key(req: Dict[str, Any]) -> str:
@@ -1005,7 +1013,8 @@ def _history_key(req: Dict[str, Any]) -> str:
     for k in _KEY_FIELDS_OPTIONAL:
         if req.get(k) is not None and not (
                 (k == "switching_source" and str(req[k]).lower() == "datasheet")
-                or (k == "pwm_modulation" and str(req[k]).lower() == "sine")):
+                or (k == "pwm_modulation" and str(req[k]).lower() == "sine")
+                or (k == "winding_n_parallel" and int(req[k]) == 1)):
             p[k] = _RH.round_floats(req.get(k), 6)
     # 2026-09-27: the default basis moved to the vendor SPICE model for every
     # device with a table (and the datasheet fallback's R_G / V_dc rules were

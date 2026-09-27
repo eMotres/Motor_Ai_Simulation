@@ -846,19 +846,57 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
 
     coils_per_phase = max(1, len(coils) // 3)
     v_machine_phase_rms = (p_ac / pf) / (3.0 * i_ph) if (pf > 0 and i_ph > 0) else 0.0
-    v_coil_rms = v_machine_phase_rms / coils_per_phase
+    # ── the winding's parallel paths (2026-09-27) ──────────────────────────
+    # A phase of C coils is wired as n_series x n_parallel = C.  The FEM puts
+    # I_phase / n_parallel through every coil at V_phase / n_series across
+    # it.  Until 2026-09-27 this module took every winding as all-series, so
+    # on a 2P machine (L155) the H-bridge per coil was costed at TWICE its
+    # real coil current (docs/SIX_COIL_STUDY_2026-09-27.md §5).
+    a_par = int(_f(req.get("winding_n_parallel"), "winding_n_parallel",
+                   default=1, positive=True))
+    if coils_per_phase % a_par:
+        raise ControllerRefusal(
+            f"winding_n_parallel = {a_par} does not divide the "
+            f"{coils_per_phase} coil(s) per phase of this winding",
+            ["winding_n_parallel"], code="bad_winding")
+    n_ser_path = coils_per_phase // a_par
+    i_coil_rms = i_ph / a_par
+    v_coil_rms = v_machine_phase_rms / n_ser_path
+
+    def _bridge_wiring(k: int) -> Tuple[int, int]:
+        """(paths, series coils) of a bridge terminal holding k coils.
+
+        The machine's own series string is kept when the bridge holds whole
+        paths (k a multiple of n_series); otherwise the k coils are one
+        series string.  Every coil still carries I_phase / n_parallel."""
+        k = max(int(k), 1)
+        if k % n_ser_path == 0:
+            return k // n_ser_path, n_ser_path
+        return 1, k
 
     # ── per-bridge leg currents and modulation ─────────────────────────────
     n_3ph = sum(1 for b in topo.bridges if b.kind == "three_phase_2l")
     legs_spec: Dict[Tuple[str, str], Dict[str, float]] = {}
+    wiring_notes: List[str] = []
     for b in topo.bridges:
         if b.kind == "three_phase_2l":
-            if n_3ph >= 2 and set_split == "power_split":
-                i_b, m_b = i_leg_3ph / n_3ph, m
-            elif n_3ph >= 2:
-                i_b, m_b = i_leg_3ph, m / n_3ph
+            if a_par == 1:
+                # all-series winding: the legacy reading, bit for bit
+                if n_3ph >= 2 and set_split == "power_split":
+                    i_b, m_b = i_leg_3ph / n_3ph, m
+                elif n_3ph >= 2:
+                    i_b, m_b = i_leg_3ph, m / n_3ph
+                else:
+                    i_b, m_b = i_leg_3ph, m
             else:
-                i_b, m_b = i_leg_3ph, m
+                k_leg = max(len(lg.coils) for lg in b.legs)
+                p_b, s_b = _bridge_wiring(k_leg)
+                i_b = p_b * i_coil_rms * (root3 if sd == "delta" else 1.0)
+                m_b = m * s_b / n_ser_path
+                wiring_notes.append(
+                    f"{b.id}: {k_leg} coil(s) per leg as {s_b}S-{p_b}P of the "
+                    f"{n_ser_path}S-{a_par}P winding, {i_coil_rms:.1f} A per "
+                    "coil")
             b.modulation = {"sine": "sine_triangle", "svpwm": "svpwm",
                             "third_harmonic": "third_harmonic"}[pmod]
             for k, lg in enumerate(b.legs):
@@ -869,11 +907,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                     "m": m_b,
                 }
         else:                                        # H-bridge
-            m_b = (v_coil_rms * math.sqrt(2.0) / v_dc) if v_dc > 0 else 0.0
+            p_b, s_b = _bridge_wiring(len(b.coils))
+            i_hb = p_b * i_coil_rms
+            m_b = ((s_b * v_coil_rms) * math.sqrt(2.0) / v_dc) if v_dc > 0 else 0.0
+            if a_par > 1 or len(b.coils) > 1:
+                wiring_notes.append(
+                    f"{b.id}: {len(b.coils)} coil(s) as {s_b}S-{p_b}P, "
+                    f"{i_hb:.1f} A at {s_b * v_coil_rms:.1f} V rms")
             base = b.phase_shift_deg
             for k, lg in enumerate(b.legs):
                 legs_spec[(b.id, lg.name)] = {
-                    "i_peak_A": i_ph * math.sqrt(2.0) * (1 if k == 0 else -1),
+                    "i_peak_A": i_hb * math.sqrt(2.0) * (1 if k == 0 else -1),
                     "i_phase_deg": base,
                     "v_phase_deg": base + phi_deg + (0.0 if k == 0 else 180.0),
                     "m": m_b,
@@ -1153,7 +1197,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         v_sd=_v_sd, dead_samples=dead_n)
     waves["dead_time_error_V"] = round(
         float(dead_us * 1e-6 * st0.f_carrier_eff_hz
-              * (v_dc + 2.0 * _vsd1(i_ph * math.sqrt(2.0) / max(n_par, 1)))), 2)
+              * (v_dc + 2.0 * _vsd1(i_ph / a_par * math.sqrt(2.0)
+                                    / max(n_par, 1)))), 2)
 
     # ── the R_th(j-a) cross-check, air-cooled modes only (owner's brief: a
     # PQFN/source-down part's path is pad -> PCB copper -> air; state clearly
@@ -1194,7 +1239,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         "device_row": card.row(i_switch_rms_A=i_dev_max * max(n_par, 1)),
         "provenance": card.provenance(),
         "topology": topo.as_dict(),
-        "set_split": set_split if n_3ph >= 2 else None,
+        "set_split": ((set_split if a_par == 1 else "winding")
+                      if n_3ph >= 2 else None),
         "bridges": bridges_out,
         "losses": {
             "conduction_W": round(split["conduction_W"], 1),
@@ -1297,6 +1343,9 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "v_machine_phase_rms_V": round(v_machine_phase_rms, 1),
             "v_coil_rms_V": round(v_coil_rms, 1),
             "coils_per_phase": coils_per_phase,
+            "winding_n_parallel": a_par,
+            "i_coil_rms_A": round(i_coil_rms, 2),
+            "bridge_wiring": wiring_notes,
             "rpm": req.get("rpm"),
         },
         "settings": {

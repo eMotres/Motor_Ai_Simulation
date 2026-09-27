@@ -15489,7 +15489,13 @@ def controller_source_text(rec: Dict[str, Any]) -> str:
     """Where the device numbers came from — the card's own provenance."""
     p = rec.get("provenance") or {}
     ds = p.get("datasheet_revision")
-    return ("Device data transcribed from the manufacturer's datasheet"
+    L = rec.get("losses") or {}
+    # 2026-09-27 uniform SPICE basis: the basis is named, and a vendor model
+    # that deviates from its datasheet by more than 15 % says so, one clause.
+    basis = L.get("basis_label")
+    dev = L.get("spice_deviation_line")
+    return ((f"Loss basis: {basis}" + (f" — {dev}" if dev else "") + ". ") if basis else "") + (
+            "Device data transcribed from the manufacturer's datasheet"
             + (f" (revision {ds})" if ds else "")
             + "; figure-read points carry the tolerance stated on the card.")
 

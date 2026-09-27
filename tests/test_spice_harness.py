@@ -187,7 +187,10 @@ def test_table_interpolates_on_grid_and_between() -> None:
     e = table_energy(b, i_d_A=100.0, v_dc_V=800.0, t_j_c=25.0, r_g_on_ohm=10.0)
     assert e["e_off_J"] == pytest.approx(2000e-6, rel=1e-9)
     e = table_energy(b, i_d_A=100.0, v_dc_V=800.0, t_j_c=25.0, r_g_on_ohm=8.0)
-    assert any("nearest set" in n for n in e["notes"])
+    # 2026-09-27: between two simulated R_G sets the energy is interpolated
+    # linearly in R_G (not the nearest set)
+    assert "interpolated linearly" in e["notes"][0]
+    assert e["e_off_J"] == pytest.approx((1 + (8.0 - 2.3) / 7.7) * 1000e-6, rel=1e-9)
 
 
 def test_write_block_keeps_card_text_and_round_trips(tmp_path: Path) -> None:
@@ -211,12 +214,14 @@ def test_card_dispatches_on_switching_source() -> None:
                          .read_text(encoding="utf-8"))
     doc.pop("switching_table", None)
     doc.pop("switching_source", None)
+    doc.pop("static_table", None)
     card = DeviceCard(doc)
     with pytest.raises(CardError):                        # no table: refused
         card.e_switch(i_d_A=100, t_j_c=25, v_dc_V=800, source="spice")
     doc["switching_table"] = _block()
     card = DeviceCard(doc)
-    ds = card.e_switch(i_d_A=185.2, t_j_c=25, v_dc_V=800)   # default = datasheet
+    assert card.switching_source_default() == "spice"      # 2026-09-27: a table = the default
+    ds = card.e_switch(i_d_A=185.2, t_j_c=25, v_dc_V=800, source="datasheet")
     assert ds["e_off_J"] == pytest.approx(3970e-6)           # Table 4 anchor
     sp = card.e_switch(i_d_A=100, t_j_c=25, v_dc_V=800, source="spice")
     assert sp["e_off_J"] == pytest.approx(1000e-6)
@@ -314,6 +319,7 @@ def test_solve_controller_spice_source(monkeypatch) -> None:
                          .read_text(encoding="utf-8"))
     doc.pop("switching_table", None)
     doc.pop("switching_source", None)
+    doc.pop("static_table", None)
     bare = DeviceCard(doc)
     monkeypatch.setattr(lo, "get_device", lambda name: bare)
     with pytest.raises(lo.ControllerRefusal) as exc:
@@ -345,3 +351,117 @@ def test_solve_controller_spice_source(monkeypatch) -> None:
     # energy-to-loss ratio loosely and the conduction strictly at its own T_j
     assert sp["losses"]["switching_W"] > 1.7 * ds["losses"]["switching_W"]
     assert sp["thermal"]["t_j_max_c"] > ds["thermal"]["t_j_max_c"]
+
+
+# ── 2026-09-27: uniform SPICE basis ──────────────────────────────────────────
+def test_table_interpolates_linearly_in_r_g_between_sets() -> None:
+    b = _block()                     # sets at 2.3 ohm and 10 ohm (E_on, E_off x2 at 10)
+    e23 = table_energy(b, i_d_A=100.0, v_dc_V=800.0, t_j_c=25.0, r_g_on_ohm=2.3)
+    e10 = table_energy(b, i_d_A=100.0, v_dc_V=800.0, t_j_c=25.0, r_g_on_ohm=10.0)
+    e47 = table_energy(b, i_d_A=100.0, v_dc_V=800.0, t_j_c=25.0, r_g_on_ohm=4.7)
+    f = (4.7 - 2.3) / (10.0 - 2.3)
+    assert e47["e_off_J"] == pytest.approx(e23["e_off_J"] + f * (e10["e_off_J"] - e23["e_off_J"]))
+    assert e47["e_on_J"] == pytest.approx(e23["e_on_J"] + f * (e10["e_on_J"] - e23["e_on_J"]))
+    assert e47["spice_set"]["r_g_interpolated_between"] == [2.3, 10.0]
+    # R_G,off alone moves E_off only
+    e = table_energy(b, i_d_A=100.0, v_dc_V=800.0, t_j_c=25.0, r_g_on_ohm=2.3,
+                     r_g_off_ohm=10.0)
+    assert e["e_on_J"] == pytest.approx(e23["e_on_J"])
+    assert e["e_off_J"] == pytest.approx(e10["e_off_J"])
+    # outside the simulated span: the straight line, flagged
+    e = table_energy(b, i_d_A=100.0, v_dc_V=800.0, t_j_c=25.0, r_g_on_ohm=20.0)
+    assert e["extrapolated"] and any("outside the simulated" in n for n in e["notes"])
+
+
+def test_table_bus_interpolation_is_a_power_law() -> None:
+    runs = []
+    for v in (375.0, 750.0):
+        for i in (50.0, 100.0):
+            runs.append(_fake_run(v, 25.0, i, i * (v / 750.0) ** 1.8, i, i))
+    s = make_set(v_gs_on=18, v_gs_off=0, r_g_on=2.3, r_g_off=2.3, l_sigma_nH=15,
+                 l_gate_nH=2, c_sigma_pF=20, runs=runs)
+    b = {"basis": "spice:x", "sets": [s]}
+    e = table_energy(b, i_d_A=100.0, v_dc_V=550.0, t_j_c=25.0, r_g_on_ohm=2.3)
+    assert e["e_off_J"] == pytest.approx(100.0 * (550 / 750) ** 1.8 * 1e-6, rel=1e-3)
+
+
+def test_static_voltage_forward_and_third_quadrant() -> None:
+    from motor_ai_sim.inverter.spice.table import static_voltage
+    blk = {"forward": [[18, 25, 100, 0.40, 0.50], [18, 25, 200, 0.80, 1.00],
+                       [18, 175, 100, 0.90, 1.00], [18, 175, 200, 1.80, 2.00]],
+           "third_quadrant": [[0, 25, 100, 4.0, 4.1], [0, 25, 200, 4.4, 4.6],
+                              [0, 175, 100, 3.8, 3.9], [0, 175, 200, 4.2, 4.4]]}
+    v, _ = static_voltage(blk, kind="forward", i_A=150, t_j_c=100, v_gs_V=18)
+    assert v == pytest.approx(0.5 * (0.75 + 1.5))          # power pin, linear in I and T
+    v, _ = static_voltage(blk, kind="forward", i_A=50, t_j_c=25, v_gs_V=18)
+    assert v == pytest.approx(0.25)                         # through the origin
+    v, notes = static_voltage(blk, kind="third_quadrant", i_A=50, t_j_c=25, v_gs_V=-5)
+    assert v == pytest.approx(4.1) and notes                # knee held, V_GS miss said
+
+
+def test_datasheet_fallback_rg_line_and_bus_exponent() -> None:
+    """The fallback against IMCQ120R004M2H's own figures (rev 1.10 p. 12-13,
+    800 V / 185.2 A / 175 degC): within 5 % where the old rules were off by
+    x1.5...x2.4 (R_G) and +25 % (600 V)."""
+    root = Path(__file__).resolve().parents[1]
+    card = DeviceCard(yaml.safe_load((root / "config" / "devices" / "IMCQ120R004M2H.yaml")
+                                     .read_text(encoding="utf-8")))
+    fig_rg = {4.7: (6700, 7200), 10.0: (10500, 12800), 20.0: (17800, 23000)}
+    for r, (on, off) in fig_rg.items():
+        e = card.e_switch(i_d_A=185.2, t_j_c=175, v_dc_V=800, r_g_ext_ohm=r, source="datasheet")
+        assert e["e_on_J"] * 1e6 == pytest.approx(on, rel=0.05)
+        assert e["e_off_J"] * 1e6 == pytest.approx(off, rel=0.05)
+    fig_v = {600: (2950, 2850, 2250), 1000: (7050, 7500, 3800)}
+    for v, (on, off, fr) in fig_v.items():
+        e = card.e_switch(i_d_A=185.2, t_j_c=175, v_dc_V=v, r_g_ext_ohm=2.3, source="datasheet")
+        assert e["e_on_J"] * 1e6 == pytest.approx(on, rel=0.05)
+        assert e["e_off_J"] * 1e6 == pytest.approx(off, rel=0.06)
+        assert e["e_fr_J"] * 1e6 == pytest.approx(fr, rel=0.05)
+
+
+def test_default_basis_is_spice_where_a_table_exists() -> None:
+    root = Path(__file__).resolve().parents[1]
+    doc = yaml.safe_load((root / "config" / "devices" / "IMCQ120R004M2H.yaml")
+                         .read_text(encoding="utf-8"))
+    doc["switching_table"] = _block()
+    doc.pop("switching_source", None)
+    assert DeviceCard(doc).switching_source_default() == "spice"
+    doc["switching_source"] = "datasheet"                    # a card may pin it
+    assert DeviceCard(doc).switching_source_default() == "datasheet"
+    doc.pop("switching_table")
+    doc["switching_source"] = "spice"                        # no table: fallback
+    assert DeviceCard(doc).switching_source_default() == "datasheet"
+    enc = yaml.safe_load((root / "config" / "devices" / "IMDQ75R004M2H.yaml")
+                         .read_text(encoding="utf-8"))
+    a = DeviceCard(enc).spice_availability()
+    assert not a["has_table"] and a["model_status"] == "encrypted" and "LTspice" in a["needs"]
+
+
+def test_solve_on_spice_static_and_deviation_line(monkeypatch) -> None:
+    from motor_ai_sim.inverter import losses as lo
+    root = Path(__file__).resolve().parents[1]
+    doc = yaml.safe_load((root / "config" / "devices" / "IMCQ120R004M2H.yaml")
+                         .read_text(encoding="utf-8"))
+    doc.pop("switching_source", None)
+    doc["switching_table"] = dict(_block(), validation={
+        "deviates": True, "line": "model deviates from datasheet by -17 % (E_on, 25 degC)"})
+    # a static table equal to R = 5 mohm at every T, and V_SD = 4 V flat
+    doc["static_table"] = {
+        "forward": [[18, t, i, 0.0, 0.005 * i] for t in (25, 175) for i in (50, 100, 200, 300)],
+        "third_quadrant": [[0, t, i, 4.0, 4.0] for t in (25, 175) for i in (50, 100, 200, 300)]}
+    card = DeviceCard(doc)
+    monkeypatch.setattr(lo, "get_device", lambda name: card)
+    r = lo.solve_controller(dict(_L155, device="IMCQ120R004M2H"))
+    L = r["losses"]
+    assert L["switching_source"] == "spice" and L["conduction_source"] == "spice_static"
+    assert L["basis_label"].startswith("SPICE")
+    assert "deviates" in (L["spice_deviation_line"] or "")
+    assert any("deviates" in w for w in r["warnings"])
+    # conduction: sum over legs of (1 - f_dt) * I_leg_rms^2 * 5 mohm / 3
+    f_dt = 2 * 0.5e-6 * 24_000
+    legs = [lg for b in r["bridges"] for lg in b["legs"]]
+    want = sum((1 - f_dt) * lg["i_leg_rms_A"] ** 2 * 0.005 / 3 for lg in legs)
+    assert L["conduction_W"] == pytest.approx(want, rel=0.01)
+    ds = lo.solve_controller(dict(_L155, device="IMCQ120R004M2H", switching_source="datasheet"))
+    assert ds["losses"]["conduction_source"] == "datasheet"
+    assert ds["losses"]["basis_label"].startswith("datasheet (explicit")

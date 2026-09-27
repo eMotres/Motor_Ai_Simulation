@@ -146,7 +146,12 @@ switching:
   i_d_ref_A: 55.8
   r_g_ext_ref_ohm: 1.8
   scaling:
-    voltage_exponent: 1.0
+    voltage_exponent: 1.8
+    voltage_exponent_fr: 1.0
+    voltage_exponent_source: >-
+      2026-09-27 ASSUMPTION: no E = f(V_DD) figure is published for this part;
+      the CoolSiC G2 1200 V figure (IMCQ120R004M2H: E_on/E_off ~V^1.8, E_fr ~V^1.0) is used
+      instead of ^1.0. No R_G slope is published: energies are NOT rescaled in R_G.
     voltage_rule: "E(V_dc) = E(500 V) * (V_dc / 500)^1.0 — first-order hard-switching rule, ASSUMPTION."
     current_rule: "No current-dependence figure published — the single table point is held flat; NOT extrapolated."
     temperature_rule: "No temperature-dependence figure published."

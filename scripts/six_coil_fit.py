@@ -1,4 +1,4 @@
-﻿"""Stage-3 optimiser of the six-coil study: fit the FEM probes, solve, propose.
+"""Stage-3 optimiser of the six-coil study: fit the FEM probes, solve, propose.
 
     python scripts/six_coil_fit.py <workdir> [<out.json>]
 

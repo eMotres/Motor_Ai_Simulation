@@ -885,6 +885,11 @@ coil, fault tolerance with a coil open, and torque-ripple cancellation that a
 three-wire machine cannot reach. That study needs Stage 2's per-coil interface
 and nothing else from this module.
 
+**Done 2026-09-27: `docs/SIX_COIL_STUDY_2026-09-27.md`.** It also finds that §6
+costs the H-bridge at the PHASE current. L155 is 2P, so each coil carries half
+of it: correctly costed, the H-bridge at rated is 4.41 kW with 24 devices, not
+7.26 kW with 96.
+
 ## 9 · Open items
 
 * `Z_th(j-c)` is not published in this datasheet revision, so the model is

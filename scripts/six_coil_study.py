@@ -241,11 +241,17 @@ def run(spec_path, out_path):
                 Bx=np.asarray([f["Bx"] for f in fr], np.float32),
                 By=np.asarray([f["By"] for f in fr], np.float32),
                 step_idx=np.asarray([f.get("step_idx", i) for i, f in enumerate(fr)]))
-        L = float(geo.get("stack_length") or 0.0)
-        L = L / 1000.0 if L > 5 else L
+        L = float(geo.get("stack_length") or geo.get("motor_length") or 0.0)
+        L = L / 1000.0 if L > 5 else L          # the geometry carries mm
         try:
             res["gap"] = pc.gap_forces(r, L if L > 0 else 1.0)
-            res["gap"]["stack_length_m"] = L
+            res["gap"]["stack_length_m"] = L if L > 0 else None
+            # the ring torque against the solver's own Maxwell mean: the
+            # integral's calibration, printed with every force it produces
+            tm = r.get("T_avg_maxwell_Nm")
+            if tm:
+                res["gap"]["T_ring_over_solver_maxwell"] = (
+                    res["gap"]["T_mean_Nm"] / float(tm))
         except Exception as e:  # noqa: BLE001 — a diagnostic must not lose the run
             res["gap"] = {"error": repr(e)}
     json.dump(res, open(out_path, "w"), indent=1, default=str)

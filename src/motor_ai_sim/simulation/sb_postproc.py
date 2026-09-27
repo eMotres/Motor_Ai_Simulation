@@ -367,8 +367,21 @@ def space_vector_hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                                psi_c: Sequence[float], i_a: Sequence[float],
                                i_b: Sequence[float], i_c: Sequence[float],
                                t_maxwell: Sequence[float], pole_pairs: int,
-                               n_parallel: int = 1) -> Tuple[List[float], str]:
+                               n_parallel: int = 1, *,
+                               zero_sequence: bool = False,
+                               mechanical_angle_rad: Optional[Sequence[float]] = None
+                               ) -> Tuple[List[float], str]:
     """Flux-linkage (space-vector) mean + raw Maxwell AC — 68de0ca verbatim.
+
+    ``zero_sequence=True`` (2026-09-27) is for drives that CAN carry a
+    zero-sequence current — open-winding / per-coil (H-bridge) drives.  The
+    Clarke α/β pair drops the zero sequence, so a triplen current's torque is
+    invisible to the space-vector mean (the six-coil study under-read its
+    3rd-harmonic case by 0.92 N·m, docs/SIX_COIL_STUDY_2026-09-27.md §3).
+    The omitted flux-linkage term ``3·n_par·<i0·dψ0/dθ_m>`` is added to the
+    mean (method ``"energy_mean+zero_sequence+maxwell_ripple"``); it needs the
+    retained window's mechanical angles.  A three-wire star/delta drive passes
+    ``False`` and is untouched bit for bit.
 
     The mean is ``(3/2)·p·n_parallel·<ψα·iβ − ψβ·iα>`` over the retained
     window (PER-BRANCH ψ and i; ``n_parallel`` restores the phase current).
@@ -393,14 +406,56 @@ def space_vector_hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                * (_psial * _ibe - _psibe * _ial))
         _emean = float(_Te.mean())
         _mx = np.asarray(t_maxwell, float)     # raw Maxwell σ_rθ series
+        if zero_sequence:
+            _emean += zero_sequence_torque_mean(
+                _pa, _pb, _pc, _ea, _eb, _ec, mechanical_angle_rad,
+                n_parallel=n_parallel)
+            return ((_mx - _mx.mean() + _emean).tolist(),
+                    "energy_mean+zero_sequence+maxwell_ripple")
         return (_mx - _mx.mean() + _emean).tolist(), "energy_mean+maxwell_ripple"
     return list(t_maxwell), "maxwell_stress"
+
+
+def zero_sequence_torque_mean(psi_a: Sequence[float], psi_b: Sequence[float],
+                              psi_c: Sequence[float], i_a: Sequence[float],
+                              i_b: Sequence[float], i_c: Sequence[float],
+                              mechanical_angle_rad: Optional[Sequence[float]],
+                              n_parallel: int = 1) -> float:
+    """``3·n_par·<i0·dψ0/dθ_m>`` — the zero-sequence share of the torque.
+
+    ``i0 = (ia+ib+ic)/3`` and ``ψ0 = (ψa+ψb+ψc)/3`` per branch.  With the
+    Clarke pair, ``Σ i_k·dψ_k = (3/2)(iα dψα + iβ dψβ) + 3·i0·dψ0``, so this is
+    exactly what the space-vector mean leaves out.  The derivative is the
+    full-DFT one of :func:`terminal_work_mean` on an endpoint-excluded
+    integer-period window, else central differences on the given angles.
+    """
+    pa, pb, pc, ia, ib, ic = (np.asarray(v, float) for v in
+                              (psi_a, psi_b, psi_c, i_a, i_b, i_c))
+    if mechanical_angle_rad is None:
+        raise ValueError("the zero-sequence torque needs the mechanical angles")
+    th = np.asarray(mechanical_angle_rad, float)
+    if th.shape != pa.shape or th.size < 3:
+        raise ValueError("mechanical angles must align with the terminal samples")
+    i0 = (ia + ib + ic) / 3.0
+    psi0 = (pa + pb + pc) / 3.0
+    steps = np.diff(th)
+    step = float(steps[0])
+    uniform = step != 0.0 and np.allclose(
+        steps, step, rtol=1e-10, atol=max(1e-14, abs(step) * 1e-10))
+    if uniform:
+        w = 2.0 * math.pi * np.fft.fftfreq(th.size, d=step)
+        dpsi0 = np.fft.ifft(1j * w * np.fft.fft(psi0)).real
+    else:
+        dpsi0 = np.gradient(psi0, th)
+    return float(3.0 * max(1, int(n_parallel)) * np.mean(i0 * dpsi0))
 
 
 # What each selected-method string means, for the result record.
 TORQUE_MEAN_SOURCE = {
     "terminal_work_mean+maxwell_ripple": "terminal_work",
     "energy_mean+maxwell_ripple": "flux_linkage_space_vector",
+    "energy_mean+zero_sequence+maxwell_ripple":
+        "flux_linkage_space_vector+zero_sequence",
     "maxwell_stress": "raw_maxwell",
 }
 
@@ -415,7 +470,8 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
                   rotor_eddy: bool = False, demag: bool = False,
                   frozen_nu: bool = False,
                   all_frames_converged: bool = False,
-                  integer_period_window: bool = False
+                  integer_period_window: bool = False,
+                  zero_sequence: bool = False
                   ) -> Tuple[List[float], str]:
     """Mean torque from terminal work or flux linkage, AC from raw Maxwell.
 
@@ -464,6 +520,14 @@ def hybrid_torque(psi_a: Sequence[float], psi_b: Sequence[float],
         integer_period_window=integer_period_window,
         mechanical_angle_rad=mechanical_angle_rad)
     if _ineligible is not None:
+        # ``zero_sequence``: only a drive with a zero-sequence current path
+        # (per-coil / open winding) — the terminal-work branch below already
+        # sums every phase, so it needs no correction.
+        if zero_sequence:
+            return space_vector_hybrid_torque(
+                psi_a, psi_b, psi_c, i_a, i_b, i_c, t_maxwell, pole_pairs,
+                n_parallel=n_parallel, zero_sequence=True,
+                mechanical_angle_rad=mechanical_angle_rad)
         return space_vector_hybrid_torque(
             psi_a, psi_b, psi_c, i_a, i_b, i_c, t_maxwell, pole_pairs,
             n_parallel=n_parallel)

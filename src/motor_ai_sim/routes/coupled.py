@@ -3268,6 +3268,7 @@ class _ControllerLoop:
             "num_slots": geo.get("num_slots"),
             "num_poles": geo.get("num_poles"),
             "single_layer": int(wnd.get("layers") or 1) == 1,
+            "winding_n_parallel": int(wnd.get("n_parallel") or 1),
             "star_delta": self.star_delta,
             "device": cfg["device"],
             "devices_parallel": int(cfg["devices_parallel"]),

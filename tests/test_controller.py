@@ -1999,3 +1999,94 @@ def test_cooling_report_line_names_the_mode(synth_dir):
     rows3 = {r[0]: r for r in R.controller_rows(still)}
     assert "still air" in rows3["Cooling"][1].lower()
     assert "air still" in rows3["Cooling"][2].lower()
+
+
+# ---------------------------------------------------------------------------
+# The winding's parallel paths (2026-09-27, docs/SIX_COIL_STUDY_2026-09-27.md §5)
+# ---------------------------------------------------------------------------
+
+def _hb_mod(out):
+    return {b["id"]: b for b in out["topology"]["bridges"]}
+
+
+def test_h_bridge_on_a_2p_winding_carries_half_the_phase_current(synth_dir):
+    """12 slots / 10 poles / single layer: 2 coils per phase.  Wired 2P, each
+    coil carries I/2 at the FULL phase voltage; the H-bridge conduction loss
+    (2 switches per coil, I_coil^2 R each) falls to a quarter."""
+    ser = lo.solve_controller(_synth_request(topology="h_bridge"))
+    par = lo.solve_controller(_synth_request(topology="h_bridge",
+                                             winding_n_parallel=2))
+    assert ser["point"]["i_coil_rms_A"] == pytest.approx(100.0)
+    assert par["point"]["i_coil_rms_A"] == pytest.approx(50.0)
+    expect = 6 * 2 * 50.0 ** 2 * R_SYN_MOHM * 1e-3
+    assert par["losses"]["conduction_W"] == pytest.approx(expect, rel=1e-6)
+    assert (par["losses"]["conduction_W"]
+            == pytest.approx(ser["losses"]["conduction_W"] / 4.0, rel=1e-6))
+    # coil voltage = phase voltage (1 coil in series per path), twice the 1P's
+    assert par["point"]["v_coil_rms_V"] == pytest.approx(
+        par["point"]["v_machine_phase_rms_V"], rel=1e-3)
+    assert par["point"]["v_coil_rms_V"] == pytest.approx(
+        2.0 * ser["point"]["v_coil_rms_V"], rel=1e-3)
+
+
+def test_2p_is_the_same_as_asking_for_the_coil_current_by_hand(synth_dir):
+    """The study's manual correction (I/2 at the same P and pf) must be what
+    the winding-aware solve does on its own."""
+    auto = lo.solve_controller(_synth_request(topology="h_bridge",
+                                              winding_n_parallel=2))
+    hand = lo.solve_controller(_synth_request(topology="h_bridge",
+                                              i_phase_rms_A=50.0))
+    for k in ("conduction_W", "switching_W", "third_quadrant_W", "total_W"):
+        assert auto["losses"][k] == pytest.approx(hand["losses"][k], rel=1e-9)
+
+
+def test_one_inverter_does_not_care_about_the_parallel_paths(synth_dir):
+    """The three-phase bridge sees the PHASE (or line) current whatever the
+    coils do inside the phase."""
+    for sd in ("star", "delta"):
+        a1 = lo.solve_controller(_synth_request(star_delta=sd))
+        a2 = lo.solve_controller(_synth_request(star_delta=sd,
+                                                winding_n_parallel=2))
+        assert a2["losses"]["total_W"] == pytest.approx(a1["losses"]["total_W"],
+                                                        rel=1e-9)
+
+
+def test_two_inverters_on_a_2p_winding_split_the_power(synth_dir):
+    """2P, two sets: each inverter holds one whole parallel path — half the
+    current at the full modulation (the legacy "power_split"), whatever the
+    stale default set_split says."""
+    auto = lo.solve_controller(_synth_request(topology="two_3ph",
+                                              winding_n_parallel=2,
+                                              set_split="series_split"))
+    ps = lo.solve_controller(_synth_request(topology="two_3ph",
+                                            set_split="power_split"))
+    assert auto["losses"]["total_W"] == pytest.approx(ps["losses"]["total_W"],
+                                                      rel=1e-9)
+    assert auto["set_split"] == "winding"
+    # 1S winding keeps the legacy reading bit for bit
+    legacy = lo.solve_controller(_synth_request(topology="two_3ph"))
+    a1 = lo.solve_controller(_synth_request(topology="two_3ph",
+                                            winding_n_parallel=1))
+    assert a1["losses"] == legacy["losses"]
+
+
+def test_custom_mapping_follows_the_parallel_paths(synth_dir):
+    """A custom map with one H-bridge per coil is the h_bridge preset."""
+    coils = tp.coils_from_winding(12, 10, single_layer=True)
+    mapping = ([{"coil": c.index, "bridge": f"B{c.index}", "leg": "P"}
+                for c in coils]
+               + [{"coil": c.index, "bridge": f"B{c.index}", "leg": "N",
+                   "polarity": -1} for c in coils])
+    cu = lo.solve_controller(_synth_request(topology="custom", mapping=mapping,
+                                            winding_n_parallel=2))
+    hb = lo.solve_controller(_synth_request(topology="h_bridge",
+                                            winding_n_parallel=2))
+    assert cu["losses"]["conduction_W"] == pytest.approx(
+        hb["losses"]["conduction_W"], rel=1e-9)
+
+
+def test_parallel_paths_that_do_not_divide_the_phase_are_refused(synth_dir):
+    with pytest.raises(lo.ControllerRefusal) as ei:
+        lo.solve_controller(_synth_request(topology="h_bridge",
+                                           winding_n_parallel=4))
+    assert "winding_n_parallel" in str(ei.value)

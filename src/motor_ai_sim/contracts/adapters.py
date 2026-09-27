@@ -227,16 +227,11 @@ def result_ir_from_transient(sbres: Dict[str, Any], *, provenance: Optional[Prov
 # `P_shaft_honest_W`) was named for the un-filtered frequency-domain solve; it
 # is actually a LINEAR estimate (see docs/EDDY_TIME_INTEGRATION_2026-09-25.md,
 # `shaft_is_linear_estimate`), so every place that reads or displays it now
-# calls it `P_mag_linear_W` / `P_shaft_linear_W`. The solver
-# (`simulation/fem_solver_2d.py`) still EMITS the old key names — it is another
-# agent's file this session — so this adapter (the one place a raw solver dict
-# crosses into a record any route/web/report consumer touches) aliases the new
-# names onto the old values, in place, without removing the old keys. Old
-# stored records (which only ever have the old keys) keep reading correctly
-# through `read_linear_cross_check` below. Nothing else in the codebase reads
-# `P_mag_honest_W` / `P_shaft_honest_W` today (checked: not in report.py,
-# datasheet.py, or web/), so this is the only rename hook needed until the
-# solver itself is free to rename its own output — noted for the orchestrator.
+# calls it `P_mag_linear_W` / `P_shaft_linear_W`. Since 2026-09-27 the solver
+# (`simulation/fem_solver_2d.py`) emits the new names itself. Old stored
+# records only ever have the old keys; this adapter aliases the new names onto
+# them, in place, without removing the old keys, and `read_linear_cross_check`
+# below reads either.
 _LINEAR_KEY_ALIASES = {
     "P_mag_honest_W": "P_mag_linear_W",
     "P_shaft_honest_W": "P_shaft_linear_W",

@@ -101,6 +101,10 @@ def test_generator_commands_below_the_terminal():
     {"drop": DeviceDrop(r_ds_ohm=-1.0, v_sd_v0_V=0.7, v_sd_rd_ohm=0.0,
                         dead_time_s=0.2e-6)},
     {"drop": object()},
+    {"drop": DeviceDrop(r_ds_ohm=0.005, v_sd_v0_V=float("nan"),
+                        v_sd_rd_ohm=0.004, dead_time_s=0.2e-6)},
+    {"drop": DeviceDrop(r_ds_ohm=0.005, v_sd_v0_V=0.7, v_sd_rd_ohm=0.004,
+                        dead_time_s=-1e-9)},
 ])
 def test_bad_inputs_refuse_by_name(kw):
     from fastapi import HTTPException
@@ -108,6 +112,17 @@ def test_bad_inputs_refuse_by_name(kw):
         _guess(**kw)
     assert ei.value.status_code == 422
     assert ei.value.detail["error_code"] == "pwm_first_guess_input"
+
+
+@pytest.mark.parametrize("v0, rd", [(-5.034101662310716e-16, 0.004),
+                                    (0.0, 0.0), (-0.01, -1e-4)])
+def test_fitted_body_diode_intercept_near_zero_or_negative_is_used(v0, rd):
+    # L12 IQE050N08NM5SC: the body-diode fit intercept is -5e-16; the guess
+    # uses the fit as it is (finite only), it must not refuse the coupled run.
+    d = DeviceDrop(r_ds_ohm=0.005, v_sd_v0_V=v0, v_sd_rd_ohm=rd,
+                   dead_time_s=0.2e-6)
+    g = _guess(drop=d)
+    assert np.isfinite(g["v_command_peak_V"])
 
 
 # ── the passes, on a mocked machine ────────────────────────────────────────
@@ -129,6 +144,9 @@ class _Ctl:
 
     def restore(self, st):
         self.t_j_c, self.solve = st
+
+    def snap_excitation(self):
+        return "fake/ctl"
 
     def step(self, em, *, it, phase="loop"):
         self.steps.append(phase)

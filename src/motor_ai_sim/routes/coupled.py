@@ -1784,10 +1784,16 @@ def _pwm_v1_first_guess(*, v_sine_peak_V: float, v_delta_deg: float,
             fv = float(getattr(drop, k))
         except (AttributeError, TypeError, ValueError):
             fv = float("nan")
-        if not (math.isfinite(fv) and fv >= 0.0):
+        # r_ds and dead time are physical magnitudes (>= 0).  The body-diode
+        # pair is a straight-line FIT (intercept, slope): the intercept can
+        # come out ~0 or slightly negative (L12 card: -5e-16) and
+        # pole_error_volts uses it as it is, so only finiteness is required.
+        need_nonneg = k in ("r_ds_ohm", "dead_time_s")
+        if not (math.isfinite(fv) and (fv >= 0.0 or not need_nonneg)):
             raise _refuse("the PWM first-voltage guess needs the controller's "
-                          "device drop %s (finite, ≥ 0); got %r"
-                          % (k, getattr(drop, k, None)), ["controller"],
+                          "device drop %s (%s); got %r"
+                          % (k, "finite, ≥ 0" if need_nonneg else "finite",
+                             getattr(drop, k, None)), ["controller"],
                           code="pwm_first_guess_input")
         drop_vals[k] = fv
     for k, v in (("v_delta_deg", v_delta_deg), ("gamma_deg", gamma_deg)):

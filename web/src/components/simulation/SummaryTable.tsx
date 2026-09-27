@@ -1211,8 +1211,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
 
       {/* ── Row 1 — torque, power, mass, efficiency, ripple ───────────────── */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        <Cell label="Torque T_em" value={fmt(s.T_em_avg_Nm, 2)} unit="N·m"
-          accent="blue"
+        <Cell label="Torque T_em"
+          value={fmt(s.T_em_avg_Nm, Math.abs(s.T_em_avg_Nm) < 0.1 ? 4 : 2)}
+          unit="N·m" accent="blue"
           tooltip="Average electromagnetic torque from Maxwell stress integral over one electrical period"/>
         <Cell label="Mech power" value={`${fmt(pShaft / 1000, 3)}`} unit="kW"
           accent="blue"

@@ -230,6 +230,17 @@ def run(spec_path, out_path):
                              "rotor_angle_deg")},
     }
     if spec.get("frames"):
+        # the field itself, so the gap integral can be redone without a solve
+        fm = r.get("frames_mesh") or {}
+        fr = r.get("frames") or []
+        if fm and fr:
+            np.savez_compressed(
+                os.path.splitext(out_path)[0] + ".frames.npz",
+                T=np.asarray(fm["T"], np.int32), tags=np.asarray(fm["tags"], np.int32),
+                nsn=int(fm["nsn"]), P_mm=np.asarray(fr[0]["P_mm"], np.float64),
+                Bx=np.asarray([f["Bx"] for f in fr], np.float32),
+                By=np.asarray([f["By"] for f in fr], np.float32),
+                step_idx=np.asarray([f.get("step_idx", i) for i, f in enumerate(fr)]))
         L = float(geo.get("stack_length") or 0.0)
         L = L / 1000.0 if L > 5 else L
         try:

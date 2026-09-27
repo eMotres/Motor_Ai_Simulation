@@ -301,23 +301,32 @@ def open_coils_layout(open_coils: Iterable[int]):
 # ═══════════════════════════════════════════════════════════════════════════
 #  AIR-GAP FORCES (UMP) FROM THE SOLVER'S OWN FRAMES
 # ═══════════════════════════════════════════════════════════════════════════
-def _gap_annulus(P: np.ndarray, T: np.ndarray, tags: np.ndarray, n_el_stator: int,
-                 air_tags=(0, 3, 7)) -> Tuple[np.ndarray, float, float]:
-    """Stator-side air elements forming a clean annulus up to the bore."""
+def _gap_annulus(P: np.ndarray, T: np.ndarray, tags: np.ndarray,
+                 stator_el: np.ndarray) -> Tuple[np.ndarray, float, float]:
+    """Stator-side elements lying entirely between the band edge and the bore.
+
+    The stator half of the sliding-band mesh starts at the band's outer ring;
+    everything of it below the first stator-iron node is the stator-side gap
+    ring (tagged as outer/gap air by the mesher, which is why no tag is
+    trusted here — only radii and "no iron, no copper").  It does not rotate,
+    so its field needs no frame change.
+    """
     r = np.hypot(P[0], P[1])
-    st = np.arange(n_el_stator)
-    iron = st[tags[:n_el_stator] == 1]
-    if not iron.size:
-        raise ValueError("no stator iron in the frame mesh")
-    r_bore = float(r[T[:, iron]].min())
-    air = st[np.isin(tags[:n_el_stator], air_tags)]
-    rmax = r[T[:, air]].max(axis=0)
-    rmin = r[T[:, air]].min(axis=0)
-    sel = air[rmax <= r_bore * (1 + 1e-9)]
+    st = np.where(stator_el)[0]
+    solid = st[(tags[st] == 1) | (tags[st] >= 100)]
+    if not solid.size:
+        raise ValueError("no stator iron/copper in the frame mesh")
+    r_bore = float(r[T[:, solid]].min())
+    r_band = float(r[T[:, st]].min())
+    # node radii on "the bore circle" scatter by mesher round-off: allow 2 %
+    # of the ring's own thickness, far below one element layer
+    tol = 0.02 * max(r_bore - r_band, 1e-12)
+    rmax = r[T[:, st]].max(axis=0)
+    ok = rmax <= r_bore + tol
+    sel = st[ok & (tags[st] != 1) & (tags[st] < 100)]
     if not sel.size:
         raise ValueError("no stator-side gap air below the bore")
-    r_in = float(rmin[rmax <= r_bore * (1 + 1e-9)].min())
-    return sel, r_in, r_bore
+    return sel, r_band, float(r[T[:, sel]].max())
 
 
 def gap_forces(result: Dict[str, Any], stack_length_m: float) -> Dict[str, Any]:
@@ -341,10 +350,11 @@ def gap_forces(result: Dict[str, Any], stack_length_m: float) -> Dict[str, Any]:
     T = np.asarray(fm["T"], int)
     tags = np.asarray(fm["tags"], int)
     nsn = int(fm["nsn"])
-    # stator elements are those whose nodes are all stator nodes
-    n_el_st = int(np.sum(np.all(T < nsn, axis=0)))
+    # stator elements are those whose nodes are all stator nodes (the rotor
+    # block of P_mm is rotated per frame for display; the stator is not)
+    stator_el = np.all(T < nsn, axis=0)
     P0 = np.asarray(frames[0]["P_mm"], float) * 1e-3
-    sel, r_i, r_o = _gap_annulus(P0, T, tags, n_el_st)
+    sel, r_i, r_o = _gap_annulus(P0, T, tags, stator_el)
     tri = P0[:, T[:, sel]]                       # (2, 3, E)
     area = 0.5 * np.abs((tri[0, 1] - tri[0, 0]) * (tri[1, 2] - tri[1, 0])
                         - (tri[0, 2] - tri[0, 0]) * (tri[1, 1] - tri[1, 0]))

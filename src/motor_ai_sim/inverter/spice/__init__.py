@@ -20,9 +20,11 @@ What lives here (pure Python, no new dependency):
   with the interpolation the loss model reads when ``switching_source`` is
   ``"spice"``.
 
-Nothing here replaces a datasheet number: the table is a SECOND source,
-tagged ``basis: spice:<lib>@<sha256>``, and ``switching_source`` defaults to
-``"datasheet"``.
+Owner 2026-09-27: every device whose vendor model runs is solved on it,
+uniformly — ``switching_source`` defaults to ``"spice"`` for any card with a
+``switching_table`` (switching) and ``static_table`` (conduction, third
+quadrant), tagged ``basis: spice:<lib>@<sha256>``; the datasheet path is the
+explicit, labelled fallback (docs/CONTROLLER_SPICE_UNIFORM_2026-09-27.md).
 """
 from __future__ import annotations
 

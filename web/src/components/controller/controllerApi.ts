@@ -34,6 +34,12 @@ export interface DeviceRow {
             source: string | null; dated: string | null };
   datasheet_url?: string | null;
   datasheet_revision?: string | null;
+  /** 2026-09-27 uniform SPICE basis: the basis a solve uses by default. */
+  basis_default?: 'spice' | 'datasheet';
+  spice?: { has_table: boolean; has_static: boolean; model_status: string;
+            needs: string | null; basis: string | null;
+            l_sigma_default_nH: number | null; r_g_sets_ohm: number[];
+            deviation_line: string | null };
   error?: string;
 }
 
@@ -222,6 +228,13 @@ export interface ControllerSettings {
   devices_parallel_by_bridge?: Record<string, number>;
   r_g_ext_ohm?: number | null;
   v_gs_off_V?: number | null;
+  /** 2026-09-27 (cloud task 10): the loss basis ("spice" | "datasheet";
+   *  null = the device's default — SPICE wherever a table exists) and the
+   *  driver/layout inputs the SPICE table is looked up with. */
+  switching_source?: string | null;
+  r_g_off_ext_ohm?: number | null;
+  v_gs_on_V?: number | null;
+  l_sigma_nH?: number | null;
   dead_time_us?: number | null;
   f_carrier_hz?: number | null;
   v_dc_V?: number | null;
@@ -268,6 +281,13 @@ export interface ControllerFormState {
   nPar: NumOrBlank;
   rg: NumOrBlank;
   vgsOff: NumOrBlank;
+  /** ``''`` = the device's default basis (SPICE where a table exists). */
+  basis: string;
+  /** blank = same as R_G,on / the device's datasheet V_GS(on) / the
+   *  datasheet test circuit's loop inductance. */
+  rgOff: NumOrBlank;
+  vgsOn: NumOrBlank;
+  lSigma: NumOrBlank;
   dead: NumOrBlank;
   fsw: NumOrBlank;
   vdc: NumOrBlank;
@@ -314,6 +334,7 @@ export interface ControllerFormState {
 export const DEFAULT_CONTROLLER_FORM: ControllerFormState = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
   nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
+  basis: '', rgOff: '', vgsOn: '', lSigma: '',
   // Owner 2026-09-25: these five INHERIT from the Thermal tab by default —
   // blank is "not overridden yet", the SAME convention ``vdc``/``fsw``
   // already use here (a placeholder shows the resolved value; typing a real
@@ -364,6 +385,10 @@ export function formStateFromSettings(
     nPar: block.devices_parallel ?? fallback.nPar,
     rg: toFormNumber(block.r_g_ext_ohm),
     vgsOff: toFormNumber(block.v_gs_off_V),
+    basis: block.switching_source || fallback.basis,
+    rgOff: toFormNumber(block.r_g_off_ext_ohm),
+    vgsOn: toFormNumber(block.v_gs_on_V),
+    lSigma: toFormNumber(block.l_sigma_nH),
     dead: toFormNumber(block.dead_time_us),
     fsw: toFormNumber(block.f_carrier_hz),
     vdc: toFormNumber(block.v_dc_V),
@@ -402,6 +427,10 @@ export function settingsForSave(s: ControllerFormState): ControllerSettings {
     devices_parallel_by_bridge: {},
     r_g_ext_ohm: toSaveNumber(s.rg),
     v_gs_off_V: toSaveNumber(s.vgsOff),
+    switching_source: s.basis || null,
+    r_g_off_ext_ohm: toSaveNumber(s.rgOff),
+    v_gs_on_V: toSaveNumber(s.vgsOn),
+    l_sigma_nH: toSaveNumber(s.lSigma),
     dead_time_us: toSaveNumber(s.dead),
     f_carrier_hz: toSaveNumber(s.fsw),
     v_dc_V: toSaveNumber(s.vdc),
@@ -515,6 +544,10 @@ export interface ControllerSolveBody {
   h_bridge_modulation: string;
   r_g_ext_ohm?: number;
   v_gs_off_V?: number;
+  switching_source?: string;
+  r_g_off_ext_ohm?: number;
+  v_gs_on_V?: number;
+  l_sigma_nH?: number;
   dead_time_us?: number;
   f_carrier_hz?: number;
   v_dc_V?: number;
@@ -563,6 +596,10 @@ export function controllerSolveBody(
     topology: s.topology, set_split: s.setSplit, h_bridge_modulation: s.hbMod,
     r_g_ext_ohm: blank(s.rg),
     v_gs_off_V: blank(s.vgsOff),
+    switching_source: s.basis || undefined,
+    r_g_off_ext_ohm: blank(s.rgOff),
+    v_gs_on_V: blank(s.vgsOn),
+    l_sigma_nH: blank(s.lSigma),
     dead_time_us: blank(s.dead),
     f_carrier_hz: blank(s.fsw),
     v_dc_V: blank(s.vdc),
@@ -797,6 +834,10 @@ export function staleResultFields(
       && s.rg !== res.settings.r_g_ext_ohm) out.push('R_G');
   if (s.vgsOff !== '' && res.settings?.v_gs_off_V != null
       && s.vgsOff !== res.settings.v_gs_off_V) out.push('V_GS off');
+  if (s.basis && res.settings?.switching_source != null
+      && s.basis !== res.settings.switching_source) out.push('loss basis');
+  if (s.rgOff !== '' && s.rgOff !== (res.settings?.r_g_off_ext_ohm ?? null)) out.push('R_G,off');
+  if (s.lSigma !== '' && s.lSigma !== (res.settings?.l_sigma_nH ?? null)) out.push('L_σ');
   if (s.fsw !== '' && res.point?.f_carrier_hz != null
       && s.fsw !== res.point.f_carrier_hz) out.push('carrier');
   if (s.vdc !== '' && res.point?.v_dc_V != null

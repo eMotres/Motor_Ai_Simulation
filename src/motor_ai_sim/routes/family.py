@@ -4047,6 +4047,12 @@ class ControllerPatch(BaseModel):
     devices_parallel_by_bridge: dict[str, int] = {}
     r_g_ext_ohm: Optional[float] = None
     v_gs_off_V: Optional[float] = None
+    # 2026-09-27 (cloud task 10): the switching basis and the driver/layout
+    # inputs the SPICE table is looked up with (R_G,off, V_GS(on), L_sigma)
+    switching_source: Optional[str] = None
+    r_g_off_ext_ohm: Optional[float] = None
+    v_gs_on_V: Optional[float] = None
+    l_sigma_nH: Optional[float] = None
     dead_time_us: Optional[float] = None
     f_carrier_hz: Optional[float] = None
     v_dc_V: Optional[float] = None
@@ -4085,6 +4091,8 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
             f"controller.devices_parallel must be at least 1, got "
             f"{req.devices_parallel}"))
     for _f, _v in (("r_g_ext_ohm", req.r_g_ext_ohm),
+                   ("r_g_off_ext_ohm", req.r_g_off_ext_ohm),
+                   ("l_sigma_nH", req.l_sigma_nH),
                    ("dead_time_us", req.dead_time_us),
                    ("f_carrier_hz", req.f_carrier_hz),
                    ("v_dc_V", req.v_dc_V),
@@ -4096,6 +4104,9 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
     if req.power_factor is not None and float(req.power_factor) > 1.0:
         raise HTTPException(422, detail=(
             f"controller.power_factor cannot exceed 1; got {req.power_factor}"))
+    if req.switching_source and req.switching_source.strip().lower() not in ("spice", "datasheet"):
+        raise HTTPException(422, detail=(
+            f"controller.switching_source must be spice or datasheet; got {req.switching_source!r}"))
     if req.cooling.mode is not None:
         from motor_ai_sim.inverter.losses import COOLING_MODES
         if str(req.cooling.mode).strip().lower() not in COOLING_MODES:
@@ -4114,6 +4125,10 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
                                        (req.devices_parallel_by_bridge or {}).items()},
         "r_g_ext_ohm": req.r_g_ext_ohm,
         "v_gs_off_V": req.v_gs_off_V,
+        "switching_source": ((req.switching_source or "").strip().lower() or None),
+        "r_g_off_ext_ohm": req.r_g_off_ext_ohm,
+        "v_gs_on_V": req.v_gs_on_V,
+        "l_sigma_nH": req.l_sigma_nH,
         "dead_time_us": req.dead_time_us,
         "f_carrier_hz": req.f_carrier_hz,
         "modulation_index": req.modulation_index,

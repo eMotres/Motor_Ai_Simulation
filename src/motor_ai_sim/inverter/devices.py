@@ -629,10 +629,78 @@ class DeviceCard:
         return b if isinstance(b, dict) and b.get("sets") else None
 
     def switching_source_default(self) -> str:
-        """The card's own ``switching_source`` (``datasheet`` unless the card
-        says ``spice``).  A request's ``switching_source`` overrides it."""
-        s = str(self.doc.get("switching_source") or "datasheet").strip().lower()
-        return s if s in SWITCHING_SOURCES else "datasheet"
+        """The basis a solve uses when the request does not say.
+
+        Owner 2026-09-27: «все моторы должны работать на SPICE одинаково» —
+        every device whose vendor model runs carries a ``switching_table``
+        and is solved on it; the datasheet path is the explicit, labelled
+        fallback for a device WITHOUT a runnable model (the encrypted 750 V
+        parts).  A card may still pin ``switching_source: datasheet``."""
+        s = str(self.doc.get("switching_source") or "").strip().lower()
+        if s in SWITCHING_SOURCES:
+            return "datasheet" if (s == "spice" and self.switching_table() is None) else s
+        return "spice" if self.switching_table() is not None else "datasheet"
+
+    def static_table(self) -> Optional[Dict[str, Any]]:
+        """The card's generated SPICE ``static_table`` (DC sweeps), or ``None``."""
+        b = self.doc.get("static_table")
+        return b if isinstance(b, dict) and b.get("forward") else None
+
+    def spice_validation(self) -> Optional[Dict[str, Any]]:
+        """The model-vs-datasheet verdict stored with the table (or ``None``)."""
+        v = (self.switching_table() or {}).get("validation")
+        return v if isinstance(v, dict) else None
+
+    def spice_deviation_line(self) -> Optional[str]:
+        """The one line the card/results show when the vendor model deviates
+        from the datasheet by more than 15 % (or cannot be checked)."""
+        v = self.spice_validation()
+        if not v or not v.get("deviates"):
+            return None
+        return str(v.get("line") or "")
+
+    def spice_availability(self) -> Dict[str, Any]:
+        """What the Controller tab shows next to the basis selector."""
+        from motor_ai_sim.inverter.spice.models import SpiceModelError, read_manifest
+        try:
+            man = read_manifest(self.part)
+        except SpiceModelError:
+            man = {}
+        status = str(man.get("status") or "no_model")
+        return {"has_table": self.switching_table() is not None,
+                "has_static": self.static_table() is not None,
+                "model_status": status,
+                "model_status_reason": man.get("status_reason"),
+                "needs": ("LTspice (free, Analog Devices) with the vendor's _LTSpice.lib — "
+                          "the library is encrypted, ngspice cannot run it"
+                          if status.lower() == "encrypted" else None),
+                "basis": (self.switching_table() or {}).get("basis"),
+                "l_sigma_default_nH": (self.switching_table() or {}).get("l_sigma_default_nH"),
+                "r_g_sets_ohm": sorted({float(s.get("r_g_on_ohm")) for s in
+                                        (self.switching_table() or {}).get("sets") or []
+                                        if isinstance(s, dict) and s.get("r_g_on_ohm") is not None}),
+                "validation": self.spice_validation(),
+                "deviation_line": self.spice_deviation_line()}
+
+    # ── conduction / third quadrant from the SPICE static table ────────────
+    def v_ds_on_spice_V(self, i_A: float, t_j_c: float, v_gs_on_V: float) -> float:
+        """Forward V_DS [V] at the POWER source pin from the vendor model's DC
+        sweep (the vendor model's own Kelvin-to-power-source path included,
+        neither added nor removed here)."""
+        from motor_ai_sim.inverter.spice.table import static_voltage
+        blk = self.static_table()
+        if blk is None:
+            raise CardError(f"{self.part}: no SPICE static_table")
+        return static_voltage(blk, kind="forward", i_A=i_A, t_j_c=t_j_c, v_gs_V=v_gs_on_V)[0]
+
+    def v_sd_spice_V(self, i_sd_A: float, t_j_c: float, v_gs_off_V: float = 0.0) -> float:
+        """Third-quadrant V_SD [V] at the power source pin, gate at V_GS(off)."""
+        from motor_ai_sim.inverter.spice.table import static_voltage
+        blk = self.static_table()
+        if blk is None:
+            raise CardError(f"{self.part}: no SPICE static_table")
+        return static_voltage(blk, kind="third_quadrant", i_A=i_sd_A, t_j_c=t_j_c,
+                              v_gs_V=v_gs_off_V)[0]
 
     def e_switch(self, *, i_d_A: float, t_j_c: float, v_dc_V: float,
                  v_gs_off_V: float = 0.0,
@@ -719,28 +787,51 @@ class DeviceCard:
                 continue
             e_uj = interp(sorted(by_t), float(t_j_c)) or 0.0
             out[key] = max(float(e_uj), 0.0) * 1e-6
-        # Voltage
+        # Voltage — E_on/E_off on the card's exponent (the datasheet's own
+        # E = f(V_DD) figure says ~1.8 on the CoolSiC G2 family, 2026-09-27),
+        # E_fr on its own (~1.0 on the same figure).
         v_ref = float(sw.get("v_dd_ref_V"))
         n = float(_num(scaling.get("voltage_exponent")) or 1.0)
-        kv = (max(float(v_dc_V), 0.0) / v_ref) ** n if v_ref > 0 else 1.0
-        for key in ("e_on_J", "e_off_J", "e_fr_J"):
-            out[key] *= kv
-        # Gate resistance — E_on/E_off only, per the card's `r_g_rule`.
+        n_fr = float(_num(scaling.get("voltage_exponent_fr")) or n)
+        vr = max(float(v_dc_V), 0.0) / v_ref if v_ref > 0 else 1.0
+        kv, kv_fr = vr ** n, vr ** n_fr
+        out["e_on_J"] *= kv
+        out["e_off_J"] *= kv
+        out["e_fr_J"] *= kv_fr
+        # Gate resistance — E_on/E_off only: a straight line THROUGH the
+        # datasheet point with the datasheet figure's slope (relative to the
+        # energy at the reference R_G):  E(R) = E(R_ref)*(1 + s*(R - R_ref)).
+        # 2026-09-27: the former rule E*R/R_ref (a line through the origin)
+        # over-read the figure x1.5 at 4.7 ohm and x2.4 at 20 ohm.  A card
+        # without a slope is NOT rescaled (said).
         r_ref = _num(sw.get("r_g_ext_ref_ohm"))
-        kr = 1.0
-        if r_g_ext_ohm is not None and r_ref and r_ref > 0:
-            kr = max(float(r_g_ext_ohm), 0.0) / r_ref
-            out["e_on_J"] *= kr
-            out["e_off_J"] *= kr
+        s_on = _num(scaling.get("r_g_slope_rel_on_per_ohm"))
+        s_off = _num(scaling.get("r_g_slope_rel_off_per_ohm"))
+        k_on = k_off = 1.0
+        r_note = None
+        if r_g_ext_ohm is not None and r_ref is not None and abs(float(r_g_ext_ohm) - r_ref) > 1e-9:
+            dr = float(r_g_ext_ohm) - r_ref
+            if s_on is not None and s_off is not None:
+                k_on = max(1.0 + s_on * dr, 0.05)
+                k_off = max(1.0 + s_off * dr, 0.05)
+                out["e_on_J"] *= k_on
+                out["e_off_J"] *= k_off
+                r_note = (f"gate resistance {float(r_g_ext_ohm):g} ohm: line through the "
+                          f"datasheet point ({r_ref:g} ohm) with the figure's slope — "
+                          f"E_on x{k_on:.3f}, E_off x{k_off:.3f} "
+                          f"[{scaling.get('r_g_slope_source') or 'card'}]; E_fr held")
+            else:
+                r_note = (f"gate resistance {float(r_g_ext_ohm):g} ohm: the card publishes no "
+                          f"E = f(R_G) slope — energies NOT rescaled from {r_ref:g} ohm")
         notes = [
             f"E(I_D) from the card's {float(t_j_c):.0f} degC-interpolated curves "
             f"at V_GS(off) = {float(v_gs_off_V):g} V",
-            f"bus scaling (V_dc/{v_ref:g} V)^{n:g} = {kv:.4f} "
-            f"[{scaling.get('voltage_rule') or 'card rule'}]",
+            f"bus scaling (V_dc/{v_ref:g} V)^{n:g} = {kv:.4f} on E_on/E_off"
+            + (f", ^{n_fr:g} = {kv_fr:.4f} on E_fr" if n_fr != n else "")
+            + f" [{scaling.get('voltage_rule') or 'card rule'}]",
         ]
-        if kr != 1.0:
-            notes.append(f"gate-resistance scaling R_G,ext/{r_ref:g} ohm = {kr:.3f} "
-                         "(E_on and E_off only; E_fr held at the datasheet R_G)")
+        if r_note:
+            notes.append(r_note)
         if above:
             notes.append(f"{i:.0f} A is ABOVE the card's tabulated current range "
                          "— linearly extrapolated")
@@ -1041,6 +1132,13 @@ class DeviceCard:
             "family": self.doc.get("family"),
             "technology": self.doc.get("technology"),
             "switching_energy_source": self.switching_energy_source(),
+            # 2026-09-27 uniform SPICE basis: which basis a solve uses by
+            # default, and the one-line model deviation where it applies
+            "basis_default": self.switching_source_default(),
+            "spice": (lambda a: {k: a[k] for k in ("has_table", "has_static", "model_status",
+                                                   "needs", "basis", "l_sigma_default_nH",
+                                                   "r_g_sets_ohm", "deviation_line")})(
+                self.spice_availability()),
             "package": self.doc.get("package"),
             "package_common_name": self.doc.get("package_common_name"),
             "cooling": self.doc.get("cooling"),

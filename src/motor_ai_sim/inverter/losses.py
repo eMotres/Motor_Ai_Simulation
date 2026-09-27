@@ -472,21 +472,30 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
     ``l_sigma_nH`` choose its driver/layout set).
     """
     n = max(int(n_par), 1)
-    r_tot = card.r_ds_on_ohm(t_j_c, v_gs_on)
-    r_eff = r_tot / n
     a = np.abs(i_leg)
     i_dev = a / n
     f_dt = min(max(2.0 * float(dead_time_s) * float(f_sw), 0.0), 1.0)
-
-    p_cond = (1.0 - f_dt) * float(np.mean(i_leg ** 2)) * r_eff
-
     # Sampled on a coarse current ladder and interpolated back, so a
     # 2 000-point grid does not mean 2 000 card look-ups per iteration.
     i_max = float(np.max(i_dev)) if i_dev.size else 0.0
     ladder = np.linspace(0.0, max(i_max, 1e-9), 33)
+    # 2026-09-27: on the SPICE basis the conduction and the third quadrant
+    # come from the vendor model's DC sweeps too (uniform with switching):
+    # V_DS(I, T_j) at the POWER source pin, integrated as <i * V(i)>.
+    switching_source = (switching_source or card.switching_source_default()).strip().lower()
+    spice_static = (switching_source == "spice" and card.static_table() is not None)
+    if spice_static:
+        v_fw = np.array([card.v_ds_on_spice_V(float(x), t_j_c, v_gs_on) for x in ladder])
+        p_cond = (1.0 - f_dt) * n * float(np.mean(i_dev * np.interp(i_dev, ladder, v_fw)))
+        i_ref = max(float(np.sqrt(np.mean(i_dev ** 2))), 1e-9)
+        r_tot = float(np.interp(i_ref, ladder, v_fw)) / i_ref
+    else:
+        r_tot = card.r_ds_on_ohm(t_j_c, v_gs_on)
+        p_cond = (1.0 - f_dt) * float(np.mean(i_leg ** 2)) * r_tot / n
 
     if f_dt > 0.0:
-        v_ladder = np.array([card.v_sd_V(float(x), t_j_c, v_gs_off)
+        v_ladder = np.array([(card.v_sd_spice_V(float(x), t_j_c, v_gs_off) if spice_static
+                              else card.v_sd_V(float(x), t_j_c, v_gs_off))
                              for x in ladder])
         v_sd = np.interp(i_dev, ladder, v_ladder)
         p_3q = f_dt * float(np.mean(a * v_sd))
@@ -539,6 +548,7 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
         "i_device_peak_A": i_max,
         "extrapolated": extrapolated,
         "notes": notes,
+        "conduction_source": "spice_static" if spice_static else "datasheet",
     }
 
 
@@ -1061,6 +1071,10 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "switching-energy curves cover — the energies above their last "
             "tabulated point were linearly extrapolated")
 
+    if sw_src == "spice" and card.spice_deviation_line():
+        warnings.append(f"{card.part}: {card.spice_deviation_line()} — used as is "
+                        "(uniform SPICE basis; a vendor model is never tuned)")
+
     # ── efficiency ─────────────────────────────────────────────────────────
     eta_inv = p_ac / (p_ac + p_total) if (p_ac + p_total) > 0 else None
     eta_wall = (eta_inv * eta_shaft) if (eta_inv and eta_shaft) else None
@@ -1081,12 +1095,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         v_dc_V=base.v_dc_V, modulation_index=base.modulation_index,
         samples_per_carrier=spc, dead_time_s=dead_s)
     t_draw = min(t_j_max_seen, t_cap)
-    r_ds = card.r_ds_on_ohm(t_draw, v_gs_on)
+    spice_static = sw_src == "spice" and card.static_table() is not None
+    r_ds = (float(np.mean([r["r_ds_on_mohm"] for r in per_leg.values()])) * 1e-3
+            if spice_static else card.r_ds_on_ohm(t_draw, v_gs_on))
+
+    def _vsd1(i_dev: float) -> float:
+        return (card.v_sd_spice_V(i_dev, t_draw, v_gs_off) if spice_static
+                else card.v_sd_V(i_dev, t_draw, v_gs_off))
 
     def _v_sd(arr: np.ndarray) -> np.ndarray:
         n0 = max(int(topo.bridges[0].devices_parallel), 1)
-        return np.array([card.v_sd_V(float(x) / n0, t_draw, v_gs_off)
-                         for x in arr])
+        return np.array([_vsd1(float(x) / n0) for x in arr])
 
     dead_n = wf.dead_samples_for(st0)
     if dead_us > 0 and dead_n < 1:
@@ -1099,8 +1118,7 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         v_sd=_v_sd, dead_samples=dead_n)
     waves["dead_time_error_V"] = round(
         float(dead_us * 1e-6 * st0.f_carrier_eff_hz
-              * (v_dc + 2.0 * card.v_sd_V(i_ph * math.sqrt(2.0) / max(n_par, 1),
-                                          t_draw, v_gs_off))), 2)
+              * (v_dc + 2.0 * _vsd1(i_ph * math.sqrt(2.0) / max(n_par, 1)))), 2)
 
     # ── the R_th(j-a) cross-check, air-cooled modes only (owner's brief: a
     # PQFN/source-down part's path is pad -> PCB copper -> air; state clearly
@@ -1158,6 +1176,20 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "switching_source": sw_src,
             "switching_basis": ((card.switching_table() or {}).get("basis")
                                 if sw_src == "spice" else "datasheet"),
+            # 2026-09-27 uniform SPICE basis: one label for the whole loss
+            # split, the fallback said as such, and the model's deviation
+            "conduction_source": ("spice_static" if spice_static else "datasheet"),
+            "basis_label": (
+                (f"SPICE ({card.part} vendor model): switching"
+                 + (", conduction, dead time" if spice_static else ""))
+                if sw_src == "spice" else
+                ("datasheet (explicit choice; a SPICE table exists)"
+                 if card.switching_table() is not None else
+                 "datasheet FALLBACK — no runnable vendor model"
+                 + (f" ({card.spice_availability().get('needs')})"
+                    if card.spice_availability().get("needs") else ""))),
+            "spice_deviation_line": (card.spice_deviation_line() if sw_src == "spice" else None),
+            "spice_validation": (card.spice_validation() if sw_src == "spice" else None),
         },
         "thermal": {
             "t_j_max_c": round(t_j_max_seen, 1),

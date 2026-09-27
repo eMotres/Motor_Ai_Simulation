@@ -194,6 +194,10 @@ term `3·n_par·⟨i0·dψ0/dt⟩/ω_m` gives 188.467 Nm (the zero-sequence shar
 solver's terminal-work mean to every printed digit, which validates the
 correction. For a three-wire drive i0 = 0 and the reported mean is right; for
 any per-coil drive with triplens it is not.
+**Fixed 2026-09-27:** a source that declares `zero_sequence_path`
+(`PerCoilCurrentSource` does) now gets this term added by the solver itself
+(`sb_postproc.zero_sequence_torque_mean`, method
+`energy_mean+zero_sequence+maxwell_ripple`); three-wire drives are unchanged.
 
 **The final optimised waveform** (production physics, Newton-refined), in
 percent of the fundamental and the harmonic's own phase:

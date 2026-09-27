@@ -9610,10 +9610,16 @@ def fem_transient_sliding_band(
                                  and all(_frame_converged)),
         "integer_period_window": bool(_retained_periods_integer),
     }
+    # A source that can carry zero-sequence current (per-coil / open-winding,
+    # simulation/per_coil.py) declares it; the flux-linkage mean then adds
+    # the zero-sequence term the Clarke pair drops.  Every three-wire drive
+    # leaves it False and is unchanged bit for bit.
+    _zero_seq = bool(getattr(_src, "zero_sequence_path", False))
     try:
         _T2, _torque_method = _hybrid_torque(
             _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
-            n_parallel=int(n_parallel), **_torque_method_args)
+            n_parallel=int(n_parallel), zero_sequence=_zero_seq,
+            **_torque_method_args)
     except Exception as _te:
         # House rule: never fall to the Maxwell MEAN on a loaded run — the
         # flux-linkage mean (68de0ca) is the fallback, exactly as for every
@@ -9623,7 +9629,8 @@ def fem_transient_sliding_band(
         try:
             _T2, _torque_method = _space_vector_hybrid_torque(
                 _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
-                n_parallel=int(n_parallel))
+                n_parallel=int(n_parallel), zero_sequence=_zero_seq,
+                mechanical_angle_rad=_theta_samples)
         except Exception as _te2:   # noqa: BLE001
             log.warning("P2 space-vector torque failed (%s) — using the raw "
                         "Maxwell series", _te2)

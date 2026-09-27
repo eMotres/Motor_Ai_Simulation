@@ -172,6 +172,9 @@ class PerCoilCurrentSource:
 
     kind = "I"
     name = "per_coil_current"
+    #: Every coil is on its own bridge, so the channel currents need not sum
+    #: to zero: the solver adds the zero-sequence torque term (2026-09-27).
+    zero_sequence_path = True
     rms_from_series = True
     carriers = 0
 

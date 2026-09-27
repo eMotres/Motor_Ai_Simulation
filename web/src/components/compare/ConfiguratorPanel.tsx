@@ -40,6 +40,8 @@ import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
 import { useWireStock } from '../materials/useWireStock';
 import { stockHint } from '../../lib/wireStock';
+import { useDieContext } from '../common/useDieContext';
+import { getResolvedPoint } from '../controller/controllerApi';
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -329,6 +331,24 @@ const ConfiguratorPanel: React.FC = () => {
   });
   // remember the user's tuning across reloads
   useEffect(() => { try { localStorage.setItem(KNOBS_LS, JSON.stringify(knobs)); } catch { /* ignore */ } }, [knobs]);
+  // The carrier knob below defaults to the CONTROLLER's resolved carrier
+  // (owner-approved: PWM lives in the Controller tab now), not the passport's
+  // own reference carrier — read-only here, same GET /api/controller/point
+  // resolution the Controller and Simulation tabs use. Only a DEFAULT: a
+  // knobs.f_sw_Hz the user has already picked (incl. a passport carrier) is
+  // never overwritten.
+  const dieCtx = useDieContext();
+  const [ctrlCarrierHz, setCtrlCarrierHz] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const pt = await getResolvedPoint(dieCtx.die || undefined, dieCtx.config || undefined);
+        if (alive) setCtrlCarrierHz(Number(pt.f_carrier_hz) > 0 ? Number(pt.f_carrier_hz) : null);
+      } catch { if (alive) setCtrlCarrierHz(null); }
+    })();
+    return () => { alive = false; };
+  }, [dieCtx.die, dieCtx.config]);
   // Slider ranges FOLLOW THE MACHINE (user 2026-08-25: loading the 850 N·m
   // motor left the 40 mm ranges — its 205 mm stack and 400 A sat outside the
   // sliders and the fields showed the previous motor's values).  Derived from
@@ -652,14 +672,27 @@ const ConfiguratorPanel: React.FC = () => {
                   <ToggleButton value="pwm" title={`Add the measured carrier deltas (${p.pwm.controller_class}, measured at ${p.pwm.f_sw_Hz.map((x) => (x / 1000).toFixed(0)).join(' / ')} kHz on a ${p.pwm.v_bus_V.toFixed(0)} V bus)`}
                     sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>PWM</ToggleButton>
                 </ToggleButtonGroup>
-                {knobs.pwm && (
+                {knobs.pwm && (() => {
+                  const carrierOptions = p.pwm!.f_sw_class_Hz ?? p.pwm!.f_sw_Hz;
+                  // Default = the Controller's resolved carrier, snapped to the
+                  // nearest option this passport offers; falls back to the
+                  // passport's own reference carrier with no Controller value
+                  // (e.g. no device chosen yet). Only a default — any carrier
+                  // the passport offers stays pickable below.
+                  const controllerDefaultHz = ctrlCarrierHz == null ? null
+                    : carrierOptions.reduce((best, f) =>
+                        Math.abs(f - ctrlCarrierHz) < Math.abs(best - ctrlCarrierHz) ? f : best,
+                        carrierOptions[0]);
+                  const defaultHz = controllerDefaultHz ?? p.pwm!.f_sw_ref_Hz;
+                  const usingDefault = knobs.f_sw_Hz == null;
+                  return (
                   <>
                     <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>carrier</Box>
-                    <select value={String(knobs.f_sw_Hz ?? p.pwm.f_sw_ref_Hz)}
+                    <select value={String(knobs.f_sw_Hz ?? defaultHz)}
                       onChange={(e) => setKnobs((s) => ({ ...s, f_sw_Hz: Number(e.target.value) }))}
-                      title={`${p.pwm.controller_class} — the settings this power stage offers. Carriers outside the measured pair are extrapolated and flagged.`}
+                      title={`${p.pwm!.controller_class} — the settings this power stage offers. Carriers outside the measured pair are extrapolated and flagged.`}
                       style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px' }}>
-                      {(p.pwm.f_sw_class_Hz ?? p.pwm.f_sw_Hz).map((f) => (
+                      {carrierOptions.map((f) => (
                         <option key={f} value={f} style={{ color: '#000' }}>
                           {(f / 1000).toFixed(0)} kHz{p.pwm!.f_sw_Hz.includes(f) ? ' ·measured' : ''}
                         </option>
@@ -667,13 +700,20 @@ const ConfiguratorPanel: React.FC = () => {
                     </select>
                     <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>bus</Box>
                     <input type="number" step={1}
-                      value={String(knobs.v_bus_V ?? p.pwm.v_bus_V)}
+                      value={String(knobs.v_bus_V ?? p.pwm!.v_bus_V)}
                       onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v > 0) setKnobs((s) => ({ ...s, v_bus_V: v })); }}
                       title="DC link the inverter switches against — the ripple current is proportional to it. Defaults to the pack the block was measured on."
                       style={{ width: 62, background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', textAlign: 'right', padding: '1px 4px' }} />
                     <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>V</Box>
+                    {usingDefault && (
+                      <Box component="span" sx={{ fontSize: 10.5, color: 'var(--text-4)' }}
+                        title="Defaults to the Controller tab's resolved carrier (GET /api/controller/point); pick another passport carrier above to override.">
+                        {controllerDefaultHz != null ? '· from Controller' : '· passport reference'}
+                      </Box>
+                    )}
                   </>
-                )}
+                  );
+                })()}
               </Box>
               {knobs.pwm && result.pwm_fidelity && (
                 <Typography sx={{ fontSize: 10.5, color: result.pwm_extrapolated ? '#fbbf24' : 'var(--text-4)', mb: 0.5 }}

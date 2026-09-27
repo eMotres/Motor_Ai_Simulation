@@ -412,13 +412,25 @@ def _with_eddy_steps(body: Dict[str, Any]) -> Dict[str, Any]:
     separate key and is not touched.
     """
     from motor_ai_sim.simulation.eddy_steps import (
-        EDDY_DEFAULT_STEPS_PER_PERIOD, validate_steps_per_period)
+        ripple_grade_steps, validate_steps_per_period)
     out = dict(body or {})
     v = out.get("n_steps_per_period")
     if v is None or (isinstance(v, str) and not v.strip()):
-        out["n_steps_per_period"] = EDDY_DEFAULT_STEPS_PER_PERIOD
-        log.info("coupled: no n_steps_per_period in the request — the eddy "
-                 "default %d steps/period is used", EDDY_DEFAULT_STEPS_PER_PERIOD)
+        # report-grade (owner 2026-09-27): >= 9 samples per cogging cycle
+        try:
+            from motor_ai_sim.config import get_config
+            from motor_ai_sim.routes._validation import parse_geo_override
+            g = dict((get_config().get("geometry") or {}))
+            try:
+                g.update(parse_geo_override(out.get("geo")) or {})
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            g = {}
+        n_def = ripple_grade_steps(g.get("num_slots"), g.get("num_poles"))
+        out["n_steps_per_period"] = n_def
+        log.info("coupled: no n_steps_per_period in the request — the "
+                 "ripple-grade default %d steps/period is used", n_def)
         return out
     try:
         out["n_steps_per_period"] = validate_steps_per_period(v)

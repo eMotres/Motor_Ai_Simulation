@@ -29,6 +29,20 @@ class TestResolver:
         assert ES.resolve_steps_per_period(None, eddy=True) == 72
         assert ES.resolve_steps_per_period("", eddy=True) == 72
 
+    def test_ripple_grade_default_is_nine_samples_per_cogging_cycle(self):
+        # owner 2026-09-27: L155 / Ø40 12s14p -> 12 cycles/period -> 108
+        assert ES.cogging_cycles_per_period(24, 28) == 12
+        assert ES.cogging_cycles_per_period(12, 14) == 12
+        assert ES.ripple_grade_steps(24, 28) == 108
+        assert ES.resolve_steps_per_period(None, eddy=True, num_slots=24,
+                                           num_poles=28) == 108
+        # never below the eddy default (12s/4p: 6 cycles -> 54 < 72)
+        assert ES.ripple_grade_steps(12, 4) == 72
+        assert ES.ripple_grade_steps(None, None) == 72
+        # a named count is still the count solved
+        assert ES.resolve_steps_per_period(36, eddy=True, num_slots=24,
+                                           num_poles=28) == 36
+
     def test_eddy_off_keeps_the_route_default(self):
         assert ES.resolve_steps_per_period(None, eddy=False) == 60
 
@@ -62,9 +76,15 @@ class TestTransientRoute:
 
 class TestCoupledLoop:
     def test_absent_count_gets_the_eddy_default(self):
+        # report-grade since 2026-09-27: 9 x cogging cycles of the config's
+        # machine, never below 72
+        from motor_ai_sim.config import get_config
         from motor_ai_sim.routes.coupled import _with_eddy_steps
-        assert _with_eddy_steps({})["n_steps_per_period"] == 72
-        assert _with_eddy_steps({"n_steps_per_period": None})["n_steps_per_period"] == 72
+        g = get_config().get("geometry") or {}
+        want = ES.ripple_grade_steps(g.get("num_slots"), g.get("num_poles"))
+        assert want >= 72
+        assert _with_eddy_steps({})["n_steps_per_period"] == want
+        assert _with_eddy_steps({"n_steps_per_period": None})["n_steps_per_period"] == want
 
     @pytest.mark.parametrize("asked", [2, 36, 40, 72, 144])
     def test_named_count_is_kept(self, asked):

@@ -6375,6 +6375,19 @@ def fem_transient_sliding_band(
     # a capped run says so (eddy_settled False).
     _EDDY_MAX_WARM_PERIODS = max(1, int(
         _os_sb.environ.get("SB_EDDY_MAX_PERIODS", "16") or 16))
+    # CAP 24 FOR SLOW BODIES (owner 2026-09-27).  A body whose slow mode, as
+    # the periodic accelerator MEASURES it on the state (λ per period, τ =
+    # −1/ln λ periods), decays slower than the normal cap is long may march
+    # up to SB_EDDY_MAX_PERIODS_SLOW (24) periods.  Criterion: τ > the normal
+    # cap (L155 shaft λ 0.942 → τ 16.7 > 16).  A fast machine never gets a λ
+    # from the accelerator, keeps the normal cap and is bit-identical.  An
+    # explicit SB_EDDY_MAX_PERIODS pin is a pin: never raised.
+    _EDDY_MAX_WARM_PERIODS_SLOW = max(_EDDY_MAX_WARM_PERIODS, int(
+        _os_sb.environ.get("SB_EDDY_MAX_PERIODS_SLOW", "24") or 24))
+    _eddy_cap_pinned = bool(_os_sb.environ.get("SB_EDDY_MAX_PERIODS"))
+    _eddy_cap_periods = _EDDY_MAX_WARM_PERIODS      # the cap in force
+    _eddy_slow_cap: Dict[str, Any] = {}             # why it was raised
+    _acc_lam_state: List[float] = []                # λ read at slow-mode checks
     _warm_grp: Dict[str, List[float]] = {}   # per conductor group, continuous
     _warm_ext_periods = 0           # whole periods spliced in (extensions)
     _warm_gauge: Dict[str, Any] = {}          # the verdict's own numbers
@@ -7640,6 +7653,8 @@ def fem_transient_sliding_band(
                             except Exception as _e_chk:   # noqa: BLE001
                                 log.warning("P2 eddy accelerator: slow-mode check "
                                             "could not read the state (%s)", _e_chk)
+                            if _lam_s and 0.0 < float(_lam_s) < 1.0:
+                                _acc_lam_state.append(float(_lam_s))
                             _lam_c = max([0.9] + list(_acc_lams)
                                          + ([float(_lam_s)] if _lam_s else []))
                             _tails = _acc_tail({_gk: _warm_grp[_gk]
@@ -7673,10 +7688,13 @@ def fem_transient_sliding_band(
                                             else float("%.3g" % _gr))
                                       for _gk, _gr in _warm_gres.items()},
                         "extension_periods": int(_warm_ext_periods),
-                        "max_extension_periods": int(_EDDY_MAX_WARM_PERIODS),
+                        "max_extension_periods": int(_eddy_cap_periods),
                         "accelerator": ({"method": "rre_period_map",
                                          "jumps": list(_acc_jumps),
                                          "slow_mode_check": _acc_check,
+                                         "slow_body_cap": (dict(_eddy_slow_cap)
+                                                           if _eddy_slow_cap
+                                                           else None),
                                          "periods_since_last_jump": (
                                              int(_warm_nper) if any(
                                                  _j.get("applied")
@@ -7705,8 +7723,31 @@ def fem_transient_sliding_band(
                                  for _j in range(min(3, len(_gv) // _Npm) - 1,
                                                  -1, -1)]
                               for _gk, _gv in _warm_grp.items()})
+                    # raise the cap for a SLOW body (see its init): the
+                    # slowest λ the accelerator measured on this state
+                    if (not _quiet and not _eddy_cap_pinned and not _eddy_slow_cap
+                            and _EDDY_MAX_WARM_PERIODS_SLOW > _eddy_cap_periods):
+                        _lam_m = [float(_l) for _l in (list(_acc_lams)
+                                                      + list(_acc_lam_state))
+                                  if 0.0 < float(_l) < 1.0]
+                        if _lam_m:
+                            _lam_x = max(_lam_m)
+                            _tau_x = -1.0 / math.log(_lam_x)
+                            if _tau_x > _EDDY_MAX_WARM_PERIODS:
+                                _eddy_slow_cap = {
+                                    "normal_cap": int(_EDDY_MAX_WARM_PERIODS),
+                                    "cap": int(_EDDY_MAX_WARM_PERIODS_SLOW),
+                                    "lambda": float("%.4g" % _lam_x),
+                                    "tau_periods": float("%.3g" % _tau_x),
+                                    "after_period": int(_warm_ext_periods)}
+                                _eddy_cap_periods = _EDDY_MAX_WARM_PERIODS_SLOW
+                                log.info("P2 eddy warm-up: SLOW body (accelerator "
+                                         "lambda %.4f, tau %.1f periods > cap %d) "
+                                         "-- cap raised to %d periods",
+                                         _lam_x, _tau_x, _EDDY_MAX_WARM_PERIODS,
+                                         _eddy_cap_periods)
                     if ((not _quiet) and _eddy_cap >= 3
-                            and _warm_ext_periods < _EDDY_MAX_WARM_PERIODS):
+                            and _warm_ext_periods < _eddy_cap_periods):
                         # Not settled → march ANOTHER whole electrical period
                         # in front of the window.  The rotor goes back one
                         # period, and its eddy state goes with it through the
@@ -7771,7 +7812,7 @@ def fem_transient_sliding_band(
                             elif _acc_on:
                                 _acc_states.append(_x_now)
                                 _acc_dec.append(int(_acc_seen))
-                                _room = (_EDDY_MAX_WARM_PERIODS - _warm_ext_periods
+                                _room = (_eddy_cap_periods - _warm_ext_periods
                                          + 1 >= _acc_min_verify)
                                 # the SLOW bodies: the rotor conductor groups
                                 # the gauge has just called unsettled.  A fast
@@ -7895,7 +7936,7 @@ def fem_transient_sliding_band(
                         log.info("P2 eddy warm-up: not settled — extending by "
                                  "one electrical period (%d frames, extension "
                                  "%d of at most %d)", _eddy_cap,
-                                 _warm_ext_periods, _EDDY_MAX_WARM_PERIODS)
+                                 _warm_ext_periods, _eddy_cap_periods)
                         continue
                     _warm_done = True
                     if not _quiet:
@@ -10029,6 +10070,11 @@ def fem_transient_sliding_band(
         # averaged in, so it reports True / False and not a null.
         "eddy_settled": bool(_warm_quiet is not False),
         "eddy_capped": bool(_warm_quiet is False),
+        # PROVENANCE (owner 2026-09-27): settled, but the discarded warm-up
+        # prefix was moved by periodic-accelerator jumps (the gauge then judged
+        # >= MIN_VERIFY_PERIODS continuous periods after the last jump).
+        "eddy_settled_via_accelerator": bool(
+            _warm_quiet is not False and any(_j.get("applied") for _j in _acc_jumps)),
         # The same two numbers as eddy_warmup_resid / eddy_warmup_tol, under
         # the names the settle test itself uses — these are the pair the
         # sweep points and the UI carry (the eddy_warmup_* names stay for the

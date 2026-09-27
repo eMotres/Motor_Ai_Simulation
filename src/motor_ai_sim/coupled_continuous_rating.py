@@ -132,7 +132,7 @@ COOLING_KEYS: Tuple[str, ...] = (
     "bore_mode", "bore_air_speed_mps", "bore_fluid", "bore_fluid_temp_in_c",
     "bore_flow_lpm", "shaft_ext_length_mm", "shaft_ext_sides",
     "frame", "open_air_speed_mps", "emissivity", "mount_g_w_per_k",
-    "mount_temp_c", "end_faces", "end_face_sides",
+    "mount_temp_c", "heat_path", "end_faces", "end_face_sides",
 )
 
 
@@ -163,7 +163,8 @@ class Condition:
 #: SENDS the keys the mode reads.
 _OUTER_ONLY = {"manual": ("h_conv",), "air": ("air_speed_mps",),
                "liquid": ("fluid", "fluid_temp_in_c", "flow_lpm"),
-               "robotics": ("emissivity", "end_faces", "end_face_sides"),
+               "robotics": ("emissivity", "end_faces", "end_face_sides",
+                            "heat_path"),
                "none": ()}
 _BORE_ONLY = {"air": ("bore_air_speed_mps",),
               "liquid": ("bore_fluid", "bore_fluid_temp_in_c", "bore_flow_lpm"),
@@ -189,6 +190,10 @@ def _prune(kw: Mapping[str, Any]) -> Dict[str, Any]:
         drop.update(("mount_g_w_per_k", "mount_temp_c"))
     if str(out.get("end_faces") or "none") == "none":
         drop.add("end_face_sides")
+    if str(out.get("heat_path") or "none") == "none":
+        # 'none' is the router's default — never sent, so it never splits a
+        # cache key (the same rule thermal_settings.cooling_fields follows).
+        drop.add("heat_path")
     if not _num(out.get("shaft_ext_length_mm")):
         drop.update(("shaft_ext_length_mm", "shaft_ext_sides"))
     return {k: v for k, v in out.items() if k not in drop}
@@ -259,6 +264,10 @@ def cooling_from_duty_thermal(thermal_block: Mapping[str, Any]
         out["mount_g_w_per_k"] = _num(mount.get("G_W_per_K"))
         if _num(mount.get("t_sink_c")) is not None:
             out["mount_temp_c"] = _num(mount.get("t_sink_c"))
+    # THE HEAT PATH (2026-09-26): the choice the map was solved under.
+    hp = str((dict(cl.get("heat_path") or {})).get("option") or "none")
+    if mode == "robotics" and hp in ("housing", "shaft", "both"):
+        out["heat_path"] = hp
     if str(faces.get("mode") or "off") == "still":
         out["end_faces"] = "still"
         out["end_face_sides"] = int(faces.get("sides") or 2)
@@ -801,6 +810,12 @@ def headline(block: Optional[Mapping[str, Any]]) -> str:
     lim = _num((b.get("limits_c") or {}).get(part))
     p = _num((b.get("power") or {}).get("P_shaft_W"))
     tail = ("" if p is None else ", %.0f W at the shaft" % p)
+    if part in ("housing", "structure"):
+        # The robotics heat path's body (2026-09-26): its limit is a TOUCH
+        # limit, and the sentence says so rather than a bare temperature.
+        return ("%.1f A rms continuously%s — the %s sits on its %s touch "
+                "limit" % (i or 0.0, tail, part,
+                           "%g °C" % lim if lim is not None else "70 °C"))
     return ("%.1f A rms continuously%s — the %s sits on %s"
             % (i or 0.0, tail, part,
                "%g °C" % lim if lim is not None else "its limit"))

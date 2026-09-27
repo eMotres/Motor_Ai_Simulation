@@ -551,6 +551,11 @@ BORE_MODES = ("none", "air", "liquid", "still")
 #: decision, from the Fusion model: the 24 coils stand proud of the core on both
 #: sides and the core's own end faces are largely uncovered.
 END_FACE_MODES = ("still", "none")
+#: The robotics mode's ONE conduction choice (2026-09-26, owner: «давай
+#: упростим») — replaces the mount W/K / mount °C / sink-or-link / link size /
+#: link material fields.  ``none`` is the default here and is bit-identical to
+#: the robotics mode with no mount; see ``cooling_models.HEAT_PATHS``.
+HEAT_PATHS = ("housing", "shaft", "both", "none")
 #: How the machine is BUILT, which decides whether the end windings and the slot
 #: channels are in the airflow at all (user 2026-09-09, on the 40 mm "CIANO14 40
 #: new": *"нет корпуса"* — the tooth blocks with their coils are held between two
@@ -597,6 +602,23 @@ def _bad(field: str, value, kind: str, message: str, error: Optional[str] = None
     return HTTPException(status_code=422, detail=detail)
 
 
+def _refuse_retired_link(mount_mode: Optional[str], link_preset: Optional[str],
+                         link_material: Optional[str]) -> None:
+    """The robot-link fields (mount_mode / link_preset / link_material, one
+    day old) were replaced by ``heat_path`` on 2026-09-26.  A client still
+    sending them is told so by name rather than silently solved without."""
+    for name, val in (("mount_mode", mount_mode), ("link_preset", link_preset),
+                      ("link_material", link_material)):
+        if val is not None:
+            raise _bad(name, val, "bad_value",
+                       "%s was replaced by heat_path (2026-09-26): 'housing', "
+                       "'shaft', 'both' or 'none' — the housing / structure it "
+                       "conducts into is sized from the stator and judged "
+                       "against a 70 °C touch limit.  Reload the Thermal tab "
+                       "and pick a Heat path." % name,
+                       error=f"{name} is retired; use heat_path")
+
+
 def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
                            h_conv: float, air_speed_mps: float, fluid: str,
                            fluid_temp_in_c: float, flow_lpm: float,
@@ -613,6 +635,7 @@ def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
                            emissivity: float = 0.9,
                            mount_g_w_per_k: float = 0.0,
                            mount_temp_c: Optional[float] = None,
+                           heat_path: str = "none",
                            end_faces: str = "still",
                            end_face_sides: int = 2,
                            slot_k: float = 0.0, rpm: float = 0.0,
@@ -675,6 +698,25 @@ def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
                    "cooling_mode='robotics'.  Use cooling_mode='robotics', or "
                    "bore_mode 'none' / 'air' / 'liquid'.",
                    error="bore_mode='still' outside the robotics mode")
+    # THE ROBOTICS HEAT PATH (2026-09-26) — one choice, fixed defaults; see
+    # cooling_models' "robotics HEAT PATH" section.  Only the robotics mode has
+    # the still-air body it lands on, so it is refused beside any other film.
+    _hp = str(heat_path or "none").strip().lower()
+    if _hp not in HEAT_PATHS:
+        raise _bad("heat_path", heat_path, "bad_value",
+                   "heat_path is where a robotics joint's heat goes by "
+                   "conduction: 'housing' (stator OD → housing, which sheds it "
+                   "by still air + radiation), 'shaft' (rotor → shaft → "
+                   "bearings → structure), 'both', or 'none' (no conduction "
+                   "path — still air + radiation everywhere)",
+                   error=f"unknown heat_path {heat_path!r}")
+    if _hp != "none" and mode != "robotics":
+        raise _bad("heat_path", heat_path, "bad_value",
+                   "heat_path belongs to cooling_mode='robotics': the housing / "
+                   "structure it conducts into sheds its heat by still air + "
+                   "radiation at the robotics emissivity.  Use "
+                   "cooling_mode='robotics', or heat_path='none'.",
+                   error="heat_path outside the robotics mode")
     _mount_g = float(mount_g_w_per_k or 0.0)
     if mode == "none" and bore == "none" and not _mount_g > 0.0:
         # WIDENED 2026-09-14: a machine bolted to a cold arm IS cooled, even with
@@ -1064,8 +1106,7 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
                      shaft_ext_diameter_mm=0.0, shaft_ext_sides=2,
                      frame="housed", open_air_speed_mps=0.0,
                      emissivity=0.9, mount_g_w_per_k=0.0, mount_temp_c=None,
-                     mount_mode="sink", link_preset="wrist",
-                     link_material="aluminium",
+                     heat_path="none",
                      end_faces="still", end_face_sides=2) -> tuple:
     """What makes two thermal requests the SAME request.
 
@@ -1162,19 +1203,16 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
     if str(cooling_mode or "").strip().lower() == "robotics":
         _base = _base + ("robotics", round(float(emissivity), 4),
                          _norm_end_faces(end_faces), int(end_face_sides))
+        # THE HEAT PATH (2026-09-26): 'none' is not appended — it is the tuple
+        # every robotics entry from before this choice was stored under.
+        _hp = str(heat_path or "none").strip().lower()
+        if _hp != "none":
+            _base = _base + ("heat_path", _hp)
     _g = float(mount_g_w_per_k or 0.0)
     if _g > 0.0:
         _base = _base + ("mount", round(_g, 5),
                          (None if mount_temp_c is None
                           else round(float(mount_temp_c), 2)))
-        # THE MOUNT'S FAR SIDE (2026-09-26): 'sink' is not appended at all — it
-        # is the tuple every cache entry from before this feature was stored
-        # under — but 'link' is a genuinely different boundary condition (the
-        # sink temperature is now SOLVED, not held), and its own preset and
-        # material pick a different film and a different capacity.
-        if str(mount_mode or "sink").strip().lower() == "link":
-            _base = _base + ("link", str(link_preset).strip().lower(),
-                             str(link_material).strip().lower())
     return _base
 
 
@@ -1873,6 +1911,7 @@ def _loss_maps_load() -> None:
         pass
     except Exception as exc:  # noqa: BLE001
         log.warning("thermal: could not read the stored loss maps: %s", exc)
+    _coupled_passes_load()
 
 
 def _loss_maps_persist() -> None:
@@ -1921,15 +1960,207 @@ def clear_thermal_loss_maps() -> int:
     wants the Electromagnetic run consulted again regardless (the identity
     carries the geometry and material fingerprints, so a changed machine never
     gets an old map anyway)."""
-    n = len(_LOSS_MAPS)
+    n = len(_LOSS_MAPS) + len(_COUPLED_PASSES)
     _LOSS_MAPS.clear()
+    _COUPLED_PASSES.clear()
+    for _p in (_loss_maps_path(), _coupled_passes_path()):
+        try:
+            os.remove(_p)
+        except FileNotFoundError:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+    return n
+
+
+# ── THE COUPLED LOOP'S ANSWER PASSES (2026-09-26) ─────────────────────────────
+# WHY: the Thermal tab refused `no_electromagnetic_run` at the coupled loop's
+# own S1 point (20.4 A, coil 200.2 °C) minutes after the loop had solved it.
+# Every coupled pass IS an ordinary Electromagnetic run (`coupled._em_run` is
+# the Run button's own call), but the run snapshot store keeps ONE entry per
+# finished run and the loop makes several after its answer (the 20 °C
+# constants, the PWM passes …), and this router's own `_LOSS_MAPS` holds four
+# maps that the loop's iterations fill on the way.  So the pass the record
+# reports was gone by the time anybody asked for it.
+#
+# This store keeps exactly the passes the loop REPORTS AS ITS ANSWER (final,
+# limit, S1 verification), each under the same physics identity the lookup
+# uses, with its exact point.  Written only by `register_coupled_pass`; read by
+# `_em_loss_map` as one more source of the SAME map — never a solve, never a
+# near match.  Loaded with `_LOSS_MAPS` (the same `_LOSS_MAPS_LOADED` flag),
+# mirrored to a dot-file beside it.
+_COUPLED_PASSES_CAP = 8
+_COUPLED_PASSES = _WSP.ws_map("thermal.coupled_passes", _COUPLED_PASSES_CAP)
+
+#: What a pass is called where a person reads it.
+_COUPLED_PHASE_WORDS = {"final": "final pass", "limit": "pass at the limit",
+                        "s1_verify": "S1 verification pass",
+                        "pwm_final": "PWM final pass"}
+
+
+def _coupled_passes_path() -> str:
+    return os.path.join(os.path.dirname(_loss_maps_path()),
+                        ".thermal_coupled_passes.pkl")
+
+
+def _coupled_passes_load() -> None:
+    """Called from ``_loss_maps_load`` only, so the one restore flag governs
+    both stores (tests pin it to keep the disk out)."""
     try:
-        os.remove(_loss_maps_path())
+        import pickle as pk
+        with open(_coupled_passes_path(), "rb") as fh:
+            d = pk.load(fh)
+        if isinstance(d, dict):
+            for k, v in list(d.items())[-_COUPLED_PASSES_CAP:]:
+                _COUPLED_PASSES[k] = v
     except FileNotFoundError:
         pass
-    except Exception:  # noqa: BLE001
-        pass
-    return n
+    except Exception as exc:  # noqa: BLE001
+        log.warning("thermal: could not read the coupled passes: %s", exc)
+
+
+def _coupled_passes_persist() -> None:
+    import threading
+
+    snapshot = dict(_COUPLED_PASSES)
+
+    def _write():
+        try:
+            import pickle as pk
+            p = _coupled_passes_path()
+            with open(p + ".tmp", "wb") as fh:
+                pk.dump(snapshot, fh, protocol=pk.HIGHEST_PROTOCOL)
+            os.replace(p + ".tmp", p)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("thermal: could not persist the coupled passes: %s", exc)
+
+    threading.Thread(target=_WSP.bind(_write), daemon=True).start()
+
+
+def _pass_point(probe) -> Dict[str, Any]:
+    """The exact point a probe names, in the precision the key compares at."""
+    return {"I_phase_rms": probe.get("I_phase_rms"),
+            "gamma_deg": probe.get("gamma_deg"),
+            "rpm": probe.get("rpm"),
+            "coil_temp_c": probe.get("coil_temp_c"),
+            "magnet_temp_c": probe.get("magnet_temp_c"),
+            "n_steps_per_period": probe.get("n_steps_per_period"),
+            "n_periods": probe.get("n_periods"),
+            "drive": probe.get("drive"),
+            "excitation": probe.get("excitation") or ""}
+
+
+def _same_machine(a, b) -> bool:
+    return (a.get("cfg_fingerprint") == b.get("cfg_fingerprint")
+            and _freeze(a.get("geo_ov")) == _freeze(b.get("geo_ov"))
+            and _em_material_names(a.get("mat_ov"))
+            == _em_material_names(b.get("mat_ov")))
+
+
+def coupled_pass_probe(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
+                       mesh_size_mm, min_size_mm, outer_air_factor, n_sectors,
+                       coil_temp_c, component_mesh, geo=None,
+                       magnet_temp_c=None, op_mode=None, drive=None,
+                       excitation=None, rpm=None):
+    """A coupled pass, spelled as the probe the Thermal tab builds for the
+    same request — so the two are compared by one function, not two.
+
+    ``drive`` / ``excitation`` are the PWM pass's own (``inverter`` /
+    ``pwm_voltage`` and the snapshot's excitation string).  A Thermal request
+    always probes the sinusoidal current drive, so a PWM pass never answers
+    one: its map carries the carrier's losses, and serving it as the sine
+    point's would be a silent substitution.  It is still registered, so the
+    refusal can name it.
+
+    ``rpm`` is the speed the pass was SOLVED at (the body's, resolved the way
+    the transient resolves it).  The Thermal probe keys on the config's
+    ``simulation.rpm``; a pass at another speed is filed under its own, so it
+    answers only a request at that speed — never one at the config's."""
+    from motor_ai_sim.routes.simulation import (_effective_rpm,
+                                                _parse_geo_override)
+    probe = _loss_snapshot_probe(
+        gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
+        mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+        outer_air_factor=outer_air_factor, n_sectors=n_sectors,
+        coil_temp_c=coil_temp_c, component_mesh=component_mesh,
+        n_steps_per_period=n_steps_per_period, n_periods=n_periods,
+        geo_ov=_parse_geo_override(geo), magnet_temp_c=magnet_temp_c,
+        op_mode=op_mode)
+    if rpm is not None:
+        probe["rpm"] = round(_effective_rpm(rpm), 3)
+    if drive:
+        probe["drive"] = str(drive)
+        probe["excitation"] = str(excitation or "")
+    return probe
+
+
+def register_coupled_pass(*, phase: str, probe, em: Dict[str, Any],
+                          run_id: Optional[str] = None) -> Dict[str, Any]:
+    """File ONE coupled answer pass where the Thermal tab looks.
+
+    ``em`` is that pass's own cycle-averaged loss map (the field payload the
+    thermal solve reads).  Raises ``ValueError`` when it carries no per-element
+    loss map — a pass with component totals only is not a map, and filing it
+    would let the Thermal tab spread watts nobody measured.  Returns the
+    registered point."""
+    n_ld = len(em.get("loss_density_per_tri") or []) if isinstance(em, dict) else 0
+    n_tri = int((em or {}).get("n_triangles")
+                or len((em or {}).get("triangles") or []) or -1)
+    if n_ld <= 0 or n_ld != n_tri:
+        raise ValueError("the %s carries no per-element loss map (%d values "
+                         "on %d triangles)" % (phase, n_ld, n_tri))
+    _loss_maps_load()
+    identity = _physics_identity(probe)
+    point = _pass_point(probe)
+    _COUPLED_PASSES[identity] = {
+        "em": _slim_em(em), "phase": str(phase), "point": point,
+        "machine": {k: probe.get(k) for k in ("cfg_fingerprint", "geo_ov",
+                                              "mat_ov")},
+        "run_id": run_id,
+        "computed_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    _COUPLED_PASSES.move_to_end(identity)
+    while len(_COUPLED_PASSES) > _COUPLED_PASSES_CAP:
+        _COUPLED_PASSES.popitem(last=False)
+    _coupled_passes_persist()
+    log.info("thermal: coupled %s registered at %s", phase, point)
+    return point
+
+
+def _coupled_pass_get(identity):
+    _loss_maps_load()
+    return _COUPLED_PASSES.get(identity)
+
+
+def _coupled_pass_words(entry) -> str:
+    pt = entry.get("point") or {}
+    words = _operating_point_words(
+        I_phase_rms=pt.get("I_phase_rms"), gamma_deg=pt.get("gamma_deg"),
+        rpm=pt.get("rpm"), coil_temp_c=pt.get("coil_temp_c"),
+        n_steps_per_period=pt.get("n_steps_per_period"))
+    if pt.get("magnet_temp_c") is not None:
+        words += ", magnet %s °C" % pt["magnet_temp_c"]
+    drv = str(pt.get("drive") or "current")
+    if drv != "current":
+        words += " (%s drive — not a sine-current map)" % drv
+    return "%s at %s" % (_COUPLED_PHASE_WORDS.get(entry.get("phase"),
+                                                  str(entry.get("phase"))),
+                         words)
+
+
+def _coupled_passes_hint(probe) -> str:
+    """The coupled passes of THIS machine that are filed, newest first — so a
+    refusal at 20.4 A can say the loop's S1 pass is at 20.44 A.  Empty when
+    there are none."""
+    try:
+        _loss_maps_load()
+        got = [e for e in reversed(list(_COUPLED_PASSES.values()))
+               if _same_machine(e.get("machine") or {}, probe)]
+    except Exception:  # noqa: BLE001 - a hint never fails the refusal
+        return ""
+    if not got:
+        return ""
+    return ("the coupled loop's passes of this machine are at: %s"
+            % "; ".join(_coupled_pass_words(e) for e in got[:3]))
 
 
 #: The machine-readable tag on the ONE refusal this router owns.  A panel keys
@@ -1961,10 +2192,19 @@ def _operating_point_words(*, I_phase_rms, gamma_deg, rpm, coil_temp_c,
             return "?"
         return "%d" % round(v) if abs(v - round(v)) < 5e-4 else "%.1f" % v
 
+    def _i(x) -> str:
+        # The current at the precision the run key compares it at (0.01 A):
+        # "20.4 A" for a pass solved at 20.44 A sends the user to run a point
+        # that will never match.
+        try:
+            return ("%.2f" % float(x)).rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            return "?"
+
     _rpm = ("?" if rpm is None
             else format(int(round(float(rpm))), ",d").replace(",", " "))
     out = ("I = %s A, γ = %s°, %s rpm, coil %s °C"
-           % (_n(I_phase_rms), _n(gamma_deg), _rpm, _n(coil_temp_c)))
+           % (_i(I_phase_rms), _n(gamma_deg), _rpm, _n(coil_temp_c)))
     if n_steps_per_period:
         _st = int(n_steps_per_period)
         out += ", %d step%s/period" % (_st, "" if _st == 1 else "s")
@@ -2181,6 +2421,27 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
         why = ("the matching Electromagnetic run could not be replayed into a "
                "loss map (%s)" % (em.get("reason") if em else "no payload"))
 
+    # ── (c) a pass the COUPLED loop reported as its answer ──────────────────
+    _cp = _coupled_pass_get(_identity)
+    if _cp and isinstance(_cp.get("em"), dict):
+        if callable(phase_cb):
+            phase_cb("loss map — coupled %s" % _cp.get("phase"))
+        log.info("thermal: cycle-averaged loss map taken from the coupled "
+                 "loop's %s (%s) — no EM solve", _cp.get("phase"),
+                 _cp.get("run_id"))
+        return dict(_cp["em"]), {
+            "kind": "coupled_pass",
+            "phase": _cp.get("phase"),
+            "run_id": _cp.get("run_id") or _cp.get("computed_at"),
+            "computed_at": _cp.get("run_id") or _cp.get("computed_at"),
+            "note": ("cycle-averaged loss density of the coupled loop's %s "
+                     "(Electromagnetic run %s) — the same machine, operating "
+                     "point, coil temperature and frame count; no "
+                     "electromagnetic solve ran for this temperature map"
+                     % (_coupled_pass_words(_cp),
+                        _cp.get("run_id") or "of an earlier session")),
+        }
+
     # ── (b') this router's OWN remembered map for the same physics ──────────
     _stored = _loss_maps_get(_identity)
     if _stored and isinstance(_stored.get("em"), dict):
@@ -2200,6 +2461,11 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
         }
 
     # Neither source has it.  This is where a six-minute solve used to start.
+    # When the coupled loop filed passes of this machine, name them: the
+    # usual cause is a point typed off the record's rounded display.
+    _hint = _coupled_passes_hint(probe)
+    if _hint:
+        why = ("%s; %s" % (why, _hint)) if why else _hint
     raise _no_electromagnetic_run(words=_words, why=why)
 
 
@@ -3035,15 +3301,9 @@ def solve_thermal_field(
     emissivity:         float = 0.9,
     mount_g_w_per_k:    float = 0.0,
     mount_temp_c:       Optional[float] = None,
-    # "sink" (default, unchanged) holds the mount at `mount_temp_c` (or
-    # ambient) for ever — the machined-test-bench case.  "link" (2026-09-26)
-    # instead treats the far side of `mount_g_w_per_k` as a robot ARM that
-    # heats up: one extra lumped node, still air + radiation off its own
-    # surface (cooling_models.robot_link_path), judged against the fixed
-    # IEC 60335 70 °C touch limit.  See THE ROBOT LINK in cooling_models.
-    mount_mode:         str   = "sink",
-    link_preset:        str   = "wrist",
-    link_material:      str   = "aluminium",
+    # The robotics mode's ONE conduction choice (2026-09-26): 'housing' |
+    # 'shaft' | 'both' | 'none' — see THE HEAT PATH in the docstring.
+    heat_path:          str   = "none",
     end_faces:          str   = "still",
     end_face_sides:     int   = 2,
     magnet_temp_c:      Optional[float] = None,
@@ -3240,7 +3500,34 @@ def solve_thermal_field(
         contact area and the interface), so it is an INPUT with a loud note, and
         it enters as a ``volume_sink`` on the stator elements — a 2-D section has
         no face out along the axis for a flange to sit on.  It is read in EVERY
-        cooling mode: a jacketed machine is bolted to something too.
+        cooling mode: a jacketed machine is bolted to something too.  The
+        Thermal tab no longer sends it (2026-09-26 — see THE HEAT PATH); it
+        stays for the API and for reading duty records back.
+
+    THE HEAT PATH (``heat_path``, robotics only, 2026-09-26 — owner: «давай
+    упростим») replaces the tab's five mount fields with ONE choice, every
+    number behind it a stated default in ``cooling_models``:
+
+      * ``housing`` — the stator OD sits in a housing: the outer film becomes a
+        contact (``HOUSING_CONTACT_H`` on the OD) into ONE lumped body sized
+        from the stator OD and stack (``heat_path_body``), which sheds heat by
+        still air + radiation off its whole skin (``heat_path_film``).  The OD
+        itself no longer sees the room — the housing covers it;
+      * ``shaft`` — rotor → shaft → two bearings → the structure they sit in
+        (``bearing_path``, a volume sink on the shaft elements), the same kind
+        of body; the stator OD keeps its still-air film;
+      * ``both`` — both paths into the SAME body (the bearings sit in the
+        housing's end caps);
+      * ``none`` — no conduction path: the robotics mode as it was with no
+        mount, bit for bit.
+
+    The body is a lumped node of the conduction solve itself
+    (``thermal_solver_2d``'s ``lumped_nodes``), not a sink temperature
+    iterated between passes — the contact is ~30× the body's own film and a
+    lagged sink diverges.  Only the body's film (weakly ΔT-dependent) rides the
+    pass loop.  ``cooling.heat_path`` reports the body's temperature against a
+    fixed 70 °C touch limit (``TOUCH_LIMIT_C``), which
+    ``coupled_time_to_limit.part_limits`` judges beside the winding and magnet.
 
     EVERY ONE OF THOSE COEFFICIENTS DEPENDS ON THE WALL TEMPERATURE, which no
     film in this router did before — h ∝ ΔT^(1/4) on the convective half and the
@@ -3301,7 +3588,7 @@ def solve_thermal_field(
         shaft_ext_sides=shaft_ext_sides,
         frame=frame, open_air_speed_mps=open_air_speed_mps,
         emissivity=emissivity, mount_g_w_per_k=mount_g_w_per_k,
-        mount_temp_c=mount_temp_c, end_faces=end_faces,
+        mount_temp_c=mount_temp_c, heat_path=heat_path, end_faces=end_faces,
         end_face_sides=end_face_sides,
         slot_k=slot_k, rpm=rpm, I_phase_rms=I_phase_rms,
         coil_temp_c=coil_temp_c, n_steps_per_period=n_steps_per_period,
@@ -3313,22 +3600,9 @@ def solve_thermal_field(
     # bolted to an arm in the same room is the answer nobody has to type.
     mount_g_w_per_k = float(mount_g_w_per_k or 0.0)
     t_mount_c = float(ambient_temp if mount_temp_c is None else mount_temp_c)
-    # THE MOUNT'S OWN OTHER SIDE (2026-09-26).  "sink" is today's model,
-    # unchanged: the far side of `mount_g_w_per_k` is held at `t_mount_c` for
-    # ever.  "link" instead treats it as a robot ARM that itself only loses
-    # heat to the room by natural convection + radiation off ONE fixed preset
-    # shape — see cooling_models.robot_link_path.  `t_mount_c` then becomes a
-    # SEED (ambient) that the wall-iteration loop below walks to the fixed
-    # point, exactly like the housing's own still-air film.
-    _mount_mode_in = str(mount_mode or "sink").strip().lower()
-    if _mount_mode_in not in ("sink", "link"):
-        raise _bad("mount_mode", mount_mode, "bad_value",
-                   "mount_mode must be 'sink' (the mount is held at "
-                   "mount_temp_c for ever) or 'link' (the mount is a robot "
-                   "arm that heats up — link_preset + link_material pick its "
-                   "shape and material)",
-                   error=f"unknown mount_mode {mount_mode!r}")
-    _mount_link_mode = _mount_mode_in == "link"
+    heat_path = str(heat_path or "none").strip().lower()
+    _hp_housing = heat_path in ("housing", "both")
+    _hp_shaft = heat_path in ("shaft", "both")
 
     # Two parameters survive only so an old client is not broken by a 422 for
     # sending them; both are IGNORED and both say so in the payload.  Silence
@@ -3368,9 +3642,8 @@ def solve_thermal_field(
         shaft_ext_sides=shaft_ext_sides,
         frame=frame, open_air_speed_mps=open_air_speed_mps,
         emissivity=emissivity, mount_g_w_per_k=mount_g_w_per_k,
-        mount_temp_c=mount_temp_c, mount_mode=mount_mode,
-        link_preset=link_preset, link_material=link_material,
-        end_faces=end_faces, end_face_sides=end_face_sides)
+        mount_temp_c=mount_temp_c, heat_path=heat_path, end_faces=end_faces,
+        end_face_sides=end_face_sides)
     # THE MAGNET TEMPERATURE, appended only when the request carries one — the
     # same rule `_field_snap_key_fields` follows, and for the same reason: with
     # no magnet temperature the key must stay byte-identical to the one every
@@ -3994,8 +4267,6 @@ def solve_thermal_field(
     from motor_ai_sim.simulation import cooling_models as _cm3
     _mount_path = _cm3.mount_path(g_w_per_k=mount_g_w_per_k, t_mount_c=t_mount_c)
     _mount_on = bool(float(_mount_path["G_W_per_K"]) > 0.0)
-    _mount_sink_entry: Optional[Dict[str, Any]] = None
-    _link_report: Optional[Dict[str, Any]] = None
     if _mount_on:
         if not (tags == DOM_STATOR).any():
             raise _bad("mount_g_w_per_k", mount_g_w_per_k, "bad_value",
@@ -4004,15 +4275,64 @@ def solve_thermal_field(
                        "model, or this mesh resolved none).  Include the stator, "
                        "or set mount_g_w_per_k = 0.",
                        error="no stator elements in this cross-section")
-        _mount_sink_entry = {"name": "mount", "tags": [DOM_STATOR],
-                            "G_W_per_K": float(_mount_path["G_W_per_K"]),
-                            "t_sink_c": float(t_mount_c),
-                            # A WHOLE-MACHINE conductance (one real flange, real
-                            # bolts) on a possibly 1/sym wedge — the same
-                            # bookkeeping the shaft ends and the open frame's
-                            # two paths use.
-                            "symmetry_mult": sym}
-        _sinks.append(_mount_sink_entry)
+        _sinks.append({"name": "mount", "tags": [DOM_STATOR],
+                       "G_W_per_K": float(_mount_path["G_W_per_K"]),
+                       "t_sink_c": float(t_mount_c),
+                       # A WHOLE-MACHINE conductance (one real flange, real
+                       # bolts) on a possibly 1/sym wedge — the same bookkeeping
+                       # the shaft ends and the open frame's two paths use.
+                       "symmetry_mult": sym})
+
+    # ── THE ROBOTICS HEAT PATH (2026-09-26) — see THE HEAT PATH above ────────
+    # One lumped body (housing / structure), a NODE of the conduction solve:
+    # the stator OD's contact and/or the bearing path land on it, and it sheds
+    # heat by still air + radiation off its own skin.  Every number is a
+    # stated default in cooling_models; nothing here is a field.
+    _hp_body: Optional[Dict[str, Any]] = None
+    _hp_bearing: Optional[Dict[str, Any]] = None
+    _hp_contact_g = 0.0
+    if heat_path != "none":
+        _hp_body = _cm3.heat_path_body(d_stator_m=2.0 * R_house, stack_m=L)
+        if _hp_housing:
+            if not (tags == DOM_STATOR).any():
+                raise _bad("heat_path", heat_path, "bad_value",
+                           "this cross-section has no stator for the housing "
+                           "to hold (the stator part is excluded from the "
+                           "model, or this mesh resolved none).  Include the "
+                           "stator, or pick heat_path 'shaft' or 'none'.",
+                           error="no stator elements in this cross-section")
+            _hp_contact_g = _cm3.housing_contact_g(d_stator_m=2.0 * R_house,
+                                                   stack_m=L)
+        if _hp_shaft:
+            if not _shaft_mask.any():
+                raise _bad("heat_path", heat_path, "bad_value",
+                           "this cross-section has no shaft for the bearings "
+                           "to carry heat out of (the shaft part is excluded "
+                           "from the model, or this geometry has none).  "
+                           "Include the shaft, or pick heat_path 'housing' or "
+                           "'none'.",
+                           error="no shaft elements in this cross-section")
+            # The shaft's OD at the bearing: the stub's own when it was given
+            # (or already derived for the stub path above), else the
+            # geometry's rotor_inner_radius, else measured on the shaft.
+            _b_d_out = _shaft_d_out
+            if _b_d_out <= 0.0:
+                _b_d_out = max(float(shaft_ext_diameter_mm), 0.0) * 1e-3
+            if _b_d_out <= 0.0:
+                _rir = float(g.get("rotor_inner_radius") or 0.0) * 1e-3
+                if _rir > 0.0:
+                    _b_d_out = 2.0 * _rir
+                else:
+                    _sn = _np.unique(tris[_shaft_mask])
+                    _b_d_out = 2.0 * float(
+                        _np.hypot(verts[_sn, 0], verts[_sn, 1]).max())
+            _hp_bearing = _cm3.bearing_path(
+                d_out_m=_b_d_out, d_in_m=2.0 * max(r_bore_m, 0.0),
+                k_shaft=k_shaft, stack_m=L)
+            _sinks.append({"name": "bearings", "tags": [DOM_SHAFT],
+                           "G_W_per_K": float(_hp_bearing["G_W_per_K"]),
+                           "t_sink_c": float(ambient_temp),
+                           "node": "heat_path", "symmetry_mult": sym})
 
     # ── THE AXIAL END FACES (2026-09-14) ─────────────────────────────────────
     # User, 2026-09-14, with the Fusion model in front of him: the 24 coils stand
@@ -4384,14 +4704,15 @@ def solve_thermal_field(
     # whole conductance is that same film times an area.
     _wall_iterating = ([n for n, m in (("outer", cooling_mode),
                                        ("bore", bore_mode))
-                        if (n == "outer" and m == "robotics")
+                        if (n == "outer" and m == "robotics"
+                            and not _hp_housing)
                         or (n == "bore" and m == "still")])
-    # …and the MOUNT, when its far side is a robot link rather than an ideal
-    # sink (2026-09-26): the link's own still-air + radiation film depends on
-    # its OWN temperature, which depends on the heat the mount carries, which
-    # the conduction solve has not produced yet.  Same fixed-point shape.
-    if _mount_on and _mount_link_mode:
-        _wall_iterating = _wall_iterating + ["mount"]
+    # …and the HEAT-PATH BODY (2026-09-26): the node's temperature is SOLVED,
+    # but its own still-air + radiation film is evaluated at it, so the film
+    # rides this loop like any other wall.  With the housing on, the OD's own
+    # film is gone (the housing covers it) and "outer" is a fixed contact.
+    if _hp_body is not None:
+        _wall_iterating = _wall_iterating + ["heat_path"]
     _iterating = _outlet_iterating + _wall_iterating
     if (_ef_specs or _gf_on) and not _wall_iterating:
         # The open frame (2026-09-21) reaches this too: its rotor-face film is
@@ -4429,10 +4750,9 @@ def solve_thermal_field(
     _t_wall: Dict[str, float] = {"outer": _t_wall_seed, "bore": _t_wall_seed}
     for _s in _ef_specs:
         _t_wall[_s["name"]] = _t_wall_seed
-    if "mount" in _wall_iterating:
-        # Seeded at t_mount_c (ambient, unless mount_temp_c was typed anyway) —
-        # the pass loop below walks it to the fixed point.
-        _t_wall["mount"] = t_mount_c
+    if _hp_body is not None:
+        _t_wall["heat_path"] = _t_wall_seed
+    _hp_film: Dict[str, Any] = {}
     # The two gap streams (2026-09-21) iterate on the AIR's own mean
     # temperature, not on a wall: that is the temperature their density and
     # their enthalpy balance are evaluated at.  Seeded halfway between ambient
@@ -4483,6 +4803,21 @@ def solve_thermal_field(
             fluid_temp_in_c=bore_fluid_temp_in_c, flow_lpm=bore_flow_lpm,
             r_bore_m=r_bore_m, rpm=rpm, length_m=L, p_bore_w=p_bore_est,
             emissivity=emissivity, t_wall_c=_t_wall["bore"])
+        # THE HEAT PATH (2026-09-26): with the housing on, the OD's film is the
+        # CONTACT into the body (a fixed coefficient; its sink is the body's
+        # solved temperature), and the body's own film is evaluated at this
+        # pass's body temperature.
+        _nodes_pass: List[Dict[str, Any]] = []
+        if _hp_body is not None:
+            _hp_film = _cm3.heat_path_film(
+                t_body_c=_t_wall["heat_path"], t_ambient_c=ambient_temp,
+                body=_hp_body, emissivity=emissivity)
+            _nodes_pass = [{"name": "heat_path",
+                            "G_W_per_K": float(_hp_film["G_W_per_K"]),
+                            "t_sink_c": float(ambient_temp),
+                            "symmetry_mult": sym}]
+        if _hp_housing:
+            h_eff = float(_cm3.HOUSING_CONTACT_H)
 
         # THE END FACES, at this pass's wall temperatures.  Rebuilt every pass
         # rather than once: G = h_total(ΔT)·A·n_faces, and h_total is the whole
@@ -4670,14 +5005,15 @@ def solve_thermal_field(
                 # meshed there are no such islands and this does nothing.
                 slot_ins_k=float(k_liner), slot_ins_d_m=float(t_liner) * 1e-3,
                 surfaces=[{"name": "outer", "h": float(h_eff),
-                           "t_sink": float(t_sink)},
+                           "t_sink": float(t_sink),
+                           **({"node": "heat_path"} if _hp_housing else {})},
                           {"name": "bore", "h": float(h_bore),
                            "t_sink": float(t_bore_sink)}],
                 # The exposed shaft ends, the mount and the axial end faces — all
                 # lumped conductances on the elements they act on, not facet
                 # films (every one of those surfaces is out along the axis, so
                 # this cross-section has no facets for them).
-                volume_sinks=_sinks_pass)
+                volume_sinks=_sinks_pass, lumped_nodes=_nodes_pass)
         except ValueError as exc:
             # A cross-section the conduction solve cannot stand up (no solid
             # elements left, a disconnected island with no housing) is NAMED,
@@ -4737,21 +5073,10 @@ def solve_thermal_field(
             if "bore" in _wall_iterating:
                 _d = max(_d, _wall_move(
                     "bore", _by_name.get("bore", {}).get("t_mean_c")))
-            if "mount" in _wall_iterating:
-                # Not a wall's own t_mean_c: the link is not a meshed surface,
-                # it is what the mount's OWN volume-sink heat drives, off its
-                # own preset shape (cooling_models.robot_link_path).
-                _mount_w_now = float(
-                    (_sk_by_name.get("mount") or {}).get("heat_removed_W")
-                    or 0.0) * sym
-                _link_report = _cm3.robot_link_path(
-                    q_w=_mount_w_now, t_ambient_c=ambient_temp,
-                    preset=link_preset, material=link_material,
-                    emissivity=emissivity)
-                t_mount_c = float(_link_report["t_link_c"])
-                if _mount_sink_entry is not None:
-                    _mount_sink_entry["t_sink_c"] = t_mount_c
-                _d = max(_d, _wall_move("mount", t_mount_c))
+            if "heat_path" in _wall_iterating:
+                _d = max(_d, _wall_move("heat_path", next(
+                    (n.get("t_c") for n in (th.get("nodes") or [])
+                     if n.get("name") == "heat_path"), None)))
             for _s in _ef_specs:
                 _d = max(_d, _wall_move(
                     _s["name"],
@@ -4825,6 +5150,94 @@ def solve_thermal_field(
     bore_cooling["area_m2"] = round(float(_by_name.get("bore", {})
                                           .get("area_m2", 0.0)) * sym, 6)
     bore_cooling["r_bore_mm"] = round(r_bore_m * 1e3, 3)
+
+    # ── THE HEAT PATH, as the solve measured it (2026-09-26) ────────────────
+    # The body's temperature is the solve's own node; its film is re-evaluated
+    # there, so `heat_to_room_W == G_film·(t_body_c − ambient)` holds to the
+    # pass tolerance and `contact_W + bearings_W == heat_to_room_W` exactly.
+    _sink_by_name0 = {s.get("name"): s for s in (th.get("sinks") or [])}
+    _brg_w = float((_sink_by_name0.get("bearings") or {})
+                   .get("heat_removed_W") or 0.0) * sym
+    if _hp_body is not None:
+        _hp_node = next((n for n in (th.get("nodes") or [])
+                         if n.get("name") == "heat_path"), {})
+        _t_body = float(_hp_node.get("t_c", ambient_temp))
+        _hp_film = _cm3.heat_path_film(t_body_c=_t_body,
+                                       t_ambient_c=ambient_temp,
+                                       body=_hp_body, emissivity=emissivity)
+        _body_name = "housing" if _hp_housing else "structure"
+        _body_w = float(_hp_node.get("heat_removed_W") or 0.0) * sym
+        _over = _t_body - float(_cm3.TOUCH_LIMIT_C)
+        heat_path_blk: Dict[str, Any] = {
+            "option": heat_path,
+            "body": _body_name,
+            # The node a transient carries this body on — the one its heat
+            # comes from (the stator through the OD; the rotor through the
+            # shaft when the shaft is the only path).
+            "rides_node": "stator" if _hp_housing else "rotor",
+            "t_body_c": round(_t_body, 2),
+            "touch_limit_c": float(_cm3.TOUCH_LIMIT_C),
+            "over_touch_K": round(_over, 2),
+            "binds_touch_limit": bool(_over > 0.0),
+            "diameter_mm": round(float(_hp_body["diameter_m"]) * 1e3, 2),
+            "length_mm": round(float(_hp_body["length_m"]) * 1e3, 2),
+            "area_m2": round(float(_hp_body["area_m2"]), 6),
+            "h_conv": round(float(_hp_film["h_conv"]), 3),
+            "h_rad": round(float(_hp_film["h_rad"]), 3),
+            "G_film_W_per_K": round(float(_hp_film["G_W_per_K"]), 5),
+            "emissivity": float(emissivity),
+            "heat_to_room_W": round(_body_w, 3),
+            "contact": (None if not _hp_housing else {
+                "h_W_per_m2K": float(_cm3.HOUSING_CONTACT_H),
+                "G_W_per_K": round(float(_hp_contact_g), 5),
+                "heat_W": round(_outer_w, 3)}),
+            "bearings": (None if _hp_bearing is None else {
+                "G_W_per_K": round(float(_hp_bearing["G_W_per_K"]), 5),
+                "G_shaft_each_W_per_K": round(
+                    float(_hp_bearing["G_shaft_each_W_per_K"]), 5),
+                "G_bearing_each_W_per_K": round(
+                    float(_hp_bearing["G_bearing_each_W_per_K"]), 5),
+                "n_bearings": int(_hp_bearing["n_bearings"]),
+                "shaft_od_mm": round(float(_hp_bearing["d_out_m"]) * 1e3, 3),
+                "axial_length_mm": round(
+                    float(_hp_bearing["axial_length_m"]) * 1e3, 3),
+                "heat_W": round(_brg_w, 3)}),
+            "note": ("%s Ø%.0f × %.0f mm (sized from the stator), %.1f °C "
+                     "carrying %.2f W to %.0f °C still air — touch limit "
+                     "%.0f °C" % (_body_name, float(_hp_body["diameter_m"]) * 1e3,
+                                  float(_hp_body["length_m"]) * 1e3, _t_body,
+                                  _body_w, float(ambient_temp),
+                                  float(_cm3.TOUCH_LIMIT_C))),
+        }
+        if _hp_housing:
+            # The OD's film IS the contact now; what the room sees is the
+            # housing's skin.  Report the housing's film here, on the heat
+            # that crossed the OD, so housing_convection_W +
+            # housing_radiation_W == housing_W keeps holding.
+            _od_area = cooling.get("area_m2")
+            cooling = _cm3.outer_still(
+                t_wall_c=_t_body, t_ambient_c=ambient_temp,
+                d_housing_m=float(_hp_body["diameter_m"]),
+                emissivity=emissivity, area_m2=float(_hp_body["area_m2"]),
+                heat_w=_outer_w)
+            cooling["mode"] = "robotics"
+            cooling["model"] = (
+                "stator OD in contact with the housing (%.0f W/m²·K) → the "
+                "housing at %.1f °C → still air + radiation off its skin"
+                % (float(_cm3.HOUSING_CONTACT_H), _t_body))
+            cooling["heat_removed_W"] = round(_outer_w, 2)
+            cooling["area_m2"] = _od_area
+            cooling["housing_area_m2"] = round(float(_hp_body["area_m2"]), 6)
+    else:
+        heat_path_blk = {
+            "option": "none", "body": None, "t_body_c": None,
+            "touch_limit_c": float(_cm3.TOUCH_LIMIT_C),
+            "binds_touch_limit": False, "heat_to_room_W": 0.0,
+            "note": ("no conduction path: the stator OD, the bore and the end "
+                     "faces shed heat by still air + radiation and nothing "
+                     "else" if cooling_mode == "robotics" else
+                     "heat_path is a robotics-mode choice"),
+        }
 
     # THE SHAFT ENDS, as the solve measured them.  `heat_removed_W` comes back
     # from the solver in the same (wedge) watts every other flow does, so it is
@@ -4969,12 +5382,9 @@ def solve_thermal_field(
     _mount_w = float((_mt_sink or {}).get("heat_removed_W") or 0.0) * sym
     mount = {
         "mode": str(_mount_path.get("mode") or "off"),
-        "mount_mode": _mount_mode_in,
         "G_W_per_K": round(float(_mount_path.get("G_W_per_K") or 0.0), 5),
         "t_sink_c": round(float(t_mount_c), 2),
-        "t_sink_source": ("robot link (computed, see link below)"
-                          if _mount_link_mode else
-                          "ambient (mount_temp_c not given)"
+        "t_sink_source": ("ambient (mount_temp_c not given)"
                           if mount_temp_c is None else "given"),
         "t_housing_mean_c": (None if (_mt_sink or {}).get("t_mean_c") is None
                              else round(float(_mt_sink["t_mean_c"]), 2)),
@@ -4982,26 +5392,6 @@ def solve_thermal_field(
         "n_elements": int((_mt_sink or {}).get("n_elements") or 0),
         "attached_to": "stator",
         "note": str(_mount_path.get("note") or ""),
-        # THE LINK (2026-09-26): only present in mount_mode='link'.  Carries
-        # its own fixed 70 °C touch limit — the report/route reads
-        # `link.binds_touch_limit` beside the winding/magnet limits, and
-        # names it "link (touch 70 °C)" when it is the one that binds.
-        "link": (None if _link_report is None else {
-            "preset": _link_report["preset"],
-            "material": _link_report["material"],
-            "length_mm": _link_report["length_mm"],
-            "diameter_mm": _link_report["diameter_mm"],
-            "area_m2": round(float(_link_report["area_m2"]), 6),
-            "mass_kg": round(float(_link_report["mass_kg"]), 4),
-            "C_J_per_K": round(float(_link_report["C_J_per_K"]), 2),
-            "t_link_c": round(float(_link_report["t_link_c"]), 2),
-            "h_conv": round(float(_link_report["h_conv"]), 3),
-            "h_rad": round(float(_link_report["h_rad"]), 3),
-            "touch_limit_c": float(_link_report["touch_limit_c"]),
-            "over_touch_K": round(float(_link_report["over_touch_K"]), 2),
-            "binds_touch_limit": bool(_link_report["binds_touch_limit"]),
-            "note": str(_link_report["note"]),
-        }),
     }
 
     # ── THE AXIAL END FACES, as the solve measured them (2026-09-14) ────────
@@ -5177,7 +5567,7 @@ def solve_thermal_field(
             gap_flow["notes"] = list(_gf_notes)
 
     _resid = (_gen_w - _outer_w - _bore_w - _shaft_w - _ew_w - _ch_w
-              - _mount_w - _ef_w_total - _gf_w)
+              - _mount_w - _ef_w_total - _gf_w - _brg_w)
 
     # ── WHERE THE ROTOR'S HEAT GOES: out through the gap, or in through the
     #    shaft (2026-09-10) ───────────────────────────────────────────────────
@@ -5225,6 +5615,10 @@ def solve_thermal_field(
         # statement: there are no stubs to lose heat from.
         "axial_shaft_ends_W": round(_shaft_w, 3),
         "axial_shaft_ends_pct": _share(_shaft_w),
+        # …and the BEARINGS (2026-09-26, heat_path 'shaft' / 'both'): rotor →
+        # shaft → bearings → the housing / structure.  0 otherwise.
+        "axial_bearings_W": round(_brg_w, 3),
+        "axial_bearings_pct": _share(_brg_w),
         # …and the rotor's OTHER out-of-plane path (2026-09-14): the rotor core's
         # and the magnets' own end faces, when the machine's ends are exposed.
         # 0 on every housed machine, and 0 there is a statement.
@@ -5240,7 +5634,7 @@ def solve_thermal_field(
         "gap_flow_pct": _share(_gf_w_rot),
         # The identity still runs over all of them — a closure that ignored an
         # axial term would not close on a machine that has one.
-        "closure_W": round(_rotor_w - _gap_w - _bore_w - _shaft_w
+        "closure_W": round(_rotor_w - _gap_w - _bore_w - _shaft_w - _brg_w
                            - _ef_w_by_node.get("rotor", 0.0)
                            - _ef_w_by_node.get("magnet", 0.0) - _gf_w_rot, 3),
         "note": ("what the rotor makes and where it goes, on the 2-D "
@@ -5338,6 +5732,9 @@ def solve_thermal_field(
         # The exposed shaft stubs — a rotor outflow like the bore, but along the
         # axis rather than across a facet of this cross-section.
         "shaft_ends_W": round(_shaft_w, 3),
+        # THE BEARINGS (2026-09-26): heat_path 'shaft' / 'both' — the rotor's
+        # conduction path out through the shaft and the bearings.  0 otherwise.
+        "bearings_W": round(_brg_w, 3),
         # ── THE OPEN FRAME's two paths (2026-09-09) ─────────────────────────
         # Both are 0 on a housed machine, and 0 there is a STATEMENT: the end
         # turns and the slot air are inside the housing.  On an open one they
@@ -5464,6 +5861,7 @@ def solve_thermal_field(
             # sat at while it did.  `mode: off` is an answer: this machine was
             # modelled as bolted to nothing.
             "mount": mount,
+            "heat_path": heat_path_blk,
             # THE AXIAL END FACES (2026-09-14): the end turns, the two core end
             # faces and the magnet ends, each with its own film, area and watts.
             "end_faces": end_faces_block,
@@ -5991,6 +6389,22 @@ def field(
                                                       "an infinite sink — its "
                                                       "temperature does not rise "
                                                       "with the machine's heat"),
+    heat_path:          str = Query(default="none",
+                                    description="cooling_mode=robotics: where "
+                                                "the heat goes by conduction — "
+                                                "'housing' (stator OD → "
+                                                "housing, still air + "
+                                                "radiation off it), 'shaft' "
+                                                "(rotor → shaft → bearings → "
+                                                "structure), 'both', or "
+                                                "'none' (still air + "
+                                                "radiation everywhere)"),
+    # RETIRED 2026-09-26 (replaced by heat_path) — accepted only to be refused
+    # by name, so a stale client is told rather than silently ignored.
+    mount_mode: Optional[str] = Query(default=None, include_in_schema=False),
+    link_preset: Optional[str] = Query(default=None, include_in_schema=False),
+    link_material: Optional[str] = Query(default=None,
+                                         include_in_schema=False),
     end_faces:          str = Query(default="still",
                                     description="cooling_mode=robotics: 'still' "
                                                 "(the end turns, the core end "
@@ -6070,6 +6484,12 @@ def field(
         _mount_kw["mount_g_w_per_k"] = float(mount_g_w_per_k)
         if mount_temp_c is not None:
             _mount_kw["mount_temp_c"] = float(mount_temp_c)
+    # THE HEAT PATH (2026-09-26): sent on only when it is not 'none', so every
+    # request from before it keys, restores and solves byte-identically.  Not
+    # gated on the mode — heat_path beside a jacket is refused by name.
+    _refuse_retired_link(mount_mode, link_preset, link_material)
+    if str(heat_path or "none").strip().lower() != "none":
+        _robot_kw = dict(_robot_kw, heat_path=str(heat_path).strip().lower())
 
     # ── persistent history (2026-09-22) ─────────────────────────────────────
     # Computed and checked BEFORE the progress bar opens, exactly as
@@ -6274,9 +6694,22 @@ def coupled(
     emissivity:         float = Query(default=0.9, ge=0.0, le=1.0),
     mount_g_w_per_k:    float = Query(default=0.0, ge=0.0),
     mount_temp_c: Optional[float] = Query(default=None),
-    mount_mode:         str = Query(default="sink"),
-    link_preset:        str = Query(default="wrist"),
-    link_material:      str = Query(default="aluminium"),
+    heat_path:          str = Query(default="none",
+                                    description="cooling_mode=robotics: where "
+                                                "the heat goes by conduction — "
+                                                "'housing' (stator OD → "
+                                                "housing, still air + "
+                                                "radiation off it), 'shaft' "
+                                                "(rotor → shaft → bearings → "
+                                                "structure), 'both', or "
+                                                "'none' (still air + "
+                                                "radiation everywhere)"),
+    # RETIRED 2026-09-26 (replaced by heat_path) — accepted only to be refused
+    # by name, so a stale client is told rather than silently ignored.
+    mount_mode: Optional[str] = Query(default=None, include_in_schema=False),
+    link_preset: Optional[str] = Query(default=None, include_in_schema=False),
+    link_material: Optional[str] = Query(default=None,
+                                         include_in_schema=False),
     end_faces:          str = Query(default="still"),
     end_face_sides:     int = Query(default=2, ge=1, le=2),
 ):
@@ -6350,10 +6783,9 @@ def coupled(
             _robot_kw["mount_g_w_per_k"] = float(mount_g_w_per_k)
             if mount_temp_c is not None:
                 _robot_kw["mount_temp_c"] = float(mount_temp_c)
-            if str(mount_mode or "sink").strip().lower() == "link":
-                _robot_kw["mount_mode"] = "link"
-                _robot_kw["link_preset"] = str(link_preset)
-                _robot_kw["link_material"] = str(link_material)
+        _refuse_retired_link(mount_mode, link_preset, link_material)
+        if str(heat_path or "none").strip().lower() != "none":
+            _robot_kw["heat_path"] = str(heat_path).strip().lower()
         _cool_kw = dict(cooling_mode=mode, air_speed_mps=air_speed_mps,
                         fluid=fluid, fluid_temp_in_c=fluid_temp_in_c,
                         flow_lpm=flow_lpm, bore_mode=bmode,
@@ -6582,7 +7014,7 @@ _DC_COOLING_KEYS = (
     "bore_fluid", "bore_fluid_temp_in_c", "bore_flow_lpm",
     "shaft_ext_length_mm", "shaft_ext_sides", "frame", "open_air_speed_mps",
     "emissivity", "end_faces", "end_face_sides", "mount_g_w_per_k",
-    "mount_temp_c")
+    "mount_temp_c", "heat_path")
 
 #: …and the operating point that selects the Electromagnetic run behind it.
 _DC_POINT_KEYS = ("rpm", "I_phase_rms", "gamma_deg", "coil_temp_c")

@@ -30,6 +30,8 @@
  * convention.
  */
 
+import { HEAT_PATH_LABEL } from './roboticsHelp';
+
 /** Bumped when the shape changes in a way the view has to notice. Mirrors
  *  `thermal_heat_paths.HEAT_PATH_SCHEMA_VERSION`. */
 export const HEAT_PATH_SCHEMA_VERSION = 1;
@@ -38,7 +40,7 @@ type Dict = Record<string, unknown>;
 
 export type SinkId =
   | 'mount' | 'housing' | 'end_face_winding' | 'end_face_stator'
-  | 'end_windings' | 'slot_channels' | 'bore' | 'shaft_ends'
+  | 'end_windings' | 'slot_channels' | 'bore' | 'shaft_ends' | 'bearings'
   | 'end_face_rotor' | 'end_face_magnet';
 
 export interface HeatPathPlacement {
@@ -242,7 +244,7 @@ export function machineEnvelope(
  *  faces, then the rotor's own paths. */
 const SINK_ORDER: SinkId[] = [
   'mount', 'housing', 'end_face_winding', 'end_face_stator',
-  'end_windings', 'slot_channels', 'bore', 'shaft_ends',
+  'end_windings', 'slot_channels', 'bore', 'shaft_ends', 'bearings',
   'end_face_rotor', 'end_face_magnet',
 ];
 
@@ -478,6 +480,24 @@ export function buildHeatPathModel(
     note: fin !== null ? `fin efficiency ${Math.round(fin * 100)} %` : '',
   }));
 
+  /* the bearings (2026-09-26, the robotics heat path 'shaft' / 'both') —
+     mirrors thermal_heat_paths.heat_path_model */
+  const hp = d(cooling.heat_path);
+  const brg = d(hp.bearings);
+  const hasBrg = Object.keys(brg).length > 0;
+  const bW = f0(brg.heat_W, f0(budget.bearings_W));
+  sinks.push(mkSink({
+    id: 'bearings', group: 'rotor', mode: hasBrg ? 'conduction' : 'off',
+    label: `Bearings — shaft into the ${String(hp.body ?? 'structure')}`,
+    short: 'bearings', W: bW, active: hasBrg && Math.abs(bW) > 1e-9,
+    G: f(brg.G_W_per_K), tSink: f(hp.t_body_c),
+    placement: {
+      kind: 'annulus', r_in_mm: env.bore_r_mm ?? null,
+      r_out_mm: env.shaft_r_out_mm ?? null, sides: [-1, 1], z_mm: r3(half),
+    },
+    note: String(hp.note ?? ''),
+  }));
+
   /* shares, and the balance */
   const order = new Map(SINK_ORDER.map((id, i) => [id, i] as const));
   sinks.sort((a, b) => (order.get(a.id) ?? 99) - (order.get(b.id) ?? 99));
@@ -615,7 +635,7 @@ export function sinkLabel(sink: HeatSink, setting?: string | null): string {
  *
  * Strings, not numbers, because that is what a text field holds: `''` is "not
  * typed" and must not become `Number('') === 0` (a 0 °C ambient nobody asked
- * for).  `mountT` blank means the ambient, which is the panel's own rule.
+ * for).
  */
 export interface CoolingSettings {
   coolMode: string; ambientT: string; airSpeed: string; hConv: string;
@@ -623,19 +643,24 @@ export interface CoolingSettings {
   boreMode: string; boreAirSpeed: string; boreTIn: string; boreFlowLpm: string;
   shaftExtMm: string; shaftExtSides: string;
   frame: string; openAirSpeed: string;
-  emissivity: string; mountG: string; mountT: string;
+  emissivity: string;
+  /** the robotics Heat path (2026-09-26): housing | shaft | both | none */
+  heatPath: string;
   endFaces: string; endFaceSides: string;
 }
 
 /** Which popover a surface opens.  `null` = this path is not set anywhere —
  *  it is a consequence of the others, so clicking it offers nothing. */
-export type SinkEditor = 'housing' | 'mount' | 'end_faces' | 'bore'
+export type SinkEditor = 'housing' | 'heat_path' | 'end_faces' | 'bore'
   | 'shaft_ends' | 'frame';
 
 export function editorFor(id: SinkId): SinkEditor | null {
   switch (id) {
     case 'housing': return 'housing';
-    case 'mount': return 'mount';
+    // The bolted mount is no longer a panel setting (2026-09-26): a map that
+    // still carries one (an API request) is shown, not edited.
+    case 'mount': return null;
+    case 'bearings': return 'heat_path';
     case 'end_face_winding': case 'end_face_stator':
     case 'end_face_rotor': case 'end_face_magnet': return 'end_faces';
     case 'bore': return 'bore';
@@ -666,12 +691,9 @@ export function settingLabel(id: SinkId, s: CoolingSettings | null | undefined):
       if (s.coolMode === 'liquid') return `${nz(s.flowLpm, '8')} L/min @ ${nz(s.tIn, amb)} °C`;
       if (s.coolMode === 'manual') return `h ${nz(s.hConv, '—')} W/m²K`;
       return 'no cooling';
-    case 'mount': {
-      const g = Number(s.mountG);
-      if (!(g > 0)) return 'off';
-      // blank mount °C means the ambient — the panel's rule, said out loud
-      return `${s.mountG} W/K @ ${nz(s.mountT, amb)} °C`;
-    }
+    case 'heat_path':
+      return s.coolMode === 'robotics'
+        ? (HEAT_PATH_LABEL[s.heatPath] ?? s.heatPath) : 'off';
     case 'end_faces':
       if (s.coolMode !== 'robotics' || s.endFaces === 'none') return 'closed';
       return `${nz(s.endFaceSides, '2')} end${nz(s.endFaceSides, '2') === '1' ? '' : 's'} open`;
@@ -715,7 +737,11 @@ export function coolingFromSettings(s: CoolingSettings): Dict {
   return {
     outer: { mode: s.coolMode, heat_removed_W: 0 },
     inner: { mode: s.boreMode, heat_removed_W: 0 },
-    mount: { mode: Number(s.mountG) > 0 ? 'conduction' : 'off', heat_removed_W: 0 },
+    mount: { mode: 'off', heat_removed_W: 0 },
+    heat_path: (robot && (s.heatPath === 'shaft' || s.heatPath === 'both'))
+      ? { option: s.heatPath, body: s.heatPath === 'shaft' ? 'structure' : 'housing',
+          bearings: { heat_W: 0 } }
+      : { option: robot ? s.heatPath : 'none' },
     end_faces: {
       mode: ef, sides, heat_removed_W: 0,
       winding: face, stator: face, rotor: face, magnet: face,
@@ -767,6 +793,7 @@ export function arrowMechanism(sink: Pick<HeatSink, 'id' | 'mode'>): string {
   const mode = sink.mode ?? '';
   switch (sink.id) {
     case 'mount': return 'conduction into the mount';
+    case 'bearings': return 'conduction through the shaft and bearings';
     case 'housing':
       return mode === 'liquid' ? 'liquid jacket on the housing'
         : mode === 'air' ? 'forced air over the housing'
@@ -792,6 +819,7 @@ export function arrowMechanism(sink: Pick<HeatSink, 'id' | 'mode'>): string {
  *  pair; "housing 64 → mount 40 °C" is the equation the watts came out of. */
 const TEMP_NAMES: Record<string, [string, string]> = {
   mount: ['housing', 'mount'],
+  bearings: ['shaft', 'body'],
   housing: ['wall', 'air'],
   bore: ['wall', 'air'],
   shaft_ends: ['shaft', 'air'],

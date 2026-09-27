@@ -27,6 +27,8 @@ export interface DeviceRow {
   image?: string | null;
   /** A GENERATED outline of the package — never vendor artwork. */
   package_svg?: string;
+  /** The PCB side of the card — null when the card has no footprint block. */
+  footprint?: DeviceFootprint | null;
   /** ceil(I_switch_rms / I_DDC@100 °C) for the duty the catalogue was asked for. */
   suggested_parallel?: number | null;
   /** A quotation somebody typed on the card, never a datasheet value. */
@@ -41,6 +43,19 @@ export interface DeviceRow {
             l_sigma_default_nH: number | null; r_g_sets_ohm: number[];
             deviation_line: string | null };
   error?: string;
+}
+
+/** A card's `footprint` block as the catalogue row carries it. */
+export interface DeviceFootprint {
+  package_outline_id: string | null;
+  land_pattern_ref: string | null;
+  body_height_mm: number | null;
+  top_tab_mm: { length_mm: number | null; width_mm: number | null } | null;
+  /** Parts sharing ONE land pattern, e.g. `qdpak_750_1200`. */
+  compatibility_group: string | null;
+  group_parts?: string[];
+  /** One line when parts in the group differ (or are unknown) in height / top tab. */
+  group_warning?: string | null;
 }
 
 export interface CoilRow {
@@ -224,6 +239,8 @@ export interface ControllerSettings {
   topology?: string;
   set_split?: string;
   h_bridge_modulation?: string;
+  /** Three-phase bridges: ``"sine" | "svpwm" | "third_harmonic"``. */
+  pwm_modulation?: string;
   devices_parallel?: number;
   devices_parallel_by_bridge?: Record<string, number>;
   r_g_ext_ohm?: number | null;
@@ -278,6 +295,8 @@ export interface ControllerFormState {
   topology: string;
   setSplit: string;
   hbMod: string;
+  /** Three-phase modulation — ``"sine" | "svpwm" | "third_harmonic"``. */
+  pwmMod: string;
   nPar: NumOrBlank;
   rg: NumOrBlank;
   vgsOff: NumOrBlank;
@@ -333,6 +352,7 @@ export interface ControllerFormState {
  */
 export const DEFAULT_CONTROLLER_FORM: ControllerFormState = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
+  pwmMod: 'sine',
   nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
   basis: '', rgOff: '', vgsOn: '', lSigma: '',
   // Owner 2026-09-25: these five INHERIT from the Thermal tab by default —
@@ -382,6 +402,7 @@ export function formStateFromSettings(
     topology: block.topology || fallback.topology,
     setSplit: block.set_split || fallback.setSplit,
     hbMod: block.h_bridge_modulation || fallback.hbMod,
+    pwmMod: block.pwm_modulation || fallback.pwmMod,
     nPar: block.devices_parallel ?? fallback.nPar,
     rg: toFormNumber(block.r_g_ext_ohm),
     vgsOff: toFormNumber(block.v_gs_off_V),
@@ -420,6 +441,7 @@ export function settingsForSave(s: ControllerFormState): ControllerSettings {
     topology: s.topology,
     set_split: s.setSplit,
     h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
     devices_parallel: s.nPar === '' ? 1 : s.nPar,
     // ALWAYS {} — the tab has only the one global count now; this REPLACES
     // (never merges into) whatever a saved block held, so a stale per-bridge
@@ -542,6 +564,7 @@ export interface ControllerSolveBody {
   topology: string;
   set_split: string;
   h_bridge_modulation: string;
+  pwm_modulation: string;
   r_g_ext_ohm?: number;
   v_gs_off_V?: number;
   switching_source?: string;
@@ -594,6 +617,7 @@ export function controllerSolveBody(
     device: s.device,
     devices_parallel: blank(s.nPar),
     topology: s.topology, set_split: s.setSplit, h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
     r_g_ext_ohm: blank(s.rg),
     v_gs_off_V: blank(s.vgsOff),
     switching_source: s.basis || undefined,
@@ -844,6 +868,9 @@ export function staleResultFields(
       && s.vdc !== res.point.v_dc_V) out.push('DC link');
   if (s.coolingMode && res.thermal?.cooling_mode != null
       && s.coolingMode !== res.thermal.cooling_mode) out.push('cooling');
+  // A result from before the choice existed carries no pwm_modulation: sine.
+  if (s.pwmMod && res.settings && s.pwmMod !== (res.settings.pwm_modulation || 'sine'))
+    out.push('modulation');
   return out;
 }
 

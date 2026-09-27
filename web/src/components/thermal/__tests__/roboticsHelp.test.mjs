@@ -26,12 +26,13 @@ import assert from 'node:assert/strict';
 
 import {
   BORE_MODE_LABEL, COOL_MODE_LABEL, END_FACE_LABEL, END_FACE_SIDES_LABEL,
-  FRAME_LABEL, HOW_IT_WORKS, HOW_IT_WORKS_TITLE, L13_SHARES, PARAM_BY_SINK,
+  FRAME_LABEL, HEAT_PATH_LABEL, HOW_IT_WORKS, HOW_IT_WORKS_TITLE, L13_SHARES,
+  PARAM_BY_SINK,
   ROBOTICS_HELP, ROBOTICS_SUBTITLE, SHAFT_SIDES_LABEL, setByLine,
 } from '../roboticsHelp.ts';
 
 const KEYS = [
-  'coolMode', 'ambientT', 'emissivity', 'mountG', 'mountT',
+  'coolMode', 'ambientT', 'emissivity', 'heatPath',
   'endFaces', 'endFaceSides', 'boreMode', 'shaftExtMm', 'shaftExtSides',
   'frame', 'openAirSpeed',
 ];
@@ -58,8 +59,7 @@ test('a tip is 2…5 sentences — an explanation, never a wall of text', () => 
 
 test('the label carries the unit, or the word that makes it obvious', () => {
   assert.equal(ROBOTICS_HELP.emissivity.label, 'ε (radiation)');
-  assert.equal(ROBOTICS_HELP.mountG.label, 'mount to arm, W/K');
-  assert.equal(ROBOTICS_HELP.mountT.label, 'mount °C (blank = room air)');
+  assert.equal(ROBOTICS_HELP.heatPath.label, 'Heat path');
   assert.equal(ROBOTICS_HELP.ambientT.label, 'room air °C');
   assert.equal(ROBOTICS_HELP.shaftExtMm.label, 'shaft out of housing, mm/side');
   // no label may be one of the old internal stubs
@@ -80,14 +80,24 @@ test('the emissivity tip says it is THE radiation parameter, with the law and th
   assert.match(t, new RegExp(String(L13_SHARES.housing_convection_W)));
 });
 
-test('the mount tips say what it conducts into, the law, the default and the blank rule', () => {
-  const g = ROBOTICS_HELP.mountG.tip;
-  assert.match(g, /robot's own structure/);
-  assert.match(g, /G·\(T_housing − T_mount\)/);
-  assert.match(g, /2 W\/K is an ASSUMPTION/);
-  assert.match(g, new RegExp(`${L13_SHARES.mount_pct} %`));
-  const t = ROBOTICS_HELP.mountT.tip;
-  assert.match(t, /BLANK means the room air temperature/);
+test('the heat-path tip states every default it stands on and the touch limit', () => {
+  // Owner 2026-09-26: «давай упростим» — ONE choice, and every internal
+  // default behind it stated in the HelpTip rather than asked for.
+  const t = ROBOTICS_HELP.heatPath.tip;
+  for (const opt of Object.values(HEAT_PATH_LABEL)) {
+    assert.ok(opt.length > 0);
+  }
+  assert.match(t, /Stator → housing/);
+  assert.match(t, /Through the shaft/);
+  assert.match(t, /Housing \+ shaft/);
+  assert.match(t, /No contact/);
+  assert.match(t, /2000 W\/m²K/);          // stator OD ↔ housing contact
+  assert.match(t, /8 % of OD/);            // housing wall
+  assert.match(t, /30 % of OD/);           // end room
+  assert.match(t, /0\.1 W\/K per mm/);      // bearings
+  assert.match(t, /stack\/6 \+ 5 mm/);      // shaft conduction length
+  assert.match(t, /70 °C touch limit/);
+  assert.deepEqual(Object.keys(HEAT_PATH_LABEL), ['housing', 'shaft', 'both', 'none']);
 });
 
 test('end faces, bore and shaft tips say what the options DO', () => {
@@ -103,8 +113,9 @@ test('end faces, bore and shaft tips say what the options DO', () => {
 test('every quoted share is the record\'s, not an invented one', () => {
   const quoted = Object.values(ROBOTICS_HELP).map((c) => c.tip).join(' ')
     + HOW_IT_WORKS.map((h) => h.text).join(' ');
-  for (const pct of [L13_SHARES.mount_pct, L13_SHARES.end_faces_total_pct,
-                     L13_SHARES.bore_pct]) {
+  // (The L13 mount share is no longer quoted: the mount W/K it came from was
+  // replaced by the heat path on 2026-09-26.)
+  for (const pct of [L13_SHARES.end_faces_total_pct, L13_SHARES.bore_pct]) {
     assert.match(quoted, new RegExp(`${pct} %`), `share ${pct} % is never quoted`);
   }
   // …and the shares must still add up to the record's own outflow
@@ -117,7 +128,8 @@ test('every quoted share is the record\'s, not an invented one', () => {
 });
 
 test('the option texts say what the option does, not what it is called', () => {
-  assert.equal(COOL_MODE_LABEL.robotics, 'Robotics — still air + radiation + mount');
+  assert.equal(COOL_MODE_LABEL.robotics, 'Robotics — still air + radiation + heat path');
+  assert.equal(HEAT_PATH_LABEL.none, 'No contact — still air only');
   assert.match(COOL_MODE_LABEL.none, /adiabatic/);
   assert.match(BORE_MODE_LABEL.still, /Open bore/);
   assert.match(BORE_MODE_LABEL.still, /radiation/);
@@ -133,7 +145,7 @@ test('the option texts say what the option does, not what it is called', () => {
 
 test('the subtitle is one short line and names the three paths', () => {
   assert.ok(ROBOTICS_SUBTITLE.length <= 70, 'the subtitle is a line, not a paragraph');
-  for (const w of ['still air', 'radiation', 'mount', 'no fan']) {
+  for (const w of ['still air', 'radiation', 'conduction path', 'no fan']) {
     assert.match(ROBOTICS_SUBTITLE, new RegExp(w));
   }
 });
@@ -151,8 +163,8 @@ test('the collapsible note is 6…10 short lines, in the order of the 3-D view',
   // winding → stator → housing → its three sinks, then the rotor side
   assert.ok(at('winding → stator iron') === 0);
   assert.ok(at('housing → still air') < at('housing → radiation'));
-  assert.ok(at('housing → radiation') < at('housing → the arm'));
-  assert.ok(at('housing → the arm') < at('rotor → bore'));
+  assert.ok(at('housing → radiation') < at('housing or structure'));
+  assert.ok(at('housing or structure') < at('rotor → bore'));
   assert.ok(at('air gap') < at('rotor → bore'));
   assert.ok(at('rotor → bore') < at('rotor → shaft stubs'));
 });
@@ -166,13 +178,15 @@ test('every governed line names a parameter EXACTLY as its control is labelled',
               `"${h.param}" is not any control's label — the note and the row disagree`);
   }
   // the four paths the owner asked about are each named once
-  for (const p of ['ε (radiation)', 'mount to arm, W/K', 'End faces', 'Rotor bore']) {
+  for (const p of ['ε (radiation)', 'Heat path', 'End faces', 'Rotor bore']) {
     assert.equal(named.filter((h) => h.param === p).length, 1, `${p} not named once`);
   }
 });
 
 test('a sink on the 3-D view can name the field that sets it', () => {
-  assert.equal(setByLine('mount'), 'Set by: mount to arm, W/K.');
+  assert.equal(setByLine('bearings'), 'Set by: Heat path.');
+  // the bolted mount is no longer a panel setting (2026-09-26)
+  assert.equal(setByLine('mount'), '');
   assert.equal(setByLine('end_face_magnet'), 'Set by: End faces.');
   assert.equal(setByLine('bore'), 'Set by: Rotor bore.');
   assert.equal(setByLine('slot_channels'), 'Set by: Frame.');

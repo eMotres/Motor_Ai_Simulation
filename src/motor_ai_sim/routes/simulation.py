@@ -302,6 +302,10 @@ class SimConfigPatch(BaseModel):
     # (sweep / optimizer / descent) reads.
     coil_temp_c:        Optional[float] = None   # copper temperature -> rho_Cu(T)
     steps_per_period:   Optional[int]   = None   # transient frames per electrical period
+    # WHO set steps_per_period: "eddy_default" = the panel's eddy-run default (72,
+    # owner 2026-09-26), "user" = picked by the user.  The optimizer screens at
+    # its own count when the tab holds only the default (routes/optimization.py).
+    steps_per_period_source: Optional[Literal["eddy_default", "user"]] = None
     end_winding_factor: Optional[float] = None   # k_end (0 = auto from geometry)
     connection:         Optional[str]   = None   # winding: "4S" | "2S-2P" | "4P"
     # TERMINAL connection of the three phases — orthogonal to `connection`,
@@ -677,7 +681,11 @@ def update_sim_config(patch: SimConfigPatch):
             return a == b
         except Exception:  # noqa: BLE001
             return False
-    _changed = sorted(k for k, v in updates.items() if not _same(_before_sim.get(k), v))
+    # steps_per_period_source is bookkeeping (who set the count), not physics:
+    # flipping it must not throw away a solved field.
+    _changed = sorted(k for k, v in updates.items()
+                      if k != "steps_per_period_source"
+                      and not _same(_before_sim.get(k), v))
     if _changed:
         try:
             clear_simulation_caches(reason="simulation config patched (%s)"
@@ -4224,7 +4232,9 @@ def _mark_equivalent_star(sbres: Dict, *, v_bus_real: float,
               body_keys=("current_a", "rpm", "steps", "n_periods", "gamma_deg",
                          "drive", "n_sectors", "demag", "rotor_eddy"))
 def get_fem_transient(
-    n_steps_per_period:  int   = 60,   # FEM solves per electrical period
+    n_steps_per_period: Optional[int] = None,  # FEM solves per electrical period;
+                                          #   omitted = 72 with eddy on, 60 without
+                                          #   (simulation/eddy_steps.py)
     # "cogging_quality" = opt-in >= 6 raw samples per cogging cycle (the
     # dedicated cogging run); standard/optimization keep the requested steps.
     sampling_purpose: Literal["standard", "optimization",
@@ -4409,6 +4419,9 @@ def get_fem_transient(
     inv_devices_parallel: int  = 1,       # ← provenance: devices per switch
     inv_t_j_c:           float = 0.0,     # ← provenance: T_j the card was read at
     inv_topology:        str   = "",      # ← provenance: the coil->bridge map
+    inv_modulation:      str   = "sine",  # ← the Controller's three-phase modulation:
+                                          #   sine | svpwm | third_harmonic (zero-sequence
+                                          #   injection, linear to m = 2/√3).  inverter only.
     harm_ref:            bool  = True,    # ← voltage drive: ALSO run a current-drive reference at
                                           #   the extracted fundamental (I₁, γ₁) → ΔP_harm = the
                                           #   watt cost of the parasitic harmonic currents
@@ -4472,6 +4485,27 @@ def get_fem_transient(
     if type(sampling_purpose) is not str or sampling_purpose not in (
             "standard", "optimization", "cogging_quality"):
         raise HTTPException(status_code=422, detail="invalid sampling_purpose")
+    # The step count: the caller's, validated, else the eddy-aware default
+    # (owner 2026-09-26: 72 with the coupled eddy solve, BDF2 reads the magnet
+    # loss -4.3 % at 36 and -1 % at 72).  Resolved before anything reads it,
+    # and written back into the captured kwargs so the outer loops (battery
+    # bus, max-charge search) re-enter with the number this run solved.
+    from motor_ai_sim.simulation.eddy_steps import (
+        resolve_steps_per_period as _resolve_steps)
+    try:
+        _g_st = {}
+        if n_steps_per_period is None:
+            try:
+                from motor_ai_sim.config import get_config as _gc_st
+                _g_st = dict(_gc_st().get("geometry") or {})
+            except Exception:  # noqa: BLE001
+                _g_st = {}
+        n_steps_per_period = _resolve_steps(n_steps_per_period, eddy=bool(eddy),
+                                            num_slots=_g_st.get("num_slots"),
+                                            num_poles=_g_st.get("num_poles"))
+    except ValueError as _se:
+        raise HTTPException(status_code=422, detail=str(_se))
+    _route_kwargs["n_steps_per_period"] = n_steps_per_period
 
     # Per-request materials via the KERNEL path: same parse/validate/set as
     # the router dependency does for ?mat= — per-task context, so the kernel
@@ -4531,9 +4565,22 @@ def get_fem_transient(
     # the ExcitationError handler around the solve below.
     from motor_ai_sim.simulation.pwm import (
         ExcitationError as _ExcErr, parse_waveform as _parse_wf,
-        MAX_MODULATION_INDEX as _MAX_M,
+        modulation_ceiling as _mod_ceiling,
+        normalize_modulation as _norm_mod,
         star_equivalent_bus as _sq_bus, modulation_index as _mod_idx)
     _drive = str(drive or "current").strip().lower()
+    # THE CONTROLLER'S MODULATION (2026-09-26).  Validated loudly, and only on
+    # the Controller's bridge: the ideal pwm_voltage drive stays sine.
+    try:
+        _inv_mod = _norm_mod(inv_modulation)
+    except _ExcErr as _e_mod:
+        raise HTTPException(status_code=422, detail=str(_e_mod))
+    if _inv_mod != "sine" and _drive != "inverter":
+        raise HTTPException(status_code=422, detail=(
+            "inv_modulation=%r was sent with drive=%r; the modulation is the "
+            "Controller's and only means something for drive='inverter'."
+            % (inv_modulation, _drive)))
+    _MAX_M = _mod_ceiling(_inv_mod)
     _DRIVES = ("current", "voltage", "pwm_voltage", "inverter",
                "custom_current", "bldc_current")
     # The Controller's bridge is the ideal one PLUS the device: every gate,
@@ -4664,13 +4711,14 @@ def get_fem_transient(
         # sits at 0.88 (user 2026-09-14 / PWM study §0.2).  `modulation_index`
         # divides by √3 in delta — equivalently, it is the branch V₁ against the
         # √3-scaled model bus, which is exactly what the source will chop.  The
-        # 1.15 ceiling (sine-triangle WITH zero-sequence injection) is unchanged.
+        # ceiling is the modulation's own (`pwm.modulation_ceiling`): 1.15 for
+        # sine, unchanged, and 2/√3 for svpwm / third_harmonic.
         _m_req = _mod_idx(float(v_phase_peak), float(v_bus),
                           star_delta=_sd_eff)
         if _m_req > _MAX_M:
             raise HTTPException(status_code=422, detail=(
                 "modulation index m = 2·V_phase/V_bus = %.3f exceeds the "
-                "%.2f linear-modulation limit (%s on the REAL %.1f V DC link)."
+                "%.4g linear-modulation limit (%s on the REAL %.1f V DC link)."
                 "  Overmodulation (pulse dropping / six-step) is out of scope: "
                 "raise V_bus above %.0f V, or lower %s below %.1f V."
                 % (_m_req, _MAX_M,
@@ -4716,11 +4764,16 @@ def get_fem_transient(
             "t_j_c": float(inv_t_j_c),
             "devices_parallel": int(inv_devices_parallel or 1),
             "topology": str(inv_topology or "one_3ph"),
+            "modulation": _inv_mod,
         }
         _inv_key = ("%g/%g/%g/%g/%g/%g"
                     % (float(v_bus), float(f_switch), float(inv_r_ds_ohm),
                        float(inv_v_sd_v0_V), float(inv_v_sd_rd_ohm),
                        float(inv_dead_time_us)))
+        # Keyed only when not sine, so every key written before the choice
+        # existed stays the same key (routes/coupled.py spells it the same).
+        if _inv_mod != "sine":
+            _inv_key += "/" + _inv_mod
 
     # Content hash of the imposed waveform for the transient cache key — the
     # samples themselves are physics, and a 20k-point list is not a dict key.
@@ -5241,8 +5294,13 @@ def get_fem_transient(
             if run_id and _JOBS.is_cancelled(run_id):
                 raise _RunCancelled(run_id)
             _cur = _fem_transient_progress["current"]
-            _cur["step"] = int(_done)
-            _cur["total"] = int(_total)
+            # done/total None = a SET-UP checkpoint (mesh, projections, phasor
+            # initialiser, static start field): it exists so the cancel check
+            # above runs before frame 0, and it keeps what the bar shows.
+            if _done is not None:
+                _cur["step"] = int(_done)
+            if _total is not None:
+                _cur["total"] = int(_total)
             # HOW that total is made up, in the SOLVER's own words.  The strip
             # used to derive this client-side from "total = 3 x steps/period",
             # which the PWM mixed-resolution schedule (coarse sinusoid settle +
@@ -7644,6 +7702,9 @@ def _build_transient_summary(
                         else bool(sbres["eddy_capped"])),
         "eddy_settle_residual": sbres.get("eddy_settle_residual"),
         "eddy_settle_tol": sbres.get("eddy_settle_tol"),
+        # settled with the warm-up prefix moved by accelerator jumps (2026-09-27)
+        "eddy_settled_via_accelerator": bool(sbres.get("eddy_settled_via_accelerator",
+                                                       False)),
         # Did this run CONTINUE a previous one's state instead of solving it?
         # Both are False on every interactive Run by construction — the flag
         # that allows it (SB_SEED_FROM_PREVIOUS) is set only in the optimizer's

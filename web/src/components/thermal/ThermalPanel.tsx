@@ -23,7 +23,8 @@ import {
 } from '@mui/material';
 
 import { useMotorStore } from '../../stores/motorStore';
-import { coolingIssue, isStale, useThermalStore } from '../../stores/thermalStore';
+import { coolingIssue, HEAT_PATHS, isStale, useThermalStore } from '../../stores/thermalStore';
+import type { HeatPath } from '../../stores/thermalStore';
 import { historyNoticeFor } from '../../lib/historyNotice';
 import AddResultToCompareButton from '../compare/AddResultToCompareButton';
 import { MAX_LOCAL_ROWS, localThermalRow, partMaxLabel } from '../compare/resultRows';
@@ -43,6 +44,7 @@ import { fetchCoupledLast, coupledStateLine,
 import type { CouplingBlock } from '../simulation/coupledApi';
 import {
   BORE_MODE_LABEL, COOL_MODE_LABEL, END_FACE_LABEL, END_FACE_SIDES_LABEL,
+  HEAT_PATH_LABEL,
   FRAME_LABEL as FRAME_MODE_LABEL, HOW_IT_WORKS, HOW_IT_WORKS_TITLE,
   ROBOTICS_HELP, ROBOTICS_SUBTITLE, SHAFT_SIDES_LABEL,
 } from './roboticsHelp';
@@ -568,7 +570,7 @@ const ThermalPanel: React.FC = () => {
     coolMode, ambientT, airSpeed, fluid, tIn, hConv, flowLpm,
     boreMode, boreAirSpeed, boreFluid, boreTIn, boreFlowLpm,
     shaftExtMm, shaftExtSides, frame, openAirSpeed,
-    emissivity, mountG, mountT, mountMode, linkPreset, linkMaterial,
+    emissivity, heatPath,
     endFaces, endFaceSides,
     view, eqTemp, showFlux, geom, geomBusy, geomErr,
   } = st;
@@ -685,6 +687,7 @@ const ThermalPanel: React.FC = () => {
      so the line below appears only when one of them is really there — the same
      rule the shaft and the open-frame tiles follow. */
   const mount = res?.cooling?.mount;
+  const hpBlk = res?.cooling?.heat_path;
   const endFaceBlk = res?.cooling?.end_faces;
   const sSplit = budget?.stator_heat_split;
   const showRobot = mount?.mode === 'conduction' || endFaceBlk?.mode === 'still'
@@ -700,6 +703,7 @@ const ThermalPanel: React.FC = () => {
     + (sSplit?.end_faces_W ?? 0) + (budget?.end_windings_W ?? 0)
     + (budget?.slot_channels_W ?? 0);
   const rotorSideW = (budget?.bore_W ?? 0) + (budget?.shaft_ends_W ?? 0)
+    + (budget?.bearings_W ?? 0)
     + (budget?.rotor_heat_split?.axial_end_faces_W ?? 0);
   const outTotalW = statorSideW + rotorSideW;
   const sidePct = (w: number): number | null =>
@@ -1020,46 +1024,18 @@ const ThermalPanel: React.FC = () => {
                 onChange={(v) => setField('emissivity', v)} width={128}
                 error={!!coolErr && /emissivity/.test(coolErr)}
                 tip={ROBOTICS_HELP.emissivity.tip} />
-              <NumField label={ROBOTICS_HELP.mountG.label} value={mountG}
-                onChange={(v) => setField('mountG', v)} width={160}
-                error={!!coolErr && /mount conductance/.test(coolErr)}
-                tip={ROBOTICS_HELP.mountG.tip} />
-              <NumField label={ROBOTICS_HELP.mountT.label} value={mountT}
-                onChange={(v) => setField('mountT', v)} width={196}
-                tip={ROBOTICS_HELP.mountT.tip} />
               <Box sx={CTRL_ROW}>
-                <Select size="small" value={mountMode}
-                  onChange={(e) => setField('mountMode', e.target.value as 'sink' | 'link')}
+                <Select size="small" value={heatPath}
+                  onChange={(e) => setField('heatPath', e.target.value as HeatPath)}
                   sx={{ fontSize: 11, height: 30, minWidth: 210 }}>
-                  <MenuItem value="sink" sx={{ fontSize: 11 }}>Mount into: ideal heat sink</MenuItem>
-                  <MenuItem value="link" sx={{ fontSize: 11 }}>Mount into: robot link (heats up)</MenuItem>
+                  {HEAT_PATHS.map((m) => (
+                    <MenuItem key={m} value={m} sx={{ fontSize: 11 }}>
+                      {ROBOTICS_HELP.heatPath.label}: {HEAT_PATH_LABEL[m]}
+                    </MenuItem>
+                  ))}
                 </Select>
-                <HelpTip title={ROBOTICS_HELP.mountMode.tip} />
+                <HelpTip title={ROBOTICS_HELP.heatPath.tip} />
               </Box>
-              {mountMode === 'link' && (
-                <>
-                  <Box sx={CTRL_ROW}>
-                    <Select size="small" value={linkPreset}
-                      onChange={(e) => setField('linkPreset', e.target.value as typeof linkPreset)}
-                      sx={{ fontSize: 11, height: 30, minWidth: 140 }}>
-                      <MenuItem value="finger" sx={{ fontSize: 11 }}>finger</MenuItem>
-                      <MenuItem value="wrist" sx={{ fontSize: 11 }}>wrist</MenuItem>
-                      <MenuItem value="arm" sx={{ fontSize: 11 }}>arm</MenuItem>
-                    </Select>
-                    <HelpTip title={ROBOTICS_HELP.linkPreset.tip} />
-                  </Box>
-                  <Box sx={CTRL_ROW}>
-                    <Select size="small" value={linkMaterial}
-                      onChange={(e) => setField('linkMaterial', e.target.value as typeof linkMaterial)}
-                      sx={{ fontSize: 11, height: 30, minWidth: 140 }}>
-                      <MenuItem value="aluminium" sx={{ fontSize: 11 }}>aluminium</MenuItem>
-                      <MenuItem value="steel" sx={{ fontSize: 11 }}>steel</MenuItem>
-                      <MenuItem value="plastic" sx={{ fontSize: 11 }}>plastic</MenuItem>
-                    </Select>
-                    <HelpTip title={ROBOTICS_HELP.linkMaterial.tip} />
-                  </Box>
-                </>
-              )}
               <Box sx={CTRL_ROW}>
                 <Select size="small" value={endFaces}
                   onChange={(e) => setField('endFaces', e.target.value as EndFaceMode)}
@@ -1300,7 +1276,7 @@ const ThermalPanel: React.FC = () => {
             coolMode, ambientT, airSpeed, fluid, tIn, hConv, flowLpm,
             boreMode, boreAirSpeed, boreTIn, boreFlowLpm,
             shaftExtMm, shaftExtSides, frame, openAirSpeed,
-            emissivity, mountG, mountT, endFaces, endFaceSides,
+            emissivity, heatPath, endFaces, endFaceSides,
           }}
           onChange={(k, v) => setField(k as Parameters<typeof setField>[0],
                                        v as never)} />
@@ -1450,7 +1426,8 @@ const ThermalPanel: React.FC = () => {
                 <Typography sx={{ ...lbl, mt: 0.75, display: 'inline-block', cursor: 'help',
                   borderBottom: '1px dotted var(--text-4)', fontFamily: 'monospace' }}>
                   out: housing {fmt(budget.housing_W, 1)} W ({fmt(budget.housing_convection_W, 1)} conv + {fmt(budget.housing_radiation_W, 1)} rad)
-                  {' · '}mount {fmt(budget.mount_W, 1)} W
+                  {(budget.mount_W ?? 0) > 0 && <>{' · '}mount {fmt(budget.mount_W, 1)} W</>}
+                  {(budget.bearings_W ?? 0) > 0 && <>{' · '}bearings {fmt(budget.bearings_W, 1)} W</>}
                   {' · '}end faces {fmt(budget.end_faces_W, 1)} W
                   {' · '}bore {fmt(budget.bore_W, 1)} W
                   {sSplit && (
@@ -1459,6 +1436,18 @@ const ThermalPanel: React.FC = () => {
                       {' / rotor side '}{fmt(sidePct(rotorSideW), 0)} %
                     </>
                   )}
+                </Typography>
+              </Tooltip>
+            )}
+
+            {/* THE HEAT PATH'S BODY (2026-09-26): one line — the housing /
+                structure temperature against its fixed 70 °C touch limit,
+                red when it binds; the rest on the tooltip. */}
+            {hpBlk?.body && (
+              <Tooltip {...TIP_PROPS} title={`${hpBlk.note ?? ''}. It carries ${fmt(hpBlk.heat_to_room_W, 2)} W to the room: still air h ${fmt(hpBlk.h_conv, 1)} + radiation h ${fmt(hpBlk.h_rad, 1)} W/m²K over ${fmt((hpBlk.area_m2 ?? 0) * 1e4, 0)} cm².${hpBlk.contact ? ` Stator OD contact ${fmt(hpBlk.contact.G_W_per_K, 2)} W/K carries ${fmt(hpBlk.contact.heat_W, 2)} W.` : ''}${hpBlk.bearings ? ` Shaft + ${hpBlk.bearings.n_bearings ?? 2} bearings ${fmt(hpBlk.bearings.G_W_per_K, 3)} W/K carry ${fmt(hpBlk.bearings.heat_W, 2)} W.` : ''} Judged against the fixed 70 °C touch limit (IEC 60335) beside the winding and the magnets — in the duty cycle, the time to limit and the S1 rating too. The sizes and conductances are stated defaults, not measurements.`}>
+                <Typography sx={{ ...lbl, mt: 0.75, display: 'block', cursor: 'help', fontFamily: 'monospace',
+                  color: hpBlk.binds_touch_limit ? 'error.main' : undefined }}>
+                  {hpBlk.body} {fmt(hpBlk.t_body_c, 1)} °C (touch {fmt(hpBlk.touch_limit_c, 0)} °C){hpBlk.binds_touch_limit ? ' — over the touch limit' : ''}
                 </Typography>
               </Tooltip>
             )}

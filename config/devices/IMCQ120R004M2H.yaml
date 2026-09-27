@@ -42,6 +42,39 @@ package_size_mm:
   leads: 22
 #: Not published in this datasheet revision.
 weight_g: null
+
+# ── footprint (PCB side; owner 2026-09-26, Task 9) ─────────────────────
+# Read by the Controller catalogue's "fits the selected board" filter, not
+# by the loss model. Unpublished / not-yet-transcribed = null + a note.
+footprint:
+  package_outline_id: PG-HDSOP-22-U03
+  outline_source: >-
+    Datasheet Figure 1 (section 5, Package outlines), PG-HDSOP-22-U03
+  land_pattern_ref: null
+  land_pattern_note: >-
+    NOT TRANSCRIBED. The datasheet could not be opened when this block was
+    added (infineon.com unreachable from that session), so whether its Package
+    outlines section carries a land-pattern / footprint figure is unchecked.
+    Fill in 'Figure N, page P' from the datasheet, or write that the datasheet
+    has none.
+  body_height_mm: 2.35
+  body_height_source: >-
+    Datasheet Figure 1 (section 5), dimension A (seating plane to top of tab),
+    MAX column
+  top_tab_mm: null
+  top_tab_note: >-
+    NOT TRANSCRIBED. package_size_mm carries body D, overall E, body E1 and
+    height A from Figure 1 but not the top cooling tab's own length x width,
+    and the datasheet could not be re-opened when this block was added. null
+    is NOT 'same as the rest of the group'.
+  compatibility_group: qdpak_750_1200
+  compatibility_basis: >-
+    Owner, 2026-09-26 (Task 9): PG-HDSOP-22-U01 (750 V G2) and PG-HDSOP-22-U03
+    (1200 V G2) share one land pattern and differ in the top tab. NOT a
+    datasheet statement and not checked against the two land-pattern drawings.
+    The cards' own Figure 1 MAX columns agree on D 15.10, E1 15.50, A 2.35, e
+    1.14, N 22 and differ in overall E (lead tip to lead tip): U01 21.06, U03
+    21.11 mm.
 datasheet_revision: "1.10, 2025-10-13"
 datasheet_url: "https://www.infineon.com/assets/row/public/documents/60/49/infineon-imcq120r004m2h-datasheet-en.pdf"
 application_note_url: "https://www.infineon.com/assets/row/public/documents/60/42/infineon-an2025-10-understanding-and-interpreting-the-coolsic-mosfet-1200v-datasheet-applicationnotes-en.pdf"

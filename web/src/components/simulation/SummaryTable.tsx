@@ -190,6 +190,7 @@ export interface TransientSummary {
   // budget rather than passing the test.  Absent on older runs → treated as
   // settled, which is how those runs already read.
   eddy_settled?: boolean | null;
+  eddy_settled_via_accelerator?: boolean | null;
   eddy_capped?: boolean | null;
   eddy_settle_residual?: number | null;
   eddy_settle_tol?: number | null;
@@ -206,7 +207,11 @@ export interface TransientSummary {
   Km_Nm_sqrtW?: number | null;
   Km_per_mass_Nm_sqrtW_kg?: number | null;
   demag?: { bh_kept_vol_pct?: number; bh_loss_pct?: number;
-            br_kept_vol_pct: number; loss_pct: number; br_worst_pct: number;
+            br_kept_vol_pct: number; loss_pct: number;
+            // Worst single element: a flagged CORNER diagnostic (sharp-corner
+            // value, mesh-dependent) with its location — not the magnet's
+            // figure.  br_worst_pct is the same number on pre-2026-09-26 results.
+            br_corner?: BrCorner | null; br_worst_pct?: number;
             area_derated_pct: number; grade_nominal?: number;
             grade_effective?: number; magnet_name?: string;
             energy_total_J?: number; energy_lost_J?: number } | null;
@@ -471,6 +476,12 @@ function magnetSegNote(m?: TransientSummary['magnet_segmentation']): string {
 const ROW = {
   display: 'grid', gridAutoFlow: 'column', gridAutoColumns: 'minmax(0, 1fr)', gap: 1,
 } as const;
+
+interface BrCorner {
+  flag: 'corner'; br_pct: number; x_mm?: number; y_mm?: number;
+  r_mm?: number; theta_deg?: number; magnet_tag?: number | null;
+  element_area_pct?: number; note?: string;
+}
 
 const Cell: React.FC<{
   label: string; value: string; unit?: string;
@@ -865,6 +876,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // Displayed as the KEPT coefficient (user's call: "должен быть 99.74, а не
   // 0.26") — the retention reads naturally as a health figure: 100 % = intact.
   const dmKept = dmLoss != null ? 100 - dmLoss : null;
+  // The worst element as the flagged corner diagnostic (legacy payloads carry
+  // only the value, as br_worst_pct).
+  const dmCorner: BrCorner | null = dm?.br_corner
+    ?? (dm?.br_worst_pct != null ? { flag: 'corner', br_pct: dm.br_worst_pct } : null);
   const accentRipple: 'green' | 'amber' | 'red' = s.T_ripple_pct <= 5 ? 'green'
                                                 : s.T_ripple_pct <= 15 ? 'amber'
                                                 : 'red';
@@ -1196,8 +1211,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
 
       {/* ── Row 1 — torque, power, mass, efficiency, ripple ───────────────── */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        <Cell label="Torque T_em" value={fmt(s.T_em_avg_Nm, 2)} unit="N·m"
-          accent="blue"
+        <Cell label="Torque T_em"
+          value={fmt(s.T_em_avg_Nm, Math.abs(s.T_em_avg_Nm) < 0.1 ? 4 : 2)}
+          unit="N·m" accent="blue"
           tooltip="Average electromagnetic torque from Maxwell stress integral over one electrical period"/>
         <Cell label="Mech power" value={`${fmt(pShaft / 1000, 3)}`} unit="kW"
           accent="blue"
@@ -1358,6 +1374,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                            + `ratchet is allowed to look (it is frozen through the warm-up, `
                            + `whose transient is not a field the machine was ever in).`
                          : '')
+                    : '')
+                 + (s.eddy_settled !== false && s.eddy_settled_via_accelerator
+                    ? '  Settled via accelerator jumps (warm-up prefix only; ≥ 4 periods marched after the last jump).'
                     : '')
                  + (s.eddy_settled === false
                     ? `  ⚠ NOT SETTLED: `
@@ -1679,10 +1698,18 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                              : '')
                          + '. '
                        : '')
-                   + `Worst single element ${fmt(dm.br_worst_pct, 1)} % Br (corner statistic); `
                    + `${fmt(dm.area_derated_pct, 1)} % of magnet area de-rated. `
                    + "Knee from the ASSIGNED grade at its record temperature — pick the _30C/_80C/_120C variant "
                    + "matching the real magnet temperature. Shown only when the run modelled demag."}/>
+        )}
+        {dmCorner != null && (
+          <Cell label="⚑ Br corner" value={fmt(dmCorner.br_pct, 1)} unit="%"
+            tooltip={'Worst single magnet element — a corner flag, not the magnet\'s figure (that is Demag koef). '
+                   + 'A sharp-corner value that does not converge with mesh refinement'
+                   + (dmCorner.r_mm != null && dmCorner.theta_deg != null
+                       ? `; at r ${fmt(dmCorner.r_mm, 2)} mm, ${fmt(dmCorner.theta_deg, 1)}° (rotor frame)`
+                       : '')
+                   + '.'}/>
         )}
         {s.saturation?.droop_pct != null && (
           <Cell label="Saturation koef"

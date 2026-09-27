@@ -80,6 +80,39 @@ package_size_mm:
 #: Not published in this datasheet revision (Package Outlines section gives
 #: no mass, same as the base part's).
 weight_g: null
+
+# ── footprint (PCB side; owner 2026-09-26, Task 9) ─────────────────────
+# Read by the Controller catalogue's "fits the selected board" filter, not
+# by the loss model. Unpublished / not-yet-transcribed = null + a note.
+footprint:
+  package_outline_id: PG-WHSON-8-U01
+  outline_source: >-
+    Datasheet Figure 1 (section 5, Package Outlines), PG-WHSON-8-U01
+  land_pattern_ref: null
+  land_pattern_note: >-
+    NOT TRANSCRIBED. The datasheet could not be opened when this block was
+    added (infineon.com unreachable from that session), so whether its Package
+    outlines section carries a land-pattern / footprint figure is unchecked.
+    Fill in 'Figure N, page P' from the datasheet, or write that the datasheet
+    has none.
+  body_height_mm: 0.75
+  body_height_source: >-
+    Datasheet Figure 1 (section 5), dimension A, MAX column
+  top_tab_mm: null
+  top_tab_note: >-
+    NOT TRANSCRIBED. The package is dual-side cooled (Table 3 publishes a
+    junction-case TOP resistance), but the top exposed face's size is not on
+    this card and the datasheet could not be re-opened when this block was
+    added. (The BOTTOM exposed pad is D1 2.31...2.51 mm, Figure 1 — that is a
+    pad, not the top tab.)
+  compatibility_group: whson8_tson8
+  compatibility_basis: >-
+    Owner, 2026-09-26 (Task 9): PG-WHSON-8 and PG-TSON-8-4 share the pads and
+    differ in height. This card's Figure 1 transcription: bottom pad D1
+    2.31...2.51 mm (the same span as the base part IQE050N08NM5's
+    PG-TSON-8-4), height A 0.75 max vs 1.10 on the base part's datasheet, body
+    3.40 vs 3.30 mm. No PG-TSON-8-4 card is in this catalogue, so the group
+    has one member here.
 datasheet_revision: "2.0, 2022-05-02"
 datasheet_url: "https://www.infineon.com/assets/row/public/documents/24/49/infineon-iqe050n08nm5sc-datasheet-en.pdf"
 

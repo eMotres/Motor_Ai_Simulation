@@ -874,6 +874,41 @@ the sine loop (36 steps/period, minutes per pass) + 1–2 PWM passes, i.e.
 from the start temperatures (it was one pass short of T_j convergence), and all
 of the sine loop when a sine state of the duty already exists.
 
+### 7d · The first PWM command carries the bridge's drops (2026-09-26)
+
+§7c's −3.4 % was the SEED, not the thermal: pass 1 commanded the sine state's
+TERMINAL fundamental, the bridge lost its channel drop and dead time between
+command and terminals, and the damped first regulator step (gain 0.3) could
+not recover it inside the 2-pass cap.
+
+* **First command, closed form** (`coupled._pwm_v1_first_guess`, placed after
+  the `T_j` seed so `R_DS(on)` and `V_SD` are read at the seeded junction).
+  The leg's pole error `e(i) = −i·R_DS − sign(i)·t_d·f_sw·(V_dc + 2·(v0 + r_d·|i|))`
+  has, on a sinusoidal leg current of peak `Î`, the fundamental
+  `E1 = Î·R_DS + (4/π)·t_d·f_sw·(V_dc + 2·v0) + 2·t_d·f_sw·r_d·Î`, in phase
+  with the current and opposing it (in delta `√3·E1` at `Î_leg = √3·Î_branch`,
+  along the branch current).  The load angle is held, so the command is the
+  projection `V_cmd = V1 + E1·cos φ`, `φ = δ_V − γ_I` (below `V1` on a
+  generator).  The ceiling clamp applies; the record carries every term
+  (`pwm_final.v1_first_guess`).  Left out, and said: dead-time windows clipped
+  near the rails, the channel drop absent during the dead time, and the
+  harmonic currents the drops drive — the regulator takes that residual.
+* **Third pass for the current only**: after the 2-pass cap, ONE more PWM
+  pass when `|point_error_pct| > i_tol_pct`; a temperature residual alone
+  never buys it (`pwm_final.current_extra_pass`, `final_point_error_pct`).
+
+Mocked affine machine (`tests/test_coupled_pwm_first_guess.py`; Ø40 L12-like
+bridge, the true drop 10 % above the closed form, `dI/I = 1.5·dV/V`, +5 K
+from the PWM map on pass 1):
+
+| seed / cap | PWM passes | current error per pass |
+|---|---|---|
+| terminal V1, 2-pass cap (before) | 2 | −7.19 %, −3.95 % |
+| terminal V1, + current pass | 3 | −7.19 %, −3.95 %, +0.29 % |
+| closed form (now) | 2 | −0.65 %, −0.90 % (pass 2 for the +5 K) |
+
+Not yet re-measured on the FEM machine.
+
 ---
 
 ## 8 · Stage 3 — the six-coil H-bridge study
@@ -884,6 +919,11 @@ coil currents need not be a three-phase set at all — harmonic injection per
 coil, fault tolerance with a coil open, and torque-ripple cancellation that a
 three-wire machine cannot reach. That study needs Stage 2's per-coil interface
 and nothing else from this module.
+
+**Done 2026-09-27: `docs/SIX_COIL_STUDY_2026-09-27.md`.** It also finds that §6
+costs the H-bridge at the PHASE current. L155 is 2P, so each coil carries half
+of it: correctly costed, the H-bridge at rated is 4.41 kW with 24 devices, not
+7.26 kW with 96.
 
 ## 9 · Open items
 
@@ -1088,3 +1128,34 @@ applications" note the doc paraphrases (see `IMDQ75R004M2H.yaml`'s
   fixing it is a Controller-module change, out of this batch's scope
   (device cards + read-only cross-checks only, "не подстраивай ничего под
   документ").
+
+### 10.4 · SVPWM / third-harmonic injection — the §10.2 gap closed (2026-09-26)
+
+`pwm_modulation` in the Controller settings: `sine` (default, unchanged),
+`svpwm` (carrier-based, min-max zero sequence `v0 = −(max+min)/2`) or
+`third_harmonic` (`v0 = −(m/6)·cos 3x`). One comparator implements it
+(`simulation/pwm.py::PwmVoltageSource._duty_at`), read by BOTH the loss model
+(`inverter/waveforms.leg_duty`) and the `drive: "inverter"` source the coupled
+EM loop marches (`inverter_nonideal["modulation"]`, route `inv_modulation`).
+
+* **Linear range** m ≤ 2/√3 (sine: 1). The loss model's OVERMODULATED flag and
+  the coupled regulator's voltage ceiling are the modulation's own; the EM
+  source refuses m > 2/√3 for the injected modulators (sine keeps its 1.15).
+* **Line voltages are the sine modulator's**: the zero sequence is sampled at
+  the same instant for all three legs, so every carrier's line volt-seconds
+  are identical below m = 1, and the line fundamental stays √3·m·V_dc/2 up to
+  2/√3 where sine clips (−5.5 % at m = 1.15, 48 carriers).
+* **Star / delta**: the injection is common mode — a star's floating neutral
+  drops it, a delta branch sees a line voltage with zero zero-sequence. The
+  triplen that circulates in a delta is the winding's own and still never
+  reaches a device (`leg_currents` differences it out).
+* **Devices and losses at a given point are unchanged**: same leg current,
+  one hard on/off per carrier (continuous modulation), half-wave-symmetric
+  zero sequence so the per-switch split stays ½, same DC-link mean
+  (`Σ v0·i = 0`). What changes is the reachable m (+15.5 % fundamental on the
+  same link, so the §10.2 power at the same current and losses) and the ripple.
+* The applied fundamental of an injected source is measured on `v_A − CM`: on
+  a carrier count not divisible by 3 the held zero sequence leaks a common-mode
+  fundamental into the pole (0.8 % at 7 carriers) that no winding sees.
+
+Tests: `tests/test_controller_svpwm.py`.

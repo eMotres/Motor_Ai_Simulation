@@ -218,7 +218,50 @@ def result_ir_from_transient(sbres: Dict[str, Any], *, provenance: Optional[Prov
     # Carry the full payload (minus heavy per-frame fields) so a UI can migrate
     # onto the kernel byte-identically; the typed scalars/series stay the contract.
     raw = {k: v for k, v in sbres.items() if k != "frames"}
+    alias_linear_cross_check_keys(raw)
     return ResultIR(physics="em_transient", scalars=scalars, series=series, raw=raw, provenance=provenance)
+
+
+# ── "honest" -> "linear" cross-check rename, read-compat ─────────────────────
+# The frequency-domain magnet/shaft cross-check (`P_mag_honest_W` /
+# `P_shaft_honest_W`) was named for the un-filtered frequency-domain solve; it
+# is actually a LINEAR estimate (see docs/EDDY_TIME_INTEGRATION_2026-09-25.md,
+# `shaft_is_linear_estimate`), so every place that reads or displays it now
+# calls it `P_mag_linear_W` / `P_shaft_linear_W`. The solver
+# (`simulation/fem_solver_2d.py`) still EMITS the old key names — it is another
+# agent's file this session — so this adapter (the one place a raw solver dict
+# crosses into a record any route/web/report consumer touches) aliases the new
+# names onto the old values, in place, without removing the old keys. Old
+# stored records (which only ever have the old keys) keep reading correctly
+# through `read_linear_cross_check` below. Nothing else in the codebase reads
+# `P_mag_honest_W` / `P_shaft_honest_W` today (checked: not in report.py,
+# datasheet.py, or web/), so this is the only rename hook needed until the
+# solver itself is free to rename its own output — noted for the orchestrator.
+_LINEAR_KEY_ALIASES = {
+    "P_mag_honest_W": "P_mag_linear_W",
+    "P_shaft_honest_W": "P_shaft_linear_W",
+}
+
+
+def alias_linear_cross_check_keys(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Add the new `_linear_W` keys (mirroring the old `_honest_W` ones) onto
+    ``d`` in place, if not already present. Never removes or overwrites the
+    old keys — they stay for anything still reading them. Safe on records that
+    have neither key (no-op) or already have the new key (no-op)."""
+    for old_key, new_key in _LINEAR_KEY_ALIASES.items():
+        if new_key not in d and old_key in d:
+            d[new_key] = d[old_key]
+    return d
+
+
+def read_linear_cross_check(d: Dict[str, Any], stem: str) -> Any:
+    """Read a linear cross-check field (``stem`` = "P_mag" or "P_shaft") from a
+    record ``d``, preferring the new ``<stem>_linear_W`` key and falling back
+    to the old ``<stem>_honest_W`` key so old stored records keep reading."""
+    new_key, old_key = f"{stem}_linear_W", f"{stem}_honest_W"
+    if new_key in d:
+        return d[new_key]
+    return d.get(old_key)
 
 
 def stamp(module: str, *, version: str = "0.1.0", input_hash: Optional[str] = None,

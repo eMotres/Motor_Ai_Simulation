@@ -190,6 +190,7 @@ export interface TransientSummary {
   // budget rather than passing the test.  Absent on older runs → treated as
   // settled, which is how those runs already read.
   eddy_settled?: boolean | null;
+  eddy_settled_via_accelerator?: boolean | null;
   eddy_capped?: boolean | null;
   eddy_settle_residual?: number | null;
   eddy_settle_tol?: number | null;
@@ -1358,6 +1359,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                            + `ratchet is allowed to look (it is frozen through the warm-up, `
                            + `whose transient is not a field the machine was ever in).`
                          : '')
+                    : '')
+                 + (s.eddy_settled !== false && s.eddy_settled_via_accelerator
+                    ? '  Settled via accelerator jumps (warm-up prefix only; ≥ 4 periods marched after the last jump).'
                     : '')
                  + (s.eddy_settled === false
                     ? `  ⚠ NOT SETTLED: `

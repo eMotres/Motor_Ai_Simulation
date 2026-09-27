@@ -17,6 +17,28 @@
 
 export const EDDY_DEFAULT_STEPS = 72;
 
+/** Owner 2026-09-27: reported torque ripple / cogging needs >= 9 samples per
+ *  cogging cycle (docs/EDDY_PERIODIC_ACCEL_2026-09-26.md, ripple study: L155
+ *  at 108 steps is within 1.3 % of 216).  Same rule as the backend's
+ *  simulation/eddy_steps.ripple_grade_steps. */
+export const RIPPLE_SAMPLES_PER_COGGING_CYCLE = 9;
+
+const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+
+/** Cogging cycles per ELECTRICAL period: lcm(Q, 2p) / p. */
+export function coggingCyclesPerPeriod(numSlots: number, numPoles: number): number {
+  const Q = Math.round(numSlots), P2 = Math.round(numPoles);
+  if (!(Q > 0) || !(P2 >= 2)) return 0;
+  const lcm = (Q * P2) / gcd(Q, P2);
+  return Math.round(lcm / (P2 / 2));
+}
+
+/** The report-grade default: max(eddy default, 9 x cogging cycles/period). */
+export function rippleGradeSteps(numSlots: number, numPoles: number): number {
+  return Math.max(EDDY_DEFAULT_STEPS,
+    RIPPLE_SAMPLES_PER_COGGING_CYCLE * coggingCyclesPerPeriod(numSlots, numPoles));
+}
+
 /** The tab's factory defaults before 2026-09-26.  A count equal to one of them
  *  with no record of who set it is the old default, not a choice. */
 export const LEGACY_DEFAULT_STEPS: readonly number[] = [36, 40];

@@ -119,6 +119,16 @@ from motor_ai_sim.simulation.rotor_window import (
     commensurate_rotor_potential_window as _commensurate_rotor_potential_window,
     period_shift_map as _period_shift_map,
 )
+from motor_ai_sim.simulation.periodic_accel import (
+    rre_extrapolate as _acc_rre,
+    extrapolate_by_sector as _acc_rre_sec,
+    restrict_shift as _acc_restrict,
+    single_mode_extrapolate as _acc_single,
+    shift_cycles as _acc_cycles,
+    sector_components as _acc_comp,
+    slow_tail_resid as _acc_tail,
+    MIN_VERIFY_PERIODS as _acc_min_verify,
+)
 from motor_ai_sim.simulation.sb_postproc import (
     drop_settling_frames as _drop_settling_frames,
     retained_window_metadata as _retained_window_metadata,
@@ -6365,10 +6375,56 @@ def fem_transient_sliding_band(
     # a capped run says so (eddy_settled False).
     _EDDY_MAX_WARM_PERIODS = max(1, int(
         _os_sb.environ.get("SB_EDDY_MAX_PERIODS", "16") or 16))
+    # CAP 24 FOR SLOW BODIES (owner 2026-09-27).  A body whose slow mode, as
+    # the periodic accelerator MEASURES it on the state (λ per period, τ =
+    # −1/ln λ periods), decays slower than the normal cap is long may march
+    # up to SB_EDDY_MAX_PERIODS_SLOW (24) periods.  Criterion: τ > the normal
+    # cap (L155 shaft λ 0.942 → τ 16.7 > 16).  A fast machine never gets a λ
+    # from the accelerator, keeps the normal cap and is bit-identical.  An
+    # explicit SB_EDDY_MAX_PERIODS pin is a pin: never raised.
+    _EDDY_MAX_WARM_PERIODS_SLOW = max(_EDDY_MAX_WARM_PERIODS, int(
+        _os_sb.environ.get("SB_EDDY_MAX_PERIODS_SLOW", "24") or 24))
+    _eddy_cap_pinned = bool(_os_sb.environ.get("SB_EDDY_MAX_PERIODS"))
+    _eddy_cap_periods = _EDDY_MAX_WARM_PERIODS      # the cap in force
+    _eddy_slow_cap: Dict[str, Any] = {}             # why it was raised
+    _acc_lam_state: List[float] = []                # λ read at slow-mode checks
     _warm_grp: Dict[str, List[float]] = {}   # per conductor group, continuous
     _warm_ext_periods = 0           # whole periods spliced in (extensions)
     _warm_gauge: Dict[str, Any] = {}          # the verdict's own numbers
     _shift_cache: Dict[str, Any] = {}
+    # ── PERIODIC-STATE ACCELERATOR (2026-09-26, periodic_accel.py) ──────────
+    # A slow rotor conductor (L155 shaft wall, τ ≈ 17-18 periods via μ(B))
+    # cannot settle inside the cap by marching.  At the end of every extension
+    # period the rotor-conductor state (both BDF2 levels, carried across the
+    # period by the exact pole-pair map) is one iterate of the period map; RRE
+    # over `_ACC_K` + 2 of them jumps to the linearised fixed point.  Only the
+    # DISCARDED prefix moves: the gauge then needs MIN_VERIFY_PERIODS whole
+    # continuous periods solved after the last jump (its record is restarted
+    # at the jump), unchanged otherwise.  A machine that settles before
+    # `_ACC_SKIP` + `_ACC_K` + 2 periods never collects enough states, so the
+    # accelerator is a no-op there.  SB_EDDY_ACCEL=0 switches it off.
+    _acc_on = bool(eddy and not _vdrive
+                   and _os_sb.environ.get("SB_EDDY_ACCEL", "1") != "0")
+    _ACC_SKIP = max(0, int(_os_sb.environ.get("SB_EDDY_ACCEL_SKIP", "1") or 1))
+    _ACC_K = max(1, int(_os_sb.environ.get("SB_EDDY_ACCEL_K", "2") or 2))
+    # after a jump: periods left to the fast modes the jump re-excites before
+    # the next cycle collects, and that cycle's (smaller) order
+    _ACC_POST_SKIP = max(0, int(_os_sb.environ.get("SB_EDDY_ACCEL_POST_SKIP", "1")
+                                or 1))
+    _ACC_K2 = max(1, int(_os_sb.environ.get("SB_EDDY_ACCEL_K2", "1") or 1))
+    _acc_skip_left = _ACC_SKIP            # decisions still to skip this cycle
+    _acc_k_now = _ACC_K                   # RRE order of the current cycle
+    _acc_hist: List[np.ndarray] = []      # last 4 period states (slow check)
+    _acc_last: Dict[str, Any] = {}        # slow bodies/map of the last jump
+    _acc_lams: List[float] = []           # lambda measured by single-mode jumps
+    _acc_dec: List[int] = []              # decision number of each state
+    _acc_sec: Dict[str, Any] = {}         # single-mode jump -> secant memo
+    _acc_states: List[np.ndarray] = []    # period-map iterates since last jump
+    _acc_idx = None                       # rotor-conductor dofs (σ > 0)
+    _acc_w = None                         # lumped σ-mass (the residual norm)
+    _acc_gmask: Dict[str, np.ndarray] = {}  # group → mask over _acc_idx
+    _acc_jumps: List[Dict[str, Any]] = []  # what each jump did (in the result)
+    _acc_seen = 0                         # extension decisions seen
 
     def _period_shift(vec):
         """Rotor part of a per-dof state carried one electrical period BACK
@@ -7570,6 +7626,54 @@ def fem_transient_sliding_band(
                     # the one the reported window was actually handed.
                     _warm_quiet = bool(_warm_resid <= _EDDY_SETTLE_TOL
                                        or _ref_ok)
+                    # after an accelerator jump: at least MIN_VERIFY_PERIODS
+                    # whole continuous periods solved on the new state
+                    _acc_check = None
+                    if _warm_quiet and any(_j.get("applied") for _j in _acc_jumps):
+                        _warm_quiet = bool(_warm_nper >= _acc_min_verify)
+                        if _warm_quiet and _acc_last and len(_acc_hist) >= 3:
+                            # SLOW-MODE CHECK (in addition to the gauge): the
+                            # tail of the slow bodies at the lambda the
+                            # accelerator measured on the state, not the
+                            # gauge's q <= 0.9 (periodic_accel.slow_tail_resid)
+                            _lam_s = None
+                            try:
+                                _two_c = _acc_hist[-1].size == 2 * _acc_idx.size
+                                _smm_c = np.concatenate([_acc_last["sm"]]
+                                                        * (2 if _two_c else 1))
+                                _seq_c = [_h[_smm_c] for _h in _acc_hist[-3:]]
+                                _q_c, _s_c, _r_c = _acc_cycles(_acc_last["perm"],
+                                                               _acc_last["sign"])
+                                _m0_c = [_acc_comp(_x, _acc_last["perm"],
+                                                   _acc_last["sign"], _q_c, _s_c,
+                                                   _r_c)["m0"] for _x in _seq_c]
+                                _inf_c = _acc_single(_m0_c, _acc_last["w"])[1]
+                                _lam_s = (_inf_c.get("lambda")
+                                          if not _inf_c.get("refused") else None)
+                            except Exception as _e_chk:   # noqa: BLE001
+                                log.warning("P2 eddy accelerator: slow-mode check "
+                                            "could not read the state (%s)", _e_chk)
+                            if _lam_s and 0.0 < float(_lam_s) < 1.0:
+                                _acc_lam_state.append(float(_lam_s))
+                            _lam_c = max([0.9] + list(_acc_lams)
+                                         + ([float(_lam_s)] if _lam_s else []))
+                            _tails = _acc_tail({_gk: _warm_grp[_gk]
+                                                for _gk in _acc_last["bodies"]
+                                                if _gk in _warm_grp},
+                                               int(n_steps_per_period), _lam_c)
+                            _acc_check = {"lambda": float("%.4g" % _lam_c),
+                                          "lambda_state": (None if _lam_s is None
+                                                           else float("%.4g" % _lam_s)),
+                                          "per_group": {_gk: float("%.3g" % _v)
+                                                        for _gk, _v in _tails.items()}}
+                            if max(_tails.values(), default=0.0) > _EDDY_SETTLE_TOL:
+                                _warm_quiet = False
+                                _warm_resid = max(_warm_resid, max(_tails.values()))
+                                log.info("P2 eddy accelerator: the gauge passes but the "
+                                         "slow-mode tail at the measured lambda %.3f is "
+                                         "%s -- not settled", _lam_c,
+                                         {_gk: "%.3g %%" % (100.0 * _v)
+                                          for _gk, _v in _tails.items()})
                     _quiet = (_warm_quiet
                               and not (demag and _dm_moved_in_warm))
                     if _ref_ok and not (_warm_resid <= _EDDY_SETTLE_TOL):
@@ -7584,7 +7688,19 @@ def fem_transient_sliding_band(
                                             else float("%.3g" % _gr))
                                       for _gk, _gr in _warm_gres.items()},
                         "extension_periods": int(_warm_ext_periods),
-                        "max_extension_periods": int(_EDDY_MAX_WARM_PERIODS),
+                        "max_extension_periods": int(_eddy_cap_periods),
+                        "accelerator": ({"method": "rre_period_map",
+                                         "jumps": list(_acc_jumps),
+                                         "slow_mode_check": _acc_check,
+                                         "slow_body_cap": (dict(_eddy_slow_cap)
+                                                           if _eddy_slow_cap
+                                                           else None),
+                                         "periods_since_last_jump": (
+                                             int(_warm_nper) if any(
+                                                 _j.get("applied")
+                                                 for _j in _acc_jumps)
+                                             else None)}
+                                        if _acc_jumps else None),
                         "period_remap": (None if "map" not in _shift_cache
                                          else bool(_shift_cache["map"]
                                                    is not None)),
@@ -7607,8 +7723,31 @@ def fem_transient_sliding_band(
                                  for _j in range(min(3, len(_gv) // _Npm) - 1,
                                                  -1, -1)]
                               for _gk, _gv in _warm_grp.items()})
+                    # raise the cap for a SLOW body (see its init): the
+                    # slowest λ the accelerator measured on this state
+                    if (not _quiet and not _eddy_cap_pinned and not _eddy_slow_cap
+                            and _EDDY_MAX_WARM_PERIODS_SLOW > _eddy_cap_periods):
+                        _lam_m = [float(_l) for _l in (list(_acc_lams)
+                                                      + list(_acc_lam_state))
+                                  if 0.0 < float(_l) < 1.0]
+                        if _lam_m:
+                            _lam_x = max(_lam_m)
+                            _tau_x = -1.0 / math.log(_lam_x)
+                            if _tau_x > _EDDY_MAX_WARM_PERIODS:
+                                _eddy_slow_cap = {
+                                    "normal_cap": int(_EDDY_MAX_WARM_PERIODS),
+                                    "cap": int(_EDDY_MAX_WARM_PERIODS_SLOW),
+                                    "lambda": float("%.4g" % _lam_x),
+                                    "tau_periods": float("%.3g" % _tau_x),
+                                    "after_period": int(_warm_ext_periods)}
+                                _eddy_cap_periods = _EDDY_MAX_WARM_PERIODS_SLOW
+                                log.info("P2 eddy warm-up: SLOW body (accelerator "
+                                         "lambda %.4f, tau %.1f periods > cap %d) "
+                                         "-- cap raised to %d periods",
+                                         _lam_x, _tau_x, _EDDY_MAX_WARM_PERIODS,
+                                         _eddy_cap_periods)
                     if ((not _quiet) and _eddy_cap >= 3
-                            and _warm_ext_periods < _EDDY_MAX_WARM_PERIODS):
+                            and _warm_ext_periods < _eddy_cap_periods):
                         # Not settled → march ANOTHER whole electrical period
                         # in front of the window.  The rotor goes back one
                         # period, and its eddy state goes with it through the
@@ -7636,10 +7775,168 @@ def fem_transient_sliding_band(
                         _Ib_prev2 = _Ib_prev; _Ib_prev = _Ib_k        # stator currents; rotor ∫J=0
                         _Aed_prev = _period_shift(A2)
                         _A2_prev = _period_shift(A2)
+                        # ── periodic-state accelerator (see its init) ──────
+                        # Only on the θ = −dθ decisions (one phase of the
+                        # period map), never on the frame-0 probe.
+                        if _acc_on and k < 0:
+                            _acc_seen += 1
+                            if _acc_idx is None:
+                                _rot_M = None
+                                for _gk in ("shaft", "sleeve", "mag"):
+                                    if _gk in _Msig_grp:
+                                        _rot_M = (_Msig_grp[_gk] if _rot_M is None
+                                                  else _rot_M + _Msig_grp[_gk])
+                                if _rot_M is None or _shift_cache.get("map") is None:
+                                    _acc_on = False     # nothing slow / no exact map
+                                    log.info("P2 eddy accelerator: off (%s)",
+                                             "no rotor conductor" if _rot_M is None
+                                             else "no exact period map")
+                                else:
+                                    _dg = np.asarray(_rot_M.diagonal()).ravel()
+                                    _acc_idx = np.flatnonzero(_dg > 0.0)
+                                    _acc_w = _dg[_acc_idx]
+                                    _acc_gmask = {
+                                        _gk: (np.asarray(_Msig_grp[_gk].diagonal()
+                                                         ).ravel()[_acc_idx] > 0.0)
+                                        for _gk in ("shaft", "sleeve", "mag")
+                                        if _gk in _Msig_grp}
+                            if _acc_on:
+                                # this period's iterate of the map (both levels)
+                                _two = bool(_eddy_bdf2 and _Aed_prev2 is not None)
+                                _x_now = np.concatenate(
+                                    [_Aed_prev[_acc_idx]]
+                                    + ([_Aed_prev2[_acc_idx]] if _two else []))
+                                _acc_hist = (_acc_hist + [_x_now])[-4:]
+                            if _acc_on and _acc_skip_left > 0:
+                                _acc_skip_left -= 1
+                            elif _acc_on:
+                                _acc_states.append(_x_now)
+                                _acc_dec.append(int(_acc_seen))
+                                _room = (_eddy_cap_periods - _warm_ext_periods
+                                         + 1 >= _acc_min_verify)
+                                # the SLOW bodies: the rotor conductor groups
+                                # the gauge has just called unsettled.  A fast
+                                # body (magnets, sleeve) is left to the march:
+                                # its period changes are Newton-level noise
+                                # that would swamp the slow mode's least squares.
+                                _slow = [_gk for _gk in _acc_gmask
+                                         if (_warm_gres.get(_gk) is None
+                                             or _warm_gres[_gk] > _EDDY_SETTLE_TOL)]
+                                if (len(_acc_states) >= _acc_k_now + 2 and _room
+                                        and _slow):
+                                    _nI = _acc_idx.size
+                                    _sm = np.zeros(_nI, bool)
+                                    for _gk in _slow:
+                                        _sm |= _acc_gmask[_gk]
+                                    _sI = _acc_idx[_sm]
+                                    _smm = np.concatenate([_sm] * (2 if _two else 1))
+                                    # RRE per symmetry sector of the exact
+                                    # pole-pair image map (periodic_accel)
+                                    _seq = [_st[_smm] for _st in _acc_states]
+                                    _wS = np.concatenate([_acc_w[_sm]]
+                                                         * (2 if _two else 1))
+                                    try:
+                                        _rdf_m, _jj_m, _ss_m = _shift_cache["map"]
+                                        _pm, _pg_s = _acc_restrict(_rdf_m, _jj_m,
+                                                                   _ss_m, _sI)
+                                        if _two:
+                                            _pm = np.concatenate([_pm, _pm + _sI.size])
+                                            _pg_s = np.concatenate([_pg_s, _pg_s])
+                                        _msec = None
+                                        if (_acc_sec and _acc_sec.get("bodies") == list(_slow)
+                                                and len(_seq) >= 2):
+                                            _msec = {"u_pre": _acc_sec["u_pre"],
+                                                     "S_p": _acc_sec["S_p"],
+                                                     "n_after": int(_acc_dec[0])
+                                                     - int(_acc_sec["dec"])}
+                                        _acc_sec = {}
+                                        _xs, _ai = _acc_rre_sec(_seq, _wS, _pm, _pg_s,
+                                                                m0_secant=_msec)
+                                        _ai["method"] = "rre_per_symmetry_sector"
+                                    except ValueError as _e_sec:
+                                        log.warning("P2 eddy accelerator: image map "
+                                                    "not closed on the slow bodies "
+                                                    "(%s) — one RRE over the whole "
+                                                    "state", _e_sec)
+                                        _xs, _ai = _acc_rre(_seq, _wS)
+                                        _ai["method"] = "rre_whole_state"
+                                        _ai.pop("gamma", None)
+                                    _nS = _sI.size
+                                    _ai.update({"after_period": int(_warm_ext_periods - 1),
+                                                "states": len(_acc_states),
+                                                "bodies": list(_slow),
+                                                "dofs": int(_nS)})
+                                    if _xs is not None:
+                                        _acc_last = {"sm": _sm, "perm": _pm,
+                                                     "sign": _pg_s, "bodies": list(_slow),
+                                                     "w": _wS}
+                                        for _sk, _se in (_ai.get("sectors") or {}).items():
+                                            if (_se.get("applied") and _se.get("lambda")
+                                                    and str(_se.get("method", "")
+                                                            ).startswith("single_mode")):
+                                                _acc_lams.append(float(_se["lambda"]))
+                                            if "_u_pre" in _se:
+                                                _acc_sec = {"u_pre": _se["_u_pre"],
+                                                            "S_p": _se["S_step"],
+                                                            "dec": int(_acc_dec[-1]),
+                                                            "bodies": list(_slow)}
+                                        _Aed_prev = _Aed_prev.copy()
+                                        _Aed_prev[_sI] = _xs[:_nS]
+                                        _A2_prev = _A2_prev.copy()
+                                        _A2_prev[_sI] = _xs[:_nS]
+                                        if _two:
+                                            _Aed_prev2 = _Aed_prev2.copy()
+                                            _Aed_prev2[_sI] = _xs[_nS:]
+                                        # the gauge judges ONLY periods solved
+                                        # after the jump (≥ MIN_VERIFY_PERIODS)
+                                        _warm_grp = {}
+                                        _ai["applied"] = True
+                                    else:
+                                        _ai["applied"] = False
+                                    for _se in (_ai.get("sectors") or {}).values():
+                                        _se.pop("_u_pre", None)
+                                    _acc_states = []
+                                    _acc_dec = []
+                                    if _ai["applied"]:
+                                        # a jump of a multi-mode (RRE) sector
+                                        # re-excites fast modes: skip; a
+                                        # single-mode step moves along the
+                                        # slow mode only: collect at once
+                                        _acc_skip_left = (_ACC_POST_SKIP if any(
+                                            _se.get("applied") and _se.get("method") == "rre"
+                                            for _se in (_ai.get("sectors") or {}).values())
+                                            else 0)
+                                        _acc_k_now = _ACC_K2
+                                        if _acc_sec:
+                                            # after a single-mode jump: one
+                                            # period, then ONE change calibrates
+                                            # it (periodic_accel.secant_step_scale)
+                                            _acc_skip_left = max(_acc_skip_left, 1)
+                                            _acc_k_now = 0
+                                    _acc_jumps.append(
+                                        {_kk: (_vv if not isinstance(_vv, float)
+                                               else float("%.4g" % _vv))
+                                         for _kk, _vv in _ai.items()
+                                         if _kk not in ("u_norms",)})
+                                    log.info("P2 eddy accelerator: RRE over %d "
+                                             "period states after extension "
+                                             "period %d — %s", _ai["states"],
+                                             _ai["after_period"],
+                                             ("jump applied (%s), step %.3g x the "
+                                              "last change; sectors %s; the gauge "
+                                              "restarts"
+                                              % (_ai.get("method"),
+                                                 _ai["step_over_last_change"],
+                                                 _ai.get("sectors")))
+                                             if _ai["applied"] else
+                                             "REFUSED (%s), marching on"
+                                             % _ai.get("refused"))
+                                    log.info("P2 eddy accelerator: bodies %s, %d dofs",
+                                             _slow, _nS)
                         log.info("P2 eddy warm-up: not settled — extending by "
                                  "one electrical period (%d frames, extension "
                                  "%d of at most %d)", _eddy_cap,
-                                 _warm_ext_periods, _EDDY_MAX_WARM_PERIODS)
+                                 _warm_ext_periods, _eddy_cap_periods)
                         continue
                     _warm_done = True
                     if not _quiet:
@@ -9773,6 +10070,11 @@ def fem_transient_sliding_band(
         # averaged in, so it reports True / False and not a null.
         "eddy_settled": bool(_warm_quiet is not False),
         "eddy_capped": bool(_warm_quiet is False),
+        # PROVENANCE (owner 2026-09-27): settled, but the discarded warm-up
+        # prefix was moved by periodic-accelerator jumps (the gauge then judged
+        # >= MIN_VERIFY_PERIODS continuous periods after the last jump).
+        "eddy_settled_via_accelerator": bool(
+            _warm_quiet is not False and any(_j.get("applied") for _j in _acc_jumps)),
         # The same two numbers as eddy_warmup_resid / eddy_warmup_tol, under
         # the names the settle test itself uses — these are the pair the
         # sweep points and the UI carry (the eddy_warmup_* names stay for the

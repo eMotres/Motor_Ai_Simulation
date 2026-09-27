@@ -17532,14 +17532,16 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     def _eddy_words(c):
         settled = _e(c, "eddy_settled")
         if settled is None or settled is True:
-            return "settled"
+            return ("settled via accelerator jumps"
+                    if _e(c, "eddy_settled_via_accelerator") else "settled")
         res = _numf(_e(c, "eddy_settle_residual"))
         tol = _numf(_e(c, "eddy_settle_tol"))
         tail = (" (residual %s vs %s)" % (_fmt(res, 4), _fmt(tol, 4))
                 if res is not None and tol is not None else "")
         return ("not settled / capped" if _e(c, "eddy_capped")
                 else "not settled") + tail
-    if any(_e(c, "eddy_settled") is False for c in cols):
+    if any(_e(c, "eddy_settled") is False
+           or _e(c, "eddy_settled_via_accelerator") for c in cols):
         rows.append(["…eddy currents"] + _col_vals(cols, _eddy_words))
     R("Bearing loss [W]", lambda c: _e(c, "P_bearings_W"), 1)
     # ONE ROUNDING FOR ONE QUANTITY (BT-13): the windage was the only watt row

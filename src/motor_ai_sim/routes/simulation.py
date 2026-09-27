@@ -4493,7 +4493,16 @@ def get_fem_transient(
     from motor_ai_sim.simulation.eddy_steps import (
         resolve_steps_per_period as _resolve_steps)
     try:
-        n_steps_per_period = _resolve_steps(n_steps_per_period, eddy=bool(eddy))
+        _g_st = {}
+        if n_steps_per_period is None:
+            try:
+                from motor_ai_sim.config import get_config as _gc_st
+                _g_st = dict(_gc_st().get("geometry") or {})
+            except Exception:  # noqa: BLE001
+                _g_st = {}
+        n_steps_per_period = _resolve_steps(n_steps_per_period, eddy=bool(eddy),
+                                            num_slots=_g_st.get("num_slots"),
+                                            num_poles=_g_st.get("num_poles"))
     except ValueError as _se:
         raise HTTPException(status_code=422, detail=str(_se))
     _route_kwargs["n_steps_per_period"] = n_steps_per_period
@@ -7693,6 +7702,9 @@ def _build_transient_summary(
                         else bool(sbres["eddy_capped"])),
         "eddy_settle_residual": sbres.get("eddy_settle_residual"),
         "eddy_settle_tol": sbres.get("eddy_settle_tol"),
+        # settled with the warm-up prefix moved by accelerator jumps (2026-09-27)
+        "eddy_settled_via_accelerator": bool(sbres.get("eddy_settled_via_accelerator",
+                                                       False)),
         # Did this run CONTINUE a previous one's state instead of solving it?
         # Both are False on every interactive Run by construction — the flag
         # that allows it (SB_SEED_FROM_PREVIOUS) is set only in the optimizer's

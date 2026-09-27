@@ -36,7 +36,8 @@ import CommonProgressStrip from '../common/SolveProgressStrip';
 import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
 import {
-  EDDY_DEFAULT_STEPS, adoptSteps, isStepsSource, snapStepsToRing, stepsNote,
+  EDDY_DEFAULT_STEPS, RIPPLE_SAMPLES_PER_COGGING_CYCLE, coggingCyclesPerPeriod,
+  rippleGradeSteps, adoptSteps, isStepsSource, snapStepsToRing, stepsNote,
   type StepsSource,
 } from '../../lib/eddySteps';
 import { fetchCoupledLast, setCoupledControllerRef } from './coupledApi';
@@ -1162,16 +1163,27 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [stepsMigratedFrom, setStepsMigratedFrom] = useState<number | null>(null);
   // The user picks a count → it is theirs.  Picking the item marked as the
   // eddy default hands the count back to the default.
+  // REPORT-GRADE DEFAULT (owner 2026-09-27): >= 9 samples per cogging cycle,
+  // never below the eddy default (L155 24s/28p: 12 cycles -> 108).
+  const coggingCycles = coggingCyclesPerPeriod(numSlots, numPoles);
+  const defaultSteps = rippleGradeSteps(numSlots, numPoles);
+  const prevDefaultSteps = useRef<number>(EDDY_DEFAULT_STEPS);
   const pickSteps = (v: number, isDefault = false) => {
     setStepsMigratedFrom(null);
-    if (isDefault) { setSteps(EDDY_DEFAULT_STEPS); setStepsSource('eddy_default'); }
+    if (isDefault) { setSteps(defaultSteps); setStepsSource('eddy_default'); }
     else { setSteps(v); setStepsSource('user'); }
   };
   // Anything else that writes the count (a duty load, an optimizer Apply,
   // another window) wrote a choice, not the default.
+  // The default follows the machine (slots/poles): a count still held AS the
+  // default moves with it; any other writer's count is a choice.
   useEffect(() => {
-    if (stepsSource === 'eddy_default' && steps !== EDDY_DEFAULT_STEPS) setStepsSource('user');
-  }, [steps, stepsSource, setStepsSource]);
+    const prev = prevDefaultSteps.current;
+    prevDefaultSteps.current = defaultSteps;
+    if (stepsSource !== 'eddy_default' || steps === defaultSteps) return;
+    if (steps === prev || steps === EDDY_DEFAULT_STEPS) setSteps(defaultSteps);
+    else setStepsSource('user');
+  }, [steps, stepsSource, setStepsSource, defaultSteps, setSteps]);
   // Magnet/shaft eddy losses ALWAYS come from the real field solve
   // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the Ansys way),
   // never the classical slab d²/12 estimate.  No toggle: real fields only.
@@ -2483,22 +2495,25 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               value={stepsOptions.includes(steps) ? steps : snapSteps(steps)}
               onChange={e => {
                 const v = Number(e.target.value);
-                pickSteps(v, v === snapSteps(EDDY_DEFAULT_STEPS));
+                pickSteps(v, v === snapSteps(defaultSteps));
               }}
               endAdornment={
                 <InputAdornment position="end" sx={{ mr: 2.5 }}>
-                  <HelpTip title={`Transient time resolution. Eddy-current runs default to ${EDDY_DEFAULT_STEPS} steps per period (BDF2 reads the magnet loss about −4 % at 36 steps, −1 % at 72); any count in the list is solved exactly as picked. Up to ${stepsMax} the count must be a DIVISOR of ${stepsMax} — the slip-ring nodes per electrical period for this machine — so the rotor lands on whole mesh nodes. ABOVE ${stepsMax} the solver raises the slip-ring density to match the request exactly (needed to resolve a PWM carrier); the band mesh is then denser and the run slower.`} />
+                  <HelpTip title={`Transient time resolution. Eddy-current runs default to ${defaultSteps} steps per period: ${RIPPLE_SAMPLES_PER_COGGING_CYCLE} samples per cogging cycle (${coggingCycles} per electrical period) so the reported ripple/cogging is resolved, never below ${EDDY_DEFAULT_STEPS} (BDF2 reads the magnet loss about −4 % at 36 steps, −1 % at 72); any count in the list is solved exactly as picked. Up to ${stepsMax} the count must be a DIVISOR of ${stepsMax} — the slip-ring nodes per electrical period for this machine — so the rotor lands on whole mesh nodes. ABOVE ${stepsMax} the solver raises the slip-ring density to match the request exactly (needed to resolve a PWM carrier); the band mesh is then denser and the run slower.`} />
                 </InputAdornment>
               }
             >
               {stepsOptions.map(v => (
                 <MenuItem key={v} value={v}>
                   {v}{v > stepsMax ? '  · raises the slip ring' : ''}
-                  {v === snapSteps(EDDY_DEFAULT_STEPS) ? '  · eddy default' : ''}
+                  {v === snapSteps(defaultSteps) ? '  · default' : ''}
                 </MenuItem>
               ))}
             </Select>
           </FormControl>
+          <Typography sx={{ fontSize: 10.5, color: 'text.secondary', mt: -0.75, mb: 0.5 }}>
+            {`Default ${defaultSteps} = ${RIPPLE_SAMPLES_PER_COGGING_CYCLE} samples × ${coggingCycles} cogging cycles per period (ripple-grade; min ${EDDY_DEFAULT_STEPS}).`}
+          </Typography>
           {stepsLine && (
             <Typography sx={{ fontSize: 10.5, color: 'text.secondary', mt: -0.75, mb: 1 }}>
               {stepsLine}

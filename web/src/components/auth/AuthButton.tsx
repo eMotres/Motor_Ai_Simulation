@@ -5,12 +5,15 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import DevicesIcon from '@mui/icons-material/Devices';
 import { useAuth } from '../../contexts/AuthContext';
 import SessionsDialog from './SessionsDialog';
+import AgentKeysDialog from './AgentKeysDialog';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
 
 /** Header login/logout control (self-hosted auth — see contexts/AuthContext). */
 const AuthButton: React.FC = () => {
   const { user, tier, signIn, logout } = useAuth();
   const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
+  const [agentsOpen, setAgentsOpen] = React.useState(false);
 
   if (!user) {
     return (
@@ -47,9 +50,15 @@ const AuthButton: React.FC = () => {
           <ListItemIcon><DevicesIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           Sessions
         </MenuItem>
+        <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setAgentsOpen(true); }}>
+          <ListItemIcon><SmartToyIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          Access for agents
+        </MenuItem>
       </Menu>
       <SessionsDialog open={sessionsOpen} onClose={() => setSessionsOpen(false)}
         onSignedOut={() => { void logout(); }} />
+      <AgentKeysDialog open={agentsOpen} onClose={() => setAgentsOpen(false)} />
     </Box>
   );
 };

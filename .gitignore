@@ -119,6 +119,8 @@ config/.mesh_cache/
 config/users.json
 config/.auth_secret
 config/.sessions.json
+config/agent_keys.json
+config/mcp_audit.jsonl
 
 # cross-run eddy warm cache (solver speedup, regenerated constantly)
 config/.warm_cache.npz

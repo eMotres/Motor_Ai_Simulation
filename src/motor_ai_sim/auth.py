@@ -680,6 +680,36 @@ def install_tier_gate(app) -> None:
     app.add_middleware(TierGateMiddleware)
 
 
+#: The account an MCP agent-key call acts for (set only by
+#: ``use_agent_user``; ``{}`` = the local-dev admin owner with no e-mail).
+import contextvars as _cv
+from contextlib import contextmanager as _cm
+_AGENT_USER: "_cv.ContextVar[Optional[dict]]" = _cv.ContextVar(
+    "motor_ai_sim_agent_user", default=None)
+
+
+@_cm
+def use_agent_user(user: Optional[dict]):
+    """Resolve credential-less in-process calls as `user` ({uid,email,tier})."""
+    tok = _AGENT_USER.set(user)
+    try:
+        yield user
+    finally:
+        _AGENT_USER.reset(tok)
+
+
+def agent_user_for(email: str) -> Optional[dict]:
+    """{uid,email,tier} for an agent key's owner, or None when disabled.
+    ``{}`` for the local-dev admin owner (``ADMIN_OWNER``)."""
+    ident = (email or "").strip().lower()
+    if not ident or ident == ADMIN_OWNER:
+        return {}
+    tier = _registry_tier(ident)
+    if tier == "__disabled__":
+        return None
+    return {"uid": ident, "email": ident, "tier": tier}
+
+
 def _is_admin_caller(authorization: Optional[str]) -> tuple[bool, Optional[dict]]:
     """(is_admin, user|None). Admin iff the signed-in account is admin-tier
     (email in ADMIN_EMAILS, or a 'tier=admin' claim).
@@ -689,7 +719,16 @@ def _is_admin_caller(authorization: Optional[str]) -> tuple[bool, Optional[dict]
     as ADMIN_EMAILS is set (which production must do), only those accounts are
     admin, even with AUTH_ENFORCE off — so the admin page never leaks to ordinary
     visitors."""
-    user = resolve_user(authorization)
+    user = None
+    _agent = _AGENT_USER.get()
+    if _agent is not None and not (isinstance(authorization, str)
+                                   and authorization.strip()):
+        # An MCP call acting for an agent key's owner (motor_ai_sim.mcp_app):
+        # the owner's identity, resolved once, answers every in-process
+        # permission question exactly as that owner's own web session would.
+        user = _agent or None
+    else:
+        user = resolve_user(authorization)
     if not AUTH_ENFORCE and not _ADMIN_EMAILS:
         return True, user
     return (user is not None and user.get("tier") == "admin"), user

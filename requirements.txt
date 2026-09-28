@@ -50,3 +50,8 @@ triangle==20250106
 # first container build.  Same class of gap as the three above — installed on
 # the workstation, never pinned.  Version = the workstation's (2026-09-16).
 openpyxl==3.1.5
+# MCP server for external AI agents at /mcp (Stage 1, 2026-09-28,
+# docs/MCP_2026-09-28.md): the official Model Context Protocol SDK, streamable
+# HTTP transport.  Pinned to the version the tests ran with — 2.x renamed
+# FastMCP to MCPServer, so an unpinned install can break the import.
+mcp==2.2.0

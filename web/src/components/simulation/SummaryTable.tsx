@@ -6,6 +6,7 @@
  * /fem_transient → summary, so every value here is a REAL FEM result
  * (not analytical).
  */
+import { sixPhaseCells, type SixPhaseResult } from './sixPhase';
 import React from 'react';
 import { Box, Button, Paper, Typography, Tooltip } from '@mui/material';
 import AddToCompareButton from '../compare/AddToCompareButton';
@@ -91,6 +92,8 @@ export interface TransientSummary {
   V_line_peak_V:       number;
   // Terminal connection of the three phases — decides what "line" means.
   star_delta?:         string;          // "star" | "delta"
+  // six-phase winding (two in-phase sets): per-set values + the FEM L_xy
+  six_phase?:          SixPhaseResult;
   I_line_rms_A?:       number;          // delta: sqrt(3) x phase; star: = phase
   I_terminal_rms_A?:   number;          // the SETPOINT (three leads to the inverter)
   I_winding_rms_A?:    number;          // delta: setpoint / sqrt(3); star: = setpoint
@@ -1616,6 +1619,26 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           tooltip={(s.saliency_Lq_over_Ld != null
             ? 'Saliency at this load point, from the two INCREMENTAL inductances (frozen permeability). The dq frame behind these cells is self-checked every run: T = 1.5·p·(ψd·iq − ψq·id) must reproduce the energy-method torque, or the inductances are withheld rather than shown wrong.'
             : 'Saliency from the BENCH (small-signal) frame — both axes measured the LCR way at I≈0, so the ratio is cross-saturation-free.')}/>
+        {(() => {
+          const c6 = sixPhaseCells(s.six_phase);
+          if (!c6) return null;
+          const ind = s.six_phase?.inductances;
+          return (<>
+            <Cell label="L_xy" value={c6.lxy} unit="mH" accent="blue"
+              tooltip={'Six-phase: the inductance between the two sets driven AGAINST each other '
+                + '(circulating x-y current) — only this limits PWM current that flows from one '
+                + 'inverter into the other. Frozen permeability at this operating point, full ring. '
+                + (c6.lxyPct ? c6.lxyPct + '. ' : '')
+                + (ind?.Ld_set_mH != null ? `Per-set L_d ${ind.Ld_set_mH.toFixed(4)} mH (air-gap plane). ` : '')
+                + (ind?.Lxy_min_mH != null ? `Range ${ind.Lxy_min_mH.toFixed(4)}–${(ind.Lxy_max_mH ?? 0).toFixed(4)} mH. ` : '')
+                + (s.six_phase?.inductances_error ? 'Not measured: ' + s.six_phase.inductances_error : '')
+                + 'The Controller ripple takes it automatically.'}/>
+            <Cell label="Per set" value={c6.perSet}
+              tooltip={'Each of the two in-phase sets: half the phase current, the full phase '
+                + `voltage (fundamental peak). Set 1 = path ${(s.six_phase?.set1_paths ?? []).join(', ')}, `
+                + `set 2 = path ${(s.six_phase?.set2_paths ?? []).join(', ')}; each on its own inverter.`}/>
+          </>);
+        })()}
       </Box>
       )}
 

@@ -1235,3 +1235,44 @@ Report: rows "Power direction", "Phase-current PWM ripple", "Phase-current THD".
 Datasheet: "Controller power direction", "Phase-current PWM ripple (A rms)",
 "Phase-current THD (%)". Saved with the controller settings: `ripple_l_*`,
 `ripple_neutral`, `carrier_interleave_deg`, `thd_limit_pct`.
+
+## 12 · Six-phase winding: two in-phase 3-phase sets (2026-09-28)
+
+Owner decision: the winding option *3 phases | 6 phases (two 3-phase sets)*. The
+phase's PARALLEL paths are split between two sets; each set is star or delta
+(the duty's Y/Δ, both sets alike) and has its own inverter. Both sets lie in
+the same phase belts, so they are **in phase (0°)** — no spatial shift is
+offered (owner, same day).
+
+* Winding block keys (`/api/winding/config`): `phases` 3|6, `set1_paths`
+  ("1,2"; empty = the first half), `set_neutrals` isolated|common. Refused
+  loudly (422) unless the paths split into two identical sets: an even path
+  count ≥ 2, every path a rotated copy of path 1 (the stator cut into
+  n_parallel equal sectors, no coil straddling a cut), set 1 = exactly half.
+  Bookkeeping: `winding_sets.py`, shared by the solver, the Controller and the
+  web.
+* EM solve (`six_phase=`): the per-set unit sources are built from the same
+  coil tags; f_set1 + f_set2 = f_phase is checked (`source_sum_residual`,
+  0 to round-off). Balanced sine currents are identical in both sets, so the
+  solve IS the 3-phase one — pinned: torque and ψ equal to 1e-9
+  (`tests/test_six_phase_winding.py`). Per set: half the phase current, the
+  full phase voltage.
+* **L_xy from the FEM** (`frozen_permeability_vsd`,
+  `measure_six_phase_inductances`): frozen ν of the loaded field at the
+  operating point, six unit per-set-phase back-solves → the 6×6 incremental
+  L, projected on the orthonormal VSD: d/q (air-gap plane, per set phase) and
+  x-y (orthogonal complement without either zero sequence = the sets driven
+  against each other). Full ring (the x-y current does not repeat with a
+  sector), 4 rotor positions over half an electrical period; the route runs it
+  after every six-phase Simulation run and stores `summary.six_phase`
+  (`inductances.Lxy_mH`, `Lxy_pct_of_Ld`, `Ld_set_mH`, spread, reciprocity).
+* Controller: a duty solved six-phase selects `two_3ph_sets` automatically
+  (one inverter per set, 0°, each leg at the set's current); the ripple takes
+  `L_xy = Lxy_pct_of_Ld × L_d,bridge` from the record unless L_xy is typed.
+
+L155 rated (12 s / 10 p, 2P delta, 324.5 A winding, γ 15°, magnet 104.2 °C;
+set 1 = slots 1–6, set 2 = slots 7–12): L_d,set 0.1204 mH = 2.00 × the
+machine's 0.0602 mH; **L_xy 0.1178 mH = 97.9 % of L_d,set** (principal values
+0.106–0.130 mH, rotor spread 0.7 %). The two half-machines barely couple
+(M12 ≈ 1 % of L_set), so a circulating x-y ripple meets almost the full set
+inductance.

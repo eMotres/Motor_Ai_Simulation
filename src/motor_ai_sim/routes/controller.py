@@ -322,6 +322,12 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
             out["ripple_ld_mH"], out["ripple_lq_mH"] = ldv, lqv
             src["ripple_l"] = (f"{where}: incremental {kd}/{kq} "
                                f"({ldv:.4g}/{lqv:.4g} mH)")
+    # SIX-PHASE WINDING (owner 2026-09-28): the EM record says which paths
+    # are set 1 / set 2 and carries the machine's own L_xy.
+    six = em.get("six_phase") if isinstance(em.get("six_phase"), dict) else None
+    if six and six.get("set1_paths"):
+        out["six_phase"] = six
+        src["six_phase"] = f"{where} (six-phase winding: two in-phase sets)"
     g = _num(em.get("gamma1_deg"))
     if g is None:
         g = _num(em.get("gamma_deg"))
@@ -1036,7 +1042,9 @@ _KEY_FIELDS_OPTIONAL = ("switching_source", "r_g_off_ext_ohm", "l_sigma_nH",
                         "ripple_l_xy_pct", "ripple_l_xy_uH", "ripple_l_zero_uH",
                         "ripple_neutral", "carrier_interleave_deg",
                         "thd_limit_pct", "ripple_sampling",
-                        "ripple_voltage_angle_deg", "ripple_samples_per_carrier")
+                        "ripple_voltage_angle_deg", "ripple_samples_per_carrier",
+                        # 2026-09-28: six-phase winding (sets + its own L_xy)
+                        "_six_slot_set", "_six_lxy_pct")
 
 
 def _history_key(req: Dict[str, Any]) -> str:
@@ -1134,6 +1142,35 @@ def _build_request(body: Dict[str, Any],
         req["_ripple_sources"] = {"l": duty_src.get("ripple_l", "the duty record")}
     if duty.get("gamma_deg") is not None:
         req["_gamma_deg"] = duty["gamma_deg"]
+    # SIX PHASES: the sets of THIS machine's coils (resolved again from the
+    # live winding with the record's own set-1 paths — the same bookkeeping
+    # the EM solve used) and the record's L_xy.  The topology is then two
+    # 3-phase inverters, one per set (inverter.losses).
+    six = duty.get("six_phase")
+    if isinstance(six, dict) and six.get("set1_paths"):
+        try:
+            from motor_ai_sim.winding_sets import resolve_six_phase
+            _v = mach["values"]
+            _spec = resolve_six_phase(
+                {"phases": 6, "n_parallel": six.get("n_parallel"),
+                 "set1_paths": six.get("set1_paths"),
+                 "set_neutrals": six.get("neutrals")},
+                num_slots=int(_v["num_slots"]), num_poles=int(_v["num_poles"]),
+                single_layer=bool(_v.get("single_layer", True)),
+                layout_str=_v.get("winding_layout"),
+                star_delta=req.get("star_delta") or "star")
+            req["_six_slot_set"] = _spec["slot_set"]
+            sources["topology"] = ("the six-phase winding: two 3-phase "
+                                   "inverters, one per set (automatic)")
+            _ind = six.get("inductances") or {}
+            if _ind.get("Lxy_pct_of_Ld") is not None:
+                req["_six_lxy_pct"] = float(_ind["Lxy_pct_of_Ld"])
+            if not req.get("ripple_neutral") and six.get("neutrals"):
+                req["ripple_neutral"] = six["neutrals"]
+                sources["ripple_neutral"] = "the six-phase winding's neutrals"
+        except Exception as exc:                            # noqa: BLE001
+            raise _refuse(f"six-phase winding: {exc}", ["phases"],
+                          code="bad_winding")
     for k in RIPPLE_FIELDS:
         v = body.get(k) if body.get(k) not in (None, "") else ctrl.get(k)
         if v not in (None, ""):

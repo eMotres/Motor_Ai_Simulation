@@ -1570,6 +1570,55 @@ def _effective_bonding(v: Optional[str] = None) -> Optional[str]:
     return None
 
 
+def _six_phase_geometry():
+    """(slots, poles, single_layer, layout) of the loaded machine."""
+    from motor_ai_sim.config import get_config as _gc
+    _c = _gc() or {}
+    g = dict(_c.get("geometry") or {})
+    w = dict(_c.get("winding") or {})
+    slots = int(g.get("num_slots") or round(float(g.get("num_seg") or 0)
+                                            * float(g.get("num_slots_per_segment") or 0)))
+    poles = int(g.get("num_poles") or round(float(g.get("num_seg") or 0)
+                                            * float(g.get("num_poles_per_segment") or 0)))
+    return slots, poles, int(w.get("layers") or 1) == 1, (w.get("layout") or None)
+
+
+def _six_phase_error(winding: dict) -> Optional[str]:
+    """The refusal text for a six-phase winding block, or None if it wires."""
+    from motor_ai_sim.winding_sets import SixPhaseError, resolve_six_phase
+    try:
+        slots, poles, sl, lay = _six_phase_geometry()
+        resolve_six_phase(winding, num_slots=slots, num_poles=poles,
+                          single_layer=sl, layout_str=lay)
+    except SixPhaseError as e:
+        return str(e)
+    return None
+
+
+def _effective_six_phase(star_delta: Optional[str] = None,
+                         n_parallel: Optional[int] = None) -> Optional[dict]:
+    """The validated six-phase spec of the loaded winding, or None (3 phases).
+
+    Read from the WINDING block (``phases`` / ``set1_paths`` /
+    ``set_neutrals``) like star/delta; the request's own parallel-path count
+    wins over the block's.  An invalid block is a 422 — a six-phase machine
+    that cannot be wired is never solved as a three-phase one."""
+    from motor_ai_sim.config import get_config as _gc
+    from motor_ai_sim.winding_sets import SixPhaseError, resolve_six_phase
+    w = dict((_gc() or {}).get("winding") or {})
+    if int(w.get("phases") or 3) != 6:
+        return None
+    if n_parallel is not None:
+        w["n_parallel"] = int(n_parallel)
+    try:
+        slots, poles, sl, lay = _six_phase_geometry()
+        return resolve_six_phase(w, num_slots=slots, num_poles=poles,
+                                 single_layer=sl, layout_str=lay,
+                                 star_delta=_effective_star_delta(star_delta))
+    except SixPhaseError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
 def _effective_star_delta(v: Optional[str] = None) -> str:
     """"star" | "delta" — the argument if given, else the saved operating point.
 
@@ -4658,6 +4707,13 @@ def get_fem_transient(
     # a model bus of 1299.7 V that nobody can buy must not look like a number
     # somebody measured.
     _sd_eff = _effective_star_delta(star_delta)
+    # SIX PHASES (two in-phase 3-phase sets) — resolved and validated here,
+    # before anything is solved; None on a 3-phase winding.
+    try:
+        _six_spec = _effective_six_phase(
+            star_delta, _effective_winding(n_parallel, connection)[0])
+    except ValueError as _e6:
+        raise HTTPException(status_code=400, detail=str(_e6))
     _eq_star = (_drive in ("voltage",) + _pwm_like and _sd_eff == "delta")
     # The bus the SOURCE chops.  Star: v_bus, byte for byte.  The REQUEST keeps
     # the real link everywhere else (cache key, snapshot key, the reported
@@ -4951,6 +5007,10 @@ def get_fem_transient(
         # delta the copper total carries a circulating loss star does not have.
         # Sharing one cache entry would replay the other connection's numbers.
         ("star_delta", _effective_star_delta(star_delta)),
+        # 3 or 6 phases, and which paths are set 1: the six-phase result
+        # carries per-set values and L_xy the 3-phase one does not.
+        ("six_phase", (None if not _six_spec else
+                       (tuple(_six_spec["set1_paths"]), _six_spec["neutrals"]))),
         # Transposed / soldered / per-turn-parallel are three different
         # windings and they differ by kilowatts of copper — never one entry.
         ("strand_bonding", _effective_bonding(strand_bonding) or "auto"),
@@ -5376,11 +5436,63 @@ def get_fem_transient(
                 # loaded iron's ψ_PM sag dominates (client review, 2026-09-20).
                 # Three extra back-solves on four frames' own matrices.
                 inc_ldq=True,
+                six_phase=_six_spec,
                 # Coupled σ·∂A/∂t solve — only when the caller asked for it.
                 eddy=bool(eddy),
                 # Keep the last frame's field for the J⟳ / Loss views.  Free:
                 # the frame is already solved; this stops it being discarded.
                 return_field=bool(field_snapshot))
+            # ── SIX PHASES: L_xy on the full ring, at THIS operating point ──
+            # The circulating (x-y) mode drives the sets against each other,
+            # which a sector model cannot represent unless the set pattern
+            # repeats with it.  One short magnetostatic sine-current solve of
+            # the whole machine at the run's current, angle, temperatures and
+            # mesh — the frozen-permeability derivative of that loaded field.
+            if _six_spec and not ((_sbres.get("six_phase") or {})
+                                  .get("inductances")):
+                try:
+                    _fem_transient_progress["current"]["phase"] = \
+                        "fem-solve (six-phase L_xy probe, full ring)"
+                    from motor_ai_sim.simulation.fem_solver_2d import \
+                        measure_six_phase_inductances as _msi
+                    _i1 = _I_wind
+                    _g1 = float(gamma_deg)
+                    if _drive != "current":
+                        from motor_ai_sim.simulation.postproc import \
+                            fundamental_current as _fc6
+                        _f6 = _fc6(_sbres)
+                        _i1, _g1 = float(_f6["I1_phase_rms_A"]), float(_f6["gamma1_deg"])
+                    _pr = _msi(
+                        six_phase=_six_spec, I_phase_rms=_i1, gamma_deg=_g1,
+                        rpm=(None if rpm is None else float(rpm)),
+                        n_parallel=(None if n_parallel is None else int(n_parallel)),
+                        connection=(None if connection is None else str(connection)),
+                        star_delta=_effective_star_delta(star_delta),
+                        daxis_deg=(_sbres.get("daxis_deg")
+                                   if _sbres.get("daxis_deg") is not None
+                                   else _effective_daxis(daxis_deg)),
+                        mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
+                        outer_air_factor=float(outer_air_factor),
+                        gap_layers=float(gap_layers),
+                        coil_temp_c=float(coil_temp_c),
+                        magnet_temp_c=(None if magnet_temp_c is None
+                                       else float(magnet_temp_c)),
+                        iron_template=bool(iron_template), geo_mesh=bool(geo_mesh),
+                        structured_gap=bool(structured_gap),
+                        component_mesh_mm=_comp_mesh, geo_override=_geo_ov,
+                        element_order=int(element_order))
+                    _blk6 = dict(_sbres.get("six_phase") or {})
+                    for _k in ("inductances", "probe", "per_set_flux",
+                               "per_set_flux_note", "source_sum_residual"):
+                        if _pr.get(_k) is not None:
+                            _blk6[_k] = _pr[_k]
+                    _blk6.pop("inductances_note", None)
+                    _sbres["six_phase"] = _blk6
+                except Exception as _e6p:   # noqa: BLE001 — never fails the run
+                    log.warning("six-phase L_xy probe failed: %s", _e6p)
+                    _blk6 = dict(_sbres.get("six_phase") or {})
+                    _blk6["inductances_error"] = f"{type(_e6p).__name__}: {_e6p}"
+                    _sbres["six_phase"] = _blk6
             # ── ΔP_harm (voltage drive): current-drive REFERENCE at the
             # extracted fundamental (I₁, γ₁), so the comparison runs at a
             # MATCHED fundamental current — the loss difference is then
@@ -7382,7 +7494,7 @@ def _build_transient_summary(
     def _summary_ripple_pct(value):
         return None if value is None else round(abs(float(value)), 1)
 
-    return {
+    _summary_out = {
         "rpm": _rpm,
         # I_phase_rms_A is the TERMINAL current — the setpoint the panel holds,
         # the three leads to the inverter — in BOTH connections.  It has to be:
@@ -7845,3 +7957,22 @@ def _build_transient_summary(
             p_loss_w=_ploss, efficiency=_eff, op_mode=_op_mode,
             mass_components=_masses.get("components")),
     }
+    # SIX PHASES: the per-set values + the solver's L_xy block, on the summary
+    # every consumer (duty record, Controller, report) reads.
+    if isinstance(sbres.get("six_phase"), dict):
+        try:
+            from motor_ai_sim.winding_sets import per_set_values as _psv
+            _b6 = dict(sbres["six_phase"])
+            _spec6 = {"set1_paths": _b6.get("set1_paths"),
+                      "set2_paths": _b6.get("set2_paths"),
+                      "set_connection": _summary_out.get("star_delta")}
+            _b6.update(_psv(_summary_out, _spec6))
+            _summary_out["six_phase"] = _b6
+            _ind = _b6.get("inductances") or {}
+            if _ind.get("Lxy_mH") is not None:
+                _summary_out["Lxy_mH"] = _ind["Lxy_mH"]
+                _summary_out["Lxy_pct_of_Ld"] = _ind.get("Lxy_pct_of_Ld")
+        except Exception as _e6s:   # noqa: BLE001
+            _summary_out["six_phase"] = {**sbres["six_phase"],
+                                         "summary_error": str(_e6s)}
+    return _summary_out

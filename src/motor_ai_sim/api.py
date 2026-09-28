@@ -112,6 +112,7 @@ from motor_ai_sim.routes.modules import router as modules_router
 from motor_ai_sim.routes.kernel import router as kernel_router
 from motor_ai_sim.routes.jobs_api import router as jobs_router
 from motor_ai_sim.routes.history import router as history_router
+from motor_ai_sim.routes.agent_keys import router as agent_keys_router
 from motor_ai_sim.services.geometry_service import get_current_geometry, params_to_dict
 from motor_ai_sim import materials as mat_lib
 from motor_ai_sim.materials import UnknownMaterialError
@@ -138,10 +139,21 @@ async def _lifespan(_app):
     except Exception as _e:
         logging.getLogger(__name__).warning("sweep resumption failed: %s", _e)
     _watchdog.start()
-    try:
-        yield
-    finally:
-        _watchdog.stop()
+    # MCP server for external AI agents (Stage 1, docs/MCP_2026-09-28.md): the
+    # SDK's session manager lives for the whole process.  A missing `mcp`
+    # package must not take the API down — /mcp then answers 404.
+    from contextlib import AsyncExitStack as _AES
+    async with _AES() as _stack:
+        if _MCP_OK:
+            try:
+                from motor_ai_sim import mcp_app as _mcp_app
+                await _stack.enter_async_context(_mcp_app.lifespan())
+            except Exception as _e:                      # noqa: BLE001
+                logging.getLogger(__name__).error("MCP server not started: %s", _e)
+        try:
+            yield
+        finally:
+            _watchdog.stop()
 
 
 app = FastAPI(
@@ -189,6 +201,17 @@ app.add_middleware(
     # FreeCAD bundle kind it got (App Control fallback, 2026-09-14).
     expose_headers=["Content-Disposition", "X-Bundle-Kind", "X-Bundle-Reason"],
 )
+
+# /mcp — the MCP server for external AI agents.  Added LAST = OUTERMOST, so an
+# agent-key request never meets the session-token tier gate / workspace
+# resolver: McpGate authenticates it itself (motor_ai_sim.mcp_app).
+try:
+    from motor_ai_sim import mcp_app as _mcp_app
+    _mcp_app.install(app)
+    _MCP_OK = True
+except ImportError as _e:                                # pragma: no cover
+    logging.getLogger(__name__).error("MCP disabled (package missing): %s", _e)
+    _MCP_OK = False
 
 
 # An unresolvable material ASSIGNMENT is a bad request, not a server fault: the
@@ -258,6 +281,8 @@ app.include_router(jobs_router)
 # browse, load and delete the last few results of each solve kind that has
 # wired itself into motor_ai_sim.run_history (today: mechanical.rotor_stress).
 app.include_router(history_router)
+# /api/agent_keys — "Access for agents": per-user MCP keys (2026-09-28).
+app.include_router(agent_keys_router)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

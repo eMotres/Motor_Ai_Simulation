@@ -14,6 +14,11 @@ named maps over that one structure:
                  star point.  For a 6-coil/12-slot machine the two sets sit one
                  coil apart, which on L155 (12 slots, 10 poles) is 150 degrees
                  electrical — reported, never assumed to be 30 or 60.
+  ``two_3ph_sets`` the SIX-PHASE winding (owner 2026-09-28): the two
+                 in-phase sets of ``winding_sets`` — each set half the
+                 parallel paths, in the same phase belts (0 deg) — each on its
+                 own 3-phase inverter at half the phase current.  Selected
+                 automatically for a six-phase winding.
   ``h_bridge``   one full H-bridge per coil: N_coils bridges, 4 switches each,
                  every coil independent and across the FULL DC link.  This is
                  the Stage-3 six-coil study's topology, available now.
@@ -65,6 +70,12 @@ TOPOLOGY_PRESETS: Dict[str, Dict[str, Any]] = {
         "label": "Two 3-phase inverters",
         "hint": "2 x 6 switches; odd coils on inverter 1, even coils on "
                 "inverter 2, each with its own star point",
+        "bridge_kind": "three_phase_2l",
+    },
+    "two_3ph_sets": {
+        "label": "Two 3-phase inverters (six-phase winding)",
+        "hint": "2 x 6 switches; set 1 / set 2 = the winding's two halves of "
+                "the parallel paths, in phase, each its own star or delta",
         "bridge_kind": "three_phase_2l",
     },
     "h_bridge": {
@@ -287,7 +298,8 @@ def build_topology(*, preset: str, coils: Sequence[Coil],
                    v_dc_V: Optional[float] = None,
                    h_bridge_modulation: str = "unipolar",
                    mapping: Optional[Sequence[Dict[str, Any]]] = None,
-                   devices_parallel_by_bridge: Optional[Dict[str, Any]] = None
+                   devices_parallel_by_bridge: Optional[Dict[str, Any]] = None,
+                   coil_sets: Optional[Dict[int, int]] = None
                    ) -> Topology:
     """Turn a preset (or an explicit mapping) into a validated :class:`Topology`.
 
@@ -340,6 +352,25 @@ def build_topology(*, preset: str, coils: Sequence[Coil],
         notes.append("EQUAL SPLIT ASSUMPTION: the duty's current is divided "
                      "equally between the two inverters (same machine, same "
                      "control); an unbalanced split is not modelled")
+    elif p == "two_3ph_sets":
+        if not coil_sets:
+            raise TopologyError(
+                "two_3ph_sets needs the six-phase winding's set of every coil "
+                "— set Phases = 6 on the winding and solve the duty first")
+        s1 = [c for c in coils if int(coil_sets.get(c.index, 0)) == 1]
+        s2 = [c for c in coils if int(coil_sets.get(c.index, 0)) == 2]
+        if len(s1) + len(s2) != len(coils) or len(s1) != len(s2):
+            raise TopologyError(
+                "the six-phase sets do not hold every coil in two equal halves "
+                f"({len(s1)} + {len(s2)} of {len(coils)} coils)")
+        b1 = _three_phase_bridge("INV1", "Inverter 1 (set 1)", s1, sd, **common)
+        b2 = _three_phase_bridge("INV2", "Inverter 2 (set 2)", s2, sd, **common)
+        b2.phase_shift_deg = 0.0
+        bridges = [b1, b2]
+        notes.append(
+            f"six-phase winding: two in-phase 3-phase sets ({sd} each, own "
+            "neutral), each set half the parallel paths on its own inverter — "
+            "each leg carries the SET's current, half the phase current")
     elif p == "h_bridge":
         mod = str(h_bridge_modulation or "unipolar").strip().lower()
         if mod not in H_BRIDGE_MODULATIONS:

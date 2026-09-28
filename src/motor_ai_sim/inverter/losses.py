@@ -75,7 +75,7 @@ log = logging.getLogger(__name__)
 __all__ = ["ControllerRefusal", "ColdPlate", "AirForcedCooling",
            "AirStillCooling", "COOLING_MODES", "solve_controller", "limit_rows",
            "DEFAULT_TIM_K_W", "TOL_K", "E_OSS_POLICIES", "SET_SPLITS",
-           "V_DSS_WARN_FRACTION"]
+           "V_DSS_WARN_FRACTION", "POWER_DIRECTIONS"]
 
 #: Bus utilisation above this fraction of V_DSS is a DESIGN WARNING, not a
 #: refusal: the device blocks it, but there is nothing left for the switching
@@ -132,6 +132,16 @@ MODULATION_SCHEMES = ("spwm", "svpwm")
 #: inverter quoted as "V_dc, I per phase, f_sw, m, cos phi"): the coils are
 #: synthetic — one 3-phase set per inverter — and the point is typed.
 STANDALONE_INVERTERS = (1, 2)
+
+#: Which way the power flows through the bridge (owner 2026-09-28): a motor
+#: duty, or a generator on an ACTIVE rectifier (the same bridge, switched).
+POWER_DIRECTIONS = ("motor", "generator")
+
+#: The loss model is a synchronous-rectifying MOSFET's: the reverse current is
+#: in the channel, so conduction is <i^2>*R whatever the direction.  An IGBT
+#: with its antiparallel diode splits by the current's direction instead, and
+#: that model is not here — such a card is refused, never costed as a MOSFET.
+MOSFET_TECHNOLOGIES = ("sic_mosfet", "si_mosfet", "gan_hemt", "gan_fet")
 
 
 def standalone_coils(n_inverters: int, shift_deg: float = 30.0) -> List[Coil]:
@@ -881,6 +891,129 @@ def _f(v: Any, name: str, *, default: Optional[float] = None,
     return x
 
 
+def _ripple_block(req: Dict[str, Any], *, topo: Topology,
+                  legs_spec: Dict[Tuple[str, str], Dict[str, float]],
+                  m_by_bridge: Dict[str, float], m: float, i_leg_3ph: float,
+                  v_dc: float, f_el: float, f_sw: float, pmod: str,
+                  lag_deg: float, sd: str, warnings: List[str]) -> Dict[str, Any]:
+    """PWM current ripple + phase-current THD (``inverter.ripple``).
+
+    The inductance the carrier sees, in this priority: a typed commutating /
+    subtransient ``ripple_l_sub_uH`` (one L, both axes) > typed
+    ``ripple_l_d_uH``/``ripple_l_q_uH`` (per bridge phase) > the duty's
+    incremental L_d/L_q (``_ripple_ld_mH``/``_ripple_lq_mH``, star-equivalent,
+    put there by the route).  The machine's L is re-referred to ONE bridge's
+    phase by that bridge's own V/I ratio (``m_b/m`` over ``i_b/I_leg``) — a
+    set of half the coils in series sees half the impedance.  Never a guess:
+    without an L the block says so and the loss solve still stands.
+    """
+    from motor_ai_sim.inverter import ripple as _rp
+
+    three = [b for b in topo.bridges if b.kind == "three_phase_2l"]
+    if len(three) != len(topo.bridges) or len(three) not in (1, 2):
+        return {"status": "not_computed",
+                "reason": "ripple is modelled for one or two three-phase "
+                          "bridges; this topology has H-bridges"}
+    src: Dict[str, str] = dict(req.get("_ripple_sources") or {})
+    typed = False
+    l_sub = req.get("ripple_l_sub_uH")
+    if l_sub not in (None, ""):
+        ld = lq = _f(l_sub, "ripple_l_sub_uH", positive=True) * 1e-6
+        src["l"] = "the request: commutating/subtransient L, both axes"
+        typed = True
+    elif req.get("ripple_l_d_uH") not in (None, ""):
+        ld = _f(req.get("ripple_l_d_uH"), "ripple_l_d_uH", positive=True) * 1e-6
+        has_q = req.get("ripple_l_q_uH") not in (None, "")
+        lq = (_f(req.get("ripple_l_q_uH"), "ripple_l_q_uH", positive=True) * 1e-6
+              if has_q else ld)
+        src["l"] = "the request (L_d" + (", L_q)" if has_q else " = L_q)")
+        typed = True
+    elif req.get("_ripple_ld_mH") is not None:
+        ld = float(req["_ripple_ld_mH"]) * 1e-3
+        lq = float(req.get("_ripple_lq_mH") or req["_ripple_ld_mH"]) * 1e-3
+        src.setdefault("l", "the duty's incremental L_d/L_q")
+    else:
+        return {"status": "not_computed",
+                "reason": "no inductance: type L (uH) — or run the duty's "
+                          "Simulation for its L_d/L_q"}
+    b0 = three[0]
+    m_b = m_by_bridge[b0.id]
+    i_b = legs_spec[(b0.id, b0.legs[0].name)]["i_peak_A"] / math.sqrt(2.0)
+    scale = 1.0
+    if not typed and not req.get("standalone") and m > 0 and i_b > 0 and i_leg_3ph > 0:
+        scale = (m_b / m) / (i_b / i_leg_3ph)
+    ld_b, lq_b = ld * scale, lq * scale
+    n_sets = len(three)
+    l_xy = None
+    shift = 0.0
+    if n_sets == 2:
+        shift = (three[1].phase_shift_deg - three[0].phase_shift_deg) % 360.0
+        if req.get("ripple_l_xy_uH") not in (None, ""):
+            l_xy = _f(req["ripple_l_xy_uH"], "ripple_l_xy_uH", positive=True) * 1e-6
+            src["l_xy"] = "the request (uH)"
+        elif req.get("ripple_l_xy_pct") not in (None, ""):
+            l_xy = _f(req["ripple_l_xy_pct"], "ripple_l_xy_pct", positive=True) / 100.0 * ld_b
+            src["l_xy"] = f"the request: {float(req['ripple_l_xy_pct']):g} % of L_d"
+        elif req.get("_six_lxy_pct") not in (None, ""):
+            # the machine's OWN L_xy (six-phase EM run, frozen permeability
+            # at the operating point), as a share of the per-set L_d — the
+            # same bridge-phase reference ld_b is on.  A typed value wins.
+            l_xy = float(req["_six_lxy_pct"]) / 100.0 * ld_b
+            src["l_xy"] = (f"the duty's EM record: L_xy = "
+                           f"{float(req['_six_lxy_pct']):.4g} % of the per-set "
+                           "L_d (FEM, frozen permeability)")
+        else:
+            msg = ("ripple NOT computed: two three-phase inverters need L_xy "
+                   "(the x-y plane links no air-gap flux — only L_xy limits "
+                   "that current, and no field solve here measures it)")
+            warnings.append(msg)
+            return {"status": "missing_input", "reason": msg,
+                    "fields": ["ripple_l_xy_pct", "ripple_l_xy_uH"]}
+    l0 = req.get("ripple_l_zero_uH")
+    l0 = None if l0 in (None, "") else _f(l0, "ripple_l_zero_uH", positive=True) * 1e-6
+    # where the voltage vector sits relative to d (matters only if L_d != L_q)
+    ang = req.get("ripple_voltage_angle_deg")
+    if ang not in (None, ""):
+        ang = float(ang)
+        src["voltage_angle"] = "the request"
+    elif req.get("_gamma_deg") is not None:
+        # gamma = atan2(-i_d, i_q): the current sits 90 + gamma from d, and
+        # the voltage leads it by the lag
+        ang = 90.0 + float(req["_gamma_deg"]) + lag_deg
+        src["voltage_angle"] = "the duty's current angle gamma + the load angle"
+    else:
+        ang = 90.0
+        if abs(ld_b - lq_b) > 1e-12:
+            src["voltage_angle"] = ("stated: the voltage vector on the q-axis "
+                                    "(no current angle known)")
+    lim = req.get("thd_limit_pct")
+    try:
+        r = _rp.pwm_ripple(
+            v_dc_V=v_dc, modulation_index=m_b, f1_hz=f_el, f_sw_hz=f_sw,
+            modulation=pmod, n_sets=n_sets, set_shift_deg=shift,
+            carrier_interleave_deg=float(req.get("carrier_interleave_deg") or 0.0),
+            l_d_H=ld_b, l_q_H=lq_b, l_xy_H=l_xy,
+            neutral=str(req.get("ripple_neutral") or "isolated"), l_zero_H=l0,
+            i1_rms_A=i_b, current_lag_deg=lag_deg,
+            voltage_angle_from_d_deg=ang,
+            sampling=str(req.get("ripple_sampling") or "natural"),
+            samples_per_carrier=int(req.get("ripple_samples_per_carrier") or 256),
+            thd_limit_pct=(None if lim in (None, "") else
+                           _f(lim, "thd_limit_pct", positive=True)))
+    except _rp.RippleRefusal as exc:
+        raise ControllerRefusal(str(exc), exc.fields, code="bad_ripple")
+    for w in r.get("warnings") or []:
+        warnings.append("ripple: " + w)
+    if r.get("thd_verdict") == "fail":
+        warnings.append(f"phase-current THD {r['thd_pct']:.2f} % exceeds the "
+                        f"{r['thd_limit_pct']:g} % limit")
+    r["status"] = "computed"
+    r["sources"] = src
+    r["star_delta"] = sd
+    r["l_scale_to_bridge"] = round(scale, 4)
+    return r
+
+
 def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     """Solve one controller on one operating point.
 
@@ -956,6 +1089,15 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     except CardError as exc:
         raise ControllerRefusal(str(exc), ["device"], code="unknown_device")
 
+    tech = str(card.doc.get("technology") or "sic_mosfet").strip().lower()
+    if tech not in MOSFET_TECHNOLOGIES:
+        raise ControllerRefusal(
+            f"{card.part} is a {tech} card: this loss model is synchronous-"
+            "rectifying MOSFET only (reverse current in the channel); an "
+            "IGBT/diode pair needs its conduction split by the current's "
+            "direction between the IGBT and the diode, which is not modelled",
+            ["device"], code="technology_not_modelled")
+
     n_par = int(_f(req.get("devices_parallel"), "devices_parallel", default=1,
                    positive=True))
     v_dc = _f(req.get("v_dc_V"), "v_dc_V", positive=True)
@@ -966,6 +1108,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             ["v_dc_V"], code="bus_over_vdss")
 
     preset = str(req.get("topology") or "one_3ph").strip().lower()
+    # SIX-PHASE WINDING (owner 2026-09-28): the machine has two in-phase
+    # 3-phase sets, so the controller is two 3-phase inverters — selected
+    # here, whatever a saved 3-phase topology says (only an explicit H-bridge
+    # or custom map keeps its own coil->bridge assignment).
+    coil_sets = None
+    six_slot_set = None if standalone else req.get("_six_slot_set")
+    if six_slot_set:
+        coil_sets = {c.index: int(six_slot_set[(c.slot_go - 1) % len(six_slot_set)])
+                     for c in coils}
+        if preset not in ("h_bridge", "custom", "two_3ph_sets"):
+            preset = "two_3ph_sets"
     set_split = str(req.get("set_split") or "series_split").strip().lower()
     if set_split not in SET_SPLITS:
         raise ControllerRefusal("set_split must be " + " or ".join(SET_SPLITS),
@@ -976,7 +1129,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             devices_parallel=n_par, v_dc_V=v_dc,
             h_bridge_modulation=str(req.get("h_bridge_modulation") or "unipolar"),
             mapping=req.get("mapping"),
-            devices_parallel_by_bridge=req.get("devices_parallel_by_bridge"))
+            devices_parallel_by_bridge=req.get("devices_parallel_by_bridge"),
+            coil_sets=coil_sets)
     except TopologyError as exc:
         raise ControllerRefusal(str(exc), ["topology", "mapping",
                                            "devices_parallel_by_bridge"],
@@ -1064,6 +1218,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "switching functions this model integrates are not what such a "
             "bridge does, and the losses below read low")
     phi_deg = math.degrees(math.acos(min(max(pf, -1.0), 1.0)))
+    # ── POWER DIRECTION (owner 2026-09-28) ─────────────────────────────────
+    # Consumer (motor) reference arrows throughout.  A motor draws P > 0 with
+    # the current lagging the voltage by phi; a generator on an active
+    # rectifier delivers P < 0 while its inductance still draws reactive
+    # power from the bridge (Q > 0), so the current lags by 180 - phi.
+    direction = str(req.get("power_direction") or "motor").strip().lower()
+    if direction not in POWER_DIRECTIONS:
+        raise ControllerRefusal("power_direction must be motor or generator; got "
+                                f"{req.get('power_direction')!r}", ["power_direction"],
+                                code="bad_direction")
+    lag_deg = phi_deg if direction == "motor" else 180.0 - phi_deg
 
     coils_per_phase = max(1, len(coils) // 3)
     v_machine_phase_rms = ((p_ac / pf) / (3.0 * i_ph
@@ -1129,7 +1294,7 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                 legs_spec[(b.id, lg.name)] = {
                     "i_peak_A": i_b * math.sqrt(2.0),
                     "i_phase_deg": -120.0 * k + b.phase_shift_deg,
-                    "v_phase_deg": -120.0 * k + b.phase_shift_deg + phi_deg,
+                    "v_phase_deg": -120.0 * k + b.phase_shift_deg + lag_deg,
                     "m": m_b,
                 }
         else:                                        # H-bridge
@@ -1145,7 +1310,7 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                 legs_spec[(b.id, lg.name)] = {
                     "i_peak_A": i_hb * math.sqrt(2.0) * (1 if k == 0 else -1),
                     "i_phase_deg": base,
-                    "v_phase_deg": base + phi_deg + (0.0 if k == 0 else 180.0),
+                    "v_phase_deg": base + lag_deg + (0.0 if k == 0 else 180.0),
                     "m": m_b,
                 }
     m_by_bridge = {b.id: legs_spec[(b.id, b.legs[0].name)]["m"]
@@ -1357,6 +1522,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             states.append(wf.switch_states(st, u, spec["v_phase_deg"]))
             currents.append(leg_current[(b.id, lg.name)])
     dc = wf.dc_link_current(states, currents)
+    # Which way the leg current flows through its switch: forward (first
+    # quadrant) while the conducting switch carries it drain->source, REVERSE
+    # (third quadrant — the channel in synchronous rectification, the diode
+    # of an IGBT/diode pair) otherwise.  i > 0 leaves the leg: forward in the
+    # high side (s = 1), reverse in the low side (s = 0); i < 0 the opposite.
+    _sq = _rv = 0.0
+    for s_, i_ in zip(states, currents):
+        i2 = i_ ** 2
+        _sq += float(np.sum(i2))
+        _rv += float(np.sum(i2 * (((s_ > 0.5) & (i_ < 0)) | ((s_ <= 0.5) & (i_ > 0)))))
+    reverse_share = (_rv / _sq) if _sq > 0 else 0.0
 
     # ── the datasheet limits, and the verdicts that follow from them ───────
     i_pk_dev = max((per_leg[(b.id, lg.name)]["i_device_peak_A"]
@@ -1404,8 +1580,18 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                         "(uniform SPICE basis; a vendor model is never tuned)")
 
     # ── efficiency ─────────────────────────────────────────────────────────
-    eta_inv = p_ac / (p_ac + p_total) if (p_ac + p_total) > 0 else None
+    # motor: P_ac is the bridge's OUTPUT; generator: its INPUT (what the
+    # machine delivers), and the link receives P_ac - P_loss.
+    if direction == "generator":
+        eta_inv = (p_ac - p_total) / p_ac if p_ac > 0 else None
+    else:
+        eta_inv = p_ac / (p_ac + p_total) if (p_ac + p_total) > 0 else None
     eta_wall = (eta_inv * eta_shaft) if (eta_inv and eta_shaft) else None
+
+    ripple_out = _ripple_block(req, topo=topo, legs_spec=legs_spec,
+                               m_by_bridge=m_by_bridge, m=m, i_leg_3ph=i_leg_3ph,
+                               v_dc=v_dc, f_el=f_el, f_sw=f_sw, pmod=pmod,
+                               lag_deg=lag_deg, sd=sd, warnings=warnings)
 
     # ── the waveform the motor sees ────────────────────────────────────────
     # The PICTURE gets its own, finer grid.  The loss integral does not need
@@ -1556,9 +1742,25 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                              for k, v in cp.items()}},
             "iterations": iters, "converged": converged, "tol_K": TOL_K,
         },
-        "dc_link": {k: round(v, 1) for k, v in dc.items()},
+        "dc_link": {**{k: round(v, 1) for k, v in dc.items()},
+                    "power_flow": ("link -> machine" if direction == "motor"
+                                   else "machine -> link")},
+        "power_direction": direction,
+        "conduction_direction": {
+            "reverse_share": round(reverse_share, 4),
+            "forward_share": round(1.0 - reverse_share, 4),
+            "note": ("share of every switch's I^2 carried in the third quadrant "
+                     "(source->drain): with synchronous rectification it is the "
+                     "channel either way, so the loss is unchanged; on an "
+                     "IGBT/diode pair it would be the diode's share"),
+        },
+        "ripple": ripple_out,
         "efficiency": {
             "inverter": None if eta_inv is None else round(eta_inv, 5),
+            "inverter_definition": ("(P_ac - P_loss) / P_ac — generator: the "
+                                    "machine's AC power in, the link's DC out"
+                                    if direction == "generator" else
+                                    "P_ac / (P_ac + P_loss) — motor: DC in, AC out"),
             "shaft": None if eta_shaft is None else round(eta_shaft, 5),
             "wall_to_shaft": None if eta_wall is None else round(eta_wall, 5),
             # WHY it is absent, when it is: never a silent blank — the route
@@ -1600,6 +1802,12 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "modulation_linear_limit": round(m_lin, 4),
             "power_factor": round(pf, 4),
             "load_angle_deg": round(phi_deg, 2),
+            "power_direction": direction,
+            "current_lag_deg": round(lag_deg, 2),
+            "angle_convention": ("consumer (motor) reference arrows: the "
+                                 "fundamental current lags the phase voltage "
+                                 "by phi (motor) or 180 - phi (generator: "
+                                 "P < 0, the machine inductance still draws Q)"),
             "v_dc_V": round(v_dc, 2),
             "v_machine_phase_rms_V": round(v_machine_phase_rms, 1),
             "v_coil_rms_V": round(v_coil_rms, 1),

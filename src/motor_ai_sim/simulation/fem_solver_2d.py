@@ -554,6 +554,65 @@ def frozen_permeability_ldq(p2, Pro, free, A2, f_mag, Pa, Pb, psi_of, th_dq,
     }
 
 
+def frozen_permeability_vsd(p2, Pro, free, A2, f_set, sc_psi, th_dq,
+                            n_branch_per_set):
+    """Six-phase (two 3-phase sets) inductances at ONE rotor position.
+
+    Same frozen-permeability operator K* as :func:`frozen_permeability_ldq`
+    (the ν of THIS converged loaded frame, held fixed), six back-solves — a
+    unit PER-SET PHASE current in each of the six phases — give the full 6x6
+    incremental inductance matrix L6 [H] (per-set phase current → per-set
+    phase flux linkage).  It is then projected on the ORTHONORMAL
+    vector-space decomposition ``inverter.ripple`` uses:
+
+      d, q  the air-gap plane (both sets driven as the machine is driven,
+            at the Park angle of this frame);
+      x-y   the orthogonal complement of d, q and each set's zero sequence —
+            for the in-phase sets that is "set 1 +i, set 2 -i" (the
+            differential, circulating mode).
+
+    Every value is PER SET PHASE, the same reference the ripple model's
+    bridge-phase L_d/L_q take (a set = half the paths: L_d,set = 2 L_d of the
+    3-phase machine).  No filter and no fit: L_xy is Xᵀ·L6·X on the
+    plane, its two principal values reported beside their mean.
+
+    ``f_set[s][ph]`` are the unit-BRANCH sources; a unit set-phase current is
+    ``1/n_branch_per_set`` in each branch; ``sc_psi`` turns A·f into one
+    branch's flux linkage (stack · sectors / n_branch_per_set).
+    """
+    import numpy as _np
+    from motor_ai_sim.winding_sets import vsd_basis as _vb
+    K, _ = p2.Kpw(A2)
+    Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
+    _keys = [(s, ph) for s in (1, 2) for ph in 'ABC']
+    _nb = float(max(1.0, n_branch_per_set))
+
+    def _red(v):
+        return _np.asarray(Pro.T @ v).ravel()[free]
+    X = p2.solve_ff(Kff, _np.column_stack(
+        [_red(f_set[s][ph] / _nb) for s, ph in _keys]))
+    L6 = _np.zeros((6, 6))
+    for j in range(6):
+        A = p2.pad2(Pro, free, X[:, j])
+        for i, (s, ph) in enumerate(_keys):
+            L6[i, j] = sc_psi * float(A @ f_set[s][ph])
+    B = _vb(th_dq, _ipark_dq)
+    ed, eq, XY = B["d"], B["q"], B["xy"]
+    Lxy2 = XY.T @ L6 @ XY
+    Lxy2 = 0.5 * (Lxy2 + Lxy2.T)
+    ev = _np.linalg.eigvalsh(Lxy2)
+    _ref = max(float(_np.max(_np.abs(L6))), 1e-30)
+    return {
+        "Ld_set_H": float(ed @ L6 @ ed), "Lq_set_H": float(eq @ L6 @ eq),
+        "Lxy_H": float(0.5 * (ev[0] + ev[1])),
+        "Lxy_min_H": float(ev[0]), "Lxy_max_H": float(ev[1]),
+        # coupling of the air-gap plane into x-y: ~0 for identical sets
+        "dq_xy_coupling_pct": float(100.0 * _np.max(_np.abs(
+            _np.vstack([ed, eq]) @ L6 @ XY)) / _ref),
+        "reciprocity_pct": float(100.0 * _np.max(_np.abs(L6 - L6.T)) / _ref),
+    }
+
+
 def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
                  geo_override=None, progress_cb=None, connection=None):
     """Magnet flux linkage ψ_PM [Wb, phase] — the d-axis flux at I = 0.
@@ -3477,6 +3536,13 @@ def fem_transient_sliding_band(
                                  # extra linear back-solve triple per sampled
                                  # frame on a matrix the frame already has, and
                                  # nothing else about the run moves.
+    six_phase: Optional[dict] = None,  # SIX-PHASE WINDING (two in-phase 3-phase
+                                 # sets, ``winding_sets.resolve_six_phase``).  None
+                                 # = 3 phases, byte-identical to before.  The sets
+                                 # carry identical currents, so the source is the
+                                 # 3-phase one (proved by column sum, reported);
+                                 # with inc_ldq it also measures L_xy / L_dq per
+                                 # set — see `frozen_permeability_vsd`.
     coil_temp_c: float = 120.0,
     end_winding_factor: float = 0.0,
     geo_override: dict = None,
@@ -5642,6 +5708,67 @@ def fem_transient_sliding_band(
             sb = Basis(mesh_all, _P2E(), elements=np.asarray(idx, int))
             f_coil2[_ph] += asm(_f1, sb) * m_.J_z
 
+    # ── SIX-PHASE WINDING: the same unit sources split by SET ────────────
+    # Every coil tag belongs to one slot, every slot to one set
+    # (``six_phase["slot_set"]``, from winding_sets).  f_set[s][ph] is the
+    # unit-BRANCH-current source of set s's coils of phase ph, so
+    # f_set[1] + f_set[2] == f_coil2 to round-off — measured and reported.
+    _six = dict(six_phase) if isinstance(six_phase, dict) else None
+    f_set2 = None
+    _six_blk: Dict[str, Any] = {}
+    if _six:
+        _slot_set = list(_six.get("slot_set") or [])
+        _pl = getattr(cs, "polys", polys)
+        _clist = (_pl or {}).get("coils", []) if isinstance(_pl, dict) else []
+        _nsl = len(dom.winding_layout)
+        if len(_slot_set) != _nsl:
+            raise ValueError(
+                "six_phase.slot_set has %d entries for a %d-slot winding"
+                % (len(_slot_set), _nsl))
+        f_set2 = {s: {ph: np.zeros(N2) for ph in 'ABC'} for s in (1, 2)}
+        for _ph in ('A', 'B', 'C'):
+            _Iu = {'A': 0.0, 'B': 0.0, 'C': 0.0}; _Iu[_ph] = 1.0
+            _mu = build_materials(_Iu, dom.winding_layout, _pl, 0.0,
+                                  slot_area_m2, n_wires,
+                                  coil_area_m2=_coil_area_meshed)
+            for tag, idx in half["s"]["cells"].items():
+                m_ = _mu.get(int(tag))
+                if m_ is None or m_.J_z == 0.0:
+                    continue
+                _ci = int(tag) - DOM_COIL_BASE
+                _si = (coil_slot_index(_clist[_ci], _nsl)
+                       if 0 <= _ci < len(_clist) else None)
+                if _si is None or _slot_set[_si] not in (1, 2):
+                    raise ValueError("six-phase: coil tag %d has no set" % int(tag))
+                sb = Basis(mesh_all, _P2E(), elements=np.asarray(idx, int))
+                f_set2[_slot_set[_si]][_ph] += asm(_f1, sb) * m_.J_z
+        _sum_err = max(
+            float(np.max(np.abs(f_set2[1][ph] + f_set2[2][ph] - f_coil2[ph])))
+            / max(float(np.max(np.abs(f_coil2[ph]))), 1e-300) for ph in 'ABC')
+        _six_blk = {"split": _six.get("split"), "shift_deg": 0.0,
+                    "phases": 6, "n_parallel": _six.get("n_parallel"),
+                    "set1_paths": _six.get("set1_paths"),
+                    "set2_paths": _six.get("set2_paths"),
+                    "neutrals": _six.get("neutrals"),
+                    "set_connection": _six.get("set_connection"),
+                    "source_sum_residual": _sum_err,
+                    "sets_in_model": sorted(
+                        s for s in (1, 2)
+                        if any(np.any(f_set2[s][ph]) for ph in 'ABC')),
+                    "solve": ("the two sets are in phase and carry the "
+                              "identical branch current: the source IS the "
+                              "3-phase one (f_set1 + f_set2 = f_phase, "
+                              "residual above)")}
+        # The x-y probe drives the sets AGAINST each other.  A sector model
+        # copies its own field into the other sectors, so it can only
+        # represent that if the set pattern repeats with the sector — else
+        # the probe needs the full ring (`measure_six_phase_inductances`).
+        _secl = _nsl // max(int(NS), 1)
+        _six_blk["xy_probe_valid"] = bool(
+            _six_blk["sets_in_model"] == [1, 2]
+            and all(_slot_set[k] == _slot_set[(k + _secl) % _nsl]
+                    for k in range(_nsl)))
+
     # ── per-element base ν + saturable element sets (mesh_all element ids) ─
     nu_base2 = np.empty(n_all_el)
     for _hn, _off in (("s", 0), ("r", nst)):
@@ -6385,6 +6512,8 @@ def fem_transient_sliding_band(
     # cannot depend on anything the loop discovers.  Evenly spaced over the
     # whole reported window; `_INC_LDQ_SAMPLES` says why four.
     _inc_rows: list = []
+    _six_rows: list = []    # six-phase L_xy / L_dq,set probe rows
+    _six_psi: list = []     # (theta_e, psi_set1_A, psi_set2_A) per frame
     _inc_at: set = set()
     # (A converged settle does not know its reported window yet: it picks the
     # probed frames inside that window when the settle stops — see the loop.)
@@ -8276,6 +8405,13 @@ def fem_transient_sliding_band(
         _T2.append(Tq)
         _pa, _pb, _pc = _psi2(A2)
         _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
+        if f_set2 is not None and _six_blk.get("sets_in_model") == [1, 2]:
+            # per-set phase-A flux linkage (one branch of that set) and the
+            # electrical angle it was taken at — the per-set voltage, measured
+            # (not assumed equal) wherever both sets are in the model
+            _six_psi.append((math.radians(theta_eff * pole_pairs),
+                             2.0 * _sc_psi2 * float(A2 @ f_set2[1]['A']),
+                             2.0 * _sc_psi2 * float(A2 @ f_set2[2]['A'])))
         _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
         # The Δt this frame's step was SOLVED with (rotor time on a voltage
         # run, the nominal step otherwise) — the step voltage divides by it.
@@ -8350,6 +8486,18 @@ def fem_transient_sliding_band(
                 _inc_rows.append(_row)
             except Exception as _eil:   # noqa: BLE001 — a diagnostic, never fatal
                 log.debug("incremental Ldq failed at frame %d: %s", k, _eil)
+            if f_set2 is not None and _six_blk.get("xy_probe_valid"):
+                try:
+                    _nbs = max(1.0, float(n_parallel) / 2.0)
+                    _vr = frozen_permeability_vsd(
+                        _p2, Pro, _free2, A2, f_set2,
+                        p.stack_length * NS / _nbs, _th_i, _nbs)
+                    _vr["frame"] = int(k)
+                    _six_rows.append(_vr)
+                except Exception as _eiv:   # noqa: BLE001 — diagnostic
+                    log.warning("six-phase L_xy probe failed at frame %d: %s",
+                                k, _eiv)
+                    _six_blk["xy_probe_error"] = f"{type(_eiv).__name__}: {_eiv}"
         # The MEASUREMENT the source gets on the next frame — the machine's own
         # converged values, before any settling bookkeeping moves them.
         _fb_i_prev = {'A': Ist['A'], 'B': Ist['B'], 'C': Ist['C']}
@@ -10140,6 +10288,72 @@ def fem_transient_sliding_band(
         except Exception as _ei2:   # noqa: BLE001
             _inc = {"inc_ldq_error": f"{type(_ei2).__name__}: {_ei2}"}
 
+    # ── SIX-PHASE: per-set flux / voltage and the VSD inductances ───────────
+    _six_out = None
+    if f_set2 is not None:
+        _six_out = dict(_six_blk)
+        try:
+            if len(_six_psi) >= 3:
+                _th6 = np.array([r[0] for r in _six_psi])
+                _M6 = np.column_stack([np.cos(_th6), np.sin(_th6),
+                                       np.ones_like(_th6)])
+                _w_el = 2.0 * math.pi * float(f_elec)
+                _ps = []
+                for _s in (1, 2):
+                    _y = np.array([r[_s] for r in _six_psi])
+                    _cf = np.linalg.lstsq(_M6, _y, rcond=None)[0]
+                    _amp = float(math.hypot(_cf[0], _cf[1]))
+                    _ps.append({"set": _s, "psi1_A_Wb": round(_amp, 6),
+                                "psi1_angle_deg": round(math.degrees(
+                                    math.atan2(_cf[1], _cf[0])), 2),
+                                "V1_flux_peak_V": round(_w_el * _amp, 2)})
+                _six_out["per_set_flux"] = _ps
+                _six_out["per_set_flux_note"] = (
+                    "fundamental of each set's phase-A flux linkage (one "
+                    "branch); V1_flux = omega * psi1 — the loaded EMF, "
+                    "without the R drop")
+            if _six_rows:
+                def _m6(_k):
+                    return float(np.mean([_r[_k] for _r in _six_rows]))
+
+                def _sp6(_k):
+                    _v = [abs(_r[_k]) for _r in _six_rows]
+                    return float(100.0 * (max(_v) - min(_v))
+                                 / max(np.mean(_v), 1e-30))
+                _ldset = _m6("Ld_set_H")
+                _six_out["inductances"] = {
+                    "Ld_set_mH": round(1e3 * _ldset, 6),
+                    "Lq_set_mH": round(1e3 * _m6("Lq_set_H"), 6),
+                    "Lxy_mH": round(1e3 * _m6("Lxy_H"), 6),
+                    "Lxy_min_mH": round(1e3 * min(_r["Lxy_min_H"] for _r in _six_rows), 6),
+                    "Lxy_max_mH": round(1e3 * max(_r["Lxy_max_H"] for _r in _six_rows), 6),
+                    "Lxy_pct_of_Ld": (round(100.0 * _m6("Lxy_H") / _ldset, 3)
+                                      if abs(_ldset) > 1e-15 else None),
+                    "spread_pct": {"Ld_set": round(_sp6("Ld_set_H"), 2),
+                                   "Lxy": round(_sp6("Lxy_H"), 2)},
+                    "dq_xy_coupling_pct": round(max(
+                        _r["dq_xy_coupling_pct"] for _r in _six_rows), 4),
+                    "reciprocity_pct": round(max(
+                        _r["reciprocity_pct"] for _r in _six_rows), 4),
+                    "samples": len(_six_rows),
+                    "reference": "per SET phase (a set = half the paths); "
+                                 "L_xy % is of the per-set L_d, the ripple "
+                                 "model's bridge-phase reference",
+                    "method": ("frozen permeability at the operating point: "
+                               "the 6x6 incremental L of the two sets "
+                               "(six unit-current back-solves on the loaded "
+                               "frame's frozen ν) projected on the orthonormal "
+                               "VSD — d/q = the air-gap plane, x-y = its "
+                               "complement without the zero sequences"),
+                }
+            elif not _six_blk.get("xy_probe_valid"):
+                _six_out["inductances_note"] = (
+                    "L_xy not measured on this model: the sector does not "
+                    "repeat the set pattern — the full-ring probe "
+                    "(measure_six_phase_inductances) measures it")
+        except Exception as _e6:   # noqa: BLE001 — a result block, never fatal
+            _six_out["error"] = f"{type(_e6).__name__}: {_e6}"
+
     _vw_all_eligible = bool(_T_vw) and len(_T_vw) == len(_T2) and all(
         value is not None for value in _T_vw)
     _vw_mean = (float(np.mean(_T_vw)) if _vw_all_eligible else None)
@@ -10169,6 +10383,7 @@ def fem_transient_sliding_band(
     return {
         "method": "sliding_band_p2", "element_order": 2,
         **({"inc_ldq": _inc} if _inc else {}),
+        **({"six_phase": _six_out} if _six_out is not None else {}),
         # WHICH ELECTRICAL FRAME THIS RUN WAS SOLVED IN.  gamma is measured
         # from the q-axis, and the q-axis is wherever the d-axis calibration
         # put it — so a run whose calibration landed on the wrong sample of
@@ -10724,6 +10939,8 @@ def em_transient_eval(
     inc_ldq: bool = False,           # also measure the incremental (frozen-
                                      # permeability) d-q inductances of the
                                      # point — see frozen_permeability_ldq
+    six_phase: Optional[dict] = None,  # two in-phase 3-phase sets (winding_sets);
+                                     # None = 3 phases, unchanged
     drive: str = "current",          # "current" | "voltage" | "pwm_voltage" | "custom_current"
     v_phase_peak: float = 0.0,
     v_delta_deg: float = 0.0,
@@ -10780,6 +10997,7 @@ def em_transient_eval(
         progress_cb=progress_cb, hi_fidelity=bool(hi_fidelity),
         structured_gap=bool(structured_gap), airgap_macro=bool(airgap_macro),
         frozen_nu=bool(frozen_nu), inc_ldq=bool(inc_ldq),
+        **({} if not six_phase else {"six_phase": dict(six_phase)}),
         drive=str(drive or "current"), v_phase_peak=float(v_phase_peak),
         v_delta_deg=float(v_delta_deg),
         v_bus=float(v_bus), v_bus_real=float(v_bus_real),
@@ -10793,3 +11011,43 @@ def em_transient_eval(
         # B(t) history is complete, which is what the loss map and the coupled
         # eddy J are derived from.
         return_field=bool(return_field))
+
+
+def measure_six_phase_inductances(*, six_phase: dict, I_phase_rms: float,
+                                  gamma_deg: float, n_samples: int = 4,
+                                  **kw) -> Dict[str, Any]:
+    """L_xy and the per-set L_d/L_q of a six-phase winding, on the FULL ring.
+
+    The x-y mode drives the sets against each other; with the owner's default
+    split (set 1 = the first half of the paths) that current pattern does not
+    repeat with any sector, so a sector model cannot represent it.  This is one
+    short magnetostatic sine-current run of the whole machine at the duty's
+    operating point (``I_phase_rms``, ``gamma_deg``, the caller's temperatures
+    and mesh in ``kw``) — ``n_samples`` rotor positions over half an electrical
+    period, every one probed — no eddy, no voltage circuit: the inductance is
+    the frozen-permeability derivative of the loaded magnetostatic field.
+
+    Returns the ``six_phase`` block of that run (``inductances`` + the source
+    split check), plus what was solved.
+    """
+    ns = max(2, int(n_samples))
+    kw = dict(kw)
+    for k in ("eddy", "drive", "inc_ldq", "n_sectors", "return_field",
+              "return_frames", "n_steps_per_period", "n_periods", "six_phase"):
+        kw.pop(k, None)
+    res = em_transient_eval(
+        n_steps_per_period=2 * ns, n_periods=0.5, gamma_deg=float(gamma_deg),
+        I_phase_rms=float(I_phase_rms), n_sectors=-1, inc_ldq=True,
+        drive="current", eddy=False, six_phase=dict(six_phase),
+        sampling_purpose="internal_probe", **kw)
+    blk = dict(res.get("six_phase") or {})
+    blk["probe"] = {"model": "full ring", "frames": ns,
+                    "I_phase_rms_A": float(I_phase_rms),
+                    "gamma_deg": float(gamma_deg),
+                    "picard_converged": bool(res.get("picard_converged", False)),
+                    "T_avg_Nm": res.get("T_avg_Nm")}
+    inc = res.get("inc_ldq") or {}
+    if inc.get("Ld_mH") is not None:
+        blk["probe"]["Ld_machine_mH"] = inc.get("Ld_mH")
+        blk["probe"]["Lq_machine_mH"] = inc.get("Lq_mH")
+    return blk

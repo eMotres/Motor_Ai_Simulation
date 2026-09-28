@@ -52,6 +52,59 @@ def _same_circuit(a: str, b: str) -> bool:
     return core(a) == core(b)
 
 
+def _variants(model: SpiceModel, dp: DoublePulse):
+    """The netlist texts to try, in order: one for ngspice; for LTspice the
+    alternate solver first, then the normal one (see netlist._ltspice_options)."""
+    from . import netlist as _nl
+    if model.compat != "ltspice":
+        return [double_pulse_netlist(model, dp)]
+    out = []
+    for sv in ("alt", "normal"):
+        _nl.LT_SOLVER["solver"] = sv
+        out.append(double_pulse_netlist(model, dp))
+    _nl.LT_SOLVER["solver"] = "alt"
+    return out
+
+
+def _quiescent_ok(r: Dict[str, Any], dp: DoublePulse) -> Optional[str]:
+    """Before the first gate pulse both devices are off and the load current
+    is zero: a run whose operating point carries current there, or does not
+    hold V_DD across the DUT, sits on a spurious DC solution — not data.
+    Returns the reason, or None."""
+    t = np.asarray(r["scale"], float)
+    m = t < 0.9 * dp.timeline()["t_on1"]
+    if not m.any():
+        return None
+    i_lim = 0.05 * dp.i_target + 1.0
+    for nm in ("i(vidl)", "i(vidh)"):
+        if nm in r and float(np.max(np.abs(np.asarray(r[nm])[m]))) > i_lim:
+            return f"{nm} {float(np.max(np.abs(np.asarray(r[nm])[m]))):.3g} A before the first pulse"
+    v = float(np.median(np.asarray(r["v(dl)"])[m]))
+    if abs(v - dp.v_dd) > 0.1 * dp.v_dd:
+        return f"V_DS {v:.4g} V before the first pulse (V_DD {dp.v_dd:g} V)"
+    return None
+
+
+def _simulate(model: SpiceModel, dp: DoublePulse, cir: Path, backend, timeout_s: float):
+    """Write and run ``cir``; for LTspice try each solver variant until one
+    runs AND starts from the physical quiescent state.  Returns (text, r)."""
+    errs = []
+    lt = model.compat == "ltspice"
+    for text in _variants(model, dp):
+        cir.write_text(text, encoding="utf-8")
+        try:
+            r = run_netlist(cir, dp_vectors(model), compat=model.compat, backend=backend,
+                            timeout_s=min(timeout_s, 600.0) if lt else timeout_s)
+        except NgspiceError as exc:
+            errs.append(str(exc).splitlines()[0])
+            continue
+        bad = _quiescent_ok(r, dp) if lt else None
+        if bad is None:
+            return text, r
+        errs.append(f"{cir.name}: spurious operating point — {bad}")
+    raise NgspiceError("; ".join(errs))
+
+
 def dp_name(dp: DoublePulse) -> str:
     """File stem of one run.  A re-timed first pulse (``l_load`` fixed) and a
     transient cut before the second turn-off get their own stems, so every
@@ -89,11 +142,11 @@ def run_double_pulse(model: SpiceModel, dp: DoublePulse, *,
             if (wd / f"{dp_name(cut)}.json").is_file():
                 dp, name = cut, dp_name(cut)     # this point only ever ran cut
         cir = wd / f"{name}.cir"
-        text = double_pulse_netlist(model, dp)
+        texts = _variants(model, dp)
         res_p = wd / f"{name}.json"
         npz_p = wd / f"{name}.npz"
         if (reuse and res_p.is_file() and npz_p.is_file() and cir.is_file()
-                and _same_circuit(cir.read_text(encoding="utf-8"), text)):
+                and any(_same_circuit(cir.read_text(encoding="utf-8"), t) for t in texts)):
             # same circuit, same library: re-extract from the stored waveforms
             # (so a change of the extraction never needs a re-simulation)
             res = json.loads(res_p.read_text(encoding="utf-8"))
@@ -104,10 +157,8 @@ def run_double_pulse(model: SpiceModel, dp: DoublePulse, *,
                 v_gs_on=dp.v_gs_on, v_gs_off=dp.v_gs_off)
             res_p.write_text(json.dumps(res, indent=1, default=float), encoding="utf-8")
         else:
-            cir.write_text(text, encoding="utf-8")
             try:
-                r = run_netlist(cir, dp_vectors(model), compat=model.compat,
-                                backend=backend, timeout_s=timeout_s)
+                text, r = _simulate(model, dp, cir, backend, timeout_s)
             except NgspiceError:
                 if dp.stop_before_second_off:
                     raise
@@ -118,15 +169,13 @@ def run_double_pulse(model: SpiceModel, dp: DoublePulse, *,
                 name = dp_name(dp)
                 cir, res_p, npz_p = (wd / f"{name}.cir", wd / f"{name}.json",
                                      wd / f"{name}.npz")
-                text = double_pulse_netlist(model, dp)
+                texts = _variants(model, dp)
                 if (reuse and res_p.is_file() and npz_p.is_file() and cir.is_file()
-                        and _same_circuit(cir.read_text(encoding="utf-8"), text)):
+                        and any(_same_circuit(cir.read_text(encoding="utf-8"), t) for t in texts)):
                     return run_double_pulse(model, dp, workdir=wd, backend=backend,
                                             reuse=True, timeout_s=timeout_s,
                                             correct_current=correct_current)
-                cir.write_text(text, encoding="utf-8")
-                r = run_netlist(cir, dp_vectors(model), compat=model.compat,
-                                backend=backend, timeout_s=timeout_s)
+                text, r = _simulate(model, dp, cir, backend, timeout_s)
             t_end = float(r["scale"][-1])
             if t_end < 0.999 * dp.timeline()["t_stop"]:
                 raise NgspiceError(f"{cir.name}: transient stopped at {t_end:.3e} s "
@@ -203,6 +252,14 @@ def run_static(model: SpiceModel, *, kind: str, t_j: float, v_gs: float,
         v_pin = r["v(dl)"]
         v_k = r["v(dl)"] - r["v(kl)"] if model.kelvin else v_pin
         drive = "current"
+        if model.compat == "ltspice" and float(np.max(np.abs(v_pin))) > v_max:
+            # LTspice's current-driven DC solve of the 750 V G2 models can
+            # land on a spurious high-voltage branch (~830 V at 33 A, V_GS =
+            # 20 V, 2026-09-28): a device voltage beyond the sweep's own
+            # bound is a non-converged answer, not data — re-solve with the
+            # voltage drive below (nothing is clamped or kept from it)
+            raise NgspiceError(f"{cir.name}: |V| {float(np.max(np.abs(v_pin))):.3g} V "
+                               f"> {v_max:g} V — spurious DC branch")
     except NgspiceError:
         # current drive did not converge: sweep the drain voltage instead and
         # read the current (see netlist.static_netlist, drive="voltage")

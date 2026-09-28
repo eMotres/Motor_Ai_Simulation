@@ -1169,3 +1169,110 @@ EM loop marches (`inverter_nonideal["modulation"]`, route `inv_modulation`).
   fundamental into the pole (0.8 % at 7 carriers) that no winding sees.
 
 Tests: `tests/test_controller_svpwm.py`.
+
+## 11 · Power direction and PWM current ripple / THD (2026-09-28)
+
+### 11.1 Motor | Generator (active rectifier)
+
+* Standalone run: typed (`power_direction`, default `motor`). Machine run: the
+  DUTY's mode (`d_entry.mode`, else the record's `op_mode`); the form cannot
+  override it.
+* Angle convention: consumer (motor) reference arrows everywhere. Motor: the
+  fundamental current lags the phase voltage by phi. Generator: P < 0 and the
+  machine inductance still draws reactive power (Q > 0), so the current lags by
+  180° − phi (`point.current_lag_deg`).
+* Efficiency: motor `P_ac / (P_ac + P_loss)`; generator `(P_ac − P_loss) / P_ac`
+  (P_ac = the machine's AC power into the bridge). `efficiency.inverter_definition`
+  states which.
+* DC link: `i_dc = Σ s·i` on the switching functions — the mean is negative for a
+  generator (`dc_link.power_flow`: machine → link).
+* Losses: unchanged by direction for synchronous-rectifying MOSFETs (the reverse
+  current is in the channel: conduction `<i²>R`, one hard commutation per carrier
+  at `|i|`). `conduction_direction.reverse_share` = the share of I² carried in
+  the third quadrant (≈0.16 motor, ≈0.84 generator at cos phi 0.9) — on an
+  IGBT/diode pair that would be the diode's share. A card whose `technology` is
+  not a MOSFET is REFUSED (`technology_not_modelled`) rather than costed as one.
+
+### 11.2 PWM current ripple and phase-current THD (`inverter/ripple.py`)
+
+* Exact switching instants of the actual modulator (sine / SVPWM / third
+  harmonic, natural or regular-symmetric sampling, each inverter's own carrier
+  with the typed interleave), per carrier ramp; every grid sample is the exact
+  fraction of its interval the leg is high — no quantisation (a point-sampled
+  comparison put ~0.1 V of spurious f1 content into the result, which a pure
+  inductance turns into amperes: ±2 % grid dependence, now < 0.1 %).
+* Window = K whole fundamental periods, K the smallest count that closes the
+  carrier (synchronous: 1; asynchronous ratios are WARNED — sub-harmonics).
+* Orthonormal VSD: αβ (air-gap plane, L_d/L_q solved exactly in the rotor frame,
+  bin by bin, including the ω_e cross terms; R neglected), x-y (dual 3-phase;
+  the orthogonal complement; `L_xy` REQUIRED), zero sequence per neutral
+  (isolated: zero; common: the difference sequence through `L_0`, required).
+  Only the positive-sequence fundamental (dq DC) is removed; stationary DC is
+  R-limited, zeroed and reported if > 0.1 % V_dc.
+* Inductance priority: typed commutating/subtransient L > typed L_d/L_q > the
+  duty's incremental L_d/L_q (star-equivalent in delta), re-referred to one
+  bridge phase by that bridge's V/I ratio. No L → `ripple.status =
+  not_computed` (the loss solve stands). Two inverters without L_xy →
+  `missing_input` + a warning.
+* Outputs: ripple rms (total, αβ, x-y, zero), peak-to-peak, THD = ripple rms /
+  I1 rms, top-12 spectrum of phase a, DC-link capacitor rms with the ripple in
+  the leg currents (shared link, and per inverter), optional THD limit → pass/fail.
+* Ideal switches: the dead-time distortion is NOT in the ripple numbers (it is a
+  current-dependent low-order error that needs the closed current loop).
+
+Validation (`tests/test_inverter_ripple.py`):
+
+| case | model | reference |
+|---|---|---|
+| sine, m 0.3/0.8/1.0, f_sw/f1 = 400 | within 0.5 % | Hava-Kerkman-Lipo / Holtz per-carrier closed form `I = V_dc/(24 L f_sw)·m·sqrt(3/2 − 4√3/π·m + c4·m²)`, c4 = 9/8 |
+| SVPWM, m 0.5/0.9/1.15 | within 0.5 % | same, c4 = 27/16 − 81√3/(64π) |
+| 800 V, SVPWM m 0.9, 750 Hz, 15 kHz, 90 µH, dual 3-ph 30°, isolated, L_xy 20 % | 39.49 A rms total, 10.28 A αβ, 38.13 A x-y, pk-pk 279 A | earlier standalone script: 39.6 / 10.3 (−0.3 %) |
+
+Interleaving 90° on that case: αβ 7.02 A, x-y 53.6 A, total 54.0 A (worse: the
+x-y plane is limited by 18 µH only). Regular-symmetric sampling: 38.3 A.
+
+Report: rows "Power direction", "Phase-current PWM ripple", "Phase-current THD".
+Datasheet: "Controller power direction", "Phase-current PWM ripple (A rms)",
+"Phase-current THD (%)". Saved with the controller settings: `ripple_l_*`,
+`ripple_neutral`, `carrier_interleave_deg`, `thd_limit_pct`.
+
+## 12 · Six-phase winding: two in-phase 3-phase sets (2026-09-28)
+
+Owner decision: the winding option *3 phases | 6 phases (two 3-phase sets)*. The
+phase's PARALLEL paths are split between two sets; each set is star or delta
+(the duty's Y/Δ, both sets alike) and has its own inverter. Both sets lie in
+the same phase belts, so they are **in phase (0°)** — no spatial shift is
+offered (owner, same day).
+
+* Winding block keys (`/api/winding/config`): `phases` 3|6, `set1_paths`
+  ("1,2"; empty = the first half), `set_neutrals` isolated|common. Refused
+  loudly (422) unless the paths split into two identical sets: an even path
+  count ≥ 2, every path a rotated copy of path 1 (the stator cut into
+  n_parallel equal sectors, no coil straddling a cut), set 1 = exactly half.
+  Bookkeeping: `winding_sets.py`, shared by the solver, the Controller and the
+  web.
+* EM solve (`six_phase=`): the per-set unit sources are built from the same
+  coil tags; f_set1 + f_set2 = f_phase is checked (`source_sum_residual`,
+  0 to round-off). Balanced sine currents are identical in both sets, so the
+  solve IS the 3-phase one — pinned: torque and ψ equal to 1e-9
+  (`tests/test_six_phase_winding.py`). Per set: half the phase current, the
+  full phase voltage.
+* **L_xy from the FEM** (`frozen_permeability_vsd`,
+  `measure_six_phase_inductances`): frozen ν of the loaded field at the
+  operating point, six unit per-set-phase back-solves → the 6×6 incremental
+  L, projected on the orthonormal VSD: d/q (air-gap plane, per set phase) and
+  x-y (orthogonal complement without either zero sequence = the sets driven
+  against each other). Full ring (the x-y current does not repeat with a
+  sector), 4 rotor positions over half an electrical period; the route runs it
+  after every six-phase Simulation run and stores `summary.six_phase`
+  (`inductances.Lxy_mH`, `Lxy_pct_of_Ld`, `Ld_set_mH`, spread, reciprocity).
+* Controller: a duty solved six-phase selects `two_3ph_sets` automatically
+  (one inverter per set, 0°, each leg at the set's current); the ripple takes
+  `L_xy = Lxy_pct_of_Ld × L_d,bridge` from the record unless L_xy is typed.
+
+L155 rated (12 s / 10 p, 2P delta, 324.5 A winding, γ 15°, magnet 104.2 °C;
+set 1 = slots 1–6, set 2 = slots 7–12): L_d,set 0.1204 mH = 2.00 × the
+machine's 0.0602 mH; **L_xy 0.1178 mH = 97.9 % of L_d,set** (principal values
+0.106–0.130 mH, rotor spread 0.7 %). The two half-machines barely couple
+(M12 ≈ 1 % of L_set), so a circulating x-y ripple meets almost the full set
+inductance.

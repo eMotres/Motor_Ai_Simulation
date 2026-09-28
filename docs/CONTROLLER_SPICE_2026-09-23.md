@@ -61,8 +61,27 @@ modes translate syntax, they do not decrypt). **Simulator needed: LTspice
 (free, Analog Devices) with the `_LTSpice.lib` variant**, or OrCAD/Cadence
 PSpice, or SIMetrix. KiCad cannot run these parts either. The harness writes
 the same Fig. F circuit as a `.cir`, so the three parts can be run in
-LTspice by hand with the vendor's own LTspice library; nothing in this repo
-does that automatically. Their datasheet curves remain the only source.
+LTspice by hand with the vendor's own LTspice library.
+
+**2026-09-28 — LTspice backend.** `runner.py` now drives LTspice in batch
+mode (`LTspice.exe -b <file>.cir`, the binary `.raw` read back by
+`parse_ltspice_raw`) for any part whose manifest says
+`status: usable_ltspice`; the three 750 V manifests point at the vendor's
+`_LTSpice.lib` (sha256-checked, `.include`d through a byte-identical short
+copy in `_vendor/_ltspice/` — LTspice cannot open the automotive zip's
+>260-character path). Same Fig. F circuit, same windows, same extraction;
+LTspice netlists add `.options plotwinsize=0 numdgt=15` (no waveform
+compression, double `.raw`), ngspice netlists are unchanged. A current-driven
+DC sweep that lands beyond the sweep's own voltage bound (LTspice found a
+spurious ~830 V branch at V_GS = 20 V) is re-solved voltage-driven, never
+kept. `spice_build_all_tables.py --parts IMDQ75R004M2H,IMDQ75R007M2H,AIMDQ75R016M2H --jobs 1 --write`
+builds their `switching_table` + `static_table`: sets 2.3 Ω and 10 Ω
+(both edges), L_σ 15 nH, V_GS 0/18 V, T_j 25 / 125 / 175 °C, I = 0.12 / 0.5
+/ 1.0 / 1.5 × the datasheet test current, V_dc 250 / 400 / 500 V (500 V is
+the datasheet's test bus; 750.4 V would exceed V_DSS = 750 V). Validation
+at each datasheet point (500 V, R_G,ext 1.8 Ω, 15 nH, 0/18 V, 25 °C) is in
+the card's `switching_table.validation`: E_on within 10 %, E_off +29…+35 %
+on all three (model used anyway, owner rule).
 
 **Licence.** The CoolSiC 1200 V library carries Infineon's "MODEL TERMS OF
 USE" in its header: accepted by downloading/using (no click-through step on
@@ -543,9 +562,8 @@ CoolSiC library must be the translated copy — created on first use by
 5. **The realistic driver** for the Controller tab (R_G,on / R_G,off,
    V_GS, L_σ): the 4.7 Ω / 10–20 nH here is an assumption; the web needs the
    inputs of §8 before any of this reaches a user.
-6. **The three 750 V parts** need LTspice (free) with the vendor's
-   `_LTSpice.lib` to be simulated at all; say if that should be set up
-   (it would be a second simulator, not KiCad's).
+6. **The three 750 V parts** — done 2026-09-28 with the LTspice backend
+   (§3, "LTspice backend"); tables in the cards.
 7. **IQE050N08NM5SC card**: re-transcribe from its own datasheet (§2;
    suggested as a separate task).
 8. **IMCQ120R005M2H card** (fixed in this pass): its 175 °C switching blocks

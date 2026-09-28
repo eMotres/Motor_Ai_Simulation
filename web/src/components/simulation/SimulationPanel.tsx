@@ -35,6 +35,7 @@ import SolveProgressStrip from './SolveProgressStrip';
 import CommonProgressStrip from '../common/SolveProgressStrip';
 import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
+import { normalizeSet1Paths, sixPhaseLine, sixPhaseProblem } from './sixPhase';
 import {
   EDDY_DEFAULT_STEPS, RIPPLE_SAMPLES_PER_COGGING_CYCLE, coggingCyclesPerPeriod,
   rippleGradeSteps, adoptSteps, isStepsSource, snapStepsToRing, stepsNote,
@@ -1788,6 +1789,75 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               </Tooltip>
             ))}
           </Box>
+
+          {/* PHASES — 3, or 6 = two in-phase 3-phase sets (owner 2026-09-28):
+              the parallel paths split between the sets, each on its own
+              inverter.  Stored on the winding; refused loudly by the backend
+              when the paths cannot be split. */}
+          <Box sx={{ display: 'flex', gap: 0.75, mb: 0.75, alignItems: 'center' }}>
+            {([3, 6] as const).map(n => {
+              const cur = Number(windCfg?.phases ?? 3);
+              return (
+                <Button key={n} size="small"
+                  variant={cur === n ? 'contained' : 'outlined'}
+                  disabled={isRunning}
+                  onClick={() => {
+                    if (n === 6) {
+                      const prob = sixPhaseProblem(nParallel);
+                      if (prob) { setWindErr(prob); return; }
+                    }
+                    applyWinding({ phases: n });
+                  }}
+                  sx={{ flex: 1, fontSize: 11, fontWeight: 700, py: 0.5, textTransform: 'none',
+                    ...(cur === n ? {} : { color: 'var(--text-3)', borderColor: 'var(--line)' }) }}>
+                  {n === 3 ? '3 phases' : '6 phases (2 sets)'}
+                </Button>
+              );
+            })}
+            <HelpTip title={'6 phases: the parallel paths are split into two 3-phase sets, '
+              + 'each connected star or delta as above and each fed by its own inverter. '
+              + 'The two sets lie in the same phase belts, so they are IN PHASE (0°) and carry '
+              + 'identical currents: torque and flux are those of the 3-phase winding, each set '
+              + 'takes half the phase current at the full phase voltage. Needs an even number '
+              + 'of parallel paths. The run also measures L_xy — the inductance that limits '
+              + 'current circulating between the sets — and the Controller uses it.'} />
+          </Box>
+          {Number(windCfg?.phases ?? 3) === 6 && (
+            <Box sx={{ display: 'flex', gap: 0.75, mb: 0.75, alignItems: 'center' }}>
+              <TextField size="small" label="Set 1 paths" placeholder="first half"
+                defaultValue={windCfg?.set1_paths ?? ''}
+                key={`s1-${windCfg?.set1_paths ?? ''}`}
+                disabled={isRunning}
+                onBlur={(e) => {
+                  const v = normalizeSet1Paths(e.target.value);
+                  if (v === null) { setWindErr('set 1 paths: path numbers, e.g. 1,2'); return; }
+                  if (v !== String(windCfg?.set1_paths ?? '')) applyWinding({ set1_paths: v });
+                }}
+                sx={{ flex: 1 }}
+                InputProps={{ endAdornment: <HelpTip title={'Which parallel paths form set 1 '
+                  + `(1–${nParallel}); set 2 takes the rest. Empty = the first half. Each set `
+                  + 'must hold exactly half of the paths.'} /> }} />
+              {(['isolated', 'common'] as const).map(nz => (
+                <Button key={nz} size="small"
+                  variant={(windCfg?.set_neutrals ?? 'isolated') === nz ? 'contained' : 'outlined'}
+                  disabled={isRunning}
+                  onClick={() => applyWinding({ set_neutrals: nz })}
+                  sx={{ fontSize: 10.5, py: 0.5, textTransform: 'none',
+                    ...((windCfg?.set_neutrals ?? 'isolated') === nz ? {}
+                      : { color: 'var(--text-3)', borderColor: 'var(--line)' }) }}>
+                  {nz === 'isolated' ? 'Neutrals isolated' : 'Neutrals tied'}
+                </Button>
+              ))}
+              <HelpTip title={'Isolated (default): each set has its own star point, so no '
+                + 'zero-sequence current flows between the sets. Tied: one common neutral — '
+                + 'the Controller ripple then needs L_0.'} />
+            </Box>
+          )}
+          {sixPhaseLine(windCfg) && (
+            <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mb: 1 }}>
+              {sixPhaseLine(windCfg)}
+            </Typography>
+          )}
 
           {/* The backend refused the change — one line, the reason it gave. */}
           {windErr && (

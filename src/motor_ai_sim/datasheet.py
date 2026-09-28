@@ -1221,6 +1221,17 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             [((_ctrl(d).get("thermal") or {}).get("t_j_max_c")) for d in duties],
             "the hottest device, with its margin to the datasheet limit in the "
             "report's Controller section", 0)
+        row("Controller power direction",
+            [(("generator" if str(_ctrl(d).get("power_direction")) == "generator"
+               else "motor") if _ctrl(d) else "") for d in duties],
+            "motor = DC link to machine; generator = active rectifier", 0)
+        _rip = [((_ctrl(d).get("ripple") or {}).get("ripple_rms_A")) for d in duties]
+        if any(v is not None for v in _rip):
+            row("Phase-current PWM ripple (A rms)", _rip,
+                "carrier ripple of the phase current, from the modulator", 1)
+            row("Phase-current THD (%)",
+                [((_ctrl(d).get("ripple") or {}).get("thd_pct")) for d in duties],
+                "PWM ripple / fundamental", 2)
         row("DC-link ripple current (A rms)",
             [((_ctrl(d).get("dc_link") or {}).get("i_cap_rms_A")) for d in duties],
             "what the link capacitor carries — computed from the modulator's "

@@ -4070,6 +4070,17 @@ class ControllerPatch(BaseModel):
     cooling: ControllerCoolingSpec = ControllerCoolingSpec()
     mapping: list[ControllerMappingRow] = []
     couple_with_em: bool = False
+    # 2026-09-28: the PWM-ripple inputs (saved with the controller; the
+    # direction of a machine run is the DUTY's, so it is not stored here).
+    ripple_l_d_uH: Optional[float] = None
+    ripple_l_q_uH: Optional[float] = None
+    ripple_l_sub_uH: Optional[float] = None
+    ripple_l_xy_pct: Optional[float] = None
+    ripple_l_xy_uH: Optional[float] = None
+    ripple_l_zero_uH: Optional[float] = None
+    ripple_neutral: Optional[str] = None
+    carrier_interleave_deg: Optional[float] = None
+    thd_limit_pct: Optional[float] = None
 
 
 @router.patch("/config/{die}/{cfg}/controller")
@@ -4104,6 +4115,24 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
         if _v is not None and not (float(_v) >= 0):
             raise HTTPException(422, detail=(
                 f"controller.{_f} must be non-negative; got {_v}"))
+    for _f, _v in (("ripple_l_d_uH", req.ripple_l_d_uH),
+                   ("ripple_l_q_uH", req.ripple_l_q_uH),
+                   ("ripple_l_sub_uH", req.ripple_l_sub_uH),
+                   ("ripple_l_xy_pct", req.ripple_l_xy_pct),
+                   ("ripple_l_xy_uH", req.ripple_l_xy_uH),
+                   ("ripple_l_zero_uH", req.ripple_l_zero_uH),
+                   ("thd_limit_pct", req.thd_limit_pct)):
+        if _v is not None and not (float(_v) > 0):
+            raise HTTPException(422, detail=(
+                f"controller.{_f} must be positive; got {_v}"))
+    if req.carrier_interleave_deg is not None and not (
+            0.0 <= float(req.carrier_interleave_deg) <= 180.0):
+        raise HTTPException(422, detail=(
+            "controller.carrier_interleave_deg must be 0-180; got "
+            f"{req.carrier_interleave_deg}"))
+    if req.ripple_neutral is not None and req.ripple_neutral not in ("isolated", "common"):
+        raise HTTPException(422, detail=(
+            f"controller.ripple_neutral must be isolated or common; got {req.ripple_neutral!r}"))
     if req.power_factor is not None and float(req.power_factor) > 1.0:
         raise HTTPException(422, detail=(
             f"controller.power_factor cannot exceed 1; got {req.power_factor}"))
@@ -4146,6 +4175,11 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
         "cooling": req.cooling.model_dump(exclude_none=True),
         "mapping": [m.model_dump() for m in req.mapping],
         "couple_with_em": bool(req.couple_with_em),
+        **{k: getattr(req, k) for k in (
+            "ripple_l_d_uH", "ripple_l_q_uH", "ripple_l_sub_uH",
+            "ripple_l_xy_pct", "ripple_l_xy_uH", "ripple_l_zero_uH",
+            "ripple_neutral", "carrier_interleave_deg", "thd_limit_pct")
+           if getattr(req, k) is not None},
     }
     _save_yaml(_cfg_file(die, cfg), c)
     log.info("family: controller settings on '%s/%s': %s x%s, topology %s",

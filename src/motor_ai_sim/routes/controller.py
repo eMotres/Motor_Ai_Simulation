@@ -305,6 +305,34 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
     mode = ("generator" if str(d_entry.get("mode")
                               or em.get("op_mode") or "").lower().startswith("gen")
            else "motor")
+    # POWER DIRECTION (owner 2026-09-28): a machine run inherits it from the
+    # duty — a generator duty is a generator on an active rectifier.
+    out["power_direction"] = mode
+    src["power_direction"] = ("the duty's mode" if d_entry.get("mode")
+                              else f"{where} (op_mode)" if em.get("op_mode")
+                              else "no mode on the duty: motor")
+    # THE INDUCTANCE the carrier sees: the incremental L_d/L_q of this very
+    # record (the report's guard: only when the incremental block exists — a
+    # pre-2026-09-20 record's Ld_mH is a chord).  Star-equivalent for delta.
+    if em.get("Ld_inc_mH") is not None and em.get("Lq_inc_mH") is not None:
+        kd, kq = (("Ld_eq_star_mH", "Lq_eq_star_mH") if sd == "delta"
+                  else ("Ld_mH", "Lq_mH"))
+        ldv, lqv = _num(em.get(kd)), _num(em.get(kq))
+        if ldv and lqv and ldv > 0 and lqv > 0:
+            out["ripple_ld_mH"], out["ripple_lq_mH"] = ldv, lqv
+            src["ripple_l"] = (f"{where}: incremental {kd}/{kq} "
+                               f"({ldv:.4g}/{lqv:.4g} mH)")
+    # SIX-PHASE WINDING (owner 2026-09-28): the EM record says which paths
+    # are set 1 / set 2 and carries the machine's own L_xy.
+    six = em.get("six_phase") if isinstance(em.get("six_phase"), dict) else None
+    if six and six.get("set1_paths"):
+        out["six_phase"] = six
+        src["six_phase"] = f"{where} (six-phase winding: two in-phase sets)"
+    g = _num(em.get("gamma1_deg"))
+    if g is None:
+        g = _num(em.get("gamma_deg"))
+    if g is not None:
+        out["gamma_deg"] = g
     t2d = _num(em.get("T_em_avg_Nm"))
     p_mech = _num(em.get("P_mech_W"))
     if p_mech is None and t2d is not None and rpm:
@@ -1006,7 +1034,17 @@ _KEY_FIELDS_OPTIONAL = ("switching_source", "r_g_off_ext_ohm", "l_sigma_nH",
                         "pwm_modulation", "winding_n_parallel",
                         # 2026-09-28: standalone runs + stated R_th(j-c)
                         "standalone", "n_inverters", "phase_shift_deg",
-                        "modulation_scheme", "r_th_jc_k_w")
+                        "modulation_scheme", "r_th_jc_k_w",
+                        # 2026-09-28: direction + PWM ripple
+                        "power_direction", "_ripple_ld_mH", "_ripple_lq_mH",
+                        "_gamma_deg",
+                        "ripple_l_d_uH", "ripple_l_q_uH", "ripple_l_sub_uH",
+                        "ripple_l_xy_pct", "ripple_l_xy_uH", "ripple_l_zero_uH",
+                        "ripple_neutral", "carrier_interleave_deg",
+                        "thd_limit_pct", "ripple_sampling",
+                        "ripple_voltage_angle_deg", "ripple_samples_per_carrier",
+                        # 2026-09-28: six-phase winding (sets + its own L_xy)
+                        "_six_slot_set", "_six_lxy_pct")
 
 
 def _history_key(req: Dict[str, Any]) -> str:
@@ -1017,7 +1055,8 @@ def _history_key(req: Dict[str, Any]) -> str:
         if req.get(k) is not None and not (
                 (k == "switching_source" and str(req[k]).lower() == "datasheet")
                 or (k == "pwm_modulation" and str(req[k]).lower() == "sine")
-                or (k == "winding_n_parallel" and int(req[k]) == 1)):
+                or (k == "winding_n_parallel" and int(req[k]) == 1)
+                or (k == "power_direction" and str(req[k]).lower() == "motor")):
             p[k] = _RH.round_floats(req.get(k), 6)
     # 2026-09-27: the default basis moved to the vendor SPICE model for every
     # device with a table (and the datasheet fallback's R_G / V_dc rules were
@@ -1093,6 +1132,51 @@ def _build_request(body: Dict[str, Any],
     # rotor power/loss to balance) — never left for the panel to guess at.
     if req.get("efficiency_shaft") is None and duty.get("efficiency_shaft_note"):
         req["_efficiency_shaft_note"] = duty["efficiency_shaft_note"]
+    # the duty decides the direction of a machine run — never the form
+    req["power_direction"] = duty.get("power_direction") or "motor"
+    sources["power_direction"] = duty_src.get("power_direction",
+                                              "no duty record: motor")
+    if duty.get("ripple_ld_mH") is not None:
+        req["_ripple_ld_mH"] = duty["ripple_ld_mH"]
+        req["_ripple_lq_mH"] = duty["ripple_lq_mH"]
+        req["_ripple_sources"] = {"l": duty_src.get("ripple_l", "the duty record")}
+    if duty.get("gamma_deg") is not None:
+        req["_gamma_deg"] = duty["gamma_deg"]
+    # SIX PHASES: the sets of THIS machine's coils (resolved again from the
+    # live winding with the record's own set-1 paths — the same bookkeeping
+    # the EM solve used) and the record's L_xy.  The topology is then two
+    # 3-phase inverters, one per set (inverter.losses).
+    six = duty.get("six_phase")
+    if isinstance(six, dict) and six.get("set1_paths"):
+        try:
+            from motor_ai_sim.winding_sets import resolve_six_phase
+            _v = mach["values"]
+            _spec = resolve_six_phase(
+                {"phases": 6, "n_parallel": six.get("n_parallel"),
+                 "set1_paths": six.get("set1_paths"),
+                 "set_neutrals": six.get("neutrals")},
+                num_slots=int(_v["num_slots"]), num_poles=int(_v["num_poles"]),
+                single_layer=bool(_v.get("single_layer", True)),
+                layout_str=_v.get("winding_layout"),
+                star_delta=req.get("star_delta") or "star")
+            req["_six_slot_set"] = _spec["slot_set"]
+            sources["topology"] = ("the six-phase winding: two 3-phase "
+                                   "inverters, one per set (automatic)")
+            _ind = six.get("inductances") or {}
+            if _ind.get("Lxy_pct_of_Ld") is not None:
+                req["_six_lxy_pct"] = float(_ind["Lxy_pct_of_Ld"])
+            if not req.get("ripple_neutral") and six.get("neutrals"):
+                req["ripple_neutral"] = six["neutrals"]
+                sources["ripple_neutral"] = "the six-phase winding's neutrals"
+        except Exception as exc:                            # noqa: BLE001
+            raise _refuse(f"six-phase winding: {exc}", ["phases"],
+                          code="bad_winding")
+    for k in RIPPLE_FIELDS:
+        v = body.get(k) if body.get(k) not in (None, "") else ctrl.get(k)
+        if v not in (None, ""):
+            req[k] = v
+            sources[k] = ("the request" if body.get(k) not in (None, "")
+                          else "the saved controller settings")
     if body.get("power_factor") is not None:
         req["power_factor"] = body["power_factor"]
         sources["power_factor"] = "the request"
@@ -1307,6 +1391,13 @@ def _build_request(body: Dict[str, Any],
     return req, sources
 
 
+#: The PWM-ripple inputs (2026-09-28), request > saved settings, both runs.
+RIPPLE_FIELDS = ("ripple_l_d_uH", "ripple_l_q_uH", "ripple_l_sub_uH",
+                 "ripple_l_xy_pct", "ripple_l_xy_uH", "ripple_l_zero_uH",
+                 "ripple_neutral", "carrier_interleave_deg", "thd_limit_pct",
+                 "ripple_sampling", "ripple_voltage_angle_deg",
+                 "ripple_samples_per_carrier")
+
 #: The typed fields a STANDALONE run (no motor, owner 2026-09-28) accepts —
 #: everything the solver needs, nothing resolved from a duty.
 _STANDALONE_FIELDS = (
@@ -1315,7 +1406,8 @@ _STANDALONE_FIELDS = (
     "phase_shift_deg", "modulation_scheme", "dead_time_us", "v_gs_on_V",
     "v_gs_off_V", "r_g_ext_ohm", "r_g_off_ext_ohm", "l_sigma_nH",
     "switching_source", "r_tim_k_w", "r_spread_k_w", "r_th_jc_k_w",
-    "e_oss_policy", "samples_per_carrier", "efficiency_shaft")
+    "e_oss_policy", "samples_per_carrier", "efficiency_shaft",
+    "power_direction") + RIPPLE_FIELDS
 
 
 def _standalone_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:

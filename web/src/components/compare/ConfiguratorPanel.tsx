@@ -42,6 +42,7 @@ import { useWireStock } from '../materials/useWireStock';
 import { stockHint } from '../../lib/wireStock';
 import { useDieContext } from '../common/useDieContext';
 import { getResolvedPoint } from '../controller/controllerApi';
+import { getDraft, patchDraft, draftIdFromUrl, type AgentDraft } from '../../lib/agentDrafts';
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -403,6 +404,70 @@ const ConfiguratorPanel: React.FC = () => {
     }
   }, [refId, ref]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── MCP Stage 3: an AGENT DRAFT as a simplified machine ──────────────────
+  // …/?tab=configure&design=d-… (or Motors → Agent drafts → Configure) shows a
+  // banner; nothing changes until the engineer clicks Open, and even then only
+  // this client-side tuner moves — the server's open machine is not touched.
+  const [draft, setDraft] = useState<AgentDraft | null>(null);
+  const [draftMsg, setDraftMsg] = useState<string | null>(null);
+  const [draftOpen, setDraftOpen] = useState(false);
+  const pendingDraft = React.useRef<Knobs | null>(null);
+  useEffect(() => {
+    const load = (id: string | null) => {
+      if (!id) return;
+      getDraft(id).then((d) => { setDraft(d); setDraftOpen(false); setDraftMsg(null); })
+        .catch((e) => setDraftMsg(`Agent draft ${id}: ${e instanceof Error ? e.message : e}`));
+    };
+    load(draftIdFromUrl());
+    const on = (e: Event) => load((e as CustomEvent<{ id: string }>).detail?.id ?? null);
+    window.addEventListener('agent-draft', on);
+    return () => window.removeEventListener('agent-draft', on);
+  }, []);
+  // declared AFTER the reference effects above so it runs after them and wins
+  useEffect(() => {
+    const k1 = pendingDraft.current;
+    if (!k1) return;
+    pendingDraft.current = null;
+    setKnobs(k1); setRefKnobs(k1);
+  }, [refId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openDraft = () => {
+    if (!draft) return;
+    const pr = draft.params;
+    const target = draft.reference_motor_id
+      ? allRefs.find((r) => r.id === `cat:${draft.reference_motor_id}`) : undefined;
+    const base = target ? baseKnobs(target.passport) : knobs;
+    const n1 = draft.build?.conductors_per_slot;
+    const k1: Knobs = {
+      ...base, L_mm: pr.stack_mm, I_A: pr.current_a_rms, rpm: pr.speed_rpm,
+      nP: pr.parallel_paths ?? base.nP,
+      N: n1 && n1 > 0 ? n1 : Math.max(1, Math.round(base.N * (pr.turns_factor || 1))),
+    };
+    setRanges((r) => ({
+      ...r,
+      L_mm: { min: Math.min(r.L_mm.min, pr.stack_mm * 0.5), max: Math.max(r.L_mm.max, pr.stack_mm * 2) },
+      N: { min: Math.min(r.N.min, Math.max(1, Math.round(k1.N * 0.3))), max: Math.max(r.N.max, Math.ceil(k1.N * 2)) },
+      I_A: { ...r.I_A, max: Math.max(r.I_A.max, pr.current_a_rms * 1.5) },
+      rpm: { ...r.rpm, max: Math.max(r.rpm.max, pr.speed_rpm * 1.5) },
+    }));
+    if (target && target.id !== refId) {
+      pendingDraft.current = k1; skipReset.current = true; setRefId(target.id);
+    } else { setKnobs(k1); setRefKnobs(k1); }
+    setDraftOpen(true);
+    setDraftMsg(target ? null : 'No passport for this machine yet — the tuner scales the current reference; run simulate for the FEM answer.');
+  };
+  const saveDraft = async () => {
+    if (!draft) return;
+    const n0 = draft.build?.base_conductors_per_slot;
+    try {
+      const d = await patchDraft(draft.design_id, {
+        stack_mm: knobs.L_mm, current_a_rms: knobs.I_A, speed_rpm: knobs.rpm,
+        parallel_paths: knobs.nP,
+        ...(n0 && n0 > 0 ? { turns_factor: knobs.N / n0 } : {}),
+      });
+      setDraft(d); setDraftMsg('Saved to the draft (its FEM results were cleared — simulate again).');
+    } catch (e) { setDraftMsg(e instanceof Error ? e.message : String(e)); }
+  };
+
   // battery the user runs the motor from (persisted; snapshotted into each saved config)
   const [battery, setBattery] = useState<Battery>(() => {
     try { const r = localStorage.getItem('configurator.battery.v1'); if (r) { const b = JSON.parse(r); if (b?.type) return b; } } catch { /* ignore */ }
@@ -581,6 +646,27 @@ const ConfiguratorPanel: React.FC = () => {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel-2)', overflow: 'auto' }}>
+      {(draft || draftMsg) && (
+        <Alert severity={draft ? 'info' : 'warning'} sx={{ m: 1, fontSize: 12 }}
+          onClose={() => { setDraft(null); setDraftMsg(null); }}
+          action={draft ? (
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              {!draftOpen
+                ? <Button size="small" onClick={openDraft}>Open</Button>
+                : <Button size="small" onClick={() => { void saveDraft(); }}>Save to draft</Button>}
+            </Box>) : undefined}>
+          {draft && (
+            <>
+              🤖 Agent draft <b>{draft.name}</b> by {draft.created_by.client_name} — from{' '}
+              {draft.starting_point.die} / {draft.starting_point.config}: L {fmt(draft.params.stack_mm, 1)} mm,
+              {' '}{fmt(draft.params.current_a_rms, 1)} A, {fmt(draft.params.speed_rpm, 0)} rpm
+              {draft.params.connection ? `, ${draft.params.connection}` : ''}.
+              {!draftOpen && ' Open loads it into this tuner only — your open machine stays as it is.'}
+            </>
+          )}
+          {draftMsg && <Box sx={{ mt: draft ? 0.5 : 0 }}>{draftMsg}</Box>}
+        </Alert>
+      )}
       {/* Header — NO reference picker (user 2026-08-25 "выкинь это меню"):
           the Configurator always mirrors the LOADED motor; the name shown is
           the matched passport's. */}

@@ -1,4 +1,5 @@
-"""The MCP server at ``/mcp`` (Stage 1: read-only).  docs/MCP_2026-09-28.md.
+"""The MCP server at ``/mcp`` (Stage 1 read-only, Stage 2 OAuth, Stage 3 drafts
++ simulations through the job queue).  docs/MCP_2026-09-28.md.
 
 Official MCP Python SDK (``mcp``), streamable-HTTP transport, STATELESS with
 plain JSON responses: every POST is one self-contained JSON-RPC exchange, so
@@ -24,7 +25,7 @@ from typing import Annotated, Any, Dict, Optional
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp_types import ToolAnnotations
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from motor_ai_sim import agent_keys as _keys
 from motor_ai_sim import mcp_tools as _t
@@ -40,7 +41,18 @@ TOOL_SCOPES: Dict[str, str] = {
     "list_machines": "machines:read",
     "get_machine_performance": "machines:read",
     "check_fit": "machines:read",
+    # Stage 3 — drafts and simulations (docs/MCP_2026-09-28.md "Stage 3")
+    "start_design": "designs:write",
+    "get_design": "machines:read",
+    "simulate": "simulate",
+    "get_job": "simulate",
+    "get_design_result": "machines:read",
+    "open_in_configure": "machines:read",
 }
+
+#: Stage-3 tools that change something (a draft, a queued job) — every other
+#: tool carries ``readOnlyHint: true``.
+WRITE_TOOLS = frozenset({"start_design", "simulate"})
 
 _server = None
 _http_app = None
@@ -58,10 +70,13 @@ def _run(fn, ctx, *args):
     """Call a tool body as the key's owner; a caller mistake becomes a tool
     error the agent can read (anything else stays a generic crash)."""
     from mcp.server.mcpserver.exceptions import ToolError as _SdkToolError
+    from motor_ai_sim import agent_designs as _ad
     try:
         return fn(_principal_from(ctx), *args)
-    except _t.ToolError as e:
+    except (_t.ToolError, _ad.DesignError) as e:
         raise _SdkToolError(str(e)) from e
+    except _ad.QuotaExceeded as e:
+        raise _SdkToolError(f"{e}; retry after {e.retry_after} s") from e
 
 
 def build_server():
@@ -69,10 +84,12 @@ def build_server():
     srv = MCPServer(
         name="emotres",
         title="eMotres motor catalog",
-        instructions=("Read-only access to eMotres electric-machine catalog and "
-                      "saved simulation results. Start with list_machines or "
-                      "check_fit; read resource emotres://guide for conventions."),
-        version="stage1",
+        instructions=("eMotres electric-machine catalog, saved simulation results "
+                      "and (with designs:write / simulate) draft designs simulated "
+                      "on the user's own queue. Start with check_fit, or "
+                      "start_design when nothing fits; if an answer says "
+                      "needs_input, ask the engineer. Read emotres://guide."),
+        version="stage3",
     )
     ro = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                          idempotentHint=True, openWorldHint=False)
@@ -138,12 +155,120 @@ def build_server():
                             voltage_v, max_diameter_mm, max_length_mm,
                             max_mass_kg, cooling, limit)
 
+    _register_stage3(srv)
+
     @srv.resource("emotres://guide", name="guide", title="How to use eMotres MCP",
                   mime_type="text/markdown")
     def guide() -> str:
         return _t.GUIDE
 
     return srv
+
+
+class Requirements(BaseModel):
+    """What the engineer asked for.  Leave out what he did not say — the tool
+    answers ``needs_input`` and you ask him; never invent a value."""
+    model_config = ConfigDict(extra="forbid")
+    torque_nm: Optional[float] = Field(None, gt=0, description="shaft torque at rated speed, N*m")
+    power_kw: Optional[float] = Field(None, gt=0, description="shaft power at rated speed, kW (alternative to torque)")
+    speed_rpm: Optional[float] = Field(None, gt=0, description="rated speed, rpm")
+    max_speed_rpm: Optional[float] = Field(None, gt=0, description="maximum speed, rpm (default = rated)")
+    dc_bus_v: Optional[float] = Field(None, gt=0, description="DC bus voltage of the inverter, V")
+    max_outer_diameter_mm: Optional[float] = Field(None, gt=0, description="max stator outer diameter, mm")
+    max_length_mm: Optional[float] = Field(None, gt=0, description="max active (stack) length, mm")
+    max_mass_kg: Optional[float] = Field(None, gt=0, description="max active mass, kg")
+    cooling: Optional[str] = Field(None, description="air | liquid | robotics")
+    duty: Optional[str] = Field(None, description="S1 (continuous) | S2 | S3 | peak")
+    ambient_c: Optional[float] = Field(None, description="ambient / coolant temperature, degC (default 40)")
+    mode: Optional[str] = Field(None, description="motor | generator (default motor)")
+    application: Optional[str] = Field(None, description="free-text application notes")
+
+
+class BaseMachine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    die: str = Field(description="die name from list_machines")
+    config: str = Field(description="configuration name")
+    duty: Optional[str] = Field(None, description="duty name (optional)")
+
+
+_CONVERSATION = (
+    " CONVERSATIONAL PATTERN: when the answer has status 'needs_input', do NOT "
+    "guess — ask the engineer each listed field (the 'why' and the 'options' / "
+    "'range' are written to be read to him), then call again with the complete "
+    "requirements.  status 'no_fit' lists what blocked it: ask which limit may move.")
+
+
+def _register_stage3(srv) -> None:
+    from motor_ai_sim import agent_designs as _ad
+    ro = ToolAnnotations(readOnlyHint=True, destructiveHint=False,
+                         idempotentHint=True, openWorldHint=False)
+    wr = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                         idempotentHint=False, openWorldHint=False)
+
+    @srv.tool(annotations=wr, description=(
+        "Start a DRAFT motor design from requirements (scope designs:write). "
+        "Validates loudly: missing or contradictory essentials (torque or power, "
+        "rated speed, DC bus voltage, cooling, duty) come back as "
+        "status='needs_input' with needs_input=[{field, why, options|range}]." +
+        _CONVERSATION + " Otherwise picks the nearest EXISTING machine you may "
+        "use (no new laminations), scales stack length / turns / parallel paths "
+        "within valid ranges, explains why, and creates a draft in the user's "
+        "workspace marked as yours. Nothing saved or open is changed. Returns "
+        "design_id; next: simulate(design_id, 'em')."))
+    def start_design(
+        requirements: Annotated[Requirements, Field(description="the engineer's requirements")],
+        ctx: Context,
+        base: Annotated[Optional[BaseMachine], Field(description="force this starting machine (explicit addressing)")] = None,
+        name: Annotated[Optional[str], Field(description="draft name")] = None,
+    ) -> Dict[str, Any]:
+        return _run(_ad.start_design, ctx, requirements.model_dump(exclude_none=True),
+                    base.model_dump(exclude_none=True) if base else None, name)
+
+    @srv.tool(annotations=ro, description=(
+        "One draft by design_id: requirements, starting point and why, scaled "
+        "parameters, the analytical estimate, runs and warnings."))
+    def get_design(design_id: Annotated[str, Field(description="d-… from start_design")],
+                   ctx: Context) -> Dict[str, Any]:
+        return _run(_ad.get_design, ctx, design_id)
+
+    @srv.tool(annotations=wr, description=(
+        "Queue a FEM simulation of a draft on the user's own job queue (scope "
+        "simulate; daily quota, 429 when used up). what: em (electromagnetic "
+        "transient) | thermal (one EM pass + one thermal solve) | coupled (EM <-> "
+        "thermal loop to steady temperatures). steps: time steps per electrical "
+        "period (optional). Returns job_id at once; the solve takes minutes — "
+        "poll get_job. Runs in the draft's own sandbox: the user's open machine "
+        "is never touched and his own runs keep their place in the queue."))
+    def simulate(design_id: Annotated[str, Field(description="d-… from start_design")],
+                 what: Annotated[str, Field(description="em | thermal | coupled")],
+                 ctx: Context,
+                 steps: Annotated[Optional[int], Field(ge=12, le=360, description="steps per electrical period")] = None,
+                 ) -> Dict[str, Any]:
+        return _run(_ad.simulate, ctx, design_id, what, steps)
+
+    @srv.tool(annotations=ro, description=(
+        "Status of a queued job: state (queued | running | done | failed | "
+        "cancelled | interrupted), queue position, progress %, ETA, elapsed "
+        "time and the error text — what the web's progress bar shows."))
+    def get_job(job_id: Annotated[str, Field(description="job_id from simulate")],
+                ctx: Context) -> Dict[str, Any]:
+        return _run(_ad.get_job, ctx, job_id)
+
+    @srv.tool(annotations=ro, description=(
+        "Headline results of a draft's finished runs: torque, power, efficiency "
+        "at the shaft, loss split (W), temperatures (degC), limits, mass, and "
+        "whether the requirements are met. Public-datasheet fields only."))
+    def get_design_result(design_id: Annotated[str, Field(description="d-… from start_design")],
+                          ctx: Context) -> Dict[str, Any]:
+        return _run(_ad.get_design_result, ctx, design_id)
+
+    @srv.tool(annotations=ro, description=(
+        "The aerostator.com link that opens the draft in Configure, where the "
+        "engineer tunes length / turns / current / speed interactively. Give it "
+        "to him; his open machine is replaced only if he clicks Open there."))
+    def open_in_configure(design_id: Annotated[str, Field(description="d-… from start_design")],
+                          ctx: Context) -> Dict[str, Any]:
+        return _run(_ad.open_in_configure, ctx, design_id)
 
 
 def get_server():
@@ -265,6 +390,19 @@ class McpGate:
                     m.get("id"), -32029, f"rate limit; retry after {retry} s"),
                     [("retry-after", str(retry))])
                 return
+            if tool == "simulate":
+                # The DAILY simulation quota (Stage 3), counted from the job
+                # queue's own records of this account's agent runs.
+                from motor_ai_sim import agent_designs as _ad
+                ok, retry, used, lim = _ad.check_quota(principal)
+                if not ok:
+                    _keys.audit(principal=principal, method="tools/call", tool=tool,
+                                args=args, status=429, note=f"simulate quota {used}/{lim}")
+                    await _send_json(send, 429, _rpc_error(
+                        m.get("id"), -32029,
+                        f"daily simulation quota reached ({used}/{lim}); "
+                        f"retry after {retry} s"), [("retry-after", str(retry))])
+                    return
             _keys.audit(principal=principal, method="tools/call", tool=tool,
                         args=args, status=200)
 

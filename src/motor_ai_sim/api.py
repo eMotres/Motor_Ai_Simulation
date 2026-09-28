@@ -288,6 +288,10 @@ app.include_router(agent_keys_router)
 # OAuth 2.1 for MCP connectors (Stage 2): /.well-known/*, /oauth/*, /api/oauth/*.
 from motor_ai_sim.routes.oauth import router as oauth_router
 app.include_router(oauth_router)
+# MCP Stage 3: the owner's view of his agents' DRAFT machines (Motors tab,
+# Configure) — /api/agent_designs.
+from motor_ai_sim.routes.agent_designs import router as agent_designs_router
+app.include_router(agent_designs_router)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

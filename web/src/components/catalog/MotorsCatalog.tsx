@@ -15,6 +15,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Typography, Button } from '@mui/material';
 import FamilyCatalog from './FamilyCatalog';
 import MyMotorsPanel from './MyMotorsPanel';
+import AgentWorkPanel from './AgentWorkPanel';
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
@@ -122,6 +123,9 @@ const MotorsCatalog: React.FC = () => {
       {/* The signed-in user's private space — above the shared catalog.
           Renders nothing while empty. */}
       <MyMotorsPanel />
+      {/* MCP Stage 3: drafts the user's AI agents created + the job queue
+          (agent runs badged, Stop).  Renders nothing while empty. */}
+      <AgentWorkPanel />
 
       {diams.length === 0 && (
         <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>

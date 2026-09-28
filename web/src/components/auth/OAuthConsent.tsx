@@ -3,7 +3,7 @@
 // sees the client name + scopes and approves or denies.  The API answers with
 // the client's redirect URL (code or access_denied) and the browser goes there.
 import React, { useEffect, useState } from 'react';
-import { Box, Button, Paper, Typography, Chip, Alert, CircularProgress } from '@mui/material';
+import { Box, Button, Paper, Typography, Chip, Alert, CircularProgress, Checkbox } from '@mui/material';
 import { useAuth } from '../../contexts/AuthContext';
 import { getStoredToken } from '../../lib/localAuth';
 
@@ -12,9 +12,15 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\
 const SCOPE_TEXT: Record<string, string> = {
   'catalog:read': 'Read the materials and dies catalog',
   'machines:read': 'Read your machines and their saved results',
+  'designs:write': 'Create draft machines in your workspace (never your saved motors or open machine)',
+  simulate: 'Queue simulations of those drafts in your job queue (daily quota)',
 };
+const WRITE_SCOPES = ['designs:write', 'simulate'];
 
-interface Req { client_name: string; client_uri?: string | null; redirect_host: string; scopes: string[]; account: string }
+interface Req {
+  client_name: string; client_uri?: string | null; redirect_host: string; scopes: string[]; account: string;
+  scope_descriptions?: Record<string, string>;
+}
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getStoredToken();
@@ -36,17 +42,21 @@ const OAuthConsent: React.FC = () => {
   const [req, setReq] = useState<Req | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Stage 3: the owner may untick scopes — the grant then carries only these.
+  const [picked, setPicked] = useState<string[]>([]);
 
   useEffect(() => {
     if (!user || !rid) return;
-    call<Req>(encodeURIComponent(rid)).then(setReq).catch((e) => setErr(String(e.message ?? e)));
+    call<Req>(encodeURIComponent(rid))
+      .then((r) => { setReq(r); setPicked(r.scopes); })
+      .catch((e) => setErr(String(e.message ?? e)));
   }, [user, rid]);
 
   const decide = async (approve: boolean) => {
     setBusy(true); setErr(null);
     try {
       const j = await call<{ redirect: string }>(encodeURIComponent(rid), {
-        method: 'POST', body: JSON.stringify({ approve }),
+        method: 'POST', body: JSON.stringify(approve ? { approve, scopes: picked } : { approve }),
       });
       window.location.assign(j.redirect);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); }
@@ -68,21 +78,24 @@ const OAuthConsent: React.FC = () => {
     body = (
       <>
         <Typography sx={{ fontSize: 15, mb: 1 }}>
-          <b>{req.client_name}</b> wants read-only access to your eMotres account <b>{req.account}</b>.
+          <b>{req.client_name}</b> wants{req.scopes.some((s) => WRITE_SCOPES.includes(s)) ? ' ' : ' read-only '}
+          access to your eMotres account <b>{req.account}</b>.
         </Typography>
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)', mb: 1.5 }}>
-          It will return to {req.redirect_host}.
+          It will return to {req.redirect_host}. Untick what you do not want to allow.
         </Typography>
         <Box sx={{ mb: 2 }}>
           {req.scopes.map((s) => (
             <Box key={s} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>
+              <Checkbox size="small" sx={{ p: 0.25 }} checked={picked.includes(s)}
+                onChange={() => setPicked((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]))} />
               <Chip size="small" label={s} sx={{ fontSize: 11 }} />
-              <Typography sx={{ fontSize: 13 }}>{SCOPE_TEXT[s] ?? s}</Typography>
+              <Typography sx={{ fontSize: 13 }}>{req.scope_descriptions?.[s] ?? SCOPE_TEXT[s] ?? s}</Typography>
             </Box>
           ))}
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button variant="contained" disabled={busy} onClick={() => { void decide(true); }}>Allow</Button>
+          <Button variant="contained" disabled={busy || !picked.length} onClick={() => { void decide(true); }}>Allow</Button>
           <Button variant="outlined" disabled={busy} onClick={() => { void decide(false); }}>Deny</Button>
         </Box>
         <Typography sx={{ fontSize: 11, color: 'var(--text-2)', mt: 2 }}>

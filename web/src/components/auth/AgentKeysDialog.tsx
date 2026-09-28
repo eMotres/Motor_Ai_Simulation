@@ -42,6 +42,8 @@ const AgentKeysDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
   const [rows, setRows] = useState<KeyRow[]>([]);
   const [grants, setGrants] = useState<GrantRow[]>([]);
   const [allScopes, setAllScopes] = useState<string[]>([]);
+  const [scopeText, setScopeText] = useState<Record<string, string>>({});
+  const [simPerDay, setSimPerDay] = useState<number | null | undefined>(undefined);
   const [scopes, setScopes] = useState<string[]>([]);
   const [name, setName] = useState('');
   const [fresh, setFresh] = useState<string | null>(null);
@@ -51,11 +53,16 @@ const AgentKeysDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
   const load = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const j = await call<{ keys: KeyRow[]; scopes: string[] }>('');
+      const j = await call<{ keys: KeyRow[]; scopes: string[]; default_scopes?: string[];
+        scope_descriptions?: Record<string, string>;
+        limits?: { simulations_per_day?: number | null } }>('');
       setRows(j.keys); setAllScopes(j.scopes);
+      setScopeText(j.scope_descriptions ?? {});
+      setSimPerDay(j.limits?.simulations_per_day);
       const g = await call<{ grants: GrantRow[] }>('', undefined, '/api/oauth/grants');
       setGrants(g.grants);
-      setScopes((s) => (s.length ? s : j.scopes));
+      // read-only by default: the owner ticks designs:write / simulate himself
+      setScopes((s) => (s.length ? s : (j.default_scopes ?? j.scopes)));
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }, []);
   useEffect(() => { if (open) { setFresh(null); void load(); } }, [open, load]);
@@ -88,7 +95,7 @@ const AgentKeysDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ fontSize: '1rem' }}>
         Access for agents
-        <Tooltip arrow title="Keys let an AI agent (Claude, ChatGPT) read your catalog and saved results through https://aerostator.com/mcp. Read-only.">
+        <Tooltip arrow title="Keys let an AI agent (Claude, ChatGPT) work in your account through https://aerostator.com/mcp: read the catalog and results; with designs:write / simulate it creates DRAFT machines (🤖 in Motors) and queues their runs — never your saved motors or open machine.">
           <Typography component="span" sx={{ ml: 1, fontSize: 12, color: 'var(--text-2)', cursor: 'help' }}>ⓘ</Typography>
         </Tooltip>
       </DialogTitle>
@@ -105,7 +112,8 @@ const AgentKeysDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
             placeholder="e.g. Claude Desktop" sx={{ minWidth: 220 }} />
           {allScopes.map((s) => (
             <FormControlLabel key={s} sx={{ '& .MuiFormControlLabel-label': { fontSize: 12 } }}
-              control={<Checkbox size="small" checked={scopes.includes(s)} onChange={() => toggle(s)} />} label={s} />
+              control={<Checkbox size="small" checked={scopes.includes(s)} onChange={() => toggle(s)} />}
+              label={<Tooltip arrow title={(scopeText[s] ?? s) + (s === 'simulate' ? (simPerDay === null ? ' — unlimited for this account' : simPerDay !== undefined ? ` — ${simPerDay} per day` : '') : '')}><span>{s}</span></Tooltip>} />
           ))}
           <Button size="small" variant="contained" disabled={busy || !scopes.length} onClick={() => { void create(); }}>
             Create key

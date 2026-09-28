@@ -1084,16 +1084,16 @@ async def build_fem_mesh_2d_sliding_band(
     # real mesh different?" gap.  With it, the viewer is byte-for-byte the solved mesh.
     _eff_mesh = float(mesh_size_mm); _eff_gap = float(gap_layers); _feat_floor = None
     try:
-        _feat = min(float(motor.parameters.get("slot_width", 1e9) or 1e9),
-                    float(motor.parameters.get("tooth_width", 1e9) or 1e9))
-        if 0.0 < _feat < 1e8:
+        from motor_ai_sim.simulation.fem_solver_2d import mesh_feature_floor_mm
+        _ff = mesh_feature_floor_mm(motor.parameters, min_size_mm, hi_fidelity)
+        if _ff is not None:
             # feature/2 (÷4 hi-fi) is the quality floor: the coarsest the iron is
             # allowed to be = 2 elements across the smallest tooth/slot.  Per Vadim
             # 2026-07-02 the previous feature/4 was too fine on big motors (450 mm:
             # feature/4 = 3.9 mm forced a 96k-tri mesh); feature/2 ≈ 8 mm there lets
             # it mesh coarse + fast, and the slider still refines down.  Report it so
             # the Mesh tab bounds the slider to it (the actually-meshed size).
-            _feat_floor = max(float(min_size_mm), _feat / (4.0 if hi_fidelity else 2.0))
+            _feat_floor = _ff
             _eff_mesh = min(_eff_mesh, _feat_floor)
     except Exception:
         pass

@@ -56,6 +56,22 @@ from motor_ai_sim.simulation.pardiso_lifetime import (
     own_pardiso as _own_pardiso, pardiso_scope as _pardiso_scope,
 )
 
+
+def mesh_feature_floor_mm(geo: Mapping[str, Any], min_size_mm: float,
+                          hi_fidelity: bool = False) -> Optional[float]:
+    """Coarsest iron element the solver allows = smallest tooth/slot ÷2 (÷4 hi-fi),
+    never below min_size_mm.  ONE definition shared by the transient solve and
+    the Mesh-tab viewer / slider cap (routes.simulation), so the slider range
+    and the solved mesh can never disagree.  None when no feature is known."""
+    try:
+        feat = min(float(geo.get("slot_width", 1e9) or 1e9),
+                   float(geo.get("tooth_width", 1e9) or 1e9))
+    except (TypeError, ValueError):
+        return None
+    if not (0.0 < feat < 1e8):
+        return None
+    return max(float(min_size_mm), feat / (4.0 if hi_fidelity else 2.0))
+
 # ── Lower layers ─────────────────────────────────────────────────────────────
 # Domain tags / mesh flags and the whole geometry->mesh stage now live in their
 # own modules.  Re-exported here rather than merely imported: routes.simulation,
@@ -3821,9 +3837,9 @@ def fem_transient_sliding_band(
     try:
         _feat_mm = min(float(geo.get("slot_width", 1e9) or 1e9),
                        float(geo.get("tooth_width", 1e9) or 1e9))
-        if 0.0 < _feat_mm < 1e8:
-            _elem_per_feat = 4.0 if hi_fidelity else 2.0   # normal: 2 elem/feature ceiling (÷4 hi-fi)
-            _mesh_feat = max(float(min_size_mm), _feat_mm / _elem_per_feat)
+        _elem_per_feat = 4.0 if hi_fidelity else 2.0   # normal: 2 elem/feature ceiling (÷4 hi-fi)
+        _mesh_feat = mesh_feature_floor_mm(geo, min_size_mm, hi_fidelity)
+        if _mesh_feat is not None:
             if _mesh_feat < mesh_size_mm - 1e-9:
                 log.info("mesh auto-refined %.2f → %.2f mm (smallest feature "
                          "%.2f mm ÷ %g) — small-motor resolution",

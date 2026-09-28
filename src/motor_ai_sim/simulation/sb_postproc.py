@@ -213,10 +213,18 @@ def eddy_settle_resid(p_solid: Sequence[float], n_steps_per_period: int,
 #: be ruled out from two means): the residual is then 9x the last change.
 EDDY_PERIOD_Q_CAP = 0.9
 
+#: A body at or above this loss [W] always keeps its OWN-relative settle test,
+#: whatever its share of the machine: watts of shaft loss feed the thermal
+#: model (bearing seat), so the L155 shaft (≈7–15 W beside kW) is never
+#: loosened; the minor-body rule is for milliwatt bodies.
+EDDY_SIGNIFICANT_BODY_W = 1.0
+
 
 def eddy_period_resid(groups: Mapping[str, Sequence[float]],
                       n_per_period: int,
-                      floor_frac: float = 1e-3
+                      floor_frac: float = 1e-3,
+                      machine_extra_W: float = 0.0,
+                      minor_share: float = 0.02,
                       ) -> Tuple[float, Dict[str, Optional[float]], int]:
     """Remaining start-up transient judged on WHOLE ELECTRICAL PERIODS, per body.
 
@@ -240,12 +248,21 @@ def eddy_period_resid(groups: Mapping[str, Sequence[float]],
         one: a multi-mode decay can flatten for one period and steepen again
         (measured on the L155 shaft: −1.10, −0.14, then −0.5 W per period), and
         a single ratio read that flat step as "settled";
-      * two or three periods: q is unknown, the tail is bounded with q = cap
-        (9× the largest of the last changes);
+      * three periods: q = |Δ2/Δ1| MEASURED when below the cap, tail
+        |Δ2|·q/(1−q) (a last change of 0 is a settled body, not 9× the first);
+        otherwise as two periods;
+      * two periods: q is unknown, the tail is bounded with q = cap
+        (9× the last change);
       * fewer: infinite.
-    Each group is judged against its OWN level, floored at ``floor_frac`` of
-    the total solid loss (a milliwatt group beside kilowatts is judged on the
-    watts it could move, not divided noise by noise).  Returns
+    A group carrying at least ``minor_share`` of the MACHINE loss, or at least
+    ``EDDY_SIGNIFICANT_BODY_W`` watts (all groups
+    + ``machine_extra_W``, the copper I²R; iron is not known during the
+    warm-up, which only makes this stricter) is judged against its OWN level,
+    floored at ``floor_frac`` of the group sum — never weakened.  A group
+    below that share is judged by the watts it could still move as a
+    fraction of the machine loss (fix 2026-09-28: an 8 mW shaft beside 5.6 W
+    of copper had run 146 warm-up frames on a 0.004 % own-relative wobble).
+    Stop rule only: no reported value is filtered or smoothed.  Returns
     ``(worst_residual, per_group_residual, n_whole_periods)``.
     """
     N = max(1, int(n_per_period))
@@ -259,13 +276,31 @@ def eddy_period_resid(groups: Mapping[str, Sequence[float]],
     means = {k: [float(np.mean(s[s.size - (j + 1) * N: s.size - j * N]))
                  for j in range(use - 1, -1, -1)] for k, s in series.items()}
     total = sum(abs(m[-1]) for m in means.values())
+    # Machine total for the minor-body rule: the eddy groups plus the copper
+    # I²R the caller knows (a "cu" σE² group, if present, is the same copper,
+    # so the larger of the two counts, never both).
+    cu_grp = abs(means["cu"][-1]) if "cu" in means else 0.0
+    machine = (total - cu_grp) + max(cu_grp, abs(float(machine_extra_W)))
     worst = 0.0
     cap = EDDY_PERIOD_Q_CAP
     for k, m in means.items():
-        ref = max(abs(m[-1]), floor_frac * total, 1e-30)
+        own = abs(m[-1])
+        if (machine > 0.0 and own < minor_share * machine
+                and own < EDDY_SIGNIFICANT_BODY_W):
+            # minor body: judged by the watts it could still move, as a
+            # fraction of the MACHINE's loss (a 8 mW shaft beside 5.6 W).
+            ref = max(machine, 1e-30)
+        else:
+            ref = max(own, floor_frac * total, 1e-30)
         d = [m[i + 1] - m[i] for i in range(len(m) - 1)]
         dmax = max(abs(d[-1]), abs(d[-2]) if len(d) >= 2 else 0.0)
         qq = cap
+        if len(d) == 2 and d[-2] != 0.0:
+            # three periods: the MEASURED ratio of the two changes, when it is
+            # below the cap, bounds the tail from the last change.
+            qm = abs(d[-1] / d[-2])
+            if qm < cap:
+                qq, dmax = qm, abs(d[-1])
         if len(d) >= 3:
             same = (d[-1] * d[-2] > 0.0) and (d[-2] * d[-3] > 0.0)
             q1 = (d[-2] / d[-3]) if d[-3] != 0.0 else 1.0

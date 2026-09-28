@@ -6640,6 +6640,11 @@ def fem_transient_sliding_band(
     # to SB_EDDY_MAX_PERIODS (16), after which the run says it is capped.
     # n_warmup and the measured residual travel out in the result dict.
     _EDDY_SETTLE_TOL = 0.02
+    # copper I²R for the settle gauge's machine total (minor-body rule)
+    try:
+        _warm_cu_W = max(0.0, float(P_cu))
+    except Exception:
+        _warm_cu_W = 0.0
     _eddy_probe = 2 if (eddy and not _vdrive) else 0
     _eddy_cap = int(n_steps_per_period) if (eddy and not _vdrive) else 0
     # Benchmarks / tests: pin the warm-up to a fixed count and take whatever
@@ -7767,7 +7772,8 @@ def fem_transient_sliding_band(
                     # block-width caveat applies); the block gauge only for a
                     # prefix too short for that.
                     _ve_per = int(_c_nspp if _sched_mixed else _v_nspp)
-                    _pres, _pgres, _pnp = _eddy_period_resid(_warm_grp, _ve_per)
+                    _pres, _pgres, _pnp = _eddy_period_resid(
+                        _warm_grp, _ve_per, machine_extra_W=_warm_cu_W)
                     _ve_period_gauge = bool(_pnp >= 2)
                     if _ve_period_gauge:
                         _warm_resid, _warm_tau_s = float(_pres), None
@@ -7866,7 +7872,8 @@ def fem_transient_sliding_band(
                     # pass a probe, because it compares against the settled
                     # level at the same rotor angle.
                     _warm_resid, _warm_gres, _warm_nper = _eddy_period_resid(
-                        _warm_grp, int(n_steps_per_period))
+                        _warm_grp, int(n_steps_per_period),
+                        machine_extra_W=_warm_cu_W)
                     _warm_tau_s = None
                     # Same-angle reference test (warm cache): three probe
                     # samples cannot average away the 6th-harmonic angular

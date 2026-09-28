@@ -46,10 +46,12 @@ def test_geometric_tail_is_extrapolated_from_four_periods():
     q = min(max(d[1] / d[0], d[2] / d[1]), EDDY_PERIOD_Q_CAP)
     want = max(abs(d[2]), abs(d[1])) * q / (1 - q) / abs(m[3])
     assert math.isclose(r, want, rel_tol=1e-12)
-    # three periods: the ratio is not trusted, the cap bounds the tail
+    # three periods: the MEASURED ratio |d2/d1| (< cap here) bounds the tail
     r3, _, _ = eddy_period_resid({"g": s[:120]}, 40)
     m3 = m[:3]
-    want3 = max(abs(m3[2] - m3[1]), abs(m3[1] - m3[0])) * 9.0 / abs(m3[2])
+    q3 = abs((m3[2] - m3[1]) / (m3[1] - m3[0]))
+    assert q3 < EDDY_PERIOD_Q_CAP
+    want3 = abs(m3[2] - m3[1]) * q3 / (1 - q3) / abs(m3[2])
     assert math.isclose(r3, want3, rel_tol=1e-9)
 
 

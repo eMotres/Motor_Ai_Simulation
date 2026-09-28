@@ -265,6 +265,11 @@ _GATED_PREFIX: list[tuple[str, str, str]] = [
     ("PUT",    "/api/sweep/config", "admin"),
     ("POST",   "/api/simulation/run", "admin"),
     ("POST",   "/api/simulation/caches/clear", "admin"),
+    # reference catalogues (bearings, devices): ONE machine-wide library, never
+    # a per-workspace copy — admin even with the layering on (owner 2026-09-28).
+    # Listed BEFORE "/api/catalog" because the first matching prefix wins.
+    ("POST",   "/api/catalog/cards", "admin"),
+    ("POST",   "/api/controller/devices", "admin"),
     ("POST",   "/api/catalog", "admin"),
     ("DELETE", "/api/catalog", "admin"),
     ("POST",   "/api/presets", "admin"),

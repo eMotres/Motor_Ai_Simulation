@@ -22,10 +22,12 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, CircularProgress, MenuItem, Select, TextField, Tooltip,
-  Typography,
+  Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent,
+  MenuItem, Select, TextField, Tooltip, Typography,
 } from '@mui/material';
 
+import CatalogBrowser from '../catalogBrowser/CatalogBrowser';
+import HelpTip from '../common/HelpTip';
 import { useMechanicalStore } from '../../stores/mechanicalStore';
 import {
   bearingsChipLabel, fetchBearingLibrary, fetchBearingLosses,
@@ -80,6 +82,7 @@ const BearingsSection: React.FC<{ rpm: number }> = ({ rpm }) => {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [browse, setBrowse] = useState(false);
 
   const names = useMemo(
     () => Object.keys(lib?.bearings ?? {}).sort(), [lib]);
@@ -279,6 +282,10 @@ const BearingsSection: React.FC<{ rpm: number }> = ({ rpm }) => {
           </Select>
         </Tooltip>
 
+        <Button size="small" variant="outlined" onClick={() => setBrowse(true)}
+          sx={{ textTransform: 'none', fontSize: 11, height: 30 }}>Browse</Button>
+        <HelpTip title="The bearing catalogue: search, sources and provenance per value, compare 2–3 cards, pick A or B." />
+
         <Tooltip title="Grease has no oil bath to churn, so M_drag = 0 — and its base oil is thick, which is what caps the speed. Oil-air is thinner and reaches a far higher n·d_m, at the price of a supply. The card's speed limit is checked against whichever you pick.">
           <Select size="small" value={brg.lubrication}
             onChange={(e) => setField('brg',
@@ -339,6 +346,28 @@ const BearingsSection: React.FC<{ rpm: number }> = ({ rpm }) => {
           </Typography>
         </Tooltip>
       </Box>
+
+      <Dialog open={browse} onClose={() => setBrowse(false)} maxWidth="lg" fullWidth>
+        <DialogContent sx={{ p: 1.5 }}>
+          <CatalogBrowser
+            kinds={['bearing', 'lubricant']}
+            title="Bearing catalogue"
+            help="config/bearings_library.yaml through the common card envelope. Click a part for its sources, per-value provenance and the machines using it. Editing is admin-only, in the repository."
+            selectedId={brg.A}
+            rowAction={(c) => (c.kind !== 'bearing' ? null : (
+              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                <Button size="small" variant={brg.A === c.id ? 'contained' : 'outlined'}
+                  sx={{ minWidth: 28, px: 0.5, fontSize: 11, py: 0 }}
+                  onClick={() => setField('brg', { ...brg, A: c.id })}>A</Button>
+                <Button size="small" variant={(brg.B || brg.A) === c.id && brg.B ? 'contained' : 'outlined'}
+                  sx={{ minWidth: 28, px: 0.5, fontSize: 11, py: 0 }}
+                  onClick={() => setField('brg', { ...brg, B: c.id })}>B</Button>
+              </Box>
+            ))}
+          />
+        </DialogContent>
+        <DialogActions><Button onClick={() => setBrowse(false)}>Close</Button></DialogActions>
+      </Dialog>
 
       {err && <Alert severity="error" sx={{ mb: 1, fontSize: 12 }}>{err}</Alert>}
       {msg && !err && (

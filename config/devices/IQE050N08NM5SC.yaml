@@ -682,3 +682,12 @@ static_table:
     - [0, 175, 75, 0.773295, 0.773295]
     - [0, 175, 80, 0.78161, 0.78161]
 # <<< switching_table
+
+# -- catalog envelope (catalog stage 1, 2026-09-28) ------------------------
+# Identity, status and revision of this card for the common catalogue browser;
+# the loss model ignores it.  Sources and per-field provenance are DERIVED by
+# motor_ai_sim.catalog from datasheet_url / datasheet_file / datasheet_revision,
+# every block's `source` line and each point's `basis` (table | figure).
+catalog:
+  status: active
+  revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added"}

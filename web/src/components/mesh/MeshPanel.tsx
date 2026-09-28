@@ -61,6 +61,7 @@ import FemMeshViewer3D from './FemMeshViewer3D';
 import FemMeshViewer2D from './FemMeshViewer2D';
 import { syncActiveMotor } from '../common/motorSettings';
 import HelpTip from '../common/HelpTip';
+import { meshSliderBounds, meshSliderValue, meshSizeLabel } from '../../lib/meshSliderBounds';
 import {
   adoptMeshConfig, configRetryDelayMs, decideMeshSave, MESH_CONFIG_KEYS,
   type MeshConfigKey, type MeshSettings,
@@ -649,12 +650,9 @@ const MeshPanel: React.FC = () => {
   // floor is real and must bind the slider.
   const _floor = (femMesh?.feature_floor_mm && femMesh.feature_floor_mm > 0)
     ? femMesh.feature_floor_mm : null;
-  const meshMax  = _floor ?? 8;
-  // meshMin must never exceed meshMax: for a floor small enough that
-  // floor/6 rounds under 0.2, clamp the lower bound down to the floor
-  // itself rather than letting min > max collapse the MUI slider.
-  const meshMin  = _floor ? Math.min(meshMax, Math.max(0.05, +(_floor / 6).toFixed(2))) : 1.5;
-  const meshStep = _floor ? Math.max(0.02, +((meshMax - meshMin) / 18).toFixed(2)) : 0.5;
+  // Bounds + chip precision live in lib/meshSliderBounds (node-tested).
+  const meshBounds = meshSliderBounds(_floor);
+  const { min: meshMin, max: meshMax, step: meshStep } = meshBounds;
   // Snap a persisted value sitting above the floor down onto it, so the Chip and
   // the transient solve use the size that is ACTUALLY meshed (not a dead 8 mm).
   // NOT marked dirty: this is the mesher clamping the user's value, not the user
@@ -915,11 +913,11 @@ const MeshPanel: React.FC = () => {
                     <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
-                <Chip label={`${Math.min(meshSizeMm, meshMax).toFixed(1)} mm`} size="small"
+                <Chip label={meshSizeLabel(meshSizeMm, meshBounds)} size="small"
                   sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
               </Box>
               <Slider
-                value={Math.min(meshSizeMm, meshMax)} min={meshMin} max={meshMax} step={meshStep}
+                value={meshSliderValue(meshSizeMm, meshBounds)} min={meshMin} max={meshMax} step={meshStep}
                 disabled={!cfgLoaded}
                 // A user move is the ONLY thing that may be written back to the
                 // server config (2026-09-07 rule) — hence the dirty flag here.
@@ -933,10 +931,12 @@ const MeshPanel: React.FC = () => {
                   "stuck" without this line (2026-09-25 report: "меняю, а ничего
                   не меняется" on the Ø12 CIANO14). */}
               {_floor && (
-                <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mt: 0.25 }}>
-                  Capped at {_floor.toFixed(2)} mm — this motor's smallest tooth/slot
-                  limits the range; every position above it meshes the same.
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
+                  <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
+                    Range {meshMin.toFixed(2)}–{meshMax.toFixed(2)} mm for this motor
+                  </Typography>
+                  <HelpTip title={`The top of the range is 2 elements across the smallest tooth/slot (${_floor.toFixed(2)} mm); coarser would mesh identically, so the slider stops there. Every position in the range changes the mesh and the value is used by the solve. The air gap is resolved separately by the gap layers.`} />
+                </Box>
               )}
             </Box>
 

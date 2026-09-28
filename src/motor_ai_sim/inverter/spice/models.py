@@ -93,9 +93,17 @@ class SpiceModel:
     manifest: Dict[str, Any] = field(default_factory=dict)
 
     @property
+    def simulator(self) -> str:
+        """``"ltspice"`` for an LTspice-encrypted library, else ``"ngspice"``."""
+        return "ltspice" if self.compat == "ltspice" else "ngspice"
+
+    @property
     def include_path(self) -> Path:
-        """What a netlist ``.include``s for ngspice (see
+        """What a netlist ``.include``s: the vendor file itself for LTspice,
+        for ngspice the file or its DDT()-translated copy (see
         :func:`ngspice_lib_for`)."""
+        if self.compat == "ltspice":
+            return ltspice_lib_for(self)
         return ngspice_lib_for(self)
 
     @property
@@ -226,6 +234,29 @@ def ngspice_lib_for(model: "SpiceModel") -> Path:
     return dst
 
 
+def ltspice_lib_for(model: "SpiceModel") -> Path:
+    """The library path LTspice ``.include``s: a BYTE-IDENTICAL copy of the
+    vendor file under a short name (``_vendor/_ltspice/<part>.<sha12>.lib``, git-ignored with ``_vendor``).
+    LTspice cannot open an include whose absolute path exceeds Windows'
+    260-character limit, and the automotive 750 V zip nests the file that
+    deep ("File not found", 2026-09-28).  The copy is checked against the
+    manifest sha256 before use; nothing in it is changed."""
+    src = model.lib_path
+    dst_dir = src.parent
+    for p in src.parents:
+        if p.name == "_vendor":
+            dst_dir = p / "_ltspice"
+            break
+    dst = dst_dir / f"{model.part}.{model.lib_sha256[:12]}.lib"
+    if dst.is_file() and _sha256(dst) == model.lib_sha256:
+        return dst
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(src.read_bytes())
+    if _sha256(dst) != model.lib_sha256:
+        raise SpiceModelError(f"{model.part}: LTspice library copy {dst} does not match")
+    return dst
+
+
 def model_for(part: str, level: Optional[str] = None, *,
               check_sha: bool = True) -> SpiceModel:
     """The usable model of ``part`` at ``level`` (``L1`` isothermal, the
@@ -233,15 +264,20 @@ def model_for(part: str, level: Optional[str] = None, *,
     netlists hold at T_j).  ``None`` = the manifest's ``ngspice.level``
     (the level that runs in ngspice), else ``L1``.
 
+    ``status: usable_ltspice`` — the library is the vendor's LTspice-encrypted
+    variant, run by LTspice in batch mode (``compat = "ltspice"``; the runner
+    picks the LTspice backend from it; ``ltspice.level`` names the level).
+
     Refuses — by name and reason — a part whose manifest says the library is
-    encrypted for another simulator, a library that is not on disk, and a
+    encrypted for a simulator this project does not drive, a library that is not on disk, and a
     library whose sha256 no longer matches the manifest.
     """
     doc = read_manifest(part)
     status = str(doc.get("status") or "").strip()
-    if status != "usable_ngspice":
+    if status not in ("usable_ngspice", "usable_ltspice"):
         why = doc.get("status_reason") or status or "no status"
-        raise SpiceModelError(f"{part}: SPICE model not runnable in ngspice — {why}")
+        raise SpiceModelError(f"{part}: SPICE model not runnable in ngspice/LTspice — {why}")
+    sim_key = "ltspice" if status == "usable_ltspice" else "ngspice"
     lib = doc.get("library") or {}
     rel = lib.get("file")
     if not rel:
@@ -260,7 +296,7 @@ def model_for(part: str, level: Optional[str] = None, *,
             f"manifest's {want[:12]}… — a different model revision")
     mods = doc.get("models") or {}
     if level is None:
-        level = str((doc.get("ngspice") or {}).get("level") or "L1")
+        level = str((doc.get(sim_key) or {}).get("level") or "L1")
     m = mods.get(level)
     if not isinstance(m, dict) or not m.get("subckt"):
         raise SpiceModelError(f"{part}: manifest has no {level} model")
@@ -272,5 +308,6 @@ def model_for(part: str, level: Optional[str] = None, *,
     return SpiceModel(
         part=part, level=level, lib_path=path, lib_sha256=got,
         lib_name=path.name, subckt=str(m["subckt"]), pins=pins,
-        compat=str((doc.get("ngspice") or {}).get("compat") or "psa"),
+        compat=("ltspice" if sim_key == "ltspice" else
+                str((doc.get("ngspice") or {}).get("compat") or "psa")),
         kelvin=kel, thermal_pins=th, manifest=doc)

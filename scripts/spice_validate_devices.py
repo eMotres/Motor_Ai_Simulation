@@ -17,7 +17,9 @@ Results go to ``config/devices/spice/_runs/validation.json`` (git-ignored);
 the netlist of each datasheet-condition double pulse is also copied next to
 the part's manifest (``double_pulse_datasheet_T<T>.cir``, committed — it is
 our circuit, the vendor library is only ``.include``d).  ngspice runs one at
-a time at BelowNormal priority.
+a time at BelowNormal priority; a part whose manifest says ``usable_ltspice``
+(the encrypted CoolSiC 750 V G2 libraries) runs the same circuits in LTspice
+batch mode, also one at a time.
 
 The judgement (owner 2026-09-23): a switching energy more than 15 % off its
 datasheet value marks the model "not trusted" for that quantity, with the
@@ -164,7 +166,7 @@ def main() -> int:
             print(part, "->", exc)
             out_p.write_text(json.dumps(res, indent=1, default=float), encoding="utf-8")
             continue
-        row["status"] = "usable_ngspice"
+        row["status"] = "usable_ltspice" if m.compat == "ltspice" else "usable_ngspice"
         row["basis"] = m.basis
         i_ref = float((doc.get("r_ds_on") or {}).get("measured_at_i_d_A"))
         if not a.no_static:

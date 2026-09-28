@@ -11,7 +11,14 @@ Two back-ends, one contract (a ``.cir`` in, a ``wrdata`` table out):
   ``apt-get install ngspice`` on the server; the compatibility mode goes into
   a ``.spiceinit`` beside the netlist.
 
-Resolution order: ``$MOTOR_AI_SIM_NGSPICE`` (a path to either an executable
+* ``ltspice`` — Analog Devices LTspice in batch mode (``LTspice.exe -b``),
+  for vendor libraries ENCRYPTED for LTspice (the Infineon CoolSiC 750 V G2
+  ``_LTSpice.lib``): the same ``.cir`` text, the binary ``.raw`` read back by
+  :func:`parse_ltspice_raw`.  Chosen automatically for a model whose
+  manifest says ``status: usable_ltspice`` (``compat == "ltspice"``);
+  ``$MOTOR_AI_SIM_LTSPICE`` overrides the install path.
+
+Resolution order (ngspice): ``$MOTOR_AI_SIM_NGSPICE`` (a path to either an executable
 or a shared library), then KiCad's bundled DLL, then ``ngspice`` on PATH.
 
 The child always runs at BELOW-NORMAL priority (Windows) / ``nice 19``
@@ -32,8 +39,9 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
-__all__ = ["NgspiceError", "Backend", "find_backend", "run_netlist",
-           "parse_wrdata"]
+__all__ = ["NgspiceError", "Backend", "find_backend", "find_ltspice",
+           "backend_for_compat", "run_netlist", "parse_wrdata",
+           "parse_ltspice_raw"]
 
 
 class NgspiceError(RuntimeError):
@@ -42,11 +50,13 @@ class NgspiceError(RuntimeError):
 
 @dataclass
 class Backend:
-    kind: str            # "dll" | "cli"
+    kind: str            # "dll" | "cli" | "ltspice"
     path: str
     version: str = ""
 
     def describe(self) -> str:
+        if self.kind == "ltspice":
+            return f"LTspice (batch -b) {self.path}" + (f" [{self.version}]" if self.version else "")
         return f"ngspice ({self.kind}) {self.path}" + (f" [{self.version}]" if self.version else "")
 
 
@@ -74,6 +84,36 @@ def find_backend() -> Backend:
     raise NgspiceError(
         "no ngspice found: install KiCad (bundles ngspice.dll) or ngspice, or "
         "set MOTOR_AI_SIM_NGSPICE to the executable / shared library")
+
+
+def find_ltspice() -> Backend:
+    """LTspice's executable: ``$MOTOR_AI_SIM_LTSPICE``, the per-user install
+    (``%LOCALAPPDATA%\\Programs\\ADI\\LTspice``), then Program Files."""
+    env = os.environ.get("MOTOR_AI_SIM_LTSPICE")
+    cands = [env] if env else []
+    la = os.environ.get("LOCALAPPDATA")
+    if la:
+        cands.append(os.path.join(la, "Programs", "ADI", "LTspice", "LTspice.exe"))
+    for root in (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                 os.environ.get("ProgramW6432", r"C:\Program Files")):
+        cands.append(os.path.join(root, "ADI", "LTspice", "LTspice.exe"))
+    for c in cands:
+        if c and os.path.isfile(c):
+            return Backend("ltspice", c)
+    raise NgspiceError(
+        "no LTspice found: install LTspice (free, Analog Devices) or set "
+        "MOTOR_AI_SIM_LTSPICE to LTspice.exe")
+
+
+def backend_for_compat(compat: str, backend: Optional[Backend] = None) -> Backend:
+    """The backend a model needs: LTspice for an LTspice-encrypted library
+    (``compat == "ltspice"``), else ``backend`` or :func:`find_backend` — so a
+    caller holding the ngspice backend can pass it for every part."""
+    if str(compat).lower() == "ltspice":
+        return backend if (backend is not None and backend.kind == "ltspice") else find_ltspice()
+    if backend is not None and backend.kind == "ltspice":
+        return find_backend()
+    return backend or find_backend()
 
 
 def _low_priority_kwargs() -> Dict[str, object]:
@@ -120,6 +160,153 @@ def parse_wrdata(path: Path, names: Sequence[str]) -> Dict[str, np.ndarray]:
     return out
 
 
+def _read_log(path: Path) -> str:
+    """LTspice writes its .log in UTF-16 LE on some versions, UTF-8 on others."""
+    if not path.is_file():
+        return ""
+    b = path.read_bytes()
+    if b[:2] == b"\xff\xfe" or (len(b) > 3 and b[1:2] == b"\x00" and b[3:4] == b"\x00"):
+        return b.decode("utf-16-le", errors="replace").lstrip("\ufeff")
+    return b.decode("utf-8", errors="replace")
+
+
+def parse_ltspice_raw(path: Path) -> Dict[str, np.ndarray]:
+    """Read an LTspice ``.raw`` (binary or ASCII; UTF-16 LE or 8-bit header).
+
+    Returns ``{"scale": …, <lower-case vector name>: …}``.  Real binary data:
+    the scale is float64 and the other vectors float32 unless the flags say
+    ``double``; complex data (``.ac``): complex128 throughout, returned under
+    the name plus ``real(<name>)`` / ``imag(<name>)``.  A transient scale is
+    ``abs(time)`` (LTspice flags some points with a negative sign).
+    Waveform compression must be off in the netlist (``.options
+    plotwinsize=0``) — this reader does not interpolate.
+    """
+    b = Path(path).read_bytes()
+    utf16 = b[1:2] == b"\x00"
+    enc = "utf-16-le" if utf16 else "latin-1"
+    for mark in ("Binary:\n", "Values:\n"):
+        mb = mark.encode(enc)
+        k = b.find(mb)
+        if k >= 0:
+            header = b[:k].decode(enc, errors="replace")
+            data = b[k + len(mb):]
+            binary = mark.startswith("Binary")
+            break
+    else:
+        raise NgspiceError(f"{path}: not an LTspice raw file")
+    hdr: Dict[str, str] = {}
+    names: List[str] = []
+    in_vars = False
+    for ln in header.replace("\r", "").split("\n"):
+        if in_vars:
+            parts = ln.split()
+            if len(parts) >= 3 and parts[0].isdigit():
+                names.append(parts[1].lower())
+                continue
+            in_vars = False
+        if ln.startswith("Variables:"):
+            in_vars = True
+            continue
+        if ":" in ln:
+            key, _, val = ln.partition(":")
+            hdr[key.strip().lower()] = val.strip()
+    nvar = int(hdr.get("no. variables", len(names)))
+    npts = int(hdr.get("no. points", "0"))
+    flags = hdr.get("flags", "").lower()
+    cplx = "complex" in flags
+    dbl = "double" in flags
+    if len(names) != nvar or nvar < 1:
+        raise NgspiceError(f"{path}: header lists {len(names)} of {nvar} variables")
+    if binary:
+        if cplx:
+            arr = np.frombuffer(data[:npts * nvar * 16], dtype="<c16").reshape(-1, nvar)
+            cols = [arr[:, j] for j in range(nvar)]
+        elif dbl:
+            arr = np.frombuffer(data[:npts * nvar * 8], dtype="<f8").reshape(-1, nvar)
+            cols = [arr[:, j] for j in range(nvar)]
+        else:
+            rec = np.dtype([("s", "<f8")] + [(f"v{j}", "<f4") for j in range(1, nvar)])
+            arr = np.frombuffer(data[:npts * rec.itemsize], dtype=rec)
+            cols = [arr["s"].astype(float)] + [arr[f"v{j}"].astype(float)
+                                               for j in range(1, nvar)]
+    else:
+        toks = data.decode(enc, errors="replace").split()
+        vals: List[complex] = []
+        j = 0
+        while j < len(toks) and len(vals) < npts * nvar:
+            if len(vals) % nvar == 0:
+                j += 1                      # the point index
+            t = toks[j]
+            if "," in t:
+                re_, im_ = t.split(",")[:2]
+                vals.append(complex(float(re_), float(im_)))
+            else:
+                vals.append(complex(float(t), 0.0))
+            j += 1
+        a = np.array(vals).reshape(-1, nvar)
+        cols = [a[:, k] if cplx else a[:, k].real for k in range(nvar)]
+    if len(cols[0]) < npts:
+        raise NgspiceError(f"{path}: truncated ({len(cols[0])} of {npts} points)")
+    out: Dict[str, np.ndarray] = {}
+    sc = cols[0]
+    if cplx:
+        out["scale"] = np.abs(np.real(sc))
+    else:
+        sc = np.asarray(sc, float)
+        out["scale"] = np.abs(sc) if names[0] == "time" else sc
+    for nm, c in zip(names[1:], cols[1:]):
+        if cplx:
+            out[nm] = c
+            out[f"real({nm})"] = np.real(c)
+            out[f"imag({nm})"] = np.imag(c)
+        else:
+            out[nm] = np.asarray(c, float)
+    return out
+
+
+#: LTspice log lines that mean the run is not data (it may still write a
+#: partial .raw and exit 0)
+_LT_FAIL = ("timestep too small", "singular matrix", "simulation aborted",
+            "fatal error", "unknown subcircuit", "could not open include",
+            "unknown parameter", "error:")
+
+
+def _run_ltspice(cir: Path, vectors: Sequence[str], be: Backend, timeout_s: float,
+                 env: Dict[str, str]) -> Dict[str, np.ndarray]:
+    raw = cir.with_suffix(".raw")
+    log = cir.with_suffix(".log")          # LTspice's own log (same stem)
+    for f in (raw, log, cir.with_suffix(".op.raw")):
+        if f.exists():
+            f.unlink()
+    t0 = time.time()
+    proc = subprocess.Popen([be.path, "-b", cir.name], cwd=str(cir.parent),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            env=env, **_low_priority_kwargs())  # type: ignore[arg-type]
+    try:
+        rc = proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise NgspiceError(f"{cir.name}: LTspice timed out after {timeout_s:.0f} s")
+    dt = time.time() - t0
+    txt = _read_log(log)
+    low = txt.lower()
+    bad = [m for m in _LT_FAIL if m in low]
+    if rc != 0 or bad or not raw.is_file():
+        tail = txt.splitlines()[-25:]
+        raise NgspiceError(f"{cir.name}: LTspice failed (rc={rc}, {dt:.1f} s, {bad})\n"
+                           + "\n".join(tail))
+    r = parse_ltspice_raw(raw)
+    out: Dict[str, np.ndarray] = {"scale": r["scale"]}
+    for nm in vectors:
+        k = nm.lower()
+        if k not in r:
+            raise NgspiceError(f"{raw.name}: vector {nm} missing (have {sorted(r)[:24]})")
+        out[nm] = r[k]
+    out["_elapsed_s"] = np.array([dt])
+    return out
+
+
 def run_netlist(cir: Path, vectors: Sequence[str], *, compat: str = "psa",
                 timeout_s: float = 900.0, backend: Optional[Backend] = None,
                 keep_log: bool = True) -> Dict[str, np.ndarray]:
@@ -130,14 +317,16 @@ def run_netlist(cir: Path, vectors: Sequence[str], *, compat: str = "psa",
     log's tail when ngspice fails or writes nothing.
     """
     cir = Path(cir).resolve()
-    be = backend or find_backend()
+    be = backend_for_compat(compat, backend)
+    env = dict(os.environ)
+    env["OMP_NUM_THREADS"] = "1"
+    if be.kind == "ltspice":
+        return _run_ltspice(cir, vectors, be, timeout_s, env)
     data = cir.with_suffix(".data")
     log = cir.with_suffix(".log")
     for f in (data,):
         if f.exists():
             f.unlink()
-    env = dict(os.environ)
-    env["OMP_NUM_THREADS"] = "1"
     vec = " ".join(vectors)
     if be.kind == "dll":
         cmd = [sys.executable, "-m", "motor_ai_sim.inverter.spice._worker",

@@ -179,6 +179,31 @@ def _device(model: SpiceModel, name: str, d: str, g: str, s: str,
     return [model.instance(name, d, g, s, kelvin=k, thermal=nodes)] + extra
 
 
+#: LTspice matrix solver for the next netlist ("alt" or "normal"); the
+#: harness sets it per attempt (see harness._lt_solve)
+LT_SOLVER = {"solver": "alt"}
+
+
+def _ltspice_options(model: SpiceModel) -> List[str]:
+    """LTspice only: no waveform compression (``plotwinsize=0``, every solver
+    point kept — the energies integrate V*I over the stored points) and a
+    double-precision ``.raw`` (``numdgt=15``).  Nothing for ngspice, so the
+    ngspice netlists (the run-cache key) are unchanged."""
+    if getattr(model, "compat", "") != "ltspice":
+        return []
+    # solver=alt: LTspice's alternate (more accurate) matrix solver.  With
+    # the normal solver the 750 V G2 model stalled at t = 1e-13 s ("tolerance
+    # relaxed", 30 min) on IMDQ75R004M2H 400 V / 31 A / 25 degC; alt ran it in
+    # 2.4 s, and on IMDQ75R007M2H / AIMDQ75R016M2H gave the normal solver's
+    # energies to 0.1 %.  On IMDQ75R004M2H at 500 V / 262 A alt's Gmin step
+    # found a spurious operating point (90 kA) — the harness rejects such a
+    # run and retries with the normal solver.  A solver choice, not a circuit
+    # or model change (2026-09-28).
+    s = LT_SOLVER["solver"]
+    return [f"* LTspice: keep every time point, write doubles, {s} solver",
+            ".options plotwinsize=0 numdgt=15" + (" solver=alt" if s == "alt" else "")]
+
+
 def double_pulse_netlist(model: SpiceModel, dp: DoublePulse, *,
                          title: str = "") -> str:
     """The Fig. F circuit for ``model`` at ``dp`` — plain SPICE text."""
@@ -249,6 +274,7 @@ def double_pulse_netlist(model: SpiceModel, dp: DoublePulse, *,
         f".save {' '.join(dp_vectors(model))}",
         f".temp {_g(dp.t_j)}",
         f".options reltol={_g(dp.reltol)} abstol=1e-9 vntol=1e-5 itl4=200",
+        *_ltspice_options(model),
         f".tran {_g(dp.t_max_step)} {_g(tl['t_stop'])} 0 {_g(dp.t_max_step)}",
         ".end",
     ]
@@ -278,6 +304,7 @@ def capacitance_netlist(model: SpiceModel, *, v_ds: float, f_hz: float = 100e3,
         f"VG gl {k} DC 0{ac_g}",
         "RKS kl 0 1e9" if model.kelvin else "* (no Kelvin pin)",
         f".temp {_g(t_j)}",
+        *_ltspice_options(model),
         f".ac lin 1 {_g(f_hz)} {_g(f_hz)}",
         ".end",
     ]
@@ -319,6 +346,7 @@ def static_netlist(model: SpiceModel, *, kind: str, t_j: float,
             "RKS kl 0 1e9" if model.kelvin else "* (no Kelvin pin)",
             "VDS dl 0 DC 0",
             f".temp {_g(t_j)}",
+            *_ltspice_options(model),
             f".dc VDS 0 {_g(vm)} {_g(vs)}",
             ".end"]) + "\n"
     sign = "0 dl" if kind == "rds" else "dl 0"
@@ -333,6 +361,7 @@ def static_netlist(model: SpiceModel, *, kind: str, t_j: float,
         "RKS kl 0 1e9" if model.kelvin else "* (no Kelvin pin)",
         f"ID {sign} 0",
         f".temp {_g(t_j)}",
+        *_ltspice_options(model),
         f".dc ID {_g(i_step)} {_g(i_max)} {_g(i_step)}",
         ".end",
     ]

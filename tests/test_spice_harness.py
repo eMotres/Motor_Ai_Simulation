@@ -1,4 +1,4 @@
-"""SPICE harness (motor_ai_sim.inverter.spice) — parser, windows, table.
+﻿"""SPICE harness (motor_ai_sim.inverter.spice) â€” parser, windows, table.
 
 None of these tests runs ngspice: the parser, the DDT translation, the
 datasheet integration windows and the table interpolation are pure functions
@@ -23,7 +23,7 @@ from motor_ai_sim.inverter.spice.table import (MARK_BEGIN, MARK_END, make_set,
                                                table_energy, write_block)
 
 
-# ── parser ──────────────────────────────────────────────────────────────────
+# â”€â”€ parser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def test_parse_wrdata_singlescale_with_header(tmp_path: Path) -> None:
     p = tmp_path / "x.data"
     p.write_text(" time            v(dl)           i(vidl)\n"
@@ -36,7 +36,7 @@ def test_parse_wrdata_singlescale_with_header(tmp_path: Path) -> None:
     assert r["i(vidl)"][-1] == pytest.approx(180.0)
 
 
-# ── DDT translation (exact algebra, nothing else touched) ───────────────────
+# â”€â”€ DDT translation (exact algebra, nothing else touched) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def test_ddt_translation_replaces_only_ddt_calls() -> None:
     src = (".SUBCKT ZZ A B C\n"
            "G1 A B VALUE = { K1 * DDT(V(A,B)) * F(V(C,B)),\n"
@@ -55,7 +55,7 @@ def test_ddt_translation_replaces_only_ddt_calls() -> None:
     assert "R1 A B 1k" in out and ".ENDS ZZ" in out
 
 
-# ── netlist: pin order follows the vendor subcircuit ────────────────────────
+# â”€â”€ netlist: pin order follows the vendor subcircuit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def test_instance_pin_order_and_kelvin(tmp_path: Path) -> None:
     lib = tmp_path / "x.lib"
     lib.write_text("* no ddt here\n", encoding="utf-8")
@@ -71,9 +71,9 @@ def test_instance_pin_order_and_kelvin(tmp_path: Path) -> None:
     assert "VDRV drv kl PWL(" in txt                           # Kelvin-referenced
 
 
-# ── the datasheet windows (Fig. C / Fig. B) on a synthetic edge ─────────────
+# â”€â”€ the datasheet windows (Fig. C / Fig. B) on a synthetic edge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _trapezoid_off(v_dd=800.0, i0=100.0, tr=20e-9, tf=30e-9):
-    """V_DS ramps 0→V_dd in tr, THEN I_D falls i0→0 in tf (inductive turn-off)."""
+    """V_DS ramps 0â†’V_dd in tr, THEN I_D falls i0â†’0 in tf (inductive turn-off)."""
     t = np.linspace(0, 200e-9, 20001)
     t0 = 50e-9
     v = np.clip((t - t0) / tr, 0, 1) * v_dd
@@ -88,7 +88,7 @@ def test_e_off_window_matches_closed_form() -> None:
     r = extract.edge_off(t, v, i, vgs, v_dd=v_dd, t_cmd=t0 - 20e-9,
                          v_gs_on=18.0, v_gs_off=0.0)
     # window: from V = 10 % to I = 10 %  (Fig. C)
-    # ∫ v·i over the voltage ramp from 10 %: i = i0, v linear 0.1→1
+    # âˆ« vÂ·i over the voltage ramp from 10 %: i = i0, v linear 0.1â†’1
     e_v = i0 * v_dd * tr * (1 - 0.1 ** 2) / 2
     # current fall from 100 % to 10 %: v = v_dd, i linear
     e_i = v_dd * i0 * tf * (1 - 0.1 ** 2) / 2
@@ -128,7 +128,7 @@ def test_e_on_and_recovery_windows() -> None:
 
 def test_load_current_is_the_gap_average_not_a_peak() -> None:
     """The switched current is the freewheeling (load) current in the gap,
-    averaged — a ringing C_sigma current on top must not move it."""
+    averaged â€” a ringing C_sigma current on top must not move it."""
     dp = DoublePulse(v_dd=800, i_target=100)
     tl = dp.timeline()
     t = np.linspace(0, tl["t_stop"], 200001)
@@ -145,7 +145,7 @@ def test_load_current_is_the_gap_average_not_a_peak() -> None:
     assert m["i_off_A"] == m["i_on_A"]
 
 
-# ── the table ───────────────────────────────────────────────────────────────
+# â”€â”€ the table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _fake_run(v, t, i, e_off, e_on, e_fr):
     return {"conditions": {"v_dd": v, "t_j": t},
             "metrics": {"i_off_A": i, "i_on_A": i * 0.99,
@@ -243,7 +243,7 @@ def test_table_single_voltage_node_is_held_and_said() -> None:
     assert any("HELD" in n for n in e["notes"])
 
 
-# ── netlists: no Kelvin pin, thermal pins, voltage-drive statics ─────────────
+# â”€â”€ netlists: no Kelvin pin, thermal pins, voltage-drive statics â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _model(tmp_path: Path, pins, part="Q"):
     lib = tmp_path / "x.lib"
     lib.write_text("* no ddt here\n", encoding="utf-8")
@@ -302,7 +302,7 @@ def test_value_at_interpolates_on_current() -> None:
     assert value_at(r, 15.0) == pytest.approx(0.15)
 
 
-# ── the loss model: optional source, refused by name when absent ────────────
+# â”€â”€ the loss model: optional source, refused by name when absent â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _L155 = dict(num_slots=12, num_poles=10, single_layer=True, star_delta="delta",
              devices_parallel=3, v_dc_V=750.4, i_phase_rms_A=314.3,
              p_ac_W=272_200.0, f_elec_hz=1183.3, f_carrier_hz=24_000.0,
@@ -353,7 +353,7 @@ def test_solve_controller_spice_source(monkeypatch) -> None:
     assert sp["thermal"]["t_j_max_c"] > ds["thermal"]["t_j_max_c"]
 
 
-# ── 2026-09-27: uniform SPICE basis ──────────────────────────────────────────
+# â”€â”€ 2026-09-27: uniform SPICE basis â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def test_table_interpolates_linearly_in_r_g_between_sets() -> None:
     b = _block()                     # sets at 2.3 ohm and 10 ohm (E_on, E_off x2 at 10)
     e23 = table_energy(b, i_d_A=100.0, v_dc_V=800.0, t_j_c=25.0, r_g_on_ohm=2.3)
@@ -434,7 +434,81 @@ def test_default_basis_is_spice_where_a_table_exists() -> None:
     enc = yaml.safe_load((root / "config" / "devices" / "IMDQ75R004M2H.yaml")
                          .read_text(encoding="utf-8"))
     a = DeviceCard(enc).spice_availability()
-    assert not a["has_table"] and a["model_status"] == "encrypted" and "LTspice" in a["needs"]
+    # 750 V G2: LTspice-encrypted library, tables built in LTspice (2026-09-28)
+    assert a["has_table"] and a["has_static"] and a["model_status"] == "usable_ltspice"
+    assert a["needs"] is None and "LTSpice.lib" in a["basis"]
+
+
+# â”€â”€ LTspice backend (the encrypted CoolSiC 750 V G2 libraries) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+def _raw_header(names, npts, flags="real forward", title="t"):
+    lines = [f"Title: {title}", "Date: x", "Plotname: Transient Analysis",
+             f"Flags: {flags}", f"No. Variables: {len(names)}", f"No. Points: {npts}",
+             "Offset: 0", "Command: test", "Variables:"]
+    lines += [f"\t{k}\t{n}\t{'time' if k == 0 else 'voltage'}" for k, n in enumerate(names)]
+    return "\n".join(lines) + "\n"
+
+
+def test_parse_ltspice_raw_binary_utf16(tmp_path: Path) -> None:
+    from motor_ai_sim.inverter.spice.runner import parse_ltspice_raw
+    t = np.array([0.0, 1e-9, 2e-9])
+    v = np.array([1.0, 2.5, -3.0], dtype="<f4")
+    rec = np.zeros(3, dtype=[("s", "<f8"), ("v1", "<f4")])
+    rec["s"], rec["v1"] = [0.0, -1e-9, 2e-9], v          # LTspice's negative-time flag
+    b = (_raw_header(["time", "V(dl)"], 3) + "Binary:\n").encode("utf-16-le") + rec.tobytes()
+    p = tmp_path / "a.raw"
+    p.write_bytes(b)
+    r = parse_ltspice_raw(p)
+    assert np.allclose(r["scale"], t) and np.allclose(r["v(dl)"], v)
+    # numdgt > 7: every column double
+    arr = np.array([[0.0, 1.0], [1e-9, 2.0]], dtype="<f8")
+    b = (_raw_header(["time", "I(Vidl)"], 2, "real forward double") + "Binary:\n"
+         ).encode("utf-16-le") + arr.tobytes()
+    p.write_bytes(b)
+    assert np.allclose(parse_ltspice_raw(p)["i(vidl)"], [1.0, 2.0])
+
+
+def test_parse_ltspice_raw_complex_ac(tmp_path: Path) -> None:
+    from motor_ai_sim.inverter.spice.runner import parse_ltspice_raw
+    arr = np.array([[1e5 + 0j, 0.1 - 2.0j]], dtype="<c16")
+    b = (_raw_header(["frequency", "I(Vds)"], 1, "complex forward log") + "Binary:\n"
+         ).encode("utf-16-le") + arr.tobytes()
+    p = tmp_path / "c.raw"
+    p.write_bytes(b)
+    r = parse_ltspice_raw(p)
+    assert r["scale"][0] == pytest.approx(1e5) and r["imag(i(vds))"][0] == pytest.approx(-2.0)
+
+
+def test_backend_follows_the_model(monkeypatch, tmp_path: Path) -> None:
+    from motor_ai_sim.inverter.spice import runner
+    exe = tmp_path / "LTspice.exe"
+    exe.write_bytes(b"")
+    monkeypatch.setenv("MOTOR_AI_SIM_LTSPICE", str(exe))
+    ng = runner.Backend("dll", "ngspice.dll")
+    assert runner.backend_for_compat("ltspice", ng).kind == "ltspice"
+    assert runner.backend_for_compat("psa", ng) is ng
+
+
+def test_ltspice_netlist_keeps_every_point_ngspice_unchanged(tmp_path: Path) -> None:
+    from dataclasses import replace
+    m = _model(tmp_path, ["drain", "gate", "source", "source_k"])
+    ng = double_pulse_netlist(m, DoublePulse(v_dd=500, i_target=100))
+    assert "plotwinsize" not in ng
+    import hashlib
+    sha = hashlib.sha256(m.lib_path.read_bytes()).hexdigest()
+    lt = double_pulse_netlist(replace(m, compat="ltspice", lib_sha256=sha),
+                              DoublePulse(v_dd=500, i_target=100))
+    assert ".options plotwinsize=0 numdgt=15 solver=alt" in lt
+    # short byte-identical copy for LTspice (260-character include limit)
+    assert f"Q.{sha[:12]}.lib" in lt
+
+
+def test_750v_manifests_run_in_ltspice() -> None:
+    from motor_ai_sim.inverter.spice.models import read_manifest
+    for part in ("IMDQ75R004M2H", "IMDQ75R007M2H", "AIMDQ75R016M2H"):
+        man = read_manifest(part)
+        assert man["status"] == "usable_ltspice"
+        assert man["library"]["file"].endswith("_LTSpice.lib")
+        assert man["ltspice"]["level"] == "L1"
 
 
 def test_solve_on_spice_static_and_deviation_line(monkeypatch) -> None:

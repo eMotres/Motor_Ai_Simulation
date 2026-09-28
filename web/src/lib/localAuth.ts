@@ -165,6 +165,61 @@ export function passwordLogin(email: string, password: string) {
   return post('/api/auth/login', { email, password });
 }
 
+async function postPlain(path: string, body: unknown): Promise<{ message?: string; email?: string }> {
+  const r = await fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as { detail?: string }).detail || `request failed (${r.status})`);
+  return j as { message?: string; email?: string };
+}
+
+/** Self-service sign-up. The answer never says whether the address existed. */
+export function registerAccount(email: string, password: string, name: string) {
+  return postPlain('/api/auth/register', { email, password, name });
+}
+
+/** Consume the mailed confirmation link. */
+export function verifyEmail(token: string) {
+  return postPlain('/api/auth/verify', { token });
+}
+
+/** Ask for a reset link (also how a Google-only account gets a password). */
+export function requestPasswordReset(email: string) {
+  return postPlain('/api/auth/reset/request', { email });
+}
+
+/** Set a new password from a reset link; signs out every session. */
+export function confirmPasswordReset(token: string, password: string) {
+  return postPlain('/api/auth/reset/confirm', { token, password });
+}
+
+export const PASSWORD_MIN_LEN = 10;
+
+/** A mailed link in the address bar: `?verify=…` or `?reset=…`. */
+export function pendingEmailLink(): { kind: 'verify' | 'reset'; token: string } | null {
+  try {
+    const q = new URLSearchParams(window.location.search);
+    const v = q.get('verify');
+    if (v) return { kind: 'verify', token: v };
+    const r = q.get('reset');
+    if (r) return { kind: 'reset', token: r };
+  } catch { /* no window */ }
+  return null;
+}
+
+/** Remove the link token from the address bar (it must not linger in history). */
+export function clearEmailLink(): void {
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.delete('verify');
+    u.searchParams.delete('reset');
+    window.history.replaceState(null, '', u.pathname + u.search + u.hash);
+  } catch { /* ignore */ }
+}
+
 /** GIS ID token (1-hour life) → our 30-day token. */
 export function googleExchange(credential: string) {
   return post('/api/auth/google', { credential });

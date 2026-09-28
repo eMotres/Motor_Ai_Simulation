@@ -39,6 +39,7 @@ dependencies = [
     "gmsh>=4.13",
     "trimesh>=4.0",
     "cadquery>=2.4",
+    "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]

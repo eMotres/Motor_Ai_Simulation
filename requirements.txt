@@ -18,6 +18,9 @@ trimesh==4.11.2
 # Auth: our HS256 session tokens + Google Identity Services ID-token
 # verification (JWKS, RS256). [crypto] pulls cryptography.
 pyjwt[crypto]==2.10.1
+# Password hashing for e-mail/password accounts: argon2id (legacy PBKDF2
+# hashes still verify and are upgraded on the next successful login).
+argon2-cffi>=23.1
 # Anthropic SDK: in-app AI support assistant (/api/support/chat). Reads
 # ANTHROPIC_API_KEY from env (server-side only); absent -> endpoint serves a
 # flagged mock reply. Set ANTHROPIC_SUPPORT_MODEL to override the model.

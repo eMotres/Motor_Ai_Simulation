@@ -11,6 +11,7 @@ import {
   setSessionRole, serverLogout, updateToken, GOOGLE_CLIENT_ID, type SessionUser,
 } from '../lib/localAuth';
 import LoginDialog from '../components/auth/LoginDialog';
+import { pendingEmailLink } from '../lib/localAuth';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -107,7 +108,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Flipped by the first /api/me answer we actually APPLY — never by the
   // store-busy or provisional paths, both of which come back in a moment.
   const [resolved, setResolved] = useState<boolean>(false);
-  const [loginOpen, setLoginOpen] = useState<boolean>(false);
+  // A mailed ?verify= / ?reset= link opens the dialog, which consumes it.
+  const [loginOpen, setLoginOpen] = useState<boolean>(() => pendingEmailLink() !== null);
   // One short amber line when the backend could not READ its own auth store —
   // the session is kept and retried, so the user needs to know only that the
   // pause is ours and temporary.

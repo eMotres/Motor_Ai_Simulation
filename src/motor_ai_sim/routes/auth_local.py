@@ -13,8 +13,14 @@ from a password account below; RIGHTS always come from our registry
 - GET  /api/auth/sessions     — the caller's own sessions
 - POST /api/auth/sessions/{sid}/revoke — sign one of them out
 - POST /api/auth/logout       — revoke the session this request is using
+- POST /api/auth/register     — self-service e-mail/password sign-up (unverified)
+- POST /api/auth/verify       — consume the e-mail confirmation link
+- POST /api/auth/reset/request, /reset/confirm — password reset by link
+- GET  /api/auth/methods      — which sign-in methods the form may offer
+- GET  /api/auth/pending, POST /api/auth/pending/{email}/approve — admin
 
-Login is rate-limited in-memory: 5 failures per email-or-IP → 60 s lockout.
+Login is rate-limited in-memory per account and per IP (auth_email.Limiter);
+register/reset answers never reveal whether an address has an account.
 
 Every sign-in now creates a SERVER-SIDE session (sessions.py) whose sid rides
 in the token, and appends a line to logs/auth_events.jsonl.  Before that, a
@@ -31,6 +37,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
+from motor_ai_sim import auth_email as E
 from motor_ai_sim import sessions as S
 from motor_ai_sim import users as U
 from motor_ai_sim.auth import require_admin, resolve_user, resolve_user_detail
@@ -67,24 +74,20 @@ def _start_session(email: str, *, method: str, request: Optional[Request]) -> st
                    user_agent=ua, path="/api/auth/" + method)
     return token
 
-_FAILS: dict[str, list[float]] = {}
-_FLOCK = threading.Lock()
-_MAX_FAILS, _WINDOW_S, _LOCK_S = 5, 300.0, 60.0
+def _ip(request: Optional[Request]) -> str:
+    """Client IP, proxy-aware the same way the support chat is (X-Real-IP set
+    by our nginx; the rightmost X-Forwarded-For hop otherwise)."""
+    try:
+        from motor_ai_sim.routes.support import client_ip
+        return client_ip(request) or "?"
+    except Exception:                                       # pragma: no cover
+        return request.client.host if request and request.client else "?"
 
 
-def _throttle(key: str) -> None:
-    now = time.time()
-    with _FLOCK:
-        lst = [t for t in _FAILS.get(key, []) if now - t < _WINDOW_S]
-        _FAILS[key] = lst
-        if len(lst) >= _MAX_FAILS and now - lst[-1] < _LOCK_S:
-            raise HTTPException(429, detail=(
-                "too many failed logins — wait a minute and try again"))
-
-
-def _note_fail(key: str) -> None:
-    with _FLOCK:
-        _FAILS.setdefault(key, []).append(time.time())
+def _locked(email: str, ip: str) -> None:
+    if E.LOGIN_ACCOUNT.blocked(email) or E.LOGIN_IP.blocked(ip):
+        raise HTTPException(429, detail=(
+            "too many failed sign-ins — wait 15 minutes and try again"))
 
 
 class LoginReq(BaseModel):
@@ -94,17 +97,206 @@ class LoginReq(BaseModel):
 
 @router.post("/login")
 def login(req: LoginReq, request: Request):
-    ip = (request.client.host if request and request.client else "?")
-    key = f"{req.email.strip().lower()}|{ip}"
-    _throttle(key)
-    u = U.check_login(req.email, req.password)
-    if u is None:
-        _note_fail(key)
+    """Password login.  Rate limited per ACCOUNT (8 failures / 15 min, keyed
+    on the normalized address whether or not it exists — so the lockout itself
+    reveals nothing) and per IP (30 / 15 min)."""
+    ip = _ip(request)
+    email = U._norm(req.email)
+    _locked(email, ip)
+    status, _rec = U.authenticate(email, req.password)
+    if status == "bad":
+        E.LOGIN_ACCOUNT.hit(email)
+        E.LOGIN_IP.hit(ip)
+        S.record_event("login_failed", email=email, reason="bad_password",
+                       ip=ip, path="/api/auth/login")
         # One message for wrong password AND unknown user — no user enumeration.
         raise HTTPException(401, detail="wrong email or password")
-    token = _start_session(req.email, method="password", request=request)
-    log.info("auth: password login ok for %s from %s", req.email.strip().lower(), ip)
-    return {"token": token, "user": U.public_user(req.email)}
+    # Past this point the caller holds the correct password.
+    if status == "unverified":
+        raise HTTPException(403, detail=(
+            "confirm your e-mail first — use the link we sent you"))
+    if status == "disabled":
+        raise HTTPException(403, detail="this account is disabled")
+    E.LOGIN_ACCOUNT.clear(email)
+    token = _start_session(email, method="password", request=request)
+    log.info("auth: password login ok for %s from %s", email, ip)
+    return {"token": token, "user": U.public_user(email)}
+
+
+# ── self-service registration / verification / reset ─────────────────────────
+
+_ACCEPTED = {"ok": True, "message": (
+    "If this address can be used, we sent it a link. Check your inbox.")}
+
+
+def _mail_allowed(email: str, ip: str) -> bool:
+    """Mail-sending endpoints: a flooded IP gets 429 (says nothing about any
+    account); a flooded ADDRESS is silently not mailed again (a 429 there
+    would reveal that the address had been asked about)."""
+    if E.MAIL_IP.blocked(ip):
+        raise HTTPException(429, detail="too many requests — try again later")
+    E.MAIL_IP.hit(ip)
+    if E.MAIL_ACCOUNT.blocked(email):
+        return False
+    E.MAIL_ACCOUNT.hit(email)
+    return True
+
+
+def _send_verification(email: str) -> None:
+    token = U.issue_link_token(email, "verify")
+    subj, body = E.verify_mail(email, token)
+    if not E.send(email, subj, body):
+        U.mark_pending_approval(email, "smtp_not_configured")
+        log.warning("auth: SMTP not configured — verification link for %s "
+                    "(or approve in Admin -> Pending sign-ups): %s",
+                    email, E.link("verify", token))
+
+
+def _valid_email(email: str) -> bool:
+    if not email or len(email) > 254 or email.count("@") != 1:
+        return False
+    if any(c.isspace() for c in email):
+        return False
+    local, dom = email.split("@")
+    return bool(local) and "." in dom and not dom.startswith(".") \
+        and not dom.endswith(".")
+
+
+class RegisterReq(BaseModel):
+    email: str
+    password: str
+    name: str = ""
+
+
+@router.post("/register", status_code=202)
+def register(req: RegisterReq, request: Request):
+    """Create an unverified account and mail the confirmation link.
+
+    The answer is IDENTICAL whether the address was new, pending or already
+    registered — only format and password-policy errors (which depend on the
+    input alone) are reported."""
+    ip = _ip(request)
+    email = U._norm(req.email)
+    if not _valid_email(email):
+        raise HTTPException(422, detail="enter a valid e-mail address")
+    try:
+        U.check_password_policy(req.password, email)
+    except U.PasswordPolicyError as e:
+        raise HTTPException(422, detail=str(e))
+    if not (req.name or "").strip():
+        raise HTTPException(422, detail="enter your name")
+    may_mail = _mail_allowed(email, ip)
+    outcome = U.register_self(email, req.password, req.name.strip())
+    S.record_event("register", email=email, reason=outcome, ip=ip,
+                   path="/api/auth/register")
+    if may_mail:
+        if outcome in ("created", "exists_unverified"):
+            _send_verification(email)
+        else:
+            subj, body = E.exists_mail(email)
+            E.send(email, subj, body)
+    elif outcome == "created":
+        # Throttled address, fresh row: still make it reachable for the admin.
+        U.mark_pending_approval(email, "mail_throttled")
+    return _ACCEPTED
+
+
+class TokenReq(BaseModel):
+    token: str
+
+
+@router.post("/verify")
+def verify_email(req: TokenReq, request: Request):
+    email = U.consume_link_token(req.token, "verify")
+    if not email:
+        raise HTTPException(400, detail=(
+            "this link is invalid, already used or expired — sign up again "
+            "to get a new one"))
+    U.mark_verified(email, by="link")
+    S.record_event("verified", email=email, reason="link", ip=_ip(request),
+                   path="/api/auth/verify")
+    return {"ok": True, "email": email}
+
+
+class EmailReq(BaseModel):
+    email: str
+
+
+@router.post("/reset/request", status_code=202)
+def reset_request(req: EmailReq, request: Request):
+    """Mail a reset link if the account exists.  Same answer either way.
+    Also the way a Google-only account gets a password."""
+    ip = _ip(request)
+    email = U._norm(req.email)
+    if not _valid_email(email):
+        raise HTTPException(422, detail="enter a valid e-mail address")
+    may_mail = _mail_allowed(email, ip)
+    rec = U.get_user(email)
+    if may_mail and rec is not None and not rec.get("disabled"):
+        token = U.issue_link_token(email, "reset")
+        subj, body = E.reset_mail(email, token)
+        if not E.send(email, subj, body):
+            log.warning("auth: SMTP not configured — password-reset link for "
+                        "%s: %s", email, E.link("reset", token))
+        S.record_event("reset_requested", email=email, ip=ip,
+                       path="/api/auth/reset/request")
+    return _ACCEPTED
+
+
+class ResetReq(BaseModel):
+    token: str
+    password: str
+
+
+@router.post("/reset/confirm")
+def reset_confirm(req: ResetReq, request: Request):
+    """Set a new password from a reset link; every session is revoked."""
+    try:
+        U.check_password_policy(req.password)
+    except U.PasswordPolicyError as e:
+        raise HTTPException(422, detail=str(e))
+    email = U.consume_link_token(req.token, "reset")
+    if not email:
+        raise HTTPException(400, detail=(
+            "this link is invalid, already used or expired — ask for a new one"))
+    try:
+        U.reset_password(email, req.password)
+    except U.PasswordPolicyError as e:
+        raise HTTPException(422, detail=str(e))
+    except KeyError:
+        raise HTTPException(400, detail="this link is invalid")
+    n = S.revoke_all(email)
+    E.LOGIN_ACCOUNT.clear(email)
+    S.record_event("password_reset", email=email, reason=f"revoked {n}",
+                   ip=_ip(request), path="/api/auth/reset/confirm")
+    log.info("auth: password reset for %s, %d session(s) revoked", email, n)
+    return {"ok": True, "email": email}
+
+
+@router.get("/methods")
+def auth_methods():
+    """What the login form may offer (no secrets, anonymous)."""
+    from motor_ai_sim.auth import GOOGLE_CLIENT_ID
+    return {"google": bool(GOOGLE_CLIENT_ID), "password": True,
+            "register": True, "mail": E.smtp_configured()}
+
+
+# ── admin: pending accounts ──────────────────────────────────────────────────
+
+@router.get("/pending")
+def pending_list(_admin: dict = Depends(require_admin)):
+    return {"pending": U.list_pending(), "smtp": E.smtp_configured()}
+
+
+@router.post("/pending/{email}/approve")
+def pending_approve(email: str, _admin: dict = Depends(require_admin)):
+    if U.get_user(email) is None:
+        raise HTTPException(404, detail=f"user '{email}' not found")
+    U.mark_verified(email, by="admin")
+    S.record_event("verified", email=U._norm(email), reason="admin",
+                   path="/api/auth/pending/approve")
+    log.info("auth: %s approved by admin %s", email, (_admin or {}).get("email"))
+    return {"ok": True, "user": U.public_user(email)}
 
 
 class GoogleReq(BaseModel):
@@ -130,6 +322,10 @@ def google_login(req: GoogleReq, request: Request):
     tier = _registry_tier(email)
     if tier == "__disabled__":
         raise HTTPException(403, detail="this account is disabled")
+    # Same address by password and by Google = one account.  Google's proof
+    # of the mailbox verifies a pending password account (and discards its
+    # unproven password — see users.link_google).
+    U.link_google(email)
     token = _start_session(email, method="google", request=request)
     ip = (request.client.host if request and request.client else "?")
     log.info("auth: Google login ok for %s (tier %s) from %s", email, tier, ip)
@@ -207,6 +403,7 @@ def change_password(req: SelfPassword,
     if U.check_login(me["email"], req.old_password) is None:
         raise HTTPException(403, detail="current password does not match")
     try:
+        U.check_password_policy(req.new_password, me["email"])
         U.set_password(me["email"], req.new_password)
     except ValueError as e:
         raise HTTPException(422, detail=str(e))

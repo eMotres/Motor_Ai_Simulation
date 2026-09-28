@@ -94,6 +94,7 @@ from motor_ai_sim.routes.wire_stock import router as wire_stock_router
 from motor_ai_sim.routes.optimization import router as optimization_router
 from motor_ai_sim.routes.presets import router as presets_router
 from motor_ai_sim.routes.catalog import router as catalog_router
+from motor_ai_sim.routes.catalog_cards import router as catalog_cards_router
 from motor_ai_sim.routes.saved_sims import router as saved_sims_router
 from motor_ai_sim.routes.freecad import router as freecad_router
 from motor_ai_sim.routes.fusion import router as fusion_router
@@ -261,6 +262,7 @@ app.include_router(bearings_router)
 app.include_router(wire_stock_router)
 app.include_router(optimization_router)
 app.include_router(presets_router)
+app.include_router(catalog_cards_router)   # before the motor catalog: /api/catalog/cards/*
 app.include_router(catalog_router)
 app.include_router(saved_sims_router)
 app.include_router(freecad_router)

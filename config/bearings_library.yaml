@@ -35,11 +35,70 @@
 #   stiffness_n_per_m : N/m           M (model output) : N.m
 #   R1/R2/R3/S1/S2    : SKF's own, i.e. mm and rpm in, N.mm out
 #
-# "catalogue value to verify" marks a figure written from the best available
-# reading of the published tables that has NOT been checked against the printed
-# catalogue.  It is a real number, not a placeholder — but it is the first thing
-# to check when an answer looks wrong.
+# PROVENANCE (catalog stage 1, 2026-09-28)
+# ----------------------------------------
+# Every card and lubricant carries a `catalog:` block — the common card
+# envelope (motor_ai_sim.catalog): manufacturer, part number, status
+# (draft | active | validated | deprecated), the ids of the sources below,
+# per-field provenance `prov`, validation deltas and a revision.  The loaders
+# (motor_ai_sim.bearings) ignore it; the numbers stay where they always were.
+#
+#   prov.<field>: {type: datasheet|measured|estimate|derived, src: <id>,
+#                  verify: true, note: "..."}
+#   A field with no prov entry = datasheet, from the card's FIRST source.
+#   Nested fields are dotted: `friction.R1`.
+#
+# `verify: true` (formerly the comment "catalogue value to verify") marks a
+# figure written from the best available reading of the published tables that
+# has NOT been checked against the printed catalogue.  It is a real number, not
+# a placeholder — but it is the first thing to check when an answer looks wrong.
+# `type: estimate` (formerly "APPROXIMATE") is our own number, not the maker's.
 # ============================================================
+
+catalog_units:
+  d: mm
+  D: mm
+  B: mm
+  d_m: mm
+  seal_ds: mm
+  contact_angle_deg: deg
+  C_kn: kN
+  C0_kn: kN
+  n_limit_grease_rpm: rpm
+  n_limit_oil_air_rpm: rpm
+  stiffness_n_per_m: N/m
+  nu40: mm^2/s
+  nu100: mm^2/s
+  temp_range_c: degC
+  seal_ks1: "SKF (N.mm)"
+  seal_ks2: "SKF (N.mm)"
+  friction.R1: "SKF (mm, rpm -> N.mm)"
+  friction.S1: "SKF (mm, rpm -> N.mm)"
+
+catalog_sources:
+  skf_friction:
+    doc: "SKF, The SKF model for calculating the frictional moment"
+    url: "https://cdn.skfmediahub.skf.com/api/public/0901d1968065e9e7"
+    page: "tables 2 (rolling/sliding) and 3 (seals)"
+  skf_catalogue:
+    doc: "SKF main catalogue / super-precision catalogue (dimensions, C, C0, speed limits)"
+    url: "https://www.skf.com/group/products/rolling-bearings"
+  skf_w638_2_2z:
+    doc: "SKF product page W 638/2-2Z"
+    url: "https://www.skf.com/group/products/rolling-bearings/ball-bearings/deep-groove-ball-bearings/productid-W%20638%2F2-2Z"
+    read: "2026-09-28"
+  task_ac_constants:
+    doc: "Angular-contact friction constants supplied with the Ø200 design task (SKF table 2 row, not yet checked against the table)"
+  skf_greases:
+    doc: "SKF lubricant datasheets (LGMT 2, LGHP 2, LGLT 2; MT47 standard fill)"
+    url: "https://www.skf.com/group/products/lubrication-solutions/lubricants"
+  iso_vg:
+    doc: "ISO 3448 viscosity grades (VG 10, VG 32) — nominal kinematic viscosity at 40 C"
+  noload_150mm_2026_08_04:
+    doc: "Free-run decomposition of the 150 mm 24s/28p"
+    file: "docs/measurements/2026-08-04_noload_decomposition_150mm.md"
+    page: "§4.1"
+    read: "2026-08-04"
 
 # ── GREASES AND OILS ────────────────────────────────────────
 # Only the base-oil viscosity matters to the friction model: nu at the RUNNING
@@ -52,12 +111,21 @@ lubricants:
   MT47:
     description: "SKF standard fill of 2RS1/2Z deep groove bearings — lithium soap, mineral base oil"
     kind: grease
-    nu40: 70          # mm^2/s   catalogue value to verify
-    nu100: 8.6        # mm^2/s   catalogue value to verify
+    nu40: 70          # mm^2/s
+    nu100: 8.6        # mm^2/s
     temp_range_c: [-30, 110]
     # NB at ~59 C this line gives nu = 30 mm^2/s, which is the running viscosity
     # the 2026-08-04 free-run decomposition used for the 61811-2RS1 pair.
     note: "the grease the sealed SKF bearings below are delivered with"
+    catalog:
+      manufacturer: SKF
+      part_number: MT47
+      status: active
+      sources: [skf_greases]
+      prov:
+        nu40: {type: datasheet, src: skf_greases, verify: true, note: "catalogue value to verify"}
+        nu100: {type: datasheet, src: skf_greases, verify: true, note: "catalogue value to verify"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify comments moved to prov"}
 
   LGMT_2:
     description: "SKF LGMT 2 — general purpose industrial and automotive"
@@ -65,6 +133,12 @@ lubricants:
     nu40: 110
     nu100: 11
     temp_range_c: [-30, 120]
+    catalog:
+      manufacturer: SKF
+      part_number: "LGMT 2"
+      status: active
+      sources: [skf_greases]
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added"}
 
   LGHP_2:
     description: "SKF LGHP 2 — high performance polyurea, electric motor grease"
@@ -72,6 +146,12 @@ lubricants:
     nu40: 96
     nu100: 10.5
     temp_range_c: [-40, 150]
+    catalog:
+      manufacturer: SKF
+      part_number: "LGHP 2"
+      status: active
+      sources: [skf_greases]
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added"}
 
   LGLT_2:
     description: "SKF LGLT 2 — low temperature, EXTREMELY high speed (spindle grease)"
@@ -80,18 +160,40 @@ lubricants:
     nu100: 3.7
     temp_range_c: [-55, 110]
     note: "the grease super-precision spindle bearings are filled with; its thin base oil is what lets n.dm reach ~1.4e6"
+    catalog:
+      manufacturer: SKF
+      part_number: "LGLT 2"
+      status: active
+      sources: [skf_greases]
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added"}
 
   OIL_VG10:
     description: "ISO VG 10 spindle oil — the usual oil-air medium"
     kind: oil_air
     nu40: 10
     nu100: 2.6
+    catalog:
+      manufacturer: generic
+      part_number: "ISO VG 10"
+      status: active
+      sources: [iso_vg]
+      prov:
+        nu100: {type: estimate, note: "typical VG 10 mineral oil; ISO 3448 fixes only the 40 C grade"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added"}
 
   OIL_VG32:
     description: "ISO VG 32 spindle / hydraulic oil"
     kind: oil_air
     nu40: 32
     nu100: 5.4
+    catalog:
+      manufacturer: generic
+      part_number: "ISO VG 32"
+      status: active
+      sources: [iso_vg]
+      prov:
+        nu100: {type: estimate, note: "typical VG 32 mineral oil; ISO 3448 fixes only the 40 C grade"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added"}
 
 # ── BEARINGS ────────────────────────────────────────────────
 # `friction` carries the SKF constants that apply to THIS bearing, so a card is
@@ -150,11 +252,11 @@ bearings:
     # it changes the number tests/test_bearings.py checks against the bench.
     seal_ds: 59.5
     default_lubricant: MT47
-    n_limit_grease_rpm: 3800     # catalogue value to verify — seal-limited, not ball-limited
+    n_limit_grease_rpm: 3800
     n_limit_oil_air_rpm: null    # sealed for life; oil-air does not apply
-    C_kn: 9.56                   # catalogue value to verify
-    C0_kn: 8.15                  # catalogue value to verify
-    stiffness_n_per_m: 1.0e+8     # APPROXIMATE — a thin-section deep groove under light radial load
+    C_kn: 9.56
+    C0_kn: 8.15
+    stiffness_n_per_m: 1.0e+8
     friction:
       # SKF table 2, series 617 / 618 / 628 / 637 / 638.
       R1: 4.7e-7
@@ -167,6 +269,35 @@ bearings:
       0.400 N.m predicted for the pair at 2000 rpm, 0.387 +/- 0.025 N.m returned
       by the free-run fit (docs/measurements/2026-08-04_noload_decomposition_150mm.md).
       98 % of that torque is seal drag, so P_bearing is very nearly linear in speed.
+    catalog:
+      manufacturer: SKF
+      part_number: 61811-2RS1
+      status: validated
+      sources: [skf_catalogue, skf_friction, noload_150mm_2026_08_04]
+      prov:
+        seal_ks1: {type: datasheet, src: skf_friction, note: "SKF table 3, RS1 on deep groove, 62 < D <= 80 mm"}
+        seal_ks2: {type: datasheet, src: skf_friction, note: "SKF table 3, RS1 on deep groove, 62 < D <= 80 mm"}
+        seal_beta: {type: datasheet, src: skf_friction, note: "SKF table 3, RS1 on deep groove, 62 < D <= 80 mm"}
+        seal_ds: {type: measured, src: noload_150mm_2026_08_04, note: "PINNED: the counterface diameter the validated decomposition used (generic d + 0.25(D-d) = 59.25)"}
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify — seal-limited, not ball-limited"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE — a thin-section deep groove under light radial load"}
+        friction.R1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 617/618/628/637/638"}
+        friction.S1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 617/618/628/637/638"}
+        friction.K_z: {type: datasheet, src: skf_friction, note: "3.1 deep groove"}
+        friction.mu_sl: {type: datasheet, src: skf_friction, note: "grease-lubricated ball bearing"}
+        friction.ball_density_ratio: {type: derived, note: "1.0 = steel balls (plain SKF)"}
+      validation:
+        - what: "bearing torque, pair @ 2000 rpm"
+          ref: 0.387
+          ref_tol: 0.025
+          model: 0.400
+          unit: N.m
+          delta_pct: 3.4
+          doc: "docs/measurements/2026-08-04_noload_decomposition_150mm.md §4.1"
+          pinned_by: "tests/test_bearings.py"
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify/APPROXIMATE comments moved to prov"}
 
   61811-2Z:
     description: "SKF 61811-2Z — deep groove, series 618 (thin section), metal shields both sides (the 150 mm motors, user 2026-09-08)"
@@ -178,11 +309,27 @@ bearings:
     balls: steel
     seals: shields          # 2Z shields do not touch the inner ring: M_seal = 0
     default_lubricant: MT47
-    n_limit_grease_rpm: 8500     # catalogue value to verify — shields lift the seal limit of the 2RS1 (3800)
+    n_limit_grease_rpm: 8500
     n_limit_oil_air_rpm: null    # shielded, grease-filled
-    C_kn: 9.56                   # catalogue value to verify (same rings and balls as 61811-2RS1)
-    C0_kn: 8.15                  # catalogue value to verify
-    stiffness_n_per_m: 1.0e+8     # APPROXIMATE — a thin-section deep groove under light radial load
+    C_kn: 9.56
+    C0_kn: 8.15
+    stiffness_n_per_m: 1.0e+8
+    catalog:
+      manufacturer: SKF
+      part_number: 61811-2Z
+      status: active
+      sources: [skf_catalogue, skf_friction]
+      prov:
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify — shields lift the seal limit of the 2RS1 (3800)"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify (same rings and balls as 61811-2RS1)"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE — a thin-section deep groove under light radial load"}
+        friction.R1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 617/618/628/637/638 (the 61811-2RS1's rolling/sliding terms)"}
+        friction.S1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 617/618/628/637/638"}
+        friction.K_z: {type: datasheet, src: skf_friction, note: "3.1 deep groove"}
+        friction.mu_sl: {type: datasheet, src: skf_friction, note: "grease-lubricated ball bearing"}
+        friction.ball_density_ratio: {type: derived, note: "1.0 = steel balls"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify/APPROXIMATE comments moved to prov"}
     friction:
       # SKF table 2, series 617 / 618 / 628 / 637 / 638 — the rolling/sliding
       # terms are the 61811-2RS1's; only the seal drag (98 % of the 2RS1 pair's
@@ -212,11 +359,28 @@ bearings:
     seal_ks2: 20
     seal_beta: 2.25
     default_lubricant: MT47
-    n_limit_grease_rpm: 3000     # catalogue value to verify — seal-limited
+    n_limit_grease_rpm: 3000
     n_limit_oil_air_rpm: null    # sealed for life
-    C_kn: 11.9                   # catalogue value to verify
-    C0_kn: 11.4                  # catalogue value to verify
-    stiffness_n_per_m: 1.2e+8     # APPROXIMATE
+    C_kn: 11.9
+    C0_kn: 11.4
+    stiffness_n_per_m: 1.2e+8
+    catalog:
+      manufacturer: SKF
+      part_number: 61814-2RS1
+      status: active
+      sources: [skf_catalogue, skf_friction]
+      prov:
+        seal_ks1: {type: datasheet, src: skf_friction, verify: true, note: "SKF table 3, 80 < D <= 100 band: the SAME constants as the verified 62 < D <= 80 row — catalogue value to verify against table 3"}
+        seal_ks2: {type: datasheet, src: skf_friction, verify: true, note: "as seal_ks1 — to verify against table 3"}
+        seal_beta: {type: datasheet, src: skf_friction, verify: true, note: "as seal_ks1 — to verify against table 3"}
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify — seal-limited"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE"}
+        friction.R1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
+        friction.S1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
+        friction.ball_density_ratio: {type: derived, note: "1.0 = steel balls"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify/APPROXIMATE comments moved to prov"}
     friction:
       R1: 4.7e-7
       S1: 6.50e-3
@@ -239,12 +403,25 @@ bearings:
     balls: steel
     seals: shields          # 2Z shields do not touch the inner ring: M_seal = 0
     default_lubricant: MT47
-    n_limit_grease_rpm: 45000    # catalogue value to verify
+    n_limit_grease_rpm: 45000
     n_limit_oil_air_rpm: null    # shielded, grease-filled
-    C_kn: 1.33                   # catalogue value to verify
-    C0_kn: 0.585                 # catalogue value to verify
-    stiffness_n_per_m: 1.5e+7     # APPROXIMATE — a miniature bearing is SOFT, and on a small
-                                 # machine it, not the shaft, sets the first critical speed
+    C_kn: 1.33
+    C0_kn: 0.585
+    stiffness_n_per_m: 1.5e+7
+    catalog:
+      manufacturer: SKF
+      part_number: 618/8-2Z
+      status: active
+      sources: [skf_catalogue, skf_friction]
+      prov:
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE — a miniature bearing is SOFT, and on a small machine it, not the shaft, sets the first critical speed"}
+        friction.R1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
+        friction.S1: {type: datasheet, src: skf_friction, note: "SKF table 2, series 618"}
+        friction.ball_density_ratio: {type: derived, note: "1.0 = steel balls"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify/APPROXIMATE comments moved to prov"}
     friction:
       R1: 4.7e-7
       S1: 6.50e-3
@@ -269,11 +446,23 @@ bearings:
     n_limit_oil_air_rpm: null    # shielded, grease-filled; no oil-air rating published
     C_kn: 0.094                  # SKF "Basic dynamic load rating"
     C0_kn: 0.025                 # SKF "Basic static load rating"
-    stiffness_n_per_m: 2.0e+6     # APPROXIMATE, NOT SKF-published (SKF does not publish bearing stiffness at
-                                 # all — every stiffness_n_per_m in this file is our own estimate, see the
-                                 # 618/8-2Z card). Scaled down from 618/8-2Z's 1.5e7 N/m by this bearing's
-                                 # much smaller d_m/section (3.5 mm vs 12 mm); order-of-magnitude only, first
-                                 # thing to check if a rotordynamics answer on this bearing looks wrong.
+    stiffness_n_per_m: 2.0e+6
+    catalog:
+      manufacturer: SKF
+      part_number: W 638/2-2Z
+      status: active
+      sources: [skf_w638_2_2z, skf_friction]
+      prov:
+        d_m: {type: derived, note: "not published; (d+D)/2, same convention as every other card here"}
+        default_lubricant: {type: datasheet, src: skf_w638_2_2z, note: "page states 'Lubricant: Grease'; SKF's standard 2Z fill, same as the other 2Z cards"}
+        n_limit_grease_rpm: {type: datasheet, src: skf_w638_2_2z, note: "SKF 'Limiting speed' (mechanical); reference (thermal) speed is 200 000 r/min"}
+        C_kn: {type: datasheet, src: skf_w638_2_2z, note: "SKF 'Basic dynamic load rating'"}
+        C0_kn: {type: datasheet, src: skf_w638_2_2z, note: "SKF 'Basic static load rating'"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE, NOT SKF-published (SKF publishes no bearing stiffness; every stiffness_n_per_m in this file is our own estimate). Scaled down from 618/8-2Z's 1.5e7 N/m by the much smaller d_m/section (3.5 vs 12 mm); order-of-magnitude only, first thing to check if a rotordynamics answer on this bearing looks wrong."}
+        friction.R1: {type: datasheet, src: skf_friction, verify: true, note: "borrowed from the 617/618/628/637/638 family row, not SKF-published for W 638/2-2Z"}
+        friction.S1: {type: datasheet, src: skf_friction, verify: true, note: "borrowed from the 617/618/628/637/638 family row, not SKF-published for W 638/2-2Z"}
+        friction.ball_density_ratio: {type: derived, note: "1.0 = stainless steel, same density category as bearing steel"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; APPROXIMATE comment moved to prov"}
     friction:
       # SKF table 2, series 617 / 618 / 628 / 637 / 638 (see header note) — same
       # constants as the other 618/638-family deep groove cards in this file.
@@ -321,11 +510,31 @@ bearings:
     balls: ceramic
     seals: none
     default_lubricant: LGLT_2
-    n_limit_grease_rpm: 21000    # catalogue value to verify (n.dm ~ 1.28e6)
-    n_limit_oil_air_rpm: 32000   # catalogue value to verify (n.dm ~ 1.95e6)
-    C_kn: 15.6                   # catalogue value to verify
-    C0_kn: 12.7                  # catalogue value to verify
-    stiffness_n_per_m: 1.5e+8     # APPROXIMATE, light preload; a preloaded PAIR is stiffer
+    n_limit_grease_rpm: 21000
+    n_limit_oil_air_rpm: 32000
+    C_kn: 15.6
+    C0_kn: 12.7
+    stiffness_n_per_m: 1.5e+8
+    catalog:
+      manufacturer: SKF
+      part_number: 71910 CE/HCP4A
+      status: active
+      sources: [skf_catalogue, task_ac_constants, skf_friction]
+      prov:
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify (n.dm ~ 1.28e6)"}
+        n_limit_oil_air_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify (n.dm ~ 1.95e6)"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE, light preload; a preloaded PAIR is stiffer"}
+        friction.R1: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.R2: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.R3: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied, to verify — F_g = R3.d_m^4.n^2 dominates above ~15 000 rpm; check R3 first if a loss looks impossible"}
+        friction.S1: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.S2: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.K_z: {type: datasheet, src: skf_friction, note: "4.4 angular contact"}
+        friction.mu_sl: {type: datasheet, src: skf_friction, note: "grease-lubricated ball bearing"}
+        friction.ball_density_ratio: {type: derived, note: "OUR extension: Si3N4 3.2 / bearing steel 7.85 = 0.408"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify/APPROXIMATE comments moved to prov"}
     friction:
       R1: 5.03e-7
       R2: 1.97
@@ -350,11 +559,31 @@ bearings:
     balls: ceramic
     seals: none
     default_lubricant: LGLT_2
-    n_limit_grease_rpm: 19000    # catalogue value to verify
-    n_limit_oil_air_rpm: 29000   # catalogue value to verify
-    C_kn: 18.2                   # catalogue value to verify
-    C0_kn: 15.3                  # catalogue value to verify
-    stiffness_n_per_m: 1.6e+8     # APPROXIMATE
+    n_limit_grease_rpm: 19000
+    n_limit_oil_air_rpm: 29000
+    C_kn: 18.2
+    C0_kn: 15.3
+    stiffness_n_per_m: 1.6e+8
+    catalog:
+      manufacturer: SKF
+      part_number: 71911 CE/HCP4A
+      status: active
+      sources: [skf_catalogue, task_ac_constants, skf_friction]
+      prov:
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        n_limit_oil_air_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE"}
+        friction.R1: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.R2: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.R3: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied, to verify — F_g = R3.d_m^4.n^2 dominates above ~15 000 rpm; check R3 first if a loss looks impossible"}
+        friction.S1: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.S2: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.K_z: {type: datasheet, src: skf_friction, note: "4.4 angular contact"}
+        friction.mu_sl: {type: datasheet, src: skf_friction, note: "grease-lubricated ball bearing"}
+        friction.ball_density_ratio: {type: derived, note: "OUR extension: Si3N4 3.2 / bearing steel 7.85 = 0.408"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify/APPROXIMATE comments moved to prov"}
     friction:
       R1: 5.03e-7
       R2: 1.97
@@ -377,11 +606,31 @@ bearings:
     balls: ceramic
     seals: none
     default_lubricant: LGLT_2
-    n_limit_grease_rpm: 18000    # catalogue value to verify
-    n_limit_oil_air_rpm: 27000   # catalogue value to verify
-    C_kn: 19.5                   # catalogue value to verify
-    C0_kn: 17.3                  # catalogue value to verify
-    stiffness_n_per_m: 1.7e+8     # APPROXIMATE
+    n_limit_grease_rpm: 18000
+    n_limit_oil_air_rpm: 27000
+    C_kn: 19.5
+    C0_kn: 17.3
+    stiffness_n_per_m: 1.7e+8
+    catalog:
+      manufacturer: SKF
+      part_number: 71912 CE/HCP4A
+      status: active
+      sources: [skf_catalogue, task_ac_constants, skf_friction]
+      prov:
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        n_limit_oil_air_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE"}
+        friction.R1: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.R2: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.R3: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied, to verify — F_g = R3.d_m^4.n^2 dominates above ~15 000 rpm; check R3 first if a loss looks impossible"}
+        friction.S1: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.S2: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.K_z: {type: datasheet, src: skf_friction, note: "4.4 angular contact"}
+        friction.mu_sl: {type: datasheet, src: skf_friction, note: "grease-lubricated ball bearing"}
+        friction.ball_density_ratio: {type: derived, note: "OUR extension: Si3N4 3.2 / bearing steel 7.85 = 0.408"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify/APPROXIMATE comments moved to prov"}
     friction:
       R1: 5.03e-7
       R2: 1.97
@@ -404,11 +653,31 @@ bearings:
     balls: ceramic
     seals: none
     default_lubricant: LGLT_2
-    n_limit_grease_rpm: 19000    # catalogue value to verify
-    n_limit_oil_air_rpm: 30000   # catalogue value to verify
-    C_kn: 24.2                   # catalogue value to verify
-    C0_kn: 19.0                  # catalogue value to verify
-    stiffness_n_per_m: 2.2e+8     # APPROXIMATE — the stiffest of the five, heavier section and bigger balls
+    n_limit_grease_rpm: 19000
+    n_limit_oil_air_rpm: 30000
+    C_kn: 24.2
+    C0_kn: 19.0
+    stiffness_n_per_m: 2.2e+8
+    catalog:
+      manufacturer: SKF
+      part_number: 7010 CE/HCP4A
+      status: active
+      sources: [skf_catalogue, task_ac_constants, skf_friction]
+      prov:
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        n_limit_oil_air_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE — the stiffest of the five, heavier section and bigger balls"}
+        friction.R1: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.R2: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.R3: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied, to verify — F_g = R3.d_m^4.n^2 dominates above ~15 000 rpm; check R3 first if a loss looks impossible"}
+        friction.S1: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.S2: {type: datasheet, src: task_ac_constants, verify: true, note: "task-supplied angular-contact set, marked to verify (SKF table 2)"}
+        friction.K_z: {type: datasheet, src: skf_friction, note: "4.4 angular contact"}
+        friction.mu_sl: {type: datasheet, src: skf_friction, note: "grease-lubricated ball bearing"}
+        friction.ball_density_ratio: {type: derived, note: "OUR extension: Si3N4 3.2 / bearing steel 7.85 = 0.408"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify/APPROXIMATE comments moved to prov"}
     friction:
       R1: 5.03e-7
       R2: 1.97
@@ -435,14 +704,30 @@ bearings:
     seal_ks2: 20
     seal_beta: 2.25
     default_lubricant: LGHP_2
-    n_limit_grease_rpm: 6300     # catalogue value to verify — the seals decide, not the balls
+    n_limit_grease_rpm: 6300
     n_limit_oil_air_rpm: null    # sealed
-    C_kn: 22.9                   # catalogue value to verify
-    C0_kn: 16.6                  # catalogue value to verify
-    stiffness_n_per_m: 1.3e+8     # APPROXIMATE
+    C_kn: 22.9
+    C0_kn: 16.6
+    stiffness_n_per_m: 1.3e+8
+    catalog:
+      manufacturer: SKF
+      part_number: 6010-2RZ/HC5C3
+      status: active
+      sources: [skf_catalogue, skf_friction]
+      prov:
+        seals: {type: estimate, note: "2RZ: contact seal with a lighter lip -> HALF the RS1 value, flagged seal_estimate in the result"}
+        seal_ks1: {type: datasheet, src: skf_friction, note: "RS1 constants, D in the 62 < D <= 80 band"}
+        n_limit_grease_rpm: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify — the seals decide, not the balls"}
+        C_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        C0_kn: {type: datasheet, src: skf_catalogue, verify: true, note: "catalogue value to verify"}
+        stiffness_n_per_m: {type: estimate, note: "APPROXIMATE"}
+        friction.R1: {type: datasheet, src: skf_friction, verify: true, note: "deep groove, general row — catalogue value to verify"}
+        friction.S1: {type: datasheet, src: skf_friction, verify: true, note: "deep groove, general row — catalogue value to verify"}
+        friction.ball_density_ratio: {type: derived, note: "Si3N4 3.2 / bearing steel 7.85 = 0.408"}
+      revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added; verify/APPROXIMATE comments moved to prov"}
     friction:
-      R1: 4.3e-7                 # deep groove, general row — catalogue value to verify
-      S1: 4.25e-3                # deep groove, general row — catalogue value to verify
+      R1: 4.3e-7
+      S1: 4.25e-3
       K_z: 3.1
       mu_sl: 0.05
       ball_density_ratio: 0.408

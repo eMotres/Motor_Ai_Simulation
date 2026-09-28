@@ -4,7 +4,7 @@ The Controller tab's whole backend:
 
   ``GET  /devices``            the catalogue rows (the browsable MOSFET table)
   ``GET  /devices/{part}``     one card, whole, with its provenance
-  ``POST /devices``            add a card (validated; writes ``config/devices``)
+  ``POST /devices``            add a card (ADMIN only; validated; writes ``config/devices``)
   ``GET  /topologies``         the presets + THIS machine's coils, so the
                                mapping table can be drawn before anything is
                                solved
@@ -37,7 +37,9 @@ import math
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+
+from motor_ai_sim.auth import require_admin
 
 from motor_ai_sim import duty_results as _DR
 from motor_ai_sim import run_history as _RH
@@ -753,8 +755,11 @@ def get_device_image(part: str):
 
 
 @router.post("/devices")
-def add_device_card(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """Add (or replace) a card.
+def add_device_card(body: Dict[str, Any] = Body(...),
+                    _admin: dict = Depends(require_admin)) -> Dict[str, Any]:
+    """Add (or replace) a card — ADMIN ONLY (owner 2026-09-28, unified
+    catalogues stage 1: users read the catalogue, admins edit it; until then
+    any caller could overwrite a card the loss model quotes).
 
     The ONLY writer of ``config/devices/``.  It validates first and refuses a
     half-filled card outright — a card that loads and then returns ``None``
@@ -762,6 +767,12 @@ def add_device_card(body: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     ship.  No datasheet is scraped and none ever will be here: somebody
     transcribes the numbers and says where each block came from.
     """
+    return store_device_card(body)
+
+
+def store_device_card(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse, validate and write one device card (the callers check the role:
+    ``POST /api/controller/devices`` and ``POST /api/catalog/cards/device``)."""
     if body.get("card_yaml"):
         import yaml as _yaml
         try:

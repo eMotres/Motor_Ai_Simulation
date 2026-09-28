@@ -402,3 +402,12 @@ thermal:
     r100_tolerance_pct: 5
     b25_50_K: 3375
   mounting_torque_Nm: {terminals_M6: [3.0, 6.0], heatsink_M5: [3.0, 6.0]}
+
+# -- catalog envelope (catalog stage 1, 2026-09-28) ------------------------
+# Identity, status and revision of this card for the common catalogue browser;
+# the loss model ignores it.  Sources and per-field provenance are DERIVED by
+# motor_ai_sim.catalog from datasheet_url / datasheet_file / datasheet_revision,
+# every block's `source` line and each point's `basis` (table | figure).
+catalog:
+  status: active
+  revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added"}

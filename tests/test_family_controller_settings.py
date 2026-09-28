@@ -201,6 +201,20 @@ def test_modulation_index_and_power_factor_round_trip(dies, granted):
     assert c["controller"]["power_factor"] is None
 
 
+def test_ripple_inputs_round_trip_and_bad_ones_are_refused(dies, granted):
+    """2026-09-28: the PWM-ripple inputs are saved with the controller."""
+    r = _patch_controller(headers=granted, ripple_l_d_uH=90.0, ripple_l_xy_pct=20.0,
+                          carrier_interleave_deg=90.0, thd_limit_pct=8.0,
+                          ripple_neutral="isolated")
+    assert r.status_code == 200, r.text
+    c = _cfg_doc(dies)["controller"]
+    assert c["ripple_l_d_uH"] == 90.0 and c["ripple_l_xy_pct"] == 20.0
+    assert c["carrier_interleave_deg"] == 90.0 and c["thd_limit_pct"] == 8.0
+    assert _patch_controller(headers=granted, carrier_interleave_deg=270).status_code == 422
+    assert _patch_controller(headers=granted, ripple_l_xy_pct=0).status_code == 422
+    assert _patch_controller(headers=granted, ripple_neutral="grounded").status_code == 422
+
+
 def test_power_factor_above_one_is_refused(dies, granted):
     r = _patch_controller(headers=granted, power_factor=1.5)
     assert r.status_code == 422

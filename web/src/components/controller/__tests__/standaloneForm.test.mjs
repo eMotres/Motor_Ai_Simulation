@@ -44,6 +44,7 @@ function standaloneSolveBody(base, sa) {
     modulation_scheme: sa.scheme,
     // the same choice as the tab's PWM modulation — the typed scheme wins
     pwm_modulation: sa.scheme === 'svpwm' ? 'svpwm' : 'sine',
+    power_direction: sa.direction === 'generator' ? 'generator' : 'motor',
   };
 }
 
@@ -85,4 +86,10 @@ test('the wire body drops the motor-only fields and carries the typed point', ()
   assert.equal(b.i_phase_rms_A, 470);
   assert.equal(b.n_inverters, 2);
   assert.equal(b.modulation_scheme, 'svpwm');
+});
+
+test('the power direction rides the standalone body, motor by default', () => {
+  assert.equal(standaloneSolveBody({ topology: 'x' }, CASE).power_direction, 'motor');
+  assert.equal(standaloneSolveBody({ topology: 'x' }, { ...CASE, direction: 'generator' })
+    .power_direction, 'generator');
 });

@@ -36,6 +36,8 @@ import { listDevices, getTopologies, solveController, getLast, postSchematic,
          staleResultFields, staleResultLine,
          standaloneProblems, standaloneSolveBody, DEFAULT_STANDALONE,
          type StandaloneForm,
+         DEFAULT_RIPPLE, rippleFromSettings, rippleForSave, rippleSolveFields,
+         rippleProblems, type RippleForm,
          type DeviceRow, type CoilRow, type ControllerResult,
          type ControllerFormState, type ResolvedPoint,
          type ThermalCoolingByMode } from './controllerApi';
@@ -126,6 +128,9 @@ const ControllerPanel: React.FC = () => {
     try { localStorage.setItem('ctrl.ext', JSON.stringify(next)); } catch { /* private window */ }
     return next;
   });
+  // PWM ripple / THD inputs (2026-09-28) — saved WITH the controller.
+  const [rip, setRipRaw] = useState<RippleForm>(DEFAULT_RIPPLE);
+  const setRip = (p: Partial<RippleForm>) => setRipRaw(r => ({ ...r, ...p }));
   const [settingsErr, setSettingsErr] = useState<string | null>(null);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [switchCurrent, setSwitchCurrent] = useState<
@@ -289,6 +294,7 @@ const ControllerPanel: React.FC = () => {
       setTAmbient(next.tAmbient); setAreaBasis(next.areaBasis);
       setAreaCm2(next.areaCm2); setFinEff(next.finEff); setEmissivity(next.emissivity);
       setMapping(next.mapping);
+      setRipRaw(rippleFromSettings(block as any));
       if (block && (block as any).saved_at) setSettingsSavedAt((block as any).saved_at);
     } catch { /* nothing saved yet, or the read failed — the tab's own defaults stand */
     } finally { settingsLoadedFor.current = `${dieCtx.die}::${dieCtx.config}`; }
@@ -310,13 +316,14 @@ const ControllerPanel: React.FC = () => {
         coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
         mapping };
       localStorage.setItem('ctrl.settings', JSON.stringify({
-        die: dieCtx.die, config: dieCtx.config, block: settingsForSave(state) }));
+        die: dieCtx.die, config: dieCtx.config,
+        block: { ...settingsForSave(state), ...rippleForSave(rip) } }));
     } catch { /* private window — the auto-save-with-the-motor mirror just won't work this session */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, pwmMod, nPar, rg,
       vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-      mapping]);
+      mapping, rip]);
 
   // ── AUTO-SAVE (owner 2026-09-25, "Devices / switch keeps resetting to 4")
   // ─────────────────────────────────────────────────────────────────────
@@ -337,7 +344,8 @@ const ControllerPanel: React.FC = () => {
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping };
     try {
-      const r = await saveControllerSettings(dieCtx.die, dieCtx.config, settingsForSave(state));
+      const r = await saveControllerSettings(dieCtx.die, dieCtx.config,
+        { ...settingsForSave(state), ...rippleForSave(rip) });
       setSettingsSavedAt(r.controller?.saved_at || null);
       // The carrier on screen is now the Controller's own — no origin line.
       if (r.controller?.f_carrier_hz != null) setFswOrigin(null);
@@ -349,7 +357,7 @@ const ControllerPanel: React.FC = () => {
   }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, pwmMod, nPar, rg,
       vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-      mapping]);
+      mapping, rip]);
 
   const saveSettings = async () => {
     if (!dieCtx.die || !dieCtx.config) {
@@ -374,7 +382,7 @@ const ControllerPanel: React.FC = () => {
   }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, pwmMod, nPar, rg,
       vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-      mapping]);
+      mapping, rip]);
 
   const customRows = useMemo(() =>
     coils.map(c => ({ coil: c.index, bridge: (mapping[c.index] || 'INV1').split('/')[0],
@@ -389,6 +397,8 @@ const ControllerPanel: React.FC = () => {
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping, ...ext });
   const body = () => controllerSolveBody(formNow(), customRows);
+  // how many three-phase inverters the ripple sees (L_xy needed for two)
+  const nInvNow = sa.on ? Number(sa.nInv) : (topology === 'two_3ph' ? 2 : 1);
 
   // The per-switch current — and so the catalogue's "parallel" suggestion —
   // depends on the topology, so it is re-asked when that changes.
@@ -457,12 +467,15 @@ const ControllerPanel: React.FC = () => {
     // it should have written (owner 2026-09-25 report's root cause: Solve
     // alone never saved anything).
     void persistSettings();
-    if (sa.on) {
-      const bad = standaloneProblems(sa, formNow());
+    {
+      const bad = [...(sa.on ? standaloneProblems(sa, formNow()) : []),
+                   ...rippleProblems(rip, nInvNow)];
       if (bad.length) { setErr(bad.join(' · ')); setBusy(false); return; }
     }
     try {
-      const r = await solveController(sa.on ? standaloneSolveBody(body(), sa) : body(), fresh);
+      const r = await solveController(
+        { ...(sa.on ? standaloneSolveBody(body(), sa) : body()), ...rippleSolveFields(rip) },
+        fresh);
       setRes(r);
       if (r.schematic_svg) setSvg(r.schematic_svg);
     } catch (e) { setErr(String(e)); }
@@ -586,6 +599,14 @@ const ControllerPanel: React.FC = () => {
                   <MenuItem value="spwm" sx={{ fontSize: 12 }}>sine-triangle</MenuItem>
                 </TextField>
               </Row>
+              <Row label="Power direction" tip="Motor: DC link → machine. Generator: an active rectifier, machine → DC link — efficiency = (P_ac − P_loss)/P_ac and the link current reverses. MOSFET losses do not change with direction (synchronous rectification: the reverse current is in the channel). A motor run takes the duty's own mode.">
+                <TextField select size="small" value={sa.direction || 'motor'}
+                  onChange={e => setSa({ direction: e.target.value })}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="motor" sx={{ fontSize: 12 }}>Motor</MenuItem>
+                  <MenuItem value="generator" sx={{ fontSize: 12 }}>Generator (active rectifier)</MenuItem>
+                </TextField>
+              </Row>
               {standaloneProblems(sa, formNow()).length > 0 && (
                 <Alert severity="warning" sx={{ fontSize: 11.5, py: 0 }}>
                   {standaloneProblems(sa, formNow()).join(' · ')}</Alert>)}
@@ -597,6 +618,34 @@ const ControllerPanel: React.FC = () => {
                   <MenuItem key={d.part} value={d.part} sx={{ fontSize: 12 }}>{d.part}</MenuItem>)}
               </TextField>
             </Row>
+            <SectionLabel sx={{ mt: 0.5 }}>PWM ripple</SectionLabel>
+            <Row label="L_d" unit="µH" tip="Phase inductance the carrier sees (d-axis). Blank = the duty's own incremental L_d (star-equivalent in delta). Typed = per inverter phase.">
+              <Num v={rip.ld} set={v => setRip({ ld: v })} placeholder="duty" /></Row>
+            <Row label="L_q" unit="µH" tip="q-axis inductance. Blank = L_d (or the duty's own L_q).">
+              <Num v={rip.lq} set={v => setRip({ lq: v })} placeholder="= L_d" /></Row>
+            <Row label="L commutating" unit="µH" tip="Optional subtransient/commutating inductance — what the winding shows at carrier frequency when eddy currents screen the iron. Replaces L_d and L_q when typed.">
+              <Num v={rip.lsub} set={v => setRip({ lsub: v })} /></Row>
+            {nInvNow === 2 && (<>
+              <Row label="L_xy" unit="% L_d" tip="Dual 3-phase: the x-y plane links no air-gap flux, only leakage limits its current. Required for two inverters — no field solve here measures it.">
+                <Num v={rip.lxyPct} set={v => setRip({ lxyPct: v })} /></Row>
+              <Row label="Neutrals" tip="Isolated: each set's zero-sequence current is zero. Common: the two neutrals tied — the difference zero sequence circulates through L_0.">
+                <TextField select size="small" value={rip.neutral} onChange={e => setRip({ neutral: e.target.value })}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="isolated" sx={{ fontSize: 12 }}>isolated (2 neutrals)</MenuItem>
+                  <MenuItem value="common" sx={{ fontSize: 12 }}>common (tied)</MenuItem>
+                </TextField>
+              </Row>
+              {rip.neutral === 'common' && (
+                <Row label="L_0" unit="µH" tip="Zero-sequence inductance of the tied neutrals' circulating path. Required with common neutrals.">
+                  <Num v={rip.l0} set={v => setRip({ l0: v })} /></Row>)}
+              <Row label="Carrier interleave" unit="°" tip="Carrier phase shift of inverter 2 against inverter 1, 0–180° of a carrier period. Trades alpha-beta ripple against x-y ripple.">
+                <Num v={rip.interleave} set={v => setRip({ interleave: v })} /></Row>
+            </>)}
+            <Row label="THD limit" unit="%" tip="Optional: phase-current THD (PWM ripple / fundamental) above this is flagged FAIL.">
+              <Num v={rip.thdLimit} set={v => setRip({ thdLimit: v })} /></Row>
+            {rippleProblems(rip, nInvNow).length > 0 && (
+              <Alert severity="warning" sx={{ fontSize: 11.5, py: 0 }}>
+                {rippleProblems(rip, nInvNow).join(' · ')}</Alert>)}
             {!sa.on && <Row label="Topology" tip="How the bridges are combined with the motor: one inverter, two inverters on alternate coils, an H-bridge per coil, or an explicit coil-to-bridge mapping.">
               <TextField select size="small" value={topology} onChange={e => setTopology(e.target.value)}
                 sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
@@ -834,7 +883,10 @@ const ControllerPanel: React.FC = () => {
                 </Box>)}
               <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 1.5 }}>
                 <Tile label="Inverter losses" value={`${fmt(L?.total_W, 0)} W`} />
-                <Tile label="Inverter efficiency" value={pct(E?.inverter)} />
+                <Tile label={res.power_direction === 'generator'
+                    ? 'Rectifier efficiency (generator)' : 'Inverter efficiency (motor)'}
+                  value={pct(E?.inverter)}
+                  tip={(E as any)?.inverter_definition || ''} />
                 <Tile label="Wall-to-shaft efficiency" value={pct(E?.wall_to_shaft)}
                   tip="inverter efficiency × the ONE shaft efficiency of this duty's coupled record" />
                 <Tile label="T_j max" value={`${fmt(T?.t_j_max_c, 0)} °C`}
@@ -845,6 +897,8 @@ const ControllerPanel: React.FC = () => {
                 <Tile label="Switches" value={`${res.topology?.n_switches} × ${res.settings?.devices_parallel}`}
                   tip={`${res.topology?.n_devices} devices in ${res.topology?.n_bridges} bridge(s)`} />
               </Box>
+
+              <RippleCard r={res.ripple} />
 
               <SectionLabel sx={{ mb: 0.75 }}>Loss split</SectionLabel>
               <Box sx={{ display: 'grid', gridTemplateColumns: '1.6fr repeat(5, 1fr)', rowGap: 0.5, columnGap: 1 }}>
@@ -1045,6 +1099,48 @@ const Num: React.FC<{ v: Nullable; set: (v: Nullable) => void; placeholder?: str
   <TextField type="number" size="small" value={v} placeholder={placeholder}
     onChange={e => set(e.target.value === '' ? '' : parseFloat(e.target.value))}
     sx={NUM} />);
+
+/** PWM current ripple / THD — one line of numbers + the top harmonics. */
+const RippleCard: React.FC<{ r?: ControllerResult['ripple'] }> = ({ r }) => {
+  if (!r) return null;
+  if (r.status !== 'computed') {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
+        <SectionLabel sx={{ m: 0 }}>PWM ripple</SectionLabel>
+        <Typography sx={{ fontSize: 11.5, color: r.status === 'missing_input' ? '#fca5a5' : 'var(--text-3)' }}>
+          not computed — {r.reason}</Typography>
+      </Box>);
+  }
+  const top = [...(r.spectrum || [])].sort((a, b) => b.i_rms_A - a.i_rms_A).slice(0, 6);
+  return (
+    <Box sx={{ mb: 1.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.75 }}>
+        <SectionLabel sx={{ m: 0 }}>PWM ripple</SectionLabel>
+        {r.thd_verdict && (
+          <Chip size="small" label={r.thd_verdict === 'fail' ? 'THD FAIL' : 'THD PASS'}
+            color={r.thd_verdict === 'fail' ? 'error' : 'success'} sx={{ fontSize: 10, height: 20 }} />)}
+        <HelpTip title={`${r.model || ''}. L_d/L_q ${fmt(r.l_d_uH, 1)}/${fmt(r.l_q_uH, 1)} µH`
+          + (r.l_xy_uH ? `, L_xy ${fmt(r.l_xy_uH, 1)} µH` : '')
+          + `. f_sw/f1 = ${fmt(r.carrier_ratio, 3)}${r.synchronous ? ' (synchronous)' : ' (asynchronous)'}, `
+          + `${r.window_periods} period(s) simulated. `
+          + Object.entries(r.sources || {}).map(([k, v]) => `${k}: ${v}`).join('; ')} />
+      </Box>
+      <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 0.75 }}>
+        <Tile label="Ripple" value={`${fmt(r.ripple_rms_A, 1)} A rms`}
+          tip={`pk-pk ${fmt(r.ripple_pp_A, 0)} A · alpha-beta ${fmt(r.ripple_rms_ab_A, 1)} A`
+            + (r.ripple_rms_xy_A != null ? ` · x-y ${fmt(r.ripple_rms_xy_A, 1)} A` : '')} />
+        <Tile label="Phase-current THD" value={`${fmt(r.thd_pct, 2)} %`}
+          bad={r.thd_verdict === 'fail'}
+          tip={r.thd_limit_pct != null ? `limit ${fmt(r.thd_limit_pct, 1)} %` : 'no limit set'} />
+        <Tile label="DC-link cap (with ripple)" value={`${fmt(r.dc_link?.i_cap_rms_A, 0)} A rms`}
+          tip={`bus mean ${fmt(r.dc_link?.i_dc_mean_A, 0)} A (negative = into the link)`} />
+      </Box>
+      {top.length > 0 && (
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'monospace' }}>
+          {top.map(h => `${fmt(h.f_Hz / 1000, 2)} kHz ${fmt(h.i_rms_A, 1)} A`).join(' · ')}
+        </Typography>)}
+    </Box>);
+};
 
 const Tile: React.FC<{ label: string; value: string; tip?: string; bad?: boolean }> =
   ({ label, value, tip, bad }) => (

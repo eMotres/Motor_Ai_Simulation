@@ -94,6 +94,26 @@ export interface LimitRow {
   note: string;
 }
 
+export interface RippleResult {
+  status: 'computed' | 'not_computed' | 'missing_input';
+  reason?: string;
+  ripple_rms_A?: number;
+  ripple_rms_ab_A?: number;
+  ripple_rms_xy_A?: number | null;
+  ripple_rms_zero_A?: number | null;
+  ripple_pp_A?: number;
+  thd_pct?: number;
+  thd_limit_pct?: number;
+  thd_verdict?: 'pass' | 'fail';
+  i1_rms_A?: number;
+  spectrum?: { f_Hz: number; order: number; i_rms_A: number; pct_of_i1: number | null }[];
+  dc_link?: { i_dc_mean_A: number; i_cap_rms_A: number; i_cap_rms_per_inverter_A: number[] };
+  l_d_uH?: number; l_q_uH?: number; l_xy_uH?: number | null;
+  carrier_ratio?: number; synchronous?: boolean; window_periods?: number;
+  sources?: Record<string, string>;
+  model?: string;
+}
+
 export interface ControllerResult {
   ok: boolean;
   /** every published limit of the chosen part is inside its number */
@@ -112,6 +132,11 @@ export interface ControllerResult {
   efficiency: { inverter: number | null; shaft: number | null;
                 wall_to_shaft: number | null; note: string };
   point: Record<string, any>;
+  /** 2026-09-28: ``motor`` | ``generator`` (active rectifier). */
+  power_direction?: string;
+  conduction_direction?: { reverse_share: number; forward_share: number; note: string };
+  /** PWM current ripple / THD — ``status`` says whether it was computed. */
+  ripple?: RippleResult;
   settings: Record<string, any>;
   waveforms: { f_elec_hz: number; t_s: number[];
                coils: Record<string, { bridge: string; v_V: number[]; i_A: number[];
@@ -263,6 +288,15 @@ export interface ControllerSettings {
    * Kept optional here only so reading an old block doesn't error; the web
    * never sets or sends it any more. */
   couple_with_em?: boolean;
+  /* 2026-09-28: the PWM-ripple inputs (see RippleForm) */
+  ripple_l_d_uH?: number | null;
+  ripple_l_q_uH?: number | null;
+  ripple_l_sub_uH?: number | null;
+  ripple_l_xy_pct?: number | null;
+  ripple_l_zero_uH?: number | null;
+  ripple_neutral?: string | null;
+  carrier_interleave_deg?: number | null;
+  thd_limit_pct?: number | null;
 }
 
 /** ``{}`` (never an error) on a configuration that has never saved one. */
@@ -356,10 +390,14 @@ export interface StandaloneForm {
   pf: NumOrBlank;
   /** ``svpwm`` (linear to 2/sqrt3) | ``spwm`` (linear to 1). */
   scheme: string;
+  /** ``motor`` | ``generator`` (active rectifier). A machine run takes the
+   *  duty's own mode instead. Optional: older saved sessions lack it. */
+  direction?: string;
 }
 
 export const DEFAULT_STANDALONE: StandaloneForm = {
   on: false, nInv: 1, shift: 30, iPh: '', f1: '', m: 0.9, pf: 0.9, scheme: 'svpwm',
+  direction: 'motor',
 };
 
 /** Every reason a standalone run cannot be sent — LOUD, one line each, never
@@ -398,7 +436,88 @@ export function standaloneSolveBody(base: ControllerSolveBody, sa: StandaloneFor
     modulation_scheme: sa.scheme,
     // the same choice as the tab's PWM modulation — the typed scheme wins
     pwm_modulation: sa.scheme === 'svpwm' ? 'svpwm' : 'sine',
+    power_direction: sa.direction === 'generator' ? 'generator' : 'motor',
   };
+}
+
+/* ── PWM current ripple / THD (owner 2026-09-28) ───────────────────────────
+ * Its own small state, saved WITH the controller (merged into the PATCH
+ * body) and sent with every solve.  Blank = not typed: a machine run then
+ * takes L_d/L_q from the duty's own record. */
+export interface RippleForm {
+  /** L_d, L_q per phase [uH] — blank = the duty's incremental L_d/L_q. */
+  ld: NumOrBlank;
+  lq: NumOrBlank;
+  /** commutating/subtransient L [uH], both axes — wins over L_d/L_q. */
+  lsub: NumOrBlank;
+  /** L_xy as % of L_d — REQUIRED for two three-phase inverters. */
+  lxyPct: NumOrBlank;
+  /** zero-sequence L [uH] — only with the two neutrals tied. */
+  l0: NumOrBlank;
+  /** ``isolated`` | ``common`` (dual three-phase neutrals). */
+  neutral: string;
+  /** carrier phase shift between the two inverters, 0-180 deg. */
+  interleave: NumOrBlank;
+  /** optional THD limit [%] with a pass/fail line. */
+  thdLimit: NumOrBlank;
+}
+
+export const DEFAULT_RIPPLE: RippleForm = {
+  ld: '', lq: '', lsub: '', lxyPct: '', l0: '', neutral: 'isolated',
+  interleave: 0, thdLimit: '',
+};
+
+export function rippleFromSettings(block: ControllerSettings | null | undefined): RippleForm {
+  if (!block) return DEFAULT_RIPPLE;
+  return {
+    ld: toFormNumber(block.ripple_l_d_uH), lq: toFormNumber(block.ripple_l_q_uH),
+    lsub: toFormNumber(block.ripple_l_sub_uH), lxyPct: toFormNumber(block.ripple_l_xy_pct),
+    l0: toFormNumber(block.ripple_l_zero_uH),
+    neutral: block.ripple_neutral || DEFAULT_RIPPLE.neutral,
+    interleave: block.carrier_interleave_deg ?? DEFAULT_RIPPLE.interleave,
+    thdLimit: toFormNumber(block.thd_limit_pct),
+  };
+}
+
+export function rippleForSave(r: RippleForm): Partial<ControllerSettings> {
+  return {
+    ripple_l_d_uH: toSaveNumber(r.ld), ripple_l_q_uH: toSaveNumber(r.lq),
+    ripple_l_sub_uH: toSaveNumber(r.lsub), ripple_l_xy_pct: toSaveNumber(r.lxyPct),
+    ripple_l_zero_uH: toSaveNumber(r.l0), ripple_neutral: r.neutral || null,
+    carrier_interleave_deg: toSaveNumber(r.interleave),
+    thd_limit_pct: toSaveNumber(r.thdLimit),
+  };
+}
+
+/** The solve body's ripple fields — blanks omitted (the route resolves them). */
+export function rippleSolveFields(r: RippleForm) {
+  return {
+    ripple_l_d_uH: blank(r.ld), ripple_l_q_uH: blank(r.lq),
+    ripple_l_sub_uH: blank(r.lsub), ripple_l_xy_pct: blank(r.lxyPct),
+    ripple_l_zero_uH: blank(r.l0), ripple_neutral: r.neutral || undefined,
+    carrier_interleave_deg: blank(r.interleave), thd_limit_pct: blank(r.thdLimit),
+  };
+}
+
+/** Loud, one line each — the backend refuses the same things by name. */
+export function rippleProblems(r: RippleForm, nInverters: number): string[] {
+  const out: string[] = [];
+  const pos = (v: NumOrBlank, name: string) => {
+    if (v !== '' && !(Number(v) > 0)) out.push(`${name} must be positive`);
+  };
+  pos(r.ld, 'L_d'); pos(r.lq, 'L_q'); pos(r.lsub, 'L commutating');
+  pos(r.lxyPct, 'L_xy'); pos(r.l0, 'L_0'); pos(r.thdLimit, 'THD limit');
+  if (r.interleave !== '' && !(Number(r.interleave) >= 0 && Number(r.interleave) <= 180)) {
+    out.push('Carrier interleave must be 0-180°');
+  }
+  const hasL = r.ld !== '' || r.lsub !== '';
+  if (nInverters === 2 && hasL && r.lxyPct === '') {
+    out.push('L_xy is required for two inverters (ripple)');
+  }
+  if (nInverters === 2 && r.neutral === 'common' && r.l0 === '') {
+    out.push('L_0 is required with the two neutrals tied');
+  }
+  return out;
 }
 
 /**

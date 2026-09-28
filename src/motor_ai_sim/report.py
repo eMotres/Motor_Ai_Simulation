@@ -15380,9 +15380,15 @@ def controller_rows(rec: Dict[str, Any]) -> List[List[str]]:
           f"the datasheet E_on is a hard-switching measurement and contains "
           f"it; for reference it would be {_fmt(L.get('e_oss_reference_W'), 0)} W")
     r("Total inverter loss", L.get("total_W"), "", 0, "W")
+    _gen = str(rec.get("power_direction") or P.get("power_direction")
+               or "motor") == "generator"
+    r("Power direction",
+      "generator (active rectifier)" if _gen else "motor",
+      "machine -> DC link" if _gen else "DC link -> machine")
     r("Inverter efficiency",
       None if E.get("inverter") is None else float(E["inverter"]) * 100.0,
-      "AC output / (AC output + the losses above)", 2, "%")
+      "(AC input - losses) / AC input" if _gen
+      else "AC output / (AC output + the losses above)", 2, "%")
     r("Shaft efficiency",
       None if E.get("shaft") is None else float(E["shaft"]) * 100.0,
       "the machine's own, unchanged — read from this duty's coupled record",
@@ -15405,6 +15411,20 @@ def controller_rows(rec: Dict[str, Any]) -> List[List[str]]:
     r("DC-link ripple current", D.get("i_cap_rms_A"),
       f"capacitor rms; bus mean {_fmt(D.get('i_dc_mean_A'), 0)} A, "
       f"peak-to-peak {_fmt(D.get('i_dc_pp_A'), 0)} A", 0, "A")
+    RP = rec.get("ripple") or {}
+    if RP.get("status") == "computed":
+        r("Phase-current PWM ripple", RP.get("ripple_rms_A"),
+          f"peak-to-peak {_fmt(RP.get('ripple_pp_A'), 0)} A; "
+          f"L_d/L_q {_fmt(RP.get('l_d_uH'), 1)}/{_fmt(RP.get('l_q_uH'), 1)} uH"
+          + (f", L_xy {_fmt(RP.get('l_xy_uH'), 1)} uH" if RP.get("l_xy_uH") else ""),
+          1, "A rms")
+        r("Phase-current THD", RP.get("thd_pct"),
+          (f"limit {_fmt(RP.get('thd_limit_pct'), 1)} %: "
+           f"{str(RP.get('thd_verdict') or '').upper()}"
+           if RP.get("thd_limit_pct") is not None else "PWM ripple / fundamental"),
+          2, "%")
+    elif RP.get("reason"):
+        r("Phase-current PWM ripple", "not computed", str(RP.get("reason")))
     r("Operating point",
       f"{_fmt(P.get('i_phase_rms_A'), 0)} A phase / "
       f"{_fmt(P.get('i_leg_rms_3ph_A'), 0)} A per leg",

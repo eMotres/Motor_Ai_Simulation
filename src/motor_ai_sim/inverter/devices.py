@@ -187,14 +187,18 @@ def validate_card(doc: Any) -> List[str]:
             bad.append("ratings.v_dss_V is required (blocking voltage)")
         if not _num(rat.get("t_j_max_c")):
             bad.append("ratings.t_j_max_c is required (the refusal limit)")
-        if not _points_of(rat.get("i_d_continuous"), "t_case_c", "i_a"):
+        if not (_points_of(rat.get("i_d_continuous"), "t_case_c", "i_a")
+                or _unpublished(rat.get("i_d_continuous_unpublished"))):
             bad.append("ratings.i_d_continuous needs at least one "
-                       "{t_case_c, i_a} point")
+                       "{t_case_c, i_a} point (or, when the datasheet prints "
+                       "none, ratings.i_d_continuous_unpublished saying so)")
     th = doc.get("thermal") or {}
     if isinstance(th, dict):
         r = th.get("r_th_jc_k_w")
-        if not (isinstance(r, dict) and (_num(r.get("typ")) or _num(r.get("max")))):
-            bad.append("thermal.r_th_jc_k_w needs typ or max [K/W]")
+        if not (isinstance(r, dict) and (_num(r.get("typ")) or _num(r.get("max"))
+                                         or _unpublished(r.get("unpublished")))):
+            bad.append("thermal.r_th_jc_k_w needs typ or max [K/W] (or, when "
+                       "the datasheet prints none, an 'unpublished' note)")
     rds = doc.get("r_ds_on") or {}
     if isinstance(rds, dict):
         curves = rds.get("curves")
@@ -437,6 +441,17 @@ def _num(v: Any) -> Optional[float]:
     return None if math.isnan(f) or math.isinf(f) else f
 
 
+def _unpublished(v: Any) -> bool:
+    """A non-empty sentence saying the datasheet does not publish a value.
+
+    Some datasheets (e.g. the WCMS900B170E53 module, Rev.0) print "-" where
+    a rating belongs.  The card then carries ``null`` plus this sentence, and
+    whatever needs the number must get it from the REQUEST as a stated
+    assumption or refuse by name — never a plausible default.
+    """
+    return isinstance(v, str) and bool(v.strip())
+
+
 def _has_times_and_charges(doc: Dict[str, Any]) -> bool:
     """Whether ``doc`` carries enough for the TIMES-AND-CHARGES switching
     fallback (:meth:`DeviceCard._e_switch_from_times_charges`) — most
@@ -546,19 +561,33 @@ class DeviceCard:
         return float((self.doc["ratings"] or {})["t_j_max_c"])
 
     @property
-    def r_th_jc_k_w(self) -> float:
+    def r_th_jc_k_w(self) -> Optional[float]:
         """The junction-case resistance the model derates on.
 
         ``max`` when the card has one — a thermal margin quoted on the TYPICAL
         package would be a margin no production unit is guaranteed to have.
+        ``None`` when the datasheet does not publish it (the card's
+        ``unpublished`` note says so); the solve then needs the request's
+        ``r_th_jc_k_w`` as a stated assumption.
         """
         r = (self.doc["thermal"] or {}).get("r_th_jc_k_w") or {}
-        return float(_num(r.get("max")) or _num(r.get("typ")))
+        v = _num(r.get("max")) or _num(r.get("typ"))
+        return None if v is None else float(v)
+
+    @property
+    def r_th_jc_unpublished(self) -> Optional[str]:
+        r = (self.doc["thermal"] or {}).get("r_th_jc_k_w") or {}
+        u = r.get("unpublished") if isinstance(r, dict) else None
+        return u.strip() if _unpublished(u) else None
 
     @property
     def r_th_jc_basis(self) -> str:
         r = (self.doc["thermal"] or {}).get("r_th_jc_k_w") or {}
-        return "max" if _num(r.get("max")) is not None else "typ"
+        if _num(r.get("max")) is not None:
+            return "max"
+        if _num(r.get("typ")) is not None:
+            return "typ"
+        return "unpublished"
 
     @property
     def r_th_ja_k_w(self) -> Optional[float]:

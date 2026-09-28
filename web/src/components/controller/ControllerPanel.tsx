@@ -34,6 +34,8 @@ import { listDevices, getTopologies, solveController, getLast, postSchematic,
          controllerSolveBody, getResolvedPoint, DEFAULT_CONTROLLER_FORM,
          getThermalCooling, carrierPrefill, carrierOriginLine,
          staleResultFields, staleResultLine,
+         standaloneProblems, standaloneSolveBody, DEFAULT_STANDALONE,
+         type StandaloneForm,
          type DeviceRow, type CoilRow, type ControllerResult,
          type ControllerFormState, type ResolvedPoint,
          type ThermalCoolingByMode } from './controllerApi';
@@ -98,6 +100,32 @@ const ControllerPanel: React.FC = () => {
   const [finEff, setFinEff] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.finEff);
   const [emissivity, setEmissivity] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.emissivity);
   const [mapping, setMapping] = useState<Record<number, string>>(DEFAULT_CONTROLLER_FORM.mapping);
+  // ── 2026-09-28: a run WITHOUT a motor, per-module plates, a stated plate R
+  // with its own fluid, and R_th(j-c) for a card that prints none.  Kept in
+  // this browser only (session convenience) — never saved with the motor.
+  const [sa, setSaRaw] = useState<StandaloneForm>(() => {
+    try { return { ...DEFAULT_STANDALONE,
+                   ...JSON.parse(localStorage.getItem('ctrl.standalone') || '{}') }; }
+    catch { return DEFAULT_STANDALONE; }
+  });
+  const setSa = (patch: Partial<StandaloneForm>) => setSaRaw(prev => {
+    const next = { ...prev, ...patch };
+    try { localStorage.setItem('ctrl.standalone', JSON.stringify(next)); } catch { /* private window */ }
+    return next;
+  });
+  type Ext = { plumbing: string; nPlates: Nullable; rPlate: Nullable;
+               rPlateFluid: string; rPlateFlow: Nullable; rthJc: Nullable };
+  const EXT0: Ext = { plumbing: 'shared', nPlates: '', rPlate: '', rPlateFluid: '',
+                      rPlateFlow: '', rthJc: '' };
+  const [ext, setExtRaw] = useState<Ext>(() => {
+    try { return { ...EXT0, ...JSON.parse(localStorage.getItem('ctrl.ext') || '{}') }; }
+    catch { return EXT0; }
+  });
+  const setExt = (patch: Partial<Ext>) => setExtRaw(prev => {
+    const next = { ...prev, ...patch };
+    try { localStorage.setItem('ctrl.ext', JSON.stringify(next)); } catch { /* private window */ }
+    return next;
+  });
   const [settingsErr, setSettingsErr] = useState<string | null>(null);
   const [settingsSavedAt, setSettingsSavedAt] = useState<string | null>(null);
   const [switchCurrent, setSwitchCurrent] = useState<
@@ -356,12 +384,11 @@ const ControllerPanel: React.FC = () => {
   // The wire body — see controllerSolveBody's own doc: every blank number
   // box is OMITTED, never sent as '' or null, so the route's own V_dc /
   // carrier / current / power resolution chain runs uncontested.
-  const body = () => controllerSolveBody(
-    { device, topology, setSplit, hbMod, pwmMod, nPar, rg, vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc,
+  const formNow = () => ({ device, topology, setSplit, hbMod, pwmMod, nPar, rg, vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc,
       coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
-      mapping },
-    customRows);
+      mapping, ...ext });
+  const body = () => controllerSolveBody(formNow(), customRows);
 
   // The per-switch current — and so the catalogue's "parallel" suggestion —
   // depends on the topology, so it is re-asked when that changes.
@@ -430,8 +457,12 @@ const ControllerPanel: React.FC = () => {
     // it should have written (owner 2026-09-25 report's root cause: Solve
     // alone never saved anything).
     void persistSettings();
+    if (sa.on) {
+      const bad = standaloneProblems(sa, formNow());
+      if (bad.length) { setErr(bad.join(' · ')); setBusy(false); return; }
+    }
     try {
-      const r = await solveController(body(), fresh);
+      const r = await solveController(sa.on ? standaloneSolveBody(body(), sa) : body(), fresh);
       setRes(r);
       if (r.schematic_svg) setSvg(r.schematic_svg);
     } catch (e) { setErr(String(e)); }
@@ -520,6 +551,45 @@ const ControllerPanel: React.FC = () => {
         <Paper sx={{ ...CARD, width: 330, flexShrink: 0 }}>
           <SectionLabel sx={{ mb: 1.5 }}>Controller</SectionLabel>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.1 }}>
+            <Row label="Run without a motor" tip="Standalone: solve an inverter from a typed point (DC link, current per phase, f1, m, cos φ) — for a customer's controller with no motor in this app. Topology is one or two 3-phase inverters; nothing is taken from a duty or the Thermal tab.">
+              <TextField select size="small" value={sa.on ? 'on' : 'off'}
+                onChange={e => setSa({ on: e.target.value === 'on' })}
+                sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                <MenuItem value="off" sx={{ fontSize: 12 }}>no — the loaded motor</MenuItem>
+                <MenuItem value="on" sx={{ fontSize: 12 }}>yes — typed point</MenuItem>
+              </TextField>
+            </Row>
+            {sa.on && (<>
+              <Row label="Inverters" tip="1 = one 3-phase inverter; 2 = dual 3-phase (6 phases), each inverter a full 3-phase set at the typed current.">
+                <TextField select size="small" value={String(sa.nInv)}
+                  onChange={e => setSa({ nInv: Number(e.target.value) })}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="1" sx={{ fontSize: 12 }}>1 × 3-phase</MenuItem>
+                  <MenuItem value="2" sx={{ fontSize: 12 }}>2 × 3-phase (6 phases)</MenuItem>
+                </TextField>
+              </Row>
+              {Number(sa.nInv) === 2 && (
+                <Row label="Set 2 shift" tip="Electrical angle of inverter 2 against inverter 1 (dual 3-phase is usually 30°). It changes the DC-link ripple, not the device losses." unit="°">
+                  <Num v={sa.shift} set={v => setSa({ shift: v })} /></Row>)}
+              <Row label="Phase current" tip="RMS current of ONE phase (one inverter leg), continuous." unit="A rms">
+                <Num v={sa.iPh} set={v => setSa({ iPh: v })} /></Row>
+              <Row label="f1" tip="Fundamental electrical frequency. The carrier is rounded to a whole number of periods of it (synchronous modulation)." unit="Hz">
+                <Num v={sa.f1} set={v => setSa({ f1: v })} /></Row>
+              <Row label="Modulation m" tip="m = 2·V_phase,peak / V_dc. Sets the output voltage and so the power; with synchronous rectification it does not change the device losses.">
+                <Num v={sa.m} set={v => setSa({ m: v })} /></Row>
+              <Row label="cos φ" tip="Displacement power factor of the load. Sets the power (and the efficiency), not the device losses.">
+                <Num v={sa.pf} set={v => setSa({ pf: v })} /></Row>
+              <Row label="Modulation" tip="SVPWM is linear to m = 2/√3 ≈ 1.155, sine-triangle to m = 1; above that the run warns as overmodulated.">
+                <TextField select size="small" value={sa.scheme} onChange={e => setSa({ scheme: e.target.value })}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="svpwm" sx={{ fontSize: 12 }}>SVPWM</MenuItem>
+                  <MenuItem value="spwm" sx={{ fontSize: 12 }}>sine-triangle</MenuItem>
+                </TextField>
+              </Row>
+              {standaloneProblems(sa, formNow()).length > 0 && (
+                <Alert severity="warning" sx={{ fontSize: 11.5, py: 0 }}>
+                  {standaloneProblems(sa, formNow()).join(' · ')}</Alert>)}
+            </>)}
             <Row label="Device" tip="The power device, from the catalogue below. Its card carries the datasheet numbers this solve uses.">
               <TextField select size="small" value={device} onChange={e => setDevice(e.target.value)}
                 sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
@@ -527,13 +597,13 @@ const ControllerPanel: React.FC = () => {
                   <MenuItem key={d.part} value={d.part} sx={{ fontSize: 12 }}>{d.part}</MenuItem>)}
               </TextField>
             </Row>
-            <Row label="Topology" tip="How the bridges are combined with the motor: one inverter, two inverters on alternate coils, an H-bridge per coil, or an explicit coil-to-bridge mapping.">
+            {!sa.on && <Row label="Topology" tip="How the bridges are combined with the motor: one inverter, two inverters on alternate coils, an H-bridge per coil, or an explicit coil-to-bridge mapping.">
               <TextField select size="small" value={topology} onChange={e => setTopology(e.target.value)}
                 sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
                 {presets.map(p => <MenuItem key={p.id} value={p.id} sx={{ fontSize: 12 }}>{p.label}</MenuItem>)}
               </TextField>
-            </Row>
-            {topology === 'two_3ph' && (
+            </Row>}
+            {!sa.on && topology === 'two_3ph' && (
               <Row label="Coil split" tip="series_split: the winding is untouched, so each inverter keeps the per-coil current and supplies half the volts. power_split: the sets are reconnected so each inverter delivers half the power at the full bus, halving the device current.">
                 <TextField select size="small" value={setSplit} onChange={e => setSetSplit(e.target.value)}
                   sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
@@ -559,6 +629,10 @@ const ControllerPanel: React.FC = () => {
                 </TextField>
               </Row>)}
             <Row label="Devices / switch" tip="How many of the chosen part sit in parallel in ONE switch position. They are assumed to share the current equally — the usual reason a real stack is derated. The same number for every bridge; per-bridge counts only via the API."><Num v={nPar} set={setNPar} /></Row>
+            {(() => { const d = devices.find(x => x.part === device);
+              return d && d.r_th_jc_k_w == null && d.r_th_jc_max_k_w == null; })() && (
+              <Row label="R_th j-c (assumed)" tip="This device's datasheet prints no junction-to-case resistance, so the junction temperature needs a stated value per switch. It is shown as an assumption on the result." unit="K/W">
+                <Num v={ext.rthJc} set={v => setExt({ rthJc: v })} /></Row>)}
             <Row label="Switching losses" tip={"SPICE = the vendor's own device model run in the datasheet's double-pulse circuit (ngspice, the KiCad engine): switching, conduction and dead time from the same model, for every device that has one. Datasheet = the card's curves, the labelled fallback for a device whose model cannot run here"
                 + (devRow?.spice?.needs ? ` — ${devRow.spice.needs}.` : '.')}>
               <TextField select size="small" value={basis || (devRow?.basis_default ?? 'spice')}
@@ -635,7 +709,8 @@ const ControllerPanel: React.FC = () => {
                 <TextField select size="small" value={coolant} onChange={e => setCoolant(e.target.value)}
                   sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
                   <MenuItem value="" sx={{ fontSize: 12, fontStyle: 'italic' }}>(from Thermal)</MenuItem>
-                  {['water', 'water_glycol_50', 'ethylene_glycol', 'oil'].map(c =>
+                  {['water', 'water_glycol_50', 'water_glycol_50_65c', 'ethylene_glycol', 'oil',
+                    'rp3_kerosene'].map(c =>
                     <MenuItem key={c} value={c} sx={{ fontSize: 12 }}>{c}</MenuItem>)}
                 </TextField>
                 {coolant !== '' && <ResetToThermal onReset={() => setCoolant('')} />}
@@ -655,6 +730,31 @@ const ControllerPanel: React.FC = () => {
                 {tin !== '' && <ResetToThermal onReset={() => setTin('')} />}
               </Row>
               {thermalHint('liquid', 't_in_c', tin !== '', v => `${fmt(v as number, 1)} °C`)}
+              <Row label="Plumbing" tip="One shared plate under every device; or one plate per module fed in parallel (flow ÷ plates, each at the inlet); or in series (full flow through each, the last plate sees the hottest coolant — that one is reported).">
+                <TextField select size="small" value={ext.plumbing} onChange={e => setExt({ plumbing: e.target.value })}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="shared" sx={{ fontSize: 12 }}>one shared plate</MenuItem>
+                  <MenuItem value="parallel" sx={{ fontSize: 12 }}>plates in parallel</MenuItem>
+                  <MenuItem value="series" sx={{ fontSize: 12 }}>plates in series</MenuItem>
+                </TextField>
+              </Row>
+              {ext.plumbing !== 'shared' && (
+                <Row label="Plates" tip="How many plates (usually one per module) the flow is split over or runs through. At least 2.">
+                  <Num v={ext.nPlates} set={v => setExt({ nPlates: v })} /></Row>)}
+              <Row label="Plate R (stated)" tip="Blank = the channel correlation. Or type a plate-to-coolant resistance per plate, e.g. from a coldplate datasheet; it is corrected to this coolant and flow below." unit="K/W">
+                <Num v={ext.rPlate} set={v => setExt({ rPlate: v })} /></Row>
+              {ext.rPlate !== '' && (<>
+                <Row label="…measured with" tip="The fluid that stated R was measured with. A different working coolant is corrected by the Dittus–Boelter film ratio; the laminar bound is shown beside it.">
+                  <TextField select size="small" value={ext.rPlateFluid} onChange={e => setExt({ rPlateFluid: e.target.value })}
+                    sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                    <MenuItem value="" sx={{ fontSize: 12, fontStyle: 'italic' }}>(this coolant — no correction)</MenuItem>
+                    {['water', 'water_glycol_50', 'water_glycol_50_65c', 'ethylene_glycol', 'oil', 'rp3_kerosene'].map(c =>
+                      <MenuItem key={c} value={c} sx={{ fontSize: 12 }}>{c}</MenuItem>)}
+                  </TextField>
+                </Row>
+                <Row label="…at flow" tip="Per-plate flow the stated R was measured at; blank = this run's per-plate flow. The film scales with flow^0.8." unit="L/min">
+                  <Num v={ext.rPlateFlow} set={v => setExt({ rPlateFlow: v })} /></Row>
+              </>)}
             </>)}
             {coolingMode !== 'liquid' && (<>
               {coolingMode === 'air_forced' && (<>
@@ -830,6 +930,7 @@ const ControllerPanel: React.FC = () => {
                        : T?.cooling_mode === 'air_still' ? 'air — still' : 'liquid coldplate'} ·
                   {T?.cooling_mode === 'liquid'
                     ? ` coolant ${fmt(T?.t_coolant_in_c, 0)} → ${fmt(T?.t_coolant_in_c + (T?.coolant_rise_K ?? 0), 0)} °C ·`
+                      + (T?.plumbing ? ` ${T.plumbing.n_plates} plates ${T.plumbing.mode}, hottest plate in ${fmt(T.plumbing.t_plate_in_c, 1)} °C ·` : '')
                     : ` ambient ${fmt(T?.t_coolant_in_c, 0)} °C ·`}
                   {' '}case {fmt(T?.t_case_c, 0)} °C · R_path {fmt(T?.r_coldplate_k_w, 4)} K/W
                 </Typography>

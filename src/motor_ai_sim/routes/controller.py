@@ -1003,7 +1003,10 @@ _KEY_FIELDS = ("num_slots", "num_poles", "single_layer", "winding_layout",
 #: Keyed only when SET (2026-09-23), so every key written before these
 #: fields existed stays the same key.
 _KEY_FIELDS_OPTIONAL = ("switching_source", "r_g_off_ext_ohm", "l_sigma_nH",
-                        "pwm_modulation", "winding_n_parallel")
+                        "pwm_modulation", "winding_n_parallel",
+                        # 2026-09-28: standalone runs + stated R_th(j-c)
+                        "standalone", "n_inverters", "phase_shift_deg",
+                        "modulation_scheme", "r_th_jc_k_w")
 
 
 def _history_key(req: Dict[str, Any]) -> str:
@@ -1230,6 +1233,10 @@ def _build_request(body: Dict[str, Any],
                                if body.get("l_sigma_nH") is not None
                                else ctrl.get("l_sigma_nH")),
                 "samples_per_carrier": body.get("samples_per_carrier"),
+                # 2026-09-28: a stated R_th(j-c) for a card whose datasheet
+                # prints none, and the modulator's linear range.
+                "r_th_jc_k_w": body.get("r_th_jc_k_w"),
+                "modulation_scheme": body.get("modulation_scheme"),
                 "mapping": body.get("mapping") or (ctrl.get("mapping") or None),
                 "devices_parallel_by_bridge":
                     dict(body.get("devices_parallel_by_bridge")
@@ -1272,7 +1279,9 @@ def _build_request(body: Dict[str, Any],
     for k in ("n_channels", "channel_w_mm", "channel_h_mm", "length_mm",
              "fin_area_factor", "r_override_k_w",
              "heatsink_area_cm2_per_device", "plate_area_cm2",
-             "fin_efficiency", "emissivity"):
+             "fin_efficiency", "emissivity",
+             # 2026-09-28: per-module plates, and a stated plate R with its fluid
+             "plumbing", "n_plates", "r_override_coolant", "r_override_flow_lpm"):
         if body_cooling.get(k) is not None:
             cooling_out[k] = body_cooling[k]
             cooling_src[k] = "the request"
@@ -1298,6 +1307,39 @@ def _build_request(body: Dict[str, Any],
     return req, sources
 
 
+#: The typed fields a STANDALONE run (no motor, owner 2026-09-28) accepts —
+#: everything the solver needs, nothing resolved from a duty.
+_STANDALONE_FIELDS = (
+    "device", "devices_parallel", "v_dc_V", "i_phase_rms_A", "f_elec_hz",
+    "f_carrier_hz", "modulation_index", "power_factor", "n_inverters",
+    "phase_shift_deg", "modulation_scheme", "dead_time_us", "v_gs_on_V",
+    "v_gs_off_V", "r_g_ext_ohm", "r_g_off_ext_ohm", "l_sigma_nH",
+    "switching_source", "r_tim_k_w", "r_spread_k_w", "r_th_jc_k_w",
+    "e_oss_policy", "samples_per_carrier", "efficiency_shaft")
+
+
+def _standalone_request(body: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """A controller run WITHOUT a motor: every value is the request's own.
+
+    Nothing is inherited from a duty, the Thermal tab or a battery — the
+    customer quoted the point, so the point is typed, and a missing value is
+    refused by name in ``solve_controller`` rather than filled in here.
+    """
+    req: Dict[str, Any] = {"standalone": True}
+    sources: Dict[str, str] = {}
+    for k in _STANDALONE_FIELDS:
+        if body.get(k) is not None and body.get(k) != "":
+            req[k] = body[k]
+            sources[k] = "the request (standalone run)"
+    req.setdefault("device", _default_device())
+    req.setdefault("e_oss_policy", "included_in_eon")
+    cooling = dict(body.get("cooling") or {})
+    cooling.setdefault("mode", "liquid")
+    req["cooling"] = {k: v for k, v in cooling.items() if v is not None and v != ""}
+    sources["cooling"] = "the request (standalone run — nothing inherited from Thermal)"
+    return req, sources
+
+
 def _default_device() -> str:
     rows = [r for r in _dev.list_devices() if not r.get("error")]
     return str(rows[0]["part"]) if rows else ""
@@ -1310,6 +1352,8 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
                ) -> Dict[str, Any]:
     """Solve this controller on this duty's point."""
     t0 = time.time()
+    if (body or {}).get("standalone"):
+        return _post_solve_standalone(body or {}, fresh, t0)
     req, sources = _build_request(body or {}, authorization)
     ctx = req.pop("_context", None)
     solved_for = req.pop("_solved_for", None)
@@ -1413,7 +1457,57 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
     return out
 
 
+def _post_solve_standalone(body: Dict[str, Any], fresh: bool,
+                           t0: float) -> Dict[str, Any]:
+    """``POST /solve`` with ``standalone: true`` — see :func:`_standalone_request`."""
+    req, sources = _standalone_request(body)
+    key = _history_key(req)
+    if not fresh:
+        hit = _HISTORY.get(key)
+        if hit is not None:
+            out = dict(hit["payload"])
+            out.update({"cached": True, "served_from_history": True,
+                        "computed_at": hit["entry"].get("computed_at"),
+                        "history_key": key})
+            _LAST.clear(); _LAST.update(out)
+            return out
+    try:
+        out = solve_controller(req)
+    except ControllerRefusal as exc:
+        raise _refuse(str(exc), exc.fields, code=exc.code)
+    except Exception as exc:                                # noqa: BLE001
+        log.exception("standalone controller solve failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+    out.update({"sources": sources, "origins": None, "context": None,
+                "cooling_sources": None, "thermal_cooling": None,
+                "solved_for": ("standalone controller — no motor; the point "
+                               "is the typed one"),
+                "em_source": None, "elapsed_s": round(time.time() - t0, 3),
+                "history_key": key, "cached": False})
+    try:
+        out["schematic_svg"] = _schem.schematic_svg(
+            _rebuild_topology(req), v_dc_V=req.get("v_dc_V"),
+            device=out.get("device"))
+    except Exception as exc:                                # noqa: BLE001
+        log.warning("controller: schematic not drawn (%s)", exc)
+        out["schematic_svg"] = None
+    _HISTORY.put(key, params={k: req.get(k) for k in _KEY_FIELDS},
+                 summary=_summary(req, out), payload=out, extra={"context": None})
+    _LAST.clear(); _LAST.update(out)
+    return out
+
+
 def _rebuild_topology(req: Dict[str, Any]):
+    if req.get("standalone"):
+        from motor_ai_sim.inverter.losses import standalone_coils
+        n_inv = int(req.get("n_inverters") or 1)
+        topo = build_topology(
+            preset="two_3ph" if n_inv == 2 else "one_3ph",
+            coils=standalone_coils(n_inv, float(req.get("phase_shift_deg") or 30.0)),
+            star_delta="star", device=req.get("device"),
+            devices_parallel=int(req.get("devices_parallel") or 1),
+            v_dc_V=req.get("v_dc_V"))
+        return topo
     coils = coils_from_winding(int(req["num_slots"]), int(req["num_poles"]),
                                single_layer=bool(req.get("single_layer", True)),
                                layout_str=req.get("winding_layout"))

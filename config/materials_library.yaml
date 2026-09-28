@@ -3534,6 +3534,36 @@ coolant:
     sigma: 0.0
     permeability: 1.0
 
+  water_glycol_50_65c:
+    description: "50/50 water–ethylene-glycol at ~65 °C (the hot-loop state an inverter coldplate runs at)."
+    # ASHRAE Handbook — Fundamentals, ch. 31 (aqueous ethylene glycol, 50 %
+    # by volume) at 65 °C, rounded: rho 1040, cp 3.50 kJ/kgK, k 0.41 W/mK,
+    # mu ~1.35 mPa·s -> nu 1.3 cSt.  Handbook values, not measured here.
+    phase: liquid
+    density: 1040                 # kg/m³
+    specific_heat: 3500           # cp  J/(kg·K)
+    thermal_conductivity: 0.41    # k   W/(m·K)
+    kinematic_viscosity: 1.3e-6   # nu  m²/s
+    prandtl: 11.5                 # nu*rho*cp/k
+    sigma: 0.0
+    permeability: 1.0
+
+  rp3_kerosene:
+    description: "RP-3 aviation kerosene (Chinese jet fuel, ≈ Jet A-1) at ~60–80 °C, used as a fuel-cooled coolant."
+    # Kerosene jet-fuel class at 60-80 °C, rounded: rho 0.775 kg/L, cp 2.1
+    # kJ/kgK, k 0.11 W/mK, nu 1.2 cSt (typical Jet A/JP-8/RP-3 values, cf.
+    # CRC Report No. 663 "Handbook of Aviation Fuel Properties", 2004 — values
+    # at temperature vary +-10 % between batches).  FLASH POINT ~38 °C: the
+    # loop runs above it — a closed, inerted circuit is the user's matter.
+    phase: liquid
+    density: 775                  # kg/m³
+    specific_heat: 2100           # cp  J/(kg·K)
+    thermal_conductivity: 0.11    # k   W/(m·K)
+    kinematic_viscosity: 1.2e-6   # nu  m²/s
+    prandtl: 17.8                 # nu*rho*cp/k
+    sigma: 0.0
+    permeability: 1.0
+
   ethylene_glycol:
     description: "Pure ethylene glycol — high-boiling coolant."
     phase: liquid

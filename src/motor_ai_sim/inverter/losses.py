@@ -119,7 +119,34 @@ E_OSS_POLICIES = ("included_in_eon", "added")
 #: What a SECOND three-phase inverter on the same motor actually does depends on
 #: how the coils are reconnected, and the two answers differ by a factor of two
 #: in device current.  Both are offered and the response says which was taken.
-SET_SPLITS = ("series_split", "power_split")
+SET_SPLITS = ("series_split", "power_split", "independent")
+
+#: The modulator's zero-sequence choice.  It does NOT change the loss integrals
+#: of this module (with synchronous rectification a leg's conduction is
+#: <i^2>*R whatever the duty, and one hard commutation per carrier period
+#: costs E(|i|) whatever the duty) — it changes the LINEAR RANGE: sine-
+#: triangle is linear to m = 1, SVPWM / min-max injection to m = 2/sqrt(3).
+MODULATION_SCHEMES = ("spwm", "svpwm")
+
+#: A controller solved WITHOUT a motor (owner 2026-09-28: a customer's
+#: inverter quoted as "V_dc, I per phase, f_sw, m, cos phi"): the coils are
+#: synthetic — one 3-phase set per inverter — and the point is typed.
+STANDALONE_INVERTERS = (1, 2)
+
+
+def standalone_coils(n_inverters: int, shift_deg: float = 30.0) -> List[Coil]:
+    """Three synthetic coils per inverter (A, B, C at 0/-120/-240 deg).  With
+    two inverters the sets alternate (A1, A2, B1, B2, C1, C2), so ``two_3ph``
+    (odd indices -> inverter 1, even -> inverter 2) splits them exactly."""
+    out: List[Coil] = []
+    idx = 1
+    for k, ph in enumerate("ABC"):
+        for s_ in range(int(n_inverters)):
+            ang = (-120.0 * k + (shift_deg if s_ else 0.0)) % 360.0
+            out.append(Coil(index=idx, phase=ph, polarity=1, slot_go=idx,
+                            slot_return=idx, tooth=None, angle_elec_deg=ang))
+            idx += 1
+    return out
 
 #: The three-phase modulations (``simulation.pwm.PWM_MODULATIONS``) and the
 #: LINEAR limit of each: past it the [0, 1] duty clamps and the switching
@@ -158,6 +185,58 @@ class ColdPlate:
     #: Wetted-area multiplier for a finned/pin-fin plate (1.0 = plain channels).
     fin_area_factor: float = 1.0
     r_override_k_w: Optional[float] = None   # bypasses the correlation
+    # ── 2026-09-28 (WCMS900B170E53 customer case): modules on SEPARATE
+    # plates and a stated plate resistance measured with ANOTHER fluid.
+    #: ``shared`` (default, unchanged): ONE plate under every device, the whole
+    #: flow through it.  ``parallel``: ``n_plates`` plates, each fed at the
+    #: inlet with flow/n_plates.  ``series``: the whole flow through
+    #: ``n_plates`` plates one after another — the LAST plate (hottest inlet)
+    #: is the one reported.  With n_plates > 1 the geometry (or
+    #: ``r_override_k_w``) describes ONE plate.
+    plumbing: str = "shared"
+    n_plates: int = 1
+    #: The fluid and per-plate flow ``r_override_k_w`` was stated for.  When
+    #: the working coolant or flow differ, the override is corrected by the
+    #: film-coefficient ratio of Dittus-Boelter at the same channel geometry,
+    #: h ~ k^0.6 * (rho*cp)^0.4 * nu^-0.4 * Q^0.8 (the laminar-bound ratio,
+    #: h ~ k, is reported beside it as the uncertainty).
+    r_override_coolant: Optional[str] = None
+    r_override_flow_lpm: Optional[float] = None
+
+    def _per_plate_flow_lpm(self) -> float:
+        q = max(float(self.flow_lpm), 0.0)
+        if self.plumbing == "parallel":
+            return q / max(int(self.n_plates), 1)
+        return q
+
+    def case_temperature(self, p_total_W: float, cp_info: Dict[str, Any]
+                         ) -> Dict[str, float]:
+        """``{t_case_c, t_coolant_mean_c, t_plate_in_c, rise_total_K}`` of
+        the HOTTEST plate for ``plumbing`` parallel/series (every plate
+        carries the same power — equal modules, equal current).
+
+        parallel: plate inlet = t_in; its coolant mean = t_in + rise_plate/2.
+        series:   plate k inlet = t_in + (k-1)*rise_plate; the last plate's
+                  mean = t_in + (n - 1/2)*rise_plate.
+        rise_plate = P_plate / (m_dot_plate * cp).  Case (plate surface under
+        the module) = coolant mean + P_plate * R_plate.
+        """
+        n = max(int(self.n_plates), 1)
+        p_plate = float(p_total_W) / n
+        m_dot = float(cp_info.get("m_dot_kg_s") or 0.0)
+        cp = float(cp_info.get("cp_j_kgk") or 0.0)
+        rise_plate = p_plate / (m_dot * cp) if m_dot * cp > 0 else 0.0
+        if self.plumbing == "series":
+            t_in_plate = self.t_in_c + (n - 1) * rise_plate
+            rise_total = n * rise_plate
+        else:
+            t_in_plate = self.t_in_c
+            rise_total = rise_plate          # every branch rises the same
+        t_mean = t_in_plate + 0.5 * rise_plate
+        return {"t_case_c": t_mean + p_plate * float(cp_info["r_k_w"]),
+                "t_coolant_mean_c": t_mean, "t_plate_in_c": t_in_plate,
+                "rise_plate_K": rise_plate, "rise_total_K": rise_total,
+                "p_plate_W": p_plate}
 
     def resistance(self, t_wall_c: Optional[float] = None) -> Dict[str, Any]:
         """``{r_k_w, h_w_m2k, ...}`` — the plate-to-coolant thermal resistance.
@@ -168,12 +247,45 @@ class ColdPlate:
         cooling object through the same signature so the thermal loop does
         not need to know which mode it is iterating.
         """
-        if self.r_override_k_w is not None:
-            return {"r_k_w": float(self.r_override_k_w),
-                    "r_film_per_device_k_w": 0.0,
-                    "basis": "given by the request (the correlation was not used)"}
         from motor_ai_sim.simulation import cooling_models as cm
         from motor_ai_sim.routes.thermal import _coolant_props
+        multi = self.plumbing in ("parallel", "series")
+        if self.r_override_k_w is not None:
+            if not multi and self.r_override_coolant is None:
+                return {"r_k_w": float(self.r_override_k_w),
+                        "r_film_per_device_k_w": 0.0,
+                        "basis": "given by the request (the correlation was not used)"}
+            props = cm.FluidProps(*_coolant_props(str(self.coolant)))
+            q_plate = self._per_plate_flow_lpm()
+            out = {"r_film_per_device_k_w": 0.0,
+                   "m_dot_kg_s": props.rho * q_plate / 60000.0,
+                   "cp_j_kgk": props.cp, "flow_per_plate_lpm": q_plate}
+            r = float(self.r_override_k_w)
+            ref = self.r_override_coolant
+            if ref is not None:
+                pr_ = cm.FluidProps(*_coolant_props(str(ref)))
+                q_ref = float(self.r_override_flow_lpm or q_plate)
+                h_turb = ((props.k / pr_.k) ** 0.6
+                          * ((props.rho * props.cp) / (pr_.rho * pr_.cp)) ** 0.4
+                          * (pr_.nu / props.nu) ** 0.4
+                          * (q_plate / q_ref if q_ref > 0 else 1.0) ** 0.8)
+                h_lam = props.k / pr_.k
+                r_corr = r / h_turb if h_turb > 0 else float("inf")
+                out.update({
+                    "r_k_w": r_corr, "r_stated_k_w": r,
+                    "h_ratio_turbulent": h_turb, "h_ratio_laminar": h_lam,
+                    "r_laminar_bound_k_w": r / h_lam if h_lam > 0 else None,
+                    "basis": (f"stated {r:g} K/W per plate with {ref} at "
+                              f"{q_ref:g} L/min, corrected to {self.coolant} at "
+                              f"{q_plate:g} L/min by the Dittus-Boelter film ratio "
+                              f"h = {h_turb:.3f} x (same channels; laminar bound "
+                              f"h ~ k gives x{h_lam:.3f}, R = "
+                              f"{r / h_lam if h_lam > 0 else float('nan'):.4f} K/W)")})
+            else:
+                out.update({"r_k_w": r, "basis": (
+                    f"given by the request per plate ({r:g} K/W, the "
+                    "correlation was not used)")})
+            return out
         props = cm.FluidProps(*_coolant_props(str(self.coolant)))
         w = max(float(self.channel_w_mm), 0.1) * 1e-3
         h = max(float(self.channel_h_mm), 0.1) * 1e-3
@@ -181,7 +293,8 @@ class ColdPlate:
         L = max(float(self.length_mm), 1.0) * 1e-3
         d_h = cm.hydraulic_diameter_slot(w, h)
         a_c = w * h * n
-        q = max(float(self.flow_lpm), 0.0) / 60000.0
+        q = (self._per_plate_flow_lpm() if multi
+             else max(float(self.flow_lpm), 0.0)) / 60000.0
         v = q / a_c if a_c > 0 else 0.0
         re = v * d_h / props.nu if v > 0 else 0.0
         nu, regime = cm.pipe_nusselt(re, props.pr)
@@ -207,7 +320,10 @@ class ColdPlate:
                 "channel_w_mm": self.channel_w_mm,
                 "channel_h_mm": self.channel_h_mm, "length_mm": self.length_mm,
                 "fin_area_factor": self.fin_area_factor,
-                "r_override_k_w": self.r_override_k_w}
+                "r_override_k_w": self.r_override_k_w,
+                "plumbing": self.plumbing, "n_plates": self.n_plates,
+                "r_override_coolant": self.r_override_coolant,
+                "r_override_flow_lpm": self.r_override_flow_lpm}
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +374,9 @@ class ColdPlate:
 # ``m_dot_kg_s``/``cp_j_kgk`` keys in the resistance dict).
 
 COOLING_MODES = ("liquid", "air_forced", "air_still")
+
+#: How liquid-cooled modules are plumbed — see :class:`ColdPlate.plumbing`.
+PLUMBINGS = ("shared", "parallel", "series")
 
 #: Characteristic length fed to the forced/still correlations above — NOT a
 #: real cylinder or plate height, a stated assumption standing in for one.
@@ -459,6 +578,53 @@ def _build_cooling(cooling_req: Dict[str, Any]
         raise ControllerRefusal(
             "cooling.mode must be " + " or ".join(COOLING_MODES) + f"; got {mode!r}",
             ["cooling"], code="bad_cooling_mode")
+    if mode == "liquid":
+        plumb = str(spec.get("plumbing") or "shared").strip().lower()
+        if plumb not in PLUMBINGS:
+            raise ControllerRefusal(
+                "cooling.plumbing must be " + " or ".join(PLUMBINGS)
+                + f"; got {plumb!r}", ["cooling.plumbing"], code="bad_plumbing")
+        spec["plumbing"] = plumb
+        try:
+            n_pl = int(spec.get("n_plates") or 1)
+        except (TypeError, ValueError):
+            raise ControllerRefusal("cooling.n_plates must be a whole number",
+                                    ["cooling.n_plates"], code="bad_plumbing")
+        if n_pl < 1:
+            raise ControllerRefusal("cooling.n_plates must be at least 1",
+                                    ["cooling.n_plates"], code="bad_plumbing")
+        if plumb != "shared" and n_pl < 2:
+            raise ControllerRefusal(
+                f"cooling.plumbing '{plumb}' needs n_plates >= 2 (how many "
+                "plates/modules the flow is split over or runs through)",
+                ["cooling.n_plates"], code="bad_plumbing")
+        spec["n_plates"] = n_pl
+        from motor_ai_sim.routes.thermal import _known_coolant
+        for key in ("coolant", "r_override_coolant"):
+            name = spec.get(key)
+            if name is not None and not _known_coolant(str(name)):
+                raise ControllerRefusal(
+                    f"cooling.{key} {name!r} is not a coolant the catalogue knows",
+                    [f"cooling.{key}"], code="bad_coolant")
+        if spec.get("r_override_coolant") is not None and spec.get("r_override_k_w") is None:
+            raise ControllerRefusal(
+                "cooling.r_override_coolant names the fluid a stated plate "
+                "resistance was measured with — send cooling.r_override_k_w too",
+                ["cooling.r_override_k_w"], code="bad_plumbing")
+        for key in ("r_override_k_w", "r_override_flow_lpm"):
+            v = spec.get(key)
+            if v is not None:
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    fv = float("nan")
+                ok = (fv >= 0 if key == "r_override_k_w" else fv > 0) and math.isfinite(fv)
+                if not ok:
+                    raise ControllerRefusal(
+                        f"cooling.{key} must be "
+                        + ("zero or positive" if key == "r_override_k_w" else "positive")
+                        + f"; got {v!r}",
+                                            [f"cooling.{key}"], code="bad_plumbing")
     return cls(**{k: v for k, v in spec.items() if k in cls.__dataclass_fields__})
 
 
@@ -739,16 +905,49 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                 also ``r_tim_k_w``, ``r_spread_k_w`` (per-device, every mode)
     """
     # ── the machine and the map ────────────────────────────────────────────
-    slots = int(_f(req.get("num_slots"), "num_slots", positive=True))
-    poles = int(_f(req.get("num_poles"), "num_poles", positive=True))
-    try:
-        coils = coils_from_winding(
-            slots, poles,
-            single_layer=bool(req.get("single_layer", True)),
-            layout_str=req.get("winding_layout") or None)
-    except TopologyError as exc:
-        raise ControllerRefusal(str(exc), ["num_slots", "num_poles"],
-                                code="bad_winding")
+    standalone = bool(req.get("standalone"))
+    shift_req: Optional[float] = None
+    if standalone:
+        # No motor: the point is typed.  Every one of these is REQUIRED —
+        # there is no duty to resolve them from.
+        missing = [k for k in ("v_dc_V", "i_phase_rms_A", "f_elec_hz",
+                               "f_carrier_hz", "modulation_index",
+                               "power_factor") if req.get(k) is None]
+        if missing:
+            raise ControllerRefusal(
+                "a standalone controller run needs " + ", ".join(missing)
+                + " — there is no motor to take them from", missing,
+                code="standalone_missing")
+        n_inv = int(_f(req.get("n_inverters"), "n_inverters", default=1,
+                       positive=True))
+        if n_inv not in STANDALONE_INVERTERS:
+            raise ControllerRefusal("n_inverters must be 1 or 2 (one or two "
+                                    "3-phase inverters)", ["n_inverters"])
+        shift_req = _f(req.get("phase_shift_deg"), "phase_shift_deg",
+                       default=30.0)
+        coils = standalone_coils(n_inv, shift_req)
+        req = dict(req)
+        req["topology"] = "two_3ph" if n_inv == 2 else "one_3ph"
+        req["set_split"] = "independent"
+        req["star_delta"] = "star"
+        req.pop("mapping", None)
+    else:
+        slots = int(_f(req.get("num_slots"), "num_slots", positive=True))
+        poles = int(_f(req.get("num_poles"), "num_poles", positive=True))
+        try:
+            coils = coils_from_winding(
+                slots, poles,
+                single_layer=bool(req.get("single_layer", True)),
+                layout_str=req.get("winding_layout") or None)
+        except TopologyError as exc:
+            raise ControllerRefusal(str(exc), ["num_slots", "num_poles"],
+                                    code="bad_winding")
+    scheme = str(req.get("modulation_scheme") or "spwm").strip().lower()
+    if scheme not in MODULATION_SCHEMES:
+        raise ControllerRefusal("modulation_scheme must be "
+                                + " or ".join(MODULATION_SCHEMES),
+                                ["modulation_scheme"])
+    m_linear = 2.0 / math.sqrt(3.0) if scheme == "svpwm" else 1.0
 
     sd = str(req.get("star_delta") or "star").strip().lower()
     device = str(req.get("device") or "").strip()
@@ -783,8 +982,24 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                                            "devices_parallel_by_bridge"],
                                 code="bad_topology")
 
+    if standalone and len(topo.bridges) == 2 and shift_req is not None:
+        topo.bridges[1].phase_shift_deg = float(shift_req) % 360.0
+        topo.notes.append(
+            f"standalone run: two independent 3-phase inverters, set 2 at "
+            f"{float(shift_req):g} deg electrical from set 1 (typed), each leg "
+            "at the typed phase current and modulation index")
+
     # ── the operating point ────────────────────────────────────────────────
     i_ph = _f(req.get("i_phase_rms_A"), "i_phase_rms_A", positive=True)
+    if standalone:
+        m_sa = _f(req.get("modulation_index"), "modulation_index", positive=True)
+        pf_sa = _f(req.get("power_factor"), "power_factor", positive=True)
+        if pf_sa > 1.0:
+            raise ControllerRefusal(f"power_factor must be at most 1; got {pf_sa:g}",
+                                    ["power_factor"])
+        req["p_ac_W"] = (len(topo.bridges) * 3.0
+                         * (m_sa * float(req["v_dc_V"]) / (2.0 * math.sqrt(2.0)))
+                         * i_ph * pf_sa)
     p_ac = _f(req.get("p_ac_W"), "p_ac_W", positive=True)
     f_el = _f(req.get("f_elec_hz"), "f_elec_hz", positive=True)
     f_sw = _f(req.get("f_carrier_hz"), "f_carrier_hz", positive=True)
@@ -796,7 +1011,11 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     i_leg_3ph = i_ph * (root3 if sd == "delta" else 1.0)
 
     # ── the three-phase modulation (2026-09-26) ────────────────────────────
-    pmod = str(req.get("pwm_modulation") or "sine").strip().lower()
+    # modulation_scheme (standalone form, 2026-09-28) is the same choice as
+    # pwm_modulation: spwm -> sine, svpwm -> svpwm; an explicit
+    # pwm_modulation wins.
+    pmod = str(req.get("pwm_modulation")
+               or {"spwm": "sine", "svpwm": "svpwm"}[scheme]).strip().lower()
     if pmod not in PWM_LINEAR_LIMIT:
         raise ControllerRefusal(
             "pwm_modulation must be " + " or ".join(PWM_LINEAR_LIMIT)
@@ -817,6 +1036,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     if m_req is not None:
         m = _f(m_req, "modulation_index", positive=True)
         s_total = 3.0 * (m * v_dc / (2.0 * math.sqrt(2.0))) * i_leg_3ph
+        if standalone:
+            s_total *= len(topo.bridges)
         pf = p_ac / s_total if s_total > 0 else 0.0
     elif pf_req is not None:
         pf = _f(pf_req, "power_factor", positive=True)
@@ -845,7 +1066,9 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     phi_deg = math.degrees(math.acos(min(max(pf, -1.0), 1.0)))
 
     coils_per_phase = max(1, len(coils) // 3)
-    v_machine_phase_rms = (p_ac / pf) / (3.0 * i_ph) if (pf > 0 and i_ph > 0) else 0.0
+    v_machine_phase_rms = ((p_ac / pf) / (3.0 * i_ph
+                                           * (len(topo.bridges) if standalone else 1))
+                           if (pf > 0 and i_ph > 0) else 0.0)
     # ── the winding's parallel paths (2026-09-27) ──────────────────────────
     # A phase of C coils is wired as n_series x n_parallel = C.  The FEM puts
     # I_phase / n_parallel through every coil at V_phase / n_series across
@@ -880,7 +1103,10 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     wiring_notes: List[str] = []
     for b in topo.bridges:
         if b.kind == "three_phase_2l":
-            if a_par == 1:
+            if set_split == "independent":
+                # standalone: every inverter a full 3-phase set
+                i_b, m_b = i_leg_3ph, m
+            elif a_par == 1:
                 # all-series winding: the legacy reading, bit for bit
                 if n_3ph >= 2 and set_split == "power_split":
                     i_b, m_b = i_leg_3ph / n_3ph, m
@@ -941,6 +1167,21 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     r_tim = _f((req.get("r_tim_k_w")), "r_tim_k_w", default=DEFAULT_TIM_K_W)
     r_spread = _f(req.get("r_spread_k_w"), "r_spread_k_w", default=0.0)
     r_jc = card.r_th_jc_k_w
+    if r_jc is None:
+        # The datasheet prints no R_th(j-c) (card's `unpublished` note): the
+        # junction temperature cannot be solved without one, so it must come
+        # from the request as a STATED assumption — never a default here.
+        if req.get("r_th_jc_k_w") is None:
+            raise ControllerRefusal(
+                f"{card.part}: the datasheet publishes no R_th(j-c) "
+                f"({card.r_th_jc_unpublished}) — send r_th_jc_k_w (per switch, "
+                "K/W) as a stated assumption to solve the junction temperature",
+                ["r_th_jc_k_w"], code="r_th_jc_unpublished")
+        r_jc = _f(req.get("r_th_jc_k_w"), "r_th_jc_k_w", positive=True)
+        warnings_rth = (f"R_th(j-c) = {r_jc:g} K/W is the REQUEST's assumption: "
+                        f"{card.part}'s datasheet does not publish it")
+    else:
+        warnings_rth = None
     cooling_mode = str(plate.as_dict().get("mode") or "liquid")
 
     dead_us = _f(req.get("dead_time_us"), "dead_time_us", default=0.5)
@@ -999,6 +1240,7 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     p_total = 0.0
     t_case = plate.t_in_c
     t_cool_mean = plate.t_in_c
+    ct: Optional[Dict[str, float]] = None
     cp: Dict[str, Any] = {}
     r_dev = r_jc + r_tim + r_spread
     while True:
@@ -1028,11 +1270,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                                   l_sigma_nH=l_sig)
                 per_leg[key] = res
                 p_total += res["p_total_W"]
-        m_dot = float(cp.get("m_dot_kg_s") or 0.0)
-        cpj = float(cp.get("cp_j_kgk") or 1.0)
-        rise = p_total / (m_dot * cpj) if m_dot * cpj > 0 else 0.0
-        t_cool_mean = plate.t_in_c + 0.5 * rise
-        t_case = t_cool_mean + p_total * float(cp["r_k_w"])
+        if getattr(plate, "plumbing", "shared") in ("parallel", "series"):
+            ct = plate.case_temperature(p_total, cp)
+            t_cool_mean, t_case = ct["t_coolant_mean_c"], ct["t_case_c"]
+            rise = ct["rise_total_K"]
+        else:
+            m_dot = float(cp.get("m_dot_kg_s") or 0.0)
+            cpj = float(cp.get("cp_j_kgk") or 1.0)
+            rise = p_total / (m_dot * cpj) if m_dot * cpj > 0 else 0.0
+            t_cool_mean = plate.t_in_c + 0.5 * rise
+            t_case = t_cool_mean + p_total * float(cp["r_k_w"])
+            ct = None
         p_dev_max = max((r["p_total_W"] / (2 * max(int(b.devices_parallel), 1))
                          for b in topo.bridges for lg in b.legs
                          for r in [per_leg[(b.id, lg.name)]]), default=0.0)
@@ -1143,6 +1391,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             f"{card.part} card tabulates ({t_cap:.0f} degC), so the device "
             f"characteristics were held at that value; the T_j reported is the "
             f"unclamped one and it is a LOWER bound")
+    if warnings_rth:
+        warnings.append(warnings_rth)
     if extrapolated:
         warnings.append(
             f"each device carries more current than the {card.part} card's "
@@ -1279,9 +1529,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "t_case_c": round(t_case, 1),
             "t_coolant_mean_c": round(t_cool_mean, 1),
             "t_coolant_in_c": plate.t_in_c,
-            "coolant_rise_K": round(2.0 * (t_cool_mean - plate.t_in_c), 2),
+            "coolant_rise_K": (round(ct["rise_total_K"], 2) if ct else
+                               round(2.0 * (t_cool_mean - plate.t_in_c), 2)),
+            "plumbing": ({k: round(v, 3) for k, v in ct.items()}
+                         | {"mode": plate.plumbing, "n_plates": plate.n_plates,
+                            "hottest_plate": ("the last in series"
+                                              if plate.plumbing == "series"
+                                              else "every branch alike")}
+                         if ct else None),
             "r_th_jc_k_w": r_jc,
-            "r_th_jc_basis": card.r_th_jc_basis,
+            "r_th_jc_basis": ("request_assumption" if warnings_rth
+                              else card.r_th_jc_basis),
             "r_tim_k_w": r_tim,
             "r_spread_k_w": r_spread,
             "r_coldplate_k_w": round(float(cp["r_k_w"]), 5),
@@ -1325,7 +1583,10 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             # the duty's own record and the route reports where it came from
             # (owner 2026-09-22: «соединение звезда/треугольник у нас
             # определяется на моторе»).
-            "connection_from": "the duty (star/delta is a property of the motor)",
+            "connection_from": ("standalone run: each inverter a star-connected "
+                                "3-phase load, typed current per phase"
+                                if standalone else
+                                "the duty (star/delta is a property of the motor)"),
             "i_switch_rms_max_A": round(
                 max((per_leg[(b.id, lg.name)]["i_switch_rms_A"]
                      for b in topo.bridges for lg in b.legs), default=0.0), 1),
@@ -1347,6 +1608,10 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "i_coil_rms_A": round(i_coil_rms, 2),
             "bridge_wiring": wiring_notes,
             "rpm": req.get("rpm"),
+            "standalone": standalone,
+            "n_inverters": len(topo.bridges) if standalone else None,
+            "modulation_scheme": scheme,
+            "m_linear_limit": round(m_linear, 4),
         },
         "settings": {
             "devices_parallel": n_par,

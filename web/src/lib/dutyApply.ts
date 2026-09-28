@@ -23,6 +23,26 @@ import { beginDutyApply, endDutyApply } from './familyFollow';
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 /**
+ * Ask the owner which geometry wins when the duty's saved machine differs
+ * from the die: one line + the diff, two choices.  OK = "apply duty
+ * geometry" (written to die.yaml / the configuration, history-snapshotted),
+ * Cancel = "keep die geometry" (nothing written).  Returns null only when no
+ * dialog can be shown — the load then stops.
+ */
+export async function chooseDutyGeometry(message: string,
+                                         diff: string): Promise<'apply_duty' | 'keep_die' | null> {
+  try {
+    const apply = window.confirm(
+      `${message}\n\n${diff}\n\n`
+      + 'OK = apply duty geometry (writes the die / configuration)\n'
+      + 'Cancel = keep die geometry (nothing is written)');
+    return apply ? 'apply_duty' : 'keep_die';
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Apply `die / cfg / duty` everywhere.  Throws with a one-line reason when a
  * server step refuses; the caller shows it.  Resolves to the local half's
  * message ("point 60 A @ 20000 rpm …").
@@ -66,10 +86,35 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
       // 0) mark WHICH die/config/duty the editor is about to become — the
       //    geometry route enforces the locks against this context, and
       //    applying the configuration's own canonical values passes.
-      const ar = await fetch(`${API}/api/family/activate`, {
+      const activate = (geometry_choice?: string) => fetch(`${API}/api/family/activate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die, config: cfg, duty }),
+        body: JSON.stringify({ die, config: cfg, duty, geometry_choice }),
       });
+      let ar = await activate();
+      // 409 = the duty was saved on a different geometry than the die (+config).
+      // The server wrote NOTHING; the owner chooses, explicitly (incident
+      // 2026-09-27: a load silently rewrote the die's winding and stack).
+      if (ar.status === 409) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let det: any = {};
+        try { det = (await ar.json()).detail ?? {}; } catch { /* no body */ }
+        if (det?.code !== 'duty_geometry_differs') {
+          throw new Error(String(det?.message ?? det ?? `HTTP ${ar.status}`));
+        }
+        const lines = (det.diffs ?? []).map(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (x: any) => `  ${x.key} (${x.scope}): die ${x.live} → duty ${x.duty}`).join('\n');
+        const choice = await chooseDutyGeometry(String(det.message ?? ''), lines);
+        if (!choice) throw new Error('load cancelled — die geometry differs from the duty');
+        ar = await activate(choice);
+      }
+      // with apply_duty the files changed — reread what the load will PUT
+      if (ar.ok) {
+        try {
+          const aj = await ar.clone().json();
+          if (aj?.geometry_applied) Object.assign(p, await fetchDutyPayload(die, cfg, duty));
+        } catch { /* keep the payload read before */ }
+      }
       // A failed activate (expired session, 401/403) used to be SILENT and
       // the geometry PUT below still ran — the live editor then held this
       // machine while the server context still named the previous die, and
@@ -77,7 +122,10 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
       // applied when the context could not follow.
       if (!ar.ok) {
         let why = `HTTP ${ar.status}`;
-        try { why = (await ar.json()).detail ?? why; } catch { /* no body */ }
+        try {
+          const dt = (await ar.json()).detail;
+          why = (dt && typeof dt === 'object' ? dt.message : dt) ?? why;
+        } catch { /* no body */ }
         throw new Error(`cannot activate ${die} / ${cfg}: ${why} — sign in again and retry`);
       }
       // 1) geometry — the die's stamped section + this configuration's stack/wire

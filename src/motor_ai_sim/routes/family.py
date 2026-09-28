@@ -23,7 +23,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
@@ -3491,6 +3491,24 @@ def sync_active_die_geometry(saved_geo: dict,
                 "%s). The die snapshot is untouched.",
                 die, ", ".join(sorted(_foreign)[:8]))
             return None
+    # ── Config-level keys never reach die.yaml ───────────────────────────────
+    # Stack length and the whole wire stack (FREE_GEO_KEYS) belong to the
+    # CONFIGURATION (geometry_overrides); the live save may carry any value for
+    # them — a duty load's overrides, or a value the constraint clamp DERIVED
+    # (incident 2026-09-27 20:20: wire_height 0.190333 = the slot-fit bound for
+    # 6 wires, computed by geometry_constraints.clamp in the PUT and then synced
+    # here with wire_width 2 / 6 wires / motor_length 10).  The die keeps its
+    # own values for them; only die-level keys follow the live edit.
+    _die_prev = dict(d.get("geometry") or {})
+    new_geo = dict(geo)
+    for k in FREE_GEO_KEYS:
+        if k in _die_prev:
+            new_geo[k] = _die_prev[k]
+        else:
+            new_geo.pop(k, None)
+    if new_geo == _die_prev:
+        return None                        # nothing die-level changed
+    geo = new_geo
     d["geometry"] = geo
     try:
         from motor_ai_sim.routes.presets import _gen_thumb_svg
@@ -3505,10 +3523,142 @@ def sync_active_die_geometry(saved_geo: dict,
     return die
 
 
+#: The winding keys of a configuration — FREE_GEO_KEYS minus the stack length.
+#: A duty whose saved machine differs from the die in one of these (or in any
+#: die key) was solved on a different winding: loading it must ask first.
+WINDING_GEO_KEYS = tuple(k for k in FREE_GEO_KEYS if k != "motor_length")
+
+
+def _find_geo_sig(node: Any, depth: int = 0) -> Optional[str]:
+    """The first ``_geoSig`` string in a duty record (its ``summary`` first,
+    then anything nested — runs, results).  None when the duty carries none."""
+    if depth > 6:
+        return None
+    if isinstance(node, dict):
+        s = node.get("_geoSig")
+        if isinstance(s, str) and s.strip():
+            return s
+        keys = sorted(node.keys(), key=lambda k: 0 if k == "summary" else 1)
+        for k in keys:
+            r = _find_geo_sig(node[k], depth + 1)
+            if r:
+                return r
+    elif isinstance(node, list):
+        for x in node:
+            r = _find_geo_sig(x, depth + 1)
+            if r:
+                return r
+    return None
+
+
+def duty_saved_geometry(duty: Optional[dict]) -> Dict[str, float]:
+    """The machine a duty says it was solved on: its own ``geometry`` dict, or
+    the parsed ``_geoSig`` stamp of its records.  ``{}`` when it says nothing."""
+    if not isinstance(duty, dict):
+        return {}
+    g = duty.get("geometry")
+    if isinstance(g, dict) and g:
+        return {k: v for k, v in g.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    sig = _find_geo_sig({k: v for k, v in duty.items() if k != "geometry"})
+    if not sig:
+        return {}
+    try:
+        from motor_ai_sim.report import _parse_geo_sig
+        return dict(_parse_geo_sig(sig) or {})
+    except Exception:   # noqa: BLE001 — an unreadable stamp says nothing
+        return {}
+
+
+def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
+                       duty: Optional[dict]) -> List[Dict[str, Any]]:
+    """``[{key, scope, live, duty}]`` — where the duty's saved machine differs
+    from what loading it would put live (die geometry + config overrides).
+
+    ``scope`` is ``"identity"`` (lamination Ø / topology), ``"die"`` (any other
+    die key), ``"winding"`` (a configuration's wire keys) or ``"free"`` (the
+    stack length — informational, never blocking).  Only keys BOTH sides carry
+    as numbers are compared: a stamp that is silent on a key says nothing."""
+    saved = duty_saved_geometry(duty)
+    if not saved:
+        return []
+    live = dict((die_doc or {}).get("geometry") or {})
+    live.update({k: v for k, v in ((cfg_doc or {}).get("geometry_overrides") or {}).items()
+                 if v is not None})
+    die_keys = set((die_doc or {}).get("geometry") or {}) - set(FREE_GEO_KEYS)
+    out: List[Dict[str, Any]] = []
+    for k in sorted(set(saved) & set(live)):
+        lv, sv = live.get(k), saved.get(k)
+        if (not isinstance(lv, (int, float)) or isinstance(lv, bool)
+                or not isinstance(sv, (int, float)) or isinstance(sv, bool)):
+            continue
+        if abs(float(lv) - float(sv)) <= 1e-6 * max(1.0, abs(float(lv))):
+            continue
+        if k in DIE_IDENTITY_KEYS:
+            scope = "identity"
+        elif k in WINDING_GEO_KEYS:
+            scope = "winding"
+        elif k == "motor_length":
+            scope = "free"
+        elif k in die_keys:
+            scope = "die"
+        else:
+            continue
+        out.append({"key": k, "scope": scope, "live": lv, "duty": sv})
+    return out
+
+
+def _blocking(diffs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [x for x in diffs if x["scope"] != "free"]
+
+
 class Activate(BaseModel):
     die: str
     config: str
     duty: Optional[str] = None
+    #: The explicit answer when the duty's saved machine differs from the die:
+    #: ``"keep_die"`` loads the die's geometry (nothing written),
+    #: ``"apply_duty"`` writes the duty's geometry into die.yaml (die keys) and
+    #: the configuration's overrides (winding/stack keys), history-snapshotted.
+    #: Absent while a difference exists → 409 with the structured diff.
+    geometry_choice: Optional[str] = None
+
+
+def _apply_duty_geometry(die: str, cfg: str, d: dict, c: dict,
+                         diffs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The explicit "apply duty geometry" write.  Die keys → die.yaml, free
+    keys → the configuration's geometry_overrides; both through `_save_yaml`,
+    which snapshots the previous file into .history first."""
+    if any(x["scope"] == "identity" for x in diffs):
+        raise HTTPException(422, detail={
+            "code": "duty_geometry_foreign_lamination",
+            "message": "the duty was solved on a different lamination "
+                       "(Ø / slots / poles) — save it as a new die instead",
+            "diffs": diffs})
+    die_part = {x["key"]: x["duty"] for x in diffs if x["scope"] == "die"}
+    cfg_part = {x["key"]: x["duty"] for x in diffs
+                if x["scope"] in ("winding", "free")}
+    if die_part:
+        if bool(d.get("locked", True)):
+            raise HTTPException(423, detail={
+                "code": "die_locked",
+                "message": f"die '{die}' is locked — unlock it to apply the "
+                           "duty's die geometry",
+                "diffs": diffs})
+        g = dict(d.get("geometry") or {})
+        g.update(die_part)
+        d["geometry"] = g
+        _save_yaml(_die_file(die), d)
+    if cfg_part:
+        ov = dict(c.get("geometry_overrides") or {})
+        ov.update(cfg_part)
+        c["geometry_overrides"] = ov
+        _save_yaml(_cfg_file(die, cfg), c)
+    log.warning("family: duty geometry APPLIED on explicit request to '%s/%s' "
+                "(die keys: %s; config keys: %s)", die, cfg,
+                ", ".join(sorted(die_part)) or "-",
+                ", ".join(sorted(cfg_part)) or "-")
+    return {"die_keys": sorted(die_part), "config_keys": sorted(cfg_part)}
 
 
 @router.post("/activate")
@@ -3516,12 +3666,40 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
     """Mark die/config/duty as the machine now loaded in the editor.  Admin
     only since multi-user deploy: this stamps the SHARED .family_context.json
     (the owner's live editor state).  An ordinary user's ▶ loads the duty as
-    a CLIENT-SIDE copy and never calls this."""
+    a CLIENT-SIDE copy and never calls this.
+
+    No silent die write (incident 2026-09-27 20:20: loading
+    "CIANO14 12_40 Ø12 12s10p / L10 / rated" rewrote the die's winding and
+    stack): when the duty's saved machine differs from the die + config in a
+    die or winding key, this answers 409 with the diff and changes NOTHING
+    until the caller says ``geometry_choice`` = keep_die | apply_duty."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     _require_die_write(die, _w)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    choice = (req.geometry_choice or "").strip() or None
+    if choice not in (None, "keep_die", "apply_duty"):
+        raise HTTPException(422, detail="geometry_choice must be 'keep_die' or 'apply_duty'")
+    geometry_applied = None
+    diffs: List[Dict[str, Any]] = []
+    if req.duty:
+        _duty = next((x for x in (c.get("duties") or [])
+                      if isinstance(x, dict) and x.get("name") == req.duty), None)
+        diffs = duty_geometry_diff(d, c, _duty)
+        if _blocking(diffs):
+            if choice is None:
+                keys = ", ".join(f"{x['key']} {x['live']}→{x['duty']}"
+                                 for x in _blocking(diffs)[:6])
+                raise HTTPException(409, detail={
+                    "code": "duty_geometry_differs",
+                    "message": f"duty '{req.duty}' was saved on a different "
+                               f"geometry ({keys}) — apply the duty geometry "
+                               "or keep the die geometry?",
+                    "diffs": diffs,
+                    "choices": ["apply_duty", "keep_die"]})
+            if choice == "apply_duty":
+                geometry_applied = _apply_duty_geometry(die, cfg, d, c, diffs)
     import json
     _ctx_file().write_text(
         json.dumps({"die": die, "config": cfg, "duty": req.duty,
@@ -3538,7 +3716,9 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
     mesh_synced = _sync_mesh_config_from_duty(c, req.duty)
     return {"ok": True, "die_locked": bool(d.get("locked", True)),
             "config_locked": bool(c.get("locked", False)),
-            "mesh_synced": mesh_synced}
+            "mesh_synced": mesh_synced,
+            "geometry_diffs": diffs, "geometry_choice": choice,
+            "geometry_applied": geometry_applied}
 
 
 #: The duty block's panel keys → the server mesh config's keys, and their types.

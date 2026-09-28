@@ -53,6 +53,8 @@ const COMPARE_KEY = 'controller.compareRows';
 const ControllerPanel: React.FC = () => {
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [device, setDevice] = useState('');
+  /** the chosen device's catalogue row — which loss basis it has (2026-09-27) */
+  const devRow = useMemo(() => devices.find(d => d.part === device) ?? null, [devices, device]);
   const [presets, setPresets] = useState<{ id: string; label: string; hint: string }[]>([]);
   const [coils, setCoils] = useState<CoilRow[]>([]);
   const [machine, setMachine] = useState<Record<string, any>>({});
@@ -60,10 +62,16 @@ const ControllerPanel: React.FC = () => {
   const [topology, setTopology] = useState(DEFAULT_CONTROLLER_FORM.topology);
   const [setSplit, setSetSplit] = useState(DEFAULT_CONTROLLER_FORM.setSplit);
   const [hbMod, setHbMod] = useState(DEFAULT_CONTROLLER_FORM.hbMod);
+  const [pwmMod, setPwmMod] = useState(DEFAULT_CONTROLLER_FORM.pwmMod);
   // Owner 2026-09-24: default 1, not 4 — see DEFAULT_CONTROLLER_FORM's own doc.
   const [nPar, setNPar] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.nPar);
   const [rg, setRg] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.rg);
   const [vgsOff, setVgsOff] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.vgsOff);
+  // 2026-09-27 (cloud task 10): loss basis + the SPICE table's driver/layout inputs
+  const [basis, setBasis] = useState<string>(DEFAULT_CONTROLLER_FORM.basis);
+  const [rgOff, setRgOff] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.rgOff);
+  const [vgsOn, setVgsOn] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.vgsOn);
+  const [lSigma, setLSigma] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.lSigma);
   const [dead, setDead] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.dead);
   const [fsw, setFsw] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.fsw);
   // Where the Carrier box's value came from while it is NOT yet this
@@ -272,7 +280,8 @@ const ControllerPanel: React.FC = () => {
       // "keeps resetting to 4" report; see DEFAULT_CONTROLLER_FORM's doc).
       const next = formStateFromSettings(block, DEFAULT_CONTROLLER_FORM);
       setDevice(next.device); setTopology(next.topology); setSetSplit(next.setSplit);
-      setHbMod(next.hbMod); setNPar(next.nPar); setRg(next.rg); setVgsOff(next.vgsOff);
+      setHbMod(next.hbMod); setPwmMod(next.pwmMod); setNPar(next.nPar); setRg(next.rg); setVgsOff(next.vgsOff);
+      setBasis(next.basis); setRgOff(next.rgOff); setVgsOn(next.vgsOn); setLSigma(next.lSigma);
       setDead(next.dead); setFsw(next.fsw); setFswOrigin(null);
       setVdc(next.vdc); setCoolant(next.coolant);
       setFlow(next.flow); setTin(next.tin); setRtim(next.rtim);
@@ -296,16 +305,16 @@ const ControllerPanel: React.FC = () => {
   useEffect(() => {
     if (!dieCtx.die || !dieCtx.config) return;
     try {
-      const state: ControllerFormState = { device, topology, setSplit, hbMod,
-        nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+      const state: ControllerFormState = { device, topology, setSplit, hbMod, pwmMod,
+        nPar, rg, vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc, coolant, flow, tin, rtim,
         coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
         mapping };
       localStorage.setItem('ctrl.settings', JSON.stringify({
         die: dieCtx.die, config: dieCtx.config, block: settingsForSave(state) }));
     } catch { /* private window — the auto-save-with-the-motor mirror just won't work this session */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
-      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, pwmMod, nPar, rg,
+      vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping]);
 
@@ -323,8 +332,8 @@ const ControllerPanel: React.FC = () => {
   const persistSettings = useCallback(async () => {
     if (!dieCtx.die || !dieCtx.config) return null;
     setSettingsErr(null);
-    const state: ControllerFormState = { device, topology, setSplit, hbMod,
-      nPar, rg, vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+    const state: ControllerFormState = { device, topology, setSplit, hbMod, pwmMod,
+      nPar, rg, vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping };
     try {
@@ -337,8 +346,8 @@ const ControllerPanel: React.FC = () => {
       catch { /* SSR/no-window */ }
       return r;
     } catch (e) { setSettingsErr(String(e)); return null; }
-  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
-      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, pwmMod, nPar, rg,
+      vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping]);
 
@@ -362,8 +371,8 @@ const ControllerPanel: React.FC = () => {
     autoSaveTimer.current = setTimeout(() => { void persistSettings(); }, 1000);
     return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, nPar, rg,
-      vgsOff, dead, fsw, vdc, coolant, flow, tin, rtim,
+  }, [dieCtx.die, dieCtx.config, device, topology, setSplit, hbMod, pwmMod, nPar, rg,
+      vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc, coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping]);
 
@@ -375,7 +384,7 @@ const ControllerPanel: React.FC = () => {
   // The wire body — see controllerSolveBody's own doc: every blank number
   // box is OMITTED, never sent as '' or null, so the route's own V_dc /
   // carrier / current / power resolution chain runs uncontested.
-  const formNow = () => ({ device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
+  const formNow = () => ({ device, topology, setSplit, hbMod, pwmMod, nPar, rg, vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc,
       coolant, flow, tin, rtim,
       coolingMode, airSpeed, tAmbient, areaBasis, areaCm2, finEff, emissivity,
       mapping, ...ext });
@@ -472,10 +481,10 @@ const ControllerPanel: React.FC = () => {
   // silently: one short line names what disagrees, in place of a result the
   // owner would otherwise read as a plain answer to what is on screen now.
   const staleFields = useMemo(() => staleResultFields(
-    { device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
+    { device, topology, setSplit, hbMod, pwmMod, nPar, rg, vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc,
       coolant, flow, tin, rtim, coolingMode, airSpeed, tAmbient, areaBasis,
       areaCm2, finEff, emissivity, mapping }, res),
-    [device, topology, setSplit, hbMod, nPar, rg, vgsOff, dead, fsw, vdc,
+    [device, topology, setSplit, hbMod, pwmMod, nPar, rg, vgsOff, basis, rgOff, vgsOn, lSigma, dead, fsw, vdc,
      coolant, flow, tin, rtim, coolingMode, airSpeed, tAmbient, areaBasis,
      areaCm2, finEff, emissivity, mapping, res]);
   const staleLine = staleResultLine(staleFields, res);
@@ -602,6 +611,15 @@ const ControllerPanel: React.FC = () => {
                   <MenuItem value="power_split" sx={{ fontSize: 12 }}>power split</MenuItem>
                 </TextField>
               </Row>)}
+            {topology !== 'h_bridge' && (
+              <Row label="PWM" tip="Three-phase modulation. Sine is linear to m = 1; SVPWM (min-max zero sequence) and third-harmonic injection add the same common-mode term to all three legs, so the line voltages are unchanged and the linear range extends to m = 2/√3 (+15.5 % voltage on the same DC link). Used by the loss model and by the coupled drive=inverter run.">
+                <TextField select size="small" value={pwmMod} onChange={e => setPwmMod(e.target.value)}
+                  sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                  <MenuItem value="sine" sx={{ fontSize: 12 }}>sine</MenuItem>
+                  <MenuItem value="svpwm" sx={{ fontSize: 12 }}>SVPWM</MenuItem>
+                  <MenuItem value="third_harmonic" sx={{ fontSize: 12 }}>third-harmonic</MenuItem>
+                </TextField>
+              </Row>)}
             {topology === 'h_bridge' && (
               <Row label="H-bridge PWM" tip="Unipolar switches the two legs against opposite references — the coil sees twice the ripple frequency and half the step. Bipolar switches the diagonals together.">
                 <TextField select size="small" value={hbMod} onChange={e => setHbMod(e.target.value)}
@@ -615,8 +633,26 @@ const ControllerPanel: React.FC = () => {
               return d && d.r_th_jc_k_w == null && d.r_th_jc_max_k_w == null; })() && (
               <Row label="R_th j-c (assumed)" tip="This device's datasheet prints no junction-to-case resistance, so the junction temperature needs a stated value per switch. It is shown as an assumption on the result." unit="K/W">
                 <Num v={ext.rthJc} set={v => setExt({ rthJc: v })} /></Row>)}
-            <Row label="R_G,ext" tip="External gate resistance. The card's switching energies were measured at its own R_G and are scaled linearly from it." unit="Ω"><Num v={rg} set={setRg} /></Row>
+            <Row label="Switching losses" tip={"SPICE = the vendor's own device model run in the datasheet's double-pulse circuit (ngspice, the KiCad engine): switching, conduction and dead time from the same model, for every device that has one. Datasheet = the card's curves, the labelled fallback for a device whose model cannot run here"
+                + (devRow?.spice?.needs ? ` — ${devRow.spice.needs}.` : '.')}>
+              <TextField select size="small" value={basis || (devRow?.basis_default ?? 'spice')}
+                onChange={e => setBasis(e.target.value === (devRow?.basis_default ?? 'spice') ? '' : e.target.value)}
+                sx={{ width: 190, '& .MuiSelect-select': { fontSize: 12, py: 0.6 } }}>
+                <MenuItem value="spice" disabled={devRow != null && !devRow.spice?.has_table} sx={{ fontSize: 12 }}>
+                  SPICE{devRow != null && !devRow.spice?.has_table ? ' (no model)' : ''}</MenuItem>
+                <MenuItem value="datasheet" sx={{ fontSize: 12 }}>datasheet</MenuItem>
+              </TextField>
+            </Row>
+            {devRow?.spice?.deviation_line && (basis || devRow.basis_default) === 'spice' && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: -0.6, ml: 0.5 }}>
+                <Typography sx={{ fontSize: 10.5, color: '#fcd34d' }}>{devRow.spice.deviation_line}</Typography>
+                <HelpTip title="The vendor model was checked against this part's own datasheet at the datasheet's test points (double pulse, same circuit, same integration windows). It is used as is — a vendor model is never tuned — and this line says by how much its worst switching energy differs." />
+              </Box>)}
+            <Row label="R_G,on" tip="External turn-on gate resistance per device. Default = the datasheet test circuit (2.3 Ω CoolSiC, 1.6 Ω OptiMOS). SPICE: interpolated between the simulated resistances; datasheet: a line through the datasheet point with its figure's slope." unit="Ω"><Num v={rg} set={setRg} /></Row>
+            <Row label="R_G,off" tip="External turn-off gate resistance per device (blank = same as R_G,on). SPICE only; the datasheet path has one R_G." unit="Ω"><Num v={rgOff} set={setRgOff} /></Row>
+            <Row label="V_GS on" tip="Gate-on voltage (blank = the datasheet's: 18 V CoolSiC, 10 V OptiMOS). Picks the R_DS(on) curve and the SPICE set." unit="V"><Num v={vgsOn} set={setVgsOn} /></Row>
             <Row label="V_GS off" tip="Gate-off voltage: 0 V or −5 V. It changes both the turn-off energy and the body-diode drop during dead time." unit="V"><Num v={vgsOff} set={setVgsOff} /></Row>
+            <Row label="Loop L_σ" tip={`Power-loop stray inductance per commutation cell (blank = the datasheet test circuit${devRow?.spice?.l_sigma_default_nH != null ? `: ${devRow.spice.l_sigma_default_nH} nH` : ''}). SPICE only: the nearest simulated loop is used and named.`} unit="nH"><Num v={lSigma} set={setLSigma} /></Row>
             <Row label="Dead time" tip="Both switches of a leg off. The current then runs through a SiC body diode at ~4 V, so this is expensive — and it is what distorts the output voltage at every current zero crossing." unit="µs"><Num v={dead} set={setDead} /></Row>
             <Divider sx={{ borderColor: 'var(--panel)', my: 0.5 }} />
             <Row label="Carrier" tip={'PWM carrier frequency — THE machine\'s carrier: the coupled '
@@ -785,12 +821,17 @@ const ControllerPanel: React.FC = () => {
                   Owner 2026-09-22: «не пиши это всё, никто это не читает». */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
                 <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
-                  Model: datasheet curves at T_j · hard-switching bus scaling ·
-                  synchronous rectification · {res.settings?.devices_parallel} device(s)
-                  per switch sharing equally
+                  Basis: {String(L?.basis_label ?? 'datasheet curves')} · synchronous
+                  rectification · {res.settings?.devices_parallel} device(s) per switch sharing equally
                 </Typography>
                 <HelpTip title={(res.model_notes || []).join('. ')} />
               </Box>
+              {L?.spice_deviation_line && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: -0.75, mb: 1 }}>
+                  <Typography sx={{ fontSize: 11, color: '#fcd34d' }}>
+                    {String(L.spice_deviation_line)} (see ⓘ)</Typography>
+                  <HelpTip title="The vendor SPICE model against this part's own datasheet at its test points: the worst switching-energy deviation. Owner 2026-09-27: every motor runs on SPICE uniformly, so the model is used as is — never tuned — and this line says how far it is from the datasheet." />
+                </Box>)}
               <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 1.5 }}>
                 <Tile label="Inverter losses" value={`${fmt(L?.total_W, 0)} W`} />
                 <Tile label="Inverter efficiency" value={pct(E?.inverter)} />

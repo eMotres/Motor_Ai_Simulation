@@ -32,7 +32,7 @@ per half, and that is what the shape test measures.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -52,6 +52,9 @@ class ModulatorSetup:
     samples_per_carrier: int = 40
     dead_time_s: float = 0.0
     phase_shift_deg: float = 0.0     # of this bridge's fundamental
+    # "sine" | "svpwm" | "third_harmonic" — ``simulation.pwm.PWM_MODULATIONS``.
+    # A three-phase bridge's zero sequence; an H-bridge is always "sine".
+    modulation: str = "sine"
 
     @property
     def carriers_per_period(self) -> float:
@@ -83,11 +86,31 @@ def carrier_reference(setup: ModulatorSetup, u: np.ndarray) -> np.ndarray:
 
 def leg_duty(setup: ModulatorSetup, u: np.ndarray, phase_deg: float,
              third_harmonic: float = 0.0) -> np.ndarray:
-    """High-side duty of one leg: ``0.5*(1 + m*sin(theta + phi))``, clipped."""
+    """High-side duty of one leg: ``0.5*(1 + m*sin(theta + phi) + v0)``, clipped.
+
+    ``v0`` is the bridge's zero sequence (``setup.modulation``): for ``svpwm``
+    ``-(max + min)/2`` of the three references of THIS leg's balanced set at
+    the same instant, for ``third_harmonic`` ``(m/6)*sin(3*theta)``.  Both are
+    the same number on all three legs, which is what keeps the line voltages
+    the sine modulator's.  The clip is the leg's physical [0, 1] duty — it
+    bites only past the modulation's linear limit, which the loss model flags.
+    """
     th = 2.0 * math.pi * u + math.radians(phase_deg + setup.phase_shift_deg)
-    ref = setup.modulation_index * np.sin(th)
+    m = setup.modulation_index
+    ref = m * np.sin(th)
+    mod = str(setup.modulation or "sine")
+    if mod == "svpwm":
+        others = (m * np.sin(th - 2.0 * math.pi / 3.0),
+                  m * np.sin(th + 2.0 * math.pi / 3.0))
+        hi = np.maximum(ref, np.maximum(*others))
+        lo = np.minimum(ref, np.minimum(*others))
+        ref = ref - 0.5 * (hi + lo)
+    elif mod == "third_harmonic":
+        ref = ref + (m / 6.0) * np.sin(3.0 * th)
+    elif mod != "sine":
+        raise ValueError("unknown modulation %r" % (mod,))
     if third_harmonic:
-        ref = ref + third_harmonic * setup.modulation_index * np.sin(3.0 * th)
+        ref = ref + third_harmonic * m * np.sin(3.0 * th)
     return np.clip(0.5 * (1.0 + ref), 0.0, 1.0)
 
 
@@ -95,8 +118,9 @@ def switch_states(setup: ModulatorSetup, u: np.ndarray, phase_deg: float,
                   third_harmonic: float = 0.0) -> np.ndarray:
     """1 while the HIGH-side switch is commanded on, 0 while the low side is.
 
-    Regular-sampled sine-triangle: the reference is compared with the carrier
-    sample by sample.  Dead time is NOT in this array — it is a command, and
+    Regular-sampled carrier comparison (sine-triangle, or with the bridge's
+    zero sequence — ``setup.modulation``): the reference is compared with the
+    carrier sample by sample.  Dead time is NOT in this array — it is a command, and
     the two commands are complementary by construction; where the dead time
     changes the OUTPUT is :func:`leg_terminal_voltage`.
     """
@@ -203,6 +227,10 @@ def coil_waveforms(*, bridges: Sequence[Any], setup: ModulatorSetup,
     leg_v: Dict[Tuple[str, str], np.ndarray] = {}
     leg_i: Dict[Tuple[str, str], np.ndarray] = {}
     for b in bridges:
+        # The zero sequence is a THREE-PHASE bridge's; an H-bridge's two legs
+        # keep their own sine references whatever the controller chose.
+        b_setup = (setup if b.kind == "three_phase_2l" or setup.modulation == "sine"
+                   else replace(setup, modulation="sine"))
         for lg in b.legs:
             key = (b.id, lg.name)
             spec = legs.get(key) or {}
@@ -210,7 +238,7 @@ def coil_waveforms(*, bridges: Sequence[Any], setup: ModulatorSetup,
             i_ph = float(spec.get("i_phase_deg", 0.0))
             v_ph = float(spec.get("v_phase_deg", i_ph))
             i = ip * np.sin(2.0 * math.pi * u + math.radians(i_ph))
-            s = switch_states(setup, u, v_ph)
+            s = switch_states(b_setup, u, v_ph)
             leg_i[key] = i
             leg_v[key] = leg_terminal_voltage(setup, u, s, i,
                                               r_ds_ohm=r_ds_ohm, v_sd=v_sd,
@@ -220,6 +248,7 @@ def coil_waveforms(*, bridges: Sequence[Any], setup: ModulatorSetup,
         "f_elec_hz": round(float(setup.f_elec_hz), 4),
         "f_carrier_eff_hz": round(float(setup.f_carrier_eff_hz), 2),
         "dead_time_us": round(setup.dead_time_s * 1e6, 3),
+        "modulation": str(setup.modulation or "sine"),
         "samples": int(u.size),
         "t_s": [round(float(x), 9) for x in t[::step]],
         "coils": {},

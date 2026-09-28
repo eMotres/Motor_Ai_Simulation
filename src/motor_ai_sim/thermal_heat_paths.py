@@ -221,7 +221,7 @@ def _k_end_from_geometry(g: Mapping[str, Any]) -> float:
 #: Every path this model knows how to place, in the order a legend reads best:
 #: the big one first on a robot joint, then the axial faces, then the rotor's.
 _SINK_ORDER = ("mount", "housing", "end_face_winding", "end_face_stator",
-               "end_windings", "slot_channels", "bore", "shaft_ends",
+               "end_windings", "slot_channels", "bore", "shaft_ends", "bearings",
                "end_face_rotor", "end_face_magnet")
 
 
@@ -470,6 +470,23 @@ def heat_path_model(result: Optional[Mapping[str, Any]],
                    "z_mm": _r(half, 3)},
         note=(f"fin efficiency {round(_f0(stubs.get('fin_efficiency')) * 100)} %"
               if _f(stubs.get("fin_efficiency")) is not None else ""),
+    ))
+
+    # ── the bearings (2026-09-26, the robotics heat path 'shaft' / 'both') ──
+    # rotor → shaft → bearings → the housing / structure.  Drawn where the
+    # shaft leaves the stack; 0 W and inactive on every other machine.
+    hp = _d(cooling.get("heat_path"))
+    brg = _d(hp.get("bearings"))
+    b_w = _f0(brg.get("heat_W"), _f0(budget.get("bearings_W")))
+    sinks.append(_sink(
+        "bearings", group="rotor", mode=("conduction" if brg else "off"),
+        label="Bearings — shaft into the %s" % (hp.get("body") or "structure"),
+        short="bearings", w=b_w, active=bool(brg) and abs(b_w) > 1e-9,
+        g_wk=_f(brg.get("G_W_per_K")), t_sink=_f(hp.get("t_body_c")),
+        placement={"kind": "annulus", "r_in_mm": env.get("bore_r_mm"),
+                   "r_out_mm": env.get("shaft_r_out_mm"), "sides": [-1, 1],
+                   "z_mm": _r(half, 3)},
+        note=str(hp.get("note") or ""),
     ))
 
     # ── shares, and the balance ─────────────────────────────────────────────

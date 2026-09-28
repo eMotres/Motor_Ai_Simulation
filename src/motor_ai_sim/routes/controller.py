@@ -100,6 +100,14 @@ def _live_machine(body: Dict[str, Any]) -> Dict[str, Any]:
     out["winding_layout"] = body.get("winding_layout")
     if out["winding_layout"]:
         src["winding_layout"] = "the request"
+    # 2026-09-27: the winding's parallel paths — every coil carries
+    # I_phase / n_parallel, and a per-coil bridge must be costed at THAT.
+    if body.get("winding_n_parallel") is not None:
+        out["winding_n_parallel"] = body["winding_n_parallel"]
+        src["winding_n_parallel"] = "the request"
+    elif wnd.get("n_parallel") is not None:
+        out["winding_n_parallel"] = int(wnd.get("n_parallel") or 1)
+        src["winding_n_parallel"] = "the loaded machine's winding block"
     return {"values": out, "sources": src, "winding": wnd}
 
 
@@ -995,6 +1003,7 @@ _KEY_FIELDS = ("num_slots", "num_poles", "single_layer", "winding_layout",
 #: Keyed only when SET (2026-09-23), so every key written before these
 #: fields existed stays the same key.
 _KEY_FIELDS_OPTIONAL = ("switching_source", "r_g_off_ext_ohm", "l_sigma_nH",
+                        "pwm_modulation", "winding_n_parallel",
                         # 2026-09-28: standalone runs + stated R_th(j-c)
                         "standalone", "n_inverters", "phase_shift_deg",
                         "modulation_scheme", "r_th_jc_k_w")
@@ -1005,9 +1014,15 @@ def _history_key(req: Dict[str, Any]) -> str:
     for k in _KEY_FIELDS:
         p[k] = _RH.round_floats(req.get(k), 6) if req.get(k) is not None else None
     for k in _KEY_FIELDS_OPTIONAL:
-        if req.get(k) is not None and not (k == "switching_source"
-                                           and str(req[k]).lower() == "datasheet"):
+        if req.get(k) is not None and not (
+                (k == "switching_source" and str(req[k]).lower() == "datasheet")
+                or (k == "pwm_modulation" and str(req[k]).lower() == "sine")
+                or (k == "winding_n_parallel" and int(req[k]) == 1)):
             p[k] = _RH.round_floats(req.get(k), 6)
+    # 2026-09-27: the default basis moved to the vendor SPICE model for every
+    # device with a table (and the datasheet fallback's R_G / V_dc rules were
+    # corrected) — no earlier result may be served for a new solve.
+    p["loss_basis_rev"] = "spice-uniform-2026-09-27"
     p["cooling"] = _RH.round_floats(dict(req.get("cooling") or {}), 6)
     p["par_by_bridge"] = sorted(
         f"{k}={v}" for k, v in (req.get("devices_parallel_by_bridge") or {}).items())
@@ -1185,10 +1200,16 @@ def _build_request(body: Dict[str, Any],
                 "h_bridge_modulation": (body.get("h_bridge_modulation")
                                         or ctrl.get("h_bridge_modulation")
                                         or "unipolar"),
+                # 2026-09-26: the three-phase modulation (sine default;
+                # svpwm / third_harmonic — linear to m = 2/sqrt(3)).
+                "pwm_modulation": (body.get("pwm_modulation")
+                                   or ctrl.get("pwm_modulation") or "sine"),
                 "dead_time_us": (body.get("dead_time_us")
                                  if body.get("dead_time_us") is not None
                                  else ctrl.get("dead_time_us")),
-                "v_gs_on_V": body.get("v_gs_on_V"),
+                "v_gs_on_V": (body.get("v_gs_on_V")
+                              if body.get("v_gs_on_V") is not None
+                              else ctrl.get("v_gs_on_V")),
                 "v_gs_off_V": (body.get("v_gs_off_V")
                                if body.get("v_gs_off_V") is not None
                                else ctrl.get("v_gs_off_V")),

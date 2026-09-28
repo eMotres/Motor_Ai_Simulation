@@ -27,6 +27,8 @@ export interface DeviceRow {
   image?: string | null;
   /** A GENERATED outline of the package — never vendor artwork. */
   package_svg?: string;
+  /** The PCB side of the card — null when the card has no footprint block. */
+  footprint?: DeviceFootprint | null;
   /** ceil(I_switch_rms / I_DDC@100 °C) for the duty the catalogue was asked for. */
   suggested_parallel?: number | null;
   /** A quotation somebody typed on the card, never a datasheet value. */
@@ -34,7 +36,26 @@ export interface DeviceRow {
             source: string | null; dated: string | null };
   datasheet_url?: string | null;
   datasheet_revision?: string | null;
+  /** 2026-09-27 uniform SPICE basis: the basis a solve uses by default. */
+  basis_default?: 'spice' | 'datasheet';
+  spice?: { has_table: boolean; has_static: boolean; model_status: string;
+            needs: string | null; basis: string | null;
+            l_sigma_default_nH: number | null; r_g_sets_ohm: number[];
+            deviation_line: string | null };
   error?: string;
+}
+
+/** A card's `footprint` block as the catalogue row carries it. */
+export interface DeviceFootprint {
+  package_outline_id: string | null;
+  land_pattern_ref: string | null;
+  body_height_mm: number | null;
+  top_tab_mm: { length_mm: number | null; width_mm: number | null } | null;
+  /** Parts sharing ONE land pattern, e.g. `qdpak_750_1200`. */
+  compatibility_group: string | null;
+  group_parts?: string[];
+  /** One line when parts in the group differ (or are unknown) in height / top tab. */
+  group_warning?: string | null;
 }
 
 export interface CoilRow {
@@ -218,10 +239,19 @@ export interface ControllerSettings {
   topology?: string;
   set_split?: string;
   h_bridge_modulation?: string;
+  /** Three-phase bridges: ``"sine" | "svpwm" | "third_harmonic"``. */
+  pwm_modulation?: string;
   devices_parallel?: number;
   devices_parallel_by_bridge?: Record<string, number>;
   r_g_ext_ohm?: number | null;
   v_gs_off_V?: number | null;
+  /** 2026-09-27 (cloud task 10): the loss basis ("spice" | "datasheet";
+   *  null = the device's default — SPICE wherever a table exists) and the
+   *  driver/layout inputs the SPICE table is looked up with. */
+  switching_source?: string | null;
+  r_g_off_ext_ohm?: number | null;
+  v_gs_on_V?: number | null;
+  l_sigma_nH?: number | null;
   dead_time_us?: number | null;
   f_carrier_hz?: number | null;
   v_dc_V?: number | null;
@@ -265,9 +295,18 @@ export interface ControllerFormState {
   topology: string;
   setSplit: string;
   hbMod: string;
+  /** Three-phase modulation — ``"sine" | "svpwm" | "third_harmonic"``. */
+  pwmMod: string;
   nPar: NumOrBlank;
   rg: NumOrBlank;
   vgsOff: NumOrBlank;
+  /** ``''`` = the device's default basis (SPICE where a table exists). */
+  basis: string;
+  /** blank = same as R_G,on / the device's datasheet V_GS(on) / the
+   *  datasheet test circuit's loop inductance. */
+  rgOff: NumOrBlank;
+  vgsOn: NumOrBlank;
+  lSigma: NumOrBlank;
   dead: NumOrBlank;
   fsw: NumOrBlank;
   vdc: NumOrBlank;
@@ -357,6 +396,8 @@ export function standaloneSolveBody(base: ControllerSolveBody, sa: StandaloneFor
     i_phase_rms_A: blank(sa.iPh), f_elec_hz: blank(sa.f1),
     modulation_index: blank(sa.m), power_factor: blank(sa.pf),
     modulation_scheme: sa.scheme,
+    // the same choice as the tab's PWM modulation — the typed scheme wins
+    pwm_modulation: sa.scheme === 'svpwm' ? 'svpwm' : 'sine',
   };
 }
 
@@ -386,7 +427,9 @@ export function standaloneSolveBody(base: ControllerSolveBody, sa: StandaloneFor
  */
 export const DEFAULT_CONTROLLER_FORM: ControllerFormState = {
   device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
+  pwmMod: 'sine',
   nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
+  basis: '', rgOff: '', vgsOn: '', lSigma: '',
   // Owner 2026-09-25: these five INHERIT from the Thermal tab by default —
   // blank is "not overridden yet", the SAME convention ``vdc``/``fsw``
   // already use here (a placeholder shows the resolved value; typing a real
@@ -434,9 +477,14 @@ export function formStateFromSettings(
     topology: block.topology || fallback.topology,
     setSplit: block.set_split || fallback.setSplit,
     hbMod: block.h_bridge_modulation || fallback.hbMod,
+    pwmMod: block.pwm_modulation || fallback.pwmMod,
     nPar: block.devices_parallel ?? fallback.nPar,
     rg: toFormNumber(block.r_g_ext_ohm),
     vgsOff: toFormNumber(block.v_gs_off_V),
+    basis: block.switching_source || fallback.basis,
+    rgOff: toFormNumber(block.r_g_off_ext_ohm),
+    vgsOn: toFormNumber(block.v_gs_on_V),
+    lSigma: toFormNumber(block.l_sigma_nH),
     dead: toFormNumber(block.dead_time_us),
     fsw: toFormNumber(block.f_carrier_hz),
     vdc: toFormNumber(block.v_dc_V),
@@ -468,6 +516,7 @@ export function settingsForSave(s: ControllerFormState): ControllerSettings {
     topology: s.topology,
     set_split: s.setSplit,
     h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
     devices_parallel: s.nPar === '' ? 1 : s.nPar,
     // ALWAYS {} — the tab has only the one global count now; this REPLACES
     // (never merges into) whatever a saved block held, so a stale per-bridge
@@ -475,6 +524,10 @@ export function settingsForSave(s: ControllerFormState): ControllerSettings {
     devices_parallel_by_bridge: {},
     r_g_ext_ohm: toSaveNumber(s.rg),
     v_gs_off_V: toSaveNumber(s.vgsOff),
+    switching_source: s.basis || null,
+    r_g_off_ext_ohm: toSaveNumber(s.rgOff),
+    v_gs_on_V: toSaveNumber(s.vgsOn),
+    l_sigma_nH: toSaveNumber(s.lSigma),
     dead_time_us: toSaveNumber(s.dead),
     f_carrier_hz: toSaveNumber(s.fsw),
     v_dc_V: toSaveNumber(s.vdc),
@@ -586,8 +639,13 @@ export interface ControllerSolveBody {
   topology: string;
   set_split: string;
   h_bridge_modulation: string;
+  pwm_modulation: string;
   r_g_ext_ohm?: number;
   v_gs_off_V?: number;
+  switching_source?: string;
+  r_g_off_ext_ohm?: number;
+  v_gs_on_V?: number;
+  l_sigma_nH?: number;
   dead_time_us?: number;
   f_carrier_hz?: number;
   v_dc_V?: number;
@@ -646,8 +704,13 @@ export function controllerSolveBody(
     device: s.device,
     devices_parallel: blank(s.nPar),
     topology: s.topology, set_split: s.setSplit, h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
     r_g_ext_ohm: blank(s.rg),
     v_gs_off_V: blank(s.vgsOff),
+    switching_source: s.basis || undefined,
+    r_g_off_ext_ohm: blank(s.rgOff),
+    v_gs_on_V: blank(s.vgsOn),
+    l_sigma_nH: blank(s.lSigma),
     dead_time_us: blank(s.dead),
     f_carrier_hz: blank(s.fsw),
     v_dc_V: blank(s.vdc),
@@ -883,12 +946,19 @@ export function staleResultFields(
       && s.rg !== res.settings.r_g_ext_ohm) out.push('R_G');
   if (s.vgsOff !== '' && res.settings?.v_gs_off_V != null
       && s.vgsOff !== res.settings.v_gs_off_V) out.push('V_GS off');
+  if (s.basis && res.settings?.switching_source != null
+      && s.basis !== res.settings.switching_source) out.push('loss basis');
+  if (s.rgOff !== '' && s.rgOff !== (res.settings?.r_g_off_ext_ohm ?? null)) out.push('R_G,off');
+  if (s.lSigma !== '' && s.lSigma !== (res.settings?.l_sigma_nH ?? null)) out.push('L_σ');
   if (s.fsw !== '' && res.point?.f_carrier_hz != null
       && s.fsw !== res.point.f_carrier_hz) out.push('carrier');
   if (s.vdc !== '' && res.point?.v_dc_V != null
       && s.vdc !== res.point.v_dc_V) out.push('DC link');
   if (s.coolingMode && res.thermal?.cooling_mode != null
       && s.coolingMode !== res.thermal.cooling_mode) out.push('cooling');
+  // A result from before the choice existed carries no pwm_modulation: sine.
+  if (s.pwmMod && res.settings && s.pwmMod !== (res.settings.pwm_modulation || 'sine'))
+    out.push('modulation');
   return out;
 }
 

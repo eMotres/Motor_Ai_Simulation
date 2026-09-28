@@ -42,6 +42,8 @@ function standaloneSolveBody(base, sa) {
     i_phase_rms_A: blank(sa.iPh), f_elec_hz: blank(sa.f1),
     modulation_index: blank(sa.m), power_factor: blank(sa.pf),
     modulation_scheme: sa.scheme,
+    // the same choice as the tab's PWM modulation — the typed scheme wins
+    pwm_modulation: sa.scheme === 'svpwm' ? 'svpwm' : 'sine',
   };
 }
 

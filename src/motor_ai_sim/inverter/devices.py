@@ -36,7 +36,8 @@ log = logging.getLogger(__name__)
 __all__ = [
     "CardError", "DeviceCard", "devices_dir", "library", "list_devices",
     "get_device", "validate_card", "write_card", "REQUIRED_BLOCKS",
-    "SWITCHING_SOURCES",
+    "SWITCHING_SOURCES", "FOOTPRINT_KEYS", "validate_footprint",
+    "footprint_groups",
 ]
 
 
@@ -126,6 +127,13 @@ def list_devices(*, i_switch_rms_A: Optional[float] = None
             out.append({"part": p.stem, "error": str(exc)})
             continue
         out.append(card.row(i_switch_rms_A=i_switch_rms_A))
+    groups = footprint_groups(out)
+    for r in out:
+        fp = r.get("footprint")
+        if fp and fp.get("compatibility_group") in groups:
+            g = groups[fp["compatibility_group"]]
+            fp["group_parts"] = list(g["parts"])
+            fp["group_warning"] = g["warning"]
     return out
 
 
@@ -219,7 +227,180 @@ def validate_card(doc: Any) -> List[str]:
                                      and tq.get("curves")):
         bad.append("third_quadrant.curves needs at least one I_SD(V_SD) curve "
                    "(the dead-time drop)")
+    if "footprint" in doc:
+        bad.extend(validate_footprint(doc))
     return bad
+
+
+# ---------------------------------------------------------------------------
+# Footprint — what the PCB has to carry (owner 2026-09-26, Task 9)
+# ---------------------------------------------------------------------------
+
+#: Every key a ``footprint`` block has, and only these.  A value the datasheet
+#: does not publish is ``null`` and its ``*_note`` says so — the block is
+#: OPTIONAL on a card (the loss model does not read it), but once present it is
+#: complete, so a half-filled one is refused rather than shown as "fits".
+FOOTPRINT_KEYS = (
+    "package_outline_id",     # the datasheet's package-group number, e.g. PG-HDSOP-22-U03
+    "outline_source",         # which figure/page of the datasheet gives it
+    "land_pattern_ref",       # datasheet figure/page of the land pattern, or null
+    "land_pattern_note",      # required when land_pattern_ref is null
+    "body_height_mm",         # seating plane to top, MAX column, or null
+    "body_height_source",     # figure + dimension letter, or why it is null
+    "top_tab_mm",             # {length_mm, width_mm, source} of the top cooling tab, or null
+    "top_tab_note",           # required when top_tab_mm is null
+    "compatibility_group",    # parts that share ONE land pattern, e.g. qdpak_750_1200
+    "compatibility_basis",    # who/what says they share it
+)
+
+_GROUP_RE = re.compile(r"^[a-z0-9][a-z0-9_]{1,63}$")
+
+
+def _blank(v: Any) -> bool:
+    return v is None or (isinstance(v, str) and not v.strip())
+
+
+def validate_footprint(doc: Dict[str, Any]) -> List[str]:
+    """Everything wrong with ``doc['footprint']`` (empty = fine)."""
+    fp = doc.get("footprint")
+    if not isinstance(fp, dict):
+        return ["footprint must be a mapping with the keys "
+                + ", ".join(FOOTPRINT_KEYS)]
+    bad: List[str] = []
+    extra = sorted(set(fp) - set(FOOTPRINT_KEYS))
+    if extra:
+        bad.append("footprint has unknown key(s) " + ", ".join(extra)
+                   + " — allowed: " + ", ".join(FOOTPRINT_KEYS))
+    missing = [k for k in FOOTPRINT_KEYS if k not in fp]
+    if missing:
+        bad.append("footprint is missing " + ", ".join(missing)
+                   + " (write null with a note where the datasheet is silent)")
+
+    oid = fp.get("package_outline_id")
+    pkg = str(doc.get("package") or "").strip()
+    if _blank(oid):
+        bad.append("footprint.package_outline_id is required (the datasheet's "
+                   "package-group number)")
+    elif pkg and not str(oid).strip().upper().startswith(pkg.upper()):
+        bad.append(f"footprint.package_outline_id {oid!r} is not a variant of "
+                   f"the card's package {pkg!r}")
+    if _blank(fp.get("outline_source")):
+        bad.append("footprint.outline_source is required (datasheet figure/page)")
+
+    if _blank(fp.get("land_pattern_ref")) and _blank(fp.get("land_pattern_note")):
+        bad.append("footprint.land_pattern_ref is null — land_pattern_note "
+                   "must say why")
+
+    h = fp.get("body_height_mm")
+    if h is None:
+        if _blank(fp.get("body_height_source")):
+            bad.append("footprint.body_height_mm is null — body_height_source "
+                       "must say why")
+    else:
+        hv = _num(h)
+        if hv is None or hv <= 0 or isinstance(h, bool):
+            bad.append(f"footprint.body_height_mm must be a positive number "
+                       f"[mm] or null; got {h!r}")
+        else:
+            if _blank(fp.get("body_height_source")):
+                bad.append("footprint.body_height_source is required "
+                           "(figure + dimension)")
+            size = doc.get("package_size_mm")
+            ph = _num(size.get("height_mm")) if isinstance(size, dict) else None
+            if ph is not None and abs(ph - hv) > 1e-9:
+                bad.append(f"footprint.body_height_mm {hv} disagrees with "
+                           f"package_size_mm.height_mm {ph} — one of them is "
+                           f"mis-transcribed")
+
+    tab = fp.get("top_tab_mm")
+    if tab is None:
+        if _blank(fp.get("top_tab_note")):
+            bad.append("footprint.top_tab_mm is null — top_tab_note must say "
+                       "why (not published / no top tab)")
+    elif not isinstance(tab, dict):
+        bad.append(f"footprint.top_tab_mm must be a mapping "
+                   f"{{length_mm, width_mm, source}} or null; got {tab!r}")
+    else:
+        for k in ("length_mm", "width_mm"):
+            v = _num(tab.get(k))
+            if v is None or v <= 0:
+                bad.append(f"footprint.top_tab_mm.{k} must be a positive "
+                           f"number [mm]; got {tab.get(k)!r}")
+        if _blank(tab.get("source")):
+            bad.append("footprint.top_tab_mm.source is required "
+                       "(datasheet figure/page)")
+
+    g = fp.get("compatibility_group")
+    if _blank(g) or not _GROUP_RE.match(str(g)):
+        bad.append(f"footprint.compatibility_group must be lower-case letters, "
+                   f"digits and underscores (e.g. qdpak_750_1200); got {g!r}")
+    if _blank(fp.get("compatibility_basis")):
+        bad.append("footprint.compatibility_basis is required (who or which "
+                   "document says these parts share one land pattern)")
+    return bad
+
+
+def _footprint_of(doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The row's footprint summary — ``None`` when the card has no block."""
+    fp = doc.get("footprint")
+    if not isinstance(fp, dict):
+        return None
+    tab = fp.get("top_tab_mm")
+    return {
+        "package_outline_id": fp.get("package_outline_id"),
+        "land_pattern_ref": fp.get("land_pattern_ref"),
+        "body_height_mm": _num(fp.get("body_height_mm")),
+        "top_tab_mm": ({"length_mm": _num(tab.get("length_mm")),
+                        "width_mm": _num(tab.get("width_mm"))}
+                       if isinstance(tab, dict) else None),
+        "compatibility_group": fp.get("compatibility_group"),
+    }
+
+
+def _fmt_mm(v: float) -> str:
+    return f"{v:g}"
+
+
+def footprint_groups(rows: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Catalogue rows -> ``{group: {parts, heights_mm, top_tabs_mm, warning}}``.
+
+    ``warning`` is ONE line, or ``None`` when every part in the group has the
+    same published height and the same published top tab.  A value no card
+    publishes is never read as "equal": the line says how many are unknown.
+    """
+    groups: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        fp = r.get("footprint") if isinstance(r, dict) else None
+        if not fp or not fp.get("compatibility_group"):
+            continue
+        g = groups.setdefault(str(fp["compatibility_group"]),
+                              {"parts": [], "heights_mm": {}, "top_tabs_mm": {}})
+        g["parts"].append(r["part"])
+        g["heights_mm"][r["part"]] = fp.get("body_height_mm")
+        g["top_tabs_mm"][r["part"]] = fp.get("top_tab_mm")
+    for g in groups.values():
+        n = len(g["parts"])
+        clauses: List[str] = []
+        hs = sorted({h for h in g["heights_mm"].values() if h is not None})
+        if len(hs) > 1:
+            clauses.append("body height differs ("
+                           + " / ".join(_fmt_mm(h) for h in hs) + " mm)")
+        tabs = sorted({(t["length_mm"], t["width_mm"])
+                       for t in g["top_tabs_mm"].values() if t})
+        if len(tabs) > 1:
+            clauses.append("top tab differs ("
+                           + " / ".join(f"{_fmt_mm(a)}×{_fmt_mm(b)}"
+                                        for a, b in tabs) + " mm)")
+        n_h_unk = sum(1 for h in g["heights_mm"].values() if h is None)
+        n_t_unk = sum(1 for t in g["top_tabs_mm"].values() if not t)
+        if n > 1 and n_h_unk:
+            clauses.append(f"height not published on {n_h_unk} of {n}")
+        if n > 1 and n_t_unk:
+            clauses.append(f"top tab not published on {n_t_unk} of {n}")
+        g["warning"] = ("Same land pattern, but " + "; ".join(clauses)
+                        + " — check heatsink contact and clearance."
+                        if clauses else None)
+    return groups
 
 
 def write_card(doc: Dict[str, Any], *, overwrite: bool = False) -> Path:
@@ -658,10 +839,78 @@ class DeviceCard:
         return b if isinstance(b, dict) and b.get("sets") else None
 
     def switching_source_default(self) -> str:
-        """The card's own ``switching_source`` (``datasheet`` unless the card
-        says ``spice``).  A request's ``switching_source`` overrides it."""
-        s = str(self.doc.get("switching_source") or "datasheet").strip().lower()
-        return s if s in SWITCHING_SOURCES else "datasheet"
+        """The basis a solve uses when the request does not say.
+
+        Owner 2026-09-27: «все моторы должны работать на SPICE одинаково» —
+        every device whose vendor model runs carries a ``switching_table``
+        and is solved on it; the datasheet path is the explicit, labelled
+        fallback for a device WITHOUT a runnable model (the encrypted 750 V
+        parts).  A card may still pin ``switching_source: datasheet``."""
+        s = str(self.doc.get("switching_source") or "").strip().lower()
+        if s in SWITCHING_SOURCES:
+            return "datasheet" if (s == "spice" and self.switching_table() is None) else s
+        return "spice" if self.switching_table() is not None else "datasheet"
+
+    def static_table(self) -> Optional[Dict[str, Any]]:
+        """The card's generated SPICE ``static_table`` (DC sweeps), or ``None``."""
+        b = self.doc.get("static_table")
+        return b if isinstance(b, dict) and b.get("forward") else None
+
+    def spice_validation(self) -> Optional[Dict[str, Any]]:
+        """The model-vs-datasheet verdict stored with the table (or ``None``)."""
+        v = (self.switching_table() or {}).get("validation")
+        return v if isinstance(v, dict) else None
+
+    def spice_deviation_line(self) -> Optional[str]:
+        """The one line the card/results show when the vendor model deviates
+        from the datasheet by more than 15 % (or cannot be checked)."""
+        v = self.spice_validation()
+        if not v or not v.get("deviates"):
+            return None
+        return str(v.get("line") or "")
+
+    def spice_availability(self) -> Dict[str, Any]:
+        """What the Controller tab shows next to the basis selector."""
+        from motor_ai_sim.inverter.spice.models import SpiceModelError, read_manifest
+        try:
+            man = read_manifest(self.part)
+        except SpiceModelError:
+            man = {}
+        status = str(man.get("status") or "no_model")
+        return {"has_table": self.switching_table() is not None,
+                "has_static": self.static_table() is not None,
+                "model_status": status,
+                "model_status_reason": man.get("status_reason"),
+                "needs": ("LTspice (free, Analog Devices) with the vendor's _LTSpice.lib — "
+                          "the library is encrypted, ngspice cannot run it"
+                          if status.lower() == "encrypted" else None),
+                "basis": (self.switching_table() or {}).get("basis"),
+                "l_sigma_default_nH": (self.switching_table() or {}).get("l_sigma_default_nH"),
+                "r_g_sets_ohm": sorted({float(s.get("r_g_on_ohm")) for s in
+                                        (self.switching_table() or {}).get("sets") or []
+                                        if isinstance(s, dict) and s.get("r_g_on_ohm") is not None}),
+                "validation": self.spice_validation(),
+                "deviation_line": self.spice_deviation_line()}
+
+    # ── conduction / third quadrant from the SPICE static table ────────────
+    def v_ds_on_spice_V(self, i_A: float, t_j_c: float, v_gs_on_V: float) -> float:
+        """Forward V_DS [V] at the POWER source pin from the vendor model's DC
+        sweep (the vendor model's own Kelvin-to-power-source path included,
+        neither added nor removed here)."""
+        from motor_ai_sim.inverter.spice.table import static_voltage
+        blk = self.static_table()
+        if blk is None:
+            raise CardError(f"{self.part}: no SPICE static_table")
+        return static_voltage(blk, kind="forward", i_A=i_A, t_j_c=t_j_c, v_gs_V=v_gs_on_V)[0]
+
+    def v_sd_spice_V(self, i_sd_A: float, t_j_c: float, v_gs_off_V: float = 0.0) -> float:
+        """Third-quadrant V_SD [V] at the power source pin, gate at V_GS(off)."""
+        from motor_ai_sim.inverter.spice.table import static_voltage
+        blk = self.static_table()
+        if blk is None:
+            raise CardError(f"{self.part}: no SPICE static_table")
+        return static_voltage(blk, kind="third_quadrant", i_A=i_sd_A, t_j_c=t_j_c,
+                              v_gs_V=v_gs_off_V)[0]
 
     def e_switch(self, *, i_d_A: float, t_j_c: float, v_dc_V: float,
                  v_gs_off_V: float = 0.0,
@@ -748,28 +997,51 @@ class DeviceCard:
                 continue
             e_uj = interp(sorted(by_t), float(t_j_c)) or 0.0
             out[key] = max(float(e_uj), 0.0) * 1e-6
-        # Voltage
+        # Voltage — E_on/E_off on the card's exponent (the datasheet's own
+        # E = f(V_DD) figure says ~1.8 on the CoolSiC G2 family, 2026-09-27),
+        # E_fr on its own (~1.0 on the same figure).
         v_ref = float(sw.get("v_dd_ref_V"))
         n = float(_num(scaling.get("voltage_exponent")) or 1.0)
-        kv = (max(float(v_dc_V), 0.0) / v_ref) ** n if v_ref > 0 else 1.0
-        for key in ("e_on_J", "e_off_J", "e_fr_J"):
-            out[key] *= kv
-        # Gate resistance — E_on/E_off only, per the card's `r_g_rule`.
+        n_fr = float(_num(scaling.get("voltage_exponent_fr")) or n)
+        vr = max(float(v_dc_V), 0.0) / v_ref if v_ref > 0 else 1.0
+        kv, kv_fr = vr ** n, vr ** n_fr
+        out["e_on_J"] *= kv
+        out["e_off_J"] *= kv
+        out["e_fr_J"] *= kv_fr
+        # Gate resistance — E_on/E_off only: a straight line THROUGH the
+        # datasheet point with the datasheet figure's slope (relative to the
+        # energy at the reference R_G):  E(R) = E(R_ref)*(1 + s*(R - R_ref)).
+        # 2026-09-27: the former rule E*R/R_ref (a line through the origin)
+        # over-read the figure x1.5 at 4.7 ohm and x2.4 at 20 ohm.  A card
+        # without a slope is NOT rescaled (said).
         r_ref = _num(sw.get("r_g_ext_ref_ohm"))
-        kr = 1.0
-        if r_g_ext_ohm is not None and r_ref and r_ref > 0:
-            kr = max(float(r_g_ext_ohm), 0.0) / r_ref
-            out["e_on_J"] *= kr
-            out["e_off_J"] *= kr
+        s_on = _num(scaling.get("r_g_slope_rel_on_per_ohm"))
+        s_off = _num(scaling.get("r_g_slope_rel_off_per_ohm"))
+        k_on = k_off = 1.0
+        r_note = None
+        if r_g_ext_ohm is not None and r_ref is not None and abs(float(r_g_ext_ohm) - r_ref) > 1e-9:
+            dr = float(r_g_ext_ohm) - r_ref
+            if s_on is not None and s_off is not None:
+                k_on = max(1.0 + s_on * dr, 0.05)
+                k_off = max(1.0 + s_off * dr, 0.05)
+                out["e_on_J"] *= k_on
+                out["e_off_J"] *= k_off
+                r_note = (f"gate resistance {float(r_g_ext_ohm):g} ohm: line through the "
+                          f"datasheet point ({r_ref:g} ohm) with the figure's slope — "
+                          f"E_on x{k_on:.3f}, E_off x{k_off:.3f} "
+                          f"[{scaling.get('r_g_slope_source') or 'card'}]; E_fr held")
+            else:
+                r_note = (f"gate resistance {float(r_g_ext_ohm):g} ohm: the card publishes no "
+                          f"E = f(R_G) slope — energies NOT rescaled from {r_ref:g} ohm")
         notes = [
             f"E(I_D) from the card's {float(t_j_c):.0f} degC-interpolated curves "
             f"at V_GS(off) = {float(v_gs_off_V):g} V",
-            f"bus scaling (V_dc/{v_ref:g} V)^{n:g} = {kv:.4f} "
-            f"[{scaling.get('voltage_rule') or 'card rule'}]",
+            f"bus scaling (V_dc/{v_ref:g} V)^{n:g} = {kv:.4f} on E_on/E_off"
+            + (f", ^{n_fr:g} = {kv_fr:.4f} on E_fr" if n_fr != n else "")
+            + f" [{scaling.get('voltage_rule') or 'card rule'}]",
         ]
-        if kr != 1.0:
-            notes.append(f"gate-resistance scaling R_G,ext/{r_ref:g} ohm = {kr:.3f} "
-                         "(E_on and E_off only; E_fr held at the datasheet R_G)")
+        if r_note:
+            notes.append(r_note)
         if above:
             notes.append(f"{i:.0f} A is ABOVE the card's tabulated current range "
                          "— linearly extrapolated")
@@ -1070,6 +1342,13 @@ class DeviceCard:
             "family": self.doc.get("family"),
             "technology": self.doc.get("technology"),
             "switching_energy_source": self.switching_energy_source(),
+            # 2026-09-27 uniform SPICE basis: which basis a solve uses by
+            # default, and the one-line model deviation where it applies
+            "basis_default": self.switching_source_default(),
+            "spice": (lambda a: {k: a[k] for k in ("has_table", "has_static", "model_status",
+                                                   "needs", "basis", "l_sigma_default_nH",
+                                                   "r_g_sets_ohm", "deviation_line")})(
+                self.spice_availability()),
             "package": self.doc.get("package"),
             "package_common_name": self.doc.get("package_common_name"),
             "cooling": self.doc.get("cooling"),
@@ -1093,6 +1372,10 @@ class DeviceCard:
             "price": self.unit_price(),
             "image": self.doc.get("image"),
             "package_svg": self.package_outline_svg(),
+            # The PCB side (owner 2026-09-26): outline ID, land-pattern
+            # reference, height, top tab and the compatibility group the
+            # catalogue's "fits the selected board" filter reads.
+            "footprint": _footprint_of(self.doc),
             "suggested_parallel": (None if i_switch_rms_A is None else
                                    self.suggested_parallel(i_switch_rms_A)),
             "datasheet_url": self.doc.get("datasheet_url"),

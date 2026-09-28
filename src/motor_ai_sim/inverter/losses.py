@@ -148,6 +148,13 @@ def standalone_coils(n_inverters: int, shift_deg: float = 30.0) -> List[Coil]:
             idx += 1
     return out
 
+#: The three-phase modulations (``simulation.pwm.PWM_MODULATIONS``) and the
+#: LINEAR limit of each: past it the [0, 1] duty clamps and the switching
+#: functions integrated here are no longer what the bridge does.
+PWM_LINEAR_LIMIT = {"sine": 1.0,
+                    "svpwm": 2.0 / math.sqrt(3.0),
+                    "third_harmonic": 2.0 / math.sqrt(3.0)}
+
 
 # ---------------------------------------------------------------------------
 # The coldplate
@@ -638,21 +645,30 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
     ``l_sigma_nH`` choose its driver/layout set).
     """
     n = max(int(n_par), 1)
-    r_tot = card.r_ds_on_ohm(t_j_c, v_gs_on)
-    r_eff = r_tot / n
     a = np.abs(i_leg)
     i_dev = a / n
     f_dt = min(max(2.0 * float(dead_time_s) * float(f_sw), 0.0), 1.0)
-
-    p_cond = (1.0 - f_dt) * float(np.mean(i_leg ** 2)) * r_eff
-
     # Sampled on a coarse current ladder and interpolated back, so a
     # 2 000-point grid does not mean 2 000 card look-ups per iteration.
     i_max = float(np.max(i_dev)) if i_dev.size else 0.0
     ladder = np.linspace(0.0, max(i_max, 1e-9), 33)
+    # 2026-09-27: on the SPICE basis the conduction and the third quadrant
+    # come from the vendor model's DC sweeps too (uniform with switching):
+    # V_DS(I, T_j) at the POWER source pin, integrated as <i * V(i)>.
+    switching_source = (switching_source or card.switching_source_default()).strip().lower()
+    spice_static = (switching_source == "spice" and card.static_table() is not None)
+    if spice_static:
+        v_fw = np.array([card.v_ds_on_spice_V(float(x), t_j_c, v_gs_on) for x in ladder])
+        p_cond = (1.0 - f_dt) * n * float(np.mean(i_dev * np.interp(i_dev, ladder, v_fw)))
+        i_ref = max(float(np.sqrt(np.mean(i_dev ** 2))), 1e-9)
+        r_tot = float(np.interp(i_ref, ladder, v_fw)) / i_ref
+    else:
+        r_tot = card.r_ds_on_ohm(t_j_c, v_gs_on)
+        p_cond = (1.0 - f_dt) * float(np.mean(i_leg ** 2)) * r_tot / n
 
     if f_dt > 0.0:
-        v_ladder = np.array([card.v_sd_V(float(x), t_j_c, v_gs_off)
+        v_ladder = np.array([(card.v_sd_spice_V(float(x), t_j_c, v_gs_off) if spice_static
+                              else card.v_sd_V(float(x), t_j_c, v_gs_off))
                              for x in ladder])
         v_sd = np.interp(i_dev, ladder, v_ladder)
         p_3q = f_dt * float(np.mean(a * v_sd))
@@ -705,6 +721,7 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
         "i_device_peak_A": i_max,
         "extrapolated": extrapolated,
         "notes": notes,
+        "conduction_source": "spice_static" if spice_static else "datasheet",
     }
 
 
@@ -877,7 +894,9 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                 ``power_factor``)
       devices   ``device``, ``devices_parallel``, ``r_g_ext_ohm``,
                 ``v_gs_on_V``, ``v_gs_off_V``, ``dead_time_us``
-      topology  ``topology``, ``mapping``, ``h_bridge_modulation``, ``set_split``
+      topology  ``topology``, ``mapping``, ``h_bridge_modulation``, ``set_split``,
+                ``pwm_modulation`` (three-phase bridges: ``sine`` default,
+                ``svpwm``, ``third_harmonic`` — linear to m = 2/sqrt(3))
       cooling   ``cooling.mode`` -> ``"liquid"`` (default, :class:`ColdPlate`
                 fields — coolant/flow/inlet/channels), ``"air_forced"``
                 (:class:`AirForcedCooling` — air_speed_mps/t_ambient_c/
@@ -991,6 +1010,27 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     root3 = math.sqrt(3.0)
     i_leg_3ph = i_ph * (root3 if sd == "delta" else 1.0)
 
+    # ── the three-phase modulation (2026-09-26) ────────────────────────────
+    # modulation_scheme (standalone form, 2026-09-28) is the same choice as
+    # pwm_modulation: spwm -> sine, svpwm -> svpwm; an explicit
+    # pwm_modulation wins.
+    pmod = str(req.get("pwm_modulation")
+               or {"spwm": "sine", "svpwm": "svpwm"}[scheme]).strip().lower()
+    if pmod not in PWM_LINEAR_LIMIT:
+        raise ControllerRefusal(
+            "pwm_modulation must be " + " or ".join(PWM_LINEAR_LIMIT)
+            + f"; got {req.get('pwm_modulation')!r}", ["pwm_modulation"],
+            code="bad_modulation")
+    if pmod != "sine" and not any(b.kind == "three_phase_2l"
+                                  for b in topo.bridges):
+        raise ControllerRefusal(
+            f"pwm_modulation {pmod!r} is a zero sequence shared by the three "
+            "legs of a three-phase bridge, and this topology has none (every "
+            "coil is on its own H-bridge) — use sine with the H-bridge's own "
+            "unipolar/bipolar choice", ["pwm_modulation", "topology"],
+            code="modulation_needs_three_phase")
+    m_lin = PWM_LINEAR_LIMIT[pmod]
+
     m_req = req.get("modulation_index")
     pf_req = req.get("power_factor")
     if m_req is not None:
@@ -1017,34 +1057,74 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             f"{p_ac / 1e3:.0f} kW this duty draws (power factor {pf:.3f} > 1): "
             "one of the three does not belong to this operating point")
         pf = 1.0
-    if m > m_linear + 1e-9:
+    if m > m_lin:
         warnings.append(
-            f"modulation index {m:.3f} > {m_linear:.3f} ({scheme} linear limit) "
-            "— the bridge is OVERMODULATED; the "
-            "sine-triangle switching functions this model integrates are not "
-            "what such a bridge does, and the losses below read low")
+            f"modulation index {m:.3f} > {m_lin:.4g} — the bridge is "
+            f"OVERMODULATED for {pmod} modulation (linear to {m_lin:.4g}); the "
+            "switching functions this model integrates are not what such a "
+            "bridge does, and the losses below read low")
     phi_deg = math.degrees(math.acos(min(max(pf, -1.0), 1.0)))
 
     coils_per_phase = max(1, len(coils) // 3)
     v_machine_phase_rms = ((p_ac / pf) / (3.0 * i_ph
                                            * (len(topo.bridges) if standalone else 1))
                            if (pf > 0 and i_ph > 0) else 0.0)
-    v_coil_rms = v_machine_phase_rms / coils_per_phase
+    # ── the winding's parallel paths (2026-09-27) ──────────────────────────
+    # A phase of C coils is wired as n_series x n_parallel = C.  The FEM puts
+    # I_phase / n_parallel through every coil at V_phase / n_series across
+    # it.  Until 2026-09-27 this module took every winding as all-series, so
+    # on a 2P machine (L155) the H-bridge per coil was costed at TWICE its
+    # real coil current (docs/SIX_COIL_STUDY_2026-09-27.md §5).
+    a_par = int(_f(req.get("winding_n_parallel"), "winding_n_parallel",
+                   default=1, positive=True))
+    if coils_per_phase % a_par:
+        raise ControllerRefusal(
+            f"winding_n_parallel = {a_par} does not divide the "
+            f"{coils_per_phase} coil(s) per phase of this winding",
+            ["winding_n_parallel"], code="bad_winding")
+    n_ser_path = coils_per_phase // a_par
+    i_coil_rms = i_ph / a_par
+    v_coil_rms = v_machine_phase_rms / n_ser_path
+
+    def _bridge_wiring(k: int) -> Tuple[int, int]:
+        """(paths, series coils) of a bridge terminal holding k coils.
+
+        The machine's own series string is kept when the bridge holds whole
+        paths (k a multiple of n_series); otherwise the k coils are one
+        series string.  Every coil still carries I_phase / n_parallel."""
+        k = max(int(k), 1)
+        if k % n_ser_path == 0:
+            return k // n_ser_path, n_ser_path
+        return 1, k
 
     # ── per-bridge leg currents and modulation ─────────────────────────────
     n_3ph = sum(1 for b in topo.bridges if b.kind == "three_phase_2l")
     legs_spec: Dict[Tuple[str, str], Dict[str, float]] = {}
+    wiring_notes: List[str] = []
     for b in topo.bridges:
         if b.kind == "three_phase_2l":
             if set_split == "independent":
+                # standalone: every inverter a full 3-phase set
                 i_b, m_b = i_leg_3ph, m
-            elif n_3ph >= 2 and set_split == "power_split":
-                i_b, m_b = i_leg_3ph / n_3ph, m
-            elif n_3ph >= 2:
-                i_b, m_b = i_leg_3ph, m / n_3ph
+            elif a_par == 1:
+                # all-series winding: the legacy reading, bit for bit
+                if n_3ph >= 2 and set_split == "power_split":
+                    i_b, m_b = i_leg_3ph / n_3ph, m
+                elif n_3ph >= 2:
+                    i_b, m_b = i_leg_3ph, m / n_3ph
+                else:
+                    i_b, m_b = i_leg_3ph, m
             else:
-                i_b, m_b = i_leg_3ph, m
-            b.modulation = "sine_triangle"
+                k_leg = max(len(lg.coils) for lg in b.legs)
+                p_b, s_b = _bridge_wiring(k_leg)
+                i_b = p_b * i_coil_rms * (root3 if sd == "delta" else 1.0)
+                m_b = m * s_b / n_ser_path
+                wiring_notes.append(
+                    f"{b.id}: {k_leg} coil(s) per leg as {s_b}S-{p_b}P of the "
+                    f"{n_ser_path}S-{a_par}P winding, {i_coil_rms:.1f} A per "
+                    "coil")
+            b.modulation = {"sine": "sine_triangle", "svpwm": "svpwm",
+                            "third_harmonic": "third_harmonic"}[pmod]
             for k, lg in enumerate(b.legs):
                 legs_spec[(b.id, lg.name)] = {
                     "i_peak_A": i_b * math.sqrt(2.0),
@@ -1053,23 +1133,34 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
                     "m": m_b,
                 }
         else:                                        # H-bridge
-            m_b = (v_coil_rms * math.sqrt(2.0) / v_dc) if v_dc > 0 else 0.0
+            p_b, s_b = _bridge_wiring(len(b.coils))
+            i_hb = p_b * i_coil_rms
+            m_b = ((s_b * v_coil_rms) * math.sqrt(2.0) / v_dc) if v_dc > 0 else 0.0
+            if a_par > 1 or len(b.coils) > 1:
+                wiring_notes.append(
+                    f"{b.id}: {len(b.coils)} coil(s) as {s_b}S-{p_b}P, "
+                    f"{i_hb:.1f} A at {s_b * v_coil_rms:.1f} V rms")
             base = b.phase_shift_deg
             for k, lg in enumerate(b.legs):
                 legs_spec[(b.id, lg.name)] = {
-                    "i_peak_A": i_ph * math.sqrt(2.0) * (1 if k == 0 else -1),
+                    "i_peak_A": i_hb * math.sqrt(2.0) * (1 if k == 0 else -1),
                     "i_phase_deg": base,
                     "v_phase_deg": base + phi_deg + (0.0 if k == 0 else 180.0),
                     "m": m_b,
                 }
     m_by_bridge = {b.id: legs_spec[(b.id, b.legs[0].name)]["m"]
                    for b in topo.bridges}
-    over = [b.id for b in topo.bridges if m_by_bridge[b.id] > m_linear + 1e-9]
+    def _lin(b: Bridge) -> float:
+        return m_lin if b.kind == "three_phase_2l" else 1.0
+    over = [b.id for b in topo.bridges if m_by_bridge[b.id] > _lin(b)]
     if over:
         warnings.append(
-            "bridge(s) " + ", ".join(over) + " need a modulation index above 1 "
-            f"on a {v_dc:.0f} V link — this topology cannot make the voltage "
-            "this operating point needs without overmodulation or a higher bus")
+            "bridge(s) " + ", ".join(over) + " need a modulation index above "
+            "their linear limit (" + ", ".join(
+                f"{b.id} {_lin(b):.4g}" for b in topo.bridges if b.id in over)
+            + f") on a {v_dc:.0f} V link — this topology cannot make the "
+            "voltage this operating point needs without overmodulation or a "
+            "higher bus")
 
     # ── the thermal loop ───────────────────────────────────────────────────
     plate = _build_cooling(req.get("cooling") or {})
@@ -1132,7 +1223,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             f_elec_hz=f_el, f_carrier_hz=f_sw, v_dc_V=v_dc,
             modulation_index=m_by_bridge[b.id],
             samples_per_carrier=int(req.get("samples_per_carrier") or 24),
-            dead_time_s=dead_s)
+            dead_time_s=dead_s,
+            modulation=(pmod if b.kind == "three_phase_2l" else "sine"))
     u = setups[topo.bridges[0].id].grid()
     leg_current: Dict[Tuple[str, str], np.ndarray] = {}
     for (bid, lname), spec in legs_spec.items():
@@ -1307,6 +1399,10 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "switching-energy curves cover — the energies above their last "
             "tabulated point were linearly extrapolated")
 
+    if sw_src == "spice" and card.spice_deviation_line():
+        warnings.append(f"{card.part}: {card.spice_deviation_line()} — used as is "
+                        "(uniform SPICE basis; a vendor model is never tuned)")
+
     # ── efficiency ─────────────────────────────────────────────────────────
     eta_inv = p_ac / (p_ac + p_total) if (p_ac + p_total) > 0 else None
     eta_wall = (eta_inv * eta_shaft) if (eta_inv and eta_shaft) else None
@@ -1325,14 +1421,20 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
     st0 = wf.ModulatorSetup(
         f_elec_hz=base.f_elec_hz, f_carrier_hz=base.f_carrier_hz,
         v_dc_V=base.v_dc_V, modulation_index=base.modulation_index,
-        samples_per_carrier=spc, dead_time_s=dead_s)
+        samples_per_carrier=spc, dead_time_s=dead_s,
+        modulation=base.modulation)
     t_draw = min(t_j_max_seen, t_cap)
-    r_ds = card.r_ds_on_ohm(t_draw, v_gs_on)
+    spice_static = sw_src == "spice" and card.static_table() is not None
+    r_ds = (float(np.mean([r["r_ds_on_mohm"] for r in per_leg.values()])) * 1e-3
+            if spice_static else card.r_ds_on_ohm(t_draw, v_gs_on))
+
+    def _vsd1(i_dev: float) -> float:
+        return (card.v_sd_spice_V(i_dev, t_draw, v_gs_off) if spice_static
+                else card.v_sd_V(i_dev, t_draw, v_gs_off))
 
     def _v_sd(arr: np.ndarray) -> np.ndarray:
         n0 = max(int(topo.bridges[0].devices_parallel), 1)
-        return np.array([card.v_sd_V(float(x) / n0, t_draw, v_gs_off)
-                         for x in arr])
+        return np.array([_vsd1(float(x) / n0) for x in arr])
 
     dead_n = wf.dead_samples_for(st0)
     if dead_us > 0 and dead_n < 1:
@@ -1345,8 +1447,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         v_sd=_v_sd, dead_samples=dead_n)
     waves["dead_time_error_V"] = round(
         float(dead_us * 1e-6 * st0.f_carrier_eff_hz
-              * (v_dc + 2.0 * card.v_sd_V(i_ph * math.sqrt(2.0) / max(n_par, 1),
-                                          t_draw, v_gs_off))), 2)
+              * (v_dc + 2.0 * _vsd1(i_ph / a_par * math.sqrt(2.0)
+                                    / max(n_par, 1)))), 2)
 
     # ── the R_th(j-a) cross-check, air-cooled modes only (owner's brief: a
     # PQFN/source-down part's path is pad -> PCB copper -> air; state clearly
@@ -1387,7 +1489,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
         "device_row": card.row(i_switch_rms_A=i_dev_max * max(n_par, 1)),
         "provenance": card.provenance(),
         "topology": topo.as_dict(),
-        "set_split": set_split if n_3ph >= 2 else None,
+        "set_split": ((set_split if a_par == 1 else "winding")
+                      if n_3ph >= 2 else None),
         "bridges": bridges_out,
         "losses": {
             "conduction_W": round(split["conduction_W"], 1),
@@ -1404,6 +1507,20 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "switching_source": sw_src,
             "switching_basis": ((card.switching_table() or {}).get("basis")
                                 if sw_src == "spice" else "datasheet"),
+            # 2026-09-27 uniform SPICE basis: one label for the whole loss
+            # split, the fallback said as such, and the model's deviation
+            "conduction_source": ("spice_static" if spice_static else "datasheet"),
+            "basis_label": (
+                (f"SPICE ({card.part} vendor model): switching"
+                 + (", conduction, dead time" if spice_static else ""))
+                if sw_src == "spice" else
+                ("datasheet (explicit choice; a SPICE table exists)"
+                 if card.switching_table() is not None else
+                 "datasheet FALLBACK — no runnable vendor model"
+                 + (f" ({card.spice_availability().get('needs')})"
+                    if card.spice_availability().get("needs") else ""))),
+            "spice_deviation_line": (card.spice_deviation_line() if sw_src == "spice" else None),
+            "spice_validation": (card.spice_validation() if sw_src == "spice" else None),
         },
         "thermal": {
             "t_j_max_c": round(t_j_max_seen, 1),
@@ -1479,12 +1596,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "f_carrier_hz": round(f_sw, 1),
             "f_carrier_eff_hz": round(st0.f_carrier_eff_hz, 1),
             "modulation_index": round(m, 4),
+            "pwm_modulation": pmod,
+            "modulation_linear_limit": round(m_lin, 4),
             "power_factor": round(pf, 4),
             "load_angle_deg": round(phi_deg, 2),
             "v_dc_V": round(v_dc, 2),
             "v_machine_phase_rms_V": round(v_machine_phase_rms, 1),
             "v_coil_rms_V": round(v_coil_rms, 1),
             "coils_per_phase": coils_per_phase,
+            "winding_n_parallel": a_par,
+            "i_coil_rms_A": round(i_coil_rms, 2),
+            "bridge_wiring": wiring_notes,
             "rpm": req.get("rpm"),
             "standalone": standalone,
             "n_inverters": len(topo.bridges) if standalone else None,
@@ -1499,6 +1621,7 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "r_g_off_ext_ohm": r_g_off,
             "l_sigma_nH": l_sig,
             "switching_source": sw_src,
+            "pwm_modulation": pmod,
             "samples_per_carrier": st0.samples_per_carrier,
             "grid_points": int(u.size),
         },
@@ -1536,5 +1659,12 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "curves are extrapolated on the straight line through their two "
             "lowest points — that is where a sinusoidal current's zero "
             "crossings live",
-        ] + cooling_notes,
+        ] + ([
+            f"{pmod}: a CONTINUOUS zero-sequence modulation — every leg still "
+            "switches once per carrier, the leg current is the load's and the "
+            "zero sequence is half-wave symmetric, so conduction, switching "
+            "and the per-switch split are the sine modulator's at the same "
+            "point; what it changes is the reachable modulation index (linear "
+            "to 2/sqrt(3) instead of 1) and the DC-link ripple"]
+            if pmod != "sine" else []) + cooling_notes,
     }

@@ -7,6 +7,32 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Fixed
+- **PWM settle: the DC offset is solved, not anchored** (docs/NO_FILTERS_2026-09-24.md
+  item 5, option (c); `docs/PWM_DC_ORBIT_SOLVE_2026-09-26.md`). The period-mean DC
+  anchor had no free decay in its model: on a short-τ_e machine it over-corrected
+  and the reported window opened on its own last correction (30 mm fixture:
+  0.55 A of DC left, T −0.20 %, P_cu −0.68 % against a free settle; Ø40: 1.1 A,
+  P_cu −0.9 %). It is replaced by a Newton shooting solve of the line-to-line
+  flux's period map (`simulation/dc_orbit.py`): the exact whole-period flux
+  drift, the period Jacobian from each frame's own incremental ∂ψ/∂i (no extra
+  solve), the modulator's turn-on flux predicted from its volt-seconds, and the
+  last settling period left free as the verification. The mixed coarse/fine
+  schedule's handover step was one COARSE step long, so the first fine
+  "period" (which the anchor measured too) was P + Δθ_f; the r − 1 fine frames
+  that complete it are now on the fine grid (+1 frame at ratio 2; the reported
+  window's angles are unchanged). 30 mm fixture, 72 steps/9 carriers: DC left
+  0.554 A (anchor) / 0.025 A (free) → 0.000 A. Payload: `v_dc_orbit`
+  (per-period drift, DC, correction, Jacobian eigenvalues) replaces
+  `v_dc_anchor_applied`; `SB_V_DC_SOLVE=0` measures without correcting (for a
+  reference run's long free settle).
+- **Stop during the solver's set-up** is honoured before frame 0. The progress
+  callback that carries the Stop button fired for the first time at frame 0, so
+  the mesh, the assembly, the sliding-band projections, the phasor initialiser
+  and the static start field ran deaf to it (up to ~30 s on a large machine).
+  Each stage now starts with a checkpoint (`progress_cb(None, None)`, which
+  keeps the bar), and so does each demag re-solve of a frame.
+
 ### Changed
 - **The duty cycle is behind a feature flag, off by default** (owner 2026-09-17:
   *«давай пока уберём duty cycle из Thermal, оставим только стандартный

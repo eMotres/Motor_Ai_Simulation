@@ -195,9 +195,16 @@ NOT_PER_FRAME = {
     "_inc_rows",      # incremental Ldq rows at sampled frames only
     "_pic_fallback", "_pic_unconv",    # frame INDEX lists (diagnostics)
     "_v_bpsi",        # period-boundary flux samples (Aitken anchor)
+    "_cs_hist",       # one row per settling PERIOD (converged sine settle)
     "_warm_ks", "_warm_solid",         # eddy warm-up (k < 0) samples only
     "_warm_grp.setdefault(_gk, [])",   # …per conductor group (period gauge)
-    "_v_diag.setdefault('dc_anchor_A', [])",   # one entry per anchor event
+    # periodic-state eddy accelerator (675c93c): appended once per EXTENSION
+    # PERIOD decision during the eddy warm-up, never per reported frame —
+    "_acc_states",    # period-map iterates since the last jump (RRE input)
+    "_acc_dec",       # the decision number of each of those states
+    "_acc_lams",      # λ measured by each single-mode jump
+    "_acc_lam_state", # λ read at each slow-mode check
+    "_acc_jumps",     # one record per jump (goes into the result as a log)
 }
 
 

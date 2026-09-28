@@ -954,6 +954,14 @@ def _ripple_block(req: Dict[str, Any], *, topo: Topology,
         elif req.get("ripple_l_xy_pct") not in (None, ""):
             l_xy = _f(req["ripple_l_xy_pct"], "ripple_l_xy_pct", positive=True) / 100.0 * ld_b
             src["l_xy"] = f"the request: {float(req['ripple_l_xy_pct']):g} % of L_d"
+        elif req.get("_six_lxy_pct") not in (None, ""):
+            # the machine's OWN L_xy (six-phase EM run, frozen permeability
+            # at the operating point), as a share of the per-set L_d — the
+            # same bridge-phase reference ld_b is on.  A typed value wins.
+            l_xy = float(req["_six_lxy_pct"]) / 100.0 * ld_b
+            src["l_xy"] = (f"the duty's EM record: L_xy = "
+                           f"{float(req['_six_lxy_pct']):.4g} % of the per-set "
+                           "L_d (FEM, frozen permeability)")
         else:
             msg = ("ripple NOT computed: two three-phase inverters need L_xy "
                    "(the x-y plane links no air-gap flux — only L_xy limits "
@@ -1100,6 +1108,17 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             ["v_dc_V"], code="bus_over_vdss")
 
     preset = str(req.get("topology") or "one_3ph").strip().lower()
+    # SIX-PHASE WINDING (owner 2026-09-28): the machine has two in-phase
+    # 3-phase sets, so the controller is two 3-phase inverters — selected
+    # here, whatever a saved 3-phase topology says (only an explicit H-bridge
+    # or custom map keeps its own coil->bridge assignment).
+    coil_sets = None
+    six_slot_set = None if standalone else req.get("_six_slot_set")
+    if six_slot_set:
+        coil_sets = {c.index: int(six_slot_set[(c.slot_go - 1) % len(six_slot_set)])
+                     for c in coils}
+        if preset not in ("h_bridge", "custom", "two_3ph_sets"):
+            preset = "two_3ph_sets"
     set_split = str(req.get("set_split") or "series_split").strip().lower()
     if set_split not in SET_SPLITS:
         raise ControllerRefusal("set_split must be " + " or ".join(SET_SPLITS),
@@ -1110,7 +1129,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             devices_parallel=n_par, v_dc_V=v_dc,
             h_bridge_modulation=str(req.get("h_bridge_modulation") or "unipolar"),
             mapping=req.get("mapping"),
-            devices_parallel_by_bridge=req.get("devices_parallel_by_bridge"))
+            devices_parallel_by_bridge=req.get("devices_parallel_by_bridge"),
+            coil_sets=coil_sets)
     except TopologyError as exc:
         raise ControllerRefusal(str(exc), ["topology", "mapping",
                                            "devices_parallel_by_bridge"],

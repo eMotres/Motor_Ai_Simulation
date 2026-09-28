@@ -883,6 +883,12 @@ class WindingConfigPatch(BaseModel):
     n_coils_per_phase: Optional[int] = None
     layers:            Optional[int] = None  # 1 = single-layer, 2 = double-layer
     layout:            Optional[str] = None  # explicit per-slot "A|a|c|C|…" string
+    # SIX-PHASE WINDING (owner 2026-09-28): 3 | 6 phases.  6 = the parallel
+    # paths split into two in-phase 3-phase sets (winding_sets.py), each star
+    # or delta as the duty's Y/Delta says, each on its own inverter.
+    phases:            Optional[int] = None  # 3 | 6
+    set1_paths:        Optional[str] = None  # "1,2" — "" = the first half
+    set_neutrals:      Optional[str] = None  # "isolated" (default) | "common"
 
 
 def _current_winding_layout():
@@ -952,7 +958,29 @@ def get_winding_config():
         "layout":             layout_str,
         # per-slot [phase, direction] for the visual phase-map
         "layout_slots":       [[p, d] for p, d in lay],
+        **_six_phase_view(w),
     }
+
+
+def _six_phase_view(w: dict) -> dict:
+    """The six-phase fields of GET /api/winding/config: the stored choice and,
+    for 6 phases, the sets it resolves to (or the reason it cannot be wired)."""
+    out = {"phases": int(w.get("phases") or 3),
+           "set1_paths": str(w.get("set1_paths") or ""),
+           "set_neutrals": str(w.get("set_neutrals") or "isolated")}
+    if out["phases"] == 6:
+        from motor_ai_sim.routes.simulation import _six_phase_geometry
+        from motor_ai_sim.winding_sets import SixPhaseError, resolve_six_phase
+        try:
+            slots, poles, sl, lay_s = _six_phase_geometry()
+            spec = resolve_six_phase(w, num_slots=slots, num_poles=poles,
+                                     single_layer=sl, layout_str=lay_s)
+            out["six_phase"] = {k: spec[k] for k in (
+                "set1_paths", "set2_paths", "paths_per_set", "slot_set",
+                "neutrals", "note")}
+        except SixPhaseError as e:
+            out["six_phase_error"] = str(e)
+    return out
 
 
 from motor_ai_sim.winding import parse_connection as _parse_connection  # noqa: E402
@@ -1001,8 +1029,34 @@ def update_winding_config(patch: WindingConfigPatch):
             clean = "|".join(p if d > 0 else p.lower() for p, d in parsed)
             updates["layout"] = f'"{clean}"'
 
+    if patch.phases is not None:
+        if int(patch.phases) not in (3, 6):
+            raise HTTPException(status_code=400,
+                                detail="phases must be 3 or 6 (two 3-phase sets)")
+        updates["phases"] = str(int(patch.phases))
+    if patch.set1_paths is not None:
+        updates["set1_paths"] = '"%s"' % patch.set1_paths.replace('"', "").strip()
+    if patch.set_neutrals is not None:
+        _nz = patch.set_neutrals.strip().lower() or "isolated"
+        if _nz not in ("isolated", "common"):
+            raise HTTPException(status_code=400,
+                                detail="set_neutrals must be isolated or common")
+        updates["set_neutrals"] = _nz
+
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    # LOUD six-phase validation (owner rule: never solve an impossible
+    # machine): the winding as it WOULD be after this patch must wire as two
+    # identical 3-phase sets — odd / single paths, paths that are not copies
+    # of each other, an unequal set are refused with the reason.
+    _w_after = dict(get_config().get("winding", {}) or {})
+    _w_after.update({k: v.strip('"') for k, v in updates.items()})
+    if int(_w_after.get("phases") or 3) == 6:
+        from motor_ai_sim.routes.simulation import _six_phase_error
+        _e6 = _six_phase_error(_w_after)
+        if _e6:
+            raise HTTPException(status_code=422, detail=_e6)
 
     content = _config_path().read_text(encoding="utf-8")
     lines   = content.splitlines(keepends=True)
@@ -1042,6 +1096,25 @@ def update_winding_config(patch: WindingConfigPatch):
 
         result.append(line)
 
+    # The six-phase keys are new: a block that has never carried them gains
+    # them at its end instead of refusing the change.
+    _six_new = [k for k in ("phases", "set1_paths", "set_neutrals")
+                if k in updates and k not in replaced]
+    if _six_new:
+        _out, _inw = [], False
+        for _ln in result:
+            if re.match(r'^winding\s*:', _ln):
+                _inw = True
+            elif _inw and re.match(r'^\S', _ln):
+                _out.extend(f"  {k}: {updates[k]}\n" for k in _six_new)
+                _inw = False
+            _out.append(_ln)
+        if _inw:
+            if _out and not _out[-1].endswith("\n"):
+                _out[-1] += "\n"
+            _out.extend(f"  {k}: {updates[k]}\n" for k in _six_new)
+        result = _out
+        replaced.update(_six_new)
     missing = set(updates) - replaced
     if missing:
         raise HTTPException(
@@ -1053,7 +1126,8 @@ def update_winding_config(patch: WindingConfigPatch):
     clear_config_cache()
     # A winding change (connection / layers / layout) alters the field & torque,
     # so flush the simulation caches (mesh / field / transient) like a geometry edit.
-    if {"connection", "layers", "layout"} & set(updates):
+    if {"connection", "layers", "layout", "phases", "set1_paths",
+            "set_neutrals"} & set(updates):
         try:
             from motor_ai_sim.routes.simulation import clear_simulation_caches
             clear_simulation_caches(reason="winding changed")

@@ -2090,3 +2090,39 @@ def test_parallel_paths_that_do_not_divide_the_phase_are_refused(synth_dir):
         lo.solve_controller(_synth_request(topology="h_bridge",
                                            winding_n_parallel=4))
     assert "winding_n_parallel" in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-28: a machine run inherits the power DIRECTION and the ripple's
+# inductance from the duty
+# ---------------------------------------------------------------------------
+
+def test_generator_duty_drives_the_direction_and_ripple_l(synth_dir, monkeypatch):
+    rpm = 3000.0
+    node = {
+        "coupled": {
+            "mode": "steady",
+            "em": {"T_em_avg_Nm": -12.0, "P_loss_total_W": 500.0,
+                   "op_mode": "generator"},
+            "inverter": {"I_phase_rms_solved_A": 48.6, "star_delta": "star",
+                         "v_dc_V": 400.0},
+        },
+        "thermal": {"point": {"rpm": rpm}},
+    }
+    # L_d/L_q live on the duty's standalone EM summary (the report's rule)
+    _patch_duty(monkeypatch, node, d_entry={
+        "mode": "generator",
+        "summary": {"Ld_inc_mH": 0.1, "Lq_inc_mH": 0.15, "Ld_mH": 0.1,
+                    "Lq_mH": 0.15, "gamma_deg": 170.0}})
+    # the form's own direction is ignored on a machine run
+    r = _solve(_duty_solve_body(power_direction="motor", thd_limit_pct=50.0))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["power_direction"] == "generator"
+    assert out["sources"]["power_direction"] == "the duty's mode"
+    assert out["dc_link"]["i_dc_mean_A"] < 0
+    rip = out["ripple"]
+    assert rip["status"] == "computed", (rip, out["sources"])
+    assert rip["l_d_uH"] == pytest.approx(100.0) and rip["l_q_uH"] == pytest.approx(150.0)
+    assert "incremental" in rip["sources"]["l"]
+    assert rip["thd_verdict"] in ("pass", "fail")

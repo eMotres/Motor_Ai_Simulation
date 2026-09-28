@@ -1169,3 +1169,69 @@ EM loop marches (`inverter_nonideal["modulation"]`, route `inv_modulation`).
   fundamental into the pole (0.8 % at 7 carriers) that no winding sees.
 
 Tests: `tests/test_controller_svpwm.py`.
+
+## 11 · Power direction and PWM current ripple / THD (2026-09-28)
+
+### 11.1 Motor | Generator (active rectifier)
+
+* Standalone run: typed (`power_direction`, default `motor`). Machine run: the
+  DUTY's mode (`d_entry.mode`, else the record's `op_mode`); the form cannot
+  override it.
+* Angle convention: consumer (motor) reference arrows everywhere. Motor: the
+  fundamental current lags the phase voltage by phi. Generator: P < 0 and the
+  machine inductance still draws reactive power (Q > 0), so the current lags by
+  180° − phi (`point.current_lag_deg`).
+* Efficiency: motor `P_ac / (P_ac + P_loss)`; generator `(P_ac − P_loss) / P_ac`
+  (P_ac = the machine's AC power into the bridge). `efficiency.inverter_definition`
+  states which.
+* DC link: `i_dc = Σ s·i` on the switching functions — the mean is negative for a
+  generator (`dc_link.power_flow`: machine → link).
+* Losses: unchanged by direction for synchronous-rectifying MOSFETs (the reverse
+  current is in the channel: conduction `<i²>R`, one hard commutation per carrier
+  at `|i|`). `conduction_direction.reverse_share` = the share of I² carried in
+  the third quadrant (≈0.16 motor, ≈0.84 generator at cos phi 0.9) — on an
+  IGBT/diode pair that would be the diode's share. A card whose `technology` is
+  not a MOSFET is REFUSED (`technology_not_modelled`) rather than costed as one.
+
+### 11.2 PWM current ripple and phase-current THD (`inverter/ripple.py`)
+
+* Exact switching instants of the actual modulator (sine / SVPWM / third
+  harmonic, natural or regular-symmetric sampling, each inverter's own carrier
+  with the typed interleave), per carrier ramp; every grid sample is the exact
+  fraction of its interval the leg is high — no quantisation (a point-sampled
+  comparison put ~0.1 V of spurious f1 content into the result, which a pure
+  inductance turns into amperes: ±2 % grid dependence, now < 0.1 %).
+* Window = K whole fundamental periods, K the smallest count that closes the
+  carrier (synchronous: 1; asynchronous ratios are WARNED — sub-harmonics).
+* Orthonormal VSD: αβ (air-gap plane, L_d/L_q solved exactly in the rotor frame,
+  bin by bin, including the ω_e cross terms; R neglected), x-y (dual 3-phase;
+  the orthogonal complement; `L_xy` REQUIRED), zero sequence per neutral
+  (isolated: zero; common: the difference sequence through `L_0`, required).
+  Only the positive-sequence fundamental (dq DC) is removed; stationary DC is
+  R-limited, zeroed and reported if > 0.1 % V_dc.
+* Inductance priority: typed commutating/subtransient L > typed L_d/L_q > the
+  duty's incremental L_d/L_q (star-equivalent in delta), re-referred to one
+  bridge phase by that bridge's V/I ratio. No L → `ripple.status =
+  not_computed` (the loss solve stands). Two inverters without L_xy →
+  `missing_input` + a warning.
+* Outputs: ripple rms (total, αβ, x-y, zero), peak-to-peak, THD = ripple rms /
+  I1 rms, top-12 spectrum of phase a, DC-link capacitor rms with the ripple in
+  the leg currents (shared link, and per inverter), optional THD limit → pass/fail.
+* Ideal switches: the dead-time distortion is NOT in the ripple numbers (it is a
+  current-dependent low-order error that needs the closed current loop).
+
+Validation (`tests/test_inverter_ripple.py`):
+
+| case | model | reference |
+|---|---|---|
+| sine, m 0.3/0.8/1.0, f_sw/f1 = 400 | within 0.5 % | Hava-Kerkman-Lipo / Holtz per-carrier closed form `I = V_dc/(24 L f_sw)·m·sqrt(3/2 − 4√3/π·m + c4·m²)`, c4 = 9/8 |
+| SVPWM, m 0.5/0.9/1.15 | within 0.5 % | same, c4 = 27/16 − 81√3/(64π) |
+| 800 V, SVPWM m 0.9, 750 Hz, 15 kHz, 90 µH, dual 3-ph 30°, isolated, L_xy 20 % | 39.49 A rms total, 10.28 A αβ, 38.13 A x-y, pk-pk 279 A | earlier standalone script: 39.6 / 10.3 (−0.3 %) |
+
+Interleaving 90° on that case: αβ 7.02 A, x-y 53.6 A, total 54.0 A (worse: the
+x-y plane is limited by 18 µH only). Regular-symmetric sampling: 38.3 A.
+
+Report: rows "Power direction", "Phase-current PWM ripple", "Phase-current THD".
+Datasheet: "Controller power direction", "Phase-current PWM ripple (A rms)",
+"Phase-current THD (%)". Saved with the controller settings: `ripple_l_*`,
+`ripple_neutral`, `carrier_interleave_deg`, `thd_limit_pct`.

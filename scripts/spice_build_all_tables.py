@@ -14,6 +14,11 @@ Per part, one grid, the same rules for every part:
   T_j 25 / 75 / 125 / 175, I 5 / 12 / 20 / 31 / 44 / 60 A, R_G 1.6 / 4.7 ohm,
   L_sigma 2 nH, V_GS 0/10 V.  Earlier sets already simulated (R004 4.7 ohm
   10/20 nH, IQE 5 nH) are re-read from the run cache and kept.
+  CoolSiC 750 V G2 (IMDQ75R004M2H, IMDQ75R007M2H, AIMDQ75R016M2H; the vendor
+  library is LTspice-encrypted, so these run in LTspice batch mode — the
+  runner picks the backend from the manifest, 2026-09-28): the same sets,
+  T_j and current multiples; V_dc 250 / 400 / 500 V (500 V = the datasheet's
+  test bus; 750.4 V is above V_DSS = 750 V and is not simulated).
 * static (DC sweeps): V_DS(I) forward at V_GS(on) and V_SD(I) third quadrant
   at V_GS(off), T_j 25 / 75 / 125 / 150 / 175, both the Kelvin and the power
   source-pin voltage.
@@ -42,13 +47,15 @@ sys.path.insert(0, str(ROOT / "src"))
 from motor_ai_sim.inverter.spice.harness import run_double_pulse, run_static  # noqa: E402
 from motor_ai_sim.inverter.spice.models import model_for  # noqa: E402
 from motor_ai_sim.inverter.spice.netlist import DoublePulse, timing_for  # noqa: E402
-from motor_ai_sim.inverter.spice.runner import find_backend  # noqa: E402
+from motor_ai_sim.inverter.spice.runner import (NgspiceError,  # noqa: E402
+                                                backend_for_compat, find_backend)
 from motor_ai_sim.inverter.spice.table import (make_block, make_set,  # noqa: E402
                                                make_static_block, write_block)
 
 SIC = ["IMCQ120R004M2H", "IMCQ120R005M2H", "IMCQ120R007M2H", "IMCQ120R010M2H",
        "IMCQ120R017M2H", "IMCQ120R034M2H", "IMCQ120R078M2H"]
 LV = ["IQE050N08NM5SC"]
+SIC750 = ["IMDQ75R004M2H", "IMDQ75R007M2H", "AIMDQ75R016M2H"]
 STATIC_T = [25.0, 75.0, 125.0, 150.0, 175.0]
 
 
@@ -69,7 +76,8 @@ def grid(part: str, doc: dict) -> dict:
     else:
         cur = [round(i_ref * k, 2) for k in (0.12, 0.5, 1.0, 1.5)]
         extra = []
-    return {"v": [375.0, 750.4], "t": [25.0, 125.0, 175.0], "i": cur,
+    v_bus = [250.0, 400.0, 500.0] if part in SIC750 else [375.0, 750.4]
+    return {"v": v_bus, "t": [25.0, 125.0, 175.0], "i": cur,
             "sets": [(2.3, 2.3, 15.0, 0.0, 18.0), (10.0, 10.0, 15.0, 0.0, 18.0)],
             "extra": extra, "v_gs_on": 18.0, "v_gs_off": [0.0, -5.0],
             "i_static": 1.6 * i_ref}
@@ -148,9 +156,14 @@ def validation_summary(part: str) -> dict:
                 continue
             ds_tot = sum(float(ds.get(k) or 0) for k in ("e_on", "e_off", "e_fr"))
             sp_tot = sum(float(sp.get(k) or 0) for k in ("e_on", "e_off", "e_fr"))
-            for nm, a, b in (("E_on", sp.get("e_on"), ds.get("e_on")),
-                             ("E_off", sp.get("e_off"), ds.get("e_off")),
-                             ("E_tot", sp_tot, ds_tot)):
+            checks = [("E_on", sp.get("e_on"), ds.get("e_on")),
+                      ("E_off", sp.get("e_off"), ds.get("e_off"))]
+            # E_tot only where the datasheet publishes E_fr: the 750 V G2
+            # cards carry a 1 uJ placeholder (E_tot = E_on + E_off there),
+            # and a sum with a placeholder is no comparison
+            if float(ds.get("e_fr") or 0) > 1.0:
+                checks.append(("E_tot", sp_tot, ds_tot))
+            for nm, a, b in checks:
                 if a is None or not b:
                     continue
                 d = 100.0 * (float(a) / float(b) - 1.0)
@@ -179,11 +192,14 @@ def validation_summary(part: str) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--jobs", type=int, default=8)
-    ap.add_argument("--parts", default=",".join(LV + SIC))
+    ap.add_argument("--parts", default=",".join(LV + SIC))   # SIC750: name them (LTspice)
     ap.add_argument("--write", action="store_true")
     ap.add_argument("--static-only", action="store_true")
     a = ap.parse_args()
-    be = find_backend()
+    try:
+        be = find_backend()
+    except NgspiceError:
+        be = None           # LTspice-only parts need no ngspice
     parts = [p for p in a.parts.split(",") if p]
     docs = {p: yaml.safe_load((ROOT / "config" / "devices" / f"{p}.yaml").read_text(encoding="utf-8"))
             for p in parts}
@@ -213,10 +229,11 @@ def main() -> int:
                       f"({dt:.0f} s, {time.time()-t_all:.0f} s total)", flush=True)
     for p in parts:
         m = model_for(p)
+        be_p = backend_for_compat(m.compat, be)
         g = plan[p][1]
         tim = timing_for(float((docs[p].get("ratings") or {}).get("v_dss_V") or 1200))
         out_dir = ROOT / "config" / "devices" / "spice" / "_runs" / p
-        st = static_rows(p, g, be)
+        st = static_rows(p, g, be_p)
         sets = []
         for s in sorted({s for s, _ in results[p]}, key=lambda s: (s[2], s[0])):
             rg_on, rg_off, ls, voff, von = s
@@ -224,9 +241,12 @@ def main() -> int:
                                  l_sigma_nH=ls, l_gate_nH=tim["l_gate"] * 1e9,
                                  c_sigma_pF=tim["c_sigma"] * 1e12,
                                  runs=[r for ss, r in results[p] if ss == s]))
-        sim = (f"{be.describe()}, ngbehavior={m.compat}"
-               + (", DDT() translated to an implicit capacitor sense"
-                  if m.include_path != m.lib_path else ""))
+        if be_p.kind == "ltspice":
+            sim = f"{be_p.describe()}, vendor LTspice-encrypted library, plotwinsize=0"
+        else:
+            sim = (f"{be_p.describe()}, ngbehavior={m.compat}"
+                   + (", DDT() translated to an implicit capacitor sense"
+                      if m.include_path != m.lib_path else ""))
         (out_dir / "uniform_2026-09-27.json").write_text(json.dumps(
             {"sets": sets, "failed": failed[p], "static": st}, indent=1, default=float),
             encoding="utf-8")

@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from motor_ai_sim.inverter.spice.harness import run_double_pulse  # noqa: E402
 from motor_ai_sim.inverter.spice.models import model_for  # noqa: E402
 from motor_ai_sim.inverter.spice.netlist import DoublePulse, timing_for  # noqa: E402
-from motor_ai_sim.inverter.spice.runner import find_backend  # noqa: E402
+from motor_ai_sim.inverter.spice.runner import backend_for_compat  # noqa: E402
 from motor_ai_sim.inverter.spice.table import make_block, make_set, write_block  # noqa: E402
 
 
@@ -58,7 +58,9 @@ def main() -> int:
         tim["l_gate"] = a.l_gate_nH * 1e-9
     if a.c_sigma_pF is not None:
         tim["c_sigma"] = a.c_sigma_pF * 1e-12
-    be = find_backend()
+    # LTspice for an LTspice-encrypted vendor library (manifest
+    # ``status: usable_ltspice``), ngspice otherwise
+    be = backend_for_compat(m.compat)
     sets = []
     t_all = time.time()
     v_dss = float((doc.get("ratings") or {}).get("v_dss_V") or 1200)
@@ -90,10 +92,12 @@ def main() -> int:
         sets.append(make_set(v_gs_on=von, v_gs_off=voff, r_g_on=rg_on, r_g_off=rg_off,
                              l_sigma_nH=ls, l_gate_nH=tim["l_gate"] * 1e9,
                              c_sigma_pF=tim["c_sigma"] * 1e12, runs=runs))
-    block = make_block(model=m, sets=sets,
-                       simulator=f"{be.describe()}, ngbehavior={m.compat}"
-                                 + (", DDT() translated to an implicit capacitor sense"
-                                    if m.include_path != m.lib_path else ""))
+    sim = (f"{be.describe()}, vendor LTspice-encrypted library, plotwinsize=0"
+           if be.kind == "ltspice" else
+           f"{be.describe()}, ngbehavior={m.compat}"
+           + (", DDT() translated to an implicit capacitor sense"
+              if m.include_path != m.lib_path else ""))
+    block = make_block(model=m, sets=sets, simulator=sim)
     print(f"total {time.time() - t_all:.0f} s", flush=True)
     if a.write:
         write_block(ROOT / "config" / "devices" / f"{a.part}.yaml", block)

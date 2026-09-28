@@ -172,7 +172,7 @@ _ALLOWED_ORIGINS = [
     "http://127.0.0.1:5174",
     "http://127.0.0.1:3000",
     # Production origins come from the ALLOWED_ORIGINS env (comma-separated),
-    # e.g. "https://emotres.com" — set per deployment, nothing hardcoded.
+    # e.g. "https://aerostator.com" — set per deployment, nothing hardcoded.
 ] + [o.strip() for o in _os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 
 # WHOSE machine is this request about?  (migration Stage 1)
@@ -283,6 +283,9 @@ app.include_router(jobs_router)
 app.include_router(history_router)
 # /api/agent_keys — "Access for agents": per-user MCP keys (2026-09-28).
 app.include_router(agent_keys_router)
+# OAuth 2.1 for MCP connectors (Stage 2): /.well-known/*, /oauth/*, /api/oauth/*.
+from motor_ai_sim.routes.oauth import router as oauth_router
+app.include_router(oauth_router)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

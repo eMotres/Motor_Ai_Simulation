@@ -81,6 +81,7 @@ Windows workstation, so a value proven there is the value that ships.
 | `PUBLIC_EXHIBIT` | `1` | `1` = the anonymous public exhibit (tree + geometry + report of the passported dies) — the workstation default. **`0` on any internet-facing host**: no credentials ⇒ 401 on every `/api` route but `/api/health`, `/api/me` (anonymous shape, so the SPA renders its login screen) and `/api/auth/login|google|logout`. Registered accounts are unaffected — grants still decide what each sees. |
 | `CATALOG_GRANT_ALL_REGISTERED` | *(unset)* | **leave it unset on this server.** Unset = a registered account sees exactly the dies it was granted, plus whatever anyone has published; `1` = every signed-in account sees the whole shared catalog. The grant posture below says why. |
 | `ALLOWED_ORIGINS` | *(empty)* | extra CORS origins. Only needed if the frontend is served from a **different** origin than the API; the same-origin nginx default needs nothing. |
+| `PUBLIC_BASE_URL` | `https://aerostator.com` | public origin of the app: OAuth issuer and the MCP resource `<origin>/mcp` (docs/MCP_2026-09-28.md). |
 | `ANTHROPIC_API_KEY` | *(empty)* | in-app support assistant; empty = a flagged mock reply |
 | `DUTY_CYCLE_ENABLED` | *(unset = off)* | the duty cycle inside the coupled loop — see below |
 
@@ -139,14 +140,14 @@ the messenger. One call creates the row, the tier, the grants **and the seeded
 workspace**:
 
 ```bash
-curl -s -X POST https://emotres.com/api/admin/invite \
+curl -s -X POST https://aerostator.com/api/admin/invite \
   -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
   -d '{"email":"someone@example.com","tier":"free",
        "motors":["CIANO28 150_35"],"note":"Ø150 evaluation"}'
 ```
 
 `motors` is a list of die names, or `"all"`. Then tell the person to open
-`https://emotres.com` and sign in with Google — the address must be the one they
+`https://aerostator.com` and sign in with Google — the address must be the one they
 sign in with. `GET /api/admin/invites` lists the invites with an `accepted` flag
 (has that account ever actually signed in), and `DELETE /api/admin/invites/{email}`
 withdraws one: the registry row goes and every session of it is revoked, while

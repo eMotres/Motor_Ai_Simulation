@@ -103,6 +103,22 @@ def test_shields_have_no_seal_drag():
     assert not f["seal_estimate"]
 
 
+def test_w638_2_2z_loads_and_has_no_seal_drag():
+    """SKF W 638/2-2Z (stainless, series 638, 2Z shields) — the same shielded
+    regime as 618/8-2Z: card loads from the catalogue with the right SKF
+    dimensions/ratings and M_seal is exactly zero."""
+    card = brg.get_bearing("W 638/2-2Z")
+    assert (card.d, card.D, card.B) == (2.0, 5.0, 2.3)
+    assert card.C_kn == pytest.approx(0.094)
+    assert card.C0_kn == pytest.approx(0.025)
+    assert card.n_limit_grease_rpm == pytest.approx(100000.0)
+    f = brg.friction(card, rpm=50000.0, f_r_n=0.05, temp_c=40.0)
+    assert f["M_seal_Nm"] == 0.0
+    assert not f["seal_estimate"]
+    sc = brg.speed_check(card, 50000.0)
+    assert sc["ok"] is True
+
+
 def test_low_friction_seal_is_flagged_as_an_estimate():
     """2RZ gets half the RS1 value and SAYS it is an estimate — a number the
     reader must be able to discount."""

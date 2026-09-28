@@ -124,7 +124,9 @@ _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version",
 #: token exchange, and logout (which must work for a token we are rejecting).
 #: NOT the rest of routes/auth_local.py — /api/auth/users, /api/auth/sessions and
 #: /api/auth/password are admin/account surface and keep their own require_admin.
-_ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout")
+_ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
+                     "/api/auth/register", "/api/auth/verify",
+                     "/api/auth/reset", "/api/auth/methods")
 
 
 def anonymous_allowed(path: str) -> bool:
@@ -591,6 +593,10 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
         if tier == "__disabled__":
             _report_reject("disabled", email, "", ip, user_agent, path)
             return _out(None, "disabled", email=email)
+        try:
+            _users.link_google(email)       # Google proof verifies a pending row
+        except Exception:                                   # pragma: no cover
+            pass
         return _out({"uid": claims.get("sub"), "email": email, "tier": tier},
                     "ok", email=email)
 

@@ -164,11 +164,121 @@ def _norm(email: str) -> str:
 
 
 # ── passwords ────────────────────────────────────────────────────────────────
+# New hashes are argon2id (argon2-cffi, library defaults: m=64 MiB, t=3, p=4),
+# stored as the self-describing "$argon2id$..." string with `pw_algo:
+# "argon2id"` and NO pw_salt.  Records written before 2026-09-28 carry
+# `pw_salt` + `pw_iters` + a hex PBKDF2-SHA256 `pw_hash`; they keep verifying
+# and are re-hashed to argon2id on the next successful login.  The schema
+# change is read-compatible: a record without `pw_algo` is PBKDF2, a record
+# without `email_verified` is verified (every pre-existing account was created
+# by an admin, an invite or Google — all of which prove the address).
+
+from argon2 import PasswordHasher as _PasswordHasher
+from argon2 import exceptions as _argon2_exc
+
+_PH = _PasswordHasher()                    # argon2id by default
+_DUMMY_HASH: Optional[str] = None          # burned for unknown accounts
+
+PASSWORD_MIN_LEN = 10
+PASSWORD_MAX_LEN = 256
+
+#: A deliberately small list of the passwords that survive a 10-character
+#: minimum and still top every breach corpus.  Not a substitute for a breach
+#: API; enough to refuse the obvious.
+COMMON_PASSWORDS = frozenset("""
+password12 password123 password1234 password12345 password123456 passw0rd123
+1234567890 12345678910 0123456789 0987654321 9876543210 1111111111 0000000000
+1234512345 1234554321 1q2w3e4r5t 1qaz2wsx3edc qwertyuiop qwerty1234 qwerty12345
+qwerty123456 asdfghjkl1 asdfghjkl; zxcvbnm123 abcdefghij abcd123456 abc1234567
+iloveyou12 iloveyou123 letmein123 welcome123 welcome1234 administrator admin12345
+admin123456 changeme123 football123 baseball123 monkey12345 dragon12345
+sunshine123 princess123 superman123 starwars123 trustno1234 michael123
+computer123 internet123 whatever123 master12345 shadow12345 jordan23123
+p@ssw0rd123 p@ssword123 password!123 motorsim123 aerostator1 aerostator123
+""".split())
+
+
+class PasswordPolicyError(ValueError):
+    """A password that the policy refuses; the message is safe to show."""
+
+
+def check_password_policy(password: str, email: str = "") -> None:
+    """Raise PasswordPolicyError with a human reason, or return None."""
+    pw = password or ""
+    if len(pw) < PASSWORD_MIN_LEN:
+        raise PasswordPolicyError(
+            f"password must be at least {PASSWORD_MIN_LEN} characters")
+    if len(pw) > PASSWORD_MAX_LEN:
+        raise PasswordPolicyError(
+            f"password must be at most {PASSWORD_MAX_LEN} characters")
+    low = pw.lower()
+    if low in COMMON_PASSWORDS or len(set(pw)) <= 2:
+        raise PasswordPolicyError("this password is too common — choose another")
+    local = _norm(email).split("@", 1)[0]
+    if local and len(local) >= 4 and (low == local or low == _norm(email)):
+        raise PasswordPolicyError("password must not be your e-mail address")
+
+
+def _argon2(password: str) -> str:
+    return _PH.hash(password or "")
+
+
+def _dummy_hash() -> str:
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = _argon2(secrets.token_urlsafe(24))
+    return _DUMMY_HASH
+
 
 def _hash_pw(password: str, salt_hex: str) -> str:
+    """Legacy PBKDF2-SHA256 — verification of pre-argon2 records only."""
     return hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), bytes.fromhex(salt_hex),
         _PBKDF2_ITERS).hex()
+
+
+def _pw_fields(password: str) -> dict:
+    """The record fields for a fresh argon2id hash (legacy fields cleared)."""
+    return {"pw_algo": "argon2id", "pw_hash": _argon2(password),
+            "pw_salt": None, "pw_iters": None,
+            "pw_changed": time.strftime("%Y-%m-%dT%H:%M:%S")}
+
+
+def _apply_pw(rec: dict, password: str) -> None:
+    rec.update(_pw_fields(password))
+    rec.pop("pw_salt", None)
+    rec.pop("pw_iters", None)
+
+
+def _verify_pw(rec: Optional[dict], password: str) -> bool:
+    """Constant-time check of `password` against a record (or a dummy hash
+    when `rec` is None, so unknown accounts cost the same time)."""
+    pw = password or ""
+    if rec is None or rec.get("pw_algo") == "argon2id" or not rec.get("pw_salt"):
+        h = (rec or {}).get("pw_hash") if rec is not None else None
+        if not isinstance(h, str) or not h.startswith("$argon2"):
+            try:
+                _PH.verify(_dummy_hash(), pw)
+            except Exception:
+                pass
+            return False
+        try:
+            return bool(_PH.verify(h, pw))
+        except (_argon2_exc.VerifyMismatchError, _argon2_exc.VerificationError,
+                _argon2_exc.InvalidHashError):
+            return False
+    try:
+        iters = int(rec.get("pw_iters") or _PBKDF2_ITERS)
+        calc = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"),
+                                   bytes.fromhex(rec["pw_salt"]), iters).hex()
+    except Exception:
+        return False
+    return hmac.compare_digest(calc, str(rec.get("pw_hash") or ""))
+
+
+def is_verified(rec: Optional[dict]) -> bool:
+    """Absent key = a pre-2026-09-28 account = verified (read-compatible)."""
+    return bool(rec) and rec.get("email_verified", True) is not False
 
 
 def create_user(email: str, password: str, tier: str = "free",
@@ -184,16 +294,14 @@ def create_user(email: str, password: str, tier: str = "free",
         users = _load()
         if email in users:
             raise ValueError(f"user '{email}' already exists")
-        salt = secrets.token_hex(16)
-        users[email] = {
-            "pw_salt": salt,
-            "pw_hash": _hash_pw(password, salt),
-            "pw_iters": _PBKDF2_ITERS,
+        rec = {
             "tier": tier,
             "name": name or "",
             "disabled": False,
             "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
+        _apply_pw(rec, password)
+        users[email] = rec
         _save(users)
     return public_user(email)
 
@@ -206,10 +314,198 @@ def set_password(email: str, password: str) -> None:
         users = _load()
         if email not in users:
             raise KeyError(email)
-        salt = secrets.token_hex(16)
-        users[email]["pw_salt"] = salt
-        users[email]["pw_hash"] = _hash_pw(password, salt)
-        users[email]["pw_iters"] = _PBKDF2_ITERS
+        _apply_pw(users[email], password)
+        users[email]["has_password"] = True
+        _save(users)
+
+
+# ── self-service registration / verification / reset ─────────────────────────
+# Single-use links: the signed token carries a random nonce whose SHA-256 is
+# stored on the record under `link_nonces[purpose]`.  Using the link deletes
+# it; asking for a new one replaces it.  Tokens are signed with a key DERIVED
+# from the session secret (HMAC "email-link-v1"), and carry their own issuer,
+# so a link can never be presented as a session token or vice versa.
+
+LINK_TTL_S = 24 * 3600
+_LINK_ISS = "motor-ai-sim-link"
+LINK_PURPOSES = ("verify", "reset")
+
+
+def _link_key() -> bytes:
+    return hmac.new(_secret().encode("utf-8"), b"email-link-v1",
+                    hashlib.sha256).digest()
+
+
+def _nonce_digest(nonce: str) -> str:
+    return hashlib.sha256(nonce.encode("utf-8")).hexdigest()
+
+
+def issue_link_token(email: str, purpose: str,
+                     ttl_s: int = LINK_TTL_S) -> str:
+    """Mint a single-use link token and remember its nonce on the record."""
+    if purpose not in LINK_PURPOSES:
+        raise ValueError(purpose)
+    email = _norm(email)
+    nonce = secrets.token_urlsafe(24)
+    with _LOCK:
+        users = _load()
+        if email not in users:
+            raise KeyError(email)
+        ln = users[email].get("link_nonces")
+        ln = dict(ln) if isinstance(ln, dict) else {}
+        ln[purpose] = _nonce_digest(nonce)
+        users[email]["link_nonces"] = ln
+        _save(users)
+    now = int(time.time())
+    return jwt.encode({"sub": email, "purpose": purpose, "nonce": nonce,
+                       "iat": now, "exp": now + int(ttl_s), "iss": _LINK_ISS},
+                      _link_key(), algorithm="HS256")
+
+
+def consume_link_token(token: str, purpose: str) -> Optional[str]:
+    """Verify + burn a link token.  Returns the email, or None for ANY
+    failure (expired, forged, reused, wrong purpose, unknown account)."""
+    try:
+        claims = jwt.decode(token or "", _link_key(), algorithms=["HS256"],
+                            issuer=_LINK_ISS,
+                            options={"require": ["exp", "sub", "nonce"]})
+    except Exception:
+        return None
+    if claims.get("purpose") != purpose:
+        return None
+    email = _norm(claims.get("sub") or "")
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        if rec is None:
+            return None
+        ln = rec.get("link_nonces") if isinstance(rec.get("link_nonces"), dict) else {}
+        want = ln.get(purpose) or ""
+        got = _nonce_digest(str(claims.get("nonce") or ""))
+        if not want or not hmac.compare_digest(want, got):
+            return None
+        ln = dict(ln)
+        ln.pop(purpose, None)
+        rec["link_nonces"] = ln
+        _save(users)
+    return email
+
+
+def register_self(email: str, password: str, name: str = "") -> str:
+    """Create an UNVERIFIED password account.
+
+    Returns what happened, for the route to decide on mail — never for the
+    client: "created" | "exists_unverified" | "exists_verified".  An existing
+    account is never modified (in particular its password is NOT replaced:
+    that would let anybody reset a pending registration)."""
+    email = _norm(email)
+    check_password_policy(password, email)
+    fields = _pw_fields(password)          # hash first: same cost every branch
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        if rec is not None:
+            return "exists_verified" if is_verified(rec) else "exists_unverified"
+        rec = {"tier": "free", "name": str(name or "")[:120],
+               "disabled": False,
+               "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+               "email_verified": False, "has_password": True,
+               "signup": "email"}
+        rec.update(fields)
+        rec.pop("pw_salt", None)
+        rec.pop("pw_iters", None)
+        users[email] = rec
+        _save(users)
+    return "created"
+
+
+def mark_verified(email: str, *, by: str = "link") -> bool:
+    """Activate an account (link clicked, admin approval, Google proof)."""
+    email = _norm(email)
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        if rec is None:
+            return False
+        rec["email_verified"] = True
+        rec["verified_by"] = by
+        rec["verified_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        rec.pop("pending_approval", None)
+        ln = rec.get("link_nonces")
+        if isinstance(ln, dict):
+            ln = dict(ln)
+            ln.pop("verify", None)
+            rec["link_nonces"] = ln
+        _save(users)
+    return True
+
+
+def mark_pending_approval(email: str, reason: str = "smtp_not_configured") -> None:
+    email = _norm(email)
+    with _LOCK:
+        users = _load()
+        if email in users and not is_verified(users[email]):
+            users[email]["pending_approval"] = reason
+            _save(users)
+
+
+def list_pending() -> list[dict]:
+    """Every account that cannot sign in yet because its e-mail is unproven."""
+    out = []
+    for email, rec in _load_soft().items():
+        if is_verified(rec):
+            continue
+        out.append({**public_user(email),
+                    "reason": rec.get("pending_approval") or "awaiting_link"})
+    out.sort(key=lambda r: r.get("created") or "", reverse=True)
+    return out
+
+
+def link_google(email: str) -> None:
+    """Google just proved `email` belongs to the caller.
+
+    If an UNVERIFIED password account with that address exists, it was created
+    by someone who never proved the mailbox — possibly an attacker squatting
+    the address in advance.  Google's proof wins: the account is verified and
+    its unproven password is DISCARDED (the owner can set one via reset).  A
+    verified password account is left exactly as it is: both doors open."""
+    email = _norm(email)
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        if rec is None or is_verified(rec):
+            return
+        _apply_pw(rec, secrets.token_urlsafe(32))
+        rec["has_password"] = False
+        rec["email_verified"] = True
+        rec["verified_by"] = "google"
+        rec["verified_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        rec.pop("pending_approval", None)
+        rec["link_nonces"] = {}
+        _save(users)
+
+
+def reset_password(email: str, password: str) -> None:
+    """Set a new password after a reset link: argon2id, proves the mailbox
+    (so the account becomes verified), and burns every outstanding link."""
+    email = _norm(email)
+    check_password_policy(password, email)
+    fields = _pw_fields(password)
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        if rec is None:
+            raise KeyError(email)
+        rec.update(fields)
+        rec.pop("pw_salt", None)
+        rec.pop("pw_iters", None)
+        rec["has_password"] = True
+        if not is_verified(rec):
+            rec["email_verified"] = True
+            rec["verified_by"] = "reset"
+            rec["verified_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+            rec.pop("pending_approval", None)
+        rec["link_nonces"] = {}
         _save(users)
 
 
@@ -256,6 +552,9 @@ def public_user(email: str) -> dict:
     return {"email": _norm(email), "tier": u.get("tier", "free"),
             "name": u.get("name", ""), "disabled": bool(u.get("disabled")),
             "created": u.get("created"),
+            # False only for a self-registered account whose link was never
+            # used (absent on older records = verified).
+            "email_verified": is_verified(u) if u else True,
             # Which catalog motors this account may open (see below).  Shipped
             # with the record so the admin table draws the count without a
             # second round trip per user.
@@ -340,14 +639,12 @@ def invite_user(email: str, *, tier: str = "free", name: str = "",
         users = _load()
         rec = users.get(email)
         if rec is None:
-            salt = secrets.token_hex(16)
-            rec = {"pw_salt": salt,
-                   "pw_hash": _hash_pw(secrets.token_urlsafe(32), salt),
-                   "pw_iters": _PBKDF2_ITERS,
-                   "tier": tier,
+            rec = {"tier": tier,
                    "name": name or "",
                    "disabled": False,
+                   "has_password": False,
                    "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            _apply_pw(rec, secrets.token_urlsafe(32))
             users[email] = rec
         else:
             rec["tier"] = tier
@@ -390,21 +687,41 @@ def any_users() -> bool:
 
 # ── login / tokens ───────────────────────────────────────────────────────────
 
-def check_login(email: str, password: str) -> Optional[dict]:
-    """Constant-time-ish password check → the user record, or None."""
+def authenticate(email: str, password: str) -> tuple[str, Optional[dict]]:
+    """Password check with a status: ("ok", rec) | ("bad", None) |
+    ("unverified", None) | ("disabled", None).
+
+    The hash is ALWAYS computed (a dummy one for unknown addresses), and the
+    non-"bad" statuses are only reachable with the CORRECT password, so a
+    caller that reveals them reveals nothing to someone who does not already
+    hold the credential.  A legacy PBKDF2 hash is upgraded to argon2id here."""
     email = _norm(email)
     u = _load_soft().get(email)
-    # Always burn a hash even for unknown users, so response timing does not
-    # reveal which emails exist.
-    salt = (u or {}).get("pw_salt") or secrets.token_hex(16)
-    iters = int((u or {}).get("pw_iters") or _PBKDF2_ITERS)
-    calc = hashlib.pbkdf2_hmac("sha256", (password or "").encode("utf-8"),
-                               bytes.fromhex(salt), iters).hex()
-    if u is None or u.get("disabled"):
-        return None
-    if not hmac.compare_digest(calc, u.get("pw_hash", "")):
-        return None
-    return u
+    if not _verify_pw(u, password):
+        return "bad", None
+    if u.get("disabled"):
+        return "disabled", None
+    if not is_verified(u):
+        return "unverified", None
+    if u.get("pw_algo") != "argon2id":
+        try:
+            with _LOCK:
+                users = _load()
+                if email in users and users[email].get("pw_algo") != "argon2id":
+                    _apply_pw(users[email], password)
+                    users[email].pop("pw_changed", None)
+                    _save(users)
+                    log.info("auth: upgraded %s's password hash to argon2id", email)
+        except Exception as e:                              # pragma: no cover
+            log.warning("auth: argon2 rehash of %s failed (%s)", email, e)
+    return "ok", u
+
+
+def check_login(email: str, password: str) -> Optional[dict]:
+    """Back-compat: the record when the password is right AND the account may
+    sign in, else None."""
+    status, rec = authenticate(email, password)
+    return rec if status == "ok" else None
 
 
 def issue_token(email: str, sid: Optional[str] = None,

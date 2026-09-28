@@ -27,6 +27,7 @@ import {
 import SupportSettings, { type SupportCfg } from './SupportSettings';
 import SessionsSection from './SessionsSection';
 import VisitorRequests from './VisitorRequests';
+import PendingSignups from './PendingSignups';
 import ModulesPanel from './ModulesPanel';
 import PassportManager from './PassportManager';
 import { ConfirmDialog, type ConfirmState } from '../common/PromptDialogs';
@@ -537,6 +538,9 @@ const AdminPanel: React.FC = () => {
 
       {!loading && !error && (
         <>
+          {/* e-mail sign-ups awaiting proof of address / admin approval */}
+          <PendingSignups onChanged={() => void load()} />
+
           {/* summary cards */}
           <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mb: 2 }}>
             <StatCard label="Total accounts" value={users.length} sub={`${disabledCount} disabled`} />

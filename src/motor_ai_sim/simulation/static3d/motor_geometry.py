@@ -168,6 +168,45 @@ CUT_SNAP_MM = 0.01          # 10 um — see _snap_cut_vertices
 POCKET_SLIVER_MM2 = 0.01    # see _recut_rotor_pockets
 
 
+def effective_material_assignments() -> dict:
+    """The machine's material assignment exactly as ``build_materials`` sees it.
+
+    The shared config first, then the per-request override on top (the same
+    merge ``fem_solver_2d.build_materials`` does).  Everything in static3d that
+    names or resolves a material goes through here, so the steel whose B-H
+    curve is in the solve is also the steel whose k_f sets the across-stack
+    permeability and the steel the passport says was solved.  Reading the
+    shared config alone was the 2026-09-27 bug: the 2D curve came from the
+    machine's 20SW1200, the k_f and the passport label from the config's
+    B15AHV950M.
+    """
+    try:
+        from motor_ai_sim.config import get_material_assignments
+        out = dict(get_material_assignments() or {})
+    except Exception:
+        out = {}
+    try:
+        from motor_ai_sim.material_context import get_request_materials
+        ov = get_request_materials() or {}
+    except Exception:
+        ov = {}
+    out.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
+    return out
+
+
+def _resolve_steel(name: str):
+    """Steel by name: per-request override props first, else the library."""
+    from motor_ai_sim import materials as _ml
+    try:
+        from motor_ai_sim.material_context import get_request_materials
+        props = ((get_request_materials() or {}).get("materials") or {}).get(name)
+    except Exception:
+        props = None
+    if props:
+        return _ml.material_from_dict(props.get("category") or "steel", name, props)
+    return _ml.get_material("steel", name)
+
+
 def _stack_factor(part_key: str, built_mu_r: float) -> float:
     """The lamination fill factor of a laminated core, two ways, cross-checked.
 
@@ -183,11 +222,9 @@ def _stack_factor(part_key: str, built_mu_r: float) -> float:
     kf_lib = None
     mu_raw = None
     try:
-        from motor_ai_sim.config import get_material_assignments
-        from motor_ai_sim.materials import get_material
-        name = (get_material_assignments() or {}).get(part_key)
+        name = effective_material_assignments().get(part_key)
         if name:
-            m = get_material("steel", name)
+            m = _resolve_steel(name)
             kf = float(getattr(m, "stacking_factor", 1.0) or 1.0)
             kf_lib = kf if 0.0 < kf <= 1.0 else 1.0
             mu_raw = float(getattr(m, "mu_r", 0.0) or 0.0)
@@ -253,7 +290,59 @@ def _recut_rotor_pockets(polys: dict, tol_mm2: float = POCKET_SLIVER_MM2
     return out, removed
 
 
-def _snap_cut_vertices(poly, a_sec: float, tol: float = CUT_SNAP_MM):
+def _cut_radius_canon(polys, a_sec: float, tol: float = CUT_SNAP_MM):
+    """One radius per breakpoint, shared by BOTH sector cuts and ALL regions.
+
+    Rounding each cut vertex on its own is not enough: two partner breakpoints
+    that straddle a quantum boundary (15.70499 / 15.70501 mm) round to
+    DIFFERENT quanta, 10 um apart — measured 2026-09-27 on the CIANO14 50
+    (``sector cut curve radii mismatch: 15.705 vs 15.700``).  Here the radius
+    of every vertex within ``tol`` of either cut, in every polygon, is sorted
+    and chained into clusters (neighbours closer than ``tol``); each cluster
+    gets its mean, so partners agree by construction.
+
+    A cluster wider than 2*tol means distinct features are being merged: a
+    geometry fault, not round-off, and it raises.
+    """
+    ca, sa = math.cos(a_sec), math.sin(a_sec)
+    rs = []
+    for poly in polys:
+        for p in (list(poly.geoms) if hasattr(poly, "geoms") else [poly]):
+            for ring in [p.exterior] + list(p.interiors):
+                for x, y in list(ring.coords):
+                    r = math.hypot(x, y)
+                    if r <= 1e-12:
+                        continue
+                    if (abs(y) <= tol and x > 0) or (
+                            abs(x * sa - y * ca) <= tol and (x * ca + y * sa) > 0):
+                        rs.append(r)
+    rs.sort()
+    clusters: List[List[float]] = []
+    for r in rs:
+        if clusters and r - clusters[-1][-1] <= tol:
+            clusters[-1].append(r)
+        else:
+            clusters.append([r])
+    spans, vals = [], []
+    for c in clusters:
+        if c[-1] - c[0] > 2.0 * tol:
+            raise ValueError(
+                f"sector cut breakpoints {c[0]:.6f}..{c[-1]:.6f} mm chain into one "
+                f"cluster wider than {2 * tol * 1000:.0f} um: distinct features too "
+                "close to tell apart; fix the geometry, do not loosen the tolerance")
+        spans.append((c[0], c[-1]))
+        vals.append(float(sum(c) / len(c)))
+
+    def canon(r: float) -> float:
+        for (a, b), v in zip(spans, vals):
+            if a - 1e-12 <= r <= b + 1e-12:
+                return v
+        return r
+    return canon
+
+
+def _snap_cut_vertices(poly, a_sec: float, tol: float = CUT_SNAP_MM,
+                       canon=None):
     """Put every vertex ON a sector cut line exactly on it, at a QUANTISED radius.
 
     The sector model needs the two radial cuts to be each other's rotation
@@ -276,16 +365,21 @@ def _snap_cut_vertices(poly, a_sec: float, tol: float = CUT_SNAP_MM):
 
     ca, sa = math.cos(a_sec), math.sin(a_sec)
 
+    def _q(r):
+        # canon: shared cluster radius (see _cut_radius_canon); else legacy
+        # independent rounding, which can split partners across a quantum.
+        return canon(r) if canon is not None else round(r / tol) * tol
+
     def _fix(coords):
         out = []
         for x, y in coords:
             r = math.hypot(x, y)
             if r > 1e-12:
                 if abs(y) <= tol and x > 0:                    # theta = 0 cut
-                    out.append((round(r / tol) * tol, 0.0))
+                    out.append((_q(r), 0.0))
                     continue
                 if abs(x * sa - y * ca) <= tol and (x * ca + y * sa) > 0:
-                    rq = round(r / tol) * tol
+                    rq = _q(r)
                     out.append((rq * ca, rq * sa))             # theta = a_sec
                     continue
             out.append((x, y))
@@ -317,10 +411,14 @@ def _clip_to_sector(polys: dict, n_sectors: int) -> dict:
     from motor_ai_sim.simulation.mesher import _clip_polys_to_sector
     out = dict(_clip_polys_to_sector(polys, n_sectors))
     a = 2.0 * math.pi / n_sectors
+    allp = [out[k] for k in ("stator", "rotor", "shaft")
+            if out.get(k) is not None and not out[k].is_empty]
+    allp += [mp for mp, _pol in out.get("magnets", [])]
+    canon = _cut_radius_canon(allp, a)
     for k in ("stator", "rotor", "shaft"):
         if out.get(k) is not None and not out[k].is_empty:
-            out[k] = _snap_cut_vertices(out[k], a)
-    out["magnets"] = [(_snap_cut_vertices(mp, a), pol)
+            out[k] = _snap_cut_vertices(out[k], a, canon=canon)
+    out["magnets"] = [(_snap_cut_vertices(mp, a, canon=canon), pol)
                       for mp, pol in out.get("magnets", [])]
     return out
 
@@ -430,11 +528,7 @@ def load_motor_section(geo_override: Optional[dict] = None,
         fp = _geometry_fingerprint(geo_override)
     except Exception:
         fp = ""
-    try:
-        from motor_ai_sim.config import get_material_assignments
-        assigns = dict(get_material_assignments() or {})
-    except Exception:
-        assigns = {}
+    assigns = effective_material_assignments()
 
     return MotorSection(
         geo=p, regions=regions, n_sectors=n_sec,

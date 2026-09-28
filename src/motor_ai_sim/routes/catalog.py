@@ -513,17 +513,20 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "if mats:\n"
                 "    from motor_ai_sim.material_context import set_request_materials\n"
                 "    set_request_materials({'assignment': mats, 'materials': {}})\n"
-                "gap = float(g.get('air_gap') or 0.5)\n"
-                "od = float(g.get('stator_diameter') or 100.0)\n"
                 "from motor_ai_sim.simulation.static3d.end_effect import run_stage_a\n"
+                "# mesh sizes: run_stage_a derives them from the PHYSICAL\n"
+                "# scales (air gap, thinnest magnet), never from the OD\n"
                 "p = run_stage_a(geo_override=g, n_stack=4, n_cap=6,\n"
-                "                h_gap=max(0.28, min(0.6, gap)),\n"
-                "                h_solid=max(0.8, min(1.6, od / 100.0)),\n"
                 "                order=2, l_factors=(0.75, 1.0, 1.5),\n"
                 "                do_bracket=False, do_2d=True,\n"
                 "                tol=3e-3, max_iter=45, verbose=False)\n"
+                "mm = p.get('machine') or {}\n"
+                "md = p.get('model') or {}\n"
                 "out = {k: p.get(k) for k in ('k_flux', 'k_flux_self',\n"
                 "                             'generated_utc', 'l_stack_curve')}\n"
+                "out['materials'] = mm.get('materials')\n"
+                "out['mesh'] = {k: md.get(k) for k in ('h_gap_mm', 'h_solid_mm',\n"
+                "               'mesh_rule', 'box_z_mm', 'iron_stack_kf')}\n"
                 "print('PASSPORT3D:' + json.dumps(out, default=float))\n")
             try:
                 # THE CHILD'S MACHINE IS THE CALLER'S.  Geometry and materials
@@ -564,6 +567,10 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                            f"OD {2*result['geo']['statorOR_mm']:.0f}",
                 "k_flux_vs_L": {str(e["stack_mm"]): round(e["k_flux"], 5)
                                 for e in (_sa.get("l_stack_curve") or [])},
+                # provenance: the steel actually solved and the mesh rule, so
+                # a wrong-material passport can be found later
+                "materials": _sa.get("materials"),
+                "mesh": _sa.get("mesh"),
             }
             import json as _j
             from pathlib import Path as _P

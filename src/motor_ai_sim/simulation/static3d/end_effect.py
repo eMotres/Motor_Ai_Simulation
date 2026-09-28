@@ -121,6 +121,25 @@ def _regions_for(tm, section: MotorSection, linear_iron: bool = False,
     return regs
 
 
+def compatible_mu_init(mu_init: Optional[np.ndarray], n_elements: int
+                       ) -> Optional[np.ndarray]:
+    """A warm-start permeability only if it belongs to a mesh of this size.
+
+    The warm start is a first guess, never an input to the answer (the Picard
+    converges on the constitutive residual), so a guess from a mesh with a
+    different element count is DROPPED rather than crashing the solve — the
+    2026-09-27 ``mu_init must be one value per element`` abort.  Element counts
+    can legitimately differ between stack lengths (the axial box grows with a
+    long stack; see ``motor_mesh.axial_box_mm``).
+    """
+    if mu_init is None:
+        return None
+    a = np.asarray(mu_init)
+    if a.shape[-1] != int(n_elements):
+        return None
+    return a
+
+
 def solve_sector(section: MotorSection,
                  sect2d: Section2D,
                  stack_mm: Optional[float] = None,
@@ -136,16 +155,20 @@ def solve_sector(section: MotorSection,
                  linear_solver: Optional[str] = None,
                  mu_init: Optional[np.ndarray] = None,
                  laminated_iron: bool = True,
+                 h_axial_end: Optional[float] = None,
+                 h_axial_max: Optional[float] = None,
                  verbose: bool = False) -> SectorSolve:
     """Mesh + solve one stack length on a prebuilt cross-section."""
     from skfem import Basis, ElementTetP1, ElementTetP2
 
     t0 = time.perf_counter()
     tm, _ = build_motor_mesh(section, stack_mm=stack_mm, sect=sect2d,
-                             n_stack=n_stack, n_cap=n_cap)
+                             n_stack=n_stack, n_cap=n_cap,
+                             h_axial_end=h_axial_end, h_axial_max=h_axial_max)
     regs = _regions_for(tm, section, linear_iron=linear_iron,
                         iron_mu_r=iron_mu_r, laminated_iron=laminated_iron)
     linear_iron = linear_iron or iron_mu_r is not None
+    mu_init = compatible_mu_init(mu_init, tm.n_elements)
     basis = Basis(tm.mesh, ElementTetP2() if order == 2 else ElementTetP1())
     per = None
     if section.n_sectors > 1:
@@ -219,6 +242,7 @@ def solve_sector_A(section: MotorSection,
     regs = _regions_for(tm, section, linear_iron=linear_iron,
                         iron_mu_r=iron_mu_r)
     linear_iron = linear_iron or iron_mu_r is not None
+    mu_init = compatible_mu_init(mu_init, tm.n_elements)
     basis = Basis(tm.mesh, ElementTetN0())
     per = None
     if section.n_sectors > 1:
@@ -444,8 +468,8 @@ def read_passport(path: str) -> dict:
 def run_stage_a(geo_override: Optional[dict] = None,
                 n_sectors: Optional[int] = None,
                 box_factor: float = 4.0,
-                h_gap: float = 0.28,
-                h_solid: float = 0.85,
+                h_gap: Optional[float] = None,
+                h_solid: Optional[float] = None,
                 order: int = 2,
                 n_stack: int = 8,
                 n_cap: int = 10,
@@ -468,6 +492,23 @@ def run_stage_a(geo_override: Optional[dict] = None,
     section = load_motor_section(geo_override=geo_override, n_sectors=n_sectors)
     if verbose:
         print(section.summary(), flush=True)
+
+    # Mesh sizes follow the PHYSICAL scales (elements across the air gap and
+    # across the thinnest magnet), never the machine diameter.  An explicit
+    # value may only be FINER than the physical rule, so a caller cannot put
+    # one element across a gap again.
+    from .motor_mesh import physical_mesh_sizes
+    phys = physical_mesh_sizes(section)
+    h_gap = phys["h_gap"] if h_gap is None else min(float(h_gap), phys["h_gap"])
+    h_solid = (phys["h_solid"] if h_solid is None
+               else min(float(h_solid), phys["h_solid"]))
+    h_solid = max(h_solid, h_gap)
+    ax = dict(h_axial_end=phys["h_axial_end"], h_axial_max=phys["h_axial_max"])
+    if verbose:
+        print(f"mesh from physical scales: gap {phys['gap_mm']:.3f} mm -> "
+              f"h_gap {h_gap:.4f} mm ({phys['n_gap']} across); thinnest magnet "
+              f"{phys['magnet_width_mm']:.3f} mm -> h_solid {h_solid:.4f} mm",
+              flush=True)
 
     sect2d = build_section_mesh_2d(section, box_factor=box_factor,
                                    h_gap=h_gap, h_solid=h_solid)
@@ -500,7 +541,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
         print(f"\n[1] reference stack {section.stack_mm:.2f} mm", flush=True)
     ss = solve_sector(section, sect2d, stack_mm=section.stack_mm, order=order,
                       n_stack=n_stack, n_cap=n_cap, tol=tol, max_iter=max_iter,
-                      laminated_iron=laminated_iron,
+                      laminated_iron=laminated_iron, **ax,
                       linear_solver=linear_solver, verbose=verbose)
     _record("reference", ss)
     mu_ref = getattr(ss.sol, "mu_converged", None)
@@ -521,7 +562,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
         ssn = solve_sector(section, sect2d, stack_mm=section.stack_mm,
                            order=order, n_stack=n_stack, n_cap=n_cap, tol=tol,
                            max_iter=max_iter, neumann_outer=True,
-                           mu_init=mu_ref, laminated_iron=laminated_iron,
+                           mu_init=mu_ref, laminated_iron=laminated_iron, **ax,
                            linear_solver=linear_solver, verbose=False)
         _record("neumann_outer", ssn)
         pn = spill_profile(ssn, n_theta=n_theta)
@@ -555,7 +596,7 @@ def run_stage_a(geo_override: Optional[dict] = None,
             ss_i = solve_sector(section, sect2d, stack_mm=Lm, order=order,
                                 n_stack=n_stack, n_cap=n_cap, tol=tol,
                                 max_iter=max_iter, mu_init=mu_prev,
-                                laminated_iron=laminated_iron,
+                                laminated_iron=laminated_iron, **ax,
                                 linear_solver=linear_solver, verbose=False)
             _record(f"L={Lm:g}mm", ss_i)
             mu_prev = getattr(ss_i.sol, "mu_converged", mu_prev)
@@ -672,6 +713,12 @@ def run_stage_a(geo_override: Optional[dict] = None,
             mirror_plane_z0="natural (dphi/dn = 0) — B_z = 0 by symmetry",
             box_r_mm=sect2d.r_box_mm, box_z_mm=ss.tm.meta["z_box_mm"],
             h_gap_mm=h_gap, h_solid_mm=h_solid,
+            mesh_rule=("physical: air gap / %d, thinnest magnet / %d"
+                       % (phys["n_gap"], phys["n_magnet"])
+                       + "; axial: end layer 2 x gap growing x1.5 to one pole pitch"),
+            h_axial_end_mm=ax["h_axial_end"], h_axial_max_mm=ax["h_axial_max"],
+            iron_stack_kf={r.name: float(r.stack_kf) for r in section.regions
+                           if r.kind == "iron"},
             cross_section_tri=sect2d.n_tri,
             axial_layers=ss.tm.meta["n_layers"],
             z_levels_mm=ss.tm.meta["z_levels_mm"],

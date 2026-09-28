@@ -35,7 +35,7 @@ Type=oneshot
 
 # Through the public edge, not localhost: a probe that skipped nginx and TLS
 # would stay green through exactly the outage the customer is experiencing.
-Environment=MOTRES_HEALTH_URL=https://emotres.com/api/me
+Environment=MOTRES_HEALTH_URL=https://aerostator.com/api/me
 
 # The URL is passed as an ARGUMENT (reaching bash as $0) rather than read from
 # the environment inside the script: systemd expands ${VAR} in an unquoted

@@ -10,7 +10,8 @@ takes ``/mcp`` before the tier gate / workspace resolver / CORS ever see it —
 those speak session tokens, and an agent key is not one.  McpGate does, per
 request:
 
-1. auth   — ``Bearer emk_…`` (agent_keys.verify) -> 401 + WWW-Authenticate
+1. auth   — ``Bearer emk_…`` key or ``Bearer emo_…`` OAuth token
+            -> 401 + WWW-Authenticate: Bearer resource_metadata=…
 2. scope  — the tool's scope must be on the key            -> 403
 3. quota  — per key per minute / per day, ``tools/call`` only -> 429 + Retry-After
 4. audit  — one line per tool call (user, key, tool, args summary, status)
@@ -27,6 +28,7 @@ from pydantic import Field
 
 from motor_ai_sim import agent_keys as _keys
 from motor_ai_sim import mcp_tools as _t
+from motor_ai_sim import oauth as _oauth
 
 MCP_PATH = "/mcp"
 SCOPE_KEY = "emotres.mcp_principal"
@@ -192,6 +194,16 @@ def _rpc_error(msg_id, code: int, text: str) -> dict:
     return {"jsonrpc": "2.0", "id": msg_id, "error": {"code": code, "message": text}}
 
 
+def verify_any(authorization):
+    """An agent key (``emk_``) or an OAuth access token (``emo_``) -> Principal."""
+    if isinstance(authorization, str):
+        parts = authorization.strip().split(" ", 1)
+        if (len(parts) == 2 and parts[0].lower() == "bearer"
+                and parts[1].strip().startswith(_oauth.ACCESS_PREFIX)):
+            return _oauth.verify_access(parts[1].strip())
+    return _keys.verify(authorization)
+
+
 class McpGate:
     """Outermost ASGI middleware: ``/mcp`` -> auth/scope/quota/audit -> SDK."""
 
@@ -204,12 +216,14 @@ class McpGate:
             return
         headers = {k.decode("latin-1").lower(): v.decode("latin-1")
                    for k, v in scope.get("headers") or ()}
-        principal, reason = _keys.verify(headers.get("authorization"))
+        principal, reason = verify_any(headers.get("authorization"))
         if principal is None:
             _keys.audit(principal=None, method="auth", status=401, note=reason)
+            err = "invalid_token" if reason not in ("no_token",) else ""
             await _send_json(send, 401, {"error": "unauthorized", "reason": reason,
-                                         "detail": "Send Authorization: Bearer <eMotres agent key>"},
-                             [("www-authenticate", 'Bearer realm="emotres-mcp"')])
+                                         "detail": "Sign in with OAuth or send Authorization: "
+                                                   "Bearer <eMotres agent key>"},
+                             [("www-authenticate", _oauth.www_authenticate(err))])
             return
 
         body = b""
@@ -239,7 +253,9 @@ class McpGate:
                             args=args, status=403, note=f"needs {need}")
                 await _send_json(send, 403, _rpc_error(
                     m.get("id"), -32001,
-                    f"key lacks scope '{need}'" if need else f"unknown tool '{tool}'"))
+                    f"key lacks scope '{need}'" if need else f"unknown tool '{tool}'"),
+                    [("www-authenticate", _oauth.www_authenticate("insufficient_scope")
+                      + (f', scope="{need}"' if need else ""))])
                 return
             ok, retry = _keys.take_quota(principal.credential_id)
             if not ok:

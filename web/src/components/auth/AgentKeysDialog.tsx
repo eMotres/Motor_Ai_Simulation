@@ -11,6 +11,11 @@ import { getStoredToken } from '../../lib/localAuth';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
+interface GrantRow {
+  id: string; client_name: string; scopes: string[];
+  created_at: number; last_used_at: number | null; revoked_at: number | null; active: boolean;
+}
+
 interface KeyRow {
   id: string; name: string; prefix: string; scopes: string[];
   created_at: number; last_used_at: number | null; revoked_at: number | null; active: boolean;
@@ -19,9 +24,9 @@ interface KeyRow {
 const when = (s?: number | null) =>
   (s ? new Date(s * 1000).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—');
 
-async function call<T>(path: string, init?: RequestInit): Promise<T> {
+async function call<T>(path: string, init?: RequestInit, base = '/api/agent_keys'): Promise<T> {
   const token = getStoredToken();
-  const r = await fetch(`${API}/api/agent_keys${path}`, {
+  const r = await fetch(`${API}${base}${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
   });
@@ -35,6 +40,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 
 const AgentKeysDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const [rows, setRows] = useState<KeyRow[]>([]);
+  const [grants, setGrants] = useState<GrantRow[]>([]);
   const [allScopes, setAllScopes] = useState<string[]>([]);
   const [scopes, setScopes] = useState<string[]>([]);
   const [name, setName] = useState('');
@@ -47,6 +53,8 @@ const AgentKeysDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
     try {
       const j = await call<{ keys: KeyRow[]; scopes: string[] }>('');
       setRows(j.keys); setAllScopes(j.scopes);
+      const g = await call<{ grants: GrantRow[] }>('', undefined, '/api/oauth/grants');
+      setGrants(g.grants);
       setScopes((s) => (s.length ? s : j.scopes));
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }, []);
@@ -67,6 +75,12 @@ const AgentKeysDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
 
+  const disconnect = async (id: string) => {
+    setBusy(true);
+    try { await call(`/${id}`, { method: 'DELETE' }, '/api/oauth/grants'); await load(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
+  };
+
   const toggle = (s: string) =>
     setScopes((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
 
@@ -74,7 +88,7 @@ const AgentKeysDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle sx={{ fontSize: '1rem' }}>
         Access for agents
-        <Tooltip arrow title="Keys let an AI agent (Claude, ChatGPT) read your catalog and saved results through https://emotres.com/mcp. Read-only.">
+        <Tooltip arrow title="Keys let an AI agent (Claude, ChatGPT) read your catalog and saved results through https://aerostator.com/mcp. Read-only.">
           <Typography component="span" sx={{ ml: 1, fontSize: 12, color: 'var(--text-2)', cursor: 'help' }}>ⓘ</Typography>
         </Tooltip>
       </DialogTitle>
@@ -122,6 +136,38 @@ const AgentKeysDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ ope
             ))}
             {!rows.length && (
               <TableRow><TableCell colSpan={6}><Typography variant="caption">No keys yet.</Typography></TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
+        <Typography sx={{ fontSize: 13, fontWeight: 600, mt: 2, mb: 0.5 }}>
+          Connected apps
+          <Tooltip arrow title="Apps you approved through Sign in (claude.ai, ChatGPT connectors). Disconnect revokes their tokens.">
+            <Typography component="span" sx={{ ml: 1, fontSize: 12, color: 'var(--text-2)', cursor: 'help' }}>ⓘ</Typography>
+          </Tooltip>
+        </Typography>
+        <Table size="small" sx={{ '& td, & th': { fontSize: 12 } }}>
+          <TableHead>
+            <TableRow>
+              <TableCell>App</TableCell><TableCell>Scopes</TableCell>
+              <TableCell>Connected</TableCell><TableCell>Last used</TableCell><TableCell />
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {grants.map((g) => (
+              <TableRow key={g.id} sx={{ opacity: g.active ? 1 : 0.5 }}>
+                <TableCell>{g.client_name}</TableCell>
+                <TableCell>{g.scopes.map((s) => <Chip key={s} size="small" label={s} sx={{ mr: 0.5, fontSize: 10 }} />)}</TableCell>
+                <TableCell>{when(g.created_at)}</TableCell>
+                <TableCell>{when(g.last_used_at)}</TableCell>
+                <TableCell align="right">
+                  {g.active
+                    ? <Button size="small" color="error" onClick={() => { void disconnect(g.id); }}>Disconnect</Button>
+                    : <Typography variant="caption">{g.revoked_at ? 'revoked' : 'expired'}</Typography>}
+                </TableCell>
+              </TableRow>
+            ))}
+            {!grants.length && (
+              <TableRow><TableCell colSpan={5}><Typography variant="caption">No connected apps.</Typography></TableCell></TableRow>
             )}
           </TableBody>
         </Table>

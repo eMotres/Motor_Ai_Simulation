@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import OAuthConsent from './components/auth/OAuthConsent'
 import { AuthProvider } from './contexts/AuthContext'
 import { loadThemeMode } from './theme'
 
@@ -88,7 +89,8 @@ console.warn = (...args) => {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
-      <App />
+      {/* OAuth consent for MCP connectors (docs/MCP_2026-09-28.md): a page of its own */}
+      {window.location.pathname === '/agent-consent' ? <OAuthConsent /> : <App />}
     </AuthProvider>
   </StrictMode>,
 )

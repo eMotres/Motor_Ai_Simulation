@@ -2984,6 +2984,10 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
         "r_g_ext_ohm": (None if r_g is None else float(r_g)),
         "e_oss_policy": policy, "set_split": split,
         "cooling": cooling or {}, "r_tim_k_w": r_tim,
+        # A card whose datasheet prints no R_th(j-c) (e.g. WCMS900B170E53)
+        # needs the stated value; solve_controller refuses without it.
+        "r_th_jc_k_w": (None if req.get("r_th_jc_k_w") is None
+                        else float(req["r_th_jc_k_w"])),
         "h_bridge_modulation": str(req.get("h_bridge_modulation")
                                    or st_top.get("h_bridge_modulation")
                                    or "unipolar"),
@@ -3287,6 +3291,7 @@ class _ControllerLoop:
             "e_oss_policy": cfg["e_oss_policy"],
             "cooling": cfg.get("cooling") or {},
             "r_tim_k_w": float(cfg["r_tim_k_w"]),
+            "r_th_jc_k_w": cfg.get("r_th_jc_k_w"),
             "i_phase_rms_A": i_ph,
             "p_ac_W": p_ac,
             "f_elec_hz": f_el,

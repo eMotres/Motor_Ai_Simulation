@@ -285,6 +285,79 @@ export interface ControllerFormState {
   finEff: NumOrBlank;
   emissivity: NumOrBlank;
   mapping: Record<number, string>;
+  /* ── 2026-09-28 (optional, session-only — not saved with the motor) ── */
+  /** liquid: ``shared`` (one plate, default) | ``parallel`` | ``series``. */
+  plumbing?: string;
+  /** plates/modules the flow is split over (parallel) or runs through (series). */
+  nPlates?: NumOrBlank;
+  /** a stated plate-to-coolant R per plate [K/W] instead of the channel correlation. */
+  rPlate?: NumOrBlank;
+  /** the fluid that stated R was measured with ('' = the working coolant). */
+  rPlateFluid?: string;
+  /** the per-plate flow that stated R was measured at [L/min]. */
+  rPlateFlow?: NumOrBlank;
+  /** R_th(j-c) per switch [K/W] — only for a card whose datasheet prints none. */
+  rthJc?: NumOrBlank;
+}
+
+/** A controller run WITHOUT a motor (owner 2026-09-28) — the point is typed. */
+export interface StandaloneForm {
+  on: boolean;
+  /** 1 or 2 three-phase inverters. */
+  nInv: NumOrBlank;
+  /** set 2 against set 1, electrical degrees (dual 3-phase: usually 30). */
+  shift: NumOrBlank;
+  /** rms current per phase (per inverter leg). */
+  iPh: NumOrBlank;
+  /** fundamental electrical frequency. */
+  f1: NumOrBlank;
+  /** modulation index m = 2 V_ph,peak / V_dc. */
+  m: NumOrBlank;
+  /** displacement power factor. */
+  pf: NumOrBlank;
+  /** ``svpwm`` (linear to 2/sqrt3) | ``spwm`` (linear to 1). */
+  scheme: string;
+}
+
+export const DEFAULT_STANDALONE: StandaloneForm = {
+  on: false, nInv: 1, shift: 30, iPh: '', f1: '', m: 0.9, pf: 0.9, scheme: 'svpwm',
+};
+
+/** Every reason a standalone run cannot be sent — LOUD, one line each, never
+ *  a silently defaulted number (client-facing validation rule). */
+export function standaloneProblems(sa: StandaloneForm, s: ControllerFormState): string[] {
+  const out: string[] = [];
+  if (!sa.on) return out;
+  const need = (v: NumOrBlank | undefined, name: string) => {
+    if (v === '' || v === undefined || v === null || !Number.isFinite(Number(v))) {
+      out.push(`${name} is required for a standalone run`); return false;
+    }
+    return true;
+  };
+  if (need(sa.iPh, 'Phase current') && Number(sa.iPh) <= 0) out.push('Phase current must be positive');
+  if (need(sa.f1, 'Fundamental frequency') && Number(sa.f1) <= 0) out.push('Fundamental frequency must be positive');
+  if (need(sa.m, 'Modulation index') && Number(sa.m) <= 0) out.push('Modulation index must be positive');
+  if (need(sa.pf, 'cos φ') && (Number(sa.pf) <= 0 || Number(sa.pf) > 1)) out.push('cos φ must be in (0, 1]');
+  if (need(sa.nInv, 'Inverters') && ![1, 2].includes(Number(sa.nInv))) out.push('Inverters must be 1 or 2');
+  if (need(s.vdc, 'DC link') && Number(s.vdc) <= 0) out.push('DC link must be positive');
+  if (need(s.fsw, 'Carrier') && Number(s.fsw) <= 0) out.push('Carrier must be positive');
+  if (sa.m !== '' && Number(sa.m) > (sa.scheme === 'svpwm' ? 2 / Math.sqrt(3) : 1) + 1e-9) {
+    out.push(`m ${sa.m} is above the ${sa.scheme} linear limit — overmodulated`);
+  }
+  return out;
+}
+
+/** The standalone ``POST /solve`` body: the normal body plus the typed point,
+ *  with the motor-only fields (topology/mapping) left out. */
+export function standaloneSolveBody(base: ControllerSolveBody, sa: StandaloneForm) {
+  const { topology: _t, set_split: _s, h_bridge_modulation: _h, mapping: _m, ...rest } = base;
+  return {
+    ...rest, standalone: true,
+    n_inverters: blank(sa.nInv), phase_shift_deg: blank(sa.shift),
+    i_phase_rms_A: blank(sa.iPh), f_elec_hz: blank(sa.f1),
+    modulation_index: blank(sa.m), power_factor: blank(sa.pf),
+    modulation_scheme: sa.scheme,
+  };
 }
 
 /**
@@ -519,7 +592,10 @@ export interface ControllerSolveBody {
   f_carrier_hz?: number;
   v_dc_V?: number;
   r_tim_k_w?: number;
+  r_th_jc_k_w?: number;
   cooling: { mode: string; coolant?: string; flow_lpm?: number; t_in_c?: number;
+            plumbing?: string; n_plates?: number; r_override_k_w?: number;
+            r_override_coolant?: string; r_override_flow_lpm?: number;
             air_speed_mps?: number; t_ambient_c?: number;
             heatsink_area_cm2_per_device?: number; plate_area_cm2?: number;
             fin_efficiency?: number; emissivity?: number };
@@ -549,6 +625,15 @@ export function controllerSolveBody(
     if (s.coolant) cooling.coolant = s.coolant;
     cooling.flow_lpm = blank(s.flow);
     cooling.t_in_c = blank(s.tin);
+    if (s.plumbing && s.plumbing !== 'shared') {
+      cooling.plumbing = s.plumbing;
+      cooling.n_plates = blank(s.nPlates ?? '');
+    }
+    if (s.rPlate !== undefined && s.rPlate !== '') {
+      cooling.r_override_k_w = s.rPlate;
+      if (s.rPlateFluid) cooling.r_override_coolant = s.rPlateFluid;
+      cooling.r_override_flow_lpm = blank(s.rPlateFlow ?? '');
+    }
   } else {
     cooling.t_ambient_c = blank(s.tAmbient);
     cooling.fin_efficiency = blank(s.finEff);
@@ -567,6 +652,7 @@ export function controllerSolveBody(
     f_carrier_hz: blank(s.fsw),
     v_dc_V: blank(s.vdc),
     r_tim_k_w: blank(s.rtim),
+    r_th_jc_k_w: blank(s.rthJc ?? ''),
     cooling,
     mapping: s.topology === 'custom' ? customRows : undefined,
   };

@@ -237,6 +237,30 @@ Items 2 and 4 move nothing in the fixture (solid magnets, no cut magnet).
 - Knobs: `SB_EDDY_BE=1` (backward Euler, the pre-change time march bit-for-bit: the
   fixture reproduces every HEAD digit of the coupled solve), `SB_EDDY_LOSS_AT=step`.
 
+## Warm-up stop rule fix (2026-09-28)
+
+Ø12 12s10p production log: the warm-up ran 146 frames although every loss was identical to
+6 significant figures from period 2 on (Cu 5.62903 W, shaft 0.00824257 → 0.00821184 W,
+magnets 0.0328032 → 0.0327882 W). Two defects in `sb_postproc.eddy_period_resid`:
+
+1. **Own-relative judgement of milliwatt bodies.** Each group was divided by its own loss, so an
+   8 mW shaft moving 31 µW read 3.4 % (9 × 0.37 %). Now the machine total (all eddy groups +
+   copper I²R passed by the solver as `machine_extra_W`; iron is not known during the warm-up,
+   which only makes the test stricter) sets the scale: a body below 2 % of it **and** below
+   `EDDY_SIGNIFICANT_BODY_W` = 1 W is judged by the watts it could still move as a fraction of
+   the machine loss. Bodies ≥ 1 W or ≥ 2 % (the L155 shaft, 7–15 W beside kW) keep the
+   own-relative test unchanged — never weakened.
+2. **Three periods ignored the measured ratio.** The cap q = 0.9 was applied to the larger of
+   the last two changes, so a last change of 0 still read 9 × the first. Now with three periods
+   q = |Δ2/Δ1| is used when below the cap (tail |Δ2|·q/(1−q)); otherwise the cap as before.
+   Four-period rule unchanged.
+
+Stop rule only: no reported value is filtered or smoothed. Expected on the Ø12 case:
+146 → 74 warm-up frames (stops at 2 periods). Tests: `tests/test_eddy_settle_stop_rule.py`
+(Ø12 log values stop at 2; old rule 3.4 % at 2; a slow 15 W shaft beside 3.9 kW + 2 kW Cu runs
+until its own-relative residual ≤ 2 %; measured-q path), `tests/test_eddy_period_gauge.py`
+three-period expectation updated.
+
 ## Open decisions for the owner
 
 1. **Default steps for eddy duties.** BDF2 at 36 steps still reads the L155 magnets −4.3 %

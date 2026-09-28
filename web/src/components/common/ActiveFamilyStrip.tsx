@@ -663,7 +663,9 @@ const ActiveFamilyStrip: React.FC = () => {
       // untouched (activate loads nothing — ▶ does).
       const activated = await fetch(`${API}/api/family/activate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ die, config: created, duty }),
+        // keep_die: a re-attach loads nothing and writes no geometry, so a
+        // duty whose old stamp differs must not block it (409) either.
+        body: JSON.stringify({ die, config: created, duty, geometry_choice: 'keep_die' }),
       });
       if (!activated.ok) {
         throw new Error((await activated.json()).detail ?? `HTTP ${activated.status}`);

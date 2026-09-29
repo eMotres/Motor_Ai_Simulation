@@ -1,0 +1,21 @@
+[Unit]
+Description=eMotres node agent (load samples to Admin -> Servers)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/motres-node-agent.env
+ExecStart=/usr/bin/python3 /opt/motres-node-agent/motres_node_agent.py
+Restart=always
+RestartSec=10
+Nice=10
+CPUQuota=5%
+MemoryMax=64M
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

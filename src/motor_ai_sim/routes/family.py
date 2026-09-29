@@ -785,12 +785,33 @@ def _sim_of(c: dict) -> dict:
 def _live_parts() -> dict:
     """The live machine's per-part accounting states, or {} when every part is
     included.  Same shape the configuration file stores under ``parts:`` and
-    the ``?mat=`` payload carries under ``parts``."""
+    the ``?mat=`` payload carries under ``parts``.
+
+    ``ALWAYS_INCLUDED_PARTS`` (the shaft — owner rule 2026-09-29: "во всех
+    моторах вал должен участвовать") never lands here even if the live state
+    says otherwise: ``included`` is not stored, so silently dropping it is
+    exactly what storing ``included`` would do.  ``_live_shaft_note`` is the
+    loud half of the same rule, for callers that must tell the user.
+    """
     try:
-        from motor_ai_sim.part_states import config_part_states
-        return dict(config_part_states())
+        from motor_ai_sim.part_states import config_part_states, ALWAYS_INCLUDED_PARTS
+        out = dict(config_part_states())
+        for _part in ALWAYS_INCLUDED_PARTS:
+            out.pop(_part, None)
+        return out
     except Exception:      # noqa: BLE001
         return {}
+
+
+def _live_shaft_note() -> str:
+    """One-line warning when the live machine's shaft state is not
+    ``included`` — surfaced in config-creation / duty-save responses so the
+    override is never silent."""
+    try:
+        from motor_ai_sim.part_states import forced_override_note
+        return forced_override_note()
+    except Exception:      # noqa: BLE001
+        return ""
 
 
 def _config_role(c: dict) -> tuple:
@@ -1728,6 +1749,14 @@ def _tree_signature(with_catalog: bool) -> tuple:
             if p.is_file():
                 st = p.stat()
                 sig.append(("motor_catalog.json", "", st.st_mtime_ns, st.st_size))
+        # Die-level access (public / selected-clients) changes visibility for a
+        # GRANTED account exactly like a grant does — same "never a stale memo"
+        # requirement, so it is part of the signature too.
+        from motor_ai_sim import motor_access as _ma
+        p = _ma.die_access_file()
+        if p.is_file():
+            st = p.stat()
+            sig.append(("\0die_access", "", st.st_mtime_ns, st.st_size))
     except OSError:
         return ()                    # unreadable right now → never served from memo
     return tuple(sig)
@@ -1803,8 +1832,19 @@ def tree(response: Response, authorization: str = Header(default=None)):
     # tell them apart is precisely the cross-user leak this migration exists to
     # prevent.  (The signature would usually catch it; "usually" is not a
     # guarantee worth resting a customer's machine on.)
+    #
+    # Two GRANTED accounts with the SAME (empty) grant list used to be the same
+    # cache entry — fine until die-level "selected clients" access (2026-09-29)
+    # made two such accounts see different catalogs anyway (one is on a die's
+    # client list, the other is not). Only widen the key when that mode is
+    # actually in play, so the common case (no selected-clients dies at all)
+    # keeps the same cap-8 cache it always had.
+    from motor_ai_sim import motor_access as _ma
+    _sel_present = _acc["mode"] == MODE_GRANTED and any(
+        v.get("visibility") == _ma.VIS_SELECTED for v in _ma.all_die_access().values())
     _key = (str(_acc["mode"]), tuple(sorted(str(x) for x in (_acc.get("dies") or ()))),
-            _can_write, _client_filter, _WS.workspace().id)
+            _can_write, _client_filter, _WS.workspace().id,
+            _acc.get("email") if _sel_present else None)
     _sig = _tree_signature(_client_filter)
     _hit = _TREE_CACHE.get(_key)
     if _sig and _hit is not None and _hit[0] == _sig:
@@ -1820,8 +1860,12 @@ def tree(response: Response, authorization: str = Header(default=None)):
         # ALL their configurations and duties, exactly as an admin would.
         # Grants gate the SHARED catalog only: a die in this workspace is the
         # caller's own, and a PUBLISHED one is open to every registered account.
+        # A die the OWNER marked "public" or "selected clients" (motor_access
+        # die-level access, distinct from a per-user grant) is visible the same
+        # way — may_see_die is the single gate every other route already uses.
         if (_acc["mode"] == MODE_GRANTED and _die_name not in _acc["dies"]
-                and (not _ws_layering() or _layer == _WS.LAYER_SHARED)):
+                and (not _ws_layering() or _layer == _WS.LAYER_SHARED)
+                and not may_see_die(_acc, _die_name)):
             continue
         # The community layer is for people who signed in.  The anonymous
         # exhibit stays exactly the passport-filtered shared set it always was.
@@ -2129,7 +2173,12 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     _save_yaml(_cfg_file(die, name), doc)
     log.info("family: configuration '%s/%s' created from the live machine",
              die, name)
-    return {"ok": True, "die": die, "config": name}
+    out = {"ok": True, "die": die, "config": name}
+    _shaft_note = _live_shaft_note()
+    if _shaft_note:
+        log.warning("family: configuration '%s/%s' — %s", die, name, _shaft_note)
+        out["note"] = _shaft_note
+    return out
 
 
 def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
@@ -2486,7 +2535,13 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             # configuration whose shaft became `reference` (frameless — the
             # customer brings the shaft) is a different product, and every
             # earlier duty's N·m/kg was billed against a mass that included it.
-            _sp = c.get("parts") or {}
+            # ALWAYS_INCLUDED_PARTS (the shaft) are excluded from this diff: an
+            # old stored file that still says ``shaft: reference`` is not a
+            # build change to flag or refuse on — it always reads as
+            # ``included`` now (owner rule 2026-09-29), silently.
+            from motor_ai_sim.part_states import ALWAYS_INCLUDED_PARTS as _ALWAYS_INC
+            _sp = {k: v for k, v in (c.get("parts") or {}).items()
+                   if k not in _ALWAYS_INC}
             for k in sorted(set(_sp) | set(_live_pstates)):
                 if (_sp.get(k) or "included") != (_live_pstates.get(k) or "included"):
                     _mc_diffs.append("part %s: %s → %s"

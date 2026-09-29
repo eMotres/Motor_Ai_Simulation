@@ -78,30 +78,45 @@ const STATE_TIP: Record<PartState, string> = {
   excluded:  'Excluded — solved as air (µr 1, σ 0), zero mass, not drawn anywhere. Click to cycle.',
 };
 
+// The shaft always participates in the calculation (owner rule 2026-09-29:
+// "во всех моторах вал должен участвовать") — no state of its is a choice
+// any more, so its badge never cycles.  It still shows INC (the fact is
+// true and worth a glance), but the click is a no-op and the tooltip says
+// why instead of "click to cycle".
+const ALWAYS_INCLUDED_PARTS = ['shaft'];
+const SHAFT_ALWAYS_INCLUDED_TIP =
+  'Вал всегда участвует в расчёте (правило владельца) — Included, ' +
+  'not selectable.';
+
 const PartStateBadge: React.FC<{ part: string; hovered: boolean }> = ({ part, hovered }) => {
   const { stateOf, setState, saving } = usePartStates();
-  const st = stateOf(part);
+  const locked = ALWAYS_INCLUDED_PARTS.includes(part);
+  const st = locked ? 'included' : stateOf(part);
   const chip = STATE_CHIP[st];
   const next = PART_STATES[(PART_STATES.indexOf(st) + 1) % PART_STATES.length];
   const willBeRisky = next === 'excluded' && MAGNETICALLY_ACTIVE_PARTS.includes(part);
   return (
     <button
-      onClick={e => { e.stopPropagation(); if (!saving) setState(part, next); }}
-      title={STATE_TIP[st]
+      onClick={e => { e.stopPropagation(); if (!locked && !saving) setState(part, next); }}
+      disabled={locked}
+      title={locked ? SHAFT_ALWAYS_INCLUDED_TIP : STATE_TIP[st]
         + (st === 'excluded' && MAGNETICALLY_ACTIVE_PARTS.includes(part)
             ? ' ⚠ This part is magnetically active — the machine solved here is not the real one.'
             : willBeRisky
               ? ' ⚠ Next: excluded — this part is magnetically active, so removing it changes the magnetics, not just the accounting.'
               : '')}
       style={{
-        background: chip.bg, border: 'none', borderRadius: 3, cursor: 'pointer',
+        background: chip.bg, border: 'none', borderRadius: 3,
+        cursor: locked ? 'default' : 'pointer',
         padding: '0 3px', marginLeft: 2, flexShrink: 0,
         color: chip.fg, fontSize: 8, lineHeight: 1.5, fontWeight: 700,
         letterSpacing: 0.5,
         // Out of the way while the part is plain `included` (the default must
         // add no clutter); always visible once the accounting is non-default,
         // because that is a fact about the machine the user must not lose.
-        opacity: st === 'included' ? (hovered ? 0.7 : 0) : 1,
+        // The shaft's badge never hides — an owner rule is worth a constant
+        // glance even though its value never changes.
+        opacity: locked ? (hovered ? 0.7 : 0.35) : (st === 'included' ? (hovered ? 0.7 : 0) : 1),
         transition: 'opacity 0.15s',
       }}
     >

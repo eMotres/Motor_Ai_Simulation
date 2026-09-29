@@ -109,6 +109,7 @@ from motor_ai_sim.routes.newsletter import router as newsletter_router, notices_
 from motor_ai_sim.routes.sweep_config import router as sweep_config_router
 from motor_ai_sim.routes.account import router as account_router
 from motor_ai_sim.routes.admin import router as admin_router
+from motor_ai_sim.routes.cluster import router as cluster_router
 from motor_ai_sim.routes.support import router as support_router
 from motor_ai_sim.routes.modules import router as modules_router
 from motor_ai_sim.routes.kernel import router as kernel_router
@@ -215,6 +216,10 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "X-Bundle-Kind", "X-Bundle-Reason"],
 )
 
+# Admin -> Servers: API/MCP latency ring (motor_ai_sim.cluster_monitor).
+from motor_ai_sim import cluster_monitor as _cluster_monitor
+_cluster_monitor.install(app)
+
 # /mcp — the MCP server for external AI agents.  Added LAST = OUTERMOST, so an
 # agent-key request never meets the session-token tier gate / workspace
 # resolver: McpGate authenticates it itself (motor_ai_sim.mcp_app).
@@ -287,6 +292,7 @@ app.include_router(notices_router)
 app.include_router(sweep_config_router)
 app.include_router(account_router)
 app.include_router(admin_router)
+app.include_router(cluster_router)
 app.include_router(support_router)
 app.include_router(modules_router)
 app.include_router(kernel_router)

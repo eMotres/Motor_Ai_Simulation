@@ -9123,7 +9123,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # From here on a section opens a NEW page only when less than half of the
     # current one is left: with full-width field maps a hard break after each
     # section left a map alone on a page with three quarters of white under it
-    # (user 2026-09-08: "убери эти здоровенные пропуски").
+    # (user 2026-09-08: "remove these huge gaps").
     story.append(CondPageBreak(PAGE_H * 0.5))
     # 5 · PWM influence — the one section that is not the sinusoidal supply
     # (user decision 2026-09-14).  It sits between the electromagnetics it
@@ -9172,7 +9172,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     story.append(CondPageBreak(PAGE_H * 0.45))
     story += _notes_page(st, sources, brg, em, th, me, cp, sec)
     story.append(CondPageBreak(PAGE_H * 0.35))
-    # No per-duty source table (user 2026-09-10: "это тоже выкинь") — it listed
+    # No per-duty source table (user 2026-09-10: "throw that one out too") — it listed
     # which store each column was read from and when, and since a foreign answer
     # is dropped from this report rather than flagged in it, the Machine column
     # said "this machine" on every row.
@@ -9190,7 +9190,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
         subject="Full report of every solver's last result for this configuration",
         pageCompression=1 if compress else 0)
 
-    # NO TIMESTAMP (user 2026-09-10: "метки времени можно вообще убрать"; the
+    # NO TIMESTAMP (user 2026-09-10: "the timestamps can just be removed entirely"; the
     # cover and the footer carried two of them a minute apart — reviewer
     # 2026-09-14, D4).  The footer says which machine the sheet belongs to and
     # nothing else.
@@ -9376,7 +9376,7 @@ def cover_source_note(used_live: bool = False) -> str:
 def shaft_view(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
                mode: Optional[str] = None) -> Dict[str, Optional[float]]:
     """The power balance exactly as the Simulation card and the catalog row
-    state it (SummaryTable, 2026-09-13: "почему цифры не бьют") — ONE set of
+    state it (SummaryTable, 2026-09-13: "why don't the numbers match up") — ONE set of
     formulas for every table of this document:
 
       P_rotor  = |P_mech| × k_3d           (the 3-D end-effect factor, if any)
@@ -9483,7 +9483,7 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
                    "bearing and windage losses are NOT included — this "
                    "configuration names no bearings")
 
-    # ONE MASS (user 2026-09-10: "масса у нас только одна").
+    # ONE MASS (user 2026-09-10: "we only have one mass").
     #
     # It is the TOTAL, and not by preference: `mass_total_kg` is already the
     # divisor of every N·m/kg and kW/kg in this project (Compare's TD tile, the

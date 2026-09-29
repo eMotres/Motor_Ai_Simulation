@@ -1,6 +1,6 @@
 /**
- * node --test — THE DUTY-CYCLE FEATURE FLAG (owner, 2026-09-17: «давай пока
- * уберём duty cycle из Thermal, оставим только стандартный каплинг»).
+ * node --test — THE DUTY-CYCLE FEATURE FLAG (owner, 2026-09-17: «let's drop
+ * the duty cycle from Thermal for now, keep just the standard coupling»).
  *
  * Two things are worth pinning and nothing else here is:
  *

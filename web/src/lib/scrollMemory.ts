@@ -1,6 +1,6 @@
 // Remember where a scrolling panel was and put it back — user 2026-09-13:
-// "можешь сделать запоминалку положения скроллинга страницы Motors, я
-// постоянно её кручу".  The Motors tab is unmounted on every tab switch, so
+// "can you make a memory for the Motors page's scroll position, I keep
+// scrolling it constantly".  The Motors tab is unmounted on every tab switch, so
 // its scroll box comes back at the top each time.
 //
 // The position lives in localStorage (survives a reload too); the restore

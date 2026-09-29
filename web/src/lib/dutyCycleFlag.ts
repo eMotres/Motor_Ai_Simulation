@@ -1,8 +1,8 @@
 /**
  * THE DUTY-CYCLE FEATURE FLAG — off by default.
  *
- * Owner, 2026-09-17: «давай пока уберём duty cycle из Thermal, оставим только
- * стандартный каплинг» — for now the Thermal tab shows the cooling and the
+ * Owner, 2026-09-17: «let's drop the duty cycle from Thermal for now, keep
+ * just the standard coupling» — for now the Thermal tab shows the cooling and the
  * coupled loop, and nothing about S2/S3 cycles.  It is a "for now": not one line
  * of the cycle was deleted, it is all behind this one switch, so the feature
  * comes back with a build flag and no code archaeology.

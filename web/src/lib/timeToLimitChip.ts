@@ -1,8 +1,8 @@
 /**
  * HOW LONG MAY IT RUN — the catalog duty row's chip.
  *
- * Owner, 2026-09-17: *«для каплинга: если где-то выходим за лимиты, нужно
- * посчитать время, за какое мотор проработает до этого лимита»*.  The coupled
+ * Owner, 2026-09-17: *«for the coupling: if we go past the limits somewhere,
+ * we need to compute the time the motor will run before hitting that limit»*.  The coupled
  * loop computes it (`coupled_time_to_limit`), the Thermal tab prints it as a
  * line — and the catalog row is where the reader ALREADY is when the question
  * comes up ("can I pull this point?"), so the duty row gets one amber chip:

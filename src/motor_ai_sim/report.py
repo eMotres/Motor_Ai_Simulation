@@ -16748,8 +16748,8 @@ def not_included_bullets(brg: Optional[Dict[str, Any]],
 def solved_at_rows(sources: List[Any]) -> List[List[str]]:
     """Every solver answer this report leans on, and whether it is this machine.
 
-    No "computed at" column since 2026-09-10 (user: "метки времени можно вообще
-    убрать").  Two stamps a few minutes apart were read as two sections
+    No "computed at" column since 2026-09-10 (user: "the timestamps can just
+    be removed entirely").  Two stamps a few minutes apart were read as two sections
     disagreeing about the machine, when what they recorded was which store
     answered first; a result is identified by its machine and its operating
     point, and this report states both.  Header row included.
@@ -16770,7 +16770,7 @@ def _notes_page(st, sources, brg, em, th, me, cp,
     for b in assumption_bullets(sec):
         out.append(_para("• " + b, st["body"]))
         out.append(Spacer(1, 2))
-    # NOTHING AFTER THE ASSUMPTIONS (user 2026-09-11: "я думаю это не надо").
+    # NOTHING AFTER THE ASSUMPTIONS (user 2026-09-11: "I don't think we need this").
     # Three blocks went together, and they had one thing in common — they were
     # about the REPORT rather than about the machine:
     #   • "Not included", a list of what the models leave out.  The caveats that
@@ -16788,9 +16788,9 @@ def _notes_page(st, sources, brg, em, th, me, cp,
 # ---------------------------------------------------------------------------
 # The comparison pages — one column per duty, one table per simulation
 # ---------------------------------------------------------------------------
-# User, 2026-09-09: *"а report всё нужно делать с картинками и гораздо подробнее
-# всё расписывать ... если в конфигурации несколько режимов, их нужно сравнивать
-# в таблицах по всем моделированиям"*.
+# User, 2026-09-09: *"the report needs to have pictures and everything spelled
+# out in much more detail ... if a configuration has several duties, they
+# need to be compared in tables across every simulation"*.
 #
 # The UI's one-line rule (memory: "no text walls") is a rule about a PANEL, where
 # the reader is mid-task and wants the number.  A report is read once, by someone
@@ -17005,7 +17005,7 @@ def _duty_overview(st, cols: List[Dict[str, Any]],
     if _pe:
         out.append(_para(_pe, st["note"]))
     # The "when computed" table and the two paragraphs under it are gone
-    # (user 2026-09-11: "выкинь это"; the timestamps themselves were already
+    # (user 2026-09-11: "throw that out"; the timestamps themselves were already
     # ruled out on 2026-09-10).  `duty_overview_rows` still returns the stamps
     # for anyone who wants them; the document does not print them.
     return out
@@ -17015,8 +17015,8 @@ def battery_rows(batt: Dict[str, Any]) -> List[List[str]]:
     """The PACK the voltage limit comes from.  Header row included; empty when
     the configuration names no battery.
 
-    User 2026-09-10: *"нигде не нашёл информацию про батарейку и лимиты
-    напряжения"*.  The report warned against a 749.5 V limit and never said
+    User 2026-09-10: *"couldn't find any information about the battery and
+    the voltage limits anywhere"*.  The report warned against a 749.5 V limit and never said
     where that number came from — it is this pack at its minimum cell voltage,
     which is the worst case for a machine that has to keep making torque.
     """

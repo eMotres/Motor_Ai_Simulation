@@ -6082,8 +6082,8 @@ def _duty_magnet_temp(em: Dict[str, Any]) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # ONE COLUMN PER DUTY
 # ---------------------------------------------------------------------------
-# User, 2026-09-09: *"если в конфигурации несколько режимов, их нужно сравнивать
-# в таблицах по всем моделированиям"*.
+# User, 2026-09-09: *"if a configuration has several duties, they need to be
+# compared in tables across every simulation"*.
 #
 # The electromagnetic side has always been per duty — the Simulation tab saves a
 # summary into the configuration's yaml.  Everything else was stored ONCE PER
@@ -6131,7 +6131,7 @@ def _rated_duty(duties: List[Dict[str, Any]], die: str, cfg: str,
                 active: Optional[str]) -> Optional[str]:
     """WHICH duty the pictures are of.
 
-    User 2026-09-10: *"картинки моделирования должны быть из rated"*.  A report
+    User 2026-09-10: *"the simulation pictures should be from rated"*.  A report
     that took its maps from whatever the editor last had open showed the peak
     duty's fields under a document about the rated one, and the two look
     different for a reason.  So: the duty whose name says rated, when it has
@@ -6652,7 +6652,7 @@ def _match_duty_by_point(duties: List[Dict[str, Any]],
                          last: Dict[str, Any]) -> Dict[str, str]:
     """Which duty each machine-level LAST answer was solved at, PER KIND.
 
-    2026-09-09.  User: *"почему написано not solved везде?"* — the catalog
+    2026-09-09.  User: *"why does it say not solved everywhere?"* — the catalog
     context names the duty the EDITOR has open, so a report of any machine the
     user is not editing at that minute attributed nothing: every comparison cell
     said "not solved" and every map was captioned "no duty identified", while
@@ -7796,7 +7796,7 @@ def _col_vals(cols, fn) -> List[Any]:
 def _drop_empty(rows: List[List[Any]]) -> List[List[Any]]:
     """Comparison rows with nothing in them at all, taken out.
 
-    User 2026-09-11: *"убери это Warning, они пустые"* — the coupled table's
+    User 2026-09-11: *"remove that Warning, they're empty"* — the coupled table's
     "Warning" row printed an em-dash under every duty, which is what a healthy
     run looks like, so the row was a line of nothing on every report of a
     machine that converged.  A row goes only when EVERY cell is the "no value"
@@ -8401,8 +8401,8 @@ def duty_setting(cfg_doc: Dict[str, Any], duty: Optional[str], key: str) -> Any:
 def duty_carrier_hz(cfg_doc: Optional[Dict[str, Any]],
                     duty: Optional[str]) -> Optional[float]:
     """The PWM carrier the report judges a duty's resonances against — the
-    configuration's CONTROLLER carrier (2026-09-24, owner: «Это значение нужно
-    задавать в контроллере; PWM нужно выкинуть из Electromagnetic»), else the
+    configuration's CONTROLLER carrier (2026-09-24, owner: "This value needs
+    to be set in the controller; PWM needs to be dropped from Electromagnetic"), else the
     retired Simulation-tab ``sim.fSwitch`` the duty was saved with (the
     migration tier), else ``None`` (no carrier line — never a made-up one).
     ``inverter.drive_source`` is the one resolution every consumer uses."""
@@ -8420,7 +8420,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     """Everything the report is ABOUT, with no renderer anywhere near it.
 
     Split out of :func:`build_motor_report` on 2026-09-09, when the user asked
-    for the document in Word as well: *"репорт лучше выдавать в формате doc"* —
+    for the document in Word as well: *"better to output the report in doc format"* —
     he edits it and forwards it to clients, and Word makes its own PDF.  Two
     renderers reading two different gathering passes is how a .docx and a .pdf
     of the same machine end up quoting two different torques, so there is one
@@ -8557,8 +8557,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
 
     # ── ANOTHER MACHINE'S ANSWER IS NOT IN THIS REPORT ──────────────────────
     #
-    # User 2026-09-10, reading the first docx: *"машина должна быть одна и та
-    # же; если нет для неё решения, вообще этот раздел не вносится в отчёт"*.
+    # User 2026-09-10, reading the first docx: *"it must be the same machine
+    # throughout; if there's no solution for it, this section shouldn't go into the report at all"*.
     # Until now a stale answer was printed with a red flag beside it, and the
     # numbers were read anyway — the rotordynamics section quoted a critical
     # speed of 15,534 rpm belonging to a different motor.  A flag is not a
@@ -8724,12 +8724,12 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # ── THE PICTURES ARE ONE DUTY'S, and that duty is the rated one ─────────
     # Read from the per-duty FIELD store, so a map is the map that duty was
     # solved with rather than whatever the last press of a Solve button left in
-    # the machine's store (user 2026-09-10: "картинки моделирования должны быть
-    # из rated").  Empty when nothing is stored, and then every page falls back
+    # the machine's store (user 2026-09-10: "the simulation pictures should be
+    # from rated").  Empty when nothing is stored, and then every page falls back
     # to the machine's last solve exactly as it did before.
     _duties_l = [d for d in (cfg_doc.get("duties") or []) if isinstance(d, dict)]
-    # THE USER'S CHOICE first (2026-09-11: "нужно ещё сделать выбор, из какого
-    # режима мы публикуем картинки в отчёте"): `pictures` names a duty of this
+    # THE USER'S CHOICE first (2026-09-11: "we also need to make a choice of
+    # which duty we publish pictures from in the report"): `pictures` names a duty of this
     # configuration, and its stored fields are the maps.  A duty with nothing
     # stored cannot be drawn from, so the rule below takes over and the log
     # says so — the document never comes out with blank map pages because of a
@@ -8869,8 +8869,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     me_map_cur = _pic_cur if me_from_duty else None
 
     # ── AND THE SAME PICTURE FOR THE OTHER DUTY, BESIDE IT (2026-09-14) ─────
-    # User: *"добавим ещё картинки из peak — слева картинка из rated, справа из
-    # peak"*.  Both sides are gathered here, once, exactly like everything else
+    # User: *"let's also add pictures from peak — the left picture from
+    # rated, the right one from peak"*.  Both sides are gathered here, once, exactly like everything else
     # this function reads: the stored fields, the waveforms, and the thermal and
     # mechanical records each side's charts are drawn from.  The renderers only
     # place them.

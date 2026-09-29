@@ -10,7 +10,7 @@ Base: `motor_ai_sim`, branch `origin/pre-migration-freeze-2026-09-15` (productio
 | Commercial content | **Removed.** The project is non-commercial for now: pure AGPL-3.0-or-later + DCO, no pricing, no tiers (only `user` and `admin` roles), no billing, no revenue share, no listing fees, no paid features. Fair-use limits instead of plans; users may attach their own compute nodes (BYO compute). |
 | Restructure | Owner decision: the whole project moves onto this architecture, stage by stage (M0…), never breaking results: bit-identical acceptance on L155 motor, L180 generator and L13. |
 | New scope | Parties and organizations (section 6), manufacturing documentation (section 7), sourcing and orders (section 8): everything can be done in the portal "up to drawings and orders of finished products". Money and contracts stay outside the platform; it carries documents, statuses and communication. |
-| Decisions | D1–D23 kept (D9 restated as non-commercial, D12 was never used); new D24–D37. |
+| Decisions | D1–D23 kept (D9 restated as non-commercial, D12 was never used); new D24–D37; D46–D56 on data protection and residency (section 10A). |
 | Roadmap | New stages M8–M12 placed after the core restructure (M0–M3) and the data model (M4–M7). |
 
 ## Goal
@@ -822,6 +822,100 @@ A customer agent works like this: "need a 25 kg drone, 40 min": `search_catalog`
 
 ---
 
+## 10A. Customer data protection and data residency
+
+Owner (2026-09-29): customer data must be stored with great care, and it must be possible to separate it by country in the future. This section sets the rules now so that organizations (M8), the object store (D30) and BYO compute do not have to be retrofitted later. The current state was audited the same day (read-only; `data_protection_audit_2026-09-29.md`); its findings drive the "NOW" list in 10A.10.
+
+### 10A.1 Data classification
+
+Every stored object carries one class. Class decides encryption, who may see it, whether it may leave its region and how long it is kept.
+
+| Class | Examples | Rules |
+|---|---|---|
+| `public` | published catalog cards, marketing site, AGPL source | may be cached anywhere (CDN) |
+| `internal` | platform logs without PII, metrics, shared materials library | platform staff only; region-pinned where it contains customer references |
+| `customer-confidential` (default for customer objects) | geometry, machine descriptions, duties, results, fields, reports, drawings, BOMs, RFQs | org members with grants only; encrypted at rest with the org key; never leaves the org's region without a policy |
+| `nda-restricted` | anything shared under an NDA policy (6.5) | as confidential + NDA gating, watermark, download rules, full access audit |
+| `personal` (GDPR Art. 4) | account e-mail, name, sessions (IP, user agent), auth events, newsletter consent, support tickets and chats, MCP audit, usage stats | minimised, purpose-bound, retention schedule, subject rights automated; IPs stored hashed with a rotating salt or truncated |
+
+Export-controlled technical data (see 10A.4) is a **flag** on top of the class (`export_control: none | eu_dual_use | ear | itar_suspected`), set by the owning org, never inferred by the platform.
+
+### 10A.2 Tenancy and region as first-class attributes
+
+- **Tenant = organization** (D24). Every object has `org_id` and `region`; personal data of a user belongs to the user's home region.
+- **`region`** is set when an org is created (`eu` first, the current Hetzner FSN1 server; later e.g. `us`, `apac`, `cn`), is immutable except through a documented migration job, and is copied onto every object, job, file, backup and log line that references customer data.
+- **Region-pinned storage, compute and backups:** each region has its own database, object store bucket (MinIO, D30), job queue, solver nodes, backup repository and key hierarchy. No shared database across regions; the global layer holds only the org directory (`org_id → region`, display name) and public catalog data.
+- **Region router in the API:** the global entry point (aerostator.com) authenticates, looks up the caller's org region and routes (or redirects) to the regional API (`eu1.…`, `us1.…`). A request that would read an object of another region fails closed unless a cross-region grant exists. In the single-region phase the router is a no-op check (`region == "eu"`) that is already present in every store call, so the second region is configuration, not a rewrite.
+- **Cross-region transfer only by explicit policy:** a `transfer_policy` object (source region, destination region, data classes, legal basis, approver, expiry) must exist and be approved by the data owner's org owner; every transfer is audited.
+
+### 10A.3 Legal frame per region (awareness, not legal advice)
+
+- **EU/EEA (GDPR):** MOTRES d.o.o. is controller for accounts and platform data, processor for customer engineering data. Transfers out of the EEA need Chapter V basis: adequacy decision (e.g. EU–US Data Privacy Framework for certified recipients) or Standard Contractual Clauses plus a transfer impact assessment.
+- **China (PIPL, Data Security Law):** personal information and "important data" of Chinese users should stay in a `cn` region operated with a local partner; export needs a security assessment, certification or the standard contract. A `cn` region is a separate deployment, not a bucket in the EU.
+- **US / export control:** motor, drive and drone propulsion technology can fall under EU Dual-Use Regulation 2021/821, US EAR (ECCN) and in edge cases ITAR. The platform does not classify; it lets an org flag objects, blocks sharing flagged objects to orgs in embargoed countries or on sanctions lists, and records who accessed what. A US region may be needed for customers who require US-person-only storage.
+- Counsel reviews the DPA, the SCCs and the export-control wording before the first external customer org and before any second region.
+
+### 10A.4 Encryption
+
+- **In transit:** TLS 1.2/1.3 only, HSTS with `includeSubDomains` on every portal host (already on emotres.com), internal traffic between regional services on a private network or mTLS; BYO nodes and remote modules use mTLS (3c).
+- **At rest, layer 1 (disk):** LUKS full-disk encryption on every server that holds customer data (today the EU server has **none**, see audit). Remote unlock (dropbear-initramfs or Tang/Clevis) so reboots stay unattended.
+- **At rest, layer 2 (per-org envelope keys):** each org has a data key (DEK) that encrypts its objects in the object store and its confidential DB columns; DEKs are wrapped by a regional key-encryption key (KEK). First implementation: KEK in a root-only file on the regional host, separate from backups; later a KMS (HashiCorp Vault/OpenBao on a separate host, or a cloud KMS in that region). Deleting an org's DEK = crypto-shredding its data, including copies inside backups.
+- **Key rotation:** KEK yearly and on staff change; DEKs re-wrapped (not re-encrypted) on KEK rotation; `AUTH_SECRET`/session signing keys with a key id (`kid`) so rotation does not sign everyone out; SMTP, LLM and backup credentials rotated at least yearly and on suspicion.
+
+### 10A.5 Backups
+
+- **Per region, never across regions**; the EU backup target is a Hetzner Storage Box in the EU (the backup unit is written for it but currently points at a local repository on the same disk).
+- **Encrypted** (restic repository key, stored outside the backed-up host as well, in the owner's password manager), **off-site** (different machine, ideally different Hetzner location), hourly/daily/monthly retention as today (24/30/12).
+- **Restore tested:** quarterly restore rehearsal into a scratch VM, with a written result; automated weekly `restic check --read-data-subset`.
+- **Deletion and backups:** an erasure request is honoured in live data at once; backup copies age out within the retention window (12 months max) and are never restored for the deleted subject (a restore replays the deletion log). With per-org keys, deleting the DEK makes backup copies unreadable immediately.
+
+### 10A.6 GDPR operations
+
+- **Records of processing (Art. 30):** one maintained register (purpose, data, subjects, recipients, retention, transfers) in the private repository; updated with every new feature that stores personal data.
+- **DPA template** for customer orgs (Art. 28), with the sub-processor list as an annex and 30-day notice of changes.
+- **Sub-processor list (current):** Hetzner (hosting, backups; DE), Google Workspace (SMTP mail, Google sign-in; US parent, DPF/SCCs), Cloudflare (DNS; US parent), Firebase/Google (marketing site hosting), GitHub (source code; no customer data), Anthropic and Google Gemini (support assistant, if customer text is sent). Each needs a signed DPA and a transfer basis; LLM calls must not carry customer-confidential data unless the org opts in.
+- **Data subject rights automated:** `GET /api/account/export` (ZIP of account record, sessions, events, tickets, workspace) and `DELETE /api/account` (account, sessions, workspace, published items or their transfer, tickets, newsletter consent, pseudonymised audit entries), both logged; admin tool for requests received by e-mail. Answer within one month.
+- **Retention schedule:** sessions 30 days after expiry; auth events 12 months; API access logs 30 days (no bodies, no tokens); MCP audit and admin audit 24 months; support tickets 24 months after closure; newsletter consent until withdrawal plus proof for 3 years; usage stats aggregated after 90 days; deleted accounts purged from live data in 30 days, from backups by retention.
+- **Breach process:** detection → owner notified at once → assessment → supervisory authority (Slovenia: Information Commissioner) within 72 h if a risk to persons exists → affected customers/subjects without undue delay; written runbook and an incident log.
+
+### 10A.7 Admin access
+
+- Least privilege: platform `admin` sees account metadata and can manage grants, but **does not read customer-confidential content by default**. Reading a customer workspace needs a **break-glass** action: reason, time-boxed (e.g. 1 h), optional customer consent, logged to an append-only audit and shown to the org owner.
+- Every admin action (tier/role change, grant, invite, delete, session revoke, support read) goes to the admin audit with actor, target, time and reason.
+- Server access: named SSH keys per person (no shared root key), `root` login disabled in favour of a named sudo user, SSH from allow-listed addresses or a VPN, fail2ban, hardware-key (FIDO) SSH keys for the owner. Users in the `docker` group are root-equivalent and count as admins.
+
+### 10A.8 BYO compute, vendor modules, MCP and agents
+
+- **Data minimisation:** a job bundle carries only what the solve needs (machine description, duty, materials used); no account data, no other objects; results come back signed; the node deletes the bundle after the job (policy + attestation in the lease protocol).
+- **Region rule:** a platform node belongs to one region; a BYO node declares its country; the scheduler never sends a job of a region-pinned object to a node outside the allowed countries unless the owning org's `transfer_policy` allows it. Export-flagged objects never go to foreign vendor modules.
+- **Vendor modules** receive port values only (D23, 5.3), never geometry.
+- **MCP/agents** act with the calling user's grants and region, never the platform's; tools cannot cross orgs or regions; MCP audit stays in the region.
+
+### 10A.9 Logging without secrets or PII
+
+- Structured logs; a redaction filter drops `Authorization`, cookies, tokens, passwords, API keys and form bodies; e-mails in logs are replaced by `user_id`; IPs hashed or truncated in application logs (raw IPs only in the web server log, 14 days, for abuse handling).
+- Logs are region-pinned and follow the retention schedule; log files are not world-readable.
+
+### 10A.10 Roadmap placement
+
+| When | What |
+|---|---|
+| **NOW (before more external customers)** | point backups to the off-site Storage Box and test a restore; LUKS on the EU server at the next maintenance window (or a second server with LUKS and migrate); tighten file modes (identity, logs, backups 600/700); account deletion that removes workspace, sessions, tickets, newsletter entry; account export; admin action audit; retention jobs (sessions, logs, auth events); privacy notice + sub-processor list + DPAs signed with Hetzner, Google, Cloudflare; breach runbook; remove the `erp` user from the `docker` group or treat it as admin; named SSH keys, root login off; `region="eu"` field on users/workspaces/jobs from now on |
+| **With M4/M8 (organizations)** | `org_id` + `region` + `class` on every object; per-org DEKs in the object store; region check in every store call (single-region router); break-glass admin access; DPA template for customer orgs; transfer_policy object; export-control flag; BYO/job scheduler honouring region and flags |
+| **Later (second region)** | global org directory + region router; regional deployments (DB, MinIO, queue, nodes, backups, keys); KMS; region migration job; SCC/TIA package; `cn` only with a local partner and a separate deployment |
+
+### 10A.11 Risks added
+
+| Risk | Mitigation |
+|---|---|
+| Server theft/decommissioned disk exposes all customer data | LUKS, per-org keys, Hetzner disk wipe on cancel |
+| Backup on the same disk: one failure loses data and backups together | off-site Storage Box, restore rehearsals |
+| Customer data crosses a border without basis | region attribute everywhere, router, transfer_policy, node country check |
+| An admin or agent reads customer designs silently | break-glass with audit visible to the org owner; MCP with caller's grants only |
+| Export-controlled design shared to a sanctioned party | export-control flag, country checks on sharing and on BYO nodes |
+
+---
+
 ## 11. Risks, decisions, roadmap
 
 ### 11.1 Risks
@@ -896,11 +990,23 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D43 | 2FA at signing | **Re-authentication always; 2FA when enabled**, and an org may make 2FA mandatory for its signatories |
 | D44 | Agents and NDAs | Agents may **propose drafts only** (`nda:draft`); sending and signing are human-only |
 | D45 | Existing paper NDAs | **Manual upload** accepted as an equivalent access policy after both org owners confirm |
+| D46 | Tenancy and region | **Organization is the tenant; `region` is a first-class, immutable attribute of every org and every stored object**; EU (Hetzner FSN1) is the only region now |
+| D47 | Region isolation | **Separate regional deployments** (DB, object store, queue, nodes, backups, keys); global layer only for the org directory and public catalog; a region check in every store call from M4 on |
+| D48 | Cross-region transfer | **Only through an approved `transfer_policy`** (classes, legal basis, approver, expiry), audited; default deny |
+| D49 | Encryption at rest | **LUKS on every data server now; per-org envelope keys (DEK/KEK) with M8**; KMS when the second region starts; crypto-shredding on org deletion |
+| D50 | Backups | **Per region, encrypted, off-site, restore rehearsed quarterly**; retention 24 h / 30 d / 12 mo; deletions replayed after any restore |
+| D51 | Data subject rights | **Self-service export and delete** in the account page before more external users; admin tool for e-mailed requests |
+| D52 | Retention | **Adopt the schedule in 10A.6** and enforce it with daily jobs |
+| D53 | Admin access to customer content | **Break-glass only** (reason, time-box, append-only audit visible to the org owner) |
+| D54 | LLM support assistant | **No customer-confidential data to external LLMs unless the org opts in**; LLM vendors listed as sub-processors |
+| D55 | Export control | **Org-set flag per object**; platform blocks sharing/compute to disallowed countries, makes no classification itself |
+| D56 | China | **Separate `cn` deployment with a local partner**, only when there is demand; never a bucket in the EU region |
 
 ### 11.3 Roadmap (rough, weeks of one engineering agent + owner review)
 
 | Step | Content | Effort |
 |---|---|---|
+| **NOW. Data protection baseline** | off-site backups + restore test, LUKS, file modes, account export/delete, retention jobs, admin audit, privacy notice + DPAs, breach runbook, SSH hardening, `region` field (10A.10) | ~2–3 wk, before more external customers |
 | **1. Core restructure: own modules on the contract** | M0 port contract (1 wk) · M1 motor adapter + `machine/1.0` + golden tests (1–2 wk) · M2 controller (1 wk) · M3 system solver calling the old loop (2 wk) · M4–M5 org/project/system beside cfg, battery card (2 wk) · M6 `/api/v2` (1 wk) · `module@version`/`own_node` in `job_usage` (0.5 wk); M7 retirement runs in the background | **~9–10 wk** |
 | **1A. Own geometry (import)** | `machine/1.0` + IPM plugin (in M1), then DXF import → region recognition → material/winding assignment → validation → solve | ~3–4 wk (after M1, not first) |
 | **M8. Parties and organizations** | org UI, memberships and roles, object grants generalizing die_access, NDA policies, audit view, org verification; BYO org-shared nodes; **NDA workflow** (6.5A): templates, generation, SES click-to-sign with re-auth/2FA, signed PDF with audit trail, grant activation after signatures, auto-revoke on expiry, manual upload | ~5 wk (3 + 2 for NDA) |
@@ -929,4 +1035,4 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | **Geometry, further** | step-by-step editor; SPM/outrunner/axial/IM/SynRM/EESM plugins; STEP import | on demand |
 | **Later** | CFD modules as coefficient sources, Newton for stiff loops, reply-by-e-mail, third-party ERP connectors | on demand |
 
-Suggested order: **1 → (1A, 2, M8 in parallel) → M9 → M10 → M11 → M12 → 3a → 4.1–4.3 → 3b/3c → 4.4–4.7**. Step 1 changes no number and no URL for users; it runs in parallel with ongoing motor work.
+Suggested order: **NOW (data protection) → 1 → (1A, 2, M8 in parallel) → M9 → M10 → M11 → M12 → 3a → 4.1–4.3 → 3b/3c → 4.4–4.7**. Step 1 changes no number and no URL for users; it runs in parallel with ongoing motor work.

@@ -10994,9 +10994,9 @@ SINE_CONSTANT_TAIL = " (sinusoidal run)"
 
 
 # ── THE CATALOGUE CONSTANTS, AT 20 °C (owner 2026-09-18) ────────────────────
-# *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить все
-# коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех каталогах
-# моторов и нужны для сравнения; это нужно отдельно упомянуть в отчёте»*.
+# *"do a cold 20 °C pass for every report, to find all the coefficients KV,
+# Kt, Km, Km/mass that appear in every motor catalogue and are needed for
+# comparison; this needs to be mentioned separately in the report"*.
 #
 # Every constant elsewhere in this document is at the duty's OWN temperatures,
 # which is right and is not comparable: a catalogue quotes room-temperature
@@ -11081,8 +11081,8 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
       "above are consistent with")
     R("Magnet flux linkage Ψ_PM [Wb]", _v("psi_pm_Wb"), 4, "",
       "the back-EMF per rad/s at 20 °C" + _tail)
-    # Ld / Lq ON THE CATALOGUE'S OWN BASIS (owner 2026-09-20: *«Ld/Lq нужно
-    # указывать тоже для 20 градусов и без тока, как для KV»*).  KV above is a
+    # Ld / Lq ON THE CATALOGUE'S OWN BASIS (owner 2026-09-20: *"Ld/Lq also
+    # need to be given at 20 degrees and at zero current, like KV"*).  KV above is a
     # no-load constant at 20 °C; quoting the inductances of a 600 A operating
     # point beside it compares two different machines.  These are the
     # incremental (frozen-permeability) values at i = 0 and 20 °C — the duty's
@@ -11112,8 +11112,8 @@ def em_constant_rows(em: Dict[str, Any],
                      drive: str = "sine") -> List[List[str]]:
     """The machine constants a control engineer asks for.  Header included.
 
-    User 2026-09-11: *"проверь все эти параметры, они обязательно должны быть
-    отображены, каждый в своём разделе"*.  Ld, Lq, the saliency, the magnet
+    User 2026-09-11: *"check all these parameters, they absolutely must be
+    shown, each in its own section"*.  Ld, Lq, the saliency, the magnet
     flux linkage, the winding resistances and the saturation droop were on the
     summary card and in no section of this document — and they are exactly what
     a drive is tuned from.
@@ -11351,9 +11351,9 @@ def em_loss_rows(em: Dict[str, Any],
     # WHETHER THE SOLID LOSS IS SPLIT decides how the sleeve is listed, and it
     # has to: on a run WITHOUT the split the combined row already contains the
     # sleeve, so printing a sleeve row beside it invites the reader to add the
-    # column up and land 20 W above the total — reported 2026-09-11 ("двойной
-    # учёт потерь в гильзе... прямое суммирование даёт 6,462.6 Вт, тогда как
-    # итоговая строка правильно указывает 6,442.9 Вт").  The total was right
+    # column up and land 20 W above the total — reported 2026-09-11 ("double
+    # counting of the sleeve losses... direct summation gives 6,462.6 W,
+    # while the total row correctly shows 6,442.9 W").  The total was right
     # both times; the table was ambiguous.  Split: three siblings that add up.
     # Not split: one row, and the sleeve indented under it as a part OF it.
     _split = (_g(em, "P_mag_W") is not None or _g(em, "P_shaft_W") is not None)
@@ -11821,8 +11821,8 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
         out.append(_para(dem_text, st["body"]))
 
     # ── the pictures ────────────────────────────────────────────────────────
-    # User 2026-09-08: "рисунки надо делать на всю ширину страницы, а то ничего
-    # не видно, и подписи под ними и демагнитизации обязательно рисовать" —
+    # User 2026-09-08: "the pictures need to be full page width, otherwise
+    # nothing is visible, and the captions under them and demagnetization must always be drawn" —
     # every map takes the full content width on a row of its own, its caption
     # travels with it (image + caption in one KeepTogether, nothing more: the
     # earlier whole-block grouping is what left a half-empty page behind).

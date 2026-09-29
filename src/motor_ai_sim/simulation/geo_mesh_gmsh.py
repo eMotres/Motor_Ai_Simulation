@@ -96,14 +96,16 @@ def _faces(V: np.ndarray, S: np.ndarray):
     return list(getattr(polys, "geoms", []))
 
 
-def _feature_sizes(V: np.ndarray, S: np.ndarray) -> np.ndarray:
-    """Per segment: distance to the nearest segment sharing no vertex with it."""
+def _feature_sizes(V: np.ndarray, S: np.ndarray):
+    """Per segment: (distance to the nearest segment sharing no vertex with it,
+    index of that segment or -1)."""
     import shapely
     from shapely.geometry import LineString
     lines = [LineString([V[a], V[b]]) for a, b in S]
     tree = shapely.STRtree(lines)
     L = np.linalg.norm(V[S[:, 0]] - V[S[:, 1]], axis=1)
     out = np.full(len(S), np.inf)
+    near = np.full(len(S), -1, np.int64)
     for k, seg in enumerate(lines):
         a, b = int(S[k, 0]), int(S[k, 1])
         for c in tree.query(seg.buffer(max(float(L[k]), 1e-6))):
@@ -114,7 +116,44 @@ def _feature_sizes(V: np.ndarray, S: np.ndarray) -> np.ndarray:
             d = float(seg.distance(lines[c]))
             if d < out[k]:
                 out[k] = d
-    return out
+                near[k] = int(c)
+    return out, near
+
+
+def _segment_sizes(L, lfs, near, frozen, K):
+    """Target edge per segment.
+
+    * frozen (domain-boundary) segments cannot be split: their size IS their
+      length, and it is what the size field must grade from;
+    * an interior interface is cut to min(its length, K x its feature size)
+      so a thin feature between two interfaces never forms a sliver ...
+    * ... but never finer than a FROZEN segment facing it across that thin
+      feature: a 0.02 mm recess under a 0.074 mm slip-grid ring meshes as one
+      row spanning the recess only if both sides carry the same spacing
+      (measured: aspect 51 with the interface cut to 2.5 x 0.02 mm, the
+      cell-row layout with the frozen spacing)."""
+    h = np.minimum(L, K * lfs)
+    face_frozen = (near >= 0) & frozen[np.maximum(near, 0)]
+    h = np.where(face_frozen, np.minimum(L, np.maximum(h, L[np.maximum(near, 0)])), h)
+    h = np.where(frozen, L, h)
+    return np.maximum(h, 1e-4)
+
+
+def _ring_use_counts(S, faces, keep, key, seg_id):
+    """How many kept faces use each segment on their rings (2 = interior)."""
+    cnt = np.zeros(len(S), int)
+    for i, f in enumerate(faces):
+        if not keep[i]:
+            continue
+        for ring in [f.exterior] + list(f.interiors):
+            c = list(ring.coords)
+            for j in range(len(c) - 1):
+                a = key.get((float(c[j][0]), float(c[j][1])))
+                b = key.get((float(c[j + 1][0]), float(c[j + 1][1])))
+                k = seg_id.get((min(a, b), max(a, b))) if a is not None and b is not None else None
+                if k is not None:
+                    cnt[k] += 1
+    return cnt
 
 
 def triangulate_gmsh(V, S, area: float, hole_pts=None, regions=None,
@@ -167,13 +206,14 @@ def triangulate_gmsh(V, S, area: float, hole_pts=None, regions=None,
                 "its target sizes (budget {}); rejected before meshing."
                 .format(pred, int(budget)))
 
-    L = np.linalg.norm(V[S[:, 0]] - V[S[:, 1]], axis=1)
-    h_seg = np.minimum(L, K * _feature_sizes(V, S))
-    h_seg = np.maximum(h_seg, 1e-4)
-
     key = {(float(x), float(y)): i for i, (x, y) in
            reversed(list(enumerate(V)))}          # first index wins on dups
     seg_id = {(int(a), int(b)): k for k, (a, b) in enumerate(S)}
+
+    L = np.linalg.norm(V[S[:, 0]] - V[S[:, 1]], axis=1)
+    lfs, near = _feature_sizes(V, S)
+    frozen = _ring_use_counts(S, faces, keep, key, seg_id) != 2
+    h_seg = _segment_sizes(L, lfs, near, frozen, K)
 
     def _vid(c):
         i = key.get((float(c[0]), float(c[1])))

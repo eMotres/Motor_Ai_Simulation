@@ -90,6 +90,9 @@ METRICS = (  # (key, label, unit)
     ("P_sleeve_W", "sleeve eddy loss", "W"),
     ("P_loss_total_W", "total loss", "W"),
     ("V_peak", "terminal voltage peak", "V"),
+    ("P_in_W", "electrical input power", "W"),
+    ("P_mech_W", "mechanical power", "W"),
+    ("balance_residual_rel", "field power-balance residual (rel.)", "-"),
 )
 EMF_METRICS = (
     ("E_peak_V", "no-load EMF peak (phase)", "V"),
@@ -163,6 +166,19 @@ def _harm(series, n):
     return [float(2 * abs(F[h])) for h in range(n // 2)]
 
 
+def _versions():
+    """Provenance: the mesher/solver library versions this solve ran on."""
+    out = {"python": sys.version.split()[0]}
+    for mod in ("gmsh", "triangle", "numpy", "scipy", "shapely", "pypardiso",
+                "skfem"):
+        try:
+            m = __import__(mod)
+            out[mod] = str(getattr(m, "__version__", "?"))
+        except Exception:  # noqa: BLE001 — absent is a valid answer
+            out[mod] = None
+    return out
+
+
 def run(spec_path, out_path):
     import logging
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
@@ -172,6 +188,8 @@ def run(spec_path, out_path):
     except (AttributeError, OSError):
         pass
     spec = json.load(open(spec_path, encoding="utf-8"))
+    # study knobs (e.g. SB_SKIN_H1_FRAC, SB_SLEEVE_LAYERS) set BEFORE any import
+    os.environ.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
     y, geo, duty, mats, st = _compose(spec["dies"], *spec["case"])
     sd, wnd = _write_sandbox_config(y, geo, mats, duty, st,
                                     [spec.get("live_config"), spec["dies"]])
@@ -218,6 +236,46 @@ def run(spec_path, out_path):
         structured_gap=bool(st.get("mesh.structuredGap", True)),
         component_mesh_mm=dict(st.get("mesh.componentMesh") or {}),
         geo_override=dict(geo), eddy=True)
+    if spec.get("mesh_only"):
+        # Hash the geometry-driven halves exactly as the solve builds them and
+        # stop: used to show whether a code change moves a saved duty's mesh
+        # at all (identical hashes => identical numbers, the solve is
+        # deterministic).  _Stop is a BaseException so no fallback catches it.
+        import hashlib
+        from motor_ai_sim.simulation import geo_mesh as _gm
+
+        class _Stop(BaseException):
+            pass
+        _orig = _gm.geo_mesh_halves
+        seen = []
+
+        def _spy(p, polys, **k):
+            out = _orig(p, polys, **k)
+            ms, ts, _cs, mr, tr, _cr = out
+            rec = {"kwargs": {kk: (vv if isinstance(vv, (int, float, str)) else str(vv))
+                              for kk, vv in k.items() if kk != "skin_layers"}}
+            for nm, m_, t_ in (("stator", ms, ts), ("rotor", mr, tr)):
+                h = hashlib.sha1(np.ascontiguousarray(m_.p).tobytes()
+                                 + np.ascontiguousarray(m_.t).tobytes()
+                                 + np.ascontiguousarray(t_).tobytes()).hexdigest()
+                rec[nm] = {"sha1": h, "n_tri": int(m_.t.shape[1])}
+            for nm, m_, rr in (("R1", mr, k.get("r1_band")), ("R2", ms, k.get("r2_band"))):
+                if rr:
+                    P = m_.p.T * 1e3
+                    used = np.unique(m_.t)
+                    rad = np.hypot(P[used, 0], P[used, 1])
+                    rec[nm + "_nodes"] = int(np.sum(np.abs(rad - float(rr)) < 2e-3))
+            seen.append(rec)
+            raise _Stop()
+        _gm.geo_mesh_halves = _spy
+        try:
+            em_transient_eval(**kw)
+        except _Stop:
+            pass
+        json.dump({"spec": spec, "backend": backend, "versions": _versions(),
+                   "builds": seen}, open(out_path, "w", encoding="utf-8"), indent=1)
+        print(json.dumps(seen))
+        return
     t0 = time.time()
     r = em_transient_eval(**kw)
     wall = time.time() - t0
@@ -246,6 +304,9 @@ def run(spec_path, out_path):
     res = {
         "spec": spec, "module": motor_ai_sim.__file__, "have_triangle": have_triangle,
         "backend": backend, "wall_s": wall, "maxrss_mb": maxrss_mb,
+        "versions": _versions(),
+        "P_in_W": f("P_elec_in_W"), "P_mech_W": f("P_mech_avg_W"),
+        "balance_residual_rel": ((r.get("power_balance") or {}).get("residual_rel")),
         "kwargs": {k: v for k, v in kw.items() if k != "geo_override"},
         "mesh_build_events": r.get("mesh_build_events"),
         "mesh_build_notes": r.get("mesh_build_notes"),

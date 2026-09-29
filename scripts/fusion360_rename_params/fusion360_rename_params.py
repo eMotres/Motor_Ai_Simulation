@@ -15,8 +15,8 @@
 # cannot be assumed to have PyYAML.
 #
 # NOTHING IS EVER RENAMED AWAY AND NOTHING IS EVER DELETED (owner, 2026-09-25:
-# "чтобы никаких переменных не уничтожалось, только переименования" --
-# revised again the same day: "формулы не меняй, только одну:
+# "no variable should ever be destroyed, only renamed" --
+# revised again the same day: "don't change the formulas, only one:
 # stator_up_r = stator_diameter/2"). Three kinds of change only:
 #   1. PLAIN RENAME (27 of the 33): UserParameter.name = <canonical>. Per the
 #      Fusion API this automatically rewrites every OTHER expression that

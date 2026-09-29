@@ -3,8 +3,8 @@
 #
 # WHY: of the 295 files under config\dies only 22 are in git and config\ was
 # last committed on 2026-08-20; three weeks of duties, materials, saved runs
-# and field maps had no copy anywhere (user 2026-09-12: "а мы делаем бэкап
-# данных по моторам?").
+# and field maps had no copy anywhere (user 2026-09-12: "are we even backing up
+# the motor data?").
 #
 # WHAT: two layers, both under $Root —
 #   latest\   an incremental mirror (robocopy /MIR — only changed files move,

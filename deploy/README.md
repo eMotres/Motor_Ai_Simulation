@@ -87,8 +87,8 @@ Windows workstation, so a value proven there is the value that ships.
 
 ### The duty cycle is behind a flag (2026-09-17)
 
-Owner's decision on 2026-09-17: *«давай пока уберём duty cycle из Thermal,
-оставим только стандартный каплинг»* — for now the Thermal tab shows the cooling
+Owner's decision on 2026-09-17: *«let's drop the duty cycle from Thermal for
+now, keep just the standard coupling»* — for now the Thermal tab shows the cooling
 and the coupled EM↔thermal loop and nothing about S2/S3 cycles. It is a *for
 now*, so nothing was deleted: the whole feature sits behind two flags that are
 **off by default**. The backend's is `DUTY_CYCLE_ENABLED` (this table); with it

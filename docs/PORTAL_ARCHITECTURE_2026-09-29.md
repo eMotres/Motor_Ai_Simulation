@@ -15,6 +15,7 @@ Base: `motor_ai_sim`, branch `origin/pre-migration-freeze-2026-09-15` (productio
 | Physical port contract (update 2026-09-29) | New section 2.7 per the Codex review (point 6, owner agreed): acausal across/through ports, **positive = into the module** (D2 restated), SI with K and m at the boundary (D3 restated), per-module energy balance with explicit storage states, PWM fidelity levels, coolant stream semantics, consistency checks with tolerances, worked battery–controller–motor–load example, two separate validation tracks (D11 restated, D57–D61). |
 | Priority order (update 2026-09-29) | Roadmap reordered per the review: publication fix → data loading and versions → motor + controller in contracts → verify old results → simple battery–controller–motor–load system; orders, NDA and missions later (D37 restated, D62). |
 | Open standards (update 2026-09-29) | New section 10B per the owner principle "be compatible with open standards": every interface mapped to an open standard with import/export, roadmap stage, conformance test and what is not adopted (D63–D69). |
+| Open RFQ board (update 2026-09-29) | New section 8.9 per the owner idea: category RFQ templates from released revisions, invite-only or verified-supplier board, NDA-gated watermarked drawings, structured quotes, sealed bids, comparison matrix, award or split, supplier capability profiles with hard/soft matching (UNSPSC/ECLASS), freelance-style supplier profiles, job feed, status milestones and two-way blind reviews, direct work after award; no fees, no payments (D70–D82). |
 
 ## Goal
 
@@ -915,6 +916,148 @@ A human always sends and approves; agents only read and draft.
 
 No MCP tool can send an RFQ, accept a quote, issue an order, release a revision or create a grant. Those need a signed-in human with the right member role.
 
+### 8.9 Open RFQ / quotation board (update 2026-09-29)
+
+Owner idea: a customer posts a request (CNC part, motor coils, magnets), suppliers quote, the customer picks the best offer and then works with the supplier directly. This extends 8.3–8.4 (the `rfq`/`quote` rows there become the entities below) and stays **non-commercial** (section 10): the platform takes no fee, handles no payments and is not a party to the deal. It hosts documents, statuses and communication.
+
+#### 8.9.1 RFQ types and category templates
+
+Each RFQ item uses a category template. The template lists required fields and validates them loudly before publishing.
+
+| Category | Required inputs | Optional / typical |
+|---|---|---|
+| CNC / machined parts | drawing (PDF) + model (STEP AP242), material and condition, general tolerances ISO 2768 (class) and fits ISO 286 on toleranced features, surface finish (Ra), heat treatment, qty tiers (e.g. 10/100/1000) | coating/plating, inspection level (FAI, CMM report), marking, packaging |
+| Laminations | DXF (from the released revision), steel grade and thickness, coating class, stacking method (interlock, welded, bonded, backlack), stack height and tolerance, qty tiers | burr limit, cutting method (stamping, laser, wire EDM with the recast note), annealing |
+| Coils / windings | winding spec (generated, section 7), wire (type, size, strands), insulation class, impregnation (VPI, trickle, none), turns and connection, test requirements (resistance, hipot, surge, partial discharge), qty tiers | lead finishing, embedded sensors (NTC/PT1000), packaging |
+| Magnets | grade (e.g. N52UH) and temperature class, dimensions and tolerances, coating (NiCuNi, epoxy), magnetisation direction (drawing), segmentation, **test report required** (B-H at temperature, flux per piece) | grain-boundary diffusion, pole marking, packaging for shipping magnetised |
+| Bearings / electronics / other | part number or spec sheet, qty tiers, acceptable alternates | free-form spec with attachments |
+
+Attachments are **generated from a released design revision** (section 7): the RFQ pins `design_revision@rev` and its package (drawings, DXF, STEP, winding spec, BOM lines). A superseded revision flags the RFQ, never changes it. Hand uploads are allowed and marked "uploaded" (7.2).
+
+#### 8.9.2 Supplier capability profile and matching
+
+Owner rule: every supplier states at registration what it can make, and receives RFQs by those criteria.
+
+**Profile.** Filled when a supplier org registers; **required before it receives any RFQ** (invite or board). Editable, **versioned** (every change is a new profile revision; a quote pins the profile revision it was made under) and verifiable.
+
+| Capability family | Structured parameters (per capability) |
+|---|---|
+| Machining: CNC milling, turning, 5-axis | materials, max part envelope (mm), achievable tolerance (ISO 2768 class, IT grade per ISO 286), best Ra |
+| EDM: wire, sinker | max workpiece (mm), max height, tolerance, materials; lamination-stack EDM with recast note |
+| Laminations: laser, stamping, etching | steel grades and thicknesses, max OD (mm), burr limit, die making in house |
+| Stack joining: bonding (backlack), welding, interlock | stack height range, grades, annealing |
+| Coil winding: concentrated, distributed, hairpin, litz, foil | wire sizes (min/max mm or AWG), strands, insulation classes, max coil envelope |
+| Impregnation / potting | VPI, trickle, potting; resin systems; thermal class |
+| Magnets | production vs trading, grades (e.g. N35–N55, H–AH classes, SmCo), max dimensions, coatings, magnetisation (in house, direction types), GBD, test reports offered |
+| Bearings, PCB/PCBA, power electronics | product ranges, layer counts / IPC class, voltage/current range |
+| Heat treatment, surface finishing | processes, max size, standards |
+| Assembly, testing | assembly types; tests (hipot, surge, PD, B-H, dynamometer) |
+
+Common to every capability: min/max quantity, typical lead time (days), capacity (units or hours per month, optional), certifications (ISO 9001, IATF 16949, AS9100, ISO 14001) with files and expiry, export regions served, languages. Optional: equipment list (machine, model, envelope), sample photos and case studies (watermarked, public only if the supplier chooses).
+
+**Taxonomy.** Services and processes are classified with **UNSPSC** (segments 73 "Industrial production and manufacturing services" and 23 for machinery), products with **ECLASS** (the same property dictionary as 10B.4, D64), and the org itself carries its **NACE Rev. 2** code (ISIC-compatible) for statistics and registry checks only. Reason: UNSPSC is the only open, widely used code set that names manufacturing *services* at process level (machining, winding, heat treatment); NACE/ISIC classify companies, not what they can make; ECLASS is already our product dictionary. Our own capability ids map onto these codes; parameters stay ours where no standard property exists.
+
+**Matching engine.** Each RFQ item's template (8.9.1) yields requirements; the engine compares them with capability profiles:
+
+- **Hard constraints must match**: capability family and process, material/grade, envelope ≥ part, achievable tolerance ≤ required, required certifications valid on the deadline date, quantity within min/max, export region allowed, NDA policy acceptable.
+- **Soft constraints are scored** (0–100): lead time vs needed_by, capacity, verification level, language, past performance (later, 8.9.6), distance/region preference.
+- Board visibility and auto-invites go **only to suppliers passing all hard constraints**, ranked by score; each match stores its **reasons** (which constraints matched, which soft ones cost points).
+- The customer can still **invite manually** any supplier (with a warning listing failed hard constraints). Suppliers see **why they received** an RFQ (the matched capabilities and parameters), and can mark "not a fit" to improve matching.
+
+**Verification levels** (badges on profile and in the comparison matrix): **self-declared** → **documents checked** (certificates, registry extract checked by the platform or a verified customer) → **audited** (on-site or remote audit report uploaded by an auditor org). Each capability carries its own level; expired certificates drop the level automatically.
+
+#### 8.9.3 Visibility
+
+- **Invite-only**: the customer picks supplier orgs; only they see the RFQ.
+- **Board**: published to **verified** supplier orgs (6.7) that pass the hard constraints of the matching engine (8.9.2); the board shows a summary only (category, qty tiers, region, deadline, no drawings).
+- **NDA gate**: drawings and models become visible only after the supplier signs the RFQ's NDA policy (6.5A); the grant activates on signature and expires with the NDA or at award + N days.
+- **Watermarking**: every viewed or downloaded file is stamped with the viewing org, user and date; download can be disabled (view only).
+- **Region and export control**: the RFQ carries `region` and an export-control flag (10A); the board hides it from suppliers in disallowed jurisdictions, and controlled items are invite-only.
+
+#### 8.9.4 Quotation
+
+A quote is structured, not a free PDF:
+
+- per item and qty tier: unit price, currency; tooling/NRE (one-off); lead time (days from order or from drawing approval); MOQ;
+- Incoterms 2020 term and named place; validity date; payment terms as text (the platform does not process them);
+- certifications (ISO 9001, IATF 16949, ISO 14001) with certificate files; material certificates offered (EN 10204 3.1);
+- deviations/exceptions per item (explicit list; empty means "as specified");
+- attachments (own drawings, process sheets).
+
+**Q&A**: suppliers ask clarifications in the RFQ thread; the customer answers privately or **publicly**; a public answer is broadcast to all bidders, anonymised (the asker is not revealed). A material change of the RFQ (new revision, new deadline) notifies all bidders and marks existing quotes "may need revision". Suppliers may **revise** a quote until the deadline; all revisions are kept.
+
+#### 8.9.5 Sealed bids, comparison, award
+
+- **Sealed until the deadline** (default): bidders never see each other's prices or identities; the customer sees who has submitted but not the prices until the deadline. For invite-only RFQs the customer may choose "open as received".
+- After the deadline, a **comparison matrix** per item and qty tier: unit price normalised to one currency (**rate source and date stated** on the matrix), tooling amortised over the qty tier, **landed-cost estimate** (price + Incoterms-dependent freight/duty estimate, marked as an estimate), lead time, MOQ, certifications, deviations and **risk flags** (single bid, first-time supplier, expired certificate, deviations present, validity ending soon).
+- Actions: shortlist; ask **best-and-final** from the shortlist (one extra sealed round); **award** to one supplier or **split** items/quantities between suppliers; **decline** the others with a reason code (price, lead time, technical, other). Every bidder is notified of the outcome; declined bidders see the reason code, not the winning price.
+- Cancel with a reason at any state before award; bidders are notified.
+
+#### 8.9.6 After award
+
+- Contact exchange between the two orgs (named contacts); optional **order document** in UBL (8, 10B.7) generated from the awarded quote, carrying the RFQ and quote references.
+- Work continues **directly between the parties**: off-platform, or through the portal's order tracking (8.4, `order` linked to the award). MOTRES as buyer pushes the award to `motres_erp` as a PO draft (8.6).
+- Later: **supplier performance notes and ratings** (on time, quality, communication) from awarded orders only, moderated, with the supplier's right of reply.
+
+#### 8.9.7 Anti-abuse
+
+- Only verified orgs publish to or bid on the board; unverified orgs can use invite-only RFQs.
+- Rate limits on RFQ publishing, quotes and messages per org; **reporting** of RFQs, quotes and orgs, moderated in the Admin tab.
+- No scraping: board listings paginated and authenticated, no bulk export, API scopes limited to the caller's own RFQs and invitations.
+- **Audit log** of every view, download, NDA signature, quote submission and revision, award and decline (6.6).
+
+#### 8.9.8 Data model
+
+| Entity | Key fields |
+|---|---|
+| `CapabilityProfile` | supplier_org, revision, state (`draft`/`active`), languages, export_regions, NACE code, created_by, updated_at |
+| `Capability` | profile, family + process id, UNSPSC / ECLASS codes, parameters (JSON per family schema), min/max qty, lead time, capacity, verification level |
+| `Certification` | supplier_org, standard (ISO 9001, IATF 16949, AS9100, ISO 14001), certificate file, issuer, expiry, verification level |
+| `Equipment` / `CaseStudy` | profile; machine, model, envelope / photos, description, public flag |
+| `Match` | rfq_item, supplier_org, profile revision, hard pass (bool), score, reasons[], invited (auto/manual), supplier feedback |
+| `Rfq` | owner_org, title, category, visibility (`invite`/`board`), design_revision (optional), nda_policy, region, export_control, display currency, deadline, sealed (bool), state, revision |
+| `RfqItem` | rfq, category template id + filled fields, card@rev / BOM line / document refs, qty tiers[], needed_by |
+| `Invitation` | rfq, supplier_org, state (`invited`/`nda_pending`/`nda_signed`/`declined_to_bid`), grant id |
+| `Quote` | rfq, supplier_org, state, revision, Incoterms + place, validity, payment_terms_text, certifications[], attachments[], submitted_at |
+| `QuoteLine` | quote, rfq_item, qty tier, unit_price, currency, tooling_nre, lead_time_days, moq, deviations[] |
+| `Clarification` | rfq, asker_org (hidden from others), question, answer, visibility (`private`/`public`), answered_at |
+| `Award` | rfq, rfq_item + qty (split allowed), quote, decline reasons for the others, FX rate source + date, order (optional), awarded_by |
+
+#### 8.9.9 State machines
+
+```
+ RFQ:   draft --publish (human)--> published --first bid/NDA--> bidding
+        bidding --deadline--> closed --award (human)--> awarded
+        closed --best-and-final (shortlist)--> bidding (one round)
+        any state before awarded --> cancelled
+
+ Quote: draft --submit--> submitted --> (revised --> submitted)* --> accepted | declined
+        submitted/revised --> withdrawn (before the deadline); past validity --> expired
+```
+
+#### 8.9.10 MCP
+
+Agents may **draft** RFQs from a revision (`draft_rfq`, filling the category template), read clarifications and **compare** quotes (`compare_quotes` returns the normalised matrix and risk flags). Agents never publish, answer publicly, award or decline; those are human actions with the right member role (8.8).
+
+#### 8.9.11 Roadmap
+
+Part of **M10 (Sourcing)**, after M8 organizations and NDA signing: supplier capability profiles with taxonomy and verification levels + hard-constraint matching (~2 wk), category templates, invite-only RFQs and structured quotes first (~3 wk), then board visibility, sealed-bid comparison, best-and-final and split award (~2 wk), then performance notes (later, with moderation). Supplier profile page, job feed, milestones and two-way reviews (8.9.12) follow the board (~2 wk). Decisions D70–D82.
+
+#### 8.9.12 Supplier side modelled on freelance marketplaces (update 2026-09-29)
+
+Owner: "like freelancers". The supplier experience follows Upwork/Freelancer/Fiverr patterns adapted to manufacturing, still **non-commercial: no escrow, no fees, no payments through the platform**.
+
+- **Public supplier profile page**: capabilities and parameters (8.9.2), certifications with verification badges, equipment, portfolio/case studies with photos, sample parts, regions served, languages, **median response time**, reputation metrics below. The supplier chooses what is public; drawings of customers never appear.
+- **Job feed**: RFQs the supplier matches (board RFQs passing hard constraints, plus invitations), filters (category, material, qty, region, deadline), **saved searches** with in-app/e-mail notifications for new matching RFQs.
+- **Proposals** = quotations (8.9.4) plus a short **cover note** (approach, similar parts made, questions).
+- **Messaging per RFQ** (8.7 threads; public clarifications 8.9.4).
+- **Milestones on an awarded job, status only, no money**: samples approved → first article inspection (FAI) → production → shipped → received. Each milestone has a due date, who confirms it (supplier sets, customer confirms samples/FAI/received) and attachments (FAI report, CoC, tracking). Milestones map onto the order states of 8.4.
+- **Reputation only from completed platform jobs**: **two-way reviews** after completion (customer rates supplier: quality, on-time, communication; supplier rates customer: spec clarity, responsiveness, fairness), and **metrics computed by the platform**: on-time delivery % (received vs confirmed date), quality/NCR rate (non-conformances reported on received milestones), response rate and time on RFQs, repeat-customer share, jobs completed. Verification badges from 8.9.2.
+- **Dispute / report flow**: either party opens a dispute on a job or review; moderators (Admin tab) see the thread and milestones, can hide a review that breaks the rules or annotate it; no financial arbitration (money is outside the platform).
+- **Anti-gaming**: reviews only on **awarded and completed** jobs, **one review per side per job**, **blind** (visible after both sides submit or after a 14-day deadline), no editing after publication (a reply is allowed), jobs between orgs sharing members or owners are excluded from metrics, outlier and burst detection flags for moderation.
+
+Data model additions (8.9.8): `SupplierPage` (profile revision, public fields, response-time stat), `SavedSearch` (user, filters, channel), `Proposal` = `Quote` + `cover_note`, `Milestone` (award/order, kind, due, state, confirmed_by, attachments), `Review` (job, author_org, subject_org, scores, text, submitted_at, published_at, hidden_by_moderator), `ReputationMetric` (org, metric, value, window, computed_at, job count), `Dispute` (job or review, opened_by, state, moderator notes).
+
 ---
 
 ## 9. UI and agents
@@ -1258,6 +1401,19 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D67 | Supply chain and identity | **SPDX licence ids + CycloneDX (or SPDX) SBOM per release**; OIDC/OAuth 2.1; eIDAS/PAdES for signatures (10B.6) |
 | D68 | Commercial and bench data | UBL for RFQ/order documents only (non-commercial portal, no Peppol invoicing); QIF optional; OPC UA / MQTT import only for measured-vs-simulated (10B.7–10B.8) |
 | D69 | Conformance | **No export format ships without its conformance test in CI** (fmpy/FMI XSD, SSP XSD, STEP re-import, glTF-Validator, AAS validator, OpenAPI lint) (10B.9) |
+| D70 | Bidding mode | **Sealed bids by default** until the deadline; "open as received" only for invite-only RFQs by the customer's choice (8.9.5) |
+| D71 | Drawings on RFQs | **NDA-gated and watermarked**; the board shows summaries only; download can be disabled (8.9.3) |
+| D72 | Who may use the public board | **Verified orgs only** publish and bid on the board; unverified orgs use invite-only RFQs (8.9.3, 8.9.7) |
+| D73 | Fees | **No fees ever**: no listing, success or payment fees; the platform is not a party to the deal (8.9, section 10) |
+| D74 | Currency normalisation | **ECB euro reference rates** (daily, public), rate and date printed on the matrix; the customer may override with a stated rate (8.9.5) |
+| D75 | Clarifications | Public answers broadcast to all bidders **anonymised**; material RFQ changes notify all bidders and flag quotes for revision (8.9.4) |
+| D76 | Supplier ratings | Only from awarded orders, **moderated, with right of reply**, after the board runs (8.9.6) |
+| D77 | Supplier capability profile | **Mandatory before any RFQ is received**, structured per capability family, versioned, verification level per capability (self-declared / documents checked / audited) (8.9.2) |
+| D78 | Matching | **Hard constraints must pass** (process, material, envelope, tolerance, certifications, quantity, region); soft ones scored; reasons stored and shown to both sides; manual invite still allowed with a warning (8.9.2) |
+| D79 | Capability taxonomy | **UNSPSC for processes/services, ECLASS for products, NACE Rev. 2 for the org only**; own capability ids mapped onto them (8.9.2) |
+| D80 | Supplier UX model | **Freelance-marketplace pattern** (public profile, job feed with saved searches, proposals with cover note, per-RFQ messaging, status milestones), **no escrow, no fees, no payments** (8.9.12) |
+| D81 | Reviews | **Two-way, blind** (visible after both submit or 14 days), one per side per awarded and completed job, reply allowed, moderated (8.9.12) |
+| D82 | Reputation metrics | **Computed only from platform jobs** (on-time %, NCR rate, response rate/time, repeat customers); related-party jobs excluded; never self-reported (8.9.12) |
 
 ### 11.3 Roadmap (rough, weeks of one engineering agent + owner review)
 
@@ -1282,7 +1438,7 @@ Deferred until P1–P5 and data isolation pass acceptance: RFQs and orders (M10�
 | **M8. Parties and organizations** | org UI, memberships and roles, object grants generalizing die_access, NDA policies, audit view, org verification; BYO org-shared nodes; **NDA workflow** (6.5A): templates, generation, SES click-to-sign with re-auth/2FA, signed PDF with audit trail, grant activation after signatures, auto-revoke on expiry, manual upload | ~5 wk (3 + 2 for NDA) |
 | **M9. Manufacturing documents v1** | design revisions + approval workflow; object store; generators: lamination DXF/PDF, multi-level BOM, winding spec; package ZIP; Fusion/STEP uploads with interface check | ~5–6 wk |
 | **2. Third module (propeller on maps)** | `propeller` card, C_T/C_P map, datasheet validation, system "battery→controller→motor→propeller", simple builder UI, MCP `build_system/simulate_system` | **~5–6 wk** (can run parallel to M8–M9) |
-| **M10. Sourcing** | supplier offers on cards, RFQ → quote → order state machines, threads, attachments, notifications (in-app + e-mail), MCP read/draft tools | ~5 wk |
+| **M10. Sourcing** | supplier offers on cards, RFQ → quote → order state machines, **open RFQ / quotation board** (8.9: capability profiles + matching, templates, NDA gate, sealed bids, comparison, award), threads, attachments, notifications (in-app + e-mail), MCP read/draft tools | ~5 wk |
 | **M11. ERP connector** | revision → item revision/BOM; awarded RFQ → ERP PO draft; customer order → ERP sales/production order; status and tracking back; measured-vs-simulated back | ~3 wk |
 | **M12. Customer orders of finished products** | product cards from released revisions, customer RFQ/order flow, per-serial results sharing | ~2–3 wk |
 | **M9b. Documents v2** | magnet spec, pack drawings, STEP of laminations/packs, inspection plan from the passport, controller BOM | ~3 wk |

@@ -143,9 +143,9 @@ def _mail_allowed(email: str, ip: str) -> bool:
     return True
 
 
-def _send_verification(email: str) -> None:
+def _send_verification(email: str, return_path: str = "") -> None:
     token = U.issue_link_token(email, "verify")
-    subj, body = E.verify_mail(email, token)
+    subj, body = E.verify_mail(email, token, return_path)
     if not E.send(email, subj, body):
         U.mark_pending_approval(email, "smtp_not_configured")
         log.warning("auth: SMTP not configured — verification link for %s "
@@ -168,6 +168,26 @@ class RegisterReq(BaseModel):
     password: str
     name: str = ""
     newsletter: bool = False        # the sign-up checkbox (unchecked default)
+    #: Sign-up started inside an OAuth authorization window (MCP connector):
+    #: the consent-page path ``/agent-consent?request=<id>``.  The confirmation
+    #: link then opens that page, and the pending request is kept alive.
+    return_to: Optional[str] = None
+
+
+def _oauth_return(return_to: Optional[str]) -> str:
+    """'' or the validated consent-page path (the pending request extended)."""
+    if not return_to:
+        return ""
+    from motor_ai_sim import oauth as O
+    rid = O.request_id_from_return_path(return_to)
+    if rid is None:
+        raise HTTPException(422, detail="return_to must be the consent page of a "
+                                        "pending authorization")
+    if not O.extend_request(rid):
+        raise HTTPException(410, detail=(
+            "this authorization request expired; start connecting again from "
+            "your AI app"))
+    return O.consent_path(rid)
 
 
 def _newsletter_after_proof(email: str) -> None:
@@ -198,6 +218,10 @@ def register(req: RegisterReq, request: Request):
         raise HTTPException(422, detail=str(e))
     if not (req.name or "").strip():
         raise HTTPException(422, detail="enter your name")
+    if E.SIGNUP_IP.blocked(ip):
+        raise HTTPException(429, detail="too many sign-ups from this network — try again later")
+    return_path = _oauth_return(req.return_to)
+    E.SIGNUP_IP.hit(ip)
     may_mail = _mail_allowed(email, ip)
     outcome = U.register_self(email, req.password, req.name.strip())
     S.record_event("register", email=email, reason=outcome, ip=ip,
@@ -209,7 +233,7 @@ def register(req: RegisterReq, request: Request):
         N.record_pending(email, source="signup", ip=ip)
     if may_mail:
         if outcome in ("created", "exists_unverified"):
-            _send_verification(email)
+            _send_verification(email, return_path)
         else:
             subj, body = E.exists_mail(email)
             E.send(email, subj, body)
@@ -223,8 +247,14 @@ class TokenReq(BaseModel):
     token: str
 
 
+class VerifyReq(TokenReq):
+    #: The consent page the link opened (sign-up inside an OAuth window): the
+    #: pending authorization is kept alive for the sign-in that follows.
+    return_to: Optional[str] = None
+
+
 @router.post("/verify")
-def verify_email(req: TokenReq, request: Request):
+def verify_email(req: VerifyReq, request: Request):
     email = U.consume_link_token(req.token, "verify")
     if not email:
         raise HTTPException(400, detail=(
@@ -234,7 +264,13 @@ def verify_email(req: TokenReq, request: Request):
     S.record_event("verified", email=email, reason="link", ip=_ip(request),
                    path="/api/auth/verify")
     _newsletter_after_proof(email)
-    return {"ok": True, "email": email}
+    out = {"ok": True, "email": email}
+    if req.return_to:
+        # best effort: an expired authorization only means "connect again"
+        from motor_ai_sim import oauth as O
+        rid = O.request_id_from_return_path(req.return_to)
+        out["authorization_pending"] = bool(rid and O.extend_request(rid))
+    return out
 
 
 class EmailReq(BaseModel):

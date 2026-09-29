@@ -11,7 +11,7 @@ import {
   setSessionRole, serverLogout, updateToken, GOOGLE_CLIENT_ID, type SessionUser,
 } from '../lib/localAuth';
 import LoginDialog from '../components/auth/LoginDialog';
-import { pendingEmailLink } from '../lib/localAuth';
+import { pendingEmailLink, requestedAuthMode } from '../lib/localAuth';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -30,6 +30,11 @@ export interface AuthUser {
   email: string;
   displayName: string;
   photoURL?: string;
+}
+
+export interface SignInOptions {
+  mode?: 'signin' | 'register';
+  returnTo?: string;
 }
 
 export interface AuthState {
@@ -53,8 +58,10 @@ export interface AuthState {
    *  this before acting on `enforced`; a restored session (`user`) needs no
    *  wait, so nothing about a signed-in boot changes. */
   resolved: boolean;
-  /** Opens the sign-in dialog (Google button + email/password). */
-  signIn: () => Promise<void>;
+  /** Opens the sign-in dialog (Google button + email/password); `mode:
+   *  'register'` opens it on "Create account", `returnTo` carries an OAuth
+   *  consent page through the sign-up and its confirmation mail. */
+  signIn: (opts?: SignInOptions) => Promise<void>;
   logout: () => Promise<void>;
   /** Our backend token (null if signed out). */
   getToken: () => Promise<string | null>;
@@ -108,8 +115,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Flipped by the first /api/me answer we actually APPLY — never by the
   // store-busy or provisional paths, both of which come back in a moment.
   const [resolved, setResolved] = useState<boolean>(false);
-  // A mailed ?verify= / ?reset= link opens the dialog, which consumes it.
-  const [loginOpen, setLoginOpen] = useState<boolean>(() => pendingEmailLink() !== null);
+  // A mailed ?verify= / ?reset= link opens the dialog, which consumes it; so
+  // does ?signup=1 / ?signin=1 (the links the MCP discovery tools hand out).
+  const [loginOpen, setLoginOpen] = useState<boolean>(
+    () => pendingEmailLink() !== null || (requestedAuthMode() !== null && !getStoredUser()));
+  const [loginOpts, setLoginOpts] = useState<SignInOptions>(
+    () => ({ mode: requestedAuthMode() ?? 'signin' }));
   // One short amber line when the backend could not READ its own auth store —
   // the session is kept and retried, so the user needs to know only that the
   // pause is ours and temporary.
@@ -184,7 +195,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     void loadRole();
   }, [loadRole]);
 
-  const signIn = useCallback(async () => { setLoginOpen(true); }, []);
+  const signIn = useCallback(async (opts?: SignInOptions) => {
+    setLoginOpts({ mode: opts?.mode ?? 'signin', returnTo: opts?.returnTo });
+    setLoginOpen(true);
+  }, []);
 
   const logout = useCallback(async () => {
     // Revoke server-side FIRST, while we still hold the token: a copy of it
@@ -204,7 +218,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   return (
     <AuthCtx.Provider value={{ user, loading, enabled: true, role, isAdmin, enforced, resolved, signIn, logout, getToken }}>
       {children}
-      <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn} />
+      <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn}
+        initialMode={loginOpts.mode} returnTo={loginOpts.returnTo} />
       <Snackbar open={storeBusy} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
         <Alert severity="warning" variant="outlined" sx={{ fontSize: 12, py: 0.25 }}>
           Auth store busy — retrying, your session is kept.

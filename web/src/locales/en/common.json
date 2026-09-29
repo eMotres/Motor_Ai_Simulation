@@ -89,8 +89,16 @@
     "info": {
       "emailConfirmed": "E-mail confirmed — sign in with your password.",
       "checkConfirmation": "Check your inbox for the confirmation link.",
+      "checkConfirmationReturn": "Check your inbox and open the confirmation link — it brings you back here. Then sign in to finish connecting the app.",
       "checkReset": "Check your inbox for the reset link.",
       "passwordChanged": "Password changed — sign in with the new one."
+    },
+    "terms": {
+      "prefix": "By creating an account you accept the",
+      "terms": "Terms",
+      "privacy": "Privacy Policy",
+      "license": "AeroStator is open source under AGPL-3.0-or-later:",
+      "source": "source code"
     },
     "link": {
       "createAccount": "Create account",

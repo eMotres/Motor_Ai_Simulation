@@ -66,10 +66,24 @@ const OAuthConsent: React.FC = () => {
   if (!rid) body = <Alert severity="error">Missing authorization request.</Alert>;
   else if (!resolved && !user) body = <CircularProgress size={20} />;
   else if (!user) {
+    // Sign-up happens HERE, in the browser window the AI app opened — never
+    // in the chat.  The consent path rides through the sign-up and its
+    // confirmation mail, so the user lands back on this page and continues.
+    const returnTo = `/agent-consent?request=${encodeURIComponent(rid)}`;
     body = (
       <>
-        <Typography sx={{ mb: 2, fontSize: 14 }}>Sign in to connect an AI app to your account.</Typography>
-        <Button variant="contained" onClick={() => { void signIn(); }}>Sign in</Button>
+        <Typography sx={{ mb: 2, fontSize: 14 }}>
+          Sign in to connect an AI app to your account — or create an account first.
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="contained" onClick={() => { void signIn({ returnTo }); }}>Sign in</Button>
+          <Button variant="outlined" onClick={() => { void signIn({ mode: 'register', returnTo }); }}>
+            Create account
+          </Button>
+        </Box>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-2)', mt: 2 }}>
+          A new e-mail account works after you open the confirmation link we send; it brings you back here.
+        </Typography>
       </>
     );
   } else if (err) body = <Alert severity="error">{err}</Alert>;

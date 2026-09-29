@@ -89,8 +89,16 @@
     "info": {
       "emailConfirmed": "邮箱已确认——请使用密码登录。",
       "checkConfirmation": "请查收邮件中的确认链接。",
+      "checkConfirmationReturn": "请查收邮件并打开确认链接——它会带您回到此页面。然后登录以完成应用的连接。",
       "checkReset": "请查收邮件中的重置链接。",
       "passwordChanged": "密码已修改——请使用新密码登录。"
+    },
+    "terms": {
+      "prefix": "创建账户即表示您接受",
+      "terms": "服务条款",
+      "privacy": "隐私政策",
+      "license": "AeroStator 以 AGPL-3.0-or-later 许可开源：",
+      "source": "源代码"
     },
     "link": {
       "createAccount": "创建账户",

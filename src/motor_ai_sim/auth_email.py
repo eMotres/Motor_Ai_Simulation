@@ -52,9 +52,18 @@ def app_url() -> str:
     return (_env("PUBLIC_APP_URL") or DEFAULT_APP_URL).rstrip("/")
 
 
-def link(kind: str, token: str) -> str:
-    """`kind` is 'verify' or 'reset'; the web app reads the query param."""
-    return f"{app_url()}/?{kind}={urllib.parse.quote(token, safe='')}"
+def link(kind: str, token: str, return_path: str = "") -> str:
+    """`kind` is 'verify' or 'reset'; the web app reads the query param.
+
+    ``return_path``: a RELATIVE path on the app that the link opens instead of
+    the home page (the OAuth consent page of a sign-up started there, so the
+    confirmation continues into the authorization).  The caller validates it
+    (``oauth.request_id_from_return_path``); it is never a URL."""
+    q = f"{kind}={urllib.parse.quote(token, safe='')}"
+    if return_path.startswith("/") and not return_path.startswith("//"):
+        sep = "&" if "?" in return_path else "?"
+        return f"{app_url()}{return_path}{sep}{q}"
+    return f"{app_url()}/?{q}"
 
 
 def mail_from() -> str:
@@ -126,11 +135,13 @@ def send(to: str, subject: str, body: str, *, block: bool = False) -> bool:
 
 # ── message texts ────────────────────────────────────────────────────────────
 
-def verify_mail(to: str, token: str) -> tuple[str, str]:
-    url = link("verify", token)
+def verify_mail(to: str, token: str, return_path: str = "") -> tuple[str, str]:
+    url = link("verify", token, return_path)
+    cont = ("\nIt also brings you back to the page where you were connecting "
+            "an AI app, to finish that.\n" if return_path else "")
     return ("Confirm your e-mail address",
             "Hello,\n\nconfirm this address to activate your account:\n\n"
-            f"{url}\n\nThe link works once and expires in 24 hours. If you did "
+            f"{url}\n{cont}\nThe link works once and expires in 24 hours. If you did "
             "not sign up, ignore this message.\n")
 
 
@@ -196,8 +207,12 @@ LOGIN_IP = Limiter(max_hits=30, window_s=900.0, lock_s=900.0)
 #: Mail-sending requests (register, resend, reset request).
 MAIL_IP = Limiter(max_hits=10, window_s=3600.0, lock_s=3600.0)
 MAIL_ACCOUNT = Limiter(max_hits=3, window_s=3600.0, lock_s=3600.0)
+#: Well-formed sign-ups per IP (any address) — on top of MAIL_IP, so one
+#: address cannot mint many unverified accounts (the MCP sign-up path sends
+#: agents' users here).
+SIGNUP_IP = Limiter(max_hits=5, window_s=3600.0, lock_s=3600.0)
 
 
 def reset_limits() -> None:
-    for lim in (LOGIN_ACCOUNT, LOGIN_IP, MAIL_IP, MAIL_ACCOUNT):
+    for lim in (LOGIN_ACCOUNT, LOGIN_IP, MAIL_IP, MAIL_ACCOUNT, SIGNUP_IP):
         lim.reset_all()

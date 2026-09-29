@@ -52,7 +52,13 @@ _TOKEN_TTL_S = 30 * 24 * 3600          # 30 days
 #: Inside this window before `exp`, /api/me hands back a renewed token with the
 #: SAME sid — a session that is actively used never expires under the user.
 RENEW_WINDOW_S = 7 * 24 * 3600         # 7 days
-TIERS = ("free", "pro", "team", "admin")
+ROLES = ("user", "admin")
+
+
+def _migrate_role(rec: dict) -> str:
+    """Old free/pro/team/internal/etc. tiers collapse to user; admin stays admin."""
+    v = rec.get("role") or rec.get("tier") or "user"
+    return "admin" if str(v) == "admin" else "user"
 
 #: Every possible outcome of verifying a bearer token.  Only the first is a
 #: success; only `store_unavailable` is NOT the client's fault and must never
@@ -140,7 +146,11 @@ def _load() -> dict:
                   "environmental, sessions are NOT being rejected for it",
                   _USERS_FILE, type(e).__name__, e)
         raise StoreUnavailable(str(e)) from e
-    return d if isinstance(d, dict) else {}
+    d = d if isinstance(d, dict) else {}
+    for rec in d.values():
+        if isinstance(rec, dict):
+            rec["role"] = _migrate_role(rec)
+    return d
 
 
 def _load_soft() -> dict:
@@ -281,21 +291,21 @@ def is_verified(rec: Optional[dict]) -> bool:
     return bool(rec) and rec.get("email_verified", True) is not False
 
 
-def create_user(email: str, password: str, tier: str = "free",
+def create_user(email: str, password: str, role: str = "user",
                 name: str = "") -> dict:
     email = _norm(email)
     if not email or "@" not in email:
         raise ValueError(f"'{email}' is not an email address")
     if len(password or "") < 8:
         raise ValueError("password must be at least 8 characters")
-    if tier not in TIERS:
-        raise ValueError(f"tier must be one of {TIERS}")
+    if role not in ROLES:
+        raise ValueError(f"role must be one of {ROLES}")
     with _LOCK:
         users = _load()
         if email in users:
             raise ValueError(f"user '{email}' already exists")
         rec = {
-            "tier": tier,
+            "role": role,
             "name": name or "",
             "disabled": False,
             "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -406,7 +416,7 @@ def register_self(email: str, password: str, name: str = "") -> str:
         rec = users.get(email)
         if rec is not None:
             return "exists_verified" if is_verified(rec) else "exists_unverified"
-        rec = {"tier": "free", "name": str(name or "")[:120],
+        rec = {"role": "user", "name": str(name or "")[:120],
                "disabled": False,
                "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
                "email_verified": False, "has_password": True,
@@ -509,7 +519,7 @@ def reset_password(email: str, password: str) -> None:
         _save(users)
 
 
-def update_user(email: str, *, tier: Optional[str] = None,
+def update_user(email: str, *, role: Optional[str] = None,
                 disabled: Optional[bool] = None,
                 name: Optional[str] = None) -> dict:
     email = _norm(email)
@@ -517,10 +527,10 @@ def update_user(email: str, *, tier: Optional[str] = None,
         users = _load()
         if email not in users:
             raise KeyError(email)
-        if tier is not None:
-            if tier not in TIERS:
-                raise ValueError(f"tier must be one of {TIERS}")
-            users[email]["tier"] = tier
+        if role is not None:
+            if role not in ROLES:
+                raise ValueError(f"role must be one of {ROLES}")
+            users[email]["role"] = role
         if disabled is not None:
             users[email]["disabled"] = bool(disabled)
         if name is not None:
@@ -549,7 +559,7 @@ def list_users() -> list[dict]:
 
 def public_user(email: str) -> dict:
     u = _load_soft().get(_norm(email)) or {}
-    return {"email": _norm(email), "tier": u.get("tier", "free"),
+    return {"email": _norm(email), "role": u.get("role", "user"),
             "name": u.get("name", ""), "disabled": bool(u.get("disabled")),
             "created": u.get("created"),
             # False only for a self-registered account whose link was never
@@ -616,7 +626,7 @@ def set_motor_grants(email: str, *, all_motors: bool,
 # Google sign-in, or an admin password reset.  It is not left empty, because an
 # empty hash is a hash somebody might one day match.
 
-def invite_user(email: str, *, tier: str = "free", name: str = "",
+def invite_user(email: str, *, role: str = "user", name: str = "",
                 by: str = "", note: str = "") -> dict:
     """Create — or re-invite — the account `email`, and stamp the invite.
 
@@ -629,17 +639,17 @@ def invite_user(email: str, *, tier: str = "free", name: str = "",
     email = _norm(email)
     if not email or "@" not in email:
         raise ValueError(f"'{email}' is not an email address")
-    if tier not in TIERS:
-        raise ValueError(f"tier must be one of {TIERS}")
+    if role not in ROLES:
+        raise ValueError(f"role must be one of {ROLES}")
     stamp = {"by": _norm(by) or "admin",
              "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
              "note": str(note or "")[:500],
-             "tier": tier}
+             "role": role}
     with _LOCK:
         users = _load()
         rec = users.get(email)
         if rec is None:
-            rec = {"tier": tier,
+            rec = {"role": role,
                    "name": name or "",
                    "disabled": False,
                    "has_password": False,
@@ -647,7 +657,7 @@ def invite_user(email: str, *, tier: str = "free", name: str = "",
             _apply_pw(rec, secrets.token_urlsafe(32))
             users[email] = rec
         else:
-            rec["tier"] = tier
+            rec["role"] = role
             rec["disabled"] = False
             if name:
                 rec["name"] = str(name)
@@ -732,7 +742,7 @@ def issue_token(email: str, sid: Optional[str] = None,
     email = _norm(email)
     u = _load_soft().get(email) or {}
     now = int(time.time())
-    claims = {"sub": email, "email": email, "tier": u.get("tier", "free"),
+    claims = {"sub": email, "email": email, "role": u.get("role", "user"),
               "iat": now, "exp": now + int(ttl_s or _TOKEN_TTL_S),
               "iss": "motor-ai-sim"}
     if sid:
@@ -834,7 +844,7 @@ def verify_token(token: str, *, renew: bool = False) -> TokenResult:
             renewed = None
 
     return TokenResult("ok", user={"uid": email, "email": email,
-                                   "tier": u.get("tier", "free")},
+                                   "role": u.get("role", "user")},
                        email=email, sid=sid, exp=exp, renewed_token=renewed)
 
 

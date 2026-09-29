@@ -99,14 +99,16 @@ tools are kept private.
   recognition and material assignment, and a step-by-step editor — all
   producing one machine description and passing one validation.
 
-## Open core model
+## What is open
 
-**Open** (planned licence below): the core, the solvers, the module contract
-and data formats, and the base modules (motor, controller, thermal, basic
-propulsors and vehicles).
+**Everything in this repository**: the core, the solvers, the module contract
+and data formats, and the modules (motor, controller, thermal, propulsors and
+vehicles as they arrive), under the licence below. The hosted instance runs
+the same code; its source, including any change we make to it, is available
+under the same licence.
 
-**Not open**: the hosted service and computing cluster, proprietary models
-supplied by vendors, customers' data, and MOTRES's own product designs.
+**Not published**: users' own data, proprietary models supplied by vendors, and
+MOTRES's own product designs. These are data, not code.
 
 ## Roadmap
 
@@ -133,21 +135,16 @@ Stages, in order; we commit only to "next", not to dates.
 - **Issues** — bug reports, wrong physics, missing validation: open an issue
   with inputs and the result you expected.
 - **Discussions** — ideas for modules, ports and formats.
-- **Pull requests** — welcome; a Contributor License Agreement (CLA) is planned
-  and will be required before contributions can be merged.
+- **Pull requests** — welcome; every commit is signed off under the Developer
+  Certificate of Origin (`git commit -s`).
 
-## Licence (PLANNED — not yet in effect)
+## Licence
 
-**Planned licence: GNU AGPL-3.0 for the open core, with a Contributor License
-Agreement; commercial licences available from MOTRES d.o.o.**
+**Licence: GNU AGPL-3.0-or-later. Contributions under the DCO.**
 
-Why: AGPL keeps improvements to the open core open, including when it is run
-as a network service, while the CLA and commercial licences let companies
-integrate the core into closed products and let us fund the work.
-
-This licence is **not yet applied**. There is no LICENSE file in this
-repository yet; until there is, no licence is granted. Before it is applied,
-one dependency with a non-commercial licence must become optional.
+AGPL keeps every improvement open, including when the code is run as a network
+service. Contributors keep their copyright and license their work under the
+same terms, certified by the Developer Certificate of Origin.
 
 ## Contact
 

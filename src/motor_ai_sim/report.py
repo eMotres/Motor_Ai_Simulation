@@ -5,10 +5,10 @@ holds it: the duties saved from the Simulation tab, the design block, the
 battery.  It is a spreadsheet, it never looks at a solver, and it has no
 pictures of a field.
 
-This is the other document the user asked for (2026-09-08): *"у нас уже есть
-datasheet, нам нужно его расширить до полного отчёта по всем результатам
-моделирования, с картинками, с подшипниками, со всеми потерями — полный отчёт
-по мотору, но только самое важное, не нужно сильно перегружать"*.  Six A4 pages:
+This is the other document the user asked for (2026-09-08): *"we already have
+a datasheet, we need to expand it into a full report on all the simulation
+results, with pictures, with bearings, with all the losses — a full report
+on the motor, but only the most important parts, don't overload it too much"*.  Six A4 pages:
 
     1  Cover              what machine, when, four headline numbers, SOURCES
     2  Machine            cross-section, geometry, materials, bearings
@@ -253,8 +253,8 @@ def winding_words(geo: Dict[str, Any]) -> str:
     if n is None:
         return "—"
     # `num_wires_per_slot` counts CONDUCTORS, not turns: 24 of them wound 4 in
-    # hand is 6 turns, which is what the user reads off the drawing ("витков 6
-    # по 4 параллельных провода в каждом") and what the run journal calls
+    # hand is 6 turns, which is what the user reads off the drawing ("6 turns
+    # of 4 parallel wires each") and what the run journal calls
     # `turns_per_coil`.  Dividing here rather than printing 24 is the whole
     # point of the row.
     if par and par > 1 and abs(n / par - round(n / par)) < 1e-9:
@@ -627,11 +627,11 @@ def _as_tris(v: Any) -> Optional["Any"]:
         return None
 
 
-#: The web viewer's own ramp and band count (2026-09-09).  User: *"формат
-#: вывода графиков должен быть совершенно одинаковый с нашим веб-интерфейсом"*.
+#: The web viewer's own ramp and band count (2026-09-09).  User: *"the chart
+#: output format must be completely identical to our web interface"*.
 #: The app paints every field the same way — a classic Ansys rainbow quantised
 #: into ONE band count for all views (`web/src/components/simulation/fieldView
-#: .ts`: `jet01`, `N_BANDS`, and its comment "все графики одинаково") — so the
+#: .ts`: `jet01`, `N_BANDS`, and its comment "all charts the same") — so the
 #: report's maps are that, to the same arithmetic, rather than a different
 #: matplotlib colormap per quantity.  A picture in the document and the picture
 #: on the tab it came from must be the same picture.
@@ -757,7 +757,7 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
     The picture is framed on what is DRAWN, not on the whole mesh: the far-field
     air ring around a machine is most of the mesh's extent, and framing on it
     left the motor a small shape in the middle of a square of white (the user's
-    "ничего не видно", 2026-09-08).  The figure's aspect follows that frame, so
+    "nothing is visible", 2026-09-08).  The figure's aspect follows that frame, so
     a half-machine wedge comes out twice as wide as tall and fills the page
     width without a page of white under it.
 
@@ -785,8 +785,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
     ``range_only=True`` returns ``(vmin, vmax)`` — the scale this map WOULD be
     drawn on — and draws nothing; ``pair_range`` pins the scale to a range the
     caller computed instead.  Those two are how the halves of a side-by-side
-    figure end up on ONE colour scale (user 2026-09-14: *"слева картинка из
-    rated, справа из peak"*), which is the only way the two pictures can be read
+    figure end up on ONE colour scale (user 2026-09-14: *"the left picture is
+    from rated, the right one from peak"*), which is the only way the two pictures can be read
     against each other at a glance.
     """
     p = _as_xy(verts)
@@ -955,8 +955,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
             grey = np.ma.masked_where(~ctx, np.full(t.shape[0], 0.45))
             ax.tripcolor(tri, facecolors=grey, cmap="Greys", vmin=0.0, vmax=1.0,
                          alpha=0.35, edgecolors="none")
-        # THE VIEWER'S OWN RECIPE, term for term (2026-09-09; user: "у нас же
-        # в вебе всё сглажено и красиво, нужно сделать точно так же"):
+        # THE VIEWER'S OWN RECIPE, term for term (2026-09-09; user: "it's all
+        # smoothed and pretty in our web app, we need to do exactly the same here"):
         #
         #   1. an element field is averaged onto the VERTICES, weighted by
         #      triangle area and kept SEPARATE per material class — iron and
@@ -1001,8 +1001,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
                 ax.tripcolor(tri_g, facecolors=np.ma.masked_where(~sel, v_raw),
                              cmap=cmap_obj, norm=norm)
         # ── WHERE ONE PART ENDS AND THE NEXT BEGINS ────────────────────────
-        # User 2026-09-10: "можешь сделать белые линии разделов магнитов в
-        # механике и температуре в отчёте".  The viewer draws the parts'
+        # User 2026-09-10: "can you make white lines for the magnet
+        # boundaries in the mechanical and temperature report views".  The viewer draws the parts'
         # outlines over the field; this report drew only the mesh, so a magnet
         # and the iron around it at the same stress were one shape and the
         # picture could not be read as a machine.
@@ -1053,7 +1053,7 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
         # spaced contours draw the field's own picture — dense where the flux
         # crowds, sparse where it does not — which is what an engineer looks at
         # first and what every FE post-processor calls "flux lines" (user
-        # 2026-09-10: "в отчёт добавь ещё график A_z").
+        # 2026-09-10: "add an A_z chart to the report too").
         #
         # Drawn over the WHOLE drawn mesh in one pass, not per material class:
         # A_z is continuous across every boundary — that is the point of solving
@@ -1077,8 +1077,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
             except (ValueError, RuntimeError):
                 pass
 
-        # …and the MESH over it (user 2026-09-09: "выводи картинки вместе с
-        # сеткой") — the same hairline the viewer's Mesh toggle draws, light
+        # …and the MESH over it (user 2026-09-09: "show the pictures together
+        # with the mesh") — the same hairline the viewer's Mesh toggle draws, light
         # enough that it reads as texture over the field rather than as ink.
         if mesh:
             tri_m = mtri.Triangulation(p[:, 0], p[:, 1], t)
@@ -1093,7 +1093,7 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
                                   else cmap_obj))
         sm.set_array([])
         # THE BAR IS ALWAYS THE NORM'S, never the contour set's (user
-        # 2026-09-10: "делай одинаковый шкалу без стрелок везде").  A colorbar
+        # 2026-09-10: "make the same scale everywhere, without arrows").  A colorbar
         # built from a `tricontourf` inherits its `extend` and grows arrow ends
         # on the maps that clip — so a log loss map got pointed ends and a
         # stress map flat ones, and two bars in one document meant two things.
@@ -1103,8 +1103,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
         # BOTH ENDS ARE LABELLED.  matplotlib picks its own ticks and drops the
         # last one whenever it does not land on a round number, so the top of
         # every bar in this report was blank — and the top of a bar is the
-        # number the reader is looking for (user 2026-09-10: "нигде не стоит
-        # отметки верхней границы шкалы, а это важно").  The ticks are the band
+        # number the reader is looking for (user 2026-09-10: "the top boundary
+        # of the scale isn't marked anywhere, and that's important").  The ticks are the band
         # EDGES, thinned to keep them legible, with the first and the last
         # always in.
         try:
@@ -1294,7 +1294,7 @@ def thumb_svg_for(die_doc: Dict[str, Any]) -> str:
     geometry is synced from a live save.  That made the drawing immune to its
     own generator: the band was added and the palette was taken from the app,
     and the report kept printing the old picture because the die still held the
-    old string (user 2026-09-10: "опять Machine без бандажа и цвета не те").
+    old string (user 2026-09-10: "Machine has no band again and the colours are wrong").
 
     So the stored string is used only while it carries the CURRENT version
     stamp; otherwise it is regenerated here, from the die's own geometry, and
@@ -1480,9 +1480,9 @@ def _em_maps(snap: Optional[Dict[str, Any]],
                                               DOM_OUTER))
                         # OUTSIDE air is dropped, INSIDE air is kept — and
                         # "outside" is decided by connectivity, not by radius
-                        # (user 2026-09-11: "зачем ты рисуешь эти вставки
-                        # только на этом рисунке, убери их, чтобы было всё
-                        # одинаково").  A radius cut kept the air in the
+                        # (user 2026-09-11: "why are you drawing these
+                        # inserts only on this figure, remove them so
+                        # everything is the same").  A radius cut kept the air in the
                         # scallops between the yoke humps, so this map alone
                         # grew green lobes the |B| map does not have.  The air
                         # that matters — gap, slots, bore — is walled in by iron
@@ -1521,8 +1521,8 @@ def _em_maps(snap: Optional[Dict[str, Any]],
 
         ld = fld.get("loss_dens")
         if ld is not None and np.asarray(ld, float).size:
-            # WHITE PART LINES here too (user 2026-09-10: "здесь нет белых линий
-            # между магнитами и не видно бандажа").  `outline` only, never
+            # WHITE PART LINES here too (user 2026-09-10: "there are no white
+            # lines between the magnets here, and the band isn't visible").  `outline` only, never
             # `grp`: the log scale and the per-class averaging must not change,
             # the picture only has to say where one part ends.
             #
@@ -1542,8 +1542,8 @@ def _em_maps(snap: Optional[Dict[str, Any]],
             out["label"] = str(fld.get("loss_dens_label") or "")
         # The irreversible-demagnetisation map — per cent of Br the run left in
         # each magnet element (the Simulation tab's Demag view reads the same
-        # array).  User 2026-09-08: "подписи под... демагнитизации обязательно
-        # рисовать".  Magnets only: everything else is blanked.
+        # array).  User 2026-09-08: "the captions under... the demagnetization
+        # must always be drawn".  Magnets only: everything else is blanked.
         dc = (snap.get("scalars") or {}).get("demag_coef_per_tri")
         if dc is None:
             dc = fld.get("demag_coef_per_tri")
@@ -1572,7 +1572,7 @@ def _em_maps(snap: Optional[Dict[str, Any]],
                         # coefficient of 1.0 (nothing lost, because there is
                         # nothing to lose) and came out painted at the top of
                         # the Br scale, the same dark red as a healthy magnet
-                        # (user: "зачем ты здесь красным нарисовал катушки").
+                        # (user: "why did you draw the coils red here").
                         # Every other reader of this field in the app already
                         # bounds it — `routes/simulation.py` does it three
                         # times; this one did not.
@@ -1611,8 +1611,8 @@ def _thermal_map(res: Optional[Dict[str, Any]],
     # The FIELD stays one continuous thing — temperature does not jump at a
     # material boundary, so it is neither grouped nor folded — but the machine
     # under it has to be recognisable, and on a thermal map the magnets are all
-    # one warm red shape without it (user 2026-09-10: "здесь нет белых линий
-    # между магнитами").  `domain_per_tri` is the thermal mesh's own part array:
+    # one warm red shape without it (user 2026-09-10: "there are no white
+    # lines between the magnets here").  `domain_per_tri` is the thermal mesh's own part array:
     # magnet_N and magnet_S are different ids, so alternating poles separate.
     return _map_png(inner.get("vertices"), inner.get("triangles"),
                     inner.get("temperature_per_node"),
@@ -1628,8 +1628,8 @@ def _mech_map(res: Optional[Dict[str, Any]],
               width_cm: Optional[float] = None) -> Tuple[Any, str]:
     """Von Mises over the primary case — the picture the Mechanical tab draws.
 
-    Term for term, since 2026-09-10 (user, on the first docx: "с картинками
-    полная жопа, они совершенно не похожи на то, что у нас в вебе"):
+    Term for term, since 2026-09-10 (user, on the first docx: "the pictures
+    are a total mess, they don't look anything like what we have on the web"):
 
       * ``grp`` is the material class, so the average stops at every material
         boundary instead of smearing the band into the magnets under it — that
@@ -1667,7 +1667,7 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
                      width_cm: Optional[float] = None) -> Dict[str, Any]:
     """The DISPLACEMENT and the SAFETY FACTOR, beside the stress.
 
-    User 2026-09-10: *"по механике нужно ещё выводить график деформаций и SF"*.
+    User 2026-09-10: *"for mechanics we also need to output a deformation and SF chart"*.
     Both were solved and shown on the tab and neither reached the document, so a
     reader could see where the metal is loaded but not how far it moves or how
     close it is to its own limit — and the limit is the answer the section is
@@ -1699,8 +1699,8 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
     grp = fld.get("domain_per_tri")
     u = c.get("u_mag_per_node")
     if u is not None:
-        # DRAWN DEFORMED, like the tab (user 2026-09-10: "этот график сделай как
-        # в вэбе, с деформацией").  Microns on a 100 mm part are invisible at
+        # DRAWN DEFORMED, like the tab (user 2026-09-10: "make this chart like
+        # on the web, with deformation").  Microns on a 100 mm part are invisible at
         # true scale, so the shape is exaggerated by the same rule the viewer
         # uses: the largest displacement reads as ~5 % of the rotor radius.  The
         # COLOUR is still the true |u| in µm; only the geometry is stretched,
@@ -1735,8 +1735,8 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
 
 # ── ONE FIGURE, TWO DUTIES ──────────────────────────────────────────────────
 #
-# User 2026-09-14: *"добавим ещё картинки из peak — слева картинка из rated,
-# справа из peak"*.  Every picture in this document used to be ONE duty's — the
+# User 2026-09-14: *"let's also add pictures from peak — the left picture
+# from rated, the right one from peak"*.  Every picture in this document used to be ONE duty's — the
 # `pictures` choice — and the reader who wanted to know what the peak does to
 # the magnets, the temperatures or the stress had to build a second report and
 # put the two on a desk.  So every per-duty figure is drawn twice, rated on the
@@ -1750,9 +1750,9 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
 
 # ── EVERY SIDE ON ITS OWN SCALE ─────────────────────────────────────────────
 #
-# User 2026-09-14, after seeing the first paired build: *"не надо общей шкалы,
-# шкалы как и рисунки должны быть отдельные; но магниты на первом рисунке
-# должны быть красными"*.  The shared bar had been introduced so 132 °C and
+# User 2026-09-14, after seeing the first paired build: *"we don't need a
+# shared scale, the scales like the pictures should be separate; but the
+# magnets in the first picture should be red"*.  The shared bar had been introduced so 132 °C and
 # 249 °C could be read against each other; what it actually did was flatten the
 # quieter of the two pictures — the rated temperature map spans 23 K against
 # the peak's 83, so on the union it came out as one teal shape with two band
@@ -2134,8 +2134,8 @@ SIDE_CHART_PX = 1500
 #: part palette (`web/src/lib/partColors.ts`), so a slice is the colour that
 #: part has in the 3-D view and on the cross-section.
 PART_COLOURS = {
-    # BRIGHT AND APART (user 2026-09-11: "цвета сделай поярче, чтобы хорошо
-    # было видно разницу").  The viewer's own palette is three near-identical
+    # BRIGHT AND APART (user 2026-09-11: "make the colours brighter, so the
+    # difference is clearly visible").  The viewer's own palette is three near-identical
     # navies plus two near-blacks — right for a cross-section, where the shapes
     # separate the parts and the colours only have to be quiet, and wrong for a
     # pie, where the colour IS the only thing telling two wedges apart.  Copper
@@ -2204,8 +2204,8 @@ def loss_breakdown(em: Dict[str, Any],
 def _loss_pie_png(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
                   width_cm: float = SIDE_CHART_CM,
                   px: int = SIDE_CHART_PX) -> Optional[bytes]:
-    """Where the watts go, as a pie (user 2026-09-11: "круговую диаграмму всех
-    потерь справа от таблицы — будет гораздо наглядней").
+    """Where the watts go, as a pie (user 2026-09-11: "a pie chart of all the
+    losses to the right of the table — it'll be much clearer").
 
     Every slice is labelled with its watts AND its share, because a pie alone
     answers "which is biggest" and never "how much" — and the table beside it
@@ -2230,7 +2230,7 @@ def _loss_pie_png(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
         cols = [LOSS_COLOURS.get(l, "#9aa4b2") for l in labels]
         fig_w = max(float(width_cm), 4.0) / 2.54
         # WHERE THE LEGEND GOES depends on how wide the figure is placed (user
-        # 2026-09-14: *"раздвигай на всю ширину страницы"*).  As half of a pair
+        # 2026-09-14: *"stretch it to the full width of the page"*).  As half of a pair
         # the legend beside the pie ate half the column and left the circle the
         # size of a coin, so it goes UNDERNEATH and the pie fills the width; at
         # full page width there is room beside it, and a full-width pie with
@@ -2310,8 +2310,8 @@ def _temp_bars_png(res: Dict[str, Any], inner: Dict[str, Any],
                    limits: Optional[Dict[str, float]] = None,
                    width_cm: float = SIDE_CHART_CM,
                    px: int = SIDE_CHART_PX) -> Optional[bytes]:
-    """Per-part temperature as bars (user 2026-09-11: "график температур в виде
-    гистограммы справа от таблицы температур").
+    """Per-part temperature as bars (user 2026-09-11: "a temperature chart as
+    a bar histogram to the right of the temperature table").
 
     Each part gets its maximum as the bar and its average as a tick inside it —
     the two numbers the table carries, so nothing new is asserted.  The limits
@@ -2535,8 +2535,8 @@ def _dft_pct(series: Any, n_orders: int = 20) -> Optional[Tuple[Any, Any, float]
 #: picture.  The point sizes are left alone — a chart drawn at the width it is
 #: placed at renders its 9 pt labels as 9 pt on the page either way.
 #:
-#: 14 cm, not 12 (user 2026-09-14: *"рисунки делай побольше, раздвигай на всю
-#: ширину страницы, для всех, чтобы одинаково было"*).  A pair now spans the
+#: 14 cm, not 12 (user 2026-09-14: *"make the pictures bigger, stretch them to
+#: the full page width, for all of them, so it's consistent"*).  A pair now spans the
 #: whole text width, so a half is 13.2 cm in Word and 9.2 cm in the PDF — and
 #: with the threshold at 12 the two renderers would have laid the same figure
 #: out two different ways.  Half of a pair is half of a pair in both.
@@ -2988,8 +2988,8 @@ def _currents_png(wf: Dict[str, Any], width_cm: float = 22.0,
 
 
 # ── THE BRIDGE'S OWN VOLTAGE, NOT THE WINDING'S (2026-09-15) ────────────────
-# User: *"он же не реальное напряжение показывает — там же должны быть сплошные
-# импульсы с разной скважностью"*.  The line-voltage chart drew V_A − V_B
+# User: *"it's not showing the real voltage — there should be solid pulses
+# with different duty ratios there"*.  The line-voltage chart drew V_A − V_B
 # reconstructed from the FIELD — a smooth fundamental carrying whatever ripple
 # the FEM's 20 steps per carrier could resolve.  That is a real quantity (the
 # volt-seconds the winding integrated) but it is NOT what the inverter puts on

@@ -6355,9 +6355,9 @@ def _run(body: Dict[str, Any],
                              for r in sine_cmp["rows"]
                              if r["key"] in ("T_em_avg_Nm", "P_loss_total_W")))
         # ── AND THE SAME MACHINE AT 20 °C (owner 2026-09-18) ────────────────
-        # *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить
-        # все коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех
-        # каталогах моторов и нужны для сравнения»*.  One background pass, at
+        # *"do a cold 20 °C pass for every report, to find all the
+        # coefficients KV, Kt, Km, Km/mass that appear in every motor
+        # catalogue and are needed for comparison"*.  One background pass, at
         # the end, feeding back into nothing: it is a measurement of the
         # machine, not a state the machine is in.
         if want_cold and history:
@@ -6869,8 +6869,8 @@ def _merge_constants_20c(block: Dict[str, Any]) -> Dict[str, bool]:
 # ---------------------------------------------------------------------------
 # HOW MUCH MAY IT PULL FOR EVER — the continuous rating, per cooling condition
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-20: *«давай ещё сделаем расчёт continuous power для разных
-# условий охлаждения»*.  The loop and `coupled_time_to_limit` both answer for a
+# Owner, 2026-09-20: *"let's also add a continuous power calculation for
+# different cooling conditions"*.  The loop and `coupled_time_to_limit` both answer for a
 # current somebody typed; this answers for the current the machine may HOLD, and
 # it answers it once per cooling condition, because that is the number that
 # moves by a factor of three between a joint in still air and a jacketed one.

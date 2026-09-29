@@ -18162,8 +18162,8 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
       lambda c: ", ".join(f"{k} {float(v):g}" for k, v in
                           sorted(((_m(c) or {}).get("part_temps_c") or {}).items())
                           if v is not None) or None)
-    # SPEED AT SF = 1 — MANDATORY (owner 2026-09-21: "нужно эту максимальную
-    # скорость обязательно добавлять в отчёт" — every report, not only when
+    # SPEED AT SF = 1 — MANDATORY (owner 2026-09-21: "this maximum speed
+    # absolutely needs to be added to the report" — every report, not only when
     # the button was pressed).  Same loads, contacts, interference and
     # temperatures as the case above; the block itself comes from the
     # coupled loop's automatic search (`run_rotor_stress_at`) or a manual
@@ -18548,8 +18548,8 @@ def limited_temperature_clause(rec: Optional[Dict[str, Any]], part: str) -> str:
     prints beside its number — ``""`` everywhere else.
 
     ``solved at the limit; node mean 183.5 °C``: the record's ``coil_temp_c``
-    of a limited duty IS the class temperature (owner 2026-09-18: *«расчёт
-    должен быть при катушках в 200 градусов, а не 184»* — the final
+    of a limited duty IS the class temperature (owner 2026-09-18: *"the
+    calculation should be with the coils at 200 degrees, not 184"* — the final
     electromagnetic pass is made with the limiting part exactly at its limit,
     ``routes.coupled._limited_block`` states the rule), and the row says so in
     one clause, with the node mean the map is translated onto beside it, so a
@@ -18743,7 +18743,7 @@ def continuous_rating_words(rec: Optional[Dict[str, Any]]) -> str:
 def _continuous_rating_setpoint_words(blk: Mapping[str, Any]) -> str:
     """"setpoint 63.64 A rms, continuous 48.6 A rms" — ``""`` unless the
     record actually moved to the S1 machine (owner 2026-09-21, third round:
-    *«опять токи не совпадают»* — the setpoint's own current and the
+    *"the currents don't match again"* — the setpoint's own current and the
     rating's must never be silently conflated once a real S1 verification
     pass has made them two different machines on one record)."""
     if not blk.get("record_is_s1"):
@@ -18760,8 +18760,8 @@ def continuous_rating_clause(rec: Optional[Dict[str, Any]]) -> str:
     """ONE clause: which current is which (owner 2026-09-21, third round),
     then the verification status when the block has one — a REAL
     electromagnetic pass at this current (owner 2026-09-21, second round:
-    *«почему сразу не пересчитывается электромагнитное моделирование … токи
-    не совпадают»*) replaces the linear estimate's approximation with the
+    *"why doesn't the electromagnetic simulation recompute right away ...
+    the currents don't match"*) replaces the linear estimate's approximation with the
     honest fact that it either was, or was not, confirmed.  The house rule
     for these notes is a single "; …" and never a sentence of its own —
     several facts joined by "; " still read as one clause."""

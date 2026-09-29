@@ -19,6 +19,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { uiForms, indexOfUi, hasUi } from '../../../i18n/__tests__/uiText.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -789,7 +790,7 @@ test('a still-blank (not overridden) field shows the inherited value as a '
 test('the Coolant select offers an explicit "(from Thermal)" option for the '
    + 'inherited (blank) state, never a silently-selected real fluid', () => {
   const src = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
-  const start = src.indexOf('<Row label="Coolant"');
+  const start = indexOfUi(src, uiForms('<Row label=', 'Coolant', '', { quoted: true }));
   const end = src.indexOf('</Row>', start);
   assert.ok(start > 0 && end > start, 'the Coolant row must exist');
   const block = src.slice(start, end);

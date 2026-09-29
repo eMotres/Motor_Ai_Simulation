@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { uiForms, indexOfUi, hasUi } from '../../../i18n/__tests__/uiText.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PANEL = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
@@ -80,7 +81,7 @@ test('no resolved point yet leaves the box as it is', () => {
 /* ── the panel ───────────────────────────────────────────────────────────── */
 
 test('the Carrier row has no placeholder and is filled from the resolved point', () => {
-  const at = PANEL.indexOf('<Row label="Carrier"');
+  const at = indexOfUi(PANEL, uiForms('<Row label=', 'Carrier', '', { quoted: true }));
   assert.ok(at > 0);
   const row = PANEL.slice(at, PANEL.indexOf('</Row>', at));
   assert.ok(!row.includes('placeholder'), 'never a greyed placeholder for the carrier');

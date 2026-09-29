@@ -15,7 +15,7 @@ import numpy as np
 from motor_ai_sim.inverter.coupling import DeviceDrop, build_inverter_source
 from motor_ai_sim.simulation.excitation import Feedback
 
-from test_dc_orbit import Machine, _D, _S
+from tests.test_dc_orbit import Machine, _D, _S
 
 _F, _R, _L, _PSI = 1741.67, 0.0127, 120e-6, 0.073
 _NSPP = 280                    # 20 steps per carrier, 14 carriers

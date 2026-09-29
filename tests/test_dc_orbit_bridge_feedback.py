@@ -25,7 +25,7 @@ from motor_ai_sim.simulation.dc_orbit import (DcOrbitSolve, flux_shift_to_state,
                                               ll_flux, ll_inductance)
 from motor_ai_sim.simulation.excitation import Feedback
 
-from test_dc_orbit import Machine, _D, _S
+from tests.test_dc_orbit import Machine, _D, _S
 
 _F = 1741.67          # L180 gen at 20 900 rpm, 5 pole pairs
 _R = 0.0127           # ohm per delta branch (4574 W at 346.6 A rms)

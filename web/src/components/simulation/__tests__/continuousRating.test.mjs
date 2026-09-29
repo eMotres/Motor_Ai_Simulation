@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { uiForms, indexOfUi, hasUi } from '../../../i18n/__tests__/uiText.mjs';
 
 // ── verbatim from coupledApi.ts ───────────────────────────────────────────
 function continuousRatingLine(c) {
@@ -219,10 +220,10 @@ test('the panel selector offers "continuous rating (S1)" as a third option', () 
   const here = dirname(fileURLToPath(import.meta.url));
   const src = readFileSync(
     join(here, '..', '..', 'simulation', 'SimulationPanel.tsx'), 'utf8');
-  assert.ok(src.includes('<MenuItem value="steady">steady state</MenuItem>'));
-  assert.ok(src.includes('<MenuItem value="limits">time to the limits</MenuItem>'));
-  assert.ok(src.includes(
-    '<MenuItem value="continuous">continuous rating (S1)</MenuItem>'));
+  assert.ok(hasUi(src, uiForms('<MenuItem value="steady">', 'steady state', '</MenuItem>')));
+  assert.ok(hasUi(src, uiForms('<MenuItem value="limits">', 'time to the limits', '</MenuItem>')));
+  assert.ok(hasUi(src, uiForms(
+    '<MenuItem value="continuous">', 'continuous rating (S1)', '</MenuItem>')));
   // The HelpTip states the model in words a reader may act on, not just a name.
   const tipStart = src.indexOf('Continuous rating (S1): does the same');
   assert.ok(tipStart > -1, 'the HelpTip has no continuous-rating paragraph');
@@ -238,7 +239,7 @@ test('the summary card reads continuous_rating off the coupling block, not a new
     join(here, '..', '..', 'simulation', 'SummaryTable.tsx'), 'utf8');
   assert.ok(src.includes('continuousRatingLine(s.coupling)'));
   assert.ok(src.includes('continuousRatingTip(s.coupling)'));
-  assert.ok(src.includes("label=\"Continuous rating\""));
+  assert.ok(hasUi(src, uiForms('label=', 'Continuous rating', '', { quoted: true })));
 });
 
 // ── THE RECORD MOVED TO S1 (owner 2026-09-21, third round) ─────────────────

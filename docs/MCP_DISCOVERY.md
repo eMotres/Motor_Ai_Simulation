@@ -92,11 +92,23 @@ before. No token is ever logged, only credential ids.
 ### Client IP (anonymous quota, sign-up and login limits)
 
 `motor_ai_sim/client_ip.py` honours forwarding headers **only when the TCP
-peer is a trusted proxy**. `TRUSTED_PROXIES` is a comma-separated list of
-addresses / CIDRs; the default is `127.0.0.0/8, ::1/128, 172.16.0.0/12`,
-i.e. loopback plus the docker bridges. A non-IP peer (unix socket, the
-in-process test client) counts as trusted. From a trusted peer the address
-is taken as follows:
+peer is a trusted proxy**. Trusted means exact endpoints, never a whole
+private range, because another container on any docker bridge (compute
+sandboxes on 172.17, the ERP on 172.19) must not be able to forge
+`X-Real-IP`. The trusted set is:
+
+- loopback (`127.0.0.0/8`, `::1`);
+- the addresses that the hostnames in `TRUSTED_PROXY_HOSTS` (default `web`,
+  the compose service of the web container) resolve to. They are resolved
+  at API start-up (`client_ip.warm`, at most 2 s), re-resolved every 60 s in
+  the background, and re-resolved when a peer carrying forwarding headers
+  misses (at most every 10 s), so a recreated network with a new subnet is
+  followed without configuration. If the name does not resolve (local dev
+  without docker), only loopback is trusted;
+- `TRUSTED_PROXIES`: explicit extra addresses / CIDRs, empty by default.
+
+A non-IP peer (unix socket, the in-process test client) counts as trusted.
+From a trusted peer the address is taken as follows:
 
 1. `X-Real-IP`, when it is a single valid address that is not itself a
    trusted proxy;
@@ -111,12 +123,23 @@ it sends. The MCP anonymous quota and all `/api/auth` limits (login lockout,
 mail, sign-up) use this helper; the support chat keeps its own rule.
 
 Production chain: the host nginx sets `X-Real-IP $remote_addr` (it
-overwrites) and appends to `X-Forwarded-For`. It proxies to the web
-container, whose nginx (`deploy/nginx.conf`) now uses the realip module
-(`set_real_ip_from 127.0.0.1` and `172.16.0.0/12`, `real_ip_header
-X-Real-IP`). Its `$remote_addr`, and so the `X-Real-IP` it passes to the
-API, is therefore the visitor rather than the docker gateway, and only when
-the request came from the host side. No host nginx change is required.
+overwrites) and appends to `X-Forwarded-For`. It proxies to
+`127.0.0.1:8080`, the web container's only published port, so the
+connection reaches the container from its own network's **gateway**
+(docker-proxy). The container nginx (`deploy/nginx.conf`) uses the realip
+module with `real_ip_header X-Real-IP` and includes
+`/etc/nginx/realip/trusted.conf`. That file is written at every container
+start by `/docker-entrypoint.d/15-realip-gateway.sh`
+(`deploy/nginx-realip-gateway.sh`, copied and made executable in
+`deploy/Dockerfile.web`). The script reads the default gateway from
+`/proc/net/route` and writes `set_real_ip_from 127.0.0.1;` plus
+`set_real_ip_from <gateway>;`. It fails closed: with no gateway found only
+127.0.0.1 is trusted, the file baked into the image is that same
+loopback-only default, and the API then counts every visitor as the
+gateway, which is one shared bucket and never a spoofable one. The
+container's `$remote_addr`, and so the `X-Real-IP` it passes to the API,
+is therefore the visitor, and only for requests that came in through the
+host. No host nginx change is required.
 Optional hardening on the host is `proxy_set_header X-Forwarded-For
 $remote_addr;`, which overwrites instead of appending.
 

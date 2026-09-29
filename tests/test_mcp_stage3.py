@@ -52,6 +52,8 @@ def _snapshot(root: Path) -> dict:
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("MCP_KEYS_DIR", str(tmp_path))
+    # no DNS lookup of the compose proxy name in tests (client_ip.py)
+    monkeypatch.setenv("TRUSTED_PROXY_HOSTS", "")
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://aerostator.test")
     monkeypatch.delenv("MCP_SIMULATE_PER_DAY", raising=False)
     monkeypatch.delenv("MCP_SIMULATE_UNLIMITED", raising=False)

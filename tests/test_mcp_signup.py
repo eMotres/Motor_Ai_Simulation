@@ -45,6 +45,8 @@ def senv(tmp_path, monkeypatch):
     from motor_ai_sim.routes import auth_local, oauth as R
 
     monkeypatch.setenv("MCP_KEYS_DIR", str(tmp_path))
+    # no DNS lookup of the compose proxy name in tests (client_ip.py)
+    monkeypatch.setenv("TRUSTED_PROXY_HOSTS", "")
     monkeypatch.setenv("PUBLIC_BASE_URL", BASE)
     monkeypatch.setenv("PUBLIC_APP_URL", BASE)
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
@@ -364,13 +366,23 @@ def test_signup_limit_ignores_spoofed_xff_from_a_direct_peer(senv):
     assert codes[:5] == [202] * 5 and codes[5] == 429 and codes[6] == 429
 
 
-def test_signup_limit_behind_the_proxy_counts_the_real_client(senv):
+def test_signup_limit_behind_the_proxy_counts_the_real_client(senv, monkeypatch):
+    from motor_ai_sim import client_ip as C
+    monkeypatch.setattr(C, "resolver", lambda h: ["172.18.0.5"] if h == "web" else [])
+    monkeypatch.setenv("TRUSTED_PROXY_HOSTS", "web")
+    C.reset()
     proxy = TestClient(senv["c"].app, client=("172.18.0.5", 40000))
+    sandbox = TestClient(senv["c"].app, client=("172.17.0.4", 40000))
 
-    def reg(i, spoof, real):
-        return proxy.post("/api/auth/register",
-                          json={"email": f"p{i}@example.com", "password": PW, "name": "P"},
-                          headers={"X-Forwarded-For": f"{spoof}, {real}, 172.18.0.1"}).status_code
-    codes = [reg(i, f"10.9.9.{i}", "203.0.113.77") for i in range(6)]
+    def reg(cl, i, spoof, real):
+        return cl.post("/api/auth/register",
+                       json={"email": f"p{i}@example.com", "password": PW, "name": "P"},
+                       headers={"X-Real-IP": real,
+                                "X-Forwarded-For": f"{spoof}, {real}, {real}"}).status_code
+    codes = [reg(proxy, i, f"10.9.9.{i}", "203.0.113.77") for i in range(6)]
     assert codes[:5] == [202] * 5 and codes[5] == 429           # rotating the spoof is useless
-    assert reg(9, "10.9.9.9", "203.0.113.78") == 202            # another real client
+    assert reg(proxy, 9, "10.9.9.9", "203.0.113.78") == 202     # another real client
+    # a container on another bridge claiming X-Real-IP: counted by its own address
+    codes = [reg(sandbox, 20 + i, "1.1.1.1", f"203.0.113.{i}") for i in range(6)]
+    assert codes[:5] == [202] * 5 and codes[5] == 429
+    C.reset()

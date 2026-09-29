@@ -44,6 +44,8 @@ def _die_names():
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("MCP_KEYS_DIR", str(tmp_path))
+    # no DNS lookup of the compose proxy name in tests (client_ip.py)
+    monkeypatch.setenv("TRUSTED_PROXY_HOSTS", "")
     monkeypatch.setattr(U, "_USERS_FILE", tmp_path / "users.json")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)

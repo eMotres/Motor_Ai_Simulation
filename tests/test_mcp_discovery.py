@@ -165,17 +165,37 @@ def test_audit_keeps_argument_names_only_for_anonymous_and_refused(denv):
 
 # ── the anonymous quota is not escaped by spoofing X-Forwarded-For (#2) ─────
 
-def test_anonymous_quota_ignores_spoofed_xff_from_a_direct_peer(denv, monkeypatch):
+def _proxied(c, real, spoof):
+    """What the web container sends (realip on): X-Real-IP = the visitor, the
+    visitor's own X-Forwarded-For with the hops appended."""
+    return c.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+                  headers={"Accept": ACCEPT, "Content-Type": "application/json",
+                           "X-Real-IP": real, "X-Forwarded-For": f"{spoof}, {real}, {real}"})
+
+
+def test_anonymous_quota_ignores_spoofed_headers(denv, monkeypatch):
     from starlette.testclient import TestClient
+    from motor_ai_sim import client_ip as C
+    monkeypatch.setattr(C, "resolver", lambda h: ["172.18.0.5"] if h == "web" else [])
+    monkeypatch.setenv("TRUSTED_PROXY_HOSTS", "web")
+    C.reset()
     monkeypatch.setenv("MCP_ANON_RATE_PER_MIN", "2")
+    # a direct peer rotating X-Forwarded-For / X-Real-IP: one bucket (its own)
     direct = TestClient(denv["c"].app, client=("198.51.100.201", 40000))
-    codes = [_rpc(direct, "tools/list", ip=f"203.0.113.{i}").status_code for i in range(3)]
+    codes = [_proxied(direct, f"203.0.113.{i}", "1.1.1.1").status_code for i in range(3)]
     assert codes == [200, 200, 429]
+    # containers on other bridges (compute sandboxes 172.17, the ERP 172.19)
+    # are not proxies either, whatever X-Real-IP they claim
+    for peer in ("172.17.0.4", "172.19.0.2"):
+        other = TestClient(denv["c"].app, client=(peer, 40000))
+        codes = [_proxied(other, f"203.0.113.{i}", "1.1.1.1").status_code for i in range(3)]
+        assert codes == [200, 200, 429], peer
+    # the resolved web container: the visitor is counted, spoofing is useless
     proxy = TestClient(denv["c"].app, client=("172.18.0.5", 40000))
-    codes = [_rpc(proxy, "tools/list", ip=f"10.1.1.{i}, 203.0.113.99, 172.18.0.1").status_code
-             for i in range(3)]
+    codes = [_proxied(proxy, "203.0.113.99", f"10.1.1.{i}").status_code for i in range(3)]
     assert codes == [200, 200, 429]
-    assert _rpc(proxy, "tools/list", ip="203.0.113.98, 172.18.0.1").status_code == 200
+    assert _proxied(proxy, "203.0.113.98", "10.1.1.1").status_code == 200
+    C.reset()
 
 
 # ── anonymous initialize / tools/list ───────────────────────────────────────

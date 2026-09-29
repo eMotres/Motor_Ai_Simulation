@@ -437,6 +437,11 @@ async def lifespan():
     fresh server (a second app start in one process — tests — needs it)."""
     global _server, _http_app
     _server = _http_app = None
+    # resolve the trusted proxy hostnames (compose service ``web``) once at
+    # startup, so the first request does not wait on DNS (client_ip.py)
+    import asyncio
+    from motor_ai_sim import client_ip as _cip
+    await asyncio.to_thread(_cip.warm)
     srv = get_server()
     async with srv.session_manager.run():
         yield

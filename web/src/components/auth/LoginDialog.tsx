@@ -11,8 +11,8 @@ import { CONSENT_LINE, CONSENT_HELP } from '../../lib/newsletterApi';
 import {
   decodeJwtPayload, googleExchange, loadGis, passwordLogin,
   registerAccount, verifyEmail, requestPasswordReset, confirmPasswordReset,
-  pendingEmailLink, clearEmailLink, PASSWORD_MIN_LEN,
-  GOOGLE_CLIENT_ID, type SessionUser,
+  pendingEmailLink, clearEmailLink, pendingContinuation, PASSWORD_MIN_LEN,
+  GOOGLE_CLIENT_ID, TERMS_URL, PRIVACY_URL, SOURCE_URL, type SessionUser,
 } from '../../lib/localAuth';
 import HelpTip from '../common/HelpTip';
 import { useTranslation } from 'react-i18next';
@@ -21,13 +21,17 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onSignedIn: (token: string, user: SessionUser) => void;
+  /** Open on "Create account" instead of "Sign in". */
+  initialMode?: 'signin' | 'register';
+  /** OAuth consent page to come back to after the e-mail confirmation. */
+  returnTo?: string;
 }
 
 type Mode = 'signin' | 'register' | 'forgot' | 'reset';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
+const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, returnTo }) => {
   const { t } = useTranslation('common');
   const min = PASSWORD_MIN_LEN;
   const [tab, setTab] = useState<'google' | 'email'>(GOOGLE_CLIENT_ID ? 'google' : 'email');
@@ -60,11 +64,29 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
     </Box>
   );
 
+  // Creating an account (form or first Google sign-in) accepts the terms.
+  const termsLine = (
+    <Typography sx={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.5 }}>
+      {t('auth.terms.prefix')}{' '}
+      <Link href={TERMS_URL} target="_blank" rel="noopener noreferrer">{t('auth.terms.terms')}</Link>
+      {' · '}
+      <Link href={PRIVACY_URL} target="_blank" rel="noopener noreferrer">{t('auth.terms.privacy')}</Link>
+      {'. '}{t('auth.terms.license')}{' '}
+      <Link href={SOURCE_URL} target="_blank" rel="noopener noreferrer">{t('auth.terms.source')}</Link>
+    </Typography>
+  );
+
   // A mailed link in the address bar: consume it once, then scrub the URL.
+  // Without one, open in the mode the caller asked for (e.g. "Create account"
+  // from the OAuth consent page).
   useEffect(() => {
     if (!open) return;
     const link = pendingEmailLink();
-    if (!link) return;
+    if (!link) {
+      if (initialMode === 'register') { setTab('email'); setMode('register'); setErr(null); setInfo(null); }
+      return;
+    }
+    const continuation = pendingContinuation();
     clearEmailLink();
     setTab('email');
     if (link.kind === 'reset') {
@@ -72,14 +94,22 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
       return;
     }
     setMode('signin'); setBusy(true); setErr(null);
-    void verifyEmail(link.token)
+    // A sign-up started in an AI app's authorization window: the server
+    // resumes that authorization only from the link's own continuation, bound
+    // to this address.  Anything else must not stay on a consent page.
+    void verifyEmail(link.token, continuation)
       .then((j) => {
+        const onConsent = window.location.pathname === '/agent-consent';
+        if (onConsent && !j.return_to) { window.location.replace('/?signin=1'); return; }
+        if (j.return_to && `${window.location.pathname}${window.location.search}` !== j.return_to) {
+          window.location.replace(j.return_to); return;
+        }
         if (j.email) setEmail(j.email);
         setInfo(t('auth.info.emailConfirmed'));
       })
       .catch((e: Error) => setErr(e.message))
       .finally(() => setBusy(false));
-  }, [open]);
+  }, [open, initialMode]);
 
   // Render the official Google button whenever the Google tab is shown.
   useEffect(() => {
@@ -138,10 +168,11 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
         setEmail(''); setPassword('');
         onSignedIn(token, user);
       } else if (mode === 'register') {
-        const j = await registerAccount(email.trim(), password, name.trim(), newsletter);
+        const j = await registerAccount(email.trim(), password, name.trim(), newsletter, returnTo);
         setPassword(''); setPassword2(''); setTouched(false); setNewsletter(false);
         setMode('signin');
-        setInfo(j.message || t('auth.info.checkConfirmation'));
+        setInfo(returnTo ? t('auth.info.checkConfirmationReturn')
+          : (j.message || t('auth.info.checkConfirmation')));
       } else if (mode === 'forgot') {
         const j = await requestPasswordReset(email.trim());
         setTouched(false);
@@ -184,6 +215,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
             <div ref={gButtonRef} />
             {consentBox}
             <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -0.75 }}>{t('auth.consent.newAccountOnly')}</Typography>
+            {termsLine}
             {gisErr && <Typography variant="caption" color="error">{gisErr}</Typography>}
             {err && <Typography variant="caption" color="error">{err}</Typography>}
           </Box>
@@ -221,6 +253,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
                 error={!!show(pw2Err)} helperText={show(pw2Err)} />
             )}
             {mode === 'register' && consentBox}
+            {mode === 'register' && termsLine}
             {err && <Typography variant="caption" color="error" role="alert">{err}</Typography>}
             <Button type="submit" variant="contained" disabled={busy}
               sx={{ textTransform: 'none' }}>

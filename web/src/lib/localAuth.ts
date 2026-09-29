@@ -176,15 +176,49 @@ async function postPlain(path: string, body: unknown): Promise<{ message?: strin
   return j as { message?: string; email?: string };
 }
 
-/** Self-service sign-up. The answer never says whether the address existed. */
-export function registerAccount(email: string, password: string, name: string, newsletter = false) {
-  return postPlain('/api/auth/register', { email, password, name, newsletter });
+/** Self-service sign-up. The answer never says whether the address existed.
+ *  `returnTo`: the OAuth consent page (`/agent-consent?request=…`) when the
+ *  sign-up started inside an AI app's authorization window — the mailed link
+ *  then opens that page again and the pending authorization is kept alive. */
+export function registerAccount(email: string, password: string, name: string, newsletter = false,
+  returnTo?: string) {
+  return postPlain('/api/auth/register', {
+    email, password, name, newsletter, ...(returnTo ? { return_to: returnTo } : {}),
+  });
 }
 
-/** Consume the mailed confirmation link. */
-export function verifyEmail(token: string) {
-  return postPlain('/api/auth/verify', { token });
+/** Consume the mailed confirmation link.  `continuation`: the link's
+ *  single-use `continue` secret (a sign-up started in an AI app's
+ *  authorization window).  The server derives where to go back from it and
+ *  answers `return_to` only when it is valid for the confirmed address. */
+export function verifyEmail(token: string, continuation?: string) {
+  return postPlain('/api/auth/verify', { token, ...(continuation ? { continuation } : {}) }) as
+    Promise<{ message?: string; email?: string; authorization_pending?: boolean; return_to?: string }>;
 }
+
+/** The `continue` secret of a mailed confirmation link, if any. */
+export function pendingContinuation(): string | undefined {
+  try {
+    return new URLSearchParams(window.location.search).get('continue') ?? undefined;
+  } catch { return undefined; }
+}
+
+/** `?signup=1` / `?signin=1` in the address bar (links the MCP discovery
+ *  tools hand out): open the dialog in that mode. */
+export function requestedAuthMode(): 'register' | 'signin' | null {
+  try {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('signup') === '1') return 'register';
+    if (q.get('signin') === '1') return 'signin';
+  } catch { /* no window */ }
+  return null;
+}
+
+/** Public legal / source links shown under the sign-up form (build-time
+ *  overridable; the MCP discovery tools quote the same pages). */
+export const TERMS_URL = (import.meta.env.VITE_TERMS_URL as string | undefined) ?? 'https://emotres.com/terms-conditions';
+export const PRIVACY_URL = (import.meta.env.VITE_PRIVACY_URL as string | undefined) ?? 'https://emotres.com/privacy-policy';
+export const SOURCE_URL = (import.meta.env.VITE_SOURCE_URL as string | undefined) ?? 'https://github.com/eMotres/Motor_Ai_Simulation';
 
 /** Ask for a reset link (also how a Google-only account gets a password). */
 export function requestPasswordReset(email: string) {
@@ -216,6 +250,7 @@ export function clearEmailLink(): void {
     const u = new URL(window.location.href);
     u.searchParams.delete('verify');
     u.searchParams.delete('reset');
+    u.searchParams.delete('continue');
     window.history.replaceState(null, '', u.pathname + u.search + u.hash);
   } catch { /* ignore */ }
 }

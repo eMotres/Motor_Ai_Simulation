@@ -20,6 +20,8 @@ const WRITE_SCOPES = ['designs:write', 'simulate'];
 interface Req {
   client_name: string; client_uri?: string | null; redirect_host: string; scopes: string[]; account: string;
   scope_descriptions?: Record<string, string>;
+  /** Resumed from a sign-up confirmation link (bound to this account). */
+  started_by_sign_up?: boolean;
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -66,10 +68,24 @@ const OAuthConsent: React.FC = () => {
   if (!rid) body = <Alert severity="error">Missing authorization request.</Alert>;
   else if (!resolved && !user) body = <CircularProgress size={20} />;
   else if (!user) {
+    // Sign-up happens HERE, in the browser window the AI app opened — never
+    // in the chat.  The consent path rides through the sign-up and its
+    // confirmation mail, so the user lands back on this page and continues.
+    const returnTo = `/agent-consent?request=${encodeURIComponent(rid)}`;
     body = (
       <>
-        <Typography sx={{ mb: 2, fontSize: 14 }}>Sign in to connect an AI app to your account.</Typography>
-        <Button variant="contained" onClick={() => { void signIn(); }}>Sign in</Button>
+        <Typography sx={{ mb: 2, fontSize: 14 }}>
+          Sign in to connect an AI app to your account — or create an account first.
+        </Typography>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button variant="contained" onClick={() => { void signIn({ returnTo }); }}>Sign in</Button>
+          <Button variant="outlined" onClick={() => { void signIn({ mode: 'register', returnTo }); }}>
+            Create account
+          </Button>
+        </Box>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-2)', mt: 2 }}>
+          A new e-mail account works after you open the confirmation link we send; it brings you back here.
+        </Typography>
       </>
     );
   } else if (err) body = <Alert severity="error">{err}</Alert>;
@@ -82,8 +98,14 @@ const OAuthConsent: React.FC = () => {
           access to your eMotres account <b>{req.account}</b>.
         </Typography>
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)', mb: 1.5 }}>
-          It will return to {req.redirect_host}. Untick what you do not want to allow.
+          It will return to <b>{req.redirect_host}</b>. Untick what you do not want to allow.
         </Typography>
+        {req.started_by_sign_up && (
+          <Alert severity="warning" sx={{ mb: 1.5, fontSize: 12 }}>
+            You reached this page from the confirmation e-mail of your new account. Allow only if you
+            started connecting <b>{req.client_name}</b> ({req.redirect_host}) yourself just now.
+          </Alert>
+        )}
         <Box sx={{ mb: 2 }}>
           {req.scopes.map((s) => (
             <Box key={s} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>

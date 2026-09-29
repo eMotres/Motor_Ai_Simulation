@@ -23,10 +23,11 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import time
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from motor_ai_sim import agent_keys as _keys
 from motor_ai_sim.json_store import mutate_json, read_json
@@ -37,8 +38,14 @@ ACCESS_TTL_S = 3600               # 1 h
 REFRESH_TTL_S = 30 * 86400        # 30 days, rotated on every use
 CODE_TTL_S = 300                  # authorization code: 5 min, single use
 REQUEST_TTL_S = 900               # pending consent: 15 min
+#: A sign-up started from the consent page (create account -> confirm the
+#: e-mail, possibly in another tab) keeps the pending request alive this long
+#: from the last step, but never longer than SIGNUP_MAX_AGE_S after /authorize.
+SIGNUP_REQUEST_TTL_S = 1800       # 30 min
+SIGNUP_MAX_AGE_S = 3600           # 1 h
 MAX_CLIENTS = 500                 # DCR is anonymous: cap the table
 CONSENT_PATH = "/agent-consent"
+_RID_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 
 
 # ── URLs ──────────────────────────────────────────────────────────────────────
@@ -57,10 +64,34 @@ def resource_metadata_url() -> str:
     return base_url() + "/.well-known/oauth-protected-resource/mcp"
 
 
-def www_authenticate(error: str = "") -> str:
-    extra = f', error="{error}"' if error else ""
-    return (f'Bearer realm="emotres-mcp", resource_metadata="{resource_metadata_url()}"'
-            f'{extra}')
+def authorization_server_metadata_url() -> str:
+    return base_url() + "/.well-known/oauth-authorization-server"
+
+
+def authorization_endpoint() -> str:
+    return base_url() + "/oauth/authorize"
+
+
+def _quoted(v: str) -> str:
+    # RFC 6750 auth-param values are quoted-strings: no bare quotes/backslashes
+    return str(v).replace("\\", "").replace('"', "'")
+
+
+def www_authenticate(error: str = "", *, scope: str = "",
+                     description: str = "") -> str:
+    """``Bearer realm=…, resource_metadata=…[, error=…][, scope=…][, error_description=…]``.
+
+    MCP authorization spec (2025-11-25): the 401 carries ``resource_metadata``
+    and SHOULD carry ``scope``; a runtime scope refusal is 403 with
+    ``error="insufficient_scope"`` and the ``scope`` to (re-)request."""
+    out = f'Bearer realm="emotres-mcp", resource_metadata="{resource_metadata_url()}"'
+    if error:
+        out += f', error="{_quoted(error)}"'
+    if scope:
+        out += f', scope="{_quoted(scope)}"'
+    if description:
+        out += f', error_description="{_quoted(description)}"'
+    return out
 
 
 def protected_resource_metadata() -> Dict[str, Any]:
@@ -112,7 +143,7 @@ def _load() -> Dict[str, Any]:
 def _mutate(fn):
     def _m(d):
         d = d if isinstance(d, dict) else {}
-        for k in ("clients", "requests", "codes", "grants"):
+        for k in ("clients", "requests", "codes", "grants", "continuations"):
             d.setdefault(k, {})
         d.setdefault("version", 1)
         fn(d)
@@ -123,7 +154,7 @@ def _mutate(fn):
 
 def _prune(d: Dict[str, Any]) -> None:
     now = _now()
-    for tbl in ("requests", "codes"):
+    for tbl in ("requests", "codes", "continuations"):
         for k in [k for k, r in d[tbl].items() if (r.get("expires_at") or 0) < now]:
             del d[tbl][k]
 
@@ -326,7 +357,126 @@ def describe_request(rid: str) -> Optional[Dict[str, Any]]:
     return {"id": rid, "client_name": c.get("client_name") or "Unnamed agent",
             "client_uri": c.get("client_uri"),
             "redirect_host": urlsplit(r["redirect_uri"]).netloc,
-            "scopes": r["scopes"], "resource": r["resource"]}
+            "scopes": r["scopes"], "resource": r["resource"],
+            "started_by_sign_up": bool(r.get("bound_email"))}
+
+
+# ── sign-up inside the authorization window ─────────────────────────────────
+
+def consent_path(rid: str) -> str:
+    """The web consent page of one pending request (relative to the app)."""
+    return f"{CONSENT_PATH}?{urlencode({'request': rid})}"
+
+
+def request_id_from_return_path(path: Optional[str]) -> Optional[str]:
+    """The request id when ``path`` is EXACTLY a consent-page path
+    (``/agent-consent?request=<id>``), else None.
+
+    This is the only "return to" a sign-up may carry: a relative path to our
+    own consent page, never a URL (an open redirect in a mailed link is how
+    confirmation mails become phishing mails)."""
+    if not isinstance(path, str) or len(path) > 200:
+        return None
+    u = urlsplit(path)
+    if u.scheme or u.netloc or u.fragment or u.path != CONSENT_PATH:
+        return None
+    q = parse_qs(u.query, keep_blank_values=True)
+    if set(q) != {"request"} or len(q["request"]) != 1:
+        return None
+    rid = q["request"][0]
+    return rid if _RID_RE.match(rid) else None
+
+
+def _extend(r: Dict[str, Any], now: float) -> None:
+    cap = float(r.get("created_at") or now) + SIGNUP_MAX_AGE_S
+    r["expires_at"] = max(float(r.get("expires_at") or 0),
+                          min(cap, now + SIGNUP_REQUEST_TTL_S))
+
+
+def extend_request(rid: str) -> bool:
+    """Keep a pending authorization request alive while its user signs up
+    and confirms the e-mail (possibly in another tab): ``SIGNUP_REQUEST_TTL_S``
+    from now, capped at ``SIGNUP_MAX_AGE_S`` after the /authorize call.
+    False when the request is unknown or already expired (never revives one)."""
+    hit = {"ok": False}
+
+    def _fn(d):
+        r = d["requests"].get(rid or "")
+        now = _now()
+        if not r or (r.get("expires_at") or 0) < now:
+            return
+        _extend(r, now)
+        hit["ok"] = True
+    _mutate(_fn)
+    return hit["ok"]
+
+
+def _norm_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def create_continuation(rid: str, email: str) -> Optional[str]:
+    """A sign-up started on the consent page of ``rid`` for ``email``: a
+    high-entropy, single-use secret that the confirmation link carries.
+
+    Only its SHA-256 is stored, with ``{rid, email}``.  ``/api/auth/verify``
+    derives the return target from THIS record (never from a caller-supplied
+    path), and only when the verified address is ``email``.  None when the
+    request is no longer pending."""
+    secret = secrets.token_urlsafe(32)
+    out: Dict[str, Any] = {}
+
+    def _fn(d):
+        r = d["requests"].get(rid or "")
+        now = _now()
+        if not r or (r.get("expires_at") or 0) < now:
+            return
+        _extend(r, now)
+        d["continuations"][_h(secret)] = {
+            "rid": rid, "email": _norm_email(email), "created_at": now,
+            "expires_at": r["expires_at"]}
+        out["ok"] = True
+    _mutate(_fn)
+    return secret if out.get("ok") else None
+
+
+def consume_continuation(secret: str, email: str) -> Optional[str]:
+    """Spend a continuation after ``email`` proved its mailbox.  Returns the
+    request id, now bound to ``email`` (only that account may consent) and
+    kept alive — or None: unknown, already used, expired, the request gone, or
+    the secret was issued for another address.  Single use: any attempt burns
+    it (the removal is written even when the answer is None)."""
+    if not isinstance(secret, str) or not secret or len(secret) > 200:
+        return None
+    em = _norm_email(email)
+    out: Dict[str, Any] = {}
+
+    def _fn(d):
+        c = d["continuations"].pop(_h(secret), None)
+        now = _now()
+        if not c or (c.get("expires_at") or 0) < now or c.get("email") != em:
+            return
+        r = d["requests"].get(c.get("rid") or "")
+        if not r or (r.get("expires_at") or 0) < now:
+            return
+        if r.get("bound_email") and r["bound_email"] != em:
+            return
+        _extend(r, now)
+        r["bound_email"] = em
+        out["rid"] = c["rid"]
+    _mutate(_fn)
+    return out.get("rid")
+
+
+def check_request_account(rid: str, owner: str) -> None:
+    """A request bound by a sign-up continuation may be consented to only by
+    the account that signed up (OAuthError 403 otherwise)."""
+    r = (_load().get("requests") or {}).get(rid or "") or {}
+    bound = r.get("bound_email")
+    if bound and bound != _norm_email(owner):
+        raise OAuthError("access_denied",
+                         "this authorization was started for another account; "
+                         "sign in with that account or start again from your AI app", 403)
 
 
 def decide(rid: str, owner: str, approve: bool,
@@ -342,6 +492,10 @@ def decide(rid: str, owner: str, approve: bool,
         r = d["requests"].pop(rid or "", None)
         if not r or (r.get("expires_at") or 0) < _now():
             raise OAuthError("invalid_request", "this authorization request expired", 404)
+        if r.get("bound_email") and r["bound_email"] != owner:
+            # raising aborts the write: the request stays for its own account
+            raise OAuthError("access_denied",
+                             "this authorization was started for another account", 403)
         if approve and scopes is not None:
             narrowed = [s for s in dict.fromkeys(scopes) if s in r["scopes"]]
             if not narrowed or len(narrowed) != len(set(scopes)):

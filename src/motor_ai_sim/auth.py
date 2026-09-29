@@ -128,7 +128,10 @@ _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version",
 #: /api/auth/password are admin/account surface and keep their own require_admin.
 _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/auth/register", "/api/auth/verify",
-                     "/api/auth/reset", "/api/auth/methods")
+                     "/api/auth/reset", "/api/auth/methods",
+                     # double opt-in + one-click unsubscribe (mail clients POST
+                     # without a session; rate-limited in routes/newsletter.py)
+                     "/api/newsletter/confirm", "/api/newsletter/unsubscribe")
 
 
 def anonymous_allowed(path: str) -> bool:

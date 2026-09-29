@@ -117,6 +117,8 @@ config/.mesh_cache/
 # registry — every record names a browser and an ip; it is runtime state, not
 # configuration, and it must never reach a commit.
 config/users.json
+config/newsletter.json
+config/newsletter.tmp
 config/.auth_secret
 config/.sessions.json
 config/agent_keys.json

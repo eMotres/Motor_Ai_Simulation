@@ -5,7 +5,7 @@ import React, { useEffect, useState } from 'react';
 import { Box, Typography } from '@mui/material';
 
 export type AdminSectionId =
-  | 'overview' | 'users' | 'signups' | 'servers' | 'usage' | 'agents' | 'catalogs' | 'motorsAccess' | 'logs';
+  | 'overview' | 'users' | 'signups' | 'servers' | 'usage' | 'agents' | 'catalogs' | 'motorsAccess' | 'newsletter' | 'logs';
 
 export interface AdminSectionDef { id: AdminSectionId; label: string; badge?: number }
 
@@ -18,6 +18,7 @@ export const ADMIN_SECTIONS: { id: AdminSectionId; label: string }[] = [
   { id: 'agents', label: 'Agents' },
   { id: 'catalogs', label: 'Catalogs' },
   { id: 'motorsAccess', label: 'Motors access' },
+  { id: 'newsletter', label: 'Newsletter & notices' },
   { id: 'logs', label: 'Logs / Events' },
 ];
 

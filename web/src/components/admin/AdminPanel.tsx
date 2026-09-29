@@ -18,6 +18,7 @@ import AgentsSection from './sections/AgentsSection';
 import CatalogsSection from './sections/CatalogsSection';
 import MotorsAccessSection from './sections/MotorsAccessSection';
 import LogsSection from './sections/LogsSection';
+import NewsletterSection from './NewsletterSection';
 
 const AdminPanel: React.FC = () => {
   const [section, setSection] = useAdminSection();
@@ -38,6 +39,7 @@ const AdminPanel: React.FC = () => {
       case 'agents': return <AgentsSection />;
       case 'catalogs': return <CatalogsSection />;
       case 'motorsAccess': return <MotorsAccessSection />;
+      case 'newsletter': return <NewsletterSection />;
       case 'logs': return <LogsSection />;
       default: return null;
     }

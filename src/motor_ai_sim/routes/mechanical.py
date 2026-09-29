@@ -2027,8 +2027,8 @@ def run_critical_speeds_at(**route_params) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Modal — 2-D in-plane modes, and the shaft's critical speeds
 # ---------------------------------------------------------------------------
-# Added 2026-09-05 for the user's request: "нам нужно сделать ещё модальный
-# анализ, чтобы понять все частоты — это очень важно для 20000 rpm".  Two
+# Added 2026-09-05 for the user's request: "we also need to do modal
+# analysis, to understand all the frequencies — that's very important for 20000 rpm".  Two
 # endpoints because they are two different models of two different things: the
 # ring modes of the iron (``/modes``) and the bending criticals of the shaft
 # line (``/critical_speeds``).  Neither runs on its own — both are a button.
@@ -2374,10 +2374,10 @@ def materials(geo: Optional[str] = Query(default=None)):
 # ---------------------------------------------------------------------------
 # What the tab was last showing, and the bare cross-section
 # ---------------------------------------------------------------------------
-# User 2026-09-06: "когда я захожу и выхожу в Mechanical, графики пропадают.
-# Нужно, чтобы по умолчанию: если нет расчётов — рисуется просто геометрия; если
-# есть — подгружается последний расчёт; если были изменения текущей геометрии —
-# нужно подсвечивать неактуальность текущего расчёта."
+# User 2026-09-06: "when I go in and out of Mechanical, the charts disappear.
+# By default it should be: if there are no results — just draw the geometry;
+# if there are — load the last result; if the current geometry changed — the
+# current result's staleness needs to be highlighted."
 #
 # Neither route SOLVES anything: /last is a lookup, /mesh is a mesher.  Solve
 # stays the only way to compute a stress, a mode or a critical speed.
@@ -2439,7 +2439,7 @@ def mesh(
 
     What the tab draws before anything has been computed, and since 2026-09-06
     also what the panel's **Build mesh** button calls: user, on the mechanical
-    mesh, "она строится отдельно, и ей тоже нужно как-то управлять".  The SAME
+    mesh, "it's built separately, and it needs some way to be controlled too".  The SAME
     mesher ``rotor_stress`` runs (``build_rotor_mesh``), so the picture on an
     empty tab is the picture the solve will colour in, down to the element edges
     — the Mesh and Part toggles therefore work before the first Solve — and the

@@ -192,7 +192,7 @@ def test_report_deps_warn_when_missing(monkeypatch):
     real = _iu.find_spec
 
     def fake(name, *a, **kw):
-        if name in ("reportlab", "docx", "triangle"):
+        if name in ("reportlab", "docx"):
             return None
         return real(name, *a, **kw)
 
@@ -201,7 +201,7 @@ def test_report_deps_warn_when_missing(monkeypatch):
     assert {f.code for f in findings} == {"missing_dependency"}
     assert all(f.level == "warn" for f in findings)
     names = " ".join(f.message for f in findings)
-    for pip_name in ("reportlab", "python-docx", "triangle"):
+    for pip_name in ("reportlab", "python-docx"):
         assert pip_name in names
     # The .docx warning must name it as the DEFAULT format: that is what turns
     # "an optional dep is missing" into "the product's main button 500s".

@@ -1,0 +1,8 @@
+# OPTIONAL accelerator: Intel MKL PARDISO sparse direct solver via pypardiso.
+# pypardiso itself is BSD-3-Clause, but it installs Intel MKL / OpenMP / TBB,
+# which are proprietary (Intel Simplified Software License / Intel EULA).  The
+# code runs without it (SciPy SuperLU fallback), so it is not a default
+# dependency of this AGPL project.  Install it only where you accept those
+# terms, e.g. on your own solve server:
+#   pip install -r requirements.txt -r requirements-pardiso.txt
+pypardiso>=0.4

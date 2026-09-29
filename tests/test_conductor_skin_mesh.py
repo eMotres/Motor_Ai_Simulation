@@ -27,6 +27,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+pytestmark = pytest.mark.requires_triangle
+
 from motor_ai_sim.cadquery_geometry import CadQueryMotor
 from motor_ai_sim.simulation import conductor_skin as cs
 from motor_ai_sim.simulation.geo_mesh import (geo_mesh_halves,

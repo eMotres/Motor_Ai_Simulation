@@ -28,7 +28,10 @@ def _rings(vertices: np.ndarray, ring_ends: np.ndarray):
 
 
 def triangulate_float64(vertices, ring_ends):
-    import triangle as _tri
+    try:
+        import triangle as _tri
+    except ImportError:  # optional, non-commercial licence (extra [triangle])
+        return _triangulate_shapely(vertices, ring_ends)
     from shapely.geometry import Polygon as _SPoly
 
     V = np.ascontiguousarray(np.asarray(vertices, dtype=np.float64)).reshape(-1, 2)
@@ -72,3 +75,28 @@ def triangulate_float32(vertices, ring_ends):
 
 
 __all__ = ["triangulate_float64", "triangulate_float32"]
+
+
+def _triangulate_shapely(vertices, ring_ends):
+    """Same contract without `triangle`: shapely's (GEOS, LGPL-2.1) constrained
+    Delaunay of the polygon.  GEOS adds no Steiner points, so every triangle
+    corner is an input vertex and is mapped back by coordinate."""
+    import shapely
+    from shapely.geometry import Polygon as _SPoly
+    V = np.ascontiguousarray(np.asarray(vertices, dtype=np.float64)).reshape(-1, 2)
+    ends = np.asarray(ring_ends, dtype=np.int64).ravel()
+    rings = [ring for ring, s, e in _rings(V, ends) if e - s >= 3]
+    if V.shape[0] < 3 or not rings:
+        return np.zeros(0, dtype=np.uint32)
+    poly = _SPoly(rings[0], rings[1:])
+    if not poly.is_valid:
+        poly = shapely.make_valid(poly)
+    lookup = {(float(x), float(y)): k for k, (x, y) in enumerate(V)}
+    out = []
+    for t in getattr(shapely.constrained_delaunay_triangles(poly), "geoms", []):
+        try:
+            out.extend(lookup[(float(x), float(y))]
+                       for x, y in np.asarray(t.exterior.coords)[:3])
+        except KeyError:            # a vertex not in the input (invalid ring)
+            continue
+    return np.asarray(out, dtype=np.uint32)

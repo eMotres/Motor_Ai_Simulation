@@ -268,8 +268,12 @@ def reset() -> None:
 
 
 # ── store ────────────────────────────────────────────────────────────────────
+#: ``own_node`` = 1 for a job that ran on a USER-OWNED compute node
+#: (compute_nodes / docs/BYO_COMPUTE.md): recorded for the owner's own view,
+#: never counted against fair use (:func:`cpu_hours`).
 _COLS = ("run_id", "ts_start", "ts_end", "user", "client", "kind", "machine",
-         "node", "wall_s", "cpu_s", "peak_rss", "status", "cpu_method", "wait_s")
+         "node", "wall_s", "cpu_s", "peak_rss", "status", "cpu_method", "wait_s",
+         "own_node")
 
 
 def _db():
@@ -278,18 +282,22 @@ def _db():
     con.execute("CREATE TABLE IF NOT EXISTS usage (run_id TEXT PRIMARY KEY, ts_start REAL, "
                 "ts_end REAL, user TEXT, client TEXT, kind TEXT, machine TEXT, node TEXT, "
                 "wall_s REAL, cpu_s REAL, peak_rss INTEGER, status TEXT, cpu_method TEXT, "
-                "wait_s REAL DEFAULT 0)")
-    if "wait_s" not in [r[1] for r in con.execute("PRAGMA table_info(usage)")]:
+                "wait_s REAL DEFAULT 0, own_node INTEGER DEFAULT 0)")
+    have = [r[1] for r in con.execute("PRAGMA table_info(usage)")]
+    if "wait_s" not in have:
         con.execute("ALTER TABLE usage ADD COLUMN wait_s REAL DEFAULT 0")
+    if "own_node" not in have:
+        con.execute("ALTER TABLE usage ADD COLUMN own_node INTEGER DEFAULT 0")
     con.execute("CREATE INDEX IF NOT EXISTS usage_end ON usage(ts_end)")
     return con
 
 
 def record(row: Dict[str, Any]) -> None:
     con = _db()
+    vals = tuple(int(row.get(c) or 0) if c == "own_node" else row.get(c) for c in _COLS)
     try:
-        con.execute(f"INSERT OR REPLACE INTO usage VALUES ({','.join('?' * len(_COLS))})",
-                    tuple(row.get(c) for c in _COLS))
+        con.execute(f"INSERT OR REPLACE INTO usage ({','.join(_COLS)}) "
+                    f"VALUES ({','.join('?' * len(_COLS))})", vals)
         con.commit()
     finally:
         con.close()
@@ -297,7 +305,7 @@ def record(row: Dict[str, Any]) -> None:
 
 def jobs(start: float, end: float, user: Optional[str] = None,
          client: Optional[str] = None, limit: int = 5000) -> List[Dict[str, Any]]:
-    q = "SELECT * FROM usage WHERE ts_end >= ? AND ts_end < ?"
+    q = f"SELECT {','.join(_COLS)} FROM usage WHERE ts_end >= ? AND ts_end < ?"
     a: List[Any] = [start, end]
     if user is not None:
         q += " AND user = ?"
@@ -330,7 +338,8 @@ def cluster_cores() -> int:
 def summary(start: float, end: float, by: str = "user",
             cores: Optional[int] = None) -> Dict[str, Any]:
     key = "client" if by == "client" else "user"
-    rows = jobs(start, end, limit=10 ** 7)
+    # platform capacity only: user-owned node CPU is not the cluster's
+    rows = [r for r in jobs(start, end, limit=10 ** 7) if not r.get("own_node")]
     agg: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         k = r[key] or "—"
@@ -356,10 +365,16 @@ def summary(start: float, end: float, by: str = "user",
             "total_cpu_h": round(tot_cpu / 3600, 4)}
 
 
-def cpu_hours(user: str, start: float, end: float) -> float:
-    """Billing/quota groundwork: one account's CPU-hours in [start, end)."""
+def cpu_hours(user: str, start: float, end: float, fair_use: bool = True) -> float:
+    """Billing/quota groundwork: one account's CPU-hours in [start, end).
+
+    ``fair_use=True`` (the quota question) leaves out the jobs that ran on the
+    user's OWN compute nodes: that CPU was theirs, not the platform's.
+    ``fair_use=False`` counts everything (the owner's "how much did I compute").
+    """
     return round(sum(r["cpu_s"] or 0.0 for r in jobs(start, end, user=user,
-                                                     limit=10 ** 7)) / 3600, 6)
+                                                     limit=10 ** 7)
+                     if not (fair_use and r.get("own_node"))) / 3600, 6)
 
 
 def to_csv(rows: List[Dict[str, Any]]) -> str:

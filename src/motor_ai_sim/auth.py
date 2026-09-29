@@ -21,6 +21,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.request
@@ -134,6 +135,13 @@ _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/newsletter/confirm", "/api/newsletter/unsubscribe")
 
 
+#: The worker-facing routes of docs/BYO_COMPUTE.md (heartbeat, lease, progress,
+#: complete, fail) and the public worker installer files.
+_NODE_AGENT_PATH = re.compile(
+    r"^/api/nodes/(heartbeat|jobs/lease|jobs/[A-Za-z0-9_.-]+/(progress|complete|fail)"
+    r"|worker/(install\.sh|motres_compute_worker\.py))$")
+
+
 def anonymous_allowed(path: str) -> bool:
     """May a caller WITHOUT credentials reach `path` when the exhibit is closed?
 
@@ -145,6 +153,9 @@ def anonymous_allowed(path: str) -> bool:
     if not (p == "/api" or p.startswith("/api/")):
         return True
     if p in _ANON_OK_PATHS:
+        return True
+    # user-owned compute nodes: own mcnode_ bearer, checked in routes/compute_nodes
+    if _NODE_AGENT_PATH.match(p):
         return True
     return any(p == pfx or p.startswith(pfx + "/") for pfx in _ANON_OK_PREFIXES)
 

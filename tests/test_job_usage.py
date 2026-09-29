@@ -188,7 +188,7 @@ def test_load_live_endpoint_admin_only_and_shapes_series(monkeypatch):
     monkeypatch.setattr(auth, "_is_admin_caller", lambda a: (False, None))
     assert client.get("/api/admin/load/live").status_code == 401
     monkeypatch.setattr(auth, "_is_admin_caller",
-                        lambda a: (True, {"uid": "a", "email": "a@x", "tier": "admin"}))
+                        lambda a: (True, {"uid": "a", "email": "a@x", "role": "admin"}))
     minute0 = int(time.time() // 60) * 60
     U._USER_ACC[(minute0, "eu1", "alice", "web")] = 30.0
     U.flush_user_attribution(now=minute0)

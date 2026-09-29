@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """The PWM coupled campaign, SOLVER-DIRECT and OUT OF THE USER'S WAY.
 
-2026-09-15, the user: *"PWM поставь в фоне, чтобы не мешал работать"*.  He is in
+2026-09-15, the user: *"put the PWM run in the background so it does not get in the way of work"*.  He is in
 the app on the L13 robot joint, through the API on port 8001, and the Ø200 L155
 campaign has to keep running beside him without ever touching that machine.
 

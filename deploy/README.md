@@ -266,6 +266,11 @@ curl -s localhost:8080/api/health          # {"status":"healthy"}
 curl -s localhost:8080/api/me              # the real readiness probe
 ```
 
+The compose file builds the API with `WITH_TRIANGLE=1 WITH_PARDISO=1` (the two
+optional extras, see `THIRD_PARTY_NOTICES`), so the server keeps Triangle as the
+default mesher and MKL PARDISO as the sparse solver. Check after a build:
+`docker compose -f deploy/docker-compose.yml exec api python -c "import triangle, pypardiso"`.
+
 **6. TLS.** `certbot` + host nginx in front, proxying to `127.0.0.1:8080`, HSTS,
 auto-renew timer. **Not** Cloudflare's orange cloud: the free tier cuts a
 proxied request at 100 s and a Ø200 PWM transient runs 93 minutes. Cloudflare is

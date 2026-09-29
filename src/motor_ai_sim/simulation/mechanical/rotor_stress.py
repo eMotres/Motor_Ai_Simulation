@@ -239,9 +239,9 @@ class PartMech:
     # Orthotropic extras (sleeve).  None -> isotropic.
     E_transverse: Optional[float] = None            # Pa, radial (across fibres)
     G: Optional[float] = None                       # Pa, in-plane shear
-    #: THERMAL EXPANSION, 1/K — added 2026-09-07 for the user's "нужно
-    #: универсально добавить температуру ротора, чтобы можно было задавать; для
-    #: моторов без бандажа этот эффект вообще минимальный".  ``cte_1`` is the
+    #: THERMAL EXPANSION, 1/K — added 2026-09-07 for the user's "we need to
+    #: add rotor temperature universally, so it can be set; for motors
+    #: without a band this effect is minimal anyway".  ``cte_1`` is the
     #: coefficient along MATERIAL AXIS 1 — the same axis ``part_C`` builds the
     #: stiffness in: the fibre = hoop direction of a wound sleeve, the
     #: MAGNETISATION direction of a magnet.  ``cte_2`` is the transverse one;
@@ -510,9 +510,8 @@ def part_C(pm: PartMech, centroid_angle: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Thermal strain, as an eigenstrain
 # ---------------------------------------------------------------------------
-# Added 2026-09-07.  User: "нужно универсально добавить температуру ротора,
-# чтобы можно было задавать; для моторов без бандажа этот эффект вообще
-# минимальный".
+# Added 2026-09-07.  User: "we need to add rotor temperature universally, so
+# it can be set; for motors without a band this effect is minimal anyway".
 #
 # WHY IT IS AN EIGENSTRAIN AND NOT A LOAD.  The solver already carries one
 # stress-free strain — the sleeve's interference — through exactly the same
@@ -529,8 +528,8 @@ def part_C(pm: PartMech, centroid_angle: np.ndarray) -> np.ndarray:
 # along its fibres while the iron under it grows at 12 ppm/K.  Heat the rotor
 # and the interference — and with it the sleeve hoop stress — GROWS.  Without a
 # band a uniformly heated free rotor only carries the small iron/magnet
-# CTE-mismatch stress, which is the user's "для моторов без бандажа этот эффект
-# вообще минимальный".
+# CTE-mismatch stress, which is the user's "for motors without a band this
+# effect is minimal anyway".
 #
 # 2026-09-09 — AND IT IS THE ONLY POINT.  The per-part eigenstrain is no longer
 # put into the main solve at all (``solve_rotor_stress(thermal_model=

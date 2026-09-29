@@ -1,9 +1,9 @@
 """Rotor centrifugal stress & deformation — 2-D plane-stress linear elasticity.
 
-Written 2026-09-05 for the user's request: "нам нужно сделать механический
-модуль расчётов — начнём с расчёта центробежных сил ротора ... чтобы оценить
-какой бандаж нужен для удержания магнитов и ротора, то есть рассчитывать все
-напряжения и деформации".  In other words: size the retaining sleeve.
+Written 2026-09-05 for the user's request: "we need to build a mechanical
+calculation module — let's start with the rotor centrifugal force
+calculation ... to estimate what band is needed to retain the magnets and
+the rotor, that is, compute all the stresses and deformations".  In other words: size the retaining sleeve.
 
 WHAT IS SOLVED
 --------------
@@ -45,8 +45,8 @@ MODELLING ASSUMPTIONS — read these before trusting a number
   stress concentration appears anywhere.  The centrifugal load on a rotor is
   self-equilibrated, so this is well posed.
 * CYCLIC SYMMETRY, optional (2026-09-09, ``symmetry="sector"``).  User:
-  "нагрузка на все зубы должна быть одинакова … так используй периодичность,
-  как я во Fusion".  One periodic sector of ``n`` is solved instead of the whole
+  "the load on all teeth should be the same ... so use periodicity, like I
+  do in Fusion".  One periodic sector of ``n`` is solved instead of the whole
   circle, with the two cut faces tied by ``u_B = R(2*pi/n) u_A`` — every pole
   then carries an identical load by construction and the matrix is ``n`` times
   smaller (28 on the G2-L40).  ``symmetry="full"`` is the default and is the
@@ -193,8 +193,8 @@ def runaway_verdict(u_max_m: float, r_out_m: float, free_parts: List[str],
     # glued the MAGNETS — which hands their whole centrifugal load to the iron
     # and turns the answer from 421 µm / 1717 MPa in the band into 13 µm /
     # 220 MPa.  A design read as safe because the wrong joint was glued is the
-    # one failure this fallback must never produce (user: "так у нас всё
-    # раздельно").  A part with no separation joint of its own — nothing to
+    # one failure this fallback must never produce (user: "so ours is all
+    # separated").  A part with no separation joint of its own — nothing to
     # bond — leaves the choice to the open-fraction rule, and the refusal
     # stands.
     def _joint_of(part: str) -> Optional[tuple]:

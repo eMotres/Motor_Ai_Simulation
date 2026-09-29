@@ -1,9 +1,9 @@
 """The Motor report — ``GET /api/family/report/{die}/{cfg}`` and its builder.
 
-Added 2026-09-08 for the user's ask: *"у нас уже есть datasheet, нам нужно его
-расширить до полного отчёта по всем результатам моделирования, с картинками, с
-подшипниками, со всеми потерями — полный отчёт по мотору, но только самое
-важное, не нужно сильно перегружать"*.
+Added 2026-09-08 for the user's ask: *"we already have a datasheet, we need to
+extend it into a full report on all simulation results, with pictures, with
+bearings, with all the losses — a full report on the motor, but only the most
+important things, no need to overload it too much"*.
 
 What is pinned here is the CONTRACT of that export, in the order it matters:
 
@@ -468,14 +468,14 @@ def test_b_report_after_em_thermal_and_mechanical(dies, solved, as_this_machine)
 
     # ── the pictures ────────────────────────────────────────────────────────
     # The cross-section, the |B| map, the loss-density map, the temperature map,
-    # the stress map and the Campbell diagram — a report "с картинками" whose
+    # the stress map and the Campbell diagram — a report "with pictures" whose
     # images are captions is not the thing that was asked for.
     assert _images(blob) >= 5, f"only {_images(blob)} images embedded"
     assert "Field maps from the stored run" in txt
     assert "not stored on this run" not in txt
 
-    # NO sources block (user 2026-09-10: "это тоже выкинь, никого не интересует,
-    # где ты всё решал").  A foreign answer is dropped from the report now
+    # NO sources block (user 2026-09-10: "drop this one too, nobody cares
+    # where you solved it all").  A foreign answer is dropped from the report now
     # instead of being listed and flagged, so the block had become one line per
     # store all saying "this machine".  What replaced it on the cover is the
     # pack the voltage limit comes from and a glossary of the symbols.
@@ -499,8 +499,8 @@ def test_b2_a_foreign_result_is_dropped_not_flagged(dies, solved,
     named risk is better than a hidden one.  It is not: the user read a
     rotordynamics section quoting a critical speed of 15,534 rpm and had to
     work out from a footnote that it belonged to another motor (2026-09-10,
-    "машина должна быть одна и та же; если нет для неё решения, вообще этот
-    раздел не вносится в отчёт").  A flag is not a defence — the number is
+    "it must be the same machine; if there's no solution for it, this
+    section isn't added to the report at all").  A flag is not a defence — the number is
     still on the page, in a table, next to this machine's.  So the entry is
     removed and the section reports what is true here: not solved.
     """
@@ -555,8 +555,8 @@ def test_c2_route_refuses_a_duty_the_configuration_does_not_have(client, dies):
 def test_c5_the_pictures_duty_is_the_users_pick(client, dies, solved, monkeypatch):
     """`?pictures=<duty>` chooses which duty's stored maps the report draws.
 
-    User 2026-09-11: *"нужно ещё сделать выбор, из какого режима мы публикуем
-    картинки в отчёте"*.  A duty the configuration does not have is a 404 that
+    User 2026-09-11: *"we also need a choice of which mode we publish the
+    pictures from into the report"*.  A duty the configuration does not have is a 404 that
     names it; a duty it has reaches the gathering pass verbatim.
     """
     from motor_ai_sim import report as R
@@ -685,8 +685,8 @@ def test_d3_a_run_from_before_this_change_still_gets_a_number():
 # ---------------------------------------------------------------------------
 # (e) the two documents' division of labour  (2026-09-09)
 # ---------------------------------------------------------------------------
-# User, verbatim: *"в datasheet ставить только таблицы без картинок; а report
-# всё нужно делать с картинками и гораздо подробнее всё расписывать"*.  The
+# User, verbatim: *"put only tables without pictures in the datasheet; the report
+# should have everything with pictures and spell everything out in much more detail"*.  The
 # split is the deliverable, so it is pinned from both sides in one place: the
 # spreadsheet must contain no embedded image at all, and the report must still
 # contain several.
@@ -723,8 +723,8 @@ def test_e_the_datasheet_has_no_pictures_at_all(dies):
     ws = wb["Motor card"]
     labels = {str(cell.value) for cell in ws["A"] if cell.value}
     assert "Efficiency (%)" in labels and "Torque (N·m)" in labels
-    # The geometry listing is GONE with them (user 2026-09-09: "убери вкладку
-    # Dimensions, они не нужны") — a datasheet quotes what the machine DOES;
+    # The geometry listing is GONE with them (user 2026-09-09: "remove the
+    # Dimensions tab, they're not needed") — a datasheet quotes what the machine DOES;
     # its dimensions are the drawing's business, and the drawing is in the PDF.
     assert "Dimensions" not in wb.sheetnames
     assert "Cross-section" not in wb.sheetnames
@@ -739,7 +739,7 @@ def test_e2_the_report_still_has_pictures(dies, solved, as_this_machine):
 def test_e3_the_vector_potential_is_one_of_those_pictures():
     """A_z is drawn, with flux lines over it, from the run's own nodal array.
 
-    User 2026-09-10: *"в отчёт добавь ещё график A_z"*.  Two things are pinned
+    User 2026-09-10: *"add an A_z chart to the report too"*.  Two things are pinned
     here — that the figure list offers it at all, and that a field carrying
     ``a_z_per_node`` actually renders instead of falling through to "not
     stored": the array is per NODE while every other EM map is per element, and
@@ -765,8 +765,8 @@ def test_e3_the_vector_potential_is_one_of_those_pictures():
 def test_e6_the_insulation_is_always_on_the_page():
     """What the winding is insulated with, said out loud.
 
-    User 2026-09-11: *"не нашёл ни одного слова по поводу изоляции — нужно это
-    обязательно написать и в материалах отметить"*.  The two rows used to be
+    User 2026-09-11: *"I couldn't find a single word about the insulation — this
+    absolutely must be written and noted in the materials"*.  The two rows used to be
     dropped whenever nothing was assigned, which is most machines, while the
     winding's whole temperature limit rests on them.
     """
@@ -796,7 +796,7 @@ def test_e6_the_insulation_is_always_on_the_page():
 def test_e7_the_demag_map_colours_magnets_only():
     """Conductors are not magnets, and must not be painted on the Br scale.
 
-    User 2026-09-11: *"зачем ты здесь красным нарисовал катушки"*.  Magnet tags
+    User 2026-09-11: *"why did you draw the coils red here"*.  Magnet tags
     start at DOM_MAG_BASE and coil tags at DOM_COIL_BASE, so an unbounded
     `tags >= DOM_MAG_BASE` swept every winding into the magnet mask — and a
     winding's demagnetisation coefficient is 1.0, so the slots came out at the
@@ -830,7 +830,7 @@ def test_e4_retention_is_judged_on_the_joint_that_retains():
     13.2 MPa; sleeve-rotor open 57.3 % with the solve's own ``lift_off`` flag
     set; magnet-rotor open 45 %.  The report took the WORST of the three and
     called the retention a red failure.  The user, who builds these rotors:
-    *"нет никакого отслоения бандажа"* — and the numbers agree with them.
+    *"there is no sleeve delamination at all"* — and the numbers agree with them.
     """
     from motor_ai_sim import report as R
 
@@ -867,8 +867,8 @@ def test_e4_retention_is_judged_on_the_joint_that_retains():
 def test_e5_the_mode_gallery_draws_a_3_by_4_grid(tmp_path, monkeypatch):
     """Twelve mode shapes → one picture, and the store round-trips them.
 
-    User 2026-09-11: *"для модального анализа сделай таблицу из мелких картинок
-    с 12 частотами размером 3 строки и 4 столбца"*.  A ring of 24 nodes with
+    User 2026-09-11: *"for the modal analysis make a table of small pictures
+    with 12 frequencies, sized 3 rows by 4 columns"*.  A ring of 24 nodes with
     two bending shapes is enough to exercise the packing (float16), the loading
     and the drawing; the grid size is pinned by the constants the caption
     quotes.
@@ -1159,8 +1159,8 @@ def test_g2_the_loaded_duty_owns_the_machine_level_results(two_duties, store,
 # ---------------------------------------------------------------------------
 # (h) the warnings engine  (2026-09-09)
 # ---------------------------------------------------------------------------
-# User: *"нужно делать предупреждения, если что-то близко к пределам, и
-# предложения, как этого избежать"*.
+# User: *"we need to raise warnings if something is close to the limits, and
+# suggestions on how to avoid it"*.
 #
 # ``report.duty_warnings`` is a pure function of one flat dict so that exactly
 # this can be checked: every rule at both sides of its own threshold, on inputs
@@ -1176,7 +1176,7 @@ def _fires(ctx, name):
 
     Since 2026-09-10 a check that passes still returns a row — a green one, so
     the report can print "measured and inside" instead of silence (user:
-    "зелёным норма, на зелёные не надо писать советов").  "Fired" here keeps
+    "green means normal, no need to write advice for green ones").  "Fired" here keeps
     its old meaning: red or amber.  `_passes` below is the other half.
     """
     from motor_ai_sim.report import duty_warnings
@@ -1297,8 +1297,8 @@ class TestWarningRules:
                       "current_density")["level"] == "red"
 
     def test_a_ceramic_ground_wall_raises_the_jacket_limit(self):
-        """User 2026-09-14: "до 20 A/mm² с органической изоляцией и до 25 A/mm²
-        с керамической".
+        """User 2026-09-14: "up to 20 A/mm² with organic insulation and up to 25 A/mm²
+        with ceramic".
 
         The deciding card is the SLOT insulation — the ground wall the slot's
         heat crosses and the part that ages.  The L155's build (Al2O3 liner,
@@ -1577,7 +1577,7 @@ def test_h_the_limits_come_off_the_machines_own_cards():
     assert _cold_br_factor("") == (1.0, "")
 
     # The project's own build standard, not the IEC ladder's H (user
-    # 2026-09-11: "у нас везде минимум H — 200 °C").
+    # 2026-09-11: "for us the minimum everywhere is H — 200 °C").
     from motor_ai_sim.report import PROJECT_INSULATION_C
     lim, note = _insulation_limit({})
     assert lim == PROJECT_INSULATION_C == 200.0
@@ -1720,8 +1720,8 @@ def test_h2_the_report_prints_the_warnings_and_their_remedies(two_duties, store)
 # ---------------------------------------------------------------------------
 # (i) the Word document  (2026-09-09)
 # ---------------------------------------------------------------------------
-# User, twice in one day: *"репорт лучше выдавать в формате doc"*, then *"выводи
-# всё-таки в doc формате"*.  He EDITS the report before forwarding it to a
+# User, twice in one day: *"better output the report in doc format"*, then *"output
+# it in doc format after all"*.  He EDITS the report before forwarding it to a
 # client and Word exports its own PDF at the end, so .docx is the default and a
 # PDF is what you ask for by name.
 #
@@ -1776,18 +1776,18 @@ def test_i_the_docx_is_the_same_document_in_word(dies, solved, as_this_machine):
 
     # ── the pictures ────────────────────────────────────────────────────────
     # The cross-section, |B|, the loss density, the temperature map, the stress
-    # map and the Campbell diagram — the report the user asked for is "с
-    # картинками", and a caption is not a picture.
+    # map and the Campbell diagram — the report the user asked for is "with
+    # pictures", and a caption is not a picture.
     assert len(doc.inline_shapes) >= 3, (
         f"only {len(doc.inline_shapes)} pictures embedded")
     # …each one followed by its own caption, in italic 9.5 pt (raised from 8.5
     # on 2026-09-10 with every other table and caption in the document — user:
-    # "увеличь немного шрифт во всех таблицах, очень уж мелко смотрится").
+    # "increase the font a bit in all the tables, it looks way too small").
     caps = [p for p in doc.paragraphs if p.text.startswith("Fig. ")]
     assert caps, "no figure captions"
     from motor_ai_sim import report_docx as _RD
-    # captions are 9.5 pt scaled by TEXT_SCALE (user 2026-09-11: "увеличь
-    # весь шрифт, не только в таблицах, пропорционально"); Word keeps
+    # captions are 9.5 pt scaled by TEXT_SCALE (user 2026-09-11: "increase
+    # the whole font, not just in the tables, proportionally"); Word keeps
     # half-points, so compare at that resolution
     _want = round(9.5 * _RD.TEXT_SCALE * 2) / 2
     for p in caps:
@@ -1800,8 +1800,8 @@ def test_i_the_docx_is_the_same_document_in_word(dies, solved, as_this_machine):
                for t in doc.tables), "no warnings table with a remedy column"
     assert "The rules, and where each limit comes from" in _dx_headings(doc)
     # The "Solved at" and "Where each column came from" tables are GONE since
-    # 2026-09-10 (user: "это тоже выкинь, никого не интересует, где ты всё
-    # решал").  A foreign answer is dropped from the report now instead of being
+    # 2026-09-10 (user: "drop this one too, nobody cares where you solved it
+    # all").  A foreign answer is dropped from the report now instead of being
     # flagged in it, so both tables had become one word repeated per row.
     assert "Where each column came from" not in _dx_headings(doc)
     assert "Solved at" not in _dx_headings(doc)
@@ -3749,8 +3749,8 @@ class TestAuditV3:
 
 # ---------------------------------------------------------------------------
 # Every per-duty figure is a PAIR: rated on the left, the other duty on the
-# right (user 2026-09-14: "добавим ещё картинки из peak — слева картинка из
-# rated, справа из peak").
+# right (user 2026-09-14: "let's also add pictures from peak — the rated
+# picture on the left, the peak one on the right").
 # ---------------------------------------------------------------------------
 
 
@@ -3820,8 +3820,8 @@ class TestTheFiguresAreDrawnForBothDuties:
         assert cold != hot and cold[1] < hot[0]
 
     def test_each_side_is_drawn_on_its_own_standalone_scale(self, monkeypatch):
-        """User 2026-09-14: *"не надо общей шкалы, шкалы как и рисунки должны
-        быть отдельные; но магниты на первом рисунке должны быть красными"*.
+        """User 2026-09-14: *"no need for a common scale, the scales like the
+        pictures should be separate; but the magnets in the first picture should be red"*.
 
         On a shared bar the rated temperature map (86–109 °C beside a peak's
         86–169) came out as one flat teal shape and its hottest solid, the
@@ -3934,8 +3934,8 @@ class TestTheFiguresAreDrawnForBothDuties:
         assert R.em_map_numbers("az", {}, {}) == ""
 
     def test_a_paired_b_map_caption_names_its_own_cap(self):
-        """No "one scale" anywhere since the user's 2026-09-14 rule (*"не надо
-        общей шкалы"*): each side carries its own cap and its own raw maximum,
+        """No "one scale" anywhere since the user's 2026-09-14 rule (*"no need
+        for a common scale"*): each side carries its own cap and its own raw maximum,
         and the caption is ONE sentence (CS-4)."""
         from motor_ai_sim import report as R
 
@@ -5855,8 +5855,8 @@ class TestBl4NoRowMixesTwoRuns:
 # ---------------------------------------------------------------------------
 # (p) the voltage chart on a PWM duty  (2026-09-15)
 # ---------------------------------------------------------------------------
-# User: *"он же не реальное напряжение показывает — там же должны быть сплошные
-# импульсы с разной скважностью"*.  The line-voltage chart drew the winding
+# User: *"it isn't showing the real voltage — there should be solid pulses
+# with varying duty ratio"*.  The line-voltage chart drew the winding
 # voltage reconstructed from the FIELD — a smooth fundamental with whatever
 # carrier ripple the FEM's steps could resolve — under a "PWM 24 kHz" headline.
 # What the inverter actually applies is a three-level pulse train, and that is
@@ -7684,7 +7684,7 @@ class TestSecondButtonAuditOf20260916:
 class TestTimeToTheLimit:
     """HOW LONG THE POINT MAY BE HELD (owner 2026-09-17).
 
-    The coupled loop now answers "и сколько он так проработает?" whenever its
+    The coupled loop now answers "and how long can it run like that?" whenever its
     converged state is past a limit.  The report's job is to carry that number
     to the two places a reader looks — one row of the coupled table and one
     CLAUSE on the §8 row of the part it is about — and, on a point that is

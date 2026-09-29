@@ -278,8 +278,13 @@ def record_history(node: str, sample: Dict[str, Any], ts: Optional[float] = None
             con.close()
 
 
+#: range label -> lookback seconds (used by both node history and live load).
+RANGE_LOOKBACK_S = {"15m": 900, "1h": 3600, "24h": FINE_KEEP_S, "7d": COARSE_KEEP_S}
+
+
 def history(node: str, rng: str = "24h") -> List[Dict[str, float]]:
-    table, keep = ("coarse", COARSE_KEEP_S) if rng == "7d" else ("fine", FINE_KEEP_S)
+    table = "coarse" if rng == "7d" else "fine"
+    keep = RANGE_LOOKBACK_S.get(rng, FINE_KEEP_S)
     with _LOCK:
         con = _db()
         try:

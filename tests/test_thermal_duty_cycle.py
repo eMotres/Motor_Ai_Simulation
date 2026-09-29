@@ -608,9 +608,9 @@ def test_the_physical_links_are_winding_conservative_and_magnet_honest():
 # ---------------------------------------------------------------------------
 # (b3) THE TOOL FINDS THE REGIME — user 2026-09-15
 # ---------------------------------------------------------------------------
-# «с помощью Duty cycle мы можем подобрать такой режим работы мотора, чтобы он
-# смог уложиться в температурные лимиты — то есть мы сами находим это время /
-# S3 ED, при котором всё нормально».  The duty cycle does not grade a duty ratio
+# «with the Duty cycle we can pick a motor operating regime so it can fit
+# within the temperature limits — that is, we ourselves find that time /
+# S3 ED where everything is fine».  The duty cycle does not grade a duty ratio
 # somebody typed; it ANSWERS with the one this machine holds.  On the same L13
 # basis as (b2) — the degenerate 40 °C calibration map with the physical links —
 # those answers are: 21.6 % of a 60 s cycle, one pull of 26.6 s from cold and of

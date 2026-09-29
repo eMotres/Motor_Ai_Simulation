@@ -359,8 +359,8 @@ def test_an_uncatalogued_sleeve_falls_back_to_documented_defaults_and_says_so():
 # ---------------------------------------------------------------------------
 # (e) the shaft that sticks out of the housing
 # ---------------------------------------------------------------------------
-# User 2026-09-07: *"торцы и лобовые части — только для вала, всё остальное
-# вращается внутри мотора"*.  The rotor's end faces and the end windings are in a
+# User 2026-09-07: *"end faces and end windings — only for the shaft, everything
+# else rotates inside the motor"*.  The rotor's end faces and the end windings are in a
 # CLOSED housing and have nowhere else to send their heat; the shaft comes out
 # through the bearings and its exposed length does.  Two functions: the film on a
 # cylinder spinning in still air, and the fin conductance that follows.
@@ -775,8 +775,8 @@ def test_the_touch_limit_is_the_fixed_70_c():
 # (h) the axial faces — the end turns and the core ends of an open joint
 # ---------------------------------------------------------------------------
 # User 2026-09-14: the 24 coils stand PROUD of the core on both sides and the
-# core's end faces are largely uncovered.  That is the 2026-09-07 ruling (*"торцы
-# и лобовые части — только для вала"*) not holding for this machine, so these
+# core's end faces are largely uncovered.  That is the 2026-09-07 ruling (*"end
+# faces and end windings — only for the shaft"*) not holding for this machine, so these
 # faces need the same natural-convection + radiation pair the housing gets — as
 # lumped conductances, because a 2-D cross-section has no facets out along the
 # axis.

@@ -15,19 +15,50 @@ at once.
 `mesher._build_sliding_band_meshes` with the saved-duty defaults
 (`iron_template=True`, `geo_mesh=True`):
 
-| `triangle` installed | Build |
-|---|---|
-| yes | geometry-driven CDT mesher (`geo_mesh_halves`), exactly as before |
-| no | gmsh build, one log line: "optional 'triangle' not installed — geometry-driven mesh unavailable, using the gmsh build" |
+| `triangle` installed | `MOTOR_AI_SIM_GEO_CDT` | Build |
+|---|---|---|
+| yes | `auto` (default) or `triangle` | geometry-driven mesher (`geo_mesh_halves`), Triangle CDT, exactly as before |
+| yes or no | `gmsh` | geometry-driven mesher, gmsh CDT backend (since S2) |
+| no | `auto` | geometry-driven mesher, gmsh CDT backend (since S2; S1 fell back to the plain gmsh build) |
 
 `geo_mesh=False` keeps the tensor iron template (`iron_template.py`, no
 Triangle). The 2-D view uses `mapbox-earcut`; its fallback
 (`earcut_fallback.py`) uses Triangle when installed, and otherwise shapely's
 (GEOS) constrained Delaunay.
 
-## Features only the Triangle mesher has (from the code)
+## S2 as built (2026-09-29): a gmsh backend for the geometry mesher
 
-These are what stage S2 must port or replace on the gmsh path:
+The whole geometry-driven mesher had exactly ONE Triangle call:
+`geo_mesh._triangulate(V, S, ...)`, the quality CDT of a planar straight-line
+graph that `geo_mesh.py` builds itself (resampled slip-grid arcs, 1 um snap,
+clone-identical cuts, densified outlines, skin/wire patches as holes).
+`geo_mesh_gmsh.triangulate_gmsh` replaces that one call; everything else is
+shared, so every feature below exists on both backends by construction:
+
+| # | Feature | On the gmsh backend |
+|---|---|---|
+| 1, 2 | Shaft / sleeve skin layers | same structured patches (`_skin_patch`, `_sleeve_layers`), left as holes and stitched; the patch rims are domain boundary, never split |
+| 3 | Per-part sizes | same region seeds; each face is capped by a gmsh `Constant` field at its region's target edge (last seed in a face wins, the `_seeds` order) |
+| 4 | Wire cell `coil_rel` | same wire patches / lattice (free points are embedded) |
+| 5 | Sliver / cusp guards | `_blunt_cusps` runs before either backend; gmsh has no refinement cascade; a rotor bulk over the aspect gate gets the same guarded smoothing |
+| 6 | Rotation invariance | same cell tiling; gmsh runs single-threaded, repeat builds are bit-identical; domain-boundary segments (cut rays) are frozen (transfinite 2 nodes), so the cuts stay clone-identical |
+| 7 | Exact tagging | same `_tag_stator` / `_tag_rotor` on the real polygons |
+| 8 | Moving-band rings | R1/R2 are domain boundary, frozen on the slip grid; a shared bug that moved the cell-seam node off R2 (1002 of 1008 nodes, both backends) is fixed |
+| 9 | Mesh budget | predicted count at the target sizes is checked before meshing, the actual count after; both raise `MeshBudgetExceeded` |
+
+Sizing on gmsh follows the physical scales the PSLG producer resolved: every
+input segment carries h = min(its length, 2.5 x its local feature size); the
+segments are grouped in x1.5 classes, each a `Distance` field feeding
+h0 + 2.0 x distance (`MathEval`); the background mesh is the `Min` of those and
+the region caps. Interior interfaces may be subdivided (as Triangle's `-Y`
+allowed); domain boundaries never. Default meshes: ~1.7x Triangle's element
+count on the 40 mm preset at 1 mm, aspect max 11.6 (Triangle 9.0).
+Tests: `tests/test_geo_mesh_gmsh.py` (and the skin and shaft-region suites,
+which now run on whichever backend is active and are re-run forced onto gmsh).
+
+## Features only the Triangle mesher had (from the code, before S2)
+
+These were what stage S2 had to port or replace on the gmsh path:
 
 1. **Shaft skin-depth layers** (`_shaft_skin_plan`, `_skin_patch`,
    `_stitch_skin_patch`, `_iron_grade_points`; sized by

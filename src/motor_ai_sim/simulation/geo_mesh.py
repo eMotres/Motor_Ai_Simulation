@@ -1290,6 +1290,64 @@ def _blunt_cusps(V, S, min_deg: float = 3.0, max_drop: int = 12):
     return V, S, dropped
 
 
+def _triangulate_gmsh(A: Dict, area: float, regions, rotor_bridge: bool):
+    """The gmsh CDT backend (geo_mesh_gmsh) on the already cusp-guarded PSLG.
+
+    Same inputs and output contract as the Triangle branch below.  On the
+    rotor cell the Triangle path accepted a capped q-mesh or fell back to an
+    area-only mesh + guarded smoothing; gmsh has no refinement cascade to cap,
+    so the mesh is taken as built and only a sliver-ridden bulk (p99.5 aspect
+    over the rotor bulk gate) gets the same guarded interior smoothing."""
+    from motor_ai_sim.simulation.geo_mesh_gmsh import triangulate_gmsh
+    V = A["vertices"]
+    S = A["segments"]
+    Vo, To = triangulate_gmsh(V, S, area, hole_pts=A.get("holes"),
+                              regions=regions if regions is not None
+                              and len(regions) else None,
+                              budget=_TRI_BUDGET["v"])
+    if rotor_bridge and len(To):
+        _ar, _ = _aspect_arr(Vo, To)
+        _p995 = float(np.percentile(_ar, 99.5))
+        log.info("rotor gmsh: %d tris ARmax=%.0f p99.5=%.1f", len(To),
+                 float(_ar.max()), _p995)
+        if _p995 > _ROTOR_AR_BULK:
+            return _repair_slivers(Vo, To, n_fixed=len(V), in_V=V, in_S=S,
+                                   n_iter=60)
+    return Vo, To
+
+
+# ── CDT backend selection ────────────────────────────────────────────────────
+# MOTOR_AI_SIM_GEO_CDT = auto (default) | triangle | gmsh.  auto keeps Triangle
+# wherever the optional package is installed (every number as before) and uses
+# the gmsh backend where it is not.  `set_cdt_backend` overrides per process
+# (tests, the mesher comparison).  Every other step of the geometry mesher is
+# shared, so switching the backend changes ONLY the triangulation of the PSLG.
+_CDT_OVERRIDE: Dict[str, Optional[str]] = {"v": None}
+
+
+def set_cdt_backend(name: Optional[str]) -> None:
+    if name not in (None, "auto", "triangle", "gmsh"):
+        raise ValueError("CDT backend must be auto, triangle or gmsh, not %r" % name)
+    _CDT_OVERRIDE["v"] = None if name in (None, "auto") else name
+
+
+def cdt_backend() -> str:
+    """'triangle' or 'gmsh' — the backend the next triangulation uses."""
+    want = _CDT_OVERRIDE["v"] or (os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto")
+                                  .strip().lower() or "auto")
+    if want == "gmsh":
+        return "gmsh"
+    if want == "triangle":
+        if not HAVE_TRIANGLE:
+            raise RuntimeError("MOTOR_AI_SIM_GEO_CDT=triangle but the optional "
+                               "'triangle' package is not installed")
+        return "triangle"
+    if want != "auto":
+        raise ValueError("MOTOR_AI_SIM_GEO_CDT must be auto, triangle or gmsh, "
+                         "not %r" % want)
+    return "triangle" if HAVE_TRIANGLE else "gmsh"
+
+
 def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
                  regions=None, hole_pts=None, no_bnd_steiner: bool = False,
                  rotor_bridge: bool = False, extra_holes=None):
@@ -1305,7 +1363,6 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
     pockets) is coarsened to its own size.  Every region MUST be seeded (the
     'Aa' flags impose no global cap), so callers derive the seeds from the real
     polygons.  Without regions, a single global max-area is used."""
-    import triangle as _tri
     A = dict(vertices=V, segments=S)
     if hole_pts is not None:
         A["holes"] = np.asarray(hole_pts, float)
@@ -1353,6 +1410,9 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
                  "" if _nd else "; nothing droppable, refining with -YY")
         if not _nd:
             _Y = "YY"
+    if cdt_backend() == "gmsh":
+        return _triangulate_gmsh(A, area, regions, rotor_bridge)
+    import triangle as _tri
     if regions is not None and len(regions):
         A["regions"] = np.asarray(regions, float)
         _tail = "Aa"                          # per-region areas from column 4
@@ -2236,7 +2296,7 @@ def _graded_radii(segs):
     return np.array(sorted(set(np.round(out, 4))))
 
 
-def _symmetrize_cuts(V, S, span, tol_r=0.06):
+def _symmetrize_cuts(V, S, span, tol_r=0.06, pinned_r=()):
     """Force the two radial cut rays (θ=0 and θ=span) to carry an IDENTICAL
     node set — same radii, same count — so the sector anti-periodic pairing
     welds by exact radius.
@@ -2273,14 +2333,24 @@ def _symmetrize_cuts(V, S, span, tol_r=0.06):
         return V, S
     # merged, clustered radius set (one representative per cluster ≤ tol_r wide)
     allr = np.sort(np.concatenate([r[on0], r[onS]]))
-    reps, cur = [], [allr[0]]
-    for rr in allr[1:]:
-        if rr - cur[0] <= tol_r:
-            cur.append(rr)
-        else:
-            reps.append(float(np.mean(cur))); cur = [rr]
-    reps.append(float(np.mean(cur)))
-    R = np.array(reps)
+    # PINNED radii (the moving-band ring R1/R2): a cut node on such a ring must
+    # stay ON it — the macro couples the ring node by node.  Clustering it with
+    # a neighbour ≤ tol_r away (the bore 0.06 mm off on a 0.2 mm gap) moved the
+    # seam node of R2 off the ring (1002 of 1008 grid nodes left).
+    pins = sorted(float(x) for x in pinned_r if x and x > 0)
+    if pins:
+        near = np.array([min(abs(x - p) for p in pins) <= 2e-3 for x in allr])
+        allr = allr[~near]
+    reps = list(pins)
+    if allr.size:
+        cur = [allr[0]]
+        for rr in allr[1:]:
+            if rr - cur[0] <= tol_r:
+                cur.append(rr)
+            else:
+                reps.append(float(np.mean(cur))); cur = [rr]
+        reps.append(float(np.mean(cur)))
+    R = np.array(sorted(reps))
     set0 = set(on0.tolist()); setS = set(onS.tolist())
     new_segs = []
     for theta, idxs in ((0.0, on0), (span, onS)):
@@ -2391,7 +2461,9 @@ def _stator_sector_impl(polys, r_bore, r_out_iron, r_outer, n_slip, span,
         add(_grid_arc(r_outer, n_out, span))
     add(_cut_pts(0.0, rk)); add(_cut_pts(span, rk))     # identical {r_k}
     V, S = _build_pslg(lines)
-    V, S = _symmetrize_cuts(V, S, span)                 # clone-identical seam
+    # clone-identical seam; the moving-band ring R2 stays exact
+    V, S = _symmetrize_cuts(V, S, span, pinned_r=(
+        (r2_band,) if 0.0 < r2_band < r_bore - 1e-6 else ()))
     # wire lattices carry NO segments, so the cut symmetrisation above never
     # sees them and -Y still freezes exactly the real boundary
     V = _add_free_points(V, _c_pts)
@@ -2559,7 +2631,9 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         _patch_r = _skin_patch(_sk["radii"], _nth, span, False)
     add(_cut_pts(0.0, rk_all)); add(_cut_pts(span, rk_all))
     V, S = _build_pslg(lines)
-    V, S = _symmetrize_cuts(V, S, span)                 # clone-identical seam
+    # clone-identical seam; the moving-band ring R1 stays exact
+    V, S = _symmetrize_cuts(V, S, span, pinned_r=(
+        (r1_band,) if r1_band > r_od + 1e-6 else ()))
     if _sk is not None and _sk["iron_grade"]:
         # grade the iron outward from the patch (free points, no segments:
         # the cut symmetrisation above never sees them, -Y is unaffected)
@@ -2887,9 +2961,17 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
     # zero-area slivers (defeatured-iron vs magnet-outline chains) crash the
     # FEM assembly — collapse them, protecting the slip/shaft grid rings that
     # the belt welds BY node identity.
-    Vs, Ts = _collapse_slivers(Vs, Ts, keep_r=(r_bore,))
+    # The moving-band rings R1/R2 are the halves' gap-facing boundary when the
+    # harmonic macro owns the gap: the macro couples them node by node on the
+    # uniform slip grid, so they are protected like the bore/OD rings (without
+    # this the cell-seam node of R2 was collapsed into the radial cut chain —
+    # 1002 of 1008 grid nodes, on Triangle and gmsh alike).
+    Vs, Ts = _collapse_slivers(Vs, Ts, keep_r=(r_bore,)
+                               + ((float(r2_band),) if 0.0 < r2_band < r_bore - 1e-6
+                                  else ()))
     _r_bore = _shaft_bore_r(polys, r_sh)
-    _keep_r = [r_od, r_sh] + ([_r_bore] if _r_bore > 0.0 else [])         + ([r_sleeve_in] if r_sleeve_in > 0.0 else [])
+    _keep_r = [r_od, r_sh] + ([_r_bore] if _r_bore > 0.0 else [])         + ([r_sleeve_in] if r_sleeve_in > 0.0 else []) \
+        + ([float(r1_band)] if r1_band > r_od + 1e-6 else [])
     Vr, Tr = _collapse_slivers(Vr, Tr, keep_r=tuple(_keep_r))
     Vs, Ts = _prune(Vs, Ts)
     Vr, Tr = _prune(Vr, Tr)

@@ -58,7 +58,7 @@ def accounts(tmp_path, monkeypatch):
 
 
 def _card_yaml(devdir: Path) -> str:
-    doc = yaml.safe_load((devdir / "WCMS900B170E53.yaml").read_text(encoding="utf-8"))
+    doc = yaml.safe_load((devdir / "IMCQ120R004M2H.yaml").read_text(encoding="utf-8"))
     doc["part"] = "TESTPART-1"
     return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
 
@@ -109,7 +109,7 @@ def test_everybody_reads_the_catalogue(who, devdir, accounts):
     assert one.json()["body"]["C_kn"] == 1.33
     assert one.json()["prov"]["C_kn"]["verify"] is True
     dev = client.get("/api/catalog/cards/device", headers=h).json()["cards"]
-    assert any(c["id"] == "WCMS900B170E53" for c in dev)
+    assert any(c["id"] == "IMCQ120R004M2H" for c in dev)
 
 
 def test_unknown_kind_and_card_are_404(devdir):
@@ -149,5 +149,5 @@ def test_used_by_names_the_machines(tmp_path, monkeypatch, devdir):
                    params={"id": "IMCQ120R004M2H"}).json()["machines"]
     assert d == [{"die": "DIE A", "config": "L40", "count": 1, "where": "controller"}]
     none = client.get("/api/catalog/cards/device/used_by",
-                      params={"id": "WCMS900B170E53"}).json()["machines"]
+                      params={"id": "IQE050N08NM5SC"}).json()["machines"]
     assert none == []

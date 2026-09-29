@@ -563,7 +563,7 @@ function buildIndex(p: FieldProbeData | null | undefined) {
 /* ── the colour bar ───────────────────────────────────────────────────────── */
 
 /**
- * Ansys's legend, and for the same reason: a BANDED plot's legend has to show
+ * commercial FEM's legend, and for the same reason: a BANDED plot's legend has to show
  * the band EDGES, because "which band is this colour" is the only question the
  * picture asks.  It reads its whole range off the SAME FieldScale the fill bands
  * with, so the two cannot disagree — for every output, in every tab.

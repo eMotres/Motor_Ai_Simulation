@@ -439,7 +439,7 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
       P_mech_W: Pmech,
       // v_ll_peak_v was RECORDED from a real run, so it IS the line peak.
       // KV = rpm / V_line_PEAK — the max/max convention of the Simulation tile
-      // and the user's Ansys table (2026-08-04); dividing by rms read ~√2
+      // and the user's commercial FEM table (2026-08-04); dividing by rms read ~√2
       // (+41 %) high.  The /√2 rms values below are sinusoid approximations —
       // the duty record keeps peaks only.
       V_line_peak_V: Vlpk, V_line_rms_V: Vlpk / Math.SQRT2,

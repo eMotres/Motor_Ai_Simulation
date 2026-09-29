@@ -5,9 +5,9 @@
 (модель железа), `src/motor_ai_sim/core_loss_surface.py` (интерполяция
 измеренной поверхности P(B, f)), `src/motor_ai_sim/materials.py` (фит).*
 
-Все потери считаются из **реальных данных назначенных материалов**
-(`config/materials_library.yaml`, извлечено из Ansys PersonalLib):
-измеренные кривые потерь P(B, f), BH-кривые, проводимости σ.
+All losses are computed from the **real data of the assigned materials**
+(`config/materials_library.yaml`, transcribed from the owner's personal material
+library): measured loss curves P(B, f), BH curves, conductivities σ.
 
 ---
 
@@ -101,13 +101,13 @@ ln P = (1 − s)·ln P_поверхн + s·ln P_бертотти,   s = 3u² −
 P = Σ_осям Σ_{m≥1} P_изм(B_m / k_f, m·f_эл/n_periods)
 ```
 
-**Это допущение — суперпозиция потерь по гармоникам.** Стандартное (та же
-опция гармонических потерь есть в Ansys Maxwell), несовершенное и с известным
-направлением ошибки: гистерезис — процесс с памятью, поэтому потери суммы
-гармоник не равны сумме их потерь. Но это строго лучше единственной
-«эквивалентной» амплитуды, которая слотовой пульсации не видит вовсе.
-Классическая (вихревая) часть при этом складывается **точно** (Парсеваль), так
-что она совпадает с интегралом ⟨(dB/dt)²⟩ по временно́му ряду.
+**This is an assumption: superposition of losses over harmonics.** It is the
+standard one (commercial FEM packages offer the same harmonic-loss option),
+imperfect, and its error has a known direction: hysteresis is a process with
+memory, so the loss of a sum of harmonics is not the sum of their losses. But it is strictly better than a single
+"equivalent" amplitude, which does not see the slot ripple at all.
+The classical (eddy) part adds up **exactly** (Parseval), so it matches the
+integral of ⟨(dB/dt)²⟩ over the time series.
 
 Что даёт суммирование по гармоникам против «только первой»:
 **+22.6 %** на 150 мм и **+21.6 %** на 40 мм. Разбиение по половинам говорит
@@ -240,7 +240,7 @@ P = Σ_осям Σ_{m≥1} P_изм(B_m / k_f, m·f_эл/n_periods)
 
 ### 1.5 Что осталось между расчётом и измерением (24s28p, 150 мм, 94 А, 4000 об/мин)
 
-Ansys заказчика: 186.9 Вт при их `$CoreLossCoff = 2` → **сырьё 93.4 Вт**.
+The comparison with an independent calculation is kept in the private data repository.
 Наш честный расчёт: **93.40 Вт** (было 74.72 на фите Бертотти, до того 67.9).
 Момент и напряжение не сдвинулись ни на цифру (31.0587 Н·м, 70.742 В) — это
 пост-обработка поля, а не другое поле.
@@ -256,10 +256,10 @@ Ansys заказчика: 186.9 Вт при их `$CoreLossCoff = 2` → **сы�
 Разбиение по половинам (150 мм, вся машина): статор 67.83 → 82.56 Вт,
 ротор 6.89 → 10.84 Вт.
 
-**Совпадение с 93.4 Вт — совпадение, а не валидация.** Ниже перечислены
-занижения, которые в модели ОСТАЛИСЬ, и множитель, который в неё не входит
-вообще; их сумма ненулевая, и то, что итог сел на цифру Ansys, ничего из этого
-не отменяет:
+**Agreement with the reference is a coincidence, not a validation.** Below are
+the under-estimates that REMAIN in the model and the factor that is not in it at
+all; their sum is non-zero, and the total landing on the reference figure does
+not cancel any of them:
 
 | источник | величина | статус |
 |---|---|---|
@@ -267,7 +267,7 @@ Ansys заказчика: 186.9 Вт при их `$CoreLossCoff = 2` → **сы�
 | вращательный локус | занижение | 19 % объёма (по весу потерь) с отношением полуосей > 0.5 — разложение по осям это не видит |
 | роторная сумма по гармоникам | **нижняя** оценка | окно захвата некратно зубцовому проходу; защита от leakage снимает рампу, сырая сумма даёт 17.1 Вт вместо 10.8 Вт на роторе |
 | выход за огибающую | ±0.9 % | ватты, посчитанные экстраполяцией Бертотти; чувствительность к ширине полосы сшивки |
-| производственная деградация (штамповка, стяжка, сварка) | 1.5–2× | **вне модели**: это и есть то, для чего у заказчика стоит `$CoreLossCoff = 2` |
+| manufacturing degradation (punching, clamping, welding) | 1.5–2× | **outside the model**: usually covered by a separate production factor |
 
 На 40-мм машине читать число надо осторожнее: её статор на 1517 Гц заходит
 за верх таблицы (1.48 Т на этой частоте), и **34.9 %** его ватт пришли из

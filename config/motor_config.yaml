@@ -208,7 +208,7 @@ geometry_schema:
     step: 1
     group: winding
     description: Parallel insulated strips across the wire WIDTH (transposed), like
-      splitting the bar in ANSYS. Cuts the width-direction eddy/proximity copper loss
+      splitting the bar in commercial FEM. Cuts the width-direction eddy/proximity copper loss
       by ~N^2 (strip width = wire_width/N, still capped at 2 skin depths). 1 = solid
       bar. Field and torque unchanged.
   slot_hs:

@@ -7,8 +7,8 @@ guard: each component is billed as
 
     (CAD cross-section) × (stack length) × (lamination k_f, cores only) × ρ(material)
 
-and the numbers below were verified component-by-component against the user's
-ANSYS model of the 150 mm 24s/28p (Motres_CIANO281_150), whose own active-mass
+and the numbers below were verified component-by-component against an
+independent reference model of the 150 mm 24s/28p, whose own active-mass
 expression is magnets + copper·res_add + stator iron + rotor holder, no shaft,
 no lamination factor, 7700 kg/m³ for every iron.
 
@@ -31,7 +31,7 @@ from motor_ai_sim.simulation.geometry_2d import params_from_config, merge_geo_ov
 MATS = {"stator_core": "B15AHV950M", "rotor_core": "B15AHV950M",
         "magnet": "F45SH_120C", "slot": "copper", "shaft": "Aluminium_6061"}
 
-#: 150 mm 24s/28p, 35 mm stack — the machine the ANSYS cross-check was run on.
+#: 150 mm 24s/28p, 35 mm stack — the machine the reference cross-check was run on.
 G150 = {
     "stator_diameter": 150, "slot_height": 14, "core_thickness": 4.2,
     "num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
@@ -135,7 +135,7 @@ def m40():
     ("cu",     0.5160),    # 1008 mm² measured copper × 35 mm × k_end 1.6373 × 8933
     ("mag",    0.725752),  # 2764.8 mm² of CAD magnet polygons (28 × 98.7 mm²)
     ("shaft",  0.0670),    # hollow 3 mm tube, 708.7 mm² — not a solid disc
-    ("active", 2.986049),  # iron + copper + magnets: the ANSYS basis
+    ("active", 2.986049),  # iron + copper + magnets: the reference basis
     ("total",  3.053019),  # active + shaft: the torque-per-mass divisor
 ])
 def test_150mm_component_masses(m150, part, kg):
@@ -216,15 +216,15 @@ def test_copper_is_the_measured_section_times_k_end(m150):
         m150["A_cu"] * 0.035 * m150["k_end"] * 8933.0, rel=1e-9)
 
 
-def test_k_end_matches_the_ansys_end_turn_form():
-    """k_end = (π·(tooth_w + wire_w)/2 + L)/L — the same half-loop the ANSYS model
-    uses for res_add (theirs measures the loop over the insulated coil width, so
+def test_k_end_matches_the_half_loop_end_turn_form():
+    """k_end = (π·(tooth_w + wire_w)/2 + L)/L — the same half-loop a reference model
+    uses for res_add (measured measures the loop over the insulated coil width, so
     it reads ~1 % higher; the physics is the same)."""
     p = params_from_config(geo_override=G150)
     k = end_winding_factor(p, G150)
     assert k == pytest.approx((math.pi * (9.2 + 5.0) * 1e-3 / 2 + 0.035) / 0.035)
-    ansys_res_add = (math.pi * (9.2 / 2 + 5.4 / 2) * 1e-3 + 0.035) / 0.035
-    assert k == pytest.approx(ansys_res_add, rel=0.02)
+    ref_res_add = (math.pi * (9.2 / 2 + 5.4 / 2) * 1e-3 + 0.035) / 0.035
+    assert k == pytest.approx(ref_res_add, rel=0.02)
 
 
 def test_parametric_fallback_is_the_same_machine():
@@ -243,24 +243,33 @@ def test_parametric_fallback_is_the_same_machine():
         A_cad["magnet"] + A_cad["rotor"], rel=0.06)
 
 
-def test_ansys_cross_check_150mm(m150):
-    """Rebuild the ANSYS expression on OUR sections — their densities (7700 for
-    every iron AND for the magnets), their res_add, and no lamination factor —
-    and it lands within 3 % of their 3.0975 kg.  What is left is geometry detail
-    (their magnet pockets / holder cut-outs), not a modelling difference.
+def test_reference_cross_check_150mm(m150):
+    """Rebuild the independent reference model's active-mass expression on OUR
+    sections (its densities, its res_add, no lamination factor) and compare to
+    its own figure.  The reference figure is private data: set
+    MOTOR_AI_SIM_PRIVATE_DATA to a checkout of the private data repository.
 
-    Our own active mass is LOWER than theirs by design: the lamination factor is
-    real steel that is not there, and F45SH is 7500 kg/m³, not 7700.
+    Our own active mass is LOWER than the reference by design: the lamination
+    factor is real steel that is not there, and F45SH is 7500 kg/m³, not 7700.
     """
-    L = 0.035
-    res_add = (math.pi * (9.2 / 2 + 5.4 / 2) * 1e-3 + L) / L
-    ansys_basis = L * (
-        m150["A_mag"] * 7700.0
-        + m150["A_cu"] * 8933.0 * res_add
-        + (m150["A_stator"] + m150["A_rotor"]) * 7700.0)
-    assert ansys_basis == pytest.approx(3.0975, rel=0.03)
+    import json
+    from motor_ai_sim.private_data import ENV_VAR, private_path
+    ref_file = private_path("reference", "masses_150mm_crosscheck.json")
+    if ref_file is None:
+        pytest.skip(f"reference cross-check data is private; set {ENV_VAR} "
+                    "to the private data checkout to run it")
+    ref = json.loads(ref_file.read_text(encoding="utf-8"))
+    L = ref["stack_m"]
+    rho_fe = ref["iron_density"]
+    res_add = (math.pi * (ref["tooth_width_mm"] / 2 + ref["coil_width_mm"] / 2)
+               * 1e-3 + L) / L
+    ref_basis = L * (
+        m150["A_mag"] * rho_fe
+        + m150["A_cu"] * ref["copper_density"] * res_add
+        + (m150["A_stator"] + m150["A_rotor"]) * rho_fe)
+    assert ref_basis == pytest.approx(ref["active_mass_kg"], rel=0.03)
     # and our number sits below it by the lamination + density difference only
-    assert 0.95 < m150["active"] / 3.0975 < 1.0
+    assert 0.95 < m150["active"] / ref["active_mass_kg"] < 1.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

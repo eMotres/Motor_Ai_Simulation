@@ -96,7 +96,7 @@ _SB_GEO_MESH = _os_sb.environ.get("SB_GEO_MESH", "0") == "1"
 _SB_GEO_SECTOR = _os_sb.environ.get("SB_GEO_SECTOR", "1") != "0"
 # Structured (concentric-ring) air gap: partition EACH half-gap (rotor OD->R1 and
 # R2->stator bore) into `gap_layers` thin annular rows bounded by uniform N-gon rings
-# on the slip angular grid -> the gap meshes as an ANSYS-style structured band
+# on the slip angular grid -> the gap meshes as a commercial-FEM-style structured band
 # (concentric circles + near-radial spokes) instead of free Delaunay triangles.  The
 # slip band R1..R2 is untouched.  EXPERIMENTAL (default OFF, env SB_STRUCTURED_GAP=1):
 # the dominant torque-ripple source is the tooth/slot half-mesh discretisation, NOT the

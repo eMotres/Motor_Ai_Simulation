@@ -247,7 +247,7 @@ export function mechanicalRowFromResult(
    *  otherwise, the part's own factor last. */
   /* THE safety factor: strength over the governing AVERAGED stress, which is
      the stress every table beside it prints (user 2026-09-10 — one number for
-     one part, the way ANSYS and Fusion report it).  `safety_factor` on the part
+     one part, the way commercial FEM and Fusion report it).  `safety_factor` on the part
      is the same number; the percentile and the element minimum are the
      fallbacks for a result solved before the convention changed. */
   const sf = (n: string): number | undefined => {

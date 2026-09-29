@@ -761,7 +761,7 @@ class DesignMetrics:
     # TOTAL = iron + copper + magnets + shaft.  It is what torque_per_mass and
     # power_per_mass divide by, unchanged, so every stored Compare point keeps
     # meaning the same thing.  ACTIVE drops the shaft (iron + copper + magnets)
-    # — the EM-active mass an ANSYS "active mass" expression quotes.
+    # — the EM-active mass a commercial FEM "active mass" expression quotes.
     mass_total_kg: float = 0.0
     mass_active_kg: float = 0.0
     B_gap_T: float = 0.0

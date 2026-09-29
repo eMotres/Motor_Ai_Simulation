@@ -15,21 +15,21 @@ const CARDS = [
     description: 'deep groove, contact seals', cols: { type: 'deep_groove', d: 55 } },
   { id: '71910 CE/HCP4A', kind: 'bearing', manufacturer: 'SKF', status: 'active',
     description: 'super-precision angular contact', cols: { type: 'angular_contact', d: 50 } },
-  { id: 'WCMS900B170E53', kind: 'device', manufacturer: 'YangZhou GuoYang', status: 'active',
+  { id: 'DEMO900B170', kind: 'device', manufacturer: 'Zeta Semi', status: 'active',
     description: '1700 V module', cols: { type: 'sic_mosfet', package: '62 mm module' } },
 ];
 
 test('search matches every word, case-insensitively, across id/maker/description/type', () => {
   assert.deepEqual(filterCards(CARDS, { q: 'skf angular' }).map((c) => c.id), ['71910 CE/HCP4A']);
-  assert.deepEqual(filterCards(CARDS, { q: '62 MM' }).map((c) => c.id), ['WCMS900B170E53']);
+  assert.deepEqual(filterCards(CARDS, { q: '62 MM' }).map((c) => c.id), ['DEMO900B170']);
   assert.equal(filterCards(CARDS, {}).length, 3);
 });
 
 test('facet filters combine', () => {
   assert.deepEqual(filterCards(CARDS, { manufacturer: 'SKF', status: 'validated' }).map((c) => c.id),
     ['61811-2RS1']);
-  assert.deepEqual(filterCards(CARDS, { type: 'sic_mosfet' }).map((c) => c.id), ['WCMS900B170E53']);
-  assert.deepEqual(facet(CARDS, 'manufacturer'), ['SKF', 'YangZhou GuoYang']);
+  assert.deepEqual(filterCards(CARDS, { type: 'sic_mosfet' }).map((c) => c.id), ['DEMO900B170']);
+  assert.deepEqual(facet(CARDS, 'manufacturer'), ['SKF', 'Zeta Semi']);
   assert.deepEqual(facet(CARDS, 'type'), ['angular_contact', 'deep_groove', 'sic_mosfet']);
 });
 

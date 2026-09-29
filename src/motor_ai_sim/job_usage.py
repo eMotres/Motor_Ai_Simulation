@@ -150,6 +150,8 @@ class Meter:
                            or body.get("die") or body.get("design_id") or "")[:80]
         self.node = node_name()
         self.t0 = time.time()
+        self.wait_s = max(0.0, float(getattr(rec, "started_at", 0) or self.t0)
+                          - float(getattr(rec, "queued_at", 0) or self.t0))
         self.native_id = threading.get_native_id()
         self.thread_cpu_last = time.thread_time()   # we are ON the job thread
         self.cpu_s = 0.0
@@ -244,7 +246,8 @@ def finish(m: Optional[Meter], state: str) -> Optional[Dict[str, Any]]:
                "wall_s": round(time.time() - m.t0, 2), "cpu_s": round(m.cpu_s, 2),
                "peak_rss": int(m.peak_rss),
                "status": STATUS.get(str(state), str(state)),
-               "cpu_method": "apportioned" if m.shared else "exclusive"}
+               "cpu_method": "apportioned" if m.shared else "exclusive",
+               "wait_s": round(m.wait_s, 2)}
         record(row)
         return row
     except Exception:                                   # noqa: BLE001
@@ -266,7 +269,7 @@ def reset() -> None:
 
 # ── store ────────────────────────────────────────────────────────────────────
 _COLS = ("run_id", "ts_start", "ts_end", "user", "client", "kind", "machine",
-         "node", "wall_s", "cpu_s", "peak_rss", "status", "cpu_method")
+         "node", "wall_s", "cpu_s", "peak_rss", "status", "cpu_method", "wait_s")
 
 
 def _db():
@@ -274,7 +277,10 @@ def _db():
     con = CM._db()
     con.execute("CREATE TABLE IF NOT EXISTS usage (run_id TEXT PRIMARY KEY, ts_start REAL, "
                 "ts_end REAL, user TEXT, client TEXT, kind TEXT, machine TEXT, node TEXT, "
-                "wall_s REAL, cpu_s REAL, peak_rss INTEGER, status TEXT, cpu_method TEXT)")
+                "wall_s REAL, cpu_s REAL, peak_rss INTEGER, status TEXT, cpu_method TEXT, "
+                "wait_s REAL DEFAULT 0)")
+    if "wait_s" not in [r[1] for r in con.execute("PRAGMA table_info(usage)")]:
+        con.execute("ALTER TABLE usage ADD COLUMN wait_s REAL DEFAULT 0")
     con.execute("CREATE INDEX IF NOT EXISTS usage_end ON usage(ts_end)")
     return con
 

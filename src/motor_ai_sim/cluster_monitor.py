@@ -432,6 +432,16 @@ def install(app) -> None:
             t0 = time.perf_counter()
             resp = await call_next(request)
             note_latency((time.perf_counter() - t0) * 1000.0)
+            if request.method in ("GET", "POST") and 200 <= resp.status_code < 300:
+                try:  # pricing data: aggregate activity counters only
+                    from motor_ai_sim import usage_stats as _US
+                    if _US.event_for(request.method, p) is not None:
+                        import asyncio
+                        await asyncio.to_thread(
+                            _US.note_request, request.method, p, resp.status_code,
+                            request.headers.get("authorization"))
+                except Exception:                       # noqa: BLE001
+                    pass
             return resp
 
     app.add_middleware(_LatencyMW)

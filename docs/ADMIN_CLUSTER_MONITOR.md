@@ -88,3 +88,42 @@ Running jobs show their live CPU seconds in the Servers job table.
 
 Groundwork for billing/quotas: `job_usage.cpu_hours(user, start, end)`.
 MCP quotas still count runs per day; nothing has been switched to CPU minutes yet.
+
+## Pricing data (record only, no billing)
+
+`src/motor_ai_sim/usage_stats.py` collects the signals a pricing decision needs.
+It stores aggregate counts only, never file contents, and every route is admin-only.
+
+- **Per account per day** (from the `usage` table): CPU s and wall s by kind
+  (em / coupled / thermal / sweep / optimizer / controller / mechanical / report / other),
+  jobs, failed, stopped, agent runs, queue wait, peak concurrent jobs.
+- **Activity** (table `activity`, counted by the HTTP middleware on 2xx):
+  report PDFs, datasheet exports, Fusion import/export, catalog views; MCP calls
+  by tool and 429s (from the MCP audit). Logins come from the session event log.
+- **Storage** (table `storage`, daily): bytes per workspace in dies / configs /
+  results / reports / other.
+- **Account attributes**: plan (the `plan` field if set; `internal` for admins
+  and the owner, `free` otherwise), e-mail domain, created date.
+
+**Cost basis** (Admin → Usage → Pricing data, `cost_basis.json`). The default is eu1 =
+Hetzner AX42-1 (FSN1) at €100/month (the owner's figure; confirm it from the invoice),
+16 threads, and storage at €0/GB-month.
+`€ per CPU-hour = €/month ÷ (threads × 730 h)` (default ≈ €0.0086).
+The cost of an account is `CPU-h × €/CPU-h + mean GB × €/GB-month`.
+
+| route | |
+|---|---|
+| `GET/PUT /api/admin/usage/cost_basis` | read / edit the cost basis |
+| `GET /api/admin/usage/monthly?month=YYYY-MM[&format=csv]` | per-account monthly table |
+| `GET /api/admin/usage/daily?days=7` | per-account per-day rows |
+
+**Daily job** on the host: `deploy/systemd/motres-usage.{sh,service,timer}` runs at
+00:20 UTC. It takes the storage sample and writes
+`/srv/motres/usage/usage_YYYY-MM.{json,csv}`: the current month to date, plus the
+finished previous month on the 1st.
+Install:
+```bash
+cp /opt/motres/app/deploy/systemd/motres-usage.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now motres-usage.timer
+```
+Manual run: `docker compose exec -T api python -m motor_ai_sim.usage_stats monthly 2026-09 [--csv]`.

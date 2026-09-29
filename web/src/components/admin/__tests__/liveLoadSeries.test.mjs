@@ -4,7 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mergeNodeSeries, mergeLoadSeries, isCollectingHistory, serverLabel, threadsUsed,
-  cpuTooltipValue, memTooltipValue, clusterLine,
+  cpuTooltipValue, memTooltipValue, ramNowLabel, parseServerSeriesKey, clusterLine,
+  computeXAxis, RANGE_LOOKBACK_S,
 } from '../liveLoadSeries.ts';
 
 // ── mergeNodeSeries: separate CPU/RAM series per server (the "only CPU shows,
@@ -56,14 +57,80 @@ test('cpuTooltipValue appends threads-used when threads are known', () => {
   assert.equal(cpuTooltipValue(72), '72.0 %');
 });
 
-test('memTooltipValue appends GB used/total when the node\'s RAM total is known', () => {
+test('memTooltipValue: GB first, then percent in parens, when the node\'s RAM total is known', () => {
   const total = 16 * 1024 ** 3;
-  assert.equal(memTooltipValue(9, total), '9.0 % ≈ 1.4 / 16.0 GB');
+  assert.equal(memTooltipValue(9, total), '1.4 / 16.0 GB (9.0 %)');
   assert.equal(memTooltipValue(9), '9.0 %');
+});
+
+test('ramNowLabel: same GB format as the tooltip, from real used/total bytes (not derived from a %)', () => {
+  const used = 23.4 * 1024 ** 3, total = 62.7 * 1024 ** 3;
+  assert.equal(ramNowLabel(used, total), '23.4 / 62.7 GB (37.3 %)');
+});
+
+test('ramNowLabel falls back to a dash when used or total is missing', () => {
+  assert.equal(ramNowLabel(undefined, 1e9), '—');
+  assert.equal(ramNowLabel(1e9, undefined), '—');
+  assert.equal(ramNowLabel(0, 1e9), '—');
+});
+
+// ── parseServerSeriesKey: the regression this locks in ──────────────────────
+// PR #61 split one combined tooltip into per-chart cpuTooltip/memTooltip
+// closures and, in the split, looked nodes up by the RAW dataKey ("eu1_cpu")
+// instead of the bare server id ("eu1") -- nodeMeta[key] was always
+// undefined, so every per-server tooltip silently fell back to a bare "%"
+// with no GB/threads, and the legend name showed the raw suffixed key. This
+// pins the correct parse so that mistake can't be reintroduced unnoticed.
+test('parseServerSeriesKey splits a per-server dataKey into id + kind', () => {
+  assert.deepEqual(parseServerSeriesKey('eu1_cpu'), { id: 'eu1', kind: 'cpu' });
+  assert.deepEqual(parseServerSeriesKey('eu1_mem'), { id: 'eu1', kind: 'mem' });
+  assert.deepEqual(parseServerSeriesKey('eu-west-2_cpu'), { id: 'eu-west-2', kind: 'cpu' });
+});
+
+test('parseServerSeriesKey returns null for keys with no _cpu/_mem suffix', () => {
+  // "cluster_cpu"/"cluster_mem" DO match this generic pattern (id="cluster")
+  // -- callers check those two literal keys first, same as before this
+  // function existed; this only documents what does NOT match at all.
+  assert.equal(parseServerSeriesKey('alice'), null);
+  assert.equal(parseServerSeriesKey('mesher_1'), null);
+  assert.equal(parseServerSeriesKey('other'), null);
 });
 
 test('clusterLine formats the fleet total line', () => {
   assert.equal(clusterLine(16, 10.8), 'cluster: 16 threads, 10.8 used');
+});
+
+// ── computeXAxis: one shared [now-range, now] domain + tick set ────────────
+// Owner: the three charts must share the same time domain and the same
+// ticks -- each was previously computed per-chart from that chart's own
+// data, so a different point count per chart (independent series merges)
+// could drift the plotted time ranges apart.
+test('computeXAxis domain is exactly [now - lookback, now] for the range', () => {
+  const now = 1_700_000_000;
+  for (const range of Object.keys(RANGE_LOOKBACK_S)) {
+    const { domain } = computeXAxis(range, now);
+    assert.deepEqual(domain, [now - RANGE_LOOKBACK_S[range], now]);
+  }
+});
+
+test('computeXAxis ticks start and end exactly on the domain, evenly spaced between', () => {
+  const now = 1_700_000_000;
+  const { domain, ticks } = computeXAxis('1h', now, 5);
+  assert.equal(ticks.length, 5);
+  assert.equal(ticks[0], domain[0]);
+  assert.equal(ticks[ticks.length - 1], domain[1]);
+  const gap = ticks[1] - ticks[0];
+  for (let i = 1; i < ticks.length; i++) assert.equal(ticks[i] - ticks[i - 1], gap);
+});
+
+test('computeXAxis is a pure function of (range, now): identical calls -> identical output', () => {
+  const now = 1_700_000_000;
+  assert.deepEqual(computeXAxis('24h', now), computeXAxis('24h', now));
+});
+
+test('computeXAxis clamps a silly tickCount to at least 2', () => {
+  const { ticks } = computeXAxis('15m', 1000, 1);
+  assert.equal(ticks.length, 2);
 });
 
 // ── mergeLoadSeries: user CPU % + outside-app CPU % into one stacked chart ──

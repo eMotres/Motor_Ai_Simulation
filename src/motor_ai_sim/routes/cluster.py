@@ -99,13 +99,18 @@ def load_live(range: str = "1h", top: int = 8, _admin: dict = Depends(require_ad
     # per-server "now" snapshot for the live-load strip: threads (cores, as
     # sampled from /proc/stat), physical cores (/proc/cpuinfo, 0 = unknown --
     # an agent from before this field existed, or a host without physical/
-    # core ids), RAM total and current CPU % (the chart already has history).
+    # core ids), RAM used+total and current CPU % (the chart already has
+    # history). mem_used/mem_total are both already in every sample the node
+    # agent has ever sent (meminfo(), unchanged since before this whole
+    # feature) -- no node agent change or reinstall needed for this field,
+    # just selecting it here alongside mem_total (which this route already read).
     nodes_now = []
     for n in nodes["nodes"]:
         if n["status"] == "revoked":
             continue
         s = n.get("sample") or {}
         cpu_obj = s.get("cpu") or {}
+        mem_obj = s.get("mem") or {}
         # same threads fallback as CM.list_nodes()'s cluster totals: per_core
         # length first (always present once a sample has landed), "cores" if
         # per_core is somehow empty.
@@ -113,7 +118,8 @@ def load_live(range: str = "1h", top: int = 8, _admin: dict = Depends(require_ad
         nodes_now.append({
             "id": n["id"], "name": n["name"], "status": n["status"],
             "cores": threads, "cores_physical": s.get("cores_physical") or None,
-            "cpu": cpu_obj.get("total"), "mem_total": (s.get("mem") or {}).get("total"),
+            "cpu": cpu_obj.get("total"), "mem_total": mem_obj.get("total"),
+            "mem_used": mem_obj.get("used"),
         })
     user_load = U.user_load_series(now - lookback, now, top_n=top)
     outside_app = CM.outside_app_series(now - lookback, now, top_n=top)

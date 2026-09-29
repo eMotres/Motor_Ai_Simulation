@@ -110,3 +110,29 @@ export function hostColor(mode: Mode): string {
 export function overheadColor(mode: Mode): string {
   return OVERHEAD_HUE[mode];
 }
+
+// ── RAM chart's cool/violet chrome accent (owner: "memory looks the same
+// colour as CPU... RAM chart must be visually distinct at a glance") ───────
+// Investigated (and rejected) first: a genuinely separate per-server
+// warm-for-CPU / cool-for-RAM palette. Every attempt -- a second hand-picked
+// cool set, and a uniform hue rotation/blend of the existing master eight
+// toward violet -- failed validate_palette.js's CVD gates once checked
+// (warm hues in this palette cluster too tightly for even 2 members to
+// clear the normal-vision floor; a rotation preserves relative hue spacing
+// but isn't uniformly "toward cool" -- some slots rotate into yellow-green
+// instead of violet). Forcing it through anyway would mean either an
+// unvalidated palette or a second WARN-tier set leaning entirely on
+// secondary encoding to do the real work -- at which point the secondary
+// encoding (style, not hue) should just BE the differentiator, which is
+// what the request's own fallback ("or a different fill style") says to do.
+//
+// So: RAM keeps each server's EXACT identity hue (serverColor, unchanged --
+// still the fully-validated master eight, zero new risk) for its stroke,
+// legend swatch and tooltip name, and is distinguished from CPU by (a) a
+// dashed stroke + a hollower, lower-opacity gradient (LiveLoadPanel.tsx) and
+// (b) this fixed violet/blue accent used ONLY for chart chrome that carries
+// no per-series identity -- the cluster-mean line and the grid -- which
+// needs no new categorical validation because it reuses two ALREADY-
+// validated single master hues (violet, blue) in a non-competing role.
+export const RAM_ACCENT: Record<Mode, string> = { light: '#4a3aa7', dark: '#9085e9' };
+export const RAM_GRID: Record<Mode, string> = { light: 'rgba(74,58,167,0.22)', dark: 'rgba(144,133,233,0.28)' };

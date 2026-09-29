@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   hashSlot, serverColor, userColor, containerColor, hostColor, overheadColor,
+  RAM_ACCENT, RAM_GRID,
 } from '../liveLoadColors.ts';
 
 // ── hashSlot: the primitive every "hash-stable" colour is built on ─────────
@@ -75,6 +76,17 @@ test('containerColor distinguishes two different containers by opacity, same hue
   // (opacity may coincide for some id pairs by hash chance -- that's fine,
   // legend + tooltip carry exact identity; this just checks the shape)
   assert.ok(typeof a.fillOpacity === 'number' && typeof b.fillOpacity === 'number');
+});
+
+test('RAM_ACCENT/RAM_GRID are fixed, mode-aware, and distinct from every server-slot hue', () => {
+  assert.notEqual(RAM_ACCENT.light, RAM_ACCENT.dark);
+  assert.ok(RAM_GRID.light.startsWith('rgba(') && RAM_GRID.dark.startsWith('rgba('));
+  // the accent reuses the master violet slot verbatim, in a chart-chrome
+  // role (cluster-mean line, grid) rather than as a per-series identity --
+  // see the long comment in liveLoadColors.ts for why a genuinely separate
+  // per-server cool palette was tried and rejected (CVD gates).
+  assert.equal(RAM_ACCENT.light, '#4a3aa7');
+  assert.equal(RAM_ACCENT.dark, '#9085e9');
 });
 
 test('hostColor and overheadColor are fixed (not hashed) and mode-aware', () => {

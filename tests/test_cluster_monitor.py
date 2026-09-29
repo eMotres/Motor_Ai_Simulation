@@ -295,6 +295,11 @@ def test_load_live_nodes_now_carries_cores_and_ram_for_the_per_server_strip(as_a
     assert now["cores_physical"] == 8
     assert now["cpu"] == 62.0
     assert now["mem_total"] == pytest.approx(16e9)
+    # mem_used: already in every sample the node agent has ever sent
+    # (meminfo(), unchanged) -- this only asserts the route selects it too,
+    # for the per-server strip's "23.4 / 62.7 GB (37 %)" RAM label. No node
+    # agent change or reinstall needed.
+    assert now["mem_used"] == pytest.approx(4e9)
     # RAM history is already there (mergeNodeSeries/CPU-RAM chart bug was
     # frontend-only -- point_of() has always carried "mem"): a fresh
     # regression guard so this doesn't silently regress again.

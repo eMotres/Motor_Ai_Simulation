@@ -939,9 +939,9 @@ def __getattr__(name):
 
 
 # ── EACH POINT CONTINUES THE PREVIOUS ONE ────────────────────────────────────
-# User, 2026-09-06: "мы же уже договаривались, что проход демагнитизации
-# делается для каждого sweep только один раз; изменения геометрии небольшие, и
-# каждый следующий расчёт берётся из предыдущего."  Sweep points had regressed
+# User, 2026-09-06: "we already agreed that the demagnetization pass is done
+# once per sweep only; the geometry changes are small, and each next
+# calculation is seeded from the previous one."  Sweep points had regressed
 # from 700-800 s to 1100-1700 s because every subprocess eval started COLD — a
 # full eddy warm-up march from zero plus, with demag on, a whole extra
 # electrical period of demag pre-pass.
@@ -960,7 +960,7 @@ def _eval_env_for(threads: Optional[int]) -> Dict[str, str]:
     evals, see above) unless the caller asks for more.
 
     The only caller that does is the sweep's SOLO seed point (2026-09-08, user:
-    "что так долго считалась первая точка?" — 29 min alone on one core out of
+    "why did the first point take so long to compute?" — 29 min alone on one core out of
     24 while nine workers sat idle).  That point runs by itself precisely so
     the others can continue its state, so letting it use several BLAS threads
     costs nobody a core; its numbers can move in the last ulp between runs,
@@ -1122,8 +1122,8 @@ def serial_first_decision(n_tasks: int, n_workers: int, demag: bool,
                           rotor_eddy: bool, seed_ok: bool) -> Tuple[bool, str]:
     """Should the FIRST queued point be solved ALONE before the fan-out?
 
-    The rule (user 2026-09-06, "проход демагнитизации делается для каждого
-    sweep только один раз"): the expensive one-off — the eddy warm-up march
+    The rule (user 2026-09-06, "the demagnetization pass is done once per
+    sweep only"): the expensive one-off — the eddy warm-up march
     AND the demag pre-pass period — is paid ONCE, by the first point, whose
     published state every later point then continues.  Fanning out immediately
     with no seed makes all N workers pay it in parallel instead.
@@ -2381,9 +2381,9 @@ def scan_designs(req: ScanRequest):
         demag = bool(getattr(req, 'demag', False))
         # THE RUN SHOWS A PULSE FROM SECOND ONE.  A sweep point with the
         # panel's physics is minutes of silent subprocess work, and "0/7" for
-        # ten minutes reads as a hang ("что-то не подаёт жизни") — so the
+        # ten minutes reads as a hang ("nothing is showing signs of life") — so the
         # progress carries when the scan started, how many workers solve, and
-        # the measured per-point rate, and the panel can render a живой
+        # the measured per-point rate, and the panel can render a live
         # elapsed/ETA line while the first point is still cooking.
         import time as _t_scan
         _rate0 = {}

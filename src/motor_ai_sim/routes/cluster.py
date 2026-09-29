@@ -86,3 +86,45 @@ def app_view(_admin: dict = Depends(require_admin)) -> Dict[str, Any]:
 def stop_job(run_id: str, _admin: dict = Depends(require_admin)):
     from motor_ai_sim import jobs as _J
     return _J.cancel_run(run_id, requester="", is_admin=True)
+
+
+# ── usage accounting (motor_ai_sim.job_usage) ────────────────────────────────
+def _period(start: Optional[float], end: Optional[float], days: Optional[float]):
+    import time as _t
+    e = float(end) if end else _t.time()
+    s = float(start) if start else e - 86400.0 * float(days or 1)
+    if s >= e:
+        raise HTTPException(status_code=400, detail="start must be before end")
+    return s, e
+
+
+@router.get("/usage")
+def usage(by: str = "user", start: Optional[float] = None, end: Optional[float] = None,
+          days: Optional[float] = None, _admin: dict = Depends(require_admin)):
+    from motor_ai_sim import job_usage as U
+    s, e = _period(start, end, days)
+    return U.summary(s, e, by=by)
+
+
+@router.get("/usage/jobs")
+def usage_jobs(user: Optional[str] = None, client: Optional[str] = None,
+               start: Optional[float] = None, end: Optional[float] = None,
+               days: Optional[float] = None, limit: int = 500,
+               _admin: dict = Depends(require_admin)):
+    from motor_ai_sim import job_usage as U
+    s, e = _period(start, end, days)
+    return {"jobs": U.jobs(s, e, user=user, client=client, limit=min(limit, 5000))}
+
+
+@router.get("/usage.csv")
+def usage_csv(by: str = "user", detail: str = "summary", user: Optional[str] = None,
+              client: Optional[str] = None, start: Optional[float] = None,
+              end: Optional[float] = None, days: Optional[float] = None,
+              _admin: dict = Depends(require_admin)):
+    from fastapi.responses import Response
+    from motor_ai_sim import job_usage as U
+    s, e = _period(start, end, days)
+    rows = (U.jobs(s, e, user=user, client=client, limit=10 ** 6) if detail == "jobs"
+            else U.summary(s, e, by=by)["rows"])
+    return Response(U.to_csv(rows), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="usage_{detail}.csv"'})

@@ -64,3 +64,27 @@ Remove: `systemctl disable --now motres-node-agent`, then Revoke in the panel.
 
 Dry run (prints one sample, sends nothing):
 `python3 /opt/motres-node-agent/motres_node_agent.py --once`
+
+## Usage accounting (machine time per client)
+
+Every job the queue runs is metered (`src/motor_ai_sim/job_usage.py`, hook in
+`jobs.InProcessQueue._run_admitted`) and one row per finished job is stored in
+`history.sqlite` table `usage`: account, client (`web`, or the MCP key / OAuth
+client name), kind, machine/duty, node (`NODE_NAME` or hostname), wall s,
+CPU s, peak RSS, status (`done`/`stopped`/`failed`). No backfill.
+
+CPU is **measured**: CPU time of the API process tree (psutil: process +
+live descendants + reaped children). A 2 s sampler gives each interval's delta
+to the jobs running in it: one job gets it all (`exclusive`); several split
+it by each job thread's own CPU time (`apportioned`). Peak RSS is the tree's
+peak while the job ran, so jobs running at the same time share it.
+Running jobs show their live CPU seconds in the Servers job table.
+
+| route | |
+|---|---|
+| `GET /api/admin/usage?by=user\|client&days=1\|7\|30` or `start`/`end` (epoch s) | totals: jobs, CPU-h, wall-h, peak RAM, % of jobs CPU, % of cluster capacity |
+| `GET /api/admin/usage/jobs?user=…\|client=…` | drill-down job list |
+| `GET /api/admin/usage.csv?by=…&detail=summary\|jobs` | CSV |
+
+Groundwork for billing/quotas: `job_usage.cpu_hours(user, start, end)`.
+MCP quotas still count runs per day; nothing has been switched to CPU minutes yet.

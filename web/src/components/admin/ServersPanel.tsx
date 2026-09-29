@@ -11,6 +11,7 @@ import {
   Tooltip as RcTooltip, Legend,
 } from 'recharts';
 import HelpTip from '../common/HelpTip';
+import UsagePanel from './UsagePanel';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
@@ -31,7 +32,7 @@ interface Node { id: string; name: string; status: string; last_seen: number | n
 interface Cluster { nodes: number; online: number; cores: number; cpu_used_cores: number; mem_used: number; mem_total: number }
 interface Job {
   run_id: string; owner: string; kind: string; state: string; position?: number;
-  elapsed_s?: number; waited_s?: number; eta_s?: number; frac?: number; agent?: string | null;
+  elapsed_s?: number; waited_s?: number; eta_s?: number; frac?: number; agent?: string | null; cpu_s?: number;
 }
 interface AppView {
   api: { requests: number; p50_ms: number; p95_ms: number };
@@ -169,6 +170,7 @@ const ServersPanel: React.FC = () => {
   const selNode = nodes.find((n) => n.id === sel);
 
   return (
+    <>
     <Paper elevation={0} sx={{ ...PANEL, p: 2, mb: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
         <Typography sx={{ fontWeight: 700 }}>Servers</Typography>
@@ -234,11 +236,11 @@ const ServersPanel: React.FC = () => {
           </Box>
           <Table size="small">
             <TableHead><TableRow>
-              {['owner', 'kind', 'state', 'agent', 'elapsed', 'ETA', ''].map((h) => <TableCell key={h}>{h}</TableCell>)}
+              {['owner', 'kind', 'state', 'agent', 'elapsed', 'CPU s', 'ETA', ''].map((h) => <TableCell key={h}>{h}</TableCell>)}
             </TableRow></TableHead>
             <TableBody>
               {app.jobs.items.length === 0 && (
-                <TableRow><TableCell colSpan={7} sx={{ color: 'var(--text-4)' }}>idle</TableCell></TableRow>
+                <TableRow><TableCell colSpan={8} sx={{ color: 'var(--text-4)' }}>idle</TableCell></TableRow>
               )}
               {app.jobs.items.map((j) => (
                 <TableRow key={j.run_id}>
@@ -246,6 +248,7 @@ const ServersPanel: React.FC = () => {
                   <TableCell>{j.state}{j.state === 'queued' && j.position ? ` #${j.position}` : ''}</TableCell>
                   <TableCell>{j.agent || '—'}</TableCell>
                   <TableCell>{dur(j.state === 'running' ? j.elapsed_s : j.waited_s)}</TableCell>
+                  <TableCell>{j.cpu_s != null ? Math.round(j.cpu_s) : '—'}</TableCell>
                   <TableCell>{dur(j.eta_s)}</TableCell>
                   <TableCell><Button size="small" color="error" onClick={() => void stopJob(j.run_id)}>Stop</Button></TableCell>
                 </TableRow>
@@ -279,6 +282,8 @@ const ServersPanel: React.FC = () => {
         </DialogActions>
       </Dialog>
     </Paper>
+    <UsagePanel />
+    </>
   );
 };
 

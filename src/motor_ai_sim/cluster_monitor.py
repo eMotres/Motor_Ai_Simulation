@@ -397,6 +397,13 @@ def jobs_view() -> Dict[str, Any]:
             row["eta_s"] = p.get("eta_s")
             row["frac"] = p.get("frac")
             row["phase"] = redact(str(p.get("phase") or ""))
+        try:
+            from motor_ai_sim import job_usage as _U
+            lv = _U.live(str(it.get("run_id") or ""))
+            if lv:
+                row["cpu_s"] = lv["cpu_s"]
+        except Exception:                               # noqa: BLE001
+            pass
         u = per_user.setdefault(str(it.get("owner")), {"running": 0, "queued": 0, "agent": 0})
         if it.get("state") == "running":
             u["running"] += 1

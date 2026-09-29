@@ -344,8 +344,9 @@ def test_d_an_impossible_temperature_is_refused_by_the_field(client):
 def test_e_the_magnet_card_carries_both_coefficients():
     pm = part_mech("magnet", "F52SH_120C")
     assert pm.cte_source == "card"
-    assert pm.cte_1 == pytest.approx(5e-6)
-    assert pm.cte_pair()[1] == pytest.approx(-1.5e-6)
+    # Arnold G52SH sheet (2026-09-29): 7 // and -1 perp e-6/C, 20-200 C
+    assert pm.cte_1 == pytest.approx(7e-6)
+    assert pm.cte_pair()[1] == pytest.approx(-1.0e-6)
     assert pm.cte_anisotropic is True
     # …and the sleeve's, which is the opposite pairing: nothing along the
     # fibres, a lot across them.

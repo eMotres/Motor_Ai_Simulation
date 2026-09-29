@@ -306,7 +306,7 @@ def test_b_on_a_sleeveless_rotor_no_temperature_map_is_a_load(request, cold, whi
         assert th["part_temps_c"]["magnet"] == pytest.approx(REF_TEMP_C + DT)
         assert th["part_temps_c"]["rotor_core"] == pytest.approx(REF_TEMP_C)
         assert th["parts"]["magnet"]["thermal_strain_ppm_1"] == pytest.approx(
-            5e-6 * DT * 1e6, rel=1e-9)
+            7e-6 * DT * 1e6, rel=1e-9)   # Arnold sheet CTE // (2026-09-29; was 5e-6)
         assert th["parts"]["rotor"]["delta_t_c"] == 0.0
 
     before, after = _joint(cold), _joint(hot)

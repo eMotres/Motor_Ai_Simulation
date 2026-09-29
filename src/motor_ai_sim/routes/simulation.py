@@ -3192,8 +3192,8 @@ _load_last_transient_field_snapshot()   # …and the run's field for the views
 # ═════════════════════════════════════════════════════════════════════════════
 #  RESULTS LEDGER — "have I already computed exactly this?"
 # ═════════════════════════════════════════════════════════════════════════════
-# User, 2026-09-05: «Не надо Recent runs — нужно просто сканировать результаты:
-# не совпадают ли они с уже проведёнными, хотя бы пока по этим параметрам.»
+# User, 2026-09-05: "We don't need Recent runs — we just need to scan the
+# results: whether they match ones already done, at least for these parameters for now."
 # He had set 667.4 A peak in the morning, computed, changed the current,
 # computed again, came back to 667.4 A with everything else untouched — and had
 # to sit through a solve whose answer was already on this disk.
@@ -3772,7 +3772,7 @@ def _charge_outer_loops(route_kwargs: dict, *, batt, mode_eff: str,
         }
         return res, block
 
-    # ── LOOP 2: "вся мощность в зарядку" ─────────────────────────────────
+    # ── LOOP 2: "all power to charging" ─────────────────────────────────
     if not charge_max:
         res, bus_block = _coupled()
         return _charge_attach(res, "bus_coupling", bus_block) if bus_block else res
@@ -4345,8 +4345,8 @@ def get_fem_transient(
     fresh:               bool  = False,   # ← "Start fresh" recomputes instead of serving the cache
     ledger:              bool  = True,    # ← may a STORED result with exactly this key answer the
                                           #   request instead of solving?  (user, 2026-09-05:
-                                          #   "просто сканировать результаты: не совпадают ли они с
-                                          #   уже проведёнными").  ON for the charts, which read the
+                                          #   "just scan the results: whether they match ones already
+                                          #   done").  ON for the charts, which read the
                                           #   summary and the series; the field-animation viewer
                                           #   sends false because it needs the per-frame fields,
                                           #   which the ledger deliberately never stores.
@@ -4489,7 +4489,7 @@ def get_fem_transient(
                                           #   modulation index.  Needs `battery`; PWM/voltage only.
     bus_iters:           int   = 4,       # ← cap on those outer iterations (each is a full transient)
     bus_tol_pct:         float = 0.1,     # ← convergence: |ΔV_bus| below this % of V_bus
-    charge_max:          bool  = False,   # ← "ВСЯ МОЩНОСТЬ В ЗАРЯДКУ": search (V₁, δ) for the
+    charge_max:          bool  = False,   # ← "ALL POWER TO CHARGING": search (V₁, δ) for the
                                           #   maximum charge power at THIS rpm, subject to
                                           #   |I_phase| ≤ I_phase_rms and I_charge ≤ i_charge_max.
                                           #   Seeded from v_phase_peak/v_delta_deg (the two-pass

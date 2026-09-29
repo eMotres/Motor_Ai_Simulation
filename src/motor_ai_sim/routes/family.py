@@ -2630,7 +2630,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
     if pw is not None:
         entry["power_kw"] = round(float(pw), 2)
     # The terminal connection this duty was solved with, ON THE DUTY (user
-    # 2026-09-13: "не забудь сохранять звезда или треугольник"): the run's
+    # 2026-09-13: "don't forget to save star or delta"): the run's
     # own summary says it; a save without a run keeps the previous value,
     # then the configuration's winding.  Read back by ▶ before anything else.
     _sd_src = getattr(d, "summary", None)
@@ -3230,9 +3230,9 @@ def released_state() -> Optional[dict]:
 
 
 # ── automatic die transition (owner's rule, 2026-09-20) ──────────────────────
-# «если мы меняем геометрию — неважно какую — того die, который загрузили, мы
-# всю конфигурацию переводим в новый диаметр или новое количество полюсов без
-# всяких разрывов и сохраняем её» — a die-defining edit on the ACTIVE die must
+# "if we change the geometry — whichever one — of the loaded die, we move
+# the whole configuration to the new diameter or new pole count without any
+# breaks, and save it" — a die-defining edit on the ACTIVE die must
 # never dead-end the context (the 12:47 incident this whole module chases).
 # Replaces the identity guard's `release_context` call: the live machine
 # becomes a foreign lamination → find (or mint) the die THIS lamination is and

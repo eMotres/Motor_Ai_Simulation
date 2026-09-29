@@ -2790,9 +2790,9 @@ def _warm_cache_path():
 
 
 # ── SWEEP MODE: seed the next point from the previous one ───────────────────
-# User, 2026-09-06: "мы же уже договаривались, что проход демагнитизации
-# делается для каждого sweep только один раз; изменения геометрии небольшие, и
-# каждый следующий расчёт берётся из предыдущего."  Sweep points had gone from
+# User, 2026-09-06: "we already agreed that the demagnetization pass is done
+# once per sweep only; the geometry changes are small, and each next
+# calculation is seeded from the previous one."  Sweep points had gone from
 # 700-800 s to 1100-1700 s because every subprocess eval started COLD: a full
 # eddy warm-up march from zero AND — since the 2026-09-05 reproducibility fix —
 # a full extra electrical period of demag PRE-PASS on top.
@@ -3866,7 +3866,7 @@ def fem_transient_sliding_band(
     # "correct, just slower" — which meant the Mesh tab's 1/4 never actually ran
     # as 1/4 for anyone with the geo mesh on (the default): the user chose the
     # sector FOR ITS SPEED and paid full-disk time anyway, with one info log as
-    # the only witness ("почему всё сбрасывается на full", 2026-08-22).  A 1/N
+    # the only witness ("why does everything fall back to full", 2026-08-22).  A 1/N
     # request now falls back to the TEMPLATE wedge instead (geo mesh off for
     # this run): the sector the user asked for, on the validated wedge build —
     # the trade is the geo mesh's real fillets, which is the user's own speed/
@@ -3929,13 +3929,13 @@ def fem_transient_sliding_band(
     #       the coil's two ends.  One current per PATH instead of one per
     #       strand-in-a-slot, and the k paths of a coil share the coil's
     #       terminal voltage.  This is neither bound — it is the answer they
-    #       bracket (user 2026-09-11: "делай, нужно точно знать").
+    #       bracket (user 2026-09-11: "do it, we need to know for sure").
     #
     # `None` DERIVES it from the geometry, and that is the default because the
     # geometry already decides: `wire_parallel` = k wires in hand, and a coil
     # wound with k of them is soldered at its two ends — there is no third
-    # possibility to offer (user 2026-09-11: "соединение жил в руке у нас в
-    # геометрии выбирается, не надо делать селектор").  k = 1 has nothing to
+    # possibility to offer (user 2026-09-11: "the connection of strands in
+    # hand is chosen by our geometry, no need to make a selector").  k = 1 has nothing to
     # bond and lands on the per-strand rows either way.
     #
     # An explicit argument still overrides, because the two BOUNDS are what

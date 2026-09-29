@@ -1,7 +1,7 @@
 """Node-to-node contact (Mechanical v2) — closed forms, then the live rotor.
 
-The user's requirement, 2026-09-05 (Fusion terminology): "Ещё нужно разобраться
-с контактами — они у нас все Separated по умолчанию."  A contact solver that is
+The user's requirement, 2026-09-05 (Fusion terminology): "We still need to sort
+out the contacts — they're all Separated by default for us."  A contact solver that is
 not pinned to a closed form is a plausible-number generator, and this one
 decides how thick a retaining sleeve has to be, so the first three tests are
 two concentric rings whose answer is on paper:

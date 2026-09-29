@@ -986,8 +986,8 @@ def _duty_cycle_of(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]
 def _cycle_preflight(body: Dict[str, Any]) -> None:
     """An S2/S3 duty is solved as a REGIME — check that it CAN be, before a solve.
 
-    THE REFUSAL THAT WENT AWAY (user, 2026-09-16: *"каплинг на цикле S3 подбирает
-    скважность для того чтобы можно было влезть в лимиты"*).  Until today this
+    THE REFUSAL THAT WENT AWAY (user, 2026-09-16: *"the S3-cycle coupling
+    picks the duty ratio so we can fit inside the limits"*).  Until today this
     function raised ``impulse_duty_not_steady`` on every impulse duty the loop
     was asked to iterate, and its reasoning was sound: iterating an S3 point to a
     fixed point answers with the temperature it would reach if the pull never
@@ -1109,8 +1109,8 @@ def _cycle_inputs(body: Dict[str, Any],
     to, and that is deliberately not in here: it arrives at :func:`_cycle_step`
     each time, which is the whole mechanism.
 
-    THE FEATURE FLAG (owner 2026-09-17: *«давай пока уберём duty cycle из
-    Thermal, оставим только стандартный каплинг»*).  With
+    THE FEATURE FLAG (owner 2026-09-17: *"let's drop duty cycle from Thermal
+    for now, keep only the standard coupling"*).  With
     ``DUTY_CYCLE_ENABLED`` off — the default — this is ``None`` for EVERY duty,
     including one carrying a stored S2/S3 block: the loop then iterates that
     point to its fixed point exactly as it did before cycles existed, writes no
@@ -1212,8 +1212,8 @@ def _cycle_step(inputs: Dict[str, Any], em_summary: Dict[str, Any],
 # ---------------------------------------------------------------------------
 # HOW LONG MAY IT RUN — the time to the limit (owner 2026-09-17)
 # ---------------------------------------------------------------------------
-# *«если где-то выходим за лимиты, нужно посчитать время, за какое мотор
-# проработает до этого лимита»*.  The loop answers a question about the STEADY
+# *"if we exceed the limits somewhere, we need to compute how long the motor
+# will run before hitting that limit"*.  The loop answers a question about the STEADY
 # state; when that state is past a limit the one thing the answer does not
 # contain is how long the machine may actually pull before it gets there.
 #
@@ -1318,9 +1318,9 @@ def _ttl_step(body: Dict[str, Any], cooling: Dict[str, Any],
 # ---------------------------------------------------------------------------
 # THE CATALOGUE CONSTANTS — the same machine at 20 °C
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-18: *«для каждого отчёта делать прогон на холодную 20 °C, чтобы
-# находить все коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех
-# каталогах моторов и нужны для сравнения»*.
+# Owner, 2026-09-18: *"do a cold 20 °C pass for every report, to find all the
+# coefficients KV, Kt, Km, Km/mass that appear in every motor catalogue and
+# are needed for comparison"*.
 #
 # EVERY constant in this project is reported at the duty's own temperatures,
 # which is the honest thing to do and the wrong thing to COMPARE with.  A

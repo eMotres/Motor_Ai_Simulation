@@ -1,0 +1,90 @@
+{
+  "case": "p2_load",
+  "status": "passed",
+  "parameters": {
+    "n_steps_per_period": 12,
+    "n_periods": 1.0,
+    "mesh_size_mm": 1.4,
+    "min_size_mm": 0.35,
+    "gap_layers": 1.0,
+    "n_sectors": 2,
+    "structured_gap": true,
+    "iron_template": true,
+    "geo_mesh": true,
+    "coil_temp_c": 120.0,
+    "rotor_eddy": false,
+    "element_order": 2,
+    "demag": false,
+    "I_phase_rms": 60.0,
+    "gamma_deg": 0.0
+  },
+  "actual_metrics": {
+    "T_avg_Nm": 0.40917379616535926,
+    "T_ripple_pct": 0.4048104906031955,
+    "P_cu_W": 110.48524732791229,
+    "P_fe_W": 4.929045202313177,
+    "V_peak": 7.890703852342083,
+    "T_avg_maxwell_Nm": 0.4089399500071645
+  },
+  "baseline_metrics": {
+    "P_cu_W": 110.48491882768667,
+    "P_fe_W": 4.930281874157756,
+    "T_avg_Nm": 0.4091684995819396,
+    "T_avg_maxwell_Nm": 0.4089,
+    "T_ripple_pct": 0.40481178146349794,
+    "V_peak": 7.890839435291423
+  },
+  "comparisons": {
+    "P_cu_W": {
+      "actual": 110.48524732791229,
+      "baseline": 110.48491882768667,
+      "difference": 0.0003285002256205871,
+      "relative_change_pct": 0.0002973258514430546,
+      "tolerance": 0.5524245941384334,
+      "within_existing_tolerance": true
+    },
+    "P_fe_W": {
+      "actual": 4.929045202313177,
+      "baseline": 4.930281874157756,
+      "difference": -0.0012366718445786518,
+      "relative_change_pct": -0.025083187455482218,
+      "tolerance": 0.02465140937078878,
+      "within_existing_tolerance": true
+    },
+    "T_avg_Nm": {
+      "actual": 0.40917379616535926,
+      "baseline": 0.4091684995819396,
+      "difference": 5.2965834196339046e-06,
+      "relative_change_pct": 0.0012944748740544767,
+      "tolerance": 0.0020458424979096983,
+      "within_existing_tolerance": true
+    },
+    "T_avg_maxwell_Nm": {
+      "actual": 0.4089399500071645,
+      "baseline": 0.4089,
+      "difference": 3.995000716450203e-05,
+      "relative_change_pct": 0.009770116694669121,
+      "tolerance": 0.0020445,
+      "within_existing_tolerance": true
+    },
+    "T_ripple_pct": {
+      "actual": 0.4048104906031955,
+      "baseline": 0.40481178146349794,
+      "difference": -1.2908603024275322e-06,
+      "relative_change_pct": -0.00031887913384357115,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    },
+    "V_peak": {
+      "actual": 7.890703852342083,
+      "baseline": 7.890839435291423,
+      "difference": -0.0001355829493396854,
+      "relative_change_pct": -0.001718232267321228,
+      "tolerance": 0.039454197176457116,
+      "within_existing_tolerance": true
+    }
+  },
+  "run_id": "20260916T204913.918167Z",
+  "wall_seconds": 9.856821400004264,
+  "cpu_seconds": 9.71875
+}

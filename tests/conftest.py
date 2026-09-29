@@ -1,0 +1,167 @@
+"""Test session isolation — the suite must never touch the loaded machine.
+
+Most of these tests drive the REAL API (``client.put("/api/geometry", ...)``,
+``POST /api/presets``), and those endpoints write ``config/motor_config.yaml``
+and ``config/motor_presets.json`` — the two files that decide which motor the
+user has open.  On 2026-08-06 a test run replaced a live 150 mm CIANO28 with the
+30 mm fixture mid-session, and the next save stored the fixture under the user's
+motor name; the day's optimization was recovered from a stale copy.
+
+So before ``motor_ai_sim`` is imported at all, both stores are redirected to
+throwaway copies inside the pytest tmp area.  The copies start as the real
+files, so tests that expect a sane starting machine still get one — they just
+cannot write back.  ``MOTOR_AI_SIM_CONFIG`` / ``MOTOR_AI_SIM_PRESETS`` are read
+once at import time by ``config.py`` and ``routes/presets.py``, which is why
+this happens here and not in a fixture.
+"""
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import tempfile
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[1]
+_REAL_CONFIG = _ROOT / "config" / "motor_config.yaml"
+_REAL_PRESETS = _ROOT / "config" / "motor_presets.json"
+
+_SANDBOX = Path(tempfile.mkdtemp(prefix="motor_ai_sim_tests_"))
+
+
+def _zero_the_sleeve(path: Path) -> None:
+    """Sandbox only: force ``geometry.sleeve_thickness`` to 0.
+
+    Fixtures across the suite pin their machine field by field but do NOT list
+    every geometry key; ``CadQueryMotor._map_api_to_cadquery`` fills the gaps
+    from the LOADED config, so an unpinned key is silently the user's.  That is
+    the F2 leak the physics-regression docstring tells at length — and on
+    2026-09-04 it bit through a key no fixture had ever heard of: the live
+    machine grew ``sleeve_thickness: 1`` (in a 1.6 mm gap, legal there), and
+    every fixture running a 0.2 / 0.65 mm air gap inherited a retaining ring
+    thicker than its own gap.  ~19 tests went red at once — geometry validation
+    refusing designs that are fine, and the d-axis calibration finding no psi
+    maximum in a machine whose rotor reaches the stator.
+
+    Pinning the key in each fixture would fix today's break and buy nothing:
+    the NEXT geometry key the product grows would leak exactly the same way.
+    Zeroing it once, here, makes "no sleeve" the sandbox default for the whole
+    suite, so a fixture that wants a ring has to ASK for one — tests/test_sleeve.py
+    passes ``sleeve_thickness=`` explicitly on every sleeved case (and asserts
+    that omitting it builds no ring), which is exactly that opt-in.
+
+    WIRE_PARALLEL, the same leak one key over (2026-09-09).  The live machine
+    grew ``wire_parallel: 4`` beside ``num_wires_per_slot: 24``, which is a legal
+    winding — four strands in hand, six turns.  Every fixture that pins its turn
+    count but not its strand count then inherited the 4: the 30 mm fixture winds
+    6 wires per slot, 6 is not divisible by 4, and ``wire_parallel_from_geo``
+    refuses by design ("1.5 turns per coil is not a winding").  The whole thermal
+    suite, the report suite and everything downstream of ``store_em_run`` errored
+    out before solving anything.  ``tests/test_physics_regression.py`` pinned the
+    key in ITS OWN dict after the same thing happened on 2026-09-03; pinning it
+    fixture by fixture fixes today's break and buys nothing, so — exactly like
+    the sleeve above — "one wire in hand" becomes the sandbox default and a
+    fixture that wants strands in hand asks for them (tests/test_wire_parallel.py
+    passes ``wire_parallel=`` on every case, and asserts that ``GEO_30MM`` alone
+    reads as 1).
+
+    Line-level on purpose: a yaml round-trip would rewrite the sandbox copy and
+    throw away the comments and ordering that some tests read the file for.
+    """
+    try:
+        txt = path.read_text(encoding="utf-8")
+    except Exception:
+        return
+    # Only a scalar `<key>: <number>` — never the geometry_schema block, where
+    # the same names introduce nested min/max mappings.
+    n_tot = 0
+    for key, value in (("sleeve_thickness", "0"), ("wire_parallel", "1")):
+        txt, n = re.subn(r"(?m)^(\s*%s:[ \t]*)[-+0-9.eE]+[ \t]*$" % key,
+                         r"\g<1>" + value, txt, count=1)
+        n_tot += n
+    if n_tot:
+        path.write_text(txt, encoding="utf-8")
+
+
+for _env, _real, _name in (("MOTOR_AI_SIM_CONFIG", _REAL_CONFIG, "motor_config.yaml"),
+                           ("MOTOR_AI_SIM_PRESETS", _REAL_PRESETS, "motor_presets.json")):
+    if os.environ.get(_env):
+        continue                      # an explicit override wins (CI, debugging)
+    _copy = _SANDBOX / _name
+    if _real.exists():
+        shutil.copy2(_real, _copy)
+        if _env == "MOTOR_AI_SIM_CONFIG":
+            _zero_the_sleeve(_copy)
+    os.environ[_env] = str(_copy)
+
+# ── the READ-ONLY libraries (migration Stage 2) ──────────────────────────────
+# Materials, bearings and the fusion map are ONE machine-wide answer that every
+# workspace quotes and no workspace may edit, so Stage 2 gives them to the
+# ``shared/`` layer — and with multi-user off ``workspace.shared_root()`` is the
+# folder the config path names, which in here is this sandbox.  Both library
+# loaders fall back to the repo copy when the shared folder has none, so the
+# suite was never going to lose them; putting the copies here anyway means the
+# sandbox is a COMPLETE little installation rather than one that happens to
+# work by fallback, and it is the shape the server will actually run in.
+#
+# COPIES, not the originals: the "never reach the live machine" guarantee is
+# that nothing under this tree is a path into ``config/``.  They are read-only
+# in practice (no route writes them; admin material edits go to Firestore
+# through ``materials_store``), so a copy costs a few hundred kilobytes once.
+for _lib in ("materials_library.yaml", "bearings_library.yaml",
+             "fusion_param_map.yaml", "end_effect_passports.json",
+             "end_effect_3d.json"):
+    _src = _ROOT / "config" / _lib
+    if _src.is_file() and not (_SANDBOX / _lib).exists():
+        shutil.copy2(_src, _SANDBOX / _lib)
+
+import pytest                                             # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _assert_the_live_config_is_untouched():
+    """Fail the session if a test wrote the user's config anyway — a redirect
+    that quietly stops working is worse than none."""
+    before = _REAL_CONFIG.read_bytes() if _REAL_CONFIG.exists() else None
+    yield
+    after = _REAL_CONFIG.read_bytes() if _REAL_CONFIG.exists() else None
+    assert before == after, (
+        "config/motor_config.yaml changed during the test session — either a "
+        "test bypassed MOTOR_AI_SIM_CONFIG and wrote the machine the user has "
+        "loaded, or something OUTSIDE the suite (the running backend, a PATCH "
+        "from the UI) edited it while the run was in flight.  Both are worth "
+        "knowing; check the audit trail in logs/geometry_audit.jsonl and rerun "
+        "with the app idle before treating it as a test bug.")
+
+
+@pytest.fixture(autouse=True)
+def _clear_run_history():
+    """Empty every ``motor_ai_sim.run_history`` kind before each test (2026-09-22).
+
+    ``run_history`` is a NEW persistent layer ("don't recompute an identical
+    request") that survives across requests — and, in this suite, across
+    TEST FUNCTIONS too, because the sandbox config directory this file
+    redirects to is the same for the whole session while ``run_history``
+    stores its files on disk under it.  A great many existing tests
+    (``tests/test_coupled*.py``, and others as more solve kinds are wired
+    in) post the textually IDENTICAL request body through a shared fixture,
+    relying on each test's OWN monkeypatched solver to answer differently —
+    exactly the situation persistent history exists to short-circuit for a
+    REAL caller.  Cleared here, once, for every kind, rather than in each
+    affected test file, so a new kind being wired into ``run_history`` can
+    never silently reintroduce this same class of cross-test collision.
+
+    Cheap: each kind's index is a small JSON file, and there are a handful
+    of kinds.  Failures are swallowed — a workspace this test has not
+    touched yet has no ``.run_history`` directory at all, which is not an
+    error.
+    """
+    try:
+        from motor_ai_sim import run_history as _rh
+        for _kind in _rh.known_kinds():
+            _h = _rh.history_for(_kind)
+            for _row in _h.list():
+                _h.delete(_row["key"])
+    except Exception:                                       # noqa: BLE001
+        pass
+    yield

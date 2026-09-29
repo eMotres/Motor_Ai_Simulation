@@ -1,0 +1,52 @@
+name: G2-L40
+die: CILN28
+role: generator
+created: '2026-08-19T18:07:03'
+geometry_overrides:
+  motor_length: 40
+  wire_width: 7
+  wire_height: 0.6
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 21
+  wire_split: 1
+  insulation_thickness: 0.2
+winding:
+  n_coils_per_phase: 4
+  connection: 4P
+  n_parallel: 4
+  n_series: 1
+  layers: 1
+end_winding_factor: 1.144
+duties:
+- name: peak
+  mode: generator
+  current_arms: 36.0
+  rpm: 3000.0
+  gamma_deg: 10.0
+  note: sheet wire 0.6; gamma not optimized yet
+  torque_nm: 59.0
+  power_kw: 18.5
+  saved_at: '2026-08-19T18:07:03'
+- name: optimal
+  mode: generator
+  current_arms: 31.0
+  rpm: 2200.0
+  gamma_deg: 10.0
+  note: sheet wire 0.6; gamma not optimized yet
+  torque_nm: 59.0
+  power_kw: 13.5
+  saved_at: '2026-08-19T18:07:03'
+materials:
+  magnet: F52SH_120C
+  stator_core: B15AHV950M
+  rotor_core: B15AHV950M
+battery:
+  chemistry: NMC
+  cells: 200
+  v_cell_min: 3.2
+  v_cell_nom: 3.75
+  v_cell_max: 4.3
+  v_min: 640.0
+  v_nom: 750.0
+  v_max: 860.0

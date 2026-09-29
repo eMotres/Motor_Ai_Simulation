@@ -1,0 +1,110 @@
+{
+  "case": "p2_demag",
+  "status": "passed",
+  "parameters": {
+    "n_steps_per_period": 12,
+    "n_periods": 1.0,
+    "mesh_size_mm": 1.4,
+    "min_size_mm": 0.35,
+    "gap_layers": 1.0,
+    "n_sectors": 2,
+    "structured_gap": true,
+    "iron_template": true,
+    "geo_mesh": true,
+    "coil_temp_c": 120.0,
+    "rotor_eddy": false,
+    "element_order": 2,
+    "demag": true,
+    "I_phase_rms": 60.0,
+    "gamma_deg": 0.0
+  },
+  "actual_metrics": {
+    "T_avg_Nm": 0.39510169896210573,
+    "T_ripple_pct": 0.5974804441347431,
+    "P_cu_W": 110.32003316528802,
+    "P_fe_W": 4.73591253082994,
+    "V_peak": 7.749580438070834,
+    "T_avg_maxwell_Nm": 0.39401652889343625,
+    "demag_br_min": 0.1390235169716597,
+    "demag_br_mean": 0.8280032557061477
+  },
+  "baseline_metrics": {
+    "P_cu_W": 110.31978375279301,
+    "P_fe_W": 4.737331519727038,
+    "T_avg_Nm": 0.3950961615551127,
+    "T_avg_maxwell_Nm": 0.394,
+    "T_ripple_pct": 0.5979380373780533,
+    "V_peak": 7.749646535146276,
+    "demag_br_mean": 0.8279892707618739,
+    "demag_br_min": 0.1390194718222431
+  },
+  "comparisons": {
+    "P_cu_W": {
+      "actual": 110.32003316528802,
+      "baseline": 110.31978375279301,
+      "difference": 0.00024941249500898266,
+      "relative_change_pct": 0.00022608138497431398,
+      "tolerance": 0.551598918763965,
+      "within_existing_tolerance": true
+    },
+    "P_fe_W": {
+      "actual": 4.73591253082994,
+      "baseline": 4.737331519727038,
+      "difference": -0.0014189888970976838,
+      "relative_change_pct": -0.02995333746833587,
+      "tolerance": 0.02368665759863519,
+      "within_existing_tolerance": true
+    },
+    "T_avg_Nm": {
+      "actual": 0.39510169896210573,
+      "baseline": 0.3950961615551127,
+      "difference": 5.537406993050276e-06,
+      "relative_change_pct": 0.0014015339889040792,
+      "tolerance": 0.0019754808077755634,
+      "within_existing_tolerance": true
+    },
+    "T_avg_maxwell_Nm": {
+      "actual": 0.39401652889343625,
+      "baseline": 0.394,
+      "difference": 1.652889343622954e-05,
+      "relative_change_pct": 0.0041951506183323705,
+      "tolerance": 0.00197,
+      "within_existing_tolerance": true
+    },
+    "T_ripple_pct": {
+      "actual": 0.5974804441347431,
+      "baseline": 0.5979380373780533,
+      "difference": -0.0004575932433101837,
+      "relative_change_pct": -0.07652853886277601,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    },
+    "V_peak": {
+      "actual": 7.749580438070834,
+      "baseline": 7.749646535146276,
+      "difference": -6.609707544225074e-05,
+      "relative_change_pct": -0.0008529043891548681,
+      "tolerance": 0.03874823267573138,
+      "within_existing_tolerance": true
+    },
+    "demag_br_mean": {
+      "actual": 0.8280032557061477,
+      "baseline": 0.8279892707618739,
+      "difference": 1.3984944273848221e-05,
+      "relative_change_pct": 0.0016890248180365891,
+      "tolerance": 0.01,
+      "within_existing_tolerance": true
+    },
+    "demag_br_min": {
+      "actual": 0.1390235169716597,
+      "baseline": 0.1390194718222431,
+      "difference": 4.0451494165982815e-06,
+      "relative_change_pct": 0.002909771820864491,
+      "tolerance": 0.01,
+      "within_existing_tolerance": true
+    }
+  },
+  "run_id": "20260916T204913.918167Z",
+  "wall_seconds": 137.27005169999757,
+  "cpu_seconds": 134.484375
+}

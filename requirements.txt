@@ -1,0 +1,60 @@
+# Backend runtime deps for the FEM API (self-hosted deploy).
+# ONLY what the working app needs: no torch / hydra / PINN (removed with
+# Modulus), no Firebase (auth is self-hosted since 2026-08-20).
+fastapi==0.129.0
+uvicorn[standard]==0.41.0
+pydantic==2.12.5
+python-multipart>=0.0.9
+numpy==2.4.4
+scipy==1.17.1
+shapely==2.1.2
+scikit-fem==12.0.1
+gmsh==4.15.2
+cadquery==2.7.0
+cadquery-ocp==7.8.1.1.post1
+matplotlib==3.10.8
+pyyaml==6.0.3
+trimesh==4.11.2
+# Auth: our HS256 session tokens + Google Identity Services ID-token
+# verification (JWKS, RS256). [crypto] pulls cryptography.
+pyjwt[crypto]==2.10.1
+# Password hashing for e-mail/password accounts: argon2id (legacy PBKDF2
+# hashes still verify and are upgraded on the next successful login).
+argon2-cffi>=23.1
+# Anthropic SDK: in-app AI support assistant (/api/support/chat). Reads
+# ANTHROPIC_API_KEY from env (server-side only); absent -> endpoint serves a
+# flagged mock reply. Set ANTHROPIC_SUPPORT_MODEL to override the model.
+anthropic>=0.40
+cma>=4.0  # CMA-ES optimizer
+sympy>=1.13  # symbolic back-EMF / modulus calc (pdes.py, solver_2d.py) — without it /api/simulation/status errors
+mapbox-earcut>=1.0  # 2D polygon triangulation (cadquery_geometry.get_2d_mesh_data) — without it /api/geometry/mesh2d + mesh_extruded return empty (geometry doesn't render) and build2d_sliding_band 500s
+meshio>=5.3  # skfem.io mesh IO (fem_solver_2d.build_mesh_from_polygons) — without it the FEM mesh build + simulation transient 500
+scikit-learn>=1.5  # surrogate model + DOE importance (surrogate.py: RandomForestRegressor, permutation_importance)
+pillow>=10  # PIL.Image domain rasterization for 2D field-map classification (routes/simulation.py)
+# MKL PARDISO sparse solver — the FEM transient is several times faster than
+# the SuperLU fallback. Pulls Intel MKL (~200 MB); worth it on any solve node.
+pypardiso>=0.4
+psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d); also the Stage 3 two-workspace soak (tests measure RSS)
+# ── report rendering (migration Stage 6, 2026-09-15) ────────────────────────
+# These three were installed on the workstation but NEVER pinned here, so a
+# fresh server build shipped an API whose report routes 500 on the first call.
+# Versions are the ones the pre-migration freeze recorded (pip_freeze
+# 2026-09-15) — the exact set every report in reports/ was rendered with.
+reportlab==5.0.0  # report.py PDF backend; GET /api/family/report/...?format=pdf 500s without it
+python-docx==1.2.0  # report_docx.py — the DEFAULT report format since 2026-09-09 (routes/report.py)
+# Triangulation fallback for earcut_fallback.py. On Windows it is the ONLY
+# path (App Control blocks mapbox_earcut's .pyd); on Linux the native earcut
+# loads and this is the belt-and-braces second path — it must exist, or the
+# fallback is a second ImportError instead of a fallback.
+triangle==20250106
+# The FOURTH unpinned report dependency, found on the server at Stage 7:
+# datasheet.py imports openpyxl, so GET /api/family/datasheet/...?format=xlsx
+# answered 500 "datasheet build failed: No module named 'openpyxl'" on the
+# first container build.  Same class of gap as the three above — installed on
+# the workstation, never pinned.  Version = the workstation's (2026-09-16).
+openpyxl==3.1.5
+# MCP server for external AI agents at /mcp (Stage 1, 2026-09-28,
+# docs/MCP_2026-09-28.md): the official Model Context Protocol SDK, streamable
+# HTTP transport.  Pinned to the version the tests ran with — 2.x renamed
+# FastMCP to MCPServer, so an unpinned install can break the import.
+mcp==2.2.0

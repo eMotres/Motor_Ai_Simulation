@@ -1,12 +1,30 @@
+import logging
+import math
+import os
+import re
 from pathlib import Path
 from typing import Any, Optional
 
+log = logging.getLogger(__name__)
+
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
 
-from motor_ai_sim.config import get_config, clear_config_cache, DEFAULT_CONFIG_PATH
-from motor_ai_sim.geometry.motor_geometry import HAS_MODULUS
+from motor_ai_sim.config import get_config, clear_config_cache, config_path as _resolve_cfg_path
+from motor_ai_sim import workspace as _WSG
+from motor_ai_sim.workspace import root as _ws_root_g
+from motor_ai_sim.routes._validation import (
+    DERIVED_GEOMETRY_NAMES,
+    MAX_POINTCLOUD_POINTS,
+    SOLVER_REQUIRED_PARAMS,
+    check_schema_bounds,
+    check_unknown_geometry_keys,
+    known_geometry_keys,
+    param_error,
+    parse_geo_override,
+    reject,
+)
 from motor_ai_sim.services.geometry_service import (
     generate_synthetic_pointcloud,
     get_current_geometry,
@@ -22,6 +40,53 @@ class GeometryUpdateModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+def check_geometry_submission(submitted_raw: dict) -> "dict[str, list]":
+    """Every content guard ``PUT /api/geometry`` refuses a write with —
+    unknown fields, the schema's own min/max, and unusable/impossible
+    derived values (a bore or rotor radius that comes out <= 0, a winding
+    that no longer fits) — evaluated WITHOUT writing or raising, keyed by
+    the same ``error`` string the route raises with.
+
+    THE one place these three checks run, so a caller that wants to know
+    whether a write WOULD be refused (a confirm dialog previewing a batch of
+    changes before the user commits to them, e.g. the Fusion import's
+    ``dry_run=1``) sees the identical verdict and message the write itself
+    refuses with, rather than finding out only after the write was
+    attempted.  Family locks (guard 4, "who may change this key") are
+    deliberately NOT here: whether the resulting machine can even exist does
+    not depend on who is editing it, and a locked field previewed here must
+    not be reported as "impossible" just because a lock would separately
+    refuse it.
+
+    ``submitted_raw`` is the {key: value} dict of the fields this write
+    would touch — exactly ``update.model_dump()`` with ``None`` dropped, or
+    (for a preview) the same dict a real write would receive.  Returns a
+    dict of ``error string -> [param_error, ...]``; empty when nothing is
+    wrong.  Iterate ``("unknown geometry field", "geometry parameter out of
+    range", "invalid geometry parameter value")`` for the order a real write
+    raises in (fails on the first non-empty one).
+    """
+    out: "dict[str, list]" = {}
+    unknown = check_unknown_geometry_keys(submitted_raw)
+    if unknown:
+        out["unknown geometry field"] = unknown
+    out_of_range = check_schema_bounds(submitted_raw)
+    if out_of_range:
+        out["geometry parameter out of range"] = out_of_range
+    try:
+        from motor_ai_sim.geometry_validation import validate_parameter_values
+        merged = {**get_current_geometry().to_dict(), **submitted_raw}
+        bad = [r for r in validate_parameter_values(merged)
+               if r.get("kind") == "derived" or r.get("field") in submitted_raw]
+    except HTTPException:
+        raise
+    except Exception:
+        bad = []   # the guard must never be the reason an edit cannot be saved
+    if bad:
+        out["invalid geometry parameter value"] = bad
+    return out
+
+
 class AddParameterRequest(BaseModel):
     name: str
     label: str
@@ -33,19 +98,96 @@ class AddParameterRequest(BaseModel):
     step: float = 0.1
     default_value: float = 0.0
     description: str = ""
+    #: Opt-in for overwriting a parameter that already exists.  Absent (the
+    #: default) an existing name is a 422 — creating "wire_width" a second time
+    #: used to silently overwrite the real one's bounds and value.
+    update: bool = False
+
+
+_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 @router.get("")
 def get_geometry():
     try:
-        return params_to_dict(get_current_geometry(reload=True))
+        out = params_to_dict(get_current_geometry(reload=True))
+        # A knob the SERVER owns that this config predates has a DEFAULT, and
+        # the form has to be handed it: a schema parameter with no value renders
+        # as an empty box the user can only fix by typing, and 0 strands in hand
+        # is not a machine.  See _validation.SCHEMA_FALLBACK.
+        from motor_ai_sim.routes._validation import SCHEMA_FALLBACK
+        for _k, _meta in SCHEMA_FALLBACK.items():
+            if _k not in out:
+                out[_k] = _meta.get("min", 1)
+        return out
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.put("")
-def update_geometry(update: GeometryUpdateModel):
+def update_geometry(update: GeometryUpdateModel, request: Request = None):
+    # ── Input guard 1: the NAME has to be a parameter this server knows ──────
+    # An unknown key was accepted twice over and applied zero times: the live
+    # geometry object got the attribute, the YAML writer (`if key in
+    # geometry_section`) dropped it, and the next restart silently reverted the
+    # "saved" edit.  A typo therefore looked like it worked, and the process and
+    # the file disagreed in between.  422 with the nearest real name.
+    _submitted_raw = {k: v for k, v in update.model_dump().items() if v is not None}
+    # The machine as it stands BEFORE this save — the die-sync's stranger
+    # guard compares against it to tell "an edit of this die's machine" from
+    # "a foreign machine landing after a die switch" (see
+    # sync_active_die_geometry; incident 2026-08-24).
     try:
+        from motor_ai_sim.config import get_config as _gc_prev
+        _prev_geo = dict(_gc_prev().get("geometry", {}) or {})
+    except Exception:   # noqa: BLE001
+        _prev_geo = None
+    # ── Input guards 2-3: schema bounds + unusable/impossible VALUES ─────────
+    # Guard 2 is the schema's OWN min/max, enforced server-side (the frontend
+    # clamps its sliders to these numbers — GET /api/geometry/schema serves
+    # them — so anything that is not the frontend did not; GEO_UNBOUNDED=1 is
+    # the documented escape hatch and logs a warning while it is on).  Guard 3
+    # rejects a zero / negative / non-finite dimension, and every DERIVED
+    # combination that does not survive the arithmetic (a bore or rotor
+    # radius <= 0, a winding that no longer fits) regardless of which single
+    # knob in the combination this request actually touched — a bore radius
+    # that comes out negative is broken no matter which parameter was the one
+    # just typed.  Both live in ``check_geometry_submission`` so a caller
+    # PREVIEWING a write (the Fusion import's ``dry_run=1``) sees the exact
+    # same verdict and message a real write would refuse with, instead of
+    # only finding out after the write was attempted.  This route still fails
+    # FAST, in the same order, on the first non-empty one.
+    _checks = check_geometry_submission(_submitted_raw)
+    for _err_name in ("unknown geometry field", "geometry parameter out of range",
+                      "invalid geometry parameter value"):
+        if _err_name in _checks:
+            raise reject(_err_name, _checks[_err_name])
+
+    # ── Input guard 4: family locks ──────────────────────────────────────────
+    # The machine on screen may BE a stamped product (die) or a frozen build
+    # (configuration).  Locked keys refuse changes loudly — writing the
+    # canonical value back is still allowed, which is exactly how loading the
+    # configuration itself passes.  423 Locked, with the fields named.
+    try:
+        from motor_ai_sim.routes.family import geometry_lock_check
+        _locked = geometry_lock_check(_submitted_raw)
+    except HTTPException:
+        raise
+    except Exception:
+        _locked = None   # the guard must never be the reason a solve breaks
+    if _locked:
+        raise HTTPException(status_code=423, detail=_locked)
+
+    try:
+        # Who is changing the live machine, and into what.  Cheap, write-only,
+        # and the only thing that can answer "the motor changed under me — who
+        # did it?" after the fact.  See motor_ai_sim/audit.py.
+        try:
+            from motor_ai_sim.audit import record_write as _audit
+            _geo_before = dict(get_current_geometry().to_dict())
+        except Exception:
+            _audit, _geo_before = None, {}
+
         from motor_ai_sim.cadquery_geometry import CadQueryCache
         CadQueryCache().clear_all()
         _mesh_cache["hash"] = None
@@ -54,38 +196,269 @@ def update_geometry(update: GeometryUpdateModel):
         # Mesh tab and Simulation re-solve on the NEW cross-section.
         try:
             from motor_ai_sim.routes.simulation import clear_simulation_caches
-            clear_simulation_caches()
+            clear_simulation_caches(reason="geometry changed (PUT /api/geometry)")
         except Exception:
             pass
         params = update_current_geometry(**update.model_dump())
 
         # Persist changes to YAML so they survive server restarts
-        config_path = Path(DEFAULT_CONFIG_PATH)
+        config_path = Path(str(_resolve_cfg_path()))
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
         geometry_section = config.setdefault("geometry", {})
+        # `key in geometry_section` is the guard that stops a typo from being
+        # written — guard 1 above has already refused every name the server
+        # does not know.  A knob the SERVER owns but this file predates
+        # (SCHEMA_FALLBACK, e.g. wire_parallel on a config saved before it
+        # existed) is known and must be creatable, or the Geometry tab accepts
+        # the edit and the next reload silently reverts it.
+        from motor_ai_sim.routes._validation import SCHEMA_FALLBACK
         for key, value in update.model_dump().items():
-            if value is not None and key in geometry_section:
+            if value is not None and (key in geometry_section
+                                      or key in SCHEMA_FALLBACK):
                 geometry_section[key] = value
+        # Recompute the DERIVED raw fields that shadow the formulas.  The YAML
+        # stores both num_seg/num_*_per_segment AND flattened num_poles/
+        # num_slots/angle_* — the solver path reads the flattened ones, so a
+        # segment-count edit that skips this left e.g. num_poles at the OLD
+        # value: a 20-pole rotor driven at the 28-pole frequency (T garbage)
+        # with the 28-pole winding layout.
+        try:
+            _ns = float(geometry_section.get("num_seg", 0) or 0)
+            _pps = float(geometry_section.get("num_poles_per_segment", 0) or 0)
+            _sps = float(geometry_section.get("num_slots_per_segment", 0) or 0)
+            if _ns > 0 and _pps > 0 and "num_poles" in geometry_section:
+                geometry_section["num_poles"] = int(round(_ns * _pps))
+                if "angle_pole" in geometry_section:
+                    geometry_section["angle_pole"] = 360.0 / (_ns * _pps)
+            if _ns > 0 and _sps > 0 and "num_slots" in geometry_section:
+                geometry_section["num_slots"] = int(round(_ns * _sps))
+                if "angle_slot" in geometry_section:
+                    geometry_section["angle_slot"] = 360.0 / (_ns * _sps)
+        except Exception:
+            pass
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
-        return params_to_dict(params)
+        if _audit is not None:
+            # WHO and WHAT, not just the diff.  Two machine-identity clobbers
+            # (2026-08-16 14:14 and 19:27, both 200 mm -> 30 mm) reached this
+            # route from 127.0.0.1 and the audit could not name the sender —
+            # every legitimate UI path edits single keys or loads motors
+            # server-side, so a multi-key PUT that changes poles/slots is
+            # exactly the write that must arrive with its origin attached.
+            try:
+                _cli = "%s:%s" % (request.client.host, request.client.port)                        if request is not None and request.client else ""
+                _ua = (request.headers.get("user-agent", "")[:60]
+                       if request is not None else "")
+                _ref = (request.headers.get("referer", "")[:60]
+                        if request is not None else "")
+            except Exception:
+                _cli = _ua = _ref = ""
+            _audit("live_geometry", _geo_before, geometry_section,
+                   note="PUT /api/geometry keys=%d [%s] ua=%s ref=%s"
+                        % (len(_submitted_raw),
+                           ",".join(sorted(_submitted_raw)[:12]), _ua, _ref),
+                   client=_cli)
+
+        # Flush the config cache so get_config()-based consumers (the analytical
+        # torque_sweep, params_from_config, winding calc, …) read the NEW
+        # geometry. Without this they keep returning the stale cross-section,
+        # which silently invalidates geometry optimization.
+        try:
+            from motor_ai_sim.config import clear_config_cache
+            clear_config_cache()
+        except Exception:
+            pass
+
+        # ── Enforce geometry feasibility constraints ─────────────────────────
+        # Clamp any knob that now violates a physical constraint (e.g. a winding
+        # that no longer fits the slot) and persist the clamped value, so the
+        # simulation geometry is ALWAYS valid.  Report what was clamped.
+        applied: list = []
+        try:
+            from motor_ai_sim.config import get_config, clear_config_cache
+            from motor_ai_sim.geometry_constraints import clamp as _clamp_geo
+            full_geo = dict(get_config().get("geometry", {}))
+            _clamped, applied = _clamp_geo(full_geo)
+            if applied:
+                fixes = {a["target"]: _clamped[a["target"]] for a in applied}
+                params = update_current_geometry(**fixes)
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = yaml.safe_load(f)
+                gs = config.setdefault("geometry", {})
+                for k, v in fixes.items():
+                    gs[k] = v
+                with open(config_path, "w", encoding="utf-8") as f:
+                    yaml.dump(config, f, allow_unicode=True,
+                              default_flow_style=False, sort_keys=False)
+                clear_config_cache()
+        except Exception as _ce:   # noqa: BLE001
+            # Never silent: if this block dies AFTER update_current_geometry()
+            # succeeded but BEFORE the YAML write, the live object and the file
+            # disagree until restart — and if the clamp engine itself threw,
+            # constraint enforcement was skipped for this save.  The save still
+            # succeeds (the primary write above went through); the log is the
+            # only witness, so it must exist.
+            log.warning("geometry PUT: constraint clamp/persist step failed "
+                        "(%s) — the primary save succeeded, but clamped fixes "
+                        "may not be persisted; live config and YAML can "
+                        "diverge until restart", _ce)
+
+        result = params_to_dict(params)
+        if applied:
+            result["constraints_applied"] = [
+                {"target": a["target"], "clamped_to": a["clamped_to"],
+                 "bound": a["bound"], "label": a["label"]} for a in applied]
+
+        # ── Keep the ACTIVE die's catalog snapshot honest ────────────────────
+        # An UNLOCKED die is a work in progress: its die.yaml geometry (the Ø
+        # the catalog groups by, the build_sig duties are judged against, the
+        # cross-section an apply restores) must follow the live edits, or it
+        # stays whatever the die was duplicated from.  Locked dies are left
+        # alone — their snapshot is canon.  Best-effort: a sync hiccup must not
+        # fail the save that already happened.
+        try:
+            from motor_ai_sim.routes.family import sync_active_die_geometry
+            from motor_ai_sim.config import get_config as _gc
+            sync_active_die_geometry(dict(_gc().get("geometry", {}) or {}),
+                                     prev_geo=_prev_geo)
+        except Exception as _se:   # noqa: BLE001
+            log.warning("geometry PUT: active-die snapshot sync failed: %s", _se)
+
+        # ── Real geometry validation, AFTER the clamp ───────────────────────
+        # The clamp fixes ONE knob at a time against an analytic bound; it can
+        # not see where the finished regions land.  Build the same 2-D polygons
+        # the mesher consumes and check them for overlaps / escapes / collapses.
+        #
+        # The result travels as WARNINGS: the user may well be mid-edit (change
+        # tooth_width, then wire_width), and refusing to save the intermediate
+        # state would make the form unusable.  Solving is what gets blocked —
+        # see the gate in routes/simulation.get_fem_transient.
+        try:
+            from motor_ai_sim.geometry_validation import validate_geometry
+            _vres = validate_geometry(dict(get_config().get("geometry", {})))
+            result["geometry_validation"] = _vres.to_dict()
+        except Exception as _ve:      # never block a save on the validator
+            result["geometry_validation"] = {
+                "ok": True, "n_errors": 0, "n_warnings": 0, "violations": [],
+                "hidden": {}, "checks_run": [], "min_air_gap_mm": None,
+                "unavailable": str(_ve)}
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/constraints")
+def get_geometry_constraints():
+    """Dynamic feasibility bounds (e.g. max wire_height) for the CURRENT geometry
+    so the UI can show the effective limit next to a field."""
+    try:
+        from motor_ai_sim.config import get_config
+        from motor_ai_sim.geometry_constraints import bounds, evaluate
+        geo = dict(get_config().get("geometry", {}))
+        return {"bounds": bounds(geo), "checks": evaluate(geo)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/validation")
+def get_geometry_validation(geo: Optional[str] = None):
+    """Region-level validation of the CURRENT cross-section (or of a per-request
+    ``geo`` override): which domains overlap, where, and by how much.
+
+    Same polygons the mesher consumes, so what is reported here is what would be
+    solved.  The Geometry tab calls this on load; a PUT returns the same payload
+    under ``geometry_validation`` so an edit updates the list without a refetch.
+    """
+    try:
+        from motor_ai_sim.geometry_validation import validate_geometry
+        return validate_geometry(_resolve_geo_dict(geo)).to_dict()
+    except HTTPException:
+        raise          # a 422 from `geo=` must not be laundered into a 500
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/parameter")
 def add_parameter(req: AddParameterRequest):
-    """Add a new parameter to motor_config.yaml and reload the schema."""
+    """Add a new parameter to motor_config.yaml and reload the schema.
+
+    Everything below the first ``try`` used to run unconditionally: ``min=10,
+    max=1`` produced a slider with no reachable value, ``name="num_slots"``
+    created a schema entry for a number the code DERIVES (silently overwritten
+    on the next reload, so the field did nothing), and re-adding an existing
+    name overwrote the real parameter's bounds and value with the defaults of
+    this request.  All three now 422 with the offending field named.
+    """
+    name = req.name.strip().lower().replace(" ", "_").replace("-", "_")
+    bad: list = []
+
+    # ── name ────────────────────────────────────────────────────────────────
+    if not name:
+        bad.append(param_error("name", req.name, "empty",
+                               "name must not be empty."))
+    elif not _NAME_RE.match(name):
+        bad.append(param_error(
+            "name", req.name, "bad_identifier",
+            f"'{name}' is not a usable parameter name: it must start with a "
+            f"letter and contain only lowercase letters, digits and "
+            f"underscores (it becomes a YAML key and a Python attribute)."))
+    elif name in DERIVED_GEOMETRY_NAMES:
+        bad.append(param_error(
+            "name", name, "reserved",
+            f"'{name}' is DERIVED by the geometry code (see "
+            f"MotorGeometryParams._compute_derived) — a parameter of that name "
+            f"is recomputed and overwritten on every reload, so it would never "
+            f"do anything. Reserved names: "
+            f"{', '.join(sorted(DERIVED_GEOMETRY_NAMES))}.",
+            reserved_names=sorted(DERIVED_GEOMETRY_NAMES)))
+    elif not req.update and name in known_geometry_keys():
+        bad.append(param_error(
+            "name", name, "already_exists",
+            f"'{name}' already exists — adding it again would overwrite the "
+            f"live parameter's bounds and value. Pass \"update\": true to "
+            f"change it deliberately."))
+
+    # ── type ────────────────────────────────────────────────────────────────
+    if req.type not in ("float", "int"):
+        bad.append(param_error("type", req.type, "bad_value",
+                               f"type must be 'float' or 'int', got "
+                               f"'{req.type}'."))
+
+    # ── range ───────────────────────────────────────────────────────────────
+    for _f, _v in (("min", req.min), ("max", req.max), ("step", req.step),
+                   ("default_value", req.default_value)):
+        if not math.isfinite(float(_v)):
+            bad.append(param_error(_f, _v, "not_finite",
+                                   f"{_f} must be a finite number, got {_v!r}."))
+    if math.isfinite(req.min) and math.isfinite(req.max) and req.min >= req.max:
+        bad.append(param_error(
+            "min", req.min, "bad_range",
+            f"min ({req.min:g}) must be strictly less than max ({req.max:g}) — "
+            f"otherwise the parameter has no value it is allowed to take.",
+            min=req.min, max=req.max))
+    if math.isfinite(req.step) and req.step <= 0:
+        bad.append(param_error("step", req.step, "bad_value",
+                               f"step must be > 0, got {req.step:g}."))
+    if (math.isfinite(req.default_value) and math.isfinite(req.min)
+            and math.isfinite(req.max) and req.min < req.max
+            and not (req.min <= req.default_value <= req.max)):
+        bad.append(param_error(
+            "default_value", req.default_value, "out_of_range",
+            f"default_value ({req.default_value:g}) is outside the range this "
+            f"same request declares [{req.min:g}, {req.max:g}].",
+            min=req.min, max=req.max))
+
+    if bad:
+        raise reject("invalid parameter definition", bad)
+
     try:
-        config_path = Path(DEFAULT_CONFIG_PATH)
+        config_path = Path(str(_resolve_cfg_path()))
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
-
-        name = req.name.strip().lower().replace(" ", "_").replace("-", "_")
 
         # Add to geometry section with default value
         value = int(req.default_value) if req.type == "int" else float(req.default_value)
@@ -117,9 +490,11 @@ def add_parameter(req: AddParameterRequest):
 
         # Reload everything
         clear_config_cache()
-        from motor_ai_sim.services.geometry_service import _current_geometry
         import motor_ai_sim.services.geometry_service as gs
-        gs._current_geometry = None
+        # Stage 3: drop THIS caller's geometry singleton.  A plain
+        # ``gs._current_geometry = None`` would create a real module attribute
+        # and pin every workspace to one geometry for the rest of the process.
+        gs._geom_set(None)
 
         return {"success": True, "name": name}
     except Exception as e:
@@ -128,9 +503,26 @@ def add_parameter(req: AddParameterRequest):
 
 @router.delete("/parameter/{name}")
 def delete_parameter(name: str):
-    """Remove a parameter from motor_config.yaml."""
+    """Remove a parameter from motor_config.yaml.
+
+    A parameter the solver reads is NOT deletable: the endpoint used to return
+    ``{"success": true}`` for ``DELETE /api/geometry/parameter/air_gap`` and the
+    next solve died with a KeyError three layers down in
+    ``params_from_config`` — with nothing to connect the crash to the delete.
+    """
+    if name in SOLVER_REQUIRED_PARAMS or name in DERIVED_GEOMETRY_NAMES:
+        _why = ("is DERIVED from other parameters and is recreated on every "
+                "reload" if (name in DERIVED_GEOMETRY_NAMES
+                             and name not in SOLVER_REQUIRED_PARAMS)
+                else "is required by the solver")
+        raise reject(f"'{name}' is required by the solver", [param_error(
+            name, None, "protected",
+            f"'{name}' {_why} — it cannot be deleted. Removing it would break "
+            f"the next mesh build and FEM solve (params_from_config reads it "
+            f"directly). Change its value instead.",
+            protected=True)])
     try:
-        config_path = Path(DEFAULT_CONFIG_PATH)
+        config_path = Path(str(_resolve_cfg_path()))
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
 
@@ -150,7 +542,7 @@ def delete_parameter(name: str):
 
         clear_config_cache()
         import motor_ai_sim.services.geometry_service as gs
-        gs._current_geometry = None
+        gs._geom_set(None)              # Stage 3: this caller's singleton only
 
         return {"success": True, "name": name}
     except HTTPException:
@@ -186,8 +578,30 @@ def get_geometry_summary():
 def get_geometry_schema():
     try:
         config = get_config(reload=True)
-        schema = config.get("geometry_schema", {})
+        # geometry_schema_meta, not the raw block: a knob added in code after
+        # this config was written (SCHEMA_FALLBACK) has to reach the Geometry
+        # tab too, or it exists in the solver and nowhere in the UI.
+        from motor_ai_sim.routes._validation import geometry_schema_meta
+        schema = geometry_schema_meta()
         groups = config.get("parameter_groups", {})
+        # Only parameters in the whitelist may be used as Sweep/Optimize
+        # variables.  Empty/missing list → all parameters allowed (back-compat).
+        whitelist = config.get("sweep_whitelist", None)
+        allow_all = not whitelist
+        whitelist_set = set(whitelist or [])
+        # GEO_UNBOUNDED=1 lifts every parameter's min/max cap (debug/exploration
+        # across motor scales 40 mm ↔ 450 mm) so the field clamp never blocks a
+        # value.  The yaml bounds are preserved; this only overrides them at serve
+        # time while the flag is on — unset the env var to restore the caps.
+        _unbounded = os.environ.get("GEO_UNBOUNDED", "0") == "1"
+        # The admissible slot/pole topology, ONE table (geometry_validation):
+        # served on `num_poles_per_segment` as `allowed_by` = {dependency key:
+        # {its value: [allowed values]}}, so the Geometry table offers a select
+        # of the stamped pole counts instead of a free number — the same rule
+        # PUT /api/geometry refuses on.
+        from motor_ai_sim.geometry_validation import ADMISSIBLE_POLES_PER_SEGMENT
+        _allowed_by = {"num_slots_per_segment": {
+            str(k): list(v) for k, v in ADMISSIBLE_POLES_PER_SEGMENT.items()}}
 
         parameters = [
             {
@@ -195,11 +609,22 @@ def get_geometry_schema():
                 "label": meta.get("label", name.replace("_", " ").title()),
                 "unit": meta.get("unit", ""),
                 "type": meta.get("type", "float"),
-                "min": meta.get("min", 0),
-                "max": meta.get("max", 1000),
+                "min": 0 if _unbounded else meta.get("min", 0),
+                "max": 1_000_000 if _unbounded else meta.get("max", 1000),
                 "step": meta.get("step", 0.1),
                 "group": meta.get("group", "other"),
                 "description": meta.get("description", ""),
+                # A knob whose value is a WORD carries its allowed words here;
+                # the form renders a Select whenever this list is non-empty, and
+                # a number field otherwise.  No knob uses it today (magnet_top,
+                # the one that did, was retired on 2026-09-06 — the magnet top
+                # is always the arc now), but dropping the field on the way out
+                # is what once showed a choice as a free-text box.
+                "options": list(meta.get("options") or []),
+                "default": meta.get("default"),
+                "optimizable": bool(allow_all or name in whitelist_set),
+                "hidden": bool(meta.get("hidden", False)),
+                **({"allowed_by": _allowed_by} if name == "num_poles_per_segment" else {}),
             }
             for name, meta in schema.items()
         ]
@@ -217,67 +642,352 @@ def get_geometry_schema():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-_mesh_cache: dict           = {"hash": None, "data": None, "build_time_s": None}
-_mesh2d_cache: dict         = {"hash": None, "data": None, "build_time_s": None}
-_mesh_extruded_cache: dict  = {"hash": None, "data": None, "build_time_s": None}
+#: Dimension-sheet render cache — one slot per (workspace, format), same
+#: shape as the mesh slots below (a params-hash tag and the last payload, so a
+#: Help click on an unchanged machine is a cache hit instead of a re-render) —
+#: but defined here, ahead of ``_mesh_slot()``, so it seeds itself rather than
+#: forward-referencing a function that is not defined until further down.
+_dimsheet_cache = _WSG.ws_map(
+    "geometry.dimension_sheet_slot", 8,
+    seed=lambda: {"hash": None, "data": None})
+
+
+@router.get("/dimension_sheet")
+def get_geometry_dimension_sheet(format: str = "svg"):
+    """An annotated cross-section of the CURRENT machine — every geometry
+    parameter as a dimension line/leader where it is a visible feature of the
+    section, or a legend row (`key = value unit`) otherwise.  The Geometry
+    tab's Help button opens this in a new window; see
+    ``services/dimension_sheet.py`` for how labels are placed.
+
+    Same geometry ``get_2d_polygons()`` (not a re-derived shape), same auth
+    tier as the rest of ``GET /api/geometry*`` (none of its own).  Cacheable
+    by geometry fingerprint — a repeat click on an unchanged machine is a
+    cache hit.
+    """
+    fmt = (format or "svg").lower()
+    if fmt not in ("svg", "png"):
+        raise reject("unsupported dimension_sheet format", [param_error(
+            "format", format, "bad_value",
+            f"format must be 'svg' or 'png', got {format!r}.")])
+    try:
+        import hashlib, json
+        from motor_ai_sim.routes._validation import geometry_schema_meta
+        from motor_ai_sim.services.dimension_sheet import build_dimension_sheet
+
+        geo = get_current_geometry().to_dict()
+        schema = geometry_schema_meta()
+        groups_cfg = get_config().get("parameter_groups", {})
+        groups = sorted(
+            [{"id": gid, "label": gmeta.get("label", gid.title()),
+              "order": gmeta.get("order", 99)}
+             for gid, gmeta in groups_cfg.items()],
+            key=lambda g: g["order"])
+
+        params_hash = hashlib.md5(
+            (json.dumps(geo, sort_keys=True)
+             + json.dumps(schema, sort_keys=True, default=str)).encode()
+        ).hexdigest()
+        cache_key = f"{params_hash}.{fmt}"
+        slot = _dimsheet_cache
+        if slot.get("hash") == cache_key and slot.get("data") is not None:
+            payload = slot["data"]
+        else:
+            payload = build_dimension_sheet(geo, schema, groups, fmt=fmt)
+            slot["hash"] = cache_key
+            slot["data"] = payload
+
+        media_type = "image/svg+xml" if fmt == "svg" else "image/png"
+        return Response(
+            content=payload, media_type=media_type,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "ETag": f'"{params_hash}"',
+                "Content-Disposition": f'inline; filename="geometry_dimensions.{fmt}"',
+            })
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("dimension_sheet build failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Migration Stage 3: per WORKSPACE.  Three one-geometry slots; the payload is a
+# ~1.2 MB viewer mesh and the slot is overwritten on every build, so the cap is
+# a safety valve over the three fixed keys each holds.
+def _mesh_slot():
+    return {"hash": None, "data": None, "build_time_s": None}
+
+
+_mesh_cache = _WSG.ws_map("geometry.mesh_slot", 8, seed=_mesh_slot)
+_mesh2d_cache = _WSG.ws_map("geometry.mesh2d_slot", 8, seed=_mesh_slot)
+_mesh_extruded_cache = _WSG.ws_map("geometry.mesh_extruded_slot", 8,
+                                   seed=_mesh_slot)
+
+# ── DISK LAYER under the memory slots ────────────────────────────────────
+# The 3-D viewer mesh is a 10-16 s OCC build and the slot above holds ONE
+# geometry: every parameter edit and every backend restart rebuilt it from
+# scratch (2026-09-13: eight restarts in a day, 16 s each, felt as "geometry
+# loads slowly").  A payload is ~1.2 MB (≈250 KB gzipped), so keeping the 40
+# newest on disk costs ~10 MB and makes "back to the previous value" and
+# "after a restart" instant.  Keyed by the SAME params+part-state hash the
+# memory slot uses, so the two can never disagree about what a payload is.
+# Per WORKSPACE since Stage 1 — a cached viewer mesh is a picture of ONE
+# machine, so it must never be served across users.  With no workspace set
+# this is the folder it always was.  The name survives for the completeness
+# test; a monkeypatched value in the module dict wins.
+def _mesh_disk_dir() -> Path:
+    _ov = globals().get("_MESH_DISK_DIR")
+    if _ov is not None:
+        return Path(str(_ov))
+    return _ws_root_g() / ".mesh_cache"
+
+
+def __getattr__(name):
+    if name == "_MESH_DISK_DIR":
+        return _mesh_disk_dir()
+    raise AttributeError(name)
+
+
+_MESH_DISK_KEEP = 40
+
+
+def _mesh_disk_get(kind: str, params_hash: str):
+    """Cached payload for (kind, hash) from disk, or None.  Never raises."""
+    try:
+        import gzip, json as _json
+        p = _mesh_disk_dir() / f"{kind}.{params_hash}.json.gz"
+        if not p.is_file():
+            return None
+        with gzip.open(p, "rt", encoding="utf-8") as fh:
+            return _json.load(fh)
+    except Exception:      # noqa: BLE001 — a cache miss, never a failed request
+        return None
+
+
+def _mesh_disk_put(kind: str, params_hash: str, data) -> None:
+    """Store a payload on disk and trim the kind to the newest entries."""
+    try:
+        import gzip, json as _json, os as _os
+        _mesh_disk_dir().mkdir(parents=True, exist_ok=True)
+        p = _mesh_disk_dir() / f"{kind}.{params_hash}.json.gz"
+        tmp = p.with_suffix(".tmp")
+        with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=5) as fh:
+            _json.dump(data, fh)
+        _os.replace(tmp, p)
+        old = sorted(_mesh_disk_dir().glob(f"{kind}.*.json.gz"),
+                     key=lambda q: q.stat().st_mtime)
+        for q in old[:-_MESH_DISK_KEEP]:
+            q.unlink(missing_ok=True)
+    except Exception:      # noqa: BLE001
+        log.debug("mesh disk cache: could not store %s", kind, exc_info=True)
+
+
+def _warm_live_mesh(delay_s: float = 5.0) -> None:
+    """Build the LIVE geometry's viewer meshes once, in the background, shortly
+    after boot — so the first look after a restart is a disk/memory hit.  A
+    disk hit costs nothing; a miss costs one build that nobody is waiting on."""
+    import threading
+
+    def _go():
+        try:
+            get_geometry_mesh2d(None)
+            get_geometry_mesh(None)
+            log.info("viewer meshes warmed for the live geometry")
+        except Exception as _e:     # noqa: BLE001 — a warm-up must never matter
+            log.info("viewer mesh warm-up skipped: %s", _e)
+    threading.Timer(delay_s, _go).start()
+
+def _resolve_geo_dict(geo: Optional[str]) -> dict:
+    """Geometry for a mesh request: the global config, optionally overlaid with a
+    per-request ``geo`` override (a JSON dict of geometry params).
+
+    Step 1 of the multi-user migration (docs/MULTI_USER_PLAN.md): a signed-in
+    client can compute the mesh for ITS OWN design by passing ``geo``, without
+    mutating the shared global config.
+
+    A MALFORMED ``geo`` is a 422, not a fallback.  It used to be
+    ``except Exception: pass``, which handed the client the shared global
+    config — someone else's design — rendered as its own mesh, with a 200 and no
+    way to tell.  Absent ``geo`` still means "the global config", as before.
+    """
+    params_dict = get_current_geometry().to_dict()
+    override = parse_geo_override(geo)
+    # merge_geo_override, not a dict-update: ``to_dict`` carries the DERIVED
+    # fields (counts, slot_width, radii, angles) and the override carries
+    # PRIMARIES, so an update returns one motor's primaries under another's
+    # derived values — and this dict is both hashed for the mesh cache and handed
+    # to the CAD.
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+    return merge_geo_override(params_dict, override)
+
+
+#: mesh-data key → the part whose accounting state governs it.  ``coil_7``,
+#: ``magnet_3`` etc. are matched by prefix (see ``_part_of_mesh_key``).
+_MESH_KEY_PART = {
+    "stator_core": "stator_core",
+    "rotor_core": "rotor_core",
+    "shaft": "shaft",
+    "sleeve": "sleeve",
+}
+_MESH_PREFIX_PART = (("magnet_", "magnet"), ("coil_", "slot"))
+
+
+def _part_of_mesh_key(key: str) -> Optional[str]:
+    """Which motor part a mesh-data key belongs to, or None (bands, timing,
+    insulation — nothing the accounting states govern)."""
+    if key in _MESH_KEY_PART:
+        return _MESH_KEY_PART[key]
+    for pref, part in _MESH_PREFIX_PART:
+        if key.startswith(pref):
+            return part
+    return None
+
+
+def _drop_excluded_meshes(data: dict) -> dict:
+    """Remove every mesh belonging to an EXCLUDED part.
+
+    THIS is the invisibility guarantee, and it is deliberately made on the
+    SERVER, at the only place all three viewer paths (CadQuery 3D, extruded 3D,
+    flat 2D cross-section) get their geometry from: a part that is not in the
+    payload cannot be drawn as a ghost, an outline or a selectable body by any
+    component, present or future — every one of them renders
+    ``geometries.<key> && …`` or filters ``Object.keys(...)``, so a missing key
+    renders nothing at all.  (The viewer ALSO gates on the state client-side,
+    for the client-mode user whose states live in a browser overlay and never
+    reach this route.)  A `reference` part is drawn normally — it is really
+    there, it is just not ours.
+    """
+    try:
+        from motor_ai_sim.part_states import resolve, EXCLUDED
+        gone = {k for k, v in resolve().items() if v == EXCLUDED}
+    except Exception:      # noqa: BLE001 — no state map is the default machine
+        return data
+    if not gone or not isinstance(data, dict):
+        return data
+    return {k: v for k, v in data.items() if _part_of_mesh_key(k) not in gone}
+
+
+def _part_state_cache_tag() -> str:
+    """Stable rendering of the accounting states for a mesh cache key — two
+    states of one machine must not share a cached mesh payload."""
+    try:
+        from motor_ai_sim.part_states import resolve
+        return repr(sorted(resolve().items()))
+    except Exception:      # noqa: BLE001
+        return ""
+
 
 @router.get("/mesh")
-def get_geometry_mesh():
+def get_geometry_mesh(geo: Optional[str] = None):
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
-        params = get_current_geometry()
-        params_dict = params.to_dict()
-        params_hash = hashlib.md5(json.dumps(params_dict, sort_keys=True).encode()).hexdigest()
+        params_dict = _resolve_geo_dict(geo)
+        params_hash = hashlib.md5(
+            (json.dumps(params_dict, sort_keys=True)
+             + _part_state_cache_tag()).encode()).hexdigest()
 
         if _mesh_cache["hash"] == params_hash and _mesh_cache["data"] is not None:
             return _mesh_cache["data"]
+        _disk = _mesh_disk_get("mesh3d", params_hash)
+        if _disk is not None:
+            _mesh_cache["hash"] = params_hash
+            _mesh_cache["data"] = _disk
+            _mesh_cache["build_time_s"] = 0.0
+            return _disk
 
         motor = CadQueryMotor()
         motor.set_parameters(params_dict)
         t0 = time.perf_counter()
         motor.build_all()
         data = motor.get_all_mesh_data()
+
+        # rotor_fill_r: the 3D SOLID rotor cannot take a BRep fillet at the full
+        # radius near the thin bridges (it falls back to a smaller r).  The 2D
+        # physics geometry IS filleted at the requested radius (per-edge clamp),
+        # and get_extruded_mesh_data() extrudes that filleted 2D rotor to 3D for
+        # free — no OCC fillet.  Swap the viewer's rotor_core to that mesh so the
+        # 3D view shows the SAME rounding as the physics.  The extruded mesh is
+        # z∈[-w,0]; the solids are z∈[0,w], so shift z by +w to align.  Guarded:
+        # any failure keeps the (smaller-radius but smooth) solid rotor.
+        try:
+            _rfr = float(params_dict.get('rotor_fill_r', 0.0) or 0.0)
+        except Exception:
+            _rfr = 0.0
+        if _rfr > 1e-4:
+            try:
+                _w = float(params_dict.get('motor_length') or 45.0)
+                _rc = motor.get_extruded_mesh_data().get('rotor_core')
+                if _rc and _rc.get('vertices'):
+                    _v = _rc['vertices']
+                    if _v and isinstance(_v[0], (list, tuple)):
+                        _nv = [[float(x), float(y), float(z) + _w] for (x, y, z) in _v]
+                    else:                       # flat [x,y,z,x,y,z,...]
+                        _nv = [float(c) for c in _v]
+                        for _i in range(2, len(_nv), 3):
+                            _nv[_i] += _w
+                    _rc2 = dict(_rc); _rc2['vertices'] = _nv
+                    data['rotor_core'] = _rc2
+            except Exception as _e:
+                print(f"rotor_core extruded-fillet override skipped: {_e}")
+
         build_time = time.perf_counter() - t0
 
+        data = _drop_excluded_meshes(data)
         _mesh_cache["hash"] = params_hash
         _mesh_cache["data"] = data
         _mesh_cache["build_time_s"] = round(build_time, 3)
+        _mesh_disk_put("mesh3d", params_hash, data)
+        log.info("3-D viewer mesh built in %.1f s (%d parts) — cached in memory and on disk",
+                 build_time, len(data) if isinstance(data, dict) else 0)
         return data
+    except HTTPException:
+        raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/mesh2d")
-def get_geometry_mesh2d():
+def get_geometry_mesh2d(geo: Optional[str] = None):
     """Return flat 2-D cross-section meshes for all motor components (shapely+earcut, no CadQuery)."""
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
-        params = get_current_geometry()
-        params_dict = params.to_dict()
-        params_hash = hashlib.md5(json.dumps(params_dict, sort_keys=True).encode()).hexdigest()
+        params_dict = _resolve_geo_dict(geo)
+        params_hash = hashlib.md5(
+            (json.dumps(params_dict, sort_keys=True)
+             + _part_state_cache_tag()).encode()).hexdigest()
 
         if _mesh2d_cache["hash"] == params_hash and _mesh2d_cache["data"] is not None:
             return _mesh2d_cache["data"]
+        _disk = _mesh_disk_get("mesh2d", params_hash)
+        if _disk is not None:
+            _mesh2d_cache["hash"] = params_hash
+            _mesh2d_cache["data"] = _disk
+            _mesh2d_cache["build_time_s"] = 0.0
+            return _disk
 
         motor = CadQueryMotor()
         motor.set_parameters(params_dict)
         t0 = time.perf_counter()
-        data = motor.get_2d_mesh_data()
+        data = _drop_excluded_meshes(motor.get_2d_mesh_data())
         build_time = time.perf_counter() - t0
 
         _mesh2d_cache["hash"] = params_hash
         _mesh2d_cache["data"] = data
         _mesh2d_cache["build_time_s"] = round(build_time, 3)
+        _mesh_disk_put("mesh2d", params_hash, data)
         return data
+    except HTTPException:
+        raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
         import traceback
         raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
 
 
 @router.get("/mesh_extruded")
-def get_geometry_mesh_extruded(depth: Optional[float] = None):
+def get_geometry_mesh_extruded(depth: Optional[float] = None, geo: Optional[str] = None):
     """
     Return 3-D meshes built by extruding 2-D Shapely cross-sections (no CadQuery).
 
@@ -288,10 +998,10 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None):
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
-        params = get_current_geometry()
-        params_dict = params.to_dict()
+        params_dict = _resolve_geo_dict(geo)
         cache_key = hashlib.md5(
-            json.dumps({**params_dict, "_depth": depth}, sort_keys=True).encode()
+            (json.dumps({**params_dict, "_depth": depth}, sort_keys=True)
+             + _part_state_cache_tag()).encode()
         ).hexdigest()
 
         if _mesh_extruded_cache["hash"] == cache_key and _mesh_extruded_cache["data"] is not None:
@@ -301,8 +1011,17 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None):
         motor.set_parameters(params_dict)
 
         t0 = time.perf_counter()
-        data = motor.get_extruded_mesh_data(depth=depth)
+        data = _drop_excluded_meshes(motor.get_extruded_mesh_data(depth=depth))
         build_time = round(time.perf_counter() - t0, 3)
+        # An EMPTY build is a failure, not a payload: the 2-D builder used to
+        # return {} on a missing native triangulator and this route cached the
+        # nothing and served it for the rest of the process (blank 3-D view,
+        # 2026-09-02).  Say so, and never cache it.
+        if not any(not str(k).startswith("_") for k in data):
+            raise HTTPException(status_code=500, detail=(
+                "3-D mesh build produced no parts — the cross-section builder "
+                "failed (see the API log: missing/blocked triangulator or an "
+                "invalid geometry)."))
 
         # attach timing metadata (not a mesh component — prefixed with _)
         data["_timing"] = {
@@ -315,6 +1034,8 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None):
         _mesh_extruded_cache["data"] = data
         _mesh_extruded_cache["build_time_s"] = build_time
         return data
+    except HTTPException:
+        raise          # a 422 from `geo=` must not be laundered into a 500
     except Exception as e:
         import traceback
         raise HTTPException(status_code=500, detail=f"{e}\n{traceback.format_exc()}")
@@ -322,47 +1043,40 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None):
 
 @router.get("/pointcloud")
 def get_geometry_pointcloud(n_points: int = 20000):
+    # ``n_points`` sizes five numpy allocations and the JSON body directly.  It
+    # was passed through unchecked: n_points=0 returned five empty regions with a
+    # 200 (an empty viewer nobody could explain), a negative value made
+    # np.random.uniform raise a 500, and n_points=1e9 asked the server for ~24 GB
+    # and a multi-GB response — one URL, one process gone.  Bounded and named.
+    if n_points < 1 or n_points > MAX_POINTCLOUD_POINTS:
+        raise reject(
+            "n_points out of range",
+            [param_error(
+                "n_points", n_points, "out_of_range",
+                f"n_points must be between 1 and {MAX_POINTCLOUD_POINTS:,} "
+                f"(got {n_points:,}). Above that the point cloud is larger "
+                f"than any viewer can draw and the response would not fit in "
+                f"memory.",
+                min=1, max=MAX_POINTCLOUD_POINTS)])
     try:
         params = get_current_geometry(reload=True)
 
-        if HAS_MODULUS:
-            from motor_ai_sim.geometry.motor_geometry import MotorGeometry2D
-            motor = MotorGeometry2D(params)
-            geometries = motor.get_modulus_geometries()
+        pointcloud_data = generate_synthetic_pointcloud(params, n_points)
 
-            regions_to_sample = {
-                'stator_core': 'steel',
-                'rotor_core': 'steel',
-                'coils': 'copper',
-                'magnets': 'permanent_magnet',
-                'shaft': 'steel',
-                'air_gap': 'air',
-            }
-            pointcloud_data = {}
-            for region_name, material_type in regions_to_sample.items():
-                if region_name not in geometries:
-                    continue
-                try:
-                    samples = geometries[region_name].sample_interior(n_points)
-                    if hasattr(samples, 'numpy'):
-                        samples = samples.numpy()
-                    points = samples.T.tolist() if samples.shape[0] == 3 else samples.tolist()
-                    if points and len(points[0]) == 2:
-                        points = [[x, y, 0.0] for x, y in points]
-                    pointcloud_data[region_name] = {
-                        'points': points,
-                        'material': material_type,
-                        'count': len(points),
-                    }
-                except Exception as e:
-                    pointcloud_data[region_name] = {
-                        'points': [], 'material': material_type, 'count': 0, 'error': str(e)
-                    }
-        else:
-            pointcloud_data = generate_synthetic_pointcloud(params, n_points)
-
-        return {'n_points': n_points, 'has_modulus': HAS_MODULUS, 'regions': pointcloud_data}
+        return {'n_points': n_points, 'has_modulus': False, 'regions': pointcloud_data}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# Boot-time warm-up of the live geometry's viewer meshes (see _warm_live_mesh).
+# 5 s after import: the config is loaded by then and the request handlers are
+# up, and the OCC import (2.4 s) plus the build (~10 s) happen while nobody is
+# waiting.  Disabled with SB_NO_MESH_WARMUP=1 (tests, tooling).
+if os.environ.get("SB_NO_MESH_WARMUP") != "1":
+    try:
+        _warm_live_mesh()
+    except Exception:      # noqa: BLE001
+        pass

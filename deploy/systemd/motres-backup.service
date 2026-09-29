@@ -1,0 +1,56 @@
+# restic backup of the whole server tree -> Hetzner Storage Box over SFTP.
+#
+# WHAT MAKES A HOT BACKUP LEGAL HERE
+#   Every store in this codebase is written atomically (tmp file + os.replace),
+#   so a copy taken in the middle of a 90-minute solve is at worst ONE WRITE
+#   behind — never half a file.  That property is why this runs hourly against
+#   a live server instead of needing a quiesce window.
+#
+# THE ITEM THAT CANNOT BE REGENERATED
+#   /srv/motres/identity/.auth_secret.  Losing it signs every account out
+#   permanently and users.py deliberately refuses to mint a replacement.  It is
+#   three lines up in the include list and it is the reason this unit exists at
+#   all; everything else could, in the worst case, be re-solved.
+#
+# Setup:
+#   sudo apt install restic
+#   sudo install -m 600 /dev/null /etc/motres/restic.env   # fill from
+#        deploy/backup/restic.env.example
+#   sudo install -m 644 deploy/backup/restic-include.txt \
+#                       deploy/backup/restic-exclude.txt /etc/motres/
+#   sudo -E restic init          # once, with the env loaded
+#   sudo systemctl enable --now motres-backup.timer
+
+[Unit]
+Description=motor_ai_sim restic backup to the Hetzner Storage Box
+Documentation=file:///opt/motres/app/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/motres/restic.env
+
+# Nice + idle IO: the backup must never be the reason a solve got slower.
+Nice=15
+IOSchedulingClass=idle
+
+# --files-from / --exclude-file rather than a long ExecStart: the two lists are
+# reviewable files, and §4.4 of the migration plan is literally their contents.
+ExecStart=/usr/bin/restic backup \
+    --files-from /etc/motres/restic-include.txt \
+    --exclude-file /etc/motres/restic-exclude.txt \
+    --tag hourly \
+    --host motres-eu
+
+# Retention, applied after every run so the repo never grows unbounded between
+# maintenance windows.  30 daily / 12 monthly per §4.4; the hourlies inside the
+# last day are kept so an "I overwrote my machine an hour ago" is recoverable —
+# which is the single most likely restore request this server will ever get.
+ExecStart=/usr/bin/restic forget --prune \
+    --keep-hourly 24 --keep-daily 30 --keep-monthly 12
+
+# Cheap integrity check on every run: structure only, no data read.
+ExecStart=/usr/bin/restic check
+
+TimeoutStartSec=3600

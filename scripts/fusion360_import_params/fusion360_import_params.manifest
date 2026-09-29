@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion",
+    "type": "script",
+    "author": "MOTRES",
+    "description": {
+        "": "Pull the motor_ai_sim geometry (http://localhost:8001/api/fusion/params.json) into this design's User Parameters, by canonical name: existing ones updated, missing ones created. Renamed/refactored from fusion360_sync_params (2026-09-25 packaging); logic unchanged."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

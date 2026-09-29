@@ -1,0 +1,263 @@
+# Fusion 360 user-parameter names for the geometry keys of motor_ai_sim.
+#
+# Left = our geometry key (never change), right = the name of the user
+# parameter in YOUR Fusion model.  The default is identity — the same name on
+# both sides — which is what /api/fusion/params.csv exports and what Parameter
+# I/O creates in Fusion when the parameter does not exist yet.
+#
+# If your model already has its own names (e.g. MagnetH, Lstack), write them
+# on the right: the export then uses them and the import reads them back.
+# Rows you delete fall back to identity.  Fusion names: letters, digits,
+# underscore, not starting with a digit.
+#
+# Read on every request — no restart after an edit.
+map:
+  stator_diameter: stator_diameter
+  motor_length: motor_length
+  air_gap: air_gap
+  sleeve_thickness: sleeve_thickness
+  core_thickness: core_thickness
+  slot_height: slot_height
+  slot_hs: slot_hs
+  tooth_width: tooth_width
+  tooth2_width: tooth2_width
+  cut_width: cut_width
+  stator_fillet_r: stator_fillet_r
+  stator_fillet_r1: stator_fillet_r1
+  insulation_thickness: insulation_thickness
+  wire_width: wire_width
+  wire_height: wire_height
+  wire_spacing_x: wire_spacing_x
+  wire_spacing_y: wire_spacing_y
+  num_wires_per_slot: num_wires_per_slot
+  wire_parallel: wire_parallel
+  wire_split: wire_split
+  num_seg: num_seg
+  num_slots_per_segment: num_slots_per_segment
+  num_poles_per_segment: num_poles_per_segment
+  magnet_height: magnet_height
+  magnet_fill_up: magnet_fill_up
+  magnet_fill_down: magnet_fill_down
+  magnet_fill_radius: magnet_fill_radius
+  magnet_up_gap: magnet_up_gap
+  magnet_down_height: magnet_down_height
+  magnet_lamination: magnet_lamination
+  rotor_house_height: rotor_house_height
+  rotor_hole: rotor_hole
+  rotor_fill_r: rotor_fill_r
+  shaft_height: shaft_height
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APPROVED 2026-09-25 -- owner reviewed docs/FUSION_PARAMETER_MAP_2026-09-25.md
+# (built from his own file, C:\Users\vadim\Downloads\Fusion_map_geometry_inputs_v2.xlsx)
+# and confirmed this final mapping for the 33 geometry INPUTS only (the 32
+# geometry_schema keys + sleeve_thickness; derived/internal names are never
+# renamed).
+#
+# CONVERSION HANDLING (revised 2026-09-25, owner: "формулы не меняй, только
+# одну: stator_up_r = stator_diameter/2"): the two rows with a `conversion`
+# never rename their old parameter. stator_diameter is CREATED fresh (value =
+# stator_up_r * 2, explicit unit) and stator_up_r is turned into the ONE
+# formula this tooling ever changes ("stator_diameter / 2") -- its NAME stays,
+# so every other row that referenced it needs no change. magnet_lamination is
+# likewise CREATED fresh from mag_step's value, but mag_step itself is left
+# completely untouched (no rename, no rewritten expression) -- no clean,
+# always-valid inverse formula exists for it (see
+# fusion_param_common.lamination_backward's docstring).
+#
+# SOURCE OF TRUTH FOR CODE: scripts/fusion_param_common.py (ENTRIES) -- the
+# stdlib-only module scripts/fusion_param_rename.py (the offline CSV converter)
+# and all three scripts/fusion360_*_params/ Fusion scripts import.  It is
+# stdlib-only because Fusion's sandboxed Python cannot be assumed to have
+# PyYAML, so those scripts cannot load THIS file at runtime; this section is
+# the human-reviewed record of the exact same 33 rows, generated from that
+# module and kept in sync with it by hand (small, stable table -- see
+# tests/test_fusion_param_rename.py for the executable proof they agree).
+#
+# This key is INERT for the LIVE /api/fusion route: `map:` above (already
+# identity for all 33 of these) is the only section that route reads, and it
+# was not changed -- after a design is renamed with fusion360_rename_params.py
+# its Fusion parameters ARE named canonically, so identity is exactly right.
+#
+# action: rename | rename_or_create | create | create_and_derive_old |
+#         create_from_legacy | not_mapped (see
+# scripts/fusion_param_common.py's module docstring for what each means).
+# conversion: null, or [linear, factor] (canonical = old * factor, and old
+# becomes derived as "canonical / factor" -- stator_diameter only), or
+# [lamination, null] (magnet_lamination's value from mag_step; mag_step itself
+# is never touched).
+legacy_fusion_names_approved_2026_09_25:
+  stator_diameter:
+    old: stator_up_r
+    unit: "mm"
+    action: create_and_derive_old
+    conversion: [linear, 2.0]
+    note: "old was a RADIUS; canonical is the DIAMETER. old (stator_up_r) is turned into a derived parameter ('stator_diameter / 2'), not renamed -- every other row that referenced stator_up_r keeps working unmodified."
+  slot_height:
+    old: slot_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  core_thickness:
+    old: core_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  num_seg:
+    old: N1
+    unit: ""
+    action: rename
+    conversion: null
+  num_slots_per_segment:
+    old: null
+    unit: ""
+    action: create
+    conversion: null
+    note: "old model hardcoded 6 slots/segment (N1*6) in angle_wire; no user parameter existed for it"
+  num_poles_per_segment:
+    old: Nm
+    unit: ""
+    action: rename
+    conversion: null
+  air_gap:
+    old: gap
+    unit: "mm"
+    action: rename
+    conversion: null
+  tooth_width:
+    old: teeth_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  tooth2_width:
+    old: tooth2_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  cut_width:
+    old: cut_down
+    unit: "mm"
+    action: rename
+    conversion: null
+  insulation_thickness:
+    old: ins_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  wire_width:
+    old: wire_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  wire_height:
+    old: wire_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  wire_spacing_x:
+    old: wire_dist_x
+    unit: "mm"
+    action: rename
+    conversion: null
+  wire_spacing_y:
+    old: wire_dist_y
+    unit: "mm"
+    action: rename
+    conversion: null
+  num_wires_per_slot:
+    old: wire_N
+    unit: ""
+    action: rename
+    conversion: null
+  wire_split:
+    old: null
+    unit: ""
+    action: not_mapped
+    conversion: null
+    note: "ours defaults to 1; do not create unless already present under this exact name"
+  slot_hs:
+    old: slot_hs
+    unit: ""
+    action: rename
+    conversion: null
+    note: "identity -- already matches"
+  magnet_height:
+    old: magnet_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  rotor_house_height:
+    old: r_housing_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  shaft_height:
+    old: null
+    unit: "mm"
+    action: create
+    conversion: null
+  magnet_fill_down:
+    old: magnet_fill_down
+    unit: ""
+    action: rename
+    conversion: null
+    note: "identity"
+  magnet_fill_up:
+    old: magnet_fill_up
+    unit: ""
+    action: rename
+    conversion: null
+    note: "identity"
+  magnet_fill_radius:
+    old: mag_r
+    unit: "mm"
+    action: rename
+    conversion: null
+  magnet_up_gap:
+    old: mag_sh
+    unit: "mm"
+    action: rename
+    conversion: null
+  rotor_hole:
+    old: mag_hole
+    unit: ""
+    action: rename
+    conversion: null
+  magnet_down_height:
+    old: mag_down_h
+    unit: "mm"
+    action: rename
+    conversion: null
+  magnet_lamination:
+    old: mag_step
+    unit: "mm"
+    action: create_from_legacy
+    conversion: [lamination, null]
+    note: "mag_step is the axial lamination SEGMENT LENGTH; if it equals the motor length -> no slicing -> our magnet_lamination = 0. mag_step itself is left completely as-is -- no clean, always-valid inverse formula exists (see lamination_forward)."
+  stator_fillet_r:
+    old: stator_r
+    unit: "mm"
+    action: rename
+    conversion: null
+  stator_fillet_r1:
+    old: stator_r1
+    unit: "mm"
+    action: rename_or_create
+    conversion: null
+    note: "create with our value if stator_r1 is not in the design"
+  rotor_fill_r:
+    old: rotor_r1
+    unit: "mm"
+    action: rename_or_create
+    conversion: null
+    note: "create with our value if rotor_r1 is not in the design"
+  motor_length:
+    old: stator_w
+    unit: "mm"
+    action: rename
+    conversion: null
+  sleeve_thickness:
+    old: null
+    unit: "mm"
+    action: create
+    conversion: null

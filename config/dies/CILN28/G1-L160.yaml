@@ -1,0 +1,52 @@
+name: G1-L160
+die: CILN28
+role: generator
+created: '2026-08-19T18:07:03'
+geometry_overrides:
+  motor_length: 160
+  wire_width: 7
+  wire_height: 0.9
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 12
+  wire_split: 1
+  insulation_thickness: 0.2
+winding:
+  n_coils_per_phase: 4
+  connection: 2S-2P
+  n_parallel: 2
+  n_series: 2
+  layers: 1
+end_winding_factor: 1.144
+duties:
+- name: peak
+  mode: generator
+  current_arms: 294.0
+  rpm: 3800.0
+  gamma_deg: 10.0
+  note: gamma not optimized yet
+  torque_nm: 387.0
+  power_kw: 145.0
+  saved_at: '2026-08-19T18:07:03'
+- name: optimal
+  mode: generator
+  current_arms: 275.0
+  rpm: 2500.0
+  gamma_deg: 10.0
+  note: gamma not optimized yet
+  torque_nm: 363.0
+  power_kw: 95.0
+  saved_at: '2026-08-19T18:07:03'
+materials:
+  magnet: F52SH_120C
+  stator_core: B15AHV950M
+  rotor_core: B15AHV950M
+battery:
+  chemistry: NMC
+  cells: 200
+  v_cell_min: 3.2
+  v_cell_nom: 3.75
+  v_cell_max: 4.3
+  v_min: 640.0
+  v_nom: 750.0
+  v_max: 860.0

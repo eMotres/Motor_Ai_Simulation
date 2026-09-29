@@ -1,6 +1,6 @@
 import React, { Suspense, useRef, useEffect } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, OrthographicCamera, Environment, Grid } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, OrthographicCamera, Grid } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { useUIStore, useMotorStore, useBuildTimingStore } from '../../stores/motorStore';
 import * as THREE from 'three';
@@ -10,6 +10,7 @@ import PointCloudMesh from './PointCloudMesh';
 import { STLCollection } from './STLMesh';
 import ComponentTree from './ComponentTree';
 import MaterialBar from './MaterialBar';
+import { guardCanvas } from './webglGuard';
 
 // Camera that auto-adjusts to viewport aspect ratio
 const FRUSTUM = 300;
@@ -83,43 +84,54 @@ export const CameraSync: React.FC<{ controlsRef?: React.RefObject<any> }> = ({ c
 
 // Component to handle viewcube navigation events
 export const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
-  const { camera } = useThree();
+  const { camera, invalidate } = useThree();
   const targetPosition = useRef<THREE.Vector3 | null>(null);
   const isAnimating = useRef(false);
   const animationFrame = useRef<number | undefined>(undefined);
   
   useEffect(() => {
     const handleNavigate = (e: CustomEvent) => {
-      const { position, name } = e.detail;
-      
-      // Use fixed distance for standard views
+      const { position } = e.detail;
+
+      // Orbit around the CURRENT controls target — i.e. the model centre.
+      // For the full motor that's the origin; for a 1/4 sector the fit set it
+      // to the sector midpoint (cx,cy). Hard-coding (0,0,0) here was what made
+      // a face-click fling the off-centre sector into a corner.
+      const center = controlsRef.current?.target
+        ? controlsRef.current.target.clone()
+        : new THREE.Vector3(0, 0, 0);
+
+      // Use fixed distance for standard views; offset from the model centre.
       const distance = 250;
       const direction = position.clone().normalize();
-      const newPosition = direction.multiplyScalar(distance);
-      
+      const newPosition = center.clone().add(direction.multiplyScalar(distance));
+
       // Animate camera to new position
       isAnimating.current = true;
       targetPosition.current = newPosition;
-      
+
       const startPosition = camera.position.clone();
       const startTime = performance.now();
       const duration = 500; // 500ms animation
-      
+
       const animate = (time: number) => {
         const elapsed = time - startTime;
         const progress = Math.min(elapsed / duration, 1);
-        
+
         // Ease out cubic
         const eased = 1 - Math.pow(1 - progress, 3);
-        
+
         camera.position.lerpVectors(startPosition, newPosition, eased);
-        camera.lookAt(0, 0, 0);
-        
+        camera.lookAt(center);
+
         if (controlsRef.current) {
-          controlsRef.current.target.set(0, 0, 0);
+          controlsRef.current.target.copy(center);
           controlsRef.current.update();
         }
-        
+        // The camera moved outside r3f's knowledge — in demand-mode
+        // rendering (see the <Canvas>) every step has to ask for a frame.
+        invalidate();
+
         if (progress < 1) {
           animationFrame.current = requestAnimationFrame(animate);
         } else {
@@ -140,8 +152,29 @@ export const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }>
         cancelAnimationFrame(animationFrame.current);
       }
     };
-  }, [camera, controlsRef]);
+  }, [camera, controlsRef, invalidate]);
   
+  return null;
+};
+
+// Demand-mode safety net.  r3f asks for a frame on its own reconciler
+// commits, but not for a geometry swapped on a ref, a texture that finished
+// loading, or a store change a mesh reads imperatively.  So: any change in
+// either store asks for a frame AFTER React has committed and run its
+// effects (the timeout), and a few frames are asked for after mount to catch
+// the async loads (HDR environment, the first mesh) that touch no store.
+// A frame of a still scene is cheap; a still scene that never draws is what
+// the first demand-mode build of this viewer showed (2026-09-13).
+const SceneInvalidator: React.FC = () => {
+  const invalidate = useThree(s => s.invalidate);
+  useEffect(() => {
+    const ask = () => { window.setTimeout(() => invalidate(), 0); };
+    const un1 = useMotorStore.subscribe(ask);
+    const un2 = useUIStore.subscribe(ask);
+    const timers = [100, 500, 1500, 3000, 6000].map(
+      ms => window.setTimeout(() => invalidate(), ms));
+    return () => { un1(); un2(); timers.forEach(t => window.clearTimeout(t)); };
+  }, [invalidate]);
   return null;
 };
 
@@ -149,10 +182,16 @@ export const ViewcubeNavigation: React.FC<{ controlsRef: React.RefObject<any> }>
 // Tracks which camera instance was fitted — if AdaptiveCamera replaces the camera,
 // the zoom is re-applied to the new instance.
 const FitCameraOnLoad: React.FC<{ controlsRef: React.RefObject<any> }> = ({ controlsRef }) => {
-  const { camera, size } = useThree();
+  const { camera, size, invalidate } = useThree();
   const { geometry, connectedToApi } = useMotorStore();
   const { cameraMode } = useUIStore();
   const fittedCamera = useRef<THREE.Camera | null>(null);
+
+  // Demand-mode rendering: the fit below runs inside a frame, so ask for one
+  // whenever the inputs it waits on arrive (the geometry, the connection, a
+  // camera swap) — otherwise the first frames can pass before they do and no
+  // later frame comes on its own.
+  useEffect(() => { invalidate(); }, [geometry, connectedToApi, cameraMode, camera, invalidate]);
 
   useFrame(() => {
     if (!connectedToApi) return;
@@ -187,6 +226,7 @@ const FitCameraOnLoad: React.FC<{ controlsRef: React.RefObject<any> }> = ({ cont
       controlsRef.current.target.set(0, 0, 0);
       controlsRef.current.update();
     }
+    invalidate();                        // draw the fitted view (demand mode)
   });
 
   return null;
@@ -231,13 +271,54 @@ const View2dToggle: React.FC = () => {
   );
 };
 
-const MotorScene: React.FC = () => {
+
+/** The lighting rig — three lights, no image-based environment.
+ *
+ *  This used to be drei's `<Environment preset="studio">`, which fetches
+ *  `studio_small_03_1k.hdr` from raw.githack.com at render time.  On
+ *  emotres.com that origin is CORS-blocked, so the fetch failed on EVERY
+ *  viewer mount and threw out of the Canvas; an error boundary caught it and
+ *  rendered exactly these three lights instead.  So the HDR never lit a single
+ *  frame on production — all it did was flood the console with red ("Access to
+ *  fetch … blocked by CORS policy" + "Uncaught: Could not load
+ *  studio_small_03_1k.hdr") on every mount, and earlier (2026-09-07) it took
+ *  the whole panel down.
+ *
+ *  Bundling the HDR locally was the alternative and it is not worth it: the 1k
+ *  studio map is ~1.5 MB, five times the budget for an asset whose only job is
+ *  nicer reflections on the metals.  The rig below is the production look now,
+ *  unconditionally — no network, no boundary, no console noise. */
+const EnvironmentOrLights: React.FC<{ intensity: number }> = ({ intensity }) => (
+  <>
+    <hemisphereLight intensity={0.9 * intensity} groundColor="#444" />
+    <directionalLight position={[3, 5, 4]} intensity={1.2 * intensity} />
+    <directionalLight position={[-4, -2, -3]} intensity={0.4 * intensity} />
+  </>
+);
+
+const MotorScene: React.FC<{ force3d?: boolean }> = ({ force3d }) => {
   const { showGrid, showAxes, envIntensity, setSelectedPart } = useUIStore();
+  // Materials tab opens in FULL 3D regardless of the leftover render mode
+  // (user 2026-08-25: "нужно сделать то же самое, как в геометрии") — the
+  // 2D/3D toggle still works afterwards.
+  const { renderMode: _rm, toggleRenderMode: _trm } = useUIStore();
+  useEffect(() => {
+    if (force3d && _rm === '2d') _trm();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [force3d]);
   const controlsRef = useRef<any>(null);
 
   return (
     <>
-      <Canvas shadows className="motor-canvas" onPointerMissed={() => setSelectedPart(null)}>
+      {/* frameloop="demand" (2026-09-13): a frame is drawn when something
+          changes — a control move (drei invalidates), a React commit in the
+          scene, an explicit invalidate() — instead of 60 per second for as
+          long as the tab is open.  The GPU sat at full tilt on a still image
+          all day; the day's two "Context Lost" freezes made that a cost worth
+          removing.  onCreated puts a lost/restored context on the record. */}
+      <Canvas shadows frameloop="demand" className="motor-canvas"
+        onCreated={guardCanvas('geometry viewer')}
+        onPointerMissed={() => setSelectedPart(null)}>
         {/* Adaptive camera that switches between Perspective and Orthographic */}
         <AdaptiveCamera />
 
@@ -257,7 +338,7 @@ const MotorScene: React.FC = () => {
       <directionalLight position={[-100, 50, -100]} intensity={0.5} />
       
       {/* Environment for reflections */}
-      <Environment preset="studio" background={false} environmentIntensity={envIntensity} />
+      <EnvironmentOrLights intensity={envIntensity} />
       
       {/* Post-processing effects for Fusion 360 look */}
       <EffectComposer enableNormalPass>
@@ -296,6 +377,7 @@ const MotorScene: React.FC = () => {
         {/* Camera synchronization */}
         <CameraSync controlsRef={controlsRef} />
         <ViewcubeNavigation controlsRef={controlsRef} />
+        <SceneInvalidator />
       </Canvas>
       
       {/* Viewcube overlay */}

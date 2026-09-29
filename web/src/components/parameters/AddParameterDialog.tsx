@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import { useMotorStore } from '../../stores/motorStore';
+import HelpTip from '../common/HelpTip';
 
 const GROUPS = [
   { id: 'stator',      label: 'Stator Parameters' },
@@ -94,7 +95,7 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch((import.meta.env.VITE_API_URL ?? 'http://localhost:8000') + '/api/geometry/parameter', {
+      const res = await fetch((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') + '/api/geometry/parameter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -160,7 +161,7 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
               placeholder="pole_arc_ratio"
               fullWidth
               required
-              helperText="Used in code and YAML"
+              InputProps={{ endAdornment: <HelpTip title="Used in code and YAML" /> }}
             />
           </Box>
 

@@ -1,0 +1,83 @@
+{
+ "version": "static3d-boxsize-1",
+ "generated_utc": "2026-08-11T04:42:51Z",
+ "_doc": "How small can the air box be before the answer moves?\n\nThe user's reading of the 3D view \u2014 \"too much air, 20 % of the motor should do\"\n\u2014 is worth taking seriously for two reasons, and they pull in opposite\ndirections.  FOR: the mesh is 69 % air by element count (53 460 of 77 166 tets),\nso the box is most of the cost of every 3D solve, and shrinking it would make\nthe whole programme cheaper.  AGAINST: the box is where the field is truncated,\nand truncating it inside the region where the field still lives changes the\nanswer rather than the runtime.\n\nSo this is measured, not argued, and it is measured by the SELF-CHECK the code\nalready has rather than by comparing against an even bigger box: at each size\nthe same machine is solved twice, once with the far boundary held at phi = 0\n(Dirichlet \u2014 no flux may leave) and once with dphi/dn = 0 (Neumann \u2014 no flux may\ncross).  The truth is BETWEEN them: one boundary condition pushes flux back in,\nthe other lets it slide out.  A box that is big enough shows the two conditions\nagreeing; a box that is too small shows them apart, and the gap IS the\ntruncation error, with no reference solve needed.\n\nRun:  python scripts/stage_c_box_size.py [--factors 1.2,1.5,2,4]\n\n`box_factor` here is `run_stage_a`'s own: the box radius in multiples of the\nSTATOR OUTER DIAMETER, so 1.2 is a box 1.2 x 40 mm = 48 mm across against a\n40 mm machine \u2014 i.e. 20 % clearance, exactly what was asked about.",
+ "rows": [
+  {
+   "box_factor": 1.2,
+   "box_r_mm": 24.0,
+   "k_flux": 0.9528585412909089,
+   "k_flux_self": 0.9646786326708506,
+   "B1_mid_T": 1.543224246357543,
+   "bracket_rel_spread": 2.949514670508528e-05,
+   "dirichlet": {
+    "B1_mid_T": 1.543224246357543,
+    "k_flux_self": 0.9646786326708506
+   },
+   "neumann": {
+    "B1_mid_T": 1.5429980169942228,
+    "k_flux_self": 0.9646501793330567
+   },
+   "elements": null,
+   "wall_s": 3653.2
+  },
+  {
+   "box_factor": 1.5,
+   "box_r_mm": 30.0,
+   "k_flux": 0.952603841377375,
+   "k_flux_self": 0.9639144188501544,
+   "B1_mid_T": 1.54495993851817,
+   "bracket_rel_spread": 2.024289214364194e-05,
+   "dirichlet": {
+    "B1_mid_T": 1.54495993851817,
+    "k_flux_self": 0.9639144188501544
+   },
+   "neumann": {
+    "B1_mid_T": 1.5448084742936279,
+    "k_flux_self": 0.9638949064345379
+   },
+   "elements": null,
+   "wall_s": 4497.9
+  },
+  {
+   "box_factor": 2.0,
+   "box_r_mm": 40.0,
+   "k_flux": 0.952841694747972,
+   "k_flux_self": 0.9648212791132134,
+   "B1_mid_T": 1.5447319243750504,
+   "bracket_rel_spread": 2.0252587974368265e-05,
+   "dirichlet": {
+    "B1_mid_T": 1.5447319243750504,
+    "k_flux_self": 0.9648212791132134
+   },
+   "neumann": {
+    "B1_mid_T": 1.544692175334864,
+    "k_flux_self": 0.9648017389853786
+   },
+   "elements": null,
+   "wall_s": 3197.7
+  },
+  {
+   "box_factor": 4.0,
+   "box_r_mm": 80.0,
+   "k_flux": 0.9514107797855561,
+   "k_flux_self": 0.9639661234866299,
+   "B1_mid_T": 1.546266854167729,
+   "bracket_rel_spread": 9.57843975992129e-06,
+   "dirichlet": {
+    "B1_mid_T": 1.546266854167729,
+    "k_flux_self": 0.9639661234866299
+   },
+   "neumann": {
+    "B1_mid_T": 1.5463562064931695,
+    "k_flux_self": 0.9639568901951855
+   },
+   "elements": null,
+   "wall_s": 3316.6
+  }
+ ],
+ "verdict": {
+  "smallest_box_within_0p2pct": 1.2,
+  "reading": "the Dirichlet/Neumann bracket closes to under 0.2 % at box_factor 1.20; anything smaller is truncating the field, not saving time."
+ }
+}

@@ -1,0 +1,43 @@
+{
+ "version": "static3d-stageC-offset-1",
+ "generated_utc": "2026-08-09T22:41:53Z",
+ "stack_mm": 48.0,
+ "_doc": "Stage C, part 2 \u2014 where does the 0.68 % that does NOT go away come from?\n\nThe long-stack run answered the first Stage C question: the flux deficit falls\nwith the stack (3.60 % at 12 mm, 2.59 % at 24, 1.18 % at 48) and a + b/L\nextrapolates to a = 0.9932.  It should extrapolate to 1: at infinite length the\n3D model and the 2D reference are the same machine.  0.68 % is small, but it is\na SYSTEMATIC offset, and an unattributed offset in the denominator of every\nk-factor is exactly the kind of thing this passport exists to not have.\n\nTwo suspects, one solve each, at the longest stack (48 mm \u2014 the row where the\nends matter least, so anything left is not an end effect):\n\n  * the FAR FIELD.  The 3D box is 4x the stator OD.  If the offset is the\n    boundary pulling flux, a 6x box moves k towards 1 and a 8x box moves it less\n    \u2014 a converging sequence.  If the box is innocent, all three agree.\n  * the AXIAL DISCRETISATION.  n_stack layers over the stack.  Doubling them\n    must not move k if the axial mesh is resolved.\n\nNeither is a fit and neither is an argument: each is a number that either moves\nor does not.\n\nRun:  python scripts/stage_c_offset_probe.py [--stack-mm 48] [--out PATH]",
+ "cases": [
+  {
+   "case": "box 4x (as quoted)",
+   "box_factor": 4.0,
+   "n_stack": 8,
+   "k_flux": 0.9752396935622194,
+   "k_flux_self": 0.9881094968098436,
+   "B1_mid_T": 1.5688793736456543,
+   "picard_converged": true,
+   "wall_s": 3245.2
+  },
+  {
+   "case": "box 6x",
+   "box_factor": 6.0,
+   "n_stack": 8,
+   "k_flux": 0.9747844929125365,
+   "k_flux_self": 0.986371498697635,
+   "B1_mid_T": 1.5722511585512295,
+   "picard_converged": true,
+   "wall_s": 3294.3
+  },
+  {
+   "case": "axial layers x2",
+   "box_factor": 4.0,
+   "n_stack": 16,
+   "k_flux": 0.9715945273383563,
+   "k_flux_self": 0.9849538987674772,
+   "B1_mid_T": 1.572675377937653,
+   "picard_converged": true,
+   "wall_s": 7681.3
+  }
+ ],
+ "verdict": {
+  "d_box_6x": -0.0017379981122086496,
+  "d_axial_x2": -0.0031555980423664254,
+  "reading": "box 4x -> 6x moves k_flux_self by -0.00174, doubling the axial layers by -0.00316.  The offset belongs to whichever moves it; if neither does, it is neither."
+ }
+}

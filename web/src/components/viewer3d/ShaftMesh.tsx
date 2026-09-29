@@ -12,7 +12,7 @@ const ShaftMesh: React.FC = () => {
     const cylGeometry = new THREE.CylinderGeometry(
       radius,  // top radius
       radius,  // bottom radius
-      motorGeometry.stator_width,  // height
+      motorGeometry.motor_length,  // height (axial stack length)
       32,  // radial segments
       1,   // height segments
       false  // open ended

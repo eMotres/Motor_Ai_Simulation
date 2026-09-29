@@ -1,70 +1,60 @@
 /**
- * FemFieldChart — Real scikit-fem A_z field on the motor mesh.
+ * FemFieldChart — the Simulation tab's field inspector.
  *
- * Fetches /api/simulation/physics/fem_field2d (uses the SAME mesh as the
- * Mesh tab — settings live in localStorage under mesh.*) and renders:
- *   • the triangle mesh, with each vertex coloured by A_z via a diverging
- *     RdBu colormap (classic FEA flux-potential look)
- *   • CadQuery boundary overlay (smooth outlines per domain)
- *   • a sidebar with torque, copper / iron / magnet-eddy losses, efficiency
- *     — already multiplied by n_sectors so the values represent the FULL
- *     motor (1/4 model × 4, etc.).
+ * DATA host, not a renderer, since 2026-09-06.  It still owns everything that
+ * decides WHAT is on screen — the /fem_field2d fetches and their mesh settings,
+ * the free snapshot probes (a field view never solves by itself), the run's own
+ * demag map off the stored transient, the eddy / loss / thermal gates, the
+ * material-override readiness gate, the provenance labels — and hands the
+ * result to the SHARED `common/FieldViewer` as `FieldOutput`s.
  *
- * Interactive: orbit / pan / zoom via the same OrthographicCamera +
- * OrbitControls combo used by FemMeshViewer3D.
+ * The picture, the camera (wheel-zoom at the cursor, drag-pan, Fit), the output
+ * menu and the colour bar are that viewer's job now, and they are the same ones
+ * the Mechanical and Modal tabs use.  User 2026-09-06: "интерфейс должен быть
+ * единым для всех графиков — электромагнитных, механических и термо".
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Box, Paper, Typography, CircularProgress, Button, Tooltip,
-  ToggleButton, ToggleButtonGroup,
-} from '@mui/material';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Box, Paper, Typography, Button, Tooltip } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, OrthographicCamera } from '@react-three/drei';
-import Viewcube from '../viewer3d/Viewcube';
-import { ViewcubeNavigation, CameraSync } from '../viewer3d/MotorScene';
-import * as THREE from 'three';
+import HelpTip from '../common/HelpTip';
+import FieldViewer from '../common/FieldViewer';
+import { outputStub } from '../common/fieldOutput';
+import type { FieldOutput } from '../common/fieldOutput';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 // ── types ─────────────────────────────────────────────────────────────────
 import type { FemPayload } from './fem-types';
+import { tileFullRing } from './fem-types';
+import { useMotorStore } from '../../stores/motorStore';
+import { geoSignature } from '../common/geoSig';
+import { matOverrideReady } from '../../lib/apiAuth';
+import { EDDY_DEFAULT_STEPS } from '../../lib/eddySteps';
 export type { FemPayload } from './fem-types';
 
-// ── colour maps ───────────────────────────────────────────────────────────
-// Viridis — sequential, no near-white midpoint, reads cleanly on dark canvas.
-function viridis01(t: number): [number, number, number] {
-  const c0 = [68,  1,   84];
-  const c1 = [59,  82,  139];
-  const c2 = [33,  145, 140];
-  const c3 = [94,  201, 98];
-  const c4 = [253, 231, 37];
-  const pts = [c0, c1, c2, c3, c4];
-  const s = Math.max(0, Math.min(1, t)) * (pts.length - 1);
-  const i = Math.min(Math.floor(s), pts.length - 2);
-  const f = s - i;
-  return [
-    pts[i][0] + f * (pts[i + 1][0] - pts[i][0]),
-    pts[i][1] + f * (pts[i + 1][1] - pts[i][1]),
-    pts[i][2] + f * (pts[i + 1][2] - pts[i][2]),
-  ];
-}
-// Classic Ansys-style rainbow LUT (blue → cyan → green → yellow → red).
-function jet01(t: number): [number, number, number] {
-  const x = Math.max(0, Math.min(1, t));
-  const r = Math.max(0, Math.min(1, 1.5 - Math.abs(4 * x - 3))) * 255;
-  const g = Math.max(0, Math.min(1, 1.5 - Math.abs(4 * x - 2))) * 255;
-  const b = Math.max(0, Math.min(1, 1.5 - Math.abs(4 * x - 1))) * 255;
-  return [r, g, b];
+/** True once a physics request would carry the page's `mat=` override — the
+ *  gate every free cache/snapshot probe below waits behind.  A probe fired
+ *  earlier goes out without the override and lands on a different backend
+ *  key than the solve it is looking for: after a reload the picture the page
+ *  had solved minutes ago was reported "not solved" (2026-09-04). */
+function useMatOverrideReady(): boolean {
+  const [ready, setReady] = useState<boolean>(() => matOverrideReady());
+  useEffect(() => {
+    if (ready) return;
+    const on = () => setReady(true);
+    window.addEventListener('mat-override-ready', on);
+    if (matOverrideReady()) setReady(true);   // flipped between render and subscribe
+    return () => window.removeEventListener('mat-override-ready', on);
+  }, [ready]);
+  return ready;
 }
 
-// Discrete-banded rainbow — quantize t into N levels so the fill renders
-// as Ansys-style colour patches instead of a smooth gradient.
-function jetBands(t: number, n: number = 20): [number, number, number] {
-  // Quantise to band centres so the colour matches the iso-line at the band edge.
-  const tq = (Math.floor(t * n) + 0.5) / n;
-  return jet01(tq);
-}
+// ── ONE renderer for every view ───────────────────────────────────────────
+// Geometry, colour ramp, banding and the legend's range all come out of
+// ./fieldView — see the header there for why they had to stop being seven
+// hand-written copies.  Nothing in this file may build a field colour of its
+// own: that is exactly how the views drifted apart.
+import { EM_MENU, emOutputs, outlinesFromMesh } from './fieldView';
 
 // ── helpers: read mesh params persisted by MeshPanel ──────────────────────
 function readMeshSetting<T>(key: string, def: T): T {
@@ -73,433 +63,49 @@ function readMeshSetting<T>(key: string, def: T): T {
     return raw == null ? def : (JSON.parse(raw) as T);
   } catch { return def; }
 }
+// Simulation-tab settings live under `sim.*` (single source the Simulation panel
+// writes) — the multi-frame views ask for exactly the run's own settings so the
+// backend can recognise the request as a run it already solved.
+function readSimSetting<T>(key: string, def: T): T {
+  try {
+    const raw = localStorage.getItem(`sim.${key}`);
+    return raw == null ? def : (JSON.parse(raw) as T);
+  } catch { return def; }
+}
 
 // ── R3F mesh component ────────────────────────────────────────────────────
-type FieldMode = 'Az' | 'Bmag' | 'J' | 'Demag';
+// 'Temp' left this menu on 2026-09-07: a steady-state conduction solve has its
+// own mesh, its own boundary conditions and its own minute of CPU, and an
+// electromagnetic field view that can start one is a view that solves something
+// nobody asked it for.  It is the Thermal tab now.
+type FieldMode = 'Az' | 'Bmag' | 'J' | 'Jeddy' | 'Loss' | 'Demag';
+// Only J⟳ (eddy-current crowding) needs the time-coupled σ(−∂A/∂t+U) solve.
+//
+// It does NOT necessarily need a NEW one: the Simulation run keeps its own last
+// frame server-side (mesh + A + B + Jeddy + cycle-averaged loss density), so when
+// the run solved this operating point with the coupled eddy on, J⟳ and Loss are
+// replayed from it instantly.  Only a miss (different operating point / mesh /
+// frame count, coupled eddy off in the run, or a back-end restart) runs a solve
+// here — and the header then says so.  Loss otherwise falls back to the
+// single-frame analytic density (fast, like |B|).
+const EDDY_MODES = new Set<FieldMode>(['Jeddy']);
 
-// Diverging blue→green→red colormap for signed J_z (Ansys "J" style:
-// red = +max, blue = −max, green = 0).
-function jetSigned(t: number): [number, number, number] {
-  // t ∈ [-1, +1].  Build 11 stops mirroring the Ansys J legend:
-  //   −1 .. −0.6 blue family,   −0.6 .. −0.2 cyan,   −0.2 .. +0.2 green,
-  //   +0.2 .. +0.6 yellow,      +0.6 .. +1 red.
-  const u = Math.max(-1, Math.min(1, t));
-  if (u <= -0.6) return [0, 0, 255];                // dark blue
-  if (u <= -0.4) return [0, 80, 255];               // blue
-  if (u <= -0.2) return [0, 200, 230];              // cyan
-  if (u <= -0.05) return [80, 230, 80];             // bright green
-  if (u <= +0.05) return [40, 200, 40];             // green (zero)
-  if (u <= +0.2) return [220, 240, 30];             // yellow-green
-  if (u <= +0.4) return [255, 220, 0];              // yellow
-  if (u <= +0.6) return [255, 120, 0];              // orange
-  return [255, 0, 0];                                // red
-}
-
-const N_BANDS = 20;           // # of discrete colour bands / iso-A levels
-
-/** Extract iso-A_z contour line segments via per-triangle linear
- *  interpolation (marching-segments on tris).
- *  For each iso level L, find triangles where A_min ≤ L ≤ A_max, then
- *  locate the two edges that L crosses and emit one line segment.
- *  Returns just positions — colour is applied uniformly at draw time. */
-function buildIsoLines(
-  vertices: [number, number][],
-  triangles: [number, number, number][],
-  domain_per_tri: number[],
-  A_z_per_node: number[],
-  A_min: number,
-  A_max: number,
-  nLevels: number,
-  S: number,        // metres → mm
-  z: number,        // depth for visibility
-): Float32Array {
-  const DOM_OUTER = 8;
-  // LINEAR distribution of iso-levels — required so the lines have
-  // UNIFORM spacing inside each magnet (where A_z varies linearly with
-  // the local coordinate of constant ∇A_z = constant B).  Log-spaced
-  // levels would cluster lines around A=0, making them look "denser at
-  // the middle of the magnet" — the artefact the user pointed out.
-  const range = Math.max(A_max - A_min, 1e-12);
-  const pos: number[] = [];
-  for (let k = 1; k < nLevels; k++) {
-    const t  = k / nLevels;
-    const L  = A_min + t * range;
-    for (let ti = 0; ti < triangles.length; ti++) {
-      if (domain_per_tri[ti] === DOM_OUTER) continue;
-      const [a, b1, c] = triangles[ti];
-      const Aa = A_z_per_node[a];
-      const Ab = A_z_per_node[b1];
-      const Ac = A_z_per_node[c];
-      const lo = Math.min(Aa, Ab, Ac);
-      const hi = Math.max(Aa, Ab, Ac);
-      if (L < lo || L > hi) continue;
-      const ix: [number, number][] = [];
-      const ed: number[][] = [[a, b1], [b1, c], [c, a]];
-      for (let e = 0; e < 3; e++) {
-        const i0 = ed[e][0], i1 = ed[e][1];
-        const f0 = A_z_per_node[i0] - L;
-        const f1 = A_z_per_node[i1] - L;
-        if (f0 * f1 > 0 || (f0 === 0 && f1 === 0)) continue;
-        const denom = (f0 - f1);
-        const u = denom === 0 ? 0.5 : f0 / denom;
-        const x = vertices[i0][0] + u * (vertices[i1][0] - vertices[i0][0]);
-        const y = vertices[i0][1] + u * (vertices[i1][1] - vertices[i0][1]);
-        ix.push([x, y]);
-        if (ix.length === 2) break;
-      }
-      if (ix.length === 2) {
-        pos.push(ix[0][0] * S, ix[0][1] * S, z,
-                 ix[1][0] * S, ix[1][1] * S, z);
-      }
-    }
-  }
-  return new Float32Array(pos);
-}
-
-const FieldMesh: React.FC<{ payload: FemPayload; mode: FieldMode }>
-  = ({ payload, mode }) => {
-  // Fill geometry — per-vertex Ansys-style banded rainbow for A_z, or
-  // per-triangle flat jet for |B|.  We SKIP DOM_OUTER (8) triangles so
-  // the outer far-field air ring (visible only for the BC) doesn't eat
-  // most of the canvas with a uniform near-zero band.
-  const fillGeo = useMemo(() => {
-    const { vertices, triangles, domain_per_tri,
-            A_z_per_node, A_z_min, A_z_max,
-            Bmag_per_tri, B_mag_max } = payload;
-    const S = 1000;
-    const DOM_OUTER = 8;
-
-    // ── helper: percentile of an array (in-place sort) ───────────────
-    const pctl = (arr: number[], p: number): number => {
-      if (!arr.length) return 0;
-      const a = Float64Array.from(arr).sort();
-      const i = Math.max(0, Math.min(a.length - 1,
-        Math.floor((p / 100) * (a.length - 1))));
-      return a[i];
-    };
-
-    if (mode === 'Az') {
-      // LINEAR mapping of A_z → colormap (no compression) so the iso-line
-      // density inside each magnet stays UNIFORM — A_z varies linearly
-      // with position inside a uniformly-magnetised magnet, and the user
-      // expects identical band spacing across the whole magnet body.
-      const interior = new Set<number>();
-      for (let ti = 0; ti < triangles.length; ti++) {
-        if (domain_per_tri[ti] === DOM_OUTER) continue;
-        for (const vi of triangles[ti]) interior.add(vi);
-      }
-      const interiorAbs: number[] = [];
-      interior.forEach(vi => interiorAbs.push(Math.abs(A_z_per_node[vi])));
-      const amax = Math.max(pctl(interiorAbs, 99), 1e-12);
-      const lo = -amax, hi = +amax;
-      const range = 2 * amax;
-      const compress = (a: number): number => {
-        // Linear normalisation A_z → [-1, +1]
-        return Math.max(-1, Math.min(1, a / amax));
-      };
-
-      // Only triangles NOT in DOM_OUTER get filled
-      const keep = triangles.map((_, ti) => domain_per_tri[ti] !== DOM_OUTER);
-      const positions = new Float32Array(vertices.length * 3);
-      const colors    = new Float32Array(vertices.length * 3);
-      for (let i = 0; i < vertices.length; i++) {
-        positions[3 * i]     = vertices[i][0] * S;
-        positions[3 * i + 1] = vertices[i][1] * S;
-        positions[3 * i + 2] = 0;
-        // map A_z → [-1, 1] via signed log, then to [0, 1] for jetBands
-        const tc = compress(A_z_per_node[i]);
-        const t  = 0.5 + 0.5 * tc;
-        const [r, g, b] = jetBands(t, N_BANDS);
-        colors[3 * i]     = r / 255;
-        colors[3 * i + 1] = g / 255;
-        colors[3 * i + 2] = b / 255;
-      }
-      const indexArr: number[] = [];
-      for (let i = 0; i < triangles.length; i++) {
-        if (!keep[i]) continue;
-        indexArr.push(triangles[i][0], triangles[i][1], triangles[i][2]);
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      g.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
-      g.setIndex(new THREE.BufferAttribute(new Uint32Array(indexArr), 1));
-      // Stash the symmetric percentile-clipped range so isoGeo and the
-      // colour bar can re-use the EXACT same scale.
-      (g as any).userData = { Az_lo: lo, Az_hi: hi };
-      return g;
-    }
-    // NOTE: lo/hi defined here is referenced by isoGeo + colour bar via
-    // fillGeo.userData (see below).
-
-    if (mode === 'J') {
-      // J_z mode — Ansys "J [A/m²]" style.  Coil triangles get a diverging
-      // blue→green→red colormap based on signed J_z, scaled to the 99-pct
-      // absolute value across all coil cells in the current frame.  Iron
-      // / magnet / air cells are not coloured.
-      const jz = payload.J_z_per_tri ?? [];
-      const dom = domain_per_tri;
-      const DOM_COIL = 2;
-      const nTri = triangles.length;
-      let vmaxAbs = 1e-12;
-      const sample: number[] = [];
-      for (let i = 0; i < nTri; i++) {
-        if (dom[i] !== DOM_COIL) continue;
-        if (i < jz.length) sample.push(Math.abs(jz[i]));
-      }
-      if (sample.length) {
-        const sorted = Float64Array.from(sample).sort();
-        const k = Math.floor(0.99 * (sorted.length - 1));
-        vmaxAbs = Math.max(sorted[k], 1e-12);
-      }
-      const positions = new Float32Array(nTri * 3 * 3);
-      const colors    = new Float32Array(nTri * 3 * 3);
-      let p = 0, c = 0;
-      for (let i = 0; i < nTri; i++) {
-        if (dom[i] !== DOM_COIL) continue;
-        const tt = triangles[i];
-        const v  = i < jz.length ? jz[i] : 0;
-        const tNorm = Math.max(-1, Math.min(1, v / vmaxAbs));
-        const [rr, gg, bb] = jetSigned(tNorm);
-        for (const vi of tt) {
-          positions[p++] = vertices[vi][0] * S;
-          positions[p++] = vertices[vi][1] * S;
-          positions[p++] = 0;
-          colors[c++] = rr / 255;
-          colors[c++] = gg / 255;
-          colors[c++] = bb / 255;
-        }
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position',
-        new THREE.BufferAttribute(positions.subarray(0, p), 3));
-      g.setAttribute('color',
-        new THREE.BufferAttribute(colors.subarray(0, c), 3));
-      (g as any).userData = { J_z_vmax: vmaxAbs };
-      return g;
-    }
-
-    if (mode === 'Demag') {
-      // Demag-Coef: show ONLY magnet triangles, coloured 0..1 via jet
-      // (Ansys "Demag-Coef" convention — red = 1.0 = safe, blue = 0 =
-      // fully demagnetised).  Non-magnet cells drop out so the magnet
-      // geometry stands alone on the canvas.
-      const dc = (payload as any).demag_coef_per_tri as number[] | undefined;
-      const dom = domain_per_tri;
-      const DOM_MAG_N = 4, DOM_MAG_S = 44;
-      const nTri = triangles.length;
-      const positions = new Float32Array(nTri * 3 * 3);
-      const colors    = new Float32Array(nTri * 3 * 3);
-      let p = 0, c = 0;
-      for (let i = 0; i < nTri; i++) {
-        if (dom[i] !== DOM_MAG_N && dom[i] !== DOM_MAG_S) continue;
-        const tt = triangles[i];
-        const v  = dc ? Math.max(0, Math.min(1, dc[i])) : 1;
-        const [rr, gg, bb] = jetBands(v, 11);   // 11 bands like Ansys
-        for (const vi of tt) {
-          positions[p++] = vertices[vi][0] * S;
-          positions[p++] = vertices[vi][1] * S;
-          positions[p++] = 0;
-          colors[c++] = rr / 255;
-          colors[c++] = gg / 255;
-          colors[c++] = bb / 255;
-        }
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position',
-        new THREE.BufferAttribute(positions.subarray(0, p), 3));
-      g.setAttribute('color',
-        new THREE.BufferAttribute(colors.subarray(0, c), 3));
-      return g;
-    }
-
-    // |B| — flat per-triangle jet.  Skip DOM_OUTER and HARD-CLIP vmax to
-    // the typical iron saturation (~1.8 T).  Without this cap, the 1/4-
-    // sector model's sharp-corner spikes (tens of T near the radial cut)
-    // dominate the LUT and squash the whole stator into one dark-blue
-    // band.  Using a physically-motivated cap keeps the iron variation
-    // visible — same trick Ansys applies via the "Auto-fit colour scale"
-    // toggle.
-    // Build the |B| distribution from interior triangles only (skip the
-    // far-field DOM_OUTER ring).  vmax = 95-percentile capped at 1.8 T
-    // matches the iron saturation knee — wide enough that air-gap +
-    // stator teeth + yoke each get their own colour band, narrow enough
-    // that sharp-corner spikes from the missing anti-periodic BC don't
-    // dominate the LUT.
-    const interiorB: number[] = [];
-    for (let ti = 0; ti < triangles.length; ti++) {
-      if (domain_per_tri[ti] === DOM_OUTER) continue;
-      interiorB.push(Bmag_per_tri[ti]);
-    }
-    const vmaxPct = pctl(interiorB, 95);
-    const vmax = Math.min(Math.max(vmaxPct, 0.05), 1.8);
-    const nTri = triangles.length;
-    const positions = new Float32Array(nTri * 3 * 3);
-    const colors    = new Float32Array(nTri * 3 * 3);
-    let p = 0; let c = 0;
-    // 11 discrete bands like the Ansys reference image — easier to read
-    // contour structure than a continuous gradient.
-    const N_B_BANDS = 11;
-    for (let i = 0; i < nTri; i++) {
-      // hide outer ring
-      if (domain_per_tri[i] === DOM_OUTER) continue;
-      const tt = triangles[i];
-      const t  = Math.min(1, Math.max(0, Bmag_per_tri[i] / vmax));
-      const [rr, gg, bb] = jetBands(t, N_B_BANDS);
-      for (const vi of tt) {
-        positions[p++] = vertices[vi][0] * S;
-        positions[p++] = vertices[vi][1] * S;
-        positions[p++] = 0;
-        colors[c++] = rr / 255;
-        colors[c++] = gg / 255;
-        colors[c++] = bb / 255;
-      }
-    }
-    // Trim allocated arrays to actual size (we may have skipped tris)
-    const trimPos = positions.subarray(0, p);
-    const trimCol = colors.subarray(0, c);
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(trimPos, 3));
-    g.setAttribute('color',    new THREE.BufferAttribute(trimCol, 3));
-    (g as any).userData = { Bmag_vmax: vmax };
-    return g;
-  }, [payload, mode]);
-
-  // Iso-A contour lines (only in A_z mode) — drawn as crisp DARK lines on
-  // top of the rainbow fill, like the "flux lines" in FEMM / FEMAG.  We
-  // emit them at finer level than the colour bands (N_BANDS × 3) so the
-  // line pattern is dense enough to read everywhere — even in regions
-  // where A_z varies slowly (outer air, stator iron).
-  const isoGeo = useMemo(() => {
-    if (mode !== 'Az') return null;
-    const { vertices, triangles, domain_per_tri, A_z_per_node } = payload;
-    // Pick the same symmetric 2/98 range the fill uses so contour lines
-    // are visible across the whole motor (stator iron included), not just
-    // inside the magnets where A_z peaks.
-    const ud = (fillGeo as any).userData ?? {};
-    const lo = ud.Az_lo ?? payload.A_z_min;
-    const hi = ud.Az_hi ?? payload.A_z_max;
-    // More iso lines than fill bands — gives a denser FEMM/Ansys-style
-    // flux-line pattern in the iron + airgap regions.
-    const positions = buildIsoLines(
-      vertices, triangles, domain_per_tri, A_z_per_node,
-      lo, hi, N_BANDS * 2, 1000, 1.0,
-    );
-    if (positions.length === 0) return null;
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    return g;
-  }, [payload, mode, fillGeo]);
-
-  // Outlines for crisp boundaries on top of the field
-  const outGeo = useMemo(() => {
-    const S = 1000;
-    const Z = 0.8;
-    const arr: number[] = [];
-    for (const entry of payload.outlines ?? []) {
-      for (const loop of entry.loops) {
-        if (loop.length < 2) continue;
-        for (let i = 0; i < loop.length; i++) {
-          const a = loop[i];
-          const b = loop[(i + 1) % loop.length];
-          arr.push(a[0] * S, a[1] * S, Z, b[0] * S, b[1] * S, Z);
-        }
-      }
-    }
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(arr), 3));
-    return g;
-  }, [payload]);
-
-  return (
-    <group>
-      <mesh geometry={fillGeo}>
-        <meshBasicMaterial vertexColors side={THREE.DoubleSide}/>
-      </mesh>
-      {isoGeo && (
-        <lineSegments geometry={isoGeo}>
-          <lineBasicMaterial color={0x0b1220} transparent opacity={0.85}/>
-        </lineSegments>
-      )}
-      <lineSegments geometry={outGeo}>
-        <lineBasicMaterial color={0x0f172a} transparent opacity={0.55}/>
-      </lineSegments>
-    </group>
-  );
-};
-
-const FitView: React.FC<{
-  payload: FemPayload | null;
-  controlsRef: React.MutableRefObject<any>;
-}> = ({ payload, controlsRef }) => {
-  const { camera, size, gl } = useThree();
-  useEffect(() => {
-    if (!payload || size.width === 0) return;
-    if (!(camera as any).isOrthographicCamera) return;
-    const cam = camera as THREE.OrthographicCamera;
-    const [xmin, xmax, ymin, ymax] = payload.extent;
-    const cx = (xmin + xmax) * 0.5 * 1000;
-    const cy = (ymin + ymax) * 0.5 * 1000;
-    const r  = Math.max(xmax - xmin, ymax - ymin) * 1000 * 0.55;
-    const aspect = size.width / size.height;
-    cam.left   = -r * aspect; cam.right  =  r * aspect;
-    cam.top    =  r;          cam.bottom = -r;
-    cam.zoom = 1.0;
-    cam.position.set(cx, cy, 300);
-    cam.lookAt(cx, cy, 0);
-    cam.updateProjectionMatrix();
-    if (controlsRef.current) {
-      controlsRef.current.target.set(cx, cy, 0);
-      controlsRef.current.update();
-    }
-    gl.render(camera as any, camera as any);
-  }, [payload, size.width, size.height, camera, gl, controlsRef]);
-  return null;
-};
-
-// ── colour-bar component (vertical) ───────────────────────────────────────
-const ColorBar: React.FC<{
-  vmin: number; vmax: number; unit: string; lut: (t: number) => [number, number, number];
-}> = ({ vmin, vmax, unit, lut }) => {
-  const ticks = useMemo(() => {
-    const n = 5;
-    return Array.from({ length: n }, (_, i) => vmin + (vmax - vmin) * (i / (n - 1)));
-  }, [vmin, vmax]);
-  const stops = Array.from({ length: 11 }, (_, k) => {
-    const [r, g, b] = lut(k / 10);
-    return `rgb(${r|0},${g|0},${b|0}) ${(k * 10).toFixed(0)}%`;
-  });
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5,
-      pl: 1, pr: 1, py: 1 }}>
-      <Box sx={{
-        width: 12, height: 200,
-        background: `linear-gradient(to top, ${stops.join(', ')})`,
-        border: '1px solid #1e293b',
-      }}/>
-      <Box sx={{ display: 'flex', flexDirection: 'column-reverse',
-        justifyContent: 'space-between', height: 200 }}>
-        {ticks.map((t, i) => (
-          <Typography key={i} sx={{ fontSize: 9, color: '#94a3b8',
-            fontFamily: 'monospace', lineHeight: 1 }}>
-            {t.toFixed(2)} {unit}
-          </Typography>
-        ))}
-      </Box>
-    </Box>
-  );
-};
+// The iso-line builder, the banded field mesh, the fit-on-payload camera and
+// the colour bar all moved out on 2026-09-06: the first two into fieldView's
+// emOutputs (they are field GEOMETRY, not host logic), the last two into the
+// shared common/FieldViewer, which every tab now draws through.
 
 // ── stats sidebar ─────────────────────────────────────────────────────────
 const StatRow: React.FC<{ label: string; value: string; sub?: string }> = ({
   label, value, sub,
 }) => (
   <Box sx={{ display: 'flex', justifyContent: 'space-between',
-    py: 0.4, borderBottom: '1px solid #0f172a' }}>
+    py: 0.4, borderBottom: '1px solid var(--app-bg)' }}>
     <Box>
-      <Typography sx={{ fontSize: 10, color: '#64748b' }}>{label}</Typography>
-      {sub && <Typography sx={{ fontSize: 9, color: '#334155' }}>{sub}</Typography>}
+      <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{label}</Typography>
+      {sub && <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>{sub}</Typography>}
     </Box>
-    <Typography sx={{ fontSize: 11, color: '#cbd5e1', fontFamily: 'monospace' }}>
+    <Typography sx={{ fontSize: 11, color: 'var(--text-1)', fontFamily: 'monospace' }}>
       {value}
     </Typography>
   </Box>
@@ -530,15 +136,170 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                                           payloadOverride, subHeader,
                                           hideRefresh }) => {
   const [fetchedPayload, setPayload] = useState<FemPayload | null>(null);
-  const payload = payloadOverride ?? fetchedPayload;   // override wins
   const [loading, setLoading] = useState<boolean>(false);
   const [error,   setError]   = useState<string | null>(null);
+  // A free "does the server already hold this exact picture?" lookup is in
+  // flight (cache probe, never a solve) — keeps the "not solved" line from
+  // flashing before an answer that is usually instant.
+  const [azProbing, setAzProbing] = useState<boolean>(false);
   const [mode,    setMode]    = useState<FieldMode>('Az');
-  const controlsRef = useRef<any>(null);
+  // Eddy-solve payload (J⟳ / Loss views) — separate from the fast magnetostatic
+  // one, lazily fetched on first selection and re-fetched when γ / I change.
+  const [eddyPayload, setEddyPayload] = useState<FemPayload | null>(null);
+  const [eddyLoading, setEddyLoading] = useState<boolean>(false);
+  // TRUE only once the snapshot probe has come back empty and this view is
+  // actually running its own transient — so the spinner never claims to be
+  // "fetching" while it is solving, or the other way round.
+  const [eddySolving, setEddySolving] = useState<boolean>(false);
+  const [eddyErr,     setEddyErr]     = useState<string | null>(null);
+  // The free snapshot probe has already asked (and missed) for this operating
+  // point — so the view stops asking and shows its placeholder instead of
+  // re-probing on every render.
+  const [eddyProbed,  setEddyProbed]  = useState<boolean>(false);
+  // Loss view: the Simulation run's OWN cycle-averaged loss-density map, if that
+  // run's snapshot matches this operating point.  Probed without solving
+  // (snapshot_only); a miss leaves the single-frame analytic map in place.
+  const [lossSnap,    setLossSnap]    = useState<FemPayload | null>(null);
+  const [lossProbing, setLossProbing] = useState<boolean>(false);
+  const [lossProbed,  setLossProbed]  = useState<boolean>(false);
+  const [logLoss,     setLogLoss]     = useState<boolean>(true);   // log W/m³ map
+  // Loss view: one shared W/m³ axis (default, comparable) vs each material
+  // scaled to its own range (readable inside the weakest component, but a
+  // colour no longer means one number).  Default OFF — the shared axis is the
+  // number; this is a reading aid and the note under the view says so.
+  const [perMat,      setPerMat]      = useState<boolean>(false);
+  // Signature of the machine this view is drawing.  The fetch interceptor sends
+  // exactly these numbers as `geo=` on every request, so when they change the
+  // picture on screen is of a different motor and has to be re-fetched.  Same
+  // construction TransientCharts uses to flag a stale run — one definition of
+  // "the geometry changed" for both panels.
+  const storeGeometry = useMotorStore(s => s.geometry);
+  const geoSig = useMemo(
+    () => geoSignature(storeGeometry as Record<string, unknown>), [storeGeometry]);
+  const matReady = useMatOverrideReady();
+  const isEddy = !payloadOverride && EDDY_MODES.has(mode);
+  const isLoss = !payloadOverride && mode === 'Loss';
+  // Demag rides the SAME run-snapshot probe as Loss: the honest map is the
+  // transient's worst-over-period ratchet, not this view's single-frame
+  // full-Br check.  A run that de-rated a magnet to Br 0.12 rendered here as
+  // a uniform 99.9 % "nothing happened" because only the static payload was
+  // ever consulted.
+  const isDemagV = !payloadOverride && mode === 'Demag';
 
-  const fetchFem = () => {
+  // ── The RUN's OWN demag map, off the stored transient ─────────────────────
+  // The Demag koef on the summary card is the area-weighted Br retention of
+  // the transient's full-period ratchet (the worst field every element saw),
+  // and that map travels WITH the run: `demag_field` in the transient
+  // payload, persisted in localStorage and restored by the backend.  The
+  // server-side snapshot the probe above looks for is only a cache of the
+  // same thing, and it is emptied by a restart or a geometry save — after
+  // which this view used to fall back to a single-angle full-Br check, a
+  // MILDER picture that could not reproduce the card's number (user
+  // 2026-09-04: "половина 100 %, половина 99 % — никак 94 % не получается";
+  // the run's map showed 85–90 % over the magnet cores).  Read the run's map
+  // directly instead: same machine (geometry stamp), tiled to the full ring.
+  const numPoles = Number((storeGeometry as Record<string, unknown> | null)?.num_poles ?? 0);
+  const [runMapNonce, setRunMapNonce] = useState(0);
+  useEffect(() => {
+    const bump = () => setRunMapNonce(n => n + 1);
+    window.addEventListener('sim-transient-done', bump);
+    window.addEventListener('sim-transient-restored', bump);
+    return () => {
+      window.removeEventListener('sim-transient-done', bump);
+      window.removeEventListener('sim-transient-restored', bump);
+    };
+  }, []);
+  const runDemag = useMemo<FemPayload | null>(() => {
+    if (!isDemagV) return null;
+    try {
+      const s = localStorage.getItem('sim.lastTransient');
+      if (!s) return null;
+      const t = JSON.parse(s);
+      const f = t?.demag_field;
+      if (!f?.vertices?.length || !f?.triangles?.length || !f?.demag_coef_per_tri?.length) return null;
+      // Another machine's run is never shown as this one's (the same rule the
+      // summary card applies to its numbers).
+      if (t._geoSig != null && t._geoSig !== geoSig) return null;
+      // The run solves the machine's natural wedge; its magnet count against
+      // the pole count says how many copies make the ring.
+      const nMag = Number(f.mag_domains?.length ?? 0);
+      const N = (numPoles > 0 && nMag > 0 && numPoles % nMag === 0) ? numPoles / nMag : 1;
+      const I = t.I_phase_rms_solved_A ?? t.summary?.I_phase_rms_A;
+      const g = t.gamma_effective_deg ?? t.summary?.gamma_deg;
+      const when = t.computed_at ? new Date(t.computed_at).toLocaleTimeString() : '';
+      const p = {
+        n_vertices: f.vertices.length, n_triangles: f.triangles.length,
+        vertices: f.vertices, triangles: f.triangles, domain_per_tri: f.domain_per_tri,
+        demag_coef_per_tri: f.demag_coef_per_tri,
+        A_z_per_node: [], Bmag_per_tri: [], extent: f.extent,
+        // The motor around the magnets: class boundaries chained from the
+        // run's own mesh (tileFullRing rotates them with the sector).
+        outlines: outlinesFromMesh(f.vertices, f.triangles, f.domain_per_tri, N),
+        n_sectors: N, symmetry_mult: N, anti_periodic: false,
+        solve_time_s: 0, total_time_s: 0,
+        // The sidebar formats these unconditionally (crashed the panel on
+        // 2026-09-05 with "reading 'toFixed'" — they were simply absent).
+        A_z_min: 0, A_z_max: 0, B_mag_max: 0,
+        T_em_Nm: Number(t.summary?.T_em_avg_Nm ?? 0), P_cu_W: Number(t.summary?.P_stranded_W ?? 0),
+        P_fe_W: Number(t.summary?.P_core_W ?? 0), P_mag_eddy_W: Number(t.summary?.P_solid_W ?? 0),
+        P_loss_total_W: Number(t.summary?.P_loss_total_W ?? 0), P_mech_W: Number(t.summary?.P_mech_W ?? 0),
+        efficiency: Number(t.summary?.efficiency ?? 0), freq_Hz: 0, rpm: Number(t.summary?.rpm ?? 0),
+        source: 'transient-snapshot', from_transient: true,
+        source_label: `simulation run${when ? ` ${when}` : ''}`
+          + (I != null ? ` @ ${Number(I).toFixed(0)} A` : '')
+          + (g != null ? `, γ ${Number(g).toFixed(1)}°` : '')
+          + ' — worst field over the full electrical period (the Demag koef map)',
+        transient_steps_per_period: t.summary?.n_steps_per_period ?? null,
+        transient_computed_at: t.computed_at ?? null,
+      } as unknown as FemPayload;
+      return tileFullRing(p);
+    } catch { return null; }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDemagV, geoSig, numPoles, runMapNonce]);
+
+  const payload = payloadOverride
+    ?? (isEddy ? eddyPayload
+       : ((isLoss || isDemagV) && lossSnap) ? lossSnap
+       : (isDemagV && runDemag) ? runDemag
+       : fetchedPayload);
+  const busy = isEddy ? eddyLoading
+             : ((isLoss || isDemagV) && lossProbing) ? true
+             : loading;
+  const errMsg = isEddy ? eddyErr : error;
+  // The static solver always computes a demag map (a check at full Br), but if
+  // the user has demag modelling OFF the map (all 0 % at no-load) is just
+  // confusing — only offer the Demag view when demag is actually enabled.
+  const demagOn = (() => {
+    try { return JSON.parse(localStorage.getItem('sim.demag') || 'false') === true; }
+    catch { return false; }
+  })();
+  useEffect(() => { if (!demagOn && mode === 'Demag') setMode('Az'); }, [demagOn, mode]);
+
+  // THE field view — geometry AND colour scale for whichever mode is showing,
+  // built once and handed to the shared viewer, which bands the fill and labels
+  // the colour bar off the SAME FieldScale.  (They used to derive their ranges
+  // independently and could disagree about what a colour meant.)
+  const emOut = useMemo(
+    () => emOutputs(payload, mode, { logLoss, perMaterialLoss: perMat }),
+    [payload, mode, logLoss, perMat]);
+
+  /** Single-angle field (A_z / |B| / J / Demag static).  `probeOnly` asks the
+   *  backend ONLY for a picture it already holds for this exact key (its
+   *  field cache — `snapshot_only` returns before any solve) and shows the
+   *  placeholder on a miss.  This is how the view comes back after a page
+   *  reload without solving anything: the run's automatic solve is still in
+   *  the server's cache, the page just lost its copy (user 2026-09-04: "и
+   *  опять не считается автоматом" — it had; the Claude app restart reloaded
+   *  the page and the picture with it). */
+  const fetchFem = (probeOnly = false) => {
     if (payloadOverride) return;   // parent owns the data
-    setLoading(true); setError(null);
+    if (probeOnly) setAzProbing(true); else { setLoading(true); }
+    setError(null);
+    const comp = JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {}));
+    // Transient-only policy: the separate "Eddy" static solve was retired —
+    // the magnetostatic field view is just the per-frame field the transient
+    // sweeps; losses/torque come from the sliding-band transient.
+    const base = `${API}/api/simulation/physics/fem_field2d`;
     const params: Record<string, string> = {
       rotor_angle_deg:   String(rotor_angle_deg),
       gamma_deg:         String(gamma_deg),
@@ -547,25 +308,62 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       outer_air_factor:  String(readMeshSetting('outerAir',    1.3)),
       motion_band:       String(readMeshSetting('motionBand',  true)),
       band_thickness_mm: String(readMeshSetting('bandThickness', 0.4)),
-      n_sectors:         String(readMeshSetting('nSectors',    4)),
+      n_sectors:         String(readMeshSetting('nSectors',    1)),
       stator_fillet_mm:  '0',   // native geometry — extra smoothing removed
+      component_mesh:    comp,
+      // The field view now runs the sliding-band solver for one frame; pass the
+      // demag flag so it computes the irreversible-demag %-map when modelling is on.
+      demag:             String(demagOn),
+      // Bit-identical pole/slot mesh (Mesh-tab toggle) — keep the field view
+      // consistent with the mesh/sim the user is verifying.
+      pole_copy:         String(readMeshSetting('poleCopy', false)),
+      // SAME mesh pipeline as the transient (Mesh-tab toggles) — the field
+      // view must show the exact mesh the simulation solves on.
+      iron_template:     String(readMeshSetting('ironTemplate', true)),
+      geo_mesh:          String(readMeshSetting('geoMesh', true)),
+      structured_gap:    String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
+      airgap_macro:      String(readMeshSetting('harmonicGap', false)),
+      gap_layers:        String(readMeshSetting('gapLayers', 2)),
     };
     if (I_phase_rms !== undefined) {
       params.I_phase_rms = String(I_phase_rms);
     }
+    // The cache key ignores this flag, so a hit is the very picture a full
+    // fetch would return; a miss answers {no_snapshot} instead of solving.
+    if (probeOnly) params.snapshot_only = 'true';
     const qs = new URLSearchParams(params).toString();
-    fetch(`${API}/api/simulation/physics/fem_field2d?${qs}`)
+    fetch(`${base}?${qs}`, { cache: 'no-store' })
       .then(async r => {
+        if (probeOnly && !r.ok) return { no_snapshot: true } as FemPayload;
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
       })
       .then((d: FemPayload) => {
-        setPayload(d); setLoading(false);
-        if (onPayload) onPayload(d);
+        if (probeOnly) setAzProbing(false);
+        if (d && (d as any).no_snapshot) { setLoading(false); return; }   // probe miss → placeholder
+        const full = tileFullRing(d);   // sector solve → full-ring display
+        setPayload(full); setLoading(false);
+        if (onPayload) onPayload(full);
       })
-      .catch(e => { setError(String(e)); setLoading(false); });
+      .catch(e => {
+        if (probeOnly) { setAzProbing(false); return; }   // a probe never reports
+        setError(String(e)); setLoading(false);
+      });
   };
 
+  // ── A field view NEVER SOLVES BY ITSELF ───────────────────────────────────
+  // This effect used to call fetchFem() — so opening the Simulation tab,
+  // loading a machine or nudging γ / current started a full FEM solve per
+  // view, with nothing on screen saying so (the transient strip only tracks
+  // the main transient).  Measured 2026-09-03, 18:48-19:05: 14 automatic
+  // /fem_field2d solves on one machine, 3 on a large one at 5-7 min each, two
+  // of those fired twice within a second with an identical key — ~17 cores and
+  // 345 threads busy while the panel showed nothing running.
+  //
+  // A changed machine / operating point still INVALIDATES the picture (showing
+  // the old motor's field as the new one's is the stale-machine bug), it just
+  // does not re-solve: the view goes back to its placeholder and waits for
+  // Re-solve.  What the buttons compute is unchanged.
   useEffect(() => {
     if (payloadOverride) {
       // External owner — drop loading flag and forward upstream
@@ -573,151 +371,424 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       if (onPayload) onPayload(payloadOverride);
       return;
     }
-    fetchFem();
+    setPayload(null); setError(null); setLoading(false);
+    // …then ask, for free, whether the server ALREADY holds this exact
+    // picture (a page reload, or a point the user solved earlier and came
+    // back to).  A hit paints it, a miss leaves the placeholder; no solve is
+    // ever started here.  The multi-frame views do the same with their own
+    // snapshot probes below.
+    // …but only once the request would carry the page's material override —
+    // before that the probe's key cannot match the solve's (see
+    // useMatOverrideReady); the effect re-runs when `matReady` flips.
+    if (matReady && !EDDY_MODES.has(mode) && mode !== 'Loss' && mode !== 'Demag') fetchFem(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride]);
+  }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride, geoSig, matReady]);
+
+  // ── the picture depends on the GEOMETRY, so the geometry is a dependency ──
+  // `geoSig` above is in that list, and this is the whole fix for "I edited the
+  // geometry, saved it, re-ran, and every field view still shows the old
+  // motor".  The back end was innocent: its keys already discriminate (a
+  // config-side edit changes cfg_fingerprint, a per-request `geo=` is appended
+  // to the field cache key).  What went wrong was up here — this view only ever
+  // re-fetched on γ / rotor angle / current and on the `sim-design-applied`
+  // event, and the Geometry tab's save path (motorStore.updateGeometryViaApi)
+  // does not fire that event: only applying a design from Sweep / Compare does.
+  // So the store's geometry became the new machine, every request would have
+  // carried it — and no request was made.  The stale payload stayed on screen,
+  // and Re-run Simulation did not help either: `sim-transient-done` only drops
+  // the eddy/loss snapshots, so Loss then fell back to this same stale payload.
+  //
+  // Keying on the geometry itself rather than on an event covers EVERY way the
+  // machine can change — Geometry tab, Sweep apply, Compare apply, a preset,
+  // a catalog load — including the ones that do not exist yet.
+
+  // Assigning a different magnet/steel changes the solve but NOT the URL, so this
+  // view has no way to notice on its own — re-fetch on the same event a material
+  // change fires.  Without it the map kept showing the previous material, and a
+  // manual Re-solve only re-read the browser's cached response for that URL.
+  // (…and it drops the picture rather than re-solving it, for the same reason
+  // the effect above does: a solve is the user's decision, not the app's.)
+  useEffect(() => {
+    const onApplied = () => {
+      if (!payloadOverride) { setPayload(null); setError(null); }
+    };
+    window.addEventListener('sim-design-applied', onApplied);
+    return () => window.removeEventListener('sim-design-applied', onApplied);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payloadOverride, mode, gamma_deg, I_phase_rms]);
+
+  // ── …except after RUN (user 2026-09-03: "когда я нажимаю Run, пусть
+  //    считается автоматом — это логично").  A finished transient is the one
+  //    moment the user has asked for a solve of THIS machine at THIS point, so
+  //    the field picture follows it by itself: one fetch, after the run, never
+  //    on tab opens or nudges.  `sim-transient-done` fires only for a REAL
+  //    solve (TransientCharts skips it on restore), and the backend serves the
+  //    run's own last-frame snapshot when the key matches — otherwise this is
+  //    the single-angle A_z solve the Re-solve button would have made.
+  useEffect(() => {
+    const onDone = () => {
+      if (payloadOverride) return;
+      // Exactly what the Re-solve button does for the view that is open —
+      // J⟳ / Loss included (user 2026-09-04: "field not solved" was still on
+      // screen after Run because only the A_z view auto-fetched).
+      if (isEddy) fetchEddy(true);
+      else if (isLoss) { setLossSnap(null); setLossProbed(false); fetchFem(); }
+      else fetchFem();
+    };
+    window.addEventListener('sim-transient-done', onDone);
+    return () => window.removeEventListener('sim-transient-done', onDone);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payloadOverride, mode, gamma_deg, rotor_angle_deg, I_phase_rms, geoSig]);
+
+  // Use the ACTUAL operating-point current — no silent substitution (a hidden
+  // fallback to 120 A made the no-load Loss view show full I²R copper loss, which
+  // read as "copper loss at I=0").  At I=0 the map now honestly shows the no-load
+  // losses: iron + magnet eddy + the small copper eddy/proximity the spinning
+  // magnets induce in the windings — there is NO I²R.
+  const eddyCurrent = (I_phase_rms !== undefined && I_phase_rms > 0) ? I_phase_rms : 0;
+  const eddyNoLoad = !(eddyCurrent > 0);
+
+  // The Simulation tab's own run settings.  The multi-frame views are asked for
+  // with EXACTLY these so the backend can recognise the request as the run it
+  // already solved and hand back that run's field instead of solving again.
+  // (Same localStorage keys the Simulation panel writes and TransientCharts
+  // sends — one source, or the keys would never match.)
+  const simSteps    = () => Number(readSimSetting('stepsPP', EDDY_DEFAULT_STEPS)) || EDDY_DEFAULT_STEPS;
+  const simCoilTemp = () => Number(readSimSetting('coilTemp', 120.0));
+  const simEddy     = () => readSimSetting<boolean>('eddyCoupled', true) !== false;
+
+  /** Query shared by the J⟳ / Loss requests and the run itself.  `eddy` and the
+   *  frame count differ per caller, everything else is the run's own settings. */
+  const multiFrameParams = (eddy: boolean, steps: number): Record<string, string> => ({
+    gamma_deg:        String(gamma_deg),
+    I_phase_rms:      String(eddyCurrent),
+    n_steps_per_period: String(steps),
+    n_periods:          '1',
+    eddy:             String(eddy),
+    rotor_eddy:       'true',
+    // Demag and coil temperature change the SOLVE, so they are part of what
+    // makes a request "the same run" — omitting them meant the view asked for a
+    // motor the simulation never solved and could never be served from it.
+    demag:            String(demagOn),
+    coil_temp_c:      String(simCoilTemp()),
+    mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
+    min_size_mm:      String(readMeshSetting('minSize',  0.3)),
+    outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
+    n_sectors:        String(readMeshSetting('nSectors', 1)),
+    component_mesh:   JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
+    pole_copy:        String(readMeshSetting('poleCopy', false)),
+    iron_template:    String(readMeshSetting('ironTemplate', true)),
+    geo_mesh:         String(readMeshSetting('geoMesh', true)),
+    structured_gap:   String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
+    airgap_macro:     String(readMeshSetting('harmonicGap', false)),
+    gap_layers:       String(readMeshSetting('gapLayers', 2)),
+  });
+
+  /** J⟳ / eddy view.
+   *
+   *  `allowSolve` is the whole gate: the SNAPSHOT PROBE (step 1) is free — it
+   *  asks the backend whether the last simulation run already solved this and
+   *  never starts anything — so it may run on its own when the view opens.
+   *  Step 2 is a real 10-frame transient and only ever runs from the Re-solve
+   *  button.  Automatic step 2 is how this view quietly put 5-7 minute solves
+   *  on the server (2026-09-03).
+   */
+  const fetchEddy = (allowSolve = true) => {
+    if (payloadOverride) return;
+    setEddyLoading(true); setEddyErr(null); setEddySolving(false);
+    // SAME endpoint as the A_z / |B| / J views, with the SAME mesh-pipeline
+    // toggles. It used to be a separate /fem_eddy_field2d whose defaults left
+    // out template iron, the geo mesh and the structured belt, so the J⟳ view
+    // solved a DIFFERENT mesh and drew a visibly different outline next to the
+    // A_z view. Every mesh setting must stay in step with fetchFem — that
+    // is the whole reason the two share one endpoint now.
+    const base = `${API}/api/simulation/physics/fem_field2d`;
+    const coupled = simEddy();
+    // STEP 1 — ask whether the Simulation run already solved this exact thing
+    // (snapshot_only: the backend answers from its store or says no; it never
+    // starts a solve behind this request).  Two steps rather than one so the
+    // spinner can tell the truth: "fetching" and "solving" are different waits,
+    // and a single request that might do either has to guess which to claim.
+    // With the coupled eddy off in the run there is nothing to find, so skip it.
+    const askJ = (relaxed: boolean) => fetch(
+      `${base}?${new URLSearchParams({
+          ...multiFrameParams(true, simSteps()), snapshot_only: 'true',
+          latest_run_field: relaxed ? 'true' : 'false',
+        }).toString()}`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : { no_snapshot: true }))
+      .catch(() => ({ no_snapshot: true }));
+    // Exact key, then the same-machine fallback (see the Loss probe below).
+    const probe: Promise<FemPayload> = coupled
+      ? askJ(false).then((d: any) => (d && d.no_snapshot) ? askJ(true) : d)
+      : Promise.resolve({ no_snapshot: true } as FemPayload);
+    probe.then((d: FemPayload) => {
+      if (d && !d.no_snapshot && d.vertices) {         // the run's own field
+        setEddyPayload(tileFullRing(d)); setEddyLoading(false);
+        setEddyProbed(true);
+        return;
+      }
+      setEddyProbed(true);
+      if (!allowSolve) {
+        // Nothing to replay and nobody asked for a solve → placeholder.
+        setEddyLoading(false);
+        return;
+      }
+      // STEP 2 — nothing to replay: solve it here, at the cheap 10 frames /
+      // period this view always used (≥9 keeps the de-jitter savgol and still
+      // resolves the 6f loss harmonic).  The payload labels itself as an
+      // on-demand solve, and the spinner now says so too.
+      setEddySolving(true);
+      return fetch(`${base}?${new URLSearchParams(multiFrameParams(true, 10)).toString()}`,
+                   { cache: 'no-store' })
+        .then(async r => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+          return r.json();
+        })
+        .then((d2: FemPayload) => {
+          setEddyPayload(tileFullRing(d2));
+          setEddyLoading(false); setEddySolving(false);
+        });
+    }).catch(e => { setEddyErr(String(e)); setEddyLoading(false); setEddySolving(false); });
+  };
+
+  /** Loss view: ask ONLY for the simulation run's own cycle-averaged map
+   *  (snapshot_only → the backend never starts a solve for this).  A hit
+   *  replaces the single-frame analytic estimate with the real transient map;
+   *  a miss leaves the analytic one, which is what this view showed before. */
+  const probeLossSnapshot = () => {
+    if (payloadOverride) return;
+    setLossProbing(true);
+    const base = `${API}/api/simulation/physics/fem_field2d`;
+    const P = multiFrameParams(simEddy(), simSteps());
+    const ask = (relaxed: boolean) => fetch(
+      `${base}?${new URLSearchParams({
+        ...P, snapshot_only: 'true',
+        latest_run_field: relaxed ? 'true' : 'false',
+      }).toString()}`, { cache: 'no-store' })
+      .then(async r => (r.ok ? r.json() : { no_snapshot: true }));
+    // EXACT key first.  On a miss, ask for the last run of the SAME machine —
+    // the backend crosses an operating-point / mesh difference but never a
+    // geometry or material one, and it reports every difference in
+    // `source_label`, which the header prints.  Three separate one-field
+    // spelling mismatches have sent this view to its single-frame analytic
+    // fallback (whose magnet term is ZERO), so a labelled real map beats an
+    // unlabelled fake one.
+    ask(false)
+      .then((d: FemPayload) => (d && d.no_snapshot) ? ask(true) : d)
+      .then((d: FemPayload) => {
+        setLossSnap(d && d.no_snapshot ? null : tileFullRing(d));
+        setLossProbing(false); setLossProbed(true);
+      })
+      .catch(() => { setLossSnap(null); setLossProbing(false); setLossProbed(true); });
+  };
+
+  // γ / I changed → the cached eddy solve is stale (rotor angle does NOT
+  // matter — the eddy run sweeps a whole period — so we don't invalidate on it).
+  useEffect(() => {
+    setEddyPayload(null); setEddyErr(null); setEddyProbed(false);
+    setLossSnap(null); setLossProbed(false);
+    // geoSig: a different machine invalidates these just as surely as a
+    // different operating point does — and the thermal solve is fed by them.
+  }, [gamma_deg, I_phase_rms, mode, geoSig]);   // Loss (fast) vs J⟳ (coupled) need different solves
+
+  // A finished simulation run has just produced a field snapshot → drop what
+  // these views are holding so the next look comes from the RUN, not from a
+  // solve of an older operating point.
+  useEffect(() => {
+    const onRun = () => {
+      setEddyPayload(null); setEddyErr(null); setEddyProbed(false);
+      setLossSnap(null); setLossProbed(false);
+    };
+    window.addEventListener('sim-transient-done', onRun);
+    return () => window.removeEventListener('sim-transient-done', onRun);
+  }, []);
+
+  // First time a J⟳ view is shown: ask the run's snapshot (free, no solve).
+  // A miss shows the placeholder — the 10-frame transient behind this view is
+  // a Re-solve click, not a side effect of selecting the toggle.
+  // (`matReady` gates both probes for the same reason as the single-frame one
+  // above: a probe without the override keys a different machine and its miss
+  // is then remembered as "the run has nothing" — wrongly.)
+  useEffect(() => {
+    if (matReady && isEddy && !eddyPayload && !eddyLoading && !eddyErr && !eddyProbed) {
+      fetchEddy(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEddy, eddyPayload, eddyLoading, eddyErr, eddyProbed, matReady]);
+
+  // Loss AND Demag: probe the run's snapshot once per operating point (no
+  // solve) — both maps only mean anything as the run's own cycle history.
+  useEffect(() => {
+    if (matReady && (isLoss || isDemagV) && !lossSnap && !lossProbed && !lossProbing) probeLossSnapshot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoss, isDemagV, lossSnap, lossProbed, lossProbing, matReady]);
+
+  /* The thermal solve used to live here — its own fetch of
+     /api/simulation/physics/thermal_field2d, with the cooling inputs in this
+     viewer's toolbar.  It moved to the Thermal tab on 2026-09-07: it is a
+     different physics on a different mesh, and it never belonged in an
+     electromagnetic output menu. */
+
+  // ── what the header says ─────────────────────────────────────────────────
+  // Still built HERE, not in the viewer: only this host knows whether the Loss
+  // map on screen is the run's own cycle-averaged one or the single-frame
+  // analytic fallback, and saying which is not optional.
+  const headerLabel = mode === 'Loss'
+    ? (lossSnap ? 'Loss density (simulation run, cycle-averaged)'
+                : 'Loss density (single frame, analytic)')
+    : mode === 'Demag'
+      ? ((lossSnap || runDemag)
+           ? 'Demagnetisation, % of Br remaining (simulation run, worst over period)'
+           : 'Demagnetisation, % of Br remaining (single frame, full-Br check)')
+      : mode === 'Jeddy'
+        ? 'Current density J⟳ — coupled eddy solve (proximity)'
+        : mode === 'Az'
+          ? 'Magnetic potential A_z — real scikit-fem solve'
+          : (EM_MENU.find(m => m.id === mode)?.label ?? mode);
+
+  const headerTip = (isEddy || isLoss)
+    ? "Time-coupled eddy-current solve over a full electrical period. J⟳ shows the real current density σ(−∂A/∂t+U) crowding toward the slot mouth (proximity effect); Loss is the cycle-averaged dissipation density [W/m³] — iron Bertotti + copper DC+AC + magnet eddy, normalised so the map integrates to the reported component losses. When the last Simulation run solved this same operating point (with the coupled eddy solve on), these views replay THAT run's final frame — no second solve. Otherwise they compute here, and the line below says so."
+    : "2-D magnetostatic field at the current rotor angle — the same per-frame field the sliding-band transient sweeps. Torque + losses are ×n_sectors for the full motor.";
+
+  // The menu: only the outputs THIS host can have data for.  Demag exists only
+  // with demag modelling on; the animation viewer feeds one frame at a time, and
+  // J⟳ / Loss each need their own multi-frame solve.
+  const outputs = useMemo<FieldOutput[]>(() => {
+    const avail = EM_MENU.filter(m => {
+      if (m.id === 'Demag') return demagOn;
+      if (payloadOverride && (m.id === 'Jeddy' || m.id === 'Loss')) return false;
+      return true;
+    });
+    return avail.map(m => (m.id === mode
+      ? { ...emOut, label: headerLabel, tip: headerTip }
+      : outputStub(m.id, m.menuLabel, m.label, m.group, { unit: m.unit, tip: m.tip })));
+  }, [emOut, mode, demagOn, payloadOverride, headerLabel, headerTip]);
+
+  // One SHORT visible line (user rule: no walls of text in the web — details
+  // live in the tooltip).  Visible: where the picture came from + the operating
+  // current.  Hover: mesh size, solve time, provenance, colour-scale semantics.
+  const contextLabel = payload
+    ? (subHeader
+         ? subHeader
+         : `${payload.from_transient
+                ? ('from last simulation run'
+                   // A relaxed match is the user's MOTOR but not the panel's
+                   // numbers.  That has to be visible, not hover-only.
+                   + ((payload as any).from_transient_relaxed ? ' (≠ panel)' : ''))
+                : 'computed on demand'}`
+           + `${(isEddy || isLoss || isDemagV) ? ` · @ ${eddyCurrent.toFixed(0)} A` : ''}`
+           + ' · ⓘ')
+    : busy
+      ? (isEddy
+           ? (eddySolving
+                ? 'No matching simulation run — solving this view on demand…'
+                : 'Looking for the last simulation run\'s field…')
+           : isLoss ? 'Checking the last simulation run\'s loss map…'
+           : 'Solving…')
+      : 'field not solved for this machine — Re-solve';
+
+  const contextTip = payload
+    ? (`${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry`
+       + `${payload.from_transient ? '' : ` · solve ${payload.solve_time_s}s`}`
+       + `${payload.source_label ? ` · ${payload.source_label}` : ''}`
+       + `${emOut.scale ? ` — ${emOut.scale.note} · ${emOut.scale.bands} bands` : ''}`)
+    : '';
 
   return (
-    <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
+    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <Box>
-          <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
-            Magnetic potential A<sub>z</sub> — real scikit-fem solve
-            <Tooltip title="scikit-fem 2-D magnetostatics on the same mesh the Mesh tab renders. Uses the mesh-tab Solver-Domain settings (Symmetry, motion band, outer-air ring). Torque and iron / magnet losses are multiplied by n_sectors so the values represent the full motor." placement="top">
-              <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
-            </Tooltip>
+
+      <FieldViewer
+        outputs={outputs}
+        selected={mode}
+        onSelect={(id) => setMode(id as FieldMode)}
+        fitKey={geoSig}
+        contextLabel={contextLabel}
+        contextTip={contextTip}
+        contextColor={payload?.from_transient ? '#38bdf8' : 'var(--text-4)'}
+        busy={busy}
+        error={errMsg}
+        busyNote={(isEddy || isLoss) ? (
+          <Typography sx={{ fontSize: 11, color: 'var(--text-2)', textAlign: 'center', maxWidth: 320 }}>
+            {isLoss
+                ? 'Looking for the last simulation run\'s loss map (no solve)…'
+                : !eddySolving
+                  // Still the snapshot probe — a lookup, not a solve.
+                  ? 'Looking for the last simulation run\'s eddy field…'
+                  : (simEddy()
+                      ? 'The last simulation run does not cover this operating '
+                        + 'point, so this view is solving its own 10-frame eddy '
+                        + 'transient (~25 s).'
+                      : 'Coupled eddy solve is OFF in the Simulation run, so this '
+                        + 'view has to solve its own 10-frame eddy transient (~25 s). '
+                        + 'Turn it on in the Simulation panel to get this instantly.')}
           </Typography>
-          <Typography sx={{ fontSize: 10, color: '#475569' }}>
-            {payload
-              ? (subHeader
-                   ? subHeader
-                   : `${payload.n_triangles.toLocaleString()} triangles · solve ${payload.solve_time_s}s · total ${payload.total_time_s}s · ×${payload.symmetry_mult} symmetry mult`)
-              : 'Solving…'}
-          </Typography>
-        </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <ToggleButtonGroup value={mode} exclusive size="small"
-            onChange={(_, v) => v && setMode(v as FieldMode)}
-            sx={{
-              '& .MuiToggleButton-root': { py: 0.2, px: 1.2, fontSize: 11,
-                color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
-                  borderColor: '#3b82f6' }}}}>
-            <ToggleButton value="Az">A<sub>z</sub></ToggleButton>
-            <ToggleButton value="Bmag">|B|</ToggleButton>
-            <ToggleButton value="J">J</ToggleButton>
-            <ToggleButton value="Demag">Demag</ToggleButton>
-          </ToggleButtonGroup>
-          {!hideRefresh && (
-            <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}
-              onClick={fetchFem} disabled={loading}
-              sx={{ color: '#93c5fd', fontSize: 11, textTransform: 'none' }}>
-              Re-solve
-            </Button>
-          )}
-        </Box>
-      </Box>
+        ) : undefined}
+        /* Nothing solved, nothing running: say so in ONE line and point at the
+           button.  This is what the view shows on tab open, on a machine load
+           and after a settings change — the states that used to fire a solve
+           nobody asked for. */
+        placeholder={(!azProbing && !payloadOverride) ? (
+          <Tooltip placement="top" title={
+            'Field views solve only when you ask. Opening the tab or '
+            + 'changing the machine/operating point clears the picture '
+            + 'instead of starting a FEM solve behind your back — press '
+            + 'Re-solve when you want this one computed. (The J⟳ / Loss / '
+            + 'Demag views still look for the last simulation run\'s own '
+            + 'field for free; this line means that lookup found nothing.)'}>
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)',
+              cursor: 'help', textAlign: 'center' }}>
+              field not solved for this machine — press <b>Re-solve</b> ⓘ
+            </Typography>
+          </Tooltip>
+        ) : null}
+        controls={
+          <>
+            {mode === 'Loss' && (
+              <Button size="small" onClick={() => setLogLoss(v => !v)}
+                title="Toggle log / linear colour scale"
+                sx={{ color: '#93c5fd', fontSize: 10, textTransform: 'none',
+                  minWidth: 0, px: 1, border: '1px solid var(--line-soft)' }}>
+                {logLoss ? 'log' : 'lin'}
+              </Button>
+            )}
+            {mode === 'Loss' && (
+              <Button size="small" onClick={() => setPerMat(v => !v)}
+                title={'Colour scale span. "shared" is the honest one: one W/m³ '
+                  + 'axis for the whole cross-section, so copper (≈4e7 W/m³ here) '
+                  + 'and the magnets (≈2e6) are directly comparable — and the '
+                  + 'magnets sit low because they ARE low. "per-material" '
+                  + 'rescales every material to its own range so the structure '
+                  + 'inside the weakest one is readable; a colour then means a '
+                  + 'different number in each material and levels cannot be '
+                  + 'compared across them.'}
+                sx={{ color: perMat ? '#fbbf24' : '#93c5fd', fontSize: 10,
+                  textTransform: 'none', minWidth: 0, px: 1,
+                  border: '1px solid var(--line-soft)' }}>
+                {perMat ? 'per-material' : 'shared'}
+              </Button>
+            )}
+          </>
+        }
+        actions={!hideRefresh ? (
+          <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}
+            onClick={
+                     // Explicitly (true): this is THE click that is allowed
+                     // to run the 10-frame transient behind the J⟳ view.
+                     isEddy ? (() => fetchEddy(true))
+                     // Loss: re-check the run's snapshot AND refresh the
+                     // single-frame map it falls back to.
+                     : isLoss ? (() => { setLossSnap(null); setLossProbed(false); fetchFem(); })
+                     // Wrapped: a bare `fetchFem` would receive the click
+                     // event as `probeOnly` and never solve.
+                     : (() => fetchFem())}
+            disabled={busy}
+            sx={{ color: '#93c5fd', fontSize: 11, textTransform: 'none' }}>
+            Re-solve
+          </Button>
+        ) : undefined}
+      />
 
-      {error && (
-        <Typography sx={{ fontSize: 11, color: '#fca5a5', p: 1,
-          border: '1px solid #7f1d1d', borderRadius: 1 }}>
-          {error}
-        </Typography>
-      )}
-
-      <Box sx={{ display: 'grid',
-        gridTemplateColumns: 'minmax(0, 1fr) auto',
-        gap: 1, height: 460 }}>
-        {/* Canvas */}
-        <Box sx={{ position: 'relative', border: '1px solid #0f172a',
-          bgcolor: '#060d17', minHeight: 460 }}>
-          {loading && (
-            <Box sx={{ position: 'absolute', inset: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              bgcolor: 'rgba(6,13,23,0.7)', zIndex: 5 }}>
-              <CircularProgress size={32}/>
-            </Box>
-          )}
-          {payload && (
-            <Canvas style={{ background: '#060d17' }}>
-              <OrthographicCamera makeDefault position={[0, 0, 300]}
-                near={0.1} far={5000}/>
-              <FitView payload={payload} controlsRef={controlsRef}/>
-              <ambientLight intensity={1}/>
-              <FieldMesh payload={payload} mode={mode}/>
-              <OrbitControls ref={controlsRef} enableDamping={false}
-                enableRotate enablePan enableZoom zoomSpeed={1.2}/>
-              {/* Drive + follow the overlay Viewcube (same as Geometry). */}
-              <CameraSync controlsRef={controlsRef}/>
-              <ViewcubeNavigation controlsRef={controlsRef}/>
-            </Canvas>
-          )}
-          {/* Orientation cube + XYZ axes — same component as Geometry */}
-          {payload && <Viewcube/>}
-        </Box>
-
-        {/* Colour bar — recompute the same 2/98 percentile-based vmin/vmax
-            the fill geometry uses, so the bar labels line up with the
-            actual rendered colours. */}
-        {payload && (() => {
-          const DOM_OUTER = 8;
-          const dom  = payload.domain_per_tri;
-          const tris = payload.triangles;
-          const pct = (arr: number[], p: number) => {
-            if (!arr.length) return 0;
-            const a = Float64Array.from(arr).sort();
-            const i = Math.max(0, Math.min(a.length - 1,
-              Math.floor((p / 100) * (a.length - 1))));
-            return a[i];
-          };
-          if (mode === 'Bmag') {
-            const Bs: number[] = [];
-            for (let ti = 0; ti < tris.length; ti++) {
-              if (dom[ti] === DOM_OUTER) continue;
-              Bs.push(payload.Bmag_per_tri[ti]);
-            }
-            const vmax = Math.min(Math.max(pct(Bs, 95), 0.05), 1.8);
-            return <ColorBar vmin={0} vmax={vmax} unit="T"
-              lut={(t) => jetBands(t, 11)}/>;
-          }
-          if (mode === 'Demag') {
-            return <ColorBar vmin={0} vmax={1} unit="Demag-Coef"
-              lut={(t) => jetBands(t, 11)}/>;
-          }
-          if (mode === 'J') {
-            // Signed J_z bar — find vmax across coil triangles only.
-            const DOM_COIL = 2;
-            const jz = payload.J_z_per_tri ?? [];
-            const Js: number[] = [];
-            for (let ti = 0; ti < tris.length; ti++) {
-              if (dom[ti] !== DOM_COIL) continue;
-              if (ti < jz.length) Js.push(Math.abs(jz[ti]));
-            }
-            const vmax = pct(Js, 99) || 1;
-            // Display in A/mm² for readability (matches Ansys legend scale).
-            return <ColorBar vmin={-vmax} vmax={+vmax}
-              unit="A/m²"
-              lut={(t) => jetSigned(2 * t - 1)}/>;
-          }
-          // A_z mode — 2/98 percentile of interior node values, symmetrised.
-          const used = new Set<number>();
-          for (let ti = 0; ti < tris.length; ti++) {
-            if (dom[ti] === DOM_OUTER) continue;
-            for (const vi of tris[ti]) used.add(vi);
-          }
-          const As: number[] = [];
-          used.forEach(vi => As.push(payload.A_z_per_node[vi]));
-          const lo = pct(As, 2);
-          const hi = pct(As, 98);
-          const amax = Math.max(Math.abs(lo), Math.abs(hi), 1e-12);
-          return (
-            <ColorBar vmin={-amax} vmax={+amax} unit="Wb/m"
-              lut={(t) => jetBands(t, N_BANDS)}/>
-          );
-        })()}
-
-      </Box>
 
       {/* Solver diagnostics strip — only the mesh/field numerics that are
           NOT already in the top summary table.  Sits BELOW the full-width
@@ -725,19 +796,27 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       {payload && (
         <Box sx={{ display: 'grid',
           gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 1, mt: 1 }}>
-          {[
-            { label: 'Mesh vertices',  value: payload.n_vertices.toLocaleString() },
-            { label: 'Mesh triangles', value: payload.n_triangles.toLocaleString() },
-            { label: '|B|_max',        value: `${payload.B_mag_max.toFixed(2)} T` },
-            { label: 'A_z range',      value: `[${(payload.A_z_min*1000).toFixed(2)}, ${(payload.A_z_max*1000).toFixed(2)}] mWb/m` },
-          ].map(s => (
-            <Box key={s.label} sx={{ p: 1, bgcolor: '#060d17',
-              border: '1px solid #0f172a', borderRadius: 1 }}>
-              <Typography sx={{ fontSize: 9, color: '#475569',
+          {(isEddy
+            ? [
+                { label: 'Copper loss', value: `${(payload.P_cu_W ?? 0).toFixed(0)} W` },
+                { label: 'Iron loss',   value: `${(payload.P_fe_W ?? 0).toFixed(0)} W` },
+                { label: 'Magnet eddy', value: `${(payload.P_mag_eddy_W ?? 0).toFixed(1)} W` },
+                { label: 'Efficiency',  value: `${((payload.efficiency ?? 0) * 100).toFixed(1)} %` },
+              ]
+            : [
+                { label: 'Mesh vertices',  value: payload.n_vertices.toLocaleString() },
+                { label: 'Mesh triangles', value: payload.n_triangles.toLocaleString() },
+                { label: '|B|_max',        value: `${(payload.B_mag_max ?? 0).toFixed(2)} T` },
+                { label: 'A_z range',      value: `[${((payload.A_z_min ?? 0)*1000).toFixed(2)}, ${((payload.A_z_max ?? 0)*1000).toFixed(2)}] mWb/m` },
+              ]
+          ).map(s => (
+            <Box key={s.label} sx={{ p: 1, bgcolor: 'var(--panel-2)',
+              border: '1px solid var(--app-bg)', borderRadius: 1 }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-4)',
                 textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 {s.label}
               </Typography>
-              <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#cbd5e1' }}>
+              <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
                 {s.value}
               </Typography>
             </Box>
@@ -745,34 +824,30 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         </Box>
       )}
 
-      <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
-        Same mesh + Solver-Domain settings as the Mesh tab (read from
-        localStorage). Sector mode uses anti-periodic Dirichlet BC on the
-        radial cuts so torque, |B| and flux linkages are physically correct
-        and multiplied by n_sectors to represent the full motor.
-      </Typography>
-      {payload && payload.demag_report && payload.demag_report.length > 0 && (
-        <Box sx={{ mt: 0.5, p: 0.75, border: '1px solid', borderRadius: 1,
-          borderColor: payload.demag_report.some(r => r.demagnetised)
-            ? '#dc2626' : '#fbbf24',
-          bgcolor: '#0f0a05' }}>
-          <Typography sx={{ fontSize: 10, fontWeight: 700,
-            color: payload.demag_report.some(r => r.demagnetised)
-              ? '#fca5a5' : '#fde68a', mb: 0.5 }}>
-            {payload.demag_report.some(r => r.demagnetised)
-              ? '⛔ MAGNET DEMAGNETISATION'
-              : '⚠ Magnets approaching demag knee'}
-          </Typography>
-          {payload.demag_report.map((r, i) => (
-            <Typography key={i} sx={{ fontSize: 9, color: '#fcd34d',
-              fontFamily: 'monospace' }}>
-              mag[{r.magnet_index}]: H_min = {r.H_min_kA_per_m} kA/m
-              (knee {r.H_knee_kA_per_m} kA/m, {(r.knee_proximity*100).toFixed(0)}%)
-              {r.demagnetised && '  → IRREVERSIBLE LOSS'}
-            </Typography>
-          ))}
-        </Box>
-      )}
+      {/* Footer prose folded into a single ⓘ chip (UI rule: no always-visible
+          explanation paragraphs — the line carries the label, the tooltip the
+          reasoning). */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+        <Typography sx={{ fontSize: 9, color: isEddy ? 'var(--text-3)' : 'var(--line)' }}>
+          {isEddy
+            ? (eddyNoLoad ? 'σ(−∂A/∂t+U) · no winding current (I = 0)' : 'σ(−∂A/∂t+U) · proximity crowding')
+            : 'Mesh & BC: same as the Mesh tab'}
+        </Typography>
+        <HelpTip title={isEddy
+          ? ('Real current density σ(−∂A/∂t+U) from the eddy solve — current crowds toward the slot opening '
+            + '(proximity). Compare with the uniform magnetostatic "J".'
+            + (eddyNoLoad
+              ? ' No winding current (I=0): the copper loss shown is ONLY eddy/proximity induced by the spinning'
+                + ' magnets (concentrated near the slot opening) — there is no I²R. Set a load current to see I²R'
+                + ' copper loss and current crowding.'
+              : ''))
+          : ('Same mesh + Solver-Domain settings as the Mesh tab (read from localStorage). Sector mode uses '
+            + 'anti-periodic Dirichlet BC on the radial cuts so torque, |B| and flux linkages are physically '
+            + 'correct and multiplied by n_sectors to represent the full motor.')} />
+      </Box>
+      {/* Demag warning banner removed — the per-magnet knee report over-flagged
+          (the demag model over-derates sharp corners); the demag % map above is
+          the honest per-element view. */}
     </Paper>
   );
 };

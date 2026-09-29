@@ -1,0 +1,75 @@
+{
+ "version": "static3d-stageC-longstack-1",
+ "generated_utc": "2026-08-10T06:46:23Z",
+ "geometry_fingerprint": "bb30c0242629c6ea",
+ "model": {
+  "laminated_iron": true,
+  "two_d_leg": "converged Picard (ref2d)",
+  "element_order": 2,
+  "note": "same model Stage A quotes k_flux from"
+ },
+ "rows": [
+  {
+   "stack_mm": 12.0,
+   "k_flux": 0.9514659028396592,
+   "k_flux_self": 0.9639618276848985,
+   "B1_mid_T": 1.5463633333147815,
+   "picard_converged": true,
+   "wall_s": 2245.2077156000014
+  },
+  {
+   "stack_mm": 24.0,
+   "k_flux": 0.9614657368305946,
+   "k_flux_self": 0.9740929928918477,
+   "B1_mid_T": 1.5710979924402004,
+   "picard_converged": true,
+   "wall_s": 1046.2260992999945
+  },
+  {
+   "stack_mm": 48.0,
+   "k_flux": 0.9753479556297003,
+   "k_flux_self": 0.9881575315852146,
+   "B1_mid_T": 1.5688704325166725,
+   "picard_converged": true,
+   "wall_s": 894.9100303000014
+  },
+  {
+   "stack_mm": 96.0,
+   "k_flux": 0.9857075497215994,
+   "k_flux_self": 0.9986531817447175,
+   "B1_mid_T": 1.5628517569793696,
+   "picard_converged": true,
+   "wall_s": 789.8242974999885
+  }
+ ],
+ "wall_s": 5251.5,
+ "fit_k_flux": {
+  "a_L_to_infinity": 0.9859043727088893,
+  "b_end_effect": -0.4456342132096279,
+  "residuals": [
+   0.002697714564905529,
+   -0.005870543661226968,
+   -0.0012723709706550235,
+   0.0044452000669770175
+  ],
+  "_doc": "k(L) = a + b/L.  a is what the 3D model says an infinitely long machine is worth against the same 2D reference, so a == 1 is the convergence claim; b is the end effect in k-units-times-mm and must be NEGATIVE (a deficit)."
+ },
+ "fit_k_flux_self": {
+  "a_L_to_infinity": 0.998852589675146,
+  "b_end_effect": -0.45148687868099563,
+  "residuals": [
+   0.002733144566502088,
+   -0.005947643504923494,
+   -0.001289081450744023,
+   0.004503580389165207
+  ],
+  "_doc": "k(L) = a + b/L.  a is what the 3D model says an infinitely long machine is worth against the same 2D reference, so a == 1 is the convergence claim; b is the end effect in k-units-times-mm and must be NEGATIVE (a deficit)."
+ },
+ "verdict": {
+  "a_k_flux": 0.9859043727088893,
+  "a_k_flux_self": 0.998852589675146,
+  "all_rows_converged": true,
+  "converges_to_2d": false,
+  "reading": "k_flux extrapolates to 0.9859 at L -> infinity (1.41 % from 1); every row converged: True.  k_flux_self -> 0.9989 is the pure droop and is NOT a statement about 2D."
+ }
+}

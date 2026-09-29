@@ -1,0 +1,110 @@
+
+==== RIPPLE OPTIMIZATION ====  baseline T_avg=25.281 ripple=17.60% (37.4s)
+T_avg floor = 24.02 N.m (keep within 5% of baseline)
+
+-- sweep magnet_fill_up (current best=cfg, ripple=17.60%) --
+   magnet_fill_up=0.34    T_avg=25.219  ripple= 15.56%  (37.5s)
+   magnet_fill_up=0.38    T_avg=25.798  ripple= 17.26%  (37.8s)
+   magnet_fill_up=0.42    T_avg=25.303  ripple= 16.18%  (39.3s)
+   magnet_fill_up=0.48    T_avg=25.076  ripple= 12.81%  (36.3s)
+   magnet_fill_up=0.52    T_avg=25.447  ripple= 11.24%  (31.8s)
+   -> adopt magnet_fill_up=0.52  new best ripple=11.24% (T_avg=25.447)
+
+-- sweep magnet_up_gap (current best=cfg, ripple=11.24%) --
+   magnet_up_gap=1.0     T_avg=26.710  ripple= 21.22%  (32.2s)
+   magnet_up_gap=1.5     T_avg=26.035  ripple= 18.32%  (32.6s)
+   magnet_up_gap=2.5     T_avg=24.438  ripple=  8.33%  (32.8s)
+   magnet_up_gap=3.0     T_avg=23.665  ripple=  9.65%  (34.1s)  (T below floor, rejected)
+   -> adopt magnet_up_gap=2.5  new best ripple=8.33% (T_avg=24.438)
+
+-- sweep magnet_fill_down (current best=cfg, ripple=8.33%) --
+   magnet_fill_down=0.8     T_avg=24.177  ripple=  9.04%  (34.0s)
+   magnet_fill_down=0.85    T_avg=23.849  ripple= 11.50%  (33.8s)  (T below floor, rejected)
+   magnet_fill_down=0.95    T_avg=24.601  ripple=  8.38%  (34.6s)
+   magnet_fill_down=1.0: FAIL Exception: Curve loop is not closed
+   -> keep current (magnet_fill_down unchanged), best ripple=8.33%
+
+-- sweep rotor_fill_r (current best=cfg, ripple=8.33%) --
+   rotor_fill_r=0.8     T_avg=24.295  ripple= 15.33%  (34.4s)
+   rotor_fill_r=2.0     T_avg=24.380  ripple=  7.28%  (37.9s)
+   rotor_fill_r=2.6     T_avg=24.531  ripple=  7.37%  (34.7s)
+   -> adopt rotor_fill_r=2.6  new best ripple=7.37% (T_avg=24.531)
+
+-- sweep tooth2_width (current best=cfg, ripple=7.37%) --
+   tooth2_width=4.5     T_avg=24.270  ripple=  9.58%  (35.7s)
+   tooth2_width=5.0     T_avg=24.337  ripple=  8.47%  (35.7s)
+   tooth2_width=6.0     T_avg=24.700  ripple=  7.48%  (38.7s)
+   tooth2_width=6.5: FAIL GEOSException: TopologyException: side location conflict at 16.599999999999
+   -> keep current (tooth2_width unchanged), best ripple=7.37%
+
+
+==== DONE ====  baseline ripple=17.60% -> best ripple=7.37%  (+10.23pp)  T_avg 25.28 -> 24.53
+BEST OVERRIDES: {"magnet_fill_up": 0.52, "magnet_up_gap": 2.5, "rotor_fill_r": 2.6}
+
+==== ROUND 2 ====  start best={"magnet_fill_up": 0.52, "magnet_up_gap": 2.5, "rotor_fill_r": 2.0}  T_avg=24.380 ripple=7.28% (40.1s)
+-- R2 sweep magnet_fill_up (best=0.52, ripple=7.28%) --
+   magnet_fill_up=0.56   T_avg=24.183 ripple=  6.53% (39.8s)
+   magnet_fill_up=0.6    T_avg=24.395 ripple=  9.97% (41.3s)
+   magnet_fill_up=0.64   T_avg=23.586 ripple=  8.09% (62.5s)  (T<floor, rej)
+   -> adopt magnet_fill_up=0.56 new best ripple=6.53% (T_avg=24.183)
+
+-- R2 sweep magnet_up_gap (best=2.5, ripple=6.53%) --
+   magnet_up_gap=2.6    T_avg=23.979 ripple=  7.70% (39.9s)  (T<floor, rej)
+   magnet_up_gap=2.7    T_avg=24.408 ripple=  8.71% (34.8s)
+   -> keep magnet_up_gap, best ripple=6.53%
+
+-- R2 sweep magnet_fill_down (best=cfg, ripple=6.53%) --
+   magnet_fill_down=0.92   T_avg=24.816 ripple=  4.71% (42.8s)
+   magnet_fill_down=0.95   T_avg=24.863 ripple=  9.00% (69.1s)
+   -> adopt magnet_fill_down=0.92 new best ripple=4.71% (T_avg=24.816)
+
+-- R2 sweep air_gap (best=cfg, ripple=4.71%) --
+   air_gap=0.55   T_avg=24.667 ripple=  7.32% (70.8s)
+   -> keep air_gap, best ripple=4.71%
+
+==== ROUND 2 DONE ====  best ripple=4.71%  T_avg=24.816
+FINAL OVERRIDES: {"magnet_fill_up": 0.56, "magnet_up_gap": 2.5, "rotor_fill_r": 2.0, "magnet_fill_down": 0.92}
+
+==== ROUND 3 (max torque @ min ripple) ====  base={"magnet_fill_up": 0.56, "magnet_up_gap": 2.5, "rotor_fill_r": 2.0, "magnet_fill_down": 0.92} gamma=0.0
+   start: T_avg=24.816 ripple=4.71% FoM=24.250 (62.8s)
+
+-- R3 sweep gamma (MTPA — max torque) --
+   gamma=-30  T_avg=24.139 ripple=  8.26% FoM=23.148 (34.4s)
+   gamma=-25  T_avg=24.472 ripple= 10.42% FoM=23.222 (35.1s)
+   gamma=-20  T_avg=25.153 ripple=  9.70% FoM=23.989 (38.9s)
+   gamma=-15  T_avg=25.501 ripple=  5.79% FoM=24.805 (41.1s)
+   gamma=-10  T_avg=25.640 ripple=  7.61% FoM=24.727 (39.4s)
+   gamma=-5   T_avg=25.122 ripple=  6.21% FoM=24.377 (42.8s)
+   gamma=0    T_avg=24.816 ripple=  4.71% FoM=24.250 (40.4s)
+   gamma=5    T_avg=24.176 ripple=  8.60% FoM=23.144 (41.6s)
+   -> adopt gamma=-15 FoM=24.805 (T_avg=25.501 ripple=5.79%)
+
+-- R3 sweep magnet_height (best=cfg) FoM=24.805 --
+   magnet_height=16     T_avg=25.501 ripple=  5.79% FoM=24.805 (34.5s)
+   magnet_height=17     T_avg=25.397 ripple=  8.13% FoM=24.421 (65.4s)
+   magnet_height=18     T_avg=25.707 ripple=  6.81% FoM=24.889 (71.4s)
+   -> adopt magnet_height=18  FoM=24.889 (T_avg=25.707 ripple=6.81%)
+
+-- R3 sweep air_gap (best=cfg) FoM=24.889 --
+   air_gap=0.45   T_avg=25.438 ripple=  6.83% FoM=24.618 (48.1s)
+   air_gap=0.5    T_avg=25.707 ripple=  6.81% FoM=24.889 (38.1s)
+   -> keep air_gap  FoM=24.889
+
+-- R3 sweep magnet_fill_up (best=0.56) FoM=24.889 --
+   magnet_fill_up=0.48   T_avg=26.522 ripple= 16.73% FoM=24.514 (48.2s)
+   magnet_fill_up=0.52   T_avg=25.057 ripple= 10.06% FoM=23.849 (58.8s)
+   magnet_fill_up=0.56   T_avg=25.707 ripple=  6.81% FoM=24.889 (68.9s)
+   -> keep magnet_fill_up  FoM=24.889
+
+-- R3 sweep magnet_up_gap (best=2.5) FoM=24.889 --
+   magnet_up_gap=2.4    T_avg=25.581 ripple=  8.84% FoM=24.520 (71.7s)
+   magnet_up_gap=2.5    T_avg=25.707 ripple=  6.81% FoM=24.889 (68.6s)
+   magnet_up_gap=2.6    T_avg=25.399 ripple=  5.85% FoM=24.697 (69.2s)
+   -> keep magnet_up_gap  FoM=24.889
+
+
+==== ROUND 3 DONE ====
+   min-ripple   T_avg=24.816  ripple=4.71%  gamma=0.0  FoM=24.250  [r3-start]  {"magnet_fill_up": 0.56, "magnet_up_gap": 2.5, "rotor_fill_r": 2.0, "magnet_fill_down": 0.92}
+   max-torque   T_avg=26.522  ripple=16.73%  gamma=-15  FoM=24.514  [magnet_fill_up=0.48]  {"magnet_fill_up": 0.48, "magnet_up_gap": 2.5, "rotor_fill_r": 2.0, "magnet_fill_down": 0.92, "magnet_height": 18}
+   best-balance T_avg=25.707  ripple=6.81%  gamma=-15  FoM=24.889  [magnet_height=18]  {"magnet_fill_up": 0.56, "magnet_up_gap": 2.5, "rotor_fill_r": 2.0, "magnet_fill_down": 0.92, "magnet_height": 18}
+FINAL(best-balance): {"magnet_fill_up": 0.56, "magnet_up_gap": 2.5, "rotor_fill_r": 2.0, "magnet_fill_down": 0.92, "magnet_height": 18}  gamma=-15

@@ -1,39 +1,37 @@
 """Tests for motor geometry and materials."""
 
 import pytest
-import torch
 import numpy as np
 
 from motor_ai_sim.geometry import (
     MotorGeometryParams,
-    MotorGeometry2D,
-    MotorMeshGenerator,
-    MeshBuilder,
     GeometryRegion,  # Deprecated but still available
     MagneticMaterial,
     MaterialRegistry,
     get_material_id,
 )
 
-# Check if Modulus is available
-try:
-    from modulus.geometry.primitives_2d import Circle, Rectangle
-    HAS_MODULUS = True
-except ImportError:
-    try:
-        from physicsnemo.geometry.primitives_2d import Circle, Rectangle
-        HAS_MODULUS = True
-    except ImportError:
-        HAS_MODULUS = False
+
+# A representative primary-parameter geometry — the SHAPE the class takes now.
+# MotorGeometryParams stopped carrying hardcoded field defaults when it became a
+# dynamic dict loader (all values come from motor_config.yaml); every primary a
+# test needs is supplied explicitly here instead of relying on a class default
+# that no longer exists.
+GEO_200MM = {
+    "stator_diameter": 200.0, "slot_height": 16.0, "core_thickness": 3.8,
+    "num_seg": 6, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
+    "air_gap": 0.65, "magnet_height": 13.8, "rotor_house_height": 1.2,
+    "stator_width": 30.0,
+}
 
 
 class TestMotorGeometryParams:
-    """Tests for MotorGeometryParams dataclass."""
+    """Tests for MotorGeometryParams (dynamic dict loader)."""
 
-    def test_default_params(self):
-        """Test default parameter values."""
-        params = MotorGeometryParams()
-        
+    def test_primary_params_round_trip(self):
+        """Every primary in the geometry dict becomes an attribute verbatim."""
+        params = MotorGeometryParams(dict(GEO_200MM))
+
         # Check primary parameters (all in mm)
         assert params.stator_diameter == 200.0  # mm
         assert params.slot_height == 16.0  # mm
@@ -48,8 +46,8 @@ class TestMotorGeometryParams:
 
     def test_derived_params(self):
         """Test derived parameters are computed correctly."""
-        params = MotorGeometryParams()
-        
+        params = MotorGeometryParams(dict(GEO_200MM))
+
         # Stator radii
         assert params.stator_outer_radius == params.stator_diameter / 2  # 100 mm
         expected_inner = params.stator_outer_radius - params.core_thickness - params.slot_height
@@ -77,35 +75,38 @@ class TestMotorGeometryParams:
         assert abs(params.rotor_inner_radius - expected_rotor_inner) < 1e-10
 
     def test_invalid_params(self):
-        """Test that invalid parameters raise errors."""
+        """Test that invalid parameters raise errors (validation in _validate)."""
         # Negative air gap (rotor larger than stator bore)
         with pytest.raises(ValueError):
-            MotorGeometryParams(
-                stator_diameter=50.0,
-                slot_height=5.0,
-                core_thickness=5.0,
-                air_gap=-5.0,  # Negative
-            )
-        
+            MotorGeometryParams({
+                **GEO_200MM,
+                "stator_diameter": 50.0,
+                "slot_height": 5.0,
+                "core_thickness": 5.0,
+                "air_gap": -5.0,  # Negative
+            })
+
         # Invalid pole count (too few)
         with pytest.raises(ValueError):
-            MotorGeometryParams(
-                num_seg=1,
-                num_slots_per_segment=6,
-                num_poles_per_segment=1,  # Only 1 pole
-            )
+            MotorGeometryParams({
+                **GEO_200MM,
+                "num_seg": 1,
+                "num_slots_per_segment": 6,
+                "num_poles_per_segment": 1,  # 1 pole/seg → num_poles 1 < 2
+            })
 
     def test_custom_params(self):
         """Test custom parameter values."""
-        params = MotorGeometryParams(
-            stator_diameter=100.0,
-            slot_height=10.0,
-            core_thickness=5.0,
-            num_seg=4,
-            num_slots_per_segment=8,
-            num_poles_per_segment=6,
-        )
-        
+        params = MotorGeometryParams({
+            **GEO_200MM,
+            "stator_diameter": 100.0,
+            "slot_height": 10.0,
+            "core_thickness": 5.0,
+            "num_seg": 4,
+            "num_slots_per_segment": 8,
+            "num_poles_per_segment": 6,
+        })
+
         assert params.stator_diameter == 100.0
         assert params.stator_outer_radius == 50.0
         assert params.num_slots == 32
@@ -121,106 +122,6 @@ class TestMotorGeometryParams:
         # Test rad_to_deg
         assert abs(MotorGeometryParams.rad_to_deg(np.pi) - 180.0) < 1e-10
         assert abs(MotorGeometryParams.rad_to_deg(np.pi/2) - 90.0) < 1e-10
-
-
-@pytest.mark.skipif(not HAS_MODULUS, reason="NVIDIA Modulus not installed")
-class TestMotorGeometry2DModulus:
-    """Tests for MotorGeometry2D class with Modulus CSG primitives."""
-
-    @pytest.fixture
-    def params(self):
-        """Create default geometry parameters."""
-        return MotorGeometryParams()
-
-    @pytest.fixture
-    def geometry(self, params):
-        """Create geometry generator."""
-        return MotorGeometry2D(params)
-
-    def test_create_geometry(self, geometry):
-        """Test geometry creation."""
-        assert geometry.params is not None
-
-    def test_get_modulus_geometries(self, geometry):
-        """Test getting Modulus CSG geometry objects."""
-        geometries = geometry.get_modulus_geometries()
-        
-        # Check all regions exist
-        assert "stator_core" in geometries
-        assert "air_gap" in geometries
-        assert "rotor_core" in geometries
-        assert "shaft" in geometries
-        assert "magnets" in geometries
-        assert "slots" in geometries
-
-    def test_geometry_is_csg_object(self, geometry):
-        """Test that returned geometries are actual CSG objects."""
-        geometries = geometry.get_modulus_geometries()
-        
-        # Shaft should be a Circle
-        from modulus.geometry.primitives_2d import Circle
-        assert isinstance(geometries['shaft'], Circle)
-
-    def test_get_magnetization_directions(self, geometry):
-        """Test that magnetization directions are computed correctly."""
-        directions = geometry.get_magnetization_directions()
-        
-        # Should have one direction per pole
-        assert len(directions) == geometry.params.num_poles
-        
-        # Each direction should be a unit vector
-        for pole_idx, mag_dir in directions.items():
-            mag_norm = np.linalg.norm(mag_dir)
-            assert abs(mag_norm - 1.0) < 1e-10
-            
-            # Alternating signs
-            expected_sign = 1.0 if pole_idx % 2 == 0 else -1.0
-            theta_center = pole_idx * geometry.params.pole_pitch
-            expected_dir = expected_sign * np.array([
-                np.cos(theta_center),
-                np.sin(theta_center),
-            ])
-            assert np.allclose(mag_dir, expected_dir)
-
-    def test_get_individual_slots(self, geometry):
-        """Test getting individual slot geometries."""
-        slots = geometry.get_individual_slot_geometries()
-        
-        # Should have one geometry per slot
-        assert len(slots) == geometry.params.num_slots
-
-    def test_get_individual_magnets(self, geometry):
-        """Test getting individual magnet geometries."""
-        magnets = geometry.get_individual_magnet_geometries()
-        
-        # Should have one geometry per pole
-        assert len(magnets) == geometry.params.num_poles
-
-    def test_get_summary(self, geometry):
-        """Test geometry summary."""
-        summary = geometry.get_summary()
-        
-        assert "stator_outer_radius" in summary
-        assert "stator_inner_radius" in summary
-        assert "rotor_outer_radius" in summary
-        assert "air_gap" in summary
-        assert "num_slots" in summary
-        assert "num_poles" in summary
-
-
-class TestMotorGeometry2DWithoutModulus:
-    """Tests for MotorGeometry2D when Modulus is not available."""
-
-    def test_import_error_without_modulus(self, monkeypatch):
-        """Test that ImportError is raised when Modulus is not available."""
-        # This test only runs when Modulus is not installed
-        if HAS_MODULUS:
-            pytest.skip("Modulus is installed, skipping test for missing Modulus")
-        
-        params = MotorGeometryParams()
-        
-        with pytest.raises(ImportError, match="NVIDIA Modulus is required"):
-            MotorGeometry2D(params)
 
 
 class TestGeometryRegionDeprecated:
@@ -243,143 +144,6 @@ class TestGeometryRegionDeprecated:
             assert len(w) == 1
             assert issubclass(w[0].category, DeprecationWarning)
             assert "deprecated" in str(w[0].message).lower()
-
-
-class TestMeshBuilder:
-    """Tests for MeshBuilder class."""
-
-    @pytest.fixture
-    def builder(self):
-        """Create mesh builder."""
-        return MeshBuilder(device="cpu")
-
-    def test_mesh_annulus(self, builder):
-        """Test meshing an annulus region."""
-        region = GeometryRegion(
-            name="test_annulus",
-            region_type="annulus",
-            r_inner=50.0,
-            r_outer=100.0,
-        )
-        
-        mesh = builder.mesh_region(region, n_radial=5, n_angular=32)
-        
-        assert "points" in mesh
-        assert "cells" in mesh
-        assert mesh["region"] == "test_annulus"
-        
-        # Check radius bounds
-        points = mesh["points"]
-        radii = torch.sqrt(points[:, 0]**2 + points[:, 1]**2)
-        assert radii.min() >= 50.0 - 1e-3
-        assert radii.max() <= 100.0 + 1e-3
-
-    def test_mesh_sector(self, builder):
-        """Test meshing a sector region."""
-        region = GeometryRegion(
-            name="test_sector",
-            region_type="sector",
-            r_inner=50.0,
-            r_outer=100.0,
-            theta_start=0.0,
-            theta_end=np.pi / 4,
-        )
-        
-        mesh = builder.mesh_region(region, n_radial=5, n_angular=8)
-        
-        assert "points" in mesh
-        assert "cells" in mesh
-        assert mesh["region"] == "test_sector"
-        
-        # Check angular bounds
-        points = mesh["points"]
-        angles = torch.atan2(points[:, 1], points[:, 0])
-        assert angles.min() >= 0.0 - 1e-3
-        assert angles.max() <= np.pi / 4 + 1e-3
-
-    def test_mesh_disk(self, builder):
-        """Test meshing a disk region."""
-        region = GeometryRegion(
-            name="test_disk",
-            region_type="disk",
-            r_outer=50.0,
-        )
-        
-        mesh = builder.mesh_region(region, n_radial=5, n_angular=32)
-        
-        assert "points" in mesh
-        assert "cells" in mesh
-        assert mesh["region"] == "test_disk"
-        
-        # Check radius bounds (disk includes center)
-        points = mesh["points"]
-        radii = torch.sqrt(points[:, 0]**2 + points[:, 1]**2)
-        assert radii.min() >= 0.0 - 1e-3
-        assert radii.max() <= 50.0 + 1e-3
-
-
-class TestMotorMeshGenerator:
-    """Tests for MotorMeshGenerator class."""
-
-    @pytest.fixture
-    def params(self):
-        """Create geometry parameters."""
-        return MotorGeometryParams(
-            num_seg=3,
-            num_slots_per_segment=4,
-            num_poles_per_segment=4,
-        )
-
-    @pytest.fixture
-    def generator(self, params):
-        """Create mesh generator."""
-        return MotorMeshGenerator(params)
-
-    def test_generate_mesh(self, generator):
-        """Test mesh generation with materials."""
-        meshes = generator.generate(n_radial=3, n_angular=16, n_angular_slots=4)
-        
-        # Check all regions exist
-        assert "stator_core" in meshes
-        assert "air_gap" in meshes
-        assert "rotor_core" in meshes
-        assert "shaft" in meshes
-        
-        # Check slots
-        slot_count = sum(1 for k in meshes.keys() if k.startswith("slot_"))
-        assert slot_count == generator.params.num_slots
-        
-        # Check magnets
-        magnet_count = sum(1 for k in meshes.keys() if k.startswith("magnet_"))
-        assert magnet_count == generator.params.num_poles
-
-    def test_material_properties(self, generator):
-        """Test that material properties are assigned."""
-        meshes = generator.generate(n_radial=3, n_angular=16, n_angular_slots=4)
-        
-        # Check stator core has material properties
-        stator = meshes["stator_core"]
-        assert "point_data" in stator
-        assert "mu_r" in stator["point_data"]
-        assert "sigma" in stator["point_data"]
-        assert "material_id" in stator["point_data"]
-        assert "material_name" in stator["point_data"]
-        
-        # Check material name (human-readable name)
-        assert "silicon" in stator["point_data"]["material_name"].lower() or "steel" in stator["point_data"]["material_name"].lower()
-
-    def test_magnet_magnetization(self, generator):
-        """Test that magnets have magnetization vectors."""
-        meshes = generator.generate(n_radial=3, n_angular=16, n_angular_slots=4)
-        
-        for i in range(generator.params.num_poles):
-            magnet = meshes[f"magnet_{i}"]
-            assert "point_data" in magnet
-            assert "magnetization" in magnet["point_data"]
-            
-            # Magnetization should be a 2D vector
-            mag = magnet["point_data"]["magnetization"]
-            assert mag.shape[1] == 2  # 2D vectors
 
 
 class TestMaterials:
@@ -453,3 +217,173 @@ geometry:
         """Test loading from non-existent file raises error."""
         with pytest.raises(FileNotFoundError):
             MotorGeometryParams.from_yaml("nonexistent_config.yaml")
+
+
+class TestMergeGeoOverride:
+    """The per-request geometry override must define the motor's topology.
+
+    Invariant: the merged dict's num_slots/num_poles always describe the
+    OVERRIDE's motor — explicit counts first, else the override's own
+    num_seg × *_per_segment product; the base config's counts survive only
+    when the override says nothing about topology.  (A plain dict-update let
+    the base's counts pair with the override's mesh geometry — a chimera
+    that mis-phased the winding layout and pole-pair drive: psi ~ 0, zero-
+    mean torque on the full ring, wrong sector BC sign on wedges.)
+    """
+
+    BASE = {"num_slots": 24, "num_poles": 20, "num_seg": 4,
+            "num_slots_per_segment": 6, "num_poles_per_segment": 5,
+            "stator_diameter": 150.0}
+
+    def test_explicit_counts_win(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE, {"num_slots": 12, "num_poles": 14})
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)
+
+    def test_segment_form_beats_base_counts(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        ov = {"num_seg": 2, "num_slots_per_segment": 6,
+              "num_poles_per_segment": 7, "stator_diameter": 40.0}
+        g = merge_geo_override(self.BASE, ov)
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)
+        assert g["stator_diameter"] == 40.0
+
+    def test_null_counts_fall_back_to_segment_form(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        ov = {"num_slots": None, "num_poles": None, "num_seg": 4,
+              "num_slots_per_segment": 6, "num_poles_per_segment": 7}
+        g = merge_geo_override(self.BASE, ov)
+        assert (g["num_slots"], g["num_poles"]) == (24, 28)
+
+    def test_topology_silent_override_keeps_base_counts(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE, {"air_gap": 0.3})
+        assert (g["num_slots"], g["num_poles"]) == (24, 20)
+
+    def test_no_override_returns_base(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE, None)
+        assert g == self.BASE
+
+    def test_inconsistent_base_follows_segment_form(self):
+        # A half-applied config can carry stale explicit counts next to the
+        # primary segment form; the CAD (MotorGeometryParams) meshes the
+        # segment form, so the resolved counts must match it.
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        base = dict(self.BASE, num_seg=2, num_slots_per_segment=6,
+                    num_poles_per_segment=7)   # stale explicit 24/20
+        g = merge_geo_override(base, None)
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)
+        g = merge_geo_override(base, {"air_gap": 0.3})
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)
+
+
+class TestDerivedFieldsFollowTheOverride:
+    """A DERIVED field must describe the merged motor, never the base config.
+
+    The counts were only the first member of this family.  ``motor_config.yaml``
+    also stores ``slot_width``, the four radii and the four angles/pitches — and a
+    per-request override supplies PRIMARIES only, so a plain merge left all nine
+    describing the base.
+
+    That was live: ``fem_transient_sliding_band`` sizes its mesh from
+    ``geo["slot_width"]`` (element = slot_width/2), so the SAME candidate request
+    was meshed at 1.25 mm while the user's config held the 40 mm design
+    (slot_width 2.5) and at 1.15 mm after it moved to the 30 mm one (2.3) — six
+    pinned physics cases red with nothing wrong in the code.  A per-request
+    evaluation whose MESH depends on somebody else's saved design is not an
+    evaluation of the design that was asked for.
+    """
+
+    # A full base config, carrying the derived fields exactly as the app writes
+    # them — and describing a DIFFERENT machine from the override below.
+    BASE_40MM = {
+        "stator_diameter": 40.0, "core_thickness": 3.0, "slot_height": 6.0,
+        "air_gap": 0.3, "magnet_height": 5.0, "rotor_house_height": 1.0,
+        "wire_width": 2.4, "wire_spacing_x": 0.1, "insulation_thickness": 0.05,
+        "num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 5,
+        "num_slots": 24, "num_poles": 20,
+        # derived, as stored
+        "slot_width": 2.7, "stator_outer_radius": 20.0,
+        "stator_inner_radius": 11.0, "rotor_outer_radius": 10.7,
+        "rotor_inner_radius": 4.7, "angle_slot": 15.0, "angle_pole": 18.0,
+        "slot_pitch": 0.2617993877991494, "pole_pitch": 0.3141592653589793,
+    }
+    # The 30 mm 12s14p machine, primaries only — what a geo= override looks like.
+    OV_30MM = {
+        "stator_diameter": 30.0, "core_thickness": 1.5, "slot_height": 4.3,
+        "air_gap": 0.2, "magnet_height": 4.5, "rotor_house_height": 0.8,
+        "wire_width": 2.0, "wire_spacing_x": 0.1, "insulation_thickness": 0.05,
+        # `slot_width` is derived from the wire COLUMN since 2026-09-08, and the
+        # column is wire_split strips wide.  `CadQueryMotor.set_parameters` fills
+        # an unlisted key from the LOADED config, so without this pin the 2.3 mm
+        # below became whatever the user's live machine had split its wire into
+        # — the F2 leak, through a key this fixture had never heard of.
+        "wire_split": 1,
+        "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
+    }
+
+    def test_slot_width_follows_the_override_not_the_config(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE_40MM, self.OV_30MM)
+        # 2.0 + 2*0.1 + 2*0.05, from the OVERRIDE's wire pitch — not the 2.7 the
+        # base stored, and not the base's own 2.4-derived 2.7 either.
+        assert g["slot_width"] == pytest.approx(2.3, abs=1e-12)
+
+    def test_every_derived_field_follows_the_override(self):
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        g = merge_geo_override(self.BASE_40MM, self.OV_30MM)
+        assert g["stator_outer_radius"] == pytest.approx(15.0)
+        assert g["stator_inner_radius"] == pytest.approx(9.2)
+        assert g["rotor_outer_radius"] == pytest.approx(9.0)
+        assert g["rotor_inner_radius"] == pytest.approx(3.7)
+        assert (g["num_slots"], g["num_poles"]) == (12, 14)
+        assert g["angle_slot"] == pytest.approx(30.0)
+        assert g["angle_pole"] == pytest.approx(360.0 / 14)
+        assert g["slot_pitch"] == pytest.approx(2 * np.pi / 12)
+        assert g["pole_pitch"] == pytest.approx(2 * np.pi / 14)
+
+    def test_result_is_independent_of_the_base_config(self):
+        """THE acceptance property, in one cheap assertion.
+
+        Two completely different saved configs, the same override → byte-identical
+        geometry.  This is what makes a pinned physics run reproducible while the
+        user edits their design in another tab.
+        """
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        other = dict(self.BASE_40MM, stator_diameter=200.0, wire_width=5.0,
+                     slot_width=5.5, num_seg=6, num_slots_per_segment=6,
+                     num_poles_per_segment=7, num_slots=36, num_poles=42,
+                     stator_outer_radius=100.0, angle_slot=10.0)
+        assert (merge_geo_override(self.BASE_40MM, self.OV_30MM)
+                == merge_geo_override(other, self.OV_30MM))
+
+    def test_stale_derived_in_the_base_is_refreshed_with_no_override(self):
+        """No override at all is still a leak: the file's stored derived value
+        can lag its own primaries (HEAD's config stored slot_width 2.5 next to a
+        wire pitch of 2.3), and the solver meshed the config's OWN machine at the
+        stale size."""
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        base = dict(self.BASE_40MM, slot_width=2.5)     # 2.4 + 0.2 + 0.1 = 2.7
+        assert merge_geo_override(base, None)["slot_width"] == pytest.approx(2.7)
+
+    def test_absent_derived_fields_are_not_invented(self):
+        """Refresh what the dict CARRIES; do not grow fields nobody asked for."""
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        bare = {"stator_diameter": 30.0, "num_slots": 12, "num_poles": 14,
+                "num_seg": 2, "num_slots_per_segment": 6,
+                "num_poles_per_segment": 7}
+        assert merge_geo_override(bare, None) == bare
+
+    def test_cadquery_parameters_do_not_leak_the_config_slot_width(self):
+        """The Mesh tab sizes its element from ``motor.parameters['slot_width']``
+        so it can draw the mesh the solver builds; that dict is seeded from the
+        shared config, and slot_width was the one derived field the mapping did
+        not recompute."""
+        from motor_ai_sim.cadquery_geometry import CadQueryMotor
+        motor = CadQueryMotor()
+        motor.set_parameters(dict(self.OV_30MM))
+        assert motor.parameters["slot_width"] == pytest.approx(2.3, abs=1e-12)
+        assert motor.parameters["stator_outer_radius"] == pytest.approx(15.0)
+        assert (motor.parameters["num_slots"],
+                motor.parameters["num_poles"]) == (12, 14)

@@ -1,8 +1,52 @@
 import React, { useMemo, useEffect, useState, useRef } from 'react';
+import { PART_COLORS } from '../../lib/partColors';
 import * as THREE from 'three';
 import { useMotorStore, useUIStore, useBuildTimingStore } from '../../stores/motorStore';
+import { usePartStates } from '../materials/usePartStates';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+// ─── Per-part accounting: an EXCLUDED part is INVISIBLE ──────────────────────
+// "он должен быть невидимым" — no ghost outline, no selectable body, nothing.
+// The backend already drops an excluded part's mesh from /api/geometry/mesh*
+// (routes/geometry._drop_excluded_meshes), which alone makes it undrawable.
+// This is the second gate, and the one that covers the CLIENT-MODE user whose
+// states live in a browser overlay and never reach that route: strip the keys
+// out of the geometry map, so every `geometries.<key> && …` guard below is
+// false and every `Object.entries(geometries).filter(...)` finds nothing.
+
+/** mesh-data key → the part whose state governs it (null = not governed). */
+function partOfMeshKey(key: string): string | null {
+  if (key === 'stator_core') return 'stator_core';
+  if (key === 'rotor_core')  return 'rotor_core';
+  if (key === 'shaft')       return 'shaft';
+  if (key === 'sleeve')      return 'sleeve';
+  if (key.startsWith('magnet_')) return 'magnet';
+  if (key.startsWith('coil_'))   return 'slot';
+  return null;
+}
+
+/** The set of part keys the user has EXCLUDED (empty on a normal machine). */
+function useExcludedParts(): Set<string> {
+  const { states } = usePartStates();
+  return useMemo(() => new Set(
+    Object.entries(states || {})
+      .filter(([, v]) => v === 'excluded')
+      .map(([k]) => k)), [states]);
+}
+
+/** Drop every mesh belonging to an excluded part. */
+function withoutExcluded<T>(m: Record<string, T> | null,
+                            excluded: Set<string>): Record<string, T> | null {
+  if (!m || excluded.size === 0) return m;
+  const out: Record<string, T> = {};
+  for (const [k, v] of Object.entries(m)) {
+    const part = partOfMeshKey(k);
+    if (part && excluded.has(part)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 interface ComponentMeshData {
   vertices: number[] | number[][];
@@ -72,10 +116,8 @@ export function useMotorMesh() {
     }
 
     inflightRequest.then(result => {
-      if (result) {
-        setData(result);
-        setGeometryUpdating(false);
-      }
+      if (result) setData(result);
+      setGeometryUpdating(false);   // clear the build indicator on settle (success OR failure)
     });
   }, [connectedToApi, geometryKey]);
 
@@ -121,17 +163,20 @@ export const ApiStatorMesh: React.FC<{ materialProps?: MaterialProps; visible?: 
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
+  const excluded = useExcludedParts();
+
   const geo = useMemo(() => {
-    if (meshData?.stator_core) return buildGeometry(meshData.stator_core);
+    if (meshData?.stator_core && !excluded.has('stator_core'))
+      return buildGeometry(meshData.stator_core);
     return null;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geo) return null;
 
   return (
     <mesh geometry={geo} castShadow receiveShadow visible={visible}>
       <meshStandardMaterial
-        color={materialProps?.color || '#7f8c8d'}
+        color={materialProps?.color || PART_COLORS.statorIron}
         metalness={materialProps?.metalness ?? 0.9}
         roughness={materialProps?.roughness ?? 0.3}
         envMapIntensity={envIntensity * 1.5}
@@ -144,17 +189,20 @@ export const ApiRotorMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
+  const excluded = useExcludedParts();
+
   const geo = useMemo(() => {
-    if (meshData?.rotor_core) return buildGeometry(meshData.rotor_core);
+    if (meshData?.rotor_core && !excluded.has('rotor_core'))
+      return buildGeometry(meshData.rotor_core);
     return null;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geo) return null;
 
   return (
     <mesh geometry={geo} castShadow receiveShadow visible={visible}>
       <meshStandardMaterial
-        color={materialProps?.color || '#7f8c8d'}
+        color={materialProps?.color || PART_COLORS.rotorIron}
         metalness={materialProps?.metalness ?? 0.9}
         roughness={materialProps?.roughness ?? 0.3}
         envMapIntensity={envIntensity * 1.5}
@@ -167,17 +215,20 @@ export const ApiShaftMesh: React.FC<{ visible?: boolean }> = ({ visible = true }
   const { envIntensity } = useUIStore();
   const meshData = useMotorMesh();
 
+  const excluded = useExcludedParts();
+
   const geo = useMemo(() => {
-    if (meshData?.shaft) return buildGeometry(meshData.shaft);
+    if (meshData?.shaft && !excluded.has('shaft'))
+      return buildGeometry(meshData.shaft);
     return null;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geo) return null;
 
   return (
     <mesh geometry={geo} castShadow receiveShadow visible={visible}>
       <meshStandardMaterial
-        color="#505050" metalness={0.95} roughness={0.25}
+        color={PART_COLORS.shaft} metalness={0.95} roughness={0.25}
         envMapIntensity={envIntensity * 1.5}
       />
     </mesh>
@@ -189,8 +240,10 @@ export const ApiMagnetsMesh: React.FC<{ visible?: boolean }> = ({ visible = true
   const { magnetVisibility } = useUIStore();
   const meshData = useMotorMesh();
 
+  const excluded = useExcludedParts();
+
   const magnetEntries = useMemo(() => {
-    if (!meshData) return null;
+    if (!meshData || excluded.has('magnet')) return null;
     const keys = Object.keys(meshData)
       .filter(k => k.startsWith('magnet_'))
       .sort((a, b) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]));
@@ -200,7 +253,7 @@ export const ApiMagnetsMesh: React.FC<{ visible?: boolean }> = ({ visible = true
       poleIndex: i,
       direction: i % 2 === 0 ? 'outward' : 'inward',
     }));
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!magnetEntries) return null;
 
@@ -226,10 +279,12 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
   const { coilVisibility } = useUIStore();
   const meshData = useMotorMesh();
 
-  const phaseColors = ['#b87333', '#c2410c', '#a16207'];
+  const phaseColors = [...PART_COLORS.copperPhases];
+
+  const excluded = useExcludedParts();
 
   const coilEntries = useMemo(() => {
-    if (!meshData) return [];
+    if (!meshData || excluded.has('slot')) return [];
     const keys = Object.keys(meshData)
       .filter(k => k.startsWith('coil_'))
       .sort((a, b) => parseInt(a.split('_')[1]) - parseInt(b.split('_')[1]));
@@ -238,7 +293,7 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
       slotIndex: i,
       phase: i % 3,
     }));
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   return (
     <group visible={visible}>
@@ -246,10 +301,11 @@ export const ApiCoilsMesh: React.FC<{ materialProps?: MaterialProps; visible?: b
         <mesh key={`coil-${slotIndex}`} geometry={geo} castShadow receiveShadow
           visible={coilVisibility[slotIndex] ?? true}>
           <meshStandardMaterial
+            toneMapped={false}
             color={materialProps?.color || phaseColors[phase]}
-            metalness={materialProps?.metalness ?? 0.6}
-            roughness={materialProps?.roughness ?? 0.5}
-            envMapIntensity={envIntensity * 1.5}
+            metalness={0}
+            roughness={materialProps?.roughness ?? 0.6}
+            envMapIntensity={0}
             side={THREE.DoubleSide}
           />
         </mesh>
@@ -292,7 +348,8 @@ export function useMotorMeshExtruded() {
         .finally(() => { inflightRequestExt = null; });
     }
     inflightRequestExt.then(result => {
-      if (result) { setData(result); setGeometryUpdating(false); }
+      if (result) setData(result);
+      setGeometryUpdating(false);   // clear on settle (success OR failure)
     });
   }, [connectedToApi, geometryKey]);
 
@@ -303,16 +360,20 @@ export function useMotorMeshExtruded() {
 export const ApiMotorExtruded: React.FC = () => {
   const { componentVisibility, magnetVisibility, coilVisibility, metalness, roughness, envIntensity, selectedPart, setSelectedPart } = useUIStore();
   const meshData = useMotorMeshExtruded();
+  const excluded = useExcludedParts();
 
   const geometries = useMemo(() => {
-    if (!meshData) return null;
+    // Excluded parts are stripped BEFORE any geometry is built, so nothing
+    // downstream can render, outline or hit-test them.
+    const src = withoutExcluded(meshData, excluded);
+    if (!src) return null;
     const out: Record<string, THREE.BufferGeometry> = {};
-    for (const [key, data] of Object.entries(meshData)) {
+    for (const [key, data] of Object.entries(src)) {
       if (!(data as any).vertices) continue;
       out[key] = buildGeometry(data);
     }
     return out;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geometries) return null;
 
@@ -325,19 +386,27 @@ export const ApiMotorExtruded: React.FC = () => {
     <group>
       {geometries.shaft && componentVisibility.shaft && (
         <mesh geometry={geometries.shaft} onClick={click('shaft')}>
-          <meshStandardMaterial color="#505050" metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+          <meshStandardMaterial color={PART_COLORS.shaft} metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
             emissive={emissive('shaft', '#64748b')} emissiveIntensity={emissiveIntensity('shaft')} />
+        </mesh>
+      )}
+      {/* Carbon-fibre retaining sleeve — only in the payload when the machine
+          has one (and never when it is EXCLUDED: the server drops the key). */}
+      {geometries.sleeve && componentVisibility.sleeve && (
+        <mesh geometry={geometries.sleeve} onClick={click('sleeve')}>
+          <meshStandardMaterial color={PART_COLORS.sleeve} metalness={0.15} roughness={0.55} envMapIntensity={envIntensity} side={THREE.DoubleSide}
+            emissive={emissive('sleeve', '#a78bfa')} emissiveIntensity={emissiveIntensity('sleeve')} />
         </mesh>
       )}
       {geometries.rotor_core && componentVisibility.rotor && (
         <mesh geometry={geometries.rotor_core} onClick={click('rotor')}>
-          <meshStandardMaterial color="#7f8c8d" metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+          <meshStandardMaterial color={PART_COLORS.rotorIron} metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
             emissive={emissive('rotor', '#3b82f6')} emissiveIntensity={emissiveIntensity('rotor')} />
         </mesh>
       )}
       {geometries.stator_core && componentVisibility.stator && (
         <mesh geometry={geometries.stator_core} onClick={click('stator')}>
-          <meshStandardMaterial color="#7f8c8d" metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+          <meshStandardMaterial color={PART_COLORS.statorIron} metalness={metalness} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
             emissive={emissive('stator', '#3b82f6')} emissiveIntensity={emissiveIntensity('stator')} />
         </mesh>
       )}
@@ -348,7 +417,7 @@ export const ApiMotorExtruded: React.FC = () => {
           const idx = parseInt(key.split('_')[1]);
           return (
             <mesh key={key} geometry={geo} visible={magnetVisibility[idx] ?? true} onClick={click('magnets')}>
-              <meshStandardMaterial color={idx % 2 === 0 ? '#ef4444' : '#3b82f6'} metalness={metalness * 0.7} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+              <meshStandardMaterial toneMapped={false} color={idx % 2 === 0 ? PART_COLORS.magnetN : PART_COLORS.magnetS} metalness={0} roughness={0.85} envMapIntensity={0} side={THREE.DoubleSide}
                 emissive={emissive('magnets', '#ef4444')} emissiveIntensity={emissiveIntensity('magnets')} />
             </mesh>
           );
@@ -361,16 +430,32 @@ export const ApiMotorExtruded: React.FC = () => {
           const idx = parseInt(key.split('_')[1]);
           return (
             <mesh key={key} geometry={geo} visible={coilVisibility[idx] ?? true} onClick={click('coils')}>
-              <meshStandardMaterial color="#b87333" metalness={metalness * 0.6} roughness={roughness} envMapIntensity={envIntensity * 1.5} side={THREE.DoubleSide}
+              <meshStandardMaterial toneMapped={false} color={PART_COLORS.copper} metalness={0} roughness={0.8} envMapIntensity={0} side={THREE.DoubleSide}
                 emissive={emissive('coils', '#f59e0b')} emissiveIntensity={emissiveIntensity('coils')} />
             </mesh>
           );
         })
       }
+      {/* Insulation (Nomex/ceramic) — green, between coils and iron */}
+      {geometries.slot_insulation && componentVisibility.slot_insulation && (
+        <mesh geometry={geometries.slot_insulation} onClick={click('slot_insulation')}>
+          <meshStandardMaterial toneMapped={false} color={PART_COLORS.slotLiner} metalness={0} roughness={0.9} envMapIntensity={0}
+            side={THREE.DoubleSide}
+            emissive={emissive('slot_insulation', '#3fae5a')} emissiveIntensity={emissiveIntensity('slot_insulation')} />
+        </mesh>
+      )}
+      {/* Wire enamel (polyimide) — orange, wraps each conductor */}
+      {geometries.wire_insulation && componentVisibility.wire_insulation && (
+        <mesh geometry={geometries.wire_insulation} onClick={click('wire_insulation')}>
+          <meshStandardMaterial toneMapped={false} color={PART_COLORS.enamel} metalness={0} roughness={0.85} envMapIntensity={0}
+            side={THREE.DoubleSide}
+            emissive={emissive('wire_insulation', '#d98a3a')} emissiveIntensity={emissiveIntensity('wire_insulation')} />
+        </mesh>
+      )}
       {/* Sliding-band air rings — translucent so the user can see them as distinct domains */}
       {geometries.in_band && componentVisibility.in_band && (
         <mesh geometry={geometries.in_band} onClick={click('in_band')}>
-          <meshStandardMaterial color="#22c55e" transparent opacity={0.32}
+          <meshStandardMaterial color={PART_COLORS.inBand} transparent opacity={0.12}
             metalness={0} roughness={1} envMapIntensity={envIntensity * 0.5}
             side={THREE.DoubleSide}
             emissive={emissive('in_band', '#22c55e')} emissiveIntensity={emissiveIntensity('in_band')} />
@@ -378,7 +463,7 @@ export const ApiMotorExtruded: React.FC = () => {
       )}
       {geometries.out_band && componentVisibility.out_band && (
         <mesh geometry={geometries.out_band} onClick={click('out_band')}>
-          <meshStandardMaterial color="#a855f7" transparent opacity={0.32}
+          <meshStandardMaterial color={PART_COLORS.outBand} transparent opacity={0.12}
             metalness={0} roughness={1} envMapIntensity={envIntensity * 0.5}
             side={THREE.DoubleSide}
             emissive={emissive('out_band', '#a855f7')} emissiveIntensity={emissiveIntensity('out_band')} />
@@ -395,14 +480,14 @@ let inflightRequest2d: Promise<AllMeshData> | null = null;
 let inflightGeometryKey2d = '';
 
 export function useMotorMesh2d() {
-  const { geometry, connectedToApi } = useMotorStore();
+  const { geometry, connectedToApi, setGeometryUpdating } = useMotorStore();
   const [data, setData] = useState<AllMeshData | null>(null);
   const geometryKey = JSON.stringify(geometry);
 
   useEffect(() => {
     if (!connectedToApi) { setData(null); return; }
     const cached = mesh2dCache.get(geometryKey);
-    if (cached) { setData(cached); return; }
+    if (cached) { setData(cached); setGeometryUpdating(false); return; }
 
     if (!inflightRequest2d || inflightGeometryKey2d !== geometryKey) {
       inflightGeometryKey2d = geometryKey;
@@ -412,7 +497,7 @@ export function useMotorMesh2d() {
         .catch(err => { console.error('Failed to fetch 2d mesh:', err); return null as unknown as AllMeshData; })
         .finally(() => { inflightRequest2d = null; });
     }
-    inflightRequest2d.then(result => { if (result) setData(result); });
+    inflightRequest2d.then(result => { if (result) setData(result); setGeometryUpdating(false); });
   }, [connectedToApi, geometryKey]);
 
   return data;
@@ -421,48 +506,65 @@ export function useMotorMesh2d() {
 // Colors per component type — kept in sync with 3D material defaults above
 // (shaft=#505050, stator/rotor fallback=#7f8c8d, magnets/coils identical)
 const COLORS_2D: Record<string, string> = {
-  shaft:       '#505050',  // matches ApiShaftMesh hardcoded color
-  rotor_core:  '#7f8c8d',  // matches ApiRotorMesh fallback
-  stator_core: '#7f8c8d',  // matches ApiStatorMesh fallback
+  shaft: PART_COLORS.shaft,
+  rotor_core: PART_COLORS.rotorIron,
+  stator_core: PART_COLORS.statorIron,
 };
-const getMagnetColor2d = (index: number) => index % 2 === 0 ? '#ef4444' : '#3b82f6';
-const getCoilColor2d   = (index: number) => ['#b87333', '#c2410c', '#a16207'][index % 3];
+const getMagnetColor2d = (index: number) => index % 2 === 0 ? PART_COLORS.magnetN : PART_COLORS.magnetS;
+const getCoilColor2d   = (index: number) => PART_COLORS.copperPhases[index % 3];
 
 export const ApiMotor2dFlat: React.FC = () => {
   const { componentVisibility, magnetVisibility, coilVisibility, selectedPart, setSelectedPart } = useUIStore();
   const meshData = useMotorMesh2d();
+  const excluded = useExcludedParts();
 
   const geometries = useMemo(() => {
-    if (!meshData) return null;
+    // Same gate as the 3D view: the cross-section must not show a part the
+    // machine does not have either.
+    const src = withoutExcluded(meshData, excluded);
+    if (!src) return null;
     const out: Record<string, THREE.BufferGeometry> = {};
-    for (const [key, data] of Object.entries(meshData)) {
+    for (const [key, data] of Object.entries(src)) {
       out[key] = buildGeometry(data);
     }
     return out;
-  }, [meshData]);
+  }, [meshData, excluded]);
 
   if (!geometries) return null;
 
   const sel = (part: string) => selectedPart === part;
   const click = (part: string) => (e: any) => { e.stopPropagation(); setSelectedPart(sel(part) ? null : part as any); };
-  const emissive = (part: string, color: string) => sel(part) ? color : '#000000';
-  const eI = (part: string) => sel(part) ? 0.6 : 0;
+  // 2D flat = engineering drawing: UNLIT exact colors (meshBasicMaterial).
+  // The lit standard material washed every color to pastel under the studio
+  // environment (ambient+directional+env > 1 clips to white).  Selection is
+  // shown by lightening the part's own color instead of an emissive glow.
+  const lighten = (hex: string, f = 0.45) => {
+    const n = parseInt(hex.slice(1), 16);
+    const mix = (c: number) => Math.round(c + (255 - c) * f);
+    const r = mix((n >> 16) & 255), g = mix((n >> 8) & 255), b = mix(n & 255);
+    return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+  };
+  const colFor = (part: string, base: string) => (sel(part) ? lighten(base) : base);
 
   return (
     <group>
+      {/* retaining sleeve */}
+      {geometries.sleeve && componentVisibility.sleeve && (
+        <mesh geometry={geometries.sleeve} onClick={click('sleeve')}>
+          <meshBasicMaterial toneMapped={false} color={colFor('sleeve', PART_COLORS.sleeve)} side={THREE.DoubleSide} />
+        </mesh>
+      )}
       {/* shaft */}
       {geometries.shaft && componentVisibility.shaft && (
         <mesh geometry={geometries.shaft} onClick={click('shaft')}>
-          <meshStandardMaterial color={COLORS_2D.shaft} metalness={0} roughness={1} side={THREE.DoubleSide}
-            emissive={emissive('shaft', '#64748b')} emissiveIntensity={eI('shaft')} />
+          <meshBasicMaterial toneMapped={false} color={colFor('shaft', COLORS_2D.shaft)} side={THREE.DoubleSide} />
         </mesh>
       )}
 
       {/* rotor_core */}
       {geometries.rotor_core && componentVisibility.rotor && (
         <mesh geometry={geometries.rotor_core} onClick={click('rotor')}>
-          <meshStandardMaterial color={COLORS_2D.rotor_core} metalness={0} roughness={1} side={THREE.DoubleSide}
-            emissive={emissive('rotor', '#3b82f6')} emissiveIntensity={eI('rotor')} />
+          <meshBasicMaterial toneMapped={false} color={colFor('rotor', COLORS_2D.rotor_core)} side={THREE.DoubleSide} />
         </mesh>
       )}
 
@@ -474,8 +576,7 @@ export const ApiMotor2dFlat: React.FC = () => {
           const idx = parseInt(key.split('_')[1]);
           return (
             <mesh key={key} geometry={geo} visible={magnetVisibility[idx] ?? true} onClick={click('magnets')}>
-              <meshStandardMaterial color={getMagnetColor2d(idx)} metalness={0} roughness={1} side={THREE.DoubleSide}
-                emissive={emissive('magnets', '#ef4444')} emissiveIntensity={eI('magnets')} />
+              <meshBasicMaterial toneMapped={false} color={colFor('magnets', getMagnetColor2d(idx))} side={THREE.DoubleSide} />
             </mesh>
           );
         })
@@ -484,8 +585,7 @@ export const ApiMotor2dFlat: React.FC = () => {
       {/* stator_core */}
       {geometries.stator_core && componentVisibility.stator && (
         <mesh geometry={geometries.stator_core} onClick={click('stator')}>
-          <meshStandardMaterial color={COLORS_2D.stator_core} metalness={0} roughness={1} side={THREE.DoubleSide}
-            emissive={emissive('stator', '#3b82f6')} emissiveIntensity={eI('stator')} />
+          <meshBasicMaterial toneMapped={false} color={colFor('stator', COLORS_2D.stator_core)} side={THREE.DoubleSide} />
         </mesh>
       )}
 
@@ -497,24 +597,32 @@ export const ApiMotor2dFlat: React.FC = () => {
           const idx = parseInt(key.split('_')[1]);
           return (
             <mesh key={key} geometry={geo} visible={coilVisibility[idx] ?? true} onClick={click('coils')}>
-              <meshStandardMaterial color={getCoilColor2d(idx)} metalness={0} roughness={1} side={THREE.DoubleSide}
-                emissive={emissive('coils', '#f59e0b')} emissiveIntensity={eI('coils')} />
+              <meshBasicMaterial toneMapped={false} color={colFor('coils', getCoilColor2d(idx))} side={THREE.DoubleSide} />
             </mesh>
           );
         })
       }
 
+      {/* insulation (green) + wire enamel (orange) */}
+      {geometries.slot_insulation && componentVisibility.slot_insulation && (
+        <mesh geometry={geometries.slot_insulation} onClick={click('slot_insulation')}>
+          <meshBasicMaterial toneMapped={false} color={colFor('slot_insulation', PART_COLORS.slotLiner)} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+      {geometries.wire_insulation && componentVisibility.wire_insulation && (
+        <mesh geometry={geometries.wire_insulation} onClick={click('wire_insulation')}>
+          <meshBasicMaterial toneMapped={false} color={colFor('wire_insulation', PART_COLORS.enamel)} side={THREE.DoubleSide} />
+        </mesh>
+      )}
       {/* Sliding-band: in_band (green) and out_band (purple) — translucent overlays */}
       {geometries.in_band && componentVisibility.in_band && (
         <mesh geometry={geometries.in_band} onClick={click('in_band')}>
-          <meshStandardMaterial color="#22c55e" transparent opacity={0.35} side={THREE.DoubleSide}
-            emissive={emissive('in_band', '#22c55e')} emissiveIntensity={eI('in_band')} />
+          <meshBasicMaterial toneMapped={false} color={colFor('in_band', PART_COLORS.inBand)} transparent opacity={0.12} side={THREE.DoubleSide} />
         </mesh>
       )}
       {geometries.out_band && componentVisibility.out_band && (
         <mesh geometry={geometries.out_band} onClick={click('out_band')}>
-          <meshStandardMaterial color="#a855f7" transparent opacity={0.35} side={THREE.DoubleSide}
-            emissive={emissive('out_band', '#a855f7')} emissiveIntensity={eI('out_band')} />
+          <meshBasicMaterial toneMapped={false} color={colFor('out_band', PART_COLORS.outBand)} transparent opacity={0.12} side={THREE.DoubleSide} />
         </mesh>
       )}
     </group>
@@ -529,7 +637,7 @@ function createLocalStatorGeometry(geometry: any): THREE.BufferGeometry {
   const numSlots = geometry.num_slots || 36;
   const slotHeight = geometry.slot_height || 16;
   const slotWidth = geometry.slot_width || (geometry.tooth_width ? geometry.tooth_width * 0.6 : 4.5);
-  const statorWidth = geometry.stator_width || 30;
+  const statorWidth = geometry.motor_length || 30;
 
   const shape = new THREE.Shape();
   shape.absarc(0, 0, outerR, 0, Math.PI * 2, false);
@@ -561,7 +669,7 @@ function createLocalStatorGeometry(geometry: any): THREE.BufferGeometry {
 function createLocalRotorGeometry(geometry: any): THREE.BufferGeometry {
   const outerR = geometry.rotor_outer_radius || 79.55;
   const innerR = geometry.rotor_inner_radius || 64.55;
-  const statorWidth = geometry.stator_width || 30;
+  const statorWidth = geometry.motor_length || 30;
 
   const shape = new THREE.Shape();
   shape.absarc(0, 0, outerR, 0, Math.PI * 2, false);
@@ -577,7 +685,7 @@ function createLocalRotorGeometry(geometry: any): THREE.BufferGeometry {
 function createLocalShaftGeometry(geometry: any): THREE.BufferGeometry {
   const outerR = geometry.rotor_inner_radius || 64.55;
   const innerR = outerR - (geometry.shaft_height || 3);
-  const statorWidth = geometry.stator_width || 30;
+  const statorWidth = geometry.motor_length || 30;
 
   const shape = new THREE.Shape();
   shape.absarc(0, 0, outerR, 0, Math.PI * 2, false);
@@ -595,7 +703,7 @@ function createLocalMagnetsGeometry(geometry: any): { geometry: THREE.BufferGeom
   const rotorInnerR = geometry.rotor_inner_radius || 64.55;
   const rotorHouseH = geometry.rotor_house_height || 1.2;
   const numPoles = geometry.num_poles || 42;
-  const statorWidth = geometry.stator_width || 30;
+  const statorWidth = geometry.motor_length || 30;
   const magFillDown = geometry.magnet_fill_down || 0.9;
 
   const poleAngle = (2 * Math.PI) / numPoles;

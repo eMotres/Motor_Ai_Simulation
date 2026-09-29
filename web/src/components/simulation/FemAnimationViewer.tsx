@@ -22,6 +22,7 @@ import PauseIcon from '@mui/icons-material/Pause';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import DownloadIcon from '@mui/icons-material/Download';
 import FemFieldChart from './FemFieldChart';
+import { tileFullRing } from './fem-types';
 import type { FemPayload } from './fem-types';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -48,6 +49,7 @@ interface FrameRaw {
   outlines?:       { domain: number; loops: [number, number][][] }[];
   symmetry_mult?:  number;
   n_sectors?:      number;
+  anti_periodic?:  boolean;
   // On every frame ≥ 1: rotor / magnet outlines at the current rotation.
   outlines_rotor?: { domain: number; loops: [number, number][][] }[];
 }
@@ -126,13 +128,48 @@ const FemAnimationViewer: React.FC<Props> = ({
       outer_air_factor:   String(readMeshSetting('outerAir',    1.3)),
       motion_band:        String(readMeshSetting('motionBand',  true)),
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
-      n_sectors:          String(readMeshSetting('nSectors',    4)),
+      n_sectors:          String(readMeshSetting('nSectors',    1)),
       stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
+      // Same per-part mesh sizes as TransientCharts → shared backend cache key.
+      component_mesh:     JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
+      // The sliding band, like every other panel. This request used to omit the
+      // flag and fall through to the remesh-per-frame path, which meshed and
+      // solved each keyframe on the legacy static solver at a HARD-CODED 108°
+      // d-axis — ~48° off the q-axis for a 12s14p machine — so the animation
+      // showed a different operating point than the charts beside it. These
+      // mesh toggles must stay in step with TransientCharts: same params, same
+      // backend cache key, one solve for both panels.
+      sliding_band:       'true',
+      gap_layers:         String(readMeshSetting('gapLayers', 2)),
+      iron_template:      String(readMeshSetting('ironTemplate', true)),
+      geo_mesh:           String(readMeshSetting('geoMesh', true)),
+      structured_gap:     String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
+      airgap_macro:       String(readMeshSetting('harmonicGap', false)),
       include_frames:     'true',
       n_frames:           String(n_frames),
       run_id:             String(runNonce),
       fresh:              String(fresh),
+      // The results ledger (2026-09-05) can answer a repeated run from disk —
+      // but it stores the summary and the series, never the per-frame FIELDS,
+      // because those are megabytes per keyframe and no chart reads them.  This
+      // panel is the one caller that needs exactly those, so it opts out: a
+      // ledger hit here would come back with no `frames` at all.
+      ledger:             'false',
     };
+    // WINDING — same rule as TransientCharts: the SELECTED connection rides in
+    // the request, so this panel can never render a solve of a different
+    // winding than the selector shows (and both panels keep sharing one
+    // backend cache key).
+    try {
+      const _conn = JSON.parse(localStorage.getItem('sim.connection') ?? '""');
+      if (_conn) params.connection = String(_conn);
+    } catch { /* config fallback */ }
+    // SPEED — same rule as TransientCharts: the panel's rpm rides in the
+    // request (per-user copy), omitted → shared config fallback.
+    try {
+      const _rpm = Number(JSON.parse(localStorage.getItem('sim.rpm') ?? 'null'));
+      if (Number.isFinite(_rpm) && _rpm > 0) params.rpm = String(_rpm);
+    } catch { /* config fallback */ }
     // Auto-retry against transient backend hiccups (uvicorn supervisor
     // sometimes respawns the worker mid-request during a heavy FEM solve).
     const attempt = async (i = 0): Promise<void> => {
@@ -175,20 +212,26 @@ const FemAnimationViewer: React.FC<Props> = ({
   // (one FEM sweep, not two).
   useEffect(() => { setNFrames(n_frames_default); }, [n_frames_default]);
 
-  // ── run ONLY when "Run Simulation" is pressed (runNonce ticks) ─────────
-  // runNonce starts at 0 → nothing happens on mount; the user sets the
-  // operating point + mesh settings first, then launches one solve.
-  useEffect(() => {
-    if (runNonce > 0) runAnimation();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runNonce]);
+  // ── Field animation is OPT-IN — it does NOT auto-run on "Run Simulation".
+  // It is its OWN transient at its own frame count, and shipping a full field
+  // map per keyframe is a large payload, so "Run Simulation" computes only the
+  // CHARTS at the full "Steps per electrical period".  Click "Run animation"
+  // below to compute the scrubable field video on demand.
+  // (Was: useEffect(() => { if (runNonce > 0) runAnimation(); }, [runNonce]); —
+  //  that made every Run also fire the animation solve, whose progress bar read
+  //  "0/24" and looked like the transient was ignoring the 72-step setting.)
 
   // ── build a FemPayload-shaped object for FemFieldChart ─────────────────
   const currentFrame = data?.frames[idx];
   const baseFrame = data?.frames[0];      // outlines / symmetry_mult live here
   const payloadForChart: FemPayload | null = useMemo(() => {
     if (!currentFrame || !baseFrame || !data) return null;
-    return {
+    // Tile the anti-periodic wedge out to the full ring, exactly as every other
+    // field view does. The sliding band solves the machine's natural symmetry
+    // sector on P2, so without this the animation would show a fraction of the
+    // motor — the retired remesh path happened to build the full disk, which is
+    // the only reason this was never needed here before.
+    return tileFullRing({
       n_vertices:      currentFrame.n_vertices,
       n_triangles:     currentFrame.n_triangles,
       vertices:        currentFrame.vertices,
@@ -236,7 +279,8 @@ const FemAnimationViewer: React.FC<Props> = ({
       B_mag_max:       currentFrame.B_mag_max,
       demag_coef_per_tri: currentFrame.demag_coef_per_tri,
       J_z_per_tri:     currentFrame.J_z_per_tri,
-    } as FemPayload;
+      anti_periodic:   baseFrame.anti_periodic ?? false,
+    } as FemPayload);
   }, [currentFrame, baseFrame, data]);
 
   // ── UI ─────────────────────────────────────────────────────────────────
@@ -249,18 +293,18 @@ const FemAnimationViewer: React.FC<Props> = ({
     : undefined;
 
   return (
-    <Paper sx={{ bgcolor: '#0b1220', border: '1px solid #1e293b', p: 2,
+    <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         flexWrap: 'wrap', gap: 1 }}>
         <Box>
-          <Typography sx={{ fontSize: 13, color: '#cbd5e1', fontWeight: 700 }}>
+          <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
             Field Animation — rotor through one electrical period
-            <Tooltip title="Runs the transient FEM N_frames times (one solve per keyframe), capturing the full field map at each rotor angle. Use the slider to scrub through the period — rotor moves in real geometry, fields update with it. Each fetch takes ~n_frames × 3 s for mesh_size_mm=4." placement="top">
-              <span style={{ color: '#475569', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
+            <Tooltip title="Runs the sliding-band transient over one electrical period and keeps the full field map at N_frames rotor angles. Use the slider to scrub — the rotor turns, the field follows it. The mesh is built ONCE for the whole run (the band encodes rotation in the slip pairing, not in coordinates), so the cost is one transient plus the payload, not one mesh+solve per frame. Each keyframe is a separate FEM solve at the actual rotor angle; stator iron + slot positions stay fixed. Iso-lines and the colour-bar rescale per frame to the local A_z range." placement="top">
+              <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
             </Tooltip>
           </Typography>
-          <Typography sx={{ fontSize: 10, color: '#475569' }}>
+          <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
             {data
               ? `${data.frames.length} keyframes  ·  period ${(data.T_period_s*1000).toFixed(3)} ms  ·  f_elec ${data.f_elec_Hz.toFixed(1)} Hz  ·  rpm ${data.rpm}`
               : 'Idle — click "Run animation" to compute'}
@@ -270,7 +314,7 @@ const FemAnimationViewer: React.FC<Props> = ({
           <Button size="small" variant="contained" disableElevation
             onClick={runAnimation} disabled={loading}
             startIcon={loading ? <CircularProgress size={14}/> : <RestartAltIcon fontSize="small"/>}
-            sx={{ textTransform: 'none', fontSize: 11, bgcolor: '#1e3a5f',
+            sx={{ textTransform: 'none', fontSize: 11, bgcolor: 'var(--line-accent)',
               '&:hover': { bgcolor: '#2c5282' }}}>
             {loading ? 'Running FEM…' : (data ? 'Re-run animation' : 'Run animation')}
           </Button>
@@ -290,10 +334,10 @@ const FemAnimationViewer: React.FC<Props> = ({
       {!payloadForChart && loading && (
         <Box sx={{ display: 'flex', alignItems: 'center',
           justifyContent: 'center', minHeight: 460,
-          border: '1px solid #0f172a', bgcolor: '#060d17' }}>
+          border: '1px solid var(--app-bg)', bgcolor: 'var(--panel-2)' }}>
           <Box sx={{ textAlign: 'center' }}>
             <CircularProgress size={40}/>
-            <Typography sx={{ mt: 1, fontSize: 12, color: '#475569' }}>
+            <Typography sx={{ mt: 1, fontSize: 12, color: 'var(--text-4)' }}>
               Solving FEM for {n_frames} keyframes…
             </Typography>
           </Box>
@@ -314,8 +358,8 @@ const FemAnimationViewer: React.FC<Props> = ({
       {/* Playback controls — slider + play / pause + FPS */}
       {data && data.frames.length > 1 && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2,
-          px: 1, py: 0.5, bgcolor: '#060d17',
-          border: '1px solid #0f172a', borderRadius: 1 }}>
+          px: 1, py: 0.5, bgcolor: 'var(--panel-2)',
+          border: '1px solid var(--app-bg)', borderRadius: 1 }}>
           <IconButton size="small" onClick={() => setPlaying(p => !p)}
             sx={{ color: '#93c5fd' }}>
             {playing ? <PauseIcon fontSize="small"/> : <PlayArrowIcon fontSize="small"/>}
@@ -334,22 +378,22 @@ const FemAnimationViewer: React.FC<Props> = ({
               }}
             />
             <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-              <Typography sx={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace' }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'monospace' }}>
                 t = {t_ms_now.toFixed(3)} ms
               </Typography>
-              <Typography sx={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace' }}>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-3)', fontFamily: 'monospace' }}>
                 rotor = {rotorDeg.toFixed(2)}°  ·  θ_e = {(rotorDeg * 14).toFixed(0)}°
               </Typography>
             </Box>
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Typography sx={{ fontSize: 10, color: '#64748b' }}>FPS</Typography>
+            <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>FPS</Typography>
             <ToggleButtonGroup value={fps} exclusive size="small"
               onChange={(_, v) => v && setFps(v as number)}
               sx={{
                 '& .MuiToggleButton-root': { py: 0, px: 0.8, fontSize: 10,
-                  color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                  '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
+                  color: 'var(--text-3)', borderColor: 'var(--panel)', textTransform: 'none',
+                  '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
                     borderColor: '#3b82f6' }}}}>
               <ToggleButton value={2}>2</ToggleButton>
               <ToggleButton value={4}>4</ToggleButton>
@@ -359,13 +403,6 @@ const FemAnimationViewer: React.FC<Props> = ({
           </Box>
         </Box>
       )}
-
-      <Typography sx={{ fontSize: 9, color: '#334155' }}>
-        Each keyframe is a separate FEM solve at the actual rotor angle — magnets,
-        rotor body and air-gap field reflect the physical state at that moment.
-        Stator iron + slot positions stay fixed.  Iso-lines and the colour-bar
-        rescale per frame to the local A_z range.
-      </Typography>
     </Paper>
   );
 };

@@ -1,5 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { syncActiveMotor } from '../components/common/motorSettings';
+import { setGeoGetter } from '../lib/apiAuth';
+import { canWriteServer } from '../lib/localAuth';
+import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
+import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
+import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
+import { geometryApplyOutcome } from '../lib/geometryApplyOutcome';
+import type { GeometryApplyOutcome } from '../lib/geometryApplyOutcome';
 import type {
   MotorGeometryParams,
   MaterialAssignments,
@@ -12,6 +20,8 @@ import type {
   VariationConfig,
   OperatingPoint,
   ParameterVariation,
+  GeometryValidation,
+  GeometryParamError,
 } from '../types/motor';
 import {
   defaultGeometryParams,
@@ -19,79 +29,111 @@ import {
   defaultMeshSettings,
 } from '../types/motor';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
-// ─── Material config types ────────────────────────────────────────────────────
-
-export interface SteelMaterial {
-  preset: string;
-  name: string;
-  mu_r: number;
-  sigma: number;
-  B_sat: number;
-  density: number;
-  lamination_mm: number;
+// Restore the eval parameters a descent run used into the Simulation tab's sources,
+// so re-running the Simulation on an applied design REPRODUCES it (the optimizer eval
+// is byte-identical to Simulation, so identical params => identical numbers). Mesh
+// params are read fresh from localStorage at request time; the persisted-state Sim
+// fields (steps, coil temp, …) are nudged live via the 'descent-eval-params' event.
+function restoreDescentEvalParams(st: any): void {
+  const ep = st?.eval_params;
+  if (!ep || typeof ep !== 'object') return;
+  const put = (k: string, v: unknown) => { if (v != null) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* quota */ } } };
+  put('sim.stepsPP', ep.steps_per_period);  put('mesh.nSectors', ep.n_sectors);
+  put('mesh.gapLayers', ep.gap_layers);     put('sim.coilTemp', ep.coil_temp_c);
+  put('mesh.poleCopy', ep.pole_copy);       put('sim.torqueFilter', ep.torque_filter);
+  put('sim.fieldLosses', ep.rotor_eddy);
+  // k_end: 0 in a descent means "auto" — the solver recomputes it from each
+  // candidate's own geometry.  Pinning that 0 here blanked the Simulation cell and
+  // every consumer reading `sim.endWinding`.  The applied design's geometry re-seeds
+  // the real factor, so only carry an EXPLICIT override across.
+  if (Number(ep.end_winding_factor) > 0) put('sim.endWinding', ep.end_winding_factor);
+  put('mesh.meshSize', ep.mesh_size_mm);    put('mesh.minSize', ep.min_size_mm);
+  try { window.dispatchEvent(new CustomEvent('descent-eval-params', { detail: ep })); } catch { /* SSR */ }
 }
 
-export interface MagnetMaterial {
-  preset: string;
-  name: string;
-  Br: number;
-  Hc: number;
-  mu_rec: number;
-  density: number;
-  max_temp_c: number;
+// k_end follows the geometry (masses.end_winding_factor is the SINGLE SOURCE) and the
+// transient reads it straight from localStorage, so refresh it BEFORE asking for a
+// recompute — otherwise the first solve after an apply scales the copper loss by the
+// PREVIOUS design's end-turn length.
+async function refreshEndWindingFactor(): Promise<void> {
+  try {
+    const r = await fetch(`${API_BASE_URL}/api/config`);
+    const d = await r.json();
+    const k = Number(d?.end_winding_factor);
+    if (Number.isFinite(k) && k > 0) localStorage.setItem('sim.endWinding', JSON.stringify(+k.toFixed(3)));
+  } catch { /* non-fatal: the Simulation panel also re-seeds on the geometry change */ }
 }
 
-export interface WindingMaterial {
-  preset: string;
-  name: string;
-  sigma: number;
-  fill_factor: number;
-  density: number;
-  alpha: number;
+// WHICH search produced the design being applied — the word that ends up in the
+// saved motor's name and in its provenance.  A run launched from the one-click
+// card carries `auto` (with its own mode); a manual optimizer run carries none,
+// and 'descent' is the honest label for it rather than borrowing 'auto'.
+function descentApplyMode(st: any, picked: boolean): ApplyMode {
+  if (picked) return 'picked';
+  const m = String(st?.auto?.mode ?? '').toLowerCase();
+  if (m === 'screen') return 'screen';
+  if (m === 'cmaes') return 'auto';
+  return 'descent';
 }
 
-export interface ShaftMaterial {
-  preset: string;
-  name: string;
-  density: number;
-  yield_strength_mpa: number;
-  tensile_mpa: number;
+// The provenance of an applied optimizer design: mode, run, operating point,
+// ripple gate, F and the point's own metrics.  Read from the SAME descent state
+// the cards read, so a saved motor's description cannot disagree with the card
+// that was on screen when it was applied.
+function descentProvenance(st: any, pt: any | null) {
+  const picked = !!pt;
+  const m = picked ? pt : (st?.best?.metrics || st?.result?.best || {});
+  const op = st?.auto?.operating_point || {};
+  const I = Number(picked ? pt?.current_a : m?.current_a);
+  const g = Number(
+    picked ? pt?.gamma_deg
+      : (typeof st?.mtpa_gamma_deg === 'number' ? st.mtpa_gamma_deg : m?.gamma_deg));
+  const rpm = Number(op?.rpm ?? st?.rpm);
+  return {
+    mode: descentApplyMode(st, picked),
+    runId: String(st?.run_id ?? ''),
+    objective: String(st?.auto?.objective ?? ''),
+    operatingPoint: {
+      current_a: Number.isFinite(I) ? I : Number(op?.current_a),
+      rpm: Number.isFinite(rpm) ? rpm : undefined,
+      gamma_deg: Number.isFinite(g) ? g : Number(op?.gamma_deg),
+    },
+    rippleMaxPct: Number(st?.auto?.max_ripple_pct),
+    // A picked point is not the run's best, so it does not carry the run's F.
+    F: picked ? undefined : Number(st?.best?.F),
+    metrics: picked
+      ? { T_avg_Nm: pt?.torque, T_ripple_pct: pt?.ripple, efficiency: pt?.eff,
+          torque_per_mass: pt?.td, mass_total_kg: pt?.mass }
+      : { T_avg_Nm: m?.T_em_Nm, T_ripple_pct: m?.T_ripple_pct,
+          efficiency: m?.efficiency, torque_per_mass: m?.torque_per_mass,
+          mass_total_kg: m?.mass_total_kg },
+    overrides: (picked ? pt?.overrides : (st?.best?.x || st?.result?.best?.overrides)) || {},
+  };
 }
 
-export interface MaterialConfig {
-  stator:   SteelMaterial;
-  rotor:    SteelMaterial;
-  magnets:  MagnetMaterial;
-  windings: WindingMaterial;
-  shaft:    ShaftMaterial;
+// Applying a design swaps the geometry under the Simulation tab: drop the previous
+// design's numbers ('sim-design-applied').  It does NOT solve.
+//
+// It used to also fire 'sim-rerun'.  That was wrong twice over: the design being
+// applied WAS ALREADY SOLVED — its numbers are what the user picked it on, and
+// they are pushed here via 'sim-apply-summary' — so the recompute spent minutes
+// re-deriving them, and when it finished it REPLACED them.  On 2026-08-07 that
+// replacement put 12.65 N·m on screen for a point the sweep had measured at
+// 27.33, and nothing said which number belonged to what.  A solve is now
+// something the user asks for with the Run button; when they do, the panel
+// reports the delta against the applied point instead of quietly overwriting it.
+function announceAppliedDesign(): void {
+  try {
+    window.dispatchEvent(new CustomEvent('sim-design-applied'));
+  } catch { /* SSR/no-window */ }
 }
 
-export type ComponentMaterialKey = keyof MaterialConfig;
-
-const defaultMaterialConfig: MaterialConfig = {
-  stator: {
-    preset: 'm27_silicon_steel', name: 'M27 Silicon Steel',
-    mu_r: 4000, sigma: 2.5e6, B_sat: 1.70, density: 7700, lamination_mm: 0.457,
-  },
-  rotor: {
-    preset: 'm27_silicon_steel', name: 'M27 Silicon Steel',
-    mu_r: 4000, sigma: 2.5e6, B_sat: 1.70, density: 7700, lamination_mm: 0.457,
-  },
-  magnets: {
-    preset: 'ndfeb_n42', name: 'NdFeB N42',
-    Br: 1.28, Hc: 979, mu_rec: 1.05, density: 7500, max_temp_c: 150,
-  },
-  windings: {
-    preset: 'copper', name: 'Copper',
-    sigma: 5.96e7, fill_factor: 0.55, density: 8960, alpha: 0.00393,
-  },
-  shaft: {
-    preset: 'carbon_steel_1045', name: 'Carbon Steel 1045',
-    density: 7850, yield_strength_mpa: 530, tensile_mpa: 625,
-  },
-};
+// Material PROPERTIES (Br, μr, σ, …) are not edited in the UI — material
+// selection is library-based, assigned per part on the Materials tab via
+// /api/materials (see useMotorAssignments).  The old editable materialConfig
+// (and its MaterialsPanel) were dead code and have been removed.
 
 // View mode for 3D visualization
 type ViewMode = 'solid' | 'pointcloud' | 'hybrid' | 'stl';
@@ -100,7 +142,6 @@ interface MotorState {
   // State
   geometry: MotorGeometryParams;
   materials: MaterialAssignments;
-  materialConfig: MaterialConfig;
   meshSettings: MeshSettings;
   parameterSchema: ParameterSchema[];
   parameterGroups: ParameterGroup[];
@@ -119,11 +160,28 @@ interface MotorState {
   stlMeshes: Record<string, { vertices: number[]; faces: number[] }>;
   validationData: any | null;
   geometryMismatch: boolean;
-  
+
+  /** Region-level geometry validation of the CURRENT cross-section: which
+   *  domains overlap, where, and by how much.  Filled from PUT /api/geometry
+   *  (returned as `geometry_validation`) and from GET /api/geometry/validation.
+   *  Errors here mean a solve is refused with HTTP 422 — the Geometry tab shows
+   *  them in red so the user can see WHAT intersects WHERE before pressing Run. */
+  geometryValidation: GeometryValidation | null;
+  /** Field-level rejections from a PUT that came back 422 (negative dimension,
+   *  a bore radius that works out negative, …).  Nothing was saved. */
+  geometryParamErrors: GeometryParamError[] | null;
+  /** Edits typed while the backend was unreachable (PUT died on the network —
+   *  NOT a 422/423 refusal, those never queue).  Applied to the local copy so
+   *  the form and viewers show what was typed, and replayed by
+   *  fetchGeometryFromApi's reconnect barrier BEFORE the server copy is
+   *  adopted.  Without this queue the 5 s retry loop's first successful GET
+   *  silently reverted the typed value to the server's stale geometry. */
+  pendingGeometryEdits: Record<string, number | string> | null;
+  fetchGeometryValidation: () => Promise<void>;
+
   // Actions
   setGeometryUpdating: (v: boolean) => void;
   updateGeometry: (params: Partial<MotorGeometryParams>) => void;
-  updateComponentMaterial: (comp: ComponentMaterialKey, patch: Record<string, number | string>) => void;
   updateMaterials: (materials: Partial<MaterialAssignments>) => void;
   updateMeshSettings: (settings: Partial<MeshSettings>) => void;
   setViewMode: (mode: ViewMode) => void;
@@ -135,7 +193,12 @@ interface MotorState {
   // API Actions
   fetchGeometryFromApi: () => Promise<void>;
   fetchSchemaFromApi: () => Promise<void>;
-  updateGeometryViaApi: (params: Partial<MotorGeometryParams>) => Promise<void>;
+  // Returns whether every requested field actually landed (a 422/423/500
+  // refuses SILENTLY as far as the Promise is concerned — no throw, no
+  // rejected fields in the resolved value's absence — so a caller that acts
+  // on "did this apply?" must read this, not just await the call. See
+  // lib/geometryApplyOutcome.ts.
+  updateGeometryViaApi: (params: Partial<MotorGeometryParams>) => Promise<GeometryApplyOutcome>;
   resetGeometryViaApi: () => Promise<void>;
   fetchFullConfigFromApi: () => Promise<void>;
   
@@ -150,10 +213,70 @@ interface MotorState {
   // Sweep / Optimization
   sweepConfig: SweepConfig;
   updateVariation: (paramName: string, variation: Partial<ParameterVariation>) => void;
+  setVariations: (variations: SweepConfig['variations']) => void;
   updateOperatingPoint: (index: 0 | 1, point: Partial<OperatingPoint>) => void;
   updateRippleThreshold: (threshold: number) => void;
+  updateSweepConstraints: (patch: Partial<SweepConfig>) => void;
   initVariationsFromSchema: () => void;
+
+  // Gradient / coordinate descent (fixed current+rpm, vary whitelisted vars)
+  descentRunning: boolean;
+  descentState: any | null;           // raw /descent/progress payload
+  descentError: string | null;
+  baselineLine: any | null;           // standalone current-only line (drawn before a run)
+  baselineBusy: boolean;
+  baselineError: string | null;
+  // Snapshot of the optimization INPUTS at the last launch — used to detect what
+  // changed since (materials, rpm, ripple, winding, …) and suggest re-optimizing.
+  lastOptSnapshot: Record<string, any> | null;
+  setLastOptSnapshot: (s: Record<string, any> | null) => void;
+  runDescent: (opts: { rippleMax: number; maxIters: number; wEff: number;
+                       wTd: number; steps: number;
+                       algorithm: string; nSectors: number;
+                       targetTorque?: number; vPeakLimit?: number;
+                       optimizeGamma?: boolean; autoExpand?: boolean;
+                       maxRounds?: number; surrogateSeed?: boolean;
+                       objective?: string; currentBumpPct?: number;
+                       ripplePenaltyLambda?: number;
+                       thdPenaltyLambda?: number; thdMaxPct?: number }) => Promise<void>;
+  cancelDescent: () => Promise<void>;
+  applyDescentBest: () => Promise<void>;
+  applyDescentPoint: (pt: any) => Promise<void>;   // apply a USER-PICKED scatter point
+  /** Re-solve a stored optimizer point (the run's best, or a picked cloud
+   *  point) at standard 6× on the server; on success apply the VERIFIED
+   *  point.  The only Apply path for a preliminary point. */
+  verifyAndApplyDescentPoint: (target: 'best' | 'point', pt?: any) =>
+    Promise<{ ok: boolean; error?: string; provenance?: string }>;
+  /** Outcome of the AUTO-ARCHIVE that every apply performs (see
+   *  lib/appliedAutoSave): the new motor's name, or the reason it was not
+   *  saved.  The panels show it as one line — an apply whose archiving failed
+   *  must never look like an apply that was archived. */
+  appliedSave: (AppliedSaveResult & { busy?: boolean }) | null;
+  loadLastDescent: () => Promise<void>;   // re-hydrate the last run's charts from the backend
+  computeBaselineLine: (opts: { currentBumpPct: number; steps: number; nSectors: number }) => Promise<void>;
+
+  /** Hydrate sweepConfig from the backend so the selected variables follow the
+   *  user across browsers; seeds the server if it has none yet but this browser does. */
+  loadServerSweepConfig: () => Promise<void>;
 }
+
+// Sweep-config ↔ backend sync state (see loadServerSweepConfig + the subscription
+// after the store): _sweepHydrating suppresses echoing a server-driven hydrate
+// back to the server; _sweepSaveTimer debounces saves while the user edits.
+let _sweepHydrating = false;
+let _sweepSaveTimer: ReturnType<typeof setTimeout> | undefined;
+// A config counts as "real" only if ≥1 variable is actually selected
+// (mode !== 'fixed').  A fresh browser carries all schema params as 'fixed', so
+// guarding on this prevents an empty/just-loaded browser from seeding or saving
+// an all-'fixed' config that would clobber another browser's real selections.
+const _sweepSelected = (vars?: Record<string, { mode?: string }>) =>
+  vars ? Object.values(vars).filter((v) => v && v.mode && v.mode !== 'fixed').length : 0;
+
+// Guards the offline-edit replay in fetchGeometryFromApi: the retry loop fires
+// every 5 s, and a re-PUT slower than that would otherwise be raced by a second
+// fetch that adopts the server's stale copy mid-replay.  While a replay is in
+// flight every other fetch returns without touching geometry.
+let _pendingReplayInFlight = false;
 
 export const useMotorStore = create<MotorState>()(
   persist(
@@ -161,7 +284,6 @@ export const useMotorStore = create<MotorState>()(
       // Initial state
       geometry: { ...defaultGeometryParams },
       materials: defaultMaterialAssignments,
-      materialConfig: defaultMaterialConfig,
       meshSettings: defaultMeshSettings,
       parameterSchema: [],
       parameterGroups: [],
@@ -176,27 +298,26 @@ export const useMotorStore = create<MotorState>()(
       pipelineStatus: null,
       stlMeshes: {},
       validationData: null,
+      geometryValidation: null,
+      geometryParamErrors: null,
+      pendingGeometryEdits: null,
       geometryMismatch: false,
 
-      // Sweep config initial state
+      // Sweep config initial state — two operating points ~10 % apart in
+      // current (local load sensitivity), at the rated speed.
       sweepConfig: {
         variations: {},
         operatingPoints: [
-          { current_a: 10, rpm: 3000 },
-          { current_a: 20, rpm: 3000 },
+          { current_a: 80, rpm: 3950, gamma_deg: 0 },
+          { current_a: 88, rpm: 3950, gamma_deg: 0 },
         ],
         rippleThreshold: 0.05,
+        ratedTorqueNm: 30.5,
+        vBusV: 140,
+        modulation: 'svpwm',
       },
 
       setGeometryUpdating: (v) => set({ isGeometryUpdating: v }),
-
-      updateComponentMaterial: (comp, patch) =>
-        set((state) => ({
-          materialConfig: {
-            ...state.materialConfig,
-            [comp]: { ...state.materialConfig[comp], ...patch },
-          },
-        })),
 
       // Local Actions
       updateGeometry: (params) => set((state) => ({
@@ -256,6 +377,34 @@ export const useMotorStore = create<MotorState>()(
       
       // API Actions
       fetchGeometryFromApi: async () => {
+        // RECONNECT BARRIER: edits queued while the backend was down (see
+        // updateGeometryViaApi's catch) must reach the server BEFORE its copy
+        // is adopted, or the first successful GET after an outage reverts the
+        // typed values.  Every caller funnels through here (boot probe, 5 s
+        // retry loop in App.tsx, GeometryForm's reconnect effect), so this is
+        // the single choke point.  Outcomes of the re-PUT:
+        //   still down  → connectedToApi stays false, queue kept, no adoption;
+        //   accepted    → PUT response already delivered the merged geometry
+        //                 and cleared the queue — skip the redundant GET;
+        //   422/423     → refusal path cleared the queue and filled
+        //                 geometryParamErrors (the user sees WHY the value is
+        //                 gone) — fall through and adopt the server's truth.
+        const pending = get().pendingGeometryEdits;
+        if (pending && Object.keys(pending).length > 0 && canWriteServer()) {
+          if (_pendingReplayInFlight) return;   // a replay is racing this fetch — never adopt over it
+          _pendingReplayInFlight = true;
+          try {
+            await get().updateGeometryViaApi(pending);
+          } finally {
+            _pendingReplayInFlight = false;
+          }
+          if (!get().connectedToApi) return;            // backend still down — retry later
+          if (get().pendingGeometryEdits === null && !get().geometryParamErrors) return; // accepted
+        } else if (pending && !canWriteServer()) {
+          // Signed out mid-outage: this client can no longer PUT — its copy is
+          // local-only by design (?geo= carries it), so the queue is moot.
+          set({ pendingGeometryEdits: null });
+        }
         set({ isLoading: true, error: null });
         try {
           const response = await fetch(`${API_BASE_URL}/api/geometry`);
@@ -263,7 +412,6 @@ export const useMotorStore = create<MotorState>()(
             throw new Error(`HTTP error! status: ${response.status}`);
           }
           const data = await response.json();
-          const viewMode = get().viewMode;
           set({
             geometry: data as MotorGeometryParams,
             isLoading: false,
@@ -303,6 +451,23 @@ export const useMotorStore = create<MotorState>()(
       },
       
       updateGeometryViaApi: async (params) => {
+        // Ordinary user on an enforced backend: the shared config is the
+        // owner's — edits land on THIS CLIENT'S COPY only.  Every compute
+        // request already carries the copy (?geo= via the fetch interceptor),
+        // so the solves, meshes and viewers all follow it; deep validation
+        // happens at compute time server-side.
+        if (!canWriteServer()) {
+          set((s) => ({
+            geometry: { ...(s.geometry as Record<string, unknown>), ...params } as MotorGeometryParams,
+            geometryParamErrors: null,
+            isLoading: false,
+            isGeometryUpdating: true,
+            error: null,
+          }));
+          // same acknowledgement pulse the server path gives the viewers
+          setTimeout(() => set({ isGeometryUpdating: false }), 400);
+          return { ok: true, refused: [] };
+        }
         set({ isLoading: true, isGeometryUpdating: true, error: null });
         try {
           const response = await fetch(`${API_BASE_URL}/api/geometry`, {
@@ -310,13 +475,110 @@ export const useMotorStore = create<MotorState>()(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(params),
           });
+          // 422 = the VALUE itself is unusable (negative dimension, a bore
+          // radius that works out negative, …).  Nothing was written; surface
+          // the named fields instead of the generic "HTTP error" so the user
+          // knows which box to fix.
+          if (response.status === 422) {
+            let bad: GeometryParamError[] = [];
+            try {
+              const body = await response.json();
+              bad = (body?.detail?.invalid_parameters ?? []) as GeometryParamError[];
+            } catch { /* non-JSON body */ }
+            set({
+              isLoading: false,
+              isGeometryUpdating: false,
+              connectedToApi: true,
+              geometryParamErrors: bad.length ? bad : [{
+                field: '', value: null, kind: 'field',
+                message: 'The value was rejected by the server and not saved.',
+              }],
+              // A refusal also answers a replayed offline queue: the server
+              // said WHY, the list above shows it — nothing left to sync.
+              pendingGeometryEdits: null,
+            });
+            return geometryApplyOutcome(422, Object.keys(params), bad);
+          }
+          // 423 = the field is LOCKED by the active die/configuration (family
+          // catalog).  Same surfacing as 422: name the fields and the lock, so
+          // the user sees WHY the box refuses instead of a silent revert.
+          if (response.status === 423) {
+            let det: any = null;
+            try { det = (await response.json())?.detail; } catch { /* non-JSON */ }
+            const bad = (det?.invalid_parameters ?? []) as GeometryParamError[];
+            set({
+              isLoading: false,
+              isGeometryUpdating: false,
+              connectedToApi: true,
+              geometryParamErrors: bad.length ? bad : [{
+                field: '(geometry)', reason: String(det?.hint ?? 'locked'),
+              } as GeometryParamError],
+              pendingGeometryEdits: null,   // same as 422 — refusal resolves the queue
+            });
+            return geometryApplyOutcome(423, Object.keys(params), bad);
+          }
+          // 500 = the server ANSWERED and blew up inside the route.  It is not
+          // an outage, so it must not go down the network path below: that one
+          // marks the backend disconnected and queues the edit, App's 5 s
+          // reconnect loop replays the queue, the PUT 500s again, the edit is
+          // re-applied locally … forever.  Live on production 2026-09-16 the
+          // Geometry tab BLINKED at ~6 s (nginx: a wall of `PUT /api/geometry
+          // → 500 [Errno 13] Permission denied: 'cadquery_cache'`), because
+          // every replay rewrote the geometry object and rebuilt the viewer.
+          // A broken route gets ONE red line naming it, and no retry.
+          // 502/503/504 stay on the outage path on purpose — those come from
+          // nginx while the API restarts, and replaying then is exactly right.
+          if (response.status === 500) {
+            let detail = '';
+            try { detail = String((await response.json())?.detail ?? ''); } catch { /* non-JSON */ }
+            set({
+              isLoading: false,
+              isGeometryUpdating: false,
+              connectedToApi: true,           // it answered — the backend is up
+              pendingGeometryEdits: null,     // never replay into a broken route
+              error: `The server could not save this edit (500)${detail ? ` — ${detail}` : ''}`,
+              geometryParamErrors: [{
+                field: '', value: null, kind: 'field',
+                message: `The server could not save this edit (500)`
+                  + `${detail ? ` — ${detail}` : ''}. Nothing was written.`,
+              }],
+            });
+            return geometryApplyOutcome(500, Object.keys(params), null);
+          }
           if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
           }
           const data = await response.json();
           const viewMode = get().viewMode;
+          // A knob the backend had to pull back to its feasibility bound (a
+          // winding that will not fit the slot, …) comes back under
+          // `constraints_applied`.  Nothing read it, so typing wire_height 0.6
+          // into a 6.6 mm slot with 10 conductors silently stored 0.52 and the
+          // field just showed a different number than the one that was typed.
+          // Surface it in the same list the user already watches for input
+          // problems — the value WAS refused, they need to see why.
+          const clamped = (data?.constraints_applied ?? []) as Array<{
+            target?: string; clamped_to?: number; label?: string; why?: string;
+          }>;
+          // Keys this PUT carried are on the server now — drop exactly those
+          // from the offline queue (a replay sends the whole queue, so this
+          // empties it; an ordinary edit racing a non-empty queue must not
+          // discard the still-unsent keys).
+          const remaining = { ...(get().pendingGeometryEdits ?? {}) };
+          for (const k of Object.keys(params)) delete remaining[k];
           set({
             geometry: data as MotorGeometryParams,
+            pendingGeometryEdits: Object.keys(remaining).length ? remaining : null,
+            geometryParamErrors: clamped.length
+              ? clamped.map(c => ({
+                  field: String(c.target ?? '(geometry)'),
+                  reason: `does not fit — stored as ${c.clamped_to}`
+                    + (c.label ? ` (${c.label})` : ''),
+                })) as GeometryParamError[]
+              : null,
+            // The PUT already ran the region check on the saved cross-section,
+            // so the red list updates without a second round-trip.
+            geometryValidation: (data?.geometry_validation ?? null) as GeometryValidation | null,
             isLoading: false,
             connectedToApi: true,
             // In STL mode the mesh won't auto-reload, so clear indicator immediately
@@ -327,18 +589,47 @@ export const useMotorStore = create<MotorState>()(
             await new Promise(r => setTimeout(r, 600));
             set({ isGeometryUpdating: false });
           }
+          syncActiveMotor();   // auto-save the geometry edit into "my" motor
+          return geometryApplyOutcome(response.status, Object.keys(params), null);
         } catch (error) {
+          // NETWORK death only — a 422/423 refusal returned above and never
+          // lands here.  The edit is kept twice: applied to the local copy so
+          // the form and every ?geo=-carrying solve show what was typed, AND
+          // queued in pendingGeometryEdits for fetchGeometryFromApi's
+          // reconnect barrier to re-PUT before the server copy is adopted.
+          // Before the queue existed the first GET after an outage silently
+          // reverted the typed value and no PUT ever carried it to the server.
           console.error('Failed to update geometry via API:', error);
+          const pending = {
+            ...(get().pendingGeometryEdits ?? {}),
+            ...(params as Record<string, number | string>),
+          };
+          const n = Object.keys(pending).length;
           set({
             isLoading: false,
             isGeometryUpdating: false,
-            error: error instanceof Error ? error.message : 'Failed to update geometry',
+            error: `${n} geometry edit${n === 1 ? '' : 's'} pending — will sync when the backend returns`,
             connectedToApi: false,
+            pendingGeometryEdits: pending,
+            // A red 422 list from BEFORE the outage names values that are no
+            // longer on screen — stale next to the fresh local apply below.
+            geometryParamErrors: null,
           });
           get().updateGeometry(params);
+          return geometryApplyOutcome(0, Object.keys(params), null);
         }
       },
-      
+
+      fetchGeometryValidation: async () => {
+        try {
+          const response = await fetch(`${API_BASE_URL}/api/geometry/validation`);
+          if (!response.ok) return;
+          set({ geometryValidation: (await response.json()) as GeometryValidation });
+        } catch {
+          /* the validator is advisory in the form — never break the tab over it */
+        }
+      },
+
       resetGeometryViaApi: async () => {
         set({ isLoading: true, error: null });
         try {
@@ -349,20 +640,28 @@ export const useMotorStore = create<MotorState>()(
             throw new Error(`HTTP error! status: ${response.status}`);
           }
           const data = await response.json();
-          set({ 
-            geometry: data as MotorGeometryParams, 
+          set({
+            geometry: data as MotorGeometryParams,
             isLoading: false,
             connectedToApi: true,
+            // Everything queued or flagged before the reset referred to the
+            // pre-reset geometry — a reset resolves it all.
+            pendingGeometryEdits: null,
+            geometryParamErrors: null,
           });
         } catch (error) {
           console.error('Failed to reset geometry via API:', error);
-          set({ 
-            isLoading: false, 
-            error: error instanceof Error ? error.message : 'Failed to reset geometry',
+          // OFFLINE: no resetToDefaults() fallback — the frontend's compiled
+          // defaults need not match the backend's reset target
+          // (motor_config.yaml), so a local "reset" showed a geometry the
+          // server never held and the next reconnect snapped it to something
+          // else again.  Leave the geometry untouched and say why the button
+          // did nothing.
+          set({
+            isLoading: false,
+            error: 'Reset needs the backend — it restores the server-side defaults. Nothing was changed.',
             connectedToApi: false,
           });
-          // Fallback to local reset
-          get().resetToDefaults();
         }
       },
       
@@ -591,6 +890,11 @@ export const useMotorStore = create<MotorState>()(
           },
         })),
 
+      // Replace the whole variations map at once — used to swap the per-algorithm
+      // variable sets (each sub-tab keeps its own selection in localStorage).
+      setVariations: (variations) =>
+        set((state) => ({ sweepConfig: { ...state.sweepConfig, variations } })),
+
       updateOperatingPoint: (index, point) =>
         set((state) => {
           const pts: [OperatingPoint, OperatingPoint] = [...state.sweepConfig.operatingPoints] as [OperatingPoint, OperatingPoint];
@@ -603,6 +907,11 @@ export const useMotorStore = create<MotorState>()(
           sweepConfig: { ...state.sweepConfig, rippleThreshold: threshold },
         })),
 
+      updateSweepConstraints: (patch) =>
+        set((state) => ({
+          sweepConfig: { ...state.sweepConfig, ...patch },
+        })),
+
       initVariationsFromSchema: () => {
         const { parameterSchema, geometry, sweepConfig } = get();
         const existing = sweepConfig.variations;
@@ -610,16 +919,411 @@ export const useMotorStore = create<MotorState>()(
         for (const param of parameterSchema) {
           if (param.type === 'string') continue;
           const current = Number(geometry[param.name] ?? 0);
+          // Default a freshly-seen variable's range to its CURRENT value in
+          // both Min and Max (the user widens it after selecting).
           variations[param.name] = existing[param.name] ?? {
             mode: 'fixed',
-            min: param.min ?? current * 0.5,
-            max: param.max ?? current * 1.5,
+            min: current,
+            max: current,
             step: param.step ?? (current !== 0 ? Math.abs(current) * 0.1 : 1),
           };
+        }
+        // Preserve ALL non-schema variables (load angle γ, phase current, …) — they
+        // aren't in parameterSchema but MUST survive re-init.  This effect runs on
+        // every mount, and a tab switch remounts the panel, so keeping only γ here
+        // (the old behaviour) made a phase-current (or any non-schema) variable
+        // vanish when you left the Optimization tab and came back.
+        for (const k of Object.keys(existing)) {
+          if (!(k in variations)) variations[k] = existing[k];
         }
         set((state) => ({
           sweepConfig: { ...state.sweepConfig, variations },
         }));
+      },
+
+      // (Legacy Pareto FEM-scan + front-refine + saved-scan-runs were removed —
+      //  the torque-driven descent below is now the sole optimizer.)
+
+      // ── Gradient / coordinate descent ───────────────────────────────────────
+      descentRunning: false,
+      descentState: null,
+      descentError: null,
+      baselineLine: null,
+      baselineBusy: false,
+      baselineError: null,
+      lastOptSnapshot: null,
+      appliedSave: null,
+      setLastOptSnapshot: (s) => set({ lastOptSnapshot: s }),
+      runDescent: async ({ rippleMax, maxIters, wEff, wTd, steps, algorithm, nSectors, targetTorque, vPeakLimit, optimizeGamma, autoExpand, maxRounds, surrogateSeed, objective, currentBumpPct, ripplePenaltyLambda, thdPenaltyLambda, thdMaxPct }) => {
+        const { sweepConfig } = get();
+        // Fixed operating point = Sweep "Point 1" (γ/current from Simulation).
+        const op0 = sweepConfig.operatingPoints[0] || ({} as any);
+        // Variables = every active (non-fixed) entry; each card sets its explicit
+        // [min, max] + step — the single shared variable interface used by every
+        // algorithm (Optimize searches [min,max]; Sweep grids it; DOE screens it).
+        const variables = Object.entries(sweepConfig.variations)
+          .filter(([, v]) => v.mode !== 'fixed')
+          .map(([name, v]) => ({ name, min: Number(v.min), max: Number(v.max),
+                                 mode: v.mode, step: Number(v.step) }));
+        // Mesh settings — all from the Mesh tab (single source), so the optimizer
+        // meshes EXACTLY like Simulation (incl. the Periodic pole/slot toggle).
+        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = false;
+        try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
+        try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
+        try { pole_copy    = JSON.parse(localStorage.getItem('mesh.poleCopy') ?? 'false') === true; } catch { /* default */ }
+        try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'false') === true; } catch { /* default */ }
+        // Loss model — SINGLE SOURCE: Simulation, so Optimize's efficiency matches the
+        // Simulation tab (same keys Sweep reads). Without these the eval drops the
+        // field magnet/shaft eddy + end-winding copper → η reads several points high.
+        let rotor_eddy = true, end_winding_factor = 0;
+        try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default true */ }
+        try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default 0 */ }
+        // Air-gap mesh layers + coil temperature — SINGLE SOURCE: Mesh/Simulation tabs,
+        // so the optimizer meshes the air gap (dominant torque/ripple driver) and sets
+        // copper resistance EXACTLY like Simulation, else a selected design won't
+        // reproduce when re-run in the Simulation tab.
+        let gap_layers = 2, coil_temp_c = 120, structured_gap = false;
+        try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; } catch { /* default */ }
+        try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
+        // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
+        // Honest ripple (quarter == full disk), same build as Simulation.
+        try { structured_gap = JSON.parse(localStorage.getItem('mesh.structuredGap') ?? 'false') === true; } catch { /* default */ }
+        let airgap_macro = false;
+        try { airgap_macro = JSON.parse(localStorage.getItem('mesh.harmonicGap') ?? 'false') === true; } catch { /* default */ }
+        let iron_template = true;
+        try { iron_template = JSON.parse(localStorage.getItem('mesh.ironTemplate') ?? 'true') !== false; } catch { /* default */ }
+        if (iron_template) structured_gap = true;  // template needs the belt
+        // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
+        let geo_mesh = true;
+        try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
+        // P2 — the only basis. Scores every candidate on the honest P2 ripple
+        // (the retired P1 basis reported a mesh staircase as ripple and
+        // over-read the mean torque ~35 %, so the optimizer ranked designs on
+        // a number that did not exist).
+        const element_order = 2;
+
+        set({ descentRunning: true, descentError: null, descentState: null });
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/optimization/descent/start`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              variables,
+              operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
+              ripple_max_pct: rippleMax, w_eff: wEff, w_td: wTd,
+              max_iters: maxIters, steps_per_period: steps,
+              mesh_size_mm, min_size_mm, pole_copy, torque_filter,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh, element_order,
+              algorithm, n_sectors: nSectors,
+              target_torque_nm: targetTorque ?? 0,
+              v_peak_limit: vPeakLimit ?? 1e9,
+              optimize_gamma: optimizeGamma ?? true,
+              auto_expand: autoExpand ?? false,
+              max_rounds: maxRounds ?? 5,
+              surrogate_seed: surrogateSeed ?? false,
+              objective: objective ?? 'baseline_line',
+              current_bump_pct: currentBumpPct ?? 10,
+              // Ripple gate enforcement in the COST (0 = off, ripple only trimmed on
+              // the chart): cost += λ·max(0, ripple% − limit%)/100.
+              ripple_penalty_lambda: ripplePenaltyLambda ?? 0,
+              // Line-to-line voltage THD gate (FOC waveform quality), same scale.
+              thd_penalty_lambda: thdPenaltyLambda ?? 0,
+              thd_max_pct: thdMaxPct ?? 5,
+              // Consent to vary a DIE-DEFINING key under an active die (the
+              // Optimize header's checkbox, localStorage opt.allowNewLamination);
+              // without it the backend answers 422 with the reason
+              // (routes/family.refuse_die_defining_variables, 2026-09-20).
+              allow_new_lamination: ((): boolean => {
+                try { return localStorage.getItem('opt.allowNewLamination') === '1'; }
+                catch { return false; }
+              })(),
+            }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            await new Promise(r => setTimeout(r, 2000));
+            const pr = await fetch(`${API_BASE_URL}/api/optimization/descent/progress`);
+            const st = await pr.json();
+            set({ descentState: st });
+            if (!st.running) { if (st.error) set({ descentError: st.error }); break; }
+          }
+          set({ descentRunning: false });
+        } catch (e: any) {
+          set({ descentError: String(e?.message ?? e), descentRunning: false });
+        }
+      },
+      computeBaselineLine: async ({ currentBumpPct, steps, nSectors }) => {
+        // Draw the current-only baseline line up-front (2 sims @ I, +bump% I), WITHOUT
+        // a full optimization. Same eval params (single sources) as runDescent so the
+        // line matches what the optimizer will evaluate against.
+        const { sweepConfig } = get();
+        const op0 = sweepConfig.operatingPoints[0] || ({} as any);
+        let mesh_size_mm = 4.0, min_size_mm = 0.3, pole_copy = false, torque_filter = false;
+        try { mesh_size_mm = Number(JSON.parse(localStorage.getItem('mesh.meshSize') ?? '4')) || 4.0; } catch { /* default */ }
+        try { min_size_mm  = Number(JSON.parse(localStorage.getItem('mesh.minSize')  ?? '0.3')) || 0.3; } catch { /* default */ }
+        try { pole_copy    = JSON.parse(localStorage.getItem('mesh.poleCopy') ?? 'false') === true; } catch { /* default */ }
+        try { torque_filter = JSON.parse(localStorage.getItem('sim.torqueFilter') ?? 'false') === true; } catch { /* default */ }
+        let rotor_eddy = true, end_winding_factor = 0;
+        try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default */ }
+        try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default */ }
+        let gap_layers = 2, coil_temp_c = 120, structured_gap = false;
+        try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; } catch { /* default */ }
+        try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
+        // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
+        // Honest ripple (quarter == full disk), same build as Simulation.
+        try { structured_gap = JSON.parse(localStorage.getItem('mesh.structuredGap') ?? 'false') === true; } catch { /* default */ }
+        let airgap_macro = false;
+        try { airgap_macro = JSON.parse(localStorage.getItem('mesh.harmonicGap') ?? 'false') === true; } catch { /* default */ }
+        let iron_template = true;
+        try { iron_template = JSON.parse(localStorage.getItem('mesh.ironTemplate') ?? 'true') !== false; } catch { /* default */ }
+        if (iron_template) structured_gap = true;  // template needs the belt
+        // Geometry-driven CDT mesh — SINGLE SOURCE: Mesh tab (same build as Simulation).
+        let geo_mesh = true;
+        try { geo_mesh = JSON.parse(localStorage.getItem('mesh.geoMesh') ?? 'true') !== false; } catch { /* default */ }
+        const element_order = 2;   // P2 — the only basis (see runDescent)
+        set({ baselineBusy: true, baselineError: null });
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/optimization/descent/baseline`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              operating_point: { gamma_deg: op0.gamma_deg ?? 0, current_a: op0.current_a, rpm: op0.rpm },
+              current_bump_pct: currentBumpPct, steps_per_period: steps, n_sectors: nSectors,
+              mesh_size_mm, min_size_mm, pole_copy, torque_filter,
+              rotor_eddy, end_winding_factor, gap_layers, coil_temp_c, structured_gap, airgap_macro, iron_template, geo_mesh, element_order,
+            }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+          const j = await res.json();
+          set({ baselineLine: j.baseline_line ?? null });
+        } catch (e: any) {
+          set({ baselineError: String(e?.message ?? e) });
+        } finally {
+          set({ baselineBusy: false });
+        }
+      },
+      cancelDescent: async () => {
+        try { await fetch(`${API_BASE_URL}/api/optimization/descent/cancel`, { method: 'POST' }); }
+        catch { /* ignore */ }
+      },
+      applyDescentBest: async () => {
+        const st: any = get().descentState;
+        if (st?.running || st?.final_validation_status !== 'certified' ||
+            st?.apply_eligible !== true ||
+            st?.best?.metrics?.cogging_sampling_final_quality_sufficient !== true) return;
+        const overrides = st?.best?.x || st?.result?.best?.overrides;
+        if (!overrides || !Object.keys(overrides).length) return;
+        if (get().connectedToApi) await get().updateGeometryViaApi(overrides);
+        else get().updateGeometry(overrides);
+        restoreDescentEvalParams(st);   // pin the run's eval params into the Simulation tab
+        // Persist the OPERATING POINT the design was found at (solved current +
+        // MTPA γ).  Without this, simulating the saved geometry runs at the
+        // Simulation panel's idle current → low torque → inflated ripple% (the
+        // 55% the user hit).  max_current is the solver's I_phase_rms — the same
+        // quantity the optimizer solved as current_a.
+        const m = st?.best?.metrics || st?.result?.best;
+        const I = (typeof m?.current_a === 'number') ? m.current_a : undefined;
+        const g = (typeof st?.mtpa_gamma_deg === 'number') ? st.mtpa_gamma_deg
+                : (typeof m?.gamma_deg === 'number' ? m.gamma_deg : undefined);
+        if (I !== undefined || g !== undefined) {
+          if (get().connectedToApi) {
+            try {
+              await fetch(`${API_BASE_URL}/api/simulation/config`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  ...(I !== undefined ? { max_current: I } : {}),
+                  ...(g !== undefined ? { phase_offset_deg: g } : {}),
+                }),
+              });
+            } catch { /* non-fatal: live event below still updates the panel */ }
+          }
+          // SimulationPanel is ALWAYS mounted (hidden when inactive), so it won't
+          // re-read on a tab switch — nudge it to adopt the operating point live.
+          try {
+            window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: I, gamma: g } }));
+          } catch { /* SSR/no-window */ }
+        }
+        await refreshEndWindingFactor();
+        announceAppliedDesign();
+        // ARCHIVE IT.  An applied design that lives only in the editor is one
+        // backend restart from gone — that is how a day of optimization was
+        // lost.  Saved as a NEW motor; the source motor is not touched.
+        set({ appliedSave: { ok: false, busy: true } });
+        set({ appliedSave: await autoSaveAppliedDesign(descentProvenance(st, null)) });
+      },
+      // Apply a USER-PICKED scatter point (click-to-select on the descent chart) —
+      // same geometry + operating-point write as applyDescentBest, but for an
+      // arbitrary evaluated design instead of the optimiser's auto-best.
+      applyDescentPoint: async (pt: any) => {
+        const st: any = get().descentState;
+        // A standard-quality point of a certified run, or one the server has
+        // just re-checked at 6× on demand (apply_eligible) — nothing else.
+        if (st?.running || pt?.sampling_quality !== 'standard' ||
+            (st?.final_validation_status !== 'certified' && pt?.apply_eligible !== true)) return;
+        const overrides = pt?.overrides;
+        if (!overrides || !Object.keys(overrides).length) return;
+        if (get().connectedToApi) await get().updateGeometryViaApi(overrides);
+        else get().updateGeometry(overrides);
+        restoreDescentEvalParams(get().descentState);   // pin the run's eval params into the Simulation tab
+        const I = (typeof pt?.current_a === 'number') ? pt.current_a : undefined;
+        const g = (typeof pt?.gamma_deg === 'number') ? pt.gamma_deg : undefined;
+        if (I !== undefined || g !== undefined) {
+          if (get().connectedToApi) {
+            try {
+              await fetch(`${API_BASE_URL}/api/simulation/config`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  ...(I !== undefined ? { max_current: I } : {}),
+                  ...(g !== undefined ? { phase_offset_deg: g } : {}),
+                }),
+              });
+            } catch { /* non-fatal */ }
+          }
+          try {
+            window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: I, gamma: g } }));
+          } catch { /* SSR/no-window */ }
+        }
+        await refreshEndWindingFactor();
+        announceAppliedDesign();
+        // Same archive as the best-point apply: a hand-picked design is exactly
+        // as easy to lose, and it is usually the one the engineer chose on purpose.
+        set({ appliedSave: { ok: false, busy: true } });
+        set({ appliedSave: await autoSaveAppliedDesign(
+          descentProvenance(get().descentState, pt)) });
+      },
+      verifyAndApplyDescentPoint: async (target: 'best' | 'point', pt?: any) => {
+        const st: any = get().descentState;
+        if (!st || st.running) return { ok: false, error: 'The optimization is still running' };
+        try {
+          // The server looks the point up in the STORED run and re-solves it
+          // with the run's pinned settings; the body only names which point.
+          const r = await fetch(`${API_BASE_URL}/api/optimization/descent/validate_point`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              run_id: st.run_id ?? '', target,
+              ...(target === 'point' ? { overrides: pt?.overrides ?? {}, current_a: pt?.current_a } : {}),
+            }),
+          });
+          const d = await r.json().catch(() => null);
+          if (!r.ok) return { ok: false, error: String(d?.detail ?? `HTTP ${r.status}`) };
+          const v = d?.point;
+          if (v?.apply_eligible !== true || v?.sampling_quality !== 'standard'
+              || d?.res?.cogging_sampling_final_quality_sufficient !== true
+              || d?.res?.nonlinear_converged !== true) {
+            return { ok: false, error: 'Standard 6× convergence or angular-quality stamp is missing' };
+          }
+          await get().applyDescentPoint(v);
+          return { ok: true, provenance: d?.provenance };
+        } catch (e: any) {
+          return { ok: false, error: String(e?.message ?? e) };
+        }
+      },
+      loadLastDescent: async () => {
+        // The backend keeps the last descent in memory — re-hydrate it so the
+        // charts survive a page reload (without re-running the optimization).
+        try {
+          const r = await fetch(`${API_BASE_URL}/api/optimization/descent/progress`);
+          if (!r.ok) return;
+          const st = await r.json();
+          if (st && (st.running || ((st.history?.length ?? 0) > 0) || ((st.points?.length ?? 0) > 0))) {
+            set({ descentState: st, descentRunning: !!st.running });
+          }
+        } catch { /* ignore */ }
+      },
+      loadServerSweepConfig: async () => {
+        // Server-side sweep config so the selected variables follow the user
+        // across browsers (not trapped in one browser's localStorage).  The
+        // server wins on load; if the server has none yet but THIS browser has a
+        // config, seed the server so it then shows everywhere.
+        try {
+          // An anonymous/non-writer session must neither ADOPT the server copy
+          // (it is the owner's, possibly stale for this browser) nor try to
+          // mirror to it (403). Its sweep setup lives in localStorage alone —
+          // this is exactly how "my ranges reverted after a reload" happened
+          // while signed out (live 2026-08-21).
+          if (!canWriteServer()) return;
+          const r = await fetch(`${API_BASE_URL}/api/sweep/config`);
+          if (!r.ok) return;
+          const { config } = await r.json();
+          const local = get().sweepConfig;
+          const srvVars = config?.variations && typeof config.variations === 'object'
+            ? config.variations : null;
+          // NEWEST COPY WINS when both sides carry an edit stamp (2026-09-08).
+          // The selection-kind heuristic below cannot tell "this browser's old
+          // geometry study" from "the study the user made ten minutes ago in
+          // another browser": a Chrome profile still holding rotor_house_height
+          // won on reload and PUSHED it over the γ × current sweep the user had
+          // just configured and run elsewhere.  With stamps the question is
+          // simply which edit is more recent; the heuristic stays as the
+          // fallback for copies written before the stamp existed.
+          const srvAt = Number(config?.updatedAt) || 0;
+          const locAt = Number(local.updatedAt) || 0;
+          if (srvVars && (srvAt || locAt) && srvAt !== locAt) {
+            if (srvAt > locAt) {
+              const ops = Array.isArray(config.operatingPoints) && config.operatingPoints.length === 2
+                ? config.operatingPoints : local.operatingPoints;
+              _sweepHydrating = true;
+              set({ sweepConfig: {
+                ...local,
+                variations: srvVars,
+                operatingPoints: ops as [OperatingPoint, OperatingPoint],
+                rippleThreshold: typeof config.rippleThreshold === 'number'
+                  ? config.rippleThreshold : local.rippleThreshold,
+                ratedTorqueNm: typeof config.ratedTorqueNm === 'number' ? config.ratedTorqueNm : local.ratedTorqueNm,
+                vBusV: typeof config.vBusV === 'number' ? config.vBusV : local.vBusV,
+                modulation: config.modulation ?? local.modulation,
+                updatedAt: srvAt,
+              } });
+              _sweepHydrating = false;
+            } else if (_sweepSelected(local.variations) > 0) {
+              // This browser's copy is the newer one → it becomes the server's.
+              fetch(`${API_BASE_URL}/api/sweep/config`, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(local),
+              }).catch(() => {});
+            }
+            return;
+          }
+          // "No selection yet" must not count the two OPERATING-POINT cards the
+          // panel seeds by default (γ, phase current): a reset browser profile
+          // had exactly those, "won" against the server copy and PUSHED it,
+          // wiping the four geometry variables of the user's last sweep off
+          // the server (2026-09-04: "после сбоя остаются только угол и ток").
+          // Geometry variables are the selection that matters here.
+          const _geoSel = (vs: Record<string, any> | null) => !vs ? 0
+            : Object.entries(vs).filter(([k, v]) => v?.mode !== 'fixed'
+                && k !== 'gamma_deg' && k !== 'current_a').length;
+          if (srvVars && _geoSel(srvVars) > 0 && _geoSel(local.variations) === 0) {
+            // Adopt the server's config ONLY when THIS browser has no selection yet
+            // (fresh load).  If this browser already has variables, they win (handled
+            // below) — so a reload never clobbers your selections with a server copy
+            // that may be stale (e.g. a var added <600 ms before reload hadn't synced).
+            const ops = Array.isArray(config.operatingPoints) && config.operatingPoints.length === 2
+              ? config.operatingPoints : local.operatingPoints;
+            _sweepHydrating = true;
+            set({ sweepConfig: {
+              ...local,                       // keep any local-only fields
+              variations: srvVars,
+              operatingPoints: ops as [OperatingPoint, OperatingPoint],
+              rippleThreshold: typeof config.rippleThreshold === 'number'
+                ? config.rippleThreshold : local.rippleThreshold,
+              // rated-duty constraints follow the server too (cross-browser)
+              ratedTorqueNm: typeof config.ratedTorqueNm === 'number' ? config.ratedTorqueNm : local.ratedTorqueNm,
+              vBusV: typeof config.vBusV === 'number' ? config.vBusV : local.vBusV,
+              modulation: config.modulation ?? local.modulation,
+            } });
+            _sweepHydrating = false;
+          } else if (_geoSel(local.variations) > 0
+                     || (_sweepSelected(local.variations) > 0 && _sweepSelected(srvVars) === 0)) {
+            // THIS browser has GEOMETRY selections → they win on reload; push
+            // them to the server so they sync out (covers server-empty AND
+            // server-stale).  Default op-point cards alone never overwrite a
+            // server copy that has anything.
+            fetch(`${API_BASE_URL}/api/sweep/config`, {
+              method: 'PUT', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(local),
+            }).catch(() => {});
+          }
+        } catch { /* ignore */ }
       },
     }),
     {
@@ -628,21 +1332,97 @@ export const useMotorStore = create<MotorState>()(
       partialize: (state) => ({
         geometry: state.geometry,
         materials: state.materials,
-        materialConfig: state.materialConfig,
         meshSettings: state.meshSettings,
         sweepConfig: state.sweepConfig,
+        lastOptSnapshot: state.lastOptSnapshot,
+        // Offline-typed edits must survive a reload during the outage — the
+        // boot fetch runs the same reconnect barrier and replays them.
+        pendingGeometryEdits: state.pendingGeometryEdits,
       }),
     }
   )
 );
 
+// Mirror sweepConfig to the backend on every change (debounced) so the selected
+// variables / operating points / ripple limit follow the user across browsers,
+// not just the one that holds localStorage.  Hydrate is suppressed via the flag
+// so a server-driven load isn't echoed straight back.
+let _prevSweepConfig = useMotorStore.getState().sweepConfig;
+let _sweepStamping = false;
+useMotorStore.subscribe((state) => {
+  if (state.sweepConfig === _prevSweepConfig) return;
+  _prevSweepConfig = state.sweepConfig;
+  if (_sweepHydrating || _sweepStamping) return;
+  // Never persist an all-'fixed' config — that's a fresh/just-loaded browser
+  // (e.g. right after the schema populates every param as 'fixed'), and saving
+  // it would wipe another browser's real selections off the server.
+  if (_sweepSelected(state.sweepConfig.variations) === 0) return;
+  // A genuine local edit: stamp it, so the copy that reaches the server (and
+  // this browser's own persisted copy) says WHEN the user last touched it.
+  _sweepStamping = true;
+  try {
+    useMotorStore.setState({ sweepConfig: { ...state.sweepConfig, updatedAt: Date.now() } });
+  } finally {
+    _sweepStamping = false;
+  }
+  _prevSweepConfig = useMotorStore.getState().sweepConfig;
+  if (!canWriteServer()) return;   // non-writers keep sweep setup local-only
+  clearTimeout(_sweepSaveTimer);
+  _sweepSaveTimer = setTimeout(() => {
+    fetch(`${API_BASE_URL}/api/sweep/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(useMotorStore.getState().sweepConfig),
+    }).catch(() => { /* offline / backend down — localStorage still holds it */ });
+  }, 600);
+});
+
+// Keep every open tab and every browser on the NEWEST sweep copy (user
+// 2026-09-08: "надо исправить этот косяк, он постоянно возникает").  Two
+// leaks remained after the edit stamp above:
+//   1. a second TAB of the same browser keeps its own in-memory store — the
+//      persist middleware writes localStorage but never reads it back — so an
+//      edit made there would be stamped "now" and pushed over the study made in
+//      the first tab.  The `storage` event is fired in every OTHER tab when the
+//      persisted key changes: adopt the newer copy the moment it lands.
+//   2. a window that was idle while the study was made elsewhere (another
+//      browser, the in-app pane) still holds the copy it booted with: re-read
+//      the server when it regains focus, and the load rule (newest wins) does
+//      the rest.
+const _adoptSweepCopy = (cfg: SweepConfig) => {
+  _sweepHydrating = true;
+  try {
+    useMotorStore.setState({ sweepConfig: cfg });
+    _prevSweepConfig = useMotorStore.getState().sweepConfig;
+  } finally {
+    _sweepHydrating = false;
+  }
+};
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e: StorageEvent) => {
+    if (e.key !== 'motor-config-storage' || !e.newValue) return;
+    try {
+      const cfg = JSON.parse(e.newValue)?.state?.sweepConfig as SweepConfig | undefined;
+      const mine = useMotorStore.getState().sweepConfig;
+      if (cfg && (Number(cfg.updatedAt) || 0) > (Number(mine.updatedAt) || 0)) _adoptSweepCopy(cfg);
+    } catch { /* a foreign or malformed write — ignore */ }
+  });
+  let _sweepFocusAt = 0;
+  window.addEventListener('focus', () => {
+    const now = Date.now();
+    if (now - _sweepFocusAt < 2000) return;      // a burst of focus events is one check
+    _sweepFocusAt = now;
+    void useMotorStore.getState().loadServerSweepConfig();
+  });
+}
+
 // Component visibility keys
-export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'in_band' | 'out_band';
+export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'sleeve' | 'in_band' | 'out_band' | 'wire_insulation' | 'slot_insulation';
 
 // UI State
 interface UIState {
   sidebarOpen: boolean;
-  activeTab: 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep';
+  activeTab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'admin';
   showWireframe: boolean;
   showAxes: boolean;
   showGrid: boolean;
@@ -664,7 +1444,7 @@ interface UIState {
   magnetVisibility: Record<number, boolean>;
 
   toggleSidebar: () => void;
-  setActiveTab: (tab: 'geometry' | 'materials' | 'mesh' | 'simulation' | 'sweep') => void;
+  setActiveTab: (tab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'admin') => void;
   toggleWireframe: () => void;
   toggleAxes: () => void;
   toggleGrid: () => void;
@@ -709,11 +1489,39 @@ export const useBuildTimingStore = create<BuildTimingState>()((set) => ({
   setMesh2dTime:  (s) => set({ mesh2d_s: s }),
 }));
 
+// Dev affordance: expose the motor store so the Sweep/Optimize flow can be
+// driven through the app's OWN actions (same ones the UI buttons call) rather
+// than bypassing the frontend. Dev build only.
+if (typeof window !== 'undefined' && import.meta.env?.DEV) {
+  (window as unknown as { __motorStore?: typeof useMotorStore }).__motorStore = useMotorStore;
+}
+
+// P2 (multi-user): feed the live geometry to the fetch interceptor so every
+// COMPUTE request carries THIS client's design (?geo=) — stateless per-user
+// isolation, no shared global config. See docs/MULTI_USER_PLAN.md.
+setGeoGetter(() => {
+  try {
+    const g = useMotorStore.getState().geometry as Record<string, unknown> | undefined;
+    if (!g) return null;
+    const num: Record<string, number> = {};
+    for (const [k, v] of Object.entries(g)) {
+      if (typeof v === 'number' && Number.isFinite(v)) num[k] = v;
+    }
+    return Object.keys(num).length ? JSON.stringify(num) : null;
+  } catch { return null; }
+});
+
+// …and feed the SAME numbers to the stale-stamp checker, so "which machine is
+// this result from?" is answered against exactly the geometry that was sent to
+// the solver — not against a second reading of the config that can lag it.
+setGeoSigGetter(() => geoSignature(
+  useMotorStore.getState().geometry as Record<string, unknown> | undefined));
+
 export const useUIStore = create<UIState>()(
   persist(
     (set) => ({
       sidebarOpen: true,
-      activeTab: 'geometry',
+      activeTab: 'motors',
       showWireframe: false,
       showAxes: true,
       showGrid: true,
@@ -729,8 +1537,11 @@ export const useUIStore = create<UIState>()(
       renderMode: 'extruded' as 'extruded' | '2d',
       view2d: false,
 
-      // Component tree defaults
-      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true },
+      // Component tree defaults. The FEM sliding-band air domains (in_band/out_band) and the
+      // thin insulation layers are analysis overlays, not physical parts — and the bands are
+      // drawn as big translucent disks that cover the whole stator+coils. Default them OFF so
+      // the motor renders cleanly; they stay individually toggleable in the component tree.
+      componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, sleeve: true, in_band: false, out_band: false, wire_insulation: false, slot_insulation: false },
       coilVisibility: {},
       magnetVisibility: {},
 
@@ -765,20 +1576,39 @@ export const useUIStore = create<UIState>()(
 
       isolateComponent: (key) =>
         set({
-          componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, in_band: false, out_band: false, [key]: true },
+          componentVisibility: { stator: false, rotor: false, magnets: false, coils: false, shaft: false, sleeve: false, in_band: false, out_band: false, wire_insulation: false, slot_insulation: false, [key]: true },
           coilVisibility: {},
           magnetVisibility: {},
         }),
 
       showAllComponents: () =>
         set({
-          componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, in_band: true, out_band: true },
+          componentVisibility: { stator: true, rotor: true, magnets: true, coils: true, shaft: true, sleeve: true, in_band: true, out_band: true, wire_insulation: true, slot_insulation: true },
           coilVisibility: {},
           magnetVisibility: {},
         }),
     }),
     {
       name: 'motor-ui-storage',
+      version: 1,
+      // v1: the FEM sliding-band air domains (in_band/out_band) used to default visible and were
+      // drawn as big translucent disks covering the whole motor — it looked like a geometry glitch.
+      // Force them off once for users who persisted the old default; they remain toggleable.
+      migrate: (persisted: any, version: number) => {
+        if (version < 1 && persisted?.componentVisibility) {
+          persisted.componentVisibility.in_band = false;
+          persisted.componentVisibility.out_band = false;
+        }
+        // A key added AFTER a browser persisted this slice comes back
+        // `undefined`, which reads as "hidden" — so a machine that grew a
+        // retaining sleeve would draw everything but the sleeve, silently, for
+        // every existing user.  Default it visible like every other real part.
+        if (persisted?.componentVisibility
+            && persisted.componentVisibility.sleeve === undefined) {
+          persisted.componentVisibility.sleeve = true;
+        }
+        return persisted;
+      },
     }
   )
 );

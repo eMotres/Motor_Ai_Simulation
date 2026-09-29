@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useMotorStore } from '../../stores/motorStore';
 import { Box, Typography, Divider, Chip, CircularProgress, Tooltip } from '@mui/material';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import AddCircleOutlineIcon  from '@mui/icons-material/AddCircleOutline';
@@ -19,11 +20,23 @@ interface MotorPart {
 
 const PARTS: MotorPart[] = [
   { key: 'stator_core', label: 'Stator Core',  allowedCategory: 'steel',     fallbackFill: '#374151', accentFill: '#60a5fa' },
-  { key: 'rotor_core',  label: 'Rotor Core',   allowedCategory: 'steel',     fallbackFill: '#1f2937', accentFill: '#60a5fa' },
+  { key: 'rotor_core',  label: 'Rotor Core',   allowedCategory: 'steel',     fallbackFill: 'var(--panel-2)', accentFill: '#60a5fa' },
   { key: 'magnet',      label: 'Magnets',       allowedCategory: 'magnet',    fallbackFill: '#7f1d1d', accentFill: '#f87171' },
   { key: 'slot',        label: 'Windings',      allowedCategory: 'conductor', fallbackFill: '#78350f', accentFill: '#fbbf24' },
-  { key: 'shaft',       label: 'Shaft',         allowedCategory: null,        fallbackFill: '#1e293b', accentFill: '#64748b' },
+  { key: 'slot_insulation', label: 'Insulation',  allowedCategory: 'insulator', fallbackFill: '#3f3f46', accentFill: '#a78bfa' },
+  { key: 'wire_insulation', label: 'Wire Enamel', allowedCategory: 'insulator', fallbackFill: '#3f3f46', accentFill: '#a78bfa' },
+  { key: 'shaft',       label: 'Shaft',         allowedCategory: null,        fallbackFill: 'var(--panel)', accentFill: 'var(--text-3)' },
 ];
+
+// The retaining sleeve is not in PARTS above because it is not always THERE:
+// it exists only on a machine whose geometry carries sleeve_thickness > 0, and
+// offering a material row for a part that does not exist would invite an
+// assignment that changes nothing.  Appended by the panel when the live
+// geometry says the ring is real.
+const SLEEVE_PART: MotorPart = {
+  key: 'sleeve', label: 'Retaining Sleeve', allowedCategory: 'insulator',
+  fallbackFill: '#1f2937', accentFill: '#a78bfa',
+};
 
 // ─── SVG helper ──────────────────────────────────────────────────────────────
 
@@ -68,7 +81,7 @@ const MotorDiagram: React.FC<DiagramProps> = ({ assignments, library, highlightP
   const statorFill = isLibraryMaterial(assignments.stator_core, 'steel', library)
     ? '#2563eb' : '#374151';
   const rotorFill  = isLibraryMaterial(assignments.rotor_core, 'steel', library)
-    ? '#1d4ed8' : '#1f2937';
+    ? '#1d4ed8' : 'var(--panel-2)';
   const magnetFill = isLibraryMaterial(assignments.magnet, 'magnet', library)
     ? '#dc2626' : '#7f1d1d';
   const windingFill = isLibraryMaterial(assignments.slot, 'conductor', library)
@@ -112,11 +125,11 @@ const MotorDiagram: React.FC<DiagramProps> = ({ assignments, library, highlightP
         {glowFilter('glow-blue',   '#60a5fa')}
         {glowFilter('glow-red',    '#f87171')}
         {glowFilter('glow-amber',  '#fbbf24')}
-        {glowFilter('glow-slate',  '#94a3b8')}
+        {glowFilter('glow-slate',  'var(--text-2)')}
       </defs>
 
       {/* Outer background circle */}
-      <circle cx={cx} cy={cy} r={rStOuter + 2} fill="#0f172a" />
+      <circle cx={cx} cy={cy} r={rStOuter + 2} fill="var(--app-bg)" />
 
       {/* Stator body (full ring — slots will cut in) */}
       <path
@@ -138,8 +151,8 @@ const MotorDiagram: React.FC<DiagramProps> = ({ assignments, library, highlightP
       ))}
 
       {/* Air gap */}
-      <circle cx={cx} cy={cy} r={rAirOuter} fill="#0f172a" />
-      <circle cx={cx} cy={cy} r={rAirOuter} fill="none" stroke="#334155" strokeWidth={0.5} />
+      <circle cx={cx} cy={cy} r={rAirOuter} fill="var(--app-bg)" />
+      <circle cx={cx} cy={cy} r={rAirOuter} fill="none" stroke="var(--line)" strokeWidth={0.5} />
 
       {/* Rotor body */}
       <circle
@@ -163,17 +176,17 @@ const MotorDiagram: React.FC<DiagramProps> = ({ assignments, library, highlightP
       {/* Shaft */}
       <circle
         cx={cx} cy={cy} r={rShaft}
-        fill={hShaft ? '#475569' : '#1e293b'}
-        stroke="#334155" strokeWidth={1}
+        fill={hShaft ? 'var(--text-4)' : 'var(--panel)'}
+        stroke="var(--line)" strokeWidth={1}
         filter={hShaft ? 'url(#glow-slate)' : undefined}
       />
 
       {/* Center dot */}
-      <circle cx={cx} cy={cy} r={2} fill="#475569" />
+      <circle cx={cx} cy={cy} r={2} fill="var(--text-4)" />
 
       {/* Labels */}
-      <text x={cx + rStOuter - 10} y={cy - 4} textAnchor="middle" fontSize={6} fill="#94a3b8" transform={`rotate(-60,${cx},${cy})`}>Stator</text>
-      <text x={cx} y={cy - rRotOuter + 14} textAnchor="middle" fontSize={6} fill="#94a3b8">Rotor</text>
+      <text x={cx + rStOuter - 10} y={cy - 4} textAnchor="middle" fontSize={6} fill="var(--text-2)" transform={`rotate(-60,${cx},${cy})`}>Stator</text>
+      <text x={cx} y={cy - rRotOuter + 14} textAnchor="middle" fontSize={6} fill="var(--text-2)">Rotor</text>
     </svg>
   );
 };
@@ -221,7 +234,7 @@ const PartRow: React.FC<PartRowProps> = ({
         borderRadius: 1,
         cursor: 'default',
         transition: 'background 0.15s',
-        '&:hover': { bgcolor: '#1e293b' },
+        '&:hover': { bgcolor: 'var(--panel)' },
       }}
     >
       {/* Color dot */}
@@ -232,7 +245,7 @@ const PartRow: React.FC<PartRowProps> = ({
       }} />
 
       {/* Part label */}
-      <Typography variant="body2" sx={{ color: '#cbd5e1', width: 90, flexShrink: 0, fontSize: 12 }}>
+      <Typography variant="body2" sx={{ color: 'var(--text-1)', width: 90, flexShrink: 0, fontSize: 12 }}>
         {part.label}
       </Typography>
 
@@ -245,9 +258,9 @@ const PartRow: React.FC<PartRowProps> = ({
             flex: 1,
             fontSize: 10,
             height: 20,
-            bgcolor: isInLibrary ? `${part.accentFill}20` : '#1e293b',
-            color: isInLibrary ? part.accentFill : '#64748b',
-            border: `1px solid ${isInLibrary ? `${part.accentFill}40` : '#334155'}`,
+            bgcolor: isInLibrary ? `${part.accentFill}20` : 'var(--panel)',
+            color: isInLibrary ? part.accentFill : 'var(--text-3)',
+            border: `1px solid ${isInLibrary ? `${part.accentFill}40` : 'var(--line)'}`,
             '& .MuiChip-label': { px: 1 },
           }}
         />
@@ -273,7 +286,7 @@ const PartRow: React.FC<PartRowProps> = ({
               px: 1, py: 0.25, borderRadius: 1, border: 'none', cursor: 'pointer',
               fontSize: 10, fontWeight: 600, transition: 'all 0.15s', flexShrink: 0,
               bgcolor: alreadyAssigned
-                ? '#14532d'
+                ? 'var(--ok-bg)'
                 : canAssign ? `${part.accentFill}25` : 'transparent',
               color: alreadyAssigned
                 ? '#4ade80'
@@ -310,6 +323,16 @@ const MotorAssignmentPanel: React.FC<Props> = ({
   library, selected, assignments, loadingAssignments, saving, onAssign,
 }) => {
   const [hovered, setHovered] = React.useState<string | null>(null);
+  // One short line, one condition: the ring is listed when the geometry has one.
+  const sleeveT = Number(useMotorStore(st => st.geometry?.sleeve_thickness) ?? 0);
+  // …or when the backend already lists the part: GET /api/materials adds
+  // `sleeve` only for a machine whose geometry has one, so its presence is the
+  // same fact from the other side and does not depend on this tab's copy of
+  // the geometry being fresh (user 2026-09-04: "не вижу sleeve в дереве
+  // материалов, но на геометрии он появился").
+  const sleeveAssigned = !!(assignments as any)?.sleeve;
+  const parts = useMemo(
+    () => ((sleeveT > 0 || sleeveAssigned) ? [...PARTS, SLEEVE_PART] : PARTS), [sleeveT, sleeveAssigned]);
 
   if (loadingAssignments || !assignments) {
     return (
@@ -324,22 +347,22 @@ const MotorAssignmentPanel: React.FC<Props> = ({
 
       {/* Header */}
       <Box>
-        <Typography variant="overline" sx={{ color: '#475569', letterSpacing: 2, fontSize: 10 }}>
+        <Typography variant="overline" sx={{ color: 'var(--text-4)', letterSpacing: 2, fontSize: 10 }}>
           Motor Assembly
         </Typography>
-        <Typography variant="body2" sx={{ color: '#64748b', fontSize: 11, mt: 0.25 }}>
+        <Typography variant="body2" sx={{ color: 'var(--text-3)', fontSize: 11, mt: 0.25 }}>
           {selected
-            ? <>Select a part below to assign <Box component="span" sx={{ color: '#94a3b8', fontWeight: 600 }}>{selected.name}</Box></>
+            ? <>Select a part below to assign <Box component="span" sx={{ color: 'var(--text-2)', fontWeight: 600 }}>{selected.name}</Box></>
             : 'Select a material from the tree, then assign it to a motor part'}
         </Typography>
       </Box>
 
       {/* SVG diagram */}
       <Box sx={{
-        bgcolor: '#0f172a',
+        bgcolor: 'var(--app-bg)',
         borderRadius: 2,
         p: 1.5,
-        border: '1px solid #1e293b',
+        border: '1px solid var(--line-soft)',
       }}>
         <MotorDiagram
           assignments={assignments}
@@ -353,12 +376,12 @@ const MotorAssignmentPanel: React.FC<Props> = ({
             { label: 'Steel',     color: '#2563eb' },
             { label: 'Magnets',   color: '#dc2626' },
             { label: 'Windings',  color: '#d97706' },
-            { label: 'Air gap',   color: '#334155' },
-            { label: 'Shaft',     color: '#475569' },
+            { label: 'Air gap',   color: 'var(--line)' },
+            { label: 'Shaft',     color: 'var(--text-4)' },
           ].map(({ label, color }) => (
             <Box key={label} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
               <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: color }} />
-              <Typography sx={{ fontSize: 9, color: '#475569' }}>{label}</Typography>
+              <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>{label}</Typography>
             </Box>
           ))}
         </Box>
@@ -366,14 +389,14 @@ const MotorAssignmentPanel: React.FC<Props> = ({
 
       {/* Part assignments */}
       <Box>
-        <Typography variant="overline" sx={{ color: '#475569', letterSpacing: 2, fontSize: 10, px: 1.5 }}>
+        <Typography variant="overline" sx={{ color: 'var(--text-4)', letterSpacing: 2, fontSize: 10, px: 1.5 }}>
           Part Assignments
         </Typography>
 
         <Box sx={{ mt: 0.5 }}>
-          {PARTS.map((part, i) => (
+          {parts.map((part, i) => (
             <React.Fragment key={part.key}>
-              {i > 0 && <Divider sx={{ borderColor: '#1e293b', mx: 1.5 }} />}
+              {i > 0 && <Divider sx={{ borderColor: 'var(--panel)', mx: 1.5 }} />}
               <PartRow
                 part={part}
                 currentMaterial={assignments[part.key] ?? '—'}
@@ -391,7 +414,7 @@ const MotorAssignmentPanel: React.FC<Props> = ({
       {saving && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5 }}>
           <CircularProgress size={12} />
-          <Typography sx={{ fontSize: 11, color: '#64748b' }}>Saving…</Typography>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>Saving…</Typography>
         </Box>
       )}
     </Box>

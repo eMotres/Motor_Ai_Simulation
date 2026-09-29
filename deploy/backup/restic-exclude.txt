@@ -1,0 +1,41 @@
+# What restic skips.  --exclude-file; restic patterns (a bare name matches at
+# any depth).  Install as /etc/motres/restic-exclude.txt.
+#
+# THE RULE: exclude what is REPRODUCIBLE, and nothing else.  Each line below is
+# output a solve can make again from inputs that ARE backed up.  .gitignore
+# already classifies the same set (config/.mesh_cache/, .static3d_cache/,
+# .run_ledger/, .warm_cache.npz) — this file is that classification, applied to
+# the server tree.
+#
+# The one judgement call is .run_ledger/.  §4.4 excludes it; §5.1 keeps it for
+# a WARM START, because its keys carry the geometry fingerprint and the
+# material signature, so a stale entry cannot be served for a changed machine.
+# It is excluded here: it is also the largest single thing in a workspace
+# (capped at 200 MB EACH) and the cost of a cold start after a restore is
+# latency, not correctness.  Flip it if a restore rehearsal says otherwise.
+
+# ── per-workspace caches ────────────────────────────────────────────────────
+.mesh_cache/
+.static3d_cache/
+.run_ledger/
+.warm_cache.npz
+.daxis_cache.json
+.scan_cache.jsonl
+
+# ── in-flight temporaries ───────────────────────────────────────────────────
+# Every store is written tmp + os.replace; a *.tmp caught mid-write is by
+# definition the half-file the atomic rename exists to hide.
+*.tmp
+*.part
+
+# ── python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+
+# ── restic's own cache ──────────────────────────────────────────────────────
+# Backing up the backup's index is a loop that grows forever.
+/var/cache/restic
+
+# ── noise ───────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

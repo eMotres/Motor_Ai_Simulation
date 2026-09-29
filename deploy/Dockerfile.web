@@ -1,0 +1,27 @@
+# motor_ai_sim web frontend — static build served by nginx.
+# Build from the REPO ROOT:
+#   docker build -f deploy/Dockerfile.web \
+#     --build-arg VITE_GOOGLE_CLIENT_ID=<client id> .
+# VITE_API_URL defaults to "" = same-origin (nginx proxies /api to the API
+# container) — override only for a split-host deploy.
+FROM node:22-slim AS build
+WORKDIR /app
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ .
+# The app version is the REPO ROOT's VERSION file: vite.config reads
+# `<cwd>/../VERSION`, and with WORKDIR /app that is exactly /VERSION.  Without
+# it the define falls back to "0.0.0" and every deployed page showed "v0.0.0" in
+# the header while the workstation showed the real number (found live,
+# 2026-09-16 — the build context is the repo root, only `web/` was ever copied).
+COPY VERSION /VERSION
+ARG VITE_API_URL=""
+ARG VITE_GOOGLE_CLIENT_ID=""
+ENV VITE_API_URL=$VITE_API_URL \
+    VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
+RUN npm run build
+
+FROM nginx:1.27-alpine
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80

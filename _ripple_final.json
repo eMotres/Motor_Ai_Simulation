@@ -1,0 +1,28 @@
+{
+  "baseline": {
+    "Tavg": 25.280880036440767,
+    "ripple": 17.598916906684543
+  },
+  "recommended": {
+    "Tavg": 25.500614247860753,
+    "ripple": 5.794332371207642,
+    "gamma": -15.0,
+    "over": {
+      "magnet_fill_up": 0.56,
+      "magnet_up_gap": 2.5,
+      "rotor_fill_r": 2.0,
+      "magnet_fill_down": 0.92
+    }
+  },
+  "min_ripple": {
+    "Tavg": 24.81551616042319,
+    "ripple": 4.71110218525979,
+    "gamma": 0.0,
+    "over": {
+      "magnet_fill_up": 0.56,
+      "magnet_up_gap": 2.5,
+      "rotor_fill_r": 2.0,
+      "magnet_fill_down": 0.92
+    }
+  }
+}

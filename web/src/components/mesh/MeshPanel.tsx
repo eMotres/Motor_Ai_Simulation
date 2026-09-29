@@ -10,14 +10,76 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, Divider,
-  Paper, Slider, Tooltip, Typography, ToggleButton, ToggleButtonGroup,
+  Paper, Slider, Switch, TextField, Tooltip, Typography, ToggleButton, ToggleButtonGroup,
 } from '@mui/material';
+
+// Per-component mesh-size controls (study mesh-density effect on results).
+// Keys MUST match the backend _comp_of() mapping in build_mesh_from_polygons.
+const MESH_COMPONENTS: { key: string; label: string }[] = [
+  { key: 'stator', label: 'Stator iron' },
+  { key: 'rotor',  label: 'Rotor iron' },
+  { key: 'magnet', label: 'Magnets' },
+  { key: 'outer',  label: 'Outer air' },
+];
+// Dropped from the grid, scrubbed from stored state on mount:
+//  - 'coil' (Windings, mm): superseded by the Wire cell factor below — a stale
+//    stored mm value would silently pin the copper with no field showing it;
+//  - 'shaft': the geo path cannot honour it (-Y cut chains make the area
+//    constraint unsatisfiable), so the request silently swapped the WHOLE
+//    build onto the gmsh mesher — losing the template iron and the wire patch
+//    over one innocuous field (measured: coil 3024 -> 1008 tris).  The API
+//    still accepts both keys for diagnostics.
+const DROPPED_MESH_KEYS = ['coil', 'shaft'];
+// "Wire cell" — the copper cell size as a FACTOR of the wire height h, carried
+// in the SAME componentMesh block (so duty save/restore and the per-die
+// settings memory pick it up for free).  1h is the backend default and is
+// stored as "no key", keeping the canonical mesh byte-identical.
+const WIRE_CELL_KEY = 'coil_rel';
+// THE DIE'S MEMORY FOLLOWS THE SCREEN.  It used to be written only on leaving
+// a die or saving a duty, so a duty (re)load in between put the OLDER memory
+// back over the user's live edits — the wire cell went 2h → 1h by itself
+// (user 2026-09-08: "кто опять поменял это, у меня было всегда 2h").  Every
+// mesh.* write now refreshes the active die's memory, debounced.
+import { rememberDieSettings } from '../../lib/dieSettings';
+import { activeDuty } from '../../lib/dutySettings';
+let _rememberTimer: ReturnType<typeof setTimeout> | null = null;
+function rememberActiveDieSoon(): void {
+  if (_rememberTimer) clearTimeout(_rememberTimer);
+  _rememberTimer = setTimeout(() => {
+    _rememberTimer = null;
+    try { const a = activeDuty(); if (a?.die) rememberDieSettings(a.die); }
+    catch { /* memory is a convenience, never a blocker */ }
+  }, 800);
+}
+const WIRE_CELL_OPTIONS: { v: number; label: string }[] = [
+  { v: 0.5, label: '½h' },
+  { v: 1,   label: '1h' },
+  { v: 2,   label: '2h' },
+];
 import SaveIcon from '@mui/icons-material/Save';
-import RefreshIcon from '@mui/icons-material/Refresh';
 import FemMeshViewer3D from './FemMeshViewer3D';
+import FemMeshViewer2D from './FemMeshViewer2D';
+import { syncActiveMotor } from '../common/motorSettings';
+import HelpTip from '../common/HelpTip';
+import { meshSliderBounds, meshSliderValue, meshSizeLabel } from '../../lib/meshSliderBounds';
+import {
+  adoptMeshConfig, configRetryDelayMs, decideMeshSave, MESH_CONFIG_KEYS,
+  type MeshConfigKey, type MeshSettings,
+} from './meshSaveContract';
+
+// WebGL is unavailable in some embedded / sandboxed browser panels
+// ("GL_VENDOR = Disabled, Sandboxed = yes") → the 3-D (WebGL) viewer renders
+// black there.  Detect once and fall back to the Canvas2D viewer so the mesh
+// is always visible.
+const WEBGL_OK = (() => {
+  try {
+    const c = document.createElement('canvas');
+    return !!(c.getContext('webgl2') || c.getContext('webgl'));
+  } catch { return false; }
+})();
 import Viewcube from '../viewer3d/Viewcube';
 
-const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
+const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 // ── FEM mesh types ────────────────────────────────────────────────────────────
 interface FemMesh {
@@ -29,6 +91,8 @@ interface FemMesh {
   domain_counts: Record<string, number>;
   extent: [number, number, number, number];
   mesh_size_mm: number;
+  effective_mesh_size_mm?: number;   // what the iron was ACTUALLY meshed at (feature/4 floor)
+  feature_floor_mm?: number | null;  // the smallest-feature/4 quality floor
   note: string;
 }
 
@@ -42,13 +106,18 @@ const DOMAIN_RGBA: Record<number, [number, number, number, number]> = {
   5:  [55,  68,  82,  230],   // rotor          dark slate
   6:  [180, 180, 190, 210],   // shaft          grey
   7:  [115, 217, 204, 230],   // band           teal
-  8:  [56,  102, 140, 200],   // outer air      deep blue
+  8:  [80,  90,  110, 200],   // outer air — SAME colour as air: it is the same
+                              // substance, and two blues implied two materials
+                              // (user request)
+  9:  [63,  174, 90,  240],   // insulation     green   (Nomex/ceramic)
+  10: [217, 138, 58,  240],   // wire enamel    orange  (polyimide)
   44: [239, 68,  68,  240],   // magnet S       red
 };
 const DOMAIN_NAMES: Record<number, string> = {
   0: 'Air',     1: 'Stator',  2: 'Winding',  3: 'Air gap',
   4: 'Magnet N', 5: 'Rotor',  6: 'Shaft',
   7: 'Band',    8: 'Outer air',
+  9: 'Insulation', 10: 'Wire enamel',
   44: 'Magnet S',
 };
 
@@ -72,11 +141,11 @@ interface MotorGeo {
 // ── domain list (mirrors geometry_2d.py) ─────────────────────────────────────
 const DOMAINS = [
   { key: 'stator_core', label: 'Stator Core', color: '#3b82f6' },
-  { key: 'air_gap',     label: 'Air Gap',     color: '#94a3b8' },
+  { key: 'air_gap',     label: 'Air Gap',     color: 'var(--text-2)' },
   { key: 'rotor_core',  label: 'Rotor Core',  color: '#2563eb' },
   { key: 'magnet',      label: 'Magnets',     color: '#ef4444' },
   { key: 'slot',        label: 'Windings',    color: '#f59e0b' },
-  { key: 'shaft',       label: 'Shaft',       color: '#64748b' },
+  { key: 'shaft',       label: 'Shaft',       color: 'var(--text-3)' },
 ];
 
 // Estimate collocation points per domain (mirrors batch_size_interior in solver)
@@ -180,7 +249,7 @@ const FemMeshCanvas: React.FC<FemMeshCanvasProps> = ({
         ref={canvasRef}
         width={size}
         height={size}
-        style={{ borderRadius: 12, border: '1px solid #1e293b', display: 'block' }}
+        style={{ borderRadius: 12, border: '1px solid var(--line-soft)', display: 'block' }}
       />
     </Box>
   );
@@ -239,7 +308,7 @@ const CollocationPreview: React.FC<PreviewProps> = ({ cfg, geo }) => {
     const nA = Math.max(8, Math.min(cfg.n_angular, 128));
     const nS = Math.max(4, Math.min(cfg.n_angular_slots, 32));
     return [
-      ...ringDots(r.sh, r.ri, nR, nA, '#64748b', 'shaft'),
+      ...ringDots(r.sh, r.ri, nR, nA, 'var(--text-3)', 'shaft'),
       ...ringDots(r.ri, r.ro, nR, nA, '#3b82f6', 'rotor'),
       ...ringDots(r.ro, r.si, nR, nS, '#f59e0b', 'gap'),
       ...ringDots(r.si, r.so, nR, nA, '#2563eb', 'stator'),
@@ -248,24 +317,24 @@ const CollocationPreview: React.FC<PreviewProps> = ({ cfg, geo }) => {
 
   return (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-      <svg width={SVG_SIZE} height={SVG_SIZE} style={{ background: '#060d17', borderRadius: 12 }}>
+      <svg width={SVG_SIZE} height={SVG_SIZE} style={{ background: 'var(--panel-2)', borderRadius: 12 }}>
         {r && <>
           {/* domain annuli */}
-          <circle cx={CX} cy={CY} r={r.so} fill="none" stroke="#1e293b" strokeWidth={1}/>
-          <circle cx={CX} cy={CY} r={r.si} fill="none" stroke="#334155" strokeWidth={0.8}/>
-          <circle cx={CX} cy={CY} r={r.ro} fill="none" stroke="#334155" strokeWidth={0.8}/>
-          <circle cx={CX} cy={CY} r={r.ri} fill="none" stroke="#334155" strokeWidth={0.8}/>
-          <circle cx={CX} cy={CY} r={r.sh} fill="none" stroke="#1e293b" strokeWidth={0.8}/>
+          <circle cx={CX} cy={CY} r={r.so} fill="none" stroke="var(--panel)" strokeWidth={1}/>
+          <circle cx={CX} cy={CY} r={r.si} fill="none" stroke="var(--line)" strokeWidth={0.8}/>
+          <circle cx={CX} cy={CY} r={r.ro} fill="none" stroke="var(--line)" strokeWidth={0.8}/>
+          <circle cx={CX} cy={CY} r={r.ri} fill="none" stroke="var(--line)" strokeWidth={0.8}/>
+          <circle cx={CX} cy={CY} r={r.sh} fill="none" stroke="var(--panel)" strokeWidth={0.8}/>
           {/* filled regions */}
-          <circle cx={CX} cy={CY} r={r.so} fill="#1e293b22"/>
-          <circle cx={CX} cy={CY} r={r.si} fill="#0a1628"/>
-          <circle cx={CX} cy={CY} r={r.ri} fill="#1e3a5f22"/>
-          <circle cx={CX} cy={CY} r={r.sh} fill="#0f172a"/>
+          <circle cx={CX} cy={CY} r={r.so} fill="var(--panel)22"/>
+          <circle cx={CX} cy={CY} r={r.si} fill="var(--panel-2)"/>
+          <circle cx={CX} cy={CY} r={r.ri} fill="var(--line-accent)22"/>
+          <circle cx={CX} cy={CY} r={r.sh} fill="var(--app-bg)"/>
         </>}
         {dots}
         {/* center cross */}
-        <line x1={CX - 6} y1={CY} x2={CX + 6} y2={CY} stroke="#334155" strokeWidth={0.8}/>
-        <line x1={CX} y1={CY - 6} x2={CX} y2={CY + 6} stroke="#334155" strokeWidth={0.8}/>
+        <line x1={CX - 6} y1={CY} x2={CX + 6} y2={CY} stroke="var(--line)" strokeWidth={0.8}/>
+        <line x1={CX} y1={CY - 6} x2={CX} y2={CY + 6} stroke="var(--line)" strokeWidth={0.8}/>
       </svg>
     </Box>
   );
@@ -282,10 +351,36 @@ const MeshPanel: React.FC = () => {
   const [error,   setError]   = useState<string | null>(null);
 
   // ── FEM mesh state ─────────────────────────────────────────────────────────
-  const [view,        setView]        = useState<'fem' | 'pinn'>('fem');
+  const [view] = useState<'fem' | 'pinn'>('fem');   // always the real FEM mesh; no view toggle
+
+  // ── Load/save contract (user, 2026-09-07) ────────────────────────────────
+  // "захожу в Mesh и опять не сохранено то, что было до этого — там точно
+  //  стояло 1/2; почему параметры опять не сохраняются?"
+  // Sequence: 09:0x config.yaml mesh.n_sectors: 2 → 09:06:45 the API restarts
+  // while the app is open → 09:2x GET /api/mesh/config answers n_sectors 1 /
+  // outer_air_factor 1.3, i.e. this panel's CONSTANT defaults → 09:25:41 the
+  // user re-sets 1/2 by hand.  The browser pane had lost its localStorage, so
+  // the panel painted constants and a save path that was not gated on the
+  // config load wrote them to the server.
+  // The contract now, in three lines:
+  //   1. the SERVER config is the single source of truth; localStorage is only
+  //      a cache for instant paint and is overwritten by every successful load;
+  //   2. nothing is saved (and no mesh is built) until that load succeeds —
+  //      failures retry with backoff, saves stay blocked meanwhile;
+  //   3. a PATCH carries ONLY the settings the user changed in this session
+  //      (per-setting dirty flags) — a constant default can never reach the
+  //      server again.
+  const [cfgLoaded,  setCfgLoaded]  = useState(false);   // GET /api/mesh/config answered
+  const [dirty, setDirty] = useState<ReadonlySet<MeshConfigKey>>(() => new Set());
+  const markDirty = useCallback((k: MeshConfigKey) => {
+    setDirty(prev => (prev.has(k) ? prev : new Set(prev).add(k)));
+  }, []);
+
   // ── Persisted mesh settings (survive tab switches) ──────────────────────
-  // Hook: each setting reads its initial value from localStorage and writes
-  // back on every change.  Default symmetry is 1/4 per user request.
+  // Hook: each setting reads its initial value from localStorage — a per-browser
+  // CACHE for instant paint only, never an authority: the mount load below
+  // overwrites it with the server's value.  Default symmetry is Full (full disk)
+  // per user request.
   const usePersisted = <T,>(key: string, def: T) => {
     const [v, setV] = useState<T>(() => {
       try {
@@ -295,99 +390,465 @@ const MeshPanel: React.FC = () => {
     });
     useEffect(() => {
       try { localStorage.setItem(`mesh.${key}`, JSON.stringify(v)); } catch {}
+      rememberActiveDieSoon();
     }, [key, v]);
+    // Re-read after a duty load restores saved mesh settings (same contract
+    // as SimulationPanel's twin — see 'sim-settings-restored' there).
+    useEffect(() => {
+      const onRestore = () => {
+        try {
+          const raw = localStorage.getItem(`mesh.${key}`);
+          if (raw != null) setV(JSON.parse(raw) as T);
+        } catch { /* keep current */ }
+      };
+      window.addEventListener('sim-settings-restored', onRestore);
+      return () => window.removeEventListener('sim-settings-restored', onRestore);
+    }, [key]);
     return [v, setV] as const;
   };
 
   const [meshSizeMm,  setMeshSizeMm]  = usePersisted<number>('meshSize',   4.0);
   const [minSizeMm,   setMinSizeMm]   = usePersisted<number>('minSize',    0.3);
+  // Fillet-arc resolution (Ansys "Normal Deviation"): max angle per fillet
+  // segment. Lower → more segments per rounded corner → smoother fillet + finer
+  // mesh there. Wired to n_arc in the geometry (get_2d_polygons).
+  // Fillet-arc resolution for the PREVIEW build only. It was a slider, and a
+  // misleading one: the transient does not take this parameter at all — its mesh
+  // call hard-codes 8 deg — so moving it changed the picture and never the
+  // result. Fixed at the solver's own value so preview and solve agree.
+  const normalDev = 8.0;
   // 'Surface deviation' control removed: any value >0.01 mm Douglas-Peucker-
   // flattened the rounded rotor-tooth / fillet arcs into straight chords, so
   // the Mesh no longer matched the real geometry. The Mesh now always uses the
   // real geometry (tol 0.005 mm, sent below); density is set by Max/Min size.
-  const [normalDev,   setNormalDev]   = usePersisted<number>('normalDev',  6.0);
-  const [aspectRatio, setAspectRatio] = usePersisted<number>('aspect',     10.0);
   const [rotorAngle,  setRotorAngle]  = usePersisted<number>('rotorAngle', 0.0);
   // ── Solver-domain extensions (Ansys-style) ───────────────────────────────
   const [outerAirFactor, setOuterAirFactor] = usePersisted<number>('outerAir', 1.3);
-  const [motionBand,     setMotionBand]     = usePersisted<boolean>('motionBand', true);
-  const [bandThickness,  setBandThickness]  = usePersisted<number>('bandThickness', 0.4);
-  const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 4);   // 1/4 by default
+  const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 1);   // Full (full disk) by default
+  // Air-gap element rows PER SIDE of the slip midline (1-3, default 2). The
+  // value persists in config.yaml (loaded below, clamped to the new 1-3 range).
+  const [gapLayers,      setGapLayers]      = usePersisted<number>('gapLayers', 2);
+  // Bit-identical pole/slot mesh (template-copy): mesh ONE pole + ONE slot and
+  // rotate-copy them so every pole/slot is identical → no pole-to-pole mesh
+  // variance.  Read by the field & simulation fetches too (mesh.poleCopy).
+  const [poleCopy,       setPoleCopy]       = usePersisted<boolean>('poleCopy', false);
+  // Structured (concentric-ring) air gap — ALWAYS ON, no longer a choice.
+  // The Free/Structured chooser was a lie: every consumer read it as
+  // `structuredGap || ironTemplate`, and template iron defaults on, so the belt
+  // was forced regardless of what the button showed. Kept as state (not a
+  // constant) because the toggles below still set it and the request builders
+  // still read it.
+  const [structuredGap,  setStructuredGap]  = usePersisted<boolean>('structuredGap', true);
+  // (There is no element-order toggle any more. Second-order (P2) elements are
+  // the calculation basis — B linear per element, so the torque is smooth like
+  // ANSYS instead of carrying the P1 sliding-band staircase, and the mean is
+  // energy-consistent. P1 was deleted: it over-read the mean torque ~35 % and
+  // its ripple was a mesh artefact, so "off" meant "give me the wrong number".)
+  // Deterministic template iron: stator/rotor iron meshed by the structured
+  // slot/pole unit templates (real CadQuery contours via tags + node snap)
+  // instead of gmsh free triangulation — build-to-build deterministic results.
+  // Falls back to gmsh automatically when the topology doesn't fit the units.
+  const [ironTemplate,   setIronTemplate]   = usePersisted<boolean>('ironTemplate', true);
+  // Geometry-driven mesh: triangulate the REAL CadQuery polygons (every fillet)
+  // with a constrained Delaunay instead of warping a tensor template — the mesh
+  // conforms to magnet corners, tooth-tip r1 and the V-notch apex by
+  // construction.  Full-ring only for now (a 1/N request builds the full disk).
+  const [geoMesh,        setGeoMesh]        = usePersisted<boolean>('geoMesh', true);
+  // Template halves end exactly ON the iron circles, so ONLY the structured
+  // belt meshes the air gap between them.  Keep the two coupled on EVERY render
+  // (not just on toggle) — otherwise a persisted {template ON, Free gap} state
+  // rebuilds with a black, unmeshed gap.  Runs on mount too.
+  useEffect(() => {
+    if (ironTemplate && !structuredGap) setStructuredGap(true);
+  }, [ironTemplate, structuredGap, setStructuredGap]);
+  // Applying a descent design restores ITS eval params: restoreDescentEvalParams
+  // (motorStore) writes mesh.nSectors/gapLayers/meshSize/minSize/poleCopy straight
+  // to localStorage — but this panel seeded its state ONCE at mount, so it kept
+  // DISPLAYING the pre-apply values while every solve already read the new ones
+  // (until a reload).  Adopt the event's values live, same pattern as the
+  // SimulationPanel listener.  Setters are the usePersisted ones, so state and
+  // localStorage stay one value (re-writing the same value is a no-op).
+  // Applying a design is a USER action (they pressed Apply), so the adopted
+  // values are marked dirty and do get persisted — unlike the mount adoption
+  // from the server, which must never trigger a save (2026-09-07 incident).
+  useEffect(() => {
+    const onEval = (e: Event) => {
+      const p = (e as CustomEvent).detail || {};
+      if (typeof p.n_sectors    === 'number') { setNSectors(p.n_sectors);       markDirty('n_sectors'); }
+      if (typeof p.gap_layers   === 'number') { setGapLayers(p.gap_layers);     markDirty('gap_layers'); }
+      if (typeof p.mesh_size_mm === 'number') { setMeshSizeMm(p.mesh_size_mm);  markDirty('mesh_size_mm'); }
+      if (typeof p.min_size_mm  === 'number') { setMinSizeMm(p.min_size_mm);    markDirty('min_size_mm'); }
+      if (typeof p.pole_copy    === 'boolean') setPoleCopy(p.pole_copy);   // localStorage-only setting
+    };
+    window.addEventListener('descent-eval-params', onEval as EventListener);
+    return () => window.removeEventListener('descent-eval-params', onEval as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Loading a motor / duty / stored run writes that snapshot's mesh.* keys and
+  // fires 'sim-settings-restored'; the usePersisted hooks above adopt them.
+  // That is a USER action (they pressed ▶), and the sweep/optimizer read the
+  // mesh block from config.yaml, so the restored values must reach it — mark
+  // the config-owned settings dirty.  Restored values are real saved settings,
+  // never the constant defaults this gate exists to stop.
+  useEffect(() => {
+    const onRestore = () => setDirty(prev => {
+      const next = new Set(prev);
+      for (const k of MESH_CONFIG_KEYS) next.add(k);
+      return next;
+    });
+    window.addEventListener('sim-settings-restored', onRestore);
+    return () => window.removeEventListener('sim-settings-restored', onRestore);
+  }, []);
+  // ── Per-component mesh size (study mesh-density effect on results) ─────────
+  // {comp: target element size mm}. Empty/0 → use the global size for that part.
+  // Persisted under 'mesh.componentMesh' so the Simulation tab's solve reads the
+  // SAME sizes (see readComponentMesh() in the simulation store).
+  const [componentMesh, setComponentMesh] =
+    usePersisted<Record<string, number>>('componentMesh', {});
+  // Raw text being typed per field.  The numeric store (componentMesh) only
+  // keeps positive values, so a controlled type="number" input ate any sub-1
+  // entry: typing "0.5" fires onChange with "0" first → parses to 0 → key
+  // deleted → field snaps back to empty, making a value like Wire-Width/2
+  // (~0.5 mm) impossible to enter.  Hold the raw string here and commit to
+  // componentMesh only when it parses to > 0; the field shows the draft.
+  const [compDraft, setCompDraft] = useState<Record<string, string>>({});
+  const setCompSize = (k: string, raw: string) => {
+    const clean = raw.replace(/[^0-9.]/g, '');
+    setCompDraft(prev => ({ ...prev, [k]: clean }));
+    const v = parseFloat(clean);
+    setComponentMesh(prev => {
+      const next = { ...prev };
+      if (clean === '' || !isFinite(v) || v <= 0) delete next[k];
+      else next[k] = v;
+      return next;
+    });
+  };
+  const resetCompSizes = () => { setComponentMesh({}); setCompDraft({}); };
+  // A stored 'coil'/'shaft' value would keep steering solves with no field
+  // left to show it (the solve paths read mesh.componentMesh directly) — scrub
+  // them from the stored block on mount and whenever a duty restore writes the
+  // block back (duties saved before the removal still carry them).
+  useEffect(() => {
+    const scrub = () => setComponentMesh(prev => {
+      if (!DROPPED_MESH_KEYS.some(k => k in prev)) return prev;
+      const next = { ...prev };
+      for (const k of DROPPED_MESH_KEYS) delete next[k];
+      return next;
+    });
+    scrub();
+    window.addEventListener('sim-settings-restored', scrub);
+    return () => window.removeEventListener('sim-settings-restored', scrub);
+  }, [setComponentMesh]);
+  // Wire cell (½h / 1h / 2h).  A FACTOR of each wire's own height, so it stays
+  // meaningful after a wire_height edit.
+  const wireCell = (componentMesh[WIRE_CELL_KEY] as number | undefined) ?? 1;
+  const setWireCell = (v: number) => setComponentMesh(prev => {
+    const next = { ...prev };
+    if (v === 1) delete next[WIRE_CELL_KEY];   // 1h == the canonical default
+    else next[WIRE_CELL_KEY] = v;
+    return next;
+  });
+  // Only positive sizes reach the backend; "{}" means global everywhere.
+  const componentMeshJson = JSON.stringify(
+    Object.fromEntries(Object.entries(componentMesh).filter(([, v]) => v > 0)));
   // NOTE: the old "Extra fillet smoothing" control was removed — it applied a
   // Shapely buffer on top of the CadQuery fillets, deforming the Mesh geometry
   // away from the Geometry tab.  The Mesh now always uses the native geometry
   // (stator_fillet_mm = 0), identical to the Geometry tab.
-  const [showEdges,    setShowEdges]    = useState<boolean>(true);
-  const [showOutlines, setShowOutlines] = useState<boolean>(true);
-  const [fillDomains,  setFillDomains]  = useState<boolean>(true);
+  // Display is fixed: the mesh (domain fill + triangle edges + geometry outlines)
+  // is ALWAYS shown — no toggles.
   // Sliding-band TWO-mesh view (feature/sliding-band-fem branch).  When on,
   // fetches /mesh/build2d_sliding_band which returns the stator and rotor
   // meshes concatenated — moving the rotor_angle slider rigidly rotates
   // the rotor half without touching the stator triangulation.
-  const [slidingBand,  setSlidingBand]  = usePersisted<boolean>('slidingBand', false);
+  // Which mesh the tab DRAWS:
+  //   true  → the REAL sliding-band solver mesh (stator + rotor meshed
+  //           separately, iron clamped to 2 mm, gap floor 0.1 mm, 1008-node
+  //           slip ring) — exactly what computes T(t)/V(t)/losses.
+  //   false → the single-mesh viewer/static mesh (what the static field +
+  //           torque sweep solve on).
+  // Default = solver mesh, so "Mesh" shows what actually runs.  (New
+  // localStorage key so the default takes effect even for older sessions.)
+  // The Mesh tab always renders the REAL transient (sliding-band) solver mesh.
+  // The static single-mesh view was retired — we work only with the transient.
+  const solverMesh = true;
   const [femMesh,     setFemMesh]     = useState<FemMesh | null>(null);
   const [femLoading,  setFemLoading]  = useState<boolean>(false);
   const [femError,    setFemError]    = useState<string | null>(null);
 
-  const fetchFemMesh = useCallback(() => {
+  // Monotonic build id: only the LATEST build's result is applied, so a stale build
+  // (e.g. the premature mount build with default settings) can't overwrite the
+  // config-correct one — that mismatch is what showed a 1/4 mesh under a "Full"
+  // toggle on first open.  `over` lets the mount build use the just-loaded config
+  // values directly, before the async setState has propagated to these closures.
+  const buildSeq = useRef(0);
+  const fetchFemMesh = useCallback((over?: Partial<{
+    mesh_size_mm: number; min_size_mm: number; normal_deviation: number;
+    outer_air_factor: number; gap_layers: number; n_sectors: number;
+  }>) => {
+    const mySeq = ++buildSeq.current;
     setFemLoading(true);
     setFemError(null);
-    const base = slidingBand
+    const _ms = (over?.mesh_size_mm     ?? meshSizeMm).toString();
+    const _mn = (over?.min_size_mm      ?? minSizeMm).toString();
+    const _nd = (over?.normal_deviation ?? normalDev).toString();
+    const _oa = (over?.outer_air_factor ?? outerAirFactor).toString();
+    const _gl = (over?.gap_layers       ?? gapLayers).toString();
+    const _ns = (over?.n_sectors        ?? nSectors).toString();
+    const base = solverMesh
       ? `${API}/api/simulation/mesh/build2d_sliding_band`
       : `${API}/api/simulation/mesh/build2d`;
-    const qs = new URLSearchParams(slidingBand ? {
-      // Sliding-band endpoint now accepts the full curvature-refinement set
-      // so the Normal/Surface deviation + Aspect ratio + Fillet sliders
-      // control the rotor & stator half meshes too.
+    const qs = new URLSearchParams(solverMesh ? {
       rotor_angle_deg:   rotorAngle.toString(),
-      mesh_size_mm:      meshSizeMm.toString(),
-      min_size_mm:       minSizeMm.toString(),
+      mesh_size_mm:      _ms,
+      min_size_mm:       _mn,
       surface_deviation: '0.005',     // real geometry — no flattening
-      normal_deviation:  normalDev.toString(),
-      aspect_ratio:      aspectRatio.toString(),
-      outer_air_factor:  outerAirFactor.toString(),
-      band_thickness_mm: bandThickness.toString(),
-      n_sectors:         nSectors.toString(),
+      normal_deviation:  _nd,
+      outer_air_factor:  _oa,
+      gap_layers:        _gl,
+      n_sectors:         _ns,
       stator_fillet_mm:  '0',          // native geometry — no extra smoothing
+      component_mesh:    componentMeshJson,
+      pole_copy:         poleCopy ? 'true' : 'false',
+      structured_gap:    structuredGap ? 'true' : 'false',   // ANSYS-style concentric-ring gap
+      iron_template:     ironTemplate ? 'true' : 'false',    // deterministic template iron
+      geo_mesh:          geoMesh ? 'true' : 'false',         // geometry-driven CDT (real fillets)
     } : {
-      mesh_size_mm:        meshSizeMm.toString(),
-      min_size_mm:         minSizeMm.toString(),
+      mesh_size_mm:        _ms,
+      min_size_mm:         _mn,
       surface_deviation:   '0.005',   // real geometry — no flattening
-      normal_deviation:    normalDev.toString(),
-      aspect_ratio:        aspectRatio.toString(),
+      normal_deviation:    _nd,
       rotor_angle_deg:     rotorAngle.toString(),
-      outer_air_factor:    outerAirFactor.toString(),
-      motion_band:         motionBand ? 'true' : 'false',
-      band_thickness_mm:   bandThickness.toString(),
-      n_sectors:           nSectors.toString(),
+      outer_air_factor:    _oa,
+      gap_layers:          _gl,
+      n_sectors:           _ns,
       stator_fillet_mm:    '0',          // native geometry — no extra smoothing
+      component_mesh:      componentMeshJson,
     }).toString();
     fetch(`${base}?${qs}`)
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         return r.json();
       })
-      .then((d: FemMesh) => { setFemMesh(d); setFemLoading(false); })
-      .catch(e => { setFemError(String(e)); setFemLoading(false); });
-  }, [slidingBand, meshSizeMm, minSizeMm, normalDev, aspectRatio, rotorAngle,
-      outerAirFactor, motionBand, bandThickness, nSectors]);
+      .then((d: FemMesh) => { if (mySeq !== buildSeq.current) return; setFemMesh(d); setFemLoading(false); })
+      .catch(e => { if (mySeq !== buildSeq.current) return; setFemError(String(e)); setFemLoading(false); });
+  }, [solverMesh, meshSizeMm, minSizeMm, normalDev, rotorAngle,
+      outerAirFactor, gapLayers, nSectors, componentMeshJson, poleCopy, structuredGap,
+      ironTemplate, geoMesh]);
 
-  // Load current config + geometry on mount
+  // ── Max-element-size bounds = the feature/4 quality floor ─────────────────
+  // Above the floor the solver clamps the iron anyway (those slider positions
+  // were dead — the "Max size doesn't change the mesh" report).  Bounding the
+  // slider to the floor makes its ENTIRE range live.  Floor comes from the last
+  // mesh build (feature_floor_mm); fall back to the old fixed range until then.
+  // The gate used to require floor > 0.4 mm — meant to ignore a missing/zero
+  // floor, it instead excluded every genuinely tiny motor (Ø12 CIANO14:
+  // floor ~0.3-0.5 mm), which fell through to the 1.5-8 mm fallback range —
+  // entirely ABOVE the real floor, so the backend clamped every slider
+  // position to the same effective size and dragging did nothing
+  // (2026-09-25: "изменяю на моторе, а ничего не меняется").  Any positive
+  // floor is real and must bind the slider.
+  const _floor = (femMesh?.feature_floor_mm && femMesh.feature_floor_mm > 0)
+    ? femMesh.feature_floor_mm : null;
+  // Bounds + chip precision live in lib/meshSliderBounds (node-tested).
+  const meshBounds = meshSliderBounds(_floor);
+  const { min: meshMin, max: meshMax, step: meshStep } = meshBounds;
+  // Snap a persisted value sitting above the floor down onto it, so the Chip and
+  // the transient solve use the size that is ACTUALLY meshed (not a dead 8 mm).
+  // NOT marked dirty: this is the mesher clamping the user's value, not the user
+  // changing it — machine-driven corrections must never write to the server
+  // (2026-09-07 incident).  The clamp still applies to every build.
   useEffect(() => {
-    fetch(`${API}/api/mesh/config`)
-      .then(r => r.json())
-      .then(d => setCfg(d))
-      .catch(() => {});
+    if (_floor && meshSizeMm > _floor + 1e-6) setMeshSizeMm(+_floor.toFixed(2));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [_floor]);
+
+  // ── Load the server config on mount — with retry, and NO fallback ─────────
+  // The server config is the single source of truth.  Until it answers:
+  //   • the settings are shown in a loading state and cannot be edited,
+  //   • no PATCH can fire (decideMeshSave refuses on serverLoaded === false),
+  //   • no mesh is built — the old `.catch(() => fetchFemMesh())` built the
+  //     preview from CONSTANT defaults while the config was unknown, which is
+  //     how a 1/2 machine came up as "Full" on 2026-09-07.
+  // A restarting API (09:06:45 that day) is retried at 1, 2, 4, 8, 16, 32, 60 s.
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    const load = () => {
+      fetch(`${API}/api/mesh/config`)
+        .then(async r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+        .then(d => {
+          if (!alive) return;
+          setCfg(d);
+          // The PERSISTED FEM mesh settings (config.yaml) WIN over the
+          // per-browser localStorage cache — the sliders are then identical in
+          // every session and every browser.  A difference here just means the
+          // cache is stale; the server wins silently (dev-only log).
+          const srv = adoptMeshConfig(d);
+          if (import.meta.env.DEV) {
+            const cache: MeshSettings = {
+              mesh_size_mm: meshSizeMm, min_size_mm: minSizeMm,
+              outer_air_factor: outerAirFactor, gap_layers: gapLayers,
+              n_sectors: nSectors,
+            };
+            const diff = Object.entries(srv)
+              .filter(([k, v]) => cache[k as MeshConfigKey] !== v)
+              .map(([k, v]) => `${k}: ${cache[k as MeshConfigKey]} → ${v}`);
+            if (diff.length) console.info('[mesh] server config wins over the local cache —', diff.join(', '));
+          }
+          if (srv.mesh_size_mm     !== undefined) setMeshSizeMm(srv.mesh_size_mm);
+          if (srv.min_size_mm      !== undefined) setMinSizeMm(srv.min_size_mm);
+          if (srv.outer_air_factor !== undefined) setOuterAirFactor(srv.outer_air_factor);
+          if (srv.gap_layers       !== undefined) setGapLayers(srv.gap_layers);
+          // normal_deviation is FIXED at the solver's 8° (see const above) — the
+          // setter is gone, and calling it here threw a ReferenceError that aborted
+          // this handler mid-way (n_sectors never adopted, the gate never set,
+          // initial mesh built by the .catch instead).
+          if (srv.n_sectors        !== undefined) setNSectors(srv.n_sectors);
+          setCfgLoaded(true);   // editing + saving unlocked ONLY here
+          // Build the initial mesh with the JUST-LOADED config values (not the stale
+          // defaults) so the displayed mesh matches the Symmetry toggle on first open.
+          fetchFemMesh({
+            mesh_size_mm:     srv.mesh_size_mm,
+            min_size_mm:      srv.min_size_mm,
+            normal_deviation: typeof d.normal_deviation === 'number' ? d.normal_deviation : undefined,
+            outer_air_factor: srv.outer_air_factor,
+            gap_layers:       srv.gap_layers,
+            n_sectors:        srv.n_sectors,
+          });
+        })
+        .catch(() => {
+          if (!alive) return;
+          timer = setTimeout(load, configRetryDelayMs(attempt));
+          attempt += 1;
+        });
+    };
+    load();
 
     fetch(`${API}/api/geometry/summary`)
       .then(r => r.json())
-      .then(d => setGeo(d))
+      .then(d => { if (alive) setGeo(d); })
       .catch(() => {});
-
-    // Auto-build the initial FEM mesh
-    fetchFemMesh();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── One-click symmetry switch ───────────────────────────────────────────
+  // The Full / 1/2 / 1/4 toggle rebuilds the preview immediately.  Persisting is
+  // NOT done here any more: this effect fires for every source of an nSectors
+  // change — including the mount adoption and the validity snap below — and it
+  // called saveMeshConfig() UNGATED by the config load.  Under React StrictMode
+  // the mount effects run twice with the refs preserved, so the second pass took
+  // the `symFirstRun.current === false` branch and PATCHed whatever the panel
+  // held at that instant: with an empty localStorage, the constant defaults
+  // (n_sectors 1, outer_air 1.3) — exactly what the server answered at 09:2x on
+  // 2026-09-07 after the 09:06:45 API restart.  The toggle's own onChange now
+  // marks the setting dirty and the debounced saver below writes it.
+  const symFirstRun = useRef(true);
+  useEffect(() => {
+    if (!cfgLoaded) return;            // never build from constants
+    if (symFirstRun.current) { symFirstRun.current = false; return; }
+    fetchFemMesh();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfgLoaded, nSectors]);
+
+  // ── Valid symmetry sectors for THIS motor ───────────────────────────────
+  // A sector model is only valid for divisors of GCD(slots, poles): each wedge
+  // must hold a whole number of slots AND poles.  e.g. 12s/14p → GCD 2 → {1,2}
+  // (only Full or 1/2); 24s/28p → GCD 4 → {1,2,4}.  Offering an invalid sector
+  // (e.g. 1/4 of a 12-slot motor) builds a broken cut mesh.
+  const _gcd = (a: number, b: number): number => (b === 0 ? a : _gcd(b, a % b));
+  const symSlots = geo?.num_slots ?? 24;
+  const symPoles = geo?.num_poles ?? 28;
+  const symGcd = Math.max(1, _gcd(Math.round(symSlots), Math.round(symPoles)));
+  const validSectors = [1, 2, 3, 4, 6, 8, 12].filter(s => symGcd % s === 0);
+  // If the loaded nSectors is invalid for this motor, snap to Full (always valid).
+  // NOT marked dirty — a machine-driven correction, so it changes the preview but
+  // never writes to config (2026-09-07: automatic writes are what lost the 1/2).
+  useEffect(() => {
+    if (geo && !validSectors.includes(nSectors)) {
+      setNSectors(validSectors[0]);   // = 1 (Full) — validSectors always includes 1
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geo, symGcd]);
+
+  // ── Standard / Periodic (pole-copy) switch ──────────────────────────────
+  // Toggling it must REBUILD the displayed mesh immediately, like the symmetry
+  // switch — otherwise the change silently does nothing until the next "Rebuild
+  // mesh" click (the bug the user hit: "no difference").  poleCopy is NOT a
+  // config.yaml field (it lives in localStorage and is read by the field/sim
+  // fetches too), so we just re-fetch the Mesh-tab mesh here.
+  const poleCopyFirstRun = useRef(true);
+  useEffect(() => {
+    if (!cfgLoaded) return;            // never build from constants
+    if (poleCopyFirstRun.current) { poleCopyFirstRun.current = false; return; }
+    fetchFemMesh();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfgLoaded, poleCopy]);
+
+  // Auto-rebuild on EVERY mesh-affecting setting, debounced ~450 ms after the
+  // last change.  Sliders coalesce a drag into one build; the pipeline
+  // toggles (geo mesh / iron template / structured gap) and the per-part
+  // element sizes used to re-mesh only on the "Rebuild mesh" button, which
+  // made a silently stale preview — the button is gone, this effect is the
+  // whole contract now.  First run skipped (mount already builds).
+  const densityFirstRun = useRef(true);
+  useEffect(() => {
+    if (!cfgLoaded) return;            // config unknown → never build from constants
+    if (densityFirstRun.current) { densityFirstRun.current = false; return; }
+    const id = setTimeout(() => fetchFemMesh(), 450);
+    return () => clearTimeout(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfgLoaded, meshSizeMm, minSizeMm, normalDev, gapLayers, outerAirFactor,
+      ironTemplate, geoMesh, structuredGap, componentMeshJson]);
+
+  // ── Persist to config.yaml — user changes only ───────────────────────────
+  // The body carries ONLY the settings the user moved in this session (dirty
+  // flags).  Everything else is omitted, so the server keeps the value this
+  // browser adopted from it — a value the panel never learned (empty
+  // localStorage + an API restart, 2026-09-07) can no longer be overwritten
+  // with a constant default.  normal_deviation is a const here, never a user
+  // setting, so it is not sent at all any more.
+  const patchMeshConfig = useCallback((patch: Partial<MeshSettings>) => {
+    if (Object.keys(patch).length === 0) return;
+    fetch(`${API}/api/mesh/config`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).catch(() => {});
+  }, []);
+
+  // Debounced save of the user's edits.  Two gates, both required: the config
+  // must have loaded, and the user must have changed something in this session.
+  // No mount/adoption effect can reach this — that is the whole point.
+  const pendingSave = useRef<Partial<MeshSettings> | null>(null);
+  useEffect(() => {
+    if (!cfgLoaded || dirty.size === 0) return;
+    const decision = decideMeshSave({
+      mesh_size_mm: meshSizeMm, min_size_mm: minSizeMm,
+      outer_air_factor: outerAirFactor, gap_layers: gapLayers, n_sectors: nSectors,
+    }, dirty, cfgLoaded);
+    if (!decision.save) {
+      if (import.meta.env.DEV) console.info('[mesh] save skipped —', decision.reason);
+      return;
+    }
+    pendingSave.current = decision.patch;
+    const id = setTimeout(() => {
+      pendingSave.current = null;
+      patchMeshConfig(decision.patch);
+      syncActiveMotor();
+    }, 700);
+    return () => clearTimeout(id);
+  }, [patchMeshConfig, cfgLoaded, dirty,
+      meshSizeMm, minSizeMm, outerAirFactor, gapLayers, nSectors]);
+
+  // The Mesh tab is NOT keepMounted (App.tsx): leaving it unmounts the panel and
+  // clears the 700 ms debounce above.  Flush whatever was still pending, or an
+  // edit made just before switching tabs is silently dropped — the same "why are
+  // my parameters not saved again?" the user reported on 2026-09-07.
+  useEffect(() => () => {
+    if (pendingSave.current) { patchMeshConfig(pendingSave.current); pendingSave.current = null; }
+  }, [patchMeshConfig]);
 
   const totalPoints = useMemo(() => {
     const pts = estimatePoints(cfg);
@@ -416,147 +877,126 @@ const MeshPanel: React.FC = () => {
   };
 
   return (
-    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: '#060d17' }}>
+    <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
 
       {/* ── LEFT: controls ── */}
       <Box sx={{
         width: 320, flexShrink: 0, overflowY: 'auto',
-        borderRight: '1px solid #1e293b', p: 2,
+        borderRight: '1px solid var(--line-soft)', p: 2,
         display: 'flex', flexDirection: 'column', gap: 2,
       }}>
 
-        {/* ── View toggle ── */}
-        <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
-            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.75 }}>
-            View
-          </Typography>
-          <ToggleButtonGroup
-            value={view} exclusive size="small"
-            onChange={(_, v) => v && setView(v as 'fem' | 'pinn')}
-            sx={{ width: '100%',
-              '& .MuiToggleButton-root': { flex: 1, py: 0.5, fontSize: 11,
-                color: '#64748b', borderColor: '#1e293b', textTransform: 'none',
-                '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
-                  borderColor: '#3b82f6' } } }}>
-            <ToggleButton value="fem">FEM mesh (real)</ToggleButton>
-            <ToggleButton value="pinn">PINN collocation</ToggleButton>
-          </ToggleButtonGroup>
-        </Box>
-
-        <Divider sx={{ borderColor: '#1e293b' }}/>
-
         {view === 'fem' && (
           <>
-            <Box>
-              <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
-                letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.5 }}>
-                FEM Triangle Mesh
-              </Typography>
-              <Typography sx={{ fontSize: 11, color: '#334155' }}>
-                Conforming mesh of the real CadQuery cross-section (gmsh OCC).
-                Used by the scikit-fem 2-D magnetostatics solver.
-              </Typography>
-            </Box>
-
+            {/* One short line + tooltip (UI rule).  Shown while the server
+                config is unknown: the settings are dimmed and locked, nothing
+                is saved and no mesh is built — the state that used to silently
+                fall back to constants (2026-09-07). */}
+            {!cfgLoaded && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <CircularProgress size={12} sx={{ color: '#3b82f6' }}/>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  Mesh settings: waiting for the API
+                </Typography>
+                <HelpTip title="These settings live in the server config (motor_config.yaml), which is the single source of truth. The panel shows and saves them only after the API answers — retrying automatically — so a restarting API can never leave factory defaults written over your saved values." />
+              </Box>
+            )}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2,
+              opacity: cfgLoaded ? 1 : 0.45,
+              pointerEvents: cfgLoaded ? 'auto' : 'none' }}>
             {/* mesh_size_mm */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Max element size
-                  <Tooltip title="Triangle edge length in open regions (mesh_size_mm)" placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  <Tooltip title={`Coarsest triangle edge length in the iron/body. Bounded to the feature/2 quality floor${_floor ? ` = ${_floor.toFixed(2)} mm for this motor (2 elements across the smallest tooth/slot)` : ''}: above it the solver clamps anyway, so the slider stops there and every position actually changes the mesh. Lower it to refine (finer + more accurate, slower).`} placement="right">
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
-                <Chip label={`${meshSizeMm.toFixed(1)} mm`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+                <Chip label={meshSizeLabel(meshSizeMm, meshBounds)} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
               </Box>
               <Slider
-                value={meshSizeMm} min={1.5} max={8} step={0.5}
-                onChange={(_, v) => setMeshSizeMm(v as number)}
+                value={meshSliderValue(meshSizeMm, meshBounds)} min={meshMin} max={meshMax} step={meshStep}
+                disabled={!cfgLoaded}
+                // A user move is the ONLY thing that may be written back to the
+                // server config (2026-09-07 rule) — hence the dirty flag here.
+                onChange={(_, v) => { setMeshSizeMm(v as number); markDirty('mesh_size_mm'); }}
                 sx={{ color: '#3b82f6' }}
               />
+              {/* Owner UI rule: never let an overridden control read as broken —
+                  one short ALWAYS-VISIBLE line, not just a hover tooltip.  On a
+                  small motor the floor pins the whole slider into a narrow band
+                  (e.g. 0.2-0.5 mm) — every position is live, but the range looks
+                  "stuck" without this line (2026-09-25 report: "меняю, а ничего
+                  не меняется" on the Ø12 CIANO14). */}
+              {_floor && (
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
+                  <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
+                    Range {meshMin.toFixed(2)}–{meshMax.toFixed(2)} mm for this motor
+                  </Typography>
+                  <HelpTip title={`The top of the range is 2 elements across the smallest tooth/slot (${_floor.toFixed(2)} mm); coarser would mesh identically, so the slider stops there. Every position in the range changes the mesh and the value is used by the solve. The air gap is resolved separately by the gap layers.`} />
+                </Box>
+              )}
             </Box>
 
-            {/* min_size_mm */}
-            <Box>
+            {/* min_size_mm — a LEGACY gmsh parameter.  The geometry-driven
+                mesh (the solver's default) never reads it: its floor is set
+                by the wire outlines + the q20 quality bound.  A live slider
+                that provably does nothing reads as a broken mesh pipeline
+                (user hit exactly that), so it is disabled while geo mesh is
+                on, with the reason on the ⓘ. */}
+            <Box sx={{ opacity: geoMesh ? 0.45 : 1 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Min element size
-                  <Tooltip title="Lower bound on triangle size at fillets / thin features" placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  <Tooltip placement="right" title={geoMesh
+                    ? 'Not used by the geometry-driven mesh — its minimum size is set by the wire outlines and the q20 quality bound. This slider only affects the legacy gmsh mesher (Geometry-driven mesh OFF).'
+                    : 'Lower bound on triangle size at fillets / thin features (gmsh mesher)'}>
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
-                <Chip label={`${minSizeMm.toFixed(2)} mm`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+                <Chip label={geoMesh ? 'not used' : `${minSizeMm.toFixed(2)} mm`} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--panel)', color: 'var(--text-2)' }}/>
               </Box>
               <Slider
-                value={minSizeMm} min={0.1} max={2.0} step={0.05}
-                onChange={(_, v) => setMinSizeMm(v as number)}
+                value={minSizeMm} min={0.1} max={2.0} step={0.05} disabled={geoMesh || !cfgLoaded}
+                onChange={(_, v) => { setMinSizeMm(v as number); markDirty('min_size_mm'); }}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>
 
-            {/* normal deviation */}
-            <Box>
+            {/* ── PREVIEW ONLY ─────────────────────────────────────────────
+                Rotor angle rotates the picture below, nothing else.  The
+                transient always starts the rotor at 0 and sweeps a full
+                electrical period, so this cannot change a result — it used to
+                sit among the solver settings and read like one. */}
+            <Box sx={{ borderTop: '1px solid var(--line-soft)', pt: 1.5, mt: 0.5 }}>
+              <Typography sx={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+                color: 'var(--text-4)', textTransform: 'uppercase', mb: 1 }}>
+                Preview only — does not affect results
+              </Typography>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Normal deviation
-                  <Tooltip title="Ansys equivalent — max angle between two consecutive boundary segments. Lower = smoother fillets" placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)', display: 'flex',
+                  alignItems: 'center', gap: 0.5 }}>
+                  Rotor angle
+                  <HelpTip title="0…25.71° mech = one electrical period. Rotates the mesh view only — the transient always starts the rotor at 0 and sweeps a full period, so this cannot change a result." />
                 </Typography>
-                <Chip label={`${normalDev.toFixed(1)}°`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
-              </Box>
-              <Slider
-                value={normalDev} min={1.0} max={20.0} step={0.5}
-                onChange={(_, v) => setNormalDev(v as number)}
-                sx={{ color: '#3b82f6' }}
-              />
-            </Box>
-
-            {/* aspect ratio */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Aspect ratio max
-                  <Tooltip title="Maximum triangle aspect ratio (long-edge / short-edge)" placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
-                </Typography>
-                <Chip label={`${aspectRatio.toFixed(0)}`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
-              </Box>
-              <Slider
-                value={aspectRatio} min={2} max={30} step={1}
-                onChange={(_, v) => setAspectRatio(v as number)}
-                sx={{ color: '#3b82f6' }}
-              />
-            </Box>
-
-            {/* rotor angle */}
-            <Box>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>Rotor angle</Typography>
                 <Chip label={`${rotorAngle.toFixed(1)}°`} size="small"
-                  sx={{ fontSize: 11, height: 20, bgcolor: '#1e293b', color: '#94a3b8' }}/>
+                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--panel)', color: 'var(--text-2)' }}/>
               </Box>
               <Slider
                 value={rotorAngle} min={0} max={25.71} step={0.5}
                 onChange={(_, v) => setRotorAngle(v as number)}
                 sx={{ color: '#3b82f6' }}
               />
-              <Typography sx={{ fontSize: 9, color: '#334155' }}>
-                0…25.71° mech = one electrical period
-              </Typography>
             </Box>
 
-            <Divider sx={{ borderColor: '#1e293b' }}/>
+            <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
             {/* ── Solver-domain section (Ansys-style) ────────────────────── */}
             <Box>
-              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569',
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-4)',
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
                 Solver Domain
               </Typography>
@@ -565,211 +1005,283 @@ const MeshPanel: React.FC = () => {
             {/* Outer air ring factor */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Outer air ring
                   <Tooltip title="Extend mesh beyond stator OD so the Dirichlet A=0 far-field BC is applied on air, not iron. 1.0 = off; 1.3 ≈ Ansys Region Padding 30%." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
                 <Chip label={outerAirFactor <= 1.001 ? 'off'
                   : `×${outerAirFactor.toFixed(2)}`} size="small"
                   sx={{ fontSize: 11, height: 20,
-                    bgcolor: outerAirFactor > 1.001 ? '#1e3a5f' : '#1e293b',
-                    color: outerAirFactor > 1.001 ? '#93c5fd' : '#94a3b8' }}/>
+                    bgcolor: outerAirFactor > 1.001 ? 'var(--line-accent)' : 'var(--panel)',
+                    color: outerAirFactor > 1.001 ? '#93c5fd' : 'var(--text-2)' }}/>
               </Box>
               <Slider
-                value={outerAirFactor} min={1.0} max={2.0} step={0.05}
-                onChange={(_, v) => setOuterAirFactor(v as number)}
+                value={outerAirFactor} min={1.0} max={2.0} step={0.05} disabled={!cfgLoaded}
+                onChange={(_, v) => { setOuterAirFactor(v as number); markDirty('outer_air_factor'); }}
                 sx={{ color: '#3b82f6' }}
               />
             </Box>
 
-            {/* Motion band */}
+            {/* Air element size — open air / shaft / far-field (same store as
+                the Per-part "Outer air" field; 0 = auto coarse) */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Motion band
-                  <Tooltip title="Thin slip-surface ring inside the air gap. Transient solver re-meshes only this band as the rotor sweeps; rotor-side air rotates rigidly with the rotor." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
+                  Air element size
+                  <Tooltip title="Element size (mm) for the open air: outer far-field, slot pockets, shaft core. Auto = coarse (≈2× the iron element, ≥3 mm) — the open air carries little flux, so coarse is cheap and safe. Same setting as the Per-part 'Outer air' field below." placement="right">
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
-                <ToggleButtonGroup
-                  value={motionBand ? 'on' : 'off'} exclusive size="small"
-                  onChange={(_, v) => v && setMotionBand(v === 'on')}
-                  sx={{ '& .MuiToggleButton-root': { py: 0.1, px: 1,
-                    fontSize: 10, color: '#64748b', borderColor: '#1e293b',
-                    textTransform: 'none',
-                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
-                      borderColor: '#3b82f6' } } }}>
-                  <ToggleButton value="off">Off</ToggleButton>
-                  <ToggleButton value="on">On</ToggleButton>
-                </ToggleButtonGroup>
+                <Chip label={(componentMesh.outer ?? 0) > 0
+                  ? `${(componentMesh.outer as number).toFixed(1)} mm` : 'auto'} size="small"
+                  sx={{ fontSize: 11, height: 20,
+                    bgcolor: (componentMesh.outer ?? 0) > 0 ? 'var(--line-accent)' : 'var(--panel)',
+                    color: (componentMesh.outer ?? 0) > 0 ? '#93c5fd' : 'var(--text-2)' }}/>
               </Box>
-              {motionBand && (
-                <>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between',
-                    mb: 0.5, mt: 0.5 }}>
-                    <Typography sx={{ fontSize: 11, color: '#64748b' }}>
-                      Band thickness
-                    </Typography>
-                    <Chip label={`${bandThickness.toFixed(2)} mm`} size="small"
-                      sx={{ fontSize: 10, height: 18, bgcolor: '#1e293b', color: '#94a3b8' }}/>
-                  </Box>
-                  <Slider
-                    value={bandThickness} min={0.1} max={1.0} step={0.05}
-                    onChange={(_, v) => setBandThickness(v as number)}
-                    sx={{ color: '#3b82f6' }}
-                  />
-                </>
-              )}
+              <Slider
+                value={componentMesh.outer ?? 0} min={0} max={8} step={0.5}
+                onChange={(_, v) => {
+                  const n = v as number;
+                  setCompSize('outer', n > 0 ? String(n) : '');
+                }}
+                sx={{ color: '#3b82f6' }}
+              />
             </Box>
 
-            {/* Sliding-band TWO-mesh view */}
+            {/* Air-gap layers — element rows on EACH side of the slip midline */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
-                  Sliding-band view
-                  <Tooltip title="Build stator and rotor as TWO separate meshes; rigidly rotate the rotor mesh's node coordinates by the rotor angle slider (topology stays the same). The band-interface nodes on each side are paired master-slave for the FEM solve (SB-5d, in progress)." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
+                  Air-gap fidelity (layers/side)
+                  <Tooltip title="The single air-gap fidelity control. Sets BOTH the radial element rows per side of the sliding midline (torque via Maxwell stress) AND the tangential slip-ring node count (eddy-loss accuracy — more nodes = less node-identification jitter). 2 is the sweet spot for mean torque; raise to 4+ for the cleanest eddy/solid losses (slower, ~gap=4 ≈ the retired High-fidelity mode). Drives the mesh preview and the Simulation solve identically." placement="right">
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                <Chip label={`${gapLayers.toFixed(0)}/side`} size="small"
+                  sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
+              </Box>
+              <Slider
+                value={gapLayers} min={1} max={6} step={1} disabled={!cfgLoaded}
+                marks onChange={(_, v) => { setGapLayers(v as number); markDirty('gap_layers'); }}
+                sx={{ color: '#06b6d4' }}
+              />
+            </Box>
+
+            {/* Air-gap mesh: free triangles vs ANSYS-style concentric rings (experimental) */}
+            <Box>
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-4)',
+                letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
+                Air-gap mesh
+              </Typography>
+              {/* Element order is no longer a choice: every solve is P2. The
+                  switch that used to sit here selected P1, whose mean torque
+                  over-read ~35 % and whose ripple was a mesh staircase. */}
+              <Tooltip placement="right" title="Every solve uses second-order (P2) finite elements — the flux density B is linear inside each element instead of piecewise-constant, so the torque is smooth like ANSYS Maxwell (2nd-order) and the mean is energy-consistent. RAW ripple is honest with NO filter (measured ~55x lower non-6k noise floor than the retired P1 basis). Requires the structured belt, which is always on.">
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Elements</Typography>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-4)' }}>P2 (2nd order)</Typography>
+                </Box>
+              </Tooltip>
+              <Tooltip placement="right" title="Stator/rotor iron meshed by structured slot/pole unit templates on the real CadQuery contours (pocket fillets, vent, OD fillet) — build-to-build deterministic mesh and ripple. Works on the full disk and 1/2, 1/4, 1/6 sectors. Requires the Structured (rings) air gap (auto-enabled); falls back to gmsh when the topology doesn't fit the units.">
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Template iron (deterministic)</Typography>
+                  <Switch size="small" checked={ironTemplate}
+                    onChange={(e) => {
+                      setIronTemplate(e.target.checked);
+                      // template halves end ON the iron circles — only the
+                      // structured belt meshes the gap between them
+                      if (e.target.checked) setStructuredGap(true);
+                      else setGeoMesh(false);   // geo rides the template path
+                    }} />
+                </Box>
+              </Tooltip>
+              <Tooltip placement="right" title="Triangulate the REAL CadQuery polygons (every fillet) with a constrained Delaunay instead of warping a tensor template — the mesh conforms to magnet corners, tooth-tip r1 and the V-notch apex by construction. Rides the Template-iron path (auto-enables it). Full disk only for now: a 1/N request builds the full ring.">
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Geometry-driven mesh (fillets)</Typography>
+                  <Switch size="small" checked={geoMesh}
+                    onChange={(e) => {
+                      setGeoMesh(e.target.checked);
+                      if (e.target.checked) { setIronTemplate(true); setStructuredGap(true); }
+                    }} />
+                </Box>
+              </Tooltip>
+            </Box>
+
+            {/* ── Per-component mesh size (mesh-convergence study) ───────── */}
+            <Box>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
+                  Per-part element size (mm)
+                  <Tooltip title="Target triangle size INSIDE each motor part. Empty = use the global Max size for that part. Set a finer/coarser value per part to study how mesh density changes the simulated torque/losses (mesh-convergence). Applies to both the mesh preview and the Simulation solve. A Windings size here overrides the Wire cell factor below." placement="right">
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                  </Tooltip>
+                </Typography>
+                {Object.keys(componentMesh).length > 0 && (
+                  <Chip label="reset" size="small" onClick={resetCompSizes}
+                    sx={{ fontSize: 10, height: 18, bgcolor: '#3f1d1d', color: '#fca5a5',
+                          cursor: 'pointer' }}/>
+                )}
+              </Box>
+              <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.6 }}>
+                {MESH_COMPONENTS.map(({ key, label }) => (
+                  <Box key={key} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Typography sx={{ fontSize: 11, color: 'var(--text-1)', flex: 1 }}>
+                      {label}
+                    </Typography>
+                    <TextField
+                      type="text" size="small" placeholder="auto"
+                      value={compDraft[key] ?? (componentMesh[key]?.toString() ?? '')}
+                      onChange={e => setCompSize(key, e.target.value)}
+                      inputProps={{ inputMode: 'decimal', style: {
+                        padding: '2px 6px', fontSize: 11, width: 52,
+                        color: 'var(--text-0)', textAlign: 'right' } }}
+                      sx={{ '& .MuiOutlinedInput-root': { bgcolor: 'var(--app-bg)',
+                        '& fieldset': { borderColor: 'var(--panel)' } } }}
+                    />
+                  </Box>
+                ))}
+              </Box>
+              {/* Wire cell — copper cell size relative to the wire height */}
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.75 }}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-1)', flex: 1 }}>
+                  Wire cell
+                  <Tooltip placement="right" title="Copper cell size as a multiple of the wire height h. A factor, not mm, so it stays ½h/1h/2h after a wire-height edit.">
+                    <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
                 <ToggleButtonGroup
-                  value={slidingBand ? 'on' : 'off'} exclusive size="small"
-                  onChange={(_, v) => v && setSlidingBand(v === 'on')}
-                  sx={{ '& .MuiToggleButton-root': { py: 0.1, px: 1,
-                    fontSize: 10, color: '#64748b', borderColor: '#1e293b',
+                  value={wireCell} exclusive size="small"
+                  onChange={(_, v) => v != null && setWireCell(v as number)}
+                  sx={{ '& .MuiToggleButton-root': { py: 0.15, px: 1, fontSize: 11,
+                    lineHeight: 1.4, color: 'var(--text-3)', borderColor: 'var(--panel)',
                     textTransform: 'none',
-                    '&.Mui-selected': { color: '#a78bfa', bgcolor: '#312e5f',
-                      borderColor: '#8b5cf6' } } }}>
-                  <ToggleButton value="off">Off</ToggleButton>
-                  <ToggleButton value="on">On</ToggleButton>
+                    '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
+                      borderColor: '#3b82f6' } } }}>
+                  {WIRE_CELL_OPTIONS.map(o => (
+                    <ToggleButton key={o.v} value={o.v}>{o.label}</ToggleButton>
+                  ))}
                 </ToggleButtonGroup>
               </Box>
-              {slidingBand && (
-                <Typography sx={{ fontSize: 10, color: '#7c3aed', mt: 0.3 }}>
-                  Sweep the <b>Rotor angle</b> slider above — rotor mesh slides as rigid body
-                </Typography>
-              )}
             </Box>
 
             {/* Symmetry sectors */}
             <Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Symmetry
-                  <Tooltip title="Split motor into N equal wedges. 24 slots + 28 poles → GCD = 4 → 1/4 model (6 slots + 7 poles per sector). Anti-periodic BC on radial cuts (7 = odd # of poles)." placement="right">
-                    <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
-                  </Tooltip>
                 </Typography>
               </Box>
-              <ToggleButtonGroup
-                value={nSectors} exclusive size="small" fullWidth
-                onChange={(_, v) => v != null && setNSectors(v as number)}
-                sx={{ width: '100%',
-                  '& .MuiToggleButton-root': { flex: 1, py: 0.3,
-                    fontSize: 11, color: '#64748b', borderColor: '#1e293b',
-                    textTransform: 'none',
-                    '&.Mui-selected': { color: '#e2e8f0', bgcolor: '#1e3a5f',
-                      borderColor: '#3b82f6' } } }}>
-                <ToggleButton value={1}>Full</ToggleButton>
-                <ToggleButton value={2}>1/2</ToggleButton>
-                <ToggleButton value={4}>1/4</ToggleButton>
-              </ToggleButtonGroup>
-              {nSectors > 1 && (
-                <Typography sx={{ fontSize: 9, color: '#334155', mt: 0.5 }}>
-                  {24 / nSectors} slots + {28 / nSectors} poles per sector ·
-                  anti-periodic BC required on radial cuts
+              <Tooltip placement="right" title={`Split the motor into N equal wedges (${symSlots} slots / ${symPoles} poles, GCD ${symGcd} → ${validSectors.map(s => s === 1 ? 'Full' : '1/' + s).join(', ')}). ${nSectors > 1 ? `Now: ${symSlots / nSectors} slots + ${symPoles / nSectors} poles per sector, ${(symPoles / nSectors) % 2 === 1 ? 'anti-periodic' : 'periodic'} BC on the radial cuts.` : 'Full 360° — stitched from clean half-sectors (no cuts, no double mesh).'} Saved & used by Simulation + charts.`}>
+                <ToggleButtonGroup
+                  value={nSectors} exclusive size="small" fullWidth disabled={!cfgLoaded}
+                  // The one-click symmetry switch — a user action, so it is dirty
+                  // and persisted IMMEDIATELY (this is the setting that was lost
+                  // on 2026-09-07: "там точно стояло 1/2").  Waiting for the
+                  // 700 ms debounce would lose it again if the user leaves the
+                  // tab straight after clicking — the panel unmounts.
+                  onChange={(_, v) => {
+                    if (v == null) return;
+                    setNSectors(v as number);
+                    markDirty('n_sectors');
+                    if (cfgLoaded) patchMeshConfig({ n_sectors: v as number });
+                  }}
+                  sx={{ width: '100%',
+                    '& .MuiToggleButton-root': { flex: 1, py: 0.3,
+                      fontSize: 11, color: 'var(--text-3)', borderColor: 'var(--panel)',
+                      textTransform: 'none',
+                      '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
+                        borderColor: '#3b82f6' } } }}>
+                  {validSectors.map(s => (
+                    <ToggleButton key={s} value={s}>{s === 1 ? 'Full' : `1/${s}`}</ToggleButton>
+                  ))}
+                </ToggleButtonGroup>
+              </Tooltip>
+            </Box>
+
+            {/* Periodic (template-copy) mesh toggle */}
+            <Box sx={{ mt: 1.5 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
+                  Pole/slot mesh
                 </Typography>
-              )}
-            </Box>
-
-            {/* Display toggles */}
-            <Box>
-              <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: '#475569',
-                letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
-                Display
-              </Typography>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                {[
-                  { label: 'Fill triangles by domain',  val: fillDomains,  set: setFillDomains  },
-                  { label: 'Show CadQuery outlines',    val: showOutlines, set: setShowOutlines },
-                  { label: 'Show triangle edges',       val: showEdges,    set: setShowEdges    },
-                ].map(({ label, val, set }) => (
-                  <Box key={label} onClick={() => set(!val)}
-                    sx={{ display: 'flex', alignItems: 'center', gap: 1, cursor: 'pointer',
-                      p: 0.5, borderRadius: 1,
-                      bgcolor: val ? '#1e293b' : 'transparent',
-                      border: '1px solid', borderColor: val ? '#334155' : 'transparent' }}>
-                    <Box sx={{ width: 12, height: 12, borderRadius: 0.5, flexShrink: 0,
-                      bgcolor: val ? '#3b82f6' : '#1e293b',
-                      border: '1px solid #334155' }}/>
-                    <Typography sx={{ fontSize: 11,
-                      color: val ? '#e2e8f0' : '#475569' }}>{label}</Typography>
-                  </Box>
-                ))}
               </Box>
+              <Tooltip placement="right" title="Standard: each pole/slot meshed independently (slightly different node pattern → pole-to-pole mesh variance on the losses). Periodic: mesh ONE pole + ONE slot, rotate-copy them so every pole and slot is BIT-IDENTICAL → that variance is removed. Applies to the Mesh view, field views and Simulation.">
+                <ToggleButtonGroup
+                  value={poleCopy ? 'periodic' : 'standard'} exclusive size="small" fullWidth
+                  onChange={(_, v) => v != null && setPoleCopy(v === 'periodic')}
+                  sx={{ width: '100%',
+                    '& .MuiToggleButton-root': { flex: 1, py: 0.3, fontSize: 11,
+                      color: 'var(--text-3)', borderColor: 'var(--panel)', textTransform: 'none',
+                      '&.Mui-selected': { color: 'var(--text-0)', bgcolor: 'var(--line-accent)',
+                        borderColor: '#3b82f6' } } }}>
+                  <ToggleButton value="standard">Standard</ToggleButton>
+                  <ToggleButton value="periodic">Periodic (identical poles)</ToggleButton>
+                </ToggleButtonGroup>
+              </Tooltip>
             </Box>
 
-            <Button
-              variant="outlined" fullWidth
-              startIcon={femLoading ? <CircularProgress size={14} color="inherit"/> : <RefreshIcon/>}
-              onClick={fetchFemMesh}
-              disabled={femLoading}
-              sx={{ py: 0.8, fontSize: 11, color: '#3b82f6', borderColor: '#1e3a5f' }}
-            >
-              {femLoading ? 'Building…' : 'Rebuild mesh'}
-            </Button>
+            {/* The "Rebuild mesh" button is gone: every setting above
+                auto-rebuilds (debounced) and auto-persists — a build
+                indicator is all that remains of it. */}
+            {femLoading && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 0.5 }}>
+                <CircularProgress size={14} />
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
+                  Rebuilding mesh…
+                </Typography>
+              </Box>
+            )}
 
             {femError && <Alert severity="error" sx={{ fontSize: 11 }}>{femError}</Alert>}
 
             {femMesh && (
-              <Box sx={{ bgcolor: '#0a1628', borderRadius: 1, p: 1, border: '1px solid #1e293b' }}>
-                <Typography sx={{ fontSize: 10, color: '#475569', mb: 0.5 }}>Mesh stats</Typography>
+              <Box sx={{ bgcolor: 'var(--panel-2)', borderRadius: 1, p: 1, border: '1px solid var(--line-soft)' }}>
+                <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mb: 0.5 }}>Mesh stats</Typography>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>vertices</Typography>
-                  <Typography sx={{ fontSize: 11, color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                  <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>vertices</Typography>
+                  <Typography sx={{ fontSize: 11, color: 'var(--text-0)', fontVariantNumeric: 'tabular-nums' }}>
                     {femMesh.n_vertices.toLocaleString()}
                   </Typography>
                 </Box>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <Typography sx={{ fontSize: 11, color: '#94a3b8' }}>triangles</Typography>
-                  <Typography sx={{ fontSize: 11, color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+                  <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>triangles</Typography>
+                  <Typography sx={{ fontSize: 11, color: 'var(--text-0)', fontVariantNumeric: 'tabular-nums' }}>
                     {femMesh.n_triangles.toLocaleString()}
                   </Typography>
                 </Box>
               </Box>
             )}
 
-            <Divider sx={{ borderColor: '#1e293b' }}/>
+            <Divider sx={{ borderColor: 'var(--panel)' }}/>
+            </Box>
           </>
         )}
 
         {view === 'pinn' && (
           <>
-        <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
-            letterSpacing: '0.1em', textTransform: 'uppercase', mb: 0.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
+            letterSpacing: '0.1em', textTransform: 'uppercase' }}>
             Collocation Points
           </Typography>
-          <Typography sx={{ fontSize: 11, color: '#334155' }}>
-            PINN samples random points inside each domain. Higher density →
-            better accuracy, slower training.
-          </Typography>
+          <HelpTip title="PINN samples random points inside each domain. Higher density → better accuracy, slower training." />
         </Box>
 
-        <Divider sx={{ borderColor: '#1e293b' }}/>
+        <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
         {/* n_radial */}
         <Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-            <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
               Radial layers
               <Tooltip title="Number of concentric circles of sample points per domain" placement="right">
-                <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <Chip label={cfg.n_radial} size="small"
-              sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+              sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
           </Box>
           <Slider
             value={cfg.n_radial} min={2} max={30} step={1}
@@ -781,14 +1293,14 @@ const MeshPanel: React.FC = () => {
         {/* n_angular */}
         <Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-            <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
               Angular divisions
               <Tooltip title="Points around each radial ring in the main domains" placement="right">
-                <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <Chip label={cfg.n_angular} size="small"
-              sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+              sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
           </Box>
           <Slider
             value={cfg.n_angular} min={8} max={256} step={8}
@@ -800,14 +1312,14 @@ const MeshPanel: React.FC = () => {
         {/* n_angular_slots */}
         <Box>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-            <Typography sx={{ fontSize: 12, color: '#94a3b8' }}>
+            <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
               Slot angular divisions
               <Tooltip title="Denser angular sampling inside slots/magnets for accuracy" placement="right">
-                <span style={{ color: '#475569', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
+                <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
               </Tooltip>
             </Typography>
             <Chip label={cfg.n_angular_slots} size="small"
-              sx={{ fontSize: 11, height: 20, bgcolor: '#1e3a5f', color: '#93c5fd' }}/>
+              sx={{ fontSize: 11, height: 20, bgcolor: 'var(--line-accent)', color: '#93c5fd' }}/>
           </Box>
           <Slider
             value={cfg.n_angular_slots} min={2} max={64} step={2}
@@ -816,11 +1328,11 @@ const MeshPanel: React.FC = () => {
           />
         </Box>
 
-        <Divider sx={{ borderColor: '#1e293b' }}/>
+        <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
         {/* Point count table */}
         <Box>
-          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: '#475569',
+          <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
             Estimated Sample Points
           </Typography>
@@ -830,30 +1342,32 @@ const MeshPanel: React.FC = () => {
               justifyContent: 'space-between', py: 0.35 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                 <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: d.color, flexShrink: 0 }}/>
-                <Typography sx={{ fontSize: 11, color: '#64748b' }}>{d.label}</Typography>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{d.label}</Typography>
               </Box>
-              <Typography sx={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+              <Typography sx={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
                 {(pointsPerDomain[d.key] ?? 0).toLocaleString()}
               </Typography>
             </Box>
           ))}
 
-          <Divider sx={{ borderColor: '#1e293b', my: 0.75 }}/>
+          <Divider sx={{ borderColor: 'var(--panel)', my: 0.75 }}/>
           <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-            <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>Total</Typography>
-            <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', fontVariantNumeric: 'tabular-nums' }}>
+            <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>Total</Typography>
+            <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-0)', fontVariantNumeric: 'tabular-nums' }}>
               {totalPoints.toLocaleString()}
             </Typography>
           </Box>
         </Box>
 
-        <Divider sx={{ borderColor: '#1e293b' }}/>
+        <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
         <Button
           variant="contained" color="primary" fullWidth
           startIcon={saving ? <CircularProgress size={14} color="inherit"/> : <SaveIcon/>}
           onClick={handleSave}
-          disabled={saving}
+          // Same rule as the FEM settings: never PATCH a config the panel has
+          // not read (this body echoes the loaded block, 2026-09-07 incident).
+          disabled={saving || !cfgLoaded}
           sx={{ py: 1.1, fontWeight: 700, letterSpacing: 1 }}
         >
           {saving ? 'SAVING…' : saved ? 'SAVED ✓' : 'SAVE TO CONFIG'}
@@ -869,10 +1383,10 @@ const MeshPanel: React.FC = () => {
         overflow: 'auto' }}>
 
         <Box>
-          <Typography variant="h6" sx={{ color: '#e2e8f0', fontWeight: 700, mb: 0.5 }}>
+          <Typography variant="h6" sx={{ color: 'var(--text-0)', fontWeight: 700, mb: 0.5 }}>
             {view === 'fem' ? '2-D FEM Triangle Mesh' : 'Collocation Sampling Grid'}
           </Typography>
-          <Typography sx={{ fontSize: 12, color: '#475569' }}>
+          <Typography sx={{ fontSize: 12, color: 'var(--text-4)' }}>
             {view === 'fem'
               ? 'Conforming triangle mesh of the actual CadQuery cross-section. Each colour = one motor domain.'
               : 'Live preview of point distribution used during PINN training. Each coloured ring corresponds to one domain.'}
@@ -917,7 +1431,7 @@ const MeshPanel: React.FC = () => {
         )}
 
         {/* Preview pane */}
-        <Paper sx={{ flex: 1, bgcolor: '#060d17', border: '1px solid #1e293b',
+        <Paper sx={{ flex: 1, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
           borderRadius: 2, overflow: 'hidden', display: 'flex',
           alignItems: 'center', justifyContent: 'center', minHeight: 540,
           position: 'relative' }}>
@@ -930,20 +1444,37 @@ const MeshPanel: React.FC = () => {
                   <CircularProgress size={32} sx={{ color: '#3b82f6' }}/>
                 </Box>
               )}
-              <Box sx={{ width: '100%', height: '100%', minHeight: 540 }}>
-                <FemMeshViewer3D payload={femMesh as any}
-                  showFill={fillDomains}
-                  showWire={showEdges}
-                  showOutlines={showOutlines}
-                  showGrid/>
+              {/* position:absolute + inset:0 gives r3f a CONCRETE pixel-sized
+                  parent (the relative Paper) — a height:100% chain against a
+                  flex/align-center parent can resolve to 0 at the moment r3f
+                  measures, leaving the canvas stuck at the 300×150 default. */}
+              <Box sx={{ position: 'absolute', inset: 0 }}>
+                {WEBGL_OK ? (
+                  <FemMeshViewer3D payload={femMesh as any}
+                    showFill
+                    showWire
+                    showOutlines
+                    showGrid/>
+                ) : (
+                  <FemMeshViewer2D payload={femMesh as any} showWire/>
+                )}
               </Box>
+              {!WEBGL_OK && (
+                <Box sx={{ position: 'absolute', top: 8, left: 8, zIndex: 4,
+                  bgcolor: 'var(--overlay)', px: 1, py: 0.5, borderRadius: 1,
+                  pointerEvents: 'none' }}>
+                  <Typography sx={{ fontSize: 9, color: '#fbbf24' }}>
+                    2D view (WebGL unavailable in this window) · wheel = zoom · drag = pan
+                  </Typography>
+                </Box>
+              )}
               {/* Orientation cube + XYZ axes — same component as Geometry */}
               <Viewcube/>
               {/* Help text overlay */}
               <Box sx={{ position: 'absolute', left: 8, bottom: 8, zIndex: 4,
-                bgcolor: 'rgba(10,22,40,0.7)', px: 1, py: 0.5, borderRadius: 1,
+                bgcolor: 'var(--overlay)', px: 1, py: 0.5, borderRadius: 1,
                 pointerEvents: 'none' }}>
-                <Typography sx={{ fontSize: 9, color: '#94a3b8' }}>
+                <Typography sx={{ fontSize: 9, color: 'var(--text-2)' }}>
                   Drag = orbit · Right-drag / Shift+drag = pan · Wheel = zoom
                 </Typography>
               </Box>
@@ -953,10 +1484,16 @@ const MeshPanel: React.FC = () => {
           )}
         </Paper>
 
-        {view === 'fem' && femMesh && (
-          <Typography sx={{ fontSize: 10, color: '#475569', textAlign: 'center' }}>
-            {femMesh.note}
-          </Typography>
+        {/* The backend's mesh `note` is a full paragraph — show only its first
+            clause inline and hang the rest off the ⓘ (UI rule: no always-visible
+            explanation prose). */}
+        {view === 'fem' && femMesh?.note && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, justifyContent: 'center' }}>
+            <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
+              {String(femMesh.note).split('.')[0]}
+            </Typography>
+            <HelpTip title={femMesh.note} />
+          </Box>
         )}
       </Box>
     </Box>

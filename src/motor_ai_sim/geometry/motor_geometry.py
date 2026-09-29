@@ -1,20 +1,13 @@
-"""Parametric geometry for electric motor cross-section using NVIDIA Modulus CSG.
+"""Parametric geometry for electric motor cross-section.
 
 This module provides:
 - MotorGeometryParams: Parameters defining motor geometry
-- MotorGeometry2D: Generate 2D geometry using NVIDIA Modulus CSG primitives
-
-The geometry uses Constructive Solid Geometry (CSG) with boolean operations
-to create complex motor geometries from simple primitives (Circle, Rectangle).
-
-Use the returned geometry objects with .sample_interior() for PINN training.
 
 Units:
 - All linear dimensions are in millimeters [mm]
 - All angles are in degrees [deg]
 
 Dependencies:
-- NVIDIA Modulus (physicsnemo or modulus)
 - NumPy
 - OmegaConf (optional, for YAML config loading)
 """
@@ -32,33 +25,121 @@ try:
 except ImportError:
     HAS_OMEGACONF = False
 
-# Default config path - go up from geometry/ to project root
-DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
+# Default config path — the SAME one motor_ai_sim.config resolves (it honours
+# MOTOR_AI_SIM_CONFIG).  A second, independently derived copy of this path meant
+# a redirected config was read here from the real file: the API wrote one file
+# and reloaded another.
+from motor_ai_sim.config import DEFAULT_CONFIG_PATH  # noqa: E402  (path, not logic)
 
 # mtime-keyed cache for from_yaml(): { resolved_path: (mtime_ns, geo_dict, derived_dict) }
 # Auto-invalidates when the YAML is rewritten (geometry edit bumps mtime).
 _FROM_YAML_CACHE: Dict[str, Any] = {}
 
-# Try to import NVIDIA Modulus 2D primitives
-try:
-    from modulus.geometry.primitives_2d import Circle, Rectangle, Polygon
-    from modulus.geometry import csg
-    HAS_MODULUS = True
-except ImportError:
-    try:
-        # Try physicsnemo package name (newer versions)
-        from physicsnemo.geometry.primitives_2d import Circle, Rectangle, Polygon
-        from physicsnemo.geometry import csg
-        HAS_MODULUS = True
-    except ImportError:
-        HAS_MODULUS = False
-        # Create placeholder classes for type hints
-        class Circle:  # type: ignore
-            def __init__(self, *args, **kwargs): pass
-        class Rectangle:  # type: ignore
-            def __init__(self, *args, **kwargs): pass
-        class Polygon:  # type: ignore
-            def __init__(self, *args, **kwargs): pass
+HAS_MODULUS = False  # NVIDIA Modulus path removed
+
+
+#: The geometry names this module DERIVES from primaries, in the form they are
+#: stored in a geometry dict (motor_config.yaml `geometry:` carries all nine).
+#: Mirrored by ``routes._validation.DERIVED_GEOMETRY_NAMES`` and
+#: ``services.geometry_service._DERIVED_PARAMS``, which additionally list
+#: num_slots / num_poles and the read-only radius PROPERTIES; those are not here
+#: on purpose — see ``derived_geometry``.
+DERIVED_GEOMETRY_FIELDS = (
+    "stator_outer_radius", "stator_inner_radius",
+    "rotor_outer_radius", "rotor_inner_radius",
+    "angle_slot", "angle_pole", "slot_pitch", "pole_pitch",
+    "slot_width",
+)
+
+
+def derived_geometry(g: Dict[str, Any]) -> Dict[str, float]:
+    """Every derived geometry field, computed from the PRIMARIES in ``g``.
+
+    THE one implementation.  A derived field is a function of the primaries and
+    must never be *read back* from wherever it happens to be stored, because the
+    place it is stored is the SHARED global config: ``motor_config.yaml`` carries
+    all nine of these, the app rewrites them whenever the user edits a geometry,
+    and a per-request ``geo_override`` supplies primaries only.  Reading one back
+    on an override path therefore pairs one motor's derived value with another
+    motor's geometry — the config-leak family (rpm, winding connection, and this).
+
+    It bit for real: ``fem_transient_sliding_band`` sized its mesh from
+    ``geo["slot_width"]``, so the 30 mm regression machine was meshed at
+    slot_width/2 = 1.25 mm while the user's config held the 40 mm design (2.5 mm)
+    and at 1.15 mm after it moved to the 30 mm one (2.3 mm) — the same request,
+    two different meshes, every pinned physics case red with nothing wrong in the
+    code.
+
+    Contract: compute a field only when every primary it needs is present and
+    numeric, so a PARTIAL dict (a test fixture, a half-built override) yields a
+    partial answer instead of raising.  Callers decide what to do with the
+    result: ``_compute_derived`` assigns all of it, ``merge_geo_override`` and
+    ``CadQueryMotor._map_api_to_cadquery`` refresh only the keys their dict
+    already carries.
+
+    Deliberately NOT computed here:
+
+    * ``num_slots`` / ``num_poles`` — derived in three different tiers (config =
+      segment form; override = explicit counts first; CadQuery = the override's
+      counts, then the override's segment form, then the config's), and each
+      caller owns its tier.  Every caller resolves them BEFORE calling this, so
+      the angles and pitches below are computed on the resolved counts.
+    * ``shaft_radius`` — the codebase holds two conflicting definitions
+      (``MotorGeometryParams.shaft_radius`` = rotor_inner_radius; CadQuery's
+      ``shaft_radius`` = rotor_inner_radius − shaft_height).  Unifying them
+      moves CAD geometry and is not this fix.
+    * ``stator_slot_radius`` / ``rotor_core_radius`` — read-only properties, never
+      dict fields, so there is nothing to leak.
+    """
+    def _num(key: str) -> Optional[float]:
+        v = g.get(key)
+        if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        return float(v)
+
+    out: Dict[str, float] = {}
+
+    sd = _num("stator_diameter")
+    if sd is not None:
+        r_so = sd / 2.0
+        out["stator_outer_radius"] = r_so
+        ct, sh = _num("core_thickness"), _num("slot_height")
+        if ct is not None and sh is not None:
+            r_si = r_so - ct - sh
+            out["stator_inner_radius"] = r_si
+            ag = _num("air_gap")
+            if ag is not None:
+                r_ro = r_si - ag
+                out["rotor_outer_radius"] = r_ro
+                mh, rh = _num("magnet_height"), _num("rotor_house_height")
+                if mh is not None and rh is not None:
+                    out["rotor_inner_radius"] = r_ro - mh - rh
+
+    # Tangential slot width = the WIRE PITCH the slot has to accept.  With
+    # wire_split = N a turn is N strips of wire_width laid side by side with
+    # 2·wire_spacing_x between them, so the column the slot has to accept is
+    # N·wire_width + (N−1)·2·wire_spacing_x — the same `wire_col_w`
+    # cadquery_geometry cuts the pocket with.
+    ww, wsx, ins = (_num("wire_width"), _num("wire_spacing_x"),
+                    _num("insulation_thickness"))
+    if ww is not None and wsx is not None and ins is not None:
+        from motor_ai_sim.winding import STRIP_GAP_FACTOR as _GF
+        _nsp = _num("wire_split")
+        _nsp = max(1, int(round(_nsp))) if _nsp else 1
+        _col = ww if _nsp <= 1 else _nsp * ww + (_nsp - 1) * _GF * wsx
+        out["slot_width"] = _col + 2.0 * wsx + 2.0 * ins
+
+    # Angles / pitches from the RESOLVED counts (see the contract above).
+    n_slots = _num("num_slots")
+    if n_slots and n_slots > 0:
+        out["angle_slot"] = 360.0 / n_slots
+        out["slot_pitch"] = 2 * np.pi / n_slots
+    n_poles = _num("num_poles")
+    if n_poles and n_poles > 0:
+        out["angle_pole"] = 360.0 / n_poles
+        out["pole_pitch"] = 2 * np.pi / n_poles
+
+    return out
 
 
 class MotorGeometryParams:
@@ -121,7 +202,11 @@ class MotorGeometryParams:
             MotorGeometryParams instance with values from config
         """
         if config_path is None:
-            config_path = DEFAULT_CONFIG_PATH
+            # Per CALL through the workspace resolver (migration Stage 1), not
+            # the import-time constant: with no workspace set this IS
+            # ``DEFAULT_CONFIG_PATH``, so the single-user path is unchanged.
+            from motor_ai_sim.config import config_path as _resolve_cfg_path
+            config_path = _resolve_cfg_path()
         else:
             config_path = Path(config_path)
         
@@ -151,9 +236,18 @@ class MotorGeometryParams:
             config = OmegaConf.load(config_path)
             # Resolve any interpolations
             OmegaConf.resolve(config)
-            # Convert to dict for dynamic access
-            geometry_config = OmegaConf.to_container(config.get('geometry', {}), resolve=True)
-            derived_config = OmegaConf.to_container(config.get('derived_params', {}), resolve=True)
+            # Convert to dict for dynamic access.  OmegaConf.to_container
+            # REJECTS a plain dict, so the `.get(..., {})` fallback (a real
+            # Python {}) cannot be handed to it — a config file with no
+            # `derived_params` block used to crash here (regression caught by
+            # test_load_from_yaml).  Pull the sub-config with OmegaConf's own
+            # accessor and default to an empty DictConfig.
+            _geo_cfg = config.get('geometry')
+            _der_cfg = config.get('derived_params')
+            geometry_config = (OmegaConf.to_container(_geo_cfg, resolve=True)
+                               if _geo_cfg is not None else {})
+            derived_config = (OmegaConf.to_container(_der_cfg, resolve=True)
+                              if _der_cfg is not None else {})
         else:
             # Fallback to standard yaml
             import yaml
@@ -170,37 +264,21 @@ class MotorGeometryParams:
     
     def _compute_derived(self) -> None:
         """Compute derived parameters from formulas in config."""
-        # Standard derived parameters (computed from geometry)
-        self.stator_outer_radius = self.stator_diameter / 2.0
-        self.stator_inner_radius = (
-            self.stator_outer_radius - self.core_thickness - self.slot_height
-        )
-        
-        # Slot and pole counts
+        # Slot and pole counts FIRST — this class's tier is the SEGMENT form
+        # (num_seg x *_per_segment), which the CAD meshes; explicit counts in the
+        # config can be stale leftovers of a half-applied preset.  The angles and
+        # pitches below are then computed on these resolved counts.
         self.num_slots = int(self.num_seg * self.num_slots_per_segment)
         self.num_poles = int(self.num_seg * self.num_poles_per_segment)
-        
-        # Angles in degrees
-        self.angle_slot = 360.0 / self.num_slots
-        self.angle_pole = 360.0 / self.num_poles
-        
-        # Angular pitches in radians
-        self.slot_pitch = 2 * np.pi / self.num_slots
-        self.pole_pitch = 2 * np.pi / self.num_poles
-        
-        # Rotor radii
-        self.rotor_outer_radius = (
-            self.stator_outer_radius - self.core_thickness - self.slot_height - self.air_gap
-        )
-        self.rotor_inner_radius = (
-            self.rotor_outer_radius - self.magnet_height - self.rotor_house_height
-        )
-        
-        # Slot width (computed from wire dimensions)
-        self.slot_width = (
-            self.wire_width + 2 * self.wire_spacing_x + 2 * self.insulation_thickness
-        )
-        
+
+        # Everything else comes from the ONE derivation (module-level
+        # `derived_geometry`), shared with simulation.geometry_2d.
+        # merge_geo_override and CadQueryMotor._map_api_to_cadquery so a
+        # per-request geometry can never be paired with the config's derived
+        # values.  Radii, angles, pitches and slot_width, unchanged formulas.
+        for key, value in derived_geometry(self.__dict__).items():
+            setattr(self, key, value)
+
         # Validate
         self._validate()
     
@@ -270,461 +348,10 @@ class MotorGeometryParams:
         return radians * 180.0 / np.pi
 
 
-class MotorGeometry2D:
-    """Generate 2D cross-section geometry of an electric motor using NVIDIA Modulus CSG.
-
-    This class creates actual Modulus geometry objects using Constructive Solid Geometry
-    (CSG) with boolean operations. The resulting geometries can be used for PINN training
-    by calling .sample_interior() on each geometry object.
-
-    CSG Operations:
-    - Union (+): Combine geometries
-    - Difference (-): Subtract one geometry from another
-    - Intersection (&): Keep only overlapping regions
-
-    Geometry Construction:
-    - Stator Core: Circle (outer) - Circle (inner) - Slots
-    - Slots: Rectangle positioned at correct radius, repeated around center
-    - Shaft: Circle at center
-    - Rotor Core: Circle (rotor_core_radius) - Shaft
-    - Air Gap: Circle (stator_inner) - Circle (rotor_outer)
-    - Magnets: Sector shapes on rotor, repeated for each pole
-
-    All dimensions are in millimeters [mm].
-
-    Example:
-        >>> params = MotorGeometryParams.from_yaml("config/motor_config.yaml")
-        >>> geometry = MotorGeometry2D(params)
-        >>> geometries = geometry.get_modulus_geometries()
-        >>> # Sample points for PINN training
-        >>> stator_points = geometries['stator_core'].sample_interior(1000)
-        >>> rotor_points = geometries['rotor_core'].sample_interior(500)
-    """
-
-    def __init__(self, params: MotorGeometryParams):
-        """Initialize geometry generator.
-
-        Args:
-            params: Motor geometry parameters
-
-        Raises:
-            ImportError: If NVIDIA Modulus is not installed
-        """
-        if not HAS_MODULUS:
-            raise ImportError(
-                "NVIDIA Modulus is required for CSG geometry generation. "
-                "Install with: pip install modulus || pip install physicsnemo"
-            )
-        self.params = params
-
-    def get_modulus_geometries(self) -> Dict[str, Union[Circle, "csg.CSGObject"]]:
-        """Get all motor geometry regions as Modulus CSG objects.
-
-        Returns:
-            Dictionary mapping region names to Modulus geometry objects:
-            - 'stator_core': Stator iron (annulus with slots removed)
-            - 'slots': Combined slot regions (negative, for subtraction)
-            - 'coils': Copper windings that fill the slots (positive geometry)
-            - 'air_gap': Air gap between stator and rotor
-            - 'rotor_core': Rotor iron core
-            - 'magnets': Permanent magnets on rotor
-            - 'shaft': Motor shaft
-
-        Example:
-            >>> geometries = motor.get_modulus_geometries()
-            >>> stator_points = geometries['stator_core'].sample_interior(1000)
-        """
-        geometries = {}
-
-        # 1. Shaft (simple circle at center)
-        geometries['shaft'] = Circle(
-            center=(0.0, 0.0),
-            radius=self.params.shaft_radius
-        )
-
-        # 2. Rotor Core (annulus: circle - shaft)
-        rotor_outer = Circle(
-            center=(0.0, 0.0),
-            radius=self.params.rotor_core_radius
-        )
-        geometries['rotor_core'] = rotor_outer - geometries['shaft']
-
-        # 3. Magnets (sectors on rotor surface)
-        geometries['magnets'] = self._create_magnets()
-
-        # 4. Air Gap (annulus between stator and rotor)
-        air_gap_outer = Circle(
-            center=(0.0, 0.0),
-            radius=self.params.stator_inner_radius
-        )
-        air_gap_inner = Circle(
-            center=(0.0, 0.0),
-            radius=self.params.rotor_outer_radius
-        )
-        geometries['air_gap'] = air_gap_outer - air_gap_inner
-
-        # 5. Slots (rectangular slots in stator) - negative geometry for subtraction
-        geometries['slots'] = self._create_slots()
-
-        # 6. Coils/Windings - positive geometry that fills the slots (copper)
-        geometries['coils'] = self._create_coils()
-
-        # 7. Stator Core (annulus with slots removed)
-        stator_outer = Circle(
-            center=(0.0, 0.0),
-            radius=self.params.stator_outer_radius
-        )
-        stator_inner = Circle(
-            center=(0.0, 0.0),
-            radius=self.params.stator_inner_radius
-        )
-        # Stator core = outer circle - inner circle - slots
-        geometries['stator_core'] = stator_outer - stator_inner - geometries['slots']
-
-        return geometries
-
-    def _create_slots(self) -> "csg.CSGObject":
-        """Create combined slot geometry using CSG.
-
-        Creates a single slot as a rectangle positioned at the correct radius,
-        then repeats it around the center for all slots.
-
-        Returns:
-            Combined CSG object representing all slots
-        """
-        # Create a single slot as a rectangle
-
-        # Create slot rectangle centered at (slot_center_x, 0)
-        # Rectangle is defined by its bounds (x_min, y_min, x_max, y_max)
-        single_slot_r = Rectangle(
-            point_1=(self.params.tooth_width,self.params.stator_outer_radius-self.params.core_thickness),
-            point_2=(self.params.tooth_width + self.params.slot_width, 0)
-        )
-        single_slot_l = Rectangle(
-            point_1=(-self.params.tooth_width,self.params.stator_outer_radius-self.params.core_thickness),
-            point_2=(-self.params.tooth_width - self.params.slot_width, 0)
-        )
-
-        # Repeat the slot around the center for all slots
-        # Using rotate_repeat: repeat num_slots times with rotation
-        all_slots = single_slot_r.repeat(
-            n=self.params.num_slots,
-            angle=self.params.angle_slot,  # degrees between slots
-            center=(0.0, 0.0),
-            mode="rotate"
-        )
-        all_slots = all_slots + single_slot_l.repeat(
-            n=self.params.num_slots,
-            angle=self.params.angle_slot,  # degrees between slots
-            center=(0.0, 0.0),
-            mode="rotate"
-        )
-
-        return all_slots
-
-    def _create_coils(self, cq) -> List[Any]:
-        """Create robust concentrated coils wound around stator teeth."""
-        p = self.parameters
-        
-        outer_r = p['stator_outer_radius']
-        inner_r = p['stator_inner_radius']
-        core_h = p['core_thickness']
-        stator_w = p['stator_width']
-        num_slots = int(p['num_slots'])
-        tooth_width = p['tooth_width']
-        wire_w = p['wire_width']
-        ins_w = p['insulation_thickness']
-        
-        # Tooth dimensions along the Y-axis
-        tooth_base_y = outer_r - core_h
-        tooth_tip_y = inner_r
-        tooth_length = tooth_base_y - tooth_tip_y
-        
-        # Coil dimensions
-        # Leave a 1.0 mm gap at the tip and base to avoid overlapping with rotor/back-iron
-        coil_len_y = tooth_length - 2.0 
-        coil_center_y = tooth_tip_y + 1.0 + coil_len_y / 2.0
-        
-        # X and Z dimensions (outer bounds of the coil)
-        outer_x = tooth_width + 2 * wire_w
-        outer_z = stator_w + 2 * wire_w + 4.0 # Overhang extending past stator width
-        
-        # Inner hole dimensions (slightly larger than tooth + insulation)
-        inner_x = tooth_width + 2 * ins_w + 0.2
-        inner_z = stator_w + 2 * ins_w + 0.2
-        
-        coils = []
-        slot_angle = 360.0 / num_slots
-        
-        # Create the base coil centered at origin (hollow rectangular block)
-        base_coil = (
-            cq.Workplane("XY")
-            .box(outer_x, coil_len_y, outer_z)
-            .cut(cq.Workplane("XY").box(inner_x, coil_len_y + 5.0, inner_z))
-        )
-        
-        # Fillet the outer edges to simulate a wound wire bundle
-        try:
-            base_coil = base_coil.edges("|Y").fillet(wire_w * 0.8)
-        except:
-            pass # Ignore if filleting fails due to geometry constraints
-            
-        # Move the coil to the position of the first tooth
-        base_coil = base_coil.translate((0, coil_center_y, 0))
-        
-        # Clone and rotate for each slot
-        for i in range(num_slots):
-            angle = i * slot_angle
-            coil = base_coil.rotate((0, 0, 0), (0, 0, 1), angle)
-            coils.append(coil)
-            
-        return coils
-    def _create_magnets(self) -> "csg.CSGObject":
-        """Create combined magnet geometry using CSG.
-
-        Creates a single magnet as a sector (approximated with polygon),
-        then repeats it around the center for all poles.
-
-        Returns:
-            Combined CSG object representing all magnets
-        """
-        # Create a single magnet sector
-        # Magnet spans from rotor_core_radius to rotor_outer_radius
-        # Angular width is angle_pole degrees
-
-        # Create magnet as a polygon (sector approximation)
-        single_magnet = self._create_magnet_sector()
-
-        # Repeat the magnet around the center for all poles
-        all_magnets = single_magnet.repeat(
-            n=self.params.num_poles,
-            angle=self.params.angle_pole,  # degrees between poles
-            center=(0.0, 0.0),
-            mode="rotate"
-        )
-
-        return all_magnets
-
-    def _create_magnet_sector(self) -> "csg.CSGObject":
-        """Create a single magnet sector using CSG.
-
-        Creates a sector shape (pie slice) for one magnet.
-        Uses Circle - Circle - angular clipping rectangles.
-
-        Returns:
-            CSG object representing a single magnet sector
-        """
-        r_inner = self.params.rotor_core_radius
-        r_outer = self.params.rotor_outer_radius
-        half_angle_rad = np.radians(self.params.angle_pole / 2)
-
-        # Create annulus for magnet radial extent
-        outer_circle = Circle(center=(0.0, 0.0), radius=r_outer)
-        inner_circle = Circle(center=(0.0, 0.0), radius=r_inner)
-        magnet_annulus = outer_circle - inner_circle
-
-        # Create angular sector by intersecting with half-planes
-        # We use large rectangles to clip the annulus to the desired angle
-        # Half-plane 1: y > x * tan(-half_angle) (right side of -half_angle line)
-        # Half-plane 2: y < x * tan(+half_angle) (left side of +half_angle line)
-
-        # Create clipping rectangles (large enough to cover the magnet area)
-        clip_size = r_outer * 3  # Large enough to cover entire motor
-
-        # For angle clipping, we create two half-planes using rectangles
-        # positioned to clip the annulus to the sector
-
-        # First clip: keep points with angle >= -half_angle
-        # Rectangle positioned to the right of line at -half_angle
-        angle_1 = -half_angle_rad
-        # Normal vector pointing "inside" the sector
-        normal_1 = (np.sin(angle_1), -np.cos(angle_1))
-
-        # Second clip: keep points with angle <= +half_angle
-        angle_2 = half_angle_rad
-        normal_2 = (-np.sin(angle_2), np.cos(angle_2))
-
-        # Create clipping rectangles as half-planes
-        # Rectangle defined by two corner points
-        # We position rectangles to act as half-plane clippers
-
-        # Clip 1: Right half-plane for -half_angle boundary
-        rect1 = Rectangle(
-            point_1=(-clip_size, -clip_size),
-            point_2=(clip_size * normal_1[0] + clip_size, clip_size * normal_1[1] + clip_size)
-        )
-
-        # Clip 2: Left half-plane for +half_angle boundary
-        rect2 = Rectangle(
-            point_1=(-clip_size, -clip_size),
-            point_2=(clip_size * normal_2[0] + clip_size, clip_size * normal_2[1] + clip_size)
-        )
-
-        # Intersect annulus with both half-planes to get sector
-        magnet_sector = magnet_annulus & rect1 & rect2
-
-        return magnet_sector
-
-    def get_individual_magnet_geometries(self) -> Dict[int, "csg.CSGObject"]:
-        """Get individual magnet geometries with magnetization direction.
-
-        Returns:
-            Dictionary mapping pole index to magnet CSG object
-        """
-        magnets = {}
-        r_inner = self.params.rotor_core_radius
-        r_outer = self.params.rotor_outer_radius
-
-        for pole_idx in range(self.params.num_poles):
-            # Angular position of magnet center
-            theta_center = pole_idx * self.params.pole_pitch
-
-            # Create magnet sector at this angle
-            # (similar to _create_magnet_sector but rotated to specific position)
-            magnet = self._create_magnet_at_angle(theta_center)
-            magnets[pole_idx] = magnet
-
-        return magnets
-
-    def _create_magnet_at_angle(self, theta_center: float) -> "csg.CSGObject":
-        """Create a single magnet at a specific angular position.
-
-        Args:
-            theta_center: Center angle of the magnet [radians]
-
-        Returns:
-            CSG object for the magnet
-        """
-        r_inner = self.params.rotor_core_radius
-        r_outer = self.params.rotor_outer_radius
-        half_angle_rad = np.radians(self.params.angle_pole / 2)
-
-        # Create annulus
-        outer_circle = Circle(center=(0.0, 0.0), radius=r_outer)
-        inner_circle = Circle(center=(0.0, 0.0), radius=r_inner)
-        magnet_annulus = outer_circle - inner_circle
-
-        # Angular bounds
-        theta_start = theta_center - half_angle_rad
-        theta_end = theta_center + half_angle_rad
-
-        # Create clipping using rotated rectangles
-        clip_size = r_outer * 3
-
-        # Create sector by clipping with angular boundaries
-        # This is a simplified approach - in practice you might need
-        # to use Polygon for more precise sector shapes
-
-        # Use the repeat method's underlying rotation
-        base_sector = self._create_magnet_sector()
-
-        # Rotate to desired position
-        rotation_angle = np.degrees(theta_center)
-        rotated_magnet = base_sector.rotate(rotation_angle, center=(0.0, 0.0))
-
-        return rotated_magnet
-
-    def get_individual_slot_geometries(self) -> Dict[int, "csg.CSGObject"]:
-        """Get individual slot geometries.
-
-        Returns:
-            Dictionary mapping slot index to slot CSG object
-        """
-        slots = {}
-        slot_center_x = self.params.stator_inner_radius + self.params.slot_height / 2
-        slot_half_width = self.params.slot_width / 2
-        slot_half_height = self.params.slot_height / 2
-
-        for slot_idx in range(self.params.num_slots):
-            # Angular position
-            theta = slot_idx * self.params.slot_pitch
-
-            # Create base slot rectangle
-            base_slot = Rectangle(
-                point_1=(slot_center_x - slot_half_height, -slot_half_width),
-                point_2=(slot_center_x + slot_half_height, slot_half_width)
-            )
-
-            # Rotate to correct position
-            rotation_angle = np.degrees(theta)
-            rotated_slot = base_slot.rotate(rotation_angle, center=(0.0, 0.0))
-            slots[slot_idx] = rotated_slot
-
-        return slots
-
-    def get_magnetization_directions(self) -> Dict[int, np.ndarray]:
-        """Get magnetization direction vectors for each magnet.
-
-        Magnetization alternates between outward (N) and inward (S) poles.
-
-        Returns:
-            Dictionary mapping pole index to magnetization unit vector
-        """
-        directions = {}
-        for pole_idx in range(self.params.num_poles):
-            theta_center = pole_idx * self.params.pole_pitch
-
-            # Alternating magnetization: outward for even, inward for odd
-            sign = 1.0 if pole_idx % 2 == 0 else -1.0
-
-            # Radial direction at this angle
-            mag_dir = sign * np.array([
-                np.cos(theta_center),
-                np.sin(theta_center),
-            ])
-            directions[pole_idx] = mag_dir
-
-        return directions
-
-    def get_summary(self) -> Dict[str, float]:
-        """Get geometry summary.
-
-        Returns:
-            Dictionary with key geometry dimensions
-        """
-        return {
-            "stator_outer_radius": self.params.stator_outer_radius,
-            "stator_inner_radius": self.params.stator_inner_radius,
-            "rotor_outer_radius": self.params.rotor_outer_radius,
-            "rotor_inner_radius": self.params.rotor_inner_radius,
-            "air_gap": self.params.air_gap,
-            "num_slots": self.params.num_slots,
-            "num_poles": self.params.num_poles,
-        }
-
-    def sample_all_regions(
-        self,
-        n_points: int = 1000,
-        bounds: Optional[Dict[str, float]] = None
-    ) -> Dict[str, dict]:
-        """Sample interior points from all geometry regions.
-
-        This is a convenience method for PINN training data generation.
-
-        Args:
-            n_points: Number of points to sample per region
-            bounds: Optional bounds for sampling (not used for CSG)
-
-        Returns:
-            Dictionary mapping region names to sampled point dictionaries
-        """
-        geometries = self.get_modulus_geometries()
-        samples = {}
-
-        for name, geo in geometries.items():
-            try:
-                samples[name] = geo.sample_interior(n_points)
-            except Exception as e:
-                # Log warning but continue
-                samples[name] = {"error": str(e)}
-
-        return samples
-
-
 # Backward compatibility: Keep GeometryRegion as deprecated alias
 @dataclass
 class GeometryRegion:
-    """DEPRECATED: Use MotorGeometry2D.get_modulus_geometries() instead.
+    """DEPRECATED: legacy geometry-region descriptor.
 
     This class is kept for backward compatibility only.
     It will be removed in a future version.
@@ -741,8 +368,7 @@ class GeometryRegion:
     def __post_init__(self):
         import warnings
         warnings.warn(
-            "GeometryRegion is deprecated. Use MotorGeometry2D.get_modulus_geometries() "
-            "to get actual Modulus CSG geometry objects.",
+            "GeometryRegion is deprecated and will be removed in a future version.",
             DeprecationWarning,
             stacklevel=2
         )

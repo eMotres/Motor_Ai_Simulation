@@ -1,4 +1,4 @@
-"""2-D motor domains for Modulus PINN training.
+"""2-D motor sub-domain definitions (radii, winding layout, magnet polarity).
 
 Domain map
 ----------
@@ -19,7 +19,7 @@ Winding layout (24 slots / 28 poles = 14 pole-pairs, 3-phase):
   Computed via star-of-slots method.  Each slot is assigned one phase
   (A/B/C) and direction (+1/−1).  Used by the solver to set J_z per slot.
 
-All coordinates in metres (Modulus SI).  Config uses mm → divide by 1000.
+All coordinates in metres (SI).  Config uses mm → divide by 1000.
 """
 
 from __future__ import annotations
@@ -31,35 +31,11 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-# ── Modulus CSG primitives ────────────────────────────────────────────────────
-try:
-    from modulus.sym.geometry.primitives_2d import Circle, Rectangle
-    from modulus.sym.geometry.csg import CSGUnion, CSGDifference, CSGIntersection
-    HAS_MODULUS = True
-except ImportError:
-    try:
-        from physicsnemo.sym.geometry.primitives_2d import Circle, Rectangle
-        # CSG ops (union/diff/intersect) are built into Geometry via +/-/& operators
-        HAS_MODULUS = True
-    except ImportError:
-        HAS_MODULUS = False
-
-        class _GeoStub:
-            def __init__(self, *a, **kw):
-                self._name = kw.get("name", "stub")
-            def __sub__(self, other): return self
-            def __add__(self, other): return self
-            def __and__(self, other): return self
-            def sample_interior(self, n, **kw):
-                return {"x": np.zeros((n, 1)), "y": np.zeros((n, 1))}
-            def sample_boundary(self, n, **kw):
-                return {"x": np.zeros((n, 1)), "y": np.zeros((n, 1))}
-
-        class Circle(_GeoStub):       # type: ignore
-            def __init__(self, center=(0, 0), radius=1.0, **kw): super().__init__(**kw)
-        class Rectangle(_GeoStub):    # type: ignore
-            def __init__(self, point1=(0, 0), point2=(1, 1), **kw): super().__init__(**kw)
-        CSGUnion = CSGDifference = CSGIntersection = _GeoStub
+# ── Geometry primitives ───────────────────────────────────────────────────────
+# The active scikit-fem solver builds polygons via cadquery/shapely and never
+# samples PINN CSG; the NVIDIA Modulus CSG path has been removed.  The numpy
+# domain samplers below provide everything the live code needs.
+HAS_MODULUS = False  # NVIDIA Modulus path removed
 
 
 # ── Material conductivities ───────────────────────────────────────────────────
@@ -72,6 +48,42 @@ SIGMA_AIR   = 0.0
 # ─────────────────────────────────────────────────────────────────────────────
 # 1.  Parameter dataclass
 # ─────────────────────────────────────────────────────────────────────────────
+def _cfg_path() -> Path:
+    """The motor config this module must read — ``MOTOR_AI_SIM_CONFIG`` included.
+
+    2026-09-15.  This was a module-level constant pinned to the repo's own
+    ``config/motor_config.yaml``, and `params_from_config` took it as a DEFAULT
+    ARGUMENT — bound once, at import.  So every transient solved without an
+    explicit ``geo_override`` built its `MotorDomainParams` from the file on
+    that hardcoded path, whatever ``motor_ai_sim.config.DEFAULT_CONFIG_PATH``
+    said.
+
+    That is the one leak in a redirect the rest of the project honours
+    everywhere, and it is the redirect whose whole stated purpose is that "a
+    test must never be able to reach the machine the user has loaded"
+    (config.py, after the 2026-08-06 incident).  It cost a 93-minute Ø200 run:
+    the CAD, the mesh and the winding came from the redirected config (12 slots
+    / 10 poles) while `p.num_poles` came from the user's live L13 (28), so
+    `f_elec = rpm * p.num_poles // 2 / 60` was 2.8x the machine's real
+    fundamental, every PWM settle window and period-mean DC anchor was sized on
+    it, and the run died at the DC gate with -175 A left in phase A.
+
+    Resolved per call now, so the env var is the complete lever it is documented
+    to be.  With no env var set this is byte-identical to the old constant: the
+    live API and every ordinary run read exactly the file they always did.
+
+    Stage 1 of the multi-user migration routes it through
+    ``config.config_path()`` rather than ``DEFAULT_CONFIG_PATH`` directly, so a
+    per-request workspace moves it too.  With no workspace set: the same file.
+    """
+    try:
+        from motor_ai_sim.config import config_path as _resolve_cfg_path
+        return Path(str(_resolve_cfg_path()))
+    except Exception:                       # noqa: BLE001 — never fail a solve
+        return Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
+
+
+#: Kept as a NAME for readability; every reader goes through `_cfg_path()`.
 _CFG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "motor_config.yaml"
 
 
@@ -111,14 +123,182 @@ class MotorDomainParams:
     sigma_shaft:  float = 2.5e7    # Al6061 conductivity [S/m]
 
 
-def params_from_config(cfg_path: Path = _CFG_PATH) -> MotorDomainParams:
-    """Load MotorDomainParams from motor_config.yaml."""
+# ---------------------------------------------------------------------------
+# THE SAME-MACHINE PRINT  (v2, 2026-09-19)
+# ---------------------------------------------------------------------------
+# `routes.simulation._geometry_fingerprint` (call it v1) is a CACHE KEY: it
+# hashes the serialised live geometry object, which means a re-derived float
+# (32.400000000000006 against 32.4), a key that appears or disappears between
+# builds, or anything else the object happens to carry moves it.  That is
+# right for "may I reuse this result?" and wrong for the question a client
+# report asks — "were these two stored answers solved on the same MOTOR?" —
+# because a machine that never changed can print twice.  Measured on the L13:
+# every numeric geometry input of the 'rated' and 'peak' records is identical
+# and their v1 prints are `ee6accdc227f05fb` and `f3b4728f381c5b31`.
+#
+# THE DECISION (2026-09-19): v1 is NOT redefined.  Every cache, every stored
+# record and every staleness check already issued is keyed on it, and changing
+# it would invalidate all of them at once.  v2 is a second, narrower print
+# that answers only the same-machine question, and the report's consistency
+# check prefers it wherever both records carry one.
+#
+# THE TOLERANCE RULE: a value is rounded to 9 significant digits before it is
+# hashed, so re-derivation noise in the last bits cannot move the print, and a
+# real edit (the smallest dimension this tool lets a user type is 0.01 mm)
+# always can.  Keys that describe the DISCRETISATION rather than the machine —
+# a mesh size, an element order, a triangle count, a solver seed — are not in
+# it at all: two meshes of one geometry are one machine.
+
+#: Substrings of a key name that mean "how it was discretised or solved", not
+#: "what it is".  Excluded from the v2 print.
+_FP2_EXCLUDE_TOKENS = ("mesh", "element_order", "n_tri", "triangle", "seed",
+                       "refine", "solver", "tol", "n_steps", "timestamp",
+                       "computed_at", "recorded_at", "fingerprint")
+
+#: Significant digits kept before hashing — the tolerance rule above.
+FP2_SIG_DIGITS = 9
+
+
+def _fp2_clean(d) -> dict:
+    """One mapping reduced to what it says about the MACHINE."""
+    out = {}
+    for k, v in (d or {}).items():
+        key = str(k)
+        if key.startswith("_"):
+            continue
+        low = key.lower()
+        if any(t in low for t in _FP2_EXCLUDE_TOKENS):
+            continue
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            out[key] = bool(v)
+        elif isinstance(v, (int, float)):
+            out[key] = float("%.*g" % (FP2_SIG_DIGITS, float(v)))
+        elif isinstance(v, str):
+            out[key] = v
+        elif isinstance(v, dict):
+            sub = _fp2_clean(v)
+            if sub:
+                out[key] = sub
+    return out
+
+
+def geometry_fingerprint_v2(geo, materials=None, winding=None) -> str:
+    """A 16-character print of the MACHINE: its geometry, and the materials and
+    winding that make it that machine — never its mesh.
+
+    Identical parameters give an identical print, whatever mesh they were
+    discretised with and whatever float representation they arrived in (see
+    the block comment above for why this exists beside v1 and why v1 stays).
+
+    >>> a = {"rotor_outer_radius": 32.4, "mesh_size_mm": 1.5,
+    ...      "n_triangles": 4815}
+    >>> b = {"rotor_outer_radius": 32.400000000000006, "mesh_size_mm": 1.0,
+    ...      "n_triangles": 4813}
+    >>> geometry_fingerprint_v2(a) == geometry_fingerprint_v2(b)
+    True
+    """
+    import hashlib as _hl
+    import json as _jl
+    payload = {"g": _fp2_clean(geo)}
+    if materials:
+        payload["m"] = _fp2_clean(materials)
+    if winding:
+        payload["w"] = _fp2_clean(winding)
+    return _hl.md5(_jl.dumps(payload, sort_keys=True,
+                             default=str).encode()).hexdigest()[:16]
+
+
+def merge_geo_override(base: dict, override) -> dict:
+    """Merge a per-request geometry override into the base geometry so that the
+    slot/pole COUNTS always describe the motor the CAD actually meshes.
+
+    Invariant: the electrical topology (winding layout, pole pairs, sector BC
+    sign) must equal the MESHED geometry's topology, so the counts here follow
+    the exact resolution the CAD applies:
+
+      • base (config) tier — MotorGeometryParams ALWAYS rebuilds num_slots /
+        num_poles from the segment form (num_seg × *_per_segment), so that
+        product is the truth for the config; explicit counts are only used
+        when the segment form is absent (they can be STALE derived fields from
+        a half-applied preset).
+      • override tier — CadQueryMotor.set_parameters honours the override's
+        explicit counts first, else the override's own segment form (e.g. the
+        40 mm preset's 2×6 / 2×7 = 12 s / 14 p); the base counts survive only
+        when the override says nothing about topology.
+
+    A plain dict-update instead lets one motor's counts survive next to
+    another motor's mesh geometry — a chimera whose winding layout and
+    pole-pair drive are mis-phased against the meshed magnets, so the
+    fundamental never couples (ψ ≈ 0, zero-mean torque on the full ring) and
+    sector models pick the wrong (anti-)periodic BC sign (unbalanced phases).
+
+    The counts are not the only DERIVED field with that problem.  The config
+    also stores slot_width, the four radii and the four angles/pitches, and an
+    override supplies PRIMARIES only — so every one of them survived the merge
+    describing the base motor.  ``fem_transient_sliding_band`` read one of them
+    (``slot_width``, to size its mesh: element = slot_width/2), which made a
+    candidate evaluation's MESH a function of whatever design the user's shared
+    config happened to hold — 1.25 mm while it held the 40 mm machine, 1.15 mm
+    after it moved to the 30 mm one, for byte-identical requests.  So after the
+    merge every derived field the dict CARRIES is recomputed from the merged
+    primaries (``geometry.motor_geometry.derived_geometry``, the same derivation
+    MotorGeometryParams and the CAD use).
+
+    Only keys already present are refreshed: the merge's job is to make the dict
+    describe one motor, not to grow fields its consumers never asked for (a bare
+    fixture stays bare).
+    """
+    from motor_ai_sim.geometry.motor_geometry import derived_geometry
+
+    base = base or {}
+    g = dict(base)
+    if override:
+        g.update({k: v for k, v in override.items()})
+
+    def _seg_product(d: dict, per_key: str):
+        s = d.get("num_seg")
+        k = d.get(per_key)
+        if s and k:
+            return int(round(float(s) * float(k)))
+        return None
+
+    P = _seg_product(base, "num_poles_per_segment") or base.get("num_poles")
+    S = _seg_product(base, "num_slots_per_segment") or base.get("num_slots")
+    if override:
+        P = (override.get("num_poles")
+             or _seg_product(override, "num_poles_per_segment") or P)
+        S = (override.get("num_slots")
+             or _seg_product(override, "num_slots_per_segment") or S)
+    if P:
+        g["num_poles"] = int(round(P))
+    if S:
+        g["num_slots"] = int(round(S))
+    # Counts are resolved above, so the angles/pitches below land on THIS
+    # motor's counts.  Refresh in place, present keys only.
+    for k, v in derived_geometry(g).items():
+        if k in g:
+            g[k] = v
+    return g
+
+
+def params_from_config(cfg_path: Path = None, geo_override=None) -> MotorDomainParams:
+    """Load MotorDomainParams from motor_config.yaml.
+
+    geo_override (multi-user): a partial/full geometry dict that takes precedence
+    over the file's geometry, so a request can derive params from a signed-in
+    user's ACTIVE design without mutating the shared global config.
+    """
     import yaml
 
+    # `None` (the default) is resolved HERE, per call — not bound at import.
+    # See `_cfg_path`.
+    cfg_path = Path(cfg_path) if cfg_path is not None else _cfg_path()
     with cfg_path.open() as f:
         cfg = yaml.safe_load(f)
 
-    g   = cfg["geometry"]
+    g   = merge_geo_override(cfg["geometry"], geo_override)
     mm  = 1e-3
 
     r_so = g["stator_diameter"] / 2 * mm
@@ -127,11 +307,21 @@ def params_from_config(cfg_path: Path = _CFG_PATH) -> MotorDomainParams:
     r_ri = r_ro - g["magnet_height"] * mm - g["rotor_house_height"] * mm
     r_sh = r_ri - g["shaft_height"] * mm
 
-    num_slots = g["num_seg"] * g["num_slots_per_segment"]
-    num_poles = g["num_seg"] * g["num_poles_per_segment"]
+    # Counts MUST be ints — the config can carry them as floats (the web UI
+    # writes every number as a JS float, YAML round-trips, preset saves), and
+    # range()/modulo on a float raises TypeError and 500s the whole solve.
+    # num_poles/num_slots (the geometry's magnets/slots) are authoritative; the
+    # segment product is a fallback only (stale num_seg must not override the count).
+    num_slots = int(g.get("num_slots") or int(round(g["num_seg"])) * int(round(g["num_slots_per_segment"])))
+    num_poles = int(g.get("num_poles") or int(round(g["num_seg"])) * int(round(g["num_poles_per_segment"])))
 
+    # The wire COLUMN, not one strip: wire_split = N lays N strips of
+    # wire_width side by side with 2·wire_spacing_x between them, and the slot
+    # the CAD cuts grows with them (cadquery_geometry._strip_span).  Identical
+    # to wire_width at N = 1.
+    from motor_ai_sim.winding import winding_footprint_mm as _fp
     slot_width_m = (
-        g["wire_width"] + 2 * g["wire_spacing_x"] + 2 * g["insulation_thickness"]
+        _fp(g) + 2 * g["wire_spacing_x"] + 2 * g["insulation_thickness"]
     ) * mm
 
     return MotorDomainParams(
@@ -150,17 +340,16 @@ def params_from_config(cfg_path: Path = _CFG_PATH) -> MotorDomainParams:
         slot_height_m=g["slot_height"] * mm,
         wire_width_m=g["wire_width"] * mm,
         wire_height_m=g["wire_height"] * mm,
-        num_wires_per_slot=g["num_wires_per_slot"],
+        num_wires_per_slot=int(round(g["num_wires_per_slot"])),
     )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2.  Numpy-based domain samplers
-#     These work both in dry-run (no Modulus) and with Modulus PointCloud.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _NumpyDomain:
-    """Minimal sampling interface compatible with Modulus PointCloud and dry-run."""
+    """Minimal numpy sampling interface for the motor sub-domains."""
 
     def sample_interior(self, n: int, **kw) -> Dict[str, np.ndarray]:
         raise NotImplementedError
@@ -242,45 +431,120 @@ class SlotDomain(_NumpyDomain):
 # 3.  Winding layout — star-of-slots method (24 slots / 28 poles)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_winding_layout(num_slots: int, num_pole_pairs: int) -> List[Tuple[str, int]]:
-    """Return [(phase, direction), ...] for each slot using star-of-slots.
+def _slot_phase_sector(angle: float) -> Tuple[str, int]:
+    """Star-of-slots 60° belt → (phase, sign) for an electrical angle [deg]."""
+    sectors = [
+        ('A', +1, 330, 30),    # wraps around 0°
+        ('C', -1,  30, 90),
+        ('B', +1,  90, 150),
+        ('A', -1, 150, 210),
+        ('C', +1, 210, 270),
+        ('B', -1, 270, 330),
+    ]
+    a = angle % 360.0
+    for ph, sgn, start, end in sectors:
+        if start < end:
+            if start <= a < end:
+                return ph, sgn
+        else:                  # wraps 330→30
+            if a >= start or a < end:
+                return ph, sgn
+    return 'A', +1             # boundary fallback
 
-    Phase ∈ {'A','B','C'}, direction ∈ {+1, −1}.
-    Works for any (num_slots, num_pole_pairs) combination.
+
+def parse_winding_layout(layout_str: str) -> List[Tuple[str, int]]:
+    """Parse an explicit per-slot layout string like 'A|a|c|C|B|b|…' (one token
+    per slot, UPPER=+1, lower=−1) — lets you paste a winding straight from a
+    winding tool (emetor etc.).  Separators: '|', ',' or whitespace."""
+    out: List[Tuple[str, int]] = []
+    for tok in str(layout_str).replace(',', '|').replace(' ', '|').split('|'):
+        t = tok.strip()
+        if not t:
+            continue
+        out.append((t.upper(), +1 if t.isupper() else -1))
+    return out
+
+
+def build_winding_layout(num_slots: int, num_pole_pairs: int,
+                         single_layer: bool = True,
+                         layout_str: str = None) -> List[Tuple[str, int]]:
+    """Return [(phase, direction), ...] for each slot.
+
+    layout_str : if given AND it has exactly num_slots tokens, it is used VERBATIM
+        (paste-from-winding-tool path).  Otherwise the layout is generated:
+
+      single_layer=True  → SINGLE-LAYER concentrated winding: one coil per TWO
+        slots (coils on alternate teeth).  A coil's two sides sit in adjacent
+        slots as (phase,+1),(phase,−1); the phase of coil j comes from the
+        slot-2j star-of-slots phasor.  Phases come in pairs (A A C C B B …) and
+        each coil's sides alternate sign — matches the single-layer winding
+        tools (verified vs emetor for 24s/28p: A a c C B b a A C c b B …).
+
+      single_layer=False → DOUBLE-LAYER: one star-of-slots phasor per slot
+        (++ −− sign groups).
     """
-    phases = ['A', 'B', 'C']
+    if layout_str:
+        parsed = parse_winding_layout(layout_str)
+        if len(parsed) == num_slots:
+            return parsed
+        # wrong length → ignore and auto-generate
+
     alpha_e = num_pole_pairs * 360.0 / num_slots   # electrical angle step [deg]
 
-    layout: List[Tuple[str, int]] = []
-    for k in range(num_slots):
-        angle = (k * alpha_e) % 360.0
-        # Assign to 60° sector:  +A 330-30, -C 30-90, +B 90-150, -A 150-210,
-        #                         +C 210-270, -B 270-330
-        sectors = [
-            ('A', +1, 330, 30),    # wraps around 0°
-            ('C', -1,  30, 90),
-            ('B', +1,  90, 150),
-            ('A', -1, 150, 210),
-            ('C', +1, 210, 270),
-            ('B', -1, 270, 330),
-        ]
-        assigned = None
-        for ph, sgn, start, end in sectors:
-            if start < end:
-                if start <= angle < end:
-                    assigned = (ph, sgn)
-                    break
-            else:  # wraps 330-30
-                if angle >= start or angle < end:
-                    assigned = (ph, sgn)
-                    break
-        if assigned is None:
-            assigned = ('A', +1)   # fallback (boundary edge case)
-        layout.append(assigned)
-    return layout
+    if single_layer:
+        layout: List[Tuple[str, int]] = [('A', 1)] * num_slots
+        for j in range(num_slots // 2):
+            ph, sgn = _slot_phase_sector((2 * j) * alpha_e)
+            layout[2 * j]     = (ph, +sgn)
+            layout[2 * j + 1] = (ph, -sgn)
+        if num_slots % 2:                                  # odd leftover slot
+            layout[-1] = _slot_phase_sector((num_slots - 1) * alpha_e)
+        return layout
+
+    # double-layer (one phasor per slot)
+    return [_slot_phase_sector((k * alpha_e) % 360.0) for k in range(num_slots)]
 
 
-# Cached layout for 24s/28p (14 pole-pairs)
+def validate_sector_symmetry(num_slots, num_poles, n_sectors, winding_layout,
+                             *, paired_stator=False):
+    """Validate a scalar periodic/antiperiodic sector and its phase terminals.
+
+    ``paired_stator`` names the current CAD/template family's two-slot repeat;
+    it is a builder constraint, not a theorem about arbitrary stator geometry.
+    Check the resolved phase basis even at zero current: sector-scaled phase
+    flux linkages and subsequent terminal probes still require this symmetry.
+    Winding layer labels are irrelevant once the actual layout is resolved.
+    """
+    slots, poles, sectors = int(num_slots), int(num_poles), int(n_sectors)
+    if sectors <= 1:
+        return
+    if slots % sectors or poles % sectors:
+        raise ValueError(
+            f"n_sectors={sectors} is not a symmetry of this machine: "
+            f"{slots} slots / {poles} poles must both be divisible by it. "
+            "Use 1 for the full ring or a compatible sector.")
+    shift = slots // sectors
+    if paired_stator and shift % 2:
+        raise ValueError(
+            f"n_sectors={sectors} gives {shift} slots per sector; the current "
+            "paired-stator CAD/template family requires whole two-slot units. "
+            "Use 1 for the full ring or a sector containing whole slot pairs.")
+    if len(winding_layout) != slots:
+        raise ValueError("Resolved winding layout must contain one entry per slot.")
+    sign = -1 if (poles // sectors) % 2 else 1
+    for slot, (phase, direction) in enumerate(winding_layout):
+        other = (slot + shift) % slots
+        actual_phase, actual_direction = winding_layout[other]
+        if actual_phase != phase or actual_direction != sign * direction:
+            raise ValueError(
+                f"n_sectors={sectors} is incompatible with the resolved winding: "
+                f"slot {slot + 1} ({phase},{direction:+d}) maps to slot "
+                f"{other + 1} ({actual_phase},{actual_direction:+d}), but the "
+                f"sector boundary requires the same phase with sign {sign:+d}. "
+                "Use 1 for the full ring or a winding-compatible sector.")
+
+
+# Cached layout for 24s/28p (14 pole-pairs) — single-layer
 _WINDING_24S_28P: List[Tuple[str, int]] = build_winding_layout(24, 14)
 
 
@@ -313,7 +577,7 @@ class MotorDomains2D:
         self._build()
 
     @classmethod
-    def from_config(cls, cfg_path: Path = _CFG_PATH) -> "MotorDomains2D":
+    def from_config(cls, cfg_path: Path = None) -> "MotorDomains2D":
         return cls(params_from_config(cfg_path))
 
     # ── build ─────────────────────────────────────────────────────────────────
@@ -321,18 +585,14 @@ class MotorDomains2D:
         p = self.p
 
         def annulus(r_out: float, r_in: float) -> object:
-            if HAS_MODULUS:
-                return Circle((0, 0), r_out) - Circle((0, 0), r_in)
             return AnnulusDomain(r_out, r_in)
 
         # ── Bulk domains ──────────────────────────────────────────────────────
         self.domains["stator_core"] = annulus(p.r_stator_out, p.r_stator_in)
         self.domains["air_gap"]     = annulus(p.r_air_out,    p.r_air_in)
         self.domains["rotor_core"]  = annulus(p.r_rotor_in,   p.r_shaft_in)
-        self.domains["shaft"]       = (Circle((0, 0), p.r_shaft_in)
-                                       if HAS_MODULUS else AnnulusDomain(p.r_shaft_in, 0.0))
-        self.domains["full"]        = (Circle((0, 0), p.r_stator_out)
-                                       if HAS_MODULUS else AnnulusDomain(p.r_stator_out, 0.0))
+        self.domains["shaft"]       = AnnulusDomain(p.r_shaft_in, 0.0)
+        self.domains["full"]        = AnnulusDomain(p.r_stator_out, 0.0)
 
         self._set_props("stator_core", sigma=p.sigma_fe_lam, mu_r=5000.0)
         self._set_props("air_gap",     sigma=SIGMA_AIR,      mu_r=1.0)
@@ -340,8 +600,17 @@ class MotorDomains2D:
         self._set_props("shaft",       sigma=SIGMA_AIR,      mu_r=1.0)
 
         # ── Individual slot (conductor) sub-domains ───────────────────────────
-        self.winding_layout = build_winding_layout(p.num_slots,
-                                                   p.num_poles // 2)
+        # Winding layout from config: layers=1 → single-layer (default), and an
+        # optional explicit `layout` string (paste from a winding tool) wins.
+        try:
+            from motor_ai_sim.config import get_config as _gc
+            _wcfg = (_gc().get("winding", {}) or {})
+        except Exception:
+            _wcfg = {}
+        self.winding_layout = build_winding_layout(
+            p.num_slots, p.num_poles // 2,
+            single_layer=(int(_wcfg.get("layers", 1)) == 1),
+            layout_str=(_wcfg.get("layout") or None))
         slot_pitch = 2 * math.pi / p.num_slots
         # Slot radial extent: from stator inner outward by slot_height
         r_slot_in  = p.r_stator_in
@@ -457,20 +726,15 @@ class MotorDomains2D:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5.  Current-density helper
+# 5.  Current-density helper — REMOVED
 # ─────────────────────────────────────────────────────────────────────────────
-
-def winding_current_density(
-    I_peak: float,
-    n_turns: int,
-    slot_area_m2: float,
-    fill_factor: float = 0.6,
-    phase_angle_rad: float = 0.0,
-) -> Tuple[float, float]:
-    """Return (J_pos, J_neg) current densities for a coil pair [A/m²]."""
-    J_peak = I_peak * n_turns / (slot_area_m2 * fill_factor)
-    J = J_peak * math.sin(phase_angle_rad)
-    return J, -J
+# `winding_current_density(I, N, slot_area_m2, fill_factor=0.6)` lived here with
+# no callers.  It is the exact formula that made the solver excite every machine
+# at k·N·I: a nominal slot rectangle times a fill factor nothing sets, used as
+# the divisor for a source applied over the REAL copper.  The winding source is
+# normalised by the meshed copper area of the slot now
+# (fem_solver_2d.coil_copper_areas); leaving the old formula here as a helper
+# invites it back.
 
 
 # ─────────────────────────────────────────────────────────────────────────────

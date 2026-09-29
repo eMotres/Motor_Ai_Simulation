@@ -1,0 +1,105 @@
+[
+  {
+    "labels": [
+      "balanced (max eff*td, ripple<=7)",
+      "max-td (most compact, ripple<=8)"
+    ],
+    "current_a": 146.03304272384673,
+    "overrides": {
+      "slot_height": 19.700000000000003,
+      "core_thickness": 6.7,
+      "tooth_width": 11.0,
+      "wire_width": 6.6000000000000005,
+      "wire_height": 0.8,
+      "num_wires_per_slot": 11.0,
+      "magnet_height": 21.400000000000002,
+      "magnet_fill_up": 0.41071213575755294,
+      "magnet_down_height": 2.5,
+      "stator_fillet_r": 4.5,
+      "stator_fillet_r1": 1.9000000000000001
+    },
+    "steps60": {
+      "eff": 0.93183,
+      "td": 8.2763,
+      "ripple": 6.49,
+      "torque": 79.464
+    },
+    "steps120": {
+      "eff": 0.92284,
+      "td": 8.3097,
+      "ripple": 9.48,
+      "torque": 79.785,
+      "mass": 9.601,
+      "v_peak": 205.8,
+      "p_loss": 2794.3
+    }
+  },
+  {
+    "labels": [
+      "eff-priority (max td, eff>=95%, ripple<=7)"
+    ],
+    "current_a": 107.0,
+    "overrides": {
+      "slot_height": 19.8,
+      "core_thickness": 6.800000000000001,
+      "tooth_width": 11.4,
+      "wire_width": 6.6000000000000005,
+      "wire_height": 0.9,
+      "num_wires_per_slot": 12.0,
+      "magnet_height": 21.400000000000002,
+      "magnet_fill_up": 0.467,
+      "magnet_down_height": 2.3000000000000003,
+      "stator_fillet_r": 4.6000000000000005,
+      "stator_fillet_r1": 1.8
+    },
+    "steps60": {
+      "eff": 0.95239,
+      "td": 7.746,
+      "ripple": 6.46,
+      "torque": 77.788
+    },
+    "steps120": {
+      "eff": 0.94286,
+      "td": 7.7751,
+      "ripple": 7.78,
+      "torque": 78.08,
+      "mass": 10.042,
+      "v_peak": 208.8,
+      "p_loss": 1982.2
+    }
+  },
+  {
+    "labels": [
+      "high-eff (max eff, td>=7.7, ripple<=9)"
+    ],
+    "current_a": 96.79072028856234,
+    "overrides": {
+      "slot_height": 18.5,
+      "core_thickness": 7.6000000000000005,
+      "tooth_width": 13.200000000000001,
+      "wire_width": 6.5,
+      "wire_height": 0.9,
+      "num_wires_per_slot": 12.0,
+      "magnet_height": 21.6,
+      "magnet_fill_up": 0.42328653230806446,
+      "magnet_down_height": 2.5,
+      "stator_fillet_r": 4.4,
+      "stator_fillet_r1": 1.4000000000000001
+    },
+    "steps60": {
+      "eff": 0.95852,
+      "td": 7.7258,
+      "ripple": 8.73,
+      "torque": 77.516
+    },
+    "steps120": {
+      "eff": 0.95015,
+      "td": 7.7241,
+      "ripple": 9.12,
+      "torque": 77.498,
+      "mass": 10.033,
+      "v_peak": 212.7,
+      "p_loss": 1703.2
+    }
+  }
+]

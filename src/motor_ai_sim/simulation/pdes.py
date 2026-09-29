@@ -1,4 +1,4 @@
-"""PDE definitions for 2D magnetostatics using NVIDIA Modulus symbolic API.
+"""PDE definitions for 2D magnetostatics (sympy symbolic API).
 
 Physical model
 --------------
@@ -24,33 +24,21 @@ Permanent magnet contribution (remanent magnetisation M):
     ν · (∂²A_z/∂x² + ∂²A_z/∂y²) + J_z
         − ν₀ · (∂M_y/∂x − ∂M_x/∂y) = 0                (3)
 
-All implemented as Modulus `PDE` subclasses so they can be used directly
-in `PointwiseInteriorConstraint`.
+All implemented as `PDE` subclasses holding sympy residual expressions.
 """
 
 from __future__ import annotations
 
 from sympy import Symbol, Function, Number, sqrt, diff, Abs
 
-# ── Modulus symbolic PDE base ─────────────────────────────────────────────────
-try:
-    from modulus.sym.eq.pde import PDE
-    HAS_MODULUS = True
-except ImportError:
-    try:
-        from physicsnemo.sym.eq.pde import PDE      # physicsnemo-sym package
-        HAS_MODULUS = True
-    except ImportError:
-        try:
-            from physicsnemo.eq.pde import PDE      # legacy path
-            HAS_MODULUS = True
-        except ImportError:
-            HAS_MODULUS = False
+# ── Symbolic PDE base ─────────────────────────────────────────────────────────
+HAS_MODULUS = False  # NVIDIA Modulus path removed
 
-        class PDE:                                   # minimal stub for offline dev
-            """Stub PDE base used when Modulus is not installed."""
-            name = "PDE"
-            equations: dict = {}
+
+class PDE:
+    """Minimal sympy PDE base (NVIDIA Modulus PDE base removed)."""
+    name = "PDE"
+    equations: dict = {}
 
 
 # ── μ₀ constant ───────────────────────────────────────────────────────────────
@@ -135,7 +123,7 @@ class MagnetosticsNonlinear2D(PDE):
         nu = nu_0 + (nu_fe_0 - nu_0) / (1.0 - ratio_sq + 1e-6)
 
         # ∂/∂x(ν ∂A_z/∂x) + ∂/∂y(ν ∂A_z/∂y) + J_z = 0
-        # Expand using product rule (Modulus handles autodiff of nu·∂A_z/∂x)
+        # Expand using product rule (sympy handles the symbolic derivatives)
         self.equations = {
             "magnetostatics_nl": (
                 diff(nu * diff(A_z, x), x)
@@ -239,25 +227,46 @@ class MagnetostaticsAC2D(PDE):
         omega: float = 0.0,
         Jr:    float = 0.0,
         Ji:    float = 0.0,
+        src_r=None,
+        src_i=None,
     ):
+        """src_r / src_i : optional SYMPY expressions (in A/m²) giving a
+        spatially-varying source current density.  When given they REPLACE the
+        constant Jr / Ji.  Used for the permanent-magnet equivalent current
+        density  J_mag = curl(M)_z = M_φ/r  (tangential magnetisation), which is
+        a genuine VOLUME source the interior collocation can sample."""
         x  = Symbol("x")
         y  = Symbol("y")
         Ar = Function("Ar")(x, y)
         Ai = Function("Ai")(x, y)
 
-        nu = 1.0 / (MU_0 * mu_r)
+        # Resolve the source term (constant scalar → Number, or symbolic expr).
+        src_real = (MU_0 * src_r) if src_r is not None else Number(MU_0 * Jr)
+        src_imag = (MU_0 * src_i) if src_i is not None else Number(MU_0 * Ji)
 
-        # (4a) ν·ΔAr + ωσ·Ai + Jr = 0
+        # ── NON-DIMENSIONALISED residual ──────────────────────────────────
+        # The raw equation  ν·ΔA + ωσ·Ai + Jr = 0  has  ν = 1/(μ₀μ_r) ≈ 8·10⁵
+        # and source J ~ 10⁶, so its squared residual is ~10¹² while the
+        # Dirichlet BC residual (A_z)² ~ 10⁻⁴.  The optimiser then sees the BC
+        # as ~10¹⁶× smaller and ignores it → the homogeneous (linear) part of
+        # A_z floats free → a degenerate UNIFORM |B| field.  Multiplying the
+        # whole PDE by μ₀ rebalances it: the Laplacian coefficient becomes
+        # 1/μ_r ~ O(1) and the source becomes μ₀·J ~ O(1), comparable to the
+        # BC loss.  Same physics, vastly better-conditioned training.
+        inv_mur   = 1.0 / mu_r
+        mu0_sigma = MU_0 * omega * sigma   # μ₀ωσ
+
+        # (4a) (1/μ_r)·ΔAr + μ₀ωσ·Ai + μ₀·Jr = 0
         eq_real = (
-            nu * (diff(Ar, x, 2) + diff(Ar, y, 2))
-            + Number(omega * sigma) * Ai
-            + Number(Jr)
+            inv_mur * (diff(Ar, x, 2) + diff(Ar, y, 2))
+            + Number(mu0_sigma) * Ai
+            + src_real
         )
-        # (4b) ν·ΔAi − ωσ·Ar + Ji = 0
+        # (4b) (1/μ_r)·ΔAi − μ₀ωσ·Ar + μ₀·Ji = 0
         eq_imag = (
-            nu * (diff(Ai, x, 2) + diff(Ai, y, 2))
-            - Number(omega * sigma) * Ar
-            + Number(Ji)
+            inv_mur * (diff(Ai, x, 2) + diff(Ai, y, 2))
+            - Number(mu0_sigma) * Ar
+            + src_imag
         )
 
         self.equations = {

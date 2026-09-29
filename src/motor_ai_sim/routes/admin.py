@@ -1,0 +1,708 @@
+"""Admin-only endpoints: user management + usage statistics.
+
+The data source is Firebase Auth (the user list) + Firestore (saved designs)
+via the Firebase Admin SDK. On Cloud Run the SDK initialises from Application
+Default Credentials — the service account, no key file. Locally there are no
+credentials, so the SDK is unavailable and the endpoints serve a small MOCK
+dataset flagged `source: "mock"`, letting the admin UI be built and exercised
+without production access.
+
+Every route requires tier == admin (require_admin). When AUTH_ENFORCE is off
+(local dev) the gate is open and the caller is treated as admin.
+"""
+from __future__ import annotations
+
+import time
+from typing import Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException
+
+from motor_ai_sim.auth import require_admin, require_admin_or_token
+
+router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+_VALID_TIERS = ("free", "pro", "team", "admin")
+_DAY_MS = 86_400_000.0
+
+
+# ── Firebase Admin SDK (lazy, optional) ──────────────────────────────────────
+_admin_mod = None
+_init_done = False
+_init_error: Optional[str] = None
+
+
+def _ensure_admin():
+    """Initialise firebase-admin once and return the module, or None if the
+    package isn't installed / no credentials are available (then we serve mock)."""
+    global _admin_mod, _init_done, _init_error
+    if _init_done:
+        return _admin_mod
+    _init_done = True
+    try:
+        import firebase_admin
+        if not firebase_admin._apps:
+            # initialize_app() with no args uses Application Default Credentials
+            # (the Cloud Run service account). Raises locally with no creds.
+            firebase_admin.initialize_app()
+        _admin_mod = firebase_admin
+    except Exception as e:  # package missing or no ADC -> mock mode
+        _init_error = str(e)
+        _admin_mod = None
+    return _admin_mod
+
+
+def _tier_of(user_record) -> str:
+    """Mirror auth._tier_for for an Admin-SDK UserRecord: ADMIN_EMAILS wins,
+    then a 'tier' custom claim, else 'free'."""
+    from motor_ai_sim.auth import _ADMIN_EMAILS, _TIER_RANK
+    email = (user_record.email or "").strip().lower()
+    if email and email in _ADMIN_EMAILS:
+        return "admin"
+    claims = user_record.custom_claims or {}
+    t = claims.get("tier")
+    return t if t in _TIER_RANK else "free"
+
+
+def _real_users(admin) -> list[dict]:
+    from firebase_admin import auth as fb_auth
+    out: list[dict] = []
+    for u in fb_auth.list_users().iterate_all():
+        md = u.user_metadata
+        out.append({
+            "uid": u.uid,
+            "email": u.email,
+            "displayName": u.display_name or (u.email.split("@")[0] if u.email else u.uid),
+            "createdAt": md.creation_timestamp if md else None,        # ms epoch
+            "lastLoginAt": md.last_sign_in_timestamp if md else None,  # ms epoch
+            "disabled": bool(u.disabled),
+            "tier": _tier_of(u),
+        })
+    return out
+
+
+def _design_counts(admin) -> dict:
+    """Designs per user from Firestore. Uses a collection-group query over
+    'designs' so it counts even when the parent users/{uid} doc doesn't exist
+    (subcollection docs don't create ancestor docs)."""
+    try:
+        from firebase_admin import firestore
+        db = firestore.client()
+        counts: dict = {}
+        for d in db.collection_group("designs").stream():
+            parent = d.reference.parent.parent  # users/{uid}
+            if parent is None:
+                continue
+            counts[parent.id] = counts.get(parent.id, 0) + 1
+        return counts
+    except Exception:
+        return {}
+
+
+def _mock_users() -> list[dict]:
+    """Deterministic demo users (timestamps relative to now, so 'active' and the
+    signup timeline look live). Served only when the Admin SDK is unavailable."""
+    now = time.time() * 1000
+    # (email, tier, created_days_ago, last_login_days_ago|None, designs, disabled)
+    rows = [
+        ("vadim.owner@example.com", "admin", 240, 0, 14, False),
+        ("eng.lead@example.com",    "admin", 220, 2, 9, False),
+        ("alice.pro@example.com",   "pro",   180, 1, 11, False),
+        ("bob.design@example.com",  "pro",   150, 3, 6, False),
+        ("carla.team@example.com",  "team",  140, 0, 22, False),
+        ("dmitri.team@example.com", "team",  120, 5, 17, False),
+        ("erin.free@example.com",   "free",  95, 4, 3, False),
+        ("frank.free@example.com",  "free",  80, 12, 1, False),
+        ("grace.free@example.com",  "free",  70, 40, 2, False),
+        ("hugo.free@example.com",   "free",  55, 65, 0, False),
+        ("ivy.pro@example.com",     "pro",   42, 6, 5, False),
+        ("jack.free@example.com",   "free",  30, 8, 1, False),
+        ("kira.free@example.com",   "free",  18, 2, 0, False),
+        ("leo.free@example.com",    "free",  9, 1, 1, False),
+        ("mara.free@example.com",   "free",  3, None, 0, False),
+        ("spam.bot@example.com",    "free",  60, 58, 0, True),
+    ]
+    out = []
+    for i, (email, tier, cago, lago, designs, disabled) in enumerate(rows):
+        out.append({
+            "uid": f"mock_{i:02d}",
+            "email": email,
+            "displayName": email.split("@")[0],
+            "createdAt": now - cago * _DAY_MS,
+            "lastLoginAt": (now - lago * _DAY_MS) if lago is not None else None,
+            "disabled": disabled,
+            "tier": tier,
+            "designCount": designs,
+        })
+    return out
+
+
+def _load_users() -> tuple[str, list[dict]]:
+    admin = _ensure_admin()
+    if admin is None:
+        return "mock", _mock_users()
+    users = _real_users(admin)
+    counts = _design_counts(admin)
+    for u in users:
+        u["designCount"] = counts.get(u["uid"], 0)
+    return "firebase", users
+
+
+def _day(ms: float) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
+
+
+def _compute_stats(users: list[dict]) -> dict:
+    now = time.time() * 1000
+    by_tier: dict = {}
+    active7 = active30 = 0
+    buckets: dict = {}
+    for u in users:
+        t = u.get("tier") or "free"
+        by_tier[t] = by_tier.get(t, 0) + 1
+        c = u.get("createdAt")
+        if c:
+            buckets[_day(c)] = buckets.get(_day(c), 0) + 1
+        ll = u.get("lastLoginAt")
+        if ll is not None:
+            if now - ll <= 7 * _DAY_MS:
+                active7 += 1
+            if now - ll <= 30 * _DAY_MS:
+                active30 += 1
+    signups = []
+    cum = 0
+    for d in sorted(buckets):
+        cum += buckets[d]
+        signups.append({"date": d, "count": buckets[d], "total": cum})
+    disabled = sum(1 for u in users if u.get("disabled"))
+    designs = sum(int(u.get("designCount") or 0) for u in users)
+    return {
+        "total": len(users),
+        "disabled": disabled,
+        "designs": designs,
+        "byTier": by_tier,
+        "active7": active7,
+        "active30": active30,
+        "signups": signups,
+    }
+
+
+@router.get("/users")
+def list_users(_admin: dict = Depends(require_admin)):
+    """All users with tier, sign-up / last-login times, and saved-design count."""
+    source, users = _load_users()
+    users.sort(key=lambda u: u.get("createdAt") or 0, reverse=True)
+    return {"source": source, "count": len(users), "users": users}
+
+
+@router.get("/stats")
+def stats(_admin: dict = Depends(require_admin)):
+    """Aggregate usage: totals, tier split, active 7/30d, signup timeline."""
+    source, users = _load_users()
+    return {"source": source, **_compute_stats(users)}
+
+
+@router.post("/users/{uid}/tier")
+def set_tier(uid: str, body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
+    """Set a user's plan via a Firebase custom claim ('tier')."""
+    tier = (body or {}).get("tier")
+    if tier not in _VALID_TIERS:
+        raise HTTPException(status_code=400, detail=f"tier must be one of {_VALID_TIERS}")
+    admin = _ensure_admin()
+    if admin is None:
+        return {"ok": True, "source": "mock", "uid": uid, "tier": tier}
+    from firebase_admin import auth as fb_auth
+    current = fb_auth.get_user(uid).custom_claims or {}
+    fb_auth.set_custom_user_claims(uid, {**current, "tier": tier})
+    return {"ok": True, "source": "firebase", "uid": uid, "tier": tier}
+
+
+@router.post("/users/{uid}/disable")
+def set_disabled(uid: str, body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
+    """Disable or re-enable a user's account."""
+    disabled = bool((body or {}).get("disabled", True))
+    admin = _ensure_admin()
+    if admin is None:
+        return {"ok": True, "source": "mock", "uid": uid, "disabled": disabled}
+    from firebase_admin import auth as fb_auth
+    fb_auth.update_user(uid, disabled=disabled)
+    return {"ok": True, "source": "firebase", "uid": uid, "disabled": disabled}
+
+
+# ── Per-user motor access ─────────────────────────────────────────────────────
+# WHICH catalog motors an account may open is registry data (users.json
+# `motors: {all, dies}`), read by motor_access on every catalog request.  These
+# three routes are the admin UI's side of it; nothing else writes grants.
+
+
+@router.get("/motors")
+def list_motors(_admin: dict = Depends(require_admin)):
+    """Every die in the shared catalog — the grant picker's list."""
+    from motor_ai_sim.routes.family import catalog_dies
+    dies = catalog_dies()
+    return {"count": len(dies), "dies": dies}
+
+
+@router.get("/users/{email}/motors")
+def get_user_motors(email: str, _admin: dict = Depends(require_admin)):
+    """This account's grants: `{"all": bool, "dies": [names]}`."""
+    from motor_ai_sim import users as U
+    if U.get_user(email) is None:
+        raise HTTPException(status_code=404, detail=f"user '{email}' not found")
+    return {"email": email.strip().lower(), "motors": U.get_motor_grants(email)}
+
+
+@router.put("/users/{email}/motors")
+def set_user_motors(email: str, body: dict = Body(default={}),
+                    _admin: dict = Depends(require_admin)):
+    """Replace this account's grants.  `all: true` means the whole catalog
+    (present and future); otherwise `dies` is the exact list.
+
+    Unknown die names are REFUSED and named — a grant silently dropped because
+    a die was renamed is a user who still sees nothing and no way to find out
+    why."""
+    from motor_ai_sim import users as U
+    if U.get_user(email) is None:
+        raise HTTPException(status_code=404, detail=f"user '{email}' not found")
+    body = body or {}
+    all_motors = bool(body.get("all"))
+    raw = body.get("dies")
+    if raw is not None and not isinstance(raw, (list, tuple)):
+        raise HTTPException(status_code=422,
+                            detail="'dies' must be a list of die names")
+    dies = _check_dies(raw)
+    grants = U.set_motor_grants(email, all_motors=all_motors, dies=dies)
+    return {"ok": True, "email": email.strip().lower(), "motors": grants}
+
+
+# ── Die-level access (public / selected clients) ────────────────────────────
+# ORTHOGONAL to the per-user grant above: a grant says which dies an ACCOUNT
+# may see; this says whether a DIE, on its own, is private (default), open to
+# every signed-in account, or shared with a short list of named ones. One
+# store (motor_access.die_access.json), admin-only writes, audited like every
+# other admin action (sessions.record_event — the same log the Logs/Events
+# admin tab already shows).
+
+from motor_ai_sim import motor_access as _MA
+
+
+def _used_by_count(die: str) -> int:
+    """How many individual accounts hold this die in their OWN grant list —
+    informational only (a public/selected die's real audience is wider; this
+    is what the per-account grant table would show)."""
+    from motor_ai_sim import users as U
+    return sum(1 for row in U.list_users()
+               if die in (row.get("motors") or {}).get("dies", []))
+
+
+@router.get("/dies")
+def list_dies_access(_admin: dict = Depends(require_admin)):
+    """Every catalog die with its owner-set visibility, for the Motors access
+    table: name, visibility, and how many accounts already hold it directly."""
+    from motor_ai_sim.routes.family import catalog_dies
+    access = _MA.all_die_access()
+    out = []
+    for d in catalog_dies():
+        name = d.get("name")
+        a = access.get(name) or {"visibility": _MA.VIS_PRIVATE, "clients": []}
+        out.append({**d, "visibility": a["visibility"], "clients": a["clients"],
+                    "used_by": _used_by_count(name)})
+    return {"count": len(out), "dies": out}
+
+
+@router.get("/dies/{die}/access")
+def get_die_access(die: str, _admin: dict = Depends(require_admin)):
+    from motor_ai_sim.routes.family import die_names
+    if die not in die_names():
+        raise HTTPException(status_code=404, detail=f"die '{die}' not found")
+    return {"die": die, **_MA.get_die_access(die)}
+
+
+@router.put("/dies/{die}/access")
+def set_die_access(die: str, body: dict = Body(default={}),
+                   admin_user: dict = Depends(require_admin)):
+    """Set one die's visibility: private (default), public (every signed-in
+    account, incl. MCP agents — motor_access.may_see_die is the one gate both
+    the web routes and the MCP tools ask), or selected (named accounts only).
+    Recipients stay read-only regardless — this never grants catalog WRITE
+    access, only the same read `may_see_die` already governs."""
+    from motor_ai_sim.routes.family import die_names
+    if die not in die_names():
+        raise HTTPException(status_code=404, detail=f"die '{die}' not found")
+    body = body or {}
+    vis = str(body.get("visibility") or "").strip().lower()
+    if vis not in _MA.VISIBILITIES:
+        raise HTTPException(status_code=422,
+                            detail=f"'visibility' must be one of {sorted(_MA.VISIBILITIES)}")
+    clients = body.get("clients")
+    if clients is not None and not isinstance(clients, (list, tuple)):
+        raise HTTPException(status_code=422, detail="'clients' must be a list of e-mails")
+    clients = [str(c).strip() for c in (clients or []) if str(c).strip()]
+    if vis == _MA.VIS_SELECTED and clients:
+        from motor_ai_sim import users as U
+        unknown = sorted({c for c in clients if U.get_user(c) is None})
+        if unknown:
+            raise HTTPException(status_code=422,
+                                detail=f"unknown account(s): {', '.join(unknown)}")
+    result = _MA.set_die_access(die, visibility=vis, clients=clients)
+    from motor_ai_sim import sessions as S
+    S.record_event("die_access_change", email=str(admin_user.get("id") or admin_user.get("email") or ""),
+                   reason=f"{die} -> {vis}" + (f" ({len(clients)} client(s))" if vis == _MA.VIS_SELECTED else ""),
+                   path=f"/api/admin/dies/{die}/access")
+    return {"ok": True, "die": die, **result}
+
+
+# ── Invites ───────────────────────────────────────────────────────────────────
+# The door for an external user, and the ONLY one on a host with
+# PUBLIC_EXHIBIT=0 and CATALOG_GRANT_ALL_REGISTERED unset: an admin creates the
+# registry row, sets its tier and picks its motors, and the person signs in with
+# Google.  NO E-MAIL IS SENT — Hetzner blocks outbound 25/465, so a route that
+# claimed to send one would be lying.  The admin tells the person.
+#
+# Three routes and no new store: an invite is a stamped row in users.json
+# (users.invite_user), which is why disable / delete / grant changes made
+# through the other admin routes cannot drift away from it.
+
+
+def _check_dies(raw) -> list:
+    """Validate a die list against the catalog and NAME the unknown ones.
+
+    Shared with :func:`set_user_motors` above, which grew the rule first: a
+    grant silently dropped because a die was renamed is a user who still sees
+    nothing and no way to find out why.
+    """
+    from motor_ai_sim.routes.family import die_names
+    if raw is None:
+        raw = []
+    if not isinstance(raw, (list, tuple)):
+        raise HTTPException(status_code=422,
+                            detail="'motors' must be a list of die names or \"all\"")
+    dies = [str(d).strip() for d in raw if str(d).strip()]
+    known = die_names()
+    unknown = sorted({d for d in dies if d not in known})
+    if unknown:
+        raise HTTPException(status_code=422, detail=(
+            "unknown die(s): " + ", ".join(f"'{d}'" for d in unknown)
+            + " — the catalog has " + (", ".join(f"'{d}'" for d in sorted(known))
+                                       if known else "no dies")))
+    return dies
+
+
+@router.post("/invite")
+def invite(body: dict = Body(default={}),
+           admin_user: dict = Depends(require_admin)):
+    """Invite one external user: registry row + tier + motors + workspace.
+
+    `{email, tier="free", motors: [die names] | "all" | [], note, name}`.
+
+    Everything the account needs exists when this returns — including its
+    WORKSPACE, seeded from the shared machine, so the person's first request
+    after signing in reads a working motor and not a half-created directory.
+    Re-inviting an existing account re-sets its tier, grants and note (and
+    un-disables it); it never touches a password.
+    """
+    from motor_ai_sim import users as U
+    from motor_ai_sim import workspace as W
+    body = body or {}
+    email = str(body.get("email") or "").strip().lower()
+    tier = str(body.get("tier") or "free").strip().lower()
+    if tier not in _VALID_TIERS:
+        raise HTTPException(status_code=422,
+                            detail=f"tier must be one of {_VALID_TIERS}")
+    motors = body.get("motors", [])
+    all_motors = (motors is True
+                  or (isinstance(motors, str) and motors.strip().lower() == "all")
+                  or (isinstance(motors, dict) and bool(motors.get("all"))))
+    dies = [] if all_motors else _check_dies(
+        motors.get("dies") if isinstance(motors, dict) else motors)
+    try:
+        user = U.invite_user(email, tier=tier, name=str(body.get("name") or ""),
+                             by=str(admin_user.get("email") or "") or "admin",
+                             note=str(body.get("note") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    grants = U.set_motor_grants(email, all_motors=all_motors, dies=dies)
+    ws = W.provision(email)
+    return {"ok": True,
+            "user": {**user, "motors": grants},
+            "motors": grants,
+            "workspace": (str(ws.root) if ws is not None else None),
+            # Said out loud in the response because the admin is the messenger:
+            # nothing left this server for the invited address.
+            "emailed": False,
+            "next": "no e-mail was sent — tell them to sign in with Google"}
+
+
+@router.get("/invites")
+def list_invites(_admin: dict = Depends(require_admin)):
+    """Every invited account, newest first, with whether it has ever signed in."""
+    from motor_ai_sim import sessions as S
+    from motor_ai_sim import users as U
+    rows = []
+    for r in U.list_invites():
+        try:
+            seen = S.list_for(r["email"])
+        except Exception:                               # noqa: BLE001
+            seen = []
+        last = max((float(s.get("last_seen") or s.get("created") or 0.0)
+                    for s in seen), default=0.0)
+        rows.append({**r, "accepted": bool(seen),
+                     "last_seen": last or None})
+    return {"count": len(rows), "invites": rows}
+
+
+@router.delete("/invites/{email}")
+def revoke_invite(email: str, _admin: dict = Depends(require_admin)):
+    """Withdraw an invite: the registry row goes, every session of it is revoked.
+
+    The account stops being able to sign in as itself — and if the person signs
+    in with Google again they are an unknown address, i.e. `free` with NOTHING
+    granted (auth._registry_tier), which is the same as being outside.
+
+    The WORKSPACE DIRECTORY IS NOT TOUCHED and its path is in the answer: it
+    holds the person's own saved work, and deleting a user's data as a side
+    effect of tidying an invite list is not a decision a DELETE on an invite
+    gets to make.  Refuses (404) on an account that was never invited — those
+    are removed through DELETE /api/auth/users/{email}, deliberately.
+    """
+    from motor_ai_sim import sessions as S
+    from motor_ai_sim import users as U
+    from motor_ai_sim import workspace as W
+    email = (email or "").strip().lower()
+    if U.get_user(email) is None:
+        raise HTTPException(status_code=404, detail=f"user '{email}' not found")
+    if U.invite_of(email) is None:
+        raise HTTPException(status_code=404, detail=(
+            f"'{email}' was not invited — delete it through "
+            "DELETE /api/auth/users/{email} if that is what you mean"))
+    n = S.revoke_all(email)
+    U.delete_user(email)
+    root = W.workspaces_root()
+    ws_dir = (root / W.workspace_id(email)) if root is not None else None
+    return {"ok": True, "email": email, "sessions_revoked": n,
+            "workspace": {"id": W.workspace_id(email),
+                          "path": str(ws_dir) if ws_dir else None,
+                          "exists": bool(ws_dir and ws_dir.is_dir())}}
+
+
+# ── Sessions + auth events ────────────────────────────────────────────────────
+# The forensic side of sign-in.  A session record says WHICH browser holds a
+# live token (user agent, ip, first and last seen); the event log says what the
+# server decided about every token it was shown, with the reason.  Together they
+# answer the question that had no answer before 2026-09-03: was the user signed
+# out because something rejected their token, or because that browser profile
+# never kept it in the first place?
+
+
+@router.get("/sessions")
+def admin_sessions(email: Optional[str] = None,
+                   _admin: dict = Depends(require_admin)):
+    """Every session on the deployment, newest first; `?email=` narrows it."""
+    from motor_ai_sim import sessions as S
+    rows = [S.public(r) for r in S.list_all(email)]
+    return {"count": len(rows), "sessions": rows}
+
+
+@router.post("/sessions/{sid}/revoke")
+def admin_revoke_session(sid: str, _admin: dict = Depends(require_admin)):
+    """Kill one session immediately — its token stops verifying on the next
+    request (reason `revoked`), no waiting for the 30-day expiry."""
+    from motor_ai_sim import sessions as S
+    rec = S.revoke(sid)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"no session '{sid}'")
+    S.record_event("revoke", email=rec.get("email", ""), sid=sid,
+                   reason="admin", path="/api/admin/sessions/revoke")
+    return {"ok": True, "session": S.public(rec)}
+
+
+@router.post("/users/{email}/revoke_all")
+def admin_revoke_all(email: str, _admin: dict = Depends(require_admin)):
+    """Sign an account out of everywhere (password reset, lost laptop)."""
+    from motor_ai_sim import sessions as S
+    n = S.revoke_all(email)
+    S.record_event("revoke", email=email, reason="admin_all",
+                   path="/api/admin/users/revoke_all", count=n)
+    return {"ok": True, "email": email.strip().lower(), "revoked": n}
+
+
+@router.get("/auth_events")
+def admin_auth_events(limit: int = 200, email: Optional[str] = None,
+                      _admin: dict = Depends(require_admin_or_token)):
+    """The tail of logs/auth_events.jsonl — login / logout / renew / reject /
+    store_unavailable / revoke, newest first, each with its reason."""
+    from motor_ai_sim import sessions as S
+    limit = max(1, min(int(limit or 200), 2000))
+    ev = S.read_events(limit=limit, email=email or "")
+    return {"count": len(ev), "events": ev}
+
+
+# ── Tickets (support: bugs / feature requests / questions) ────────────────────
+_VALID_TICKET_STATUS = ("open", "in_progress", "resolved", "closed")
+
+
+def _ms(v):
+    """Best-effort convert a Firestore timestamp / number to epoch ms."""
+    try:
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        return float(v.timestamp()) * 1000.0  # Firestore DatetimeWithNanoseconds
+    except Exception:
+        return None
+
+
+def _ticket_view(d: dict) -> dict:
+    return {
+        "type": d.get("type") or "question",
+        "title": d.get("title") or "(no title)",
+        "description": d.get("description") or "",
+        "status": d.get("status") or "open",
+        "email": d.get("email"),
+        "createdAt": _ms(d.get("createdAt")),
+    }
+
+
+def _mock_tickets() -> list[dict]:
+    now = time.time() * 1000
+    # (type, title, description, status, email, days_ago)
+    rows = [
+        ("bug", "Efficiency map dark above 6000 rpm", "Looks like a render bug, not the battery limit.", "open", "alice.pro@example.com", 0.3),
+        ("feature", "Add field-weakening to the speed range", "Want torque beyond base speed (constant-power).", "open", "dmitri.team@example.com", 1.2),
+        ("question", "How do I export the efficiency map?", "Is CSV export part of Pro?", "resolved", "erin.free@example.com", 4.0),
+        ("bug", "Battery bar caps below the real max voltage", "198-cell LFP reads 723 V but the bar stops earlier.", "in_progress", "carla.team@example.com", 2.1),
+        ("feature", "Save more than 3 designs on Free", "", "closed", "frank.free@example.com", 9.0),
+    ]
+    out = []
+    for i, (typ, title, desc, status, email, dago) in enumerate(rows):
+        out.append({
+            "id": f"mock_t{i:02d}", "uid": f"mock_{i:02d}",
+            "type": typ, "title": title, "description": desc,
+            "status": status, "email": email, "createdAt": now - dago * _DAY_MS,
+        })
+    return out
+
+
+@router.get("/tickets")
+def list_tickets(_admin: dict = Depends(require_admin_or_token)):
+    """All support tickets across users (bugs / feature requests / questions).
+    Read-only — also reachable with the ADMIN_API_TOKEN bearer (nightly agent)."""
+    admin = _ensure_admin()
+    if admin is None:
+        t = _mock_tickets()
+        return {"source": "mock", "count": len(t), "tickets": t}
+    from firebase_admin import firestore
+    db = firestore.client()
+    out = []
+    for d in db.collection_group("tickets").stream():
+        parent = d.reference.parent.parent  # users/{uid}
+        out.append({"id": d.id, "uid": parent.id if parent else None, **_ticket_view(d.to_dict() or {})})
+    out.sort(key=lambda x: x.get("createdAt") or 0, reverse=True)
+    return {"source": "firebase", "count": len(out), "tickets": out}
+
+
+@router.post("/tickets/status")
+def set_ticket_status(body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
+    """Update a ticket's status (open / in_progress / resolved / closed)."""
+    uid = (body or {}).get("uid")
+    tid = (body or {}).get("id")
+    status = (body or {}).get("status")
+    if status not in _VALID_TICKET_STATUS:
+        raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_TICKET_STATUS}")
+    if not uid or not tid:
+        raise HTTPException(status_code=400, detail="uid and id are required")
+    admin = _ensure_admin()
+    if admin is None:
+        return {"ok": True, "source": "mock", "id": tid, "status": status}
+    from firebase_admin import firestore
+    db = firestore.client()
+    db.collection("users").document(uid).collection("tickets").document(tid).update({"status": status})
+    return {"ok": True, "source": "firebase", "id": tid, "status": status}
+
+
+@router.get("/support")
+def support_config(_admin: dict = Depends(require_admin)):
+    """Non-secret status of the AI support assistant: provider, models, key set?
+    Returns only masked key hints — never the API key itself."""
+    from motor_ai_sim.routes import support as support_mod
+    return support_mod.provider_status()
+
+
+@router.post("/support")
+def set_support_config(body: dict = Body(default={}), admin_user: dict = Depends(require_admin)):
+    """Save AI support settings (provider, models, keys). Keys are write-only and
+    stored server-side (Firestore config/ai) — never returned to the browser."""
+    from motor_ai_sim.routes import support as support_mod
+    who = admin_user.get("email") or admin_user.get("uid") or "admin"
+    return support_mod.set_overrides(body or {}, who=who)
+
+
+@router.get("/support/models")
+def support_models(_admin: dict = Depends(require_admin)):
+    """Available models per provider (live from the provider API, static fallback)."""
+    from motor_ai_sim.routes import support as support_mod
+    return support_mod.list_models()
+
+
+# ── The visitor inbox ─────────────────────────────────────────────────────────
+# A signed-out visitor talks to the assistant on the landing page.  Until
+# 2026-09-17 that conversation ended in the browser and the team never heard it;
+# now every anonymous turn is logged and a visitor who gives their contact
+# details becomes an ACCESS REQUEST (support_store).  These four routes are the
+# Admin tab's side of it, and they are admin-only like everything else here: the
+# door (PUBLIC_EXHIBIT) keeps an anonymous caller out with 401, require_admin
+# turns a signed-in non-admin away with 403.
+#
+# NOT `require_admin_or_token`: the static ADMIN_API_TOKEN is for the headless
+# read-only tickets agent, and a visitor's conversation is personal data that has
+# no business being readable by a shared static string.
+
+_VALID_REQUEST_STATUS = ("new", "contacted", "invited", "declined")
+
+
+@router.get("/support/requests")
+def support_requests(_admin: dict = Depends(require_admin)):
+    """Every access request a visitor left with the assistant, newest first."""
+    from motor_ai_sim import support_store as S
+    rows = S.list_access_requests()
+    return {"count": len(rows),
+            "new": sum(1 for r in rows if r.get("status") == "new"),
+            "requests": rows}
+
+
+@router.patch("/support/requests/{request_id}")
+def set_support_request_status(request_id: str, body: dict = Body(default={}),
+                               _admin: dict = Depends(require_admin)):
+    """Move one request through new → contacted / invited / declined."""
+    from motor_ai_sim import support_store as S
+    status = str((body or {}).get("status") or "").strip().lower()
+    if status not in _VALID_REQUEST_STATUS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"status must be one of {_VALID_REQUEST_STATUS}")
+    rec = S.set_status(request_id, status)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"no request '{request_id}'")
+    return {"ok": True, "request": rec}
+
+
+@router.delete("/support/requests/{request_id}")
+def delete_support_request(request_id: str,
+                           _admin: dict = Depends(require_admin)):
+    """Drop one request — a test row, or one the team is finished with.
+
+    The visitor CHAT log is not touched: it is the day's record of what was said
+    and it ages out on its own (90 days), while the inbox is a worklist.
+    """
+    from motor_ai_sim import support_store as S
+    if not S.delete_request(request_id):
+        raise HTTPException(status_code=404, detail=f"no request '{request_id}'")
+    return {"ok": True, "id": request_id}
+
+
+@router.get("/support/visitor_chats")
+def support_visitor_chats(day: str = "", _admin: dict = Depends(require_admin)):
+    """One day of visitor conversations, read-only.  `?day=YYYY-MM-DD`;
+    without it, the newest day that has a log."""
+    from motor_ai_sim import support_store as S
+    return S.conversations(day)

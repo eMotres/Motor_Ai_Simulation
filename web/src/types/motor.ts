@@ -12,6 +12,13 @@ export interface ParameterSchema {
   group: string;
   description: string;
   options?: string[]; // For string type with predefined choices
+  optimizable?: boolean; // may be used as a Sweep/Optimize variable (whitelist)
+  hidden?: boolean; // kept in config but not shown in the geometry UI
+  /** Admissible values keyed by ANOTHER parameter's value — today only
+   *  num_poles_per_segment: {num_slots_per_segment: {"6": [5, 7]}} (the one
+   *  topology table in geometry_validation).  The form renders a select of
+   *  those values whenever the dependency's current value has an entry. */
+  allowed_by?: Record<string, Record<string, number[]>>;
 }
 
 /**
@@ -141,10 +148,132 @@ export type VariationConfig = Record<string, ParameterVariation>;
 export interface OperatingPoint {
   current_a: number;
   rpm: number;
+  gamma_deg?: number;   // load (current-vector) angle; descent/scan operate at this γ
 }
 
 export interface SweepConfig {
   variations: VariationConfig;
   operatingPoints: [OperatingPoint, OperatingPoint];
   rippleThreshold: number;
+  // ── Rated-duty constraints (optional) ──────────────────────────────────────
+  /** Rated shaft torque to optimize at (Nm); current is solved per geometry. */
+  ratedTorqueNm?: number;
+  /** Inverter DC-bus voltage (V). */
+  vBusV?: number;
+  /** PWM scheme → usable peak-phase factor: svpwm=1/√3, sine=1/2, sixstep=2/π. */
+  modulation?: 'svpwm' | 'sine' | 'sixstep';
+  /** Wall-clock stamp (ms) of the last edit the USER made to this config, in
+   *  whichever browser made it.  The server keeps the body as-is, so the stamp
+   *  travels with it and the newest copy wins on load — a stale profile can no
+   *  longer push its old geometry study over a γ/current study made elsewhere
+   *  (2026-09-08: "после перезагрузки он сбросился на Rotor Housing Thickness"). */
+  updatedAt?: number;
+}
+
+// ── Design optimization (Pareto search) ───────────────────────────────────────
+export interface OptDesignPoint {
+  feasible: boolean;
+  eligible?: boolean;
+  fem?: boolean;
+  reason?: string;
+  T_em_Nm: number;
+  efficiency: number;
+  torque_per_mass_Nm_kg: number;
+  power_per_mass_W_kg: number;
+  P_mech_W: number;
+  P_loss_total_W: number;
+  P_cu_W: number;
+  P_fe_W: number;
+  P_mag_W: number;
+  // total = EM-active + shaft (the divisor of torque/power density, unchanged);
+  // active = iron + copper + magnets, the Ansys "active mass" basis.
+  mass_total_kg: number;
+  mass_active_kg?: number;
+  B_gap_T: number;
+  B_tooth_T: number;
+  B_back_T: number;
+  T_cog_Nm: number;
+  T_ripple_pct: number;
+  current_a: number;
+  rpm: number;
+  overrides: Record<string, number>;
+}
+
+export interface SavedRunMeta {
+  id: string;
+  name: string;
+  created_at: string;
+  n_geometries?: number;
+  n_points?: number;
+  n_built?: number;
+  n_front?: number;
+  steps_per_period?: number;
+  variables?: string[];
+}
+
+export interface OptimizationResult {
+  points: OptDesignPoint[];
+  segments: [number, number][];          // index pairs (same geometry, I1 & I2)
+  pareto_indices: number[];
+  baseline: OptDesignPoint;
+  n_total_points: number;
+  n_built?: number;
+  n_failed?: number;
+  n_eligible_points: number;
+  n_geometries: number;
+  variables: { name: string; min: number; max: number }[];
+  operating_points: { gamma_deg: number; current_a: number; rpm: number }[];
+  ripple_max_pct: number;
+  objective: string;
+}
+
+// ── Geometry validation (backend: motor_ai_sim/geometry_validation.py) ───────
+// Region-level check of the SAME 2-D polygons the mesher consumes: which
+// domains overlap, what escaped its host, what collapsed.  `severity: 'error'`
+// means a solve is refused with HTTP 422 — saving the geometry is still
+// allowed, because the user may be mid-edit.
+export interface GeometryViolation {
+  code: string;                 // e.g. "coil_overlaps_coil"
+  severity: 'error' | 'warning';
+  part_a: string;               // "Magnet 3 (θ=25.7°)"
+  part_b: string;               // "" for single-part defects
+  message: string;              // full engineer-readable sentence
+  overlap_area_mm2: number;
+  location_mm?: { x: number; y: number };
+  likely_params: string[];      // geometry knobs most likely responsible
+  measured_mm?: number;
+  limit_mm?: number;
+}
+
+export interface GeometryValidation {
+  ok: boolean;                  // false ⇒ solving is blocked
+  n_errors: number;
+  n_warnings: number;
+  min_air_gap_mm: number | null;
+  violations: GeometryViolation[];
+  hidden: Record<string, number>;   // code → how many more of the same kind
+  checks_run: string[];
+  unavailable?: string;         // validator itself failed; nothing was checked
+}
+
+/** A request rejected with 422 — nothing reached the config.
+ *
+ *  One shape for every rejection the routes raise (`detail.invalid_parameters`):
+ *  an unusable VALUE (`field` / `derived`), a key the server does not know
+ *  (`unknown_field`, carrying the nearest real name in `suggestion`), a value
+ *  outside the schema's own min/max (`out_of_range`), a malformed `geo=` / `mat=`
+ *  override, or a parameter that may not be created/deleted.  `message` is
+ *  always renderable on its own — it names the field and says what to do. */
+export interface GeometryParamError {
+  field: string;
+  value: unknown;
+  kind: 'field' | 'derived' | 'unknown_field' | 'out_of_range' | 'reserved'
+      | 'already_exists' | 'protected' | 'malformed_json' | 'not_a_number'
+      | 'not_finite' | 'bad_range' | 'bad_value' | 'bad_identifier'
+      | 'wrong_type' | 'empty';
+  message: string;
+  min?: number;
+  max?: number;
+  /** `unknown_field`: the closest real parameter name, if there is one. */
+  suggestion?: string;
 }

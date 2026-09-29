@@ -1,0 +1,813 @@
+"""Physics regression: pin the numbers the solver produces today.
+
+This suite does NOT judge whether a number is physically right — it judges
+whether a code change moved it. That is the gate every refactoring step needs:
+the solver is one very long function full of closures over mesh, slip pairing
+and saturation state, and the only reason the ~35 % torque inflation on the
+retired P1 path survived so long is that nothing was watching the numbers.
+
+Design notes, in case a case starts failing for the wrong reason:
+
+* **Config-independent.** Geometry goes in through ``geo_override``, the magnet
+  AND the steel through the per-request material override, and the SPEED through
+  ``RPM`` below, so editing ``config/motor_config.yaml`` (which the user does
+  constantly) cannot turn a red test into a code problem. Mutating the cached config to carry the
+  geometry or the magnet was tried and is NOT equivalent: the cache follows the
+  file now, so a live API server autosaving mid-run reloaded it and dropped the
+  override — the suite passed alone and failed in a batch.
+
+  Speed used to be the exception that had to go through the config, because
+  ``fem_transient_sliding_band`` took no rpm argument and read
+  ``simulation.rpm`` itself (docs/SOLVER_TRIALS_2026-07-30.md F2). It is an
+  explicit ``rpm=`` argument now, so ``_run`` passes it like everything else.
+  Keeping the story here because the leak was live and it bit: the pins were
+  generated at 15000 rpm (this machine's own
+  stored speed), the user's config moved to 13000 for the 40 mm design, and ALL
+  SIX cases went red at once with nothing wrong in the code —
+  ``p2_noload`` V_peak -13.33 % (= 13000/15000 exactly), its P_cu -24.89 %
+  (= the same ratio squared, the AC term is proportional to f^2), P_fe -19.8 %,
+  and the voltage cases +109 % in current because a fixed 7.0 V pk against a
+  smaller back-EMF draws whatever the impedance allows. A gate that goes red
+  when the user edits an unrelated field is not a gate.
+* **Coarse on purpose.** 12 steps/period on a 1.4 mm mesh. These are not
+  publication numbers; they only have to be *reproducible*. Keeping the suite
+  near five minutes is what makes it get run.
+* **One element order.** P2 is the only basis. P1 was deleted (its
+  Maxwell-stress mean torque is radius-inconsistent under load, ~35 % high, and
+  its ripple is a mesh staircase), so the p1_* cases went with it. What they
+  were guarding did not: every capability they pinned — cogging, demag, voltage
+  drive, the coupled sigma*dA/dt eddy solve, and eddy+voltage together — has a
+  p2_* case here.
+
+Regenerate the baseline deliberately, never casually — a diff here is the whole
+point of the file::
+
+    UPDATE_PHYSICS_BASELINE=1 python -m pytest tests/test_physics_regression.py
+
+Then READ the printed diff and justify every line of it in the commit message.
+"""
+from __future__ import annotations
+
+import io
+import json
+import math
+import os
+from pathlib import Path
+from typing import Any, Dict
+
+import numpy as np
+import pytest
+
+from motor_ai_sim.contracts.adapters import read_linear_cross_check
+from motor_ai_sim.material_context import set_request_materials
+from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
+
+
+@pytest.fixture(autouse=True)
+def _cold_eddy_warm_cache():
+    """Every case starts COLD.
+
+    The coupled-eddy solve warm-starts from the previous solve's settled state
+    (`_SB_WARM_CACHE` in memory + `.warm_cache.npz` beside the config), and
+    settles only to its tolerance — so a case run after a neighbouring case
+    lands within the tolerance of, but not bit-identical to, the same case run
+    alone.  Measured 2026-09-05: `p2_eddy` alone reproduced its pin exactly;
+    after the other cases it read P_cu_ac_solve_W +0.52 %, and the
+    start-up-transient test found no transient to remove because its "cold"
+    leg was warm.  The pins are cold-start numbers; make every case one.
+    Sandbox only: `_warm_cache_path` follows MOTOR_AI_SIM_CONFIG."""
+    from motor_ai_sim.simulation import fem_solver_2d as _F
+    _F._SB_WARM_CACHE.clear()
+    try:
+        _p = _F._warm_cache_path()
+        if _p.exists():
+            _p.unlink()
+    except Exception:   # noqa: BLE001 — a missing file is the goal
+        pass
+    yield
+
+BASELINE = Path(__file__).with_name("physics_baseline.json")
+UPDATE = os.environ.get("UPDATE_PHYSICS_BASELINE") == "1"
+
+# Relative tolerance. 0.5 % is wide enough to absorb BLAS/threading jitter in
+# the sparse solve and narrow enough that any real physics change trips it.
+RTOL = 5e-3
+# Quantities that legitimately sit near zero (cogging ripple, shaft loss) need an
+# absolute floor or the relative test divides noise by noise.
+ATOL = {"T_ripple_pct": 0.05, "P_shaft_W": 0.05, "P_solid_W": 0.05,
+        "P_core_W": 0.05, "demag_br_min": 0.01, "demag_br_mean": 0.01,
+        # A selected zero-current terminal-work mean is machine zero; compare
+        # its roundoff absolutely rather than dividing 1e-21 by 1e-21.
+        "T_avg_Nm": 1e-12,
+        # Repeated identical p2_eddy runs alternate between 3.274 and 3.291 W
+        # as sparse/BLAS threads accumulate the coupled-copper solve.  The
+        # observed 0.017 W span is 0.52 %, just beyond the general 0.5 % band.
+        "P_cu_ac_solve_W": 0.02,
+        # Honest (frequency-domain) rotor eddy: the shaft term is sub-watt for
+        # the same reason P_shaft_solve_W is, so it needs an absolute floor.
+        "P_shaft_linear_W": 0.05,
+        # Coupled-eddy shaft loss: the shaft sits under the magnets and the
+        # back iron, so in the rotor frame it sees almost no AC field at all —
+        # milliwatts, i.e. a relative test on it divides noise by noise.
+        "P_shaft_solve_W": 0.05,
+        # Voltage drive: these two are ~0 by construction (a settled orbit has
+        # no DC current, a converged circuit has no residual), so a relative
+        # test on them divides noise by noise.
+        "v_dc_residual_A": 0.05, "v_circuit_resid_max_V": 1e-9}
+
+# A 30 mm 12s14p spoke machine, pinned field by field so the suite does not
+# inherit whatever is in the working config.
+GEO_30MM: Dict[str, float] = {
+    "stator_diameter": 30.0, "slot_height": 4.3, "core_thickness": 1.5,
+    "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
+    "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.4, "cut_width": 1.5,
+    "insulation_thickness": 0.05, "wire_width": 2.0, "wire_height": 0.5,
+    "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 6,
+    # wire_parallel was the ONE key SOLVER_REQUIRED_PARAMS lists that this dict
+    # did not pin, so `merge_geo_override` kept the WORKING CONFIG's value — the
+    # F2 leak again, in the file whose docstring tells its story. It bit on
+    # 2026-09-03: the user's live config moved to `wire_parallel: 3` and every
+    # case went red at once with nothing wrong in the code (k strands in hand =
+    # turns/k, EMF/k, R/k², so measured on p2_load T 0.4076 -> 0.1439 (÷2.8),
+    # V_peak 7.86 -> 1.89, P_cu 110.5 -> 13.7 (÷8.1 ≈ ÷k²)). 1 is the value
+    # every pin was generated at, so writing it here changes no number — it only
+    # cuts the dependence, exactly as pinning the steel did.
+    "wire_parallel": 1,
+    "wire_split": 1, "slot_hs": 0.267, "magnet_height": 4.5,
+    "rotor_house_height": 0.8, "shaft_height": 2.0, "magnet_fill_down": 0.9,
+    "magnet_fill_up": 0.3, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
+    "rotor_hole": 0.7, "magnet_down_height": 1.4, "magnet_lamination": 0,
+    "stator_fillet_r": 1.2, "stator_fillet_r1": 0.0, "rotor_fill_r": 0.2,
+    "motor_length": 10.0,
+    # Pinned explicitly (2026-09-06): this fixture has NO retaining sleeve.  The
+    # live machine carries a 1 mm sleeve and a bare `fem_transient_sliding_band`
+    # call (script-mode regeneration, ad-hoc probes) merges the live geometry
+    # under the override — a 1 mm sleeve in a 0.2 mm gap kills the structured
+    # belt and the slip ring.  conftest zeroes it for pytest; this pins it for
+    # everything else.
+    "sleeve_thickness": 0.0,
+}
+
+COMMON = dict(
+    n_steps_per_period=12, n_periods=1.0, mesh_size_mm=1.4, min_size_mm=0.35,
+    gap_layers=1.0, n_sectors=2, structured_gap=True, iron_template=True,
+    geo_mesh=True, coil_temp_c=120.0, rotor_eddy=False,
+)
+
+# 2026-09-06 — pins regenerated: the magnet top is now built on the circle
+# r = rotor_or − magnet_up_gap instead of on the chord between its two top
+# corners (user: "давай по умолчанию сделаем только arc и уберём прямую
+# вообще").  Every spoke magnet gains the circular segment (+1.20 % magnet
+# section on the Ø200; tests/test_masses.py carries the mass table), so T, the
+# EMF and the losses moved by ~1 %.  The before→after table is in
+# tests/physics_baseline.before_arc.diff.txt next to the pins.
+#
+# Regenerating OUTSIDE pytest (script mode) needs `sleeve_thickness` pinned in
+# GEO_30MM: without conftest's sandbox the fixture used to inherit the live
+# machine's 1 mm sleeve into its 0.2 mm air gap, the structured-gap belt had no
+# room, the gmsh fallback left the rotor half with no slip-ring nodes and ψ_A
+# came back flat (−5.8e-9) — which was misread once as "the solver cannot mesh
+# anything".  It was the live config leaking into the fixture.
+CASES = {
+    # The default basis: energy-consistent mean torque, mesh-convergent ripple.
+    "p2_load": dict(COMMON, element_order=2, demag=False,
+                    I_phase_rms=60.0, gamma_deg=0.0),
+    # No-load cogging: the one number the flux-linkage torque cannot see. At
+    # I=0 the energy torque is identically zero, so T_avg/T_ripple here come
+    # from the raw Maxwell series alone — nothing else in the suite exercises
+    # that path unloaded. Pinned BEFORE P1 was deleted (the retired p1_noload
+    # used to be its only watcher), never after.
+    "p2_noload": dict(COMMON, element_order=2, demag=False,
+                      I_phase_rms=0.0, gamma_deg=0.0),
+    # Irreversible demagnetisation — pins the load-line construction AND the
+    # settling pass. P2 could not do it at all until the hook was moved to where
+    # the frame actually converges (P2 solves by Newton; the hook sat in the
+    # Picard fallback, which never runs). Pinned because THREE separate
+    # improvements — iron loss, demag, the settling pass — were added to the P1
+    # path and silently missed P2, each time because the P2 branch returned
+    # before that code.
+    # This case is slow (demag on P2 re-solves a frame until the magnet settles)
+    # and coarsening it does NOT help — but not for the reason first suspected.
+    # Measured: 1.4 mm and 2.2 mm both give 8195 triangles, while 0.9 mm gives
+    # 8481, with the template path ON and OFF alike. mesh_size_mm IS honoured;
+    # this geometry simply imposes a floor (0.2 mm air gap, fillets, a 2 mm wire)
+    # that already demands finer than 1.4 mm, so asking for coarser is a no-op.
+    # The cost is the demag outer loop, not the mesh.
+    "p2_demag": dict(COMMON, element_order=2, demag=True,
+                     I_phase_rms=60.0, gamma_deg=0.0),
+    # Voltage drive. (7.0 V pk, +10 deg) puts this machine near i_d = 0 at
+    # ~90 A pk, i.e. the same loaded, saturated, gamma~0 corner the current-drive
+    # cases use. These are the slowest cases in the suite: the currents are
+    # STATE, so each run marches 10 settling periods before the reported one.
+    "p2_voltage": dict(COMMON, element_order=2, demag=False,
+                       I_phase_rms=60.0, gamma_deg=0.0, drive="voltage",
+                       v_phase_peak=7.0, v_delta_deg=10.0),
+    # The coupled sigma*dA/dt solve on P2: solid copper wires with their net
+    # current imposed per wire, magnets and shaft with zero net axial current,
+    # all inside the field solve.  This is the case that pins the LOSS numbers
+    # that stop being a model when it runs — P_cu_ac and P_mag come from
+    # sigma*int(E^2) of the solved field, so a change in the constraint set, the
+    # time discretisation or the conductor bookkeeping moves them immediately.
+    # rotor_eddy is ON (unlike every other case): it is what puts the magnet and
+    # shaft conductivity into the coupled system.
+    "p2_eddy": dict(COMMON, element_order=2, demag=False, eddy=True,
+                    rotor_eddy=True, I_phase_rms=60.0, gamma_deg=0.0),
+    # demag AND the coupled eddy solve TOGETHER -- the combination the UI has
+    # defaulted to since 3eae1ee, and the one nothing here watched: p2_demag runs
+    # eddy off, p2_eddy runs demag off, so each half was pinned and the pair was
+    # not. That gap hid a silent substitution for as long as it existed. The
+    # demag re-assembly rebuilt the magnetostatic RHS only, while the bordered
+    # eddy Newton kept building its own right-hand side from the source it was
+    # handed before the frame loop -- the PRISTINE magnet. Measured on the 40 mm
+    # Fe16N2 machine (docs/SOLVER_TRIALS_2026-07-30.md F1): demag on/off moved
+    # the torque by 0.0 % with eddy on and by -69 % with eddy off, while the
+    # demag map reported 98 % of the magnet de-rated either way.
+    #
+    # What makes this case a GUARD rather than a duplicate: its T_avg must stay
+    # far below p2_eddy's (same current, same mesh, weakened magnet). If the
+    # de-rating ever stops reaching the eddy system again, this pin snaps back
+    # up toward p2_eddy and the suite says so. rotor_eddy is ON, as in p2_eddy,
+    # so the magnet conductivity is inside the coupled system while its
+    # remanence is being de-rated -- the two mechanisms that must not shadow
+    # each other.
+    #
+    # PINS MOVED 2026-09-05 — ratchet frozen during the eddy start-up transient;
+    # pre-pass on the settled state.  The irreversible Br ratchet used to run on
+    # every warm-up frame at θ<0, i.e. on the σ·∂A/∂t START-UP transient, whose
+    # ∂A/∂t is whatever the eddy history was seeded with — so two identical runs
+    # of the user's Ø200 12s/10p disagreed by +3.1 % in torque and 7.9 pp in Br
+    # (his report, 2026-09-05; reproduced here as 236.45 vs 244.66 N·m, Br kept
+    # 90.53 vs 98.42 %).  The ratchet is now FROZEN through the warm-up and a
+    # dedicated demag PRE-PASS (one whole electrical period, discarded, ratchet
+    # on) runs after the eddy handoff — the same two-stage scheme the
+    # magnetostatic path has always had (`_dmskip`).  Only THIS case moved (it
+    # is the only eddy+demag one); every other case is bit-identical by
+    # construction, since `_dm_ratchet` is True for the whole run whenever the
+    # solve is not coupled-eddy-with-demag on current drive:
+    #
+    #   T_avg_Nm            0.398474 ->   0.393847  (-1.16 %)
+    #   T_avg_maxwell_Nm      0.3926 ->     0.3899  (-0.69 %)
+    #   T_ripple_pct         1.28944 ->   0.711415  (-44.83 %)
+    #   V_peak               7.91001 ->    7.72666  (-2.32 %)
+    #   P_cu_W               110.339 ->    110.280  (-0.05 %)
+    #   P_cu_ac_solve_W        3.113 ->      3.054  (-1.90 %)
+    #   P_cu_total_solve_W    65.346 ->     65.287  (-0.09 %)
+    #   P_fe_W               4.77903 ->    4.70557  (-1.54 %)
+    #   P_mag_honest_W         1.587 ->      1.536  (-3.21 %)
+    #   P_mag_solve_W          1.426 ->      1.414  (-0.84 %)
+    #   P_shaft_honest_W       0.565 ->      0.568  (+0.53 %)
+    #   P_shaft_solve_W        0.016 ->      0.017  (within its ATOL floor)
+    #   demag_br_mean       0.852559 ->   0.834450  (-2.12 %)
+    #   demag_br_min        0.140564 ->   0.133983  (-4.68 %)
+    #
+    # DIRECTION, and why it is the opposite of the 200 mm machine's: this 30 mm
+    # case has a 2-frame warm-up, so freezing removes almost no spurious
+    # de-rating — what dominates here is the pre-pass, a whole extra period in
+    # which the ratchet visits every rotor position BEFORE the window opens.  So
+    # the reported magnet is weaker (br_mean -2.1 %) and the torque lower, while
+    # the window itself is finally clean: T_ripple halves, because the old
+    # number was largely the magnet still dying THROUGH the reported period —
+    # exactly the decay `_dmskip` was invented to remove on the magnetostatic
+    # path.  On the 200 mm the 45-frame warm-up was the whole story and the fix
+    # moves the other way (Br 90.5 -> 98.5 %, torque +3.5 %).
+    "p2_demag_eddy": dict(COMMON, element_order=2, demag=True, eddy=True,
+                          rotor_eddy=True, I_phase_rms=60.0, gamma_deg=0.0),
+    # The two hardest features TOGETHER: the coupled sigma*dA/dt solve, whose
+    # constraint rows IMPOSE each wire's current, driven by the voltage circuit,
+    # for which those same currents are UNKNOWNS. They are solved as one
+    # bordered (A, U, i_A, i_B) Newton. This case is the guard against the exact
+    # regression the retired P1 path shipped for years -- an `if eddy: ... elif
+    # vdrive:` chain that skips the circuit and reports a CURRENT-drive answer
+    # as a voltage run. If that ever comes back, the pinned currents move to the
+    # imposed 60 A rms sinusoid and the suite says so. The paired diagnostics are
+    # what make it airtight: v_circuit_resid_max_V is ~0 only if the circuit was
+    # actually solved on the converged field, and P_cu_ac_solve_W is nonzero only
+    # if the eddy reaction was actually in it. rotor_eddy is off (COMMON) so
+    # this case pins the COPPER constraint set specifically. It used to be off
+    # because the solver force-dropped it on every imposed-voltage run; that
+    # drop is gone (the conducting rotor is solved inside the same bordered
+    # Newton now, SB_VDRIVE_ROTOR_EDDY=0 restores the old behaviour), so the
+    # magnet/shaft constraint rows under voltage drive are NOT pinned by
+    # anything here — a rotor_eddy=True twin of this case is the gap.
+    "p2_voltage_eddy": dict(COMMON, element_order=2, demag=False, eddy=True,
+                            I_phase_rms=60.0, gamma_deg=0.0, drive="voltage",
+                            v_phase_peak=7.0, v_delta_deg=10.0),
+    # The rotor_eddy=True twin the comment above calls the gap.  Guards the
+    # COMBINED bordered Newton: with an IMPOSED VOLTAGE, the magnet/shaft
+    # sigma*dA/dt bodies (per-magnet integral-J=0 constraint rows and the
+    # cut-half U=0 exemptions) must stay inside the same (A, U, i_A, i_B)
+    # system as the phase currents — the configuration the solver force-
+    # dropped for months (`if _vdrive and rotor_eddy: rotor_eddy = False`),
+    # silently zeroing P_solid on every voltage/PWM card and flattering their
+    # efficiency.  P_mag_solve_W / P_shaft_solve_W are pinned NON-ZERO here:
+    # a zero in P_mag_solve_W means the force-drop came back (or the
+    # SB_VDRIVE_ROTOR_EDDY=0 escape hatch leaked into a default).
+    "p2_voltage_eddy_rotor": dict(COMMON, element_order=2, demag=False,
+                                  eddy=True, rotor_eddy=True,
+                                  I_phase_rms=60.0, gamma_deg=0.0,
+                                  drive="voltage",
+                                  v_phase_peak=7.0, v_delta_deg=10.0),
+}
+
+MAGNET = "F45SH_120C"
+# The steel is pinned through the SAME override since 2026-09-01. It used to be
+# the last material this suite read from the user's live config, and it bit the
+# same way rpm did (F2): the config's steel moved from B15AHV950M to 20RSW175
+# and all seven cases went red with nothing wrong in the code — P_fe by the
+# difference between two measured P(B,f) surfaces, T/V by the B-H change.
+# B15AHV950M is the steel the pins were generated under, so pinning it here
+# changes no number; it only cuts the dependence. Both cores get it — a split
+# assignment would put two loss surfaces into one machine for no reason.
+STEEL = "B15AHV950M"
+
+# One override for every solve in this file. The loss model reads the SAME
+# merged assignment as the B-H side since the 2026-09-01 fix in
+# fem_transient_sliding_band (it used to read the shared config only — the F6
+# failure mode: the user's steel in the field, somebody else's loss surface in
+# P_fe, measured +90 % on these very cases).
+OVERRIDE = {"assignment": {"magnet": MAGNET,
+                           "stator_core": STEEL, "rotor_core": STEEL,
+                           # The SHAFT too (2026-09-08): it was the one
+                           # conducting part still read off the sandbox copy of
+                           # the user's config.  When the live machine's shaft
+                           # became a solid magnetic steel (Steel_42CrMo4_QT,
+                           # μr ~1000) every pin moved with it — the honest
+                           # frequency-domain shaft loss 0.566 → 0.24 W on
+                           # p2_eddy, and the ~1 % ripple / THD drifts of the
+                           # no-load and voltage cases, all from the shaft's
+                           # permeability in the field.  Measured: pinned back
+                           # to the aluminium the pins were generated at, the
+                           # same code reproduces 0.566 W with the d-axis
+                           # identical (60.0263°).  The explicit value outranks
+                           # the config by design, like the steel and the magnet.
+                           "shaft": "Aluminium_6061"},
+            "materials": {},
+            # Per-part accounting states (2026-09-01) ride the same channel
+            # and the LIVE config carries the user's (frameless shaft =
+            # reference today).  reference leaves the field untouched, but a
+            # future `excluded` in the config would silently move every pin —
+            # so the parts are pinned to `included` exactly like the steel:
+            # the explicit value outranks the config by design.
+            "parts": {"stator_core": "included", "rotor_core": "included",
+                      "magnet": "included", "slot": "included",
+                      "shaft": "included"}}
+
+# The speed every pin was generated at, and the 30 mm machine's OWN stored
+# operating speed (config/motor_presets.json `my_motor`: 32 A, 15000 rpm).
+# Passed as the solver's ``rpm=`` argument (F2).
+RPM = 15000.0
+
+# The winding connection every pin was generated at: 2 coils per phase in
+# series, so ONE parallel path. Passed as the solver's ``connection=`` argument
+# (F3) — it sets n_parallel (which divides the coil current) and the d-axis
+# calibration key.
+CONNECTION = "2S"
+
+
+def _scalar(v: Any) -> float:
+    """T_em_Nm comes back as a per-frame series; the pinned value is its mean."""
+    if isinstance(v, (list, tuple)):
+        a = np.asarray(v, float)
+        return float(a.mean()) if a.size else 0.0
+    return float(v)
+
+
+def _metrics(d: Dict[str, Any]) -> Dict[str, Any]:
+    out = {
+        "T_avg_Nm": _scalar(d.get("T_avg_Nm", d.get("T_em_Nm", 0.0))),
+        "T_ripple_pct": (None if d.get("T_ripple_pct") is None
+                         else float(d["T_ripple_pct"])),
+        # Keep the physical peak-to-peak span pinned even when its percentage
+        # is undefined because the selected mean is zero or nearly zero.
+        "T_ripple_pp_Nm": float(d.get("T_ripple_pp_Nm", 0.0)),
+        "P_cu_W": float(np.mean(d.get("P_cu_W", 0.0)) if isinstance(d.get("P_cu_W"), list)
+                        else d.get("P_cu_W", 0.0)),
+        "P_fe_W": float(np.mean(d.get("P_fe_W", 0.0)) if isinstance(d.get("P_fe_W"), list)
+                        else d.get("P_fe_W", 0.0)),
+        "V_peak": float(d.get("V_peak", 0.0)),
+    }
+    # The raw Maxwell mean is pinned separately: it is the diagnostic that makes
+    # a regression in the hybrid distinguishable from one in the field solve.
+    if d.get("T_avg_maxwell_Nm") is not None:
+        out["T_avg_maxwell_Nm"] = float(d["T_avg_maxwell_Nm"])
+    # Voltage drive: the currents are the ANSWER, not the input, so they are the
+    # first thing to pin — a broken circuit shows up in the waveform long before
+    # it moves the mean torque. v_dc_residual_A is the settling gauge (~0 A on a
+    # converged periodic orbit); it has an absolute floor because it is a
+    # near-zero quantity by construction.
+    if d.get("drive") == "voltage":
+        ia = np.asarray(d.get("I_A") or [0.0], float)
+        F = np.abs(np.fft.rfft(ia - ia.mean())) * 2.0 / max(ia.size, 1)
+        out["I_A_peak_A"] = float(np.max(np.abs(ia)))
+        out["I_A_fund_A"] = float(F[1]) if F.size > 1 else 0.0
+        out["I_A_thd_pct"] = (float(np.sqrt(np.sum(F[2:] ** 2)) / F[1] * 100.0)
+                              if F.size > 2 and F[1] > 0 else 0.0)
+        out["v_dc_residual_A"] = float(d.get("v_dc_residual_A") or 0.0)
+        out["v_circuit_resid_max_V"] = float(
+            max((d.get("v_drive_diag") or {}).get("resid") or [0.0]))
+    # Coupled eddy solve: pin the four numbers that only exist because it ran.
+    # Gated on the flag the P2 branch sets, so no other case grows a key (the
+    # suite fails a case whose metric set changes, which is the point).
+    if d.get("eddy_coupled"):
+        out["P_cu_total_solve_W"] = float(d.get("P_cu_total_solve_W") or 0.0)
+        out["P_cu_ac_solve_W"] = float(d.get("P_cu_ac_solve_W") or 0.0)
+        out["P_mag_solve_W"] = float(d.get("P_mag_solve_W") or 0.0)
+        out["P_shaft_solve_W"] = float(d.get("P_shaft_solve_W") or 0.0)
+    # The frequency-domain "honest" rotor eddy solve (eddy_solver_2d.
+    # honest_rotor_eddy). It runs whenever rotor_eddy is on and is where the
+    # savgol prefilter and the k <= 16 harmonic ceiling live — and NOTHING here
+    # watched it: p2_load has rotor_eddy off, and in p2_eddy the coupled solve
+    # REPLACES the reported magnet/shaft numbers, so a change in that filter
+    # chain moved no pin at all. It does now. Gated on the honest path's own
+    # flag so no other case grows a key. (Its value is already computed in
+    # p2_eddy, so this pins it at zero extra runtime.)
+    # (Keys renamed *_honest_W -> *_linear_W 2026-09-27: a linear estimate;
+    # same values, no re-pin. read_linear_cross_check reads either name.)
+    _pm = read_linear_cross_check(d, "P_mag")
+    if float(_pm or 0.0) > 0.0:
+        out["P_mag_linear_W"] = float(_pm)
+        out["P_shaft_linear_W"] = float(read_linear_cross_check(d, "P_shaft")
+                                        or 0.0)
+    f = d.get("demag_field")
+    if f:
+        br = np.asarray(f["demag_coef_per_tri"], float)
+        dom = np.asarray(f["domain_per_tri"], int)
+        m = np.isin(dom, f["mag_domains"])
+        if m.any():
+            out["demag_br_min"] = float(br[m].min())
+            out["demag_br_mean"] = float(br[m].mean())
+    return out
+
+
+def _run(case: str) -> Dict[str, float]:
+    # Force the magnet AND the steel through the per-request override, NOT by
+    # mutating the cached config. The cache now follows the file, so anything
+    # touching motor_config.yaml mid-run — a live API server, an editor —
+    # reloads it and silently drops an in-process mutation. That made this
+    # suite pass alone and fail in a batch, which is worse than failing
+    # outright.
+    set_request_materials(OVERRIDE)
+    # Speed and the winding connection are ARGUMENTS now (F2/F3). They used to
+    # have to go through the cached config because the solver read
+    # simulation.rpm and the winding block itself; the explicit parameters make
+    # the pins independent of the user's file with no patching at all. Same
+    # numbers, same physics — this is a channel change.
+    kw = dict(CASES[case])
+    try:
+        # The winding CONNECTION is an ARGUMENT now (F3), like rpm. It is part
+        # of the d-axis calibration topology key (fem_solver_2d.
+        # _daxis_topology_key) AND it sets n_parallel, which divides the coil
+        # current. The pins were generated at 2S (n_parallel 1); when the user
+        # toggled the live config to 4S, the calibration re-ran on the new key
+        # and the re-measured d-axis moved by its numerical noise — amplitude
+        # metrics stayed inside tolerance but I_A_thd_pct drifted +1.1-1.2 % on
+        # BOTH voltage cases with every other number byte-identical. It used to
+        # be pinned by patching the cached config dict; passing it removes the
+        # last shared-config read this suite depended on.
+        d = fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
+                                       connection=CONNECTION, **kw)
+    finally:
+        set_request_materials(None)
+    return _metrics(d)
+
+
+def test_winding_carries_exactly_n_wires_times_i():
+    """The winding source integrates to n_wires·I_coil per slot. By construction.
+
+    This is the invariant the pins above are only meaningful under, and it is
+    cheap (polygons only, no mesh, no solve) so it runs in the fast suite.
+
+    It was FALSE for as long as the source was J = dir·I·n_wires / (slot_width ·
+    slot_height · fill_factor): that rectangle comes from the WIRE pitch and the
+    fill factor was a MotorDomainParams dataclass default (0.6) that no config
+    path ever set, while J was applied over the real copper. Every machine was
+    solved at k·N·I with k = A_copper_per_slot / that rectangle ∈ 0.909…1.265,
+    and T_maxwell/T_energy was exactly k (docs/SOLVER_TRIALS_2026-07-30.md,
+    F4+F5). On this geometry k was 1.0111 — the whole 30 mm design line was
+    optimised against a Maxwell torque 1.1 % too high.
+
+    Note the trap this checks past: the CAD emits ONE POLYGON PER WIRE (72 for
+    12 slots × 6 wires), so normalising each polygon by its OWN area would be
+    wrong by n_wires. The divisor has to be the SLOT's copper.
+    """
+    from motor_ai_sim.cadquery_geometry import CadQueryMotor
+    from motor_ai_sim.simulation.fem_solver_2d import (
+        build_materials, coil_copper_areas, coil_slot_index, _params_from_geo_dict)
+    from motor_ai_sim.simulation.geometry_2d import MotorDomains2D
+
+    p = _params_from_geo_dict(dict(GEO_30MM))
+    layout = MotorDomains2D(p).winding_layout
+    n_slot = len(layout)
+    motor = CadQueryMotor()
+    motor.set_parameters(dict(GEO_30MM))
+    polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
+
+    n_wires = int(GEO_30MM["num_wires_per_slot"])
+    I_ph = {"A": 37.0, "B": -11.0, "C": -26.0}     # any unbalanced triple
+    mats = build_materials(I_ph, layout, polys, 0.0,
+                           p.slot_width_m * p.slot_height_m * p.fill_factor,
+                           n_wires)
+    areas = coil_copper_areas(polys, n_slot)
+    assert areas, "no coil polygons — the invariant below would be vacuous"
+
+    at = {}
+    for i, cp in enumerate(polys.get("coils") or []):
+        s = coil_slot_index(cp, n_slot)
+        tag = 200 + i                                     # DOM_COIL_BASE + i
+        if s is None or tag not in areas or tag not in mats:
+            continue
+        at[s] = at.get(s, 0.0) + mats[tag].J_z * areas[tag][0]
+
+    assert len(at) == n_slot, f"only {len(at)} of {n_slot} slots carry copper"
+    for s, got in sorted(at.items()):
+        phase, direction = layout[s]
+        want = direction * I_ph[phase] * n_wires
+        assert math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-9), (
+            f"slot {s} ({'+' if direction > 0 else '-'}{phase}) is excited at "
+            f"{got:.6f} At, asked for {want:.6f} At "
+            f"(k = {got / want if want else float('nan'):.4f})")
+
+
+@pytest.fixture(scope="module")
+def baseline() -> Dict[str, Dict[str, float]]:
+    if BASELINE.exists():
+        return json.loads(BASELINE.read_text(encoding="utf-8"))
+    if not UPDATE:
+        pytest.skip("no baseline — run with UPDATE_PHYSICS_BASELINE=1 to create it")
+    return {}
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("case", sorted(CASES))
+def test_case_matches_baseline(case: str, baseline: Dict[str, Dict[str, float]]):
+    got = _run(case)
+    if UPDATE:
+        pytest.skip("baseline update run — see regenerate_baseline")
+    assert case in baseline, (
+        f"case {case!r} has no baseline; regenerate with "
+        f"UPDATE_PHYSICS_BASELINE=1")
+    want = baseline[case]
+    bad = []
+    for k, wv in want.items():
+        gv = got.get(k)
+        if wv is None:
+            if gv is not None:
+                bad.append(f"  {k}: expected undefined, got {gv!r}")
+            continue
+        if gv is None:
+            bad.append(f"  {k}: MISSING (was {wv:.6g})")
+            continue
+        tol = max(abs(wv) * RTOL, ATOL.get(k, 0.0))
+        if abs(gv - wv) > tol:
+            drift = (gv - wv) / wv * 100 if wv else float("inf")
+            bad.append(f"  {k}: {wv:.6g} -> {gv:.6g}  ({drift:+.2f} %)")
+    for k in got:
+        if k not in want:
+            bad.append(f"  {k}: NEW ({got[k]!r})")
+    assert not bad, (
+        f"physics moved in case {case!r}:\n" + "\n".join(bad) +
+        "\n\nIf the change is intended, regenerate with "
+        "UPDATE_PHYSICS_BASELINE=1 and justify every line above in the commit.")
+
+
+# ── coupled-eddy warm-up: settle until quiet ────────────────────────────────
+# The reported window has to start on a machine that is already running. The
+# sigma*dA/dt history starts from A_prev = 0 — a field the machine was never in
+# — so the first frames carry a decaying start-up transient, and it is the SOLID
+# conductors (magnet, shaft) that carry it longest: their diffusion time is
+# sigma*mu*r^2, which on a 78 mm rotor assembly is ~1500x a 5 mm one's. With the
+# warm-up pinned at 2 frames (tuned on the 40 mm), the 150 mm 24s28p machine
+# reported a solid loss of 262 W whose settled value is 68 W — the average of a
+# transient, not of a machine. The fix is to keep solving discarded frames until
+# the transient is quiet; these tests pin that it IS quiet, and that the run says
+# how it got there.
+
+def _eddy_run(**over: Any) -> Dict[str, Any]:
+    """One coupled-eddy transient on the 30 mm machine (raw solver dict)."""
+    kw = dict(CASES["p2_eddy"]); kw.update(over)
+    set_request_materials(OVERRIDE)
+    try:
+        return fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
+                                          connection=CONNECTION, **kw)
+    finally:
+        set_request_materials(None)
+
+
+def _solid_series(d: Dict[str, Any]) -> np.ndarray:
+    """Per-frame magnet + shaft sigma*E^2 of the REPORTED window [W]."""
+    return (np.asarray(d.get("P_mag_eddy_W") or [], float)
+            + np.asarray(d.get("P_shaft_eddy_W") or [], float))
+
+
+def test_eddy_settle_resid_reports_the_tail_not_the_last_step():
+    """The settling gauge measures what is LEFT, and ripple is not decay.
+
+    The three sequences below are MEASURED cold-start solid-loss series (W) from
+    the three machines this fix was developed on, run with SB_EDDY_WARM=0 so
+    every frame is a warm-up frame. They are the whole reason the criterion is
+    not the naive "|dP|/P between the last two frames":
+
+    * the 30 mm drops 199 -> 1.5 W in ONE step, so the naive test reads 13000 %
+      and calls a settled machine un-settled forever;
+    * the settled 30 mm then RIPPLES 20 % frame to frame (a 3-phase machine's
+      loss carries the 6th electrical harmonic), so no per-frame tolerance below
+      that can ever be met;
+    * the 150 mm decays with ratio ~0.9 in the tail, where a per-frame move of
+      2 % means 18 % of transient is still to come.
+    """
+    from motor_ai_sim.simulation.sb_postproc import eddy_settle_resid
+
+    # 30 mm 12s14p (12 steps/period): gone after one frame.  (Two warm-up
+    # frames plus the first reported frame — the probe as the solver runs it.)
+    r, _ = eddy_settle_resid([199.104, 1.501, 1.248], 12, 4.76e-5)
+    assert r < 0.02, f"30 mm probe read as un-settled ({r:.4f})"
+    # 40 mm 12s14p (36 steps/period): gone after two.
+    r, _ = eddy_settle_resid([4487.788, 14.140, 2.494], 36, 1.83e-5)
+    assert r < 0.02, f"40 mm probe read as un-settled ({r:.4f})"
+    # 150 mm 24s28p (40 steps/period): 44 % of the solid loss is still transient.
+    r, tau = eddy_settle_resid([2775.5, 1627.9, 1089.0], 40, 2.68e-5)
+    assert r > 0.20, f"150 mm probe read as settled ({r:.4f})"
+    assert tau is not None and tau > 0.0, "no time constant off a clean decay"
+    # Pure rotor-position ripple, no decay: settled, whatever its amplitude.
+    ripple = [1.24, 1.49, 1.24, 1.49, 1.24, 1.49, 1.24, 1.49, 1.24]
+    r, _ = eddy_settle_resid(ripple, 12, 1e-5)
+    assert r < 0.02, f"steady ripple read as a decay ({r:.4f})"
+    # A SLOW decay whose per-frame move is small: not settled, because the tail
+    # is not (0.98 per frame -> 2 % steps, ~100 % of the level still to come).
+    slow = [100.0 * (0.98 ** i) for i in range(12)]
+    r, _ = eddy_settle_resid(slow, 12, 1e-5)
+    assert r > 0.10, f"a 0.98-per-frame decay read as settled ({r:.4f})"
+
+
+@pytest.mark.slow
+def test_eddy_warmup_leaves_no_start_up_transient_in_the_window(monkeypatch):
+    """No reported frame may sit above the settled band, and the run says so.
+
+    The assertion is "the first reported frame is inside the band the rest of the
+    window occupies", NOT "within x % of the median": the solid loss legitimately
+    ripples ~20 % frame to frame on this machine, so a tolerance tight enough to
+    catch a start-up transient would be tripped by physics. A contaminated first
+    frame is not near the band — it is 130x its top (measured below).
+    """
+    tol = 0.02
+
+    # The bug, reproduced: no warm-up at all -> frame 0 IS the cold start (from
+    # A = 0: since 2026-09-24 a cold march starts from the static field, which
+    # SB_EDDY_ZERO_START=1 turns off for exactly this reproduction).
+    monkeypatch.setenv("SB_EDDY_WARM", "0")
+    monkeypatch.setenv("SB_EDDY_ZERO_START", "1")
+    cold = _solid_series(_eddy_run())
+    monkeypatch.delenv("SB_EDDY_WARM")
+    monkeypatch.delenv("SB_EDDY_ZERO_START")
+    assert cold.size > 3
+    assert cold[0] > 10.0 * cold[1:].max(), (
+        "the cold-start leg no longer shows a start-up transient, so the test "
+        f"below cannot prove the warm-up removes one (first {cold[0]:.4g} W, "
+        f"rest max {cold[1:].max():.4g} W)")
+
+    d = _eddy_run()
+    sol = _solid_series(d)
+    assert sol.size > 3
+    assert sol[0] <= sol[1:].max() * (1.0 + 2.0 * tol), (
+        f"the reported window starts on a start-up transient: first frame "
+        f"{sol[0]:.4g} W against a settled band of {sol[1:].min():.4g}.."
+        f"{sol[1:].max():.4g} W")
+
+    # ── the run carries HOW it got there ────────────────────────────────
+    assert d["eddy_warmup_frames"] >= 2, d["eddy_warmup_frames"]
+    assert d["eddy_warmup_tol"] == pytest.approx(tol)
+    assert d["eddy_warmup_resid"] is not None
+    assert d["eddy_warmup_resid"] <= d["eddy_warmup_tol"], (
+        f"handed off with {d['eddy_warmup_resid']:.3g} of transient left "
+        f"against a tolerance of {d['eddy_warmup_tol']}")
+    # Solved frames = reported window + the warm-up it actually needed.
+    assert (d["n_frames_solved"]
+            == d["n_steps"] + d["eddy_warmup_frames"]), (
+        f"{d['n_frames_solved']} solved vs {d['n_steps']} reported + "
+        f"{d['eddy_warmup_frames']} warm-up")
+
+
+# ── axial magnet segmentation reaches the magnet eddy loss ──────────────────
+# `magnet_lamination` (axial slice length, mm) reached the CAD, the masses and
+# the geometry validation and stopped there: BOTH routes to the magnet eddy loss
+# are 2-D, i.e. an axially infinite magnet whose induced current never has to
+# turn round.  This is the end-to-end pin that the parameter now MOVES the watts
+# — against the SOLID p2_eddy baseline above, which is the same run at the same
+# settings, so the two numbers are directly comparable and no second solve is
+# needed for the reference.
+
+@pytest.mark.slow
+def test_axial_slices_cut_the_magnet_eddy_loss_by_the_modelled_factor(
+        baseline: Dict[str, Dict[str, float]]):
+    """5 mm slices of this 10 mm stack, against the pinned solid magnet.
+
+    Checks three separate things, because a factor that is merely APPLIED
+    somewhere is not the same as a factor that is applied to the reported watts:
+
+      * the factor the run reports is the one ``losses`` computes from the loop
+        width the run measured (no second, drifted copy inside the solver);
+      * BOTH magnet routes — the coupled σ·∂A/∂t solve and the frequency-domain
+        ``honest_rotor_eddy`` — are scaled by it, since they are read against
+        each other and one scaled route would look like a physics disagreement;
+      * the SHAFT is untouched.  It is one continuous conductor; slicing the
+        magnets does not slice it, and a factor applied to "the solid losses"
+        instead of "the magnets" would show up exactly here.
+    """
+    from motor_ai_sim.simulation.losses import magnet_segmentation_factor
+    if UPDATE or "p2_eddy" not in baseline:
+        pytest.skip("needs the solid p2_eddy baseline as its reference")
+    geo = dict(GEO_30MM); geo["magnet_lamination"] = 5.0
+    kw = dict(CASES["p2_eddy"])
+    set_request_materials(OVERRIDE)
+    try:
+        d = fem_transient_sliding_band(geo_override=geo, rpm=RPM,
+                                       connection=CONNECTION, **kw)
+    finally:
+        set_request_materials(None)
+
+    seg = d.get("magnet_segmentation") or {}
+    assert seg.get("slice_mm") == 5.0 and seg.get("n_bodies", 0) > 0, seg
+    assert seg["stack_mm"] == pytest.approx(GEO_30MM["motor_length"])
+    k = float(seg["factor"])
+    assert 0.0 < k < 1.0, seg
+    # the model, recomputed from the run's own measured width
+    assert k == pytest.approx(
+        magnet_segmentation_factor(5.0, seg["width_mm"],
+                                   GEO_30MM["motor_length"]), rel=1e-4), seg
+
+    want = baseline["p2_eddy"]
+    for key in ("P_mag_solve_W", "P_mag_linear_W"):
+        got = float(d[key])
+        assert got == pytest.approx(want[key] * k, rel=RTOL, abs=1e-4), (
+            f"{key}: {want[key]:.6g} W solid x {k:.4g} = "
+            f"{want[key] * k:.6g} W expected, got {got:.6g} W")
+    assert float(d["P_shaft_solve_W"]) == pytest.approx(
+        want["P_shaft_solve_W"], rel=RTOL, abs=ATOL["P_shaft_solve_W"]), \
+        "the shaft is one continuous conductor — slicing magnets cannot cut it"
+
+
+def test_a_solid_magnet_takes_the_segmentation_path_and_changes_nothing():
+    """The 0 marker has to be inert, not merely small.
+
+    The pins above are all magnet_lamination = 0 runs, so an off-by-a-percent
+    factor on the solid path would move every one of them.  This is the cheap
+    (no-solve) statement of the same thing, at the level the solver calls it.
+    """
+    from motor_ai_sim.simulation.losses import magnet_segmentation
+    block = np.vstack([np.linspace(-4e-3, 4e-3, 10).repeat(4),
+                       np.tile(np.linspace(-2e-3, 2e-3, 4), 10)])
+    for geo in (dict(GEO_30MM), {}, {"magnet_lamination": 0.0}):
+        k, rep = magnet_segmentation(geo, [block, block], 10e-3)
+        assert k == 1.0, (geo.get("magnet_lamination"), rep)
+
+
+def regenerate_baseline() -> None:
+    """Recompute every case and write the baseline file, printing the diff."""
+    old = (json.loads(BASELINE.read_text(encoding="utf-8"))
+           if BASELINE.exists() else {})
+    new: Dict[str, Dict[str, float]] = {}
+    for case in sorted(CASES):
+        print(f"running {case} ...", flush=True)
+        new[case] = _run(case)
+        for k, v in sorted(new[case].items()):
+            ov = old.get(case, {}).get(k)
+            if v is None or ov is None:
+                print(f"    {k:22s} {ov!r} -> {v!r}")
+            elif abs(v - ov) > max(abs(ov) * RTOL, ATOL.get(k, 0.0)):
+                print(f"    {k:22s} {ov:12.6g} -> {v:12.6g}  "
+                      f"({(v - ov) / ov * 100 if ov else float('inf'):+.2f} %)")
+            else:
+                print(f"    {k:22s} {v:12.6g}")
+    BASELINE.write_text(json.dumps(new, indent=1, sort_keys=True) + "\n",
+                        encoding="utf-8")
+    print(f"\nwrote {BASELINE}")
+
+
+if __name__ == "__main__":
+    regenerate_baseline()
+
+
+class TestDqStampSelfChecks:
+    """The dq quantities ship with their own proof.
+
+    The transform angle (rotor·p + DAXIS − 90) encodes two conventions — the
+    calibration's '+90 puts γ=0 on q' and the Park constant — and a slip in
+    either produces plausible-looking wrong inductances.  So the stamp carries
+    the dq torque identity evaluated against the energy-method mean, and the
+    identity holding to a fraction of a percent (measured 0.0 % on the 200 mm
+    24s/28p at 912 N·m) is the frame's licence to exist.
+    """
+
+    def test_dq_identity_matches_the_energy_torque(self, baseline):
+        from motor_ai_sim.simulation.fem_solver_2d import fem_transient_sliding_band
+        d = fem_transient_sliding_band(
+            geo_override=dict(GEO_30MM), rpm=RPM, connection=CONNECTION,
+            daxis_deg=60.0,   # any fixed frame works: the identity is per-frame
+            **dict(COMMON, element_order=2, demag=False,
+                   I_phase_rms=60.0, gamma_deg=10.0))
+        chk = d.get("dq_torque_check_pct")
+        assert chk is not None, d.get("dq_error")
+        assert chk < 2.0, ("dq torque identity off by %.2f%% — the transform "
+                           "frame does not match the excitation" % chk)
+        assert abs(d["i_q_A"]) > abs(d["i_d_A"]) > 1e-3, (
+            "gamma=10 deg must give a dominant q current with a real d component")

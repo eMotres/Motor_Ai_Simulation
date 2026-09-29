@@ -1,0 +1,708 @@
+# P2 solver trials across the whole motor range — 2026-07-30
+
+The P2 sliding-band solver was built and tuned on the 30/40 mm 12s/14p machine.
+This is a **measurement campaign**, not a fix: the same canonical entry point
+(`simulation.fem_solver_2d.em_transient_eval`) was run on **every machine the
+repo stores**, to find where it breaks or degrades.
+
+* Harness: `scripts/solver_trials.py` (one subprocess per motor, JSON-lines
+  append so a crash loses nothing, `--list` / `--report` / `--coil-audit`).
+* Raw results: `scripts/_solver_trials_results.jsonl` (23 runs, 2 h 0 min of
+  wall time).
+* Nothing under `src/` was changed. Every finding below is stated with the
+  geometry + operating point that reproduces it.
+
+---
+
+## Status of the findings (updated 2026-07-30, later the same day)
+
+| # | Finding | Status |
+|---|---|---|
+| **F1** | demag is a no-op under `eddy=True` | **fixed** — `dd634c9` |
+| **F2** | no rpm argument | **fixed** — `ca735c8`, rpm is an argument end to end |
+| **F3** | no winding-connection argument | **fixed** — `connection=` / `n_parallel=` end to end; it also uncovered and fixed an energy torque reported as `T_true / n_parallel` |
+| **F6** | unknown material name changes the physics silently | **fixed** — the assignment is validated where it is read; HTTP 400 from the routes, an exception on every eval path |
+| **F4 + F5** | copper-DC 0.83…2.14× and energy-vs-Maxwell 0.2…19.4 % | **fixed** — one root cause, the coil ampere-turn normalisation. The winding source is divided by the slot's REAL copper area now, so the machine is excited at exactly `n_wires·I` (`k ≡ 1`). Pins, catalog references and the surrogate anchor were all re-baselined on it; see “F4+F5 — fixed” below |
+| **F7** | stored reference performance not reproducible | catalog re-baselined with F2/F3 in place — `reference_*` fields, old values kept as `legacy_reference_*` |
+
+---
+
+## TL;DR
+
+**No hard failures anywhere.** 23 runs across 30 → 200 mm, three slot/pole
+topologies (12s/14p, 24s/20p, 24s/28p) and three symmetry sectors (NS=1/2/4):
+**zero exceptions, zero mesh failures, zero timeouts, zero unconverged frames,
+zero Picard fallback frames, zero step snapping.** Newton landed at ≤1e-7
+against a 1e-3 tolerance on every frame of every machine. The solver is also
+**bit-reproducible** across processes and **sector-independent** (full ring
+matches the 90° wedge to 0.008 %).
+
+What the campaign *did* find is four things that are invisible from any single
+machine:
+
+| # | Finding | Severity |
+|---|---|---|
+| **F1** | With `eddy=True`, the irreversible-demagnetisation de-rating is computed and reported but **never reaches the solved field**. Same magnet, demag on/off: **0.0 %** torque change with eddy on, **−69 %** with eddy off. | **bug** |
+| **F2** | `em_transient_eval` has **no rpm argument** — speed is read from the global config, so any per-request evaluation (optimizer included) silently runs at the shared config's speed. | **API gap** |
+| **F3** | Same for the **winding connection**. The one entry whose connection is stored *and* self-consistent reproduces its catalog torque to **−1.1 %** once `I/n_parallel` is applied, and over-reads **+96 %** without it. | **API gap** |
+| **F4/F5** | Two internal cross-checks disagree by load-independent, geometry-dependent factors: copper-DC **0.83…2.14×**, energy-vs-Maxwell mean torque **0.2…19.4 %**. Neither is a wedge artifact. | **honesty** |
+
+---
+
+## Protocol (identical for every motor)
+
+P2 sliding-band transient via `em_transient_eval`, current drive:
+`n_steps_per_period=24`, `n_periods=1`, `element_order=2`, `structured_gap=True`,
+`iron_template=True`, `geo_mesh=True`, `demag=True`, `eddy=True`,
+`rotor_eddy=True`, `gap_layers=2` (≥2 element layers per **half** gap, so the
+gap always keeps ≥2 layers regardless of its width), `min_size_mm=0.3`,
+`outer_air_factor=1.2`, `n_sectors = gcd(slots, poles)`.
+
+* **Mesh target**: `1.4 mm × D/150`, clamped to `[0.5, 2.0]` → 0.5 mm at 30/40 mm,
+  0.93 at 100, 1.4 at 150, 1.87 at 200. This is a **ceiling**: the solver
+  additionally auto-refines to `min(slot_width, tooth_width)/2`. Air-gap
+  resolution is independent of it (`gap_layers`).
+* **Motor set**: union of the 12 presets in `config/motor_presets.json` and the
+  9 catalog entries in `config/motor_catalog.json`, deduped by geometry, plus the
+  **ACTIVE `config/motor_config.yaml`** as the control. Catalog entries carry no
+  geometry of their own (they reference a preset), so they contribute the
+  **reference performance numbers**. Two preset pairs are byte-identical
+  geometry: `my_motor` ≡ `ciano14_30_10`, `m200_20kw_base` ≡ `my_m200_20kw_base`;
+  the ACTIVE config is byte-identical to `ciano14_40_12_fe₁₆n₂`. → **11 distinct
+  machines**, plus 12 diagnostic variants.
+* **Operating point** comes from the entry itself (`max_current`, `rpm`,
+  `phase_offset_deg`); every entry stored all three, so the `J_coil ≤ 35 A/mm²`
+  fallback was never used. Recorded per run, together with the resulting J.
+* Geometry reaches the solver **only** through `geo_override`, materials only
+  through `set_request_materials`. The user's config file was never written
+  (sha256 verified per run).
+
+---
+
+## Results
+
+Baseline runs (one per distinct machine, smallest first):
+
+| motor | size mm | slots/poles | operating point | T_avg N·m | ripple % | η % | V_peak | gates a/b/c/d/e | wall s |
+|---|---|---|---|---|---|---|---|---|---|
+| `my_motor` (≡`ciano14_30_10`) | 30×10 | 12s/14p NS=2 | 32 A, 15000 rpm, γ=+6° | 0.2122 | 1.57 | 92.18 | 5.5 | P/P/P/P/P | 183 |
+| `my_motor_40mm` | 30×10 | 12s/14p NS=2 | 32 A, 15000 rpm, γ=+10° | 0.2315 | 3.19 | 92.57 | 6.1 | P/P/P/P/P | 229 |
+| `ACTIVE_config` (control) | 40×12 | 12s/14p NS=2 | 44 A, 13000 rpm, γ=+10° | 0.7479 | 6.05 | 92.56 | 15.0 | P/**F**/**F**/P/P | 343 |
+| `ciano14_40_12_fe₁₆n₂` | 40×12 | 12s/14p NS=2 | 44 A, 13000 rpm, γ=+10° | 0.7479 | 6.05 | 92.56 | 15.0 | P/**F**/**F**/P/P | 298 |
+| `ciano14_40_12_fe₁₆n₂` (later geom) | 40×12 | 12s/14p NS=2 | 44 A, 13000 rpm, γ=+10° | 0.6074 | 9.94 | 93.47 | 10.6 | P/P/P/P/P | 232 |
+| `motor_40mm` | 40×12 | 12s/14p NS=2 | 35 A, 12000 rpm, γ=−42° | 0.3086 | 35.22 | 91.27 | 10.5 | P/**F**/**F**/P/P | 184 |
+| `motor_100mm` | 100×15 | 24s/28p NS=4 | 46 A, 3800 rpm, γ=−36° | 4.8451 | 9.39 | 91.80 | 36.1 | P/P/P/P/P | 270 |
+| `ciano20_150_35` | 150×35 | 24s/20p NS=4 | 100 A, 3950 rpm, γ=+26° | 59.8444 | 2.88 | 94.92 | 132.2 | P/P/P/P/P | 292 |
+| `my_baseline` | 150×35 | 24s/28p NS=4 | 85 A, 3950 rpm, γ=0° | 53.6195 | 9.82 | 95.03 | 176.5 | P/**F**/**F**/P/P | 249 |
+| `m200_20kw_base` (≡`my_m200…`) | 200×45 | 24s/28p NS=4 | 168 A, 2000 rpm, γ=0° | 205.5302 | 6.49 | 90.78 | 362.1 | P/**F**/**F**/P/P | 477 |
+| `m200_20kw_lowripple` | 200×45 | 24s/28p NS=4 | 120 A, 2000 rpm, γ=0° | 180.1246 | 3.48 | 93.91 | 335.5 | P/**F**/**F**/P/P | 626 |
+| `m200_20kw_opt` | 200×45 | 24s/28p NS=4 | 168 A, 2000 rpm, γ=−10° | 185.4695 | 10.14 | 90.08 | 347.4 | P/**F**/**F**/P/P | 414 |
+
+Gates: **(a)** nonlinear converged on every frame · **(b)** energy-mean vs
+Maxwell-mean torque within 5 % · **(c)** copper-DC arithmetic · **(d)** demag map
+not saturated to zero · **(e)** no exception / mesh failure.
+
+Diagnostic variants:
+
+| variant | what it changes | T_avg N·m | ripple % | η % | note |
+|---|---|---|---|---|---|
+| `ciano20_150_35@coilI` | I → I/2 (its stored `2S-2P`) | 30.2347 | 6.03 | 97.08 | **−1.1 % vs its catalog 30.574** |
+| `my_baseline@coilI` | I → I/4 (its stored `4P`) | 14.1152 | 64.27 | 97.04 | −44 % vs catalog 25.28 |
+| `m200_20kw_base@coilI` | I → I/2 (hypothesis; none stored) | 123.5442 | 1.90 | 95.73 | +27.8 % vs preset 96.66 |
+| `my_baseline@NS1` | full ring instead of 90° wedge | 53.6154 | 9.81 | 95.03 | **matches NS=4 to 0.008 %** |
+| `…fe₁₆n₂@Fe16N2_lab_best` | magnet → Fe16N2 (per-request override) | 0.6128 | 9.93 | 93.52 | map: 98 % of magnet de-rated |
+| `…@Fe16N2_lab_best@demagOFF` | demag off, eddy on | 0.6128 | 9.99 | 93.52 | **identical to demag on** |
+| `…@Fe16N2_lab_best@eddyOFF` | demag on, eddy **off** | 0.1871 | 36.47 | 82.12 | **−69 % torque** |
+| `…@Fe16N2_lab_best@demagOFF@eddyOFF` | both off | 0.6121 | 10.10 | 93.49 | the reference for the pair above |
+
+---
+
+## Findings, by severity
+
+### F1 — `demag=True` is a no-op when `eddy=True` (bug)
+
+The single most consequential result. Same geometry (40 mm 12s/14p, 44 A,
+13000 rpm, γ=+10°), same magnet (`Fe16N2_lab_best` via the per-request material
+override), only the two flags change:
+
+| eddy | demag | T_avg N·m | V_peak | η % | demag map |
+|---|---|---|---|---|---|
+| on | off | 0.61280 | 10.704 | 93.522 | — |
+| on | **on** | 0.61280 | 10.703 | 93.522 | 1278/1302 magnet elems de-rated, Br_min 0.136, **mean over the de-rated set 0.369** |
+| off | off | 0.61210 | 10.694 | 93.491 | — |
+| off | **on** | **0.18710** | **6.820** | **82.122** | 1279/1302 de-rated, Br_min 0.020, mean 0.240 |
+
+With the coupled σ·∂A/∂t solve **off**, honouring the de-rating costs **69 % of
+the torque** and 36 % of the back-EMF — the physically expected result for a
+magnet that has lost most of its remanence over 98 % of its volume. With the
+coupled solve **on**, the identical de-rating changes the reported torque,
+back-EMF, iron loss and efficiency by **nothing** (4+ significant figures
+identical), while the UI-facing demag map still reports the magnet as ruined.
+
+Code site: `fem_solver_2d.py` ~line 3100, inside the frame loop —
+
+```python
+if _dmst.update(_bxe_d[nst:], _bye_d[nst:]) and _dm_pass < 11:
+    _mx_all[nst:] = _Mx_glob * _br_glob
+    ...
+    f = f_mag2 if eddy else (f_mag2 + Ist['A']*f_coil2['A'] + ...)
+    _bff2 = np.asarray(Pro.T @ f).ravel()[_free2]
+```
+
+The re-assembled right-hand side is written to `_bff2`, which is the **non-eddy**
+frame's system vector; the eddy branch solves its own bordered `(A, U, i)`
+Newton system that is not rebuilt here. So the de-rated `_br_glob` never enters
+the field that gets reported.
+
+Impact: **the P2 default configuration is `eddy=True`** (this campaign, the
+Simulation route and `refine_proc` all run it), and the ACTIVE 40 mm design has
+`demag: true` in its config. Every such run pays ~2× the wall time (210 s vs
+111 s on this machine) for a demag map that does not influence a single reported
+number. It also means demag-constrained optimization on P2 is optimizing against
+a constraint the physics never felt.
+
+Reproducer: `SOLVER_TRIALS_EDDY=0/1 SOLVER_TRIALS_DEMAG=0/1 python
+scripts/solver_trials.py --only "ciano14_40_12_fe₁₆n₂@Fe16N2_lab_best"`.
+
+### F2 — the canonical entry point has no speed argument (API gap)
+
+`em_transient_eval(...)` takes `I_phase_rms` and `gamma_deg` but **not rpm**.
+`fem_transient_sliding_band` reads it from the global config
+(`rpm = float(sim.get("rpm", 3950))`, `f_elec = rpm·poles/2/60`). So
+`geo_override` can move the geometry to another machine while the speed stays
+whatever the shared config holds.
+
+Measured on the 30 mm control (its entry says 15000 rpm; the global config held
+13000 rpm at the time):
+
+| rpm actually used | f_elec | T_avg | P_fe | V_peak | η |
+|---|---|---|---|---|---|
+| 13000 (global config) | 1516.7 Hz | 0.2122 | 2.08 W | 4.80 V | 91.32 % |
+| 15000 (entry's own) | 1750.0 Hz | 0.2122 | 2.60 W | 5.48 V | 92.18 % |
+
+Torque is unaffected (magnetostatic, current-driven) but iron loss is off by
+−20 %, back-EMF by −12.5 % and efficiency by 0.86 pp. This is not hypothetical
+for the optimizer: `refine_proc.run_one` reads `cfg["simulation"]["rpm"]` for its
+own ω and then relies on the solver reading the same global value — correct only
+as long as the active config's speed *is* the candidate's speed. The harness
+works around it by patching the in-memory config inside its throwaway
+subprocess (the YAML's sha256 is verified unchanged after every run).
+
+### F3 — no winding-connection argument either (API gap)
+
+The FEM only ever sees `I_coil = I_phase / n_parallel`, and `n_parallel` comes
+from the global config's `winding` block. There is no per-request channel for it
+(unlike `geo=` and `mat=`), so a trial of a stored machine drives `n_parallel ×`
+its intended coil MMF. The evidence is unambiguous:
+
+| entry | stored connection | as stored (n_par=1) | at I/n_parallel | catalog T |
+|---|---|---|---|---|
+| `ciano20_150_35` | `2S-2P` (n_par 2) | 59.844 N·m (**+95.7 %**) | **30.235 N·m (−1.1 %)** | 30.574 |
+| `my_baseline` | `4P` (n_par 4) | 53.620 N·m (+112.1 %) | 14.115 N·m (−44.2 %) | 25.28 |
+| `m200_20kw_base` | *none stored* | 205.530 N·m (+112.6 %) | 123.544 N·m at I/2 (+27.8 %) | 96.66 |
+
+`ciano20_150_35` is the campaign's cleanest validation of the solver itself: a
+150 mm 24s/20p machine at its own stored operating point reproduces its stored
+torque to **1.1 %** once the connection is applied. It also shows the cost of the
+gap — the same run without it is a factor 1.96 out, which is exactly its two
+parallel paths. `my_baseline`'s stored `4P` is *not* consistent with its stored
+torque (25.28 N·m sits between our 21.25 A and 85 A results, i.e. ≈2 parallel
+paths, not 4), and the 200 mm presets store no connection at all.
+
+Note the global `winding` block itself is internally inconsistent for the
+24-slot machines: `n_coils_per_phase: 4` with `n_series: 2, n_parallel: 1`
+(2 × 1 ≠ 4).
+
+### F4 — copper-DC cross-check: two routes to the same watts differ 0.83…2.14×
+
+Gate (c) has two identities. The first holds **exactly** on every machine:
+`3·I²·R_phase == P_cu_dc_W` to 0.0000 % (R is derived from it). The second — the
+code's own stated cross-check, "two independent routes to the same watts" — does
+not:
+
+* analytic active-length DC = `P_cu_dc_W / k_end` (`field_ops.copper_loss_W`:
+  ρ_Cu(T)·J²·V_cu with V_cu from the **nominal** wire rectangle);
+* solved active-length DC = `P_cu_dc_2d_solve_W` = `Σ_b I_b²/S_b` with
+  `S_b = σ_Cu(T)·A_meshed_coil` (the coupled eddy solve's own constraint rows).
+
+| machine | wires/slot × h | solve / analytic |
+|---|---|---|
+| `my_motor_40mm` 30 mm | 6 × 0.5 | 1.023 |
+| `motor_100mm` | 10 × 0.65 | 1.028 |
+| `…fe₁₆n₂` (7-wire geom) | 7 × 0.6 | 1.037 |
+| `ciano20_150_35` | 14 × 0.7 | 1.049 |
+| `my_motor` 30 mm | 6 × 0.5 | 1.072 |
+| `motor_40mm` | 8 × 0.6 | 1.234 |
+| `m200_20kw_base` / `_opt` | 18 × 0.8 | 1.366 |
+| `…fe₁₆n₂` (9-wire geom) | 9 × 0.5 | 1.440 |
+| `m200_20kw_lowripple` | 20 × 1.0 | **2.139** |
+| `my_baseline` | 14 × 0.6, split 2 | **0.827** |
+
+The ratio is **identical at two different currents** on all three machines that
+were run twice (`ciano20` 4.87 % at 100 A and 50 A; `my_baseline` 17.35 % at
+85 A and 21.25 A; `m200` 36.60 % at 168 A and 84 A) and **identical at NS=1 and
+NS=4**. Both routes scale as I², so this is a pure **conductance** disagreement:
+a fixed geometric property of each design, not a load or symmetry effect.
+
+Partial mechanism, measured: `--coil-audit` builds the 2-D polygons and compares
+the CAD copper section against the nominal `n_wires × wire_width × wire_height`.
+Two designs come out **25 % short** — `motor_40mm` 0.742 and
+`m200_20kw_lowripple` 0.748 (all others 1.0000) — i.e. the CAD clips wires the
+analytic loss assumes are full rectangles. Those are also two of the three worst
+ratios, but the direction/magnitude does not close the gap for `m200_20kw_base`
+(area ratio 1.0000, ratio 1.366) or `my_baseline` (area 1.0000, ratio 0.827), so
+a second mechanism is present — the remaining suspects are the σ(T) used for
+`S_b` versus ρ(T) in `copper_loss_W`, and `wire_split` (the only design below 1.0
+is the only one with `wire_split: 2`).
+
+Consequence for reported numbers: the reported copper is
+`P_cu_dc(analytic, with k_end) + (solve_total − solve_dc2d)`. The AC increment is
+a difference **within** the solve, so it is self-consistent; but the reported DC
+and the solve's DC describe different resistances, and the loss-density map is
+closed with `P_cu_end_winding_W = max(0, P_cu_dc2 − P_cu_dc2d_avg2)` — which is
+clamped to 0 exactly on the designs where the solve's DC is the larger of the
+two (`my_baseline` here).
+
+### F5 — energy-mean vs Maxwell-mean torque: 0.2…19.4 %, per geometry
+
+`T_avg_Nm` is the energy/flux-linkage mean (correct DC) with the Maxwell AC
+re-centred on it; `T_avg_maxwell_Nm` is the raw Arkkio mean. They measure the
+same physics two ways, so the gate asked for 5 %:
+
+| machine | Δ (energy vs Maxwell) | sign |
+|---|---|---|
+| `my_motor_40mm`, `ciano20_150_35`, `motor_100mm`, `…fe₁₆n₂` (7-wire) | 0.24 – 0.96 % | — |
+| `my_motor` 30 mm | 1.99 % | Maxwell high |
+| `motor_40mm` (γ=−42°) | 8.26 % | Maxwell **low** |
+| `my_baseline` 150 mm | 10.38 % | Maxwell low |
+| `m200_20kw_base` / `_opt` | 10.45 / 11.23 % | Maxwell high |
+| `…fe₁₆n₂` (9-wire geom) | 16.32 % | Maxwell high |
+| `m200_20kw_lowripple` | **19.37 %** | Maxwell high |
+
+Three things were ruled out by measurement:
+
+* **not a sector/wedge artifact** — `my_baseline@NS1` (full ring) gives 10.37 %
+  against the wedge's 10.38 %, with T_avg matching to 0.008 %;
+* **not saturation/load** — the divergence is the same at two currents
+  (`my_baseline` 10.38 % at 85 A, 10.87 % at 21.25 A; `m200` 10.45 % at 168 A,
+  10.82 % at 84 A; `ciano20` 0.62 % / 0.85 %);
+* **not scale** — the 200 mm is a linear 4/3 copy of the 150 mm and inherits the
+  same ≈10 %, while the 100 mm (same 24s/28p topology) sits at 0.84 %.
+
+So it is a per-geometry constant of unknown origin, and it matters twice over:
+the reported **ripple percentage** is a Maxwell peak-to-peak normalised on the
+energy mean, so wherever these two disagree by 10-19 % the ripple % carries the
+same bias. The historical note (Maxwell-on-band over-reading ~35-37 % under
+load) is *not* what is being seen here — the sign flips between machines, and the
+worst case is a low-current 200 mm design, not a heavily loaded one.
+
+### F6 — an unknown material name silently changes the physics
+
+One run (`my_baseline@coilI`, first attempt) caught the live config holding
+`magnet: N42SH`, which is not in `config/materials_library.yaml`. The solve did
+**not** fail: it logged
+`Magnet material 'N42SH' lookup failed: … Available: [...]` and fell back to the
+analytic magnet — no BH curve and, notably, **no demag knee**, so the demag map
+came back empty and the shaft-eddy loss came out **63.9 W instead of 7.0 W**
+(9×). Re-running the identical case with `F45SH_120C` restored it. A typo'd or
+stale material name therefore produces plausible-looking numbers rather than an
+error, and only a WARNING in the log distinguishes them.
+
+### F4 + F5 are ONE bug: the coil ampere-turn scale (diagnosed 2026-07-30)
+
+F4 (copper-DC 0.83…2.14×) and F5 (energy-vs-Maxwell 0.2…19.4 %) are not two
+findings. They are two visible faces of one line of code.
+
+**The mechanism.** The magnetostatic coil source is
+
+```python
+J_z = direction * I_coil * n_wires / slot_area_m2      # fem_solver_2d.py:1014
+                                                       # I_coil = I_phase / n_parallel
+slot_area_m2 = p.slot_width_m * p.slot_height_m * p.fill_factor
+p.slot_width_m = (wire_width + 2*wire_spacing_x + 2*insulation_thickness)
+p.fill_factor  = 0.6        # the MotorDomainParams DATACLASS DEFAULT.  Neither
+                            # geometry_2d.params_from_config nor
+                            # fem_solver_2d._params_from_geo_dict ever sets it,
+                            # so it is 0.6 for every machine this repo has.
+```
+
+`J_z` is then applied over the **meshed copper elements**, whose total area per
+slot is whatever the CAD wire rectangles come to — a completely different
+quantity from `slot_width × slot_height × 0.6`. So the ampere-turns the field
+actually sees are
+
+```
+AT_actual = J_z * A_copper_meshed = I_coil * n_wires * k     (want: I_coil * n_wires)
+k = A_copper_meshed_per_slot / (slot_width_m * slot_height_m * 0.6)
+```
+
+and `k` ranges from **0.909 to 1.265** across the machines this repo stores
+(1.011 on the pinned 30 mm regression machine). The coupled eddy solve imposes
+the same thing by construction — its `Iunit = dir*n_wires*area_c/slot_area_m2`
+carries an explicit comment saying it matches the magnetostatic ampere-turns,
+which it does, including the error.
+
+**Why that shows up as an energy-vs-Maxwell gap.** One field, measured twice:
+
+* `T_avg_maxwell_Nm` is the true torque of the field that was solved — the field
+  of a machine excited at `k·N·I`;
+* `T_avg_Nm` is `1.5·p·⟨ψ_α i_β − ψ_β i_α⟩` built from that same ψ and the
+  **requested** terminal current `I`.
+
+So `T_maxwell / T_energy = k`. Measured, against `k` computed from the CAD coil
+polygons (no FEM involved):
+
+| machine | k (CAD) | T_maxwell/T_energy | residual |
+|---|---|---|---|
+| `ciano14_40_12_fe₁₆n₂` (7-wire) | 1.0185 | 1.0097 | −0.9 % |
+| `my_baseline` 150 mm | 0.9091 | 0.8962 | −1.4 % |
+| `ciano20_150_35` | 1.0240 | 1.0062 | −1.7 % |
+| `motor_100mm` | 1.0136 | 0.9916 | −2.2 % |
+| `motor_40mm` (γ=−42°) | 0.9570 | 0.9174 | −4.1 % |
+| `m200_20kw_opt` | 1.1688 | 1.1123 | −4.8 % |
+| `m200_20kw_base` | 1.1688 | 1.1045 | −5.5 % |
+| `m200_20kw_lowripple` | 1.2646 | 1.1937 | −5.6 % |
+
+The 19.4 % "gap" and the 0.6 % "gap" are the same quantity. What is left after
+`k` is removed is **−0.9…−5.6 %, one sign** — that is the real
+sliding-band Maxwell-vs-energy discrepancy, and it is inside the 5 % the gate
+was asking for. The sign flips the report noted are just `k` above vs below 1.
+
+**Causal proof, not correlation.** `p.fill_factor` feeds *only* `slot_area_m2`,
+i.e. only the current-density normalisation. Overriding it changes the imposed
+ampere-turns and nothing else — same geometry, same mesh, same materials, same
+operating point (30 mm 12s/14p `GEO_30MM`, 60 A, γ=0, 15000 rpm, 6 steps):
+
+| fill_factor | k | T_energy N·m | T_maxwell N·m | T_maxwell/T_energy |
+|---|---|---|---|---|
+| 0.6 (as shipped) | 1.0111 | 0.417959 | 0.421000 | 1.0073 |
+| 0.3 | 2.0222 | 0.354130 | 0.690500 | 1.9499 |
+| 1.2 | 0.5056 | 0.437971 | 0.216600 | 0.4946 |
+
+`T_maxwell` follows `k` (sub-linearly at high `k` — the iron saturates).
+`T_energy` barely moves: it is `ψ_pm × I` at the requested current, so it is
+**invariant to this bug to first order**, drifting only through the saturation
+state the wrong excitation produces — −15 % / +5 % across a **4× swing in `k`**,
+against `T_maxwell`'s 3.2×.
+
+**Verdict on `T_avg` (the question this investigation was to answer).**
+`T_avg_Nm`, the energy mean, is **the trustworthy one**, and `T_avg_maxwell_Nm`
+over-reads by exactly `k` on every geometry. That is consistent with the two
+external checks the campaign has: `my_motor` reproduces its stored 0.212 N·m to
++0.1 % (k = 1.011) and `ciano20_150_35` reproduces its catalog 30.574 N·m to
+−1.1 % once its connection is applied (k = 1.024). But the caveat is real and
+it is not small: the field, the saturation state, every loss, the back-EMF and
+the raw ripple all belong to a machine driven at `k` times the requested MMF, so
+on a design with `k = 1.26` no number except the mean torque should be trusted
+to better than ~25 %. **The reported ripple percentage is a Maxwell peak-to-peak
+normalised on the energy mean, so it carries the full factor `k`.**
+
+**Why F4 falls out of the same line.** Gate (c)'s second identity compares the
+coupled solve's own DC (`Σ I_b²/S_b`, with `S_b = σ·A_meshed` and
+`I_b = I_branch·n_wires·A_b/slot_area_m2`) against the analytic active-length DC
+(`ρ·J²·V_cu` from the **nominal** wire rectangle). Working the algebra through,
+the ratio is
+
+```
+P_cu_dc_2d_solve / (P_cu_dc / k_end)  ==  k_nom * k_cad
+k_nom = n_wires*wire_width*wire_height / slot_area_m2
+k_cad = A_copper_meshed_per_slot      / slot_area_m2
+```
+
+Measured against the campaign's own gate-(c) numbers:
+
+| machine | k_nom | k_cad | k_nom·k_cad | gate (c) measured |
+|---|---|---|---|---|
+| `ciano14_40_12_fe₁₆n₂` | 1.0185 | 1.0185 | 1.0374 | 1.0372 |
+| `motor_100mm` | 1.0136 | 1.0136 | 1.0275 | 1.0275 |
+| `ciano20_150_35` | 1.0240 | 1.0240 | 1.0486 | 1.0487 |
+| `my_baseline` | 0.9091 | 0.9091 | 0.8264 | 0.8265 |
+| `motor_40mm` | 1.2903 | 0.9570 | 1.2348 | 1.2339 |
+| `m200_20kw_base` / `_opt` | 1.1688 | 1.1688 | 1.3661 | 1.3660 |
+| `m200_20kw_lowripple` | 1.6915 | 1.2646 | 2.1392 | 2.1390 |
+
+Four decimal places on every machine. **There is no second mechanism**: the
+report's suspects — σ(T) vs ρ(T), and `wire_split` — are both cleared.
+`my_baseline` is the only ratio below 1.0 simply because it is the only machine
+with `k < 1`, and `k_nom ≠ k_cad` on exactly the two designs whose CAD clips the
+wire rectangles (`motor_40mm` 0.742, `m200_20kw_lowripple` 0.748), which is the
+`--coil-audit` result.
+
+**The fix, and why it was written up before being applied.** The physically
+correct statement is that a slot carries `n_wires · I_branch` ampere-turns by
+construction, regardless of what the mesher produced. Both gates then collapse
+to their honest residuals. It is a small edit and a very large consequence: it
+moves **every** number this repo has ever stored — the pinned regression
+baseline (k = 1.011 there, so ~1 %), every catalog and preset reference, the
+analytic surrogate that is calibrated against the pins, the 256-entry optimizer
+eval cache, and any optimization in flight — by up to 21 %
+(`m200_20kw_lowripple`) and in both directions. It was written up first so it
+could be done as its own deliberate re-baseline, which is what the section
+below is.
+
+Reproducers:
+
+```bash
+# k from the CAD polygons, per machine (no FEM)
+python scripts/solver_trials.py --coil-audit
+
+# the causal test: fill_factor changes ONLY slot_area_m2.  Patch
+# fem_solver_2d._params_from_geo_dict to set p.fill_factor and re-run
+# tests/test_physics_regression.GEO_30MM at 0.6 / 0.3 / 1.2 -> the table above.
+```
+
+### F4+F5 — fixed 2026-07-30 (`94510e3`), and the repo re-baselined on it
+
+The winding source is normalised by the slot's REAL copper area:
+
+```
+J_z = direction · I_coil · n_wires / A_copper_of_slot
+```
+
+`A_copper_of_slot` is the area the MESH gives that slot's coil domains
+(`fem_solver_2d.coil_copper_areas`, fed `areas_s` summed per tag), so
+`Σ J·A = direction · I_coil · n_wires` over every slot **by construction** and
+`k ≡ 1` on every geometry. The nominal `slot_width·slot_height·fill_factor`
+rectangle is out of the physics; `p.fill_factor` no longer reaches the solver at
+all, and `geometry_2d.winding_current_density` — the same formula kept as an
+uncalled helper — was deleted so it cannot come back.
+
+One detail worth recording, because the obvious version of the fix is wrong
+here: the CAD emits **one polygon per wire** (72 for 12 slots × 6 wires;
+`n_poly == n_slots·n_wires` on all 15 machines, per `--coil-audit`).
+Normalising each polygon by its OWN area would have been wrong by `n_wires`. The
+slot is the thing that carries N turns, so the slot's copper is the divisor. The
+same divisor now feeds the two places that re-derived the excitation
+independently and were off by the same `k`: the imposed-current eddy constraint
+`Iunit` (what makes the coupled σ∂A/∂t solve agree with the magnetostatic
+ampere-turns) and the P2 J-view.
+
+`tests/test_physics_regression.py::test_winding_carries_exactly_n_wires_times_i`
+asserts the invariant per slot from the polygons alone — no mesh, no solve, ~2 s
+— so it runs in the fast suite. It fails on the old formula by exactly `k`.
+
+**What moved in the pinned baseline** (`GEO_30MM`, `k` = 1.0111, so `1/k` −1.10 %
+and `1/k²` −2.19 % are the two yardsticks). 23 pinned lines moved; every one of
+them fits:
+
+| pin | move | why |
+|---|---|---|
+| `p2_noload` — everything | **0.00 %**, bit-identical | `I` = 0: no winding source to renormalise. The control. |
+| `T_avg_maxwell_Nm` (4 current-drive cases) | −0.88…−1.00 % | this is the quantity that tracked `k` linearly |
+| `T_avg_Nm` (energy) | +0.13…+0.22 %, inside the gate | `1.5p⟨ψ×i⟩` at the REQUESTED current — invariant to first order |
+| `P_cu_total_solve_W` (eddy cases) | −2.16 % | coupled DC is `Σ I_b²/S_b`, every `I_b` carried `k` → `1/k²` |
+| `P_cu_ac_solve_W`, `P_mag_solve_W`, `P_mag_honest_W` | −0.63…−1.48 % | field-square quantities on the ARMATURE field only; the PM part is unchanged |
+| voltage cases: `I_A_fund`, `I_A_peak`, THD, `T_avg` | +0.86…+1.29 % | the current is the ANSWER: 1.1 % fewer ampere-turns → less armature reaction → the same 7.0 V pk draws more current |
+| voltage cases: `P_cu_W` | +1.67 % | = `I²`, i.e. 2 × 0.87 % |
+
+`T_maxwell/T_energy` on `GEO_30MM` is **0.9999** now (it was 1.0110, and `k` is
+1.0111) — this machine's sliding-band Maxwell residual is ~0.
+
+#### The whole catalog, re-measured on the fixed excitation
+
+All 15 trials machines re-run (`scripts/solver_trials.py`, same protocol, same
+frozen input dir). The `k (old)` column is **recovered from the FEM**, as
+`(M/E)_pre / (M/E)_post` — it reproduces the CAD-polygon `k` of the table above
+to 3–4 decimals on every machine, which is the fix and the diagnosis agreeing
+from two independent directions:
+
+| machine | `k` (old) | T_energy pre → post | T_maxwell pre → post | M/E pre → post | gate (c) pre → post |
+|---|---|---|---|---|---|
+| `ciano14_40_12_fe₁₆n₂` | 0.9284 | 0.023 → **0.0236** (+2.61 %) | 0.0095 → 0.0105 (+10.53 %) | 0.4130 → **0.4449** | 0.9495 → **1.0926** |
+| `ciano20_150_35` | 1.0241 | 30.23 → **30.23** (−0.00 %) | 30.49 → 29.77 (−2.35 %) | 1.0085 → **0.9847** | 1.0487 → **0.9999** |
+| `ciano20_150_35@coilI` | 1.0241 | 30.23 → **30.23** (−0.00 %) | 30.49 → 29.77 (−2.35 %) | 1.0085 → **0.9847** | 1.0487 → **0.9999** |
+| `m200_20kw_base` | 1.1684 | 205.5 → **200.5** (−2.44 %) | 227.0 → 189.6 (−16.50 %) | 1.1045 → **0.9453** | 1.3660 → **1.0001** |
+| `m200_20kw_base@coilI` | 1.1688 | 123.5 → **124.3** (+0.59 %) | 136.9 → 117.8 (−13.94 %) | 1.1082 → **0.9481** | 1.3660 → **1.0001** |
+| `m200_20kw_lowripple` | 1.2633 | 180.1 → **187.6** (+4.17 %) | 215.0 → 177.3 (−17.54 %) | 1.1937 → **0.9449** | 2.1390 → **1.3376** |
+| `m200_20kw_opt` | 1.1676 | 185.5 → **192.1** (+3.55 %) | 206.3 → 183.0 (−11.31 %) | 1.1123 → **0.9526** | 1.3660 → **1.0001** |
+| `motor_100mm` | 1.0137 | 4.743 → **4.749** (+0.12 %) | 4.702 → 4.644 (−1.24 %) | 0.9914 → **0.9779** | 1.0275 → **1.0000** |
+| `motor_40mm` | 0.9559 | 0.3089 → **0.3082** (−0.23 %) | 0.2835 → 0.2959 (+4.37 %) | 0.9178 → **0.9601** | 1.2339 → **1.3493** |
+| `my_baseline` | 0.9083 | 14.12 → **14.10** (−0.07 %) | 12.59 → 13.85 (+10.02 %) | 0.8918 → **0.9818** | 0.8265 → **1.0000** |
+| `my_baseline@coilI` | 0.9084 | 14.12 → **14.09** (−0.15 %) | 12.59 → 13.84 (+9.92 %) | 0.8918 → **0.9817** | 0.8265 → **1.0000** |
+| `my_motor` | 1.0349 | 0.2119 → **0.2121** (+0.09 %) | 0.2161 → 0.2090 (−3.29 %) | 1.0198 → **0.9854** | 1.0716 → **1.0001** |
+| `my_motor_40mm` | 1.0115 | 0.2285 → **0.2286** (+0.04 %) | 0.2280 → 0.2255 (−1.10 %) | 0.9978 → **0.9864** | 1.0226 → **0.9998** |
+
+(`ACTIVE_config` and `ciano14_40_12_fe₁₆n₂@Fe16N2_lab_best` ran post-fix too but
+their geometry moved between the two campaigns — `geometry_sha256` differs — so
+they carry no comparison. Their post-fix numbers are in the jsonl.)
+
+**Three things this table settles.**
+
+1. **`T_avg` (energy) was the trustworthy number, as claimed.** It moves −0.23…
+   +0.59 % on every machine with `k` within 3 % of 1. The 200 mm designs move
+   +3.6…+4.2 % — they are the `k` = 1.17…1.26 machines, where the wrong
+   excitation had really moved the saturation state.
+2. **`T_maxwell` moves by `1/k`,** −11…−17 % on the 200 mm designs. Any ranking
+   that used the Maxwell mean on those machines was ranking `k`.
+3. **Gate (c) collapses to 1.0000** on 10 of 13 comparable machines — the
+   copper-DC identity the campaign opened with is now an identity. The three
+   that do not are not excitation errors and do not go away:
+   * `motor_40mm` **1.3493** and `m200_20kw_lowripple` **1.3376** — exactly
+     `1/0.7417` and `1/0.7476`, the `--coil-audit` ratios. Their CAD **clips the
+     wire rectangles**, so the analytic DC (nominal `n_wires·w·h`) describes more
+     copper than the geometry has. A geometry inconsistency, now isolated.
+   * `ciano14_40_12_fe₁₆n₂` **1.0926** — here the CAD copper matches the nominal
+     (audit 1.0000) but the **MESH** carries 8.5 % less of it. Pre-fix the same
+     factor read 0.9495 (`k_nom·k_meshed`) and post-fix reads `k_nom/k_meshed`;
+     both give `k_meshed` = 0.9322, which is how we know it is the mesher and not
+     the source. Worth its own ticket.
+
+**Energy-vs-Maxwell after the fix.** M/E lands at 0.9449…0.9864 on every
+load-carrying machine — **one sign, −1.4…−5.5 %**, exactly the residual band
+4072ccc predicted once `k` is removed, and inside the 5 % gate (b) asks for. The
+outlier is `ciano14_40_12_fe₁₆n₂` at 0.4449, which is the demag-collapsed design
+(0.023 N·m, 92 % ripple) — its torque is dominated by the collapse, not by the
+torque method.
+
+**Catalog.** `scripts/catalog_rebaseline.py --write` re-wrote 8 entries against
+the post-fix runs (1 left un-measured, `cat_200_working`, whose preset does not
+exist). The stored `reference_T_avg_Nm` moves −0.23…+2.61 %, because the catalog
+stores the ENERGY torque — the trustworthy one. `reference_T_avg_maxwell_Nm` is
+the field that moved, by `1/k`. Each entry's `reference_provenance` now carries
+`ampere_turn_scale_k: 1.0` plus `legacy_ampere_turn_scale_k`, which is how far
+that entry's previous Maxwell/ripple numbers were off.
+
+### F7 — stored reference performance is largely not reproducible (data, not solver)
+
+Deltas of our T_avg against each entry's stored torque, worst first:
+
+| entry | stored | ours | Δ | reading |
+|---|---|---|---|---|
+| `my_motor_40mm` | 0.444 | 0.2315 | **−47.9 %** | the catalog entry `cat_my_motor_40mm` is a 30 mm design carrying the 40 mm entry's numbers verbatim (0.444 N·m / 558 W / 91.4 % appear on both) — a copy-paste, not a solver error (energy and Maxwell agree to 0.24 %) |
+| `m200_20kw_base` | 96.66 | 205.53 | +112.6 % | no winding connection stored (F3); ~2 parallel paths would put it at 123.5 (+27.8 %), still not a match |
+| `my_baseline` | 25.28 | 53.62 | +112.1 % | stored `4P` inconsistent with stored torque (F3) |
+| `ciano20_150_35` | 30.574 | 59.84 | +95.7 % | **explained**: −1.1 % once its `2S-2P` is applied |
+| `m200_20kw_opt` / `_lowripple` | 95.19 / 105.2 | 185.5 / 180.1 | +94.8 / +71.2 % | as `m200_20kw_base` |
+| `motor_40mm` | 0.444 | 0.3086 | −30.5 % | at γ=−42°; `docs/SOLVER_VALIDATION_2026-06-28.md` converged this machine to 0.565 N·m at 38 A/γ=−32°, a different operating point |
+| `motor_100mm` | 6.0 | 4.845 | −19.2 % | energy and Maxwell agree (−19.2 / −19.9 %), so this is the reference, not the torque method. 6.0/4.845 = 1.24 — consistent with a reference produced by an over-reading path |
+| `ciano14_40_12_fe₁₆n₂` | 0.691 | 0.6074 | −12.1 % | the preset named for Fe16N2 **stores no material assignment**, so it runs on F45SH; its stored number came from an Fe16N2 run (see `config/saved_simulations.json`, "Fe16N2 lab-best · 42 A · demag") that the preset cannot reproduce |
+| `my_motor` | 0.212 | 0.2122 | **+0.1 %** | pinned control, exact |
+
+Also: `my_motor` and `ciano14_30_10` are **byte-identical geometry at an
+identical operating point**, yet the catalog stores 0.212 vs 0.242 N·m for them
+(14 % apart). Ours reproduces the first. Three catalog entries store
+`ripple_pct: 0`, which the measurements show to be a placeholder rather than a
+result (`motor_40mm` measures 35.2 % raw ripple at its own operating point, with
+a clean order-6 spectrum and a 0.00 % numerical noise floor — real ripple, not
+solver hash).
+
+#### F7 — re-baselined 2026-07-30, with F2/F3 in place
+
+`scripts/catalog_rebaseline.py` re-measures every catalog entry through the
+trials harness (7 runs, 2380 s, frozen input dir) and writes `reference_*`
+beside `legacy_reference_*` in `config/motor_catalog.json`, with a
+`reference_provenance` block per entry (trial key + timestamp, geometry sha256,
+protocol, operating-point source, the winding connection that was applied and
+where it came from, all six gates, the energy-vs-Maxwell %, and the ampere-turn
+scale `k`). The display fields are untouched.
+
+| entry | stored | measured | Δ | reading |
+|---|---|---|---|---|
+| `cat_ciano20_150_35` | 30.574 | **30.2347** | **−1.1 %** | its `2S-2P` applied BY THE SOLVER, no manual `I/n_parallel` — 59.844 (+95.7 %) before F3 |
+| `cat_my_motor` | 0.212 | 0.2119 | −0.0 % | the pinned control |
+| `cat_ciano14_30_10` | 0.242 | 0.2119 | −12.4 % | byte-identical geometry to `my_motor`; the catalog stored two numbers for one machine |
+| `cat_motor_100mm` | 6.0 | 4.7433 | −20.9 % | gate (b) passes, so the reference is the odd one |
+| `cat_motor_40mm` | 0.444 | 0.3089 | −30.4 % | γ=−42°, a different operating point from the 2026-06-28 validation |
+| `cat_my_baseline` | 25.28 | 14.1152 | −44.2 % | its stored `4P` is now honoured; the entry's connection and its torque are mutually inconsistent |
+| `cat_my_motor_40mm` | 0.444 | 0.2285 | −48.5 % | the known copy-paste (a 30 mm design carrying the 40 mm entry's numbers) |
+| `cat_ciano14_40_12_fe₁₆n₂` | 0.747 | 0.0230 | −96.9 % | **the preset has since become a 37 mm 24s/28p machine** whose demag pre-pass de-rates 655/728 magnet elements (Br_min 0.207) → 91.7 % ripple, 23 % efficiency. Its catalog metadata was updated to 37 mm/24s/28p while its torque was left at the old 40 mm 12s/14p value. Worth knowing: with F1 fixed, a demag-collapsing design now REPORTS its collapse instead of hiding it |
+| `cat_200_working` | 78.7 | — | — | preset `200_mm` is not in `motor_presets.json`; recorded as not re-measured, with the reason |
+
+`ciano20_150_35` is the headline. It is the only entry whose stored connection
+is both present and self-consistent, and it reproduces its catalog torque to
+1.1 % with nothing applied by hand — which is what F3 was for.
+
+### F8 — timing
+
+Total 2 h 0 min for 23 runs; per-run 102 – 987 s. Wall time tracks the number of
+coil domains and DOFs, not the diameter:
+
+* `m200_20kw_lowripple` **626 s** — the campaign's slowest baseline run, and the
+  design with the most coil domains (480 = 24 slots × 20 wires).
+* `my_baseline@NS1` **987 s** vs 249 s at NS=4 — 4.0× for 4× the domain, i.e. the
+  wedge saves exactly what it should, and (F5) costs nothing in accuracy.
+* `demag=True` **doubles** the wall time (210 s vs 111 s on the 40 mm) — and per
+  F1, buys nothing when `eddy=True`.
+* `eddy=False, demag=True` (574 s) is **slower than** `eddy=True, demag=True`
+  (210 s), because the demag re-solve loop only actually runs in the non-eddy
+  branch. That timing asymmetry is itself a symptom of F1.
+* No run came near the 30 min kill threshold; nothing was killed.
+
+### F9 — smaller observations
+
+* **Demag map shape is inconsistent**: a run with nothing past the knee returns
+  either an all-ones map (`motor_100mm`, `ciano20_150_35`) or **no map at all**
+  (`my_baseline@coilI`), so a consumer must handle both.
+* `skfem.io.meshio: Failure to parse tags from meshio` appears twice per build on
+  the 24-slot machines (4 occurrences total, `motor_100mm` and `ciano20_150_35`),
+  never on the 12-slot ones. Harmless as far as the results show, but it is an
+  unexplained difference in the mesh import path between topologies.
+* **Reproducibility (positive)**: `my_motor` was run twice in independent
+  processes → identical to all reported digits (T 0.2122, ripple 1.5668, η
+  92.176 %). `ACTIVE_config` and its byte-identical preset twin
+  `ciano14_40_12_fe₁₆n₂` → identical (T 0.7479, ripple 6.05, η 92.556 %) while
+  differing 343 s vs 298 s in wall time.
+* **Step snapping never triggered**: 24 steps/period divides the slip-node grid
+  (192 nodes/period on the 12s/14p machines, 120 on the 24s/28p) on every
+  machine, so no run silently ran at a different time resolution.
+
+---
+
+## Campaign hazards worth knowing
+
+* **The input files moved under the campaign.** `config/motor_config.yaml`,
+  `motor_presets.json` and `motor_catalog.json` were rewritten by another process
+  (running backend / open UI) at least three times during the 2 h: the 40 mm
+  design's `max_current` went 42 → 44 A and its wire section 2.2×0.5 → 2.2×0.6
+  (9 wires → 7), and the magnet assignment briefly became a non-existent
+  material (F6). `motor_ai_sim.config` follows the file's mtime (1 s probe), so a
+  long solve can pick up an edit mid-flight. Consequences: the two
+  `ciano14_40_12_fe₁₆n₂` rows in the table are the **same key on two different
+  geometries** (and the gate b/c failures follow the geometry, not the key), and
+  every record after the mid-campaign edits stores its own `geometry_used` +
+  `geometry_sha256` so drift is auditable. The verified-unchanged geometries
+  (`motor_40mm`, `motor_100mm`, `ciano20_150_35`) are marked MATCH against their
+  records. Later runs used a frozen snapshot via `SOLVER_TRIALS_INPUT_DIR`.
+* **Materials always come from the live config**, not from the entry: no preset
+  or catalog entry stores a material assignment, so every baseline run used
+  `B15AHV950M` steel + `F45SH_120C` magnets regardless of what the entry is named
+  after. The per-request override channel itself works — the Fe16N2 variant took
+  effect and drove the demag map from 63 to 1278 de-rated elements.
+* **`n_parallel = 1`** (from the global config) on every baseline run; see F3.
+
+## Reproducers
+
+```bash
+# the plan, and the whole campaign (smallest first, 30 min kill per motor)
+python scripts/solver_trials.py --list
+python scripts/solver_trials.py
+
+# F1 — demag is a no-op with the coupled eddy solve, and −69 % without it
+SOLVER_TRIALS_DEMAG=1 SOLVER_TRIALS_EDDY=1 python scripts/solver_trials.py --only "ciano14_40_12_fe₁₆n₂@Fe16N2_lab_best"
+SOLVER_TRIALS_DEMAG=0 SOLVER_TRIALS_EDDY=1 python scripts/solver_trials.py --only "ciano14_40_12_fe₁₆n₂@Fe16N2_lab_best"
+SOLVER_TRIALS_DEMAG=1 SOLVER_TRIALS_EDDY=0 python scripts/solver_trials.py --only "ciano14_40_12_fe₁₆n₂@Fe16N2_lab_best"
+SOLVER_TRIALS_DEMAG=0 SOLVER_TRIALS_EDDY=0 python scripts/solver_trials.py --only "ciano14_40_12_fe₁₆n₂@Fe16N2_lab_best"
+
+# F3 — the connection is the whole +96 %
+python scripts/solver_trials.py --only ciano20_150_35
+python scripts/solver_trials.py --only ciano20_150_35@coilI
+
+# F4 — CAD copper section vs the nominal one the loss formula uses
+python scripts/solver_trials.py --coil-audit
+
+# F5 — the divergence is not the anti-periodic wedge
+SOLVER_TRIALS_NS=1 python scripts/solver_trials.py --only my_baseline
+
+# summarise everything collected so far
+python scripts/solver_trials.py --report
+```
+
+Worst-case single reproducers, as geometry + operating point:
+
+* **F1**: 40 mm 12s/14p, `motor_length` 12, `air_gap` 0.2, 7×(2.2×0.6) wires,
+  44 A rms, 13000 rpm, γ=+10°, magnet `Fe16N2_lab_best`, `demag=True`,
+  `eddy=True` → demag map claims Br_mean 0.369 over 98 % of the magnet, torque
+  identical to `demag=False`.
+* **F4**: `m200_20kw_lowripple` — 200 mm 24s/28p, 45 mm stack, 20×(6.1434×1.0)
+  wires, 120 A, 2000 rpm, γ=0 → solve DC 2.14× the analytic DC.
+* **F5**: same machine → 19.37 % energy-vs-Maxwell mean torque divergence.

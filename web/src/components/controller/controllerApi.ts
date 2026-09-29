@@ -1,0 +1,1096 @@
+/**
+ * Controller tab — the API surface and the shapes it returns.
+ *
+ * One module so the panel, the catalogue and the tests agree on the names the
+ * backend actually sends (``src/motor_ai_sim/routes/controller.py``).
+ */
+const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
+
+export interface DeviceRow {
+  part: string;
+  manufacturer?: string | null;
+  family?: string | null;
+  technology?: string | null;
+  package?: string | null;
+  package_common_name?: string | null;
+  cooling?: string | null;
+  v_dss_V?: number | null;
+  i_d_25c_A?: number | null;
+  i_d_100c_A?: number | null;
+  t_j_max_c?: number | null;
+  r_ds_on_25c_mohm?: number | null;
+  r_ds_on_175c_mohm?: number | null;
+  r_th_jc_k_w?: number | null;
+  r_th_jc_max_k_w?: number | null;
+  package_size_mm?: { length_mm: number | null; width_mm: number | null; height_mm: number | null };
+  weight_g?: number | null;
+  image?: string | null;
+  /** A GENERATED outline of the package — never vendor artwork. */
+  package_svg?: string;
+  /** The PCB side of the card — null when the card has no footprint block. */
+  footprint?: DeviceFootprint | null;
+  /** ceil(I_switch_rms / I_DDC@100 °C) for the duty the catalogue was asked for. */
+  suggested_parallel?: number | null;
+  /** A quotation somebody typed on the card, never a datasheet value. */
+  price?: { amount: number | null; currency: string; quantity: number | null;
+            source: string | null; dated: string | null };
+  datasheet_url?: string | null;
+  datasheet_revision?: string | null;
+  /** 2026-09-27 uniform SPICE basis: the basis a solve uses by default. */
+  basis_default?: 'spice' | 'datasheet';
+  spice?: { has_table: boolean; has_static: boolean; model_status: string;
+            needs: string | null; basis: string | null;
+            l_sigma_default_nH: number | null; r_g_sets_ohm: number[];
+            deviation_line: string | null };
+  error?: string;
+}
+
+/** A card's `footprint` block as the catalogue row carries it. */
+export interface DeviceFootprint {
+  package_outline_id: string | null;
+  land_pattern_ref: string | null;
+  body_height_mm: number | null;
+  top_tab_mm: { length_mm: number | null; width_mm: number | null } | null;
+  /** Parts sharing ONE land pattern, e.g. `qdpak_750_1200`. */
+  compatibility_group: string | null;
+  group_parts?: string[];
+  /** One line when parts in the group differ (or are unknown) in height / top tab. */
+  group_warning?: string | null;
+}
+
+export interface CoilRow {
+  index: number; phase: string; polarity: number;
+  slot_go: number; slot_return: number; tooth: number | null;
+  angle_elec_deg: number; label: string;
+}
+
+export interface MappingRow { coil: number; bridge: string; leg: string; polarity?: number; }
+
+export interface LegResult {
+  leg: string; coils: number[];
+  i_leg_rms_A: number; i_switch_rms_A: number;
+  i_device_rms_A: number; i_device_peak_A: number;
+  p_conduction_W: number; p_third_quadrant_W: number; p_switching_W: number;
+  p_e_oss_W: number; p_leg_W: number; p_switch_W: number; p_device_W: number;
+  t_j_c: number; r_ds_on_mohm: number;
+}
+
+export interface BridgeResult {
+  id: string; kind: string; label: string; connection: string;
+  coils: number[]; devices_parallel: number; n_switches: number;
+  modulation: string; modulation_index: number; p_loss_W: number;
+  legs: LegResult[];
+}
+
+export interface LimitRow {
+  name: string;
+  value: number | null;
+  limit: number | null;
+  unit: string;
+  margin: number | null;
+  utilisation_pct: number | null;
+  verdict: 'pass' | 'fail' | 'warn' | 'not_judged';
+  source: string;
+  note: string;
+}
+
+export interface RippleResult {
+  status: 'computed' | 'not_computed' | 'missing_input';
+  reason?: string;
+  ripple_rms_A?: number;
+  ripple_rms_ab_A?: number;
+  ripple_rms_xy_A?: number | null;
+  ripple_rms_zero_A?: number | null;
+  ripple_pp_A?: number;
+  thd_pct?: number;
+  thd_limit_pct?: number;
+  thd_verdict?: 'pass' | 'fail';
+  i1_rms_A?: number;
+  spectrum?: { f_Hz: number; order: number; i_rms_A: number; pct_of_i1: number | null }[];
+  dc_link?: { i_dc_mean_A: number; i_cap_rms_A: number; i_cap_rms_per_inverter_A: number[] };
+  l_d_uH?: number; l_q_uH?: number; l_xy_uH?: number | null;
+  carrier_ratio?: number; synchronous?: boolean; window_periods?: number;
+  sources?: Record<string, string>;
+  model?: string;
+}
+
+export interface ControllerResult {
+  ok: boolean;
+  /** every published limit of the chosen part is inside its number */
+  feasible?: boolean;
+  limits?: LimitRow[];
+  limits_verdict?: 'pass' | 'fail' | 'warn';
+  device: string;
+  device_row: DeviceRow;
+  topology: { preset: string; preset_label: string; star_delta: string;
+              n_bridges: number; n_switches: number; n_devices: number;
+              coils: CoilRow[]; mapping: MappingRow[]; notes: string[] };
+  bridges: BridgeResult[];
+  losses: Record<string, number | string>;
+  thermal: Record<string, any>;
+  dc_link: Record<string, number>;
+  efficiency: { inverter: number | null; shaft: number | null;
+                wall_to_shaft: number | null; note: string };
+  point: Record<string, any>;
+  /** 2026-09-28: ``motor`` | ``generator`` (active rectifier). */
+  power_direction?: string;
+  conduction_direction?: { reverse_share: number; forward_share: number; note: string };
+  /** PWM current ripple / THD — ``status`` says whether it was computed. */
+  ripple?: RippleResult;
+  settings: Record<string, any>;
+  waveforms: { f_elec_hz: number; t_s: number[];
+               coils: Record<string, { bridge: string; v_V: number[]; i_A: number[];
+                                       v_mean_V: number; v_rms_V: number; i_rms_A: number }>;
+               dead_time_us: number; dead_time_error_V?: number };
+  warnings: string[];
+  violations: string[];
+  model_notes: string[];
+  sources?: Record<string, string>;
+  provenance?: Record<string, string>;
+  schematic_svg?: string | null;
+  context?: { die: string; config: string; duty: string } | null;
+  cached?: boolean;
+  served_from_history?: boolean;
+  computed_at?: string;
+  elapsed_s?: number;
+  /** Which point of the duty this answer is for — e.g. "solved for the S1
+   * point: 48.6 A rms · 1.99 kW in".  The backend resolves ``p_ac_W`` (never
+   * typed by anyone) from the duty's own electromagnetic record, and a
+   * continuous (S1) rating REPLACES that record's numbers with the verified
+   * S1 machine — this line is what tells the tab (and the owner) which
+   * machine the tiles below actually describe. ``null`` when the duty has no
+   * electromagnetic answer at all (the solve was refused instead). */
+  solved_for?: string | null;
+  /** ``"coupled" | "pwm" | "standalone" | "none"`` — where the point above
+   * was read from (:func:`report.duty_em_source`'s own vocabulary). */
+  em_source?: string | null;
+}
+
+async function j<T>(r: Response): Promise<T> {
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const d = (body as any)?.detail;
+    throw new Error(typeof d === 'string' ? d : (d?.message || `HTTP ${r.status}`));
+  }
+  return body as T;
+}
+
+/** `topology` sizes the "suggested parallel" column for the loaded duty. */
+export const listDevices = (topology?: string) => {
+  const p = new URLSearchParams();
+  if (topology) p.set('topology', topology);
+  return fetch(`${API}/api/controller/devices?${p}`).then(j<{
+    dir: string; devices: DeviceRow[];
+    i_switch_rms_A: number | null; i_switch_rms_basis: string | null;
+    suggestion_note: string;
+  }>);
+};
+
+export const getDevice = (part: string) =>
+  fetch(`${API}/api/controller/devices/${encodeURIComponent(part)}`)
+    .then(j<{ part: string; card: any; row: DeviceRow; provenance: Record<string, string>; file: string }>);
+
+/** `card` may be the object itself or the YAML text of it (the route parses). */
+export const addDevice = (card: any, overwrite = false) =>
+  fetch(`${API}/api/controller/devices`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(typeof card === 'string'
+      ? { card_yaml: card, overwrite } : { card, overwrite }),
+  }).then(j<{ ok: boolean; part: string; file: string; devices: DeviceRow[] }>);
+
+export const getTopologies = (q: { num_slots?: number; num_poles?: number; single_layer?: boolean }) => {
+  const p = new URLSearchParams();
+  if (q.num_slots != null) p.set('num_slots', String(q.num_slots));
+  if (q.num_poles != null) p.set('num_poles', String(q.num_poles));
+  if (q.single_layer != null) p.set('single_layer', String(q.single_layer));
+  return fetch(`${API}/api/controller/topologies?${p}`).then(j<{
+    presets: { id: string; label: string; hint: string }[];
+    machine: Record<string, any>; star_delta: string | null;
+    coils: CoilRow[]; error: string | null;
+  }>);
+};
+
+export const postSchematic = (body: any) =>
+  fetch(`${API}/api/controller/schematic`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(j<{ topology: any; svg: string }>);
+
+export const solveController = (body: any, fresh = false) =>
+  fetch(`${API}/api/controller/solve?fresh=${fresh ? 'true' : 'false'}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(j<ControllerResult>);
+
+export const getLast = () =>
+  fetch(`${API}/api/controller/last`).then(j<ControllerResult | Record<string, never>>);
+
+/* ── settings — persisted WITH the configuration (owner 2026-09-22) ──────── */
+//
+// "при сохранении мотора текущий контроллер тоже должен сохраняться со всеми
+// настройками" — the Controller tab's own FORM, never a solve result, saved
+// on the same footing as the battery block. `null`/absent numeric fields mean
+// "the duty's own" — the SAME blank-means-duty-default convention the panel's
+// number boxes already use (Carrier / DC link).
+
+export interface ControllerCoolingSettings {
+  /** ``"liquid"`` (default, back-compatible with every save from before
+   * 2026-09-22) | ``"air_forced"`` | ``"air_still"`` — see
+   * ``inverter.losses.COOLING_MODES``. */
+  mode?: string | null;
+  coolant?: string | null;
+  flow_lpm?: number | null;
+  t_in_c?: number | null;
+  r_tim_k_w?: number | null;
+  /** air_forced only — a fan/slipstream, "wind speed" as in the thermal sim. */
+  air_speed_mps?: number | null;
+  /** air_forced / air_still — ambient air temperature. */
+  t_ambient_c?: number | null;
+  /** Wetted area, EITHER as one heatsink per device… */
+  heatsink_area_cm2_per_device?: number | null;
+  /** …or as one PCB pad shared by every device on it (wins if both are sent). */
+  plate_area_cm2?: number | null;
+  /** air_forced / air_still — stated constant, default 0.75. */
+  fin_efficiency?: number | null;
+  /** air_still only — stated constant, default 0.9. */
+  emissivity?: number | null;
+}
+
+export interface ControllerMappingRowSettings { coil: number; bridge: string; leg: string; }
+
+export interface ControllerSettings {
+  saved_at?: string | null;
+  device?: string | null;
+  topology?: string;
+  set_split?: string;
+  h_bridge_modulation?: string;
+  /** Three-phase bridges: ``"sine" | "svpwm" | "third_harmonic"``. */
+  pwm_modulation?: string;
+  devices_parallel?: number;
+  devices_parallel_by_bridge?: Record<string, number>;
+  r_g_ext_ohm?: number | null;
+  v_gs_off_V?: number | null;
+  /** 2026-09-27 (cloud task 10): the loss basis ("spice" | "datasheet";
+   *  null = the device's default — SPICE wherever a table exists) and the
+   *  driver/layout inputs the SPICE table is looked up with. */
+  switching_source?: string | null;
+  r_g_off_ext_ohm?: number | null;
+  v_gs_on_V?: number | null;
+  l_sigma_nH?: number | null;
+  dead_time_us?: number | null;
+  f_carrier_hz?: number | null;
+  v_dc_V?: number | null;
+  cooling?: ControllerCoolingSettings;
+  mapping?: ControllerMappingRowSettings[];
+  /** Old saved blocks may still carry this (the Controller tab's "Couple
+   * with EM" checkbox, removed 2026-09-25 — the backend never read it; all
+   * coupling is configured on the Electromagnetic side's own Coupled menu).
+   * Kept optional here only so reading an old block doesn't error; the web
+   * never sets or sends it any more. */
+  couple_with_em?: boolean;
+  /* 2026-09-28: the PWM-ripple inputs (see RippleForm) */
+  ripple_l_d_uH?: number | null;
+  ripple_l_q_uH?: number | null;
+  ripple_l_sub_uH?: number | null;
+  ripple_l_xy_pct?: number | null;
+  ripple_l_zero_uH?: number | null;
+  ripple_neutral?: string | null;
+  carrier_interleave_deg?: number | null;
+  thd_limit_pct?: number | null;
+}
+
+/** ``{}`` (never an error) on a configuration that has never saved one. */
+export const getControllerSettings = (die: string, config: string) => {
+  const p = new URLSearchParams({ die, config });
+  return fetch(`${API}/api/controller/settings?${p}`)
+    .then(j<ControllerSettings | Record<string, never>>);
+};
+
+/** ``PATCH /api/family/config/{die}/{cfg}/controller`` — a WHOLE replace,
+ * not a merge: the tab sends its complete state every time. */
+export const saveControllerSettings = (die: string, config: string,
+                                       settings: ControllerSettings) =>
+  fetch(`${API}/api/family/config/${encodeURIComponent(die)}/`
+       + `${encodeURIComponent(config)}/controller`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  }).then(j<{ ok: boolean; controller: ControllerSettings }>);
+
+/** The panel's own blank-field sentinel: ``''`` means "not set here" — the
+ *  route resolves it (for the carrier the panel fills the resolved value in,
+ *  see ``carrierPrefill``; for the DC link, blank = the battery). */
+type NumOrBlank = number | '';
+
+/** The panel's full editable state — every ``useState`` the settings column
+ * holds, gathered in one shape so loading and saving can each be one pure
+ * function, tested without a browser. */
+export interface ControllerFormState {
+  device: string;
+  topology: string;
+  setSplit: string;
+  hbMod: string;
+  /** Three-phase modulation — ``"sine" | "svpwm" | "third_harmonic"``. */
+  pwmMod: string;
+  nPar: NumOrBlank;
+  rg: NumOrBlank;
+  vgsOff: NumOrBlank;
+  /** ``''`` = the device's default basis (SPICE where a table exists). */
+  basis: string;
+  /** blank = same as R_G,on / the device's datasheet V_GS(on) / the
+   *  datasheet test circuit's loop inductance. */
+  rgOff: NumOrBlank;
+  vgsOn: NumOrBlank;
+  lSigma: NumOrBlank;
+  dead: NumOrBlank;
+  fsw: NumOrBlank;
+  vdc: NumOrBlank;
+  coolant: string;
+  flow: NumOrBlank;
+  tin: NumOrBlank;
+  rtim: NumOrBlank;
+  /** ``"liquid" | "air_forced" | "air_still"``. */
+  coolingMode: string;
+  airSpeed: NumOrBlank;
+  tAmbient: NumOrBlank;
+  /** which of the two area fields ``areaCm2`` below is sent as. */
+  areaBasis: 'heatsink' | 'plate';
+  areaCm2: NumOrBlank;
+  finEff: NumOrBlank;
+  emissivity: NumOrBlank;
+  mapping: Record<number, string>;
+  /* ── 2026-09-28 (optional, session-only — not saved with the motor) ── */
+  /** liquid: ``shared`` (one plate, default) | ``parallel`` | ``series``. */
+  plumbing?: string;
+  /** plates/modules the flow is split over (parallel) or runs through (series). */
+  nPlates?: NumOrBlank;
+  /** a stated plate-to-coolant R per plate [K/W] instead of the channel correlation. */
+  rPlate?: NumOrBlank;
+  /** the fluid that stated R was measured with ('' = the working coolant). */
+  rPlateFluid?: string;
+  /** the per-plate flow that stated R was measured at [L/min]. */
+  rPlateFlow?: NumOrBlank;
+  /** R_th(j-c) per switch [K/W] — only for a card whose datasheet prints none. */
+  rthJc?: NumOrBlank;
+}
+
+/** A controller run WITHOUT a motor (owner 2026-09-28) — the point is typed. */
+export interface StandaloneForm {
+  on: boolean;
+  /** 1 or 2 three-phase inverters. */
+  nInv: NumOrBlank;
+  /** set 2 against set 1, electrical degrees (dual 3-phase: usually 30). */
+  shift: NumOrBlank;
+  /** rms current per phase (per inverter leg). */
+  iPh: NumOrBlank;
+  /** fundamental electrical frequency. */
+  f1: NumOrBlank;
+  /** modulation index m = 2 V_ph,peak / V_dc. */
+  m: NumOrBlank;
+  /** displacement power factor. */
+  pf: NumOrBlank;
+  /** ``svpwm`` (linear to 2/sqrt3) | ``spwm`` (linear to 1). */
+  scheme: string;
+  /** ``motor`` | ``generator`` (active rectifier). A machine run takes the
+   *  duty's own mode instead. Optional: older saved sessions lack it. */
+  direction?: string;
+}
+
+export const DEFAULT_STANDALONE: StandaloneForm = {
+  on: false, nInv: 1, shift: 30, iPh: '', f1: '', m: 0.9, pf: 0.9, scheme: 'svpwm',
+  direction: 'motor',
+};
+
+/** Every reason a standalone run cannot be sent — LOUD, one line each, never
+ *  a silently defaulted number (client-facing validation rule). */
+export function standaloneProblems(sa: StandaloneForm, s: ControllerFormState): string[] {
+  const out: string[] = [];
+  if (!sa.on) return out;
+  const need = (v: NumOrBlank | undefined, name: string) => {
+    if (v === '' || v === undefined || v === null || !Number.isFinite(Number(v))) {
+      out.push(`${name} is required for a standalone run`); return false;
+    }
+    return true;
+  };
+  if (need(sa.iPh, 'Phase current') && Number(sa.iPh) <= 0) out.push('Phase current must be positive');
+  if (need(sa.f1, 'Fundamental frequency') && Number(sa.f1) <= 0) out.push('Fundamental frequency must be positive');
+  if (need(sa.m, 'Modulation index') && Number(sa.m) <= 0) out.push('Modulation index must be positive');
+  if (need(sa.pf, 'cos φ') && (Number(sa.pf) <= 0 || Number(sa.pf) > 1)) out.push('cos φ must be in (0, 1]');
+  if (need(sa.nInv, 'Inverters') && ![1, 2].includes(Number(sa.nInv))) out.push('Inverters must be 1 or 2');
+  if (need(s.vdc, 'DC link') && Number(s.vdc) <= 0) out.push('DC link must be positive');
+  if (need(s.fsw, 'Carrier') && Number(s.fsw) <= 0) out.push('Carrier must be positive');
+  if (sa.m !== '' && Number(sa.m) > (sa.scheme === 'svpwm' ? 2 / Math.sqrt(3) : 1) + 1e-9) {
+    out.push(`m ${sa.m} is above the ${sa.scheme} linear limit — overmodulated`);
+  }
+  return out;
+}
+
+/** The standalone ``POST /solve`` body: the normal body plus the typed point,
+ *  with the motor-only fields (topology/mapping) left out. */
+export function standaloneSolveBody(base: ControllerSolveBody, sa: StandaloneForm) {
+  const { topology: _t, set_split: _s, h_bridge_modulation: _h, mapping: _m, ...rest } = base;
+  return {
+    ...rest, standalone: true,
+    n_inverters: blank(sa.nInv), phase_shift_deg: blank(sa.shift),
+    i_phase_rms_A: blank(sa.iPh), f_elec_hz: blank(sa.f1),
+    modulation_index: blank(sa.m), power_factor: blank(sa.pf),
+    modulation_scheme: sa.scheme,
+    // the same choice as the tab's PWM modulation — the typed scheme wins
+    pwm_modulation: sa.scheme === 'svpwm' ? 'svpwm' : 'sine',
+    power_direction: sa.direction === 'generator' ? 'generator' : 'motor',
+  };
+}
+
+/* ── PWM current ripple / THD (owner 2026-09-28) ───────────────────────────
+ * Its own small state, saved WITH the controller (merged into the PATCH
+ * body) and sent with every solve.  Blank = not typed: a machine run then
+ * takes L_d/L_q from the duty's own record. */
+export interface RippleForm {
+  /** L_d, L_q per phase [uH] — blank = the duty's incremental L_d/L_q. */
+  ld: NumOrBlank;
+  lq: NumOrBlank;
+  /** commutating/subtransient L [uH], both axes — wins over L_d/L_q. */
+  lsub: NumOrBlank;
+  /** L_xy as % of L_d — REQUIRED for two three-phase inverters. */
+  lxyPct: NumOrBlank;
+  /** zero-sequence L [uH] — only with the two neutrals tied. */
+  l0: NumOrBlank;
+  /** ``isolated`` | ``common`` (dual three-phase neutrals). */
+  neutral: string;
+  /** carrier phase shift between the two inverters, 0-180 deg. */
+  interleave: NumOrBlank;
+  /** optional THD limit [%] with a pass/fail line. */
+  thdLimit: NumOrBlank;
+}
+
+export const DEFAULT_RIPPLE: RippleForm = {
+  ld: '', lq: '', lsub: '', lxyPct: '', l0: '', neutral: 'isolated',
+  interleave: 0, thdLimit: '',
+};
+
+export function rippleFromSettings(block: ControllerSettings | null | undefined): RippleForm {
+  if (!block) return DEFAULT_RIPPLE;
+  return {
+    ld: toFormNumber(block.ripple_l_d_uH), lq: toFormNumber(block.ripple_l_q_uH),
+    lsub: toFormNumber(block.ripple_l_sub_uH), lxyPct: toFormNumber(block.ripple_l_xy_pct),
+    l0: toFormNumber(block.ripple_l_zero_uH),
+    neutral: block.ripple_neutral || DEFAULT_RIPPLE.neutral,
+    interleave: block.carrier_interleave_deg ?? DEFAULT_RIPPLE.interleave,
+    thdLimit: toFormNumber(block.thd_limit_pct),
+  };
+}
+
+export function rippleForSave(r: RippleForm): Partial<ControllerSettings> {
+  return {
+    ripple_l_d_uH: toSaveNumber(r.ld), ripple_l_q_uH: toSaveNumber(r.lq),
+    ripple_l_sub_uH: toSaveNumber(r.lsub), ripple_l_xy_pct: toSaveNumber(r.lxyPct),
+    ripple_l_zero_uH: toSaveNumber(r.l0), ripple_neutral: r.neutral || null,
+    carrier_interleave_deg: toSaveNumber(r.interleave),
+    thd_limit_pct: toSaveNumber(r.thdLimit),
+  };
+}
+
+/** The solve body's ripple fields — blanks omitted (the route resolves them). */
+export function rippleSolveFields(r: RippleForm) {
+  return {
+    ripple_l_d_uH: blank(r.ld), ripple_l_q_uH: blank(r.lq),
+    ripple_l_sub_uH: blank(r.lsub), ripple_l_xy_pct: blank(r.lxyPct),
+    ripple_l_zero_uH: blank(r.l0), ripple_neutral: r.neutral || undefined,
+    carrier_interleave_deg: blank(r.interleave), thd_limit_pct: blank(r.thdLimit),
+  };
+}
+
+/** Loud, one line each — the backend refuses the same things by name. */
+export function rippleProblems(r: RippleForm, nInverters: number): string[] {
+  const out: string[] = [];
+  const pos = (v: NumOrBlank, name: string) => {
+    if (v !== '' && !(Number(v) > 0)) out.push(`${name} must be positive`);
+  };
+  pos(r.ld, 'L_d'); pos(r.lq, 'L_q'); pos(r.lsub, 'L commutating');
+  pos(r.lxyPct, 'L_xy'); pos(r.l0, 'L_0'); pos(r.thdLimit, 'THD limit');
+  if (r.interleave !== '' && !(Number(r.interleave) >= 0 && Number(r.interleave) <= 180)) {
+    out.push('Carrier interleave must be 0-180°');
+  }
+  const hasL = r.ld !== '' || r.lsub !== '';
+  if (nInverters === 2 && hasL && r.lxyPct === '') {
+    out.push('L_xy is required for two inverters (ripple)');
+  }
+  if (nInverters === 2 && r.neutral === 'common' && r.l0 === '') {
+    out.push('L_0 is required with the two neutrals tied');
+  }
+  return out;
+}
+
+/**
+ * The tab's own defaults — what a brand-new session, or a configuration that
+ * has never saved a controller block, shows.  The ONE source of truth for
+ * both the panel's initial ``useState``s and the ``fallback`` argument
+ * ``formStateFromSettings`` restores an empty/partial saved block against.
+ *
+ * Owner 2026-09-24 (production, CIANO14/CIANO28 duties): "Devices / switch"
+ * kept showing 4 on a fresh machine and his own edited count would not
+ * stick.  Root cause was the panel building `fallback` from its OWN LIVE
+ * STATE at the moment ``dieCtx.die``/``dieCtx.config`` changed — on a
+ * configuration that had never saved a controller block, that fallback (and
+ * so the restored ``nPar``) was whatever the PREVIOUSLY loaded machine had
+ * left on screen, not this tab's stated default; the literal "4" the owner
+ * saw was simply the panel's original ``useState`` seed leaking the same
+ * way on first load.  A fallback built from a constant instead of from
+ * `useState` can never carry a different machine's value across a switch,
+ * and it can never regress to a stale seed either — see
+ * ``ControllerPanel``'s settings-loading effect, which now passes this
+ * object instead of assembling one from its own state variables.  The
+ * default itself: 1, not a guess at how many devices a real stack needs —
+ * the catalogue's own "Parallel" column already suggests a count per
+ * duty/topology (``suggested_parallel``), and a machine with no solved duty
+ * yet has no current to size against.
+ */
+export const DEFAULT_CONTROLLER_FORM: ControllerFormState = {
+  device: '', topology: 'one_3ph', setSplit: 'series_split', hbMod: 'unipolar',
+  pwmMod: 'sine',
+  nPar: 1, rg: 2.3, vgsOff: 0, dead: 0.5, fsw: '', vdc: '',
+  basis: '', rgOff: '', vgsOn: '', lSigma: '',
+  // Owner 2026-09-25: these five INHERIT from the Thermal tab by default —
+  // blank is "not overridden yet", the SAME convention ``vdc``/``fsw``
+  // already use here (a placeholder shows the resolved value; typing a real
+  // one makes it a deliberate override). See ``getThermalCooling`` and the
+  // "MOSFET cooling" section of ControllerPanel for how the placeholder is
+  // filled. R_th TIM/area/fin efficiency/emissivity have no Thermal
+  // counterpart and keep a real stated default below, unaffected.
+  coolant: '', flow: '', tin: '', rtim: 0.03,
+  coolingMode: 'liquid', airSpeed: '', tAmbient: '', areaBasis: 'heatsink',
+  areaCm2: '', finEff: 0.75, emissivity: 0.9,
+  mapping: {},
+};
+
+const toFormNumber = (v: number | null | undefined): NumOrBlank =>
+  (v === null || v === undefined) ? '' : v;
+
+const toSaveNumber = (v: NumOrBlank): number | null => (v === '' ? null : v);
+
+/**
+ * A saved settings block, put back into the panel's own state shape.
+ *
+ * ``{}`` or nothing saved yet → the CALLER's current defaults, unchanged —
+ * "missing block = the tab's defaults, no error" (owner's own words). Every
+ * field of the block is otherwise independent: an old configuration saved
+ * before a field existed keeps that one field at the caller's default while
+ * every other field it DOES carry still restores.
+ */
+export function formStateFromSettings(
+  block: ControllerSettings | null | undefined,
+  fallback: ControllerFormState,
+): ControllerFormState {
+  if (!block || Object.keys(block).length === 0) return fallback;
+  const cooling = block.cooling || {};
+  const rows = block.mapping || [];
+  const mapping: Record<number, string> = {};
+  for (const m of rows) mapping[m.coil] = `${m.bridge}/${m.leg}`;
+  // A per-bridge override in the saved block (from the API/CLI, or an older
+  // save) is IGNORED here on purpose — the web only ever shows and writes the
+  // one global `devices_parallel` (owner 2026-09-22: «Давай сделаем одно
+  // общее число»). `settingsForSave` below then clears it on the next save.
+  const areaBasis: 'heatsink' | 'plate' = cooling.plate_area_cm2 != null ? 'plate'
+    : cooling.heatsink_area_cm2_per_device != null ? 'heatsink' : fallback.areaBasis;
+  return {
+    device: block.device || fallback.device,
+    topology: block.topology || fallback.topology,
+    setSplit: block.set_split || fallback.setSplit,
+    hbMod: block.h_bridge_modulation || fallback.hbMod,
+    pwmMod: block.pwm_modulation || fallback.pwmMod,
+    nPar: block.devices_parallel ?? fallback.nPar,
+    rg: toFormNumber(block.r_g_ext_ohm),
+    vgsOff: toFormNumber(block.v_gs_off_V),
+    basis: block.switching_source || fallback.basis,
+    rgOff: toFormNumber(block.r_g_off_ext_ohm),
+    vgsOn: toFormNumber(block.v_gs_on_V),
+    lSigma: toFormNumber(block.l_sigma_nH),
+    dead: toFormNumber(block.dead_time_us),
+    fsw: toFormNumber(block.f_carrier_hz),
+    vdc: toFormNumber(block.v_dc_V),
+    coolant: cooling.coolant || fallback.coolant,
+    flow: toFormNumber(cooling.flow_lpm),
+    tin: toFormNumber(cooling.t_in_c),
+    rtim: toFormNumber(cooling.r_tim_k_w),
+    coolingMode: cooling.mode || fallback.coolingMode,
+    airSpeed: toFormNumber(cooling.air_speed_mps),
+    tAmbient: toFormNumber(cooling.t_ambient_c),
+    areaBasis,
+    areaCm2: toFormNumber(areaBasis === 'plate' ? cooling.plate_area_cm2
+                                                : cooling.heatsink_area_cm2_per_device),
+    finEff: toFormNumber(cooling.fin_efficiency),
+    emissivity: toFormNumber(cooling.emissivity),
+    mapping: rows.length ? mapping : fallback.mapping,
+  };
+}
+
+/** The panel's current state, as the PATCH body that saves it whole. */
+export function settingsForSave(s: ControllerFormState): ControllerSettings {
+  const mapping: ControllerMappingRowSettings[] = Object.entries(s.mapping)
+    .map(([coil, v]) => {
+      const [bridge, leg] = String(v).split('/');
+      return { coil: Number(coil), bridge: bridge || 'INV1', leg: leg || 'A' };
+    });
+  return {
+    device: s.device || null,
+    topology: s.topology,
+    set_split: s.setSplit,
+    h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
+    devices_parallel: s.nPar === '' ? 1 : s.nPar,
+    // ALWAYS {} — the tab has only the one global count now; this REPLACES
+    // (never merges into) whatever a saved block held, so a stale per-bridge
+    // override from the API/CLI does not survive the web's own save.
+    devices_parallel_by_bridge: {},
+    r_g_ext_ohm: toSaveNumber(s.rg),
+    v_gs_off_V: toSaveNumber(s.vgsOff),
+    switching_source: s.basis || null,
+    r_g_off_ext_ohm: toSaveNumber(s.rgOff),
+    v_gs_on_V: toSaveNumber(s.vgsOn),
+    l_sigma_nH: toSaveNumber(s.lSigma),
+    dead_time_us: toSaveNumber(s.dead),
+    f_carrier_hz: toSaveNumber(s.fsw),
+    v_dc_V: toSaveNumber(s.vdc),
+    cooling: { mode: s.coolingMode, coolant: s.coolant, flow_lpm: toSaveNumber(s.flow),
+              t_in_c: toSaveNumber(s.tin), r_tim_k_w: toSaveNumber(s.rtim),
+              air_speed_mps: toSaveNumber(s.airSpeed), t_ambient_c: toSaveNumber(s.tAmbient),
+              heatsink_area_cm2_per_device: s.areaBasis === 'heatsink' ? toSaveNumber(s.areaCm2) : null,
+              plate_area_cm2: s.areaBasis === 'plate' ? toSaveNumber(s.areaCm2) : null,
+              fin_efficiency: toSaveNumber(s.finEff), emissivity: toSaveNumber(s.emissivity) },
+    mapping,
+  };
+}
+
+/** The `ctrl.settings` localStorage mirror ``ControllerPanel`` writes, TAGGED
+ * with the configuration it was captured for. */
+export interface ControllerMirror {
+  die: string;
+  config: string;
+  block: ControllerSettings;
+}
+
+/**
+ * Whether a mirrored settings snapshot belongs to the motor being saved.
+ *
+ * Owner 2026-09-22, second round: *"при сохранении мотора текущий контроллер
+ * тоже должен сохраняться со всеми настройками"* — not only the Controller
+ * tab's own button.  ``ActiveFamilyStrip``'s "Save to duty" reads
+ * ``ctrl.settings`` right after the duty save and PATCHes it in the same
+ * flow — but ONLY when the tag matches: a mirror left over from a DIFFERENT
+ * motor (the Controller tab was never opened for the one being saved now, or
+ * it still holds an earlier session's snapshot) must never land on this one.
+ */
+export function controllerMirrorApplies(
+  mirrored: ControllerMirror | null | undefined,
+  die: string,
+  config: string,
+): boolean {
+  return !!mirrored && !!mirrored.block
+    && mirrored.die === die && mirrored.config === config;
+}
+
+/** The mirror's own block, when its tag matches ``die``/``config`` — ``null``
+ *  otherwise (the Controller tab was never opened for this configuration this
+ *  session, or it still holds a different one's snapshot). */
+export function readControllerMirror(
+  die: string, config: string,
+): ControllerSettings | null {
+  try {
+    const raw = localStorage.getItem('ctrl.settings');
+    const mirrored = raw ? JSON.parse(raw) as ControllerMirror : null;
+    return controllerMirrorApplies(mirrored, die, config) ? mirrored!.block : null;
+  } catch { return null; }
+}
+
+/** Save the Controller tab's CURRENT settings — the live mirror
+ *  ``ControllerPanel`` keeps in ``ctrl.settings``, not only the last block the
+ *  server has — to the active configuration.  Used by the Coupled panel's own
+ *  "inverter (Controller)" drive selector (2026-09-22, second round): picking
+ *  that option, or starting a coupled run while it is picked, used to lean on
+ *  the user having ALREADY pressed the Controller tab's own "Save settings" —
+ *  and the common case (choose a device, switch straight to the Coupled tab,
+ *  never press Solve) left nothing saved at all, so ``drive: "inverter"``
+ *  silently fell back to the duty's own stored controller solve, or to
+ *  nothing (``GET /api/controller/settings`` answering ``{}``).  This closes
+ *  that gap: the mirror is written on every keystroke, well before any Solve,
+ *  so it is there to save even when the tab has never been asked to solve.
+ *
+ *  ``null`` = nothing to save — no device is chosen anywhere for this
+ *  configuration, so the caller's own gating (``controllerReady``) already
+ *  keeps the option disabled; this is a defensive no-op, never an error the
+ *  caller has to show. */
+export async function saveControllerFromMirror(
+  die: string, config: string,
+): Promise<{ ok: true; block: ControllerSettings } | { ok: false; error: string } | null> {
+  const block = readControllerMirror(die, config);
+  if (!block || !block.device) return null;
+  try {
+    const r = await saveControllerSettings(die, config, block);
+    return { ok: true, block: r.controller ?? block };
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+/** The short list the auto-save's HelpTip names — "device, topology, N
+ *  parallel, dead time, carrier, DC link, cooling" — never every field, this
+ *  is a caption, not a table (project UI rule). */
+export function controllerSavedFieldsLine(block: ControllerSettings): string {
+  const bits = [`device ${block.device}`];
+  if (block.topology) bits.push('topology');
+  if (block.devices_parallel != null) bits.push('N parallel');
+  if (block.dead_time_us != null) bits.push('dead time');
+  if (block.f_carrier_hz != null) bits.push('carrier');
+  if (block.v_dc_V != null) bits.push('DC link');
+  if (block.cooling && Object.values(block.cooling).some(v => v != null)) bits.push('cooling');
+  return bits.join(', ');
+}
+
+/** The ``POST /solve`` request body — every field the ROUTE resolves
+ * server-side (V_dc, carrier, current, power, connection, rpm — see
+ * ``routes.controller._build_request``) is OMITTED here when blank, never
+ * sent as ``''`` or ``null``.  Owner 2026-09-22 audit ("Error: v_dc_V is
+ * required" — «проверь всё»): a blank number box must vanish from the wire
+ * entirely (``JSON.stringify`` drops an ``undefined`` property), so the
+ * route's own fallback chain runs — sending ``''`` would instead read as
+ * "the request provided v_dc_V" and either crash on `float('')` or, worse,
+ * silently shadow a real resolved value with a falsy one. */
+export interface ControllerSolveBody {
+  device: string;
+  devices_parallel?: number;
+  topology: string;
+  set_split: string;
+  h_bridge_modulation: string;
+  pwm_modulation: string;
+  r_g_ext_ohm?: number;
+  v_gs_off_V?: number;
+  switching_source?: string;
+  r_g_off_ext_ohm?: number;
+  v_gs_on_V?: number;
+  l_sigma_nH?: number;
+  dead_time_us?: number;
+  f_carrier_hz?: number;
+  v_dc_V?: number;
+  r_tim_k_w?: number;
+  r_th_jc_k_w?: number;
+  cooling: { mode: string; coolant?: string; flow_lpm?: number; t_in_c?: number;
+            plumbing?: string; n_plates?: number; r_override_k_w?: number;
+            r_override_coolant?: string; r_override_flow_lpm?: number;
+            air_speed_mps?: number; t_ambient_c?: number;
+            heatsink_area_cm2_per_device?: number; plate_area_cm2?: number;
+            fin_efficiency?: number; emissivity?: number };
+  mapping?: ControllerMappingRowSettings[];
+  // Deliberately no `devices_parallel_by_bridge` here — the web only ever
+  // sends the one global `devices_parallel`; a per-bridge override remains a
+  // backend/API-CLI-only feature (owner 2026-09-22: «Давай сделаем одно
+  // общее число»).
+}
+
+const blank = (v: NumOrBlank): number | undefined => (v === '' ? undefined : v);
+
+export function controllerSolveBody(
+  s: ControllerFormState,
+  customRows: ControllerMappingRowSettings[],
+): ControllerSolveBody {
+  const mode = s.coolingMode || 'liquid';
+  // Only the fields THIS mode reads — ``ControllerCoolingSpec`` on the
+  // backend ignores anything unused, but the wire body stays honest about
+  // what the chosen mode actually needs (owner: "exactly the fields each
+  // mode needs").
+  const cooling: ControllerSolveBody['cooling'] = { mode };
+  if (mode === 'liquid') {
+    // Blank ('') is "inherit the Thermal tab's coolant" — never sent as an
+    // empty string (owner 2026-09-25's per-field inheritance; see
+    // DEFAULT_CONTROLLER_FORM's doc).
+    if (s.coolant) cooling.coolant = s.coolant;
+    cooling.flow_lpm = blank(s.flow);
+    cooling.t_in_c = blank(s.tin);
+    if (s.plumbing && s.plumbing !== 'shared') {
+      cooling.plumbing = s.plumbing;
+      cooling.n_plates = blank(s.nPlates ?? '');
+    }
+    if (s.rPlate !== undefined && s.rPlate !== '') {
+      cooling.r_override_k_w = s.rPlate;
+      if (s.rPlateFluid) cooling.r_override_coolant = s.rPlateFluid;
+      cooling.r_override_flow_lpm = blank(s.rPlateFlow ?? '');
+    }
+  } else {
+    cooling.t_ambient_c = blank(s.tAmbient);
+    cooling.fin_efficiency = blank(s.finEff);
+    if (s.areaBasis === 'plate') cooling.plate_area_cm2 = blank(s.areaCm2);
+    else cooling.heatsink_area_cm2_per_device = blank(s.areaCm2);
+    if (mode === 'air_forced') cooling.air_speed_mps = blank(s.airSpeed);
+    if (mode === 'air_still') cooling.emissivity = blank(s.emissivity);
+  }
+  return {
+    device: s.device,
+    devices_parallel: blank(s.nPar),
+    topology: s.topology, set_split: s.setSplit, h_bridge_modulation: s.hbMod,
+    pwm_modulation: s.pwmMod,
+    r_g_ext_ohm: blank(s.rg),
+    v_gs_off_V: blank(s.vgsOff),
+    switching_source: s.basis || undefined,
+    r_g_off_ext_ohm: blank(s.rgOff),
+    v_gs_on_V: blank(s.vgsOn),
+    l_sigma_nH: blank(s.lSigma),
+    dead_time_us: blank(s.dead),
+    f_carrier_hz: blank(s.fsw),
+    v_dc_V: blank(s.vdc),
+    r_tim_k_w: blank(s.rtim),
+    r_th_jc_k_w: blank(s.rthJc ?? ''),
+    cooling,
+    mapping: s.topology === 'custom' ? customRows : undefined,
+  };
+}
+
+/** What ``POST /solve`` WOULD use right now, before anything is solved —
+ * the tab's "solving for: …" line. */
+export interface ResolvedPoint {
+  die: string | null;
+  config: string | null;
+  duty: string | null;
+  i_phase_rms_A: number | null;
+  p_ac_W: number | null;
+  v_dc_V: number | null;
+  f_carrier_hz: number | null;
+  star_delta: string | null;
+  rpm: number | null;
+  modulation_index: number | null;
+  power_factor: number | null;
+  sources: Record<string, string>;
+  /** Which tier named the carrier / the bus (2026-09-24): ``controller``
+   *  (saved here, or the battery), ``legacy`` (migrated from the retired
+   *  Simulation-tab PWM carrier), ``default`` (nothing named one),
+   *  ``request``.  Absent on an older backend. */
+  carrier_origin?: string | null;
+  v_dc_origin?: string | null;
+  line: string | null;
+}
+
+/**
+ * THE CARRIER IS THE CONTROLLER'S (owner 2026-09-24, on a screenshot of the
+ * greyed "Carrier 20,000 Hz" placeholder: «Это значение нужно задавать в
+ * контроллере; PWM нужно выкинуть из Electromagnetic»).
+ *
+ * The Carrier box is a NORMAL value, never a greyed placeholder borrowed from
+ * another tab.  A configuration whose saved block has no carrier yet gets the
+ * one the backend resolved — the retired Simulation-tab carrier (migration) or
+ * the Controller's stated default — written INTO the field, with its origin,
+ * so the auto-save (any edit, or the next Solve, 2026-09-25 — see
+ * ControllerPanel's `persistSettings`) makes it the Controller's own.  A
+ * value already in the box (saved, or typed) is never replaced.
+ *
+ * Copied verbatim into `__tests__/carrierField.test.mjs`.
+ */
+export function carrierPrefill(
+  fsw: number | '',
+  point: { f_carrier_hz: number | null; carrier_origin?: string | null } | null,
+): { fsw: number | ''; origin: string | null } {
+  if (fsw !== '' || !point || point.f_carrier_hz == null) {
+    return { fsw, origin: null };
+  }
+  return { fsw: point.f_carrier_hz, origin: point.carrier_origin ?? null };
+}
+
+/** The ONE short line under the Carrier box while its value is not yet the
+ *  Controller's own — ``null`` once it is (saved or typed).  Copied verbatim
+ *  into `__tests__/carrierField.test.mjs`. */
+export function carrierOriginLine(origin: string | null): string | null {
+  // No "Save to keep" hint (owner 2026-09-24 follow-up, "Devices / switch"
+  // reset report): the panel auto-saves on every edit and on every Solve
+  // (see ControllerPanel's debounced settings effect), so this value becomes
+  // the Controller's own on the very next keystroke or Solve — there is
+  // nothing left for the owner to remember to click.
+  if (origin === 'legacy') return 'from the old Simulation-tab PWM';
+  if (origin === 'default') return 'default';
+  return null;
+}
+
+export const getResolvedPoint = (die?: string, config?: string, duty?: string) => {
+  const p = new URLSearchParams();
+  if (die) p.set('die', die);
+  if (config) p.set('config', config);
+  if (duty) p.set('duty', duty);
+  return fetch(`${API}/api/controller/point?${p}`).then(j<ResolvedPoint>);
+};
+
+/* ── legacy "Use thermal air cooling" button (owner 2026-09-24) — takes the
+ * MOSFET cooling's Mode/wind-speed/ambient off the loaded duty's own SAVED
+ * thermal record.  `GET /api/controller/cooling_from_thermal`.  Superseded
+ * as the tab's DEFAULT by the automatic per-field inheritance below
+ * (owner 2026-09-25); kept exported for API/back-compat — nothing in
+ * ControllerPanel calls it any more. ── */
+
+export interface CoolingFromThermal {
+  die: string | null;
+  config: string | null;
+  duty: string | null;
+  /** ``"air_forced" | "air_still"`` — the two COOLING_MODES this can ever
+   * resolve to; a liquid/manual/no-air housing refuses instead (422). */
+  mode: 'air_forced' | 'air_still';
+  /** ``air_forced`` only — ``null`` for ``air_still`` (not applicable). */
+  air_speed_m_s: number | null;
+  ambient_C: number;
+  /** the thermal tab's OWN cooling_mode word ("air" | "robotics") this was
+   * mapped from — shown in the HelpTip beside the chip. */
+  thermal_cooling_mode: string;
+  source: string;
+}
+
+/** Throws with the route's own plain-English refusal (no thermal state /
+ * liquid-only / manual h / no air path / missing air speed) on a 422. */
+export const getCoolingFromThermal = (die?: string, config?: string, duty?: string) => {
+  const p = new URLSearchParams();
+  if (die) p.set('die', die);
+  if (config) p.set('config', config);
+  if (duty) p.set('duty', duty);
+  return fetch(`${API}/api/controller/cooling_from_thermal?${p}`).then(j<CoolingFromThermal>);
+};
+
+/* ── AUTOMATIC cooling inheritance from Thermal (owner 2026-09-25): "Когда я
+ * ставлю air или liquid, он должен брать параметры охлаждения из Thermal.
+ * Я там их устанавливаю для мотора — те же и для контроллера по умолчанию,
+ * но можно изменить, чтобы сделать разными."
+ *
+ * `GET /api/controller/thermal_cooling` reports, for EACH of the three
+ * cooling modes, what it would inherit from Thermal right now — the panel
+ * fetches this once (on mount / die-config change / a Thermal-tab save) and
+ * shows whichever entry matches the Mode selector as a placeholder + "from
+ * Thermal" chip on every field that still has NO override (blank on
+ * screen — the same convention `vdc`/`fsw` already use). Typing a value
+ * makes that ONE field an override; the small "↺" resets it back to blank
+ * (see ControllerPanel's cooling rows). ── */
+
+export interface ThermalCoolingModeInfo {
+  /** Only the keys THIS mode can inherit — ``air_speed_mps``/``t_ambient_c``
+   * (air_forced), ``t_ambient_c`` (air_still), or ``coolant``/``flow_lpm``/
+   * ``t_in_c`` (liquid); ``{}`` when Thermal has nothing for this mode. */
+  fields: Record<string, number | string>;
+  /** Human sentence naming where ``fields`` came from — the Thermal tab's
+   * current settings, or the duty's saved thermal record — ``null`` with
+   * an empty ``fields``. */
+  source: string | null;
+  /** The Thermal tab's OWN cooling_mode word this was mapped from
+   * ("air" | "robotics" | "liquid") — ``null`` when nothing matched. */
+  thermal_mode: string | null;
+  /** One line explaining why ``fields`` is empty — ``null`` when it is not. */
+  note: string | null;
+}
+
+export interface ThermalCoolingByMode {
+  die: string | null; config: string | null; duty: string | null;
+  modes: { air_forced: ThermalCoolingModeInfo; air_still: ThermalCoolingModeInfo;
+          liquid: ThermalCoolingModeInfo };
+}
+
+export const getThermalCooling = (die?: string, config?: string, duty?: string) => {
+  const p = new URLSearchParams();
+  if (die) p.set('die', die);
+  if (config) p.set('config', config);
+  if (duty) p.set('duty', duty);
+  return fetch(`${API}/api/controller/thermal_cooling?${p}`).then(j<ThermalCoolingByMode>);
+};
+
+/** One electrical period as an SVG polyline, scaled to its own axis. */
+export function polyline(values: number[], w: number, h: number, pad = 2): string {
+  if (!values.length) return '';
+  let lo = Infinity; let hi = -Infinity;
+  for (const v of values) { if (v < lo) lo = v; if (v > hi) hi = v; }
+  if (!isFinite(lo) || !isFinite(hi)) return '';
+  const span = hi - lo || 1;
+  const n = values.length;
+  return values.map((v, i) => {
+    const x = (i / Math.max(n - 1, 1)) * w;
+    const y = pad + (1 - (v - lo) / span) * (h - 2 * pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+}
+
+export const fmt = (v: any, digits = 1, dash = '—'): string =>
+  (v === null || v === undefined || Number.isNaN(Number(v)))
+    ? dash : Number(v).toLocaleString(undefined, { maximumFractionDigits: digits,
+                                                   minimumFractionDigits: digits });
+
+export const pct = (v: any, digits = 2): string =>
+  (v === null || v === undefined) ? '—' : `${(Number(v) * 100).toFixed(digits)} %`;
+
+/**
+ * The tab's one status line, above the tiles.
+ *
+ * An error ALWAYS wins — the plain sentence the route sends (never a raw
+ * validation error; the 422 for a duty with no electromagnetic record reads
+ * "run the Simulation/coupled solve for this duty first…").  Otherwise, once
+ * something has solved, it names which point of the duty the numbers below
+ * are for — e.g. "solved for the S1 point: 48.6 A rms · 1.99 kW in" — because
+ * a continuous (S1) rating REPLACES the coupled record's own machine with the
+ * verified S1 one, and tiles with no such line would read like a plain solve
+ * of whatever was last typed on the Simulation tab.  `null` before the first
+ * solve, when there is nothing to say yet.
+ */
+export function statusLine(res: ControllerResult | null, err: string | null): string | null {
+  if (err) return err;
+  return res?.solved_for || null;
+}
+
+/* ── stale result vs. live form (owner 2026-09-25, "Devices / switch keeps
+ * resetting to 4") ──────────────────────────────────────────────────────
+ * The production report turned out to be TWO bugs, not one: the saved
+ * default was already fixed (DEFAULT_CONTROLLER_FORM, 2026-09-24), but the
+ * results CARD never said whether what it was showing still matched the
+ * FORM on screen — a result served from history (``fresh=false``) can be
+ * for settings the owner has since edited, and the card kept quoting THOSE
+ * old numbers ("1 device(s) per switch") right next to a form reading "4",
+ * with nothing on screen saying which one is true.  ``staleResultFields``
+ * finds the mismatch; ``staleResultLine`` is the one line the results card
+ * shows instead of silently presenting a pair that disagrees.
+ *
+ * A BLANK form field is never flagged: blank means "the duty's own" (the
+ * same convention ``carrierPrefill`` already uses), and the result's
+ * resolved value for it is exactly what blank asked for, not a mismatch.
+ */
+
+/** The (human) names of the settings the shown `res` disagrees with, given
+ *  what the form currently holds. `[]` when nothing has been solved yet, or
+ *  the result still matches every field the form has an opinion on. */
+export function staleResultFields(
+  s: ControllerFormState, res: ControllerResult | null,
+): string[] {
+  if (!res) return [];
+  const out: string[] = [];
+  if (s.device && res.device != null && s.device !== res.device) out.push('device');
+  if (s.topology && res.topology?.preset != null && s.topology !== res.topology.preset)
+    out.push('topology');
+  if (s.nPar !== '' && res.settings?.devices_parallel != null
+      && s.nPar !== res.settings.devices_parallel) out.push('N');
+  if (s.dead !== '' && res.settings?.dead_time_us != null
+      && s.dead !== res.settings.dead_time_us) out.push('dead time');
+  if (s.rg !== '' && res.settings?.r_g_ext_ohm != null
+      && s.rg !== res.settings.r_g_ext_ohm) out.push('R_G');
+  if (s.vgsOff !== '' && res.settings?.v_gs_off_V != null
+      && s.vgsOff !== res.settings.v_gs_off_V) out.push('V_GS off');
+  if (s.basis && res.settings?.switching_source != null
+      && s.basis !== res.settings.switching_source) out.push('loss basis');
+  if (s.rgOff !== '' && s.rgOff !== (res.settings?.r_g_off_ext_ohm ?? null)) out.push('R_G,off');
+  if (s.lSigma !== '' && s.lSigma !== (res.settings?.l_sigma_nH ?? null)) out.push('L_σ');
+  if (s.fsw !== '' && res.point?.f_carrier_hz != null
+      && s.fsw !== res.point.f_carrier_hz) out.push('carrier');
+  if (s.vdc !== '' && res.point?.v_dc_V != null
+      && s.vdc !== res.point.v_dc_V) out.push('DC link');
+  if (s.coolingMode && res.thermal?.cooling_mode != null
+      && s.coolingMode !== res.thermal.cooling_mode) out.push('cooling');
+  // A result from before the choice existed carries no pwm_modulation: sine.
+  if (s.pwmMod && res.settings && s.pwmMod !== (res.settings.pwm_modulation || 'sine'))
+    out.push('modulation');
+  return out;
+}
+
+/** The ONE line the results card shows for a non-empty `staleResultFields` —
+ *  "Devices / switch" ("N") is spelled out exactly (the reported production
+ *  case), everything else names the field(s) that differ. `null` when there
+ *  is nothing to say (nothing solved yet, or the result still agrees). */
+export function staleResultLine(
+  fields: string[], res: ControllerResult | null,
+): string | null {
+  if (!fields.length || !res) return null;
+  if (fields.length === 1 && fields[0] === 'N') {
+    return `result for N=${res.settings?.devices_parallel} — press Solve`;
+  }
+  return `result computed with a different ${fields.join(', ')} — press Solve`;
+}

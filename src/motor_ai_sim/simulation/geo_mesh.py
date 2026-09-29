@@ -33,6 +33,13 @@ from typing import Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
+# `triangle` (J. R. Shewchuk's Triangle) is OPTIONAL: its licence forbids
+# commercial use without the author's permission, so it is not a mandatory
+# dependency of this AGPL project (pip extra `[triangle]`).  Without it the
+# geometry-driven CDT path is unavailable and mesher.py routes to gmsh.
+import importlib.util as _ilu
+HAVE_TRIANGLE = _ilu.find_spec("triangle") is not None
+
 import numpy as np
 
 # DOM_* tags — must match iron_template / fem_solver_2d.

@@ -44,6 +44,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+pytestmark = pytest.mark.requires_triangle
+
 from motor_ai_sim.cadquery_geometry import CadQueryMotor
 from motor_ai_sim.simulation.geo_mesh import geo_mesh_halves
 from motor_ai_sim.simulation.sb_domains import (DOM_AIR, DOM_COIL_BASE,

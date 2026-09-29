@@ -42,11 +42,11 @@ psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d); al
 # 2026-09-15) — the exact set every report in reports/ was rendered with.
 reportlab==5.0.0  # report.py PDF backend; GET /api/family/report/...?format=pdf 500s without it
 python-docx==1.2.0  # report_docx.py — the DEFAULT report format since 2026-09-09 (routes/report.py)
-# Triangulation fallback for earcut_fallback.py. On Windows it is the ONLY
-# path (App Control blocks mapbox_earcut's .pyd); on Linux the native earcut
-# loads and this is the belt-and-braces second path — it must exist, or the
-# fallback is a second ImportError instead of a fallback.
-triangle==20250106
+# `triangle` is NOT installed by default any more (2026-09-29): its licence
+# forbids commercial use without the author's permission, incompatible with
+# shipping this AGPL / commercially-licensed project.  It is an OPTIONAL extra
+# (pip install ".[triangle]" or requirements-triangle.txt).  Without it the
+# 2-D view uses mapbox-earcut and the FEM mesher uses gmsh.
 # The FOURTH unpinned report dependency, found on the server at Stage 7:
 # datasheet.py imports openpyxl, so GET /api/family/datasheet/...?format=xlsx
 # answered 500 "datasheet build failed: No module named 'openpyxl'" on the

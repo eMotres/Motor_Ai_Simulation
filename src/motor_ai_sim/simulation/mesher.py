@@ -1542,6 +1542,14 @@ def _build_sliding_band_meshes(
         # so candidates stay comparable and the optimizer must not reject them.
         _trace_note("retaining sleeve: geometry-driven mesh instead of the iron template")
         _use_geo = True
+    if _use_tpl and _use_geo:
+        from motor_ai_sim.simulation.geo_mesh import HAVE_TRIANGLE
+        if not HAVE_TRIANGLE:
+            # optional non-commercial dep absent -> straight to gmsh (the
+            # template cannot carry a sleeve, so do not stop there either)
+            log.info("optional 'triangle' not installed — geometry-driven mesh "
+                     "unavailable, using the gmsh build")
+            _use_tpl = _use_geo = False
     if full_ring:
         # TRUE 360°: each half stitched from two clean 180° builds (direct
         # closed-360 OCC double-meshes → dead field).  No sector cuts exist

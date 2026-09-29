@@ -1,0 +1,4 @@
+# OPTIONAL, NON-COMMERCIAL licence (Shewchuk's Triangle: no commercial use
+# without the author's permission).  Enables the geometry-driven CDT mesher
+# and the earcut_fallback triangulator.  Install only if your use is allowed.
+triangle==20250106

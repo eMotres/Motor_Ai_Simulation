@@ -28,7 +28,11 @@ def _rings(vertices: np.ndarray, ring_ends: np.ndarray):
 
 
 def triangulate_float64(vertices, ring_ends):
-    import triangle as _tri
+    try:
+        import triangle as _tri
+    except ImportError as exc:  # optional, non-commercial licence (extra [triangle])
+        raise ImportError("neither mapbox_earcut nor the optional 'triangle' "
+                          "package is importable — install mapbox-earcut") from exc
     from shapely.geometry import Polygon as _SPoly
 
     V = np.ascontiguousarray(np.asarray(vertices, dtype=np.float64)).reshape(-1, 2)

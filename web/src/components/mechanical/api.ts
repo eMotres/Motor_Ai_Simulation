@@ -12,9 +12,9 @@ const BASE = `${API.replace(/\/$/, '')}/api/mechanical`;
 /** A load case's name.
  *
  *  `string`, not a union, since 2026-09-06: in single-speed mode the backend
- *  names the one case by its SPEED ("23,000 rpm") — user, "давай будем
- *  рассчитывать только на 23 000 оборотов ... проще будет считать только одну
- *  величину" — so the case names are data, and the panel reads them off the
+ *  names the one case by its SPEED ("23,000 rpm") — user, "let's compute
+ *  only at 23 000 rpm ... it's simpler to compute just one
+ *  value" — so the case names are data, and the panel reads them off the
  *  result instead of assuming the three below. */
 export type CaseName = string;
 /** The three-case table, when that is what was solved. */
@@ -27,8 +27,8 @@ export type CasesMode = 'single' | 'three';
 
 /** Which forces act.
  *
- *  User 2026-09-07: "добавь ещё и момент на ротор, пусть действуют все силы;
- *  сделай меню, чтобы можно было выбрать центробежную, момент и обе."  `both` is
+ *  User 2026-09-07: "add torque on the rotor too, let all forces act;
+ *  make a menu so you can choose centrifugal, torque, or both."  `both` is
  *  the API default — the machine is loaded by both — and it falls back to
  *  `centrifugal` when there is no run to take the torque from. */
 export type LoadsMode = 'centrifugal' | 'torque' | 'both';
@@ -235,7 +235,7 @@ export interface CaseResult {
     n_frozen_pairs: number; n_bodies: number; unretained_parts: string[];
     /** Parts that came loose at temperature and were TRAVELLED onto the surface
      *  that retains them, instead of being pinned where they floated
-     *  (2026-09-09, "магнит должен сесть на язычок, как в Fusion"). Empty on
+     *  (2026-09-09, "the magnet must seat on the tab, like in Fusion"). Empty on
      *  every solve where nothing floats — which is most of them. `travel_um` is
      *  the number to compare with Fusion's, `landed_on` the contact pair the
      *  part came to rest on. Optional: an older cached result has no key. */
@@ -336,8 +336,8 @@ export interface FieldPayload {
 /** The rotor's structural limit — the speed at which the minimum averaged
  *  safety factor reaches `target_sf` (1.0 = SF 1), everything else held as in
  *  the case this rode in on: same torque, contacts, interference,
- *  temperatures, mesh, order.  Owner 2026-09-21: "нужно искать ещё
- *  максимальную скорость вращения ... она будет, когда достигает SF = 1".
+ *  temperatures, mesh, order.  Owner 2026-09-21: "we also need to find
+ *  the maximum rotation speed ... it happens when SF reaches 1".
  *
  *  `rpm_sf1` is null only when the search hit its runaway guard (20× the
  *  analysed speed, or the 1500 m/s rim-speed bound) or its solve budget
@@ -435,8 +435,8 @@ export interface RotorStress {
     mesh_reused?: boolean;
   };
   /* ── the rotor temperature (2026-09-07) ───────────────────────────────────
-     User: "нужно универсально добавить температуру ротора, чтобы можно было
-     задавать; для моторов без бандажа этот эффект вообще минимальный".
+     User: "we need to add rotor temperature universally, so it can be
+     set; for motors without a sleeve this effect is minimal anyway".
      `active` is false for a 20/20 °C request — the machine as drawn. */
   thermal?: {
     /** the FALLBACK for the core, the magnets and the shaft — see
@@ -445,8 +445,8 @@ export interface RotorStress {
     sleeve_temp_c: number;
     ref_temp_c: number;
     /* ── one temperature per solid (2026-09-08) ─────────────────────────────
-       User: "в механический расчёт тоже нужно делать каплинг, чтобы температуры
-       везде были одинаковы".  `part_temps_c` is ALWAYS all four, whether they
+       User: "the mechanical solve also needs coupling, so the temperatures
+       are the same everywhere".  `part_temps_c` is ALWAYS all four, whether they
        were named or inherited — the line the panel and the Compare row print —
        and `part_temps_given` is only what the caller named, so "coupled to
        Thermal" and "two fields typed by hand" stay distinguishable. */
@@ -455,8 +455,8 @@ export interface RotorStress {
     part_temps_given?: Partial<Record<'rotor_core' | 'magnet' | 'shaft' | 'sleeve',
                                       number>>;
     /** the temperatures CHANGED the answer.  Under `band_fit` (the only model
-     *  the routes use, user 2026-09-09: "температура только как изменение
-     *  давления на бандаж, если он есть") that means "there is a band and its
+     *  the routes use, user 2026-09-09: "temperature only as a change of
+     *  pressure on the sleeve, if there is one") that means "there is a band and its
      *  fit moved"; a sleeveless rotor at 150 °C is `active: false`. */
     active: boolean;
     /** `band_fit` in production; `free_expansion` is the solver's own
@@ -508,7 +508,7 @@ export interface RotorStress {
   /** seconds the BACKEND spent on this answer, measured around the geometry
    *  build and the solve — the number the panel prints as "solved in 48 s".
    *  A cached hit carries the ORIGINAL solve's value, not its own microseconds
-   *  (user 2026-09-06: "нужно добавить ещё индикатор времени расчёта"). */
+   *  (user 2026-09-06: "need to add a computation-time indicator too"). */
   elapsed_s?: number;
   cached?: boolean;
   geo_fingerprint?: string | null;
@@ -556,8 +556,8 @@ async function get<T>(path: string,
 }
 
 /** `full` = the whole 360° rotor; `sector` = ONE periodic pole sector with
- *  cyclic-symmetry ties on its two cut faces (user 2026-09-09: "используй
- *  периодичность, как я во Fusion") — every pole identical by construction,
+ *  cyclic-symmetry ties on its two cut faces (user 2026-09-09: "use
+ *  periodicity, like I do in Fusion") — every pole identical by construction,
  *  ~40× faster on the G2, the field replicated for the map. */
 export type SymmetryMode = 'full' | 'sector';
 
@@ -581,8 +581,8 @@ export const fetchRotorStress = (p: {
    *  the rotor's number and the DIFFERENCE is what changes the fit. */
   sleeve_temp_c?: number;
   /* ── one temperature per solid (2026-09-08) ───────────────────────────────
-     User: "в механический расчёт тоже нужно делать каплинг, чтобы температуры
-     везде были одинаковы".  OMITTED unless the Thermal result carries that
+     User: "the mechanical solve also needs coupling, so the temperatures
+     are the same everywhere".  OMITTED unless the Thermal result carries that
      part: an absent field keeps `rotor_temp_c`, and a request that sends none
      of them is byte for byte the request this app has always sent (they enter
      the backend's cache key only when they are given). */
@@ -661,10 +661,10 @@ export const fetchMechMaterials = () => get<MechMaterialsReport>('/materials', {
 /* ═══════════════════════════════════════════════════════════════════════════
  * The last result, and the bare cross-section
  *
- * User 2026-09-06: "когда я захожу и выхожу в Mechanical, графики пропадают.
- * Нужно, чтобы по умолчанию: если нет расчётов — рисуется просто геометрия;
- * если есть — подгружается последний расчёт; если были изменения текущей
- * геометрии — нужно подсвечивать неактуальность текущего расчёта."
+ * User 2026-09-06: "when I enter and leave Mechanical, the plots disappear.
+ * By default it should be: if there are no results — just draw the geometry;
+ * if there are — load the last result; if the current geometry has
+ * changed — highlight that the current result is stale."
  *
  * Neither call solves anything: `/last` is a lookup of what the tab was showing
  * before (it survives a backend restart — the server persists it beside the
@@ -725,8 +725,8 @@ export const fetchLastMechanical = () =>
 
 /** Build (or fetch) the rotor mesh alone.
  *
- * User 2026-09-06: "по поводу сетки — как я понял, она строится отдельно, и ей
- * тоже нужно как-то управлять".  This is the Build mesh button.  It never
+ * User 2026-09-06: "about the mesh — as I understand it, it's built
+ * separately, and it also needs some control".  This is the Build mesh button.  It never
  * solves, and the solve that follows reuses what it built (the backend memoises
  * the mesh on the geometry itself), so pressing it costs the gmsh seconds ONCE.
  */
@@ -764,8 +764,8 @@ export function readSimTorqueNm(): number | null {
  *  the rotor stress at the point of the run it has just made — that tab's rpm
  *  and the torque the run produced — and never at this tab's boxes, which hold
  *  whatever machine they were typed for (the Ø200's 23 000 rpm and 245.5 N·m
- *  sat on the 13 000 rpm, 0.6 N·m 40 mm this morning; user: "момент должен
- *  быть правильным, и электромагнитного, и обороты, и температуры").  A manual
+ *  sat on the 13 000 rpm, 0.6 N·m 40 mm this morning; user: "the torque must
+ *  be correct, both electromagnetic, and the rpm, and the temperatures").  A manual
  *  Solve on this tab follows the same rule while the switch is on, so the two
  *  cannot disagree.  `null` fields: not coupled, or nothing run yet — the boxes
  *  apply as before. */
@@ -806,8 +806,8 @@ export function sfAccent(sf: number | null | undefined): string {
 /* ═══════════════════════════════════════════════════════════════════════════
  * Modal — 2-D in-plane modes, and the shaft's critical speeds
  *
- * Added 2026-09-05 for "нам нужно сделать ещё модальный анализ, чтобы понять
- * все частоты — это очень важно для 20000 rpm".  Two models, two endpoints, and
+ * Added 2026-09-05 for "we also need to do a modal analysis, to understand
+ * all the frequencies — this is very important for 20000 rpm".  Two models, two endpoints, and
  * they answer different questions: /modes is the ring frequencies of the iron
  * (per unit length, no axial half-waves), /critical_speeds is the bending of
  * the shaft LINE, which is the one that decides whether 20 000 rpm is allowed.
@@ -987,7 +987,7 @@ export function writeMech(key: string, v: unknown): void {
 /* ═══════════════════════════════════════════════════════════════════════════
  * How long things take
  *
- * User 2026-09-06: "нужно добавить ещё индикатор времени расчёта".  Two numbers,
+ * User 2026-09-06: "need to add a computation-time indicator too".  Two numbers,
  * and they are not the same number:
  *
  *   • the ESTIMATE shown while a solve is running — the last measured duration

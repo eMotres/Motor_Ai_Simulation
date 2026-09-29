@@ -1,7 +1,9 @@
 """deploy/node-agent/motres_node_agent.py: the "created" timestamp parsing
 that feeds the Admin -> Overview live-load Now table's outside-app uptime
-column. Stdlib-only script (no package, no docker calls here) -- imported
-directly from its file path, same trick as loading a script for a dry run."""
+column, and the physical-core count (/proc/cpuinfo) behind the "N cores /
+M threads" labels. Stdlib-only script (no package, no docker calls here) --
+imported directly from its file path, same trick as loading a script for a
+dry run."""
 from __future__ import annotations
 
 import calendar
@@ -72,3 +74,28 @@ def test_containers_attaches_created_from_meta_by_name():
     meta = {"def456": ("mesher_1", 12345.0)}
     out = agent.containers(meta)
     assert out == [{"name": "mesher_1", "cpu": 210.5, "mem": 2 * 1024 ** 3, "created": 12345.0}]
+
+
+# ── physical_cores(): "N cores / M threads" for the live-load per-server strip ─
+def test_physical_cores_counts_distinct_physical_id_core_id_pairs(monkeypatch):
+    # 2 sockets x 2 cores x 2 threads (SMT on) = 8 threads, 4 physical cores
+    pairs = [(0, 0), (0, 0), (0, 1), (0, 1), (1, 0), (1, 0), (1, 1), (1, 1)]
+    cpuinfo = "\n\n".join(
+        f"processor\t: {i}\nphysical id\t: {phys}\ncore id\t: {core}"
+        for i, (phys, core) in enumerate(pairs))
+    monkeypatch.setattr(agent, "_read", lambda p: cpuinfo)
+    assert agent.physical_cores() == 4
+
+
+def test_physical_cores_falls_back_to_thread_count_without_ids(monkeypatch):
+    # some VMs/ARM hosts don't print physical id / core id at all
+    cpuinfo = "\n\n".join(f"processor\t: {i}" for i in range(4))
+    monkeypatch.setattr(agent, "_read", lambda p: cpuinfo)
+    assert agent.physical_cores() == 4
+
+
+def test_physical_cores_is_zero_when_cpuinfo_unreadable(monkeypatch):
+    def boom(p):
+        raise OSError("no /proc here")
+    monkeypatch.setattr(agent, "_read", boom)
+    assert agent.physical_cores() == 0

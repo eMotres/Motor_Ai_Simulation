@@ -49,6 +49,33 @@ def cpu_times():
     return out  # [total, cpu0, cpu1, ...]
 
 
+def physical_cores() -> int:
+    """Distinct (physical id, core id) pairs from /proc/cpuinfo -- the host's
+    PHYSICAL core count, as opposed to ``cores`` in sample() below (the
+    logical/thread count from /proc/stat, i.e. threads with SMT/hyperthreading
+    counted separately). Falls back to the thread count when /proc/cpuinfo
+    lacks physical/core ids (some VMs, some ARM hosts): we then assume no SMT
+    rather than guessing at a ratio. Returns 0 (unknown) if /proc/cpuinfo is
+    unreadable -- callers treat that as "don't show a physical-core count"."""
+    pairs = set()
+    threads = 0
+    phys = core = None
+    try:
+        for line in _read("/proc/cpuinfo").splitlines():
+            if line.startswith("processor"):
+                threads += 1
+                phys = core = None
+            elif line.startswith("physical id"):
+                phys = line.split(":", 1)[1].strip()
+            elif line.startswith("core id"):
+                core = line.split(":", 1)[1].strip()
+                if phys is not None:
+                    pairs.add((phys, core))
+    except OSError:
+        return 0
+    return len(pairs) or threads
+
+
 def meminfo():
     m = {}
     for line in _read("/proc/meminfo").splitlines():
@@ -229,7 +256,7 @@ class Sampler:
         mem, swap = meminfo()
         s = {"hostname": os.uname().nodename, "ts": time.time(),
              "uptime_s": float(_read("/proc/uptime").split()[0]),
-             "cores": len(pct) - 1,
+             "cores": len(pct) - 1, "cores_physical": physical_cores(),
              "cpu": {"total": pct[0] if pct else 0.0, "per_core": pct[1:]},
              "load": [float(x) for x in _read("/proc/loadavg").split()[:3]],
              "mem": mem, "swap": swap, "disks": disks(),

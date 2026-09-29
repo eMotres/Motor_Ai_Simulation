@@ -117,8 +117,8 @@ def _scan_store_path() -> str:
 def _machine_stamp(exclude_geo_keys=()) -> Dict[str, Any]:
     """WHICH MACHINE a sweep belongs to.
 
-    User 2026-09-10: *"опять косяк, я запускал sweep одних параметров, а в
-    результате получил старый sweep от другого мотора"* — and the panel was
+    User 2026-09-10: *"a glitch again, I ran a sweep of one set of parameters
+    and got back an old sweep from a different motor"* — and the panel was
     showing exactly that: `.last_scan.json` is reloaded into the scan state
     every time the backend starts, and a restored chart looked like an answer.
     A sweep is only meaningful for the machine it was computed on, so it now
@@ -238,7 +238,7 @@ def _config_fingerprint(exclude_geo_keys=()) -> str:
         # by the panel, a value mirrored into a second block, a default made
         # explicit — re-fingerprinted the machine, the finished sweep on screen
         # was refused as "another motor's" and its points became cache misses
-        # (user 2026-09-12: "пропал куда-то весь мой sweep", after
+        # (user 2026-09-12: "my whole sweep disappeared somewhere", after
         # winding.star_delta appeared beside the simulation mirror).  What a
         # solve actually READS from these two blocks when the caller does not
         # pass it is a short list — the _effective_* resolvers in
@@ -352,8 +352,8 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         "pins": {k: pins[k] for k in sorted(pins)} if pins else None,
         # EFFECTIVE overrides only: an override equal to the live geometry's
         # own value changes nothing about the machine, so it must not change
-        # the key either.  User 2026-09-06: "добавил ещё один параметр (толщину
-        # перемычки) — почему он не вывел предыдущие измерения на график?" —
+        # the key either.  User 2026-09-06: "I added one more parameter (the
+        # bridge thickness) — why didn't it show the previous measurements on the chart?" —
         # the new sweep named rotor_house_height at its base value on a third
         # of its points, and that extra name alone made every key miss the
         # previous sweep's entries for the same machines.

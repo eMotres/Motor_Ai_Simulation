@@ -277,7 +277,7 @@ def expr_str(value: float, unit: str) -> str:
 
 def derive_stator_up_r_expression(factor: float = 2.0) -> str:
     """The ONE existing formula this tooling ever changes (owner, 2026-09-25:
-    "формулы не меняй, только одну: stator_up_r = stator_diameter/2"): no
+    "don't change the formulas, only one: stator_up_r = stator_diameter/2"): no
     parentheses, no reformatting -- just this exact expression, since it
     stands alone as stator_up_r's entire new definition rather than being
     substituted into a larger formula."""
@@ -473,8 +473,8 @@ def magnet_lamination_export_value(raw_value: float, motor_length_value: Optiona
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# PARAMETER I/O CSV PARSING (2026-09-25, owner audit: "исправь все эти
-# косяки в скриптах").  fusion360_import_params.py normally pulls JSON from
+# PARAMETER I/O CSV PARSING (2026-09-25, owner audit: "fix all these
+# glitches in the scripts").  fusion360_import_params.py normally pulls JSON from
 # the running app, but when the API is unreachable it falls back to reading
 # a CSV file instead -- either our own export's six columns (Name, Unit,
 # Expression, Value, Comment, Favorite) or a plain export from the

@@ -141,9 +141,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
-    U.create_user(A, "password-a", tier="free", name=A_NAME)
-    U.create_user(B, "password-b", tier="free", name="Bob")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
+    U.create_user(A, "password-a", role="user", name=A_NAME)
+    U.create_user(B, "password-b", role="user", name="Bob")
     U.set_motor_grants(A, all_motors=True)
     U.set_motor_grants(B, all_motors=True)
 

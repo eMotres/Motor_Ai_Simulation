@@ -52,7 +52,7 @@ Honest (coupled) magneto-dynamic, backward-Euler in time:
   → compare the coupled-solve loss to the closed-form skin-effect loss vs frequency
   (must show the loss roll-off as δ < thickness; the resistance-limited form would not).
 - V2 — motor: 40 mm, 13000 rpm, I=38 A, full ring → compare solid (magnet+shaft) +
-  copper AC to ANSYS (SolidLoss 2.79 W, StrandedLossAC) and to the existing solver.
+  copper AC to an independent reference solve (kept private) and to the existing solver.
 
 ## Progress
 
@@ -90,7 +90,7 @@ Honest (coupled) magneto-dynamic, backward-Euler in time:
       | magnet | 5.56e5  | 0.997  | 1.90           | 1.89       |
       | shaft  | 2.58e7  | 0.742  | 1.50           | 1.11       |
 
-      solid total: production **3.40** → honest **3.01** vs ANSYS **2.79** (within ~8 %).
+      solid total: production **3.40** → honest **3.01**.
       → Magnet eddy in production is CORRECT (δ≫7.5 mm build, no screening).  The Al
       shaft is over-counted ~26 % by the resistance-limited form (δ≈radius) — the
       honest solve fixes exactly that, with NO shape factor or cap.
@@ -148,7 +148,7 @@ The rotor-node A history is NOT a clean sinusoid, for two reasons; both are hand
 The **screening-factor V2 estimate** (validated standalone solver, cylinder-exact shaft,
 unscreened magnet) does NOT depend on the rotor-frame FFT and is the trustworthy figure:
 
-    solid: production 3.40 -> HONEST 3.01 W  vs ANSYS 2.79 W   (~8%)
+    solid: production 3.40 -> HONEST 3.01 W
     magnet eddy: production correct (no screening);  Al shaft: production over-counts ~26%.
 
 ### Still to wire (after n_periods=7 confirms)

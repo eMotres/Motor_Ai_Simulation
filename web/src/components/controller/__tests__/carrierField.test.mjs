@@ -1,7 +1,7 @@
 // node --test — the Controller's Carrier box holds a REAL value (2026-09-24).
 //
-// Owner, on a screenshot of the greyed "Carrier 20,000 Hz" placeholder: «Это
-// значение нужно задавать в контроллере; PWM нужно выкинуть из
+// Owner, on a screenshot of the greyed "Carrier 20,000 Hz" placeholder: «This
+// value needs to be set in the Controller; PWM needs to be dropped from
 // Electromagnetic.»  So the carrier is a normal editable field saved with the
 // controller settings; a configuration with none saved starts from the value
 // the backend resolved (the retired Simulation-tab carrier — migration — or the
@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { uiForms, indexOfUi, hasUi } from '../../../i18n/__tests__/uiText.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PANEL = readFileSync(join(HERE, '..', 'ControllerPanel.tsx'), 'utf8');
@@ -80,7 +81,7 @@ test('no resolved point yet leaves the box as it is', () => {
 /* ── the panel ───────────────────────────────────────────────────────────── */
 
 test('the Carrier row has no placeholder and is filled from the resolved point', () => {
-  const at = PANEL.indexOf('<Row label="Carrier"');
+  const at = indexOfUi(PANEL, uiForms('<Row label=', 'Carrier', '', { quoted: true }));
   assert.ok(at > 0);
   const row = PANEL.slice(at, PANEL.indexOf('</Row>', at));
   assert.ok(!row.includes('placeholder'), 'never a greyed placeholder for the carrier');

@@ -158,11 +158,8 @@ def _file_of(p: Path) -> str:
 
 
 def device_envelopes() -> List[Dict[str, Any]]:
-    d = _dev.devices_dir()
     out: List[Dict[str, Any]] = []
-    if not d.is_dir():
-        return out
-    for p in sorted(d.glob("*.yaml")):
+    for p in _dev.card_paths().values():
         try:
             out.append(envelope_from_doc(_dev._read(p), file=_file_of(p)))
         except Exception as exc:                          # noqa: BLE001
@@ -171,8 +168,13 @@ def device_envelopes() -> List[Dict[str, Any]]:
 
 
 def device_envelope(part: str) -> Optional[Dict[str, Any]]:
-    p = _dev.devices_dir() / f"{str(part).strip()}.yaml"
-    if not p.is_file():
+    from motor_ai_sim.safe_paths import PathRejected, check_segment
+    try:
+        check_segment(str(part).strip(), what="device part")
+    except PathRejected:
+        return None
+    p = _dev.card_path(part)
+    if p is None or not p.is_file():
         return None
     return envelope_from_doc(_dev._read(p), file=_file_of(p))
 

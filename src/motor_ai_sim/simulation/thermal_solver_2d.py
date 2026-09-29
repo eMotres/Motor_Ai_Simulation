@@ -29,7 +29,7 @@ WHAT CHANGED 2026-09-07 (and why)
    path and no branch to get wrong.
 
 2. **A LIST of Robin surfaces, not one.**  The user's rotor is cooled through the
-   shaft ("Ротор придётся охлаждать в основном через вал"), so the innermost
+   shaft ("The rotor will have to be cooled mainly through the shaft"), so the innermost
    closed boundary — the shaft bore when the shaft is a tube, the rotor inner
    radius when the shaft is excluded — is a first-class cooled surface with its
    own h and its own sink.
@@ -41,8 +41,8 @@ WHAT CHANGED 2026-09-07 (and why)
    an assertion; with them it is an answer that closes.
 
 4. **A LUMPED VOLUME SINK, for the one AXIAL path that is real.**  The user's
-   ruling (2026-09-07): *"торцы и лобовые части — только для вала, всё остальное
-   вращается внутри мотора"* — the rotor's end faces and the end windings turn
+   ruling (2026-09-07): *"end faces and end windings — only for the shaft,
+   everything else spins inside the motor"* — the rotor's end faces and the end windings turn
    inside a CLOSED housing and have nowhere to send their heat, so there is
    nothing to model there; the SHAFT sticks out through the bearings and its
    exposed length loses heat to the room.  ``volume_sinks`` is how a 2-D
@@ -129,8 +129,8 @@ def solve_steady_thermal(
     shaft: the rotor's end faces and the end windings spin inside a closed
     housing and have nowhere to send their heat, but the shaft comes out through
     the bearings on both sides and the exposed stubs lose heat to the room
-    (user 2026-09-07: *"торцы и лобовые части — только для вала, всё остальное
-    вращается внутри мотора"*).  Each entry is
+    (user 2026-09-07: *"end faces and end windings — only for the shaft,
+    everything else spins inside the motor"*).  Each entry is
 
         ``{"tags": [...], "G_W_per_K": float, "t_sink_c": float,
            "name": str, "symmetry_mult": int}``
@@ -342,7 +342,7 @@ def solve_steady_thermal(
     # outer 10 % passed the midpoint rule, so on the G2's 90° quarter the yoke
     # at both cuts was pinned at the coolant temperature and the two edge slots
     # ran 3 K cooler than the four between them — a boundary condition, not a
-    # machine (user: "меня пугает неравномерность, проверь граничные условия").
+    # machine (user: "the unevenness worries me, check the boundary conditions").
     # A cut is a symmetry plane: adiabatic, nothing crosses it.  The housing's
     # own groove walls are radial too but sit INSIDE the angular span, so they
     # keep their film — see ``wedge_cut_facets``.
@@ -366,8 +366,8 @@ def solve_steady_thermal(
         # radial facet of each cut line sat inside it and carried the bore film
         # too: ~0.5 W per cut on the G2, which is exactly the 2 K hump with
         # cool edges the rotor showed across its quarter after the housing cut
-        # was fixed (user 2026-09-09: "в роторе та же неравномерность и
-        # осталась").  A cut is adiabatic on every film.
+        # was fixed (user 2026-09-09: "the rotor still has the same
+        # unevenness").  A cut is adiabatic on every film.
         if cut_sel.size:
             bore_sel = np.setdiff1d(bore_sel, cut_sel)
     else:
@@ -657,8 +657,8 @@ def solve_steady_thermal(
     flux = np.nan_to_num(flux)                    # (2, m)  [W/m²]
     flux_mag = np.hypot(flux[0], flux[1])
     # |∇T| per element [K/m] — WHERE the temperature drops fastest is where the
-    # heat path is worst (user 2026-09-07: "график градиента температуры, чтобы
-    # понять, где самые плохие места для теплопередачи").  The flux says how
+    # heat path is worst (user 2026-09-07: "a temperature-gradient chart, to
+    # understand where the worst spots for heat transfer are").  The flux says how
     # much heat passes; the gradient says how much it costs in kelvin per metre
     # to pass it — the liner, the enamel, the gap and the sleeve light up here.
     grad_mag = np.nan_to_num(np.hypot(gT[0], gT[1]))
@@ -829,8 +829,7 @@ def wedge_cut_facets(mesh, bnd: np.ndarray, *, tol_rad: float = 2e-3) -> np.ndar
     outer 10 % of each ray used to be swept into the coolant film; on the G2's
     quarter that pinned the yoke at both cuts and left the two edge slots 3 K
     cooler than the four between them, which the user read as a machine that
-    heats unevenly (user: "меня пугает неравномерность, проверь граничные
-    условия").
+    heats unevenly (user: "the unevenness worries me, check the boundary conditions").
 
     Recognised on the MESH, not from a parameter the solver does not have: the
     nodes' angular span is measured about their mean direction (so a wedge

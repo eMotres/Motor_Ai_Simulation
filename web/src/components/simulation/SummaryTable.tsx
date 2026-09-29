@@ -22,6 +22,11 @@ import { couplingLine, couplingTooltip, coupledStateLine,
          continuousRatingTip, s1ResultsAtLine, controllerTerm } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 import SineVsInverterTable from './SineVsInverterTable';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/results.json (docs/I18N.md).
+const tx = nsT('results');
 
 /** Bench-probe result riding in the summary (backend measures it once per
  *  machine during the run) — small-signal Ld/Lq at the I≈0 iron state, the
@@ -199,8 +204,8 @@ export interface TransientSummary {
   eddy_settle_tol?: number | null;
   efficiency:          number;
   // TOTAL = iron + copper + magnets + shaft (the divisor of every density below);
-  // ACTIVE = the EM-active mass without the shaft — the basis an ANSYS active-mass
-  // expression quotes, so it is the tile a user cross-checks against Ansys.
+  // ACTIVE = the EM-active mass without the shaft — the basis a commercial FEM active-mass
+  // expression quotes, so it is the tile a user cross-checks against commercial FEM.
   mass_total_kg:       number;
   mass_active_kg?:     number;
   mass_area_source?:   string;
@@ -523,6 +528,7 @@ const Cell: React.FC<{
 };
 
 const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) => {
+  useTranslation('results'); // re-render on language change; lazy-loads the namespace
   // Hook FIRST — the empty-state early-return below must not sit between the
   // component entry and a hook call.
   const geometry = useMotorStore(s => s.geometry);
@@ -572,8 +578,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // field — so these come from GET /api/bearings/losses, an ANALYTIC model over
   // the machine's own bearing cards (SKF frictional moment + windage). Fetched
   // whenever the summary's speed changes.  Since 2026-09-09 they ARE in the
-  // card's one efficiency (user: "КПД должен быть один и потери разные — все
-  // потери суммируются, ищется КПД на валу"): the η tile is the shaft's, the
+  // card's one efficiency (user: "there should be one efficiency and different
+  // losses — all losses are summed, efficiency is sought at the shaft"): the η tile is the shaft's, the
   // electromagnetic-only figure lives in its tooltip, and the losses stay as
   // separate cells (EM / bearings / windage / all).  The stored `efficiency`
   // (electromagnetic) is untouched — the optimizer's metric and the Compare
@@ -641,7 +647,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         display: 'flex', flexDirection: 'column', gap: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
           <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
-            Simulation summary — real FEM results
+            {tx('simulationSummaryRealFemResults')}
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
             <AddToCompareButton />
@@ -804,10 +810,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   const brgTempC = fromRun ? s.bearing_temp_c : mech?.temp_c;
   const brgWind = fromRun ? runMech?.windage : mech?.windage;
   const brgMoment = fromRun ? runMech?.M_bearings_Nm : mech?.M_bearings_Nm;
-  // ONE energy balance, three tiles (user 2026-09-09: "нужно добавить
-  // электрическую мощность рядом с Mech power: механическая + все потери для
-  // мотора, механическая − все потери для генератора"; "все потери
-  // суммируются, ищется КПД на валу").  The mechanical losses sit BETWEEN the
+  // ONE energy balance, three tiles (user 2026-09-09: "need to add electric
+  // power next to Mech power: mechanical + all losses for a motor,
+  // mechanical − all losses for a generator"; "all losses
+  // are summed, efficiency is sought at the shaft").  The mechanical losses sit BETWEEN the
   // rotor and the coupling, so
   //   shaft power  = rotor T·ω − (bearings + windage)   motoring
   //                = rotor T·ω + (bearings + windage)   generating (what the
@@ -876,7 +882,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // 85 mm (bound 0.55 % vs measured 0.10 %, correctly conservative).  The
   // energy/(BH) view and the effective grade stay in the tooltip.
   const dmLoss = dm ? dm.loss_pct : null;
-  // Displayed as the KEPT coefficient (user's call: "должен быть 99.74, а не
+  // Displayed as the KEPT coefficient (user's call: "should be 99.74, not
   // 0.26") — the retention reads naturally as a health figure: 100 % = intact.
   const dmKept = dmLoss != null ? 100 - dmLoss : null;
   // The worst element as the flagged corner diagnostic (legacy payloads carry
@@ -927,8 +933,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   const geoStale = (!!s._geoSig && !!liveSig && s._geoSig !== liveSig)
                    || s._geoStaleBackend === true;
   // MATERIALS staleness (user 2026-08-25: a run with the old steel showed as
-  // current after the assignment changed — "цифры совпадают с железом,
-  // которое было до этого").  The run's grades are in its own mass rows
+  // current after the assignment changed — "the numbers match the hardware
+  // that was there before").  The run's grades are in its own mass rows
   // ("Stator core (B15AHV950M)"); the live ones are what the next run will
   // use (currentMatJson — the same payload the solve carries).
   const matDiffs: string[] = (() => {
@@ -947,7 +953,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       // solved (140 °C → N52UH_150C) while the machine is assigned N52UH_20C,
       // and that is the same magnet, not a changed one.  Comparing the record
       // names dimmed every coupled result until the page was reloaded (user
-      // 2026-09-09: "после каждого расчёта мне нужно перегружать страницу").
+      // 2026-09-09: "after every computation I need to reload the page").
       const grade = (name: string) => name.replace(/_\d+C$/i, '');
       for (const [prefix, key] of [['Stator core', 'stator_core'],
                                    ['Rotor back-iron', 'rotor_core'],
@@ -987,14 +993,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
-      {/* The shouting red STALE banner is gone (user: "выкинь").  Staleness
+      {/* The shouting red STALE banner is gone (user: "drop it").  Staleness
           still shows two quieter ways that survive: the whole card dims to
           55 % opacity, and the ⚠ chip in the header line carries the why in
           its tooltip.  Do not resurrect the banner. */}
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 2,
         flexWrap: 'wrap', opacity: stale ? 0.55 : 1 }}>
         <Typography sx={{ fontSize: 13, color: 'var(--text-1)', fontWeight: 700 }}>
-          Simulation summary — real FEM results
+          {tx('simulationSummaryRealFemResults')}
         </Typography>
         {/* 3D-corrections toggle (user's design): ON → flux-proportional tiles
             rescaled by this machine's Stage-A k_flux; OFF → pure 2D; without a
@@ -1021,7 +1027,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             </Button>
           </span>
         </Tooltip>
-        {/* R at 25 °C — bench-check view (user: "чтобы можно было проверить").
+        {/* R at 25 °C — bench-check view (user: "so it can be checked").
             Rescales ONLY the two R cells by the copper ρ(T) ratio; losses and
             η stay at the solve temperature — a cold loss set needs a cold
             re-solve, not display math. */}
@@ -1060,7 +1066,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
           <AddToCompareButton />
         </Box>
-        {/* Operating-point text removed (user: "убери — без неё всё понятно",
+        {/* Operating-point text removed (user: "remove it — it's clear without it",
             the panel inputs above already say it).  The line SURVIVES as the
             carrier of the warnings: stale ⚠, non-converged, snapped steps,
             generator chip — those must never disappear with it. */}
@@ -1121,7 +1127,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       </Box>
       {/* WHICH CURRENT THE TILES BELOW ARE AT (owner 2026-09-21, third round:
           screenshot showing the tiles at the S1 machine while the Operating
-          point panel still read the setpoint — *«опять токи не совпадают»*).
+          point panel still read the setpoint — *«the currents don't match again»*).
           Only once a real S1 verification pass has REPLACED this record
           (`record_is_s1`): every other run's tiles are simply the setpoint's,
           which is what "no line here" already means on every card today. */}
@@ -1131,7 +1137,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         </Typography>
       )}
 
-      {/* ── SEVEN FIXED ROWS (user 2026-09-04: "упорядочить вывод по строкам"):
+      {/* ── SEVEN FIXED ROWS (user 2026-09-04: "order the output by rows"):
             1 torque · power · mass · efficiency · ripple  (+ the two densities)
             2 total loss · core · stranded · solid · sleeve · stator/rotor heat
             3 voltages + J coil (unchanged)
@@ -1144,8 +1150,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           window width and whichever optional cells this run carries. */}
 
       {/* ── THE COUPLED RUN, FIRST ────────────────────────────────────
-          Directly under the card's heading (user 2026-09-09: "перенеси
-          это сразу после Physics Dashboard").  It is the sentence that
+          Directly under the card's heading (user 2026-09-09: "move it
+          right after Physics Dashboard").  It is the sentence that
           says at WHICH temperatures everything below was computed, so
           it is read before the numbers it qualifies, not after them.
           Its own row, one cell wide: the value is a sentence, and a
@@ -1153,7 +1159,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           trace stays in the tooltip (UI rule). */}
       {s.coupling && (
         <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-          <Cell label="Coupled EM ↔ thermal" value={couplingLine(s.coupling)}
+          <Cell label={tx('coupledEmThermal')} value={couplingLine(s.coupling)}
             accent={s.coupling.runaway ? 'red'
                     : s.coupling.converged ? 'green' : 'amber'}
             tooltip={couplingTooltip(s.coupling)}/>
@@ -1178,7 +1184,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         </Box>
       )}
       {/* ── THE CONTINUOUS (S1) RATING (owner 2026-09-21) ───────────────────
-          "давай сделаем кнопку, или лучше добавим ещё один элемент в меню" —
+          "let's make a button, or better add one more item to the menu" —
           the third `solve_to` option's own line, beside the limit line above
           it: the largest current this machine holds for ever at this duty's
           own saved cooling.  Green when a current came back, amber when the
@@ -1186,7 +1192,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           "something is always said" rule as the limit line. */}
       {s.coupling?.continuous_rating && (
         <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1, alignItems: 'center' }}>
-          <Cell label="Continuous rating"
+          <Cell label={tx('continuousRating')}
             value={continuousRatingLine(s.coupling) as string}
             accent={s.coupling.continuous_rating.ok
                     && s.coupling.continuous_rating.feasible !== false
@@ -1195,8 +1201,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             tooltip={continuousRatingTip(s.coupling)}/>
           {/* The manual "Use N A as the operating point" button (owner
               2026-09-21, third round) is GONE (owner, fourth round, looking at
-              it: *«ты что не можешь сам записать этот ток и прогнать солвер с
-              ним автоматом?»*) — a verified S1 run now writes the panel by
+              it: *«can't you just record this current yourself and run the
+              solver with it automatically?»*) — a verified S1 run now writes the panel by
               itself (`PhysicsDashboard`'s `s1AutoSetPlan` effect, still the
               SAME `applyS1AsOperatingPoint` setter), with the one visible
               notice + undo that rule requires instead of a click nobody
@@ -1218,7 +1224,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           value={fmt(s.T_em_avg_Nm, Math.abs(s.T_em_avg_Nm) < 0.1 ? 4 : 2)}
           unit="N·m" accent="blue"
           tooltip="Average electromagnetic torque from Maxwell stress integral over one electrical period"/>
-        <Cell label="Mech power" value={`${fmt(pShaft / 1000, 3)}`} unit="kW"
+        <Cell label={tx('mechPower')} value={`${fmt(pShaft / 1000, 3)}`} unit="kW"
           accent="blue"
           tooltip={mechKnown
             ? `At the COUPLING — ${genMode ? 'what the shaft must supply' : 'what leaves the shaft'}: `
@@ -1228,7 +1234,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             : `Rotor power T·ω from the energy balance. No bearings on this machine, so the `
               + `shaft's own friction is UNKNOWN, not zero — assign them in Mechanical → `
               + `Shaft & bearings and this becomes the coupling's number.`}/>
-        <Cell label="Elec power" value={`${fmt(pElec / 1000, 3)}`} unit="kW"
+        <Cell label={tx('elecPower')} value={`${fmt(pElec / 1000, 3)}`} unit="kW"
           accent="blue"
           tooltip={(genMode
             ? `At the TERMINALS (output) = mechanical power ${fmt(pShaft / 1000, 3)} kW − all losses `
@@ -1243,12 +1249,12 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         {/* 3 decimals: a 30 mm machine weighs ~0.05 kg, so 2 decimals showed a
             single significant digit and hid every change during optimization.
             Matches the per-component breakdown below, which already uses 3. */}
-        {/* ONE mass (user 2026-09-10: "масса у нас только одна") — the total,
+        {/* ONE mass (user 2026-09-10: "we only have one mass") — the total,
             because it is what every N·m/kg and kW/kg in this app divides by.
             The electromagnetic subset moved into the tooltip: it is no longer
-            the same quantity Ansys prints under "active mass" either, since
+            the same quantity commercial FEM prints under "active mass" either, since
             the band was folded into it. */}
-        <Cell label="Mass"
+        <Cell label={tx('mass')}
           value={fmt(s.mass_total_kg ?? s.mass_active_kg, 3)} unit="kg"
           tooltip={"IN: stator iron + rotor iron (× lamination k_f) + copper (× k_end) + magnets "
                  + "+ retaining band + shaft. OUT: housing, bearings. CAD sections × stack × the "
@@ -1257,7 +1263,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         {/* ONE efficiency, at the shaft (user 2026-09-09).  The electromagnetic
             figure the optimizer and Compare use is in the tooltip, not a
             second tile. */}
-        <Cell label="Efficiency η"
+        <Cell label={tx('efficiency')}
           value={fmt(etaOne * 100, 2) + (s.solid_loss_not_solved || !mechKnown ? '*' : '')} unit="%"
           accent={s.solid_loss_not_solved || !mechKnown ? 'amber' : accentOne}
           tooltip={(s.solid_loss_not_solved
@@ -1283,7 +1289,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             block; absent on every sine / ideal-PWM run, which is what
             "nothing else changed" looks like here. */}
         {s.coupling?.controller && (
-          <Cell label="η wall-to-shaft"
+          <Cell label={tx('wallToShaft')}
             value={fmt((s.coupling.controller.efficiency?.wall_to_shaft ?? 0) * 100, 2)}
             unit="%"
             accent={s.coupling.controller.limits_verdict === 'fail' ? 'red' : 'blue'}
@@ -1298,7 +1304,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                 ? ' At least one of the datasheet limits FAILED on this run — see the Controller tab.'
                 : '')}/>
         )}
-        <Cell label="T ripple" value={fmt(s.T_ripple_pct, 1)} unit="%"
+        <Cell label={tx('tRipple')} value={fmt(s.T_ripple_pct, 1)} unit="%"
           accent={accentRipple}
           tooltip={`Physical torque ripple (T_max − T_min)/|T_avg| over one electrical period, ` +
                    `reconstructed from the 6·k electrical orders a balanced 3-phase machine can produce ` +
@@ -1307,22 +1313,22 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                      ? `  Raw FEM pk-pk = ${s.T_ripple_raw_pct.toFixed(1)}% — the difference is sliding-band ` +
                        `stair-step noise (forbidden orders), not real ripple.`
                      : '')}/>
-        <Cell label="Torque density" value={fmt(s.torque_per_mass_Nm_kg, 3)} unit="N·m/kg"
+        <Cell label={tx('torqueDensity')} value={fmt(s.torque_per_mass_Nm_kg, 3)} unit="N·m/kg"
           tooltip="T_em / total mass (EM-active + shaft) — figure of merit for motor compactness"/>
-        <Cell label="Power density" value={fmt(s.power_per_mass_W_kg / 1000, 3)} unit="kW/kg"
+        <Cell label={tx('powerDensity')} value={fmt(s.power_per_mass_W_kg / 1000, 3)} unit="kW/kg"
           tooltip="P_mech / total mass (EM-active + shaft)"/>
       </Box>
 
       {/* ── Row 2 — losses + heat per side ────────────────────────────────── */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        <Cell label="EM losses" value={fmtK(s.P_loss_total_W)} unit="W"
+        <Cell label={tx('emLosses')} value={fmtK(s.P_loss_total_W)} unit="W"
           accent="amber"
           tooltip={"The ELECTROMAGNETIC losses — Cu + Fe (Bertotti) + magnet eddy + shaft eddy"
                  + (s.P_sleeve_W != null ? " + sleeve eddy" : "") + " — period means. "
                  + "Bearings and windage are their own cells to the right; All losses is the sum."}/>
-        <Cell label="Core (lamination)" value={fmtK(s.P_core_W)} unit="W"
+        <Cell label={tx('coreLamination')} value={fmtK(s.P_core_W)} unit="W"
           tooltip={coreTooltip(s.P_core_terms)}/>
-        <Cell label="Stranded (copper)" value={fmtK(s.P_stranded_W)} unit="W"
+        <Cell label={tx('strandedCopper')} value={fmtK(s.P_stranded_W)} unit="W"
           tooltip={"I²R (DC) + AC eddy/proximity share in the coil windings, incl. "
                  + "end-winding resistance (k_end) and ρ_Cu(T)"
                  + ((s.wire_split ?? 1) > 1
@@ -1343,10 +1349,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             start-up transient still running, so THIS number and the efficiency
             beside it are start-up values, not physics.  One marker + the
             residual in the tooltip — the tile stays one tile. */}
-        {/* No ⚠ on the number (user 2026-09-09: "восклицательный знак надо
-            убрать"): an unsettled eddy start-up is said in the tooltip and by
+        {/* No ⚠ on the number (user 2026-09-09: "the exclamation mark
+            needs to go"): an unsettled eddy start-up is said in the tooltip and by
             the amber colour, not by a mark inside the value. */}
-        <Cell label="Solid (magnets)"
+        <Cell label={tx('solidMagnets')}
           value={s.solid_loss_not_solved ? '—' : fmtK(s.P_solid_W)} unit="W"
           accent={(s.solid_loss_not_solved || s.eddy_settled === false)
                   ? 'amber' : 'default'}
@@ -1396,35 +1402,35 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                       + `that much; raise steps/period or re-run without the sweep's warm seed.`
                     : '')}/>
         {s.P_shaft_W != null && (
-          <Cell label="Shaft loss" value={fmt(s.P_shaft_W, 1)} unit="W"
+          <Cell label={tx('shaftLoss')} value={fmt(s.P_shaft_W, 1)} unit="W"
             tooltip={"Eddy-current loss in the SHAFT over the cycle (period mean) — the solid conductor inside the rotor yoke that the slot harmonics reach. On a sleeved surface-PM machine it is the rotor's largest single heat source, and it has to leave through the shaft bore or across the gap; the Thermal tab reads it from this run. Part of P_solid_W above."} />
         )}
         {s.P_mag_W != null && (
-          <Cell label="Magnet loss" value={fmt(s.P_mag_W, 1)} unit="W"
+          <Cell label={tx('magnetLoss')} value={fmt(s.P_mag_W, 1)} unit="W"
             tooltip={"Eddy-current loss in the magnets over the cycle (period mean), with the axial segmentation model applied. Heats the magnets directly — the number behind the magnet temperature on the Thermal tab. Part of P_solid_W above."} />
         )}
         {s.P_sleeve_W != null && (
-          <Cell label="Sleeve loss" value={fmt(s.P_sleeve_W, 4)} unit="W"
+          <Cell label={tx('sleeveLoss')} value={fmt(s.P_sleeve_W, 4)} unit="W"
             tooltip={"Eddy loss solved in the carbon-fibre retaining ring, inside the same coupled "
                    + "σ·∂A/∂t system as the magnets. It is milliwatts on purpose: a hoop-wound UD "
                    + "sleeve conducts ~3e4 S/m ALONG the fibres but only ~80 S/m ACROSS them, and "
                    + "the 2-D induced current is AXIAL — transverse to every fibre. It is inside "
                    + "the Solid (magnets) total and the efficiency above."}/>
         )}
-        <Cell label="Loss density" value={fmt(s.loss_density_W_kg, 1)} unit="W/kg"
+        <Cell label={tx('lossDensity')} value={fmt(s.loss_density_W_kg, 1)} unit="W/kg"
           tooltip="P_loss / mass — thermal stress indicator. Electromagnetic only: the bearings are not in the active mass."/>
       </Box>
 
       {/* ── Row 2b — heat per side + the mechanical half ─────────────────
-          Its own row (user 2026-09-08: "перенеси на другую строку, а то
-          намельчил с потерями"): thirteen cells on one grid row squeezed the
+          Its own row (user 2026-09-08: "move it to another row, it's
+          cramped with the losses"): thirteen cells on one grid row squeezed the
           labels to three letters. */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
         {/* ── HEAT TO REMOVE, per side ─────────────────────────────────
             Losses stay 2-D under the 3D toggle (same rule as the tiles
             above), so these read off `s` unchanged. */}
         {s.P_loss_stator_W != null && (
-          <Cell label="Stator heat" value={fmtK(s.P_loss_stator_W)}
+          <Cell label={tx('statorHeat')} value={fmtK(s.P_loss_stator_W)}
             unit={`W · ${pctOfLoss(s.P_loss_stator_W, s.P_loss_total_W)}`}
             tooltip={"Heat the STATOR has to shed: stator iron loss "
               + `(${fmt(s.P_core_stator_W ?? s.P_core_W, 1)} W) + all copper `
@@ -1436,7 +1442,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                  : "")}/>
         )}
         {s.P_loss_rotor_W != null && (
-          <Cell label="Rotor heat" value={fmtK(s.P_loss_rotor_W)}
+          <Cell label={tx('rotorHeat')} value={fmtK(s.P_loss_rotor_W)}
             unit={`W · ${pctOfLoss(s.P_loss_rotor_W, s.P_loss_total_W)}`}
             accent={s.P_loss_split_measured === false ? 'amber' : 'default'}
             tooltip={"Heat the ROTOR has to shed: rotor back-iron loss "
@@ -1453,7 +1459,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             Three cells so the card finally shows ONE full loss picture:
             electromagnetic + mechanical. They are '—' when the machine has no
             bearings, because an unknown loss must not be printed as zero. */}
-        <Cell label="Bearings" value={pBrg == null ? '—' : fmtK(pBrg)} unit="W"
+        <Cell label={tx('bearings')} value={pBrg == null ? '—' : fmtK(pBrg)} unit="W"
           accent={pBrg == null ? 'default' : 'amber'}
           tooltip={pBrg == null ? NO_BRG
             : `${brgLabel} by the SKF frictional-moment model: rolling + sliding + `
@@ -1462,7 +1468,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               + `for the pair.`
               + ` Unbalanced magnetic pull, coupling side loads and any shaft seal `
               + `are NOT modelled.` + MECH_SRC}/>
-        <Cell label="Windage"
+        <Cell label={tx('windage')}
           value={pWind != null ? fmtN(pWind, 2) : '—'} unit="W"
           tooltip={pWind != null
             ? `Air drag on the rotor: gap Couette friction `
@@ -1476,7 +1482,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                            + `are reported there as not modelled.` : '')
               + MECH_SRC
             : NO_BRG}/>
-        <Cell label="All losses"
+        <Cell label={tx('allLosses')}
           value={lossAll == null ? '—' : fmtK(lossAll)} unit="W"
           accent={lossAll == null ? 'default' : 'amber'}
           tooltip={lossAll == null ? NO_BRG
@@ -1517,7 +1523,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             accent="amber"
             tooltip={`DELTA: the current in ONE winding = the line setpoint (${fmt(s.I_phase_rms_A, 1)} A on the three leads) ÷ √3. This is what the field was driven with and what J coil is billed on. The inverter never sees it.`}/>
         )}
-        <Cell label="J coil" value={s.J_coil_A_per_mm2 != null ? fmt(s.J_coil_A_per_mm2, 1) : '—'} unit="A/mm²"
+        <Cell label={tx('jCoil')} value={s.J_coil_A_per_mm2 != null ? fmt(s.J_coil_A_per_mm2, 1) : '—'} unit="A/mm²"
           accent={s.J_coil_A_per_mm2 == null ? 'default'
                   : s.J_coil_A_per_mm2 <= 20 ? 'green'
                   : s.J_coil_A_per_mm2 <= 40 ? 'amber' : 'red'}
@@ -1527,19 +1533,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       {/* ── Row 4 — winding: section, fill, lead, resistance ──────────────── */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
         {s.A_phase_mm2 != null && (
-          <Cell label="Phase section" value={fmt(s.A_phase_mm2, 2)} unit="mm²"
+          <Cell label={tx('phaseSection')} value={fmt(s.A_phase_mm2, 2)} unit="mm²"
             tooltip={"Copper cross-section the PHASE current flows through: one strand (wire_width × wire_height — one STRIP when the wire is split) × the parallel paths × the strands in hand. A split row's strips are SERIES turns, not extra paths, so they are not in it. I_phase / this area is exactly the J coil cell above — the two cross-check each other. Nearest lead cable: "
               + (pickCable(s.A_phase_mm2)?.awg ?? '—')}/>
         )}
         {s.slot_fill_pct != null && (
-          <Cell label="Fill factor" value={fmt(s.slot_fill_pct, 1)} unit="%"
+          <Cell label={tx('fillFactor')} value={fmt(s.slot_fill_pct, 1)} unit="%"
             accent={s.slot_fill_pct <= 60 ? 'green' : s.slot_fill_pct <= 75 ? 'amber' : 'red'}
             tooltip={`Measured conductor area over the winding window the teeth leave — both taken from the CAD polygons the mesher receives, not from a nominal slot rectangle. ${s.A_copper_slotted_mm2?.toFixed(0) ?? '—'} mm² of copper in a ${s.A_slot_mm2?.toFixed(0) ?? '—'} mm² window. Rectangular wire wound by hand reaches ~45–60 %; above ~75 % the winding stops being buildable, and the remainder is insulation, wire spacing and the space the winder needs.`}/>
         )}
         {s.A_phase_mm2 != null && (() => {
           const c = pickCable(s.A_phase_mm2);
           return c ? (
-            <Cell label="Lead cable" value={c.awg.replace('awg', ' AWG')} unit={`Ø${c.od_mm.toFixed(1)} mm`}
+            <Cell label={tx('leadCable')} value={c.awg.replace('awg', ' AWG')} unit={`Ø${c.od_mm.toFixed(1)} mm`}
               tooltip={`Catalogue silicone lead (${c.strands}): ${c.area_mm2} mm² copper — the first size at or above the winding's ${s.A_phase_mm2!.toFixed(2)} mm² (a conductor is never rounded down). Conductor Ø${c.d_mm} mm, insulation O.D. Ø${c.od_mm}±0.1 mm (wall ${c.thk_mm} mm), ${c.r_ohm_km} Ω/km, rated ${c.i_rated_A} A continuous / ${c.i_max_A} A peak, ${c.roll_m} m per roll.`
                 + (c.suspect ? ` ⚠ supplier sheet: ${c.suspect}.` : '')}/>
           ) : null;
@@ -1547,21 +1553,21 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         {/* R with end-winding — shown when the run carries it (old stored
             runs simply lack the cells). */}
         {s.R_phase_ohm != null && (
-          <Cell label="R phase" value={fmt(s.R_phase_ohm * 1000 * rf, 2)} unit="mΩ"
+          <Cell label={tx('rPhase')} value={fmt(s.R_phase_ohm * 1000 * rf, 2)} unit="mΩ"
             tooltip={(r25 && solveT != null
               ? `At 25 °C (bench-check view; solved at ${fmt(solveT, 0)} °C — copper ρ scaled by 0.393 %/°C). `
               : 'At the coil temperature of this solve. ')
               + 'END-WINDING INCLUDED: R = P_cu/(3·I²) with P_cu = ρ_Cu(T)·J²·V_cu·k_end. The same R the copper-loss cell is billed from.'}/>
         )}
         {s.R_line_line_ohm != null && (
-          <Cell label="R line-line" value={fmt(s.R_line_line_ohm * 1000 * rf, 2)} unit="mΩ"
+          <Cell label={tx('rLineLine')} value={fmt(s.R_line_line_ohm * 1000 * rf, 2)} unit="mΩ"
             tooltip={(r25 && solveT != null ? `At 25 °C (bench-check view). ` : '')
               + (isDelta
                  ? '⅔ × R_winding — one winding in parallel with the other two in series. What an ohmmeter across two leads of the delta reads. Star-equivalent per-phase R = R_winding / 3.'
                  : '2 × R_phase — the terminal-to-terminal resistance of the isolated-neutral star this machine is driven as (the voltage circuit is line-to-line for the same reason). What an ohmmeter across two leads reads.')}/>
         )}
         {((s.wire_parallel ?? 1) > 1 || (s.wire_split ?? 1) > 1) && (
-          <Cell label="Turns/coil" value={fmt(s.turns_per_coil ?? 0, 0)}
+          <Cell label={tx('turnsCoil')} value={fmt(s.turns_per_coil ?? 0, 0)}
             unit={[(s.wire_parallel ?? 1) > 1 ? `${s.wire_parallel} in hand` : '',
                    (s.wire_split ?? 1) > 1
                      ? `${s.wire_split} strips in series`
@@ -1610,7 +1616,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               ? ` In the LOADED iron the magnets link ${fmt(s.psi_pm_frozen_Wb * 1000, 2)} mWb (${fmt(-(s.psi_pm_sag_pct ?? 0), 1)}%) — measured on the same frozen-permeability solve as Ld/Lq. That difference is what the old chord Ld divided by i_d and called an inductance.`
               : '')}/>
         {s.B_gap_mean_T != null && (
-          <Cell label="B gap mean" value={fmt(s.B_gap_mean_T, 3)} unit="T"
+          <Cell label={tx('bGapMean')} value={fmt(s.B_gap_mean_T, 3)} unit="T"
             tooltip={'Mean |B| over the AIR-GAP clearance, averaged over the electrical period. Area-weighted over the elements between the outermost rotating metal and the stator bore — a mean of the field, not of the mesh. It is the whole gap under load, magnet flux and armature reaction together, so it is not the no-load fundamental B_g1 a sizing formula asks for.'}/>
         )}
         <Cell label="Lq/Ld"
@@ -1633,7 +1639,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                 + (ind?.Lxy_min_mH != null ? `Range ${ind.Lxy_min_mH.toFixed(4)}–${(ind.Lxy_max_mH ?? 0).toFixed(4)} mH. ` : '')
                 + (s.six_phase?.inductances_error ? 'Not measured: ' + s.six_phase.inductances_error : '')
                 + 'The Controller ripple takes it automatically.'}/>
-            <Cell label="Per set" value={c6.perSet}
+            <Cell label={tx('perSet')} value={c6.perSet}
               tooltip={'Each of the two in-phase sets: half the phase current, the full phase '
                 + `voltage (fundamental peak). Set 1 = path ${(s.six_phase?.set1_paths ?? []).join(', ')}, `
                 + `set 2 = path ${(s.six_phase?.set2_paths ?? []).join(', ')}; each on its own inverter.`}/>
@@ -1650,7 +1656,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           tooltip={kvNl && s.KV_noload_rpm_per_V_line != null
             ? 'NO-LOAD KV: rpm / (√3·ω_e·ψ_PM) — back-EMF fundamental from the run\'s cached I=0 probe; what spinning the motor on the bench reads. Harmonics excluded (fundamental convention). Loaded KV: '
               + fmt(s.KV_rpm_per_V_line, 1) + ' rpm/V.'
-            : 'rpm / V_LINE PEAK — the max/max convention, the same peak shown in the voltage row above (and the one an Ansys induced-voltage table reports). Loaded voltage: at field-weakening γ it differs from the no-load back-EMF KV'
+            : 'rpm / V_LINE PEAK — the max/max convention, the same peak shown in the voltage row above (and the one a commercial FEM induced-voltage table reports). Loaded voltage: at field-weakening γ it differs from the no-load back-EMF KV'
               + (s.KV_noload_rpm_per_V_line != null ? ` (${fmt(s.KV_noload_rpm_per_V_line, 1)} rpm/V — toggle in the header).` : '.')}/>
         {(() => {
           // Kt beside KV — the other controller-facing constant.  Measured at
@@ -1679,13 +1685,13 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                    + "so a cold-datasheet Km reads higher than the same machine hot."}/>
         )}
         {s.Km_per_mass_Nm_sqrtW_kg != null && (
-          <Cell label="Km / mass" value={fmt(s.Km_per_mass_Nm_sqrtW_kg, 3)} unit="N·m/(√W·kg)"
+          <Cell label={tx('kmMass')} value={fmt(s.Km_per_mass_Nm_sqrtW_kg, 3)} unit="N·m/(√W·kg)"
             tooltip={"Specific motor constant Km / total mass (EM-active + shaft) — the actuator figure of merit "
                    + "that survives scaling: torque density says how much torque per kg, Km/m says how much of it "
                    + "you can HOLD continuously per kg for a given copper heat budget."}/>
         )}
         {s.rotor_inertia?.J_kg_m2 != null && (
-          <Cell label="Rotor inertia" value={fmt(s.rotor_inertia.J_kg_cm2, 2)} unit="kg·cm²"
+          <Cell label={tx('rotorInertia')} value={fmt(s.rotor_inertia.J_kg_cm2, 2)} unit="kg·cm²"
             tooltip={"Rotor moment of inertia J about the shaft axis — ∬r²·dA over the same CAD polygons the mass uses "
                    + "(rotor iron × lamination k_f, magnets and shaft solid) × stack × density. "
                    + `= ${Number(s.rotor_inertia.J_kg_m2).toExponential(3)} kg·m². Breakdown: iron ${fmt(s.rotor_inertia.rotor_iron * 1e4, 2)}, `
@@ -1704,7 +1710,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       {(dmKept != null || s.saturation?.droop_pct != null || s.end3d?.k_flux != null) && (
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
         {dm != null && dmLoss != null && dmKept != null && (
-          <Cell label="Demag koef" value={`≥ ${fmt(dmKept, 2)}`} unit="%"
+          <Cell label={tx('demagKoef')} value={`≥ ${fmt(dmKept, 2)}`} unit="%"
             accent={dmLoss < 1 ? 'green' : dmLoss < 5 ? 'amber' : 'red'}
             tooltip={`Torque RETAINED after irreversible demag: 100 % = magnets intact (loss ≤ ${fmt(dmLoss, 2)} %). `
                    + "Demagnetisation coefficient — the TORQUE the motor loses to irreversible demag: the "
@@ -1726,7 +1732,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                    + "matching the real magnet temperature. Shown only when the run modelled demag."}/>
         )}
         {dmCorner != null && (
-          <Cell label="⚑ Br corner" value={fmt(dmCorner.br_pct, 1)} unit="%"
+          <Cell label={tx('brCorner')} value={fmt(dmCorner.br_pct, 1)} unit="%"
             tooltip={'Worst single magnet element — a corner flag, not the magnet\'s figure (that is Demag koef). '
                    + 'A sharp-corner value that does not converge with mesh refinement'
                    + (dmCorner.r_mm != null && dmCorner.theta_deg != null
@@ -1735,7 +1741,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                    + '.'}/>
         )}
         {s.saturation?.droop_pct != null && (
-          <Cell label="Saturation koef"
+          <Cell label={tx('saturationKoef')}
             value={fmt(Math.min(100, 100 - s.saturation.droop_pct), 1)} unit="%"
             accent={s.saturation.droop_pct < 5 ? 'green' : s.saturation.droop_pct < 15 ? 'amber' : 'red'}
             tooltip={`Torque RETAINED against iron SATURATION at this operating point: 100 % = linear iron `
@@ -1768,7 +1774,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           // linear iron, fresh magnets — this operating point delivers.
           const total = dmKept / 100 * (100 - s.saturation.droop_pct);
           return (
-            <Cell label="Total koef" value={fmt(total, 1)} unit="%"
+            <Cell label={tx('totalKoef')} value={fmt(total, 1)} unit="%"
               accent={total > 95 ? 'green' : total > 85 ? 'amber' : 'red'}
               tooltip={"Overall torque retention vs the IDEAL machine — linear iron AND fresh magnets: "
                      + `Demag koef × Saturation koef = ${fmt(dmKept, 2)} % × ${fmt(100 - s.saturation.droop_pct, 1)} % `
@@ -1812,14 +1818,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         )}
         <Box sx={{ display: 'grid', gap: 0.75,
           gridTemplateColumns: 'repeat(auto-fit, minmax(118px, 1fr))' }}>
-          <Cell label="P charge" value={fmt(b.P_charge_W, 1)} unit="W"
+          <Cell label={tx('pCharge')} value={fmt(b.P_charge_W, 1)} unit="W"
             accent={chg ? 'green' : 'red'}
             tooltip={"Watts reaching the pack, from the ENERGY BALANCE: mechanical power in ("
                    + `${fmt(b.P_mech_in_W, 1)} W) minus every loss this card reports (${fmt(b.P_loss_machine_W, 1)} W). `
                    + "This is the headline rather than the DC-link integral because the 2-D circuit does not "
                    + "carry the iron loss or the end-winding copper — both are post-processed and never flow "
                    + "through its terminals. " + (b.bridge_model || '')}/>
-          <Cell label="I charge" value={fmt(b.I_charge_A, 2)} unit="A DC"
+          <Cell label={tx('iCharge')} value={fmt(b.I_charge_A, 2)} unit="A DC"
             accent={b.over_i_charge_max ? 'red' : chg ? 'green' : 'default'}
             tooltip={`P_charge / V_bus = ${fmt(b.P_charge_W, 1)} W / ${fmt(b.V_bus_V, 2)} V. `
                    + (b.i_charge_max_A != null
@@ -1827,19 +1833,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                          + `headroom ${fmt(b.i_charge_headroom_A ?? 0, 1)} A. ` : '')
                    + "Negative = this operating point EMPTIES the pack."}/>
           {b.C_rate != null && (
-            <Cell label="C-rate" value={fmt(b.C_rate, 2)} unit="C"
+            <Cell label={tx('cRate')} value={fmt(b.C_rate, 2)} unit="C"
               accent={b.C_rate > 2 ? 'amber' : 'default'}
               tooltip={`I_charge over the pack capacity (${fmt(b.capacity_ah ?? 0, 1)} Ah)`
                      + `${phTip('capacity_ah')}.`}/>
           )}
-          <Cell label="V bus" value={fmt(b.V_bus_V, 2)} unit="V"
+          <Cell label={tx('vBus')} value={fmt(b.V_bus_V, 2)} unit="V"
             tooltip={`Under load. Open circuit ${fmt(b.V_oc_V, 2)} V${phTip('v_oc')}, `
                    + `pack R ${fmt(b.R_pack_ohm * 1000, 1)} mΩ `
                    + `(${fmt(b.r_int_mohm_per_cell ?? 0, 1)} mΩ/cell${phTip('r_int_mohm')}), `
                    + `so charging lifts it by ${fmt(b.V_bus_rise_V, 2)} V. `
                    + "No state-of-charge model: V_oc is the pack nominal, not a point on a charge curve."}/>
           {b.eta_charge != null && (
-            <Cell label="η charge" value={fmt(b.eta_charge * 100, 1)} unit="%"
+            <Cell label={tx('charge')} value={fmt(b.eta_charge * 100, 1)} unit="%"
               accent={b.eta_charge > 0.85 ? 'green' : b.eta_charge > 0.6 ? 'amber' : 'red'}
               tooltip={"Shaft in → pack in. P_charge / P_mech_in = "
                      + `${fmt(b.P_charge_W, 1)} / ${fmt(b.P_mech_in_W, 1)} W. `
@@ -1847,14 +1853,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                      + "a real ESC subtracts its own conduction and switching loss on top."}/>
           )}
           {b.I_dc_mean_A != null && (
-            <Cell label="I dc (circuit)" value={fmt(-b.I_dc_mean_A, 2)} unit="A"
+            <Cell label={tx('iDcCircuit')} value={fmt(-b.I_dc_mean_A, 2)} unit="A"
               tooltip={"DC-link current straight off the modulator's switch states: "
                      + "⟨Σ s_phase·i_phase⟩ integrated exactly across the switching edges inside every solve "
                      + `step. rms ${fmt(b.I_dc_rms_A ?? 0, 2)} A, ripple ${fmt(b.I_dc_ripple_pp_A ?? 0, 2)} A p-p. `
                      + "Sign flipped here so positive means INTO the pack."}/>
           )}
           {b.balance_gap_W != null && (
-            <Cell label="Balance gap" value={fmt(b.balance_gap_W, 1)} unit="W"
+            <Cell label={tx('balanceGap')} value={fmt(b.balance_gap_W, 1)} unit="W"
               accent={Math.abs(b.balance_gap_pct ?? 0) < 25 ? 'default' : 'amber'}
               tooltip={`Switched (${fmt(b.P_charge_circuit_W ?? 0, 1)} W) minus balance `
                      + `(${fmt(b.P_charge_W, 1)} W) = ${fmt(b.balance_gap_pct ?? 0, 1)} %. `
@@ -1862,12 +1868,12 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                      + " It is the model's own cross-check: two independent routes to the same watts."}/>
           )}
           {b.P_pack_r_loss_W != null && (
-            <Cell label="Pack I²R" value={fmt(b.P_pack_r_loss_W, 1)} unit="W"
+            <Cell label={tx('packIR')} value={fmt(b.P_pack_r_loss_W, 1)} unit="W"
               tooltip={"Burnt in the pack's own internal resistance while charging. NOT a machine loss — "
                      + "it is deliberately outside the motor's efficiency so the two are never conflated."}/>
           )}
           {b.bus_coupling && (
-            <Cell label="Bus coupling"
+            <Cell label={tx('busCoupling')}
               value={b.bus_coupling.converged ? `${b.bus_coupling.iterations} it` : 'not conv.'}
               accent={b.bus_coupling.converged ? 'green' : 'red'}
               tooltip={"Fixed point V_bus = V_oc + I_charge·R_pack around the whole transient — charging raises "
@@ -1879,7 +1885,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                      + (b.bus_coupling.converged ? '' : ` — ${b.bus_coupling.note || ''}`)}/>
           )}
           {b.charge_search && (
-            <Cell label="Max charge"
+            <Cell label={tx('maxCharge')}
               value={`${fmt(b.charge_search.best.V1_peak_V, 2)} V`}
               accent="blue"
               tooltip={`Best (V₁, δ) found: ${fmt(b.charge_search.best.V1_peak_V, 3)} V peak at `
@@ -1921,7 +1927,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
               <Typography sx={{ fontSize: 11, fontFamily: 'monospace',
                 color: isRef ? 'var(--text-3)' : 'var(--text-1)' }}>
                 {isRef
-                  ? <>not billed · <b>{fmt(c.mass_modelled_kg ?? 0, 3)} kg</b> modelled</>
+                  ? <>not billed · <b>{fmt(c.mass_modelled_kg ?? 0, 3)} kg</b> {tx('modelled')}</>
                   : <><b>{fmt(c.mass_kg, 3)} kg</b> · {fmt(pct, 1)}%</>}
               </Typography>
             </Box>

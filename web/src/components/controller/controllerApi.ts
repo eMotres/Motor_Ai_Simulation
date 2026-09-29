@@ -227,8 +227,8 @@ export const getLast = () =>
 
 /* ── settings — persisted WITH the configuration (owner 2026-09-22) ──────── */
 //
-// "при сохранении мотора текущий контроллер тоже должен сохраняться со всеми
-// настройками" — the Controller tab's own FORM, never a solve result, saved
+// "when saving the motor, the current controller should also be saved with
+// all its settings" — the Controller tab's own FORM, never a solve result, saved
 // on the same footing as the battery block. `null`/absent numeric fields mean
 // "the duty's own" — the SAME blank-means-duty-default convention the panel's
 // number boxes already use (Carrier / DC link).
@@ -587,8 +587,8 @@ export function formStateFromSettings(
   for (const m of rows) mapping[m.coil] = `${m.bridge}/${m.leg}`;
   // A per-bridge override in the saved block (from the API/CLI, or an older
   // save) is IGNORED here on purpose — the web only ever shows and writes the
-  // one global `devices_parallel` (owner 2026-09-22: «Давай сделаем одно
-  // общее число»). `settingsForSave` below then clears it on the next save.
+  // one global `devices_parallel` (owner 2026-09-22: «let's make one
+  // shared number»). `settingsForSave` below then clears it on the next save.
   const areaBasis: 'heatsink' | 'plate' = cooling.plate_area_cm2 != null ? 'plate'
     : cooling.heatsink_area_cm2_per_device != null ? 'heatsink' : fallback.areaBasis;
   return {
@@ -671,8 +671,8 @@ export interface ControllerMirror {
 /**
  * Whether a mirrored settings snapshot belongs to the motor being saved.
  *
- * Owner 2026-09-22, second round: *"при сохранении мотора текущий контроллер
- * тоже должен сохраняться со всеми настройками"* — not only the Controller
+ * Owner 2026-09-22, second round: *"when saving the motor, the current
+ * controller should also be saved with all its settings"* — not only the Controller
  * tab's own button.  ``ActiveFamilyStrip``'s "Save to duty" reads
  * ``ctrl.settings`` right after the duty save and PATCHes it in the same
  * flow — but ONLY when the tag matches: a mirror left over from a DIFFERENT
@@ -747,7 +747,7 @@ export function controllerSavedFieldsLine(block: ControllerSettings): string {
  * server-side (V_dc, carrier, current, power, connection, rpm — see
  * ``routes.controller._build_request``) is OMITTED here when blank, never
  * sent as ``''`` or ``null``.  Owner 2026-09-22 audit ("Error: v_dc_V is
- * required" — «проверь всё»): a blank number box must vanish from the wire
+ * required" — «check everything»): a blank number box must vanish from the wire
  * entirely (``JSON.stringify`` drops an ``undefined`` property), so the
  * route's own fallback chain runs — sending ``''`` would instead read as
  * "the request provided v_dc_V" and either crash on `float('')` or, worse,
@@ -779,8 +779,8 @@ export interface ControllerSolveBody {
   mapping?: ControllerMappingRowSettings[];
   // Deliberately no `devices_parallel_by_bridge` here — the web only ever
   // sends the one global `devices_parallel`; a per-bridge override remains a
-  // backend/API-CLI-only feature (owner 2026-09-22: «Давай сделаем одно
-  // общее число»).
+  // backend/API-CLI-only feature (owner 2026-09-22: «let's make one
+  // shared number»).
 }
 
 const blank = (v: NumOrBlank): number | undefined => (v === '' ? undefined : v);
@@ -866,8 +866,8 @@ export interface ResolvedPoint {
 
 /**
  * THE CARRIER IS THE CONTROLLER'S (owner 2026-09-24, on a screenshot of the
- * greyed "Carrier 20,000 Hz" placeholder: «Это значение нужно задавать в
- * контроллере; PWM нужно выкинуть из Electromagnetic»).
+ * greyed "Carrier 20,000 Hz" placeholder: «This value needs to be set in
+ * the Controller; PWM needs to be dropped from Electromagnetic»).
  *
  * The Carrier box is a NORMAL value, never a greyed placeholder borrowed from
  * another tab.  A configuration whose saved block has no carrier yet gets the
@@ -944,10 +944,10 @@ export const getCoolingFromThermal = (die?: string, config?: string, duty?: stri
   return fetch(`${API}/api/controller/cooling_from_thermal?${p}`).then(j<CoolingFromThermal>);
 };
 
-/* ── AUTOMATIC cooling inheritance from Thermal (owner 2026-09-25): "Когда я
- * ставлю air или liquid, он должен брать параметры охлаждения из Thermal.
- * Я там их устанавливаю для мотора — те же и для контроллера по умолчанию,
- * но можно изменить, чтобы сделать разными."
+/* ── AUTOMATIC cooling inheritance from Thermal (owner 2026-09-25): "When I
+ * set air or liquid, it should take the cooling parameters from Thermal.
+ * I set them there for the motor — the same ones for the controller by
+ * default, but it should be possible to change them to make them different."
  *
  * `GET /api/controller/thermal_cooling` reports, for EACH of the three
  * cooling modes, what it would inherit from Thermal right now — the panel

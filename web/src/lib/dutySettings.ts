@@ -7,8 +7,8 @@
 // The panel's operating point lives in one global sim.* block, so it used to be
 // shared by every duty of a configuration: define "S2 peak" at 200 °C, click
 // back to "S1 cont" — and S1 was still at 200 °C, because nothing ever put S1's
-// own temperature back (user 2026-09-01: "почему эти режимы перезаписываются —
-// токи и температуры должны быть разные для каждого duty").
+// own temperature back (user 2026-09-01: "why do these regimes get
+// overwritten — currents and temperatures must be different for every duty").
 //
 // Two layers answer "what is this duty's point?", in priority order:
 //   1. the LOCAL OVERLAY kept here — the user's un-saved edits for THAT duty,
@@ -61,8 +61,8 @@ export const DUTY_OP_KEYS: readonly string[] = [
   // all", which is a way of working rather than a property of a duty.
   'sim.coupledSolveTo',
   // The duty's MATERIALS — a PARTIAL ASSIGNMENT `{part: material}` (user
-  // 2026-09-01: "смена магнитов не сохраняется в duty — нужно запоминать какие
-  // магниты, и не только магниты: все материалы, для каждого duty").  A duty of
+  // 2026-09-01: "changing magnets isn't saved in the duty — we need to
+  // remember which magnets, and not only magnets: all materials, for each duty").  A duty of
   // this project is a full thermal scenario ("peak 200C wire 120C NdFeB"), so
   // every material it is characterised with belongs to it, not to the machine.
   // It rides the per-request ?mat= payload only — the machine's own materials

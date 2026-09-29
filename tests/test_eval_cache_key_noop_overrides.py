@@ -1,8 +1,8 @@
 """The sweep/optimizer eval cache must key on the EFFECTIVE machine, not on
 which parameters a request happened to name.
 
-User 2026-09-06: "запустил sweep и добавил ещё один параметр (толщину
-перемычки) — почему он не вывел предыдущие измерения на график?"  The new
+User 2026-09-06: "I ran a sweep and added one more parameter (bridge
+thickness) — why didn't it plot the previous measurements?"  The new
 sweep named rotor_house_height at its base value on a third of its points;
 that extra name alone made every key miss the previous sweep's entries for
 the very same machines.  `_override_is_noop` drops such overrides from the key."""

@@ -14,7 +14,7 @@ request:
 1. auth   — ``Bearer emk_…`` key or ``Bearer emo_…`` OAuth token
             -> 401 + WWW-Authenticate: Bearer resource_metadata=…
 2. scope  — the tool's scope must be on the key            -> 403
-3. quota  — per key per minute / per day, ``tools/call`` only -> 429 + Retry-After
+3. fair use — per key per minute / per day, ``tools/call`` only -> 429 + Retry-After
 4. audit  — one line per tool call (user, key, tool, args summary, status)
 
 then hands the request to the SDK with the ``Principal`` in the ASGI scope.
@@ -233,7 +233,7 @@ def _register_stage3(srv) -> None:
 
     @srv.tool(annotations=wr, description=(
         "Queue a FEM simulation of a draft on the user's own job queue (scope "
-        "simulate; daily quota, 429 when used up). what: em (electromagnetic "
+        "simulate; daily fair-use limit, 429 when used up). what: em (electromagnetic "
         "transient) | thermal (one EM pass + one thermal solve) | coupled (EM <-> "
         "thermal loop to steady temperatures). steps: time steps per electrical "
         "period (optional). Returns job_id at once; the solve takes minutes — "
@@ -330,7 +330,7 @@ def verify_any(authorization):
 
 
 class McpGate:
-    """Outermost ASGI middleware: ``/mcp`` -> auth/scope/quota/audit -> SDK."""
+    """Outermost ASGI middleware: ``/mcp`` -> auth/scope/fair-use/audit -> SDK."""
 
     def __init__(self, app) -> None:
         self.app = app
@@ -391,16 +391,16 @@ class McpGate:
                     [("retry-after", str(retry))])
                 return
             if tool == "simulate":
-                # The DAILY simulation quota (Stage 3), counted from the job
+                # The DAILY simulation fair-use limit (Stage 3), counted from the job
                 # queue's own records of this account's agent runs.
                 from motor_ai_sim import agent_designs as _ad
                 ok, retry, used, lim = _ad.check_quota(principal)
                 if not ok:
                     _keys.audit(principal=principal, method="tools/call", tool=tool,
-                                args=args, status=429, note=f"simulate quota {used}/{lim}")
+                                args=args, status=429, note=f"simulate fair-use limit {used}/{lim}")
                     await _send_json(send, 429, _rpc_error(
                         m.get("id"), -32029,
-                        f"daily simulation quota reached ({used}/{lim}); "
+                        f"daily simulation fair-use limit reached ({used}/{lim}); "
                         f"retry after {retry} s"), [("retry-after", str(retry))])
                     return
             _keys.audit(principal=principal, method="tools/call", tool=tool,

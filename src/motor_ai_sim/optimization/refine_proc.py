@@ -537,7 +537,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     else:
         v_line_peak = float(d["V_peak"]) * (1.0 if _delta else math.sqrt(3))
     # KV = rpm / V_line_peak — the max/max convention the Simulation tile and the
-    # user's Ansys table use (bef2ed2, 2026-08-04).  It divided by the
+    # user's commercial FEM table use (bef2ed2, 2026-08-04).  It divided by the
     # FUNDAMENTAL line-to-line rms, which reads ~sqrt(2) higher and contradicted
     # a by-hand rpm / V_LINE PEAK check off the cell beside it (49.3 vs 34.7 on
     # the 150 mm at 4000 rpm).  Computed HERE, below v_line_peak, because that is
@@ -595,8 +595,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # Under SB_SEED_FROM_PREVIOUS (sweeps/optimizer only) a point starts
         # from the previous point's settled eddy field and its Br ratchet map
         # instead of re-solving the warm-up march and a whole demag pre-pass
-        # period — "проход демагнитизации делается для каждого sweep только
-        # один раз".  The scan cache deliberately does NOT key on it (see
+        # period — "the demagnetization pass is done once per sweep only".
+        # The scan cache deliberately does NOT key on it (see
         # `_eval_cache_key`), so these three fields are how a stored point says
         # for itself what it was: which parent, and how many frames it skipped.
         "warm_seeded": bool(d.get("warm_seeded", False)),

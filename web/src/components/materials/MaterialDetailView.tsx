@@ -330,7 +330,7 @@ const ConductorDetail: React.FC<{ name: string; data: ConductorData }> = ({ name
 
 
 // ─── Mechanical properties, for every card that carries them ─────────────────
-// User 2026-09-09: "где, кстати, механические свойства материалов?" — the
+// User 2026-09-09: "where, by the way, are the mechanical properties of materials?" — the
 // rotor-stress solver has been sizing bands and judging magnets on these
 // numbers since 2026-09-05, and the card that describes the material did not
 // show one of them.  Rendered only when the card actually carries some, so a
@@ -430,8 +430,8 @@ const CAT_LABEL: Record<string, string> = {
 // ─── Editable scalar fields per category ──────────────────────────────────────
 type FieldDef = { key: string; label: string; unit?: string; type?: 'number' | 'text' };
 //
-// EVERY scalar the card carries, not a chosen few (user 2026-09-10: "добавь
-// все свойства в редактирование").  What is deliberately NOT here: the B-H and
+// EVERY scalar the card carries, not a chosen few (user 2026-09-10: "add
+// all the properties to editing").  What is deliberately NOT here: the B-H and
 // core-loss CURVES, which are tables and need their own editor, and the two
 // derived values (resistivity, energy product), which `recomputeDerived` keeps
 // in step so a hand-typed one could only ever disagree.

@@ -85,7 +85,7 @@ const OP_VARS = new Set(['current_a', 'gamma_deg']);
 // Leading (blue) columns = the variables that actually varied in the sweep
 // (geometry overrides + operating point); the rest are FEM outputs. Every metric
 // already rides on each point (the backend spreads the full eval result). Click
-// any header to sort asc/desc. Losses map to the Ansys breakdown:
+// any header to sort asc/desc. Losses map to the commercial FEM breakdown:
 // core = P_fe; copper winding is split into Cu DC (I²R, INCLUDES the end-windings via
 // k_end → grows with tooth_width) and Cu AC (proximity/eddy in the strands); solid =
 // P_mag + P_shaft (eddy in solid conductors).
@@ -323,7 +323,7 @@ const SweepStudyPanel: React.FC = () => {
   // rate and a bar that creeps INSIDE a point — so the screen visibly lives
   // even when the server number stands still for minutes.
   const liveRef = useRef({ t0: 0, lastDone: -1, lastDoneT: 0 });
-  // Owner 2026-09-19: "нужно, чтобы автоматом это было видно после сбоя" — a
+  // Owner 2026-09-19: "it needs to be visible automatically after a crash" — a
   // sweep the backend resumed after an API restart (sweep_journal.py /
   // sweep_resume.py) says so on screen without the user doing anything.  The
   // backend stamps `resumed_from_restart` on the SAME progress payload this
@@ -354,8 +354,8 @@ const SweepStudyPanel: React.FC = () => {
     const now = Date.now() / 1000;
     const lv = liveRef.current;
     if (!lv.t0) {
-      // Re-entering the tab mid-run (user 2026-09-06: "вышел из sweep, зашёл
-      // обратно и опять индикатор начал с начала — уже не первый раз"): the
+      // Re-entering the tab mid-run (user 2026-09-06: "I left sweep, came
+      // back and the indicator started over again from the beginning — not the first time"): the
       // in-flight points did NOT start now.  Anchor the current-point clock to
       // when they really started — the run start for the first batch, the
       // backend's measured cadence for later ones — so the bar and the ETA
@@ -406,8 +406,8 @@ const SweepStudyPanel: React.FC = () => {
 
   /** Does a stored result belong to the machine that is loaded RIGHT NOW?
    *
-   *  User 2026-09-10: "опять косяк, я запускал sweep одних параметров, а в
-   *  результате получил старый sweep от другого мотора".  `.last_scan.json` is
+   *  User 2026-09-10: "glitch again, I ran a sweep of one set of parameters, and
+   *  got back an old sweep from a different motor".  `.last_scan.json` is
    *  reloaded into the backend's scan state on every restart, and this panel
    *  adopted it on mount as its chart — variable cards and all — with nothing
    *  saying it was computed on a different motor.  The result now carries the
@@ -477,8 +477,8 @@ const SweepStudyPanel: React.FC = () => {
       // (then its ranges may be the user's edits and are kept).  The old rule —
       // "skip when ANY geometry variable is active" — let a freshly created
       // store's default variable (Cut Width 3…6 from the schema defaults) block
-      // the restore of the real run (user 2026-09-07: "опять параметры
-      // переменных оптимизации не восстановились после загрузки").
+      // the restore of the real run (user 2026-09-07: "the optimization
+      // variable parameters didn't restore again after loading").
       const activeGeo = new Set(Object.entries(cur)
         .filter(([k, v]: any) => v?.mode !== 'fixed' && !OP_VARS.has(k)).map(([k]) => k));
       const runGeo = new Set(vars.map((v: any) => v?.name).filter((k: any) => k && !OP_VARS.has(k)));
@@ -697,7 +697,7 @@ const SweepStudyPanel: React.FC = () => {
   }, [result, sentOps, connectBy, k3dChart]);
 
   // A stale zoom window survives into the NEXT result set and shows a sliver
-  // of the new data ("а где график?" — the curves ran off the clipped view).
+  // of the new data ("where's the chart?" — the curves ran off the clipped view).
   // New series → full view, always.
   useEffect(() => { setZoom(null); setShowAll(false); }, [series]);
 
@@ -947,7 +947,7 @@ const SweepStudyPanel: React.FC = () => {
           T_em_avg_Nm: T, T_ripple_pct: Number(p.ripple) || 0, P_mech_W: Pmech,
           V_phase_peak_V: Vpk, V_phase_rms_V: Vrms, V_line_peak_V: Vlpk, V_line_rms_V: Vlrms,
           // KV = rpm / V_PEAK — the max/max convention the Simulation tile and the
-          // user's Ansys table use (see refine_proc / simulation.py, 2026-08-04);
+          // user's commercial FEM table use (see refine_proc / simulation.py, 2026-08-04);
           // dividing by rms read ~√2 high and contradicted a by-hand check.
           KV_rpm_per_V_phase: Vpk > 1 ? rpm / Vpk : 0,
           KV_rpm_per_V_line: Number(r2.KV_rpm_per_V_line) || (Vlpk > 1 ? rpm / Vlpk : 0),
@@ -1305,7 +1305,7 @@ const SweepStudyPanel: React.FC = () => {
                       // `fill="none"` would make the ring click-through: SVG
                       // hit-tests painted area only, so a hollow point could
                       // be picked by landing on its 1.4 px stroke and nowhere
-                      // else ("полые точки не могу выделить", 2026-09-07).  A
+                      // else ("can't select the hollow points", 2026-09-07).  A
                       // transparent fill is still painted, so the whole disc
                       // takes the click.
                       return <circle cx={p.cx} cy={p.cy} r={sel ? 5.5 : 3.5}

@@ -8,8 +8,8 @@
 # catalog SEED.  No notebooks, no experiments, no repo-root scratch.
 #
 # WHAT CHANGED IN STAGE 6
-#   * the three report deps are in requirements.txt now (reportlab,
-#     python-docx, triangle) — the image used to build an API whose default
+#   * the report deps are in requirements.txt now (reportlab,
+#     python-docx) — the image used to build an API whose default
 #     report format 500s on the first call;
 #   * fonts-dejavu-core as insurance.  report.py takes DejaVu Sans out of
 #     matplotlib's own data path and falls back to the Helvetica base-14 set,
@@ -39,8 +39,23 @@ RUN groupadd --gid 10001 motres \
  && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin motres
 
 WORKDIR /app
-COPY requirements.txt .
+COPY requirements.txt requirements-pardiso.txt requirements-triangle.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+# Optional proprietary accelerator (Intel MKL via pypardiso), OFF by default so
+# a distributed image contains only AGPL-compatible software.  Our own solve
+# server may build with --build-arg WITH_PARDISO=1 (several times faster
+# transient); without it every solver uses SciPy SuperLU.
+ARG WITH_PARDISO=0
+RUN if [ "$WITH_PARDISO" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-pardiso.txt; fi
+
+# Optional non-commercial `triangle` (geometry-driven mesher), OFF by default:
+# not part of the AGPL distribution.  Our own non-commercial server builds with
+# --build-arg WITH_TRIANGLE=1 during the gmsh transition so its numbers stay
+# identical (docs/MESHER_TRANSITION.md); without it the mesher uses gmsh.
+ARG WITH_TRIANGLE=0
+RUN if [ "$WITH_TRIANGLE" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-triangle.txt; fi
 
 COPY src/ src/
 # GET /api/version reads the repo-root VERSION three parents above api.py, i.e.
@@ -54,6 +69,12 @@ COPY scripts/migrate_to_workspaces.py \
      scripts/catalog_manifest.py \
      scripts/check_case_collisions.py \
      scripts/
+# BYO compute (#44): GET /api/nodes/worker/{install.sh,motres_compute_worker.py}
+# serves these two files from /app/deploy/compute-worker (routes/compute_nodes.py
+# _WORKER_DIR); without them the "add a node" install command 404s.
+COPY deploy/compute-worker/install.sh \
+     deploy/compute-worker/motres_compute_worker.py \
+     deploy/compute-worker/
 
 # Catalog SEED — read-only reference material, never the live tree.
 COPY config/ config-seed/

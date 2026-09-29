@@ -2,8 +2,8 @@
 
 Die `CIANO14 12_40 Ø12 12s10p` / L10, imported from the owner's OLD Fusion
 model (`ExportedParameters.csv`). The server validation reported
-"rotor core split into 31 disconnected pieces". Owner: «проверь геометрию, там
-с ротором косяки», then: no fitting. Find why the same values do not give the
+"rotor core split into 31 disconnected pieces". Owner: «check the geometry, there
+are issues with the rotor», then: no fitting. Find why the same values do not give the
 same rotor.
 
 ## Result

@@ -24,7 +24,7 @@ duties:
   current_arms: 404.465
   rpm: 850.0
   gamma_deg: 10.0
-  note: ANSYS-validated point
+  note: validated point
   torque_nm: 850.0
   power_kw: 75.7
   result:

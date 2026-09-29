@@ -129,7 +129,7 @@ def admin_subscribers(format: str = "json", _a: dict = Depends(require_admin)):
     if format != "csv":
         return {"subscribers": rows}
     buf = io.StringIO()
-    cols = ["email", "status", "tier", "source", "text_version", "consent_at",
+    cols = ["email", "status", "role", "source", "text_version", "consent_at",
             "confirmed_at", "unsubscribed_at"]
     w = csv.DictWriter(buf, fieldnames=cols)
     w.writeheader()
@@ -142,13 +142,13 @@ def admin_subscribers(format: str = "json", _a: dict = Depends(require_admin)):
 class CampaignReq(BaseModel):
     subject: str
     body_md: str
-    tiers: list[str] = []
+    roles: list[str] = []
 
 
 class CampaignPatch(BaseModel):
     subject: Optional[str] = None
     body_md: Optional[str] = None
-    tiers: Optional[list[str]] = None
+    roles: Optional[list[str]] = None
 
 
 @router.get("/admin/campaigns")
@@ -159,7 +159,7 @@ def admin_campaigns(_a: dict = Depends(require_admin)):
 @router.post("/admin/campaigns")
 def admin_create(req: CampaignReq, a: dict = Depends(require_admin)):
     try:
-        return N.create_campaign(req.subject, req.body_md, req.tiers,
+        return N.create_campaign(req.subject, req.body_md, req.roles,
                                  author=(a or {}).get("email") or "")
     except ValueError as e:
         raise HTTPException(422, detail=str(e))
@@ -168,7 +168,7 @@ def admin_create(req: CampaignReq, a: dict = Depends(require_admin)):
 @router.put("/admin/campaigns/{cid}")
 def admin_update(cid: str, req: CampaignPatch, _a: dict = Depends(require_admin)):
     try:
-        return N.update_campaign(cid, req.subject, req.body_md, req.tiers)
+        return N.update_campaign(cid, req.subject, req.body_md, req.roles)
     except KeyError:
         raise HTTPException(404, detail="no such campaign")
     except ValueError as e:
@@ -179,7 +179,7 @@ def admin_update(cid: str, req: CampaignPatch, _a: dict = Depends(require_admin)
 def admin_preview(req: CampaignReq, a: dict = Depends(require_admin)):
     who = (a or {}).get("email") or "preview@example.com"
     h, t = N.render(req.subject, req.body_md, N.unsubscribe_url(who))
-    return {"html": h, "text": t, "audience": len(N.audience(req.tiers))}
+    return {"html": h, "text": t, "audience": len(N.audience(req.roles))}
 
 
 @router.post("/admin/test")
@@ -225,13 +225,13 @@ def admin_cancel(cid: str, _a: dict = Depends(require_admin)):
 @notices_router.get("")
 def my_notices(authorization: str = Header(default=None)):
     me = _me(authorization)
-    return {"notices": N.notices_for(me["email"], me.get("tier") or "")}
+    return {"notices": N.notices_for(me["email"], me.get("role") or "")}
 
 
 @notices_router.post("/{nid}/read")
 def read_notice(nid: str, authorization: str = Header(default=None)):
     me = _me(authorization)
-    visible = {n["id"] for n in N.notices_for(me["email"], me.get("tier") or "")}
+    visible = {n["id"] for n in N.notices_for(me["email"], me.get("role") or "")}
     if nid not in visible:
         raise HTTPException(404, detail="no such notice")
     N.mark_read(me["email"], nid)
@@ -243,7 +243,7 @@ class NoticeReq(BaseModel):
     body: str = ""
     level: str = "info"
     emails: list[str] = []
-    tiers: list[str] = []
+    roles: list[str] = []
     expires_at: Optional[float] = None
 
 
@@ -256,7 +256,7 @@ def admin_notices(_a: dict = Depends(require_admin)):
 def admin_post_notice(req: NoticeReq, a: dict = Depends(require_admin)):
     try:
         return N.post_notice(req.title, req.body, level=req.level,
-                             emails=req.emails, tiers=req.tiers,
+                             emails=req.emails, roles=req.roles,
                              expires_at=req.expires_at,
                              author=(a or {}).get("email") or "")
     except ValueError as e:

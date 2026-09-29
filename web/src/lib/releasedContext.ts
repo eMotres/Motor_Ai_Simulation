@@ -5,8 +5,8 @@
  * edit (poles/segment 7 → 8) made it a different lamination from the active
  * die, the backend's identity guard released the context — and the header
  * strip offered only "press ▶ in Motors to load one", which would have
- * overwritten the optimised geometry.  Second time ("опять та же самая
- * проблема — я всё оптимизировал, а сохранить не могу").
+ * overwritten the optimised geometry.  Second time ("the same problem
+ * again — I optimised everything and can't save it").
  *
  * This module holds the PURE half of the fix — what `/api/family/context`
  * says about a released context, turned into the OFFERS the strip draws:

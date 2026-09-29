@@ -1,7 +1,7 @@
 """The two cut lines of a symmetry wedge are ADIABATIC (2026-09-09).
 
-User, on the G2-L40's quarter-machine thermal map: *"меня пугает
-неравномерность, проверь граничные условия"*.  Measured on that map: the four
+User, on the G2-L40's quarter-machine thermal map: *"the unevenness scares
+me, check the boundary conditions"*.  Measured on that map: the four
 interior slots' coils sat at 87.0–87.3 °C, the two slots at the sector cuts at
 84.0 and 84.1 — 3 K cooler — and the stator iron the same way (72.1–72.4 against
 69.5/69.7).  The housing film (a liquid jacket, applied as a 1e5 W/m²K pin at
@@ -164,7 +164,7 @@ def test_b_the_edge_slots_are_as_warm_as_the_interior_ones(client, em_run):
     out = r.json()
     assert out["n_cut_facets"] > 0, "the half-wedge has two cut lines"
     # …and the field says how many sectors it is of the machine, so the map's
-    # tiler can draw the whole motor (user 2026-09-09: "поля на весь мотор")
+    # tiler can draw the whole motor (user 2026-09-09: "field over the whole motor")
     assert out["n_sectors"] == 2 and out["symmetry_mult"] == 2
     # 12 slots on the 30 mm: 30° per pitch, six of them on the half
     rows = _per_pitch(out, "coil", 360.0 / 12)
@@ -179,8 +179,8 @@ def test_b_the_edge_slots_are_as_warm_as_the_interior_ones(client, em_run):
     assert means.max() - means.min() < 0.8, rows
     # The ROTOR too: the bore film's 2 % radius band used to take the first
     # radial facet of each cut, ~0.5 W per cut, a 2 K hump with cool edges
-    # across the G2's quarter (user 2026-09-09: "в роторе та же
-    # неравномерность и осталась").  14 poles on the 30 mm: seven per half.
+    # across the G2's quarter (user 2026-09-09: "the same unevenness
+    # remains in the rotor too").  14 poles on the 30 mm: seven per half.
     rrows = _per_pitch(out, "rotor", 360.0 / 14)
     assert len(rrows) >= 5, rrows
     rmeans = np.array([m for _a, m in rrows])

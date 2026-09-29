@@ -3,10 +3,9 @@
  * in the app: electromagnetic, thermal, mechanical and modal.
  *
  * User 2026-09-06, on the Mechanical tab (three static canvases side by side,
- * no zoom): "сделай наш интерфейс для просмотра, чтобы можно было приближать и
- * удалять; нужно сделать одну картинку и меню для переключения выводов
- * графиков; интерфейс должен быть единым для всех графиков — электромагнитных,
- * механических и термо".
+ * no zoom): "make our viewer interface so you can zoom in and out; we need
+ * one picture and a menu for switching between chart outputs; the interface
+ * must be the same for all charts — electromagnetic, mechanical, and thermal".
  *
  * What that means concretely, and what this component is responsible for:
  *
@@ -27,20 +26,19 @@
  *   • TWO viewer-wide toggles, added 2026-09-06 at the user's request and
  *     therefore living HERE rather than in any host — every output in every tab
  *     gets them for free, which is the whole point of one viewer:
- *       – **Max** ("подсвечивать точки максимальных деформаций, напряжений и
- *         полей; в виде меню — можно посмотреть, а можно убрать"): rings the
+ *       – **Max** ("highlight the points of maximum deformations, stresses
+ *         and fields; as a menu item — you can view it, or you can remove it"): rings the
  *         maximum and the minimum of whatever is displayed, with the value, the
  *         radius / angle and the part they sit in.
- *       – **Mesh** ("также чтобы была возможность отображения сетки или без
- *         неё"): the solver's triangle edges over the field.
+ *       – **Mesh** ("also have the option to show the mesh or not"): the solver's triangle edges over the field.
  *     Both default OFF and are remembered in localStorage (`fieldview.max`,
  *     `fieldview.mesh`) — a preference, not a per-output state.
  *
- *   • ONE **part tree**, added 2026-09-06: "нужно ещё добавить в вывод название
- *     частей ротора и статора, чтобы можно было смотреть отдельно на каждую
- *     часть и видеть только её деформации и стрессы" — and then, seeing the
- *     3-D tab's tree next to the dropdown that first answered it: "используй то
- *     же самое дерево, которое у нас уже есть, чтобы всё было универсально".
+ *   • ONE **part tree**, added 2026-09-06: "we also need to add the names of
+ *     the rotor and stator parts to the output, so you can look at each part
+ *     separately and see only its deformations and stresses" — and then, seeing the
+ *     3-D tab's tree next to the dropdown that first answered it: "use the
+ *     same tree we already have, so everything is universal".
  *     So it IS that tree — `viewer3d/ComponentTreeView`, the same rows, eyes,
  *     colour dots, isolate and Show All — driven here by a LOCAL model built
  *     from the parts of the picture instead of the global 3-D visibility store.
@@ -77,8 +75,8 @@ import type {
   FieldExtremum, FieldGroup, FieldOutput, FieldPart, FieldProbeData,
 } from './fieldOutput';
 // The app's own component tree — the SAME one the 3-D tab has always shown
-// (user 2026-09-06: "используй то же самое дерево, которое у нас уже есть,
-// чтобы всё было универсально").  There it is bound to the global visibility
+// (user 2026-09-06: "use the same tree we already have, so everything is
+// universal").  There it is bound to the global visibility
 // store; here to the parts of the picture below.
 import ComponentTreeView, {
   type TreeModel, type TreeRow,
@@ -86,7 +84,7 @@ import ComponentTreeView, {
 
 /** Viewer preference, remembered across sessions.  Both toggles are OFF by
  *  default: the plain picture is what the user asked to be able to come back to
- *  ("можно посмотреть, а можно убрать"). */
+ *  ("you can view it, or you can remove it"). */
 function readFlag(key: string): boolean {
   try { return localStorage.getItem(key) === '1'; } catch { return false; }
 }
@@ -293,8 +291,8 @@ const View2D: React.FC<View2DProps> = ({ extent, fitToken, fitKey, onFitRequest,
     // drei's <OrthographicCamera makeDefault> becomes the default camera one
     // layout-effect AFTER the first render: on the very first pass `camera` is
     // still R3F's perspective default, so the fit must report failure and be
-    // retried when the real camera lands (user 2026-09-06: "ты опять не
-    // исправил масштабирование после расчёта по умолчанию" — the key had been
+    // retried when the real camera lands (user 2026-09-06: "you still haven't
+    // fixed the default scaling after computation" — the key had been
     // marked fitted on that failed attempt and no fit ever ran again).
     if (!(cam as unknown as { isOrthographicCamera?: boolean }).isOrthographicCamera) return false;
     if (!size.width || !size.height || !extent) return false;
@@ -303,8 +301,8 @@ const View2D: React.FC<View2DProps> = ({ extent, fitToken, fitKey, onFitRequest,
     const cy = (ymin + ymax) * 0.5;
     const aspect = size.width / size.height;
     // Half-height such that BOTH the model's height and its width (divided by
-    // the canvas aspect) fit inside the frustum — user 2026-09-06: "сделай сразу
-    // масштаб изображения, чтобы вписывался в отведённую площадь".  The old
+    // the canvas aspect) fit inside the frustum — user 2026-09-06: "make the
+    // image scale fit the allotted area right away".  The old
     // max(w, h) ignored the aspect, so a tall canvas cut the sides off.
     const r = Math.max((ymax - ymin) * 0.53, (xmax - xmin) * 0.53 / Math.max(aspect, 1e-3)) || 1;
     base.current = r;
@@ -563,7 +561,7 @@ function buildIndex(p: FieldProbeData | null | undefined) {
 /* ── the colour bar ───────────────────────────────────────────────────────── */
 
 /**
- * Ansys's legend, and for the same reason: a BANDED plot's legend has to show
+ * commercial FEM's legend, and for the same reason: a BANDED plot's legend has to show
  * the band EDGES, because "which band is this colour" is the only question the
  * picture asks.  It reads its whole range off the SAME FieldScale the fill bands
  * with, so the two cannot disagree — for every output, in every tab.
@@ -848,7 +846,7 @@ const FieldViewer: React.FC<FieldViewerProps> = ({
             {/* With Max on the header says WHERE too, in the same words the
                 marker does ("max 5408 MPa @ r 61.0 mm, 17.3°").  Gated on the
                 toggle so the default line stays one short line — the project's
-                no-walls-of-text rule — and so "убрать" removes it everywhere. */}
+                no-walls-of-text rule — and so "remove" removes it everywhere. */}
             <Typography sx={{ fontSize: 11, fontFamily: 'monospace',
               color: 'var(--text-3)', cursor: 'help' }}>
               max {fmtV(out.vMax)}
@@ -899,8 +897,8 @@ const FieldViewer: React.FC<FieldViewerProps> = ({
             {/* `manual`: without it drei re-derives the frustum from the canvas
                 PIXEL size on every resize (left = −width/2 …), silently undoing
                 the fit a few frames later — the picture then sat as a 1 mm/px
-                thumbnail in the middle of the panel (user 2026-09-06: "не
-                забудь про масштабирование по умолчанию").  View2D owns the
+                thumbnail in the middle of the panel (user 2026-09-06: "don't
+                forget about the default scaling").  View2D owns the
                 frustum completely. */}
             <OrthographicCamera makeDefault manual position={[0, 0, 300]} near={0.1} far={5000}/>
             <View2D extent={extent} fitToken={fitToken} fitKey={fitKey}
@@ -928,8 +926,8 @@ const FieldViewer: React.FC<FieldViewerProps> = ({
           </Box>
 
           {/* The part tree, over the top-left of the picture — the same panel,
-              in the same place, as the 3-D tab's (user 2026-09-06: "используй
-              то же самое дерево").  Only when there is a choice to make: one
+              in the same place, as the 3-D tab's (user 2026-09-06: "use
+              the same tree").  Only when there is a choice to make: one
               part is no tree.  Above the marker layer, under the busy veil. */}
           {allParts.length > 1 && (
             <ComponentTreeView

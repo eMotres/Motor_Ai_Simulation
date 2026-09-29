@@ -20,18 +20,24 @@ import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { useScrollMemory } from '../../lib/scrollMemory';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/motors.json (docs/I18N.md).
+const tx = nsT('motors');
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 const MotorsCatalog: React.FC = () => {
+  useTranslation('motors'); // re-render on language change; lazy-loads the namespace
   // The tab's scroll box is this component's parent (App.tsx wraps it in the
   // overflowY: auto Box); its position is remembered across tab switches and
   // reloads (user 2026-09-13).
   const rootRef = useRef<HTMLDivElement>(null);
   useScrollMemory('motors', rootRef, 'parent');
   // Each Ø section folds on a click of its header and stays folded across
-  // tab switches and reloads (user 2026-09-13: "нажимаешь на 200 —
-  // вываливается весь список, снова нажимаешь — закрывается").
+  // tab switches and reloads (user 2026-09-13: "you click 200 —
+  // the whole list dumps out, click again — it closes").
   const [folded, setFolded] = useState<Record<string, boolean>>(() => {
     try { return JSON.parse(localStorage.getItem('motors.folded') || '{}') || {}; }
     catch { return {}; }
@@ -69,7 +75,7 @@ const MotorsCatalog: React.FC = () => {
         // Backend away (a restart window): retry instead of freezing a wrong
         // answer — a failed first load left an ADMIN's catalog stripped of
         // its lock/duplicate buttons until a manual F5 (measured live
-        // 2026-08-25: "не вижу замочков").
+        // 2026-08-25: "I don't see the lock icons").
         setTimeout(() => { void load(true); }, 3000);
       });
   useEffect(() => {
@@ -103,9 +109,9 @@ const MotorsCatalog: React.FC = () => {
     <Box ref={rootRef}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1.5 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>
-          Catalog
+          {tx('catalog')}
         </Typography>
-        <HelpTip title="Everything grouped by stator diameter. A 🔒 die is a stamped lamination: configurations (stack, wire, winding, materials) live under it, and each configuration has its duty table — click ▶ on a duty to load the whole machine into Simulation. ＋ buttons snapshot the CURRENT state at each level." />
+        <HelpTip title={tx('everythingGroupedByStatorDiameterA')} />
         <Box sx={{ flex: 1 }} />
         {dieMsg && (
           <Typography sx={{ fontSize: 11,

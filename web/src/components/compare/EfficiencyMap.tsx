@@ -15,7 +15,7 @@ const SQRT3 = Math.sqrt(3);
 const RPM_MAX = 8000;
 const ETA_LO = 0.80, ETA_HI = 0.99;
 
-// Ansys-style spectrum: blue (low) → cyan → green → yellow → orange → red (high).
+// commercial-FEM-style spectrum: blue (low) → cyan → green → yellow → orange → red (high).
 const JET_STOPS: [number, [number, number, number]][] = [
   [0.00, [0, 0, 255]],     // blue
   [0.22, [0, 220, 255]],   // cyan
@@ -24,7 +24,7 @@ const JET_STOPS: [number, [number, number, number]][] = [
   [0.82, [255, 140, 0]],   // orange
   [1.00, [220, 0, 0]],     // red
 ];
-/** efficiency → Ansys spectrum colour, clamped to [lo,hi]. */
+/** efficiency → commercial FEM spectrum colour, clamped to [lo,hi]. */
 function effColor(eta: number, lo: number, hi: number): string {
   const t = Math.max(0, Math.min(1, (eta - lo) / (hi - lo)));
   for (let i = 1; i < JET_STOPS.length; i++) {
@@ -67,7 +67,7 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
     // axes don't start at 0 (degenerate there): rpm from 500, torque from ~10% nominal
     const RPM_MIN = 500, T_MIN = 0.1 * base;
     const NX = 90, NY = 56, cw = pw / NX, ch = ph / NY;
-    // pass 1 — efficiency grid + auto-range over reachable cells (Ansys scales the
+    // pass 1 — efficiency grid + auto-range over reachable cells (commercial FEM scales the
     // legend to the field's actual min/max, so the full spectrum spans the data).
     const eta = new Array<number>(NX * NY), reach = new Array<boolean>(NX * NY);
     let lo = Infinity, hi = -Infinity;

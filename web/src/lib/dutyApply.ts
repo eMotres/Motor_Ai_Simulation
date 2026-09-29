@@ -176,7 +176,7 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
       // the G2's 60° (24s/28p) was applied to the CIANO10 200 opt (12s/10p,
       // its own d-axis 120°) and every Run was refused as "d-axis pin 60°
       // does not belong to this machine" while the field on screen was
-      // empty (user 2026-09-09: "не запускается моделирование").  The local
+      // empty (user 2026-09-09: "the simulation won't start").  The local
       // field was already cleared (lib/dutyLocalApply) — the config was not.
       simPatch.daxis_deg = (p.sim.daxis_deg != null && Number.isFinite(Number(p.sim.daxis_deg)))
         ? p.sim.daxis_deg : '';

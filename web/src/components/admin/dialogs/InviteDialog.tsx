@@ -1,4 +1,4 @@
-// Admin · Invite — one call creates the account, its plan, its motors and its
+// Admin · Invite — one call creates the account, its role, its motors and its
 // workspace. NO E-MAIL IS SENT (the host blocks outbound SMTP) — the admin is
 // the messenger, which is why the dialog says so instead of implying delivery.
 // Shared by the Users section ("Invite" button) and the Sign-ups section
@@ -12,7 +12,7 @@ import HelpTip from '../../common/HelpTip';
 import { MotorPicker, useCatalog } from './MotorPicker';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
-export const TIERS = ['free', 'pro', 'team', 'admin'] as const;
+export const ROLES = ['user', 'admin'] as const;
 
 const InviteDialog: React.FC<{
   open: boolean; onClose: () => void; onInvited: (msg: string) => void;
@@ -21,7 +21,7 @@ const InviteDialog: React.FC<{
 }> = ({ open, onClose, onInvited, email: prefill }) => {
   const dies = useCatalog(open);
   const [email, setEmail] = useState('');
-  const [tier, setTier] = useState<string>('free');
+  const [role, setRole] = useState<string>('user');
   const [note, setNote] = useState('');
   const [all, setAll] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -30,7 +30,7 @@ const InviteDialog: React.FC<{
 
   useEffect(() => {
     if (!open) return;
-    setEmail(prefill ?? ''); setTier('free'); setNote(''); setAll(false);
+    setEmail(prefill ?? ''); setRole('user'); setNote(''); setAll(false);
     setPicked(new Set()); setErr(null);
   }, [open, prefill]);
 
@@ -47,7 +47,7 @@ const InviteDialog: React.FC<{
       const r = await fetch(`${API}/api/admin/invite`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: email.trim(), tier, note: note.trim(),
+          email: email.trim(), role, note: note.trim(),
           motors: all ? 'all' : [...picked],
         }),
       });
@@ -62,7 +62,7 @@ const InviteDialog: React.FC<{
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontSize: '1rem', display: 'flex', alignItems: 'center', gap: 0.75 }}>
         Invite
-        <HelpTip title="Creates the account, its plan and its motors." />
+        <HelpTip title="Creates the account, its role and its motors." />
         <Typography component="span" sx={{ fontSize: 11, color: 'var(--text-4)', ml: 'auto' }}>
           No e-mail is sent — they sign in with Google.
         </Typography>
@@ -73,8 +73,8 @@ const InviteDialog: React.FC<{
             <TextField size="small" label="Email" type="email" value={email} autoFocus
               onChange={(e) => setEmail(e.target.value)} sx={{ flex: '2 1 220px' }} />
           </Tooltip>
-          <Select size="small" value={tier} onChange={(e) => setTier(e.target.value)} sx={{ flex: '0 0 110px' }}>
-            {TIERS.map((t) => <MenuItem key={t} value={t} sx={{ fontSize: 13 }}>{t}</MenuItem>)}
+          <Select size="small" value={role} onChange={(e) => setRole(e.target.value)} sx={{ flex: '0 0 110px' }}>
+            {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13 }}>{r}</MenuItem>)}
           </Select>
           <TextField size="small" label="Note (optional)" value={note}
             onChange={(e) => setNote(e.target.value)} sx={{ flex: '2 1 200px' }} />

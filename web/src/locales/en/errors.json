@@ -1,0 +1,46 @@
+{
+  "auth": {
+    "sign_in_required": "Sign in first.",
+    "account_disabled": "This account is disabled."
+  },
+  "rate_limited": "Too many requests — try again later.",
+  "material": {
+    "unknown": "Unknown material: {name}"
+  },
+  "form": {
+    "invalid_email": "Enter a valid e-mail address.",
+    "name_required": "Enter your name."
+  },
+  "duty": {
+    "name_required": "Give the duty a name.",
+    "mode_invalid": "The mode must be motor or generator."
+  },
+  "copy": {
+    "name_required": "Give the copy a name."
+  },
+  "name": {
+    "die_reserved": "The name 'die' is reserved."
+  },
+  "op": {
+    "current_rpm_positive": "Current and speed must be positive."
+  },
+  "machine": {
+    "no_poles": "The machine has no poles configured."
+  },
+  "config": {
+    "no_geometry": "The live configuration has no geometry block."
+  },
+  "upload": {
+    "empty": "The upload is empty."
+  },
+  "not_found": {
+    "campaign": "No such campaign.",
+    "notice": "No such notice."
+  },
+  "email": {
+    "not_configured": "E-mail is not configured on this server."
+  },
+  "prefs": {
+    "locale_unsupported": "Unsupported language {locale}; one of {supported}."
+  }
+}

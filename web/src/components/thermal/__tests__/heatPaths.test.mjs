@@ -519,8 +519,8 @@ test('sinkLabel: an OFF path with a setting names the setting, not "none"', () =
 
 /* ── the ARROWS ──────────────────────────────────────────────────────────── */
 
-/* User, 2026-09-16: *"добавить подсказки, когда наводишь курсором на стрелки:
-   что она означает и сколько тепла уходит через этот канал"*.  Two lines and no
+/* User, 2026-09-16: *"add hints when you hover the cursor over the arrows:
+   what it means and how much heat leaves through this channel"*.  Two lines and no
    more: WHICH path and how much, then the mechanism that carries it with the
    coefficient and the two temperatures the watts came out of.  An arrow is a
    channel, and a channel is not identified by its length. */

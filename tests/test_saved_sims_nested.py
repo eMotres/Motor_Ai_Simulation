@@ -1,9 +1,9 @@
 """A Compare point may carry NESTED result blocks, not only flat numbers.
 
 Since 2026-09-07 the Mechanical and Thermal tabs file their answers into the
-same library the Simulation tab does (user: *"нужно везде сделать такую же
-кнопку для сравнения всех величин в механических и температурных
-моделированиях"*).  An EM point's ``results`` is flat — ``{"T_em_avg_Nm": 12.3,
+same library the Simulation tab does (user: *"we need the same button
+everywhere for comparing all values in the mechanical and thermal
+simulations"*).  An EM point's ``results`` is flat — ``{"T_em_avg_Nm": 12.3,
 …}`` — while those two rows add a whole sub-object each:
 
     {"T_em_avg_Nm": …, "thermal": {"winding_max": 163.4, …},

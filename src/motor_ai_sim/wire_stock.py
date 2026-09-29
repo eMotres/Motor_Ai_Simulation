@@ -2,9 +2,9 @@
 
 WHY
 ===
-The owner: *"давай сделаем справочную таблицу по доступным на складе
-проводам; мы потом будем брать данные отсюда, чтобы пользователи могли менять
-толщину провода из тех, что есть реально"* — a reference table of the flat
+The owner: *"let's make a reference table of the wire we have available in
+stock; we'll later take the data from there, so users can change the wire
+thickness among what's actually there"* — a reference table of the flat
 strip actually on the shelf, meant to become the source the winding editors
 restrict the wire-size choice to.  This module only loads and validates the
 table and offers it read-only; nothing here restricts a wire selector yet —

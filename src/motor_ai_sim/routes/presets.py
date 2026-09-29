@@ -135,9 +135,9 @@ def _thumb_path_d(geom, c: float, s: float) -> str:
 #: The die stores its `thumb_svg` and only regenerates it when the geometry is
 #: synced from a live save — so a change to THIS function reached no existing
 #: machine, and the report went on printing a cross-section with no band and the
-#: old palette long after both were fixed (user 2026-09-10, twice: "почему ты на
-#: первом рисунке не нарисовал sleeve", then "опять Machine без бандажа и цвета
-#: не те").  Bumping this makes every reader able to tell a stale drawing from a
+#: old palette long after both were fixed (user 2026-09-10, twice: "why didn't
+#: you draw the sleeve in the first picture", then "Machine has no band again
+#: and the colours are wrong").  Bumping this makes every reader able to tell a stale drawing from a
 #: current one and redraw it; see `report.thumb_svg_for`.
 #:
 #: 1 = the original palette, no band.  2 = app colours + the retaining band.
@@ -152,8 +152,8 @@ def _gen_thumb_svg(geo: dict):
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         C, VIEW, MARGIN = 60.0, 120.0, 4.0
-        # THE APP'S OWN PART COLOURS (user 2026-09-10: "возьми все цвета с нашей
-        # геометрии").  Copied from `web/src/lib/partColors.ts`, which every
+        # THE APP'S OWN PART COLOURS (user 2026-09-10: "take all the colours
+        # from our geometry").  Copied from `web/src/lib/partColors.ts`, which every
         # surface that shows a part already reads — the 3-D and 2-D viewers, the
         # component tree swatches, the material chips.  A thumbnail in its own
         # palette made the same magnet a different colour in the document and on
@@ -178,7 +178,7 @@ def _gen_thumb_svg(geo: dict):
             out.append(f'<path d="{_thumb_path_d(poly, C, s)}" fill="{COL["magN"] if pol > 0 else COL["magS"]}"/>')
         # …AND THE BAND.  It was simply missing: the drawing showed a rotor with
         # nothing holding the magnets on, which is not the machine (user
-        # 2026-09-10, "почему ты на первом рисунке не нарисовал sleeve").  Drawn
+        # 2026-09-10, "why didn't you draw the sleeve in the first picture").  Drawn
         # AFTER the magnets because it sits on top of them, and only when the
         # section has one — a sleeveless rotor grows no ring.
         _sl = P.get("sleeve")
@@ -388,7 +388,7 @@ def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) 
         "topology": "Spoke-PM SPMSM", "slots": slots, "poles": poles,
         "rpm": sim.get("rpm", 0), "current_a": sim.get("max_current", 0),
         "T_avg_Nm": met.get("T_avg_Nm", 0), "ripple_pct": met.get("ripple_pct", 0),
-        "gamma_deg": sim.get("phase_offset_deg", 0), "tier": "free",
+        "gamma_deg": sim.get("phase_offset_deg", 0),
         "description": preset.get("description") or f"Your saved motor — {preset.get('name', preset_id)}.",
         "preset": preset_id,
         # The card MIRRORS the motor's ownership — a card that named a different

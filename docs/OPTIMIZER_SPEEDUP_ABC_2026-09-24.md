@@ -1,7 +1,7 @@
 # Optimizer speed-up A + B + C (2026-09-24)
 
 Claude Opus 5.5 (`claude-opus-5-5`) implemented this as a sub-agent, with no escalation. The owner approved
-A + B + C from `docs/OPTIMIZER_SPEED_REVIEW_2026-09-24.md` («Запускай A + B + C»). The goal was a real
+A + B + C from `docs/OPTIMIZER_SPEED_REVIEW_2026-09-24.md` («Run A + B + C»). The goal was a real
 optimizer speed-up while leaving everything the optimizer ranks unchanged.
 
 | line | commit |

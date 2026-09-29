@@ -1,7 +1,7 @@
 """A loose magnet TRAVELS onto its pocket tab instead of being pinned (2026-09-09).
 
 User, on the live G2-L40 generator at the coupled temperatures (iron 134 °C,
-magnet 135 °C): *"магнит должен сесть на язычок, как в Fusion"*.
+magnet 135 °C): *"the magnet must seat on the tab, like in Fusion"*.
 
 The magnet sits in an iron pocket whose lips overhang its shoulders with ZERO
 clearance in the die cross-section, so at 20 °C the separation contact holds it.
@@ -121,8 +121,8 @@ def _polys(gap_mm: float = 0.0, open_top: bool = False):
 def _solve(polys, *, rpm: float = RPM, mu: float = 0.0,
            typ: str = "separation", part_temps=None, lift_off: int = 0):
     # The thermally loosened fixtures run the solver's VERIFICATION model: in
-    # production (2026-09-09, "температура только как изменение давления на
-    # бандаж, если он есть") a sleeveless rotor is solved cold whatever map it
+    # production (2026-09-09, "temperature only as a change of pressure on
+    # the sleeve, if there is one") a sleeveless rotor is solved cold whatever map it
     # is given, so a pocket can only be opened by heat here, on purpose, to
     # exercise the seating machinery on a case with known arithmetic.  On the
     # machine the feature was written for, the G2, it is the centrifugal field
@@ -269,15 +269,18 @@ def test_the_lift_off_bisection_still_runs_on_a_seated_joint():
 #: to 1e-6 relative and not to the bit: the linear solver is pypardiso, which is
 #: multi-threaded and not bit-reproducible (see test_mechanical_part_temps).
 #: `sf_min` is AVERAGED since 2026-09-10 — the strength over the governing
-#: NODAL stress, which is the ANSYS/Fusion convention and the number every
+#: NODAL stress, which is the commercial FEM/Fusion convention and the number every
 #: table and map now prints.  The element-field factor this reference was first
 #: written with, 1.730, is kept as `sf_min_unaveraged`: it is still solved and
 #: still reported, and the two moving together is what says the change was a
 #: reporting one.  Every other number here is untouched by it.
-FROZEN_20C = {"sf_min": 1.9739, "sf_min_unaveraged": 1.730,
-              "sf_min_p05": 2.761,
-              "rotor_od_growth_um": 11.985, "max_displacement_um": 12.813,
-              "open_fraction": 0.893, "pressure_max_mpa": 29.205}
+#: 2026-09-29: re-measured after the magnet cards moved to the Arnold sheets
+#: (magnet density 7500 -> 7600 kg/m3: pressure_max 29.205 -> 29.576 MPa, the
+#: rest within 0.1 %).
+FROZEN_20C = {"sf_min": 1.9730, "sf_min_unaveraged": 1.729,
+              "sf_min_p05": 2.759,
+              "rotor_od_growth_um": 11.992, "max_displacement_um": 12.824,
+              "open_fraction": 0.893, "pressure_max_mpa": 29.576}
 
 
 def test_with_nothing_loose_the_answer_is_the_one_it_always_was():
@@ -381,7 +384,7 @@ def test_the_travel_cap_is_a_runaway_by_another_name():
 
 
 def test_the_seating_constants_are_the_ones_the_docstring_argues_for():
-    """Читаются в отчёте — a silent edit of any of these moves every seated
+    """Read in the report — a silent edit of any of these moves every seated
     answer, so they are pinned next to the physics they came from."""
     assert ctc.SEAT_MIN_COS == 0.05        # excludes the pocket SIDE walls
     assert ctc.SEAT_TRAVEL_FRAC == 0.05    # 2.5 mm on a Ø100 rotor
@@ -659,10 +662,16 @@ def test_the_g2_pocket_is_a_floor_a_wedge_and_a_tab():
 #: reference was written with, for the record: rotor 25.0, magnet 10.8,
 #: sf_min 13.53.  The displacements and the open fraction are the same solve
 #: either way — averaging is a reporting step, not a physics one.
-G2_COLD = {"rotor_vm_p995": 19.42, "magnet_vm_p995": 9.52, "sf_min": 17.38,
-           "sf_min_unaveraged": 13.53,
-           "open_fraction": 0.919, "od_growth_um": 4.07,
-           "max_displacement_um": 5.84}
+#: 2026-09-29: re-measured after the N52UH card moved to the Arnold G52UH
+#: sheet (density 7600, CTE 7 / -1): magnet 9.52 -> 9.68 MPa, open 0.919 ->
+#: 0.925, OD growth 4.07 -> 4.11 um; was rotor 19.42, sf 17.38 / 13.53, 5.84 um.
+#: Integration 2026-09-29: the same PR then raised B15AHV950M yield 350 -> 460
+#: MPa (Baowu product sheet, 6b7852b) without re-pinning; the rotor governs, so
+#: sf_min 17.29 -> 22.74 and the unaveraged 13.48 -> 17.69 (x 460/350).
+G2_COLD = {"rotor_vm_p995": 19.51, "magnet_vm_p995": 9.68, "sf_min": 22.74,
+           "sf_min_unaveraged": 17.69,
+           "open_fraction": 0.925, "od_growth_um": 4.11,
+           "max_displacement_um": 5.86}
 
 
 def test_the_g2_at_20C_still_solves_the_way_it_did(g2_cold):
@@ -701,8 +710,8 @@ def test_the_g2_at_20C_still_solves_the_way_it_did(g2_cold):
 
 
 def test_the_g2_at_the_coupled_temperatures_is_the_cold_answer(g2_hot_out, g2_cold_out):
-    """THE RULE ON THE MACHINE (user 2026-09-09: *"нам нужно учитывать
-    температуру только как изменение давления на бандаж, если он есть"*).
+    """THE RULE ON THE MACHINE (user 2026-09-09: *"we only need to account
+    for temperature as a change of pressure on the sleeve, if there is one"*).
 
     The G2-L40 has no band.  Its magnets sit in an epoxy bed with a 0.04 mm
     pocket clearance and the rotor is iron through, so the coupled map — iron

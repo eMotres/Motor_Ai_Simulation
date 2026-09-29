@@ -7,7 +7,7 @@ from a password account below; RIGHTS always come from our registry
 - POST /api/auth/login        — password login → our HS256 token
 - GET  /api/auth/users        — admin: list accounts
 - POST /api/auth/users        — admin: create a password account
-- PATCH /api/auth/users/{email} — admin: tier / disabled / name / new password
+- PATCH /api/auth/users/{email} — admin: role / disabled / name / new password
 - DELETE /api/auth/users/{email} — admin: remove an account
 - POST /api/auth/password     — self-service password change (signed in)
 - GET  /api/auth/sessions     — the caller's own sessions
@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from motor_ai_sim import auth_email as E
 from motor_ai_sim import sessions as S
 from motor_ai_sim import users as U
+from motor_ai_sim import admin_audit as _AA
 from motor_ai_sim.auth import require_admin, resolve_user, resolve_user_detail
 
 log = logging.getLogger(__name__)
@@ -303,11 +304,13 @@ def auth_methods():
 
 @router.get("/pending")
 def pending_list(_admin: dict = Depends(require_admin)):
+    _AA.record(_AA.actor_of(_admin), "session.list", str("pending"), subject=str(""), details=None)
     return {"pending": U.list_pending(), "smtp": E.smtp_configured()}
 
 
 @router.post("/pending/{email}/approve")
 def pending_approve(email: str, _admin: dict = Depends(require_admin)):
+    _AA.record(_AA.actor_of(_admin), "user.approve", str(email), subject=str(email), details=None)
     if U.get_user(email) is None:
         raise HTTPException(404, detail=f"user '{email}' not found")
     U.mark_verified(email, by="admin")
@@ -326,9 +329,9 @@ class GoogleReq(BaseModel):
 @router.post("/google")
 def google_login(req: GoogleReq, request: Request):
     """Exchange a Google ID token (1-hour life) for OUR 30-day HS256 token.
-    Identity is Google's; the tier comes from the registry (auto-provisioned
+    Identity is Google's; the role comes from the registry (auto-provisioned
     on first sign-in) with ADMIN_EMAILS on top."""
-    from motor_ai_sim.auth import _registry_tier, _verify_google_token, GOOGLE_CLIENT_ID
+    from motor_ai_sim.auth import _registry_role, _verify_google_token, GOOGLE_CLIENT_ID
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(503, detail=(
             "Google sign-in is not configured on this server "
@@ -340,8 +343,8 @@ def google_login(req: GoogleReq, request: Request):
         raise HTTPException(403, detail="Google account email is not verified")
     email = (claims.get("email") or "").strip().lower()
     first_sign_in = U.get_user(email) is None
-    tier = _registry_tier(email)
-    if tier == "__disabled__":
+    role = _registry_role(email)
+    if role == "__disabled__":
         raise HTTPException(403, detail="this account is disabled")
     # Same address by password and by Google = one account.  Google's proof
     # of the mailbox verifies a pending password account (and discards its
@@ -357,16 +360,16 @@ def google_login(req: GoogleReq, request: Request):
         except Exception as e:                               # noqa: BLE001
             log.warning("newsletter: google sign-up consent failed: %s", e)
     ip = (request.client.host if request and request.client else "?")
-    log.info("auth: Google login ok for %s (tier %s) from %s", email, tier, ip)
+    log.info("auth: Google login ok for %s (role %s) from %s", email, role, ip)
     return {"token": token,
-            "user": {**U.public_user(email), "tier": tier,
+            "user": {**U.public_user(email), "role": role,
                      "name": claims.get("name") or U.public_user(email).get("name", "")}}
 
 
 class CreateReq(BaseModel):
     email: str
     password: str
-    tier: str = "free"
+    role: str = "user"
     name: str = ""
 
 
@@ -377,15 +380,16 @@ def users_list(_admin: dict = Depends(require_admin)):
 
 @router.post("/users")
 def users_create(req: CreateReq, _admin: dict = Depends(require_admin)):
+    _AA.record(_AA.actor_of(_admin), "user.create", str(req.email), subject=str(req.email), details={"role": req.role})
     try:
         return {"ok": True, "user": U.create_user(req.email, req.password,
-                                                  tier=req.tier, name=req.name)}
+                                                  role=req.role, name=req.name)}
     except ValueError as e:
         raise HTTPException(422, detail=str(e))
 
 
 class PatchReq(BaseModel):
-    tier: Optional[str] = None
+    role: Optional[str] = None
     disabled: Optional[bool] = None
     name: Optional[str] = None
     password: Optional[str] = None      # admin reset
@@ -393,10 +397,11 @@ class PatchReq(BaseModel):
 
 @router.patch("/users/{email}")
 def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)):
+    _AA.record(_AA.actor_of(_admin), "user.update", str(email), subject=str(email), details={k: v for k, v in req.model_dump().items() if v is not None and k != "password"} | {"password_reset": req.password is not None})
     try:
         if req.password is not None:
             U.set_password(email, req.password)
-        out = U.update_user(email, tier=req.tier, disabled=req.disabled,
+        out = U.update_user(email, role=req.role, disabled=req.disabled,
                             name=req.name)
         log.info("auth: user %s updated (%s)", email,
                  {k: v for k, v in req.model_dump().items()
@@ -410,12 +415,18 @@ def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)
 
 @router.delete("/users/{email}")
 def users_delete(email: str, _admin: dict = Depends(require_admin)):
-    try:
-        U.delete_user(email)
-        log.warning("auth: user %s DELETED", email)
-        return {"ok": True}
-    except KeyError:
+    """Admin delete = the same full purge as a self-service deletion after its
+    grace period (audit 2026-09-29 #5): users.json, workspace, published work,
+    sessions, agent keys, OAuth grants, newsletter, support requests; audit
+    logs pseudonymised.  See motor_ai_sim.account_lifecycle."""
+    from motor_ai_sim import account_lifecycle as AL
+    _AA.record(_AA.actor_of(_admin), "user.delete", str(email), subject=str(email),
+               details={"mode": "purge"})
+    if U.get_user(email) is None:
         raise HTTPException(404, detail=f"user '{email}' not found")
+    rep = AL.purge(email, actor=_AA.actor_of(_admin), reason="admin")
+    log.warning("auth: account %s PURGED by admin", rep["subject"])
+    return {"ok": rep["ok"], "subject": rep["subject"], "steps": rep["steps"]}
 
 
 class SelfPassword(BaseModel):

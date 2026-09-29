@@ -292,7 +292,7 @@ def test_b_the_mount_carries_the_machine(robot):
 # ---------------------------------------------------------------------------
 # (b1b) THE HEAT PATH — one choice, four options (2026-09-26)
 # ---------------------------------------------------------------------------
-# Owner: «давай упростим».  The five mount / robot-link fields became ONE
+# Owner: «let's simplify».  The five mount / robot-link fields became ONE
 # select; each option must change the heat paths exactly as its name says, and
 # 'none' must have no conduction path at all.
 
@@ -616,8 +616,9 @@ def test_d3_both_splits_close(robot):
     # most of them.
     assert s["mount_W"] > s["housing_W"]
     assert s["housing_pct"] is not None and s["mount_pct"] is not None
+    # the three are reported rounded to 1 mW, so their sum may differ by 1 mW
     assert s["total_in_W"] == pytest.approx(s["stator_W"] + s["gap_in_W"],
-                                            rel=1e-6, abs=1e-6)
+                                            rel=1e-6, abs=1.5e-3)
 
 
 # ---------------------------------------------------------------------------

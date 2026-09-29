@@ -166,7 +166,7 @@ export interface SweepConfig {
    *  whichever browser made it.  The server keeps the body as-is, so the stamp
    *  travels with it and the newest copy wins on load — a stale profile can no
    *  longer push its old geometry study over a γ/current study made elsewhere
-   *  (2026-09-08: "после перезагрузки он сбросился на Rotor Housing Thickness"). */
+   *  (2026-09-08: "after reload it reset to Rotor Housing Thickness"). */
   updatedAt?: number;
 }
 
@@ -186,7 +186,7 @@ export interface OptDesignPoint {
   P_fe_W: number;
   P_mag_W: number;
   // total = EM-active + shaft (the divisor of torque/power density, unchanged);
-  // active = iron + copper + magnets, the Ansys "active mass" basis.
+  // active = iron + copper + magnets, the commercial FEM "active mass" basis.
   mass_total_kg: number;
   mass_active_kg?: number;
   B_gap_T: number;

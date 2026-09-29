@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { uiForms, indexOfUi, hasUi } from '../../../i18n/__tests__/uiText.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const webSrc = (...p) => join(HERE, '..', '..', '..', ...p);
@@ -191,7 +192,7 @@ test('the Drive selector offers "sine current" and "inverter (Controller)", '
   const end = panelSrc.indexOf('</FormControl>', start);
   const block = panelSrc.slice(start - 400, end);
   assert.ok(block.includes('{coupled && ('), 'must render only while Coupled thermal is on');
-  assert.ok(block.includes('<MenuItem value="sine">sine current</MenuItem>'));
+  assert.ok(hasUi(block, uiForms('<MenuItem value="sine">', 'sine current', '</MenuItem>')));
   assert.ok(/<MenuItem value="inverter" disabled=\{!controllerReady\}/.test(block));
   assert.ok(block.includes("'\\n\\nDisabled: choose a device in '")
     && block.includes("+ 'the Controller tab.')} />"),

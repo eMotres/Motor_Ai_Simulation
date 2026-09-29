@@ -9,7 +9,7 @@
  * CPU with a hand-written 9-stop ramp, the legend recomputed its range with its
  * own percentile code (so bar and fill could disagree), and the band count was
  * 20 / 13 / 11 / none depending on which view you were looking at.  The user's
- * complaint — "our maps look ugly next to Ansys's" — was mostly that: coarse,
+ * complaint — "our maps look ugly next to commercial FEM's" — was mostly that: coarse,
  * flat-shaded, few levels, and no two views alike.
  *
  * What every view now gets, identically:
@@ -19,12 +19,12 @@
  *     the mesh vertices with area weights, but a vertex is duplicated per
  *     (vertex, material class), so a slot-air vertex never reads half of the
  *     copper's density and a magnet corner never bleeds into the air gap.
- *     Smooth inside a part, crisp at every boundary — the Ansys reading.
+ *     Smooth inside a part, crisp at every boundary — the commercial FEM reading.
  *   • ~11 DISCRETE colour bands, quantised PER PIXEL from the interpolated
  *     scalar (not at the vertices — quantising there and letting the GPU blend
  *     the resulting RGB mixes neighbouring band colours into blotches).  Every
  *     band edge therefore lands exactly on an iso-line of the field, and the
- *     shader draws that edge as a thin dark line: Ansys's banded contour plot,
+ *     shader draws that edge as a thin dark line: commercial FEM's banded contour plot,
  *     for free, in every view.
  *   • ONE scale object shared by the fill and the colour bar, so the legend
  *     cannot describe a range the picture does not use.  The bar prints the
@@ -100,7 +100,7 @@ export function emClassName(domain: number): string | undefined {
  * same shape the backend's CadQuery outlines use — so a payload assembled
  * on the client (the run's demag map read off the stored transient) draws
  * the motor around the coloured magnets instead of magnets floating in
- * nothing (user 2026-09-05: "а почему мотора не видно?").
+ * nothing (user 2026-09-05: "why can't I see the motor?").
  */
 export function outlinesFromMesh(
   vertices: [number, number][],
@@ -153,7 +153,7 @@ export function outlinesFromMesh(
   // renderer closes every loop with a segment from its last vertex back to
   // its first, so a chain that is open (the stator and rotor boundaries are,
   // once the sector-cut edges are dropped) drew a chord straight across the
-  // machine (user 2026-09-05: "какие-то чёрточки внутри").  A two-point loop
+  // machine (user 2026-09-05: "some little lines inside").  A two-point loop
   // closes onto itself — the edge is drawn twice, nothing else is drawn.
   const out: { domain: number; loops: [number, number][][] }[] = [];
   perClass.forEach((adj, cls) => {
@@ -167,7 +167,7 @@ export function outlinesFromMesh(
 }
 
 // ── colour ────────────────────────────────────────────────────────────────
-/** Classic Ansys rainbow (blue → cyan → green → yellow → red). */
+/** Classic commercial FEM rainbow (blue → cyan → green → yellow → red). */
 export function jet01(t: number): [number, number, number] {
   const x = Math.max(0, Math.min(1, t));
   return [
@@ -182,7 +182,7 @@ export function bandColor(k: number, n: number): [number, number, number] {
   return jet01((Math.min(Math.max(k, 0), n - 1) + 0.5) / n);
 }
 
-/** Number of colour bands.  ONE value for every view — "все графики одинаково"
+/** Number of colour bands.  ONE value for every view — "all charts the same"
  *  was the request, and a plot whose band count changes with the quantity is
  *  a plot you cannot compare with the one beside it. */
 export const N_BANDS = 11;
@@ -261,8 +261,8 @@ export interface FieldProbeData {
   val: Float32Array;
   /** RAW class tag per drawn triangle (an EM domain id, a mechanical part id).
    *  Not the dense remap: the HOST owns the names, and it names its own tags.
-   *  User 2026-09-06: "подсвечивать точки максимальных деформаций, напряжений и
-   *  полей" — a peak that does not say WHICH part it is in is half an answer. */
+   *  User 2026-09-06: "highlight the points of maximum deformations, stresses
+   *  and fields" — a peak that does not say WHICH part it is in is half an answer. */
   cls?: Int32Array;
 }
 
@@ -295,8 +295,8 @@ export const fmt2 = (v: number) => v.toFixed(2);
 export const fmt0 = (v: number) => v.toFixed(0);
 /** Significant-figure-ish formatter: 2 decimals under 10, 1 under 100, none
  *  above.  Lived as a private `fmtMPa` inside the mechanical adapter until
- *  2026-09-06 — the user asked that the stress/strain views be drawn "так же
- *  как B — единый стиль везде", and two copies of the number formatter is
+ *  2026-09-06 — the user asked that the stress/strain views be drawn "the
+ *  same way as B — one consistent style everywhere", and two copies of the number formatter is
  *  exactly how two views start printing the same value differently. */
 export const fmtAuto = (v: number): string => {
   const a = Math.abs(v);
@@ -312,7 +312,7 @@ export const fmtSI = (v: number) => {
 
 /** The FLOOR of a colour scale: the field's own minimum, not zero.
  *
- *  User 2026-09-07: "почему шкала от нуля — нужно везде от минимума строить".
+ *  User 2026-09-07: "why does the scale start from zero — it needs to be built from the minimum everywhere".
  *  A bar that starts at 0 for a field that lives between 1.5 and 8 spends a
  *  fifth of the palette on values nobody has; starting at the minimum gives the
  *  whole palette to the range that exists.  Non-finite values are skipped; an
@@ -519,7 +519,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
     // 11), but the copper is pinned at the top and the eye calibrates on it.
     //
     // Per-material mode normalises each material class to its OWN 5/99.5
-    // percentiles, which is what "scale per body" does in Ansys and the only
+    // percentiles, which is what "scale per body" does in commercial FEM and the only
     // way to read structure inside the weakest component.  It buys that by
     // giving up cross-material comparison entirely: the same colour means a
     // different number in copper and in a magnet.  So it is OFF by default,
@@ -592,7 +592,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
 
   if (mode === 'J' || mode === 'Jeddy') {
     // Signed current density.  DIVERGING by construction: the range is
-    // symmetric, so jet's green midpoint lands exactly on J = 0 — the Ansys J
+    // symmetric, so jet's green midpoint lands exactly on J = 0 — the commercial FEM J
     // legend, without a second hand-written ramp to keep in step with the
     // first.
     //
@@ -619,8 +619,8 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
     // thing a current-density map must never do; and the header, which reads the
     // drawn field honestly, printed a max of 158.5 MA/m2 that could not be found
     // anywhere on the bar.  Two numbers for one field again — the same complaint
-    // the stress views were fixed for ("везде и в Ansys и в Fusion полное
-    // соответствие").
+    // the stress views were fixed for ("commercial FEM and Fusion
+    // agree everywhere").
     //
     // Unclipped, the DC level lands around a third of the scale and the
     // proximity crowding reads as what it is: brighter copper near the field,
@@ -652,8 +652,8 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
     const fixed = hi * 100 >= 90;
     // The band EDGES stay fixed (comparable between runs), but the bar starts
     // at the band the field's minimum falls in: a magnet that kept 98–100 %
-    // does not need the 0…97 % bands drawn (user 2026-09-09: "почему шкала
-    // от 0?").  At least the top two bands are always shown.
+    // does not need the 0…97 % bands drawn (user 2026-09-09: "why does the
+    // scale start from 0?").  At least the top two bands are always shown.
     const loPct = lo * 100;
     const firstIdx = Math.max(0, Math.min(DEMAG_EDGES.length - 3,
       DEMAG_EDGES.findIndex((e) => e > loPct) - 1));
@@ -746,8 +746,8 @@ export function buildFieldView(payload: FemPayload | null, mode: string,
   const positions = new Float32Array(kept.length * 9);
   const vals = new Float32Array(kept.length * 3);
   // The SAME column before normalisation, filled in this very pass: the shared
-  // viewer's Part menu (user 2026-09-06 — "видеть только её деформации и
-  // стрессы") re-normalises one part against its own range, and a second walk
+  // viewer's Part menu (user 2026-09-06 — "see only its deformations and
+  // stresses") re-normalises one part against its own range, and a second walk
   // of a 100k-triangle mesh per part switch is what would make it feel slow.
   const raw = new Float32Array(kept.length * 3);
   // Hover readout: one centroid + one DISPLAY-unit value per drawn triangle,
@@ -795,9 +795,9 @@ export function buildFieldView(payload: FemPayload | null, mode: string,
 /* ═══════════════════════════════════════════════════════════════════════════
  * The EM / thermal adapter for the shared viewer
  *
- * User 2026-09-06: "нужно сделать одну картинку и меню для переключения выводов
- * графиков; интерфейс должен быть единым для всех графиков — электромагнитных,
- * механических и термо".  Everything below turns a FemPayload into the ONE
+ * User 2026-09-06: "we need one picture and a menu for switching between
+ * chart outputs; the interface must be the same for all charts —
+ * electromagnetic, mechanical, and thermal".  Everything below turns a FemPayload into the ONE
  * `FieldOutput` shape `common/FieldViewer` renders — the same shape the
  * Mechanical and Modal adapters produce, so the three tabs cannot drift into
  * three viewers again.
@@ -889,7 +889,7 @@ export const EM_MENU: {
     tip: 'Coupled eddy-current density σ(−∂A/∂t+U) — the proximity crowding the uniform "J" view cannot show. Instant when the last Simulation run solved this operating point with the coupled eddy solve on; otherwise it runs a 10-frame transient here (~25 s) and says so.' },
   { id: 'Loss',  menuLabel: 'Loss',  label: 'Loss density',
     group: 'Electromagnetic', unit: 'W/m³',
-    tip: 'Ansys-style loss-density map. Uses the last Simulation run\'s own cycle-averaged map when it matches this operating point; otherwise the single-frame analytic estimate. The header says which one you are looking at.' },
+    tip: 'Commercial-FEM-style loss-density map. Uses the last Simulation run\'s own cycle-averaged map when it matches this operating point; otherwise the single-frame analytic estimate. The header says which one you are looking at.' },
   { id: 'Demag', menuLabel: 'Demag', label: 'Demagnetisation',
     group: 'Electromagnetic', unit: '% Br',
     tip: 'Irreversible demagnetisation — per cent of Br remaining. The honest map is the run\'s worst field over the full electrical period.' },

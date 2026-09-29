@@ -154,3 +154,19 @@ config/devices/spice/_runs/
 # MCP Stage 3: agent DRAFT machines + their sandboxes (per workspace; on this
 # single-user install the workspace is config/).  docs/MCP_2026-09-28.md
 config/agent_designs/
+
+# open/private data moves: pending state + audit (server-local)
+config/data_moves.json
+config/data_moves_audit.jsonl
+
+config/oauth_grants.json
+config/die_access.json
+config/cluster/
+config/cost_basis.json
+config/usage/
+uvicorn_*.out
+uvicorn_*.err
+
+# Raw supplier documents are never committed (owner 2026-09-29); only derived values go into the libraries
+supplier_docs/
+**/supplier_docs/

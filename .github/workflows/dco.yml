@@ -1,0 +1,43 @@
+# DCO check: every commit in a pull request must carry a
+# "Signed-off-by: Name <email>" trailer matching its author (git commit -s).
+# See DCO.md and CONTRIBUTING.md.  No third-party action, no secrets: the
+# pull request's commits are read with git only.
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Check Signed-off-by on every commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          fail=0
+          for c in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
+            author="$(git log -1 --format='%an <%ae>' "$c")"
+            if git log -1 --format='%(trailers:key=Signed-off-by,valueonly)' "$c" \
+                 | grep -qiF -- "$author"; then
+              echo "ok   $c  $author"
+            else
+              echo "FAIL $c  no 'Signed-off-by: $author'"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo
+            echo "Sign off each commit (git commit -s; for existing commits:"
+            echo "git rebase --signoff $BASE_SHA) and push again. See DCO.md."
+            exit 1
+          fi

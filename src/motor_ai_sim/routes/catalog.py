@@ -1,8 +1,8 @@
 """Motor catalog — the public 'MOTORS' menu.
 
-A curated table of ready-made motors, organised by stator diameter, plus the
-subscription tiers.  Loading a catalog motor applies its underlying preset
-(geometry + operating point) via the presets service.
+A curated table of ready-made motors, organised by stator diameter.  Loading a
+catalog motor applies its underlying preset (geometry + operating point) via
+the presets service.
 """
 from __future__ import annotations
 
@@ -402,7 +402,7 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
     if not preset_id:
         raise HTTPException(status_code=400, detail=f"motor '{motor_id}' has no preset to characterise")
     try:
-        # ZERO live-state touch (user 2026-08-25 "чтобы он мне не мешал"):
+        # ZERO live-state touch (user 2026-08-25 "so it stays out of my way"):
         # the preset's machine rides every solve as per-request overrides —
         # geometry via `geo`, connection as a parameter, materials through
         # the request material context, rpm as an argument.  No apply_preset,

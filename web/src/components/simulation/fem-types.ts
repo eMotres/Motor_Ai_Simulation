@@ -43,7 +43,7 @@ export interface FemPayload {
   // A/m² in each triangle — non-zero only inside coil polygons.
   J_z_per_tri?:        number[];
   // Cycle-averaged loss density [W/m³] per triangle (eddy solve only) — the
-  // Ansys-style "Total Loss" spatial map.  Non-zero in iron / copper / magnets.
+  // commercial-FEM-style "Total Loss" spatial map.  Non-zero in iron / copper / magnets.
   loss_density_per_tri?: number[];
   loss_dens_max?:        number;
   // WHAT that map is, component by component — written by the solver (which

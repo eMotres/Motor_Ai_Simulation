@@ -36,6 +36,14 @@ logging.getLogger("skfem").setLevel(logging.WARNING)
 # Attached ONCE per process and only in the SERVER process — refine_proc eval
 # subprocesses import modules directly (never this file), so there is no
 # multi-process contention on the rotation.
+# Data protection (audit 2026-09-29 #9): everything this process creates —
+# identity stores, logs, workspace files, sqlite — is born 0600 / 0700.
+import sys as _sys_umask
+from motor_ai_sim.private_files import apply_process_umask as _apply_umask
+if "pytest" not in _sys_umask.modules:      # the suite's tmp files stay as they were
+    _apply_umask()
+
+
 def _attach_file_log() -> None:
     import os as _os
     import sys as _sys
@@ -69,6 +77,11 @@ def _attach_file_log() -> None:
 
 
 _attach_file_log()
+
+# Logging hygiene (audit 2026-09-29): no bearer tokens / JWTs / agent keys /
+# passwords, and no raw client IPs (keyed hash instead) in any log line.
+from motor_ai_sim import log_redaction as _log_redaction
+_log_redaction.install()
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -108,8 +121,11 @@ from motor_ai_sim.routes.auth_local import router as auth_local_router
 from motor_ai_sim.routes.newsletter import router as newsletter_router, notices_router
 from motor_ai_sim.routes.sweep_config import router as sweep_config_router
 from motor_ai_sim.routes.account import router as account_router
+from motor_ai_sim.routes.account_data import router as account_data_router
 from motor_ai_sim.routes.admin import router as admin_router
 from motor_ai_sim.routes.cluster import router as cluster_router
+from motor_ai_sim.routes.compute_nodes import (
+    router as compute_nodes_router, admin_router as compute_nodes_admin_router)
 from motor_ai_sim.routes.support import router as support_router
 from motor_ai_sim.routes.modules import router as modules_router
 from motor_ai_sim.routes.kernel import router as kernel_router
@@ -134,6 +150,7 @@ from motor_ai_sim import watchdog_notify as _watchdog
 
 @_asynccontextmanager
 async def _lifespan(_app):
+    _log_redaction.install()        # again: uvicorn may have (re)built its handlers
     _run_startup_checks()
     # Resume any incomplete sweeps from before the restart
     try:
@@ -201,8 +218,14 @@ install_workspace_resolver(app)
 
 # Tier gate NEXT (inner), CORS LAST (outer) so 401/403 from the gate still
 # carry CORS headers — otherwise the browser shows a CORS error, not the 403.
-from motor_ai_sim.auth import install_tier_gate
-install_tier_gate(app)
+from motor_ai_sim.auth import install_role_gate
+install_role_gate(app)
+
+# Path-traversal guard (audit 2026-09-29 #7): OUTSIDE the gate and the
+# resolver, inside CORS, so a '..' / encoded-slash / absolute-path request is
+# refused before anything resolves a name — and the 400 still carries CORS.
+from motor_ai_sim import safe_paths as _safe_paths
+_safe_paths.install(app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -241,7 +264,16 @@ except ImportError as _e:                                # pragma: no cover
 @app.exception_handler(UnknownMaterialError)
 async def _unknown_material_handler(request, exc: UnknownMaterialError):
     return JSONResponse(status_code=400,
-                        content={"detail": f"unknown material: {exc}"})
+                        content={"detail": f"unknown material: {exc}",
+                                 "code": "material.unknown",
+                                 "params": {"name": str(exc)}})
+
+
+# Every HTTPException answer also carries a stable `code` + `params` beside the
+# unchanged English `detail`, so the localised web can translate it
+# (docs/I18N.md).  Existing clients keep reading `detail`.
+from motor_ai_sim import api_errors as _api_errors  # noqa: E402
+_api_errors.install(app)
 
 
 app.include_router(geometry_router)
@@ -257,15 +289,15 @@ app.include_router(panel_settings_router)
 # tab has the same contract the Mechanical one has (last result, mesh preview,
 # timings).  Registered next to it deliberately: they are siblings.
 app.include_router(thermal_router)
-# /api/coupled — the EM<->thermal ORCHESTRATOR (2026-09-08, user: "не надо всё
-# смешивать, нужен оркестратор").  A THIRD router above the two solvers, not a
+# /api/coupled — the EM<->thermal ORCHESTRATOR (2026-09-08, user: "don't mix
+# everything together, we need an orchestrator").  A THIRD router above the two solvers, not a
 # route inside either: it calls get_fem_transient and solve_thermal_field through
 # their own public entry points and iterates the winding / magnet temperatures to
 # the fixed point.  Neither solver learns about the other, and with the
 # Electromagnetic tab's toggle off nothing here is reachable at all.
 app.include_router(coupled_router)
-# /api/controller — the INVERTER (2026-09-22, owner: «давай начнём делать модуль
-# инвертора … чтобы была возможность комбинировать мосты так, как нам надо»).
+# /api/controller — the INVERTER (2026-09-22, owner: "let's start building the
+# inverter module ... so we can combine bridges however we need to").
 # A fourth analysis router beside coupled/thermal/mechanical: a device card
 # library, a coil->bridge map, the loss and junction-temperature arithmetic over
 # them, and the waveform the motor will be fed with in Stage 2.  It solves no
@@ -291,8 +323,11 @@ app.include_router(newsletter_router)
 app.include_router(notices_router)
 app.include_router(sweep_config_router)
 app.include_router(account_router)
+app.include_router(account_data_router)
 app.include_router(admin_router)
 app.include_router(cluster_router)
+app.include_router(compute_nodes_router)
+app.include_router(compute_nodes_admin_router)
 app.include_router(support_router)
 app.include_router(modules_router)
 app.include_router(kernel_router)
@@ -603,7 +638,7 @@ def update_part_state(assignment: PartStateAssignment):
             pass
         from motor_ai_sim.part_states import config_part_states
         out = {"status": "ok", "parts": config_part_states()}
-        # The solver refuses nothing (the user asked for "любую деталь"), but
+        # The solver refuses nothing (the user asked for "any part"), but
         # removing a magnetically active part is an experiment, not a
         # packaging choice — say so instead of letting a plausible-looking
         # torque out of the door.
@@ -732,8 +767,8 @@ def get_materials_library():
 
         # ── MECHANICAL, straight off the raw records ──────────────────
         #
-        # User 2026-09-10: *"так и не вижу механических свойств материалов в
-        # каталоге"* — and they were right twice over: the card only rendered
+        # User 2026-09-10: *"I still don't see the materials' mechanical
+        # properties in the catalog"* — and they were right twice over: the card only rendered
         # them for insulators, and this endpoint never sent them at all.
         #
         # Merged from the RAW library rather than from the parsed dataclasses:

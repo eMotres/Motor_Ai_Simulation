@@ -163,20 +163,5 @@
    "r_th_jc_k_w": "1.5"
   },
   "sha256": "4f9850a1025b86bc92eb31ea3e7d6090fbc1e161296dd796cbbddbfb82dc6680"
- },
- "WCMS900B170E53": {
-  "numbers": {
-   "e_switch_datasheet": {
-    "e_fr_J": "0.0007310377358490565",
-    "e_off_J": "0.0009179600886917961",
-    "e_on_J": "0.009459401709401714"
-   },
-   "i_d_rating_100": "None",
-   "r_ds_on_ohm@100.0": "0.0019",
-   "r_ds_on_ohm@175.0": "0.00267",
-   "r_ds_on_ohm@25.0": "0.0015",
-   "r_th_jc_k_w": "None"
-  },
-  "sha256": "1c6d31452bb308cff4ce27ef818143075ea6a52d73ee7e22247fc494a8da3687"
  }
 }

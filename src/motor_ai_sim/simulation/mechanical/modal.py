@@ -1,7 +1,7 @@
 """2-D in-plane modal analysis of the rotor and stator cross-sections.
 
-Written 2026-09-05 for the user's request: "нам нужно сделать ещё модальный
-анализ, чтобы понять все частоты — это очень важно для 20000 rpm".  At 20 000
+Written 2026-09-05 for the user's request: "we also need to do modal
+analysis, to understand all the frequencies — that's very important for 20000 rpm".  At 20 000
 rpm the rotor turns at 333 Hz, its magnetic force fundamental is 3.3 kHz, the
 slot-passing order is 4 kHz and the PWM carrier is 24 kHz — the question this
 module answers is whether any structural mode of the iron sits on top of one of

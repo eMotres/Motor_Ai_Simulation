@@ -22,8 +22,8 @@ changed in the Mechanical tab moves the Electromagnetic tab's loss picture on th
 next render instead of after a six-minute re-run.  That is what this route is
 for: PREVIEWING a pair, and answering for a speed nothing has been solved at.
 
-Since 2026-09-08 it is no longer the ONLY place those watts exist.  User: *"все
-потери должны передаваться в электромагнитный расчёт"* — every stored run of a
+Since 2026-09-08 it is no longer the ONLY place those watts exist.  User: *"all
+losses should be passed into the electromagnetic calculation"* — every stored run of a
 machine with bearings carries them in its own summary (``routes.simulation``),
 the thermal solve takes the friction as a heat source, and the coupled loop
 iterates the bearing temperature with the rest.  All four go through ONE

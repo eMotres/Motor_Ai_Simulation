@@ -57,7 +57,7 @@ def _real_users_untouched():
 
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
-    """A throwaway registry with an admin and an ordinary account, the tier gate
+    """A throwaway registry with an admin and an ordinary account, the role gate
     enforcing (what the server runs), and no provider configured.
 
     ADMIN_EMAILS must be non-empty or ``_is_admin_caller`` treats EVERY caller —
@@ -87,8 +87,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(support, "_load_overrides", lambda: {})
     support.reset_limits()
 
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Owner")
-    U.create_user(CLIENT, "password-client", tier="free", name="Client")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Owner")
+    U.create_user(CLIENT, "password-client", role="user", name="Client")
     yield {
         "admin": {"Authorization": f"Bearer {U.issue_token(ADMIN)}"},
         "client": {"Authorization": f"Bearer {U.issue_token(CLIENT)}"},

@@ -1,7 +1,7 @@
 """Limit speed (SF = 1) search — pure, solver-agnostic.
 
-Owner 2026-09-21: *"нужно искать ещё максимальную скорость вращения, на
-всякий случай — она будет, когда достигает SF = 1"*.  ``rotor_stress`` already
+Owner 2026-09-21: *"we also need to find the maximum rotation speed, just in
+case — it's where SF reaches 1"*.  ``rotor_stress`` already
 answers "is this rotor safe at rpm X"; this module answers the companion
 question — "at what speed does it stop being safe" — by bracketing and
 bisecting the SAME solve the caller already ran, with everything else held
@@ -18,8 +18,8 @@ the caller already paid for is never re-solved.
 ALGORITHM (v2, 2026-09-25)
 --------------------------
 Owner 2026-09-25, Ø30 L10: *"Limit speed: not reached within the searched
-range (SF 10.38 at 15,000 rpm)" — "он же должен искать эту скорость, на
-которой SF = 1"*.  v1 stepped ×1.5 from ``rpm0`` and stopped as soon as the
+range (SF 10.38 at 15,000 rpm)" — "it's supposed to search for the speed
+where SF = 1"*.  v1 stepped ×1.5 from ``rpm0`` and stopped as soon as the
 NEXT step would pass ``max_factor`` (5): 1.5, 2.25, 3.375 — so the range it
 actually searched was 3.4×, never 5×, whatever SF said.  On that rotor the
 stress is σ ≈ a + b·ω² with a real speed-independent part ``a`` (torque on

@@ -325,7 +325,7 @@ def _nodal_average(verts: np.ndarray, idx: np.ndarray,
 
     It is an INTERPOLATION, not a solve: the field is piecewise constant per
     tet, and averaging it at a node invents the gradient between two elements.
-    That is exactly what ANSYS's nodal plot does and why ANSYS keeps the
+    That is exactly what commercial FEM's nodal plot does and why commercial FEM keeps the
     element plot beside it — the jump between neighbours is the discretisation
     error, and smoothing hides it.  So this is offered ALONGSIDE the per-face
     values, never instead of them, and the viewer says which one is on screen.
@@ -410,7 +410,7 @@ def surface_payload(tm,
     element's own value, piecewise constant, because that is what the element
     actually holds.  Each region ALSO carries ``values_node``: the same numbers
     area-averaged onto the shared vertices, which is what a smooth (nodal) plot
-    needs and what ANSYS shows by default.  Both are emitted because they say
+    needs and what commercial FEM shows by default.  Both are emitted because they say
     different things — the per-face one is the solved field, the nodal one is an
     interpolation of it — and the viewer labels whichever it draws.
     """

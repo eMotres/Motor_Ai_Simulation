@@ -26,14 +26,14 @@ fill factor, laminated parts only) × (the density of the material ASSIGNED to i
     (or the per-request material override), never a hard-coded number.  The
     constants below are the last-resort fallback when a part has no assignment.
 
-Reference cross-check (150 mm 24s/28p, 35 mm stack, ANSYS Motres_CIANO281_150):
+Reference cross-check (150 mm 24s/28p, 35 mm stack, independent reference model):
 their active-mass expression is
     (A_magnet·Nm·7700 + A_wire·6·wire_N_h·ρ_Cu·res_add + (A_stator+A_rotor_holder)·7700)
     ·stator_w·N + mass_rest,   mass_rest = 0
 — i.e. magnets + copper (with the end-winding factor, res_add, which is the SAME
 formula as ``end_winding_factor`` here) + stator iron + rotor holder, and NO
 shaft, NO lamination factor, 7700 kg/m³ for every iron.  Hence the split below:
-``active`` (what ANSYS quotes) vs ``total`` (active + shaft), which is what
+``active`` (what the reference model quotes) vs ``total`` (active + shaft), which is what
 torque-per-mass has always divided by and still does.
 
 Fallback densities (used only when a part carries no material assignment):
@@ -67,8 +67,8 @@ def end_winding_factor(p: Any, geo: Dict[str, Any] | None = None) -> float:
     tooth_width/2 + bundle_width/2, and
         k_end = (π·(bundle_width/2 + tooth_width/2) + L_stack) / L_stack.
     (Per Vadim, 2026-08-04 — replaces the 2026-07-02 tooth-only span, which was
-    a lower bound: on the 40 mm it read 1.406 while the Ansys model's measured
-    factor is 1.76; with the wire term it reads 1.733.)  Grows with both
+    a lower bound: on the 40 mm it read 1.406, well below the independent
+    reference; with the wire term it reads 1.733.)  Grows with both
     tooth_width and the bundle, so wide teeth AND thick wire cost copper
     mass / R / loss in the torque-density sweep.
 
@@ -570,7 +570,7 @@ def compute_masses(p: Any, geo: Dict[str, Any], k_end: float = 0.0,
 
     Returns the per-component masses plus:
       ``active``  stator iron + rotor iron + copper + magnets — the EM-active mass,
-                  the number ANSYS quotes (its expression carries no shaft term);
+                  the number commercial FEM quotes (its expression carries no shaft term);
       ``total``   active + shaft — the historical basis of torque-per-mass, which
                   is unchanged so stored Compare points keep their meaning;
       the sections and volumes used, the densities and k_f per part, and
@@ -634,11 +634,11 @@ def compute_masses(p: Any, geo: Dict[str, Any], k_end: float = 0.0,
         if _states.get("sleeve"):
             m_sleeve = 0.0
 
-    # THE BAND IS ACTIVE MASS (user 2026-09-10: "давай не будем разделять их,
-    # пусть будет одна активная масса вместе с бандажом, так будет проще, чтобы
-    # не запутаться").
+    # THE BAND IS ACTIVE MASS (user 2026-09-10: "let's not split them, let
+    # there be one active mass together with the band, it'll be simpler and
+    # less confusing").
     #
-    # It used to sit on the shaft side, on the argument that ANSYS's active-mass
+    # It used to sit on the shaft side, on the argument that commercial FEM's active-mass
     # expression has no term for a retaining ring and `active` had to stay
     # comparable with it.  That comparability is now given up on purpose: two
     # masses that differ by a quarter of a kilo, one of which silently excludes
@@ -647,7 +647,7 @@ def compute_masses(p: Any, geo: Dict[str, Any], k_end: float = 0.0,
     # project it counts.
     #
     # Consequence, stated so nobody rediscovers it: `active` is no longer the
-    # same quantity ANSYS prints under that name.  `total` is unchanged — it
+    # same quantity commercial FEM prints under that name.  `total` is unchanged — it
     # always contained the band — and so is every N·m/kg, which divides by it.
     # Zero-thickness = zero, so nothing moves on a machine without a band.
     m_active = m_stator + m_rotor + m_cu + m_mag + m_sleeve

@@ -1,7 +1,7 @@
 """The Controller tab's own SETTINGS persist WITH the configuration.
 
-Owner, 2026-09-22: *"при сохранении мотора текущий контроллер тоже должен
-сохраняться со всеми настройками"* — until now only the Controller tab's
+Owner, 2026-09-22: *"when saving the motor, the current controller should
+also be saved with all its settings"* — until now only the Controller tab's
 SOLVE RESULT (losses, junction temperatures, the limit table — the
 ``duty_results`` ``controller`` kind ``routes.controller.post_solve``
 writes) survived a reload; the tab's own FORM (topology, device, mapping, N
@@ -100,7 +100,7 @@ def granted(tmp_path, monkeypatch, dies):
     monkeypatch.delenv("CATALOG_GRANT_ALL_REGISTERED", raising=False)
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
     return {"Authorization": f"Bearer {U.issue_token(ADMIN)}"}
 
 
@@ -160,8 +160,8 @@ def test_save_writes_the_block_into_the_configuration_yaml(dies, granted):
 
 
 def test_save_is_a_whole_replace_not_a_merge(dies, granted):
-    """The tab sends its complete state every time (owner: "со всеми
-    настройками") — a second save with a different shape REPLACES the first,
+    """The tab sends its complete state every time (owner: "with all
+    settings") — a second save with a different shape REPLACES the first,
     it does not merge into it."""
     _patch_controller(headers=granted, devices_parallel=3, device="A")
     r = _patch_controller(headers=granted, devices_parallel=1, device="B",
@@ -222,8 +222,8 @@ def test_power_factor_above_one_is_refused(dies, granted):
 
 
 # ---------------------------------------------------------------------------
-# cooling.mode — owner 2026-09-22: "надо добавить воздушное охлаждение и
-# скорость ветра, как в термосимуляции" (the selector only offered liquid
+# cooling.mode — owner 2026-09-22: "need to add air cooling and wind
+# speed, like in the thermal simulation" (the selector only offered liquid
 # coolants). The web selector itself is a separate follow-up; this is the
 # round-trip of the saved block through the PATCH route.
 # ---------------------------------------------------------------------------
@@ -347,7 +347,7 @@ def test_an_old_configuration_with_no_controller_key_loads_everywhere(dies, gran
 
 # ---------------------------------------------------------------------------
 # duty save carries the current controller settings (owner 2026-09-22,
-# second round: "не только кнопкой самой вкладки Controller")
+# second round: "not just with the Controller tab's own button")
 # ---------------------------------------------------------------------------
 #
 # ``ActiveFamilyStrip``'s "Save to duty" is the WEB flow: it reads the

@@ -230,9 +230,9 @@ export interface ColdConstants {
 
 /** The machine AT the first limit it reaches — the `limits` mode's whole answer.
  *
- *  Owner 2026-09-18: *«состояние мотора в работе 24 секунды при заданной
- *  мощности»* and, the same day, *«при заданной мощности и заданном
- *  охлаждении»*.  Every number in the coupling block beside this one is that
+ *  Owner 2026-09-18: *«the state of the motor running for 24 seconds at the
+ *  given power»* and, the same day, *«at the given power and given
+ *  cooling»*.  Every number in the coupling block beside this one is that
  *  machine: the loop made one more electromagnetic pass at these temperatures
  *  and the thermal map was translated onto them. */
 export interface LimitedState {
@@ -251,7 +251,7 @@ export interface LimitedState {
    *  element, the seat.  The limiting one is exactly its limit. */
   at_limit_c?: Record<string, number>;
   /** WHAT THE FINAL ELECTROMAGNETIC PASS WAS SOLVED AT (owner 2026-09-18:
-   *  *«расчёт должен быть при катушках в 200 градусов, а не 184»*): each part
+   *  *«the computation should be with the coils at 200 degrees, not 184»*): each part
    *  at the temperature its limit is judged on — the winding hot spot, the
    *  hottest magnet element — and the limiting part exactly AT its limit.
    *  The block's `coil_temp_c` / `magnet_temp_c` ARE these two numbers; the
@@ -339,8 +339,8 @@ export interface ContinuousRatingPart {
  *  pass the loop already made; `POST /api/coupled/continuous_rating` uses the
  *  same shape for a whole table of what-if coolings.
  *
- *  Owner 2026-09-21: *«давай сделаем кнопку, или лучше добавим ещё один
- *  элемент в меню»* — the third `solve_to` option. */
+ *  Owner 2026-09-21: *«let's make a button, or better add one more
+ *  item to the menu»* — the third `solve_to` option. */
 export interface ContinuousRating {
   ok?: boolean;
   feasible?: boolean;
@@ -392,8 +392,8 @@ export interface ContinuousRating {
   refusal?: { error: string; error_code?: string };
 
   // ── S1 VERIFICATION (owner 2026-09-21, second addendum) ──────────────────
-  // *«почему сразу не пересчитывается электромагнитное моделирование для
-  // найденного непрерывного режима — токи не совпадают»* — the network's own
+  // *«why doesn't the electromagnetic simulation recompute right away for
+  // the found continuous regime — the currents don't match»* — the network's own
   // answer is an ESTIMATE; the loop now CONFIRMS it with a real EM + thermal
   // pass at that current, and the record (em / field / temperatures) becomes
   // that pass.  `I_cont_A_rms` above is the VERIFIED reading once this ran;
@@ -416,7 +416,7 @@ export interface ContinuousRating {
   /** `true` once a real S1 verification pass REPLACED this record's own
    *  em / field / temperatures — i.e. the ONLY time the panel's tiles are
    *  the S1 machine rather than the setpoint's (owner 2026-09-21, third
-   *  round: *«опять токи не совпадают»* — the Operating point panel and the
+   *  round: *«the currents don't match again»* — the Operating point panel and the
    *  AT-THE-LIMIT line both kept describing the setpoint while the tiles
    *  had already moved to S1, with nothing on screen saying so). */
   record_is_s1?: boolean;
@@ -547,7 +547,7 @@ export function setCoupledControllerRef(v: Record<string, unknown> | null): void
  *  into localStorage), and the run then shipped a block with the mode and
  *  without the flow: the backend refused "coolant flow must be greater than
  *  0 L/min" while the Thermal tab itself showed 10 L/min (2026-09-09, user:
- *  "опять run не работает").  A partial block is worse than none — `null`
+ *  "run doesn't work again").  A partial block is worse than none — `null`
  *  makes the backend load the user's own stored settings, which are whole. */
 let _thermalPanelBlock: (() => Record<string, string> | null) | null = null;
 
@@ -619,8 +619,8 @@ export async function runCoupled(
   if (settings) body.thermal_settings = settings;
   // Phase 3: the loop ends with the rotor stress solved at the converged
   // per-part temperatures, so the Mechanical tab shows the same machine at the
-  // same temperatures (user 2026-09-08: "чтобы температуры везде были
-  // одинаковы").  Opt-in on the server; the toggle always asks for it.
+  // same temperatures (user 2026-09-08: "so the temperatures are the same
+  // everywhere").  Opt-in on the server; the toggle always asks for it.
   body.mechanical = opts.mechanical !== false;
   if (opts.maxIter !== undefined) body.max_iter = opts.maxIter;
   // WHICH QUESTION (owner 2026-09-18).  Always sent, never inferred server-side:
@@ -706,8 +706,8 @@ export function adoptConvergedTemperatures(c: CouplingBlock, stamp?: string): vo
 
 /** Identity of the coupled answer the temperature fields were taken from.
  *
- *  2026-09-09.  User: *"здесь одна температура, а здесь другая — как это
- *  понять?"* — the card showed a loop converged at 200 °C while the Coil
+ *  2026-09-09.  User: *"there's one temperature here, and a different one
+ *  here — how am I supposed to understand this?"* — the card showed a loop converged at 200 °C while the Coil
  *  temperature field still read 111, the value the run STARTED from, because
  *  the adopt above runs only on the live response: a page reload (or a coupled
  *  POST whose connection dropped after the server had finished, which happened
@@ -753,8 +753,8 @@ export function couplingLine(c: CouplingBlock): string {
     : mb.contact_fallback ? `${String(mb.contact_fallback.pair ?? 'joint').replace('_', '–')} solved ${mb.contact_fallback.to ?? 'bonded'}`
     : null;
   // The modes and the critical speeds the same run left (2026-09-13) used to
-  // print here too (f₁ …, crit … rpm) — owner, 2026-09-21: *«не надо их
-  // выводить сюда»*.  They stay everywhere else that already carries them:
+  // print here too (f₁ …, crit … rpm) — owner, 2026-09-21: *«no need to
+  // print them here»*.  They stay everywhere else that already carries them:
   // the Mechanical tab, this record, the catalog row and the report — only
   // this ONE dashboard line drops them.  `couplingTooltip` → `mechanicalRows`
   // (below) still prints the full sentences on hover.
@@ -830,8 +830,8 @@ export function coupledRegimeNotice(c: CouplingBlock | null | undefined):
 }
 
 /* ── HOW LONG MAY IT RUN (owner 2026-09-17) ─────────────────────────────────
- * *«если где-то выходим за лимиты, нужно посчитать время, за какое мотор
- * проработает до этого лимита»*.  A temperature past its class is half an
+ * *«if we go past the limits somewhere, we need to compute the time the
+ * motor will run before hitting that limit»*.  A temperature past its class is half an
  * answer; the loop now computes the other half and it gets ONE line.
  *
  * NOT gated by the duty-cycle flag: this is not a duty cycle.  It reads no
@@ -875,8 +875,8 @@ export function timeToLimitLine(t: TimeToLimit | null | undefined):
 }
 
 /* ── SOLVE TO THE STEADY STATE, OR TO THE LIMITS (owner 2026-09-18) ─────────
- * *«надо сделать выбор — или считать до конца стабилизации температуры, или
- * считать до лимитов и находить время работы при заданных условиях»*.  The
+ * *«we need to make a choice — either compute until temperature stabilises
+ * fully, or compute until the limits and find the time it can run under the given conditions»*.  The
  * selector beside the Coupled thermal switch asks the question; these two read
  * the answer back off the record, so the panel, the catalog chip and the PDF
  * print ONE sentence about one state. */
@@ -895,7 +895,7 @@ export function coupledStateLine(c: CouplingBlock | null | undefined):
 
 /** The HelpTip behind it: the model, and — on a limited answer — the two things
  *  it is conditional on, the operating point and the COOLING (owner's addendum
- *  of the same day: *«при заданной мощности и заданном охлаждении»*). */
+ *  of the same day: *«at the given power and given cooling»*). */
 export function coupledStateTip(c: CouplingBlock | null | undefined): string {
   if (!c) return '';
   const l = c.mode === 'limited' ? c.limited : undefined;
@@ -937,7 +937,7 @@ export function timeToLimitTip(t: TimeToLimit | null | undefined): string {
 }
 
 /* ── THE CONTINUOUS (S1) RATING (owner 2026-09-21) ───────────────────────────
- * *«давай сделаем кнопку, или лучше добавим ещё один элемент в меню»* — the
+ * *«let's make a button, or better add one more item to the menu»* — the
  * third `solve_to` option, beside `steady` and `limits`: the largest current
  * this machine may hold FOR EVER at this duty's own saved cooling, found from
  * the pass the loop already made. */
@@ -947,8 +947,8 @@ export function timeToLimitTip(t: TimeToLimit | null | undefined): string {
  *  always something to say about why), the way a refused `limits` pass still
  *  warns instead of going silent.
  *
- *  Owner addendum, 2026-09-21: *«не пиши уже мощность и момент — его и так
- *  видно»* — the tiles already show the machine's numbers, and the S1 torque
+ *  Owner addendum, 2026-09-21: *«don't write power and torque again — it's
+ *  already visible»* — the tiles already show the machine's numbers, and the S1 torque
  *  is a linear estimate anyway, so the line names only the current and what
  *  limits it.  Both are still in the stored block for the API/CLI
  *  (`power.T_em_Nm` / `power.P_shaft_W`) and in the tooltip's per-part table. */
@@ -1015,7 +1015,7 @@ export function continuousRatingTip(c: CouplingBlock | null | undefined): string
 /* ── THE RECORD MOVED TO S1 — say so, and let the panel catch up ────────────
  * Owner, 2026-09-21, third round (screenshot: tiles at the S1 machine, the
  * Operating point panel and the AT-THE-LIMIT line both still describing the
- * setpoint): *«опять токи не совпадают»*. */
+ * setpoint): *«the currents don't match again»*. */
 
 /** "Results at the continuous current 48.6 A rms (setpoint 63.64 A rms)" —
  *  `null` unless a real S1 verification pass actually REPLACED this record
@@ -1044,8 +1044,8 @@ export function s1ResultsAtLine(c: CouplingBlock | null | undefined):
  *  (`s1AutoSetPlan` / PhysicsDashboard) — never a bare side effect with
  *  nothing said on screen.  The manual "Use N A as the operating point"
  *  button that used to call this on click is GONE (owner, fourth round:
- *  *«ты что не можешь сам записать этот ток и прогнать солвер с ним
- *  автоматом?»* — the auto-set below is the answer).
+ *  *«can't you just record this current yourself and run the solver with it
+ *  automatically?»* — the auto-set below is the answer).
  *
  *  ALSO PATCHES THE BACKEND DIRECTLY (owner, 2026-09-21, fifth round: field
  *  still read the old setpoint after an F5, live-verified in a sandbox).
@@ -1105,8 +1105,8 @@ export function applyS1AsOperatingPoint(i_A_rms: number): void {
  * "⚠ STALE — DIFFERENT MACHINE" banner over it, only because the operating-
  * point FIELDS still hold whatever was typed before the click, would be
  * exactly the false alarm the S1 auto-set feature above exists to prevent
- * (PhysicsDashboard's 2026-09-21 note: *"почему замыленный экран … опять
- * токи не совпадают"*). `current` is `I_terminal_rms_A ?? I_phase_rms_A` —
+ * (PhysicsDashboard's 2026-09-21 note: *"why is the screen dimmed … the
+ * currents don't match again"*). `current` is `I_terminal_rms_A ?? I_phase_rms_A` —
  * the SAME preference `opStale`'s own comparison uses (SummaryTable.tsx),
  * so a loaded entry that predates one of the two fields still clears the
  * guard. Each field is skipped independently when the loaded summary does
@@ -1153,12 +1153,12 @@ export function applyLoadedOperatingPoint(point: {
 /* ── AUTO-SET on a VERIFIED S1 run (owner 2026-09-21, fourth round) ─────────
  * Screenshot after a `continuous` coupled run: the dashboard DIMMED (the
  * stale/"different point" verdict) and the Operating point panel still read
- * the setpoint (63.64 A) under tiles at the S1 machine (48.6 A) — *«почему
- * замыленный экран после окончания каплинга и почему опять токи не
- * совпадают»*.  A manual "Use N A as the operating point" button briefly
+ * the setpoint (63.64 A) under tiles at the S1 machine (48.6 A) — *«why is
+ * the screen dimmed after the coupling finishes and why do the currents
+ * not match again»*.  A manual "Use N A as the operating point" button briefly
  * fixed this on click, but sat at the far right of a row and went unnoticed —
- * removed (owner, fourth round: *«ты что не можешь сам записать этот ток и
- * прогнать солвер с ним автоматом?»*).  This is the same setter, called once
+ * removed (owner, fourth round: *«can't you just record this current
+ * yourself and run the solver with it automatically?»*).  This is the same setter, called once
  * by the run itself — but ONLY for a REAL S1
  * verification pass that replaced the record (`record_is_s1` AND
  * `verified === true`); an estimate or a contradiction must never move the

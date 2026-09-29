@@ -38,7 +38,7 @@ const WIRE_CELL_KEY = 'coil_rel';
 // THE DIE'S MEMORY FOLLOWS THE SCREEN.  It used to be written only on leaving
 // a die or saving a duty, so a duty (re)load in between put the OLDER memory
 // back over the user's live edits — the wire cell went 2h → 1h by itself
-// (user 2026-09-08: "кто опять поменял это, у меня было всегда 2h").  Every
+// (user 2026-09-08: "who changed this again, I always had 2h").  Every
 // mesh.* write now refreshes the active die's memory, debounced.
 import { rememberDieSettings } from '../../lib/dieSettings';
 import { activeDuty } from '../../lib/dutySettings';
@@ -354,8 +354,8 @@ const MeshPanel: React.FC = () => {
   const [view] = useState<'fem' | 'pinn'>('fem');   // always the real FEM mesh; no view toggle
 
   // ── Load/save contract (user, 2026-09-07) ────────────────────────────────
-  // "захожу в Mesh и опять не сохранено то, что было до этого — там точно
-  //  стояло 1/2; почему параметры опять не сохраняются?"
+  // "I go into Mesh and again what was there before isn't saved — it was
+  //  definitely set to 1/2; why do the parameters keep not saving?"
   // Sequence: 09:0x config.yaml mesh.n_sectors: 2 → 09:06:45 the API restarts
   // while the app is open → 09:2x GET /api/mesh/config answers n_sectors 1 /
   // outer_air_factor 1.3, i.e. this panel's CONSTANT defaults → 09:25:41 the
@@ -409,7 +409,7 @@ const MeshPanel: React.FC = () => {
 
   const [meshSizeMm,  setMeshSizeMm]  = usePersisted<number>('meshSize',   4.0);
   const [minSizeMm,   setMinSizeMm]   = usePersisted<number>('minSize',    0.3);
-  // Fillet-arc resolution (Ansys "Normal Deviation"): max angle per fillet
+  // Fillet-arc resolution (commercial FEM "Normal Deviation"): max angle per fillet
   // segment. Lower → more segments per rounded corner → smoother fillet + finer
   // mesh there. Wired to n_arc in the geometry (get_2d_polygons).
   // Fillet-arc resolution for the PREVIEW build only. It was a slider, and a
@@ -422,7 +422,7 @@ const MeshPanel: React.FC = () => {
   // the Mesh no longer matched the real geometry. The Mesh now always uses the
   // real geometry (tol 0.005 mm, sent below); density is set by Max/Min size.
   const [rotorAngle,  setRotorAngle]  = usePersisted<number>('rotorAngle', 0.0);
-  // ── Solver-domain extensions (Ansys-style) ───────────────────────────────
+  // ── Solver-domain extensions (commercial-FEM-style) ───────────────────────────────
   const [outerAirFactor, setOuterAirFactor] = usePersisted<number>('outerAir', 1.3);
   const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 1);   // Full (full disk) by default
   // Air-gap element rows PER SIDE of the slip midline (1-3, default 2). The
@@ -441,7 +441,7 @@ const MeshPanel: React.FC = () => {
   const [structuredGap,  setStructuredGap]  = usePersisted<boolean>('structuredGap', true);
   // (There is no element-order toggle any more. Second-order (P2) elements are
   // the calculation basis — B linear per element, so the torque is smooth like
-  // ANSYS instead of carrying the P1 sliding-band staircase, and the mean is
+  // commercial FEM instead of carrying the P1 sliding-band staircase, and the mean is
   // energy-consistent. P1 was deleted: it over-read the mean torque ~35 % and
   // its ripple was a mesh artefact, so "off" meant "give me the wrong number".)
   // Deterministic template iron: stator/rotor iron meshed by the structured
@@ -610,7 +610,7 @@ const MeshPanel: React.FC = () => {
       stator_fillet_mm:  '0',          // native geometry — no extra smoothing
       component_mesh:    componentMeshJson,
       pole_copy:         poleCopy ? 'true' : 'false',
-      structured_gap:    structuredGap ? 'true' : 'false',   // ANSYS-style concentric-ring gap
+      structured_gap:    structuredGap ? 'true' : 'false',   // commercial-FEM-style concentric-ring gap
       iron_template:     ironTemplate ? 'true' : 'false',    // deterministic template iron
       geo_mesh:          geoMesh ? 'true' : 'false',         // geometry-driven CDT (real fillets)
     } : {
@@ -646,7 +646,7 @@ const MeshPanel: React.FC = () => {
   // floor ~0.3-0.5 mm), which fell through to the 1.5-8 mm fallback range —
   // entirely ABOVE the real floor, so the backend clamped every slider
   // position to the same effective size and dragging did nothing
-  // (2026-09-25: "изменяю на моторе, а ничего не меняется").  Any positive
+  // (2026-09-25: "I change it on the motor, and nothing changes").  Any positive
   // floor is real and must bind the slider.
   const _floor = (femMesh?.feature_floor_mm && femMesh.feature_floor_mm > 0)
     ? femMesh.feature_floor_mm : null;
@@ -928,8 +928,8 @@ const MeshPanel: React.FC = () => {
                   one short ALWAYS-VISIBLE line, not just a hover tooltip.  On a
                   small motor the floor pins the whole slider into a narrow band
                   (e.g. 0.2-0.5 mm) — every position is live, but the range looks
-                  "stuck" without this line (2026-09-25 report: "меняю, а ничего
-                  не меняется" on the Ø12 CIANO14). */}
+                  "stuck" without this line (2026-09-25 report: "I change it,
+                  and nothing changes" on the Ø12 CIANO14). */}
               {_floor && (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
                   <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
@@ -994,7 +994,7 @@ const MeshPanel: React.FC = () => {
 
             <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
-            {/* ── Solver-domain section (Ansys-style) ────────────────────── */}
+            {/* ── Solver-domain section (commercial-FEM-style) ────────────────────── */}
             <Box>
               <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-4)',
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
@@ -1007,7 +1007,7 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Outer air ring
-                  <Tooltip title="Extend mesh beyond stator OD so the Dirichlet A=0 far-field BC is applied on air, not iron. 1.0 = off; 1.3 ≈ Ansys Region Padding 30%." placement="right">
+                  <Tooltip title="Extend mesh beyond stator OD so the Dirichlet A=0 far-field BC is applied on air, not iron. 1.0 = off; 1.3 ≈ commercial FEM Region Padding 30%." placement="right">
                     <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
@@ -1069,7 +1069,7 @@ const MeshPanel: React.FC = () => {
               />
             </Box>
 
-            {/* Air-gap mesh: free triangles vs ANSYS-style concentric rings (experimental) */}
+            {/* Air-gap mesh: free triangles vs commercial-FEM-style concentric rings (experimental) */}
             <Box>
               <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-4)',
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
@@ -1078,7 +1078,7 @@ const MeshPanel: React.FC = () => {
               {/* Element order is no longer a choice: every solve is P2. The
                   switch that used to sit here selected P1, whose mean torque
                   over-read ~35 % and whose ripple was a mesh staircase. */}
-              <Tooltip placement="right" title="Every solve uses second-order (P2) finite elements — the flux density B is linear inside each element instead of piecewise-constant, so the torque is smooth like ANSYS Maxwell (2nd-order) and the mean is energy-consistent. RAW ripple is honest with NO filter (measured ~55x lower non-6k noise floor than the retired P1 basis). Requires the structured belt, which is always on.">
+              <Tooltip placement="right" title="Every solve uses second-order (P2) finite elements — the flux density B is linear inside each element instead of piecewise-constant, so the torque is smooth like commercial FEM (2nd-order) and the mean is energy-consistent. RAW ripple is honest with NO filter (measured ~55x lower non-6k noise floor than the retired P1 basis). Requires the structured belt, which is always on.">
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
                   <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Elements</Typography>
                   <Typography sx={{ fontSize: 12, color: 'var(--text-4)' }}>P2 (2nd order)</Typography>
@@ -1178,7 +1178,7 @@ const MeshPanel: React.FC = () => {
                   value={nSectors} exclusive size="small" fullWidth disabled={!cfgLoaded}
                   // The one-click symmetry switch — a user action, so it is dirty
                   // and persisted IMMEDIATELY (this is the setting that was lost
-                  // on 2026-09-07: "там точно стояло 1/2").  Waiting for the
+                  // on 2026-09-07: "it was definitely set to 1/2").  Waiting for the
                   // 700 ms debounce would lose it again if the user leaves the
                   // tab straight after clicking — the panel unmounts.
                   onChange={(_, v) => {

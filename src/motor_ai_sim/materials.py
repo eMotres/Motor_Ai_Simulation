@@ -1,7 +1,7 @@
 """Materials library loader for electric motor EM simulation.
 
-Loads material data from config/materials_library.yaml (extracted from
-Ansys Maxwell PersonalLib) and exposes typed dataclasses for use in the
+Loads material data from config/materials_library.yaml (every value traced
+to a manufacturer data sheet, standard or handbook) and exposes typed dataclasses for use in the
 simulation pipeline.
 
 Usage
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import re
 import time
 from dataclasses import dataclass, field, fields as dataclass_fields, replace
@@ -69,6 +70,71 @@ def _lib_path() -> Path:
     return _LIB_PATH
 
 
+# ---------------------------------------------------------------------------
+# Private overlay (supplier documents received privately)
+# ---------------------------------------------------------------------------
+#: Env var naming the checkout of the private data repo (motor-ai-sim-private).
+#: Values derived from supplier documents that were NOT published by the
+#: supplier (lot test reports, typical-value tables sent on request) live there
+#: in ``config/materials_overrides.yaml`` and never in this public library.
+PRIVATE_DATA_ENV = "MOTOR_AI_SIM_PRIVATE_DATA"
+_OVERLAY_REL = Path("config") / "materials_overrides.yaml"
+
+
+def _private_overlay_path() -> Optional[Path]:
+    root = os.environ.get(PRIVATE_DATA_ENV, "").strip()
+    if not root:
+        return None
+    p = Path(root) / _OVERLAY_REL
+    return p if p.is_file() else None
+
+
+def _merge_card(base: dict, over: dict) -> dict:
+    """Field-level overlay of one material card.
+
+    Scalars/curves in ``over`` replace the public value; ``sources`` lists are
+    appended (the public citations stay visible) and ``prov`` dicts merged, so
+    every overridden field keeps a provenance entry naming the private source.
+    """
+    out = dict(base)
+    for k, v in over.items():
+        if k == "sources" and isinstance(v, list):
+            out[k] = list(base.get(k) or []) + list(v)
+        elif k == "prov" and isinstance(v, dict):
+            merged = dict(base.get(k) or {})
+            merged.update(v)
+            out[k] = merged
+        else:
+            out[k] = v
+    out["private_overlay"] = True
+    return out
+
+
+def _apply_private_overlay(lib: dict) -> dict:
+    """Return ``lib`` with the private overrides applied (no-op without them)."""
+    p = _private_overlay_path()
+    if p is None or not isinstance(lib, dict):
+        return lib
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            over = yaml.safe_load(f) or {}
+    except Exception as e:                      # noqa: BLE001
+        _log.warning("private materials overlay %s unreadable (%s) — ignored", p, e)
+        return lib
+    out = dict(lib)
+    for section, cards in over.items():
+        if not isinstance(cards, dict):
+            continue
+        sec = dict(out.get(section) or {})
+        for name, card in cards.items():
+            if not isinstance(card, dict):
+                continue
+            base = sec.get(name)
+            sec[name] = _merge_card(base, card) if isinstance(base, dict)                 else dict(card, private_overlay=True)
+        out[section] = sec
+    return out
+
+
 # Module-level cache
 _library: Optional[dict] = None
 _lib_mtime: float = 0.0      # mtime of the YAML the cached copy was parsed from
@@ -95,6 +161,10 @@ def _load() -> dict:
         raise FileNotFoundError(f"Materials library not found: {_p}")
     _lib_checked = now
     mtime = _p.stat().st_mtime
+    _ov = _private_overlay_path()
+    if _ov is not None:
+        # an edit of the private overlay must invalidate the cache as well
+        mtime = max(mtime, _ov.stat().st_mtime)
     if _library is not None and mtime == _lib_mtime and _lib_from == str(_p):
         return _library
     try:
@@ -108,7 +178,7 @@ def _load() -> dict:
                          "previously loaded copy", e)
             return _library
         raise
-    _library = parsed
+    _library = _apply_private_overlay(parsed)
     _lib_mtime = mtime
     _lib_from = str(_p)
     _bertotti_fit_cache.clear()      # derived fits belong to the old file
@@ -1008,7 +1078,7 @@ def _clear_surface_cache() -> None:
 # ---------------------------------------------------------------------------
 # Maxwell-style Bertotti coefficient fit from the MEASURED loss curves
 # ---------------------------------------------------------------------------
-# Ansys Maxwell takes the manufacturer's P(B) curves at several frequencies and
+# commercial FEM takes the manufacturer's P(B) curves at several frequencies and
 # least-squares fits the three Bertotti coefficients; the transient solver then
 # applies them in the time domain.  We do the same: a non-negative LS fit of
 #     P [W/m³] = kh·f·B² + kc·f²·B² + ke·f^1.5·B^1.5

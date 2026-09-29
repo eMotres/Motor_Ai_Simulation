@@ -176,7 +176,7 @@ const RESULT_COLS: ResultCol[] = [
   { key: 'power_per_mass_W_kg',  label: 'PD',          unit: 'kW/kg',  d: 2, scale: 1e-3, better: 'hi',
     derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg) },
   // Mass (total = EM-active + shaft) is what TD/PD above divide by; EM-active
-  // drops the shaft and is the basis an Ansys active-mass expression quotes.
+  // drops the shaft and is the basis a commercial FEM active-mass expression quotes.
   { key: 'mass_total_kg',        label: 'Mass',        unit: 'kg',     d: 3, better: 'lo' },
   { key: 'mass_active_kg',       label: 'EM-active',   unit: 'kg',     d: 3, better: 'lo' },
   { key: 'P_loss_total_W',       label: 'Loss total',  unit: 'W',      d: 1, better: 'lo' },
@@ -198,7 +198,7 @@ const RESULT_COLS: ResultCol[] = [
  *
  * User 2026-09-07: the Mechanical and Thermal tabs got the Configure tab's
  * "+ Add to comparison" button, so their answers are rows of THIS table, and
- * *"все максимальные температуры всех частей мотора"* have to be comparable
+ * *"all maximum temperatures of all motor parts"* have to be comparable
  * side by side.  Two more column groups, read out of `results.thermal` /
  * `results.mechanical` (see `compare/resultRows.ts`, which writes exactly these
  * keys); a row without the block prints "—" in every one of them, and a group
@@ -294,7 +294,7 @@ const colId = (r: ResultCol) => `${r.block ?? 'em'}:${r.key}`;
  * Part temperatures the backend added after this file was written.
  *
  * `resultRows.thermalRowFromResult` writes one `<part>_max` for EVERY component
- * the payload carries — that is what "все максимальные температуры всех частей"
+ * the payload carries — that is what "all maximum temperatures of all parts"
  * means — so the table has to be able to show a part nobody has named here yet.
  * They are ON by default: a stored temperature with no column is a measurement
  * the user cannot see.

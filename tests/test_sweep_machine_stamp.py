@@ -1,7 +1,7 @@
 """A sweep chart belongs to ONE machine, and says which.
 
-User 2026-09-10: *"опять косяк, я запускал sweep одних параметров, а в
-результате получил старый sweep от другого мотора"*.
+User 2026-09-10: *"glitch again, I ran a sweep of one set of parameters, and
+got back an old sweep from a different motor"*.
 
 The backend reloads `config/.last_scan.json` into its scan state every time it
 starts, so after any restart the Sweep panel's first poll answered with

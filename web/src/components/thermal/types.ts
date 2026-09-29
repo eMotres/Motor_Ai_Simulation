@@ -14,9 +14,9 @@
  *
  * That sub-mesh grew on 2026-09-07.  It used to be the solids alone — the whole
  * of the air was dropped, which drew the slot white around the wire bars and
- * the clearance white around the rotor.  The user's answer to that ("надо
- * рисовать изоляцию и покрытие провода … и воздух тоже показывать — он же
- * входит в расчёт") is the shape of this file now: the insulation, the wire
+ * the clearance white around the rotor.  The user's answer to that ("we need
+ * to draw the insulation and the wire coating … and also show the air — it's
+ * part of the computation") is the shape of this file now: the insulation, the wire
  * enamel, the wire coating, the air gap and the rotor's pocket air are domains
  * with tags, names, conductivities whose SOURCE is stated, and temperatures of
  * their own.  Only the far field, the slip band and the bore air are still
@@ -99,8 +99,8 @@ export interface ThermalGapInfo {
 /**
  * The shaft that sticks OUT of the housing — the rotor's third heat path.
  *
- * User 2026-09-07: *"торцы и лобовые части — только для вала, всё остальное
- * вращается внутри мотора"*.  The rotor's end faces and the end windings spin
+ * User 2026-09-07: *"end faces and end windings — only for the shaft, everything
+ * else rotates inside the motor"*.  The rotor's end faces and the end windings spin
  * inside a closed housing and have nowhere else to send their heat, so nothing
  * is modelled there on purpose.  The shaft comes out through the bearings, and
  * the exposed stubs lose heat to the room's air while turning in it.
@@ -342,8 +342,8 @@ export interface ThermalSleeveInfo {
  *  the two cooled surfaces, the exposed shaft ends and the gap bridge
  *  (rotor → stator).  The rotor's own budget is `bore_W + gap_W +
  *  shaft_ends_W` = everything the rotor side makes; how it splits between the
- *  shaft and the gap is the number the user asked for ("ротор придётся
- *  охлаждать в основном через вал"). */
+ *  shaft and the gap is the number the user asked for ("the rotor will
+ *  mainly have to be cooled through the shaft"). */
 /** The ROTOR's own balance on the 2-D section: out across the AIR GAP into the
  *  stator, in off the BORE surface, and — beside them, not inside either — the
  *  axial path down any exposed shaft stubs.  `closure_W` says how closely the

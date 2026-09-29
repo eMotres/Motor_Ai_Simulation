@@ -103,7 +103,8 @@ def atomic_write_json(path: Path, data: Any, *, indent: int = 2) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(data, indent=indent, ensure_ascii=False)
     tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    from motor_ai_sim.private_files import write_private_text
+    write_private_text(tmp, text)           # 0600 — audit 2026-09-29 #9
     last: Optional[BaseException] = None
     delay = _REPLACE_BACKOFF_S
     for attempt in range(1, _REPLACE_TRIES + 1):

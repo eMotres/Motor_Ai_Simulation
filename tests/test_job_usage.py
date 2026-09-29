@@ -130,13 +130,13 @@ def test_usage_admin_only(monkeypatch, path):
     monkeypatch.setattr(auth, "_is_admin_caller", lambda a: (False, None))
     assert client.get(path).status_code == 401
     monkeypatch.setattr(auth, "_is_admin_caller",
-                        lambda a: (False, {"uid": "u", "email": "u@x", "tier": "pro"}))
+                        lambda a: (False, {"uid": "u", "email": "u@x", "role": "user"}))
     assert client.get(path).status_code == 403
 
 
 def test_usage_routes_and_csv(monkeypatch):
     monkeypatch.setattr(auth, "_is_admin_caller",
-                        lambda a: (True, {"uid": "a", "email": "a@x", "tier": "admin"}))
+                        lambda a: (True, {"uid": "a", "email": "a@x", "role": "admin"}))
     now = time.time()
     U.record(_row("a1", "alice", "web", 3600, now - 100))
     U.record(_row("x1", "=cmd|evil", "claude", 60, now - 50))
@@ -152,6 +152,53 @@ def test_usage_routes_and_csv(monkeypatch):
     d = client.get("/api/admin/usage.csv?days=1&detail=jobs").text
     assert "run_id" in d.splitlines()[0] and "a1" in d
     assert client.get(f"/api/admin/usage?start={now}&end={now - 5}").status_code == 400
+
+
+# ── per-minute (node, user, client) attribution (Admin -> Overview live load) ──
+def test_attribution_splits_overlapping_jobs_and_zeros_idle_minutes(monkeypatch):
+    cpu = {"tree": 100.0, 1: 0.0, 2: 0.0}
+    monkeypatch.setattr(U, "tree_cpu_s", lambda fast=False: cpu["tree"])
+    monkeypatch.setattr(U, "tree_rss", lambda: 5)
+    monkeypatch.setattr(U, "_own_rss", lambda: 5)
+    monkeypatch.setattr(U, "_thread_cpu", lambda nid: cpu.get(nid, 0.0))
+    minute0 = int(time.time() // 60) * 60
+    monkeypatch.setattr(time, "time", lambda: minute0 + 5)
+
+    class R:
+        def __init__(s, rid, owner):
+            s.run_id, s.owner, s.kind, s.body = rid, owner, "em", {}
+    m1 = U.start(R("r1", "alice"), sampler=False)
+    m1.native_id, m1.thread_cpu_last, m1.node = 1, 0.0, "eu1"
+    m2 = U.start(R("r2", "bob"), sampler=False)
+    m2.native_id, m2.thread_cpu_last, m2.node = 2, 0.0, "eu1"
+    cpu.update({"tree": 112.0, 1: 3.0, 2: 1.0})           # alice 9 s, bob 3 s
+    U._tick()
+    assert U.flush_user_attribution(now=minute0 + 5) == 2
+    series = U.user_load_series(minute0 - 60, minute0 + 60, top_n=8)
+    row = next(p for p in series["series"] if p["ts"] == minute0)
+    assert row["alice"] == pytest.approx(100 * 9 / 60, abs=0.01)
+    assert row["bob"] == pytest.approx(100 * 3 / 60, abs=0.01)
+    # a minute nobody ran in never appears (idle = zero, not a fabricated row)
+    assert not any(p["ts"] == minute0 - 60 for p in series["series"])
+    U.finish(m1, "done")
+    U.finish(m2, "done")
+
+
+def test_load_live_endpoint_admin_only_and_shapes_series(monkeypatch):
+    monkeypatch.setattr(auth, "_is_admin_caller", lambda a: (False, None))
+    assert client.get("/api/admin/load/live").status_code == 401
+    monkeypatch.setattr(auth, "_is_admin_caller",
+                        lambda a: (True, {"uid": "a", "email": "a@x", "role": "admin"}))
+    minute0 = int(time.time() // 60) * 60
+    U._USER_ACC[(minute0, "eu1", "alice", "web")] = 30.0
+    U.flush_user_attribution(now=minute0)
+    for rng in ("15m", "1h", "24h", "7d"):
+        r = client.get(f"/api/admin/load/live?range={rng}")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["range"] == rng
+        assert "user_load" in body and "series" in body["user_load"]
+        assert "snapshot" in body and "nodes" in body
 
 
 def test_jobs_view_shows_live_cpu(monkeypatch):

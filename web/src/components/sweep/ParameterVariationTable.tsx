@@ -29,6 +29,11 @@ import { dieKeyLabel } from '../../lib/releasedContext';
 import { openGeometryHelpWindow } from '../../lib/geometryHelpWindow';
 import { useWireStock } from '../materials/useWireStock';
 import { stockHint } from '../../lib/wireStock';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/geometry.json (docs/I18N.md).
+const tx = nsT('geometry');
 
 const numFieldSx = {
   width: '100%',   // fill the fixed-width value column → values line up vertically
@@ -130,6 +135,7 @@ const ParamValueField: React.FC<ParamValueFieldProps> = ({
 const FAMILY_API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 const ParameterVariationTable: React.FC = () => {
+  useTranslation('geometry'); // re-render on language change; lazy-loads the namespace
   const [dialogOpen, setDialogOpen] = useState(false);
 
   // Locks of the ACTIVE die/configuration: with the die locked only the
@@ -235,8 +241,8 @@ const ParameterVariationTable: React.FC = () => {
   const isDirty    = dirtyCount > 0;
 
   // ── wire-stock hint (passive only — nothing here restricts the field) ───
-  // The owner's warehouse table (2026-09-20): "не блокируем выбор, просто
-  // подсказываем, если введённого размера физически нет на складе".
+  // The owner's warehouse table (2026-09-20): "we don't block the choice, we
+  // just hint if the entered size physically isn't in stock".
   const { data: wireStockData } = useWireStock();
   const currentWireH = localValues.wire_height ?? (geometry.wire_height as number | undefined) ?? 0;
   const currentWireW = localValues.wire_width ?? (geometry.wire_width as number | undefined) ?? 0;
@@ -348,7 +354,7 @@ const ParameterVariationTable: React.FC = () => {
         >
           Add
         </Button>
-        <Tooltip title="Reload schema from API">
+        <Tooltip title={tx('reloadSchemaFromApi')}>
           <IconButton
             size="small"
             onClick={fetchSchemaFromApi}
@@ -497,7 +503,7 @@ const ParameterVariationTable: React.FC = () => {
                       <Typography noWrap sx={{ fontSize: '0.62rem', color: '#f59e0b' }}>
                         {wireStockNote}
                       </Typography>
-                      <HelpTip title="Compared against the flat wire physically on the shelf (Materials tab → Flat wire in stock). Not enforced yet." />
+                      <HelpTip title={tx('comparedAgainstTheFlatWirePhysically')} />
                     </Box>
                   )}
                 </Box>
@@ -505,7 +511,7 @@ const ParameterVariationTable: React.FC = () => {
                 {/* Editable value — a SELECT of the admissible values when the
                     schema's topology table has an entry for the dependency's
                     current value (poles/segment given slots/segment: 5 or 7 —
-                    owner 2026-09-20, "других комбинаций пока не бывает"), a
+                    owner 2026-09-20, "there are no other combinations yet"), a
                     free-typing local draft otherwise. */}
                 {(() => {
                   const dep = param.allowed_by ? Object.keys(param.allowed_by)[0] : null;

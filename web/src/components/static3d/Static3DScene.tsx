@@ -57,7 +57,7 @@ export function partColor(name: string, kind: string, polarity = 1): string {
  * server-side), interpolated across the face by the GPU and banded per PIXEL by
  * the same shader the 2D field view uses — so the bands are true iso-levels of
  * the interpolated field rather than a per-triangle staircase.  This is what
- * ANSYS shows by default, and like ANSYS the element view stays one click away:
+ * commercial FEM shows by default, and like commercial FEM the element view stays one click away:
  * the jump between neighbours is the discretisation error, and smoothing hides
  * it.
  */

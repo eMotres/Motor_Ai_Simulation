@@ -339,7 +339,7 @@ Changes:
   every frequency still builds its own complex system and factors it anew.
   Public solve_harmonic_eddy wrapper and all output loss fields are preserved.
   The redundant frequency diagnostic was not silently disabled.
-- Corrected hybrid_torque's universal energy/ANSYS/ripple claims in docs only.
+- Corrected hybrid_torque's universal energy/commercial FEM/ripple claims in docs only.
   Its executable behavior and API labels remain unchanged.
 
 Validation (separate Python 3.11 processes, one thread, BELOW_NORMAL, redirected

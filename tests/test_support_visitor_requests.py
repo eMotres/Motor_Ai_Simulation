@@ -1,8 +1,8 @@
 """A visitor's words reach the team — the log, the marker, the inbox, the push.
 
-The owner asked it plainly on 2026-09-17: *"а как сообщения, которые они пишут
-боту, будут доходить до нас? Ему как-то надо объяснить, что делать и в каком
-случае"*.  Three mechanisms answer it, and this file holds each of them to its
+The owner asked it plainly on 2026-09-17: *"and how will the messages they
+write to the bot reach us? It needs to be explained somehow what to do and in
+what case"*.  Three mechanisms answer it, and this file holds each of them to its
 promise:
 
 1. **Every visitor turn is kept** — ``support_store`` appends it to the day's
@@ -60,7 +60,7 @@ def _real_users_untouched():
 
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
-    """A throwaway registry + a throwaway support store, the tier gate enforcing.
+    """A throwaway registry + a throwaway support store, the role gate enforcing.
 
     ``ADMIN_EMAILS`` must be non-empty or ``_is_admin_caller`` treats every
     caller as the local-dev admin and nothing anonymous exists to test.
@@ -92,8 +92,8 @@ def env(tmp_path, monkeypatch):
     })
     support.reset_limits()
 
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Owner")
-    U.create_user(CLIENT, "password-client", tier="free", name="Client")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Owner")
+    U.create_user(CLIENT, "password-client", role="user", name="Client")
     yield {
         "admin": {"Authorization": f"Bearer {U.issue_token(ADMIN)}"},
         "client": {"Authorization": f"Bearer {U.issue_token(CLIENT)}"},

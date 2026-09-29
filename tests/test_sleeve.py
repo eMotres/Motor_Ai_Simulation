@@ -225,10 +225,10 @@ class TestMassAndInertia:
     def test_it_is_in_the_active_mass_and_in_the_total(self):
         """The ring counts as ACTIVE mass since 2026-09-10.
 
-        It used to be kept out of `active` so that number stayed the one ANSYS
-        prints under the same name.  The user gave that up on purpose ("пусть
-        будет одна активная масса вместе с бандажом, так будет проще, чтобы не
-        запутаться"): two masses differing by a quarter of a kilo, one of which
+        It used to be kept out of `active` so that number stayed the one commercial FEM
+        prints under the same name.  The user gave that up on purpose ("let
+        there be one active mass together with the sleeve, it'll be simpler
+        so we don't get confused"): two masses differing by a quarter of a kilo, one of which
         silently omits a part visible in the 3-D view, cost more than the
         comparison was worth.  `total` is unchanged — it always held the ring —
         and so is every N·m/kg, which divides by it.

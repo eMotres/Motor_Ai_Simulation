@@ -4,6 +4,8 @@ A full-stack **2-D FEM design platform for BLDC/PMSM motors** — parametric geo
 real finite-element electromagnetics, thermal, optimization and cost estimation, with a
 browser workbench.
 
+> **Project vision:** read the [Manifesto](MANIFESTO.md) — why we are building an open engineering portal for motors, controllers and the systems they move.
+
 > **Note:** the electromagnetics are solved with a classical **finite-element method
 > (scikit-fem + gmsh, on CPU)** — there is **no** PINN / neural-network / NVIDIA Modulus /
 > PhysicsNeMo / PyTorch dependency. (An earlier prototype targeted Modulus PINNs; that path
@@ -52,7 +54,11 @@ Magnetostatics from Maxwell's equations, in terms of the magnetic vector potenti
 
 ## License
 
-MIT License
+Copyright (C) MOTRES d.o.o. and contributors. Free software, licensed under
+the [GNU Affero General Public License v3.0 or later](LICENSE)
+(`SPDX-License-Identifier: AGPL-3.0-or-later`). Contributions are accepted
+under the [Developer Certificate of Origin](DCO.md) (`git commit -s`); see
+[CONTRIBUTING.md](CONTRIBUTING.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## References
 

@@ -579,7 +579,7 @@ def honest_rotor_eddy(
     # nobody is watching, which is exactly what it was.
     #
     # ── the k ≤ 16 harmonic ceiling and the 5e-4 amplitude floor are DELETED
-    # (owner 2026-09-24: "убираем все фильтры").  The ceiling was "measured
+    # (owner 2026-09-24: "we are removing all filters").  The ceiling was "measured
     # necessary" because without it the loss grew with the step count
     # (p2_load + rotor_eddy, 36 steps: 2.1325 W capped vs 2.3504 W uncapped).
     # That growth was not slip-band jitter: it was the OPEN one-period window.
@@ -617,7 +617,7 @@ def _screening_factor(a, sigma, mu_r, f, h_frac=1.0 / 14.0):
 
 def _motor_demo():
     """40 mm motor @ 13000 rpm: apply the coupled-solve SCREENING factor to the
-    production solver's resistance-limited solid losses and compare to ANSYS.
+    production solver's resistance-limited solid losses (the reference comparison is kept private).
 
     The rotor co-rotates, so its conductors see the STATOR SLOT ripple at
     f_slot = N_slots * f_mech = 12 * 13000/60 = 2600 Hz.  (Higher slot harmonics
@@ -638,7 +638,6 @@ def _motor_demo():
     print(f"{'shaft':>8} {2.58e7:10.2e} {sf_shaft:7.3f} {P_shaft_rl:9.2f} {P_shaft_h:11.2f}")
     print(f"\n  solid total  production = {P_mag_rl + P_shaft_rl:.2f} W")
     print(f"  solid total  HONEST     = {P_mag_h + P_shaft_h:.2f} W")
-    print(f"  ANSYS SolidLoss          = 2.79 W")
     print("\n  -> magnet barely screened (delta >> 7.5 mm build) -> production OK;")
     print("     shaft strongly screened (Al, delta ~ radius) -> production over-counts.")
 

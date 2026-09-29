@@ -11,7 +11,7 @@
  * this file adds no type-check errors and vite never bundles it.
  *
  * What is under test is the rule the 2026-09-07 incident produced (user:
- * "захожу в Mesh и опять не сохранено то, что было до этого — там точно стояло
+ * "I go into Mesh and again what was there before isn't saved — it definitely had
  * 1/2"): between 09:0x (config n_sectors: 2), the 09:06:45 API restart and 09:2x
  * (the API answering the panel's constant defaults 1 / 1.3), a save fired for
  * settings the user had not touched, from a panel that had not read the config.

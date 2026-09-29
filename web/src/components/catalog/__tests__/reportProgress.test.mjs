@@ -1,8 +1,8 @@
 /**
  * The report ring's state machine, tested without a browser.
  *
- * User, 2026-09-16: *"нужно сделать ещё минимальный прогресс-ринг генерации
- * отчёта, чтобы было видно, что работает, а не висит"*.  What makes that ring
+ * User, 2026-09-16: *"we also need a minimal progress ring for report
+ * generation, so you can see it's working and not stuck"*.  What makes that ring
  * worth having is not the circle — it is four rules:
  *
  *   1. it MOVES from the click, before any answer has arrived (indeterminate),

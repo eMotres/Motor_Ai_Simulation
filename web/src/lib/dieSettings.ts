@@ -4,8 +4,8 @@
 // to travel with the user across machines: work on the 40 mm (mesh 1.0, its
 // max symmetry 1/2), load the 200 mm — and those values silently became the
 // 200 mm's run settings, then got baked into its saved duty and restored
-// forever after (user 2026-08-31: "всегда было 1/4 и max 2 mm — почему
-// настройки не сохраняются?").
+// forever after (user 2026-08-31: "it was always 1/4 and max 2 mm — why
+// don't the settings save?").
 //
 // This module remembers the panel state PER DIE:
 //   • remember(die)  — snapshot the current mesh.*/sim.* block under the die

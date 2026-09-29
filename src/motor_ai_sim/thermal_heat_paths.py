@@ -1,8 +1,8 @@
 """THE HEAT PATHS, as a thing you can draw.
 
-User, 2026-09-15: *"лучше нарисовать 3D модель с катушками (end windings) и на
-ней прямо показывать, куда и сколько тепла может отводиться, чтобы пользователю
-было всё ясно и понятно"*.
+User, 2026-09-15: *"better to draw a 3D model with the coils (end windings)
+and show directly on it where and how much heat can be carried away, so it's
+completely clear to the user"*.
 
 Every watt in this module already existed — ``cooling.outer``,
 ``cooling.mount``, ``cooling.end_faces``, ``cooling.inner``,

@@ -199,7 +199,7 @@ log = logging.getLogger(__name__)
 # fixed-point residual of the nu(|B|) update (measured BEFORE damping) below
 # which a frame's nonlinear iteration is converged (two consecutive sweeps).
 # Replaces the old fixed "14 iterations" recipe, which did not converge and left
-# a 5-8 Nm p-p no-load torque floor (see PARITY_FINDINGS_band_mode.md).
+# a 5-8 Nm p-p no-load torque floor (notes in the private data repository).
 _PIC_TOL = 1e-3
 
 # The magnet Br convergence tolerance moved to simulation/demag.py with the rule
@@ -249,7 +249,7 @@ DAXIS_SHIFT_DEG = 108.0   # LEGACY CONSTANT, and wrong for EVERY topology
 # 48° off the true q-axis).  We now compute θ* (rotor angle of peak no-load ψ_A)
 # from a cheap I=0 run and set DAXIS = (90 − θ*·pole_pairs) mod 360, so γ=0 is the
 # TRUE q-axis and the γ the user enters equals the PHYSICAL current angle from the
-# q-axis (identical to ANSYS's el_deg).  Cached per topology; θ* is invariant to
+# q-axis (identical to commercial FEM's el_deg).  Cached per topology; θ* is invariant to
 # dimension sweeps.
 _DAXIS_CACHE: Dict[tuple, float] = {}
 # RECURSION GUARD — PER THREAD, and a lock so two threads cannot calibrate at
@@ -426,8 +426,8 @@ def psipm_cache_key(geo, wind, connection=None) -> str:
     groups, so 4S links four times what 4P links.  The first version of this key
     argued "I = 0, the connection cannot matter" and cached one number for all
     connections; a 4S run would then have divided its 4S-scaled ψd against a 4P
-    ψ_PM and shipped a silently wrong Ld.  (Caught by the user asking "а Winding
-    Connection ты учёл?" — reviewed, measured, fixed before it produced a
+    ψ_PM and shipped a silently wrong Ld.  (Caught by the user asking "did you
+    account for the Winding Connection?" — reviewed, measured, fixed before it produced a
     number.)
 
     It depends on the WINDING SCALE for exactly the same reason: ψ_PM is the
@@ -723,8 +723,8 @@ def noload_incremental_ldq(geo, wind, pole_pairs, daxis_deg,
     stated temperature because that is the one state every machine can be
     compared in; the inductances a control engineer sizes a loop with are
     quoted the same way, and the owner's rule (2026-09-20) is that this
-    document does too — *«Ld/Lq нужно указывать тоже для 20 градусов и без
-    тока, как для KV»*.
+    document does too — *"Ld/Lq also need to be given at 20 degrees and at
+    zero current, like KV"*.
 
     ONE cheap no-load transient (the ψ_PM calibration knobs: 6 frames on the
     calibration mesh) with the magnets and the winding at ``magnet_temp_c`` /
@@ -828,8 +828,8 @@ def _daxis_geo_fingerprint(geo) -> str:
         # distance), the liner thickness and the wire sizes (they place the
         # conductors inside the slot; the phase axis is the slot's).  Keying on
         # them re-calibrated the axis — 24 no-load frames — after the user
-        # thickened the shaft wall ("зачем её калибровать, если я только
-        # увеличил толщину вала?", 2026-09-07).
+        # thickened the shaft wall ("why recalibrate it, when I only
+        # increased the shaft thickness?", 2026-09-07).
         _g = {k: v for k, v in dict(geo or {}).items()
               if k not in _DAXIS_INERT_KEYS}
         return _hl.md5(_jl.dumps(_g, sort_keys=True,
@@ -2790,9 +2790,9 @@ def _warm_cache_path():
 
 
 # ── SWEEP MODE: seed the next point from the previous one ───────────────────
-# User, 2026-09-06: "мы же уже договаривались, что проход демагнитизации
-# делается для каждого sweep только один раз; изменения геометрии небольшие, и
-# каждый следующий расчёт берётся из предыдущего."  Sweep points had gone from
+# User, 2026-09-06: "we already agreed that the demagnetization pass is done
+# once per sweep only; the geometry changes are small, and each next
+# calculation is seeded from the previous one."  Sweep points had gone from
 # 700-800 s to 1100-1700 s because every subprocess eval started COLD: a full
 # eddy warm-up march from zero AND — since the 2026-09-05 reproducibility fix —
 # a full extra electrical period of demag PRE-PASS on top.
@@ -3619,7 +3619,7 @@ def fem_transient_sliding_band(
                                      # for comparison vs the resistance-limited post-
                                      # process.  Captures rotor-node A history; fail-safe
                                      # (any error leaves the production numbers intact).
-    structured_gap: bool = False,    # ANSYS-style concentric-ring air-gap mesh (experimental
+    structured_gap: bool = False,    # commercial-FEM-style concentric-ring air-gap mesh (experimental
                                      # Mesh-tab toggle; default off = free gmsh gap).
     airgap_macro: bool = False,      # harmonic air-gap macroelement (Mesh-tab "Harmonic gap"):
                                      # replaces the node re-pairing slip coupling with a smooth
@@ -3866,7 +3866,7 @@ def fem_transient_sliding_band(
     # "correct, just slower" — which meant the Mesh tab's 1/4 never actually ran
     # as 1/4 for anyone with the geo mesh on (the default): the user chose the
     # sector FOR ITS SPEED and paid full-disk time anyway, with one info log as
-    # the only witness ("почему всё сбрасывается на full", 2026-08-22).  A 1/N
+    # the only witness ("why does everything fall back to full", 2026-08-22).  A 1/N
     # request now falls back to the TEMPLATE wedge instead (geo mesh off for
     # this run): the sector the user asked for, on the validated wedge build —
     # the trade is the geo mesh's real fillets, which is the user's own speed/
@@ -3929,13 +3929,13 @@ def fem_transient_sliding_band(
     #       the coil's two ends.  One current per PATH instead of one per
     #       strand-in-a-slot, and the k paths of a coil share the coil's
     #       terminal voltage.  This is neither bound — it is the answer they
-    #       bracket (user 2026-09-11: "делай, нужно точно знать").
+    #       bracket (user 2026-09-11: "do it, we need to know for sure").
     #
     # `None` DERIVES it from the geometry, and that is the default because the
     # geometry already decides: `wire_parallel` = k wires in hand, and a coil
     # wound with k of them is soldered at its two ends — there is no third
-    # possibility to offer (user 2026-09-11: "соединение жил в руке у нас в
-    # геометрии выбирается, не надо делать селектор").  k = 1 has nothing to
+    # possibility to offer (user 2026-09-11: "the connection of strands in
+    # hand is chosen by our geometry, no need to make a selector").  k = 1 has nothing to
     # bond and lands on the per-strand rows either way.
     #
     # An explicit argument still overrides, because the two BOUNDS are what
@@ -4034,7 +4034,7 @@ def fem_transient_sliding_band(
     mid = 0.5 * (p.r_rotor_out + p.r_stator_in)
 
     # d-axis phase offset AUTO-CALIBRATED for this motor topology so γ=0 is the
-    # true q-axis and γ equals the physical current angle from the q-axis (=ANSYS
+    # true q-axis and γ equals the physical current angle from the q-axis (=commercial FEM
     # el_deg).  Cached per topology; the I=0 calibration run is recursion-guarded.
     # …and it is REPORTED while it runs.  On a geometry the cache has not seen
     # it is a 24-frame no-load solve — measured 39 s on the 200 mm 24s/28p —
@@ -4293,7 +4293,7 @@ def fem_transient_sliding_band(
     # So hi_fidelity bundles all three (mesh ÷8 vs ÷4 above; slip 2× below;
     # gap_layers≥4 here) → measured raw 20.8 %→~14 %, RMS 4.7 %→3.0 %.  This is the
     # honest "spend compute for accuracy" mode, NOT a filter — the real DC torque
-    # is unchanged and the 6·k physical ripple already matches Ansys.  gap_layers
+    # is unchanged and the 6·k physical ripple already matches commercial FEM.  gap_layers
     # is bumped ONLY inside this bundle (it is counter-productive on its own).
     if hi_fidelity:
         gap_layers = max(float(gap_layers), 4.0)
@@ -5117,8 +5117,8 @@ def fem_transient_sliding_band(
 
     # ── the AIR GAP, as an element set ──────────────────────────────────────
     #
-    # User 2026-09-10: *"для электромагнитного анализа надо ещё рассчитывать
-    # среднее поле в зазоре и писать это число в таблицу"*.  The mean |B| over
+    # User 2026-09-10: *"for the electromagnetic analysis we also need to
+    # compute the mean field in the gap and write that number into the table"*.  The mean |B| over
     # the clearance is the number a machine is sized on before anything else,
     # and it is the one quantity the summary never carried.
     #
@@ -6032,8 +6032,8 @@ def fem_transient_sliding_band(
         # current whatever flux it links.  A real k-in-hand coil is soldered at
         # its ends, so the strands are in PARALLEL — they share a voltage and
         # the flux-linkage difference between the rows drives a circulating
-        # current between them (user 2026-09-11: "мы будем спаивать концы жил
-        # вместе... там могут возникнуть компенсационные токи").
+        # current between them (user 2026-09-11: "we'll solder the strand
+        # ends together... circulating currents could arise there").
         #
         # Merging the k rows of a turn into ONE constraint is exactly that
         # parallel connection: the group gets a single U, each strand's current
@@ -6202,7 +6202,7 @@ def fem_transient_sliding_band(
         # The block above collapses the Joule loss to ONE number per body
         # group; the Loss map needs the same integrand kept per element.  The
         # eddy current does not fill a conductor uniformly — it crowds at the
-        # corners and edges facing the changing field, which is what an Ansys
+        # corners and edges facing the changing field, which is what a commercial FEM
         # Total-Loss plot shows at every magnet corner and what the slab
         # |dB/dt|² model, normalised to an average, can never show: that model
         # is smooth by construction.
@@ -6461,6 +6461,11 @@ def fem_transient_sliding_band(
         log.info("P2 vdrive phasor init: Ld=%.4g Lq=%.4g H |psi_pm|=%.4g Wb "
                  "i_dq=(%.1f, %.1f) A i0=(%.1f, %.1f, %.1f)",
                  _Ldd, _Lqq, _psi_pm_d, _id0, _iq0, _iA0, _iB0, _iC0)
+        # THE CONTROLLER'S CURRENT LOOP (owner 2026-09-29): a closed-loop
+        # bridge source is tuned on the inductances just measured here.
+        if hasattr(_src, "configure_current_loop"):
+            _src.configure_current_loop(R_phase=float(R_phase),
+                                        L_d=float(_Ldd), L_q=float(_Lqq))
         # ── SETTLE ADAPTED TO THIS MACHINE'S L/R (user 2026-09-02) ──────
         # The PWM settle used to be a flat 2 periods, validated on a machine
         # whose L/R was ~0.75 electrical period.  On CILN28/G2-L40 (L/R = 4.8
@@ -6793,7 +6798,7 @@ def fem_transient_sliding_band(
     # P_mag / P_shaft riding a transient.
     _warm_quiet = None
     # ── THE Br RATCHET MAY ONLY SEE A SETTLED FIELD ──────────────────────────
-    # User, 2026-09-05: "второй расчёт всегда отличается от первого".  Two
+    # User, 2026-09-05: "the second run always differs from the first".  Two
     # identical Runs of the Ø200 12s/10p at 470.2 A / 20000 rpm / 36 steps with
     # coupled eddy + demag gave T_avg 237.22 vs 244.61 N·m (+3.1 %), Br kept
     # 91.4 vs 98.5 %, Ld 0.055 vs 0.044 mH, rotor heat 837 vs 713 W; a third run
@@ -6822,7 +6827,7 @@ def fem_transient_sliding_band(
     # per-frame schedule that cannot be spliced, so it keeps today's behaviour).
     #
     # ── ONCE PER SWEEP (user 2026-09-06) ─────────────────────────────────────
-    # "проход демагнитизации делается для каждого sweep только один раз".  When
+    # "the demagnetization pass is done once per sweep only".  When
     # the warm cache handed this run a Br map (`_dm_seeded`, sweep mode only —
     # see the seed block above), the pre-pass has ALREADY been paid for by the
     # point that published it and the magnet arrives settled: its length here
@@ -8607,7 +8612,12 @@ def fem_transient_sliding_band(
             if _qaL is None or _qbL is None:
                 _qaL, _qbL = _qa, _qb
             if _dc_orbit is not None and k <= _dc_verify_k:
-                _dc_orbit.frame(_ll_inductance(_qaL, _qbL), _dt_k)
+                # …and the SOURCE's own feedback on the previous step's
+                # current (the controller bridge's dead time + device drop —
+                # a real DC-mode resistance; missing it made the Newton
+                # over-shoot and diverge on the L180 delta, 2026-09-28).
+                _dc_orbit.frame(_ll_inductance(_qaL, _qbL), _dt_k,
+                                getattr(_src, "ll_feedback_gain", None))
             if _dc_orbit is not None and k in _dc_win:
                 _k0 = int(_dc_win[k])                   # first frame of the period
                 _off = len(_IA) - 1 - k                 # list index of frame k
@@ -10158,7 +10168,7 @@ def fem_transient_sliding_band(
     # ── Demag aggregate for the summary card ─────────────────────────────────
     # ONE number an engineer can act on: the AREA-weighted mean Br the magnets
     # kept.  To first order (T ∝ ψ_pm ∝ ∫Br dA) its deficit bounds the torque /
-    # EMF loss, which is what "коэффициент демагнитизации" should mean — the
+    # EMF loss, which is what "demagnetization coefficient" should mean — the
     # worst single element is a corner statistic, alarming and unrepresentative
     # on its own, so it ships as context, not as the headline.
     # magnet_scale is divided OUT: it is the torque-decomposition knob, not

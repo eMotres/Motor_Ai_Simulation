@@ -2,9 +2,9 @@
  * THE COOLING MENU, IN WORDS — one module, so the panel, the 3-D view and the
  * tests cannot say three different things about the same parameter.
  *
- * Owner, 2026-09-17: *«надо более подробно расписать это меню, оно совершенно
- * не очевидно — надо написать, что это параметр для радиации, и какие для
- * чего»*.  The rows of the Thermal tab's cooling block were terse to the point
+ * Owner, 2026-09-17: *«this menu needs to be spelled out in more detail, it's
+ * completely non-obvious — we need to write that this parameter is for
+ * radiation, and which ones are for what»*.  The rows of the Thermal tab's cooling block were terse to the point
  * of being internal names — `ε`, `mount W/K`, `mount °C`, `End faces exposed`,
  * `2 ends open`, `shaft out, mm/side` — and nothing on screen said which of
  * them is the radiation input, what the mount conductance conducts into, or

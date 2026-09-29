@@ -1,7 +1,7 @@
 """The EM ↔ thermal ORCHESTRATOR — /api/coupled.
 
-WHY A THIRD ROUTER (user, 2026-09-08: *"не надо всё смешивать, нужен
-оркестратор"* and *"чтобы можно было его включать и отключать"*)
+WHY A THIRD ROUTER (user, 2026-09-08: *"don't mix everything together, we
+need an orchestrator"* and *"so it can be turned on and off"*)
 =========================================================================
 The Electromagnetic solve needs two temperatures it cannot compute — the copper's
 (``coil_temp_c``, through ρ_Cu(T)) and the magnet's (``magnet_temp_c``, through
@@ -37,9 +37,9 @@ the magnet MAXIMUM is carried in the history for the demagnetisation check and i
 deliberately NOT fed back — a knee check is about the hottest element, a Br is
 about the body.
 
-THE THIRD TEMPERATURE (2026-09-08).  User: *"когда запускается каплинг, должно
-решаться всё моделирование, и все потери должны передаваться в электромагнитный
-расчёт"*.  The bearings and the rotor windage are ANALYTIC — the SKF frictional
+THE THIRD TEMPERATURE (2026-09-08).  User: *"when the coupling runs, the
+whole simulation should be solved, and all the losses should be passed into
+the electromagnetic calculation"*.  The bearings and the rotor windage are ANALYTIC — the SKF frictional
 moment and Couette/disc drag (``motor_ai_sim.bearings``) — and they are a
 temperature-dependent loss like any other: M_rr goes as ν^0.6, and grease quoted
 at 40 °C running at 90 °C is a factor of two on the rolling term.  So each pass
@@ -499,7 +499,7 @@ def _magnet_reference_temp_c() -> Optional[float]:
 # its answer and a duty re-solved on ``pwm`` gives the same numbers it always
 # did.  ``"inverter"`` used to be an ALIAS of ``"pwm"``; it now means the
 # Controller, which is the one place a PWM excitation is described from here on
-# (owner: *«всё будет задаваться в меню Controller»*).
+# (owner: *"everything will be set in the Controller menu"*).
 _DRIVE_ALIASES = {"": "current", "sine": "current", "sinusoid": "current",
                   "current": "current", "pwm": "pwm", "pwm_voltage": "pwm",
                   "ideal_pwm": "pwm",
@@ -543,9 +543,9 @@ def _coupled_drive(body: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # WHAT THE LOOP IS ASKED FOR — the steady state, or the limits
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-18: *«надо сделать выбор — или считать до конца стабилизации
-# температуры, или считать до лимитов и находить время работы при заданных
-# условиях»*.  So it is a CHOICE and not a rule the backend applies by itself:
+# Owner, 2026-09-18: *"we need to make a choice — either solve until the
+# temperature fully stabilizes, or solve to the limits and find the runtime
+# under the given conditions"*.  So it is a CHOICE and not a rule the backend applies by itself:
 #
 #   ``steady``      (the default, and byte-identical to every record ever
 #                   written) iterate until the winding, the magnets and the
@@ -554,8 +554,8 @@ def _coupled_drive(body: Dict[str, Any]) -> str:
 #   ``limits``      stop at the FIRST limit any part reaches and report the
 #                   machine AT THAT MOMENT, with the time it took to get there
 #                   from cold.
-#   ``continuous``  (owner 2026-09-21: *«давай сделаем кнопку, или лучше
-#                   добавим ещё один элемент в меню»*, on the same selector) —
+#   ``continuous``  (owner 2026-09-21: *"let's make a button, or better add
+#                   one more menu item"*, on the same selector) —
 #                   run the loop exactly as ``limits`` does (same stop rule, no
 #                   extra electromagnetic passes beyond what ``limits`` costs),
 #                   then, from that converged/limited pass's own loss map and
@@ -986,8 +986,8 @@ def _duty_cycle_of(body: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]
 def _cycle_preflight(body: Dict[str, Any]) -> None:
     """An S2/S3 duty is solved as a REGIME — check that it CAN be, before a solve.
 
-    THE REFUSAL THAT WENT AWAY (user, 2026-09-16: *"каплинг на цикле S3 подбирает
-    скважность для того чтобы можно было влезть в лимиты"*).  Until today this
+    THE REFUSAL THAT WENT AWAY (user, 2026-09-16: *"the S3-cycle coupling
+    picks the duty ratio so we can fit inside the limits"*).  Until today this
     function raised ``impulse_duty_not_steady`` on every impulse duty the loop
     was asked to iterate, and its reasoning was sound: iterating an S3 point to a
     fixed point answers with the temperature it would reach if the pull never
@@ -1109,8 +1109,8 @@ def _cycle_inputs(body: Dict[str, Any],
     to, and that is deliberately not in here: it arrives at :func:`_cycle_step`
     each time, which is the whole mechanism.
 
-    THE FEATURE FLAG (owner 2026-09-17: *«давай пока уберём duty cycle из
-    Thermal, оставим только стандартный каплинг»*).  With
+    THE FEATURE FLAG (owner 2026-09-17: *"let's drop duty cycle from Thermal
+    for now, keep only the standard coupling"*).  With
     ``DUTY_CYCLE_ENABLED`` off — the default — this is ``None`` for EVERY duty,
     including one carrying a stored S2/S3 block: the loop then iterates that
     point to its fixed point exactly as it did before cycles existed, writes no
@@ -1212,8 +1212,8 @@ def _cycle_step(inputs: Dict[str, Any], em_summary: Dict[str, Any],
 # ---------------------------------------------------------------------------
 # HOW LONG MAY IT RUN — the time to the limit (owner 2026-09-17)
 # ---------------------------------------------------------------------------
-# *«если где-то выходим за лимиты, нужно посчитать время, за какое мотор
-# проработает до этого лимита»*.  The loop answers a question about the STEADY
+# *"if we exceed the limits somewhere, we need to compute how long the motor
+# will run before hitting that limit"*.  The loop answers a question about the STEADY
 # state; when that state is past a limit the one thing the answer does not
 # contain is how long the machine may actually pull before it gets there.
 #
@@ -1318,9 +1318,9 @@ def _ttl_step(body: Dict[str, Any], cooling: Dict[str, Any],
 # ---------------------------------------------------------------------------
 # THE CATALOGUE CONSTANTS — the same machine at 20 °C
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-18: *«для каждого отчёта делать прогон на холодную 20 °C, чтобы
-# находить все коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех
-# каталогах моторов и нужны для сравнения»*.
+# Owner, 2026-09-18: *"do a cold 20 °C pass for every report, to find all the
+# coefficients KV, Kt, Km, Km/mass that appear in every motor catalogue and
+# are needed for comparison"*.
 #
 # EVERY constant in this project is reported at the duty's own temperatures,
 # which is the honest thing to do and the wrong thing to COMPARE with.  A
@@ -1491,8 +1491,8 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
 # ─────────────────────────────────────────────────────────────────────────────
 #  SINE vs INVERTER, at the SAME point and the SAME temperatures (2026-09-25)
 # ─────────────────────────────────────────────────────────────────────────────
-# Owner: «нужно давать сравнение, как изменились характеристики мотора с
-# контроллером по сравнению с синусоидой, и тоже указывать это в отчёте».
+# Owner: "we need to provide a comparison of how the motor's characteristics
+# changed with the controller versus the sine drive, and also show that in the report".
 #
 # ONE extra electromagnetic pass after the loop has finished, on the IDEAL
 # sinusoidal current source, at the operating point and the temperatures of the
@@ -1696,8 +1696,8 @@ def _sine_comparison_step(body: Dict[str, Any], em: Dict[str, Any], *,
 #  DRIVE = INVERTER: the loop on the SINE, then the controller's PWM once
 #  (owner 2026-09-25)
 # ─────────────────────────────────────────────────────────────────────────────
-# «очень долго идёт каплинг с контроллером, нужно сменить алгоритм: каплинг
-# делается только с синусоидой, а последний прогон — с PWM из контроллера».
+# "the coupling with the controller takes very long, we need to change the
+# algorithm: the coupling is done only with the sine drive, and the last pass — with PWM from the controller".
 #
 # THE ALGORITHM (``inverter_coupling: "final_pass"``, the default):
 #   1. the whole EM ↔ thermal (↔ mechanical) loop runs on the ideal SINE
@@ -2229,8 +2229,8 @@ def _cold_ldq0(em: Dict[str, Any],
                body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """CATALOGUE Ld / Lq: incremental, at i = 0, at 20 °C — never raising.
 
-    The owner's rule of 2026-09-20: *«Ld/Lq нужно указывать тоже для 20
-    градусов и без тока, как для KV»*.  KV is a no-load constant at a stated
+    The owner's rule of 2026-09-20: *"Ld/Lq also need to be given at 20
+    degrees and at zero current, like KV"*.  KV is a no-load constant at a stated
     temperature; so are the inductances a control engineer sizes a loop with,
     and a catalogue that quotes one at no load and the other at 600 A is
     comparing two different machines.  The LOADED point's own inductances stay
@@ -2307,8 +2307,8 @@ def _limited_block(time_to_limit: Optional[Dict[str, Any]],
     the last map and not a converged fixed point.
 
     THE TEMPERATURES THE FINAL ELECTROMAGNETIC PASS IS SOLVED AT (``em_pass_at``,
-    owner 2026-09-18 on the live site: *«так и расчёт тогда должен быть при
-    катушках в 200 градусов, а не 184»*).  THE RULE: the EM pass of a limited
+    owner 2026-09-18 on the live site: *"the calculation should be with the
+    coils at 200 degrees, not 184"*).  THE RULE: the EM pass of a limited
     state uses, for each part, the temperature the LIMIT is judged on (the
     winding HOT SPOT, the HOTTEST magnet element — never the node mean), with
     the limiting part exactly at its limit.  So when the winding limits, the
@@ -2734,10 +2734,10 @@ _V1_FIRST_STEP_GAIN = 0.3
 # ---------------------------------------------------------------------------
 # STAGE 2 — THE CONTROLLER AS THE DRIVE (2026-09-22)
 # ---------------------------------------------------------------------------
-# Owner: *«как закончишь лимиты, запускай каплинг — сначала стандартный инвертор
-# на L155 motor»*, and, the decision that shapes it: *«как отладим каплинг с
-# контроллером, нам не нужен будет PWM в электромагнитном моделировании — всё
-# будет задаваться в меню Controller»*.
+# Owner: *"once you finish the limits, run the coupling — first the standard
+# inverter on L155 motor"*, and, the decision that shapes it: *"once we debug
+# the coupling with the controller, we won't need PWM in the electromagnetic
+# simulation any more — everything will be set in the Controller menu"*.
 #
 # WHAT THIS ADDS TO ``drive: "pwm"`` is the DEVICE, and with it a second fixed
 # point.  The fundamental regulator (``_regulate_v1``) and every ceiling, every
@@ -2984,7 +2984,7 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
         "r_g_ext_ohm": (None if r_g is None else float(r_g)),
         "e_oss_policy": policy, "set_split": split,
         "cooling": cooling or {}, "r_tim_k_w": r_tim,
-        # A card whose datasheet prints no R_th(j-c) (e.g. WCMS900B170E53)
+        # A card whose datasheet prints no R_th(j-c) (some module datasheets)
         # needs the stated value; solve_controller refuses without it.
         "r_th_jc_k_w": (None if req.get("r_th_jc_k_w") is None
                         else float(req["r_th_jc_k_w"])),
@@ -4073,8 +4073,8 @@ def _mechanical_point(panel: Dict[str, Any], rpm: Optional[float]
     three cases: this is the rated speed and the route's overspeed factor
     multiplies it).  The tab's ``rpm`` / ``rpm1`` boxes are numbers typed for
     whatever machine was loaded when they were typed (2026-09-09 morning: the
-    Ø200's 23 000 on a 13 000 rpm motor; user: "обороты должны быть
-    правильными — и электромагнитного, и обороты, и температуры"), so they are
+    Ø200's 23 000 on a 13 000 rpm motor; user: "the speeds should be correct
+    — both the electromagnetic ones and the speeds, and the temperatures"), so they are
     not consulted; when a box disagrees, the note says which speed was solved.
 
     ``None`` for the speed means "the hook's own precedence" (the panel, then
@@ -4102,8 +4102,8 @@ def _mechanical_step(body: Dict[str, Any], field: Dict[str, Any], *,
                      torque_nm: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """Rotor stress at the temperatures the converged map gives EACH PART.
 
-    User 2026-09-08: "в механический расчёт тоже нужно делать каплинг, чтобы
-    температуры везде были одинаковы".  The Mechanical solver stays its own
+    User 2026-09-08: "the mechanical calculation also needs the coupling, so
+    the temperatures are the same everywhere".  The Mechanical solver stays its own
     solver — this only hands it the four temperatures (magnet, rotor core, shaft,
     sleeve; the AVERAGE of each part, the number a thermal expansion belongs
     at) through the hook ``routes.mechanical.run_rotor_stress_at``, which does
@@ -4142,10 +4142,10 @@ def _mechanical_step(body: Dict[str, Any], field: Dict[str, Any], *,
         return {"ok": False, "temps_c": {}, "error": (
             "the thermal map has no rotor part to take a temperature from")}
     # THE TEMPERATURES GO THROUGH AS THEY ARE — the map's own numbers, per
-    # part, which is what the user asked the coupling to fill in ("нужно
-    # заполнять всё реальными цифрами").  What they DO is the solver's rule,
-    # not this route's (user 2026-09-09: "нам нужно учитывать температуру
-    # только как изменение давления на бандаж, если он есть"): the rotor
+    # part, which is what the user asked the coupling to fill in ("everything
+    # needs to be filled in with real numbers").  What they DO is the solver's rule,
+    # not this route's (user 2026-09-09: "we only need to account for
+    # temperature as a change in pressure on the band, if there is one"): the rotor
     # stress solve carries a temperature only as the change of a retaining
     # band's fit pressure, and solves every part as drawn — so on a machine
     # with no band the map changes nothing and the answer says so in its
@@ -4298,8 +4298,8 @@ def _compact_crit(r: Dict[str, Any]) -> Dict[str, Any]:
 def _drive_carrier(body: Dict[str, Any], *, default: bool) -> Dict[str, Any]:
     """THE CARRIER OF THE RUN BEING SOLVED — ``{hz, origin, source}``.
 
-    2026-09-24 (owner: «Это значение нужно задавать в контроллере; PWM нужно
-    выкинуть из Electromagnetic»): the CONTROLLER owns it.  In order —
+    2026-09-24 (owner: "This value needs to be set in the controller; PWM
+    needs to be dropped from Electromagnetic"): the CONTROLLER owns it.  In order —
 
       * ``body.controller.f_carrier_hz`` (the Controller block the Coupled
         panel sends by reference) and the SAVED Controller settings of the
@@ -4378,8 +4378,8 @@ def _modal_steps(body: Dict[str, Any], *, authorization: Optional[str],
                  f_switch_hz: Optional[float] = None) -> Dict[str, Any]:
     """The two temperature-FREE mechanical answers, at this run's speed.
 
-    User 2026-09-13: "при каплинге чтобы всё решалось — и модальный, и
-    частоты, чтобы к отчёту было всё готово".  The ring modes and the shaft's
+    User 2026-09-13: "when coupling runs, everything should be solved — the
+    modal analysis and the frequencies, so everything is ready for the report".  The ring modes and the shaft's
     critical speeds go through the same hooks the tab's two buttons use
     (``run_modes_at`` / ``run_critical_speeds_at`` — the user's saved body,
     mode count, mesh and shaft line), so the report's mechanical page and the
@@ -4513,9 +4513,9 @@ def _cycle_block_of(regime: Optional[Dict[str, Any]],
 # ---------------------------------------------------------------------------
 # Persistent history (2026-09-22) — "don't recompute an identical coupled run"
 # ---------------------------------------------------------------------------
-# Owner, first sentence of the 2026-09-22 ask: *"если я запускаю те же
-# параметры каплинга, он не считается, а подгружает уже рассчитанный
-# вариант"*.  There is no in-process memo to build on here (unlike the EM
+# Owner, first sentence of the 2026-09-22 ask: *"if I run the same coupling
+# parameters, it shouldn't recompute, it should load the already-computed
+# result"*.  There is no in-process memo to build on here (unlike the EM
 # transient's ``_fem_transient_cache`` or mechanical's ``rsm.cache_get``):
 # ``_em_run`` below deliberately forces every INNER electromagnetic pass to
 # solve (``fresh=True, ledger=False`` at its own call site) because a coupled
@@ -5002,8 +5002,8 @@ def _run(body: Dict[str, Any],
         inv_final, ctl_final = inverter, ctl
         inverter, ctl = None, None
     # …AND IF THIS VERY SINE STATE WAS ALREADY SOLVED, IT IS NOT SOLVED AGAIN
-    # (owner 2026-09-25: «если уже есть каплинг с синусом — просто запускается
-    # расчёт с PWM из контроллера»).  Looked up under the drive-independent
+    # (owner 2026-09-25: "if the sine coupling already exists — just run the
+    # calculation with PWM from the controller").  Looked up under the drive-independent
     # sine-state key; `fresh` (Recompute) always solves.
     sine_key: Optional[str] = None
     sine_hit: Optional[Dict[str, Any]] = None
@@ -5447,8 +5447,8 @@ def _run(body: Dict[str, Any],
             d_mag = (0.0 if (t_mag is None or t_mag_out is None)
                      else float(t_mag_out) - float(t_mag))
             # ── THE LIMITS, WHEN THAT IS THE QUESTION (owner 2026-09-18) ────
-            # *«или считать до конца стабилизации температуры, или считать до
-            # лимитов»*.  In `limits` mode the loop must NOT keep iterating
+            # *"either solve until the temperature fully stabilizes, or solve
+            # to the limits"*.  In `limits` mode the loop must NOT keep iterating
             # towards a steady state the machine is never allowed to reach: as
             # soon as a pass's own map puts a part past its limit, the step
             # response of THAT map is integrated and — if it really does cross —
@@ -5559,8 +5559,8 @@ def _run(body: Dict[str, Any],
                         damping_eff = min(damping_eff, DAMPING_ON_OSCILLATION)
             prev_d = (d_coil, d_mag)
             history[-1]["damping_used"] = round(float(damping_eff), 3)
-            # ROUNDED to the panel's own precision (owner, 2026-09-22: "зачем
-            # он ещё пересчитывает... если во время каплинга он уже считал").
+            # ROUNDED to the panel's own precision (owner, 2026-09-22: "why is
+            # it recomputing again... it already computed during coupling").
             # `adoptConvergedTemperatures` (web/coupledApi.ts) writes this
             # exact 1-decimal number into the Simulation tab's coil/magnet
             # temperature fields, and the tab's next Run sends it straight
@@ -5702,16 +5702,16 @@ def _run(body: Dict[str, Any],
                      "inside it at this point",
                      ", ".join(time_to_limit.get("judged") or ()) or "none")
         # ── AND THE MACHINE AT THAT MOMENT (owner 2026-09-18) ───────────────
-        # *«будем ставить максимальные значения этих лимитов и делать вычисление
-        # для них… то есть состояние мотора в работе 24 секунды при заданной
-        # мощности»* — and (addendum) at the cooling this duty was solved with.
+        # *"we'll set the maximum values of these limits and compute for
+        # them... that is, the state of the motor running for 24 seconds at
+        # the given power"* — and (addendum) at the cooling this duty was solved with.
         #
         # ONE extra electromagnetic pass, AT THE LIMIT, so torque, the four
         # loss classes, R, KV/Kt/Km, the demagnetisation check, the voltages
         # and the ripple are those of the machine at that instant instead of
         # those of a steady state it never reaches.  "At the limit" is literal
-        # (owner 2026-09-18, on the live site: *«так и расчёт тогда должен быть
-        # при катушках в 200 градусов, а не 184»*): each part is solved at the
+        # (owner 2026-09-18, on the live site: *"the calculation should be
+        # with the coils at 200 degrees, not 184"*): each part is solved at the
         # temperature its limit is judged on — the winding hot spot, the
         # hottest magnet element — and the limiting part exactly AT its limit,
         # never at the node mean the network integrates (`_limited_block`
@@ -5941,8 +5941,8 @@ def _run(body: Dict[str, Any],
                 log.debug("coupled: the continuous rating could not be found",
                           exc_info=True)
             # ── CONFIRM IT WITH A REAL EM PASS (owner 2026-09-21) ────────────
-            # *«почему сразу не пересчитывается электромагнитное моделирование
-            # для найденного непрерывного режима — токи не совпадают»*.  The
+            # *"why doesn't the electromagnetic simulation recompute right
+            # away for the continuous rating found — the currents don't match"*.  The
             # network's own answer is an ESTIMATE (a four-node fit); the record
             # — and every tile downstream of `em` / `field` — must be the
             # REAL machine at that current, exactly as `limits` mode makes the
@@ -6355,9 +6355,9 @@ def _run(body: Dict[str, Any],
                              for r in sine_cmp["rows"]
                              if r["key"] in ("T_em_avg_Nm", "P_loss_total_W")))
         # ── AND THE SAME MACHINE AT 20 °C (owner 2026-09-18) ────────────────
-        # *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить
-        # все коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех
-        # каталогах моторов и нужны для сравнения»*.  One background pass, at
+        # *"do a cold 20 °C pass for every report, to find all the
+        # coefficients KV, Kt, Km, Km/mass that appear in every motor
+        # catalogue and are needed for comparison"*.  One background pass, at
         # the end, feeding back into nothing: it is a measurement of the
         # machine, not a state the machine is in.
         if want_cold and history:
@@ -6869,8 +6869,8 @@ def _merge_constants_20c(block: Dict[str, Any]) -> Dict[str, bool]:
 # ---------------------------------------------------------------------------
 # HOW MUCH MAY IT PULL FOR EVER — the continuous rating, per cooling condition
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-20: *«давай ещё сделаем расчёт continuous power для разных
-# условий охлаждения»*.  The loop and `coupled_time_to_limit` both answer for a
+# Owner, 2026-09-20: *"let's also add a continuous power calculation for
+# different cooling conditions"*.  The loop and `coupled_time_to_limit` both answer for a
 # current somebody typed; this answers for the current the machine may HOLD, and
 # it answers it once per cooling condition, because that is the number that
 # moves by a factor of three between a joint in still air and a jacketed one.
@@ -7156,8 +7156,8 @@ def _cr_consistency_guard(block: Dict[str, Any],
 def _setpoint_only_limited_line(i_duty: Optional[float],
                                 time_to_limit: Optional[Dict[str, Any]]) -> str:
     """The AT-THE-LIMIT sentence, re-worded once the record's own numbers have
-    moved to the S1 machine (owner 2026-09-21, third round: *«опять токи не
-    совпадают»* — the setpoint's own "Runs 45 s …" sentence used to end "the
+    moved to the S1 machine (owner 2026-09-21, third round: *"the currents
+    don't match again"* — the setpoint's own "Runs 45 s …" sentence used to end "the
     numbers below are the machine at that moment", which became FALSE the
     instant those numbers became the S1 pass's.  States the SETPOINT's own
     current up front and drops the now-false tail.  Only ever called after a
@@ -7187,9 +7187,9 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
     the estimate found — never trust the network alone.
 
     Owner, 2026-09-21 (screenshot: the S1 line said 34.1 A while the tiles
-    still showed the 63.64 A setpoint's numbers): *«почему сразу не
-    пересчитывается электромагнитное моделирование для найденного
-    непрерывного режима — токи не совпадают»*.  One EM pass at ``i_estimate``,
+    still showed the 63.64 A setpoint's numbers): *"why doesn't the
+    electromagnetic simulation recompute right away for the continuous rating
+    found — the currents don't match"*.  One EM pass at ``i_estimate``,
     one real 2-D thermal solve of its own loss map, and the limiting part's
     OWN hot spot / hottest element read straight off that map (never the
     network's node-mean-plus-offset estimate).  Off by more than 3 K in

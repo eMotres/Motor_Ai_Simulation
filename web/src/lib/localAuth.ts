@@ -3,7 +3,7 @@
 // Identity comes from Google Identity Services (the official button → ID token)
 // or an email/password account; either way the backend exchanges it for OUR
 // 30-day HS256 token (POST /api/auth/google | /api/auth/login), which is what
-// every API call carries. Rights (tier/admin) always live server-side in
+// every API call carries. Rights (role/admin) always live server-side in
 // config/users.json + ADMIN_EMAILS — nothing here is trusted for authorization.
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
@@ -22,7 +22,7 @@ export interface SessionUser {
   email: string;
   name: string;
   picture?: string;
-  tier: string;
+  role: string;
 }
 
 export function getStoredToken(): string | null {
@@ -263,4 +263,44 @@ export function loadGis(): Promise<GisId> {
     document.head.appendChild(s);
   });
   return gisPromise;
+}
+
+// ── my data: export + account deletion (GDPR; routes/account_data.py) ───────
+function authHeaders(json = false): Record<string, string> {
+  const h: Record<string, string> = {};
+  const token = getStoredToken();
+  if (token) h.Authorization = `Bearer ${token}`;
+  if (json) h['Content-Type'] = 'application/json';
+  return h;
+}
+
+export interface DeletionState { pending: { requested_at: number; due_at: number } | null; grace_days: number }
+
+export async function getDeletionState(): Promise<DeletionState> {
+  const r = await fetch(`${API}/api/account/deletion`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(`deletion status HTTP ${r.status}`);
+  return r.json() as Promise<DeletionState>;
+}
+
+/** Schedule my account for deletion; needs the password or a fresh Google credential. */
+export async function requestAccountDeletion(proof: { password?: string; google_credential?: string }): Promise<DeletionState> {
+  const r = await fetch(`${API}/api/account/deletion`, {
+    method: 'POST', headers: authHeaders(true), body: JSON.stringify(proof),
+  });
+  const j = await r.json().catch(() => ({})) as { detail?: string } & DeletionState;
+  if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+  return j;
+}
+
+export async function cancelAccountDeletion(): Promise<void> {
+  const r = await fetch(`${API}/api/account/deletion`, { method: 'DELETE', headers: authHeaders() });
+  if (!r.ok) throw new Error(`cancel HTTP ${r.status}`);
+}
+
+/** A signed, single-use, 15-minute download link for my data (ZIP). */
+export async function requestDataExport(): Promise<{ url: string; expires_at: number }> {
+  const r = await fetch(`${API}/api/account/export`, { method: 'POST', headers: authHeaders() });
+  if (!r.ok) throw new Error(`export HTTP ${r.status}`);
+  const j = await r.json() as { url: string; expires_at: number };
+  return { url: `${API}${j.url}`, expires_at: j.expires_at };
 }

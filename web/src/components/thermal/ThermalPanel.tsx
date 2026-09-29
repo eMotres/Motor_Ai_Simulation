@@ -54,10 +54,15 @@ import {
 import type {
   BoreMode, CoolMode, EndFaceMode, FrameMode, ThermView, ThermalCoolingSurface,
 } from './api';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/thermal.json (docs/I18N.md).
+const tx = nsT('thermal');
 
 /* A hint used to be wrapped round each Select here, pushed under the menu with
-   a z-index (2026-09-07: 'падающее меню подсказки не даёт сменить воздух на
-   жидкость').  That was only half the fix — a tooltip is INTERACTIVE by
+   a z-index (2026-09-07: 'the dropdown tooltip doesn't let you switch air
+   to liquid').  That was only half the fix — a tooltip is INTERACTIVE by
    default, so its popper takes the pointer even from under the menu — and
    since 2026-09-15 no tooltip wraps a control at all: the hint hangs on a ⓘ
    beside it (`HelpTip`), and the tooltips that remain wrap READOUTS and carry
@@ -71,12 +76,12 @@ const bad = { ...warn, color: '#f87171', borderBottom: '1px dotted #f87171' } as
 /* Every menu text and every hint of this cooling block lives in
    `roboticsHelp` — one module, so the panel, the 3-D view's popovers and the
    arrow tooltips cannot describe the same parameter three different ways
-   (owner 2026-09-17: «надо более подробно расписать это меню»).  An option
+   (owner 2026-09-17: «this menu needs to be spelled out in more detail»).  An option
    now says what it DOES, not what it is called internally. */
 const COOL_LABEL: Record<CoolMode, string> = COOL_MODE_LABEL;
 const BORE_LABEL: Record<BoreMode, string> = BORE_MODE_LABEL;
 /** How the machine is BUILT.  `open` is the 40 mm CIANO14 (user 2026-09-09:
- *  *нет корпуса*) — tooth blocks between two end plates, end turns and slot
+ *  *no housing*) — tooth blocks between two end plates, end turns and slot
  *  channels in the propeller wash. */
 const FRAME_LABEL: Record<FrameMode, string> = FRAME_MODE_LABEL;
 const FLUIDS: [string, string][] = [
@@ -208,8 +213,8 @@ const NumField: React.FC<{
  *  The same tile the Mechanical tab uses — one short line, tooltip for the
  *  rest (the project's no-walls-of-text rule). */
 /** The mean's colour when a tile carries both numbers — same type, same size,
- *  a quieter ink (user 2026-09-09: "давай будем писать одинаковыми шрифтами,
- *  но разным цветом max и mean").  Two sizes read as a headline and a
+ *  a quieter ink (user 2026-09-09: "let's write with the same fonts,
+ *  but max and mean in different colours").  Two sizes read as a headline and a
  *  footnote; two colours read as two equally real numbers, which is what they
  *  are — the peak decides the insulation class, the mean is what the coupled
  *  loop solves at. */
@@ -266,8 +271,8 @@ function hotAccent(t: number | null | undefined, limit: number): string {
 }
 
 /* ONE tile per PART the solver reported — every solid and every insulation,
-   the sleeve and the air regions included (user 2026-09-07: "сделай список
-   максимальных температур всех частей мотора, и слива, и изоляций").  The
+   the sleeve and the air regions included (user 2026-09-07: "make a list
+   of maximum temperatures of all motor parts, and the drain, and the insulations").  The
    order and the limits are this table's; a part the backend adds tomorrow
    still shows, at the end, under its own key.  At module scope so the local
    comparison table below can order ITS columns the same way — the tiles and
@@ -313,8 +318,8 @@ const PART_LABEL = (k: string) => k.replace(/_/g, ' ').replace(/^./, (c) => c.to
 /* ═══════════════════════════════════════════════════════════════════════════
  * The tab's own comparison table
  *
- * User 2026-09-07: *"сделай локальное сравнение по параметрам тепловой
- * симуляции, только как в Configure"*.  These are the COLUMNS; the rows are
+ * User 2026-09-07: *"make a local comparison of the thermal simulation
+ * parameters, just like in Configure"*.  These are the COLUMNS; the rows are
  * built by `compare/resultRows.localThermalRow`, so the table and the Compare
  * library read the same keys and can never mean two things by `winding_max`.
  *
@@ -423,21 +428,21 @@ const CoupledSection: React.FC = () => {
   return (
     <Paper sx={{ p: 1.25, mt: 1.5, bgcolor: 'var(--panel)' }}>
       <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap' }}>
-        <Tooltip {...TIP_PROPS} title="The fixed point of the loss↔temperature feedback: the losses heat the copper, hotter copper is more resistive, more resistive copper loses more. Each iteration is a full EM solve plus a conduction solve, so this is minutes, not seconds — and it is the only honest way to get a coil temperature instead of assuming one.">
+        <Tooltip {...TIP_PROPS} title={tx('theFixedPointOfTheLoss')}>
           <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-0)',
             cursor: 'help', borderBottom: '1px dotted var(--text-4)' }}>
-            Coupled EM ↔ thermal
+            {tx('coupledEmThermal')}
           </Typography>
         </Tooltip>
-        {/* NO LAUNCHER HERE (user 2026-09-11: "у нас каплинг только из
-            электромагнитов запускается").  The loop is started from the
+        {/* NO LAUNCHER HERE (user 2026-09-11: "for us, coupling is only
+            started from electromagnetics").  The loop is started from the
             Electromagnetic tab, which owns the operating point it iterates on;
             a second button over here could start it from a panel whose cooling
             had been edited but not solved, and the two entry points then
             disagreed about which point the machine was at.  This block stays
             as the READ-OUT of whatever the last coupled run converged to. */}
         <Typography sx={{ ...lbl }}>
-          started from the Electromagnetic tab
+          {tx('startedFromTheElectromagneticTab')}
         </Typography>
         <SolveTimer busy={busy} startedAt={st.coupled.startedAt}
           est={st.est.coupled} what="coupled solve" />
@@ -455,14 +460,14 @@ const CoupledSection: React.FC = () => {
       {res && (
         <Box sx={{ mt: 1 }}>
           {res.runaway ? (
-            <Tooltip {...TIP_PROPS} title="The loop diverges: at this operating point every iteration is hotter than the last, so there is no steady state to report. Physically the machine cooks — more cooling (a higher h, a colder sink) or less current is the only fix, and the temperatures below are simply where the iteration got to.">
+            <Tooltip {...TIP_PROPS} title={tx('theLoopDivergesAtThisOperating')}>
               <Typography sx={{ ...warn, color: '#f87171', borderBottomColor: '#f87171',
                 fontWeight: 700, display: 'inline-block', mb: 0.75 }}>
                 ⚠ thermal runaway — no equilibrium at this operating point
               </Typography>
             </Tooltip>
           ) : !res.converged && (
-            <Tooltip {...TIP_PROPS} title="The iteration cap was reached before the copper temperature settled. The last value is where it had got to, not a fixed point — raise the cap, or read the history to see whether it was still moving.">
+            <Tooltip {...TIP_PROPS} title={tx('theIterationCapWasReachedBefore')}>
               <Typography sx={{ ...warn, display: 'inline-block', mb: 0.75 }}>
                 ⚠ did not converge in {res.iterations} iterations
               </Typography>
@@ -500,7 +505,7 @@ const CoupledSection: React.FC = () => {
             {/* The feedback made visible: one row, one column per iteration. */}
             <Tooltip {...TIP_PROPS} title="Copper temperature after each pass of the loop. A sequence that flattens is a fixed point; one that keeps climbing by the same step or more is the runaway the warning above names.">
               <Box sx={{ cursor: 'help' }}>
-                <Typography sx={lbl}>copper per iteration</Typography>
+                <Typography sx={lbl}>{tx('copperPerIteration')}</Typography>
                 <Box sx={{ display: 'grid', gridAutoFlow: 'column', gap: 0.25, mt: 0.25 }}>
                   {hist.map((t, i) => (
                     <Typography key={i} sx={{
@@ -517,7 +522,7 @@ const CoupledSection: React.FC = () => {
             </Tooltip>
             <Tooltip {...TIP_PROPS} title="The copper temperature the loop settled on. It is a RESULT of this tab and an INPUT of the Electromagnetic tab — the button beside it is the only thing that moves it there, because silently changing another panel's operating point is exactly the state mutation this project has a standing rule against.">
               <Box sx={{ cursor: 'help' }}>
-                <Typography sx={lbl}>equilibrium copper</Typography>
+                <Typography sx={lbl}>{tx('equilibriumCopper')}</Typography>
                 <Typography sx={{ fontSize: 15, fontWeight: 700, fontFamily: 'monospace',
                   color: hotAccent(res.coil_temp_converged_C, 155) }}>
                   {fmt(res.coil_temp_converged_C, 1)} °C
@@ -535,7 +540,7 @@ const CoupledSection: React.FC = () => {
             </Tooltip>
             <Tooltip {...TIP_PROPS} title="Copper loss at the converged temperature — the number that grew as the winding heated (ρ_Cu rises about 0.39 % per K).">
               <Box sx={{ cursor: 'help' }}>
-                <Typography sx={lbl}>copper loss</Typography>
+                <Typography sx={lbl}>{tx('copperLoss')}</Typography>
                 <Typography sx={{ fontSize: 13, fontWeight: 700, fontFamily: 'monospace' }}>
                   {fmt(res.P_cu_W ?? res.field?.P_cu_W, 0)} W
                 </Typography>
@@ -543,7 +548,7 @@ const CoupledSection: React.FC = () => {
             </Tooltip>
             <Tooltip {...TIP_PROPS} title="Hot-spot of the converged temperature field — the peak anywhere in the machine, which is usually inside the slot and not in the copper's mean.">
               <Box sx={{ cursor: 'help' }}>
-                <Typography sx={lbl}>hot-spot</Typography>
+                <Typography sx={lbl}>{tx('hotSpot2')}</Typography>
                 <Typography sx={{ fontSize: 13, fontWeight: 700, fontFamily: 'monospace',
                   color: hotAccent(res.field?.T_max, 155) }}>
                   {fmt(res.field?.T_max, 0)} °C
@@ -560,6 +565,7 @@ const CoupledSection: React.FC = () => {
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
 const ThermalPanel: React.FC = () => {
+  useTranslation('thermal'); // re-render on language change; lazy-loads the namespace
   // The store's own geometry is the live machine; reading it here is what makes
   // the staleness badge re-evaluate the moment the geometry changes, without a
   // round trip to the backend.
@@ -721,9 +727,9 @@ const ThermalPanel: React.FC = () => {
      a shaft-cooled design is read on. */
   const rotorOutW = (budget?.bore_W ?? 0) + (budget?.shaft_ends_W ?? 0);
   /* …and the same split as the solver states it (2026-09-10), with the shares.
-     User: "нужно считать два числа: сколько тепла от ротора уходит через
-     внешний диаметр, а сколько через внутренний — то есть через зазор и через
-     вал".  Both numbers were on the tile as small print among four others; they
+     User: "we need to compute two numbers: how much heat leaves the rotor
+     through the outer diameter, and how much through the inner — that is,
+     through the gap and through the shaft".  Both numbers were on the tile as small print among four others; they
      are the two the cooling design turns on, so they are now the tile itself.
      Falls back to the pieces for a result solved before the block existed. */
   const split = budget?.rotor_heat_split;
@@ -752,8 +758,8 @@ const ThermalPanel: React.FC = () => {
   ];
 
   /* ── the tab's own comparison stack ──────────────────────────────────────
-     User 2026-09-07: "сделай локальное сравнение по параметрам тепловой
-     симуляции, только как в Configure".  The rows live in the store (so they
+     User 2026-09-07: "make a local comparison of the thermal simulation
+     parameters, just like in Configure".  The rows live in the store (so they
      survive leaving the tab) and are persisted with the tab's other fields (so
      they survive a reload and another browser); the Compare tab remains the
      permanent, cross-physics library. */
@@ -820,10 +826,10 @@ const ThermalPanel: React.FC = () => {
      something is solved again). */
   const localTable = (res || compareRows.length > 0) ? (
     <Paper sx={{ p: 1.25, mb: 1.5, bgcolor: 'var(--panel)' }}>
-      <LocalCompareTable title="Local comparison" rows={compareRows}
+      <LocalCompareTable title={tx('localComparison')} rows={compareRows}
         columns={compareCols} onRemove={removeLocal} onClear={clearLocal}
         onRename={renameLocal}
-        emptyHint={<>Press <b>Add to comparison</b> above to stack cooling variants here — what differs becomes the columns.</>} />
+        emptyHint={<>Press <b>{tx('addToComparison')}</b> {tx('aboveToStackCoolingVariantsHere')}</>} />
     </Paper>
   ) : null;
 
@@ -860,7 +866,7 @@ const ThermalPanel: React.FC = () => {
               (over the housing, through the bore).  With a liquid jacket and
               no air in the bore it decides nothing, and a field that decides
               nothing is a question the user should not be asked (2026-09-07:
-              "зачем тебе это, если всё равно все граничные условия задаём"). */}
+              "why do you need this, if we set all boundary conditions anyway"). */}
           {(coolMode === 'air' || boreMode === 'air' || coolMode === 'robotics') && (
             <Box sx={CTRL_ROW}>
               <TextField
@@ -899,7 +905,7 @@ const ThermalPanel: React.FC = () => {
                     : 'no Electromagnetic run at this point — running it through the coupled loop first…'}
                 </Typography>
               </Tooltip>
-              <Tooltip {...TIP_PROPS} title="Cancel the electromagnetic run. It stops between phases and, inside a transient, at the next frame — so it can take a few seconds, and it leaves no result.">
+              <Tooltip {...TIP_PROPS} title={tx('cancelTheElectromagneticRunItStops')}>
                 <span>
                   <Button variant="outlined" size="small" color="warning"
                     onClick={stopEm} disabled={emFb.stopping}>
@@ -930,7 +936,7 @@ const ThermalPanel: React.FC = () => {
               <Typography component="span" onClick={recompute}
                 sx={{ ...lbl, color: '#93c5fd', textDecoration: 'underline',
                      cursor: 'pointer' }}>
-                Recompute
+                {tx('recompute')}
               </Typography>
             </Typography>
           )}
@@ -991,7 +997,7 @@ const ThermalPanel: React.FC = () => {
             conditions of the same solve (user 2026-09-07) — a machine cooled
             through its hollow shaft alone was not expressible before. */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
-          <RowLabel text="Outer surface"
+          <RowLabel text={tx('outerSurface')}
             tip="The outside of the stator — the housing, the jacket, whatever the machine is wrapped in. This is where almost all of the loss leaves on a normally-built motor: the copper's heat crosses the iron to get here." />
           <Box sx={CTRL_ROW}>
             <Select size="small" value={coolMode}
@@ -1063,16 +1069,16 @@ const ThermalPanel: React.FC = () => {
 
           {coolMode === 'air' && (
             <SpeedSelect value={airSpeed} onChange={(v) => setField('airSpeed', v)}
-              tip="Blow speed over the housing, m/s → the convection coefficient (Churchill–Bernstein for a cylinder in cross-flow). Still air is not zero cooling — it is natural convection, about 7 W/m²K." />
+              tip={tx('blowSpeedOverTheHousingM')} />
           )}
 
           {coolMode === 'liquid' && (
             <>
               <FluidSelect value={fluid} onChange={(v) => setField('fluid', v)}
-                tip="The coolant. Its heat capacity is what turns litres per minute into a temperature rise, so glycol and oil come back hotter than water at the same flow." />
-              <NumField label="in °C" value={tIn} onChange={(v) => setField('tIn', v)} width={88}
-                tip="Coolant inlet temperature, °C — what comes out of the radiator and into the jacket. The outlet is NOT an input: it is what this machine does to that coolant at the flow beside it." />
-              <NumField label="L/min" value={flowLpm} onChange={(v) => setField('flowLpm', v)}
+                tip={tx('theCoolantItsHeatCapacityIs')} />
+              <NumField label={tx('inC')} value={tIn} onChange={(v) => setField('tIn', v)} width={88}
+                tip={tx('coolantInletTemperatureCWhatComes')} />
+              <NumField label={tx('lMin')} value={flowLpm} onChange={(v) => setField('flowLpm', v)}
                 width={88} error={!!coolErr && coolMode === 'liquid'}
                 tip="The pump, in litres per minute — required, and greater than zero. This is the number an engineer actually chooses; the outlet temperature and the jacket's film coefficient both follow from it. Doubling the flow buys about 2^0.8 ≈ 1.74 times the h and halves the coolant's own temperature rise." />
             </>
@@ -1085,15 +1091,15 @@ const ThermalPanel: React.FC = () => {
           )}
 
           {coolMode === 'none' && (
-            <Tooltip {...TIP_PROPS} title="Adiabatic: nothing leaves through the outer surface at all. Only meaningful with the bore cooled below — a machine with no cooled surface anywhere has no steady state, and Solve says so.">
-              <Typography sx={{ ...lbl, cursor: 'help' }}>adiabatic — nothing leaves here</Typography>
+            <Tooltip {...TIP_PROPS} title={tx('adiabaticNothingLeavesThroughTheOuter')}>
+              <Typography sx={{ ...lbl, cursor: 'help' }}>{tx('adiabaticNothingLeavesHere')}</Typography>
             </Tooltip>
           )}
         </Box>
 
         {/* ── boundary 2: the INNER rotor bore ─────────────────────────────── */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
-          <RowLabel text="Rotor bore"
+          <RowLabel text={tx('rotorBore')}
             tip="The rotor's inner diameter — the hollow shaft. Cooling it is the only path that reaches the rotor and the magnets WITHOUT crossing the air gap, which is why it moves the magnet temperature far more than a bigger fan on the housing does. Off by default: most shafts are solid and nothing flows through them." />
           <Box sx={CTRL_ROW}>
             <Select size="small" value={boreMode}
@@ -1113,32 +1119,32 @@ const ThermalPanel: React.FC = () => {
 
           {boreMode === 'air' && (
             <SpeedSelect value={boreAirSpeed} onChange={(v) => setField('boreAirSpeed', v)}
-              tip="Air speed through the bore, m/s, at the ambient temperature above (it is the same air). Internal flow, so the film follows a pipe correlation rather than the cross-flow one used on the housing." />
+              tip={tx('airSpeedThroughTheBoreM')} />
           )}
 
           {boreMode === 'liquid' && (
             <>
               <FluidSelect value={boreFluid} onChange={(v) => setField('boreFluid', v)}
-                tip="The bore coolant — its own loop, chosen independently of the outer one." />
-              <NumField label="in °C" value={boreTIn} onChange={(v) => setField('boreTIn', v)}
+                tip={tx('theBoreCoolantItsOwnLoop')} />
+              <NumField label={tx('inC')} value={boreTIn} onChange={(v) => setField('boreTIn', v)}
                 width={88}
                 tip="Bore coolant inlet temperature, °C. Its outlet is a result, exactly as the outer loop's is." />
-              <NumField label="L/min" value={boreFlowLpm}
+              <NumField label={tx('lMin')} value={boreFlowLpm}
                 onChange={(v) => setField('boreFlowLpm', v)} width={88}
                 error={!!coolErr && boreMode === 'liquid'}
-                tip="Bore pump, litres per minute — required and greater than zero. A bore is a much smaller wetted area than the housing, so the litres buy less total heat here but land where the magnets are." />
+                tip={tx('borePumpLitresPerMinuteRequired')} />
             </>
           )}
 
           {boreMode === 'none' && !(Number(shaftExtMm) > 0) && (
-            <Tooltip {...TIP_PROPS} title="Nothing flows through the bore: it is adiabatic, and everything the rotor and the magnets make has to cross the air gap to get out. That is the default machine.">
-              <Typography sx={{ ...lbl, cursor: 'help' }}>adiabatic — all rotor heat crosses the gap</Typography>
+            <Tooltip {...TIP_PROPS} title={tx('nothingFlowsThroughTheBoreIt')}>
+              <Typography sx={{ ...lbl, cursor: 'help' }}>{tx('adiabaticAllRotorHeatCrossesThe')}</Typography>
             </Tooltip>
           )}
 
           {/* ── the SHAFT OUTSIDE the housing ────────────────────────────────
-              User 2026-09-07: "торцы и лобовые части — только для вала, всё
-              остальное вращается внутри мотора".  The end faces and the end
+              User 2026-09-07: "end faces and end windings — only for the
+              shaft, everything else rotates inside the motor".  The end faces and the end
               windings turn inside a closed housing and are deliberately NOT
               modelled — they have nowhere else to send their heat.  The shaft
               does: it comes out through the bearings, so its exposed stubs are
@@ -1162,7 +1168,7 @@ const ThermalPanel: React.FC = () => {
         </Box>
 
         {/* ── HOW THE MACHINE IS BUILT ──────────────────────────────────────
-            User 2026-09-09, on the 40 mm CIANO14: "нет корпуса" — the tooth
+            User 2026-09-09, on the 40 mm CIANO14: "no housing" — the tooth
             blocks with their coils hang between two end plates on standoff
             pins, and the end turns plus the axial channels between neighbouring
             coils are in the propeller wash.  Every row above assumes the
@@ -1170,7 +1176,7 @@ const ThermalPanel: React.FC = () => {
             housed motor the end turns really do have nowhere to send their
             heat, and adding a path there would flatter every housed design. */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
-          <RowLabel text="Frame" tip={ROBOTICS_HELP.frame.tip} />
+          <RowLabel text={tx('frame')} tip={ROBOTICS_HELP.frame.tip} />
           <Box sx={CTRL_ROW}>
             <Select size="small" value={frame}
               onChange={(e) => setField('frame', e.target.value as FrameMode)}
@@ -1185,8 +1191,8 @@ const ThermalPanel: React.FC = () => {
 
         {/* ── WHAT THE MACHINE DOES WITH THIS POINT, over TIME ───────────────
             Right here, under the frame, and always open (user 2026-09-16:
-            «Меню Duty cycle должно быть всегда открыто и находиться вверху,
-            после frame»).  It used to sit at the very bottom of this tab
+            «The Duty cycle menu should always be open and sit near the top,
+            after frame»).  It used to sit at the very bottom of this tab
             behind a Hide/Show button, which is where the LAST thing goes — and
             the kind chosen here decides what the Run button three panels away
             actually does: S1 is the plain coupled loop, S3 makes the coupled
@@ -1196,8 +1202,8 @@ const ThermalPanel: React.FC = () => {
             Still inert: nothing in it solves on mount, and its own RUN CYCLE
             button remains the standalone tool.
 
-            …and BEHIND A FLAG since 2026-09-17 (owner: «давай пока уберём duty
-            cycle из Thermal, оставим только стандартный каплинг»).  Off by
+            …and BEHIND A FLAG since 2026-09-17 (owner: «let's drop the duty
+            cycle from Thermal for now, keep just the standard coupling»).  Off by
             default, so this tab is the cooling and the coupled loop and nothing
             else; `VITE_DUTY_CYCLE=1` at build time brings the block back
             exactly as it is.  Nothing was deleted — see `lib/dutyCycleFlag`. */}
@@ -1205,7 +1211,7 @@ const ThermalPanel: React.FC = () => {
 
         {/* ── where the physics comes from: the Electromagnetic tab, always ──── */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
-          <Tooltip {...TIP_PROPS} title="This tab owns the COOLING and nothing else. The current, the current angle, the speed, the coil temperature the losses are computed at and the steps per period are read from the Electromagnetic tab every time you press Solve — a standing rule of this project, so that one operating point describes the machine on every tab instead of each panel inventing its own. Change them there.">
+          <Tooltip {...TIP_PROPS} title={tx('thisTabOwnsTheCoolingAnd')}>
             <Typography sx={{ ...lbl, cursor: 'help', borderBottom: '1px dotted var(--text-4)',
               fontFamily: 'monospace' }}>
               from Electromagnetic: {fmt(op.I_phase_rms, 0)} A · γ {fmt(op.gamma_deg, 1)}°
@@ -1225,7 +1231,7 @@ const ThermalPanel: React.FC = () => {
           <Tooltip {...TIP_PROPS} title="The conduction solve runs on the SOLID sub-mesh of the same mesh the Electromagnetic tab uses — the outer air and the gap are dropped (there is nothing to conduct through in them; the gap is a conductivity instead). Its settings therefore belong to the Mesh tab and are shown here, not edited here.">
             <Typography sx={{ ...lbl, fontWeight: 700, cursor: 'help',
               borderBottom: '1px dotted var(--text-4)' }}>
-              Mesh
+              {tx('mesh')}
             </Typography>
           </Tooltip>
           <Tooltip {...TIP_PROPS} title="The Mesh tab's current settings — target element size, the minimum gmsh may refine to, the outer-air factor, and how many sectors of the machine are actually solved (a sector answer is tiled to the full ring for display). Change them on the Mesh tab.">
@@ -1261,10 +1267,10 @@ const ThermalPanel: React.FC = () => {
         </Box>
 
         {/* ── the same cooling, ON THE MACHINE ───────────────────────────
-            User 2026-09-15: "лучше нарисовать 3D модель с катушками (end
-            windings) и на ней прямо показывать, куда и сколько тепла может
-            отводиться … дай возможность задавать значения прямо в нём — так
-            намного удобнее, и определи его в это окно, где всё и задаётся".
+            User 2026-09-15: "better to draw a 3D model with the coils (end
+            windings) and show directly on it where and how much heat can be
+            dissipated … give the ability to set the values right in it — it's
+            much more convenient that way, and define it in this window, where everything is set".
             So it lives HERE, under the fields it duplicates, and not in a
             section of its own further down: it is an alternative way to set
             the same `thermalStore` values — one state, two faces — plus what
@@ -1285,7 +1291,7 @@ const ThermalPanel: React.FC = () => {
           Solids only, steady state; the gap and the slot are effective conductivities; cooling acts on the outer surface, on the bore when set{Number(shaftExtMm) > 0 ? ', and down the exposed shaft ends' : ''}{frame === 'open' ? ', plus the end turns and the slot channels in the wash' : ''}.
           <Tooltip {...TIP_PROPS} title="Steady-state conduction (∇·k∇T + q = 0) over the solid cross-section. The air gap is not meshed — it is represented by an effective conductivity COMPUTED from the gap width and the rotor speed (turbulent Taylor–Couette: the rotating film carries far more than still air), and the in-slot bundle by a second one that stands for copper, enamel, impregnation and the liner together. The heat source is the electromagnetic loss density of the operating point set on the Electromagnetic tab, per material. The outlets are the two convection films you set above: one on the outer stator surface, one in the rotor bore — each an h against its own sink temperature, and for a liquid loop that sink follows from the coolant you pump through it. A third outlet appears when you give the shaft an exposed length: the stubs outside the housing, as a fin in ambient air, which is the ONE axial path modelled — the rotor's end faces and the end windings spin inside the closed housing and have nowhere else to send their heat. Steady state means no thermal mass and no duty cycle — this is the temperature after the machine has been at this point long enough to stop changing, which is the worst case for a continuous rating and optimistic for a short burst.">
             <span style={{ borderBottom: '1px dotted var(--text-4)', cursor: 'help', marginLeft: 4 }}>
-              assumptions
+              {tx('assumptions')}
             </span>
           </Tooltip>
         </Typography>
@@ -1298,7 +1304,7 @@ const ThermalPanel: React.FC = () => {
         <Paper sx={{ p: 1.25, bgcolor: 'var(--panel)' }}>
           {!err && (
             <Typography sx={{ ...lbl, mb: 0.75, display: 'block' }}>
-              Nothing solved for this machine yet — press Solve for the temperature map.
+              {tx('nothingSolvedForThisMachineYet')}
             </Typography>
           )}
           <GeometryMap mesh={geom} busy={geomBusy || busy} error={geomErr} />
@@ -1316,7 +1322,7 @@ const ThermalPanel: React.FC = () => {
                 const c = comps[p.key]!;
                 return (
                   // The headline is the MAX and the label says so (user
-                  // 2026-09-09: "опять температуры разные" — the coupled loop
+                  // 2026-09-09: "different temperatures again" — the coupled loop
                   // and the Electromagnetic tab's fields carry the AVERAGE,
                   // because that is what a bulk resistivity and a bulk Br
                   // mean, while this tile led with the peak and printed the
@@ -1333,7 +1339,7 @@ const ThermalPanel: React.FC = () => {
                         : '  Neither goes back into the Electromagnetic run; this part carries no bulk property the field solve reads.')} />
                 );
               })}
-              <Tile label="Hot-spot" value={fmt(res.T_max, 0)}
+              <Tile label={tx('hotSpot')} value={fmt(res.T_max, 0)}
                 value2={fmt(res.T_min, 0)} unit="°C"
                 sub={HOTSPOT_SUB}
                 colour={hotAccent(res.T_max, 155)}
@@ -1345,24 +1351,24 @@ const ThermalPanel: React.FC = () => {
                   rule): the solver does that with a 100 000 W/m²K clamp, which
                   is a numerical device, not a film — so the tile says the
                   temperature that is held and the jacket's own film in the
-                  sub-line (user 2026-09-09: "что это такое?"). */}
+                  sub-line (user 2026-09-09: "what is this?"). */}
               {Number.isFinite(outer.h_jacket) && (outer.h_conv ?? 0) >= 1e5 ? (
-                <Tile label="Outer" value={fmt(outer.t_out_c ?? outer.t_sink_c, 0)} unit="°C held"
+                <Tile label={tx('outer')} value={fmt(outer.t_out_c ?? outer.t_sink_c, 0)} unit="°C held"
                   sub={[`liquid`, `jacket h ${fmt(outer.h_jacket, 0)} W/m²K`,
                         fmtW(outer.heat_removed_W)].join(' · ')}
                   tooltip={`${surfaceTip('outer stator surface', outer)} The housing surface is HELD at the coolant outlet temperature — the 100 000 W/m²K the solver applies for that is a numerical clamp (a wall a thousand times better coupled than any film), not a physical coefficient. The jacket's own film is ${fmt(outer.h_jacket, 0)} W/m²K: ${fmt(outer.flow_lpm, 1)} L/min through a ${fmt(outer.channel_width_mm, 0)} × ${fmt(outer.channel_height_mm, 0)} mm helical groove at ${fmt(outer.channel_velocity_mps, 2)} m/s (Re ${fmtExp(outer.re)}, ${String(outer.regime ?? '')}); across ${fmtW(outer.heat_removed_W)} that film alone would put the housing ${fmt((outer.heat_removed_W ?? 0) / Math.max((outer.h_jacket ?? 1) * (outer.area_m2 ?? 1), 1e-9), 1)} K above the coolant — which is why holding the surface at the outlet is the honest simplification.`} />
               ) : (
-                <Tile label="Outer" value={fmt(outer.h_conv ?? res.h_conv, 0)} unit="W/m²K"
+                <Tile label={tx('outer')} value={fmt(outer.h_conv ?? res.h_conv, 0)} unit="W/m²K"
                   sub={surfaceSub(outer, coolMode)}
                   tooltip={surfaceTip('outer stator surface', outer)} />
               )}
               {showInner && (
-                <Tile label="Inner bore" value={fmt(inner?.h_conv, 0)} unit="W/m²K"
+                <Tile label={tx('innerBore')} value={fmt(inner?.h_conv, 0)} unit="W/m²K"
                   sub={surfaceSub(inner, boreMode)}
                   tooltip={surfaceTip('rotor bore', inner)} />
               )}
               {showShaft && (
-                <Tile label="Shaft ends" value={fmt(shaftEnds?.h_conv, 0)} unit="W/m²K"
+                <Tile label={tx('shaftEnds')} value={fmt(shaftEnds?.h_conv, 0)} unit="W/m²K"
                   sub={[
                     `${fmt(shaftEnds?.G_W_per_K, 3)} W/K`,
                     fmtW(shaftEnds?.heat_removed_W),
@@ -1371,7 +1377,7 @@ const ThermalPanel: React.FC = () => {
                   tooltip={`The shaft outside the housing, as a FIN. ${shaftEnds?.sides ?? 2} × ${fmt(shaftEnds?.length_each_side_mm, 0)} mm of Ø${fmt(shaftEnds?.diameter_mm, 1)} mm shaft (${String(shaftEnds?.diameter_source ?? 'from the geometry')}) turning in ${fmt(shaftEnds?.t_sink_c, 0)} °C air: h ${fmt(shaftEnds?.h_conv, 0)} W/m²K on a cylinder spinning in still air (Re_ω ${fmtExp(shaftEnds?.re_omega)}, ${String(shaftEnds?.regime ?? '—')}), which the steel then has to feed — so the conductance is ${fmt(shaftEnds?.G_W_per_K, 3)} W/K and only ${fmt((shaftEnds?.fin_efficiency ?? 0) * 100, 0)} % of the stub is doing anything (mL ${fmt(shaftEnds?.mL, 2)}). At a shaft mean of ${fmt(shaftEnds?.t_shaft_mean_c, 1)} °C that removes ${fmtW(shaftEnds?.heat_removed_W)} — heat that never crosses the air gap. The rotor's end faces and the end windings are NOT modelled: they spin inside the closed housing and have nowhere else to send their heat.`} />
               )}
               {showOpen && (
-                <Tile label="End turns" value={fmt(endWind?.h_conv, 0)} unit="W/m²K"
+                <Tile label={tx('endTurns')} value={fmt(endWind?.h_conv, 0)} unit="W/m²K"
                   sub={[
                     `${fmt(endWind?.G_W_per_K, 3)} W/K`,
                     fmtW(endWind?.heat_removed_W),
@@ -1380,7 +1386,7 @@ const ThermalPanel: React.FC = () => {
                   tooltip={`The end windings in the airflow — the path an OPEN machine has and a housed one does not. ${endWind?.n_coils ?? '—'} coils × ${endWind?.n_sides ?? 2} sides of ${fmt(endWind?.end_turn_length_mm, 2)} mm end turn, a ${fmt(endWind?.bundle_thickness_mm, 2)} × ${fmt(endWind?.bundle_width_mm, 2)} mm bundle with ${fmt(endWind?.perimeter_mm, 2)} mm of it in the wash (the tooth-facing face is not) → A_ew ${fmt((endWind?.area_m2 ?? 0) * 1e4, 1)} cm². Their LENGTH is (k_end − 1)·L_stack/2 per side at k_end ${fmt(endWind?.k_end, 3)}, taken from ${String(endWind?.k_end_source ?? '—')} — the same factor the copper loss was billed at, never a second estimate. Film: ${String(endWind?.regime ?? '—')} at ${fmt(endWind?.air_speed_mps, 1)} m/s (${String(endWind?.air_speed_source ?? '')}), Re ${fmtExp(endWind?.re)}, on the bundle's equivalent Ø${fmt(endWind?.d_equiv_mm, 2)} mm. Copper's fin efficiency is taken as 1 — the end turn is the same conductor, k ≈ 400 W/m·K and a few millimetres thick. At a winding mean of ${fmt(endWind?.t_winding_mean_c, 1)} °C that removes ${fmtW(endWind?.heat_removed_W)}, which never has to cross the iron.`} />
               )}
               {showOpen && (
-                <Tile label="Slot channels" value={fmt(slotCh?.h_conv, 0)} unit="W/m²K"
+                <Tile label={tx('slotChannels')} value={fmt(slotCh?.h_conv, 0)} unit="W/m²K"
                   sub={[
                     `${fmt(slotCh?.G_W_per_K, 3)} W/K`,
                     fmtW(slotCh?.heat_removed_W),
@@ -1389,7 +1395,7 @@ const ThermalPanel: React.FC = () => {
                   tooltip={`The axial channels between neighbouring coils, ventilated. ${slotCh?.n_channels ?? '—'} of them; the free cross-section (${fmt(slotCh?.cross_section_mm2, 1)} mm² over the whole machine) and the wetted perimeter (${fmt(slotCh?.wetted_perimeter_per_slot_mm, 2)} mm per slot) are MEASURED on the mesh — what is left of a slot once the wires are in it is not a number anybody types — giving D_h ${fmt(slotCh?.hydraulic_diameter_mm, 2)} mm. Film: ${String(slotCh?.regime ?? '—')} duct flow at ${fmt(slotCh?.air_speed_mps, 1)} m/s, Re ${fmtExp(slotCh?.re)}, Nu ${fmt(slotCh?.nu, 2)}. The fully-developed Nusselt is used on a duct only a few diameters long, which UNDER-reads it — the entrance region exchanges considerably more. At a channel-air mean of ${fmt(slotCh?.t_air_mean_c, 1)} °C that removes ${fmtW(slotCh?.heat_removed_W)}.`} />
               )}
               {gapK !== undefined && (
-                <Tile label="Air gap" value={fmt(gapK, 2)} unit="W/m·K"
+                <Tile label={tx('airGap')} value={fmt(gapK, 2)} unit="W/m·K"
                   sub={[
                     `Ta ${fmtExp(gap?.Ta ?? res.gap_Ta)}`,
                     `Nu ${fmt(gap?.Nu ?? res.gap_Nu, 1)}`,
@@ -1399,17 +1405,17 @@ const ThermalPanel: React.FC = () => {
                   tooltip={`Effective conductivity of the air gap — a RESULT, computed for this machine from the gap width (${fmt(gap?.delta_mm, 2)} mm at a mean radius of ${fmt(gap?.r_mean_mm, 1)} mm) and the rotor speed, never a number typed in. The rotating film is turbulent well before a machine reaches its rated speed (Taylor number ${fmtExp(gap?.Ta ?? res.gap_Ta)}, Nusselt ${fmt(gap?.Nu ?? res.gap_Nu, 1)}, regime ${String(gap?.regime ?? '—')}), so it carries ${gap?.k_air ? `about ${fmt((gapK ?? 0) / gap.k_air, 1)}×` : 'far more than'} still air (${fmt(gap?.k_air, 3)} W/m·K). It is what sets the rotor and magnet temperature of a machine whose bore is not cooled — everything they make crosses this gap.${gap?.note ? ` ${String(gap.note)}` : ''}`} />
               )}
               {budget && rotorW !== null && (
-                <Tile label="Rotor heat out" value={`${fmt(gapOutW, 0)} gap`}
+                <Tile label={tx('rotorHeatOut')} value={`${fmt(gapOutW, 0)} gap`}
                   unit="W"
                   value2={`${fmt(boreOutW, 0)} bore`}
-                  // ONE short line (user 2026-09-10: "не надо так подробно
-                  // расписывать") — the two shares of what the rotor makes.
+                  // ONE short line (user 2026-09-10: "no need to spell it
+                  // out in such detail") — the two shares of what the rotor makes.
                   // Every other watt is in the tooltip.
                   sub={`${pct(split?.gap_pct, gapOutW)} / ${pct(split?.bore_pct, boreOutW)} of ${fmt(rotorW, 0)} W`}
                   colour={boreOutW >= 0.5 * rotorW ? 'var(--text-0)' : '#fbbf24'}
                   tooltip={`THE TWO WAYS OUT of the rotor on this 2-D section: ${fmt(gapOutW, 0)} W across the AIR GAP into the stator (${pct(split?.gap_pct, gapOutW)} of what it makes) and ${fmt(boreOutW, 0)} W off the BORE surface (${pct(split?.bore_pct, boreOutW)}).${showShaft ? ` Beside them, ${fmt(split?.axial_shaft_ends_W ?? budget.shaft_ends_W, 1)} W leaves AXIALLY down the ${shaftEnds?.sides ?? 2} exposed shaft end(s) — a lumped path out of the page, not a facet of this section, so it is not folded into either number.` : ''}${split?.closure_W != null ? ` They add back to the rotor's own generation to within ${fmt(split.closure_W, 2)} W.` : ''} Integrated on the solved mesh (machine watts). The rotor side makes ${fmt(rotorW, 0)} W (magnets, shaft, sleeve, rotor iron); ${fmt(rotorOutW, 0)} W of it leaves through the shaft — ${fmt(budget.bore_W, 0)} W through the bore${showShaft ? ` and ${fmt(budget.shaft_ends_W, 1)} W down the ${shaftEnds?.sides ?? 2} shaft end(s) sticking out of the housing` : ' (nothing sticks out of the housing, so there are no shaft ends to lose heat from — the rotor faces and the end windings turn inside it and have nowhere to send theirs)'} — and ${fmt(budget.gap_W, 0)} W crosses the air gap into the stator, through the sleeve. The housing removes ${fmt(budget.housing_W, 0)} W in total.${showOpen ? ` This machine has no housing: another ${fmt(budget.end_windings_W, 1)} W leaves off the end turns and ${fmt(budget.slot_channels_W, 1)} W out of the slot channels, straight into the wash without crossing any iron.` : ''} Balance closes to ${fmt(budget.residual_pct, 1)} % of the ${fmt(budget.losses_W, 0)} W of losses on the mesh. A rotor that must be cooled through the shaft wants the first number to be the big one.`} />
               )}
-              <Tile label="Total loss" value={fmt(res.P_loss_total_W, 0)} unit="W"
+              <Tile label={tx('totalLoss')} value={fmt(res.P_loss_total_W, 0)} unit="W"
                 sub={`Cu ${fmt(res.P_cu_W, 0)} · Fe ${fmt(res.P_fe_W, 0)}`}
                 tooltip={`All the heat this solve had to get rid of: copper ${fmt(res.P_cu_W, 0)} W, iron ${fmt(res.P_fe_W, 0)} W, magnet eddy ${fmt(res.P_mag_eddy_W, 1)} W. It is the electromagnetic loss of the operating point set on the Electromagnetic tab, at the coil temperature set there — the coupled solve below is what makes that temperature agree with the answer.`} />
             </Box>
@@ -1481,9 +1487,9 @@ const ThermalPanel: React.FC = () => {
             )}
 
             {/* ── these temperatures as a row of the Compare table ───────────
-                User 2026-09-07: "нужно везде сделать такую же кнопку … в
-                температурном нужно все максимальные температуры всех частей
-                мотора сравнивать между собой".  The row carries the peak of
+                User 2026-09-07: "we need the same button everywhere … in
+                thermal we need to compare all maximum temperatures of all
+                motor parts against each other".  The row carries the peak of
                 EVERY part the solve resolved — not the five tiles above — so two
                 cooling designs can be read against each other part by part. */}
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 1.25 }}>

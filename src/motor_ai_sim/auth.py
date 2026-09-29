@@ -1,4 +1,4 @@
-"""Firebase ID-token verification + tier gating for expensive endpoints.
+"""Firebase ID-token verification + role gating for expensive endpoints.
 
 Stateless and credential-free: a Firebase ID token is an RS256-signed JWT.
 We verify its signature against Google's public x509 certs (cached, public —
@@ -7,9 +7,9 @@ This runs fine on Cloud Run with zero secrets.
 
 Gating is OFF unless the env var AUTH_ENFORCE is truthy, so local development
 is completely unaffected (every endpoint stays open). In production we set
-AUTH_ENFORCE=1 and ADMIN_EMAILS=<owner emails>; those accounts get the highest
-tier, everyone else is 'free'. Per-user paid tiers (Stripe) will later arrive
-as a custom claim ('tier') on the token, which _tier_for() already honours.
+AUTH_ENFORCE=1 and ADMIN_EMAILS=<owner emails>; those accounts get the admin
+role, everyone else is 'user'. There are only two roles — user and admin —
+no per-account plans or billing tiers.
 
 Only a small allowlist of genuinely expensive endpoints is gated (live FEM,
 optimization, CAD generation). Catalog / presets / geometry / analytical
@@ -21,6 +21,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.request
@@ -63,7 +64,7 @@ _ADMIN_EMAILS = {
 # endpoints without a Firebase session. NEVER honour it on mutating endpoints.
 ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
 
-_TIER_RANK = {"anon": -1, "free": 0, "pro": 1, "team": 2, "admin": 3}
+_ROLE_RANK = {"anon": -1, "user": 0, "admin": 1}
 
 # ── PUBLIC_EXHIBIT — is there an anonymous audience at all? ──────────────────
 #
@@ -129,9 +130,19 @@ _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version",
 _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/auth/register", "/api/auth/verify",
                      "/api/auth/reset", "/api/auth/methods",
+                     # the data-export ZIP: the signed single-use token in the
+                     # query IS the credential (routes/account_data.py)
+                     "/api/account/export/download",
                      # double opt-in + one-click unsubscribe (mail clients POST
                      # without a session; rate-limited in routes/newsletter.py)
                      "/api/newsletter/confirm", "/api/newsletter/unsubscribe")
+
+
+#: The worker-facing routes of docs/BYO_COMPUTE.md (heartbeat, lease, progress,
+#: complete, fail) and the public worker installer files.
+_NODE_AGENT_PATH = re.compile(
+    r"^/api/nodes/(heartbeat|jobs/lease|jobs/[A-Za-z0-9_.-]+/(progress|complete|fail)"
+    r"|worker/(install\.sh|motres_compute_worker\.py))$")
 
 
 def anonymous_allowed(path: str) -> bool:
@@ -146,13 +157,16 @@ def anonymous_allowed(path: str) -> bool:
         return True
     if p in _ANON_OK_PATHS:
         return True
+    # user-owned compute nodes: own mcnode_ bearer, checked in routes/compute_nodes
+    if _NODE_AGENT_PATH.match(p):
+        return True
     return any(p == pfx or p.startswith(pfx + "/") for pfx in _ANON_OK_PREFIXES)
 
 # (HTTP method, exact path) -> minimum tier required to call it.
 # Everything not listed here (and not matched by _GATED_PREFIX below) is open.
 _GATED: dict[tuple[str, str], str] = {
-    ("GET",  "/api/simulation/physics/fem_transient"): "pro",
-    ("GET",  "/api/simulation/physics/fem_field2d"): "pro",
+    ("GET",  "/api/simulation/physics/fem_transient"): "user",
+    ("GET",  "/api/simulation/physics/fem_field2d"): "user",
     # Physics-cache diagnostics: what the server is holding in memory for the
     # SHARED machine.  Owner-only, like every other shared-store view/mutation.
     ("GET",  "/api/simulation/caches"): "admin",
@@ -162,29 +176,29 @@ _GATED: dict[tuple[str, str], str] = {
     ("DELETE", "/api/simulation/ledger"): "admin",
     # The History popover's three verbs on ONE ledger row (2026-09-22) — same
     # shared-store bargain as the whole-ledger view/clear just above, not the
-    # per-workspace "pro" tier `/api/history` gets away without gating at all.
+    # per-workspace "user" role `/api/history` gets away without gating at all.
     ("GET",  "/api/simulation/ledger/recent"): "admin",
     # "Have you already computed exactly this?" — a hash lookup, no solve, but
     # it answers a question only a paying engineering user gets to ask, so it
     # rides the same tier as the run it is a pre-flight for.
-    ("GET",  "/api/simulation/physics/fem_transient/ledger_match"): "pro",
+    ("GET",  "/api/simulation/physics/fem_transient/ledger_match"): "user",
     # Rotor structural solve — same class of compute as the field solves above
     # (a gmsh mesh + an FE solve per call), so the same tier.
-    ("GET",  "/api/mechanical/rotor_stress"): "pro",
-    ("GET",  "/api/mechanical/materials"): "pro",
-    # Modal analysis, added 2026-09-05 ("нам нужно сделать ещё модальный анализ,
-    # чтобы понять все частоты — это очень важно для 20000 rpm").  /modes is a
+    ("GET",  "/api/mechanical/rotor_stress"): "user",
+    ("GET",  "/api/mechanical/materials"): "user",
+    # Modal analysis, added 2026-09-05 ("we also need to do modal analysis,
+    # to understand all the frequencies — that's very important for 20000 rpm").  /modes is a
     # gmsh mesh + a sparse eigensolve and /critical_speeds is a Campbell sweep
     # of dense eigenvalue problems: the same class of compute as the solves
     # above, so the same tier.
-    ("GET",  "/api/mechanical/modes"): "pro",
-    ("GET",  "/api/mechanical/critical_speeds"): "pro",
-    # Added 2026-09-06 with "если есть [расчёты] — подгружается последний
-    # расчёт": /last hands back a structural result that was already paid for
+    ("GET",  "/api/mechanical/modes"): "user",
+    ("GET",  "/api/mechanical/critical_speeds"): "user",
+    # Added 2026-09-06 with "if there are [results] — the last result gets
+    # loaded": /last hands back a structural result that was already paid for
     # and /mesh runs the same gmsh pass the solve does, so both ride the tier of
     # the solves they serve rather than being open because they are cheaper.
-    ("GET",  "/api/mechanical/last"): "pro",
-    ("GET",  "/api/mechanical/mesh"): "pro",
+    ("GET",  "/api/mechanical/last"): "user",
+    ("GET",  "/api/mechanical/mesh"): "user",
     # Thermal, split out of the simulation router on 2026-09-07 and gated
     # IDENTICALLY to mechanical above, because it is the same bargain: /field is
     # a full EM transient plus a conduction solve, /coupled is up to twelve of
@@ -193,24 +207,24 @@ _GATED: dict[tuple[str, str], str] = {
     # (/api/simulation/physics/thermal_field2d) was never listed here — an
     # oversight, not a decision: it was always heavier than /physics/fem_field2d,
     # which IS gated, since it CALLS it.
-    ("GET",  "/api/thermal/field"): "pro",
-    ("GET",  "/api/thermal/coupled"): "pro",
-    ("GET",  "/api/thermal/last"): "pro",
-    ("GET",  "/api/thermal/mesh"): "pro",
+    ("GET",  "/api/thermal/field"): "user",
+    ("GET",  "/api/thermal/coupled"): "user",
+    ("GET",  "/api/thermal/last"): "user",
+    ("GET",  "/api/thermal/mesh"): "user",
     # The DUTY CYCLE (2026-09-14): one conduction solve plus a transient
     # integration over up to 200 cycles, and /duty_cycle/last hands back a
     # result that was already paid for — the same bargain the four above make.
-    ("POST", "/api/thermal/duty_cycle"): "pro",
-    ("GET",  "/api/thermal/duty_cycle/last"): "pro",
+    ("POST", "/api/thermal/duty_cycle"): "user",
+    ("GET",  "/api/thermal/duty_cycle/last"): "user",
     # The EM<->thermal orchestrator (2026-09-08).  /run is up to six FULL
     # electromagnetic transients plus a conduction solve each — the heaviest
     # single request in this backend — so it rides the same tier as the two
     # solves it drives.  /cancel and /last follow the pattern their transient and
     # thermal equivalents set: the Stop button is gated with the run it stops,
     # and /last hands back a result that was already paid for.
-    ("POST", "/api/coupled/run"): "pro",
-    ("POST", "/api/coupled/cancel"): "pro",
-    ("GET",  "/api/coupled/last"): "pro",
+    ("POST", "/api/coupled/run"): "user",
+    ("POST", "/api/coupled/cancel"): "user",
+    ("GET",  "/api/coupled/last"): "user",
     # NOT listed, and that is the decision, not an oversight (2026-09-07):
     #   GET /api/mechanical/progress
     #   GET /api/thermal/progress
@@ -221,8 +235,8 @@ _GATED: dict[tuple[str, str], str] = {
     # a second for the whole of a solve the user is ALREADY paying the gated
     # tier for.  Gating them would mean a progress bar that 401s over a running
     # solve, i.e. the one moment the user most needs to see something.
-    ("GET",  "/api/simulation/mesh/build2d"): "pro",
-    ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "pro",
+    ("GET",  "/api/simulation/mesh/build2d"): "user",
+    ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "user",
     # NOT listed since 2026-09-17: POST /api/support/chat.  It was "free" —
     # "calls the paid provider API, so require a signed-in account so an
     # anonymous visitor can't run up the bill" — which is the right worry and
@@ -246,12 +260,12 @@ _GATED: dict[tuple[str, str], str] = {
 _GATED_PREFIX: list[tuple[str, str, str]] = [
     # a tab's remembered input fields — per signed-in user, the same tier as
     # the solves whose inputs they are
-    ("GET",    "/api/panel_settings", "pro"),
-    ("PUT",    "/api/panel_settings", "pro"),
+    ("GET",    "/api/panel_settings", "user"),
+    ("PUT",    "/api/panel_settings", "user"),
     # heavy compute a signed-up engineering user may run on their own copy
-    ("POST",   "/api/kernel/run", "pro"),
-    ("POST",   "/api/kernel/study", "pro"),
-    ("POST",   "/api/simulation/physics/fem_transient/cancel", "pro"),
+    ("POST",   "/api/kernel/run", "user"),
+    ("POST",   "/api/kernel/study", "user"),
+    ("POST",   "/api/simulation/physics/fem_transient/cancel", "user"),
     # The History popover's load/delete on ONE ledger row — a path param, so
     # the exact table above cannot name it; same "admin" bargain as the
     # ledger's exact-path GET/DELETE and .../ledger/recent right next to them.
@@ -307,7 +321,7 @@ _WORKSPACE_STORE_PREFIXES = frozenset({
     "/api/presets", "/api/catalog", "/api/sims/saved", "/api/sweep/config",
 })
 #: What those writes require instead: a REGISTERED account (anonymous not).
-WORKSPACE_STORE_MIN_TIER = "free"
+WORKSPACE_STORE_MIN_ROLE = "user"
 
 
 def _layering_on() -> bool:
@@ -320,7 +334,7 @@ def _layering_on() -> bool:
         return False
 
 
-def required_tier(method: str, path: str) -> Optional[str]:
+def required_role(method: str, path: str) -> Optional[str]:
     """The minimum tier for one request, or ``None`` when the route is open.
 
     The exact table wins; otherwise the FIRST matching prefix does, with the
@@ -330,12 +344,12 @@ def required_tier(method: str, path: str) -> Optional[str]:
     need = _GATED.get((method, path))
     if need is not None:
         return need
-    for _m, _pfx, _tier in _GATED_PREFIX:
+    for _m, _pfx, _role in _GATED_PREFIX:
         if method == _m and path.startswith(_pfx):
-            if (_tier == "admin" and _pfx in _WORKSPACE_STORE_PREFIXES
+            if (_role == "admin" and _pfx in _WORKSPACE_STORE_PREFIXES
                     and _layering_on()):
-                return WORKSPACE_STORE_MIN_TIER
-            return _tier
+                return WORKSPACE_STORE_MIN_ROLE
+            return _role
     return None
 
 
@@ -387,14 +401,14 @@ def verify_id_token(id_token: str) -> dict:
     )
 
 
-def _tier_for(claims: dict) -> str:
+def _role_for(claims: dict) -> str:
     email = (claims.get("email") or "").strip().lower()
     if email and email in _ADMIN_EMAILS:
         return "admin"
-    claimed = claims.get("tier")
-    if claimed in _TIER_RANK:
+    claimed = claims.get("role")
+    if claimed in _ROLE_RANK:
         return claimed
-    return "free"
+    return "user"
 
 
 # ── Google Identity Services (direct, post-Firebase) ────────────────────────
@@ -455,7 +469,7 @@ def _verify_google_token(token: str) -> Optional[dict]:
         return None
 
 
-def _registry_tier(email: str, fallback: str = "free") -> str:
+def _registry_role(email: str, fallback: str = "user") -> str:
     """OUR user registry decides the tier; ADMIN_EMAILS overrides upward.
     Auto-provisions a record on first sight so the admin panel can manage
     every account that ever signed in.  A disabled record resolves to None
@@ -482,14 +496,14 @@ def _registry_tier(email: str, fallback: str = "free") -> str:
         if u is None and email:
             try:
                 import secrets as _sec
-                _users.create_user(email, _sec.token_hex(16), tier=fallback)
+                _users.create_user(email, _sec.token_hex(16), role=fallback)
             except Exception:
                 pass
             return fallback
         if u is not None:
             if u.get("disabled"):
                 return "__disabled__"
-            return u.get("tier", fallback)
+            return u.get("role", fallback)
     except Exception:
         pass
     return fallback
@@ -573,8 +587,8 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
         return _out(None, "store_unavailable", sid=res.sid, email=res.email)
 
     if res.ok and res.user is not None:
-        tier = _registry_tier(res.user["email"], fallback=res.user.get("tier", "free"))
-        if tier == "__disabled__":
+        role = _registry_role(res.user["email"], fallback=res.user.get("role", "user"))
+        if role == "__disabled__":
             _report_reject("disabled", res.email, res.sid, ip, user_agent, path)
             return _out(None, "disabled", sid=res.sid, email=res.email)
         _sessions.touch(res.sid, ip=ip, user_agent=user_agent)
@@ -583,7 +597,7 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
                                    reason="sliding", ip=ip,
                                    user_agent=user_agent, path=path)
         return _out({"uid": res.user["uid"], "email": res.user["email"],
-                     "tier": tier}, "ok", sid=res.sid, email=res.email,
+                     "role": role}, "ok", sid=res.sid, email=res.email,
                     renewed=res.renewed_token)
 
     # A token that is definitively OURS and definitively bad — do not waste a
@@ -599,15 +613,15 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
         if claims.get("email_verified") is False:
             _report_reject("google_unverified_email", email, "", ip, user_agent, path)
             return _out(None, "google_rejected", email=email)
-        tier = _registry_tier(email)
-        if tier == "__disabled__":
+        role = _registry_role(email)
+        if role == "__disabled__":
             _report_reject("disabled", email, "", ip, user_agent, path)
             return _out(None, "disabled", email=email)
         try:
             _users.link_google(email)       # Google proof verifies a pending row
         except Exception:                                   # pragma: no cover
             pass
-        return _out({"uid": claims.get("sub"), "email": email, "tier": tier},
+        return _out({"uid": claims.get("sub"), "email": email, "role": role},
                     "ok", email=email)
 
     _report_reject(res.reason, res.email, res.sid, ip, user_agent, path)
@@ -636,7 +650,7 @@ def resolve_user(authorization: Optional[str]) -> Optional[dict]:
     return resolve_user_detail(authorization)["user"]
 
 
-class TierGateMiddleware(BaseHTTPMiddleware):
+class RoleGateMiddleware(BaseHTTPMiddleware):
     """Two gates, one place, in this order:
 
     1. THE DOOR (``PUBLIC_EXHIBIT=0``): a caller with no valid credentials gets
@@ -644,7 +658,7 @@ class TierGateMiddleware(BaseHTTPMiddleware):
        default, so with the variable unset this costs one env read per request
        and nothing else changes.
     2. THE TIER TABLE (``AUTH_ENFORCE=1``): expensive or shared-store endpoints
-       need the tier ``required_tier`` names.
+       need the role ``required_role`` names.
 
     The identity is resolved AT MOST ONCE per request, whichever gate asks for
     it.  CORS preflight (OPTIONS) is never gated by either.
@@ -654,7 +668,7 @@ class TierGateMiddleware(BaseHTTPMiddleware):
         if request.method != "OPTIONS":
             path = request.url.path
             closed = not public_exhibit() and not anonymous_allowed(path)
-            need = required_tier(request.method, path) if AUTH_ENFORCE else None
+            need = required_role(request.method, path) if AUTH_ENFORCE else None
             if closed or need is not None:
                 _authz = request.headers.get("authorization")
                 user = resolve_user(_authz)
@@ -668,32 +682,32 @@ class TierGateMiddleware(BaseHTTPMiddleware):
                         status_code=401,
                         content={
                             "detail": "Sign in to use this server.",
-                            "required_tier": need or "free",
-                            "your_tier": "anon",
+                            "required_role": need or "user",
+                            "your_role": "anon",
                         },
                     )
                 if need is not None:
-                    tier = user["tier"] if user else "anon"
-                    if _TIER_RANK.get(tier, -1) < _TIER_RANK[need]:
+                    role = user["role"] if user else "anon"
+                    if _ROLE_RANK.get(role, -1) < _ROLE_RANK[need]:
                         return JSONResponse(
                             status_code=401 if user is None else 403,
                             content={
                                 "detail": (
                                     "Sign in to use this feature."
                                     if user is None
-                                    else f"This feature requires the '{need}' plan."
+                                    else "This feature requires an admin account."
                                 ),
-                                "required_tier": need,
-                                "your_tier": tier,
+                                "required_role": need,
+                                "your_role": role,
                             },
                         )
         return await call_next(request)
 
 
-def install_tier_gate(app) -> None:
-    """Attach the tier gate. Call BEFORE adding CORS so CORS stays outermost
+def install_role_gate(app) -> None:
+    """Attach the role gate. Call BEFORE adding CORS so CORS stays outermost
     and 403/401 responses still carry CORS headers for the browser."""
-    app.add_middleware(TierGateMiddleware)
+    app.add_middleware(RoleGateMiddleware)
 
 
 #: The account an MCP agent-key call acts for (set only by
@@ -720,15 +734,15 @@ def agent_user_for(email: str) -> Optional[dict]:
     ident = (email or "").strip().lower()
     if not ident or ident == ADMIN_OWNER:
         return {}
-    tier = _registry_tier(ident)
-    if tier == "__disabled__":
+    role = _registry_role(ident)
+    if role == "__disabled__":
         return None
-    return {"uid": ident, "email": ident, "tier": tier}
+    return {"uid": ident, "email": ident, "role": role}
 
 
 def _is_admin_caller(authorization: Optional[str]) -> tuple[bool, Optional[dict]]:
     """(is_admin, user|None). Admin iff the signed-in account is admin-tier
-    (email in ADMIN_EMAILS, or a 'tier=admin' claim).
+    (email in ADMIN_EMAILS, or a 'role=admin' claim).
 
     Local/unconfigured dev — no enforcement AND no ADMIN_EMAILS configured — is
     treated as admin so the admin UI is reachable without credentials. As soon
@@ -747,7 +761,7 @@ def _is_admin_caller(authorization: Optional[str]) -> tuple[bool, Optional[dict]
         user = resolve_user(authorization)
     if not AUTH_ENFORCE and not _ADMIN_EMAILS:
         return True, user
-    return (user is not None and user.get("tier") == "admin"), user
+    return (user is not None and user.get("role") == "admin"), user
 
 
 def account_info(authorization: Optional[str], *, ip: str = "",
@@ -760,7 +774,7 @@ def account_info(authorization: Optional[str], *, ip: str = "",
         still hold a perfectly good session (a request that raced the fetch
         interceptor, a hot-reloaded module, a proxy that dropped the header).
         Dropping the stored session here logs the user out for nothing — that
-        is exactly how "сессия постоянно протухает" happened (2026-08-21).
+        is exactly how "the session kept dying" happened (2026-08-21).
       * authError='store_unavailable' — a token was presented and we could not
         CHECK it, because users.json / .sessions.json / .auth_secret was
         momentarily unreadable (a Windows file lock during the atomic replace,
@@ -781,7 +795,7 @@ def account_info(authorization: Optional[str], *, ip: str = "",
     if not AUTH_ENFORCE and not _ADMIN_EMAILS:
         is_admin = True
     else:
-        is_admin = user is not None and user.get("tier") == "admin"
+        is_admin = user is not None and user.get("role") == "admin"
     presented = bool(det["presented"])
     # store_unavailable is OUR failure, never the client's — it must not read
     # as a rejected token, or the browser wipes a valid session over a 40 ms
@@ -790,7 +804,7 @@ def account_info(authorization: Optional[str], *, ip: str = "",
     out = {
         "uid": user["uid"] if user else ("local-dev" if is_admin else None),
         "email": user["email"] if user else None,
-        "tier": "admin" if is_admin else (user["tier"] if user else "anon"),
+        "role": "admin" if is_admin else (user["role"] if user else "anon"),
         "isAdmin": is_admin,
         "enforced": AUTH_ENFORCE,
         "tokenPresented": presented,
@@ -815,7 +829,7 @@ ANON_OWNER = "anonymous"
 
 
 def caller_identity(authorization: Optional[str] = None) -> dict:
-    """Who is asking — `{"id": str, "is_admin": bool, "tier": str}`.
+    """Who is asking — `{"id": str, "is_admin": bool, "role": str}`.
 
     The id is the SAME dialect the stores spell in an entry's `owner` field, so
     "is this mine?" is one string comparison and not a translation step. It is
@@ -846,8 +860,8 @@ def caller_identity(authorization: Optional[str] = None) -> dict:
         ident = (user.get("email") or "").strip().lower() or (user.get("uid") or "")
     if not ident:
         ident = ADMIN_OWNER if is_admin else ANON_OWNER
-    tier = "admin" if is_admin else str((user or {}).get("tier") or "anon")
-    return {"id": ident, "is_admin": is_admin, "tier": tier}
+    role = "admin" if is_admin else str((user or {}).get("role") or "anon")
+    return {"id": ident, "is_admin": is_admin, "role": role}
 
 
 def require_admin(authorization: Optional[str] = Header(default=None)) -> dict:
@@ -858,7 +872,7 @@ def require_admin(authorization: Optional[str] = Header(default=None)) -> dict:
         if user is None:
             raise HTTPException(status_code=401, detail="Sign in required.")
         raise HTTPException(status_code=403, detail="Admin access required.")
-    return user or {"uid": "local-dev", "email": None, "tier": "admin"}
+    return user or {"uid": "local-dev", "email": None, "role": "admin"}
 
 
 def _has_service_token(authorization: Optional[str]) -> bool:
@@ -876,5 +890,5 @@ def require_admin_or_token(authorization: Optional[str] = Header(default=None)) 
     headless read-only automation (the nightly tickets agent). Apply ONLY to GET
     read endpoints — mutating endpoints must keep require_admin."""
     if _has_service_token(authorization):
-        return {"uid": "service-agent", "email": None, "tier": "admin", "service": True}
+        return {"uid": "service-agent", "email": None, "role": "admin", "service": True}
     return require_admin(authorization)

@@ -18,7 +18,7 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 // Install the fetch interceptor at MODULE LOAD, not in an effect: React runs
 // child effects BEFORE the provider's, so a panel's first fetch fired from its
 // own mount effect would go out WITHOUT the Bearer header and 401 on gated
-// endpoints (seen live: the field view hit "your_tier: anon" while signed in
+// endpoints (seen live: the field view hit "your_role: anon" while signed in
 // as admin).  The token getter reads localStorage synchronously — no state to
 // wait for.
 installFetchAuth();
@@ -37,8 +37,8 @@ export interface AuthState {
   loading: boolean;
   /** Auth system availability — always true now (self-hosted). */
   enabled: boolean;
-  /** Plan tier resolved from the backend (anon/free/pro/team/admin). */
-  tier: string;
+  /** Role resolved from the backend (anon/user/admin). */
+  role: string;
   /** True when the signed-in account is an admin (or local dev). Gates the admin UI. */
   isAdmin: boolean;
   /** True when the backend enforces auth (production). When false, role restrictions are off. */
@@ -61,7 +61,7 @@ export interface AuthState {
 }
 
 const AuthCtx = createContext<AuthState>({
-  user: null, loading: false, enabled: true, tier: 'anon', isAdmin: false, enforced: false,
+  user: null, loading: false, enabled: true, role: 'anon', isAdmin: false, enforced: false,
   resolved: false,
   signIn: async () => {}, logout: async () => {}, getToken: async () => null,
 });
@@ -102,7 +102,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<AuthUser | null>(() => toAuthUser(getStoredUser()));
   // The session restores synchronously from localStorage — nothing to wait for.
   const loading = false;
-  const [tier, setTier] = useState<string>('anon');
+  const [role, setRole] = useState<string>('anon');
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [enforced, setEnforced] = useState<boolean>(false);
   // Flipped by the first /api/me answer we actually APPLY — never by the
@@ -135,10 +135,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setStoreBusy(false);
       // A PROVISIONAL answer — anonymous, but our token was never presented
       // (the mount-time race described below) — must not be applied: doing so
-      // set tier=anon / enforced=true for the ~1.5 s until the retry, the
+      // set role=anon / enforced=true for the ~1.5 s until the retry, the
       // App's tab guard saw fullUI=false in that window and threw the user
       // off Simulation / Sweep / Geometry onto Compare on EVERY full reload
-      // (user 2026-09-13: "почему вкладка отлипает?").  Keep the last known
+      // (user 2026-09-13: "why does the tab detach?").  Keep the last known
       // role and let the retry below settle it.
       const _stored0 = getStoredToken();
       const _provisional = _stored0 && !j.email && j.tokenRejected !== true
@@ -147,7 +147,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTimeout(() => { void loadRoleRef.current?.(); }, 1500);
         return;
       }
-      setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
+      setRole(j.role ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
       setResolved(true);
       setSessionRole({ isAdmin: Boolean(j.isAdmin), enforced: Boolean(j.enforced) });
       // Sliding renewal: inside the last 7 days the backend hands back a fresh
@@ -169,7 +169,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           + 'presented — keeping the session; retrying role resolution.');
         setTimeout(() => { void loadRoleRef.current?.(); }, 1500);
       }
-    } catch { setTier('anon'); setIsAdmin(false); setEnforced(false); setResolved(true); }
+    } catch { setRole('anon'); setIsAdmin(false); setEnforced(false); setResolved(true); }
   }, []);
   loadRoleRef.current = loadRole;
 
@@ -202,7 +202,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const getToken = useCallback(async () => getStoredToken(), []);
 
   return (
-    <AuthCtx.Provider value={{ user, loading, enabled: true, tier, isAdmin, enforced, resolved, signIn, logout, getToken }}>
+    <AuthCtx.Provider value={{ user, loading, enabled: true, role, isAdmin, enforced, resolved, signIn, logout, getToken }}>
       {children}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn} />
       <Snackbar open={storeBusy} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>

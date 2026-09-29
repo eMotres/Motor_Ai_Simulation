@@ -195,7 +195,7 @@ class ColdPlate:
     #: Wetted-area multiplier for a finned/pin-fin plate (1.0 = plain channels).
     fin_area_factor: float = 1.0
     r_override_k_w: Optional[float] = None   # bypasses the correlation
-    # ── 2026-09-28 (WCMS900B170E53 customer case): modules on SEPARATE
+    # ── 2026-09-28 (standalone controller case): modules on SEPARATE
     # plates and a stated plate resistance measured with ANOTHER fluid.
     #: ``shared`` (default, unchanged): ONE plate under every device, the whole
     #: flow through it.  ``parallel``: ``n_plates`` plates, each fed at the
@@ -340,8 +340,8 @@ class ColdPlate:
 # Air cooling — a heatsink or a PCB pad in an air stream, or in still air
 # ---------------------------------------------------------------------------
 # Owner, 2026-09-22 (screenshot of the Controller cooling selector offering
-# only water / water_glycol_50 / ethylene_glycol / oil): *"надо добавить
-# воздушное охлаждение и скорость ветра, как в термосимуляции"* — the same
+# only water / water_glycol_50 / ethylene_glycol / oil): *"need to add air
+# cooling and wind speed, like in the thermal simulation"* — the same
 # two air modes the motor's own Thermal tab already offers for the housing
 # (``routes.thermal``'s ``cooling_mode`` = "air" / "robotics"), applied to
 # the controller's devices instead of the housing.  NOTHING NEW IS INVENTED:
@@ -738,7 +738,7 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
 # ---------------------------------------------------------------------------
 # THE DATASHEET LIMITS — every one of them, with its number, on every solve
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-22: *«не забудь про паспортные лимиты MOSFET»*.  The junction
+# Owner, 2026-09-22: *"don't forget the MOSFET datasheet limits"*.  The junction
 # temperature and the current rating were already refusals; this makes the
 # WHOLE list explicit and always present, so a design is not "fine" merely
 # because nobody printed the line that would have failed.
@@ -1783,8 +1783,8 @@ def solve_controller(req: Dict[str, Any]) -> Dict[str, Any]:
             "i_leg_rms_3ph_A": round(i_leg_3ph, 1),
             # The connection is the MOTOR's, never this module's: it comes from
             # the duty's own record and the route reports where it came from
-            # (owner 2026-09-22: «соединение звезда/треугольник у нас
-            # определяется на моторе»).
+            # (owner 2026-09-22: "the star/delta connection is determined
+            # on the motor, for us").
             "connection_from": ("standalone run: each inverter a star-connected "
                                 "3-phase load, typed current per phase"
                                 if standalone else

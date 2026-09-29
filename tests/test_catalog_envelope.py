@@ -199,7 +199,12 @@ def test_device_envelope_is_well_formed_and_carries_provenance(part):
 
 
 def test_unpublished_device_values_are_flagged_not_hidden():
-    env = cd.device_envelope("WCMS900B170E53")
+    from motor_ai_sim.private_data import ENV_VAR, private_path
+    part = "WCMS900B170E53"
+    if private_path("config", "devices", f"{part}.yaml") is None:
+        pytest.skip(f"the card of {part} is private data; set {ENV_VAR} to "
+                    "the private data checkout to run this test")
+    env = cd.device_envelope(part)
     assert env["prov"]["thermal.r_th_jc_k_w.typ"]["note"] == "not published (null)"
     assert env["prov"]["ratings.i_d_pulsed_A"]["note"] == "not published (null)"
     assert "figure" in env["prov"]["r_ds_on"]["note"]

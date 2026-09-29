@@ -38,6 +38,11 @@ import {
 } from './reportProgress';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/motors.json (docs/I18N.md).
+const tx = nsT('motors');
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -179,6 +184,7 @@ const FamilyCatalog: React.FC<{
   /** Render bare die blocks (no panel, no header) for embedding in a Ø group. */
   embedded?: boolean;
 }> = ({ diameter, embedded }) => {
+  useTranslation('motors'); // re-render on language change; lazy-loads the namespace
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const [dies, setDies] = useState<Die[]>([]);
   const [busy, setBusy] = useState<string | null>(null);   // what is being applied/created
@@ -289,8 +295,8 @@ const FamilyCatalog: React.FC<{
   //   report (.docx)     the same machine plus what every SOLVER last answered
   //                      about it — losses, temperatures, stresses, bearings and
   //                      the field maps, with each result's own timestamp.
-  //                      WORD, not PDF, since 2026-09-09 (user: "репорт лучше
-  //                      выдавать в формате doc") — he edits the document and
+  //                      WORD, not PDF, since 2026-09-09 (user: "better output
+  //                      the report in doc format") — he edits the document and
   //                      forwards it to clients, and Word exports its own PDF.
   //                      The backend serves docx by default and pdf on
   //                      `?format=pdf`, which the small PDF button asks for.
@@ -299,9 +305,9 @@ const FamilyCatalog: React.FC<{
   // grey out the other on the same row.
   const [exporting, setExporting] = useState<string | null>(null);
 
-  // THE PROGRESS RING (user 2026-09-16: "нужно сделать ещё минимальный
-  // прогресс-ринг генерации отчёта, чтобы было видно, что работает, а не
-  // висит").  A report is ~50 s of figures and the PDF half a minute more, and
+  // THE PROGRESS RING (user 2026-09-16: "we also need a minimal progress ring
+  // for report generation, so you can see it's working and not stuck").
+  // A report is ~50 s of figures and the PDF half a minute more, and
   // the download is ONE request whose body is the file — nothing on the wire
   // until it is finished.  So the click mints a run id, sends it with the
   // download, and a second request polls the stages the backend publishes into
@@ -312,8 +318,8 @@ const FamilyCatalog: React.FC<{
   const reportBusy = (die: string, cfg: string) =>
     exporting === `report:${die}/${cfg}` || exporting === `report:pdf:${die}/${cfg}`;
 
-  // WHICH DUTY'S PICTURES go into the report (user 2026-09-11: "нужно ещё
-  // сделать выбор, из какого режима мы публикуем картинки в отчёте").  The
+  // WHICH DUTY'S PICTURES go into the report (user 2026-09-11: "we also need
+  // a choice of which mode we publish the pictures from into the report").  The
   // backend's own rule is "the rated duty, then the loaded one"; this lets the
   // user override it per configuration.  Remembered per machine in
   // localStorage — a convenience, never state the report depends on: an empty
@@ -458,8 +464,8 @@ const FamilyCatalog: React.FC<{
             }
             // 409 = the die still has configurations. Name them and ask ONCE
             // more — then delete the whole subtree with force. (It used to stop
-            // here with a message the user could miss: "стираю а она не
-            // стирается", live 2026-08-20.)
+            // here with a message the user could miss: "I'm deleting it and it
+            // isn't deleting", live 2026-08-20.)
             const detail = String(data?.detail ?? '');
             setBusy(null);
             setAskConfirm({
@@ -593,8 +599,8 @@ const FamilyCatalog: React.FC<{
   /** Where the chip's word came from.  The role is READ OFF THE DUTIES since
    *  2026-09-10 — it used to be the Simulation toggle's value on the day the
    *  configuration was created, frozen in the yaml, so "L180 gen" wore a
-   *  `motor` chip over two generator duties (user: "почему здесь motor, хотя
-   *  это генератор"). */
+   *  `motor` chip over two generator duties (user: "why does it say motor here,
+   *  when this is a generator"). */
   const roleTip = (c: { role: string; role_source?: string; role_stored?: string }) => (
     c.role_source === 'duties'
       ? (c.role === 'mixed'
@@ -640,7 +646,7 @@ const FamilyCatalog: React.FC<{
               {die.locked ? '🔒 ' : ''}{die.name}
             </Typography>
             {canWrite && (
-              <Tooltip title="Rename die">
+              <Tooltip title={tx('renameDie')}>
                 <span>
                   <IconButton size="small" disabled={!!busy}
                     onClick={() => renameDie(die.name)}
@@ -679,7 +685,7 @@ const FamilyCatalog: React.FC<{
               </span>
             </Tooltip>
             {canWrite && (
-              <Tooltip title="Duplicate the WHOLE die — stamped geometry + every configuration with its duties and results. The copy starts unlocked.">
+              <Tooltip title={tx('duplicateTheWholeDieStampedGeometry')}>
                 <span>
                   <Button size="small" disabled={!!busy}
                     onClick={() => duplicateDie(die.name)}
@@ -699,7 +705,7 @@ const FamilyCatalog: React.FC<{
               </Button>
             )}
             {canWrite && (
-              <Tooltip title="Delete die (configurations must be deleted first)">
+              <Tooltip title={tx('deleteDieConfigurationsMustBeDeleted')}>
                 <span>
                   <IconButton size="small" disabled={!!busy}
                     onClick={() => deleteDie(die)}
@@ -723,7 +729,7 @@ const FamilyCatalog: React.FC<{
                   <Typography component="span" sx={{ fontSize: 11 }}>🔒</Typography>
                 )}
                 {canWrite && (
-                  <Tooltip title="Rename configuration">
+                  <Tooltip title={tx('renameConfiguration')}>
                     <span>
                       <IconButton size="small" disabled={!!busy}
                         onClick={() => renameCfg(die.name, c.name)}
@@ -756,7 +762,7 @@ const FamilyCatalog: React.FC<{
                   </span>
                 </Tooltip>
                 {canWrite && (
-                  <Tooltip title="Duplicate — copy this configuration with ALL its duties (a starting point for a variant)">
+                  <Tooltip title={tx('duplicateCopyThisConfigurationWithAll')}>
                     <span>
                       <Button size="small" disabled={!!busy}
                         onClick={() => duplicateCfg(die.name, c.name)}
@@ -768,7 +774,7 @@ const FamilyCatalog: React.FC<{
                   </Tooltip>
                 )}
                 {(c.duties?.length ?? 0) > 0 && (
-                  <Tooltip title="Download the datasheet (.xlsx) — every duty in a column, the design and battery blocks, the cross-section, the measured curves and a page explaining each number. Opens in Google Sheets or Excel.">
+                  <Tooltip title={tx('downloadTheDatasheetXlsxEveryDuty')}>
                     <span>
                       <Button size="small"
                         disabled={exporting === `datasheet:${die.name}/${c.name}`}
@@ -822,7 +828,7 @@ const FamilyCatalog: React.FC<{
                                background: 'transparent', color: '#a78bfa',
                                border: '1px solid var(--line-soft)', borderRadius: 4,
                                maxWidth: 150 }}>
-                      <option value="">pictures: auto</option>
+                      <option value="">{tx('picturesAuto')}</option>
                       {(c.duties ?? []).map((d) => (
                         <option key={d.name} value={d.name}>pictures: {d.name}</option>
                       ))}
@@ -848,7 +854,7 @@ const FamilyCatalog: React.FC<{
                   </span>
                 </Tooltip>
                 {!canWrite && (
-                  <Tooltip title="Copy this machine into MY MOTORS — your private space, visible only to you until you share it">
+                  <Tooltip title={tx('copyThisMachineIntoMyMotors')}>
                     <span>
                       <Button size="small" disabled={!!busy}
                         onClick={() => duplicateToMySpace(die.name, c.name)}
@@ -875,7 +881,7 @@ const FamilyCatalog: React.FC<{
                 </Typography>
                 {(c as any).name_stack_mismatch && (
                   <Tooltip title={`The L-number in the name contradicts the stored stack (${c.stack_mm} mm). New saves can no longer create this; rename the configuration (✎) so the catalog stops repeating it.`}>
-                    <Chip size="small" label="⚠ name ≠ stack"
+                    <Chip size="small" label={tx('nameStack')}
                       sx={{ height: 18, fontSize: 10, color: '#f59e0b',
                             bgcolor: 'transparent', border: '1px solid #f59e0b88' }} />
                   </Tooltip>
@@ -893,7 +899,7 @@ const FamilyCatalog: React.FC<{
                   </Tooltip>
                 )}
                 {!c.battery && canWrite && (
-                  <Tooltip title="Set the supply battery — duties will be judged against its voltage range">
+                  <Tooltip title={tx('setTheSupplyBatteryDutiesWill')}>
                     <Typography component="span" sx={{ fontSize: 11, color: 'var(--text-4)', cursor: 'pointer' }}
                       onClick={() => editBattery(die.name, c)}>🔋 —</Typography>
                   </Tooltip>
@@ -911,7 +917,7 @@ const FamilyCatalog: React.FC<{
                   </Tooltip>
                 )}
                 {canWrite && (
-                  <Tooltip title="Delete this configuration and its duties">
+                  <Tooltip title={tx('deleteThisConfigurationAndItsDuties')}>
                     <span>
                       <IconButton size="small" disabled={!!busy}
                         onClick={() => deleteCfg(die.name, c.name)}
@@ -933,9 +939,9 @@ const FamilyCatalog: React.FC<{
                 }}>
                   <thead>
                     <tr>
-                      <th>duty</th><th>kW</th><th>Nm</th><th>rpm</th>
-                      <th>A</th><th>V L-L</th><th>η %</th><th>ripple %</th>
-                      <th>loss W</th><th>kg</th><th>KV</th>
+                      <th>{tx('duty')}</th><th>kW</th><th>Nm</th><th>rpm</th>
+                      <th>A</th><th>V L-L</th><th>η %</th><th>{tx('ripple')}</th>
+                      <th>{tx('lossW')}</th><th>kg</th><th>KV</th>
                       <th style={{ textAlign: 'center' }} />
                     </tr>
                   </thead>
@@ -1131,7 +1137,7 @@ const FamilyCatalog: React.FC<{
                             </Tooltip>
                           </td>
                           <td style={{ textAlign: 'center' }}>
-                            <Tooltip title="Load into Simulation">
+                            <Tooltip title={tx('loadIntoSimulation')}>
                               <span>
                                 <IconButton size="small" disabled={!!busy}
                                   onClick={() => applyDuty(die.name, c.name, d.name)}
@@ -1141,7 +1147,7 @@ const FamilyCatalog: React.FC<{
                               </span>
                             </Tooltip>
                             {canWrite && (
-                              <Tooltip title="Rename duty">
+                              <Tooltip title={tx('renameDuty')}>
                                 <span>
                                   <IconButton size="small" disabled={!!busy}
                                     onClick={() => renameDuty(die.name, c.name, d.name)}
@@ -1151,7 +1157,7 @@ const FamilyCatalog: React.FC<{
                               </Tooltip>
                             )}
                             {canWrite && (
-                              <Tooltip title="Duplicate duty (full copy incl. result)">
+                              <Tooltip title={tx('duplicateDutyFullCopyInclResult')}>
                                 <span>
                                   <IconButton size="small" disabled={!!busy}
                                     onClick={() => duplicateDuty(die.name, c.name, d.name)}
@@ -1161,7 +1167,7 @@ const FamilyCatalog: React.FC<{
                               </Tooltip>
                             )}
                             {canWrite && (
-                              <Tooltip title="Delete duty">
+                              <Tooltip title={tx('deleteDuty')}>
                                 <span>
                                   {/* Deliberate distance from ▶/⧉ — load and DELETE
                                       must not be a one-pixel slip apart. */}
@@ -1214,7 +1220,7 @@ const FamilyCatalog: React.FC<{
                  p: 2, mb: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>
-          Families — die / configuration / duty
+          {tx('familiesDieConfigurationDuty')}
           <Tooltip placement="top" title="One stamped lamination (die) is frozen geometry. A configuration changes only what the stamp does not fix: stack length, wire and winding. A duty is a named operating point (mode, current, rpm, γ). Click a duty to load the whole machine into Simulation; ＋ buttons snapshot the CURRENT state at each level.">
             <span style={{ color: 'var(--text-4)', marginLeft: 6, fontSize: 11, cursor: 'help' }}>ⓘ</span>
           </Tooltip>

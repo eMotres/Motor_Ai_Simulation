@@ -164,7 +164,7 @@ def surface_loss_density(
 
         P = Σ_axes Σ_{m≥1} P_meas(B_m / k_f, m·f_elec/n_periods)
 
-    This is the standard engineering treatment (Ansys Maxwell's own harmonic
+    This is the standard engineering treatment (commercial FEM's own harmonic
     core-loss option does the same thing) and it is imperfect in a known
     direction: hysteresis is a memory process, so the loss of a sum of
     harmonics is not exactly the sum of their losses — a superimposed ripple
@@ -914,7 +914,7 @@ def loss_density_map(
     n_periods: float = 1.0,
     n_periods_rotor: Optional[float] = None,
 ) -> Tuple[np.ndarray, str, list]:
-    """Per-element loss DENSITY (W/m³) for the Ansys-style spatial map.
+    """Per-element loss DENSITY (W/m³) for the commercial-FEM-style spatial map.
 
     Returns ``(density, label, unmodelled)`` — the label says, in the picture's
     own words, which component came from where, and ``unmodelled`` lists the
@@ -931,7 +931,7 @@ def loss_density_map(
       run actually solved.  This is the density itself, not a shape: it is
       taken UNRENORMALISED, because renormalising a measured quantity to a
       number derived from it can only add error.  It is also the only way the
-      map can show the corner/edge crowding an Ansys Total-Loss plot shows —
+      map can show the corner/edge crowding a commercial FEM Total-Loss plot shows —
       the eddy current concentrates where the conductor faces the changing
       field, and no per-body average knows that.
     * everything else — the modelled shapes (Bertotti for iron always; the slab

@@ -4,8 +4,8 @@ The in-app assistant answers signed-out visitors on the landing page
 (``routes/support.py``).  Until now those conversations went nowhere: the
 provider answered, the browser printed it, and the team never learned that
 somebody had stood in the doorway and asked how to get in.  The owner's
-question on 2026-09-17 was exactly that — *"как сообщения, которые они пишут
-боту, будут доходить до нас?"*
+question on 2026-09-17 was exactly that — *"how will the messages they write
+to the bot reach us?"*
 
 Two stores, both under the SAME root as ``users.json`` (the identity/admin data
 root — ``config/`` on this workstation, ``/srv/motres/config`` on the server),
@@ -157,8 +157,8 @@ def log_visitor_turn(*, ip: str = "", user_agent: str = "", messages: list | Non
             "model": _clip(model, 80),
             "limit": _clip(limit, 40) or None,
         }
-        d = chats_dir()
-        d.mkdir(parents=True, exist_ok=True)
+        from motor_ai_sim.private_files import ensure_private_dir, open_private
+        d = ensure_private_dir(chats_dir())
         path = d / f"{_day()}.jsonl"
         with _LOCK:
             if path.is_file() and path.stat().st_size >= DAY_MAX_BYTES:
@@ -168,7 +168,7 @@ def log_visitor_turn(*, ip: str = "", user_agent: str = "", messages: list | Non
                                 "visitor turns are no longer logged", path.name,
                                 DAY_MAX_BYTES)
                 return
-            with open(path, "a", encoding="utf-8") as f:
+            with open_private(path, "a") as f:
                 f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         _prune()
     except Exception as e:                                   # noqa: BLE001

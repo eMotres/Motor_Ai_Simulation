@@ -69,6 +69,11 @@ import { effectiveAssignment } from '../../lib/dutyMaterials';
 import { runNoticeFor, type RunNotice } from '../../lib/runNotice';
 import { useMotorAssignments } from '../materials/useMotorAssignments';
 import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/simulation.json (docs/I18N.md).
+const tx = nsT('simulation');
 
 // NOTE: using port 8001 (new backend with loss calculations)
 // Change back to 8000 after restarting the main backend
@@ -102,8 +107,8 @@ type DriveKind = 'current' | 'voltage' | 'pwm_voltage' | 'custom_current'
                | 'bldc_current';
 
 // THE PWM DRIVE IS THE CONTROLLER'S (owner 2026-09-24, on the Controller
-// tab's greyed "Carrier 20,000 Hz": «Это значение нужно задавать в
-// контроллере; PWM нужно выкинуть из Electromagnetic»).  This tab no longer
+// tab's greyed "Carrier 20,000 Hz": «This value needs to be set in
+// the Controller; PWM needs to be dropped from Electromagnetic»).  This tab no longer
 // holds a carrier, a DC link or a controller class: the carrier picker, the
 // V_bus field and the battery→V_bus prefill that lived here are gone, and
 // every number this panel still needs about the bridge (a restored PWM run's
@@ -185,6 +190,7 @@ function lcm(a: number, b: number): number { return (a * b) / gcd(a, b); }
 interface WindConn { label: string; n_parallel: number; n_series: number; }
 
 const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => {
+  useTranslation('simulation'); // re-render on language change; lazy-loads the namespace
   // localStorage-backed state so the whole left column survives reloads.
   const usePersisted = <T,>(key: string, def: T) => {
     const [v, setV] = useState<T>(() => {
@@ -195,8 +201,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     });
     useEffect(() => {
       try { localStorage.setItem(`sim.${key}`, JSON.stringify(v)); } catch {}
-      // ── PER-DUTY memory (user 2026-09-01: "токи и температуры должны быть
-      //    разные для каждого duty") ──────────────────────────────────────
+      // ── PER-DUTY memory (user 2026-09-01: "currents and temperatures must
+      //    be different for every duty") ──────────────────────────────────────
       // sim.* is ONE global block, so every duty of a machine used to share
       // the same current / rpm / γ / coil temp / drive: editing S2 at 200 °C
       // left S1 sitting at 200 °C for ever.  An operating-point field written
@@ -420,9 +426,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [vPeak,   setVPeak]   = usePersisted('vPeak',  30.0);  // phase-voltage amplitude [V]
   const [vDelta,  setVDelta]  = usePersisted('vDelta',  0.0);  // voltage angle δ [°el], same frame as γ
   // ── PWM IS THE CONTROLLER'S (owner 2026-09-22, removed here 2026-09-24) ─
-  // *«как отладим каплинг с контроллером, нам не нужен будет PWM в
-  // электромагнитном моделировании — всё будет задаваться в меню Controller»*
-  // and *«PWM нужно выкинуть из Electromagnetic»*.  No PWM button, carrier,
+  // *«once we debug the coupling with the controller, we won't need PWM in
+  // the electromagnetic simulation — everything will be set in the Controller menu»*
+  // and *«PWM needs to be dropped from Electromagnetic»*.  No PWM button, carrier,
   // V_bus or controller class lives here any more.  A stored `pwm_voltage`
   // run still restores into this panel (old records stay readable and
   // re-runnable); its carrier and DC link then come from the Controller —
@@ -595,10 +601,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // solve changes.  On, it goes to POST /api/coupled/run instead — see
   // ./coupledApi and TransientCharts' `run()`.
   const [coupled,       setCoupled]       = usePersisted('coupled', false);
-  // WHICH QUESTION the loop is asked (owner 2026-09-18: *«надо сделать выбор —
-  // или считать до конца стабилизации температуры, или считать до лимитов и
-  // находить время работы при заданных условиях»*; third option 2026-09-21:
-  // *«давай сделаем кнопку, или лучше добавим ещё один элемент в меню»*).  Per
+  // WHICH QUESTION the loop is asked (owner 2026-09-18: *«we need to make a
+  // choice — either compute until temperature stabilises fully, or compute
+  // until the limits and find the time it can run under the given
+  // conditions»*; third option 2026-09-21:
+  // *«let's make a button, or better add one more item to the menu»*).  Per
   // DUTY, like the operating point (`lib/dutySettings` carries the key),
   // because a continuous duty is a steady state by definition and a peak is a
   // pull with a length.
@@ -842,8 +849,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // refreshes itself on every mat-assign event.  Two earlier versions of this
   // badge were both stale by construction — reading /api/materials alone missed
   // the overlay, and reading currentMatJson() inside an event handler raced the
-  // sync's own async refresh (user 2026-09-01, twice: "меняю магниты — в
-  // симуляции те же самые").  Depending on the hook's state closes the race:
+  // sync's own async refresh (user 2026-09-01, twice: "I change the magnets
+  // — in the simulation they're still the same").  Depending on the hook's state closes the race:
   // when the data actually lands, React re-runs this effect.
   const { assignments: liveAssign, refresh: refreshAssign } = useMotorAssignments();
   const machineMagnet = liveAssign?.magnet || '';
@@ -1147,8 +1154,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   useEffect(() => { void active; void simBusy; }, [active]);
   // Steps per electrical period (transient time resolution).  Persisted.
   // A Select over the divisors of stepsMax — the set is fixed, so free typing
-  // only produced snap surprises (user, 2026-08-01: "если фиксированные
-  // значения — давай выбор только их из списка").
+  // only produced snap surprises (user, 2026-08-01: "if fixed values —
+  // let's have a choice of only those from a list").
   // Defaults follow the user's standing practice (2026-09-03): 40 steps per
   // period minimum and demag ON on every machine — a fresh browser profile
   // must not silently solve at 24 steps without the de-rate.
@@ -1186,12 +1193,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     else setStepsSource('user');
   }, [steps, stepsSource, setStepsSource, defaultSteps, setSteps]);
   // Magnet/shaft eddy losses ALWAYS come from the real field solve
-  // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the Ansys way),
+  // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the commercial FEM way),
   // never the classical slab d²/12 estimate.  No toggle: real fields only.
   const fieldLosses = true;
   // Per-element irreversible demagnetisation: a pre-pass sweeps the period at
   // full Br, finds the worst demagnetising field at every magnet element, and
-  // de-rates Br along the recoil line (Ansys-style) so the transient torque /
+  // de-rates Br along the recoil line (commercial-FEM-style) so the transient torque /
   // back-EMF reflect the weakened magnets.  Opt-in (adds a pre-pass sweep).
   const [demag, setDemag] = usePersisted('demag', true);
   // Coupled σ·∂A/∂t eddy-current solve (P2): the currents induced in copper,
@@ -1202,8 +1209,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // run's own last frame instead of launching a second transient.  Turning it
   // OFF is honest too — the run is then magnetostatic and those views solve on
   // demand, exactly as they used to (and say so in their header).
-  // ALWAYS ON (user 2026-09-05: "можно эту кнопку убрать — я всегда её
-  // использую").  The checkbox is gone; the persisted key is pinned to true
+  // ALWAYS ON (user 2026-09-05: "we can remove this button — I always
+  // use it").  The checkbox is gone; the persisted key is pinned to true
   // so every reader of `sim.eddyCoupled` (the field views' snapshot probes,
   // the duty settings block, the ETA) agrees with what the run does.
   const eddyCoupled = true;
@@ -1378,8 +1385,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         && relOk(v1Seed.iA, current, 0.01)
         && Math.abs((v1Seed.gam ?? 0) - phaseOffset) <= 0.5;
   }, [v1Seed, rpm, current, phaseOffset]);
-  // ── AUTO-apply of the seed (user 2026-08-31: "она должна ставить это
-  // значение автоматом после короткого первого прогона, и угол тоже").
+  // ── AUTO-apply of the seed (user 2026-08-31: "it should set this value
+  // automatically after a short first run, and the angle too").
   // The write happens by itself when a matching seed exists AND the fields do
   // not hold a value the user typed for THIS machine.  Ownership is a record
   // of what WE last applied ('battery.vseed': {sig, pk, dl}) — same discipline
@@ -1521,8 +1528,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, []);
 
   // ── load server status + physics config + geometry ────────────────────────
-  // SAME contract as the Mesh tab after the 2026-09-07 incident (user: "захожу
-  // в Mesh и опять не сохранено то, что было до этого — там точно стояло 1/2"):
+  // SAME contract as the Mesh tab after the 2026-09-07 incident (user: "I go
+  // into Mesh and again what was there before isn't saved — it was definitely set to 1/2"):
   // the SERVER config is the single source of truth, it is adopted BEFORE any
   // save is allowed, and a failed load retries with backoff instead of letting
   // constants stand in for it.
@@ -1737,7 +1744,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
-            Winding Connection
+            {tx('windingConnection')}
           </Typography>
           <Typography sx={{ fontSize: 10, color: 'var(--line)', mb: 1.2 }}>
             {nCoilsPerPhase} coils/phase · {nWiresPerSlot} wires/slot
@@ -1824,7 +1831,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           </Box>
           {Number(windCfg?.phases ?? 3) === 6 && (
             <Box sx={{ display: 'flex', gap: 0.75, mb: 0.75, alignItems: 'center' }}>
-              <TextField size="small" label="Set 1 paths" placeholder="first half"
+              <TextField size="small" label={tx('set1Paths')} placeholder={tx('firstHalf')}
                 defaultValue={windCfg?.set1_paths ?? ''}
                 key={`s1-${windCfg?.set1_paths ?? ''}`}
                 disabled={isRunning}
@@ -1874,7 +1881,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
-            Coil Layout — currents per slot
+            {tx('coilLayoutCurrentsPerSlot')}
           </Typography>
 
           {/* single-layer winding (this machine has no double-layer variant) */}
@@ -1906,7 +1913,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1.5 }}>
-            Operating Point
+            {tx('operatingPoint')}
           </Typography>
           {magInfo && (
             <Tooltip placement="right" title={
@@ -1921,7 +1928,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 px: 1, py: 0.5, borderRadius: 0.5, cursor: 'help',
                 border: '1px solid var(--line)', bgcolor: 'var(--panel-2)' }}>
                 <Typography sx={{ fontSize: 9.5, color: 'var(--text-4)', textTransform: 'uppercase',
-                  letterSpacing: '0.06em' }}>magnet</Typography>
+                  letterSpacing: '0.06em' }}>{tx('magnet')}</Typography>
                 {/* The name is the TEMPERATURE picker when the grade is in the
                     library at more than one temperature — the duty's magnet
                     temperature, one line, the rest in the tooltip. */}
@@ -1937,8 +1944,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       {/* The live magnet is always an option, even when the
                           library list this page fetched at mount predates it
                           (a card added while the page was open showed a blank
-                          picker — user 2026-09-09: "почему тут не пишет, какие
-                          магниты"). */}
+                          picker — user 2026-09-09: "why doesn't it say here
+                          which magnets"). */}
                       <Select value={liveMagnet || ''}
                         disabled={!dutyOn} variant="standard" disableUnderline
                         IconComponent={() => null}
@@ -2005,7 +2012,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 border: '1px solid var(--line)', bgcolor: 'var(--panel-2)',
                 '&:hover': { borderColor: 'var(--text-4)' } }}>
               <Typography sx={{ fontSize: 9.5, color: 'var(--text-4)', textTransform: 'uppercase',
-                letterSpacing: '0.06em' }}>battery</Typography>
+                letterSpacing: '0.06em' }}>{tx('battery')}</Typography>
               <Typography sx={{ fontSize: 11, fontWeight: 700,
                 color: battery ? '#f59e0b' : 'var(--text-4)' }}>
                 {batteryChipLabel(battery)}
@@ -2058,14 +2065,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   variant={drive === m && targetKind === 'off' ? 'contained' : 'outlined'}
                   onClick={() => { setDrive(m); setTargetKind('off'); }}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
-                  Sine current
+                  {tx('sineCurrent')}
                 </Button>
               ))}
               <Button size="small" fullWidth disabled={isRunning || fitBusy}
                 variant={targetKind !== 'off' ? 'contained' : 'outlined'}
                 onClick={() => { setDrive('current'); setTargetKind(k => (k === 'off' ? 'nm' : k)); }}
                 sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
-                Target T / P
+                {tx('targetTP')}
               </Button>
               <HelpTip title={'Sine current: imposed sinusoidal phase currents — the ideal ' +
                 'reference, and the right one for design work. Target T / P: the current is ' +
@@ -2075,7 +2082,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 'inverter feeds the machine that Controller’s real waveform.'} />
             </Box>
             {/* The non-ideal CURRENT sources, on their own row so the labels
-                fit.  No PWM button (2026-09-24: «PWM нужно выкинуть из
+                fit.  No PWM button (2026-09-24: «PWM needs to be dropped from
                 Electromagnetic») — the drive is the Controller's. */}
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               {([['bldc_current', 'BLDC 120°'],
@@ -2110,7 +2117,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Button size="small" variant="text"
                   onClick={() => goToTab('controller')}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0 }}>
-                  Open
+                  {tx('open')}
                 </Button>
                 <HelpTip title={'PWM is defined in the Controller tab: the carrier, the DC link, '
                   + 'the dead time and the device. A re-run of this stored ideal-modulator run '
@@ -2119,7 +2126,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               </Box>
             )}
             {drive === 'bldc_current' && (
-              <TextField label="I block, flat top (A)" type="number" size="small" fullWidth
+              <TextField label={tx('iBlockFlatTopA')} type="number" size="small" fullWidth
                 value={iBlock} onChange={e => setIBlock(+e.target.value)}
                 inputProps={{ step: 1, min: 0 }} disabled={isRunning}
                 InputProps={{ endAdornment: <HelpTip title={
@@ -2171,7 +2178,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Button size="small" variant="outlined" component="label"
                   disabled={isRunning}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3, minWidth: 76 }}>
-                  Upload
+                  {tx('upload')}
                   <input type="file" hidden accept=".json,.csv,.txt"
                     onChange={e => {
                       const f = e.target.files?.[0]; if (!f) return;
@@ -2208,7 +2215,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                same pattern as I rms ⇄ peak — edit either, the other follows.
                Torque is the stored canon; the current is fitted at Run. */
             <Box sx={{ display: 'flex', gap: 1 }}>
-              <TextField label="Target torque (Nm)" type="number" size="small" fullWidth
+              <TextField label={tx('targetTorqueNm')} type="number" size="small" fullWidth
                 value={Number(targetValue.toFixed(2))}
                 onChange={e => setTargetValue(+e.target.value)}
                 inputProps={{ step: 10, min: 0 }} disabled={isRunning || fitBusy}
@@ -2218,7 +2225,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   + 'through the saturation curve, then the full run fires at the '
                   + 'fitted current. γ stays as set — find the optimal angle with a '
                   + 'sweep, as usual.'} /> }} />
-              <TextField label="Target power (kW)" type="number" size="small" fullWidth
+              <TextField label={tx('targetPowerKw')} type="number" size="small" fullWidth
                 value={Number((targetValue * (2 * Math.PI * rpm / 60) / 1000).toFixed(2))}
                 onChange={e => {
                   const w = 2 * Math.PI * rpm / 60;
@@ -2232,8 +2239,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             ) : (drive === 'voltage' || drive === 'pwm_voltage') ? (<>
             {/* PRE-FLIGHT card: one aligned row per launch criterion —
                 status left, one-click fix right.  Replaces the pile of loose
-                chips that accumulated here (user 2026-08-31: "лежит всё как
-                попало").  Full explanations live in each row's tooltip. */}
+                chips that accumulated here (user 2026-08-31: "everything is
+                lying around any old way").  Full explanations live in each row's tooltip. */}
             {(() => {
               type Row = { key: string; label: string; ok: boolean; warn?: boolean;
                            status: string; tip: string;
@@ -2266,8 +2273,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 });
                 const m = ctrlVdc > 0 && vPeak > 0 ? 2 * vPeak / ctrlVdc : 0;
                 // Only when it BLOCKS: a legal m is not a launch criterion
-                // worth a standing row (user 2026-09-01: "вот это можно
-                // выбросить" — the amber 3rd-harmonic note was daily noise;
+                // worth a standing row (user 2026-09-01: "this one can be
+                // tossed" — the amber 3rd-harmonic note was daily noise;
                 // the zone semantics stay in the V-peak tooltip).
                 if (m > 1.15) rows.push({
                   key: 'mod', label: 'Modulation',
@@ -2358,7 +2365,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 </Box>
               );
             })()}
-            <TextField label="V phase peak (V)" type="number" size="small" fullWidth
+            <TextField label={tx('vPhasePeakV')} type="number" size="small" fullWidth
               value={vPeak} onChange={e => setVPeak(+e.target.value)}
               inputProps={{ step: 1, min: 0, max: 2000 }} disabled={isRunning}
               InputProps={{ endAdornment: <HelpTip title={'Amplitude of the FUNDAMENTAL phase ' +
@@ -2366,7 +2373,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 'sampled-reference delay and gain are compensated so it lands here, and what it ' +
                 'really applied is measured and reported with the result. ' +
                 'Tip: run a current-drive simulation first — its V₁ is the natural starting value.'} /> }}/>
-            <TextField label="δ — voltage angle (°el)" type="number" size="small" fullWidth
+            <TextField label={tx('voltageAngleEl')} type="number" size="small" fullWidth
               value={vDelta} onChange={e => setVDelta(+e.target.value)}
               inputProps={{ step: 5, min: -180, max: 180 }} disabled={isRunning}
               InputProps={{ endAdornment: <HelpTip title={'Voltage-vector angle in the same electrical frame as γ ' +
@@ -2376,10 +2383,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                Speed ↔ Frequency below: edit either, the other recomputes.
                The SOLVER input stays the RMS value — peak is a pure UI view.
                PEAK comes FIRST (user's standing choice, 2026-08-22): the
-               inverter and ANSYS both speak amplitude, so peak is the primary
+               inverter and commercial FEM both speak amplitude, so peak is the primary
                field everywhere current is entered. */
             <Box sx={{ display: 'flex', gap: 1 }}>
-              <TextField label="I phase peak (A)" type="number" size="small" fullWidth
+              <TextField label={tx('iPhasePeakA')} type="number" size="small" fullWidth
                 value={Number((current * Math.SQRT2).toFixed(2))}
                 onChange={e => setCurrent(+e.target.value / Math.SQRT2)}
                 inputProps={{ step: 5, min: 0, max: 707 }} disabled={isRunning}
@@ -2391,7 +2398,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   `TERMINAL phase current. With ${connection} (${nParallel} parallel `
                   + `path${nParallel > 1 ? 's' : ''}) each coil carries I/${nParallel}: `
                   + `I coil = ${I_coil_rms.toFixed(1)} Arms (${I_coil_peak.toFixed(1)} A peak) → sent to solver. `
-                  + `Comparing with ANSYS Maxwell: its winding must have Number of Parallel `
+                  + `Comparing with commercial FEM: its winding must have Number of Parallel `
                   + `Branches = ${nParallel}, else Maxwell drives every coil at the full `
                   + `phase current and reports ~${nParallel}x the torque for the same input.`} /> }}/>
             </Box>
@@ -2409,7 +2416,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   f_elec [Hz]  =  rpm × pole_pairs / 60
                   rpm          =  f_elec × 60 / pole_pairs
                 Editing one immediately recomputes the other. */}
-            <TextField label="Speed (rpm)" type="number" size="small" fullWidth
+            <TextField label={tx('speedRpm')} type="number" size="small" fullWidth
               value={Number(rpm.toFixed(0))}
               onChange={e => {
                 const r = +e.target.value;
@@ -2420,7 +2427,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               InputProps={{ endAdornment: <HelpTip title={`electrical f = ${Number(frequency.toFixed(1))} Hz`} /> }}/>
             {/* Frequency is DERIVED from rpm (f = rpm × pole_pairs / 60) — read-only,
                 single source is the speed above.  Editing rpm recomputes it. */}
-            <TextField label="Frequency (Hz) — derived" type="number" size="small" fullWidth
+            <TextField label={tx('frequencyHzDerived')} type="number" size="small" fullWidth
               value={Number(frequency.toFixed(2))}
               disabled
               InputProps={{ endAdornment: <HelpTip title={`f = rpm × ${polePairs} / 60 — derived from speed`} /> }}/>
@@ -2437,7 +2444,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 weakening at high speed; γ > 0 retards (used to flatten
                 cogging-torque ripple in some control schemes). */}
             <TextField
-              label="γ — current-vector offset from q-axis (°)"
+              label={tx('currentVectorOffsetFromQAxis')}
               type="number" size="small" fullWidth
               value={phaseOffset}
               onChange={e => setPhaseOffset(+e.target.value)}
@@ -2454,8 +2461,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 with coil temperature, and the end-turns that loop outside the
                 stack add series resistance the 2-D model can't see. */}
             {/* With the coupled switch ON these two are OUTPUTS of the loop
-                (user 2026-09-08: "когда я нажимаю каплинг, она не должна быть
-                редактируемой, она вычисляется"): read-only, showing the
+                (user 2026-09-08: "when I click coupling, it shouldn't be
+                editable, it's computed"): read-only, showing the
                 converged values — adopted from the run's answer and, on
                 mount / switch-on, from the server's last coupled run. */}
             <TextField
@@ -2477,7 +2484,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               label={coupled ? 'Magnet temperature (°C) — from the coupled loop' : 'Magnet temperature (°C) — empty = card'}
               type="text" size="small" fullWidth
               value={magnetTempC}
-              placeholder="as quoted"
+              placeholder={tx('asQuoted')}
               onChange={e => setMagnetTempC(e.target.value)}
               inputProps={{ readOnly: coupled }}
               InputProps={{ endAdornment: <HelpTip title={coupled
@@ -2558,10 +2565,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               leave a big empty gap now that the cooling/PINN sections are gone. ── */}
         <Box sx={{ pt: 1 }}>
           <FormControl size="small" fullWidth sx={{ mb: 1.25 }} disabled={simBusy}>
-            <InputLabel id="steps-pp-label">Steps per electrical period</InputLabel>
+            <InputLabel id="steps-pp-label">{tx('stepsPerElectricalPeriod')}</InputLabel>
             <Select
               labelId="steps-pp-label"
-              label="Steps per electrical period"
+              label={tx('stepsPerElectricalPeriod')}
               value={stepsOptions.includes(steps) ? steps : snapSteps(steps)}
               onChange={e => {
                 const v = Number(e.target.value);
@@ -2589,11 +2596,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               {stepsLine}
             </Typography>
           )}
-          {/* Per-element irreversible demagnetisation (Ansys-style).  A pre-pass
+          {/* Per-element irreversible demagnetisation (commercial-FEM-style).  A pre-pass
               sweeps the period at full Br, finds the worst demag field at every
               magnet element, and de-rates Br on the recoil line → the torque /
               back-EMF reflect the weakened magnets, plus a Demag-% map. */}
-          <Tooltip title="Account for irreversible magnet demagnetisation. A pre-pass sweeps the whole period at full strength, finds the worst demagnetising field H at EVERY magnet element, and permanently de-rates Br along the recoil line where H crosses the BH-curve knee (per element, like Ansys). The torque and back-EMF then reflect the weakened magnets, and a Demag-% map is produced. COST — measured, not modest: the pre-pass is a WHOLE EXTRA PERIOD of FEM frames, so the run solves twice the steps you asked for, and each frame re-solves while the magnet is still moving. On the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 86 s on (2.3×). The line under the Run button shows the frame count your current settings imply." placement="right">
+          <Tooltip title={tx('accountForIrreversibleMagnetDemagnetisationA')} placement="right">
             <FormControlLabel
               sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
               control={
@@ -2604,14 +2611,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               }
               label={
                 <Typography variant="caption" sx={{ color: demag ? '#c084fc' : 'var(--text-2)' }}>
-                  Demagnetisation — de-rate torque (FEM, per element)
+                  {tx('demagnetisationDeRateTorqueFemPer')}
                 </Typography>
               }
             />
           </Tooltip>
           {/* The "Coupled eddy solve" checkbox lived here until 2026-09-05;
-              the coupled σ·∂A/∂t solve is now always on (user: "я всегда её
-              использую") — see `eddyCoupled` above. */}
+              the coupled σ·∂A/∂t solve is now always on (user: "I always
+              use it") — see `eddyCoupled` above. */}
           {/* The torque band-limit checkbox that lived here was removed at the
               user's request (2026-07-29): it was a P1-era crutch — P2's raw
               ripple is mesh-convergent and honest, so the headline is ALWAYS
@@ -2734,8 +2741,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Tooltip>
           )}
           {/* ── The EM<->thermal orchestrator, on or off ────────────────────
-              User 2026-09-08: "не надо всё смешивать, нужен оркестратор" and
-              "чтобы можно было его включать и отключать".  One switch, one
+              User 2026-09-08: "don't mix everything together, we need an
+              orchestrator" and "so that it can be switched on and off".  One switch, one
               short line, everything else in the tooltip (UI rule). */}
           <Tooltip placement="right" title={
             'Run EM → Thermal → EM until the winding and magnet temperatures '
@@ -2751,7 +2758,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               label={
                 <Typography variant="caption"
                   sx={{ color: coupled ? '#34d399' : 'var(--text-2)' }}>
-                  Coupled thermal — solve for the temperatures
+                  {tx('coupledThermalSolveForTheTemperatures')}
                 </Typography>
               }
             />
@@ -2762,10 +2769,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               choices explained in the tip, never a text wall in the rail. */}
           {coupled && (
             <FormControl size="small" fullWidth sx={{ mt: 0.75 }} disabled={simBusy}>
-              <InputLabel id="coupled-drive-label">Drive</InputLabel>
+              <InputLabel id="coupled-drive-label">{tx('drive')}</InputLabel>
               <Select
                 labelId="coupled-drive-label"
-                label="Drive"
+                label={tx('drive')}
                 value={coupledDrive}
                 onOpen={() => bumpCtrlRecheck(n => n + 1)}
                 onChange={e => setCoupledDrive(
@@ -2788,9 +2795,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   </InputAdornment>
                 }
               >
-                <MenuItem value="sine">sine current</MenuItem>
+                <MenuItem value="sine">{tx('sineCurrent2')}</MenuItem>
                 <MenuItem value="inverter" disabled={!controllerReady}>
-                  inverter (Controller)
+                  {tx('inverterController')}
                 </MenuItem>
               </Select>
               {coupledDrive === 'inverter' && (ctrlSaveMsg || ctrlSaveErr) && (
@@ -2806,19 +2813,20 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </FormControl>
           )}
           {/* ── …AND WHICH QUESTION IT ANSWERS (owner 2026-09-18) ───────────
-              "или считать до конца стабилизации температуры, или считать до
-              лимитов и находить время работы при заданных условиях".  A CHOICE,
+              "either compute until temperature stabilises fully, or compute
+              until the limits and find the time it can run under the given
+              conditions".  A CHOICE,
               not a rule the backend applies by itself — one short line, both
-              modes in the HelpTip (UI rule).  Owner 2026-09-18 again: "сделай
-              это меню поаккуратней" — the same outlined-label select as "Steps
+              modes in the HelpTip (UI rule).  Owner 2026-09-18 again: "make
+              this menu a bit neater" — the same outlined-label select as "Steps
               per electrical period" above (label in the outline, never wrapped,
               two short options; the explanation lives in the tip). */}
           {coupled && (
             <FormControl size="small" fullWidth sx={{ mt: 0.75, mb: 1 }} disabled={simBusy}>
-              <InputLabel id="solve-to-label">Solve to</InputLabel>
+              <InputLabel id="solve-to-label">{tx('solveTo')}</InputLabel>
               <Select
                 labelId="solve-to-label"
-                label="Solve to"
+                label={tx('solveTo')}
                 value={solveTo}
                 onChange={e => setSolveTo(
                   e.target.value === 'limits' ? 'limits'
@@ -2845,9 +2853,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   </InputAdornment>
                 }
               >
-                <MenuItem value="steady">steady state</MenuItem>
-                <MenuItem value="limits">time to the limits</MenuItem>
-                <MenuItem value="continuous">continuous rating (S1)</MenuItem>
+                <MenuItem value="steady">{tx('steadyState')}</MenuItem>
+                <MenuItem value="limits">{tx('timeToTheLimits')}</MenuItem>
+                <MenuItem value="continuous">{tx('continuousRatingS1')}</MenuItem>
               </Select>
             </FormControl>
           )}
@@ -2952,7 +2960,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                     .catch(() => { /* nothing user-facing */ });
                 }}
                 style={{ cursor: 'pointer', textDecoration: 'underline', color: '#60a5fa' }}>
-                clear
+                {tx('clear')}
               </span>
             </Typography>
           )}
@@ -2961,19 +2969,19 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         {/* ── Resume / fresh dialog (after a Stop) ── */}
         <Dialog open={askResume} onClose={() => setAskResume(false)}
           PaperProps={{ sx: { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 2 } }}>
-          <DialogTitle sx={{ fontSize: 15, color: 'var(--text-0)' }}>Resume the stopped run?</DialogTitle>
+          <DialogTitle sx={{ fontSize: 15, color: 'var(--text-0)' }}>{tx('resumeTheStoppedRun')}</DialogTitle>
           <DialogContent>
             <Typography sx={{ fontSize: 13, color: 'var(--text-2)' }}>
-              <b>Continue</b> keeps the solved frames · <b>Start fresh</b> recomputes the period.
+              <b>{tx('continue')}</b> keeps the solved frames · <b>{tx('startFresh')}</b> {tx('recomputesThePeriod')}
             </Typography>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
             <Button onClick={() => launchRun(true)} sx={{ textTransform: 'none', color: 'var(--text-2)' }}>
-              Start fresh
+              {tx('startFresh')}
             </Button>
             <Button onClick={() => launchRun(false)} variant="contained"
               sx={{ textTransform: 'none', bgcolor: '#2563eb', '&:hover': { bgcolor: '#1d4ed8' } }}>
-              Continue
+              {tx('continue')}
             </Button>
           </DialogActions>
         </Dialog>
@@ -3013,7 +3021,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           borderRadius: 2, display: 'none' }}>
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1.5,
             textTransform: 'uppercase', letterSpacing: 1 }}>
-            Governing Equation
+            {tx('governingEquation')}
           </Typography>
           <Box sx={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-2)', lineHeight: 2 }}>
             <Box>∂/∂x(ν ∂A_z/∂x) + ∂/∂y(ν ∂A_z/∂y) = −J_z</Box>
@@ -3029,7 +3037,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           {/* Periodicity info */}
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1,
             textTransform: 'uppercase', letterSpacing: 1 }}>
-            Rotor Periodicity
+            {tx('rotorPeriodicity')}
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1.5 }}>
             {[
@@ -3058,7 +3066,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1,
             textTransform: 'uppercase', letterSpacing: 1 }}>
-            Domains
+            {tx('domains')}
           </Typography>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
             {[
@@ -3150,49 +3158,49 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             {/* ── Power balance ── */}
             <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#3b82f6',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
-              Power Balance
+              {tx('powerBalance')}
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mb: 1.5 }}>
-              <Row label="Torque"    value={job.result.torque_Nm.toFixed(4)} unit="N·m"
+              <Row label={tx('torque')}    value={job.result.torque_Nm.toFixed(4)} unit="N·m"
                    highlight={job.result.torque_Nm !== 0}/>
-              <Row label="P mech"   value={job.result.P_mech_W != null ? job.result.P_mech_W.toFixed(0) : '—'} unit="W"
+              <Row label={tx('pMech')}   value={job.result.P_mech_W != null ? job.result.P_mech_W.toFixed(0) : '—'} unit="W"
                    highlight={(job.result.P_mech_W ?? 0) > 0}/>
-              <Row label="P input"  value={job.result.P_input_W != null ? job.result.P_input_W.toFixed(0) : '—'} unit="W"/>
+              <Row label={tx('pInput')}  value={job.result.P_input_W != null ? job.result.P_input_W.toFixed(0) : '—'} unit="W"/>
             </Box>
 
             {/* ── Losses breakdown ── */}
             <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#ef4444',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
-              Losses
+              {tx('losses')}
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mb: 1.5 }}>
-              <Row label="Cu (winding)"   value={job.result.P_cu_total_W != null ? job.result.P_cu_total_W.toFixed(1) : '—'} unit="W"/>
-              <Row label="Fe stator"      value={job.result.P_fe_stator_W != null ? job.result.P_fe_stator_W.toFixed(1) : '— (need Modulus)'} unit={job.result.P_fe_stator_W != null ? 'W' : ''}/>
-              <Row label="Fe rotor"       value={job.result.P_fe_rotor_W  != null ? job.result.P_fe_rotor_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_fe_rotor_W  != null ? 'W' : ''}/>
-              <Row label="Mag eddy"       value={job.result.P_mag_eddy_W  != null ? job.result.P_mag_eddy_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_mag_eddy_W  != null ? 'W' : ''}/>
-              <Row label="Total losses"   value={job.result.P_loss_total_W != null ? job.result.P_loss_total_W.toFixed(1) : '—'} unit="W"/>
+              <Row label={tx('cuWinding')}   value={job.result.P_cu_total_W != null ? job.result.P_cu_total_W.toFixed(1) : '—'} unit="W"/>
+              <Row label={tx('feStator')}      value={job.result.P_fe_stator_W != null ? job.result.P_fe_stator_W.toFixed(1) : '— (need Modulus)'} unit={job.result.P_fe_stator_W != null ? 'W' : ''}/>
+              <Row label={tx('feRotor')}       value={job.result.P_fe_rotor_W  != null ? job.result.P_fe_rotor_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_fe_rotor_W  != null ? 'W' : ''}/>
+              <Row label={tx('magEddy')}       value={job.result.P_mag_eddy_W  != null ? job.result.P_mag_eddy_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_mag_eddy_W  != null ? 'W' : ''}/>
+              <Row label={tx('totalLosses')}   value={job.result.P_loss_total_W != null ? job.result.P_loss_total_W.toFixed(1) : '—'} unit="W"/>
             </Box>
 
             {/* ── Winding params ── */}
             <Typography sx={{ fontSize: 9, fontWeight: 700, color: 'var(--text-4)',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
-              Winding (computed)
+              {tx('windingComputed')}
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mb: 1.5 }}>
-              <Row label="R phase"    value={job.result.R_phase_ohm != null ? (job.result.R_phase_ohm * 1000).toFixed(2) : '—'} unit="mΩ"/>
-              <Row label="L turn"     value={job.result.L_turn_mm != null ? job.result.L_turn_mm.toFixed(1) : '—'} unit="mm"/>
-              <Row label="I coil rms" value={job.result.I_coil_rms_A != null ? job.result.I_coil_rms_A.toFixed(1) : '—'} unit="A"/>
+              <Row label={tx('rPhase')}    value={job.result.R_phase_ohm != null ? (job.result.R_phase_ohm * 1000).toFixed(2) : '—'} unit="mΩ"/>
+              <Row label={tx('lTurn')}     value={job.result.L_turn_mm != null ? job.result.L_turn_mm.toFixed(1) : '—'} unit="mm"/>
+              <Row label={tx('iCoilRms')} value={job.result.I_coil_rms_A != null ? job.result.I_coil_rms_A.toFixed(1) : '—'} unit="A"/>
             </Box>
 
             {/* ── Field ── */}
             <Typography sx={{ fontSize: 9, fontWeight: 700, color: 'var(--text-4)',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
-              Magnetic Field
+              {tx('magneticField')}
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-              <Row label="B max"  value={job.result.B_max_T.toFixed(4)}  unit="T"/>
-              <Row label="B mean" value={job.result.B_mean_T.toFixed(4)} unit="T"/>
-              <Row label="Steps"  value={job.result.training_steps.toString()}/>
+              <Row label={tx('bMax')}  value={job.result.B_max_T.toFixed(4)}  unit="T"/>
+              <Row label={tx('bMean')} value={job.result.B_mean_T.toFixed(4)} unit="T"/>
+              <Row label={tx('steps')}  value={job.result.training_steps.toString()}/>
             </Box>
 
             <Divider sx={{ borderColor: 'var(--panel)', my: 1.5 }}/>

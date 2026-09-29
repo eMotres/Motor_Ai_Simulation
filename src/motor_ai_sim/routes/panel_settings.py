@@ -1,8 +1,8 @@
 """Server-side memory of a panel's INPUT fields — Mechanical, Thermal, and any
 tab that comes after them.
 
-WHY (user 2026-09-07: "запоминай все последние настройки механических и
-термических моделирований … всё одинаково для всех моделирований"): the
+WHY (user 2026-09-07: "remember all the latest mechanical and thermal
+simulation settings ... the same for every simulation"): the
 Simulation tab keeps its operating point in the server config, so it comes back
 on every browser, after every reload and every API restart.  The Mechanical and
 Thermal tabs kept theirs in ``localStorage`` — one browser's memory — and their

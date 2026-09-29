@@ -13,7 +13,7 @@ const SCOPE_TEXT: Record<string, string> = {
   'catalog:read': 'Read the materials and dies catalog',
   'machines:read': 'Read your machines and their saved results',
   'designs:write': 'Create draft machines in your workspace (never your saved motors or open machine)',
-  simulate: 'Queue simulations of those drafts in your job queue (daily quota)',
+  simulate: 'Queue simulations of those drafts in your job queue (daily fair-use limit)',
 };
 const WRITE_SCOPES = ['designs:write', 'simulate'];
 

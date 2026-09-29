@@ -117,8 +117,8 @@ def _scan_store_path() -> str:
 def _machine_stamp(exclude_geo_keys=()) -> Dict[str, Any]:
     """WHICH MACHINE a sweep belongs to.
 
-    User 2026-09-10: *"опять косяк, я запускал sweep одних параметров, а в
-    результате получил старый sweep от другого мотора"* — and the panel was
+    User 2026-09-10: *"a glitch again, I ran a sweep of one set of parameters
+    and got back an old sweep from a different motor"* — and the panel was
     showing exactly that: `.last_scan.json` is reloaded into the scan state
     every time the backend starts, and a restored chart looked like an answer.
     A sweep is only meaningful for the machine it was computed on, so it now
@@ -238,7 +238,7 @@ def _config_fingerprint(exclude_geo_keys=()) -> str:
         # by the panel, a value mirrored into a second block, a default made
         # explicit — re-fingerprinted the machine, the finished sweep on screen
         # was refused as "another motor's" and its points became cache misses
-        # (user 2026-09-12: "пропал куда-то весь мой sweep", after
+        # (user 2026-09-12: "my whole sweep disappeared somewhere", after
         # winding.star_delta appeared beside the simulation mirror).  What a
         # solve actually READS from these two blocks when the caller does not
         # pass it is a short list — the _effective_* resolvers in
@@ -352,8 +352,8 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         "pins": {k: pins[k] for k in sorted(pins)} if pins else None,
         # EFFECTIVE overrides only: an override equal to the live geometry's
         # own value changes nothing about the machine, so it must not change
-        # the key either.  User 2026-09-06: "добавил ещё один параметр (толщину
-        # перемычки) — почему он не вывел предыдущие измерения на график?" —
+        # the key either.  User 2026-09-06: "I added one more parameter (the
+        # bridge thickness) — why didn't it show the previous measurements on the chart?" —
         # the new sweep named rotor_house_height at its base value on a third
         # of its points, and that extra name alone made every key miss the
         # previous sweep's entries for the same machines.
@@ -939,9 +939,9 @@ def __getattr__(name):
 
 
 # ── EACH POINT CONTINUES THE PREVIOUS ONE ────────────────────────────────────
-# User, 2026-09-06: "мы же уже договаривались, что проход демагнитизации
-# делается для каждого sweep только один раз; изменения геометрии небольшие, и
-# каждый следующий расчёт берётся из предыдущего."  Sweep points had regressed
+# User, 2026-09-06: "we already agreed that the demagnetization pass is done
+# once per sweep only; the geometry changes are small, and each next
+# calculation is seeded from the previous one."  Sweep points had regressed
 # from 700-800 s to 1100-1700 s because every subprocess eval started COLD — a
 # full eddy warm-up march from zero plus, with demag on, a whole extra
 # electrical period of demag pre-pass.
@@ -960,7 +960,7 @@ def _eval_env_for(threads: Optional[int]) -> Dict[str, str]:
     evals, see above) unless the caller asks for more.
 
     The only caller that does is the sweep's SOLO seed point (2026-09-08, user:
-    "что так долго считалась первая точка?" — 29 min alone on one core out of
+    "why did the first point take so long to compute?" — 29 min alone on one core out of
     24 while nine workers sat idle).  That point runs by itself precisely so
     the others can continue its state, so letting it use several BLAS threads
     costs nobody a core; its numbers can move in the last ulp between runs,
@@ -1122,8 +1122,8 @@ def serial_first_decision(n_tasks: int, n_workers: int, demag: bool,
                           rotor_eddy: bool, seed_ok: bool) -> Tuple[bool, str]:
     """Should the FIRST queued point be solved ALONE before the fan-out?
 
-    The rule (user 2026-09-06, "проход демагнитизации делается для каждого
-    sweep только один раз"): the expensive one-off — the eddy warm-up march
+    The rule (user 2026-09-06, "the demagnetization pass is done once per
+    sweep only"): the expensive one-off — the eddy warm-up march
     AND the demag pre-pass period — is paid ONCE, by the first point, whose
     published state every later point then continues.  Fanning out immediately
     with no seed makes all N workers pay it in parallel instead.
@@ -2340,7 +2340,7 @@ def scan_designs(req: ScanRequest):
         # route (simulation.py: n_sectors ≤1 → -1).  Passing raw 1 made the solver build
         # an invalid NS=4 wedge (90°) — broken for any motor whose pole count is not a
         # multiple of 4 (e.g. 14 poles → 3.5/sector) → spurious tooth-width torque slope
-        # + scattered ripple.  This was the sweep-vs-Simulation mismatch vs ANSYS.
+        # + scattered ripple.  This was the sweep-vs-Simulation mismatch vs commercial FEM.
         n_sectors = -1 if int(req.n_sectors) <= 1 else int(req.n_sectors)
         # Air-gap mesh layers — single source: the Mesh tab.  gap_layers drives the
         # air-gap field resolution → torque ripple + magnet eddy; the Simulation uses
@@ -2381,9 +2381,9 @@ def scan_designs(req: ScanRequest):
         demag = bool(getattr(req, 'demag', False))
         # THE RUN SHOWS A PULSE FROM SECOND ONE.  A sweep point with the
         # panel's physics is minutes of silent subprocess work, and "0/7" for
-        # ten minutes reads as a hang ("что-то не подаёт жизни") — so the
+        # ten minutes reads as a hang ("nothing is showing signs of life") — so the
         # progress carries when the scan started, how many workers solve, and
-        # the measured per-point rate, and the panel can render a живой
+        # the measured per-point rate, and the panel can render a live
         # elapsed/ETA line while the first point is still cooking.
         import time as _t_scan
         _rate0 = {}
@@ -3437,8 +3437,8 @@ def _pt(out: Dict[str, Any], kind: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # OBJECTIVE-SPACE CLOUD — publication policy.
 #
-# INVARIANT (Vadim, 2026-08-05: «надо выводить все точки я потом могу отфильтровать
-# их по пульсации там же есть ползунок»): EVERY eval that produced metrics is
+# INVARIANT (Vadim, 2026-08-05: "we need to output all the points, I can
+# filter them by ripple later, there's a slider for that too"): EVERY eval that produced metrics is
 # published to `points`.  Nothing is filtered server-side — not by ripple, not by
 # the objective, not by "is it the incumbent".  The chart's ripple slider does the
 # trimming, visually, where the user can move it.  A run that shows the user 51 of
@@ -3594,7 +3594,7 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
     the chart) — but when the request sets ripple_penalty_lambda > 0 the cost adds
         λ_r · max(0, T_ripple_pct − ripple_max) / 100
     so the optimizer actively holds ripple under the gate (per Vadim: "ripple < 4 %
-    при максимальном КПД и плотности момента" — the chart-trim alone let CMA drift
+    at maximum efficiency and torque density" — the chart-trim alone let CMA drift
     to 7.6 % because the objective never felt the constraint).  The other
     feasibility penalty is over-voltage: V_peak above the inverter's usable
     phase-voltage limit, so a design the bus can't drive is repelled.
@@ -5550,9 +5550,9 @@ def _auto_population(n_vars: int) -> int:
 # the defect is in the SEARCH, not the physics.
 #
 # The user's method, in their words:
-#   «сначала сделал бы первоначальные отклонения по всем переменным в районе
-#    0.2 mm или 0.02 для безразмерных и понял бы какая куда отклоняет систему,
-#    а потом уже использовал самые влиятельные и доводку делал оставшимися»
+#   "first I'd make initial perturbations of about 0.2 mm on every variable,
+#    or 0.02 for dimensionless ones, and see which way each one deflects the
+#    system, then use the most influential ones and fine-tune with the rest"
 #
 #   1. SCREEN  — perturb EVERY variable by ±δ (δ = 0.2 mm for lengths, 0.02 for
 #      dimensionless, 1 for integers) and measure which way each one moves the
@@ -7101,7 +7101,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             # inner loop already ran to exhaustion, the full re-screen already
             # retried, and every point is memoised — a repeat lap would measure
             # the identical numbers.)  So halve δ once, down to the floor, and
-            # try the whole cycle again — the user's «доводка», finer.
+            # try the whole cycle again — the user's "fine-tuning", finer.
             if scale * _SCREEN_SHRINK >= _SCREEN_MIN_SHRINK - 1e-12 \
                     and _spent() < budget and not _cancelled():
                 scale *= _SCREEN_SHRINK

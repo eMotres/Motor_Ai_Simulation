@@ -15,8 +15,8 @@ SAME ``Principal`` shape (``email``, ``credential_id``, ``kind``, ``scopes``).
 An OAuth access token will be one more ``kind`` ("oauth") resolved by a second
 verifier; keys keep working unchanged.  See docs/MCP_2026-09-28.md.
 
-Quotas: per key, calls/minute and calls/day, in process memory (one API
-process serves the server).  Audit: one JSONL line per MCP tool call.
+Fair-use limits: per key, calls/minute and calls/day, in process memory (one
+API process serves the server).  Audit: one JSONL line per MCP tool call.
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ SCOPE_DESCRIPTIONS: Dict[str, str] = {
     "designs:write": "Create draft machines in your workspace (marked as the "
                      "agent's; never changes your saved machines or open motor)",
     "simulate": "Queue simulations of those drafts in your job queue "
-                "(daily quota)",
+                "(daily fair-use limit)",
 }
 TOKEN_PREFIX = "emk_"
 MAX_KEYS_PER_USER = 10
@@ -322,9 +322,10 @@ def audit(*, principal: Optional[Principal], method: str, tool: str = "",
             pass
     p = audit_path()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
+        from motor_ai_sim.private_files import ensure_private_dir, open_private
+        ensure_private_dir(p.parent)
         with lock_for(p):
-            with open(p, "a", encoding="utf-8") as f:
+            with open_private(p, "a") as f:     # 0600 — audit 2026-09-29 #9
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:                                   # noqa: BLE001
         pass

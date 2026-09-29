@@ -1,0 +1,125 @@
+{
+  "tabs": {
+    "motors": "Motors",
+    "geometry": "Geometry",
+    "materials": "Materials",
+    "mesh": "Mesh",
+    "simulation": "Electromagnetic",
+    "static3d": "3D",
+    "mechanical": "Mechanical",
+    "thermal": "Thermal",
+    "controller": "Controller",
+    "sweep": "Optimization",
+    "comparePoints": "Compare",
+    "cost": "Cost",
+    "compare": "Configure",
+    "admin": "Admin"
+  },
+  "status": {
+    "connected": "Connected",
+    "localMode": "Local Mode"
+  },
+  "theme": {
+    "dark": "Dark theme",
+    "light": "Light theme"
+  },
+  "actions": {
+    "resetDefaults": "Reset to Defaults"
+  },
+  "viewer": {
+    "showGrid": "Show Grid",
+    "hideGrid": "Hide Grid",
+    "showAxes": "Show Axes",
+    "hideAxes": "Hide Axes",
+    "solidMesh": "Solid Mesh",
+    "stl": "STL (CadQuery)",
+    "generateStl": "Generate STL from CadQuery",
+    "clearCache": "Clear Cache & Rebuild"
+  },
+  "language": {
+    "label": "Language"
+  },
+  "account": {
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "avatarTooltip": "{email} · {role} — click for sessions",
+    "sessions": "Sessions",
+    "agents": "Access for agents",
+    "notifications": "Notifications"
+  },
+  "auth": {
+    "title": {
+      "signin": "Sign in",
+      "register": "Create account",
+      "forgot": "Reset password",
+      "reset": "Set a new password"
+    },
+    "cta": {
+      "signin": "Sign in",
+      "register": "Create account",
+      "forgot": "Send reset link",
+      "reset": "Set password"
+    },
+    "lead": {
+      "signin": "Sign in with your e-mail and password.",
+      "register": "We mail you a confirmation link.",
+      "forgot": "We mail you a reset link.",
+      "reset": "Choose a new password."
+    },
+    "help": {
+      "signin": "Same address via Google or password = one account. A new e-mail account works after you confirm the mailed link.",
+      "register": "At least {min} characters; common passwords are refused. We mail a link valid 24 h; until you open it the account cannot sign in.",
+      "forgot": "If an account uses this address we mail a reset link (24 h, one use). Also sets a password for a Google-only account.",
+      "reset": "Setting a new password signs out every other session."
+    },
+    "field": {
+      "name": "Name",
+      "email": "E-mail",
+      "password": "Password",
+      "newPassword": "New password (min {min})",
+      "repeatPassword": "Repeat password"
+    },
+    "validation": {
+      "email": "enter a valid e-mail address",
+      "passwordRequired": "enter a password",
+      "passwordMin": "at least {min} characters",
+      "passwordMismatch": "passwords do not match",
+      "nameRequired": "enter your name"
+    },
+    "info": {
+      "emailConfirmed": "E-mail confirmed — sign in with your password.",
+      "checkConfirmation": "Check your inbox for the confirmation link.",
+      "checkReset": "Check your inbox for the reset link.",
+      "passwordChanged": "Password changed — sign in with the new one."
+    },
+    "link": {
+      "createAccount": "Create account",
+      "forgot": "Forgot password?",
+      "back": "Back to sign in"
+    },
+    "consent": {
+      "line": "Send me product news and updates",
+      "help": "Product news and updates, at most 2 per month; unsubscribe in one click. We mail a confirmation link first.",
+      "newAccountOnly": "applies to a new account only"
+    }
+  },
+  "units": {
+    "motorCount": "{count, plural, one {# motor} other {# motors}}",
+    "dutyCount": "{count, plural, one {# duty} other {# duties}}"
+  },
+  "thisOne": "this one",
+  "browser": "Browser",
+  "signedIn": "Signed in",
+  "lastSeen": "Last seen",
+  "expires": "Expires",
+  "how": "How",
+  "revoked": "revoked",
+  "revoke": "Revoke",
+  "noSessionsRecordedYet": "No sessions recorded yet.",
+  "signOutEverywhere": "Sign out everywhere",
+  "close": "Close",
+  "notifications": "Notifications",
+  "notices": "Notices",
+  "none": "None.",
+  "markRead": "Mark read"
+}

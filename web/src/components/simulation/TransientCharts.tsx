@@ -784,8 +784,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         // shape existed when the run was made.  Ask the backend's restore path
         // (no compute, milliseconds) and adopt ITS summary when it is newer —
         // waveforms, _geoSig and stale flags stay local.  Without this, new
-        // summary cells only ever appeared after a full re-run ("не вижу его
-        // после Rotor inertia", 2026-08-23).
+        // summary cells only ever appeared after a full re-run ("I don't see
+        // it after Rotor inertia", 2026-08-23).
         (async () => {
           try {
             const q = new URLSearchParams({ restore: 'true' });
@@ -853,7 +853,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
 
   // CROSS-TAB sync: another tab's finished run writes sim.lastTransient — adopt
   // it live.  Without this a background tab silently keeps showing its old
-  // result ("пересчиталось, но не обновилось" when two app tabs are open: the
+  // result ("recomputed, but not updated" when two app tabs are open: the
   // solve lands only in the tab whose Run button was pressed).  The `storage`
   // event fires only in OTHER tabs (never the writer), so there is no loop; a
   // tab that is mid-solve keeps its own run (busyRef guard).
@@ -865,8 +865,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
   // API restart in which the server's live fingerprint transiently differed;
   // the restore came back `stale_geometry: true`, the dashboard dimmed to 35 %
   // and STAYED so for a quarter of an hour although the very next lookup would
-  // have said "same machine" ("если каплинг завершился, почему у меня экран
-  // замыленный?").  The verdict is a function of the geometry the client sends
+  // have said "same machine" ("if the coupling finished, why is my screen
+  // dimmed?").  The verdict is a function of the geometry the client sends
   // and of the server's state at that instant — both move — so while it says
   // "different", ask again: 3 s, 15 s, 60 s, then every 2 min; at once when
   // the loaded geometry changes.  A restore is a lookup (milliseconds, no
@@ -2152,7 +2152,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           {/* The small per-element demag map that used to render here was
               removed at the user's request (2026-07-29): the Field view's
               Demag tab shows the same data on the full mesh with the
-              Ansys-style colour map — one honest view instead of two. */}
+              commercial-FEM-style colour map — one honest view instead of two. */}
         </>
       )}
     </Paper>

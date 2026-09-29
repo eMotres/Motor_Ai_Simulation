@@ -1,7 +1,7 @@
 """Limit speed (SF = 1) — the pure search, and the route.
 
-Owner 2026-09-21: "нужно искать ещё максимальную скорость вращения, на
-всякий случай — она будет, когда достигает SF = 1".
+Owner 2026-09-21: "we also need to find the maximum rotation speed, just
+in case — it happens when SF reaches 1".
 
 Three groups, cheapest first:
 
@@ -469,8 +469,8 @@ def test_route_zero_rpm_is_a_422(client):
 
 
 # ---------------------------------------------------------------------------
-# (b2) the coupled loop's AUTOMATIC search — owner 2026-09-21: "нужно эту
-# максимальную скорость обязательно добавлять в отчёт", every duty a coupled
+# (b2) the coupled loop's AUTOMATIC search — owner 2026-09-21: "this maximum
+# speed absolutely must be added to the report", every duty a coupled
 # run saves, not only when the button was pressed.  Wired into
 # `run_rotor_stress_at` only; cached per (geometry, loads/torque, contacts,
 # temperatures, mesh, order); MECH_LIMIT_SPEED_AUTO=0 turns it off.
@@ -625,8 +625,8 @@ def test_run_rotor_stress_at_env_off_attaches_nothing(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# (c) the report row — MANDATORY (owner 2026-09-21: "нужно эту максимальную
-# скорость обязательно добавлять в отчёт"), never blank, never omitted
+# (c) the report row — MANDATORY (owner 2026-09-21: "this maximum
+# speed absolutely must be added to the report"), never blank, never omitted
 # ---------------------------------------------------------------------------
 
 _LS_BLOCK = {

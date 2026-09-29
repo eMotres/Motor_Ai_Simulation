@@ -1,9 +1,9 @@
 """THE CATALOGUE CONSTANTS — the same machine at 20 °C.
 
-Owner, 2026-09-18: *«для каждого отчёта делать прогон на холодную 20 °C, чтобы
-находить все коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех
-каталогах моторов и нужны для сравнения; это нужно отдельно упомянуть в
-отчёте»*.
+Owner, 2026-09-18: *«for every report, run a cold pass at 20 °C to
+find all the constants KV, Kt, Km, Km/mass that appear in all the
+motor catalogues and are needed for comparison; this needs to be mentioned
+separately in the report»*.
 
 Every constant this project reports is at the duty's own temperatures, which is
 honest and is not COMPARABLE: a catalogue quotes room-temperature numbers, so a

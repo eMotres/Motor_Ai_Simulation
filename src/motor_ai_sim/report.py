@@ -5,10 +5,10 @@ holds it: the duties saved from the Simulation tab, the design block, the
 battery.  It is a spreadsheet, it never looks at a solver, and it has no
 pictures of a field.
 
-This is the other document the user asked for (2026-09-08): *"у нас уже есть
-datasheet, нам нужно его расширить до полного отчёта по всем результатам
-моделирования, с картинками, с подшипниками, со всеми потерями — полный отчёт
-по мотору, но только самое важное, не нужно сильно перегружать"*.  Six A4 pages:
+This is the other document the user asked for (2026-09-08): *"we already have
+a datasheet, we need to expand it into a full report on all the simulation
+results, with pictures, with bearings, with all the losses — a full report
+on the motor, but only the most important parts, don't overload it too much"*.  Six A4 pages:
 
     1  Cover              what machine, when, four headline numbers, SOURCES
     2  Machine            cross-section, geometry, materials, bearings
@@ -253,8 +253,8 @@ def winding_words(geo: Dict[str, Any]) -> str:
     if n is None:
         return "—"
     # `num_wires_per_slot` counts CONDUCTORS, not turns: 24 of them wound 4 in
-    # hand is 6 turns, which is what the user reads off the drawing ("витков 6
-    # по 4 параллельных провода в каждом") and what the run journal calls
+    # hand is 6 turns, which is what the user reads off the drawing ("6 turns
+    # of 4 parallel wires each") and what the run journal calls
     # `turns_per_coil`.  Dividing here rather than printing 24 is the whole
     # point of the row.
     if par and par > 1 and abs(n / par - round(n / par)) < 1e-9:
@@ -627,11 +627,11 @@ def _as_tris(v: Any) -> Optional["Any"]:
         return None
 
 
-#: The web viewer's own ramp and band count (2026-09-09).  User: *"формат
-#: вывода графиков должен быть совершенно одинаковый с нашим веб-интерфейсом"*.
-#: The app paints every field the same way — a classic Ansys rainbow quantised
+#: The web viewer's own ramp and band count (2026-09-09).  User: *"the chart
+#: output format must be completely identical to our web interface"*.
+#: The app paints every field the same way — a classic commercial FEM rainbow quantised
 #: into ONE band count for all views (`web/src/components/simulation/fieldView
-#: .ts`: `jet01`, `N_BANDS`, and its comment "все графики одинаково") — so the
+#: .ts`: `jet01`, `N_BANDS`, and its comment "all charts the same") — so the
 #: report's maps are that, to the same arithmetic, rather than a different
 #: matplotlib colormap per quantity.  A picture in the document and the picture
 #: on the tab it came from must be the same picture.
@@ -757,7 +757,7 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
     The picture is framed on what is DRAWN, not on the whole mesh: the far-field
     air ring around a machine is most of the mesh's extent, and framing on it
     left the motor a small shape in the middle of a square of white (the user's
-    "ничего не видно", 2026-09-08).  The figure's aspect follows that frame, so
+    "nothing is visible", 2026-09-08).  The figure's aspect follows that frame, so
     a half-machine wedge comes out twice as wide as tall and fills the page
     width without a page of white under it.
 
@@ -785,8 +785,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
     ``range_only=True`` returns ``(vmin, vmax)`` — the scale this map WOULD be
     drawn on — and draws nothing; ``pair_range`` pins the scale to a range the
     caller computed instead.  Those two are how the halves of a side-by-side
-    figure end up on ONE colour scale (user 2026-09-14: *"слева картинка из
-    rated, справа из peak"*), which is the only way the two pictures can be read
+    figure end up on ONE colour scale (user 2026-09-14: *"the left picture is
+    from rated, the right one from peak"*), which is the only way the two pictures can be read
     against each other at a glance.
     """
     p = _as_xy(verts)
@@ -955,8 +955,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
             grey = np.ma.masked_where(~ctx, np.full(t.shape[0], 0.45))
             ax.tripcolor(tri, facecolors=grey, cmap="Greys", vmin=0.0, vmax=1.0,
                          alpha=0.35, edgecolors="none")
-        # THE VIEWER'S OWN RECIPE, term for term (2026-09-09; user: "у нас же
-        # в вебе всё сглажено и красиво, нужно сделать точно так же"):
+        # THE VIEWER'S OWN RECIPE, term for term (2026-09-09; user: "it's all
+        # smoothed and pretty in our web app, we need to do exactly the same here"):
         #
         #   1. an element field is averaged onto the VERTICES, weighted by
         #      triangle area and kept SEPARATE per material class — iron and
@@ -1001,8 +1001,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
                 ax.tripcolor(tri_g, facecolors=np.ma.masked_where(~sel, v_raw),
                              cmap=cmap_obj, norm=norm)
         # ── WHERE ONE PART ENDS AND THE NEXT BEGINS ────────────────────────
-        # User 2026-09-10: "можешь сделать белые линии разделов магнитов в
-        # механике и температуре в отчёте".  The viewer draws the parts'
+        # User 2026-09-10: "can you make white lines for the magnet
+        # boundaries in the mechanical and temperature report views".  The viewer draws the parts'
         # outlines over the field; this report drew only the mesh, so a magnet
         # and the iron around it at the same stress were one shape and the
         # picture could not be read as a machine.
@@ -1053,7 +1053,7 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
         # spaced contours draw the field's own picture — dense where the flux
         # crowds, sparse where it does not — which is what an engineer looks at
         # first and what every FE post-processor calls "flux lines" (user
-        # 2026-09-10: "в отчёт добавь ещё график A_z").
+        # 2026-09-10: "add an A_z chart to the report too").
         #
         # Drawn over the WHOLE drawn mesh in one pass, not per material class:
         # A_z is continuous across every boundary — that is the point of solving
@@ -1077,8 +1077,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
             except (ValueError, RuntimeError):
                 pass
 
-        # …and the MESH over it (user 2026-09-09: "выводи картинки вместе с
-        # сеткой") — the same hairline the viewer's Mesh toggle draws, light
+        # …and the MESH over it (user 2026-09-09: "show the pictures together
+        # with the mesh") — the same hairline the viewer's Mesh toggle draws, light
         # enough that it reads as texture over the field rather than as ink.
         if mesh:
             tri_m = mtri.Triangulation(p[:, 0], p[:, 1], t)
@@ -1093,7 +1093,7 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
                                   else cmap_obj))
         sm.set_array([])
         # THE BAR IS ALWAYS THE NORM'S, never the contour set's (user
-        # 2026-09-10: "делай одинаковый шкалу без стрелок везде").  A colorbar
+        # 2026-09-10: "make the same scale everywhere, without arrows").  A colorbar
         # built from a `tricontourf` inherits its `extend` and grows arrow ends
         # on the maps that clip — so a log loss map got pointed ends and a
         # stress map flat ones, and two bars in one document meant two things.
@@ -1103,8 +1103,8 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
         # BOTH ENDS ARE LABELLED.  matplotlib picks its own ticks and drops the
         # last one whenever it does not land on a round number, so the top of
         # every bar in this report was blank — and the top of a bar is the
-        # number the reader is looking for (user 2026-09-10: "нигде не стоит
-        # отметки верхней границы шкалы, а это важно").  The ticks are the band
+        # number the reader is looking for (user 2026-09-10: "the top boundary
+        # of the scale isn't marked anywhere, and that's important").  The ticks are the band
         # EDGES, thinned to keep them legible, with the first and the last
         # always in.
         try:
@@ -1294,7 +1294,7 @@ def thumb_svg_for(die_doc: Dict[str, Any]) -> str:
     geometry is synced from a live save.  That made the drawing immune to its
     own generator: the band was added and the palette was taken from the app,
     and the report kept printing the old picture because the die still held the
-    old string (user 2026-09-10: "опять Machine без бандажа и цвета не те").
+    old string (user 2026-09-10: "Machine has no band again and the colours are wrong").
 
     So the stored string is used only while it carries the CURRENT version
     stamp; otherwise it is regenerated here, from the die's own geometry, and
@@ -1480,9 +1480,9 @@ def _em_maps(snap: Optional[Dict[str, Any]],
                                               DOM_OUTER))
                         # OUTSIDE air is dropped, INSIDE air is kept — and
                         # "outside" is decided by connectivity, not by radius
-                        # (user 2026-09-11: "зачем ты рисуешь эти вставки
-                        # только на этом рисунке, убери их, чтобы было всё
-                        # одинаково").  A radius cut kept the air in the
+                        # (user 2026-09-11: "why are you drawing these
+                        # inserts only on this figure, remove them so
+                        # everything is the same").  A radius cut kept the air in the
                         # scallops between the yoke humps, so this map alone
                         # grew green lobes the |B| map does not have.  The air
                         # that matters — gap, slots, bore — is walled in by iron
@@ -1521,8 +1521,8 @@ def _em_maps(snap: Optional[Dict[str, Any]],
 
         ld = fld.get("loss_dens")
         if ld is not None and np.asarray(ld, float).size:
-            # WHITE PART LINES here too (user 2026-09-10: "здесь нет белых линий
-            # между магнитами и не видно бандажа").  `outline` only, never
+            # WHITE PART LINES here too (user 2026-09-10: "there are no white
+            # lines between the magnets here, and the band isn't visible").  `outline` only, never
             # `grp`: the log scale and the per-class averaging must not change,
             # the picture only has to say where one part ends.
             #
@@ -1542,8 +1542,8 @@ def _em_maps(snap: Optional[Dict[str, Any]],
             out["label"] = str(fld.get("loss_dens_label") or "")
         # The irreversible-demagnetisation map — per cent of Br the run left in
         # each magnet element (the Simulation tab's Demag view reads the same
-        # array).  User 2026-09-08: "подписи под... демагнитизации обязательно
-        # рисовать".  Magnets only: everything else is blanked.
+        # array).  User 2026-09-08: "the captions under... the demagnetization
+        # must always be drawn".  Magnets only: everything else is blanked.
         dc = (snap.get("scalars") or {}).get("demag_coef_per_tri")
         if dc is None:
             dc = fld.get("demag_coef_per_tri")
@@ -1572,7 +1572,7 @@ def _em_maps(snap: Optional[Dict[str, Any]],
                         # coefficient of 1.0 (nothing lost, because there is
                         # nothing to lose) and came out painted at the top of
                         # the Br scale, the same dark red as a healthy magnet
-                        # (user: "зачем ты здесь красным нарисовал катушки").
+                        # (user: "why did you draw the coils red here").
                         # Every other reader of this field in the app already
                         # bounds it — `routes/simulation.py` does it three
                         # times; this one did not.
@@ -1611,8 +1611,8 @@ def _thermal_map(res: Optional[Dict[str, Any]],
     # The FIELD stays one continuous thing — temperature does not jump at a
     # material boundary, so it is neither grouped nor folded — but the machine
     # under it has to be recognisable, and on a thermal map the magnets are all
-    # one warm red shape without it (user 2026-09-10: "здесь нет белых линий
-    # между магнитами").  `domain_per_tri` is the thermal mesh's own part array:
+    # one warm red shape without it (user 2026-09-10: "there are no white
+    # lines between the magnets here").  `domain_per_tri` is the thermal mesh's own part array:
     # magnet_N and magnet_S are different ids, so alternating poles separate.
     return _map_png(inner.get("vertices"), inner.get("triangles"),
                     inner.get("temperature_per_node"),
@@ -1628,8 +1628,8 @@ def _mech_map(res: Optional[Dict[str, Any]],
               width_cm: Optional[float] = None) -> Tuple[Any, str]:
     """Von Mises over the primary case — the picture the Mechanical tab draws.
 
-    Term for term, since 2026-09-10 (user, on the first docx: "с картинками
-    полная жопа, они совершенно не похожи на то, что у нас в вебе"):
+    Term for term, since 2026-09-10 (user, on the first docx: "the pictures
+    are a total mess, they don't look anything like what we have on the web"):
 
       * ``grp`` is the material class, so the average stops at every material
         boundary instead of smearing the band into the magnets under it — that
@@ -1667,7 +1667,7 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
                      width_cm: Optional[float] = None) -> Dict[str, Any]:
     """The DISPLACEMENT and the SAFETY FACTOR, beside the stress.
 
-    User 2026-09-10: *"по механике нужно ещё выводить график деформаций и SF"*.
+    User 2026-09-10: *"for mechanics we also need to output a deformation and SF chart"*.
     Both were solved and shown on the tab and neither reached the document, so a
     reader could see where the metal is loaded but not how far it moves or how
     close it is to its own limit — and the limit is the answer the section is
@@ -1699,8 +1699,8 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
     grp = fld.get("domain_per_tri")
     u = c.get("u_mag_per_node")
     if u is not None:
-        # DRAWN DEFORMED, like the tab (user 2026-09-10: "этот график сделай как
-        # в вэбе, с деформацией").  Microns on a 100 mm part are invisible at
+        # DRAWN DEFORMED, like the tab (user 2026-09-10: "make this chart like
+        # on the web, with deformation").  Microns on a 100 mm part are invisible at
         # true scale, so the shape is exaggerated by the same rule the viewer
         # uses: the largest displacement reads as ~5 % of the rotor radius.  The
         # COLOUR is still the true |u| in µm; only the geometry is stretched,
@@ -1735,8 +1735,8 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
 
 # ── ONE FIGURE, TWO DUTIES ──────────────────────────────────────────────────
 #
-# User 2026-09-14: *"добавим ещё картинки из peak — слева картинка из rated,
-# справа из peak"*.  Every picture in this document used to be ONE duty's — the
+# User 2026-09-14: *"let's also add pictures from peak — the left picture
+# from rated, the right one from peak"*.  Every picture in this document used to be ONE duty's — the
 # `pictures` choice — and the reader who wanted to know what the peak does to
 # the magnets, the temperatures or the stress had to build a second report and
 # put the two on a desk.  So every per-duty figure is drawn twice, rated on the
@@ -1750,9 +1750,9 @@ def _mech_extra_maps(res: Optional[Dict[str, Any]],
 
 # ── EVERY SIDE ON ITS OWN SCALE ─────────────────────────────────────────────
 #
-# User 2026-09-14, after seeing the first paired build: *"не надо общей шкалы,
-# шкалы как и рисунки должны быть отдельные; но магниты на первом рисунке
-# должны быть красными"*.  The shared bar had been introduced so 132 °C and
+# User 2026-09-14, after seeing the first paired build: *"we don't need a
+# shared scale, the scales like the pictures should be separate; but the
+# magnets in the first picture should be red"*.  The shared bar had been introduced so 132 °C and
 # 249 °C could be read against each other; what it actually did was flatten the
 # quieter of the two pictures — the rated temperature map spans 23 K against
 # the peak's 83, so on the union it came out as one teal shape with two band
@@ -2134,8 +2134,8 @@ SIDE_CHART_PX = 1500
 #: part palette (`web/src/lib/partColors.ts`), so a slice is the colour that
 #: part has in the 3-D view and on the cross-section.
 PART_COLOURS = {
-    # BRIGHT AND APART (user 2026-09-11: "цвета сделай поярче, чтобы хорошо
-    # было видно разницу").  The viewer's own palette is three near-identical
+    # BRIGHT AND APART (user 2026-09-11: "make the colours brighter, so the
+    # difference is clearly visible").  The viewer's own palette is three near-identical
     # navies plus two near-blacks — right for a cross-section, where the shapes
     # separate the parts and the colours only have to be quiet, and wrong for a
     # pie, where the colour IS the only thing telling two wedges apart.  Copper
@@ -2204,8 +2204,8 @@ def loss_breakdown(em: Dict[str, Any],
 def _loss_pie_png(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
                   width_cm: float = SIDE_CHART_CM,
                   px: int = SIDE_CHART_PX) -> Optional[bytes]:
-    """Where the watts go, as a pie (user 2026-09-11: "круговую диаграмму всех
-    потерь справа от таблицы — будет гораздо наглядней").
+    """Where the watts go, as a pie (user 2026-09-11: "a pie chart of all the
+    losses to the right of the table — it'll be much clearer").
 
     Every slice is labelled with its watts AND its share, because a pie alone
     answers "which is biggest" and never "how much" — and the table beside it
@@ -2230,7 +2230,7 @@ def _loss_pie_png(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
         cols = [LOSS_COLOURS.get(l, "#9aa4b2") for l in labels]
         fig_w = max(float(width_cm), 4.0) / 2.54
         # WHERE THE LEGEND GOES depends on how wide the figure is placed (user
-        # 2026-09-14: *"раздвигай на всю ширину страницы"*).  As half of a pair
+        # 2026-09-14: *"stretch it to the full width of the page"*).  As half of a pair
         # the legend beside the pie ate half the column and left the circle the
         # size of a coin, so it goes UNDERNEATH and the pie fills the width; at
         # full page width there is room beside it, and a full-width pie with
@@ -2310,8 +2310,8 @@ def _temp_bars_png(res: Dict[str, Any], inner: Dict[str, Any],
                    limits: Optional[Dict[str, float]] = None,
                    width_cm: float = SIDE_CHART_CM,
                    px: int = SIDE_CHART_PX) -> Optional[bytes]:
-    """Per-part temperature as bars (user 2026-09-11: "график температур в виде
-    гистограммы справа от таблицы температур").
+    """Per-part temperature as bars (user 2026-09-11: "a temperature chart as
+    a bar histogram to the right of the temperature table").
 
     Each part gets its maximum as the bar and its average as a tick inside it —
     the two numbers the table carries, so nothing new is asserted.  The limits
@@ -2535,8 +2535,8 @@ def _dft_pct(series: Any, n_orders: int = 20) -> Optional[Tuple[Any, Any, float]
 #: picture.  The point sizes are left alone — a chart drawn at the width it is
 #: placed at renders its 9 pt labels as 9 pt on the page either way.
 #:
-#: 14 cm, not 12 (user 2026-09-14: *"рисунки делай побольше, раздвигай на всю
-#: ширину страницы, для всех, чтобы одинаково было"*).  A pair now spans the
+#: 14 cm, not 12 (user 2026-09-14: *"make the pictures bigger, stretch them to
+#: the full page width, for all of them, so it's consistent"*).  A pair now spans the
 #: whole text width, so a half is 13.2 cm in Word and 9.2 cm in the PDF — and
 #: with the threshold at 12 the two renderers would have laid the same figure
 #: out two different ways.  Half of a pair is half of a pair in both.
@@ -2988,8 +2988,8 @@ def _currents_png(wf: Dict[str, Any], width_cm: float = 22.0,
 
 
 # ── THE BRIDGE'S OWN VOLTAGE, NOT THE WINDING'S (2026-09-15) ────────────────
-# User: *"он же не реальное напряжение показывает — там же должны быть сплошные
-# импульсы с разной скважностью"*.  The line-voltage chart drew V_A − V_B
+# User: *"it's not showing the real voltage — there should be solid pulses
+# with different duty ratios there"*.  The line-voltage chart drew V_A − V_B
 # reconstructed from the FIELD — a smooth fundamental carrying whatever ripple
 # the FEM's 20 steps per carrier could resolve.  That is a real quantity (the
 # volt-seconds the winding integrated) but it is NOT what the inverter puts on
@@ -3700,7 +3700,7 @@ def _heat_waterfall_png(res: Dict[str, Any], inner: Dict[str, Any],
         # away thinking the machine dissipates less than it does.
         _nm = heat_not_in_map_w(res, inner) or 0.0
         if _nm > 0.01 * float(p_in):
-            # NAMED, not just hatched (user 2026-09-11: "что это значит?").  A
+            # NAMED, not just hatched (user 2026-09-11: "what does this mean?").  A
             # bar standing outside the balance has to say what it is on the
             # chart, not only in the caption three lines below it.
             ax.bar(["Mechanical,\nnot in map"], [_nm], color="#fff4e5",
@@ -4064,8 +4064,8 @@ def _image(blob: Optional[bytes], width: float,
 #: The gap between the two halves of a paired figure, in points.
 PAIR_GAP = 8.0
 
-#: ONE HEIGHT CAP FOR EVERY PAIR (user 2026-09-14: *"рисунки делай побольше,
-#: раздвигай на всю ширину страницы, для всех, чтобы одинаково было"*).  Each
+#: ONE HEIGHT CAP FOR EVERY PAIR (user 2026-09-14: *"make the pictures bigger,
+#: stretch them to the full page width, for all of them, so it's consistent"*).  Each
 #: figure used to name its own cap — 0.30, 0.32, 0.42 of the page — so three
 #: figures on one page were three different sizes.  One number, and it is loose
 #: enough that no pair is ever narrowed by it: a pair ALWAYS spans the whole
@@ -4675,8 +4675,8 @@ class _Source:
                  report_fp: Optional[str] = None,
                  delta: Optional[List[str]] = None):
         self.name = name
-        # The stamp is KEPT but no longer printed (user 2026-09-10: "я думаю,
-        # что метки времени можно вообще убрать").  A reader compared two of
+        # The stamp is KEPT but no longer printed (user 2026-09-10: "I think
+        # the timestamps can just be removed entirely").  A reader compared two of
         # them and concluded the sections disagreed, when what they disagreed
         # about was which store answered first; the machine and the operating
         # point are what identify a result, and both are stated already.
@@ -4712,8 +4712,8 @@ class _Source:
 # ---------------------------------------------------------------------------
 # LIMITS AND WARNINGS
 # ---------------------------------------------------------------------------
-# User, 2026-09-09: *"нужно делать предупреждения, если что-то близко к пределам,
-# и предложения, как этого избежать"*.
+# User, 2026-09-09: *"we need to raise warnings when something is close to
+# the limits, and suggestions for how to avoid it"*.
 #
 # The engine below is a PURE FUNCTION of one flat dict per duty — no stores, no
 # imports, no solver — for two reasons.  The first is that it is the only part of
@@ -4764,7 +4764,7 @@ INSULATION_CLASS_C: Dict[str, float] = {
 }
 DEFAULT_INSULATION_CLASS = "N"
 
-#: WHAT THIS PROJECT BUILDS TO (user 2026-09-11: "обмотки везде класс 200С").
+#: WHAT THIS PROJECT BUILDS TO (user 2026-09-11: "windings are class 200C everywhere").
 #: The letters above are the IEC ladder, and 200 °C on it is class N — H is
 #: 180 °C.  The document used to call this build "class H" and print 200 °C
 #: beside it, which is a contradiction on the page (reviewer 2026-09-14); the
@@ -4779,8 +4779,8 @@ PROJECT_INSULATION_TEXT = ("class N per IEC 60085 (200 °C) — this project's "
 
 #: Current density a winding is designed to, A/mm² rms — THIS PROJECT'S limits,
 #: given by the user on 2026-09-10 ("current density in the copper limit 20
-#: A/mm²" for the jacketed machine, then "лимиты по воздушному от 10 для
-#: закрытых конструкций до 15 для открытых конструкций").
+#: A/mm²" for the jacketed machine, then "air limits from 10 for closed
+#: constructions up to 15 for open constructions").
 #:
 #: Air depends on the FRAME, which is why there are three numbers and not two: a
 #: closed machine hands its winding heat to the housing and only then to the
@@ -4792,9 +4792,9 @@ PROJECT_INSULATION_TEXT = ("class N per IEC 60085 (200 °C) — this project's "
 #: A machine with no thermal answer reads as closed air, the tightest of the
 #: three, and the warning says so in its own note.
 #:
-#: THE JACKET SPLITS BY INSULATION SYSTEM (user 2026-09-14: "исправим лимиты для
-#: плотности тока с жидкостным охлаждением: до 20 A/mm² с органической изоляцией
-#: и до 25 A/mm² с керамической").  Under a jacket the heat path out of the slot
+#: THE JACKET SPLITS BY INSULATION SYSTEM (user 2026-09-14: "let's fix the
+#: current-density limits for liquid cooling: up to 20 A/mm² with organic
+#: insulation and up to 25 A/mm² with ceramic").  Under a jacket the heat path out of the slot
 #: is short and it is the GROUND WALL that sets how hard it may be pushed: an
 #: organic liner (aramid paper, polymer film) is a 0.14 W/(m·K) blanket with an
 #: organic temperature ceiling, while an alumina liner conducts ~24 W/(m·K) and
@@ -4840,8 +4840,8 @@ def _insulator_description(card: str) -> str:
 def insulation_system(mats: Any) -> Tuple[str, str]:
     """``('ceramic' | 'organic', why)`` for the winding's insulation system.
 
-    THE SLOT INSULATION IS THE DECIDING CARD (user 2026-09-14: "с керамической
-    изоляцией" is the Al2O3 liner he assigns).  The ground wall is the whole
+    THE SLOT INSULATION IS THE DECIDING CARD (user 2026-09-14: "with ceramic
+    insulation" is the Al2O3 liner he assigns).  The ground wall is the whole
     series heat path out of the slot and the part that ages; the wire enamel is
     a 30 µm film on the strand, and a polyimide enamel inside an alumina liner
     is still a ceramic-insulated slot as far as the current density goes.  A
@@ -5080,7 +5080,7 @@ OPEN_FRACTION_LIMIT_PCT = 50.0
 #: the band, so it leaves the rotor iron under it, and the band bridges the
 #: inter-pole gaps rather than lying on the iron there.  Neither is a load path,
 #: and neither has anything to let go of.  The user, who built these rotors:
-#: *"нет никакого отслоения бандажа"*.
+#: *"there's no such thing as the band delaminating"*.
 #:
 #: So retention is judged on ONE pair: the band against the magnets when there
 #: is a band, the magnets against the rotor when there is not (then the glue or
@@ -5154,9 +5154,9 @@ def _warn(rule: str, duty: str, quantity: str, value: Optional[float],
     elif margin <= near:
         level = "amber"
     else:
-        # GREEN, and it is printed (user 2026-09-10: "помечай шрифты цветом
-        # красным превышения предела, зелёным норма; на зелёные не надо писать
-        # советов").  A check that passes used to return nothing at all, so the
+        # GREEN, and it is printed (user 2026-09-10: "mark the text in red for
+        # exceeded limits, green for normal; don't write advice for the green
+        # ones").  A check that passes used to return nothing at all, so the
         # table listed only trouble and the reader could not tell a quantity
         # that was measured and passed from one nobody looked at.  Green rows
         # carry no remedy: there is nothing to do about them.
@@ -6082,8 +6082,8 @@ def _duty_magnet_temp(em: Dict[str, Any]) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # ONE COLUMN PER DUTY
 # ---------------------------------------------------------------------------
-# User, 2026-09-09: *"если в конфигурации несколько режимов, их нужно сравнивать
-# в таблицах по всем моделированиям"*.
+# User, 2026-09-09: *"if a configuration has several duties, they need to be
+# compared in tables across every simulation"*.
 #
 # The electromagnetic side has always been per duty — the Simulation tab saves a
 # summary into the configuration's yaml.  Everything else was stored ONCE PER
@@ -6131,7 +6131,7 @@ def _rated_duty(duties: List[Dict[str, Any]], die: str, cfg: str,
                 active: Optional[str]) -> Optional[str]:
     """WHICH duty the pictures are of.
 
-    User 2026-09-10: *"картинки моделирования должны быть из rated"*.  A report
+    User 2026-09-10: *"the simulation pictures should be from rated"*.  A report
     that took its maps from whatever the editor last had open showed the peak
     duty's fields under a document about the rated one, and the two look
     different for a reason.  So: the duty whose name says rated, when it has
@@ -6652,7 +6652,7 @@ def _match_duty_by_point(duties: List[Dict[str, Any]],
                          last: Dict[str, Any]) -> Dict[str, str]:
     """Which duty each machine-level LAST answer was solved at, PER KIND.
 
-    2026-09-09.  User: *"почему написано not solved везде?"* — the catalog
+    2026-09-09.  User: *"why does it say not solved everywhere?"* — the catalog
     context names the duty the EDITOR has open, so a report of any machine the
     user is not editing at that minute attributed nothing: every comparison cell
     said "not solved" and every map was captioned "no duty identified", while
@@ -7796,7 +7796,7 @@ def _col_vals(cols, fn) -> List[Any]:
 def _drop_empty(rows: List[List[Any]]) -> List[List[Any]]:
     """Comparison rows with nothing in them at all, taken out.
 
-    User 2026-09-11: *"убери это Warning, они пустые"* — the coupled table's
+    User 2026-09-11: *"remove that Warning, they're empty"* — the coupled table's
     "Warning" row printed an em-dash under every duty, which is what a healthy
     run looks like, so the row was a line of nothing on every report of a
     machine that converged.  A row goes only when EVERY cell is the "no value"
@@ -8401,8 +8401,8 @@ def duty_setting(cfg_doc: Dict[str, Any], duty: Optional[str], key: str) -> Any:
 def duty_carrier_hz(cfg_doc: Optional[Dict[str, Any]],
                     duty: Optional[str]) -> Optional[float]:
     """The PWM carrier the report judges a duty's resonances against — the
-    configuration's CONTROLLER carrier (2026-09-24, owner: «Это значение нужно
-    задавать в контроллере; PWM нужно выкинуть из Electromagnetic»), else the
+    configuration's CONTROLLER carrier (2026-09-24, owner: "This value needs
+    to be set in the controller; PWM needs to be dropped from Electromagnetic"), else the
     retired Simulation-tab ``sim.fSwitch`` the duty was saved with (the
     migration tier), else ``None`` (no carrier line — never a made-up one).
     ``inverter.drive_source`` is the one resolution every consumer uses."""
@@ -8420,7 +8420,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     """Everything the report is ABOUT, with no renderer anywhere near it.
 
     Split out of :func:`build_motor_report` on 2026-09-09, when the user asked
-    for the document in Word as well: *"репорт лучше выдавать в формате doc"* —
+    for the document in Word as well: *"better to output the report in doc format"* —
     he edits it and forwards it to clients, and Word makes its own PDF.  Two
     renderers reading two different gathering passes is how a .docx and a .pdf
     of the same machine end up quoting two different torques, so there is one
@@ -8557,8 +8557,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
 
     # ── ANOTHER MACHINE'S ANSWER IS NOT IN THIS REPORT ──────────────────────
     #
-    # User 2026-09-10, reading the first docx: *"машина должна быть одна и та
-    # же; если нет для неё решения, вообще этот раздел не вносится в отчёт"*.
+    # User 2026-09-10, reading the first docx: *"it must be the same machine
+    # throughout; if there's no solution for it, this section shouldn't go into the report at all"*.
     # Until now a stale answer was printed with a red flag beside it, and the
     # numbers were read anyway — the rotordynamics section quoted a critical
     # speed of 15,534 rpm belonging to a different motor.  A flag is not a
@@ -8724,12 +8724,12 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # ── THE PICTURES ARE ONE DUTY'S, and that duty is the rated one ─────────
     # Read from the per-duty FIELD store, so a map is the map that duty was
     # solved with rather than whatever the last press of a Solve button left in
-    # the machine's store (user 2026-09-10: "картинки моделирования должны быть
-    # из rated").  Empty when nothing is stored, and then every page falls back
+    # the machine's store (user 2026-09-10: "the simulation pictures should be
+    # from rated").  Empty when nothing is stored, and then every page falls back
     # to the machine's last solve exactly as it did before.
     _duties_l = [d for d in (cfg_doc.get("duties") or []) if isinstance(d, dict)]
-    # THE USER'S CHOICE first (2026-09-11: "нужно ещё сделать выбор, из какого
-    # режима мы публикуем картинки в отчёте"): `pictures` names a duty of this
+    # THE USER'S CHOICE first (2026-09-11: "we also need to make a choice of
+    # which duty we publish pictures from in the report"): `pictures` names a duty of this
     # configuration, and its stored fields are the maps.  A duty with nothing
     # stored cannot be drawn from, so the rule below takes over and the log
     # says so — the document never comes out with blank map pages because of a
@@ -8869,8 +8869,8 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     me_map_cur = _pic_cur if me_from_duty else None
 
     # ── AND THE SAME PICTURE FOR THE OTHER DUTY, BESIDE IT (2026-09-14) ─────
-    # User: *"добавим ещё картинки из peak — слева картинка из rated, справа из
-    # peak"*.  Both sides are gathered here, once, exactly like everything else
+    # User: *"let's also add pictures from peak — the left picture from
+    # rated, the right one from peak"*.  Both sides are gathered here, once, exactly like everything else
     # this function reads: the stored fields, the waveforms, and the thermal and
     # mechanical records each side's charts are drawn from.  The renderers only
     # place them.
@@ -9123,7 +9123,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # From here on a section opens a NEW page only when less than half of the
     # current one is left: with full-width field maps a hard break after each
     # section left a map alone on a page with three quarters of white under it
-    # (user 2026-09-08: "убери эти здоровенные пропуски").
+    # (user 2026-09-08: "remove these huge gaps").
     story.append(CondPageBreak(PAGE_H * 0.5))
     # 5 · PWM influence — the one section that is not the sinusoidal supply
     # (user decision 2026-09-14).  It sits between the electromagnetics it
@@ -9172,7 +9172,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
     story.append(CondPageBreak(PAGE_H * 0.45))
     story += _notes_page(st, sources, brg, em, th, me, cp, sec)
     story.append(CondPageBreak(PAGE_H * 0.35))
-    # No per-duty source table (user 2026-09-10: "это тоже выкинь") — it listed
+    # No per-duty source table (user 2026-09-10: "throw that one out too") — it listed
     # which store each column was read from and when, and since a foreign answer
     # is dropped from this report rather than flagged in it, the Machine column
     # said "this machine" on every row.
@@ -9190,7 +9190,7 @@ def build_motor_report(*, die: str, cfg: str, die_doc: Dict[str, Any],
         subject="Full report of every solver's last result for this configuration",
         pageCompression=1 if compress else 0)
 
-    # NO TIMESTAMP (user 2026-09-10: "метки времени можно вообще убрать"; the
+    # NO TIMESTAMP (user 2026-09-10: "the timestamps can just be removed entirely"; the
     # cover and the footer carried two of them a minute apart — reviewer
     # 2026-09-14, D4).  The footer says which machine the sheet belongs to and
     # nothing else.
@@ -9376,7 +9376,7 @@ def cover_source_note(used_live: bool = False) -> str:
 def shaft_view(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
                mode: Optional[str] = None) -> Dict[str, Optional[float]]:
     """The power balance exactly as the Simulation card and the catalog row
-    state it (SummaryTable, 2026-09-13: "почему цифры не бьют") — ONE set of
+    state it (SummaryTable, 2026-09-13: "why don't the numbers match up") — ONE set of
     formulas for every table of this document:
 
       P_rotor  = |P_mech| × k_3d           (the 3-D end-effect factor, if any)
@@ -9483,7 +9483,7 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
                    "bearing and windage losses are NOT included — this "
                    "configuration names no bearings")
 
-    # ONE MASS (user 2026-09-10: "масса у нас только одна").
+    # ONE MASS (user 2026-09-10: "we only have one mass").
     #
     # It is the TOTAL, and not by preference: `mass_total_kg` is already the
     # divisor of every N·m/kg and kW/kg in this project (Compare's TD tile, the
@@ -9798,7 +9798,7 @@ def _layers_words(wind: Dict[str, Any]) -> str:
     # The number and the word only.  The old gloss ("coils on alternate
     # teeth" / "every tooth wound") described a topology this field does not
     # select — the Ø200 winds every one of its 12 teeth and printed
-    # "alternate teeth" (user 2026-09-13: "выкинь это из отчёта").
+    # "alternate teeth" (user 2026-09-13: "throw that out of the report").
     if int(n) <= 1:
         return "1 — single-layer"
     return "%s — double-layer" % _fmt(n, 0)
@@ -9818,8 +9818,8 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
     return [
         ["Stator outer diameter", _f("stator_diameter"), "mm",
          "Slots / poles", "%d / %d" % _slots_poles(geo), ""],
-        # HOW THE SLOT IS ACTUALLY WOUND (user 2026-09-10: "не нашёл нигде, что
-        # витков 6 по 4 параллельных провода в каждом").  The turn count alone
+        # HOW THE SLOT IS ACTUALLY WOUND (user 2026-09-10: "couldn't find
+        # anywhere that it's 6 turns of 4 parallel wires each").  The turn count alone
         # does not describe the winding: each turn is `wire_parallel` strands in
         # hand, and `wire_split` cuts each strand into that many narrower strips
         # in SERIES.  All three are drawn and meshed, so they belong on the
@@ -9841,8 +9841,8 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
          else "none", "mm" if geo.get("sleeve_thickness") else "",
          "Series coils", _fmt(wind.get("n_series"), 0), ""],
         ["Rotor outer radius", _f("rotor_outer_radius", 2), "mm",
-         # coil grouping AND the terminal connection (user 2026-09-13: "нужно
-         # добавить соединение в отчёт") — "2P · Δ delta"
+         # coil grouping AND the terminal connection (user 2026-09-13: "need
+         # to add the connection to the report") — "2P · Δ delta"
          "Connection", "%s · %s" % (str(wind.get("connection") or "—"),
                                     _sd_words(wind, em)), ""],
         # THE SHAFT, from the keys this geometry actually has (2026-09-11).
@@ -9942,9 +9942,9 @@ def material_rows(mats: Dict[str, Any],
               else "hoop-wound carbon fibre" if mats.get("sleeve") else "")),
             ("Shaft", "shaft", ""),
     ):
-        # THE INSULATION IS ALWAYS ON THE PAGE (user 2026-09-11: "не нашёл ни
-        # одного слова по поводу изоляции — нужно это обязательно написать и в
-        # материалах отметить").  It used to be dropped whenever it was not
+        # THE INSULATION IS ALWAYS ON THE PAGE (user 2026-09-11: "couldn't
+        # find a single word about insulation — this absolutely needs to be
+        # written and noted in the materials").  It used to be dropped whenever it was not
         # assigned, which is every machine: the library's enamel and liner
         # entries are thermal-property cards and nobody picks one, so the two
         # rows never appeared — while the winding's whole temperature limit
@@ -9994,8 +9994,8 @@ def magnet_text(mats: Dict[str, Any], em: Dict[str, Any],
                 ctxs: Dict[str, Any]) -> str:
     """At what temperature the magnets were taken, and where that came from.
 
-    User 2026-09-11: *"надо также упомянуть, что для расчётов использовались
-    магниты при температуре 150 °C, если этого ещё нет"*.  The operating-point
+    User 2026-09-11: *"also need to mention that the magnets used for the
+    calculations were at a temperature of 150 °C, if that isn't there yet"*.  The operating-point
     table carries the number, but nothing said that the CARD is a 150 °C card
     and that the solve walks it to the run's own magnet temperature — two
     different temperatures, and the difference is a real Br.
@@ -10336,9 +10336,9 @@ MASS_TABLE_NOTE = (
 def lamination_rows(mats: Dict[str, Any], em: Dict[str, Any]) -> List[List[str]]:
     """How the iron is laminated and how the magnets are cut.  Header included.
 
-    User 2026-09-11: *"не нашёл в отчёте про ламинацию магнитов и её величину;
-    проверь ещё про ламинацию статора и ротора и что они сделаны из одного и
-    того же материала"*.  All three facts were in the solve and in none of the
+    User 2026-09-11: *"couldn't find the magnet lamination and its value in
+    the report; also check the stator and rotor lamination and that they're
+    made of the same material"*.  All three facts were in the solve and in none of the
     pages: the stacking factor scales the iron a flux path actually has, the
     sheet thickness is what sets the eddy term of the loss model, and the
     magnet slicing is a factor of ~50 on the magnet loss.
@@ -10994,9 +10994,9 @@ SINE_CONSTANT_TAIL = " (sinusoidal run)"
 
 
 # ── THE CATALOGUE CONSTANTS, AT 20 °C (owner 2026-09-18) ────────────────────
-# *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить все
-# коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех каталогах
-# моторов и нужны для сравнения; это нужно отдельно упомянуть в отчёте»*.
+# *"do a cold 20 °C pass for every report, to find all the coefficients KV,
+# Kt, Km, Km/mass that appear in every motor catalogue and are needed for
+# comparison; this needs to be mentioned separately in the report"*.
 #
 # Every constant elsewhere in this document is at the duty's OWN temperatures,
 # which is right and is not comparable: a catalogue quotes room-temperature
@@ -11081,8 +11081,8 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
       "above are consistent with")
     R("Magnet flux linkage Ψ_PM [Wb]", _v("psi_pm_Wb"), 4, "",
       "the back-EMF per rad/s at 20 °C" + _tail)
-    # Ld / Lq ON THE CATALOGUE'S OWN BASIS (owner 2026-09-20: *«Ld/Lq нужно
-    # указывать тоже для 20 градусов и без тока, как для KV»*).  KV above is a
+    # Ld / Lq ON THE CATALOGUE'S OWN BASIS (owner 2026-09-20: *"Ld/Lq also
+    # need to be given at 20 degrees and at zero current, like KV"*).  KV above is a
     # no-load constant at 20 °C; quoting the inductances of a 600 A operating
     # point beside it compares two different machines.  These are the
     # incremental (frozen-permeability) values at i = 0 and 20 °C — the duty's
@@ -11112,8 +11112,8 @@ def em_constant_rows(em: Dict[str, Any],
                      drive: str = "sine") -> List[List[str]]:
     """The machine constants a control engineer asks for.  Header included.
 
-    User 2026-09-11: *"проверь все эти параметры, они обязательно должны быть
-    отображены, каждый в своём разделе"*.  Ld, Lq, the saliency, the magnet
+    User 2026-09-11: *"check all these parameters, they absolutely must be
+    shown, each in its own section"*.  Ld, Lq, the saliency, the magnet
     flux linkage, the winding resistances and the saturation droop were on the
     summary card and in no section of this document — and they are exactly what
     a drive is tuned from.
@@ -11351,9 +11351,9 @@ def em_loss_rows(em: Dict[str, Any],
     # WHETHER THE SOLID LOSS IS SPLIT decides how the sleeve is listed, and it
     # has to: on a run WITHOUT the split the combined row already contains the
     # sleeve, so printing a sleeve row beside it invites the reader to add the
-    # column up and land 20 W above the total — reported 2026-09-11 ("двойной
-    # учёт потерь в гильзе... прямое суммирование даёт 6,462.6 Вт, тогда как
-    # итоговая строка правильно указывает 6,442.9 Вт").  The total was right
+    # column up and land 20 W above the total — reported 2026-09-11 ("double
+    # counting of the sleeve losses... direct summation gives 6,462.6 W,
+    # while the total row correctly shows 6,442.9 W").  The total was right
     # both times; the table was ambiguous.  Split: three siblings that add up.
     # Not split: one row, and the sleeve indented under it as a part OF it.
     _split = (_g(em, "P_mag_W") is not None or _g(em, "P_shaft_W") is not None)
@@ -11821,8 +11821,8 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
         out.append(_para(dem_text, st["body"]))
 
     # ── the pictures ────────────────────────────────────────────────────────
-    # User 2026-09-08: "рисунки надо делать на всю ширину страницы, а то ничего
-    # не видно, и подписи под ними и демагнитизации обязательно рисовать" —
+    # User 2026-09-08: "the pictures need to be full page width, otherwise
+    # nothing is visible, and the captions under them and demagnetization must always be drawn" —
     # every map takes the full content width on a row of its own, its caption
     # travels with it (image + caption in one KeepTogether, nothing more: the
     # earlier whole-block grouping is what left a half-empty page behind).
@@ -12085,7 +12085,7 @@ def _cooling_words(cooling: Dict[str, Any]) -> List[str]:
                         _fmt(rep.get("h_conv"), 1), _fmt(rep.get("h_rad"), 1),
                         eps, _fmt(rep.get("h_total"), 1, "W/m²K")))
         if mode.startswith("liq"):
-            # No h on a jacket line (user 2026-09-11: "а зачем он нужен?"):
+            # No h on a jacket line (user 2026-09-11: "why is it even needed?"):
             # the wall is PINNED at the outlet temperature, and the 1e5 that
             # imposes that is a device, not a property of the cooling.
             return ("%s: %s jacket, in %s -> out %s at %s; wall held at the "
@@ -12625,7 +12625,7 @@ def thermal_budget_rows(res: Dict[str, Any],
         if budget.get(k) is not None:
             brows.append([label, _fmt(budget.get(k), 2)])
     # THE ROTOR's own balance: the two ways its heat leaves this cross-section
-    # (user 2026-09-10 — "через зазор и через вал").  Every watt made inside the
+    # (user 2026-09-10 — "through the gap and through the shaft").  Every watt made inside the
     # slip radius goes one way or the other, so the shares are the cooling
     # design: a rotor that has to be cooled through the shaft wants the second
     # number to be the big one.
@@ -12654,7 +12654,7 @@ def thermal_budget_rows(res: Dict[str, Any],
                               sp.get("axial_end_faces_pct"))])
         # No "rotor balance closes to" row: it is the residual of the three
         # rows above (a fraction of a watt when the split is sound) and the
-        # reader does not audit it — user 2026-09-11, "выкинь".
+        # reader does not audit it — user 2026-09-11, "throw it out".
     # ── …AND THE STATOR's (2026-09-14) ──────────────────────────────────────
     # The mirror of the block above, and on a joint in still air it is THE
     # question: the housing hands the room ~3 W of 64 and the BOLTS take the
@@ -14317,8 +14317,8 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
         out.append(Spacer(1, 4))
         out.append(_pair_blk)
     elif img is not None:
-        # Full width, caption under it (user 2026-09-08: "рисунки на всю
-        # ширину страницы, а то ничего не видно").
+        # Full width, caption under it (user 2026-09-08: "pictures at full
+        # page width, otherwise nothing is visible").
         from reportlab.platypus import KeepTogether
         out.append(Spacer(1, 4))
         out.append(budget_t)
@@ -15605,9 +15605,9 @@ MECH_MAP_MISSING = (
 CRIT_PAGE_UNSOLVED = (
     "Not solved — no rotordynamics answer is stored for this machine.")
 
-#: The notice on the cover (user 2026-09-10: "надо как бы написать, что это всё
-#: конфиденциально и принадлежит Motres d.o.o., распространять только с
-#: разрешения — кратко и понятно").  Short on purpose: a paragraph of legal
+#: The notice on the cover (user 2026-09-10: "we should kind of write that
+#: this is all confidential and belongs to Motres d.o.o., only to be
+#: distributed with permission — short and clear").  Short on purpose: a paragraph of legal
 #: boilerplate on an engineering report is read by nobody.
 CONFIDENTIAL_NOTICE = (
     "CONFIDENTIAL — property of Motres d.o.o. This document and the design it "
@@ -15882,8 +15882,8 @@ def mode_rows(res: Optional[Dict[str, Any]], *, rpm: Any = None,
 #: How wide the gallery is DRAWN, in centimetres, and how many pixels that is.
 #:
 #: The figure is built at the size it will be printed at (2026-09-11, user:
-#: "увеличь разрешение во всю ширину страницы пропорционально, и шрифты внутри
-#: тоже увеличь").  That is the whole trick: matplotlib sizes text in POINTS of
+#: "increase the resolution to full page width proportionally, and enlarge
+#: the fonts inside too").  That is the whole trick: matplotlib sizes text in POINTS of
 #: the figure, so a 28 cm figure shrunk into a 16.5 cm frame took its 8.5 pt
 #: titles down to 5 pt on paper.  Draw it at the frame's own width and a point
 #: in the figure is a point on the page — the titles below are then the same
@@ -16106,7 +16106,7 @@ def mech_part_rows(case: Dict[str, Any]) -> List[List[str]]:
     """Per-part stress and safety factor.  Header row included.
 
     AVERAGED since 2026-09-10 — element values area-averaged onto the nodes of
-    their own part, which is what ANSYS and Fusion plot and report, so the
+    their own part, which is what commercial FEM and Fusion plot and report, so the
     number here is the number on the map beside it.  The unaveraged element
     peak is carried in its own column: it is the other half of the same toggle
     those tools offer, and the gap between the two is the corner singularity.
@@ -16184,8 +16184,8 @@ def mech_percentile_text(case: Dict[str, Any]) -> str:
 def rotor_inertia_rows(em: Dict[str, Any]) -> List[List[str]]:
     """The rotor's moment of inertia about the shaft, and what makes it up.
 
-    User 2026-09-11: *"нигде не нашёл величины инерции ротора — её нужно
-    обязательно добавить в механику"*.  It is computed on every run (from the
+    User 2026-09-11: *"couldn't find the rotor inertia value anywhere — it
+    absolutely needs to be added to the mechanics"*.  It is computed on every run (from the
     CAD polygons, not a cylinder approximation) and lives in the summary; no
     section of this document carried it.  It belongs to MECHANICS: it is what
     sets the acceleration a drive can ask for and the energy stored in the
@@ -16247,8 +16247,8 @@ def mech_fit_rows(case: Dict[str, Any], res: Dict[str, Any]) -> List[List[str]]:
             [f"{what} OD radial travel, mean", _fmt(od.get("mean_um"), 1, "µm")],
             [f"{what} OD radial travel, least", _fmt(od.get("min_um"), 1, "µm")],
         ]
-    # THE AIR GAP, as a budget (user 2026-09-10: "не забудь добавить в отчёт,
-    # как меняется зазор").  The clearance is measured off the drawn section —
+    # THE AIR GAP, as a budget (user 2026-09-10: "don't forget to add to the
+    # report how the gap changes").  The clearance is measured off the drawn section —
     # the smallest radius anywhere on the stator against the rotor's largest —
     # so a chamfer or a stepped pole counts and no geometry field has to be
     # kept in step with it.  What is NOT in it: manufacturing tolerance,
@@ -16277,7 +16277,7 @@ def mech_fit_rows(case: Dict[str, Any], res: Dict[str, Any]) -> List[List[str]]:
 def _interface_words(label: Any) -> str:
     """``magnet_rotor`` -> ``magnet/rotor``.
 
-    User 2026-09-11: *"интерфейсы лучше писать так: magnet/rotor"* — a contact
+    User 2026-09-11: *"better to write interfaces like this: magnet/rotor"* — a contact
     pair is two parts touching, and a slash says that where an underscore reads
     like one identifier.  The stored key is untouched: this is spelling for the
     page only.
@@ -16748,8 +16748,8 @@ def not_included_bullets(brg: Optional[Dict[str, Any]],
 def solved_at_rows(sources: List[Any]) -> List[List[str]]:
     """Every solver answer this report leans on, and whether it is this machine.
 
-    No "computed at" column since 2026-09-10 (user: "метки времени можно вообще
-    убрать").  Two stamps a few minutes apart were read as two sections
+    No "computed at" column since 2026-09-10 (user: "the timestamps can just
+    be removed entirely").  Two stamps a few minutes apart were read as two sections
     disagreeing about the machine, when what they recorded was which store
     answered first; a result is identified by its machine and its operating
     point, and this report states both.  Header row included.
@@ -16770,7 +16770,7 @@ def _notes_page(st, sources, brg, em, th, me, cp,
     for b in assumption_bullets(sec):
         out.append(_para("• " + b, st["body"]))
         out.append(Spacer(1, 2))
-    # NOTHING AFTER THE ASSUMPTIONS (user 2026-09-11: "я думаю это не надо").
+    # NOTHING AFTER THE ASSUMPTIONS (user 2026-09-11: "I don't think we need this").
     # Three blocks went together, and they had one thing in common — they were
     # about the REPORT rather than about the machine:
     #   • "Not included", a list of what the models leave out.  The caveats that
@@ -16788,9 +16788,9 @@ def _notes_page(st, sources, brg, em, th, me, cp,
 # ---------------------------------------------------------------------------
 # The comparison pages — one column per duty, one table per simulation
 # ---------------------------------------------------------------------------
-# User, 2026-09-09: *"а report всё нужно делать с картинками и гораздо подробнее
-# всё расписывать ... если в конфигурации несколько режимов, их нужно сравнивать
-# в таблицах по всем моделированиям"*.
+# User, 2026-09-09: *"the report needs to have pictures and everything spelled
+# out in much more detail ... if a configuration has several duties, they
+# need to be compared in tables across every simulation"*.
 #
 # The UI's one-line rule (memory: "no text walls") is a rule about a PANEL, where
 # the reader is mid-task and wants the number.  A report is read once, by someone
@@ -17005,7 +17005,7 @@ def _duty_overview(st, cols: List[Dict[str, Any]],
     if _pe:
         out.append(_para(_pe, st["note"]))
     # The "when computed" table and the two paragraphs under it are gone
-    # (user 2026-09-11: "выкинь это"; the timestamps themselves were already
+    # (user 2026-09-11: "throw that out"; the timestamps themselves were already
     # ruled out on 2026-09-10).  `duty_overview_rows` still returns the stamps
     # for anyone who wants them; the document does not print them.
     return out
@@ -17015,8 +17015,8 @@ def battery_rows(batt: Dict[str, Any]) -> List[List[str]]:
     """The PACK the voltage limit comes from.  Header row included; empty when
     the configuration names no battery.
 
-    User 2026-09-10: *"нигде не нашёл информацию про батарейку и лимиты
-    напряжения"*.  The report warned against a 749.5 V limit and never said
+    User 2026-09-10: *"couldn't find any information about the battery and
+    the voltage limits anywhere"*.  The report warned against a 749.5 V limit and never said
     where that number came from — it is this pack at its minimum cell voltage,
     which is the worst case for a machine that has to keep making torque.
     """
@@ -17145,9 +17145,9 @@ def glossary_rows(em: Dict[str, Any],
                   cols: Optional[List[Dict[str, Any]]] = None) -> List[List[str]]:
     """The symbols this report uses that are not self-explaining.
 
-    User 2026-09-10: *"нигде не нашёл, что такое k_3d — тоже нужно, пользователь,
-    который будет читать отчёт, объяснить, что это, так же как и gamma. Может,
-    что ещё нужно объяснить, сам реши"*.  So: every symbol a reader meets in a
+    User 2026-09-10: *"couldn't find anywhere what k_3d is — that also needs
+    explaining for the user reading the report, same as gamma. Maybe decide
+    for yourself what else needs explaining"*.  So: every symbol a reader meets in a
     headline number or a table header and cannot look up in the document.
     Header row included.
     """
@@ -17426,7 +17426,7 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
             cols, lambda c: EM_SOURCE_SHORT.get(
                 str(c.get("em_source") or ""), "")))
     # Per duty, because two duties of one configuration may be solved in Y
-    # and in Δ (user 2026-09-13: "нужно добавить соединение в отчёт").
+    # and in Δ (user 2026-09-13: "need to add the connection to the report").
     rows.append(["Terminal connection"] + _col_vals(
         cols, lambda c: _sd_words(None, c["em"] or {}, c["d"])))
     R("Torque, 2-D [N·m]",
@@ -17735,8 +17735,8 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
         if not any(isinstance(((_t(c) or {}).get("components") or {}).get(key), dict)
                    for c in cols):
             continue
-        # ONE ROW PER PART (user 2026-09-11: "пиши эти все через чёрточку —
-        # меньше будет строк").  Two rows per part filled a page with the same
+        # ONE ROW PER PART (user 2026-09-11: "write these all separated by a
+        # slash — that'll mean fewer rows").  Two rows per part filled a page with the same
         # nine labels written twice; "143 / 139" says the same in one line, and
         # the header says which is which.
         S(f"{label}, max / avg [°C]",
@@ -18162,8 +18162,8 @@ def mech_compare_rows(cols: List[Dict[str, Any]]
       lambda c: ", ".join(f"{k} {float(v):g}" for k, v in
                           sorted(((_m(c) or {}).get("part_temps_c") or {}).items())
                           if v is not None) or None)
-    # SPEED AT SF = 1 — MANDATORY (owner 2026-09-21: "нужно эту максимальную
-    # скорость обязательно добавлять в отчёт" — every report, not only when
+    # SPEED AT SF = 1 — MANDATORY (owner 2026-09-21: "this maximum speed
+    # absolutely needs to be added to the report" — every report, not only when
     # the button was pressed).  Same loads, contacts, interference and
     # temperatures as the case above; the block itself comes from the
     # coupled loop's automatic search (`run_rotor_stress_at`) or a manual
@@ -18548,8 +18548,8 @@ def limited_temperature_clause(rec: Optional[Dict[str, Any]], part: str) -> str:
     prints beside its number — ``""`` everywhere else.
 
     ``solved at the limit; node mean 183.5 °C``: the record's ``coil_temp_c``
-    of a limited duty IS the class temperature (owner 2026-09-18: *«расчёт
-    должен быть при катушках в 200 градусов, а не 184»* — the final
+    of a limited duty IS the class temperature (owner 2026-09-18: *"the
+    calculation should be with the coils at 200 degrees, not 184"* — the final
     electromagnetic pass is made with the limiting part exactly at its limit,
     ``routes.coupled._limited_block`` states the rule), and the row says so in
     one clause, with the node mean the map is translated onto beside it, so a
@@ -18743,7 +18743,7 @@ def continuous_rating_words(rec: Optional[Dict[str, Any]]) -> str:
 def _continuous_rating_setpoint_words(blk: Mapping[str, Any]) -> str:
     """"setpoint 63.64 A rms, continuous 48.6 A rms" — ``""`` unless the
     record actually moved to the S1 machine (owner 2026-09-21, third round:
-    *«опять токи не совпадают»* — the setpoint's own current and the
+    *"the currents don't match again"* — the setpoint's own current and the
     rating's must never be silently conflated once a real S1 verification
     pass has made them two different machines on one record)."""
     if not blk.get("record_is_s1"):
@@ -18760,8 +18760,8 @@ def continuous_rating_clause(rec: Optional[Dict[str, Any]]) -> str:
     """ONE clause: which current is which (owner 2026-09-21, third round),
     then the verification status when the block has one — a REAL
     electromagnetic pass at this current (owner 2026-09-21, second round:
-    *«почему сразу не пересчитывается электромагнитное моделирование … токи
-    не совпадают»*) replaces the linear estimate's approximation with the
+    *"why doesn't the electromagnetic simulation recompute right away ...
+    the currents don't match"*) replaces the linear estimate's approximation with the
     honest fact that it either was, or was not, confirmed.  The house rule
     for these notes is a single "; …" and never a sentence of its own —
     several facts joined by "; " still read as one clause."""
@@ -19056,7 +19056,7 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     # number a reader should have to interpret.
     S("Time to the limit", lambda c: time_to_limit_words(_c(c)) or None)
     # ── CONTINUOUS RATING (S1) AT THE SAVED COOLING (owner 2026-09-21) ───────
-    # *«давай сделаем кнопку, или лучше добавим ещё один элемент в меню»* — a
+    # *"let's make a button, or better add one more menu item"* — a
     # third `solve_to` answer, beside the one above it: the largest current
     # this machine may hold FOR EVER at this duty's own saved cooling.  NEVER
     # COMPUTED HERE (`continuous_rating_of` only reads the stored block), so
@@ -19076,11 +19076,11 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
             return "—" if v is None else _fmt(v, d, unit)
         rows.append([label] + _col_vals(cols, _cell))
 
-    # Owner, 2026-09-21 first addendum: *«не пиши уже мощность и момент — его
-    # и так видно»* — torque and power dropped because the S1 numbers were a
+    # Owner, 2026-09-21 first addendum: *"don't write power and torque again
+    # — you can already see it"* — torque and power dropped because the S1 numbers were a
     # LINEAR ESTIMATE, and the tiles already carried the setpoint's real ones.
-    # Owner, same day, second addendum: *«почему сразу не пересчитывается
-    # электромагнитное моделирование … токи не совпадают»* — the loop now
+    # Owner, same day, second addendum: *"why doesn't the electromagnetic
+    # simulation recompute right away ... the currents don't match"* — the loop now
     # CONFIRMS the estimate with a real electromagnetic pass and the record's
     # own tiles become the S1 machine, so torque and power are real again and
     # print once more; `continuous_rating_clause` states whether they are
@@ -19452,8 +19452,8 @@ def _warnings_page(st, cols: List[Dict[str, Any]],
                    sec: Optional[Dict[str, int]] = None) -> List[Any]:
     """Every duty against every limit, with what to do about it.
 
-    User, 2026-09-09: *"нужно делать предупреждения, если что-то близко к
-    пределам, и предложения, как этого избежать"*.
+    User, 2026-09-09: *"we need to raise warnings when something is close to
+    the limits, and suggestions for how to avoid it"*.
     """
     from reportlab.platypus import KeepTogether, Spacer
 
@@ -19483,7 +19483,7 @@ def _warnings_page(st, cols: List[Dict[str, Any]],
         out.append(Spacer(1, 6))
         out.append(_para("What to do about each of them", st["h2"]))
         # …about each of the ones that are OVER a limit.  User 2026-09-10:
-        # "What to do about each of them — писать тоже только для красных".
+        # "What to do about each of them — only write it for the red ones too".
         # An amber row already says its own margin in the table; a paragraph of
         # advice for something that is still inside its limit buries the rows
         # that are not.

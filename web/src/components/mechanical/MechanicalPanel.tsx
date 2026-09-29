@@ -1,17 +1,17 @@
 /** Mechanical tab — rotor centrifugal stress and the retaining sleeve.
  *
- * Added 2026-09-05 for the user's request: "начнём с расчёта центробежных сил
- * ротора ... чтобы оценить какой бандаж нужен для удержания магнитов и ротора".
+ * Added 2026-09-05 for the user's request: "let's start with computing the
+ * rotor's centrifugal forces ... to assess what sleeve is needed to retain the magnets and rotor".
  *
  * Nothing solves on mount.  The operating point comes from the Electromagnetic tab
  * (standing project rule: every physics setting of a run is read from there,
  * never from a default in a panel), and Solve is a deliberate press.
  *
- * 2026-09-06 the panel stopped OWNING what it shows.  User: "когда я захожу и
- * выхожу в Mechanical, графики пропадают. Нужно, чтобы по умолчанию: если нет
- * расчётов — рисуется просто геометрия; если есть — подгружается последний
- * расчёт; если были изменения текущей геометрии — нужно подсвечивать
- * неактуальность текущего расчёта."  This tab is not `keepMounted` (it draws
+ * 2026-09-06 the panel stopped OWNING what it shows.  User: "when I enter and
+ * leave Mechanical, the plots disappear. By default it should be: if there are
+ * no results — just draw the geometry; if there are — load the last
+ * result; if the current geometry has changed — highlight that the current
+ * result is stale."  This tab is not `keepMounted` (it draws
  * its own picture, so it does not take the AppBar's viewer cluster), so leaving
  * it unmounted the component and every `useState` result went with it — a
  * 30-second contact solve thrown away by a click.  The results and the toolbar
@@ -50,8 +50,8 @@ import type { MechView } from './fieldAdapters';
 
 /** Tooltip on a Select: keep the hint UNDER the menu the Select opens (MUI
  *  draws tooltips at z 1500, menus at z 1300, so a hint wrapped round a Select
- *  used to cover its own options — 'падающее меню подсказки не даёт сменить
- *  воздух на жидкость', 2026-09-07). */
+ *  used to cover its own options — 'the dropdown tooltip doesn't let you
+ *  switch air to liquid', 2026-09-07). */
 const SELECT_TIP = { popper: { sx: { zIndex: 1250 } } } as const;
 
 const lbl = { fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap' } as const;
@@ -88,8 +88,8 @@ const tempBadge = (t: RotorStress['thermal']): string => {
 };
 
 /** The same thing spelled out, for the tooltip — and what it DID.  User
- *  2026-09-09: "нам нужно учитывать температуру только как изменение давления
- *  на бандаж, если он есть": a temperature is a load on the band's fit and
+ *  2026-09-09: "we only need to account for temperature as a change of
+ *  pressure on the sleeve, if there is one": a temperature is a load on the band's fit and
  *  nowhere else, so the sentence says either how the fit moved or that nothing
  *  was loaded. */
 const tempSentence = (t: RotorStress['thermal']): string => {
@@ -125,8 +125,8 @@ const Cell: React.FC<{
       </Typography>
       {sub && (
         // 11, not the 9 every other small print uses: this line carries the
-        // safety factor now (user 2026-09-10, "SF 1.66 · 2500 MPa побольше
-        // шрифт сделай"), and a margin is not a footnote.
+        // safety factor now (user 2026-09-10, "SF 1.66 · 2500 MPa make the
+        // font bigger"), and a margin is not a footnote.
         <Typography sx={{ fontSize: 11, color: 'var(--text-3)',
                           fontFamily: 'monospace', lineHeight: 1.25 }}>
           {sub}
@@ -157,8 +157,8 @@ function sfOf(c: CaseResult, part: string, p: PartResult): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
-/** The tile's second line.  User 2026-09-10: "добавь ещё SF для каждого
- *  материала вместо процентов 69 % of 2500" — a per cent of a strength is one
+/** The tile's second line.  User 2026-09-10: "add SF for each material too
+ *  instead of percentages, 69 % of 2500" — a per cent of a strength is one
  *  division away from the safety factor everything else on the page is judged
  *  by, and two ways of saying the same margin is one way too many.  The
  *  strength stays: it is what the SF was divided by. */
@@ -167,7 +167,7 @@ function sfOf(c: CaseResult, part: string, p: PartResult): number | null {
  *  them is what makes our number reproducible in theirs. */
 function unavgTip(p: PartResult, unavg?: number | null): string {
   const g = p.governing_stress_mpa;
-  const base = 'Averaged: each element value area-averaged onto the nodes of its own part — the ANSYS and Fusion default, and the field the map draws, so this number is the map\'s maximum.';
+  const base = 'Averaged: each element value area-averaged onto the nodes of its own part — the commercial FEM and Fusion default, and the field the map draws, so this number is the map\'s maximum.';
   const un = (typeof unavg === 'number' && Number.isFinite(unavg))
     ? ` Unaveraged (the raw element peak, what those tools show with averaging off): ${fmt(unavg)} MPa.`
     : '';
@@ -187,7 +187,7 @@ function sfSub(c: CaseResult, part: string, p: PartResult): string {
 /* ═══════════════════════════════════════════════════════════════════════════
  * The tab's own comparison table
  *
- * User 2026-09-07: *"сделай локальное сравнение … так же сделай в механике"* —
+ * User 2026-09-07: *"make a local comparison … do the same in mechanics"* —
  * the Configure tab's stack, for rotor variants: press the blue button and this
  * answer becomes a row, so an interference fit or a sleeve temperature can be
  * traded off against the safety factors without leaving the tab.
@@ -311,8 +311,8 @@ const MechanicalPanel: React.FC = () => {
   /* The Electromagnetic tab's "Coupled thermal" switch.  With it ON the loop
      solves the rotor stress at the temperatures of ITS thermal map, bypassing
      these fields — so the fields must show those temperatures and not a
-     manual number typed hours ago (user 2026-09-08: "температуры должны быть
-     согласованы, а у тебя здесь стоят старые значения").  Read on mount and
+     manual number typed hours ago (user 2026-09-08: "the temperatures should
+     be consistent, and you have old values here").  Read on mount and
      on cross-tab storage changes, like the rpm above. */
   const [coupled, setCoupledView] = useState<boolean>(
     () => readSimSetting<unknown>('coupled', false) === true);
@@ -323,8 +323,8 @@ const MechanicalPanel: React.FC = () => {
     return () => { window.removeEventListener('storage', sync); window.removeEventListener('focus', sync); };
   }, []);
   /* With the switch ON the speed and the torque are the Electromagnetic run's
-     too (2026-09-09, user: "момент должен быть правильным, и электромагнитного,
-     и обороты, и температуры"): the two boxes show that point, locked, and a
+     too (2026-09-09, user: "the torque must be correct, both electromagnetic,
+     and the rpm, and the temperatures"): the two boxes show that point, locked, and a
      Solve here sends it — the loop's own mechanical step solves the same one.
      Re-read on every render: the run changes on the other tab, and this panel
      re-mounts on the way back to it. */
@@ -342,8 +342,8 @@ const MechanicalPanel: React.FC = () => {
   // so what the fields show is what the loop's last rotor-stress step used.
   const refreshThermalTemps = st.refreshThermalTemps;
   // The rotor temperature comes from the Thermal solve whenever there is one
-  // (user 2026-09-09: "температуру ротора ставить из Thermal, хотя ты её и не
-  // используешь — но будешь использовать вместе с бандажом"): band or no
+  // (user 2026-09-09: "set the rotor temperature from Thermal, even though
+  // you don't use it — but you will use it together with the sleeve"): band or no
   // band, the picker goes to Thermal when the loop is on or a fresh Thermal
   // result appears; a manual pick survives until the next Thermal solve.
   const thermalFresh = !!thermalTemps && !thermalTemps.stale;
@@ -372,8 +372,8 @@ const MechanicalPanel: React.FC = () => {
   }, []);
 
   /* ── is the shown result still this machine's? ──────────────────────────
-     2026-09-06: "если были изменения текущей геометрии — нужно подсвечивать
-     неактуальность текущего расчёта".  We do NOT re-solve: an expensive solve
+     2026-09-06: "if the current geometry has changed — highlight that the
+     current result is stale".  We do NOT re-solve: an expensive solve
      started by a geometry edit the user has not finished making is worse than a
      badge.  `liveGeometry` is in the dependency list so the badge appears the
      moment the machine changes. */
@@ -401,8 +401,8 @@ const MechanicalPanel: React.FC = () => {
   }, [solveStress, solveLimitSpeed, hasSleeveGeo, res?.limit_speed]);
 
   /* ── the mesh, as a thing you control ────────────────────────────────────
-     User 2026-09-06: "по поводу сетки — как я понял, она строится отдельно, и
-     ей тоже нужно как-то управлять".  It IS built separately (the mechanical
+     User 2026-09-06: "about the mesh — as I understand it, it's built
+     separately, and it also needs some control".  It IS built separately (the mechanical
      mesher, not the EM one), so it gets its own button and its own line, and
      changing the size does NOT rebuild on its own — each build is seconds of
      gmsh.  What is on screen is what was built; the notes below say when that
@@ -423,7 +423,7 @@ const MechanicalPanel: React.FC = () => {
     const part = (c: CaseResult, name: string) => c.parts[name];
 
     // The sleeve rows exist only on a machine that HAS a sleeve (user
-    // 2026-09-09: "выкинь всё про sleeve", when there is none).
+    // 2026-09-09: "drop everything about sleeve", when there is none).
     if (hasSleeveGeo) {
       out.push({
         key: 'sleeve_hoop', label: 'Sleeve hoop σθ',
@@ -518,7 +518,7 @@ const MechanicalPanel: React.FC = () => {
           .map(([k, v]) => `${k}: ${((v as number) * 100).toFixed(0)} %`)
           .join(' · ');
         // The tile names the surface; the sentence (travel, seating) is the
-        // tooltip's (user 2026-09-09: "не надо всё это расписывать").
+        // tooltip's (user 2026-09-09: "no need to spell all this out").
         const head = r.verdict.split(' — ')[0].trim();
         return <Cell value={head} colour={r.verdict.startsWith('nothing') ? '#f87171' : 'var(--text-0)'}
           sub={r.magnet_centrifugal_kn_per_m ? `${fmt(r.magnet_centrifugal_kn_per_m, 0)} kN/m` : ''}
@@ -558,8 +558,8 @@ const MechanicalPanel: React.FC = () => {
       tip: 'Radial growth of the rotor outer surface — this comes straight off the air gap. Check it against the mechanical clearance before anything else on this page.',
       // max on the line, mean under it: the maximum is the rub criterion, the
       // mean says how much of it is the whole ring growing (user 2026-09-10:
-      // "нужно ещё считать максимальное радиальное смещение верха бандажа как
-      // отдельное число в таблице").
+      // "we also need to compute the maximum radial displacement of the
+      // sleeve top as a separate number in the table").
       cell: (c) => {
         const g = c.od_growth;
         return <Cell value={fmt(g ? g.max_um : c.rotor_od_growth_um, 2)} unit="µm"
@@ -609,8 +609,8 @@ const MechanicalPanel: React.FC = () => {
 
   /* ── a part that came loose and was SEATED (2026-09-09) ───────────────────
      The pocket grows more than the magnet does at temperature, so the magnet
-     goes free by microns and then travels onto its lip — "магнит должен сесть
-     на язычок, как в Fusion". ONE line, the travel in it (that is the number
+     goes free by microns and then travels onto its lip — "the magnet must seat
+     on the tab, like in Fusion". ONE line, the travel in it (that is the number
      the user compares with Fusion's), the rest in the tooltip. Quoted from the
      case the other one-liners are quoted from, and worst-first so a rotor whose
      magnets moved by different amounts leads with the largest. */
@@ -705,8 +705,8 @@ const MechanicalPanel: React.FC = () => {
       {/* ── controls ──────────────────────────────────────────────────── */}
       <Paper sx={{ p: 1.25, mb: 1.5, bgcolor: 'var(--panel)' }}>
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* ONE speed, always (user 2026-09-07: "давай делать только одно
-              значение скорости для моделирования — выкинь это вообще"): the
+          {/* ONE speed, always (user 2026-09-07: "let's use only one speed
+              value for the simulation — drop this entirely"): the
               proof rpm on the right is the one case a Solve computes; anything
               slower is less loaded and covered by it. */}
           {single ? (
@@ -737,9 +737,9 @@ const MechanicalPanel: React.FC = () => {
             </>
           )}
           {/* ── which forces act ───────────────────────────────────────────
-              User 2026-09-07: "добавь ещё и момент на ротор, пусть действуют
-              все силы; сделай меню, чтобы можно было выбрать центробежную,
-              момент и обе."  One menu, one field, tooltips for the rest. */}
+              User 2026-09-07: "add torque on the rotor too, let all forces
+              act; make a menu so you can choose centrifugal, torque, or both."
+              One menu, one field, tooltips for the rest. */}
           <Tooltip title="Which forces act. Centrifugal: ρω²r only, the bore free — the model this tab started as. Torque: the electromagnetic torque alone, applied as a uniform tangential traction τ = T/(2πr²L) on the rotor iron and magnet tops facing the air gap (never on the sleeve — a carbon band carries no EM force), and reacted at the SHAFT BORE, which is held tangentially and left free radially. Both: the machine. The same T is applied at every speed, standstill included — the torque is the machine's, not the speed's, and a stalled motor is the worst case for the friction path because there is no centrifugal clamp yet." slotProps={SELECT_TIP}>
             <Select size="small" value={loads}
               onChange={(e) => setField('loads', e.target.value as LoadsMode)}
@@ -773,9 +773,9 @@ const MechanicalPanel: React.FC = () => {
             </span>
           </Tooltip>
           {/* ── the rotor temperature ─────────────────────────────────────
-              User 2026-09-07: "нужно универсально добавить температуру ротора,
-              чтобы можно было задавать; для моторов без бандажа этот эффект
-              вообще минимальный".  Two fields, one line, tooltips for the
+              User 2026-09-07: "we need to add rotor temperature universally,
+              so it can be set; for motors without a sleeve this effect is
+              minimal anyway".  Two fields, one line, tooltips for the
               rest — the project's no-walls-of-text rule. */}
           <Tooltip title={`Rotor core, magnet and shaft temperature, °C — one number for the three, which is what MANUAL means; switch the picker to "from Thermal" and each of them takes its own. ${REF_TEMP_C} °C = the reference the material library is quoted at, i.e. NO thermal load and the machine exactly as drawn. Heat it and the iron grows at 12 ppm/K under a band whose fibre-direction CTE is about zero, so the fit — and the sleeve hoop stress — get TIGHTER; the effective interference is reported below. Without a band a uniformly heated rotor only carries the small iron/magnet mismatch, which is why this hardly moves a sleeveless machine. Not seeded from the Electromagnetic tab: what that tab carries is the COIL temperature (the winding${simCoilTemp ? `, currently ${simCoilTemp} °C` : ''}), which is not the rotor's.`}>
             <TextField label={coupled && fromThermal ? 'rotor °C · coupled' : 'rotor °C'} size="small"
@@ -786,8 +786,8 @@ const MechanicalPanel: React.FC = () => {
               InputLabelProps={{ style: { fontSize: 12 } }} />
           </Tooltip>
           {/* Where the temperatures come from (user 2026-09-07), and since
-              2026-09-08 how many of them: "в механический расчёт тоже нужно
-              делать каплинг, чтобы температуры везде были одинаковы". */}
+              2026-09-08 how many of them: "the mechanical solve also needs
+              coupling, so the temperatures are the same everywhere". */}
           <Tooltip title={coupled
             ? `Coupled thermal is ON (Electromagnetic tab): the loop solves the rotor stress at the temperatures of its own Thermal map, so the source is locked to "from Thermal" and the fields show what the last coupled step used. ${thermalTip}`
             : thermalTemps
@@ -801,7 +801,7 @@ const MechanicalPanel: React.FC = () => {
             </Select>
           </Tooltip>
           {/* No band → nothing about a band on this tab (user 2026-09-09:
-              "если бандажа нет, не надо ничего писать про него"). */}
+              "if there's no sleeve, no need to write anything about it"). */}
           {hasSleeveGeo && (
             <Tooltip title={`Retaining-sleeve temperature, °C. Its own field because on a real machine it is not the rotor's number — the iron carries the loss, the band sits on the outside in the gap draught — and the DIFFERENCE between the two is what moves the fit. ${REF_TEMP_C} °C = no thermal load on the band.`}>
               <span>
@@ -817,9 +817,9 @@ const MechanicalPanel: React.FC = () => {
           {/* ── what a coupled Solve will actually send ────────────────────
               ONE short line, tooltip for everything else (the no-walls-of-text
               rule), placed after the two fields it replaces so the temperature
-              cluster reads as one thing.  User 2026-09-08: "в механический
-              расчёт тоже нужно делать каплинг, чтобы температуры везде были
-              одинаковы". */}
+              cluster reads as one thing.  User 2026-09-08: "the mechanical
+              solve also needs coupling, so the temperatures are the same
+              everywhere". */}
           {thermalLine && (
             <Tooltip title={thermalTip}>
               <Typography sx={{ ...lbl, cursor: 'help', borderBottom: '1px dotted var(--text-4)' }}>
@@ -850,8 +850,8 @@ const MechanicalPanel: React.FC = () => {
           <SolveTimer busy={busy} startedAt={st.stress.startedAt} est={st.est.stress}
             what="stress solve" />
           {/* ── Limit speed (SF = 1) ────────────────────────────────────────
-              Owner 2026-09-21: "нужно искать ещё максимальную скорость
-              вращения, на всякий случай — она будет, когда достигает SF = 1".
+              Owner 2026-09-21: "we also need to find the maximum rotation
+              speed, just in case — it happens when SF reaches 1".
               Same case as Solve — same torque, contacts, interference,
               temperatures, mesh — swept in rpm by the backend search; the
               answer lands in the SAME slice Solve fills (`res.limit_speed`),
@@ -878,8 +878,8 @@ const MechanicalPanel: React.FC = () => {
             </Tooltip>
           )}
           {/* ONE short line, tooltip for the rest — the project's no-walls-of-
-              text rule.  User 2026-09-06: "нужно подсвечивать неактуальность
-              текущего расчёта". */}
+              text rule.  User 2026-09-06: "need to highlight that the
+              current result is stale". */}
           {staleNote && (
             <Tooltip title={staleTip}>
               <Typography sx={{ ...lbl, color: '#fbbf24', fontWeight: 700,
@@ -905,7 +905,7 @@ const MechanicalPanel: React.FC = () => {
           )}
           {res && (
             /* The context line: what was solved, on what, and how long it took
-               (user 2026-09-06: "индикатор времени расчёта").  The seconds are
+               (user 2026-09-06: "computation-time indicator").  The seconds are
                the BACKEND's, measured around the solve — a client stopwatch
                would also be timing the network and this result's field payload. */
             <Tooltip title={`${solvedIn(res) || 'no timing in this result'}${
@@ -937,8 +937,8 @@ const MechanicalPanel: React.FC = () => {
         </Box>
 
         {/* ── the mesh block: ONE size for the whole tab, built on a press ──
-            2026-09-06, "по поводу сетки — как я понял, она строится отдельно, и
-            ей тоже нужно как-то управлять".  The stress solve, the modal solve
+            2026-09-06, "about the mesh — as I understand it, it's built
+            separately, and it also needs some control".  The stress solve, the modal solve
             and this button all use this one size; the backend memoises the
             built mesh on the geometry, so Build mesh → Solve meshes once. */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
@@ -954,7 +954,7 @@ const MechanicalPanel: React.FC = () => {
               InputLabelProps={{ style: { fontSize: 12 } }} />
           </Tooltip>
           {/* ONE pole sector with cyclic-symmetry ties, as the user solves it
-              in Fusion (2026-09-09: "используй периодичность, как я во
+              in Fusion (2026-09-09: "use periodicity, like I do in
               Fusion"): every pole identical by construction, ~40× faster on
               the G2, the field replicated for the map.  One menu, tooltip for
               the rest. */}
@@ -1016,8 +1016,8 @@ const MechanicalPanel: React.FC = () => {
           </Tooltip>
           {CONTACT_PAIRS.filter((pair) =>
             // A machine with no retaining band has no band joints to set
-            // (user 2026-09-09: "если не sleeve, надо убрать всё, что с ним
-            // связано").  The saved picks are kept, only not drawn — the two
+            // (user 2026-09-09: "if not sleeve, need to remove everything
+            // related to it").  The saved picks are kept, only not drawn — the two
             // rows come back with the band.
             hasSleeveGeo || (pair !== 'sleeve_rotor' && pair !== 'sleeve_magnet'),
           ).map((pair) => {
@@ -1105,7 +1105,7 @@ const MechanicalPanel: React.FC = () => {
         )}
         {/* A part that came loose at temperature was TRAVELLED onto the surface
             that retains it, instead of being pinned where it floated
-            (2026-09-09, "магнит должен сесть на язычок, как в Fusion"). The
+            (2026-09-09, "the magnet must seat on the tab, like in Fusion"). The
             travel is the number to compare with Fusion's. */}
         {seatedNote && (
           <Tooltip title={seatedNote.detail}>
@@ -1139,7 +1139,7 @@ const MechanicalPanel: React.FC = () => {
       </Paper>
 
       {/* ── the machine's bearings — right under the mesh / contacts block
-          (user 2026-09-08: "подними её наверх, после этой секции"); it used to
+          (user 2026-09-08: "move it up, after this section"); it used to
           sit at the bottom of the Modal card where nobody found it. */}
       <Paper sx={{ p: 1.25, mb: 1.5, bgcolor: 'var(--panel)' }}>
         <BearingsSection rpm={Number(rpm) || 0} />
@@ -1148,7 +1148,7 @@ const MechanicalPanel: React.FC = () => {
       {err && <Alert severity="error" sx={{ mb: 1.5, fontSize: 12 }}>{err}</Alert>}
 
       {/* ── nothing solved: the rotor itself ───────────────────────────────
-          User 2026-09-06: "если нет расчётов — рисуется просто геометрия".  An
+          User 2026-09-06: "if there are no results — just draw the geometry".  An
           empty tab used to be one sentence on a blank page; it is now the same
           viewer with the same camera showing the cross-section that Solve will
           colour in, so pressing Solve fills the picture instead of creating it. */}
@@ -1168,8 +1168,8 @@ const MechanicalPanel: React.FC = () => {
         <>
           {/* ── the three load cases ──────────────────────────────────── */}
           <Paper sx={{ p: 1.25, mb: 1.5, bgcolor: 'var(--panel)', overflowX: 'auto' }}>
-            {/* Horizontal, like the Thermal tab's tiles (user 2026-09-07: "а эту
-                таблицу сделай по горизонтали"): one tile per quantity, the
+            {/* Horizontal, like the Thermal tab's tiles (user 2026-09-07: "make
+                this table horizontal"): one tile per quantity, the
                 single case's speed in the corner of the same Paper. */}
             {resCases[0] && (
               <Tooltip title="The one load case this result holds: the proof speed the contact solve was run at.">
@@ -1195,9 +1195,9 @@ const MechanicalPanel: React.FC = () => {
               ))}
             </Box>
             {/* ── this answer as a row of the Compare table ─────────────────
-                User 2026-09-07: "нужно везде сделать такую же кнопку для
-                сравнения всех величин в механических и температурных
-                моделированиях".  The same button the Configure tab has, and the
+                User 2026-09-07: "we need the same button everywhere for
+                comparing all values in the mechanical and thermal
+                simulations".  The same button the Configure tab has, and the
                 same library — so a sleeve safety factor can be read next to the
                 torque and the hot-spot of the same machine. */}
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 1.25 }}>
@@ -1271,9 +1271,9 @@ const MechanicalPanel: React.FC = () => {
           </Paper>
 
           {/* ── ONE result picture with a menu ─────────────────────────────
-              2026-09-06, replacing the three side-by-side canvases: "нужно
-              сделать одну картинку и меню для переключения выводов графиков;
-              интерфейс должен быть единым для всех графиков".  The toolbar
+              2026-09-06, replacing the three side-by-side canvases: "we need
+              one picture and a menu for switching between chart outputs; the
+              interface must be the same for all charts".  The toolbar
               state stays here (this panel persists and re-reads it); StressMap
               is the host that turns it into FieldOutputs for the shared
               viewer. */}
@@ -1297,8 +1297,8 @@ const MechanicalPanel: React.FC = () => {
         </>
       )}
 
-      {/* Modal analysis — 2026-09-05, "нам нужно сделать ещё модальный анализ,
-          чтобы понять все частоты — это очень важно для 20000 rpm".  Outside
+      {/* Modal analysis — 2026-09-05, "we also need to do a modal analysis,
+          to understand all the frequencies — this is very important for 20000 rpm".  Outside
           the `res &&` block on purpose: it is a different model of the same
           machine, not a view of the stress result, and it must be reachable
           without spending a contact solve first. */}

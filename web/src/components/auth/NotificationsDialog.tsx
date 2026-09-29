@@ -9,6 +9,11 @@ import {
   getMyNewsletter, setMyNewsletter, getNotices, markNoticeRead,
   CONSENT_LINE, CONSENT_HELP, type NewsletterStatus, type Notice,
 } from '../../lib/newsletterApi';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/common.json (docs/I18N.md).
+const tx = nsT('common');
 
 interface Props { open: boolean; onClose: () => void; onRead?: () => void }
 
@@ -20,6 +25,7 @@ const STATE: Record<string, string> = {
 };
 
 const NotificationsDialog: React.FC<Props> = ({ open, onClose, onRead }) => {
+  useTranslation('common'); // re-render on language change; lazy-loads the namespace
   const [st, setSt] = useState<NewsletterStatus | null>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [busy, setBusy] = useState(false);
@@ -51,7 +57,7 @@ const NotificationsDialog: React.FC<Props> = ({ open, onClose, onRead }) => {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle sx={{ fontSize: '1rem', pb: 0.5 }}>Notifications</DialogTitle>
+      <DialogTitle sx={{ fontSize: '1rem', pb: 0.5 }}>{tx('notifications')}</DialogTitle>
       <DialogContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           <Typography sx={{ fontSize: 13, flex: 1 }}>{CONSENT_LINE}</Typography>
@@ -63,17 +69,17 @@ const NotificationsDialog: React.FC<Props> = ({ open, onClose, onRead }) => {
         {err && <Typography sx={{ fontSize: 12, color: '#f87171', mt: 0.5 }}>{err}</Typography>}
         <Divider sx={{ my: 1.5 }} />
         <Typography sx={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', mb: 0.5 }}>
-          Notices
+          {tx('notices')}
         </Typography>
         {notices.length === 0 ? (
-          <Typography sx={{ fontSize: 12, color: 'var(--text-4)' }}>None.</Typography>
+          <Typography sx={{ fontSize: 12, color: 'var(--text-4)' }}>{tx('none')}</Typography>
         ) : notices.map((n) => (
           <Box key={n.id} sx={{ py: 0.75, opacity: n.read ? 0.6 : 1, borderBottom: '1px solid var(--line-soft)' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Typography sx={{ fontSize: 12.5, fontWeight: n.read ? 400 : 700, flex: 1 }}>{n.title}</Typography>
               {!n.read && (
                 <Button size="small" onClick={() => void read(n.id)} sx={{ textTransform: 'none', fontSize: 11, minWidth: 0 }}>
-                  Mark read
+                  {tx('markRead')}
                 </Button>
               )}
             </Box>

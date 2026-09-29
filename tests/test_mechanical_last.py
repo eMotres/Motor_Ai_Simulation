@@ -1,9 +1,9 @@
 """What the Mechanical tab comes back to — /api/mechanical/last and /mesh.
 
-Added 2026-09-06 for the user's report: "когда я захожу и выхожу в Mechanical,
-графики пропадают.  Нужно, чтобы по умолчанию: если нет расчётов — рисуется
-просто геометрия; если есть — подгружается последний расчёт; если были изменения
-текущей геометрии — нужно подсвечивать неактуальность текущего расчёта."
+Added 2026-09-06 for the user's report: "when I enter and leave Mechanical,
+the plots disappear.  By default it should be: if there are no results — just
+draw the geometry; if there are — load the last result; if the current
+geometry has changed — highlight that the current result is stale."
 
 Three claims are worth a test, and they are the three the panel now trusts:
 
@@ -107,8 +107,8 @@ def test_last_hands_the_solved_result_back_with_its_fingerprint(client):
 def test_last_flags_a_result_from_a_different_machine(client, monkeypatch):
     """A result whose fingerprint is not the live one comes back FLAGGED.
 
-    The badge the user asked for ("нужно подсвечивать неактуальность текущего
-    расчёта") is only as good as this bit, and the frontend cannot compute it —
+    The badge the user asked for ("need to highlight that the current result is
+    stale") is only as good as this bit, and the frontend cannot compute it —
     it does not have the backend's fingerprint of the live machine.
     """
     assert client.get("/api/mechanical/rotor_stress",
@@ -255,8 +255,8 @@ def test_mesh_does_not_solve_anything(client):
 # ---------------------------------------------------------------------------
 # How long it took, and the mesh as a thing you control
 # ---------------------------------------------------------------------------
-# User 2026-09-06: "нужно добавить ещё индикатор времени расчёта, и по поводу
-# сетки — как я понял, она строится отдельно, и ей тоже нужно как-то управлять".
+# User 2026-09-06: "need to add a computation-time indicator too, and about
+# the mesh — as I understand it, it's built separately, and it also needs some control".
 #
 # Both halves are backend claims before they are UI: a panel can time its own
 # fetch, but that number includes the network and a 40 MB field payload, and a
@@ -395,7 +395,7 @@ def _rotor_polys(params: dict):
 def test_last_round_trips_a_single_speed_result(client):
     """One case, named by its speed, comes back as itself — mode included.
 
-    User 2026-09-06: "давай будем рассчитывать только на 23 000 оборотов".  The
+    User 2026-09-06: "let's compute only at 23 000 rpm".  The
     panel restores its toolbar from `params`, so the case-table choice has to
     ride along with the numbers: a single-speed answer displayed under a
     three-case toggle would read as two columns that failed to arrive.

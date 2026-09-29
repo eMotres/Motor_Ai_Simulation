@@ -98,7 +98,7 @@ def _hash_tree(root: Path) -> dict:
 def env(tmp_path, monkeypatch):
     """A three-layer tree with a real admin and two real accounts.
 
-    Only the PATHS are faked.  Tokens, tier resolution, admin-ness, grants and
+    Only the PATHS are faked.  Tokens, role resolution, admin-ness, grants and
     every route are the shipping code — the point of this module is that the
     shipping code keeps the layers apart.
     """
@@ -149,9 +149,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN, A})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
-    U.create_user(A, "password-a", tier="admin", name=A_NAME)
-    U.create_user(B, "password-b", tier="free", name="Bob")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
+    U.create_user(A, "password-a", role="admin", name=A_NAME)
+    U.create_user(B, "password-b", role="user", name="Bob")
     # B is a plain registered account: it sees what it is GRANTED of the shared
     # catalog, plus whatever anyone has published.
     U.set_motor_grants(B, all_motors=False, dies=[DIE])
@@ -431,8 +431,8 @@ def test_deleting_a_configuration_of_a_shared_die_only_hides_it_here(
 # Until 2026-09-15 every write route in routes/family.py hung on
 # ``require_admin``, so the copy-on-write seam Stage 2 built was unreachable for
 # the accounts it was built for: a registered user got 403 before it.  The rule
-# the user set that day — *"общий каталог правит пока только админ; пользователи
-# всё сохраняют только в своём пространстве, но могут и делиться со всеми"* — is
+# the user set that day — *"for now only the admin edits the shared catalogue;
+# users save everything only in their own space, but can share with everyone"* — is
 # these five tests.  B is a plain ``free`` account with a grant on ``DIE`` and
 # nothing else.
 

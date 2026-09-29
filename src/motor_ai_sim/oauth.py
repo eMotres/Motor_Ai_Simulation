@@ -13,7 +13,7 @@ connectors can connect to ``/mcp`` without a hand-copied key:
   the whole grant (RFC 9700 refresh-token reuse detection).
 
 Every access token resolves to the same ``agent_keys.Principal`` as a key
-(``kind="oauth"``, ``credential_id`` = grant id), so scopes, quotas and audit in
+(``kind="oauth"``, ``credential_id`` = grant id), so scopes, fair-use limits and audit in
 ``mcp_app.McpGate`` apply unchanged.  Storage: ``oauth_grants.json`` next to
 ``agent_keys.json`` (``json_store.mutate_json``: lock + atomic replace).
 """

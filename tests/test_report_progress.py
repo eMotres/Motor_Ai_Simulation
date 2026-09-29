@@ -1,7 +1,7 @@
 """The report's progress ring — ``GET /api/family/report/progress?run_id=…``.
 
-User, 2026-09-16: *"нужно сделать ещё минимальный прогресс-ринг генерации
-отчёта, чтобы было видно, что работает, а не висит"*.  A Word report is ~50 s
+User, 2026-09-16: *"we also need a minimal progress ring for report
+generation, so you can see it's working and not stuck"*.  A Word report is ~50 s
 and its PDF half a minute more, and for all of that the catalogue row showed
 one static caption.
 

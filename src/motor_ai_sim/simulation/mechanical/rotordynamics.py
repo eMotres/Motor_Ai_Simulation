@@ -1,8 +1,8 @@
 """Lateral rotordynamics of the shaft — whirl, Campbell, critical speeds.
 
-Written 2026-09-05 alongside ``modal.py`` for the user's request: "нам нужно
-сделать ещё модальный анализ, чтобы понять все частоты — это очень важно для
-20000 rpm".  The 2-D modal solve answers "does the iron ring at an excitation
+Written 2026-09-05 alongside ``modal.py`` for the user's request: "we also
+need to do modal analysis, to understand all the frequencies — that's very
+important for 20000 rpm".  The 2-D modal solve answers "does the iron ring at an excitation
 frequency"; THIS module answers the question that actually decides whether a
 machine may be run at 20 000 rpm: where are the shaft's bending critical
 speeds, and is the rated speed clear of them.

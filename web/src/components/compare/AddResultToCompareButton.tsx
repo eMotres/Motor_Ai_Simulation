@@ -1,8 +1,8 @@
 /**
  * "+ Add to comparison" for the Mechanical and Thermal tabs.
  *
- * User 2026-09-07: *"нужно везде сделать такую же кнопку для сравнения всех
- * величин в механических и температурных моделированиях"* — the same button the
+ * User 2026-09-07: *"we need the same button everywhere for comparing all
+ * values in the mechanical and thermal simulations"* — the same button the
  * Configure tab has (filled, primary blue, a "+" and the words), so it reads as
  * the same action wherever it appears, and the row it stores lands in the SAME
  * Compare library the Electromagnetic tab's points do.
@@ -39,8 +39,8 @@ const READY_TIP: Record<'mechanical' | 'thermal', string> = {
 };
 
 /**
- * `onLocalAdd` is the TAB's own stack (user 2026-09-07: *"сделай локальное
- * сравнение … только как в Configure"*).  ONE press does both, because they are
+ * `onLocalAdd` is the TAB's own stack (user 2026-09-07: *"make a local
+ * comparison … just like in Configure"*).  ONE press does both, because they are
  * one action — "keep this variant" — and two buttons would make the user choose
  * between a table and a library they both want.  The local half goes first: it
  * needs no network, and nobody should have to press twice because the server

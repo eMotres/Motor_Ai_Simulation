@@ -1,7 +1,7 @@
 """Modal analysis — closed-form checks, then the two routes.
 
-Added 2026-09-05 for the user's request: "нам нужно сделать ещё модальный
-анализ, чтобы понять все частоты — это очень важно для 20000 rpm".
+Added 2026-09-05 for the user's request: "we also need to do a modal
+analysis, to understand all the frequencies — this is very important for 20000 rpm".
 
 The first five tests pin the two solvers to textbook answers on geometry the
 motor config knows nothing about (a thin ring, a uniform beam).  That order is
@@ -478,10 +478,10 @@ def test_zero_rpm_is_rejected_with_the_field_named(client):
     assert r.json()["detail"]["invalid_parameters"][0]["field"] == "rpm"
 
 
-def test_both_modal_routes_are_tier_gated(client):
+def test_both_modal_routes_are_role_gated(client):
     """They are the same class of compute as the field solves, so they ride the
-    same tier — an entry missing from `_GATED` is a free eigensolve."""
+    same role — an entry missing from `_GATED` is an open eigensolve."""
     from motor_ai_sim.auth import _GATED
 
-    assert _GATED[("GET", "/api/mechanical/modes")] == "pro"
-    assert _GATED[("GET", "/api/mechanical/critical_speeds")] == "pro"
+    assert _GATED[("GET", "/api/mechanical/modes")] == "user"
+    assert _GATED[("GET", "/api/mechanical/critical_speeds")] == "user"

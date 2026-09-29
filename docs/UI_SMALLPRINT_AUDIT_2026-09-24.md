@@ -1,7 +1,7 @@
 # UI small-print audit — 2026-09-24
 
 Owner request: clean the web interface of small-print text nobody reads
-(«не пиши это всё, никто это не читает»). Rule: at most ONE short line per
+(«don't write all this, nobody reads it»). Rule: at most ONE short line per
 control/panel; explanations, assumptions, method notes, provenance and
 caveats go into a HelpTip, the record, or docs — never as paragraphs of
 small grey text on the page.

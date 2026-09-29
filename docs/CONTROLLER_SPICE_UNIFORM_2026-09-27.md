@@ -1,7 +1,7 @@
 # The Controller on the vendor SPICE models, uniformly (2026-09-27)
 
-Owner, 2026-09-27: «Перевести L155 на SPICE — все моторы должны работать на
-SPICE одинаково.» Every device whose vendor model runs in ngspice is now
+Owner, 2026-09-27: «Move L155 to SPICE — every motor must run on
+SPICE the same way.» Every device whose vendor model runs in ngspice is now
 solved on that model, the same way for every motor: switching energies,
 conduction and the dead-time (third-quadrant) drop all come from the same
 vendor model. The datasheet path is only an explicit, labelled fallback for

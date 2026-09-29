@@ -479,7 +479,7 @@ class P2Drive:
         # constraint equation, not to `cr` alone: at I = 0 on a cold frame
         # cr = dt·0 − Gᵀ·0 is exactly zero, so a machine-zero residual divided
         # by 1e-30 read as rrel ≈ 1e15 and the no-load run was refused twice
-        # (user 2026-09-05: "запускаю с 0 A и не могу получить результата").
+        # (user 2026-09-05: "I start from 0 A and can't get a result").
         # The magnet flux linked by the eddy bodies (GᵀA) is the natural scale
         # of the equation when the drive term vanishes; it is folded in per
         # iterate below, so the criterion means the same thing at 0 A and at

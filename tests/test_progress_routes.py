@@ -164,7 +164,7 @@ def test_progress_is_answerable_before_anything_runs(client, path):
 def test_the_progress_route_is_not_gated():
     """It mirrors the transient's own progress endpoint, which is open.
 
-    The SOLVE is gated (``/api/mechanical/rotor_stress`` is "pro"); its counter
+    The SOLVE is gated (``/api/mechanical/rotor_stress`` requires sign-in); its counter
     is a status read polled twice a second while that paid-for solve runs, and a
     bar that 401s over a running solve is the one moment the user most needs to
     see something.

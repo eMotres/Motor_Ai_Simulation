@@ -23,9 +23,10 @@ engineering tabs behave identically:
     PATCH / Run drops the cached temperature maps, because a stale cross-section
     is a wrong temperature.
 
-THE TWO SOLVERS ARE SEPARATE (user, 2026-09-07: *"нужно как-то разделить
-тепловые расчёты и электромагнитные; если вдруг тепловому расчёту нужно
-электромагнитное моделирование, пусть оно делается во вкладке Simulation"* — the
+THE TWO SOLVERS ARE SEPARATE (user, 2026-09-07: *"we need to somehow separate
+the thermal calculations from the electromagnetic ones; if the thermal
+calculation ever needs an electromagnetic simulation, let it be done in the
+Simulation tab"* — the
 tab now called Electromagnetic).  THIS ROUTER NEVER STARTS AN ELECTROMAGNETIC
 SOLVE: not a 36-frame transient, not a single-frame magnetostatic estimate, not
 a d-axis calibration, not a verification pass.  The cycle-averaged loss map is
@@ -43,7 +44,7 @@ The machine has TWO cooled surfaces, not one:
 
   * the OUTER stator surface — ``cooling_mode`` = manual | air | liquid | none;
   * the ROTOR BORE — ``bore_mode`` = none | air | liquid.  The user's point:
-    *"Ротор придётся охлаждать в основном через вал"*.  In a 2-D cross-section
+    *"The rotor will have to be cooled mainly through the shaft"*.  In a 2-D cross-section
     the rotor's only other way out is the air gap, whose effective conductivity
     is a few hundredths of a W/m·K even with the Taylor vortices working, so a
     rotor with no bore cooling is thermally not cooled at all — and until this
@@ -60,8 +61,8 @@ Three model changes came with it, each of which was a wrong number before:
      minus the rotor OD *including the retaining sleeve*) with air properties at
      a stated gap temperature.  ``gap_k`` stopped being an input;
   3. the retaining SLEEVE is a domain of its own with an anisotropic (r, θ)
-     conductivity tensor — *"у него теплопроводность очень плохая в радиальном
-     направлении"* — instead of silently inheriting the air-gap value.
+     conductivity tensor — *"its thermal conductivity is very poor in the
+     radial direction"* — instead of silently inheriting the air-gap value.
 
 And the answer now closes: every surface reports its facet-integrated watts, the
 gap bridge reports what crosses it, and ``cooling.heat_budget`` states the
@@ -398,8 +399,8 @@ def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
                               r_housing_m=float(r_housing_m),
                               length_m=float(length_m),
                               heat_w=float(p_loss_w), area_m2=area)
-        # USER RULE (2026-09-07): "температура внешней поверхности статора
-        # равна температуре выходной воды".  The jacket film is reported for
+        # USER RULE (2026-09-07): "the outer stator surface temperature
+        # equals the outlet water temperature".  The jacket film is reported for
         # information (`h_jacket`, Re), but the boundary condition is the
         # housing PINNED at the coolant OUTLET — the hottest the jacket gets and
         # the conservative reading of a well-designed jacket (turbulent h is
@@ -432,7 +433,7 @@ def _bore_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
              emissivity: float = 0.9, t_wall_c: Optional[float] = None):
     """The BORE (rotor inner diameter) Robin BC — the rotor's real heat path.
 
-    User, 2026-09-07: *"Ротор придётся охлаждать в основном через вал"*.  In a
+    User, 2026-09-07: *"The rotor will have to be cooled mainly through the shaft"*.  In a
     2-D cross-section the rotor's only other route is the air gap, whose
     effective conductivity is tens of milliwatts per metre-kelvin even when the
     Taylor vortices are working — so a rotor that is not cooled through its bore
@@ -491,8 +492,8 @@ def _sleeve_k(name: Optional[str]):
     material.
 
     A hoop-wound UD CFRP sleeve is the most anisotropic body in the machine —
-    the user's words: *"у него теплопроводность очень плохая в радиальном
-    направлении"* — and the two numbers are NOT interchangeable.  The radial
+    the user's words: *"its thermal conductivity is very poor in the radial
+    direction"* — and the two numbers are NOT interchangeable.  The radial
     (through-thickness) value is matrix- and contact-limited and is the one that
     stands between the rotor and the air gap; the fibre-direction value is an
     order of magnitude higher and only smears heat AROUND the rotor.
@@ -551,14 +552,14 @@ BORE_MODES = ("none", "air", "liquid", "still")
 #: decision, from the Fusion model: the 24 coils stand proud of the core on both
 #: sides and the core's own end faces are largely uncovered.
 END_FACE_MODES = ("still", "none")
-#: The robotics mode's ONE conduction choice (2026-09-26, owner: «давай
-#: упростим») — replaces the mount W/K / mount °C / sink-or-link / link size /
+#: The robotics mode's ONE conduction choice (2026-09-26, owner: "let's
+#: simplify") — replaces the mount W/K / mount °C / sink-or-link / link size /
 #: link material fields.  ``none`` is the default here and is bit-identical to
 #: the robotics mode with no mount; see ``cooling_models.HEAT_PATHS``.
 HEAT_PATHS = ("housing", "shaft", "both", "none")
 #: How the machine is BUILT, which decides whether the end windings and the slot
 #: channels are in the airflow at all (user 2026-09-09, on the 40 mm "CIANO14 40
-#: new": *"нет корпуса"* — the tooth blocks with their coils are held between two
+#: new": *"there's no housing"* — the tooth blocks with their coils are held between two
 #: end plates by standoff pins and the end turns sit in the propeller wash).
 #: ``housed`` is the model this router has always solved and stays the default,
 #: bit for bit; ``open`` adds the two paths — see ``solve_thermal_field``.
@@ -787,8 +788,8 @@ def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
                        error="bore liquid cooling without a flow rate")
 
     # The SHAFT ENDS — the one axial path the user asked for (2026-09-07):
-    # "торцы и лобовые части — только для вала, всё остальное вращается внутри
-    # мотора".  Length 0 turns it off, so only a NEGATIVE or non-finite length is
+    # "end faces and end windings — only for the shaft, everything else spins
+    # inside the motor".  Length 0 turns it off, so only a NEGATIVE or non-finite length is
     # a refusal; a negative stub is not a shorter one.
     if not math.isfinite(float(shaft_ext_length_mm)) or float(shaft_ext_length_mm) < 0.0:
         raise _bad("shaft_ext_length_mm", shaft_ext_length_mm, "bad_value",
@@ -1376,8 +1377,8 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
     # The store above is one entry per MACHINE: solving a second duty overwrites
     # the first, so a report of a configuration with several duties could only
     # ever show one thermal column.  The user asked for a comparison across
-    # every simulation — *"если в конфигурации несколько режимов, их нужно
-    # сравнивать в таблицах по всем моделированиям"* — so a COMPACT copy (no
+    # every simulation — *"if a configuration has several duties, they need
+    # to be compared in tables across every simulation"* — so a COMPACT copy (no
     # per-node field) is filed under the duty the catalog context names.
     # Guarded twice over: the write itself never raises, and a failure here must
     # not turn a finished solve into an error.
@@ -1402,9 +1403,8 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
             return
     # ── …and the FIELD itself, per duty (2026-09-09) ────────────────────────
     # The compact row above is a table cell; the report also draws each duty's
-    # own temperature MAP side by side (user: *"давай сделаем сохранение всех
-    # полей моделирования, как электромагнитных, так и тепловых и
-    # механических"*), and the map's arrays are in the pickle one machine at a
+    # own temperature MAP side by side (user: *"let's save all the simulation
+    # fields — electromagnetic, thermal, and mechanical alike"*), and the map's arrays are in the pickle one machine at a
     # time.  ``duty_fields`` keeps the mesh + T-per-node + flux of THIS duty
     # (~0.31 MB compressed on the 200 mm machine) beside its stored runs.
     # BOTH kinds write it: a coupled run's converged map is this duty's
@@ -1440,10 +1440,11 @@ def _strip_heavy(res: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # The cycle-averaged loss map: TAKEN, never computed
 # ---------------------------------------------------------------------------
-# User, 2026-09-07: *"а зачем считается каждый шаг? нам нужны средние потери
-# мотора за весь цикл"*, and the same day: *"нужно как-то разделить тепловые
-# расчёты и электромагнитные; если вдруг тепловому расчёту нужно
-# электромагнитное моделирование, пусть оно делается во вкладке Simulation"*.
+# User, 2026-09-07: *"why is every step being computed? we need the motor's
+# average losses over the whole cycle"*, and the same day: *"we need to
+# somehow separate the thermal calculations from the electromagnetic ones;
+# if the thermal calculation ever needs an electromagnetic simulation, let
+# it be done in the Simulation tab"*.
 #
 # The thermal solve does not want a movie, it wants ONE number per element: the
 # cycle-averaged loss density.  It used to buy that number with its OWN 36-frame
@@ -1589,8 +1590,8 @@ def _loss_snapshot_probe(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
 #: demag run is the same losses with a more honest magnet.  Keying on those
 #: (the first cut of this mechanism did) meant a Thermal solve never matched a
 #: Simulation run, because the user runs Simulation with demag and one gap
-#: layer while this route solves with neither ("опять расчёт на каждого
-#: фрейма", 2026-09-07).
+#: layer while this route solves with neither ("computing per frame again",
+#: 2026-09-07).
 #:
 #: ``magnet_temp_c`` (2026-09-08) joins them because it is the one field of the
 #: three temperatures a run carries that changes the MAP rather than how it was
@@ -1759,8 +1760,8 @@ def _snapshot_loss_entry(probe):
 
 
 # ── the thermal route's OWN memory of the maps it had to solve ────────────────
-# WHY (user 2026-09-07: "надо просто запоминать карту потерь и не гонять каждый
-# раз электромагнитный решатель"): when no Simulation run matches, the map this
+# WHY (user 2026-09-07: "we should just remember the loss map and not run
+# the electromagnetic solver every time"): when no Simulation run matches, the map this
 # route solves lived only in the field route's in-process cache — gone at the
 # next API restart, and keyed on the mesh flags so a Solve with other cooling
 # but the same physics could still miss.  This store is keyed on the PHYSICS
@@ -2215,9 +2216,9 @@ def _no_electromagnetic_run(*, words: str, why: str = "",
                             single_frame: bool = False) -> HTTPException:
     """The 422 that replaced the hidden six-minute solve.
 
-    User, 2026-09-07: *"нужно как-то разделить тепловые расчёты и
-    электромагнитные; если вдруг тепловому расчёту нужно электромагнитное
-    моделирование, пусть оно делается во вкладке Simulation"*.  So when no
+    User, 2026-09-07: *"we need to somehow separate the thermal calculations
+    from the electromagnetic ones; if the thermal calculation ever needs an
+    electromagnetic simulation, let it be done in the Simulation tab"*.  So when no
     Electromagnetic run and no remembered map matches, this router does not
     quietly become an electromagnetic solver for the next six minutes — it says
     which run is missing, in the words of the tab that makes it.
@@ -2560,8 +2561,9 @@ def _scaled_copper_map(em: Dict[str, Any], *, t_ref_c: float, t_c: float):
 # is one material.  Thermally it is five different ones, and until this change
 # the thermal solve dropped every one of them: the user was looking at a map
 # with the slot white around the wires and the air gap white around the rotor,
-# and asked for the obvious — *"надо рисовать изоляцию и покрытие провода, а то
-# пустое место, и воздух тоже показывать — он же входит в расчёт"*.
+# and asked for the obvious — *"insulation and the wire coating need to be
+# drawn, otherwise it's an empty space, and air also needs to be shown — it's
+# part of the calculation too"*.
 #
 # So the air is KEPT and NAMED, by geometry (see `_retag_thermal_domains`), in
 # a tag range of its own.  61… is chosen to clear everything the EM palette
@@ -2584,9 +2586,9 @@ DOM_BORE_AIR    = 66      # air inside the bore — DROPPED: it is the coolant s
 DOM_AIR_OTHER   = 67      # air the classifier could not place (should be 0)
 DOM_OUTER_CUT   = 68      # air in the stator's OUTER cuts / vents — DROPPED: it is
                           # open to the outside, i.e. the coolant side of the
-                          # housing boundary condition (user 2026-09-07: "в этих
-                          # вырезах не нужно ничего рисовать, там охлаждающая
-                          # жидкость или воздух")
+                          # housing boundary condition (user 2026-09-07: "there's
+                          # no need to draw anything in these cuts, that's
+                          # cooling fluid or air there")
 
 #: tag -> display name, for BOTH the solver's own bookkeeping and the payload's
 #: ``part_names``.  One table, so a triangle the solve calls "insulation" is the
@@ -3029,9 +3031,9 @@ def _retag_thermal_domains(verts, tris, tags, polys, *, r_housing_m,
     that the radius rule above would call wire coating — but that air is the
     coolant flowing past the housing, and meshing it buries the cut walls inside
     the conduction problem instead of putting the convection film on them
-    (user 2026-09-07: "в этих вырезах не нужно ничего рисовать, там находится
-    охлаждающая жидкость или воздух, нам важны только граничные условия на
-    внешнем контуре статора").  So the air is walked by CONNECTIVITY: every
+    (user 2026-09-07: "there's no need to draw anything in these cuts,
+    that's cooling fluid or air there, we only care about the boundary
+    conditions on the stator's outer contour").  So the air is walked by CONNECTIVITY: every
     air element that shares an edge-path with the far field (DOM_OUTER beyond the
     housing radius) without crossing a solid is `outer cut (coolant)` — counted,
     dropped, and its walls become part of the outer surface the film acts on.
@@ -3355,8 +3357,8 @@ def solve_thermal_field(
     ``bearings.temp_c`` (or its last thermal map when the assignment says
     ``temp_source: thermal``) — see ``mech_losses.resolve_bearing_temp``.
 
-    THE MECHANICAL LOSSES ARE A HEAT SOURCE (user, 2026-09-08: *"все потери
-    должны передаваться"*).  Two of them, and they enter in the two different
+    THE MECHANICAL LOSSES ARE A HEAT SOURCE (user, 2026-09-08: *"all losses
+    should be passed"*).  Two of them, and they enter in the two different
     places they are actually made:
 
       * BEARING FRICTION goes in at the SHAFT, and only when the shaft-ends heat
@@ -3421,9 +3423,9 @@ def solve_thermal_field(
     the STATOR side in the propeller stream and left the rotor exactly where the
     housed model had it, with the mechanical clearance and the bore as its only
     doors.  The user, with his thermal photographs of the open Ø50 machine:
-    *"по термофотографиям катушки греются всегда значительно больше магнитов;
-    конструкция полностью открыта, магниты обдуваются со всех сторон, и воздух
-    ещё продувает зазор"*.  The model said the opposite — on the CIANO14 50
+    *"the thermal photos always show the coils running much hotter than the
+    magnets; the build is completely open, the magnets are blown on from all
+    sides, and air also blows through the gap"*.  The model said the opposite — on the CIANO14 50
     edited / L15 record the winding came out at 251 °C and the magnets at
     240 °C, i.e. the rotor all but welded to the stator through 0.2 mm of air.
     Two more paths, both only when ``frame == 'open'``:
@@ -3504,8 +3506,8 @@ def solve_thermal_field(
         Thermal tab no longer sends it (2026-09-26 — see THE HEAT PATH); it
         stays for the API and for reading duty records back.
 
-    THE HEAT PATH (``heat_path``, robotics only, 2026-09-26 — owner: «давай
-    упростим») replaces the tab's five mount fields with ONE choice, every
+    THE HEAT PATH (``heat_path``, robotics only, 2026-09-26 — owner: "let's
+    simplify") replaces the tab's five mount fields with ONE choice, every
     number behind it a stated default in ``cooling_models``:
 
       * ``housing`` — the stator OD sits in a housing: the outer film becomes a
@@ -3736,8 +3738,8 @@ def solve_thermal_field(
     # NEVER computed here (see `_em_loss_map`): a missing run is a 422, not a
     # solve started behind a temperature request.
     # ISOLATION from the electromagnetic solver's cross-run state (user
-    # 2026-09-07: "надо полностью разделить решатели ... чтобы они никак не
-    # пересекались").  Nothing under this call solves any more, but the
+    # 2026-09-07: "the solvers need to be fully separated ... so they never
+    # intersect in any way").  Nothing under this call solves any more, but the
     # ContextVar stays: the snapshot replay goes through the same field-view
     # machinery, and the one time this path published its state a full-ring eddy
     # field went into config/.warm_cache.npz, the next 1/2-sector sweep read it
@@ -3817,7 +3819,7 @@ def solve_thermal_field(
     # is NOT the same from pole to pole: on the G2-L40 quarter the seven magnets
     # carried 4.14 / 4.30 / 3.85 / 3.98 / 4.08 / 4.05 / 3.48 W — ±5 %, and the
     # pole at the 90° cut 15 % short — and the temperature map showed exactly
-    # that pole 2 K cooler (user: "опять та же картина с пятнами").  A balanced
+    # that pole 2 K cooler (user: "the same spotty pattern again").  A balanced
     # machine heats every pole alike; the spread is the transient's numerics
     # (eddy start-up, the sliding band at the sector edge), not a hotter magnet.
     # So each rotor-side domain's per-pole watts are brought to their mean —
@@ -3928,8 +3930,8 @@ def solve_thermal_field(
     is_coil = (tags == DOM_COIL)
 
     # ── the retaining sleeve, as its OWN anisotropic domain ──────────────────
-    # User 2026-09-07: "у него теплопроводность очень плохая в радиальном
-    # направлении".  The EM mesh already builds the ring as DOM_SLEEVE (it has
+    # User 2026-09-07: "its thermal conductivity is very poor in the radial
+    # direction".  The EM mesh already builds the ring as DOM_SLEEVE (it has
     # its own eddy loss), but the thermal solve used to hand it the DEFAULT
     # element conductivity — the air-gap value — because nothing assigned it one.
     # A sleeve modelled as air is a sleeve that is not there; a sleeve modelled
@@ -3987,9 +3989,10 @@ def solve_thermal_field(
         }
 
     # ── 4b. the AIR, kept and named ──────────────────────────────────────────
-    # User 2026-09-07: *"надо рисовать изоляцию и покрытие провода, а то пустое
-    # место, и воздух тоже показывать — он же входит в расчёт, и в дереве
-    # отображать их тоже нужно"*.  Everything the mesh calls air is re-tagged by
+    # User 2026-09-07: *"insulation and the wire coating need to be drawn,
+    # otherwise it's an empty space, and air also needs to be shown — it's
+    # part of the calculation too, and it needs to be shown in the tree as
+    # well"*.  Everything the mesh calls air is re-tagged by
     # geometry into the five materials it actually is (see
     # `_retag_thermal_domains`), so the insulation, the wire enamel, the slot
     # fill, the air gap and the rotor's pocket air are SOLVED domains with their
@@ -4066,8 +4069,8 @@ def solve_thermal_field(
     sym = max(int(em.get("symmetry_mult") or 1), 1)
 
     # ── the SHAFT ENDS: the rotor's third heat path ───────────────────────────
-    # User 2026-09-07: *"торцы и лобовые части — только для вала, всё остальное
-    # вращается внутри мотора"*.  The rotor's end faces and the end windings are
+    # User 2026-09-07: *"end faces and end windings — only for the shaft,
+    # everything else spins inside the motor"*.  The rotor's end faces and the end windings are
     # inside a CLOSED housing, spinning in their own air — whatever they hand to
     # that air comes straight back through the housing, so there is no extra
     # path there and modelling one would flatter every design.  The SHAFT is the
@@ -4338,8 +4341,8 @@ def solve_thermal_field(
     # User, 2026-09-14, with the Fusion model in front of him: the 24 coils stand
     # PROUD of the core on both sides — hairpin-like, fully exposed — and the
     # stator / rotor end faces are uncovered too.  That is the 2026-09-07 ruling
-    # this file's shaft section is built on (*"торцы и лобовые части — только для
-    # вала"*) turned round for THIS build, which is why it rides with the
+    # this file's shaft section is built on (*"end faces and end windings —
+    # only for the shaft"*) turned round for THIS build, which is why it rides with the
     # robotics mode and is off everywhere else: on a housed machine the end turns
     # really do have nowhere to send their heat, and adding a path there would
     # flatter every design that has a lid.
@@ -4436,9 +4439,10 @@ def solve_thermal_field(
             "would be the same watts twice")
 
     # ── THE ROTOR IS IN THE WASH TOO (frame='open', 2026-09-21) ──────────────
-    # User, with his thermal photographs: *«по термофотографиям катушки греются
-    # всегда значительно больше магнитов; конструкция полностью открыта, магниты
-    # обдуваются со всех сторон, и воздух ещё продувает зазор»*.  The 2026-09-09
+    # User, with his thermal photographs: *"the thermal photos always show
+    # the coils running much hotter than the magnets; the build is
+    # completely open, the magnets are blown on from all sides, and air also
+    # blows through the gap"*.  The 2026-09-09
     # open frame put the STATOR side in the wash and left the rotor exactly
     # where the housed model had it — with the 0.2 mm clearance and the bore as
     # its only doors — and on the Ø50 record that reads the magnets at 240 °C
@@ -4575,7 +4579,7 @@ def solve_thermal_field(
                    "this mesh resolves no gap-air elements"))
 
     # ── THE MECHANICAL HEAT (2026-09-08) ─────────────────────────────────────
-    # User: *"все потери должны передаваться в электромагнитный расчёт"* — and
+    # User: *"all losses should be passed into the electromagnetic calculation"* — and
     # into this one.  The two analytic terms enter where they are MADE:
     #
     #   * bearing friction on the SHAFT, and only when the shaft-ends path is on.
@@ -4934,8 +4938,8 @@ def solve_thermal_field(
             # wire-resolved mesh — 9 mm wide, 0.5 mm thick, with the enamel and
             # the fill already meshed around them — stacks the insulation twice
             # and turns the winding into a heater in a thermos (measured live
-            # 2026-09-07: 860 °C copper under a 64 °C water jacket, user: "какая-
-            # то хрень").  Wires carry the conductor's own k from the library.
+            # 2026-09-07: 860 °C copper under a 64 °C water jacket, user: "what kind
+            # of nonsense is this").  Wires carry the conductor's own k from the library.
             winding_is_wires = bool(is_enamel.any() or is_fill.any())
             if winding_is_wires:
                 k_coil = _thermal_k_any(mats.get("slot"), 385.0)
@@ -5572,9 +5576,10 @@ def solve_thermal_field(
     # ── WHERE THE ROTOR'S HEAT GOES: out through the gap, or in through the
     #    shaft (2026-09-10) ───────────────────────────────────────────────────
     #
-    # User: *"в термоанализе ещё нужно считать два числа: сколько тепла от
-    # ротора уходит через внешний диаметр, а сколько через внутренний"*, and
-    # then plainly: *"то есть через зазор и через вал"*.
+    # User: *"in the thermal analysis we also need to compute two numbers:
+    # how much heat leaves the rotor through the outer diameter, and how
+    # much through the inner"*, and then plainly: *"that is, through the gap
+    # and through the shaft"*.
     #
     # Every watt made inside the slip radius has exactly three ways out of this
     # cross-section — across the gap into the stator, off the bore surface into
@@ -5593,8 +5598,8 @@ def solve_thermal_field(
         return (round(100.0 * w / _rotor_w, 1) if abs(_rotor_w) > 1e-9
                 else None)
 
-    # TWO NUMBERS, both of them 2-D (user 2026-09-10: "делай только в двумерном
-    # варианте пока").  The gap and the bore are surface integrals on the SAME
+    # TWO NUMBERS, both of them 2-D (user 2026-09-10: "just do it in the 2-D
+    # version for now").  The gap and the bore are surface integrals on the SAME
     # solved cross-section — one is the outer diameter, the other the inner —
     # so they are directly comparable and the pair is the answer.  The shaft
     # stubs are an AXIAL path bolted onto a plane model, a lumped conductance
@@ -5839,7 +5844,7 @@ def solve_thermal_field(
         "n_cut_facets": th.get("n_cut_facets"),
         # How many sectors the solved wedge is of the machine, so the map's
         # tiler (`tileFullRing`) can draw the whole motor (user 2026-09-09:
-        # "сделай тепловые поля на весь мотор, а не только на 1/4") — the
+        # "make the thermal fields cover the whole motor, not just 1/4") — the
         # mesh preview always carried it, the field did not.
         "n_sectors": int(sym), "symmetry_mult": int(sym),
         "ambient_temp": float(ambient_temp), "h_conv": round(float(h_eff), 1),
@@ -6896,8 +6901,8 @@ def last(
 # ---------------------------------------------------------------------------
 # THE HEAT PATHS — GET /api/thermal/heat_paths/last
 # ---------------------------------------------------------------------------
-# User, 2026-09-15: *"лучше нарисовать 3D модель с катушками (end windings) и на
-# ней прямо показывать, куда и сколько тепла может отводиться"*.
+# User, 2026-09-15: *"better to draw a 3D model with the coils (end windings)
+# and show directly on it where and how much heat can be carried away"*.
 #
 # Every watt is already in `cooling`; what this adds is WHERE each one leaves,
 # on a machine drawn out of cylinders and annuli, so the answer "89 % through
@@ -7508,8 +7513,8 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                          else list(ED_CYCLE_LENGTHS_S))
 
         # ── 5a. THE REGIME THE MACHINE CAN HOLD ─────────────────────────────
-        # THE TOOL FINDS THE REGIME (user 2026-09-15): «мы сами находим это
-        # время / S3 ED, при котором всё нормально».  So the allowable duty
+        # THE TOOL FINDS THE REGIME (user 2026-09-15): "we find that time / S3
+        # ED ourselves, at which everything is fine".  So the allowable duty
         # ratio is solved FIRST and the cycle that is then integrated and drawn
         # is the one at THAT ED — unless the request stated an ED of its own, in
         # which case it is graded as before and the found one is reported

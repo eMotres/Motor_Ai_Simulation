@@ -1,8 +1,8 @@
 """Per-duty FIELDS — every duty's own maps, not only the last solve's.
 
 WHY THIS EXISTS (2026-09-09).  The user asked for the solved FIELDS to be kept,
-all of them: *"давай сделаем сохранение всех полей моделирования, как
-электромагнитных, так и тепловых и механических"*.  A configuration has several
+all of them: *"let's save all the simulation fields — electromagnetic,
+thermal, and mechanical alike"*.  A configuration has several
 duties and the report must show each duty's maps SIDE BY SIDE; today every field
 lives in exactly one place per MACHINE —
 
@@ -450,8 +450,8 @@ def pack_rotor_stress(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def pack_modes(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """A modal ``result`` → the mesh and every mode's shape (2026-09-11).
 
-    User: *"для модального анализа сделай таблицу из мелких картинок с 12
-    частотами, 3 строки и 4 столбца"*.  The solver has always computed the
+    User: *"for the modal analysis make a table of small pictures with 12
+    frequencies, 3 rows and 4 columns"*.  The solver has always computed the
     shapes (``with_shapes=True``); the machine-level pickle dropped them and the
     per-duty row kept only the frequencies, so there was nothing to draw from.
 

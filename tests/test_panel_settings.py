@@ -1,7 +1,7 @@
 """/api/panel_settings — the server-side memory of a tab's input fields.
 
-User 2026-09-07: "запоминай все последние настройки механических и термических
-моделирований … всё одинаково для всех моделирований".  The store is a dot-file
+User 2026-09-07: "remember all the latest mechanical and thermal simulation
+settings … the same way for every simulation".  The store is a dot-file
 beside the config; tests redirect it to tmp_path so the user's own memory is
 never touched.
 """

@@ -4,6 +4,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Typography, CircularProgress } from '@mui/material';
 import HelpTip from '../../common/HelpTip';
+import LiveLoadPanel from '../LiveLoadPanel';
 import type { AdminSectionId } from '../AdminNav';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -32,7 +33,7 @@ const Tile: React.FC<{ k: Kpi; onGoto: (s: AdminSectionId) => void }> = ({ k, on
   </Box>
 );
 
-interface RegistryUser { email: string; tier: string; created?: string | null }
+interface RegistryUser { email: string; role: string; created?: string | null }
 interface AdminSession { email: string; lastSeen: number; revoked: boolean }
 interface AuthEvent { ts: string; event: string }
 interface Cluster { cores: number; cpu_used_cores: number; mem_used: number; mem_total: number }
@@ -110,6 +111,7 @@ const OverviewSection: React.FC<{ onGoto: (s: AdminSectionId) => void }> = ({ on
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
         {kpis.map((k) => <Tile key={k.label} k={k} onGoto={onGoto} />)}
       </Box>
+      <LiveLoadPanel />
     </Box>
   );
 };

@@ -87,8 +87,8 @@ Windows workstation, so a value proven there is the value that ships.
 
 ### The duty cycle is behind a flag (2026-09-17)
 
-Owner's decision on 2026-09-17: *«давай пока уберём duty cycle из Thermal,
-оставим только стандартный каплинг»* — for now the Thermal tab shows the cooling
+Owner's decision on 2026-09-17: *«let's drop the duty cycle from Thermal for
+now, keep just the standard coupling»* — for now the Thermal tab shows the cooling
 and the coupled EM↔thermal loop and nothing about S2/S3 cycles. It is a *for
 now*, so nothing was deleted: the whole feature sits behind two flags that are
 **off by default**. The backend's is `DUTY_CYCLE_ENABLED` (this table); with it
@@ -185,7 +185,7 @@ The API refuses to boot, or warns, on three of these at startup —
   other's geometry, and there is no correct fallback.
   Check before the transfer: `python scripts/check_case_collisions.py config/dies`
 * **warn** — `AUTH_SECRET` implicit while `WORKSPACES_ROOT` is set.
-* **warn** — `reportlab` / `python-docx` / `triangle` missing.
+* **warn** — `reportlab` / `python-docx` missing.
 
 ---
 
@@ -265,6 +265,11 @@ docker compose -f deploy/docker-compose.yml logs -f api
 curl -s localhost:8080/api/health          # {"status":"healthy"}
 curl -s localhost:8080/api/me              # the real readiness probe
 ```
+
+The compose file builds the API with `WITH_TRIANGLE=1 WITH_PARDISO=1` (the two
+optional extras, see `THIRD_PARTY_NOTICES`), so the server keeps Triangle as the
+default mesher and MKL PARDISO as the sparse solver. Check after a build:
+`docker compose -f deploy/docker-compose.yml exec api python -c "import triangle, pypardiso"`.
 
 **6. TLS.** `certbot` + host nginx in front, proxying to `127.0.0.1:8080`, HSTS,
 auto-renew timer. **Not** Cloudflare's orange cloud: the free tier cuts a

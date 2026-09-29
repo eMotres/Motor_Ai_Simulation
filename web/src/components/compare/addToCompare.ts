@@ -5,9 +5,9 @@
  * survive a reload, a different browser and a different machine — localStorage
  * would not.  ComparePanel renders these rows.
  *
- * Three physics file rows here, not one (user 2026-09-07: *"нужно везде сделать
- * такую же кнопку для сравнения всех величин в механических и температурных
- * моделированиях"*).  They share `buildParams()` — the machine is the machine —
+ * Three physics file rows here, not one (user 2026-09-07: *"we need the same
+ * button everywhere for comparing all values in the mechanical and thermal
+ * simulations"*).  They share `buildParams()` — the machine is the machine —
  * and differ only in what they add: the Mechanical and Thermal tabs each write
  * their OWN inputs into `params` (prefixed `mech_` / `therm_`, so they can never
  * collide with a geometry key) and their own answer into `results.mechanical` /
@@ -309,9 +309,9 @@ export function thermalPointIssue(): string | null {
 
 /**
  * The Thermal tab's answer as a Compare row — every part's MAXIMUM temperature
- * side by side with every other point's (user 2026-09-07: *"в температурном
- * нужно все максимальные температуры всех частей мотора сравнивать между
- * собой"*).
+ * side by side with every other point's (user 2026-09-07: *"in thermal we
+ * need to compare all maximum temperatures of all motor parts against
+ * each other"*).
  *
  * As above, the cooling INPUTS come from the payload's own echoed boundary
  * block wherever it has them: switching the outer surface from air to a water

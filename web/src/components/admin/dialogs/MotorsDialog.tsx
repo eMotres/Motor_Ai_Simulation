@@ -7,7 +7,7 @@ import { MotorPicker, useCatalog, type MotorGrants } from './MotorPicker';
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 export interface RegistryUser {
-  email: string; tier: string; name: string; disabled: boolean; created?: string | null;
+  email: string; role: string; name: string; disabled: boolean; created?: string | null;
   motors?: MotorGrants;
 }
 

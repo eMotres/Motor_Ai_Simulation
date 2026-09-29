@@ -1,0 +1,46 @@
+{
+  "auth": {
+    "sign_in_required": "请先登录。",
+    "account_disabled": "该账户已被停用。"
+  },
+  "rate_limited": "请求过于频繁——请稍后再试。",
+  "material": {
+    "unknown": "未知材料：{name}"
+  },
+  "form": {
+    "invalid_email": "请输入有效的邮箱地址。",
+    "name_required": "请输入姓名。"
+  },
+  "duty": {
+    "name_required": "请为工况命名。",
+    "mode_invalid": "模式必须为电动或发电。"
+  },
+  "copy": {
+    "name_required": "请为副本命名。"
+  },
+  "name": {
+    "die_reserved": "名称 'die' 为保留字。"
+  },
+  "op": {
+    "current_rpm_positive": "电流和转速必须为正值。"
+  },
+  "machine": {
+    "no_poles": "该电机未设置极数。"
+  },
+  "config": {
+    "no_geometry": "当前配置中没有几何数据块。"
+  },
+  "upload": {
+    "empty": "上传内容为空。"
+  },
+  "not_found": {
+    "campaign": "该推送活动不存在。",
+    "notice": "该公告不存在。"
+  },
+  "email": {
+    "not_configured": "本服务器未配置邮件。"
+  },
+  "prefs": {
+    "locale_unsupported": "不支持的语言 {locale}；可选：{supported}。"
+  }
+}

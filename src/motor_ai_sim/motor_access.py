@@ -9,7 +9,7 @@ owner's own second account could not see the two 85 mm dies.
 Access is now REGISTRY data: `motors: {"all": bool, "dies": [names]}` on the
 user record (motor_ai_sim.users).  Three answers:
 
-* ``all``        — admins (tier admin / ADMIN_EMAILS), any account granted
+* ``all``        — admins (role admin / ADMIN_EMAILS), any account granted
                    ``all``, and — when CATALOG_GRANT_ALL_REGISTERED is on —
                    every signed-in account.  Sees the whole catalog.
 * ``granted``    — a signed-in account sees exactly its granted dies.  A new
@@ -24,7 +24,7 @@ user record (motor_ai_sim.users).  Three answers:
 That follow-up decision arrived on 2026-09-16, and it was "close it" — but NOT
 here.  An internet-facing deployment sets ``PUBLIC_EXHIBIT=0`` and then no
 anonymous request reaches this module at all: the door is one gate in
-``auth.TierGateMiddleware`` (``auth.public_exhibit`` / ``auth.anonymous_allowed``)
+``auth.RoleGateMiddleware`` (``auth.public_exhibit`` / ``auth.anonymous_allowed``)
 and it answers 401 before any route runs.  ``MODE_ANONYMOUS`` stays exactly as
 it is because the workstation — where the variable is unset — still uses it, and
 a second copy of the rule per route is how such rules drift apart.

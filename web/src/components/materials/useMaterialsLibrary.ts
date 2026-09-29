@@ -34,7 +34,7 @@ export interface MaterialMeta {
  *  stress solver was written (2026-09-05) and the API returns them; the detail
  *  card printed only the thermal and electrical half, so the numbers that size
  *  a retaining band were invisible in the app that computes with them (user
- *  2026-09-09: "где, кстати, механические свойства материалов?").
+ *  2026-09-09: "where, by the way, are the mechanical properties of materials?").
  *
  *  Orthotropic parts (a hoop-wound CFRP band) carry axis 1 = the fibre/hoop
  *  direction and axis 2 = across it. */
@@ -158,7 +158,7 @@ export const MAX_LIBRARY_RETRIES = 6;
  *
  *  `0` is "the server never answered" — offline, DNS, a container mid-restart —
  *  and 5xx / 408 / 429 are the server saying "not now".  Everything else is a
- *  REFUSAL: 401 (not signed in), 403 (this tier does not open the library),
+ *  REFUSAL: 401 (not signed in), 403 (this role does not open the library),
  *  404 (no such route on this backend) are final answers, and asking six more
  *  times only spends the visitor's battery.  Not signed in is handled by the
  *  gate below, which asks again the moment there IS a session. */

@@ -1,171 +1,171 @@
-# Скрипты Fusion 360 для motor_ai_sim — как пользоваться (2026-09-25)
+# Fusion 360 scripts for motor_ai_sim — how to use them (2026-09-25)
 
-Три скрипта для Fusion 360, каждый — своя папка в `scripts/`, каждый
-запускается из диалога Fusion **Utilities → Scripts and Add-Ins → "+"**
-(добавить один раз, дальше просто запуск двойным кликом). Формат обмена —
-тот же 6-колоночный CSV, что и раньше (`Name, Unit, Expression, Value,
-Comment, Favorite`, формат надстройки Fusion "Parameter I/O"). Backend
-(`/api/fusion/params.csv` и `/api/fusion/import`) и кнопки в Geometry tab
-("⇩ Fusion CSV" / "⇧ Fusion CSV") уже существовали и не менялись — новое
-здесь только со стороны Fusion.
+Three scripts for Fusion 360, each in its own folder under `scripts/`, each
+launched from the Fusion **Utilities → Scripts and Add-Ins → "+"** dialog
+(add once, afterward just double-click to run). The exchange format is
+the same 6-column CSV as before (`Name, Unit, Expression, Value,
+Comment, Favorite`, the format used by the Fusion "Parameter I/O" add-in). The backend
+(`/api/fusion/params.csv` and `/api/fusion/import`) and the buttons on the Geometry tab
+("⇩ Fusion CSV" / "⇧ Fusion CSV") already existed and were not changed — what's new
+here is only on the Fusion side.
 
-## Куда копировать
+## Where to copy them
 
-Каждая из трёх папок — отдельный скрипт для Fusion:
+Each of the three folders is a separate script for Fusion:
 
 - `scripts/fusion360_rename_params/`
 - `scripts/fusion360_export_params/`
 - `scripts/fusion360_import_params/`
 
-а также общий модуль (сам по себе НЕ добавляется в Fusion, но должен лежать
-рядом, скрипты его импортируют):
+plus a shared module (NOT added to Fusion by itself, but must sit
+next to them, since the scripts import it):
 
 - `scripts/fusion_param_common.py`
 
-В Fusion: **Utilities → Scripts and Add-Ins → Scripts → "+"** → указать путь
-к нужной папке (например, `scripts/fusion360_rename_params`). Fusion сам
-подхватит `.manifest` и покажет название/описание. Повторить для всех трёх
-папок. `fusion_param_common.py` копировать в Fusion отдельно не нужно — три
-скрипта сами находят его на уровень выше своей папки
-(`scripts/fusion_param_common.py`), так что вся папка `scripts/` должна
-остаться на диске рядом с ними (не переносите одну папку скрипта отдельно от
-остального репозитория).
+In Fusion: **Utilities → Scripts and Add-Ins → Scripts → "+"** → point it
+to the folder you need (e.g. `scripts/fusion360_rename_params`). Fusion will
+pick up the `.manifest` on its own and show the name/description. Repeat for all three
+folders. `fusion_param_common.py` does not need to be copied into Fusion separately — the three
+scripts find it themselves one level above their own folder
+(`scripts/fusion_param_common.py`), so the whole `scripts/` folder must
+stay on disk next to them (do not move a single script folder away from
+the rest of the repository).
 
-## Порядок использования
+## Order of use
 
-### 1) `fusion360_rename_params` — переименовать старые параметры (один раз)
+### 1) `fusion360_rename_params` — rename the old parameters (once)
 
-Нужен только для **старой** модели Fusion, где параметры называются
-по-старому (`stator_up_r`, `slot_h`, `magnet_h`, …). Открыть модель в Fusion,
-запустить скрипт:
+Only needed for the **old** Fusion model, where the parameters are named
+the old way (`stator_up_r`, `slot_h`, `magnet_h`, ...). Open the model in Fusion,
+run the script:
 
-**Главное правило (владелец, 25.09.2026): ничего никогда не удаляется, и
-меняется только ОДНА существующая формула.** Три вида изменений, и больше
-ничего:
+**Main rule (owner, 2026-09-25): nothing is ever deleted, and
+only ONE existing formula is ever changed.** Three kinds of changes, and nothing
+else:
 
-1. **Переименование** (27 из 33 параметров) — просто меняется `Name`,
-   значение не трогается. Fusion сам обновляет все формулы, которые
-   ссылались на старое имя (это делает сам API Fusion — здесь ничего
-   вручную не переписывается).
-2. **Создание** — новый параметр для тех 6, у которых нет старого аналога
-   вообще (`num_slots_per_segment`, `shaft_height`, `sleeve_thickness`),
-   или только при отсутствии старого имени (`stator_fillet_r1` ← `stator_r1`,
-   `rotor_fill_r` ← `rotor_r1`), плюс всегда `stator_diameter` и
-   `magnet_lamination` (см. пункт 3) — со значением из работающего
-   приложения (`http://localhost:8001`, если API не отвечает — берутся
-   встроенные запасные значения) и явной единицей измерения в формуле
-   (`"12 mm"`, никогда голое число для длины).
-3. **Единственная формула, которая меняется:** `stator_up_r` **никогда не
-   переименовывается**. Вместо этого создаётся `stator_diameter`
-   (`"12 mm"` — значение = `stator_up_r` × 2, был радиус, стал диаметр), а у
-   `stator_up_r` меняется ТОЛЬКО его формула: `"stator_diameter / 2"`. Имя
-   `stator_up_r` остаётся прежним, поэтому все остальные параметры, которые
-   на него уже ссылались (`motor_d`, `stator_mid_r`, `stator_down_r`, …), не
-   трогаются вообще — им ничего менять не нужно.
+1. **Rename** (27 of 33 parameters) — just changes the `Name`,
+   the value is untouched. Fusion itself updates every formula that
+   referenced the old name (this is done by Fusion's own API — nothing here
+   is rewritten by hand).
+2. **Create** — a new parameter for the 6 that have no old
+   equivalent at all (`num_slots_per_segment`, `shaft_height`, `sleeve_thickness`),
+   or only when the old name is absent (`stator_fillet_r1` ← `stator_r1`,
+   `rotor_fill_r` ← `rotor_r1`), plus always `stator_diameter` and
+   `magnet_lamination` (see item 3) — with a value taken from the running
+   application (`http://localhost:8001`; if the API doesn't answer, the
+   built-in fallback values are used) and an explicit unit in the formula
+   (`"12 mm"`, never a bare number for a length).
+3. **The one formula that changes:** `stator_up_r` is **never
+   renamed**. Instead `stator_diameter` is created
+   (`"12 mm"` — value = `stator_up_r` × 2, it was a radius, now it's a diameter), and
+   `stator_up_r`'s formula is the ONLY thing that changes: `"stator_diameter / 2"`. The name
+   `stator_up_r` stays the same, so every other parameter that already
+   referenced it (`motor_d`, `stator_mid_r`, `stator_down_r`, ...) is
+   left completely untouched — nothing needs to change for them.
 
-   `magnet_lamination` создаётся похожим образом (значение из `mag_step`:
-   0, если `mag_step` равен длине мотора — значит без ламинирования; иначе
-   как есть), но **`mag_step` не трогается совсем** — ни переименования, ни
-   новой формулы. Почему: у `mag_step` нет одной чистой формулы, которая
-   была бы верна всегда — она должна быть равна длине мотора, когда
-   `magnet_lamination = 0`, и равна `magnet_lamination` в остальных
-   случаях, а в выражениях Fusion нет условного оператора для такого
-   переключения. Значение просто считывается один раз при запуске скрипта.
+   `magnet_lamination` is created in a similar way (value from `mag_step`:
+   0 if `mag_step` equals the motor length — meaning no lamination; otherwise
+   as-is), but **`mag_step` is not touched at all** — no rename, no
+   new formula. Why: `mag_step` has no single clean formula that
+   would always be correct — it must equal the motor length when
+   `magnet_lamination = 0`, and equal `magnet_lamination` in every other
+   case, and Fusion's expressions have no conditional operator for that
+   kind of switch. The value is simply read once when the script runs.
 
-Перед применением скрипт **проверяет свой план**: если в нём оказалось
-что-то, кроме переименования / создания / этой одной формулы — скрипт
-откажется что-либо делать и ничего не изменит (защита на случай ошибки в
-самом скрипте).
+Before applying anything, the script **checks its own plan**: if it turns out to
+contain anything other than rename / create / that one formula — the script
+will refuse to do anything and change nothing (a safeguard in case of a bug in
+the script itself).
 
-Если и старое, и новое имя уже существуют одновременно — такой параметр
-скрипт НЕ трогает (конфликт, требует ручного решения).
+If both the old and the new name already exist at the same time — the script
+does NOT touch that parameter (conflict, requires a manual decision).
 
-**РЕМОНТ модели, сломанной ПЕРВОЙ версией этого скрипта (коммит e65e16e,
-2026-09-25).** Та версия по ошибке просто переименовала `stator_up_r` →
-`stator_diameter`, сохранив значение РАДИУСА (напр. 6 мм вместо диаметра
-12 мм), и `mag_step` → `magnet_lamination`, сохранив длину мотора (40 мм)
-вместо 0. Текущая версия скрипта теперь сама обнаруживает такую модель
-(есть `stator_diameter`, нет `stator_up_r`, и либо какая-то другая формула
-использует `stator_diameter` как радиус без деления на 2, либо его
-значение слишком маленькое для диаметра; аналогично для
-`magnet_lamination` == длина мотора при отсутствии `mag_step`) и сама её
-чинит: переименовывает `stator_diameter` обратно в `stator_up_r`
-(Fusion сам обновит зависимые формулы) и `magnet_lamination` обратно в
-`mag_step`, показывает это отдельным блоком «REPAIR» в диалоге
-предварительного просмотра — и только потом выполняет обычный план (создать
-`stator_diameter`/`magnet_lamination` заново, уже правильно). Если модель
-уже в порядке — ремонт не запускается, обычный план строится как раньше.
+**REPAIR for a model broken by the FIRST version of this script (commit e65e16e,
+2026-09-25).** That version, by mistake, simply renamed `stator_up_r` →
+`stator_diameter`, keeping the RADIUS value (e.g. 6 mm instead of the
+12 mm diameter), and `mag_step` → `magnet_lamination`, keeping the motor length (40 mm)
+instead of 0. The current version of the script now detects such a model on its own
+(`stator_diameter` present, `stator_up_r` absent, and either some other formula
+uses `stator_diameter` as a radius without dividing by 2, or its
+value is too small for a diameter; similarly for
+`magnet_lamination` == motor length when `mag_step` is absent) and
+repairs it itself: renames `stator_diameter` back to `stator_up_r`
+(Fusion updates the dependent formulas on its own) and `magnet_lamination` back to
+`mag_step`, showing this as a separate "REPAIR" block in the preview
+dialog — and only then runs the normal plan (creating
+`stator_diameter`/`magnet_lamination` again, correctly this time). If the model
+is already fine — the repair does not run, and the normal plan is built as before.
 
-**Если модель уже с новыми (каноническими) именами** — просто пропустите
-этот шаг, скрипт покажет "Nothing to do".
+**If the model already has the new (canonical) names** — just skip
+this step, the script will show "Nothing to do".
 
-### 2) `fusion360_import_params` — затянуть геометрию ИЗ приложения В Fusion
+### 2) `fusion360_import_params` — pull geometry FROM the application INTO Fusion
 
-(Это переименованный/отрефакторенный `fusion360_sync_params` — логика та же,
-просто под новым именем и в новой папке; старая папка
-`scripts/fusion360_sync_params/` тоже оставлена рабочей, если она уже
-зарегистрирована в чьей-то Fusion — но дальше пользоваться лучше новой.)
+(This is the renamed/refactored `fusion360_sync_params` — same logic,
+just under a new name and in a new folder; the old folder
+`scripts/fusion360_sync_params/` is also left working, in case it's already
+registered in someone's Fusion — but going forward it's better to use the new one.)
 
-Требует, чтобы **приложение (API) было запущено** на `localhost:8001`.
-Запустить скрипт в открытой модели Fusion — он подтянет текущую геометрию
-активной машины из приложения и обновит/создаст параметры по каноническим
-именам. Диалог с итогом (обновлено / создано / без изменений / ошибки) в
-конце.
+Requires that **the application (API) is running** on `localhost:8001`.
+Run the script in an open Fusion model — it will pull the current geometry
+of the active machine from the application and update/create the parameters under the canonical
+names. A summary dialog (updated / created / unchanged / errors) at the
+end.
 
-Если API недоступен (2026-09-25) — скрипт спросит, не импортировать ли
-вместо этого локальный CSV-файл Parameter I/O (свой экспорт или экспорт
-самой надстройки — оба формата читаются, колонки ищутся по названию, а не
-по позиции).
+If the API is unavailable (2026-09-25) — the script will ask whether to
+import a local Parameter I/O CSV file instead (either its own export or the
+add-in's own export — both formats are read, columns are located by name, not
+by position).
 
-### 3) `fusion360_export_params` — выгрузить геометрию ИЗ Fusion В приложение
+### 3) `fusion360_export_params` — export geometry FROM Fusion INTO the application
 
-Обратное направление. Запустить в открытой модели Fusion — скрипт прочитает
-33 канонических геометрических параметра (сначала пробует каноническое имя,
-если его нет — берёт старое, легаси, и сам пересчитывает по тем же правилам,
-что и `fusion360_rename_params`), и предложит сохранить CSV-файл (диалог
-"Сохранить как", формат — тот же 6-колоночный CSV).
+The reverse direction. Run it in an open Fusion model — the script will read
+the 33 canonical geometric parameters (it first tries the canonical name;
+if it's absent, it takes the old legacy one and recomputes it itself using the same rules
+as `fusion360_rename_params`), and offer to save a CSV file (a "Save
+as" dialog, the same 6-column CSV format).
 
-Дальше — как обычный Parameter I/O CSV: загрузить его в приложении через
-кнопку **"⇧ Fusion CSV"** на вкладке Geometry (там будет показан
-предварительный просмотр изменений перед применением — как обычно), либо
-`POST` на `/api/fusion/import`. Этот способ приёма файла в приложении уже
-существовал, ничего нового туда не добавлялось.
+From there — like any regular Parameter I/O CSV: load it into the application via the
+**"⇧ Fusion CSV"** button on the Geometry tab (a preview of the
+changes will be shown before applying it, as usual), or
+`POST` it to `/api/fusion/import`. This way of receiving the file in the application already
+existed, nothing new was added there.
 
-**Проверка перед записью (2026-09-25).** Перед сохранением CSV скрипт
-считает те же производные радиусы, что и приложение (stator_outer =
-D/2, stator_inner, rotor_outer, rotor_inner, shaft_inner), и проверяет, что
-они положительные и идут по убыванию, плюс сверяет `stator_diameter` с
-`stator_up_r` (если оба есть в модели — должно быть ровно ×2). Если
-что-то не сходится (например, модель ещё не отремонтирована — см. раздел
-про `fusion360_rename_params` выше), скрипт НЕ пишет файл молча: покажет,
-какая именно проверка не прошла, и спросит — отменить или всё равно
-записать. Также: если `magnet_lamination` уже существует под своим именем и
-до сих пор равен длине мотора (типичный след первой версии скрипта),
-экспортируется 0, а не это значение.
+**Pre-write check (2026-09-25).** Before saving the CSV, the script
+computes the same derived radii as the application (stator_outer =
+D/2, stator_inner, rotor_outer, rotor_inner, shaft_inner), and checks that
+they are positive and decreasing, plus cross-checks `stator_diameter` against
+`stator_up_r` (if both are present in the model — it must be exactly ×2). If
+something doesn't add up (e.g. the model hasn't been repaired yet — see the
+section on `fusion360_rename_params` above), the script does NOT write the file silently: it shows
+which check failed, and asks whether to cancel or write
+anyway. Also: if `magnet_lamination` already exists under its own name and
+still equals the motor length (a typical trace of the first version of the script),
+0 is exported instead of that value.
 
-## Итого: типичный порядок действий
+## Summary: typical workflow
 
-- **Новая модель** (или уже переименованная): `fusion360_import_params` →
-  править в Fusion → `fusion360_export_params` → загрузить CSV в приложении.
-- **Старая модель со старыми именами**: сначала один раз
-  `fusion360_rename_params`, дальше как выше.
+- **New model** (or already renamed): `fusion360_import_params` →
+  edit in Fusion → `fusion360_export_params` → load the CSV in the application.
+- **Old model with old names**: first run
+  `fusion360_rename_params` once, then as above.
 
-## Где что лежит (для справки, не обязательно читать перед использованием)
+## Where things live (for reference, not required reading before use)
 
-- Таблица соответствия имён (обоснование по каждому параметру, включая
-  спорные случаи, которые уже утверждены владельцем 25.09.2026):
+- Name-mapping table (rationale for each parameter, including
+  the contested cases, already approved by the owner on 2026-09-25):
   `docs/FUSION_PARAMETER_MAP_2026-09-25.md`.
-- Исполняемый источник истины для карты/конвертаций: `scripts/fusion_param_common.py`.
-- Человекочитаемая копия той же таблицы: `config/fusion_param_map.yaml`,
-  раздел `legacy_fusion_names_approved_2026_09_25`.
-- Офлайн-конвертер CSV (для файла, экспортированного не из Fusion-скрипта, а
-  просто надстройкой Parameter I/O): `scripts/fusion_param_rename.py`
+- The executable source of truth for the map/conversions: `scripts/fusion_param_common.py`.
+- A human-readable copy of the same table: `config/fusion_param_map.yaml`,
+  section `legacy_fusion_names_approved_2026_09_25`.
+- Offline CSV converter (for a file exported not from the Fusion script but
+  from the Parameter I/O add-in directly): `scripts/fusion_param_rename.py`
   (`python scripts/fusion_param_rename.py IN.csv OUT.csv --dry-run`).
-  Печатает полный дифф "было → стало" по каждой изменённой строке; на
-  выходе строк всегда `входные + созданные` — если бы строка потерялась,
-  скрипт откажется писать файл (`FusionRenameError`), а не молча его выдаст.
-- Тесты (запускать только их, не весь набор):
+  Prints a full "before -> after" diff for every changed row; the
+  output row count is always `input + created` — if a row were ever lost,
+  the script refuses to write the file (`FusionRenameError`) rather than silently emitting it.
+- Tests (run only these, not the whole suite):
   `pytest tests/test_fusion_param_rename.py tests/test_fusion_param_roundtrip.py
   tests/test_fusion_params_csv.py tests/test_fusion_v1_repair_and_export_guard.py`
-  (последний — ремонт v1-сломанной модели, guard при экспорте, CSV-fallback
-  импорта).
+  (the last one covers repairing a v1-broken model, the export guard, and the CSV-fallback
+  import path).

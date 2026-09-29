@@ -2,10 +2,10 @@
  * mechanicalStore — everything the Mechanical tab is showing, kept OUTSIDE the
  * panel's component tree.
  *
- * User 2026-09-06: "когда я захожу и выхожу в Mechanical, графики пропадают.
- * Нужно, чтобы по умолчанию: если нет расчётов — рисуется просто геометрия;
- * если есть — подгружается последний расчёт; если были изменения текущей
- * геометрии — нужно подсвечивать неактуальность текущего расчёта."
+ * User 2026-09-06: "when I enter and leave Mechanical, the plots disappear.
+ * By default it should be: if there are no results — just draw the geometry;
+ * if there are — load the last result; if the current geometry has
+ * changed — highlight that the current result is stale."
  *
  * The Mechanical tab is NOT `keepMounted` in App.tsx (it owns its own picture,
  * so it does not take the AppBar's viewer cluster), which means leaving the tab
@@ -116,7 +116,7 @@ interface Slice<T> {
    *  Client-side ON PURPOSE: the point of the clock is that it moves while the
    *  request is still in flight and the backend has said nothing yet.  The
    *  number that ends up on screen afterwards is the backend's `elapsed_s`
-   *  (user 2026-09-06: "нужно добавить ещё индикатор времени расчёта"). */
+   *  (user 2026-09-06: "need to add a computation-time indicator too"). */
   startedAt: number | null;
 }
 
@@ -148,15 +148,15 @@ export interface MechanicalState {
   // ── rotor-stress inputs (strings: they are text fields) ────────────────────
   /** how many load cases a Solve computes.
    *
-   *  User 2026-09-06: "давай будем рассчитывать только на 23 000 оборотов — всё,
-   *  что ниже, всяко выдержит, и проще будет считать только одну величину".  So
+   *  User 2026-09-06: "let's compute only at 23 000 rpm — everything
+   *  below will hold up anyway, and it's simpler to compute just one value".  So
    *  the tab defaults to ONE case; the three-case table is still one click away
    *  (the API default stays `three`, this is the panel's choice). */
   cases: CasesMode;
   /** which forces a Solve applies.
    *
-   *  User 2026-09-07: "добавь ещё и момент на ротор, пусть действуют все силы;
-   *  сделай меню, чтобы можно было выбрать центробежную, момент и обе." */
+   *  User 2026-09-07: "add torque on the rotor too, let all forces act;
+   *  make a menu so you can choose centrifugal, torque, or both." */
   loads: LoadsMode;
   /** electromagnetic torque, N·m, as text (it is a field).
    *
@@ -176,9 +176,9 @@ export interface MechanicalState {
   interf: string;
   /** rotor core / magnet / shaft temperature, °C, as text (it is a field).
    *
-   *  User 2026-09-07: "нужно универсально добавить температуру ротора, чтобы
-   *  можно было задавать; для моторов без бандажа этот эффект вообще
-   *  минимальный".  20 is the REFERENCE — the machine as drawn, no thermal
+   *  User 2026-09-07: "we need to add rotor temperature universally, so it
+   *  can be set; for motors without a sleeve this effect is minimal
+   *  anyway".  20 is the REFERENCE — the machine as drawn, no thermal
    *  load — and it is the default because a temperature is a duty point the
    *  user chooses, not something this panel may invent (the Electromagnetic tab
    *  carries a COIL temperature, which is the winding, not the rotor). */
@@ -187,16 +187,16 @@ export interface MechanicalState {
    *  draught while the iron carries the loss, and the DIFFERENCE between the
    *  two is what moves the fit. */
   sleeveTempC: string;
-  /** Where the temperatures come from (user 2026-09-07: "если есть уже
-   *  термоанализ, можно брать температуру из него, а можно по умолчанию"):
+  /** Where the temperatures come from (user 2026-09-07: "if there's already
+   *  a thermal analysis, you can take the temperature from it, or use the default"):
    *  'manual' = the two fields above; 'thermal' = the LAST Thermal-tab result,
    *  ONE TEMPERATURE PER PART, when that result is for the machine on screen.
    *  With no fresh thermal result the fields are used and the panel says so. */
   tempSource: 'manual' | 'thermal';
   /** What the Thermal tab last solved, per part — read on mount and on demand.
    *
-   *  User 2026-09-08: "в механический расчёт тоже нужно делать каплинг, чтобы
-   *  температуры везде были одинаковы".  It used to be the rotor and sleeve
+   *  User 2026-09-08: "the mechanical solve also needs coupling, so the
+   *  temperatures are the same everywhere".  It used to be the rotor and sleeve
    *  MAXIMA only, with the rotor's number stretched over the core, the magnets
    *  AND the shaft — two numbers standing in for four parts that are not the
    *  same on a real machine.  Now every solid carries its own mean (what a
@@ -210,15 +210,15 @@ export interface MechanicalState {
    *  the opposite of that, and a shared size is also what lets the backend's
    *  mesh memo serve the solve with what Build mesh already built. */
   meshMm: string;
-  /** `full` rotor or one periodic pole `sector` (2026-09-09, user: "используй
-   *  периодичность, как я во Fusion") — persisted with the panel, so the
+  /** `full` rotor or one periodic pole `sector` (2026-09-09, user: "use
+   *  periodicity, like I do in Fusion") — persisted with the panel, so the
    *  coupled loop's mechanical step solves the same way the button does. */
   symmetry: SymmetryMode;
   contacts: Record<ContactPair, ContactSpec>;
 
   /** The tab's OWN comparison stack — the Configure tab's "Saved
-   *  configurations", for rotor variants (user 2026-09-07: "сделай локальное
-   *  сравнение … так же сделай в механике").  A PERSISTED field like any
+   *  configurations", for rotor variants (user 2026-09-07: "make a local
+   *  comparison … do the same in mechanics").  A PERSISTED field like any
    *  other, so the stack survives a reload and is the same in every browser;
    *  the permanent library is still the Compare tab. */
   compareRows: LocalRow[];
@@ -262,8 +262,8 @@ export interface MechanicalState {
    *  a result solved by somebody else after that first visit never reached this
    *  tab: the coupled loop solves the rotor stress at its converged
    *  temperatures and files it as the last mechanical result, and the user came
-   *  back to the tab to find the run before it (2026-09-10: "в механике был
-   *  предыдущий режим 22900, когда я туда зашёл", and with it the torque and
+   *  back to the tab to find the run before it (2026-09-10: "there was a
+   *  previous 22900 regime in mechanical when I went there", and with it the torque and
    *  the rotor temperature of that older run).  Cheap — one GET — and it never
    *  touches a slice that is mid-solve or newer than the server's. */
   refreshLast: () => Promise<void>;
@@ -280,8 +280,8 @@ export interface MechanicalState {
   solveStress: (hasSleeve: boolean, fresh?: boolean) => Promise<void>;
   /** The **Limit speed** button: the same case `solveStress` would send —
    *  same torque, contacts, interference, temperatures, mesh — searched for
-   *  the speed at which SF reaches 1 (owner 2026-09-21: "нужно искать ещё
-   *  максимальную скорость вращения ... она будет, когда достигает SF = 1").
+   *  the speed at which SF reaches 1 (owner 2026-09-21: "we also need to
+   *  find the maximum rotation speed ... it happens when SF reaches 1").
    *  Lands in the SAME `stress` slice `solveStress` fills: the backend
    *  returns a genuine single-speed `rotor_stress` answer with `.limit_speed`
    *  riding on it, so every existing reader of `st.stress.data` (tiles, maps,
@@ -360,15 +360,15 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
   },
 
   cases: readMech('cases', 'single' as CasesMode),
-  // "пусть действуют все силы" — both is the default, here as on the API.
+  // "let all forces act" — both is the default, here as on the API.
   loads: readMech('loads', 'both' as LoadsMode),
   // Never a hard-coded torque: unset, it is the last Electromagnetic run's |T_avg|,
   // and empty when nothing has been run (the backend then resolves it).
   torque: readMech('torque', String(
     readSimTorqueNm() === null ? '' : Math.round(readSimTorqueNm()! * 10) / 10)),
   rpm: String(readSimSetting('rpm', 0) || ''),
-  // BLANK means "the Electromagnetic tab's rpm" (user 2026-09-09: "надо писать
-  // всегда расчётные rpm") — `effectiveProofRpm()` below resolves it at solve
+  // BLANK means "the Electromagnetic tab's rpm" (user 2026-09-09: "always
+  // write the computed rpm") — `effectiveProofRpm()` below resolves it at solve
   // time and the panel shows the resolved number in the box.  It used to seed
   // ×1.15 once and then keep whatever was typed, which left the Ø200's 23 000
   // on the 40 mm and an empty box on a fresh machine.  A typed value is a
@@ -380,9 +380,9 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
   // Nothing is seeded from the Electromagnetic tab, because what that tab carries is
   // the COIL temperature — the winding, not the rotor — and putting a winding
   // number into a rotor field would be a made-up duty point.
-  // Worst case by decision (user 2026-09-07: "давай вести расчёты ротора при
-  // температуре 150 градусов, и магниты тоже на 150 — это будет худшим
-  // вариантом"): rotor 150 °C, and the sleeve at 150 °C too, so a cold
+  // Worst case by decision (user 2026-09-07: "let's run the rotor computations
+  // at 150 degrees, and the magnets also at 150 — that will be the worst
+  // case"): rotor 150 °C, and the sleeve at 150 °C too, so a cold
   // browser never quietly reports a cold rotor.  20 °C (= no thermal load) is
   // one keystroke away in the field.
   rotorTempC: readMech('rotorTempC', '150'),
@@ -421,7 +421,7 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
   view: readMech('view', 'vm' as MechView),
   exagg: readMech('exagg', 'auto'),
   showContacts: readMech('showContacts', true),
-  // EMPTY = auto (user 2026-09-09: "давай это делать автоматом") — the map
+  // EMPTY = auto (user 2026-09-09: "let's do this automatically") — the map
   // chooses the bands from the field, see components/mechanical/fieldAdapters.
   // The one-time migration below is for the pair nobody ever typed: '2'/'4'
   // was the default this app shipped, so a browser carrying exactly those two
@@ -457,8 +457,8 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
       };
       writeMech(alias[k as string] ?? (k as string), v);
       // …and to the SERVER, the memory every browser shares (user 2026-09-07:
-      // "запоминай все последние настройки … одинаково для всех
-      // моделирований").  Debounced in the helper; the last snapshot wins.
+      // "remember all the latest settings … the same way for every
+      // simulation").  Debounced in the helper; the last snapshot wins.
       const snap: Record<string, unknown> = {};
       const st = get();
       for (const pk of PERSISTED) snap[pk as string] = (st as unknown as Record<string, unknown>)[pk as string];
@@ -567,7 +567,7 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
       });
       // THE BOXES FOLLOW THE ANSWER.  After a coupled run everything is
       // supposed to agree — that is what the loop is for (user 2026-09-10:
-      // "по-хорошему после каплинга всё должно совпадать") — and a panel whose
+      // "ideally after coupling everything should match") — and a panel whose
       // speed, torque and rotor temperature still describe the run BEFORE it
       // contradicts the very result printed under them.  Only when a newer
       // result was actually adopted, and only the fields that result names.
@@ -652,8 +652,8 @@ export const useMechanicalStore = create<MechanicalState>()((set, get) => ({
         // never to `Number('') === 0`: 20 °C is "no thermal load", which is the
         // honest reading of an empty box; 0 °C would be a −20 K load nobody
         // asked for.  The whole rule lives in `lib/mechThermalTemps`.
-        // NO BAND → NO THERMAL LOAD (user 2026-09-09: "температура в роторе
-        // важна только для бандажа"): the iron expands freely and the
+        // NO BAND → NO THERMAL LOAD (user 2026-09-09: "temperature in the
+        // rotor only matters for the sleeve"): the iron expands freely and the
         // magnet/iron mismatch is taken up by the epoxy bed, so a sleeveless
         // machine is solved at the reference whatever the fields say — the
         // same rule the coupled loop's mechanical step applies server-side.

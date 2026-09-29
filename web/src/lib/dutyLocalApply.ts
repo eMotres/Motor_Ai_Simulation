@@ -132,7 +132,7 @@ export function coupledTempsForNewMachine(duty: DutyEntry | null | undefined):
  *
  *  Leaving another DIE: the mesh/sim block on the panel belongs to that die, so
  *  coming back restores the user's own state instead of whatever machine was
- *  visited in between (user 2026-08-31: "всегда было 1/4 и max 2 mm").
+ *  visited in between (user 2026-08-31: "it was always 1/4 and max 2 mm").
  *  Leaving another DUTY: same argument one level down — the panel writes each
  *  field through to its duty's overlay as it is typed, so this only catches
  *  points written by something else (a Compare apply, a descent restore), but
@@ -282,7 +282,7 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
   window.dispatchEvent(new CustomEvent('sim-design-applied'));
   window.dispatchEvent(new CustomEvent('family-changed'));
   const dd: DutyEntry = p.duty || {};
-  // ── Restore EVERY saved panel setting (user: "сохранять всё что можно"):
+  // ── Restore EVERY saved panel setting (user: "save everything that can be saved"):
   //    the duty carries the full mesh.*/sim.* state it was solved with — write
   //    it back verbatim, then tell the mounted panels to re-read their fields.
   //    The op-point set() calls above stay AFTER-authoritative (same values on
@@ -358,7 +358,7 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
   // when the duty carried saved settings.  Without this, the panel's own state
   // (from the PREVIOUS motor) wrote itself back over the just-loaded values,
   // and the first Run went out with the old winding connection: T×½, R×¼ on the
-  // 40 mm (user 2026-08-25, "она уже не раз повторяется" — this was the
+  // 40 mm (user 2026-08-25, "this keeps happening again and again" — this was the
   // recurring first-run bug).
   window.dispatchEvent(new CustomEvent('sim-settings-restored'));
   // A DIFFERENT machine is on the panel now.  Said out loud, after the fields
@@ -439,7 +439,7 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
       P_mech_W: Pmech,
       // v_ll_peak_v was RECORDED from a real run, so it IS the line peak.
       // KV = rpm / V_line_PEAK — the max/max convention of the Simulation tile
-      // and the user's Ansys table (2026-08-04); dividing by rms read ~√2
+      // and the user's commercial FEM table (2026-08-04); dividing by rms read ~√2
       // (+41 %) high.  The /√2 rms values below are sinusoid approximations —
       // the duty record keeps peaks only.
       V_line_peak_V: Vlpk, V_line_rms_V: Vlpk / Math.SQRT2,

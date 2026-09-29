@@ -75,7 +75,7 @@ export type EndFaceMode = 'still' | 'none';
  *  `housed` is every normally-built motor and the model this tab has always
  *  solved: the end turns and the slot air are inside a closed housing, so
  *  whatever they hand to that air comes straight back through the housing.
- *  `open` is the 40 mm CIANO14 (user 2026-09-09: *нет корпуса*) — the tooth
+ *  `open` is the 40 mm CIANO14 (user 2026-09-09: *no housing*) — the tooth
  *  blocks with their coils hang between two end plates on standoff pins and the
  *  end turns plus the axial channels between neighbouring coils sit in the
  *  propeller wash. */
@@ -123,8 +123,8 @@ export interface ThermalRequest {
   // ── the SHAFT OUTSIDE the housing, 0 mm (off) unless the user gives it one ─
   /* The rotor's third heat path (2026-09-07).  The rotor's end faces and the
      end windings turn inside a CLOSED housing and are deliberately not
-     modelled — "торцы и лобовые части — только для вала, всё остальное
-     вращается внутри мотора" — but the shaft comes out through the bearings and
+     modelled — "end faces and end windings — only for the shaft, everything
+     else rotates inside the motor" — but the shaft comes out through the bearings and
      the exposed stubs lose heat to the room. */
   /** exposed length on EACH side, mm; 0 = the path is off */
   shaft_ext_length_mm?: number;
@@ -713,7 +713,7 @@ export function meshParams(): ThermalMeshRequest {
 /**
  * The mesh block every request must carry, read from the SERVER.
  *
- * WHY (2026-09-07, user: "похоже завис тепловой расчёт"): the first thermal
+ * WHY (2026-09-07, user: "looks like the thermal computation is stuck"): the first thermal
  * solve on the Ø200 took 683 s because the request said `n_sectors = 1` — the
  * browser's `mesh.nSectors` key was absent (the Mesh tab writes it only while
  * mounted, and a reload had wiped the session), so the default of 1 = the FULL

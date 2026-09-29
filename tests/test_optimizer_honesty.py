@@ -248,7 +248,7 @@ def test_surrogate_reproduces_its_anchor():
     # still lines up.  The pin moved once, and the move is the k_end fix, not a
     # drift: 91.135 W was recorded 2026-07-29 with the pre-fix end-winding
     # factor (k_end = 1.4641 for this anchor); the 2026-08-04 fix — the
-    # end-turn half-loop includes the wire, validated against ANSYS on this
+    # end-turn half-loop includes the wire, validated against commercial FEM on this
     # very machine (auto 1.733 vs 1.76) — evaluates the anchor at
     # k_end = 1.7226, and P_cu is linear in k_end:
     # 91.135 × 1.7226/1.4641 = 107.23 W.  Anything OUTSIDE the tolerance
@@ -282,7 +282,7 @@ def test_surrogate_reads_topology_and_materials_from_the_design():
     finally:
         set_request_materials(None)
     assert src == de._ANCHOR_MAGNET
-    assert Br == pytest.approx(1.19, abs=1e-6)   # the old literal was 1.23
+    assert Br == pytest.approx(1.188, abs=1e-6)  # #51: Arnold N45SH (was 1.19; the old literal was 1.23)
     assert mu_rec == pytest.approx(1.05, abs=1e-3)
     assert sigma > 0
 

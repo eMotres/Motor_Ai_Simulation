@@ -318,6 +318,7 @@ class TestRejectionAccounting:
         assert rj["evaluated"] == 0 and rj["reject_pct"] == 0.0
 
 
+@pytest.mark.requires_triangle
 class TestMeshBudgetFence:
     """The cheap pre-mesh reject: Triangle itself, Steiner-capped.
 

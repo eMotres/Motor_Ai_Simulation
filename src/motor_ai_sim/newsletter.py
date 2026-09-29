@@ -125,9 +125,10 @@ def _load() -> dict:
 
 def _save(d: dict) -> None:
     with _LOCK:
-        _STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        from motor_ai_sim.private_files import ensure_private_dir, open_private
+        ensure_private_dir(_STORE_FILE.parent)
         tmp = _STORE_FILE.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open_private(tmp, "w") as f:   # 0600 — audit 2026-09-29 #9
             json.dump(d, f, indent=1, ensure_ascii=False, sort_keys=True)
         os.replace(tmp, _STORE_FILE)
 
@@ -317,17 +318,17 @@ def unsubscribe_by_token(token: str) -> bool:
     return True
 
 
-def subscribers(tiers: Optional[list[str]] = None,
+def subscribers(roles: Optional[list[str]] = None,
                 only_confirmed: bool = False) -> list[dict]:
     out = []
     for email, rec in sorted(_load()["subscribers"].items()):
         st = rec.get("status") or "none"
         if only_confirmed and st != "confirmed":
             continue
-        tier = (U.get_user(email) or {}).get("tier") or ""
-        if tiers and tier not in tiers:
+        role = (U.get_user(email) or {}).get("role") or ""
+        if roles and role not in roles:
             continue
-        out.append({"email": email, "status": st, "tier": tier,
+        out.append({"email": email, "status": st, "role": role,
                     "source": rec.get("source") or "",
                     "text_version": rec.get("text_version") or "",
                     "consent_at": rec.get("consent_at"),
@@ -446,11 +447,11 @@ def build_message(email: str, subject: str, body_md: str,
 
 # ── campaigns ────────────────────────────────────────────────────────────────
 
-def _clean_tiers(tiers) -> list[str]:
-    return sorted({str(t) for t in (tiers or []) if str(t).strip()})
+def _clean_roles(roles) -> list[str]:
+    return sorted({str(t) for t in (roles or []) if str(t).strip()})
 
 
-def create_campaign(subject: str, body_md: str, tiers=None, author: str = "") -> dict:
+def create_campaign(subject: str, body_md: str, roles=None, author: str = "") -> dict:
     subject = (subject or "").strip()
     if not subject or len(subject) > 200:
         raise ValueError("subject must be 1–200 characters")
@@ -458,7 +459,7 @@ def create_campaign(subject: str, body_md: str, tiers=None, author: str = "") ->
         raise ValueError("body is empty")
     cid = uuid.uuid4().hex[:12]
     rec = {"id": cid, "subject": subject, "body_md": body_md,
-           "tiers": _clean_tiers(tiers), "author": author or "",
+           "roles": _clean_roles(roles), "author": author or "",
            "created": time.time(), "status": "draft", "scheduled_at": None,
            "started_at": None, "finished_at": None, "recipients": {},
            "unsubscribes": 0}
@@ -469,7 +470,7 @@ def create_campaign(subject: str, body_md: str, tiers=None, author: str = "") ->
     return public_campaign(rec)
 
 
-def update_campaign(cid: str, subject=None, body_md=None, tiers=None) -> dict:
+def update_campaign(cid: str, subject=None, body_md=None, roles=None) -> dict:
     with _LOCK:
         d = _load()
         rec = d["campaigns"].get(cid)
@@ -483,8 +484,8 @@ def update_campaign(cid: str, subject=None, body_md=None, tiers=None) -> dict:
             rec["subject"] = subject.strip()
         if body_md is not None:
             rec["body_md"] = body_md
-        if tiers is not None:
-            rec["tiers"] = _clean_tiers(tiers)
+        if roles is not None:
+            rec["roles"] = _clean_roles(roles)
         _save(d)
     return public_campaign(rec)
 
@@ -494,7 +495,7 @@ def public_campaign(rec: dict) -> dict:
               "skipped": 0}
     for r in (rec.get("recipients") or {}).values():
         counts[r.get("status", "pending")] = counts.get(r.get("status", "pending"), 0) + 1
-    return {k: rec.get(k) for k in ("id", "subject", "body_md", "tiers", "author",
+    return {k: rec.get(k) for k in ("id", "subject", "body_md", "roles", "author",
                                     "created", "status", "scheduled_at",
                                     "started_at", "finished_at")} | {
         "stats": {**counts, "total": len(rec.get("recipients") or {}),
@@ -544,8 +545,8 @@ def cancel(cid: str) -> dict:
     return public_campaign(rec)
 
 
-def audience(tiers=None) -> list[str]:
-    return [s["email"] for s in subscribers(_clean_tiers(tiers) or None,
+def audience(roles=None) -> list[str]:
+    return [s["email"] for s in subscribers(_clean_roles(roles) or None,
                                             only_confirmed=True)]
 
 
@@ -597,7 +598,7 @@ def pump(now: Optional[float] = None,
                     c["status"] = "sending"
                     c["started_at"] = t
                     c["recipients"] = {e: {"status": "pending"}
-                                       for e in audience(c.get("tiers"))}
+                                       for e in audience(c.get("roles"))}
                 if c["status"] != "sending":
                     continue
                 nxt = next((e for e, r in c["recipients"].items()
@@ -685,7 +686,7 @@ LEVELS = ("info", "warning", "important")
 
 
 def post_notice(title: str, body: str = "", *, level: str = "info",
-                emails=None, tiers=None, expires_at: Optional[float] = None,
+                emails=None, roles=None, expires_at: Optional[float] = None,
                 author: str = "") -> dict:
     title = (title or "").strip()
     if not title or len(title) > 140:
@@ -695,7 +696,7 @@ def post_notice(title: str, body: str = "", *, level: str = "info",
     nid = uuid.uuid4().hex[:12]
     rec = {"id": nid, "title": title, "body": (body or "")[:2000], "level": level,
            "emails": sorted({U._norm(e) for e in (emails or []) if e}),
-           "tiers": _clean_tiers(tiers), "created": time.time(),
+           "roles": _clean_roles(roles), "created": time.time(),
            "expires_at": expires_at, "active": True, "author": author or ""}
     with _LOCK:
         d = _load()
@@ -713,15 +714,15 @@ def withdraw_notice(nid: str) -> None:
         _save(d)
 
 
-def _targets(n: dict, email: str, tier: str) -> bool:
+def _targets(n: dict, email: str, role: str) -> bool:
     if n.get("emails") and email not in n["emails"]:
         return False
-    if n.get("tiers") and tier not in n["tiers"]:
+    if n.get("roles") and role not in n["roles"]:
         return False
     return True
 
 
-def notices_for(email: str, tier: str = "", now: Optional[float] = None) -> list[dict]:
+def notices_for(email: str, role: str = "", now: Optional[float] = None) -> list[dict]:
     t = time.time() if now is None else now
     email = U._norm(email)
     d = _load()
@@ -730,7 +731,7 @@ def notices_for(email: str, tier: str = "", now: Optional[float] = None) -> list
     for n in sorted(d["notices"].values(), key=lambda n: -n["created"]):
         if not n.get("active") or (n.get("expires_at") and n["expires_at"] < t):
             continue
-        if not _targets(n, email, tier):
+        if not _targets(n, email, role):
             continue
         out.append({k: n[k] for k in ("id", "title", "body", "level", "created")}
                    | {"read": n["id"] in read})

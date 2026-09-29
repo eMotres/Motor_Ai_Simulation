@@ -1,7 +1,7 @@
 """ONE temperature per rotor part — the Thermal → Mechanical coupling.
 
-Added 2026-09-08 for the user's request: *"в механический расчёт тоже нужно
-делать каплинг, чтобы температуры везде были одинаковы"*.  The Thermal solve
+Added 2026-09-08 for the user's request: *"the mechanical solve also needs
+coupling, so the temperatures are the same everywhere"*.  The Thermal solve
 already reports a temperature for every solid; the Mechanical solve used to take
 two numbers typed by hand (``rotor_temp_c`` for the core, the magnets AND the
 shaft, ``sleeve_temp_c`` for the band).  Two hand-typed numbers are how the two
@@ -16,8 +16,8 @@ Four claims, in the order they matter:
       meaningful (see the docstring of `test_a_...eigenstrain...`: the linear
       solver is pypardiso, which is multi-threaded and NOT bit-reproducible, so
       the bit-level claim is made about the eigenstrain that reaches it).
-  (b) THE PHYSICS — the user's rule of 2026-09-09: *"нам нужно учитывать
-      температуру только как изменение давления на бандаж, если он есть"*.
+  (b) THE PHYSICS — the user's rule of 2026-09-09: *"we only need to account
+      for temperature as a change of pressure on the sleeve, if there is one"*.
       A temperature is a load on the rotor in ONE place, a retaining band: the
       iron under it grows at 12 ppm/K, the carbon does not, and the fit
       tightens.  Everywhere else — the magnets in their epoxy bed with a
@@ -306,7 +306,7 @@ def test_b_on_a_sleeveless_rotor_no_temperature_map_is_a_load(request, cold, whi
         assert th["part_temps_c"]["magnet"] == pytest.approx(REF_TEMP_C + DT)
         assert th["part_temps_c"]["rotor_core"] == pytest.approx(REF_TEMP_C)
         assert th["parts"]["magnet"]["thermal_strain_ppm_1"] == pytest.approx(
-            5e-6 * DT * 1e6, rel=1e-9)
+            7e-6 * DT * 1e6, rel=1e-9)   # Arnold sheet CTE // (2026-09-29; was 5e-6)
         assert th["parts"]["rotor"]["delta_t_c"] == 0.0
 
     before, after = _joint(cold), _joint(hot)

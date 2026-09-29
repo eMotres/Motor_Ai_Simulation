@@ -435,8 +435,8 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
         log.debug("mechanical: per-duty result not recorded", exc_info=True)
     # ── …and the STRESS FIELD itself, per duty (2026-09-09) ─────────────────
     # The row above is the table; the report also draws each duty's own von
-    # Mises map (user: *"давай сделаем сохранение всех полей моделирования, как
-    # электромагнитных, так и тепловых и механических"*).  ``duty_fields`` keeps
+    # Mises map (user: *"let's save all the simulation fields — electromagnetic,
+    # thermal, and mechanical alike"*).  ``duty_fields`` keeps
     # the mesh, the primary case's vm / principal / safety factor, the
     # displacement and the contact segments — ~0.31 MB compressed on the 200 mm
     # rotor, against the 4 MB the machine-level pickle costs.  ``modes`` keeps
@@ -691,15 +691,15 @@ def rotor_stress(
     side.  Since v2 they are three separate NONLINEAR solves: a separation
     contact opens and closes with the load, so nothing superposes.
 
-    ``cases=single`` solves only the one at ``rpm``.  User 2026-09-06: "давай
-    будем рассчитывать только на 23 000 оборотов — всё, что ниже, всяко выдержит,
-    и проще будет считать только одну величину".  The response SHAPE is
+    ``cases=single`` solves only the one at ``rpm``.  User 2026-09-06: "let's
+    only calculate at 23 000 rpm — anything lower will hold up fine anyway,
+    and it'll be simpler to compute only one value".  The response SHAPE is
     identical (``cases`` simply has one entry, keyed by the speed), so the maps,
     the persisted last result and every existing reader keep working.
 
     ``symmetry=sector`` (2026-09-09) solves ONE periodic sector instead of the
-    whole circle.  User: *"нагрузка на все зубы должна быть одинакова … так
-    используй периодичность, как я во Fusion"* — the two cut faces are tied by
+    whole circle.  User: *"the load on all teeth should be the same ... so
+    use periodicity, like I do in Fusion"* — the two cut faces are tied by
     ``u_B = R(2*pi/n) u_A``, so every pole is identical by construction and the
     stiffness matrix is ``n`` times smaller.  The response shape does not
     change: extensive numbers (masses, joint capacities, the bore reaction) are
@@ -710,8 +710,8 @@ def rotor_stress(
 
     ``magnet_temp_c`` / ``rotor_core_temp_c`` / ``shaft_temp_c`` (2026-09-08)
     give each solid its OWN temperature; ``sleeve_temp_c`` already did, and
-    ``rotor_temp_c`` stays the fallback for the three.  User: "в механический
-    расчёт тоже нужно делать каплинг, чтобы температуры везде были одинаковы" —
+    ``rotor_temp_c`` stays the fallback for the three.  User: "the mechanical
+    calculation also needs the coupling, so the temperatures are the same everywhere" —
     the Thermal solve reports a temperature per part, and the Mechanical solve
     should apply THOSE rather than two numbers retyped by hand.  Each one is in
     the cache key only when it was passed, so a request that names none is keyed

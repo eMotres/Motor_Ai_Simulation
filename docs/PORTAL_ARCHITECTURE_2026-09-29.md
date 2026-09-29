@@ -1402,6 +1402,83 @@ Owner principle (2026-09-29): **the portal must be compatible with open standard
 - **Peppol e-invoicing, payments**: the portal is non-commercial; commercial documents stay in `motres_erp`.
 - **Native CAD formats as exchange of record**: Fusion CSV remains a convenience.
 
+## 10C. Sustainability: who pays for compute
+
+Owner position (2026-09-29): the platform offers no commerce; suppliers and customers contact each other directly; the main goal is engineering. Server cost must not grow with users on the owner alone. The path below keeps the platform non-commercial now and adds funding stages only when measured triggers fire.
+
+### 10C.1 What we already measure
+
+- Per-user CPU-hours per job, with `own_node` flag (BYO vs shared) — usage metering, PR #44.
+- Fair-use limits per user on shared compute (section 10).
+- Queue length and wait time per job class (solver queue).
+- Missing, to add in Stage 1: monthly server invoice (Hetzner) imported as a cost record; storage GB and egress per org; derived **€/CPU-hour = monthly cost / shared CPU-hours**.
+
+### 10C.2 Options
+
+| Option | How | Pros | Cons |
+|---|---|---|---|
+| (a) BYO compute nodes (built, PR #44) | Heavy users and orgs attach their own Linux servers; jobs lease to them | Zero cost to the platform; scales with the users who need it; data can stay on the user's hardware | Needs a user with a server; support effort for node setup; mixed hardware = timing variance (results identical, provenance recorded) |
+| (b) Fair-use + metering + public cost dashboard | Limits on shared compute (exist), per-user CPU-hour metering (exists), public page: €/CPU-hour, monthly cost vs usage, BYO share | Transparency builds trust and supports sponsor asks; no money flows | Does not raise money by itself; limits may frustrate power users |
+| (c) Community / sponsor funding (AGPL-compatible) | GitHub Sponsors; Open Collective with a fiscal host (transparent public ledger); vendor/partner sponsorship of nodes (credited on the dashboard, contractually no influence on results or rankings); research/EU grants — candidates to verify: Horizon Europe (Cluster 4/5 calls), EIC Pathfinder/Transition, NGI-style open-source funds (NLnet NGI Zero), national (e.g. Slovenian) research funds | Keeps the platform free; fiscal host handles money and receipts, platform never holds funds; grants fit open engineering tools | Irregular income; grant writing effort and reporting; vendor sponsorship needs a neutrality policy |
+| (d) Optional at-cost compute credits (later) | Users buy CPU-hours at cost (no margin) to exceed fair use; uses the disabled payments module (10D) | Heavy users pay for what they consume; platform stays non-commercial in spirit | Needs payments, VAT/OSS, invoicing, counsel; perceived as commercial if badly explained |
+| (e) Organization-hosted instances | Companies self-host the AGPL platform on their own infra (docs + Helm/compose) | Zero platform cost; strongest data residency; AGPL keeps improvements flowing back when offered over a network | Fragmented community; upgrade support load |
+
+### 10C.3 Recommended staged path and triggers
+
+| Stage | Switch on when | What |
+|---|---|---|
+| S0 (now) | — | (a) BYO nodes as the primary scaling path; (b) fair-use limits + metering; (e) self-hosting documented |
+| S1 | Before public launch | Public cost dashboard (€/CPU-hour, monthly cost vs usage, BYO share, queue wait p95); cost record import |
+| S2 | Shared compute > **€150/month** for 2 consecutive months, or > 50 active users | Open Collective (fiscal host) + GitHub Sponsors; vendor node-sponsorship policy published; first grant application |
+| S3 | Shared compute > **€500/month**, or queue wait p95 > **30 min** for 2 weeks despite BYO nudges | Add sponsored nodes; tighten fair use; prompt top-10 % consumers to BYO |
+| S4 | Sponsorship covers < 70 % of shared cost for 3 months and S3 measures failed | Enable (d) at-cost credits via the payments module (10D), after counsel review |
+
+Thresholds are initial values; the owner revisits them from the dashboard data. Decisions: D91–D96.
+
+---
+
+## 10D. Payments extension point (disabled)
+
+Architecture only; nothing is active. The point is that enabling payments later needs no restructuring.
+
+### 10D.1 Boundary
+
+- A `billing` module behind feature flag `BILLING_ENABLED` (default **off**); when off, routes return 404, UI hides every price, MCP exposes no billing tools.
+- Other modules talk to billing only through events (`usage.recorded`, `job.completed`) and a read API; no module imports billing internals.
+- Usage metering (10C.1) already emits the records billing would consume.
+
+### 10D.2 Data model placeholders (tables created empty, no UI)
+
+| Entity | Purpose |
+|---|---|
+| `Ledger` | Append-only double-entry lines (credit purchase, usage debit, refund, sponsor grant); never updated in place |
+| `CreditBalance` | Per user/org CPU-hour credit balance, derived from `Ledger` |
+| `Invoice` | Number, seller/buyer, VAT treatment, PDF ref, status |
+| `PaymentIntent` | Reference to a provider-side intent id + status only; no card or bank data |
+| `TaxProfile` | Buyer country, VAT id, B2B/B2C flag for VAT/OSS |
+
+### 10D.3 Payment provider adapter
+
+- Interface: `create_checkout(amount, currency, ref) -> redirect_url`, `handle_webhook(event)`, `refund(ref)`; candidate adapters Stripe, Mollie, Adyen (to evaluate).
+- Provider-hosted checkout only; PSD2/SCA handled by the provider; **no card data ever touches our servers** (PCI scope minimal).
+- Webhooks signature-verified and idempotent.
+
+### 10D.4 Marketplace payments (far future only)
+
+Customer-to-supplier payments would require a licensed payment/escrow provider (marketplace product of the PSP). The platform never holds, pools or forwards funds.
+
+### 10D.5 Legal notes (awareness, not legal advice)
+
+- E-money/PSD2 payment-institution licensing is avoided because funds are held by the provider, never by the platform.
+- VAT: EU B2C digital services via OSS, B2B reverse charge; invoices via the ERP (Minimax later). Confirm with tax counsel before enabling.
+
+### 10D.6 MCP and agents
+
+- MCP gets read-only `billing:read` (balance, usage, invoices list) when enabled.
+- Any purchase, refund or payment is **human-only** in the web with re-auth; no tool can initiate it (extends 9A.4).
+
+---
+
 ## 11. Risks, decisions, roadmap
 
 ### 11.1 Risks
@@ -1422,6 +1499,8 @@ Owner principle (2026-09-29): **the portal must be compatible with open standard
 | Non-commercial load grows beyond hardware | fair-use limits + BYO compute |
 
 ### 11.2 Decisions for the owner
+
+**Status: the owner approved D1–D90 on 2026-09-29.** D91+ below are new recommendations.
 
 D1–D23 from v2 (D9 restated; D12 was never assigned):
 
@@ -1526,6 +1605,16 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D88 | Untrusted content | Third-party text **only in `x-untrusted` fields**, never followed or interpolated; CI injection fixtures (9A.4) |
 | D89 | Agent language | **English** for tool names, descriptions, enums, errors; localized strings only as extra `display` fields (9A.1) |
 | D90 | Scope model | **`area:read` / `area:draft|write` + separate compute scopes**; new keys read-only by default; org roles apply on top (9A.4) |
+| D91 | Primary compute scaling | **BYO compute nodes first** (PR #44); heavy users and orgs bring their own servers (10C) |
+| D92 | Cost transparency | **Public cost dashboard**: €/CPU-hour, monthly cost vs usage, BYO share, queue wait (10C.3 S1) |
+| D93 | Community funding | **Open Collective with a fiscal host + GitHub Sponsors**; platform never holds funds (10C) |
+| D94 | Vendor sponsorship | Vendors may **sponsor nodes, credited publicly, no influence on results** (written policy) |
+| D95 | Grants | Apply to verified candidates (Horizon Europe, EIC, NGI Zero/NLnet) at stage S2 |
+| D96 | Funding triggers | Stages S0–S4 with thresholds €150 / €500 per month, queue p95 30 min; owner revisits |
+| D97 | At-cost credits | **Only on trigger S4**, at cost, no margin, after counsel review |
+| D98 | Payments module | **Designed, flag `BILLING_ENABLED` off**; empty Ledger/CreditBalance/Invoice/PaymentIntent tables (10D) |
+| D99 | Funds and card data | **Never hold funds, never store card data**; provider-hosted checkout only; marketplace payments only via a licensed provider |
+| D100 | Billing via agents | MCP **read-only** balance/usage; every payment human-only with re-auth |
 
 ### 11.3 Roadmap (rough, weeks of one engineering agent + owner review)
 

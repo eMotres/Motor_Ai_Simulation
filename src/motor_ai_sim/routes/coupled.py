@@ -5702,16 +5702,16 @@ def _run(body: Dict[str, Any],
                      "inside it at this point",
                      ", ".join(time_to_limit.get("judged") or ()) or "none")
         # ── AND THE MACHINE AT THAT MOMENT (owner 2026-09-18) ───────────────
-        # *«будем ставить максимальные значения этих лимитов и делать вычисление
-        # для них… то есть состояние мотора в работе 24 секунды при заданной
-        # мощности»* — and (addendum) at the cooling this duty was solved with.
+        # *"we'll set the maximum values of these limits and compute for
+        # them... that is, the state of the motor running for 24 seconds at
+        # the given power"* — and (addendum) at the cooling this duty was solved with.
         #
         # ONE extra electromagnetic pass, AT THE LIMIT, so torque, the four
         # loss classes, R, KV/Kt/Km, the demagnetisation check, the voltages
         # and the ripple are those of the machine at that instant instead of
         # those of a steady state it never reaches.  "At the limit" is literal
-        # (owner 2026-09-18, on the live site: *«так и расчёт тогда должен быть
-        # при катушках в 200 градусов, а не 184»*): each part is solved at the
+        # (owner 2026-09-18, on the live site: *"the calculation should be
+        # with the coils at 200 degrees, not 184"*): each part is solved at the
         # temperature its limit is judged on — the winding hot spot, the
         # hottest magnet element — and the limiting part exactly AT its limit,
         # never at the node mean the network integrates (`_limited_block`
@@ -5941,8 +5941,8 @@ def _run(body: Dict[str, Any],
                 log.debug("coupled: the continuous rating could not be found",
                           exc_info=True)
             # ── CONFIRM IT WITH A REAL EM PASS (owner 2026-09-21) ────────────
-            # *«почему сразу не пересчитывается электромагнитное моделирование
-            # для найденного непрерывного режима — токи не совпадают»*.  The
+            # *"why doesn't the electromagnetic simulation recompute right
+            # away for the continuous rating found — the currents don't match"*.  The
             # network's own answer is an ESTIMATE (a four-node fit); the record
             # — and every tile downstream of `em` / `field` — must be the
             # REAL machine at that current, exactly as `limits` mode makes the

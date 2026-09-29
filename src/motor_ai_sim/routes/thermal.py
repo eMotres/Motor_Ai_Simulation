@@ -7513,8 +7513,8 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                          else list(ED_CYCLE_LENGTHS_S))
 
         # ── 5a. THE REGIME THE MACHINE CAN HOLD ─────────────────────────────
-        # THE TOOL FINDS THE REGIME (user 2026-09-15): «мы сами находим это
-        # время / S3 ED, при котором всё нормально».  So the allowable duty
+        # THE TOOL FINDS THE REGIME (user 2026-09-15): "we find that time / S3
+        # ED ourselves, at which everything is fine".  So the allowable duty
         # ratio is solved FIRST and the cycle that is then integrated and drawn
         # is the one at THAT ED — unless the request stated an ED of its own, in
         # which case it is graded as before and the found one is reported

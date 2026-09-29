@@ -2522,8 +2522,8 @@ def _fem_field2d_impl(
             # restart with the persisted snapshot reloaded.  Nothing is
             # solved behind a probe, so the choice is "the run's final frame,
             # labelled" or a blank view saying "press Re-solve"; the user's
-            # verdict on the blank view (2026-09-05: "ну почему ты это до сих
-            # пор не исправил?") settles it.  Same-machine check inside.
+            # verdict on the blank view (2026-09-05: "why haven't you fixed
+            # this yet?") settles it.  Same-machine check inside.
             _snap, _relaxed_diffs = _latest_run_snapshot(_probe_fields)
             if _snap is not None:
                 _relaxed_diffs = list(_relaxed_diffs) + [
@@ -2919,8 +2919,8 @@ _fem_transient_cache = _WSP.ws_map(
 # second press of Run with the same inputs returned the FIRST run's object —
 # same torque, same ripple, same `computed_at` — without touching the solver.
 # For an engineer that is not a cache hit, it is a Run that silently did
-# nothing (user, 2026-09-04: "у нас с ними постоянно жуткие проблемы, их нужно
-# очищать при каждом расчёте и обновлять").  The dict survives only as an
+# nothing (user, 2026-09-04: "we constantly have terrible problems with
+# these, they need to be cleared and refreshed on every calculation").  The dict survives only as an
 # OPT-IN memo for the iterative loops that re-enter this route many times
 # inside ONE request (the bus-coupling fixed point and the charge-max compass
 # search: they revisit the same operating point by construction and each
@@ -3046,7 +3046,7 @@ def _save_last_transient(sb_key: tuple, result: Dict, *,
         # later RESTORE shipped 725 MB of JSON that no browser could parse —
         # the user's card silently fell back to a stale localStorage summary
         # and showed the previous run's numbers (measured live 2026-09-01:
-        # "обновил страницу, так 0 и стоит" over a solved P_solid = 5.1 W).
+        # "reloaded the page, it's still showing 0" over a solved P_solid = 5.1 W).
         result = {k: v for k, v in result.items() if k != "frames"}
         tmp = _transient_store_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:

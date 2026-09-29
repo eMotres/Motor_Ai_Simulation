@@ -4587,7 +4587,7 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
             # overrides it with 9 x 0.5 mm: loading one was refused key by key
             # (423), the live machine kept the DIE's wire, and the user got a
             # panel showing "wire split 2 / parallel 3" for a machine wound
-            # 1 x 4 ("откуда здесь взялось wire split 2?").  An override is a
+            # 1 x 4 ("where did wire split 2 come from here?").  An override is a
             # stored property of the configuration, not an edit — loading it is
             # exactly what the lock is meant to keep working.  A THIRD value,
             # typed by hand, is still refused.
@@ -4680,9 +4680,9 @@ def duty_fields(die: str, cfg: str, response: Response,
                 authorization: str = Header(default=None)):
     """WHICH duties of this configuration have a stored FIELD, and how big it is.
 
-    The array half of ``/duty_results`` (2026-09-09, user: *"давай сделаем
-    сохранение всех полей моделирования, как электромагнитных, так и тепловых и
-    механических"*).  ``motor_ai_sim.duty_fields`` keeps each duty's own mesh and
+    The array half of ``/duty_results`` (2026-09-09, user: *"let's save all
+    the simulation fields — electromagnetic, thermal, and mechanical
+    alike"*).  ``motor_ai_sim.duty_fields`` keeps each duty's own mesh and
     map arrays under ``<die>/runs/<configuration>/<duty>/fields/<kind>.npz``, so
     a report can draw four duties' temperature maps side by side instead of the
     last-solved one four times.

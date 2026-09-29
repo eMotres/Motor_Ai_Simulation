@@ -5,8 +5,8 @@ each magnet, parallel side walls) was solved with the Ø200's ``separation``
 magnet–rotor contact.  The magnets slid outward, the active set cycled, the
 maximum displacement came out at 1.6e11 µm — and the route still returned
 SF 0.08 on the magnets and a stress map with one 2 GPa corner element, which
-the user read as a real result ("напряжения должны быть распределены
-равномерно").  The solver had already written "a piece of the rotor is held by
+the user read as a real result ("stresses should be distributed
+evenly").  The solver had already written "a piece of the rotor is held by
 nothing and ran away" in ``torque_path`` beside it.  Such a solve is now
 refused by name, at the solver and at the route.
 
@@ -16,7 +16,7 @@ pocket cut ``GAP`` longer than the magnet: the magnet's outer face floats
 
 Later the same day the solver learned to SEAT a loose part — to travel it onto
 the surface that retains it rather than pin it where it floated (see
-tests/test_mechanical_seating.py, "магнит должен сесть на язычок, как в Fusion").
+tests/test_mechanical_seating.py, "the magnet must seat on the tab, like in Fusion").
 That does NOT soften anything here.  Seating moves a part onto a contact pair it
 already has, and a DRAWN gap has none: the 0.1 mm sliver is in no part's polygon,
 so it is not meshed and the two faces across it are both free surfaces.  A
@@ -64,8 +64,8 @@ def _polys(gap_mm: float):
 def _solve(gap_mm: float, contact: str = "separation", mu: float = 0.0,
            part_temps=None):
     # A map is only a load here under the solver's verification model: the
-    # production rule (2026-09-09, "температура только как изменение давления
-    # на бандаж") solves a sleeveless rotor cold whatever it is given.
+    # production rule (2026-09-09, "temperature only as a change of pressure
+    # on the sleeve") solves a sleeveless rotor cold whatever it is given.
     return rs.solve_rotor_stress(
         _polys(gap_mm), ASSIGN, RPM, 1.0, 0.0, stack_length_mm=50.0,
         mesh_size_mm=2.0, order=1, with_field=False,
@@ -120,7 +120,7 @@ def test_the_same_pocket_loosened_by_HEAT_seats_instead_of_running_away():
     against the magnet's 5, every pair goes tensile, and the magnet is loose by
     tens of microns.  That clearance is on a SHARED boundary, so the pair the
     magnet has to land on exists, and it travels onto it instead of running
-    away.  User: "магнит должен сесть на язычок, как в Fusion".
+    away.  User: "the magnet must seat on the tab, like in Fusion".
     """
     out = _solve(0.0, part_temps={"rotor_core": 150.0, "magnet": 20.0,
                                   "shaft": 20.0, "sleeve": 20.0})
@@ -187,7 +187,7 @@ def test_the_route_solves_an_unretained_separation_joint_bonded_and_says_so(monk
 
 
 def test_every_floating_separation_joint_is_bonded_in_turn(monkeypatch):
-    """User 2026-09-09 ("я везде сделал separation"): magnet AND shaft joints
+    """User 2026-09-09 ("I made everything separation"): magnet AND shaft joints
     separation, µ = 0 on the shaft — the magnet floats first, then the hub
     opens off the fit-less shaft.  Each runaway bonds the joint it names; the
     record lists both, in order."""
@@ -267,7 +267,7 @@ def test_the_route_turns_it_into_a_422_naming_the_pair(monkeypatch):
 # fallback glued the MAGNETS, handed their centrifugal load to the iron, and the
 # band's stress fell from 1717 MPa to 220 while the displacement fell from
 # 421 µm to 13.  A design read as safe because the wrong joint was glued is the
-# one failure this fallback must never produce (user: "так у нас всё раздельно").
+# one failure this fallback must never produce (user: "that's how we keep everything separate").
 
 def _ifaces(**open_by_pair):
     return {lb: {"type": "separation", "n_facets": 200, "open_fraction": of}
@@ -320,8 +320,8 @@ def test_a_free_part_with_no_separation_joint_falls_back_to_the_open_rule():
 # 2026-09-21.  The owner hit this refusal on production with a machine that was
 # not a runaway at all: CIANO14 50 edited / L15 — Ø50, 14 poles, rotor_hole 1,
 # magnet_up_gap 0.1, i.e. the straight-sided pocket with the magnets RECESSED
-# 0.1 mm below the rotor surface («мне нужно сделать запас magnet_up_gap = 0.1,
-# чтобы магниты не выскочили наружу, я должен проверить деформации»).  The
+# 0.1 mm below the rotor surface («I need to add a margin, magnet_up_gap = 0.1,
+# so the magnets don't pop out, I need to check the deformations»).  The
 # magnets are retained by the wedge of the pocket's side walls, exactly as at
 # magnet_up_gap = 0.
 #

@@ -372,8 +372,8 @@ def test_route_numbers_are_finite_and_physical(sandbox_result):
 
 
 def test_the_outer_surface_travel_is_reported_as_its_own_number(sandbox_result):
-    """User 2026-09-10: "нужно ещё считать максимальное радиальное смещение
-    верха бандажа как отдельное число в таблице".
+    """User 2026-09-10: "we also need to compute the maximum radial
+    displacement of the sleeve top as a separate number in the table".
 
     The outermost ROTATING surface is what closes the mechanical clearance, so
     its travel is quoted on its own rather than left to be inferred from the
@@ -586,8 +586,8 @@ def test_zero_rpm_is_rejected_with_the_field_named(client):
 # ---------------------------------------------------------------------------
 # (f) ONE speed instead of three
 # ---------------------------------------------------------------------------
-# User 2026-09-06: "давай будем рассчитывать только на 23 000 оборотов — всё,
-# что ниже, всяко выдержит, и проще будет считать только одну величину".  The
+# User 2026-09-06: "let's compute only at 23 000 rpm — everything
+# below will hold up anyway, and it's simpler to compute just one value".  The
 # claim under test is not "it is faster" (that follows from solving one case
 # instead of three) but that the ANSWER SHAPE does not change: one entry in
 # `cases`, named by its speed, with the safety factors, the retention verdict
@@ -661,8 +661,8 @@ def test_an_unknown_case_table_is_a_422_naming_the_field(client):
 # ---------------------------------------------------------------------------
 # (g) the high-modulus sleeve cards
 # ---------------------------------------------------------------------------
-# User 2026-09-06: "у нас цель сделать бандаж как можно тоньше и чтобы он смог
-# всё выдержать".  Three published-datasheet UD carbon laminates were added to
+# User 2026-09-06: "our goal is to make the sleeve as thin as possible and have it
+# survive everything".  Three published-datasheet UD carbon laminates were added to
 # config/materials_library.yaml beside T800_UD_60; this test is what says they
 # still resolve as SLEEVE material — orthotropic, checked in tension, with the
 # hoop modulus the card claims.

@@ -156,8 +156,8 @@ COMMON = dict(
 
 # 2026-09-06 — pins regenerated: the magnet top is now built on the circle
 # r = rotor_or − magnet_up_gap instead of on the chord between its two top
-# corners (user: "давай по умолчанию сделаем только arc и уберём прямую
-# вообще").  Every spoke magnet gains the circular segment (+1.20 % magnet
+# corners (user: "let's default to arc only and drop the straight segment
+# entirely").  Every spoke magnet gains the circular segment (+1.20 % magnet
 # section on the Ø200; tests/test_masses.py carries the mass table), so T, the
 # EMF and the losses moved by ~1 %.  The before→after table is in
 # tests/physics_baseline.before_arc.diff.txt next to the pins.

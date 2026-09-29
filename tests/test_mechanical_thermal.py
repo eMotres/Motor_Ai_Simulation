@@ -1,8 +1,8 @@
 """Rotor TEMPERATURE — the thermal eigenstrain, and the fit it changes.
 
-Added 2026-09-07 for the user's request: "нужно универсально добавить
-температуру ротора, чтобы можно было задавать; для моторов без бандажа этот
-эффект вообще минимальный".
+Added 2026-09-07 for the user's request: "we need to add rotor temperature
+universally, so it can be set; for motors without a sleeve this
+effect is minimal anyway".
 
 Five checks, in the order they matter:
 
@@ -261,7 +261,7 @@ NO_CTE_STEEL = {"category": "steel", "density": 7600.0,
 
 
 def test_c_a_material_with_no_cte_is_a_NOTE_not_a_422():
-    """The rule the user's "универсально" turns on: a card that predates the
+    """The rule the user's "universally" turns on: a card that predates the
     field must still solve.  The part simply does not expand, and the answer
     says which one and why."""
     out = rs.solve_rotor_stress(

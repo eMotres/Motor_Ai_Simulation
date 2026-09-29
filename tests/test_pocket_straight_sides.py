@@ -2,10 +2,10 @@
 
 Why (user, 2026-09-06, two zoomed pictures of the Ø200 pocket's top corner):
 
-    "при Rotor Hole = 1 грань ротора у кармана должна быть всегда прямой"
+    "with Rotor Hole = 1 the rotor face at the pocket must always be a straight line"
 
-and, on the zero-gap picture, "кусок ротора, который будет давать опять жуткие
-перегрузки; нужно сделать грань ротора прямой".  The two defects he showed:
+and, on the zero-gap picture, "a piece of the rotor that will again cause terrible
+overloads; the rotor face needs to be made straight".  The two defects he showed:
 
   * ``magnet_up_gap = 1`` — the rectangular opening cut had VERTICAL sides while
     the magnet's side edge is slanted, so where the cut met the magnet's rounded
@@ -521,8 +521,8 @@ _RECT_SNAPSHOT = {
     # gap 0 re-pinned 2026-09-07: a magnet that SEATS ON THE SLEEVE now ends its
     # corner fillets with a short chord at ≥ 12° to the bore instead of a
     # tangent (cadquery_geometry._open_fillet_at_top — the 0° air cusp at the
-    # tangent point made Triangle fan micro-elements there; user: "обрати
-    # внимание на углы магнитов").  The rectangle path itself is untouched: the
+    # tangent point made Triangle fan micro-elements there; user: "pay
+    # attention to the magnet corners").  The rectangle path itself is untouched: the
     # pocket hole is built from the same magnet polygon, so its hash follows
     # the magnet.  Rotor area 3997.148409 mm², gap 1 unchanged.
     # Same value after the opening learned to judge the chord with the ring
@@ -631,8 +631,8 @@ def test_the_mesh_tab_rotor_is_the_same_body_as_the_solver_rotor(gap):
 #     to the corner along the same chord.  Fixed by splicing the corners into
 #     the rim ring itself (`_od_ring_with_pocket_corners`).
 #   * the pole-tip fillet (rotor_fill_r) was NOT applied at magnet_up_gap = 0:
-#     the search band was scaled by up_gap and collapsed to 0 (user: "ты забыл
-#     применить это на углы ротора").  Fixed band on the straight-sided path.
+#     the search band was scaled by up_gap and collapsed to 0 (user: "you forgot
+#     to apply this to the rotor corners").  Fixed band on the straight-sided path.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _od_band_interior_angles(rotor, band_mm=0.5):
@@ -684,8 +684,8 @@ def test_the_pole_tips_are_rounded_by_rotor_fill_r(gap):
 # ═══════════════════════════════════════════════════════════════════════════
 #
 # 2026-09-21, the owner on CIANO14 50 edited / L15 (Ø50, 14 poles, rotor_hole 1,
-# magnet_up_gap 0.1): «мне нужно сделать запас magnet_up_gap = 0.1, чтобы
-# магниты не выскочили наружу, я должен проверить деформации».  In this mode
+# magnet_up_gap 0.1): «I need to add a margin, magnet_up_gap = 0.1, so the
+# magnets don't pop out, I need to check the deformations».  In this mode
 # `magnet_up_gap` is how far the magnet sits BELOW the rotor surface — air above
 # it, pocket walls still run to the OD, the magnets retained by the wedge of
 # those walls.  The geometry was right; `solve_rotor_stress` refused it.

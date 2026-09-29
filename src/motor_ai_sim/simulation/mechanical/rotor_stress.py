@@ -2473,8 +2473,8 @@ def solve_rotor_stress(polys: dict,
     # 2026-09-09: under the default ``band_fit`` model this array is NOT put
     # into the solve.  It is used to measure the fit at temperature (below),
     # and the solve carries that fit as the band's interference — the user's
-    # rule, "температура только как изменение давления на бандаж, если он
-    # есть".  ``free_expansion`` sums it onto the interference one as before.
+    # rule, "temperature only as a change in pressure on the band, if there
+    # is one".  ``free_expansion`` sums it onto the interference one as before.
     #
     # THE FRAME.  Axis 1 of every card is the same axis ``part_C`` builds the
     # stiffness in, so the two can never disagree:
@@ -2772,8 +2772,8 @@ def solve_rotor_stress(polys: dict,
         # ``TORQUE_LOAD_STEPS`` increments from that seated state.  Coulomb
         # friction has a history and not a value, and on the G2's self-locking
         # wedge applying the whole traction at once let the active set choose a
-        # locked state carrying seven times the load (user: "получается, что от
-        # момента больше деформации, чем от вращения?" — no; see the load-path
+        # locked state carrying seven times the load (user: "so torque causes
+        # more deformation than rotation?" — no; see the load-path
         # section of ``contact``).  With loads='centrifugal' there is no ramp and
         # the solve is one step, exactly the arithmetic it always ran.
         f = f_rot * (omega ** 2 * k * float(use_centrifugal)) + f_eig
@@ -2807,8 +2807,8 @@ def solve_rotor_stress(polys: dict,
         # was believed to hold the magnets.  The same case FRICTIONLESS
         # converges in eight iterations at 1,688 MPa and 419 µm, and the case
         # with the torque (which is ramped) converges at 1,717 and 421.  The
-        # user caught the pair: "не может такого быть, чтобы при только
-        # центробежной силе деформации были больше, чем ещё и при моменте".
+        # user caught the pair: "that can't be right, that centrifugal force
+        # alone gives more deformation than with torque added too".
         #
         #   1. walk the spin on in ``SPIN_LOAD_STEPS`` — kept ONLY if it
         #      actually converges, because a second unsettled state is not an

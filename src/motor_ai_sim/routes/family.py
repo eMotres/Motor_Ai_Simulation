@@ -2233,8 +2233,8 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
 
 # ── L-name ↔ stack consistency ───────────────────────────────────────────────
 # A configuration named "L15" / "G1-L160" declares its stack in the name, and
-# the name must TRACK the build (user's rule 2026-08-24: "нужно это
-# отслеживать и переименовывать") — an L15 holding a 13 mm build misled for a
+# the name must TRACK the build (user's rule 2026-08-24: "this needs to be
+# tracked and renamed") — an L15 holding a 13 mm build misled for a
 # whole session before it was caught by hand.
 _LNUM_RE = re.compile(r"(^|[-_ ])L(\d+(?:\.\d+)?)$")
 
@@ -2425,8 +2425,8 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             d.gamma_deg = sim.get("gamma_deg", sim.get("phase_offset_deg"))
         # A DUTY has no geometry of its own — the build (stack, wire, turns,
         # winding, materials) belongs to the CONFIGURATION, and every duty of
-        # a configuration shares it (user's rule, 2026-08-24: "как могут быть
-        # режимы с разной геометрией — это невозможно, только конфигурации").
+        # a configuration shares it (user's rule, 2026-08-24: "how could duties
+        # have different geometry — that's impossible, only configurations can").
         # This block used to RE-SNAPSHOT the live build into the configuration
         # on every save — which silently turned an L15 config into a 13 mm one
         # the moment a duty was saved from a 13 mm live machine (live incident
@@ -2470,7 +2470,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             # CONFIGURATION'S OWN parameters — it stores them, so an UNLOCKED
             # configuration must accept them being re-tuned: copy a config,
             # change the stack and the coil, save (user 2026-08-25, after the
-            # third refusal: "вся остальная геометрия не менялась").  The
+            # third refusal: "the rest of the geometry didn't change").  The
             # refusal exists for the DIE-level cross-section below — that one
             # is the stamped lamination, shared by every configuration.
             # Adopting changes build_sig, so older results correctly flag as

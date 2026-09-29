@@ -128,6 +128,7 @@ def test_cluster_summary_totals():
     ("get", "/api/admin/nodes"), ("post", "/api/admin/nodes"),
     ("get", "/api/admin/nodes/x/history"), ("post", "/api/admin/nodes/x/revoke"),
     ("get", "/api/admin/cluster/app"), ("post", "/api/admin/cluster/jobs/r/stop"),
+    ("get", "/api/admin/load/live"),
 ])
 def test_admin_only(monkeypatch, method, path):
     monkeypatch.setattr(auth, "_is_admin_caller", lambda a: (False, None))

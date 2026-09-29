@@ -29,11 +29,18 @@ import time
 from typing import Any, Dict, List, Optional
 
 SAMPLE_S = 2.0
+#: Admin -> Overview live load: how often the (minute, node, user, client)
+#: CPU-seconds accumulator is flushed to the store. The per-job weights come
+#: from the existing 2 s _tick(); this just controls write frequency.
+ATTRIB_FLUSH_S = 12.0
 _LOCK = threading.RLock()
 _ACTIVE: Dict[str, "Meter"] = {}
 _SAMPLER: Optional[threading.Thread] = None
+_ATTRIB_FLUSHER: Optional[threading.Thread] = None
 _LAST_TREE: Optional[float] = None
 _SEEN_CHILD: Dict[int, float] = {}
+#: (minute_bucket, node, user, client) -> accumulated CPU-seconds not yet flushed.
+_USER_ACC: Dict[tuple, float] = {}
 
 STATUS = {"done": "done", "cancelled": "stopped", "failed": "failed"}
 
@@ -197,11 +204,16 @@ def _tick(fast: bool = False, own: Optional["Meter"] = None) -> None:
         tot = sum(weights)
         if fast and len(ms) > 1:
             tot = 0.0                                   # unknown weights -> equal
+        minute = int(time.time() // 60) * 60
         for m, w in zip(ms, weights):
             share = (w / tot) if tot > 1e-6 else 1.0 / len(ms)
-            m.cpu_s += delta * share
+            got = delta * share
+            m.cpu_s += got
             if len(ms) > 1:
                 m.shared = True
+            if got > 0:
+                key = (minute, m.node, m.user, m.client)
+                _USER_ACC[key] = _USER_ACC.get(key, 0.0) + got
 
 
 def _sampler_loop() -> None:
@@ -218,6 +230,94 @@ def _ensure_sampler() -> None:
     if _SAMPLER is None or not _SAMPLER.is_alive():
         _SAMPLER = threading.Thread(target=_sampler_loop, daemon=True, name="job-usage")
         _SAMPLER.start()
+    _ensure_attrib_flusher()
+
+
+# ── per-minute (node, user, client) CPU attribution (Admin -> Overview live load) ──
+LOAD_FINE_BUCKET_S = 60
+LOAD_FINE_KEEP_S = 24 * 3600
+LOAD_COARSE_BUCKET_S = 15 * 60
+LOAD_COARSE_KEEP_S = 7 * 24 * 3600
+
+
+def flush_user_attribution(now: Optional[float] = None) -> int:
+    """Drain the in-memory (minute, node, user, client) accumulator to the store."""
+    t = time.time() if now is None else now
+    with _LOCK:
+        acc = dict(_USER_ACC)
+        _USER_ACC.clear()
+    if not acc:
+        return 0
+    from motor_ai_sim import cluster_monitor as CM
+    con = _db()
+    try:
+        for (minute, node, user, client), cpu_s in acc.items():
+            coarse = int(minute // LOAD_COARSE_BUCKET_S) * LOAD_COARSE_BUCKET_S
+            for table, bucket in (("load_by_user_fine", minute),
+                                  ("load_by_user_coarse", coarse)):
+                con.execute(
+                    f"INSERT INTO {table} (bucket, node, user, client, cpu_s) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(bucket, node, user, client) "
+                    "DO UPDATE SET cpu_s = cpu_s + excluded.cpu_s",
+                    (bucket, node, user, client, cpu_s))
+        con.execute("DELETE FROM load_by_user_fine WHERE bucket < ?",
+                    (int(t - LOAD_FINE_KEEP_S),))
+        con.execute("DELETE FROM load_by_user_coarse WHERE bucket < ?",
+                    (int(t - LOAD_COARSE_KEEP_S),))
+        con.commit()
+    finally:
+        con.close()
+    return len(acc)
+
+
+def _attrib_flush_loop() -> None:
+    while True:
+        time.sleep(ATTRIB_FLUSH_S)
+        try:
+            flush_user_attribution()
+        except Exception:                               # noqa: BLE001
+            pass
+
+
+def _ensure_attrib_flusher() -> None:
+    global _ATTRIB_FLUSHER
+    if _ATTRIB_FLUSHER is None or not _ATTRIB_FLUSHER.is_alive():
+        _ATTRIB_FLUSHER = threading.Thread(target=_attrib_flush_loop, daemon=True,
+                                           name="job-usage-attrib")
+        _ATTRIB_FLUSHER.start()
+
+
+def user_load_series(start: float, end: float, top_n: int = 8) -> Dict[str, Any]:
+    """Stacked CPU-seconds series for Admin -> Overview live load, grouped by
+    (user, client), top ``top_n`` by total CPU + an "other" bucket."""
+    fine_cutoff = time.time() - LOAD_FINE_BUCKET_S * 1440   # 24 h of fine data
+    table = "load_by_user_fine" if start >= fine_cutoff else "load_by_user_coarse"
+    width = LOAD_FINE_BUCKET_S if table == "load_by_user_fine" else LOAD_COARSE_BUCKET_S
+    con = _db()
+    try:
+        rows = con.execute(
+            f"SELECT bucket, node, user, client, cpu_s FROM {table} "
+            "WHERE bucket >= ? AND bucket < ? ORDER BY bucket",
+            (int(start), int(end))).fetchall()
+    finally:
+        con.close()
+    totals: Dict[str, float] = {}
+    for _b, _n, user, client, cpu_s in rows:
+        totals[user] = totals.get(user, 0.0) + cpu_s
+    top = sorted(totals, key=lambda u: -totals[u])[:max(0, int(top_n))]
+    top_set = set(top)
+    buckets: Dict[int, Dict[str, float]] = {}
+    for bucket, _node, user, _client, cpu_s in rows:
+        key = user if user in top_set else "other"
+        b = buckets.setdefault(int(bucket), {})
+        b[key] = b.get(key, 0.0) + cpu_s
+    series = []
+    for b in sorted(buckets):
+        pt: Dict[str, Any] = {"ts": b}
+        for u, s in buckets[b].items():
+            pt[u] = round(100.0 * s / width, 2)   # CPU-seconds -> CPU %
+        series.append(pt)
+    return {"users": top, "bucket_s": width, "series": series}
 
 
 def start(rec: Any, sampler: bool = True) -> Optional[Meter]:
@@ -265,6 +365,7 @@ def reset() -> None:
     with _LOCK:
         _ACTIVE.clear()
         _LAST_TREE = None
+        _USER_ACC.clear()
 
 
 # ── store ────────────────────────────────────────────────────────────────────
@@ -289,6 +390,10 @@ def _db():
     if "own_node" not in have:
         con.execute("ALTER TABLE usage ADD COLUMN own_node INTEGER DEFAULT 0")
     con.execute("CREATE INDEX IF NOT EXISTS usage_end ON usage(ts_end)")
+    for table in ("load_by_user_fine", "load_by_user_coarse"):
+        con.execute(
+            f"CREATE TABLE IF NOT EXISTS {table} (bucket INTEGER, node TEXT, user TEXT, "
+            "client TEXT, cpu_s REAL DEFAULT 0, PRIMARY KEY(bucket, node, user, client))")
     return con
 
 

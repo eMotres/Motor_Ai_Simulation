@@ -1,4 +1,4 @@
-# Engineering portal: core + contracted modules (v4, 2026-09-29)
+# Engineering portal: core + contracted modules (v4.1, 2026-09-29)
 
 Base: `motor_ai_sim`, branch `origin/pre-migration-freeze-2026-09-15` (production, 3d914fc), plus the open PRs #40 (licence: AGPL-3.0-or-later + DCO), #41 (private split), #44 (bring-your-own compute, `docs/BYO_COMPUTE.md`) and the MCP stages (`docs/MCP_2026-09-28.md`). The separate ERP project `motres_erp` was read (not changed) to draw the integration boundary. This is a document; no code was changed.
 
@@ -21,6 +21,17 @@ v4 is one consistency pass over v3 (PR #37, commit 5053809) after two technical 
 | C11 | BYO nodes: permission to compute ≠ permission to receive geometry; signatures prove origin only; verification levels of results | 5.3, 10, 10A.8, D118 | DR A03, SR compute |
 | C12 | Immutable **quotation package (not for production)** before release; production orders only on released revisions; watermark renditions, never manufacturing geometry | 7.3, 8.4, 8.9.1, 8.9.3, D119 (restates D34) | DR A07 |
 | C13 | Consistency: Argon2id hashes are stored (no "stores no passwords"); one deprecation policy; one units rule (m, rad/s at the boundary, legacy adapters); one quote schema and state machine (8.9.8/8.9.9); roadmap durations reconciled (M10 ~9 wk); independent data-policy attributes and honest erasure; manual invites cannot override access rules; FMU rights; semantic conformance; module acceptance rules; J as parameter | 1.1, 2.1, 4.1, 4A.2, 5.1–5.3, 8.3, 8.4, 8.9.2, 9A.3, 10A.1, 10A.4–10A.6, 10B.6, 10B.9, 11.3, D120–D121 | DR R02, R03, R04, A04, A05, A06, S03, S04, F05, F09; SR storage |
+| C14 (v4.1) | Transient shaft: no port-torque sum equals J·dω/dt at an ideal node; acceleration comes from each module's own torque balance or an explicit `inertia`/`shaft` module that owns ω | 2.7.5, 2.7.7, 3.5 | Codex re-review v4, top issue 1 |
+| C15 (v4.1) | P1 publication protocol made normative (PR #48): private frozen export, hashed manifest, hash-bound approval, durable journal before any remote effect, private-first push, exactly the snapshot, resume/rollback, fail-closed validation, `owner_org` boundary | new 10A.12, 9A.2, 9A.6, 11.3 P1 | Codex re-review v4, top issue 2 |
+| C16 (v4.1) | P2 catalog source binding: one source per ID, clash = error unless an override record, results record ID + source + content hash; layers testable without local files; open item on local config/dies | new 10A.13, 11.3 P2 | Codex re-review v4, top issue 3 |
+| C17 (v4.1) | Managed-pool rate: exact allocable core-hours, 50 % floor formula, dedicated and burst nodes, storage, refunds, first charged month, currency, rounding, worked AX42 example | 10C.3 | Codex re-review v4, top issue 4 |
+| C18 (v4.1) | D73 limited to marketplace fees/commissions between customers and suppliers; compute pass-through billing (10C/10D) explicitly separate and allowed | D73, 10C.3 | Codex re-review v4, wording conflict |
+| C19 (v4.1) | One data boundary: foreign/vendor modules get port values only; platform solvers (also on the data owner's BYO node) get machine descriptions only where the object's export right allows, checked per object before bundle creation | 5.3, 10A.8, D118 | Codex re-review v4, top issue 5 |
+| C20 (v4.1) | Six-phase / independent coils narrowed to what is demonstrated per solver (two-set 0° six-phase in the EM solver, PR #21); the rest planned | 4A.6, D113 | Codex re-review v4, capability row |
+| C21 (v4.1) | M4 org schema foundation and M8 org features are one migration path | 11.3, D24 | Codex re-review v4, roadmap |
+| C22 (v4.1) | Public CI runs synthetic public conservation/golden tests; absent private gates fail release CI (skip only in developer runs) | 11.3 P2/P4, 10B.9 | Codex re-review v4, public CI |
+
+v4.1 (same day) applies the independent re-review `codex_rereview_architecture_v4_2026-09-29.md` in place (rows C14–C22); decision ids stay stable.
 
 Decision ids D1–D106 are unchanged. Changed decisions are marked **(restated v4)**; replaced ones are marked **superseded by Dxxx** and kept for traceability; new decisions are D107–D121.
 
@@ -285,7 +296,7 @@ Example: OCV = 400 V, R = 0.1 Ω, I = −10 A (discharging at 10 A) → V = 400 
 
 - Across ω [rad/s] (angle φ in `series` when compliance is modelled), through τ [N·m] acting on the module. Each shaft port declares its positive rotation direction; a link checks that both ends agree (or carries an explicit orientation factor s = ±1).
 - **Motoring:** electrical port power > 0 (in), shaft power < 0 (out). **Generating:** signs flip. No "if generator" branch: the mode is the sign pattern, efficiency = |out| / |in|.
-- **Inertia** J [kg·m²] is a module **parameter**; ω (and φ) are states with energy ½·J·ω². The core may merge rigidly coupled inertias on one shaft into J_total as an internal numerical reduction to avoid an algebraic loop, but it still reports each module's own ½·J_k·ω² and its port torques separately. Across a gearbox the inertia of side b reflected to side a is J_b / i², not a plain sum (DR F05).
+- **Inertia** J [kg·m²] is a module **parameter**; ω (and φ) are states with energy ½·J·ω². Each module that carries inertia integrates its **own** balance J_k·dω/dt = Σ(its port torques) + its internal torques (electromagnetic, friction, load law); a load or shaft whose only physics is inertia is an explicit `inertia` (or `shaft`) module with state ω. An **ideal shaft node has no inertia**: at every instant and in every mode it enforces equal ω (with orientation factors) and Σ port torques = 0. The core may reduce rigidly coupled inertias to one ω state as an internal numerical step to avoid an algebraic loop, but that reduction is derived from the module balances, never replaces the node law, and the core still reports each module's own ½·J_k·ω² and its port torques separately. Across a gearbox the inertia of side b reflected to side a is J_b / i², not a plain sum (DR F05).
 - **Gearbox (DR F01, D107).** Ports a and b, ratio i with ω_b = ω_a / i (in the declared directions). Port torques τ_a, τ_b act on the gearbox (positive in). P_a = τ_a·ω_a, P_b = τ_b·ω_b; the loss P_loss = P_a + P_b ≥ 0 goes to the heat port.
   - **Forward (power a → b, P_a > 0):** P_b = −η_f · P_a, hence τ_b = −i · η_f · τ_a.
   - **Backward / back-driven (power b → a, P_b > 0, e.g. regenerative braking through the gearbox):** P_a = −η_b · P_b, hence τ_a = −(η_b / i) · τ_b.
@@ -326,7 +337,7 @@ Checks the core performs:
 2. **Modules:** every row above has residual 0.
 3. **System:** energy released by storage = energy leaving through boundaries: −dE_chem/dt = P_bnd,load + ṁ·(h_out − h_in) → 105 000 = 97 500 + 7 500 ✓.
 
-In a transient (acceleration, `transient` mode) the same equations hold with dE/dt ≠ 0: at the shaft the signed port torques satisfy τ_motor,port + τ_load,port = J_total·dω/dt, SoC and every thermal node are integrated, the DC-link ½·C·V² and the motor field energy W_field are included, and the check runs on energies integrated over each accepted step.
+In a transient (acceleration, `transient` mode) the same equations hold with dE/dt ≠ 0. The shaft node stays ideal (equal ω; τ_motor,port + τ_load,port = 0). Acceleration comes from the module balances of 2.7.5: the motor integrates J_rotor·dω/dt = τ_em − τ_mech,loss + τ_motor,port, and the load, now an explicit `inertia` module (or a load module with its own J and load law) instead of the boundary sink, integrates J_load·dω/dt = τ_load,port − τ_brake(ω); both ½·J·ω² are reported as storage. SoC and every thermal node are integrated, the DC-link ½·C·V² and the motor field energy W_field are included, and the check runs on energies integrated over each accepted step.
 
 #### 2.7.8 Consistency checks on every system solve
 
@@ -451,7 +462,7 @@ Naming FMI or SSP does not provide an acausal graph solver (DR F07). Version 1 o
 
 | Scheme | Graph | Modes |
 |---|---|---|
-| **S-A** | battery → controller → motor → load (boundary sink or inertia) | `steady_periodic`, `quasi_static`, `transient` |
+| **S-A** | battery → controller → motor → load (boundary sink, or an explicit `inertia` module with state ω, 2.7.5) | `steady_periodic`, `quasi_static`, `transient` |
 | **S-B** | S-A with a gearbox between motor and load | as S-A |
 | **S-C** | S-A or S-B plus a thermal network: heat ports → cold plate(s) → coolant boundary, or lumped ambient boundaries | as S-A |
 | **S-0** | today's single motor with current drive (no battery, ideal source) or with the built-in controller | as today (`coupled.py`) |
@@ -464,7 +475,7 @@ Naming FMI or SSP does not provide an acausal graph solver (DR F07). Version 1 o
 |---|---|
 | Inputs (scenario) | demand on the load (ω, or τ, or a profile), battery SoC₀ and T₀, coolant supply T and ṁ (boundary), ambient T, controller command (current or torque setpoint, f_sw, modulation) |
 | Algebraic unknowns | V_bus, I_bus, phase quantities (phasors or series), motor torque, controller and motor losses, gearbox torques, heat flows, coolant outlet enthalpy |
-| States | SoC, polarisation voltages, all thermal node temperatures, ω (and φ with compliance) in `transient`; DC-link V_C and field quantities only in `transient` / `switching_resolved` (inside the FEM or the averaged model) |
+| States | SoC, polarisation voltages, all thermal node temperatures, ω (and φ with compliance) in `transient`, owned by the modules with inertia (motor, `inertia`/`shaft` module), never by an ideal node; DC-link V_C and field quantities only in `transient` / `switching_resolved` (inside the FEM or the averaged model) |
 | Initial conditions | from the scenario; unspecified temperatures = ambient; DC-link V_C₀ = OCV (no-load); ω₀ as given; a consistent initialization pass solves the algebraic unknowns before the first step and fails loudly if it does not converge |
 | Algebraic loops | battery V depends on I, I on the motor demand, the demand on V (field weakening): solved as one **fixed-point loop on V_bus** with under-relaxation, secant fallback, iteration cap and the all-quantity convergence rule of 2.7.8; the thermal loop is the outer loop as today; rigid inertias merged (2.7.5). Non-convergence = no result |
 | Events | limits (current, voltage, temperatures, SoC_min), backlash contact, back-driving refusal: located in time, the step is repeated to the event |
@@ -678,7 +689,10 @@ A geometry source can describe a machine that no solver can yet compute correctl
 | Induction (cage) | new formulation (rotor bar currents, slip) | new formulation (time-harmonic / motional eddy) | new formulation | part of the formulation | planned after EM |
 | SynRM | planned (no magnets, saturation maps) | planned | planned | not applicable to magnets; steel eddy planned | planned |
 | EESM (wound field) | planned (field winding as a second excitation) | new formulation (field circuit, exciter/brushes) | new formulation | planned | planned (rotor copper heat) |
-| Six-phase / independent coils (any supported topology) | **supported** in the controller study (`elec.acN`) | **supported** where the topology is | as the topology | as the topology | as the topology |
+| Six-phase, two three-phase sets with 0° shift (IPM radial inner) | **supported** in the EM solver (PR #21) | **supported** in the EM solver (PR #21) | planned | as IPM radial inner | as IPM radial inner |
+| Six-phase with 30° shift, other N-phase, independent coils, open-phase/fault current sets | planned (the controller study `elec.acN` exists; the EM solver winding/excitation is not yet demonstrated) | planned | planned | planned | planned |
+
+A winding row is marked supported only for the solver whose winding and excitation implementation has been demonstrated on a test case; every other solver in that row stays planned until it is.
 
 ---
 
@@ -705,7 +719,7 @@ An FMU is **executable code with its own distribution rights** (DR S04). An inde
 ### 5.3 Security and IP protection
 
 - **Foreign code never runs in the API process.** Only a separate executor (container: `--network none`, seccomp, limits, temporary FS), dispatched through `jobs.py` and the node lease protocol.
-- **Minimum data out:** a module receives only its port values. Our motor geometry never goes to the propeller vendor. Same principle as the MCP whitelist.
+- **Minimum data out, one boundary (D118).** A **foreign/vendor module** receives only its port values, never a machine description, geometry, map or another owner's card: our motor geometry never goes to the propeller vendor. A **platform solver** (our code, pinned by digest, on a platform node or on a BYO node of the data owner) receives a machine description only for objects whose export right allows it on that node class (the owner's own objects, or an explicit `run_on_byo` grant; 10A.8). The check runs **per object before the job bundle is created**; a bundle that would contain a disallowed object is never built. Same principle as the MCP whitelist.
 - **Compute rights ≠ data rights (DR A03, D118):** permission to *run* a model or a customer design does not include permission to *receive* its geometry, map or FMU. Jobs that need another owner's geometry, maps or FMUs run only on platform nodes (shared or dedicated), never on a user-owned BYO node, unless the owner has explicitly granted `run_on_byo` for that object and that node class (10A.8).
 - **Vendor IP protection:** maps and FMUs are visible in the UI only as results; a card cannot be downloaded as a whole unless `license: download`. A remote service gives maximum protection.
 - **Audit:** every call to a foreign module is a log row (as `config/mcp_audit.jsonl`): who, which module@version with its **image/code digest**, which input and card revisions, how many seconds.
@@ -1228,7 +1242,7 @@ Resources are read-only and addressed by `emotres://` URIs (listed and templated
 | BYO compute nodes (10) | `emotres://nodes` (own/org nodes, status, profile, last lease) | `get_node_status(id)` | — | `nodes:read` | attach/revoke node, token issue = human |
 | i18n | `emotres://guide/glossary` has EN terms + ZH display names | — | — | — | — |
 | Data export / delete (10A.6) | `emotres://privacy/requests` (own requests, state) | `request_data_export()` (prepares; download link needs web session), `request_account_delete()` | — | `privacy:request` | **delete and export delivery confirmed by the human in the web** (re-auth) |
-| Open-data publication (10B, D66) | `emotres://publication/{id}` | `prepare_publication_draft(object)` (runs the publication boundary checks of P1) | — | `publish:draft` | **publication = human** |
+| Open-data publication (10B, D66) | `emotres://publication/{id}` | `prepare_publication_draft(object)` (runs the preview/validation of 10A.12 and returns the snapshot id) | — | `publish:draft` | **publication = human** |
 
 ### 9A.3 Discoverability: the portal describes itself
 
@@ -1276,7 +1290,7 @@ Resources are read-only and addressed by `emotres://` URIs (listed and templated
 
 | Stage | MCP deliverables |
 |---|---|
-| **P1** Publication fix | `prepare_publication_draft` shares the fail-closed boundary; `publish` stays human-only |
+| **P1** Publication fix | `prepare_publication_draft` shares the fail-closed validation and snapshot of 10A.12; `publish` stays human-only |
 | **P2** Data loading and versions | revision ids in every `emotres://` URI, `@latest` resolution, code SHA + data revision in every result |
 | **P3** Motor + controller in contracts | `schemas/` repository and generator; port contract schema; `emotres://schema`, `guide/units-and-signs`, `guide/port-contract`; error-code table; tool contract tests in CI; today's 11 tools regenerated from schemas without behaviour change |
 | **P4** Verify old results | MCP results of L155/L180/L13 compared bit-identical with the old routes |
@@ -1385,7 +1399,7 @@ Export-controlled technical data (see 10A.3) is a further **attribute** (`export
 - **Limits of what a node proves.** A result signature proves **origin** (which node key signed which bundle), **not correctness**, and a node's deletion statement or declared country is a **declaration, not proof** of deletion or location. Results carry a **verification level**: `platform` (computed on a platform node), `byo_declared` (signed by a user node), `byo_rechecked` (a sample of points re-run on a platform node and matched within the track-B tolerances). Only `platform` and `byo_rechecked` results may enter released revisions, published cards or maps shared with other orgs.
 - **Region rule:** a platform node belongs to one region; a BYO node declares its country; the scheduler never sends a job of a region-pinned object to a node outside the allowed countries unless the owning org's `transfer_policy` allows it. Export-flagged objects never go to foreign vendor modules.
 - **Dataset export** (the engineering dataset program) is a data destination too: only MOTRES-owned or explicitly authorised records enter it; customer data never does by default.
-- **Vendor modules** receive port values only (D23, 5.3), never geometry.
+- **Vendor modules** receive port values only (D23, 5.3), never geometry; platform solvers receive machine descriptions only under the per-object export check of 5.3, enforced before bundle creation (D118).
 - **MCP/agents** act with the calling user's grants and region, never the platform's; tools cannot cross orgs or regions; MCP audit stays in the region.
 
 ### 10A.9 Logging without secrets or PII
@@ -1410,6 +1424,29 @@ Export-controlled technical data (see 10A.3) is a further **attribute** (`export
 | Customer data crosses a border without basis | region attribute everywhere, router, transfer_policy, node country check |
 | An admin or agent reads customer designs silently | break-glass with audit visible to the org owner; MCP with caller's grants only |
 | Export-controlled design shared to a sanctioned party | export-control flag, country checks on sharing and on BYO nodes |
+
+### 10A.12 Reference-data publication protocol (P1, normative)
+
+The protocol implemented by PR #48 (branch `feat/open-private-data`, commit 6dc6b6e; `src/motor_ai_sim/data_publish.py`, `docs/OPEN_PRIVATE_DATA.md`) is the normative P1 design. **Publication is the first push to the public repository**; the pull request is review, not a confidentiality gate, so every check and the human approval happen before that push.
+
+1. **Boundary.** Only objects declaring `owner_org: MOTRES` (or an organisation listed in `DATA_REFERENCE_ORGS`) may enter either repository; a missing or foreign `owner_org` blocks. Anything tagged `customer`, `confidential: customer` or naming a `customer:` is blocked for both repositories; NDA/confidential tags block publication. Workspace and shared-catalog objects are not movable. Customer data never enters git (1.1, 10A.2).
+2. **Private frozen export.** Preview builds the export privately: the complete file list with sha256 content hashes (the manifest), its dependencies (materials, devices, results) and a **snapshot id** over all of it.
+3. **Fail-closed validation of every exported file and dependency.** Blocking: an unreadable or unparseable file or metadata, the wrong schema/shape, a file outside the export whitelist (attachments, PDFs, notes, backups included), a symlink or a path escaping the folder, size or archive-expansion limits, pickled objects, secrets or e-mail addresses in content, a missing or foreign `owner_org`, and for publication any dependency missing from the public library. Missing or invalid metadata is a blocker, never a default.
+4. **Approval bound to the hash.** The admin confirms with the snapshot id; if anything changed since the preview, the move is refused (same rule as D117).
+5. **Durable journal before any remote effect.** An intent record (id, object, source, target, branch, snapshot, files + hashes, planned steps) is written before the first git action; moves are serialised by a lock across threads and processes; an unreadable journal refuses every move.
+6. **Private first, exactly the snapshot.** Steps `commit:private → commit:open → push:private → push:open → pr:private → pr:open`; the commit copies exactly the confirmed files and re-checks every hash; every step is idempotent and recognised on retry.
+7. **Resume / rollback.** A failed step leaves the move `incomplete` with the error; Resume re-runs from the first unfinished step; Rollback deletes pushed branches, closes PRs and drops local branches until a PR is merged (it cannot unpublish what was already public).
+8. **Reconcile.** After the human merges: `merged → ff:private → ff:open → verify` against the journal hashes; any mismatch leaves the move `incomplete`, never `done`. Every intent, refusal, failure, resume, rollback and completion is audited.
+
+### 10A.13 Catalog source binding (P2, normative)
+
+Implemented in PR #48 (`src/motor_ai_sim/catalog_sources.py`) for dies, materials, devices and bearings:
+
+- Every item has one ID and comes from **exactly one** named source (`open`, `private`, `shared`, `public`, `global`). The same ID in two sources is a **clash**: a loud error, the item does not resolve, and a calculation that needs it fails and names the clash. No silent "private wins" or "public wins".
+- The only way through a clash is an explicit **override record** (kind, id, source, by, reason); an unreadable override file counts as none, so the clash stays an error.
+- Every result records each item it used as **ID + source + content hash** (`catalog_refs` in duty records, `provenance.catalog_ref` in controller results), so a same-named item from another source cannot silently change a stored number.
+- External source layers are visible and tested independently of local files (a layer present with an empty local directory, and the reverse).
+- **Open item:** on a single-user workstation, local `config/dies` still decides whether the layers activate (on when it is empty or the flag is set), and workspace copies resolve as `source: workspace`; an explicit binding for local config and dies remains to be designed in P2.
 
 ---
 
@@ -1535,6 +1572,7 @@ Status as understood on 2026-09-29; "to verify" items are checked (terms page, c
 | SBOM | CycloneDX / SPDX validators |
 | UBL, QIF | XSD validation **plus** a declared profile (which UBL document types and fields we fill) and a round trip through at least one named external reader; unsupported exports are labelled planned |
 | MCP / JSON Schema contract | Schema lint, generation drift, coverage, MCP tool contract tests, injection fixtures (9A.5) |
+| Physics (public / private) | Public CI: synthetic conservation (2.7.7 balances) and golden tests on made-up demo data. Release CI: private goldens must be present and pass; an absent private gate **fails** the release; skipping is allowed only in developer runs |
 
 ### 10B.10 Deliberately not adopted (now)
 
@@ -1571,12 +1609,27 @@ Public **price page** (`/compute/pricing`, no login) and a **monthly public cost
 | Shown | Content |
 |---|---|
 | Provider invoice lines | per node and month: provider, product, location, list price, discount obtained, net cost; storage and traffic lines; totals (company-identifying invoice numbers may be masked, amounts are not) |
-| Allocation method | written rule, e.g. **shared €/CPU-hour = shared-pool net cost of the month ÷ billable CPU-hours of the month**, with a **utilisation floor of 50 %** (owner-approved 2026-09-29): the rate is computed as if the pool were at least 50 % utilised, so early users do not pay for idle capacity; the gap is covered openly by the owner/sponsors and shown as such; storage **€/GB-month = storage cost ÷ stored GB-months**; dedicated node = its own net provider cost |
+| Allocation method | written rule, e.g. **shared €/core-hour = C_m / max(U_m, 0.5 × A_m)** (exact definitions below the table), i.e. a **utilisation floor of 50 %** of allocable core-hours (owner-approved 2026-09-29): the rate is computed as if the pool were at least 50 % utilised, so early users do not pay for idle capacity; the gap is covered openly by the owner/sponsors and shown as such; storage **€/GB-month = storage cost ÷ max(used, 0.5 × capacity) GB-months**; dedicated node = its own net provider cost |
 | Resulting rates | €/CPU-hour (shared), €/GB-month, dedicated-node €/month per node type; next month's rate is published before it applies (rates follow last month's actual cost, capped change per month) |
 | Discounts | each volume or term discount obtained, from when, and how it is passed on (lower rate for everyone on the shared pool; lower reservation price for dedicated nodes) |
-| Overhead | **default 0 % margin.** Payment fees, VAT handling and administration may be recovered only as a **separate, clearly-stated line item** (e.g. "payment provider fee 1.5 % + €0.25, passed through at cost"), and only if the owner decides; never hidden in the rate |
+| Overhead | **default 0 % margin** (compute pass-through, not a marketplace fee; D73). Payment fees, VAT handling and administration may be recovered only as a **separate, clearly-stated line item** (e.g. "payment provider fee 1.5 % + €0.25, passed through at cost"), and only if the owner decides; never hidden in the rate |
 | Free tier | the fair-use allowance and who funds it (owner budget, named sponsors) |
 | Pool health | utilisation, queue wait p95, node count, BYO share |
+
+**Rate formula (normative, v4.1).** Computed per region and calendar month m; all amounts in **EUR**, net of VAT (VAT per 10C.5).
+
+- **Allocable core-hours** A_m = Σ over shared-pool nodes of usable_cores × hours in the pool during m. usable_cores = hardware threads minus threads reserved for the OS/node agent (declared per node type); a full month is days × 24 h; a node added or removed mid-month counts pro rata. **Excluded:** dedicated nodes, BYO nodes, the owner's reserved or maintenance nodes, and hours a node was out of service.
+- **Used core-hours** U_m = Σ over shared-pool jobs of cores leased × wall hours (metering of PR #44), including user-caused failures and free-tier jobs (the free tier is paid from the sponsor budget at the same rate), excluding platform-caused failures.
+- **Pool cost** C_m = net provider cost of the shared-pool nodes in m (after discounts, pro rata), without storage and without dedicated nodes.
+- **CPU rate** r_m = C_m / max(U_m, 0.5 × A_m). The **50 % floor** means the denominator never falls below half of the allocable core-hours; the uncovered part C_m − r_m·U_m is funded by the owner/sponsors and published.
+- **Dedicated nodes** are billed to their org at their own net provider cost per month (plus a pass-through setup fee), outside r_m; their hours are in neither A_m nor U_m.
+- **Burst / extra nodes** (hourly nodes added under load) join the shared pool: their net cost enters C_m and their usable core-hours enter A_m only for the hours they existed.
+- **Storage rate** s_m = storage cost_m / max(used GB-months, 0.5 × capacity GB-months), capacity = billable storage provisioned for customer data (object store, Storage Box share); storage included in a node price is not billed separately.
+- **Failed jobs:** platform-caused failures are refunded in full as a ledger credit (10C.4) and excluded from U_m; user-caused failures are charged.
+- **First charged month:** the first full calendar month after the price page is live; rates are published before the month they apply and follow the previous month's actual cost; before that, usage is metered and shown at €0.
+- **Rounding:** rates rounded **up** to €0.0001 per core-hour and €0.001 per GB-month; each job line = core-hours (to 0.001 h) × rate, rounded to €0.01; statements sum the lines and are not re-rounded.
+
+**Worked example (current Hetzner AX42, €100/month net, 16 threads, 0 reserved, 30-day month).** A = 16 × 720 = 11 520 core-hours; floor 0.5 × A = 5 760. With U = 2 000: r = 100 / max(2 000, 5 760) = 0.017361… → **€0.0174 per core-hour**; users pay 2 000 × 0.0174 = €34.80, owner/sponsors cover €65.20 (published). With U = 8 000: r = 100 / 8 000 = **€0.0125**, users pay €100.00. A job of 8 cores × 3 h = 24 core-hours costs 24 × 0.0174 = **€0.42** in the first case.
 
 **Per-user and per-org usage statements** come from the existing metering: each job with its CPU-hours, node kind, rate applied and amount; the monthly statement sums to the ledger (10D) and is exportable (CSV/PDF) and readable over MCP (`billing:read`).
 
@@ -1750,7 +1803,7 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D24 | Org model: now or later? | **Now, in M4**: `org`, `membership`, `grant` tables; every user gets a personal org; multi-role orgs; UI only for members and grants at first. Retrofitting orgs after RFQs exist would mean migrating every object's owner |
+| D24 | Org model: now or later? **(restated v4.1)** | **Now, in M4**: `org`, `membership`, `grant` tables; every user gets a personal org; multi-role orgs; UI only for members and grants at first. M4 is the **only** org schema migration; M8 adds features (UI, roles, NDA, verification) on that schema, not a second migration (11.3). Retrofitting orgs after RFQs exist would mean migrating every object's owner |
 | D25 | User roles vs org roles | Platform roles only **`user` / `admin`**; everything else is an org membership role (`owner/approver/engineer/buyer/sales/viewer`); legacy `free/pro/team` removed |
 | D26 | First scope of the drawing generator | **Lamination DXF + PDF and the multi-level BOM first** (M9), then winding spec and magnet spec; shaft/housing drawings stay CAD uploads; STEP of laminations/packs after |
 | D27 | Drawing standards default **(restated v4)** | **ISO** (ISO 128/129-1/7200, **ISO 2768-1:1989-m** for linear/angular and **ISO 22081:2021** for general geometrical specifications under ISO 8015, ISO 286 fits, first-angle, mm), exact editions recorded per drawing (D116); ISO 2768-2 only to read legacy drawings; per-org switchable to ASME/third-angle |
@@ -1804,7 +1857,7 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D70 | Bidding mode | **Sealed bids by default** until the deadline; "open as received" only for invite-only RFQs by the customer's choice (8.9.5) |
 | D71 | Drawings on RFQs | **NDA-gated and watermarked**; the board shows summaries only; download can be disabled (8.9.3) |
 | D72 | Who may use the public board | **Verified orgs only** publish and bid on the board; unverified orgs use invite-only RFQs (8.9.3, 8.9.7) |
-| D73 | Fees | **No fees ever**: no listing, success or payment fees; the platform is not a party to the deal (price policy 8.1, D114) |
+| D73 | Fees **(restated v4.1)** | **No marketplace fees or commissions between customers and suppliers, ever**: no listing, success or payment fees on deals between parties; the platform is not a party to the deal (price policy 8.1, D114). Pass-through billing of MOTRES compute at cost (10C, 10D), including separately stated pass-through payment fees, is separate and explicitly allowed |
 | D74 | Currency normalisation | **ECB euro reference rates** (daily, public), rate and date printed on the matrix; the customer may override with a stated rate (8.9.5) |
 | D75 | Clarifications | Public answers broadcast to all bidders **anonymised**; material RFQ changes notify all bidders and flag quotes for revision (8.9.4) |
 | D76 | Supplier ratings | Only from awarded orders, **moderated, with right of reply**, after the board runs (8.9.6) |
@@ -1849,12 +1902,12 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D110 | Storage by analysis mode | Motor/inductor/DC-link **field energy is storage**; `steady_periodic` requires ΔE = 0 over an integer-period settled window (checked); `transient` / `switching_resolved` include dW_field/dt (2.7.2) |
 | D111 | Tolerances and convergence | **Absolute + relative** tolerances per module (no cancellation across modules); event-resolving time step (dead time, minimum pulse); mesh and time-step convergence studies; energy closure ≠ validation; all numbers **proposals** until confirmed (2.7.3, 2.7.8, 2.7.9) |
 | D112 | Solver scope v1 | **Fixed scheme catalogue** (S-0, S-A battery–controller–motor–load, S-B with gearbox, S-C with thermal network); explicit `E_TOPOLOGY_UNSUPPORTED` for others; declared unknowns, states, initial conditions, algebraic-loop handling; FMI 3.0 causal mapping (3.5) |
-| D113 | Machine capability | **Topology × analysis-mode capability table** (4A.6) decides what `simulate` accepts; symmetry verified on geometry, winding, excitation, materials and machine state; `elec.acN` for six-phase / independent coils. **Supersedes D22** |
+| D113 | Machine capability | **Topology × analysis-mode capability table** (4A.6) decides what `simulate` accepts; symmetry verified on geometry, winding, excitation, materials and machine state; `elec.acN` for six-phase / independent coils; supported only where demonstrated per solver (v4.1: two-set 0° six-phase in the EM solver, PR #21; the rest planned). **Supersedes D22** |
 | D114 | Price policy | **No payments or commissions between customers and suppliers; the platform helps compare offers** (structured quotes, currency normalisation, tooling allocation, landed-cost estimate as comparison aids); MOTRES sells only its own compute at cost (8.1, 10C). **Supersedes D33** |
 | D115 | Standards licensing | Licence status recorded per standard (10B.1a); **ECLASS optional** (IRDI references only) until its licence for our use is checked; unclear terms = optional |
 | D116 | Drawing standard editions | Drawings record the **exact standard and edition**; new drawings use ISO 2768-1 + ISO 22081:2021 (ISO 8015 GPS); ISO 2768-2 (withdrawn) only for legacy reading, never silently substituted (7.6) |
 | D117 | Human confirmation | Bound to an immutable **pending action** (payload hash of files, recipients, permissions, document versions, amounts, expiry); any change invalidates; single use; re-checked at execution; **enforced server-side for REST and MCP**; agent credentials refused on the confirm step (9A.4) |
-| D118 | BYO nodes | **Compute permission ≠ geometry permission**: user-owned nodes get only the owner's own or explicitly granted data; code/image digests pinned; signatures prove origin, not correctness or deletion; result verification levels (10A.8) |
+| D118 | BYO nodes | **Compute permission ≠ geometry permission** **(restated v4.1)**: foreign/vendor modules get port values only; platform solvers (also on the data owner's BYO node) get machine descriptions only where the object's export right allows, checked per object before bundle creation; user-owned nodes get only the owner's own or explicitly granted data; code/image digests pinned; signatures prove origin, not correctness or deletion; result verification levels (10A.8) |
 | D119 | Quotation package | Immutable **`for_quotation` package (not for production)** allowed before release for quotation RFQs; production RFQs and all orders reference only released revisions (7.3, 8.9.1) |
 | D120 | Deprecation | **One policy for every API surface**: ≥ 90 days **and** ≥ 1 minor release after the replacement, plus 0 calls in 30 days; contract major versions (`portal/x`, `machine/x`) 12 months in parallel (9A.3) |
 | D121 | Data policy attributes | **Independent attributes** (publication, personal data, NDA, export control, region, retention hold) instead of one class; erasure claims follow the key-copy inventory; account deletion removes personal records, not org-owned ones (10A.1, 10A.4–10A.6) |
@@ -1865,10 +1918,10 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 
 | Step | Content | Acceptance |
 |---|---|---|
-| **P1. Fix publication** | correct and test the publication boundary, fail-closed validation, operation recovery before any Admin data move | public/private split tests pass; a failed validation publishes nothing |
-| **P2. Stabilise data loading and versions** | one integration branch and deployment source; source precedence; immutable identity/revision references; complete public demo install; runtime customer storage separate from reference repositories | code SHA + data revision recorded; the same inputs load the same objects on every node |
+| **P1. Fix publication** | the normative protocol of 10A.12, implemented by PR #48 (`data_publish.py`, `docs/OPEN_PRIVATE_DATA.md`) | public/private split tests pass; a failed validation publishes nothing; a changed snapshot is refused; an interrupted move resumes or rolls back from the journal |
+| **P2. Stabilise data loading and versions** | one integration branch and deployment source; the source binding policy of 10A.13 (PR #48 `catalog_sources.py`); public CI runs **synthetic public** conservation and golden tests on made-up demo data; release CI **fails** when a private gate (private fixtures, golden captures) is absent, skipping only in developer runs; immutable identity/revision references; complete public demo install; runtime customer storage separate from reference repositories | code SHA + data revision recorded; the same inputs load the same objects on every node |
 | **P3. Motor + controller in contracts** | M0 port contract exactly as 2.7 (units, basis, state, boundary terms, checks), with `org_id`, `region` and immutable revision ids **reserved** in every contract object even before the org UI (DR R04); M1 motor adapter; M2 controller adapter, both calling existing code | contract schema and consistency checks unit-tested, incl. the 2.7.4 battery example and the 2.7.5 gearbox quadrants |
-| **P4. Verify old results** | golden captures before work; adapters vs old routes | track A: bit-identical L155 motor, L180 gen, L13 (2.7.9) |
+| **P4. Verify old results** | golden captures before work; adapters vs old routes; synthetic public golden set for public CI | track A: bit-identical L155 motor, L180 gen, L13 (2.7.9) in private release CI (absent = fail, not skip); synthetic public goldens pass in public CI |
 | **P5. Simple system** | schemes S-A (and S-C with a cold plate) of 3.5 through the system solver (M3), steady and one short transient | every module, node and system balance of 2.7.7 closes within the 2.7.8 tolerances; motor point == old coupled loop; an unsupported topology is refused |
 
 Deferred until P1–P5 and data isolation pass acceptance: RFQs and orders (M10–M12), NDA signing (NDA part of M8), vendor modules (3a–3c) and full mission families (step 4). Manufacturing revisions/BOMs and the ERP boundary stay in the design.
@@ -1879,7 +1932,7 @@ Deferred until P1–P5 and data isolation pass acceptance: RFQs and orders (M10�
 | **NOW. Data protection baseline** | off-site backups + restore test, LUKS, file modes, account export/delete, retention jobs, admin audit, privacy notice + DPAs, breach runbook, SSH hardening, `region` field (10A.10) | ~2–3 wk, before more external customers |
 | **1. Core restructure: own modules on the contract** | M0 port contract (1 wk) · M1 motor adapter + `machine/1.0` + golden tests (1–2 wk) · M2 controller (1 wk) · M3 system solver calling the old loop (2 wk) · M4–M5 org/project/system beside cfg, battery card (2 wk) · M6 `/api/v2` (1 wk) · `module@version`/`own_node` in `job_usage` (0.5 wk); M7 retirement runs in the background | **~9–10 wk** |
 | **1A. Own geometry (import)** | `machine/1.0` + IPM plugin (in M1), then DXF import → region recognition → material/winding assignment → validation → solve | ~3–4 wk (after M1, not first) |
-| **M8. Parties and organizations** | org UI, memberships and roles, object grants generalizing die_access, NDA policies, audit view, org verification; BYO org-shared nodes; **NDA workflow** (6.5A): templates, generation, SES click-to-sign with re-auth/2FA, signed PDF with audit trail, grant activation after signatures, auto-revoke on expiry, manual upload | ~5 wk (3 + 2 for NDA) |
+| **M8. Parties and organizations** | features on the M4 org schema (one migration path, D24; no second org migration): org UI, memberships and roles, object grants generalizing die_access, NDA policies, audit view, org verification; BYO org-shared nodes; **NDA workflow** (6.5A): templates, generation, SES click-to-sign with re-auth/2FA, signed PDF with audit trail, grant activation after signatures, auto-revoke on expiry, manual upload | ~5 wk (3 + 2 for NDA) |
 | **M9. Manufacturing documents v1** | design revisions + approval workflow; object store; generators: lamination DXF/PDF, multi-level BOM, winding spec; package ZIP; Fusion/STEP uploads with interface check | ~5–6 wk |
 | **2. Third module (propeller on maps)** | `propeller` card, C_T/C_P map, datasheet validation, system "battery→controller→motor→propeller", simple builder UI, MCP `build_system/simulate_system` | **~5–6 wk** (can run parallel to M8–M9) |
 | **M10. Sourcing** | supplier offers on cards, RFQ → quote → order state machines, **open RFQ / quotation board** (8.9: capability profiles + matching, templates, quotation packages, NDA gate, sealed bids, comparison, award, supplier pages and reviews), threads, attachments, notifications (in-app + e-mail), MCP read/draft tools | ~9 wk (2 + 3 + 2 + 2, 8.9.11) |

@@ -1,5 +1,5 @@
 """controller.r_th_jc_k_w reaches the coupled run's controller settings
-(WCMS900B170E53 prints no R_th(j-c); 2026-09-28)."""
+(for cards whose datasheet prints no R_th(j-c); 2026-09-28)."""
 from motor_ai_sim.routes import coupled as cp
 
 
@@ -9,7 +9,7 @@ def _settings(ctl):
 
 
 def test_stated_r_th_jc_is_passed_through():
-    s = _settings({"device": "WCMS900B170E53", "devices_parallel": 2,
+    s = _settings({"device": "IMCQ120R004M2H", "devices_parallel": 2,
                    "r_th_jc_k_w": 0.06, "v_gs_off_V": -5.0})
     assert s["r_th_jc_k_w"] == 0.06
 

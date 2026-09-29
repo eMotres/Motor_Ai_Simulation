@@ -75,6 +75,30 @@ def devices_dir() -> Path:
     return _DIR
 
 
+def card_paths() -> Dict[str, Path]:
+    """Every card file keyed by part: :func:`devices_dir` first, then the
+    optional private overlay (``$MOTOR_AI_SIM_PRIVATE_DATA/config/devices``)
+    for parts the public folder does not have.  A test that moved ``_DIR``
+    sees its fixture folder only."""
+    out: Dict[str, Path] = {}
+    d = devices_dir()
+    if d.is_dir():
+        for p in sorted(d.glob("*.yaml")):
+            out[p.stem] = p
+    if _DIR == _DEFAULT_DIR:
+        from motor_ai_sim.private_data import private_path
+        extra = private_path("config", "devices")
+        if extra is not None and extra.is_dir():
+            for p in sorted(extra.glob("*.yaml")):
+                out.setdefault(p.stem, p)
+    return dict(sorted(out.items()))
+
+
+def card_path(part: str) -> Optional[Path]:
+    """The file of one card (public or private overlay), or ``None``."""
+    return card_paths().get(str(part or "").strip())
+
+
 _CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _CACHE_LOCK = threading.RLock()
 
@@ -116,10 +140,7 @@ def list_devices(*, i_switch_rms_A: Optional[float] = None
     that part a switch would need on current alone (``suggested_parallel``).
     """
     out: List[Dict[str, Any]] = []
-    d = devices_dir()
-    if not d.is_dir():
-        return out
-    for p in sorted(d.glob("*.yaml")):
+    for p in card_paths().values():
         try:
             card = DeviceCard(_read(p), source_file=p)
         except Exception as exc:                          # noqa: BLE001
@@ -141,12 +162,11 @@ def library() -> Dict[str, Any]:
     """Every card, whole, keyed by part — the catalogue endpoint's payload."""
     d = devices_dir()
     cards: Dict[str, Any] = {}
-    if d.is_dir():
-        for p in sorted(d.glob("*.yaml")):
-            try:
-                cards[p.stem] = _read(p)
-            except Exception as exc:                      # noqa: BLE001
-                cards[p.stem] = {"error": str(exc)}
+    for stem, p in card_paths().items():
+        try:
+            cards[stem] = _read(p)
+        except Exception as exc:                          # noqa: BLE001
+            cards[stem] = {"error": str(exc)}
     return {"dir": str(d), "devices": cards}
 
 
@@ -156,8 +176,8 @@ def get_device(part: str) -> "DeviceCard":
     if not name:
         raise CardError("no device named: send the part number of a card in "
                         "config/devices/ (GET /api/controller/devices lists them)")
-    p = devices_dir() / f"{name}.yaml"
-    if not p.is_file():
+    p = card_path(name)
+    if p is None or not p.is_file():
         known = [row.get("part") for row in list_devices()]
         raise CardError(
             f"no device card {name!r} in {devices_dir()}. Known parts: "
@@ -444,7 +464,7 @@ def _num(v: Any) -> Optional[float]:
 def _unpublished(v: Any) -> bool:
     """A non-empty sentence saying the datasheet does not publish a value.
 
-    Some datasheets (e.g. the WCMS900B170E53 module, Rev.0) print "-" where
+    Some datasheets (some module datasheets) print "-" where
     a rating belongs.  The card then carries ``null`` plus this sentence, and
     whatever needs the number must get it from the REQUEST as a stated
     assumption or refuse by name — never a plausible default.

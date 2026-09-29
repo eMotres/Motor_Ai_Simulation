@@ -409,7 +409,7 @@ const MeshPanel: React.FC = () => {
 
   const [meshSizeMm,  setMeshSizeMm]  = usePersisted<number>('meshSize',   4.0);
   const [minSizeMm,   setMinSizeMm]   = usePersisted<number>('minSize',    0.3);
-  // Fillet-arc resolution (Ansys "Normal Deviation"): max angle per fillet
+  // Fillet-arc resolution (commercial FEM "Normal Deviation"): max angle per fillet
   // segment. Lower → more segments per rounded corner → smoother fillet + finer
   // mesh there. Wired to n_arc in the geometry (get_2d_polygons).
   // Fillet-arc resolution for the PREVIEW build only. It was a slider, and a
@@ -422,7 +422,7 @@ const MeshPanel: React.FC = () => {
   // the Mesh no longer matched the real geometry. The Mesh now always uses the
   // real geometry (tol 0.005 mm, sent below); density is set by Max/Min size.
   const [rotorAngle,  setRotorAngle]  = usePersisted<number>('rotorAngle', 0.0);
-  // ── Solver-domain extensions (Ansys-style) ───────────────────────────────
+  // ── Solver-domain extensions (commercial-FEM-style) ───────────────────────────────
   const [outerAirFactor, setOuterAirFactor] = usePersisted<number>('outerAir', 1.3);
   const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 1);   // Full (full disk) by default
   // Air-gap element rows PER SIDE of the slip midline (1-3, default 2). The
@@ -441,7 +441,7 @@ const MeshPanel: React.FC = () => {
   const [structuredGap,  setStructuredGap]  = usePersisted<boolean>('structuredGap', true);
   // (There is no element-order toggle any more. Second-order (P2) elements are
   // the calculation basis — B linear per element, so the torque is smooth like
-  // ANSYS instead of carrying the P1 sliding-band staircase, and the mean is
+  // commercial FEM instead of carrying the P1 sliding-band staircase, and the mean is
   // energy-consistent. P1 was deleted: it over-read the mean torque ~35 % and
   // its ripple was a mesh artefact, so "off" meant "give me the wrong number".)
   // Deterministic template iron: stator/rotor iron meshed by the structured
@@ -610,7 +610,7 @@ const MeshPanel: React.FC = () => {
       stator_fillet_mm:  '0',          // native geometry — no extra smoothing
       component_mesh:    componentMeshJson,
       pole_copy:         poleCopy ? 'true' : 'false',
-      structured_gap:    structuredGap ? 'true' : 'false',   // ANSYS-style concentric-ring gap
+      structured_gap:    structuredGap ? 'true' : 'false',   // commercial-FEM-style concentric-ring gap
       iron_template:     ironTemplate ? 'true' : 'false',    // deterministic template iron
       geo_mesh:          geoMesh ? 'true' : 'false',         // geometry-driven CDT (real fillets)
     } : {
@@ -994,7 +994,7 @@ const MeshPanel: React.FC = () => {
 
             <Divider sx={{ borderColor: 'var(--panel)' }}/>
 
-            {/* ── Solver-domain section (Ansys-style) ────────────────────── */}
+            {/* ── Solver-domain section (commercial-FEM-style) ────────────────────── */}
             <Box>
               <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-4)',
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
@@ -1007,7 +1007,7 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Outer air ring
-                  <Tooltip title="Extend mesh beyond stator OD so the Dirichlet A=0 far-field BC is applied on air, not iron. 1.0 = off; 1.3 ≈ Ansys Region Padding 30%." placement="right">
+                  <Tooltip title="Extend mesh beyond stator OD so the Dirichlet A=0 far-field BC is applied on air, not iron. 1.0 = off; 1.3 ≈ commercial FEM Region Padding 30%." placement="right">
                     <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>
@@ -1069,7 +1069,7 @@ const MeshPanel: React.FC = () => {
               />
             </Box>
 
-            {/* Air-gap mesh: free triangles vs ANSYS-style concentric rings (experimental) */}
+            {/* Air-gap mesh: free triangles vs commercial-FEM-style concentric rings (experimental) */}
             <Box>
               <Typography sx={{ fontSize: '0.62rem', fontWeight: 700, color: 'var(--text-4)',
                 letterSpacing: '0.08em', textTransform: 'uppercase', mb: 0.5 }}>
@@ -1078,7 +1078,7 @@ const MeshPanel: React.FC = () => {
               {/* Element order is no longer a choice: every solve is P2. The
                   switch that used to sit here selected P1, whose mean torque
                   over-read ~35 % and whose ripple was a mesh staircase. */}
-              <Tooltip placement="right" title="Every solve uses second-order (P2) finite elements — the flux density B is linear inside each element instead of piecewise-constant, so the torque is smooth like ANSYS Maxwell (2nd-order) and the mean is energy-consistent. RAW ripple is honest with NO filter (measured ~55x lower non-6k noise floor than the retired P1 basis). Requires the structured belt, which is always on.">
+              <Tooltip placement="right" title="Every solve uses second-order (P2) finite elements — the flux density B is linear inside each element instead of piecewise-constant, so the torque is smooth like commercial FEM (2nd-order) and the mean is energy-consistent. RAW ripple is honest with NO filter (measured ~55x lower non-6k noise floor than the retired P1 basis). Requires the structured belt, which is always on.">
                 <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mt: 0.75 }}>
                   <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>Elements</Typography>
                   <Typography sx={{ fontSize: 12, color: 'var(--text-4)' }}>P2 (2nd order)</Typography>

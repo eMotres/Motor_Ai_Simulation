@@ -55,7 +55,7 @@ _PRESETS = json.loads((_ROOT / "config" / "motor_presets.json")
 
 # FROZEN geometries — not config/motor_config.yaml, which the user edits
 # constantly (same reasoning as tests/test_masses.py and
-# tests/test_cad_polygon_quality.py).  The 150 mm block is the one the ANSYS
+# tests/test_cad_polygon_quality.py).  The 150 mm block is the one the commercial FEM
 # mass cross-check was run on; the 40 mm is the live preset.
 G150 = {
     "stator_diameter": 150.0, "slot_height": 14.0, "core_thickness": 4.2,

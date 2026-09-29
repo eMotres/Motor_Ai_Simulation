@@ -237,8 +237,8 @@ the bearing model: the same fit with the bearing torque at 0.75 × / 1.25 × SKF
 gives 397 W / 254 W. Everything else (step count ±1.4 %, seal counterface
 diameter ±8 %, rotating mass ×3) is inside that.
 
-Note for context: the customer's ANSYS model carries `$CoreLossCoff = 2`. That
-is about right at 1000 rpm and **half** of what this machine needs at 4000 rpm.
+Note for context: a constant production factor of 2 is about right at 1000 rpm
+and **half** of what this machine needs at 4000 rpm.
 
 ---
 
@@ -390,7 +390,7 @@ not of the steel or the loss model.
 Actions available: acid-etch the cut surfaces (removes the recast layer; the
 standard remedy for EDM-cut cores), verify with an ohmmeter across adjacent
 laminations on a cut face (healthy: MOhm; shorted: Ohm), and expect a punched
-or laser+etch series stack to sit near the computed curve. The Ansys-practice
+or laser+etch series stack to sit near the computed curve. The common-practice
 x2 coefficient under-reads this prototype above ~2000 rpm: the measured factor
 is 2.15 at 1000 rpm rising to 4.05 at 4000, because the mechanism is n^2, not
 a constant multiplier.

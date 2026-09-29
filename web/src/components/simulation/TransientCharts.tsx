@@ -2152,7 +2152,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
           {/* The small per-element demag map that used to render here was
               removed at the user's request (2026-07-29): the Field view's
               Demag tab shows the same data on the full mesh with the
-              Ansys-style colour map — one honest view instead of two. */}
+              commercial-FEM-style colour map — one honest view instead of two. */}
         </>
       )}
     </Paper>

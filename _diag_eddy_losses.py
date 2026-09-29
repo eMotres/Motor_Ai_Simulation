@@ -1,7 +1,7 @@
 """Validate the field-based (rotor_eddy) loss path vs the slab estimate.
 Runs the sliding-band transient twice (n=2, 24 steps, I=120):
   A) rotor_eddy=False  -> slab magnet/shaft losses (old)
-  B) rotor_eddy=True   -> J=sigma(-dA/dt+U) field losses (new, Ansys-style)
+  B) rotor_eddy=True   -> J=sigma(-dA/dt+U) field losses (new, commercial-FEM-style)
 Checks: torque/EMF unchanged (eddy reaction small), loss magnitudes, timing.
 Also prints the Maxwell-style Bertotti fit actually used for the iron."""
 import time, numpy as np

@@ -231,7 +231,7 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   71.0 V. Torque-spectrum comparison shows the ¼ wedge is the spectrally
   CLEAN solve (non-6k noise floor 0.02 % vs the ring's 1.66 %); the remaining
   ripple gap (19.9 vs 22.2 %) sits in the h24/h36 cogging orders which the
-  ring's broadband numeric noise damps — see PARITY_FINDINGS_band_mode.md.
+  ring's broadband numeric noise damps — see PARITY_FINDINGS_band_mode.md (private data repository).
   Verified on the geo (CDT) pipeline too: means within 0.6 %, h12/h30 within
   1–2 %. Tightening the ring's saturation Picard is NOT a fix (fixed-recipe
   iteration; 28 iters shifts T_avg +2.5 % and doubles the noise floor) — the
@@ -266,7 +266,7 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   and shown read-only (smaller chosen ΔT → more flow). Replaces the old fixed-h preset
   dropdown.
 - **Thermal map uses the full colour range (Fusion-style).** The temperature view
-  now renders the Ansys-style blue→cyan→green→yellow→red rainbow and, by default,
+  now renders the commercial-FEM-style blue→cyan→green→yellow→red rainbow and, by default,
   **histogram-equalises** it — each node is coloured by its rank in the temperature
   distribution, so the whole spectrum lands on the structure even when the motor is
   a tight hot plateau (most of it within a few °C). The colour bar is labelled at the
@@ -392,7 +392,7 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   rotor (magnet) eddy losses and the end-winding factor, so Optimize reported a
   higher efficiency than Simulation for the same design; both are now forwarded
   (single source = Simulation).
-- **|B| field view matches the Ansys scale** — discrete blue->red bands in mTesla
+- **|B| field view matches the commercial FEM scale** — discrete blue->red bands in mTesla
   over the real field range, instead of a continuous jet clipped at 1.8 T that
   amplified per-element saturation noise.
 - **Eddy-current (J) field view shows the whole motor** — the route forced an
@@ -465,20 +465,20 @@ First tracked release. Establishes app versioning + a coordinated release proces
   полоса добавляет ~60 % к h6 против аналитического макроэлемента;
   (3) остаток h6≈1.5 — реальный сатурационный коггинг 12-кратного статора
   (12 главных + 12 вспомогательных зубьев, порядки кратны 60/об).
-- Честные цифры (макро, n_pic=100): no-load p-p 2.75 Н·м; нагрузка I=85
-  γ=32: mean 27.4 Н·м, ripple 11.7 % (полоса: 29.6 Н·м, 17.6 %; ANSYS:
-  29.37 Н·м, 3.44 %).
-- Сталь (JFE vs B15) и крупная геометрия точки ANSYS — не факторы (±4 %).
-- Детали: PARITY_FINDINGS_band_mode.md.
+- Honest figures (macro, n_pic=100): no-load p-p 2.75 N·m; load I=85
+  γ=32: mean 27.4 N·m, ripple 11.7 % (band: 29.6 N·m, 17.6 %).
+- Steel (JFE vs B15) and the coarse geometry of the reference point are not
+  factors (±4 %).
+- Details: PARITY_FINDINGS_band_mode.md (private data repository).
 
-## 2026-07-21: паритет пульсаций с ANSYS достигнут
+## 2026-07-21: ripple parity with the reference reached
 
-- Ротор конфига приведён к ANSYS (magnet_height 16, up_gap 2, fill_up 0.46,
-  fill_radius 1, rotor_fill_r 2) — пользователь.
-- Честный замер (макро + n_pic=100): нагрузка I=85 γ=32 → ripple 4.15 %
-  (ANSYS 3.44 %), no-load коггинг p-p 1.57 Н·м (ANSYS ~1.09 с их шумом).
-  Расхождение по пульсациям ЗАКРЫТО; главный драйвер был ротор.
-- Открыто: mean момента макро на ~7 % ниже полосы — калибровка экстракции.
+- The config rotor was brought to the reference geometry (magnet_height 16,
+  up_gap 2, fill_up 0.46, fill_radius 1, rotor_fill_r 2) — by the user.
+- Honest measurement (macro + n_pic=100): load I=85 γ=32 → ripple 4.15 %,
+  no-load cogging p-p 1.57 N·m (the reference comparison is kept private).
+  The ripple discrepancy is CLOSED; the main driver was the rotor.
+- Open: the macro mean torque is ~7 % below the band — extraction calibration.
 
 ## 2026-07-21: честные дефолты — без фильтров и рецептов
 

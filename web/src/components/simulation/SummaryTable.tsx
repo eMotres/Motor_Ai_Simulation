@@ -199,8 +199,8 @@ export interface TransientSummary {
   eddy_settle_tol?: number | null;
   efficiency:          number;
   // TOTAL = iron + copper + magnets + shaft (the divisor of every density below);
-  // ACTIVE = the EM-active mass without the shaft — the basis an ANSYS active-mass
-  // expression quotes, so it is the tile a user cross-checks against Ansys.
+  // ACTIVE = the EM-active mass without the shaft — the basis a commercial FEM active-mass
+  // expression quotes, so it is the tile a user cross-checks against commercial FEM.
   mass_total_kg:       number;
   mass_active_kg?:     number;
   mass_area_source?:   string;
@@ -1246,7 +1246,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         {/* ONE mass (user 2026-09-10: "масса у нас только одна") — the total,
             because it is what every N·m/kg and kW/kg in this app divides by.
             The electromagnetic subset moved into the tooltip: it is no longer
-            the same quantity Ansys prints under "active mass" either, since
+            the same quantity commercial FEM prints under "active mass" either, since
             the band was folded into it. */}
         <Cell label="Mass"
           value={fmt(s.mass_total_kg ?? s.mass_active_kg, 3)} unit="kg"
@@ -1650,7 +1650,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           tooltip={kvNl && s.KV_noload_rpm_per_V_line != null
             ? 'NO-LOAD KV: rpm / (√3·ω_e·ψ_PM) — back-EMF fundamental from the run\'s cached I=0 probe; what spinning the motor on the bench reads. Harmonics excluded (fundamental convention). Loaded KV: '
               + fmt(s.KV_rpm_per_V_line, 1) + ' rpm/V.'
-            : 'rpm / V_LINE PEAK — the max/max convention, the same peak shown in the voltage row above (and the one an Ansys induced-voltage table reports). Loaded voltage: at field-weakening γ it differs from the no-load back-EMF KV'
+            : 'rpm / V_LINE PEAK — the max/max convention, the same peak shown in the voltage row above (and the one a commercial FEM induced-voltage table reports). Loaded voltage: at field-weakening γ it differs from the no-load back-EMF KV'
               + (s.KV_noload_rpm_per_V_line != null ? ` (${fmt(s.KV_noload_rpm_per_V_line, 1)} rpm/V — toggle in the header).` : '.')}/>
         {(() => {
           // Kt beside KV — the other controller-facing constant.  Measured at

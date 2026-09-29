@@ -11,7 +11,7 @@ This is a **2D electromagnetic motor design platform** combining:
 - **Optimization (CMA-ES), DOE sweeps, and cost estimation**
 - **Web UI** (React) for geometry, simulation, optimization and visualization
 
-**Goal**: Fast, validated 2D FEM motor design (cross-checked against ANSYS FEA)
+**Goal**: Fast, validated 2D FEM motor design (validated against measurements)
 
 ---
 
@@ -149,7 +149,7 @@ air gap. Steel from the material library's measured BH curve; magnets carry Br
 and μ_rec from the assigned material.
 
 ### Torque
-Energy / flux-linkage mean torque (matches ANSYS). Maxwell stress on the sliding
+Energy / flux-linkage mean torque. Maxwell stress on the sliding
 band over-reads ~37 % under load and is kept only as `T_avg_maxwell_Nm`, the
 diagnostic that distinguishes a hybrid regression from a field-solve regression.
 

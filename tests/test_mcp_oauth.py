@@ -99,7 +99,8 @@ def test_metadata_documents(oenv):
         m = c.get(p).json()
         assert m["resource"] == "https://aerostator.com/mcp"
         assert m["authorization_servers"] == ["https://aerostator.com"]
-        assert set(m["scopes_supported"]) == {"catalog:read", "machines:read"}
+        assert set(m["scopes_supported"]) == {"catalog:read", "machines:read",
+                                              "designs:write", "simulate"}
     a = c.get("/.well-known/oauth-authorization-server").json()
     assert a["issuer"] == "https://aerostator.com"
     assert a["code_challenge_methods_supported"] == ["S256"]

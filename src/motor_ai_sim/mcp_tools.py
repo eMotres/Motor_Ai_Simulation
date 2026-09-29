@@ -495,7 +495,7 @@ def check_fit(p: Principal, torque_nm: float, speed_rpm: float,
     })
 
 
-GUIDE = """# eMotres MCP — how to use (Stage 1, read-only)
+GUIDE = """# eMotres MCP — how to use (Stages 1-3)
 
 eMotres designs permanent-magnet motors/generators and keeps a catalog of
 simulated machines (2-D FEM, energy-method torque, coupled thermal).
@@ -510,8 +510,24 @@ Tools:
 - get_machine_performance(die, config, duty) — one duty's saved results
 - check_fit(torque_nm, speed_rpm, ...) — ranked machines meeting requirements
 
-Rules: nothing is solved by these calls; numbers are the last saved simulation.
+Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
+- start_design(requirements, base?, name?) — a DRAFT from the nearest existing
+  machine, scaled by stack length / turns / parallel paths.  If the answer says
+  status 'needs_input', ASK THE ENGINEER each listed field (why + options are
+  written for him), then call again.  'no_fit' says which limit blocks it.
+- simulate(design_id, what=em|thermal|coupled, steps?) -> job_id (queued on the
+  user's own queue; daily quota)
+- get_job(job_id) — state, position, progress, ETA, error
+- get_design_result(design_id) — torque, power, shaft efficiency, losses,
+  temperatures, limits, mass; requirement checks
+- open_in_configure(design_id) — link for the engineer to tune it interactively
+
+Example: "I need 12 N*m at 3000 rpm, 48 V" -> start_design -> needs_input
+[cooling, duty] -> ask -> start_design again -> simulate(em) -> get_job until
+done -> get_design_result -> open_in_configure link to the engineer.
+
+Rules: read tools solve nothing; numbers are the last saved simulation.  Drafts
+never change the user's saved machines or the machine he has open.
 Units are in field names (_nm, _rpm, _kw, _v, _mm, _kg, _c, _pct).
 Only public-datasheet data is returned — no internal dimensions or drawings.
-For a new design or a quote contact eMotres (Stage 3 adds request_quote).
 """

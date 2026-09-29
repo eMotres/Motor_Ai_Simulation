@@ -16,7 +16,7 @@ Signed-in owner (session token):
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -111,18 +111,22 @@ def consent_info(rid: str, authorization: Optional[str] = Header(default=None)):
     info = _o.describe_request(rid)
     if not info:
         raise HTTPException(404, detail="This authorization request expired. Start again from the app.")
-    return info | {"account": owner}
+    from motor_ai_sim import agent_keys as _keys
+    return info | {"account": owner,
+                   "scope_descriptions": dict(_keys.SCOPE_DESCRIPTIONS)}
 
 
 class Decision(BaseModel):
     approve: bool
+    #: Stage 3: the scopes the owner left ticked (a subset of the request).
+    scopes: Optional[List[str]] = None
 
 
 @router.post("/api/oauth/requests/{rid}")
 def consent_decide(rid: str, req: Decision, authorization: Optional[str] = Header(default=None)):
     owner = _owner(authorization)
     try:
-        return {"redirect": _o.decide(rid, owner, req.approve)}
+        return {"redirect": _o.decide(rid, owner, req.approve, req.scopes)}
     except _o.OAuthError as e:
         raise HTTPException(e.status if e.status >= 400 else 400, detail=e.description)
 

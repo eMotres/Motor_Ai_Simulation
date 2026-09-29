@@ -341,6 +341,19 @@ function App() {
   // stalls, WebGL context loss — read with `__diag()` after a freeze.
   useEffect(() => { installDiag(); }, []);
 
+  // MCP Stage 3: an agent hands the engineer …/?tab=configure&design=d-… —
+  // open the Configure tab; the panel shows the draft and applies it to the
+  // tuner only when he clicks Open (the open machine is never replaced).
+  // Re-run once signed in: the guard below bounces a signed-out visitor to Motors.
+  useEffect(() => {
+    if (!signedIn) return;
+    try {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get('tab') === 'configure' || q.get('design')) setActiveTab('compare');
+    } catch { /* ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signedIn]);
+
   // There's always a working motor ("my copy"): a brand-new user with none gets
   // one created from the current state, so every later edit has somewhere to
   // auto-save.  A short delay lets the panels seed localStorage first.

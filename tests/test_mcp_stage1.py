@@ -105,10 +105,12 @@ def test_tool_list_and_schemas(env):
     r = _rpc(env["c"], tok, "tools/list")
     tools = {t["name"]: t for t in r.json()["result"]["tools"]}
     assert set(tools) == set(mcp_app.TOOL_SCOPES)
-    for t in tools.values():
+    for n, t in tools.items():
         assert t["description"] and len(t["description"]) > 30
         assert t["inputSchema"]["type"] == "object"
-        assert (t.get("annotations") or {}).get("readOnlyHint") is True
+        # Stage 3: only the draft/queue tools change anything
+        assert (t.get("annotations") or {}).get("readOnlyHint") is (
+            n not in mcp_app.WRITE_TOOLS)
     fit = tools["check_fit"]["inputSchema"]
     assert set(fit["required"]) == {"torque_nm", "speed_rpm"}
     for f in ("torque_nm", "speed_rpm", "voltage_v", "max_diameter_mm",

@@ -34,9 +34,23 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from motor_ai_sim.json_store import lock_for, mutate_json, read_json
 
-#: Every scope a Stage-1 key may carry.  Stage 3 adds ``simulate:run`` etc.
-SCOPES: Tuple[str, ...] = ("catalog:read", "machines:read")
-DEFAULT_SCOPES: Tuple[str, ...] = SCOPES
+#: Every scope a key / OAuth grant may carry.  Stage 3 (2026-09-28) added
+#: ``designs:write`` (create DRAFT machines in the owner's workspace) and
+#: ``simulate`` (queue solves of those drafts, daily quota).  Overwriting a
+#: saved duty (``duties:write``) does not exist yet.
+SCOPES: Tuple[str, ...] = ("catalog:read", "machines:read", "designs:write",
+                           "simulate")
+#: What a key gets when the owner ticks nothing: read-only.
+DEFAULT_SCOPES: Tuple[str, ...] = ("catalog:read", "machines:read")
+#: One line per scope — the key dialog and the consent page print these.
+SCOPE_DESCRIPTIONS: Dict[str, str] = {
+    "catalog:read": "Read the materials and dies catalog",
+    "machines:read": "Read your machines and their saved results",
+    "designs:write": "Create draft machines in your workspace (marked as the "
+                     "agent's; never changes your saved machines or open motor)",
+    "simulate": "Queue simulations of those drafts in your job queue "
+                "(daily quota)",
+}
 TOKEN_PREFIX = "emk_"
 MAX_KEYS_PER_USER = 10
 
@@ -76,6 +90,9 @@ class Principal:
     credential_id: str               # key id (or, Stage 2, OAuth grant id)
     kind: str = "api_key"            # "api_key" | "oauth" (Stage 2)
     scopes: Tuple[str, ...] = field(default_factory=tuple)
+    #: The key's name / the OAuth client's name — what drafts and jobs are
+    #: labelled with ("created by agent <client_name>").
+    client_name: str = ""
 
     def has(self, scope: str) -> bool:
         return scope in self.scopes
@@ -207,7 +224,8 @@ def verify(authorization: Optional[str]) -> Tuple[Optional[Principal], str]:
         return None, "disabled"
     _touch(kid)
     return Principal(email=owner, credential_id=kid, kind="api_key",
-                     scopes=tuple(rec.get("scopes") or ())), "ok"
+                     scopes=tuple(rec.get("scopes") or ()),
+                     client_name=str(rec.get("name") or "agent key")), "ok"
 
 
 def _account_disabled(email: str) -> bool:

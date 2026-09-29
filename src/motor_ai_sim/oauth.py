@@ -329,8 +329,12 @@ def describe_request(rid: str) -> Optional[Dict[str, Any]]:
             "scopes": r["scopes"], "resource": r["resource"]}
 
 
-def decide(rid: str, owner: str, approve: bool) -> str:
-    """The signed-in owner's answer.  Returns the redirect URL for the browser."""
+def decide(rid: str, owner: str, approve: bool,
+           scopes: Optional[List[str]] = None) -> str:
+    """The signed-in owner's answer.  Returns the redirect URL for the browser.
+
+    ``scopes`` (Stage 3): the owner may untick scopes on the consent page —
+    the grant then carries only those.  A subset only, never a widening."""
     owner = (owner or "").strip().lower()
     out: Dict[str, Any] = {}
 
@@ -338,6 +342,12 @@ def decide(rid: str, owner: str, approve: bool) -> str:
         r = d["requests"].pop(rid or "", None)
         if not r or (r.get("expires_at") or 0) < _now():
             raise OAuthError("invalid_request", "this authorization request expired", 404)
+        if approve and scopes is not None:
+            narrowed = [s for s in dict.fromkeys(scopes) if s in r["scopes"]]
+            if not narrowed or len(narrowed) != len(set(scopes)):
+                raise OAuthError("invalid_scope",
+                                 "scopes must be a non-empty subset of the request", 400)
+            r["scopes"] = narrowed
         out["r"] = r
         if not approve:
             return
@@ -528,7 +538,8 @@ def verify_access(token_str: str) -> Tuple[Optional[_keys.Principal], str]:
         except Exception:                               # noqa: BLE001
             pass
     return _keys.Principal(email=owner, credential_id=gid, kind="oauth",
-                           scopes=tuple(g.get("scopes") or ())), "ok"
+                           scopes=tuple(g.get("scopes") or ()),
+                           client_name=str(g.get("client_name") or "OAuth app")), "ok"
 
 
 # ── owner's view ("Access for agents") ───────────────────────────────────────

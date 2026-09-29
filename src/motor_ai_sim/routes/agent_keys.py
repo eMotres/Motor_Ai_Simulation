@@ -1,4 +1,5 @@
-"""Access for agents — the signed-in account's own MCP keys (Stage 1).
+"""Access for agents — the signed-in account's own MCP keys (Stage 1; Stage 3
+adds the ``designs:write`` / ``simulate`` scopes and their descriptions).
 
 GET    /api/agent_keys           my keys (never the secret)
 POST   /api/agent_keys           {name, scopes?} -> {token, key}; token shown ONCE
@@ -34,9 +35,14 @@ class KeyCreate(BaseModel):
 @router.get("")
 def list_my_keys(authorization: Optional[str] = Header(default=None)):
     owner = _owner(authorization)
+    from motor_ai_sim import agent_designs as _ad
+    sim_day = _ad.daily_limit(_keys.Principal(email=owner, credential_id=""))
     return {"keys": _keys.list_keys(owner), "scopes": list(_keys.SCOPES),
+            "default_scopes": list(_keys.DEFAULT_SCOPES),
+            "scope_descriptions": dict(_keys.SCOPE_DESCRIPTIONS),
             "limits": {"per_minute": _keys.per_minute_limit(),
-                       "per_day": _keys.per_day_limit()}}
+                       "per_day": _keys.per_day_limit(),
+                       "simulations_per_day": sim_day}}
 
 
 @router.post("")

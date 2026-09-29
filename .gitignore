@@ -158,3 +158,11 @@ config/agent_designs/
 # open/private data moves: pending state + audit (server-local)
 config/data_moves.json
 config/data_moves_audit.jsonl
+
+config/oauth_grants.json
+config/die_access.json
+config/cluster/
+config/cost_basis.json
+config/usage/
+uvicorn_*.out
+uvicorn_*.err

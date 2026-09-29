@@ -7178,7 +7178,7 @@ def _build_transient_summary(
         # two phase voltages.  Delta: the winding IS the line, minus its
         # zero-sequence part — the triplen EMF drives the circulating current
         # round the closed loop and never reaches the terminals (user
-        # 2026-09-12: "в дельте линейные должны быть равны фазным").  Both
+        # 2026-09-12: "in delta the line values must equal the phase values").  Both
         # are what the DC bus has to cover; sqrt(3)x a phase peak is neither.
         if _is_delta:
             _v0 = (_va + _vb + _vc) / 3.0
@@ -7406,7 +7406,7 @@ def _build_transient_summary(
             # them: at γ ≠ 0 on a salient rotor the measured torque carries
             # 1.5·p·(Ld−Lq)·i_d·i_q, and a PM-only reference put that term in
             # the numerator alone — the koef read 101.6 % on the 85 mm at
-            # γ = 2° (user 2026-09-01: "не может быть больше 100%").  With the
+            # γ = 2° (user 2026-09-01: "can't be more than 100%").  With the
             # bench reluctance inside, the ratio measures IRON SATURATION
             # alone; a saturated machine sits below its unsaturated linear
             # twin by construction, and the clamp below covers the fallback
@@ -7501,8 +7501,8 @@ def _build_transient_summary(
         # "the current this point was set to".  (The builder's `I_phase_rms`
         # argument is the WINDING current the field was driven with; in delta
         # they differ by sqrt(3), and a summary carrying the winding value here
-        # left the card permanently "stale" — user 2026-09-12: "экран так и
-        # остаётся замыленным".)
+        # left the card permanently "stale" — user 2026-09-12: "the screen just
+        # stays fuzzy".)
         "I_phase_rms_A": round(float(I_phase_rms) * (_sq3 if _is_delta else 1.0), 2),
         "I_terminal_rms_A": round(float(I_phase_rms) * (_sq3 if _is_delta else 1.0), 2),
         # WINDING current — what the field saw, what J coil and Kt per winding

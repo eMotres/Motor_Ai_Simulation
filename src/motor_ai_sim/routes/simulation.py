@@ -79,7 +79,7 @@ _jobs: Dict[str, Dict] = {}
 # override), which made its sweep points indistinguishable from the user's own
 # runs: a background loss-grid point (1.5·I0 @ 6000 rpm) persisted as the last
 # transient and REPLACED the card in the user's browser (measured live
-# 2026-08-25: "мощность упала, момент вырос, я ничего не трогал").  Solves
+# 2026-08-25: "power dropped, torque went up, I didn't touch anything").  Solves
 # made under this flag never persist and never touch the field-snapshot store.
 from contextvars import ContextVar as _CtxVar
 _BACKGROUND_RUN: "_CtxVar[bool]" = _CtxVar("background_run", default=False)
@@ -500,8 +500,8 @@ def update_sim_config(patch: SimConfigPatch):
         warn_deprecated("PATCH /api/simulation/config with v_bus/f_switch — the "
                         "PWM carrier and DC link are set in the Controller tab")
     # What the block says NOW — so the cache flush below can tell a real
-    # change from a re-save of the same values.  User 2026-09-07 ("опять то же
-    # самое… сколько можно повторять?"): a panel re-saved unchanged settings
+    # change from a re-save of the same values.  User 2026-09-07 ("the same
+    # thing again... how many times can this repeat?"): a panel re-saved unchanged settings
     # right after a run finished, this handler flushed every cache including
     # the fresh field snapshot, and the field view said "not solved".
     try:

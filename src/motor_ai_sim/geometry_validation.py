@@ -560,8 +560,8 @@ def split_width_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, float]]:
         # be 1 — "no split at all".
         n_max = max(1, int(math.floor(n_split - over / (ww + gap) - 1e-9)))
         # The wire_width that WOULD fit at this N — named first, because
-        # splitting a bar in two means halving the wire (user 2026-09-08: "сделай
-        # ширину провода 4,5 мм"), and "use wire_split = 1" is the fix that
+        # splitting a bar in two means halving the wire (user 2026-09-08: "make
+        # the wire width 4.5 mm"), and "use wire_split = 1" is the fix that
         # undoes what the user just asked for.
         w_fit = max(0.0, ww - over / n_split)
         return ("wire_split",
@@ -1226,7 +1226,7 @@ _FRACTION_0_1 = (
 #: value validator below (→ ``PUT /api/geometry`` 422), served by
 #: ``GET /api/geometry/schema`` as ``allowed_by`` on ``num_poles_per_segment``
 #: (→ the Geometry table's select) and by nothing else.  Owner 2026-09-20:
-#: "Poles per Segment у нас 5 или 7, других комбинаций пока не бывает" — after a
+#: "our Poles per Segment is 5 or 7, no other combinations exist yet" — after a
 #: stray 7 → 8 (12s16p) turned the live machine into a lamination nobody
 #: stamps.  A slots-per-segment count NOT in the table carries no rule (there
 #: is no such family yet, and refusing it would refuse exploring one).
@@ -1336,7 +1336,7 @@ def validate_parameter_values(geo: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # Every geometry knob is a NUMBER again.  `magnet_top: flat | arc` was the
     # one word-valued one, and it lived for a few hours on 2026-09-06 before the
-    # user removed the flat top entirely ("уберём прямую вообще"); a stale key
+    # user removed the flat top entirely ("drop the straight chord entirely"); a stale key
     # from that window falls through the isinstance(v, str) skip above, which is
     # what "ignore it silently" means here.
 

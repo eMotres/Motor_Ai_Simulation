@@ -1,11 +1,11 @@
 """The CONTROLLER — power devices, bridges, their losses and their cooling.
 
-Owner, 2026-09-22: *«давай начнём делать модуль инвертора и его моделирование …
-чтобы была возможность его подключить к мотору и выдавать уже реальный сигнал,
-ну и конечно считать потери в инверторе с учётом системы охлаждения MOSFET»*,
-and, the same morning: *«чтобы была возможность комбинировать мосты так, как нам
-надо: один контроллер на один мотор, два контроллера на один мотор и т.д., один
-мост на каждую катушку отдельно»*.
+Owner, 2026-09-22: *"let's start building the inverter module and its
+simulation ... so we can connect it to the motor and produce a real signal,
+and of course compute the losses in the inverter accounting for the MOSFET
+cooling system"*, and, the same morning: *"so we can combine bridges however
+we need to: one controller per motor, two controllers per motor, etc., one
+bridge per coil separately"*.
 
 So this package is NOT a three-phase inverter with a loss formula bolted on.
 It is, in order:

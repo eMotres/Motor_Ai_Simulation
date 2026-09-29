@@ -1,8 +1,8 @@
 """WHERE A MACHINE'S PWM DRIVE COMES FROM — the Controller, and only the Controller.
 
 Owner, 2026-09-24 (a screenshot of the Controller tab's greyed "Carrier
-20,000 Hz" placeholder): *«Это значение нужно задавать в контроллере; PWM нужно
-выкинуть из Electromagnetic.»*  Until then the carrier had two homes — the
+20,000 Hz" placeholder): *"This value needs to be set in the controller;
+PWM needs to be dropped from Electromagnetic."*  Until then the carrier had two homes — the
 Simulation tab's ``sim.fSwitch`` / ``simulation.f_switch`` and the Controller
 tab's ``controller.f_carrier_hz`` — and every consumer picked one of them in
 its own order.  This module is the ONE resolution every consumer uses:

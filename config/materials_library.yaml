@@ -380,12 +380,14 @@ steel:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:
     # a field with no prov entry is `datasheet` from sources[0]) --
     sources:
-      - {"id": "baowu_b15", "doc": "Baosteel/Baowu 'B15AHV950M Product info 2025' + 'B15AHV950M Electromagnetic curve' workbook (supplier documents held by the owner)", "file": "Downloads/B15AHV950M Product info 2025.pdf; Downloads/B15AHV950M Electromagnetic curve.xlsx", "rev": "2025", "read": "2026-09-29"}
+      - {"id": "baowu_b15", "doc": "Baosteel/Baowu 'B15AHV950M Product info 2025' product introduction + 'B15AHV950M Electromagnetic curve' workbook, supplied by Dehn Technologies (Shanghai) Co., Ltd. (distributor)", "received": "2026-04-09", "rev": "2025", "read": "2026-09-29"}
     prov:
+      bh_curve: {"type": "derived", "src": "baowu_b15", "note": "workbook DC points up to 10 kA/m; above that the measured B flattens/decreases (sample saturation artefact), so the tail is continued with slope mu0 from the last rising point"}
       youngs_modulus_gpa: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
       poisson_ratio: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
       cte_ppm_k: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
-      yield_strength_mpa: {"type": "estimate", "note": "typical NO-steel value, not in the supplier documents", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "datasheet", "src": "baowu_b15", "note": "guaranteed minimum, longitudinal (typical 485 MPa); workbook sheet '力学性能' gives yield 490 / tensile 594 MPa at 25 C, 415 / 568 MPa at 150 C"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "baowu_b15", "note": "guaranteed minimum, longitudinal (typical 570 MPa)"}
       core_loss_kh: {"type": "derived", "src": "baowu_b15", "note": "fit of the supplier curves (fallback outside the measured surface)"}
       core_loss_kc: {"type": "derived", "src": "baowu_b15", "note": "as core_loss_kh"}
       core_loss_ke: {"type": "derived", "src": "baowu_b15", "note": "as core_loss_kh"}
@@ -400,7 +402,8 @@ steel:
     youngs_modulus_gpa: 200        # GPa  non-oriented electrical steel
     poisson_ratio: 0.30            # -    typical for a ferrous alloy
     cte_ppm_k: 12.0   # ppm/K  in-plane, isotropic. Electrical steel / ferrous core, user 2026-09-07
-    yield_strength_mpa: 350        # MPa  # typical, not from the datasheet (NO electrical steel)
+    yield_strength_mpa: 460        # MPa  guaranteed minimum (product introduction)
+    tensile_strength_mpa: 540      # MPa  guaranteed minimum (product introduction)
     thermal_conductivity: null
     specific_heat: null
     saturation_B: 1.997     # T
@@ -703,12 +706,14 @@ steel:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:
     # a field with no prov entry is `datasheet` from sources[0]) --
     sources:
-      - {"id": "baowu_b10", "doc": "Baosteel/Baowu 'B10AHV900M Product info 2025' + 'B10AHV900M Electromagnetic curve' workbook (supplier documents held by the owner)", "file": "Downloads/B10AHV900M Product info 2025.pdf; Downloads/B10AHV900M Electromagnetic curve.xls", "rev": "2025", "read": "2026-09-29"}
+      - {"id": "baowu_b10", "doc": "Baosteel/Baowu 'B10AHV900M Product info 2025' product introduction + 'B10AHV900M Electromagnetic curve' workbook, supplied by Dehn Technologies (Shanghai) Co., Ltd. (distributor)", "received": "2026-04-09", "rev": "2025", "read": "2026-09-29"}
     prov:
+      bh_curve: {"type": "derived", "src": "baowu_b10", "note": "workbook DC points up to 10 kA/m; above that the measured B flattens/decreases (sample saturation artefact), so the tail is continued with slope mu0 from the last rising point"}
       youngs_modulus_gpa: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
       poisson_ratio: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
       cte_ppm_k: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
-      yield_strength_mpa: {"type": "estimate", "note": "typical NO-steel value, not in the supplier documents", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "datasheet", "src": "baowu_b10", "note": "guaranteed minimum, longitudinal (typical 475 MPa)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "baowu_b10", "note": "guaranteed minimum, longitudinal (typical 555 MPa)"}
       core_loss_kh: {"type": "derived", "src": "baowu_b10", "note": "fit of the supplier curves (fallback outside the measured surface)"}
       core_loss_kc: {"type": "derived", "src": "baowu_b10", "note": "as core_loss_kh"}
       core_loss_ke: {"type": "derived", "src": "baowu_b10", "note": "as core_loss_kh"}
@@ -723,7 +728,8 @@ steel:
     youngs_modulus_gpa: 200        # GPa  non-oriented electrical steel
     poisson_ratio: 0.30            # -    typical for a ferrous alloy
     cte_ppm_k: 12.0   # ppm/K  in-plane, isotropic. Electrical steel / ferrous core, user 2026-09-07
-    yield_strength_mpa: 350        # MPa  # typical, not from the datasheet (NO electrical steel)
+    yield_strength_mpa: 450        # MPa  guaranteed minimum (product introduction)
+    tensile_strength_mpa: 530      # MPa  guaranteed minimum (product introduction)
     thermal_conductivity: null
     specific_heat: null
     saturation_B: 2.021     # T
@@ -1213,12 +1219,13 @@ steel:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:
     # a field with no prov entry is `datasheet` from sources[0]) --
     sources:
-      - {"id": "shougang_rsw", "doc": "Shougang 20RSW175 (VHs) product introduction + 'Magnetic curves of Shougang-20RSW175' workbook (supplier documents held by the owner)", "file": "Downloads/首钢产品介绍-20RSW175 Info of Shougang 20RSW175（VHs）(1).pdf; Downloads/Magnetic curves of Shougang-20RSW175.xlsx", "read": "2026-09-29"}
+      - {"id": "shougang_rsw", "doc": "Shougang 20RSW175 (VHs) product introduction + 'Magnetic curves of Shougang-20RSW175' workbook, supplied by Dehn Technologies (Shanghai) Co., Ltd. (distributor)", "received": "2026-04-09", "read": "2026-09-29"}
     prov:
       youngs_modulus_gpa: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
       poisson_ratio: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
       cte_ppm_k: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
-      yield_strength_mpa: {"type": "estimate", "note": "typical NO-steel value, not in the supplier documents", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "datasheet", "src": "shougang_rsw", "note": "guaranteed minimum, longitudinal (typical 250 MPa)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "shougang_rsw", "note": "guaranteed minimum, longitudinal (typical 380 MPa)"}
       core_loss_kh: {"type": "derived", "src": "shougang_rsw", "note": "fit of the supplier curves (fallback outside the measured surface)"}
       core_loss_kc: {"type": "derived", "src": "shougang_rsw", "note": "as core_loss_kh"}
       core_loss_ke: {"type": "derived", "src": "shougang_rsw", "note": "as core_loss_kh"}
@@ -1233,7 +1240,8 @@ steel:
     youngs_modulus_gpa: 200        # GPa  non-oriented electrical steel
     poisson_ratio: 0.30            # -    typical for a ferrous alloy
     cte_ppm_k: 12.0   # ppm/K  in-plane, isotropic. Electrical steel / ferrous core, user 2026-09-07
-    yield_strength_mpa: 350        # MPa  # typical, not from the datasheet (NO electrical steel)
+    yield_strength_mpa: 220        # MPa  guaranteed minimum (product introduction)
+    tensile_strength_mpa: 350      # MPa  guaranteed minimum (product introduction)
     thermal_conductivity: null
     specific_heat: null
     saturation_B: 2.214     # T

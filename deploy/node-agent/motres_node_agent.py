@@ -13,6 +13,7 @@ Run with --once to print one sample as JSON and exit (no POST).
 """
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import pwd
@@ -133,12 +134,42 @@ def _docker(args):
         return ""
 
 
-def container_names():
-    names = {}
-    for line in _docker(["ps", "--no-trunc", "--format", "{{.ID}} {{.Names}}"]).splitlines():
-        cid, _, name = line.partition(" ")
-        names[cid] = name
-    return names
+_DOCKER_TS = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})")
+
+
+def _parse_docker_time(s: str) -> float:
+    """``docker ps`` prints CreatedAt in the daemon's local zone (e.g.
+    ``2026-09-15 08:00:00 +0000 UTC``); we parse the naive timestamp and treat
+    it as UTC, which is right on every host we run (UTC) and off by at most a
+    few hours elsewhere -- good enough for an approximate "uptime" display."""
+    m = _DOCKER_TS.match(s.strip())
+    if not m:
+        return 0.0
+    try:
+        t = time.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M:%S")
+        return float(calendar.timegm(t))
+    except (ValueError, OverflowError):
+        return 0.0
+
+
+def container_meta():
+    """cid -> (name, created_ts).  One ``docker ps`` call, reused for both the
+    per-process container name (proc_table's cgroup id) and the per-container
+    "created" timestamp (containers(), for an approximate uptime)."""
+    meta = {}
+    for line in _docker(["ps", "--no-trunc", "--format",
+                         "{{.ID}}\t{{.Names}}\t{{.CreatedAt}}"]).splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        cid, name = parts[0], parts[1]
+        created = _parse_docker_time(parts[2]) if len(parts) > 2 else 0.0
+        meta[cid] = (name, created)
+    return meta
+
+
+def container_names(meta):
+    return {cid: name for cid, (name, _created) in meta.items()}
 
 
 def _size(s: str) -> float:
@@ -150,16 +181,22 @@ def _size(s: str) -> float:
     return float(m.group(1)) * mult
 
 
-def containers():
+def containers(meta):
+    """docker stats, one row per running container: name, CPU % (one core =
+    100 %, so a busy multi-thread container reads > 100), RAM bytes, and an
+    approximate "created" unix ts (0 if unknown) used for a Now-table uptime."""
+    created_by_name = {name: created for _cid, (name, created) in meta.items()}
     out = []
     for line in _docker(["stats", "--no-stream", "--format", "{{json .}}"]).splitlines():
         try:
             d = json.loads(line)
         except ValueError:
             continue
-        out.append({"name": d.get("Name", ""),
+        name = d.get("Name", "")
+        out.append({"name": name,
                     "cpu": float(str(d.get("CPUPerc", "0")).rstrip("%") or 0),
-                    "mem": _size(str(d.get("MemUsage", "0B")).split("/")[0])})
+                    "mem": _size(str(d.get("MemUsage", "0B")).split("/")[0]),
+                    "created": created_by_name.get(name, 0.0)})
     return out
 
 
@@ -178,7 +215,8 @@ class Sampler:
         for (a, ai), (b, bi) in zip(self.cpu, cpu):
             dtot = b - a
             pct.append(round(100.0 * (1 - (bi - ai) / dtot), 1) if dtot > 0 else 0.0)
-        names = container_names()
+        meta = container_meta()
+        names = container_names(meta)
         rows = []
         for pid, (comm, uid, nice, ticks, rss, cid) in procs.items():
             prev = self.procs.get(pid)
@@ -197,7 +235,7 @@ class Sampler:
              "mem": mem, "swap": swap, "disks": disks(),
              "net": {"rx_bps": round((net[0] - self.net[0]) / dt),
                      "tx_bps": round((net[1] - self.net[1]) / dt)},
-             "procs": list(top.values()), "containers": containers()}
+             "procs": list(top.values()), "containers": containers(meta)}
         self.t, self.cpu, self.net, self.procs = t, cpu, net, procs
         return s
 

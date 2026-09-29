@@ -320,6 +320,28 @@ def user_load_series(start: float, end: float, top_n: int = 8) -> Dict[str, Any]
     return {"users": top, "bucket_s": width, "series": series}
 
 
+def node_bucket_cpu_s(start: float, end: float) -> Dict[tuple, float]:
+    """(node, bucket) -> summed app job CPU-seconds in [start, end).
+
+    Used by cluster_monitor.outside_app_series to subtract the CPU already
+    attributed to users from the app container's own docker-stats CPU, so the
+    remainder ("app-overhead") is not double-counted as a user's or an
+    outside-app container's load."""
+    fine_cutoff = time.time() - LOAD_FINE_BUCKET_S * 1440
+    table = "load_by_user_fine" if start >= fine_cutoff else "load_by_user_coarse"
+    con = _db()
+    try:
+        rows = con.execute(f"SELECT bucket, node, cpu_s FROM {table} WHERE bucket >= ? AND bucket < ?",
+                           (int(start), int(end))).fetchall()
+    finally:
+        con.close()
+    out: Dict[tuple, float] = {}
+    for bkt, node, cpu_s in rows:
+        key = (node, int(bkt))
+        out[key] = out.get(key, 0.0) + (cpu_s or 0.0)
+    return out
+
+
 def start(rec: Any, sampler: bool = True) -> Optional[Meter]:
     try:
         with _LOCK:

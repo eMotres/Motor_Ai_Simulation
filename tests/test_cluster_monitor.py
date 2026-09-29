@@ -2,12 +2,16 @@
 detection, admin-only routes and redaction (motor_ai_sim.cluster_monitor)."""
 from __future__ import annotations
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
 from motor_ai_sim import auth
 from motor_ai_sim import cluster_monitor as CM
+from motor_ai_sim import job_usage as U
 from motor_ai_sim.api import app
+from motor_ai_sim.routes import cluster as cluster_routes
 
 client = TestClient(app)
 
@@ -190,3 +194,88 @@ def test_mcp_and_latency_counters():
     assert m["mcp"]["throttled_429"] == 1 and m["api"]["p50_ms"] == 30
     assert m["api"]["p95_ms"] == 1000
     assert CM.app_metrics(now=2000.0)["api"]["requests"] == 0
+
+
+# ── out-of-app load (heavy work outside the job queue: containers/host) ─────
+def _minute() -> int:
+    return int(time.time() // 60) * 60
+
+
+def test_outside_app_subtracts_job_cpu_and_clamps_at_zero(monkeypatch, caplog):
+    """deploy-api-1's own docker-stats CPU minus the job CPU job_usage already
+    attributed to users = "app-overhead"; if job CPU somehow reads HIGHER than
+    the container's (sampling skew) it clamps at 0 and logs, never goes
+    negative."""
+    m0 = _minute()
+    nid, _ = CM.create_node("eu1")
+    # 6 CPU-seconds of job time attributed to alice in this minute, on "eu1"
+    U._USER_ACC[(m0, nid, "alice", "web")] = 6.0
+    assert U.flush_user_attribution(now=m0) == 1
+
+    # deploy-api-1 reads 20 % over the bucket -> job's share is 100*6/60 = 10 %
+    # -> 10 % left over as app-overhead
+    CM.ingest(nid, _sample(containers=[{"name": "deploy-api-1", "cpu": 20.0, "mem": 1e8}]),
+              now=m0 + 5)
+    out = CM.outside_app_series(m0 - 60, m0 + 60, top_n=8)
+    row = next(p for p in out["series"] if p["ts"] == m0)
+    assert row[CM.APP_OVERHEAD_KEY] == pytest.approx(10.0, abs=0.05)
+    assert out["app_overhead_key"] == CM.APP_OVERHEAD_KEY
+
+    # now make the job CPU (12 s = 20 %) exceed the container's own 20 % reading
+    U._USER_ACC[(m0, nid, "alice", "web")] = 12.0
+    U.flush_user_attribution(now=m0)
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        out2 = CM.outside_app_series(m0 - 60, m0 + 60, top_n=8)
+    row2 = next(p for p in out2["series"] if p["ts"] == m0)
+    assert row2.get(CM.APP_OVERHEAD_KEY, 0.0) == 0.0            # clamped, never negative
+    assert any("clamped to 0" in r.message for r in caplog.records)
+
+
+def test_outside_app_series_ranks_containers_and_buckets_the_rest_as_other():
+    m0 = _minute()
+    nid, _ = CM.create_node("eu1")
+    CM.ingest(nid, _sample(containers=[
+        {"name": "mesher_1", "cpu": 300.0, "mem": 1e9},
+        {"name": "prof_a", "cpu": 50.0, "mem": 1e8},
+        {"name": "prof_b", "cpu": 10.0, "mem": 1e8},
+        {"name": "deploy-web-1", "cpu": 1.0, "mem": 1e7},   # never runs jobs -> all overhead
+    ], procs=[
+        {"name": "stagea_worker", "cpu": 40.0, "rss": 2e8, "container": ""},
+        {"name": "sshd", "cpu": 0.5, "rss": 1e7, "container": ""},
+    ]), now=m0 + 5)
+    out = CM.outside_app_series(m0 - 60, m0 + 60, top_n=2)
+    assert out["items"] == ["mesher_1", "prof_a"]              # top 2 by CPU (300, 50 > host's 40.5)
+    row = next(p for p in out["series"] if p["ts"] == m0)
+    assert row["mesher_1"] == pytest.approx(300.0)
+    assert row["prof_a"] == pytest.approx(50.0)
+    assert row[CM.OTHER_KEY] == pytest.approx(50.5)             # host (40.5) + prof_b (10)
+    assert row[CM.APP_OVERHEAD_KEY] == pytest.approx(1.0)      # deploy-web-1, no job to subtract
+    # NOT the literal "other": job_usage.user_load_series uses that key for its
+    # own overflow bucket, and the web panel merges both series into one chart
+    # by ts (mergeLoadSeries) -- a shared key would silently clobber one value.
+    assert CM.OTHER_KEY != "other"
+    assert "other" not in row
+
+
+def test_outside_app_now_lists_non_app_containers_with_uptime():
+    nid, _ = CM.create_node("eu1")
+    now = time.time()
+    CM.ingest(nid, _sample(containers=[
+        {"name": "deploy-api-1", "cpu": 15.0, "mem": 1e8, "created": now - 3600},
+        {"name": "mesher_1", "cpu": 210.0, "mem": 2e9, "created": now - 120},
+    ]), now=now)
+    items = CM.outside_app_now()
+    assert [i["name"] for i in items] == ["mesher_1"]          # app container excluded
+    assert items[0]["cpu"] == 210.0 and items[0]["node"] == nid
+    assert items[0]["uptime_s"] == pytest.approx(120.0, abs=2)
+
+
+def test_load_live_includes_outside_app_and_monitoring_since(as_admin):
+    cluster_routes._LOAD_CACHE.update(key=None, ts=0.0, data=None)   # a prior test's cache
+    nid, _ = CM.create_node("eu1")
+    CM.ingest(nid, _sample(containers=[{"name": "mesher_1", "cpu": 80.0, "mem": 1e9}]))
+    r = client.get("/api/admin/load/live?range=1h").json()
+    assert "outside_app" in r and "series" in r["outside_app"] and "now" in r["outside_app"]
+    assert r["outside_app"]["now"][0]["name"] == "mesher_1"
+    assert r["monitoring_since"] is not None

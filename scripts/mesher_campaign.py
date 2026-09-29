@@ -31,6 +31,8 @@ import sys
 import time
 
 _BASE = "my_40mm_last"
+# element size of the campaign meshes/solves (CAMPAIGN_MESH_MM for refinement checks)
+_MESH_MM = float(os.environ.get("CAMPAIGN_MESH_MM", "1.0") or 1.0)
 # perturbations: key -> candidate values (absolute), chosen on the cusp side
 _KNOBS = {
     "rotor_fill_r": [0.0, 0.02, 0.05, 0.1, 0.2],
@@ -129,7 +131,7 @@ def one(cand_path, backend, out_path, budget, solve):
         ms, ts, _, mr, tr, _ = gm.geo_mesh_halves(
             p, polys, r_si=float(p["stator_inner_radius"]),
             r_ro=float(p["rotor_outer_radius"]), n_slip=1008, n_sectors=1,
-            mesh_edge_mm=1.0)
+            mesh_edge_mm=_MESH_MM)
         res["mesh_s"] = time.time() - t0
         q_s = _quality(ms.p.T * 1e3, ms.t.T)
         q_r = _quality(mr.p.T * 1e3, mr.t.T)
@@ -147,7 +149,7 @@ def one(cand_path, backend, out_path, budget, solve):
         try:
             r = em_transient_eval(
                 n_steps_per_period=24, n_periods=1.0, gamma_deg=0.0,
-                I_phase_rms=10.0, rpm=3000.0, mesh_size_mm=1.0, min_size_mm=0.3,
+                I_phase_rms=10.0, rpm=3000.0, mesh_size_mm=_MESH_MM, min_size_mm=0.3,
                 outer_air_factor=1.2, gap_layers=1, n_sectors=1, rotor_eddy=True,
                 iron_template=True, geo_mesh=True, structured_gap=True,
                 geo_override=dict(cand["geometry"]), eddy=True)

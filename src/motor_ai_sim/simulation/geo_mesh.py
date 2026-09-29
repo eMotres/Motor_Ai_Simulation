@@ -1331,11 +1331,61 @@ def set_cdt_backend(name: Optional[str]) -> None:
     _CDT_OVERRIDE["v"] = None if name in (None, "auto") else name
 
 
+#: The gmsh release the gmsh backend was validated on (requirements.txt pin,
+#: docs/MESHER_COMPARISON_2026-09-29.md).  Another release still runs — the
+#: semantic tests define compatibility — but provenance flags it.
+GMSH_VALIDATED = "4.15.2"
+
+
+def _require_gmsh() -> str:
+    """Fail closed with an actionable message when gmsh cannot be loaded."""
+    try:
+        import gmsh  # noqa: F401
+        return str(getattr(gmsh, "__version__", "?"))
+    except Exception as e:  # noqa: BLE001 — ImportError, missing libGLU, ...
+        raise RuntimeError(
+            "geometry-driven mesh needs gmsh (the gmsh CDT backend was selected: "
+            "MOTOR_AI_SIM_GEO_CDT={} , triangle installed: {}) but gmsh cannot be "
+            "loaded: {}: {}. Install it with `pip install gmsh=={}` (Linux also "
+            "needs libglu1-mesa and libxcursor1), or select Triangle where it "
+            "is licensed: MOTOR_AI_SIM_GEO_CDT=triangle."
+            .format(os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto"), HAVE_TRIANGLE,
+                    type(e).__name__, e, GMSH_VALIDATED)) from e
+
+
+def cdt_provenance() -> Dict[str, Optional[str]]:
+    """Backend + library versions for the solve's provenance record."""
+    be = cdt_backend()
+    out: Dict[str, Optional[str]] = {"backend": be}
+    try:
+        import gmsh
+        out["gmsh"] = str(gmsh.__version__)
+    except Exception:  # noqa: BLE001
+        out["gmsh"] = None
+    if HAVE_TRIANGLE:
+        try:
+            from importlib.metadata import version
+            out["triangle"] = version("triangle")
+        except Exception:  # noqa: BLE001
+            out["triangle"] = "?"
+    else:
+        out["triangle"] = None
+    if be == "gmsh" and out["gmsh"] != GMSH_VALIDATED:
+        out["note"] = "gmsh {} differs from the validated {}".format(
+            out["gmsh"], GMSH_VALIDATED)
+    return out
+
+
 def cdt_backend() -> str:
-    """'triangle' or 'gmsh' — the backend the next triangulation uses."""
+    """'triangle' or 'gmsh' — the backend the next triangulation uses.
+
+    Fail-closed policy (docs/MESHER_TRANSITION.md): a selected backend that is
+    unavailable raises with an actionable message; a gmsh meshing failure
+    raises GmshCDTError; nothing silently falls back to a different mesher."""
     want = _CDT_OVERRIDE["v"] or (os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto")
                                   .strip().lower() or "auto")
     if want == "gmsh":
+        _require_gmsh()
         return "gmsh"
     if want == "triangle":
         if not HAVE_TRIANGLE:
@@ -1345,7 +1395,10 @@ def cdt_backend() -> str:
     if want != "auto":
         raise ValueError("MOTOR_AI_SIM_GEO_CDT must be auto, triangle or gmsh, "
                          "not %r" % want)
-    return "triangle" if HAVE_TRIANGLE else "gmsh"
+    if HAVE_TRIANGLE:
+        return "triangle"
+    _require_gmsh()
+    return "gmsh"
 
 
 def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
@@ -2908,6 +2961,11 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             # run.  The budget verdict is about the geometry, not the tiling.
             raise
         except Exception as _te:
+            # Fail closed on a gmsh CDT failure: the whole-wedge build is a
+            # different mesh (two unique seams), not a repair of this one.
+            from motor_ai_sim.simulation.geo_mesh_gmsh import GmshCDTError
+            if isinstance(_te, GmshCDTError):
+                raise
             log.warning("geo tile failed (%s) — whole-wedge fallback", _te)
             Vs = None
     if Vs is None:

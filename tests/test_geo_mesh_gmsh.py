@@ -185,6 +185,9 @@ def full(machine):
 
 
 def test_repeat_build_is_bit_identical(machine, full):
+    """SAME-ENVIRONMENT reproducibility: one process, one gmsh build, one
+    thread.  Bit identity across gmsh releases/platforms is NOT promised —
+    test_semantic_fingerprint defines cross-version compatibility."""
     again = _halves(machine)
     for (V, T, t), (V2, T2, t2) in zip(full, again):
         assert _hash(V, T) == _hash(V2, T2)
@@ -256,19 +259,79 @@ def test_wire_cell_factor_acts_on_gmsh(machine):
     assert counts[0.5] > counts[2.0]
 
 
-def test_moving_band_rings(machine):
+BACKENDS = ["gmsh"] + (["triangle"] if gm.HAVE_TRIANGLE else [])
+
+
+class _Backend:
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        gm.set_cdt_backend(self.name)
+
+    def __exit__(self, *a):
+        gm.set_cdt_backend("gmsh")
+
+
+def _conforming(V, T):
+    """Edges used by >2 triangles (never) and the boundary edge list."""
+    E = np.sort(np.vstack([T[:, [0, 1]], T[:, [1, 2]], T[:, [0, 2]]]), axis=1)
+    u, cnt = np.unique(E, axis=0, return_counts=True)
+    return int(cnt.max()), u[cnt == 1]
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("n_sectors", [1, 2])
+def test_moving_band_rings(machine, backend, n_sectors):
+    """R1/R2 (harmonic-macro rings) carry exactly the uniform slip grid on
+    BOTH backends: every grid angle k*2pi/1008 of the model span holds one
+    node on the ring (the band-ring pinning fix; 1002/1008 before it), the
+    nodes sit on the grid angles, and the halves stay conforming."""
     p, _ = machine
     r_ro, r_si = float(p["rotor_outer_radius"]), float(p["stator_inner_radius"])
     g = r_si - r_ro
     r1, r2 = r_ro + 0.3 * g, r_si - 0.3 * g
-    (Vs, Ts, _ts), (Vr, Tr, _tr) = _halves(machine, r1_band=r1, r2_band=r2)
+    with _Backend(backend):
+        (Vs, Ts, _ts), (Vr, Tr, _tr) = _halves(machine, r1_band=r1, r2_band=r2,
+                                                n_sectors=n_sectors)
+    n_want = 1008 // n_sectors + (1 if n_sectors > 1 else 0)   # open wedge: both ends
     for V, T, r in ((Vr, Tr, r1), (Vs, Ts, r2)):
         used = np.unique(T)
         rr = np.hypot(V[used, 0], V[used, 1])
         on = used[np.abs(rr - r) < 2e-3]          # 1 um coordinate snap
-        assert len(on) == 1008
-        ang = np.sort(np.mod(np.arctan2(V[on, 1], V[on, 0]), 2 * math.pi))
-        assert np.allclose(np.diff(ang), 2 * math.pi / 1008, atol=1e-4)
+        assert len(on) == n_want
+        k = np.mod(np.arctan2(V[on, 1], V[on, 0]), 2 * math.pi) / (2 * math.pi / 1008)
+        # on the grid angles, up to the 1 um coordinate snap (0.6 um measured)
+        assert (np.abs(k - np.round(k)) * 2 * math.pi * r / 1008).max() < 1.5e-3
+        assert len(np.unique(np.round(k))) == n_want          # one node per angle
+        assert _conforming(V, T)[0] <= 2
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_moving_band_macro_solve(backend):
+    """End to end: the harmonic gap macro (moving band, R1/R2 coupled
+    analytically) solves on the geometry-driven mesh of each backend, with no
+    mesh fallback, and both backends agree on torque and voltage.  (Server
+    test: ~2-4 min per backend.)"""
+    from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
+    out = {}
+    for be in BACKENDS:
+        with _Backend(be):
+            r = em_transient_eval(n_steps_per_period=24, n_periods=1.0, gamma_deg=0.0,
+                                  I_phase_rms=10.0, rpm=3000.0, mesh_size_mm=1.0,
+                                  min_size_mm=0.3, outer_air_factor=1.2, gap_layers=1,
+                                  n_sectors=2, rotor_eddy=False, iron_template=True,
+                                  geo_mesh=True, structured_gap=True, airgap_macro=True,
+                                  geo_override=dict(G40), eddy=False)
+        assert not r.get("mesh_build_events"), r.get("mesh_build_events")
+        T = float(np.mean(r["T_avg_Nm"]))
+        assert math.isfinite(T) and abs(T) > 0
+        out[be] = (T, float(r["V_peak"]))
+    if len(out) == 2:
+        (t0, v0), (t1, v1) = out["triangle"], out["gmsh"]
+        assert t1 == pytest.approx(t0, rel=5e-3)
+        assert v1 == pytest.approx(v0, rel=5e-3)
 
 
 def test_mesh_budget_on_gmsh(machine, full):
@@ -282,6 +345,214 @@ def test_mesh_budget_on_gmsh(machine, full):
         gm.set_tri_budget(None)
     for (V, T, _t), (V2, T2, _t2) in zip(full, again):
         assert _hash(V, T) == _hash(V2, T2)
+
+
+# ── skin (shaft) and sleeve layers, per backend, on a sleeved hollow shaft ───
+def _sleeved():
+    """tests/test_sleeve.py's 30 mm 12s/14p (1.0 mm gap) with a 0.4 mm sleeve;
+    its shaft is a TUBE (bore 0.9 mm, OD 2.9 mm)."""
+    sys.path.insert(0, str(_ROOT / "tests"))
+    from test_sleeve import GEO, SLEEVE_MM
+    from motor_ai_sim.cadquery_geometry import CadQueryMotor
+    m = CadQueryMotor()
+    m.set_parameters(dict(GEO, sleeve_thickness=SLEEVE_MM))
+    return m.parameters, m.get_2d_polygons(rotor_angle_deg=0.0)
+
+
+SKIN = {"h1_mm": 0.05, "growth": 1.5, "chord_mm": 0.2, "h_max_mm": 0.4}
+
+
+@pytest.fixture(scope="module")
+def sleeved():
+    return _sleeved()
+
+
+def _rotor_sk(sleeved, backend, layers, n_sectors=1):
+    from motor_ai_sim.simulation.sb_domains import DOM_SHAFT, DOM_SLEEVE
+    p, polys = sleeved
+    _ri, r_out = gm._sleeve_radii(polys)
+    with _Backend(backend):
+        _ms, _ts, _cs, mr, tr, _cr = gm.geo_mesh_halves(
+            p, polys, r_si=float(p["stator_inner_radius"]), r_ro=float(r_out),
+            n_slip=1008, mesh_edge_mm=0.5, n_sectors=n_sectors,
+            skin_layers={"shaft": dict(SKIN), "sleeve": {"layers": layers}})
+    return mr.p.T * 1e3, mr.t.T, np.asarray(tr), DOM_SHAFT, DOM_SLEEVE
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_shaft_skin_layers_structure(sleeved, backend):
+    """The structured wall: every planned ring is a node ring of the shaft
+    (layer count), the first cell is h1, successive layers grow by the ratio
+    until the cap, and the stitched rotor has no hanging node."""
+    p, _polys = sleeved
+    V, T, tags, DOM_SHAFT, _ = _rotor_sk(sleeved, backend, 2)
+    r_sh, r_b = float(p["rotor_inner_radius"]), float(p["shaft_inner_radius"])
+    want = gm.skin_layer_radii(r_sh, r_b, SKIN["h1_mm"], SKIN["growth"], SKIN["h_max_mm"])
+    nodes = np.unique(T[tags == DOM_SHAFT])
+    rr = np.hypot(V[nodes, 0], V[nodes, 1])
+    for r in want:                                     # every planned ring exists
+        assert np.sum(np.abs(rr - r) < 2e-3) >= 16, r
+    t = -np.diff(want)
+    assert t[0] == pytest.approx(SKIN["h1_mm"], abs=2e-3)              # first cell
+    grow = t[1:] / t[:-1]
+    capped = t[1:] >= SKIN["h_max_mm"] - 1e-9
+    assert np.allclose(grow[~capped][:-1], SKIN["growth"], rtol=1e-6)  # progression
+    assert len(want) - 1 >= 4                                          # layer count
+    mx, bnd = _conforming(V, T)
+    assert mx <= 2
+    rb = np.hypot(V[bnd, 0], V[bnd, 1])            # boundary = the rotor OD only
+    assert np.all(np.abs(rb - rb.max()) < 2e-3)
+
+
+@pytest.mark.skipif(len(BACKENDS) < 2, reason="Triangle not installed")
+def test_shaft_skin_patch_identical_on_both_backends(sleeved):
+    """The structured patch is shared code: its node rings are the same on
+    Triangle and gmsh (only the CDT around it differs)."""
+    rings = {}
+    for be in BACKENDS:
+        V, T, tags, DOM_SHAFT, _ = _rotor_sk(sleeved, be, 2)
+        nodes = np.unique(T[tags == DOM_SHAFT])
+        rings[be] = np.unique(np.round(np.hypot(V[nodes, 0], V[nodes, 1]), 4))
+    assert np.array_equal(rings["gmsh"], rings["triangle"])
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_sleeve_resolution_follows_the_layer_request(sleeved, backend):
+    """The sleeve is CDT-meshed to the target cell of `layers` elements
+    across its thickness (it is not a structured patch on either backend):
+    the mean cell edge is <= 1.25 t/n, it refines when n doubles, and the ring
+    region keeps its CAD section."""
+    p, polys = sleeved
+    r_in, r_out = gm._sleeve_radii(polys)
+    t = r_out - r_in
+    prev = None
+    for n in (2, 4):
+        V, T, tags, _s, DOM_SLEEVE = _rotor_sk(sleeved, backend, n)
+        a = np.abs(_areas(V, T))[tags == DOM_SLEEVE]
+        edge = math.sqrt(a.mean() / 0.433)
+        assert edge <= 1.25 * t / n
+        assert a.sum() == pytest.approx(polys["sleeve"].area, rel=5e-3)
+        if prev is not None:
+            assert len(a) > 1.5 * prev      # boundary chords bound the n^2 scaling
+        prev = len(a)
+        assert _conforming(V, T)[0] <= 2
+
+
+# ── fail closed ──────────────────────────────────────────────────────────────
+def test_gmsh_failure_is_loud_and_cleans_up(monkeypatch):
+    """A gmsh meshing failure raises GmshCDTError (never a silent fallback),
+    finalizes the gmsh session it opened, and releases the process lock; the
+    next triangulation works."""
+    import threading
+    import gmsh
+    from motor_ai_sim.simulation.geo_mesh_gmsh import GmshCDTError
+    from motor_ai_sim.simulation.sb_domains import _GMSH_LOCK
+    V, S = _square_pslg()
+
+    def boom(*a, **k):
+        raise Exception("synthetic meshing failure")
+    monkeypatch.setattr(gmsh.model.mesh, "generate", boom)
+    with pytest.raises(GmshCDTError, match="synthetic meshing failure"):
+        triangulate_gmsh(V, S, gm._cell_area(1.0), hole_pts=[[8.5, 8.5]])
+    assert not gmsh.isInitialized()
+    got = []
+    def _probe():
+        ok = _GMSH_LOCK.acquire(timeout=5)
+        got.append(ok)
+        if ok:
+            _GMSH_LOCK.release()
+    th = threading.Thread(target=_probe)
+    th.start(); th.join()
+    assert got == [True]
+    monkeypatch.undo()
+    Vo, To = triangulate_gmsh(V, S, gm._cell_area(1.0), hole_pts=[[8.5, 8.5]])
+    assert len(To) > 0
+
+
+def test_tile_does_not_fall_back_on_a_gmsh_failure(machine, monkeypatch):
+    """geo_mesh_halves re-raises a gmsh CDT failure instead of retrying as a
+    whole wedge (a different mesh)."""
+    import motor_ai_sim.simulation.geo_mesh_gmsh as gg
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise gg.GmshCDTError("synthetic")
+    monkeypatch.setattr(gg, "triangulate_gmsh", boom)
+    with pytest.raises(gg.GmshCDTError):
+        _halves(machine)
+    assert len(calls) == 1
+
+
+def test_missing_gmsh_is_an_actionable_error(monkeypatch):
+    import builtins
+    real = builtins.__import__
+
+    def fake(name, *a, **k):
+        if name == "gmsh":
+            raise ImportError("libGLU.so.1: cannot open shared object file")
+        return real(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", fake)
+    with pytest.raises(RuntimeError, match="pip install gmsh==") as ei:
+        gm.cdt_backend()
+    assert "MOTOR_AI_SIM_GEO_CDT=triangle" in str(ei.value)
+
+
+def test_budget_preflight_rejects_before_meshing(monkeypatch):
+    """A cross-section whose target sizes alone predict > 2x the budget is
+    rejected without calling gmsh at all."""
+    import gmsh
+    V, S = _square_pslg()
+    called = []
+    monkeypatch.setattr(gmsh.model.mesh, "generate", lambda *a: called.append(1))
+    with pytest.raises(gm.MeshBudgetExceeded, match="before meshing"):
+        triangulate_gmsh(V, S, gm._cell_area(0.05), budget=1000)
+    assert not called
+
+
+# ── cross-version compatibility: semantic, not bitwise ──────────────────────
+_FP = _ROOT / "tests" / "data" / "geo_mesh_gmsh_fingerprint_40mm.json"
+
+
+def _fingerprint(full, machine):
+    p, _ = machine
+    out = {}
+    for nm, (V, T, t), ring in (("stator", full[0], float(p["stator_inner_radius"])),
+                                ("rotor", full[1], float(p["rotor_outer_radius"]))):
+        a = np.abs(_areas(V, T))
+        ar, _ = gm._aspect_arr(V, T)
+        used = np.unique(T)
+        rr = np.hypot(V[used, 0], V[used, 1])
+        out[nm] = {"n_tri": int(len(T)),
+                   "ring_nodes": int(np.sum(np.abs(rr - ring) < 2e-3)),
+                   "area_by_tag": {str(int(k)): float(a[t == k].sum())
+                                   for k in np.unique(t)},
+                   "ar_p99": float(np.percentile(ar, 99)), "ar_max": float(ar.max())}
+    return out
+
+
+def test_semantic_fingerprint(machine, full):
+    """What must hold on ANY supported gmsh build (the pinned 4.15.2 recorded
+    it): triangle counts within 5 %, gap-ring node counts exact, every tag's
+    area within 0.1 %, quality no worse than 1.3x the reference."""
+    got = _fingerprint(full, machine)
+    if os.environ.get("GEO_MESH_WRITE_FINGERPRINT") == "1":
+        import gmsh
+        _FP.parent.mkdir(parents=True, exist_ok=True)
+        _FP.write_text(json.dumps({"gmsh": gmsh.__version__, "halves": got},
+                                  indent=1), encoding="utf-8")
+    ref = json.loads(_FP.read_text(encoding="utf-8"))["halves"]
+    for nm in ("stator", "rotor"):
+        g, r = got[nm], ref[nm]
+        assert g["n_tri"] == pytest.approx(r["n_tri"], rel=0.05)
+        assert g["ring_nodes"] == r["ring_nodes"]
+        assert set(g["area_by_tag"]) == set(r["area_by_tag"])
+        for k, v in r["area_by_tag"].items():
+            if k in ("0", "8"):          # air / outer air share a centroid split
+                continue
+            assert g["area_by_tag"][k] == pytest.approx(v, rel=1e-3, abs=1e-6)
+        assert g["ar_p99"] <= 1.3 * r["ar_p99"]
+        assert g["ar_max"] <= 1.3 * r["ar_max"]
 
 
 # ── shaft skin layers and the shaft region, re-run on this backend ───────────

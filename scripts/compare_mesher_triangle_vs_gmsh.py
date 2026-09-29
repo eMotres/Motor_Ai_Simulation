@@ -236,46 +236,34 @@ def run(spec_path, out_path):
         structured_gap=bool(st.get("mesh.structuredGap", True)),
         component_mesh_mm=dict(st.get("mesh.componentMesh") or {}),
         geo_override=dict(geo), eddy=True)
-    if spec.get("mesh_only"):
-        # Hash the geometry-driven halves exactly as the solve builds them and
-        # stop: used to show whether a code change moves a saved duty's mesh
-        # at all (identical hashes => identical numbers, the solve is
-        # deterministic).  _Stop is a BaseException so no fallback catches it.
-        import hashlib
-        from motor_ai_sim.simulation import geo_mesh as _gm
+    # Record every geometry-driven mesh build of this solve (hash of nodes,
+    # triangles and tags, triangle count, band-ring node counts): identical
+    # hashes between two code versions => identical numbers (the solve is
+    # deterministic), so a pre-processing change can be shown to be a no-op.
+    import hashlib
+    from motor_ai_sim.simulation import geo_mesh as _gm
+    _orig = _gm.geo_mesh_halves
+    seen = []
 
-        class _Stop(BaseException):
-            pass
-        _orig = _gm.geo_mesh_halves
-        seen = []
-
-        def _spy(p, polys, **k):
-            out = _orig(p, polys, **k)
-            ms, ts, _cs, mr, tr, _cr = out
-            rec = {"kwargs": {kk: (vv if isinstance(vv, (int, float, str)) else str(vv))
-                              for kk, vv in k.items() if kk != "skin_layers"}}
-            for nm, m_, t_ in (("stator", ms, ts), ("rotor", mr, tr)):
-                h = hashlib.sha1(np.ascontiguousarray(m_.p).tobytes()
-                                 + np.ascontiguousarray(m_.t).tobytes()
-                                 + np.ascontiguousarray(t_).tobytes()).hexdigest()
-                rec[nm] = {"sha1": h, "n_tri": int(m_.t.shape[1])}
-            for nm, m_, rr in (("R1", mr, k.get("r1_band")), ("R2", ms, k.get("r2_band"))):
-                if rr:
-                    P = m_.p.T * 1e3
-                    used = np.unique(m_.t)
-                    rad = np.hypot(P[used, 0], P[used, 1])
-                    rec[nm + "_nodes"] = int(np.sum(np.abs(rad - float(rr)) < 2e-3))
-            seen.append(rec)
-            raise _Stop()
-        _gm.geo_mesh_halves = _spy
-        try:
-            em_transient_eval(**kw)
-        except _Stop:
-            pass
-        json.dump({"spec": spec, "backend": backend, "versions": _versions(),
-                   "builds": seen}, open(out_path, "w", encoding="utf-8"), indent=1)
-        print(json.dumps(seen))
-        return
+    def _spy(p, polys, **k):
+        out = _orig(p, polys, **k)
+        ms, ts, _cs, mr, tr, _cr = out
+        rec = {"kwargs": {kk: (vv if isinstance(vv, (int, float, str)) else str(vv))
+                          for kk, vv in k.items() if kk != "skin_layers"}}
+        for nm, m_, t_ in (("stator", ms, ts), ("rotor", mr, tr)):
+            h = hashlib.sha1(np.ascontiguousarray(m_.p).tobytes()
+                             + np.ascontiguousarray(m_.t).tobytes()
+                             + np.ascontiguousarray(t_).tobytes()).hexdigest()
+            rec[nm] = {"sha1": h, "n_tri": int(m_.t.shape[1])}
+        for nm, m_, rr in (("R1", mr, k.get("r1_band")), ("R2", ms, k.get("r2_band"))):
+            if rr:
+                P = m_.p.T * 1e3
+                used = np.unique(m_.t)
+                rad = np.hypot(P[used, 0], P[used, 1])
+                rec[nm + "_nodes"] = int(np.sum(np.abs(rad - float(rr)) < 2e-3))
+        seen.append(rec)
+        return out
+    _gm.geo_mesh_halves = _spy
     t0 = time.time()
     r = em_transient_eval(**kw)
     wall = time.time() - t0
@@ -310,6 +298,7 @@ def run(spec_path, out_path):
         "kwargs": {k: v for k, v in kw.items() if k != "geo_override"},
         "mesh_build_events": r.get("mesh_build_events"),
         "mesh_build_notes": r.get("mesh_build_notes"),
+        "mesh_builds": seen,
         "mesh": {k: v for k, v in r.items()
                  if isinstance(v, (int, float)) and any(
                      s in k.lower() for s in ("tri", "node", "n_elem", "dof"))},

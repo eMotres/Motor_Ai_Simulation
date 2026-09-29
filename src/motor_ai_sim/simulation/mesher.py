@@ -1548,11 +1548,13 @@ def _build_sliding_band_meshes(
         # MOTOR_AI_SIM_GEO_CDT=gmsh) — docs/MESHER_TRANSITION.md, stage S2.
         # Every other step (skin layers, wire cells, tiling, tagging, budget)
         # is shared, so both backends build the same kind of mesh.
-        from motor_ai_sim.simulation.geo_mesh import cdt_backend
+        from motor_ai_sim.simulation.geo_mesh import cdt_backend, cdt_provenance
         _cdt = cdt_backend()
         if _cdt != "triangle":
-            log.info("geometry-driven mesh: gmsh CDT backend")
-            _trace_note("geometry-driven mesh on the gmsh CDT backend")
+            _pv = cdt_provenance()
+            log.info("geometry-driven mesh: gmsh CDT backend (gmsh %s)", _pv.get("gmsh"))
+            _trace_note("geometry-driven mesh on the gmsh CDT backend (gmsh %s%s)"
+                        % (_pv.get("gmsh"), "; " + _pv["note"] if _pv.get("note") else ""))
     if full_ring:
         # TRUE 360°: each half stitched from two clean 180° builds (direct
         # closed-360 OCC double-meshes → dead field).  No sector cuts exist
@@ -1641,6 +1643,11 @@ def _build_sliding_band_meshes(
                 if isinstance(_te, MeshBudgetExceeded):
                     # An armed mesh budget is a verdict on the GEOMETRY — the
                     # gmsh fallback would re-pay the same pathological build.
+                    raise
+                from motor_ai_sim.simulation.geo_mesh_gmsh import GmshCDTError
+                if isinstance(_te, GmshCDTError) or "needs gmsh" in str(_te):
+                    # fail closed: a gmsh CDT failure is never answered by a
+                    # different mesher (docs/MESHER_TRANSITION.md policy)
                     raise
                 log.warning("iron template failed (%s) — gmsh build", _te)
                 _trace_event("iron template failed -> gmsh build: %s" % _te)
@@ -1766,6 +1773,9 @@ def _build_sliding_band_meshes(
                 # Same rule as the full-ring branch: the budget verdict is
                 # about the geometry, not this particular build path.
                 raise
+            from motor_ai_sim.simulation.geo_mesh_gmsh import GmshCDTError
+            if isinstance(_te, GmshCDTError) or "needs gmsh" in str(_te):
+                raise                     # fail closed (see the full-ring branch)
             log.warning("iron template wedge failed (%s) — gmsh build", _te)
             _trace_event("iron template wedge failed -> gmsh build: %s" % _te)
             mesh_s = tags_s = classify_s = None

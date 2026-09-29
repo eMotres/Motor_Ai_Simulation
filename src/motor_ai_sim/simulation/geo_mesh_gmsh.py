@@ -47,6 +47,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -197,9 +198,12 @@ def triangulate_gmsh(V, S, area: float, hole_pts=None, regions=None,
     elif area and area > 0:
         tgt = [_edge_of_area(area)] * len(faces)
 
+    # budget PREFLIGHT, before any gmsh work: the capped faces' area at their
+    # target size (a lower bound of the count — boundary grading adds more)
+    pred = sum(faces[i].area / (_EQ * tgt[i] ** 2)
+               for i in range(len(faces)) if keep[i] and tgt[i])
+    _t0 = time.time()
     if budget:
-        pred = sum(faces[i].area / (_EQ * tgt[i] ** 2)
-                   for i in range(len(faces)) if keep[i] and tgt[i])
         if pred > 2.0 * budget:
             raise MeshBudgetExceeded(
                 "mesh budget: this cross-section needs ~{:.0f} triangles at "
@@ -407,6 +411,8 @@ def triangulate_gmsh(V, S, area: float, hole_pts=None, regions=None,
     if np.any(np.abs(sa) <= 1e-14):
         raise GmshCDTError("gmsh produced %d zero-area triangle(s)"
                            % int(np.sum(np.abs(sa) <= 1e-14)))
+    log.info("gmsh CDT: %d faces, %d segments, predicted >= %.0f tris, built %d "
+             "in %.2f s", sum(keep), len(S), pred, len(T), time.time() - _t0)
     if budget and len(T) > budget:
         raise MeshBudgetExceeded(
             "mesh budget: {} triangles in one cell exceed the {}-triangle "

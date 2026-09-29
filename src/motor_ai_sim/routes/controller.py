@@ -158,8 +158,8 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
     and which of the two it was is reported.
 
     ``p_ac_W`` — the inverter's AC OUTPUT power, i.e. the motor's electrical
-    INPUT power — is never typed by anyone (owner 2026-09-22: «не пойму, куда
-    это записывать»).  It is resolved through :func:`report.duty_em_source`
+    INPUT power — is never typed by anyone (owner 2026-09-22: "I don't get
+    where to enter this").  It is resolved through :func:`report.duty_em_source`
     (the SAME lookup a report page uses: a coupled record whatever state it is
     in — steady, at a limit, or the S1-verified machine a ``solve_to:
     continuous`` run replaced it with — a PWM run, or a plain standalone
@@ -511,9 +511,9 @@ def _cooling_from_thermal(die: Optional[str], cfg: Optional[str],
 # ---------------------------------------------------------------------------
 # Cooling INHERITANCE from Thermal — automatic, per field, per mode
 # ---------------------------------------------------------------------------
-# Owner 2026-09-25: *"Когда я ставлю air или liquid, он должен брать параметры
-# охлаждения из Thermal. Я там их устанавливаю для мотора — те же и для
-# контроллера по умолчанию, но можно изменить, чтобы сделать разными."*
+# Owner 2026-09-25: *"When I set air or liquid, it should take the cooling
+# parameters from Thermal. I set them there for the motor — the same ones for
+# the controller by default, but they can be changed to make them different."*
 #
 # Replaces the 542c930 button (:func:`_cooling_from_thermal`, kept below
 # unchanged for API/back-compat and its own passing tests) as the tab's
@@ -850,8 +850,8 @@ def _config_doc_for(die: Optional[str], cfg: Optional[str]) -> Dict[str, Any]:
 
 def _controller_settings_for(die: Optional[str], cfg: Optional[str]) -> Dict[str, Any]:
     """The Controller tab's own settings, as they were last saved WITH the
-    active configuration (owner 2026-09-22: "при сохранении мотора текущий
-    контроллер тоже должен сохраняться со всеми настройками") — written by
+    active configuration (owner 2026-09-22: "when the motor is saved the
+    current controller should also be saved with all its settings") — written by
     ``PATCH /api/family/config/{die}/{cfg}/controller``, one physical
     controller box per configuration, the same footing as ``battery``.
 
@@ -870,9 +870,9 @@ def _battery_v_dc(die: Optional[str], cfg: Optional[str]) -> Tuple[Optional[floa
     """The configuration's own battery pack, nominal — ``(v_dc, basis)``, or
     ``(None, None)`` when the configuration names no battery at all.
 
-    Owner 2026-09-22 (production, "Error: v_dc_V is required"): «почему это
-    всё не берётся из мотора или из батарейки?» — this is the "или из
-    батарейки" half.  ``v_nom`` (``set_battery``'s own pack total, ``n_cells
+    Owner 2026-09-22 (production, "Error: v_dc_V is required"): "why isn't
+    all this taken from the motor or from the battery?" — this is the "or
+    from the battery" half.  ``v_nom`` (``set_battery``'s own pack total, ``n_cells
     x v_cell_nom``) is preferred; a pack that never named a nominal CELL
     voltage falls back to the midpoint of its min/max, then to its minimum —
     every step says which it used, because a nominal and a floor read the
@@ -909,8 +909,8 @@ def get_resolved_point(die: Optional[str] = Query(None), config: Optional[str] =
     v_dc, f_sw, sd = req.get("v_dc_V"), req.get("f_carrier_hz"), req.get("star_delta")
     m, pf = req.get("modulation_index"), req.get("power_factor")
     # The web's Carrier/DC-link inputs prefill from THIS point (owner
-    # 2026-09-22 evening screenshots: "надо брать эти значения из
-    # электромагнитного моделирования или из батареи и рисовать значения" —
+    # 2026-09-22 evening screenshots: "need to take these values from the
+    # electromagnetic simulation or from the battery and draw the values" —
     # the chips row next to those inputs also names rpm), so it rides the
     # same ``_build_request`` resolution as ``i_phase_rms_A``/``p_ac_W`` above
     # rather than a second lookup that could disagree with it.
@@ -1097,7 +1097,7 @@ def _build_request(body: Dict[str, Any],
     """The solver's request, with a ``sources`` map for every resolved field.
 
     AUDIT, owner 2026-09-22 (production, "Error: v_dc_V is required" —
-    «почему это всё не берётся из мотора или из батарейки? проверь всё»):
+    "why isn't all this taken from the motor or from the battery? check everything"):
     nothing here may be REQUIRED from the web except the controller's own
     choices — topology/mapping, device, N in parallel, R_g, dead time,
     cooling.  Every machine/point value is resolved server-side and named in
@@ -1193,8 +1193,8 @@ def _build_request(body: Dict[str, Any],
         sources["power_factor"] = "the request"
         req.pop("modulation_index", None)
 
-    # ── THE DRIVE IS THE CONTROLLER'S (owner 2026-09-24: «Это значение нужно
-    # задавать в контроллере; PWM нужно выкинуть из Electromagnetic»).  Both
+    # ── THE DRIVE IS THE CONTROLLER'S (owner 2026-09-24: "This value needs
+    # to be set in the controller; PWM needs to be dropped from Electromagnetic").  Both
     # numbers go through ``inverter.drive_source``, the one resolution the
     # coupled loop, the report and the mechanical tables also use:
     #   V_DC:    request > the saved manual V_dc > the configuration's battery
@@ -1464,7 +1464,7 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
     origins = req.pop("_origins", None)
     cooling_sources = req.pop("_cooling_sources", None)
     thermal_cooling = req.pop("_thermal_cooling", None)
-    # AUDIT, owner 2026-09-22 ("Error: v_dc_V is required" — «проверь всё»):
+    # AUDIT, owner 2026-09-22 ("Error: v_dc_V is required" — "check everything"):
     # every value that is genuinely missing gets ONE plain sentence here,
     # never the physics module's raw "<field> is required" — the panel would
     # otherwise show that as its status line with no way to know what to do.
@@ -1486,8 +1486,8 @@ def post_solve(body: Dict[str, Any] = Body(default={}),
             ["f_elec_hz"], code="no_duty_record")
     # V_dc: the configuration's battery, the duty's own PWM bus and a saved
     # manual override are all tried in _build_request — this is what is left
-    # when a configuration names NONE of the three («почему это всё не
-    # берётся из мотора или из батарейки?» — because there was nothing to
+    # when a configuration names NONE of the three ("why isn't all this taken
+    # from the motor or from the battery?" — because there was nothing to
     # take it from).
     if req.get("v_dc_V") is None:
         raise _refuse(

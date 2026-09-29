@@ -3357,8 +3357,8 @@ def solve_thermal_field(
     ``bearings.temp_c`` (or its last thermal map when the assignment says
     ``temp_source: thermal``) — see ``mech_losses.resolve_bearing_temp``.
 
-    THE MECHANICAL LOSSES ARE A HEAT SOURCE (user, 2026-09-08: *"все потери
-    должны передаваться"*).  Two of them, and they enter in the two different
+    THE MECHANICAL LOSSES ARE A HEAT SOURCE (user, 2026-09-08: *"all losses
+    should be passed"*).  Two of them, and they enter in the two different
     places they are actually made:
 
       * BEARING FRICTION goes in at the SHAFT, and only when the shaft-ends heat
@@ -3423,9 +3423,9 @@ def solve_thermal_field(
     the STATOR side in the propeller stream and left the rotor exactly where the
     housed model had it, with the mechanical clearance and the bore as its only
     doors.  The user, with his thermal photographs of the open Ø50 machine:
-    *"по термофотографиям катушки греются всегда значительно больше магнитов;
-    конструкция полностью открыта, магниты обдуваются со всех сторон, и воздух
-    ещё продувает зазор"*.  The model said the opposite — on the CIANO14 50
+    *"the thermal photos always show the coils running much hotter than the
+    magnets; the build is completely open, the magnets are blown on from all
+    sides, and air also blows through the gap"*.  The model said the opposite — on the CIANO14 50
     edited / L15 record the winding came out at 251 °C and the magnets at
     240 °C, i.e. the rotor all but welded to the stator through 0.2 mm of air.
     Two more paths, both only when ``frame == 'open'``:

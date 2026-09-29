@@ -3671,7 +3671,7 @@ def _replicate_field(fld: Dict[str, Any], n: int) -> Dict[str, Any]:
         radial, first principal, the safety factor) are INVARIANTS — tiled
         unchanged.  That every sector then reads the identical number is not an
         approximation of the answer, it IS the answer: the user asked for a
-        model in which "нагрузка на все зубы должна быть одинакова".
+        model in which "the load on all teeth should be the same".
     """
     from motor_ai_sim.simulation.mechanical import symmetry as sym
 

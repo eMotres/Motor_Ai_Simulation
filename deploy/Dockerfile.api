@@ -69,6 +69,12 @@ COPY scripts/migrate_to_workspaces.py \
      scripts/catalog_manifest.py \
      scripts/check_case_collisions.py \
      scripts/
+# BYO compute (#44): GET /api/nodes/worker/{install.sh,motres_compute_worker.py}
+# serves these two files from /app/deploy/compute-worker (routes/compute_nodes.py
+# _WORKER_DIR); without them the "add a node" install command 404s.
+COPY deploy/compute-worker/install.sh \
+     deploy/compute-worker/motres_compute_worker.py \
+     deploy/compute-worker/
 
 # Catalog SEED — read-only reference material, never the live tree.
 COPY config/ config-seed/

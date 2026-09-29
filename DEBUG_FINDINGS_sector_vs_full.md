@@ -1,62 +1,62 @@
-# Debug: «1/4 vs 1» — где расходятся и в чём баг
+# Debug: «1/4 vs 1» — where they diverge and what the bug is
 
-**Дата:** ночная автономная сессия. **Исходник продакшена НЕ изменён** (все эксперименты — в scratch-скриптах `diag_*.py`, `find_*.py`, `only_phaseA*.py`, `physzero_highI.py`, `balanced_full360.py`, `why_offset.py`; они untracked).
+**Date:** overnight autonomous session. **Production source NOT changed** (all experiments are in scratch scripts `diag_*.py`, `find_*.py`, `only_phaseA*.py`, `physzero_highI.py`, `balanced_full360.py`, `why_offset.py`; they are untracked).
 
 ## TL;DR
-- **Секторная модель (`n_sectors=4`, продакшен) — ВЕРНА.** Подтверждено инвариантностью по числу секторов.
-- **Полный диск (`n_sectors=1`) — СЛОМАН** (несшитая сетка на mid_r + demag-runaway). Этот путь в продакшене не используется (транзиент форсит `NS≥4`).
-- **Следствие: сдвиг d-оси 2.1° (30° эл) — РЕАЛЬНЫЙ.** Мой более ранний вывод «полная 360° даёт 0 → сдвига нет» был основан на сломанном пути — он невалиден.
+- **Sector model (`n_sectors=4`, production) — CORRECT.** Confirmed by invariance across the sector count.
+- **Full disk (`n_sectors=1`) — BROKEN** (unstitched mesh at mid_r + demag runaway). This path is not used in production (the transient forces `NS>=4`).
+- **Consequence: the d-axis shift of 2.1° (30° elec) is REAL.** My earlier conclusion "a full 360° gives 0 -> no shift" was based on the broken path — it is invalid.
 
-## Цепочка доказательств
+## Chain of evidence
 
-### 1. Где расходятся (rotor=0, балансный ток 250 A)
-| | сектор (1/4) | полный (1) |
+### 1. Where they diverge (rotor=0, balanced current 250 A)
+| | sector (1/4) | full (1) |
 |---|---:|---:|
-| ампер-витки в пазах | 1.03e4 | 4.12e4 (×4 ✓ — токи разложены верно) |
-| \|B\| в зазоре (среднее) | 1.229 Тл | 0.305 Тл (×4 слабее ✗) |
-| момент | 60.4 Н·м | 1.3 Н·м |
+| ampere-turns in the slots | 1.03e4 | 4.12e4 (×4 correct — currents decomposed correctly) |
+| \|B\| in the gap (average) | 1.229 T | 0.305 T (×4 weaker, wrong) |
+| torque | 60.4 N·m | 1.3 N·m |
 
-→ Токи верны, **расходится ПОЛЕ.**
+-> Currents are correct, **the FIELD diverges.**
 
-### 2. Холостой ход (I=0, только магниты): расхождение есть и без тока
-- сектор: \|B\|зазор=1.316, ротор=1.677 Тл
-- полный: \|B\|зазор=0.110, ротор=0.083 Тл (≈10–15× слабее)
-→ Баг в магнитном поле/железе/ГУ, не в токах. Источник магнитов масштабируется ×4 верно (28 магнитов, теги 100–127, корректные Mx,My).
+### 2. No-load (I=0, magnets only): the divergence exists even without current
+- sector: \|B\|gap=1.316, rotor=1.677 T
+- full: \|B\|gap=0.110, rotor=0.083 T (approx 10-15x weaker)
+-> Bug is in the magnetic field/iron/BCs, not in the currents. The magnet source scales correctly ×4 (28 magnets, tags 100-127, correct Mx,My).
 
-### 3. Кто прав — инвариантность по n_sectors (demag OFF, холостой ход)
-| n_sectors | ГУ | \|B\| зазор |
+### 3. Who is right — invariance across n_sectors (demag OFF, no-load)
+| n_sectors | BCs | \|B\| gap |
 |---:|---|---:|
-| **1** | нет | **0.376** ← ВЫБРОС |
-| 2 | периодич. | 1.313 |
-| 4 | анти-период. | 1.316 |
-| 7 | периодич. | 1.343 |
-| 14 | периодич. | 1.325 |
-| 28 | анти-период. | 1.441 |
+| **1** | none | **0.376** <- OUTLIER |
+| 2 | periodic | 1.313 |
+| 4 | anti-periodic | 1.316 |
+| 7 | periodic | 1.343 |
+| 14 | periodic | 1.325 |
+| 28 | anti-periodic | 1.441 |
 
-→ Все 5 секторных вариантов (и периодика, и анти-периодика) согласованы на ~1.3 Тл. Выброс — только `n_sectors=1`. **Поле не должно зависеть от симметрийной редукции → сектор прав, полный диск сломан.** (back-EMF из сектора ≈53 В — физично.)
+-> All 5 sector variants (both periodic and anti-periodic) agree at ~1.3 T. The outlier is only `n_sectors=1`. **The field must not depend on the symmetry reduction -> the sector is right, the full disk is broken.** (back-EMF from the sector approx 53 V — physical.)
 
-### 4. ROOT CAUSE — трещина сетки на mid_r
-| | дубликатов узлов | на mid_r (±1мм) |
+### 4. ROOT CAUSE — mesh crack at mid_r
+| | duplicate nodes | on mid_r (+/-1mm) |
 |---|---:|---:|
-| сектор (4) | 0 | 0 / 4554 |
-| полный (1) | **1002** | **626 / 60781** |
+| sector (4) | 0 | 0 / 4554 |
+| full (1) | **1002** | **626 / 60781** |
 
-`mid_r=75.41 мм` — окружность скольжения в середине зазора. В полном диске `in_band` (диск до mid_r) и `out_band` (кольцо mid_r..внешн.) **не сшиваются** на полной окружности mid_r: gmsh OCC-fragment создаёт 626 совпадающих, но РАЗДЕЛЬНЫХ узлов = кольцо-трещина → поле разрывается → поток через зазор частично блокируется → −3.5×. В секторе радиальные разрезы дают чистые концы дуги → 0 дубликатов → непрерывно.
+`mid_r=75.41 mm` — the sliding circle in the middle of the gap. In the full disk, `in_band` (disk up to mid_r) and `out_band` (ring mid_r..outer) **are not stitched** across the full mid_r circle: the gmsh OCC fragment creates 626 coincident but SEPARATE nodes = a ring crack -> the field is discontinuous -> flux through the gap is partly blocked -> -3.5x. In the sector, radial cuts give clean arc ends -> 0 duplicates -> continuous.
 
-### 5. Вторичный баг — demag runaway (есть в продакшен-статике!)
-В `solve_magnetostatics` (строки ~2079–2110): когда магнит уходит ниже колена, `br_factor` халвится каждую итерацию Picard (1→0.5→0.25→…) **без сходимости** → магнит выключается. В полном диске запускается из-за трещины (магниты «видят» разомкнутую цепь, H≈−1.7e6) и добивает поле с −3.5× до −12×.
-**Важно:** этот код — в `fem_solve_for_sim → solve_magnetostatics`, т.е. в ПРОДАКШЕН-статике (field2d, daxis_sweep, момент). На больших токах в секторе магниты могут законно уйти в demag → runaway → занижение момента. Латентный риск.
+### 5. Secondary bug — demag runaway (present in production statics too!)
+In `solve_magnetostatics` (lines ~2079-2110): when a magnet drops below the knee, `br_factor` is halved every Picard iteration (1->0.5->0.25->...) **without converging** -> the magnet turns off. In the full disk this is triggered by the crack (the magnets "see" an open circuit, H≈-1.7e6) and drives the field down from -3.5x to -12x.
+**Important:** this code is in `fem_solve_for_sim -> solve_magnetostatics`, i.e. in the PRODUCTION statics path (field2d, daxis_sweep, torque). At high currents in the sector, magnets can legitimately go into demag -> runaway -> torque underestimate. Latent risk.
 
-## Eddy-решатель
-- Транзиент (`fem_transient_sliding_band`) форсит `NS = 4 if n_sectors<=1` → всегда рабочая секторная сетка → **трещина его НЕ касается, поле корректно.**
-- Picard в транзиенте — только насыщение железа (`_mu_r_from_bh_vec`), **без demag** → runaway его не касается.
-- Реальная проблема eddy (известная): per-wire медные потери `P_cu_ac_solve = P_cu_total_solve − P_cu(DC)` — катастрофическая компенсация (~28 кВт, ненадёжно). Доверять slab-оценке (~1.4 кВт).
+## Eddy solver
+- The transient (`fem_transient_sliding_band`) forces `NS = 4 if n_sectors<=1` -> always a working sector mesh -> **the crack does NOT affect it, the field is correct.**
+- Picard in the transient — only iron saturation (`_mu_r_from_bh_vec`), **no demag** -> runaway does not affect it.
+- The real eddy problem (known): per-wire copper losses `P_cu_ac_solve = P_cu_total_solve - P_cu(DC)` — catastrophic cancellation (~28 kW, unreliable). Trust the slab estimate (~1.4 kW) instead.
 
-## Рекомендованные фиксы (НЕ применял — риск сломать валидированное; жду решения)
-1. **demag runaway (приоритет — задевает прод):** заменить безусловный халвинг на сходящееся обновление — ограничить минимум `br_factor`, и не запускать demag, когда B вдоль M физично положителен (порог колена в терминах B, а не «−Mmag»). Безопасно для нормальных режимов (demag там не срабатывает).
-2. **mid_r трещина (`n_sectors=1`):** перед мешированием объединять `in_band ∪ out_band` в ОДНУ воздушную область для полного диска (статике слип не нужен), либо принудительно сшивать совпадающие узлы. Путь в проде не нужен — низкий приоритет (инвариантность по n_sectors уже служит независимой проверкой).
+## Recommended fixes (NOT applied — risk of breaking validated behavior; awaiting a decision)
+1. **demag runaway (priority — touches production):** replace the unconditional halving with a converging update — bound the minimum `br_factor`, and do not trigger demag when B along M is physically positive (knee threshold in terms of B, not "-Mmag"). Safe for normal regimes (demag does not trigger there).
+2. **mid_r crack (`n_sectors=1`):** before meshing, merge `in_band ∪ out_band` into ONE air region for the full disk (statics does not need sliding), or force-stitch the coincident nodes. Not needed on the production path — low priority (invariance across n_sectors already serves as an independent check).
 
-## Что это значит для наших споров про угол
-- Сдвиг d-оси **2.1° мех (30° эл) — реальный** (из верной секторной модели; подтверждён 4 методами: удерживающий момент, ψ_A холостого хода, Кларк, и теперь инвариантность по n_sectors).
-- Полный диск давал «0» из-за бага, а не из-за симметрии.
-- Несимметрия одной фазы A относительно X — настоящая (ось обмотки на 15° эл от паза 0, дробная q=2/7).
+## What this means for our disputes about the angle
+- The d-axis shift of **2.1° mech (30° elec) is real** (from the correct sector model; confirmed by 4 methods: holding torque, no-load psi_A, Clarke, and now invariance across n_sectors).
+- The full disk gave "0" because of a bug, not because of symmetry.
+- The phase-A asymmetry relative to X is real (winding axis at 15° elec from slot 0, fractional q=2/7).

@@ -10,6 +10,9 @@
 # config\motor_config.yaml or any workspace: each A/B run gets a copied config.
 param([switch]$Force, [switch]$SkipAB,
       [string]$Python = 'C:\Users\vadim\venvs\gpu_bench\Scripts\python.exe',
+      # code: the src of the checkout this script lives in (perf/profiling-gpu-tdm)
+      [string]$Src = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'src'),
+      # data only, read-only: config\dies and the config files
       [string]$Repo = 'C:\Users\vadim\Projects\motor_ai_sim',
       [string]$Matrices = 'C:\Users\vadim\Downloads\solver_matrices',
       [int]$Threads = 8)
@@ -45,7 +48,8 @@ if (Test-Path $gk) {
 
 # 3) engineering A/B: full runs, CPU PARDISO FP64 vs cuDSS FP64 vs cuDSS mixed
 if (-not $SkipAB) {
-  $env:PYTHONPATH = Join-Path $Repo 'src'
+  if (-not (Test-Path (Join-Path $Src 'motor_ai_sim'))) { throw "src not found: $Src" }
+  $env:PYTHONPATH = $Src
   $dies = Join-Path $Repo 'config\dies'
   foreach ($case in 'd40_rated', 'l13_rated', 'l155_rated') {
     foreach ($mode in 'static', 'eddy') {

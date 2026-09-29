@@ -363,9 +363,13 @@ Optional:
   saddle-point treatment for the bordered eddy system. Skip it unless the
   cuDSS results make iterative GPU solvers interesting.
 
-Run (night only): `powershell -ExecutionPolicy Bypass -File C:\Users\vadim\Projects\motor_ai_sim\scripts\bench\night_gpu_bench.ps1`.
-The script uses the repository checkout for `src` and `config\dies` (read-only)
-and a copied `motor_config.yaml` per run. Results go to
+Run (night only) from the branch checkout (the worktree
+`C:\Users\vadim\Projects\motor_ai_sim_perf` now, or the main checkout once the
+PR is merged):
+`powershell -ExecutionPolicy Bypass -File C:\Users\vadim\Projects\motor_ai_sim_perf\scripts\bench\night_gpu_bench.ps1`.
+The code comes from the `src` next to the script. `config\dies` and the
+config files are read-only from `C:\Users\vadim\Projects\motor_ai_sim\config`,
+with a copied `motor_config.yaml` per run. Results go to
 `C:\Users\vadim\Downloads\solver_matrices\results_<timestamp>\`.
 
 ## 7. Licences (repository: AGPL-3.0-or-later)

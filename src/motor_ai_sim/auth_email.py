@@ -135,10 +135,14 @@ def send(to: str, subject: str, body: str, *, block: bool = False) -> bool:
 
 # ── message texts ────────────────────────────────────────────────────────────
 
-def verify_mail(to: str, token: str, return_path: str = "") -> tuple[str, str]:
+def verify_mail(to: str, token: str, return_path: str = "",
+                return_host: str = "") -> tuple[str, str]:
     url = link("verify", token, return_path)
+    where = f" (it will return to {return_host})" if return_host else ""
     cont = ("\nIt also brings you back to the page where you were connecting "
-            "an AI app, to finish that.\n" if return_path else "")
+            f"an AI app{where}, to finish that. If you did not start "
+            "connecting an AI app yourself just now, do not allow it there.\n"
+            if return_path else "")
     return ("Confirm your e-mail address",
             "Hello,\n\nconfirm this address to activate your account:\n\n"
             f"{url}\n{cont}\nThe link works once and expires in 24 hours. If you did "

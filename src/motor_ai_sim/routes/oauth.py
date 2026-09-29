@@ -111,6 +111,11 @@ def consent_info(rid: str, authorization: Optional[str] = Header(default=None)):
     info = _o.describe_request(rid)
     if not info:
         raise HTTPException(404, detail="This authorization request expired. Start again from the app.")
+    try:
+        # a request resumed by a sign-up is for the account that signed up only
+        _o.check_request_account(rid, owner)
+    except _o.OAuthError as e:
+        raise HTTPException(e.status, detail=e.description)
     from motor_ai_sim import agent_keys as _keys
     return info | {"account": owner,
                    "scope_descriptions": dict(_keys.SCOPE_DESCRIPTIONS)}

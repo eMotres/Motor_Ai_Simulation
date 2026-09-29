@@ -84,6 +84,100 @@ def test_every_registered_tool_is_classified():
     assert set(mcp_app.TOOL_SCOPES.values()) <= set(K.SCOPES)
 
 
+def test_every_resource_template_and_prompt_is_classified():
+    srv = mcp_app.build_server()
+    res = {str(r.uri) for r in asyncio.run(srv.list_resources())}
+    tpl = {str(t.uri_template) for t in asyncio.run(srv.list_resource_templates())}
+    prm = {p.name for p in asyncio.run(srv.list_prompts())}
+    for have, pub, priv in ((res, D.PUBLIC_RESOURCES, D.PRIVATE_RESOURCES),
+                            (tpl, D.PUBLIC_RESOURCE_TEMPLATES, D.PRIVATE_RESOURCE_TEMPLATES),
+                            (prm, D.PUBLIC_PROMPTS, D.PRIVATE_PROMPTS)):
+        assert not (pub & priv)
+        assert have <= pub | priv, (have, pub, priv)       # nothing unclassified
+
+
+def test_later_prompts_and_templates_stay_hidden_anonymously(denv):
+    """Something registered without being made public on purpose is never
+    listed to an anonymous client (the list handlers filter, fail closed)."""
+    srv = mcp_app.get_server()
+
+    @srv.prompt(name="internal_prompt", description="not public")
+    def internal_prompt() -> str:
+        return "x"
+
+    @srv.resource("emotres://private/{item}", name="private_items")
+    def private_items(item: str) -> str:
+        return item
+
+    c = denv["c"]
+    assert _rpc(c, "prompts/list").json()["result"]["prompts"] == []
+    assert _rpc(c, "resources/templates/list").json()["result"]["resourceTemplates"] == []
+    assert _rpc(c, "prompts/get", {"name": "internal_prompt"}).status_code == 401
+    assert _rpc(c, "resources/read", {"uri": "emotres://private/a"}).status_code == 401
+    tok, _ = K.create_key(A, "t")
+    assert [p["name"] for p in _rpc(c, "prompts/list", token=tok).json()["result"]["prompts"]] == [
+        "internal_prompt"]
+    assert len(_rpc(c, "resources/templates/list", token=tok).json()["result"]["resourceTemplates"]) == 1
+
+
+# ── presented Authorization header is never anonymous (review #3) ───────────
+
+def test_empty_and_duplicate_authorization_headers(denv):
+    c = denv["c"]
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+    base = {"Accept": ACCEPT, "Content-Type": "application/json"}
+    for v in ("", "   ", "Bearer", "Bearer   "):
+        r = c.post("/mcp", headers={**base, "Authorization": v}, json=body)
+        assert r.status_code == 401, (repr(v), r.text)
+        assert 'error="invalid_token"' in r.headers["www-authenticate"]
+        assert r.json()["error"]["data"]["required_action"] == "reauthenticate"
+    tok, _ = K.create_key(A, "t")
+    r = c.post("/mcp", json=body, headers=[
+        ("Accept", ACCEPT), ("Content-Type", "application/json"),
+        ("Authorization", f"Bearer {tok}"), ("Authorization", "Bearer emk_x_y")])
+    assert r.status_code == 400
+    assert r.json()["error"]["data"]["error"] == "invalid_request"
+    r = c.post("/mcp", json=body, headers=[
+        ("Accept", ACCEPT), ("Content-Type", "application/json"),
+        ("Authorization", f"Bearer {tok}"), ("Authorization", f"Bearer {tok}")])
+    assert r.status_code == 400
+
+
+# ── audit keeps no argument values of anonymous / refused calls (review #4) ─
+
+def test_audit_keeps_argument_names_only_for_anonymous_and_refused(denv):
+    c = denv["c"]
+    secret = "hunter2-secret-value"
+    _call(c, "describe_service", {"password": secret}, ip="192.0.2.70")      # public
+    _call(c, "list_machines", {"password": secret}, ip="192.0.2.70")         # 401
+    _call(c, "drop_database", {"password": secret}, ip="192.0.2.70")         # 403 unknown
+    ro, _ = K.create_key(A, "ro", scopes=["catalog:read"])
+    _call(c, "list_machines", {"password": secret}, token=ro)                # 403 scope
+    raw = K.audit_path().read_text(encoding="utf-8")
+    assert secret not in raw
+    rows = [r for r in K.read_audit(None) if r.get("tool") in
+            ("describe_service", "list_machines", "drop_database")]
+    assert len(rows) >= 4 and all('"arg_names": ["password"]' in (r["args"] or "") for r in rows)
+    # an ACCEPTED signed-in call keeps its summary as before (Stage 1 contract)
+    _call(c, "list_catalog", {"kind": "magnets", "query": "N52"}, token=ro)
+    assert "N52" in K.read_audit(A)[0]["args"]
+
+
+# ── the anonymous quota is not escaped by spoofing X-Forwarded-For (#2) ─────
+
+def test_anonymous_quota_ignores_spoofed_xff_from_a_direct_peer(denv, monkeypatch):
+    from starlette.testclient import TestClient
+    monkeypatch.setenv("MCP_ANON_RATE_PER_MIN", "2")
+    direct = TestClient(denv["c"].app, client=("198.51.100.201", 40000))
+    codes = [_rpc(direct, "tools/list", ip=f"203.0.113.{i}").status_code for i in range(3)]
+    assert codes == [200, 200, 429]
+    proxy = TestClient(denv["c"].app, client=("172.18.0.5", 40000))
+    codes = [_rpc(proxy, "tools/list", ip=f"10.1.1.{i}, 203.0.113.99, 172.18.0.1").status_code
+             for i in range(3)]
+    assert codes == [200, 200, 429]
+    assert _rpc(proxy, "tools/list", ip="203.0.113.98, 172.18.0.1").status_code == 200
+
+
 # ── anonymous initialize / tools/list ───────────────────────────────────────
 
 def test_anonymous_initialize(denv):

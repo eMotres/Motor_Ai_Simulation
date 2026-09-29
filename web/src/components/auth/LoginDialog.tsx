@@ -11,7 +11,7 @@ import { CONSENT_LINE, CONSENT_HELP } from '../../lib/newsletterApi';
 import {
   decodeJwtPayload, googleExchange, loadGis, passwordLogin,
   registerAccount, verifyEmail, requestPasswordReset, confirmPasswordReset,
-  pendingEmailLink, clearEmailLink, consentReturnPath, PASSWORD_MIN_LEN,
+  pendingEmailLink, clearEmailLink, pendingContinuation, PASSWORD_MIN_LEN,
   GOOGLE_CLIENT_ID, TERMS_URL, PRIVACY_URL, SOURCE_URL, type SessionUser,
 } from '../../lib/localAuth';
 import HelpTip from '../common/HelpTip';
@@ -86,6 +86,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
       if (initialMode === 'register') { setTab('email'); setMode('register'); setErr(null); setInfo(null); }
       return;
     }
+    const continuation = pendingContinuation();
     clearEmailLink();
     setTab('email');
     if (link.kind === 'reset') {
@@ -93,10 +94,16 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
       return;
     }
     setMode('signin'); setBusy(true); setErr(null);
-    // On the consent page (a sign-up started in an AI app's authorization
-    // window) the confirmation also keeps that authorization pending.
-    void verifyEmail(link.token, consentReturnPath())
+    // A sign-up started in an AI app's authorization window: the server
+    // resumes that authorization only from the link's own continuation, bound
+    // to this address.  Anything else must not stay on a consent page.
+    void verifyEmail(link.token, continuation)
       .then((j) => {
+        const onConsent = window.location.pathname === '/agent-consent';
+        if (onConsent && !j.return_to) { window.location.replace('/?signin=1'); return; }
+        if (j.return_to && `${window.location.pathname}${window.location.search}` !== j.return_to) {
+          window.location.replace(j.return_to); return;
+        }
         if (j.email) setEmail(j.email);
         setInfo(t('auth.info.emailConfirmed'));
       })

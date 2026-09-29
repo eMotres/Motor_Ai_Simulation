@@ -143,7 +143,7 @@ def _load() -> Dict[str, Any]:
 def _mutate(fn):
     def _m(d):
         d = d if isinstance(d, dict) else {}
-        for k in ("clients", "requests", "codes", "grants"):
+        for k in ("clients", "requests", "codes", "grants", "continuations"):
             d.setdefault(k, {})
         d.setdefault("version", 1)
         fn(d)
@@ -154,7 +154,7 @@ def _mutate(fn):
 
 def _prune(d: Dict[str, Any]) -> None:
     now = _now()
-    for tbl in ("requests", "codes"):
+    for tbl in ("requests", "codes", "continuations"):
         for k in [k for k, r in d[tbl].items() if (r.get("expires_at") or 0) < now]:
             del d[tbl][k]
 
@@ -357,7 +357,8 @@ def describe_request(rid: str) -> Optional[Dict[str, Any]]:
     return {"id": rid, "client_name": c.get("client_name") or "Unnamed agent",
             "client_uri": c.get("client_uri"),
             "redirect_host": urlsplit(r["redirect_uri"]).netloc,
-            "scopes": r["scopes"], "resource": r["resource"]}
+            "scopes": r["scopes"], "resource": r["resource"],
+            "started_by_sign_up": bool(r.get("bound_email"))}
 
 
 # ── sign-up inside the authorization window ─────────────────────────────────
@@ -386,6 +387,12 @@ def request_id_from_return_path(path: Optional[str]) -> Optional[str]:
     return rid if _RID_RE.match(rid) else None
 
 
+def _extend(r: Dict[str, Any], now: float) -> None:
+    cap = float(r.get("created_at") or now) + SIGNUP_MAX_AGE_S
+    r["expires_at"] = max(float(r.get("expires_at") or 0),
+                          min(cap, now + SIGNUP_REQUEST_TTL_S))
+
+
 def extend_request(rid: str) -> bool:
     """Keep a pending authorization request alive while its user signs up
     and confirms the e-mail (possibly in another tab): ``SIGNUP_REQUEST_TTL_S``
@@ -398,12 +405,78 @@ def extend_request(rid: str) -> bool:
         now = _now()
         if not r or (r.get("expires_at") or 0) < now:
             return
-        cap = float(r.get("created_at") or now) + SIGNUP_MAX_AGE_S
-        r["expires_at"] = max(float(r.get("expires_at") or 0),
-                              min(cap, now + SIGNUP_REQUEST_TTL_S))
+        _extend(r, now)
         hit["ok"] = True
     _mutate(_fn)
     return hit["ok"]
+
+
+def _norm_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def create_continuation(rid: str, email: str) -> Optional[str]:
+    """A sign-up started on the consent page of ``rid`` for ``email``: a
+    high-entropy, single-use secret that the confirmation link carries.
+
+    Only its SHA-256 is stored, with ``{rid, email}``.  ``/api/auth/verify``
+    derives the return target from THIS record (never from a caller-supplied
+    path), and only when the verified address is ``email``.  None when the
+    request is no longer pending."""
+    secret = secrets.token_urlsafe(32)
+    out: Dict[str, Any] = {}
+
+    def _fn(d):
+        r = d["requests"].get(rid or "")
+        now = _now()
+        if not r or (r.get("expires_at") or 0) < now:
+            return
+        _extend(r, now)
+        d["continuations"][_h(secret)] = {
+            "rid": rid, "email": _norm_email(email), "created_at": now,
+            "expires_at": r["expires_at"]}
+        out["ok"] = True
+    _mutate(_fn)
+    return secret if out.get("ok") else None
+
+
+def consume_continuation(secret: str, email: str) -> Optional[str]:
+    """Spend a continuation after ``email`` proved its mailbox.  Returns the
+    request id, now bound to ``email`` (only that account may consent) and
+    kept alive — or None: unknown, already used, expired, the request gone, or
+    the secret was issued for another address.  Single use: any attempt burns
+    it (the removal is written even when the answer is None)."""
+    if not isinstance(secret, str) or not secret or len(secret) > 200:
+        return None
+    em = _norm_email(email)
+    out: Dict[str, Any] = {}
+
+    def _fn(d):
+        c = d["continuations"].pop(_h(secret), None)
+        now = _now()
+        if not c or (c.get("expires_at") or 0) < now or c.get("email") != em:
+            return
+        r = d["requests"].get(c.get("rid") or "")
+        if not r or (r.get("expires_at") or 0) < now:
+            return
+        if r.get("bound_email") and r["bound_email"] != em:
+            return
+        _extend(r, now)
+        r["bound_email"] = em
+        out["rid"] = c["rid"]
+    _mutate(_fn)
+    return out.get("rid")
+
+
+def check_request_account(rid: str, owner: str) -> None:
+    """A request bound by a sign-up continuation may be consented to only by
+    the account that signed up (OAuthError 403 otherwise)."""
+    r = (_load().get("requests") or {}).get(rid or "") or {}
+    bound = r.get("bound_email")
+    if bound and bound != _norm_email(owner):
+        raise OAuthError("access_denied",
+                         "this authorization was started for another account; "
+                         "sign in with that account or start again from your AI app", 403)
 
 
 def decide(rid: str, owner: str, approve: bool,
@@ -419,6 +492,10 @@ def decide(rid: str, owner: str, approve: bool,
         r = d["requests"].pop(rid or "", None)
         if not r or (r.get("expires_at") or 0) < _now():
             raise OAuthError("invalid_request", "this authorization request expired", 404)
+        if r.get("bound_email") and r["bound_email"] != owner:
+            # raising aborts the write: the request stays for its own account
+            raise OAuthError("access_denied",
+                             "this authorization was started for another account", 403)
         if approve and scopes is not None:
             narrowed = [s for s in dict.fromkeys(scopes) if s in r["scopes"]]
             if not narrowed or len(narrowed) != len(set(scopes)):

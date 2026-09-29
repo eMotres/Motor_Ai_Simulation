@@ -20,6 +20,8 @@ const WRITE_SCOPES = ['designs:write', 'simulate'];
 interface Req {
   client_name: string; client_uri?: string | null; redirect_host: string; scopes: string[]; account: string;
   scope_descriptions?: Record<string, string>;
+  /** Resumed from a sign-up confirmation link (bound to this account). */
+  started_by_sign_up?: boolean;
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -96,8 +98,14 @@ const OAuthConsent: React.FC = () => {
           access to your eMotres account <b>{req.account}</b>.
         </Typography>
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)', mb: 1.5 }}>
-          It will return to {req.redirect_host}. Untick what you do not want to allow.
+          It will return to <b>{req.redirect_host}</b>. Untick what you do not want to allow.
         </Typography>
+        {req.started_by_sign_up && (
+          <Alert severity="warning" sx={{ mb: 1.5, fontSize: 12 }}>
+            You reached this page from the confirmation e-mail of your new account. Allow only if you
+            started connecting <b>{req.client_name}</b> ({req.redirect_host}) yourself just now.
+          </Alert>
+        )}
         <Box sx={{ mb: 2 }}>
           {req.scopes.map((s) => (
             <Box key={s} sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 0.5 }}>

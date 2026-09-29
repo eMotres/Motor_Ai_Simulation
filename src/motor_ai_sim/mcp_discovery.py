@@ -40,8 +40,18 @@ ANON_METHODS = frozenset({
     "tools/list", "tools/call", "resources/list", "resources/read",
     "resources/templates/list", "prompts/list",
 })
-#: Resources an unauthenticated client may read.
+#: Resources an unauthenticated client may list and read.
 PUBLIC_RESOURCES = frozenset({"emotres://guide"})
+#: Resource templates / prompts an unauthenticated client may LIST (none
+#: today).  The list handlers filter to these, so anything registered later
+#: stays invisible anonymously until it is added here on purpose.
+PUBLIC_RESOURCE_TEMPLATES: frozenset = frozenset()
+PUBLIC_PROMPTS: frozenset = frozenset()
+#: Registered but signed-in only.  Every registered resource, template and
+#: prompt must be in the public or the private table (tests/test_mcp_discovery.py).
+PRIVATE_RESOURCES: frozenset = frozenset()
+PRIVATE_RESOURCE_TEMPLATES: frozenset = frozenset()
+PRIVATE_PROMPTS: frozenset = frozenset()
 
 #: What a sign-in asks for when the client has no better hint: the read-only
 #: pair a new agent key gets by default.  The owner can untick scopes on the
@@ -511,6 +521,7 @@ def auth_error(*, error: str, required_action: str, tool: str = "",
         msg = "This AeroStator account is disabled; contact the service operator."
     titles = {"authentication_required": "Authentication required",
               "invalid_token": "Invalid or expired credentials",
+              "invalid_request": "Invalid request",
               "insufficient_scope": "Insufficient scope",
               "account_disabled": "Account disabled"}
     data: Dict[str, Any] = {

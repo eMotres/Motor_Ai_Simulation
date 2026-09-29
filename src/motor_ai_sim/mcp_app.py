@@ -120,6 +120,21 @@ class _GatedServer(MCPServer):
         return res.model_copy(update={"resources": [
             r for r in res.resources if str(r.uri) in _d.PUBLIC_RESOURCES]})
 
+    async def _handle_list_resource_templates(self, ctx, params):
+        res = await super()._handle_list_resource_templates(ctx, params)
+        if _principal_in(getattr(ctx, "request", None)) is not None:
+            return res
+        return res.model_copy(update={"resource_templates": [
+            t for t in res.resource_templates
+            if str(t.uri_template) in _d.PUBLIC_RESOURCE_TEMPLATES]})
+
+    async def _handle_list_prompts(self, ctx, params):
+        res = await super()._handle_list_prompts(ctx, params)
+        if _principal_in(getattr(ctx, "request", None)) is not None:
+            return res
+        return res.model_copy(update={"prompts": [
+            p for p in res.prompts if p.name in _d.PUBLIC_PROMPTS]})
+
 
 def _run(fn, ctx, *args):
     """Call a tool body as the key's owner; a caller mistake becomes a tool
@@ -457,14 +472,10 @@ def verify_any(authorization):
 
 
 def _client_ip(scope) -> str:
-    """The visitor's IP through our two nginxes (the support chat's rule)."""
-    try:
-        from starlette.requests import Request
-        from motor_ai_sim.routes.support import client_ip
-        return client_ip(Request(scope)) or "?"
-    except Exception:                                   # noqa: BLE001
-        c = scope.get("client") or ("?",)
-        return str(c[0])
+    """The visitor's IP; forwarding headers only from a trusted proxy
+    (``motor_ai_sim.client_ip``, env TRUSTED_PROXIES)."""
+    from motor_ai_sim import client_ip as _cip
+    return _cip.from_scope(scope) or "?"
 
 
 def _scope_set(*scopes) -> str:
@@ -479,6 +490,15 @@ def _account_hint(m: dict) -> str:
     meta = ((m.get("params") or {}) if isinstance(m.get("params"), dict) else {}).get("_meta")
     v = meta.get("aerostator/account") if isinstance(meta, dict) else None
     return str(v or "").strip().lower()
+
+
+def _arg_names(args: Any) -> Dict[str, Any]:
+    """What the audit keeps of an anonymous or REFUSED call's arguments: the
+    argument names only, never a value (a password pasted into a public tool
+    must not land in mcp_audit.jsonl)."""
+    if isinstance(args, dict):
+        return {"arg_names": sorted(str(k)[:64] for k in args)[:50]}
+    return {"arg_type": type(args).__name__} if args is not None else {}
 
 
 def _auth_body(msg_id, err: dict, reason: str) -> dict:
@@ -497,10 +517,27 @@ class McpGate:
         if scope.get("type") != "http" or scope.get("path", "").rstrip("/") != MCP_PATH:
             await self.app(scope, receive, send)
             return
-        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
-                   for k, v in scope.get("headers") or ()}
-        authz = headers.get("authorization")
-        anonymous = not (isinstance(authz, str) and authz.strip())
+        raw_headers = [(k.decode("latin-1").lower(), v.decode("latin-1"))
+                       for k, v in scope.get("headers") or ()]
+        authz_values = [v for k, v in raw_headers if k == "authorization"]
+        # Anonymous = the header is ABSENT.  A presented header is a credential
+        # even when empty (-> 401 invalid_token), and two of them are a
+        # malformed request (-> 400), never a fall-back to the anonymous tier.
+        anonymous = not authz_values
+        if len(authz_values) > 1:
+            _keys.audit(principal=None, method="auth", status=400,
+                        note="duplicate Authorization headers")
+            err = _d.auth_error(error="invalid_request", required_action="reauthenticate",
+                                reason="duplicate_authorization")
+            err["message"] = "Invalid request: more than one Authorization header"
+            err["data"]["user_message"] = ("The AI app sent two Authorization headers; "
+                                           "reconnect AeroStator in this app.")
+            await _send_json(send, 400, _auth_body(None, err, "duplicate_authorization"),
+                             [("www-authenticate", _oauth.www_authenticate(
+                                 "invalid_request",
+                                 description="send exactly one Authorization header"))])
+            return
+        authz = authz_values[0] if authz_values else None
 
         body = b""
         if scope.get("method") == "POST":
@@ -524,6 +561,8 @@ class McpGate:
 
         principal, reason = verify_any(authz)
         if principal is None:
+            if not (authz or "").strip():
+                reason = "empty_authorization"
             await self._bad_credentials(send, msgs, reason)
             return
 
@@ -536,7 +575,7 @@ class McpGate:
             need = TOOL_SCOPES.get(tool)
             if tool not in PUBLIC_TOOLS and need is None:
                 _keys.audit(principal=principal, method="tools/call", tool=tool,
-                            args=args, status=403, note="unknown tool")
+                            args=_arg_names(args), status=403, note="unknown tool")
                 await _send_json(send, 403, _rpc_error(
                     m.get("id"), -32001, f"unknown tool '{tool}'",
                     {"error": "unknown_tool", "tool": tool or None,
@@ -545,7 +584,7 @@ class McpGate:
                 return
             if need is not None and not principal.has(need):
                 _keys.audit(principal=principal, method="tools/call", tool=tool,
-                            args=args, status=403, note=f"needs {need}")
+                            args=_arg_names(args), status=403, note=f"needs {need}")
                 err = _d.auth_error(error="insufficient_scope",
                                     required_action="grant_scope", tool=tool,
                                     method="tools/call", required_scope=need,
@@ -565,7 +604,7 @@ class McpGate:
             ok, retry = _keys.take_quota(principal.credential_id)
             if not ok:
                 _keys.audit(principal=principal, method="tools/call", tool=tool,
-                            args=args, status=429)
+                            args=_arg_names(args), status=429)
                 await _send_json(send, 429, _rpc_error(
                     m.get("id"), -32029, f"rate limit; retry after {retry} s",
                     {"error": "rate_limited", "retry_after_s": retry}),
@@ -578,7 +617,7 @@ class McpGate:
                 ok, retry, used, lim = _ad.check_quota(principal)
                 if not ok:
                     _keys.audit(principal=principal, method="tools/call", tool=tool,
-                                args=args, status=429, note=f"simulate fair-use limit {used}/{lim}")
+                                args=_arg_names(args), status=429, note=f"simulate fair-use limit {used}/{lim}")
                     await _send_json(send, 429, _rpc_error(
                         m.get("id"), -32029,
                         f"daily simulation fair-use limit reached ({used}/{lim}); "
@@ -636,7 +675,7 @@ class McpGate:
                                 need: str = "", args: Any = None) -> None:
         method = str(m.get("method") or "") if isinstance(m, dict) else ""
         _keys.audit(principal=None, method=method or "anonymous", tool=tool,
-                    args=args, status=401, note="anonymous: authentication required",
+                    args=_arg_names(args), status=401, note="anonymous: authentication required",
                     ip=ip)
         sign_up = _d.wants_sign_up(ip) or (isinstance(m, dict) and _account_hint(m) == "none")
         err = _d.auth_error(error="authentication_required",
@@ -687,12 +726,12 @@ class McpGate:
                     if tool == "start_sign_up":
                         _d.note_sign_up_intent(ip)
                     _keys.audit(principal=None, method="tools/call", tool=tool,
-                                args=args, status=200, note="anonymous", ip=ip)
+                                args=_arg_names(args), status=200, note="anonymous", ip=ip)
                     continue
                 need = TOOL_SCOPES.get(tool)
                 if need is None:
                     _keys.audit(principal=None, method="tools/call", tool=tool,
-                                args=args, status=403, note="anonymous: unknown tool", ip=ip)
+                                args=_arg_names(args), status=403, note="anonymous: unknown tool", ip=ip)
                     await _send_json(send, 403, _rpc_error(
                         m.get("id"), -32001, f"unknown tool '{tool}'",
                         {"error": "unknown_tool", "tool": tool or None,

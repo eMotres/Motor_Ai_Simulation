@@ -187,17 +187,19 @@ export function registerAccount(email: string, password: string, name: string, n
   });
 }
 
-/** Consume the mailed confirmation link (`returnTo` as for registerAccount). */
-export function verifyEmail(token: string, returnTo?: string) {
-  return postPlain('/api/auth/verify', { token, ...(returnTo ? { return_to: returnTo } : {}) });
+/** Consume the mailed confirmation link.  `continuation`: the link's
+ *  single-use `continue` secret (a sign-up started in an AI app's
+ *  authorization window).  The server derives where to go back from it and
+ *  answers `return_to` only when it is valid for the confirmed address. */
+export function verifyEmail(token: string, continuation?: string) {
+  return postPlain('/api/auth/verify', { token, ...(continuation ? { continuation } : {}) }) as
+    Promise<{ message?: string; email?: string; authorization_pending?: boolean; return_to?: string }>;
 }
 
-/** The consent page path when this tab is an OAuth authorization window. */
-export function consentReturnPath(): string | undefined {
+/** The `continue` secret of a mailed confirmation link, if any. */
+export function pendingContinuation(): string | undefined {
   try {
-    if (window.location.pathname !== '/agent-consent') return undefined;
-    const rid = new URLSearchParams(window.location.search).get('request');
-    return rid ? `/agent-consent?request=${encodeURIComponent(rid)}` : undefined;
+    return new URLSearchParams(window.location.search).get('continue') ?? undefined;
   } catch { return undefined; }
 }
 
@@ -248,6 +250,7 @@ export function clearEmailLink(): void {
     const u = new URL(window.location.href);
     u.searchParams.delete('verify');
     u.searchParams.delete('reset');
+    u.searchParams.delete('continue');
     window.history.replaceState(null, '', u.pathname + u.search + u.hash);
   } catch { /* ignore */ }
 }

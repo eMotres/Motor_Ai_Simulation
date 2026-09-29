@@ -23,7 +23,7 @@ not what protects anything:
 
 | allowed anonymously | anything else |
 |---|---|
-| methods `initialize`, `ping`, `notifications/initialized`, `notifications/cancelled`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `resources/templates/list`, `prompts/list` | 401 `authentication_required` |
+| methods `initialize`, `ping`, `notifications/initialized`, `notifications/cancelled`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `resources/templates/list`, `prompts/list` (the three lists are filtered to `PUBLIC_RESOURCES` / `PUBLIC_RESOURCE_TEMPLATES` / `PUBLIC_PROMPTS`; the last two are empty) | 401 `authentication_required` (e.g. `prompts/get`, `completion/complete`) |
 | `tools/call` of the public tools below | a protected tool: 401 `authentication_required`; a name that is neither public nor in `TOOL_SCOPES`: 403 `unknown_tool` |
 | `resources/read` of `emotres://guide` | 401 |
 | `POST` only | `GET` (SSE) / `DELETE`: 401 |
@@ -37,7 +37,17 @@ grant holds.
 
 A test (`test_every_registered_tool_is_classified`) fails when a tool is
 registered without being put in `PUBLIC_TOOLS` or `TOOL_SCOPES`, and when a
-tool has no line in the capability catalogue.
+tool has no line in the capability catalogue. The same holds for resources,
+resource templates and prompts: each must be in its `PUBLIC_*` or
+`PRIVATE_*` table (`test_every_resource_template_and_prompt_is_classified`),
+and one registered later without being made public stays out of the
+anonymous lists (tested).
+
+**Who is anonymous.** Anonymous means the `Authorization` header is absent.
+A header that is present is a credential even when it is empty or only
+whitespace: that gets 401 `invalid_token` / `reauthenticate`. Two
+`Authorization` headers get 400 `invalid_request`. Neither case falls back to
+the anonymous tier.
 
 ### Public tools
 
@@ -71,10 +81,44 @@ name appears in any answer.
 Every anonymous HTTP request (not only `tools/call`) counts against a per-IP
 bucket `anon:<ip>`: `MCP_ANON_RATE_PER_MIN` (default 20) and
 `MCP_ANON_RATE_PER_DAY` (default 300). Over the limit: 429 + `Retry-After`,
-`error.data.error = "rate_limited"`. The IP is resolved the way the support
-chat resolves it (through both nginxes). Anonymous tool calls and refusals
-are written to `mcp_audit.jsonl` with `email: null` and the `ip`. No token
-is ever logged, only credential ids as before (tested).
+`error.data.error = "rate_limited"`. Anonymous tool calls and refusals are
+written to `mcp_audit.jsonl` with `email: null` and the `ip`. For anonymous
+calls and for every refused call (401, 403, 429) the audit keeps only the
+argument **names** (`{"arg_names": [...]}`), never a value. A password
+pasted into a public tool therefore never reaches the log (tested with
+`{"password": …}`). An accepted signed-in call keeps its value summary as
+before. No token is ever logged, only credential ids.
+
+### Client IP (anonymous quota, sign-up and login limits)
+
+`motor_ai_sim/client_ip.py` honours forwarding headers **only when the TCP
+peer is a trusted proxy**. `TRUSTED_PROXIES` is a comma-separated list of
+addresses / CIDRs; the default is `127.0.0.0/8, ::1/128, 172.16.0.0/12`,
+i.e. loopback plus the docker bridges. A non-IP peer (unix socket, the
+in-process test client) counts as trusted. From a trusted peer the address
+is taken as follows:
+
+1. `X-Real-IP`, when it is a single valid address that is not itself a
+   trusted proxy;
+2. otherwise the **rightmost** `X-Forwarded-For` hop that is not a trusted
+   proxy. Every hop right of it was appended by our own proxies, and
+   anything left of it, which the client controls, is never selected. A
+   malformed hop stops the walk;
+3. otherwise the peer itself.
+
+A direct (untrusted) peer is counted by its own address, whatever headers
+it sends. The MCP anonymous quota and all `/api/auth` limits (login lockout,
+mail, sign-up) use this helper; the support chat keeps its own rule.
+
+Production chain: the host nginx sets `X-Real-IP $remote_addr` (it
+overwrites) and appends to `X-Forwarded-For`. It proxies to the web
+container, whose nginx (`deploy/nginx.conf`) now uses the realip module
+(`set_real_ip_from 127.0.0.1` and `172.16.0.0/12`, `real_ip_header
+X-Real-IP`). Its `$remote_addr`, and so the `X-Real-IP` it passes to the
+API, is therefore the visitor rather than the docker gateway, and only when
+the request came from the host side. No host nginx change is required.
+Optional hardening on the host is `proxy_set_header X-Forwarded-For
+$remote_addr;`, which overwrites instead of appending.
 
 ## Error contract
 
@@ -105,6 +149,8 @@ WWW-Authenticate: Bearer realm="emotres-mcp",
 |---|---|---|---|---|
 | no token, protected tool / method / resource | 401 | `resource_metadata`, `scope` = default read scopes + the tool's scope (no `error`, RFC 6750 §3.1) | `authentication_required` | `sign_in`, or `sign_up` when the client said it has no account (below) |
 | token presented but malformed / unknown / expired / revoked (any method, public tools included) | 401 | `error="invalid_token"`, `resource_metadata`, `scope`, `error_description` | `invalid_token` | `reauthenticate` |
+| `Authorization` present but empty / whitespace | 401 | as above | `invalid_token` (`reason: empty_authorization`) | `reauthenticate` |
+| two `Authorization` headers | 400 | `error="invalid_request"` | `invalid_request` | `reauthenticate` |
 | token of a disabled account | 401 | as above | `account_disabled` | `contact_support` |
 | valid token without the tool's scope | 403 | `error="insufficient_scope"`, `scope` = held scopes + the missing one, `resource_metadata`, `error_description` | `insufficient_scope` (+ `granted_scopes`) | `grant_scope` |
 | unknown tool | 403 | none | `unknown_tool` | null |
@@ -170,22 +216,46 @@ point the user at Connect / Sign in.
   `POST /api/auth/verify`; there is no second sign-up implementation.
   Creating an account shows the Terms / Privacy links and the AGPL notice
   with the source link.
-- **Continuation.** Create account on the consent page sends
-  `return_to=/agent-consent?request=<id>`. The server accepts only exactly
-  that shape (a relative path to our consent page, never a URL: no open
-  redirect in mailed links). It extends the pending request and mails a
-  confirmation link to `<PUBLIC_APP_URL>/agent-consent?request=<id>&verify=<token>`.
-  Opening the link, in the same tab or another one (even another browser),
-  shows the same consent page. The dialog confirms the address, extends the
-  request again and asks for the password once. Then Allow, the code goes
-  back to the AI app's `redirect_uri`, and the app is connected without
-  starting over.
+- **Continuation, bound to the registrant.** Create account on the consent
+  page sends `return_to=/agent-consent?request=<id>`. The server accepts only
+  exactly that shape, for a request that is still pending (a relative path to
+  our consent page, never a URL). When this registration **creates** the
+  account, the server mints a single-use continuation secret
+  (`secrets.token_urlsafe(32)`). Only its SHA-256 is stored, with
+  `{rid, normalized e-mail}` (`oauth.create_continuation`). The confirmation
+  link is `<PUBLIC_APP_URL>/agent-consent?request=<id>&continue=<secret>&verify=<token>`.
+  The mail names the host the app will return to and says not to allow it
+  unless the reader started it.
+- **`/api/auth/verify`** takes `{token, continuation}` and **never** a
+  caller-supplied path. After the token proves the address, the continuation
+  is spent (any attempt burns it). It resumes the request only when it was
+  issued for that same address and the request is still pending. The
+  request is then **bound** to that address and extended, and the answer
+  carries `return_to`, derived from the stored record. A foreign, replayed,
+  expired or mismatched secret resumes nothing (`authorization_pending:
+  false`), and the web moves the tab off the consent page.
+- **Consent.** A bound request can be seen and approved only by the bound
+  account: `GET` / `POST /api/oauth/requests/{id}` answer 403 for any other
+  account, and the request stays pending for the right one. The page always
+  shows the client name and the return host. A request resumed from a
+  confirmation mail also shows a warning to allow only if you started it
+  yourself.
+- **Residual risk (documented).** Someone could start an authorization for
+  their own client and register a victim's address from that consent page.
+  The victim's confirmation mail would then lead to that consent. The victim
+  would still have to sign in to an account whose password they never set
+  (or via Google) and click Allow on a page that names the client and the
+  return host and warns them. Registration of an address one does not own
+  is the existing sign-up model (the address is proven by the link).
+- Opening the link in the same tab or another one (even another browser)
+  shows the same consent page. The dialog confirms the address and asks for
+  the password once. Then Allow, the code goes back to the AI app's
+  `redirect_uri`, and the app is connected without starting over.
 - **Pending-request TTL.** A plain pending request lives 15 min
-  (`REQUEST_TTL_S`). A sign-up step (`register`, `verify` with
-  `return_to`) extends it to 30 min from that step (`SIGNUP_REQUEST_TTL_S`),
-  never beyond 1 h after `/authorize` (`SIGNUP_MAX_AGE_S`). An expired
-  request is never revived: `register` answers 410 ("start connecting
-  again"). The AI app's own callback may time out earlier; then the user
+  (`REQUEST_TTL_S`). A sign-up step (minting or spending a continuation)
+  extends it to 30 min from that step (`SIGNUP_REQUEST_TTL_S`), never
+  beyond 1 h after `/authorize` (`SIGNUP_MAX_AGE_S`). An expired request is
+  never revived: `register` answers 410 ("start connecting again"). The AI app's own callback may time out earlier; then the user
   clicks Connect again and signs in with the new account.
 - **Google.** Google sign-in on the same dialog creates the account on first
   use (the mailbox is proven by Google) and continues straight to consent.

@@ -16,6 +16,7 @@ Base: `motor_ai_sim`, branch `origin/pre-migration-freeze-2026-09-15` (productio
 | Priority order (update 2026-09-29) | Roadmap reordered per the review: publication fix → data loading and versions → motor + controller in contracts → verify old results → simple battery–controller–motor–load system; orders, NDA and missions later (D37 restated, D62). |
 | Open standards (update 2026-09-29) | New section 10B per the owner principle "be compatible with open standards": every interface mapped to an open standard with import/export, roadmap stage, conformance test and what is not adopted (D63–D69). |
 | Open RFQ board (update 2026-09-29) | New section 8.9 per the owner idea: category RFQ templates from released revisions, invite-only or verified-supplier board, NDA-gated watermarked drawings, structured quotes, sealed bids, comparison matrix, award or split, supplier capability profiles with hard/soft matching (UNSPSC/ECLASS), freelance-style supplier profiles, job feed, status milestones and two-way blind reviews, direct work after award; no fees, no payments (D70–D82). |
+| Agent interface (update 2026-09-29) | New cross-cutting section 9A per the owner requirement "the whole structure must be understandable for MCP": one JSON Schema source generating OpenAPI, MCP tool schemas and docs; every domain area mapped to `emotres://` resources, tools, prompts, scopes and human gates; self-describing schema/guide resources; versioned tool contract; prompt-injection hygiene; CI contract tests; MCP deliverables per stage (D83–D90). |
 
 ## Goal
 
@@ -1088,6 +1089,108 @@ The "no text walls" rule stays: one line + tooltip.
 
 A customer agent works like this: "need a 25 kg drone, 40 min": `search_catalog` propellers/batteries → `build_system` → `simulate_system` on maps → pick 2–3 variants → queue the exact solve → (after a human releases the design) `generate_documents` → `draft_rfq`. Everything runs under the owner's key with his rights, quotas and audit, as today.
 
+The complete agent surface, its schema source, safety gates and staged deliverables are in section 9A; the table above is its engineering subset.
+
+---
+
+## 9A. Agent interface (MCP): everything is agent-readable
+
+Owner requirement (2026-09-29): the whole structure of the portal must be understandable and usable by an agent through MCP, not only by a human through the web. This section is cross-cutting: it applies to every section above and to every roadmap stage.
+
+Starting point: `docs/MCP_2026-09-28.md`, stages 1–3 live: Streamable HTTP endpoint `/mcp`; read tools `list_catalog`, `get_catalog_entry`, `list_machines`, `get_machine_performance`, `check_fit`; draft/solve tools `start_design`, `get_design`, `simulate`, `get_job`, `get_design_result`, `open_in_configure`; personal keys and OAuth 2.1 (PKCE S256, RFC 7591/8414/9728, consent with untickable scopes); scopes `catalog:read`, `machines:read`, `designs:write`, `simulate`; fair-use limits (per minute, per day, daily simulate quota); audit log `mcp_audit.jsonl`. Stage 4 (`request_quote`, publication) was planned there and is absorbed into 9A.2 and 9A.6.
+
+### 9A.1 Principle: one schema, three surfaces
+
+- **One source of truth.** Every domain object, command and result is defined once as a **JSON Schema 2020-12** document (`schemas/<object>/<major>.<minor>.json`, the same files 10B.5 already names). From these definitions the build **generates**: (1) the REST **OpenAPI 3.1** description of `/api/v2`; (2) the **MCP tool `inputSchema` / `outputSchema`** and resource content types; (3) the **reference docs** and the agent guide resources (9A.3). Nobody hand-writes a tool schema that duplicates a REST schema.
+- **One implementation.** An MCP tool is a thin adapter over the same service call as the REST route: same validation (loud, 4A.3 / "client-facing validation"), same permission check (section 6), same quota, same audit. There is no agent-only business logic and no agent back door.
+- **No feature without its MCP surface.** Every PR that adds a domain object, state transition or result adds, in the same PR: the schema, the MCP resource and/or tool (or prompt), the scope, the gate classification (9A.4) and a contract test. The only alternative is an explicit `x-agent: human-only` mark on the schema/route **with a written reason** (e.g. "signature: legal act of a person"); a PR with neither fails CI.
+- **English for agents.** Tool names, descriptions, enums, resource text and error messages are English (the web UI is localized; agents are not — i18n keys resolve to the EN source). Localized display strings may be returned as extra `display` fields, never instead of the machine values.
+
+### 9A.2 Map: domain → resources, tools, prompts, scopes, gates
+
+Resources are read-only and addressed by `emotres://` URIs (listed and templated through `resources/list` and `resources/templates/list`); tools are actions; prompts are guided multi-step workflows the client can offer to its user. "Gate" = what an agent may **not** complete alone (9A.4). Every id in a URI is an immutable revision id or an explicit `@latest` (P2).
+
+| Area (section) | Resources (read) | Tools (actions) | Prompts | Scopes | Human gate |
+|---|---|---|---|---|---|
+| Catalogs and cards (2.2, 10B.4) | `emotres://catalog/{kind}`, `emotres://card/{kind}/{id}@{rev}` (values + units + **provenance**: source, datasheet page, validation level, badge) | `search_catalog(kind, filters)`, `compare_cards(ids)`, `draft_card(kind, data)` (own org, stays draft) | `choose_component` | `catalog:read`, `catalog:write` | publishing a card to others = human |
+| Modules and manifests (2.4) | `emotres://module/{id}@{version}` (manifest, ports, calculations, cost in time) | `list_modules(filters)` | — | `catalog:read` | vendor activation = admin |
+| Machines, designs, duties (4, 4A) | `emotres://machine/{die}/{config}`, `emotres://design/{id}`, `emotres://duty/{machine}/{duty}` | today's stage-1/3 tools; `set_duty(design, point)`, `check_fit` | `size_a_motor`, `rate_existing_motor` | `machines:read`, `designs:write`, `simulate` | release of a design revision = human (7.5) |
+| Systems, ports, modules (2.7, 3) | `emotres://system/{id}@{rev}` (graph, port bindings, unit/sign basis), `emotres://system/{id}/balance/{job}` (**energy-balance report** of 2.7.7, residuals vs 2.7.8 tolerances) | `build_system(nodes, links)`, `connect_ports(system, from, to)` (type/unit/basis check, refusal lists the mismatch), `simulate_system(system, scenario, fidelity)`, `get_system_result(job)` | `build_powertrain` | `systems:read`, `systems:write`, `systems:simulate` | — (drafts and queued jobs only) |
+| Missions (3A) | `emotres://mission/{id}`, `emotres://mission/{id}/result/{job}` (limits, "which block limits") | `define_mission(profile)`, `simulate_mission(system, mission, fidelity)`, `run_mission_batch(...)` (quota-counted) | `endurance_study` | `missions:read`, `missions:write`, `systems:simulate` | batches above the fair-use quota = human raise |
+| Geometry sources (4A.1) | `emotres://geometry/{id}` (regions, recognition report, validation) | `import_dxf_draft(file_ref)` → recognized regions + open questions; `assign_regions(id, map)` | `import_my_geometry` | `geometry:write` | none for drafts; sharing = human |
+| Materials (magnets, steels, wires, insulation) | `emotres://material/{kind}/{id}` (curves, temperature cards, provenance) | via `search_catalog`; `draft_material_card` | — | `catalog:read`, `catalog:write` | as cards |
+| Controller (M2) | `emotres://controller/{id}` (devices, topology, losses, T_j) | `configure_controller_draft(design, device, topology)` | `pick_inverter` | `machines:read`, `designs:write` | — |
+| Results and reports | `emotres://job/{id}`, `emotres://result/{job}` (whitelisted values with units, code SHA + data revision, 2.5), `emotres://report/{rev}` (metadata + download link) | `get_job`, `get_design_result`, `render_report_draft(rev)` | `explain_result` | `machines:read`, `systems:read` | none; the report file is generated by the user's click in the web when he prefers (owner rule) |
+| Drawings and BOM (7) | `emotres://revision/{id}/package`, `emotres://revision/{id}/bom` | `generate_documents_draft(revision)`, `check_interfaces(revision, upload_ref)` | `prepare_manufacturing_package` | `documents:read`, `documents:write` | approval / release (7.5) = human |
+| Organizations and members (6) | `emotres://org/{id}` (public profile, roles, verification), `emotres://org/{id}/members` (own org only), `emotres://grants` (what I can see and why) | — (membership changes are web-only in v1) | — | `org:read` | invitations, role changes, grants = human |
+| NDA (6.5, 6.5A) | `emotres://nda/{id}` (state, parties, policy, expiry) | `prepare_nda_draft(counterparty, template, scope)` | `set_up_nda` | `nda:read`, `nda:draft` | **signing = human only** (re-auth/2FA, 6.5A); `x-agent: human-only` |
+| RFQ board (8.9) | `emotres://rfq/{id}`, `emotres://rfq/{id}/quotes` (sealed until opening, 8.9), `emotres://rfq/{id}/comparison` | `draft_rfq(revision, template)`, `find_matching_suppliers(rfq)` (hard/soft reasons, D78), `compare_quotes(rfq)`, `draft_clarification(rfq, text)` | `source_a_part` | `rfq:read`, `rfq:draft` | **publish RFQ, send clarification, award/split = human** |
+| Supplier capability profile (8.9.2) | `emotres://supplier/{org}/capabilities@{rev}` | `draft_capability_profile(data)`, `update_capability_profile_draft(...)` (own org only), `draft_quote(rfq, data)` | `describe_my_shop` | `supplier:read`, `supplier:draft` | publishing a profile revision, **submitting a quote** = human |
+| Orders and status (8.4, 8.5) | `emotres://order/{id}` (state machine, milestones, tracking) | `draft_order(award)`, `draft_milestone_update(order, ...)` | `track_my_orders` | `orders:read`, `orders:draft` | **placing / confirming an order, confirming a milestone** = human |
+| Usage and fair use (5.4, 10) | `emotres://usage/me` (calls, jobs, quotas left, `own_node` share) | — | — | any key (own data) | quota raise = admin |
+| BYO compute nodes (10) | `emotres://nodes` (own/org nodes, status, profile, last lease) | `get_node_status(id)` | — | `nodes:read` | attach/revoke node, token issue = human |
+| i18n | `emotres://guide/glossary` has EN terms + ZH display names | — | — | — | — |
+| Data export / delete (10A.6) | `emotres://privacy/requests` (own requests, state) | `request_data_export()` (prepares; download link needs web session), `request_account_delete()` | — | `privacy:request` | **delete and export delivery confirmed by the human in the web** (re-auth) |
+| Open-data publication (10B, D66) | `emotres://publication/{id}` | `prepare_publication_draft(object)` (runs the publication boundary checks of P1) | — | `publish:draft` | **publication = human** |
+
+### 9A.3 Discoverability: the portal describes itself
+
+- **`emotres://schema`**: index of every schema (id, version, status, deprecation date) with links to the JSON Schema files; `emotres://schema/{object}@{version}` returns one schema. An agent can validate its own payload before calling.
+- **`emotres://guide/*`** resources, generated from the same sources as the human docs:
+  `guide/domain-model` (objects and relations: org → project → system → node → module@version → card; design → revision → package → RFQ → quote → award → order);
+  `guide/units-and-signs` (section 2.7 verbatim: SI with K and m at the boundary, **positive = into the module**, across/through variables, basis per port);
+  `guide/port-contract` (port types, compatibility rules, what `connect_ports` checks);
+  `guide/glossary` (term, definition, units, ZH display name);
+  `guide/examples` (worked calls: size a motor, battery–controller–motor–load system, source a lamination; each validated in CI);
+  `guide/errors` (the error-code table below);
+  `guide/policies` (gates, scopes, quotas, untrusted-data rules of 9A.4).
+- **Tool descriptions written for LLMs**: what it does in one sentence, when **not** to use it, **units in argument names** (`torque_nm`, `speed_rpm`, `voltage_v`, `length_mm`, `temperature_k`), closed **enums** from the schema, one example call and one example result, the error codes it can return, whether it is read-only / idempotent / destructive (MCP `annotations`: `readOnlyHint`, `idempotentHint`, `destructiveHint`, `openWorldHint`).
+- **Error codes**: one table shared with the web's i18n error messages: stable code (`E_UNIT_MISMATCH`, `E_PORT_INCOMPATIBLE`, `E_VALIDATION`, `E_SCOPE`, `E_FORBIDDEN_ORG`, `E_NDA_REQUIRED`, `E_QUOTA`, `E_RATE`, `E_HUMAN_GATE`, `E_STALE_REVISION`, `E_NOT_FOUND`, `E_DEPRECATED`), EN message, the offending field (JSON Pointer), and a `hint` the agent can act on (e.g. "call `connect_ports` with a gearbox node between"). The web localizes by code; the agent reads EN.
+- **Versioned tool contract**: the tool set has a semver `contract_version` (served in `initialize` `serverInfo` and in `emotres://schema`). Additive changes = minor; a removed or renamed argument, a narrowed enum or a changed unit = major. **Deprecation policy**: a deprecated tool or field keeps working for **at least 90 days / one minor release after its replacement ships**, is flagged in its description and in results (`deprecation: {since, sunset, replacement}`), and is listed in `emotres://schema/changes`.
+- **Capability listing per caller**: `tools/list`, `resources/list` and `prompts/list` return only what the current key/grant's scopes and the user's org roles allow; `emotres://me/capabilities` explains the rest ("`rfq:draft` missing: tick it on the key", "org role `viewer` cannot draft RFQs").
+
+### 9A.4 Safety
+
+- **Scopes per area** (table in 9A.2), always `area:read` / `area:draft` or `area:write` / a separate `simulate`-type scope for anything consuming compute. New keys default to read scopes only (as today). OAuth consent lists every scope with its one-line description; the owner can untick.
+- **Permissions identical to the web**: the tool calls the same service with the same user and org context; section 6 roles, object grants, NDA policies (6.5) and data residency (10A.2) apply unchanged. An agent can never see more than its human in the web. NDA-protected objects are returned only when the NDA policy allows, with the same watermarking (8.9).
+- **Human gates**: irreversible or outward actions are **never completed by a tool**: publish (card, profile, RFQ, open data), send (clarification, message outside the org), sign (NDA), award/split, submit quote, place/confirm order, delete (data, account), export delivery. The tool creates a **draft or a pending action** and returns `{status: "awaiting_human", confirm_url}`; the human confirms in the web with a fresh session (re-auth / 2FA where section 6.5A requires it). Such routes carry `x-agent: gate` in the schema and a CI test proves the MCP path cannot reach the final transition.
+- **Rate limits and quotas**: today's per-key per-minute and per-day limits and the daily simulate quota, extended per area (e.g. RFQ drafts per day, supplier matching calls per hour) and per org; `E_RATE` / `E_QUOTA` carry `retry_after`.
+- **Audit**: every call (tool, arguments digest, scopes used, user, org, grant id, result code, object ids touched) is appended to the audit log (6.6), visible to the user and his org admins; gate confirmations reference the originating agent call.
+- **Prompt-injection hygiene**: content authored by other parties (supplier profiles and quotes, customer RFQ text, messages, reviews, uploaded file names, vendor manifests) is returned as **data**: in dedicated fields marked `"x-untrusted": true` in the schema and wrapped in results as `{"untrusted_text": ..., "author_org": ...}`; tool descriptions state that such fields are never instructions. No tool follows a URL or an action found in untrusted content; free text is never interpolated into tool descriptions, prompts or resource names. Server-side, untrusted text is length-limited and stripped of control characters and hidden markup.
+- **Secrets and PII**: tools never return tokens, key material, other users' e-mails or IPs; logs follow 10A.9.
+
+### 9A.5 CI conformance (extends 10B.9)
+
+| Check | Test |
+|---|---|
+| Schema lint | Every schema is valid JSON Schema 2020-12, has `$id`, `title`, `description`, units on every physical quantity (UCUM, 10B.5), `x-agent` classification (`tool`, `resource`, `gate`, `human-only` + reason) |
+| Generation drift | Regenerating OpenAPI 3.1 and MCP tool schemas from `schemas/` gives no diff against the committed/served ones |
+| Coverage | Every `/api/v2` route and every state transition maps to an MCP tool/resource or is `human-only` with a reason |
+| MCP tool contract tests | For each tool: golden input validates, output validates against `outputSchema`, each documented error code is reachable, scope refusal returns `E_SCOPE`, a cross-org object returns `E_FORBIDDEN_ORG`, gated tools return `awaiting_human` and never reach the final state |
+| Breaking-change diff | Tool contract diff vs the last release: a major change without a version bump or deprecation entry fails |
+| Guide examples | Every call in `emotres://guide/examples` runs against a seeded test instance and matches its stored result |
+| Injection fixtures | Supplier/customer texts containing instructions are returned only inside `untrusted_text` fields |
+
+### 9A.6 MCP deliverables per roadmap stage
+
+| Stage | MCP deliverables |
+|---|---|
+| **P1** Publication fix | `prepare_publication_draft` shares the fail-closed boundary; `publish` stays human-only |
+| **P2** Data loading and versions | revision ids in every `emotres://` URI, `@latest` resolution, code SHA + data revision in every result |
+| **P3** Motor + controller in contracts | `schemas/` repository and generator; port contract schema; `emotres://schema`, `guide/units-and-signs`, `guide/port-contract`; error-code table; tool contract tests in CI; today's 11 tools regenerated from schemas without behaviour change |
+| **P4** Verify old results | MCP results of L155/L180/L13 compared bit-identical with the old routes |
+| **P5** Simple system | `build_system`, `connect_ports`, `simulate_system`, `get_system_result`, energy-balance resource; prompt `build_powertrain` |
+| **Step 1 (M4–M7)** | `/api/v2` + OpenAPI generated from the same schemas; `emotres://usage/me`, `emotres://nodes`, `me/capabilities` |
+| **1A** Own geometry | `import_dxf_draft`, `assign_regions`, `guide/examples` for import |
+| **M8** Parties and orgs | org/member/grant resources, `org:read`; `prepare_nda_draft` (sign human-only); audit view shows agent calls |
+| **M9** Manufacturing documents | `generate_documents_draft`, package/BOM resources, `check_interfaces`; release gate |
+| **2** Third module | propeller card in `search_catalog`; missions read tools start here |
+| **M10** Sourcing | `draft_rfq`, `find_matching_suppliers`, `compare_quotes`, `draft_clarification`, supplier profile drafts, `draft_quote`; publish/send/award/submit gates; untrusted-data fixtures |
+| **M11** ERP connector | order/status resources show ERP state read-only; no ERP write tools |
+| **M12** Customer orders | `draft_order`, `track_my_orders` prompt; place/confirm gate |
+| **3a–3c** Vendor modules | vendor manifests exposed as resources with `x-untrusted` text; no vendor tool runs outside the executor |
+| **4.x** Missions | `define_mission`, `simulate_mission`, `run_mission_batch`, `endurance_study` prompt |
+
 ---
 
 ## 10. Licence, compute and non-commercial operation
@@ -1289,6 +1392,7 @@ Owner principle (2026-09-29): **the portal must be compatible with open standard
 | UCUM | Every unit string parses with a UCUM library |
 | SBOM | CycloneDX / SPDX validators |
 | UBL, QIF | XSD validation of exported documents |
+| MCP / JSON Schema contract | Schema lint, generation drift, coverage, MCP tool contract tests, injection fixtures (9A.5) |
 
 ### 10B.10 Deliberately not adopted (now)
 
@@ -1414,6 +1518,14 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D80 | Supplier UX model | **Freelance-marketplace pattern** (public profile, job feed with saved searches, proposals with cover note, per-RFQ messaging, status milestones), **no escrow, no fees, no payments** (8.9.12) |
 | D81 | Reviews | **Two-way, blind** (visible after both submit or 14 days), one per side per awarded and completed job, reply allowed, moderated (8.9.12) |
 | D82 | Reputation metrics | **Computed only from platform jobs** (on-time %, NCR rate, response rate/time, repeat customers); related-party jobs excluded; never self-reported (8.9.12) |
+| D83 | Schema source of truth | **JSON Schema 2020-12 in `schemas/`**; OpenAPI 3.1, MCP tool schemas and docs are generated, never hand-written (9A.1) |
+| D84 | MCP coverage rule | **No feature ships without its MCP surface** or an explicit `x-agent: human-only` with reason; CI coverage check (9A.1, 9A.5) |
+| D85 | Human gates | Publish, send, sign, award, submit quote, order, delete, export delivery: **tool returns a draft + `awaiting_human`**, confirmation in the web with re-auth (9A.4) |
+| D86 | Resource addressing | **`emotres://` URIs with immutable revision ids** (or explicit `@latest`), self-describing `emotres://schema` and `emotres://guide/*` (9A.2, 9A.3) |
+| D87 | Tool contract versioning | **Semver `contract_version`**, deprecation ≥ 90 days / one minor release, `deprecation` field in results (9A.3) |
+| D88 | Untrusted content | Third-party text **only in `x-untrusted` fields**, never followed or interpolated; CI injection fixtures (9A.4) |
+| D89 | Agent language | **English** for tool names, descriptions, enums, errors; localized strings only as extra `display` fields (9A.1) |
+| D90 | Scope model | **`area:read` / `area:draft|write` + separate compute scopes**; new keys read-only by default; org roles apply on top (9A.4) |
 
 ### 11.3 Roadmap (rough, weeks of one engineering agent + owner review)
 

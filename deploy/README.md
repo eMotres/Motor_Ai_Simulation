@@ -185,7 +185,7 @@ The API refuses to boot, or warns, on three of these at startup —
   other's geometry, and there is no correct fallback.
   Check before the transfer: `python scripts/check_case_collisions.py config/dies`
 * **warn** — `AUTH_SECRET` implicit while `WORKSPACES_ROOT` is set.
-* **warn** — `reportlab` / `python-docx` / `triangle` missing.
+* **warn** — `reportlab` / `python-docx` missing.
 
 ---
 

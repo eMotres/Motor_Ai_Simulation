@@ -1238,15 +1238,9 @@ def _check_part_mesh_supported(user_cm: dict, use_geo: bool) -> None:
     user_cm = {k: v for k, v in user_cm.items() if k != "coil_rel"}
     if not user_cm:
         return
-    if not use_geo:
-        raise ValueError(
-            "tensor-template iron has one global density and cannot honour "
-            f"per-part element sizes {sorted(user_cm)}")
-    from motor_ai_sim.simulation.geo_mesh import GEO_PART_KEYS
-    _bad = sorted(set(user_cm) - set(GEO_PART_KEYS))
-    if _bad:
-        raise ValueError("geometry-driven mesh cannot honour per-part element "
-                         f"size for {_bad}")
+    raise ValueError(
+        "tensor-template iron has one global density and cannot honour "
+        f"per-part element sizes {sorted(user_cm)}")
 
 
 #: Tags the shaft-bore retag is allowed to overwrite — the air family only.
@@ -1381,7 +1375,7 @@ def _build_sliding_band_meshes(
         full_ring: bool = False,            # TRUE 360°: stitch 2×180° per half
         pole_copy: Optional[bool] = None,   # template-copy poles/slots; None=env default
         iron_template: Optional[bool] = None,  # deterministic template iron; None=env default
-        geo_mesh: Optional[bool] = None,    # geometry-driven CDT mesh; None=env default
+        geo_mesh: Optional[bool] = None,    # legacy flag: True/None -> gmsh build (CDT mesher removed)
         skin_layers: Optional[dict] = None,  # conductor skin-layer spec (geo path)
 ):
     """Build the stator-half and rotor-half meshes for the sliding-band solver.
@@ -1513,8 +1507,8 @@ def _build_sliding_band_meshes(
 
     _use_tpl = _SB_IRON_TEMPLATE if iron_template is None else bool(iron_template)
     _use_geo = _SB_GEO_MESH if geo_mesh is None else bool(geo_mesh)
-    # Did the geometry-driven mesher (the only one that builds the conductor
-    # skin layer) produce the halves?  Checked before each return.
+    # The conductor skin layer was built only by the removed geometry-driven
+    # mesher; no current build path produces it.  Checked before each return.
     _skin_geo = [False]
 
     def _skin_check():
@@ -1537,19 +1531,20 @@ def _build_sliding_band_meshes(
                      and not getattr(polys["sleeve"], "is_empty", True)):
         log.info("retaining sleeve present — the tensor iron template has no "
                  "region for a ring in the air gap, so this build uses the "
-                 "geometry-driven mesher (which conforms to it)")
+                 "gmsh mesher (which conforms to it)")
         # A note, not an event: every build of THIS machine takes this path,
         # so candidates stay comparable and the optimizer must not reject them.
-        _trace_note("retaining sleeve: geometry-driven mesh instead of the iron template")
+        _trace_note("retaining sleeve: gmsh mesh instead of the iron template")
         _use_geo = True
     if _use_tpl and _use_geo:
-        from motor_ai_sim.simulation.geo_mesh import HAVE_TRIANGLE
-        if not HAVE_TRIANGLE:
-            # optional non-commercial dep absent -> straight to gmsh (the
-            # template cannot carry a sleeve, so do not stop there either)
-            log.info("optional 'triangle' not installed — geometry-driven mesh "
-                     "unavailable, using the gmsh build")
-            _use_tpl = _use_geo = False
+        # The geometry-driven CDT mesher was removed on 2026-09-29 together
+        # with its `triangle` dependency (licence incompatible with AGPL).  A
+        # geo-mesh request is served by the gmsh build, which conforms to the
+        # real polygons (fillets, sleeve) as well; the tensor template runs
+        # only when it is asked for explicitly (geo_mesh=False).
+        log.info("geometry-driven mesh requested — served by the gmsh build")
+        _use_tpl = False
+    _use_geo = False
     if full_ring:
         # TRUE 360°: each half stitched from two clean 180° builds (direct
         # closed-360 OCC double-meshes → dead field).  No sector cuts exist
@@ -1591,41 +1586,13 @@ def _build_sliding_band_meshes(
                     _p_geo["rotor_outer_radius"] = float(_sgspec["r_ro"])
                 _density = max(0.3, 2.0 / max(mesh_size_mm, 0.5))
                 _check_part_mesh_supported(_user_cm, _use_geo)
-                if _use_geo:
-                    from motor_ai_sim.simulation.geo_mesh import geo_mesh_halves
-                    _cm = component_mesh_mm or {}
-                    # UI "Per-part element size → Outer air" uses key "outer";
-                    # geo applies it as ONE coarse size for all air + shaft.
-                    _air_mm = float(_cm.get("outer") or _cm.get("air") or 0.0)
-                    (mesh_s, tags_s, classify_s,
-                     mesh_r, tags_r, classify_r) = geo_mesh_halves(
-                        _p_geo, polys, outer_air_factor=outer_air_factor,
-                        density=_density, n_sectors=1,
-                        mesh_edge_mm=float(mesh_size_mm),
-                        n_slip=int(_sgspec.get("n_slip", 1008)),
-                        r_si=float(_sgspec.get("r_si", 0.0)),
-                        r_ro=float(_sgspec.get("r_ro", 0.0)),
-                        air_mesh_mm=_air_mm,
-                        # per-part element sizes the USER asked for (solid
-                        # parts → their own CDT region seed); the auto-filled
-                        # iron/magnet defaults are NOT passed, so an empty
-                        # request reproduces the previous mesh bit-for-bit.
-                        part_mesh_mm=_user_cm,
-                        # MOVING-band spec (harmonic macro): halves end on the
-                        # uniform R1/R2 rings; merged spec has no r1/r2 → 0.
-                        r1_band=float(_sgspec.get("r1", 0.0)),
-                        r2_band=float(_sgspec.get("r2", 0.0)),
-                        skin_layers=skin_layers)
-                    _skin_geo[0] = True
-                    log.info("geo-driven halves: stator %d tris, rotor %d tris",
-                             mesh_s.t.shape[1], mesh_r.t.shape[1])
-                elif "r1" in _sgspec:
+                if "r1" in _sgspec:
                     # tensor template halves end ON the iron circles and know
                     # nothing about the moving-band R1/R2 rings → the macro's
                     # ring extraction would find nothing.  gmsh meshes the
                     # in_band/out_band polys up to R1/R2 correctly — fall back.
                     raise ValueError("template iron does not support the "
-                                     "moving-band macro (use geo mesh)")
+                                     "moving-band macro (gmsh build)")
                 else:
                     (mesh_s, tags_s, classify_s,
                      mesh_r, tags_r, classify_r) = template_solver_halves(
@@ -1728,28 +1695,9 @@ def _build_sliding_band_meshes(
                 _p_geo["rotor_outer_radius"] = float(_sgspec["r_ro"])
             _density = max(0.3, 2.0 / max(mesh_size_mm, 0.5))
             _check_part_mesh_supported(_user_cm, _use_geo)
-            if _use_geo:
-                from motor_ai_sim.simulation.geo_mesh import geo_mesh_halves
-                _cm = component_mesh_mm or {}
-                _air_mm = float(_cm.get("outer") or _cm.get("air") or 0.0)
-                (mesh_s, tags_s, classify_s,
-                 mesh_r, tags_r, classify_r) = geo_mesh_halves(
-                    _p_geo, polys, outer_air_factor=outer_air_factor,
-                    density=_density, n_sectors=_ns_i,
-                    mesh_edge_mm=float(mesh_size_mm),
-                    n_slip=int(_sgspec.get("n_slip", 1008)),
-                    r_si=float(_sgspec.get("r_si", 0.0)),
-                    r_ro=float(_sgspec.get("r_ro", 0.0)), air_mesh_mm=_air_mm,
-                    part_mesh_mm=_user_cm,   # per-part sizes (see full-ring)
-                    r1_band=float(_sgspec.get("r1", 0.0)),
-                    r2_band=float(_sgspec.get("r2", 0.0)),
-                    skin_layers=skin_layers)
-                _skin_geo[0] = True
-                log.info("geo-driven wedge 1/%d: stator %d tris, rotor %d tris",
-                         _ns_i, mesh_s.t.shape[1], mesh_r.t.shape[1])
-            elif "r1" in _sgspec:
+            if "r1" in _sgspec:
                 raise ValueError("template iron does not support the "
-                                 "moving-band macro (use geo mesh)")
+                                 "moving-band macro (gmsh build)")
             else:
                 (mesh_s, tags_s, classify_s,
                  mesh_r, tags_r, classify_r) = template_solver_halves(

@@ -1,26 +1,33 @@
 # Contributing
 
 Thank you for helping improve this project. It is developed by
-**MOTRES d.o.o.** and published under the **GNU Affero General Public License
-v3.0 or later** (see [LICENSE](LICENSE)). MOTRES also offers the same code
-under commercial licences; contact MOTRES d.o.o. for terms.
+**MOTRES d.o.o.** and contributors and published under the **GNU Affero General
+Public License v3.0 or later** (see [LICENSE](LICENSE)). It is free software:
+there is no separate licence and no contributor licence agreement. Your
+contribution is licensed under the same AGPL-3.0-or-later terms as the rest of
+the project, and you keep your copyright.
 
-## Contributor License Agreement (required)
+## Developer Certificate of Origin (required)
 
-Every contributor must sign the [CLA](CLA.md) (CLA v1.0) before a pull request
-can be merged. The CLA lets you keep your copyright while granting MOTRES the
-rights to distribute your contribution under the AGPL and under commercial
-licences.
+Every commit in a pull request must be signed off under the
+[Developer Certificate of Origin 1.1](DCO.md). The sign-off is a line at the end
+of the commit message certifying that you wrote the change or otherwise have the
+right to submit it under the project's open source licence:
 
-- **Individuals:** open your pull request; the CLA Assistant bot will comment.
-  Reply with `I have read the CLA Document and I hereby sign the CLA`.
-- **Companies:** if your employer owns what you write, your employer signs the
-  Entity CLA (Part B of [CLA.md](CLA.md)) and lists you in Schedule A; then
-  sign as an individual through the bot as well.
+```text
+Signed-off-by: Your Name <you@example.com>
+```
 
-Signatures are stored in `signatures/cla.json` on the `cla-signatures` branch
-of this repository. This project uses the CLA; a Developer Certificate of
-Origin (`Signed-off-by`) is not required.
+- Add it automatically with `git commit -s` (or `--signoff`). The name and
+  e-mail must match the commit author (`git config user.name` /
+  `git config user.email`); a real name is expected, not an alias.
+- Forgot it? Fix the last commit with `git commit --amend -s --no-edit`, or all
+  commits of your branch with `git rebase --signoff <base>`, then push again.
+- If your employer has rights in what you write, make sure you are allowed to
+  contribute it under the AGPL before signing off.
+
+The `DCO` check on every pull request fails if any commit lacks a sign-off
+matching its author.
 
 ## How to contribute
 
@@ -62,9 +69,10 @@ files):
 
 ## Dependencies
 
-New dependencies must have a licence compatible with AGPL-3.0-or-later **and**
-with MOTRES's commercial licensing (permissive licences such as MIT, BSD,
-Apache-2.0, ISC, Zlib are preferred). Record every new runtime dependency in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packages with
-non-commercial or field-of-use restrictions (for example `triangle`) may only
-be optional extras with a fallback when absent.
+New dependencies must have a licence compatible with AGPL-3.0-or-later
+(permissive licences such as MIT, BSD, Apache-2.0, ISC, Zlib are preferred;
+LGPL and GPL-2.0-or-later/GPL-3.0 are compatible). Record every new runtime
+dependency in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packages with
+non-commercial, field-of-use or other restrictions beyond the AGPL are not
+accepted. Proprietary accelerators may only be optional, with the code working
+without them (the way `pypardiso` / Intel MKL is today).

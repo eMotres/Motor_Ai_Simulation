@@ -44,11 +44,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# OPTIONAL and NON-COMMERCIAL: Shewchuk's Triangle may not be used commercially
-# without the author's permission.  Not needed: gmsh / mapbox-earcut are used
-# when it is absent.  Install only if your use is permitted.
-triangle = [
-    "triangle>=20230923",
+# OPTIONAL: Intel MKL PARDISO accelerator.  pypardiso is BSD-3-Clause but pulls
+# proprietary Intel MKL; every solver falls back to SciPy SuperLU without it.
+pardiso = [
+    "pypardiso>=0.4",
 ]
 dev = [
     "pytest>=7.0",
@@ -89,5 +88,4 @@ python_functions = ["test_*"]
 markers = [
     # Real FEM solves — minutes, not milliseconds. Deselect with -m "not slow".
     "slow: physics regression cases that run the actual solver",
-    "requires_triangle: needs the optional non-commercial `triangle` package (skipped without it)",
 ]

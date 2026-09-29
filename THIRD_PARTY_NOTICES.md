@@ -33,18 +33,36 @@ project's own licence file. Each dependency remains under its own licence.
 | meshio | 5.3.5 | MIT |
 | scikit-learn | 1.9 | BSD-3-Clause |
 | pillow | 12.2.0 | MIT-CMU (HPND) |
-| pypardiso | 0.4.7 | BSD-3-Clause; pulls **Intel MKL** (Intel Simplified Software License, proprietary, redistributable; see note 2) |
 | psutil | 7.2.2 | BSD-3-Clause |
 | reportlab | 5.0.0 | BSD-3-Clause |
 | python-docx | 1.2.0 | MIT |
 | openpyxl | 3.1.5 | MIT |
 | mcp | 2.2.0 | MIT |
 
+### Transitive Python dependencies (installed by the packages above)
+
+All permissive (MIT, BSD, Apache-2.0, ISC, PSF, MIT-CMU) except those listed
+here, audited from the resolved dependency closure of `requirements.txt` on
+2026-09-29:
+
+| Package | Pulled in by | Licence | AGPL-3.0 verdict |
+|---|---|---|---|
+| casadi | cadquery | LGPL-3.0-or-later | compatible |
+| OpenCASCADE Technology (in cadquery-ocp) | cadquery | LGPL-2.1 with OCCT exception | compatible |
+| GEOS (in shapely) | shapely | LGPL-2.1 | compatible |
+| vtk, trame-* | cadquery-ocp | BSD-3-Clause / Apache-2.0 / MIT | compatible |
+
 ### Optional (not installed by default)
 
-| Package | Version | Licence |
+| Package | Install | Licence |
 |---|---|---|
-| triangle (extra `[triangle]`, `requirements-triangle.txt`) | 20250106 | Python wrapper LGPL-3.0; bundled Triangle C code by J. R. Shewchuk: **free for non-commercial use only** (see note 3) |
+| pypardiso | `requirements-pardiso.txt` or extra `[pardiso]` | BSD-3-Clause; pulls **Intel MKL, intel-openmp, TBB, tcmlib, umf, intel-cmplr-lib-ur** (Intel Simplified Software License / Intel EULA, proprietary; see note 2) |
+
+### Removed
+
+| Package | Why |
+|---|---|
+| triangle (J. R. Shewchuk's Triangle) | Licence forbids commercial use without the author's permission, a field-of-use restriction the AGPL does not allow (see note 3). Removed 2026-09-29 with the geometry-driven CDT mesher built on it. |
 
 ## Web client (web/package.json, runtime dependencies)
 
@@ -68,6 +86,12 @@ project's own licence file. Each dependency remains under its own licence.
 | zod | 4.3.6 | MIT |
 | zustand | 5.0.11 | MIT |
 
+Transitive npm production dependencies (`npm ls --omit=dev --all`, 275
+packages, audited 2026-09-29): MIT 175, Apache-2.0 57, ISC 22, BSD-3-Clause
+17, and one each of MIT AND ISC (victory-vendor), Zlib, 0BSD and MIT
+(webgl-constants, licence file only). No copyleft-incompatible or
+non-commercial licence.
+
 Development-only tools (pytest, black, ruff, mypy, Vite, TypeScript, ESLint)
 are not distributed with the software and are not listed.
 
@@ -75,18 +99,16 @@ are not distributed with the software and are not listed.
 
 1. **gmsh (GPL-2.0-or-later).** "Or later" allows use under GPL-3.0, and
    GPL-3.0 section 13 explicitly permits combination with AGPL-3.0 code, so
-   the AGPL distribution of this project is compatible. gmsh is used as an
-   unmodified Python package (`import gmsh`). A **commercial (non-AGPL)
-   distribution** by MOTRES that includes or links gmsh would still be bound by
-   the GPL for gmsh; such an offering needs either a gmsh commercial licence
-   (available from the gmsh authors) or a build without gmsh.
-2. **Intel MKL (via pypardiso).** Proprietary but freely redistributable
-   library installed from PyPI by the user/deployment, not shipped in this
-   source repository. The AGPL/GPL "system library" reasoning does not clearly
-   cover it; pypardiso is optional in the code (scipy's solver is used when it
-   is absent), so binary/container distributions can omit it.
+   distributing this project under the AGPL together with gmsh is compatible.
+   gmsh is used as an unmodified Python package (`import gmsh`).
+2. **Intel MKL (via pypardiso).** Proprietary, freely redistributable, and not
+   a "System Library" under GPL/AGPL section 1, so it is not a default
+   dependency and is never shipped in this repository or in the default
+   container image. Every solver falls back to SciPy's SuperLU when pypardiso
+   is absent. Operators may install it on their own machines
+   (`requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for
+   `deploy/Dockerfile.api`) for a several-times-faster transient solve.
 3. **Triangle.** Its licence forbids commercial use without the author's
-   permission, which is incompatible with both the AGPL (no field-of-use
-   restrictions) and MOTRES's commercial licences. It is therefore an
-   optional extra: without it the FEM mesher uses gmsh and the 2-D view uses
-   mapbox-earcut.
+   permission, which the AGPL (no further restrictions, section 10) does not
+   allow. It has been removed: the FEM mesher is gmsh, and the 2-D view uses
+   mapbox-earcut with a shapely (GEOS) constrained-Delaunay fallback.

@@ -31,9 +31,10 @@ mapbox-earcut>=1.0  # 2D polygon triangulation (cadquery_geometry.get_2d_mesh_da
 meshio>=5.3  # skfem.io mesh IO (fem_solver_2d.build_mesh_from_polygons) — without it the FEM mesh build + simulation transient 500
 scikit-learn>=1.5  # surrogate model + DOE importance (surrogate.py: RandomForestRegressor, permutation_importance)
 pillow>=10  # PIL.Image domain rasterization for 2D field-map classification (routes/simulation.py)
-# MKL PARDISO sparse solver — the FEM transient is several times faster than
-# the SuperLU fallback. Pulls Intel MKL (~200 MB); worth it on any solve node.
-pypardiso>=0.4
+# pypardiso (Intel MKL PARDISO) is NOT a default dependency (2026-09-29): MKL is
+# proprietary.  Every solver falls back to SciPy's SuperLU without it.  A solve
+# node that wants the several-times-faster transient installs it on top:
+#   pip install -r requirements-pardiso.txt   (or pip install ".[pardiso]")
 psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d); also the Stage 3 two-workspace soak (tests measure RSS)
 # ── report rendering (migration Stage 6, 2026-09-15) ────────────────────────
 # These three were installed on the workstation but NEVER pinned here, so a
@@ -42,11 +43,9 @@ psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d); al
 # 2026-09-15) — the exact set every report in reports/ was rendered with.
 reportlab==5.0.0  # report.py PDF backend; GET /api/family/report/...?format=pdf 500s without it
 python-docx==1.2.0  # report_docx.py — the DEFAULT report format since 2026-09-09 (routes/report.py)
-# `triangle` is NOT installed by default any more (2026-09-29): its licence
-# forbids commercial use without the author's permission, incompatible with
-# shipping this AGPL / commercially-licensed project.  It is an OPTIONAL extra
-# (pip install ".[triangle]" or requirements-triangle.txt).  Without it the
-# 2-D view uses mapbox-earcut and the FEM mesher uses gmsh.
+# `triangle` was removed entirely (2026-09-29): its licence forbids commercial
+# use, which conflicts with the AGPL.  gmsh is the FEM mesher, mapbox-earcut
+# (fallback: shapely's constrained Delaunay) the 2-D view triangulator.
 # The FOURTH unpinned report dependency, found on the server at Stage 7:
 # datasheet.py imports openpyxl, so GET /api/family/datasheet/...?format=xlsx
 # answered 500 "datasheet build failed: No module named 'openpyxl'" on the

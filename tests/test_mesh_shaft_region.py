@@ -32,8 +32,9 @@ Two properties are asserted here, on both live machines:
    a conducting tag — checked against the solver's own σ lookup rather than a
    restatement of it.
 
-The mesh is built through ``geo_mesh_halves`` directly (~0.5 s per machine):
-that is the layer the tags come from, and it needs no gmsh belt.
+The geometry-driven CDT mesher these tests used to build was removed with
+`triangle` (2026-09-29); what remains pins the bore retag rule of the gmsh
+build against the real CAD shaft and the solver's sigma rule.
 """
 from __future__ import annotations
 
@@ -44,10 +45,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytestmark = pytest.mark.requires_triangle
-
 from motor_ai_sim.cadquery_geometry import CadQueryMotor
-from motor_ai_sim.simulation.geo_mesh import geo_mesh_halves
 from motor_ai_sim.simulation.sb_domains import (DOM_AIR, DOM_COIL_BASE,
                                                 DOM_MAG_BASE, DOM_SHAFT)
 
@@ -76,26 +74,14 @@ G40 = _PRESETS["my_40mm_last"]["geometry"]
 
 MACHINES = [("150 mm 24s28p", G150), ("40 mm 12s14p (my_40mm_last)", G40)]
 
-#: The meshed annulus is bounded by two POLYGONS, so it under-reads the CAD
-#: annulus by (2π/n)²/6 per circle.  Measured: 1.38 % (150 mm), 0.19 % (40 mm).
-_AREA_TOL = 0.03
-
 
 def _rotor_half(geo):
-    """(params, CAD polys, rotor-half tri areas mm², centroid radii mm, tags)."""
+    """(params, CAD polys).  The geometry-driven CDT mesher that used to build
+    a rotor half here was removed with `triangle` (2026-09-29); the retag rule
+    below is tested on synthetic meshes against the real CAD shaft."""
     motor = CadQueryMotor()
     motor.set_parameters(dict(geo))
-    p = motor.parameters
-    polys = motor.get_2d_polygons(rotor_angle_deg=0.0)
-    _ms, _ts, _cs, mesh_r, tags_r, _cr = geo_mesh_halves(
-        p, polys, r_si=float(p["stator_inner_radius"]),
-        r_ro=float(p["rotor_outer_radius"]), mesh_edge_mm=4.0, n_slip=1008)
-    P, T = mesh_r.p, mesh_r.t
-    x, y = P[0][T], P[1][T]
-    area = 0.5 * np.abs((x[1] - x[0]) * (y[2] - y[0])
-                        - (x[2] - x[0]) * (y[1] - y[0])) * 1e6      # m² → mm²
-    r = np.hypot(P[0][T].mean(0), P[1][T].mean(0)) * 1e3            # m → mm
-    return p, polys, area, r, np.asarray(tags_r)
+    return motor.parameters, motor.get_2d_polygons(rotor_angle_deg=0.0)
 
 
 @pytest.fixture(scope="module", params=MACHINES, ids=[m[0] for m in MACHINES])
@@ -103,53 +89,8 @@ def machine(request):
     return _rotor_half(request.param[1])
 
 
-def test_the_cad_shaft_is_a_tube_not_a_disc(machine):
-    """Guard on the premise: if the CAD ever built a solid shaft, the two
-    assertions below would pass for the wrong reason."""
-    p, polys, _a, _r, _t = machine
-    r_out = float(p["rotor_inner_radius"])
-    r_in = float(p["shaft_inner_radius"])
-    assert 0.0 < r_in < r_out
-    assert r_out - r_in == pytest.approx(float(p["shaft_height"]), abs=1e-6)
-    ring = math.pi * (r_out ** 2 - r_in ** 2)
-    assert polys["shaft"].area == pytest.approx(ring, rel=2e-3)
-    # ... and it really is an annulus, not a disc with the same area
-    assert len(list(polys["shaft"].interiors)) == 1
 
 
-def test_field_shaft_region_is_the_cad_shaft_polygon(machine):
-    """The conductor the solver assembles == the section the mass model bills."""
-    _p, polys, area, _r, tags = machine
-    meshed = float(area[tags == DOM_SHAFT].sum())
-    cad = float(polys["shaft"].area)
-    assert meshed == pytest.approx(cad, rel=_AREA_TOL), (
-        f"meshed DOM_SHAFT {meshed:.1f} mm² vs CAD shaft {cad:.1f} mm² "
-        f"({meshed / cad:.2f}x) — the field model is not billing the CAD tube")
-
-
-def test_the_shaft_bore_carries_no_conductivity(machine):
-    """Inside the tube there is no metal: DOM_AIR, and DOM_AIR has σ = 0."""
-    p, _polys, area, r, tags = machine
-    r_in = float(p["shaft_inner_radius"])
-    # 0.05 mm clear of the bore circle so a triangle straddling it (its centroid
-    # may fall either side) is not counted against either region.
-    inside = r < r_in - 0.05
-    assert inside.any(), "the bore is not meshed at all — nothing to check"
-    bad = inside & (tags != DOM_AIR)
-    assert not bad.any(), (
-        f"{int(bad.sum())} triangles inside the shaft bore "
-        f"({float(area[bad].sum()):.1f} mm²) carry a non-air tag "
-        f"{sorted(set(tags[bad].tolist()))}")
-    assert _sigma_of_tag(int(DOM_AIR)) == 0.0
-
-
-def test_the_shaft_wall_does_carry_conductivity(machine):
-    """The complement of the test above — the tube itself is still metal, so a
-    'fix' that simply deleted the shaft region would not pass this file."""
-    _p, _polys, area, _r, tags = machine
-    assert (tags == DOM_SHAFT).any()
-    assert _sigma_of_tag(int(DOM_SHAFT)) > 0.0
-    assert float(area[tags == DOM_SHAFT].sum()) > 0.0
 
 
 def _sigma_of_tag(tag: int) -> float:
@@ -177,14 +118,6 @@ class TestBoreIsAirNotAirGap:
     ``mesher._retag_shaft_bore_as_air`` is the correction; these pin it.
     """
 
-    def test_the_geo_mesh_rotor_half_calls_the_bore_air_gap_free(self, machine):
-        """The default (geometry-driven) mesher: no air-GAP inside the bore."""
-        from motor_ai_sim.simulation.sb_domains import DOM_AIRGAP
-        p, _polys, _area, r, tags = machine
-        inside = r < float(p["shaft_inner_radius"]) - 0.05
-        assert inside.any()
-        assert not (tags[inside] == DOM_AIRGAP).any()
-        assert (tags[inside] == DOM_AIR).all()
 
     def test_the_retag_maps_air_gap_to_air_inside_the_bore_only(self, machine):
         """The gmsh fallback's correction, driven by the real CAD shaft.
@@ -196,7 +129,7 @@ class TestBoreIsAirNotAirGap:
         from motor_ai_sim.simulation.mesher import _retag_shaft_bore_as_air
         from motor_ai_sim.simulation.sb_domains import (DOM_AIRGAP, DOM_ROTOR,
                                                         DOM_SHAFT)
-        p, polys, _area, _r, _t = machine
+        p, polys = machine
         r_in = float(p["shaft_inner_radius"])
         r_out = float(p["rotor_inner_radius"])
         # one degenerate-free triangle per sample radius, centroid at that r
@@ -221,7 +154,7 @@ class TestBoreIsAirNotAirGap:
         from skfem import MeshTri
         from motor_ai_sim.simulation.mesher import _retag_shaft_bore_as_air
         from motor_ai_sim.simulation.sb_domains import DOM_MAG_BASE, DOM_SHAFT
-        p, polys, _area, _r, _t = machine
+        p, polys = machine
         rr = 0.5 * float(p["shaft_inner_radius"])
         d = 1e-3 * rr
         P = np.array([[rr - d, -d], [rr + d, -d], [rr, 2 * d],
@@ -237,7 +170,7 @@ class TestBoreIsAirNotAirGap:
         from skfem import MeshTri
         from motor_ai_sim.simulation.mesher import _retag_shaft_bore_as_air
         from motor_ai_sim.simulation.sb_domains import DOM_AIRGAP
-        p, _polys, _area, _r, _t = machine
+        p, _polys = machine
         r_out = float(p["rotor_inner_radius"])
         solid = {"shaft": Point(0.0, 0.0).buffer(r_out, 128)}
         rr = 0.3 * r_out
@@ -262,7 +195,7 @@ class TestBoreIsAirNotAirGap:
         src = inspect.getsource(M)
         assert "_stitch_full_half(\n                polys_r_for_mesh, DOM_AIRGAP," in src
         assert 'polys_r_for_mesh["air_gap"] = polys_r_for_mesh.pop("in_band")' in src
-        p, polys, _area, _r, _t = machine
+        p, polys = machine
         bore_pt = Point(0.5 * float(p["shaft_inner_radius"]), 0.0)
         assert not polys["shaft"].contains(bore_pt)
         for key in ("rotor", "stator"):

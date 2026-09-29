@@ -7,6 +7,22 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Changed
+- **Licensing: pure AGPL-3.0-or-later, contributions under the DCO.** No
+  commercial licensing and no CLA: `CLA.md` and the CLA Assistant workflow are
+  replaced by `DCO.md` (Developer Certificate of Origin 1.1) and a `DCO`
+  pull-request check (`Signed-off-by` on every commit, `git commit -s`).
+- **`triangle` removed.** Shewchuk's Triangle forbids commercial use, which the
+  AGPL does not allow. The geometry-driven CDT mesher built on it is gone; a
+  geo-mesh request is served by the gmsh build (the tensor iron template still
+  runs when `geo_mesh=False`). The shaft conductor skin layer was built only by
+  that mesher and is not produced any more (a warning says so). The earcut
+  fallback triangulates with shapely's constrained Delaunay.
+- **`pypardiso` / Intel MKL optional.** Not a default dependency any more
+  (`requirements-pardiso.txt`, extra `[pardiso]`, or
+  `--build-arg WITH_PARDISO=1`); every solver falls back to SciPy SuperLU.
+  Dependency audit recorded in `THIRD_PARTY_NOTICES.md`.
+
 ### Fixed
 - **PWM settle: the DC offset is solved, not anchored** (docs/NO_FILTERS_2026-09-24.md
   item 5, option (c); `docs/PWM_DC_ORBIT_SOLVE_2026-09-26.md`). The period-mean DC

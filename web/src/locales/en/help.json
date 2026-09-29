@@ -6,8 +6,5 @@
     "theVendorSpiceModelAgainst": "The vendor SPICE model against this part's own datasheet at its test points: the worst switching-energy deviation. Owner 2026-09-27: every motor runs on SPICE uniformly, so the model is used as is — never tuned — and this line says how far it is from the datasheet.",
     "drawnFromTheChosenTopology": "Drawn from the chosen topology and the winding builder's own coils, so it cannot disagree with the numbers. ×N on a switch is the parallel device count.",
     "oneRowPerCoilWhich": "One row per coil: which bridge and which leg drives it. Written as BRIDGE/LEG (e.g. INV1/A, HB3/P). Every coil must be assigned exactly once — the backend refuses anything else by coil number."
-  },
-  "thermal": {
-    "openAddsTwoPathsA": "Open adds two paths a housed machine does not have: end turns in cross flow and the slot channels — both in the same air as the Outer surface above."
   }
 }

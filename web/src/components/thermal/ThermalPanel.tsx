@@ -1185,7 +1185,7 @@ const ThermalPanel: React.FC = () => {
                 <MenuItem key={m} value={m} sx={{ fontSize: 11 }}>{FRAME_LABEL[m]}</MenuItem>
               ))}
             </Select>
-            <HelpTip i18nKey="thermal.openAddsTwoPathsA" />
+            <HelpTip title="Open adds two paths a housed machine does not have: end turns in cross flow and the slot channels — both in the same air as the Outer surface above." />
           </Box>
         </Box>
 

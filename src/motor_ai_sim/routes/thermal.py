@@ -2561,8 +2561,9 @@ def _scaled_copper_map(em: Dict[str, Any], *, t_ref_c: float, t_c: float):
 # is one material.  Thermally it is five different ones, and until this change
 # the thermal solve dropped every one of them: the user was looking at a map
 # with the slot white around the wires and the air gap white around the rotor,
-# and asked for the obvious — *"надо рисовать изоляцию и покрытие провода, а то
-# пустое место, и воздух тоже показывать — он же входит в расчёт"*.
+# and asked for the obvious — *"insulation and the wire coating need to be
+# drawn, otherwise it's an empty space, and air also needs to be shown — it's
+# part of the calculation too"*.
 #
 # So the air is KEPT and NAMED, by geometry (see `_retag_thermal_domains`), in
 # a tag range of its own.  61… is chosen to clear everything the EM palette
@@ -2585,9 +2586,9 @@ DOM_BORE_AIR    = 66      # air inside the bore — DROPPED: it is the coolant s
 DOM_AIR_OTHER   = 67      # air the classifier could not place (should be 0)
 DOM_OUTER_CUT   = 68      # air in the stator's OUTER cuts / vents — DROPPED: it is
                           # open to the outside, i.e. the coolant side of the
-                          # housing boundary condition (user 2026-09-07: "в этих
-                          # вырезах не нужно ничего рисовать, там охлаждающая
-                          # жидкость или воздух")
+                          # housing boundary condition (user 2026-09-07: "there's
+                          # no need to draw anything in these cuts, that's
+                          # cooling fluid or air there")
 
 #: tag -> display name, for BOTH the solver's own bookkeeping and the payload's
 #: ``part_names``.  One table, so a triangle the solve calls "insulation" is the

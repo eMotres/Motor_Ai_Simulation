@@ -24,9 +24,9 @@ of another's business here is the OWNER filter, not the tier.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim import progress as _PROG
@@ -68,7 +68,17 @@ def list_jobs(limit: int = 50, all: bool = False) -> Dict[str, Any]:
     except NotImplementedError:
         raise HTTPException(status_code=503,
                             detail="the configured queue cannot list jobs")
-    out = {"owner": owner, "jobs": [_with_progress(r) for r in recs]}
+    rows = [_with_progress(r) for r in recs]
+    # Jobs that went to the caller's OWN compute nodes (docs/BYO_COMPUTE.md):
+    # same table, ``where`` says which machine.
+    try:
+        from motor_ai_sim import compute_nodes as _CN
+        rows += _CN.list_jobs(None if (all and admin) else owner, limit=limit)
+        rows.sort(key=lambda r: r.get("queued_at") or 0, reverse=True)
+        rows = rows[:max(1, int(limit))]
+    except Exception as exc:                            # noqa: BLE001
+        log.debug("remote jobs not listed: %s", exc)
+    out = {"owner": owner, "jobs": rows}
     snap = getattr(q, "snapshot", None)
     if snap is not None:
         out["queue"] = snap()
@@ -85,6 +95,10 @@ def get_job(run_id: str) -> Dict[str, Any]:
     """
     rec = _JOBS.queue().status(run_id)
     if rec is None:
+        from motor_ai_sim import compute_nodes as _CN
+        rj = _CN.get_job(run_id)
+        if rj is not None:
+            return _CN.public(rj)
         # It may still have a progress entry — a solve that never went through
         # the queue (a nested one, or a route not yet admitted) still reports.
         e = _PROG.registry().entry(run_id)
@@ -96,13 +110,22 @@ def get_job(run_id: str) -> Dict[str, Any]:
 
 
 @router.post("/{run_id}/cancel")
-def cancel_job(run_id: str) -> Dict[str, Any]:
+def cancel_job(run_id: str,
+               authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """Stop this run.  403 unless it is the caller's own, or the caller is admin.
 
     THE one cancel.  Every per-route Stop button ends up here, which is what
     makes "who may stop what" a single rule instead of five.
     """
     try:
+        # A job on the caller's own node: flagged here, the worker sees the
+        # flag on its next progress call (no inbound port to push to).
+        from motor_ai_sim import auth as _AUTH
+        from motor_ai_sim import compute_nodes as _CN
+        who = _AUTH.caller_identity(authorization)
+        remote = _CN.cancel(run_id, who["id"], bool(who["is_admin"]))
+        if remote is not None:
+            return remote
         out = _JOBS.cancel_run(run_id)
     except _JOBS.NotOwner:
         raise HTTPException(status_code=403,

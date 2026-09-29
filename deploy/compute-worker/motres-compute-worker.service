@@ -1,0 +1,21 @@
+[Unit]
+Description=eMotres compute worker (user-owned node, docs/BYO_COMPUTE.md)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=motres-worker
+EnvironmentFile=/etc/motres-compute-worker.env
+WorkingDirectory=/opt/motres-worker
+ExecStart=/opt/motres-worker/venv/bin/python /opt/motres-worker/src/deploy/compute-worker/motres_compute_worker.py
+Restart=always
+RestartSec=10
+Nice=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/motres-worker
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

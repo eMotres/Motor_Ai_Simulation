@@ -37,7 +37,7 @@ const AgentWorkPanel: React.FC = () => {
   const act = async (fn: () => Promise<unknown>) => {
     try { await fn(); await load(); } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
-  const live = jobs.filter((j) => j.state === 'queued' || j.state === 'running' || j.body?.agent);
+  const live = jobs.filter((j) => j.state === 'queued' || j.state === 'running' || j.state === 'leased' || j.body?.agent);
   if (!drafts.length && !live.length) return null;
 
   return (
@@ -86,11 +86,12 @@ const AgentWorkPanel: React.FC = () => {
                 : <Chip size="small" label="you" sx={{ fontSize: 10 }} />}
               <Typography sx={{ fontSize: 12, flex: 1 }}>
                 {j.kind} · {j.state}
+                {j.where && j.where !== 'platform' ? ` · ${j.where}` : ''}
                 {j.state === 'queued' && j.position ? ` · #${j.position} in queue` : ''}
                 {j.state === 'running' && j.progress?.total ? ` · ${j.progress.step}/${j.progress.total}` : ''}
                 {j.error ? ` · ${j.error.slice(0, 80)}` : ''}
               </Typography>
-              {(j.state === 'queued' || j.state === 'running') && (
+              {(j.state === 'queued' || j.state === 'running' || j.state === 'leased') && (
                 <Button size="small" color="error" onClick={() => { void act(() => cancelJob(j.run_id)); }}>Stop</Button>
               )}
             </Box>

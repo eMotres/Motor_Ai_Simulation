@@ -30,6 +30,8 @@ export interface AgentDraft {
 
 export interface JobRow {
   run_id: string; kind: string; state: string; position: number; owner: string;
+  /** "platform" or "node:<id>" (a user-owned compute node, docs/BYO_COMPUTE.md). */
+  where?: string;
   queued_at: number; started_at: number; finished_at: number; error: string;
   elapsed_s: number; body?: { agent?: { client_name?: string }; design_id?: string; what?: string };
   progress?: { step?: number; total?: number; eta_s?: number };

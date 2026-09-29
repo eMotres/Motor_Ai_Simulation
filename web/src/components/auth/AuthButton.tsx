@@ -9,6 +9,8 @@ import AgentKeysDialog from './AgentKeysDialog';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import NotificationsIcon from '@mui/icons-material/NotificationsNone';
 import NotificationsDialog from './NotificationsDialog';
+import ComputeNodesDialog from './ComputeNodesDialog';
+import DnsIcon from '@mui/icons-material/Dns';
 import { NoticeBell, NewsletterLinkHandler } from './NoticeBell';
 
 /** Header login/logout control (self-hosted auth — see contexts/AuthContext). */
@@ -18,6 +20,7 @@ const AuthButton: React.FC = () => {
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
   const [agentsOpen, setAgentsOpen] = React.useState(false);
   const [notifOpen, setNotifOpen] = React.useState(false);
+  const [nodesOpen, setNodesOpen] = React.useState(false);
   const [noticeKey, setNoticeKey] = React.useState(0);
 
   if (!user) {
@@ -66,6 +69,11 @@ const AuthButton: React.FC = () => {
           Access for agents
         </MenuItem>
         <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setNodesOpen(true); }}>
+          <ListItemIcon><DnsIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          My compute nodes
+        </MenuItem>
+        <MenuItem sx={{ fontSize: 12.5 }}
           onClick={() => { setAnchor(null); setNotifOpen(true); }}>
           <ListItemIcon><NotificationsIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           Notifications
@@ -77,6 +85,7 @@ const AuthButton: React.FC = () => {
       <SessionsDialog open={sessionsOpen} onClose={() => setSessionsOpen(false)}
         onSignedOut={() => { void logout(); }} />
       <AgentKeysDialog open={agentsOpen} onClose={() => setAgentsOpen(false)} />
+      <ComputeNodesDialog open={nodesOpen} onClose={() => setNodesOpen(false)} />
     </Box>
   );
 };

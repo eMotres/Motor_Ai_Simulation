@@ -2087,7 +2087,7 @@ def _torque_path(ifaces: Dict[str, Any], torque_nm: float, sol,
     clamped = {lb: v for lb, v in uni.items() if v["friction_capacity_nm"] > 0}
     if not clamped:
         # No FRICTION path.  Two different situations, told apart by µ
-        # (2026-09-09, user: "можно же считать с нулевым трением?"):
+        # (2026-09-09, user: "can we just compute with zero friction?"):
         #   * µ = 0 on every joint that carries pressure — a spoke magnet's
         #     pocket walls are form-locked, the torque crosses them as NORMAL
         #     pressure, and there is simply no slip question to grade.  The
@@ -2174,17 +2174,17 @@ def solve_rotor_stress(polys: dict,
     ``contacts`` is a ``{label: ContactSpec}`` map; ``None`` means the defaults.
 
     ``case_mode`` (2026-09-06) picks how many of them are actually solved.  User:
-    "давай будем рассчитывать только на 23 000 оборотов — всё, что ниже, всяко
-    выдержит, и проще будет считать только одну величину".  ``"single"`` solves
+    "let's only calculate at 23 000 rpm — anything lower will hold up fine
+    anyway, and it'll be simpler to compute only one value".  ``"single"`` solves
     ONE case, at ``rpm``, named by its speed ("23,000 rpm"); ``"three"`` is the
     original standstill / rated / overspeed and stays the default so every
     existing caller keeps its answer.  The response shape does not change — the
     ``cases`` dict simply has one entry — so the maps, the safety factors and the
     persisted last result read a single-speed answer without knowing about it.
 
-    ``loads`` (2026-09-07) picks WHICH forces act.  User: "добавь ещё и момент на
-    ротор, пусть действуют все силы; сделай меню, чтобы можно было выбрать
-    центробежную, момент и обе."
+    ``loads`` (2026-09-07) picks WHICH forces act.  User: "also add torque on
+    the rotor, let all the forces act; make a menu so centrifugal, torque,
+    and both can be selected."
 
       * ``centrifugal`` — rho*omega^2*r only, the model as it was.  The rotor
         floats: only the rigid-body modes are removed, no node is held.
@@ -2206,8 +2206,8 @@ def solve_rotor_stress(polys: dict,
     is no centrifugal clamp yet to press the poles into the sleeve.
 
     ``rotor_temp_c`` / ``sleeve_temp_c`` (2026-09-07) are the ROTOR TEMPERATURE.
-    User: "нужно универсально добавить температуру ротора, чтобы можно было
-    задавать; для моторов без бандажа этот эффект вообще минимальный".  The
+    User: "we need to add rotor temperature universally, so it can be set;
+    for motors without a band this effect is minimal anyway".  The
     first covers the rotor core, the magnets and the shaft, the second the
     sleeve — they are given separately because on a real machine they are not
     the same number: the iron carries the loss, the carbon band is on the
@@ -2215,9 +2215,9 @@ def solve_rotor_stress(polys: dict,
     is the state the geometry as drawn is stress-free in, so a request that
     says nothing about temperature solves exactly the machine it always did.
 
-    HOW THE TEMPERATURES ACT — ``thermal_model`` (2026-09-09).  User: "нам нужно
-    учитывать температуру только как изменение давления на бандаж, если он
-    есть".  Under the default ``"band_fit"`` the rotor's temperature is NOT a
+    HOW THE TEMPERATURES ACT — ``thermal_model`` (2026-09-09).  User: "we only
+    need to account for temperature as a change in pressure on the band, if
+    there is one".  Under the default ``"band_fit"`` the rotor's temperature is NOT a
     load on its parts: the per-part free strains (``thermal_eigenstrain``) are
     used for one thing only — how much what sits under the band would grow on
     its own against how much the band's own bore grows — and that difference is
@@ -2237,8 +2237,8 @@ def solve_rotor_stress(polys: dict,
 
     ``part_temps_c`` (2026-09-08) gives EACH solid its own temperature, keyed by
     ``PART_TEMP_KEY`` — ``rotor_core``, ``magnet``, ``shaft``, ``sleeve``, the
-    same vocabulary the material assignment uses.  User: "в механический расчёт
-    тоже нужно делать каплинг, чтобы температуры везде были одинаковы" — the
+    same vocabulary the material assignment uses.  User: "the mechanical
+    calculation also needs the coupling, so the temperatures are the same everywhere" — the
     Thermal solve already produces a temperature per part, and typing two of
     them back in by hand is how the two solvers drift apart.  A key that is
     absent keeps the OLD rule exactly (``rotor_temp_c`` for core / magnet /
@@ -2254,8 +2254,8 @@ def solve_rotor_stress(polys: dict,
     show that at all.
 
     ``symmetry`` (2026-09-09) picks the MODEL, not a view of it.  User:
-    *"нагрузка на все зубы должна быть одинакова … так используй периодичность,
-    как я во Fusion"*.
+    *"the load on all teeth should be the same ... so use periodicity, like I
+    do in Fusion"*.
 
       * ``"full"``   — the whole 360° cross-section, exactly as before.  Every
         number, every cache key and every array is what it was; this is the

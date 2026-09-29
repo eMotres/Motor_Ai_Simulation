@@ -4637,8 +4637,8 @@ def get_fem_transient(
     # it unchanged, so the two travel together wherever the question is "is
     # this a chopped bridge".
     _pwm_like = ("pwm_voltage", "inverter")
-    # ── THE PWM DRIVE IS THE CONTROLLER'S (owner 2026-09-24: «Это значение
-    # нужно задавать в контроллере; PWM нужно выкинуть из Electromagnetic») ──
+    # ── THE PWM DRIVE IS THE CONTROLLER'S (owner 2026-09-24: "This value
+    # needs to be set in the controller; PWM needs to be dropped from Electromagnetic") ──
     # The Simulation tab no longer holds a carrier or a DC link, so a
     # ``pwm_voltage`` request (a stored PWM run re-run from that tab) arrives
     # WITHOUT them and they are taken from the Controller here — the saved
@@ -5190,9 +5190,8 @@ def get_fem_transient(
     # ── RESULTS LEDGER — "this exact run already exists on disk" ─────────────
     # User, 2026-09-05: he set 667.4 A peak in the morning, ran, changed the
     # current, ran, came back to 667.4 A with nothing else touched — and had to
-    # re-solve a run whose answer was already stored.  «Не надо Recent runs —
-    # нужно просто сканировать результаты: не совпадают ли они с уже
-    # проведёнными».
+    # re-solve a run whose answer was already stored.  "We don't need Recent
+    # runs — we just need to scan the results: whether they match ones already done."
     #
     # This is NOT the in-memory memo coming back (`_memo_allowed` — a Run still
     # never reads that).  The difference is what makes it honest:
@@ -5383,8 +5382,8 @@ def get_fem_transient(
             # the Mesh tab); 1/4 1/2 solve the sector (1/4 is the UI default).
             # THE CURRENT SETPOINT IS THE TERMINAL (line) CURRENT — the three
             # leads between the machine and the inverter, in both connections
-            # (user 2026-09-12: "эти параметры задаются для 3 проводов, которые
-            # идут с мотора на инвертор").  The solver drives the WINDING, and
+            # (user 2026-09-12: "these parameters are set for the 3 wires
+            # that go from the motor to the inverter").  The solver drives the WINDING, and
             # in delta a winding carries the line current over sqrt(3): that
             # division happens HERE, once, so the field sees the ampere-turns
             # the inverter actually produces.  Star: winding = line, no-op.

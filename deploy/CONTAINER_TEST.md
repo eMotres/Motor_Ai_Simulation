@@ -14,7 +14,7 @@ Run it **before inviting anyone**, and read it as one question:
 > render, and does the physics still produce the same numbers?
 
 Windows cannot answer either half. `mapbox_earcut` and `OCP` are blocked by App
-Control there, so the `triangle` fallback and the DXF+macro FreeCAD bundle are
+Control there, so the earcut fallback and the DXF+macro FreeCAD bundle are
 the *only* paths the workstation has ever exercised; on Linux the native ones
 load and become live code for the first time. And no Cyrillic has ever been
 rendered through the base-14 font path.
@@ -34,13 +34,10 @@ The second reuses every layer of the first and adds `pytest`, `httpx` and
 `tests/`. Expect ~5 min cold (gmsh + OCP + MKL are ~1.5 GB of wheels) and
 seconds warm.
 
-Sanity-check the three new pins landed:
+Sanity-check the report pins landed:
 
 ```bash
-docker run --rm motres-api python -c \
- "import reportlab, docx, triangle, matplotlib; \
-  print(reportlab.Version, docx.__version__ if hasattr(docx,'__version__') else 'ok', \
-        triangle.__version__ if hasattr(triangle,'__version__') else 'ok')"
+docker run --rm motres-api python -c  "import reportlab, docx, matplotlib; print(reportlab.Version)"
 ```
 
 And that the native paths Windows has never used now import:
@@ -131,7 +128,7 @@ Both files must build. Then check the thing the byte count cannot:
 
 | symptom | read it as |
 |---|---|
-| `ImportError: reportlab` / `docx` / `triangle` | the image was built from something other than this `requirements.txt` |
+| `ImportError: reportlab` / `docx` | the image was built from something other than this `requirements.txt` |
 | report builds, Cyrillic is boxes | neither DejaVu path resolved — check `matplotlib.get_data_path()` and that `fonts-dejavu-core` installed |
 | physics regression drifts | MKL/PARDISO on Linux vs Windows. Compare against `tests/physics_baseline.json` tolerances before assuming a port bug; record the deltas either way |
 | `startup_checks` refuses to boot | two dies differ only by case. **Correct behaviour** — fix the catalog, do not disable the check (`python scripts/check_case_collisions.py --tree /srv/motres`) |

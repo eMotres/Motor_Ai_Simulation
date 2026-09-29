@@ -24,8 +24,8 @@ All three are Linux-port failures that Windows hides (migration plan §3):
    customers, so with ``WORKSPACES_ROOT`` set this **warns, loudly, every
    boot**, and the warning names the backup consequence.
 
-3. **A missing report dependency.**  ``reportlab``, ``python-docx`` and
-   ``triangle`` were installed on the workstation and pinned nowhere until
+3. **A missing report dependency.**  ``reportlab`` and ``python-docx``
+   were installed on the workstation and pinned nowhere until
    Stage 6, so the first server image built an API whose *default* report
    format 500s on the first customer click.  They are in ``requirements.txt``
    now; this check is what makes the next such gap a log line at boot instead
@@ -210,9 +210,6 @@ REPORT_DEPS = (
      "GET /api/family/report/...?format=pdf returns 500"),
     ("docx", "python-docx",
      "the DEFAULT report format (.docx) returns 500"),
-    ("triangle", "triangle",
-     "the earcut triangulation fallback raises ImportError instead of "
-     "falling back (only reached if mapbox_earcut fails to load)"),
 )
 
 

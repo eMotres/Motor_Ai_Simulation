@@ -52,7 +52,11 @@ Magnetostatics from Maxwell's equations, in terms of the magnetic vector potenti
 
 ## License
 
-MIT License
+Copyright (C) MOTRES d.o.o. and contributors. Free software, licensed under
+the [GNU Affero General Public License v3.0 or later](LICENSE)
+(`SPDX-License-Identifier: AGPL-3.0-or-later`). Contributions are accepted
+under the [Developer Certificate of Origin](DCO.md) (`git commit -s`); see
+[CONTRIBUTING.md](CONTRIBUTING.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## References
 

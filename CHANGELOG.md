@@ -7,6 +7,23 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Changed
+- **Licensing: pure AGPL-3.0-or-later, contributions under the DCO.** No
+  commercial licensing and no CLA: `CLA.md` and the CLA Assistant workflow are
+  replaced by `DCO.md` (Developer Certificate of Origin 1.1) and a `DCO`
+  pull-request check (`Signed-off-by` on every commit, `git commit -s`).
+- **`triangle` optional.** Shewchuk's Triangle forbids commercial use, so it
+  is no longer a default dependency and not part of the AGPL distribution
+  (`requirements-triangle.txt`, extra `[triangle]`, Docker
+  `--build-arg WITH_TRIANGLE=1`). Installed, the geometry-driven mesher works
+  and stays the default exactly as before; absent, the mesher uses gmsh (one
+  log line) and the earcut fallback uses shapely. Staged transition to gmsh:
+  `docs/MESHER_TRANSITION.md`.
+- **`pypardiso` / Intel MKL optional.** Not a default dependency any more
+  (`requirements-pardiso.txt`, extra `[pardiso]`, or
+  `--build-arg WITH_PARDISO=1`); every solver falls back to SciPy SuperLU.
+  Dependency audit recorded in `THIRD_PARTY_NOTICES.md`.
+
 ### Fixed
 - **PWM settle: the DC offset is solved, not anchored** (docs/NO_FILTERS_2026-09-24.md
   item 5, option (c); `docs/PWM_DC_ORBIT_SOLVE_2026-09-26.md`). The period-mean DC

@@ -1256,6 +1256,14 @@ def _kill_live_evals(owner: str) -> int:
     with _live_eval_lock:
         victims = [(pid, p) for pid, (p, o) in _LIVE_EVAL_PROCS.items() if o == want]
     n = 0
+    try:
+        # Solve pool: the evals still WAITING for a slot are withdrawn too, and
+        # the running ones lose their whole process tree (not only the pid).
+        from motor_ai_sim import solve_pool as _SP
+        if _SP.enabled():
+            _SP.cancel_tag(want)
+    except Exception:   # noqa: BLE001
+        pass
     for pid, p in victims:
         try:
             if p.poll() is None:
@@ -1422,27 +1430,59 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
             _env_eval["SB_SEED_ACROSS_STEPS"] = "1"
         else:
             _env_eval.pop("SB_SEED_ACROSS_STEPS", None)
-        _p = subprocess.Popen(
-            [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, env=_env_eval)
-        with _live_eval_lock:
-            _LIVE_EVAL_PROCS[_p.pid] = (_p, _eval_owner(owner))
-        try:
-            try:
-                _out, _err = _p.communicate(input=spec, timeout=_cap)
-            except subprocess.TimeoutExpired:
-                _p.kill()
-                _p.communicate()
-                raise
-        finally:
+        from motor_ai_sim import solve_pool as _SP
+        if _SP.enabled():
+            # THE SOLVE POOL (SOLVE_POOL=1): the same refine_proc command, but
+            # the slot, the thread width and the priority come from the
+            # machine-wide pool — fair across users and jobs, children at low
+            # OS priority, the tree killed on Stop.  The process is still
+            # registered here so _kill_live_evals keeps working unchanged; a
+            # Stop while the eval WAITS for a slot cancels it by the same tag.
+            # The hang cap counts from the start of the process, not the wait.
+            _tag = _eval_owner(owner)
+
+            def _reg(_pp, _tag=_tag):
+                with _live_eval_lock:
+                    _LIVE_EVAL_PROCS[_pp.pid] = (_pp, _tag)
+
+            def _unreg(_pp):
+                with _live_eval_lock:
+                    _LIVE_EVAL_PROCS.pop(_pp.pid, None)
+
+            _rid_eval = _JOBS.current_run_id() or ""
+            _cr = _SP.run_command(
+                [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
+                input_text=spec, env=_env_eval, timeout=_cap, threads=threads,
+                tag=_tag, label="refine_proc", on_spawn=_reg, on_exit=_unreg,
+                cancel_check=(lambda: bool(_rid_eval)
+                              and _JOBS.is_cancelled(_rid_eval)))
+            proc = _NS(stdout=_cr.stdout, stderr=_cr.stderr,
+                       returncode=_cr.returncode)
+            if _cr.wall_s > 0:
+                _record_eval_seconds(_cr.wall_s, seeded=_seeded)
+        else:
+            _p = subprocess.Popen(
+                [sys.executable, "-m", "motor_ai_sim.optimization.refine_proc"],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, env=_env_eval)
             with _live_eval_lock:
-                _LIVE_EVAL_PROCS.pop(_p.pid, None)
-        proc = _NS(stdout=_out, stderr=_err, returncode=_p.returncode)
-        # `_seeded` is what the cache said BEFORE this eval started, which is
-        # what the eval then found — the two cannot disagree by more than a
-        # concurrent publish, and a mis-filed sample is one sample in a median.
-        _record_eval_seconds(_t_eval.monotonic() - _t0_eval, seeded=_seeded)
+                _LIVE_EVAL_PROCS[_p.pid] = (_p, _eval_owner(owner))
+            try:
+                try:
+                    _out, _err = _p.communicate(input=spec, timeout=_cap)
+                except subprocess.TimeoutExpired:
+                    _p.kill()
+                    _p.communicate()
+                    raise
+            finally:
+                with _live_eval_lock:
+                    _LIVE_EVAL_PROCS.pop(_p.pid, None)
+            proc = _NS(stdout=_out, stderr=_err, returncode=_p.returncode)
+            # `_seeded` is what the cache said BEFORE this eval started, which
+            # is what the eval then found — the two cannot disagree by more
+            # than a concurrent publish, and a mis-filed sample is one sample
+            # in a median.
+            _record_eval_seconds(_t_eval.monotonic() - _t0_eval, seeded=_seeded)
         out = proc.stdout or ""
         m = out.rfind("@@RESULT@@")
         if m >= 0:

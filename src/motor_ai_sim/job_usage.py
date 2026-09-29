@@ -14,6 +14,8 @@ delta and gives it to the jobs running in that interval:
 * one job running -> it gets the whole delta (``cpu_method = "exclusive"``);
 * several -> the delta is split in proportion to each job thread's own CPU
   time in the interval (equal split if all are ~0) (``"apportioned"``).
+  A solve-pool child (``solve_pool``, ``SOLVE_POOL=1``) counts towards the job
+  it solves for; a child of an un-metered job goes straight to its account.
 
 Peak RSS is the tree's peak resident memory seen while the job ran (shared by
 concurrent jobs -- it is the machine's footprint, not a private one).
@@ -170,19 +172,89 @@ class Meter:
                 "wall_s": round(time.time() - self.t0, 1)}
 
 
+# ── solve-pool children (motor_ai_sim.solve_pool) ────────────────────────────
+# A pooled solve runs in a CHILD process while the job's own thread only waits,
+# so the job thread's CPU time no longer says whose work the tree's CPU was.
+# The pool registers every child with the run and the account it solves for
+# and reports its CPU-seconds as it samples them; a full tick then weights each
+# job by its thread time PLUS its children's, and a child whose run has no
+# meter (a campaign admitted with ``jobs.admit``) is credited to its account
+# directly.  pid -> {run_id, user, client, cpu, credited, done}
+_CHILDREN: Dict[int, Dict[str, Any]] = {}
+
+
+def child_started(pid: int, run_id: str, user: str, client: str = "web",
+                  sampler: bool = True) -> None:
+    with _LOCK:
+        _CHILDREN[int(pid)] = {"run_id": str(run_id or ""), "user": str(user or ""),
+                               "client": str(client or "web"), "cpu": 0.0,
+                               "credited": 0.0, "done": False}
+    if sampler:
+        _ensure_sampler()
+
+
+def child_cpu(pid: int, cpu_s: float) -> None:
+    with _LOCK:
+        c = _CHILDREN.get(int(pid))
+        if c is not None:
+            c["cpu"] = max(c["cpu"], float(cpu_s or 0.0))
+
+
+def child_finished(pid: int, cpu_s: Optional[float] = None) -> None:
+    """The child exited; its last CPU reading is credited at the next tick."""
+    with _LOCK:
+        c = _CHILDREN.get(int(pid))
+        if c is not None:
+            if cpu_s is not None:
+                c["cpu"] = max(c["cpu"], float(cpu_s))
+            c["done"] = True
+
+
+def _children_split(delta: float, minute: int) -> tuple:
+    """(cpu per metered run id, CPU credited directly to un-metered owners)."""
+    by_run: Dict[str, float] = {}
+    orphan = 0.0
+    for pid, c in list(_CHILDREN.items()):
+        d = max(0.0, c["cpu"] - c["credited"])
+        if c["done"]:
+            _CHILDREN.pop(pid, None)
+        rid = c["run_id"]
+        if rid and rid in _ACTIVE:
+            c["credited"] = c["cpu"]
+            if d > 0.0:
+                by_run[rid] = by_run.get(rid, 0.0) + d
+            continue
+        # Never credit more than the tree actually measured in this interval;
+        # what does not fit yet (the pool sampled the child after the tree
+        # did) is carried to the next tick while the child lives.
+        got = min(d, max(0.0, delta - orphan))
+        c["credited"] += got
+        if got > 0.0:
+            orphan += got
+            key = (minute, node_name(), c["user"], c["client"])
+            _USER_ACC[key] = _USER_ACC.get(key, 0.0) + got
+    return by_run, orphan
+
+
 def _tick(fast: bool = False, own: Optional["Meter"] = None) -> None:
     """Hand the tree's CPU delta since the last tick to the active jobs.
 
-    The sampler does full ticks (descendants, RSS, per-thread weights).  A job
-    start/finish does a FAST tick on the job's own thread: process CPU only,
-    its own thread time from ``time.thread_time``; the other jobs' weights
-    fall back to an equal split of that (at most ``SAMPLE_S``-long) slice."""
+    The sampler does full ticks (descendants, RSS, per-thread weights, and the
+    solve-pool children's own CPU, see ``_CHILDREN``).  A job start/finish
+    does a FAST tick on the job's own thread: process CPU only, its own thread
+    time from ``time.thread_time``; the other jobs' weights fall back to an
+    equal split of that (at most ``SAMPLE_S``-long) slice."""
     global _LAST_TREE
     with _LOCK:
         now_tree = tree_cpu_s(fast=fast)
         rss = _own_rss() if fast else tree_rss()
         delta = 0.0 if _LAST_TREE is None else max(0.0, now_tree - _LAST_TREE)
         _LAST_TREE = now_tree
+        minute = int(time.time() // 60) * 60
+        child_by_run: Dict[str, float] = {}
+        if not fast and _CHILDREN:
+            child_by_run, orphan = _children_split(delta, minute)
+            delta = max(0.0, delta - orphan)
         ms = list(_ACTIVE.values())
         if not ms:
             return
@@ -198,13 +270,13 @@ def _tick(fast: bool = False, own: Optional["Meter"] = None) -> None:
                 m.peak_rss = max(m.peak_rss, rss)
                 continue
             tc = _thread_cpu(m.native_id)
-            weights.append(max(0.0, tc - m.thread_cpu_last))
+            weights.append(max(0.0, tc - m.thread_cpu_last)
+                           + child_by_run.get(m.run_id, 0.0))
             m.thread_cpu_last = tc
             m.peak_rss = max(m.peak_rss, rss)
         tot = sum(weights)
         if fast and len(ms) > 1:
             tot = 0.0                                   # unknown weights -> equal
-        minute = int(time.time() // 60) * 60
         for m, w in zip(ms, weights):
             share = (w / tot) if tot > 1e-6 else 1.0 / len(ms)
             got = delta * share
@@ -388,6 +460,7 @@ def reset() -> None:
         _ACTIVE.clear()
         _LAST_TREE = None
         _USER_ACC.clear()
+        _CHILDREN.clear()
 
 
 # ── store ────────────────────────────────────────────────────────────────────

@@ -3459,6 +3459,52 @@ import threading as _threading
 _fem_transient_lock = _threading.Lock()
 
 
+class _KeyedTransientLock:
+    """One lock per (workspace, request key) — weak-referenceable holder."""
+
+    __slots__ = ("lock", "__weakref__")
+
+    def __init__(self) -> None:
+        self.lock = _threading.Lock()
+
+    def acquire(self) -> bool:
+        return self.lock.acquire()
+
+    def release(self) -> None:
+        self.lock.release()
+
+
+import weakref as _weakref
+_fem_transient_keyed = _weakref.WeakValueDictionary()
+_fem_transient_keyed_guard = _threading.Lock()
+
+
+def _transient_lock_for(sb_key):
+    """The lock a transient solve holds.
+
+    In-process (the default) it is the ONE process-wide lock above: every
+    sliding-band solve is serialised, as it always was.  With the solve pool
+    on (``SOLVE_POOL=1``) the solve itself runs in a pool worker that the pool
+    bounds and schedules, so only IDENTICAL requests (same workspace, same
+    key) still wait for each other — the twin still wakes into the cache —
+    and different users' or different machines' runs proceed side by side.
+    """
+    from motor_ai_sim import solve_pool as _SP
+    if not _SP.enabled():
+        return _fem_transient_lock
+    try:
+        k = (_WSP.workspace().id, sb_key)
+        hash(k)
+    except Exception:                                   # noqa: BLE001
+        return _fem_transient_lock
+    with _fem_transient_keyed_guard:
+        lk = _fem_transient_keyed.get(k)
+        if lk is None:
+            lk = _KeyedTransientLock()
+            _fem_transient_keyed[k] = lk
+        return lk
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  GENERATOR → BATTERY: the DC side of the same bridge
 # ═════════════════════════════════════════════════════════════════════════════
@@ -5300,7 +5346,8 @@ def get_fem_transient(
     # (the "Solving frame 0 / N" flash mid-run).  Acquire BEFORE touching
     # progress; a twin waiting on the lock wakes straight into the
     # freshly-populated cache instead of re-solving.
-    _fem_transient_lock.acquire()
+    _tlock = _transient_lock_for(_sb_key)
+    _tlock.acquire()
     try:
         # Re-check under the lock: a twin that finished while we waited has
         # already populated the cache → return its result, don't re-solve.
@@ -5317,7 +5364,10 @@ def get_fem_transient(
         # (×N), verified within 0.7 % of the literal full disk.  The remesh-
         # per-frame quasi-static alternative that used to sit beside this is
         # gone: ~10× slower AND it solved on the legacy static P1 solver.
-        from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
+        # The canonical solve, through the solve pool when SOLVE_POOL=1 (a
+        # worker process; progress and cancel replay here) and in-process,
+        # unchanged, otherwise — see motor_ai_sim.solve_pool.
+        from motor_ai_sim.solve_pool import em_transient_eval
         import time as _t
         # Per-frame progress so the web UI's "Solving frame X of N" + ETA
         # advance during a sliding-band run.  The remesh path used to drive
@@ -5903,7 +5953,7 @@ def get_fem_transient(
         # frame (see the phase note above).  Unconditional: an exception on any
         # path must not leave the progress endpoint reporting a live solve.
         _fem_transient_progress["current"]["running"] = False
-        _fem_transient_lock.release()
+        _tlock.release()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

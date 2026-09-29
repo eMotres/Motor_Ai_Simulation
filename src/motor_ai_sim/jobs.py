@@ -252,7 +252,13 @@ def _int_env(name: str, default: int) -> int:
 
 
 def default_workers() -> int:
-    """``QUEUE_WORKERS``, else ``max(1, cores // 4)``.  Read per call."""
+    """``QUEUE_WORKERS``, else ``max(1, cores // 4)``.  Read per call.
+
+    With the solve pool on (``SOLVE_POOL=1``) the solves of admitted jobs run
+    in pool processes that the pool itself bounds (``QUEUE_PROCS``), so the
+    unset default follows the pool: as many jobs as there are process slots.
+    An explicit ``QUEUE_WORKERS`` still wins.
+    """
     n = _int_env(ENV_WORKERS, 0)
     if n > 0:
         return n
@@ -260,6 +266,12 @@ def default_workers() -> int:
         cores = os.cpu_count() or 4
     except Exception:                                   # noqa: BLE001
         cores = 4
+    try:
+        from motor_ai_sim import solve_pool as _SP
+        if _SP.enabled():
+            return max(1, cores // 4, _SP.default_procs())
+    except Exception:                                   # noqa: BLE001
+        pass
     return max(1, cores // 4)
 
 

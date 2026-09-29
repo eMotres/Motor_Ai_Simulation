@@ -1577,7 +1577,7 @@ SPIN_LOAD_STEPS = 6
 #: not the 30-iteration cap.  The cap multiplied out — 30 per case plus 30 per
 #: possible lift-off solve — opened the bar on 212 steps for a rotor that
 #: converged in 20 and quoted an ETA ten times too long (user 2026-09-07:
-#: "зачем столько шагов?").  A solve that needs more than the estimate GROWS
+#: "why so many steps?").  A solve that needs more than the estimate GROWS
 #: the bar (StepLedger.grow); one that needs fewer hands the rest back.
 _LEARNED_CONTACT_ITER = {"iters": 8}
 
@@ -1889,8 +1889,8 @@ def _retention(cs, sol, forces: Dict[str, Any], present: Dict[str, np.ndarray],
 
     ``seated`` (2026-09-09) is the contact solve's seating record.  A magnet that
     came loose and TRAVELLED onto its lip is retained by that lip, and the
-    verdict has to say so with the distance: "магнит должен сесть на язычок, как
-    в Fusion" — the number the user compares with Fusion's 0.078 mm is the
+    verdict has to say so with the distance: "the magnet should seat on the
+    tongue, like in Fusion" — the number the user compares with Fusion's 0.078 mm is the
     travel, and burying it in a nested contact block would leave the headline
     reading like an ordinary clamp.
     """

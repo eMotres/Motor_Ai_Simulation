@@ -1440,10 +1440,11 @@ def _strip_heavy(res: Dict[str, Any]) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # The cycle-averaged loss map: TAKEN, never computed
 # ---------------------------------------------------------------------------
-# User, 2026-09-07: *"а зачем считается каждый шаг? нам нужны средние потери
-# мотора за весь цикл"*, and the same day: *"нужно как-то разделить тепловые
-# расчёты и электромагнитные; если вдруг тепловому расчёту нужно
-# электромагнитное моделирование, пусть оно делается во вкладке Simulation"*.
+# User, 2026-09-07: *"why is every step being computed? we need the motor's
+# average losses over the whole cycle"*, and the same day: *"we need to
+# somehow separate the thermal calculations from the electromagnetic ones;
+# if the thermal calculation ever needs an electromagnetic simulation, let
+# it be done in the Simulation tab"*.
 #
 # The thermal solve does not want a movie, it wants ONE number per element: the
 # cycle-averaged loss density.  It used to buy that number with its OWN 36-frame
@@ -1589,8 +1590,8 @@ def _loss_snapshot_probe(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
 #: demag run is the same losses with a more honest magnet.  Keying on those
 #: (the first cut of this mechanism did) meant a Thermal solve never matched a
 #: Simulation run, because the user runs Simulation with demag and one gap
-#: layer while this route solves with neither ("опять расчёт на каждого
-#: фрейма", 2026-09-07).
+#: layer while this route solves with neither ("computing per frame again",
+#: 2026-09-07).
 #:
 #: ``magnet_temp_c`` (2026-09-08) joins them because it is the one field of the
 #: three temperatures a run carries that changes the MAP rather than how it was

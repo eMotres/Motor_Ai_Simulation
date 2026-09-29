@@ -5785,9 +5785,8 @@ def get_fem_transient(
             # the next run evicts them, so a report of a configuration with
             # several duties could draw one duty's |B| and loss maps and had to
             # say so in the caption.  The user asked for all of the solved
-            # fields to be kept — *"давай сделаем сохранение всех полей
-            # моделирования, как электромагнитных, так и тепловых и
-            # механических"* — so this run's mesh, |B|, loss density and demag
+            # fields to be kept — *"let's save all the simulation fields —
+            # electromagnetic, thermal, and mechanical alike"* — so this run's mesh, |B|, loss density and demag
             # coefficient are filed under the duty the catalog context names
             # (~0.31 MB compressed on the 200 mm machine).  Only here: this is
             # the one place a live-machine run's field is persisted at all, and
@@ -5800,8 +5799,8 @@ def get_fem_transient(
                     computed_at=_sbres.get("computed_at"))
             except Exception:      # noqa: BLE001 — never fails a run
                 log.debug("transient: per-duty field not stored", exc_info=True)
-        # Bench Ld/Lq ride with every live-machine run (user: "во время
-        # расчёта посчитай индуктивность" — no separate button).  Once per
+        # Bench Ld/Lq ride with every live-machine run (user: "compute the
+        # inductance during the calculation" — no separate button).  Once per
         # machine+connection: a cache hit costs a file read, a miss costs
         # ~45 s of three quick solves appended to this run.  Candidate evals
         # skip it — an optimizer must not pay 45 s per candidate.
@@ -6914,8 +6913,8 @@ def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
                       mass_components: Optional[list] = None) -> dict:
     """The MECHANICAL half of this run's loss picture, or ``{}``.
 
-    User, 2026-09-08: *"все потери должны передаваться в электромагнитный
-    расчёт"*.  Until today the bearing friction and the rotor windage were
+    User, 2026-09-08: *"all losses should be passed into the electromagnetic
+    calculation"*.  Until today the bearing friction and the rotor windage were
     computed in the BROWSER, from ``/api/bearings/losses``, and pasted into four
     cells of the summary table; the run that was stored — the thing the
     datasheet, the report, Compare and the coupled loop read — carried none of

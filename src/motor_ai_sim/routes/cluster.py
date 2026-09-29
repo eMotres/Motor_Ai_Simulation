@@ -72,6 +72,44 @@ def node_history(nid: str, range: str = "24h", _admin: dict = Depends(require_ad
             "points": CM.history(nid, range)}
 
 
+_LOAD_RANGES = {"15m", "1h", "24h", "7d"}
+_LOAD_CACHE: Dict[str, Any] = {"key": None, "ts": 0.0, "data": None}
+_LOAD_CACHE_TTL_S = 5.0
+
+
+@router.get("/load/live")
+def load_live(range: str = "1h", top: int = 8, _admin: dict = Depends(require_admin)):
+    """Admin -> Overview live load: per-node series + per-user stacked CPU +
+    a running/queued snapshot. Cached for a few seconds so the auto-refreshing
+    panel does not hammer the store on every tab."""
+    import time as _t
+    rng = range if range in _LOAD_RANGES else "1h"
+    cache_key = f"{rng}:{top}"
+    now = _t.time()
+    cached = _LOAD_CACHE
+    if cached["key"] == cache_key and now - cached["ts"] < _LOAD_CACHE_TTL_S:
+        return cached["data"]
+
+    from motor_ai_sim import job_usage as U
+    lookback = CM.RANGE_LOOKBACK_S.get(rng, 3600)
+    node_rng = "7d" if rng == "7d" else ("24h" if rng == "24h" else rng)
+    nodes = CM.list_nodes()
+    node_series = {n["id"]: CM.history(n["id"], node_rng) for n in nodes["nodes"]
+                  if n["status"] != "revoked"}
+    user_load = U.user_load_series(now - lookback, now, top_n=top)
+    try:
+        snapshot = CM.jobs_view()
+        for row in snapshot.get("items") or []:
+            row.setdefault("node", U.node_name())
+    except Exception as e:                                # noqa: BLE001
+        snapshot = {"error": CM.redact(str(e))[:200], "items": []}
+
+    data = {"range": rng, "nodes": node_series, "cluster": nodes["cluster"],
+            "user_load": user_load, "snapshot": snapshot}
+    _LOAD_CACHE.update(key=cache_key, ts=now, data=data)
+    return data
+
+
 @router.get("/cluster/app")
 def app_view(_admin: dict = Depends(require_admin)) -> Dict[str, Any]:
     out = CM.app_metrics()

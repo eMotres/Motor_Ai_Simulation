@@ -4,6 +4,7 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Typography, CircularProgress } from '@mui/material';
 import HelpTip from '../../common/HelpTip';
+import LiveLoadPanel from '../LiveLoadPanel';
 import type { AdminSectionId } from '../AdminNav';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -110,6 +111,7 @@ const OverviewSection: React.FC<{ onGoto: (s: AdminSectionId) => void }> = ({ on
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
         {kpis.map((k) => <Tile key={k.label} k={k} onGoto={onGoto} />)}
       </Box>
+      <LiveLoadPanel />
     </Box>
   );
 };

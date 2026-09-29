@@ -284,12 +284,26 @@ def _check_name(name: str, what: str) -> str:
 # With ``WORKSPACES_ROOT`` unset there is exactly one layer and every function
 # below is the expression it replaced, character for character.
 
+def _segment_or_422(name: str, what: str) -> str:
+    """Defence in depth under ``_check_name``: whatever reached a path builder
+    must be ONE safe segment (no separators, no '..', no drive letter) —
+    audit 2026-09-29 #7.  Raised as 422 like every other bad name."""
+    from motor_ai_sim.safe_paths import PathRejected, check_segment
+    try:
+        return check_segment(str(name), what)
+    except PathRejected as exc:
+        raise HTTPException(422, detail=str(exc))
+
+
 def _die_dir(die: str) -> Path:
     """Where the named die is READ from.
 
     Falls back to the workspace path when no layer has it, so a 404 still names
     the folder the user would have created — the pre-Stage-2 answer exactly.
+    The fallback is contained: a symlinked die folder that resolves outside the
+    workspace's ``dies/`` is refused (422), never followed.
     """
+    _segment_or_422(die, "die")
     if _ws_layering():
         d = _ws_resolve_die_dir(str(die))
         if d is not None:
@@ -301,7 +315,12 @@ def _die_dir(die: str) -> Path:
             src = _ds.locate(str(die))
             if src is not None:
                 return src
-    return _dies_dir() / die
+    base = _dies_dir()
+    cand = base / die
+    from motor_ai_sim.safe_paths import is_within
+    if cand.exists() and not is_within(cand, base):
+        raise HTTPException(422, detail=f"die {die!r} resolves outside its folder")
+    return cand
 
 
 def _flat_sources() -> bool:
@@ -327,7 +346,12 @@ def _die_file(die: str) -> Path:
 
 
 def _cfg_file(die: str, cfg: str) -> Path:
-    return _die_dir(die) / f"{cfg}.yaml"
+    d = _die_dir(die)
+    p = d / f"{_segment_or_422(cfg, 'configuration')}.yaml"
+    from motor_ai_sim.safe_paths import is_within
+    if p.exists() and not is_within(p, d):
+        raise HTTPException(422, detail=f"configuration {cfg!r} resolves outside its die")
+    return p
 
 
 def _die_layer(die: str) -> str:

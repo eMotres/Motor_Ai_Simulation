@@ -5,6 +5,7 @@ import {
   Box, Typography, Paper, Chip, Table, TableBody, TableCell, TableHead, TableRow, Select, MenuItem,
 } from '@mui/material';
 import SessionsSection from '../SessionsSection';
+import AdminAuditSection from '../AdminAuditSection';
 import SupportSettings, { type SupportCfg } from '../SupportSettings';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -53,6 +54,8 @@ const LogsSection: React.FC = () => {
       <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)', mb: 1.5 }}>Logs &amp; events</Typography>
 
       <SessionsSection />
+
+      <AdminAuditSection />
 
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mt: 3, mb: 1 }}>
         <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)' }}>Support tickets</Typography>

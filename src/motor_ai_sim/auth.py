@@ -129,6 +129,9 @@ _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version",
 _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/auth/register", "/api/auth/verify",
                      "/api/auth/reset", "/api/auth/methods",
+                     # the data-export ZIP: the signed single-use token in the
+                     # query IS the credential (routes/account_data.py)
+                     "/api/account/export/download",
                      # double opt-in + one-click unsubscribe (mail clients POST
                      # without a session; rate-limited in routes/newsletter.py)
                      "/api/newsletter/confirm", "/api/newsletter/unsubscribe")

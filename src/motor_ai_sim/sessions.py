@@ -87,11 +87,22 @@ def _load() -> dict:
 
 
 def _save(d: dict) -> None:
-    _SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    from motor_ai_sim.private_files import chmod_private, ensure_private_dir, open_private
+    ensure_private_dir(_SESSIONS_FILE.parent)
     tmp = _SESSIONS_FILE.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open_private(tmp, "w") as f:       # 0600 — audit 2026-09-29 #9
         json.dump(d, f, indent=1, ensure_ascii=False, sort_keys=True)
     tmp.replace(_SESSIONS_FILE)
+    chmod_private(_SESSIONS_FILE)
+
+
+def _ip(ip: str) -> str:
+    """Sessions and auth events keep a KEYED HASH of the client address, never
+    the address (audit 2026-09-29 #16): "same client as yesterday?" still
+    answers, "where does this person live?" does not."""
+    from motor_ai_sim.log_redaction import hash_ip
+    s = (ip or "").strip()[:64]
+    return "" if s in ("", "?") else hash_ip(s)
 
 
 def _norm(email: str) -> str:
@@ -132,7 +143,7 @@ def create(email: str, *, expires: float, login_method: str = "password",
         "last_seen": now,
         "expires": float(expires),
         "user_agent": _short_ua(user_agent),
-        "ip": (ip or "")[:64],
+        "ip": _ip(ip),
         "login_method": login_method if login_method in ("password", "google") else "password",
         "revoked": False,
     }
@@ -262,7 +273,7 @@ def touch(sid: str, *, ip: str = "", user_agent: str = "") -> None:
                 return
             rec["last_seen"] = now
             if ip:
-                rec["ip"] = ip[:64]
+                rec["ip"] = _ip(ip)
             if user_agent:
                 rec["user_agent"] = _short_ua(user_agent)
             d[sid] = rec
@@ -302,7 +313,8 @@ def record_event(event: str, *, email: str = "", sid: str = "", reason: str = ""
     "users.json was locked for 40 ms" stop looking the same from outside.
     """
     try:
-        _EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        from motor_ai_sim.private_files import ensure_private_dir, open_private
+        ensure_private_dir(_EVENTS_FILE.parent)
         _trim_events()
         line = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
@@ -311,14 +323,14 @@ def record_event(event: str, *, email: str = "", sid: str = "", reason: str = ""
             "email": _norm(email),
             "sid": sid or "",
             "reason": reason or "",
-            "ip": (ip or "")[:64],
+            "ip": _ip(ip),
             "user_agent": _short_ua(user_agent, 200),
             "path": (path or "")[:200],
             "pid": os.getpid(),
         }
         if extra:
             line.update({k: v for k, v in extra.items() if v is not None})
-        with open(_EVENTS_FILE, "a", encoding="utf-8") as f:
+        with open_private(_EVENTS_FILE, "a") as f:
             f.write(json.dumps(line, ensure_ascii=False, default=str) + "\n")
     except Exception:
         pass

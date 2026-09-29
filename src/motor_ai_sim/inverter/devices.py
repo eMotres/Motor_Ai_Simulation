@@ -211,6 +211,11 @@ def get_device(part: str) -> "DeviceCard":
     if not name:
         raise CardError("no device named: send the part number of a card in "
                         "config/devices/ (GET /api/controller/devices lists them)")
+    from motor_ai_sim.safe_paths import PathRejected, check_segment
+    try:
+        check_segment(name, what="device part")
+    except PathRejected as exc:
+        raise CardError(str(exc)) from exc
     p = card_path(name)
     if p is None or not p.is_file():
         known = [row.get("part") for row in list_devices()]

@@ -761,7 +761,8 @@ def ensure_layout(ws: Workspace) -> Workspace:
     if ws is None or ws.is_process or workspaces_root() is None:
         return ws
     try:
-        ws.root.mkdir(parents=True, exist_ok=True)
+        from motor_ai_sim.private_files import ensure_private_dir
+        ensure_private_dir(ws.root)             # 0700 (audit 2026-09-29 #9)
         cfg = Path(str(ws.config_file))
         if cfg.exists():
             return ws
@@ -808,14 +809,40 @@ def provision(email: Optional[str]) -> Optional[Workspace]:
         return None
 
 
-def workspace_for_request(authorization: Optional[str]) -> Workspace:
-    """``Authorization`` header -> workspace.  Never raises.
+class WorkspaceResolutionError(RuntimeError):
+    """The request's workspace could not be established — FAIL CLOSED.
 
-    Anonymous, unauthenticated and local-dev-admin callers all get the PROCESS
-    workspace: they are the owner of this box, and their machine is the one the
-    config path already names.  ``auth.caller_identity`` spells those two cases
-    as the ``ANON_OWNER`` / ``ADMIN_OWNER`` sentinels, which are not identities
-    and must never become directory names.
+    ``status`` is what the HTTP answer must be: 401 for a credential that was
+    presented and did not verify, 503 when the identity store itself could not
+    be read (the client keeps its session and retries), 500 for anything else.
+    """
+
+    def __init__(self, status: int, reason: str) -> None:
+        super().__init__(reason)
+        self.status = int(status)
+        self.reason = reason
+
+
+def _presented(authorization: Optional[str]) -> bool:
+    return isinstance(authorization, str) and bool(authorization.strip())
+
+
+def workspace_for_request(authorization: Optional[str]) -> Workspace:
+    """``Authorization`` header -> workspace, FAIL-CLOSED (audit 2026-09-29 #7).
+
+    * multi-user off (``WORKSPACES_ROOT`` unset): the process workspace, always
+      — a single-user install has exactly one machine.
+    * a verified account: that account's workspace.
+    * the admin / local-dev admin / the static service token: the process
+      workspace (the owner's, which an admin IS).
+    * NO credentials at all: the process workspace — the anonymous public
+      exhibit.  With ``PUBLIC_EXHIBIT=0`` the tier gate has already turned an
+      anonymous caller away from every route that reads a machine.
+    * credentials PRESENTED but not verifiable, or ANY exception while
+      resolving: :class:`WorkspaceResolutionError` — never the owner's
+      workspace.  Until 2026-09-29 this fell back to the process workspace, so
+      an expired token or a users.json read hiccup handed a customer the
+      owner's machine.
     """
     if workspaces_root() is None:
         return process_workspace()
@@ -823,12 +850,44 @@ def workspace_for_request(authorization: Optional[str]) -> Workspace:
         from motor_ai_sim.auth import (ADMIN_OWNER, ANON_OWNER,
                                        caller_identity)
         who = str((caller_identity(authorization) or {}).get("id") or "").strip()
-        if not who or who in (ANON_OWNER, ADMIN_OWNER):
+        if who == ADMIN_OWNER:
             return process_workspace()
+        if not who or who == ANON_OWNER:
+            if not _presented(authorization):
+                return process_workspace()
+            _raise_for_unverified(authorization)
+            return process_workspace()          # the static service token
         return workspace_for_identity(who)
-    except Exception as exc:            # noqa: BLE001 — auth trouble is not a 500
-        log.warning("workspace resolution fell back to the process config: %s", exc)
-        return process_workspace()
+    except WorkspaceResolutionError:
+        raise
+    except Exception as exc:            # noqa: BLE001
+        log.error("workspace resolution FAILED (%s: %s) — request refused, "
+                  "NOT falling back to the process workspace",
+                  type(exc).__name__, exc)
+        raise WorkspaceResolutionError(500, "workspace_resolution_failed") from exc
+
+
+def _raise_for_unverified(authorization: str) -> None:
+    """A credential was presented and ``caller_identity`` could not name it.
+
+    The static ``ADMIN_API_TOKEN`` is the one credential that is valid WITHOUT
+    an identity — it returns normally.  Everything else is a refusal: 503 when
+    our own store was unreadable, 401 otherwise.
+    """
+    from motor_ai_sim import auth as _auth
+    if _auth._has_service_token(authorization):
+        return
+    reason = "rejected"
+    try:
+        reason = str(_auth.resolve_user_detail(authorization).get("reason") or "rejected")
+    except Exception as exc:                                # noqa: BLE001
+        log.error("workspace: token re-check crashed (%s: %s)", type(exc).__name__, exc)
+        raise WorkspaceResolutionError(503, "store_unavailable") from exc
+    if reason == "store_unavailable":
+        log.error("workspace: identity store unavailable — request refused (503)")
+        raise WorkspaceResolutionError(503, "store_unavailable")
+    log.warning("workspace: credential presented but not verified (%s) — 401", reason)
+    raise WorkspaceResolutionError(401, reason)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1050,7 +1109,8 @@ def resolve_die_dir(die: str):
             cand = lay.dies_dir / want
         if lay.name == LAYER_SHARED and is_tombstoned(cand.name):
             continue
-        if (cand / "die.yaml").is_file() and _catalog_ok(rule, lay, cand.name):
+        if ((cand / "die.yaml").is_file() and _contained(cand, lay.dies_dir)
+                and _catalog_ok(rule, lay, cand.name)):
             return cand
     return None
 
@@ -1071,6 +1131,17 @@ def _catalog_ok(rule, lay, name: str) -> bool:
         return True
     e = rule.get(name)
     return bool(e and not e["clash"] and e["source"] == (lay.source or "shared"))
+
+
+def _contained(cand: Path, base: Path) -> bool:
+    """A die folder must RESOLVE inside its layer: a name with a separator or
+    '..', or a symlink planted in one workspace pointing at another, is not a
+    die of this layer (audit 2026-09-29 #7).  Logged, never followed."""
+    from motor_ai_sim.safe_paths import is_within, segment_problem
+    if segment_problem(cand.name) or not is_within(cand, base):
+        log.warning("workspace: die folder %s escapes %s — ignored", cand, base)
+        return False
+    return True
 
 
 def source_die_dir(die: str):
@@ -1097,7 +1168,8 @@ def source_die_dir(die: str):
             cand = lay.dies_dir / str(die)
         if lay.name == LAYER_SHARED and is_tombstoned(cand.name):
             continue
-        if (cand / "die.yaml").is_file() and _catalog_ok(rule, lay, cand.name):
+        if ((cand / "die.yaml").is_file() and _contained(cand, lay.dies_dir)
+                and _catalog_ok(rule, lay, cand.name)):
             return cand
     return None
 
@@ -1237,7 +1309,19 @@ class WorkspaceMiddleware:
                 except Exception:       # noqa: BLE001
                     auth_hdr = None
                 break
-        token = _WS.set(workspace_for_request(auth_hdr))
+        try:
+            resolved = workspace_for_request(auth_hdr)
+        except WorkspaceResolutionError as exc:
+            if _open_path(str(scope.get("path") or "")):
+                # The sign-in plumbing (/api/me, /api/auth/*, /api/health ...)
+                # must still answer — /api/me is how the client LEARNS its
+                # token was rejected — but it gets an EMPTY quarantine
+                # workspace, never the owner's.
+                resolved = quarantine_workspace()
+            else:
+                await _refuse(send, exc)
+                return
+        token = _WS.set(resolved)
         # ``?layer=shared`` rides the request, not the route signature: every
         # family write funnels through one helper and that helper asks here.
         # Admin-ness is checked AT THE WRITE, never at the parse.
@@ -1249,6 +1333,43 @@ class WorkspaceMiddleware:
             _CALLER.reset(ctok)
             _WRITE_LAYER.reset(ltok)
             _WS.reset(token)
+
+
+def _open_path(path: str) -> bool:
+    """Routes that must answer even when the caller's credential is bad."""
+    try:
+        from motor_ai_sim.auth import anonymous_allowed
+        return path.startswith("/api/") and anonymous_allowed(path)
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
+QUARANTINE_WS_ID = "_unresolved"
+
+
+def quarantine_workspace() -> Workspace:
+    """An empty, never-provisioned workspace for a request whose identity could
+    not be established.  Its root is ``<WORKSPACES_ROOT>/_unresolved`` and
+    nothing creates it, so every read finds nothing and a write fails loudly."""
+    base = workspaces_root() or process_workspace().root
+    root_dir = Path(base) / QUARANTINE_WS_ID
+    return Workspace(id=QUARANTINE_WS_ID, email="", root=root_dir,
+                     shared_root=root_dir)
+
+
+async def _refuse(send, exc: "WorkspaceResolutionError") -> None:
+    import json as _json
+    detail = {401: "Your session is no longer valid — sign in again.",
+              503: "The account store is temporarily unavailable — retry shortly."
+              }.get(exc.status, "Could not establish your workspace.")
+    body = _json.dumps({"detail": detail, "reason": exc.reason}).encode("utf-8")
+    headers = [(b"content-type", b"application/json"),
+               (b"content-length", str(len(body)).encode())]
+    if exc.status == 503:
+        headers.append((b"retry-after", b"5"))
+    await send({"type": "http.response.start", "status": exc.status,
+                "headers": headers})
+    await send({"type": "http.response.body", "body": body})
 
 
 def install_workspace_resolver(app) -> None:

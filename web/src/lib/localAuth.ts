@@ -264,3 +264,43 @@ export function loadGis(): Promise<GisId> {
   });
   return gisPromise;
 }
+
+// ── my data: export + account deletion (GDPR; routes/account_data.py) ───────
+function authHeaders(json = false): Record<string, string> {
+  const h: Record<string, string> = {};
+  const token = getStoredToken();
+  if (token) h.Authorization = `Bearer ${token}`;
+  if (json) h['Content-Type'] = 'application/json';
+  return h;
+}
+
+export interface DeletionState { pending: { requested_at: number; due_at: number } | null; grace_days: number }
+
+export async function getDeletionState(): Promise<DeletionState> {
+  const r = await fetch(`${API}/api/account/deletion`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(`deletion status HTTP ${r.status}`);
+  return r.json() as Promise<DeletionState>;
+}
+
+/** Schedule my account for deletion; needs the password or a fresh Google credential. */
+export async function requestAccountDeletion(proof: { password?: string; google_credential?: string }): Promise<DeletionState> {
+  const r = await fetch(`${API}/api/account/deletion`, {
+    method: 'POST', headers: authHeaders(true), body: JSON.stringify(proof),
+  });
+  const j = await r.json().catch(() => ({})) as { detail?: string } & DeletionState;
+  if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+  return j;
+}
+
+export async function cancelAccountDeletion(): Promise<void> {
+  const r = await fetch(`${API}/api/account/deletion`, { method: 'DELETE', headers: authHeaders() });
+  if (!r.ok) throw new Error(`cancel HTTP ${r.status}`);
+}
+
+/** A signed, single-use, 15-minute download link for my data (ZIP). */
+export async function requestDataExport(): Promise<{ url: string; expires_at: number }> {
+  const r = await fetch(`${API}/api/account/export`, { method: 'POST', headers: authHeaders() });
+  if (!r.ok) throw new Error(`export HTTP ${r.status}`);
+  const j = await r.json() as { url: string; expires_at: number };
+  return { url: `${API}${j.url}`, expires_at: j.expires_at };
+}

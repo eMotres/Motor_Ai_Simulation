@@ -17,6 +17,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from motor_ai_sim import admin_audit as _AA
 from motor_ai_sim.auth import require_admin, require_admin_or_token
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -204,6 +205,7 @@ def stats(_admin: dict = Depends(require_admin)):
 @router.post("/users/{uid}/role")
 def set_role(uid: str, body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
     """Set a user's role via a Firebase custom claim ('role')."""
+    _AA.record(_AA.actor_of(_admin), "user.role", str(uid), subject=str(uid), details={"role": (body or {}).get("role")})
     role = (body or {}).get("role")
     if role not in _VALID_ROLES:
         raise HTTPException(status_code=400, detail=f"role must be one of {_VALID_ROLES}")
@@ -219,6 +221,7 @@ def set_role(uid: str, body: dict = Body(default={}), _admin: dict = Depends(req
 @router.post("/users/{uid}/disable")
 def set_disabled(uid: str, body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
     """Disable or re-enable a user's account."""
+    _AA.record(_AA.actor_of(_admin), "user.disable", str(uid), subject=str(uid), details={"disabled": bool((body or {}).get("disabled", True))})
     disabled = bool((body or {}).get("disabled", True))
     admin = _ensure_admin()
     if admin is None:
@@ -245,6 +248,7 @@ def list_motors(_admin: dict = Depends(require_admin)):
 @router.get("/users/{email}/motors")
 def get_user_motors(email: str, _admin: dict = Depends(require_admin)):
     """This account's grants: `{"all": bool, "dies": [names]}`."""
+    _AA.record(_AA.actor_of(_admin), "workspace.read", str(email), subject=str(email), details={"what": "motor grants"})
     from motor_ai_sim import users as U
     if U.get_user(email) is None:
         raise HTTPException(status_code=404, detail=f"user '{email}' not found")
@@ -260,6 +264,7 @@ def set_user_motors(email: str, body: dict = Body(default={}),
     Unknown die names are REFUSED and named — a grant silently dropped because
     a die was renamed is a user who still sees nothing and no way to find out
     why."""
+    _AA.record(_AA.actor_of(_admin), "user.motors", str(email), subject=str(email), details={"all": (body or {}).get("all")})
     from motor_ai_sim import users as U
     if U.get_user(email) is None:
         raise HTTPException(status_code=404, detail=f"user '{email}' not found")
@@ -478,6 +483,7 @@ def set_die_access(die: str, body: dict = Body(default={}),
     the web routes and the MCP tools ask), or selected (named accounts only).
     Recipients stay read-only regardless — this never grants catalog WRITE
     access, only the same read `may_see_die` already governs."""
+    _AA.record(_AA.actor_of(admin_user), "die.access", str(die), subject=str(""), details={"visibility": (body or {}).get("visibility")})
     from motor_ai_sim.routes.family import die_names
     if die not in die_names():
         raise HTTPException(status_code=404, detail=f"die '{die}' not found")
@@ -553,6 +559,7 @@ def invite(body: dict = Body(default={}),
     Re-inviting an existing account re-sets its role, grants and note (and
     un-disables it); it never touches a password.
     """
+    _AA.record(_AA.actor_of(admin_user), "user.invite", str(str((body or {}).get("email") or "")), subject=str(str((body or {}).get("email") or "")), details={"role": (body or {}).get("role")})
     from motor_ai_sim import users as U
     from motor_ai_sim import workspace as W
     body = body or {}
@@ -617,6 +624,7 @@ def revoke_invite(email: str, _admin: dict = Depends(require_admin)):
     gets to make.  Refuses (404) on an account that was never invited — those
     are removed through DELETE /api/auth/users/{email}, deliberately.
     """
+    _AA.record(_AA.actor_of(_admin), "user.invite_revoke", str(email), subject=str(email), details=None)
     from motor_ai_sim import sessions as S
     from motor_ai_sim import users as U
     from motor_ai_sim import workspace as W
@@ -650,6 +658,7 @@ def revoke_invite(email: str, _admin: dict = Depends(require_admin)):
 def admin_sessions(email: Optional[str] = None,
                    _admin: dict = Depends(require_admin)):
     """Every session on the deployment, newest first; `?email=` narrows it."""
+    _AA.record(_AA.actor_of(_admin), "session.list", str(email or "*"), subject=str(email or ""), details=None)
     from motor_ai_sim import sessions as S
     rows = [S.public(r) for r in S.list_all(email)]
     return {"count": len(rows), "sessions": rows}
@@ -659,6 +668,7 @@ def admin_sessions(email: Optional[str] = None,
 def admin_revoke_session(sid: str, _admin: dict = Depends(require_admin)):
     """Kill one session immediately — its token stops verifying on the next
     request (reason `revoked`), no waiting for the 30-day expiry."""
+    _AA.record(_AA.actor_of(_admin), "session.revoke", str(sid), subject=str(""), details=None)
     from motor_ai_sim import sessions as S
     rec = S.revoke(sid)
     if rec is None:
@@ -671,6 +681,7 @@ def admin_revoke_session(sid: str, _admin: dict = Depends(require_admin)):
 @router.post("/users/{email}/revoke_all")
 def admin_revoke_all(email: str, _admin: dict = Depends(require_admin)):
     """Sign an account out of everywhere (password reset, lost laptop)."""
+    _AA.record(_AA.actor_of(_admin), "session.revoke_all", str(email), subject=str(email), details=None)
     from motor_ai_sim import sessions as S
     n = S.revoke_all(email)
     S.record_event("revoke", email=email, reason="admin_all",
@@ -683,6 +694,7 @@ def admin_auth_events(limit: int = 200, email: Optional[str] = None,
                       _admin: dict = Depends(require_admin_or_token)):
     """The tail of logs/auth_events.jsonl — login / logout / renew / reject /
     store_unavailable / revoke, newest first, each with its reason."""
+    _AA.record(_AA.actor_of(_admin), "auth_events.read", str(email or "*"), subject=str(email or ""), details={"limit": limit})
     from motor_ai_sim import sessions as S
     limit = max(1, min(int(limit or 200), 2000))
     ev = S.read_events(limit=limit, email=email or "")
@@ -740,6 +752,7 @@ def _mock_tickets() -> list[dict]:
 def list_tickets(_admin: dict = Depends(require_admin_or_token)):
     """All support tickets across users (bugs / feature requests / questions).
     Read-only — also reachable with the ADMIN_API_TOKEN bearer (nightly agent)."""
+    _AA.record(_AA.actor_of(_admin), "tickets.read", str("*"), subject=str(""), details=None)
     admin = _ensure_admin()
     if admin is None:
         t = _mock_tickets()
@@ -757,6 +770,7 @@ def list_tickets(_admin: dict = Depends(require_admin_or_token)):
 @router.post("/tickets/status")
 def set_ticket_status(body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
     """Update a ticket's status (open / in_progress / resolved / closed)."""
+    _AA.record(_AA.actor_of(_admin), "tickets.status", str(str((body or {}).get("id") or "")), subject=str(""), details={"status": (body or {}).get("status")})
     uid = (body or {}).get("uid")
     tid = (body or {}).get("id")
     status = (body or {}).get("status")
@@ -785,6 +799,7 @@ def support_config(_admin: dict = Depends(require_admin)):
 def set_support_config(body: dict = Body(default={}), admin_user: dict = Depends(require_admin)):
     """Save AI support settings (provider, models, keys). Keys are write-only and
     stored server-side (Firestore config/ai) — never returned to the browser."""
+    _AA.record(_AA.actor_of(admin_user), "support.config", str("support"), subject=str(""), details={"fields": sorted((body or {}).keys())})
     from motor_ai_sim.routes import support as support_mod
     who = admin_user.get("email") or admin_user.get("uid") or "admin"
     return support_mod.set_overrides(body or {}, who=who)
@@ -816,6 +831,7 @@ _VALID_REQUEST_STATUS = ("new", "contacted", "invited", "declined")
 @router.get("/support/requests")
 def support_requests(_admin: dict = Depends(require_admin)):
     """Every access request a visitor left with the assistant, newest first."""
+    _AA.record(_AA.actor_of(_admin), "support.requests.read", str("*"), subject=str(""), details=None)
     from motor_ai_sim import support_store as S
     rows = S.list_access_requests()
     return {"count": len(rows),
@@ -827,6 +843,7 @@ def support_requests(_admin: dict = Depends(require_admin)):
 def set_support_request_status(request_id: str, body: dict = Body(default={}),
                                _admin: dict = Depends(require_admin)):
     """Move one request through new → contacted / invited / declined."""
+    _AA.record(_AA.actor_of(_admin), "support.requests.status", str(request_id), subject=str(""), details={"status": (body or {}).get("status")})
     from motor_ai_sim import support_store as S
     status = str((body or {}).get("status") or "").strip().lower()
     if status not in _VALID_REQUEST_STATUS:
@@ -847,6 +864,7 @@ def delete_support_request(request_id: str,
     The visitor CHAT log is not touched: it is the day's record of what was said
     and it ages out on its own (90 days), while the inbox is a worklist.
     """
+    _AA.record(_AA.actor_of(_admin), "support.requests.delete", str(request_id), subject=str(""), details=None)
     from motor_ai_sim import support_store as S
     if not S.delete_request(request_id):
         raise HTTPException(status_code=404, detail=f"no request '{request_id}'")
@@ -857,5 +875,6 @@ def delete_support_request(request_id: str,
 def support_visitor_chats(day: str = "", _admin: dict = Depends(require_admin)):
     """One day of visitor conversations, read-only.  `?day=YYYY-MM-DD`;
     without it, the newest day that has a log."""
+    _AA.record(_AA.actor_of(_admin), "support.chats.read", str(day or "latest"), subject=str(""), details=None)
     from motor_ai_sim import support_store as S
     return S.conversations(day)

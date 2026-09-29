@@ -168,6 +168,11 @@ def device_envelopes() -> List[Dict[str, Any]]:
 
 
 def device_envelope(part: str) -> Optional[Dict[str, Any]]:
+    from motor_ai_sim.safe_paths import PathRejected, check_segment
+    try:
+        check_segment(str(part).strip(), what="device part")
+    except PathRejected:
+        return None
     p = _dev.card_path(part)
     if p is None or not p.is_file():
         return None

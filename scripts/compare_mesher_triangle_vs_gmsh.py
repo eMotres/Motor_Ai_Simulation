@@ -236,6 +236,8 @@ def run(spec_path, out_path):
         structured_gap=bool(st.get("mesh.structuredGap", True)),
         component_mesh_mm=dict(st.get("mesh.componentMesh") or {}),
         geo_override=dict(geo), eddy=True)
+    # study overrides of the solve call (e.g. {"demag": false}), recorded in kwargs
+    kw.update(spec.get("kw_override") or {})
     # Record every geometry-driven mesh build of this solve (hash of nodes,
     # triangles and tags, triangle count, band-ring node counts): identical
     # hashes between two code versions => identical numbers (the solve is

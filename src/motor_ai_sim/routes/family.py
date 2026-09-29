@@ -4836,8 +4836,8 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
     # PREVIOUS machine's value — PUT /api/geometry merges over what is loaded.
     # Eleven of thirteen dies predate `sleeve_thickness`, so loading any of
     # them from a sleeved Ø200 kept its 2.5 mm band and the PUT was refused
-    # ("not thinner than air_gap (0.65 mm)" — user 2026-09-08: "хочу загрузить
-    # G2-L40, а он не грузится"); a stray `wire_parallel: 3` would likewise have
+    # ("not thinner than air_gap (0.65 mm)" — user 2026-09-08: "I want to load
+    # G2-L40, and it won't load"); a stray `wire_parallel: 3` would likewise have
     # turned a 21-turn machine into a 7-turn one without a word.  Say what
     # absence MEANS, explicitly, so the payload describes the whole machine.
     for _k, _v in _ABSENT_MEANS.items():
@@ -4960,9 +4960,9 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
 # `_save_yaml` has snapshotted every changed save into
 # config/dies/.history/<die>/<file>.<stamp>.yaml since 2026-08-24 (30 newest
 # per file); what was missing was a way to LOOK at those snapshots and put one
-# back without a file manager (user 2026-09-12: "история сохранённых параметров
-# по каждой конфигурации, чтобы в любой момент можно было откатиться —
-# геометрия и режимы для моделирования").  A snapshot IS exactly that: the
+# back without a file manager (user 2026-09-12: "a history of saved parameters
+# per configuration, so we can roll back at any moment — geometry and duties
+# for simulation").  A snapshot IS exactly that: the
 # configuration file holds geometry_overrides, winding, materials and the
 # duties with their operating points and solver settings; the die file holds
 # the base geometry.

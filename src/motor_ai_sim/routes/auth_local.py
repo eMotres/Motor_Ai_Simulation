@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from motor_ai_sim import auth_email as E
 from motor_ai_sim import sessions as S
 from motor_ai_sim import users as U
+from motor_ai_sim import admin_audit as _AA
 from motor_ai_sim.auth import require_admin, resolve_user, resolve_user_detail
 
 log = logging.getLogger(__name__)
@@ -303,11 +304,13 @@ def auth_methods():
 
 @router.get("/pending")
 def pending_list(_admin: dict = Depends(require_admin)):
+    _AA.record(_AA.actor_of(_admin), "session.list", str("pending"), subject=str(""), details=None)
     return {"pending": U.list_pending(), "smtp": E.smtp_configured()}
 
 
 @router.post("/pending/{email}/approve")
 def pending_approve(email: str, _admin: dict = Depends(require_admin)):
+    _AA.record(_AA.actor_of(_admin), "user.approve", str(email), subject=str(email), details=None)
     if U.get_user(email) is None:
         raise HTTPException(404, detail=f"user '{email}' not found")
     U.mark_verified(email, by="admin")
@@ -377,6 +380,7 @@ def users_list(_admin: dict = Depends(require_admin)):
 
 @router.post("/users")
 def users_create(req: CreateReq, _admin: dict = Depends(require_admin)):
+    _AA.record(_AA.actor_of(_admin), "user.create", str(req.email), subject=str(req.email), details={"tier": req.tier})
     try:
         return {"ok": True, "user": U.create_user(req.email, req.password,
                                                   tier=req.tier, name=req.name)}
@@ -393,6 +397,7 @@ class PatchReq(BaseModel):
 
 @router.patch("/users/{email}")
 def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)):
+    _AA.record(_AA.actor_of(_admin), "user.update", str(email), subject=str(email), details={k: v for k, v in req.model_dump().items() if v is not None and k != "password"} | {"password_reset": req.password is not None})
     try:
         if req.password is not None:
             U.set_password(email, req.password)
@@ -410,12 +415,18 @@ def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)
 
 @router.delete("/users/{email}")
 def users_delete(email: str, _admin: dict = Depends(require_admin)):
-    try:
-        U.delete_user(email)
-        log.warning("auth: user %s DELETED", email)
-        return {"ok": True}
-    except KeyError:
+    """Admin delete = the same full purge as a self-service deletion after its
+    grace period (audit 2026-09-29 #5): users.json, workspace, published work,
+    sessions, agent keys, OAuth grants, newsletter, support requests; audit
+    logs pseudonymised.  See motor_ai_sim.account_lifecycle."""
+    from motor_ai_sim import account_lifecycle as AL
+    _AA.record(_AA.actor_of(_admin), "user.delete", str(email), subject=str(email),
+               details={"mode": "purge"})
+    if U.get_user(email) is None:
         raise HTTPException(404, detail=f"user '{email}' not found")
+    rep = AL.purge(email, actor=_AA.actor_of(_admin), reason="admin")
+    log.warning("auth: account %s PURGED by admin", rep["subject"])
+    return {"ok": rep["ok"], "subject": rep["subject"], "steps": rep["steps"]}
 
 
 class SelfPassword(BaseModel):

@@ -125,9 +125,10 @@ def _load() -> dict:
 
 def _save(d: dict) -> None:
     with _LOCK:
-        _STORE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        from motor_ai_sim.private_files import ensure_private_dir, open_private
+        ensure_private_dir(_STORE_FILE.parent)
         tmp = _STORE_FILE.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
+        with open_private(tmp, "w") as f:   # 0600 — audit 2026-09-29 #9
             json.dump(d, f, indent=1, ensure_ascii=False, sort_keys=True)
         os.replace(tmp, _STORE_FILE)
 

@@ -933,8 +933,8 @@ class RotorMesh:
 # ---------------------------------------------------------------------------
 # The mesh memo
 # ---------------------------------------------------------------------------
-# User 2026-09-06: "по поводу сетки — как я понял, она строится отдельно, и ей
-# тоже нужно как-то управлять".  The panel now has a Build mesh button, so the
+# User 2026-09-06: "about the mesh — as I understand it, it's built
+# separately, and it needs some way to be controlled too".  The panel now has a Build mesh button, so the
 # same rotor gets meshed by the /mesh route and then again by the very next
 # Solve — twice the gmsh seconds for one identical answer.  This memo keys the
 # built mesh on the SOLIDS themselves (a hash of the polygon WKB) plus the three
@@ -1504,9 +1504,9 @@ def _normal_traction(sigma: np.ndarray, elems: np.ndarray,
 # ---------------------------------------------------------------------------
 # The ELECTROMAGNETIC TORQUE, as an air-gap shear
 # ---------------------------------------------------------------------------
-# Added 2026-09-07 for the user's request: "добавь ещё и момент на ротор, пусть
-# действуют все силы; сделай меню, чтобы можно было выбрать центробежную, момент
-# и обе."  The design behind it is a spoke rotor whose iron bridges are there for
+# Added 2026-09-07 for the user's request: "also add torque on the rotor,
+# let all the forces act; make a menu so centrifugal, torque, and both can be
+# selected."  The design behind it is a spoke rotor whose iron bridges are there for
 # assembly only — they yield on the first spin-up — after which each pole is held
 # TANGENTIALLY by nothing but friction against the sleeve and the magnets.  So
 # the question is not "does the sleeve hold the poles down" (the centrifugal

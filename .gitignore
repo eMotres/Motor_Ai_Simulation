@@ -166,3 +166,7 @@ config/cost_basis.json
 config/usage/
 uvicorn_*.out
 uvicorn_*.err
+
+# Raw supplier documents are never committed (owner 2026-09-29); only derived values go into the libraries
+supplier_docs/
+**/supplier_docs/

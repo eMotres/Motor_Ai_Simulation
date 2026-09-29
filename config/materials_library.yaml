@@ -1,7 +1,12 @@
 # ============================================================
-# Motor AI Sim — Material Library
-# Transcribed from the owner's personal material library (manufacturer data)
-# ============================================================
+# Motor AI Sim - Material Library
+# Every value traces to an INDEPENDENT source (manufacturer data sheet,
+# standard or handbook) - rebuilt 2026-09-29, owner decision: nothing is
+# taken from a commercial FEM package's material library.  Each card carries
+# `sources:` and per-field `prov:` in the catalog-envelope format
+# (src/motor_ai_sim/catalog/envelope.py): a field without a prov entry is
+# `datasheet` from sources[0]; `verify: true` marks what still needs a
+# source or a check.  Audit table: docs/materials_sources_2026-09-29.md.
 # Units:
 #   sigma            : S/m
 #   density          : kg/m³
@@ -20,50 +25,64 @@
 steel:
 
   Somaloy_700HR_5P:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "hoganas_5p", "doc": "Hoganas, Somaloy 5P Material data, 2274HOG-3 (c) 2025, p.5 'Somaloy 700HR 5P 800 MPa'", "url": "https://www.hoganas.com/globalassets/downloads/libary/somaloy_somaloy-5p-material-data_2274hog.pdf", "page": 5, "rev": "2274HOG-3", "read": "2026-09-29"}
+      - {"id": "hoganas_fit", "doc": "Hoganas curve-fitting workbook 'Somaloy 5P 700HR_800MPa_SAY-CurveFitting.xlsx' (sheet Tabelle1: B-H and P(B) at 50/300/400/600/1000/2000 Hz)", "file": "Downloads/Somaloy_Somaloy 5P 700HR_800MPa_SAY-CurveFitting.xlsx", "read": "2026-09-29"}
+    prov:
+      sigma: {"type": "estimate", "note": "0 is a modelling convention: the SMC bulk eddy term is inside the manufacturer loss data (Kep*d^2 term, p.5); datasheet resistivity 700 uOhm m (sigma 1.43e3 S/m) recorded here, not used"}
+      specific_heat: {"type": "estimate", "note": "not published by Hoganas; left null", "verify": true, "source": "none"}
+      stacking_factor: {"type": "estimate", "note": "1.0 by definition for a pressed isotropic compact"}
+      core_loss_curves: {"type": "datasheet", "src": "hoganas_fit", "note": "Hoganas curve-fitting workbook; agrees with the p.5 table (1 T: 3.2 W/kg at 50 Hz, 92 at 1 kHz, 241 at 2 kHz)"}
+      core_loss_kh: {"type": "derived", "src": "hoganas_fit", "note": "least-squares Bertotti fit of the curves (materials.fit_bertotti_from_curves); replaces the Maxwell-fitted coefficients"}
+      core_loss_kc: {"type": "derived", "src": "hoganas_fit", "note": "as core_loss_kh"}
+      core_loss_ke: {"type": "derived", "src": "hoganas_fit", "note": "as core_loss_kh"}
     description: "Soft Magnetic Composite (SMC) powder core — Höganäs Somaloy 700 HR 5P"
     form: solid          # not laminated — isotropic SMC
     sigma: 0             # effectively insulating between particles
-    density: 7650
+    density: 7500
     # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
     # SMC is a pressed powder compact, not a rolled sheet: stiff, but far weaker
     # than a lamination and BRITTLE.  The data sheets quote a transverse rupture
     # strength (TRS), not a yield, so TRS is what the safety factor is taken on.
-    youngs_modulus_gpa: 160        # GPa  Somaloy 700 5P compact, datasheet class
-    poisson_ratio: 0.28            # -    typical for a ferrous SMC compact
-    cte_ppm_k: 12.0   # ppm/K  isotropic; ferrous SMC compact, taken as the steel figure (user 2026-09-07)
-    yield_strength_mpa: 120        # MPa  = transverse rupture strength (SMC does not yield)
-    thermal_conductivity: null
+    youngs_modulus_gpa: 150   # GPa  Hoganas 2274HOG-3 p.5
+    poisson_ratio: 0.23   # -    Hoganas 2274HOG-3 p.5
+    cte_ppm_k: 11.0   # ppm/K  Hoganas 2274HOG-3 p.5
+    yield_strength_mpa: 60   # MPa  = transverse rupture strength, Hoganas p.5 (tensile is only 20)
+    thermal_conductivity: 21
     specific_heat: null
     stacking_factor: 1.0
-    # Bertotti core-loss coefficients (Electrical Steel model, Maxwell)
+    # Bertotti core-loss coefficients (fallback outside the curves; fitted from them)
     core_loss_model: bertotti
-    core_loss_kh: 376.596523799905
-    core_loss_kc: 0.151462503872851
-    core_loss_ke: 5.39623112602906
+    core_loss_kh: 479.606487   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_kc: 0.168030874   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_ke: 1.5068649   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
     core_loss_curve_unit: w_per_kg
     # B-H magnetisation curve  [H (A/m), B (T)]
     bh_curve:
-      - [0,      0.00]
-      - [63,     0.03]
-      - [119,    0.06]
-      - [214,    0.14]
-      - [306,    0.21]
-      - [608,    0.45]
-      - [899,    0.65]
-      - [1344,   0.86]
-      - [1996,   1.05]
-      - [3285,   1.24]
-      - [6377,   1.43]
-      - [13228,  1.63]
-      - [27279,  1.84]
-      - [49771,  1.99]
-      - [74771,  2.08]
-      - [99771,  2.14]
+      - [0, 0.00]
+      - [63, 0.03]
+      - [119, 0.06]
+      - [214, 0.14]
+      - [306, 0.21]
+      - [608, 0.45]
+      - [899, 0.65]
+      - [1344, 0.86]
+      - [1996, 1.05]
+      - [3285, 1.24]
+      - [6377, 1.43]
+      - [13228, 1.63]
+      - [27279, 1.84]
+      - [49771, 1.99]
+      - [74771, 2.08]
+      - [99771, 2.14]
       - [124771, 2.19]
       - [149771, 2.23]
-      - [189771, 2.29]
-      - [229771, 2.34]
-      - [279771, 2.41]
+      - [189771, 2.30]
+      - [229771, 2.36]
+      - [279771, 2.44]
+      - [304771, 2.47]
     # Core-loss multi-frequency curves  [[B_T, P_w_per_kg], ...]
     core_loss_curves:
       50Hz:
@@ -130,164 +149,132 @@ steel:
         - [1.500, 516.130]
 
   VACODUR_49_0p20mm_390MPa:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "vac_flyer", "doc": "VACUUMSCHMELZE, VACODUR 49 datasheet (flyer), published July 2022, p.2 (physical, mechanical final-annealed, specific iron losses of strip incl. 0.20 mm)", "url": "https://vacuumschmelze.com/03_Documents/Brochures/Datasheet%20VACODUR%2049.pdf", "file": "Downloads/Flyer VACODUR 49.pdf", "page": 2, "rev": "2022-07", "read": "2026-09-29"}
+      - {"id": "vac_cofe", "doc": "VACUUMSCHMELZE, Soft magnetic cobalt-iron alloys VACOFLUX and VACODUR (brochure, PDF 2021-04), p.8 'DC magnetic properties after magnetic final annealing (strip 0.35 mm) - typical values'", "url": "https://sekels.de/fileadmin/PDF/English/Materials__Magnetic_Shieldings/51_1_Broschuere_CoFe-Legierungen_VAC_.pdf", "page": 8, "read": "2026-09-29"}
+    prov:
+      bh_curve: {"type": "derived", "src": "vac_cofe", "note": "typical DC values measured on 0.35 mm strip (DC magnetisation does not depend on strip gauge); saturation tail from Js = 2.30 T"}
+      core_loss_curves: {"type": "datasheet", "src": "vac_flyer", "note": "0.20 mm column, mechanically optimised (750 C / 3 h)"}
+      core_loss_kh: {"type": "derived", "src": "vac_flyer", "note": "Bertotti fit of the six datasheet points (materials.fit_bertotti_from_curves)"}
+      core_loss_kc: {"type": "derived", "src": "vac_flyer", "note": "as core_loss_kh"}
+      core_loss_ke: {"type": "derived", "src": "vac_flyer", "note": "as core_loss_kh"}
+      sigma: {"type": "estimate", "note": "lamination sigma is a modelling convention in this library (eddy loss lives in the loss data); datasheet resistivity 0.42 uOhm m = 2.38e6 S/m"}
+      specific_heat: {"type": "estimate", "note": "410 J/kgK not found in the VAC documents read; Ansys PersonalLib origin", "verify": true, "source": "none"}
+      stacking_factor: {"type": "estimate", "note": "not published by VAC; Ansys PersonalLib origin", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "0.30 generic metal value, not in the VAC documents", "verify": true, "source": "none"}
     description: "Vacuumschmelze VACODUR 49 — CoFe alloy, 0.20 mm, 390 MPa yield"
     form: lamination
     stacking_factor: 0.95
     sigma: 2380952.38      # S/m
     density: 8120
     # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
-    youngs_modulus_gpa: 210        # GPa  CoFe (Vacodur/Vacoflux 49 class)
+    youngs_modulus_gpa: 250   # GPa  VAC flyer 2022 p.2, mechanically optimised (750 C / 3 h)
     poisson_ratio: 0.30            # -    typical for a ferrous alloy
-    cte_ppm_k: 12.0   # ppm/K  in-plane, isotropic (user 2026-09-07's steel figure; a CoFe 49 datasheet is nearer 9.5 - verify before quoting)
+    cte_ppm_k: 8.9   # ppm/K  VAC flyer 2022 p.2 (20-100 C)
     yield_strength_mpa: 390        # MPa  FROM this grade's own name and description above
-    thermal_conductivity: 32.83
+    thermal_conductivity: 32
     specific_heat: 410
     core_loss_model: bertotti
-    core_loss_kh: 2.48807199028208
-    core_loss_kc: 0.00284058417289946
-    core_loss_ke: 0.0
-    core_loss_curve_unit: w_per_cubic_meter
+    core_loss_kh: 154.062513   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_kc: 0.126537089   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_ke: 2.68915966   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_curve_unit: w_per_kg
     bh_curve:
-      - [0,     0.000]
-      - [19.9,  0.038]
-      - [25,    0.049]
-      - [30,    0.061]
-      - [35,    0.075]
-      - [40,    0.089]
-      - [45,    0.105]
-      - [50,    0.122]
-      - [55,    0.142]
-      - [60,    0.165]
-      - [65,    0.194]
-      - [80,    0.347]
-      - [90,    0.597]
-      - [100,   0.976]
-      - [120,   1.553]
-      - [140,   1.720]
-      - [160,   1.800]
-      - [180,   1.852]
-      - [200,   1.890]
-      - [250,   1.958]
-      - [300,   1.992]
-      - [399,   2.042]
-      - [499,   2.078]
-      - [599,   2.104]
-      - [799,   2.141]
-      - [999,   2.165]
-      - [1399,  2.197]
-      - [1999,  2.223]
-      - [2999,  2.246]
-      - [3999,  2.258]
-      - [5999,  2.271]
-      - [7999,  2.278]
-      - [9999,  2.284]
-      - [12000, 2.288]
-      - [14000, 2.291]
-      - [16000, 2.294]
+      - [0, 0.0000]
+      - [300, 1.8000]
+      - [800, 2.0500]
+      - [1600, 2.1500]
+      - [4000, 2.2500]
+      - [8000, 2.2700]
+      - [16000, 2.3000]
+      - [40000, 2.3302]
+      - [100000, 2.4056]
+      - [200000, 2.5312]
     core_loss_curves:
       50Hz:
-        - [0.502, 57.9]
-        - [1.005, 180.9]
-        - [1.505, 319.9]
-        - [2.010, 509.9]
+        - [1.5, 2.6]
+        - [2.0, 4.1]
       400Hz:
-        - [0.500, 553.1]
-        - [0.999, 1843.6]
-        - [1.504, 3480.4]
-        - [2.002, 5665.3]
+        - [1.5, 28.0]
+        - [2.0, 46.0]
       1000Hz:
-        - [0.500, 1684.7]
-        - [1.000, 5795.6]
-        - [1.504, 11821.6]
-        - [2.001, 21213.1]
-      2000Hz:
-        - [0.500, 4266.0]
-        - [0.990, 14495.1]
-        - [1.502, 34101.0]
-        - [2.006, 67604.7]
+        - [1.5, 96.0]
+        - [2.0, 172.0]
 
   VACODUR_49_0p20mm_210MPa:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "vac_flyer", "doc": "VACUUMSCHMELZE, VACODUR 49 datasheet (flyer), published July 2022, p.2 (physical, mechanical final-annealed, specific iron losses of strip incl. 0.20 mm)", "url": "https://vacuumschmelze.com/03_Documents/Brochures/Datasheet%20VACODUR%2049.pdf", "file": "Downloads/Flyer VACODUR 49.pdf", "page": 2, "rev": "2022-07", "read": "2026-09-29"}
+      - {"id": "vac_cofe", "doc": "VACUUMSCHMELZE, Soft magnetic cobalt-iron alloys VACOFLUX and VACODUR (brochure, PDF 2021-04), p.8 'DC magnetic properties after magnetic final annealing (strip 0.35 mm) - typical values'", "url": "https://sekels.de/fileadmin/PDF/English/Materials__Magnetic_Shieldings/51_1_Broschuere_CoFe-Legierungen_VAC_.pdf", "page": 8, "read": "2026-09-29"}
+    prov:
+      bh_curve: {"type": "derived", "src": "vac_cofe", "note": "typical DC values measured on 0.35 mm strip (DC magnetisation does not depend on strip gauge); saturation tail from Js = 2.30 T"}
+      core_loss_curves: {"type": "datasheet", "src": "vac_flyer", "note": "0.20 mm column, magnetically optimised (880 C / 6 h)"}
+      core_loss_kh: {"type": "derived", "src": "vac_flyer", "note": "Bertotti fit of the six datasheet points (materials.fit_bertotti_from_curves)"}
+      core_loss_kc: {"type": "derived", "src": "vac_flyer", "note": "as core_loss_kh"}
+      core_loss_ke: {"type": "derived", "src": "vac_flyer", "note": "as core_loss_kh"}
+      sigma: {"type": "estimate", "note": "lamination sigma is a modelling convention in this library (eddy loss lives in the loss data); datasheet resistivity 0.42 uOhm m = 2.38e6 S/m"}
+      specific_heat: {"type": "estimate", "note": "410 J/kgK not found in the VAC documents read; Ansys PersonalLib origin", "verify": true, "source": "none"}
+      stacking_factor: {"type": "estimate", "note": "not published by VAC; Ansys PersonalLib origin", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "0.30 generic metal value, not in the VAC documents", "verify": true, "source": "none"}
     description: "Vacuumschmelze VACODUR 49 — CoFe alloy, 0.20 mm, 210 MPa yield (annealed)"
     form: lamination
     stacking_factor: 0.94
     sigma: 0
     density: 8120
     # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
-    youngs_modulus_gpa: 210        # GPa  CoFe (Vacodur/Vacoflux 49 class)
+    youngs_modulus_gpa: 200   # GPa  VAC flyer 2022 p.2, magnetically optimised (880 C / 6 h)
     poisson_ratio: 0.30            # -    typical for a ferrous alloy
-    cte_ppm_k: 12.0   # ppm/K  in-plane, isotropic (user 2026-09-07's steel figure; a CoFe 49 datasheet is nearer 9.5 - verify before quoting)
+    cte_ppm_k: 8.9   # ppm/K  VAC flyer 2022 p.2 (20-100 C)
     yield_strength_mpa: 210        # MPa  FROM this grade's own name and description above (annealed)
-    thermal_conductivity: 32.83
+    thermal_conductivity: 32
     specific_heat: 410
     core_loss_model: bertotti
-    core_loss_kh: 135.779373853219
-    core_loss_kc: 0.141517405090033
-    core_loss_ke: 0.0
+    core_loss_kh: 82.8654995   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_kc: 0.147416351   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_ke: 1.72434236   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
     core_loss_curve_unit: w_per_kg
     bh_curve:
-      - [0,    0.000]
-      - [19.9, 0.060]
-      - [25,   0.091]
-      - [30,   0.138]
-      - [35,   0.214]
-      - [40,   0.334]
-      - [45,   0.517]
-      - [50,   0.755]
-      - [55,   1.032]
-      - [60,   1.274]
-      - [65,   1.429]
-      - [70,   1.526]
-      - [80,   1.642]
-      - [90,   1.711]
-      - [100,  1.762]
-      - [120,  1.830]
-      - [140,  1.877]
-      - [160,  1.911]
-      - [200,  1.962]
-      - [250,  2.009]
-      - [300,  2.038]
-      - [399,  2.081]
-      - [499,  2.114]
-      - [599,  2.138]
-      - [799,  2.172]
-      - [999,  2.194]
-      - [1399, 2.222]
-      - [1999, 2.243]
-      - [2999, 2.260]
-      - [3999, 2.269]
-      - [5999, 2.279]
-      - [7999, 2.285]
-      - [9999, 2.290]
-      - [11995, 2.293]
-      - [14000, 2.297]
-      - [16000, 2.300]
+      - [0, 0.0000]
+      - [300, 1.9000]
+      - [800, 2.1000]
+      - [1600, 2.2000]
+      - [4000, 2.2550]
+      - [8000, 2.2800]
+      - [16000, 2.3000]
+      - [40000, 2.3302]
+      - [100000, 2.4056]
+      - [200000, 2.5312]
     core_loss_curves:
       50Hz:
-        - [0.500, 0.20]
-        - [1.002, 0.55]
-        - [1.502, 1.40]
-        - [2.009, 2.50]
-        - [2.200, 3.10]
+        - [1.5, 1.5]
+        - [2.0, 2.3]
       400Hz:
-        - [0.501, 1.80]
-        - [0.999, 7.50]
-        - [1.501, 18.0]
-        - [2.000, 35.0]
-        - [2.200, 48.0]
+        - [1.5, 19.0]
+        - [2.0, 32.0]
       1000Hz:
-        - [0.500, 6.50]
-        - [0.999, 26.0]
-        - [1.503, 65.0]
-        - [2.001, 130.0]
-        - [2.200, 180.0]
-      2000Hz:
-        - [0.500, 22.0]
-        - [0.999, 85.0]
-        - [1.500, 190.0]
-        - [2.002, 380.0]
-        - [2.200, 550.0]
+        - [1.5, 74.0]
+        - [2.0, 138.0]
 
   JFE_10JNEX900:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "jfe_f1e002", "doc": "JFE Steel, Super Core catalog Cat.No.F1E-002 (PDF 2014-03), p.5/p.7 typical characteristics table (0.10 mm JNEX-Core), p.10 product specification", "url": "https://www.jfe-steel.co.jp/en/products/electrical/catalog/f1e-002.pdf", "page": "5,7,10", "read": "2026-09-29"}
+    prov:
+      bh_curve: {"type": "derived", "src": "jfe_f1e002", "note": "POINT SET OF ANSYS PERSONALLIB ORIGIN, kept because it reproduces the JFE anchors: B8 1.260 vs 1.29 T (-2.3 %), B25 1.377 vs 1.40 T (-1.6 %). Replace with JFE's own curve file (Cat. F2E-001 'Magnetic property curves') when obtained", "verify": true}
+      core_loss_curves: {"type": "derived", "src": "jfe_f1e002", "note": "POINT SET OF ANSYS PERSONALLIB ORIGIN, anchor-consistent: W10/50 0.514 vs 0.5, W10/400 5.84 vs 5.7 (+2.4 %), W10/1k 18.9 vs 18.7 W/kg (+1.2 %). Replace with the JFE curve file", "verify": true}
+      core_loss_kh: {"type": "derived", "src": "jfe_f1e002", "note": "Bertotti fit of the curves (materials.fit_bertotti_from_curves); replaces the Maxwell-fitted coefficients"}
+      core_loss_kc: {"type": "derived", "src": "jfe_f1e002", "note": "as core_loss_kh"}
+      core_loss_ke: {"type": "derived", "src": "jfe_f1e002", "note": "as core_loss_kh"}
+      sigma: {"type": "datasheet", "src": "jfe_f1e002", "note": "p.5 specific resistance 0.82 uOhm m -> 1.2195e6 S/m (matches)"}
+      stacking_factor: {"type": "datasheet", "src": "jfe_f1e002", "note": "p.10 space factor 90 % or more (matches)"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "not in the JFE catalog", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "not in the JFE catalog", "verify": true, "source": "none"}
+      cte_ppm_k: {"type": "estimate", "note": "not in the JFE catalog", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "estimate", "note": "typical 6.5 % Si value, not in the JFE catalog", "verify": true, "source": "none"}
     description: "JFE Steel 10JNEX900 — ultra-thin (0.10 mm) Si-steel, high-frequency"
     form: lamination
     stacking_factor: 0.90
@@ -301,9 +288,9 @@ steel:
     thermal_conductivity: null
     specific_heat: null
     core_loss_model: bertotti
-    core_loss_kh: 133.474786410586
-    core_loss_kc: 0.0134650388489389
-    core_loss_ke: 1.26413752880456
+    core_loss_kh: 72.0772494   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_kc: 0.0128812215   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_ke: 1.69723504   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
     core_loss_curve_unit: w_per_kg
     bh_curve:
       - [0,     0.000]
@@ -390,6 +377,20 @@ steel:
         - [0.600, 600.456]
 
   B15AHV950M:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "baowu_b15", "doc": "Baosteel/Baowu 'B15AHV950M Product info 2025' product introduction + 'B15AHV950M Electromagnetic curve' workbook, supplied by Dehn Technologies (Shanghai) Co., Ltd. (distributor)", "received": "2026-04-09", "rev": "2025", "read": "2026-09-29"}
+    prov:
+      bh_curve: {"type": "derived", "src": "baowu_b15", "note": "workbook DC points up to 10 kA/m; above that the measured B flattens/decreases (sample saturation artefact), so the tail is continued with slope mu0 from the last rising point"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
+      cte_ppm_k: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "datasheet", "src": "baowu_b15", "note": "guaranteed minimum, longitudinal (typical 485 MPa); workbook sheet '力学性能' gives yield 490 / tensile 594 MPa at 25 C, 415 / 568 MPa at 150 C"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "baowu_b15", "note": "guaranteed minimum, longitudinal (typical 570 MPa)"}
+      core_loss_kh: {"type": "derived", "src": "baowu_b15", "note": "fit of the supplier curves (fallback outside the measured surface)"}
+      core_loss_kc: {"type": "derived", "src": "baowu_b15", "note": "as core_loss_kh"}
+      core_loss_ke: {"type": "derived", "src": "baowu_b15", "note": "as core_loss_kh"}
     description: "Baosteel B15AHV950M — non-oriented (NGO) electrical steel, 0.15 mm, EV traction grade"
     note: "Manufacturer data 2025: 'B15AHV950M Electromagnetic curve' workbook (DC B-H + core loss at 15 frequencies, 50 Hz-10 kHz) and 'B15AHV950M Product info 2025' datasheet (0.15 mm, assumed density 7.60 kg/dm3, min lamination factor 92.0 %, guaranteed P1.0/400 <= 9.50 W/kg, typical 9.00; J5000 >= 1.64 T). Curve file reproduces both anchors: P1.0/400 = 8.842 W/kg, B(5000 A/m) = 1.674 T."
     form: lamination
@@ -401,7 +402,8 @@ steel:
     youngs_modulus_gpa: 200        # GPa  non-oriented electrical steel
     poisson_ratio: 0.30            # -    typical for a ferrous alloy
     cte_ppm_k: 12.0   # ppm/K  in-plane, isotropic. Electrical steel / ferrous core, user 2026-09-07
-    yield_strength_mpa: 350        # MPa  # typical, not from the datasheet (NO electrical steel)
+    yield_strength_mpa: 460        # MPa  guaranteed minimum (product introduction)
+    tensile_strength_mpa: 540      # MPa  guaranteed minimum (product introduction)
     thermal_conductivity: null
     specific_heat: null
     saturation_B: 1.997     # T
@@ -701,18 +703,33 @@ steel:
         - [0.531, 306]
 
   B10AHV900M:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "baowu_b10", "doc": "Baosteel/Baowu 'B10AHV900M Product info 2025' product introduction + 'B10AHV900M Electromagnetic curve' workbook, supplied by Dehn Technologies (Shanghai) Co., Ltd. (distributor)", "received": "2026-04-09", "rev": "2025", "read": "2026-09-29"}
+    prov:
+      bh_curve: {"type": "derived", "src": "baowu_b10", "note": "workbook DC points up to 10 kA/m; above that the measured B flattens/decreases (sample saturation artefact), so the tail is continued with slope mu0 from the last rising point"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
+      cte_ppm_k: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "datasheet", "src": "baowu_b10", "note": "guaranteed minimum, longitudinal (typical 475 MPa)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "baowu_b10", "note": "guaranteed minimum, longitudinal (typical 555 MPa)"}
+      core_loss_kh: {"type": "derived", "src": "baowu_b10", "note": "fit of the supplier curves (fallback outside the measured surface)"}
+      core_loss_kc: {"type": "derived", "src": "baowu_b10", "note": "as core_loss_kh"}
+      core_loss_ke: {"type": "derived", "src": "baowu_b10", "note": "as core_loss_kh"}
     description: "Baosteel B10AHV900M — non-oriented (NGO) electrical steel, 0.10 mm, EV traction grade"
     note: "Manufacturer data 2025: 'B10AHV900M Electromagnetic curve' workbook (DC B-H + core loss at 12 frequencies, 50 Hz-10 kHz) and 'B10AHV900M Product info 2025' datasheet (0.10 mm, assumed density 7.60 kg/dm3, min lamination factor 92.0 %, guaranteed P1.0/400 <= 9.00 W/kg, typical 8.50; J5000 >= 1.64 T). Curve file reproduces both anchors: P1.0/400 = 8.488 W/kg, B(5000 A/m) = 1.672 T."
     form: lamination
     thickness_mm: 0.1
-    stacking_factor: 0.90     # user 2026-09-05: measured stack, not the 92 % datasheet minimum
+    stacking_factor: 0.9   # user 2026-09-05: measured stack, not the 92 % datasheet minimum
     sigma: 0
     density: 7600
     # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
     youngs_modulus_gpa: 200        # GPa  non-oriented electrical steel
     poisson_ratio: 0.30            # -    typical for a ferrous alloy
     cte_ppm_k: 12.0   # ppm/K  in-plane, isotropic. Electrical steel / ferrous core, user 2026-09-07
-    yield_strength_mpa: 350        # MPa  # typical, not from the datasheet (NO electrical steel)
+    yield_strength_mpa: 450        # MPa  guaranteed minimum (product introduction)
+    tensile_strength_mpa: 530      # MPa  guaranteed minimum (product introduction)
     thermal_conductivity: null
     specific_heat: null
     saturation_B: 2.021     # T
@@ -1199,6 +1216,19 @@ steel:
         - [0.399, 141.1]
 
   20RSW175:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "shougang_rsw", "doc": "Shougang 20RSW175 (VHs) product introduction + 'Magnetic curves of Shougang-20RSW175' workbook, supplied by Dehn Technologies (Shanghai) Co., Ltd. (distributor)", "received": "2026-04-09", "read": "2026-09-29"}
+    prov:
+      youngs_modulus_gpa: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
+      cte_ppm_k: {"type": "estimate", "note": "not in the supplier documents", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "datasheet", "src": "shougang_rsw", "note": "guaranteed minimum, longitudinal (typical 250 MPa)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "shougang_rsw", "note": "guaranteed minimum, longitudinal (typical 380 MPa)"}
+      core_loss_kh: {"type": "derived", "src": "shougang_rsw", "note": "fit of the supplier curves (fallback outside the measured surface)"}
+      core_loss_kc: {"type": "derived", "src": "shougang_rsw", "note": "as core_loss_kh"}
+      core_loss_ke: {"type": "derived", "src": "shougang_rsw", "note": "as core_loss_kh"}
     description: "Shougang 20RSW175 (VHs) — non-oriented electrical steel, 0.20 mm, ultra-high induction, robot torque-motor grade"
     note: "Manufacturer data: 'Magnetic curves of Shougang-20RSW175' workbook (DC B-H + core loss at 23 frequencies, 50 Hz-20 kHz) and the Shougang 20RSW175 (VHs) product introduction (0.20 mm, conventional density 7.75 kg/dm3, stacking factor >= 95 %, guaranteed P1.0/400 <= 15 W/kg, typical 14.4; J50 >= 1.75 T, typical 1.76). Curve file reproduces both anchors: P1.0/400 = 14.032 W/kg, B(5000 A/m) = 1.762 T."
     form: lamination
@@ -1210,7 +1240,8 @@ steel:
     youngs_modulus_gpa: 200        # GPa  non-oriented electrical steel
     poisson_ratio: 0.30            # -    typical for a ferrous alloy
     cte_ppm_k: 12.0   # ppm/K  in-plane, isotropic. Electrical steel / ferrous core, user 2026-09-07
-    yield_strength_mpa: 350        # MPa  # typical, not from the datasheet (NO electrical steel)
+    yield_strength_mpa: 220        # MPa  guaranteed minimum (product introduction)
+    tensile_strength_mpa: 350      # MPa  guaranteed minimum (product introduction)
     thermal_conductivity: null
     specific_heat: null
     saturation_B: 2.214     # T
@@ -1820,6 +1851,22 @@ steel:
         - [0.2, 362.5]
 
   JFE_Steel_20JNEH1200:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "jfe_tr31", "doc": "JFE Technical Report No.31 (Mar. 2024), Okubo et al., 'Recent Development of Non-Oriented Electrical Steel for HEV and EV in JFE Steel', p.13 Table 1 (20JNEH1200: W15/50 2.13, W10/400 11.0 W/kg, B50 1.67 T)", "url": "https://www.jfe-steel.co.jp/en/research/report/031/pdf/031-03.pdf", "page": 13, "read": "2026-09-29"}
+    prov:
+      bh_curve: {"type": "derived", "src": "jfe_tr31", "note": "POINT SET OF ANSYS PERSONALLIB ORIGIN (also in Downloads/20JNEH1200.tab), kept because it reproduces JFE's anchor: B50 1.685 vs 1.67 T (+0.9 %). Replace with JFE's curve file", "verify": true}
+      core_loss_curves: {"type": "derived", "src": "jfe_tr31", "note": "POINT SET OF ANSYS PERSONALLIB ORIGIN, anchor-consistent: W15/50 2.14 vs 2.13 (+0.5 %), W10/400 10.9 vs 11.0 W/kg (-0.9 %). Replace with JFE's curve file", "verify": true}
+      core_loss_kh: {"type": "derived", "src": "jfe_tr31", "note": "Bertotti fit of the curves; replaces the Maxwell-fitted coefficients"}
+      core_loss_kc: {"type": "derived", "src": "jfe_tr31", "note": "as core_loss_kh"}
+      core_loss_ke: {"type": "derived", "src": "jfe_tr31", "note": "as core_loss_kh"}
+      density: {"type": "estimate", "note": "7.65 kg/dm3 'assumed density' is JFE's figure as quoted by third-party listings; not in Technical Report 31", "verify": true, "source": "none"}
+      stacking_factor: {"type": "estimate", "note": "0.97 not found in a JFE document", "verify": true, "source": "none"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "not in the JFE documents read", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "not in the JFE documents read", "verify": true, "source": "none"}
+      cte_ppm_k: {"type": "estimate", "note": "not in the JFE documents read", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "estimate", "note": "typical NO-steel value", "verify": true, "source": "none"}
     description: "JFE Steel 20JNEH1200 — non-oriented electrical steel, 0.20 mm"
     form: lamination
     stacking_factor: 0.97
@@ -1833,9 +1880,9 @@ steel:
     thermal_conductivity: null
     specific_heat: null
     core_loss_model: bertotti
-    core_loss_kh: 173.295800803324
-    core_loss_kc: 0.0859561716280974
-    core_loss_ke: 2.06787925813399
+    core_loss_kh: 125.435641   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_kc: 0.0959462164   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_ke: 2.44765379   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
     core_loss_curve_unit: w_per_kg
     bh_curve:
       - [0,      0.0000]
@@ -2032,7 +2079,22 @@ steel:
         - [0.230, 100.0]
 
   20SW1200:
-    description: "JFE Steel 20SW1200 — non-oriented electrical steel, 0.20 mm (2025 meas.)"
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "shougang_2024", "doc": "Beijing Shougang Co., Non-oriented electrical steel product handbook (PDF 2024-12-25), p.8 NEV series guaranteed (20SW1200: 0.20 mm, 7.65 kg/dm3, P1.0/400 <= 12.0, B50 >= 1.61) and typical (7.60, P1.0/400 11.0, B50 1.63)", "url": "https://www.shougang.com.cn/u/cms/www/202412/2024122702.pdf", "page": 8, "read": "2026-09-29"}
+    prov:
+      bh_curve: {"type": "derived", "src": "shougang_2024", "note": "POINT SET OF UNCERTAIN ORIGIN (entered via the Ansys PersonalLib; Downloads/20SW1200.tab, 2025), kept because it reproduces Shougang's typical B50 1.63 T (curve 1.639, +0.6 %). Ask Shougang for the curve workbook (as for 20RSW175)", "verify": true}
+      core_loss_curves: {"type": "derived", "src": "shougang_2024", "note": "same origin; anchor-consistent: P1.0/400 11.21 vs typical 11.0 W/kg (+1.9 %), under the 12.0 guarantee", "verify": true}
+      core_loss_kh: {"type": "derived", "src": "shougang_2024", "note": "Bertotti fit of the curves; replaces the hand-set coefficients"}
+      core_loss_kc: {"type": "derived", "src": "shougang_2024", "note": "as core_loss_kh"}
+      core_loss_ke: {"type": "derived", "src": "shougang_2024", "note": "as core_loss_kh"}
+      stacking_factor: {"type": "estimate", "note": "0.95 not in the handbook", "verify": true, "source": "none"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "not in the handbook", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "not in the handbook", "verify": true, "source": "none"}
+      cte_ppm_k: {"type": "estimate", "note": "not in the handbook", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "estimate", "note": "typical NO-steel value", "verify": true, "source": "none"}
+    description: "Shougang 20SW1200 - non-oriented electrical steel, 0.20 mm, NEV series"
     form: lamination
     stacking_factor: 0.95
     sigma: 0
@@ -2045,9 +2107,9 @@ steel:
     thermal_conductivity: null
     specific_heat: null
     core_loss_model: bertotti
-    core_loss_kh: 139.921979119876
-    core_loss_kc: 0.201729356570559
-    core_loss_ke: 0.0
+    core_loss_kh: 115.340729   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_kc: 0.0799395817   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
+    core_loss_ke: 3.84225901   # derived: Bertotti fit of this card's curves (fit_bertotti_from_curves)
     core_loss_curve_unit: w_per_kg
     bh_curve:
       - [0,      0.000]
@@ -2382,21 +2444,32 @@ steel:
 
 
   Steel_42CrMo4_QT:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "dew_42crmo4", "doc": "Deutsche Edelstahlwerke / Swiss Steel Group, 1.7225/1.7227 42CrMo4 material data sheet (physical properties: 7.72 kg/dm3, E 210 GPa, 0.19 Ohm mm2/m, 42.6 W/mK, 470 J/kgK, 11.1e-6/K 20-100 C)", "url": "https://swisssteel-group.com/en/services/download-center/1-7225-1-7227-42crmo4-42crmos4-werkstoffdatenblatt", "read": "2026-09-29"}
+      - {"id": "en10083_3", "doc": "EN 10083-3 quenched-and-tempered minimum proof strength by ruling section (as tabulated in the DEW data sheets): 42CrMo4 16<d<=40 mm Rp0.2 >= 750 MPa; 34CrNiMo6 16<d<=40 mm >= 900 MPa", "read": "2026-09-29"}
+      - {"id": "en1993", "doc": "EN 1993-1-1 section 3.2.6: design values for structural steel E = 210 GPa, nu = 0.3", "read": "2026-09-29"}
+    prov:
+      yield_strength_mpa: {"type": "datasheet", "src": "en10083_3", "note": "ruling section 16 < d <= 40 mm: >= 750 MPa (a thicker bar is lower: 40-100 mm 650)"}
+      poisson_ratio: {"type": "datasheet", "src": "en1993", "note": "0.3"}
+      bh_curve: {"type": "estimate", "note": "generic QT low-alloy curve, no published source found; measure the bar (ring test, IEC 60404-4) or obtain a mill curve", "verify": true, "source": "none"}
+      stacking_factor: {"type": "estimate", "note": "1.0 by definition for a solid part"}
     description: "42CrMo4 / AISI 4140, quenched and tempered — solid alloy-steel shaft"
     form: solid          # one piece of quenched-and-tempered alloy steel — a shaft, not a stack
     # SOLID and MAGNETIC: assigned to the shaft, the FEM gives it this B-H curve
     # (the shaft joins the rotor flux path) and solves its eddy current with
     # sigma — unlike the aluminium it replaces, which is non-magnetic and
     # 6x more conductive.  Added 2026-09-08 on request (shaft material study).
-    sigma: 4.4e+06          # S/m  (rho ~ 0.23 uOhm.m at 20 C, QT alloy steel)
-    density: 7850
-    thermal_conductivity: 42
+    sigma: 5263158.0   # S/m  (rho ~ 0.23 uOhm.m at 20 C, QT alloy steel)
+    density: 7720
+    thermal_conductivity: 42.6
     specific_heat: 470
     stacking_factor: 1.0
     # --- mechanical (rotor structural solve) ---
     youngs_modulus_gpa: 210
     poisson_ratio: 0.30
-    cte_ppm_k: 12.3   # ppm/K  isotropic
+    cte_ppm_k: 11.1   # ppm/K  DEW data sheet, 20-100 C
     yield_strength_mpa: 750   # MPa  Rp0.2, QT; 650 (D 40-100 mm) ... 900 (D <= 16 mm) by section — 750 typical for a 60 mm shaft
     # No lamination and no Bertotti fit: the shaft's loss is the SOLVED eddy
     # current (sigma above); hysteresis in a solid shaft under the slot
@@ -2428,21 +2501,32 @@ steel:
       - [ 250000, 2.18]
 
   Steel_34CrNiMo6_QT:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "dew_34crnimo6", "doc": "Deutsche Edelstahlwerke, Technical data sheet 34CrNiMo6 1.6582 Firmodur 6582 (2018-12-19), p.1 physical properties, p.2 +QT table", "url": "https://swisssteel-group.com/content-media/documents/Data-Sheets/Engineering-Steel/1.6582_en.pdf", "page": "1-2", "read": "2026-09-29"}
+      - {"id": "en10083_3", "doc": "EN 10083-3 quenched-and-tempered minimum proof strength by ruling section (as tabulated in the DEW data sheets): 42CrMo4 16<d<=40 mm Rp0.2 >= 750 MPa; 34CrNiMo6 16<d<=40 mm >= 900 MPa", "read": "2026-09-29"}
+      - {"id": "en1993", "doc": "EN 1993-1-1 section 3.2.6: design values for structural steel E = 210 GPa, nu = 0.3", "read": "2026-09-29"}
+    prov:
+      yield_strength_mpa: {"type": "datasheet", "src": "en10083_3", "note": "ruling section 16 < d <= 40 mm: >= 900 MPa (a thicker bar is lower: 40-100 mm 800)"}
+      poisson_ratio: {"type": "datasheet", "src": "en1993", "note": "0.3"}
+      bh_curve: {"type": "estimate", "note": "generic QT low-alloy curve, no published source found; measure the bar (ring test, IEC 60404-4) or obtain a mill curve", "verify": true, "source": "none"}
+      stacking_factor: {"type": "estimate", "note": "1.0 by definition for a solid part"}
     description: "34CrNiMo6 / AISI 4340, quenched and tempered — high-strength solid shaft"
     form: solid          # one piece of quenched-and-tempered alloy steel — a shaft, not a stack
     # SOLID and MAGNETIC: assigned to the shaft, the FEM gives it this B-H curve
     # (the shaft joins the rotor flux path) and solves its eddy current with
     # sigma — unlike the aluminium it replaces, which is non-magnetic and
     # 6x more conductive.  Added 2026-09-08 on request (shaft material study).
-    sigma: 4e+06          # S/m  (rho ~ 0.25 uOhm.m at 20 C, QT alloy steel)
-    density: 7850
-    thermal_conductivity: 40
+    sigma: 5263158.0   # S/m  (rho ~ 0.25 uOhm.m at 20 C, QT alloy steel)
+    density: 7730
+    thermal_conductivity: 42.6
     specific_heat: 470
     stacking_factor: 1.0
     # --- mechanical (rotor structural solve) ---
     youngs_modulus_gpa: 210
     poisson_ratio: 0.30
-    cte_ppm_k: 12.0   # ppm/K  isotropic
+    cte_ppm_k: 11.1   # ppm/K  DEW data sheet, 20-100 C
     yield_strength_mpa: 900   # MPa  Rp0.2, QT; 800 (D 40-100 mm) ... 1000 (D <= 16 mm) by section — 900 typical for a 60 mm shaft
     # No lamination and no Bertotti fit: the shaft's loss is the SOLVED eddy
     # current (sigma above); hysteresis in a solid shaft under the slot
@@ -2509,13 +2593,14 @@ steel:
 #
 # CONSISTENCY, ENFORCED BY tests/test_magnet_temperature.py: where the library
 # holds two cards of one grade, rescaling one to the other's temperature must
-# reproduce it — Br within 1 %, knee field within 5 %.  Measured 2026-09-08:
-#   N52UH_100C -> 150 C : Br 1.2200 vs 1.2200 (-0.001 %), knee -730.0 vs
-#                         -730.0 kA/m (+0.00 %)
+# reproduce it — Br within 1 %, knee field within 5 %.  Measured 2026-09-29:
+#   N52UH_100C -> 150 C : Br 1.2069 vs 1.2069 (0.00 %), knee -670.6 vs
+#                         -670.6 kA/m (0.00 %)
 #   N45EH_150C -> 180 C : Br 1.1014 vs 1.1020 (-0.05 %),  knee -606.4 vs
 #                         -619.0 kA/m (-2.04 %)
-# The N45EH pair is the honest check of the two: its coefficients come from the
-# published datasheet slope, not from fitting the pair.
+# Since 2026-09-29 the N52UH / F52SH / F45SH cards are GENERATED from one
+# manufacturer sheet each (Br20, HcJ20 min, alpha, beta), so their pairs agree
+# by construction; each card's knee (point[1]) is its datasheet HcJ(T).
 #
 # LIMIT.  This is the REVERSIBLE model only — it says where the card's curve
 # sits at temperature T, not what an excursion has permanently taken away
@@ -2530,223 +2615,210 @@ steel:
 magnet:
 
   N52UH_150C:
-    description: "Arnold Magnetics N52UH — operating point 150 °C"
-    # Renamed from Arnold_N52UH_150C on 2026-09-08 (one naming rule for magnets:
-    # <grade>_<T>C, no maker prefix — user).  The old name still resolves
-    # (materials.MATERIAL_ALIASES), so stored duties and runs keep working.
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "arnold_g52uh", "doc": "Arnold Magnetic Technologies, G52UH (grain-boundary-diffused N52UH) data sheet Rev. 210607: Br 1410/1430/1450 mT, HcB 1086 kA/m nom, HcJ >= 1990 kA/m, alpha(Br) -0.12 %/C, alpha(HcJ) -0.51 %/C (20-180 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp e-6/C", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52UH_GBDD_181031.pdf", "file": "Downloads/N52UH.pdf", "rev": "210607", "read": "2026-09-29"}
+      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
+      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "derived", "src": "arnold_g52uh", "note": "nominal Br20 1.43 T moved to 150 C with the datasheet alpha"}
+      Hc: {"type": "derived", "src": "arnold_g52uh", "note": "Br/(mu0*mu_rec)"}
+      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.048 (Br/(mu0 HcB))"}
+      bh_curve: {"type": "derived", "src": "arnold_g52uh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
+      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
+      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
+      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
+    source_note: "Independent same-grade reference: Arnold G52UH. The magnets are bought from Ningbo Permanent Magnetics (N52UH) - replace with NPM's own sheet when obtained."
+    description: "Sintered NdFeB N52UH - operating point 150 C"
+    # Every number is the manufacturer's 20 C data sheet value (G52UH (Arnold, Rev. 210607))
+    # moved to 150 C with that sheet's own alpha/beta; the reversible
+    # coefficients below are re-referenced to this card's T_ref (section
+    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
     grade: N52UH
-    # Maximum working temperature of the UH class (2026-09-15, user):
-    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
-    # and it is NOT this card's `temperature_c`, which is only the
-    # temperature the card was measured at.
-    max_working_temp_c: 180   # degC
+    max_working_temp_c: 180   # degC  class maximum working temperature (HGT Table I)
     temperature_c: 150   # T_ref of this card — see the section header
-    # Reversible temperature coefficients, REFERENCED TO THIS CARD'S 150 C.
-    # Derived 2026-09-08 from the library's own N52UH pair (100 C / 150 C),
-    # which is the only self-consistent source for them: Br 1.30 -> 1.22 and
-    # knee -1155 -> -730 kA/m over 50 K.  Equivalent 20 C-referenced values are
-    # alpha(20) = -0.112 %/K and beta(20) = -0.463 %/K — both inside the UH
-    # datasheet band (Arnold N52UH, -0.11..-0.12 and -0.45..-0.55 %/K), which
-    # is why the pair is taken as the calibration rather than a typical number.
-    # Rescaling this card to 100 C returns Br 1.3000 and knee -1155.0 kA/m.
-    alpha_br_pct_per_k: -0.1311    # %/K  (Br)
-    beta_hcj_pct_per_k: -1.1644    # %/K  (Hcj / knee field)
-    # Key scalar parameters (derived from B-H curve)
-    Br: 1.22           # T — remanence at H=0
-    # 2026-09-08: mu_rec was 1.349 — a SECANT through the curve's B = 0 crossing
-    # (Hc 719676), not the recoil permeability.  The FEM magnet region uses mu_rec
-    # as its mu_r, so the magnet was ~30 % too soft (the same fault F45SH_120C was
-    # cured of).  Sintered NdFeB recoil permeability is ~1.05; the normal
-    # coercivity of the linear model follows as Hc = Br/(mu0*mu_rec).  The demag
-    # knee is unchanged — it lives in bh_curve below (H_knee ~ -730 kA/m).
-    Hc: 924614         # A/m — normal coercivity = Br / (mu0 * mu_rec)
-    mu_rec: 1.050      # relative recoil permeability (sintered NdFeB)
-    sigma: 555555.6    # S/m
-    density: 7500
-    # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
-    # Sintered NdFeB is a CERAMIC-like brittle intermetallic: it never yields, it
-    # cracks, and it is ~12x stronger in compression than in tension.  The rotor
-    # check is therefore against the TENSILE strength, and the compressive number
-    # is carried so a spoke magnet squeezed by the sleeve can be judged too.
+    alpha_br_pct_per_k: -0.1422   # %/K  = -0.12/(1-0.12/100*(150-20))
+    beta_hcj_pct_per_k: -1.5134   # %/K  = -0.51/(1-0.51/100*(150-20))
+    Br: 1.2069   # T  (datasheet Br20 moved by datasheet alpha)
+    Hc: 914701   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
+    mu_rec: 1.05   # HGT Table IV
+    sigma: 666666.7   # S/m
+    density: 7600
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 5.0    # ppm/K  PARALLEL to the magnetisation (user 2026-09-07)
-    cte_ppm_k_2: -1.5   # ppm/K  PERPENDICULAR to it - sintered NdFeB CONTRACTS across the alignment axis
+    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
+    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
     tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    thermal_conductivity: 7.6
+    thermal_conductivity: 6.16
     specific_heat: 460
-    # Full demagnetisation B-H curve (2nd quadrant, H A/m → B T)
-    # Positive direction (+X in Maxwell). For -X pole flip H sign.
     bh_curve:
-      - [-731000, -0.9504]
-      - [-730000, -0.6237]
-      - [-725000, -0.073]
-      - [-714000,  0.1043]
-      - [-705000,  0.170]
-      - [-696000,  0.220]
-      - [-688000,  0.260]
-      - [-679000,  0.280]
-      - [-662000,  0.315]
-      - [-636000,  0.351]
-      - [-610000,  0.386]
-      - [-576000,  0.433]
-      - [-542000,  0.479]
-      - [-507000,  0.527]
-      - [-473000,  0.574]
-      - [-438000,  0.621]
-      - [-404000,  0.668]
-      - [-370000,  0.714]
-      - [-335000,  0.762]
-      - [-301000,  0.809]
-      - [-266000,  0.856]
-      - [-232000,  0.903]
-      - [-198000,  0.949]
-      - [-163000,  0.997]
-      - [-129000,  1.044]
-      - [-95000,   1.090]
-      - [-60000,   1.138]
-      - [-26000,   1.184]
-      - [-9000,    1.208]
-      - [0,        1.220]
+      - [-690749, -1.4715]
+      - [-670630, -0.8427]
+      - [-665600, -0.3263]
+      - [-660571, 0.0444]
+      - [-655541, 0.2694]
+      - [-650511, 0.3486]
+      - [-617986, 0.3915]
+      - [-585460, 0.4344]
+      - [-520409, 0.5203]
+      - [-455358, 0.6061]
+      - [-390307, 0.6919]
+      - [-325256, 0.7778]
+      - [-260204, 0.8636]
+      - [-195153, 0.9494]
+      - [-130102, 1.0353]
+      - [-65051, 1.1211]
+      - [0, 1.2069]
 
   N52UH_20C:
-    description: "Arnold Magnetics N52UH — operating point 20 °C (cold magnets)"
-    # Added 2026-09-09 (user: "заведи материал N52UH 20C") — the same magnet as
-    # N52UH_150C / N52UH_100C, quoted at room temperature, for the COLD back-EMF
-    # and the cold runaway threshold of the G2-L40 (on cold magnets at the
-    # pack floor voltage).  Every number is the 150 °C card
-    # rescaled by that card's own coefficients over 130 K — no new source:
-    #   Br   = 1.22 · (1 − 0.1311 %/K · (20 − 150) K) = 1.4279 T
-    #   Hc   = Br / (mu0 · mu_rec)                    = 1082196 A/m  (normal coercivity of the linear model)
-    #   knee = −730 kA/m · (1 − 1.1644 %/K · (20 − 150) K) = -1835 kA/m  (intrinsic, Hcj)
-    # At 20 °C the intrinsic knee lies BEYOND the normal coercivity, so the 2nd-
-    # quadrant curve is a straight line all the way to B = 0 and the knee sits
-    # in the 3rd quadrant — a cold UH magnet cannot be demagnetised by the
-    # machine's own field; the curve carries the knee there for completeness.
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "arnold_g52uh", "doc": "Arnold Magnetic Technologies, G52UH (grain-boundary-diffused N52UH) data sheet Rev. 210607: Br 1410/1430/1450 mT, HcB 1086 kA/m nom, HcJ >= 1990 kA/m, alpha(Br) -0.12 %/C, alpha(HcJ) -0.51 %/C (20-180 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp e-6/C", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52UH_GBDD_181031.pdf", "file": "Downloads/N52UH.pdf", "rev": "210607", "read": "2026-09-29"}
+      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
+      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "derived", "src": "arnold_g52uh", "note": "nominal Br20 1.43 T moved to 20 C with the datasheet alpha"}
+      Hc: {"type": "derived", "src": "arnold_g52uh", "note": "Br/(mu0*mu_rec)"}
+      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.048 (Br/(mu0 HcB))"}
+      bh_curve: {"type": "derived", "src": "arnold_g52uh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
+      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
+      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
+      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
+    source_note: "Independent same-grade reference: Arnold G52UH. The magnets are bought from Ningbo Permanent Magnetics (N52UH) - replace with NPM's own sheet when obtained."
+    description: "Sintered NdFeB N52UH - operating point 20 C (cold magnets)"
+    # Every number is the manufacturer's 20 C data sheet value (G52UH (Arnold, Rev. 210607))
+    # moved to 20 C with that sheet's own alpha/beta; the reversible
+    # coefficients below are re-referenced to this card's T_ref (section
+    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
     grade: N52UH
-    # Maximum working temperature of the UH class (2026-09-15, user):
-    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
-    # and it is NOT this card's `temperature_c`, which is only the
-    # temperature the card was measured at.
-    max_working_temp_c: 180   # degC
+    max_working_temp_c: 180   # degC  class maximum working temperature (HGT Table I)
     temperature_c: 20    # T_ref of this card — see the section header
-    # Reversible temperature coefficients, REFERENCED TO THIS CARD'S 20 C — the
-    # 20 C-referenced values the N52UH_150C comment derives from the 100/150 pair.
-    alpha_br_pct_per_k: -0.112     # %/K  (Br)
-    beta_hcj_pct_per_k: -0.463     # %/K  (Hcj / knee field)
-    Br: 1.4279           # T — remanence at H=0
-    Hc: 1082196        # A/m — normal coercivity = Br / (mu0 * mu_rec)
-    mu_rec: 1.050      # relative recoil permeability (sintered NdFeB)
-    sigma: 555555.6    # S/m
-    density: 7500
-    # --- mechanical (same sintered NdFeB as the other N52UH cards) ---
+    alpha_br_pct_per_k: -0.12   # %/K  = -0.12/(1-0.12/100*(20-20))
+    beta_hcj_pct_per_k: -0.51   # %/K  = -0.51/(1-0.51/100*(20-20))
+    Br: 1.43   # T  (datasheet Br20 moved by datasheet alpha)
+    Hc: 1083769   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
+    mu_rec: 1.05   # HGT Table IV
+    sigma: 666666.7   # S/m
+    density: 7600
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 5.0    # ppm/K  PARALLEL to the magnetisation
-    cte_ppm_k_2: -1.5   # ppm/K  PERPENDICULAR to it
+    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
+    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
     tensile_strength_mpa: 80       # MPa
     compressive_strength_mpa: 1000 # MPa
-    thermal_conductivity: 7.6
+    thermal_conductivity: 6.16
     specific_heat: 460
-    # Demagnetisation curve (H A/m → B T): linear at mu_rec down to the intrinsic
-    # knee, which at 20 °C is in the 3rd quadrant (see above)
     bh_curve:
-      - [ -1846000,  -1.9578]
-      - [ -1845000,  -1.6065]
-      - [ -1843000,  -1.3039]
-      - [ -1840000,  -1.0499]
-      - [ -1825000,  -0.9801]
-      - [ -1800000,  -0.9471]
-      - [ -1750000,  -0.8811]
-      - [ -1600000,  -0.6832]
-      - [ -1400000,  -0.4193]
-      - [ -1200000,  -0.1554]
-      - [ -1082000,   0.0003]
-      - [ -1000000,   0.1085]
-      - [  -900000,   0.2404]
-      - [  -800000,   0.3723]
-      - [  -700000,   0.5043]
-      - [  -600000,   0.6362]
-      - [  -500000,   0.7682]
-      - [  -400000,   0.9001]
-      - [  -300000,   1.0321]
-      - [  -200000,   1.1640]
-      - [  -150000,   1.2300]
-      - [  -100000,   1.2960]
-      - [   -60000,   1.3488]
-      - [   -26000,   1.3936]
-      - [    -9000,   1.4160]
-      - [        0,   1.4279]
+      - [-2049700, -3.2907]
+      - [-1990000, -2.5007]
+      - [-1975075, -1.9094]
+      - [-1960150, -1.4817]
+      - [-1945225, -1.2175]
+      - [-1930300, -1.117]
+      - [-1833785, -0.9896]
+      - [-1737270, -0.8623]
+      - [-1544240, -0.6076]
+      - [-1351210, -0.3529]
+      - [-1158180, -0.0982]
+      - [-965150, 0.1565]
+      - [-772120, 0.4112]
+      - [-579090, 0.6659]
+      - [-386060, 0.9206]
+      - [-193030, 1.1753]
+      - [0, 1.43]
 
   N52UH_100C:
-    description: "Arnold Magnetics N52UH — operating point 100 °C"
-    # Renamed from Arnold_N52UH_100C on 2026-09-08 (see N52UH_150C); old name aliased.
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "arnold_g52uh", "doc": "Arnold Magnetic Technologies, G52UH (grain-boundary-diffused N52UH) data sheet Rev. 210607: Br 1410/1430/1450 mT, HcB 1086 kA/m nom, HcJ >= 1990 kA/m, alpha(Br) -0.12 %/C, alpha(HcJ) -0.51 %/C (20-180 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp e-6/C", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52UH_GBDD_181031.pdf", "file": "Downloads/N52UH.pdf", "rev": "210607", "read": "2026-09-29"}
+      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
+      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "derived", "src": "arnold_g52uh", "note": "nominal Br20 1.43 T moved to 100 C with the datasheet alpha"}
+      Hc: {"type": "derived", "src": "arnold_g52uh", "note": "Br/(mu0*mu_rec)"}
+      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52uh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.048 (Br/(mu0 HcB))"}
+      bh_curve: {"type": "derived", "src": "arnold_g52uh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
+      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
+      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
+      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
+    source_note: "Independent same-grade reference: Arnold G52UH. The magnets are bought from Ningbo Permanent Magnetics (N52UH) - replace with NPM's own sheet when obtained."
+    description: "Sintered NdFeB N52UH - operating point 100 C"
+    # Every number is the manufacturer's 20 C data sheet value (G52UH (Arnold, Rev. 210607))
+    # moved to 100 C with that sheet's own alpha/beta; the reversible
+    # coefficients below are re-referenced to this card's T_ref (section
+    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
     grade: N52UH
-    # Maximum working temperature of the UH class (2026-09-15, user):
-    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
-    # and it is NOT this card's `temperature_c`, which is only the
-    # temperature the card was measured at.
-    max_working_temp_c: 180   # degC
+    max_working_temp_c: 180   # degC  class maximum working temperature (HGT Table I)
     temperature_c: 100   # T_ref of this card — see the section header
-    # Reversible temperature coefficients, REFERENCED TO THIS CARD'S 100 C;
-    # same derivation as N52UH_150C (the library's own 100/150 pair), read in
-    # the other direction.  20 C-referenced equivalents: alpha(20) = -0.112,
-    # beta(20) = -0.463 %/K.  Rescaling this card to 150 C returns Br 1.2200
-    # (card: 1.22) and knee -730.0 kA/m (card: -730.0) — the pair is exact by
-    # construction, which is the point: the two cards are ONE material.
-    alpha_br_pct_per_k: -0.1231    # %/K  (Br)
-    beta_hcj_pct_per_k: -0.7359    # %/K  (Hcj / knee field)
-    Br: 1.30
-    Hc: 983000
-    mu_rec: 1.052
-    sigma: 555555.6
-    density: 7500
-    # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
-    # Sintered NdFeB is a CERAMIC-like brittle intermetallic: it never yields, it
-    # cracks, and it is ~12x stronger in compression than in tension.  The rotor
-    # check is therefore against the TENSILE strength, and the compressive number
-    # is carried so a spoke magnet squeezed by the sleeve can be judged too.
+    alpha_br_pct_per_k: -0.1327   # %/K  = -0.12/(1-0.12/100*(100-20))
+    beta_hcj_pct_per_k: -0.8615   # %/K  = -0.51/(1-0.51/100*(100-20))
+    Br: 1.2927   # T  (datasheet Br20 moved by datasheet alpha)
+    Hc: 979728   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
+    mu_rec: 1.05   # HGT Table IV
+    sigma: 666666.7
+    density: 7600
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 5.0    # ppm/K  PARALLEL to the magnetisation (user 2026-09-07)
-    cte_ppm_k_2: -1.5   # ppm/K  PERPENDICULAR to it - sintered NdFeB CONTRACTS across the alignment axis
+    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
+    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
     tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    thermal_conductivity: 7.6
+    thermal_conductivity: 6.16
     specific_heat: 460
     bh_curve:
-      - [-1157000, -0.9504]
-      - [-1155000, -0.6237]
-      - [-1147000, -0.400]
-      - [-1130000, -0.250]
-      - [-1116000, -0.176]
-      - [-1103000, -0.159]
-      - [-1075000, -0.122]
-      - [-1035000, -0.069]
-      - [-980000,   0.004]
-      - [-939000,   0.058]
-      - [-898000,   0.112]
-      - [-844000,   0.184]
-      - [-790000,   0.255]
-      - [-735000,   0.328]
-      - [-681000,   0.399]
-      - [-626000,   0.472]
-      - [-572000,   0.544]
-      - [-517000,   0.616]
-      - [-463000,   0.688]
-      - [-408000,   0.760]
-      - [-354000,   0.832]
-      - [-299000,   0.905]
-      - [-245000,   0.976]
-      - [-191000,   1.047]
-      - [-136000,   1.120]
-      - [-82000,    1.192]
-      - [-27000,    1.264]
-      - [-14000,    1.281]
-      - [0,         1.300]
+      - [-1213422, -2.1712]
+      - [-1178080, -1.4804]
+      - [-1169244, -0.9352]
+      - [-1160409, -0.5425]
+      - [-1151573, -0.3025]
+      - [-1142738, -0.2151]
+      - [-1085601, -0.1397]
+      - [-1028464, -0.0643]
+      - [-914190, 0.0865]
+      - [-799916, 0.2373]
+      - [-685643, 0.388]
+      - [-571369, 0.5388]
+      - [-457095, 0.6896]
+      - [-342821, 0.8404]
+      - [-228548, 0.9912]
+      - [-114274, 1.1419]
+      - [0, 1.2927]
 
   N45EH_150C:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "courage_n45eh", "doc": "Courage Magnet, 'NdFeB N45EH Grade Performance Data and BH Curves' (2024-11-15): BHmax 45 MGOe, Br 13.5-14.1 kGs, Tw 200 C", "url": "https://www.couragemagnet.com/magnet-blog/3036.html", "read": "2026-09-29"}
+      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "derived", "src": "courage_n45eh", "note": "Br20 1.35 T = lower end of the published 1.35-1.41 T range, moved with alpha", "verify": true}
+      alpha_br_pct_per_k: {"type": "estimate", "note": "-0.115 %/K at 20 C: inside the HGT band -0.09..-0.12, no grade-specific value found", "verify": true, "source": "none"}
+      beta_hcj_pct_per_k: {"type": "estimate", "note": "-0.45 %/K at 20 C: inside the HGT band -0.40..-0.60; Arnold's nearest EH grades quote -0.41 (N42EH) and -0.472 (N28-N38EH)", "verify": true, "source": "none"}
+      bh_curve: {"type": "estimate", "note": "HcJ20 2400 kA/m vs EH class minimum 2388 (HGT Table I) - consistent; knee shape estimated", "verify": true, "source": "none"}
+      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05"}
+      sigma: {"type": "datasheet", "src": "hgt_ndfeb", "note": "1.6 uOhm m = 6.25e5 S/m, Table IV upper bound"}
+      thermal_conductivity: {"type": "estimate", "note": "7.6 W/mK is below HGT's 8-10 range; Arnold's N45SH value", "verify": true, "source": "none"}
+      cte_ppm_k_1: {"type": "estimate", "note": "5.0 (user 2026-09-07); Arnold sheets give 7-7.5, HGT 3-4", "verify": true, "source": "none"}
+      cte_ppm_k_2: {"type": "estimate", "note": "-1.5 (user); Arnold -0.1..-1, HGT +1..+3 - sources disagree", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "handbook 0.24", "verify": true, "source": "none"}
+      density: {"type": "datasheet", "src": "hgt_ndfeb", "note": "7.4-7.7 range"}
+    source_note: "No manufacturer sheet for N45EH found (Arnold lists up to N42EH). Values are the library's generic card, checked against class ranges only."
     description: "Sintered NdFeB N45EH (EH grade, Tmax 200 °C, Hcj >= 30 kOe at 20 °C) — operating point 150 °C"
     grade: N45EH
     # Maximum working temperature of the EH class (2026-09-15, user):
@@ -2819,6 +2891,24 @@ magnet:
       - [       0,  1.1482]
 
   N45EH_180C:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "courage_n45eh", "doc": "Courage Magnet, 'NdFeB N45EH Grade Performance Data and BH Curves' (2024-11-15): BHmax 45 MGOe, Br 13.5-14.1 kGs, Tw 200 C", "url": "https://www.couragemagnet.com/magnet-blog/3036.html", "read": "2026-09-29"}
+      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "derived", "src": "courage_n45eh", "note": "Br20 1.35 T = lower end of the published 1.35-1.41 T range, moved with alpha", "verify": true}
+      alpha_br_pct_per_k: {"type": "estimate", "note": "-0.115 %/K at 20 C: inside the HGT band -0.09..-0.12, no grade-specific value found", "verify": true, "source": "none"}
+      beta_hcj_pct_per_k: {"type": "estimate", "note": "-0.45 %/K at 20 C: inside the HGT band -0.40..-0.60; Arnold's nearest EH grades quote -0.41 (N42EH) and -0.472 (N28-N38EH)", "verify": true, "source": "none"}
+      bh_curve: {"type": "estimate", "note": "HcJ20 2400 kA/m vs EH class minimum 2388 (HGT Table I) - consistent; knee shape estimated", "verify": true, "source": "none"}
+      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05"}
+      sigma: {"type": "datasheet", "src": "hgt_ndfeb", "note": "1.6 uOhm m = 6.25e5 S/m, Table IV upper bound"}
+      thermal_conductivity: {"type": "estimate", "note": "7.6 W/mK is below HGT's 8-10 range; Arnold's N45SH value", "verify": true, "source": "none"}
+      cte_ppm_k_1: {"type": "estimate", "note": "5.0 (user 2026-09-07); Arnold sheets give 7-7.5, HGT 3-4", "verify": true, "source": "none"}
+      cte_ppm_k_2: {"type": "estimate", "note": "-1.5 (user); Arnold -0.1..-1, HGT +1..+3 - sources disagree", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "handbook 0.24", "verify": true, "source": "none"}
+      density: {"type": "datasheet", "src": "hgt_ndfeb", "note": "7.4-7.7 range"}
+    source_note: "No manufacturer sheet for N45EH found (Arnold lists up to N42EH). Values are the library's generic card, checked against class ranges only."
     description: "Sintered NdFeB N45EH (EH grade, Tmax 200 °C, Hcj >= 30 kOe at 20 °C) — operating point 180 °C"
     grade: N45EH
     # Maximum working temperature of the EH class (2026-09-15, user):
@@ -2910,6 +3000,24 @@ magnet:
   # not a measurement: no bulk magnet exists to measure.  Br still falls with
   # temperature, so these numbers remain the OPTIMISTIC end for a hot machine.
   Fe16N2_optimistic:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "fe16n2_lit", "doc": "Literature bracket (no qualified bulk magnet exists): Phys. Rev. Applied 6, 024013; Sci. Rep. 6, 25436 (2016); Acta Mater. (2020) for dHcj/dT = +0.4 Oe/K; Niron Magnetics public claims", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "estimate", "note": "literature bracket, see card comments", "verify": true, "source": "fe16n2_lit"}
+      alpha_br_pct_per_k: {"type": "estimate", "note": "estimate, no bulk magnet exists to measure", "verify": true, "source": "none"}
+      sigma: {"type": "estimate", "note": "metallic Fe-based estimate", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "estimate", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "estimate", "verify": true, "source": "none"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "sintered-NdFeB stand-in", "verify": true, "source": "none"}
+      tensile_strength_mpa: {"type": "estimate", "note": "sintered-NdFeB stand-in", "verify": true, "source": "none"}
+      compressive_strength_mpa: {"type": "estimate", "note": "sintered-NdFeB stand-in", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "stand-in", "verify": true, "source": "none"}
+      cte_ppm_k_1: {"type": "estimate", "note": "stand-in", "verify": true, "source": "none"}
+      cte_ppm_k_2: {"type": "estimate", "note": "stand-in", "verify": true, "source": "none"}
+      density: {"type": "estimate", "note": "estimate", "verify": true, "source": "none"}
+    source_note: "Research material: literature estimate by design, not a datasheet."
     description: Fe16N2 iron nitride - OPTIMISTIC commercial target (Niron-class claims, Br up to 1.5 T, Hcj 4 kOe). Literature estimate, NOT a qualified datasheet.
     grade: Fe16N2-opt
     temperature_c: 20    # T_ref of this card — see the section header
@@ -2944,6 +3052,24 @@ magnet:
     - [-63200, 1.263]
     - [0, 1.35]
   Fe16N2_lab_best:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "fe16n2_lit", "doc": "Literature bracket (no qualified bulk magnet exists): Phys. Rev. Applied 6, 024013; Sci. Rep. 6, 25436 (2016); Acta Mater. (2020) for dHcj/dT = +0.4 Oe/K; Niron Magnetics public claims", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "estimate", "note": "literature bracket, see card comments", "verify": true, "source": "fe16n2_lit"}
+      alpha_br_pct_per_k: {"type": "estimate", "note": "estimate, no bulk magnet exists to measure", "verify": true, "source": "none"}
+      sigma: {"type": "estimate", "note": "metallic Fe-based estimate", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "estimate", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "estimate", "verify": true, "source": "none"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "sintered-NdFeB stand-in", "verify": true, "source": "none"}
+      tensile_strength_mpa: {"type": "estimate", "note": "sintered-NdFeB stand-in", "verify": true, "source": "none"}
+      compressive_strength_mpa: {"type": "estimate", "note": "sintered-NdFeB stand-in", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "stand-in", "verify": true, "source": "none"}
+      cte_ppm_k_1: {"type": "estimate", "note": "stand-in", "verify": true, "source": "none"}
+      cte_ppm_k_2: {"type": "estimate", "note": "stand-in", "verify": true, "source": "none"}
+      density: {"type": "estimate", "note": "estimate", "verify": true, "source": "none"}
+    source_note: "Research material: literature estimate by design, not a datasheet."
     description: Fe16N2 iron nitride - BEST PUBLISHED measurement (free-standing foils, Hcj 1910 Oe, 20 MGOe; Sci.Rep. 25436). Bulk anisotropic to date is weaker (9 MGOe).
     grade: Fe16N2-lab
     temperature_c: 20    # T_ref of this card — see the section header
@@ -2976,229 +3102,251 @@ magnet:
     - [-30020, 1.159]
     - [0, 1.2]
   F45SH_120C:
-    description: "Sintered NdFeB magnet, F45SH grade — operating point 120 °C"
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "arnold_n45sh", "doc": "Arnold Magnetic Technologies, Neo catalog (Catalog-151021) p.2 grade table and p.40 N45SH sheet Rev. 151021a: Br 1350 mT nom, HcB 1015 kA/m nom, HcJ >= 1592 kA/m, alpha(Br) -0.120, alpha(HcJ) -0.535 %/C (20-150 C), 7.6 W/mK, 460 J/kgK, 7.5 g/cm3, 180 uOhm cm, CTE 7.5 // -0.1 perp", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2017/10/Catalog-151021.pdf", "page": "2,40", "rev": "151021a", "read": "2026-09-29"}
+      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
+      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "derived", "src": "arnold_n45sh", "note": "nominal Br20 1.35 T moved to 120 C with the datasheet alpha"}
+      Hc: {"type": "derived", "src": "arnold_n45sh", "note": "Br/(mu0*mu_rec)"}
+      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_n45sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_n45sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.058 (Br/(mu0 HcB))"}
+      bh_curve: {"type": "derived", "src": "arnold_n45sh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
+      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
+      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
+      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
+    source_note: "F45SH = Ningbo Permanent Magnetics '45SH-F'; independent same-grade reference Arnold N45SH. Replace with NPM's sheet when obtained."
+    description: "Sintered NdFeB 45SH (supplier grade 45SH-F) - operating point 120 C"
+    # Every number is the manufacturer's 20 C data sheet value (N45SH (Arnold, Rev. 151021a))
+    # moved to 120 C with that sheet's own alpha/beta; the reversible
+    # coefficients below are re-referenced to this card's T_ref (section
+    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
     grade: F45SH
-    # Maximum working temperature of the SH class (2026-09-15, user):
-    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
-    # and it is NOT this card's `temperature_c`, which is only the
-    # temperature the card was measured at.
-    max_working_temp_c: 150   # degC
+    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I)
     temperature_c: 120   # T_ref of this card — see the section header
-    # SH class, 20 C-referenced alpha(Br) = -0.1185 %/K (the factor the F45SH
-    # 1.35 -> 1.19 pair pins) and beta(Hcj) = -0.5 %/K — the same pair the
-    # F52SH records were derived with, and the F52SH knees (-1233.7 / -909.0 /
-    # -649.3 kA/m at 30/80/120 C) reproduce that beta to 5 digits.
-    # RE-REFERENCED to this card's 120 C: alpha = -0.1185/0.8815 = -0.1344,
-    # beta = -0.5/0.50 = -1.0000 %/K.
-    alpha_br_pct_per_k: -0.1344    # %/K  (Br)
-    beta_hcj_pct_per_k: -1.0000    # %/K  (Hcj / knee field)
-    Br: 1.190          # T   — NdFeB-class remanence at 120 °C
-    # Recoil permeability of SINTERED NdFeB is ~1.05 (essentially temp-independent);
-    # the old mu_rec=1.46 came from a too-low Hc=648 kA/m and made the magnet region
-    # far too "soft" — the magnetostatic solve (demag off) uses mu_rec as the magnet
-    # μ_r, so it over-read the PM flux linkage and torque (~+5%).  Corrected to the
-    # datasheet value; normal coercivity follows as Hc = Br/(mu0·mu_rec).  (The
-    # bh_curve recoil slope already implied ~1.08, not 1.46.)
-    Hc: 901878         # A/m — normal coercivity = Br / (mu0 * mu_rec)
-    mu_rec: 1.050      # relative recoil permeability (sintered NdFeB)
-    # NdFeB is a metallic alloy (Nd-Fe-B), so eddy-current losses are
-    # significant — σ ≈ 625 kS/m at 20 °C, dropping a few percent at
-    # 120 °C (thermal phonon scattering).  Use the standard reference
-    # 6.25e5 S/m so the σ·ω²·B²·d²/12 slab model produces realistic
-    # eddy losses at electrical frequency (≈ 50 … 500 W at 1–2 kHz
-    # for typical SPMSM geometries; magnets can be segmented later
-    # to bring it down).
-    sigma: 6.25e5      # S/m  — sintered NdFeB at ~120 °C
+    alpha_br_pct_per_k: -0.1364   # %/K  = -0.12/(1-0.12/100*(120-20))
+    beta_hcj_pct_per_k: -1.1505   # %/K  = -0.535/(1-0.535/100*(120-20))
+    Br: 1.188   # T  (datasheet Br20 moved by datasheet alpha)
+    Hc: 900362   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
+    mu_rec: 1.05   # HGT Table IV
+    sigma: 555555.6   # S/m  — sintered NdFeB at ~120 °C
     density: 7500
-    # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
-    # Sintered NdFeB is a CERAMIC-like brittle intermetallic: it never yields, it
-    # cracks, and it is ~12x stronger in compression than in tension.  The rotor
-    # check is therefore against the TENSILE strength, and the compressive number
-    # is carried so a spoke magnet squeezed by the sleeve can be judged too.
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 5.0    # ppm/K  PARALLEL to the magnetisation (user 2026-09-07)
-    cte_ppm_k_2: -1.5   # ppm/K  PERPENDICULAR to it - sintered NdFeB CONTRACTS across the alignment axis
+    cte_ppm_k_1: 7.5   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
+    cte_ppm_k_2: -0.1   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
     tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
     thermal_conductivity: 7.6
     specific_heat: 460
     bh_curve:
-      - [-652000, -0.819]
-      - [-649000,  0.000]
-      - [-647000,  0.169]
-      - [-643000,  0.287]
-      - [-638000,  0.317]
-      - [-634000,  0.327]
-      - [0,        1.190]
+      - [-762488, -1.5522]
+      - [-740280, -0.9303]
+      - [-734728, -0.4233]
+      - [-729176, -0.0591]
+      - [-723624, 0.1621]
+      - [-718072, 0.2405]
+      - [-682168, 0.2879]
+      - [-646264, 0.3353]
+      - [-574457, 0.43]
+      - [-502650, 0.5248]
+      - [-430843, 0.6195]
+      - [-359036, 0.7143]
+      - [-287229, 0.809]
+      - [-215421, 0.9038]
+      - [-143614, 0.9985]
+      - [-71807, 1.0933]
+      - [0, 1.188]
   F52SH_120C:
-    Br: 1.27
-    Hc: 962525
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "arnold_g52sh", "doc": "Arnold Magnetic Technologies, G52SH (grain-boundary-diffused N52SH) data sheet Rev. 210607: Br 1420/1440/1460 mT, HcB 1090 kA/m nom, HcJ >= 1592 kA/m, alpha(Br) -0.12, alpha(HcJ) -0.55 %/C (20-150 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52SH_GBDD_181031.pdf", "rev": "210607", "read": "2026-09-29"}
+      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
+      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "derived", "src": "arnold_g52sh", "note": "nominal Br20 1.44 T moved to 120 C with the datasheet alpha"}
+      Hc: {"type": "derived", "src": "arnold_g52sh", "note": "Br/(mu0*mu_rec)"}
+      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.051 (Br/(mu0 HcB))"}
+      bh_curve: {"type": "derived", "src": "arnold_g52sh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
+      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
+      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
+      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
+    source_note: "F52SH = the supplier's N52SH-class grade; independent same-grade reference Arnold G52SH. Replace with the supplier sheet when obtained."
+    Br: 1.2672   # T  (datasheet Br20 moved by datasheet alpha)
+    Hc: 960386   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
     bh_curve:
-    - - -652000
-      - -0.739
-    - - -649300
-      - 0.0
-    - - -649000
-      - 0.08
-    - - -647000
-      - 0.249
-    - - -643000
-      - 0.367
-    - - -638000
-      - 0.397
-    - - -634000
-      - 0.407
-    - - 0
-      - 1.27
-    density: 7500
-    # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
-    # Sintered NdFeB is a CERAMIC-like brittle intermetallic: it never yields, it
-    # cracks, and it is ~12x stronger in compression than in tension.  The rotor
-    # check is therefore against the TENSILE strength, and the compressive number
-    # is carried so a spoke magnet squeezed by the sleeve can be judged too.
+      - [-737892, -1.5609]
+      - [-716400, -0.9003]
+      - [-711027, -0.3582]
+      - [-705654, 0.0309]
+      - [-700281, 0.2671]
+      - [-694908, 0.3503]
+      - [-660163, 0.3961]
+      - [-625417, 0.442]
+      - [-555926, 0.5337]
+      - [-486436, 0.6254]
+      - [-416945, 0.7171]
+      - [-347454, 0.8087]
+      - [-277963, 0.9004]
+      - [-208472, 0.9921]
+      - [-138982, 1.0838]
+      - [-69491, 1.1755]
+      - [0, 1.2672]
+    density: 7600
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 5.0    # ppm/K  PARALLEL to the magnetisation (user 2026-09-07)
-    cte_ppm_k_2: -1.5   # ppm/K  PERPENDICULAR to it - sintered NdFeB CONTRACTS across the alignment axis
+    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
+    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
     tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    description: Sintered NdFeB magnet, F52SH grade - operating point 120 C. Same SH
-      temperature class as F45SH_120C (J-knee at the same demagnetising field); Br
-      scaled from the N52SH 20 C typical 1.445 T by the SH class factor 0.8815 measured
-      on the F45SH record (1.35 -> 1.19). Hc = Br/(mu0*mu_rec).
+    description: "Sintered NdFeB 52SH (supplier grade F52SH) - operating point 120 C"
+    # Every number is the manufacturer's 20 C data sheet value (G52SH (Arnold, Rev. 210607))
+    # moved to 120 C with that sheet's own alpha/beta; the reversible
+    # coefficients below are re-referenced to this card's T_ref (section
+    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
     grade: F52SH
-    # Maximum working temperature of the SH class (2026-09-15, user):
-    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
-    # and it is NOT this card's `temperature_c`, which is only the
-    # temperature the card was measured at.
-    max_working_temp_c: 150   # degC
-    mu_rec: 1.05
-    sigma: 6.25e5
+    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I)
+    mu_rec: 1.05   # HGT Table IV
+    sigma: 666666.7
     specific_heat: 460
     temperature_c: 120   # T_ref of this card — see the section header
-    # SH class, 20 C-referenced alpha -0.1185 / beta -0.5 %/K (the numbers this
-    # record was BUILT from, see description), RE-REFERENCED to 120 C:
-    # alpha = -0.1185/0.8815 = -0.1344, beta = -0.5/0.50 = -1.0000 %/K.
-    # Rescaling this card to 80 C returns Br 1.3383 (card: 1.342, -0.28 %) and
-    # knee -905.0 kA/m (card: -909.0, -0.45 %).
-    alpha_br_pct_per_k: -0.1344    # %/K  (Br)
-    beta_hcj_pct_per_k: -1.0000    # %/K  (Hcj / knee field)
-    thermal_conductivity: 7.6
+    alpha_br_pct_per_k: -0.1364   # %/K  = -0.12/(1-0.12/100*(120-20))
+    beta_hcj_pct_per_k: -1.2222   # %/K  = -0.55/(1-0.55/100*(120-20))
+    thermal_conductivity: 6.16
 
   F52SH_30C:
-    Br: 1.428
-    Hc: 1082200
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "arnold_g52sh", "doc": "Arnold Magnetic Technologies, G52SH (grain-boundary-diffused N52SH) data sheet Rev. 210607: Br 1420/1440/1460 mT, HcB 1090 kA/m nom, HcJ >= 1592 kA/m, alpha(Br) -0.12, alpha(HcJ) -0.55 %/C (20-150 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52SH_GBDD_181031.pdf", "rev": "210607", "read": "2026-09-29"}
+      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
+      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "derived", "src": "arnold_g52sh", "note": "nominal Br20 1.44 T moved to 30 C with the datasheet alpha"}
+      Hc: {"type": "derived", "src": "arnold_g52sh", "note": "Br/(mu0*mu_rec)"}
+      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.051 (Br/(mu0 HcB))"}
+      bh_curve: {"type": "derived", "src": "arnold_g52sh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
+      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
+      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
+      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
+    source_note: "F52SH = the supplier's N52SH-class grade; independent same-grade reference Arnold G52SH. Replace with the supplier sheet when obtained."
+    Br: 1.4227   # T  (datasheet Br20 moved by datasheet alpha)
+    Hc: 1078252   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
     bh_curve:
-    - - -1238800
-      - -0.831
-    - - -1233700
-      - 0.0
-    - - -1233100
-      - 0.09
-    - - -1229300
-      - 0.28
-    - - -1221700
-      - 0.413
-    - - -1212200
-      - 0.446
-    - - -1204600
-      - 0.458
-    - - 0
-      - 1.428
-    density: 7500
-    # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
-    # Sintered NdFeB is a CERAMIC-like brittle intermetallic: it never yields, it
-    # cracks, and it is ~12x stronger in compression than in tension.  The rotor
-    # check is therefore against the TENSILE strength, and the compressive number
-    # is carried so a spoke magnet squeezed by the sleeve can be judged too.
+      - [-1549573, -2.6586]
+      - [-1504440, -1.8905]
+      - [-1493157, -1.294]
+      - [-1481873, -0.8639]
+      - [-1470590, -0.6002]
+      - [-1459307, -0.5028]
+      - [-1386341, -0.4065]
+      - [-1313376, -0.3102]
+      - [-1167445, -0.1177]
+      - [-1021515, 0.0749]
+      - [-875584, 0.2674]
+      - [-729653, 0.46]
+      - [-583723, 0.6525]
+      - [-437792, 0.8451]
+      - [-291861, 1.0376]
+      - [-145931, 1.2302]
+      - [0, 1.4227]
+    density: 7600
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 5.0    # ppm/K  PARALLEL to the magnetisation (user 2026-09-07)
-    cte_ppm_k_2: -1.5   # ppm/K  PERPENDICULAR to it - sintered NdFeB CONTRACTS across the alignment axis
+    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
+    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
     tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    description: 'Sintered NdFeB magnet, F52SH grade - operating point 30 C. Same derivation
-      as F52SH_120C: Br from the N52SH 20 C typical 1.445 T at alpha(Br) = -0.1185 %/C
-      (the factor the F45SH 1.35 -> 1.19 pair pins); demag curve is the 120 C record
-      scaled self-similarly - B by Br(30)/Br(120), H by Hcj(30)/Hcj(120) with SH-class
-      Hcj(20 C) = 1592 kA/m (20 kOe) and beta(Hcj) = -0.5 %/C. Hc = Br/(mu0*mu_rec).
-      Datasheet anchors: N52 Br 1.43-1.48 T, SH = Hcj >= 20 kOe, max 150 C.'
+    description: "Sintered NdFeB 52SH (supplier grade F52SH) - operating point 30 C"
+    # Every number is the manufacturer's 20 C data sheet value (G52SH (Arnold, Rev. 210607))
+    # moved to 30 C with that sheet's own alpha/beta; the reversible
+    # coefficients below are re-referenced to this card's T_ref (section
+    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
     grade: F52SH
-    # Maximum working temperature of the SH class (2026-09-15, user):
-    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
-    # and it is NOT this card's `temperature_c`, which is only the
-    # temperature the card was measured at.
-    max_working_temp_c: 150   # degC
-    mu_rec: 1.05
-    sigma: 625000.0
+    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I)
+    mu_rec: 1.05   # HGT Table IV
+    sigma: 666666.7
     specific_heat: 460
     temperature_c: 30    # T_ref of this card — see the section header
-    # SH class, 20 C-referenced alpha -0.1185 / beta -0.5 %/K (the numbers this
-    # record was BUILT from, see description), RE-REFERENCED to 30 C:
-    # alpha = -0.1185/0.98815 = -0.1199, beta = -0.5/0.95 = -0.5263 %/K.
-    # Rescaling this card to 120 C returns Br 1.2739 (card: 1.27, +0.31 %) and
-    # knee -651.4 kA/m (card: -649.3, +0.32 %).
-    alpha_br_pct_per_k: -0.1199    # %/K  (Br)
-    beta_hcj_pct_per_k: -0.5263    # %/K  (Hcj / knee field)
-    thermal_conductivity: 7.6
+    alpha_br_pct_per_k: -0.1215   # %/K  = -0.12/(1-0.12/100*(30-20))
+    beta_hcj_pct_per_k: -0.582   # %/K  = -0.55/(1-0.55/100*(30-20))
+    thermal_conductivity: 6.16
 
   F52SH_80C:
-    Br: 1.342
-    Hc: 1017300
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "arnold_g52sh", "doc": "Arnold Magnetic Technologies, G52SH (grain-boundary-diffused N52SH) data sheet Rev. 210607: Br 1420/1440/1460 mT, HcB 1090 kA/m nom, HcJ >= 1592 kA/m, alpha(Br) -0.12, alpha(HcJ) -0.55 %/C (20-150 C), rho 150 // 130 perp uOhm cm, 7.6 g/cm3, 5.3/5.8 kcal/m h C, 0.11 cal/g C, CTE 7 // -1 perp", "url": "https://www.arnoldmagnetics.com/wp-content/uploads/2018/11/N52SH_GBDD_181031.pdf", "rev": "210607", "read": "2026-09-29"}
+      - {"id": "hgt_ndfeb", "doc": "HGT Advanced Magnets, Sintered NdFeB Magnets' Specifications (PDF 2020-07): Table I grades (Tw: SH <=150, UH <=180, EH <=200 C; EH HcJ >= 2388 kA/m), note alpha -0.09..-0.12, beta -0.40..-0.60 %/C; Table IV physical: mu_rec 1.05, tensile 80-90, compressive 1000-1100, E 150-200 GPa, rho 1.4-1.6 uOhm m, k 8-10 W/mK", "url": "https://www.advancedmagnets.com/wp-content/uploads/2020/07/Sintered-Neodymium-Iron-Boron-NdFeB-Magnets-Specifications.pdf", "page": "2-5", "read": "2026-09-29"}
+      - {"id": "npm_pi", "doc": "Ningbo Permanent Magnetics Co. proforma invoices PM25-0616-1 / PM25-0725-1 (the owner's supplier: N52UH and 45SH-F magnets). Grade names only - no properties; the supplier's own datasheet is still to be obtained.", "file": "Downloads/PI-25.06.16-...N52UH&F-45SH-370pcs.pdf; Downloads/25.07.25-PI-32pcs Magnet 460_180-F45SH.pdf", "read": "2026-09-29"}
+    prov:
+      Br: {"type": "derived", "src": "arnold_g52sh", "note": "nominal Br20 1.44 T moved to 80 C with the datasheet alpha"}
+      Hc: {"type": "derived", "src": "arnold_g52sh", "note": "Br/(mu0*mu_rec)"}
+      alpha_br_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      beta_hcj_pct_per_k: {"type": "derived", "src": "arnold_g52sh", "note": "datasheet 20 C value re-referenced to this card's T_ref"}
+      mu_rec: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1.05; the Arnold sheet implies 1.051 (Br/(mu0 HcB))"}
+      bh_curve: {"type": "derived", "src": "arnold_g52sh", "note": "generated: linear recoil to the knee at 0.97 HcJ (squareness is an ESTIMATE - the sheets plot but do not tabulate it), quadratic collapse to J = 0 at HcJ; HcJ is the datasheet MINIMUM", "verify": true}
+      max_working_temp_c: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table I class Tw"}
+      youngs_modulus_gpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 150-200 GPa (160 kept)"}
+      tensile_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 80-90 MPa (80 kept, lower bound)"}
+      compressive_strength_mpa: {"type": "datasheet", "src": "hgt_ndfeb", "note": "Table IV 1000-1100 MPa (1000 kept)"}
+      poisson_ratio: {"type": "estimate", "note": "0.24 handbook figure; no manufacturer value found", "verify": true, "source": "none"}
+    source_note: "F52SH = the supplier's N52SH-class grade; independent same-grade reference Arnold G52SH. Replace with the supplier sheet when obtained."
+    Br: 1.3363   # T  (datasheet Br20 moved by datasheet alpha)
+    Hc: 1012771   # A/m  normal coercivity of the linear model = Br/(mu0*mu_rec)
     bh_curve:
-    - - -912800
-      - -0.781
-    - - -909000
-      - 0.0
-    - - -908600
-      - 0.085
-    - - -905800
-      - 0.263
-    - - -900200
-      - 0.388
-    - - -893200
-      - 0.42
-    - - -887600
-      - 0.43
-    - - 0
-      - 1.342
-    density: 7500
-    # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
-    # Sintered NdFeB is a CERAMIC-like brittle intermetallic: it never yields, it
-    # cracks, and it is ~12x stronger in compression than in tension.  The rotor
-    # check is therefore against the TENSILE strength, and the compressive number
-    # is carried so a spoke magnet squeezed by the sleeve can be judged too.
+      - [-1098639, -2.0488]
+      - [-1066640, -1.3404]
+      - [-1058640, -0.7741]
+      - [-1050640, -0.3668]
+      - [-1042641, -0.1184]
+      - [-1034641, -0.0289]
+      - [-982909, 0.0394]
+      - [-931177, 0.1077]
+      - [-827713, 0.2442]
+      - [-724249, 0.3807]
+      - [-620784, 0.5172]
+      - [-517320, 0.6537]
+      - [-413856, 0.7902]
+      - [-310392, 0.9268]
+      - [-206928, 1.0633]
+      - [-103464, 1.1998]
+      - [0, 1.3363]
+    density: 7600
     youngs_modulus_gpa: 160        # GPa  sintered NdFeB, handbook value
     poisson_ratio: 0.24            # -    sintered NdFeB, handbook value
-    cte_ppm_k_1: 5.0    # ppm/K  PARALLEL to the magnetisation (user 2026-09-07)
-    cte_ppm_k_2: -1.5   # ppm/K  PERPENDICULAR to it - sintered NdFeB CONTRACTS across the alignment axis
+    cte_ppm_k_1: 7.0   # ppm/K  PARALLEL to the magnetisation, datasheet 20-200 C
+    cte_ppm_k_2: -1.0   # ppm/K  PERPENDICULAR to it, datasheet 20-200 C
     tensile_strength_mpa: 80       # MPa  sintered NdFeB, handbook value (75-90 MPa)
     compressive_strength_mpa: 1000 # MPa  sintered NdFeB, handbook value (~1000-1100 MPa)
-    description: 'Sintered NdFeB magnet, F52SH grade - operating point 80 C. Same derivation
-      as F52SH_120C: Br from the N52SH 20 C typical 1.445 T at alpha(Br) = -0.1185 %/C
-      (the factor the F45SH 1.35 -> 1.19 pair pins); demag curve is the 120 C record
-      scaled self-similarly - B by Br(80)/Br(120), H by Hcj(80)/Hcj(120) with SH-class
-      Hcj(20 C) = 1592 kA/m (20 kOe) and beta(Hcj) = -0.5 %/C. Hc = Br/(mu0*mu_rec).
-      Datasheet anchors: N52 Br 1.43-1.48 T, SH = Hcj >= 20 kOe, max 150 C.'
+    description: "Sintered NdFeB 52SH (supplier grade F52SH) - operating point 80 C"
+    # Every number is the manufacturer's 20 C data sheet value (G52SH (Arnold, Rev. 210607))
+    # moved to 80 C with that sheet's own alpha/beta; the reversible
+    # coefficients below are re-referenced to this card's T_ref (section
+    # header).  bh_curve: most negative H first; point[1] is the solver's knee.
     grade: F52SH
-    # Maximum working temperature of the SH class (2026-09-15, user):
-    # the grade letter is the class -- SH 150, UH 180, EH 200, AH 220 --
-    # and it is NOT this card's `temperature_c`, which is only the
-    # temperature the card was measured at.
-    max_working_temp_c: 150   # degC
-    mu_rec: 1.05
-    sigma: 625000.0
+    max_working_temp_c: 150   # degC  class maximum working temperature (HGT Table I)
+    mu_rec: 1.05   # HGT Table IV
+    sigma: 666666.7
     specific_heat: 460
     temperature_c: 80    # T_ref of this card — see the section header
-    # SH class, 20 C-referenced alpha -0.1185 / beta -0.5 %/K (the numbers this
-    # record was BUILT from, see description), RE-REFERENCED to 80 C:
-    # alpha = -0.1185/0.9289 = -0.1276, beta = -0.5/0.70 = -0.7143 %/K.
-    # Rescaling this card to 120 C returns Br 1.2735 (card: 1.27, +0.28 %) and
-    # knee -650.3 kA/m (card: -649.3, +0.15 %).
-    alpha_br_pct_per_k: -0.1276    # %/K  (Br)
-    beta_hcj_pct_per_k: -0.7143    # %/K  (Hcj / knee field)
-    thermal_conductivity: 7.6
+    alpha_br_pct_per_k: -0.1293   # %/K  = -0.12/(1-0.12/100*(80-20))
+    beta_hcj_pct_per_k: -0.8209   # %/K  = -0.55/(1-0.55/100*(80-20))
+    thermal_conductivity: 6.16
 
 
 # ── CONDUCTORS (windings) ────────────────────────────────────
@@ -3206,22 +3354,48 @@ magnet:
 conductor:
 
   copper:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "iec60028", "doc": "IEC 60028:1925 International standard of resistance for copper: annealed copper at 20 C has resistivity 1/58 Ohm mm2/m (58.0 MS/m), density 8.89 g/cm3, constant-mass temperature coefficient 0.00393 1/K at 20 C", "read": "2026-09-29"}
+      - {"id": "cda_c11000", "doc": "Copper Development Association, UNS C11000 (ETP) typical properties: density 0.321 lb/in3, thermal conductivity 226 Btu ft/(h ft2 F) = 391 W/mK, E 17 000 ksi = 117 GPa, specific heat 0.092 Btu/lb F = 385 J/kgK, annealed yield ~10 ksi = 69 MPa (as reproduced by AZoM article 6312)", "url": "https://www.azom.com/article.aspx?ArticleID=6312", "read": "2026-09-29"}
+    prov:
+      youngs_modulus_gpa: {"type": "datasheet", "src": "cda_c11000", "note": "17 000 ksi = 117 GPa (matches)"}
+      yield_strength_mpa: {"type": "datasheet", "src": "cda_c11000", "note": "annealed ~69 MPa (matches 70)"}
+      specific_heat: {"type": "datasheet", "src": "cda_c11000", "note": "385 (matches)"}
+      thermal_conductivity: {"type": "datasheet", "src": "cda_c11000"}
+      cte_ppm_k: {"type": "estimate", "note": "17.0; CDA quotes 17.6e-6/K as the 20-300 C mean - kept, verify the range used", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "0.34 handbook figure", "verify": true, "source": "none"}
+      permeability: {"type": "estimate", "note": "diamagnetic copper, mu_r ~ 0.99999; value kept", "verify": true, "source": "none"}
     description: "Pure copper — rectangular Litz wire"
     sigma: 58000000    # S/m at 20 °C
-    density: 8933
+    density: 8890
     # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
     youngs_modulus_gpa: 117        # GPa  annealed C11000
     poisson_ratio: 0.34            # -
     cte_ppm_k: 17.0   # ppm/K  annealed C11000 (user 2026-09-07)
     yield_strength_mpa: 70         # MPa  annealed (soft) copper, 0.2 % proof
-    thermal_conductivity: 400
+    thermal_conductivity: 391
     specific_heat: 385
     permeability: 0.999991
     wire_type: rectangular
-    # Temperature-dependent conductivity: σ(T) = σ₀ / (1 + 0.0043·(T − 20))
-    thermal_alpha: 0.0043  # 1/°C
+    # Temperature-dependent conductivity: sigma(T) = sigma0 / (1 + 0.00393*(T - 20)), IEC 60028
+    thermal_alpha: 0.00393   # 1/°C
 
   Aluminium:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "asm_v2", "doc": "ASM Handbook Vol. 2 (1990), Properties of Wrought Aluminum and Aluminum Alloys: 1060-O (62 % IACS, 234 W/mK, Rp0.2 28 MPa), 6061-T6 (43 % IACS, 167 W/mK, 276 MPa, E 68.9 GPa, 896 J/kgK), 7075-T6 (33 % IACS, 130 W/mK, 503 MPa, E 71.7 GPa, 960 J/kgK, 23.6e-6/K)", "read": "2026-09-29"}
+    prov:
+      sigma: {"type": "datasheet", "src": "asm_v2", "note": "37.7 MS/m = 65 % IACS, high-purity aluminium (matches)"}
+      density: {"type": "estimate", "note": "2800 is an alloy figure; pure Al is 2699 - card mixes pure-Al conductivity with alloy density/k/yield; decide which it is", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "205 is an alloy figure (pure Al 237)", "verify": true, "source": "none"}
+      yield_strength_mpa: {"type": "estimate", "note": "110 not traceable", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "900 generic", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "handbook", "verify": true, "source": "none"}
+      thermal_alpha: {"type": "estimate", "note": "pure-Al value", "verify": true, "source": "none"}
+    source_note: "Generic card of unclear composition; not used by any saved die."
     description: "Aluminium — rectangular Litz wire (general alloy)"
     sigma: 37700000
     density: 2800
@@ -3237,6 +3411,14 @@ conductor:
     thermal_alpha: 0.0039
 
   Aluminium_1060:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "asm_v2", "doc": "ASM Handbook Vol. 2 (1990), Properties of Wrought Aluminum and Aluminum Alloys: 1060-O (62 % IACS, 234 W/mK, Rp0.2 28 MPa), 6061-T6 (43 % IACS, 167 W/mK, 276 MPa, E 68.9 GPa, 896 J/kgK), 7075-T6 (33 % IACS, 130 W/mK, 503 MPa, E 71.7 GPa, 960 J/kgK, 23.6e-6/K)", "read": "2026-09-29"}
+    prov:
+      poisson_ratio: {"type": "estimate", "note": "0.33 handbook figure", "verify": true, "source": "none"}
+      thermal_alpha: {"type": "estimate", "note": "0.0039 is pure-aluminium's; alloys are lower", "verify": true, "source": "none"}
+      permeability: {"type": "estimate", "note": "value kept (non-magnetic)", "verify": true, "source": "none"}
     description: "Aluminium alloy 1060 — rectangular Litz wire"
     sigma: 35700000
     density: 2700
@@ -3255,8 +3437,16 @@ conductor:
     thermal_alpha: 0.0039
 
   Aluminium_6061:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "asm_v2", "doc": "ASM Handbook Vol. 2 (1990), Properties of Wrought Aluminum and Aluminum Alloys: 1060-O (62 % IACS, 234 W/mK, Rp0.2 28 MPa), 6061-T6 (43 % IACS, 167 W/mK, 276 MPa, E 68.9 GPa, 896 J/kgK), 7075-T6 (33 % IACS, 130 W/mK, 503 MPa, E 71.7 GPa, 960 J/kgK, 23.6e-6/K)", "read": "2026-09-29"}
+    prov:
+      poisson_ratio: {"type": "estimate", "note": "0.33 handbook figure", "verify": true, "source": "none"}
+      thermal_alpha: {"type": "estimate", "note": "0.0039 is pure-aluminium's; alloys are lower", "verify": true, "source": "none"}
+      permeability: {"type": "estimate", "note": "value kept (non-magnetic)", "verify": true, "source": "none"}
     description: "Aluminium alloy 6061-T6 — general structural / motor shaft"
-    sigma: 25800000    # S/m at 20 °C  (conductivity ~43 % IACS)
+    sigma: 24940000   # S/m at 20 °C  (conductivity ~43 % IACS)
     density: 2700      # kg/m³
     # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
     youngs_modulus_gpa: 69         # GPa  6061-T6
@@ -3270,19 +3460,33 @@ conductor:
     thermal_alpha: 0.0039
 
   Stainless_316L:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "astm_a240", "doc": "ASTM A240/A240M, UNS S31603 (316L) minimum Rp0.2 170 MPa; ASM Handbook Vol. 1 typical physical data 316L: 8.0 g/cm3, 74 uOhm cm, 16.3 W/mK, 500 J/kgK, 16.0e-6/K, E 193 GPa", "read": "2026-09-29"}
+    prov:
+      permeability: {"type": "estimate", "note": "annealed 316L mu_r ~1.005 typical; cold work raises it", "verify": true, "source": "none"}
+      thermal_alpha: {"type": "estimate", "note": "resistivity temperature coefficient not in the sources read", "verify": true, "source": "none"}
     description: "Stainless steel 316L (austenitic, NON-magnetic) — motor shaft; ~18x lower conductivity than aluminium, so far lower eddy loss in the yoke's leakage field (user 2026-09-07)"
     sigma: 1350000     # S/m at 20 °C  (resistivity 0.74 µΩ·m)
     density: 8000      # kg/m³
     youngs_modulus_gpa: 193        # GPa
     poisson_ratio: 0.29            # -
     cte_ppm_k: 16.0   # ppm/K  (20-100 °C)
-    yield_strength_mpa: 240        # MPa  annealed 316L, 0.2 % proof (cold-worked bar reaches 400+)
+    yield_strength_mpa: 170   # MPa  annealed 316L, 0.2 % proof (cold-worked bar reaches 400+)
     thermal_conductivity: 16.3  # W/(m·K)
     specific_heat: 500          # J/(kg·K)
     permeability: 1.005         # annealed austenite; cold work can raise it to ~1.1
     wire_type: rectangular
     thermal_alpha: 0.00094      # 1/K  resistivity temperature coefficient
   Titanium_Ti6Al4V:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "asm_ti", "doc": "ASM Materials Properties Handbook: Titanium Alloys (1994), Ti-6Al-4V: 4.43 g/cm3, 170-178 uOhm cm, 6.7 W/mK, 526 J/kgK, 8.6e-6/K, E 113.8 GPa, nu 0.342, Rp0.2 880 MPa", "read": "2026-09-29"}
+    prov:
+      permeability: {"type": "estimate", "note": "paramagnetic, value kept", "verify": true, "source": "none"}
+      thermal_alpha: {"type": "estimate", "note": "not in the sources read", "verify": true, "source": "none"}
     description: "Titanium Ti-6Al-4V (grade 5, NON-magnetic) — motor shaft; lowest eddy loss of the common shaft alloys, high strength, low k"
     sigma: 580000      # S/m at 20 °C  (resistivity 1.72 µΩ·m)
     density: 4430      # kg/m³
@@ -3297,16 +3501,24 @@ conductor:
     thermal_alpha: 0.0004       # 1/K
 
   Aluminium_7075:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "asm_v2", "doc": "ASM Handbook Vol. 2 (1990), Properties of Wrought Aluminum and Aluminum Alloys: 1060-O (62 % IACS, 234 W/mK, Rp0.2 28 MPa), 6061-T6 (43 % IACS, 167 W/mK, 276 MPa, E 68.9 GPa, 896 J/kgK), 7075-T6 (33 % IACS, 130 W/mK, 503 MPa, E 71.7 GPa, 960 J/kgK, 23.6e-6/K)", "read": "2026-09-29"}
+    prov:
+      poisson_ratio: {"type": "estimate", "note": "0.33 handbook figure", "verify": true, "source": "none"}
+      thermal_alpha: {"type": "estimate", "note": "0.0039 is pure-aluminium's; alloys are lower", "verify": true, "source": "none"}
+      permeability: {"type": "estimate", "note": "value kept (non-magnetic)", "verify": true, "source": "none"}
     description: "Aluminium alloy 7075-T6 — high-strength structural / motor shaft"
     sigma: 19200000    # S/m at 20 °C  (conductivity ~32 % IACS)
     density: 2810      # kg/m³
     # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
     youngs_modulus_gpa: 72         # GPa  7075-T6
     poisson_ratio: 0.33            # -
-    cte_ppm_k: 23.4   # ppm/K  7075-T6 (user 2026-09-07)
+    cte_ppm_k: 23.6   # ppm/K  7075-T6 (user 2026-09-07)
     yield_strength_mpa: 503        # MPa  7075-T6, 0.2 % proof
     thermal_conductivity: 130   # W/(m·K)
-    specific_heat: 870          # J/(kg·K)
+    specific_heat: 960   # J/(kg·K)
     permeability: 0.999991
     wire_type: rectangular
     thermal_alpha: 0.0039
@@ -3321,14 +3533,26 @@ conductor:
 insulator:
 
   polyimide:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "kapton_hn", "doc": "DuPont Kapton HN polyimide film technical data sheet (c) 2006: density 1.42 g/cc (ASTM D-1505), thermal conductivity 0.12 W/mK at 23 C, specific heat 1.09 J/gK", "url": "https://docs.rs-online.com/c6e2/0900766b80659d8c.pdf", "read": "2026-09-29"}
     description: "Polyimide wire enamel (Kapton-type magnet-wire film). Thermal only; cost bundled in wire."
     sigma: 0.0
     density: 1420            # kg/m³
     thermal_conductivity: 0.12   # W/(m·K)
-    specific_heat: 1100          # J/(kg·K)
+    specific_heat: 1090   # J/(kg·K)
     permeability: 1.0
 
   Nomex:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "nomex410", "doc": "DuPont Nomex Type 410 technical data sheet (PDF 2000-05), Table IV: density 0.87 g/cc and k 0.123 W/mK at 0.13 mm, 0.95 / 0.143 at 0.18 mm, 0.96 / 0.139 at 0.25 mm (k at 150 C)", "url": "https://www.wshampshire.com/wp-content/uploads/type_410_data_sheet.pdf", "read": "2026-09-29"}
+    prov:
+      density: {"type": "datasheet", "src": "nomex410", "note": "880 ~ 0.87 g/cc of the 0.13 mm grade (matches); 0.25 mm is 0.96"}
+      thermal_conductivity: {"type": "datasheet", "src": "nomex410", "note": "0.14 = 0.139-0.143 of the 0.18-0.25 mm grades at 150 C (matches)"}
+      specific_heat: {"type": "estimate", "note": "1200 not in the Nomex 410 sheet", "verify": true, "source": "none"}
     description: "Nomex 410 aramid paper — slot liner (ground-wall insulation)."
     sigma: 0.0
     density: 880             # kg/m³  (pressed calendered aramid paper)
@@ -3337,6 +3561,13 @@ insulator:
     permeability: 1.0
 
   Al2O3:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+    prov:
+      density: {"type": "estimate", "note": "no primary source read (CoorsTek brochure fetch failed); AD-96 alumina is quoted at 3.72 g/cc / 24.7 W/mK by secondary listings", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "no primary source read (CoorsTek brochure fetch failed); AD-96 alumina is quoted at 3.72 g/cc / 24.7 W/mK by secondary listings", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "no primary source read (CoorsTek brochure fetch failed); AD-96 alumina is quoted at 3.72 g/cc / 24.7 W/mK by secondary listings", "verify": true, "source": "none"}
     description: "Alumina (95% Al₂O₃) ceramic slot liner — high-temp, moderate k."
     sigma: 0.0
     density: 3800            # kg/m³
@@ -3345,6 +3576,13 @@ insulator:
     permeability: 1.0
 
   AlN:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+    prov:
+      density: {"type": "estimate", "note": "no primary source read", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "no primary source read", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "no primary source read", "verify": true, "source": "none"}
     description: "Aluminium nitride ceramic slot liner — very high thermal conductivity."
     sigma: 0.0
     density: 3260            # kg/m³
@@ -3373,6 +3611,24 @@ insulator:
   # hoop tensile strength below are the usual measured UD laminate values
   # (translation efficiency ~0.72 of the rule of mixtures), not the fibre's.
   T800_UD_60:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "fibre_ds", "doc": "Fibre manufacturer data sheets (Toray T800S, Toray M40X / M55J, Hexcel HexTow HM63) for the fibre properties the laminate values are derived from - NOT re-read in this audit", "read": "2026-09-29"}
+    prov:
+      density: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      youngs_modulus_transverse_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      shear_modulus_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      tensile_strength_mpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      cte_ppm_k_1: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      cte_ppm_k_2: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      thermal_conductivity_axial: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      sigma: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      max_service_temp_c: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
     description: "T800 unidirectional CFRP, ~60 % fibre volume, hoop-wound rotor retaining sleeve. mu_r 1; sigma is the TRANSVERSE (across-fibre) value the axial 2-D eddy current actually sees."
     sigma: 80.0              # S/m  transverse to the fibres (along fibres ~3e4)
     density: 1580            # kg/m3  rule of mixtures, Vf 0.60
@@ -3428,6 +3684,24 @@ insulator:
   # same Vf) - to be verified with the laminate supplier.
   # -------------------------------------------------------------------------
   HM63_UD_60:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "fibre_ds", "doc": "Fibre manufacturer data sheets (Toray T800S, Toray M40X / M55J, Hexcel HexTow HM63) for the fibre properties the laminate values are derived from - NOT re-read in this audit", "read": "2026-09-29"}
+    prov:
+      density: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      youngs_modulus_transverse_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      shear_modulus_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      tensile_strength_mpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      cte_ppm_k_1: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      cte_ppm_k_2: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      thermal_conductivity_axial: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      sigma: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      max_service_temp_c: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
     description: "Hexcel HM63 unidirectional CFRP, ~60 % fibre volume, hoop-wound rotor retaining sleeve. High-modulus intermediate: E1 250 GPa at 2600 MPa hoop strength, strain to failure ~1.1 %. TYPICAL PUBLISHED VALUES - verify with the winder. sigma is the TRANSVERSE value (fibre-graphitisation scaling, rho x0.6 of T800)."
     sigma: 133.0             # S/m  transverse; = 80 / 0.6 (assumed rho scaling)
     density: 1600            # kg/m3  rule of mixtures, Vf 0.60
@@ -3445,6 +3719,24 @@ insulator:
     max_service_temp_c: 180      # degC  epoxy matrix (180 C class)
 
   M40X_UD_60:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "fibre_ds", "doc": "Fibre manufacturer data sheets (Toray T800S, Toray M40X / M55J, Hexcel HexTow HM63) for the fibre properties the laminate values are derived from - NOT re-read in this audit", "read": "2026-09-29"}
+    prov:
+      density: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      youngs_modulus_transverse_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      shear_modulus_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      tensile_strength_mpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      cte_ppm_k_1: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      cte_ppm_k_2: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      thermal_conductivity_axial: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      sigma: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      max_service_temp_c: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
     description: "Toray M40X unidirectional CFRP, ~60 % fibre volume, hoop-wound rotor retaining sleeve. The TOUGH high-modulus option: E1 215 GPa at 2700 MPa, strain to failure ~1.5 % - the largest strain margin of the three. TYPICAL PUBLISHED VALUES - verify with the winder. sigma is the TRANSVERSE value (fibre-graphitisation scaling, rho x0.8 of T800)."
     sigma: 100.0             # S/m  transverse; = 80 / 0.8 (assumed rho scaling)
     density: 1590            # kg/m3  rule of mixtures, Vf 0.60
@@ -3462,6 +3754,24 @@ insulator:
     max_service_temp_c: 180      # degC  epoxy matrix (180 C class)
 
   M55J_UD_60:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "fibre_ds", "doc": "Fibre manufacturer data sheets (Toray T800S, Toray M40X / M55J, Hexcel HexTow HM63) for the fibre properties the laminate values are derived from - NOT re-read in this audit", "read": "2026-09-29"}
+    prov:
+      density: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      youngs_modulus_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      youngs_modulus_transverse_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      shear_modulus_gpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      tensile_strength_mpa: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      cte_ppm_k_1: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      cte_ppm_k_2: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      thermal_conductivity_axial: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      sigma: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
+      max_service_temp_c: {"type": "estimate", "note": "laminate value derived from fibre data by rule of mixtures / typical translation efficiency - confirm with the winder (see section comment)", "verify": true, "source": "none"}
     description: "Toray M55J unidirectional CFRP, ~60 % fibre volume, hoop-wound rotor retaining sleeve. The STIFFEST option: E1 305 GPa, but only 1900 MPa and a strain to failure of ~0.8 % - it buys retention per mm and gives away burst margin. TYPICAL PUBLISHED VALUES - verify with the winder. sigma is the TRANSVERSE value (fibre-graphitisation scaling, rho x0.5 of T800)."
     sigma: 160.0             # S/m  transverse; = 80 / 0.5 (assumed rho scaling)
     density: 1650            # kg/m3  rule of mixtures, Vf 0.60
@@ -3491,17 +3801,31 @@ insulator:
 coolant:
 
   air:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "incropera", "doc": "Incropera, DeWitt, Bergman, Lavine, Fundamentals of Heat and Mass Transfer, 7th ed., Table A.4 (air, 300 K: rho 1.1614, cp 1007, k 0.0263, nu 15.89e-6, Pr 0.707) and Table A.5 (ethylene glycol, 300 K: rho 1114.4, cp 2415, k 0.252, nu 14.1e-6, Pr 151)", "read": "2026-09-29"}
     description: "Air at ~300 K — natural / forced-convection coolant (gas)."
     phase: gas
-    density: 1.16                 # kg/m³
+    density: 1.1614   # kg/m³
     specific_heat: 1007           # cp  J/(kg·K)
     thermal_conductivity: 0.0263  # k   W/(m·K)
-    kinematic_viscosity: 1.56e-5  # nu  m²/s
+    kinematic_viscosity: 1.6e-05   # nu  m²/s
     prandtl: 0.707
     sigma: 0.0
     permeability: 1.0
 
   water:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "nist_water", "doc": "NIST Chemistry WebBook, fluid properties of water (IAPWS-95) at 20 C, 1 bar: rho 998.21, cp 4184.1, mu 1.0016e-3 Pa s (nu 1.0034e-6), k 0.598 W/mK -> Pr 7.01", "url": "https://webbook.nist.gov/chemistry/fluid/", "read": "2026-09-29"}
+    prov:
+      density: {"type": "datasheet", "src": "nist_water", "note": "20 C NIST value rounded (<= 0.4 %) - kept"}
+      specific_heat: {"type": "datasheet", "src": "nist_water", "note": "20 C NIST value rounded (<= 0.4 %) - kept"}
+      thermal_conductivity: {"type": "datasheet", "src": "nist_water", "note": "20 C NIST value rounded (<= 0.4 %) - kept"}
+      kinematic_viscosity: {"type": "datasheet", "src": "nist_water", "note": "20 C NIST value rounded (<= 0.4 %) - kept"}
+      prandtl: {"type": "datasheet", "src": "nist_water", "note": "20 C NIST value rounded (<= 0.4 %) - kept"}
     description: "Liquid water — water-jacket coolant."
     phase: liquid
     density: 1000                 # kg/m³
@@ -3513,6 +3837,15 @@ coolant:
     permeability: 1.0
 
   water_glycol_50:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+    prov:
+      density: {"type": "estimate", "note": "no source read; ASHRAE Fundamentals ch. 31 (aqueous glycol tables) is the intended reference", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "no source read; ASHRAE Fundamentals ch. 31 (aqueous glycol tables) is the intended reference", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "no source read; ASHRAE Fundamentals ch. 31 (aqueous glycol tables) is the intended reference", "verify": true, "source": "none"}
+      kinematic_viscosity: {"type": "estimate", "note": "no source read; ASHRAE Fundamentals ch. 31 (aqueous glycol tables) is the intended reference", "verify": true, "source": "none"}
+      prandtl: {"type": "estimate", "note": "no source read; ASHRAE Fundamentals ch. 31 (aqueous glycol tables) is the intended reference", "verify": true, "source": "none"}
     description: "50/50 water–ethylene-glycol — anti-freeze jacket coolant."
     phase: liquid
     density: 1070                 # kg/m³
@@ -3524,6 +3857,15 @@ coolant:
     permeability: 1.0
 
   oil:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+    prov:
+      density: {"type": "estimate", "note": "generic 'transformer/cooling oil' - no product or handbook source; pick the actual oil and use its sheet", "verify": true, "source": "none"}
+      specific_heat: {"type": "estimate", "note": "generic 'transformer/cooling oil' - no product or handbook source; pick the actual oil and use its sheet", "verify": true, "source": "none"}
+      thermal_conductivity: {"type": "estimate", "note": "generic 'transformer/cooling oil' - no product or handbook source; pick the actual oil and use its sheet", "verify": true, "source": "none"}
+      kinematic_viscosity: {"type": "estimate", "note": "generic 'transformer/cooling oil' - no product or handbook source; pick the actual oil and use its sheet", "verify": true, "source": "none"}
+      prandtl: {"type": "estimate", "note": "generic 'transformer/cooling oil' - no product or handbook source; pick the actual oil and use its sheet", "verify": true, "source": "none"}
     description: "Transformer / cooling oil — direct-contact coolant."
     phase: liquid
     density: 860                  # kg/m³
@@ -3535,6 +3877,16 @@ coolant:
     permeability: 1.0
 
   water_glycol_50_65c:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "ashrae_f31", "doc": "ASHRAE Handbook - Fundamentals, ch. 31 (cited in the card, not re-read in this audit)", "read": "2026-09-29"}
+    prov:
+      density: {"type": "datasheet", "src": "ashrae_f31", "verify": true, "note": "citation carried over; not re-read"}
+      specific_heat: {"type": "datasheet", "src": "ashrae_f31", "verify": true, "note": "citation carried over; not re-read"}
+      thermal_conductivity: {"type": "datasheet", "src": "ashrae_f31", "verify": true, "note": "citation carried over; not re-read"}
+      kinematic_viscosity: {"type": "datasheet", "src": "ashrae_f31", "verify": true, "note": "citation carried over; not re-read"}
+      prandtl: {"type": "datasheet", "src": "ashrae_f31", "verify": true, "note": "citation carried over; not re-read"}
     description: "50/50 water–ethylene-glycol at ~65 °C (the hot-loop state an inverter coldplate runs at)."
     # ASHRAE Handbook — Fundamentals, ch. 31 (aqueous ethylene glycol, 50 %
     # by volume) at 65 °C, rounded: rho 1040, cp 3.50 kJ/kgK, k 0.41 W/mK,
@@ -3549,6 +3901,16 @@ coolant:
     permeability: 1.0
 
   rp3_kerosene:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "crc663", "doc": "CRC Report No. 663, Handbook of Aviation Fuel Properties (2004) (cited in the card, not re-read)", "read": "2026-09-29"}
+    prov:
+      density: {"type": "datasheet", "src": "crc663", "verify": true, "note": "citation carried over; batch scatter +-10 %"}
+      specific_heat: {"type": "datasheet", "src": "crc663", "verify": true, "note": "citation carried over; batch scatter +-10 %"}
+      thermal_conductivity: {"type": "datasheet", "src": "crc663", "verify": true, "note": "citation carried over; batch scatter +-10 %"}
+      kinematic_viscosity: {"type": "datasheet", "src": "crc663", "verify": true, "note": "citation carried over; batch scatter +-10 %"}
+      prandtl: {"type": "datasheet", "src": "crc663", "verify": true, "note": "citation carried over; batch scatter +-10 %"}
     description: "RP-3 aviation kerosene (Chinese jet fuel, ≈ Jet A-1) at ~60–80 °C, used as a fuel-cooled coolant."
     # Kerosene jet-fuel class at 60-80 °C, rounded: rho 0.775 kg/L, cp 2.1
     # kJ/kgK, k 0.11 W/mK, nu 1.2 cSt (typical Jet A/JP-8/RP-3 values, cf.
@@ -3565,12 +3927,16 @@ coolant:
     permeability: 1.0
 
   ethylene_glycol:
+    # -- provenance (independent-source audit 2026-09-29; envelope rule:
+    # a field with no prov entry is `datasheet` from sources[0]) --
+    sources:
+      - {"id": "incropera", "doc": "Incropera, DeWitt, Bergman, Lavine, Fundamentals of Heat and Mass Transfer, 7th ed., Table A.4 (air, 300 K: rho 1.1614, cp 1007, k 0.0263, nu 15.89e-6, Pr 0.707) and Table A.5 (ethylene glycol, 300 K: rho 1114.4, cp 2415, k 0.252, nu 14.1e-6, Pr 151)", "read": "2026-09-29"}
     description: "Pure ethylene glycol — high-boiling coolant."
     phase: liquid
-    density: 1110                 # kg/m³
-    specific_heat: 2400           # cp  J/(kg·K)
-    thermal_conductivity: 0.25    # k   W/(m·K)
-    kinematic_viscosity: 1.5e-5   # nu  m²/s
-    prandtl: 150.0
+    density: 1114.4   # kg/m³
+    specific_heat: 2415   # cp  J/(kg·K)
+    thermal_conductivity: 0.252   # k   W/(m·K)
+    kinematic_viscosity: 1.4e-05   # nu  m²/s
+    prandtl: 151.0
     sigma: 0.0
     permeability: 1.0

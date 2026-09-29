@@ -4439,9 +4439,10 @@ def solve_thermal_field(
             "would be the same watts twice")
 
     # ── THE ROTOR IS IN THE WASH TOO (frame='open', 2026-09-21) ──────────────
-    # User, with his thermal photographs: *«по термофотографиям катушки греются
-    # всегда значительно больше магнитов; конструкция полностью открыта, магниты
-    # обдуваются со всех сторон, и воздух ещё продувает зазор»*.  The 2026-09-09
+    # User, with his thermal photographs: *"the thermal photos always show
+    # the coils running much hotter than the magnets; the build is
+    # completely open, the magnets are blown on from all sides, and air also
+    # blows through the gap"*.  The 2026-09-09
     # open frame put the STATOR side in the wash and left the rotor exactly
     # where the housed model had it — with the 0.2 mm clearance and the bore as
     # its only doors — and on the Ø50 record that reads the magnets at 240 °C

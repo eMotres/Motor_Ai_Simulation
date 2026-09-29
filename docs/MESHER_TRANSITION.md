@@ -32,33 +32,39 @@ The whole geometry-driven mesher had exactly ONE Triangle call:
 `geo_mesh._triangulate(V, S, ...)`, the quality CDT of a planar straight-line
 graph that `geo_mesh.py` builds itself (resampled slip-grid arcs, 1 um snap,
 clone-identical cuts, densified outlines, skin/wire patches as holes).
-`geo_mesh_gmsh.triangulate_gmsh` replaces that one call; everything else is
-shared, so every feature below exists on both backends by construction:
+`geo_mesh_gmsh.triangulate_gmsh` replaces that one call. Every other step is
+shared code, so a feature exists on gmsh either because it is verified by a
+test on the gmsh backend (**tested**) or only because the code that implements
+it runs unchanged before/after the triangulation (**inferred**):
 
-| # | Feature | On the gmsh backend |
-|---|---|---|
-| 1, 2 | Shaft / sleeve skin layers | same structured patches (`_skin_patch`, `_sleeve_layers`), left as holes and stitched; the patch rims are domain boundary, never split |
-| 3 | Per-part sizes | same region seeds; each face is capped by a gmsh `Constant` field at its region's target edge (last seed in a face wins, the `_seeds` order) |
-| 4 | Wire cell `coil_rel` | same wire patches / lattice (free points are embedded) |
-| 5 | Sliver / cusp guards | `_blunt_cusps` runs before either backend; gmsh has no refinement cascade; a rotor bulk over the aspect gate gets the same guarded smoothing |
-| 6 | Rotation invariance | same cell tiling; gmsh runs single-threaded, repeat builds are bit-identical; domain-boundary segments (cut rays) are frozen (transfinite 2 nodes), so the cuts stay clone-identical |
-| 7 | Exact tagging | same `_tag_stator` / `_tag_rotor` on the real polygons |
-| 8 | Moving-band rings | R1/R2 are domain boundary, frozen on the slip grid; a shared bug that moved the cell-seam node off R2 (1002 of 1008 nodes, both backends) is fixed |
-| 9 | Mesh budget | predicted count at the target sizes is checked before meshing, the actual count after; both raise `MeshBudgetExceeded` |
+| # | Feature | How it works on the gmsh backend | Evidence |
+|---|---|---|---|
+| 1 | Shaft skin layers | the same structured patch (`_skin_patch`) is a hole in the PSLG and stitched afterwards; its rim is domain boundary, never split | **tested**: planned rings present, first cell h1, growth 1.5 to the cap, no hanging node, identical rings on both backends (`test_shaft_skin_layers_structure`, `test_shaft_skin_patch_identical_on_both_backends`, the whole `test_conductor_skin_mesh.py` re-run on gmsh) |
+| 2 | Sleeve layers | NOT a structured patch on either backend: the ring is CDT-meshed to the target cell 0.433 (t/n)^2 of `n` layers (`_sleeve_layers`) | **tested**: mean cell edge <= 1.25 t/n, refines with n, CAD section kept (`test_sleeve_resolution_follows_the_layer_request`); loss convergence: server study in MESHER_COMPARISON |
+| 3 | Per-part sizes | the same region seeds; each face is capped by a `Constant` field at its region's target edge (last seed in a face wins, the `_seeds` order) | **tested** (`test_per_part_size_acts_on_gmsh`) |
+| 4 | Wire cell `coil_rel` | the same structured wire patches / lattice (lattice points are embedded) | **tested** (`test_wire_cell_factor_acts_on_gmsh`) |
+| 5 | Sliver / cusp guards | `_blunt_cusps` before either backend; gmsh has no refinement cascade; frozen-boundary-aware sizing; a rotor bulk over the aspect gate gets the same guarded smoothing | **tested** (`test_cusp_guard_on_the_gmsh_path`, `test_thin_pocket_is_not_a_sliver`); campaign quality distribution in MESHER_COMPARISON |
+| 6 | Rotation invariance / hashes | the same cell tiling; domain-boundary segments frozen (transfinite, 2 nodes) so cuts stay clone-identical; one gmsh thread | **tested**: every cell maps onto the next (`test_every_cell_is_the_same_mesh`); repeat build bit-identical in ONE environment (`test_repeat_build_is_bit_identical`); cross-version = semantic fingerprint (`test_semantic_fingerprint`), not bitwise |
+| 7 | Exact tagging | the same `_tag_stator` / `_tag_rotor` | **tested**: CAD sections kept, same per-tag areas as Triangle |
+| 8 | Moving-band rings | R1/R2 frozen on the slip grid; band rings pinned in `_symmetrize_cuts` (the fix for 1002/1008 seam nodes, which affected both backends) | **tested** on forced Triangle and gmsh, full ring and sector (`test_moving_band_rings`); macro solve `test_moving_band_macro_solve` (slow, server) |
+| 9 | Mesh budget | preflight: faces' area at their target size > 2x budget rejects before gmsh runs; the built count is checked after | **tested** (`test_mesh_budget_on_gmsh`, `test_budget_preflight_rejects_before_meshing`) |
+| 10 | Fail closed | an unloadable gmsh raises with the install command and the Triangle alternative; a meshing failure raises `GmshCDTError` after finalizing gmsh and releasing the lock; no path retries with another mesher | **tested** (`test_gmsh_failure_is_loud_and_cleans_up`, `test_tile_does_not_fall_back_on_a_gmsh_failure`, `test_missing_gmsh_is_an_actionable_error`) |
 
 Sizing on gmsh follows the physical scales the PSLG producer resolved: every
-input segment carries h = min(its length, 2.5 x its local feature size); the
+input segment carries h = min(its length, 2.5 x its local feature size); a
+frozen (boundary) segment's size is its length, and an interface facing a
+frozen segment across a thin feature is not cut finer than that segment. The
 segments are grouped in x1.5 classes, each a `Distance` field feeding
 h0 + 2.0 x distance (`MathEval`); the background mesh is the `Min` of those and
-the region caps. Interior interfaces may be subdivided (as Triangle's `-Y`
-allowed); domain boundaries never. Default meshes: ~1.7x Triangle's element
-count on the 40 mm preset at 1 mm, aspect max 11.6 (Triangle 9.0).
-Tests: `tests/test_geo_mesh_gmsh.py` (and the skin and shaft-region suites,
-which now run on whichever backend is active and are re-run forced onto gmsh).
+the region caps. Provenance: every gmsh-backend solve notes the gmsh version
+(`geo_mesh.cdt_provenance`, validated release `GMSH_VALIDATED` = 4.15.2, the
+`requirements.txt` pin).
+## Historical: the S1 gap list (superseded)
 
-## Features only the Triangle mesher had (from the code, before S2)
-
-These were what stage S2 had to port or replace on the gmsh path:
+Written at S1, BEFORE the gmsh backend existed. The statements below that say
+gmsh lacks a feature ("gmsh has no wire grid", "no equivalent fence", "the
+shaft wall is meshed without it") describe the plain gmsh build that S1 fell
+back to, not the S2 backend; the current state is the table above.
 
 1. **Shaft skin-depth layers** (`_shaft_skin_plan`, `_skin_patch`,
    `_stitch_skin_patch`, `_iron_grade_points`; sized by

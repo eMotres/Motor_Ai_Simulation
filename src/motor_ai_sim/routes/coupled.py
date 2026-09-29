@@ -5002,8 +5002,8 @@ def _run(body: Dict[str, Any],
         inv_final, ctl_final = inverter, ctl
         inverter, ctl = None, None
     # …AND IF THIS VERY SINE STATE WAS ALREADY SOLVED, IT IS NOT SOLVED AGAIN
-    # (owner 2026-09-25: «если уже есть каплинг с синусом — просто запускается
-    # расчёт с PWM из контроллера»).  Looked up under the drive-independent
+    # (owner 2026-09-25: "if the sine coupling already exists — just run the
+    # calculation with PWM from the controller").  Looked up under the drive-independent
     # sine-state key; `fresh` (Recompute) always solves.
     sine_key: Optional[str] = None
     sine_hit: Optional[Dict[str, Any]] = None
@@ -5447,8 +5447,8 @@ def _run(body: Dict[str, Any],
             d_mag = (0.0 if (t_mag is None or t_mag_out is None)
                      else float(t_mag_out) - float(t_mag))
             # ── THE LIMITS, WHEN THAT IS THE QUESTION (owner 2026-09-18) ────
-            # *«или считать до конца стабилизации температуры, или считать до
-            # лимитов»*.  In `limits` mode the loop must NOT keep iterating
+            # *"either solve until the temperature fully stabilizes, or solve
+            # to the limits"*.  In `limits` mode the loop must NOT keep iterating
             # towards a steady state the machine is never allowed to reach: as
             # soon as a pass's own map puts a part past its limit, the step
             # response of THAT map is integrated and — if it really does cross —
@@ -5559,8 +5559,8 @@ def _run(body: Dict[str, Any],
                         damping_eff = min(damping_eff, DAMPING_ON_OSCILLATION)
             prev_d = (d_coil, d_mag)
             history[-1]["damping_used"] = round(float(damping_eff), 3)
-            # ROUNDED to the panel's own precision (owner, 2026-09-22: "зачем
-            # он ещё пересчитывает... если во время каплинга он уже считал").
+            # ROUNDED to the panel's own precision (owner, 2026-09-22: "why is
+            # it recomputing again... it already computed during coupling").
             # `adoptConvergedTemperatures` (web/coupledApi.ts) writes this
             # exact 1-decimal number into the Simulation tab's coil/magnet
             # temperature fields, and the tab's next Run sends it straight

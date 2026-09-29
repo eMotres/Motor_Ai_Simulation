@@ -26,7 +26,12 @@ CPU total and per core, load average, RAM, swap, disk per mount, network
 rx/tx rate (physical interfaces), uptime, top processes (name, user, nice,
 CPU %, RSS, container name via cgroup), docker containers with CPU/RAM and an
 approximate "created" timestamp (from `docker ps`, used for the outside-app
-Now table's uptime column).
+Now table's uptime column). `cores` is the logical/thread count (one entry
+per `/proc/stat` `cpuN` line, i.e. SMT/hyperthreading counted separately);
+`cores_physical` is the distinct (physical id, core id) count from
+`/proc/cpuinfo` (0 if unreadable -- older node agents before this field
+existed, or a host whose `/proc/cpuinfo` lacks those ids, also read as
+"unknown" since `cores_physical` then falls back to the thread count).
 The agent sends process **names only** — never command lines or environments.
 The API additionally drops any `env`/`cmdline`/`args` keys and redacts
 token-, password- and key-like strings before storing.
@@ -99,6 +104,17 @@ CPU %, RAM, approx uptime) and `monitoring_since` (oldest registered node,
 for a "collecting since HH:MM" hint on a short history instead of an
 empty-looking chart). The web panel never offers to stop a container — only
 job-queue rows get a Stop button.
+
+`GET /api/admin/load/live` also returns `nodes_now` (id, name, status,
+`cores` — threads, `cores_physical`, `cpu` now, `mem_total`), the per-server
+snapshot the "CPU % / RAM % per server" chart's legend/tooltip and the
+compact strip above it use for "eu1 (16 threads / 8 cores)" labels and
+"threads used" (`cores × CPU % / 100`); `cores_physical` is `null` for an
+older node agent or a host whose `/proc/cpuinfo` lacks physical/core ids.
+CPU and RAM are drawn as separate Lines per server (CPU solid, RAM dashed,
+one colour per server) plus `cluster_cpu`/`cluster_mem` dashed grey means —
+`nodes.<id>` history and `nodes_now` were always both there, the earlier
+panel simply never drew a RAM Line at all.
 
 ## Usage accounting (machine time per client)
 

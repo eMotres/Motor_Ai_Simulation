@@ -11,12 +11,18 @@ import {
   Tooltip as RcTooltip, Legend,
 } from 'recharts';
 import HelpTip from '../common/HelpTip';
-import { mergeNodeSeries, mergeLoadSeries, isCollectingHistory } from './liveLoadSeries';
+import {
+  mergeNodeSeries, mergeLoadSeries, isCollectingHistory, serverLabel, threadsUsed,
+  cpuTooltipValue, memTooltipValue, clusterLine,
+} from './liveLoadSeries';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
 const REFRESH_MS = 7000;
 const NODE_COLORS = ['#60a5fa', '#a78bfa', '#4ade80', '#fbbf24', '#f87171', '#22d3ee'];
+const STATUS_DOT: Record<string, string> = {
+  online: '#4ade80', offline: '#f87171', never: 'var(--text-4)', revoked: 'var(--text-4)',
+};
 const USER_COLORS = ['#60a5fa', '#a78bfa', '#4ade80', '#fbbf24', '#f87171', '#22d3ee', '#f472b6', '#94a3b8'];
 // outside-app series: a distinct grey ramp (never overlaps a user color) so the
 // legend visually groups "who" (colorful) vs. "what's running outside the app" (grey).
@@ -28,6 +34,10 @@ const OUTSIDE_OTHER_KEY = 'outside-other';
 
 type Range = '15m' | '1h' | '24h' | '7d';
 interface NodePoint { ts: number; cpu: number; mem: number }
+interface NodeNow {
+  id: string; name: string; status: string; cores?: number; cores_physical?: number;
+  cpu?: number; mem_total?: number;
+}
 interface UserLoad { users: string[]; bucket_s: number; series: Record<string, number>[] }
 interface OutsideNow { node: string; name: string; cpu: number; mem: number; uptime_s: number | null }
 interface OutsideApp {
@@ -40,7 +50,7 @@ interface JobItem {
 }
 interface Snapshot { running: number; queued: number; items: JobItem[] }
 interface LoadLive {
-  range: Range; nodes: Record<string, NodePoint[]>;
+  range: Range; nodes: Record<string, NodePoint[]>; nodes_now: NodeNow[];
   cluster: { cores: number; cpu_used_cores: number; mem_used: number; mem_total: number };
   user_load: UserLoad; outside_app: OutsideApp; snapshot: Snapshot;
   monitoring_since: number | null;
@@ -112,6 +122,22 @@ const LiveLoadPanel: React.FC = () => {
 
   const nodeIds = data ? Object.keys(data.nodes) : [];
   const cpuRam = mergeNodeSeries(data?.nodes ?? {});
+  const nodesNow = data?.nodes_now ?? [];
+  const nodeMeta: Record<string, NodeNow> = Object.fromEntries(nodesNow.map((n) => [n.id, n]));
+  const cpuRamTooltip = (value: unknown, _name: unknown, entry: { dataKey?: unknown }) => {
+    const key = String(entry?.dataKey ?? '');
+    if (key === 'cluster_cpu') return [`${Number(value).toFixed(1)} %`, 'cluster CPU (mean)'];
+    if (key === 'cluster_mem') return [`${Number(value).toFixed(1)} %`, 'cluster RAM (mean)'];
+    const m = key.match(/^(.+)_(cpu|mem)$/);
+    if (!m) return [`${Number(value).toFixed(1)} %`, key];
+    const [, id, kind] = m;
+    const meta = nodeMeta[id];
+    const label = `${serverLabel(id, { threads: meta?.cores, cores: meta?.cores_physical })} ${kind === 'cpu' ? 'CPU' : 'RAM'}`;
+    const v = kind === 'cpu'
+      ? cpuTooltipValue(Number(value), meta?.cores)
+      : memTooltipValue(Number(value), meta?.mem_total);
+    return [v, label];
+  };
   const loadSeries = mergeLoadSeries(data?.user_load.series ?? [], data?.outside_app.series ?? []);
   const outsideKeys = data?.outside_app.items ?? [];
   const overheadKey = data?.outside_app.app_overhead_key ?? null;
@@ -132,21 +158,58 @@ const LiveLoadPanel: React.FC = () => {
 
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
         <Box sx={{ flex: '1 1 380px', minWidth: 320 }}>
-          <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mb: 0.5 }}>CPU % / RAM % per server</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+            <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>CPU % / RAM % per server</Typography>
+            <HelpTip title="CPU is solid, RAM is dashed, each server keeps one colour across both. Threads used = physical-core-independent thread count × CPU %; cores/threads come from the node agent's /proc/cpuinfo (0 = an older agent or a host without physical/core ids to count)." />
+          </Box>
+          {!!nodesNow.length && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5, flexWrap: 'wrap' }}>
+              {nodesNow.map((n) => (
+                <Box key={n.id} sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: 10.5,
+                  color: 'var(--text-3)', bgcolor: 'var(--panel-3, rgba(255,255,255,0.04))', borderRadius: 1, px: 0.75, py: 0.25 }}>
+                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: STATUS_DOT[n.status] ?? 'var(--text-4)' }} />
+                  <span>{n.name}</span>
+                  <span>·</span>
+                  <span>{n.cores_physical ? `${n.cores_physical}c/${n.cores ?? '?'}t` : n.cores ? `${n.cores} threads` : '—'}</span>
+                  <span>·</span>
+                  <span>{gb(n.mem_total)} GB</span>
+                  <span>·</span>
+                  <span>{n.cpu != null ? `${n.cpu.toFixed(0)} %` : '—'}</span>
+                  {threadsUsed(n.cores, n.cpu ?? 0) != null && (
+                    <span>({threadsUsed(n.cores, n.cpu ?? 0)!.toFixed(1)} thr used)</span>
+                  )}
+                </Box>
+              ))}
+              <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', ml: 'auto' }}>
+                {clusterLine(data?.cluster.cores ?? 0, data?.cluster.cpu_used_cores ?? 0)}
+              </Typography>
+            </Box>
+          )}
           <Box sx={{ height: 190 }}>
             <ResponsiveContainer>
               <LineChart data={cpuRam}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" />
                 <XAxis dataKey="ts" tickFormatter={fmt} tick={{ fontSize: 10 }} minTickGap={40} />
                 <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" width={36} />
-                <RcTooltip labelFormatter={(v) => fmt(Number(v))} />
+                <RcTooltip labelFormatter={(v) => fmt(Number(v))} formatter={cpuRamTooltip} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
-                {nodeIds.map((id, i) => (
-                  <Line key={id} type="monotone" dataKey={`${id}_cpu`} name={`${id} CPU`}
-                    stroke={NODE_COLORS[i % NODE_COLORS.length]} dot={false} isAnimationActive={false} strokeWidth={1.5} />
-                ))}
-                <Line type="monotone" dataKey="cluster_cpu" name="cluster mean" stroke="var(--text-4)"
-                  strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+                {nodeIds.map((id, i) => {
+                  const meta = nodeMeta[id];
+                  const color = NODE_COLORS[i % NODE_COLORS.length];
+                  const label = serverLabel(id, { threads: meta?.cores, cores: meta?.cores_physical });
+                  return (
+                    <React.Fragment key={id}>
+                      <Line type="monotone" dataKey={`${id}_cpu`} name={`${label} CPU`}
+                        stroke={color} dot={false} isAnimationActive={false} strokeWidth={1.5} />
+                      <Line type="monotone" dataKey={`${id}_mem`} name={`${label} RAM`}
+                        stroke={color} strokeDasharray="5 3" dot={false} isAnimationActive={false} strokeWidth={1.5} />
+                    </React.Fragment>
+                  );
+                })}
+                <Line type="monotone" dataKey="cluster_cpu" name="cluster CPU (mean)" stroke="var(--text-4)"
+                  strokeDasharray="2 2" dot={false} isAnimationActive={false} />
+                <Line type="monotone" dataKey="cluster_mem" name="cluster RAM (mean)" stroke="var(--text-4)"
+                  strokeDasharray="6 3" dot={false} isAnimationActive={false} />
               </LineChart>
             </ResponsiveContainer>
           </Box>

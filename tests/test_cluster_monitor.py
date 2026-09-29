@@ -279,3 +279,34 @@ def test_load_live_includes_outside_app_and_monitoring_since(as_admin):
     assert "outside_app" in r and "series" in r["outside_app"] and "now" in r["outside_app"]
     assert r["outside_app"]["now"][0]["name"] == "mesher_1"
     assert r["monitoring_since"] is not None
+
+
+def test_load_live_nodes_now_carries_cores_and_ram_for_the_per_server_strip(as_admin):
+    """The left "CPU % / RAM % per server" chart's legend/tooltip and the
+    per-server strip above it need each node's thread/physical-core count and
+    total RAM -- not just the history points, which only carry cpu/mem %."""
+    cluster_routes._LOAD_CACHE.update(key=None, ts=0.0, data=None)
+    nid, _ = CM.create_node("eu1")
+    CM.ingest(nid, _sample(cpu=62.0, cores_physical=8,
+                          mem={"used": 4e9, "total": 16e9}))
+    r = client.get("/api/admin/load/live?range=1h").json()
+    now = next(n for n in r["nodes_now"] if n["id"] == nid)
+    assert now["cores"] == 4                                    # 4 per_core entries in _sample()
+    assert now["cores_physical"] == 8
+    assert now["cpu"] == 62.0
+    assert now["mem_total"] == pytest.approx(16e9)
+    # RAM history is already there (mergeNodeSeries/CPU-RAM chart bug was
+    # frontend-only -- point_of() has always carried "mem"): a fresh
+    # regression guard so this doesn't silently regress again.
+    assert CM.history(nid, "24h")[0]["mem"] == pytest.approx(25.0)
+
+
+def test_load_live_nodes_now_cores_physical_is_none_for_an_older_agent(as_admin):
+    """An agent from before cores_physical existed (or physical_cores()
+    returning 0, "unknown") must not surface as a nonsensical "0 cores"."""
+    cluster_routes._LOAD_CACHE.update(key=None, ts=0.0, data=None)
+    nid, _ = CM.create_node("eu1")
+    CM.ingest(nid, _sample())                                     # no cores_physical key at all
+    r = client.get("/api/admin/load/live?range=1h").json()
+    now = next(n for n in r["nodes_now"] if n["id"] == nid)
+    assert now["cores_physical"] is None

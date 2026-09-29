@@ -96,6 +96,25 @@ def load_live(range: str = "1h", top: int = 8, _admin: dict = Depends(require_ad
     nodes = CM.list_nodes()
     node_series = {n["id"]: CM.history(n["id"], node_rng) for n in nodes["nodes"]
                   if n["status"] != "revoked"}
+    # per-server "now" snapshot for the live-load strip: threads (cores, as
+    # sampled from /proc/stat), physical cores (/proc/cpuinfo, 0 = unknown --
+    # an agent from before this field existed, or a host without physical/
+    # core ids), RAM total and current CPU % (the chart already has history).
+    nodes_now = []
+    for n in nodes["nodes"]:
+        if n["status"] == "revoked":
+            continue
+        s = n.get("sample") or {}
+        cpu_obj = s.get("cpu") or {}
+        # same threads fallback as CM.list_nodes()'s cluster totals: per_core
+        # length first (always present once a sample has landed), "cores" if
+        # per_core is somehow empty.
+        threads = len(cpu_obj.get("per_core") or []) or int(CM._num(s.get("cores"))) or None
+        nodes_now.append({
+            "id": n["id"], "name": n["name"], "status": n["status"],
+            "cores": threads, "cores_physical": s.get("cores_physical") or None,
+            "cpu": cpu_obj.get("total"), "mem_total": (s.get("mem") or {}).get("total"),
+        })
     user_load = U.user_load_series(now - lookback, now, top_n=top)
     outside_app = CM.outside_app_series(now - lookback, now, top_n=top)
     outside_app["now"] = CM.outside_app_now()
@@ -108,7 +127,7 @@ def load_live(range: str = "1h", top: int = 8, _admin: dict = Depends(require_ad
     except Exception as e:                                # noqa: BLE001
         snapshot = {"error": CM.redact(str(e))[:200], "items": []}
 
-    data = {"range": rng, "nodes": node_series, "cluster": nodes["cluster"],
+    data = {"range": rng, "nodes": node_series, "nodes_now": nodes_now, "cluster": nodes["cluster"],
             "user_load": user_load, "outside_app": outside_app, "snapshot": snapshot,
             "monitoring_since": min(since) if since else None}
     _LOAD_CACHE.update(key=cache_key, ts=now, data=data)

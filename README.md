@@ -4,6 +4,8 @@ A full-stack **2-D FEM design platform for BLDC/PMSM motors** — parametric geo
 real finite-element electromagnetics, thermal, optimization and cost estimation, with a
 browser workbench.
 
+> **Project vision:** read the [Manifesto](MANIFESTO.md) — why we are building an open engineering portal for motors, controllers and the systems they move.
+
 > **Note:** the electromagnetics are solved with a classical **finite-element method
 > (scikit-fem + gmsh, on CPU)** — there is **no** PINN / neural-network / NVIDIA Modulus /
 > PhysicsNeMo / PyTorch dependency. (An earlier prototype targeted Modulus PINNs; that path

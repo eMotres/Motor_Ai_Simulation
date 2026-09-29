@@ -1,6 +1,6 @@
 /* ── Sine | Inverter | Δ % (owner 2026-09-25) ────────────────────────────────
-   «нужно давать сравнение, как изменились характеристики мотора с контроллером
-   по сравнению с синусоидой».  A compact table under the coupled result of a
+   «we need to show a comparison of how the motor's characteristics changed
+   with the controller compared to the sine wave».  A compact table under the coupled result of a
    drive=inverter run: the ideal sine current beside the controller's PWM, at
    the SAME temperatures (the drive the only difference), plus — on the
    final-pass algorithm, when the PWM's own losses moved the temperatures — the

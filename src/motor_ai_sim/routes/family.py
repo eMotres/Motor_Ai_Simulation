@@ -1489,7 +1489,7 @@ class DutySpec(BaseModel):
     note: Optional[str] = None           # None = keep the previous note on upsert
     from_current: bool = False           # fill the Nones from the live Simulation
     # The COMPLETE computed state of the run being saved (user 2026-08-25:
-    # "это всё должно сохраняться"): the mesh settings the numbers were solved
+    # "all of this needs to be saved"): the mesh settings the numbers were solved
     # on, and the full summary block — so loading the duty restores the exact
     # card (all constants, live 3D/R/KV buttons) and the exact mesh, not
     # whatever happened to linger in the browser.
@@ -1497,7 +1497,7 @@ class DutySpec(BaseModel):
     summary: Optional[dict] = None
     # THIS DUTY's materials — a PARTIAL assignment {part: material} laid over
     # the configuration's own `materials:` when the duty is loaded (user
-    # 2026-09-01: "все материалы, для каждого duty").  A duty here is a full
+    # 2026-09-01: "all materials, per duty").  A duty here is a full
     # thermal scenario ("peak 200C wire 120C NdFeB"), so the magnet temperature
     # record and the steel it was characterised with belong to it, not to the
     # machine.  A `null` value is the duty SAYING "the configuration's own" —

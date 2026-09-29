@@ -1,7 +1,7 @@
 """HOW MUCH MAY IT PULL FOR EVER? — the S1 rating under a stated cooling.
 
-WHY THIS MODULE EXISTS (owner, 2026-09-20: *«давай ещё сделаем расчёт continuous
-power для разных условий охлаждения»*)
+WHY THIS MODULE EXISTS (owner, 2026-09-20: *"let's also add a continuous
+power calculation for different cooling conditions"*)
 =============================================================================
 :mod:`coupled_time_to_limit` answers the question the other way round: the
 current is given, the steady state is over a limit, and what is asked is how

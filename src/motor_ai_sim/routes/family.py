@@ -438,8 +438,8 @@ def _require_deletable_die(die: str, who: dict) -> str:
 
     Unlike :func:`_require_writable_die` (rename, and the general "may I aim a
     write at the curated layer" gate behind ``?layer=shared``), a DELETE by an
-    admin needs no query-string opt-in: the owner's own words were "я же
-    админ" — the confirmation dialog already asks twice for a die with
+    admin needs no query-string opt-in: the owner's own words were "I'm the
+    admin, aren't I" — the confirmation dialog already asks twice for a die with
     configurations, and ``who["is_admin"]`` is a stronger promise than a query
     parameter a UI call forgot to add (that gap is exactly what left a 403 with
     no way through it, 2026-09-24).  A non-admin gets the same refusal
@@ -524,9 +524,8 @@ def _require_die_access(die: str, authorization) -> dict:
 
 
 # ── who may WRITE the catalog (migration Stage 5) ────────────────────────────
-# The user's rule, 2026-09-15: *"общий каталог правит пока только админ;
-# пользователи всё сохраняют только в своём пространстве, но могут и делиться
-# со всеми"*.
+# The user's rule, 2026-09-15: *"for now only the admin edits the shared
+# catalog; users only save everything in their own workspace, but can also share with everyone"*.
 #
 # Stage 2 built the machinery for the second half of that sentence — every write
 # in this router funnels through ``_write_target``/``_ensure_writable_die``,

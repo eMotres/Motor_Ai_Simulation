@@ -754,7 +754,7 @@ def rotor_stress(
                                    "with cyclic-symmetry ties)"}]})
 
     # ── which forces act (2026-09-07) ───────────────────────────────────────
-    # User: "сделай меню, чтобы можно было выбрать центробежную, момент и обе".
+    # User: "make a menu so centrifugal, torque, and both can be selected".
     load_mode = str(loads or "both").strip().lower()
     if load_mode not in rsm.LOAD_MODES:
         raise HTTPException(
@@ -940,8 +940,8 @@ def rotor_stress(
             # 40 mm's magnets sit in pockets with a gap above them, and a hub
             # on a fit-less, frictionless shaft opens under its own growth —
             # the contact set the user chose for the Ø200, whose iron lips DO
-            # hold the magnets, followed them onto both machines ("я везде
-            # сделал separation").  Rather than refuse a machine the user
+            # hold the magnets, followed them onto both machines ("I set
+            # separation everywhere").  Rather than refuse a machine the user
             # cannot tell apart from a working one, the joint that ran away is
             # solved BONDED and the answer says so, in the result and on the
             # panel (`contact_fallback`).  ONE joint per pass, in the order the
@@ -1064,8 +1064,8 @@ def rotor_stress(
 # ---------------------------------------------------------------------------
 # Limit speed — the rpm at which SF = 1 (or whatever target is asked for)
 # ---------------------------------------------------------------------------
-# Owner 2026-09-21: "нужно искать ещё максимальную скорость вращения, на
-# всякий случай — она будет, когда достигает SF = 1".  ``rotor_stress`` answers
+# Owner 2026-09-21: "we also need to find the maximum rotation speed, just
+# in case — it's where SF reaches 1".  ``rotor_stress`` answers
 # "is THIS speed safe"; this route answers the companion question everything
 # else about the case held fixed — same torque, contacts, interference,
 # temperatures, mesh, order — by bracketing and bisecting single-speed

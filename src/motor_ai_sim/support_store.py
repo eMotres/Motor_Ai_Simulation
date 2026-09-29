@@ -4,8 +4,8 @@ The in-app assistant answers signed-out visitors on the landing page
 (``routes/support.py``).  Until now those conversations went nowhere: the
 provider answered, the browser printed it, and the team never learned that
 somebody had stood in the doorway and asked how to get in.  The owner's
-question on 2026-09-17 was exactly that — *"как сообщения, которые они пишут
-боту, будут доходить до нас?"*
+question on 2026-09-17 was exactly that — *"how will the messages they write
+to the bot reach us?"*
 
 Two stores, both under the SAME root as ``users.json`` (the identity/admin data
 root — ``config/`` on this workstation, ``/srv/motres/config`` on the server),

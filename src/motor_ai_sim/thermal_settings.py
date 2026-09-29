@@ -55,8 +55,8 @@ END_FACE_MODES = ("still", "none")
 #: the airflow — is the 40 mm CIANO14; ``housed`` is every other machine and the
 #: model this project has always solved.
 FRAME_MODES = ("housed", "open")
-#: The robotics mode's ONE conduction choice (2026-09-26, owner: «давай
-#: упростим») — replaces the mount W/K, mount °C, sink-or-link, link size and
+#: The robotics mode's ONE conduction choice (2026-09-26, owner: "let's
+#: simplify") — replaces the mount W/K, mount °C, sink-or-link, link size and
 #: link material fields.  See ``cooling_models.HEAT_PATHS``.
 HEAT_PATHS = ("housing", "shaft", "both", "none")
 
@@ -218,8 +218,8 @@ def cooling_issue(s: Mapping[str, Any]) -> Optional[str]:
 def cooling_words(c: Mapping[str, Any]) -> str:
     """THE BOUNDARY, in a handful of words — ``""`` when there is nothing to say.
 
-    Owner, 2026-09-18 (addendum): the limited state is the machine *«при заданной
-    мощности и заданном охлаждении»*, so the answer has to NAME the cooling it
+    Owner, 2026-09-18 (addendum): the limited state is the machine *"at a
+    given power and given cooling"*, so the answer has to NAME the cooling it
     was computed with.  The sentence itself stays one line (the no-walls rule),
     so this is what its tooltip prints.
 

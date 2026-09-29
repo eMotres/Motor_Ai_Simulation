@@ -26,8 +26,8 @@ psi and EMF /k, Kt and T /k, KV xk, R_phase and Ld/Lq /k^2, J per strand /k.
 
 ``wire_split`` (STRIPS PER WIRE ROW) is the third, and it is GEOMETRY FIRST.  N
 strips of ``wire_width`` each — ``wire_width`` IS one strip, the user sets it
-himself (2026-09-08: *"сделай ширину провода 4,5 мм, слот станет чуть больше, я
-бы гап между проводами сделал 2·Wire Spacing X"*) — are laid SIDE BY SIDE across
+himself (2026-09-08: *"make the wire width 4.5 mm, the slot will get a bit
+bigger, I'd make the gap between wires 2·Wire Spacing X"*) — are laid SIDE BY SIDE across
 the slot width with ``2 x wire_spacing_x`` of insulation between them.  So the
 wire footprint, and with it the slot the CAD cuts, GROWS::
 
@@ -39,9 +39,9 @@ separate conductors, one imposed net current each, so the slot holds
 
 The N strips of a row are CONSECUTIVE SERIES TURNS — always.  There was a
 ``wire_split_series`` flag for a few hours on 2026-09-08 offering the parallel
-reading too; the user removed it the same day (*"wire_split_series можно убрать —
-нам всегда будет нужно только последовательное подключение этих двух катушек;
-при параллельном подключении возникнут компенсационные токи между ними"*):
+reading too; the user removed it the same day (*"wire_split_series can be
+removed — we'll always only need the series connection of these two coils; a
+parallel connection would create circulating currents between them"*):
 strips lying side by side in a slot see different leakage flux, so wiring them in
 parallel drives circulating current between them, which this model does not
 solve and which the machine does not want.  So::
@@ -80,7 +80,7 @@ __all__ = ["parse_connection", "n_parallel_from_connection", "connection_label",
            "strip_gap_mm", "winding_footprint_mm", "STRIP_GAP_FACTOR"]
 
 #: How many ``wire_spacing_x`` layers sit between two strips of the SAME row.
-#: TWO, not one (user 2026-09-08: *"я бы гап между проводами сделал 2·Wire
+#: TWO, not one (user 2026-09-08: *"I'd make the gap between wires 2·Wire
 #: Spacing X"*): ``wire_spacing_x`` is the half-gap the CAD already leaves on
 #: each side of a wire, so two strips facing each other bring one each.  It
 #: lives here as a named constant because the polygon builder, the slot cutter,

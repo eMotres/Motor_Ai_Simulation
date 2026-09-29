@@ -30,6 +30,7 @@ import numpy as np
 from skfem import BilinearForm, asm
 from skfem.assembly.form.coo_data import COOData as _COOData
 from skfem.helpers import dot as _dot, grad as _grad
+from scipy.sparse import csr_matrix as _csr_matrix
 from scipy.sparse.linalg import splu as _splu
 
 from motor_ai_sim.simulation.pardiso_lifetime import release_pardiso
@@ -37,6 +38,53 @@ from motor_ai_sim.simulation.pardiso_lifetime import release_pardiso
 from motor_ai_sim.simulation.field_ops import (
     MU0, _grad_at_quad, _mu_r_from_bh_vec, _p2_B_at_quad,
 )
+
+
+# Value-symmetry tolerance of the Cholesky path, relative to √(a_ii·a_jj).
+# The assembled operators are symmetric to round-off only (the tangent's
+# (c·a_j)·a_i vs (c·a_i)·a_j products, sparse sums in different orders):
+# measured ≤ 1e-15 on every exported system.  A genuinely unsymmetric
+# operator is off by O(1); 1e-12 separates the two by three decades each way.
+SPD_SYM_RTOL = 1e-12
+
+
+class _SymPattern:
+    """What the Cholesky path needs to know about one sparsity pattern."""
+
+    __slots__ = ("key", "indptr", "indices", "ok", "why", "tri", "diag",
+                 "u_indptr", "u_indices", "probe", "probe_tol", "analysed")
+
+
+def sym_pattern(indptr, indices, n: int) -> _SymPattern:
+    """Upper triangle and diagonal of a sorted CSR pattern (for CSC arrays:
+    of the transpose), built once per pattern like the LU ordering.  ``ok``
+    is False, with ``why``, when a diagonal entry is missing: such a matrix
+    cannot be SPD as stored and goes to LU.  Structural symmetry is not
+    tested here: an entry without its mirror is an asymmetric VALUE, which the
+    per-solve probe of :meth:`P2Nonlinear._solve_spd` catches."""
+    p = _SymPattern()
+    p.key = (int(n), int(indices.size))
+    p.indptr = np.array(indptr, copy=True)
+    p.indices = np.array(indices, copy=True)
+    p.ok, p.why, p.analysed = False, None, None
+    rows = np.repeat(np.arange(n, dtype=np.int32), np.diff(indptr))
+    cols = np.asarray(indices, dtype=np.int32)
+    diag = np.flatnonzero(cols == rows)
+    if diag.size != n:
+        p.why = "missing diagonal entries"
+        return p
+    p.diag = diag.astype(np.int32)                  # diag[i] = row i's entry
+    p.tri = np.flatnonzero(cols >= rows).astype(np.int32)   # upper incl. diag
+    p.u_indptr = np.concatenate(
+        [[0], np.cumsum(np.asarray(indptr[1:], np.int64) - diag)]).astype(np.int32)
+    p.u_indices = cols[p.tri]
+    # fixed +-1 probe vector for the per-solve symmetry test (see _solve_spd)
+    p.probe = np.where(np.random.default_rng(20260929).random(n) < 0.5,
+                       -1.0, 1.0)
+    p.probe_tol = SPD_SYM_RTOL * float(np.sqrt(max(int(np.max(np.diff(indptr),
+                                                              initial=1)), 1)))
+    p.ok = True
+    return p
 
 
 @BilinearForm
@@ -156,17 +204,27 @@ class P2Nonlinear:
     ``pardiso`` is the persistent MKL handle (or ``None`` for SuperLU); it is
     dropped to ``None`` on the first failure, so a broken PARDISO degrades once
     instead of once per solve.
+
+    ``pardiso_spd`` is an optional second handle created with ``mtype=2``
+    (real symmetric positive definite: Cholesky).  A caller that passes
+    ``spd=True`` to :meth:`solve_ff` asserts that its operator is SPD BY
+    CONSTRUCTION; the matrix is still checked at run time (structure, value
+    symmetry, positive diagonal) and any doubt, or a Cholesky failure, takes
+    the unsymmetric LU path above for that solve.  See
+    ``docs/CHOLESKY_SPD_2026-09-29.md`` for the per-system proofs.
     """
 
     def __init__(self, *, basis, n_dof: int,
                  K_const, sat: Sequence[tuple],
-                 sat_sub: Sequence[tuple], pardiso, log) -> None:
+                 sat_sub: Sequence[tuple], pardiso, log,
+                 pardiso_spd=None) -> None:
         self.basis = basis
         self.N = int(n_dof)
         self.K_const = K_const
         self.sat = list(sat)
         self.sat_sub = list(sat_sub)
         self._pardiso = pardiso
+        self._pardiso_spd = pardiso_spd
         self._log = log
         # geometry half of the two forms, one per saturable sub-basis, built
         # on first use (a cold run that never saturates never pays for it)
@@ -181,9 +239,15 @@ class P2Nonlinear:
         self.pardiso_analyses = 0   # phase-11 calls
         self.pardiso_solves = 0     # phase-23 calls
         self.pardiso_perturbed = 0  # frames PARDISO had to perturb a pivot on
+        # Cholesky (mtype 2) path — see _solve_spd.
+        self._spd_pat = None        # _SymPattern of the last SPD analysis
+        self.spd_solves = 0         # solves done by the Cholesky handle
+        self.spd_analyses = 0       # its phase-11 calls
+        self.spd_declined = 0       # spd=True solves sent to LU by the checks
+        self.spd_failures = 0       # Cholesky errors (then LU for the run)
 
     # ── linear algebra ───────────────────────────────────────────────────────
-    def solve_ff(self, Mff, rhs):
+    def solve_ff(self, Mff, rhs, spd: bool = False):
         """Solve Mff·x = rhs for a 1-D or 2-D (multi-column) rhs.
 
         REUSES THE SYMBOLIC FACTORIZATION while the sparsity pattern holds.
@@ -229,9 +293,27 @@ class P2Nonlinear:
         The reused analysis moves a single solve by ~6e-13 relative, i.e. the
         same order as the noise that was always there.  See the commit message
         for the whole-run numbers; ``SB_NO_PARDISO_REUSE=1`` turns it off.
+
+        ``spd=True`` (2026-09-29): the caller's operator is symmetric positive
+        definite by construction — the secant stiffness Pᵀ K(ν) P (ν > 0,
+        Dirichlet rows removed), the Newton Jacobian Pᵀ(K + T)P (T is the
+        Gram form of 2·max(dν/dB², 0) ≥ 0), and the bordered eddy matrix,
+        whose σ block is Σ_b (a − Δt·U_b·1)ᵀ M_b (a − Δt·U_b·1)/Δt with
+        g_b = M_b·1 and S_b = 1ᵀM_b1 exactly.  It is then factorised by
+        Cholesky (PARDISO mtype 2, the upper triangle) instead of LU: half
+        the work, no pivoting.  Checked, not assumed: :meth:`_solve_spd`
+        declines (→ LU) a matrix whose pattern is not symmetric, whose
+        values differ from their transpose beyond round-off, or whose
+        diagonal is not positive, and a Cholesky error switches the run back
+        to LU loudly.  ``SB_PARDISO_SPD=0`` (read where the handle is made)
+        keeps every solve on LU.
         """
         if self._pardiso is not None:
             try:
+                if spd and self._pardiso_spd is not None:
+                    x = self._solve_spd(Mff, rhs)
+                    if x is not None:
+                        return x
                 if self._reuse:
                     return self._solve_reuse(Mff, rhs)
                 return self._pardiso.solve(Mff, rhs)
@@ -241,7 +323,95 @@ class P2Nonlinear:
                 release_pardiso(self._pardiso)
                 self._pardiso = None
                 self._pat = None
+                self._drop_spd()
         return _splu(Mff).solve(rhs)
+
+    def _drop_spd(self):
+        if self._pardiso_spd is not None:
+            release_pardiso(self._pardiso_spd)
+            self._pardiso_spd = None
+            self._spd_pat = None
+
+    def _solve_spd(self, A, rhs):
+        """Cholesky solve of an SPD-by-construction matrix, or ``None`` (the
+        caller then takes the LU path) when the run-time checks decline it.
+
+        Per PATTERN (once per analysis, like the LU ordering): the
+        upper-triangle and diagonal positions (:func:`sym_pattern`, ~5 ms on
+        the 0.5 M-nnz L155 system).  Per SOLVE: a positive diagonal and the
+        scale-free symmetry test |a_ij - a_ji| <= SPD_SYM_RTOL*sqrt(a_ii*a_jj)
+        (the natural scale of a matrix meant to be SPD, where
+        |a_ij| <= sqrt(a_ii a_jj)) through a fixed +-1 probe v:
+        ``max|D^-1/2 (A - A^T) D^-1/2 v|`` <= tol*sqrt(max row count), two
+        sparse mat-vecs, ~1 ms (the pairwise gather costs ~4 ms per solve and
+        a transpose map another ~10 ms per pattern).  An asymmetric pair
+        (i, j) shows in rows i and j unless it cancels EXACTLY against other
+        asymmetric entries of both rows; an entry without its mirror is such
+        a pair.  Then phase 23 on the upper triangle.  A CSC matrix's arrays
+        are the CSR arrays of A^T, which the test has just shown to equal A
+        to round-off.
+        """
+        if A.format not in ("csr", "csc"):
+            A = A.tocsr()
+        if not A.has_sorted_indices:
+            A.sort_indices()
+        key = (int(A.shape[0]), int(A.nnz))
+        pat = self._spd_pat
+        new = not (pat is not None and pat.key == key
+                   and np.array_equal(pat.indptr, A.indptr)
+                   and np.array_equal(pat.indices, A.indices))
+        if new:
+            pat = sym_pattern(A.indptr, A.indices, A.shape[0])
+            self._spd_pat = pat
+        if not pat.ok:
+            self.spd_declined += 1
+            if self.spd_declined == 1:
+                self._log.info("PARDISO Cholesky declined (%s, n=%d) — LU "
+                               "for this matrix", pat.why, A.shape[0])
+            return None
+        d = A.data
+        dg = d[pat.diag]
+        why = None
+        if not bool(np.all(dg > 0.0)):
+            why = "non-positive diagonal"
+        else:
+            sc = 1.0 / np.sqrt(dg)
+            w = sc * pat.probe
+            y = A @ w
+            y -= A.T @ w
+            y *= sc
+            asym = float(np.max(np.abs(y), initial=0.0))
+            if not asym <= pat.probe_tol:
+                why = "asymmetric values (%.3g of sqrt(a_ii a_jj))" % asym
+        if why is not None:
+            self.spd_declined += 1
+            if self.spd_declined == 1:
+                self._log.warning("PARDISO Cholesky declined (%s, n=%d) — LU "
+                                  "for this matrix", why, A.shape[0])
+            return None
+        s = self._pardiso_spd
+        U = _csr_matrix((d[pat.tri], pat.u_indices, pat.u_indptr),
+                        shape=A.shape, copy=False)
+        b = s._check_b(U, rhs)
+        s.iparm[11] = 0                     # no transposed solve (symmetric)
+        try:
+            if new or pat.analysed is not s:
+                s.set_phase(11)
+                s._call_pardiso(U, np.zeros((U.shape[0], 1)))
+                pat.analysed = s
+                self.spd_analyses += 1
+            s.set_phase(23)
+            x = s._call_pardiso(U, b)
+        except Exception as _e:              # noqa: BLE001 — loud, then LU
+            self.spd_failures += 1
+            self._log.warning(
+                "PARDISO Cholesky failed (%s, n=%d) on a matrix that passed "
+                "the symmetry checks — not positive definite?  The rest of "
+                "this run uses the unsymmetric LU.", _e, A.shape[0])
+            self._drop_spd()
+            return None
+        self.spd_solves += 1
+        return x
 
     def _solve_reuse(self, A, rhs):
         """phase 11 only when the pattern moved, then phase 23 (numeric+solve).
@@ -411,7 +581,7 @@ class P2Nonlinear:
             nit = it + 1
             K = self.asmK(nu)
             Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
-            A2 = self.pad2(Pro, free, self.solve_ff(Kff, bff))
+            A2 = self.pad2(Pro, free, self.solve_ff(Kff, bff, spd=True))
             if linear_only or not _sat2:
                 break                            # frozen frame: 1 linear solve
             Bmag_el = self.elemB(A2)

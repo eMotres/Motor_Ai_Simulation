@@ -1,8 +1,8 @@
 /**
  * node --test — THE CATALOG DUTY ROW's "how long may it run" chip.
  *
- * Owner, 2026-09-17: *«для каплинга: если где-то выходим за лимиты, нужно
- * посчитать время, за какое мотор проработает до этого лимита»*, and the chip
+ * Owner, 2026-09-17: *«for the coupling: if we go past the limits somewhere,
+ * we need to compute the time the motor will run before hitting that limit»*, and the chip
  * is where that answer meets the reader in the catalog:
  *
  *     ⚠ winding 212 °C · 2 m 40 s to limit
@@ -138,8 +138,8 @@ test('the same durations the panel, the log and the PDF print', () => {
 });
 
 /* ── SOLVED TO THE LIMITS (owner 2026-09-18) ──────────────────────────────── */
-// «надо сделать выбор — или считать до конца стабилизации температуры, или
-// считать до лимитов и находить время работы при заданных условиях».  With the
+// «we need to make a choice — either compute until temperature stabilises
+// fully, or compute until the limits and find the time it can run under the given conditions».  With the
 // second question asked, the duty's whole record IS the machine at the crossing
 // — so the chip stops being a warning ("this point is past a limit and the
 // numbers beside it are a state it never reaches") and becomes the answer
@@ -148,7 +148,7 @@ test('the same durations the panel, the log and the PDF print', () => {
 //   1. the label states the RUN and drops the ⚠ — there is nothing to warn
 //      about, the duty was solved to exactly this;
 //   2. the tooltip names the COOLING the answer is conditional on (the owner's
-//      addendum of the same day: «при заданной мощности и заданном охлаждении»).
+//      addendum of the same day: «at the given power and given cooling»).
 
 /** The same L13 peak duty, solved to its limits instead of to a steady state. */
 const PEAK_LIMITED = {

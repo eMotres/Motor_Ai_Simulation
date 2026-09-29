@@ -294,7 +294,7 @@ function App() {
   // HERE, at the root: it used to sit in GeometryBuildTimer, which mounts
   // only with the Geometry tab, so a browser that opened on Thermal or
   // Electromagnetic never synced at all — the user's F5 kept "4 sectors"
-  // from the Ø200 on a 12/14 machine (2026-09-09, "нажимаю, но то же самое").
+  // from the Ø200 on a 12/14 machine (2026-09-09, "I click, but it's the same thing").
   // Behind the same gate as the probes above: /api/mesh/config is closed to an
   // anonymous caller, and the sync has nothing to adopt until there is a
   // session whose machine it belongs to (401 measured live, 2026-09-16).
@@ -385,8 +385,8 @@ function App() {
     if (!signedIn && activeTab !== 'motors') { setActiveTab('motors'); return; }
     // The DEFAULT client set (user's spec 2026-08-24): Motors, Configure,
     // Compare, Materials.  The old two-tab whitelist here silently bounced
-    // every Materials/Compare click back to Configure ("эти два меню не
-    // работают", 2026-08-25) — the gate list on the tabs and this redirect
+    // every Materials/Compare click back to Configure ("these two menus don't
+    // work", 2026-08-25) — the gate list on the tabs and this redirect
     // must name the same set.
     const clientTabs = ['motors', 'compare', 'materials'];
     if (!fullUI && !clientTabs.includes(activeTab)) setActiveTab('compare');

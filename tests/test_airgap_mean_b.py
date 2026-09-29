@@ -1,7 +1,7 @@
 """The mean flux density in the AIR GAP, and where it comes from.
 
-User 2026-09-10: *"для электромагнитного анализа надо ещё рассчитывать среднее
-поле в зазоре и писать это число в таблицу"*.  The mean |B| over the clearance
+User 2026-09-10: *"for the electromagnetic analysis we also need to compute the
+mean field in the gap and write that number in the table"*.  The mean |B| over the clearance
 is the first number a machine is sized on and the summary never carried it.
 
 What is pinned here is not a value — the machine under the test can change —

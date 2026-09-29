@@ -1,4 +1,4 @@
-# physics_baseline.json regenerated 2026-09-06: magnet top built on the circle (r = rotor_or - magnet_up_gap) instead of the chord; user: 'давай по умолчанию сделаем только arc и уберём прямую вообще'.
+# physics_baseline.json regenerated 2026-09-06: magnet top built on the circle (r = rotor_or - magnet_up_gap) instead of the chord; user: 'let's default to arc only and drop the straight segment entirely'.
 # Script-mode run on a sandbox copy of the config (GEO_30MM now pins sleeve_thickness 0). Lines = pins that moved beyond tolerance (before -> after).
 running p2_demag_eddy ...
     P_cu_ac_solve_W               3.054 ->        3.086  (+1.05 %)

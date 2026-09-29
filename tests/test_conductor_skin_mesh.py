@@ -313,8 +313,8 @@ def _resolution(geo, rpm):
 
 
 def test_same_rule_same_resolution_on_every_scale(monkeypatch):
-    """Owner 2026-09-25: «все физические законы должны работать одинаково на
-    любых масштабах».  The Ø150 and the Ø40 rotors, at speeds that put their
+    """Owner 2026-09-25: «all physical laws must work the same at any
+    scale».  The Ø150 and the Ø40 rotors, at speeds that put their
     skin depths 3x apart, get at least one layer per δ at the surface (exactly
     one unless the chord caps it finer), at least two layers inside 3 δ and
     the same cells per field wavelength."""

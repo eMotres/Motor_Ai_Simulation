@@ -3989,9 +3989,10 @@ def solve_thermal_field(
         }
 
     # ── 4b. the AIR, kept and named ──────────────────────────────────────────
-    # User 2026-09-07: *"надо рисовать изоляцию и покрытие провода, а то пустое
-    # место, и воздух тоже показывать — он же входит в расчёт, и в дереве
-    # отображать их тоже нужно"*.  Everything the mesh calls air is re-tagged by
+    # User 2026-09-07: *"insulation and the wire coating need to be drawn,
+    # otherwise it's an empty space, and air also needs to be shown — it's
+    # part of the calculation too, and it needs to be shown in the tree as
+    # well"*.  Everything the mesh calls air is re-tagged by
     # geometry into the five materials it actually is (see
     # `_retag_thermal_domains`), so the insulation, the wire enamel, the slot
     # fill, the air gap and the rotor's pocket air are SOLVED domains with their

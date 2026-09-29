@@ -8607,7 +8607,12 @@ def fem_transient_sliding_band(
             if _qaL is None or _qbL is None:
                 _qaL, _qbL = _qa, _qb
             if _dc_orbit is not None and k <= _dc_verify_k:
-                _dc_orbit.frame(_ll_inductance(_qaL, _qbL), _dt_k)
+                # …and the SOURCE's own feedback on the previous step's
+                # current (the controller bridge's dead time + device drop —
+                # a real DC-mode resistance; missing it made the Newton
+                # over-shoot and diverge on the L180 delta, 2026-09-28).
+                _dc_orbit.frame(_ll_inductance(_qaL, _qbL), _dt_k,
+                                getattr(_src, "ll_feedback_gain", None))
             if _dc_orbit is not None and k in _dc_win:
                 _k0 = int(_dc_win[k])                   # first frame of the period
                 _off = len(_IA) - 1 - k                 # list index of frame k

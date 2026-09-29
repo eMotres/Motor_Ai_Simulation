@@ -70,7 +70,7 @@ from motor_ai_sim.simulation.excitation import (Feedback,
                                                 _modulator_words)
 
 __all__ = ["DeviceDrop", "fit_device_drop", "leg_currents",
-           "InverterVoltageSource", "build_inverter_source",
+           "InverterVoltageSource", "build_inverter_source", "feedback_gain_ll",
            "pole_error_volts"]
 
 #: Phase order, the one every abc quantity in this project is written in.
@@ -203,6 +203,27 @@ def leg_currents(i_abc: Dict[str, float], *, star_delta: str,
     return {"A": k * a, "B": k * b, "C": k * c}
 
 
+def feedback_gain_ll(g_leg: Dict[str, float], *, star_delta: str,
+                     n_parallel: int = 1) -> np.ndarray:
+    """2×2 d(D·v_model)/d(i_A, i_B) of a per-leg error slope ``g_leg`` [V/A].
+
+    Chain: branch (i_A, i_B, i_C = −i_A − i_B) → leg currents
+    (:func:`leg_currents`) → diag(g) → model pole voltages (star: as is;
+    delta: err_A − err_B, the v_AB error) → line-to-line difference D.
+    """
+    k = float(max(int(n_parallel), 1))
+    C = np.array([[1.0, 0.0], [0.0, 1.0], [-1.0, -1.0]])
+    G = np.diag([float(g_leg[p]) for p in _ABC])
+    if str(star_delta or "star").strip().lower() == "delta":
+        Lg = k * np.array([[1.0, 0.0, -1.0], [-1.0, 1.0, 0.0], [0.0, -1.0, 1.0]])
+        P = np.array([[1.0, -1.0, 0.0], [0.0, 1.0, -1.0], [-1.0, 0.0, 1.0]])
+    else:
+        Lg = k * np.eye(3)
+        P = np.eye(3)
+    D = np.array([[1.0, -1.0, 0.0], [0.0, 1.0, -1.0]])
+    return D @ P @ G @ Lg @ C
+
+
 # ---------------------------------------------------------------------------
 # The pole-voltage error of ONE leg over ONE time step
 # ---------------------------------------------------------------------------
@@ -315,9 +336,62 @@ class InverterVoltageSource(_ExcPwm):
         self._fine_seen = 0
 
     # ── the one thing that is different ────────────────────────────────────
+    # ── the bridge's own small-signal feedback, for the DC-orbit solve ──────
+    #: 2×2 d(line-to-line model volts of THIS step)/d(i_A, i_B of the
+    #: feedback step), i_C = −i_A − i_B; None when the step has no bridge
+    #: error (a coarse frame, no feedback yet).  Read by the solver right
+    #: after :meth:`mean_over` and handed to ``DcOrbitSolve.frame``.
+    ll_feedback_gain: Optional[np.ndarray] = None
+
+    def _record_feedback_gain(self, legs: Dict[str, float],
+                              err: Dict[str, float], psi_a: float,
+                              psi_b: float) -> None:
+        """The SECANT of each leg's error along the leg-current trajectory.
+
+        WHY (L180 gen, night 2026-09-28/29): the dead time and the device drop
+        are a real resistance for the circuit's DC mode.  A DC offset I_dc on a
+        leg of peak Î moves its zero crossings, and the dead-time clamp's
+        −sign(i)·E then carries a mean of −(2/π)·E·I_dc/Î — an effective
+        2E/(π·Î) ohm per leg, 3× that per delta branch.  On the L180 at 24 kHz
+        that is ~27 mΩ against a ~13 mΩ branch: the DC mode decays about three
+        times faster than R_phase alone says.  The DC-orbit Newton built its
+        period Jacobian from R_phase only, so it over-corrected ~3× per period
+        — an iteration with gain ≈ −1.8 — and after 11 corrections the start-
+        up DC had grown to −645 A (WCMS) / −886 A (IMCQ).
+
+        The derivative the variational equation needs is that of THIS step's
+        error with respect to the feedback current.  The error is piecewise
+        (sign), so its derivative is taken as the secant between the two
+        feedback currents this source has actually seen, evaluated on the
+        SAME step window: away from a zero crossing it is the device drop's
+        slope, across one it is the jump over the current step — the box
+        discretisation of the sign's delta, whose integral over the period is
+        exactly the (2/π)·E/Î mean above.  No filtering: it is the model's own
+        Jacobian, fed to the Newton so the step is the right size.
+        """
+        prev = getattr(self, "_legs_prev", None)
+        self._legs_prev = dict(legs)
+        g = {}
+        for k in _ABC:
+            i1 = legs[k]
+            i0 = None if prev is None else prev[k]
+            if i0 is None or abs(i1 - i0) <= 1e-9 * max(1.0, abs(i1)):
+                # no trajectory yet / no motion: the local slope, same window
+                eps = 1e-3 * max(1.0, abs(i1))
+                i0 = i1 - eps
+            e0 = pole_error_volts(modulator=self._mod, drop=self.drop, phase=k,
+                                  i_leg_A=i0, psi_a_deg=psi_a, psi_b_deg=psi_b,
+                                  v_dc_real_V=self.v_dc_real_V,
+                                  deg_per_s=self.deg_per_s)
+            g[k] = (err[k] - e0) / (i1 - i0)
+        self.ll_feedback_gain = feedback_gain_ll(
+            g, star_delta=self.star_delta, n_parallel=self.n_parallel)
+
     def mean_over(self, fb: Feedback) -> Dict[str, float]:
         base = super().mean_over(fb)
+        self.ll_feedback_gain = None
         if not fb.fine or fb.i_abc is None:
+            self._legs_prev = None
             return base
         legs = leg_currents(fb.i_abc, star_delta=self.star_delta,
                             n_parallel=self.n_parallel)
@@ -335,6 +409,7 @@ class InverterVoltageSource(_ExcPwm):
                                    v_dc_real_V=self.v_dc_real_V,
                                    deg_per_s=self.deg_per_s)
                for k in _ABC}
+        self._record_feedback_gain(legs, err, psi_a, psi_b)
         if self.star_delta == "delta":
             # The model's phase voltage IS the real line-to-line voltage, so
             # the error injected into model pole A is the error of v_AB.

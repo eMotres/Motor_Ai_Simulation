@@ -17,6 +17,7 @@ Base: `motor_ai_sim`, branch `origin/pre-migration-freeze-2026-09-15` (productio
 | Open standards (update 2026-09-29) | New section 10B per the owner principle "be compatible with open standards": every interface mapped to an open standard with import/export, roadmap stage, conformance test and what is not adopted (D63–D69). |
 | Open RFQ board (update 2026-09-29) | New section 8.9 per the owner idea: category RFQ templates from released revisions, invite-only or verified-supplier board, NDA-gated watermarked drawings, structured quotes, sealed bids, comparison matrix, award or split, supplier capability profiles with hard/soft matching (UNSPSC/ECLASS), freelance-style supplier profiles, job feed, status milestones and two-way blind reviews, direct work after award; no fees, no payments (D70–D82). |
 | Agent interface (update 2026-09-29) | New cross-cutting section 9A per the owner requirement "the whole structure must be understandable for MCP": one JSON Schema source generating OpenAPI, MCP tool schemas and docs; every domain area mapped to `emotres://` resources, tools, prompts, scopes and human gates; self-describing schema/guide resources; versioned tool contract; prompt-injection hygiene; CI contract tests; MCP deliverables per stage (D83–D90). |
+| Compute funding (update 2026-09-29) | Sections 10C/10D revised per the owner: **managed compute pool**, MOTRES the single provider account (Hetzner now), shared + dedicated nodes, **provider-cost pass-through at 0 % margin** with a public price page and monthly cost report, prepaid credits, dedicated-node reservations, payments module as the planned path (off until S2) with invoicing in `motres_erp`/Minimax; BYO compute kept as an option (D91–D106 revised). |
 
 ## Goal
 
@@ -1197,8 +1198,8 @@ Resources are read-only and addressed by `emotres://` URIs (listed and templated
 
 - **Licence:** platform code is AGPL-3.0-or-later; contributions under the DCO (`git commit -s`), no CLA (PR #40). Solver components with non-commercial licences are optional (e.g. `triangle` removed, `pypardiso` optional).
 - **Private split (PR #41):** ANSYS cross-checks, customer case data and NDA material live in a private repository; the portal's runtime data (orgs, NDAs, drawings, RFQs) lives in the database and object store, never in git.
-- **No money in the platform:** no pricing, tiers, billing, revenue share, listing fees or paid features. Roles are `user` and `admin`; limits are fair-use.
-- **BYO compute (PR #44):** users attach their own Linux nodes (pull model, `mcnode_` tokens, owner-only leasing, signed job bundles, same solver code, results with provenance, `own_node` flag in usage). Stage 3 of that plan adds org-shared nodes, which fits section 6 directly (a node owned by an org leases jobs of its members). FMU/foreign code runs only on nodes that opt into the sandbox profile.
+- **No commerce in the engineering platform:** no tiers, revenue share, listing fees or paid features; roles are `user` and `admin`; limits are fair-use. The only paid item is **compute at provider cost** through the platform (managed pool, 10C), with the payments module off until stage S2 (10D).
+- **BYO compute (PR #44), an option next to the managed pool:** users attach their own Linux nodes (pull model, `mcnode_` tokens, owner-only leasing, signed job bundles, same solver code, results with provenance, `own_node` flag in usage). Stage 3 of that plan adds org-shared nodes, which fits section 6 directly (a node owned by an org leases jobs of its members). FMU/foreign code runs only on nodes that opt into the sandbox profile.
 - **AGPL and network use:** because the portal is offered over a network, users are entitled to the source of the running version; the footer links the exact commit.
 
 ---
@@ -1399,83 +1400,151 @@ Owner principle (2026-09-29): **the portal must be compatible with open standard
 - **Modelica source exchange / in-portal compiler**: FMI + SSP cover exchange at a fraction of the cost.
 - **eFMI**: only if the controller module ever generates embedded code.
 - **JT / IGES export**: legacy or weak open tooling; STEP AP242 suffices.
-- **Peppol e-invoicing, payments**: the portal is non-commercial; commercial documents stay in `motres_erp`.
+- **Peppol e-invoicing**: compute invoices are issued by `motres_erp` (10D.4); Peppol only if a counterparty requires it.
 - **Native CAD formats as exchange of record**: Fusion CSV remains a convenience.
 
-## 10C. Sustainability: who pays for compute
+## 10C. Sustainability: managed compute pool, paid through the platform at cost
 
-Owner position (2026-09-29): the platform offers no commerce; suppliers and customers contact each other directly; the main goal is engineering. Server cost must not grow with users on the owner alone. The path below keeps the platform non-commercial now and adds funding stages only when measured triggers fire.
+Owner position (2026-09-29, refined the same day): the platform stays non-commercial in its engineering content (no paid features, no tiers, no fees between customers and suppliers), but **compute is a pass-through service**: "better for us to be one customer at the provider, so that we can negotiate volume discounts later, and better that customers pay through us, but everything is transparent." Server cost must not grow with users on the owner alone. This replaces the v3 draft where BYO compute was the primary path and donations/sponsors the funding.
 
-### 10C.1 What we already measure
+### 10C.1 Model: managed compute pool
 
-- Per-user CPU-hours per job, with `own_node` flag (BYO vs shared) — usage metering, PR #44.
-- Fair-use limits per user on shared compute (section 10).
-- Queue length and wait time per job class (solver queue).
-- Missing, to add in Stage 1: monthly server invoice (Hetzner) imported as a cost record; storage GB and egress per org; derived **€/CPU-hour = monthly cost / shared CPU-hours**.
+- **One provider account.** MOTRES d.o.o. is the single customer at each compute provider (Hetzner now; others later, see 10C.8). It owns or rents every platform node, signs the provider contracts, pays the provider invoices and negotiates volume discounts. Users and orgs never hold provider accounts for platform compute.
+- **Two node kinds, one scheduler.**
+  - **Shared pool**: nodes leased to any user within fair use and credits; region-pinned (10A.2).
+  - **Dedicated nodes**: a node reserved for one customer org for a monthly term; only that org's jobs lease to it; its cost is charged to the org as a monthly reservation at provider cost (10C.4). Useful for guaranteed capacity, predictable wall time and stricter data separation.
+- **Same dispatch path for all.** Platform nodes, dedicated nodes and BYO nodes all use the lease protocol of PR #44 (pull model, signed bundles, provenance). A job record carries `node_kind: shared | dedicated | byo` (extends the `own_node` flag).
+- **BYO compute (PR #44) stays an option**, not the primary path: for self-hosted, on-premises or data-residency needs (a customer that must keep designs on its own hardware or in its own country). BYO CPU-hours are metered but never charged.
+- **Self-hosted instances** (AGPL platform run by a company on its own infrastructure) remain possible and documented; no platform cost involved.
 
-### 10C.2 Options
+### 10C.2 What we already measure and what to add
 
-| Option | How | Pros | Cons |
-|---|---|---|---|
-| (a) BYO compute nodes (built, PR #44) | Heavy users and orgs attach their own Linux servers; jobs lease to them | Zero cost to the platform; scales with the users who need it; data can stay on the user's hardware | Needs a user with a server; support effort for node setup; mixed hardware = timing variance (results identical, provenance recorded) |
-| (b) Fair-use + metering + public cost dashboard | Limits on shared compute (exist), per-user CPU-hour metering (exists), public page: €/CPU-hour, monthly cost vs usage, BYO share | Transparency builds trust and supports sponsor asks; no money flows | Does not raise money by itself; limits may frustrate power users |
-| (c) Community / sponsor funding (AGPL-compatible) | GitHub Sponsors; Open Collective with a fiscal host (transparent public ledger); vendor/partner sponsorship of nodes (credited on the dashboard, contractually no influence on results or rankings); research/EU grants — candidates to verify: Horizon Europe (Cluster 4/5 calls), EIC Pathfinder/Transition, NGI-style open-source funds (NLnet NGI Zero), national (e.g. Slovenian) research funds | Keeps the platform free; fiscal host handles money and receipts, platform never holds funds; grants fit open engineering tools | Irregular income; grant writing effort and reporting; vendor sponsorship needs a neutrality policy |
-| (d) Optional at-cost compute credits (later) | Users buy CPU-hours at cost (no margin) to exceed fair use; uses the disabled payments module (10D) | Heavy users pay for what they consume; platform stays non-commercial in spirit | Needs payments, VAT/OSS, invoicing, counsel; perceived as commercial if badly explained |
-| (e) Organization-hosted instances | Companies self-host the AGPL platform on their own infra (docs + Helm/compose) | Zero platform cost; strongest data residency; AGPL keeps improvements flowing back when offered over a network | Fragmented community; upgrade support load |
+- Exists: per-user CPU-hours and peak RSS per job, node, client (`job_usage.py`, PR #44 metering); fair-use limits; queue length and wait per job class; monthly usage report (`usage_stats.py`).
+- Add in S1: **provider cost records** (each provider invoice line imported per node and month: server rent, storage box, traffic, IPs, setup fees, discounts/credits); storage GB-month and egress per org; `node_kind` on every job; node idle vs busy hours.
 
-### 10C.3 Recommended staged path and triggers
+### 10C.3 Transparent price: provider cost pass-through
+
+Public **price page** (`/compute/pricing`, no login) and a **monthly public cost report**, both generated from the cost records and metering, never typed by hand:
+
+| Shown | Content |
+|---|---|
+| Provider invoice lines | per node and month: provider, product, location, list price, discount obtained, net cost; storage and traffic lines; totals (company-identifying invoice numbers may be masked, amounts are not) |
+| Allocation method | written rule, e.g. **shared €/CPU-hour = shared-pool net cost of the month ÷ billable CPU-hours of the month**, with a floor on the utilisation used (e.g. computed at ≥ 50 % utilisation so early users do not pay for idle capacity; the gap is owner/sponsor-funded and shown as such); storage **€/GB-month = storage cost ÷ stored GB-months**; dedicated node = its own net provider cost |
+| Resulting rates | €/CPU-hour (shared), €/GB-month, dedicated-node €/month per node type; next month's rate is published before it applies (rates follow last month's actual cost, capped change per month) |
+| Discounts | each volume or term discount obtained, from when, and how it is passed on (lower rate for everyone on the shared pool; lower reservation price for dedicated nodes) |
+| Overhead | **default 0 % margin.** Payment fees, VAT handling and administration may be recovered only as a **separate, clearly-stated line item** (e.g. "payment provider fee 1.5 % + €0.25, passed through at cost"), and only if the owner decides; never hidden in the rate |
+| Free tier | the fair-use allowance and who funds it (owner budget, named sponsors) |
+| Pool health | utilisation, queue wait p95, node count, BYO share |
+
+**Per-user and per-org usage statements** come from the existing metering: each job with its CPU-hours, node kind, rate applied and amount; the monthly statement sums to the ledger (10D) and is exportable (CSV/PDF) and readable over MCP (`billing:read`).
+
+### 10C.4 Billing mechanics
+
+- **Prepaid credits (default).** Users/orgs buy credit in euros; jobs on the shared pool debit credit at the published rate on completion (reserve on start, settle on completion). No debt risk: a job starts only if the estimated cost is covered; a running job is never killed for credit, the overrun is settled and the balance may go slightly negative once, then new jobs wait.
+- **Monthly invoicing (optional)** for verified orgs (6.7) with a credit limit set by the owner; invoice on month end with net-30 terms; overdue → new jobs fall back to prepaid.
+- **Dedicated node** = monthly reservation at provider cost (plus the provider's setup fee, passed through), billed in advance for the month; minimum term = the provider's term for that node; the org may cancel with the provider's notice period.
+- **Free tier** = fair-use allowance on the shared pool (monthly CPU-hours per user), funded by the owner's budget and named sponsors; shown on the price page.
+- **Spend caps and alerts:** per user/org monthly cap, per-job cost estimate before submit, alerts at 50/80/100 % of cap and at low balance (e-mail + Admin tab + in-app).
+- **Refunds:** jobs that fail because of the platform (node crash, solver bug confirmed by us, lost results, scheduler error) are refunded automatically as a ledger credit; user-input errors (invalid machine, stopped by user) are charged for CPU-hours used. Refund classification is recorded with the job.
+- **Usage disputes:** user opens a dispute on a statement line (job id) → platform checks metering, node logs and provenance → decision within 10 working days with reason → credit note if upheld; escalation to the owner; all disputes logged.
+
+### 10C.5 Legal and contract checks for counsel (awareness, not legal advice)
+
+| Item | Question to verify |
+|---|---|
+| Provider terms on reselling | Do Hetzner's terms (and later providers') allow using rented dedicated/cloud servers to provide a compute service to third parties, and under what conditions (abuse handling, contact, no resale of the server itself)? **To verify** before S2. |
+| Our compute terms of service | Service description, fair use, acceptable use, credit expiry, refunds, disputes, suspension, termination, data return |
+| SLA | Availability target for the shared pool and dedicated nodes, maintenance windows, credits for missed SLA (or explicitly best-effort at S2) |
+| Liability | Cap (e.g. fees paid in the last 12 months), exclusion of indirect damages, no warranty of engineering fitness of results (simulation, not certification) |
+| VAT | Electronically supplied service: B2C in the EU via **OSS** at the customer's country rate; B2B intra-EU **reverse charge** with VAT-id validation (VIES); non-EU customers: place of supply outside the EU, local registration thresholds (e.g. UK, CH, NO) to check |
+| Slovenian invoicing law | Mandatory invoice content, numbering, fiscal cash-register rules (FURS) do not apply to non-cash bank/card payments but to verify; e-invoicing obligations for B2B |
+| Payment provider | Merchant terms, payout schedule, chargeback handling, KYC of MOTRES |
+| GDPR | MOTRES is processor for customer data processed on these nodes: DPA (10A.6) must cover compute; provider (Hetzner) as sub-processor; region rules (10A.8) |
+| Prepaid credit | Confirm prepaid credits for our own service are not e-money (single-issuer, own-service use); expiry and refund-on-closure policy |
+
+### 10C.6 Capacity planning
+
+- **Forecast from metering:** weekly CPU-hours per region and job class, trailing 8-week trend, queue wait p95, peak concurrency; published internally, summarised in the monthly cost report.
+- **When to add a node:** shared-pool utilisation > 70 % over 2 weeks, or queue wait p95 > 30 min for 2 weeks, and the added cost is covered by credit/invoice revenue of the last month (or the owner approves funding it).
+- **When to remove a node:** utilisation < 30 % for a month and the provider's notice period allows.
+- **Reserved vs on-demand:** baseline load on monthly dedicated servers (cheapest per CPU-hour); peaks on hourly cloud instances (provider cloud, spun up by the scheduler, capped per day); dedicated customer nodes are always monthly.
+- **Provider diversification later:** a second provider only for a second region (10A.2 region rules) or resilience; each provider is a node source in the same scheduler; cost records per provider.
+
+### 10C.7 Options considered
+
+| Option | Status |
+|---|---|
+| Managed compute pool, one provider account, pass-through pricing | **Recommended primary path** (D91–D95) |
+| BYO compute (PR #44) | **Kept as an option** for on-prem / data residency (D101) |
+| Community / sponsor funding (GitHub Sponsors, Open Collective, vendor node sponsorship, grants) | **Supplementary**: funds the free tier only; sponsors credited, no influence on results (D102) |
+| Each user rents own provider account | **Rejected**: no volume discount, no transparency across users, support burden |
+| Margin on compute | **Rejected by default** (0 %); only a stated line item for fees/admin if the owner decides (D93) |
+
+### 10C.8 Stage triggers (revised)
 
 | Stage | Switch on when | What |
 |---|---|---|
-| S0 (now) | — | (a) BYO nodes as the primary scaling path; (b) fair-use limits + metering; (e) self-hosting documented |
-| S1 | Before public launch | Public cost dashboard (€/CPU-hour, monthly cost vs usage, BYO share, queue wait p95); cost record import |
-| S2 | Shared compute > **€150/month** for 2 consecutive months, or > 50 active users | Open Collective (fiscal host) + GitHub Sponsors; vendor node-sponsorship policy published; first grant application |
-| S3 | Shared compute > **€500/month**, or queue wait p95 > **30 min** for 2 weeks despite BYO nudges | Add sponsored nodes; tighten fair use; prompt top-10 % consumers to BYO |
-| S4 | Sponsorship covers < 70 % of shared cost for 3 months and S3 measures failed | Enable (d) at-cost credits via the payments module (10D), after counsel review |
+| S0 (now) | — | Fair use + metering; BYO as option; self-hosting documented |
+| **S1 (now)** | now | Provider cost-record import; public price page and monthly public cost report (rates shown as "would be", no charging yet); `node_kind` on jobs; payments module stays off |
+| **S2** | shared compute cost > **X €/month** (owner's budget; initial proposal €150) for 2 consecutive months, **or** the first org asks for dedicated capacity | Enable the payments module (10D): prepaid credits, dedicated-node reservations, ToS/SLA/DPA published, counsel checks of 10C.5 done; invoicing via ERP |
+| S3 | **N ≥ 5 platform nodes** or provider spend > €1 000/month | Volume/term negotiation with the provider; discounts passed on and published; monthly invoicing for verified orgs; hourly cloud burst |
+| S4 | a customer needs another jurisdiction or resilience demands it | Second provider/region per 10A |
 
-Thresholds are initial values; the owner revisits them from the dashboard data. Decisions: D91–D96.
+Thresholds are initial values; the owner sets X and revisits from the cost report. Decisions: D91–D105.
 
 ---
 
-## 10D. Payments extension point (disabled)
+## 10D. Payments module (planned path, off until S2)
 
-Architecture only; nothing is active. The point is that enabling payments later needs no restructuring.
+The module is designed now and switched on at stage S2 (10C.8). Until then nothing is active.
 
 ### 10D.1 Boundary
 
-- A `billing` module behind feature flag `BILLING_ENABLED` (default **off**); when off, routes return 404, UI hides every price, MCP exposes no billing tools.
-- Other modules talk to billing only through events (`usage.recorded`, `job.completed`) and a read API; no module imports billing internals.
-- Usage metering (10C.1) already emits the records billing would consume.
+- A `billing` module behind feature flag `BILLING_ENABLED` (default **off**); when off, routes return 404, UI shows the public price page only (informative), MCP exposes no billing tools.
+- Other modules talk to billing only through events (`usage.recorded`, `job.completed`, `node.reserved`) and a read API; no module imports billing internals.
+- **Scope:** MOTRES d.o.o. is the **seller of compute services** (shared CPU-hours, storage, dedicated-node reservations). The platform never holds third-party funds; **marketplace payments between customers and suppliers remain out of scope** (8.1, 10D.5).
 
-### 10D.2 Data model placeholders (tables created empty, no UI)
+### 10D.2 Data model
 
 | Entity | Purpose |
 |---|---|
-| `Ledger` | Append-only double-entry lines (credit purchase, usage debit, refund, sponsor grant); never updated in place |
-| `CreditBalance` | Per user/org CPU-hour credit balance, derived from `Ledger` |
-| `Invoice` | Number, seller/buyer, VAT treatment, PDF ref, status |
-| `PaymentIntent` | Reference to a provider-side intent id + status only; no card or bank data |
-| `TaxProfile` | Buyer country, VAT id, B2B/B2C flag for VAT/OSS |
+| `CostRecord` | Provider invoice line per node/month (provider, product, location, list, discount, net, currency) — feeds the price page |
+| `RateCard` | Published rates per month and region (€/CPU-hour, €/GB-month, dedicated node types), allocation inputs, effective date |
+| `Ledger` | Append-only double-entry lines (credit purchase, usage debit, reservation, refund, dispute credit, free-tier grant, sponsor grant); never updated in place |
+| `CreditBalance` | Per user/org balance, derived from `Ledger` |
+| `Reservation` | Dedicated node ↔ org, term, monthly price = provider cost |
+| `SpendCap` | Per user/org cap and alert thresholds |
+| `Dispute` | Statement line, reason, status, decision, credit-note ref |
+| `Invoice` | Reference to the ERP invoice (number, status, PDF ref); issued by the ERP, not by the portal |
+| `PaymentIntent` | Provider-side intent id + status only; no card or bank data |
+| `TaxProfile` | Buyer country, VAT id (VIES-checked), B2B/B2C flag, evidence of location for OSS |
 
 ### 10D.3 Payment provider adapter
 
-- Interface: `create_checkout(amount, currency, ref) -> redirect_url`, `handle_webhook(event)`, `refund(ref)`; candidate adapters Stripe, Mollie, Adyen (to evaluate).
-- Provider-hosted checkout only; PSD2/SCA handled by the provider; **no card data ever touches our servers** (PCI scope minimal).
-- Webhooks signature-verified and idempotent.
+- Interface: `create_checkout(amount, currency, ref) -> redirect_url`, `handle_webhook(event)`, `refund(ref)`; candidates **Stripe, Mollie, Adyen** (compare fees for SEPA/cards, OSS support, payout to a Slovenian account, invoicing hooks).
+- **Provider-hosted checkout only**; PSD2/SCA handled by the provider; **no card data ever touches our servers** (PCI scope SAQ A).
+- Webhooks signature-verified and idempotent; credit is booked only on the provider's confirmed payment event.
+- Bank transfer (SEPA) against an ERP proforma is an alternative top-up path for orgs.
 
-### 10D.4 Marketplace payments (far future only)
+### 10D.4 Invoicing and accounting: `motres_erp` + Minimax
 
-Customer-to-supplier payments would require a licensed payment/escrow provider (marketplace product of the PSP). The platform never holds, pools or forwards funds.
+- Invoices are issued by **`motres_erp`** (read-only review 2026-09-29: it already has invoices, lines, credit notes, proformas, PDF generation and VAT from the **issuer/buyer country pair** — 22 % domestic SI, intra-EU reverse charge with a legal clause, export zero-rated — and a Minimax export with modes `off | file | api`).
+- The portal calls the ERP API: top-up → ERP invoice (paid) or proforma (bank transfer); month end → ERP invoice for org usage or reservations; refund/dispute → ERP credit note. The portal stores only the ERP reference (no duplicate invoice logic, as in 8.6).
+- **Gap to close in the ERP before S2:** EU **OSS** B2C rates per customer country and the OSS quarterly return data; VIES check; a "compute service" product line. Minimax receives the documents through the existing export for bookkeeping.
 
-### 10D.5 Legal notes (awareness, not legal advice)
+### 10D.5 Marketplace payments (out of scope)
 
-- E-money/PSD2 payment-institution licensing is avoided because funds are held by the provider, never by the platform.
-- VAT: EU B2C digital services via OSS, B2B reverse charge; invoices via the ERP (Minimax later). Confirm with tax counsel before enabling.
+Customer-to-supplier payments for parts and orders are not handled. If ever needed, only via a licensed payment/escrow provider's marketplace product; the platform never holds, pools or forwards third-party funds.
 
-### 10D.6 MCP and agents
+### 10D.6 Legal notes (awareness, not legal advice)
 
-- MCP gets read-only `billing:read` (balance, usage, invoices list) when enabled.
-- Any purchase, refund or payment is **human-only** in the web with re-auth; no tool can initiate it (extends 9A.4).
+- No payment-institution/e-money licence is needed as long as MOTRES only collects payment for **its own** service through a licensed provider and credits are usable only for that service (confirm, 10C.5).
+- VAT: OSS for EU B2C, reverse charge for EU B2B, non-EU per destination rules; invoices via the ERP; confirm with tax counsel before S2.
+
+### 10D.7 MCP and agents
+
+- MCP gets read-only `billing:read` (price page, balance, usage statement, invoice list, cost report) when enabled.
+- Any purchase, top-up, reservation, refund request or payment is **human-only** in the web with re-auth; no tool can initiate it (extends 9A.4). Agents may prepare a cost estimate for a job.
 
 ---
 
@@ -1496,7 +1565,8 @@ Customer-to-supplier payments would require a licensed payment/escrow provider (
 | A drawing does not match the simulated machine | generator reads the same machine description; package pins the revision hash; interface check on CAD uploads |
 | An agent sends something on its own | MCP tools stop at `draft`; send/accept/issue/release need a human member role |
 | Legal exposure from documents (NDA, drawings) | NDA-policy gating, watermarking, audit, private file store; platform makes no contract claims |
-| Non-commercial load grows beyond hardware | fair-use limits + BYO compute |
+| Non-commercial load grows beyond hardware | fair-use limits, managed pool paid at cost from S2, capacity planning (10C.6), BYO as option |
+| Provider terms forbid serving third parties / pricing looks like hidden profit | counsel check before S2 (10C.5); pass-through with published invoice lines and 0 % margin (10C.3) |
 
 ### 11.2 Decisions for the owner
 
@@ -1605,16 +1675,22 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D88 | Untrusted content | Third-party text **only in `x-untrusted` fields**, never followed or interpolated; CI injection fixtures (9A.4) |
 | D89 | Agent language | **English** for tool names, descriptions, enums, errors; localized strings only as extra `display` fields (9A.1) |
 | D90 | Scope model | **`area:read` / `area:draft|write` + separate compute scopes**; new keys read-only by default; org roles apply on top (9A.4) |
-| D91 | Primary compute scaling | **BYO compute nodes first** (PR #44); heavy users and orgs bring their own servers (10C) |
-| D92 | Cost transparency | **Public cost dashboard**: €/CPU-hour, monthly cost vs usage, BYO share, queue wait (10C.3 S1) |
-| D93 | Community funding | **Open Collective with a fiscal host + GitHub Sponsors**; platform never holds funds (10C) |
-| D94 | Vendor sponsorship | Vendors may **sponsor nodes, credited publicly, no influence on results** (written policy) |
-| D95 | Grants | Apply to verified candidates (Horizon Europe, EIC, NGI Zero/NLnet) at stage S2 |
-| D96 | Funding triggers | Stages S0–S4 with thresholds €150 / €500 per month, queue p95 30 min; owner revisits |
-| D97 | At-cost credits | **Only on trigger S4**, at cost, no margin, after counsel review |
-| D98 | Payments module | **Designed, flag `BILLING_ENABLED` off**; empty Ledger/CreditBalance/Invoice/PaymentIntent tables (10D) |
-| D99 | Funds and card data | **Never hold funds, never store card data**; provider-hosted checkout only; marketplace payments only via a licensed provider |
-| D100 | Billing via agents | MCP **read-only** balance/usage; every payment human-only with re-auth |
+| D91 | Compute model | **Managed compute pool**: MOTRES d.o.o. is the single account at the provider(s), owns/rents all nodes (shared pool + dedicated nodes per org) (10C.1) |
+| D92 | Provider | **Hetzner now, one account**; more providers only for a second region or resilience (10C.6, 10A) |
+| D93 | Pricing | **Provider-cost pass-through, 0 % margin by default**; fees/VAT/admin only as a stated line item if the owner decides (10C.3) |
+| D94 | Transparency | **Public price page + monthly public cost report** from provider invoice lines, allocation rule, €/CPU-hour, €/GB-month, discounts passed on; per-user statements from metering (10C.3) |
+| D95 | Volume discounts | Negotiate at **S3 (≥ 5 nodes or > €1 000/month)**; every discount published and passed on (10C.8) |
+| D96 | Stage triggers | S1 price page now; S2 payments when shared cost > **X €/month** (proposal €150) or first dedicated-node request; S3 negotiation; owner sets X (10C.8) |
+| D97 | Billing default | **Prepaid credits** (no debt risk); monthly invoicing only for verified orgs with a credit limit (10C.4) |
+| D98 | Dedicated nodes | **Monthly reservation at provider cost** (+ provider setup fee), org-only leasing (10C.4) |
+| D99 | Free tier | Fair-use allowance funded by the owner budget and named sponsors; spend caps + alerts for everyone (10C.4) |
+| D100 | Refunds and disputes | **Auto-refund of platform-caused failures**; disputes per job line, decision in 10 working days, credit note via ERP (10C.4) |
+| D101 | BYO compute | **Kept as an option** (on-prem, data residency, self-hosting), metered, never charged (10C.1) |
+| D102 | Sponsors and grants | Supplementary, fund the free tier only; credited, no influence on results |
+| D103 | Payments module | **Planned path, off until S2**; provider-hosted checkout (Stripe/Mollie/Adyen to compare); no card data; never hold third-party funds; marketplace payments out of scope (10D) |
+| D104 | Invoicing | MOTRES is the seller of compute; **invoices, credit notes, VAT in `motres_erp`**, bookkeeping via Minimax; add OSS + VIES to the ERP before S2 (10D.4) |
+| D105 | Counsel before S2 | Hetzner resale/third-party-service terms, ToS + SLA, liability cap, VAT/OSS, Slovenian invoicing, prepaid-credit status, DPA for compute (10C.5) |
+| D106 | Billing via agents | MCP **read-only** `billing:read`; every payment/top-up/reservation human-only with re-auth (10D.7) |
 
 ### 11.3 Roadmap (rough, weeks of one engineering agent + owner review)
 

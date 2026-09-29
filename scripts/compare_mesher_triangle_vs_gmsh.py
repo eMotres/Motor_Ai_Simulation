@@ -201,7 +201,8 @@ def run(spec_path, out_path):
         n_steps_per_period=steps, n_periods=1.0, gamma_deg=float(duty["gamma_deg"]),
         I_phase_rms=(0.0 if noload else I_wind), rpm=float(duty["rpm"]),
         n_parallel=n_par, connection=wnd.get("connection"), star_delta=sd,
-        mesh_size_mm=float(st.get("mesh.meshSize", 4)),
+        # spec "mesh_size_mm" overrides the duty's size (convergence checks)
+        mesh_size_mm=float(spec.get("mesh_size_mm") or st.get("mesh.meshSize", 4)),
         min_size_mm=float(st.get("mesh.minSize", 0.3)),
         outer_air_factor=float(st.get("mesh.outerAir", 1.2)),
         gap_layers=float(st.get("mesh.gapLayers", 1)),

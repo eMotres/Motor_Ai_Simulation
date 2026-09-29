@@ -1,9 +1,9 @@
 """Persistent, capped run history — "don't recompute what was already solved".
 
-WHY (owner, 2026-09-22, in Russian): *"если я запускаю те же параметры
-каплинга, он не считается, а подгружает уже рассчитанный вариант; это нужно
-не только для каплинга — нужна проверка и хранить небольшую историю, 10
-вычислений"* — every solve kind (coupled, EM transient, thermal, mechanical
+WHY (owner, 2026-09-22): *"if I run the same coupling parameters, it
+shouldn't recompute, it should load the already-computed result; we need
+this not only for coupling — we need a check and to keep a small history, 10
+computations"* — every solve kind (coupled, EM transient, thermal, mechanical
 rotor stress / modes / critical speeds, limit speed) must recognise an
 IDENTICAL request and hand back the stored answer instead of re-solving, and
 keep the last :data:`DEFAULT_CAP` results per kind so a repeat launch is
@@ -102,7 +102,7 @@ __all__ = [
     "loader_for",
 ]
 
-#: The owner's number, verbatim ("хранить небольшую историю, 10 вычислений").
+#: The owner's number, verbatim ("keep a small history, 10 computations").
 DEFAULT_CAP = 10
 
 _DIRNAME = ".run_history"

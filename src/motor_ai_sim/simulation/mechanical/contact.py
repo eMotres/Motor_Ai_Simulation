@@ -2,7 +2,7 @@
 
 Written 2026-09-05 for the user's requirement, in Fusion-360 terminology:
 
-    "Ещё нужно разобраться с контактами — они у нас все Separated по умолчанию."
+    "We also need to sort out the contacts — ours are all Separated by default."
 
 v1 welded every part into one conforming body (see ``rotor_stress`` docstring),
 so an interface transmitted TENSION.  On the live Ø124 spoke rotor that made the
@@ -42,7 +42,7 @@ The other two types are the degenerate cases of the same machinery:
 FRICTION (mu > 0, ``separation`` only) — REGULARISED COULOMB
 ------------------------------------------------------------
 Rewritten 2026-09-07, when the torque load made friction the load path instead
-of a footnote (user: "добавь ещё и момент на ротор").  The law is
+of a footnote (user: "also add torque on the rotor").  The law is
 
     F_t  =  min( k_t * |s| , mu * F_n ) * sign(s)
 
@@ -68,8 +68,8 @@ the saddle system stays definite and the iteration contracts.
 
 FRICTION HAS A HISTORY — THE LOAD PATH (2026-09-09)
 ---------------------------------------------------
-User, reading the hot G2-L40: *"получается, что от момента больше деформации,
-чем от вращения?"*  No.  The hot rows with torque on them were not a deformation
+User, reading the hot G2-L40: *"so torque causes more deformation than
+rotation?"*  No.  The hot rows with torque on them were not a deformation
 at all, they were a LOCKED FRICTION STATE, and they are the reason the friction
 above stopped being path-independent.
 
@@ -141,7 +141,7 @@ system is singular.
 SEATING A LOOSE PART (2026-09-09)
 --------------------------------
 User, on the live G2-L40 at the coupled temperatures (iron 134 °C, magnet
-135 °C): *"магнит должен сесть на язычок, как в Fusion"*.
+135 °C): *"the magnet should seat on the tongue, like in Fusion"*.
 
 The magnet sits in an iron pocket whose lips overhang its shoulders with ZERO
 clearance in the die cross-section, so at 20 °C the separation contact holds it.
@@ -259,7 +259,7 @@ numbers at 30 iterations and at 120.
 
 A HELD BOUNDARY (2026-09-07)
 ---------------------------
-User: "добавь ещё и момент на ротор, пусть действуют все силы".  A torque is not
+User: "also add torque on the rotor, let all the forces act".  A torque is not
 self-equilibrated, so the rotor can no longer float: something has to react it.
 ``HeldBoundary`` is that reaction — a set of rows ``u.d = 0`` (the shaft bore
 held TANGENTIALLY, radial free) appended to the same constraint block the
@@ -325,7 +325,7 @@ class ContactSpec:
         return {"type": self.type, "mu": float(self.mu)}
 
 
-#: The user's default, 2026-09-05: "они у нас все Separated по умолчанию".
+#: The user's default, 2026-09-05: "ours are all Separated by default".
 #: shaft <-> rotor core is the exception — it is a press-fit / keyed hub, which
 #: is a bonded joint by construction, and modelling it as separation would let
 #: the hub rattle inside the bore for no physical reason.
@@ -776,7 +776,7 @@ ST_STICK = 2
 class HeldBoundary:
     """Rows ``u . d = 0`` on a set of dofs — the shaft bore held tangentially.
 
-    Added 2026-09-07 with the torque load (user: "добавь ещё и момент на ротор").
+    Added 2026-09-07 with the torque load (user: "also add torque on the rotor").
     One row per held node: ``dofs`` are its (x, y) dof ids on the SPLIT mesh,
     ``dirs`` the unit direction that is held (the hoop direction, so the bore is
     free to breathe radially) and ``arm`` its radius, which turns the row's
@@ -799,8 +799,8 @@ class HeldBoundary:
 class CyclicTies:
     """Rows ``u_B = R(theta) . u_A`` on matching nodes of two cut faces.
 
-    Added 2026-09-09 for the user's request: *"нагрузка на все зубы должна быть
-    одинакова … так используй периодичность, как я во Fusion"* — in Fusion 360
+    Added 2026-09-09 for the user's request: *"the load on all teeth should be
+    the same ... so use periodicity, like I do in Fusion"* — in Fusion 360
     he solves ONE pole sector of the rotor with cyclic-symmetry boundary
     conditions.  This is the same statement: the model is a wedge of
     ``2*pi/n_sectors``, and every displacement on the trailing cut face (B) is
@@ -1288,8 +1288,8 @@ def _loose_pairs(cs: ContactSystem, body: np.ndarray, body_dof: np.ndarray,
     about load paths and not a tuning knob.
 
     It covers all THREE rigid modes on purpose.  Translation along the load is
-    the obvious one, and it is what the user sees ("магнит должен сесть на
-    язычок"), but the G2 fails through the other two: a magnet resting on two
+    the obvious one, and it is what the user sees ("the magnet should seat
+    on the tongue"), but the G2 fails through the other two: a magnet resting on two
     pairs of one wedge wall can still ROTATE about them, and rotation is what
     took the displacement to 2.3e8 mm.
 
@@ -1655,8 +1655,8 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
 
     ``cs.cyclic`` (2026-09-09) appends the CYCLIC-SYMMETRY rows of a
     ``CyclicTies`` to the same ``C`` — ``u_B = R(theta) u_A`` on every matched
-    point of the two cut faces of a one-pole sector (user: *"так используй
-    периодичность, как я во Fusion"*).  They are bilateral and load-independent,
+    point of the two cut faces of a one-pole sector (user: *"so use
+    periodicity, like I do in Fusion"*).  They are bilateral and load-independent,
     so they are assembled once, outside the active-set loop; their multipliers
     come back in ``cyclic_mult``.  Because a translation is not a periodic
     field, the rigid-body border of any component they touch drops from three
@@ -1977,7 +1977,7 @@ def solve_contact(K, f: np.ndarray, cs: ContactSystem, basis,
         viol = float(np.linalg.norm(gap[_bad])) if _bad.any() else 0.0
 
         # ── SEATING: a loose part travels until it lands (2026-09-09) ────────
-        # "магнит должен сесть на язычок, как в Fusion" — see the module
+        # "the magnet should seat on the tongue, like in Fusion" — see the module
         # docstring.  Nothing here runs unless a component was already floating
         # when THIS solve was made, so a rotor whose parts are all held reaches
         # the active-set update below having executed one `if`.

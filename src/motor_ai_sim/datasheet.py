@@ -295,9 +295,9 @@ def _render_cross_section(svg: str, px: int = 900) -> Optional[bytes]:
     return buf.getvalue()
 
 
-# NO PICTURES IN THE DATASHEET (2026-09-09).  User, verbatim: *"в datasheet
-# ставить только таблицы без картинок; а report всё нужно делать с картинками и
-# гораздо подробнее всё расписывать"*.  The two documents were given different
+# NO PICTURES IN THE DATASHEET (2026-09-09).  User, verbatim: *"put only
+# tables without pictures in the datasheet; the report needs to have pictures
+# and everything spelled out in much more detail"*.  The two documents were given different
 # jobs: the spreadsheet is the machine's NUMBERS — one column per duty, sortable,
 # pasteable into a quotation, diffable against the next revision — and the PDF
 # report is where the maps, the plots and the reasoning live.
@@ -1485,8 +1485,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         "iron + copper + magnets + shaft over the active length", 3)
     one("Cooling", cfg_doc.get("cooling") or die_doc.get("cooling") or "air",
         "the losses above are electromagnetic — the cooling has to remove them")
-    # THE MECHANICAL LIMIT SPEED (owner 2026-09-21: "нужно эту максимальную
-    # скорость вращения обязательно добавлять в отчёт") — read from the
+    # THE MECHANICAL LIMIT SPEED (owner 2026-09-21: "this maximum rotation
+    # speed absolutely needs to be added to the report") — read from the
     # `duty_results` store's compact rotor-stress record (the coupled loop's
     # automatic search in `routes/mechanical.py:run_rotor_stress_at`, or a
     # manual press of the Mechanical tab's **Limit speed** button attaches
@@ -1585,9 +1585,9 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             "measured T/I at the duty point; saturation included — the "
             "low-current (bench) value sits slightly above", 4)
     # ── THE SAME FOUR, AT 20 °C (owner 2026-09-18) ──────────────────────────
-    # *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить все
-    # коэффициенты KV, Kt, Km, Km/mass, которые фигурируют во всех каталогах
-    # моторов и нужны для сравнения»*.  Beside the hot ones, named, from the
+    # *"do a cold 20 °C pass for every report, to find all the coefficients
+    # KV, Kt, Km, Km/mass that appear in every motor catalogue and are needed
+    # for comparison"*.  Beside the hot ones, named, from the
     # coupled loop's own cold pass — and absent entirely when no duty has one,
     # because this card does not extrapolate.
     _c20 = None
@@ -1611,8 +1611,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         one("Km per mass at 20 °C (N·m/(√W·kg))",
             _c20.get("km_per_mass_Nm_sqrtW_kg"),
             "the figure of merit that survives scaling; " + _tail20, 4)
-        # …AND THE INDUCTANCES ON THE SAME BASIS (owner 2026-09-20: *«Ld/Lq
-        # нужно указывать тоже для 20 градусов и без тока, как для KV»*).  KV
+        # …AND THE INDUCTANCES ON THE SAME BASIS (owner 2026-09-20: *"Ld/Lq
+        # also need to be given at 20 degrees and at zero current, like KV"*).  KV
         # is a no-load constant at a stated temperature; a catalogue that
         # quotes the inductances at 600 A beside it is comparing two different
         # machines.  Incremental (∂ψ/∂i at the no-load iron state), never a
@@ -1835,8 +1835,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             log.exception("datasheet: charging block failed — the sheet ships "
                           "without it")
 
-    # The Dimensions sheet is GONE (user 2026-09-09: "убери вкладку
-    # Dimensions, они не нужны").  It listed every geometry key of the
+    # The Dimensions sheet is GONE (user 2026-09-09: "remove the Dimensions
+    # tab, they aren't needed").  It listed every geometry key of the
     # machine; the numbers a reader of a datasheet needs are on the Motor
     # card, and the drawing lives in the PDF report.  `schema` went with it
     # — it existed only to label those rows.

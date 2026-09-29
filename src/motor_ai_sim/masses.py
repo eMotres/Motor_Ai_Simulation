@@ -634,9 +634,9 @@ def compute_masses(p: Any, geo: Dict[str, Any], k_end: float = 0.0,
         if _states.get("sleeve"):
             m_sleeve = 0.0
 
-    # THE BAND IS ACTIVE MASS (user 2026-09-10: "давай не будем разделять их,
-    # пусть будет одна активная масса вместе с бандажом, так будет проще, чтобы
-    # не запутаться").
+    # THE BAND IS ACTIVE MASS (user 2026-09-10: "let's not split them, let
+    # there be one active mass together with the band, it'll be simpler and
+    # less confusing").
     #
     # It used to sit on the shaft side, on the argument that commercial FEM's active-mass
     # expression has no term for a retaining ring and `active` had to stay

@@ -1064,7 +1064,7 @@ def _build_pslg(lines, merge_tol: float = 0.006) -> Tuple[np.ndarray, np.ndarray
 def _split_at_t_junctions(V: np.ndarray, S: np.ndarray, tol: float) -> np.ndarray:
     """Split every segment at any vertex that lies within `tol` of its INTERIOR.
 
-    WHY (mesh view 2026-09-07, "обрати внимание на углы магнитов"): the magnet's
+    WHY (mesh view 2026-09-07, "look at the magnet corners"): the magnet's
     walls are delimited by the iron chain alone (`_air_facing_runs`), so the
     magnet's air-facing run STARTS at a vertex sitting in the middle of the
     iron's straight pocket-wall segment.  shapely's noding only splits a segment
@@ -2073,7 +2073,7 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
         n_bore = n_sh                          # the patch's inner ring IS the bore
     mags = [mg for mg, _pol in (polys.get("magnets") or [])]
     mags = [_resample(mg, r_iron_od, n_slip) for mg in mags]   # top on the OD → slip grid (see sector)
-    mags = [_weld_outline(mg, iron, 0.01) for mg in mags]  # см. sector (zipper)
+    mags = [_weld_outline(mg, iron, 0.01) for mg in mags]  # see sector (zipper)
 
     lines = []
 

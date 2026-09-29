@@ -595,8 +595,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # Under SB_SEED_FROM_PREVIOUS (sweeps/optimizer only) a point starts
         # from the previous point's settled eddy field and its Br ratchet map
         # instead of re-solving the warm-up march and a whole demag pre-pass
-        # period — "проход демагнитизации делается для каждого sweep только
-        # один раз".  The scan cache deliberately does NOT key on it (see
+        # period — "the demagnetization pass is done once per sweep only".
+        # The scan cache deliberately does NOT key on it (see
         # `_eval_cache_key`), so these three fields are how a stored point says
         # for itself what it was: which parent, and how many frames it skipped.
         "warm_seeded": bool(d.get("warm_seeded", False)),

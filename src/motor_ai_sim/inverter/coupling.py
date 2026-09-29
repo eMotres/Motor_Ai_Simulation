@@ -1,9 +1,10 @@
 """STAGE 2 — the controller driving the electromagnetic solver.
 
-Owner, 2026-09-22: *«как отладим каплинг с контроллером, нам не нужен будет PWM
-в электромагнитном моделировании — всё будет задаваться в меню Controller»*, and
-*«как закончишь лимиты, запускай каплинг — сначала стандартный инвертор на L155
-motor»*.
+Owner, 2026-09-22: *"once we debug the coupling with the controller, we won't
+need PWM in the electromagnetic simulation any more — everything will be set
+in the Controller menu"*, and *"once you finish the limits, run the coupling —
+first the standard inverter on L155
+motor"*.
 
 WHAT IS NEW, AND WHAT IS NOT
 ============================

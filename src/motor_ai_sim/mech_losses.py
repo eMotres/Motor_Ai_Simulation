@@ -2,8 +2,8 @@
 
 WHY THIS MODULE EXISTS (user, 2026-09-08)
 =========================================
-*"Когда запускается каплинг, должно решаться всё моделирование, и все потери
-должны передаваться в электромагнитный расчёт."*
+*"When the coupling runs, the whole simulation should be solved, and all the
+losses should be passed into the electromagnetic calculation."*
 
 Until today the bearing friction and the rotor windage lived at the EDGE of the
 app: ``GET /api/bearings/losses`` computed them, the Electromagnetic summary

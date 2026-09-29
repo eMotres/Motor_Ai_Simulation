@@ -186,15 +186,15 @@ _GATED: dict[tuple[str, str], str] = {
     # (a gmsh mesh + an FE solve per call), so the same tier.
     ("GET",  "/api/mechanical/rotor_stress"): "user",
     ("GET",  "/api/mechanical/materials"): "user",
-    # Modal analysis, added 2026-09-05 ("нам нужно сделать ещё модальный анализ,
-    # чтобы понять все частоты — это очень важно для 20000 rpm").  /modes is a
+    # Modal analysis, added 2026-09-05 ("we also need to do modal analysis,
+    # to understand all the frequencies — that's very important for 20000 rpm").  /modes is a
     # gmsh mesh + a sparse eigensolve and /critical_speeds is a Campbell sweep
     # of dense eigenvalue problems: the same class of compute as the solves
     # above, so the same tier.
     ("GET",  "/api/mechanical/modes"): "user",
     ("GET",  "/api/mechanical/critical_speeds"): "user",
-    # Added 2026-09-06 with "если есть [расчёты] — подгружается последний
-    # расчёт": /last hands back a structural result that was already paid for
+    # Added 2026-09-06 with "if there are [results] — the last result gets
+    # loaded": /last hands back a structural result that was already paid for
     # and /mesh runs the same gmsh pass the solve does, so both ride the tier of
     # the solves they serve rather than being open because they are cheaper.
     ("GET",  "/api/mechanical/last"): "user",
@@ -774,7 +774,7 @@ def account_info(authorization: Optional[str], *, ip: str = "",
         still hold a perfectly good session (a request that raced the fetch
         interceptor, a hot-reloaded module, a proxy that dropped the header).
         Dropping the stored session here logs the user out for nothing — that
-        is exactly how "сессия постоянно протухает" happened (2026-08-21).
+        is exactly how "the session kept dying" happened (2026-08-21).
       * authError='store_unavailable' — a token was presented and we could not
         CHECK it, because users.json / .sessions.json / .auth_secret was
         momentarily unreadable (a Windows file lock during the atomic replace,

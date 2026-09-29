@@ -883,8 +883,8 @@ class DeviceCard:
         publishes an E_on/E_off energy table (the SiC power modules this
         project started with); ``"times_and_charges"`` when it does not — most
         low-voltage Si/SiC MOSFET datasheets publish switching TIMES and gate
-        CHARGES instead, and owner 2026-09-22: *"конечно, нужен честный
-        пересчёт для любых MOSFET"* — a card without an energy table gets an
+        CHARGES instead, and owner 2026-09-22: *"of course, we need an honest
+        recalculation for any MOSFET"* — a card without an energy table gets an
         honest ESTIMATE from what it DOES publish, not a null loss.
         """
         sw = self.doc.get("switching") or {}
@@ -901,7 +901,7 @@ class DeviceCard:
     def switching_source_default(self) -> str:
         """The basis a solve uses when the request does not say.
 
-        Owner 2026-09-27: «все моторы должны работать на SPICE одинаково» —
+        Owner 2026-09-27: "all motors should run on SPICE the same way" —
         every device whose vendor model runs carries a ``switching_table``
         and is solved on it; the datasheet path is the explicit, labelled
         fallback for a device WITHOUT a runnable model (the encrypted 750 V

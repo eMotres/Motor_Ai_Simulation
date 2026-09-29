@@ -3328,9 +3328,9 @@ def solve_rotor_stress(polys: dict,
                            for s in sol.seated],
             },
             "rotor_od_growth_um": float(ur[od_case].max()) * 1e6,
-            # …and the same surface spelled out (user 2026-09-10: "нужно ещё
-            # считать максимальное радиальное смещение верха бандажа как
-            # отдельное число в таблице").  This is the surface that faces the
+            # …and the same surface spelled out (user 2026-09-10: "we also
+            # need to compute the maximum radial displacement of the band's
+            # top as a separate number in the table").  This is the surface that faces the
             # stator — the band's outside when there is one, the iron's when
             # there is not — so its radial motion is what eats the MECHANICAL
             # clearance (air gap minus the band).  The maximum is the number
@@ -3513,8 +3513,8 @@ def solve_rotor_stress(polys: dict,
         "has_sleeve": has_sleeve,
         "stack_length_mm": float(stack_length_mm or 0.0),
         # ── the rotor temperature (2026-09-07) ──────────────────────────────
-        # User: "нужно универсально добавить температуру ротора, чтобы можно
-        # было задавать".  `active` is False for a 20/20 °C request, which is
+        # User: "we need to add rotor temperature universally, so it can be
+        # set".  `active` is False for a 20/20 °C request, which is
         # the machine as drawn and as every earlier answer solved it.
         "thermal": {
             "rotor_temp_c": rotor_temp_c,

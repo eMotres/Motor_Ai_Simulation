@@ -150,7 +150,7 @@ export function openGeometryHelpWindow(): string | null {
     const tabs = geometryHelpTabs(window.location.origin);
     // NOT 'noopener' in the features: with it window.open() returns null by
     // spec, so the window opened blank and nothing could be written into it
-    // (owner 2026-09-25: "пустая картинка"). The opener link is cut by hand.
+    // (owner 2026-09-25: "empty picture"). The opener link is cut by hand.
     const win = window.open('', '_blank', 'width=1500,height=950');
     if (!win) {
       return 'Popup blocked — allow popups for this site to open the geometry help picture.';

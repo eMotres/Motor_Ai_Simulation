@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Optimizer speed-up A + B + C (owner 2026-09-24, «Запускай A + B + C»).
+"""Optimizer speed-up A + B + C (owner 2026-09-24, «Run A + B + C»).
 
 A. an optimizer candidate skips the no-load ψ_PM probe (its only consumers,
    chord Ld/Lq and the droop row, are not in refine_proc's result) — and ONLY a

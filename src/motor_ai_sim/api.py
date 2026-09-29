@@ -257,15 +257,15 @@ app.include_router(panel_settings_router)
 # tab has the same contract the Mechanical one has (last result, mesh preview,
 # timings).  Registered next to it deliberately: they are siblings.
 app.include_router(thermal_router)
-# /api/coupled — the EM<->thermal ORCHESTRATOR (2026-09-08, user: "не надо всё
-# смешивать, нужен оркестратор").  A THIRD router above the two solvers, not a
+# /api/coupled — the EM<->thermal ORCHESTRATOR (2026-09-08, user: "don't mix
+# everything together, we need an orchestrator").  A THIRD router above the two solvers, not a
 # route inside either: it calls get_fem_transient and solve_thermal_field through
 # their own public entry points and iterates the winding / magnet temperatures to
 # the fixed point.  Neither solver learns about the other, and with the
 # Electromagnetic tab's toggle off nothing here is reachable at all.
 app.include_router(coupled_router)
-# /api/controller — the INVERTER (2026-09-22, owner: «давай начнём делать модуль
-# инвертора … чтобы была возможность комбинировать мосты так, как нам надо»).
+# /api/controller — the INVERTER (2026-09-22, owner: "let's start building the
+# inverter module ... so we can combine bridges however we need to").
 # A fourth analysis router beside coupled/thermal/mechanical: a device card
 # library, a coil->bridge map, the loss and junction-temperature arithmetic over
 # them, and the waveform the motor will be fed with in Stage 2.  It solves no
@@ -603,7 +603,7 @@ def update_part_state(assignment: PartStateAssignment):
             pass
         from motor_ai_sim.part_states import config_part_states
         out = {"status": "ok", "parts": config_part_states()}
-        # The solver refuses nothing (the user asked for "любую деталь"), but
+        # The solver refuses nothing (the user asked for "any part"), but
         # removing a magnetically active part is an experiment, not a
         # packaging choice — say so instead of letting a plausible-looking
         # torque out of the door.
@@ -732,8 +732,8 @@ def get_materials_library():
 
         # ── MECHANICAL, straight off the raw records ──────────────────
         #
-        # User 2026-09-10: *"так и не вижу механических свойств материалов в
-        # каталоге"* — and they were right twice over: the card only rendered
+        # User 2026-09-10: *"I still don't see the materials' mechanical
+        # properties in the catalog"* — and they were right twice over: the card only rendered
         # them for insulators, and this endpoint never sent them at all.
         #
         # Merged from the RAW library rather than from the parsed dataclasses:

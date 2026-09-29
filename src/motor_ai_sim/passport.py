@@ -210,8 +210,8 @@ def generate_passport(
     # demag=True: the loaded base doubles as the 1.0·I0 point of the current
     # sweep below, and that point must carry a MEASURED retention like its
     # neighbours (not a demag-off 100 %).
-    # steps ≥ 48 on the BASE point only (user 2026-08-25: "на 12 точках не
-    # поймаешь пульсаций"): the passport quotes the rated-point torque ripple,
+    # steps ≥ 48 on the BASE point only (user 2026-08-25: "you won't catch the
+    # ripple with 12 points"): the passport quotes the rated-point torque ripple,
     # and ripple needs the fine grid; the sweeps stay coarse — they feed only
     # AVERAGED quantities, where 12 steps sit within ~0.2 % of 40 (measured).
     A = run(I0, eddy=True, steps=max(48, base_steps), demag=True)
@@ -329,7 +329,7 @@ def generate_passport(
                                  # +25-30 % on a concentrated winding, and
                                  # without them the tuner under-reported loss
                                  # and over-reported efficiency (user
-                                 # 2026-08-26: "цифры расходятся").
+                                 # 2026-08-26: "the numbers don't match").
                                  "cuAC": []}
     try:
         for gi, Ig in enumerate(grid_I):

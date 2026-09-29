@@ -6,7 +6,7 @@
  * `family-changed` event — eight identical 900 KB requests fired in the same
  * tick, each a full YAML parse of every die on the server, queued behind one
  * another (measured 2026-09-13: ~1 s each, the tab "loading" for the sum of
- * them; user: "почему каждый раз так долго загружается меню motors?").
+ * them; user: "why does the motors menu take so long to load every time?").
  *
  * Rules:
  *  - concurrent callers share the in-flight request;

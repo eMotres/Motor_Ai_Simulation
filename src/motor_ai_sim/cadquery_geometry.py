@@ -605,7 +605,7 @@ def _pocket_cut_depth(p: Dict) -> float:
     0.88 mm opening down to the magnet's 0.72 mm-wide inner end, its corners
     cut 0.08 mm into both 0.13 mm iron webs between neighbouring pockets and
     every iron spoke came off the hub — the rotor core in 11 pieces.  That is
-    the 2026-09-05 "косяк внизу магнитов" again, back on any machine whose
+    the 2026-09-05 "flaw at the bottom of the magnets" again, back on any machine whose
     magnet is shorter than ~2 mm + the opening's own taper.  Where the magnet
     is at least as wide as the opening all the way down to the fixed overlap
     (every machine built before this) the depth is exactly what it was."""
@@ -687,12 +687,12 @@ def _pocket_cut_depth_limit(p: Dict) -> Optional[float]:
 #
 #   * with magnet_up_gap = 1 the rectangular opening had VERTICAL sides while
 #     the magnet's side edge (mp2→mp3) is slanted, so where the cut's side met
-#     the magnet's rounded corner the iron showed a small step — "артефакт";
+#     the magnet's rounded corner the iron showed a small step — "an artifact";
 #   * with magnet_up_gap = 0 the pocket equalled the FILLETED magnet, so iron
 #     filled the magnet's 2.5 mm corner fillet and ended in a sharp wedge
-#     between the fillet arc and the sleeve bore — "кусок ротора, который будет
-#     давать опять жуткие перегрузки и не нужен совсем; нужно сделать грань
-#     ротора прямой".
+#     between the fillet arc and the sleeve bore — "a piece of rotor that will
+#     cause horrible overloads again and isn't needed at all; the rotor face
+#     needs to be made straight".
 #
 # Both are the same defect: the iron face beside a magnet was not one straight
 # line.  It is now.  The pocket boundary is the UNFILLETED magnet outline
@@ -945,8 +945,8 @@ def _extended_pocket_poly(spoly, mag_local, rotor_or: float, a_global: float,
 #  Magnet top edge: ALWAYS the arc on the circle r = rotor_or − magnet_up_gap
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# WHY (user, 2026-09-06: "я убрал всё, но у нас геометрия всё равно не
-# соединяется со сливом" — with magnet_up_gap = 0 and rotor_hole = 1 the magnet
+# WHY (user, 2026-09-06: "I removed everything, but our geometry still
+# doesn't connect to the sleeve" — with magnet_up_gap = 0 and rotor_hole = 1 the magnet
 # STILL did not touch the retaining sleeve):
 #
 #   the magnet's top edge used to be the straight CHORD between mp3 and mp4,
@@ -959,7 +959,7 @@ def _extended_pocket_poly(spoly, mag_local, rotor_or: float, a_global: float,
 #   carbon band.
 #
 # The chord was briefly a choice (`magnet_top: flat | arc`).  The user closed it
-# the same day — "давай по умолчанию сделаем только arc и уберём прямую вообще"
+# the same day — "let's make arc the only default and drop the straight chord entirely"
 # (2026-09-06) — so there is now ONE magnet top: the arc.  A machine, die,
 # preset or catalog entry that still carries a `magnet_top` key is read as if it
 # did not: the key is ignored, never errors and is never written back.
@@ -1020,8 +1020,8 @@ def _open_fillet_at_top(poly, r_top: float, min_deg: float = 12.0,
     """End every corner fillet with a chord that meets its neighbour at a
     finite angle instead of tangentially.
 
-    WHY (user 2026-09-07, mesh view: "обрати внимание на углы магнитов, что-то
-    тут не так"): a fillet arriving tangentially leaves a 0°…8° wedge of pocket
+    WHY (user 2026-09-07, mesh view: "look at the magnet corners, something's
+    off there"): a fillet arriving tangentially leaves a 0°…8° wedge of pocket
     air between the arc and the surface it meets — the sleeve bore on top
     (magnet_up_gap = 0) and the straight iron pocket wall on the side
     (rotor_hole = 1).  Triangle cannot mesh such a wedge and answers with a fan
@@ -1251,8 +1251,8 @@ def _strip_columns(x0: float, wire_w: float, n_split: int, spacing_x: float):
     """[(x_left, width)] for the strips of ONE turn, left to right.
 
     ``wire_w`` is ONE STRIP — the user halves the wire himself when he splits a
-    bar in two (2026-09-08: *"сделай ширину провода 4,5 мм, слот станет чуть
-    больше, я бы гап между проводами сделал 2·Wire Spacing X"*).  So ``n_split``
+    bar in two (2026-09-08: *"make the wire width 4.5 mm, the slot will get a
+    bit bigger, I'd make the gap between wires 2·Wire Spacing X"*).  So ``n_split``
     strips of ``wire_w`` are laid side by side starting at ``x0``, separated by
     ``STRIP_GAP_FACTOR × spacing_x`` of insulation, and the row spans
     ``_strip_span``.
@@ -1648,8 +1648,8 @@ class CadQueryMotor:
 
         # A stale `magnet_top` from a machine saved on 2026-09-06, while the
         # flat/arc choice briefly existed, rides along untouched: nothing reads
-        # it any more (the top is always the arc — user, same day: "уберём
-        # прямую вообще"), so it cannot change a polygon, and dropping it here
+        # it any more (the top is always the arc — user, same day: "drop the
+        # straight chord entirely"), so it cannot change a polygon, and dropping it here
         # would only make the dict differ from the one the caller passed in.
 
         return mapped
@@ -2011,7 +2011,7 @@ class CadQueryMotor:
 
         # The magnet top is the ARC on r = rotor_or − magnet_up_gap (user
         # 2026-09-06: the magnets must press straight on the carbon sleeve, and
-        # later that day "уберём прямую вообще" — the chord is gone).  The
+        # later that day "drop the straight chord entirely" — the chord is gone).  The
         # outline is therefore not a hexagon, so `edges(">Y and |Z")` — which
         # picks the vertical edges at max Y — would grab the single station at
         # the pole centre instead of the two corners.  Build the profile as the
@@ -2099,8 +2099,8 @@ class CadQueryMotor:
         # height as a constant-width rectangle, and where the magnet narrows
         # toward the hub (magnet_fill_down < the opening's width in mm) its
         # bottom corners stuck out past the magnet's inner corners — two air
-        # slivers beside the magnet's inner end (user 2026-09-05: "косяк внизу
-        # магнитов").  Below the top edge the magnet polygon itself defines
+        # slivers beside the magnet's inner end (user 2026-09-05: "flaw at the
+        # bottom of the magnets").  Below the top edge the magnet polygon itself defines
         # the pocket.  Same rule in get_2d_mesh_data / get_2d_polygons.
         rect_depth = _pocket_cut_depth(p)
 
@@ -2115,8 +2115,8 @@ class CadQueryMotor:
         # `_extended_pocket`).  Not an "opening" any more: the cut IS the magnet
         # outline with its side edges extended, so `build_all`'s later
         # `rotor.cut(magnet)` finds nothing left to remove and the 3-D solid is
-        # the same shape the mesher solves.  User 2026-09-06: "нужно сделать
-        # грань ротора прямой".
+        # the same shape the mesher solves.  User 2026-09-06: "the rotor face
+        # needs to be made straight".
         if _extended_pocket(p):
             rotor_house_h = p['rotor_house_height']
             mag_down_h = p['magnet_down_height']
@@ -2539,7 +2539,7 @@ class CadQueryMotor:
         mp6 = (-magnet_r * sin(angle_down),                  magnet_r * cos(angle_down))
         mag_local = [mp1, mp2, mp3, mp4, mp5, mp6]
         # The magnet's top edge is the ARC on r = rotor_or − magnet_up_gap, and
-        # nothing else (user 2026-09-06 — "уберём прямую вообще").
+        # nothing else (user 2026-09-06 — "drop the straight chord entirely").
         mag_r_top = rotor_or - mag_up_gap
 
         # ── 1. SHAFT (hollow ring: shaft_inner_radius → rotor_inner_radius) ──
@@ -2668,7 +2668,7 @@ class CadQueryMotor:
                 # Straight-sided pockets (rotor_hole ≥ 1): the only sharp
                 # corners near the OD ARE the pole tips, so the band is fixed —
                 # the up_gap-scaled band was 0 at up_gap 0 and the tips stayed
-                # sharp (user 2026-09-06: "ты забыл применить это на углы ротора").
+                # sharp (user 2026-09-06: "you forgot to apply that to the rotor corners").
                 _band = (1.5 if _extended_pocket(self.parameters)
                          else min(1.5, 0.6 * float(self.parameters.get('magnet_up_gap', 1.5) or 1.5)))
                 _f = _round_corners_vertex(rotor_poly, _rfr, surface_band=_band,
@@ -3126,7 +3126,7 @@ class CadQueryMotor:
         mp6 = (-magnet_r*sin(angle_down),               magnet_r*cos(angle_down))
         mag_local = [mp1, mp2, mp3, mp4, mp5, mp6]
         # The magnet's top edge is the ARC on r = rotor_or − magnet_up_gap and
-        # nothing else (user 2026-09-06 — "уберём прямую вообще").  This is THE
+        # nothing else (user 2026-09-06 — "drop the straight chord entirely").  This is THE
         # build the mesher and the validator read, so it is the one that decides
         # whether the magnet actually touches the sleeve bore.
         mag_r_top = rotor_or - mag_up_gap
@@ -3225,7 +3225,7 @@ class CadQueryMotor:
         # — it rounds corners WITHOUT eroding edges, so the thin inter-magnet
         # bridges (rotor_house ~1.2 mm) survive (the fillet auto-clamps to the
         # local feature size).  GUARDED: keep only if valid, ≥85 % area, same #
-        # pieces — else keep the sharp rotor.  ("не ломай геометрию")
+        # pieces — else keep the sharp rotor.  ("don't break the geometry")
         _rfr = float(p.get('rotor_fill_r', 0.0) or 0.0)
         if _rfr > 1e-4:
             def _npoly(g):
@@ -3239,7 +3239,7 @@ class CadQueryMotor:
                 # them rounded while every magnet-side corner stays sharp.
                 # Straight-sided pockets: fixed band — the up_gap-scaled band
                 # was 0 at up_gap 0 and left the tips sharp (user 2026-09-06:
-                # "ты забыл применить это на углы ротора").
+                # "you forgot to apply that to the rotor corners").
                 _band = (1.5 if _ext_pocket
                          else min(1.5, 0.6 * float(p.get('magnet_up_gap', 1.5) or 1.5)))
                 _f = _round_corners_vertex(rotor_poly, _rfr, surface_band=_band,

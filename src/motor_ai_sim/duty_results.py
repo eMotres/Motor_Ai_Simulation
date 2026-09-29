@@ -1,8 +1,8 @@
 """Per-duty solver results — the small side store the full report is made of.
 
 WHY THIS EXISTS (2026-09-09).  The user asked for a report that COMPARES every
-duty of a configuration across every simulation: *"если в конфигурации несколько
-режимов, их нужно сравнивать в таблицах по всем моделированиям"*.  Only the
+duty of a configuration across every simulation: *"if a configuration has
+several duties, they need to be compared in tables across every simulation"*.  Only the
 electromagnetic side could answer that: a duty's own ``result``/``summary`` block
 is saved into ``config/dies/<die>/<cfg>.yaml`` when the user presses Save in the
 Simulation tab.  Everything else — the thermal map, the rotor stress, the
@@ -1131,8 +1131,8 @@ def compact_mechanical(kind: str, result: Dict[str, Any],
             "mesh": _pick(res.get("mesh"), ("n_triangles", "element_order",
                                             "mesh_size_mm")),
         })
-        # THE LIMIT SPEED (owner 2026-09-21: "нужно искать ещё максимальную
-        # скорость вращения ... она будет, когда достигает SF = 1"), riding on
+        # THE LIMIT SPEED (owner 2026-09-21: "we also need to find the
+        # maximum rotation speed ... it's where SF reaches 1"), riding on
         # the same rotor-stress record — present only when the **Limit speed**
         # button (not this table build) produced it, never computed here.
         _ls = res.get("limit_speed")
@@ -1346,8 +1346,8 @@ def compact_coupled(out: Dict[str, Any]) -> Dict[str, Any]:
         **({"limited": dict(c["limited"])}
            if isinstance(c.get("limited"), dict) and c["limited"] else {}),
         # ── THE CATALOGUE CONSTANTS (owner 2026-09-18) ──────────────────────
-        # *«для каждого отчёта делать прогон на холодную 20 °C, чтобы находить
-        # все коэффициенты KV, Kt, Km, Km/mass»*.  Kept WHOLE — three small
+        # *"do a cold 20 °C pass for every report, to find all the
+        # coefficients KV, Kt, Km, Km/mass"*.  Kept WHOLE — three small
         # dicts of scalars — because §4's catalogue subsection, the datasheet
         # and any comparison between machines read the DUTY's record and not
         # the run, and a constant that does not make this crossing reaches no
@@ -1552,8 +1552,8 @@ def compact_controller(out: Dict[str, Any]) -> Dict[str, Any]:
         "warnings": list(out.get("warnings") or []),
         "violations": list(out.get("violations") or []),
         # The full assumption text lives HERE, in the record, and in the docs
-        # note — never on the tab (owner 2026-09-22: «не пиши это всё, никто
-        # это не читает»).  The tab shows one line and a tooltip.
+        # note — never on the tab (owner 2026-09-22: "don't write all that,
+        # nobody reads it").  The tab shows one line and a tooltip.
         "assumptions": list(out.get("model_notes") or []),
         "schematic_svg": out.get("schematic_svg"),
         "elapsed_s": _f(out.get("elapsed_s")),

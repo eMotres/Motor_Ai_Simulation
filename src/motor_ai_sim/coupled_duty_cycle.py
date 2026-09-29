@@ -1,7 +1,7 @@
 """THE CYCLE INSIDE THE COUPLED LOOP — an S2/S3 duty solved for its REGIME.
 
-WHY THIS MODULE EXISTS (user, 2026-09-16: *"каплинг на цикле S3 подбирает
-скважность для того чтобы можно было влезть в лимиты"*)
+WHY THIS MODULE EXISTS (user, 2026-09-16: *"the S3-cycle coupling picks the
+duty ratio so we can fit inside the limits"*)
 =========================================================================
 Until today the coupled EM↔thermal loop REFUSED an impulse duty, and the refusal
 was right about the physics and wrong about the question.  The loop's method is
@@ -79,8 +79,8 @@ from motor_ai_sim.thermal_duty_cycle import DutyCycleError
 IMPULSE_KINDS: Tuple[str, ...] = ("S2", "S3")
 
 #: The env var that switches everything above BACK ON, and the values that count
-#: as "on".  Off is the default (owner, 2026-09-17: *«давай пока уберём duty
-#: cycle из Thermal, оставим только стандартный каплинг»*).
+#: as "on".  Off is the default (owner, 2026-09-17: *"let's drop duty cycle
+#: from Thermal for now, keep only the standard coupling"*).
 DUTY_CYCLE_ENV = "DUTY_CYCLE_ENABLED"
 _ON = ("1", "true", "yes", "on")
 

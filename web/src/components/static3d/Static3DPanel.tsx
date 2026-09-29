@@ -292,7 +292,7 @@ const Static3DPanel: React.FC = () => {
                 (40 mm on this motor) while the modelled half-stack ends at
                 6 mm and the end-turn band at 8.8 — so five sixths of the
                 travel cut nothing but far-field air, and the slider read as
-                broken ("cut z не работает" at 27.5 mm, which is 4.5 stack
+                broken ("cut z doesn't work" at 27.5 mm, which is 4.5 stack
                 halves above the iron).  Full-box travel is not useful: there
                 is nothing out there to cut. */}
             <Slider size="small" min={0} max={cutZMax} step={0.1}

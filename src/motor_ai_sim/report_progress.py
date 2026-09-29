@@ -2,8 +2,8 @@
 
 WHY THIS EXISTS
 ---------------
-User, 2026-09-16: *"нужно сделать ещё минимальный прогресс-ринг генерации
-отчёта, чтобы было видно, что работает, а не висит"*.  A Word report of a
+User, 2026-09-16: *"we also need a minimal progress ring for report
+generation, so it's visible that it's working and not hung"*.  A Word report of a
 200 mm machine is ~50 s (twenty-odd matplotlib figures at print width, 43
 pages) and the PDF is half a minute more — and for all of that the catalogue
 row showed the button's own "… report" and nothing else.  A caption that does

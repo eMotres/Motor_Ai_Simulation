@@ -5,7 +5,7 @@ Two failures, one root cause — a cached entry outliving the run it belongs to:
 1. Pressing Run returned the PREVIOUS run's object.  Same torque, same ripple,
    same `computed_at`, no solver call.  For an engineer a Run that solves
    nothing is not a cache hit, it is a lie about what happened (user,
-   2026-09-04: "их нужно очищать при каждом расчёте и обновлять").
+   2026-09-04: "they need to be cleared on every solve and refreshed").
 2. Old field pictures and old field snapshots kept sitting BESIDE the fresh
    run, where the relaxed snapshot lookup could still serve them.
 

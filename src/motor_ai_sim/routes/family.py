@@ -73,9 +73,9 @@ FREE_GEO_KEYS = (
 #: machine edited here is the same DIE — the same laminations, the same slot,
 #: the same tools.
 #:
-#: `wire_parallel` joined them on 2026-09-11 (user: "нужно дать ещё возможность
-#: менять wire parallel (strands) для режимов, это никак не затрагивает
-#: геометрию").  It is right: the slot holds `num_wires_per_slot` conductors
+#: `wire_parallel` joined them on 2026-09-11 (user: "we also need the ability
+#: to change wire parallel (strands) per duty, it doesn't touch the geometry
+#: at all").  It is right: the slot holds `num_wires_per_slot` conductors
 #: whatever the strands in hand are, and `wire_parallel` only says how they are
 #: grouped — it appears nowhere in `cadquery_geometry`, only in `winding`
 #: (turns = conductors / strands), in the validator that makes the two divide,
@@ -93,8 +93,8 @@ EDITABLE_UNDER_DIE_LOCK = ("motor_length", "wire_height", "num_wires_per_slot",
 #: whose value moved is a DIFFERENT lamination, i.e. a new die.  ONE list, read
 #: by the identity guard in `sync_active_die_geometry`, by `/context` (so the
 #: Geometry table and the sweep pickers can flag the keys BEFORE the change,
-#: 2026-09-20: "опять та же самая проблема — я всё оптимизировал, а сохранить
-#: не могу"), and by the optimizer routes that refuse to vary them while a die
+#: 2026-09-20: "the same problem again — I optimized everything and can't
+#: save it"), and by the optimizer routes that refuse to vary them while a die
 #: is active unless the caller says "allow new lamination".
 DIE_IDENTITY_KEYS = ("stator_diameter", "num_seg", "num_slots_per_segment",
                      "num_poles_per_segment")
@@ -152,7 +152,7 @@ def refuse_die_defining_variables(names, allow_new_lamination: bool) -> None:
 #: machine — and a load that says nothing about them leaves the previously
 #: loaded machine's picks in the shared config (2026-09-09: the Ø200's Al2O3
 #: ceramic liner, tried on 2026-09-07/08, sat on every motor loaded after it —
-#: user: "почему у всех моторов поменялся материал изоляции, всегда был Nomex").
+#: user: "why did the insulation material change on all motors, it was always Nomex").
 _ABSENT_MATERIALS: Dict[str, str] = {
     "slot_insulation": "Nomex",
     "wire_insulation": "polyimide",
@@ -161,7 +161,7 @@ _ABSENT_MATERIALS: Dict[str, str] = {
 #: The parts a configuration SAVES its material choice for.  Everything solid
 #: the machine is made of — not the three the save used to keep (2026-09-09).
 #:
-#: User: *"почему изоляция в этой машине опять Nomex, я же менял её на Al2O3"*.
+#: User: *"why is the insulation on this machine Nomex again, I changed it to Al2O3"*.
 #: The save kept magnet / stator_core / rotor_core only, so a slot liner, a wire
 #: enamel, a conductor or a shaft grade chosen in Materials had nowhere to live:
 #: on the next activation the absent keys were filled from ``_ABSENT_MATERIALS``
@@ -438,8 +438,8 @@ def _require_deletable_die(die: str, who: dict) -> str:
 
     Unlike :func:`_require_writable_die` (rename, and the general "may I aim a
     write at the curated layer" gate behind ``?layer=shared``), a DELETE by an
-    admin needs no query-string opt-in: the owner's own words were "я же
-    админ" — the confirmation dialog already asks twice for a die with
+    admin needs no query-string opt-in: the owner's own words were "I'm the
+    admin, aren't I" — the confirmation dialog already asks twice for a die with
     configurations, and ``who["is_admin"]`` is a stronger promise than a query
     parameter a UI call forgot to add (that gap is exactly what left a 403 with
     no way through it, 2026-09-24).  A non-admin gets the same refusal
@@ -524,9 +524,8 @@ def _require_die_access(die: str, authorization) -> dict:
 
 
 # ── who may WRITE the catalog (migration Stage 5) ────────────────────────────
-# The user's rule, 2026-09-15: *"общий каталог правит пока только админ;
-# пользователи всё сохраняют только в своём пространстве, но могут и делиться
-# со всеми"*.
+# The user's rule, 2026-09-15: *"for now only the admin edits the shared
+# catalog; users only save everything in their own workspace, but can also share with everyone"*.
 #
 # Stage 2 built the machinery for the second half of that sentence — every write
 # in this router funnels through ``_write_target``/``_ensure_writable_die``,
@@ -787,8 +786,8 @@ def _live_parts() -> dict:
     included.  Same shape the configuration file stores under ``parts:`` and
     the ``?mat=`` payload carries under ``parts``.
 
-    ``ALWAYS_INCLUDED_PARTS`` (the shaft — owner rule 2026-09-29: "во всех
-    моторах вал должен участвовать") never lands here even if the live state
+    ``ALWAYS_INCLUDED_PARTS`` (the shaft — owner rule 2026-09-29: "the shaft
+    must take part in every motor") never lands here even if the live state
     says otherwise: ``included`` is not stored, so silently dropping it is
     exactly what storing ``included`` would do.  ``_live_shaft_note`` is the
     loud half of the same rule, for callers that must tell the user.
@@ -817,7 +816,7 @@ def _live_shaft_note() -> str:
 def _config_role(c: dict) -> tuple:
     """WHAT THIS CONFIGURATION IS, read off its duties.
 
-    User 2026-09-10: *"почему здесь motor, хотя это генератор"* — the chip said
+    User 2026-09-10: *"why does it say motor here, when it's a generator"* — the chip said
     `motor` on a configuration named "L180 gen" whose every duty is a generator
     duty.  `role` was captured ONCE, at creation, from whatever the Simulation
     panel's mode toggle happened to be, written into the yaml and never looked
@@ -939,8 +938,8 @@ def _with_mech_loss(d: Dict[str, Any]) -> Any:
     shaft efficiency) and no watts to show for it — the catalog would print the
     electromagnetic loss beside a shaft efficiency, and mark it as unknown.
     Nobody should have to press save on a machine they did not change to get a
-    field the code learned to store afterwards (user: "я же ничего не менял,
-    зачем мне ещё раз всё пересохранять?"), so it is read back here from the
+    field the code learned to store afterwards (user: "I didn't change
+    anything, why do I need to resave everything again?"), so it is read back here from the
     run's own summary, which has carried ``P_bearings_W`` / ``P_windage_W`` all
     along.  Derived at SERVE time: nothing is rewritten, and a duty re-saved
     later simply stops needing this.
@@ -1490,7 +1489,7 @@ class DutySpec(BaseModel):
     note: Optional[str] = None           # None = keep the previous note on upsert
     from_current: bool = False           # fill the Nones from the live Simulation
     # The COMPLETE computed state of the run being saved (user 2026-08-25:
-    # "это всё должно сохраняться"): the mesh settings the numbers were solved
+    # "all of this needs to be saved"): the mesh settings the numbers were solved
     # on, and the full summary block — so loading the duty restores the exact
     # card (all constants, live 3D/R/KV buttons) and the exact mesh, not
     # whatever happened to linger in the browser.
@@ -1498,7 +1497,7 @@ class DutySpec(BaseModel):
     summary: Optional[dict] = None
     # THIS DUTY's materials — a PARTIAL assignment {part: material} laid over
     # the configuration's own `materials:` when the duty is loaded (user
-    # 2026-09-01: "все материалы, для каждого duty").  A duty here is a full
+    # 2026-09-01: "all materials, per duty").  A duty here is a full
     # thermal scenario ("peak 200C wire 120C NdFeB"), so the magnet temperature
     # record and the steel it was characterised with belong to it, not to the
     # machine.  A `null` value is the duty SAYING "the configuration's own" —
@@ -2234,8 +2233,8 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
 
 # ── L-name ↔ stack consistency ───────────────────────────────────────────────
 # A configuration named "L15" / "G1-L160" declares its stack in the name, and
-# the name must TRACK the build (user's rule 2026-08-24: "нужно это
-# отслеживать и переименовывать") — an L15 holding a 13 mm build misled for a
+# the name must TRACK the build (user's rule 2026-08-24: "this needs to be
+# tracked and renamed") — an L15 holding a 13 mm build misled for a
 # whole session before it was caught by hand.
 _LNUM_RE = re.compile(r"(^|[-_ ])L(\d+(?:\.\d+)?)$")
 
@@ -2426,8 +2425,8 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             d.gamma_deg = sim.get("gamma_deg", sim.get("phase_offset_deg"))
         # A DUTY has no geometry of its own — the build (stack, wire, turns,
         # winding, materials) belongs to the CONFIGURATION, and every duty of
-        # a configuration shares it (user's rule, 2026-08-24: "как могут быть
-        # режимы с разной геометрией — это невозможно, только конфигурации").
+        # a configuration shares it (user's rule, 2026-08-24: "how could duties
+        # have different geometry — that's impossible, only configurations can").
         # This block used to RE-SNAPSHOT the live build into the configuration
         # on every save — which silently turned an L15 config into a 13 mm one
         # the moment a duty was saved from a 13 mm live machine (live incident
@@ -2471,7 +2470,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             # CONFIGURATION'S OWN parameters — it stores them, so an UNLOCKED
             # configuration must accept them being re-tuned: copy a config,
             # change the stack and the coil, save (user 2026-08-25, after the
-            # third refusal: "вся остальная геометрия не менялась").  The
+            # third refusal: "the rest of the geometry didn't change").  The
             # refusal exists for the DIE-level cross-section below — that one
             # is the stamped lamination, shared by every configuration.
             # Adopting changes build_sig, so older results correctly flag as
@@ -2521,8 +2520,8 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             # configuration kept its three-key map, and the next activation
             # filled the unnamed liner from `_ABSENT_MATERIALS` — Nomex.  The
             # user changed it to Al2O3 four times over four days and watched it
-            # come back every time ("уже несколько раз я сохранял изоляцию как
-            # Al2O3, но она всё равно всегда сбрасывается в Nomex").
+            # come back every time ("I've saved the insulation as Al2O3
+            # several times already, but it always resets back to Nomex anyway").
             _sm = c.get("materials") or {}
             _mc_contradicted = False       # a NAMED material actually changed
             for k in _SAVED_MATERIAL_KEYS:
@@ -2567,8 +2566,8 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                     # earlier duty was solved on, and flagging those results
                     # "computed on an older build" is a false alarm the user has
                     # no way to clear except by re-saving work they did not
-                    # change ("я же не менял ничего, зачем мне ещё раз всё
-                    # пересохранять?").  So their stamps are carried forward.
+                    # change ("I didn't change anything, why do I need to
+                    # resave everything again?").  So their stamps are carried forward.
                     # A material that CONTRADICTED the stored one is a real
                     # change and the flag stands, which is the whole point of it.
                     if not _mc_contradicted:
@@ -2631,7 +2630,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
     if pw is not None:
         entry["power_kw"] = round(float(pw), 2)
     # The terminal connection this duty was solved with, ON THE DUTY (user
-    # 2026-09-13: "не забудь сохранять звезда или треугольник"): the run's
+    # 2026-09-13: "don't forget to save star or delta"): the run's
     # own summary says it; a save without a run keeps the previous value,
     # then the configuration's winding.  Read back by ▶ before anything else.
     _sd_src = getattr(d, "summary", None)
@@ -3231,9 +3230,9 @@ def released_state() -> Optional[dict]:
 
 
 # ── automatic die transition (owner's rule, 2026-09-20) ──────────────────────
-# «если мы меняем геометрию — неважно какую — того die, который загрузили, мы
-# всю конфигурацию переводим в новый диаметр или новое количество полюсов без
-# всяких разрывов и сохраняем её» — a die-defining edit on the ACTIVE die must
+# "if we change the geometry — whichever one — of the loaded die, we move
+# the whole configuration to the new diameter or new pole count without any
+# breaks, and save it" — a die-defining edit on the ACTIVE die must
 # never dead-end the context (the 12:47 incident this whole module chases).
 # Replaces the identity guard's `release_context` call: the live machine
 # becomes a foreign lamination → find (or mint) the die THIS lamination is and
@@ -4218,8 +4217,8 @@ def set_battery(die: str, cfg: str, req: BatteryPatch,
 class ControllerCoolingSpec(BaseModel):
     """The Controller tab's MOSFET cooling row.
 
-    ``mode`` (owner 2026-09-22: *"надо добавить воздушное охлаждение и
-    скорость ветра, как в термосимуляции"*) picks which of the three
+    ``mode`` (owner 2026-09-22: *"need to add air cooling and wind speed,
+    like in the thermal simulation"*) picks which of the three
     ``inverter.losses.COOLING_MODES`` the fields below feed —
     ``None``/``"liquid"`` (the original, only-ever-existed-before coldplate:
     ``coolant``/``flow_lpm``/``t_in_c``), ``"air_forced"`` (a fan/slipstream:
@@ -4267,8 +4266,8 @@ class ControllerPatch(BaseModel):
     tier until the tab is saved with a number.  ``v_dc_V`` ``None`` means "the
     configuration's battery, nominal".
 
-    Owner 2026-09-22: *"при сохранении мотора текущий контроллер тоже должен
-    сохраняться со всеми настройками"* — saved WHOLE, the same footing as
+    Owner 2026-09-22: *"when the motor is saved the current controller should
+    also be saved with all its settings"* — saved WHOLE, the same footing as
     ``battery`` (:func:`set_battery` above): every field is sent every time
     (the tab has exactly one form, not several dialogs edited piecemeal), so
     this PATCH REPLACES the stored block rather than merging into it field by
@@ -4588,7 +4587,7 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
             # overrides it with 9 x 0.5 mm: loading one was refused key by key
             # (423), the live machine kept the DIE's wire, and the user got a
             # panel showing "wire split 2 / parallel 3" for a machine wound
-            # 1 x 4 ("откуда здесь взялось wire split 2?").  An override is a
+            # 1 x 4 ("where did wire split 2 come from here?").  An override is a
             # stored property of the configuration, not an edit — loading it is
             # exactly what the lock is meant to keep working.  A THIRD value,
             # typed by hand, is still refused.
@@ -4681,9 +4680,9 @@ def duty_fields(die: str, cfg: str, response: Response,
                 authorization: str = Header(default=None)):
     """WHICH duties of this configuration have a stored FIELD, and how big it is.
 
-    The array half of ``/duty_results`` (2026-09-09, user: *"давай сделаем
-    сохранение всех полей моделирования, как электромагнитных, так и тепловых и
-    механических"*).  ``motor_ai_sim.duty_fields`` keeps each duty's own mesh and
+    The array half of ``/duty_results`` (2026-09-09, user: *"let's save all
+    the simulation fields — electromagnetic, thermal, and mechanical
+    alike"*).  ``motor_ai_sim.duty_fields`` keeps each duty's own mesh and
     map arrays under ``<die>/runs/<configuration>/<duty>/fields/<kind>.npz``, so
     a report can draw four duties' temperature maps side by side instead of the
     last-solved one four times.
@@ -4837,8 +4836,8 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
     # PREVIOUS machine's value — PUT /api/geometry merges over what is loaded.
     # Eleven of thirteen dies predate `sleeve_thickness`, so loading any of
     # them from a sleeved Ø200 kept its 2.5 mm band and the PUT was refused
-    # ("not thinner than air_gap (0.65 mm)" — user 2026-09-08: "хочу загрузить
-    # G2-L40, а он не грузится"); a stray `wire_parallel: 3` would likewise have
+    # ("not thinner than air_gap (0.65 mm)" — user 2026-09-08: "I want to load
+    # G2-L40, and it won't load"); a stray `wire_parallel: 3` would likewise have
     # turned a 21-turn machine into a 7-turn one without a word.  Say what
     # absence MEANS, explicitly, so the payload describes the whole machine.
     for _k, _v in _ABSENT_MEANS.items():
@@ -4961,9 +4960,9 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
 # `_save_yaml` has snapshotted every changed save into
 # config/dies/.history/<die>/<file>.<stamp>.yaml since 2026-08-24 (30 newest
 # per file); what was missing was a way to LOOK at those snapshots and put one
-# back without a file manager (user 2026-09-12: "история сохранённых параметров
-# по каждой конфигурации, чтобы в любой момент можно было откатиться —
-# геометрия и режимы для моделирования").  A snapshot IS exactly that: the
+# back without a file manager (user 2026-09-12: "a history of saved parameters
+# per configuration, so we can roll back at any moment — geometry and duties
+# for simulation").  A snapshot IS exactly that: the
 # configuration file holds geometry_overrides, winding, materials and the
 # duties with their operating points and solver settings; the die file holds
 # the base geometry.

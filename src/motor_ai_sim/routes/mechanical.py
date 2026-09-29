@@ -1,7 +1,7 @@
 """Mechanical (structural) routes — /api/mechanical.
 
-Added 2026-09-05 for the user's Mechanical tab: "начнём с расчёта центробежных
-сил ротора ... чтобы оценить какой бандаж нужен для удержания магнитов".
+Added 2026-09-05 for the user's Mechanical tab: "let's start with the rotor
+centrifugal force calculation ... to estimate what band is needed to retain the magnets".
 
 The solve itself lives in ``simulation.mechanical.rotor_stress``; this module
 only resolves WHICH machine and WHICH materials the request means, and caches
@@ -151,7 +151,7 @@ def _override_props() -> Dict[str, dict]:
 def _elapsed(t0: float) -> float:
     """Seconds this request spent working, as the panel's timer reports them.
 
-    User 2026-09-06: "нужно добавить ещё индикатор времени расчёта".  The client
+    User 2026-09-06: "we also need to add a calculation-time indicator".  The client
     can time its own fetch, but that number includes the network and the JSON —
     on a 40 MB field payload those are seconds of their own — so the honest
     figure is measured here, around the geometry build and the solve, and it is
@@ -172,7 +172,7 @@ def _default_rpm() -> float:
 def _default_torque_nm() -> tuple:
     """(mean torque of the last Simulation run, where it came from).
 
-    User 2026-09-07: "добавь ещё и момент на ротор, пусть действуют все силы".
+    User 2026-09-07: "also add torque on the rotor, let all the forces act".
     The torque is a RESULT, not a setting, so it is read from the last transient
     the Simulation tab produced — never invented here, and never typed into a
     default in a panel (the standing rule that every physics value comes from
@@ -262,9 +262,9 @@ def clear_mechanical_caches(reason: str = "") -> int:
     _MESH_CACHE.clear()
     # `_LAST` is deliberately NOT cleared here.  It is not a cache — it is what
     # the panel SHOWS when you come back to the tab, and the user's ask
-    # (2026-09-06) is exactly that it survives: "если есть [расчёты] —
-    # подгружается последний расчёт; если были изменения текущей геометрии —
-    # нужно подсвечивать неактуальность текущего расчёта".  Throwing it away on
+    # (2026-09-06) is exactly that it survives: "if there are [results] — the
+    # last result gets loaded; if the current geometry changed — the current
+    # result's staleness needs to be highlighted".  Throwing it away on
     # a geometry edit would replace the badge with a blank page, which is the
     # bug, not the fix.  Every /last response carries the fingerprint it was
     # solved for so the staleness is stated rather than hidden.
@@ -276,9 +276,9 @@ def clear_mechanical_caches(reason: str = "") -> int:
 # ---------------------------------------------------------------------------
 # The LAST result, kept across tab switches and backend restarts
 # ---------------------------------------------------------------------------
-# User 2026-09-06: "когда я захожу и выхожу в Mechanical, графики пропадают.
-# Нужно, чтобы по умолчанию: если нет расчётов — рисуется просто геометрия;
-# если есть — подгружается последний расчёт".
+# User 2026-09-06: "when I go in and out of Mechanical, the charts disappear.
+# By default it should be: if there are no results — just draw the geometry;
+# if there are — load the last result".
 #
 # Same shape as the Simulation tab's last transient
 # (`routes.simulation._store_transient_field_snapshot`): one in-memory entry per
@@ -435,8 +435,8 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
         log.debug("mechanical: per-duty result not recorded", exc_info=True)
     # ── …and the STRESS FIELD itself, per duty (2026-09-09) ─────────────────
     # The row above is the table; the report also draws each duty's own von
-    # Mises map (user: *"давай сделаем сохранение всех полей моделирования, как
-    # электромагнитных, так и тепловых и механических"*).  ``duty_fields`` keeps
+    # Mises map (user: *"let's save all the simulation fields — electromagnetic,
+    # thermal, and mechanical alike"*).  ``duty_fields`` keeps
     # the mesh, the primary case's vm / principal / safety factor, the
     # displacement and the contact segments — ~0.31 MB compressed on the 200 mm
     # rotor, against the 4 MB the machine-level pickle costs.  ``modes`` keeps
@@ -691,15 +691,15 @@ def rotor_stress(
     side.  Since v2 they are three separate NONLINEAR solves: a separation
     contact opens and closes with the load, so nothing superposes.
 
-    ``cases=single`` solves only the one at ``rpm``.  User 2026-09-06: "давай
-    будем рассчитывать только на 23 000 оборотов — всё, что ниже, всяко выдержит,
-    и проще будет считать только одну величину".  The response SHAPE is
+    ``cases=single`` solves only the one at ``rpm``.  User 2026-09-06: "let's
+    only calculate at 23 000 rpm — anything lower will hold up fine anyway,
+    and it'll be simpler to compute only one value".  The response SHAPE is
     identical (``cases`` simply has one entry, keyed by the speed), so the maps,
     the persisted last result and every existing reader keep working.
 
     ``symmetry=sector`` (2026-09-09) solves ONE periodic sector instead of the
-    whole circle.  User: *"нагрузка на все зубы должна быть одинакова … так
-    используй периодичность, как я во Fusion"* — the two cut faces are tied by
+    whole circle.  User: *"the load on all teeth should be the same ... so
+    use periodicity, like I do in Fusion"* — the two cut faces are tied by
     ``u_B = R(2*pi/n) u_A``, so every pole is identical by construction and the
     stiffness matrix is ``n`` times smaller.  The response shape does not
     change: extensive numbers (masses, joint capacities, the bore reaction) are
@@ -710,8 +710,8 @@ def rotor_stress(
 
     ``magnet_temp_c`` / ``rotor_core_temp_c`` / ``shaft_temp_c`` (2026-09-08)
     give each solid its OWN temperature; ``sleeve_temp_c`` already did, and
-    ``rotor_temp_c`` stays the fallback for the three.  User: "в механический
-    расчёт тоже нужно делать каплинг, чтобы температуры везде были одинаковы" —
+    ``rotor_temp_c`` stays the fallback for the three.  User: "the mechanical
+    calculation also needs the coupling, so the temperatures are the same everywhere" —
     the Thermal solve reports a temperature per part, and the Mechanical solve
     should apply THOSE rather than two numbers retyped by hand.  Each one is in
     the cache key only when it was passed, so a request that names none is keyed
@@ -754,7 +754,7 @@ def rotor_stress(
                                    "with cyclic-symmetry ties)"}]})
 
     # ── which forces act (2026-09-07) ───────────────────────────────────────
-    # User: "сделай меню, чтобы можно было выбрать центробежную, момент и обе".
+    # User: "make a menu so centrifugal, torque, and both can be selected".
     load_mode = str(loads or "both").strip().lower()
     if load_mode not in rsm.LOAD_MODES:
         raise HTTPException(
@@ -940,8 +940,8 @@ def rotor_stress(
             # 40 mm's magnets sit in pockets with a gap above them, and a hub
             # on a fit-less, frictionless shaft opens under its own growth —
             # the contact set the user chose for the Ø200, whose iron lips DO
-            # hold the magnets, followed them onto both machines ("я везде
-            # сделал separation").  Rather than refuse a machine the user
+            # hold the magnets, followed them onto both machines ("I set
+            # separation everywhere").  Rather than refuse a machine the user
             # cannot tell apart from a working one, the joint that ran away is
             # solved BONDED and the answer says so, in the result and on the
             # panel (`contact_fallback`).  ONE joint per pass, in the order the
@@ -1064,8 +1064,8 @@ def rotor_stress(
 # ---------------------------------------------------------------------------
 # Limit speed — the rpm at which SF = 1 (or whatever target is asked for)
 # ---------------------------------------------------------------------------
-# Owner 2026-09-21: "нужно искать ещё максимальную скорость вращения, на
-# всякий случай — она будет, когда достигает SF = 1".  ``rotor_stress`` answers
+# Owner 2026-09-21: "we also need to find the maximum rotation speed, just
+# in case — it's where SF reaches 1".  ``rotor_stress`` answers
 # "is THIS speed safe"; this route answers the companion question everything
 # else about the case held fixed — same torque, contacts, interference,
 # temperatures, mesh, order — by bracketing and bisecting single-speed
@@ -1473,8 +1473,8 @@ def limit_speed(
 # ---------------------------------------------------------------------------
 # The coupled hook — one rotor-stress solve AT a given set of temperatures
 # ---------------------------------------------------------------------------
-# User 2026-09-08: "в механический расчёт тоже нужно делать каплинг, чтобы
-# температуры везде были одинаковы".  An orchestrator that has just solved the
+# User 2026-09-08: "the mechanical calculation also needs the coupling, so
+# the temperatures are the same everywhere".  An orchestrator that has just solved the
 # Thermal map needs to run the Mechanical solve at THOSE temperatures — and it
 # must run the same solve the button runs, not a private near-copy that drifts
 # the first time the button changes.
@@ -1530,8 +1530,8 @@ def _panel_float(settings: Dict[str, Any], key: str) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # The COUPLED LOOP'S OWN limit speed — automatic, cached, never manual
 # ---------------------------------------------------------------------------
-# Owner 2026-09-21: "нужно эту максимальную скорость обязательно добавлять в
-# отчёт" — every duty a coupled run saves must carry it, not only the ones a
+# Owner 2026-09-21: "this maximum speed absolutely needs to be added to the
+# report" — every duty a coupled run saves must carry it, not only the ones a
 # human pressed **Limit speed (SF = 1)** for.  Wired into `run_rotor_stress_at`
 # ONLY — the hook `routes/coupled.py` calls — so a plain interactive
 # `/rotor_stress` GET (the Mechanical tab's own Solve button) never pays this
@@ -1902,8 +1902,8 @@ def run_rotor_stress_at(temps: Dict[str, float],
                      or ps.get("symmetry") or "full"),
         geo=route_params.get("geo"),
     )
-    # THE LIMIT SPEED, AUTOMATIC (owner 2026-09-21: "нужно эту максимальную
-    # скорость вращения обязательно добавлять в отчёт").  Only here — the
+    # THE LIMIT SPEED, AUTOMATIC (owner 2026-09-21: "this maximum rotation
+    # speed absolutely needs to be added to the report").  Only here — the
     # coupled loop's own hook — never on a plain interactive Solve, and never
     # for a solve marked `record: false` (nobody will ever read it).
     if isinstance(out, dict):
@@ -1922,9 +1922,9 @@ def run_rotor_stress_at(temps: Dict[str, float],
 
 def run_modes_at(**route_params) -> Dict[str, Any]:
     """Solve the ring modes exactly as **Solve modes** on the Mechanical tab
-    does — THE HOOK the coupled orchestrator calls (2026-09-13, user: "при
-    каплинге чтобы всё решалось — и модальный, и частоты, чтобы к отчёту было
-    всё готово").
+    does — THE HOOK the coupled orchestrator calls (2026-09-13, user: "when
+    coupling runs, everything should be solved — the modal analysis and the
+    frequencies, so everything is ready for the report").
 
     No temperature enters: the modal model is bonded, unprestressed and reads
     none (its own ``assumptions`` string says so), so this hook is only about
@@ -2027,8 +2027,8 @@ def run_critical_speeds_at(**route_params) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Modal — 2-D in-plane modes, and the shaft's critical speeds
 # ---------------------------------------------------------------------------
-# Added 2026-09-05 for the user's request: "нам нужно сделать ещё модальный
-# анализ, чтобы понять все частоты — это очень важно для 20000 rpm".  Two
+# Added 2026-09-05 for the user's request: "we also need to do modal
+# analysis, to understand all the frequencies — that's very important for 20000 rpm".  Two
 # endpoints because they are two different models of two different things: the
 # ring modes of the iron (``/modes``) and the bending criticals of the shaft
 # line (``/critical_speeds``).  Neither runs on its own — both are a button.
@@ -2374,10 +2374,10 @@ def materials(geo: Optional[str] = Query(default=None)):
 # ---------------------------------------------------------------------------
 # What the tab was last showing, and the bare cross-section
 # ---------------------------------------------------------------------------
-# User 2026-09-06: "когда я захожу и выхожу в Mechanical, графики пропадают.
-# Нужно, чтобы по умолчанию: если нет расчётов — рисуется просто геометрия; если
-# есть — подгружается последний расчёт; если были изменения текущей геометрии —
-# нужно подсвечивать неактуальность текущего расчёта."
+# User 2026-09-06: "when I go in and out of Mechanical, the charts disappear.
+# By default it should be: if there are no results — just draw the geometry;
+# if there are — load the last result; if the current geometry changed — the
+# current result's staleness needs to be highlighted."
 #
 # Neither route SOLVES anything: /last is a lookup, /mesh is a mesher.  Solve
 # stays the only way to compute a stress, a mode or a critical speed.
@@ -2439,7 +2439,7 @@ def mesh(
 
     What the tab draws before anything has been computed, and since 2026-09-06
     also what the panel's **Build mesh** button calls: user, on the mechanical
-    mesh, "она строится отдельно, и ей тоже нужно как-то управлять".  The SAME
+    mesh, "it's built separately, and it needs some way to be controlled too".  The SAME
     mesher ``rotor_stress`` runs (``build_rotor_mesh``), so the picture on an
     empty tab is the picture the solve will colour in, down to the element edges
     — the Mesh and Part toggles therefore work before the first Solve — and the

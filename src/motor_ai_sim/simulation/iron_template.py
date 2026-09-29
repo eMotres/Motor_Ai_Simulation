@@ -1233,8 +1233,8 @@ def rotor_unit_blocks(p: Dict, density: float = 1.0) -> List[Tuple]:
     corner fillet (magnet_fill_radius) and rotor_fill_r are deferred (v2).
 
     The magnet TOP is the constant-radius row r_top of grid A, i.e. an arc on
-    the circle — which is what CadQuery now builds too (user 2026-09-06: "давай
-    по умолчанию сделаем только arc и уберём прямую вообще").  Until that day
+    the circle — which is what CadQuery now builds too (user 2026-09-06: "let's
+    make arc the only default and drop the straight chord entirely").  Until that day
     the CAD top was the straight chord between the two corners and this row sat
     a sagitta ABOVE it (0.615 mm on the Ø200), so `_snap_to_contours` and
     `_despike_tag` had to drag the whole top row down onto the chord on every

@@ -9,7 +9,7 @@
  * number when a request names none (simulation/eddy_steps.py).
  *
  * It is a DEFAULT: the picker stays visible and any count the user picks is the
- * one solved («должен быть всегда выбор»).  Optimizer screening keeps its own
+ * one solved («there should always be a choice»).  Optimizer screening keeps its own
  * count while the tab holds only this default (routes/optimization.py).
  *
  * Pure functions only — `lib/__tests__/eddySteps.test.mjs` restates them.

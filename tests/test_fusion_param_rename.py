@@ -86,7 +86,7 @@ def test_other_rows_referencing_stator_up_r_are_left_completely_untouched(tmp_pa
     # stator_mid_r is NOT one of the 33 -- its formula references stator_up_r,
     # which is never renamed, so this row needs NO changes at all: no
     # substitution, no parenthesising, no reformatting (owner, 2026-09-25:
-    # "формулы не меняй, только одну: stator_up_r = stator_diameter/2").
+    # "don't change the formulas, only this one: stator_up_r = stator_diameter/2").
     rows = [
         _row("stator_up_r", "6"),
         _row("slot_h", "1.842"),

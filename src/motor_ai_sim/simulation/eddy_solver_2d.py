@@ -579,7 +579,7 @@ def honest_rotor_eddy(
     # nobody is watching, which is exactly what it was.
     #
     # ── the k ≤ 16 harmonic ceiling and the 5e-4 amplitude floor are DELETED
-    # (owner 2026-09-24: "убираем все фильтры").  The ceiling was "measured
+    # (owner 2026-09-24: "we are removing all filters").  The ceiling was "measured
     # necessary" because without it the loss grew with the step count
     # (p2_load + rotor_eddy, 36 steps: 2.1325 W capped vs 2.3504 W uncapped).
     # That growth was not slip-band jitter: it was the OPEN one-period window.

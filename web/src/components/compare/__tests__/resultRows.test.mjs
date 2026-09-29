@@ -9,7 +9,7 @@
  *
  *   • EVERY component of the thermal payload becomes a `<part>_max`, including
  *     domains that did not exist when this file was written (the user asked for
- *     "все максимальные температуры всех частей мотора", and the backend grew
+ *     "all the maximum temperatures of every motor part", and the backend grew
  *     five new domains on 2026-09-07 alone);
  *   • a missing or empty result THROWS a sentence an engineer can act on,
  *     rather than storing a permanent row of dashes;

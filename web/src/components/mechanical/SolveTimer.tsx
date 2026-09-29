@@ -1,6 +1,6 @@
 /** How long a mechanical solve is taking, and how long the last one took.
  *
- * User 2026-09-06: "нужно добавить ещё индикатор времени расчёта".  A contact
+ * User 2026-09-06: "need another indicator for solve time".  A contact
  * solve on a fine mesh is a minute of silence with a spinner on it, and the two
  * questions that silence raises are "is it still going" and "how much longer".
  *

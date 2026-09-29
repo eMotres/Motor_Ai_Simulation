@@ -79,7 +79,7 @@ _jobs: Dict[str, Dict] = {}
 # override), which made its sweep points indistinguishable from the user's own
 # runs: a background loss-grid point (1.5·I0 @ 6000 rpm) persisted as the last
 # transient and REPLACED the card in the user's browser (measured live
-# 2026-08-25: "мощность упала, момент вырос, я ничего не трогал").  Solves
+# 2026-08-25: "power dropped, torque went up, I didn't touch anything").  Solves
 # made under this flag never persist and never touch the field-snapshot store.
 from contextvars import ContextVar as _CtxVar
 _BACKGROUND_RUN: "_CtxVar[bool]" = _CtxVar("background_run", default=False)
@@ -500,8 +500,8 @@ def update_sim_config(patch: SimConfigPatch):
         warn_deprecated("PATCH /api/simulation/config with v_bus/f_switch — the "
                         "PWM carrier and DC link are set in the Controller tab")
     # What the block says NOW — so the cache flush below can tell a real
-    # change from a re-save of the same values.  User 2026-09-07 ("опять то же
-    # самое… сколько можно повторять?"): a panel re-saved unchanged settings
+    # change from a re-save of the same values.  User 2026-09-07 ("the same
+    # thing again... how many times can this repeat?"): a panel re-saved unchanged settings
     # right after a run finished, this handler flushed every cache including
     # the fresh field snapshot, and the field view said "not solved".
     try:
@@ -2522,8 +2522,8 @@ def _fem_field2d_impl(
             # restart with the persisted snapshot reloaded.  Nothing is
             # solved behind a probe, so the choice is "the run's final frame,
             # labelled" or a blank view saying "press Re-solve"; the user's
-            # verdict on the blank view (2026-09-05: "ну почему ты это до сих
-            # пор не исправил?") settles it.  Same-machine check inside.
+            # verdict on the blank view (2026-09-05: "why haven't you fixed
+            # this yet?") settles it.  Same-machine check inside.
             _snap, _relaxed_diffs = _latest_run_snapshot(_probe_fields)
             if _snap is not None:
                 _relaxed_diffs = list(_relaxed_diffs) + [
@@ -2919,8 +2919,8 @@ _fem_transient_cache = _WSP.ws_map(
 # second press of Run with the same inputs returned the FIRST run's object —
 # same torque, same ripple, same `computed_at` — without touching the solver.
 # For an engineer that is not a cache hit, it is a Run that silently did
-# nothing (user, 2026-09-04: "у нас с ними постоянно жуткие проблемы, их нужно
-# очищать при каждом расчёте и обновлять").  The dict survives only as an
+# nothing (user, 2026-09-04: "we constantly have terrible problems with
+# these, they need to be cleared and refreshed on every calculation").  The dict survives only as an
 # OPT-IN memo for the iterative loops that re-enter this route many times
 # inside ONE request (the bus-coupling fixed point and the charge-max compass
 # search: they revisit the same operating point by construction and each
@@ -3046,7 +3046,7 @@ def _save_last_transient(sb_key: tuple, result: Dict, *,
         # later RESTORE shipped 725 MB of JSON that no browser could parse —
         # the user's card silently fell back to a stale localStorage summary
         # and showed the previous run's numbers (measured live 2026-09-01:
-        # "обновил страницу, так 0 и стоит" over a solved P_solid = 5.1 W).
+        # "reloaded the page, it's still showing 0" over a solved P_solid = 5.1 W).
         result = {k: v for k, v in result.items() if k != "frames"}
         tmp = _transient_store_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -3192,8 +3192,8 @@ _load_last_transient_field_snapshot()   # …and the run's field for the views
 # ═════════════════════════════════════════════════════════════════════════════
 #  RESULTS LEDGER — "have I already computed exactly this?"
 # ═════════════════════════════════════════════════════════════════════════════
-# User, 2026-09-05: «Не надо Recent runs — нужно просто сканировать результаты:
-# не совпадают ли они с уже проведёнными, хотя бы пока по этим параметрам.»
+# User, 2026-09-05: "We don't need Recent runs — we just need to scan the
+# results: whether they match ones already done, at least for these parameters for now."
 # He had set 667.4 A peak in the morning, computed, changed the current,
 # computed again, came back to 667.4 A with everything else untouched — and had
 # to sit through a solve whose answer was already on this disk.
@@ -3772,7 +3772,7 @@ def _charge_outer_loops(route_kwargs: dict, *, batt, mode_eff: str,
         }
         return res, block
 
-    # ── LOOP 2: "вся мощность в зарядку" ─────────────────────────────────
+    # ── LOOP 2: "all power to charging" ─────────────────────────────────
     if not charge_max:
         res, bus_block = _coupled()
         return _charge_attach(res, "bus_coupling", bus_block) if bus_block else res
@@ -4345,8 +4345,8 @@ def get_fem_transient(
     fresh:               bool  = False,   # ← "Start fresh" recomputes instead of serving the cache
     ledger:              bool  = True,    # ← may a STORED result with exactly this key answer the
                                           #   request instead of solving?  (user, 2026-09-05:
-                                          #   "просто сканировать результаты: не совпадают ли они с
-                                          #   уже проведёнными").  ON for the charts, which read the
+                                          #   "just scan the results: whether they match ones already
+                                          #   done").  ON for the charts, which read the
                                           #   summary and the series; the field-animation viewer
                                           #   sends false because it needs the per-frame fields,
                                           #   which the ledger deliberately never stores.
@@ -4489,7 +4489,7 @@ def get_fem_transient(
                                           #   modulation index.  Needs `battery`; PWM/voltage only.
     bus_iters:           int   = 4,       # ← cap on those outer iterations (each is a full transient)
     bus_tol_pct:         float = 0.1,     # ← convergence: |ΔV_bus| below this % of V_bus
-    charge_max:          bool  = False,   # ← "ВСЯ МОЩНОСТЬ В ЗАРЯДКУ": search (V₁, δ) for the
+    charge_max:          bool  = False,   # ← "ALL POWER TO CHARGING": search (V₁, δ) for the
                                           #   maximum charge power at THIS rpm, subject to
                                           #   |I_phase| ≤ I_phase_rms and I_charge ≤ i_charge_max.
                                           #   Seeded from v_phase_peak/v_delta_deg (the two-pass
@@ -4637,8 +4637,8 @@ def get_fem_transient(
     # it unchanged, so the two travel together wherever the question is "is
     # this a chopped bridge".
     _pwm_like = ("pwm_voltage", "inverter")
-    # ── THE PWM DRIVE IS THE CONTROLLER'S (owner 2026-09-24: «Это значение
-    # нужно задавать в контроллере; PWM нужно выкинуть из Electromagnetic») ──
+    # ── THE PWM DRIVE IS THE CONTROLLER'S (owner 2026-09-24: "This value
+    # needs to be set in the controller; PWM needs to be dropped from Electromagnetic") ──
     # The Simulation tab no longer holds a carrier or a DC link, so a
     # ``pwm_voltage`` request (a stored PWM run re-run from that tab) arrives
     # WITHOUT them and they are taken from the Controller here — the saved
@@ -5190,9 +5190,8 @@ def get_fem_transient(
     # ── RESULTS LEDGER — "this exact run already exists on disk" ─────────────
     # User, 2026-09-05: he set 667.4 A peak in the morning, ran, changed the
     # current, ran, came back to 667.4 A with nothing else touched — and had to
-    # re-solve a run whose answer was already stored.  «Не надо Recent runs —
-    # нужно просто сканировать результаты: не совпадают ли они с уже
-    # проведёнными».
+    # re-solve a run whose answer was already stored.  "We don't need Recent
+    # runs — we just need to scan the results: whether they match ones already done."
     #
     # This is NOT the in-memory memo coming back (`_memo_allowed` — a Run still
     # never reads that).  The difference is what makes it honest:
@@ -5383,8 +5382,8 @@ def get_fem_transient(
             # the Mesh tab); 1/4 1/2 solve the sector (1/4 is the UI default).
             # THE CURRENT SETPOINT IS THE TERMINAL (line) CURRENT — the three
             # leads between the machine and the inverter, in both connections
-            # (user 2026-09-12: "эти параметры задаются для 3 проводов, которые
-            # идут с мотора на инвертор").  The solver drives the WINDING, and
+            # (user 2026-09-12: "these parameters are set for the 3 wires
+            # that go from the motor to the inverter").  The solver drives the WINDING, and
             # in delta a winding carries the line current over sqrt(3): that
             # division happens HERE, once, so the field sees the ampere-turns
             # the inverter actually produces.  Star: winding = line, no-op.
@@ -5786,9 +5785,8 @@ def get_fem_transient(
             # the next run evicts them, so a report of a configuration with
             # several duties could draw one duty's |B| and loss maps and had to
             # say so in the caption.  The user asked for all of the solved
-            # fields to be kept — *"давай сделаем сохранение всех полей
-            # моделирования, как электромагнитных, так и тепловых и
-            # механических"* — so this run's mesh, |B|, loss density and demag
+            # fields to be kept — *"let's save all the simulation fields —
+            # electromagnetic, thermal, and mechanical alike"* — so this run's mesh, |B|, loss density and demag
             # coefficient are filed under the duty the catalog context names
             # (~0.31 MB compressed on the 200 mm machine).  Only here: this is
             # the one place a live-machine run's field is persisted at all, and
@@ -5801,8 +5799,8 @@ def get_fem_transient(
                     computed_at=_sbres.get("computed_at"))
             except Exception:      # noqa: BLE001 — never fails a run
                 log.debug("transient: per-duty field not stored", exc_info=True)
-        # Bench Ld/Lq ride with every live-machine run (user: "во время
-        # расчёта посчитай индуктивность" — no separate button).  Once per
+        # Bench Ld/Lq ride with every live-machine run (user: "compute the
+        # inductance during the calculation" — no separate button).  Once per
         # machine+connection: a cache hit costs a file read, a miss costs
         # ~45 s of three quick solves appended to this run.  Candidate evals
         # skip it — an optimizer must not pay 45 s per candidate.
@@ -6915,8 +6913,8 @@ def _mech_loss_fields(sbres: dict, *, geo_override: Optional[dict],
                       mass_components: Optional[list] = None) -> dict:
     """The MECHANICAL half of this run's loss picture, or ``{}``.
 
-    User, 2026-09-08: *"все потери должны передаваться в электромагнитный
-    расчёт"*.  Until today the bearing friction and the rotor windage were
+    User, 2026-09-08: *"all losses should be passed into the electromagnetic
+    calculation"*.  Until today the bearing friction and the rotor windage were
     computed in the BROWSER, from ``/api/bearings/losses``, and pasted into four
     cells of the summary table; the run that was stored — the thing the
     datasheet, the report, Compare and the coupled loop read — carried none of
@@ -7180,7 +7178,7 @@ def _build_transient_summary(
         # two phase voltages.  Delta: the winding IS the line, minus its
         # zero-sequence part — the triplen EMF drives the circulating current
         # round the closed loop and never reaches the terminals (user
-        # 2026-09-12: "в дельте линейные должны быть равны фазным").  Both
+        # 2026-09-12: "in delta the line values must equal the phase values").  Both
         # are what the DC bus has to cover; sqrt(3)x a phase peak is neither.
         if _is_delta:
             _v0 = (_va + _vb + _vc) / 3.0
@@ -7408,7 +7406,7 @@ def _build_transient_summary(
             # them: at γ ≠ 0 on a salient rotor the measured torque carries
             # 1.5·p·(Ld−Lq)·i_d·i_q, and a PM-only reference put that term in
             # the numerator alone — the koef read 101.6 % on the 85 mm at
-            # γ = 2° (user 2026-09-01: "не может быть больше 100%").  With the
+            # γ = 2° (user 2026-09-01: "can't be more than 100%").  With the
             # bench reluctance inside, the ratio measures IRON SATURATION
             # alone; a saturated machine sits below its unsaturated linear
             # twin by construction, and the clamp below covers the fallback
@@ -7503,8 +7501,8 @@ def _build_transient_summary(
         # "the current this point was set to".  (The builder's `I_phase_rms`
         # argument is the WINDING current the field was driven with; in delta
         # they differ by sqrt(3), and a summary carrying the winding value here
-        # left the card permanently "stale" — user 2026-09-12: "экран так и
-        # остаётся замыленным".)
+        # left the card permanently "stale" — user 2026-09-12: "the screen just
+        # stays fuzzy".)
         "I_phase_rms_A": round(float(I_phase_rms) * (_sq3 if _is_delta else 1.0), 2),
         "I_terminal_rms_A": round(float(I_phase_rms) * (_sq3 if _is_delta else 1.0), 2),
         # WINDING current — what the field saw, what J coil and Kt per winding
@@ -7704,9 +7702,9 @@ def _build_transient_summary(
         "P_loss_total_W": round(_ploss, 1),
         # Mean |B| over the AIR-GAP clearance, averaged over the period — the
         # number a machine is sized on before anything else, and the one the
-        # summary never carried (user 2026-09-10: "для электромагнитного
-        # анализа надо ещё рассчитывать среднее поле в зазоре и писать это
-        # число в таблицу").  Area-weighted over the elements between the
+        # summary never carried (user 2026-09-10: "for the electromagnetic
+        # analysis we also need to compute the mean field in the gap and
+        # write that number into the table").  Area-weighted over the elements between the
         # outermost rotating metal and the stator bore, so it is a mean of the
         # field and not of the mesh.  Absent (None) on a result solved before
         # the feature, which is what keeps a stale card from printing a zero.
@@ -7752,8 +7750,8 @@ def _build_transient_summary(
         "wire_split": int(_wsplit),
         "cu_ac_solved_ignores_wire_split": False,
         "P_solid_W":    round(_Pmag + _Pshaft + _Psleeve, 1),  # magnet + shaft + sleeve eddy
-        # The two big solid conductors on their own (user 2026-09-07: "добавь
-        # потери в валу"): the shaft eddy loss is the rotor's largest single
+        # The two big solid conductors on their own (user 2026-09-07: "add
+        # losses in the shaft"): the shaft eddy loss is the rotor's largest single
         # heat source on a sleeved machine, and a card that only showed their
         # sum could not say so.
         "P_mag_W":      round(_Pmag, 1),
@@ -7820,8 +7818,8 @@ def _build_transient_summary(
         # Did this run CONTINUE a previous one's state instead of solving it?
         # Both are False on every interactive Run by construction — the flag
         # that allows it (SB_SEED_FROM_PREVIOUS) is set only in the optimizer's
-        # eval environment (user 2026-09-06, "каждый следующий расчёт берётся
-        # из предыдущего", which is a rule about sweeps).  Carried anyway, so a
+        # eval environment (user 2026-09-06, "each next calculation is seeded
+        # from the previous one", which is a rule about sweeps).  Carried anyway, so a
         # saved simulation states it rather than leaving it to be assumed.
         "warm_seeded": bool(sbres.get("warm_seeded", False)),
         "demag_seeded": bool(sbres.get("demag_seeded", False)),

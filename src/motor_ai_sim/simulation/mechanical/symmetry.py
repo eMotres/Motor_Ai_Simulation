@@ -2,8 +2,8 @@
 
 Written 2026-09-09 for the user's request:
 
-    "нагрузка на все зубы должна быть одинакова … так используй периодичность,
-     как я во Fusion"
+    "the load on all teeth should be the same ... so use periodicity, like I
+     do in Fusion"
 
 In Fusion he meshes a single pole sector of the rotor and ties its two cut
 faces with a cyclic-symmetry boundary condition.  The wedge then behaves as if

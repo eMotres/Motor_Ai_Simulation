@@ -1,7 +1,7 @@
 """The motor report as a Microsoft Word document — the default export.
 
-User, 2026-09-09: *"репорт лучше выдавать в формате doc"*, and again *"выводи
-всё-таки в doc формате"*.  He edits the document before it goes to a client —
+User, 2026-09-09: *"better to output the report in doc format"*, and again
+*"output it in doc format after all"*.  He edits the document before it goes to a client —
 a paragraph rewritten for that customer, a section dropped, the company's own
 letterhead put on it — and Word makes its own PDF at the end of that.  A PDF is
 the last step of a document, not the first, so ``format=docx`` is what the route
@@ -61,8 +61,8 @@ def _ink(level: str) -> str:
 
 #: Picture width — THE WHOLE TEXT WIDTH.  A landscape A4 with 1.5 cm margins
 #: leaves 26.7 cm, and every figure now takes all of it (user 2026-09-14:
-#: *"рисунки делай побольше, раздвигай на всю ширину страницы, для всех, чтобы
-#: одинаково было"*).  At the old 16.5 cm a paired figure was two 8 cm pictures
+#: *"make the pictures bigger, stretch them to the full page width, for all
+#: of them, so it's consistent"*).  At the old 16.5 cm a paired figure was two 8 cm pictures
 #: with 10 cm of margin beside them, and half of each of those was a legend.
 PAGE_TEXT_CM = 26.7
 PIC_CM = PAGE_TEXT_CM
@@ -236,7 +236,7 @@ def _rich(par, text: str, **kw):
 
 
 #: EVERY run of text outside a table is scaled by this (user 2026-09-11:
-#: "увеличь весь шрифт, не только в таблицах, пропорционально").  The tables
+#: "increase the whole font, not just in tables, proportionally").  The tables
 #: had already been raised by hand twice at the user's request and sit where
 #: they should; this brings the paragraphs, captions and headings up to meet
 #: them without retyping forty call sites.  9 pt body -> ~10, 15 pt heading ->
@@ -322,8 +322,8 @@ def _looks_numeric(s: str) -> bool:
     return bool(_NUM.match(s))
 
 
-#: TABLE TYPE IS 9.5 pt, not 8 (user 2026-09-10: "увеличь немного шрифт во всех
-#: таблицах, очень уж мелко смотрится").  The document is read on a screen and
+#: TABLE TYPE IS 9.5 pt, not 8 (user 2026-09-10: "increase the font a bit in
+#: all the tables, it looks too small").  The document is read on a screen and
 #: printed on A4; 8 pt in a shaded grid is at the edge of comfortable for both,
 #: and this report is meant to be read rather than skimmed.
 
@@ -374,7 +374,7 @@ def _table(doc, rows: Sequence[Sequence[Any]], *, header: bool = True,   # doc O
             elif (i - (1 if header else 0)) % 2 == 1:
                 _shade(cell, GREY)
             # EVERY value cell right-aligned, words included, header included
-            # (user 2026-09-11: "во всех таблицах сделай alignment right").
+            # (user 2026-09-11: "make alignment right in all tables").
             # Right-aligning only the numbers left "yes", "thermal" and "—"
             # hugging the left edge of a column whose numbers hugged the right,
             # and a column that reads in two directions is not a column.  The
@@ -437,8 +437,8 @@ def _table_with_chart(doc, rows, png: Optional[bytes], *,
                       widths_cm=None, size: float = 10.5) -> bool:
     """A data table with its chart BESIDE it, not under it.
 
-    User 2026-09-11: *"круговую диаграмму всех потерь справа от таблицы — будет
-    гораздо наглядней"*.  Word has no float, so the pair goes into one
+    User 2026-09-11: *"a pie chart of all the losses to the right of the
+    table — it'll be much clearer"*.  Word has no float, so the pair goes into one
     borderless 1x2 frame: the real table is built inside the left cell and the
     picture dropped into the right.  Falls back to the plain stacked layout
     when there is no chart, so a run that stored nothing to draw still reads.
@@ -738,8 +738,8 @@ def _cover(doc, D: Dict[str, Any]) -> None:
             % (D["em_src"] or "— nothing solved yet"),
        size=9.5, italic=True, color=NOTE, space_after=10.0)
 
-    # THE PACK the voltage limit comes from (user 2026-09-10: "нигде не нашёл
-    # информацию про батарейку и лимиты напряжения").
+    # THE PACK the voltage limit comes from (user 2026-09-10: "couldn't find
+    # any information about the battery and the voltage limits anywhere").
     _brows = R.battery_rows(D["batt"])
     _h(doc, "Battery and the voltage limit", 1)
     if len(_brows) > 1:
@@ -777,8 +777,8 @@ def _machine(doc, D: Dict[str, Any]) -> None:
     png = None
     try:
         from motor_ai_sim.datasheet import _render_cross_section
-        # Full page width, and rendered to match (user 2026-09-10: "картинку
-        # машины нужно сделать побольше, чтобы были видны катушки").  At 8 cm
+        # Full page width, and rendered to match (user 2026-09-10: "the
+        # machine picture needs to be bigger, so the coils are visible").  At 8 cm
         # the slot fill was a smudge; the coils are the point of this drawing.
         png = _render_cross_section(R.thumb_svg_for(D["die_doc"]),
                                     px=2000)
@@ -1702,8 +1702,8 @@ def _mech_detail(doc, D: Dict[str, Any]) -> None:
 def _warnings(doc, D: Dict[str, Any]) -> None:
     """Every duty against every limit, with what to do about it — one table.
 
-    User, 2026-09-09: *"нужно делать предупреждения, если что-то близко к
-    пределам, и предложения, как этого избежать"*.  In Word the remedy is a
+    User, 2026-09-09: *"we need to raise warnings when something is close to
+    the limits, and suggestions for how to avoid it"*.  In Word the remedy is a
     sixth COLUMN rather than a paragraph list under the table: a cell wraps, and
     the reader who is going to act on a row wants the fix beside the number, not
     two pages further down.  The row is coloured by its level — red is over,

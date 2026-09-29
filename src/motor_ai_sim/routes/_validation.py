@@ -376,19 +376,18 @@ SCHEMA_DESCRIPTION_OVERRIDE: Dict[str, str] = {
 #: already in the geometry section), not read by anything.
 #:
 #: magnet_top ("flat" | "arc") lived for a few hours on 2026-09-06 before the
-#: user removed the flat top entirely — "давай по умолчанию сделаем только arc
-#: и уберём прямую вообще".  The magnet top is now always the arc on
+#: user removed the flat top entirely — "let's make arc the only default and
+#: drop the straight chord entirely".  The magnet top is now always the arc on
 #: r = rotor_or − magnet_up_gap.
 # `shaft_diameter` (2026-09-07): never read by any builder, solver, mass or
 # cost function — the shaft is rotor_inner_radius / shaft_height; the field only
-# confused the user ("что означает это?").  Dropped from the form; old dies and
+# confused the user ("what does this mean?").  Dropped from the form; old dies and
 # presets still carry the key and must still load.
 # `wire_split_series` (0/1) lived for a few hours on 2026-09-08: it chose
 # whether a wire_split row's strips were parallel strands or series turns.  The
-# user removed the parallel reading the same day ("wire_split_series можно
-# убрать — нам всегда будет нужно только последовательное подключение этих двух
-# катушек; при параллельном подключении возникнут компенсационные токи между
-# ними"), so the strips are ALWAYS series turns and the flag has no meaning.
+# user removed the parallel reading the same day ("wire_split_series can be
+# removed — we'll always only need the series connection of these two coils;
+# a parallel connection would create circulating currents between them"), so the strips are ALWAYS series turns and the flag has no meaning.
 # Accepted and dropped, like the two above — a die or sweep config saved inside
 # that window must not 422 on a field the user can no longer see.
 RETIRED_GEOMETRY_KEYS: frozenset = frozenset({"magnet_top", "shaft_diameter",

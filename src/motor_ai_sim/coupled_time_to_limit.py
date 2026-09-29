@@ -1,7 +1,7 @@
 """HOW LONG MAY IT RUN? — the coupled loop's answer when a part is over its limit.
 
-WHY THIS MODULE EXISTS (owner, 2026-09-17: *«для каплинга: если где-то выходим за
-лимиты, нужно посчитать время, за какое мотор проработает до этого лимита»*)
+WHY THIS MODULE EXISTS (owner, 2026-09-17: *"for the coupling: if we exceed the
+limits somewhere, we need to compute how long the motor will run before hitting that limit"*)
 =============================================================================
 The coupled EM↔thermal loop answers a question about the STEADY state: held at
 this operating point for ever, the winding settles at 214 °C.  When that number
@@ -443,7 +443,7 @@ def limited_line(block: Optional[Mapping[str, Any]], *,
     Owner, 2026-09-18: the reported machine is the one AT the limit, and the
     line has to say what that state IS — *«Runs 24 s from cold, then the winding
     reaches 200 °C»* — plus (addendum, same day) the two things the answer is
-    conditional on: *«при заданной мощности и заданном охлаждении»*.  One
+    conditional on: *"at a given power and given cooling"*.  One
     sentence, the cooling MODE in the tooltip rather than in it.
     """
     lim = limiting(block)

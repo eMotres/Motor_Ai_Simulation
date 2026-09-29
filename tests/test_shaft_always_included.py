@@ -1,4 +1,4 @@
-"""Owner rule 2026-09-29: «во всех моторах вал должен участвовать» — the
+"""Owner rule 2026-09-29: «in every motor the shaft must be included» — the
 shaft part-state must always resolve to ``included``, no matter what a
 config file, a ``?mat=`` request or a stale saved config says.
 

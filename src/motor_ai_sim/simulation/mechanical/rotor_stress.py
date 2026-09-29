@@ -1,9 +1,9 @@
 """Rotor centrifugal stress & deformation — 2-D plane-stress linear elasticity.
 
-Written 2026-09-05 for the user's request: "нам нужно сделать механический
-модуль расчётов — начнём с расчёта центробежных сил ротора ... чтобы оценить
-какой бандаж нужен для удержания магнитов и ротора, то есть рассчитывать все
-напряжения и деформации".  In other words: size the retaining sleeve.
+Written 2026-09-05 for the user's request: "we need to build a mechanical
+calculation module — let's start with the rotor centrifugal force
+calculation ... to estimate what band is needed to retain the magnets and
+the rotor, that is, compute all the stresses and deformations".  In other words: size the retaining sleeve.
 
 WHAT IS SOLVED
 --------------
@@ -45,8 +45,8 @@ MODELLING ASSUMPTIONS — read these before trusting a number
   stress concentration appears anywhere.  The centrifugal load on a rotor is
   self-equilibrated, so this is well posed.
 * CYCLIC SYMMETRY, optional (2026-09-09, ``symmetry="sector"``).  User:
-  "нагрузка на все зубы должна быть одинакова … так используй периодичность,
-  как я во Fusion".  One periodic sector of ``n`` is solved instead of the whole
+  "the load on all teeth should be the same ... so use periodicity, like I
+  do in Fusion".  One periodic sector of ``n`` is solved instead of the whole
   circle, with the two cut faces tied by ``u_B = R(2*pi/n) u_A`` — every pole
   then carries an identical load by construction and the matrix is ``n`` times
   smaller (28 on the G2-L40).  ``symmetry="full"`` is the default and is the
@@ -193,8 +193,8 @@ def runaway_verdict(u_max_m: float, r_out_m: float, free_parts: List[str],
     # glued the MAGNETS — which hands their whole centrifugal load to the iron
     # and turns the answer from 421 µm / 1717 MPa in the band into 13 µm /
     # 220 MPa.  A design read as safe because the wrong joint was glued is the
-    # one failure this fallback must never produce (user: "так у нас всё
-    # раздельно").  A part with no separation joint of its own — nothing to
+    # one failure this fallback must never produce (user: "so ours is all
+    # separated").  A part with no separation joint of its own — nothing to
     # bond — leaves the choice to the open-fraction rule, and the refusal
     # stands.
     def _joint_of(part: str) -> Optional[tuple]:
@@ -239,9 +239,9 @@ class PartMech:
     # Orthotropic extras (sleeve).  None -> isotropic.
     E_transverse: Optional[float] = None            # Pa, radial (across fibres)
     G: Optional[float] = None                       # Pa, in-plane shear
-    #: THERMAL EXPANSION, 1/K — added 2026-09-07 for the user's "нужно
-    #: универсально добавить температуру ротора, чтобы можно было задавать; для
-    #: моторов без бандажа этот эффект вообще минимальный".  ``cte_1`` is the
+    #: THERMAL EXPANSION, 1/K — added 2026-09-07 for the user's "we need to
+    #: add rotor temperature universally, so it can be set; for motors
+    #: without a band this effect is minimal anyway".  ``cte_1`` is the
     #: coefficient along MATERIAL AXIS 1 — the same axis ``part_C`` builds the
     #: stiffness in: the fibre = hoop direction of a wound sleeve, the
     #: MAGNETISATION direction of a magnet.  ``cte_2`` is the transverse one;
@@ -510,9 +510,8 @@ def part_C(pm: PartMech, centroid_angle: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Thermal strain, as an eigenstrain
 # ---------------------------------------------------------------------------
-# Added 2026-09-07.  User: "нужно универсально добавить температуру ротора,
-# чтобы можно было задавать; для моторов без бандажа этот эффект вообще
-# минимальный".
+# Added 2026-09-07.  User: "we need to add rotor temperature universally, so
+# it can be set; for motors without a band this effect is minimal anyway".
 #
 # WHY IT IS AN EIGENSTRAIN AND NOT A LOAD.  The solver already carries one
 # stress-free strain — the sleeve's interference — through exactly the same
@@ -529,8 +528,8 @@ def part_C(pm: PartMech, centroid_angle: np.ndarray) -> np.ndarray:
 # along its fibres while the iron under it grows at 12 ppm/K.  Heat the rotor
 # and the interference — and with it the sleeve hoop stress — GROWS.  Without a
 # band a uniformly heated free rotor only carries the small iron/magnet
-# CTE-mismatch stress, which is the user's "для моторов без бандажа этот эффект
-# вообще минимальный".
+# CTE-mismatch stress, which is the user's "for motors without a band this
+# effect is minimal anyway".
 #
 # 2026-09-09 — AND IT IS THE ONLY POINT.  The per-part eigenstrain is no longer
 # put into the main solve at all (``solve_rotor_stress(thermal_model=
@@ -934,8 +933,8 @@ class RotorMesh:
 # ---------------------------------------------------------------------------
 # The mesh memo
 # ---------------------------------------------------------------------------
-# User 2026-09-06: "по поводу сетки — как я понял, она строится отдельно, и ей
-# тоже нужно как-то управлять".  The panel now has a Build mesh button, so the
+# User 2026-09-06: "about the mesh — as I understand it, it's built
+# separately, and it needs some way to be controlled too".  The panel now has a Build mesh button, so the
 # same rotor gets meshed by the /mesh route and then again by the very next
 # Solve — twice the gmsh seconds for one identical answer.  This memo keys the
 # built mesh on the SOLIDS themselves (a hash of the polygon WKB) plus the three
@@ -1505,9 +1504,9 @@ def _normal_traction(sigma: np.ndarray, elems: np.ndarray,
 # ---------------------------------------------------------------------------
 # The ELECTROMAGNETIC TORQUE, as an air-gap shear
 # ---------------------------------------------------------------------------
-# Added 2026-09-07 for the user's request: "добавь ещё и момент на ротор, пусть
-# действуют все силы; сделай меню, чтобы можно было выбрать центробежную, момент
-# и обе."  The design behind it is a spoke rotor whose iron bridges are there for
+# Added 2026-09-07 for the user's request: "also add torque on the rotor,
+# let all the forces act; make a menu so centrifugal, torque, and both can be
+# selected."  The design behind it is a spoke rotor whose iron bridges are there for
 # assembly only — they yield on the first spin-up — after which each pole is held
 # TANGENTIALLY by nothing but friction against the sleeve and the magnets.  So
 # the question is not "does the sleeve hold the poles down" (the centrifugal
@@ -1578,7 +1577,7 @@ SPIN_LOAD_STEPS = 6
 #: not the 30-iteration cap.  The cap multiplied out — 30 per case plus 30 per
 #: possible lift-off solve — opened the bar on 212 steps for a rotor that
 #: converged in 20 and quoted an ETA ten times too long (user 2026-09-07:
-#: "зачем столько шагов?").  A solve that needs more than the estimate GROWS
+#: "why so many steps?").  A solve that needs more than the estimate GROWS
 #: the bar (StepLedger.grow); one that needs fewer hands the rest back.
 _LEARNED_CONTACT_ITER = {"iters": 8}
 
@@ -1890,8 +1889,8 @@ def _retention(cs, sol, forces: Dict[str, Any], present: Dict[str, np.ndarray],
 
     ``seated`` (2026-09-09) is the contact solve's seating record.  A magnet that
     came loose and TRAVELLED onto its lip is retained by that lip, and the
-    verdict has to say so with the distance: "магнит должен сесть на язычок, как
-    в Fusion" — the number the user compares with Fusion's 0.078 mm is the
+    verdict has to say so with the distance: "the magnet should seat on the
+    tongue, like in Fusion" — the number the user compares with Fusion's 0.078 mm is the
     travel, and burying it in a nested contact block would leave the headline
     reading like an ordinary clamp.
     """
@@ -2088,7 +2087,7 @@ def _torque_path(ifaces: Dict[str, Any], torque_nm: float, sol,
     clamped = {lb: v for lb, v in uni.items() if v["friction_capacity_nm"] > 0}
     if not clamped:
         # No FRICTION path.  Two different situations, told apart by µ
-        # (2026-09-09, user: "можно же считать с нулевым трением?"):
+        # (2026-09-09, user: "can we just compute with zero friction?"):
         #   * µ = 0 on every joint that carries pressure — a spoke magnet's
         #     pocket walls are form-locked, the torque crosses them as NORMAL
         #     pressure, and there is simply no slip question to grade.  The
@@ -2175,17 +2174,17 @@ def solve_rotor_stress(polys: dict,
     ``contacts`` is a ``{label: ContactSpec}`` map; ``None`` means the defaults.
 
     ``case_mode`` (2026-09-06) picks how many of them are actually solved.  User:
-    "давай будем рассчитывать только на 23 000 оборотов — всё, что ниже, всяко
-    выдержит, и проще будет считать только одну величину".  ``"single"`` solves
+    "let's only calculate at 23 000 rpm — anything lower will hold up fine
+    anyway, and it'll be simpler to compute only one value".  ``"single"`` solves
     ONE case, at ``rpm``, named by its speed ("23,000 rpm"); ``"three"`` is the
     original standstill / rated / overspeed and stays the default so every
     existing caller keeps its answer.  The response shape does not change — the
     ``cases`` dict simply has one entry — so the maps, the safety factors and the
     persisted last result read a single-speed answer without knowing about it.
 
-    ``loads`` (2026-09-07) picks WHICH forces act.  User: "добавь ещё и момент на
-    ротор, пусть действуют все силы; сделай меню, чтобы можно было выбрать
-    центробежную, момент и обе."
+    ``loads`` (2026-09-07) picks WHICH forces act.  User: "also add torque on
+    the rotor, let all the forces act; make a menu so centrifugal, torque,
+    and both can be selected."
 
       * ``centrifugal`` — rho*omega^2*r only, the model as it was.  The rotor
         floats: only the rigid-body modes are removed, no node is held.
@@ -2207,8 +2206,8 @@ def solve_rotor_stress(polys: dict,
     is no centrifugal clamp yet to press the poles into the sleeve.
 
     ``rotor_temp_c`` / ``sleeve_temp_c`` (2026-09-07) are the ROTOR TEMPERATURE.
-    User: "нужно универсально добавить температуру ротора, чтобы можно было
-    задавать; для моторов без бандажа этот эффект вообще минимальный".  The
+    User: "we need to add rotor temperature universally, so it can be set;
+    for motors without a band this effect is minimal anyway".  The
     first covers the rotor core, the magnets and the shaft, the second the
     sleeve — they are given separately because on a real machine they are not
     the same number: the iron carries the loss, the carbon band is on the
@@ -2216,9 +2215,9 @@ def solve_rotor_stress(polys: dict,
     is the state the geometry as drawn is stress-free in, so a request that
     says nothing about temperature solves exactly the machine it always did.
 
-    HOW THE TEMPERATURES ACT — ``thermal_model`` (2026-09-09).  User: "нам нужно
-    учитывать температуру только как изменение давления на бандаж, если он
-    есть".  Under the default ``"band_fit"`` the rotor's temperature is NOT a
+    HOW THE TEMPERATURES ACT — ``thermal_model`` (2026-09-09).  User: "we only
+    need to account for temperature as a change in pressure on the band, if
+    there is one".  Under the default ``"band_fit"`` the rotor's temperature is NOT a
     load on its parts: the per-part free strains (``thermal_eigenstrain``) are
     used for one thing only — how much what sits under the band would grow on
     its own against how much the band's own bore grows — and that difference is
@@ -2238,8 +2237,8 @@ def solve_rotor_stress(polys: dict,
 
     ``part_temps_c`` (2026-09-08) gives EACH solid its own temperature, keyed by
     ``PART_TEMP_KEY`` — ``rotor_core``, ``magnet``, ``shaft``, ``sleeve``, the
-    same vocabulary the material assignment uses.  User: "в механический расчёт
-    тоже нужно делать каплинг, чтобы температуры везде были одинаковы" — the
+    same vocabulary the material assignment uses.  User: "the mechanical
+    calculation also needs the coupling, so the temperatures are the same everywhere" — the
     Thermal solve already produces a temperature per part, and typing two of
     them back in by hand is how the two solvers drift apart.  A key that is
     absent keeps the OLD rule exactly (``rotor_temp_c`` for core / magnet /
@@ -2255,8 +2254,8 @@ def solve_rotor_stress(polys: dict,
     show that at all.
 
     ``symmetry`` (2026-09-09) picks the MODEL, not a view of it.  User:
-    *"нагрузка на все зубы должна быть одинакова … так используй периодичность,
-    как я во Fusion"*.
+    *"the load on all teeth should be the same ... so use periodicity, like I
+    do in Fusion"*.
 
       * ``"full"``   — the whole 360° cross-section, exactly as before.  Every
         number, every cache key and every array is what it was; this is the
@@ -2474,8 +2473,8 @@ def solve_rotor_stress(polys: dict,
     # 2026-09-09: under the default ``band_fit`` model this array is NOT put
     # into the solve.  It is used to measure the fit at temperature (below),
     # and the solve carries that fit as the band's interference — the user's
-    # rule, "температура только как изменение давления на бандаж, если он
-    # есть".  ``free_expansion`` sums it onto the interference one as before.
+    # rule, "temperature only as a change in pressure on the band, if there
+    # is one".  ``free_expansion`` sums it onto the interference one as before.
     #
     # THE FRAME.  Axis 1 of every card is the same axis ``part_C`` builds the
     # stiffness in, so the two can never disagree:
@@ -2773,8 +2772,8 @@ def solve_rotor_stress(polys: dict,
         # ``TORQUE_LOAD_STEPS`` increments from that seated state.  Coulomb
         # friction has a history and not a value, and on the G2's self-locking
         # wedge applying the whole traction at once let the active set choose a
-        # locked state carrying seven times the load (user: "получается, что от
-        # момента больше деформации, чем от вращения?" — no; see the load-path
+        # locked state carrying seven times the load (user: "so torque causes
+        # more deformation than rotation?" — no; see the load-path
         # section of ``contact``).  With loads='centrifugal' there is no ramp and
         # the solve is one step, exactly the arithmetic it always ran.
         f = f_rot * (omega ** 2 * k * float(use_centrifugal)) + f_eig
@@ -2808,8 +2807,8 @@ def solve_rotor_stress(polys: dict,
         # was believed to hold the magnets.  The same case FRICTIONLESS
         # converges in eight iterations at 1,688 MPa and 419 µm, and the case
         # with the torque (which is ramped) converges at 1,717 and 421.  The
-        # user caught the pair: "не может такого быть, чтобы при только
-        # центробежной силе деформации были больше, чем ещё и при моменте".
+        # user caught the pair: "that can't be right, that centrifugal force
+        # alone gives more deformation than with torque added too".
         #
         #   1. walk the spin on in ``SPIN_LOAD_STEPS`` — kept ONLY if it
         #      actually converges, because a second unsettled state is not an
@@ -2923,9 +2922,9 @@ def solve_rotor_stress(polys: dict,
 
     # -- AVERAGED, the way every other FE tool reports a stress --------------
     #
-    # User 2026-09-10: "как нам теперь объяснять пользователям эти две разные
-    # цифры 1728 и 1426? нас не поймут, везде и в Ansys и Fusion полное
-    # соответствие" — and they are right, so the convention is now theirs.
+    # User 2026-09-10: "how are we supposed to explain these two different
+    # numbers, 1728 and 1426, to users now? nobody will understand it, in
+    # Ansys and Fusion it's always in full agreement" — and they are right, so the convention is now theirs.
     #
     # ANSYS and Fusion report a stress on the NODES of an averaged plot: each
     # element's constant value is area-averaged onto the nodes it touches,
@@ -2987,7 +2986,7 @@ def solve_rotor_stress(polys: dict,
 
     # ── how much AIR GAP is left when the rotor has grown into it ───────────
     #
-    # User 2026-09-10: *"не забудь добавить в отчёт, как меняется зазор"*.  The
+    # User 2026-09-10: *"don't forget to add to the report how the gap changes"*.  The
     # clearance is the number that decides whether the machine rubs, and until
     # now the report carried only the growth — the reader had to subtract by
     # hand, on a machine where the gap and the band thickness are two different
@@ -3329,9 +3328,9 @@ def solve_rotor_stress(polys: dict,
                            for s in sol.seated],
             },
             "rotor_od_growth_um": float(ur[od_case].max()) * 1e6,
-            # …and the same surface spelled out (user 2026-09-10: "нужно ещё
-            # считать максимальное радиальное смещение верха бандажа как
-            # отдельное число в таблице").  This is the surface that faces the
+            # …and the same surface spelled out (user 2026-09-10: "we also
+            # need to compute the maximum radial displacement of the band's
+            # top as a separate number in the table").  This is the surface that faces the
             # stator — the band's outside when there is one, the iron's when
             # there is not — so its radial motion is what eats the MECHANICAL
             # clearance (air gap minus the band).  The maximum is the number
@@ -3514,8 +3513,8 @@ def solve_rotor_stress(polys: dict,
         "has_sleeve": has_sleeve,
         "stack_length_mm": float(stack_length_mm or 0.0),
         # ── the rotor temperature (2026-09-07) ──────────────────────────────
-        # User: "нужно универсально добавить температуру ротора, чтобы можно
-        # было задавать".  `active` is False for a 20/20 °C request, which is
+        # User: "we need to add rotor temperature universally, so it can be
+        # set".  `active` is False for a 20/20 °C request, which is
         # the machine as drawn and as every earlier answer solved it.
         "thermal": {
             "rotor_temp_c": rotor_temp_c,
@@ -3672,7 +3671,7 @@ def _replicate_field(fld: Dict[str, Any], n: int) -> Dict[str, Any]:
         radial, first principal, the safety factor) are INVARIANTS — tiled
         unchanged.  That every sector then reads the identical number is not an
         approximation of the answer, it IS the answer: the user asked for a
-        model in which "нагрузка на все зубы должна быть одинакова".
+        model in which "the load on all teeth should be the same".
     """
     from motor_ai_sim.simulation.mechanical import symmetry as sym
 

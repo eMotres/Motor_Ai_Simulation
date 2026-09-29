@@ -79,7 +79,7 @@ def identities(monkeypatch):
             return None
         email = authorization.split(" ", 1)[1].strip().lower()
         return {"uid": f"uid-{email}", "email": email,
-                "tier": "admin" if email == "admin@example.com" else "free"}
+                "role": "admin" if email == "admin@example.com" else "user"}
 
     monkeypatch.setattr(auth, "resolve_user", _fake_resolve)
 

@@ -71,7 +71,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(E, "send", fake_send)
     delivered: list = []
     monkeypatch.setattr(E, "deliver", lambda msg: delivered.append(msg))
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
     yield {"U": U, "N": N, "E": E, "A": A, "outbox": outbox,
            "delivered": delivered, "mp": monkeypatch}
     E.reset_limits()
@@ -90,13 +90,13 @@ def _login(email, pw, ip="203.0.113.5"):
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
-def _user(env, email, tier="free"):
-    env["U"].create_user(email, "password-" + email.split("@")[0], tier=tier)
+def _user(env, email, role="user"):
+    env["U"].create_user(email, "password-" + email.split("@")[0], role=role)
     return _login(email, "password-" + email.split("@")[0], ip="198.51.100.9")
 
 
-def _subscribe_confirmed(env, email, tier="free"):
-    h = _user(env, email, tier)
+def _subscribe_confirmed(env, email, role="user"):
+    h = _user(env, email, role)
     assert client.post("/api/newsletter/me", json={"subscribe": True}, headers=h).status_code == 200
     tok = _tok(env["outbox"][-1]["body"], "nl_confirm")
     assert client.post("/api/newsletter/confirm", json={"token": tok}).status_code == 200
@@ -149,7 +149,7 @@ def test_google_first_sign_in_consent(env):
 
 
 def test_existing_users_are_not_subscribed(env):
-    env["U"].create_user("old@example.com", "password-old", tier="pro")
+    env["U"].create_user("old@example.com", "password-old", role="user")
     assert env["N"].status("old@example.com")["subscribed"] is False
     assert env["N"].audience() == []
     # an existing account signing in with Google + ticked box is NOT opted in
@@ -207,7 +207,7 @@ def test_link_endpoints_rate_limited(env):
 def test_campaign_only_to_confirmed_and_throttled(env):
     N = env["N"]
     _subscribe_confirmed(env, "a@example.com")
-    _subscribe_confirmed(env, "b@example.com", tier="pro")
+    _subscribe_confirmed(env, "b@example.com", role="user")
     _subscribe_confirmed(env, "c@example.com")
     _user(env, "none@example.com")                       # never opted in
     hp = _user(env, "pend@example.com")                  # pending, never clicked
@@ -230,12 +230,12 @@ def test_campaign_only_to_confirmed_and_throttled(env):
     assert N.get_campaign(c["id"])["status"] == "done"
 
 
-def test_tier_filter_bounce_and_unsubscribe_mid_campaign(env):
+def test_role_filter_bounce_and_unsubscribe_mid_campaign(env):
     N = env["N"]
-    _subscribe_confirmed(env, "a@example.com", tier="pro")
-    hb = _subscribe_confirmed(env, "b@example.com", tier="pro")
-    _subscribe_confirmed(env, "c@example.com", tier="free")
-    c = N.create_campaign("S", "body", tiers=["pro"])
+    _subscribe_confirmed(env, "a@example.com", role="user")
+    hb = _subscribe_confirmed(env, "b@example.com", role="user")
+    _subscribe_confirmed(env, "c@example.com", role="admin")
+    c = N.create_campaign("S", "body", roles=["user"])
     N.schedule(c["id"])
     env["mp"].setenv("NEWSLETTER_RATE_PER_MIN", "1")
 
@@ -296,22 +296,22 @@ def test_admin_csv_and_preview(env):
 # ── in-app notices ──────────────────────────────────────────────────────────
 
 def test_notice_read_state_and_targeting(env):
-    ha = _user(env, "u1@example.com", tier="pro")
-    hb = _user(env, "u2@example.com", tier="free")
+    ha = _user(env, "u1@example.com", role="admin")
+    hb = _user(env, "u2@example.com", role="user")
     ah = _login(ADMIN, "password-admin", ip="198.51.100.1")
     n_all = client.post("/api/notices/admin", json={"title": "Maintenance tonight"}, headers=ah).json()
-    n_pro = client.post("/api/notices/admin", json={"title": "Pro only", "tiers": ["pro"]}, headers=ah).json()
+    n_admin = client.post("/api/notices/admin", json={"title": "Admins only", "roles": ["admin"]}, headers=ah).json()
     la = client.get("/api/notices", headers=ha).json()["notices"]
     lb = client.get("/api/notices", headers=hb).json()["notices"]
-    assert {n["id"] for n in la} == {n_all["id"], n_pro["id"]}
+    assert {n["id"] for n in la} == {n_all["id"], n_admin["id"]}
     assert {n["id"] for n in lb} == {n_all["id"]}
     assert all(not n["read"] for n in la)
     assert client.post(f"/api/notices/{n_all['id']}/read", headers=ha).status_code == 200
     la = {n["id"]: n["read"] for n in client.get("/api/notices", headers=ha).json()["notices"]}
-    assert la[n_all["id"]] is True and la[n_pro["id"]] is False
+    assert la[n_all["id"]] is True and la[n_admin["id"]] is False
     # read state is per user
     assert all(not n["read"] for n in client.get("/api/notices", headers=hb).json()["notices"])
     # a notice not addressed to you cannot be touched
-    assert client.post(f"/api/notices/{n_pro['id']}/read", headers=hb).status_code == 404
+    assert client.post(f"/api/notices/{n_admin['id']}/read", headers=hb).status_code == 404
     client.post(f"/api/notices/admin/{n_all['id']}/withdraw", headers=ah)
     assert client.get("/api/notices", headers=hb).json()["notices"] == []

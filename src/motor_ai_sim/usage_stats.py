@@ -1,4 +1,4 @@
-"""Pricing data: per-account usage signals + what each client costs us.
+"""Usage statistics: per-account resource-usage signals.
 
 RECORD ONLY -- nothing here bills or limits anyone.  Aggregate counts only,
 never file contents.  Everything lives in the cluster store
@@ -12,9 +12,6 @@ never file contents.  Everything lives in the cluster store
 * ``storage``  daily workspace size per account and category
                (dies / configs / results / reports / other), bytes only;
 * logins come from the session event log (``sessions.read_events``).
-
-Cost basis (admin-editable, ``cost_basis.json``): EUR per server-month and
-cores per server give EUR per CPU-hour; EUR per GB-month prices storage.
 
 CLI (host timer, see deploy/systemd/motres-usage.*):
   python -m motor_ai_sim.usage_stats daily            # storage sample
@@ -35,11 +32,6 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 HOURS_PER_MONTH = 730.0
-#: eu1 = Hetzner AX42-1 (FSN1): EUR 100/month (owner's figure, to confirm from
-#: the invoice), 8 cores / 16 threads, 64 GB.  CPU-hour priced per THREAD:
-#: EUR/month / (threads x 730 h).  Storage EUR 0 until set.
-DEFAULT_BASIS = {"eur_per_server_month": 100.0, "cores_per_server": 16,
-                 "eur_per_gb_month": 0.0}
 KINDS = ("em", "coupled", "thermal", "sweep", "optimizer", "controller",
          "mechanical", "report", "other")
 STORAGE_CATS = ("dies", "configs", "results", "reports", "other")
@@ -211,41 +203,6 @@ def sample_storage(root: Optional[Path] = None, ts: Optional[float] = None,
     return len(sizes)
 
 
-# ── cost basis ───────────────────────────────────────────────────────────────
-def _basis_file() -> Path:
-    from motor_ai_sim import cluster_monitor as CM
-    return CM.data_dir() / "cost_basis.json"
-
-
-def get_basis() -> Dict[str, Any]:
-    b = dict(DEFAULT_BASIS)
-    try:
-        b.update(json.loads(_basis_file().read_text(encoding="utf-8")))
-    except (OSError, ValueError):
-        pass
-    return with_rates(b)
-
-
-def with_rates(b: Dict[str, Any]) -> Dict[str, Any]:
-    cores = max(1.0, float(b["cores_per_server"]))
-    out = dict(b)
-    out["eur_per_cpu_hour"] = round(float(b["eur_per_server_month"]) / (cores * HOURS_PER_MONTH), 6)
-    return out
-
-
-def set_basis(body: Dict[str, Any]) -> Dict[str, Any]:
-    b = {k: DEFAULT_BASIS[k] for k in DEFAULT_BASIS}
-    b.update({k: v for k, v in get_basis().items() if k in DEFAULT_BASIS})
-    for k in DEFAULT_BASIS:
-        if k in body:
-            v = float(body[k])
-            if not (v >= 0) or (k == "cores_per_server" and v < 1):
-                raise ValueError(f"{k} must be a non-negative number (cores >= 1)")
-            b[k] = int(v) if k == "cores_per_server" else v
-    _basis_file().write_text(json.dumps(b, indent=1), encoding="utf-8")
-    return with_rates(b)
-
-
 # ── account attributes ───────────────────────────────────────────────────────
 def account_attrs(email: str, registry: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     e = (email or "").lower()
@@ -253,11 +210,10 @@ def account_attrs(email: str, registry: Optional[Dict[str, Dict[str, Any]]] = No
     u = reg.get(e) or {}
     try:
         from motor_ai_sim.auth import _ADMIN_EMAILS, ADMIN_OWNER
-        internal = e in _ADMIN_EMAILS or e == (ADMIN_OWNER or "").lower() or u.get("tier") == "admin"
+        is_admin = e in _ADMIN_EMAILS or e == (ADMIN_OWNER or "").lower() or u.get("role") == "admin"
     except Exception:                                   # noqa: BLE001
-        internal = u.get("tier") == "admin"
-    return {"plan": u.get("plan") or ("internal" if internal else "free"),
-            "tier": u.get("tier", ""),
+        is_admin = u.get("role") == "admin"
+    return {"role": "admin" if is_admin else "user",
             "domain": e.split("@", 1)[1] if "@" in e else "",
             "created": u.get("created")}
 
@@ -366,12 +322,11 @@ def _logins(start: float, end: float) -> Dict[str, int]:
     return out
 
 
-def monthly(month: str, basis: Optional[Dict[str, Any]] = None,
+def monthly(month: str,
             registry: Optional[Dict[str, Dict[str, Any]]] = None,
             logins: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     start, end = month_bounds(month)
     d0, d1 = day_of(start), day_of(end)
-    b = with_rates(basis) if basis else get_basis()
     reg = registry if registry is not None else _registry()
     lg = logins if logins is not None else _logins(start, end)
     days_in = calendar.monthrange(*(int(x) for x in month.split("-")))[1]
@@ -416,23 +371,17 @@ def monthly(month: str, basis: Optional[Dict[str, Any]] = None,
         for c in STORAGE_CATS:
             a[f"storage_{c}_gb"] = s["last"][c] / 1e9
 
-    rate_cpu = float(b["eur_per_cpu_hour"])
-    rate_gb = float(b["eur_per_gb_month"])
     rows = []
     for u, a in acc.items():
         a["active_days"] = len(a["active_days"])
         a.update(account_attrs(u, reg))
-        a["cost_cpu_eur"] = round(a["cpu_h"] * rate_cpu, 4)
-        a["cost_storage_eur"] = round(a["storage_gb_avg"] * rate_gb, 4)
-        a["cost_eur"] = round(a["cost_cpu_eur"] + a["cost_storage_eur"], 4)
         for k, v in list(a.items()):
             if isinstance(v, float):
                 a[k] = round(v, 4)
         rows.append(a)
-    rows.sort(key=lambda r: -r["cost_eur"])
-    return {"month": month, "days": days_in, "basis": b, "accounts": rows,
+    rows.sort(key=lambda r: -r["cpu_h"])
+    return {"month": month, "days": days_in, "accounts": rows,
             "totals": {"cpu_h": round(sum(r["cpu_h"] for r in rows), 4),
-                       "cost_eur": round(sum(r["cost_eur"] for r in rows), 4),
                        "jobs": sum(r["jobs"] for r in rows)}}
 
 

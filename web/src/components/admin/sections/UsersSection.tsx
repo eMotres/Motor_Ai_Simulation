@@ -1,5 +1,5 @@
 /**
- * Admin · Users — one compact table (search, tier filter, sortable columns);
+ * Admin · Users — one compact table (search, role filter, sortable columns);
  * clicking a row opens a side drawer with details and actions. Accounts live
  * in OUR registry (backend config/users.json, /api/auth/users).
  */
@@ -14,12 +14,12 @@ import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import { ConfirmDialog, type ConfirmState } from '../../common/PromptDialogs';
 import { CreateUserDialog, ResetPasswordDialog } from '../dialogs/AccountDialogs';
 import MotorsDialog, { type RegistryUser } from '../dialogs/MotorsDialog';
-import { TIERS } from '../dialogs/InviteDialog';
+import { ROLES } from '../dialogs/InviteDialog';
 import UserDrawer from '../UserDrawer';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
-const TIER_COLOR: Record<string, string> = {
-  anon: 'var(--text-4)', free: 'var(--text-3)', pro: '#3b82f6', team: '#a855f7', admin: '#fbbf24',
+const ROLE_COLOR: Record<string, string> = {
+  anon: 'var(--text-4)', user: 'var(--text-3)', admin: '#fbbf24',
 };
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
 
@@ -29,7 +29,7 @@ const fmtCreated = (iso?: string | null) =>
 interface SessionRow { email: string; lastSeen: number; revoked: boolean }
 interface UsageRow { key: string; jobs: number; cpu_h: number }
 
-type SortKey = 'email' | 'tier' | 'created' | 'lastLogin';
+type SortKey = 'email' | 'role' | 'created' | 'lastLogin';
 
 const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: string | null; setNotice: (m: string | null) => void }> = ({
   onInvite, notice, setNotice,
@@ -46,7 +46,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [tierFilter, setTierFilter] = useState<string>('all');
+  const [roleFilter, setRoleFilter] = useState<string>('all');
   const [sortKey, setSortKey] = useState<SortKey>('created');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
@@ -112,7 +112,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let rows = users.filter((u) =>
-      (tierFilter === 'all' || u.tier === tierFilter) &&
+      (roleFilter === 'all' || u.role === roleFilter) &&
       (!q || u.email.toLowerCase().includes(q) || (u.name ?? '').toLowerCase().includes(q)));
     const lastLogin = (email: string) => {
       const live = (sessionsByEmail.get(email) ?? []).filter((s) => !s.revoked);
@@ -121,13 +121,13 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
     rows = [...rows].sort((a, b) => {
       let cmp = 0;
       if (sortKey === 'email') cmp = a.email.localeCompare(b.email);
-      else if (sortKey === 'tier') cmp = a.tier.localeCompare(b.tier);
+      else if (sortKey === 'role') cmp = a.role.localeCompare(b.role);
       else if (sortKey === 'created') cmp = (a.created ?? '').localeCompare(b.created ?? '');
       else if (sortKey === 'lastLogin') cmp = lastLogin(a.email) - lastLogin(b.email);
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return rows;
-  }, [users, search, tierFilter, sortKey, sortDir, sessionsByEmail]);
+  }, [users, search, roleFilter, sortKey, sortDir, sessionsByEmail]);
 
   const toggleSort = (k: SortKey) => {
     if (sortKey === k) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -150,9 +150,9 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         <Box sx={{ flex: 1 }} />
         <TextField size="small" placeholder="Search email or name" value={search}
           onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 200, '& .MuiInputBase-input': { fontSize: 12.5, py: 0.6 } }} />
-        <Select size="small" value={tierFilter} onChange={(e) => setTierFilter(e.target.value)} sx={{ fontSize: 12.5 }}>
-          <MenuItem value="all" sx={{ fontSize: 12.5 }}>All tiers</MenuItem>
-          {TIERS.map((t) => <MenuItem key={t} value={t} sx={{ fontSize: 12.5 }}>{t}</MenuItem>)}
+        <Select size="small" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} sx={{ fontSize: 12.5 }}>
+          <MenuItem value="all" sx={{ fontSize: 12.5 }}>All roles</MenuItem>
+          {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 12.5 }}>{r}</MenuItem>)}
         </Select>
         <Button size="small" startIcon={<MailOutlineIcon sx={{ fontSize: 16 }} />} onClick={() => onInvite()}
           variant="outlined" sx={{ textTransform: 'none', fontSize: 12 }}>Invite</Button>
@@ -183,7 +183,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
             <TableHead>
               <TableRow>
                 <TableCell><TableSortLabel active={sortKey === 'email'} direction={sortDir} onClick={() => toggleSort('email')}>User</TableSortLabel></TableCell>
-                <TableCell><TableSortLabel active={sortKey === 'tier'} direction={sortDir} onClick={() => toggleSort('tier')}>Plan</TableSortLabel></TableCell>
+                <TableCell><TableSortLabel active={sortKey === 'role'} direction={sortDir} onClick={() => toggleSort('role')}>Role</TableSortLabel></TableCell>
                 <TableCell><TableSortLabel active={sortKey === 'created'} direction={sortDir} onClick={() => toggleSort('created')}>Created</TableSortLabel></TableCell>
                 <TableCell><TableSortLabel active={sortKey === 'lastLogin'} direction={sortDir} onClick={() => toggleSort('lastLogin')}>Last login</TableSortLabel></TableCell>
                 <TableCell align="right">CPU-h 30 d</TableCell>
@@ -197,7 +197,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
                 const last = live.length ? Math.max(...live.map((s) => s.lastSeen)) : 0;
                 const uh = usageByEmail.get(u.email);
                 const g = u.motors;
-                const motorsLabel = u.tier === 'admin' ? 'all' : g?.all ? 'all' : g?.dies?.length ? String(g.dies.length) : '—';
+                const motorsLabel = u.role === 'admin' ? 'all' : g?.all ? 'all' : g?.dies?.length ? String(g.dies.length) : '—';
                 return (
                   <TableRow key={u.email} hover onClick={() => setSelected(u.email)}
                     sx={{ opacity: u.disabled ? 0.55 : 1, cursor: 'pointer' }}>
@@ -205,7 +205,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
                       <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{u.email}</Typography>
                     </TableCell>
                     <TableCell>
-                      <Chip size="small" label={u.tier} sx={{ height: 18, fontSize: 11, fontWeight: 700, bgcolor: 'var(--panel)', color: TIER_COLOR[u.tier] ?? 'var(--text-2)' }} />
+                      <Chip size="small" label={u.role} sx={{ height: 18, fontSize: 11, fontWeight: 700, bgcolor: 'var(--panel)', color: ROLE_COLOR[u.role] ?? 'var(--text-2)' }} />
                     </TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>{fmtCreated(u.created)}</TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>{last ? new Date(last * 1000).toLocaleDateString() : '—'}</TableCell>
@@ -240,7 +240,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         jobs30d={selUsage?.jobs ?? null}
         busy={busy === selected}
         onClose={() => setSelected(null)}
-        onTier={(tier) => void patchUser(selected!, { tier })}
+        onRole={(role) => void patchUser(selected!, { role })}
         onToggleDisabled={() => void patchUser(selected!, { disabled: !selectedUser?.disabled })}
         onDelete={() => selected && deleteUser(selected)}
         onResetPassword={() => selected && setResetFor(selected)}

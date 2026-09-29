@@ -1,8 +1,8 @@
 """Motor catalog — the public 'MOTORS' menu.
 
-A curated table of ready-made motors, organised by stator diameter, plus the
-subscription tiers.  Loading a catalog motor applies its underlying preset
-(geometry + operating point) via the presets service.
+A curated table of ready-made motors, organised by stator diameter.  Loading a
+catalog motor applies its underlying preset (geometry + operating point) via
+the presets service.
 """
 from __future__ import annotations
 

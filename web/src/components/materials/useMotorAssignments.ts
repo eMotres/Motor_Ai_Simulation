@@ -38,7 +38,7 @@ function readLocalOverlay(): Partial<MotorAssignments> {
 }
 
 export function useMotorAssignments() {
-  const { isAdmin, enforced, tier } = useAuth();
+  const { isAdmin, enforced } = useAuth();
   // GET /api/materials answers 401 to an anonymous caller, and this hook
   // mounts at the App root (MaterialOverrideSync) — the landing's first paint
   // knocked on it (live, 2026-09-16).  Same gate as the geometry/schema
@@ -46,9 +46,9 @@ export function useMotorAssignments() {
   const ready = useApiReady();
   // Ordinary user on an enforced backend → assignments live client-side.
   const localMode = enforced && !isAdmin;
-  // Free-tier client → the motor card's materials are read-only (pro/team
-  // engineers still tune materials on their own copy).
-  const restricted = enforced && !isAdmin && tier !== 'pro' && tier !== 'team';
+  // No more paid tiers (commerce removed 2026-09-29): every signed-in
+  // account tunes materials on its own workspace copy same as before.
+  const restricted = false;
 
   const [assignments, setAssignments] = useState<MotorAssignments | null>(null);
   const [loading, setLoading]         = useState(true);

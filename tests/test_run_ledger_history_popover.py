@@ -176,10 +176,10 @@ def test_the_three_popover_verbs_are_gated_like_the_whole_ledger():
     them — the ledger is the SHARED machine's store, not per-workspace."""
     from motor_ai_sim import auth
 
-    assert auth.required_tier("GET", "/api/simulation/ledger/recent") == "admin"
-    assert auth.required_tier(
+    assert auth.required_role("GET", "/api/simulation/ledger/recent") == "admin"
+    assert auth.required_role(
         "POST", "/api/simulation/ledger/abc123/load") == "admin"
-    assert auth.required_tier("DELETE", "/api/simulation/ledger/abc123") == "admin"
+    assert auth.required_role("DELETE", "/api/simulation/ledger/abc123") == "admin"
     # Unaffected: the exact-path table still wins for the whole-ledger verbs.
-    assert auth.required_tier("GET", "/api/simulation/ledger") == "admin"
-    assert auth.required_tier("DELETE", "/api/simulation/ledger") == "admin"
+    assert auth.required_role("GET", "/api/simulation/ledger") == "admin"
+    assert auth.required_role("DELETE", "/api/simulation/ledger") == "admin"

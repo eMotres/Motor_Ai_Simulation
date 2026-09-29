@@ -50,8 +50,8 @@ def accounts(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
-    U.create_user(USER, "password-user", tier="pro", name="Engineer")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
+    U.create_user(USER, "password-user", role="user", name="Engineer")
     return {"admin": {"Authorization": f"Bearer {U.issue_token(ADMIN)}"},
             "user": {"Authorization": f"Bearer {U.issue_token(USER)}"},
             "anon": {}}

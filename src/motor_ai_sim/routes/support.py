@@ -733,12 +733,12 @@ def _charge_anonymous(ip: str, now: Optional[float] = None) -> Optional[str]:
 
 def _is_anonymous(authorization: Optional[str]) -> bool:
     """No credentials at all?  `caller_identity` is the ONE definition of who is
-    calling in this backend, tier 'anon' its answer for "nobody presented any" —
+    calling in this backend, role 'anon' its answer for "nobody presented any" —
     which also keeps the local/unconfigured workstation (where the developer IS
     the admin) out of the limiter, exactly as it is out of every other gate."""
     try:
         from motor_ai_sim.auth import caller_identity
-        return caller_identity(authorization).get("tier") == "anon"
+        return caller_identity(authorization).get("role") == "anon"
     except Exception:                                        # pragma: no cover
         return True
 

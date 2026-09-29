@@ -1,9 +1,9 @@
 """Account route — who am I.
 
-GET /api/me lets the frontend learn the signed-in user's tier + admin flag
+GET /api/me lets the frontend learn the signed-in user's role + admin flag
 (the role is only known server-side, from the verified token + ADMIN_EMAILS).
 Used to gate the admin page and the full-UI vs configurator split. Open
-endpoint: an anonymous caller just gets tier 'anon'.
+endpoint: an anonymous caller just gets role 'anon'.
 """
 from __future__ import annotations
 

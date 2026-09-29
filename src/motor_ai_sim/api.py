@@ -201,8 +201,8 @@ install_workspace_resolver(app)
 
 # Tier gate NEXT (inner), CORS LAST (outer) so 401/403 from the gate still
 # carry CORS headers — otherwise the browser shows a CORS error, not the 403.
-from motor_ai_sim.auth import install_tier_gate
-install_tier_gate(app)
+from motor_ai_sim.auth import install_role_gate
+install_role_gate(app)
 
 app.add_middleware(
     CORSMiddleware,

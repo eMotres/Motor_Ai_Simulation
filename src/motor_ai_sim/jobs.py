@@ -106,7 +106,7 @@ __all__ = [
     "queue", "reset_queue", "run_job", "admit", "queued",
     "cancel_run", "is_cancelled", "clear_cancelled", "current_run_id",
     "check_cancelled",
-    "current_owner", "current_tier", "priority_for",
+    "current_owner", "current_role", "priority_for",
     "new_run_id", "async_mode", "store_path",
     "HANDLERS", "register_handler", "register_cancel_hook",
     "ENV_WORKERS", "ENV_ASYNC", "ENV_PER_USER", "ENV_FIELD_LIMIT",
@@ -314,45 +314,45 @@ def current_owner() -> str:
         return _WSP.PROCESS_WS_ID
 
 
-def current_tier() -> str:
-    """The tier of the caller this job belongs to, or ``""`` outside a request.
+def current_role() -> str:
+    """The role of the caller this job belongs to, or ``""`` outside a request.
 
-    ``""`` on purpose and not ``"free"``: a direct call (a test, a CLI run, the
-    migration script) has no tier to be demoted by, and guessing the lowest one
+    ``""`` on purpose and not ``"user"``: a direct call (a test, a CLI run, the
+    migration script) has no role to be demoted by, and guessing the lowest one
     would quietly reorder work nobody is queueing against.
     """
     try:
         who = _WSP.caller() or {}
-        return str(who.get("tier") or "").strip().lower()
+        return str(who.get("role") or "").strip().lower()
     except Exception:                                   # noqa: BLE001
         return ""
 
 
-#: Tiers with no claim on the front of the queue.  ``free`` is what every
+#: Roles with no claim on the front of the queue.  ``user`` is what every
 #: invited and every self-registered account starts as; ``anon`` can only appear
 #: on a host that still has the public exhibit open.
-_BASE_TIERS = frozenset({"free", "anon"})
+_BASE_ROLES = frozenset({"user", "anon"})
 #: The job KINDS that are somebody's campaign — matched on the family (the part
 #: before the first dot), so ``optimizer.scan`` / ``optimizer.doe`` /
 #: ``optimizer.descent`` need no list to maintain.
 _CAMPAIGN_FAMILIES = frozenset({"optimizer", "pipeline", "sweep"})
 
 
-def priority_for(kind: str, tier: str,
+def priority_for(kind: str, role: str,
                  requested: Priority = Priority.DUTY) -> Priority:
-    """The class one job actually gets — the tier's half of admission.
+    """The class one job actually gets — the role's half of admission.
 
-    The rule (Stage 10): a ``free`` account's optimizer run is a CAMPAIGN and
-    everything else it submits is at best a DUTY.  ``pro`` / ``team`` / ``admin``
-    keep the class the route asked for, INTERACTIVE included, so a paying user's
-    transient still goes in front of the bar they are watching.
+    The rule (Stage 10): a non-admin account's optimizer run is a CAMPAIGN and
+    everything else it submits is at best a DUTY.  ``admin`` keeps the class the
+    route asked for, INTERACTIVE included, so an operator's transient still
+    goes in front of the bar they are watching.
 
     It never promotes: a campaign stays a campaign whoever submits it, which is
     why the non-optimizer answer is a ``max`` and not a constant.  An unknown or
-    empty tier is left alone (see :func:`current_tier`).
+    empty role is left alone (see :func:`current_role`).
     """
-    t = str(tier or "").strip().lower()
-    if t not in _BASE_TIERS:
+    r = str(role or "").strip().lower()
+    if r not in _BASE_ROLES:
         return Priority(int(requested))
     family = str(kind or "").split(".", 1)[0].strip().lower()
     if family in _CAMPAIGN_FAMILIES:
@@ -1041,7 +1041,7 @@ def make_record(kind: str, *, priority: Priority = Priority.DUTY,
     eight call sites that would drift apart.
     """
     ws = _WSP.workspace()
-    prio = priority_for(str(kind), current_tier(), Priority(int(priority)))
+    prio = priority_for(str(kind), current_role(), Priority(int(priority)))
     return JobRecord(run_id=str(run_id) or new_run_id(str(kind).split(".")[0]),
                      ws_id=ws.id, owner=str(owner) or current_owner(),
                      kind=str(kind), priority=int(prio),

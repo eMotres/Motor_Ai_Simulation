@@ -74,7 +74,7 @@ def env(tmp_path, monkeypatch):
         shutil.copytree(_REPO / "config" / "dies" / n, dd / n)
     monkeypatch.setattr(fam, "_DIES_DIR", dd, raising=False)
     for e in (A, B):
-        U.create_user(e, "pw-" + e, tier="free")
+        U.create_user(e, "pw-" + e, role="user")
     U.set_motor_grants(A, all_motors=False, dies=["CIANO14 40_12"])
     U.set_motor_grants(B, all_motors=False, dies=["CILN28"])
     K.reset_quotas()
@@ -295,7 +295,7 @@ def test_simulate_quota_429(env, monkeypatch):
     _wait(env["c"], tok, j["job_id"])
     r = _call(env["c"], tok, "simulate", {"design_id": did, "what": "em"})
     assert r.status_code == 429 and int(r.headers["retry-after"]) >= 1
-    assert "quota" in r.json()["error"]["message"]
+    assert "fair-use limit" in r.json()["error"]["message"]
     # another key of the SAME account shares the account's quota
     tok2, _ = K.create_key(A, "c2", scopes=ALL)
     assert _call(env["c"], tok2, "simulate", {"design_id": did, "what": "em"}).status_code == 429

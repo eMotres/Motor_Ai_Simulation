@@ -32,7 +32,7 @@ const Tile: React.FC<{ k: Kpi; onGoto: (s: AdminSectionId) => void }> = ({ k, on
   </Box>
 );
 
-interface RegistryUser { email: string; tier: string; created?: string | null }
+interface RegistryUser { email: string; role: string; created?: string | null }
 interface AdminSession { email: string; lastSeen: number; revoked: boolean }
 interface AuthEvent { ts: string; event: string }
 interface Cluster { cores: number; cpu_used_cores: number; mem_used: number; mem_total: number }

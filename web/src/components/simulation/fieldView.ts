@@ -9,7 +9,7 @@
  * CPU with a hand-written 9-stop ramp, the legend recomputed its range with its
  * own percentile code (so bar and fill could disagree), and the band count was
  * 20 / 13 / 11 / none depending on which view you were looking at.  The user's
- * complaint — "our maps look ugly next to Ansys's" — was mostly that: coarse,
+ * complaint — "our maps look ugly next to commercial FEM's" — was mostly that: coarse,
  * flat-shaded, few levels, and no two views alike.
  *
  * What every view now gets, identically:
@@ -19,12 +19,12 @@
  *     the mesh vertices with area weights, but a vertex is duplicated per
  *     (vertex, material class), so a slot-air vertex never reads half of the
  *     copper's density and a magnet corner never bleeds into the air gap.
- *     Smooth inside a part, crisp at every boundary — the Ansys reading.
+ *     Smooth inside a part, crisp at every boundary — the commercial FEM reading.
  *   • ~11 DISCRETE colour bands, quantised PER PIXEL from the interpolated
  *     scalar (not at the vertices — quantising there and letting the GPU blend
  *     the resulting RGB mixes neighbouring band colours into blotches).  Every
  *     band edge therefore lands exactly on an iso-line of the field, and the
- *     shader draws that edge as a thin dark line: Ansys's banded contour plot,
+ *     shader draws that edge as a thin dark line: commercial FEM's banded contour plot,
  *     for free, in every view.
  *   • ONE scale object shared by the fill and the colour bar, so the legend
  *     cannot describe a range the picture does not use.  The bar prints the
@@ -167,7 +167,7 @@ export function outlinesFromMesh(
 }
 
 // ── colour ────────────────────────────────────────────────────────────────
-/** Classic Ansys rainbow (blue → cyan → green → yellow → red). */
+/** Classic commercial FEM rainbow (blue → cyan → green → yellow → red). */
 export function jet01(t: number): [number, number, number] {
   const x = Math.max(0, Math.min(1, t));
   return [
@@ -519,7 +519,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
     // 11), but the copper is pinned at the top and the eye calibrates on it.
     //
     // Per-material mode normalises each material class to its OWN 5/99.5
-    // percentiles, which is what "scale per body" does in Ansys and the only
+    // percentiles, which is what "scale per body" does in commercial FEM and the only
     // way to read structure inside the weakest component.  It buys that by
     // giving up cross-material comparison entirely: the same colour means a
     // different number in copper and in a magnet.  So it is OFF by default,
@@ -592,7 +592,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
 
   if (mode === 'J' || mode === 'Jeddy') {
     // Signed current density.  DIVERGING by construction: the range is
-    // symmetric, so jet's green midpoint lands exactly on J = 0 — the Ansys J
+    // symmetric, so jet's green midpoint lands exactly on J = 0 — the commercial FEM J
     // legend, without a second hand-written ramp to keep in step with the
     // first.
     //
@@ -619,8 +619,8 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
     // thing a current-density map must never do; and the header, which reads the
     // drawn field honestly, printed a max of 158.5 MA/m2 that could not be found
     // anywhere on the bar.  Two numbers for one field again — the same complaint
-    // the stress views were fixed for ("везде и в Ansys и в Fusion полное
-    // соответствие").
+    // the stress views were fixed for ("commercial FEM and Fusion
+    // agree everywhere").
     //
     // Unclipped, the DC level lands around a third of the scale and the
     // proximity crowding reads as what it is: brighter copper near the field,
@@ -889,7 +889,7 @@ export const EM_MENU: {
     tip: 'Coupled eddy-current density σ(−∂A/∂t+U) — the proximity crowding the uniform "J" view cannot show. Instant when the last Simulation run solved this operating point with the coupled eddy solve on; otherwise it runs a 10-frame transient here (~25 s) and says so.' },
   { id: 'Loss',  menuLabel: 'Loss',  label: 'Loss density',
     group: 'Electromagnetic', unit: 'W/m³',
-    tip: 'Ansys-style loss-density map. Uses the last Simulation run\'s own cycle-averaged map when it matches this operating point; otherwise the single-frame analytic estimate. The header says which one you are looking at.' },
+    tip: 'Commercial-FEM-style loss-density map. Uses the last Simulation run\'s own cycle-averaged map when it matches this operating point; otherwise the single-frame analytic estimate. The header says which one you are looking at.' },
   { id: 'Demag', menuLabel: 'Demag', label: 'Demagnetisation',
     group: 'Electromagnetic', unit: '% Br',
     tip: 'Irreversible demagnetisation — per cent of Br remaining. The honest map is the run\'s worst field over the full electrical period.' },

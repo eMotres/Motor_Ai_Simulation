@@ -199,7 +199,7 @@ log = logging.getLogger(__name__)
 # fixed-point residual of the nu(|B|) update (measured BEFORE damping) below
 # which a frame's nonlinear iteration is converged (two consecutive sweeps).
 # Replaces the old fixed "14 iterations" recipe, which did not converge and left
-# a 5-8 Nm p-p no-load torque floor (see PARITY_FINDINGS_band_mode.md).
+# a 5-8 Nm p-p no-load torque floor (notes in the private data repository).
 _PIC_TOL = 1e-3
 
 # The magnet Br convergence tolerance moved to simulation/demag.py with the rule
@@ -249,7 +249,7 @@ DAXIS_SHIFT_DEG = 108.0   # LEGACY CONSTANT, and wrong for EVERY topology
 # 48° off the true q-axis).  We now compute θ* (rotor angle of peak no-load ψ_A)
 # from a cheap I=0 run and set DAXIS = (90 − θ*·pole_pairs) mod 360, so γ=0 is the
 # TRUE q-axis and the γ the user enters equals the PHYSICAL current angle from the
-# q-axis (identical to ANSYS's el_deg).  Cached per topology; θ* is invariant to
+# q-axis (identical to commercial FEM's el_deg).  Cached per topology; θ* is invariant to
 # dimension sweeps.
 _DAXIS_CACHE: Dict[tuple, float] = {}
 # RECURSION GUARD — PER THREAD, and a lock so two threads cannot calibrate at
@@ -3619,7 +3619,7 @@ def fem_transient_sliding_band(
                                      # for comparison vs the resistance-limited post-
                                      # process.  Captures rotor-node A history; fail-safe
                                      # (any error leaves the production numbers intact).
-    structured_gap: bool = False,    # ANSYS-style concentric-ring air-gap mesh (experimental
+    structured_gap: bool = False,    # commercial-FEM-style concentric-ring air-gap mesh (experimental
                                      # Mesh-tab toggle; default off = free gmsh gap).
     airgap_macro: bool = False,      # harmonic air-gap macroelement (Mesh-tab "Harmonic gap"):
                                      # replaces the node re-pairing slip coupling with a smooth
@@ -4034,7 +4034,7 @@ def fem_transient_sliding_band(
     mid = 0.5 * (p.r_rotor_out + p.r_stator_in)
 
     # d-axis phase offset AUTO-CALIBRATED for this motor topology so γ=0 is the
-    # true q-axis and γ equals the physical current angle from the q-axis (=ANSYS
+    # true q-axis and γ equals the physical current angle from the q-axis (=commercial FEM
     # el_deg).  Cached per topology; the I=0 calibration run is recursion-guarded.
     # …and it is REPORTED while it runs.  On a geometry the cache has not seen
     # it is a 24-frame no-load solve — measured 39 s on the 200 mm 24s/28p —
@@ -4293,7 +4293,7 @@ def fem_transient_sliding_band(
     # So hi_fidelity bundles all three (mesh ÷8 vs ÷4 above; slip 2× below;
     # gap_layers≥4 here) → measured raw 20.8 %→~14 %, RMS 4.7 %→3.0 %.  This is the
     # honest "spend compute for accuracy" mode, NOT a filter — the real DC torque
-    # is unchanged and the 6·k physical ripple already matches Ansys.  gap_layers
+    # is unchanged and the 6·k physical ripple already matches commercial FEM.  gap_layers
     # is bumped ONLY inside this bundle (it is counter-productive on its own).
     if hi_fidelity:
         gap_layers = max(float(gap_layers), 4.0)
@@ -6202,7 +6202,7 @@ def fem_transient_sliding_band(
         # The block above collapses the Joule loss to ONE number per body
         # group; the Loss map needs the same integrand kept per element.  The
         # eddy current does not fill a conductor uniformly — it crowds at the
-        # corners and edges facing the changing field, which is what an Ansys
+        # corners and edges facing the changing field, which is what a commercial FEM
         # Total-Loss plot shows at every magnet corner and what the slab
         # |dB/dt|² model, normalised to an average, can never show: that model
         # is smooth by construction.

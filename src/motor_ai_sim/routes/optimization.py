@@ -2340,7 +2340,7 @@ def scan_designs(req: ScanRequest):
         # route (simulation.py: n_sectors ≤1 → -1).  Passing raw 1 made the solver build
         # an invalid NS=4 wedge (90°) — broken for any motor whose pole count is not a
         # multiple of 4 (e.g. 14 poles → 3.5/sector) → spurious tooth-width torque slope
-        # + scattered ripple.  This was the sweep-vs-Simulation mismatch vs ANSYS.
+        # + scattered ripple.  This was the sweep-vs-Simulation mismatch vs commercial FEM.
         n_sectors = -1 if int(req.n_sectors) <= 1 else int(req.n_sectors)
         # Air-gap mesh layers — single source: the Mesh tab.  gap_layers drives the
         # air-gap field resolution → torque ripple + magnet eddy; the Simulation uses

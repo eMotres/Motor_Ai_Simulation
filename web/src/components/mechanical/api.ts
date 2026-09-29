@@ -70,7 +70,7 @@ export interface PartResult {
   hoop_max_mpa: number;
   radial_min_mpa: number;
   radial_max_mpa: number;
-  /** The UNAVERAGED element peaks — the other half of the ANSYS averaging
+  /** The UNAVERAGED element peaks — the other half of the commercial FEM averaging
    *  toggle, kept so a user can reproduce either number.  Optional: a result
    *  cached before 2026-09-10 has none. */
   von_mises_max_unaveraged_mpa?: number;

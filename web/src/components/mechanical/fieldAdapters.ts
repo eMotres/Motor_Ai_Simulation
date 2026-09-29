@@ -240,8 +240,8 @@ export function mechOutputs(
     //
     // User 2026-09-10: "я думаю шкалу визуализации нужно сдвигать", after
     // asking how two different numbers for one band could ever be explained to
-    // a user who has ANSYS open beside us.  They cannot, so both moved onto one
-    // convention: the AVERAGED nodal field, which is what ANSYS and Fusion plot
+    // a user who has commercial FEM open beside us.  They cannot, so both moved onto one
+    // convention: the AVERAGED nodal field, which is what commercial FEM and Fusion plot
     // and report, and which the solver now quotes in every table.
     //
     // The range therefore has to be measured on that field, and it does not
@@ -260,7 +260,7 @@ export function mechOutputs(
       if (!Number.isFinite(hi)) hi = lo + 1e-9;
       if (view === 'vm' || view === 's1') {
         return linScale(lo, Math.max(hi, lo + 1e-9), 'MPa',
-          `${meta.label} — AVERAGED, the ANSYS/Fusion convention: each element value area-averaged onto the nodes of its own part. The bar runs from the picture's own minimum to its own maximum, and those are the numbers the result table quotes`,
+          `${meta.label} — AVERAGED, the commercial FEM/Fusion convention: each element value area-averaged onto the nodes of its own part. The bar runs from the picture's own minimum to its own maximum, and those are the numbers the result table quotes`,
           fmtAuto);
       }
       // Signed components keep zero on jet's green midpoint.

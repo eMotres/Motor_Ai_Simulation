@@ -2923,11 +2923,11 @@ def solve_rotor_stress(polys: dict,
 
     # -- AVERAGED, the way every other FE tool reports a stress --------------
     #
-    # User 2026-09-10: "как нам теперь объяснять пользователям эти две разные
-    # цифры 1728 и 1426? нас не поймут, везде и в Ansys и Fusion полное
-    # соответствие" — and they are right, so the convention is now theirs.
+    # User 2026-09-10: "how do we explain these two different numbers, 1728
+    # and 1426, to users? They will not understand; commercial FEM and Fusion
+    # agree everywhere" — and they are right, so the convention is now theirs.
     #
-    # ANSYS and Fusion report a stress on the NODES of an averaged plot: each
+    # commercial FEM and Fusion report a stress on the NODES of an averaged plot: each
     # element's constant value is area-averaged onto the nodes it touches,
     # WITHIN its own body (never across a material boundary, where the stress
     # is genuinely discontinuous), and the number in the results table is the
@@ -3092,7 +3092,7 @@ def solve_rotor_stress(polys: dict,
                 "radial_min_mpa": float(srr_n.min()) * MPA,
                 "radial_max_mpa": float(srr_n.max()) * MPA,
                 # ...and the UNAVERAGED element peaks beside them, so nothing
-                # is hidden: this is the other half of the same toggle ANSYS
+                # is hidden: this is the other half of the same toggle commercial FEM
                 # offers, and the gap between them is the corner singularity.
                 "von_mises_max_unaveraged_mpa": float(vm[m].max()) * MPA,
                 "principal_max_unaveraged_mpa": float(p1[m].max()) * MPA,

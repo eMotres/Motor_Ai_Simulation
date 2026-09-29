@@ -1,7 +1,7 @@
 """Materials library loader for electric motor EM simulation.
 
-Loads material data from config/materials_library.yaml (extracted from
-Ansys Maxwell PersonalLib) and exposes typed dataclasses for use in the
+Loads material data from config/materials_library.yaml (transcribed from
+the owner's personal material library) and exposes typed dataclasses for use in the
 simulation pipeline.
 
 Usage
@@ -1008,7 +1008,7 @@ def _clear_surface_cache() -> None:
 # ---------------------------------------------------------------------------
 # Maxwell-style Bertotti coefficient fit from the MEASURED loss curves
 # ---------------------------------------------------------------------------
-# Ansys Maxwell takes the manufacturer's P(B) curves at several frequencies and
+# commercial FEM takes the manufacturer's P(B) curves at several frequencies and
 # least-squares fits the three Bertotti coefficients; the transient solver then
 # applies them in the time domain.  We do the same: a non-negative LS fit of
 #     P [W/m³] = kh·f·B² + kc·f²·B² + ke·f^1.5·B^1.5

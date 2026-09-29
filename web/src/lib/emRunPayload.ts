@@ -190,7 +190,7 @@ export function buildEmRunPayload(inp: EmRunInputs): Record<string, unknown> {
     torque_filter:      inp.torqueFilter,
     // Bit-identical pole/slot mesh (Mesh-tab "Periodic" toggle).
     pole_copy:          readMeshSetting('poleCopy', false),
-    // ANSYS-style concentric-ring air-gap mesh (Mesh-tab "Air-gap mesh" toggle).
+    // commercial-FEM-style concentric-ring air-gap mesh (Mesh-tab "Air-gap mesh" toggle).
     // template halves need the belt → force structured gap when template on
     structured_gap:     readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true),
     // Harmonic gap coupling (Mesh-tab "Harmonic gap"): step-independent RAW ripple.

@@ -186,7 +186,7 @@ export interface OptDesignPoint {
   P_fe_W: number;
   P_mag_W: number;
   // total = EM-active + shaft (the divisor of torque/power density, unchanged);
-  // active = iron + copper + magnets, the Ansys "active mass" basis.
+  // active = iron + copper + magnets, the commercial FEM "active mass" basis.
   mass_total_kg: number;
   mass_active_kg?: number;
   B_gap_T: number;

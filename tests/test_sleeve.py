@@ -225,7 +225,7 @@ class TestMassAndInertia:
     def test_it_is_in_the_active_mass_and_in_the_total(self):
         """The ring counts as ACTIVE mass since 2026-09-10.
 
-        It used to be kept out of `active` so that number stayed the one ANSYS
+        It used to be kept out of `active` so that number stayed the one commercial FEM
         prints under the same name.  The user gave that up on purpose ("пусть
         будет одна активная масса вместе с бандажом, так будет проще, чтобы не
         запутаться"): two masses differing by a quarter of a kilo, one of which

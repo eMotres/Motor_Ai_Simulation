@@ -167,7 +167,7 @@ function sfOf(c: CaseResult, part: string, p: PartResult): number | null {
  *  them is what makes our number reproducible in theirs. */
 function unavgTip(p: PartResult, unavg?: number | null): string {
   const g = p.governing_stress_mpa;
-  const base = 'Averaged: each element value area-averaged onto the nodes of its own part — the ANSYS and Fusion default, and the field the map draws, so this number is the map\'s maximum.';
+  const base = 'Averaged: each element value area-averaged onto the nodes of its own part — the commercial FEM and Fusion default, and the field the map draws, so this number is the map\'s maximum.';
   const un = (typeof unavg === 'number' && Number.isFinite(unavg))
     ? ` Unaveraged (the raw element peak, what those tools show with averaging off): ${fmt(unavg)} MPa.`
     : '';

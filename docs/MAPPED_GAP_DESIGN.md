@@ -171,7 +171,7 @@ To close it further (optional, for torque-accuracy parity at low ring counts):
 - or grade the cells (finer near the iron) instead of uniform — but that breaks the
   "exactly 2K UNIFORM rings" requirement, so it is a separate mode.
 
-For the current goal (ANSYS-style uniform structured gap, behind an experimental toggle,
+For the current goal (commercial-FEM-style uniform structured gap, behind an experimental toggle,
 default off) the mesh is correct and the torque is convergent; users wanting torque
 parity raise the Air-gap-layers slider.
 

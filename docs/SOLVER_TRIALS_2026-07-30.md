@@ -573,7 +573,7 @@ Deltas of our T_avg against each entry's stored torque, worst first:
 | `my_baseline` | 25.28 | 53.62 | +112.1 % | stored `4P` inconsistent with stored torque (F3) |
 | `ciano20_150_35` | 30.574 | 59.84 | +95.7 % | **explained**: −1.1 % once its `2S-2P` is applied |
 | `m200_20kw_opt` / `_lowripple` | 95.19 / 105.2 | 185.5 / 180.1 | +94.8 / +71.2 % | as `m200_20kw_base` |
-| `motor_40mm` | 0.444 | 0.3086 | −30.5 % | at γ=−42°; `docs/SOLVER_VALIDATION_2026-06-28.md` converged this machine to 0.565 N·m at 38 A/γ=−32°, a different operating point |
+| `motor_40mm` | 0.444 | 0.3086 | −30.5 % | at γ=−42°; `docs/SOLVER_VALIDATION_2026-06-28.md` (private data repository) converged this machine to 0.565 N·m at 38 A/γ=−32°, a different operating point |
 | `motor_100mm` | 6.0 | 4.845 | −19.2 % | energy and Maxwell agree (−19.2 / −19.9 %), so this is the reference, not the torque method. 6.0/4.845 = 1.24 — consistent with a reference produced by an over-reading path |
 | `ciano14_40_12_fe₁₆n₂` | 0.691 | 0.6074 | −12.1 % | the preset named for Fe16N2 **stores no material assignment**, so it runs on F45SH; its stored number came from an Fe16N2 run (see `config/saved_simulations.json`, "Fe16N2 lab-best · 42 A · demag") that the preset cannot reproduce |
 | `my_motor` | 0.212 | 0.2122 | **+0.1 %** | pinned control, exact |

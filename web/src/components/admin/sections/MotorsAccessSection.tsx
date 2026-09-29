@@ -8,7 +8,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Paper, Chip, Button, CircularProgress, Table, TableBody,
   TableCell, TableHead, TableRow, TextField, Drawer, RadioGroup, FormControlLabel,
-  Radio, Checkbox, Divider, Autocomplete,
+  Radio, Checkbox, Divider, Autocomplete, Dialog, DialogTitle, DialogContent,
+  DialogActions,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import HelpTip from '../../common/HelpTip';
@@ -20,10 +21,41 @@ type Visibility = 'private' | 'public' | 'selected';
 const VIS_LABEL: Record<Visibility, string> = { private: 'Private', public: 'Public', selected: 'Selected clients' };
 const VIS_COLOR: Record<Visibility, string> = { private: 'var(--text-3)', public: '#4ade80', selected: '#60a5fa' };
 
+type Source = 'open' | 'private';
+const SOURCE_HELP = 'Open = public GitHub repository (AGPL): publishing pushes there at once and is public immediately. Private = our private repository. Only MOTRES reference data; customer dies never go to git.';
+
+type MoveStatus = 'prepared' | 'running' | 'incomplete' | 'pending' | 'done' | 'rolled_back';
+interface PendingMove {
+  id: string; status: MoveStatus; from: Source; to: Source; branch: string; at: string;
+  prs: { repo: string; url: string; opened?: boolean }[]; failed_step?: string | null; error?: string | null;
+}
 interface DieRow {
   name: string; stator_diameter: number | null; configs: number; duties: number;
   visibility: Visibility; clients: string[]; used_by: number;
+  source?: Source; source_movable?: boolean; source_clash?: boolean; source_error?: string | null;
+  source_pending?: PendingMove | null;
 }
+interface Blocker { kind: string; name: string; reason: string }
+interface MovePreview {
+  die: string; from: Source; to: Source; warning: string; notice: string; public_push: boolean;
+  snapshot: string; blockers: Blocker[];
+  manifest: {
+    files: { path: string; bytes: number; sha256: string }[]; total_bytes: number;
+    geometry: Record<string, unknown>; configs: { name: string; role: string | null; duties: string[] }[];
+    materials: string[]; devices: string[]; results: string[];
+  };
+}
+
+const sourceLabel = (d: DieRow) => {
+  const m = d.source_pending;
+  if (m) return m.status === 'pending' ? `Pending ${m.to === 'open' ? 'publish' : 'withdraw'}` : 'Move incomplete';
+  return d.source === 'open' ? 'Open' : 'Private';
+};
+const sourceColor = (d: DieRow) => (d.source_pending ? (d.source_pending.status === 'pending' ? '#fbbf24' : '#f87171') : d.source === 'open' ? '#4ade80' : 'var(--text-3)');
+const detailMsg = (j: { detail?: unknown }, status: number) => {
+  const d = j.detail as { message?: string } | string | undefined;
+  return typeof d === 'string' ? d : d?.message ?? `HTTP ${status}`;
+};
 interface RegistryUser { email: string }
 
 const statusLabel = (d: DieRow) =>
@@ -86,6 +118,17 @@ const MotorsAccessSection: React.FC = () => {
     } finally { setBusy(false); }
   };
 
+  const reconcile = async () => {
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/api/admin/dies/source/reconcile`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setNotice(`✗ ${detailMsg(j, r.status)}`); return; }
+      setNotice(`✓ ${(j.completed ?? []).length} merged move(s) completed`);
+      await load();
+    } finally { setBusy(false); }
+  };
+
   const toggleChecked = (name: string) => setSelChecked((s) => {
     const n = new Set(s); if (n.has(name)) n.delete(name); else n.add(name); return n;
   });
@@ -106,6 +149,7 @@ const MotorsAccessSection: React.FC = () => {
             <Button size="small" disabled={busy} onClick={() => void bulkSet('private')} sx={{ textTransform: 'none', fontSize: 11, color: 'var(--text-3)' }}>Make private</Button>
           </>
         )}
+        <Button size="small" disabled={busy} onClick={() => void reconcile()} sx={{ textTransform: 'none', fontSize: 11, color: 'var(--text-2)' }}>Check merged PRs</Button>
         <Button size="small" startIcon={<RefreshIcon sx={{ fontSize: 16 }} />} onClick={() => void load()} disabled={loading}
           sx={{ color: 'var(--text-2)', textTransform: 'none', fontSize: 12 }}>Refresh</Button>
       </Box>
@@ -129,6 +173,9 @@ const MotorsAccessSection: React.FC = () => {
                 <TableCell>Die</TableCell>
                 <TableCell align="right">Ø mm</TableCell>
                 <TableCell align="center">Status</TableCell>
+                <TableCell align="center">
+                  <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>Source <HelpTip title={SOURCE_HELP} /></Box>
+                </TableCell>
                 <TableCell align="right">Used by</TableCell>
               </TableRow>
             </TableHead>
@@ -146,11 +193,15 @@ const MotorsAccessSection: React.FC = () => {
                     <Chip size="small" label={statusLabel(d)}
                       sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: VIS_COLOR[d.visibility] }} />
                   </TableCell>
+                  <TableCell align="center" onClick={() => setDrawerFor(d)}>
+                    <Chip size="small" label={sourceLabel(d) + (d.source_clash ? ' ⚠' : '')}
+                      sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: sourceColor(d) }} />
+                  </TableCell>
                   <TableCell align="right" onClick={() => setDrawerFor(d)} sx={{ color: 'var(--text-3)' }}>{d.used_by}</TableCell>
                 </TableRow>
               ))}
               {filtered.length === 0 && (
-                <TableRow><TableCell colSpan={5} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>No dies match.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>No dies match.</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
@@ -159,7 +210,8 @@ const MotorsAccessSection: React.FC = () => {
 
       <DieAccessDrawer die={drawerFor} users={users} busy={busy}
         onClose={() => setDrawerFor(null)}
-        onSave={(vis, clients) => { if (drawerFor) void setAccess(drawerFor.name, vis, clients); }} />
+        onSave={(vis, clients) => { if (drawerFor) void setAccess(drawerFor.name, vis, clients); }}
+        onMoved={(msg) => { setNotice(msg); setDrawerFor(null); void load(); }} />
     </Box>
   );
 };
@@ -167,7 +219,8 @@ const MotorsAccessSection: React.FC = () => {
 const DieAccessDrawer: React.FC<{
   die: DieRow | null; users: RegistryUser[]; busy: boolean;
   onClose: () => void; onSave: (vis: Visibility, clients: string[]) => void;
-}> = ({ die, users, busy, onClose, onSave }) => {
+  onMoved: (msg: string) => void;
+}> = ({ die, users, busy, onClose, onSave, onMoved }) => {
   const [vis, setVis] = useState<Visibility>('private');
   const [clients, setClients] = useState<string[]>([]);
   useEffect(() => { if (die) { setVis(die.visibility); setClients(die.clients); } }, [die]);
@@ -206,9 +259,179 @@ const DieAccessDrawer: React.FC<{
             <Button size="small" variant="contained" disabled={busy} onClick={() => { onSave(vis, vis === 'selected' ? clients : []); onClose(); }}
               sx={{ textTransform: 'none' }}>Save</Button>
           </Box>
+
+          <Divider sx={{ my: 2, borderColor: 'var(--line-soft)' }} />
+          <SourceBlock die={die} onMoved={onMoved} />
         </>
       )}
     </Drawer>
+  );
+};
+
+/** Source: Open / Private — separate from visibility; a move opens PRs. */
+const SourceBlock: React.FC<{ die: DieRow; onMoved: (msg: string) => void }> = ({ die, onMoved }) => {
+  const [preview, setPreview] = useState<MovePreview | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+  const [ack, setAck] = useState(false);
+  const current: Source = die.source ?? 'private';
+  const target: Source = current === 'open' ? 'private' : 'open';
+  const pend = die.source_pending;
+
+  const openPreview = async () => {
+    setErr(null); setAck(false); setWorking(true);
+    try {
+      const r = await fetch(`${API}/api/admin/dies/${encodeURIComponent(die.name)}/source/preview?target=${target}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(typeof j.detail === 'string' ? j.detail : `HTTP ${r.status}`); return; }
+      setPreview(j as MovePreview);
+    } finally { setWorking(false); }
+  };
+
+  const confirmMove = async () => {
+    if (!preview) return;
+    setWorking(true); setErr(null);
+    try {
+      const r = await fetch(`${API}/api/admin/dies/${encodeURIComponent(die.name)}/source`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, confirm: true, snapshot: preview.snapshot }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setErr(detailMsg(j, r.status));
+        if (j.detail?.move) { setPreview(null); onMoved(`✗ ${die.name}: move incomplete — ${detailMsg(j, r.status)}`); }
+        return;
+      }
+      setPreview(null);
+      onMoved(target === 'open'
+        ? `✓ ${die.name}: published (branch pushed to the public repository); PRs opened for merge into main`
+        : `✓ ${die.name}: withdraw PRs opened — pending until merged`);
+    } finally { setWorking(false); }
+  };
+
+  const moveAction = async (action: 'resume' | 'rollback') => {
+    if (!pend) return;
+    if (action === 'rollback' && !window.confirm(
+      `Roll back move ${pend.id}? The pushed branches are deleted and the PRs closed.` +
+      (pend.to === 'open' ? ' Anything already pushed to the public repository may have been cloned — rollback cannot unpublish it.' : ''))) return;
+    setWorking(true); setErr(null);
+    try {
+      const r = await fetch(`${API}/api/admin/dies/source/moves/${encodeURIComponent(pend.id)}/${action}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action === 'rollback' ? { confirm: true } : {}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(detailMsg(j, r.status)); return; }
+      onMoved(`✓ ${die.name}: move ${action === 'resume' ? `resumed — ${j.status}` : 'rolled back'}`);
+    } finally { setWorking(false); }
+  };
+
+  const m = preview?.manifest;
+  return (
+    <Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>Source</Typography>
+        <HelpTip title={SOURCE_HELP} />
+      </Box>
+      <Typography sx={{ fontSize: 13, color: sourceColor(die), fontWeight: 700 }}>{sourceLabel(die)}</Typography>
+      {die.source_clash && (
+        <Typography sx={{ fontSize: 11, color: '#f87171' }} title={die.source_error ?? ''}>
+          In more than one source — not used until one copy is removed or an override record picks one.
+        </Typography>
+      )}
+      {pend && pend.status !== 'pending' && (
+        <Box sx={{ mt: 0.5 }}>
+          <Typography sx={{ fontSize: 11, color: '#f87171' }} title={pend.error ?? ''}>
+            Stopped at {pend.failed_step ?? 'start'}{pend.error ? `: ${pend.error.slice(0, 140)}` : ''}
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
+            <Button size="small" disabled={working} onClick={() => void moveAction('resume')} sx={{ textTransform: 'none', fontSize: 12 }}>Resume</Button>
+            <Button size="small" disabled={working} onClick={() => void moveAction('rollback')} sx={{ textTransform: 'none', fontSize: 12, color: '#f87171' }}>Rollback</Button>
+          </Box>
+        </Box>
+      )}
+      {pend && (
+        <Box sx={{ mt: 0.5 }}>
+          {(pend.prs ?? []).map((p) => (
+            <Typography key={p.url} sx={{ fontSize: 11 }}>
+              <a href={p.url} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>{p.repo}</a>
+              {p.opened === false ? ' — open the PR by hand' : ''}
+            </Typography>
+          ))}
+        </Box>
+      )}
+      {!pend && die.source_movable === false && (
+        <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: 0.5 }}>Not in a data repository — private, cannot be moved.</Typography>
+      )}
+      {!pend && die.source_movable !== false && (
+        <Button size="small" disabled={working} onClick={() => void openPreview()}
+          sx={{ mt: 1, textTransform: 'none', fontSize: 12, color: target === 'open' ? '#4ade80' : 'var(--text-2)' }}>
+          {target === 'open' ? 'Publish (make open)…' : 'Make private…'}
+        </Button>
+      )}
+      {err && !preview && <Typography sx={{ fontSize: 11, color: '#f87171', mt: 0.5 }}>{err}</Typography>}
+
+      <Dialog open={!!preview} onClose={() => setPreview(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontSize: 15, fontWeight: 800 }}>
+          {target === 'open' ? `Publish “${die.name}” as open data?` : `Move “${die.name}” to private?`}
+        </DialogTitle>
+        <DialogContent dividers>
+          {preview && m && (
+            <>
+              {preview.public_push && (
+                <Typography sx={{ fontSize: 13, color: '#f87171', fontWeight: 800, mb: 1 }}>
+                  Confirming publishes immediately — the branch is pushed to the public repository and is public at once. The PR is only for review and merge into main.
+                </Typography>
+              )}
+              <Typography sx={{ fontSize: 12.5, color: '#fbbf24', fontWeight: 700, mb: 1.5 }}>{preview.warning}</Typography>
+              {preview.blockers.length > 0 && (
+                <Box sx={{ mb: 1.5 }}>
+                  <Typography sx={{ fontSize: 12, color: '#f87171', fontWeight: 700 }}>Blocked — fix these first:</Typography>
+                  {preview.blockers.map((b) => (
+                    <Typography key={`${b.kind}:${b.name}`} sx={{ fontSize: 12 }}>• {b.kind} <b>{b.name}</b> — {b.reason}</Typography>
+                  ))}
+                </Box>
+              )}
+              <Typography sx={{ fontSize: 12, fontWeight: 700 }}>
+                {target === 'open' ? 'Will be published' : 'Will be moved'}: {m.files.length} file(s), {(m.total_bytes / 1024).toFixed(1)} KiB
+                <span style={{ color: 'var(--text-4)', fontWeight: 400 }}> · snapshot {preview.snapshot.slice(0, 12)}</span>
+              </Typography>
+              <Box component="ul" sx={{ fontSize: 11.5, m: 0, pl: 2.5, maxHeight: 140, overflow: 'auto' }}>
+                {m.files.map((f) => <li key={f.path}>{f.path}</li>)}
+              </Box>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, mt: 1 }}>Geometry</Typography>
+              <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+                {Object.keys(m.geometry).length} parameters{m.geometry.stator_diameter != null ? ` · Ø ${String(m.geometry.stator_diameter)} mm` : ''}
+                {m.geometry.num_slots != null ? ` · ${String(m.geometry.num_slots)}s-${String(m.geometry.num_poles)}p` : ''}
+              </Typography>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, mt: 1 }}>Configurations</Typography>
+              <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+                {m.configs.map((c) => `${c.name} (${c.duties.join(', ') || 'no duties'})`).join(' · ') || '—'}
+              </Typography>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, mt: 1 }}>Materials</Typography>
+              <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)' }}>{m.materials.join(', ') || '—'}</Typography>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, mt: 1 }}>Devices</Typography>
+              <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)' }}>{m.devices.join(', ') || '—'}</Typography>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, mt: 1 }}>Results</Typography>
+              <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)' }}>{m.results.length ? `${m.results.length} item(s)` : 'none'}</Typography>
+              {preview.blockers.length === 0 && (
+                <FormControlLabel sx={{ mt: 1.5 }} control={<Checkbox size="small" checked={ack} onChange={(e) => setAck(e.target.checked)} />}
+                  label={<Typography sx={{ fontSize: 12 }}>I understand — {target === 'open' ? 'this publishes immediately and cannot be undone' : 'the public history keeps what was published'}.</Typography>} />
+              )}
+              {err && <Typography sx={{ fontSize: 11.5, color: '#f87171', mt: 1 }}>{err}</Typography>}
+            </>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button size="small" onClick={() => setPreview(null)} sx={{ textTransform: 'none' }}>Cancel</Button>
+          <Button size="small" variant="contained" color={target === 'open' ? 'warning' : 'primary'}
+            disabled={working || !ack || (preview?.blockers.length ?? 0) > 0} onClick={() => void confirmMove()}
+            sx={{ textTransform: 'none' }}>
+            {target === 'open' ? 'Publish now' : 'Move to private'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
   );
 };
 

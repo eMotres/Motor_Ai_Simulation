@@ -5117,8 +5117,8 @@ def fem_transient_sliding_band(
 
     # ── the AIR GAP, as an element set ──────────────────────────────────────
     #
-    # User 2026-09-10: *"для электромагнитного анализа надо ещё рассчитывать
-    # среднее поле в зазоре и писать это число в таблицу"*.  The mean |B| over
+    # User 2026-09-10: *"for the electromagnetic analysis we also need to
+    # compute the mean field in the gap and write that number into the table"*.  The mean |B| over
     # the clearance is the number a machine is sized on before anything else,
     # and it is the one quantity the summary never carried.
     #
@@ -6032,8 +6032,8 @@ def fem_transient_sliding_band(
         # current whatever flux it links.  A real k-in-hand coil is soldered at
         # its ends, so the strands are in PARALLEL — they share a voltage and
         # the flux-linkage difference between the rows drives a circulating
-        # current between them (user 2026-09-11: "мы будем спаивать концы жил
-        # вместе... там могут возникнуть компенсационные токи").
+        # current between them (user 2026-09-11: "we'll solder the strand
+        # ends together... circulating currents could arise there").
         #
         # Merging the k rows of a turn into ONE constraint is exactly that
         # parallel connection: the group gets a single U, each strand's current
@@ -6793,7 +6793,7 @@ def fem_transient_sliding_band(
     # P_mag / P_shaft riding a transient.
     _warm_quiet = None
     # ── THE Br RATCHET MAY ONLY SEE A SETTLED FIELD ──────────────────────────
-    # User, 2026-09-05: "второй расчёт всегда отличается от первого".  Two
+    # User, 2026-09-05: "the second run always differs from the first".  Two
     # identical Runs of the Ø200 12s/10p at 470.2 A / 20000 rpm / 36 steps with
     # coupled eddy + demag gave T_avg 237.22 vs 244.61 N·m (+3.1 %), Br kept
     # 91.4 vs 98.5 %, Ld 0.055 vs 0.044 mH, rotor heat 837 vs 713 W; a third run
@@ -6822,7 +6822,7 @@ def fem_transient_sliding_band(
     # per-frame schedule that cannot be spliced, so it keeps today's behaviour).
     #
     # ── ONCE PER SWEEP (user 2026-09-06) ─────────────────────────────────────
-    # "проход демагнитизации делается для каждого sweep только один раз".  When
+    # "the demagnetization pass is done once per sweep only".  When
     # the warm cache handed this run a Br map (`_dm_seeded`, sweep mode only —
     # see the seed block above), the pre-pass has ALREADY been paid for by the
     # point that published it and the magnet arrives settled: its length here
@@ -10158,7 +10158,7 @@ def fem_transient_sliding_band(
     # ── Demag aggregate for the summary card ─────────────────────────────────
     # ONE number an engineer can act on: the AREA-weighted mean Br the magnets
     # kept.  To first order (T ∝ ψ_pm ∝ ∫Br dA) its deficit bounds the torque /
-    # EMF loss, which is what "коэффициент демагнитизации" should mean — the
+    # EMF loss, which is what "demagnetization coefficient" should mean — the
     # worst single element is a corner statistic, alarming and unrepresentative
     # on its own, so it ships as context, not as the headline.
     # magnet_scale is divided OUT: it is the torque-decomposition knob, not

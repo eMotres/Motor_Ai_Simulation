@@ -309,6 +309,17 @@ def audit(*, principal: Optional[Principal], method: str, tool: str = "",
            "method": method, "tool": tool or None,
            "args": _summ(args) if args is not None else None,
            "status": status, **({"note": note} if note else {})}
+    if method == "tools/call":
+        try:  # Admin -> Servers: MCP calls/min and 429s
+            from motor_ai_sim import cluster_monitor as _cm
+            _cm.note_mcp_call(status)
+            from motor_ai_sim import usage_stats as _us
+            who = principal.email if principal else None
+            _us.note(who, "mcp_call", tool)
+            if status == 429:
+                _us.note(who, "mcp_429")
+        except Exception:                               # noqa: BLE001
+            pass
     p = audit_path()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)

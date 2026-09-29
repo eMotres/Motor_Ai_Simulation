@@ -693,7 +693,15 @@ class InProcessQueue(JobQueue):
                 self._cv.wait(timeout=1.0)
 
     def _run_admitted(self, w: _Waiter, inline: bool) -> Any:
-        """Run an ALREADY-ADMITTED job and release its slot."""
+        """Run an ALREADY-ADMITTED job and release its slot (metered)."""
+        from motor_ai_sim import job_usage as _USAGE
+        meter = _USAGE.start(w.record)
+        try:
+            return self._run_admitted_inner(w, inline)
+        finally:
+            _USAGE.finish(meter, w.record.state)
+
+    def _run_admitted_inner(self, w: _Waiter, inline: bool) -> Any:
         rec = w.record
         try:
             with _WSP.use_workspace(w.ws) if (not inline and w.ws is not None) \

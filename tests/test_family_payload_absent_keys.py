@@ -4,7 +4,7 @@ A die saved before a knob existed carries no key for it, and the frontend's
 ``PUT /api/geometry`` merges the payload over whatever is loaded — so the
 previous machine's value survived.  Loading any pre-sleeve die from the sleeved
 Ø200 kept its 2.5 mm band and was refused by the sleeve-vs-gap rule (user,
-2026-09-08: "хочу загрузить G2-L40, а он не грузится").  The payload now says
+2026-09-08: "I want to load G2-L40, and it won't load").  The payload now says
 what absence means.
 """
 from __future__ import annotations
@@ -108,7 +108,7 @@ def test_a_die_that_carries_the_key_keeps_its_own_value(dies):
 # ---------------------------------------------------------------------------
 # …and what a configuration SAVES (2026-09-09)
 # ---------------------------------------------------------------------------
-# User: *"почему изоляция в этой машине опять Nomex, я же менял её на Al2O3"*.
+# User: *"why is the insulation in this machine Nomex again, I changed it to Al2O3"*.
 # The save kept three material keys — magnet, stator_core, rotor_core — so a
 # slot liner, a wire enamel, a conductor or a shaft grade chosen in Materials
 # had nowhere to live, and the next activation filled the absent keys from

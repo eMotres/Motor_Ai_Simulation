@@ -1,9 +1,9 @@
 /**
  * HistoryPopover — "last 10 stored results", a click away from solving again.
  *
- * Owner, 2026-09-22, first sentence of the ask: *"если я запускаю те же
- * параметры каплинга, он не считается, а подгружает уже рассчитанный
- * вариант; ... нужна проверка и хранить небольшую историю, 10 вычислений"*.
+ * Owner, 2026-09-22, first sentence of the ask: *"if I run the same coupling
+ * parameters, it doesn't recompute, it loads the already-computed
+ * variant; ... we need a check and to keep a small history, 10 computations"*.
  * The "Loaded from history — computed … · Recompute" one-liner
  * (`lib/historyNotice.ts`) answers HALF of that: it tells you when the
  * result on screen already came from a stored run. This is the other half —

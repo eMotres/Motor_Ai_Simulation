@@ -1,8 +1,8 @@
 /**
  * The one-line notice shown, without any user action, when a running sweep
  * got interrupted by an API restart and the backend picked it back up on its
- * own.  Owner 2026-09-19: "нужно, чтобы автоматом это было видно после
- * сбоя" ("it needs to be automatically visible after a crash").
+ * own.  Owner 2026-09-19: "it needs to be visible automatically after a
+ * crash" ("it needs to be automatically visible after a crash").
  *
  * The backend already does the actual work — `sweep_journal.py` persists the
  * sweep's request + which points are done, `sweep_resume.py` re-enqueues it

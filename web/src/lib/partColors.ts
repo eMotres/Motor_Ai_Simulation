@@ -21,8 +21,8 @@ export const PART_COLORS = {
   outBand: '#a855f7',
   // The three domains the THERMAL map added on 2026-09-07, when the air the
   // conduction solve actually uses stopped being white space and became parts
-  // of their own (user: "и воздух тоже показывать — он же входит в расчёт, и в
-  // дереве отображать их тоже нужно").  Deliberately pale: they are the things
+  // of their own (user: "also show the air — it's part of the computation,
+  // so it also needs to be shown in the tree").  Deliberately pale: they are the things
   // BETWEEN the metals, and a saturated fill for them would read as a component
   // rather than as what fills the space around one.
   slotFill: '#efe4c4',    // impregnation / air in the slot — cream

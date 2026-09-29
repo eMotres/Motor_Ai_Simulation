@@ -109,8 +109,8 @@ test('pct is a fraction turned into per cent', () => {
 });
 
 /* ── settings persistence (owner 2026-09-22) ────────────────────────────────
- * "при сохранении мотора текущий контроллер тоже должен сохраняться со всеми
- * настройками" — the tab's own FORM, saved WITH the configuration, restored
+ * "when saving the motor, the current controller should also be saved with
+ * all its settings" — the tab's own FORM, saved WITH the configuration, restored
  * when the tab reads it back. Verbatim copies of `formStateFromSettings` /
  * `settingsForSave`, same reason as the helpers above (TS + import.meta.env).
  */
@@ -273,7 +273,7 @@ test('settingsForSave round-trips through formStateFromSettings', () => {
 });
 
 /* ── controllerSolveBody — the wire payload (owner 2026-09-22, third round:
- * "Error: v_dc_V is required" — «проверь всё») ─────────────────────────────
+ * "Error: v_dc_V is required" — «check everything») ─────────────────────────────
  * Every machine/point value (V_dc, carrier, current, power, connection) is
  * resolved server-side; the tab must never send '' or null for a blank
  * number box, only OMIT the key entirely, or the route reads "the request
@@ -367,8 +367,8 @@ test('a custom mapping is sent only for the custom topology', () => {
 });
 
 /* ── cooling.mode payload (owner 2026-09-22 evening) ─────────────────────────
- * "надо добавить воздушное охлаждение и скорость ветра, как в
- * термосимуляции" — the same liquid / forced-air / still-air choice the
+ * "need to add air cooling and wind speed, like in
+ * the thermal simulation" — the same liquid / forced-air / still-air choice the
  * thermal tab already offers, now for the device heatsink/plate
  * (``ControllerCoolingSpec`` on the backend, ``inverter.losses.COOLING_MODES``).
  * ``ControllerCoolingSpec`` ignores whatever a mode does not use, but the
@@ -472,8 +472,8 @@ test('an old configuration with no saved cooling.mode restores as "liquid" '
 });
 
 /* ── the resolved point pre-fills Carrier/DC link, never silently overrides
- * (owner 2026-09-22 evening screenshots: "надо брать эти значения из
- * электромагнитного моделирования или из батареи и рисовать значения") ────
+ * (owner 2026-09-22 evening screenshots: "we need to take these values from
+ * the electromagnetic simulation or the battery and draw the values") ────
  * The panel shows the resolved value as a PLACEHOLDER (``carrierPlaceholder``
  * / ``vdcPlaceholder`` below, verbatim copies of the JSX prop expressions —
  * see ControllerPanel.tsx's Carrier/DC-link ``<Num>`` rows) while the actual
@@ -524,7 +524,7 @@ test('typing over the placeholder sends the typed value as a deliberate '
 });
 
 /* ── controllerMirrorApplies (owner 2026-09-22, second round) ───────────────
- * "при сохранении мотора текущий контроллер тоже должен сохраняться" — not
+ * "when saving the motor, the current controller should also be saved" — not
  * only the Controller tab's own button. ActiveFamilyStrip's "Save to duty"
  * reads the `ctrl.settings` localStorage mirror and PATCHes it in the SAME
  * flow, but only when the tag matches the motor actually being saved — a
@@ -734,9 +734,9 @@ test('a saved devices-per-switch count survives round-tripping through the '
     + 'value from whatever machine was loaded before it');
 });
 
-/* ── automatic cooling inheritance from Thermal (owner 2026-09-25): "Когда я
- * ставлю air или liquid, он должен брать параметры охлаждения из Thermal...
- * но можно изменить, чтобы сделать разными" — replaces the 2026-09-24
+/* ── automatic cooling inheritance from Thermal (owner 2026-09-25): "When I
+ * set air or liquid, it should take the cooling parameters from Thermal...
+ * but it should be possible to change them to make them different" — replaces the 2026-09-24
  * button (`useThermalCooling`/`getCoolingFromThermal`/the chip state), now
  * gone from ControllerPanel entirely. ControllerPanel.tsx imports
  * import.meta.env and JSX, so this is source-checked (not re-implemented),
@@ -797,8 +797,8 @@ test('the Coolant select offers an explicit "(from Thermal)" option for the '
     'a blank option must exist so the select can represent "inherited"');
 });
 
-/* ── "Couple with EM" checkbox removed (owner 2026-09-25): «весь каплинг
- * нужно настраивать через меню в Электромагнитном» — all coupling (drive,
+/* ── "Couple with EM" checkbox removed (owner 2026-09-25): «all coupling
+ * needs to be configured through the menu in Electromagnetic» — all coupling (drive,
  * Solve to, Re-run) is configured ONLY in the EM-side Coupled panel. The
  * Controller tab's checkbox only ever SAVED a flag the backend never read
  * (`src/motor_ai_sim/routes/family.py` stored `couple_with_em` and nothing

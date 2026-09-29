@@ -609,7 +609,7 @@ def test_schematic_draws_a_transistor_with_its_body_diode_per_switch():
 @pytest.mark.parametrize("sd,marker,absent", [("star", ">N<", "Δ"),
                                               ("delta", "Δ", ">N<")])
 def test_schematic_draws_the_winding_the_duty_is_wound_as(sd, marker, absent):
-    """Owner 2026-09-22: «дельту и звезду тоже надо рисовать на картинке»."""
+    """Owner 2026-09-22: «delta and star also need to be drawn in the picture»."""
     coils = tp.coils_from_winding(12, 10)
     t = tp.build_topology(preset="one_3ph", coils=coils, star_delta=sd)
     svg = sc.schematic_svg(t)
@@ -622,8 +622,8 @@ def test_schematic_draws_the_winding_the_duty_is_wound_as(sd, marker, absent):
 def test_the_three_terminals_sit_120_degrees_apart(sd, slots, poles):
     """The textbook symbols, and the reason the phase lines do not cross.
 
-    Owner 2026-09-22, on the first two attempts: *«я бы повернул и треугольник,
-    и звезду на 60 градусов»*, then *«нарисуй нормальную звезду»*.  What both
+    Owner 2026-09-22, on the first two attempts: *«I'd rotate the triangle
+    and the star by 60 degrees too»*, then *«draw a proper star»*.  What both
     corrections come down to is one property, and it is the one pinned here:
     the three terminals are 120 degrees apart — an equilateral triangle, or a
     Y of three equal arms — placed upper-left, lower-left and right, so L1 and
@@ -695,7 +695,7 @@ def test_suggested_parallel_is_the_current_rating_and_says_so():
 # ---------------------------------------------------------------------------
 # The times-and-charges switching-energy fallback (owner 2026-09-22:
 # IQE050N08NM5SC has no E_on/E_off table, only t_r/t_f and gate charges —
-# "конечно, нужен честный пересчёт для любых MOSFET")
+# "of course we need an honest recomputation for any MOSFET")
 # ---------------------------------------------------------------------------
 
 def test_tc_card_loads_and_matches_datasheet_tables():
@@ -1122,8 +1122,8 @@ def test_missing_duty_record_refuses_with_the_plain_sentence(synth_dir, monkeypa
 
 # ---------------------------------------------------------------------------
 # V_dc and the carrier are resolved server-side, never required from the web
-# (owner 2026-09-22, production: "Error: v_dc_V is required" — «почему это
-# всё не берётся из мотора или из батарейки? проверь всё»)
+# (owner 2026-09-22, production: "Error: v_dc_V is required" — «why isn't
+# this all taken from the motor or the battery? check everything»)
 # ---------------------------------------------------------------------------
 
 def _sine_node(rpm=3000.0, T_Nm=12.0, P_loss_W=500.0, i_A=48.6, sd="star",
@@ -1220,7 +1220,7 @@ def test_missing_battery_and_no_pwm_bus_refuses_with_the_v_dc_sentence(
 
 def test_carrier_the_saved_controller_carrier_outranks_the_dutys_pwm_record(
         synth_dir, monkeypatch):
-    """2026-09-24 (owner: «Это значение нужно задавать в контроллере»): the
+    """2026-09-24 (owner: «This value needs to be set in the Controller»): the
     Controller's saved carrier IS the machine's carrier.  The duty's stored
     PWM record is what an older run was solved at — a migration tier only."""
     node = _sine_node(inv_extra={"f_carrier_hz": 24_000.0})
@@ -1595,8 +1595,8 @@ def test_cooling_from_thermal_source_names_the_duty_and_the_cooling_mode(monkeyp
 
 # ---------------------------------------------------------------------------
 # Cooling INHERITS from Thermal, per field, per mode (owner 2026-09-25:
-# "Когда я ставлю air или liquid, он должен брать параметры охлаждения из
-# Thermal... но можно изменить, чтобы сделать разными") — the automatic
+# "When I set air or liquid, it should take the cooling parameters from
+# Thermal... but it should be possible to change them to make them different") — the automatic
 # default that replaces the 542c930 button above as the tab's DEFAULT
 # behaviour.  ``_thermal_cooling_for_mode`` unit tests first (no route, no
 # device card), then ``_build_request``'s override precedence, then the
@@ -1833,8 +1833,8 @@ def test_report_controller_section_is_absent_without_a_record():
 
 
 # ---------------------------------------------------------------------------
-# Cooling modes — owner 2026-09-22: "надо добавить воздушное охлаждение и
-# скорость ветра, как в термосимуляции" (the Controller cooling selector
+# Cooling modes — owner 2026-09-22: "need to add air cooling and wind
+# speed, like in the thermal simulation" (the Controller cooling selector
 # only offered liquid coolants).  ``liquid`` (the original ColdPlate) must
 # stay bit-identical; ``air_forced``/``air_still`` reuse the SAME
 # correlations the motor's own housing ("air") and robotics ("still")

@@ -2,8 +2,8 @@
  * mechThermalTemps — the Thermal tab's per-part temperatures, as the Mechanical
  * tab uses them.
  *
- * User 2026-09-08: *"в механический расчёт тоже нужно делать каплинг, чтобы
- * температуры везде были одинаковы"*.  The Thermal solve already reports a
+ * User 2026-09-08: *"the mechanical solve also needs coupling, so the
+ * temperatures are the same everywhere"*.  The Thermal solve already reports a
  * temperature for every solid; the Mechanical solve used to take the rotor and
  * sleeve MAXIMA and stretch the rotor's number over the core, the magnets and
  * the shaft.  That is two numbers standing in for four, and on a real machine

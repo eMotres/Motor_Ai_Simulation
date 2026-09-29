@@ -3,10 +3,9 @@
  * to `common/FieldViewer`.
  *
  * User 2026-09-06, looking at the Mechanical tab (three static side-by-side
- * canvases, no zoom): "сделай наш интерфейс для просмотра, чтобы можно было
- * приближать и удалять; нужно сделать одну картинку и меню для переключения
- * выводов графиков; интерфейс должен быть единым для всех графиков —
- * электромагнитных, механических и термо".
+ * canvases, no zoom): "make our viewer interface so you can zoom in and out;
+ * we need one picture and a menu for switching between chart outputs; the
+ * interface must be the same for all charts — electromagnetic, mechanical, and thermal".
  *
  * Before this file there were four renderers of the same kind of picture:
  * FemFieldChart (three.js, zoomable, jet bands), StressMap (2-D canvas, three
@@ -111,9 +110,9 @@ export interface FieldOutput {
    * The DISPLAY-unit value behind every drawn VERTEX, in geometry order (3 per
    * drawn triangle) — i.e. `aVal` BEFORE it was normalised against `scale`.
    *
-   * User 2026-09-06: "нужно ещё добавить в вывод название частей ротора и
-   * статора, чтобы можно было смотреть отдельно на каждую часть и видеть только
-   * её деформации и стрессы".  Showing one part alone is not a matter of hiding
+   * User 2026-09-06: "we also need to add the names of the rotor and stator
+   * parts to the output, so you can look at each part separately and see
+   * only its deformations and stresses".  Showing one part alone is not a matter of hiding
    * triangles: the whole point is that the part gets its OWN colour range (a
    * magnet's stress read against the rotor lips' 5 GPa is one flat colour band),
    * and re-normalising needs the raw values back.  `aVal` cannot be inverted —
@@ -340,8 +339,8 @@ export interface FieldExtremum {
 /**
  * The max and the min of what is actually drawn.
  *
- * User 2026-09-06: "нужно ещё, чтобы можно было подсвечивать точки максимальных
- * деформаций, напряжений и полей".  Read off `probe` — the RAW per-triangle
+ * User 2026-09-06: "we also need to be able to highlight the points of
+ * maximum deformations, stresses and fields".  Read off `probe` — the RAW per-triangle
  * display-unit values and their display-space centroids — and NEVER off the
  * normalised `aVal`: that one is clipped at the percentile ends, so on any
  * clipped view (von Mises, |B|, Loss) whole regions share t = 1 and the "max"
@@ -358,9 +357,9 @@ export function extremaOf(
 
   // THE DRAWN FIELD'S OWN ENDS, read on the nodes it is drawn from.
   //
-  // User 2026-09-10: "как нам теперь объяснять пользователям эти две разные
-  // цифры 1728 и 1426? нас не поймут, везде и в Ansys и Fusion полное
-  // соответствие".  They are right, and one of those two numbers was ours to
+  // User 2026-09-10: "how are we supposed to explain to users these two
+  // different numbers, 1728 and 1426? nobody will understand, everywhere in
+  // Ansys and Fusion there's a full match".  They are right, and one of those two numbers was ours to
   // fix.  The picture is drawn from NODAL values (each element's value
   // area-averaged onto the nodes of its own part, which is what ANSYS and
   // Fusion call an averaged plot).  The marker, though, used to be read off
@@ -407,8 +406,7 @@ export function extremaOf(
 /**
  * Triangle edges of a drawn field geometry, as LineSegments positions.
  *
- * User 2026-09-06: "также чтобы была возможность отображения сетки или без
- * неё".  The field geometry is NON-INDEXED (3 corners per triangle, duplicated
+ * User 2026-09-06: "also have the option to show the mesh or not".  The field geometry is NON-INDEXED (3 corners per triangle, duplicated
  * per material class — see `buildMeshGeometry`), so drawing three edges per
  * triangle would emit every interior edge twice: 6 vertices per triangle, which
  * on a 100k-triangle mesh is 1.8 M floats of line data and a visibly heavier
@@ -468,12 +466,12 @@ export function buildEdgeGeometry(
 /* ── the parts of a picture (the component tree's model) ──────────────────── */
 
 /**
- * User 2026-09-06: "нужно ещё добавить в вывод название частей ротора и
- * статора, чтобы можно было смотреть отдельно на каждую часть и видеть только
- * её деформации и стрессы".
+ * User 2026-09-06: "we also need to add the names of the rotor and stator
+ * parts to the output, so you can look at each part separately and see
+ * only its deformations and stresses".
  *
  * The second half of that sentence is the hard half.  Hiding the other parts is
- * a triangle filter; "видеть только её" means the picture has to be REBUILT for
+ * a triangle filter; "see only its" means the picture has to be REBUILT for
  * the part — its own colour range, its own max/min, its own mesh, its own
  * cursor readout.  On the Ø200 rotor the iron lips run to ~5 GPa and the magnets
  * to ~40 MPa: on the shared scale every magnet element is band 0, so "look at
@@ -500,7 +498,7 @@ export interface FieldPart {
   n: number;
   /** the swatch the shared component tree draws next to it.  Straight out of
    *  `lib/partColors`, so the field viewer's tree and the 3-D one give the same
-   *  part the same colour (user 2026-09-06: "то же самое дерево"). */
+   *  part the same colour (user 2026-09-06: "the same tree"). */
   colour: string;
 }
 
@@ -606,8 +604,8 @@ export function partsOf(out: FieldOutput | null | undefined): FieldPart[] {
  *
  * `ends` — when given — is what the LINEAR range is taken from: the drawn
  * per-triangle values, the same array `extremaOf` reads the max / min markers
- * off.  User 2026-09-10: "надо, чтобы шкала автоматом перестраивалась по
- * min max именно выбранных в дереве элементов, а не по всем".  It already did,
+ * off.  User 2026-09-10: "the scale needs to automatically rebuild by the
+ * min/max of exactly the elements selected in the tree, not all of them".  It already did,
  * but over `vals` — the per-VERTEX values, percentile-clipped the way the full
  * view was — so the bar's ends never equalled the numbers the markers printed
  * beside them (1463 on the bar over "max 1426 MPa"), and a rebuilt scale that
@@ -707,8 +705,8 @@ function nameList(names: string[]): string {
  * cursor readout, colour bar, Fit) restricts itself for free.
  *
  * User 2026-09-06 replaced the viewer's single-choice Part dropdown with the
- * app's own component tree ("используй то же самое дерево, которое у нас уже
- * есть, чтобы всё было универсально"), and a tree of eye toggles is not a
+ * app's own component tree ("use the same tree we already have, so
+ * everything is universal"), and a tree of eye toggles is not a
  * single choice: any SUBSET of the parts can be on.  Hence a set of names
  * rather than one `FieldPart` — everything else (the per-part re-scaling that
  * is the whole point, the ghost outlines, the honest clip note) is unchanged.

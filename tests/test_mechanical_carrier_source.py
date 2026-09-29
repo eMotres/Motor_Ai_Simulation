@@ -173,7 +173,7 @@ def test_effective_f_switch_prefers_the_bodys_own(global_carrier):
 
 def test_the_controllers_carrier_outranks_the_body_and_the_global(
         global_carrier, monkeypatch):
-    """2026-09-24 (owner: «Это значение нужно задавать в контроллере»): a
+    """2026-09-24 (owner: «this value must be set in the Controller»): a
     carrier saved in the Controller — or sent with the run as its
     ``controller`` block — is THE carrier; the retired body field is only
     accepted below it."""

@@ -1,6 +1,6 @@
 """Sine | Inverter | Δ on a drive="inverter" coupled run (owner 2026-09-25:
-«нужно давать сравнение, как изменились характеристики мотора с контроллером
-по сравнению с синусоидой, и тоже указывать это в отчёте»).
+«we need to show a comparison of how the motor's characteristics changed with
+the controller compared to the sine wave, and also note this in the report»).
 
 The record block (``coupling.sine_comparison``), the extra sine pass the
 full-PWM loop makes for it, its compaction into the duty record, and the

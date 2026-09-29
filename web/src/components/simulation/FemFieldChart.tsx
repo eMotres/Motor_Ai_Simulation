@@ -10,8 +10,8 @@
  *
  * The picture, the camera (wheel-zoom at the cursor, drag-pan, Fit), the output
  * menu and the colour bar are that viewer's job now, and they are the same ones
- * the Mechanical and Modal tabs use.  User 2026-09-06: "интерфейс должен быть
- * единым для всех графиков — электромагнитных, механических и термо".
+ * the Mechanical and Modal tabs use.  User 2026-09-06: "the interface must
+ * be the same for all charts — electromagnetic, mechanical, and thermal".
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Paper, Typography, Button, Tooltip } from '@mui/material';
@@ -195,7 +195,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // same thing, and it is emptied by a restart or a geometry save — after
   // which this view used to fall back to a single-angle full-Br check, a
   // MILDER picture that could not reproduce the card's number (user
-  // 2026-09-04: "половина 100 %, половина 99 % — никак 94 % не получается";
+  // 2026-09-04: "half at 100 %, half at 99 % — there's no way to get 94 %";
   // the run's map showed 85–90 % over the magnet cores).  Read the run's map
   // directly instead: same machine (geometry stamp), tiled to the full ring.
   const numPoles = Number((storeGeometry as Record<string, unknown> | null)?.num_poles ?? 0);
@@ -288,8 +288,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
    *  field cache — `snapshot_only` returns before any solve) and shows the
    *  placeholder on a miss.  This is how the view comes back after a page
    *  reload without solving anything: the run's automatic solve is still in
-   *  the server's cache, the page just lost its copy (user 2026-09-04: "и
-   *  опять не считается автоматом" — it had; the Claude app restart reloaded
+   *  the server's cache, the page just lost its copy (user 2026-09-04: "and
+   *  again it's not computing automatically" — it had; the Claude app restart reloaded
    *  the page and the picture with it). */
   const fetchFem = (probeOnly = false) => {
     if (payloadOverride) return;   // parent owns the data
@@ -417,8 +417,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payloadOverride, mode, gamma_deg, I_phase_rms]);
 
-  // ── …except after RUN (user 2026-09-03: "когда я нажимаю Run, пусть
-  //    считается автоматом — это логично").  A finished transient is the one
+  // ── …except after RUN (user 2026-09-03: "when I click Run, let it
+  //    compute automatically — that's logical").  A finished transient is the one
   //    moment the user has asked for a solve of THIS machine at THIS point, so
   //    the field picture follows it by itself: one fetch, after the run, never
   //    on tab opens or nudges.  `sim-transient-done` fires only for a REAL

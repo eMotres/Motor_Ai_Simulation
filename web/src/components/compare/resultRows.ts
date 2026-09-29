@@ -1,9 +1,9 @@
 /**
  * One Mechanical / Thermal answer → the flat block a Compare row carries.
  *
- * User 2026-09-07: *"нужно везде сделать такую же кнопку для сравнения всех
- * величин в механических и температурных моделированиях; в температурном нужно
- * все максимальные температуры всех частей мотора сравнивать между собой"* — the
+ * User 2026-09-07: *"we need the same button everywhere for comparing all
+ * values in the mechanical and thermal simulations; in thermal we need to
+ * compare all maximum temperatures of all motor parts against each other"* — the
  * Mechanical and Thermal tabs get the Configure tab's "+ Add to comparison"
  * button, and their answers become ROWS of the SAME table the EM points live in.
  *
@@ -23,8 +23,8 @@
  * parts: the backend grew five new domains on 2026-09-07 (insulation, wire
  * enamel, wire coating, air gap, pocket air) and will grow more, and a hard-coded
  * list would silently drop the temperature of every part added after this file
- * was written — which is the opposite of "все максимальные температуры всех
- * частей".
+ * was written — which is the opposite of "all maximum temperatures of all
+ * parts".
  */
 import type { CoupledResult, ThermalField } from '../thermal/api';
 import { outerCooling } from '../thermal/types';
@@ -330,8 +330,8 @@ export function mechanicalRowFromResult(
 /* ═══════════════════════════════════════════════════════════════════════════
  * THE TAB'S OWN STACK — one row of a LOCAL comparison table
  *
- * User 2026-09-07: *"сделай локальное сравнение по параметрам тепловой
- * симуляции, только как в Configure; так же сделай в механике"* — pressing "+
+ * User 2026-09-07: *"make a local comparison of the thermal simulation
+ * parameters, just like in Configure; do the same in mechanics"* — pressing "+
  * Add to comparison" must also stack the variant into a table ON THE TAB, the
  * way the Configure tab stacks its configurations, so two cooling designs (or
  * two fits) can be read against each other without leaving the physics.
@@ -567,8 +567,8 @@ export function mechanicalInputsFromResult(
   // The fit the band actually FEELS once the rotor is hot — an input of the
   // machine, not of the panel, and the number two thermal variants differ by.
   put(out, 'interference_eff_mm', num(stress?.interference_effective_mm));
-  /* ONE temperature per solid (2026-09-08): "в механический расчёт тоже нужно
-     делать каплинг, чтобы температуры везде были одинаковы".  The four are read
+  /* ONE temperature per solid (2026-09-08): "the mechanical solve also needs
+     coupling, so the temperatures are the same everywhere".  The four are read
      off `thermal.part_temps_c`, which the solver always fills — whether each
      part was named or inherited the scalar — so a row never has to re-derive
      the fallback rule to say what was applied.  `rotor_c` KEEPS its key (it is

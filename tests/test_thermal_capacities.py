@@ -1,7 +1,7 @@
 """Σm·c_p per node — the thermal mass a duty cycle is integrated on.
 
 Pinned on the machine the whole robot-joint feature was written for: the Ø85 /
-13 mm ``CIANO28 85 20SW1200 / L13``, duty "rated 120С wire 80C NdFeB".  Its mass
+13 mm ``CIANO28 85 20SW1200 / L13``, duty "rated 120C wire 80C NdFeB".  Its mass
 rows are copied verbatim below rather than read out of ``config/`` — a unit test
 must not depend on the catalogue the user happens to have open — and one test
 DOES read the catalogue, to say so loudly if the machine behind these numbers

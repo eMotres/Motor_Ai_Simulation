@@ -129,8 +129,8 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
   // ── MACHINE IDENTITY of the shown numbers ──────────────────────────────
   // The summary card is the LAST thing the user reads, and it kept presenting
   // the previous machine's physics as current after another motor was loaded
-  // (user 2026-08-31: "при загрузке нового мотора остались данные со старого
-  // — этот косяк давным давно не исправляется").  The charts already carry
+  // (user 2026-08-31: "when loading a new motor, data from the old one
+  // remained — this glitch has been unfixed for ages").  The charts already carry
   // two witnesses on every summary (_geoSig — this client's stamp of the run,
   // _geoStaleBackend — the server's own fingerprint verdict on the restored
   // last transient); the card just never looked at them.  An applied duty
@@ -150,7 +150,7 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
   // ── AUTO-SET the operating point from a VERIFIED S1 run (owner 2026-09-21,
   // fourth round, screenshot: the dashboard DIMMED after a `continuous` run
   // and the panel still read the setpoint 63.64 A under tiles at 48.6 A —
-  // *«почему замыленный экран … опять токи не совпадают»*).  The dimming
+  // *«why is the screen dimmed … the currents don't match again»*).  The dimming
   // IS SummaryTable's own operating-point staleness guard (`opStale`, current
   // vs `liveOp.current`) — this is the current mismatch, not the geometry
   // fingerprint (the "3D ×0.951 ⚠ recompute" chip is the unrelated inherited
@@ -158,8 +158,8 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
   // current through `applyS1AsOperatingPoint` brings `liveOp.current` back
   // within the guard's own 0.05 A tolerance.  A manual "Use N A…" button once
   // did this on click, but sat unnoticed at the end of a row — removed (owner,
-  // fourth round: *«ты что не можешь сам записать этот ток и прогнать солвер
-  // с ним автоматом?»*): the panel now moves BY ITSELF.  Only for a REAL
+  // fourth round: *«can't you just record this current yourself and run the
+  // solver with it automatically?»*): the panel now moves BY ITSELF.  Only for a REAL
   // verification pass (`s1AutoSetPlan` — record_is_s1 AND verified === true);
   // an estimate or a contradiction never moves the setpoint (rule 2 of the
   // brief), and the S1 line already says why.  Never silent (project rule):

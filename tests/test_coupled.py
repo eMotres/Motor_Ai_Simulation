@@ -9,8 +9,8 @@ for each other:
     EM run at (T_coil, T_magnet)  ->  thermal solve  ->  winding / magnet
     averages  ->  back into the EM run's temperatures  ->  until both settle.
 
-User, 2026-09-08: *"не надо всё смешивать, нужен оркестратор"* and *"чтобы можно
-было его включать и отключать"*.  Both halves of that sentence are testable, and
+User, 2026-09-08: *"don't mix everything together, we need an orchestrator"* and *"so that
+it can be switched on and off"*.  Both halves of that sentence are testable, and
 this file tests them:
 
   (a) SOLVER ISOLATION SURVIVES.  The orchestrator is a third module above the
@@ -1110,8 +1110,8 @@ def test_a_later_pass_s_refusal_keeps_the_last_solved_pass(client, monkeypatch):
     assert c["coil_temp_c"] == pytest.approx(EM_BODY.get("coil_temp_c", 120.0))
     # …and the mechanics were solved for that pass, not skipped, at THAT
     # map's numbers.  This map has no sleeve, so the solver treats them as no
-    # load (user 2026-09-09: "температура только как изменение давления на
-    # бандаж, если он есть") and the block says so in one line — the numbers
+    # load (user 2026-09-09: "temperature only as a change of pressure on
+    # the sleeve, if there is one") and the block says so in one line — the numbers
     # themselves still go through, because the user wants the coupling to
     # carry real ones everywhere.
     assert hook_calls and hook_calls[0]["magnet"] == pytest.approx(243.6)

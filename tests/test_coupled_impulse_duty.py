@@ -1,7 +1,7 @@
 """An IMPULSE duty is solved for its REGIME — it is no longer refused.
 
-THE REFUSAL THAT WENT AWAY (user, 2026-09-16: *"каплинг на цикле S3 подбирает
-скважность для того чтобы можно было влезть в лимиты"*).  Until today this file
+THE REFUSAL THAT WENT AWAY (user, 2026-09-16: *"on an S3 cycle, the coupling
+picks the duty ratio so that it can fit within the limits"*).  Until today this file
 pinned a 422: the coupled loop's method is to iterate the electromagnetic run and
 the thermal solve until the winding and the magnet stop moving, and on a duty
 that runs 25 % of a 60 s cycle that fixed point is the temperature the machine

@@ -3,9 +3,9 @@
  * copper wire physically on the shelf (`GET /api/wires/stock`, backed by
  * `config/wire_stock.yaml`).
  *
- * WHY (the owner, 2026-09-20): *"давай сделаем справочную таблицу по
- * доступным на складе проводам; мы потом будем брать данные отсюда, чтобы
- * пользователи могли менять толщину провода из тех, что есть реально"* — a
+ * WHY (the owner, 2026-09-20): *"let's make a reference table of the wires
+ * available in stock; we'll later pull data from here so users can change
+ * the wire thickness from what's actually available"* — a
  * table the winding editors will later restrict the wire-size choice to.
  * This component only DISPLAYS the table; nothing here restricts a selector
  * yet (the owner decides the hard restriction later) — see

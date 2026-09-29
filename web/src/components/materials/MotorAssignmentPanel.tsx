@@ -328,8 +328,8 @@ const MotorAssignmentPanel: React.FC<Props> = ({
   // …or when the backend already lists the part: GET /api/materials adds
   // `sleeve` only for a machine whose geometry has one, so its presence is the
   // same fact from the other side and does not depend on this tab's copy of
-  // the geometry being fresh (user 2026-09-04: "не вижу sleeve в дереве
-  // материалов, но на геометрии он появился").
+  // the geometry being fresh (user 2026-09-04: "I don't see the sleeve in
+  // the materials tree, but it appeared on the geometry").
   const sleeveAssigned = !!(assignments as any)?.sleeve;
   const parts = useMemo(
     () => ((sleeveT > 0 || sleeveAssigned) ? [...PARTS, SLEEVE_PART] : PARTS), [sleeveT, sleeveAssigned]);

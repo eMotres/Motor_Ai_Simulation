@@ -1,8 +1,8 @@
 """A visitor's words reach the team — the log, the marker, the inbox, the push.
 
-The owner asked it plainly on 2026-09-17: *"а как сообщения, которые они пишут
-боту, будут доходить до нас? Ему как-то надо объяснить, что делать и в каком
-случае"*.  Three mechanisms answer it, and this file holds each of them to its
+The owner asked it plainly on 2026-09-17: *"and how will the messages they
+write to the bot reach us? It needs to be explained somehow what to do and in
+what case"*.  Three mechanisms answer it, and this file holds each of them to its
 promise:
 
 1. **Every visitor turn is kept** — ``support_store`` appends it to the day's

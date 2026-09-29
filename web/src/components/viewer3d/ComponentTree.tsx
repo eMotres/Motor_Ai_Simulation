@@ -1,8 +1,8 @@
 /**
  * ComponentTree — the 3-D viewport's binding of the shared tree.
  *
- * The LOOK lives in `ComponentTreeView` (user 2026-09-06: "используй то же
- * самое дерево, которое у нас уже есть, чтобы всё было универсально" — the
+ * The LOOK lives in `ComponentTreeView` (user 2026-09-06: "use the same tree
+ * we already have, so everything is universal" — the
  * field viewer now drives the same view with its own model).  This file is only
  * the wiring to the global `useUIStore`: which rows the machine has, what each
  * eye toggles, what "isolate" and "Show All" mean here.  Rows are listed in the
@@ -32,8 +32,8 @@ const ComponentTree: React.FC = () => {
   const meshData = useMotorMesh();
   // The sleeve row keys on the GEOMETRY, not only on the CadQuery mesh: in the
   // flat / extruded viewer modes that mesh is never fetched, so the row was
-  // missing there while the ring was drawn (user 2026-09-05: "не вижу sleeve
-  // в дереве").  The geometry says whether the machine has one.
+  // missing there while the ring was drawn (user 2026-09-05: "I don't see
+  // the sleeve in the tree").  The geometry says whether the machine has one.
   const sleeveT = Number(useMotorStore(s => (s.geometry as Record<string, unknown> | null)?.sleeve_thickness ?? 0));
   const hasSleeve = sleeveT > 0 || !!(meshData && (meshData as Record<string, unknown>).sleeve);
 

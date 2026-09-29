@@ -2,8 +2,8 @@
 
 Owner report, production, 2026-09-20 20:40 CEST: the field view showed
 ``max 0.0 · min 0.0``, every slot painted the same colour, on a run whose
-server log said ``eddy=True`` — "очень странно выглядит график токов, тут
-должны быть и + −".
+server log said ``eddy=True`` — "the current chart looks very strange, there
+should be both + and −".
 
 Root cause: ``fem_transient_sliding_band``'s field-snapshot builder wrote
 EITHER ``Jeddy`` (the coupled solve's nodal eddy density, when ``eddy`` was
@@ -78,7 +78,7 @@ class TestTheSolverSnapshotCarriesBoth:
         assert js.size > 0
         # Windings carry current at 60 A rms and gamma=0: a symmetric 3-phase
         # set never has all three legs the same sign, so the applied source
-        # density must show both + and - (the owner's "должны быть и + −").
+        # density must show both + and - (the owner's "there should be both + and −").
         assert (js > 0).any(), "no positive source-current elements at all"
         assert (js < 0).any(), "no negative source-current elements at all"
 
@@ -155,7 +155,7 @@ class TestTheRouteServesTheViewNotTheRunFlag:
         assert out["ok"] and out.get("from_transient")
         j = out["J_z_per_tri"]
         assert j == pytest.approx(fld["Jtri_src"].tolist())
-        # Sign kept — this is the owner's literal complaint ("должны быть и + −").
+        # Sign kept — this is the owner's literal complaint ("there should be both + and −").
         assert any(v > 0 for v in j) and any(v < 0 for v in j)
         assert not out.get("j_view_stale")
 

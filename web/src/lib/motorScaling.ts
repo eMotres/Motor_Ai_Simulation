@@ -484,7 +484,7 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
       // Entries, not key round-trips: the backend writes '35.0' and
       // String(Number('35.0')) is '35' — the lookup missed its own key and a
       // NaN k poisoned torque/EMF/KV across the card (measured live
-      // 2026-08-25: "куча пустых клеток").
+      // 2026-08-25: "a pile of empty cells").
       const pts = Object.entries(m)
         .map(([kk, vv]) => [Number(kk), Number(vv)] as [number, number])
         .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))

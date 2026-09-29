@@ -1,6 +1,6 @@
 """Two identical eddy+demag runs must give the same machine.
 
-User, 2026-09-05: "второй расчёт всегда отличается от первого — разберись".
+User, 2026-09-05: "the second solve always differs from the first — figure it out".
 Two identical Runs of the Ø200 12s/10p at 470.2 A rms / 20000 rpm / 36 steps,
 coupled eddy + demag, current drive, gave T_avg 237.22 vs 244.61 N·m (+3.1 %),
 Br kept 91.4 vs 98.5 %, Ld 0.055 vs 0.044 mH and rotor heat 837 vs 713 W; a

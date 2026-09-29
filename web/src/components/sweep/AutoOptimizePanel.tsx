@@ -552,7 +552,7 @@ const AutoOptimizePanel: React.FC = () => {
             </Box>
             {/* Points cloud: EVERY measured design as torque×ripple, the ripple
                 gate as the vertical fence, the current design and the best point
-                called out — the user's "график с точками".
+                called out — the user's "chart with points".
                 It used to plot `hist` (st.history = one row per GENERATION, i.e.
                 the incumbent), so a 62-eval run drew 6 dots and read as "found
                 nothing".  It now plots st.points — every eval that produced
@@ -659,8 +659,8 @@ const AutoOptimizePanel: React.FC = () => {
                     fontWeight: 700, cursor: 'help',
                     bgcolor: nDom > 0 ? 'rgba(232,121,249,0.08)' : 'rgba(245,158,11,0.08)' }}>
                   {nDom > 0
-                    ? `F ${fmt(st.best.F, 3)} · но ${nDom} конструкц. лучше текущей по всем трём осям · ⓘ`
-                    : `⚠ не лучше текущего (F = ${fmt(st.best.F, 3)}) · ⓘ`}
+                    ? `F ${fmt(st.best.F, 3)} · but ${nDom} design(s) beat the current one on all three axes · ⓘ`
+                    : `⚠ not better than current (F = ${fmt(st.best.F, 3)}) · ⓘ`}
                 </Typography>
               </Tooltip>
             )}
@@ -670,7 +670,7 @@ const AutoOptimizePanel: React.FC = () => {
                 + `the current would give.`}>
                 <Typography variant="caption" sx={{ display: 'inline-block', mb: 1, color: '#22c55e',
                     fontWeight: 700, cursor: 'help' }}>
-                  ✓ лучше текущего (F = {fmt(st.best.F, 3)}) · ⓘ
+                  ✓ better than current (F = {fmt(st.best.F, 3)}) · ⓘ
                 </Typography>
               </Tooltip>
             )}

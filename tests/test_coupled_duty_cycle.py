@@ -1,7 +1,7 @@
 """The coupled loop FINDS the regime — the search, the feedback, the record.
 
-User, 2026-09-16: *"каплинг на цикле S3 подбирает скважность для того чтобы можно
-было влезть в лимиты"*.  Three claims, tested in three layers:
+User, 2026-09-16: *"on an S3 cycle, the coupling picks the duty ratio so that it can
+fit within the limits"*.  Three claims, tested in three layers:
 
   (a) THE MODEL — ``coupled_duty_cycle`` on the L13 fixtures (the Ø85 robot
       joint, the same maps ``tests/test_thermal_duty_cycle`` pins the physics
@@ -543,8 +543,8 @@ def test_an_s1_machine_is_untouched(client, monkeypatch, faked_loop):
 # ---------------------------------------------------------------------------
 # (b2) THE FEATURE FLAG — with the duty cycle OFF, every duty is the point it is
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-17: *«давай пока уберём duty cycle из Thermal, оставим только
-# стандартный каплинг»*.  Nothing above was deleted; it is all behind
+# Owner, 2026-09-17: *«let's drop the duty cycle from Thermal for now, keep just
+# the standard coupling»*.  Nothing above was deleted; it is all behind
 # `DUTY_CYCLE_ENABLED`, which is OFF unless something sets it.  What has to be
 # true then is exactly what `test_an_s1_machine_is_untouched` pins for a machine
 # with no cycle at all — with the difference that the duty here HAS an S3 block

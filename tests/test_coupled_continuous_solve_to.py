@@ -1,7 +1,7 @@
 """``solve_to: "continuous"`` — the THIRD answer, beside ``steady`` / ``limits``.
 
 Owner, 2026-09-21 (screenshot of the coupled panel's "Solve to" selector):
-*«давай сделаем кнопку, или лучше добавим ещё один элемент в меню»* — a third
+*«let's make a button, or better add one more item to the menu»* — a third
 option, "continuous rating": the largest current the machine may hold FOR EVER
 at THIS duty's saved cooling (S1), from the pass the loop already made.
 
@@ -185,8 +185,8 @@ def test_continuous_stops_the_loop_exactly_as_limits_does(client, monkeypatch):
     assert cr["duty_point"]["I_phase_rms_A"] == LOOP_BODY["I_phase_rms"]
     assert "winding reaches 200" in cr["duty_point"]["verdict"]
 
-    # ── THE RECORD SAYS SO (owner 2026-09-21, third round: "опять токи не
-    # совпадают" — the AT-THE-LIMIT line used to end "the numbers below are
+    # ── THE RECORD SAYS SO (owner 2026-09-21, third round: "the currents don't
+    # match again" — the AT-THE-LIMIT line used to end "the numbers below are
     # the machine at that moment", which is false once those numbers are the
     # S1 pass's) ─────────────────────────────────────────────────────────
     assert cr["record_is_s1"] is True
@@ -493,7 +493,7 @@ def test_the_row_group_appears_only_when_a_duty_asked_for_it():
     assert "confirmed with a real electromagnetic pass" in lim_v
     assert "torque linear in current" not in lim_v
     # …and once the record has MOVED to S1 (owner 2026-09-21, third round:
-    # "опять токи не совпадают"), both currents are named so the setpoint's
+    # "the currents don't match again"), both currents are named so the setpoint's
     # and the rating's are never silently conflated on one record.
     assert "setpoint 63.64 A rms, continuous 34.4 A rms" in lim_v
 

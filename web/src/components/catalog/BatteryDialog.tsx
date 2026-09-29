@@ -57,9 +57,9 @@ const BatteryDialog: React.FC<{
                 n_parallel?: number; r_int_mohm?: number;
                 capacity_ah?: number; i_charge_max_a?: number }) => void;
 }> = ({ open, configName, initial, onClose, onSave }) => {
-  // STORE THE PLACEHOLDERS ANYWAY (user 2026-09-11: "надо тогда предупреждать,
-  // почему не сохранилось, или дать возможность перезаписать несмотря ни на
-  // что").  Both, in the end: the row below names the fields that will be
+  // STORE THE PLACEHOLDERS ANYWAY (user 2026-09-11: "then we need to warn
+  // why it wasn't saved, or give the ability to overwrite regardless").
+  // Both, in the end: the row below names the fields that will be
   // skipped, and this makes them go anyway.  Off by default — a guess that
   // enters the yaml is indistinguishable from a measurement ever after, and
   // that asymmetry is why the skipping existed at all.
@@ -167,8 +167,8 @@ const BatteryDialog: React.FC<{
           mt: 2, mb: 0.75 }}>
           CHARGE SIDE — for running this machine as a generator into the pack
         </Typography>
-        {/* WHY A NUMBER IN THE BOX CAN COME BACK (user 2026-09-11: "батарея не
-            сохраняется" — the pack had saved; these four had not).  A field
+        {/* WHY A NUMBER IN THE BOX CAN COME BACK (user 2026-09-11: "the battery
+            isn't saving" — the pack had saved; these four had not).  A field
             still showing a placeholder is deliberately NOT sent: a guessed
             12 mOhm written to the yaml would read as a measured one ever after.
             The rule was in the code and in a tooltip; it was not on the screen,

@@ -1,6 +1,6 @@
 """The slot/pole topology has to be one the product family stamps (2026-09-20).
 
-Owner: *"Poles per Segment у нас 5 или 7, других комбинаций пока не бывает"* —
+Owner: *"our Poles per Segment is 5 or 7, no other combinations exist yet"* —
 after a stray 7 → 8 (12s16p) reached the live machine and released the die
 context.  ONE table (``geometry_validation.ADMISSIBLE_POLES_PER_SEGMENT``):
 

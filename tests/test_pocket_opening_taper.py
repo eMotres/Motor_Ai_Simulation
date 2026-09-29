@@ -1,6 +1,6 @@
 """rotor_hole < 1: the pocket OPENING must never leave the magnet outline.
 
-Owner, 2026-09-25 («проверь геометрию, там с ротором косяки»): the Ø12
+Owner, 2026-09-25 («check the geometry, there are glitches with the rotor»): the Ø12
 12s10p rotor imported from his Fusion model came out as 31 pieces of iron.
 Two things stacked up; this file pins the builder half.
 
@@ -11,7 +11,7 @@ written for magnets tens of mm tall.  On a 2 mm magnet it runs the 0.88 mm
 opening down to the magnet's 0.72 mm-wide inner end: the rectangle's corners
 stand 0.08 mm outside the magnet on both sides, i.e. in the 0.13 mm iron web
 between two neighbouring pockets, and every spoke comes off the hub.  That is
-the 2026-09-05 "косяк внизу магнитов" again, which the 2 mm overlap was meant
+the 2026-09-05 "glitch at the bottom of the magnets" again, which the 2 mm overlap was meant
 to have fixed.  `_pocket_cut_depth` now also stops where the magnet's side
 becomes narrower than the opening; where it never does (every machine built
 before) the depth is exactly what it was.

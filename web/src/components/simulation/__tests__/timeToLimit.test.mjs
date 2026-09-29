@@ -8,8 +8,8 @@
 // reason.
 //
 // WHAT IS WORTH TESTING is not string formatting; it is three rules the owner
-// asked for on 2026-09-17 («если где-то выходим за лимиты, нужно посчитать
-// время, за какое мотор проработает до этого лимита»):
+// asked for on 2026-09-17 («if we go past the limits somewhere, we need to
+// compute the time the motor will run before hitting that limit»):
 //
 //   1. a point INSIDE every limit shows NOTHING — there is no time to a limit
 //      it respects, and printing one would invite planning around a number that

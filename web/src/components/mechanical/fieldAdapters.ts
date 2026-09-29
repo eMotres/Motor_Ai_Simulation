@@ -1,8 +1,8 @@
 /**
  * fieldAdapters — the Mechanical tab's half of the shared field contract.
  *
- * User 2026-09-06: "интерфейс должен быть единым для всех графиков —
- * электромагнитных, механических и термо".  Everything a mechanical or modal
+ * User 2026-09-06: "the interface must be the same for all charts —
+ * electromagnetic, mechanical, and thermal".  Everything a mechanical or modal
  * picture needs is turned into the SAME `FieldOutput` the EM adapter produces,
  * so `common/FieldViewer` draws all of them with one camera, one banded shader
  * and one colour bar.  The three hand-rolled 2-D canvases this replaced each had
@@ -64,8 +64,8 @@ export const MECH_MENU: {
 ];
 
 // The number formatter is `fieldView.fmtAuto`, shared with every other output.
-// It used to be a private `fmtMPa` here — user 2026-09-06: "вывод полей
-// напряжения/деформации должен быть сделан так же как B — единый стиль везде",
+// It used to be a private `fmtMPa` here — user 2026-09-06: "the stress/strain
+// field output should be done the same way as B — one consistent style everywhere",
 // and a second copy of the formatter is a second place for the same value to be
 // printed differently.  Same reason the outline colour below is the EM one.
 
@@ -173,7 +173,7 @@ export function mechOutputs(
     // a band nobody's element falls into is not drawn, so a rotor whose worst
     // element is at 2.6 shows green and blue only, from 2.6 up.
     const sfMin = Math.max(0, floorOf(sf));
-    // AUTO BANDS (user 2026-09-09: "давай это делать автоматом").  A blank
+    // AUTO BANDS (user 2026-09-09: "let's do this automatically").  A blank
     // low/high hands the choice to the map, and there are two regimes, because
     // a safety factor is an ACCEPTANCE test only while something is close to
     // failing:
@@ -238,7 +238,7 @@ export function mechOutputs(
     valuesPerTri = v;
     // THE BAR ENDS WHERE THE PICTURE ENDS.
     //
-    // User 2026-09-10: "я думаю шкалу визуализации нужно сдвигать", after
+    // User 2026-09-10: "I think the visualization scale needs to shift", after
     // asking how two different numbers for one band could ever be explained to
     // a user who has ANSYS open beside us.  They cannot, so both moved onto one
     // convention: the AVERAGED nodal field, which is what ANSYS and Fusion plot
@@ -310,8 +310,8 @@ export function mechOutputs(
     outlines: exagg > 0 ? undefined : payload.outlines,
     ghostOutlines: exagg > 0 ? payload.outlines : undefined,
     // EXACTLY the EM outline (0x0f172a / 0.55), not the black-45 % this used to
-    // draw.  User 2026-09-06: "вывод полей напряжения/деформации должен быть
-    // сделан так же как B" — a different outline ink is a visible difference
+    // draw.  User 2026-09-06: "the stress/strain field output should be
+    // done the same way as B" — a different outline ink is a visible difference
     // between a stress map and a |B| map of the same machine.
     outlineColor: 0x0f172a,
     outlineOpacity: 0.55,
@@ -330,7 +330,7 @@ const GEOM_FILL: [number, number, number] = [100, 116, 139];
 /**
  * The rotor as geometry alone — no values, no colour scale.
  *
- * User 2026-09-06: "если нет расчётов — рисуется просто геометрия".  Built from
+ * User 2026-09-06: "if there are no results — just draw the geometry".  Built from
  * `/api/mechanical/mesh`, i.e. the SAME `build_rotor_mesh` the stress solve
  * runs, so the empty tab shows the picture the solve will colour in — down to
  * the element edges, which is what makes the viewer's Mesh and Part toggles

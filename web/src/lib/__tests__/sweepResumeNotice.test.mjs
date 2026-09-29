@@ -3,8 +3,8 @@
 // the TS modules, so the pure function under test is re-stated and kept in
 // sync — see runNotice.test.mjs for the same pattern).
 //
-// The case this exists for: owner 2026-09-19, «нужно, чтобы автоматом это
-// было видно после сбоя» — a sweep interrupted by an API restart resumes on
+// The case this exists for: owner 2026-09-19, «it needs to be visible
+// automatically after a crash» — a sweep interrupted by an API restart resumes on
 // its own (sweep_journal.py / sweep_resume.py) and the frontend must say so
 // without the user doing anything, on whatever tab they are looking at.
 import test from 'node:test';

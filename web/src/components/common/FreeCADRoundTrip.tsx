@@ -4,7 +4,7 @@
 // locks, clamp report), so refusals surface exactly like a typed value would.
 // One shared component: it first shipped inside GeometryForm, which turned out
 // to be DEAD code — the Geometry tab actually renders ParameterVariationTable
-// (found live 2026-08-23: "не вижу кнопку экспорта").
+// (found live 2026-08-23: "I don't see the export button").
 import React, { useState } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';

@@ -145,7 +145,7 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
   const isInt = parameterSchema.find(p => p.name === paramName)?.type === 'int';
   // 3 decimals, not 1: fraction parameters (magnet fill 0…1) need 0.45-style
   // values — the old 0.1 grid silently rounded them to 0.5 the moment they
-  // were typed (live 2026-08-21: "Magnet Fill Up не могу задать 0.45").
+  // were typed (live 2026-08-21: "Magnet Fill Up, I can't set it to 0.45").
   const snap = (x: number) => (isInt ? Math.round(x) : Math.round(x * 1000) / 1000);
   const fmt  = (x: number) => (isInt ? String(Math.round(x)) : String(snap(x)));
   // Optimize view anchors the ± window on the CURRENT value.
@@ -463,7 +463,7 @@ const SweepConfigPanel: React.FC = () => {
           <ToggleButton value="doe" sx={{ textTransform: 'none', fontSize: 12 }}>DOE / Importance</ToggleButton>
         </ToggleButtonGroup>
         {/* One-click card FIRST — the user opens Optimize to run it, not to
-            scroll past 18 variable cards looking for it ("не вижу графика").
+            scroll past 18 variable cards looking for it ("I don't see the chart").
             The variables block below belongs to the manual flow. */}
         {algoTab === 'optimize' && (
           <Box sx={{ mb: 2 }}>

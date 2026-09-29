@@ -2,10 +2,10 @@
  * THE FOUND REGIME — what the duty-cycle editor says now (2026-09-15).
  *
  * The tool used to GRADE a duty ratio the user typed: "you asked for 25 %, the
- * class allows 21.6 %".  The user's reframe is the other way round — «с помощью
- * Duty cycle мы можем подобрать такой режим работы мотора, чтобы он смог
- * уложиться в температурные лимиты — то есть мы сами находим это время / S3 ED,
- * при котором всё нормально» — so the ANSWER is the regime, and the typed ratio
+ * class allows 21.6 %".  The user's reframe is the other way round — «with the
+ * Duty cycle we can pick a motor operating regime so it can fit within the
+ * temperature limits — that is, we ourselves find that time / S3 ED where
+ * everything is fine» — so the ANSWER is the regime, and the typed ratio
  * became an optional check beside it.
  *
  * This module is the panel's arithmetic and its wording, with no React in it:
@@ -211,16 +211,16 @@ export function calibrationIssue(picked: string | null | undefined,
 }
 
 /* ── WHAT THE RUN BUTTON WILL DO, in the kind that is chosen ────────────────
-   User 2026-09-16: «Нужен правильный алгоритм расчёта — что и когда нажимать.
-   Если выбран S1 — идёт нормальный каплинг; если выбран S3 — по умолчанию идёт
-   оптимизация времени импульса.»  The flow was real in the backend since
+   User 2026-09-16: «We need the correct computation algorithm — what to press
+   and when. If S1 is selected — normal coupling runs; if S3 is selected — by
+   default pulse-time optimization runs.»  The flow was real in the backend since
    `coupled: an S2/S3 duty is solved for its REGIME` and invisible in the UI:
    the kind picker sat in a panel that said nothing about the Run button three
    panels away.  One line under the picker says it, and the two sentences
    behind the ⓘ say why — the standing no-walls-of-text rule. */
 
 /** The kinds this editor OFFERS.  S2 went out with the same message (user:
- *  «S2, я думаю, нужно выбросить, не знаю ему пока применения») — one pull is
+ *  «S2, I think we should drop it, I don't know a use for it yet») — one pull is
  *  what the S3 answer already reports as "S2 from cold", so choosing it was
  *  asking for a number you were being given anyway. */
 export const OFFERED_KINDS = ['S1', 'S3'] as const;

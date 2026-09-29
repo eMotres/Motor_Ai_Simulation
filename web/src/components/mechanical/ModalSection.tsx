@@ -1,7 +1,7 @@
 /** Modal section of the Mechanical tab — ring modes, and the shaft's criticals.
  *
- * Added 2026-09-05 for the user's request: "нам нужно сделать ещё модальный
- * анализ, чтобы понять все частоты — это очень важно для 20000 rpm".
+ * Added 2026-09-05 for the user's request: "we also need to do a modal
+ * analysis, to understand all the frequencies — this is very important for 20000 rpm".
  *
  * Two models side by side because they answer two different questions, and
  * only one of them decides whether the machine may be run at 20 000 rpm:
@@ -17,7 +17,7 @@
  *
  * 2026-09-06: both results and every input here moved into
  * `stores/mechanicalStore` with the rest of the tab — user, on leaving and
- * re-entering Mechanical: "графики пропадают".  A modal solve is as expensive as
+ * re-entering Mechanical: "the plots disappear".  A modal solve is as expensive as
  * a stress solve and was being thrown away by the same click.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -73,8 +73,8 @@ const Num: React.FC<{
 /** One mode shape, on the SHARED field viewer.
  *
  * It used to be a fourth hand-written canvas (a sibling of StressMap, with no
- * legend and no zoom).  User 2026-09-06: "интерфейс должен быть единым для всех
- * графиков", so a mode shape is now just another `FieldOutput` — same camera,
+ * legend and no zoom).  User 2026-09-06: "the interface must be the same for
+ * all charts", so a mode shape is now just another `FieldOutput` — same camera,
  * same banded ramp, same colour bar as every electromagnetic and mechanical
  * map.  What stays special is what a mode shape IS: no units (the solver
  * normalises it so the peak component is 1), so the exaggeration is a fraction
@@ -293,8 +293,8 @@ const BEAM_FIELDS: { key: keyof BeamInputs; label: string; tip: string }[] = [
 const ModalSection: React.FC<{ rpm: number }> = ({ rpm }) => {
   const st = useMechanicalStore();
   const liveGeometry = useMotorStore((s) => s.geometry);
-  // `meshMm` is the tab's ONE mesh size since 2026-09-06 ("сетка ... ей тоже
-  // нужно как-то управлять"): this section used to carry a second "mesh mm" box
+  // `meshMm` is the tab's ONE mesh size since 2026-09-06 ("the mesh ... it
+  // also needs some control"): this section used to carry a second "mesh mm" box
   // of its own, so the same rotor was meshed twice, at two different sizes, and
   // neither box said which one the picture belonged to.  The field lives in the
   // Mesh block above; here we only report what the answer was solved on.
@@ -518,8 +518,8 @@ const ModalSection: React.FC<{ rpm: number }> = ({ rpm }) => {
 
           {/* the mode shape — same viewer as every other field map, and the
               SAME SIZE as the stress map above it: its own full-width row at
-              the StressMap height (user 2026-09-08: "сделай этот график точно
-              такого же размера, как и предыдущий, во всю страницу"). */}
+              the StressMap height (user 2026-09-08: "make this chart exactly
+              the same size as the previous one, full page"). */}
           {modal.field && (
             <Box sx={{ flex: '1 1 100%', minWidth: 0 }}>
               <ModeView modal={modal} sel={sel} onSel={setSel} exagg={exagg}

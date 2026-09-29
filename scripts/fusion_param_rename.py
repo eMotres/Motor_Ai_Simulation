@@ -346,8 +346,8 @@ def rename(rows: List[Dict[str, str]], create_defaults: Dict[str, float],
     for out in new_rows:
         res.rows.append(out if set(out) == set(HEADER) else _to_row6(out, cols))
 
-    # NO PARAMETER IS EVER DELETED (owner, 2026-09-25: "чтобы никаких
-    # переменных не уничтожалось, только переименования") -- every input
+    # NO PARAMETER IS EVER DELETED (owner, 2026-09-25: "no variable should
+    # ever be destroyed, only renamed") -- every input
     # row survives (unchanged, renamed, or with its Expression's referenced
     # tokens rewritten), and the only rows added are the ones this run
     # explicitly created. A count mismatch here means a row silently

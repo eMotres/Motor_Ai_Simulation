@@ -30,8 +30,8 @@ const MotorsCatalog: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null);
   useScrollMemory('motors', rootRef, 'parent');
   // Each Ø section folds on a click of its header and stays folded across
-  // tab switches and reloads (user 2026-09-13: "нажимаешь на 200 —
-  // вываливается весь список, снова нажимаешь — закрывается").
+  // tab switches and reloads (user 2026-09-13: "you click 200 —
+  // the whole list dumps out, click again — it closes").
   const [folded, setFolded] = useState<Record<string, boolean>>(() => {
     try { return JSON.parse(localStorage.getItem('motors.folded') || '{}') || {}; }
     catch { return {}; }
@@ -69,7 +69,7 @@ const MotorsCatalog: React.FC = () => {
         // Backend away (a restart window): retry instead of freezing a wrong
         // answer — a failed first load left an ADMIN's catalog stripped of
         // its lock/duplicate buttons until a manual F5 (measured live
-        // 2026-08-25: "не вижу замочков").
+        // 2026-08-25: "I don't see the lock icons").
         setTimeout(() => { void load(true); }, 3000);
       });
   useEffect(() => {

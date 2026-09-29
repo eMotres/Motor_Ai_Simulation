@@ -1,6 +1,6 @@
 /**
- * The page a signed-out visitor lands on (user 2026-09-16: *"нужно сделать
- * красивую заставку при входе, ещё до регистрации клиента"*).
+ * The page a signed-out visitor lands on (user 2026-09-16: *"we need a nice
+ * splash screen at entry, even before the client registers"*).
  *
  * Before this, a visitor to https://emotres.com got the header and one grey
  * line — "Sign in to see the motor catalog" — because the production backend

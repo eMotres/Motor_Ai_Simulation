@@ -572,8 +572,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // field — so these come from GET /api/bearings/losses, an ANALYTIC model over
   // the machine's own bearing cards (SKF frictional moment + windage). Fetched
   // whenever the summary's speed changes.  Since 2026-09-09 they ARE in the
-  // card's one efficiency (user: "КПД должен быть один и потери разные — все
-  // потери суммируются, ищется КПД на валу"): the η tile is the shaft's, the
+  // card's one efficiency (user: "there should be one efficiency and different
+  // losses — all losses are summed, efficiency is sought at the shaft"): the η tile is the shaft's, the
   // electromagnetic-only figure lives in its tooltip, and the losses stay as
   // separate cells (EM / bearings / windage / all).  The stored `efficiency`
   // (electromagnetic) is untouched — the optimizer's metric and the Compare
@@ -804,10 +804,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   const brgTempC = fromRun ? s.bearing_temp_c : mech?.temp_c;
   const brgWind = fromRun ? runMech?.windage : mech?.windage;
   const brgMoment = fromRun ? runMech?.M_bearings_Nm : mech?.M_bearings_Nm;
-  // ONE energy balance, three tiles (user 2026-09-09: "нужно добавить
-  // электрическую мощность рядом с Mech power: механическая + все потери для
-  // мотора, механическая − все потери для генератора"; "все потери
-  // суммируются, ищется КПД на валу").  The mechanical losses sit BETWEEN the
+  // ONE energy balance, three tiles (user 2026-09-09: "need to add electric
+  // power next to Mech power: mechanical + all losses for a motor,
+  // mechanical − all losses for a generator"; "all losses
+  // are summed, efficiency is sought at the shaft").  The mechanical losses sit BETWEEN the
   // rotor and the coupling, so
   //   shaft power  = rotor T·ω − (bearings + windage)   motoring
   //                = rotor T·ω + (bearings + windage)   generating (what the
@@ -876,7 +876,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // 85 mm (bound 0.55 % vs measured 0.10 %, correctly conservative).  The
   // energy/(BH) view and the effective grade stay in the tooltip.
   const dmLoss = dm ? dm.loss_pct : null;
-  // Displayed as the KEPT coefficient (user's call: "должен быть 99.74, а не
+  // Displayed as the KEPT coefficient (user's call: "should be 99.74, not
   // 0.26") — the retention reads naturally as a health figure: 100 % = intact.
   const dmKept = dmLoss != null ? 100 - dmLoss : null;
   // The worst element as the flagged corner diagnostic (legacy payloads carry
@@ -927,8 +927,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   const geoStale = (!!s._geoSig && !!liveSig && s._geoSig !== liveSig)
                    || s._geoStaleBackend === true;
   // MATERIALS staleness (user 2026-08-25: a run with the old steel showed as
-  // current after the assignment changed — "цифры совпадают с железом,
-  // которое было до этого").  The run's grades are in its own mass rows
+  // current after the assignment changed — "the numbers match the hardware
+  // that was there before").  The run's grades are in its own mass rows
   // ("Stator core (B15AHV950M)"); the live ones are what the next run will
   // use (currentMatJson — the same payload the solve carries).
   const matDiffs: string[] = (() => {
@@ -947,7 +947,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       // solved (140 °C → N52UH_150C) while the machine is assigned N52UH_20C,
       // and that is the same magnet, not a changed one.  Comparing the record
       // names dimmed every coupled result until the page was reloaded (user
-      // 2026-09-09: "после каждого расчёта мне нужно перегружать страницу").
+      // 2026-09-09: "after every computation I need to reload the page").
       const grade = (name: string) => name.replace(/_\d+C$/i, '');
       for (const [prefix, key] of [['Stator core', 'stator_core'],
                                    ['Rotor back-iron', 'rotor_core'],
@@ -987,7 +987,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
-      {/* The shouting red STALE banner is gone (user: "выкинь").  Staleness
+      {/* The shouting red STALE banner is gone (user: "drop it").  Staleness
           still shows two quieter ways that survive: the whole card dims to
           55 % opacity, and the ⚠ chip in the header line carries the why in
           its tooltip.  Do not resurrect the banner. */}
@@ -1021,7 +1021,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             </Button>
           </span>
         </Tooltip>
-        {/* R at 25 °C — bench-check view (user: "чтобы можно было проверить").
+        {/* R at 25 °C — bench-check view (user: "so it can be checked").
             Rescales ONLY the two R cells by the copper ρ(T) ratio; losses and
             η stay at the solve temperature — a cold loss set needs a cold
             re-solve, not display math. */}
@@ -1060,7 +1060,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
           <AddToCompareButton />
         </Box>
-        {/* Operating-point text removed (user: "убери — без неё всё понятно",
+        {/* Operating-point text removed (user: "remove it — it's clear without it",
             the panel inputs above already say it).  The line SURVIVES as the
             carrier of the warnings: stale ⚠, non-converged, snapped steps,
             generator chip — those must never disappear with it. */}
@@ -1121,7 +1121,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       </Box>
       {/* WHICH CURRENT THE TILES BELOW ARE AT (owner 2026-09-21, third round:
           screenshot showing the tiles at the S1 machine while the Operating
-          point panel still read the setpoint — *«опять токи не совпадают»*).
+          point panel still read the setpoint — *«the currents don't match again»*).
           Only once a real S1 verification pass has REPLACED this record
           (`record_is_s1`): every other run's tiles are simply the setpoint's,
           which is what "no line here" already means on every card today. */}
@@ -1131,7 +1131,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         </Typography>
       )}
 
-      {/* ── SEVEN FIXED ROWS (user 2026-09-04: "упорядочить вывод по строкам"):
+      {/* ── SEVEN FIXED ROWS (user 2026-09-04: "order the output by rows"):
             1 torque · power · mass · efficiency · ripple  (+ the two densities)
             2 total loss · core · stranded · solid · sleeve · stator/rotor heat
             3 voltages + J coil (unchanged)
@@ -1144,8 +1144,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           window width and whichever optional cells this run carries. */}
 
       {/* ── THE COUPLED RUN, FIRST ────────────────────────────────────
-          Directly under the card's heading (user 2026-09-09: "перенеси
-          это сразу после Physics Dashboard").  It is the sentence that
+          Directly under the card's heading (user 2026-09-09: "move it
+          right after Physics Dashboard").  It is the sentence that
           says at WHICH temperatures everything below was computed, so
           it is read before the numbers it qualifies, not after them.
           Its own row, one cell wide: the value is a sentence, and a
@@ -1178,7 +1178,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         </Box>
       )}
       {/* ── THE CONTINUOUS (S1) RATING (owner 2026-09-21) ───────────────────
-          "давай сделаем кнопку, или лучше добавим ещё один элемент в меню" —
+          "let's make a button, or better add one more item to the menu" —
           the third `solve_to` option's own line, beside the limit line above
           it: the largest current this machine holds for ever at this duty's
           own saved cooling.  Green when a current came back, amber when the
@@ -1195,8 +1195,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             tooltip={continuousRatingTip(s.coupling)}/>
           {/* The manual "Use N A as the operating point" button (owner
               2026-09-21, third round) is GONE (owner, fourth round, looking at
-              it: *«ты что не можешь сам записать этот ток и прогнать солвер с
-              ним автоматом?»*) — a verified S1 run now writes the panel by
+              it: *«can't you just record this current yourself and run the
+              solver with it automatically?»*) — a verified S1 run now writes the panel by
               itself (`PhysicsDashboard`'s `s1AutoSetPlan` effect, still the
               SAME `applyS1AsOperatingPoint` setter), with the one visible
               notice + undo that rule requires instead of a click nobody
@@ -1243,7 +1243,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         {/* 3 decimals: a 30 mm machine weighs ~0.05 kg, so 2 decimals showed a
             single significant digit and hid every change during optimization.
             Matches the per-component breakdown below, which already uses 3. */}
-        {/* ONE mass (user 2026-09-10: "масса у нас только одна") — the total,
+        {/* ONE mass (user 2026-09-10: "we only have one mass") — the total,
             because it is what every N·m/kg and kW/kg in this app divides by.
             The electromagnetic subset moved into the tooltip: it is no longer
             the same quantity Ansys prints under "active mass" either, since
@@ -1343,8 +1343,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             start-up transient still running, so THIS number and the efficiency
             beside it are start-up values, not physics.  One marker + the
             residual in the tooltip — the tile stays one tile. */}
-        {/* No ⚠ on the number (user 2026-09-09: "восклицательный знак надо
-            убрать"): an unsettled eddy start-up is said in the tooltip and by
+        {/* No ⚠ on the number (user 2026-09-09: "the exclamation mark
+            needs to go"): an unsettled eddy start-up is said in the tooltip and by
             the amber colour, not by a mark inside the value. */}
         <Cell label="Solid (magnets)"
           value={s.solid_loss_not_solved ? '—' : fmtK(s.P_solid_W)} unit="W"
@@ -1416,8 +1416,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       </Box>
 
       {/* ── Row 2b — heat per side + the mechanical half ─────────────────
-          Its own row (user 2026-09-08: "перенеси на другую строку, а то
-          намельчил с потерями"): thirteen cells on one grid row squeezed the
+          Its own row (user 2026-09-08: "move it to another row, it's
+          cramped with the losses"): thirteen cells on one grid row squeezed the
           labels to three letters. */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
         {/* ── HEAT TO REMOVE, per side ─────────────────────────────────

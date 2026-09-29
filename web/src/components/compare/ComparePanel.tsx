@@ -198,7 +198,7 @@ const RESULT_COLS: ResultCol[] = [
  *
  * User 2026-09-07: the Mechanical and Thermal tabs got the Configure tab's
  * "+ Add to comparison" button, so their answers are rows of THIS table, and
- * *"все максимальные температуры всех частей мотора"* have to be comparable
+ * *"all maximum temperatures of all motor parts"* have to be comparable
  * side by side.  Two more column groups, read out of `results.thermal` /
  * `results.mechanical` (see `compare/resultRows.ts`, which writes exactly these
  * keys); a row without the block prints "—" in every one of them, and a group
@@ -294,7 +294,7 @@ const colId = (r: ResultCol) => `${r.block ?? 'em'}:${r.key}`;
  * Part temperatures the backend added after this file was written.
  *
  * `resultRows.thermalRowFromResult` writes one `<part>_max` for EVERY component
- * the payload carries — that is what "все максимальные температуры всех частей"
+ * the payload carries — that is what "all maximum temperatures of all parts"
  * means — so the table has to be able to show a part nobody has named here yet.
  * They are ON by default: a stored temperature with no column is a measurement
  * the user cannot see.

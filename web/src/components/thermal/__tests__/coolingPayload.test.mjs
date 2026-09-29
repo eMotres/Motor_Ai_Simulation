@@ -283,8 +283,8 @@ test('a liquid bore sends its own coolant, inlet and pump', () => {
 });
 
 /* ── the shaft outside the housing ─────────────────────────────────────────
-   User 2026-09-07: "торцы и лобовые части — только для вала, всё остальное
-   вращается внутри мотора".  The rotor's end faces and the end windings turn in
+   User 2026-09-07: "end faces and end windings — only for the shaft, everything
+   else rotates inside the motor".  The rotor's end faces and the end windings turn in
    a closed housing and are deliberately not modelled; the shaft stubs are. */
 
 test('the shaft path is OFF by default, and off means neither field is sent', () => {
@@ -339,7 +339,7 @@ test('the shaft path is independent of how the bore is cooled', () => {
 });
 
 /* ── how the machine is BUILT ──────────────────────────────────────────────
-   User 2026-09-09, on the 40 mm CIANO14: "нет корпуса" — no housing, the tooth
+   User 2026-09-09, on the 40 mm CIANO14: "no housing" — no housing, the tooth
    blocks with their coils between two end plates on standoff pins, the end
    turns and the axial channels between neighbouring coils in the propeller
    wash.  `housed` is every other machine and must stay byte-identical on the

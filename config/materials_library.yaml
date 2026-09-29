@@ -2612,7 +2612,7 @@ magnet:
 
   N52UH_20C:
     description: "Arnold Magnetics N52UH — operating point 20 °C (cold magnets)"
-    # Added 2026-09-09 (user: "заведи материал N52UH 20C") — the same magnet as
+    # Added 2026-09-09 (user: "add a material N52UH 20C") — the same magnet as
     # N52UH_150C / N52UH_100C, quoted at room temperature, for the COLD back-EMF
     # and the cold runaway threshold of the G2-L40 (spec Rev 2.0: 3494 rpm on
     # cold magnets at the 640 V pack floor).  Every number is the 150 °C card
@@ -3398,8 +3398,8 @@ insulator:
   # -------------------------------------------------------------------------
   # HIGH-MODULUS hoop-wound sleeves - added 2026-09-06.
   #
-  # User: "у нас цель сделать бандаж как можно тоньше и чтобы он смог всё
-  # выдержать".  A retaining band is a STIFFNESS problem before it is a strength
+  # User: "our goal is to make the sleeve as thin as possible and have it
+  # survive everything".  A retaining band is a STIFFNESS problem before it is a strength
   # problem: the rotor grows into the sleeve, so what keeps the magnets pressed
   # on is the hoop stiffness E1 (and the interference), not the tensile margin.
   # A higher-modulus fibre therefore buys retention per millimetre of thickness -

@@ -2,8 +2,8 @@
 
 Added 2026-09-07 for the user's request, in his words:
 
-    "ты можешь это проверить: добавь ещё и момент на ротор, пусть действуют все
-     силы; сделай меню, чтобы можно было выбрать центробежную, момент и обе."
+    "you can check this: also add torque on the rotor, let all forces act;
+     make a menu so you can choose centrifugal, torque, or both."
 
 The design behind it is a spoke rotor whose iron bridges are assembly features
 only — they yield on the first spin-up — after which each pole is held
@@ -747,7 +747,7 @@ def test_a_three_mm_band_does_not_fit_the_live_air_gap():
 # ---------------------------------------------------------------------------
 # The verdict with no friction path (2026-09-09)
 # ---------------------------------------------------------------------------
-# User: "можно же считать с нулевым трением?" — on a spoke rotor the torque
+# User: "can't we compute with zero friction?" — on a spoke rotor the torque
 # crosses the pocket walls as NORMAL pressure, so µ = 0 is a legitimate model
 # and the old line "poles held: no — no separation joint is clamped (µ = 0…)"
 # was wrong on it: the poles are held, there is just no friction margin to

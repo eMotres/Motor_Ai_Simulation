@@ -61,6 +61,15 @@ STATEFUL_PARTS = ("stator_core", "rotor_core", "magnet", "slot", "shaft",
 #: nothing (the user asked for "любую деталь"); the UI warns in amber.
 MAGNETICALLY_ACTIVE_PARTS = ("stator_core", "rotor_core", "magnet", "slot")
 
+#: Parts the owner has ruled must ALWAYS take part in the calculation, no
+#: matter what a config file, a ``?mat=`` request or a UI toggle says (owner
+#: 2026-09-29: "во всех моторах вал должен участвовать").  ``resolve`` strips
+#: these out of any non-default map before it is applied, so ``included`` is
+#: the only state that can ever reach the solver, the mass totals or the
+#: datasheet for them — an old file that still says ``reference`` (or
+#: ``excluded``) is read as ``included``, loudly, via ``forced_override_note``.
+ALWAYS_INCLUDED_PARTS = ("shaft",)
+
 
 class UnknownPartStateError(ValueError):
     """A parts map naming a state or a part that does not exist.
@@ -142,12 +151,37 @@ def resolve(states: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     per-request override, then an explicit argument (a caller scoring a
     candidate under a different accounting than the saved one).  An empty dict
     means "everything included", i.e. today's behaviour.
+
+    ``ALWAYS_INCLUDED_PARTS`` are dropped from the merged map here, AFTER
+    precedence is applied — so no source (an old config file, a ``?mat=``
+    override, a caller's explicit argument) can ever make one of them
+    anything but ``included``.
     """
     merged: Dict[str, str] = {}
     merged.update(config_part_states())
     merged.update(request_part_states())
     merged.update(normalize_states(states))
+    for _part in ALWAYS_INCLUDED_PARTS:
+        merged.pop(_part, None)
     return {k: v for k, v in merged.items() if v != INCLUDED}
+
+
+def forced_override_note(states: Optional[Dict[str, str]] = None) -> str:
+    """One-line notice when a source tried to set an ``ALWAYS_INCLUDED_PARTS``
+    part away from ``included`` and was overridden.  Empty when nothing was
+    overridden — same "adds nothing by default" contract as ``state_note``.
+    """
+    merged: Dict[str, str] = {}
+    merged.update(config_part_states())
+    merged.update(request_part_states())
+    merged.update(normalize_states(states))
+    forced = [p for p in ALWAYS_INCLUDED_PARTS
+              if merged.get(p, INCLUDED) != INCLUDED]
+    if not forced:
+        return ""
+    parts = ", ".join(forced)
+    return (f"{parts} always participates in the calculation (owner rule) — "
+            f"stored/requested state ignored and treated as included")
 
 
 def part_state(part: str, states: Optional[Dict[str, str]] = None) -> str:

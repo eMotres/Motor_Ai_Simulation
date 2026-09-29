@@ -2520,8 +2520,8 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             # configuration kept its three-key map, and the next activation
             # filled the unnamed liner from `_ABSENT_MATERIALS` — Nomex.  The
             # user changed it to Al2O3 four times over four days and watched it
-            # come back every time ("уже несколько раз я сохранял изоляцию как
-            # Al2O3, но она всё равно всегда сбрасывается в Nomex").
+            # come back every time ("I've saved the insulation as Al2O3
+            # several times already, but it always resets back to Nomex anyway").
             _sm = c.get("materials") or {}
             _mc_contradicted = False       # a NAMED material actually changed
             for k in _SAVED_MATERIAL_KEYS:
@@ -2566,8 +2566,8 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                     # earlier duty was solved on, and flagging those results
                     # "computed on an older build" is a false alarm the user has
                     # no way to clear except by re-saving work they did not
-                    # change ("я же не менял ничего, зачем мне ещё раз всё
-                    # пересохранять?").  So their stamps are carried forward.
+                    # change ("I didn't change anything, why do I need to
+                    # resave everything again?").  So their stamps are carried forward.
                     # A material that CONTRADICTED the stored one is a real
                     # change and the flag stands, which is the whole point of it.
                     if not _mc_contradicted:

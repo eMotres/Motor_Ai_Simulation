@@ -1491,8 +1491,8 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
 # ─────────────────────────────────────────────────────────────────────────────
 #  SINE vs INVERTER, at the SAME point and the SAME temperatures (2026-09-25)
 # ─────────────────────────────────────────────────────────────────────────────
-# Owner: «нужно давать сравнение, как изменились характеристики мотора с
-# контроллером по сравнению с синусоидой, и тоже указывать это в отчёте».
+# Owner: "we need to provide a comparison of how the motor's characteristics
+# changed with the controller versus the sine drive, and also show that in the report".
 #
 # ONE extra electromagnetic pass after the loop has finished, on the IDEAL
 # sinusoidal current source, at the operating point and the temperatures of the
@@ -1696,8 +1696,8 @@ def _sine_comparison_step(body: Dict[str, Any], em: Dict[str, Any], *,
 #  DRIVE = INVERTER: the loop on the SINE, then the controller's PWM once
 #  (owner 2026-09-25)
 # ─────────────────────────────────────────────────────────────────────────────
-# «очень долго идёт каплинг с контроллером, нужно сменить алгоритм: каплинг
-# делается только с синусоидой, а последний прогон — с PWM из контроллера».
+# "the coupling with the controller takes very long, we need to change the
+# algorithm: the coupling is done only with the sine drive, and the last pass — with PWM from the controller".
 #
 # THE ALGORITHM (``inverter_coupling: "final_pass"``, the default):
 #   1. the whole EM ↔ thermal (↔ mechanical) loop runs on the ideal SINE
@@ -2229,8 +2229,8 @@ def _cold_ldq0(em: Dict[str, Any],
                body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """CATALOGUE Ld / Lq: incremental, at i = 0, at 20 °C — never raising.
 
-    The owner's rule of 2026-09-20: *«Ld/Lq нужно указывать тоже для 20
-    градусов и без тока, как для KV»*.  KV is a no-load constant at a stated
+    The owner's rule of 2026-09-20: *"Ld/Lq also need to be given at 20
+    degrees and at zero current, like KV"*.  KV is a no-load constant at a stated
     temperature; so are the inductances a control engineer sizes a loop with,
     and a catalogue that quotes one at no load and the other at 600 A is
     comparing two different machines.  The LOADED point's own inductances stay
@@ -2307,8 +2307,8 @@ def _limited_block(time_to_limit: Optional[Dict[str, Any]],
     the last map and not a converged fixed point.
 
     THE TEMPERATURES THE FINAL ELECTROMAGNETIC PASS IS SOLVED AT (``em_pass_at``,
-    owner 2026-09-18 on the live site: *«так и расчёт тогда должен быть при
-    катушках в 200 градусов, а не 184»*).  THE RULE: the EM pass of a limited
+    owner 2026-09-18 on the live site: *"the calculation should be with the
+    coils at 200 degrees, not 184"*).  THE RULE: the EM pass of a limited
     state uses, for each part, the temperature the LIMIT is judged on (the
     winding HOT SPOT, the HOTTEST magnet element — never the node mean), with
     the limiting part exactly at its limit.  So when the winding limits, the

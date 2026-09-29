@@ -23,9 +23,10 @@ engineering tabs behave identically:
     PATCH / Run drops the cached temperature maps, because a stale cross-section
     is a wrong temperature.
 
-THE TWO SOLVERS ARE SEPARATE (user, 2026-09-07: *"нужно как-то разделить
-тепловые расчёты и электромагнитные; если вдруг тепловому расчёту нужно
-электромагнитное моделирование, пусть оно делается во вкладке Simulation"* — the
+THE TWO SOLVERS ARE SEPARATE (user, 2026-09-07: *"we need to somehow separate
+the thermal calculations from the electromagnetic ones; if the thermal
+calculation ever needs an electromagnetic simulation, let it be done in the
+Simulation tab"* — the
 tab now called Electromagnetic).  THIS ROUTER NEVER STARTS AN ELECTROMAGNETIC
 SOLVE: not a 36-frame transient, not a single-frame magnetostatic estimate, not
 a d-axis calibration, not a verification pass.  The cycle-averaged loss map is
@@ -43,7 +44,7 @@ The machine has TWO cooled surfaces, not one:
 
   * the OUTER stator surface — ``cooling_mode`` = manual | air | liquid | none;
   * the ROTOR BORE — ``bore_mode`` = none | air | liquid.  The user's point:
-    *"Ротор придётся охлаждать в основном через вал"*.  In a 2-D cross-section
+    *"The rotor will have to be cooled mainly through the shaft"*.  In a 2-D cross-section
     the rotor's only other way out is the air gap, whose effective conductivity
     is a few hundredths of a W/m·K even with the Taylor vortices working, so a
     rotor with no bore cooling is thermally not cooled at all — and until this
@@ -60,8 +61,8 @@ Three model changes came with it, each of which was a wrong number before:
      minus the rotor OD *including the retaining sleeve*) with air properties at
      a stated gap temperature.  ``gap_k`` stopped being an input;
   3. the retaining SLEEVE is a domain of its own with an anisotropic (r, θ)
-     conductivity tensor — *"у него теплопроводность очень плохая в радиальном
-     направлении"* — instead of silently inheriting the air-gap value.
+     conductivity tensor — *"its thermal conductivity is very poor in the
+     radial direction"* — instead of silently inheriting the air-gap value.
 
 And the answer now closes: every surface reports its facet-integrated watts, the
 gap bridge reports what crosses it, and ``cooling.heat_budget`` states the

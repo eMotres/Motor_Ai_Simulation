@@ -1473,8 +1473,8 @@ def limit_speed(
 # ---------------------------------------------------------------------------
 # The coupled hook — one rotor-stress solve AT a given set of temperatures
 # ---------------------------------------------------------------------------
-# User 2026-09-08: "в механический расчёт тоже нужно делать каплинг, чтобы
-# температуры везде были одинаковы".  An orchestrator that has just solved the
+# User 2026-09-08: "the mechanical calculation also needs the coupling, so
+# the temperatures are the same everywhere".  An orchestrator that has just solved the
 # Thermal map needs to run the Mechanical solve at THOSE temperatures — and it
 # must run the same solve the button runs, not a private near-copy that drifts
 # the first time the button changes.
@@ -1530,8 +1530,8 @@ def _panel_float(settings: Dict[str, Any], key: str) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # The COUPLED LOOP'S OWN limit speed — automatic, cached, never manual
 # ---------------------------------------------------------------------------
-# Owner 2026-09-21: "нужно эту максимальную скорость обязательно добавлять в
-# отчёт" — every duty a coupled run saves must carry it, not only the ones a
+# Owner 2026-09-21: "this maximum speed absolutely needs to be added to the
+# report" — every duty a coupled run saves must carry it, not only the ones a
 # human pressed **Limit speed (SF = 1)** for.  Wired into `run_rotor_stress_at`
 # ONLY — the hook `routes/coupled.py` calls — so a plain interactive
 # `/rotor_stress` GET (the Mechanical tab's own Solve button) never pays this
@@ -1902,8 +1902,8 @@ def run_rotor_stress_at(temps: Dict[str, float],
                      or ps.get("symmetry") or "full"),
         geo=route_params.get("geo"),
     )
-    # THE LIMIT SPEED, AUTOMATIC (owner 2026-09-21: "нужно эту максимальную
-    # скорость вращения обязательно добавлять в отчёт").  Only here — the
+    # THE LIMIT SPEED, AUTOMATIC (owner 2026-09-21: "this maximum rotation
+    # speed absolutely needs to be added to the report").  Only here — the
     # coupled loop's own hook — never on a plain interactive Solve, and never
     # for a solve marked `record: false` (nobody will ever read it).
     if isinstance(out, dict):
@@ -1922,9 +1922,9 @@ def run_rotor_stress_at(temps: Dict[str, float],
 
 def run_modes_at(**route_params) -> Dict[str, Any]:
     """Solve the ring modes exactly as **Solve modes** on the Mechanical tab
-    does — THE HOOK the coupled orchestrator calls (2026-09-13, user: "при
-    каплинге чтобы всё решалось — и модальный, и частоты, чтобы к отчёту было
-    всё готово").
+    does — THE HOOK the coupled orchestrator calls (2026-09-13, user: "when
+    coupling runs, everything should be solved — the modal analysis and the
+    frequencies, so everything is ready for the report").
 
     No temperature enters: the modal model is bonded, unprestressed and reads
     none (its own ``assumptions`` string says so), so this hook is only about

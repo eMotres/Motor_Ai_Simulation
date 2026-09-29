@@ -1,14 +1,14 @@
 # The Controller module — Stage 1 (2026-09-22)
 
-Owner, 2026-09-22 10:20: *«давай начнём делать модуль инвертора и его
-моделирование и начнём с IMCQ120R004M2H для мотора L155 motor, чтобы была
-возможность его подключить к мотору и выдавать уже реальный сигнал, ну и
-конечно считать потери в инверторе с учётом системы охлаждения MOSFET; пусть
-это всё будет в отдельном меню Controller, и чтобы была возможность делать
-каплинг с электромагнитным решателем»*, and, 15 minutes later, the requirement
-that shaped the whole design: *«чтобы была возможность комбинировать мосты так,
-как нам надо: один контроллер на один мотор, два контроллера на один мотор и
-т.д., один мост на каждую катушку отдельно»*.
+Owner, 2026-09-22 10:20: *«let's start building the inverter module and its
+modeling, starting with the IMCQ120R004M2H for the L155 motor, so that we have the
+ability to connect it to the motor and output an actual real signal, and of course
+compute the inverter's losses accounting for the MOSFET cooling system; let
+all of this live in a separate Controller menu, with the ability to
+couple it with the electromagnetic solver»*, and, 15 minutes later, the requirement
+that shaped the whole design: *«so that we can combine bridges however
+we need: one controller per motor, two controllers per motor, and
+so on, one bridge per coil separately»*.
 
 So the module is not "a three-phase inverter". It is a **map from the motor's
 coils onto bridges**, plus the arithmetic that map implies.
@@ -152,7 +152,7 @@ not count, and the module says so rather than pretending otherwise.
 bridge a three-phase leg owns a coil once and an H-bridge owns it twice (its
 two legs are the coil's two ends). Anything else is refused by coil number.
 
-**Devices in parallel per switch** (owner: *«надо добавить number of
+**Devices in parallel per switch** (owner: *«need to add number of
 parallel»*) is `devices_parallel` for the whole controller and
 `devices_parallel_by_bridge: {INV2: 7}` where one bridge differs. It is edited
 in two places because those are the two places it is read: beside the device in
@@ -221,7 +221,7 @@ THERMAL RUNAWAY rather than printing a number.
 
 ### The datasheet limits — all of them, on every solve
 
-Owner: *«не забудь про паспортные лимиты MOSFET»*. The junction temperature
+Owner: *«don't forget the MOSFET datasheet limits»*. The junction temperature
 and the current rating were already refusals; the solve now carries the WHOLE
 list, so a design is not "fine" merely because nobody printed the line that
 would have failed. Every row has the number reached, the published limit,
@@ -258,8 +258,8 @@ wire limits and not the junction (the flat top of the I_D = f(T_c) figure).
 Which branch answered is reported in the row's `source`.
 
 **The connection is the motor's.** Star or delta comes from the duty's own
-coupled record and never from this module (owner: *«соединение звезда/
-треугольник у нас определяется на моторе»*). The response's `sources`
+coupled record and never from this module (owner: *«the star/delta
+connection is determined on the motor for us»*). The response's `sources`
 block names where it came from, the point block repeats it, and the schematic
 draws it.
 
@@ -429,16 +429,16 @@ two windings; an H-bridge gets its coil between its own two legs, with no star
 and no delta. Junction = filled dot; lines crossing without a dot are not
 connected. **Labels only inside the drawing.**
 
-The tab itself carries no paragraphs (owner 2026-09-22: *«не пиши это всё,
-никто это не читает»*). The model's assumptions exist in exactly three places:
+The tab itself carries no paragraphs (owner 2026-09-22: *«don't write all this,
+nobody reads it»*). The model's assumptions exist in exactly three places:
 this note, the duty record's `controller.assumptions` list, and the tooltip
 behind the one-line "Model: …" under the results header. Every other
 explanatory sentence in the tab is a label plus a HelpTip.
 
 ## 6b · Compare — the same stacked table the other tabs have
 
-Owner: *«не забудь Compare сделать для анализа разных вариантов, так же как на
-всех других меню»*. The tab hosts `common/LocalCompareTable`, the component
+Owner: *«don't forget to build Compare for analyzing different variants, same as on
+all the other menus»*. The tab hosts `common/LocalCompareTable`, the component
 the Thermal and Mechanical tabs use, with the same skin and the same row
 contract (`compare/resultRows.LocalRow`): press **+ Add to comparison** and the
 solve on screen becomes a column — device, topology, connection, duty, N,
@@ -461,8 +461,8 @@ materials: no gate drivers, no busbars, no coldplate, no assembly.
 
 ## 7 · Stage 2 — coupling with the electromagnetic solver
 
-Owner, 2026-09-22: *«как отладим каплинг с контроллером, нам не нужен будет PWM
-в электромагнитном моделировании — всё будет задаваться в меню Controller»*.
+Owner, 2026-09-22: *«once we've debugged the coupling with the controller, we won't need PWM
+in the electromagnetic modeling — everything will be set in the Controller menu»*.
 So Stage 2 is not only a new drive; it is where the Controller becomes the ONE
 place a PWM excitation is described, and the Simulation tab stops owning one.
 
@@ -500,8 +500,8 @@ place a PWM excitation is described, and the Simulation tab stops owning one.
 
 ## 7a · Stage 2 — WHAT WAS BUILT (2026-09-22)
 
-Owner, 13:45: *«как закончишь лимиты, запускай каплинг — сначала стандартный
-инвертор на L155 motor»*.  Below is what the plan above turned into, and where
+Owner, 13:45: *«once you finish the limits, run the coupling — start with the standard
+inverter on the L155 motor»*.  Below is what the plan above turned into, and where
 it differs from the plan it says so.
 
 ### The drive
@@ -675,7 +675,7 @@ the record says it is one.
 
 ## 7b · Stage 2, MEASURED — L155 motor / rated 1×9 mm (2026-09-22)
 
-Owner, 13:45: *«запускай каплинг — сначала стандартный инвертор на L155 motor»*.
+Owner, 13:45: *«run the coupling — start with the standard inverter on the L155 motor»*.
 One three-phase bridge of **IMCQ120R004M2H**, **N = 3** per switch, **24 kHz**,
 **750.4 V**, **0.5 µs** dead time, V_GS 18/0 V, micro-channel coldplate
 water-glycol 50/50 at **65 °C, 8 L/min**; motor cooling the duty's own (water
@@ -804,10 +804,10 @@ carrier, so the peak duty did not fit the session.  It needs the same run with
 
 ## 7c · The loop on the SINE, the controller's PWM once (2026-09-25)
 
-Owner: *«очень долго идёт каплинг с контроллером, нужно сменить алгоритм:
-каплинг делается только с синусоидой, а последний прогон — с PWM из
-контроллера»* and *«если уже есть каплинг с синусом — просто запускается расчёт
-с PWM из контроллера»*.
+Owner: *«the coupling with the controller takes very long, we need to change the algorithm:
+do the coupling only with the sine wave, and only the last run with the PWM from
+the controller»* and *«if a coupling with the sine already exists — just run the calculation
+with PWM from the controller»*.
 
 `inverter_coupling: "final_pass"` is now the default for `drive: "inverter"`
 (`"full"` keeps §7a's loop — every pass on the PWM — for validation):
@@ -952,8 +952,8 @@ is re-solved (H-bridge at rated 4.49 kW with 24 devices, not 7.26 kW with 96).
 
 ## 10 · MOTRES SiC concept doc — the whole 1200 V/750 V Q-DPAK lineup (2026-09-23)
 
-Owner, 2026-09-23 08:10: *«внеси все MOSFET, которые есть в документе, в
-нашу базу и проверь, как они работают»*, source document: MOTRES's
+Owner, 2026-09-23 08:10: *«add all the MOSFETs that are in the document into
+our database and check how they perform»*, source document: MOTRES's
 "800 V / 400 V SiC Inverter Platform — Technical Concept". Nine new device
 cards were added to `config/devices/`, each transcribed from its own
 Infineon datasheet (PDF fetched live, not from the concept doc's summary
@@ -1136,8 +1136,8 @@ applications" note the doc paraphrases (see `IMDQ75R004M2H.yaml`'s
 * The model's plain sine-PWM modulator (no SVPWM/third-harmonic injection)
   is the standing gap behind the ~17-20 % power under-read in section 10.2;
   fixing it is a Controller-module change, out of this batch's scope
-  (device cards + read-only cross-checks only, "не подстраивай ничего под
-  документ").
+  (device cards + read-only cross-checks only, "don't tune anything to match
+  the document").
 
 ### 10.4 · SVPWM / third-harmonic injection — the §10.2 gap closed (2026-09-26)
 

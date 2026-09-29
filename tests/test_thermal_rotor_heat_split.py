@@ -1,8 +1,8 @@
 """Where the rotor's heat goes: out across the gap, or in down the shaft.
 
-User 2026-09-10: *"в термоанализе ещё нужно считать два числа: сколько тепла от
-ротора уходит через внешний диаметр, а сколько через внутренний"*, and then
-plainly: *"то есть через зазор и через вал"*.
+User 2026-09-10: *"in the thermal analysis we also need to compute two numbers:
+how much heat leaves the rotor through the outer diameter, and how much through
+the inner"*, and then plainly: *"that is, through the gap and through the shaft"*.
 
 Every watt made inside the slip radius has exactly three ways out of this
 cross-section — across the gap into the stator, off the bore surface, and
@@ -114,7 +114,7 @@ def test_a_the_block_is_the_rotor_balance(thermal_result):
 
 
 def test_b_the_axial_path_is_kept_out_of_the_two(thermal_result):
-    """User 2026-09-10: "делай только в двумерном варианте пока".
+    """User 2026-09-10: "do it in the 2D variant only for now".
 
     The gap and the bore are surface integrals on the SAME solved section; the
     shaft stubs are a lumped conductance out of the page.  Folding the third

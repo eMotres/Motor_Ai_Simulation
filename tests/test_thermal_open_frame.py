@@ -1,11 +1,11 @@
 """The OPEN frame — a machine with no housing at all (``frame=open``).
 
-User, 2026-09-09, on the 40 mm "CIANO14 40 new": *нет корпуса* — the stator
+User, 2026-09-09, on the 40 mm "CIANO14 40 new": *no housing* — the stator
 tooth blocks with their coils hang between two end plates on standoff pins, and
 the coil END WINDINGS plus the axial CHANNELS between neighbouring coils sit
 directly in the propeller wash (10-12 m/s).  Every thermal answer this router
-gave before today assumes the opposite (2026-09-07: *"торцы и лобовые части —
-только для вала, всё остальное вращается внутри мотора"* — a closed housing,
+gave before today assumes the opposite (2026-09-07: *"end faces and end
+windings — only for the shaft, everything else rotates inside the motor"* — a closed housing,
 end turns with nowhere to send their heat), and on this machine that omission is
 not conservative: k_end is 1.759 on the L12, i.e. 76 % of the copper LENGTH is
 end turn, and all of its loss is currently deposited in the in-slot copper with

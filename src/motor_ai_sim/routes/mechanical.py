@@ -1,7 +1,7 @@
 """Mechanical (structural) routes — /api/mechanical.
 
-Added 2026-09-05 for the user's Mechanical tab: "начнём с расчёта центробежных
-сил ротора ... чтобы оценить какой бандаж нужен для удержания магнитов".
+Added 2026-09-05 for the user's Mechanical tab: "let's start with the rotor
+centrifugal force calculation ... to estimate what band is needed to retain the magnets".
 
 The solve itself lives in ``simulation.mechanical.rotor_stress``; this module
 only resolves WHICH machine and WHICH materials the request means, and caches
@@ -151,7 +151,7 @@ def _override_props() -> Dict[str, dict]:
 def _elapsed(t0: float) -> float:
     """Seconds this request spent working, as the panel's timer reports them.
 
-    User 2026-09-06: "нужно добавить ещё индикатор времени расчёта".  The client
+    User 2026-09-06: "we also need to add a calculation-time indicator".  The client
     can time its own fetch, but that number includes the network and the JSON —
     on a 40 MB field payload those are seconds of their own — so the honest
     figure is measured here, around the geometry build and the solve, and it is
@@ -172,7 +172,7 @@ def _default_rpm() -> float:
 def _default_torque_nm() -> tuple:
     """(mean torque of the last Simulation run, where it came from).
 
-    User 2026-09-07: "добавь ещё и момент на ротор, пусть действуют все силы".
+    User 2026-09-07: "also add torque on the rotor, let all the forces act".
     The torque is a RESULT, not a setting, so it is read from the last transient
     the Simulation tab produced — never invented here, and never typed into a
     default in a panel (the standing rule that every physics value comes from
@@ -262,9 +262,9 @@ def clear_mechanical_caches(reason: str = "") -> int:
     _MESH_CACHE.clear()
     # `_LAST` is deliberately NOT cleared here.  It is not a cache — it is what
     # the panel SHOWS when you come back to the tab, and the user's ask
-    # (2026-09-06) is exactly that it survives: "если есть [расчёты] —
-    # подгружается последний расчёт; если были изменения текущей геометрии —
-    # нужно подсвечивать неактуальность текущего расчёта".  Throwing it away on
+    # (2026-09-06) is exactly that it survives: "if there are [results] — the
+    # last result gets loaded; if the current geometry changed — the current
+    # result's staleness needs to be highlighted".  Throwing it away on
     # a geometry edit would replace the badge with a blank page, which is the
     # bug, not the fix.  Every /last response carries the fingerprint it was
     # solved for so the staleness is stated rather than hidden.
@@ -276,9 +276,9 @@ def clear_mechanical_caches(reason: str = "") -> int:
 # ---------------------------------------------------------------------------
 # The LAST result, kept across tab switches and backend restarts
 # ---------------------------------------------------------------------------
-# User 2026-09-06: "когда я захожу и выхожу в Mechanical, графики пропадают.
-# Нужно, чтобы по умолчанию: если нет расчётов — рисуется просто геометрия;
-# если есть — подгружается последний расчёт".
+# User 2026-09-06: "when I go in and out of Mechanical, the charts disappear.
+# By default it should be: if there are no results — just draw the geometry;
+# if there are — load the last result".
 #
 # Same shape as the Simulation tab's last transient
 # (`routes.simulation._store_transient_field_snapshot`): one in-memory entry per

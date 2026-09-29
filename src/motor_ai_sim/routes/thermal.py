@@ -3819,7 +3819,7 @@ def solve_thermal_field(
     # is NOT the same from pole to pole: on the G2-L40 quarter the seven magnets
     # carried 4.14 / 4.30 / 3.85 / 3.98 / 4.08 / 4.05 / 3.48 W — ±5 %, and the
     # pole at the 90° cut 15 % short — and the temperature map showed exactly
-    # that pole 2 K cooler (user: "опять та же картина с пятнами").  A balanced
+    # that pole 2 K cooler (user: "the same spotty pattern again").  A balanced
     # machine heats every pole alike; the spread is the transient's numerics
     # (eddy start-up, the sliding band at the sector edge), not a hotter magnet.
     # So each rotor-side domain's per-pole watts are brought to their mean —
@@ -3930,8 +3930,8 @@ def solve_thermal_field(
     is_coil = (tags == DOM_COIL)
 
     # ── the retaining sleeve, as its OWN anisotropic domain ──────────────────
-    # User 2026-09-07: "у него теплопроводность очень плохая в радиальном
-    # направлении".  The EM mesh already builds the ring as DOM_SLEEVE (it has
+    # User 2026-09-07: "its thermal conductivity is very poor in the radial
+    # direction".  The EM mesh already builds the ring as DOM_SLEEVE (it has
     # its own eddy loss), but the thermal solve used to hand it the DEFAULT
     # element conductivity — the air-gap value — because nothing assigned it one.
     # A sleeve modelled as air is a sleeve that is not there; a sleeve modelled

@@ -7702,9 +7702,9 @@ def _build_transient_summary(
         "P_loss_total_W": round(_ploss, 1),
         # Mean |B| over the AIR-GAP clearance, averaged over the period — the
         # number a machine is sized on before anything else, and the one the
-        # summary never carried (user 2026-09-10: "для электромагнитного
-        # анализа надо ещё рассчитывать среднее поле в зазоре и писать это
-        # число в таблицу").  Area-weighted over the elements between the
+        # summary never carried (user 2026-09-10: "for the electromagnetic
+        # analysis we also need to compute the mean field in the gap and
+        # write that number into the table").  Area-weighted over the elements between the
         # outermost rotating metal and the stator bore, so it is a mean of the
         # field and not of the mesh.  Absent (None) on a result solved before
         # the feature, which is what keeps a stale card from printing a zero.
@@ -7750,8 +7750,8 @@ def _build_transient_summary(
         "wire_split": int(_wsplit),
         "cu_ac_solved_ignores_wire_split": False,
         "P_solid_W":    round(_Pmag + _Pshaft + _Psleeve, 1),  # magnet + shaft + sleeve eddy
-        # The two big solid conductors on their own (user 2026-09-07: "добавь
-        # потери в валу"): the shaft eddy loss is the rotor's largest single
+        # The two big solid conductors on their own (user 2026-09-07: "add
+        # losses in the shaft"): the shaft eddy loss is the rotor's largest single
         # heat source on a sleeved machine, and a card that only showed their
         # sum could not say so.
         "P_mag_W":      round(_Pmag, 1),
@@ -7818,8 +7818,8 @@ def _build_transient_summary(
         # Did this run CONTINUE a previous one's state instead of solving it?
         # Both are False on every interactive Run by construction — the flag
         # that allows it (SB_SEED_FROM_PREVIOUS) is set only in the optimizer's
-        # eval environment (user 2026-09-06, "каждый следующий расчёт берётся
-        # из предыдущего", which is a rule about sweeps).  Carried anyway, so a
+        # eval environment (user 2026-09-06, "each next calculation is seeded
+        # from the previous one", which is a rule about sweeps).  Carried anyway, so a
         # saved simulation states it rather than leaving it to be assumed.
         "warm_seeded": bool(sbres.get("warm_seeded", False)),
         "demag_seeded": bool(sbres.get("demag_seeded", False)),

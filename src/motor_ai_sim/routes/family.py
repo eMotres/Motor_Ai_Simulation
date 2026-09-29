@@ -785,12 +785,33 @@ def _sim_of(c: dict) -> dict:
 def _live_parts() -> dict:
     """The live machine's per-part accounting states, or {} when every part is
     included.  Same shape the configuration file stores under ``parts:`` and
-    the ``?mat=`` payload carries under ``parts``."""
+    the ``?mat=`` payload carries under ``parts``.
+
+    ``ALWAYS_INCLUDED_PARTS`` (the shaft — owner rule 2026-09-29: "во всех
+    моторах вал должен участвовать") never lands here even if the live state
+    says otherwise: ``included`` is not stored, so silently dropping it is
+    exactly what storing ``included`` would do.  ``_live_shaft_note`` is the
+    loud half of the same rule, for callers that must tell the user.
+    """
     try:
-        from motor_ai_sim.part_states import config_part_states
-        return dict(config_part_states())
+        from motor_ai_sim.part_states import config_part_states, ALWAYS_INCLUDED_PARTS
+        out = dict(config_part_states())
+        for _part in ALWAYS_INCLUDED_PARTS:
+            out.pop(_part, None)
+        return out
     except Exception:      # noqa: BLE001
         return {}
+
+
+def _live_shaft_note() -> str:
+    """One-line warning when the live machine's shaft state is not
+    ``included`` — surfaced in config-creation / duty-save responses so the
+    override is never silent."""
+    try:
+        from motor_ai_sim.part_states import forced_override_note
+        return forced_override_note()
+    except Exception:      # noqa: BLE001
+        return ""
 
 
 def _config_role(c: dict) -> tuple:
@@ -2129,7 +2150,12 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
     _save_yaml(_cfg_file(die, name), doc)
     log.info("family: configuration '%s/%s' created from the live machine",
              die, name)
-    return {"ok": True, "die": die, "config": name}
+    out = {"ok": True, "die": die, "config": name}
+    _shaft_note = _live_shaft_note()
+    if _shaft_note:
+        log.warning("family: configuration '%s/%s' — %s", die, name, _shaft_note)
+        out["note"] = _shaft_note
+    return out
 
 
 def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
@@ -2486,7 +2512,13 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             # configuration whose shaft became `reference` (frameless — the
             # customer brings the shaft) is a different product, and every
             # earlier duty's N·m/kg was billed against a mass that included it.
-            _sp = c.get("parts") or {}
+            # ALWAYS_INCLUDED_PARTS (the shaft) are excluded from this diff: an
+            # old stored file that still says ``shaft: reference`` is not a
+            # build change to flag or refuse on — it always reads as
+            # ``included`` now (owner rule 2026-09-29), silently.
+            from motor_ai_sim.part_states import ALWAYS_INCLUDED_PARTS as _ALWAYS_INC
+            _sp = {k: v for k, v in (c.get("parts") or {}).items()
+                   if k not in _ALWAYS_INC}
             for k in sorted(set(_sp) | set(_live_pstates)):
                 if (_sp.get(k) or "included") != (_live_pstates.get(k) or "included"):
                     _mc_diffs.append("part %s: %s → %s"

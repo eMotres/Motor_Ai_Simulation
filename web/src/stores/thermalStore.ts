@@ -94,8 +94,8 @@ const BORE_MODES: readonly BoreMode[] = ['none', 'air', 'liquid', 'still'];
 const END_FACE_MODES: readonly EndFaceMode[] = ['still', 'none'];
 const FRAME_MODES: readonly FrameMode[] = ['housed', 'open'];
 
-/** The robotics mode's ONE conduction choice (2026-09-26, owner: «давай
- *  упростим») — replaces mount W/K, mount °C, sink-or-link, link size and link
+/** The robotics mode's ONE conduction choice (2026-09-26, owner: «let's
+ *  simplify it») — replaces mount W/K, mount °C, sink-or-link, link size and link
  *  material.  See `ROBOTICS_HELP.heatPath` for what each one is. */
 export type HeatPath = 'housing' | 'shaft' | 'both' | 'none';
 export const HEAT_PATHS: readonly HeatPath[] = ['housing', 'shaft', 'both', 'none'];
@@ -217,8 +217,8 @@ export interface ThermalState {
   boreFlowLpm: string;
 
   /** How much SHAFT sticks out of the housing on each side, mm — '0' = off.
-   *  The rotor's third heat path (user 2026-09-07: "торцы и лобовые части —
-   *  только для вала, всё остальное вращается внутри мотора"): the end faces
+   *  The rotor's third heat path (user 2026-09-07: "end faces and end
+   *  windings — only for the shaft, everything else rotates inside the motor"): the end faces
    *  and the end windings turn inside the closed housing and have nowhere else
    *  to send their heat, but the shaft stubs sit in the room's air. */
   shaftExtMm: string;
@@ -262,8 +262,8 @@ export interface ThermalState {
   meshCfg: ThermalMeshRequest | null;
 
   /** The tab's OWN comparison stack — the Configure tab's "Saved
-   *  configurations", for cooling designs (user 2026-09-07: "сделай локальное
-   *  сравнение по параметрам тепловой симуляции, только как в Configure").
+   *  configurations", for cooling designs (user 2026-09-07: "make a local
+   *  comparison of the thermal simulation parameters, just like in Configure").
    *  A PERSISTED field like any other, so the stack survives a reload and is
    *  the same in every browser; the permanent library is still the Compare tab. */
   compareRows: LocalRow[];
@@ -494,8 +494,8 @@ function buildRequest(s: ThermalState, mesh: ThermalMeshRequest,
  * `no_electromagnetic_run` naming the run that is missing, and that refusal is a
  * standing rule of this project (2026-09-07).  What was left for the user to do
  * by hand — go to the Electromagnetic tab, press Run, come back, press Solve —
- * this tab now does for them (user 2026-09-08: *"лучше, чтобы она сама считала
- * электромагнетику и понимала, когда это нужно делать, а когда не надо"*).
+ * this tab now does for them (user 2026-09-08: *"better if it computes the
+ * electromagnetics itself and understands when it needs to be done and when not"*).
  *
  * NOT by solving anything here, and not by relaxing the route: through the
  * ORCHESTRATOR, `POST /api/coupled/run`, the one thing in this app allowed to
@@ -721,8 +721,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     if (PERSISTED.includes(k)) {
       writeTherm(k as string, v);
       // …and to the SERVER, the memory every browser shares — the same bargain
-      // the Electromagnetic tab has with the config (user 2026-09-07: "запоминай все
-      // последние настройки … одинаково для всех моделирований").
+      // the Electromagnetic tab has with the config (user 2026-09-07: "remember all
+      // the latest settings … the same way for every simulation").
       const snap: Record<string, unknown> = {};
       const st = get();
       for (const pk of PERSISTED) snap[pk as string] = (st as unknown as Record<string, unknown>)[pk as string];
@@ -788,8 +788,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       // A field solved before 2026-09-09 17:09 carries no `n_sectors` (only
       // the mesh preview did), so the tiler would leave it a quarter of a
       // motor.  It was solved on the Mesh tab's own sector count, which is
-      // what the tiler borrows here (user: "сделай тепловые поля на весь
-      // мотор, а не только на 1/4").
+      // what the tiler borrows here (user: "make the thermal fields cover
+      // the whole motor, not just 1/4").
       const tileRestored = <P extends { n_sectors?: number }>(p: P): P => {
         if (!p || (p.n_sectors ?? 0) > 0) return tileFullRing(p as never) as P;
         const mb = readMeshSettings();
@@ -853,8 +853,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   loadGeometry: async () => {
     // A build already running is not re-entered — unless its flag is STALE
     // (a request the API restart cut off never resolves, and a flag stuck
-    // true would disable the button until a reload: 'на кнопку Build mesh
-    // невозможно нажать', 2026-09-07).
+    // true would disable the button until a reload: 'the Build mesh button
+    // is impossible to click', 2026-09-07).
     if (get().geomBusy && Date.now() - (get().geomStartedAt ?? 0) < 180_000) return;
     const t0 = Date.now();
     set({ geomBusy: true, geomErr: null, geomStartedAt: t0 });

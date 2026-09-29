@@ -416,8 +416,8 @@ export const useMotorStore = create<MotorState>()(
             geometry: data as MotorGeometryParams,
             isLoading: false,
             connectedToApi: true,
-            // GET-only: geometry не перестраивается, таймер не нужен.
-            // isGeometryUpdating устанавливается только через updateGeometryViaApi (PUT).
+            // GET-only: geometry is not rebuilt, no timer needed.
+            // isGeometryUpdating is only set via updateGeometryViaApi (PUT).
             isGeometryUpdating: false,
           });
         } catch (error) {
@@ -1287,7 +1287,7 @@ export const useMotorStore = create<MotorState>()(
           // panel seeds by default (γ, phase current): a reset browser profile
           // had exactly those, "won" against the server copy and PUSHED it,
           // wiping the four geometry variables of the user's last sweep off
-          // the server (2026-09-04: "после сбоя остаются только угол и ток").
+          // the server (2026-09-04: "after a crash only the angle and current remain").
           // Geometry variables are the selection that matters here.
           const _geoSel = (vs: Record<string, any> | null) => !vs ? 0
             : Object.entries(vs).filter(([k, v]) => v?.mode !== 'fixed'
@@ -1378,7 +1378,7 @@ useMotorStore.subscribe((state) => {
 });
 
 // Keep every open tab and every browser on the NEWEST sweep copy (user
-// 2026-09-08: "надо исправить этот косяк, он постоянно возникает").  Two
+// 2026-09-08: "need to fix this glitch, it keeps happening").  Two
 // leaks remained after the edit stamp above:
 //   1. a second TAB of the same browser keeps its own in-memory store — the
 //      persist middleware writes localStorage but never reads it back — so an

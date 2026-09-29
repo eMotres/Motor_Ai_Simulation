@@ -6461,6 +6461,11 @@ def fem_transient_sliding_band(
         log.info("P2 vdrive phasor init: Ld=%.4g Lq=%.4g H |psi_pm|=%.4g Wb "
                  "i_dq=(%.1f, %.1f) A i0=(%.1f, %.1f, %.1f)",
                  _Ldd, _Lqq, _psi_pm_d, _id0, _iq0, _iA0, _iB0, _iC0)
+        # THE CONTROLLER'S CURRENT LOOP (owner 2026-09-29): a closed-loop
+        # bridge source is tuned on the inductances just measured here.
+        if hasattr(_src, "configure_current_loop"):
+            _src.configure_current_loop(R_phase=float(R_phase),
+                                        L_d=float(_Ldd), L_q=float(_Lqq))
         # ── SETTLE ADAPTED TO THIS MACHINE'S L/R (user 2026-09-02) ──────
         # The PWM settle used to be a flat 2 periods, validated on a machine
         # whose L/R was ~0.75 electrical period.  On CILN28/G2-L40 (L/R = 4.8
@@ -8607,7 +8612,12 @@ def fem_transient_sliding_band(
             if _qaL is None or _qbL is None:
                 _qaL, _qbL = _qa, _qb
             if _dc_orbit is not None and k <= _dc_verify_k:
-                _dc_orbit.frame(_ll_inductance(_qaL, _qbL), _dt_k)
+                # …and the SOURCE's own feedback on the previous step's
+                # current (the controller bridge's dead time + device drop —
+                # a real DC-mode resistance; missing it made the Newton
+                # over-shoot and diverge on the L180 delta, 2026-09-28).
+                _dc_orbit.frame(_ll_inductance(_qaL, _qbL), _dt_k,
+                                getattr(_src, "ll_feedback_gain", None))
             if _dc_orbit is not None and k in _dc_win:
                 _k0 = int(_dc_win[k])                   # first frame of the period
                 _off = len(_IA) - 1 - k                 # list index of frame k

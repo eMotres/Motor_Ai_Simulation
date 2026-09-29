@@ -193,7 +193,15 @@ class DcOrbitSolve:
     records: List[Dict[str, Any]] = field(default_factory=list)
     corrections: int = 0
     refused: int = 0
+    # frames whose variational row carried the source's own feedback gain
+    source_feedback_frames: int = 0
     _q: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+    _prev_drift: Optional[np.ndarray] = field(default=None, init=False,
+                                              repr=False)
+    _step: float = field(default=1.0, init=False, repr=False)
+    _period_g: bool = field(default=False, init=False, repr=False)
+    # damped Newton on periods whose map carries a (piecewise) source feedback
+    damped: bool = True
     _M: Optional[np.ndarray] = field(default=None, init=False, repr=False)
     _L_prev: Optional[np.ndarray] = field(default=None, init=False, repr=False)
 
@@ -204,8 +212,21 @@ class DcOrbitSolve:
                              "lossless circuit never decays and has no orbit "
                              "to solve for" % self.R_phase)
 
-    def frame(self, L_ll: np.ndarray, dt_s: float) -> None:
-        """Advance the period's Jacobian by one CN step (the variational row)."""
+    def frame(self, L_ll: np.ndarray, dt_s: float,
+              G_ll: Optional[np.ndarray] = None) -> None:
+        """Advance the period's Jacobian by one CN step (the variational row).
+
+        ``G_ll`` is the SOURCE's own small-signal feedback, d(D·v_k)/d(i_A,
+        i_B)_{k−1} [V/A] — a closed-loop source (the controller's bridge: dead
+        time and device drops act on the previous step's current) is part of
+        the circuit its DC mode decays through.  The row
+        ``Δy = Δt·D·v_k(i_{k−1}) − h·R·S·(i_k + i_{k−1})`` linearises to
+
+            (I + hRS·L_k⁻¹)·δy_k = (I − hRS·L_{k−1}⁻¹ + Δt·G·L_{k−1}⁻¹)·δy_{k−1}
+
+        Leaving G out when it is there (the L180 delta, 2026-09-28) makes M
+        decay ~3× too slowly and the Newton step over-shoots into divergence.
+        """
         L = _finite_2x2(L_ll, "the frame's incremental inductance")
         dt = float(dt_s)
         if not (np.isfinite(dt) and dt > 0.0):
@@ -216,6 +237,11 @@ class DcOrbitSolve:
             RSh = h * _S
             A = np.eye(2) + RSh @ np.linalg.inv(L)
             B = np.eye(2) - RSh @ np.linalg.inv(Lp)
+            if G_ll is not None:
+                G = _finite_2x2(G_ll, "the source's feedback gain")
+                B = B + dt * G @ np.linalg.inv(Lp)
+                self.source_feedback_frames += 1
+                self._period_g = True
             self._M = np.linalg.solve(A, B @ self._M)
         self._L_prev = L
 
@@ -225,6 +251,7 @@ class DcOrbitSolve:
             raise ValueError("DcOrbitSolve: non-finite start flux %r" % (q,))
         self._q = q
         self._M = np.eye(2)
+        self._period_g = False
 
     def period_end(self, p_ll: np.ndarray, *, tag: str, correct: bool,
                    frame: int = -1, dc_phase_A: Optional[Sequence[float]] = None
@@ -247,8 +274,30 @@ class DcOrbitSolve:
             if np.all(np.isfinite(M)) and rho < 1.0:
                 # (2): the next start state onto the orbit.
                 w = M @ np.linalg.solve(np.eye(2) - M, delta)
+                # DAMPED NEWTON (globalisation, 2026-09-29).  The period map
+                # of a bridge with dead time is only piecewise smooth (the
+                # clamp is a sign of the sampled current), so near the orbit
+                # the linearised M can over-state the damping and the full
+                # step then over-shoots into a period-2 cycle (drift flips
+                # sign at undiminished size).  When the last corrected step
+                # did that, the step is halved; when a step reduces the
+                # drift cleanly it grows back to the full Newton step.  The
+                # state is still moved only onto the solved orbit's
+                # direction — nothing is subtracted from the measured DC.
+                pd = self._prev_drift
+                if pd is not None and self.damped and self._period_g:
+                    flip = float(np.dot(pd, delta)) < 0.0
+                    ratio = (float(np.linalg.norm(delta))
+                             / max(float(np.linalg.norm(pd)), 1e-300))
+                    if flip and ratio > 0.5:
+                        self._step = max(self._step * 0.5, 1.0 / 64.0)
+                    elif ratio < 0.5:
+                        self._step = min(self._step * 2.0, 1.0)
+                w = self._step * w
+                self._prev_drift = delta
                 self.corrections += 1
-                verdict = "corrected"
+                verdict = ("corrected" if self._step == 1.0 else
+                           "corrected (damped x%.4g)" % self._step)
             else:
                 self.refused += 1
                 verdict = ("REFUSED: period Jacobian not contractive "
@@ -286,5 +335,6 @@ class DcOrbitSolve:
             "correcting": bool(self.correcting),
             "corrections": int(self.corrections),
             "refused": int(self.refused),
+            "source_feedback_frames": int(self.source_feedback_frames),
             "periods": list(self.records),
         }

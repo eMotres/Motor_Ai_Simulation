@@ -70,7 +70,7 @@ from motor_ai_sim.simulation.excitation import (Feedback,
                                                 _modulator_words)
 
 __all__ = ["DeviceDrop", "fit_device_drop", "leg_currents",
-           "InverterVoltageSource", "build_inverter_source",
+           "InverterVoltageSource", "build_inverter_source", "feedback_gain_ll",
            "pole_error_volts"]
 
 #: Phase order, the one every abc quantity in this project is written in.
@@ -203,6 +203,27 @@ def leg_currents(i_abc: Dict[str, float], *, star_delta: str,
     return {"A": k * a, "B": k * b, "C": k * c}
 
 
+def feedback_gain_ll(g_leg: Dict[str, float], *, star_delta: str,
+                     n_parallel: int = 1) -> np.ndarray:
+    """2×2 d(D·v_model)/d(i_A, i_B) of a per-leg error slope ``g_leg`` [V/A].
+
+    Chain: branch (i_A, i_B, i_C = −i_A − i_B) → leg currents
+    (:func:`leg_currents`) → diag(g) → model pole voltages (star: as is;
+    delta: err_A − err_B, the v_AB error) → line-to-line difference D.
+    """
+    k = float(max(int(n_parallel), 1))
+    C = np.array([[1.0, 0.0], [0.0, 1.0], [-1.0, -1.0]])
+    G = np.diag([float(g_leg[p]) for p in _ABC])
+    if str(star_delta or "star").strip().lower() == "delta":
+        Lg = k * np.array([[1.0, 0.0, -1.0], [-1.0, 1.0, 0.0], [0.0, -1.0, 1.0]])
+        P = np.array([[1.0, -1.0, 0.0], [0.0, 1.0, -1.0], [-1.0, 0.0, 1.0]])
+    else:
+        Lg = k * np.eye(3)
+        P = np.eye(3)
+    D = np.array([[1.0, -1.0, 0.0], [0.0, 1.0, -1.0]])
+    return D @ P @ G @ Lg @ C
+
+
 # ---------------------------------------------------------------------------
 # The pole-voltage error of ONE leg over ONE time step
 # ---------------------------------------------------------------------------
@@ -277,6 +298,182 @@ def _overlap(a0: float, a1: float, b0: float, b1: float) -> float:
 # The source
 # ---------------------------------------------------------------------------
 
+class CurrentController:
+    """A drive's discrete current regulator in the rotor dq frame.
+
+    WHY (owner 2026-09-29).  The open-loop bridge (a fixed voltage reference)
+    has no means to remove a DC current: it decays only with the circuit's own
+    L/R (~16 electrical periods on the L180 gen), and dead time with a
+    non-symmetric carrier ratio (14 per period there) even sustains ~20 A of it
+    on the orbit (server run 2026-09-29: 21.6 A left after the DC-orbit solve
+    converged).  A real drive closes a current loop; this is that loop:
+
+    * **sampling** - once per carrier period (regular sampling), at the
+      carrier boundary; the measured current is the last converged FEM step's
+      (at most one step old: the ADC/computation delay a DSP has);
+    * **law** - PI in dq with feedforward, v_dq = v_ff + Kp*e + Ki*integral(e),
+      e = i*_dq - i_dq, i* = the sine pass's current (I, gamma).  v_ff is the
+      fundamental the sine pass applied (the V1, delta the open-loop bridge
+      was commanded), so on the orbit the regulator only corrects;
+    * **tuning** - Kp_x = w_c*L_x (bandwidth w_c = 2*pi*f_sw/20 by default,
+      w_c*T_s ~ 0.3 rad for a stable sampled loop) and the integral corner at
+      w_c/4 (Ki = Kp*w_c/4).  The pole-zero-cancelling Ki = w_c*R was tried
+      first: it tracks the reference but rejects a disturbance (the dead-time
+      volts, a feedforward error) only with the plant's own L/R, ~16 periods
+      on the L180 - longer than the settle;
+    * **delay compensation** - the voltage goes back to abc at the carrier
+      CENTRE angle, where its volt-seconds are centred;
+    * **limit + anti-windup** - the linear SVPWM range |v_dq| <= V_bus/sqrt(3)
+      of the model bus; above it the vector is scaled onto the limit, the
+      sample is counted as OVERMODULATION, and the integrator is frozen for
+      that sample (conditional integration);
+    * **modulator** - the controller's own zero sequence (sine / svpwm /
+      third_harmonic) on the sampled reference, one centred pulse per carrier;
+      dead time and device drops are applied on these edges by
+      :func:`pole_error_volts`, exactly as for open loop.
+
+    A DC current in abc is a component at -w_e in dq; the proportional gain
+    acts on it as an active resistance ~w_c*L >> R, so it decays in ~1/w_c -
+    physically, through the controller; nothing is subtracted from it.
+    """
+
+    _SHIFT_KEY = {0.0: "A", -120.0: "B", 120.0: "C"}
+
+    def __init__(self, *, modulator, R: float, L_d: float, L_q: float,
+                 f_sw_hz: float, bw_hz: float, daxis_deg: float,
+                 v1_peak: float, v1_delta_deg: float):
+        if not (R > 0 and L_d > 0 and L_q > 0 and f_sw_hz > 0 and bw_hz > 0):
+            raise ValueError("CurrentController: need positive R, Ld, Lq, "
+                             "f_sw, bandwidth; got %r"
+                             % ((R, L_d, L_q, f_sw_hz, bw_hz),))
+        self._mod = modulator
+        self.carriers = int(modulator.carriers)
+        self.v_bus = float(modulator.v_bus)
+        self.modulation = str(getattr(modulator, "modulation", "sine"))
+        self.R, self.L_d, self.L_q = float(R), float(L_d), float(L_q)
+        self.f_sw = float(f_sw_hz)
+        self.T_s = 1.0 / self.f_sw
+        self.w_c = 2.0 * math.pi * float(bw_hz)
+        self.Kp_d, self.Kp_q = self.w_c * self.L_d, self.w_c * self.L_q
+        # integral corner at w_c/4 (Ti = 4/w_c): the pole-zero-cancelling
+        # Ki = w_c*R leaves the disturbance (back-EMF, dead-time volts)
+        # rejected only with the plant's own L/R (~16 periods on the L180)
+        self.Ki = 0.25 * self.w_c * 0.5 * (self.Kp_d + self.Kp_q)
+        self.daxis = float(daxis_deg)
+        self.v1_peak, self.v1_delta = float(v1_peak), float(v1_delta_deg)
+        self.v_max = self.v_bus / math.sqrt(3.0)
+        self.int_d = self.int_q = 0.0
+        self.duty: Dict[int, Dict[str, float]] = {}
+        self.samples = 0
+        self.overmod = 0
+        self.log: list = []          # (carrier, e_d, e_q, v_d, v_q) per sample
+
+    # -- the sampled regulator ------------------------------------------------
+    def update(self, i_abc, psi_a: float, psi_b: float, exc) -> None:
+        d_ang = 360.0 / self.carriers
+        j0 = int(math.floor(psi_a / d_ang + 1e-9))
+        j1 = int(math.floor((psi_b - 1e-12) / d_ang))
+        for j in range(j0, j1 + 1):
+            if j in self.duty:
+                continue
+            self._sample(j, i_abc, psi_a, exc)
+        for k in [k for k in self.duty if k < j0 - 4]:
+            del self.duty[k]
+
+    def _sample(self, j, i_abc, psi_meas, exc) -> None:
+        from motor_ai_sim.simulation.drive import inverse_park, park
+        from motor_ai_sim.simulation.pwm import zero_sequence
+        d_ang = 360.0 / self.carriers
+        th_m = math.radians(psi_meas + self.daxis)
+        # the setpoint at the measuring instant, in the same electrical frame
+        ref = exc.currents(psi_meas / max(int(exc.pole_pairs), 1))
+        rd, rq = park(ref['A'], ref['B'], ref['C'], th_m)
+        if i_abc is None:
+            md, mq = rd, rq
+        else:
+            md, mq = park(float(i_abc['A']), float(i_abc['B']),
+                          float(i_abc['C']), th_m)
+        ed, eq = rd - md, rq - mq
+        # feedforward: the commanded fundamental V1 cos(x + v1_delta), in dq
+        x = math.radians(self.v1_delta)
+        vfd, vfq = park(self.v1_peak * math.cos(x),
+                        self.v1_peak * math.cos(x - 2 * math.pi / 3),
+                        self.v1_peak * math.cos(x + 2 * math.pi / 3), 0.0)
+        vd = vfd + self.Kp_d * ed + self.int_d
+        vq = vfq + self.Kp_q * eq + self.int_q
+        mag = math.hypot(vd, vq)
+        if mag > self.v_max:
+            vd, vq = vd * self.v_max / mag, vq * self.v_max / mag
+            self.overmod += 1
+        else:                                   # conditional integration
+            self.int_d += self.Ki * ed * self.T_s
+            self.int_q += self.Ki * eq * self.T_s
+        th_c = math.radians((j + 0.5) * d_ang + self.daxis)
+        va, vb, vc = inverse_park(vd, vq, th_c)
+        half = 0.5 * self.v_bus
+        refs = [va / half, vb / half, vc / half]
+        z = zero_sequence(refs, self.modulation, m=min(mag, self.v_max) / half,
+                          x_deg=math.degrees(th_c))
+        self.duty[j] = {k: min(1.0, max(0.0, 0.5 * (1.0 + r + z)))
+                        for k, r in zip(_ABC, refs)}
+        self.samples += 1
+        self.log.append((j, ed, eq, vd, vq))
+        if len(self.log) > 4096:
+            del self.log[:1024]
+
+    # -- the pattern, in the modulator's own interface ------------------------
+    def _pulse(self, carrier_index: int, shift_deg: float):
+        dd = self.duty.get(int(carrier_index))
+        if dd is None:
+            return self._mod._pulse(carrier_index, shift_deg)  # noqa: SLF001
+        d = dd[self._SHIFT_KEY[float(shift_deg)]]
+        d_ang = 360.0 / self.carriers
+        c = (carrier_index + 0.5) * d_ang
+        return c - 0.5 * d * d_ang, c + 0.5 * d * d_ang
+
+    def pole_mean(self, psi_a: float, psi_b: float, phase: str) -> float:
+        shift = _SHIFT[phase]
+        d_ang = 360.0 / self.carriers
+        j0 = math.floor(psi_a / d_ang)
+        j1 = math.floor((psi_b - 1e-12) / d_ang)
+        acc = 0.0
+        for j in range(j0, j1 + 1):
+            a, b = max(psi_a, j * d_ang), min(psi_b, (j + 1) * d_ang)
+            if b <= a:
+                continue
+            lo, hi = self._pulse(j, shift)
+            on = max(0.0, min(b, hi) - max(a, lo))
+            acc += 0.5 * self.v_bus * (2.0 * on - (b - a))
+        return acc / (psi_b - psi_a)
+
+    def tracking_error_rms(self, last: int = 0) -> Optional[float]:
+        rows = self.log[-(last or self.carriers):]
+        if not rows:
+            return None
+        return float(np.sqrt(np.mean([r[1] ** 2 + r[2] ** 2 for r in rows])))
+
+    def report(self) -> Dict[str, Any]:
+        te = self.tracking_error_rms()
+        return {
+            "active": True,
+            "law": "dq PI + feedforward, sampled once per carrier",
+            "tuning": ("Kp = w_c*L, Ki = Kp*w_c/4, "
+                       "w_c = 2*pi*%.1f Hz (f_sw/%.3g)"
+                       % (self.w_c / (2 * math.pi),
+                          self.f_sw * 2 * math.pi / self.w_c)),
+            "Kp_d_ohm": round(self.Kp_d, 5), "Kp_q_ohm": round(self.Kp_q, 5),
+            "Ki_ohm_per_s": round(self.Ki, 4),
+            "L_d_H": self.L_d, "L_q_H": self.L_q, "R_ohm": self.R,
+            "v_limit_V": round(self.v_max, 3),
+            "samples": int(self.samples),
+            "overmodulated_samples": int(self.overmod),
+            "overmodulation": bool(self.overmod),
+            "tracking_error_rms_A_last_period": (None if te is None
+                                                 else round(te, 4)),
+            "integrator_V": [round(self.int_d, 4), round(self.int_q, 4)],
+        }
+
+
 class InverterVoltageSource(_ExcPwm):
     """The Controller's own bridge, driving the electromagnetic transient.
 
@@ -293,7 +490,9 @@ class InverterVoltageSource(_ExcPwm):
                  v_delta_deg: float, f_switch_requested_hz: float,
                  drop: DeviceDrop, v_dc_real_V: float, star_delta: str,
                  n_parallel: int = 1, pole_pairs: int = 1,
-                 f_elec_hz: float = 0.0, topology: str = "one_3ph"):
+                 f_elec_hz: float = 0.0, topology: str = "one_3ph",
+                 current_loop: bool = True,
+                 current_loop_bw_ratio: float = 20.0):
         super().__init__(exc, modulator, v_phase_peak=v_phase_peak,
                          v_delta_deg=v_delta_deg,
                          f_switch_requested_hz=f_switch_requested_hz)
@@ -313,10 +512,71 @@ class InverterVoltageSource(_ExcPwm):
         self._i_leg_sq = {k: 0.0 for k in _ABC}
         self._i_leg_peak = 0.0
         self._fine_seen = 0
+        #: THE CONTROLLER'S CURRENT LOOP (owner 2026-09-29) - see
+        #: :class:`CurrentController`.  Armed by the solver through
+        #: :meth:`configure_current_loop` once the machine's Ld/Lq/R at the
+        #: operating point are known; until then the bridge runs open loop.
+        self.current_loop_wanted = bool(current_loop)
+        self.current_loop_bw_ratio = float(current_loop_bw_ratio)
+        self.cc = None
 
     # ── the one thing that is different ────────────────────────────────────
+    # ── the bridge's own small-signal feedback, for the DC-orbit solve ──────
+    #: 2×2 d(line-to-line model volts of THIS step)/d(i_A, i_B of the
+    #: feedback step), i_C = −i_A − i_B; None when the step has no bridge
+    #: error (a coarse frame, no feedback yet).  Read by the solver right
+    #: after :meth:`mean_over` and handed to ``DcOrbitSolve.frame``.
+    ll_feedback_gain: Optional[np.ndarray] = None
+
+    def _record_feedback_gain(self, legs: Dict[str, float],
+                              err: Dict[str, float], psi_a: float,
+                              psi_b: float) -> None:
+        """The bridge's small-signal DC conductance per leg (describing function).
+
+        WHY (L180 gen, night 2026-09-28/29): the dead time and the device drop
+        are a real resistance for the circuit's DC mode.  A DC offset I_dc on a
+        leg of peak Î moves its zero crossings, and the dead-time clamp's
+        −sign(i)·E then carries a mean of −(2/π)·E·I_dc/Î — an effective
+        2E/(π·Î) ohm per leg, 3× that per delta branch.  On the L180 at 24 kHz
+        that is ~27 mΩ against a ~13 mΩ branch: the DC mode decays about three
+        times faster than R_phase alone says.  The DC-orbit Newton built its
+        period Jacobian from R_phase only, so it over-corrected ~3× per period
+        — an iteration with gain ≈ −1.8 — and after 11 corrections the start-
+        up DC had grown to −645 A (WCMS) / −886 A (IMCQ).
+
+        WHICH derivative.  The dead-time error is a sign of the ONE-STEP-OLD
+        current, so its per-step derivative is a delta at each zero crossing.
+        A per-step secant (tried first) is the right integral on a clean
+        sinusoid, but on the real L180 carrier ripple a crossing can move the
+        current by a few amperes only, the secant becomes huge, and the
+        explicit (one-step-delayed) row makes the period map non-contractive
+        (server run 2026-09-29: eigenvalue −3.66, period refused, 20.8 A left).
+        What the DC mode — a slow quantity over a whole period — actually
+        meets is the PERIOD-AVERAGED slope, i.e. the describing-function
+        conductance of the clamp, spread evenly over the period's steps:
+
+            g_leg = −r_ds − 2·E / (π·Î_leg),   E = t_d·f_sw·(V_dc + 2·V_SD(Î))
+
+        Î_leg = √2 × the leg's rms over the fine steps marched so far.  It is
+        the same model's linearisation (not a filter on the DC); its integral
+        over a period equals the box-discretised one on a clean waveform.
+        """
+        g = {}
+        f_sw = float(self._mod.carriers) * max(self.f_elec_hz, 0.0)
+        n = max(self._fine_seen, 1)
+        for k in _ABC:
+            i_pk = math.sqrt(2.0 * self._i_leg_sq[k] / n)
+            g[k] = -float(self.drop.r_ds_ohm)
+            if self.drop.dead_time_s > 0.0 and i_pk > 1e-9:
+                e = self.drop.dead_time_s * f_sw * (
+                    self.v_dc_real_V + 2.0 * self.drop.v_sd(i_pk))
+                g[k] -= 2.0 * e / (math.pi * i_pk)
+        self.ll_feedback_gain = feedback_gain_ll(
+            g, star_delta=self.star_delta, n_parallel=self.n_parallel)
+
     def mean_over(self, fb: Feedback) -> Dict[str, float]:
         base = super().mean_over(fb)
+        self.ll_feedback_gain = None
         if not fb.fine or fb.i_abc is None:
             return base
         legs = leg_currents(fb.i_abc, star_delta=self.star_delta,
@@ -329,12 +589,20 @@ class InverterVoltageSource(_ExcPwm):
         psi_b = float(fb.theta_deg) * self.pole_pairs
         if psi_b <= psi_a:
             return base
-        err = {k: pole_error_volts(modulator=self._mod, drop=self.drop,
+        pattern = self._mod
+        if self.cc is not None:
+            # closed loop: the regulator decides every carrier's duties from
+            # the current measured at its sampling instant
+            self.cc.update(fb.i_abc, psi_a, psi_b, self._exc)
+            pattern = self.cc
+            base = {k: self.cc.pole_mean(psi_a, psi_b, k) for k in _ABC}
+        err = {k: pole_error_volts(modulator=pattern, drop=self.drop,
                                    phase=k, i_leg_A=legs[k], psi_a_deg=psi_a,
                                    psi_b_deg=psi_b,
                                    v_dc_real_V=self.v_dc_real_V,
                                    deg_per_s=self.deg_per_s)
                for k in _ABC}
+        self._record_feedback_gain(legs, err, psi_a, psi_b)
         if self.star_delta == "delta":
             # The model's phase voltage IS the real line-to-line voltage, so
             # the error injected into model pole A is the error of v_AB.
@@ -342,6 +610,37 @@ class InverterVoltageSource(_ExcPwm):
                     "B": base["B"] + err["B"] - err["C"],
                     "C": base["C"] + err["C"] - err["A"]}
         return {k: base[k] + err[k] for k in _ABC}
+
+    # ── the current loop ────────────────────────────────────────────────────
+    def configure_current_loop(self, *, R_phase: float, L_d: float,
+                               L_q: float) -> None:
+        """Arm the regulator with the machine's own Ld/Lq/R at the point.
+
+        Called by the solver right after its dq phasor initialiser, which has
+        just MEASURED the operating-point inductances on this very mesh; R is
+        the circuit's phase resistance at this run's copper temperature.
+        """
+        if not self.current_loop_wanted:
+            return
+        f_sw = float(self._mod.carriers) * max(self.f_elec_hz, 0.0)
+        self.cc = CurrentController(
+            modulator=self._mod, R=float(R_phase), L_d=float(L_d),
+            L_q=float(L_q), f_sw_hz=f_sw,
+            bw_hz=f_sw / self.current_loop_bw_ratio,
+            daxis_deg=float(self._mod.daxis_deg),
+            v1_peak=float(self.v_phase_peak),
+            v1_delta_deg=float(self.v_delta_deg))
+
+    def settle_policy(self):
+        pol = super().settle_policy()
+        if self.current_loop_wanted:
+            # The bridge's DC decays PHYSICALLY through the regulator (its
+            # proportional gain is an active resistance ~w_c*L >> R), so the
+            # DC-orbit Newton - built for an open-loop voltage source - only
+            # MEASURES here and never moves the state.
+            import dataclasses as _dc
+            pol = _dc.replace(pol, dc_orbit_correct=False)
+        return pol
 
     # ── what the record has to be able to say about it ─────────────────────
     def measured(self) -> Dict[str, Any]:
@@ -404,6 +703,12 @@ class InverterVoltageSource(_ExcPwm):
                 "i_leg = n_parallel*I_A — the bridge is in series with the "
                 "star branch"),
             "measured": self.measured(),
+            "current_loop": (self.cc.report() if self.cc is not None else
+                             {"active": False,
+                              "why": ("switched off" if not
+                                      self.current_loop_wanted else
+                                      "not armed (no dq phasor initialiser "
+                                      "ran - open-loop bridge)")}),
             # WHAT THIS SOURCE DOES NOT CHANGE, said rather than left to be
             # discovered: the DC-link series beside it is still computed from
             # the COMMANDED switching functions, so the bus current carries no

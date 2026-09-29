@@ -11,7 +11,7 @@ the inlet temperature, and the outlet is what the machine DOES to the coolant.
 
 The user's ask (2026-09-07) is two cooled surfaces, not one:
 
-    "Ротор придётся охлаждать в основном через вал" — the rotor's heat leaves
+    "The rotor will have to be cooled mainly through the shaft" — the rotor's heat leaves
     mainly through the SHAFT, not across the air gap.
 
 So the model needs the rotor bore as a first-class cooled surface with its own
@@ -20,8 +20,9 @@ told how many watts left through each.  That is three correlation families
 (external cross-flow, internal pipe flow, an annular jacket channel) plus an
 energy balance, and none of them has any business being inside a route.
 
-Later the same day the user named the ONE axial path that is real (*"торцы и
-лобовые части — только для вала, всё остальное вращается внутри мотора"*): the
+Later the same day the user named the ONE axial path that is real (*"end
+faces and end windings — only for the shaft, everything else spins inside
+the motor"*): the
 rotor's end faces and the end windings spin inside a closed housing and have
 nowhere else to send their heat, but the SHAFT comes out through the bearings
 and its exposed length loses heat to the room.  That is a fourth family — a
@@ -621,8 +622,8 @@ def centrifugal_convection(*, props: FluidProps, beta_per_k: float, rpm: float,
     heated at the wall is lighter and falls inward, cold core fluid takes its
     place: a natural-convection loop driven by rotation, not by the Earth.  It
     is what the ½·ω·r "swirl velocity" guess this replaced was standing in for,
-    with the wrong scaling (user 2026-09-07: "давай автоматически рассчитывать
-    скорость вращения внутри ротора — чем быстрее, тем лучше теплообмен").
+    with the wrong scaling (user 2026-09-07: "let's automatically compute the
+    rotation speed inside the rotor — the faster it is, the better the heat transfer").
 
     Ra = g_eff·β·ΔT·D³ / (ν·α), Nu = 0.13·Ra^(1/3) for the turbulent branch
     (McAdams' turbulent plate coefficient; Ra > ~10⁹ at any useful speed),
@@ -822,8 +823,8 @@ def bore_liquid(*, props: FluidProps, fluid: str, t_in_c: float,
 # ---------------------------------------------------------------------------
 # The shaft that sticks OUT of the housing
 # ---------------------------------------------------------------------------
-# User, 2026-09-07: *"торцы и лобовые части — только для вала, всё остальное
-# вращается внутри мотора"*.  The rotor's end faces and the end windings live
+# User, 2026-09-07: *"end faces and end windings — only for the shaft,
+# everything else spins inside the motor"*.  The rotor's end faces and the end windings live
 # inside a CLOSED housing, spinning in their own air: whatever they hand to that
 # air comes back through the housing, so there is no extra path to model there
 # and inventing one would flatter every design.  The SHAFT is the exception —
@@ -1086,7 +1087,7 @@ def mount_path(*, g_w_per_k: float,
 # ---------------------------------------------------------------------------
 # The robotics HEAT PATH — one choice, fixed defaults (2026-09-26)
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-26: «давай упростим».  The robotics mode used to ask for a
+# Owner, 2026-09-26: "let's simplify".  The robotics mode used to ask for a
 # mount conductance in W/K, a mount temperature, "ideal sink or robot link", a
 # link size and a link material — five numbers nobody on the Thermal tab can
 # measure.  It now asks ONE question, where the heat goes by conduction:
@@ -1198,8 +1199,8 @@ def bearing_path(*, d_out_m: float, d_in_m: float, k_shaft: float,
 # ---------------------------------------------------------------------------
 # User, 2026-09-14: on this joint the 24 coils stand PROUD of the core on both
 # sides and the core's own end faces are largely uncovered.  That breaks the
-# 2026-09-07 ruling this file's shaft section is built on (*"торцы и лобовые
-# части — только для вала"*) for this machine: there the end turns spin inside a
+# 2026-09-07 ruling this file's shaft section is built on (*"end faces and
+# end windings — only for the shaft"*) for this machine: there the end turns spin inside a
 # closed housing and have nowhere to send their heat, here they are the most
 # exposed copper in the machine and they face the room directly.
 #
@@ -1357,8 +1358,8 @@ def end_face_still(*, t_wall_c: float, t_ambient_c: float, area_m2: float,
 # directly in the propeller wash (~10-12 m/s).
 #
 # That breaks the assumption the whole ``shaft_ends_path`` section above is built
-# on — *"торцы и лобовые части — только для вала, всё остальное вращается внутри
-# мотора"* (2026-09-07) — but only for THIS kind of machine, which is why the
+# on — *"end faces and end windings — only for the shaft, everything else
+# spins inside the motor"* (2026-09-07) — but only for THIS kind of machine, which is why the
 # two models live side by side and the caller picks one by name (``frame`` =
 # housed | open).  On a housed motor the end turns really do have nowhere to send
 # their heat; on an open one they are the best-cooled copper in the machine, and
@@ -1606,9 +1607,9 @@ def slot_channels_path(*, air_speed_mps: float, t_ambient_c: float,
 # The OPEN frame, part two: the ROTOR is in the wash as well (2026-09-21)
 # ---------------------------------------------------------------------------
 # User, 2026-09-21, with his thermal photographs of the Ø50 drone motor in
-# front of him: *«по термофотографиям катушки греются всегда значительно больше
-# магнитов; конструкция полностью открыта, магниты обдуваются со всех сторон, и
-# воздух ещё продувает зазор»* — the coils are ALWAYS much hotter than the
+# front of him: *"the thermal photos always show the coils running much
+# hotter than the magnets; the build is completely open, the magnets are
+# blown on from all sides, and air also blows through the gap"* — the coils are ALWAYS much hotter than the
 # magnets, the build is open on every side, the magnets are washed all round and
 # the air blows through the gap as well.  The model said the opposite: on the
 # CIANO14 50 edited / L15 record the winding came out at 251 °C and the magnets

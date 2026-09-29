@@ -1377,8 +1377,8 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
     # The store above is one entry per MACHINE: solving a second duty overwrites
     # the first, so a report of a configuration with several duties could only
     # ever show one thermal column.  The user asked for a comparison across
-    # every simulation — *"если в конфигурации несколько режимов, их нужно
-    # сравнивать в таблицах по всем моделированиям"* — so a COMPACT copy (no
+    # every simulation — *"if a configuration has several duties, they need
+    # to be compared in tables across every simulation"* — so a COMPACT copy (no
     # per-node field) is filed under the duty the catalog context names.
     # Guarded twice over: the write itself never raises, and a failure here must
     # not turn a finished solve into an error.
@@ -1403,9 +1403,8 @@ def _remember_last(kind: str, result: Dict[str, Any], params: Dict[str, Any],
             return
     # ── …and the FIELD itself, per duty (2026-09-09) ────────────────────────
     # The compact row above is a table cell; the report also draws each duty's
-    # own temperature MAP side by side (user: *"давай сделаем сохранение всех
-    # полей моделирования, как электромагнитных, так и тепловых и
-    # механических"*), and the map's arrays are in the pickle one machine at a
+    # own temperature MAP side by side (user: *"let's save all the simulation
+    # fields — electromagnetic, thermal, and mechanical alike"*), and the map's arrays are in the pickle one machine at a
     # time.  ``duty_fields`` keeps the mesh + T-per-node + flux of THIS duty
     # (~0.31 MB compressed on the 200 mm machine) beside its stored runs.
     # BOTH kinds write it: a coupled run's converged map is this duty's

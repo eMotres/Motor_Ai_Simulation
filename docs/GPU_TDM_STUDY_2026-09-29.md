@@ -4,8 +4,190 @@ Claude Opus 5.5 (`claude-opus-5-5`), one agent, no escalation. Branch
 `perf/profiling-gpu-tdm` from `pre-migration-freeze-2026-09-15` (5af2c19).
 Documents and bench scripts only: **no solver code was changed.** The Stage-1
 measurements this study builds on are in `SOLVER_PROFILING_2026-09-29.md`.
-The GPU numbers do not exist yet. They will be measured on the owner's
-RTX 5070 in the night window with the scripts described in section 5.
+**The GPU measurements are in section 0**: RTX 5070 Laptop, daytime run the
+owner approved on 2026-09-29. Where they contradict the predictions made
+before measuring (sections 3 and 5), the predictions are kept, marked as
+such, and corrected in section 0.
+
+## 0. Measured GPU results (2026-09-29, daytime run approved by the owner)
+
+**Hardware.** GPU: NVIDIA GeForce RTX 5070 **Laptop** GPU (Blackwell, cc 12.0,
+8 GB, driver 581.91 / CUDA 13.0, CUDA 13.4 runtime wheels). Laptop CPU: AMD
+Ryzen AI 9 HX 370 (12 C / 24 T, 31 GB). Server CPU: AMD Ryzen 7 PRO 8700GE
+(8 C / 16 T, 61 GB). The laptop runs shared the CPU with a KiCad routing job
+of another project and were throttled to BelowNormal or Idle priority, so
+laptop wall times carry noise of the order of ±10 %. Per-solve medians are
+robust. After the owner's decision, all CPU references were taken on the
+server; laptop CPU numbers are given only where they already existed.
+
+**cuDSS route.** The C API through ctypes on CuPy arrays
+(`gpu_backends.CuDSSDirect`). nvmath-python cannot be imported on this PC,
+because Windows App Control blocks two of its modules (section 6). The
+backend follows the production cycle: one analysis per sparsity pattern, then
+the new values are copied in place and refactorised.
+
+### 0.1 Matrix level (real exported systems, median of 7 refactorise+solve cycles, ms)
+
+| system | n | server CPU LU / Chol (6 thr) | laptop CPU LU / Chol (6 thr) | laptop GPU LU / Chol FP64 | GPU mixed Chol | GPU Chol vs server Chol | analysis, once per pattern: server PARDISO / laptop cuDSS | GPU memory |
+|---|---:|---|---|---|---:|---:|---|---:|
+| Ø40 static Newton | 17,584 | 8.1 / 7.2 | 12.9 / 9.2 | 5.4 / 4.5 | 5.9 | 1.6× | 23 / 160 | 92 MB |
+| Ø40 eddy bordered | 23,931 | 7.4 / 6.2 | 19.7 / 14.1 | 4.3 / 3.8 | 4.4 | 1.6× | 35 / 192 | 100 MB |
+| L13 eddy bordered | 30,768 | 13.4 / 11.0 | 25.5 / 19.8 | 11.1 / 7.5 | 9.6 | 1.5× | 50 / 278 | 104 MB |
+| L155 static Newton | 39,030 | 15.5 / 13.7 | 31.8 / 23.9 | 19.7 / 15.0 | 17.0 | 0.9× | 55 / 380 | 108 MB |
+| L155 eddy bordered | 44,277 | 20.2 / 13.6 | 46.4 / 31.9 | 22.2 / 12.1 | 15.1 | 1.1× | 59 / 414 | 112 MB |
+| L155 ×0.5 eddy | 60,754 | 24.9 / 18.1 | 62.6 / 48.3 | 23.2 / 9.2 | 15.1 | 2.0× | 80 / 514 | 130 MB |
+| L155 ×0.3 eddy | 97,437 | 65.5 / 44.4 | 106.5 / 79.8 | 42.8 / 16.8 | 30.5 | 2.6× | 190 / 744 | 176 MB |
+| L155 ×0.2 eddy | 168,527 | 128.2 / 94.3 | 197.1 / 164.3 | 42.6 / 32.9 | 27.7 | 2.9× | 348 / 1,414 | 242 MB |
+
+All 34 mid-Newton systems, all backends: `scripts/bench/summarize_gpu_bench.py`
+on `results_20260929_gpu/gpu_bench.json`. On the same laptop, the GPU
+Cholesky beats the laptop CPU LU by 2–7× on every system. Against the
+faster server CPU it is 0.9–1.6× at production size and 2–2.9× at
+61–169 k DOF. **No out-of-memory case**: the largest system needs 242 MB of
+the 8 GB. GPU memory grows roughly linearly with the factor size (about
+1.4 kB per DOF at 169 k).
+
+Accuracy over all 34 systems (FP64 relative residual; relative difference to
+the CPU PARDISO FP64 solution):
+
+| backend | max residual | max difference vs CPU x | notes |
+|---|---:|---:|---|
+| CPU LU (PARDISO mtype 11) | 1.9e-13 | 9.6e-13 (run-to-run) | reference |
+| CPU Cholesky (mtype 2) | 1.9e-13 | 7.6e-13 | |
+| GPU FP64 LU | 2.4e-13 | 9.5e-13 | |
+| GPU FP64 Cholesky | 2.8e-13 | 1.6e-12 | |
+| GPU FP32 LU / Cholesky | 1.2e-4 / 1.4e-4 | 6.4e-4 / 7.8e-4 | **not acceptable alone** |
+| GPU mixed (FP32 factor + FP64 refinement), LU / Cholesky | 5.4e-13 / 4.6e-13 | 2.2e-10 / 9.5e-11 | converges in ≤ 3 steps (2 on the eddy systems) |
+| CuPy QR (cuSOLVER), ≤ 50 k | 5.5e-13 | 8.5e-9 | 100–1000× slower, no reuse |
+| CuPy GMRES + Jacobi, ≤ 50 k | 4.4e-2 | 0.97 | **fails** (as expected for cond 1e6–1e13) |
+
+### 0.2 The analysis phase decides the full run
+
+The pattern changes at every rotor position, so the analysis runs once per
+frame. Per frame of the L155 eddy run (7.3 bordered solves per frame):
+
+- server CPU Cholesky: 59 ms + 7.3 × 13.6 ms ≈ **158 ms**
+- laptop GPU Cholesky: 414 ms + 7.3 × 12.1 ms ≈ **502 ms** (3.2× *slower*)
+
+If the ordering were reused across frames (a superset pattern, see
+`SOLVER_PROFILING_2026-09-29.md` §4.3), the numbers would be 99 ms against
+88 ms (1.1×). At 169 k DOF with reuse, the GPU would win 2.9×.
+
+The cuDSS host-side knobs were measured on L155 eddy (44 k):
+
+- **AMD reordering** halves the analysis (300 → 119 ms) but makes every
+  factorisation 8–10× slower (6.8 → 70 ms). Net loss.
+- **The multithreaded host layer** (`cudss_mtlayer_vcomp`, 2 threads) cuts
+  the analysis by 43 % (300 → 171 ms) but **crashes with an access violation
+  in `cudssDestroy`** on Windows. Not usable as-is.
+
+### 0.3 Full simulations with the GPU solution: engineering A/B
+
+40 mm Ø40 L12 rated, full `em_transient_eval` with every P2 linear solve
+routed through the backend (`profile_fem_run.py --backend`). Reference: CPU
+PARDISO LU FP64. All runs are on the laptop, 6 threads, sharing the CPU with
+the routing job.
+
+| mode | backend | frames | linear solves [s] | wall [s] | worst headline rel. diff | verdict |
+|---|---|---:|---:|---:|---:|---|
+| static | CPU LU (ref) | 72 | 40.8 | 147.1 | – | – |
+| static | CPU Cholesky | 72 | 36.0 | 137.4 | 7.3e-14 | PASS |
+| static | GPU FP64 LU | 72 | 52.0 | 145.9 | 4.3e-13 | PASS |
+| static | GPU FP64 Cholesky | 72 | 49.0 | 141.3 | 2.4e-13 | PASS |
+| static | GPU mixed Cholesky | 72 | 56.2 | 145.9 | 3.9e-13 | PASS |
+| eddy | CPU LU (ref) | 218 | 83.8 | 296.6 | – | – |
+| eddy | CPU Cholesky | 218 | 83.6 | 305.0 | 7.6e-13 | PASS |
+| eddy | GPU FP64 LU | 218 | 91.4 | 276.1 | 1.0e-12 | PASS |
+| eddy | GPU FP64 Cholesky | 218 | 88.1 | 277.8 | 2.5e-12 | PASS |
+| eddy | GPU mixed Cholesky | 218 | 83.4 | 242.6 | 7.2e-13 | PASS |
+
+The headline quantities are torque, ripple, V_peak/EMF, flux linkage,
+Ld/Lq, peak B, and every loss (copper AC, iron, magnets, shaft), plus the
+waveforms. All match to ≤ 2.5e-12, with identical frame counts. **The GPU
+solution is engineering-identical.** The linear-solve totals are equal: in
+the eddy run the median GPU solve is 11 ms against 22.6 ms on CPU, which
+saves about 23 s, and the roughly 245 GPU analyses at about 200 ms each cost
+about 25 s extra. The wall differences (−18 % to +3 %) are within the
+laptop's contention noise; the linear-solve column is the controlled number.
+
+Server CPU references of the same 40 mm case (6 threads, container,
+`nice 19`). **Timings are not controlled.** The server was shared with two
+other agents (load 17–26 against 16 threads). Two contradictory results show
+it: Cholesky came out slower than LU in static (62.8 vs 41.5 s of solves)
+but faster in eddy (105.5 vs 126.7 s). The engineering results are identical:
+T = 0.621306 N·m static and 0.621868 N·m eddy, the same frame counts, and
+differences in the 1e-15 range. The quiet-server matrix numbers (§0.1, §3)
+are the valid CPU speed comparison. The L13 and L155 full-case CPU runs were
+dropped for the same reason (they were queued behind a load gate of 11 that
+never opened for long).
+
+| mode | backend (server) | frames | linear solves [s] | wall [s] |
+|---|---|---:|---:|---:|
+| static | CPU LU | 72 | 41.5 | 142.7 |
+| static | CPU Cholesky | 72 | 62.8 | 180.2 |
+| eddy | CPU LU | 218 | 126.7 | 380.3 |
+| eddy | CPU Cholesky | 218 | 105.5 | 337.6 |
+
+**Parallel positions / candidates (server, measured).** `throughput_bench.py`
+runs independent processes, each refactorising and solving the real system
+back to back, with 6 cores in total per layout. The numbers are aggregate
+cycles per second, with the ratio to one 6-thread LU process in brackets:
+
+| system | LU 1×6 | LU 2×3 | LU 3×2 | LU 6×1 | Chol 1×6 | Chol 6×1 |
+|---|---:|---:|---:|---:|---:|---:|
+| L155 eddy (44 k) | 38.9 (1.0) | 34.8 (0.9) | 49.8 (1.28) | 71.0 (**1.83**) | 49.6 (1.28) | 104.5 (**2.69**) |
+| Ø40 eddy (24 k) | 75.1 (1.0) | 72.2 (0.96) | 100.5 (1.34) | 129.1 (**1.72**) | 85.7 (1.14) | 199.0 (**2.65**) |
+
+These are also contended numbers, but each layout ran back to back with the
+others, so the ratios are meaningful. **Process-level parallelism over
+independent positions or candidates with single-thread Cholesky gives about
+2.7× the solve throughput** of today's one-process-many-threads layout, on
+the same 6 cores and with no GPU. For comparison, one laptop GPU worker
+refactorises L155 at about 83 cycles/s (12.1 ms, analysis excluded), roughly
+one more CPU core group's worth.
+
+L13 and L155 GPU full runs were **not run**. The launch was denied by the
+permission system after the owner gave the workstation CPU to the SiC
+routing agents, and the 40 mm A/B already answers the question: with
+once-per-frame analysis, the GPU cannot win the full run. The matrix-level
+numbers above are enough to project L13 and L155.
+
+### 0.4 Summary table
+
+"Solver time" is one refactorise+solve of the production L155 eddy system
+(44 k DOF; in brackets the 169 k system). "Full sim" is the 40 mm eddy run:
+linear-solve total / wall. "Speed-up" is relative to CPU LU on the same host.
+
+| Method | Solver time [ms] | Full sim (40 mm eddy) | Speed-up | Error (worst) | Memory | Complexity |
+|---|---|---|---|---|---|---|
+| CPU LU, PARDISO mtype 11 (production) | server 20.2 (128), laptop 46.4 (197) | 83.8 s / 296.6 s (laptop) | 1.0 | residual 1.9e-13 | factor 26 MB (L155) | in production |
+| CPU Cholesky, PARDISO mtype 2 | server 13.6 (94), laptop 31.9 (164) | 83.6 s / 305.0 s; static 36.0 vs 40.8 s | 1.05–1.6× per solve; 1.0–1.13× on run solves | headline 7.6e-13 | ~½ of LU | **low**: mtype + upper triangle + loud LU fallback |
+| GPU FP64 LU, cuDSS | 22.2 (42.6) | 91.4 s / 276.1 s | 2–7× per solve vs laptop LU; 0.92× on run solves | headline 1.0e-12 | 112 MB (242 MB) | medium: optional user-installed backend, ctypes, App Control caveat |
+| GPU FP64 Cholesky, cuDSS SPD | 12.1 (32.9) | 88.1 s / 277.8 s | 1.1× vs server Chol, 2.9× at 169 k; 0.95× on run solves | headline 2.5e-12 | 112 MB (242 MB) | medium |
+| GPU FP32, cuDSS | 8.1 LU / 6.6 Chol (29 / 21) | not run: accuracy | – | residual 1e-4: **rejected** | ~½ of FP64 | – |
+| GPU mixed (FP32 Chol + FP64 refinement) | 15.1 (27.7) | 83.4 s / 242.6 s | 1.0× on run solves | headline 7.2e-13, ≤ 3 steps | ~½ + FP64 copy of A | medium |
+| GPU analysis per pattern (cost that decides it) | 414 vs CPU 59 (1,414 vs 348) | ≈ 245 analyses per run | GPU 4–7× slower | – | – | – |
+| Parallel positions/candidates, CPU processes (server, 6 cores) | L155: 6×1 LU 71.0, 6×1 Chol 104.5 cycles/s against 38.9 (1×6 LU) | – (throughput, not latency) | **1.7–1.8× (LU), 2.65–2.7× (Cholesky)** | identical per process | × processes (26 MB each, L155) | low: process pool (section 8.2) |
+| Hybrid CPU workers + GPU worker | not measured (workstation CPU given to routing) | – | projected: + 1 worker at GPU rate | – | – | medium |
+
+### 0.5 Verdict
+
+1. **The GPU produces engineering-identical results**, but **it does not
+   speed up today's 2-D runs.** Its refactorisations are faster (1.1–2.9×
+   vs the server CPU, 2–7× vs the laptop CPU), but cuDSS's analysis is 4–7×
+   slower than PARDISO's and runs once per rotor position.
+2. The GPU becomes worthwhile only together with **ordering reuse across
+   frames** (a superset sliding-band pattern) **and** larger systems
+   (≥ 60 k DOF, where the refactorisation wins 2–2.9× against the server).
+   Even then, the Amdahl limit of the run is 1.4–1.6× (solves are 27–39 % of
+   the wall time).
+3. **Mixed precision works** (≤ 3 refinement steps, 1e-13). The prediction
+   that it would fail was wrong. It is not faster than FP64 at these sizes.
+4. **Recommended order:** CPU Cholesky (measured 1.05–1.6× per solve, zero
+   dependencies) → ordering reuse across frames (helps CPU and GPU alike) →
+   the process-level scheduler (section 8.2) → the eddy warm-up and shaft
+   gauge (section 4.5) → only then an optional GPU backend for fine meshes.
+
 
 ## 1. Where the time goes (Stage 1 summary)
 
@@ -116,10 +298,14 @@ What this means:
    non-positive pivot.
 2. **Threads scale poorly at this size.** 1 → 6 threads gives only
    2.1–3.5× on L155 eddy, and 1.5× from 4 to 6 threads on the 44 k system.
-   Six single-thread processes deliver about 2.5× the solve throughput of
-   one six-thread process. Process-level parallelism over independent work
+   Measured (§0.3): six single-thread processes deliver 1.7–1.8× the
+   solve throughput of one six-thread process with LU, and 2.65–2.7× with
+   Cholesky. Process-level parallelism over independent work
    items (section 8.2) is worth more than any faster single solve.
-3. **FP32 is ruled out for the eddy systems.** cond₂ ≈ 3e12 × ε₃₂ (6e-8)
+3. *(Prediction, **refuted by measurement**: mixed FP32 + FP64 refinement
+   converges in 2–3 steps to ≤ 5.4e-13 on every eddy system, section 0.
+   The large cond₂ is diagonal scaling of the constraint rows, which the
+   factorisation's scaling absorbs.)* **FP32 is ruled out for the eddy systems.** cond₂ ≈ 3e12 × ε₃₂ (6e-8)
    ≈ 2e5 ≫ 1: an FP32 factorisation with FP64 iterative refinement cannot
    converge. For the magnetostatic systems, κ·ε₃₂ ≈ 0.1–5: refinement
    converges slowly on coarse meshes and fails on fine ones. The mixed
@@ -128,7 +314,10 @@ What this means:
    lower the eddy cond₂ by orders of magnitude, since λmin comes from the
    scaling of the constraint rows. That is worth one test before closing the
    FP32 question.
-4. **Break-even for a GPU direct solver:** the CPU cycle on the production
+4. *(Prediction, **half right**: the GPU refactorisation already wins at
+   17.6 k DOF on the matrix bench, but the full run gains nothing, because
+   the GPU analysis is 4–7× slower and runs once per rotor position;
+   section 0.)* **Break-even for a GPU direct solver:** the CPU cycle on the production
    L155 system is 18–26 ms at 4 threads (17.6 ms median measured inside the
    real run). Moving 0.54 M values (4.3 MB) to the device alone takes about
    0.2–0.4 ms over PCIe. The cuDSS numeric factorisation for 2.6 M factor
@@ -312,6 +501,11 @@ Callers: `fem_transient_sliding_band` (magnetostatic Newton K+T),
 start), `pic2_sweeps` (Picard stiffness). Sizes run from 17.6 k to 169 k DOF
 (section 3).
 
+*Outcome (section 0): the matrix-level prediction was wrong, since cuDSS
+wins every refactorisation from 17.6 k DOF up. The mixed-precision
+prediction was wrong too (it converges). The full-run conclusion held: there
+is no gain with today's once-per-frame analysis.*
+
 What to expect, stated before measuring so it can be proved wrong: cuDSS FP64
 **will not beat** PARDISO below roughly 100–200 k DOF on this hardware. The
 production systems are 18–44 k. FP32 or mixed factorisation fails on the
@@ -350,7 +544,24 @@ Toolkit required):
    `nvmath-python[cu12]` pulls `nvidia-cudss-cu12==0.8.*` (win_amd64 wheels
    exist for 0.8.0.10), cuBLAS, cuSPARSE, cuSOLVER and the runtime as pip
    wheels.
-3. Check: `C:\Users\vadim\venvs\gpu_bench\Scripts\python.exe -c "import cupy, nvmath; print(cupy.cuda.runtime.getDeviceProperties(0)['name'], nvmath.__version__)"`
+3. Check: `C:\Users\vadim\venvs\gpu_bench\Scripts\python.exe -c "import cupy; print(cupy.cuda.runtime.getDeviceProperties(0)['name'])"`
+
+**What was actually installed on 2026-09-29.** Driver 581.91 (CUDA 13.0),
+CUDA Toolkit 13.4 (installed by the owner; not needed by the wheels), and
+the venv `C:\Users\vadim\venvs\gpu_bench` (Python 3.11.9, the repository
+requirements, `cupy-cuda13x` 14.2.0, `nvmath-python[cu13]` 1.0.0,
+`nvidia-cudss-cu13` 0.8.0.10). The CUDA 13.4 runtime wheels run on the 13.0
+driver through minor-version compatibility (checked).
+
+**Windows App Control blocks two of nvmath's compiled modules** on this PC:
+`nvmath/bindings/cusolver.*.pyd` and `nvmath/bindings/cutensor.*.pyd`.
+nvmath's package `__init__` imports them unconditionally, so
+`import nvmath` fails. CuPy and every NVIDIA DLL, including
+`cudss64_0.dll`, load fine. The bench therefore calls cuDSS through its C
+API with ctypes on CuPy arrays (`gpu_backends.CuDSSDirect`, the default for
+`cudss_*`). The `nvmath_cudss_*` names keep the nvmath route for hosts where
+it imports. The policy was not touched. Allowing those two files is the
+owner's decision, and it is not needed for cuDSS.
 
 Optional:
 

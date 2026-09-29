@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -40,6 +41,21 @@ MAX_CONTAINERS = 60
 MAX_CORES = 1024
 MAX_DISKS = 32
 TOKEN_PREFIX = "mnode_"
+
+#: Admin -> Overview live load, out-of-app CPU (see outside_app_series below).
+#: The two containers the app itself runs in (docker-compose default naming
+#: `<project>-<service>-<index>`, project = the `deploy/` directory); only
+#: JOB_CONTAINER runs the job queue that job_usage meters.
+APP_CONTAINERS = {c.strip() for c in
+                  os.environ.get("CLUSTER_APP_CONTAINERS", "deploy-api-1,deploy-web-1").split(",")
+                  if c.strip()}
+JOB_CONTAINER = os.environ.get("CLUSTER_JOB_CONTAINER", "deploy-api-1").strip()
+HOST_KEY = "host"
+APP_OVERHEAD_KEY = "app-overhead"
+#: distinct from job_usage's "other" (see outside_app_series: the two series share a chart).
+OTHER_KEY = "outside-other"
+
+_LOG = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
 _LATEST: Dict[str, Dict[str, Any]] = {}
@@ -222,6 +238,12 @@ def _db() -> sqlite3.Connection:
             f"CREATE TABLE IF NOT EXISTS {t} (node TEXT, ts INTEGER, n INTEGER, "
             + ", ".join(f"{f} REAL" for f in _FIELDS)
             + ", PRIMARY KEY(node, ts))")
+    # per-(node, container|host) CPU/RAM history -- same two resolutions/
+    # retention as fine/coarse, feeds outside_app_series() below.
+    for t in ("container_fine", "container_coarse"):
+        con.execute(
+            f"CREATE TABLE IF NOT EXISTS {t} (node TEXT, name TEXT, ts INTEGER, "
+            "n INTEGER, cpu REAL, mem REAL, PRIMARY KEY(node, name, ts))")
     return con
 
 
@@ -278,6 +300,53 @@ def record_history(node: str, sample: Dict[str, Any], ts: Optional[float] = None
             con.close()
 
 
+def _merge_container(con: sqlite3.Connection, table: str, node: str, name: str,
+                     ts: int, cpu: float, mem: float) -> None:
+    row = con.execute(f"SELECT n, cpu, mem FROM {table} WHERE node=? AND name=? AND ts=?",
+                      (node, name, ts)).fetchone()
+    if row is None:
+        con.execute(f"INSERT INTO {table} VALUES (?,?,?,?,?,?)", (node, name, ts, 1, cpu, mem))
+        return
+    n, ocpu, omem = row
+    con.execute(f"UPDATE {table} SET n=?, cpu=?, mem=? WHERE node=? AND name=? AND ts=?",
+               (n + 1, (ocpu * n + cpu) / (n + 1), (omem * n + mem) / (n + 1), node, name, ts))
+
+
+def record_container_history(node: str, containers: List[Dict[str, Any]],
+                             procs: List[Dict[str, Any]], ts: float) -> None:
+    """Per-(node, container|host) CPU %/RAM history, one bucket average like
+    ``fine``/``coarse``. ``host`` is the sum of the reported processes that are
+    not inside any container (proc_table's ``container`` field empty) -- only
+    the top processes the node agent reports (TOP_N), so it can undercount a
+    host with many small non-top processes; good enough for the live-load
+    "outside the app" picture, not exact accounting."""
+    agg: Dict[str, Dict[str, float]] = {}
+    for c in containers or []:
+        name = str(c.get("name") or "")[:60]
+        if not name:
+            continue
+        agg[name] = {"cpu": _num(c.get("cpu")), "mem": _num(c.get("mem"))}
+    host_cpu = sum(_num(p.get("cpu")) for p in (procs or []) if not p.get("container"))
+    host_rss = sum(_num(p.get("rss")) for p in (procs or []) if not p.get("container"))
+    if host_cpu or host_rss:
+        agg[HOST_KEY] = {"cpu": host_cpu, "mem": host_rss}
+    if not agg:
+        return
+    with _LOCK:
+        con = _db()
+        try:
+            for name, v in agg.items():
+                _merge_container(con, "container_fine", node, name, bucket(ts, FINE_BUCKET_S),
+                                 v["cpu"], v["mem"])
+                _merge_container(con, "container_coarse", node, name, bucket(ts, COARSE_BUCKET_S),
+                                 v["cpu"], v["mem"])
+            con.execute("DELETE FROM container_fine WHERE ts < ?", (int(ts - FINE_KEEP_S),))
+            con.execute("DELETE FROM container_coarse WHERE ts < ?", (int(ts - COARSE_KEEP_S),))
+            con.commit()
+        finally:
+            con.close()
+
+
 #: range label -> lookback seconds (used by both node history and live load).
 RANGE_LOOKBACK_S = {"15m": 900, "1h": 3600, "24h": FINE_KEEP_S, "7d": COARSE_KEEP_S}
 
@@ -305,6 +374,7 @@ def ingest(node: str, raw: Dict[str, Any], now: Optional[float] = None) -> None:
     with _LOCK:
         _LATEST[node] = s
     record_history(node, s, t)
+    record_container_history(node, s.get("containers") or [], s.get("procs") or [], t)
 
 
 def status_of(last: Optional[float], now: Optional[float] = None) -> str:
@@ -343,6 +413,107 @@ def list_nodes(now: Optional[float] = None) -> Dict[str, Any]:
             tot["mem_total"] += _num((s.get("mem") or {}).get("total"))
     tot["cpu_used_cores"] = round(tot["cpu_used_cores"], 2)
     return {"nodes": out, "cluster": tot, "offline_after_s": OFFLINE_AFTER_S}
+
+
+# ── out-of-app load (Admin -> Overview live load) ────────────────────────────
+# The owner's "CPU % by user" chart was empty while the server sat at ~70 %
+# CPU: heavy work (mesher_*, prof_*, stagea_* studies) runs in its own docker
+# containers/processes, outside the app's job queue that job_usage meters.
+# This turns the SAME per-container/host samples the node agent already sends
+# into a series next to the per-user one: real containers by name, host
+# processes outside any container as "host", and what's left of the app's OWN
+# containers after subtracting the job CPU already attributed to users, as
+# "app-overhead" (nginx/uvicorn/GC -- not a user's job, not "outside app" work
+# either, but needed so the two series add up to the container's measured CPU).
+def outside_app_series(start: float, end: float, top_n: int = 8) -> Dict[str, Any]:
+    """Stacked CPU-% series for the containers/host processes NOT counted in
+    job_usage.user_load_series, top ``top_n`` by total CPU + an "other" bucket.
+    Percent convention matches user_load_series: 100 % = one core fully busy
+    for the whole bucket (so several containers/cores can sum past 100 %)."""
+    fine_cutoff = time.time() - FINE_BUCKET_S * 1440   # 24 h of fine data
+    table = "container_fine" if start >= fine_cutoff else "container_coarse"
+    width = FINE_BUCKET_S if table == "container_fine" else COARSE_BUCKET_S
+    with _LOCK:
+        con = _db()
+        try:
+            rows = con.execute(
+                f"SELECT ts, node, name, cpu FROM {table} WHERE ts >= ? AND ts < ? "
+                "ORDER BY ts", (int(start), int(end))).fetchall()
+        finally:
+            con.close()
+
+    from motor_ai_sim import job_usage as U
+    job_cpu_s = U.node_bucket_cpu_s(start, end)   # (node, bucket) -> app job CPU-s
+
+    totals: Dict[str, float] = {}
+    buckets: Dict[int, Dict[str, float]] = {}
+    for ts, node, name, cpu in rows:
+        ts = int(ts)
+        if name in APP_CONTAINERS:
+            key = APP_OVERHEAD_KEY
+            if name == JOB_CONTAINER:
+                job_pct = 100.0 * job_cpu_s.get((node, ts), 0.0) / width
+                overhead = cpu - job_pct
+                if overhead < -1e-6:
+                    _LOG.warning(
+                        "outside_app_series: %s job CPU (%.1f%%) exceeds container "
+                        "%s CPU (%.1f%%) at node=%s ts=%s -- clamped to 0 "
+                        "(sampling skew between docker stats and the job meter)",
+                        JOB_CONTAINER, job_pct, name, cpu, node, ts)
+                val = max(0.0, overhead)
+            else:
+                val = cpu   # this app container never runs jobs: all of it is overhead
+        else:
+            key = name      # a real "outside app" container, or HOST_KEY
+            val = cpu
+        b = buckets.setdefault(ts, {})
+        b[key] = b.get(key, 0.0) + val
+        totals[key] = totals.get(key, 0.0) + val
+
+    top = sorted((k for k in totals if k != APP_OVERHEAD_KEY), key=lambda k: -totals[k])
+    top = top[:max(0, int(top_n))]
+    top_set = set(top)
+    series: List[Dict[str, Any]] = []
+    for ts in sorted(buckets):
+        pt: Dict[str, Any] = {"ts": ts}
+        other = 0.0
+        for k, v in buckets[ts].items():
+            if k == APP_OVERHEAD_KEY or k in top_set:
+                pt[k] = round(v, 2)
+            else:
+                other += v
+        if other:
+            # NOT "other" -- job_usage.user_load_series already uses that key for
+            # its own overflow bucket, and the two series get merged by ts into
+            # one chart (mergeLoadSeries): a shared key would silently clobber it.
+            pt[OTHER_KEY] = round(other, 2)
+        series.append(pt)
+    has_overhead = totals.get(APP_OVERHEAD_KEY, 0.0) > 0
+    return {"items": top, "app_overhead_key": APP_OVERHEAD_KEY if has_overhead else None,
+            "bucket_s": width, "series": series}
+
+
+def outside_app_now() -> List[Dict[str, Any]]:
+    """The Now table: currently running non-app containers from each ONLINE
+    node's latest sample (name, node, CPU %, RAM bytes, approx uptime_s).
+    No history involved -- purely the live snapshot, like list_nodes()."""
+    now = time.time()
+    out: List[Dict[str, Any]] = []
+    with _LOCK:
+        latest = dict(_LATEST)
+    for node, s in latest.items():
+        if status_of(s.get("received"), now) != "online":
+            continue
+        for c in s.get("containers") or []:
+            name = str(c.get("name") or "")
+            if not name or name in APP_CONTAINERS:
+                continue
+            created = _num(c.get("created"))
+            out.append({"node": node, "name": name, "cpu": round(_num(c.get("cpu")), 1),
+                       "mem": _num(c.get("mem")),
+                       "uptime_s": round(now - created, 0) if created > 0 else None})
+    out.sort(key=lambda c: -c["cpu"])
+    return out
 
 
 # ── app-level metrics ────────────────────────────────────────────────────────

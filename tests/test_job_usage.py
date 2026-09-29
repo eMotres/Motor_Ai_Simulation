@@ -201,6 +201,20 @@ def test_load_live_endpoint_admin_only_and_shapes_series(monkeypatch):
         assert "snapshot" in body and "nodes" in body
 
 
+def test_node_bucket_cpu_s_sums_users_and_clients_per_node_minute():
+    """cluster_monitor.outside_app_series subtracts this from the app
+    container's own docker-stats CPU -- it needs the NODE total, not per user."""
+    minute0 = int(time.time() // 60) * 60
+    U._USER_ACC[(minute0, "eu1", "alice", "web")] = 6.0
+    U._USER_ACC[(minute0, "eu1", "bob", "claude")] = 2.0
+    U._USER_ACC[(minute0, "eu2", "carol", "web")] = 9.0
+    assert U.flush_user_attribution(now=minute0) == 3
+    totals = U.node_bucket_cpu_s(minute0 - 60, minute0 + 60)
+    assert totals[("eu1", minute0)] == pytest.approx(8.0)
+    assert totals[("eu2", minute0)] == pytest.approx(9.0)
+    assert ("eu1", minute0 - 60) not in totals
+
+
 def test_jobs_view_shows_live_cpu(monkeypatch):
     class R:
         run_id, owner, kind, body = "live1", "u", "em", {}

@@ -97,6 +97,10 @@ def load_live(range: str = "1h", top: int = 8, _admin: dict = Depends(require_ad
     node_series = {n["id"]: CM.history(n["id"], node_rng) for n in nodes["nodes"]
                   if n["status"] != "revoked"}
     user_load = U.user_load_series(now - lookback, now, top_n=top)
+    outside_app = CM.outside_app_series(now - lookback, now, top_n=top)
+    outside_app["now"] = CM.outside_app_now()
+    since = [n.get("created") for n in nodes["nodes"]
+            if n.get("created") and n["status"] != "revoked"]
     try:
         snapshot = CM.jobs_view()
         for row in snapshot.get("items") or []:
@@ -105,7 +109,8 @@ def load_live(range: str = "1h", top: int = 8, _admin: dict = Depends(require_ad
         snapshot = {"error": CM.redact(str(e))[:200], "items": []}
 
     data = {"range": rng, "nodes": node_series, "cluster": nodes["cluster"],
-            "user_load": user_load, "snapshot": snapshot}
+            "user_load": user_load, "outside_app": outside_app, "snapshot": snapshot,
+            "monitoring_since": min(since) if since else None}
     _LOAD_CACHE.update(key=cache_key, ts=now, data=data)
     return data
 

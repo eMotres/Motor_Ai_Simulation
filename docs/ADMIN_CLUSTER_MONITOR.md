@@ -24,7 +24,9 @@ Data lives in `<identity dir>/cluster/` (the folder of `users.json`, i.e.
 
 CPU total and per core, load average, RAM, swap, disk per mount, network
 rx/tx rate (physical interfaces), uptime, top processes (name, user, nice,
-CPU %, RSS, container name via cgroup), docker containers with CPU/RAM.
+CPU %, RSS, container name via cgroup), docker containers with CPU/RAM and an
+approximate "created" timestamp (from `docker ps`, used for the outside-app
+Now table's uptime column).
 The agent sends process **names only** — never command lines or environments.
 The API additionally drops any `env`/`cmdline`/`args` keys and redacts
 token-, password- and key-like strings before storing.
@@ -64,6 +66,39 @@ Remove: `systemctl disable --now motres-node-agent`, then Revoke in the panel.
 
 Dry run (prints one sample, sends nothing):
 `python3 /opt/motres-node-agent/motres_node_agent.py --once`
+
+## Out-of-app CPU (Admin -> Overview live load)
+
+Heavy work (agent studies: `mesher_*`, `prof_*`, `stagea_*`, and other
+sandboxed processes) often runs in its own docker containers or host
+processes, outside the app's job queue that `job_usage` meters — that showed
+up as the server sitting at real CPU % while the "CPU by user" chart stayed
+empty. `outside_app_series`/`outside_app_now` in `cluster_monitor.py` turn the
+SAME per-container/host samples the node agent already sends into a series
+next to the per-user one:
+
+- real docker containers, by name (top N by CPU + an "other" bucket);
+- `host` — processes outside any container (the node agent's own top-N
+  process sample, so a host with many small non-top processes can be
+  undercounted; good enough for the picture, not exact accounting);
+- `app-overhead` — the app's own containers (`deploy-api-1`/`deploy-web-1`,
+  override with `CLUSTER_APP_CONTAINERS`) minus the job CPU `job_usage`
+  already attributed to users that minute (`CLUSTER_JOB_CONTAINER`, default
+  `deploy-api-1`) — nginx/uvicorn/GC, not a user's job, but needed so the two
+  series add up to the container's measured CPU. Clamped at 0 (logged) if a
+  sampling-skew minute reads more job CPU than container CPU.
+
+History lives in `container_fine`/`container_coarse` (same two resolutions
+and retention as `fine`/`coarse`). `GET /api/admin/load/live` returns it as
+`outside_app` (`items`, `app_overhead_key`, `series`) alongside `user_load` --
+its overflow bucket is `"outside-other"`, not `"other"`, since the web panel
+merges the two series into one chart by ts (`mergeLoadSeries`) and
+`user_load_series` already uses `"other"` for its own overflow,
+plus `outside_app.now` (currently running non-app containers: name, node,
+CPU %, RAM, approx uptime) and `monitoring_since` (oldest registered node,
+for a "collecting since HH:MM" hint on a short history instead of an
+empty-looking chart). The web panel never offers to stop a container — only
+job-queue rows get a Stop button.
 
 ## Usage accounting (machine time per client)
 

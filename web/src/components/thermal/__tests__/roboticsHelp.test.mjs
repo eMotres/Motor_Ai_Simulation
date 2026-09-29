@@ -81,7 +81,7 @@ test('the emissivity tip says it is THE radiation parameter, with the law and th
 });
 
 test('the heat-path tip states every default it stands on and the touch limit', () => {
-  // Owner 2026-09-26: «давай упростим» — ONE choice, and every internal
+  // Owner 2026-09-26: «let's simplify» — ONE choice, and every internal
   // default behind it stated in the HelpTip rather than asked for.
   const t = ROBOTICS_HELP.heatPath.tip;
   for (const opt of Object.values(HEAT_PATH_LABEL)) {

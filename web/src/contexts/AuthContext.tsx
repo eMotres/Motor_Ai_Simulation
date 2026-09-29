@@ -138,7 +138,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // set tier=anon / enforced=true for the ~1.5 s until the retry, the
       // App's tab guard saw fullUI=false in that window and threw the user
       // off Simulation / Sweep / Geometry onto Compare on EVERY full reload
-      // (user 2026-09-13: "почему вкладка отлипает?").  Keep the last known
+      // (user 2026-09-13: "why does the tab detach?").  Keep the last known
       // role and let the retry below settle it.
       const _stored0 = getStoredToken();
       const _provisional = _stored0 && !j.email && j.tokenRejected !== true

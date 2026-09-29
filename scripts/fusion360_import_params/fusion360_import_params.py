@@ -104,7 +104,7 @@ def _clip(text, n=48):
 def _write_value(um, existing, name, value, unit, expr):
     """Write the VALUE of an existing parameter.  ('same'|'updated'|'failed', detail).
 
-    API AUDIT (2026-09-25, owner: "исправь все эти косяки в скриптах").
+    API AUDIT (2026-09-25, owner: "fix all these screw-ups in the scripts").
     `Parameter.unit` is READ-ONLY in the Fusion API (help.autodesk.com's own
     Parameter.unit reference page, corroborated on the Autodesk community
     forum: assigning it always raises) -- an earlier version of this

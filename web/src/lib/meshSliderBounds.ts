@@ -6,7 +6,7 @@
  * the slider range is [floor/6 … floor].  On a tiny motor (Ø12 CIANO14: floor
  * 0.50 mm) the steps are 0.02 mm — the chip must print TWO decimals, or a move
  * 0.30 → 0.32 mm reads "0.3 mm" both times and the slider looks dead
- * (2026-09-28 «это опять не работает»).
+ * (2026-09-28 «this is broken again»).
  */
 export interface MeshSliderBounds {
   min: number;

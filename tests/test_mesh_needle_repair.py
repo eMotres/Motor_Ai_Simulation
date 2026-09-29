@@ -222,7 +222,7 @@ _CHILD = textwrap.dedent("""
 @pytest.mark.slow
 @pytest.mark.parametrize("gap", [0.0, 0.05, 0.1])
 def test_the_recess_meshes_for_every_gap(gap):
-    """«эта пара должна работать при любом значении magnet_up_gap» (owner)."""
+    """«this pair must work at any magnet_up_gap value» (owner)."""
     import json
     geo = dict(GEO_50, magnet_up_gap=gap)
     env = dict(os.environ)

@@ -1,5 +1,5 @@
 """Build the uniform SPICE tables for EVERY device whose vendor model runs in
-ngspice (owner 2026-09-27: «все моторы должны работать на SPICE одинаково»).
+ngspice (owner 2026-09-27: «all motors must behave the same way in SPICE»).
 
     python scripts/spice_build_all_tables.py [--jobs 8] [--parts A,B] [--write] [--static-only]
 

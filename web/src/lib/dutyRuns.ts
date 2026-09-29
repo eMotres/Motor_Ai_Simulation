@@ -6,7 +6,7 @@
 // 2026-09-02 the duty held exactly one snapshot, so saving after a PWM run
 // overwrote the sine result the catalog shows AND restored `sim.drive =
 // pwm_voltage` the next time the duty was loaded — after which every Run was a
-// PWM solve (user: "кто опять включил расчёт на 12 минут?").
+// PWM solve (user: "who turned on the 12-minute solve again?").
 //
 // Now the yaml keeps one entry per drive under `runs:` with its waveforms in a
 // gzip sidecar (routes/family.py), ▶ fetches them ALL in one call, and this

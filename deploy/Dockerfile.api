@@ -39,7 +39,7 @@ RUN groupadd --gid 10001 motres \
  && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin motres
 
 WORKDIR /app
-COPY requirements.txt requirements-pardiso.txt ./
+COPY requirements.txt requirements-pardiso.txt requirements-triangle.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 # Optional proprietary accelerator (Intel MKL via pypardiso), OFF by default so
 # a distributed image contains only AGPL-compatible software.  Our own solve
@@ -48,6 +48,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 ARG WITH_PARDISO=0
 RUN if [ "$WITH_PARDISO" = "1" ]; then \
         pip install --no-cache-dir -r requirements-pardiso.txt; fi
+
+# Optional non-commercial `triangle` (geometry-driven mesher), OFF by default:
+# not part of the AGPL distribution.  Our own non-commercial server builds with
+# --build-arg WITH_TRIANGLE=1 during the gmsh transition so its numbers stay
+# identical (docs/MESHER_TRANSITION.md); without it the mesher uses gmsh.
+ARG WITH_TRIANGLE=0
+RUN if [ "$WITH_TRIANGLE" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-triangle.txt; fi
 
 COPY src/ src/
 # GET /api/version reads the repo-root VERSION three parents above api.py, i.e.

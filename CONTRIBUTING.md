@@ -74,5 +74,6 @@ New dependencies must have a licence compatible with AGPL-3.0-or-later
 LGPL and GPL-2.0-or-later/GPL-3.0 are compatible). Record every new runtime
 dependency in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packages with
 non-commercial, field-of-use or other restrictions beyond the AGPL are not
-accepted. Proprietary accelerators may only be optional, with the code working
+accepted as dependencies. The one existing case, `triangle`, is an optional
+extra being phased out (see [docs/MESHER_TRANSITION.md](docs/MESHER_TRANSITION.md)). Proprietary accelerators may only be optional, with the code working
 without them (the way `pypardiso` / Intel MKL is today).

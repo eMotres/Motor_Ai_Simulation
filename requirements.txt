@@ -43,9 +43,11 @@ psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d); al
 # 2026-09-15) — the exact set every report in reports/ was rendered with.
 reportlab==5.0.0  # report.py PDF backend; GET /api/family/report/...?format=pdf 500s without it
 python-docx==1.2.0  # report_docx.py — the DEFAULT report format since 2026-09-09 (routes/report.py)
-# `triangle` was removed entirely (2026-09-29): its licence forbids commercial
-# use, which conflicts with the AGPL.  gmsh is the FEM mesher, mapbox-earcut
-# (fallback: shapely's constrained Delaunay) the 2-D view triangulator.
+# `triangle` is an OPTIONAL extra, not installed by default (2026-09-29): its
+# licence forbids commercial use, so it is not part of the AGPL distribution.
+# pip install -r requirements-triangle.txt (or ".[triangle]") restores the
+# geometry-driven mesher, which is then the default as before; without it the
+# mesher uses gmsh.  Transition plan: docs/MESHER_TRANSITION.md.
 # The FOURTH unpinned report dependency, found on the server at Stage 7:
 # datasheet.py imports openpyxl, so GET /api/family/datasheet/...?format=xlsx
 # answered 500 "datasheet build failed: No module named 'openpyxl'" on the

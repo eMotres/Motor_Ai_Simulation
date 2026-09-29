@@ -56,13 +56,8 @@ here, audited from the resolved dependency closure of `requirements.txt` on
 
 | Package | Install | Licence |
 |---|---|---|
+| triangle | `requirements-triangle.txt` or extra `[triangle]` | Python wrapper LGPL-3.0; bundled Triangle C code by J. R. Shewchuk: **free for non-commercial use only** (see note 3) |
 | pypardiso | `requirements-pardiso.txt` or extra `[pardiso]` | BSD-3-Clause; pulls **Intel MKL, intel-openmp, TBB, tcmlib, umf, intel-cmplr-lib-ur** (Intel Simplified Software License / Intel EULA, proprietary; see note 2) |
-
-### Removed
-
-| Package | Why |
-|---|---|
-| triangle (J. R. Shewchuk's Triangle) | Licence forbids commercial use without the author's permission, a field-of-use restriction the AGPL does not allow (see note 3). Removed 2026-09-29 with the geometry-driven CDT mesher built on it. |
 
 ## Web client (web/package.json, runtime dependencies)
 
@@ -108,7 +103,12 @@ are not distributed with the software and are not listed.
    is absent. Operators may install it on their own machines
    (`requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for
    `deploy/Dockerfile.api`) for a several-times-faster transient solve.
-3. **Triangle.** Its licence forbids commercial use without the author's
-   permission, which the AGPL (no further restrictions, section 10) does not
-   allow. It has been removed: the FEM mesher is gmsh, and the 2-D view uses
-   mapbox-earcut with a shapely (GEOS) constrained-Delaunay fallback.
+3. **Triangle (optional, being phased out).** Its licence permits only
+   non-commercial use without the author's permission, a restriction the AGPL
+   does not allow, so it is **not a dependency of and not bundled in** the AGPL
+   distribution: it is an optional extra the operator installs separately.
+   MOTRES currently uses the project non-commercially and installs it on its
+   own machines so that results stay identical during the transition to gmsh
+   (docs/MESHER_TRANSITION.md). Without it the geometry mesher falls back to
+   gmsh (one log line) and the 2-D view uses mapbox-earcut with a shapely
+   (GEOS) constrained-Delaunay fallback. It will be removed at stage S5.

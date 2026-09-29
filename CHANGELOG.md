@@ -12,12 +12,13 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   commercial licensing and no CLA: `CLA.md` and the CLA Assistant workflow are
   replaced by `DCO.md` (Developer Certificate of Origin 1.1) and a `DCO`
   pull-request check (`Signed-off-by` on every commit, `git commit -s`).
-- **`triangle` removed.** Shewchuk's Triangle forbids commercial use, which the
-  AGPL does not allow. The geometry-driven CDT mesher built on it is gone; a
-  geo-mesh request is served by the gmsh build (the tensor iron template still
-  runs when `geo_mesh=False`). The shaft conductor skin layer was built only by
-  that mesher and is not produced any more (a warning says so). The earcut
-  fallback triangulates with shapely's constrained Delaunay.
+- **`triangle` optional.** Shewchuk's Triangle forbids commercial use, so it
+  is no longer a default dependency and not part of the AGPL distribution
+  (`requirements-triangle.txt`, extra `[triangle]`, Docker
+  `--build-arg WITH_TRIANGLE=1`). Installed, the geometry-driven mesher works
+  and stays the default exactly as before; absent, the mesher uses gmsh (one
+  log line) and the earcut fallback uses shapely. Staged transition to gmsh:
+  `docs/MESHER_TRANSITION.md`.
 - **`pypardiso` / Intel MKL optional.** Not a default dependency any more
   (`requirements-pardiso.txt`, extra `[pardiso]`, or
   `--build-arg WITH_PARDISO=1`); every solver falls back to SciPy SuperLU.

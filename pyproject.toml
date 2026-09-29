@@ -49,6 +49,11 @@ dependencies = [
 pardiso = [
     "pypardiso>=0.4",
 ]
+# OPTIONAL, NON-COMMERCIAL licence (Shewchuk's Triangle): the geometry-driven
+# mesher; gmsh is used when absent.  See docs/MESHER_TRANSITION.md.
+triangle = [
+    "triangle>=20230923",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -88,4 +93,5 @@ python_functions = ["test_*"]
 markers = [
     # Real FEM solves — minutes, not milliseconds. Deselect with -m "not slow".
     "slow: physics regression cases that run the actual solver",
+    "requires_triangle: needs the optional non-commercial `triangle` package (skipped without it)",
 ]

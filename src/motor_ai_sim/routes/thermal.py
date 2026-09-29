@@ -1760,8 +1760,8 @@ def _snapshot_loss_entry(probe):
 
 
 # ── the thermal route's OWN memory of the maps it had to solve ────────────────
-# WHY (user 2026-09-07: "надо просто запоминать карту потерь и не гонять каждый
-# раз электромагнитный решатель"): when no Simulation run matches, the map this
+# WHY (user 2026-09-07: "we should just remember the loss map and not run
+# the electromagnetic solver every time"): when no Simulation run matches, the map this
 # route solves lived only in the field route's in-process cache — gone at the
 # next API restart, and keyed on the mesh flags so a Solve with other cooling
 # but the same physics could still miss.  This store is keyed on the PHYSICS
@@ -2216,9 +2216,9 @@ def _no_electromagnetic_run(*, words: str, why: str = "",
                             single_frame: bool = False) -> HTTPException:
     """The 422 that replaced the hidden six-minute solve.
 
-    User, 2026-09-07: *"нужно как-то разделить тепловые расчёты и
-    электромагнитные; если вдруг тепловому расчёту нужно электромагнитное
-    моделирование, пусть оно делается во вкладке Simulation"*.  So when no
+    User, 2026-09-07: *"we need to somehow separate the thermal calculations
+    from the electromagnetic ones; if the thermal calculation ever needs an
+    electromagnetic simulation, let it be done in the Simulation tab"*.  So when no
     Electromagnetic run and no remembered map matches, this router does not
     quietly become an electromagnetic solver for the next six minutes — it says
     which run is missing, in the words of the tab that makes it.

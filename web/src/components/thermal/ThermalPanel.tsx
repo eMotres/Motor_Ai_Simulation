@@ -56,8 +56,8 @@ import type {
 } from './api';
 
 /* A hint used to be wrapped round each Select here, pushed under the menu with
-   a z-index (2026-09-07: 'падающее меню подсказки не даёт сменить воздух на
-   жидкость').  That was only half the fix — a tooltip is INTERACTIVE by
+   a z-index (2026-09-07: 'the dropdown tooltip doesn't let you switch air
+   to liquid').  That was only half the fix — a tooltip is INTERACTIVE by
    default, so its popper takes the pointer even from under the menu — and
    since 2026-09-15 no tooltip wraps a control at all: the hint hangs on a ⓘ
    beside it (`HelpTip`), and the tooltips that remain wrap READOUTS and carry
@@ -71,12 +71,12 @@ const bad = { ...warn, color: '#f87171', borderBottom: '1px dotted #f87171' } as
 /* Every menu text and every hint of this cooling block lives in
    `roboticsHelp` — one module, so the panel, the 3-D view's popovers and the
    arrow tooltips cannot describe the same parameter three different ways
-   (owner 2026-09-17: «надо более подробно расписать это меню»).  An option
+   (owner 2026-09-17: «this menu needs to be spelled out in more detail»).  An option
    now says what it DOES, not what it is called internally. */
 const COOL_LABEL: Record<CoolMode, string> = COOL_MODE_LABEL;
 const BORE_LABEL: Record<BoreMode, string> = BORE_MODE_LABEL;
 /** How the machine is BUILT.  `open` is the 40 mm CIANO14 (user 2026-09-09:
- *  *нет корпуса*) — tooth blocks between two end plates, end turns and slot
+ *  *no housing*) — tooth blocks between two end plates, end turns and slot
  *  channels in the propeller wash. */
 const FRAME_LABEL: Record<FrameMode, string> = FRAME_MODE_LABEL;
 const FLUIDS: [string, string][] = [
@@ -208,8 +208,8 @@ const NumField: React.FC<{
  *  The same tile the Mechanical tab uses — one short line, tooltip for the
  *  rest (the project's no-walls-of-text rule). */
 /** The mean's colour when a tile carries both numbers — same type, same size,
- *  a quieter ink (user 2026-09-09: "давай будем писать одинаковыми шрифтами,
- *  но разным цветом max и mean").  Two sizes read as a headline and a
+ *  a quieter ink (user 2026-09-09: "let's write with the same fonts,
+ *  but max and mean in different colours").  Two sizes read as a headline and a
  *  footnote; two colours read as two equally real numbers, which is what they
  *  are — the peak decides the insulation class, the mean is what the coupled
  *  loop solves at. */
@@ -266,8 +266,8 @@ function hotAccent(t: number | null | undefined, limit: number): string {
 }
 
 /* ONE tile per PART the solver reported — every solid and every insulation,
-   the sleeve and the air regions included (user 2026-09-07: "сделай список
-   максимальных температур всех частей мотора, и слива, и изоляций").  The
+   the sleeve and the air regions included (user 2026-09-07: "make a list
+   of maximum temperatures of all motor parts, and the drain, and the insulations").  The
    order and the limits are this table's; a part the backend adds tomorrow
    still shows, at the end, under its own key.  At module scope so the local
    comparison table below can order ITS columns the same way — the tiles and
@@ -313,8 +313,8 @@ const PART_LABEL = (k: string) => k.replace(/_/g, ' ').replace(/^./, (c) => c.to
 /* ═══════════════════════════════════════════════════════════════════════════
  * The tab's own comparison table
  *
- * User 2026-09-07: *"сделай локальное сравнение по параметрам тепловой
- * симуляции, только как в Configure"*.  These are the COLUMNS; the rows are
+ * User 2026-09-07: *"make a local comparison of the thermal simulation
+ * parameters, just like in Configure"*.  These are the COLUMNS; the rows are
  * built by `compare/resultRows.localThermalRow`, so the table and the Compare
  * library read the same keys and can never mean two things by `winding_max`.
  *
@@ -429,8 +429,8 @@ const CoupledSection: React.FC = () => {
             Coupled EM ↔ thermal
           </Typography>
         </Tooltip>
-        {/* NO LAUNCHER HERE (user 2026-09-11: "у нас каплинг только из
-            электромагнитов запускается").  The loop is started from the
+        {/* NO LAUNCHER HERE (user 2026-09-11: "for us, coupling is only
+            started from electromagnetics").  The loop is started from the
             Electromagnetic tab, which owns the operating point it iterates on;
             a second button over here could start it from a panel whose cooling
             had been edited but not solved, and the two entry points then
@@ -721,9 +721,9 @@ const ThermalPanel: React.FC = () => {
      a shaft-cooled design is read on. */
   const rotorOutW = (budget?.bore_W ?? 0) + (budget?.shaft_ends_W ?? 0);
   /* …and the same split as the solver states it (2026-09-10), with the shares.
-     User: "нужно считать два числа: сколько тепла от ротора уходит через
-     внешний диаметр, а сколько через внутренний — то есть через зазор и через
-     вал".  Both numbers were on the tile as small print among four others; they
+     User: "we need to compute two numbers: how much heat leaves the rotor
+     through the outer diameter, and how much through the inner — that is,
+     through the gap and through the shaft".  Both numbers were on the tile as small print among four others; they
      are the two the cooling design turns on, so they are now the tile itself.
      Falls back to the pieces for a result solved before the block existed. */
   const split = budget?.rotor_heat_split;
@@ -752,8 +752,8 @@ const ThermalPanel: React.FC = () => {
   ];
 
   /* ── the tab's own comparison stack ──────────────────────────────────────
-     User 2026-09-07: "сделай локальное сравнение по параметрам тепловой
-     симуляции, только как в Configure".  The rows live in the store (so they
+     User 2026-09-07: "make a local comparison of the thermal simulation
+     parameters, just like in Configure".  The rows live in the store (so they
      survive leaving the tab) and are persisted with the tab's other fields (so
      they survive a reload and another browser); the Compare tab remains the
      permanent, cross-physics library. */
@@ -860,7 +860,7 @@ const ThermalPanel: React.FC = () => {
               (over the housing, through the bore).  With a liquid jacket and
               no air in the bore it decides nothing, and a field that decides
               nothing is a question the user should not be asked (2026-09-07:
-              "зачем тебе это, если всё равно все граничные условия задаём"). */}
+              "why do you need this, if we set all boundary conditions anyway"). */}
           {(coolMode === 'air' || boreMode === 'air' || coolMode === 'robotics') && (
             <Box sx={CTRL_ROW}>
               <TextField
@@ -1137,8 +1137,8 @@ const ThermalPanel: React.FC = () => {
           )}
 
           {/* ── the SHAFT OUTSIDE the housing ────────────────────────────────
-              User 2026-09-07: "торцы и лобовые части — только для вала, всё
-              остальное вращается внутри мотора".  The end faces and the end
+              User 2026-09-07: "end faces and end windings — only for the
+              shaft, everything else rotates inside the motor".  The end faces and the end
               windings turn inside a closed housing and are deliberately NOT
               modelled — they have nowhere else to send their heat.  The shaft
               does: it comes out through the bearings, so its exposed stubs are
@@ -1162,7 +1162,7 @@ const ThermalPanel: React.FC = () => {
         </Box>
 
         {/* ── HOW THE MACHINE IS BUILT ──────────────────────────────────────
-            User 2026-09-09, on the 40 mm CIANO14: "нет корпуса" — the tooth
+            User 2026-09-09, on the 40 mm CIANO14: "no housing" — the tooth
             blocks with their coils hang between two end plates on standoff
             pins, and the end turns plus the axial channels between neighbouring
             coils are in the propeller wash.  Every row above assumes the
@@ -1185,8 +1185,8 @@ const ThermalPanel: React.FC = () => {
 
         {/* ── WHAT THE MACHINE DOES WITH THIS POINT, over TIME ───────────────
             Right here, under the frame, and always open (user 2026-09-16:
-            «Меню Duty cycle должно быть всегда открыто и находиться вверху,
-            после frame»).  It used to sit at the very bottom of this tab
+            «The Duty cycle menu should always be open and sit near the top,
+            after frame»).  It used to sit at the very bottom of this tab
             behind a Hide/Show button, which is where the LAST thing goes — and
             the kind chosen here decides what the Run button three panels away
             actually does: S1 is the plain coupled loop, S3 makes the coupled
@@ -1196,8 +1196,8 @@ const ThermalPanel: React.FC = () => {
             Still inert: nothing in it solves on mount, and its own RUN CYCLE
             button remains the standalone tool.
 
-            …and BEHIND A FLAG since 2026-09-17 (owner: «давай пока уберём duty
-            cycle из Thermal, оставим только стандартный каплинг»).  Off by
+            …and BEHIND A FLAG since 2026-09-17 (owner: «let's drop the duty
+            cycle from Thermal for now, keep just the standard coupling»).  Off by
             default, so this tab is the cooling and the coupled loop and nothing
             else; `VITE_DUTY_CYCLE=1` at build time brings the block back
             exactly as it is.  Nothing was deleted — see `lib/dutyCycleFlag`. */}
@@ -1261,10 +1261,10 @@ const ThermalPanel: React.FC = () => {
         </Box>
 
         {/* ── the same cooling, ON THE MACHINE ───────────────────────────
-            User 2026-09-15: "лучше нарисовать 3D модель с катушками (end
-            windings) и на ней прямо показывать, куда и сколько тепла может
-            отводиться … дай возможность задавать значения прямо в нём — так
-            намного удобнее, и определи его в это окно, где всё и задаётся".
+            User 2026-09-15: "better to draw a 3D model with the coils (end
+            windings) and show directly on it where and how much heat can be
+            dissipated … give the ability to set the values right in it — it's
+            much more convenient that way, and define it in this window, where everything is set".
             So it lives HERE, under the fields it duplicates, and not in a
             section of its own further down: it is an alternative way to set
             the same `thermalStore` values — one state, two faces — plus what
@@ -1316,7 +1316,7 @@ const ThermalPanel: React.FC = () => {
                 const c = comps[p.key]!;
                 return (
                   // The headline is the MAX and the label says so (user
-                  // 2026-09-09: "опять температуры разные" — the coupled loop
+                  // 2026-09-09: "different temperatures again" — the coupled loop
                   // and the Electromagnetic tab's fields carry the AVERAGE,
                   // because that is what a bulk resistivity and a bulk Br
                   // mean, while this tile led with the peak and printed the
@@ -1345,7 +1345,7 @@ const ThermalPanel: React.FC = () => {
                   rule): the solver does that with a 100 000 W/m²K clamp, which
                   is a numerical device, not a film — so the tile says the
                   temperature that is held and the jacket's own film in the
-                  sub-line (user 2026-09-09: "что это такое?"). */}
+                  sub-line (user 2026-09-09: "what is this?"). */}
               {Number.isFinite(outer.h_jacket) && (outer.h_conv ?? 0) >= 1e5 ? (
                 <Tile label="Outer" value={fmt(outer.t_out_c ?? outer.t_sink_c, 0)} unit="°C held"
                   sub={[`liquid`, `jacket h ${fmt(outer.h_jacket, 0)} W/m²K`,
@@ -1402,8 +1402,8 @@ const ThermalPanel: React.FC = () => {
                 <Tile label="Rotor heat out" value={`${fmt(gapOutW, 0)} gap`}
                   unit="W"
                   value2={`${fmt(boreOutW, 0)} bore`}
-                  // ONE short line (user 2026-09-10: "не надо так подробно
-                  // расписывать") — the two shares of what the rotor makes.
+                  // ONE short line (user 2026-09-10: "no need to spell it
+                  // out in such detail") — the two shares of what the rotor makes.
                   // Every other watt is in the tooltip.
                   sub={`${pct(split?.gap_pct, gapOutW)} / ${pct(split?.bore_pct, boreOutW)} of ${fmt(rotorW, 0)} W`}
                   colour={boreOutW >= 0.5 * rotorW ? 'var(--text-0)' : '#fbbf24'}
@@ -1481,9 +1481,9 @@ const ThermalPanel: React.FC = () => {
             )}
 
             {/* ── these temperatures as a row of the Compare table ───────────
-                User 2026-09-07: "нужно везде сделать такую же кнопку … в
-                температурном нужно все максимальные температуры всех частей
-                мотора сравнивать между собой".  The row carries the peak of
+                User 2026-09-07: "we need the same button everywhere … in
+                thermal we need to compare all maximum temperatures of all
+                motor parts against each other".  The row carries the peak of
                 EVERY part the solve resolved — not the five tiles above — so two
                 cooling designs can be read against each other part by part. */}
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mt: 1.25 }}>

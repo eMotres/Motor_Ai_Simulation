@@ -4069,8 +4069,8 @@ def solve_thermal_field(
     sym = max(int(em.get("symmetry_mult") or 1), 1)
 
     # ── the SHAFT ENDS: the rotor's third heat path ───────────────────────────
-    # User 2026-09-07: *"торцы и лобовые части — только для вала, всё остальное
-    # вращается внутри мотора"*.  The rotor's end faces and the end windings are
+    # User 2026-09-07: *"end faces and end windings — only for the shaft,
+    # everything else spins inside the motor"*.  The rotor's end faces and the end windings are
     # inside a CLOSED housing, spinning in their own air — whatever they hand to
     # that air comes straight back through the housing, so there is no extra
     # path there and modelling one would flatter every design.  The SHAFT is the
@@ -4341,8 +4341,8 @@ def solve_thermal_field(
     # User, 2026-09-14, with the Fusion model in front of him: the 24 coils stand
     # PROUD of the core on both sides — hairpin-like, fully exposed — and the
     # stator / rotor end faces are uncovered too.  That is the 2026-09-07 ruling
-    # this file's shaft section is built on (*"торцы и лобовые части — только для
-    # вала"*) turned round for THIS build, which is why it rides with the
+    # this file's shaft section is built on (*"end faces and end windings —
+    # only for the shaft"*) turned round for THIS build, which is why it rides with the
     # robotics mode and is off everywhere else: on a housed machine the end turns
     # really do have nowhere to send their heat, and adding a path there would
     # flatter every design that has a lid.

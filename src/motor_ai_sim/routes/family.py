@@ -786,8 +786,8 @@ def _live_parts() -> dict:
     included.  Same shape the configuration file stores under ``parts:`` and
     the ``?mat=`` payload carries under ``parts``.
 
-    ``ALWAYS_INCLUDED_PARTS`` (the shaft — owner rule 2026-09-29: "во всех
-    моторах вал должен участвовать") never lands here even if the live state
+    ``ALWAYS_INCLUDED_PARTS`` (the shaft — owner rule 2026-09-29: "the shaft
+    must take part in every motor") never lands here even if the live state
     says otherwise: ``included`` is not stored, so silently dropping it is
     exactly what storing ``included`` would do.  ``_live_shaft_note`` is the
     loud half of the same rule, for callers that must tell the user.
@@ -816,7 +816,7 @@ def _live_shaft_note() -> str:
 def _config_role(c: dict) -> tuple:
     """WHAT THIS CONFIGURATION IS, read off its duties.
 
-    User 2026-09-10: *"почему здесь motor, хотя это генератор"* — the chip said
+    User 2026-09-10: *"why does it say motor here, when it's a generator"* — the chip said
     `motor` on a configuration named "L180 gen" whose every duty is a generator
     duty.  `role` was captured ONCE, at creation, from whatever the Simulation
     panel's mode toggle happened to be, written into the yaml and never looked
@@ -938,8 +938,8 @@ def _with_mech_loss(d: Dict[str, Any]) -> Any:
     shaft efficiency) and no watts to show for it — the catalog would print the
     electromagnetic loss beside a shaft efficiency, and mark it as unknown.
     Nobody should have to press save on a machine they did not change to get a
-    field the code learned to store afterwards (user: "я же ничего не менял,
-    зачем мне ещё раз всё пересохранять?"), so it is read back here from the
+    field the code learned to store afterwards (user: "I didn't change
+    anything, why do I need to resave everything again?"), so it is read back here from the
     run's own summary, which has carried ``P_bearings_W`` / ``P_windage_W`` all
     along.  Derived at SERVE time: nothing is rewritten, and a duty re-saved
     later simply stops needing this.

@@ -4579,7 +4579,7 @@ def solve_thermal_field(
                    "this mesh resolves no gap-air elements"))
 
     # ── THE MECHANICAL HEAT (2026-09-08) ─────────────────────────────────────
-    # User: *"все потери должны передаваться в электромагнитный расчёт"* — and
+    # User: *"all losses should be passed into the electromagnetic calculation"* — and
     # into this one.  The two analytic terms enter where they are MADE:
     #
     #   * bearing friction on the SHAFT, and only when the shaft-ends path is on.
@@ -4938,8 +4938,8 @@ def solve_thermal_field(
             # wire-resolved mesh — 9 mm wide, 0.5 mm thick, with the enamel and
             # the fill already meshed around them — stacks the insulation twice
             # and turns the winding into a heater in a thermos (measured live
-            # 2026-09-07: 860 °C copper under a 64 °C water jacket, user: "какая-
-            # то хрень").  Wires carry the conductor's own k from the library.
+            # 2026-09-07: 860 °C copper under a 64 °C water jacket, user: "what kind
+            # of nonsense is this").  Wires carry the conductor's own k from the library.
             winding_is_wires = bool(is_enamel.any() or is_fill.any())
             if winding_is_wires:
                 k_coil = _thermal_k_any(mats.get("slot"), 385.0)

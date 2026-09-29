@@ -30,6 +30,14 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   Dependency audit recorded in `THIRD_PARTY_NOTICES.md`.
 
 ### Fixed
+- **L155 eddy: the shaft now settles, 0.4 % from its asymptote** (docs/EDDY_SHAFT_SETTLE_2026-09-29.md).
+  The oscillating shaft gauge was a 5-period beat of non-pole-pair-periodic DC patterns that
+  the one-angle static start froze into the solid wall; under it the wall's rotor-frame DC
+  diffuses with τ = 21 periods. The ring conductors now start from their pole-pair image
+  mean, and the slow DC error is corrected after periods 2 and 4 by one static solve of the
+  period-averaged exact Jacobian (TP-EEC), verified by the unchanged gauge plus a tail test
+  at the operator's slowest λ. L155: 650 frames capped (+3.0 % shaft) → 614 settled (−0.4 %).
+  `SB_EDDY_START_IMAGE_MEAN=0`, `SB_EDDY_EEC=0` restore the previous march.
 - **PWM settle: the DC offset is solved, not anchored** (docs/NO_FILTERS_2026-09-24.md
   item 5, option (c); `docs/PWM_DC_ORBIT_SOLVE_2026-09-26.md`). The period-mean DC
   anchor had no free decay in its model: on a short-τ_e machine it over-corrected

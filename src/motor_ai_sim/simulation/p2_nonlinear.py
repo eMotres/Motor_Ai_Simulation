@@ -567,14 +567,23 @@ class P2Nonlinear:
             self._skel[k] = s
         return s
 
-    def tangent2(self, info):
-        """T = 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), pointwise & consistent with Kpw."""
+    def tangent2(self, info, clamp: bool = True):
+        """T = 2·(dν/dB²)·(∇A·∇u)(∇A·∇v), pointwise & consistent with Kpw.
+
+        ``clamp`` (the Newton's choice) drops dν/dB² < 0 (the rising-μ part
+        of a B-H curve), which keeps K + T symmetric positive definite at any
+        field.  ``clamp=False`` is the EXACT linearisation of the residual —
+        K + T is then the differential reluctivity dH/dB along B, still > 0
+        for a monotone curve — used where the linearised DYNAMICS matters, not
+        a Newton step (the DC error correction of the eddy warm-up)."""
         T = None
         for _k2, _ids2, _c2, gA, Bm, nuq in info:
             _dB = 1e-3 * Bm + 1e-6
             nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
                 _c2, (Bm + _dB).ravel()).reshape(Bm.shape), 1.0))
-            nup = np.maximum((nu1 - nuq) / _dB / (2.0 * Bm), 0.0)   # dν/dB²
+            nup = (nu1 - nuq) / _dB / (2.0 * Bm)                  # dν/dB²
+            if clamp:
+                nup = np.maximum(nup, 0.0)
             Ti = self._skel[_k2].tang(gA, 2.0 * nup)
             T = Ti if T is None else T + Ti
         return T

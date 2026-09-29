@@ -1,6 +1,6 @@
 """Does tightening the ring's saturation Picard close the ripple gap vs the wedge?
 
-Hypothesis (PARITY_FINDINGS_band_mode.md): the full ring's ~1% broadband
+Hypothesis (PARITY_FINDINGS_band_mode.md, private data repository): the full ring's ~1% broadband
 torque noise comes from the per-frame Picard converging to slightly
 asymmetric saturation states (rel tol 2%, fixed iteration count) — the noise
 damps the coherent h24/h36 cogging orders, understating ripple vs the

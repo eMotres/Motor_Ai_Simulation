@@ -1,5 +1,5 @@
 /**
- * DemagMap — Ansys-style demagnetisation map (per-element, in %).
+ * DemagMap — commercial-FEM-style demagnetisation map (per-element, in %).
  *
  * Renders ONLY the magnet triangles, coloured by the local irreversible
  * demagnetisation:  % = (1 − Br_factor)·100  (0 % = full strength / safe,
@@ -20,7 +20,7 @@ export interface DemagField {
 }
 
 // % demag → colour.  0 % green (safe) → 50 % amber → 100 % red (irreversible),
-// matching the "danger" reading an engineer expects from an Ansys demag plot.
+// matching the "danger" reading an engineer expects from a commercial FEM demag plot.
 function demagColor(pct: number): string {
   const t = Math.max(0, Math.min(100, pct)) / 100;
   let r: number, g: number, b: number;

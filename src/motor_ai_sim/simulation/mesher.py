@@ -314,7 +314,7 @@ def _decimate_ring_by_angle(coords: list, min_turn_deg: float) -> list:
     collinear), guarding against removing two adjacent vertices in the
     same pass so a fillet arc thins out evenly instead of collapsing.
 
-    This is the polygon equivalent of Ansys "Normal Deviation": a larger
+    This is the polygon equivalent of commercial FEM "Normal Deviation": a larger
     angle keeps fewer points per arc → coarser mesh on bends; a smaller
     angle keeps every arc point → fine mesh on bends.
     """
@@ -374,7 +374,7 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                      structured_gap: bool = False) -> dict:
     """Drop near-collinear vertices below chord tolerance `tol_mm`.
 
-    Default 0.005 mm matches Ansys Maxwell's "Surface Deviation = 0.01 mm"
+    Default 0.005 mm matches commercial FEM's "Surface Deviation = 0.01 mm"
     — small enough that every fillet arc point (chord deviation ~0.01-0.05
     mm depending on radius) survives the cleanup. Long straight runs still
     collapse to two endpoints, so the mesh density is driven entirely by
@@ -545,7 +545,7 @@ def _simplify_polys(polys: dict, tol_mm: float = 0.005,
                 if _do_struct:
                     # STRUCTURED gap: partition each half-gap into `gap_layers`
                     # concentric annular rows bounded by uniform N-gon rings on the
-                    # slip angular grid → the gap meshes as ANSYS-style concentric
+                    # slip angular grid → the gap meshes as commercial-FEM-style concentric
                     # circles + near-radial spokes.  The slip band R1..R2 is left
                     # intact; rows sit strictly inside the clean gap (a thin
                     # transition sliver to the iron stays free-meshed).
@@ -846,7 +846,7 @@ def _add_background_air(polys: dict, outer_air_factor: float = 1.0) -> dict:
     # ── Outer air ring (far-field boundary) ──────────────────────────────
     # Adds disk(R_far) − disk(R_stator) as DOM_OUTER, so the Dirichlet
     # A_z = 0 condition is applied on the artificial far-field boundary,
-    # not on the iron.  Typical R_far / R_stator = 1.3–1.5 (Ansys default
+    # not on the iron.  Typical R_far / R_stator = 1.3–1.5 (commercial FEM default
     # is "Region Padding" ~25% which corresponds to factor 1.25).
     if outer_air_factor > 1.001:
         try:
@@ -2829,10 +2829,10 @@ def build_mesh_from_polygons(polys: dict,
         gmsh.initialize()
     try:
         gmsh.option.setNumber("General.Terminal", 0)
-        # Ansys-style "Curved Surface Meshing":
+        # commercial-FEM-style "Curved Surface Meshing":
         #   - polygon vertex density is the refinement signal (dense points on
         #     fillet arcs → fine mesh there, sparse on straight runs → coarse)
-        #   - MeshSizeFromCurvature ≈ 60 means ~6° per segment (= Ansys Normal
+        #   - MeshSizeFromCurvature ≈ 60 means ~6° per segment (= commercial FEM Normal
         #     Deviation = 3° doubled to keep triangle count reasonable)
         #   - MeshSizeMin bounds the minimum element so a 0.5 mm fillet doesn't
         #     spawn thousands of triangles
@@ -3451,7 +3451,7 @@ def build_mesh_from_polygons(polys: dict,
         #      mesh-dependent (23→37 N·m).  Force ~3 element layers ACROSS THE
         #      GAP ONLY, with a quick ramp back to the global size just outside
         #      it — so the rotor/stator iron and the rotating ring stay coarse
-        #      and only the gap itself is fine (Ansys does the same).
+        #      and only the gap itself is fine (commercial FEM does the same).
         # All background size fields (air-gap + per-component) are collected in
         # _bg_fields and combined with a Min field at the very end.
         _bg_fields: List[int] = []

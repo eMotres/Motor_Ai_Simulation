@@ -269,7 +269,7 @@ def test_the_lift_off_bisection_still_runs_on_a_seated_joint():
 #: to 1e-6 relative and not to the bit: the linear solver is pypardiso, which is
 #: multi-threaded and not bit-reproducible (see test_mechanical_part_temps).
 #: `sf_min` is AVERAGED since 2026-09-10 — the strength over the governing
-#: NODAL stress, which is the ANSYS/Fusion convention and the number every
+#: NODAL stress, which is the commercial FEM/Fusion convention and the number every
 #: table and map now prints.  The element-field factor this reference was first
 #: written with, 1.730, is kept as `sf_min_unaveraged`: it is still solved and
 #: still reported, and the two moving together is what says the change was a

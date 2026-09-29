@@ -119,7 +119,7 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
   // in peak survives switching the unit back without drift.
   const isCur = paramName === 'current_a';
   // PEAK is the default (user's standing choice, 2026-08-22): the inverter and
-  // the ANSYS side both speak amplitude, so the card opens in peak and only an
+  // the commercial FEM side both speak amplitude, so the card opens in peak and only an
   // explicit RMS pick (persisted) switches it back.  Stored range values remain
   // Arms either way — only the DISPLAY unit changes.
   const [iUnit, setIUnitState] = useState<'arms' | 'peak'>(() => {

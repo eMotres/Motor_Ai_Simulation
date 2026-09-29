@@ -537,7 +537,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     else:
         v_line_peak = float(d["V_peak"]) * (1.0 if _delta else math.sqrt(3))
     # KV = rpm / V_line_peak — the max/max convention the Simulation tile and the
-    # user's Ansys table use (bef2ed2, 2026-08-04).  It divided by the
+    # user's commercial FEM table use (bef2ed2, 2026-08-04).  It divided by the
     # FUNDAMENTAL line-to-line rms, which reads ~sqrt(2) higher and contradicted
     # a by-hand rpm / V_LINE PEAK check off the cell beside it (49.3 vs 34.7 on
     # the 150 mm at 4000 rpm).  Computed HERE, below v_line_peak, because that is

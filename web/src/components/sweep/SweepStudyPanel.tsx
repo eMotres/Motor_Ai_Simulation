@@ -85,7 +85,7 @@ const OP_VARS = new Set(['current_a', 'gamma_deg']);
 // Leading (blue) columns = the variables that actually varied in the sweep
 // (geometry overrides + operating point); the rest are FEM outputs. Every metric
 // already rides on each point (the backend spreads the full eval result). Click
-// any header to sort asc/desc. Losses map to the Ansys breakdown:
+// any header to sort asc/desc. Losses map to the commercial FEM breakdown:
 // core = P_fe; copper winding is split into Cu DC (I²R, INCLUDES the end-windings via
 // k_end → grows with tooth_width) and Cu AC (proximity/eddy in the strands); solid =
 // P_mag + P_shaft (eddy in solid conductors).
@@ -947,7 +947,7 @@ const SweepStudyPanel: React.FC = () => {
           T_em_avg_Nm: T, T_ripple_pct: Number(p.ripple) || 0, P_mech_W: Pmech,
           V_phase_peak_V: Vpk, V_phase_rms_V: Vrms, V_line_peak_V: Vlpk, V_line_rms_V: Vlrms,
           // KV = rpm / V_PEAK — the max/max convention the Simulation tile and the
-          // user's Ansys table use (see refine_proc / simulation.py, 2026-08-04);
+          // user's commercial FEM table use (see refine_proc / simulation.py, 2026-08-04);
           // dividing by rms read ~√2 high and contradicted a by-hand check.
           KV_rpm_per_V_phase: Vpk > 1 ? rpm / Vpk : 0,
           KV_rpm_per_V_line: Number(r2.KV_rpm_per_V_line) || (Vlpk > 1 ? rpm / Vlpk : 0),

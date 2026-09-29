@@ -1186,12 +1186,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     else setStepsSource('user');
   }, [steps, stepsSource, setStepsSource, defaultSteps, setSteps]);
   // Magnet/shaft eddy losses ALWAYS come from the real field solve
-  // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the Ansys way),
+  // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the commercial FEM way),
   // never the classical slab d²/12 estimate.  No toggle: real fields only.
   const fieldLosses = true;
   // Per-element irreversible demagnetisation: a pre-pass sweeps the period at
   // full Br, finds the worst demagnetising field at every magnet element, and
-  // de-rates Br along the recoil line (Ansys-style) so the transient torque /
+  // de-rates Br along the recoil line (commercial-FEM-style) so the transient torque /
   // back-EMF reflect the weakened magnets.  Opt-in (adds a pre-pass sweep).
   const [demag, setDemag] = usePersisted('demag', true);
   // Coupled σ·∂A/∂t eddy-current solve (P2): the currents induced in copper,
@@ -2376,7 +2376,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                Speed ↔ Frequency below: edit either, the other recomputes.
                The SOLVER input stays the RMS value — peak is a pure UI view.
                PEAK comes FIRST (user's standing choice, 2026-08-22): the
-               inverter and ANSYS both speak amplitude, so peak is the primary
+               inverter and commercial FEM both speak amplitude, so peak is the primary
                field everywhere current is entered. */
             <Box sx={{ display: 'flex', gap: 1 }}>
               <TextField label="I phase peak (A)" type="number" size="small" fullWidth
@@ -2391,7 +2391,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   `TERMINAL phase current. With ${connection} (${nParallel} parallel `
                   + `path${nParallel > 1 ? 's' : ''}) each coil carries I/${nParallel}: `
                   + `I coil = ${I_coil_rms.toFixed(1)} Arms (${I_coil_peak.toFixed(1)} A peak) → sent to solver. `
-                  + `Comparing with ANSYS Maxwell: its winding must have Number of Parallel `
+                  + `Comparing with commercial FEM: its winding must have Number of Parallel `
                   + `Branches = ${nParallel}, else Maxwell drives every coil at the full `
                   + `phase current and reports ~${nParallel}x the torque for the same input.`} /> }}/>
             </Box>
@@ -2589,11 +2589,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               {stepsLine}
             </Typography>
           )}
-          {/* Per-element irreversible demagnetisation (Ansys-style).  A pre-pass
+          {/* Per-element irreversible demagnetisation (commercial-FEM-style).  A pre-pass
               sweeps the period at full Br, finds the worst demag field at every
               magnet element, and de-rates Br on the recoil line → the torque /
               back-EMF reflect the weakened magnets, plus a Demag-% map. */}
-          <Tooltip title="Account for irreversible magnet demagnetisation. A pre-pass sweeps the whole period at full strength, finds the worst demagnetising field H at EVERY magnet element, and permanently de-rates Br along the recoil line where H crosses the BH-curve knee (per element, like Ansys). The torque and back-EMF then reflect the weakened magnets, and a Demag-% map is produced. COST — measured, not modest: the pre-pass is a WHOLE EXTRA PERIOD of FEM frames, so the run solves twice the steps you asked for, and each frame re-solves while the magnet is still moving. On the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 86 s on (2.3×). The line under the Run button shows the frame count your current settings imply." placement="right">
+          <Tooltip title="Account for irreversible magnet demagnetisation. A pre-pass sweeps the whole period at full strength, finds the worst demagnetising field H at EVERY magnet element, and permanently de-rates Br along the recoil line where H crosses the BH-curve knee (per element, like commercial FEM). The torque and back-EMF then reflect the weakened magnets, and a Demag-% map is produced. COST — measured, not modest: the pre-pass is a WHOLE EXTRA PERIOD of FEM frames, so the run solves twice the steps you asked for, and each frame re-solves while the magnet is still moving. On the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 86 s on (2.3×). The line under the Run button shows the frame count your current settings imply." placement="right">
             <FormControlLabel
               sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
               control={

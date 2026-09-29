@@ -1,7 +1,7 @@
 # Ld / Lq: frozen-permeability incremental, and the catalogue pair at 20 °C
 
-**2026-09-20.** Raised by a Chinese client reviewing the CIANO10 200 opt / L180
-generator report: *«这个电机 Ld > Lq? 好像和一般的电机不太一样»* — "this motor has
+**2026-09-20.** Raised in a review of the CIANO10 200 opt / L180
+generator report: "this motor has
 Ld > Lq? that looks unlike an ordinary machine". It does not. The report was
 printing a chord, and the chord was not an inductance.
 

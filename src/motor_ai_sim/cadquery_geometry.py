@@ -3091,7 +3091,7 @@ class CadQueryMotor:
         # and mag[7] (S) — i.e. an effective N-pole of the rotor in the
         # SPOKE-PM topology — sits at math 90° (+Y axis), aligned with
         # the first stator tooth (also at math 90°).  This is the
-        # convention shown in the user's Ansys reference image:  rotor
+        # convention shown in the user's commercial FEM reference image:  rotor
         # d-axis pole at +Y, magnets distributed in the upper arc of the
         # rotor.  Cadquery's native magnet origin is the +Y axis; we add
         # a small −(90° − half_pole_pitch) shift so the 7 magnets of the

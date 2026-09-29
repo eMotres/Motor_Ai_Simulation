@@ -715,9 +715,9 @@ _fem_mesh_cache = _WSP.ws_map("simulation.fem_mesh", _FEM_MESH_CACHE_MAX,
 async def build_fem_mesh_2d(
     rotor_angle_deg:     float = 0.0,
     mesh_size_mm:        float = 4.0,
-    surface_deviation:   float = 0.005,   # Ansys "Surface Deviation" [mm]
-    normal_deviation:    float = 6.0,     # Ansys "Normal Deviation" [deg]
-    aspect_ratio:        float = 10.0,    # Ansys "Aspect Ratio"
+    surface_deviation:   float = 0.005,   # commercial FEM "Surface Deviation" [mm]
+    normal_deviation:    float = 6.0,     # commercial FEM "Normal Deviation" [deg]
+    aspect_ratio:        float = 10.0,    # commercial FEM "Aspect Ratio"
     min_size_mm:         float = 0.3,     # Mesh.MeshSizeMin
     outer_air_factor:    float = 1.0,     # 1.0 = no outer ring; 1.3 = +30% radius
     motion_band:         bool  = False,   # split air gap with thin DOM_BAND ring
@@ -734,10 +734,10 @@ async def build_fem_mesh_2d(
     geo:                 Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Build a 2-D triangle mesh of the motor cross-section and return it as
-    JSON-friendly arrays. Parameters mirror Ansys Maxwell's Curved Surface
+    JSON-friendly arrays. Parameters mirror commercial FEM's Curved Surface
     Meshing settings.
 
-    Solver-domain extensions (Ansys-style):
+    Solver-domain extensions (commercial-FEM-style):
       • outer_air_factor: extend air beyond stator OD to apply A_z=0 at a
         far-field boundary instead of directly on the iron.
       • motion_band: thin slip-surface ring inside the air gap (transient
@@ -977,9 +977,9 @@ async def build_fem_mesh_2d_sliding_band(
     rotor_angle_deg:   float = 0.0,
     mesh_size_mm:      float = 4.0,
     min_size_mm:       float = 0.3,
-    surface_deviation: float = 0.005,   # Ansys "Surface Deviation" [mm]
-    normal_deviation:  float = 6.0,     # Ansys "Normal Deviation" [deg]
-    aspect_ratio:      float = 10.0,    # Ansys "Aspect Ratio"
+    surface_deviation: float = 0.005,   # commercial FEM "Surface Deviation" [mm]
+    normal_deviation:  float = 6.0,     # commercial FEM "Normal Deviation" [deg]
+    aspect_ratio:      float = 10.0,    # commercial FEM "Aspect Ratio"
     outer_air_factor:  float = 1.3,
     band_thickness_mm: float = 0.4,
     gap_layers:        float = 3.0,     # element layers across the air gap
@@ -990,7 +990,7 @@ async def build_fem_mesh_2d_sliding_band(
     iron_template:     bool  = True,    # deterministic template iron (fallback: gmsh)
     geo_mesh:          bool  = False,   # geometry-driven CDT mesh (real fillets; full-ring only)
     hi_fidelity:       bool  = False,   # match the SOLVER's hi-fi mesh: feature÷8 + gap≥4
-    structured_gap:    bool  = False,   # ANSYS-style concentric-ring gap (experimental toggle)
+    structured_gap:    bool  = False,   # commercial-FEM-style concentric-ring gap (experimental toggle)
     geo:               Optional[str] = None,  # per-request geometry override (multi-user)
 ):
     """Build TWO independent meshes (stator + rotor) and stitch them into
@@ -2306,7 +2306,7 @@ def _fem_field2d_impl(
     pole_copy:           bool  = False,   # bit-identical pole/slot template-copy mesh
     iron_template:       bool  = True,    # deterministic template iron (fallback: gmsh)
     geo_mesh:            bool  = True,    # geometry-driven CDT mesh (Mesh-tab toggle)
-    structured_gap:      bool  = True,    # ANSYS-style ring gap (merged band)
+    structured_gap:      bool  = True,    # commercial-FEM-style ring gap (merged band)
     airgap_macro:        bool  = False,   # harmonic gap coupling (moving band)
     gap_layers:          float = 2.0,     # radial gap rings (K of the macro ladder)
     geo:                 Optional[str] = None,  # per-request geometry override (multi-user)
@@ -4403,7 +4403,7 @@ def get_fem_transient(
                                           #   full ring + sectors) — matches the Mesh-tab default, so
                                           #   callers that omit it get the SAME build as Simulation
     hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
-    structured_gap:      bool  = False,   # ← ANSYS-style concentric-ring air-gap mesh (experimental)
+    structured_gap:      bool  = False,   # ← commercial-FEM-style concentric-ring air-gap mesh (experimental)
     airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring + sectors)
     element_order:       int   = 2,       # ← 2 = P2 quadratic, the ONLY basis.  B is linear per
                                           #   element → smooth Arkkio torque, an energy-consistent
@@ -6657,7 +6657,7 @@ def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
         # The accounting states this mass was computed under, so a restored
         # summary can still say WHY its total is what it is.
         "part_states": {k: v for k, v in _state.items()},
-        # ACTIVE = the EM-active mass (iron + copper + magnets), the basis ANSYS
+        # ACTIVE = the EM-active mass (iron + copper + magnets), the basis commercial FEM
         # quotes; TOTAL = active + shaft, the historical divisor of torque-per-mass
         # (unchanged, so stored Compare points keep their meaning).
         "mass_active_kg": round(m["active"], 3),
@@ -7084,7 +7084,7 @@ def _build_transient_summary(
     # TOTAL (active + shaft) stays the divisor of torque/power/loss density — the
     # basis every stored Compare point and optimizer objective was built on.
     # ACTIVE (iron + copper + magnets, no shaft) is reported alongside: it is the
-    # number an ANSYS "active mass" expression quotes, and the tile the user
+    # number a commercial FEM "active mass" expression quotes, and the tile the user
     # cross-checks against it.
     _m_tot = float(_masses["mass_total_kg"])
     _m_active = float(_masses["mass_active_kg"])
@@ -7648,7 +7648,7 @@ def _build_transient_summary(
         "P_cu_circulating_W": round(float(sbres.get("P_cu_circulating_W")
                                           or 0.0), 1),
         "circulating_harmonics": list(sbres.get("circulating_harmonics") or []),
-        # KV = rpm / V_peak — the user's (and their Ansys table's) convention:
+        # KV = rpm / V_peak — the user's (and their commercial FEM table's) convention:
         # max(rpm)/max(voltage), i.e. the PEAK of the waveform shown right next
         # to this tile, not the fundamental rms (which read ~sqrt(2) higher and
         # contradicted a by-hand rpm/V_line_peak check, 2026-08-04).  NB this is

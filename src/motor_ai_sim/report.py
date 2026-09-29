@@ -629,7 +629,7 @@ def _as_tris(v: Any) -> Optional["Any"]:
 
 #: The web viewer's own ramp and band count (2026-09-09).  User: *"формат
 #: вывода графиков должен быть совершенно одинаковый с нашим веб-интерфейсом"*.
-#: The app paints every field the same way — a classic Ansys rainbow quantised
+#: The app paints every field the same way — a classic commercial FEM rainbow quantised
 #: into ONE band count for all views (`web/src/components/simulation/fieldView
 #: .ts`: `jet01`, `N_BANDS`, and its comment "все графики одинаково") — so the
 #: report's maps are that, to the same arithmetic, rather than a different
@@ -16106,7 +16106,7 @@ def mech_part_rows(case: Dict[str, Any]) -> List[List[str]]:
     """Per-part stress and safety factor.  Header row included.
 
     AVERAGED since 2026-09-10 — element values area-averaged onto the nodes of
-    their own part, which is what ANSYS and Fusion plot and report, so the
+    their own part, which is what commercial FEM and Fusion plot and report, so the
     number here is the number on the map beside it.  The unaveraged element
     peak is carried in its own column: it is the other half of the same toggle
     those tools offer, and the gap between the two is the corner singularity.

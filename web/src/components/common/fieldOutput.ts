@@ -194,7 +194,7 @@ export interface MeshGeometryInput {
   /** Build the colour scale from the DRAWN nodal values instead of handing one
    *  in.  The values that reach the screen are the averaged nodal field, not
    *  the element field the adapter starts from, so an adapter that wants its
-   *  bar to end exactly where the picture ends (ANSYS/Fusion convention, user
+   *  bar to end exactly where the picture ends (commercial FEM/Fusion convention, user
    *  2026-09-10) cannot compute that range before this function has averaged.
    *  Called once, after the nodal pass, before normalisation. */
   scaleFrom?: (nodal: Float32Array) => FieldScale;
@@ -358,11 +358,11 @@ export function extremaOf(
 
   // THE DRAWN FIELD'S OWN ENDS, read on the nodes it is drawn from.
   //
-  // User 2026-09-10: "как нам теперь объяснять пользователям эти две разные
-  // цифры 1728 и 1426? нас не поймут, везде и в Ansys и Fusion полное
-  // соответствие".  They are right, and one of those two numbers was ours to
+  // User 2026-09-10: "how do we explain these two different numbers, 1728
+  // and 1426, to users? They will not understand; commercial FEM and Fusion
+  // agree everywhere".  They are right, and one of those two numbers was ours to
   // fix.  The picture is drawn from NODAL values (each element's value
-  // area-averaged onto the nodes of its own part, which is what ANSYS and
+  // area-averaged onto the nodes of its own part, which is what commercial FEM and
   // Fusion call an averaged plot).  The marker, though, used to be read off
   // `probe.val` — the mean of a triangle's three nodal values — which is a
   // SECOND smoothing on top, and one no other tool applies.  On the live band

@@ -195,7 +195,7 @@ class ColdPlate:
     #: Wetted-area multiplier for a finned/pin-fin plate (1.0 = plain channels).
     fin_area_factor: float = 1.0
     r_override_k_w: Optional[float] = None   # bypasses the correlation
-    # ── 2026-09-28 (WCMS900B170E53 customer case): modules on SEPARATE
+    # ── 2026-09-28 (standalone controller case): modules on SEPARATE
     # plates and a stated plate resistance measured with ANOTHER fluid.
     #: ``shared`` (default, unchanged): ONE plate under every device, the whole
     #: flow through it.  ``parallel``: ``n_plates`` plates, each fed at the

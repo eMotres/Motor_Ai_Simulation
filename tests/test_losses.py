@@ -490,7 +490,7 @@ class TestLossDensityMap:
 
     The magnet term used to be the slab |dB/dt|² shape scaled to P_mag_avg —
     smooth by construction, so the map could never show the corner/edge
-    crowding an Ansys Total-Loss plot shows.  When the coupled σ·∂A/∂t solve
+    crowding a commercial FEM Total-Loss plot shows.  When the coupled σ·∂A/∂t solve
     ran, the per-element σE² it produced IS the density and must be taken
     unrenormalised; these tests pin both halves of that rule.
     """

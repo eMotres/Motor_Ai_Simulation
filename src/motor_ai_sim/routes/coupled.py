@@ -2984,7 +2984,7 @@ def _controller_settings(body: Dict[str, Any], *, rpm: float,
         "r_g_ext_ohm": (None if r_g is None else float(r_g)),
         "e_oss_policy": policy, "set_split": split,
         "cooling": cooling or {}, "r_tim_k_w": r_tim,
-        # A card whose datasheet prints no R_th(j-c) (e.g. WCMS900B170E53)
+        # A card whose datasheet prints no R_th(j-c) (some module datasheets)
         # needs the stated value; solve_controller refuses without it.
         "r_th_jc_k_w": (None if req.get("r_th_jc_k_w") is None
                         else float(req["r_th_jc_k_w"])),

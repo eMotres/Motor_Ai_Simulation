@@ -495,15 +495,29 @@ def check_fit(p: Principal, torque_nm: float, speed_rpm: float,
     })
 
 
-GUIDE = """# eMotres MCP — how to use (Stages 1-3)
+GUIDE = """# AeroStator MCP — how to use (Stages 1-3 + public discovery)
 
-eMotres designs permanent-magnet motors/generators and keeps a catalog of
-simulated machines (2-D FEM, energy-method torque, coupled thermal).
+AeroStator (aerostator.com, by eMotres) designs permanent-magnet
+motors/generators and keeps a catalog of simulated machines (2-D FEM,
+energy-method torque, coupled thermal).
 
 Hierarchy: a *die* (lamination) -> *configurations* (stack length, winding,
 materials) -> *duties* (operating points with saved results).
 
-Tools:
+Public tools (no sign-in; service description only, never user data):
+- describe_service, list_capabilities, list_calculation_types
+- get_input_requirements(calculation_type) — inputs with UCUM units and ranges
+- how_to_authenticate — OAuth / API-key sign-in, scopes, sign-up URL
+- start_sign_up — the sign-up page for a user without an account
+
+Everything else needs sign-in.  A refused call answers HTTP 401 (403 for a
+missing scope) with error.data = {error, required_action (sign_in | sign_up |
+reauthenticate | grant_scope), required_scope, tool, sign_up_url,
+authorize_url, resource_metadata_url, docs_url, user_message}: relay
+user_message and let the user click Connect / Sign in in the AI app.  Never
+ask for a password in chat.
+
+Tools after sign-in:
 - list_catalog(kind, query?) — magnets | steels | wires | bearings | devices | dies
 - get_catalog_entry(kind, id)
 - list_machines() — machines this key's owner may see, with headline ratings

@@ -264,9 +264,26 @@ def _day_key(t: float) -> str:
     return time.strftime("%Y-%m-%d", time.gmtime(t))
 
 
-def take_quota(cred_id: str, now: Optional[float] = None) -> Tuple[bool, int]:
-    """Count one call.  ``(True, 0)`` when allowed, else ``(False, retry_after_s)``."""
+def anon_per_minute_limit() -> int:
+    """Anonymous (unauthenticated) MCP requests per client IP per minute."""
+    return _limit("MCP_ANON_RATE_PER_MIN", 20)
+
+
+def anon_per_day_limit() -> int:
+    """Anonymous (unauthenticated) MCP requests per client IP per UTC day."""
+    return _limit("MCP_ANON_RATE_PER_DAY", 300)
+
+
+def take_quota(cred_id: str, now: Optional[float] = None, *,
+               per_min: Optional[int] = None,
+               per_day: Optional[int] = None) -> Tuple[bool, int]:
+    """Count one call.  ``(True, 0)`` when allowed, else ``(False, retry_after_s)``.
+
+    ``per_min`` / ``per_day`` override the key limits — the anonymous tier
+    counts per client IP (bucket ``anon:<ip>``) with its own, lower limits."""
     t = _now() if now is None else now
+    lim_min = per_minute_limit() if per_min is None else max(1, int(per_min))
+    lim_day = per_day_limit() if per_day is None else max(1, int(per_day))
     with _Q_LOCK:
         dq = _minute.setdefault(cred_id, deque())
         while dq and t - dq[0] >= 60.0:
@@ -275,10 +292,10 @@ def take_quota(cred_id: str, now: Optional[float] = None) -> Tuple[bool, int]:
         day, n = _day.get(cred_id, (dk, 0))
         if day != dk:
             day, n = dk, 0
-        if n >= per_day_limit():
+        if n >= lim_day:
             midnight = (int(t // 86400) + 1) * 86400
             return False, max(1, int(midnight - t))
-        if len(dq) >= per_minute_limit():
+        if len(dq) >= lim_min:
             return False, max(1, int(60.0 - (t - dq[0])) + 1)
         dq.append(t)
         _day[cred_id] = (day, n + 1)
@@ -302,13 +319,18 @@ def _summ(args: Any, limit: int = 300) -> str:
 
 
 def audit(*, principal: Optional[Principal], method: str, tool: str = "",
-          args: Any = None, status: int = 200, note: str = "") -> None:
+          args: Any = None, status: int = 200, note: str = "",
+          ip: str = "") -> None:
+    """One JSONL line.  Never a token: only the credential id, and for the
+    anonymous tier (``principal=None``) the client IP the fair-use limit
+    counts by."""
     rec = {"ts": _now(), "email": principal.email if principal else None,
            "key": principal.credential_id if principal else None,
            "kind": principal.kind if principal else None,
            "method": method, "tool": tool or None,
            "args": _summ(args) if args is not None else None,
-           "status": status, **({"note": note} if note else {})}
+           "status": status, **({"note": note} if note else {}),
+           **({"ip": ip} if ip else {})}
     if method == "tools/call":
         try:  # Admin -> Servers: MCP calls/min and 429s
             from motor_ai_sim import cluster_monitor as _cm

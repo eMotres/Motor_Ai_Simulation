@@ -69,6 +69,15 @@ BUS_UTILISATION = 0.9
 SPEED_VERIFIED_FACTOR = 1.2
 POWER_TOLERANCE = 0.05
 MAX_DRAFTS_PER_USER = 50
+#: The ranges ``needs_input`` quotes (and the public input catalogue in
+#: ``mcp_discovery`` repeats) — one definition, so the two never drift.
+TORQUE_RANGE_NM = (0.01, 20000.0)
+SPEED_RANGE_RPM = (50.0, 60000.0)
+DC_BUS_RANGE_V = (12.0, 1500.0)
+DC_BUS_OPTIONS_V = (24, 48, 96, 400, 800)
+AMBIENT_RANGE_C = (-60.0, 150.0)
+AMBIENT_DEFAULT_C = 40.0
+STEPS_RANGE = (12, 360)
 
 
 class DesignError(ValueError):
@@ -246,9 +255,9 @@ def normalize_requirements(req: Dict[str, Any]) -> Tuple[Dict[str, Any],
         if v is not None and k != "ambient_c" and v <= 0:
             raise DesignError(f"{k} must be positive (got {v:g})")
         n[k] = v
-    if n["ambient_c"] is not None and not -60 <= n["ambient_c"] <= 150:
+    if n["ambient_c"] is not None and not AMBIENT_RANGE_C[0] <= n["ambient_c"] <= AMBIENT_RANGE_C[1]:
         raise DesignError("ambient_c must be between -60 and 150 degC")
-    if n["dc_bus_v"] is not None and n["dc_bus_v"] > 1500:
+    if n["dc_bus_v"] is not None and n["dc_bus_v"] > DC_BUS_RANGE_V[1]:
         raise DesignError("dc_bus_v above 1500 V is outside what eMotres simulates")
     for k, allowed in (("cooling", COOLINGS), ("duty", DUTIES), ("mode", MODES)):
         v = req.get(k)
@@ -278,11 +287,11 @@ def normalize_requirements(req: Dict[str, Any]) -> Tuple[Dict[str, Any],
         ask.append({"field": "torque_nm",
                     "why": "the design target: shaft torque at rated speed "
                            "(or give power_kw instead)",
-                    "range": [0.01, 20000], "unit": "N*m"})
+                    "range": list(TORQUE_RANGE_NM), "unit": "N*m"})
     if n_r is None:
         ask.append({"field": "speed_rpm",
                     "why": "rated speed sets the frequency, the back-EMF and "
-                           "therefore the winding", "range": [50, 60000],
+                           "therefore the winding", "range": list(SPEED_RANGE_RPM),
                     "unit": "rpm"})
     if T is not None and P is not None and n_r is not None:
         p_calc = T * n_r * math.pi / 30.0 / 1000.0
@@ -302,7 +311,7 @@ def normalize_requirements(req: Dict[str, Any]) -> Tuple[Dict[str, Any],
         ask.append({"field": "dc_bus_v",
                     "why": "the winding (turns and parallel paths) is chosen so "
                            "the peak line voltage fits the DC bus",
-                    "options": [24, 48, 96, 400, 800], "range": [12, 1500],
+                    "options": list(DC_BUS_OPTIONS_V), "range": list(DC_BUS_RANGE_V),
                     "unit": "V"})
     if n["cooling"] is None:
         ask.append({"field": "cooling",
@@ -315,7 +324,7 @@ def normalize_requirements(req: Dict[str, Any]) -> Tuple[Dict[str, Any],
                            "sets the allowed current density",
                     "options": list(DUTIES)})
     if n["ambient_c"] is None:
-        n["ambient_c"] = 40.0
+        n["ambient_c"] = AMBIENT_DEFAULT_C
         assumptions.append("ambient 40 degC (not given)")
     if n["mode"] is None:
         n["mode"] = "motor"
@@ -1038,7 +1047,7 @@ def simulate(p: Principal, design_id: str, what: str,
     what = str(what or "").strip().lower()
     if what not in WHATS:
         raise DesignError(f"what must be one of {list(WHATS)}")
-    if steps is not None and not 12 <= int(steps) <= 360:
+    if steps is not None and not STEPS_RANGE[0] <= int(steps) <= STEPS_RANGE[1]:
         raise DesignError("steps (per electrical period) must be within [12, 360]")
     ok, retry, used, lim = check_quota(p)
     if not ok:

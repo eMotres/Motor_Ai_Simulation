@@ -109,7 +109,8 @@ def test_metadata_documents(oenv):
 
 
 def test_401_carries_resource_metadata(oenv):
-    r = _rpc(oenv["c"], None, "tools/list")
+    # (anonymous tools/list is public since docs/MCP_DISCOVERY.md; a data tool is not)
+    r = _call(oenv["c"], None, "list_machines")
     assert r.status_code == 401
     assert 'resource_metadata="https://aerostator.com/.well-known/oauth-protected-resource/mcp"' \
         in r.headers["www-authenticate"]

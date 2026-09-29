@@ -101,10 +101,13 @@ def _payload(r):
 # ── schemas ──────────────────────────────────────────────────────────────────
 
 def test_tool_list_and_schemas(env):
-    tok, _ = K.create_key(A, "t")
+    # every scope -> every tool (tools/list follows the key's scopes since the
+    # anonymous tier, docs/MCP_DISCOVERY.md; the scoped subsets are covered in
+    # tests/test_mcp_discovery.py)
+    tok, _ = K.create_key(A, "t", scopes=list(K.SCOPES))
     r = _rpc(env["c"], tok, "tools/list")
     tools = {t["name"]: t for t in r.json()["result"]["tools"]}
-    assert set(tools) == set(mcp_app.TOOL_SCOPES)
+    assert set(tools) == set(mcp_app.TOOL_SCOPES) | mcp_app.PUBLIC_TOOLS
     for n, t in tools.items():
         assert t["description"] and len(t["description"]) > 30
         assert t["inputSchema"]["type"] == "object"
@@ -130,7 +133,9 @@ def test_guide_resource(env):
 
 def test_no_key_wrong_key_revoked_key(env):
     c = env["c"]
-    r = _rpc(c, None, "tools/list")
+    # no key: the anonymous tier lists the public tools, a data tool is 401
+    assert _rpc(c, None, "tools/list").status_code == 200
+    r = _call(c, None, "list_machines")
     assert r.status_code == 401 and "www-authenticate" in r.headers
     assert _rpc(c, "emk_nope_nope", "tools/list").status_code == 401
     assert _rpc(c, "some-session-token", "tools/list").status_code == 401
@@ -236,7 +241,7 @@ def test_quota_per_minute_and_day(env, monkeypatch):
 def test_audit_log_written(env):
     tok, rec = K.create_key(A, "t")
     _call(env["c"], tok, "list_catalog", {"kind": "magnets", "query": "N52"})
-    _rpc(env["c"], None, "tools/list")
+    _call(env["c"], None, "list_machines")          # anonymous -> 401, audited
     rows = K.read_audit(A)
     assert rows and rows[0]["tool"] == "list_catalog" and rows[0]["key"] == rec["id"]
     assert "N52" in rows[0]["args"] and rows[0]["status"] == 200

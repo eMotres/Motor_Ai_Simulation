@@ -552,14 +552,14 @@ BORE_MODES = ("none", "air", "liquid", "still")
 #: decision, from the Fusion model: the 24 coils stand proud of the core on both
 #: sides and the core's own end faces are largely uncovered.
 END_FACE_MODES = ("still", "none")
-#: The robotics mode's ONE conduction choice (2026-09-26, owner: «давай
-#: упростим») — replaces the mount W/K / mount °C / sink-or-link / link size /
+#: The robotics mode's ONE conduction choice (2026-09-26, owner: "let's
+#: simplify") — replaces the mount W/K / mount °C / sink-or-link / link size /
 #: link material fields.  ``none`` is the default here and is bit-identical to
 #: the robotics mode with no mount; see ``cooling_models.HEAT_PATHS``.
 HEAT_PATHS = ("housing", "shaft", "both", "none")
 #: How the machine is BUILT, which decides whether the end windings and the slot
 #: channels are in the airflow at all (user 2026-09-09, on the 40 mm "CIANO14 40
-#: new": *"нет корпуса"* — the tooth blocks with their coils are held between two
+#: new": *"there's no housing"* — the tooth blocks with their coils are held between two
 #: end plates by standoff pins and the end turns sit in the propeller wash).
 #: ``housed`` is the model this router has always solved and stays the default,
 #: bit for bit; ``open`` adds the two paths — see ``solve_thermal_field``.
@@ -788,8 +788,8 @@ def _validate_field_params(*, cooling_mode: str, ambient_temp: float,
                        error="bore liquid cooling without a flow rate")
 
     # The SHAFT ENDS — the one axial path the user asked for (2026-09-07):
-    # "торцы и лобовые части — только для вала, всё остальное вращается внутри
-    # мотора".  Length 0 turns it off, so only a NEGATIVE or non-finite length is
+    # "end faces and end windings — only for the shaft, everything else spins
+    # inside the motor".  Length 0 turns it off, so only a NEGATIVE or non-finite length is
     # a refusal; a negative stub is not a shorter one.
     if not math.isfinite(float(shaft_ext_length_mm)) or float(shaft_ext_length_mm) < 0.0:
         raise _bad("shaft_ext_length_mm", shaft_ext_length_mm, "bad_value",

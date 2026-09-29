@@ -34,9 +34,9 @@ everything after that moving.
 
 The user's own words:
 
-> сначала сделал бы первоначальные отклонения по всем переменным в районе 0.2 mm
-> или 0.02 для безразмерных и понял бы какая куда отклоняет систему, а потом уже
-> использовал самые влиятельные и доводку делал оставшимися
+> first I would make initial perturbations on all variables around 0.2 mm
+> or 0.02 for dimensionless ones and figure out which one deflects the system where, and only then
+> use the most influential ones and do the fine-tuning with the rest
 
 Mechanised as four phases, all on the same fixed operating point and the same
 honest eval path the CMA route uses:

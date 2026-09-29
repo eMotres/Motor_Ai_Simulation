@@ -1,8 +1,8 @@
 # PWM lives in the Controller (2026-09-24)
 
 Owner, 2026-09-24, on a screenshot of the Controller tab's greyed "Carrier
-20,000 Hz" placeholder: *«Это значение нужно задавать в контроллере; PWM нужно
-выкинуть из Electromagnetic.»*
+20,000 Hz" placeholder: *«This value needs to be set in the controller; PWM needs
+to be thrown out of Electromagnetic.»*
 
 The PWM drive (carrier, V_dc source, dead time, modulation) is now defined in
 the **Controller tab only**. The Electromagnetic/Simulation tab keeps **Sine

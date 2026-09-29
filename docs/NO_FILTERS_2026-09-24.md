@@ -1,8 +1,8 @@
 # No filters on reported values (2026-09-24)
 
 Done by Claude Opus 5.5 (`claude-opus-5-5`) as one sub-agent, no escalation, on branch
-`pre-migration-freeze-2026-09-15` on top of f0f5486. Owner's rule: «Убираем все фильтры —
-считаем только реальную физику.» No smoothing, truncation, harmonic cap, amplitude floor,
+`pre-migration-freeze-2026-09-15` on top of f0f5486. Owner's rule: «We remove all filters —
+we compute only the real physics.» No smoothing, truncation, harmonic cap, amplitude floor,
 detrending, windowing or anchor may shape a reported value; where a filter hid a numerical
 defect, the defect is fixed instead.
 

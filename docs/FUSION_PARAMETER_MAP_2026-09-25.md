@@ -94,17 +94,17 @@ away or deleted; only ONE existing formula is ever changed)
 
 Two owner corrections, same day, narrowed this considerably:
 
-> «так должно быть: stator_up_r = stator_diameter/2» — for a mapping WITH a
+> «that's how it should be: stator_up_r = stator_diameter/2» — for a mapping WITH a
 > conversion, do NOT rename the old parameter. CREATE the canonical
 > parameter holding OUR value ("12 mm", explicit unit — never a bare number
 > for a length), and turn the OLD parameter into a DERIVED one referencing
 > the new one. Every other old expression stays exactly as it was.
 
-> «формулы не меняй, только одну: stator_up_r = stator_diameter/2» — do not
+> «don't change the formulas, only one: stator_up_r = stator_diameter/2» — do not
 > change `mag_step`'s formula either; if `magnet_lamination` needs a
 > conversion, create it with its own value and leave `mag_step` as is.
 
-> «чтобы никаких переменных не уничтожалось, только переименования» — never
+> «so that no variables are ever destroyed, only renamed» — never
 > delete a parameter. The converter's output always contains every input
 > row (`rows_out = rows_in + created`, asserted in code); the Fusion script
 > refuses to run if its plan contains anything other than rename / create /

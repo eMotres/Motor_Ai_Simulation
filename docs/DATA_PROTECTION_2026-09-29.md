@@ -124,12 +124,24 @@ reset or verify link to the log. Approve pending accounts in Admin instead.
 
 ## Left for server operations
 
-* Off-site restic repository (Storage Box), a restore rehearsal, and running
-  `account_lifecycle reapply` as part of it.
-* One-time tightening of existing files:
-  `chmod 600 /srv/motres/identity/*`, `chmod 750 /srv/motres/logs`,
-  `chmod 640 /srv/motres/logs/*`, `chmod 700 /srv/motres/workspaces/*`.
-* Install and enable `motres-retention.timer`, then run a `--dry-run` first.
+* Off-site restic repository (Storage Box) and a restore rehearsal. The
+  `account_lifecycle reapply` step is now part of the restore procedure
+  (deploy/README.md "Rollback" step 2; `/opt/motres/RESTORE.md` on the server).
+* **Done on the server 2026-09-29.** One-time tightening of existing files.
+  Files and directories are treated separately, because a blanket
+  `chmod 600 /srv/motres/identity/*` would also hit the subdirectories
+  (`cluster/`, `logs/`, `support/`) and lock the API out of them:
+  ```bash
+  find /srv/motres/identity -type f -exec chmod 600 {} +
+  find /srv/motres/identity -mindepth 1 -type d -exec chmod 700 {} +
+  chmod 750 /srv/motres/logs
+  find /srv/motres/logs -maxdepth 1 -type f -exec chmod 640 {} +
+  find /srv/motres/workspaces -mindepth 1 -maxdepth 1 -type d -exec chmod 700 {} +
+  ```
+  Everything stays owned by uid 10001, the container's `motres` user.
+* **Done on the server 2026-09-29.** `motres-retention.timer` installed and
+  enabled after a `--dry-run` that would have dropped nothing (all steps 0,
+  no pending deletion requests).
 * Existing raw IPs in `.sessions.json` and `auth_events.jsonl` stay until
   retention or a re-login overwrites them. An optional one-off rewrite script
   is not included.

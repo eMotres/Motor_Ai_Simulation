@@ -303,6 +303,18 @@ If `requirements.txt` changed, the build reinstalls the whole native stack
    as long as no migration stage changed the on-disk layout between the two.
 2. **The state.** `restic restore latest --target /srv/motres.restored`, then
    swap the directories. Hourly snapshots mean at most an hour of a user's work.
+   Before the swap, copy the live `/srv/motres/identity/deleted_subjects.jsonl`
+   aside. After **any** restore, re-apply account deletions, because a
+   snapshot can bring back accounts deleted after it was taken
+   (docs/DATA_PROTECTION_2026-09-29.md §2):
+   ```bash
+   cd /opt/motres/app/deploy
+   docker compose exec -T api python -m motor_ai_sim.account_lifecycle reapply
+   # restored register older than the copy you kept aside:
+   #   ... account_lifecycle reapply --register <path of the newest copy, inside the container>
+   ```
+   The server keeps a step-by-step copy of this procedure in
+   `/opt/motres/RESTORE.md` (outside the app tree, which a deploy overwrites).
 3. **The whole server.** The Windows workstation stays running read-only for two
    weeks after cutover (§ Stage 11). Point DNS back; it is still the same
    `.auth_secret`, so sessions survive.

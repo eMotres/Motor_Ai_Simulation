@@ -11,7 +11,6 @@ import {
   Tooltip as RcTooltip, Legend,
 } from 'recharts';
 import HelpTip from '../common/HelpTip';
-import UsagePanel from './UsagePanel';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
@@ -30,14 +29,9 @@ interface Sample {
 }
 interface Node { id: string; name: string; status: string; last_seen: number | null; sample: Sample | null }
 interface Cluster { nodes: number; online: number; cores: number; cpu_used_cores: number; mem_used: number; mem_total: number }
-interface Job {
-  run_id: string; owner: string; kind: string; state: string; position?: number;
-  elapsed_s?: number; waited_s?: number; eta_s?: number; frac?: number; agent?: string | null; cpu_s?: number;
-}
 interface AppView {
   api: { requests: number; p50_ms: number; p95_ms: number };
-  mcp: { calls_per_min: number; throttled_429: number };
-  jobs: { running: number; queued: number; workers?: number; oldest_wait_s: number; items: Job[] };
+  jobs: { running: number; queued: number };
 }
 interface Point { ts: number; cpu: number; mem: number; load1: number; disk: number; rx: number; tx: number }
 
@@ -163,10 +157,6 @@ const ServersPanel: React.FC = () => {
     if (!window.confirm(`Revoke the token of ${id}? The agent there stops reporting.`)) return;
     await fetch(`${API}/api/admin/nodes/${encodeURIComponent(id)}/revoke`, { method: 'POST' }); void load();
   };
-  const stopJob = async (rid: string) => {
-    if (!window.confirm(`Stop job ${rid}?`)) return;
-    await fetch(`${API}/api/admin/cluster/jobs/${encodeURIComponent(rid)}/stop`, { method: 'POST' }); void load();
-  };
   const selNode = nodes.find((n) => n.id === sel);
 
   return (
@@ -190,8 +180,7 @@ const ServersPanel: React.FC = () => {
           <span>RAM <b>{gb(cluster.mem_used)}/{gb(cluster.mem_total)}</b> GB</span>
           {app && <span>Jobs <b>{app.jobs.running}</b> running · <b>{app.jobs.queued}</b> queued</span>}
           {app && <span>API p50/p95 <b>{app.api.p50_ms}/{app.api.p95_ms}</b> ms</span>}
-          {app && <span>MCP <b>{app.mcp.calls_per_min}</b>/min · 429s <b>{app.mcp.throttled_429}</b></span>}
-          <HelpTip title="Totals over online nodes; API latency and MCP counts over the last 5 min." />
+          <HelpTip title="Totals over online nodes; API latency over the last 5 min. Job queue and MCP traffic: see Agents." />
         </Box>
       )}
 
@@ -227,37 +216,6 @@ const ServersPanel: React.FC = () => {
       </Box>
       {selNode && <NodeDetail node={selNode} />}
 
-      {app && (
-        <>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 2 }}>
-            <Typography sx={{ fontWeight: 600, fontSize: 13 }}>Jobs</Typography>
-            <HelpTip title="Every account's running and queued solves; agent = started through MCP." />
-            <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>oldest wait {dur(app.jobs.oldest_wait_s)}</Typography>
-          </Box>
-          <Table size="small">
-            <TableHead><TableRow>
-              {['owner', 'kind', 'state', 'agent', 'elapsed', 'CPU s', 'ETA', ''].map((h) => <TableCell key={h}>{h}</TableCell>)}
-            </TableRow></TableHead>
-            <TableBody>
-              {app.jobs.items.length === 0 && (
-                <TableRow><TableCell colSpan={8} sx={{ color: 'var(--text-4)' }}>idle</TableCell></TableRow>
-              )}
-              {app.jobs.items.map((j) => (
-                <TableRow key={j.run_id}>
-                  <TableCell>{j.owner}</TableCell><TableCell>{j.kind}</TableCell>
-                  <TableCell>{j.state}{j.state === 'queued' && j.position ? ` #${j.position}` : ''}</TableCell>
-                  <TableCell>{j.agent || '—'}</TableCell>
-                  <TableCell>{dur(j.state === 'running' ? j.elapsed_s : j.waited_s)}</TableCell>
-                  <TableCell>{j.cpu_s != null ? Math.round(j.cpu_s) : '—'}</TableCell>
-                  <TableCell>{dur(j.eta_s)}</TableCell>
-                  <TableCell><Button size="small" color="error" onClick={() => void stopJob(j.run_id)}>Stop</Button></TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </>
-      )}
-
       <Dialog open={addOpen} onClose={() => { setAddOpen(false); setMinted(null); }} maxWidth="sm" fullWidth>
         <DialogTitle>Add server</DialogTitle>
         <DialogContent>
@@ -282,7 +240,6 @@ const ServersPanel: React.FC = () => {
         </DialogActions>
       </Dialog>
     </Paper>
-    <UsagePanel />
     </>
   );
 };

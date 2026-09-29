@@ -399,8 +399,8 @@ def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
                               r_housing_m=float(r_housing_m),
                               length_m=float(length_m),
                               heat_w=float(p_loss_w), area_m2=area)
-        # USER RULE (2026-09-07): "температура внешней поверхности статора
-        # равна температуре выходной воды".  The jacket film is reported for
+        # USER RULE (2026-09-07): "the outer stator surface temperature
+        # equals the outlet water temperature".  The jacket film is reported for
         # information (`h_jacket`, Re), but the boundary condition is the
         # housing PINNED at the coolant OUTLET — the hottest the jacket gets and
         # the conservative reading of a well-designed jacket (turbulent h is
@@ -433,7 +433,7 @@ def _bore_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
              emissivity: float = 0.9, t_wall_c: Optional[float] = None):
     """The BORE (rotor inner diameter) Robin BC — the rotor's real heat path.
 
-    User, 2026-09-07: *"Ротор придётся охлаждать в основном через вал"*.  In a
+    User, 2026-09-07: *"The rotor will have to be cooled mainly through the shaft"*.  In a
     2-D cross-section the rotor's only other route is the air gap, whose
     effective conductivity is tens of milliwatts per metre-kelvin even when the
     Taylor vortices are working — so a rotor that is not cooled through its bore
@@ -492,8 +492,8 @@ def _sleeve_k(name: Optional[str]):
     material.
 
     A hoop-wound UD CFRP sleeve is the most anisotropic body in the machine —
-    the user's words: *"у него теплопроводность очень плохая в радиальном
-    направлении"* — and the two numbers are NOT interchangeable.  The radial
+    the user's words: *"its thermal conductivity is very poor in the radial
+    direction"* — and the two numbers are NOT interchangeable.  The radial
     (through-thickness) value is matrix- and contact-limited and is the one that
     stands between the rotor and the air gap; the fibre-direction value is an
     order of magnitude higher and only smears heat AROUND the rotor.

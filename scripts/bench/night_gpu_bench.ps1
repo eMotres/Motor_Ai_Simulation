@@ -44,7 +44,7 @@ $env:SB_NO_WARM_CACHE = '1'; $env:MPLBACKEND = 'Agg'
 Remove-Item Env:WORKSPACES_ROOT -ErrorAction SilentlyContinue
 
 "started $(Get-Date -Format s); threads $Threads; priority BelowNormal; daytime override: $([bool]$AllowDaytime) $DaytimeReason" | Set-Content (Join-Path $out 'env.txt')
-& $Python -c "import cupy, nvmath; p=cupy.cuda.runtime.getDeviceProperties(0); print('GPU', p['name'], 'cc', p['major'], p['minor'], 'CUDA rt', cupy.cuda.runtime.runtimeGetVersion(), 'driver', cupy.cuda.runtime.driverGetVersion(), 'cupy', cupy.__version__, 'nvmath', nvmath.__version__)" 2>&1 | Add-Content (Join-Path $out 'env.txt')
+& $Python -c "import cupy; p=cupy.cuda.runtime.getDeviceProperties(0); print('GPU', p['name'], 'cc', p['major'], p['minor'], 'CUDA rt', cupy.cuda.runtime.runtimeGetVersion(), 'driver', cupy.cuda.runtime.driverGetVersion(), 'cupy', cupy.__version__)" 2>&1 | Add-Content (Join-Path $out 'env.txt')
 
 # 1) matrix benchmark: every exported system, every backend
 if (-not $SkipMatrices) {

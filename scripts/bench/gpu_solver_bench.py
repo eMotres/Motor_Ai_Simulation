@@ -143,6 +143,10 @@ def main():
     ap.add_argument("--repeat", type=int, default=7)
     ap.add_argument("--only", default="", help="substring filter on the matrix tag")
     ap.add_argument("--max-n-superlu", type=int, default=400000)
+    ap.add_argument("--slow", default="superlu,cupy_qr,cupy_gmres_jac,amgx",
+                    help="reference backends limited to --max-n-slow and --repeat-slow")
+    ap.add_argument("--max-n-slow", type=int, default=50000)
+    ap.add_argument("--repeat-slow", type=int, default=2)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     metas = sorted(glob.glob(os.path.join(a.matrices, "*_meta.json")))
@@ -153,13 +157,14 @@ def main():
         m, A, b, x_ref = load(mp)
         print(f"{m['tag']}: n={A.shape[0]} nnz={A.nnz} sym_rel={m['sym_rel']:.1e}", flush=True)
         for be in [s.strip() for s in a.backends.split(",") if s.strip()]:
-            if be == "superlu" and A.shape[0] > a.max_n_superlu:
+            slow = be in a.slow.split(",")
+            if (be == "superlu" and A.shape[0] > a.max_n_superlu) or (slow and A.shape[0] > a.max_n_slow):
                 continue
             if be in ("cudss_fp64_sym", "cudss_fp64_spd", "pardiso_spd", "pardiso_sym") and m["sym_rel"] > 1e-12:
                 res["results"].append(dict(tag=m["tag"], n=A.shape[0], nnz=A.nnz, backend=be,
                                            skipped="matrix not symmetric"))
                 continue
-            r = bench_one(be, A, b, x_ref, a.repeat)
+            r = bench_one(be, A, b, x_ref, a.repeat_slow if slow else a.repeat)
             r.update(tag=m["tag"], n=int(A.shape[0]), nnz=int(A.nnz), caller=m["caller"],
                      case=m["case"], mesh_scale=m["mesh_scale"])
             res["results"].append(r)

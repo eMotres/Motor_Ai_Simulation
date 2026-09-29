@@ -15,13 +15,15 @@ factorisation + solve for each new set of values with that pattern.
 Backends
   pardiso        MKL PARDISO via pypardiso, mtype 11, phases 11/22/33 (CPU reference)
   superlu        SciPy SuperLU (the CPU fallback path)
-  cudss_fp64     NVIDIA cuDSS through nvmath-python, FP64 factor + solve
+  cudss_fp64     NVIDIA cuDSS (C API via ctypes on CuPy arrays), FP64 factor + solve
+                 ("nvmath_cudss_*" = the same through nvmath-python, where it imports)
   cudss_fp32     cuDSS FP32 factor + solve, no refinement (accuracy probe only)
   cudss_mixed    cuDSS FP32 factor, FP64 residuals, iterative refinement to --ir-tol
   cudss_fp64_sym cuDSS FP64 with the matrix declared SYMMETRIC (LDL^T); valid only
                  when the dumped matrix reports sym_rel ~ 0
   cudss_fp64_spd cuDSS FP64 Cholesky (matrix declared SPD); every exported system
                  is SPD (analyze_matrices.py), mirrors PARDISO mtype 2
+  cudss_fp32_spd, cudss_mixed_spd   SPD variants of the FP32 / mixed probes
   cupy_qr        cupyx.scipy.sparse.linalg.spsolve (cuSOLVER QR), no reuse
   cupy_gmres_jac cupyx GMRES + Jacobi preconditioner (expected to struggle)
   amgx           pyamgx FGMRES + AMG (only if pyamgx + AmgX are installed)
@@ -275,6 +277,233 @@ class CuDSS(Backend):
             self.solver = None
 
 
+# ------------------------------------------------------- cuDSS through ctypes
+# The direct C-API route (the brief's "CuPy bindings" option): NVIDIA's own
+# cudss64_0.dll / libcudss.so.0 from the nvidia-cudss-cu13|cu12 wheel, driven
+# with CuPy device arrays.  Used by default because nvmath-python cannot be
+# imported on a host whose Windows App Control policy blocks its
+# cusolver/cutensor binding modules (nvmath's package __init__ imports them
+# unconditionally); cuDSS itself does not need them.
+_CUDSS = None
+
+
+def _cudss_lib():
+    global _CUDSS
+    if _CUDSS is not None:
+        return _CUDSS
+    import ctypes
+    import glob
+    import os
+    import sys
+    import cupy  # noqa: F401  (loads the CUDA runtime first)
+    names = []
+    for sp_dir in sys.path:
+        for sub in ("nvidia/cu13", "nvidia/cu12", "nvidia/cudss"):
+            d = os.path.join(sp_dir, *sub.split("/"))
+            if os.path.isdir(d):
+                names += glob.glob(os.path.join(d, "bin", "cudss64_*.dll"))
+                names += glob.glob(os.path.join(d, "lib", "libcudss.so*"))
+    names = [n for n in names if "mtlayer" not in n and "commlayer" not in n]
+    if not names:
+        raise ImportError("cuDSS library not found (pip install nvidia-cudss-cu13 or -cu12)")
+    path = names[0]
+    if os.name == "nt":
+        os.add_dll_directory(os.path.dirname(path))
+        x64 = os.path.join(os.path.dirname(path), "x86_64")
+        if os.path.isdir(x64):
+            os.add_dll_directory(x64)
+    lib = ctypes.CDLL(path)
+    vp, i64, ci = ctypes.c_void_p, ctypes.c_int64, ctypes.c_int
+    P = ctypes.POINTER
+    sig = {
+        "cudssCreate": [P(vp)], "cudssDestroy": [vp], "cudssSetStream": [vp, vp],
+        "cudssConfigCreate": [P(vp)], "cudssConfigDestroy": [vp],
+        "cudssConfigSet": [vp, ci, vp, ctypes.c_size_t],
+        "cudssDataCreate": [vp, P(vp)], "cudssDataDestroy": [vp, vp],
+        "cudssDataGet": [vp, vp, ci, vp, ctypes.c_size_t, P(ctypes.c_size_t)],
+        "cudssMatrixCreateCsr": [P(vp), i64, i64, i64, vp, vp, vp, vp, ci, ci, ci, ci, ci, ci],
+        "cudssMatrixCreateDn": [P(vp), i64, i64, i64, vp, ci, ci],
+        "cudssMatrixDestroy": [vp],
+        "cudssExecute": [vp, ci, vp, vp, vp, vp, vp],
+    }
+    for fn, at in sig.items():
+        f = getattr(lib, fn)
+        f.argtypes = at
+        f.restype = ci
+    _CUDSS = lib
+    return lib
+
+
+_CUDSS_STATUS = {0: "SUCCESS", 1: "NOT_INITIALIZED", 2: "ALLOC_FAILED (out of GPU memory)",
+                 3: "INVALID_VALUE", 4: "NOT_SUPPORTED", 5: "EXECUTION_FAILED",
+                 6: "INTERNAL_ERROR", 7: "IR_FAILED"}
+
+
+class CuDSSError(RuntimeError):
+    pass
+
+
+def _ck(st, what):
+    if st != 0:
+        raise CuDSSError("%s: cuDSS status %d %s" % (what, st, _CUDSS_STATUS.get(st, "")))
+
+
+class CuDSSDirect(Backend):
+    """cuDSS via its C API.  Pattern arrays live on the device; a new set of
+    values with the same pattern is copied into the value buffer in place and
+    refactorised without a new analysis (the production reuse cycle)."""
+    device = "gpu"
+    PH_ANALYSIS, PH_FACT, PH_SOLVE = 3, 4, 1008
+    MT = {"general": 0, "symmetric": 1, "spd": 3}
+
+    def __init__(self, dtype="float64", mtype="general", mixed=False,
+                 ir_tol=1e-12, ir_max=30):
+        super().__init__()
+        import ctypes
+        import cupy as cp
+        import cupyx.scipy.sparse as csp
+        self.ct, self.cp, self.csp = ctypes, cp, csp
+        self.lib = _cudss_lib()
+        self.mixed = mixed
+        self.dtype = np.float32 if (dtype == "float32" or mixed) else np.float64
+        self.vtype = 0 if self.dtype == np.float32 else 1       # CUDA_R_32F / CUDA_R_64F
+        self.mtype = mtype
+        self.ir_tol, self.ir_max = ir_tol, ir_max
+        prec = "mixed" if mixed else ("fp32" if self.dtype == np.float32 else "fp64")
+        self.name = "cudss_" + prec + {"general": "", "symmetric": "_sym", "spd": "_spd"}[mtype]
+        self.h = ctypes.c_void_p()
+        _ck(self.lib.cudssCreate(ctypes.byref(self.h)), "create")
+        self.cfg = ctypes.c_void_p()
+        _ck(self.lib.cudssConfigCreate(ctypes.byref(self.cfg)), "config")
+        self.data = None
+        self.mA = self.mx = self.mb = None
+        self.ir_iters = []
+
+    def _free_objs(self):
+        lib = self.lib
+        for m in (self.mA, self.mx, self.mb):
+            if m is not None:
+                lib.cudssMatrixDestroy(m)
+        self.mA = self.mx = self.mb = None
+        if self.data is not None:
+            lib.cudssDataDestroy(self.h, self.data)
+            self.data = None
+
+    def analyze(self, A):
+        ct, cp, lib = self.ct, self.cp, self.lib
+        self._free_objs()
+        A = sp.csr_matrix(A)
+        A.sort_indices()
+        n = A.shape[0]
+        t0 = time.perf_counter()
+        self.d_ptr = cp.asarray(A.indptr.astype(np.int32))
+        self.d_ind = cp.asarray(A.indices.astype(np.int32))
+        self.d_val = cp.asarray(A.data.astype(self.dtype))
+        self.d_b = cp.zeros(n, dtype=self.dtype)
+        self.d_x = cp.zeros(n, dtype=self.dtype)
+        if self.mixed:
+            self.a64 = self.csp.csr_matrix((cp.asarray(A.data), self.d_ind, self.d_ptr),
+                                           shape=A.shape)
+        _sync()
+        self.t["h2d"] += time.perf_counter() - t0
+        t0 = time.perf_counter()
+        self.data = ct.c_void_p()
+        _ck(lib.cudssDataCreate(self.h, ct.byref(self.data)), "data")
+        self.mA = ct.c_void_p()
+        _ck(lib.cudssMatrixCreateCsr(ct.byref(self.mA), n, n, int(A.nnz), self.d_ptr.data.ptr,
+                                     None, self.d_ind.data.ptr, self.d_val.data.ptr, 10, 10,
+                                     self.vtype, self.MT[self.mtype], 0, 0), "matrix A")
+        self.mb = ct.c_void_p()
+        self.mx = ct.c_void_p()
+        _ck(lib.cudssMatrixCreateDn(ct.byref(self.mb), n, 1, n, self.d_b.data.ptr, self.vtype, 0), "b")
+        _ck(lib.cudssMatrixCreateDn(ct.byref(self.mx), n, 1, n, self.d_x.data.ptr, self.vtype, 0), "x")
+        _ck(lib.cudssExecute(self.h, self.PH_ANALYSIS, self.cfg, self.data, self.mA, self.mx,
+                             self.mb), "analysis")
+        _sync()
+        self.t["analyze"] += time.perf_counter() - t0
+        self.n_analyze += 1
+        est = (ct.c_int64 * 16)()
+        w = ct.c_size_t()
+        if lib.cudssDataGet(self.h, self.data, 13, est, ct.sizeof(est), ct.byref(w)) == 0:
+            self.info["mem_est_device_permanent_MB"] = est[0] / 2 ** 20
+            self.info["mem_est_device_peak_MB"] = est[1] / 2 ** 20
+        self.n = n
+
+    def factorize(self, A):
+        ct, cp, lib = self.ct, self.cp, self.lib
+        A = sp.csr_matrix(A)
+        A.sort_indices()
+        t0 = time.perf_counter()
+        self.d_val[...] = cp.asarray(A.data.astype(self.dtype))
+        if self.mixed:
+            self.a64.data[...] = cp.asarray(A.data)
+        _sync()
+        self.t["h2d"] += time.perf_counter() - t0
+        t0 = time.perf_counter()
+        _ck(lib.cudssExecute(self.h, self.PH_FACT, self.cfg, self.data, self.mA, self.mx, self.mb),
+            "factorization")
+        _sync()
+        self.t["factorize"] += time.perf_counter() - t0
+        self.n_factorize += 1
+        info = ct.c_int()
+        w = ct.c_size_t()
+        lib.cudssDataGet(self.h, self.data, 0, ct.byref(info), ct.sizeof(info), ct.byref(w))
+        if info.value != 0:
+            raise CuDSSError("factorization info=%d (zero/negative pivot for mtype %s)"
+                             % (info.value, self.mtype))
+        nnz = ct.c_int64()
+        if lib.cudssDataGet(self.h, self.data, 1, ct.byref(nnz), 8, ct.byref(w)) == 0:
+            self.info["lu_nnz"] = int(nnz.value)
+
+    def _solve_dev(self, rhs):
+        cp, lib = self.cp, self.lib
+        self.d_b[...] = rhs.astype(self.dtype)
+        _ck(lib.cudssExecute(self.h, self.PH_SOLVE, self.cfg, self.data, self.mA, self.mx, self.mb),
+            "solve")
+        return self.d_x.astype(cp.float64)       # a copy
+
+    def solve(self, b):
+        cp = self.cp
+        b = np.asarray(b, dtype=np.float64)
+        cols = [b] if b.ndim == 1 else [b[:, j] for j in range(b.shape[1])]
+        out = []
+        for bj in cols:
+            t0 = time.perf_counter()
+            bd = cp.asarray(bj)
+            _sync()
+            self.t["h2d"] += time.perf_counter() - t0
+            t0 = time.perf_counter()
+            xd = self._solve_dev(bd)
+            if self.mixed:
+                nb = float(cp.linalg.norm(bd)) or 1.0
+                it = 0
+                for it in range(1, self.ir_max + 1):
+                    r = bd - self.a64 @ xd
+                    if float(cp.linalg.norm(r)) / nb < self.ir_tol:
+                        it -= 1
+                        break
+                    xd = xd + self._solve_dev(r)
+                self.ir_iters.append(it)
+            _sync()
+            self.t["solve"] += time.perf_counter() - t0
+            t0 = time.perf_counter()
+            out.append(cp.asnumpy(xd))
+            self.t["d2h"] += time.perf_counter() - t0
+        return out[0] if b.ndim == 1 else np.column_stack(out)
+
+    def close(self):
+        if getattr(self, "h", None) is None:
+            return
+        self._free_objs()
+        self.lib.cudssConfigDestroy(self.cfg)
+        self.lib.cudssDestroy(self.h)
+        self.h = None
+        try:
+            self.cp.get_default_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+
+
 # ----------------------------------------------------------------------- CuPy
 class CupyQR(Backend):
     name = "cupy_qr"
@@ -308,7 +537,7 @@ class CupyGmresJacobi(Backend):
     name = "cupy_gmres_jac"
     device = "gpu"
 
-    def __init__(self, tol=1e-10, maxiter=2000, restart=100):
+    def __init__(self, tol=1e-10, maxiter=20, restart=100):
         super().__init__()
         self.tol, self.maxiter, self.restart = tol, maxiter, restart
         self.iters = []
@@ -342,7 +571,7 @@ class CupyGmresJacobi(Backend):
 
             def cb(_):
                 cnt[0] += 1
-            x, info = gmres(self.a, cp.asarray(bj), tol=self.tol, restart=self.restart,
+            x, info = gmres(self.a, cp.asarray(bj), rtol=self.tol, restart=self.restart,
                             maxiter=self.maxiter, M=M, callback=cb, callback_type="pr_norm")
             self.iters.append((cnt[0], int(info)))
             out.append(cp.asnumpy(x))
@@ -429,16 +658,33 @@ def make_backend(name, **kw):
         return Pardiso(mtype=-2)
     if name == "superlu":
         return SuperLU()
+    # cuDSS: C API via ctypes (default) or nvmath-python ("nvmath_" prefix)
+    if name.startswith("nvmath_"):
+        nm = name[len("nvmath_"):]
+        if nm == "cudss_fp64":
+            return CuDSS("float64")
+        if nm == "cudss_fp64_sym":
+            return CuDSS("float64", symmetric=True)
+        if nm == "cudss_fp64_spd":
+            return CuDSS("float64", symmetric="spd")
+        if nm == "cudss_fp32":
+            return CuDSS("float32")
+        if nm == "cudss_mixed":
+            return CuDSS(mixed=True, ir_tol=kw.get("ir_tol", 1e-12))
     if name == "cudss_fp64":
-        return CuDSS("float64")
+        return CuDSSDirect("float64")
     if name == "cudss_fp64_sym":
-        return CuDSS("float64", symmetric=True)
+        return CuDSSDirect("float64", mtype="symmetric")
     if name == "cudss_fp64_spd":
-        return CuDSS("float64", symmetric="spd")
+        return CuDSSDirect("float64", mtype="spd")
     if name == "cudss_fp32":
-        return CuDSS("float32")
+        return CuDSSDirect("float32")
+    if name == "cudss_fp32_spd":
+        return CuDSSDirect("float32", mtype="spd")
     if name == "cudss_mixed":
-        return CuDSS(mixed=True, ir_tol=kw.get("ir_tol", 1e-12))
+        return CuDSSDirect(mixed=True, ir_tol=kw.get("ir_tol", 1e-12))
+    if name == "cudss_mixed_spd":
+        return CuDSSDirect(mtype="spd", mixed=True, ir_tol=kw.get("ir_tol", 1e-12))
     if name == "cupy_qr":
         return CupyQR()
     if name == "cupy_gmres_jac":

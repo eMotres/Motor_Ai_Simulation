@@ -44,7 +44,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytestmark = pytest.mark.requires_triangle
+# Runs on either CDT backend of the geometry mesher (Triangle where installed,
+# else gmsh); tests/test_geo_mesh_gmsh.py re-runs it forced onto gmsh.
 
 from motor_ai_sim.cadquery_geometry import CadQueryMotor
 from motor_ai_sim.simulation.geo_mesh import geo_mesh_halves

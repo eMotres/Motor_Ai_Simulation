@@ -17,7 +17,20 @@ Nothing here writes live data.  Each solve runs in its own child process with
   * `nice 19` (os.nice in the child), BLAS/OpenMP threads capped (default 6),
   * SB_NO_WARM_CACHE=1 (no shared warm-start cache).
 
-Server usage (Linux, tonight, one run after another, ~minutes per case):
+Since stage S2 (docs/MESHER_TRANSITION.md) the geometry mesher has a gmsh CDT
+backend next to Triangle, so ONE checkout with triangle installed runs both
+sides: omit --old-src/--old-python and each side's child gets
+MOTOR_AI_SIM_GEO_CDT=triangle|gmsh (the child refuses to run if the backend it
+resolves differs from its side):
+
+    python scripts/compare_mesher_triangle_vs_gmsh.py plan --new-src <tree>/src \
+        --new-python <venv>/bin/python --config <config copy> --dies <dies copy> \
+        --workdir <run dir> --threads 6
+
+The report adds element counts (parsed from the child log), solve wall time
+and peak RSS per side.
+
+Two-tree usage (stage S1, old code with triangle vs new code without it):
 
     # 1. two checkouts side by side (no stash, plain worktrees)
     git -C /opt/motres/app fetch origin
@@ -168,10 +181,14 @@ def run(spec_path, out_path):
     from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
 
     have_triangle = importlib.util.find_spec("triangle") is not None
-    if spec["mesher"] == "triangle" and not have_triangle:
-        raise SystemExit("the 'triangle' side needs the old code WITH triangle installed")
-    if spec["mesher"] == "gmsh" and have_triangle:
-        raise SystemExit("the 'gmsh' side must run without triangle installed")
+    try:     # S2 tree: one checkout, the CDT backend chosen per run
+        from motor_ai_sim.simulation.geo_mesh import cdt_backend
+        backend = cdt_backend()
+    except ImportError:   # S1 tree: gmsh only where triangle is absent
+        backend = "triangle" if have_triangle else "gmsh"
+    if spec["mesher"] != backend:
+        raise SystemExit(f"side {spec['mesher']!r} resolved to the {backend!r} "
+                         "backend (MOTOR_AI_SIM_GEO_CDT / triangle install)")
 
     n_par = int(wnd.get("n_parallel") or 1)
     I_term = float(duty["current_arms"])
@@ -220,9 +237,14 @@ def run(spec_path, out_path):
 
     nper = r.get("n_steps_per_period") or steps
     T = np.asarray(r.get("T_em_Nm") or [], float)
+    try:
+        import resource
+        maxrss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    except ImportError:          # Windows
+        maxrss_mb = None
     res = {
         "spec": spec, "module": motor_ai_sim.__file__, "have_triangle": have_triangle,
-        "wall_s": wall,
+        "backend": backend, "wall_s": wall, "maxrss_mb": maxrss_mb,
         "kwargs": {k: v for k, v in kw.items() if k != "geo_override"},
         "mesh_build_events": r.get("mesh_build_events"),
         "mesh_build_notes": r.get("mesh_build_notes"),
@@ -258,7 +280,12 @@ def plan(a):
         cases["L13"] = (a.l13_die, "L13", "rated")
     tags = a.cases.split(",") if a.cases else list(cases)
     prog = os.path.join(a.workdir, "progress.txt")
-    sides = (("triangle", a.old_src, a.old_python), ("gmsh", a.new_src, a.new_python))
+    # one tree (S2+): the same checkout and venv (with triangle installed),
+    # the CDT backend switched by MOTOR_AI_SIM_GEO_CDT; two trees (S1): old
+    # code with triangle vs new code without it.
+    old_src = a.old_src or a.new_src
+    old_py = a.old_python or a.new_python
+    sides = (("triangle", old_src, old_py), ("gmsh", a.new_src, a.new_python))
     for tag in tags:
         for noload in ((False,) if a.no_emf else (False, True)):
             for mesher, src, py in sides:
@@ -282,6 +309,7 @@ def plan(a):
                 env = dict(os.environ)
                 env.update({"PYTHONPATH": os.path.abspath(src),
                             "MOTOR_AI_SIM_CONFIG": os.path.join(cd, "motor_config.yaml"),
+                            "MOTOR_AI_SIM_GEO_CDT": mesher,
                             "SB_NO_WARM_CACHE": "1", "OMP_NUM_THREADS": thr,
                             "MKL_NUM_THREADS": thr, "OPENBLAS_NUM_THREADS": thr,
                             "NUMEXPR_MAX_THREADS": thr})
@@ -297,6 +325,20 @@ def plan(a):
                              f"wall={time.time() - t0:.0f}s\n")
     with open(prog, "a") as pf:
         pf.write(f"{time.strftime('%H:%M:%S')} PLAN DONE\n")
+
+
+def _elements(workdir, name):
+    """Stator + rotor triangles of the geometry-driven build, from the child's
+    log ("geo-driven halves|wedge ...: stator N tris, rotor M tris")."""
+    import re
+    try:
+        txt = open(os.path.join(workdir, name + ".err"), encoding="utf-8",
+                   errors="replace").read()
+    except OSError:
+        return None
+    m = re.search(r"geo-driven (?:halves|wedge[^:]*): stator (\d+) tris, "
+                  r"rotor (\d+) tris", txt)
+    return float(int(m.group(1)) + int(m.group(2))) if m else None
 
 
 def report(a):
@@ -327,6 +369,22 @@ def report(a):
                              f"{'' if vo is None else f'{vo:.4g}'} | "
                              f"{'' if vn is None else f'{vn:.4g}'} | "
                              f"{'' if d is None else f'{d:+.2f} %'} |")
+            for key, label, vo, vn in (
+                    ("elements", "elements stator+rotor",
+                     _elements(a.workdir, f"{tag}_{kind}_triangle"),
+                     _elements(a.workdir, f"{tag}_{kind}_gmsh")),
+                    ("wall_s", "solve wall time [s]", o.get("wall_s"), n.get("wall_s")),
+                    ("maxrss_mb", "peak RSS [MB]", o.get("maxrss_mb"), n.get("maxrss_mb"))):
+                if vo is None and vn is None:
+                    continue
+                d = (100.0 * (vn - vo) / abs(vo)
+                     if vo not in (None, 0) and vn is not None else None)
+                out.setdefault(tag, {})[f"{kind}_{key}"] = {
+                    "triangle": vo, "gmsh": vn, "delta_pct": d}
+                lines.append(f"| {tag} {kind} | {label} | "
+                             f"{'' if vo is None else f'{vo:.4g}'} | "
+                             f"{'' if vn is None else f'{vn:.4g}'} | "
+                             f"{'' if d is None else f'{d:+.1f} %'} |")
             out.setdefault(tag, {})[f"{kind}_mesh"] = {"triangle": o.get("mesh"),
                                                        "gmsh": n.get("mesh")}
             out[tag][f"{kind}_wall_s"] = {"triangle": o.get("wall_s"),
@@ -346,8 +404,11 @@ def main():
     r = sub.add_parser("run", help="(internal) one solve in this process")
     r.add_argument("spec"); r.add_argument("out")
     p = sub.add_parser("plan", help="run every case on both meshers")
-    p.add_argument("--old-src", required=True, help="src/ of a checkout WITH triangle")
-    p.add_argument("--old-python", required=True, help="python of the venv with triangle")
+    p.add_argument("--old-src", default="",
+                   help="src/ of a checkout WITH triangle (default: --new-src, "
+                        "backend switched by MOTOR_AI_SIM_GEO_CDT)")
+    p.add_argument("--old-python", default="",
+                   help="python of the venv with triangle (default: --new-python)")
     p.add_argument("--new-src", required=True, help="src/ of this branch")
     p.add_argument("--new-python", default=sys.executable)
     p.add_argument("--config", required=True, help="config/ to COPY per case (read only)")

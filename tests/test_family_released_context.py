@@ -5,8 +5,8 @@ it.  A single-key ``PUT /api/geometry`` (``num_poles_per_segment`` 7 → 8, from
 the Geometry table) had made the live machine a different lamination from the
 active die 'CIANO14 50 edited', the identity guard released the context, and
 the header strip offered only "press ▶ in Motors to load one" — which would
-have overwritten the optimised geometry.  Second time ("опять та же самая
-проблема — я всё оптимизировал, а сохранить не могу").
+have overwritten the optimised geometry.  Second time ("the same problem
+again — I optimised everything and can't save it").
 
 What is pinned here:
 
@@ -199,8 +199,8 @@ def test_context_with_no_record_at_all_is_plain(dies, live):
 
 
 # ── automatic die transition (owner's rule, 2026-09-20) ──────────────────────
-# «мы всю конфигурацию переводим в новый диаметр или новое количество полюсов
-# без всяких разрывов и сохраняем её» — a die-defining edit on the ACTIVE die
+# «we move the whole configuration to a new diameter or a new pole count
+# without any discontinuities and save it» — a die-defining edit on the ACTIVE die
 # no longer releases the context (the tests above pinned the PRIOR behaviour,
 # superseded the same day): it auto-transitions instead.
 

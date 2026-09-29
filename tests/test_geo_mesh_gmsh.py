@@ -283,7 +283,8 @@ def _conforming(V, T):
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("n_sectors", [1, 2])
 def test_moving_band_rings(machine, backend, n_sectors):
-    """R1/R2 (harmonic-macro rings) carry exactly the uniform slip grid on
+    """R1/R2 (harmonic-macro rings, mesh level only: the macro solve is not
+    implemented on P2, see below) carry exactly the uniform slip grid on
     BOTH backends: every grid angle k*2pi/1008 of the model span holds one
     node on the ring (the band-ring pinning fix; 1002/1008 before it), the
     nodes sit on the grid angles, and the halves stay conforming."""
@@ -308,43 +309,21 @@ def test_moving_band_rings(machine, backend, n_sectors):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("backend", BACKENDS)
-def test_moving_band_macro_solve(backend):
-    """End to end: the harmonic gap macro (moving band, R1/R2 coupled
-    analytically) solves on the geometry-driven mesh of each backend, with no
-    mesh fallback, and both backends agree on torque and voltage.  (Server
-    test: ~2-4 min per backend.)"""
+def test_moving_band_solve_is_refused_loudly():
+    """The R1/R2 rings serve the harmonic-macro (moving-band) gap, which the
+    P2 solver does NOT implement: a request must fail loudly before any
+    solve, never degrade silently.  (Server finding 2026-09-29: the planned
+    end-to-end macro solve raised this; the production sliding-band path is
+    the merged structured belt, solved end to end on both backends in the
+    saved-duty comparison.)"""
     from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
-    out = {}
-    for be in BACKENDS:
-        with _Backend(be):
-            r = em_transient_eval(n_steps_per_period=24, n_periods=1.0, gamma_deg=0.0,
-                                  I_phase_rms=10.0, rpm=3000.0, mesh_size_mm=1.0,
-                                  min_size_mm=0.3, outer_air_factor=1.2, gap_layers=1,
-                                  n_sectors=2, rotor_eddy=False, iron_template=True,
-                                  geo_mesh=True, structured_gap=True, airgap_macro=True,
-                                  geo_override=dict(G40), eddy=False)
-        assert not r.get("mesh_build_events"), r.get("mesh_build_events")
-        T = float(np.mean(r["T_avg_Nm"]))
-        assert math.isfinite(T) and abs(T) > 0
-        out[be] = (T, float(r["V_peak"]))
-    if len(out) == 2:
-        (t0, v0), (t1, v1) = out["triangle"], out["gmsh"]
-        assert t1 == pytest.approx(t0, rel=5e-3)
-        assert v1 == pytest.approx(v0, rel=5e-3)
-
-
-def test_mesh_budget_on_gmsh(machine, full):
-    try:
-        gm.set_tri_budget(500)
-        with pytest.raises(gm.MeshBudgetExceeded):
-            _halves(machine)
-        gm.set_tri_budget(10_000_000)          # armed, not reached: no change
-        again = _halves(machine)
-    finally:
-        gm.set_tri_budget(None)
-    for (V, T, _t), (V2, T2, _t2) in zip(full, again):
-        assert _hash(V, T) == _hash(V2, T2)
+    with pytest.raises(NotImplementedError, match="not implemented on P2"):
+        em_transient_eval(n_steps_per_period=24, n_periods=1.0, gamma_deg=0.0,
+                          I_phase_rms=10.0, rpm=3000.0, mesh_size_mm=1.0,
+                          min_size_mm=0.3, outer_air_factor=1.2, gap_layers=1,
+                          n_sectors=2, rotor_eddy=False, iron_template=True,
+                          geo_mesh=True, structured_gap=True, airgap_macro=True,
+                          geo_override=dict(G40), eddy=False)
 
 
 # ── skin (shaft) and sleeve layers, per backend, on a sleeved hollow shaft ───

@@ -124,26 +124,72 @@ the same geometry.
 
 **S3 — server comparison.** `scripts/compare_mesher_triangle_vs_gmsh.py` on
 L155 motor rated 1x9 mm, L180 gen rated 1x9 mm and L13 rated (loaded and
-no-load), sandboxed, `nice 19`, threads <= 6; usage in its docstring. Proposed
-acceptance criteria (gmsh vs Triangle, same duty and settings) — **for the
-owner to decide**:
+no-load), plus the optimizer-style campaign `scripts/mesher_campaign.py`;
+sandboxed, `nice 19`, threads <= 6. Results and evidence:
+`docs/MESHER_COMPARISON_2026-09-29.md`.
 
-| Quantity | Proposed limit |
-|---|---|
-| Mean torque (energy method) | <= 0.3 % |
-| No-load EMF fundamental | <= 0.3 % |
-| Torque ripple | <= 0.5 percentage points |
-| Cogging torque peak-to-peak | <= 10 % |
-| Copper and iron loss | <= 2 % each |
-| Magnet eddy loss | <= 3 % |
-| Shaft eddy loss | <= 5 % |
-| Sleeve eddy loss (where present) | <= 5 % |
-| Total loss | <= 2 % |
-| Repeat build | bit-identical mesh hash |
+### Acceptance rules (gmsh vs Triangle, same duty and settings)
 
-A case outside a limit sends the relevant feature back to S2 (a mesh
-convergence check on both meshers first, to separate a mesher bias from a
-discretisation error).
+Conditions under which the rules are stated: gmsh 4.15.2 (single thread),
+triangle 20250106, scikit-fem 12.0.1, pypardiso 0.4.7, solver threads 6,
+P2 merged structured belt, nonlinear residual <= 1e-7, eddy warm-up
+tolerance 2 % per period, the duty's own settings (steps, demag, magnet
+temperature, mesh block).
+
+**Field and loss quantities.** A quantity passes when
+|gmsh - Triangle| <= max(relative limit x |Triangle|, absolute floor).
+The floors keep near-zero quantities from failing on noise:
+
+| Quantity | Relative limit | Absolute floor |
+|---|---|---|
+| Mean torque (energy method) | 0.3 % | 0.05 % of the duty's rated torque |
+| No-load EMF fundamental | 0.3 % | 0.1 % of the rated phase voltage |
+| Torque ripple | 0.5 percentage points | — |
+| Cogging torque peak-to-peak | 10 % | 0.1 % of the rated torque |
+| Copper loss, iron loss (each) | 2 % | 0.1 % of the total loss |
+| Magnet eddy loss | 3 % | 0.1 % of the total loss |
+| Shaft eddy loss, sleeve eddy loss | 5 % | 0.1 % of the total loss |
+| Total loss | 2 % | — |
+| Electrical input power | 0.3 % | — |
+
+**Solver balance.** The field power-balance residual
+(`power_balance.residual_rel`) of the two meshers differs by <= 0.1
+percentage points of the input power. The residual itself (-2 to -4 % on
+these duties, post-processed iron loss sits outside the field balance) is a
+solver property and is not judged here.
+
+**Convergence of the reference.** A failed quantity is re-checked on a finer
+mesh on both meshers before a verdict. The mesh-size knob of the geometry
+mesher floors the cell area at 0.12 mm^2 (0.53 mm edge) and does not refine
+the slip grid, so levels are not geometric and Richardson extrapolation is
+not applied. The finest attainable level is the reference.
+
+**Mesh quality (per half, gmsh backend).** Minimum angle >= 1.5 degrees;
+aspect ratio (longest edge / (2 sqrt 3 inradius)) p99.9 <= 30. Campaign
+worst: 2.05 degrees, 22.7.
+
+**Resources.** Median over the runs: solve wall <= 1.25x Triangle and peak
+RSS <= 1.35x Triangle; any single run <= 2x on both, and <= 2 GB RSS.
+
+**Reproducibility.** In one environment (same gmsh build, one gmsh thread):
+the mesh is bit-identical (`test_repeat_build_is_bit_identical`), and a solve
+on an identical mesh repeats to <= 1e-4 relative (measured 5e-12 to 7.8e-5:
+the eddy warm-up with extensions is the source). Across gmsh releases or
+platforms bit identity is NOT required. Compatibility is the semantic
+fingerprint (`test_semantic_fingerprint`): triangle counts within 5 %,
+gap-ring node counts exact, every tag's area within 0.1 %, quality no worse
+than 1.3x the gmsh 4.15.2 reference. A solve records the gmsh version in its
+mesh-build notes (`geo_mesh.cdt_provenance`); production pins gmsh in
+`requirements.txt`.
+
+**Fail closed.** A selected backend that cannot load raises with the install
+command and the Triangle alternative. A gmsh meshing failure raises
+`GmshCDTError` after finalizing gmsh and releasing the process lock. The
+budget preflight rejects a cross-section before gmsh runs, and the built
+count is checked after. No path answers a gmsh failure with a different
+mesher (not the whole-wedge build, not the plain gmsh build). Operators see
+the error in the solve response and the log; the remedy is to fix the
+geometry or, where licensed, select Triangle explicitly.
 
 **S4 — switch the default to gmsh.** After S3 passes: a geo-mesh request goes
 to gmsh even with `triangle` installed; Triangle remains selectable for one

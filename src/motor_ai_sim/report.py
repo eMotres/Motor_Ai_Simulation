@@ -12085,7 +12085,7 @@ def _cooling_words(cooling: Dict[str, Any]) -> List[str]:
                         _fmt(rep.get("h_conv"), 1), _fmt(rep.get("h_rad"), 1),
                         eps, _fmt(rep.get("h_total"), 1, "W/m²K")))
         if mode.startswith("liq"):
-            # No h on a jacket line (user 2026-09-11: "а зачем он нужен?"):
+            # No h on a jacket line (user 2026-09-11: "why is it even needed?"):
             # the wall is PINNED at the outlet temperature, and the 1e5 that
             # imposes that is a device, not a property of the cooling.
             return ("%s: %s jacket, in %s -> out %s at %s; wall held at the "
@@ -12625,7 +12625,7 @@ def thermal_budget_rows(res: Dict[str, Any],
         if budget.get(k) is not None:
             brows.append([label, _fmt(budget.get(k), 2)])
     # THE ROTOR's own balance: the two ways its heat leaves this cross-section
-    # (user 2026-09-10 — "через зазор и через вал").  Every watt made inside the
+    # (user 2026-09-10 — "through the gap and through the shaft").  Every watt made inside the
     # slip radius goes one way or the other, so the shares are the cooling
     # design: a rotor that has to be cooled through the shaft wants the second
     # number to be the big one.
@@ -12654,7 +12654,7 @@ def thermal_budget_rows(res: Dict[str, Any],
                               sp.get("axial_end_faces_pct"))])
         # No "rotor balance closes to" row: it is the residual of the three
         # rows above (a fraction of a watt when the split is sound) and the
-        # reader does not audit it — user 2026-09-11, "выкинь".
+        # reader does not audit it — user 2026-09-11, "throw it out".
     # ── …AND THE STATOR's (2026-09-14) ──────────────────────────────────────
     # The mirror of the block above, and on a joint in still air it is THE
     # question: the housing hands the room ~3 W of 64 and the BOLTS take the
@@ -14317,8 +14317,8 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
         out.append(Spacer(1, 4))
         out.append(_pair_blk)
     elif img is not None:
-        # Full width, caption under it (user 2026-09-08: "рисунки на всю
-        # ширину страницы, а то ничего не видно").
+        # Full width, caption under it (user 2026-09-08: "pictures at full
+        # page width, otherwise nothing is visible").
         from reportlab.platypus import KeepTogether
         out.append(Spacer(1, 4))
         out.append(budget_t)

@@ -14,6 +14,7 @@ Base: `motor_ai_sim`, branch `origin/pre-migration-freeze-2026-09-15` (productio
 | Roadmap | New stages M8–M12 placed after the core restructure (M0–M3) and the data model (M4–M7). |
 | Physical port contract (update 2026-09-29) | New section 2.7 per the Codex review (point 6, owner agreed): acausal across/through ports, **positive = into the module** (D2 restated), SI with K and m at the boundary (D3 restated), per-module energy balance with explicit storage states, PWM fidelity levels, coolant stream semantics, consistency checks with tolerances, worked battery–controller–motor–load example, two separate validation tracks (D11 restated, D57–D61). |
 | Priority order (update 2026-09-29) | Roadmap reordered per the review: publication fix → data loading and versions → motor + controller in contracts → verify old results → simple battery–controller–motor–load system; orders, NDA and missions later (D37 restated, D62). |
+| Open standards (update 2026-09-29) | New section 10B per the owner principle "be compatible with open standards": every interface mapped to an open standard with import/export, roadmap stage, conformance test and what is not adopted (D63–D69). |
 
 ## Goal
 
@@ -1050,6 +1051,110 @@ Export-controlled technical data (see 10A.4) is a **flag** on top of the class (
 
 ---
 
+## 10B. Open standards
+
+Owner principle (2026-09-29): **the portal must be compatible with open standards.** Every interface where data leaves or enters the portal maps to a published standard; our own formats (`machine/1.x`, the port contract of 2.7, card schemas) are profiles of such a standard or are exported to one. Status legend: **Adopted** = in use now or a fixed convention; **Planned Mx / step n** = enters with that roadmap stage (11.3); **Not adopted** = considered and deliberately left out, with the reason.
+
+### 10B.1 Principles
+
+1. **Open on the boundary, free inside.** Internal storage may stay our own JSON/tables; everything crossing an org boundary, an API or a file download has an open-standard form.
+2. **Import is wider than export.** We export only formats we pass a conformance test for (10B.9); the rest is "import, best effort".
+3. **Our contract is the source of truth; the standard is the wire.** The port contract (2.7) uses Modelica connector semantics and is exported as FMI/SSP; it is not redefined by them.
+4. **Freely implementable wire formats.** Paywalled ISO/IEC documents are followed as conventions; the machine-readable formats we require must be implementable without licence fees.
+
+### 10B.2 Models and co-simulation
+
+| Interface | Standard | Import / export | Status | Notes |
+|---|---|---|---|---|
+| Physical port semantics | Modelica connector semantics (across/through, flow sum = 0, `stream` for coolant enthalpy) | internal contract | **Adopted** (2.7, D57–D60) | Semantics only, no Modelica compiler in the portal |
+| Reduced models of our modules (motor L0 maps, controller loss/T_j model, thermal RC networks) | **FMI 3.0** | **export** FMU | **Planned step 3b** (motor L0 map FMU may come right after P5) | **Model exchange** for smooth ODE models (thermal networks, L0 maps): the importer's solver integrates them. **Co-simulation** for models with their own stepping or internal state (PWM, FEM-backed, state machines) |
+| Third-party models (flight controller, gearbox, battery, vehicle) | **FMI 3.0** (FMI 2.0 accepted) | **import** FMU into the isolated executor (5.2, 5.3) | **Planned step 3b / 4.7** | Binary FMUs run only in the sandbox |
+| System graph and parameter sets | **SSP 2.0** (SSD structure, SSV parameter values, SSM mappings) | import + export | **Planned step 2** (first export: the P5 battery–controller–motor–load system) | `.ssp` archive carries the FMUs; SSV = parameter set of a configuration/duty |
+| Embedded controller code from models | eFMI | — | **Considered, not adopted now** | Revisit only if the controller module generates target code |
+| Model source | Modelica `.mo` | — | **Not adopted** | Needs a Modelica tool chain; FMI/SSP cover exchange |
+
+### 10B.3 Geometry and drawings
+
+| Interface | Standard | Import / export | Status | Notes |
+|---|---|---|---|---|
+| 3-D parts and assemblies with PMI | **STEP AP242** (ISO 10303-242) | import + export | Import **planned "Geometry, further"**; export **planned M9b** (laminations, packs) | AP203/AP214 accepted on import; semantic PMI where the generator knows tolerances |
+| Laminations and 2-D profiles | **DXF** (ASCII, R2013+) | export + import | Export **adopted** (lamination DXF); import **planned 1A** | Units and layer convention published with the export |
+| Drawings | **ISO 128** (presentation), **ISO 129-1** (dimensioning), **ISO 1101** (GD&T), **ISO 2768** (general tolerances); PDF/A for archive | export PDF + DXF | **Planned M9** (7.6 options per org) | ASME Y14.5 as an org option |
+| 3-D viewer | **glTF 2.0** (`.glb`) | export (server tessellation) | **Planned M9b** | Display only, never the manufacturing master |
+| JT, IGES | ISO 14306, IGES | import only | **Considered, import on demand** | Not exported: legacy / weak open tooling |
+| Native CAD | Fusion Parameter I/O CSV | both | **Kept as convenience** | STEP is the exchange of record |
+
+### 10B.4 Component data and catalogs
+
+| Interface | Standard | Import / export | Status | Notes |
+|---|---|---|---|---|
+| Catalog field definitions (magnet, steel, wire, semiconductor, bearing…) | **IEC 61360 / IEC CDD**, **ECLASS** IRDIs | each card field carries an optional `irdi` | **Planned M4** (data model) | Meaning, unit, datatype from the dictionary; own fields allowed but marked |
+| Product and component data with suppliers and customers | **Asset Administration Shell** (IEC 63278-1, IDTA): **Digital Nameplate**, **Technical Data**, **Carbon Footprint** submodels; AASX + AAS REST API | import (supplier components) + export (released products) | **Planned M10 (import) / M12 (export)** | Motor datasheet → Technical Data submodel with IEC CDD properties; serial data per product |
+| Motor ratings | **IEC 60034-1** (ratings, duties S1–S10), **60034-2-1** (efficiency), **60034-30-1** (classes) | datasheet convention | **Adopted** as convention | We say "simulated, duty S3 per 60034-1", never "rated" without a test |
+| Magnetic materials | **IEC 60404** (-8-1 magnets, -8-4/-8-7 electrical steel) | card convention | **Adopted** as convention | Measurement standard recorded in provenance |
+| Semiconductors | **IEC 60747 / 60749**, **JEDEC** (JESD51 thermal) | card convention | **Adopted where applicable** (Controller device cards) | R_th per JESD51 |
+
+### 10B.5 Units, data and APIs
+
+| Interface | Standard | Status | Notes |
+|---|---|---|---|
+| Units | **SI** (2.7.1); **UCUM** codes in every API field that carries a unit | SI **adopted**; UCUM **planned M0** | K at the port boundary (D3) |
+| Payload contracts | **JSON Schema 2020-12** for cards, manifests, ports, results | **Planned M0** | Versioned with card kinds and `machine/1.x` |
+| REST API | **OpenAPI 3.1**, generated and published per release | **Planned P2/M0** | Linted and diffed in CI |
+| Agent tools | **MCP** | **Adopted** (9.2) | Tool input schemas = the same JSON Schemas |
+| Results | **CSV** (small tables), **Parquet** (maps, sweeps), **HDF5** (fields, waveforms, meshes) | **Planned M5–M7** | Internal pickles never leave the server |
+| Provenance | **W3C PROV** concepts (Entity / Activity / Agent), PROV-JSON export | Model **planned M0**, export later | Result = Entity, solve = Activity, user/agent/module = Agent |
+| Time, ids | ISO 8601 / RFC 3339 (UTC), UUID | **Adopted** | — |
+
+### 10B.6 Identity, security, licences
+
+| Interface | Standard | Status | Notes |
+|---|---|---|---|
+| Login and API auth | **OpenID Connect**, **OAuth 2.1** (authorization code + PKCE) | OIDC **adopted** (Google); OAuth 2.1 for the public API **planned M4** | The portal stores no passwords |
+| Service to service | mTLS, TLS 1.3 | **Planned 3c** | — |
+| Licences | **SPDX licence identifiers** in manifests and file headers | **Planned M0** | `AGPL-3.0-or-later`; vendor modules declare theirs (5.1) |
+| SBOM | **CycloneDX** (primary) or SPDX SBOM per release, portal and every module image | **Planned P2** | Generated in CI, stored with the release |
+| Signatures on NDAs and approvals | **eIDAS** (simple/advanced; qualified only on request), PAdES signed PDFs | **Planned M8** (6.5A) | Legal effect is the parties' responsibility |
+
+### 10B.7 Manufacturing and ERP exchange
+
+| Interface | Standard | Status | Notes |
+|---|---|---|---|
+| RFQ, quote, order, despatch documents | **UBL 2.x** document types; **Peppol BIS** only where a counterparty requires it | **Planned M10–M11** | Document exchange only; the portal stays non-commercial, invoicing stays in `motres_erp` |
+| BOM | STEP AP242 assembly structure + CSV | **Planned M9** | — |
+| Inspection plans and results | **QIF 3.0** (ISO 23952) | **Optional, M9b** | Measured vs nominal feeds the passport |
+
+### 10B.8 Messaging and IoT (test benches, later)
+
+| Interface | Standard | Status | Notes |
+|---|---|---|---|
+| Live bench data | **OPC UA** and **MQTT 5** (Sparkplug B payloads) | **Planned M11 / Later** | Import only, mapped to the port variables of 2.7.3 to compare simulated vs measured; the portal never commands a bench |
+| Offline bench data | CSV / Parquet / HDF5 with UCUM units; ASAM MDF4 on import | **Planned M11** | — |
+
+### 10B.9 Conformance tests (CI, per release)
+
+| Standard | Test |
+|---|---|
+| FMI 3.0 export | `fmpy validate` + simulation in fmpy; modelDescription against the FMI XSD; results in FMI Cross-Check layout |
+| FMI import | Modelica Association Reference-FMUs run in the executor |
+| SSP 2.0 | SSD/SSV against the SSP XSDs; export → import round trip gives the identical system graph |
+| STEP AP242 | Re-import (OCCT) with identical volume and mass; syntax check; PMI checked where emitted |
+| DXF | Re-import (ezdxf): closed contours, units flag, area = solved region area |
+| glTF | Khronos glTF-Validator, zero errors |
+| AAS | AASX validated (aas-core / Eclipse BaSyx); submodels against IDTA templates |
+| JSON Schema, OpenAPI | Golden examples validate; OpenAPI linted (Spectral) and diffed for breaking changes |
+| UCUM | Every unit string parses with a UCUM library |
+| SBOM | CycloneDX / SPDX validators |
+| UBL, QIF | XSD validation of exported documents |
+
+### 10B.10 Deliberately not adopted (now)
+
+- **Modelica source exchange / in-portal compiler**: FMI + SSP cover exchange at a fraction of the cost.
+- **eFMI**: only if the controller module ever generates embedded code.
+- **JT / IGES export**: legacy or weak open tooling; STEP AP242 suffices.
+- **Peppol e-invoicing, payments**: the portal is non-commercial; commercial documents stay in `motres_erp`.
+- **Native CAD formats as exchange of record**: Fusion CSV remains a convenience.
+
 ## 11. Risks, decisions, roadmap
 
 ### 11.1 Risks
@@ -1146,6 +1251,13 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D60 | Consistency checks | Units, node conservation, module and system energy residuals, all-quantity convergence, map domain, trial/commit state, **on every system solve**, tolerances as in 2.7.8, stored in provenance |
 | D61 | Validation tracks | **Adapters = bit-identical; numerical changes (triangle → gmsh) = justified tolerances + convergence study**; never in one PR (2.7.9) |
 | D62 | Order of work | **Publication fix → data loading and versions → motor + controller in contracts → verify old results → battery–controller–motor–load system**; orders, NDA and missions later (11.3) |
+| D63 | Module and system exchange format | **FMI 3.0 for modules (export our motor/controller/thermal reduced models, import third-party FMUs in the sandbox) + SSP 2.0 for the system graph and parameter sets**; Modelica connector semantics stay the internal contract (10B.2) |
+| D64 | Product and component data | **Asset Administration Shell** (Nameplate, Technical Data, Carbon Footprint) with **IEC CDD / ECLASS** property IRDIs on catalog fields (10B.4) |
+| D65 | API contract | **JSON Schema 2020-12 for every payload + OpenAPI 3.1 for the REST API + UCUM units**; MCP tools reuse the same schemas; breaking changes caught in CI (10B.5) |
+| D66 | Geometry exchange | **STEP AP242 is the exchange of record**, DXF for laminations, glTF for viewing only, drawings to ISO 128/129/1101/2768; JT/IGES import only (10B.3) |
+| D67 | Supply chain and identity | **SPDX licence ids + CycloneDX (or SPDX) SBOM per release**; OIDC/OAuth 2.1; eIDAS/PAdES for signatures (10B.6) |
+| D68 | Commercial and bench data | UBL for RFQ/order documents only (non-commercial portal, no Peppol invoicing); QIF optional; OPC UA / MQTT import only for measured-vs-simulated (10B.7–10B.8) |
+| D69 | Conformance | **No export format ships without its conformance test in CI** (fmpy/FMI XSD, SSP XSD, STEP re-import, glTF-Validator, AAS validator, OpenAPI lint) (10B.9) |
 
 ### 11.3 Roadmap (rough, weeks of one engineering agent + owner review)
 

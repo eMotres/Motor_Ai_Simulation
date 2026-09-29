@@ -693,6 +693,28 @@ def carriers_per_period(f_switch_hz: float, f_elec_hz: float) -> int:
     return max(1, int(round(float(f_switch_hz) / float(f_elec_hz))))
 
 
+def symmetric_carriers_per_period(f_switch_hz: float, f_elec_hz: float) -> int:
+    """The nearest ODD MULTIPLE OF 3 carriers per electrical period (>= 3).
+
+    Synchronous PWM with a carrier ratio N that is an odd multiple of three
+    has half-wave AND three-phase symmetry: every leg sees the same pulse
+    pattern shifted by exactly T/3, and the second half-period mirrors the
+    first.  Any other N (the plain snap gives 14 on the L180 gen at 24 kHz /
+    1741.67 Hz) breaks the half-wave symmetry, and a bridge with DEAD TIME —
+    whose error is a sign of the sampled current — then applies a small net
+    volt-second per period that the orbit carries as a REAL DC current:
+    ~0.25 V of mean line voltage on a 12.7 mΩ branch is ~20 A (measured on
+    the server 2026-09-29: 21.6 A left after the DC-orbit solve converged;
+    the same synthetic machine settles to 0.0 A at N = 15).  Real high-speed
+    drives use exactly this synchronous ratio at low pulse numbers.  Ties go
+    to the higher N.
+    """
+    n = carriers_per_period(f_switch_hz, f_elec_hz)
+    r = float(f_switch_hz) / float(f_elec_hz)
+    cands = [k for k in range(3, 6 * n + 12, 6)]
+    return int(min(cands, key=lambda k: (abs(k - r), -k)))
+
+
 def build_pwm_source(*, pole_pairs: int, daxis_deg: float, v_phase_peak: float,
                      v_delta_deg: float, v_bus: float, f_switch_hz: float,
                      f_elec_hz: float, v_bus_real: float = 0.0,

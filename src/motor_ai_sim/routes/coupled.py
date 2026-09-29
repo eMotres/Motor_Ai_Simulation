@@ -786,6 +786,25 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
     v_dc, v_dc_src = _num("v_dc_V", _vd["V"], "a DC link voltage",
                           fallback_src=_vd["source"])
     f_el = float(rpm) * _pole_pairs(body) / 60.0
+    # THE CONTROLLER'S BRIDGE RUNS SYMMETRIC SYNCHRONOUS PWM (2026-09-29).
+    # With dead time in the bridge, a carrier ratio that is not an odd
+    # multiple of 3 leaves a real DC on the orbit (L180 gen: 14 carriers ->
+    # 21.6 A, refused; pwm.symmetric_carriers_per_period).  The carrier is
+    # moved to the nearest such ratio and the run SAYS so — the device losses
+    # are then computed at the carrier actually switched.
+    f_c_requested = float(f_c)
+    carrier_sync = None
+    if _coupled_drive(body) == "inverter" and f_el > 0.0:
+        from motor_ai_sim.simulation.pwm import (
+            symmetric_carriers_per_period as _sym_nc)
+        _nsym = _sym_nc(f_c, f_el)
+        f_c = float(_nsym) * f_el
+        carrier_sync = (
+            "symmetric synchronous PWM: %d carriers per electrical period "
+            "(an odd multiple of 3) -> %.1f Hz switched, asked %.1f Hz "
+            "(ratio %.2f).  A non-symmetric ratio with dead time leaves a "
+            "real DC current on the orbit."
+            % (_nsym, f_c, f_c_requested, f_c_requested / f_el))
     steps, steps_src = _num("n_steps_per_period",
                             _pwm_steps_per_period(f_c, f_el),
                             "a frame count")
@@ -902,6 +921,8 @@ def _inverter_settings(body: Dict[str, Any], *, rpm: float) -> Dict[str, Any]:
         # the caller asked for, kept even after the regulator has moved it.
         "v_phase_peak_seed_V": float(v1),
         "f_carrier_hz": f_c, "v_dc_V": v_dc,
+        "f_carrier_requested_hz": f_c_requested,
+        **({"carrier_sync": carrier_sync} if carrier_sync else {}),
         "n_steps_per_period": int(steps), "schedule": sched,
         "v_phase_peak_V": float(v1), "v_delta_deg": float(dl),
         "f_elec_hz": round(f_el, 4),

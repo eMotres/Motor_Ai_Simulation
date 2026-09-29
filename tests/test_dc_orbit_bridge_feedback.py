@@ -129,3 +129,31 @@ def test_feedback_gain_of_a_pure_resistance(sd, factor):
     r = 2e-3
     G = feedback_gain_ll({'A': -r, 'B': -r, 'C': -r}, star_delta=sd)
     np.testing.assert_allclose(G, -factor * r * _S, atol=1e-15)
+
+
+def test_symmetric_carrier_ratio_rule():
+    from motor_ai_sim.simulation.pwm import symmetric_carriers_per_period as f
+    assert f(24000.0, _F) == 15          # L180 gen: 13.78 -> 15, not 14
+    assert f(24000.0, 1000.0) == 27      # tie 21/27 -> the higher
+    assert all(f(fs, _F) % 6 == 3 for fs in (5e3, 12e3, 24e3, 48e3))
+
+
+def _march_at(fsw, ang_deg, nspp):
+    """The same march at another carrier and load angle."""
+    import inspect
+    i = 490.0 * np.exp(1j * math.radians(ang_deg))
+    v = 1j * 2 * math.pi * _F * _PSI + (_R + 1j * 2 * math.pi * _F * _L) * i
+    g = dict(globals(), _case=lambda: (i, v), _NSPP=nspp)
+    ns = {}
+    exec(inspect.getsource(_march).replace("f_switch_hz=24000.0",
+                                           "f_switch_hz=%r" % fsw), g, ns)
+    return ns["_march"](_WCMS, use_gain=True, n_settle=24)[0]
+
+
+def test_even_carrier_ratio_with_dead_time_carries_a_real_dc():
+    """14 carriers (no half-wave symmetry) + dead time: the CONVERGED orbit
+    has ~20 A of DC (the server's 21.6 A); 15 carriers: none."""
+    d14 = _march_at(24000.0, 140.0, 280)
+    d15 = _march_at(15 * _F, 140.0, 300)
+    assert abs(d14[-1]) > 5.0 and abs(d14[-1] - d14[-2]) < 0.1, d14[-4:]
+    assert abs(d15[-1]) < 0.5, d15[-4:]

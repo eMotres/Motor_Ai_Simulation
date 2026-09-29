@@ -1,8 +1,8 @@
 """drive = "inverter": the loop on the SINE, the controller's PWM once
-(owner 2026-09-25: «каплинг делается только с синусоидой, а последний прогон —
-с PWM из контроллера»), the sine-vs-inverter columns it yields for free, and
-the reuse of an already converged sine state («если уже есть каплинг с синусом —
-просто запускается расчёт с PWM из контроллера»).
+(owner 2026-09-25: «coupling is done with the sine only, and the final pass —
+with PWM from the controller»), the sine-vs-inverter columns it yields for free, and
+the reuse of an already converged sine state («if there's already a coupling run with sine —
+just run the PWM pass from the controller»).
 
 Faked as ``test_coupled_sine_comparison.rig`` fakes the loop: the sine map puts
 the winding at 400 °C, the PWM's own map at 420 °C, so the first PWM pass

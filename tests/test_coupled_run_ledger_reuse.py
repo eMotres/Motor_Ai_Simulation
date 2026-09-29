@@ -1,7 +1,7 @@
 """The coupled loop's EM passes and the Simulation tab's Run must share ONE
-ledger key for the same operating point — owner, 2026-09-22: *"я не совсем
-понимаю, зачем он ещё пересчитывает электромагнитный расчёт, если во время
-каплинга он уже считал его и нашёл эту точку?"*.
+ledger key for the same operating point — owner, 2026-09-22: *"I don't quite
+understand why it recomputes the electromagnetic solve again, if during the
+coupling run it already computed it and found this point?"*.
 
 After a coupled run (any of the three ``solve_to`` answers — ``steady``,
 ``limits``, ``continuous``) auto-sets the Simulation tab's coil / magnet

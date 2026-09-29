@@ -1,7 +1,7 @@
 """``POST /api/coupled/run`` — the persistent "don't recompute this" layer.
 
-Owner, first sentence of the 2026-09-22 ask: *"если я запускаю те же параметры
-каплинга, он не считается, а подгружает уже рассчитанный вариант"*.  This
+Owner, first sentence of the 2026-09-22 ask: *"if I run the same coupling
+parameters, it doesn't recompute, it loads the already-computed variant"*.  This
 exercises the wiring added in ``routes/coupled.py`` (``_COUPLED_HISTORY`` /
 ``_coupled_history_key`` / ``_load_coupled_history_entry``) with the two heavy
 halves (``_em_run``, ``_thermal_solve``) faked — the template

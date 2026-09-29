@@ -115,7 +115,7 @@ def test_the_run_point_and_the_caller_reach_the_hook(monkeypatch):
 
 def test_single_mode_solves_the_run_s_speed_not_the_proof_box(monkeypatch):
     """User 2026-09-09 morning: the coupled step had solved the 13 000 rpm L12
-    at the Ø200's 23 000 proof speed — "обороты должны быть правильными"."""
+    at the Ø200's 23 000 proof speed — "the rpm must be correct"."""
     store: dict = {}
     from motor_ai_sim.routes import mechanical as mech
     monkeypatch.setattr(mech, "run_rotor_stress_at", _fake_hook(store))
@@ -168,8 +168,8 @@ def test_the_shaft_torque_is_the_tab_s_number_not_the_2d_mean():
 
 
 def test_the_map_s_temperatures_go_through_and_a_sleeveless_block_says_they_are_no_load(monkeypatch):
-    """User 2026-09-09: "нам нужно учитывать температуру только как изменение
-    давления на бандаж, если он есть".  The rule lives in the SOLVER
+    """User 2026-09-09: "we only need to account for temperature as a change
+    of pressure on the sleeve, if there is one".  The rule lives in the SOLVER
     (``solve_rotor_stress(thermal_model="band_fit")``, tests/test_mechanical_
     part_temps.py): this step passes the map's own numbers per part, exactly
     as the Thermal tab reported them, and on a machine with no band the block

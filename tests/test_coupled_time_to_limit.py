@@ -381,8 +381,8 @@ def test_the_block_survives_compact_coupled_into_the_duty_record():
 # ---------------------------------------------------------------------------
 # (d) THE MACHINE AT THE CROSSING — the "limited" mode's raw material
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-18: *«состояние мотора в работе 24 секунды при заданной
-# мощности»*.  The time alone was the 2026-09-17 answer; what the loop now
+# Owner, 2026-09-18: *«the state of the motor running for 24 seconds at the
+# given power»*.  The time alone was the 2026-09-17 answer; what the loop now
 # reports is the STATE at that instant, so the step response has to hand back
 # every node at the crossing and not just when it happened.
 

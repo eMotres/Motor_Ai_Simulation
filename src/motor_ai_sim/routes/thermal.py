@@ -5576,9 +5576,10 @@ def solve_thermal_field(
     # ── WHERE THE ROTOR'S HEAT GOES: out through the gap, or in through the
     #    shaft (2026-09-10) ───────────────────────────────────────────────────
     #
-    # User: *"в термоанализе ещё нужно считать два числа: сколько тепла от
-    # ротора уходит через внешний диаметр, а сколько через внутренний"*, and
-    # then plainly: *"то есть через зазор и через вал"*.
+    # User: *"in the thermal analysis we also need to compute two numbers:
+    # how much heat leaves the rotor through the outer diameter, and how
+    # much through the inner"*, and then plainly: *"that is, through the gap
+    # and through the shaft"*.
     #
     # Every watt made inside the slip radius has exactly three ways out of this
     # cross-section — across the gap into the stator, off the bore surface into
@@ -5597,8 +5598,8 @@ def solve_thermal_field(
         return (round(100.0 * w / _rotor_w, 1) if abs(_rotor_w) > 1e-9
                 else None)
 
-    # TWO NUMBERS, both of them 2-D (user 2026-09-10: "делай только в двумерном
-    # варианте пока").  The gap and the bore are surface integrals on the SAME
+    # TWO NUMBERS, both of them 2-D (user 2026-09-10: "just do it in the 2-D
+    # version for now").  The gap and the bore are surface integrals on the SAME
     # solved cross-section — one is the outer diameter, the other the inner —
     # so they are directly comparable and the pair is the answer.  The shaft
     # stubs are an AXIAL path bolted onto a plane model, a lumped conductance

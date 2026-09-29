@@ -516,7 +516,7 @@ Stage 3 (scopes designs:write + simulate) — design a motor for the engineer:
   status 'needs_input', ASK THE ENGINEER each listed field (why + options are
   written for him), then call again.  'no_fit' says which limit blocks it.
 - simulate(design_id, what=em|thermal|coupled, steps?) -> job_id (queued on the
-  user's own queue; daily quota)
+  user's own queue; daily fair-use limit)
 - get_job(job_id) — state, position, progress, ETA, error
 - get_design_result(design_id) — torque, power, shaft efficiency, losses,
   temperatures, limits, mass; requirement checks

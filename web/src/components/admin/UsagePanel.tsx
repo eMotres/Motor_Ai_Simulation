@@ -5,7 +5,6 @@ import {
   ToggleButton, ToggleButtonGroup, TextField,
 } from '@mui/material';
 import HelpTip from '../common/HelpTip';
-import PricingData from './PricingData';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
@@ -130,7 +129,6 @@ const UsagePanel: React.FC = () => {
           </Table>
         </Box>
       )}
-      <PricingData />
     </Paper>
   );
 };

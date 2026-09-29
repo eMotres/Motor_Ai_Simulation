@@ -260,10 +260,10 @@ def test_stock_route_serves_the_table(client, tmp_path, monkeypatch):
 
 
 def test_stock_route_is_not_gated(client):
-    """Same tier as GET /api/materials: no entry in auth's tier tables — open
+    """Same role as GET /api/materials: no entry in auth's role tables — open
     to an anonymous caller, since it is a reference table, not compute."""
-    from motor_ai_sim.auth import required_tier
-    assert required_tier("GET", "/api/wires/stock") is None
+    from motor_ai_sim.auth import required_role
+    assert required_role("GET", "/api/wires/stock") is None
 
 
 def test_real_config_wire_stock_yaml_is_valid():

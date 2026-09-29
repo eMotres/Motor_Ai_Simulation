@@ -478,10 +478,10 @@ def test_zero_rpm_is_rejected_with_the_field_named(client):
     assert r.json()["detail"]["invalid_parameters"][0]["field"] == "rpm"
 
 
-def test_both_modal_routes_are_tier_gated(client):
+def test_both_modal_routes_are_role_gated(client):
     """They are the same class of compute as the field solves, so they ride the
-    same tier — an entry missing from `_GATED` is a free eigensolve."""
+    same role — an entry missing from `_GATED` is an open eigensolve."""
     from motor_ai_sim.auth import _GATED
 
-    assert _GATED[("GET", "/api/mechanical/modes")] == "pro"
-    assert _GATED[("GET", "/api/mechanical/critical_speeds")] == "pro"
+    assert _GATED[("GET", "/api/mechanical/modes")] == "user"
+    assert _GATED[("GET", "/api/mechanical/critical_speeds")] == "user"

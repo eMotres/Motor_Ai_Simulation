@@ -7,7 +7,7 @@ credentials, so the SDK is unavailable and the endpoints serve a small MOCK
 dataset flagged `source: "mock"`, letting the admin UI be built and exercised
 without production access.
 
-Every route requires tier == admin (require_admin). When AUTH_ENFORCE is off
+Every route requires role == admin (require_admin). When AUTH_ENFORCE is off
 (local dev) the gate is open and the caller is treated as admin.
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from motor_ai_sim.auth import require_admin, require_admin_or_token
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-_VALID_TIERS = ("free", "pro", "team", "admin")
+_VALID_ROLES = ("user", "admin")
 _DAY_MS = 86_400_000.0
 
 
@@ -51,16 +51,16 @@ def _ensure_admin():
     return _admin_mod
 
 
-def _tier_of(user_record) -> str:
-    """Mirror auth._tier_for for an Admin-SDK UserRecord: ADMIN_EMAILS wins,
-    then a 'tier' custom claim, else 'free'."""
-    from motor_ai_sim.auth import _ADMIN_EMAILS, _TIER_RANK
+def _role_of(user_record) -> str:
+    """Mirror auth._role_for for an Admin-SDK UserRecord: ADMIN_EMAILS wins,
+    then a 'role' custom claim, else 'user'."""
+    from motor_ai_sim.auth import _ADMIN_EMAILS, _ROLE_RANK
     email = (user_record.email or "").strip().lower()
     if email and email in _ADMIN_EMAILS:
         return "admin"
     claims = user_record.custom_claims or {}
-    t = claims.get("tier")
-    return t if t in _TIER_RANK else "free"
+    r = claims.get("role")
+    return r if r in _ROLE_RANK else "user"
 
 
 def _real_users(admin) -> list[dict]:
@@ -75,7 +75,7 @@ def _real_users(admin) -> list[dict]:
             "createdAt": md.creation_timestamp if md else None,        # ms epoch
             "lastLoginAt": md.last_sign_in_timestamp if md else None,  # ms epoch
             "disabled": bool(u.disabled),
-            "tier": _tier_of(u),
+            "role": _role_of(u),
         })
     return out
 
@@ -102,27 +102,27 @@ def _mock_users() -> list[dict]:
     """Deterministic demo users (timestamps relative to now, so 'active' and the
     signup timeline look live). Served only when the Admin SDK is unavailable."""
     now = time.time() * 1000
-    # (email, tier, created_days_ago, last_login_days_ago|None, designs, disabled)
+    # (email, role, created_days_ago, last_login_days_ago|None, designs, disabled)
     rows = [
         ("vadim.owner@example.com", "admin", 240, 0, 14, False),
         ("eng.lead@example.com",    "admin", 220, 2, 9, False),
-        ("alice.pro@example.com",   "pro",   180, 1, 11, False),
-        ("bob.design@example.com",  "pro",   150, 3, 6, False),
-        ("carla.team@example.com",  "team",  140, 0, 22, False),
-        ("dmitri.team@example.com", "team",  120, 5, 17, False),
-        ("erin.free@example.com",   "free",  95, 4, 3, False),
-        ("frank.free@example.com",  "free",  80, 12, 1, False),
-        ("grace.free@example.com",  "free",  70, 40, 2, False),
-        ("hugo.free@example.com",   "free",  55, 65, 0, False),
-        ("ivy.pro@example.com",     "pro",   42, 6, 5, False),
-        ("jack.free@example.com",   "free",  30, 8, 1, False),
-        ("kira.free@example.com",   "free",  18, 2, 0, False),
-        ("leo.free@example.com",    "free",  9, 1, 1, False),
-        ("mara.free@example.com",   "free",  3, None, 0, False),
-        ("spam.bot@example.com",    "free",  60, 58, 0, True),
+        ("alice.eng@example.com",   "user",  180, 1, 11, False),
+        ("bob.design@example.com",  "user",  150, 3, 6, False),
+        ("carla.eng@example.com",   "user",  140, 0, 22, False),
+        ("dmitri.eng@example.com",  "user",  120, 5, 17, False),
+        ("erin.user@example.com",   "user",  95, 4, 3, False),
+        ("frank.user@example.com",  "user",  80, 12, 1, False),
+        ("grace.user@example.com",  "user",  70, 40, 2, False),
+        ("hugo.user@example.com",   "user",  55, 65, 0, False),
+        ("ivy.eng@example.com",     "user",  42, 6, 5, False),
+        ("jack.user@example.com",   "user",  30, 8, 1, False),
+        ("kira.user@example.com",   "user",  18, 2, 0, False),
+        ("leo.user@example.com",    "user",  9, 1, 1, False),
+        ("mara.user@example.com",   "user",  3, None, 0, False),
+        ("spam.bot@example.com",    "user",  60, 58, 0, True),
     ]
     out = []
-    for i, (email, tier, cago, lago, designs, disabled) in enumerate(rows):
+    for i, (email, role, cago, lago, designs, disabled) in enumerate(rows):
         out.append({
             "uid": f"mock_{i:02d}",
             "email": email,
@@ -130,7 +130,7 @@ def _mock_users() -> list[dict]:
             "createdAt": now - cago * _DAY_MS,
             "lastLoginAt": (now - lago * _DAY_MS) if lago is not None else None,
             "disabled": disabled,
-            "tier": tier,
+            "role": role,
             "designCount": designs,
         })
     return out
@@ -153,12 +153,12 @@ def _day(ms: float) -> str:
 
 def _compute_stats(users: list[dict]) -> dict:
     now = time.time() * 1000
-    by_tier: dict = {}
+    by_role: dict = {}
     active7 = active30 = 0
     buckets: dict = {}
     for u in users:
-        t = u.get("tier") or "free"
-        by_tier[t] = by_tier.get(t, 0) + 1
+        r = u.get("role") or "user"
+        by_role[r] = by_role.get(r, 0) + 1
         c = u.get("createdAt")
         if c:
             buckets[_day(c)] = buckets.get(_day(c), 0) + 1
@@ -179,7 +179,7 @@ def _compute_stats(users: list[dict]) -> dict:
         "total": len(users),
         "disabled": disabled,
         "designs": designs,
-        "byTier": by_tier,
+        "byRole": by_role,
         "active7": active7,
         "active30": active30,
         "signups": signups,
@@ -188,7 +188,7 @@ def _compute_stats(users: list[dict]) -> dict:
 
 @router.get("/users")
 def list_users(_admin: dict = Depends(require_admin)):
-    """All users with tier, sign-up / last-login times, and saved-design count."""
+    """All users with role, sign-up / last-login times, and saved-design count."""
     source, users = _load_users()
     users.sort(key=lambda u: u.get("createdAt") or 0, reverse=True)
     return {"source": source, "count": len(users), "users": users}
@@ -196,24 +196,24 @@ def list_users(_admin: dict = Depends(require_admin)):
 
 @router.get("/stats")
 def stats(_admin: dict = Depends(require_admin)):
-    """Aggregate usage: totals, tier split, active 7/30d, signup timeline."""
+    """Aggregate usage: totals, role split, active 7/30d, signup timeline."""
     source, users = _load_users()
     return {"source": source, **_compute_stats(users)}
 
 
-@router.post("/users/{uid}/tier")
-def set_tier(uid: str, body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
-    """Set a user's plan via a Firebase custom claim ('tier')."""
-    tier = (body or {}).get("tier")
-    if tier not in _VALID_TIERS:
-        raise HTTPException(status_code=400, detail=f"tier must be one of {_VALID_TIERS}")
+@router.post("/users/{uid}/role")
+def set_role(uid: str, body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
+    """Set a user's role via a Firebase custom claim ('role')."""
+    role = (body or {}).get("role")
+    if role not in _VALID_ROLES:
+        raise HTTPException(status_code=400, detail=f"role must be one of {_VALID_ROLES}")
     admin = _ensure_admin()
     if admin is None:
-        return {"ok": True, "source": "mock", "uid": uid, "tier": tier}
+        return {"ok": True, "source": "mock", "uid": uid, "role": role}
     from firebase_admin import auth as fb_auth
     current = fb_auth.get_user(uid).custom_claims or {}
-    fb_auth.set_custom_user_claims(uid, {**current, "tier": tier})
-    return {"ok": True, "source": "firebase", "uid": uid, "tier": tier}
+    fb_auth.set_custom_user_claims(uid, {**current, "role": role})
+    return {"ok": True, "source": "firebase", "uid": uid, "role": role}
 
 
 @router.post("/users/{uid}/disable")
@@ -543,24 +543,24 @@ def _check_dies(raw) -> list:
 @router.post("/invite")
 def invite(body: dict = Body(default={}),
            admin_user: dict = Depends(require_admin)):
-    """Invite one external user: registry row + tier + motors + workspace.
+    """Invite one external user: registry row + role + motors + workspace.
 
-    `{email, tier="free", motors: [die names] | "all" | [], note, name}`.
+    `{email, role="user", motors: [die names] | "all" | [], note, name}`.
 
-    Everything the account needs exists when this returns — including its
+    Everything the account needs exists when this returns -- including its
     WORKSPACE, seeded from the shared machine, so the person's first request
     after signing in reads a working motor and not a half-created directory.
-    Re-inviting an existing account re-sets its tier, grants and note (and
+    Re-inviting an existing account re-sets its role, grants and note (and
     un-disables it); it never touches a password.
     """
     from motor_ai_sim import users as U
     from motor_ai_sim import workspace as W
     body = body or {}
     email = str(body.get("email") or "").strip().lower()
-    tier = str(body.get("tier") or "free").strip().lower()
-    if tier not in _VALID_TIERS:
+    role = str(body.get("role") or "user").strip().lower()
+    if role not in _VALID_ROLES:
         raise HTTPException(status_code=422,
-                            detail=f"tier must be one of {_VALID_TIERS}")
+                            detail=f"role must be one of {_VALID_ROLES}")
     motors = body.get("motors", [])
     all_motors = (motors is True
                   or (isinstance(motors, str) and motors.strip().lower() == "all")
@@ -568,7 +568,7 @@ def invite(body: dict = Body(default={}),
     dies = [] if all_motors else _check_dies(
         motors.get("dies") if isinstance(motors, dict) else motors)
     try:
-        user = U.invite_user(email, tier=tier, name=str(body.get("name") or ""),
+        user = U.invite_user(email, role=role, name=str(body.get("name") or ""),
                              by=str(admin_user.get("email") or "") or "admin",
                              note=str(body.get("note") or ""))
     except ValueError as e:
@@ -609,7 +609,7 @@ def revoke_invite(email: str, _admin: dict = Depends(require_admin)):
 
     The account stops being able to sign in as itself — and if the person signs
     in with Google again they are an unknown address, i.e. `free` with NOTHING
-    granted (auth._registry_tier), which is the same as being outside.
+    granted (auth._registry_role), which is the same as being outside.
 
     The WORKSPACE DIRECTORY IS NOT TOUCHED and its path is in the answer: it
     holds the person's own saved work, and deleting a user's data as a side

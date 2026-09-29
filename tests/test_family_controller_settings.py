@@ -100,7 +100,7 @@ def granted(tmp_path, monkeypatch, dies):
     monkeypatch.delenv("CATALOG_GRANT_ALL_REGISTERED", raising=False)
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
     return {"Authorization": f"Bearer {U.issue_token(ADMIN)}"}
 
 

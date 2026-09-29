@@ -60,7 +60,7 @@ def _real_users_untouched():
 
 @pytest.fixture()
 def env(tmp_path, monkeypatch):
-    """A throwaway registry + a throwaway support store, the tier gate enforcing.
+    """A throwaway registry + a throwaway support store, the role gate enforcing.
 
     ``ADMIN_EMAILS`` must be non-empty or ``_is_admin_caller`` treats every
     caller as the local-dev admin and nothing anonymous exists to test.
@@ -92,8 +92,8 @@ def env(tmp_path, monkeypatch):
     })
     support.reset_limits()
 
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Owner")
-    U.create_user(CLIENT, "password-client", tier="free", name="Client")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Owner")
+    U.create_user(CLIENT, "password-client", role="user", name="Client")
     yield {
         "admin": {"Authorization": f"Bearer {U.issue_token(ADMIN)}"},
         "client": {"Authorization": f"Bearer {U.issue_token(CLIENT)}"},

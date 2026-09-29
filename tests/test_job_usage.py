@@ -130,13 +130,13 @@ def test_usage_admin_only(monkeypatch, path):
     monkeypatch.setattr(auth, "_is_admin_caller", lambda a: (False, None))
     assert client.get(path).status_code == 401
     monkeypatch.setattr(auth, "_is_admin_caller",
-                        lambda a: (False, {"uid": "u", "email": "u@x", "tier": "pro"}))
+                        lambda a: (False, {"uid": "u", "email": "u@x", "role": "user"}))
     assert client.get(path).status_code == 403
 
 
 def test_usage_routes_and_csv(monkeypatch):
     monkeypatch.setattr(auth, "_is_admin_caller",
-                        lambda a: (True, {"uid": "a", "email": "a@x", "tier": "admin"}))
+                        lambda a: (True, {"uid": "a", "email": "a@x", "role": "admin"}))
     now = time.time()
     U.record(_row("a1", "alice", "web", 3600, now - 100))
     U.record(_row("x1", "=cmd|evil", "claude", 60, now - 50))

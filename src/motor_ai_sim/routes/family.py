@@ -584,10 +584,10 @@ def _require_die_access(die: str, authorization) -> dict:
 #                there is exactly one layer and the only place a write could
 #                land IS the shared catalog.
 
-#: The lowest tier that may write its own workspace.  ``free`` is the tier
+#: The lowest role that may write its own workspace.  ``user`` is the role
 #: ``auth._GATED`` already spells for the one other route gated on merely being
 #: signed in (``POST /api/support/chat``): a registered account, anonymous not.
-WRITE_MIN_TIER = "free"
+WRITE_MIN_ROLE = "user"
 
 
 def require_catalog_write(authorization: str = Header(default=None)) -> dict:
@@ -613,7 +613,7 @@ def require_catalog_write(authorization: str = Header(default=None)) -> dict:
     is_admin, user = _auth._is_admin_caller(authorization)
     if is_admin:
         return {"user": user or {"uid": "local-dev", "email": None,
-                                 "tier": "admin"},
+                                 "role": "admin"},
                 "is_admin": True, "authorization": authorization}
     # ``?layer=shared`` (and its ``published`` sibling) is the admin's explicit
     # aim at a curated layer.  ``_write_target`` refuses it too — this is the
@@ -625,8 +625,8 @@ def require_catalog_write(authorization: str = Header(default=None)) -> dict:
             "'?layer=shared' and the save lands in your own workspace"))
     if user is None:
         raise HTTPException(401, detail="Sign in required.")
-    tier = str(user.get("tier") or "anon")
-    if _auth._TIER_RANK.get(tier, -1) < _auth._TIER_RANK[WRITE_MIN_TIER]:
+    role = str(user.get("role") or "anon")
+    if _auth._ROLE_RANK.get(role, -1) < _auth._ROLE_RANK[WRITE_MIN_ROLE]:
         raise HTTPException(403, detail=(
             "a registered account is required to save into your workspace."))
     return {"user": user, "is_admin": False, "authorization": authorization}

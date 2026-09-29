@@ -388,7 +388,7 @@ def _upsert_catalog_entry(preset_id: str, preset: dict, gen_thumb: bool = True) 
         "topology": "Spoke-PM SPMSM", "slots": slots, "poles": poles,
         "rpm": sim.get("rpm", 0), "current_a": sim.get("max_current", 0),
         "T_avg_Nm": met.get("T_avg_Nm", 0), "ripple_pct": met.get("ripple_pct", 0),
-        "gamma_deg": sim.get("phase_offset_deg", 0), "tier": "free",
+        "gamma_deg": sim.get("phase_offset_deg", 0),
         "description": preset.get("description") or f"Your saved motor — {preset.get('name', preset_id)}.",
         "preset": preset_id,
         # The card MIRRORS the motor's ownership — a card that named a different

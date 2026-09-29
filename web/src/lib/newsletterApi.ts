@@ -63,13 +63,13 @@ export interface CampaignStats {
   skipped: number; total: number; unsubscribes: number;
 }
 export interface Campaign {
-  id: string; subject: string; body_md: string; tiers: string[]; author: string;
+  id: string; subject: string; body_md: string; roles: string[]; author: string;
   created: number; status: 'draft' | 'scheduled' | 'sending' | 'done' | 'cancelled';
   scheduled_at: number | null; started_at: number | null; finished_at: number | null;
   stats: CampaignStats;
 }
 export interface Subscriber {
-  email: string; status: string; tier: string; source: string; text_version: string;
+  email: string; status: string; role: string; source: string; text_version: string;
   consent_at: number | null; confirmed_at: number | null; unsubscribed_at: number | null;
 }
 export interface AdminStatus {
@@ -77,10 +77,10 @@ export interface AdminStatus {
   confirmed: number; pending: number; unsubscribed: number;
 }
 export interface AdminNotice {
-  id: string; title: string; body: string; level: string; emails: string[]; tiers: string[];
+  id: string; title: string; body: string; level: string; emails: string[]; roles: string[];
   created: number; expires_at: number | null; active: boolean; read_count: number;
 }
-export interface Draft { subject: string; body_md: string; tiers: string[] }
+export interface Draft { subject: string; body_md: string; roles: string[] }
 
 export const nlAdmin = {
   status: () => call<AdminStatus>('/api/newsletter/admin/status'),
@@ -97,7 +97,7 @@ export const nlAdmin = {
     call<Campaign>(`/api/newsletter/admin/campaigns/${id}/send`, { method: 'POST', body: JSON.stringify({ at }) }),
   cancel: (id: string) => call<Campaign>(`/api/newsletter/admin/campaigns/${id}/cancel`, { method: 'POST' }),
   notices: () => call<{ notices: AdminNotice[] }>('/api/notices/admin'),
-  postNotice: (n: { title: string; body: string; level: string; emails: string[]; tiers: string[] }) =>
+  postNotice: (n: { title: string; body: string; level: string; emails: string[]; roles: string[] }) =>
     call<AdminNotice>('/api/notices/admin', { method: 'POST', body: JSON.stringify(n) }),
   withdrawNotice: (id: string) => call<{ ok: boolean }>(`/api/notices/admin/${id}/withdraw`, { method: 'POST' }),
 };

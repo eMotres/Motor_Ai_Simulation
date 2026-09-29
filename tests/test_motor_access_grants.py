@@ -87,7 +87,7 @@ def _real_files_untouched():
 def env(tmp_path, monkeypatch):
     """Registry + catalog redirected to throwaway copies, with a real admin
     account and a real client account.  Only the file paths are faked: tokens,
-    tier resolution and admin-ness are the shipping code."""
+    role resolution and admin-ness are the shipping code."""
     from motor_ai_sim import auth
     from motor_ai_sim import users as U
     from motor_ai_sim.routes import family as fam
@@ -118,8 +118,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
 
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
-    U.create_user(CLIENT, "password-client", tier="free", name="Client")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
+    U.create_user(CLIENT, "password-client", role="user", name="Client")
     yield {"dies": dies_dir, "users": users_file,
            "admin": {"Authorization": f"Bearer {U.issue_token(ADMIN)}"},
            "client": {"Authorization": f"Bearer {U.issue_token(CLIENT)}"},
@@ -277,8 +277,8 @@ def test_grants_round_trip_through_the_registry(env):
     assert r.json()["motors"] == {"all": False, "dies": sorted(DIES_85)}
     stored = json.loads(env["users"].read_text(encoding="utf-8"))
     assert stored[CLIENT]["motors"] == {"all": False, "dies": sorted(DIES_85)}
-    # the account keeps its tier / password / disabled flag
-    assert stored[CLIENT]["tier"] == "free" and stored[CLIENT]["pw_hash"]
+    # the account keeps its role / password / disabled flag
+    assert stored[CLIENT]["role"] == "user" and stored[CLIENT]["pw_hash"]
     # and the admin user table carries the grants for the count chip
     users = client.get("/api/auth/users", headers=env["admin"]).json()["users"]
     me = next(u for u in users if u["email"] == CLIENT)

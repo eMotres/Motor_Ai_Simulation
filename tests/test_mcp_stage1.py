@@ -55,7 +55,7 @@ def env(tmp_path, monkeypatch):
         shutil.copytree(_REPO_DIES / n, dd / n)
     monkeypatch.setattr(fam, "_DIES_DIR", dd, raising=False)
     for e in (A, B):
-        U.create_user(e, "pw-" + e, tier="free")
+        U.create_user(e, "pw-" + e, role="user")
     dies = _die_names()
     assert len(dies) >= 2, "the repo catalog must hold two dies"
     U.set_motor_grants(A, all_motors=False, dies=[dies[0]])
@@ -202,7 +202,7 @@ def test_two_users_see_only_their_granted_machines(env):
 
 
 def test_admin_key_sees_everything(env):
-    U.create_user(ADMIN, "pw-long-enough", tier="free")
+    U.create_user(ADMIN, "pw-long-enough", role="user")
     tok, _ = K.create_key(ADMIN, "boss")
     dies = {r["id"] for r in _payload(_call(env["c"], tok, "list_catalog", {"kind": "dies"}))["entries"]}
     assert dies == set(env["dies"])
@@ -247,7 +247,7 @@ def test_audit_log_written(env):
 # ── no geometry leaks ────────────────────────────────────────────────────────
 
 def test_no_geometry_fields_leak(env):
-    U.create_user(ADMIN, "pw-long-enough", tier="free")
+    U.create_user(ADMIN, "pw-long-enough", role="user")
     tok, _ = K.create_key(ADMIN, "boss")
     c = env["c"]
     outs = [_payload(_call(c, tok, "list_machines"))]

@@ -32,7 +32,7 @@ def _iso(tmp_path, monkeypatch):
 @pytest.fixture()
 def as_admin(monkeypatch):
     monkeypatch.setattr(auth, "_is_admin_caller",
-                        lambda a: (True, {"uid": "a", "email": "a@x", "tier": "admin"}))
+                        lambda a: (True, {"uid": "a", "email": "a@x", "role": "admin"}))
 
 
 def _post(tok, body):
@@ -133,7 +133,7 @@ def test_admin_only(monkeypatch, method, path):
     monkeypatch.setattr(auth, "_is_admin_caller", lambda a: (False, None))
     assert getattr(client, method)(path).status_code == 401
     monkeypatch.setattr(auth, "_is_admin_caller",
-                        lambda a: (False, {"uid": "u", "email": "u@x", "tier": "pro"}))
+                        lambda a: (False, {"uid": "u", "email": "u@x", "role": "user"}))
     assert getattr(client, method)(path).status_code == 403
 
 

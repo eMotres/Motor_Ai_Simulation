@@ -528,8 +528,8 @@ def soak_env(two, monkeypatch):
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {A, B})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
-    U.create_user(A, "password-a", tier="admin", name="Alice")
-    U.create_user(B, "password-b", tier="admin", name="Bob")
+    U.create_user(A, "password-a", role="admin", name="Alice")
+    U.create_user(B, "password-b", role="admin", name="Bob")
     return {A: {"Authorization": f"Bearer {U.issue_token(A)}"},
             B: {"Authorization": f"Bearer {U.issue_token(B)}"}}
 

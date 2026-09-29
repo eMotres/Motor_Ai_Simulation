@@ -4,14 +4,14 @@ Stage 10 of the migration.  The server runs with ``PUBLIC_EXHIBIT=0`` and
 ``CATALOG_GRANT_ALL_REGISTERED`` unset, so there are exactly two ways an outside
 account can exist and see anything:
 
-* it signs in with Google and is AUTO-REGISTERED at tier ``free`` with NOTHING
-  granted (``auth._registry_tier``) — it can sign in, and it sees an empty
+* it signs in with Google and is AUTO-REGISTERED at role ``user`` with NOTHING
+  granted (``auth._registry_role``) — it can sign in, and it sees an empty
   catalog until a human grants it a motor.  That policy is unchanged here; what
   Stage 10 adds is that its WORKSPACE is created and seeded at sign-in, so the
   first request after the token is issued reads a working machine instead of
   racing a directory copy;
 * an admin INVITES it (``POST /api/admin/invite``), which creates the same row
-  with the tier and the motors already decided, and seeds the workspace before
+  with the role and the motors already decided, and seeds the workspace before
   the person has ever knocked.  No e-mail is sent — the host blocks outbound
   25/465 — and the response says so out loud.
 
@@ -19,16 +19,16 @@ What is under test:
 
 * the Google path end to end with a MOCKED JWKS (a real RS256 token, signed by a
   key generated here, verified by the shipping ``_verify_google_token``): the
-  registry row appears at ``free``, the workspace is seeded from ``shared/``,
+  registry row appears at role ``user``, the workspace is seeded from ``shared/``,
   the first ``/api/config`` after sign-in answers 200 from that seed, and
   ``/api/family/tree`` is EMPTY — grants and nothing else decide;
-* the invite routes: row + tier + grants + workspace in one call, unknown die
+* the invite routes: row + role + grants + workspace in one call, unknown die
   names refused and named, ``"all"``, re-invite, the list with ``accepted``,
   and revoke (row gone, sessions revoked, workspace directory NOT touched);
 * the invite API is admin-only (403 for a registered account, 401 anonymous);
 * an invited account sees exactly its die and 404s on every other — the same
   claim the server-side isolation check makes over https;
-* per-tier queue admission (``jobs.priority_for``).
+* per-role queue admission (``jobs.priority_for``).
 
 Everything runs in the pytest tmp area against copies; the real
 ``config/users.json`` and ``config/dies`` come out byte-identical.
@@ -131,7 +131,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
 
     from motor_ai_sim import workspace as W
     yield {
@@ -179,9 +179,9 @@ def _sign_in(google, email: str) -> dict:
     return {"Authorization": f"Bearer {r.json()['token']}"}
 
 
-def _invite(env, email=GUEST, tier="free", motors=None, note="", expect=200):
+def _invite(env, email=GUEST, role="user", motors=None, note="", expect=200):
     r = client.post("/api/admin/invite", headers=env["admin"], json={
-        "email": email, "tier": tier,
+        "email": email, "role": role,
         "motors": [DIE] if motors is None else motors, "note": note})
     assert r.status_code == expect, r.text
     return r
@@ -195,13 +195,13 @@ def _tree(headers):
 
 # ── 1. first sign-in provisioning ────────────────────────────────────────────
 
-def test_unknown_google_account_is_registered_free_with_nothing_granted(env, google):
+def test_unknown_google_account_is_registered_user_with_nothing_granted(env, google):
     from motor_ai_sim import users as U
     assert U.get_user(STRANGER) is None
     hdr = _sign_in(google, STRANGER)
     rec = U.get_user(STRANGER)
     assert rec is not None, "the sign-in did not create a registry row"
-    assert rec["tier"] == "free"
+    assert rec["role"] == "user"
     assert U.get_motor_grants(STRANGER) == {"all": False, "dies": []}
     # …and it is NOT an invite: nobody let this address in on purpose.
     assert U.invite_of(STRANGER) is None
@@ -264,7 +264,7 @@ def test_invite_creates_the_row_the_grants_and_the_workspace(env):
     assert body["ok"] is True and body["emailed"] is False
     assert "Google" in body["next"]
     assert body["motors"] == {"all": False, "dies": [DIE]}
-    assert U.get_user(GUEST)["tier"] == "free"
+    assert U.get_user(GUEST)["role"] == "user"
     inv = U.invite_of(GUEST)
     assert inv["by"] == ADMIN and inv["note"] == "Ø40 evaluation, 2 weeks"
     ws = env["ws_of"](GUEST)
@@ -293,8 +293,8 @@ def test_invite_refuses_an_unknown_die_and_names_it(env):
         "a refused invite still created the account")
 
 
-def test_invite_refuses_an_unknown_tier_and_a_bad_address(env):
-    assert _invite(env, tier="platinum", expect=422)
+def test_invite_refuses_an_unknown_role_and_a_bad_address(env):
+    assert _invite(env, role="platinum", expect=422)
     assert _invite(env, email="not-an-address", expect=422)
 
 
@@ -304,13 +304,13 @@ def test_invite_all_grants_the_whole_catalog(env, google):
     assert sorted(d["name"] for d in _tree(hdr)["dies"]) == sorted([DIE, OTHER])
 
 
-def test_reinvite_moves_the_tier_the_grants_and_un_disables(env):
+def test_reinvite_moves_the_role_the_grants_and_un_disables(env):
     from motor_ai_sim import users as U
     _invite(env)
     U.update_user(GUEST, disabled=True)
-    _invite(env, tier="pro", motors=[DIE, OTHER], note="upgraded")
+    _invite(env, role="admin", motors=[DIE, OTHER], note="upgraded")
     rec = U.get_user(GUEST)
-    assert rec["tier"] == "pro" and rec["disabled"] is False
+    assert rec["role"] == "admin" and rec["disabled"] is False
     assert U.get_motor_grants(GUEST)["dies"] == sorted([DIE, OTHER])
     assert U.invite_of(GUEST)["note"] == "upgraded"
 
@@ -374,51 +374,50 @@ def test_the_invite_api_is_admin_only(env, google):
         assert call({}).status_code == 401
 
 
-# ── 3. per-tier queue admission ──────────────────────────────────────────────
+# ── 3. per-role queue admission ──────────────────────────────────────────────
 
-def test_priority_for_demotes_only_the_base_tiers():
+def test_priority_for_demotes_only_the_base_roles():
     from motor_ai_sim import jobs as J
     P = J.Priority
-    # a free account: campaigns for the optimizer, DUTY for everything else
-    assert J.priority_for("optimizer.scan", "free", P.CAMPAIGN) is P.CAMPAIGN
-    assert J.priority_for("optimizer.descent", "free", P.DUTY) is P.CAMPAIGN
-    assert J.priority_for("transient", "free", P.INTERACTIVE) is P.DUTY
-    assert J.priority_for("thermal.field", "free", P.FIELD) is P.DUTY
-    assert J.priority_for("coupled.run", "free", P.DUTY) is P.DUTY
+    # an ordinary account: campaigns for the optimizer, DUTY for everything else
+    assert J.priority_for("optimizer.scan", "user", P.CAMPAIGN) is P.CAMPAIGN
+    assert J.priority_for("optimizer.descent", "user", P.DUTY) is P.CAMPAIGN
+    assert J.priority_for("transient", "user", P.INTERACTIVE) is P.DUTY
+    assert J.priority_for("thermal.field", "user", P.FIELD) is P.DUTY
+    assert J.priority_for("coupled.run", "user", P.DUTY) is P.DUTY
     assert J.priority_for("transient", "anon", P.INTERACTIVE) is P.DUTY
-    # paying and owning accounts keep the class the route asked for
-    for tier in ("pro", "team", "admin"):
-        assert J.priority_for("transient", tier, P.INTERACTIVE) is P.INTERACTIVE
-        assert J.priority_for("thermal.field", tier, P.FIELD) is P.FIELD
-        assert J.priority_for("optimizer.scan", tier, P.CAMPAIGN) is P.CAMPAIGN
-    # an unknown/absent tier (a direct call, a CLI run) is left alone
+    # an admin account keeps the class the route asked for
+    assert J.priority_for("transient", "admin", P.INTERACTIVE) is P.INTERACTIVE
+    assert J.priority_for("thermal.field", "admin", P.FIELD) is P.FIELD
+    assert J.priority_for("optimizer.scan", "admin", P.CAMPAIGN) is P.CAMPAIGN
+    # an unknown/absent role (a direct call, a CLI run) is left alone
     assert J.priority_for("transient", "", P.INTERACTIVE) is P.INTERACTIVE
     assert J.priority_for("transient", None, P.INTERACTIVE) is P.INTERACTIVE
 
 
-def test_the_record_carries_the_tier_class_not_the_route_s(env, google, monkeypatch):
+def test_the_record_carries_the_role_class_not_the_route_s(env, google, monkeypatch):
     """The mapping is applied where every submission funnels: ``make_record``."""
     from motor_ai_sim import jobs as J
     from motor_ai_sim import workspace as W
-    _invite(env, tier="free")
+    _invite(env, role="user")
     with W.use_workspace(W.workspace_for_identity(GUEST)), \
-            W.use_caller({"id": GUEST, "is_admin": False, "tier": "free"}):
+            W.use_caller({"id": GUEST, "is_admin": False, "role": "user"}):
         assert J.make_record("transient", priority=J.Priority.INTERACTIVE
                              ).priority == int(J.Priority.DUTY)
         assert J.make_record("optimizer.scan", priority=J.Priority.CAMPAIGN
                              ).priority == int(J.Priority.CAMPAIGN)
     with W.use_workspace(W.workspace_for_identity(ADMIN)), \
-            W.use_caller({"id": ADMIN, "is_admin": True, "tier": "admin"}):
+            W.use_caller({"id": ADMIN, "is_admin": True, "role": "admin"}):
         assert J.make_record("transient", priority=J.Priority.INTERACTIVE
                              ).priority == int(J.Priority.INTERACTIVE)
 
 
-def test_caller_identity_carries_the_tier(env, google):
-    """The queue reads the tier the GATE already resolved — one verification."""
+def test_caller_identity_carries_the_role(env, google):
+    """The queue reads the role the GATE already resolved — one verification."""
     from motor_ai_sim.auth import caller_identity
     _invite(env)
     guest = _sign_in(google, GUEST)
     assert caller_identity(guest["Authorization"]) == {
-        "id": GUEST, "is_admin": False, "tier": "free"}
-    assert caller_identity(env["admin"]["Authorization"])["tier"] == "admin"
-    assert caller_identity(None)["tier"] in ("anon", "admin")
+        "id": GUEST, "is_admin": False, "role": "user"}
+    assert caller_identity(env["admin"]["Authorization"])["role"] == "admin"
+    assert caller_identity(None)["role"] in ("anon", "admin")

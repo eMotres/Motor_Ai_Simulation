@@ -58,7 +58,7 @@ def client(monkeypatch):
     # patching the identity is the smallest honest way to BE somebody.
     monkeypatch.setattr(_auth, "caller_identity",
                         lambda *a, **kw: {"id": USER, "email": USER,
-                                          "tier": "pro", "is_admin": False})
+                                          "role": "user", "is_admin": False})
     return TestClient(app)
 
 

@@ -13,7 +13,7 @@ import { NoticeBell, NewsletterLinkHandler } from './NoticeBell';
 
 /** Header login/logout control (self-hosted auth — see contexts/AuthContext). */
 const AuthButton: React.FC = () => {
-  const { user, tier, signIn, logout } = useAuth();
+  const { user, role, signIn, logout } = useAuth();
   const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
   const [agentsOpen, setAgentsOpen] = React.useState(false);
@@ -38,7 +38,7 @@ const AuthButton: React.FC = () => {
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
       <NewsletterLinkHandler />
       <NoticeBell onOpen={() => setNotifOpen(true)} refreshKey={noticeKey} />
-      <Tooltip title={`${user.email} · ${tier} — click for sessions`} arrow>
+      <Tooltip title={`${user.email} · ${role} — click for sessions`} arrow>
         <Avatar src={user.photoURL || undefined}
           onClick={(e) => setAnchor(e.currentTarget)}
           sx={{ width: 26, height: 26, fontSize: '0.8rem', bgcolor: 'var(--line-accent)', cursor: 'pointer' }}>

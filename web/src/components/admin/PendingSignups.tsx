@@ -2,7 +2,7 @@
  * Admin · Pending sign-ups — e-mail/password accounts whose address is not
  * proven yet. With SMTP unset the confirmation link only reaches the server
  * log, so every new sign-up lands here and the owner approves it by hand.
- * Approve = the account may sign in (tier free, no motors granted).
+ * Approve = the account may sign in (role user, no motors granted).
  * Reject = delete the row (same DELETE as the users table).
  */
 import React, { useCallback, useEffect, useState } from 'react';

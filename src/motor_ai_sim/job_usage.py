@@ -357,7 +357,7 @@ def summary(start: float, end: float, by: str = "user",
 
 
 def cpu_hours(user: str, start: float, end: float) -> float:
-    """Billing/quota groundwork: one account's CPU-hours in [start, end)."""
+    """Usage-statistics groundwork: one account's CPU-hours in [start, end)."""
     return round(sum(r["cpu_s"] or 0.0 for r in jobs(start, end, user=user,
                                                      limit=10 ** 7)) / 3600, 6)
 

@@ -130,22 +130,7 @@ def usage_csv(by: str = "user", detail: str = "summary", user: Optional[str] = N
                     headers={"Content-Disposition": f'attachment; filename="usage_{detail}.csv"'})
 
 
-# ── pricing data (motor_ai_sim.usage_stats) — record only, no billing ────────
-@router.get("/usage/cost_basis")
-def get_cost_basis(_admin: dict = Depends(require_admin)):
-    from motor_ai_sim import usage_stats as US
-    return US.get_basis()
-
-
-@router.put("/usage/cost_basis")
-def put_cost_basis(body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
-    from motor_ai_sim import usage_stats as US
-    try:
-        return US.set_basis(body)
-    except (ValueError, TypeError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
+# ── usage statistics (motor_ai_sim.usage_stats) — CPU-hours, storage, counts ─
 @router.get("/usage/monthly")
 def usage_monthly(month: str = "", format: str = "json",
                   _admin: dict = Depends(require_admin)):

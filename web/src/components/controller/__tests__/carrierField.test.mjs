@@ -1,7 +1,7 @@
 // node --test — the Controller's Carrier box holds a REAL value (2026-09-24).
 //
-// Owner, on a screenshot of the greyed "Carrier 20,000 Hz" placeholder: «Это
-// значение нужно задавать в контроллере; PWM нужно выкинуть из
+// Owner, on a screenshot of the greyed "Carrier 20,000 Hz" placeholder: «This
+// value needs to be set in the Controller; PWM needs to be dropped from
 // Electromagnetic.»  So the carrier is a normal editable field saved with the
 // controller settings; a configuration with none saved starts from the value
 // the backend resolved (the retired Simulation-tab carrier — migration — or the

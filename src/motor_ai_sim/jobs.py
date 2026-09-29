@@ -106,7 +106,7 @@ __all__ = [
     "queue", "reset_queue", "run_job", "admit", "queued",
     "cancel_run", "is_cancelled", "clear_cancelled", "current_run_id",
     "check_cancelled",
-    "current_owner", "current_tier", "priority_for",
+    "current_owner", "current_role", "priority_for",
     "new_run_id", "async_mode", "store_path",
     "HANDLERS", "register_handler", "register_cancel_hook",
     "ENV_WORKERS", "ENV_ASYNC", "ENV_PER_USER", "ENV_FIELD_LIMIT",
@@ -1041,7 +1041,7 @@ def make_record(kind: str, *, priority: Priority = Priority.DUTY,
     eight call sites that would drift apart.
     """
     ws = _WSP.workspace()
-    prio = priority_for(str(kind), current_tier(), Priority(int(priority)))
+    prio = priority_for(str(kind), current_role(), Priority(int(priority)))
     return JobRecord(run_id=str(run_id) or new_run_id(str(kind).split(".")[0]),
                      ws_id=ws.id, owner=str(owner) or current_owner(),
                      kind=str(kind), priority=int(prio),

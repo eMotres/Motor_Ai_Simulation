@@ -611,7 +611,7 @@ def set_motor_grants(email: str, *, all_motors: bool,
 # ── invites ──────────────────────────────────────────────────────────────────
 # An invite is NOT a second store.  There is one registry, and an invite is a
 # row in it that the vendor created on purpose, stamped with who invited whom,
-# when and why:  `invite: {"by", "at", "note", "tier"}`.  A second file would
+# when and why:  `invite: {"by", "at", "note", "role"}`.  A second file would
 # have to be kept in step with users.json on every rename, disable and delete —
 # and the one thing this deployment cannot afford is two answers to "may this
 # person in?".
@@ -620,7 +620,7 @@ def set_motor_grants(email: str, *, all_motors: bool,
 # admin tells the person to sign in with Google.  The row exists first, which is
 # what makes the difference between an invited account (its tier and its motors
 # are already decided) and an unknown Google address (auto-registered at `free`
-# with NOTHING granted — see auth._registry_tier).
+# with NOTHING granted — see auth._registry_role).
 #
 # The password of an invited account is RANDOM and nobody holds it: the door is
 # Google sign-in, or an admin password reset.  It is not left empty, because an

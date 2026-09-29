@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Select, MenuItem, Typography,
 } from '@mui/material';
-import { TIERS } from './InviteDialog';
+import { ROLES } from './InviteDialog';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -13,7 +13,7 @@ export const CreateUserDialog: React.FC<{
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [tier, setTier] = useState<string>('free');
+  const [role, setRole] = useState<string>('user');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -23,11 +23,11 @@ export const CreateUserDialog: React.FC<{
     try {
       const r = await fetch(`${API}/api/auth/users`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password, tier, name: name.trim() }),
+        body: JSON.stringify({ email: email.trim(), password, role, name: name.trim() }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(j.detail ?? `HTTP ${r.status}`); return; }
-      setEmail(''); setPassword(''); setName(''); setTier('free');
+      setEmail(''); setPassword(''); setName(''); setRole('user');
       onClose(); onCreated();
     } catch (e) { setErr(String(e)); } finally { setBusy(false); }
   };
@@ -39,8 +39,8 @@ export const CreateUserDialog: React.FC<{
         <TextField size="small" label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
         <TextField size="small" label="Password (min 8 chars)" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         <TextField size="small" label="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
-        <Select size="small" value={tier} onChange={(e) => setTier(e.target.value)}>
-          {TIERS.map((t) => <MenuItem key={t} value={t} sx={{ fontSize: 13 }}>{t}</MenuItem>)}
+        <Select size="small" value={role} onChange={(e) => setRole(e.target.value)}>
+          {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13 }}>{r}</MenuItem>)}
         </Select>
         {err && <Typography variant="caption" color="error">{err}</Typography>}
       </DialogContent>

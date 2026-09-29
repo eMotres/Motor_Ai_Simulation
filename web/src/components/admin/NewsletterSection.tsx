@@ -2,7 +2,7 @@
  * Admin · Newsletter — self-contained section (mounts in the Admin sub-
  * navigation; no props). Compose a campaign (subject + Markdown), preview the
  * branded HTML, send a test to yourself, send now or schedule; the audience is
- * CONFIRMED subscribers only (optional tier filter). Sending is a throttled
+ * CONFIRMED subscribers only (optional role filter). Sending is a throttled
  * server queue; this view polls the per-campaign stats. Also: subscribers
  * table + CSV export, and in-app notices (product notices, not marketing).
  */
@@ -17,24 +17,24 @@ import {
   type AdminStatus, type Campaign, type Subscriber, type AdminNotice, type Draft,
 } from '../../lib/newsletterApi';
 
-const TIERS = ['free', 'pro', 'admin'];
+const ROLES = ['user', 'admin'];
 const card = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.5, mb: 2 };
 const head = { fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.04em' };
 const tbl = { '& td, & th': { borderColor: 'var(--panel)', fontSize: 12.5 } };
 const btn = { textTransform: 'none' as const, fontSize: 12 };
 const ts = (t: number | null) => (t ? new Date(t * 1000).toLocaleString() : '');
 
-const TierPick: React.FC<{ value: string[]; onChange: (v: string[]) => void }> = ({ value, onChange }) => (
+const RolePick: React.FC<{ value: string[]; onChange: (v: string[]) => void }> = ({ value, onChange }) => (
   <Select multiple size="small" displayEmpty value={value}
     onChange={(e) => onChange(typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value)}
-    renderValue={(v) => ((v as string[]).length ? (v as string[]).join(', ') : 'all tiers')}
+    renderValue={(v) => ((v as string[]).length ? (v as string[]).join(', ') : 'all roles')}
     sx={{ fontSize: 12.5, minWidth: 140 }}>
-    {TIERS.map((t) => <MenuItem key={t} value={t} sx={{ fontSize: 12.5 }}>{t}</MenuItem>)}
+    {ROLES.map((t) => <MenuItem key={t} value={t} sx={{ fontSize: 12.5 }}>{t}</MenuItem>)}
   </Select>
 );
 
 const Compose: React.FC<{ status: AdminStatus | null; onSaved: () => void }> = ({ status, onSaved }) => {
-  const [d, setD] = useState<Draft>({ subject: '', body_md: '', tiers: [] });
+  const [d, setD] = useState<Draft>({ subject: '', body_md: '', roles: [] });
   const [id, setId] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ html: string; audience: number } | null>(null);
   const [when, setWhen] = useState('');
@@ -58,7 +58,7 @@ const Compose: React.FC<{ status: AdminStatus | null; onSaved: () => void }> = (
       <Box sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
         <TextField size="small" label="Subject" value={d.subject} fullWidth
           onChange={(e) => setD({ ...d, subject: e.target.value })} inputProps={{ maxLength: 200 }} />
-        <TierPick value={d.tiers} onChange={(tiers) => setD({ ...d, tiers })} />
+        <RolePick value={d.roles} onChange={(roles) => setD({ ...d, roles })} />
       </Box>
       <TextField size="small" label="Body (Markdown)" value={d.body_md} multiline minRows={8} fullWidth
         onChange={(e) => setD({ ...d, body_md: e.target.value })}
@@ -86,7 +86,7 @@ const Compose: React.FC<{ status: AdminStatus | null; onSaved: () => void }> = (
             void run(async () => {
               const cid = await save();
               await nlAdmin.send(cid, at);
-              setId(null); setD({ subject: '', body_md: '', tiers: [] }); setPreview(null); setWhen(''); onSaved();
+              setId(null); setD({ subject: '', body_md: '', roles: [] }); setPreview(null); setWhen(''); onSaved();
               return at ? 'Scheduled.' : 'Queued — sending at the configured rate.';
             });
           }}>
@@ -115,7 +115,7 @@ const Campaigns: React.FC<{ rows: Campaign[]; reload: () => void }> = ({ rows, r
     <TableBody>
       {rows.map((c) => (
         <TableRow key={c.id}>
-          <TableCell>{c.subject}{c.tiers.length ? <Chip size="small" label={c.tiers.join(',')} sx={{ ml: 1, height: 18, fontSize: 10 }} /> : null}</TableCell>
+          <TableCell>{c.subject}{c.roles.length ? <Chip size="small" label={c.roles.join(',')} sx={{ ml: 1, height: 18, fontSize: 10 }} /> : null}</TableCell>
           <TableCell>{c.status}</TableCell>
           <TableCell>{ts(c.started_at ?? c.scheduled_at ?? c.created)}</TableCell>
           <TableCell align="right">{c.stats.sent}</TableCell>
@@ -149,13 +149,13 @@ const Subscribers: React.FC = () => {
       {err && <Typography sx={{ fontSize: 12, color: '#f87171' }}>{err}</Typography>}
       <Table size="small" sx={tbl}>
         <TableHead><TableRow>
-          <TableCell>E-mail</TableCell><TableCell>Status</TableCell><TableCell>Tier</TableCell>
+          <TableCell>E-mail</TableCell><TableCell>Status</TableCell><TableCell>Role</TableCell>
           <TableCell>Source</TableCell><TableCell>Consent</TableCell><TableCell>Confirmed</TableCell><TableCell>Text ver.</TableCell>
         </TableRow></TableHead>
         <TableBody>
           {rows.map((s) => (
             <TableRow key={s.email}>
-              <TableCell>{s.email}</TableCell><TableCell>{s.status}</TableCell><TableCell>{s.tier}</TableCell>
+              <TableCell>{s.email}</TableCell><TableCell>{s.status}</TableCell><TableCell>{s.role}</TableCell>
               <TableCell>{s.source}</TableCell><TableCell>{ts(s.consent_at)}</TableCell>
               <TableCell>{ts(s.confirmed_at)}</TableCell><TableCell>{s.text_version}</TableCell>
             </TableRow>
@@ -169,7 +169,7 @@ const Subscribers: React.FC = () => {
 
 const Notices: React.FC = () => {
   const [rows, setRows] = useState<AdminNotice[]>([]);
-  const [n, setN] = useState({ title: '', body: '', level: 'info', emails: '', tiers: [] as string[] });
+  const [n, setN] = useState({ title: '', body: '', level: 'info', emails: '', roles: [] as string[] });
   const [err, setErr] = useState<string | null>(null);
   const load = useCallback(() => { void nlAdmin.notices().then((j) => setRows(j.notices)).catch((e: Error) => setErr(e.message)); }, []);
   useEffect(load, [load]);
@@ -177,7 +177,7 @@ const Notices: React.FC = () => {
     setErr(null);
     try {
       await nlAdmin.postNotice({ ...n, emails: n.emails.split(/[\s,;]+/).filter(Boolean) });
-      setN({ title: '', body: '', level: 'info', emails: '', tiers: [] }); load();
+      setN({ title: '', body: '', level: 'info', emails: '', roles: [] }); load();
     } catch (e) { setErr((e as Error).message); }
   };
   return (
@@ -188,7 +188,7 @@ const Notices: React.FC = () => {
         <Select size="small" value={n.level} onChange={(e) => setN({ ...n, level: e.target.value })} sx={{ fontSize: 12.5 }}>
           {['info', 'warning', 'important'].map((l) => <MenuItem key={l} value={l} sx={{ fontSize: 12.5 }}>{l}</MenuItem>)}
         </Select>
-        <TierPick value={n.tiers} onChange={(tiers) => setN({ ...n, tiers })} />
+        <RolePick value={n.roles} onChange={(roles) => setN({ ...n, roles })} />
       </Box>
       <TextField size="small" label="Text (optional)" value={n.body} multiline minRows={2} fullWidth
         onChange={(e) => setN({ ...n, body: e.target.value })} sx={{ mb: 1 }} />
@@ -207,7 +207,7 @@ const Notices: React.FC = () => {
           {rows.map((r) => (
             <TableRow key={r.id} sx={{ opacity: r.active ? 1 : 0.5 }}>
               <TableCell>{r.title}</TableCell><TableCell>{r.level}</TableCell>
-              <TableCell>{r.emails.length ? `${r.emails.length} user(s)` : r.tiers.length ? r.tiers.join(',') : 'all'}</TableCell>
+              <TableCell>{r.emails.length ? `${r.emails.length} user(s)` : r.roles.length ? r.roles.join(',') : 'all'}</TableCell>
               <TableCell>{ts(r.created)}</TableCell><TableCell align="right">{r.read_count}</TableCell>
               <TableCell align="right">
                 {r.active && <Button size="small" color="error" sx={btn}

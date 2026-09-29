@@ -9,11 +9,11 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import BlockIcon from '@mui/icons-material/Block';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import HelpTip from '../common/HelpTip';
-import { TIERS } from './dialogs/InviteDialog';
+import { ROLES } from './dialogs/InviteDialog';
 import type { RegistryUser } from './dialogs/MotorsDialog';
 
-const TIER_COLOR: Record<string, string> = {
-  anon: 'var(--text-4)', free: 'var(--text-3)', pro: '#3b82f6', team: '#a855f7', admin: '#fbbf24',
+const ROLE_COLOR: Record<string, string> = {
+  anon: 'var(--text-4)', user: 'var(--text-3)', admin: '#fbbf24',
 };
 
 const fmt = (iso?: string | null) =>
@@ -35,7 +35,7 @@ const UserDrawer: React.FC<{
   jobs30d: number | null;
   onClose: () => void;
   busy: boolean;
-  onTier: (tier: string) => void;
+  onRole: (role: string) => void;
   onToggleDisabled: () => void;
   onDelete: () => void;
   onResetPassword: () => void;
@@ -43,13 +43,13 @@ const UserDrawer: React.FC<{
   onRevokeAllSessions: () => void;
 }> = ({
   user, liveSessions, lastLogin, cpuH30d, jobs30d, onClose, busy,
-  onTier, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onRevokeAllSessions,
+  onRole, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onRevokeAllSessions,
 }) => {
   const [revoking, setRevoking] = useState(false);
   useEffect(() => setRevoking(false), [user?.email]);
 
   const g = user?.motors;
-  const motorsLabel = user?.tier === 'admin' ? 'all (admin)' : g?.all ? 'all' : g?.dies?.length ? `${g.dies.length} granted` : 'none';
+  const motorsLabel = user?.role === 'admin' ? 'all (admin)' : g?.all ? 'all' : g?.dies?.length ? `${g.dies.length} granted` : 'none';
 
   return (
     <Drawer anchor="right" open={!!user} onClose={onClose} PaperProps={{ sx: { width: 340, bgcolor: 'var(--panel)', p: 2.5 } }}>
@@ -59,12 +59,12 @@ const UserDrawer: React.FC<{
           {user.name && <Typography sx={{ fontSize: 12, color: 'var(--text-4)', mb: 1 }}>{user.name}</Typography>}
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, mb: 0.5 }}>
-            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>Plan</Typography>
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>Role</Typography>
             <HelpTip title="Changing this takes effect on the account's next request." />
           </Box>
-          <Select size="small" value={user.tier} disabled={busy} onChange={(e) => onTier(e.target.value)}
-            sx={{ fontSize: 13, fontWeight: 700, color: TIER_COLOR[user.tier] ?? 'var(--text-2)', width: '100%' }}>
-            {TIERS.map((t) => <MenuItem key={t} value={t} sx={{ fontSize: 13, color: TIER_COLOR[t] }}>{t}</MenuItem>)}
+          <Select size="small" value={user.role} disabled={busy} onChange={(e) => onRole(e.target.value)}
+            sx={{ fontSize: 13, fontWeight: 700, color: ROLE_COLOR[user.role] ?? 'var(--text-2)', width: '100%' }}>
+            {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13, color: ROLE_COLOR[r] }}>{r}</MenuItem>)}
           </Select>
 
           <Box sx={{ mt: 2 }}>
@@ -84,7 +84,7 @@ const UserDrawer: React.FC<{
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', mb: 1 }}>Motor grants</Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
             <Typography sx={{ fontSize: 13, color: 'var(--text-0)' }}>{motorsLabel}</Typography>
-            {user.tier !== 'admin' && (
+            {user.role !== 'admin' && (
               <Button size="small" onClick={onOpenMotors} sx={{ textTransform: 'none', fontSize: 11 }}>Change…</Button>
             )}
           </Box>

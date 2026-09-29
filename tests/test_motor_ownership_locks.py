@@ -94,7 +94,7 @@ def stores(tmp_path, monkeypatch):
 def identities(monkeypatch):
     """Make the real identity path usable in-process: only the RS256 token
     verification is faked (a bearer whose body is an email is that account).
-    Admin-ness, the tier ladder and `caller_identity` are the shipping code."""
+    Admin-ness, the role ladder and `caller_identity` are the shipping code."""
     from motor_ai_sim import auth
 
     admins = {"admin@example.com"}
@@ -108,7 +108,7 @@ def identities(monkeypatch):
             return None
         email = authorization.split(" ", 1)[1].strip().lower()
         return {"uid": f"uid-{email}", "email": email,
-                "tier": "admin" if email in admins else "free"}
+                "role": "admin" if email in admins else "user"}
 
     monkeypatch.setattr(auth, "resolve_user", _fake_resolve)
 
@@ -237,7 +237,7 @@ def test_lock_beats_ownership(stores):
 
     _save(pre_mod, "m_a", "Motor A", GEO_A, ALICE)
     out = pre_mod.set_preset_lock("m_a", pre_mod.LockRequest(locked=True),
-                                  _admin={"uid": "u", "tier": "admin"})
+                                  _admin={"uid": "u", "role": "admin"})
     assert out["locked"] is True
 
     for call in (
@@ -257,7 +257,7 @@ def test_lock_beats_ownership(stores):
     pre_mod.save_motor_settings("m_a", pre_mod.SettingsPatch(simulation={"rpm": 4200}),
                                 authorization=ADMIN)
     pre_mod.set_preset_lock("m_a", pre_mod.LockRequest(locked=False),
-                            _admin={"uid": "u", "tier": "admin"})
+                            _admin={"uid": "u", "role": "admin"})
     pre_mod.rename_preset("m_a", pre_mod.RenamePresetRequest(name="Unlocked again"),
                           authorization=ALICE)
     assert _read(stores["presets"])["m_a"]["name"] == "Unlocked again"
@@ -268,7 +268,7 @@ def test_lock_flag_reaches_the_catalog_card(stores):
 
     _save(pre_mod, "m_a", "Motor A", GEO_A, ALICE)
     pre_mod.set_preset_lock("m_a", pre_mod.LockRequest(locked=True),
-                            _admin={"uid": "u", "tier": "admin"})
+                            _admin={"uid": "u", "role": "admin"})
     assert _read(stores["catalog"])["motors"][0]["locked"] is True
     card = cat_mod.get_catalog(authorization=ALICE)["motors"][0]
     assert card["locked"] is True and card["can_write"] is False

@@ -184,12 +184,11 @@ function App() {
   useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
-  const { user, isAdmin, tier, enforced, resolved: authResolved } = useAuth();
-  // Access tiers (only enforced when the backend has AUTH_ENFORCE on; with it off,
+  const { user, isAdmin, role, enforced, resolved: authResolved } = useAuth();
+  // Access (only enforced when the backend has AUTH_ENFORCE on; with it off,
   // dev shows everything):
   //   • Anonymous       → the Motors catalog ONLY (browse, can't work with a motor).
-  //   • Signed in (free) → + the analytical Configurator.
-  //   • Pro / team / admin → + the full engineering UI (geometry/mesh/FEM/optimize).
+  //   • Signed in (any role) → the full engineering UI (geometry/mesh/FEM/optimize).
   const signedIn = !enforced || !!user;
   // UNTIL /api/me HAS ANSWERED we do not know whether this backend enforces
   // auth — `enforced` starts false, so `signedIn` reads true for the ~100 ms
@@ -200,7 +199,7 @@ function App() {
   // comes back from localStorage synchronously — so a signed-in boot is
   // exactly what it was, and only an anonymous one waits.
   const authPending = !authResolved && !user;
-  const fullUI   = !enforced || isAdmin || tier === 'pro' || tier === 'team';
+  const fullUI   = !enforced || isAdmin || role !== 'anon';
   const newRequests = useNewRequestCount(isAdmin);
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);

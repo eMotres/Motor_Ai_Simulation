@@ -9,7 +9,7 @@ that is the wrong default — the standing rule is that a new visitor sees NOTHI
 until an account is granted something.
 
 ``PUBLIC_EXHIBIT`` is the switch, and it is ONE gate in
-``auth.TierGateMiddleware``, not a rule repeated per route:
+``auth.RoleGateMiddleware``, not a rule repeated per route:
 
 * unset / ``1`` — today's behaviour, byte for byte.  This workstation and every
   other test in the suite never set it, so nothing they assert can move.
@@ -17,7 +17,7 @@ until an account is granted something.
   except ``/api/health``, ``/api/me`` (which must still answer, in its anonymous
   shape, or the SPA cannot tell "not signed in" from "server down") and the
   sign-in endpoints ``/api/auth/login`` | ``/api/auth/google`` | ``/api/auth/logout``.
-  A REGISTERED caller is unaffected: the tier table and the per-account motor
+  A REGISTERED caller is unaffected: the role table and the per-account motor
   grants decide exactly what they decided before.
 
 Every path in ``CLOSED`` is checked against the app's real route table first —
@@ -116,7 +116,7 @@ def _real_files_untouched():
 def env(tmp_path, monkeypatch):
     """A real registry (a throwaway copy) with an admin and an ungranted client.
 
-    Only the file paths are faked — tokens, tier resolution, admin-ness and the
+    Only the file paths are faked — tokens, role resolution, admin-ness and the
     middleware are the shipping code.
     """
     from motor_ai_sim import auth
@@ -139,8 +139,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", True)
 
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Owner")
-    U.create_user(CLIENT, CLIENT_PW, tier="free", name="Client")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Owner")
+    U.create_user(CLIENT, CLIENT_PW, role="user", name="Client")
     return {
         "admin": {"Authorization": f"Bearer {U.issue_token(ADMIN)}"},
         "client": {"Authorization": f"Bearer {U.issue_token(CLIENT)}"},
@@ -237,7 +237,7 @@ def test_me_answers_anonymous(closed):
     assert r.status_code == 200
     j = r.json()
     assert j["email"] is None
-    assert j["tier"] == "anon"
+    assert j["role"] == "anon"
     assert j["isAdmin"] is False
     assert j["enforced"] is True
     assert j["tokenPresented"] is False
@@ -314,4 +314,4 @@ def test_with_the_switch_unset_the_exhibit_is_still_there(env):
     assert set(names) <= set(env["all_dies"])
     assert client.get("/api/geometry").status_code == 200
     assert client.get("/api/config").status_code == 200
-    assert client.get("/api/me").json()["tier"] == "anon"
+    assert client.get("/api/me").json()["role"] == "anon"

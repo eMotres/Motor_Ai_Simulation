@@ -86,8 +86,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "_reject_seen", {})
     monkeypatch.setattr(S, "_last_touch", {})
 
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
-    U.create_user(CLIENT, "password-client", tier="free", name="Client")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
+    U.create_user(CLIENT, "password-client", role="user", name="Client")
     yield {"tmp": tmp_path, "users": users_file,
            "events": tmp_path / "auth_events.jsonl", "S": S, "U": U, "A": A}
 

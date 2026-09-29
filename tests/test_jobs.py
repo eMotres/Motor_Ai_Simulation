@@ -72,16 +72,16 @@ class Recorder:
 
 
 def _submit(email: str, kind: str, priority: J.Priority, work,
-            run_id: str = "", block: bool = True, tier: str = ""):
+            run_id: str = "", block: bool = True, role: str = ""):
     """Submit AS ``email`` — workspace and caller identity both, as a request.
 
-    ``tier`` is what the gate resolved for this caller; empty (the default) is a
-    direct call with no tier to be judged by, which ``jobs.priority_for`` leaves
+    ``role`` is what the gate resolved for this caller; empty (the default) is a
+    direct call with no role to be judged by, which ``jobs.priority_for`` leaves
     alone — so every test written before Stage 10 means exactly what it did.
     """
     ws = _ws(email)
     with WS.use_workspace(ws), WS.use_caller({"id": email, "is_admin": False,
-                                              "tier": tier}):
+                                              "role": role}):
         rec = J.make_record(kind, priority=priority, run_id=run_id)
         return J.queue().submit(rec, work, block=block), rec
 
@@ -133,31 +133,32 @@ def test_priority_beats_arrival_order():
     assert rec.finished[1:] == ["transient", "duty", "campaign"]
 
 
-def test_a_free_account_never_overtakes_a_paying_one(tmp_path):
-    """Stage 10: the tier decides the CLASS, whatever the route asked for.
+def test_an_ordinary_account_never_overtakes_an_admin_one(tmp_path):
+    """Stage 10 (post-commerce): the role decides the CLASS, whatever the
+    route asked for.
 
-    Both callers press the same button — an interactive transient — and the free
-    account's copy is admitted as a DUTY, so the paying user's bar keeps moving
-    while the evaluation account waits.  Ordering, not refusal: the free job
-    still runs, second.
+    Both callers press the same button — an interactive transient — and the
+    ordinary (``user``) account's copy is admitted as a DUTY, so the admin's
+    bar keeps moving while the other account waits.  Ordering, not refusal:
+    the ordinary job still runs, second.
     """
     q = J.reset_queue(J.InProcessQueue(workers=1, field_limit=1))
     rec = Recorder()
     hold = threading.Event()
 
-    blocker = _thread(lambda: _submit("pro@x.com", "blocker",
+    blocker = _thread(lambda: _submit("admin@x.com", "blocker",
                                       J.Priority.INTERACTIVE,
-                                      rec.work("blocker", gate=hold), tier="pro"))
+                                      rec.work("blocker", gate=hold), role="admin"))
     while not rec.started:
         time.sleep(0.01)
 
-    ts = [_thread(lambda: _submit("free@x.com", "transient",
+    ts = [_thread(lambda: _submit("user@x.com", "transient",
                                   J.Priority.INTERACTIVE,
-                                  rec.work("free-transient", 0.01), tier="free"))]
-    time.sleep(0.05)                    # the free account asked FIRST
-    ts.append(_thread(lambda: _submit("pro@x.com", "transient",
+                                  rec.work("user-transient", 0.01), role="user"))]
+    time.sleep(0.05)                    # the ordinary account asked FIRST
+    ts.append(_thread(lambda: _submit("admin@x.com", "transient",
                                       J.Priority.INTERACTIVE,
-                                      rec.work("pro-transient", 0.01), tier="pro")))
+                                      rec.work("admin-transient", 0.01), role="admin")))
     time.sleep(0.05)
 
     waiting = sorted(q._waiting, key=q._order_key)
@@ -167,13 +168,13 @@ def test_a_free_account_never_overtakes_a_paying_one(tmp_path):
     blocker.join(5)
     for t in ts:
         t.join(5)
-    assert rec.finished[1:] == ["pro-transient", "free-transient"]
+    assert rec.finished[1:] == ["admin-transient", "user-transient"]
 
 
-def test_a_free_account_s_optimizer_run_is_a_campaign(tmp_path):
+def test_an_ordinary_account_s_optimizer_run_is_a_campaign(tmp_path):
     """…and its sweep is a campaign even when the route said DUTY."""
     with WS.use_workspace(_ws("free@x.com")), \
-            WS.use_caller({"id": "free@x.com", "is_admin": False, "tier": "free"}):
+            WS.use_caller({"id": "free@x.com", "is_admin": False, "role": "user"}):
         assert J.make_record("optimizer.scan", priority=J.Priority.DUTY
                              ).priority == int(J.Priority.CAMPAIGN)
 

@@ -56,9 +56,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
 
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
-    U.create_user(OWNER_CLIENT, "password-a", tier="free", name="A")
-    U.create_user(OTHER_CLIENT, "password-b", tier="free", name="B")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
+    U.create_user(OWNER_CLIENT, "password-a", role="user", name="A")
+    U.create_user(OTHER_CLIENT, "password-b", role="user", name="B")
 
     all_dies = sorted(p.name for p in dies_dir.iterdir() if (p / "die.yaml").is_file())
     assert all_dies, "fixture catalog is empty — nothing to grant"
@@ -129,7 +129,7 @@ def test_selected_clients_only(env):
     assert env["die"] in _names(client.get("/api/family/tree", headers=env["other"]))
     # a THIRD account, not on the list, still sees nothing
     from motor_ai_sim import users as U
-    U.create_user("clientc@example.com", "password-c", tier="free", name="C")
+    U.create_user("clientc@example.com", "password-c", role="user", name="C")
     third = {"Authorization": f"Bearer {U.issue_token('clientc@example.com')}"}
     assert env["die"] not in _names(client.get("/api/family/tree", headers=third))
 

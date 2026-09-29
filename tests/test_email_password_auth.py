@@ -75,7 +75,7 @@ def env(tmp_path, monkeypatch):
         outbox.append({"to": to, "subject": subject, "body": body})
         return True
 
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
     yield {"U": U, "S": S, "E": E, "A": A, "tmp": tmp_path, "outbox": outbox,
            "fake_send": fake_send, "mp": monkeypatch}
     E.reset_limits()
@@ -240,7 +240,7 @@ def test_without_smtp_account_lands_in_admin_pending(env):
 def test_pending_is_admin_only(env):
     _register()
     tok = _login(ADMIN, "password-admin", ip="198.51.100.6").json()["token"]  # sanity
-    env["U"].create_user("plain@example.com", "password-plain", tier="free")
+    env["U"].create_user("plain@example.com", "password-plain", role="user")
     ptok = _login("plain@example.com", "password-plain", ip="198.51.100.7").json()["token"]
     r = client.get("/api/auth/pending", headers={"Authorization": f"Bearer {ptok}"})
     assert r.status_code in (401, 403)
@@ -294,14 +294,14 @@ def test_legacy_pbkdf2_row_signs_in_and_is_upgraded(env):
     salt = secrets.token_hex(16)
     legacy = {"pw_salt": salt, "pw_iters": 1000,
               "pw_hash": hashlib.pbkdf2_hmac("sha256", b"legacy-pass", bytes.fromhex(salt), 1000).hex(),
-              "tier": "pro", "name": "Old", "disabled": False, "created": "2026-08-21T10:00:00"}
+              "role": "user", "name": "Old", "disabled": False, "created": "2026-08-21T10:00:00"}
     users = json.loads((env["tmp"] / "users.json").read_text())
     users["old@example.com"] = legacy
     (env["tmp"] / "users.json").write_text(json.dumps(users))
     assert U.public_user("old@example.com")["email_verified"] is True
     assert _login("old@example.com", "legacy-pass", ip="198.51.100.11").status_code == 200
     rec = json.loads((env["tmp"] / "users.json").read_text())["old@example.com"]
-    assert rec["pw_algo"] == "argon2id" and "pw_salt" not in rec and rec["tier"] == "pro"
+    assert rec["pw_algo"] == "argon2id" and "pw_salt" not in rec and rec["role"] == "user"
     assert _login("old@example.com", "legacy-pass", ip="198.51.100.12").status_code == 200
 
 

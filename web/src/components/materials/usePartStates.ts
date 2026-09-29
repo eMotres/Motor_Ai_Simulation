@@ -74,7 +74,7 @@ function prune(m: PartStates): PartStates {
 }
 
 export function usePartStates() {
-  const { isAdmin, enforced, tier } = useAuth();
+  const { isAdmin, enforced } = useAuth();
   // GET /api/parts is closed to an anonymous caller, and this hook mounts at
   // the App root (MaterialOverrideSync) — so the very first paint of the
   // landing page knocked on it and got a 401 (live, 2026-09-16).  Same gate
@@ -82,7 +82,9 @@ export function usePartStates() {
   // there is a session (or the backend does not enforce auth at all).
   const ready = useApiReady();
   const localMode  = enforced && !isAdmin;
-  const restricted = enforced && !isAdmin && tier !== 'pro' && tier !== 'team';
+  // No more paid tiers (commerce removed 2026-09-29): every signed-in
+  // account tunes part states on its own workspace copy same as before.
+  const restricted = false;
 
   const [states, setStates]   = useState<PartStates>({});
   const [loading, setLoading] = useState(true);

@@ -77,7 +77,7 @@ class DesignError(ValueError):
 
 class QuotaExceeded(Exception):
     def __init__(self, used: int, limit: int, retry_after: int) -> None:
-        super().__init__(f"daily simulation quota reached ({used}/{limit})")
+        super().__init__(f"daily simulation fair-use limit reached ({used}/{limit})")
         self.used, self.limit, self.retry_after = used, limit, retry_after
 
 

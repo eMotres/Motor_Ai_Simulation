@@ -3,7 +3,7 @@
 // Identity comes from Google Identity Services (the official button → ID token)
 // or an email/password account; either way the backend exchanges it for OUR
 // 30-day HS256 token (POST /api/auth/google | /api/auth/login), which is what
-// every API call carries. Rights (tier/admin) always live server-side in
+// every API call carries. Rights (role/admin) always live server-side in
 // config/users.json + ADMIN_EMAILS — nothing here is trusted for authorization.
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
@@ -22,7 +22,7 @@ export interface SessionUser {
   email: string;
   name: string;
   picture?: string;
-  tier: string;
+  role: string;
 }
 
 export function getStoredToken(): string | null {

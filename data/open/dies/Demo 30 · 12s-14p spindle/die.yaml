@@ -1,0 +1,53 @@
+name: Demo 30 · 12s-14p spindle
+locked: true
+created: '2026-09-29T12:00:00'
+description: Made-up demonstration motor of the OPEN data set (not a product).
+tags:
+- demo
+- open
+daxis_deg: null
+geometry:
+  stator_diameter: 30
+  slot_height: 4.3
+  core_thickness: 1.5
+  num_seg: 2
+  num_slots_per_segment: 6
+  num_poles_per_segment: 7
+  air_gap: 0.2
+  tooth_width: 2.5
+  tooth2_width: 1.4
+  cut_width: 1.5
+  insulation_thickness: 0.05
+  wire_width: 2
+  wire_height: 0.5
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.1
+  num_wires_per_slot: 6
+  wire_split: 1
+  slot_hs: 0.267
+  magnet_height: 4.2
+  rotor_house_height: 0.8
+  shaft_height: 2
+  magnet_fill_down: 0.8
+  magnet_fill_up: 0.3
+  magnet_fill_radius: 0.1
+  magnet_up_gap: 0.1
+  rotor_hole: 0.7
+  magnet_down_height: 1.4
+  magnet_lamination: 0
+  stator_fillet_r: 1.2
+  stator_fillet_r1: 0
+  rotor_fill_r: 0.2
+  motor_length: 12
+  stator_outer_radius: 15
+  stator_inner_radius: 9.2
+  num_slots: 12
+  num_poles: 14
+  angle_slot: 30
+  angle_pole: 25.714285714285715
+  slot_pitch: 0.5235987755982988
+  pole_pitch: 0.4487989505128276
+  rotor_outer_radius: 9
+  rotor_inner_radius: 3.7
+  slot_width: 2.3000000000000003
+  shaft_diameter: 5

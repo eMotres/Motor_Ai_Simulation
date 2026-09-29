@@ -866,6 +866,9 @@ class Layer:
     #: The publishing identity — published layer only.
     owner: str = ""
     owner_id: str = ""
+    #: ``open`` / ``private`` for the two data-set layers under the shared
+    #: catalog (:mod:`motor_ai_sim.data_sources`); empty for every other layer.
+    source: str = ""
 
     @property
     def writable(self) -> bool:
@@ -912,7 +915,25 @@ def layers() -> list:
         out.append(Layer(LAYER_PUBLISHED, d, owner=_owner_email(d),
                          owner_id=d.name))
     out.append(Layer(LAYER_SHARED, Path(str(shared_root())) / "dies"))
+    out.extend(source_layers())
     return out
+
+
+def source_layers() -> list:
+    """The OPEN and PRIVATE data sets, below the shared catalog, private first.
+
+    They behave exactly like the shared catalog — read-only, copy-on-write on a
+    user's save — and are merged by name with the private copy winning a clash
+    (``data_sources.scan`` logs that loudly).
+
+    ON only with ``MOTOR_AI_SIM_DATA_SOURCES=1`` (set on the server): a suite
+    that builds its own layered sandbox must not see the repository's demo set.
+    """
+    from motor_ai_sim import data_sources as _ds
+    if not _ds.forced_on():
+        return []
+    _ds.scan()                    # logs any open/private clash, once
+    return [Layer(LAYER_SHARED, d, source=src) for src, d in _ds.source_dirs()]
 
 
 #: ``published/<ws_id>/.owner.json`` — who this namespace belongs to.  A file

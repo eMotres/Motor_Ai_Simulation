@@ -294,7 +294,32 @@ def _die_dir(die: str) -> Path:
         d = _ws_resolve_die_dir(str(die))
         if d is not None:
             return d
+    elif _flat_sources():
+        own = _dies_dir() / die
+        if not (own / "die.yaml").is_file():
+            from motor_ai_sim import data_sources as _ds
+            src = _ds.locate(str(die))
+            if src is not None:
+                return src
     return _dies_dir() / die
+
+
+def _flat_sources() -> bool:
+    """With multi-user layering OFF, do the open/private data sets join the
+    catalog?  Yes when forced (``MOTOR_AI_SIM_DATA_SOURCES=1``) or when the
+    process catalog holds no die at all — a fresh public clone runs on the open
+    demo set out of the box.  Never when a test redirected ``_DIES_DIR``: a
+    sandboxed suite must see its own fixture tree only."""
+    if globals().get("_DIES_DIR") is not None:
+        return False
+    from motor_ai_sim import data_sources as _ds
+    if _ds.forced_on():
+        return True
+    d = _dies_dir()
+    try:
+        return not any((p / "die.yaml").is_file() for p in d.iterdir() if p.is_dir())
+    except OSError:
+        return True
 
 
 def _die_file(die: str) -> Path:
@@ -333,6 +358,10 @@ def _classify_die_dir(d: Optional[Path]) -> tuple:
         if d.parent == _dies_dir():
             return (_WS.LAYER_WORKSPACE, name)
         if d.parent == Path(str(_WS.shared_root())) / "dies":
+            return (_WS.LAYER_SHARED, name)
+        from motor_ai_sim import data_sources as _ds
+        if _ds.source_of_dir(d) is not None:
+            # The open / private data sets are read-only catalog layers too.
             return (_WS.LAYER_SHARED, name)
         pub = Path(str(_WS.published_root()))
         if d.parent.parent == pub:
@@ -486,13 +515,21 @@ def _iter_die_entries() -> list:
         return _WS.iter_dies()
     out = []
     d = _dies_dir()
-    if not d.is_dir():
-        return out
-    for dd in sorted(d.iterdir()):
-        if dd.is_dir() and (dd / "die.yaml").is_file():
-            out.append({"name": dd.name, "die": dd.name, "dir": dd,
-                        "layer": _WS.LAYER_WORKSPACE, "owner": "",
-                        "owner_id": ""})
+    if d.is_dir():
+        for dd in sorted(d.iterdir()):
+            if dd.is_dir() and (dd / "die.yaml").is_file():
+                out.append({"name": dd.name, "die": dd.name, "dir": dd,
+                            "layer": _WS.LAYER_WORKSPACE, "owner": "",
+                            "owner_id": ""})
+    if _flat_sources():
+        from motor_ai_sim import data_sources as _ds
+        have = {e["name"] for e in out}
+        for name, e in sorted(_ds.scan().items()):
+            if name not in have:
+                out.append({"name": name, "die": name, "dir": e["dir"],
+                            "layer": _WS.LAYER_WORKSPACE, "owner": "",
+                            "owner_id": ""})
+        out.sort(key=lambda e: e["name"])
     return out
 
 

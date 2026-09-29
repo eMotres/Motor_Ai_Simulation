@@ -299,14 +299,96 @@ def list_dies_access(_admin: dict = Depends(require_admin)):
     """Every catalog die with its owner-set visibility, for the Motors access
     table: name, visibility, and how many accounts already hold it directly."""
     from motor_ai_sim.routes.family import catalog_dies
+    from motor_ai_sim import data_publish as _DP
+    from motor_ai_sim import data_sources as _DS
     access = _MA.all_die_access()
+    scan = _DS.scan()
+    moves = _DP.load_moves()
     out = []
     for d in catalog_dies():
         name = d.get("name")
         a = access.get(name) or {"visibility": _MA.VIS_PRIVATE, "clients": []}
+        s = scan.get(name)
+        mv = moves.get(name) or {}
         out.append({**d, "visibility": a["visibility"], "clients": a["clients"],
-                    "used_by": _used_by_count(name)})
+                    "used_by": _used_by_count(name),
+                    "source": s["source"] if s else _DS.SOURCE_PRIVATE,
+                    # False = the die is not in either data checkout (a shared or
+                    # workspace die): it counts as private but cannot be moved.
+                    "source_movable": bool(s),
+                    "source_clash": bool(s and s["shadowed"]),
+                    "source_pending": (mv if mv.get("status") == _DP.STATUS_PENDING else None)})
     return {"count": len(out), "dies": out}
+
+
+# ── Data source: OPEN (public repo, AGPL) / PRIVATE (private repo) ──────────
+# Separate from visibility above: visibility is who may SEE a die on this
+# server; the source is which git repository the die's files live in.  A move
+# is a pull request in each repository (motor_ai_sim.data_publish) that a human
+# merges — until then the die shows "pending publish".
+
+@router.get("/dies/{die}/source/preview")
+def preview_die_source(die: str, target: str,
+                       _admin: dict = Depends(require_admin)):
+    """Exactly what moving the die to ``target`` would carry (files, geometry,
+    materials, devices, results), what blocks it, and the warning to show."""
+    from motor_ai_sim import data_publish as _DP
+    try:
+        return _DP.preview(die, target)
+    except _DP.MoveError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@router.post("/dies/{die}/source")
+def move_die_source(die: str, body: dict = Body(default={}),
+                    admin_user: dict = Depends(require_admin)):
+    """Open the PRs that move one die to ``target``.  ``confirm`` must be
+    ``true`` — the UI sends it only after the admin read the manifest and the
+    irreversibility warning."""
+    from motor_ai_sim import data_publish as _DP
+    body = body or {}
+    target = str(body.get("target") or "").strip().lower()
+    if body.get("confirm") is not True:
+        raise HTTPException(status_code=422, detail=(
+            "a move needs 'confirm': true — preview it first "
+            f"(GET /api/admin/dies/{die}/source/preview?target={target or 'open'})"))
+    who = str(admin_user.get("id") or admin_user.get("email") or "")
+    try:
+        pv = _DP.preview(die, target)
+    except _DP.MoveError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    if pv["blockers"]:
+        _DP.audit("move_refused", die=die, **{"from": pv["from"]}, to=target, by=who,
+                  blockers=pv["blockers"])
+        raise HTTPException(status_code=409, detail={
+            "message": f"'{die}' cannot be published until these are open too",
+            "blockers": pv["blockers"]})
+    try:
+        rec = _DP.move_die(die, target, by=who)
+    except _DP.MoveError as exc:
+        _DP.audit("move_failed", die=die, **{"from": pv["from"]}, to=target, by=who,
+                  error=str(exc)[:300])
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True, **rec}
+
+
+@router.post("/dies/source/reconcile")
+def reconcile_die_sources(admin_user: dict = Depends(require_admin)):
+    """Clear 'pending publish' for every move whose PRs have been merged."""
+    from motor_ai_sim import data_publish as _DP
+    who = str(admin_user.get("id") or admin_user.get("email") or "")
+    try:
+        done = _DP.reconcile(by=who)
+    except _DP.MoveError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"ok": True, "completed": done}
+
+
+@router.get("/dies/source/audit")
+def die_source_audit(die: Optional[str] = None,
+                     _admin: dict = Depends(require_admin)):
+    from motor_ai_sim import data_publish as _DP
+    return {"events": _DP.read_audit(die)}
 
 
 @router.get("/dies/{die}/access")

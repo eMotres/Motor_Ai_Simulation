@@ -171,7 +171,12 @@ def device_envelopes() -> List[Dict[str, Any]]:
 
 
 def device_envelope(part: str) -> Optional[Dict[str, Any]]:
-    p = _dev.devices_dir() / f"{str(part).strip()}.yaml"
+    from motor_ai_sim.safe_paths import PathRejected, safe_join
+    try:
+        p = safe_join(_dev.devices_dir(), f"{str(part).strip()}.yaml",
+                      what="device part")
+    except PathRejected:
+        return None
     if not p.is_file():
         return None
     return envelope_from_doc(_dev._read(p), file=_file_of(p))

@@ -322,9 +322,10 @@ def audit(*, principal: Optional[Principal], method: str, tool: str = "",
             pass
     p = audit_path()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
+        from motor_ai_sim.private_files import ensure_private_dir, open_private
+        ensure_private_dir(p.parent)
         with lock_for(p):
-            with open(p, "a", encoding="utf-8") as f:
+            with open_private(p, "a") as f:     # 0600 — audit 2026-09-29 #9
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:                                   # noqa: BLE001
         pass

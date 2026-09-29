@@ -116,8 +116,9 @@ def _secret() -> str:
                       _SECRET_FILE)
             raise StoreUnavailable("secret file is empty")
         s = secrets.token_hex(32)
-        _SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _SECRET_FILE.write_text(s, encoding="utf-8")
+        from motor_ai_sim.private_files import ensure_private_dir, write_private_text
+        ensure_private_dir(_SECRET_FILE.parent)
+        write_private_text(_SECRET_FILE, s)
         log.warning("auth: generated a new signing secret at %s (first run)",
                     _SECRET_FILE)
         return s
@@ -152,11 +153,13 @@ def _load_soft() -> dict:
 
 
 def _save(d: dict) -> None:
-    _USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    from motor_ai_sim.private_files import chmod_private, ensure_private_dir, open_private
+    ensure_private_dir(_USERS_FILE.parent)
     tmp = _USERS_FILE.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
+    with open_private(tmp, "w") as f:       # 0600 — audit 2026-09-29 #9
         json.dump(d, f, indent=1, ensure_ascii=False, sort_keys=True)
     tmp.replace(_USERS_FILE)
+    chmod_private(_USERS_FILE)
 
 
 def _norm(email: str) -> str:

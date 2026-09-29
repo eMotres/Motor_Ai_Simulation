@@ -157,8 +157,8 @@ def log_visitor_turn(*, ip: str = "", user_agent: str = "", messages: list | Non
             "model": _clip(model, 80),
             "limit": _clip(limit, 40) or None,
         }
-        d = chats_dir()
-        d.mkdir(parents=True, exist_ok=True)
+        from motor_ai_sim.private_files import ensure_private_dir, open_private
+        d = ensure_private_dir(chats_dir())
         path = d / f"{_day()}.jsonl"
         with _LOCK:
             if path.is_file() and path.stat().st_size >= DAY_MAX_BYTES:
@@ -168,7 +168,7 @@ def log_visitor_turn(*, ip: str = "", user_agent: str = "", messages: list | Non
                                 "visitor turns are no longer logged", path.name,
                                 DAY_MAX_BYTES)
                 return
-            with open(path, "a", encoding="utf-8") as f:
+            with open_private(path, "a") as f:
                 f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
         _prune()
     except Exception as e:                                   # noqa: BLE001

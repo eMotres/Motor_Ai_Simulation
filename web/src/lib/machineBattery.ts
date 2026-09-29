@@ -167,7 +167,7 @@ export function batteryChipLabel(b: BatteryPack | null | undefined): string {
   const parts: string[] = [];
   // The chemistry alone — "NMC", not the supplier and part number the field
   // may carry ("NMC (GF Myriad semi-solid, FAP106136260)"); the full text is
-  // the dialog's (user 2026-09-09: "просто NMC · 200S · 640/750/860 V").
+  // the dialog's (user 2026-09-09: "just NMC · 200S · 640/750/860 V").
   if (b.chemistry) parts.push(String(b.chemistry).split(/[\s(]/)[0] || String(b.chemistry));
   if (b.cells) parts.push(`${b.cells}S`);
   const f = (v: unknown) =>

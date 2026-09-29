@@ -35,8 +35,8 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ### Changed
 - **The duty cycle is behind a feature flag, off by default** (owner 2026-09-17:
-  *«давай пока уберём duty cycle из Thermal, оставим только стандартный
-  каплинг»*). The Thermal tab is the cooling and the coupled EM↔thermal loop
+  *«let's remove the duty cycle from Thermal for now, keep only the standard
+  coupling»*). The Thermal tab is the cooling and the coupled EM↔thermal loop
   again; the Duty cycle block, the catalog's S1/S3 chip and every ED term a
   coupled answer could print are hidden behind the build flag `VITE_DUTY_CYCLE`,
   and the loop's own ED search behind the backend env var `DUTY_CYCLE_ENABLED`.
@@ -456,51 +456,51 @@ First tracked release. Establishes app versioning + a coordinated release proces
 - **40 mm geometry:** `tooth_width` schema minimum lowered (4 → 1) so small motors are
   editable in the UI and build without a degenerate slot fillet.
 
-## 2026-07-20 (поздно): починен измеритель пульсаций
+## 2026-07-20 (late): ripple gauge fixed
 
-- Пикар насыщения: затухающее демпфирование (α=0.5 → 3/(it+1), пол 0.05)
-  вжито в nu-update fem_solver_2d.py. При n_pic≈40–100 решение сходится:
-  mean(I=0) → 0, спектр момента чистый (семейство 6k).
-- Диагноз слоями: (1) несходимость Пикара = 5–8 Н·м шума; (2) скользящая
-  полоса добавляет ~60 % к h6 против аналитического макроэлемента;
-  (3) остаток h6≈1.5 — реальный сатурационный коггинг 12-кратного статора
-  (12 главных + 12 вспомогательных зубьев, порядки кратны 60/об).
-- Честные цифры (макро, n_pic=100): no-load p-p 2.75 Н·м; нагрузка I=85
-  γ=32: mean 27.4 Н·м, ripple 11.7 % (полоса: 29.6 Н·м, 17.6 %; ANSYS:
-  29.37 Н·м, 3.44 %).
-- Сталь (JFE vs B15) и крупная геометрия точки ANSYS — не факторы (±4 %).
-- Детали: PARITY_FINDINGS_band_mode.md.
+- Saturation Picard: decaying damping (α=0.5 → 3/(it+1), floor 0.05)
+  wired into the nu-update in fem_solver_2d.py. At n_pic≈40–100 the solution converges:
+  mean(I=0) → 0, the torque spectrum is clean (6k family).
+- Diagnosed by layer: (1) Picard non-convergence = 5–8 N·m of noise; (2) the sliding
+  band adds ~60 % to h6 compared to the analytical macro-element;
+  (3) the residual h6≈1.5 is real saturation cogging from the 12x stator
+  (12 main + 12 auxiliary teeth, orders that are multiples of 60/rev).
+- Honest numbers (macro, n_pic=100): no-load p-p 2.75 N·m; load I=85
+  γ=32: mean 27.4 N·m, ripple 11.7 % (band: 29.6 N·m, 17.6 %; ANSYS:
+  29.37 N·m, 3.44 %).
+- Steel (JFE vs B15) and the ANSYS point's coarse geometry are not factors (±4 %).
+- Details: PARITY_FINDINGS_band_mode.md.
 
-## 2026-07-21: паритет пульсаций с ANSYS достигнут
+## 2026-07-21: ripple parity with ANSYS achieved
 
-- Ротор конфига приведён к ANSYS (magnet_height 16, up_gap 2, fill_up 0.46,
-  fill_radius 1, rotor_fill_r 2) — пользователь.
-- Честный замер (макро + n_pic=100): нагрузка I=85 γ=32 → ripple 4.15 %
-  (ANSYS 3.44 %), no-load коггинг p-p 1.57 Н·м (ANSYS ~1.09 с их шумом).
-  Расхождение по пульсациям ЗАКРЫТО; главный драйвер был ротор.
-- Открыто: mean момента макро на ~7 % ниже полосы — калибровка экстракции.
+- Rotor of the config brought in line with ANSYS (magnet_height 16, up_gap 2, fill_up 0.46,
+  fill_radius 1, rotor_fill_r 2) — done by the user.
+- Honest measurement (macro + n_pic=100): load I=85 γ=32 → ripple 4.15 %
+  (ANSYS 3.44 %), no-load cogging p-p 1.57 N·m (ANSYS ~1.09 with their noise).
+  The ripple discrepancy is CLOSED; the main driver was the rotor.
+- Open: macro mean torque is ~7 % below the band — extraction calibration.
 
-## 2026-07-21: честные дефолты — без фильтров и рецептов
+## 2026-07-21: honest defaults — no filters, no recipes
 
-- Пикар насыщения: фиксированный «рецепт 14 итераций» УДАЛЁН. Теперь цикл
-  останавливается по невязке неподвижной точки nu (< 1e-3 два свипа подряд),
-  потолок 100. Диагностика в каждом результате: picard_iters_mean/max,
-  picard_resid_max, picard_converged — честность каждого прогона видна,
-  а не предполагается. То же для demag-препасса и фазорного инита vdrive.
-- Фильтр момента (6k-полоса) по умолчанию ВЫКЛЮЧЕН везде: солвер,
-  em_transient_eval, маршруты симуляции, оптимизатор (run_one, DescentRequest,
-  scan, refine), фронтенд (чекбокс, localStorage-дефолты). Заголовочная
-  T_ripple_pct — теперь сырая. Фильтр остался только как явная опция UI.
-- ВНИМАНИЕ: у существующих браузеров чекбокс мог сохраниться включённым в
-  localStorage ('torqueFilter') — снять галку один раз в Simulation.
+- Saturation Picard: the fixed "14-iteration recipe" REMOVED. The loop now
+  stops on the nu fixed-point residual (< 1e-3 for two sweeps in a row),
+  ceiling 100. Diagnostics in every result: picard_iters_mean/max,
+  picard_resid_max, picard_converged — the honesty of each run is visible,
+  not assumed. Same for the demag pre-pass and the phasor vdrive init.
+- Torque filter (6k band) OFF by default everywhere: the solver,
+  em_transient_eval, simulation routes, the optimizer (run_one, DescentRequest,
+  scan, refine), the frontend (checkbox, localStorage defaults). The headline
+  T_ripple_pct is now raw. The filter remains only as an explicit UI option.
+- WARNING: on existing browsers the checkbox may have persisted as enabled in
+  localStorage ('torqueFilter') — uncheck it once in Simulation.
 
-## 2026-07-21 (продолжение): адаптивная релаксация Айткена в Пикаре
+## 2026-07-21 (continued): adaptive Aitken relaxation in Picard
 
-- Расписание демпфирования (0.5 → 3/(it+1)) заменено релаксацией
-  Иронса–Така (векторный Aitken Δ²): шаг подбирается из фактических
-  невязок, настроечных констант нет. Anderson(m=4) испытан и отброшен —
-  на изломе B-H секущая модель разносит итерацию.
-- Валидация (кольцо, макро, no-load, сетка 2.8): h6=0.5483 (реф. 0.549),
-  mean=−0.0007, iters_mean=58.8, resid_max=1.4e-3 (tol 1e-3 — кадры, не
-  дошедшие до tol на потолке 100, честно репортят converged=False).
-  Стоимость ~4× против старого «рецепта 14»; физика сошедшаяся.
+- The damping schedule (0.5 → 3/(it+1)) was replaced by Irons–Tuck
+  relaxation (vector Aitken Δ²): the step is derived from the actual
+  residuals, with no tuning constants. Anderson(m=4) was tried and dropped —
+  at the B-H kink the secant model destabilizes the iteration.
+- Validation (ring, macro, no-load, mesh 2.8): h6=0.5483 (ref. 0.549),
+  mean=−0.0007, iters_mean=58.8, resid_max=1.4e-3 (tol 1e-3 — frames that did not
+  reach tol at the 100 ceiling honestly report converged=False).
+  Cost ~4× versus the old "14-recipe"; the physics is converged.

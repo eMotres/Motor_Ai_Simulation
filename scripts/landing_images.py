@@ -18,7 +18,7 @@ prints:
 The third is the rotor WITH ITS SLEEVE, drawn deformed at the report's own
 exaggeration (~22x) and coloured by the true |u| — the mechanical section's
 displacement figure, which is what the user asked that card to show
-(2026-09-16, "механическое моделирование").
+(2026-09-16, "mechanical simulation").
 
 ONE CUT, THE WHOLE MACHINE.  The three must show the same section of the
 machine, and they do not out of the box.  The mechanical solve is a full 360

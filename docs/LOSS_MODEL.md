@@ -1,367 +1,367 @@
-# Модель потерь (LOSS MODEL) — методология и валидация
+# Loss model (LOSS MODEL) — methodology and validation
 
-*Обновлено: август 2026. Код: `src/motor_ai_sim/simulation/fem_solver_2d.py`
-(транзиент `fem_transient_sliding_band`), `src/motor_ai_sim/simulation/losses.py`
-(модель железа), `src/motor_ai_sim/core_loss_surface.py` (интерполяция
-измеренной поверхности P(B, f)), `src/motor_ai_sim/materials.py` (фит).*
+*Updated: August 2026. Code: `src/motor_ai_sim/simulation/fem_solver_2d.py`
+(transient `fem_transient_sliding_band`), `src/motor_ai_sim/simulation/losses.py`
+(iron model), `src/motor_ai_sim/core_loss_surface.py` (interpolation of the
+measured P(B, f) surface), `src/motor_ai_sim/materials.py` (fit).*
 
-Все потери считаются из **реальных данных назначенных материалов**
-(`config/materials_library.yaml`, извлечено из Ansys PersonalLib):
-измеренные кривые потерь P(B, f), BH-кривые, проводимости σ.
+All losses are computed from **real data of the assigned materials**
+(`config/materials_library.yaml`, extracted from the Ansys PersonalLib):
+measured loss curves P(B, f), BH curves, conductivities σ.
 
 ---
 
-## 1. Железо (ламинация) — прямая интерполяция измеренной поверхности P(B, f)
+## 1. Iron (lamination) — direct interpolation of the measured P(B, f) surface
 
-**Две модели, выбор — по записи материала** (`core_loss_model` в
+**Two models, selected by the material's record** (`core_loss_model` in
 `config/materials_library.yaml`):
 
-| `core_loss_model` | что считается | какие стали |
+| `core_loss_model` | what is computed | which steels |
 |---|---|---|
-| `measured_surface` | сама заводская таблица P(B, f), интерполированная напрямую | B15AHV950M, B10AHV900M, 20RSW175 (данные сверены с паспортом) |
-| `bertotti` (по умолчанию) | три коэффициента, отфитованные по кривым | все остальные записи библиотеки |
+| `measured_surface` | the manufacturer's own table P(B, f), interpolated directly | B15AHV950M, B10AHV900M, 20RSW175 (data cross-checked against the datasheet) |
+| `bertotti` (default) | three coefficients fitted to the curves | every other library record |
 
-Опт-ин **по записи**, а не «есть кривые»: у 20SW1200 тоже 10 кривых и 269 точек,
-но происхождение таблицы не проверялось по паспорту, и путь, на котором она
-провалидирована, не должен уехать под ней.
+Opt-in **per record**, not "has curves": 20SW1200 also has 10 curves and 269 points,
+but the table's provenance was never checked against a datasheet, and the path on which it
+has been validated must not drift out from under it.
 
-### 1.0 Почему поверхность, а не три коэффициента
+### 1.0 Why a surface, not three coefficients
 
-Трёхчленная форма несёт **фиксированную степень B²**:
+The three-term form carries a **fixed B² power**:
 
 ```
-P [Вт/м³_стали] = kh·f·B_s² + kc·f²·B_s² + ke·f^1.5·B_s^1.5
-                  гистерезис   классич.     избыточные
+P [W/m³_steel] = kh·f·B_s² + kc·f²·B_s² + ke·f^1.5·B_s^1.5
+                 hysteresis  classical   excess
 ```
 
-Реальная изотропная сталь выше колена **загибается вверх**, и никакие три
-константы не могут одновременно попасть в загиб и в область малых индукций.
-Измерено на B15AHV950M по реальному полю 150-мм машины на 933 Гц: фит даёт
-53.6 Вт потерь за цикл там, где сама заводская поверхность даёт 62.3 Вт
-(**−16.4 %**), потому что 43 % потерь статора лежит выше 1.5 Т. На точке
-1.5 Т / 933 Гц фит занижает на 13 %.
+Real isotropic steel **bends upward** above the knee, and no three
+constants can hit both the bend and the low-induction region at once.
+Measured on B15AHV950M against the real field of the 150-mm machine at 933 Hz: the fit gives
+53.6 W of loss per cycle where the manufacturer's own surface gives 62.3 W
+(**-16.4 %**), because 43 % of the stator's losses lie above 1.5 T. At the point
+1.5 T / 933 Hz the fit underestimates by 13 %.
 
-### 1.1 Схема интерполяции
+### 1.1 Interpolation scheme
 
-Лог-логарифмическая, C1 по обеим осям (оптимизатор не должен видеть изломов —
-это ложные градиенты):
+Log-log, C1 along both axes (the optimizer must not see kinks —
+those are spurious gradients):
 
-1. **По B, на каждой измеренной частоте** — PCHIP (монотонный кубический
-   Эрмит Фрича–Карлсона) через (ln B, ln P). Проходит **точно** через каждую
-   измеренную точку, C1, и не даёт выбросов между узлами, как обычный сплайн.
-   За пределами диапазона кривой — прямая в лог-логе, т.е. степенной закон с
-   наклоном на краю (P → 0 при B → 0, загиб продолжается вверх).
-2. **По f** — снова PCHIP, через (ln f_i, ln P_i(B)). Наклоны PCHIP локальны
-   (узел i использует только i−1, i, i+1), поэтому на интервале [f_i, f_{i+1}]
-   достаточно четырёх кривых — результат тождественен глобальному PCHIP, а
-   стоимость не зависит от числа кривых в записи.
+1. **Over B, at each measured frequency** — PCHIP (monotone cubic
+   Fritsch-Carlson Hermite) through (ln B, ln P). Passes **exactly** through each
+   measured point, C1, and produces no overshoots between nodes, unlike an
+   ordinary spline. Beyond the curve's range — a straight line in log-log, i.e. a power law with
+   the slope at the edge (P -> 0 as B -> 0, the bend continues upward).
+2. **Over f** — PCHIP again, through (ln f_i, ln P_i(B)). PCHIP's slopes are local
+   (node i uses only i-1, i, i+1), so over the interval [f_i, f_{i+1}]
+   four curves suffice — the result is identical to a global PCHIP, and
+   the cost does not depend on the number of curves in the record.
 
-Итог: в **каждой** из 1128 измеренных точек трёх сталей модель возвращает
-паспортное число с точностью до float (проверено:
+Result: at **every one** of the 1128 measured points across the three steels, the model returns
+the datasheet number to float precision (verified:
 `tests/test_core_loss_surface.py::TestAnchors`).
 
-### 1.2 Огибающая измеренного и что за ней
+### 1.2 The measured envelope and what lies beyond it
 
-Таблицы — **лестница**, а не прямоугольник: 0.15-мм сталь измерена до 1.886 Т
-на 50 Гц, но только до 1.597 Т на 1 кГц и до 0.531 Т на 10 кГц (испытательный
-стенд не прогонит насыщенный поток через тонкий лист на 10 кГц). Огибающая
-`B_env(f)` — PCHIP по верхним точкам кривых; на 933 Гц она равна **1.63 Т**.
+The tables form a **staircase**, not a rectangle: 0.15-mm steel is measured up to 1.886 T
+at 50 Hz, but only up to 1.597 T at 1 kHz and up to 0.531 T at 10 kHz (the test
+rig cannot drive a saturated flux through a thin sheet at 10 kHz). The envelope
+`B_env(f)` is a PCHIP through the curves' top points; at 933 Hz it equals **1.63 T**.
 
-За огибающей (B выше `B_env(f)`, либо f вне диапазона таблицы) ответ
-**сшивается** с экстраполяцией Бертотти, а не переключается на неё:
-
-```
-ln P = (1 − s)·ln P_поверхн + s·ln P_бертотти,   s = 3u² − 2u³
-```
-
-где `u` — расстояние наружу, 0 на границе и 1 на дальнем краю полосы сшивки
-(множитель 1.35 по B, октава по f). У `s` и `ds/du` нули на границе, поэтому
-значение **и первая производная** непрерывны — ни скачка, ни излома. Внутри
-огибающей ответ — ровно измерение (`s ≡ 0`).
-
-Ширина полосы по B задана **монотонностью**, а не вкусом: переход с кривой,
-которая читает выше, на кривую, которая читает ниже, «стоит» наклона, и при
-узкой полосе потери начинают **падать** с ростом индукции (измерено на
-20RSW175 на 933 Гц: полоса 1.15 даёт провал между 1.62 и 1.68 Т). 1.25 уже
-чисто на всех трёх записях в 20 Гц–40 кГц и 0.02–2.6 Т; 1.35 — то же с запасом.
-Сдвиг полосы в 1.15…1.45 меняет потери 150-мм машины на 0.9 %.
-
-Выход за огибающую **логируется громко**, один раз на половину за прогон, с
-долей ватт, пришедших из экстраполяции: на 150 мм это 8.1 % статора и 2.6 %
-ротора; на 40-мм машине (1517 Гц, таблица там достаёт лишь до 1.48 Т) —
-**34.9 % статора**, и это надо знать, читая её число.
-
-### 1.3 Суммирование по гармоникам
-
-Измеренная точка P(B, f) — это **синусоида**. B(t) в машине не синусоида,
-поэтому локус каждого элемента раскладывается в ряд и поверхность
-опрашивается на каждой гармонике:
+Beyond the envelope (B above `B_env(f)`, or f outside the table's range), the answer is
+**blended** with the Bertotti extrapolation, rather than switched to it outright:
 
 ```
-P = Σ_осям Σ_{m≥1} P_изм(B_m / k_f, m·f_эл/n_periods)
+ln P = (1 - s)·ln P_surface + s·ln P_bertotti,   s = 3u^2 - 2u^3
 ```
 
-**Это допущение — суперпозиция потерь по гармоникам.** Стандартное (та же
-опция гармонических потерь есть в Ansys Maxwell), несовершенное и с известным
-направлением ошибки: гистерезис — процесс с памятью, поэтому потери суммы
-гармоник не равны сумме их потерь. Но это строго лучше единственной
-«эквивалентной» амплитуды, которая слотовой пульсации не видит вовсе.
-Классическая (вихревая) часть при этом складывается **точно** (Парсеваль), так
-что она совпадает с интегралом ⟨(dB/dt)²⟩ по временно́му ряду.
+where `u` is the outward distance, 0 at the boundary and 1 at the far edge of the blend
+band (a factor of 1.35 in B, one octave in f). `s` and `ds/du` are both zero at the boundary, so
+the value **and its first derivative** are continuous — no jump, no kink. Inside the
+envelope, the answer is exactly the measurement (`s ≡ 0`).
 
-Что даёт суммирование по гармоникам против «только первой»:
-**+22.6 %** на 150 мм и **+21.6 %** на 40 мм. Разбиение по половинам говорит
-больше, чем общая цифра: на статоре +10 %, на роторе — в **8 раз** (0.33 → 2.71 Вт
-на сектор), потому что поле в роторном фрейме почти целиком состоит из
-зубцовых гармоник, а первой гармоники в нём почти нет.
+The blend band's width in B is set by **monotonicity**, not taste: crossing from a curve
+that reads higher to one that reads lower "costs" a slope, and with too narrow a
+band the losses start to **fall** as the induction rises (measured on
+20RSW175 at 933 Hz: a 1.15 band gives a dip between 1.62 and 1.68 T). 1.25 is already
+clean across all three records over 20 Hz-40 kHz and 0.02-2.6 T; 1.35 gives the same with margin.
+Shifting the band across 1.15...1.45 changes the 150-mm machine's losses by 0.9 %.
 
-**Защита от растекания спектра (leakage).** ДПФ требует, чтобы окно
-замыкалось само на себя. На статоре так и есть. На роторе — нет: на 24 пазах и
-14 парах полюсов зубец проходит мимо точки ротора 24/14 = 1.71 раза за
-электрический период, т.е. окно обрывается на полуцикле. Прямоугольное ДПФ
-читает этот **разрыв** как широкополосный сигнал, а потери растут с частотой,
-поэтому фиктивный хвост оплачивается на 19 кГц: измерено, 30 % сырой роторной
-суммы сидело в гармониках k ≥ 8 и **росло** к Найквисту. Поэтому шаг
-оценивается и снимается линейной рампой до ДПФ, **поэлементно и с плавным
-порогом**:
+Going past the envelope is **logged loudly**, once per half per run, with
+the fraction of watts that came from extrapolation: on the 150 mm that's 8.1 % of the stator and 2.6 %
+of the rotor; on the 40-mm machine (1517 Hz, whose table only reaches 1.48 T) —
+**34.9 % of the stator**, and that needs to be known when reading its number.
 
-- шаг — это `x[N] − x[0]`, где `x[N]` экстраполирован на отсчёт вперёд
-  квадратичной по трём последним. Наивная разность `x[N−1] − x[0]` — это один
-  отсчёт **наклона**, а не шаг: на дискретизованной синусоиде она даёт 1.2e-2
-  амплитуды против 9e-4 у квадратичной, и вычитание такой «рампы» съедало 2 %
-  потерь статора, который был периодичен изначально;
-- снимается с весом smoothstep от `|шаг|/размах` между 0.15 и 0.30 (C1 по
-  данным, чтобы ни один элемент не переходил порог скачком).
+### 1.3 Summing over harmonics
 
-Измерено: средний вес защиты 0.00 (150 мм) и 0.06 (40 мм) на статоре — т.е.
-она там ничего не делает — против 0.75 и 0.81 на роторе, где она снимает 37 %
-сырой суммы и роняет хвост k ≥ 8 с 30 % до 8 %. Сдвиг порогов в (0.10, 0.25)
-или (0.20, 0.40) меняет итог 150-мм машины на 0.2 % — это не настроечная ручка.
+A measured point P(B, f) is a **sinusoid**. B(t) in the machine is not sinusoidal,
+so each element's locus is decomposed into a series and the surface is
+sampled at every harmonic:
 
-**Чего это стоит**: снятая рампа — реальная экскурсия потока (биение
-некратной частоты об окно). Поэтому роторная гармоническая сумма — **нижняя**
-оценка, сырая — верхняя: 10.8 Вт против 17.1 Вт на роторе 150 мм. Закрывается
-это окном захвата, кратным зубцовому проходу (семь электрических периодов на
-этой машине), а не изменением в модели потерь.
+```
+P = Sum_over_axes Sum_{m>=1} P_meas(B_m / k_f, m·f_elec/n_periods)
+```
 
-### 1.4 Фит Бертотти — по-прежнему в деле (фоллбэк и сшивка)
+**This is an assumption — superposition of losses over harmonics.** Standard (the same
+harmonic-loss option exists in Ansys Maxwell), imperfect, with a known
+direction of error: hysteresis is a process with memory, so the loss of a sum
+of harmonics is not equal to the sum of their losses. But this is strictly better than a single
+"equivalent" amplitude, which does not see the slot ripple at all.
+The classical (eddy) part, however, sums up **exactly** (Parseval), so
+it matches the integral ⟨(dB/dt)^2⟩ over the time series.
 
-Три коэффициента никуда не делись: они считают **все** стали без опт-ина и
-работают экстраполяцией за огибающей у тех, кто с опт-ином. Поэтому их
-качество по-прежнему проверяется (`tests/test_materials_fit.py`), включая
-запинованное занижение в насыщении — оно теперь описывает **фоллбэк**, а не то,
-что биллится.
+What summing over harmonics gives versus "first harmonic only":
+**+22.6 %** on the 150 mm and **+21.6 %** on the 40 mm. The split by half tells
+more than the overall number: +10 % on the stator, but **8x** on the rotor (0.33 -> 2.71 W
+per sector), because the field in the rotor frame consists almost entirely
+of slot harmonics, with almost no first harmonic in it.
 
-- `materials.fit_bertotti_from_curves(steel)` — NNLS-фит по **всем** измеренным
-  точкам с весом 1/P (минимизируется относительная ошибка по всему диапазону
-  частот/индукций, а не только в углу больших потерь).
-- Для 20SW1200: 10 кривых (30–800 Гц), 269 точек →
-  **kh=115.3, kc=0.0799, ke=3.84; средняя ошибка 6.4 %, p90=15.6 %**.
-  (Ручные YAML-коэффициенты вообще не имели избыточного члена: ke=0.)
-- **Данные производителя (2026-08)**: три стали переведены на полные заводские
-  наборы кривых + паспорт. Глубина проверки разная и намеренно:
-  **B15AHV950M** — сталь активной 150-мм машины, полная лестница
-  (`tests/test_materials_fit.py::TestB15AtTheOperatingPoint`: каждая измеренная
-  частота, гарантированные точки паспорта, рабочая точка 933 Гц, и
-  запинованное занижение фита в насыщении). Остальные две **загружены** для
-  выбора в UI — smoke-уровень (`TestIngestedRecords`: данные пришли целиком,
-  B(H) обратима, фит вменяем, коэффициенты принадлежат своим кривым). Их полная
-  валидация — когда на них построят машину, против её рабочей точки:
+**Protection against spectral leakage.** The DFT requires the window
+to close on itself. On the stator it does. On the rotor it does not: with 24 slots and
+14 pole pairs, a tooth passes a rotor point 24/14 = 1.71 times per
+electrical period, i.e. the window breaks mid-cycle. A rectangular DFT
+reads this **discontinuity** as broadband content, and since losses grow with frequency,
+the spurious tail gets paid for out to 19 kHz: measured, 30 % of the raw rotor
+sum sat in harmonics k >= 8 and **grew** toward Nyquist. So the step
+is estimated and removed with a linear ramp before the DFT, **per element and with a smooth
+threshold**:
 
-  | сталь | толщина | k_f | ρ | кривых | точек | kh / kc / ke | ср. ошибка |
+- the step is `x[N] - x[0]`, where `x[N]` is extrapolated one sample forward
+  quadratically from the last three. The naive difference `x[N-1] - x[0]` is one sample
+  of **slope**, not a step: on a discretized sinusoid it gives 1.2e-2 of
+  amplitude versus 9e-4 for the quadratic one, and subtracting such a "ramp" ate 2 % of
+  the stator's losses, which was periodic to begin with;
+- it is removed with a smoothstep weight over `|step|/range` between 0.15 and 0.30 (C1 in the
+  data, so that no element crosses the threshold as a jump).
+
+Measured: mean protection weight 0.00 (150 mm) and 0.06 (40 mm) on the stator — i.e.
+it does nothing there — versus 0.75 and 0.81 on the rotor, where it removes 37 %
+of the raw sum and drops the k >= 8 tail from 30 % to 8 %. Shifting the thresholds to (0.10, 0.25)
+or (0.20, 0.40) changes the 150-mm machine's result by 0.2 % — this is not a tuning knob.
+
+**The cost of this**: the removed ramp is a real flux excursion (a beat of a
+non-integer frequency against the window). So the rotor harmonic sum is a **lower**
+bound, and the raw sum is an upper one: 10.8 W versus 17.1 W on the 150-mm rotor. Closing
+this gap requires a capture window that is an integer multiple of the tooth pass (seven electrical periods
+on this machine), not a change to the loss model.
+
+### 1.4 The Bertotti fit — still in play (fallback and blending)
+
+The three coefficients haven't gone anywhere: they compute losses for **every** steel without
+opt-in, and serve as the extrapolation beyond the envelope for those with the opt-in. So their
+quality is still checked (`tests/test_materials_fit.py`), including the
+pinned underestimate in saturation — it now describes the **fallback**, not
+what is billed.
+
+- `materials.fit_bertotti_from_curves(steel)` — an NNLS fit across **all** measured
+  points weighted by 1/P (minimizing relative error across the whole range of
+  frequencies/inductions, not just in the high-loss corner).
+- For 20SW1200: 10 curves (30-800 Hz), 269 points ->
+  **kh=115.3, kc=0.0799, ke=3.84; mean error 6.4 %, p90=15.6 %**.
+  (The hand-written YAML coefficients had no excess term at all: ke=0.)
+- **Manufacturer data (2026-08)**: three steels moved onto full manufacturer
+  curve sets + datasheet. The depth of verification differs, and deliberately so:
+  **B15AHV950M** — the active 150-mm machine's steel, full staircase
+  (`tests/test_materials_fit.py::TestB15AtTheOperatingPoint`: every measured
+  frequency, guaranteed datasheet points, the 933 Hz operating point, and the
+  pinned fit underestimate in saturation). The other two are **ingested** for
+  selection in the UI — smoke level (`TestIngestedRecords`: data arrived whole,
+  B(H) is invertible, the fit is sane, coefficients belong to their own curves). Their full
+  validation happens once a machine is built on them, against its operating point:
+
+  | steel | thickness | k_f | rho | curves | points | kh / kc / ke | mean error |
   |---|---|---|---|---|---|---|---|
-  | B15AHV950M (Baosteel NGO) | 0.15 мм | 0.92 | 7600 | 15 (50 Гц–10 кГц) | 217 | 111.0 / 0.0530 / 2.076 | 6.8 % |
-  | B10AHV900M (Baosteel NGO) | 0.10 мм | 0.92 | 7600 | 12 (50 Гц–10 кГц) | 406 | 120.3 / 0.0364 / 1.650 | 4.5 % |
-  | 20RSW175 (Shougang VHs)   | 0.20 мм | 0.95 | 7750 | 23 (50 Гц–20 кГц) | 505 | 119.1 / 0.1078 / 5.948 | 5.6 % |
+  | B15AHV950M (Baosteel NGO) | 0.15 mm | 0.92 | 7600 | 15 (50 Hz-10 kHz) | 217 | 111.0 / 0.0530 / 2.076 | 6.8 % |
+  | B10AHV900M (Baosteel NGO) | 0.10 mm | 0.92 | 7600 | 12 (50 Hz-10 kHz) | 406 | 120.3 / 0.0364 / 1.650 | 4.5 % |
+  | 20RSW175 (Shougang VHs)   | 0.20 mm | 0.95 | 7750 | 23 (50 Hz-20 kHz) | 505 | 119.1 / 0.1078 / 5.948 | 5.6 % |
 
-  До этого запись B15AHV950M несла **5 кривых из 15** и описание другой стали
-  (Nippon Steel 23ZDKH75, текстурованная). Полный рефит сместил потери в рабочей
-  точке 933 Гц всего на −1.5…−3 %: **экстраполяция по частоте гапом не была** —
-  запись уже накрывала 933 Гц кривыми 800/1000 Гц.
-- **Ламинация (k_f) — алгебра**. Магнитная задача решается на гомогенизированном
-  железе, поэтому решатель отдаёт `B_homog = k_f·B_steel`. Коэффициенты же —
-  Вт на м³ **стали** при индукции **в стали**. Значит потери считаются при
-  `B/k_f` на объёме `k_f·V`:
+  Before this, the B15AHV950M record carried **5 curves out of 15** and a description of a different steel
+  (Nippon Steel 23ZDKH75, grain-oriented). The full refit shifted the losses at the operating
+  point of 933 Hz by only -1.5...-3 %: the frequency range was **not** an extrapolation gap —
+  the record already covered 933 Hz with the 800/1000 Hz curves.
+- **Lamination factor (k_f) — the algebra**. The magnetic problem is solved on homogenized
+  iron, so the solver returns `B_homog = k_f·B_steel`. The coefficients, however, are
+  W per m^3 of **steel** at the induction **in the steel**. So the losses must be computed at
+  `B/k_f` over a volume of `k_f·V`:
 
   ```
-  P = k_f·V·[kh·f·(B/k_f)² + kc/(2π²)·⟨(dB/dt)²⟩/k_f² + ke·f^1.5·(B/k_f)^1.5]
-    = V·[kh·f·B²/k_f + kc/(2π²)·⟨(dB/dt)²⟩/k_f + ke·f^1.5·B^1.5/√k_f]
+  P = k_f·V·[kh·f·(B/k_f)^2 + kc/(2*pi^2)·<(dB/dt)^2>/k_f^2 + ke·f^1.5·(B/k_f)^1.5]
+    = V·[kh·f·B^2/k_f + kc/(2*pi^2)·<(dB/dt)^2>/k_f + ke·f^1.5·B^1.5/sqrt(k_f)]
   ```
 
-  Раньше k_f применялся только к объёму (вниз) и не применялся к полю (вверх) —
-  занижение в `1/k_f² = 1.18` по B²-членам и `1/k_f^1.5 = 1.12` по избыточному.
-  **Алгебра одна и та же для обеих моделей**: поверхность тоже опрашивается на
-  `B/k_f` и биллится на `k_f·V`.
-- Применение во времени (по каждому элементу сетки, из его B(t) за период) —
-  **путь Бертотти**:
-  - классические: `kc/(2π²)·⟨(dB/dt)²⟩` — по **временно́му ряду** dB/dt обеих
-    компонент, корректно для ВСЕХ гармоник (слотовые пульсации и малые петли
-    входят автоматически, без синусоидального эквивалента);
-  - гистерезис: `kh·f·B_ac²`, где B_ac — половина размаха, **только большая
-    петля**, один цикл на электрический период. Rainflow-подсчёта малых петель
-    нет — это осознанный выбор (классическое разделение Бертотти), и он делает
-    гистерезисный член **нижней оценкой** там, где сильна слотовая пульсация:
-    на 24s28p роторное железо проходит 1.81 цикла за электрический период
-    (измерено), т.е. его гистерезис недосчитан ~1.8× (≈ +1.6 Вт из 74.7 Вт);
-  - избыточные: `ke·f^1.5·B_ac^1.5`.
-- **Путь поверхности** биллит ОДИН измеренный тотал (§1.3), и разбиение на
-  гистерезис/вихревые/избыточные в этом случае — производная величина:
-  вихревой член остаётся тем же честным интегралом ⟨(dB/dt)²⟩ (он же — форма
-  временно́й ряби P_fe(t), единственная мгновенная часть потерь), а остаток
-  делится в **пропорции фита**. Тултип плитки Core и `P_fe_terms.model` это
-  говорят: раздельного измерения гистерезиса и избыточных в таблице нет.
-  Суммирование по гармоникам уже включает малые петли на своих частотах,
-  поэтому оговорка «только большая петля» к этому пути не относится.
-- **Вращательные потери**: две компоненты поля трактуются как две независимые
-  знакопеременные петли, вклады складываются (стандартная аппроксимация
-  разложения по осям). У корней зубцов локус вращается — классически там
-  занижение до ~1.5–2×. На 24s28p 19 % (по весу потерь) объёма имеет отношение
-  полуосей локуса > 0.5. Поправочных коэффициентов не вводится: это заявленное
-  занижение, а не настраиваемый множитель.
-- Рабочая точка 466.7 Гц лежит **внутри** измеренного диапазона (400/500/600 Гц).
-- BH-кривая материала используется решателем для насыщения (пер-элементный
-  Пикар/Ньютон). Заводские BH из xlsx требуют обработки хвоста: измерение
-  выходит на плато и затем **падает** (B15AHV950M: 1.945 Т при 49 кА/м → 1.939 Т
-  при 80 кА/м — шум на насыщенном образце), а до падения даёт участки с
-  `dB/dH < μ0` (B15: 3.9e-7; B10: 1e-7 — это уже квантование B до 3 знаков).
-  Насыщенная сталь подходит к μ0 **сверху** и не может быть «жёстче вакуума».
-  Правило: измеренные точки берутся, пока B растёт **и** `dB/dH ≥ μ0`; дальше
-  хвост продолжается наклоном μ0. Если приклеить μ0-хвост ПОСЛЕ участков с
-  `dB/dH < μ0`, дифференциальная проницаемость падает и снова **растёт** — излом,
-  на котором касательная Ньютона спотыкается: связанный eddy-кейс встал на
-  rrel 1.39e-7 при допуске 1e-7 (измерено, 2026-08-04). B15AHV950M: измерение до
-  28.8 кА/м / 1.933 Т, дальше μ0 → 1.997 Т при 80 кА/м.
-- Фоллбэк: если у стали нет измеренных кривых — берутся YAML-коэффициенты.
-  Для трёх сталей выше YAML-коэффициенты **равны** фиту по их же кривым, так что
-  фоллбэк не даёт второго ответа.
-- Тесты: `tests/test_core_loss_surface.py` (поверхность: реперы, огибающая,
-  сшивка, гармоники, защита от leakage), `tests/test_materials_fit.py` (фит),
-  `tests/test_losses.py` (k_f-алгебра и разбиение).
+  Previously k_f was applied only to the volume (downward) and not to the field (upward) —
+  an underestimate of `1/k_f^2 = 1.18` on the B^2 terms and `1/k_f^1.5 = 1.12` on the excess term.
+  **The algebra is the same for both models**: the surface is also sampled at
+  `B/k_f` and billed over `k_f·V`.
+- Application over time (per mesh element, from its B(t) over a period) — the
+  **Bertotti path**:
+  - classical: `kc/(2*pi^2)·<(dB/dt)^2>` — from the **time series** of dB/dt of both
+    components, correct for ALL harmonics (slot ripple and minor loops
+    enter automatically, with no sinusoidal equivalent needed);
+  - hysteresis: `kh·f·B_ac^2`, where B_ac is half the swing, **major loop
+    only**, one cycle per electrical period. There is no rainflow count of minor
+    loops — this is a deliberate choice (the classical Bertotti split), and it makes
+    the hysteresis term a **lower bound** wherever the slot ripple is strong:
+    on the 24s28p the rotor iron completes 1.81 cycles per electrical period
+    (measured), i.e. its hysteresis is undercounted by ~1.8x (approx +1.6 W out of 74.7 W);
+  - excess: `ke·f^1.5·B_ac^1.5`.
+- **The surface path** bills ONE measured total (§1.3), and the split into
+  hysteresis/eddy/excess in this case is a derived quantity:
+  the eddy term remains the same honest integral ⟨(dB/dt)^2⟩ (which is also
+  the shape of the P_fe(t) time ripple, the only instantaneous part of the losses), and the remainder
+  is split in the **fit's proportion**. The Core tile's tooltip and `P_fe_terms.model` say
+  this: there is no separate measurement of hysteresis and excess in the table.
+  Summing over harmonics already includes minor loops at their own frequencies,
+  so the "major loop only" caveat does not apply to this path.
+- **Rotational losses**: the field's two components are treated as two independent
+  alternating loops, and the contributions are summed (the standard axis-decomposition
+  approximation). At the tooth roots the locus rotates — classically that is
+  underestimated by up to ~1.5-2x. On the 24s28p, 19 % (by loss weight) of the
+  volume has a locus semi-axis ratio > 0.5. No correction coefficient is introduced: this is a stated
+  underestimate, not a tunable multiplier.
+- The 466.7 Hz operating point lies **inside** the measured range (400/500/600 Hz).
+- The material's BH curve is used by the solver for saturation (per-element
+  Picard/Newton). The manufacturer BH data from the xlsx needs tail cleanup:
+  the measurement reaches a plateau and then **drops** (B15AHV950M: 1.945 T at 49 kA/m -> 1.939 T
+  at 80 kA/m — noise on a saturated sample), and before the drop there are stretches with
+  `dB/dH < mu0` (B15: 3.9e-7; B10: 1e-7 — this is already B quantized to 3 digits).
+  Saturated steel approaches mu0 **from above** and cannot be "stiffer than vacuum".
+  Rule: measured points are kept while B is increasing **and** `dB/dH >= mu0`; beyond that
+  the tail continues with a mu0 slope. If a mu0 tail were glued on AFTER stretches with
+  `dB/dH < mu0`, the differential permeability would drop and then **rise** again — a kink
+  on which Newton's tangent stumbles: the coupled eddy case stalled at
+  rrel 1.39e-7 against a tolerance of 1e-7 (measured, 2026-08-04). B15AHV950M: measured up to
+  28.8 kA/m / 1.933 T, then mu0 -> 1.997 T at 80 kA/m.
+- Fallback: if a steel has no measured curves, the YAML coefficients are used.
+  For the three steels above, the YAML coefficients **equal** the fit from their own curves, so
+  the fallback does not give a second answer.
+- Tests: `tests/test_core_loss_surface.py` (surface: anchors, envelope,
+  blending, harmonics, leakage protection), `tests/test_materials_fit.py` (fit),
+  `tests/test_losses.py` (k_f algebra and split).
 
-### 1.5 Что осталось между расчётом и измерением (24s28p, 150 мм, 94 А, 4000 об/мин)
+### 1.5 What remains between calculation and measurement (24s28p, 150 mm, 94 A, 4000 rpm)
 
-Ansys заказчика: 186.9 Вт при их `$CoreLossCoff = 2` → **сырьё 93.4 Вт**.
-Наш честный расчёт: **93.40 Вт** (было 74.72 на фите Бертотти, до того 67.9).
-Момент и напряжение не сдвинулись ни на цифру (31.0587 Н·м, 70.742 В) — это
-пост-обработка поля, а не другое поле.
+Client's Ansys: 186.9 W at their `$CoreLossCoff = 2` -> **raw 93.4 W**.
+Our honest calculation: **93.40 W** (was 74.72 on the Bertotti fit, and 67.9 before that).
+Torque and voltage did not move by a single digit (31.0587 N·m, 70.742 V) — this is
+post-processing of the field, not a different field.
 
-Из чего сложился рост +25.0 %:
+Breakdown of the +25.0 % increase:
 
-| вклад | 150 мм | 40 мм |
+| contribution | 150 mm | 40 mm |
 |---|---|---|
-| поверхность вместо фита, только первая гармоника | +2.0 % (74.72 → 76.22 Вт) | +8.6 % (5.97 → 6.48 Вт) |
-| суммирование по гармоникам | **+22.6 %** (76.22 → 93.40 Вт) | **+21.6 %** (6.48 → 7.88 Вт) |
-| итог | **74.72 → 93.40 Вт (+25.0 %)** | **5.97 → 7.88 Вт (+32.1 %)** |
+| surface instead of fit, first harmonic only | +2.0 % (74.72 -> 76.22 W) | +8.6 % (5.97 -> 6.48 W) |
+| summing over harmonics | **+22.6 %** (76.22 -> 93.40 W) | **+21.6 %** (6.48 -> 7.88 W) |
+| total | **74.72 -> 93.40 W (+25.0 %)** | **5.97 -> 7.88 W (+32.1 %)** |
 
-Разбиение по половинам (150 мм, вся машина): статор 67.83 → 82.56 Вт,
-ротор 6.89 → 10.84 Вт.
+Split by half (150 mm, whole machine): stator 67.83 -> 82.56 W,
+rotor 6.89 -> 10.84 W.
 
-**Совпадение с 93.4 Вт — совпадение, а не валидация.** Ниже перечислены
-занижения, которые в модели ОСТАЛИСЬ, и множитель, который в неё не входит
-вообще; их сумма ненулевая, и то, что итог сел на цифру Ansys, ничего из этого
-не отменяет:
+**Matching 93.4 W is a coincidence, not a validation.** Listed below are the
+underestimates that REMAIN in the model, and the multiplier that is not included
+in it at all; their sum is nonzero, and the fact that the total landed on Ansys's
+number does not cancel any of them:
 
-| источник | величина | статус |
+| source | magnitude | status |
 |---|---|---|
-| форма Бертотти при B > 1.5 Т | **закрыто** | поверхность опрашивается напрямую; фит остался только экстраполяцией за огибающей (8.1 % ватт статора, 2.6 % ротора на этой машине) |
-| вращательный локус | занижение | 19 % объёма (по весу потерь) с отношением полуосей > 0.5 — разложение по осям это не видит |
-| роторная сумма по гармоникам | **нижняя** оценка | окно захвата некратно зубцовому проходу; защита от leakage снимает рампу, сырая сумма даёт 17.1 Вт вместо 10.8 Вт на роторе |
-| выход за огибающую | ±0.9 % | ватты, посчитанные экстраполяцией Бертотти; чувствительность к ширине полосы сшивки |
-| производственная деградация (штамповка, стяжка, сварка) | 1.5–2× | **вне модели**: это и есть то, для чего у заказчика стоит `$CoreLossCoff = 2` |
+| Bertotti shape above B > 1.5 T | **closed** | the surface is sampled directly; the fit remains only as the extrapolation beyond the envelope (8.1 % of stator watts, 2.6 % of rotor watts on this machine) |
+| rotational locus | underestimate | 19 % of the volume (by loss weight) has a semi-axis ratio > 0.5 — the axis decomposition does not see this |
+| rotor harmonic sum | **lower** bound | the capture window is not an integer multiple of the tooth pass; the leakage protection removes the ramp, the raw sum gives 17.1 W instead of 10.8 W on the rotor |
+| beyond the envelope | +-0.9 % | watts computed by Bertotti extrapolation; sensitivity to the blend band width |
+| manufacturing degradation (stamping, clamping, welding) | 1.5-2x | **outside the model**: this is exactly what the client's `$CoreLossCoff = 2` is for |
 
-На 40-мм машине читать число надо осторожнее: её статор на 1517 Гц заходит
-за верх таблицы (1.48 Т на этой частоте), и **34.9 %** его ватт пришли из
-экстраполяции, а не из измерения. Лог прогона это говорит явно.
+On the 40-mm machine the number needs to be read more carefully: its stator at 1517 Hz goes
+past the top of the table (1.48 T at that frequency), and **34.9 %** of its watts came from
+extrapolation, not measurement. The run log states this explicitly.
 
-Замечание о сходимости по шагам: P_fe растёт 137 Вт @24 → 183 Вт @72 шагах —
-72 шага полнее разрешают слотовые dB/dt. Максимальное разрешение пути
-sliding-band = 72 позиции слип-кольца на эл. период (1008/14), т.е. 72 шага —
-это сошедшееся значение. **С переходом на поверхность это стало важнее**:
-сумма по гармоникам видит ровно N/2 гармоник, всё выше — алиасится вниз, как и
-любая другая величина из этого снимка. 40 шагов = 20 гармоник; для машины, у
-которой заметная доля потерь сидит выше, число шагов надо поднимать, и разница
-между 40 и 72 шагами — это не шум, а разрешение.
+A note on step-count convergence: P_fe grows from 137 W @24 to 183 W @72 steps —
+72 steps resolve the slot dB/dt more fully. The sliding-band path's maximum resolution
+is 72 slip-ring positions per electrical period (1008/14), i.e. 72 steps
+is the converged value. **This matters more now that we use the surface**:
+the harmonic sum sees exactly N/2 harmonics, and everything above aliases down, like
+any other quantity from this snapshot. 40 steps = 20 harmonics; for a machine where
+a noticeable share of the losses sits above that, the step count must be raised, and the difference
+between 40 and 72 steps is resolution, not noise.
 
-## 2. Магниты — потери из реального распределения поля
+## 2. Magnets — losses from the real field distribution
 
-**Физика**: `J = σ·(−dA/dt + U_m)` по каждому элементу магнита;
-`U_m` — константа на магнит, обеспечивающая `∫J dA = 0` (изолированный
-проводник, нет осевого возврата тока). Для половинок магнитов, рассечённых
-срезом сектора, U = 0 — их (анти)периодический образ гасит суммарный ток по
-симметрии. σ — из назначенного материала магнита (F45SH_120C: 6.25e5 См/м).
+**Physics**: `J = sigma·(-dA/dt + U_m)` per magnet element;
+`U_m` is a per-magnet constant enforcing `Integral(J dA) = 0` (an isolated
+conductor, no axial return current). For magnet halves cut by a sector boundary,
+U = 0 — their (anti)periodic image cancels the net current by
+symmetry. sigma comes from the assigned magnet material (F45SH_120C: 6.25e5 S/m).
 
-**Реализация — пост-обработка** на A(t)-историях магнитостатического решения:
-- ротор-сетка в формулировке sliding-band — это **материальный фрейм ротора**
-  (вращение живёт в слип-паре), поэтому dA/dt на узле ротора — уже
-  материальная производная, конвективный член не нужен;
-- производная берётся тем же сглаженным механизмом, что и для B-полей
-  (`_angle_ddt_2d`: savgol по уникальным позициям слип-узлов) — физика
-  (слотовая пульсация, 1–2 цикла на период) проходит, шум стыковки узлов
-  гасится;
-- `P(t) = Σ_магнитов σ Σ_e (dA/dt_e − U_m)²·area_e × L_stack × N_sectors`.
+**Implementation — post-processing** on the A(t) histories of the magnetostatic solution:
+- the rotor mesh in the sliding-band formulation is the **rotor's material frame**
+  (the rotation lives in the slip pair), so dA/dt at a rotor node is already
+  a material derivative, no convective term needed;
+- the derivative is taken with the same smoothed mechanism used for B-fields
+  (`_angle_ddt_2d`: savgol over the unique slip-node positions) — the physics
+  (slot ripple, 1-2 cycles per period) passes through, node-stitching noise
+  is damped;
+- `P(t) = Sum_over_magnets sigma Sum_e (dA/dt_e - U_m)^2·area_e * L_stack * N_sectors`.
 
-**Почему НЕ связанный (in-loop) солвер**: он был реализован и отброшен.
-Сырой (A_k−A_{k−1})/dt ест пер-узловой шум слип-стыковки фиксированной
-амплитуды → P ∝ (δA/dt)² растёт с числом шагов: P_mag = 142 Вт @24 → 516 Вт
-@72 (расходимость!), плюс искажение момента +4 %. Пост-обработка со
-сглаживанием даёт **42.8 @24 → 43.4 Вт @72 — сходимость 1.4 %**, момент и ЭДС
-не затронуты (решение остаётся магнитостатическим), время счёта +0 %.
-Связанный bordered-режим оставлен только для **Eddy J-карты**
-(`/fem_eddy_field2d`, eddy=True + rotor_eddy=True): там J-вид показывает
-вихревые токи в меди, магнитах и вале (качественная картина).
+**Why NOT a coupled (in-loop) solver**: it was implemented and dropped.
+The raw (A_k-A_{k-1})/dt eats fixed-amplitude per-node slip-stitching noise
+-> P proportional to (deltaA/dt)^2 grows with the number of steps: P_mag = 142 W @24 -> 516 W
+@72 (divergence!), plus a +4 % torque distortion. The smoothed post-processing gives
+**42.8 @24 -> 43.4 W @72 — 1.4 % convergence**, torque and EMF
+unaffected (the solution remains magnetostatic), compute time +0 %.
+The coupled bordered mode is kept only for the **Eddy J-map**
+(`/fem_eddy_field2d`, eddy=True + rotor_eddy=True): there the J view shows
+eddy currents in the copper, magnets and shaft (a qualitative picture).
 
-**Ограничения (как у любого 2-D транзиента, включая Maxwell 2D):**
-- resistance-limited (реакция вихрей/скин-эффект в магните не учитывается):
-  скин-глубина на слот-частоте ≈ 12 мм при ширине магнита ≈ 14 мм → оценка
-  слегка консервативна (завышает);
-- магнит непрерывен по оси (без осевой сегментации): сегментация на N частей
-  снижает потери ≈ N² — вне 2-D модели.
+**Limitations (as with any 2-D transient, including Maxwell 2D):**
+- resistance-limited (eddy reaction/skin effect in the magnet is not accounted for):
+  skin depth at the slot frequency is approx 12 mm against a magnet width of approx 14 mm -> the estimate
+  is slightly conservative (overestimates);
+- the magnet is continuous along the axis (no axial segmentation): segmenting into N pieces
+  reduces losses by approximately N^2 — outside the 2-D model.
 
-Старая slab-оценка (`σ·d²/12·⟨dB/dt⟩²` с тангенциальной шириной) завышала
-~1.5× (64 Вт против 43): средняя B по магниту × ширина не видит реального
-распределения (потери сосредоточены у зазорного торца). Slab остаётся
-фоллбэком при выключенной галке.
+The old slab estimate (`sigma·d^2/12·<dB/dt>^2` with the tangential width) overestimated by
+~1.5x (64 W versus 43): the average B over the magnet times the width does not see the real
+distribution (the losses are concentrated at the gap-side face). Slab remains the
+fallback when the checkbox is off.
 
-## 3. Вал — slab со скин-капом и реальной σ
+## 3. Shaft — slab with a skin cap and real sigma
 
-Вал глубоко в железе ротора, видит малую пульсацию. Оценка
-`σ·(d_eff²/12)·⟨(dB/dt)²⟩` с `d_eff = min(2r, 2δ)` (скин-кап) — корректный
-порядок для глубокого скина. **Критично**: σ и μr берутся из назначенного
-материала. Старые зашитые константы (сталь 4.5e6 См/м, μr=200) занижали
-потери алюминиевого вала (2.58e7 См/м, μr=1) в ~200 раз: 0.24 Вт → реальные
-≈ 50 Вт (связанный полевой солвер давал ≈ 30 Вт — slab консервативен ~1.7×,
-ожидаемо). Алюминиевый вал в spoke-машине — известный источник нагрева.
+The shaft sits deep inside the rotor iron and sees a small ripple. The estimate
+`sigma·(d_eff^2/12)·<(dB/dt)^2>` with `d_eff = min(2r, 2*delta)` (skin cap) is the correct
+order of magnitude for deep skin. **Critically**: sigma and mu_r are taken from the assigned
+material. The old hardcoded constants (steel 4.5e6 S/m, mu_r=200) underestimated the
+aluminum shaft's losses (2.58e7 S/m, mu_r=1) by ~200x: 0.24 W versus the real
+approx 50 W (the coupled field solver gave approx 30 W — the slab is conservative by ~1.7x,
+as expected). An aluminum shaft in a spoke machine is a known source of heating.
 
-## 4. Медь — DC I²R + proximity (stranded)
+## 4. Copper — DC I^2R + proximity (stranded)
 
-Обмотка физически многожильная (stranded) — bar-skin эффекта нет, поэтому:
-- DC: `ρ_Cu(T)·J²·V_cu·k_end` (температурная ρ, лобовые через k_end);
-- AC proximity: классическая оценка с разложением поля на радиальную/
-  тангенциальную компоненты, каждая со своим поперечником жилы.
-Диагностический Cu(solve) в Eddy-виде (полный ∫σF² по медным барам) после
-фикса единиц (×L_stack) = 400.7 Вт ≈ пазовая DC-медь (P_cu/k_end ≈ 408 Вт) —
-сходится; для stranded-обмотки именно DC+proximity, а не bar-skin, является
-физичной моделью.
+The winding is physically stranded — there is no bar-skin effect, so:
+- DC: `rho_Cu(T)·J^2·V_cu·k_end` (temperature-dependent rho, end-windings via k_end);
+- AC proximity: the classical estimate with the field split into radial and
+  tangential components, each with its own strand cross-section.
+The diagnostic Cu(solve) in the Eddy view (the full Integral(sigma*F^2) over the copper bars), after
+a units fix (×L_stack) = 400.7 W ≈ the slot DC copper (P_cu/k_end ≈ 408 W) —
+consistent; for a stranded winding, DC+proximity, not bar-skin, is
+the physical model.
 
-## 5. Валидация (n=2, I=120 A rms, 466.7 Гц)
+## 5. Validation (n=2, I=120 A rms, 466.7 Hz)
 
-| Величина | 24 шага | 72 шага | Комментарий |
+| Quantity | 24 steps | 72 steps | Comment |
 |---|---|---|---|
-| T_avg, Н·м | 63.97 | 63.68 | = магнитостатике (потери не искажают момент) |
-| P_fe, Вт | 137 | 183 | фит-коэффициенты; 72 шага разрешают слот-dB/dt |
-| P_mag, Вт | 42.8 | 43.4 | **сходимость 1.4 %** |
-| P_shaft, Вт | 47 | 54 | реальная σ алюминия |
-| время | 28 с | 70 с | = slab-пути (+0 %) |
+| T_avg, N·m | 63.97 | 63.68 | = magnetostatics (losses don't distort torque) |
+| P_fe, W | 137 | 183 | fit coefficients; 72 steps resolve the slot dB/dt |
+| P_mag, W | 42.8 | 43.4 | **1.4 % convergence** |
+| P_shaft, W | 47 | 54 | real aluminum sigma |
+| time | 28 s | 70 s | = the slab path (+0 %) |
 
-Сетка: значения при mesh_size 4.0 и 3.0 мм идентичны (путь sliding-band
-клампит железо на 2 мм и зазор на 0.1 мм независимо от запрошенного размера).
+Mesh: values at mesh_size 4.0 and 3.0 mm are identical (the sliding-band path
+clamps the iron to 2 mm and the gap to 0.1 mm independent of the requested size).
 
-## 6. Управление
+## 6. Controls
 
-- UI: Simulation → галка **«Field-based magnet/shaft losses (FEM eddy)»**
-  (по умолчанию ВКЛ; хранится в localStorage `sim.fieldLosses`; входит в
-  staleness-guard кнопки Save).
+- UI: Simulation -> checkbox **"Field-based magnet/shaft losses (FEM eddy)"**
+  (ON by default; stored in localStorage `sim.fieldLosses`; part of the
+  Save button's staleness guard).
 - API: `GET /api/simulation/physics/fem_transient?...&rotor_eddy=true|false`
-  (в кэш-ключе).
-- Снимки Save пишут `field_losses` в параметры — в Compare прогоны slab/field
-  различимы.
+  (part of the cache key).
+- Save snapshots write `field_losses` into the parameters — in Compare, slab/field
+  runs are distinguishable.

@@ -1125,7 +1125,7 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     ``physical`` or ``merged``.
 
     ``surface_fit`` (2026-09-20, **the DEFAULT since 2026-09-21** — owner:
-    *«давай включай все»*) takes each SURFACE path's conductance from
+    *«go ahead, turn everything on»*) takes each SURFACE path's conductance from
     the map as well — the housing film the map actually used (forced air, a
     jacket, a typed h) instead of a natural-convection correlation, the axial
     end faces from the watts the map's heat budget closes on, and the open

@@ -160,7 +160,7 @@ test('a current drive carries no voltage, no carrier and no pack', () => {
 });
 
 test('a PWM run carries NO bus and NO carrier — they are the Controller\'s', () => {
-  // 2026-09-24: «PWM нужно выкинуть из Electromagnetic» — the route resolves
+  // 2026-09-24: «PWM needs to come out of Electromagnetic» — the route resolves
   // both from the Controller settings (inverter.drive_source).
   const d = driveFields({ ...base, drive: 'pwm_voltage' });
   assert.equal('v_bus' in d, false);

@@ -7,7 +7,7 @@ conductance, and WHERE on the machine that surface sits.  So what is pinned here
 is a CONTRACT, not a number the solver owns:
 
   (a) the Ø85 ROBOT JOINT (``CIANO28 85 20SW1200 / L13``, duty
-      "rated 120С wire 80C NdFeB", solved 2026-09-14): mount 48.5 W, end faces
+      "rated 120C wire 80C NdFeB", solved 2026-09-14): mount 48.5 W, end faces
       5.9 W total, housing 1.1 W as 0.45 conv + 0.67 rad, bore 0.6 W — and the
       shares add to 100 % ± 1;
   (b) the Ø200 LIQUID-JACKETED motor (``CIANO10 200 opt / L155 motor``, duty

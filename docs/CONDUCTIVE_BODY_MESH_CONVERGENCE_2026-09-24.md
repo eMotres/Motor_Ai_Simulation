@@ -4,9 +4,9 @@ Claude Opus 5.5 (`claude-opus-5-5`) did this as one sub-agent, no escalation, on
 `pre-migration-freeze-2026-09-15`, base bc14972. The session was interrupted once; the
 interrupted runs were re-run.
 
-Owner's brief: «давай сначала разберёмся с валом — может ещё что-то всплывёт». Principle added
-mid-task: «проблема больших моторов — это проблема большой сетки; все физические законы должны
-работать одинаково на любых масштабах». So conductive-body meshes are sized by physical lengths
+Owner's brief: «let's sort out the shaft first — something else might surface». Principle added
+mid-task: «the problem with big motors is the problem of a coarse mesh; all physical laws must
+work the same way at any scale». So conductive-body meshes are sized by physical lengths
 (the skin depth, the field's wavelength), never by the machine size or the global element size.
 
 **Summary**

@@ -1,7 +1,7 @@
 # Eddy march from a loaded static start: L155 shaft slow mode (2026-09-24)
 
 Claude Opus 5.5 (`claude-opus-5-5`) did this as one sub-agent, with no escalation, on branch
-`pre-migration-freeze-2026-09-15` at e1b9c72. The owner approved the test («стартовать со статики — запускай»).
+`pre-migration-freeze-2026-09-15` at e1b9c72. The owner approved the test («start from statics — go ahead»).
 Hypothesis under test: the L155 shaft does not settle because the march starts
 from a PM-only static field. On that view the armature-reaction DC has to soak into the steel shaft,
 and a loaded static start would leave only the fast harmonic part to settle.

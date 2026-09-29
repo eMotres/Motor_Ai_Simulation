@@ -105,6 +105,7 @@ from motor_ai_sim.routes.family import router as family_router
 from motor_ai_sim.routes.report import router as report_router
 from motor_ai_sim.routes.my_motors import router as my_motors_router
 from motor_ai_sim.routes.auth_local import router as auth_local_router
+from motor_ai_sim.routes.newsletter import router as newsletter_router, notices_router
 from motor_ai_sim.routes.sweep_config import router as sweep_config_router
 from motor_ai_sim.routes.account import router as account_router
 from motor_ai_sim.routes.admin import router as admin_router
@@ -140,6 +141,12 @@ async def _lifespan(_app):
     except Exception as _e:
         logging.getLogger(__name__).warning("sweep resumption failed: %s", _e)
     _watchdog.start()
+    # Newsletter send queue (throttled, resumes after a restart).
+    try:
+        from motor_ai_sim import newsletter as _nl
+        _nl.start_worker()
+    except Exception as _e:                              # noqa: BLE001
+        logging.getLogger(__name__).error("newsletter queue not started: %s", _e)
     # MCP server for external AI agents (Stage 1, docs/MCP_2026-09-28.md): the
     # SDK's session manager lives for the whole process.  A missing `mcp`
     # package must not take the API down — /mcp then answers 404.
@@ -155,6 +162,11 @@ async def _lifespan(_app):
             yield
         finally:
             _watchdog.stop()
+            try:
+                from motor_ai_sim import newsletter as _nl
+                _nl.stop_worker()
+            except Exception:                            # noqa: BLE001
+                pass
 
 
 app = FastAPI(
@@ -270,6 +282,8 @@ app.include_router(family_router)
 app.include_router(report_router)
 app.include_router(my_motors_router)
 app.include_router(auth_local_router)
+app.include_router(newsletter_router)
+app.include_router(notices_router)
 app.include_router(sweep_config_router)
 app.include_router(account_router)
 app.include_router(admin_router)

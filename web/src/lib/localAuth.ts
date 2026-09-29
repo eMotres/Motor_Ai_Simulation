@@ -177,8 +177,8 @@ async function postPlain(path: string, body: unknown): Promise<{ message?: strin
 }
 
 /** Self-service sign-up. The answer never says whether the address existed. */
-export function registerAccount(email: string, password: string, name: string) {
-  return postPlain('/api/auth/register', { email, password, name });
+export function registerAccount(email: string, password: string, name: string, newsletter = false) {
+  return postPlain('/api/auth/register', { email, password, name, newsletter });
 }
 
 /** Consume the mailed confirmation link. */
@@ -221,8 +221,10 @@ export function clearEmailLink(): void {
 }
 
 /** GIS ID token (1-hour life) → our 30-day token. */
-export function googleExchange(credential: string) {
-  return post('/api/auth/google', { credential });
+/** `newsletter` = the consent box under the button; the server applies it on
+ *  the FIRST sign-in only (and then mails a double opt-in link). */
+export function googleExchange(credential: string, newsletter = false) {
+  return post('/api/auth/google', { credential, newsletter });
 }
 
 /** Best-effort decode of a JWT payload (display-only fields like name/picture). */

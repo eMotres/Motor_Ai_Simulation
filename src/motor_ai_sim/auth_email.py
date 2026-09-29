@@ -57,34 +57,52 @@ def link(kind: str, token: str) -> str:
     return f"{app_url()}/?{kind}={urllib.parse.quote(token, safe='')}"
 
 
-def _send(to: str, subject: str, body: str) -> bool:
+def mail_from() -> str:
+    return _env("MAIL_FROM") or _env("NOTIFY_FROM") or _env("SMTP_USER")
+
+
+def deliver(msg: EmailMessage) -> None:
+    """Hand one prepared message to the configured SMTP server.  RAISES on
+    any failure (the newsletter queue classifies the exception as a bounce
+    or a transient failure); `_send` below is the forgiving wrapper."""
     user, password = _env("SMTP_USER"), _smtp_pass()
     if not (user and password):
-        return False
-    msg = EmailMessage()
-    msg["From"] = _env("MAIL_FROM") or _env("NOTIFY_FROM") or user
-    msg["To"] = to
-    msg["Subject"] = subject
-    msg.set_content(body)
+        raise RuntimeError("SMTP is not configured")
+    if not msg.get("From"):
+        msg["From"] = mail_from()
     host = _env("SMTP_HOST", DEFAULT_SMTP_HOST)
     try:
         port = int(_env("SMTP_PORT", str(DEFAULT_SMTP_PORT)))
     except ValueError:
         port = DEFAULT_SMTP_PORT
     ctx = ssl.create_default_context()
+    if port == 465:
+        with smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT_S,
+                              context=ctx) as s:
+            s.login(user, password)
+            s.send_message(msg)
+    else:
+        with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_S) as s:
+            s.ehlo()
+            s.starttls(context=ctx)
+            s.ehlo()
+            s.login(user, password)
+            s.send_message(msg)
+
+
+def _send(to: str, subject: str, body: str) -> bool:
+    user, password = _env("SMTP_USER"), _smtp_pass()
+    if not (user and password):
+        return False
+    msg = EmailMessage()
+    msg["From"] = mail_from()
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(body)
+    host = _env("SMTP_HOST", DEFAULT_SMTP_HOST)
+    port = _env("SMTP_PORT", str(DEFAULT_SMTP_PORT))
     try:
-        if port == 465:
-            with smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT_S,
-                                  context=ctx) as s:
-                s.login(user, password)
-                s.send_message(msg)
-        else:
-            with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_S) as s:
-                s.ehlo()
-                s.starttls(context=ctx)
-                s.ehlo()
-                s.login(user, password)
-                s.send_message(msg)
+        deliver(msg)
         log.info("auth-mail: sent %r to %s", subject, to)
         return True
     except Exception as e:                                   # noqa: BLE001

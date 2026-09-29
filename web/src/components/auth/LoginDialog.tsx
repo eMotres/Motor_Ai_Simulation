@@ -5,8 +5,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, Box, TextField, Button,
-  Typography, CircularProgress, Tabs, Tab, Link,
+  Typography, CircularProgress, Tabs, Tab, Link, FormControlLabel, Checkbox,
 } from '@mui/material';
+import { CONSENT_LINE, CONSENT_HELP } from '../../lib/newsletterApi';
 import {
   decodeJwtPayload, googleExchange, loadGis, passwordLogin,
   registerAccount, verifyEmail, requestPasswordReset, confirmPasswordReset,
@@ -46,6 +47,22 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
   const [touched, setTouched] = useState(false);
   const [gisErr, setGisErr] = useState<string | null>(null);
   const gButtonRef = useRef<HTMLDivElement>(null);
+  // Newsletter consent: UNCHECKED by default (GDPR); a ref so the GIS callback
+  // registered once still reads the current box.
+  const [newsletter, setNewsletter] = useState(false);
+  const newsletterRef = useRef(false);
+  newsletterRef.current = newsletter;
+
+  const consentBox = (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      <FormControlLabel
+        control={<Checkbox size="small" checked={newsletter}
+          onChange={(e) => setNewsletter(e.target.checked)} />}
+        label={<Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{CONSENT_LINE}</Typography>}
+        sx={{ mr: 0 }} />
+      <HelpTip title={CONSENT_HELP} />
+    </Box>
+  );
 
   // A mailed link in the address bar: consume it once, then scrub the URL.
   useEffect(() => {
@@ -80,7 +97,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
           callback: (resp: { credential?: string }) => {
             if (!resp.credential) return;
             const claims = decodeJwtPayload(resp.credential);
-            void googleExchange(resp.credential)
+            void googleExchange(resp.credential, newsletterRef.current)
               .then(({ token, user }) => onSignedIn(token, {
                 ...user,
                 name: user.name || String(claims.name ?? ''),
@@ -125,8 +142,8 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
         setEmail(''); setPassword('');
         onSignedIn(token, user);
       } else if (mode === 'register') {
-        const j = await registerAccount(email.trim(), password, name.trim());
-        setPassword(''); setPassword2(''); setTouched(false);
+        const j = await registerAccount(email.trim(), password, name.trim(), newsletter);
+        setPassword(''); setPassword2(''); setTouched(false); setNewsletter(false);
         setMode('signin');
         setInfo(j.message || 'Check your inbox for the confirmation link.');
       } else if (mode === 'forgot') {
@@ -173,6 +190,8 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
         {tab === 'google' && GOOGLE_CLIENT_ID ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, py: 1 }}>
             <div ref={gButtonRef} />
+            {consentBox}
+            <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -0.75 }}>applies to a new account only</Typography>
             {gisErr && <Typography variant="caption" color="error">{gisErr}</Typography>}
             {err && <Typography variant="caption" color="error">{err}</Typography>}
           </Box>
@@ -212,6 +231,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn }) => {
                 value={password2} onChange={(e) => setPassword2(e.target.value)} fullWidth
                 error={!!show(pw2Err)} helperText={show(pw2Err)} />
             )}
+            {mode === 'register' && consentBox}
             {err && <Typography variant="caption" color="error" role="alert">{err}</Typography>}
             <Button type="submit" variant="contained" disabled={busy}
               sx={{ textTransform: 'none' }}>

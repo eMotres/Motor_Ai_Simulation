@@ -28,6 +28,7 @@ import SupportSettings, { type SupportCfg } from './SupportSettings';
 import SessionsSection from './SessionsSection';
 import VisitorRequests from './VisitorRequests';
 import PendingSignups from './PendingSignups';
+import NewsletterSection from './NewsletterSection';
 import ModulesPanel from './ModulesPanel';
 import PassportManager from './PassportManager';
 import { ConfirmDialog, type ConfirmState } from '../common/PromptDialogs';
@@ -693,6 +694,9 @@ const AdminPanel: React.FC = () => {
 
           {/* sessions + auth events */}
           <SessionsSection />
+
+          {/* newsletter + in-app notices (moves into the Admin sub-navigation) */}
+          <NewsletterSection />
 
           {/* visitors who asked for access, and the chats behind them */}
           <VisitorRequests onInvite={(email) => { setInvitePrefill(email); setInviteOpen(true); }} />

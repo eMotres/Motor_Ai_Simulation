@@ -17145,9 +17145,9 @@ def glossary_rows(em: Dict[str, Any],
                   cols: Optional[List[Dict[str, Any]]] = None) -> List[List[str]]:
     """The symbols this report uses that are not self-explaining.
 
-    User 2026-09-10: *"нигде не нашёл, что такое k_3d — тоже нужно, пользователь,
-    который будет читать отчёт, объяснить, что это, так же как и gamma. Может,
-    что ещё нужно объяснить, сам реши"*.  So: every symbol a reader meets in a
+    User 2026-09-10: *"couldn't find anywhere what k_3d is — that also needs
+    explaining for the user reading the report, same as gamma. Maybe decide
+    for yourself what else needs explaining"*.  So: every symbol a reader meets in a
     headline number or a table header and cannot look up in the document.
     Header row included.
     """
@@ -17426,7 +17426,7 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
             cols, lambda c: EM_SOURCE_SHORT.get(
                 str(c.get("em_source") or ""), "")))
     # Per duty, because two duties of one configuration may be solved in Y
-    # and in Δ (user 2026-09-13: "нужно добавить соединение в отчёт").
+    # and in Δ (user 2026-09-13: "need to add the connection to the report").
     rows.append(["Terminal connection"] + _col_vals(
         cols, lambda c: _sd_words(None, c["em"] or {}, c["d"])))
     R("Torque, 2-D [N·m]",
@@ -17735,8 +17735,8 @@ def thermal_compare_rows(cols: List[Dict[str, Any]]
         if not any(isinstance(((_t(c) or {}).get("components") or {}).get(key), dict)
                    for c in cols):
             continue
-        # ONE ROW PER PART (user 2026-09-11: "пиши эти все через чёрточку —
-        # меньше будет строк").  Two rows per part filled a page with the same
+        # ONE ROW PER PART (user 2026-09-11: "write these all separated by a
+        # slash — that'll mean fewer rows").  Two rows per part filled a page with the same
         # nine labels written twice; "143 / 139" says the same in one line, and
         # the header says which is which.
         S(f"{label}, max / avg [°C]",

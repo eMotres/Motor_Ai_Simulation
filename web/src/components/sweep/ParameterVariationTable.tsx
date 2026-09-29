@@ -235,8 +235,8 @@ const ParameterVariationTable: React.FC = () => {
   const isDirty    = dirtyCount > 0;
 
   // ── wire-stock hint (passive only — nothing here restricts the field) ───
-  // The owner's warehouse table (2026-09-20): "не блокируем выбор, просто
-  // подсказываем, если введённого размера физически нет на складе".
+  // The owner's warehouse table (2026-09-20): "we don't block the choice, we
+  // just hint if the entered size physically isn't in stock".
   const { data: wireStockData } = useWireStock();
   const currentWireH = localValues.wire_height ?? (geometry.wire_height as number | undefined) ?? 0;
   const currentWireW = localValues.wire_width ?? (geometry.wire_width as number | undefined) ?? 0;
@@ -505,7 +505,7 @@ const ParameterVariationTable: React.FC = () => {
                 {/* Editable value — a SELECT of the admissible values when the
                     schema's topology table has an entry for the dependency's
                     current value (poles/segment given slots/segment: 5 or 7 —
-                    owner 2026-09-20, "других комбинаций пока не бывает"), a
+                    owner 2026-09-20, "there are no other combinations yet"), a
                     free-typing local draft otherwise. */}
                 {(() => {
                   const dep = param.allowed_by ? Object.keys(param.allowed_by)[0] : null;

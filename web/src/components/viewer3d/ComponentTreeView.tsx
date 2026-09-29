@@ -2,8 +2,8 @@
  * ComponentTreeView — the "Motor Assembly" tree, as a PURE VIEW over a model.
  *
  * User 2026-09-06, shown the 3-D tab's tree next to the field viewer's new Part
- * dropdown: "используй то же самое дерево, которое у нас уже есть, чтобы всё
- * было универсально".  So the tree stops being a piece of the 3-D viewer and
+ * dropdown: "use the same tree we already have, so everything is
+ * universal".  So the tree stops being a piece of the 3-D viewer and
  * becomes the one part picker in the app: this file draws it, and each host
  * binds it to whatever it means by "a part" —
  *
@@ -79,13 +79,13 @@ const STATE_TIP: Record<PartState, string> = {
 };
 
 // The shaft always participates in the calculation (owner rule 2026-09-29:
-// "во всех моторах вал должен участвовать") — no state of its is a choice
+// "the shaft must participate in every motor") — no state of its is a choice
 // any more, so its badge never cycles.  It still shows INC (the fact is
 // true and worth a glance), but the click is a no-op and the tooltip says
 // why instead of "click to cycle".
 const ALWAYS_INCLUDED_PARTS = ['shaft'];
 const SHAFT_ALWAYS_INCLUDED_TIP =
-  'Вал всегда участвует в расчёте (правило владельца) — Included, ' +
+  'The shaft always participates in the computation (owner rule) — Included, ' +
   'not selectable.';
 
 const PartStateBadge: React.FC<{ part: string; hovered: boolean }> = ({ part, hovered }) => {

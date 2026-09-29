@@ -3437,8 +3437,8 @@ def _pt(out: Dict[str, Any], kind: str):
 # ─────────────────────────────────────────────────────────────────────────────
 # OBJECTIVE-SPACE CLOUD — publication policy.
 #
-# INVARIANT (Vadim, 2026-08-05: «надо выводить все точки я потом могу отфильтровать
-# их по пульсации там же есть ползунок»): EVERY eval that produced metrics is
+# INVARIANT (Vadim, 2026-08-05: "we need to output all the points, I can
+# filter them by ripple later, there's a slider for that too"): EVERY eval that produced metrics is
 # published to `points`.  Nothing is filtered server-side — not by ripple, not by
 # the objective, not by "is it the incumbent".  The chart's ripple slider does the
 # trimming, visually, where the user can move it.  A run that shows the user 51 of
@@ -3594,7 +3594,7 @@ def _descent_cost(m: Dict[str, Any], base: Dict[str, Any],
     the chart) — but when the request sets ripple_penalty_lambda > 0 the cost adds
         λ_r · max(0, T_ripple_pct − ripple_max) / 100
     so the optimizer actively holds ripple under the gate (per Vadim: "ripple < 4 %
-    при максимальном КПД и плотности момента" — the chart-trim alone let CMA drift
+    at maximum efficiency and torque density" — the chart-trim alone let CMA drift
     to 7.6 % because the objective never felt the constraint).  The other
     feasibility penalty is over-voltage: V_peak above the inverter's usable
     phase-voltage limit, so a design the bus can't drive is repelled.
@@ -5550,9 +5550,9 @@ def _auto_population(n_vars: int) -> int:
 # the defect is in the SEARCH, not the physics.
 #
 # The user's method, in their words:
-#   «сначала сделал бы первоначальные отклонения по всем переменным в районе
-#    0.2 mm или 0.02 для безразмерных и понял бы какая куда отклоняет систему,
-#    а потом уже использовал самые влиятельные и доводку делал оставшимися»
+#   "first I'd make initial perturbations of about 0.2 mm on every variable,
+#    or 0.02 for dimensionless ones, and see which way each one deflects the
+#    system, then use the most influential ones and fine-tune with the rest"
 #
 #   1. SCREEN  — perturb EVERY variable by ±δ (δ = 0.2 mm for lengths, 0.02 for
 #      dimensionless, 1 for integers) and measure which way each one moves the
@@ -7101,7 +7101,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             # inner loop already ran to exhaustion, the full re-screen already
             # retried, and every point is memoised — a repeat lap would measure
             # the identical numbers.)  So halve δ once, down to the floor, and
-            # try the whole cycle again — the user's «доводка», finer.
+            # try the whole cycle again — the user's "fine-tuning", finer.
             if scale * _SCREEN_SHRINK >= _SCREEN_MIN_SHRINK - 1e-12 \
                     and _spent() < budget and not _cancelled():
                 scale *= _SCREEN_SHRINK

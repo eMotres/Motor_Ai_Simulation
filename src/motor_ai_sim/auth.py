@@ -119,7 +119,9 @@ def public_exhibit() -> bool:
 #: describes the product, never a machine: the visitor prompt forbids catalog
 #: contents and customer designs, and the route hands the model no app state.
 _ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version",
-                            "/api/support/chat"})
+                            "/api/support/chat",
+                            # node agents: own per-node bearer, checked in the route
+                            "/api/admin/nodes/metrics"})
 #: …plus the sign-in endpoints themselves: the password login, the Google GIS
 #: token exchange, and logout (which must work for a token we are rejecting).
 #: NOT the rest of routes/auth_local.py — /api/auth/users, /api/auth/sessions and

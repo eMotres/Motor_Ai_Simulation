@@ -30,6 +30,7 @@ import VisitorRequests from './VisitorRequests';
 import PendingSignups from './PendingSignups';
 import ModulesPanel from './ModulesPanel';
 import PassportManager from './PassportManager';
+import ServersPanel from './ServersPanel';
 import { ConfirmDialog, type ConfirmState } from '../common/PromptDialogs';
 import HelpTip from '../common/HelpTip';
 
@@ -690,6 +691,9 @@ const AdminPanel: React.FC = () => {
               </TableBody>
             </Table>
           </Paper>
+
+          {/* cluster load: node agents + queue + API latency */}
+          <ServersPanel />
 
           {/* sessions + auth events */}
           <SessionsSection />

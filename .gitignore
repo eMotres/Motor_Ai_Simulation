@@ -154,3 +154,11 @@ config/devices/spice/_runs/
 # MCP Stage 3: agent DRAFT machines + their sandboxes (per workspace; on this
 # single-user install the workspace is config/).  docs/MCP_2026-09-28.md
 config/agent_designs/
+
+config/oauth_grants.json
+config/die_access.json
+config/cluster/
+config/cost_basis.json
+config/usage/
+uvicorn_*.out
+uvicorn_*.err

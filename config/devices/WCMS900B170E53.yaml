@@ -4,7 +4,8 @@
 # ============================================================
 # Source: "WCMS900B170E53 V0" datasheet, Rev.0, published 2025-11-07,
 # YangZhou GuoYang Electronics Co., Ltd. (11 pages); a copy is kept at
-# docs/datasheets/WCMS900B170E53_V0.pdf.  Page numbers below are that PDF's.
+# docs/datasheets/WCMS900B170E53_V0.pdf (PDF not redistributed: vendor copyright; see manufacturer).
+# Page numbers below are that PDF's.
 #
 # ONE CARD = ONE SWITCH POSITION of the module.  The module is a half-bridge
 # (datasheet p.10 circuit: D1 / S1-D2 / S2, two MOSFETs with their body
@@ -45,8 +46,8 @@ package_size_mm:
   mounting_hole_pitch_mm: [137, 57.5]
 weight_g: 346                 # p.4 Module Characteristics, G typ
 datasheet_revision: "Rev.0, 2025-11-07"
-datasheet_url: null           # received from the customer as a PDF; local copy below
-datasheet_file: "docs/datasheets/WCMS900B170E53_V0.pdf"
+datasheet_url: null           # received from the customer as a PDF
+datasheet_file: "docs/datasheets/WCMS900B170E53_V0.pdf (PDF not redistributed: vendor copyright; see manufacturer)"
 switching_source: datasheet   # no SPICE model exists for this part
 
 # ── ratings ────────────────────────────────────────────────────────────────

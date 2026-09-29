@@ -128,8 +128,8 @@ test('an impulse duty as the calibration point is refused, not warned about', ()
 });
 
 /* ── what the Run button will do, per kind (2026-09-16) ─────────────────────
-   «Если выбран S1 — идёт нормальный каплинг; если выбран S3 — по умолчанию идёт
-   оптимизация времени импульса.»  The flow existed in the backend and nowhere
+   «If S1 is selected — normal coupling runs; if S3 is selected — by default
+   pulse-time optimization runs.»  The flow existed in the backend and nowhere
    on screen.  These two lines are the contract between the kind picker and the
    Run button, so they are pinned here rather than written inline in the JSX. */
 

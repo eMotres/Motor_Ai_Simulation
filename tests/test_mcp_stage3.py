@@ -365,3 +365,24 @@ def test_oauth_consent_can_narrow_scopes(env):
     O.decide(rid, A, True, ["catalog:read", "designs:write"])
     code = next(iter(O._load()["codes"].values()))
     assert code["scopes"] == ["catalog:read", "designs:write"]
+
+
+def test_done_job_reports_full_progress(env, monkeypatch):
+    """Server run 2026-09-29: the solver's last tick was 23/24 before the
+    post-processing, so a finished job read 95.8 %.  Done means 100 %."""
+    from motor_ai_sim import progress as P
+    inner = AD.SIM_RUNNERS["em"]
+
+    def _ticking(d, ws, steps, run_id):
+        e = P.registry().entry(run_id, create=True)
+        e.tracker.start(24, "transient")
+        e.tracker.update(done=23, phase="post-processing")
+        return inner(d, ws, steps, run_id)
+    monkeypatch.setitem(AD.SIM_RUNNERS, "em", _ticking)
+    tok, _ = K.create_key(A, "Claude Desktop", scopes=ALL)
+    did = _design(env, tok)["design_id"]
+    job = _payload(_call(env["c"], tok, "simulate", {"design_id": did, "what": "em"}))
+    j = _wait(env["c"], tok, job["job_id"])
+    assert j["state"] == "done", j
+    pr = j["progress"]
+    assert pr["pct"] == 100.0 and pr["step"] == 24 and pr["eta_s"] == 0.0

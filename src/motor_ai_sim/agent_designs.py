@@ -1126,6 +1126,11 @@ def get_job(p: Principal, job_id: str) -> Dict[str, Any]:
         out["progress"] = {"step": snap.get("step"), "total": tot,
                            "pct": round(100.0 * (snap.get("step") or 0) / tot, 1) if tot else None,
                            "eta_s": snap.get("eta_s"), "phase": snap.get("phase")}
+        if rec.state == "done":
+            # the last solver tick is often before post-processing ends
+            # (seen 2026-09-29: done at 23/24 = 95.8 %) — a finished job is 100 %
+            out["progress"].update(step=tot or snap.get("step"), pct=100.0,
+                                   eta_s=0.0, phase="done")
     if rec.error:
         out["error"] = _clean_error(rec.error)
     if rec.state == "done":

@@ -3031,9 +3031,9 @@ def _retag_thermal_domains(verts, tris, tags, polys, *, r_housing_m,
     that the radius rule above would call wire coating — but that air is the
     coolant flowing past the housing, and meshing it buries the cut walls inside
     the conduction problem instead of putting the convection film on them
-    (user 2026-09-07: "в этих вырезах не нужно ничего рисовать, там находится
-    охлаждающая жидкость или воздух, нам важны только граничные условия на
-    внешнем контуре статора").  So the air is walked by CONNECTIVITY: every
+    (user 2026-09-07: "there's no need to draw anything in these cuts,
+    that's cooling fluid or air there, we only care about the boundary
+    conditions on the stator's outer contour").  So the air is walked by CONNECTIVITY: every
     air element that shares an edge-path with the far field (DOM_OUTER beyond the
     housing radius) without crossing a solid is `outer cut (coolant)` — counted,
     dropped, and its walls become part of the outer surface the film acts on.

@@ -1025,8 +1025,10 @@ def call(target: str, payload: Any, *,
     finally:
         if child is not None:
             if child.proc.poll() is None:
-                kill_tree(child.proc) if state != DONE else \
+                if state == DONE:
                     _reap(child.proc)
+                else:
+                    kill_tree(child.proc)
             child.sample(t)
             _usage_finish(t, cpu_final if cpu_final is not None else child.cpu_s)
             with contextlib.suppress(Exception):

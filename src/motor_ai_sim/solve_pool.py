@@ -164,22 +164,41 @@ def _cgroup_cpu_quota() -> Optional[float]:
 
 
 def physical_cores() -> int:
-    """Physical cores this process may use (affinity and cgroup quota), >= 1."""
+    """Physical cores this process may use (affinity and cgroup quota), >= 1.
+
+    The same rule as ``routes.optimization._physical_cores_available``: on
+    Linux the allowed CPUs are mapped to distinct (package, core) pairs, so a
+    container pinned to ``0-11`` on an 8-core / 16-thread AX42 counts 8.
+    """
     n: Optional[int] = None
     try:
-        import psutil
-        n = psutil.cpu_count(logical=False) or None
-    except Exception:                                   # noqa: BLE001
-        n = None
-    logical = os.cpu_count() or 4
-    try:
-        allowed = len(os.sched_getaffinity(0))          # Linux only
+        allowed = sorted(os.sched_getaffinity(0))       # Linux only
     except (AttributeError, OSError):
-        allowed = logical
+        allowed = None
+    if allowed:
+        try:
+            cores = set()
+            for c in allowed:
+                base = "/sys/devices/system/cpu/cpu%d/topology/" % int(c)
+                with open(base + "core_id") as fh:
+                    core = fh.read().strip()
+                with open(base + "physical_package_id") as fh:
+                    pkg = fh.read().strip()
+                cores.add((pkg, core))
+            n = len(cores) or None
+        except OSError:
+            n = None
+        if n is None:
+            n = len(allowed) // 2 if len(allowed) > 4 else len(allowed)
     if n is None:
+        try:
+            import psutil
+            n = psutil.cpu_count(logical=False) or None
+        except Exception:                               # noqa: BLE001
+            n = None
+    if n is None:
+        logical = os.cpu_count() or 4
         n = logical // 2 if logical > 4 else logical
-    if allowed < logical:                               # pinned: scale down
-        n = max(1, int(round(n * allowed / float(logical))))
     q = _cgroup_cpu_quota()
     if q:
         n = min(n, max(1, int(q)))

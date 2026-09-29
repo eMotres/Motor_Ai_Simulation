@@ -2734,10 +2734,10 @@ _V1_FIRST_STEP_GAIN = 0.3
 # ---------------------------------------------------------------------------
 # STAGE 2 — THE CONTROLLER AS THE DRIVE (2026-09-22)
 # ---------------------------------------------------------------------------
-# Owner: *«как закончишь лимиты, запускай каплинг — сначала стандартный инвертор
-# на L155 motor»*, and, the decision that shapes it: *«как отладим каплинг с
-# контроллером, нам не нужен будет PWM в электромагнитном моделировании — всё
-# будет задаваться в меню Controller»*.
+# Owner: *"once you finish the limits, run the coupling — first the standard
+# inverter on L155 motor"*, and, the decision that shapes it: *"once we debug
+# the coupling with the controller, we won't need PWM in the electromagnetic
+# simulation any more — everything will be set in the Controller menu"*.
 #
 # WHAT THIS ADDS TO ``drive: "pwm"`` is the DEVICE, and with it a second fixed
 # point.  The fundamental regulator (``_regulate_v1``) and every ceiling, every
@@ -4073,8 +4073,8 @@ def _mechanical_point(panel: Dict[str, Any], rpm: Optional[float]
     three cases: this is the rated speed and the route's overspeed factor
     multiplies it).  The tab's ``rpm`` / ``rpm1`` boxes are numbers typed for
     whatever machine was loaded when they were typed (2026-09-09 morning: the
-    Ø200's 23 000 on a 13 000 rpm motor; user: "обороты должны быть
-    правильными — и электромагнитного, и обороты, и температуры"), so they are
+    Ø200's 23 000 on a 13 000 rpm motor; user: "the speeds should be correct
+    — both the electromagnetic ones and the speeds, and the temperatures"), so they are
     not consulted; when a box disagrees, the note says which speed was solved.
 
     ``None`` for the speed means "the hook's own precedence" (the panel, then
@@ -4102,8 +4102,8 @@ def _mechanical_step(body: Dict[str, Any], field: Dict[str, Any], *,
                      torque_nm: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """Rotor stress at the temperatures the converged map gives EACH PART.
 
-    User 2026-09-08: "в механический расчёт тоже нужно делать каплинг, чтобы
-    температуры везде были одинаковы".  The Mechanical solver stays its own
+    User 2026-09-08: "the mechanical calculation also needs the coupling, so
+    the temperatures are the same everywhere".  The Mechanical solver stays its own
     solver — this only hands it the four temperatures (magnet, rotor core, shaft,
     sleeve; the AVERAGE of each part, the number a thermal expansion belongs
     at) through the hook ``routes.mechanical.run_rotor_stress_at``, which does
@@ -4142,10 +4142,10 @@ def _mechanical_step(body: Dict[str, Any], field: Dict[str, Any], *,
         return {"ok": False, "temps_c": {}, "error": (
             "the thermal map has no rotor part to take a temperature from")}
     # THE TEMPERATURES GO THROUGH AS THEY ARE — the map's own numbers, per
-    # part, which is what the user asked the coupling to fill in ("нужно
-    # заполнять всё реальными цифрами").  What they DO is the solver's rule,
-    # not this route's (user 2026-09-09: "нам нужно учитывать температуру
-    # только как изменение давления на бандаж, если он есть"): the rotor
+    # part, which is what the user asked the coupling to fill in ("everything
+    # needs to be filled in with real numbers").  What they DO is the solver's rule,
+    # not this route's (user 2026-09-09: "we only need to account for
+    # temperature as a change in pressure on the band, if there is one"): the rotor
     # stress solve carries a temperature only as the change of a retaining
     # band's fit pressure, and solves every part as drawn — so on a machine
     # with no band the map changes nothing and the answer says so in its

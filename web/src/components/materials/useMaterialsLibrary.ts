@@ -34,7 +34,7 @@ export interface MaterialMeta {
  *  stress solver was written (2026-09-05) and the API returns them; the detail
  *  card printed only the thermal and electrical half, so the numbers that size
  *  a retaining band were invisible in the app that computes with them (user
- *  2026-09-09: "где, кстати, механические свойства материалов?").
+ *  2026-09-09: "where, by the way, are the mechanical properties of materials?").
  *
  *  Orthotropic parts (a hoop-wound CFRP band) carry axis 1 = the fibre/hoop
  *  direction and axis 2 = across it. */

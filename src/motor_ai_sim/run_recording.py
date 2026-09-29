@@ -6,7 +6,7 @@ The duty-cycle editor has an escape hatch: when the cycle route refuses with
 ``no_electromagnetic_run``, the Thermal tab offers to MAKE that run — at the
 CALIBRATION duty's point (14.7 A, 1 000 rpm, coil 30 °C), through
 ``POST /api/coupled/run`` with ``max_iter = 1``.  The machine loaded in the
-editor at that moment is a different duty entirely (the L13 ``peak 200С wire
+editor at that moment is a different duty entirely (the L13 ``peak 200C wire
 120C NdFeB``, 45.96 A at 200 °C), and the backend had no way to tell the two
 apart: every solve route files its answer under whatever duty
 ``duty_fields.active_context()`` names.  So a calibration run overwrote the peak

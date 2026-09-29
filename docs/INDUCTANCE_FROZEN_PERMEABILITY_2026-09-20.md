@@ -86,8 +86,8 @@ Winding values, delta, at each duty's own mesh and temperatures.
 ## What the documents print
 
 * §4, 20 °C catalogue sub-table: **Ld / Lq at no load, 20 °C** and their
-  saliency — the same basis as KV beside them (owner, 2026-09-20: *«Ld/Lq нужно
-  указывать тоже для 20 градусов и без тока, как для KV»*). Stored in the
+  saliency — the same basis as KV beside them (owner, 2026-09-20: *«Ld/Lq also needs
+  to be given at 20 degrees and no current, same as for KV»*). Stored in the
   coupled record's `constants_20c` as `Ld0_mH` / `Lq0_mH` /
   `saliency0_Lq_over_Ld` / `ldq0_method`.
 * §4, machine constants: the **incremental** Ld / Lq at the point, the cross

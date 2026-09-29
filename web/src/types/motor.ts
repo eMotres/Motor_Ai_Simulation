@@ -166,7 +166,7 @@ export interface SweepConfig {
    *  whichever browser made it.  The server keeps the body as-is, so the stamp
    *  travels with it and the newest copy wins on load — a stale profile can no
    *  longer push its old geometry study over a γ/current study made elsewhere
-   *  (2026-09-08: "после перезагрузки он сбросился на Rotor Housing Thickness"). */
+   *  (2026-09-08: "after reload it reset to Rotor Housing Thickness"). */
   updatedAt?: number;
 }
 

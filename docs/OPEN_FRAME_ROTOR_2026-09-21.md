@@ -1,9 +1,9 @@
 # The open frame, part two: the rotor is in the wash (2026-09-21)
 
 Owner, 2026-09-21, with his IR photographs of an open drone motor on a propeller
-stand: *«по термофотографиям катушки греются всегда значительно больше магнитов;
-конструкция полностью открыта, магниты обдуваются со всех сторон, и воздух ещё
-продувает зазор — надо это как-то учесть, когда мы задаём no housing».*
+stand: *«the thermal photos always show the coils running significantly hotter than the magnets;
+the construction is fully open, the magnets are blown on from all sides, and the air also
+flows through the gap — we need to account for this somehow when we set no housing».*
 
 The 2026-09-09 open frame (`frame=open`) put the **stator** side in the
 propeller stream — the end turns (`cooling.end_windings`) and the ventilated

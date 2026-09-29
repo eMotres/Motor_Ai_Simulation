@@ -4,7 +4,7 @@
 // turnsFactor.test.mjs / geometryApplyOutcome.test.mjs for the same pattern).
 //
 // What this pins: the "flat wire in stock" reference table's row formatting
-// (owner, 2026-09-20 — "справочная таблица по доступным на складе проводам")
+// (owner, 2026-09-20 — "reference table of wires available in stock")
 // and the passive "not in stock — nearest: …" hint for a wire_height /
 // wire_width input, which does NOT restrict anything yet — it only hints.
 import test from 'node:test';

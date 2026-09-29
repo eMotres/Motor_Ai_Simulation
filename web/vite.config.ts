@@ -22,7 +22,7 @@ export default defineConfig({
     // LISTEN ON BOTH STACKS.  Vite's default bind on this machine is IPv6 only
     // ([::1]:5173), while the API binds IPv4 (127.0.0.1:8001) — so whether the
     // app opened at all depended on which address the browser resolved
-    // `localhost` to.  That is the "веб не отвечает" that has been coming back
+    // `localhost` to.  That is the "the web isn't responding" that has been coming back
     // for days: nothing had crashed, the server was simply not on the address
     // the browser tried.  0.0.0.0 also puts it on the LAN, which is what the
     // phone/remote-control view needs anyway.

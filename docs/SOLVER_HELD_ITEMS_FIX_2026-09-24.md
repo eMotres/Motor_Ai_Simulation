@@ -6,7 +6,7 @@ Done by Claude Opus 5.5 (`claude-opus-5-5`), one sub-agent, no escalation. It wo
 The optimizer-side items (110352a, 0f973bb) and speed-ups A+B+C belong to another agent and are
 not touched here. `refine_proc.py` and `routes/optimization.py` are unchanged.
 
-Owner rule, restated 2026-09-24 ("фильтры бы я убрал"): no ramp removal, detrending, smoothing,
+Owner rule, restated 2026-09-24 ("I would remove the filters"): no ramp removal, detrending, smoothing,
 windowing or harmonic truncation may feed any selected or reported value. Section 6 lists every
 filter-like operation that is still on a reported path. They are listed only, not removed.
 

@@ -292,7 +292,7 @@ def test_b_the_mount_carries_the_machine(robot):
 # ---------------------------------------------------------------------------
 # (b1b) THE HEAT PATH — one choice, four options (2026-09-26)
 # ---------------------------------------------------------------------------
-# Owner: «давай упростим».  The five mount / robot-link fields became ONE
+# Owner: «let's simplify».  The five mount / robot-link fields became ONE
 # select; each option must change the heat paths exactly as its name says, and
 # 'none' must have no conduction path at all.
 

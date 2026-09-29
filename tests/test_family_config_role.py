@@ -1,6 +1,6 @@
 """A configuration's role is read off its DUTIES, not off a stale toggle.
 
-User 2026-09-10: *"почему здесь motor, хотя это генератор"* — the catalog chip
+User 2026-09-10: *"why does it say motor here when it's a generator"* — the catalog chip
 said `motor` on a configuration named "L180 gen" whose every duty is a
 generator duty.  `role` was captured once, at creation, from whatever the
 Simulation panel's mode toggle happened to be, written into the yaml and never

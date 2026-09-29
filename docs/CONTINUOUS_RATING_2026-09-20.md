@@ -1,7 +1,7 @@
 # Continuous (S1) rating under different cooling conditions — 2026-09-20
 
-Owner, 2026-09-20: *«давай ещё сделаем расчёт continuous power для разных условий
-охлаждения»*.
+Owner, 2026-09-20: *«let's also compute continuous power for different cooling
+conditions»*.
 
 `coupled_time_to_limit` answers "the current is given, how long may it pull?".
 This is the complement: **the largest current the machine may hold for ever at
@@ -81,7 +81,7 @@ makes) to 9 %.
 
 **All three shipped OFF for one day** behind
 `network_from_steady(..., surface_fit=…)`, and are **ON by default since
-2026-09-21** (owner: *«давай включай все»*). `surface_fit=False` still restores
+2026-09-21** (owner: *«go ahead and turn them all on»*). `surface_fit=False` still restores
 the pre-2026-09-21 network exactly, which is how a record written before that
 date has to be read back. What follows is the reasoning from the day they were
 gated; the appendix carries what turning them on actually moved.
@@ -331,7 +331,7 @@ record.
 
 ## Validation on the other motors — 2026-09-21, each with ITS OWN saved cooling
 
-Owner: *«проверяй алгоритм на других моторах не меняя систему охлаждения»*.  One
+Owner: *«check the algorithm on other motors without changing the cooling system»*.  One
 condition per duty and it is the empty patch — the cooling the duty's own stored
 thermal map was solved under, read back by
 `coupled_continuous_rating.cooling_from_duty_thermal`.  No electromagnetic solve:

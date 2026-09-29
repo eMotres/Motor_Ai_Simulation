@@ -7,7 +7,7 @@
  * its popper takes pointer events — so a hint wrapped round a Select lands on
  * top of the very options it is explaining and swallows the click that should
  * pick one.  The duty-cycle editor's kind select could not be opened at all
- * because of it (user 2026-09-15: «всплывающее меню всё закрывает»), and the
+ * because of it (user 2026-09-15: «the popup menu covers everything»), and the
  * cooling selects on the Thermal tab had already been patched once by hand
  * with a z-index (2026-09-07) — twice is a pattern, so it lives here now.
  *

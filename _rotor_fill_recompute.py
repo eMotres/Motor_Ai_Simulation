@@ -1,4 +1,4 @@
-"""'пересчитаем все' — recompute the FEM transient with the NEW rounded rotor
+"""'recompute everything' — recompute the FEM transient with the NEW rounded rotor
 (rotor_fill_r=1.6) vs the OLD sharp rotor (rotor_fill_r=0), 72 steps, sliding
 band, identical settings.  Reports T_avg, ripple, and losses so we can see if
 rounding the rotor pole-tip corners reduced the torque ripple."""

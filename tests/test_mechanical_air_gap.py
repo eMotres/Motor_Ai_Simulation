@@ -1,6 +1,6 @@
 """What is left of the air gap once the rotor has grown into it.
 
-User 2026-09-10: *"не забудь добавить в отчёт, как меняется зазор"* — the growth
+User 2026-09-10: *"don't forget to add how the gap changes to the report"* — the growth
 alone was never the answer, because the clearance it eats is the air gap MINUS
 the band, two different geometry fields, and the reader was left to subtract.
 

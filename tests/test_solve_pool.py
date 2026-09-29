@@ -567,3 +567,13 @@ def test_transient_lock_is_global_off_and_keyed_on(monkeypatch, tmp_path):
     assert a1.acquire() and b1.acquire()        # different users side by side
     a1.release()
     b1.release()
+
+
+def test_cgroup_memory_limit_is_honoured(tmp_path):
+    (tmp_path / "memory.max").write_text("%d\n" % (10 * GB))
+    (tmp_path / "memory.current").write_text("%d\n" % (7 * GB))
+    (tmp_path / "memory.stat").write_text("anon 1\ninactive_file %d\n" % GB)
+    assert SP._cgroup_mem_available(str(tmp_path)) == 4 * GB
+    (tmp_path / "memory.max").write_text("max\n")
+    assert SP._cgroup_mem_available(str(tmp_path)) is None
+    assert SP._cgroup_mem_available(str(tmp_path / "absent")) is None

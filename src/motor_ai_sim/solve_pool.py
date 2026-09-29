@@ -261,12 +261,43 @@ class Ticket:
                 "peak_rss": self.peak_rss}
 
 
+def _cgroup_mem_available(base: str = "/sys/fs/cgroup") -> Optional[int]:
+    """Bytes left under this container's memory limit (cgroup v2), or None.
+
+    psutil reports the HOST's memory, and the API container is capped below it
+    (40 GB of 64 on the AX42): the limit is what an out-of-memory kill obeys.
+    Reclaimable page cache (``inactive_file``) does not count as used.
+    """
+    try:
+        with open(os.path.join(base, "memory.max")) as fh:
+            lim = fh.read().strip()
+        if lim == "max":
+            return None
+        with open(os.path.join(base, "memory.current")) as fh:
+            cur = int(fh.read().strip())
+        inactive = 0
+        with contextlib.suppress(OSError, ValueError):
+            with open(os.path.join(base, "memory.stat")) as fh:
+                for line in fh:
+                    if line.startswith("inactive_file "):
+                        inactive = int(line.split()[1])
+                        break
+        return max(0, int(lim) - max(0, cur - inactive))
+    except (OSError, ValueError):
+        return None
+
+
 def _mem_available() -> Optional[int]:
+    avail: Optional[int] = None
     try:
         import psutil
-        return int(psutil.virtual_memory().available)
+        avail = int(psutil.virtual_memory().available)
     except Exception:                                   # noqa: BLE001
-        return None
+        avail = None
+    cg = _cgroup_mem_available()
+    if cg is not None:
+        avail = cg if avail is None else min(avail, cg)
+    return avail
 
 
 def _proc_rss(pid: int) -> int:

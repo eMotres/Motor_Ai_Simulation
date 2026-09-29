@@ -73,9 +73,9 @@ FREE_GEO_KEYS = (
 #: machine edited here is the same DIE — the same laminations, the same slot,
 #: the same tools.
 #:
-#: `wire_parallel` joined them on 2026-09-11 (user: "нужно дать ещё возможность
-#: менять wire parallel (strands) для режимов, это никак не затрагивает
-#: геометрию").  It is right: the slot holds `num_wires_per_slot` conductors
+#: `wire_parallel` joined them on 2026-09-11 (user: "we also need the ability
+#: to change wire parallel (strands) per duty, it doesn't touch the geometry
+#: at all").  It is right: the slot holds `num_wires_per_slot` conductors
 #: whatever the strands in hand are, and `wire_parallel` only says how they are
 #: grouped — it appears nowhere in `cadquery_geometry`, only in `winding`
 #: (turns = conductors / strands), in the validator that makes the two divide,
@@ -93,8 +93,8 @@ EDITABLE_UNDER_DIE_LOCK = ("motor_length", "wire_height", "num_wires_per_slot",
 #: whose value moved is a DIFFERENT lamination, i.e. a new die.  ONE list, read
 #: by the identity guard in `sync_active_die_geometry`, by `/context` (so the
 #: Geometry table and the sweep pickers can flag the keys BEFORE the change,
-#: 2026-09-20: "опять та же самая проблема — я всё оптимизировал, а сохранить
-#: не могу"), and by the optimizer routes that refuse to vary them while a die
+#: 2026-09-20: "the same problem again — I optimized everything and can't
+#: save it"), and by the optimizer routes that refuse to vary them while a die
 #: is active unless the caller says "allow new lamination".
 DIE_IDENTITY_KEYS = ("stator_diameter", "num_seg", "num_slots_per_segment",
                      "num_poles_per_segment")
@@ -152,7 +152,7 @@ def refuse_die_defining_variables(names, allow_new_lamination: bool) -> None:
 #: machine — and a load that says nothing about them leaves the previously
 #: loaded machine's picks in the shared config (2026-09-09: the Ø200's Al2O3
 #: ceramic liner, tried on 2026-09-07/08, sat on every motor loaded after it —
-#: user: "почему у всех моторов поменялся материал изоляции, всегда был Nomex").
+#: user: "why did the insulation material change on all motors, it was always Nomex").
 _ABSENT_MATERIALS: Dict[str, str] = {
     "slot_insulation": "Nomex",
     "wire_insulation": "polyimide",
@@ -161,7 +161,7 @@ _ABSENT_MATERIALS: Dict[str, str] = {
 #: The parts a configuration SAVES its material choice for.  Everything solid
 #: the machine is made of — not the three the save used to keep (2026-09-09).
 #:
-#: User: *"почему изоляция в этой машине опять Nomex, я же менял её на Al2O3"*.
+#: User: *"why is the insulation on this machine Nomex again, I changed it to Al2O3"*.
 #: The save kept magnet / stator_core / rotor_core only, so a slot liner, a wire
 #: enamel, a conductor or a shaft grade chosen in Materials had nowhere to live:
 #: on the next activation the absent keys were filled from ``_ABSENT_MATERIALS``

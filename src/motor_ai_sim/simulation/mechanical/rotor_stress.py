@@ -2922,9 +2922,9 @@ def solve_rotor_stress(polys: dict,
 
     # -- AVERAGED, the way every other FE tool reports a stress --------------
     #
-    # User 2026-09-10: "как нам теперь объяснять пользователям эти две разные
-    # цифры 1728 и 1426? нас не поймут, везде и в Ansys и Fusion полное
-    # соответствие" — and they are right, so the convention is now theirs.
+    # User 2026-09-10: "how are we supposed to explain these two different
+    # numbers, 1728 and 1426, to users now? nobody will understand it, in
+    # Ansys and Fusion it's always in full agreement" — and they are right, so the convention is now theirs.
     #
     # ANSYS and Fusion report a stress on the NODES of an averaged plot: each
     # element's constant value is area-averaged onto the nodes it touches,
@@ -2986,7 +2986,7 @@ def solve_rotor_stress(polys: dict,
 
     # ── how much AIR GAP is left when the rotor has grown into it ───────────
     #
-    # User 2026-09-10: *"не забудь добавить в отчёт, как меняется зазор"*.  The
+    # User 2026-09-10: *"don't forget to add to the report how the gap changes"*.  The
     # clearance is the number that decides whether the machine rubs, and until
     # now the report carried only the growth — the reader had to subtract by
     # hand, on a machine where the gap and the band thickness are two different

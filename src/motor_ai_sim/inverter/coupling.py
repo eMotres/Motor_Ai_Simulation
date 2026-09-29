@@ -346,7 +346,7 @@ class InverterVoltageSource(_ExcPwm):
     def _record_feedback_gain(self, legs: Dict[str, float],
                               err: Dict[str, float], psi_a: float,
                               psi_b: float) -> None:
-        """The SECANT of each leg's error along the leg-current trajectory.
+        """The bridge's small-signal DC conductance per leg (describing function).
 
         WHY (L180 gen, night 2026-09-28/29): the dead time and the device drop
         are a real resistance for the circuit's DC mode.  A DC offset I_dc on a
@@ -359,31 +359,33 @@ class InverterVoltageSource(_ExcPwm):
         — an iteration with gain ≈ −1.8 — and after 11 corrections the start-
         up DC had grown to −645 A (WCMS) / −886 A (IMCQ).
 
-        The derivative the variational equation needs is that of THIS step's
-        error with respect to the feedback current.  The error is piecewise
-        (sign), so its derivative is taken as the secant between the two
-        feedback currents this source has actually seen, evaluated on the
-        SAME step window: away from a zero crossing it is the device drop's
-        slope, across one it is the jump over the current step — the box
-        discretisation of the sign's delta, whose integral over the period is
-        exactly the (2/π)·E/Î mean above.  No filtering: it is the model's own
-        Jacobian, fed to the Newton so the step is the right size.
+        WHICH derivative.  The dead-time error is a sign of the ONE-STEP-OLD
+        current, so its per-step derivative is a delta at each zero crossing.
+        A per-step secant (tried first) is the right integral on a clean
+        sinusoid, but on the real L180 carrier ripple a crossing can move the
+        current by a few amperes only, the secant becomes huge, and the
+        explicit (one-step-delayed) row makes the period map non-contractive
+        (server run 2026-09-29: eigenvalue −3.66, period refused, 20.8 A left).
+        What the DC mode — a slow quantity over a whole period — actually
+        meets is the PERIOD-AVERAGED slope, i.e. the describing-function
+        conductance of the clamp, spread evenly over the period's steps:
+
+            g_leg = −r_ds − 2·E / (π·Î_leg),   E = t_d·f_sw·(V_dc + 2·V_SD(Î))
+
+        Î_leg = √2 × the leg's rms over the fine steps marched so far.  It is
+        the same model's linearisation (not a filter on the DC); its integral
+        over a period equals the box-discretised one on a clean waveform.
         """
-        prev = getattr(self, "_legs_prev", None)
-        self._legs_prev = dict(legs)
         g = {}
+        f_sw = float(self._mod.carriers) * max(self.f_elec_hz, 0.0)
+        n = max(self._fine_seen, 1)
         for k in _ABC:
-            i1 = legs[k]
-            i0 = None if prev is None else prev[k]
-            if i0 is None or abs(i1 - i0) <= 1e-9 * max(1.0, abs(i1)):
-                # no trajectory yet / no motion: the local slope, same window
-                eps = 1e-3 * max(1.0, abs(i1))
-                i0 = i1 - eps
-            e0 = pole_error_volts(modulator=self._mod, drop=self.drop, phase=k,
-                                  i_leg_A=i0, psi_a_deg=psi_a, psi_b_deg=psi_b,
-                                  v_dc_real_V=self.v_dc_real_V,
-                                  deg_per_s=self.deg_per_s)
-            g[k] = (err[k] - e0) / (i1 - i0)
+            i_pk = math.sqrt(2.0 * self._i_leg_sq[k] / n)
+            g[k] = -float(self.drop.r_ds_ohm)
+            if self.drop.dead_time_s > 0.0 and i_pk > 1e-9:
+                e = self.drop.dead_time_s * f_sw * (
+                    self.v_dc_real_V + 2.0 * self.drop.v_sd(i_pk))
+                g[k] -= 2.0 * e / (math.pi * i_pk)
         self.ll_feedback_gain = feedback_gain_ll(
             g, star_delta=self.star_delta, n_parallel=self.n_parallel)
 
@@ -391,7 +393,6 @@ class InverterVoltageSource(_ExcPwm):
         base = super().mean_over(fb)
         self.ll_feedback_gain = None
         if not fb.fine or fb.i_abc is None:
-            self._legs_prev = None
             return base
         legs = leg_currents(fb.i_abc, star_delta=self.star_delta,
                             n_parallel=self.n_parallel)

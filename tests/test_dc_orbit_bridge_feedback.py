@@ -41,7 +41,7 @@ def _case():
     return i_ph, v_ph
 
 
-def _march(drop, *, use_gain, n_settle=12, dc0=(20.0, -10.0)):
+def _march(drop, *, use_gain, n_settle=12, dc0=(20.0, -10.0), damped=True):
     i_ph, v_ph = _case()
     src = build_inverter_source(
         pole_pairs=1, daxis_deg=0.0, v_phase_peak=abs(v_ph),
@@ -53,7 +53,7 @@ def _march(drop, *, use_gain, n_settle=12, dc0=(20.0, -10.0)):
     u = np.array([i_ph.real, (i_ph * np.exp(-2j * math.pi / 3)).real]) \
         + np.asarray(dc0)
     y = _D @ (m.Q(0.0) @ u + m.psi_pm(0.0))
-    sol = DcOrbitSolve(R_phase=_R)
+    sol = DcOrbitSolve(R_phase=_R, damped=damped)
     dth, dt = 2 * math.pi / _NSPP, 1.0 / (_F * _NSPP)
     q0 = m.Q(0.0)
     sol.frame(ll_inductance(q0[:, 0], q0[:, 1]), dt)
@@ -94,8 +94,9 @@ _WCMS = DeviceDrop(r_ds_ohm=0.0009, v_sd_v0_V=3.0, v_sd_rd_ohm=0.002,
 
 
 def test_without_the_bridge_gain_the_newton_diverges():
-    """The defect, reproduced: M from R_phase alone, sign-alternating growth."""
-    dcs, _ = _march(_WCMS, use_gain=False)
+    """The defect, reproduced: M from R_phase alone (the pre-fix solve, full
+    Newton steps), sign-alternating growth."""
+    dcs, _ = _march(_WCMS, use_gain=False, damped=False)
     assert abs(dcs[-2]) > 10.0 * abs(dcs[0]), dcs
 
 

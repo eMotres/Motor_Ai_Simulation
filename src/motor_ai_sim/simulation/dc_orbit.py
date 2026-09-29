@@ -196,6 +196,12 @@ class DcOrbitSolve:
     # frames whose variational row carried the source's own feedback gain
     source_feedback_frames: int = 0
     _q: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+    _prev_drift: Optional[np.ndarray] = field(default=None, init=False,
+                                              repr=False)
+    _step: float = field(default=1.0, init=False, repr=False)
+    _period_g: bool = field(default=False, init=False, repr=False)
+    # damped Newton on periods whose map carries a (piecewise) source feedback
+    damped: bool = True
     _M: Optional[np.ndarray] = field(default=None, init=False, repr=False)
     _L_prev: Optional[np.ndarray] = field(default=None, init=False, repr=False)
 
@@ -235,6 +241,7 @@ class DcOrbitSolve:
                 G = _finite_2x2(G_ll, "the source's feedback gain")
                 B = B + dt * G @ np.linalg.inv(Lp)
                 self.source_feedback_frames += 1
+                self._period_g = True
             self._M = np.linalg.solve(A, B @ self._M)
         self._L_prev = L
 
@@ -244,6 +251,7 @@ class DcOrbitSolve:
             raise ValueError("DcOrbitSolve: non-finite start flux %r" % (q,))
         self._q = q
         self._M = np.eye(2)
+        self._period_g = False
 
     def period_end(self, p_ll: np.ndarray, *, tag: str, correct: bool,
                    frame: int = -1, dc_phase_A: Optional[Sequence[float]] = None
@@ -266,8 +274,30 @@ class DcOrbitSolve:
             if np.all(np.isfinite(M)) and rho < 1.0:
                 # (2): the next start state onto the orbit.
                 w = M @ np.linalg.solve(np.eye(2) - M, delta)
+                # DAMPED NEWTON (globalisation, 2026-09-29).  The period map
+                # of a bridge with dead time is only piecewise smooth (the
+                # clamp is a sign of the sampled current), so near the orbit
+                # the linearised M can over-state the damping and the full
+                # step then over-shoots into a period-2 cycle (drift flips
+                # sign at undiminished size).  When the last corrected step
+                # did that, the step is halved; when a step reduces the
+                # drift cleanly it grows back to the full Newton step.  The
+                # state is still moved only onto the solved orbit's
+                # direction — nothing is subtracted from the measured DC.
+                pd = self._prev_drift
+                if pd is not None and self.damped and self._period_g:
+                    flip = float(np.dot(pd, delta)) < 0.0
+                    ratio = (float(np.linalg.norm(delta))
+                             / max(float(np.linalg.norm(pd)), 1e-300))
+                    if flip and ratio > 0.5:
+                        self._step = max(self._step * 0.5, 1.0 / 64.0)
+                    elif ratio < 0.5:
+                        self._step = min(self._step * 2.0, 1.0)
+                w = self._step * w
+                self._prev_drift = delta
                 self.corrections += 1
-                verdict = "corrected"
+                verdict = ("corrected" if self._step == 1.0 else
+                           "corrected (damped x%.4g)" % self._step)
             else:
                 self.refused += 1
                 verdict = ("REFUSED: period Jacobian not contractive "

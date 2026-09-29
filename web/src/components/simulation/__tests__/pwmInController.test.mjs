@@ -1,10 +1,10 @@
 // node --test — PWM IS GONE FROM THE ELECTROMAGNETIC TAB (2026-09-24).
 //
-// Owner, 2026-09-22: «как отладим каплинг с контроллером, нам не нужен будет
-// PWM в электромагнитном моделировании — всё будет задаваться в меню
+// Owner, 2026-09-22: «once we debug the coupling with the controller, we
+// won't need PWM in the electromagnetic simulation — everything will be set in the menu
 // Controller».  And 2026-09-24, on a screenshot of the Controller tab's greyed
-// "Carrier 20,000 Hz" placeholder: «Это значение нужно задавать в контроллере;
-// PWM нужно выкинуть из Electromagnetic.»
+// "Carrier 20,000 Hz" placeholder: «This value needs to be set in the Controller;
+// PWM needs to be dropped from Electromagnetic.»
 //
 // This test reads the PANEL SOURCE rather than rendering it, for the reason the
 // repo's other node tests state: `node --test` cannot load the TS/TSX modules.

@@ -1,5 +1,5 @@
-// node --test — the THIRD `solve_to` option (owner 2026-09-21: *«давай сделаем
-// кнопку, или лучше добавим ещё один элемент в меню»*), beside `steady` and
+// node --test — the THIRD `solve_to` option (owner 2026-09-21: *«let's make a
+// button, or better add one more item to the menu»*), beside `steady` and
 // `limits`: the largest current the machine may hold FOR EVER at this duty's
 // own saved cooling (S1).
 //
@@ -106,8 +106,8 @@ const RATING = {
 };
 
 test('the line: only the current and the part it is limited by', () => {
-  // Owner addendum, 2026-09-21: *«не пиши уже мощность и момент — его и так
-  // видно»* — no torque, no power: the tiles already show the machine's
+  // Owner addendum, 2026-09-21: *«don't write power and torque again — it's
+  // already visible»* — no torque, no power: the tiles already show the machine's
   // numbers, and the S1 torque is a linear estimate anyway.  Both stay on
   // the STORED block (RATING.power below) for the API/CLI and the tooltip.
   assert.equal(
@@ -116,8 +116,8 @@ test('the line: only the current and the part it is limited by', () => {
 });
 
 // ── S1 VERIFICATION (owner 2026-09-21, second addendum) ────────────────────
-// *«почему сразу не пересчитывается электромагнитное моделирование … токи не
-// совпадают»* — the line must say whether the current beside it was
+// *«why doesn't the electromagnetic simulation recompute right away … the
+// currents don't match»* — the line must say whether the current beside it was
 // CONFIRMED by a real EM pass, or is still the network's own estimate.
 test('a verified rating names the part\'s own confirmed temperature', () => {
   const verified = { continuous_rating: { ...RATING, verified: true,
@@ -242,7 +242,7 @@ test('the summary card reads continuous_rating off the coupling block, not a new
 });
 
 // ── THE RECORD MOVED TO S1 (owner 2026-09-21, third round) ─────────────────
-// *«опять токи не совпадают»* — the tiles were the S1 machine while the
+// *«the currents don't match again»* — the tiles were the S1 machine while the
 // Operating point panel and the AT-THE-LIMIT line both still described the
 // setpoint, with nothing on screen saying so.
 
@@ -336,7 +336,7 @@ test('the action never throws when the server PATCH itself throws '
 // ── AUTO-SET on a VERIFIED S1 run (owner 2026-09-21, fourth round) ─────────
 // Screenshot: after a `continuous` run the dashboard DIMMED and the panel
 // still read the setpoint (63.64 A) under tiles at the S1 machine (48.6 A) —
-// *«почему замыленный экран … опять токи не совпадают»*.  The dimming is
+// *«why is the screen dimmed … the currents don't match again»*.  The dimming is
 // SummaryTable's own `opStale` guard (current vs `liveOp.current`), so
 // closing the gap between the panel and the S1 record clears it by itself.
 
@@ -416,8 +416,8 @@ test('PhysicsDashboard auto-applies only a verified S1 record, with a '
 });
 
 // ── the manual button is GONE (owner, fourth round) ─────────────────────────
-// *«ты что не можешь сам записать этот ток и прогнать солвер с ним
-// автоматом?»* — the panel must move BY ITSELF; no click left to forget.
+// *«can't you just record this current yourself and run the solver with it
+// automatically?»* — the panel must move BY ITSELF; no click left to forget.
 test('the manual "Use N A as the operating point" button no longer exists', () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const summarySrc = readFileSync(

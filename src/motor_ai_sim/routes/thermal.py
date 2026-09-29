@@ -6901,8 +6901,8 @@ def last(
 # ---------------------------------------------------------------------------
 # THE HEAT PATHS — GET /api/thermal/heat_paths/last
 # ---------------------------------------------------------------------------
-# User, 2026-09-15: *"лучше нарисовать 3D модель с катушками (end windings) и на
-# ней прямо показывать, куда и сколько тепла может отводиться"*.
+# User, 2026-09-15: *"better to draw a 3D model with the coils (end windings)
+# and show directly on it where and how much heat can be carried away"*.
 #
 # Every watt is already in `cooling`; what this adds is WHERE each one leaves,
 # on a machine drawn out of cylinders and annuli, so the answer "89 % through

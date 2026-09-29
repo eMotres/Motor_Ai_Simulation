@@ -274,10 +274,13 @@ def test_the_lift_off_bisection_still_runs_on_a_seated_joint():
 #: written with, 1.730, is kept as `sf_min_unaveraged`: it is still solved and
 #: still reported, and the two moving together is what says the change was a
 #: reporting one.  Every other number here is untouched by it.
-FROZEN_20C = {"sf_min": 1.9739, "sf_min_unaveraged": 1.730,
-              "sf_min_p05": 2.761,
-              "rotor_od_growth_um": 11.985, "max_displacement_um": 12.813,
-              "open_fraction": 0.893, "pressure_max_mpa": 29.205}
+#: 2026-09-29: re-measured after the magnet cards moved to the Arnold sheets
+#: (magnet density 7500 -> 7600 kg/m3: pressure_max 29.205 -> 29.576 MPa, the
+#: rest within 0.1 %).
+FROZEN_20C = {"sf_min": 1.9730, "sf_min_unaveraged": 1.729,
+              "sf_min_p05": 2.759,
+              "rotor_od_growth_um": 11.992, "max_displacement_um": 12.824,
+              "open_fraction": 0.893, "pressure_max_mpa": 29.576}
 
 
 def test_with_nothing_loose_the_answer_is_the_one_it_always_was():
@@ -659,10 +662,13 @@ def test_the_g2_pocket_is_a_floor_a_wedge_and_a_tab():
 #: reference was written with, for the record: rotor 25.0, magnet 10.8,
 #: sf_min 13.53.  The displacements and the open fraction are the same solve
 #: either way — averaging is a reporting step, not a physics one.
-G2_COLD = {"rotor_vm_p995": 19.42, "magnet_vm_p995": 9.52, "sf_min": 17.38,
-           "sf_min_unaveraged": 13.53,
-           "open_fraction": 0.919, "od_growth_um": 4.07,
-           "max_displacement_um": 5.84}
+#: 2026-09-29: re-measured after the N52UH card moved to the Arnold G52UH
+#: sheet (density 7600, CTE 7 / -1): magnet 9.52 -> 9.68 MPa, open 0.919 ->
+#: 0.925, OD growth 4.07 -> 4.11 um; was rotor 19.42, sf 17.38 / 13.53, 5.84 um.
+G2_COLD = {"rotor_vm_p995": 19.51, "magnet_vm_p995": 9.68, "sf_min": 17.29,
+           "sf_min_unaveraged": 13.48,
+           "open_fraction": 0.925, "od_growth_um": 4.11,
+           "max_displacement_um": 5.86}
 
 
 def test_the_g2_at_20C_still_solves_the_way_it_did(g2_cold):

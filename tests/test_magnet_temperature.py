@@ -142,9 +142,12 @@ def test_the_measured_consistency_numbers_are_the_documented_ones():
     the numbers in it have to be the numbers the code produces.  Tight bounds on
     purpose: this is a pin, not a tolerance.
     """
+    # 2026-09-29: N52UH rebuilt from the Arnold G52UH sheet (Br20 1.43 T,
+    # HcJ20 >= 1990 kA/m, alpha -0.12, beta -0.51 %/K): 1.2069 T and
+    # HcJ(150 C) = 670.6 kA/m (was 1.2200 / -730 from the old 100/150 pair).
     n52 = get_magnet("N52UH_100C").at_temperature(150.0)
-    assert n52.Br == pytest.approx(1.2200, abs=5e-4)
-    assert n52.h_knee == pytest.approx(-730_000.0, rel=1e-4)
+    assert n52.Br == pytest.approx(1.2069, abs=5e-4)
+    assert n52.h_knee == pytest.approx(-670_600.0, rel=1e-4)
 
     n45 = get_magnet("N45EH_150C").at_temperature(180.0)
     assert n45.Br == pytest.approx(1.1014, abs=5e-4)

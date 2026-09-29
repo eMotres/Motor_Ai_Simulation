@@ -1,7 +1,7 @@
 """Materials library loader for electric motor EM simulation.
 
-Loads material data from config/materials_library.yaml (extracted from
-Ansys Maxwell PersonalLib) and exposes typed dataclasses for use in the
+Loads material data from config/materials_library.yaml (every value traced
+to a manufacturer data sheet, standard or handbook) and exposes typed dataclasses for use in the
 simulation pipeline.
 
 Usage

@@ -4298,8 +4298,8 @@ def _compact_crit(r: Dict[str, Any]) -> Dict[str, Any]:
 def _drive_carrier(body: Dict[str, Any], *, default: bool) -> Dict[str, Any]:
     """THE CARRIER OF THE RUN BEING SOLVED — ``{hz, origin, source}``.
 
-    2026-09-24 (owner: «Это значение нужно задавать в контроллере; PWM нужно
-    выкинуть из Electromagnetic»): the CONTROLLER owns it.  In order —
+    2026-09-24 (owner: "This value needs to be set in the controller; PWM
+    needs to be dropped from Electromagnetic"): the CONTROLLER owns it.  In order —
 
       * ``body.controller.f_carrier_hz`` (the Controller block the Coupled
         panel sends by reference) and the SAVED Controller settings of the
@@ -4378,8 +4378,8 @@ def _modal_steps(body: Dict[str, Any], *, authorization: Optional[str],
                  f_switch_hz: Optional[float] = None) -> Dict[str, Any]:
     """The two temperature-FREE mechanical answers, at this run's speed.
 
-    User 2026-09-13: "при каплинге чтобы всё решалось — и модальный, и
-    частоты, чтобы к отчёту было всё готово".  The ring modes and the shaft's
+    User 2026-09-13: "when coupling runs, everything should be solved — the
+    modal analysis and the frequencies, so everything is ready for the report".  The ring modes and the shaft's
     critical speeds go through the same hooks the tab's two buttons use
     (``run_modes_at`` / ``run_critical_speeds_at`` — the user's saved body,
     mode count, mesh and shaft line), so the report's mechanical page and the
@@ -4513,9 +4513,9 @@ def _cycle_block_of(regime: Optional[Dict[str, Any]],
 # ---------------------------------------------------------------------------
 # Persistent history (2026-09-22) — "don't recompute an identical coupled run"
 # ---------------------------------------------------------------------------
-# Owner, first sentence of the 2026-09-22 ask: *"если я запускаю те же
-# параметры каплинга, он не считается, а подгружает уже рассчитанный
-# вариант"*.  There is no in-process memo to build on here (unlike the EM
+# Owner, first sentence of the 2026-09-22 ask: *"if I run the same coupling
+# parameters, it shouldn't recompute, it should load the already-computed
+# result"*.  There is no in-process memo to build on here (unlike the EM
 # transient's ``_fem_transient_cache`` or mechanical's ``rsm.cache_get``):
 # ``_em_run`` below deliberately forces every INNER electromagnetic pass to
 # solve (``fresh=True, ledger=False`` at its own call site) because a coupled

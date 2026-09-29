@@ -15605,9 +15605,9 @@ MECH_MAP_MISSING = (
 CRIT_PAGE_UNSOLVED = (
     "Not solved — no rotordynamics answer is stored for this machine.")
 
-#: The notice on the cover (user 2026-09-10: "надо как бы написать, что это всё
-#: конфиденциально и принадлежит Motres d.o.o., распространять только с
-#: разрешения — кратко и понятно").  Short on purpose: a paragraph of legal
+#: The notice on the cover (user 2026-09-10: "we should kind of write that
+#: this is all confidential and belongs to Motres d.o.o., only to be
+#: distributed with permission — short and clear").  Short on purpose: a paragraph of legal
 #: boilerplate on an engineering report is read by nobody.
 CONFIDENTIAL_NOTICE = (
     "CONFIDENTIAL — property of Motres d.o.o. This document and the design it "
@@ -15882,8 +15882,8 @@ def mode_rows(res: Optional[Dict[str, Any]], *, rpm: Any = None,
 #: How wide the gallery is DRAWN, in centimetres, and how many pixels that is.
 #:
 #: The figure is built at the size it will be printed at (2026-09-11, user:
-#: "увеличь разрешение во всю ширину страницы пропорционально, и шрифты внутри
-#: тоже увеличь").  That is the whole trick: matplotlib sizes text in POINTS of
+#: "increase the resolution to full page width proportionally, and enlarge
+#: the fonts inside too").  That is the whole trick: matplotlib sizes text in POINTS of
 #: the figure, so a 28 cm figure shrunk into a 16.5 cm frame took its 8.5 pt
 #: titles down to 5 pt on paper.  Draw it at the frame's own width and a point
 #: in the figure is a point on the page — the titles below are then the same
@@ -16184,8 +16184,8 @@ def mech_percentile_text(case: Dict[str, Any]) -> str:
 def rotor_inertia_rows(em: Dict[str, Any]) -> List[List[str]]:
     """The rotor's moment of inertia about the shaft, and what makes it up.
 
-    User 2026-09-11: *"нигде не нашёл величины инерции ротора — её нужно
-    обязательно добавить в механику"*.  It is computed on every run (from the
+    User 2026-09-11: *"couldn't find the rotor inertia value anywhere — it
+    absolutely needs to be added to the mechanics"*.  It is computed on every run (from the
     CAD polygons, not a cylinder approximation) and lives in the summary; no
     section of this document carried it.  It belongs to MECHANICS: it is what
     sets the acceleration a drive can ask for and the energy stored in the
@@ -16247,8 +16247,8 @@ def mech_fit_rows(case: Dict[str, Any], res: Dict[str, Any]) -> List[List[str]]:
             [f"{what} OD radial travel, mean", _fmt(od.get("mean_um"), 1, "µm")],
             [f"{what} OD radial travel, least", _fmt(od.get("min_um"), 1, "µm")],
         ]
-    # THE AIR GAP, as a budget (user 2026-09-10: "не забудь добавить в отчёт,
-    # как меняется зазор").  The clearance is measured off the drawn section —
+    # THE AIR GAP, as a budget (user 2026-09-10: "don't forget to add to the
+    # report how the gap changes").  The clearance is measured off the drawn section —
     # the smallest radius anywhere on the stator against the rotor's largest —
     # so a chamfer or a stepped pole counts and no geometry field has to be
     # kept in step with it.  What is NOT in it: manufacturing tolerance,
@@ -16277,7 +16277,7 @@ def mech_fit_rows(case: Dict[str, Any], res: Dict[str, Any]) -> List[List[str]]:
 def _interface_words(label: Any) -> str:
     """``magnet_rotor`` -> ``magnet/rotor``.
 
-    User 2026-09-11: *"интерфейсы лучше писать так: magnet/rotor"* — a contact
+    User 2026-09-11: *"better to write interfaces like this: magnet/rotor"* — a contact
     pair is two parts touching, and a slash says that where an underscore reads
     like one identifier.  The stored key is untouched: this is spelling for the
     page only.

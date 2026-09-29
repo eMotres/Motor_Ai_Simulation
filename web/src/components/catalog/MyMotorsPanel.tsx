@@ -14,6 +14,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { TextPromptDialog, ConfirmDialog,
          type TextPromptState, type ConfirmState } from '../common/PromptDialogs';
 import { clearActiveDuty } from '../../lib/dutySettings';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/motors.json (docs/I18N.md).
+const tx = nsT('motors');
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -26,6 +31,7 @@ interface MyMotor {
 }
 
 const MyMotorsPanel: React.FC = () => {
+  useTranslation('motors'); // re-render on language change; lazy-loads the namespace
   const { user } = useAuth();
   const { updateGeometryViaApi } = useMotorStore();
   const [mine, setMine] = useState<MyMotor[]>([]);
@@ -145,13 +151,13 @@ const MyMotorsPanel: React.FC = () => {
                   color: m.shared ? '#34d399' : 'var(--text-3)',
                   bgcolor: 'transparent',
                   border: `1px solid ${m.shared ? '#34d39955' : 'var(--line-soft)'}` }} />
-          <Tooltip title="Rename"><IconButton size="small" onClick={() => rename(m)}
+          <Tooltip title={tx('rename')}><IconButton size="small" onClick={() => rename(m)}
             sx={{ color: 'var(--text-3)', p: 0.25, fontSize: 13 }}>✎</IconButton></Tooltip>
           <Tooltip title={m.shared ? 'Make private again' : 'Share with everyone'}>
             <IconButton size="small" onClick={() => void toggleShare(m)}
               sx={{ color: '#60a5fa', p: 0.25, fontSize: 13 }}>{m.shared ? '🔒' : '⤴'}</IconButton>
           </Tooltip>
-          <Tooltip title="Delete your copy"><IconButton size="small" onClick={() => remove(m)}
+          <Tooltip title={tx('deleteYourCopy')}><IconButton size="small" onClick={() => remove(m)}
             sx={{ color: '#f87171', p: 0.25, fontSize: 13, ml: 1.5 }}>✕</IconButton></Tooltip>
         </>
       ) : (
@@ -167,7 +173,7 @@ const MyMotorsPanel: React.FC = () => {
                bgcolor: 'var(--panel-2)' }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
         <Typography sx={{ fontWeight: 800, color: '#a78bfa', fontSize: '0.95rem' }}>
-          My motors
+          {tx('myMotors')}
         </Typography>
         <Box sx={{ flex: 1 }} />
         {msg && <Typography sx={{ fontSize: 11,
@@ -177,7 +183,7 @@ const MyMotorsPanel: React.FC = () => {
       {shared.length > 0 && (
         <>
           <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mt: 1,
-            textTransform: 'uppercase', letterSpacing: '0.04em' }}>Shared by others</Typography>
+            textTransform: 'uppercase', letterSpacing: '0.04em' }}>{tx('sharedByOthers')}</Typography>
           {shared.map(m => <Row key={m.id} m={m} own={false} />)}
         </>
       )}

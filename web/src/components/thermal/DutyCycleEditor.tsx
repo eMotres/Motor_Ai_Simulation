@@ -92,6 +92,11 @@ import { effectiveAssignment } from '../../lib/dutyMaterials';
    on a ⓘ beside its control, one short line each; the tooltips that remain wrap
    READOUTS and carry `TIP_PROPS`, which keeps them under the menu layer. */
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/thermal.json (docs/I18N.md).
+const tx = nsT('thermal');
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -190,6 +195,7 @@ function ratedDuty(duties: CatalogDuty[], fallback: string): string {
 }
 
 const DutyCycleEditor: React.FC = () => {
+  useTranslation('thermal'); // re-render on language change; lazy-loads the namespace
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [duties, setDuties] = useState<CatalogDuty[]>([]);
   const [form, setForm] = useState<DutyCycleForm>({ kind: 'S1' });
@@ -616,7 +622,7 @@ const DutyCycleEditor: React.FC = () => {
         <Tooltip {...TIP_PROPS} title="What the machine DOES with this duty, over TIME. The steady map above is the temperature after this point has run long enough to stop changing — for a robot joint that is a temperature it never reaches, because it spends two seconds at its peak and a minute at nothing. This solves the cycle: a four-node lumped network (winding, stator core, rotor + shaft, magnets) whose conductances are FITTED to one steady map — the calibration duty's, solved under the cooling set above — and integrated through the profile until the cycle repeats itself. Nothing here runs on its own.">
           <Typography sx={{ ...lbl, fontWeight: 700, cursor: 'help',
             borderBottom: '1px dotted var(--text-4)' }}>
-            Duty cycle
+            {tx('dutyCycle')}
           </Typography>
         </Tooltip>
         {ctx ? (
@@ -624,7 +630,7 @@ const DutyCycleEditor: React.FC = () => {
             {ctx.duty}{chip ? ` · ${chip}` : ''}
           </Typography>
         ) : (
-          <Typography sx={lbl}>no duty loaded — press ▶ on one in the catalogue</Typography>
+          <Typography sx={lbl}>{tx('noDutyLoadedPressOnOne')}</Typography>
         )}
         {/* ── what the COUPLED loop found, one line ─────────────────────────
             Never a second answer to the same question: this one is labelled
@@ -647,7 +653,7 @@ const DutyCycleEditor: React.FC = () => {
           </Tooltip>
         )}
         {edited && (
-          <Tooltip {...TIP_PROPS} title="This cycle lives only in this browser so far. It is sent to the yaml by the duty save (the ✓ in the strip at the top), the same way a material pick is — until then the catalogue, the report and every other browser still see the previous block.">
+          <Tooltip {...TIP_PROPS} title={tx('thisCycleLivesOnlyInThis')}>
             <Typography sx={warn}>⚠ un-saved — press Save to duty</Typography>
           </Tooltip>
         )}
@@ -714,22 +720,22 @@ const DutyCycleEditor: React.FC = () => {
                   disabled
                   sx={{ width: 96 }} inputProps={{ style: { fontSize: 12 } }}
                   InputLabelProps={{ style: { fontSize: 12 } }} />
-                <HelpTip title="How long the single pull lasts, in seconds — read-only: S2 is no longer offered." />
+                <HelpTip title={tx('howLongTheSinglePullLasts')} />
               </Box>
             )}
 
             {form.kind === 'S3' && (
               <>
                 <Box sx={CTRL_ROW}>
-                  <TextField label="cycle s" size="small" value={form.cycleS ?? ''}
+                  <TextField label={tx('cycleS')} size="small" value={form.cycleS ?? ''}
                     onChange={(e) => patch({ cycleS: e.target.value })}
                     sx={{ width: 96 }} inputProps={{ style: { fontSize: 12 } }}
                     InputLabelProps={{ style: { fontSize: 12 } }} />
-                  <HelpTip title="One ON + OFF period, in seconds — the ED that comes back is the ratio of THIS period." />
+                  <HelpTip title={tx('oneOnOffPeriodInSeconds')} />
                 </Box>
                 {/* THE OPTIONAL CHECK, not the input.  Blank = find the ED. */}
                 <Box sx={CTRL_ROW}>
-                  <TextField label="check ED %" size="small" placeholder="found"
+                  <TextField label={tx('checkEd')} size="small" placeholder={tx('found')}
                     value={form.edPct ?? ''}
                     onChange={(e) => patch({ edPct: e.target.value })}
                     sx={{ width: 108 }} inputProps={{ style: { fontSize: 12 } }}
@@ -740,12 +746,12 @@ const DutyCycleEditor: React.FC = () => {
                   <Select size="small" displayEmpty value={form.restDuty ?? ''}
                     onChange={(e) => patch({ restDuty: String(e.target.value) })}
                     sx={{ fontSize: 11, height: 30, minWidth: 190 }}>
-                    <MenuItem value="" sx={{ fontSize: 11 }}>rest: unpowered</MenuItem>
+                    <MenuItem value="" sx={{ fontSize: 11 }}>{tx('restUnpowered')}</MenuItem>
                     {names.map((n) => (
                       <MenuItem key={n} value={n} sx={{ fontSize: 11 }}>rest: {n}</MenuItem>
                     ))}
                   </Select>
-                  <HelpTip title="What the machine does while it rests — another duty, or unpowered." />
+                  <HelpTip title={tx('whatTheMachineDoesWhileIt')} />
                 </Box>
               </>
             )}
@@ -758,7 +764,7 @@ const DutyCycleEditor: React.FC = () => {
                   <Box key={i} sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
                     <Select size="small" displayEmpty value={sg.duty} disabled
                       sx={{ fontSize: 11, height: 30, minWidth: 150 }}>
-                      <MenuItem value="" sx={{ fontSize: 11 }}>unpowered</MenuItem>
+                      <MenuItem value="" sx={{ fontSize: 11 }}>{tx('unpowered')}</MenuItem>
                       {names.map((n) => (
                         <MenuItem key={n} value={n} sx={{ fontSize: 11 }}>{n}</MenuItem>
                       ))}
@@ -800,14 +806,14 @@ const DutyCycleEditor: React.FC = () => {
               </Tooltip>
             )}
             <Box sx={CTRL_ROW}>
-              <TextField label="start °C" size="small" value={form.tStartC ?? ''}
+              <TextField label={tx('startC')} size="small" value={form.tStartC ?? ''}
                 onChange={(e) => patch({ tStartC: e.target.value })}
                 sx={{ width: 96 }} inputProps={{ style: { fontSize: 12 } }}
                 InputLabelProps={{ style: { fontSize: 12 } }} />
-              <HelpTip title="Where the machine starts, °C — blank is the ambient set above." />
+              <HelpTip title={tx('whereTheMachineStartsCBlank')} />
             </Box>
             <Box sx={CTRL_ROW}>
-              <TextField label="magnet limit °C" size="small" value={magnetLimit}
+              <TextField label={tx('magnetLimitC')} size="small" value={magnetLimit}
                 onChange={(e) => setMagnetLimit(e.target.value)}
                 placeholder={magnetCardLimit != null
                   ? String(magnetCardLimit) : 'none on the card'}
@@ -824,7 +830,7 @@ const DutyCycleEditor: React.FC = () => {
                 startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
                 {busy ? 'Running' : 'Run cycle'}
               </Button>
-              <HelpTip title="One calibration thermal map, then the cycle integrated on it — seconds, not minutes." />
+              <HelpTip title={tx('oneCalibrationThermalMapThenThe')} />
             </Box>
             {issue && !busy && (
               <Tooltip {...TIP_PROPS} title="The cycle as written does not describe something that can be integrated, so Run is disabled until it does — this tab validates its input rather than sending it and translating the solver's refusal back.">
@@ -858,10 +864,10 @@ const DutyCycleEditor: React.FC = () => {
                 </Typography>
               </Tooltip>
               <Button variant="contained" size="small" onClick={makeEmRun}>
-                Make the run
+                {tx('makeTheRun')}
               </Button>
               <Button variant="text" size="small" onClick={declineEmRun}>
-                Cancel
+                {tx('cancel')}
               </Button>
             </Box>
           )}
@@ -873,12 +879,12 @@ const DutyCycleEditor: React.FC = () => {
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center',
               flexWrap: 'wrap', mt: 1 }}>
               <CircularProgress size={13} />
-              <Tooltip {...TIP_PROPS} title="One electromagnetic run at the calibration duty’s point, through the EM ↔ thermal orchestrator — the progress bar at the top of this tab is its own. When it finishes, the cycle above is sent again by itself.">
+              <Tooltip {...TIP_PROPS} title={tx('oneElectromagneticRunAtTheCalibration')}>
                 <Typography sx={{ ...lbl, cursor: 'help' }}>
-                  making the electromagnetic run at the calibration point…
+                  {tx('makingTheElectromagneticRunAtThe')}
                 </Typography>
               </Tooltip>
-              <Tooltip {...TIP_PROPS} title="Cancel the electromagnetic run. It stops between phases and, inside a transient, at the next frame — so it can take a few seconds, and it leaves no result.">
+              <Tooltip {...TIP_PROPS} title={tx('cancelTheElectromagneticRunItStops')}>
                 <span>
                   <Button variant="outlined" size="small" color="warning"
                     onClick={stopEmRun} disabled={offer.stopping}>
@@ -922,7 +928,7 @@ const DutyCycleEditor: React.FC = () => {
                     <Tooltip {...TIP_PROPS} title="Write the FOUND duty ratio into this duty's cycle block, flagged as found by the tool rather than chosen by hand — so the report can say “allowable, found by the tool”. Local to this browser until the duty save (the ✓ in the strip at the top), like every other edit here.">
                       <Button size="small" variant="outlined"
                         sx={{ fontSize: 11, py: 0 }} onClick={saveFoundEd}>
-                        Save the found ED
+                        {tx('saveTheFoundEd')}
                       </Button>
                     </Tooltip>
                   )}
@@ -952,7 +958,7 @@ const DutyCycleEditor: React.FC = () => {
                 ) : (
                   <Tooltip {...TIP_PROPS} title={lim.s2_note ?? ''}>
                     <Typography sx={{ ...lbl, cursor: 'help', fontFamily: 'monospace' }}>
-                      S2 — settles below every limit
+                      {tx('s2SettlesBelowEveryLimit')}
                     </Typography>
                   </Tooltip>
                 )}
@@ -998,7 +1004,7 @@ const DutyCycleEditor: React.FC = () => {
                       flexWrap: 'wrap' }}>
                       <Typography sx={{ fontSize: 11, fontWeight: 700,
                         color: 'var(--text-2)' }}>
-                        Allowable ED vs cycle length
+                        {tx('allowableEdVsCycleLength')}
                       </Typography>
                       <Tooltip {...TIP_PROPS} title={`The same search at ${edRows.map((r) => `${fmt(r.cycleS, 0)} s → ${fmt(r.edPct, 1)} % (${fmt(r.tOnS, 1)} s on, magnets ${fmt(r.magnetC, 0)} °C)`).join(', ')}. A short period is ridden out on the machine's own heat capacity, so a high ratio is allowed; a long one has to be in thermal balance and the allowable ratio falls towards the continuous answer. Every point sits ON the limit — this is one answer at five periods, not five judgements. Solved on the network already fitted: no extra field solve was paid for it.`}>
                         <Typography sx={{ ...lbl, cursor: 'help',
@@ -1044,7 +1050,7 @@ const DutyCycleEditor: React.FC = () => {
               {rows.length > 1 && (
                 <Box sx={{ height: 260 }}>
                   <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-2)' }}>
-                    T(t) over one cycle
+                    {tx('tTOverOneCycle')}
                     <span style={{ color: 'var(--text-4)', fontWeight: 400 }}>
                       {'  ·  '}{fmt(res.spec?.cycle_s, 2)} s
                       {res.spec?.kind === 'S2' ? ' (one pull)'
@@ -1097,7 +1103,7 @@ const DutyCycleEditor: React.FC = () => {
                     flexWrap: 'wrap' }}>
                     <Typography sx={{ fontSize: 11, fontWeight: 700,
                       color: 'var(--text-2)' }}>
-                      Shaft torque over the same cycle
+                      {tx('shaftTorqueOverTheSameCycle')}
                     </Typography>
                     <Tooltip {...TIP_PROPS} title={`The torque of whichever duty runs in each segment — ${tq.steps.map((s) => `${s.duty} ${fmt(s.nm, 2)} N·m for ${fmt(s.t1 - s.t0, 1)} s`).join(', ')} — from the configuration's own duty entries, not from the thermal solve. The mean is time-weighted over the ${fmt(tq.spanS, 1)} s cycle, which is the torque a gearbox behind this joint actually sees; the peak is ${fmt(tq.peakNm, 2)} N·m.`}>
                       <Typography sx={{ ...lbl, cursor: 'help',

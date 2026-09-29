@@ -69,6 +69,11 @@ import { effectiveAssignment } from '../../lib/dutyMaterials';
 import { runNoticeFor, type RunNotice } from '../../lib/runNotice';
 import { useMotorAssignments } from '../materials/useMotorAssignments';
 import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/simulation.json (docs/I18N.md).
+const tx = nsT('simulation');
 
 // NOTE: using port 8001 (new backend with loss calculations)
 // Change back to 8000 after restarting the main backend
@@ -185,6 +190,7 @@ function lcm(a: number, b: number): number { return (a * b) / gcd(a, b); }
 interface WindConn { label: string; n_parallel: number; n_series: number; }
 
 const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => {
+  useTranslation('simulation'); // re-render on language change; lazy-loads the namespace
   // localStorage-backed state so the whole left column survives reloads.
   const usePersisted = <T,>(key: string, def: T) => {
     const [v, setV] = useState<T>(() => {
@@ -1738,7 +1744,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
-            Winding Connection
+            {tx('windingConnection')}
           </Typography>
           <Typography sx={{ fontSize: 10, color: 'var(--line)', mb: 1.2 }}>
             {nCoilsPerPhase} coils/phase · {nWiresPerSlot} wires/slot
@@ -1825,7 +1831,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           </Box>
           {Number(windCfg?.phases ?? 3) === 6 && (
             <Box sx={{ display: 'flex', gap: 0.75, mb: 0.75, alignItems: 'center' }}>
-              <TextField size="small" label="Set 1 paths" placeholder="first half"
+              <TextField size="small" label={tx('set1Paths')} placeholder={tx('firstHalf')}
                 defaultValue={windCfg?.set1_paths ?? ''}
                 key={`s1-${windCfg?.set1_paths ?? ''}`}
                 disabled={isRunning}
@@ -1875,7 +1881,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1 }}>
-            Coil Layout — currents per slot
+            {tx('coilLayoutCurrentsPerSlot')}
           </Typography>
 
           {/* single-layer winding (this machine has no double-layer variant) */}
@@ -1907,7 +1913,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         <Box>
           <Typography sx={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--text-4)',
             letterSpacing: '0.1em', textTransform: 'uppercase', mb: 1.5 }}>
-            Operating Point
+            {tx('operatingPoint')}
           </Typography>
           {magInfo && (
             <Tooltip placement="right" title={
@@ -1922,7 +1928,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 px: 1, py: 0.5, borderRadius: 0.5, cursor: 'help',
                 border: '1px solid var(--line)', bgcolor: 'var(--panel-2)' }}>
                 <Typography sx={{ fontSize: 9.5, color: 'var(--text-4)', textTransform: 'uppercase',
-                  letterSpacing: '0.06em' }}>magnet</Typography>
+                  letterSpacing: '0.06em' }}>{tx('magnet')}</Typography>
                 {/* The name is the TEMPERATURE picker when the grade is in the
                     library at more than one temperature — the duty's magnet
                     temperature, one line, the rest in the tooltip. */}
@@ -2006,7 +2012,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 border: '1px solid var(--line)', bgcolor: 'var(--panel-2)',
                 '&:hover': { borderColor: 'var(--text-4)' } }}>
               <Typography sx={{ fontSize: 9.5, color: 'var(--text-4)', textTransform: 'uppercase',
-                letterSpacing: '0.06em' }}>battery</Typography>
+                letterSpacing: '0.06em' }}>{tx('battery')}</Typography>
               <Typography sx={{ fontSize: 11, fontWeight: 700,
                 color: battery ? '#f59e0b' : 'var(--text-4)' }}>
                 {batteryChipLabel(battery)}
@@ -2059,14 +2065,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   variant={drive === m && targetKind === 'off' ? 'contained' : 'outlined'}
                   onClick={() => { setDrive(m); setTargetKind('off'); }}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
-                  Sine current
+                  {tx('sineCurrent')}
                 </Button>
               ))}
               <Button size="small" fullWidth disabled={isRunning || fitBusy}
                 variant={targetKind !== 'off' ? 'contained' : 'outlined'}
                 onClick={() => { setDrive('current'); setTargetKind(k => (k === 'off' ? 'nm' : k)); }}
                 sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
-                Target T / P
+                {tx('targetTP')}
               </Button>
               <HelpTip title={'Sine current: imposed sinusoidal phase currents — the ideal ' +
                 'reference, and the right one for design work. Target T / P: the current is ' +
@@ -2111,7 +2117,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Button size="small" variant="text"
                   onClick={() => goToTab('controller')}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0 }}>
-                  Open
+                  {tx('open')}
                 </Button>
                 <HelpTip title={'PWM is defined in the Controller tab: the carrier, the DC link, '
                   + 'the dead time and the device. A re-run of this stored ideal-modulator run '
@@ -2120,7 +2126,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               </Box>
             )}
             {drive === 'bldc_current' && (
-              <TextField label="I block, flat top (A)" type="number" size="small" fullWidth
+              <TextField label={tx('iBlockFlatTopA')} type="number" size="small" fullWidth
                 value={iBlock} onChange={e => setIBlock(+e.target.value)}
                 inputProps={{ step: 1, min: 0 }} disabled={isRunning}
                 InputProps={{ endAdornment: <HelpTip title={
@@ -2172,7 +2178,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 <Button size="small" variant="outlined" component="label"
                   disabled={isRunning}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3, minWidth: 76 }}>
-                  Upload
+                  {tx('upload')}
                   <input type="file" hidden accept=".json,.csv,.txt"
                     onChange={e => {
                       const f = e.target.files?.[0]; if (!f) return;
@@ -2209,7 +2215,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                same pattern as I rms ⇄ peak — edit either, the other follows.
                Torque is the stored canon; the current is fitted at Run. */
             <Box sx={{ display: 'flex', gap: 1 }}>
-              <TextField label="Target torque (Nm)" type="number" size="small" fullWidth
+              <TextField label={tx('targetTorqueNm')} type="number" size="small" fullWidth
                 value={Number(targetValue.toFixed(2))}
                 onChange={e => setTargetValue(+e.target.value)}
                 inputProps={{ step: 10, min: 0 }} disabled={isRunning || fitBusy}
@@ -2219,7 +2225,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   + 'through the saturation curve, then the full run fires at the '
                   + 'fitted current. γ stays as set — find the optimal angle with a '
                   + 'sweep, as usual.'} /> }} />
-              <TextField label="Target power (kW)" type="number" size="small" fullWidth
+              <TextField label={tx('targetPowerKw')} type="number" size="small" fullWidth
                 value={Number((targetValue * (2 * Math.PI * rpm / 60) / 1000).toFixed(2))}
                 onChange={e => {
                   const w = 2 * Math.PI * rpm / 60;
@@ -2359,7 +2365,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 </Box>
               );
             })()}
-            <TextField label="V phase peak (V)" type="number" size="small" fullWidth
+            <TextField label={tx('vPhasePeakV')} type="number" size="small" fullWidth
               value={vPeak} onChange={e => setVPeak(+e.target.value)}
               inputProps={{ step: 1, min: 0, max: 2000 }} disabled={isRunning}
               InputProps={{ endAdornment: <HelpTip title={'Amplitude of the FUNDAMENTAL phase ' +
@@ -2367,7 +2373,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 'sampled-reference delay and gain are compensated so it lands here, and what it ' +
                 'really applied is measured and reported with the result. ' +
                 'Tip: run a current-drive simulation first — its V₁ is the natural starting value.'} /> }}/>
-            <TextField label="δ — voltage angle (°el)" type="number" size="small" fullWidth
+            <TextField label={tx('voltageAngleEl')} type="number" size="small" fullWidth
               value={vDelta} onChange={e => setVDelta(+e.target.value)}
               inputProps={{ step: 5, min: -180, max: 180 }} disabled={isRunning}
               InputProps={{ endAdornment: <HelpTip title={'Voltage-vector angle in the same electrical frame as γ ' +
@@ -2380,7 +2386,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                inverter and commercial FEM both speak amplitude, so peak is the primary
                field everywhere current is entered. */
             <Box sx={{ display: 'flex', gap: 1 }}>
-              <TextField label="I phase peak (A)" type="number" size="small" fullWidth
+              <TextField label={tx('iPhasePeakA')} type="number" size="small" fullWidth
                 value={Number((current * Math.SQRT2).toFixed(2))}
                 onChange={e => setCurrent(+e.target.value / Math.SQRT2)}
                 inputProps={{ step: 5, min: 0, max: 707 }} disabled={isRunning}
@@ -2410,7 +2416,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   f_elec [Hz]  =  rpm × pole_pairs / 60
                   rpm          =  f_elec × 60 / pole_pairs
                 Editing one immediately recomputes the other. */}
-            <TextField label="Speed (rpm)" type="number" size="small" fullWidth
+            <TextField label={tx('speedRpm')} type="number" size="small" fullWidth
               value={Number(rpm.toFixed(0))}
               onChange={e => {
                 const r = +e.target.value;
@@ -2421,7 +2427,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               InputProps={{ endAdornment: <HelpTip title={`electrical f = ${Number(frequency.toFixed(1))} Hz`} /> }}/>
             {/* Frequency is DERIVED from rpm (f = rpm × pole_pairs / 60) — read-only,
                 single source is the speed above.  Editing rpm recomputes it. */}
-            <TextField label="Frequency (Hz) — derived" type="number" size="small" fullWidth
+            <TextField label={tx('frequencyHzDerived')} type="number" size="small" fullWidth
               value={Number(frequency.toFixed(2))}
               disabled
               InputProps={{ endAdornment: <HelpTip title={`f = rpm × ${polePairs} / 60 — derived from speed`} /> }}/>
@@ -2438,7 +2444,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 weakening at high speed; γ > 0 retards (used to flatten
                 cogging-torque ripple in some control schemes). */}
             <TextField
-              label="γ — current-vector offset from q-axis (°)"
+              label={tx('currentVectorOffsetFromQAxis')}
               type="number" size="small" fullWidth
               value={phaseOffset}
               onChange={e => setPhaseOffset(+e.target.value)}
@@ -2478,7 +2484,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               label={coupled ? 'Magnet temperature (°C) — from the coupled loop' : 'Magnet temperature (°C) — empty = card'}
               type="text" size="small" fullWidth
               value={magnetTempC}
-              placeholder="as quoted"
+              placeholder={tx('asQuoted')}
               onChange={e => setMagnetTempC(e.target.value)}
               inputProps={{ readOnly: coupled }}
               InputProps={{ endAdornment: <HelpTip title={coupled
@@ -2559,10 +2565,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               leave a big empty gap now that the cooling/PINN sections are gone. ── */}
         <Box sx={{ pt: 1 }}>
           <FormControl size="small" fullWidth sx={{ mb: 1.25 }} disabled={simBusy}>
-            <InputLabel id="steps-pp-label">Steps per electrical period</InputLabel>
+            <InputLabel id="steps-pp-label">{tx('stepsPerElectricalPeriod')}</InputLabel>
             <Select
               labelId="steps-pp-label"
-              label="Steps per electrical period"
+              label={tx('stepsPerElectricalPeriod')}
               value={stepsOptions.includes(steps) ? steps : snapSteps(steps)}
               onChange={e => {
                 const v = Number(e.target.value);
@@ -2594,7 +2600,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               sweeps the period at full Br, finds the worst demag field at every
               magnet element, and de-rates Br on the recoil line → the torque /
               back-EMF reflect the weakened magnets, plus a Demag-% map. */}
-          <Tooltip title="Account for irreversible magnet demagnetisation. A pre-pass sweeps the whole period at full strength, finds the worst demagnetising field H at EVERY magnet element, and permanently de-rates Br along the recoil line where H crosses the BH-curve knee (per element, like commercial FEM). The torque and back-EMF then reflect the weakened magnets, and a Demag-% map is produced. COST — measured, not modest: the pre-pass is a WHOLE EXTRA PERIOD of FEM frames, so the run solves twice the steps you asked for, and each frame re-solves while the magnet is still moving. On the 40 mm 12s/14p at 0.6 mm mesh, 4 steps/period: 37 s off → 86 s on (2.3×). The line under the Run button shows the frame count your current settings imply." placement="right">
+          <Tooltip title={tx('accountForIrreversibleMagnetDemagnetisationA')} placement="right">
             <FormControlLabel
               sx={{ mt: -0.5, mb: 0.75, ml: 0.25 }}
               control={
@@ -2605,7 +2611,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               }
               label={
                 <Typography variant="caption" sx={{ color: demag ? '#c084fc' : 'var(--text-2)' }}>
-                  Demagnetisation — de-rate torque (FEM, per element)
+                  {tx('demagnetisationDeRateTorqueFemPer')}
                 </Typography>
               }
             />
@@ -2752,7 +2758,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               label={
                 <Typography variant="caption"
                   sx={{ color: coupled ? '#34d399' : 'var(--text-2)' }}>
-                  Coupled thermal — solve for the temperatures
+                  {tx('coupledThermalSolveForTheTemperatures')}
                 </Typography>
               }
             />
@@ -2763,10 +2769,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               choices explained in the tip, never a text wall in the rail. */}
           {coupled && (
             <FormControl size="small" fullWidth sx={{ mt: 0.75 }} disabled={simBusy}>
-              <InputLabel id="coupled-drive-label">Drive</InputLabel>
+              <InputLabel id="coupled-drive-label">{tx('drive')}</InputLabel>
               <Select
                 labelId="coupled-drive-label"
-                label="Drive"
+                label={tx('drive')}
                 value={coupledDrive}
                 onOpen={() => bumpCtrlRecheck(n => n + 1)}
                 onChange={e => setCoupledDrive(
@@ -2789,9 +2795,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   </InputAdornment>
                 }
               >
-                <MenuItem value="sine">sine current</MenuItem>
+                <MenuItem value="sine">{tx('sineCurrent2')}</MenuItem>
                 <MenuItem value="inverter" disabled={!controllerReady}>
-                  inverter (Controller)
+                  {tx('inverterController')}
                 </MenuItem>
               </Select>
               {coupledDrive === 'inverter' && (ctrlSaveMsg || ctrlSaveErr) && (
@@ -2817,10 +2823,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               two short options; the explanation lives in the tip). */}
           {coupled && (
             <FormControl size="small" fullWidth sx={{ mt: 0.75, mb: 1 }} disabled={simBusy}>
-              <InputLabel id="solve-to-label">Solve to</InputLabel>
+              <InputLabel id="solve-to-label">{tx('solveTo')}</InputLabel>
               <Select
                 labelId="solve-to-label"
-                label="Solve to"
+                label={tx('solveTo')}
                 value={solveTo}
                 onChange={e => setSolveTo(
                   e.target.value === 'limits' ? 'limits'
@@ -2847,9 +2853,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   </InputAdornment>
                 }
               >
-                <MenuItem value="steady">steady state</MenuItem>
-                <MenuItem value="limits">time to the limits</MenuItem>
-                <MenuItem value="continuous">continuous rating (S1)</MenuItem>
+                <MenuItem value="steady">{tx('steadyState')}</MenuItem>
+                <MenuItem value="limits">{tx('timeToTheLimits')}</MenuItem>
+                <MenuItem value="continuous">{tx('continuousRatingS1')}</MenuItem>
               </Select>
             </FormControl>
           )}
@@ -2954,7 +2960,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                     .catch(() => { /* nothing user-facing */ });
                 }}
                 style={{ cursor: 'pointer', textDecoration: 'underline', color: '#60a5fa' }}>
-                clear
+                {tx('clear')}
               </span>
             </Typography>
           )}
@@ -2963,19 +2969,19 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         {/* ── Resume / fresh dialog (after a Stop) ── */}
         <Dialog open={askResume} onClose={() => setAskResume(false)}
           PaperProps={{ sx: { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 2 } }}>
-          <DialogTitle sx={{ fontSize: 15, color: 'var(--text-0)' }}>Resume the stopped run?</DialogTitle>
+          <DialogTitle sx={{ fontSize: 15, color: 'var(--text-0)' }}>{tx('resumeTheStoppedRun')}</DialogTitle>
           <DialogContent>
             <Typography sx={{ fontSize: 13, color: 'var(--text-2)' }}>
-              <b>Continue</b> keeps the solved frames · <b>Start fresh</b> recomputes the period.
+              <b>{tx('continue')}</b> keeps the solved frames · <b>{tx('startFresh')}</b> {tx('recomputesThePeriod')}
             </Typography>
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
             <Button onClick={() => launchRun(true)} sx={{ textTransform: 'none', color: 'var(--text-2)' }}>
-              Start fresh
+              {tx('startFresh')}
             </Button>
             <Button onClick={() => launchRun(false)} variant="contained"
               sx={{ textTransform: 'none', bgcolor: '#2563eb', '&:hover': { bgcolor: '#1d4ed8' } }}>
-              Continue
+              {tx('continue')}
             </Button>
           </DialogActions>
         </Dialog>
@@ -3015,7 +3021,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           borderRadius: 2, display: 'none' }}>
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1.5,
             textTransform: 'uppercase', letterSpacing: 1 }}>
-            Governing Equation
+            {tx('governingEquation')}
           </Typography>
           <Box sx={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-2)', lineHeight: 2 }}>
             <Box>∂/∂x(ν ∂A_z/∂x) + ∂/∂y(ν ∂A_z/∂y) = −J_z</Box>
@@ -3031,7 +3037,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           {/* Periodicity info */}
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1,
             textTransform: 'uppercase', letterSpacing: 1 }}>
-            Rotor Periodicity
+            {tx('rotorPeriodicity')}
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, mb: 1.5 }}>
             {[
@@ -3060,7 +3066,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
 
           <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', mb: 1,
             textTransform: 'uppercase', letterSpacing: 1 }}>
-            Domains
+            {tx('domains')}
           </Typography>
           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
             {[
@@ -3152,49 +3158,49 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             {/* ── Power balance ── */}
             <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#3b82f6',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
-              Power Balance
+              {tx('powerBalance')}
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mb: 1.5 }}>
-              <Row label="Torque"    value={job.result.torque_Nm.toFixed(4)} unit="N·m"
+              <Row label={tx('torque')}    value={job.result.torque_Nm.toFixed(4)} unit="N·m"
                    highlight={job.result.torque_Nm !== 0}/>
-              <Row label="P mech"   value={job.result.P_mech_W != null ? job.result.P_mech_W.toFixed(0) : '—'} unit="W"
+              <Row label={tx('pMech')}   value={job.result.P_mech_W != null ? job.result.P_mech_W.toFixed(0) : '—'} unit="W"
                    highlight={(job.result.P_mech_W ?? 0) > 0}/>
-              <Row label="P input"  value={job.result.P_input_W != null ? job.result.P_input_W.toFixed(0) : '—'} unit="W"/>
+              <Row label={tx('pInput')}  value={job.result.P_input_W != null ? job.result.P_input_W.toFixed(0) : '—'} unit="W"/>
             </Box>
 
             {/* ── Losses breakdown ── */}
             <Typography sx={{ fontSize: 9, fontWeight: 700, color: '#ef4444',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
-              Losses
+              {tx('losses')}
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mb: 1.5 }}>
-              <Row label="Cu (winding)"   value={job.result.P_cu_total_W != null ? job.result.P_cu_total_W.toFixed(1) : '—'} unit="W"/>
-              <Row label="Fe stator"      value={job.result.P_fe_stator_W != null ? job.result.P_fe_stator_W.toFixed(1) : '— (need Modulus)'} unit={job.result.P_fe_stator_W != null ? 'W' : ''}/>
-              <Row label="Fe rotor"       value={job.result.P_fe_rotor_W  != null ? job.result.P_fe_rotor_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_fe_rotor_W  != null ? 'W' : ''}/>
-              <Row label="Mag eddy"       value={job.result.P_mag_eddy_W  != null ? job.result.P_mag_eddy_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_mag_eddy_W  != null ? 'W' : ''}/>
-              <Row label="Total losses"   value={job.result.P_loss_total_W != null ? job.result.P_loss_total_W.toFixed(1) : '—'} unit="W"/>
+              <Row label={tx('cuWinding')}   value={job.result.P_cu_total_W != null ? job.result.P_cu_total_W.toFixed(1) : '—'} unit="W"/>
+              <Row label={tx('feStator')}      value={job.result.P_fe_stator_W != null ? job.result.P_fe_stator_W.toFixed(1) : '— (need Modulus)'} unit={job.result.P_fe_stator_W != null ? 'W' : ''}/>
+              <Row label={tx('feRotor')}       value={job.result.P_fe_rotor_W  != null ? job.result.P_fe_rotor_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_fe_rotor_W  != null ? 'W' : ''}/>
+              <Row label={tx('magEddy')}       value={job.result.P_mag_eddy_W  != null ? job.result.P_mag_eddy_W.toFixed(1)  : '— (need Modulus)'} unit={job.result.P_mag_eddy_W  != null ? 'W' : ''}/>
+              <Row label={tx('totalLosses')}   value={job.result.P_loss_total_W != null ? job.result.P_loss_total_W.toFixed(1) : '—'} unit="W"/>
             </Box>
 
             {/* ── Winding params ── */}
             <Typography sx={{ fontSize: 9, fontWeight: 700, color: 'var(--text-4)',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
-              Winding (computed)
+              {tx('windingComputed')}
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25, mb: 1.5 }}>
-              <Row label="R phase"    value={job.result.R_phase_ohm != null ? (job.result.R_phase_ohm * 1000).toFixed(2) : '—'} unit="mΩ"/>
-              <Row label="L turn"     value={job.result.L_turn_mm != null ? job.result.L_turn_mm.toFixed(1) : '—'} unit="mm"/>
-              <Row label="I coil rms" value={job.result.I_coil_rms_A != null ? job.result.I_coil_rms_A.toFixed(1) : '—'} unit="A"/>
+              <Row label={tx('rPhase')}    value={job.result.R_phase_ohm != null ? (job.result.R_phase_ohm * 1000).toFixed(2) : '—'} unit="mΩ"/>
+              <Row label={tx('lTurn')}     value={job.result.L_turn_mm != null ? job.result.L_turn_mm.toFixed(1) : '—'} unit="mm"/>
+              <Row label={tx('iCoilRms')} value={job.result.I_coil_rms_A != null ? job.result.I_coil_rms_A.toFixed(1) : '—'} unit="A"/>
             </Box>
 
             {/* ── Field ── */}
             <Typography sx={{ fontSize: 9, fontWeight: 700, color: 'var(--text-4)',
               textTransform: 'uppercase', letterSpacing: 1, mb: 0.75 }}>
-              Magnetic Field
+              {tx('magneticField')}
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-              <Row label="B max"  value={job.result.B_max_T.toFixed(4)}  unit="T"/>
-              <Row label="B mean" value={job.result.B_mean_T.toFixed(4)} unit="T"/>
-              <Row label="Steps"  value={job.result.training_steps.toString()}/>
+              <Row label={tx('bMax')}  value={job.result.B_max_T.toFixed(4)}  unit="T"/>
+              <Row label={tx('bMean')} value={job.result.B_mean_T.toFixed(4)} unit="T"/>
+              <Row label={tx('steps')}  value={job.result.training_steps.toString()}/>
             </Box>
 
             <Divider sx={{ borderColor: 'var(--panel)', my: 1.5 }}/>

@@ -264,7 +264,16 @@ except ImportError as _e:                                # pragma: no cover
 @app.exception_handler(UnknownMaterialError)
 async def _unknown_material_handler(request, exc: UnknownMaterialError):
     return JSONResponse(status_code=400,
-                        content={"detail": f"unknown material: {exc}"})
+                        content={"detail": f"unknown material: {exc}",
+                                 "code": "material.unknown",
+                                 "params": {"name": str(exc)}})
+
+
+# Every HTTPException answer also carries a stable `code` + `params` beside the
+# unchanged English `detail`, so the localised web can translate it
+# (docs/I18N.md).  Existing clients keep reading `detail`.
+from motor_ai_sim import api_errors as _api_errors  # noqa: E402
+_api_errors.install(app)
 
 
 app.include_router(geometry_router)

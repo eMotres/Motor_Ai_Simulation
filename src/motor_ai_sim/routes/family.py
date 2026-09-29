@@ -525,7 +525,8 @@ def _iter_die_entries() -> list:
         from motor_ai_sim import data_sources as _ds
         have = {e["name"] for e in out}
         for name, e in sorted(_ds.scan().items()):
-            if name not in have:
+            # A clash resolves to no source (catalog precedence rule).
+            if name not in have and e["dir"] is not None:
                 out.append({"name": name, "die": name, "dir": e["dir"],
                             "layer": _WS.LAYER_WORKSPACE, "owner": "",
                             "owner_id": ""})

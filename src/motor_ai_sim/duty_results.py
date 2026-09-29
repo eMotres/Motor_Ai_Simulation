@@ -272,10 +272,29 @@ def live_fingerprint_v2() -> Optional[str]:
         return None
 
 
+def live_catalog_refs() -> List[Dict[str, Any]]:
+    """Which catalog items (die, materials, device, bearings) the live machine
+    uses — each as ID + source + revision (``catalog_sources``), so a stored
+    number names exactly the data it rests on.  ``[]`` when unreadable."""
+    try:
+        from motor_ai_sim import catalog_sources as CS
+        from motor_ai_sim.config import get_config
+        ctx = active_context()
+        return CS.refs_for_config(get_config() or {}, die=ctx[0] if ctx else None)
+    except Exception as exc:                                 # noqa: BLE001
+        log.debug("duty_results: no catalog refs (%s)", exc)
+        return []
+
+
 def _fp2_block() -> Dict[str, Any]:
-    """``{"geometry_fingerprint_v2": …}`` or ``{}`` — spread into a record."""
+    """``{"geometry_fingerprint_v2": …, "catalog_refs": […]}`` (keys only when
+    known) — spread into a record."""
     v = live_fingerprint_v2()
-    return {"geometry_fingerprint_v2": v} if v else {}
+    out: Dict[str, Any] = {"geometry_fingerprint_v2": v} if v else {}
+    refs = live_catalog_refs()
+    if refs:
+        out["catalog_refs"] = refs
+    return out
 
 
 def _entry_drive(entry: Any) -> str:

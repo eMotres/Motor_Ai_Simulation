@@ -75,28 +75,61 @@ def devices_dir() -> Path:
     return _DIR
 
 
-def card_paths() -> Dict[str, Path]:
-    """Every card file keyed by part: :func:`devices_dir` first, then the
-    optional private overlay (``$MOTOR_AI_SIM_PRIVATE_DATA/config/devices``)
-    for parts the public folder does not have.  A test that moved ``_DIR``
-    sees its fixture folder only."""
-    out: Dict[str, Path] = {}
+def _card_sources() -> List[Tuple[str, Dict[str, Path]]]:
+    """``[(source, {part: file})]`` — the public (or shared) folder and the
+    optional private overlay (``$MOTOR_AI_SIM_PRIVATE_DATA/config/devices``).
+    A test that moved ``_DIR`` sees its fixture folder only."""
+    out: List[Tuple[str, Dict[str, Path]]] = []
     d = devices_dir()
+    main_src = "shared" if d != _DIR else "public"
     if d.is_dir():
-        for p in sorted(d.glob("*.yaml")):
-            out[p.stem] = p
+        out.append((main_src, {p.stem: p for p in sorted(d.glob("*.yaml"))}))
     if _DIR == _DEFAULT_DIR:
         from motor_ai_sim.private_data import private_path
         extra = private_path("config", "devices")
         if extra is not None and extra.is_dir():
-            for p in sorted(extra.glob("*.yaml")):
-                out.setdefault(p.stem, p)
-    return dict(sorted(out.items()))
+            out.append(("private", {p.stem: p for p in sorted(extra.glob("*.yaml"))}))
+    return out
+
+
+def _merged_cards():
+    from motor_ai_sim import catalog_sources as CS
+    return CS.merge(CS.KIND_DEVICES, _card_sources())
+
+
+def card_clashes() -> Dict[str, str]:
+    """``{part: message}`` for parts defined by two sources with no override
+    record (catalog precedence rule, :mod:`motor_ai_sim.catalog_sources`)."""
+    _ok, bad = _merged_cards()
+    return {k: str(v) for k, v in bad.items()}
+
+
+def card_paths() -> Dict[str, Path]:
+    """Every RESOLVED card file keyed by part.  A part in two sources is a
+    clash and is left out (:func:`card_clashes`; :func:`get_device` raises)."""
+    ok, bad = _merged_cards()
+    for part, exc in bad.items():
+        log.error("device card clash: %s", exc)
+    return {k: v[1] for k, v in sorted(ok.items())}
+
+
+def resolve_card(part: str) -> Tuple[Optional[str], Optional[Path], bool]:
+    """``(source, file, overridden)``; raises ``CatalogClash`` on a clash."""
+    from motor_ai_sim import catalog_sources as CS
+    name = str(part or "").strip()
+    cands = [(src, items[name]) for src, items in _card_sources() if name in items]
+    r = CS.resolve(CS.KIND_DEVICES, name, cands)
+    return (r[0], r[1], r[2]) if r else (None, None, False)
 
 
 def card_path(part: str) -> Optional[Path]:
-    """The file of one card (public or private overlay), or ``None``."""
-    return card_paths().get(str(part or "").strip())
+    """The file of one card (public or private overlay), or ``None``.
+    Raises :class:`CardError` when two sources define the part."""
+    from motor_ai_sim import catalog_sources as CS
+    try:
+        return resolve_card(part)[1]
+    except CS.CatalogClash as exc:
+        raise CardError(str(exc)) from exc
 
 
 _CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
@@ -148,6 +181,8 @@ def list_devices(*, i_switch_rms_A: Optional[float] = None
             out.append({"part": p.stem, "error": str(exc)})
             continue
         out.append(card.row(i_switch_rms_A=i_switch_rms_A))
+    for part, msg in card_clashes().items():
+        out.append({"part": part, "error": msg, "clash": True})
     groups = footprint_groups(out)
     for r in out:
         fp = r.get("footprint")
@@ -1316,6 +1351,14 @@ class DeviceCard:
             src = (self.doc.get(blk) or {})
             if isinstance(src, dict) and src.get("source"):
                 out[blk] = str(src["source"]).strip()
+        # WHICH card this was: ID + source + revision (catalog precedence rule).
+        try:
+            from motor_ai_sim import catalog_sources as CS
+            part = str(self.doc.get("part") or "")
+            if part:
+                out["catalog_ref"] = CS.device_ref(part)
+        except Exception:                                  # noqa: BLE001
+            log.debug("device catalog_ref unavailable", exc_info=True)
         return out
 
     def package_size(self) -> Dict[str, Optional[float]]:

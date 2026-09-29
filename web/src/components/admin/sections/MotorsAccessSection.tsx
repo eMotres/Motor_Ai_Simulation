@@ -22,26 +22,40 @@ const VIS_LABEL: Record<Visibility, string> = { private: 'Private', public: 'Pub
 const VIS_COLOR: Record<Visibility, string> = { private: 'var(--text-3)', public: '#4ade80', selected: '#60a5fa' };
 
 type Source = 'open' | 'private';
-const SOURCE_HELP = 'Open = published in the public GitHub repository under AGPL for everyone; Private = only in our private repository';
+const SOURCE_HELP = 'Open = public GitHub repository (AGPL): publishing pushes there at once and is public immediately. Private = our private repository. Only MOTRES reference data; customer dies never go to git.';
 
-interface PendingMove { from: Source; to: Source; branch: string; prs: { repo: string; url: string; opened?: boolean }[]; at: string }
+type MoveStatus = 'prepared' | 'running' | 'incomplete' | 'pending' | 'done' | 'rolled_back';
+interface PendingMove {
+  id: string; status: MoveStatus; from: Source; to: Source; branch: string; at: string;
+  prs: { repo: string; url: string; opened?: boolean }[]; failed_step?: string | null; error?: string | null;
+}
 interface DieRow {
   name: string; stator_diameter: number | null; configs: number; duties: number;
   visibility: Visibility; clients: string[]; used_by: number;
-  source?: Source; source_movable?: boolean; source_clash?: boolean; source_pending?: PendingMove | null;
+  source?: Source; source_movable?: boolean; source_clash?: boolean; source_error?: string | null;
+  source_pending?: PendingMove | null;
 }
 interface Blocker { kind: string; name: string; reason: string }
 interface MovePreview {
-  die: string; from: Source; to: Source; warning: string; blockers: Blocker[];
+  die: string; from: Source; to: Source; warning: string; notice: string; public_push: boolean;
+  snapshot: string; blockers: Blocker[];
   manifest: {
-    files: { path: string; bytes: number }[]; total_bytes: number;
+    files: { path: string; bytes: number; sha256: string }[]; total_bytes: number;
     geometry: Record<string, unknown>; configs: { name: string; role: string | null; duties: string[] }[];
     materials: string[]; devices: string[]; results: string[];
   };
 }
 
-const sourceLabel = (d: DieRow) => (d.source_pending ? `Pending ${d.source_pending.to === 'open' ? 'publish' : 'withdraw'}` : d.source === 'open' ? 'Open' : 'Private');
-const sourceColor = (d: DieRow) => (d.source_pending ? '#fbbf24' : d.source === 'open' ? '#4ade80' : 'var(--text-3)');
+const sourceLabel = (d: DieRow) => {
+  const m = d.source_pending;
+  if (m) return m.status === 'pending' ? `Pending ${m.to === 'open' ? 'publish' : 'withdraw'}` : 'Move incomplete';
+  return d.source === 'open' ? 'Open' : 'Private';
+};
+const sourceColor = (d: DieRow) => (d.source_pending ? (d.source_pending.status === 'pending' ? '#fbbf24' : '#f87171') : d.source === 'open' ? '#4ade80' : 'var(--text-3)');
+const detailMsg = (j: { detail?: unknown }, status: number) => {
+  const d = j.detail as { message?: string } | string | undefined;
+  return typeof d === 'string' ? d : d?.message ?? `HTTP ${status}`;
+};
 interface RegistryUser { email: string }
 
 const statusLabel = (d: DieRow) =>
@@ -109,7 +123,7 @@ const MotorsAccessSection: React.FC = () => {
     try {
       const r = await fetch(`${API}/api/admin/dies/source/reconcile`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setNotice(`✗ ${j.detail ?? `HTTP ${r.status}`}`); return; }
+      if (!r.ok) { setNotice(`✗ ${detailMsg(j, r.status)}`); return; }
       setNotice(`✓ ${(j.completed ?? []).length} merged move(s) completed`);
       await load();
     } finally { setBusy(false); }
@@ -275,20 +289,40 @@ const SourceBlock: React.FC<{ die: DieRow; onMoved: (msg: string) => void }> = (
   };
 
   const confirmMove = async () => {
+    if (!preview) return;
     setWorking(true); setErr(null);
     try {
       const r = await fetch(`${API}/api/admin/dies/${encodeURIComponent(die.name)}/source`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, confirm: true }),
+        body: JSON.stringify({ target, confirm: true, snapshot: preview.snapshot }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        const d = j.detail;
-        setErr(typeof d === 'string' ? d : d?.message ?? `HTTP ${r.status}`);
+        setErr(detailMsg(j, r.status));
+        if (j.detail?.move) { setPreview(null); onMoved(`✗ ${die.name}: move incomplete — ${detailMsg(j, r.status)}`); }
         return;
       }
       setPreview(null);
-      onMoved(`✓ ${die.name}: pull requests opened — pending ${target === 'open' ? 'publish' : 'withdraw'} until merged`);
+      onMoved(target === 'open'
+        ? `✓ ${die.name}: published (branch pushed to the public repository); PRs opened for merge into main`
+        : `✓ ${die.name}: withdraw PRs opened — pending until merged`);
+    } finally { setWorking(false); }
+  };
+
+  const moveAction = async (action: 'resume' | 'rollback') => {
+    if (!pend) return;
+    if (action === 'rollback' && !window.confirm(
+      `Roll back move ${pend.id}? The pushed branches are deleted and the PRs closed.` +
+      (pend.to === 'open' ? ' Anything already pushed to the public repository may have been cloned — rollback cannot unpublish it.' : ''))) return;
+    setWorking(true); setErr(null);
+    try {
+      const r = await fetch(`${API}/api/admin/dies/source/moves/${encodeURIComponent(pend.id)}/${action}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(action === 'rollback' ? { confirm: true } : {}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(detailMsg(j, r.status)); return; }
+      onMoved(`✓ ${die.name}: move ${action === 'resume' ? `resumed — ${j.status}` : 'rolled back'}`);
     } finally { setWorking(false); }
   };
 
@@ -300,10 +334,25 @@ const SourceBlock: React.FC<{ die: DieRow; onMoved: (msg: string) => void }> = (
         <HelpTip title={SOURCE_HELP} />
       </Box>
       <Typography sx={{ fontSize: 13, color: sourceColor(die), fontWeight: 700 }}>{sourceLabel(die)}</Typography>
-      {die.source_clash && <Typography sx={{ fontSize: 11, color: '#f87171' }}>In both data sets — the private copy is used.</Typography>}
+      {die.source_clash && (
+        <Typography sx={{ fontSize: 11, color: '#f87171' }} title={die.source_error ?? ''}>
+          In more than one source — not used until one copy is removed or an override record picks one.
+        </Typography>
+      )}
+      {pend && pend.status !== 'pending' && (
+        <Box sx={{ mt: 0.5 }}>
+          <Typography sx={{ fontSize: 11, color: '#f87171' }} title={pend.error ?? ''}>
+            Stopped at {pend.failed_step ?? 'start'}{pend.error ? `: ${pend.error.slice(0, 140)}` : ''}
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, mt: 0.5 }}>
+            <Button size="small" disabled={working} onClick={() => void moveAction('resume')} sx={{ textTransform: 'none', fontSize: 12 }}>Resume</Button>
+            <Button size="small" disabled={working} onClick={() => void moveAction('rollback')} sx={{ textTransform: 'none', fontSize: 12, color: '#f87171' }}>Rollback</Button>
+          </Box>
+        </Box>
+      )}
       {pend && (
         <Box sx={{ mt: 0.5 }}>
-          {pend.prs.map((p) => (
+          {(pend.prs ?? []).map((p) => (
             <Typography key={p.url} sx={{ fontSize: 11 }}>
               <a href={p.url} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>{p.repo}</a>
               {p.opened === false ? ' — open the PR by hand' : ''}
@@ -317,7 +366,7 @@ const SourceBlock: React.FC<{ die: DieRow; onMoved: (msg: string) => void }> = (
       {!pend && die.source_movable !== false && (
         <Button size="small" disabled={working} onClick={() => void openPreview()}
           sx={{ mt: 1, textTransform: 'none', fontSize: 12, color: target === 'open' ? '#4ade80' : 'var(--text-2)' }}>
-          {target === 'open' ? 'Make open (publish)…' : 'Make private…'}
+          {target === 'open' ? 'Publish (make open)…' : 'Make private…'}
         </Button>
       )}
       {err && !preview && <Typography sx={{ fontSize: 11, color: '#f87171', mt: 0.5 }}>{err}</Typography>}
@@ -329,10 +378,15 @@ const SourceBlock: React.FC<{ die: DieRow; onMoved: (msg: string) => void }> = (
         <DialogContent dividers>
           {preview && m && (
             <>
+              {preview.public_push && (
+                <Typography sx={{ fontSize: 13, color: '#f87171', fontWeight: 800, mb: 1 }}>
+                  Confirming publishes immediately — the branch is pushed to the public repository and is public at once. The PR is only for review and merge into main.
+                </Typography>
+              )}
               <Typography sx={{ fontSize: 12.5, color: '#fbbf24', fontWeight: 700, mb: 1.5 }}>{preview.warning}</Typography>
               {preview.blockers.length > 0 && (
                 <Box sx={{ mb: 1.5 }}>
-                  <Typography sx={{ fontSize: 12, color: '#f87171', fontWeight: 700 }}>Blocked — publish these first:</Typography>
+                  <Typography sx={{ fontSize: 12, color: '#f87171', fontWeight: 700 }}>Blocked — fix these first:</Typography>
                   {preview.blockers.map((b) => (
                     <Typography key={`${b.kind}:${b.name}`} sx={{ fontSize: 12 }}>• {b.kind} <b>{b.name}</b> — {b.reason}</Typography>
                   ))}
@@ -340,6 +394,7 @@ const SourceBlock: React.FC<{ die: DieRow; onMoved: (msg: string) => void }> = (
               )}
               <Typography sx={{ fontSize: 12, fontWeight: 700 }}>
                 {target === 'open' ? 'Will be published' : 'Will be moved'}: {m.files.length} file(s), {(m.total_bytes / 1024).toFixed(1)} KiB
+                <span style={{ color: 'var(--text-4)', fontWeight: 400 }}> · snapshot {preview.snapshot.slice(0, 12)}</span>
               </Typography>
               <Box component="ul" sx={{ fontSize: 11.5, m: 0, pl: 2.5, maxHeight: 140, overflow: 'auto' }}>
                 {m.files.map((f) => <li key={f.path}>{f.path}</li>)}
@@ -361,7 +416,7 @@ const SourceBlock: React.FC<{ die: DieRow; onMoved: (msg: string) => void }> = (
               <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)' }}>{m.results.length ? `${m.results.length} item(s)` : 'none'}</Typography>
               {preview.blockers.length === 0 && (
                 <FormControlLabel sx={{ mt: 1.5 }} control={<Checkbox size="small" checked={ack} onChange={(e) => setAck(e.target.checked)} />}
-                  label={<Typography sx={{ fontSize: 12 }}>I understand — {target === 'open' ? 'publication cannot be undone' : 'the public history keeps what was published'}.</Typography>} />
+                  label={<Typography sx={{ fontSize: 12 }}>I understand — {target === 'open' ? 'this publishes immediately and cannot be undone' : 'the public history keeps what was published'}.</Typography>} />
               )}
               {err && <Typography sx={{ fontSize: 11.5, color: '#f87171', mt: 1 }}>{err}</Typography>}
             </>
@@ -372,7 +427,7 @@ const SourceBlock: React.FC<{ die: DieRow; onMoved: (msg: string) => void }> = (
           <Button size="small" variant="contained" color={target === 'open' ? 'warning' : 'primary'}
             disabled={working || !ack || (preview?.blockers.length ?? 0) > 0} onClick={() => void confirmMove()}
             sx={{ textTransform: 'none' }}>
-            {target === 'open' ? 'Open publish PRs' : 'Open withdraw PRs'}
+            {target === 'open' ? 'Publish now' : 'Move to private'}
           </Button>
         </DialogActions>
       </Dialog>

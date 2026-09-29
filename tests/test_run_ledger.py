@@ -1,7 +1,7 @@
 """The results ledger — "have I already computed exactly this?"
 
-User, 2026-09-05: «Не надо Recent runs — нужно просто сканировать результаты:
-не совпадают ли они с уже проведёнными, хотя бы пока по этим параметрам.»  He
+User, 2026-09-05: «No need for Recent runs — just scan the results:
+whether they match ones already done, at least for now on these parameters.»  He
 had set 667.4 A peak in the morning, computed, changed the current, computed
 again, then came back to 667.4 A with nothing else touched — and had to sit
 through a solve whose answer was already on disk.

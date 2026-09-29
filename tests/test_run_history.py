@@ -1,8 +1,8 @@
 """``run_history`` — the persistent, capped "don't recompute this" store.
 
-Owner, 2026-09-22: *"если я запускаю те же параметры каплинга, он не
-считается, а подгружает уже рассчитанный вариант; ... нужна проверка и
-хранить небольшую историю, 10 вычислений"*.  This file tests the module in
+Owner, 2026-09-22: *"if I run the same coupling parameters, it doesn't
+recompute, it loads the already-computed variant; ... we need a check and
+to keep a small history, 10 computations"*.  This file tests the module in
 isolation (no solver, no FastAPI) — route-level "a repeat launch does not
 solve" tests live beside each route (``tests/test_mechanical_history.py``).
 

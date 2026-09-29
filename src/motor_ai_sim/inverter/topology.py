@@ -1,8 +1,8 @@
 """COIL -> BRIDGE — which switch drives which coil, and nothing implied.
 
-Owner, 2026-09-22: *«чтобы была возможность комбинировать мосты так, как нам
-надо: один контроллер на один мотор, два контроллера на один мотор и т.д., один
-мост на каждую катушку отдельно»*.  So the controller is not "a three-phase
+Owner, 2026-09-22: *"so we can combine bridges however we need to: one
+controller per motor, two controllers per motor, etc., one bridge per coil
+separately"*.  So the controller is not "a three-phase
 inverter"; it is a MAP from the motor's coils onto bridges, and the presets are
 named maps over that one structure:
 
@@ -305,7 +305,7 @@ def build_topology(*, preset: str, coils: Sequence[Coil],
 
     ``devices_parallel`` is the count EVERY switch position gets;
     ``devices_parallel_by_bridge`` overrides it per bridge (owner 2026-09-22:
-    *«надо добавить number of parallel»* — visible and editable where the
+    *"need to add number of parallel"* — visible and editable where the
     device is chosen, the same for all bridges by default).
     """
     p = str(preset or "").strip().lower()

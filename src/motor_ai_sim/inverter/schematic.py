@@ -207,15 +207,15 @@ def _three_phase_motor(blk: Dict[str, Any], x_bridge_end: float,
     """Wire this bridge's three legs to a drawn star or delta — NO CROSSINGS.
 
     Owner, 2026-09-22, on the first version (one vertex at the top, the other
-    two below it): *«я бы повернул и треугольник, и звезду на 60 градусов,
-    тогда линии фаз не пересекались бы»*.  He is right, and the rule behind it
+    two below it): *"I'd rotate both the triangle and the star by 60 degrees,
+    then the phase lines wouldn't cross"*.  He is right, and the rule behind it
     is the one this function now keeps: **the terminals must appear in the same
     top-to-bottom order as the legs that feed them.**  The legs leave the
     bridge stacked L1 / L2 / L3, so:
 
     Both symbols are the TEXTBOOK ones and they share one terminal geometry —
     three points 120° apart at 120° / 240° / 0°, i.e. upper-left, lower-left
-    and right (owner, on the first star: *«нарисуй нормальную звезду»* — three
+    and right (owner, on the first star: *"draw a proper star"* — three
     identical windings at 120°, equal arms, meeting at N in the centre).
 
     ``star``   three equal arms from the neutral N at the centre to those
@@ -359,7 +359,7 @@ def schematic_svg(topology: Any, *, v_dc_V: Optional[float] = None,
         # three-phase: the outputs leave the midpoints, run right, and end on a
         # REAL motor symbol — a star with its neutral, or a closed delta
         # triangle, whichever this duty is wound as (owner 2026-09-22:
-        # «дельту и звезду тоже надо рисовать на картинке»).
+        # "the delta and the star also need to be drawn in the picture").
         parts += _three_phase_motor(blk, bx + width_max, label_of)
 
     head = title or (f"{topology.as_dict()['preset_label']} · "

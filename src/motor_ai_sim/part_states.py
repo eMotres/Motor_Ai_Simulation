@@ -58,12 +58,12 @@ STATEFUL_PARTS = ("stator_core", "rotor_core", "magnet", "slot", "shaft",
 
 #: Parts whose exclusion is a RADICAL experiment rather than a packaging
 #: choice — removing them removes the machine's magnetics.  The solver refuses
-#: nothing (the user asked for "любую деталь"); the UI warns in amber.
+#: nothing (the user asked for "any part"); the UI warns in amber.
 MAGNETICALLY_ACTIVE_PARTS = ("stator_core", "rotor_core", "magnet", "slot")
 
 #: Parts the owner has ruled must ALWAYS take part in the calculation, no
 #: matter what a config file, a ``?mat=`` request or a UI toggle says (owner
-#: 2026-09-29: "во всех моторах вал должен участвовать").  ``resolve`` strips
+#: 2026-09-29: "the shaft must take part in every motor").  ``resolve`` strips
 #: these out of any non-default map before it is applied, so ``included`` is
 #: the only state that can ever reach the solver, the mass totals or the
 #: datasheet for them — an old file that still says ``reference`` (or

@@ -31,16 +31,25 @@ a second copy of the rule per route is how such rules drift apart.
 """
 from __future__ import annotations
 
+import json
 import os
+import threading
+from pathlib import Path
 from typing import Optional
 
 from motor_ai_sim.auth import ANON_OWNER, caller_identity
+from motor_ai_sim.config import DEFAULT_CONFIG_PATH
 
 MODE_ALL = "all"
 MODE_GRANTED = "granted"
 MODE_ANONYMOUS = "anonymous"
 
 _ENV_GRANT_ALL = "CATALOG_GRANT_ALL_REGISTERED"
+
+VIS_PRIVATE = "private"
+VIS_PUBLIC = "public"
+VIS_SELECTED = "selected"
+VISIBILITIES = frozenset({VIS_PRIVATE, VIS_PUBLIC, VIS_SELECTED})
 
 
 def grant_all_registered() -> bool:
@@ -85,10 +94,104 @@ def may_see_die(access: dict, die: str) -> bool:
     filtered where it is BUILT (routes/family.tree) and its per-die reads have
     always been open — closing them is the follow-up decision documented above,
     not part of the per-user grant work.  For a signed-in non-admin the answer
-    is the grant and nothing else, so hiding a motor in the tree is not
-    cosmetic: the payload / datasheet / context routes 404 on it.
+    is the grant, OR the die's own owner-set visibility (public / selected
+    clients — see ``get_die_access`` below), so hiding a motor in the tree is
+    not cosmetic: the payload / datasheet / context routes 404 on it, and MCP
+    tools (list_machines, check_fit) ask this same function.
     """
     mode = access.get("mode")
     if mode in (MODE_ALL, MODE_ANONYMOUS):
         return True
-    return str(die) in access.get("dies", frozenset())
+    if str(die) in access.get("dies", frozenset()):
+        return True
+    da = get_die_access(die)
+    vis = da.get("visibility")
+    if vis == VIS_PUBLIC:
+        return True
+    if vis == VIS_SELECTED:
+        email = (access.get("email") or "").strip().lower()
+        return bool(email) and email in da.get("clients", ())
+    return False
+
+
+# ── per-die access (public / selected clients) ───────────────────────────────
+# A SECOND, ORTHOGONAL visibility rule on top of the per-user grant above: the
+# grant says "this account may see its own list of dies"; this says "this die,
+# regardless of who is asking, is public (any signed-in account) or shared
+# with a short list of named accounts".  One admin-only store, keyed by die
+# name, not duplicated per user — the owner sets it once on the die.
+#
+# Deliberately NOT anonymous-facing: "every signed-in user" is the whole
+# promise here, same as the docstring above. The anonymous public exhibit
+# stays exactly the passport-filtered set routes/family.tree already builds.
+#
+# Recipients are read-only: this module only ever answers "may see", nothing
+# here grants write access to the owner's die (require_catalog_write is the
+# separate, unaffected gate for that).
+
+_DIE_ACCESS_FILE = Path(DEFAULT_CONFIG_PATH).parent / "die_access.json"
+_DA_LOCK = threading.Lock()
+
+
+def die_access_file() -> Path:
+    """The path itself, for callers (routes/family._tree_signature) that only
+    need its mtime — kept as a function so tests can monkeypatch the module
+    attribute and have both readers/writers and this follow along."""
+    return _DIE_ACCESS_FILE
+
+
+def _load_die_access() -> dict:
+    try:
+        with open(_DIE_ACCESS_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception:
+        return {}          # unreadable → treat as "nothing set" (fail private)
+    return d if isinstance(d, dict) else {}
+
+
+def _save_die_access(d: dict) -> None:
+    _DIE_ACCESS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _DIE_ACCESS_FILE.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=1, ensure_ascii=False, sort_keys=True)
+    tmp.replace(_DIE_ACCESS_FILE)
+
+
+def normalize_die_access(raw: Optional[dict]) -> dict:
+    raw = raw or {}
+    vis = str(raw.get("visibility") or VIS_PRIVATE).strip().lower()
+    if vis not in VISIBILITIES:
+        vis = VIS_PRIVATE
+    clients = raw.get("clients")
+    if not isinstance(clients, (list, tuple, set)):
+        clients = []
+    return {"visibility": vis,
+            "clients": sorted({str(c).strip().lower() for c in clients if str(c).strip()})}
+
+
+def get_die_access(die: str) -> dict:
+    return normalize_die_access(_load_die_access().get(str(die)))
+
+
+def all_die_access() -> dict:
+    """``{die_name: {"visibility", "clients"}}`` for every die that has a
+    non-default entry — used by the admin list (dies with no entry are
+    private by default and not worth a row of zeros in the store)."""
+    return {k: normalize_die_access(v) for k, v in _load_die_access().items()}
+
+
+def set_die_access(die: str, *, visibility: str, clients: Optional[list] = None) -> dict:
+    """Replace one die's access.  Same atomic-write discipline as
+    users.set_motor_grants: one writer, one lock, one file."""
+    die = str(die).strip()
+    entry = normalize_die_access({"visibility": visibility, "clients": clients or []})
+    with _DA_LOCK:
+        store = _load_die_access()
+        if entry["visibility"] == VIS_PRIVATE and not entry["clients"]:
+            store.pop(die, None)   # back to default — do not carry dead rows
+        else:
+            store[die] = entry
+        _save_die_access(store)
+    return get_die_access(die)

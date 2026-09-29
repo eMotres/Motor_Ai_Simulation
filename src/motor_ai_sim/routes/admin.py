@@ -274,6 +274,83 @@ def set_user_motors(email: str, body: dict = Body(default={}),
     return {"ok": True, "email": email.strip().lower(), "motors": grants}
 
 
+# ── Die-level access (public / selected clients) ────────────────────────────
+# ORTHOGONAL to the per-user grant above: a grant says which dies an ACCOUNT
+# may see; this says whether a DIE, on its own, is private (default), open to
+# every signed-in account, or shared with a short list of named ones. One
+# store (motor_access.die_access.json), admin-only writes, audited like every
+# other admin action (sessions.record_event — the same log the Logs/Events
+# admin tab already shows).
+
+from motor_ai_sim import motor_access as _MA
+
+
+def _used_by_count(die: str) -> int:
+    """How many individual accounts hold this die in their OWN grant list —
+    informational only (a public/selected die's real audience is wider; this
+    is what the per-account grant table would show)."""
+    from motor_ai_sim import users as U
+    return sum(1 for row in U.list_users()
+               if die in (row.get("motors") or {}).get("dies", []))
+
+
+@router.get("/dies")
+def list_dies_access(_admin: dict = Depends(require_admin)):
+    """Every catalog die with its owner-set visibility, for the Motors access
+    table: name, visibility, and how many accounts already hold it directly."""
+    from motor_ai_sim.routes.family import catalog_dies
+    access = _MA.all_die_access()
+    out = []
+    for d in catalog_dies():
+        name = d.get("name")
+        a = access.get(name) or {"visibility": _MA.VIS_PRIVATE, "clients": []}
+        out.append({**d, "visibility": a["visibility"], "clients": a["clients"],
+                    "used_by": _used_by_count(name)})
+    return {"count": len(out), "dies": out}
+
+
+@router.get("/dies/{die}/access")
+def get_die_access(die: str, _admin: dict = Depends(require_admin)):
+    from motor_ai_sim.routes.family import die_names
+    if die not in die_names():
+        raise HTTPException(status_code=404, detail=f"die '{die}' not found")
+    return {"die": die, **_MA.get_die_access(die)}
+
+
+@router.put("/dies/{die}/access")
+def set_die_access(die: str, body: dict = Body(default={}),
+                   admin_user: dict = Depends(require_admin)):
+    """Set one die's visibility: private (default), public (every signed-in
+    account, incl. MCP agents — motor_access.may_see_die is the one gate both
+    the web routes and the MCP tools ask), or selected (named accounts only).
+    Recipients stay read-only regardless — this never grants catalog WRITE
+    access, only the same read `may_see_die` already governs."""
+    from motor_ai_sim.routes.family import die_names
+    if die not in die_names():
+        raise HTTPException(status_code=404, detail=f"die '{die}' not found")
+    body = body or {}
+    vis = str(body.get("visibility") or "").strip().lower()
+    if vis not in _MA.VISIBILITIES:
+        raise HTTPException(status_code=422,
+                            detail=f"'visibility' must be one of {sorted(_MA.VISIBILITIES)}")
+    clients = body.get("clients")
+    if clients is not None and not isinstance(clients, (list, tuple)):
+        raise HTTPException(status_code=422, detail="'clients' must be a list of e-mails")
+    clients = [str(c).strip() for c in (clients or []) if str(c).strip()]
+    if vis == _MA.VIS_SELECTED and clients:
+        from motor_ai_sim import users as U
+        unknown = sorted({c for c in clients if U.get_user(c) is None})
+        if unknown:
+            raise HTTPException(status_code=422,
+                                detail=f"unknown account(s): {', '.join(unknown)}")
+    result = _MA.set_die_access(die, visibility=vis, clients=clients)
+    from motor_ai_sim import sessions as S
+    S.record_event("die_access_change", email=str(admin_user.get("id") or admin_user.get("email") or ""),
+                   reason=f"{die} -> {vis}" + (f" ({len(clients)} client(s))" if vis == _MA.VIS_SELECTED else ""),
+                   path=f"/api/admin/dies/{die}/access")
+    return {"ok": True, "die": die, **result}
+
+
 # ── Invites ───────────────────────────────────────────────────────────────────
 # The door for an external user, and the ONLY one on a host with
 # PUBLIC_EXHIBIT=0 and CATALOG_GRANT_ALL_REGISTERED unset: an admin creates the

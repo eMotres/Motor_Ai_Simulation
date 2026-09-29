@@ -9,10 +9,16 @@ import BoltIcon from '@mui/icons-material/Bolt';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import { getActiveMotor, createMotorFromCurrent, overwriteActiveMotor } from './motorSettings';
 import HelpTip from './HelpTip';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/geometry.json (docs/I18N.md).
+const tx = nsT('geometry');
 
 interface Props { disabled?: boolean; }
 
 const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
+  useTranslation('geometry'); // re-render on language change; lazy-loads the namespace
   const [active, setActive] = useState(() => getActiveMotor());
   useEffect(() => {
     const on = (e: Event) => setActive((e as CustomEvent).detail ?? getActiveMotor());
@@ -75,7 +81,7 @@ const SaveToMotorButton: React.FC<Props> = ({ disabled }) => {
       ))}
       {naming ? (
         <Box sx={{ display: 'flex', gap: 0.5 }}>
-          <TextField size="small" autoFocus placeholder="New motor name…" value={name}
+          <TextField size="small" autoFocus placeholder={tx('newMotorName')} value={name}
             onChange={e => setName(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') create(); if (e.key === 'Escape') setNaming(false); }}
             inputProps={{ style: { padding: '4px 8px', fontSize: 11, color: 'var(--text-0)' } }}

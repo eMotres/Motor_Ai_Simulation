@@ -24,6 +24,11 @@ import type {
   GeometryViolation,
   GeometryParamError,
 } from '../../types/motor';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/geometry.json (docs/I18N.md).
+const tx = nsT('geometry');
 
 /**
  * Free-typing numeric field.
@@ -172,7 +177,7 @@ const GeometryIssues: React.FC<{ v: GeometryValidation | null }> = ({ v }) => {
         <Alert severity="error">
           <AlertTitle sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
             {errs.length} geometry {errs.length === 1 ? 'problem' : 'problems'} — cannot be solved
-            <HelpTip title="This cross-section cannot be solved. The values are saved so you can keep editing, but Run will be refused until the regions no longer intersect." />
+            <HelpTip title={tx('thisCrossSectionCannotBeSolved')} />
           </AlertTitle>
           <Box component="ul" sx={{ m: 0, pl: 2.5 }}>{errs.map(row)}</Box>
           {more('error')}
@@ -196,7 +201,7 @@ const GeometryParamErrors: React.FC<{ errs: GeometryParamError[] | null }> = ({ 
   if (!errs || errs.length === 0) return null;
   return (
     <Alert severity="error">
-      <AlertTitle>Value not accepted — nothing was saved</AlertTitle>
+      <AlertTitle>{tx('valueNotAcceptedNothingWasSaved')}</AlertTitle>
       <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
         {errs.map((e, i) => (
           <Box component="li" key={`${e.field}-${i}`}>
@@ -209,6 +214,7 @@ const GeometryParamErrors: React.FC<{ errs: GeometryParamError[] | null }> = ({ 
 };
 
 const GeometryForm: React.FC = () => {
+  useTranslation('geometry'); // re-render on language change; lazy-loads the namespace
   const {
     geometry,
     parameterSchema,
@@ -331,7 +337,7 @@ const GeometryForm: React.FC = () => {
       <Box sx={{ m: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
         {pendingBanner}
         <Alert severity="warning">
-          Not connected to API. Start the Python server to edit geometry parameters.
+          {tx('notConnectedToApiStartThe')}
         </Alert>
       </Box>
     );

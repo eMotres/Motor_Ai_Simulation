@@ -1,0 +1,125 @@
+{
+  "tabs": {
+    "motors": "电机",
+    "geometry": "几何",
+    "materials": "材料",
+    "mesh": "网格",
+    "simulation": "电磁",
+    "static3d": "3D",
+    "mechanical": "机械",
+    "thermal": "热",
+    "controller": "控制器",
+    "sweep": "优化",
+    "comparePoints": "对比",
+    "cost": "成本",
+    "compare": "配置",
+    "admin": "管理"
+  },
+  "status": {
+    "connected": "已连接",
+    "localMode": "本地模式"
+  },
+  "theme": {
+    "dark": "深色主题",
+    "light": "浅色主题"
+  },
+  "actions": {
+    "resetDefaults": "恢复默认值"
+  },
+  "viewer": {
+    "showGrid": "显示网格线",
+    "hideGrid": "隐藏网格线",
+    "showAxes": "显示坐标轴",
+    "hideAxes": "隐藏坐标轴",
+    "solidMesh": "实体网格",
+    "stl": "STL（CadQuery）",
+    "generateStl": "用 CadQuery 生成 STL",
+    "clearCache": "清除缓存并重建"
+  },
+  "language": {
+    "label": "语言"
+  },
+  "account": {
+    "signIn": "登录",
+    "signOut": "退出登录",
+    "avatarTooltip": "{email} · {tier} — 点击查看会话",
+    "sessions": "会话",
+    "agents": "智能体访问",
+    "notifications": "通知"
+  },
+  "auth": {
+    "title": {
+      "signin": "登录",
+      "register": "创建账户",
+      "forgot": "重置密码",
+      "reset": "设置新密码"
+    },
+    "cta": {
+      "signin": "登录",
+      "register": "创建账户",
+      "forgot": "发送重置链接",
+      "reset": "设置密码"
+    },
+    "lead": {
+      "signin": "使用邮箱和密码登录。",
+      "register": "我们将向您发送确认链接。",
+      "forgot": "我们将向您发送重置链接。",
+      "reset": "请选择新密码。"
+    },
+    "help": {
+      "signin": "同一邮箱通过 Google 或密码登录 = 同一账户。新注册的邮箱账户需在确认邮件中的链接后才能使用。",
+      "register": "至少 {min} 个字符；常见密码会被拒绝。我们发送的链接 24 小时内有效；打开链接前该账户无法登录。",
+      "forgot": "若有账户使用此邮箱，我们将发送重置链接（24 小时内有效，仅限一次）。也可为仅用 Google 登录的账户设置密码。",
+      "reset": "设置新密码后，其他所有会话都将退出登录。"
+    },
+    "field": {
+      "name": "姓名",
+      "email": "邮箱",
+      "password": "密码",
+      "newPassword": "新密码（至少 {min} 位）",
+      "repeatPassword": "再次输入密码"
+    },
+    "validation": {
+      "email": "请输入有效的邮箱地址",
+      "passwordRequired": "请输入密码",
+      "passwordMin": "至少 {min} 个字符",
+      "passwordMismatch": "两次输入的密码不一致",
+      "nameRequired": "请输入姓名"
+    },
+    "info": {
+      "emailConfirmed": "邮箱已确认——请使用密码登录。",
+      "checkConfirmation": "请查收邮件中的确认链接。",
+      "checkReset": "请查收邮件中的重置链接。",
+      "passwordChanged": "密码已修改——请使用新密码登录。"
+    },
+    "link": {
+      "createAccount": "创建账户",
+      "forgot": "忘记密码？",
+      "back": "返回登录"
+    },
+    "consent": {
+      "line": "向我发送产品新闻和更新",
+      "help": "产品新闻和更新，每月最多 2 封；一键退订。我们会先发送确认链接。",
+      "newAccountOnly": "仅适用于新账户"
+    }
+  },
+  "units": {
+    "motorCount": "{count} 台电机",
+    "dutyCount": "{count} 个工况"
+  },
+  "thisOne": "当前会话",
+  "browser": "浏览器",
+  "signedIn": "登录时间",
+  "lastSeen": "最近活动",
+  "expires": "过期时间",
+  "how": "方式",
+  "revoked": "已撤销",
+  "revoke": "撤销",
+  "noSessionsRecordedYet": "尚无会话记录。",
+  "signOutEverywhere": "在所有设备上退出登录",
+  "close": "关闭",
+  "notifications": "通知",
+  "notices": "公告",
+  "none": "无。",
+  "markRead": "标为已读"
+}

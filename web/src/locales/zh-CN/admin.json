@@ -1,0 +1,15 @@
+{
+  "admin": "管理",
+  "nav": {
+    "overview": "概览",
+    "users": "用户",
+    "signups": "注册申请",
+    "servers": "服务器",
+    "usage": "用量与定价",
+    "agents": "智能体",
+    "catalogs": "目录",
+    "motorsAccess": "电机访问权限",
+    "newsletter": "通讯与通知",
+    "logs": "日志 / 事件"
+  }
+}

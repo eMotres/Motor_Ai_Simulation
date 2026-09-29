@@ -69,6 +69,9 @@ import MeshPanel from './components/mesh/MeshPanel';
 import CostPanel from './components/cost/CostPanel';
 import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
+import { useTranslation } from 'react-i18next';
+import { useApiReady } from './contexts/AuthContext';
+import { useServerLocale } from './i18n/persist';
 
 // Theme is built from the shared eMotres/aerostator design tokens — see
 // src/theme.ts.  Light is the default (matches the marketing site); dark
@@ -185,6 +188,9 @@ function App() {
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
   const { user, isAdmin, tier, enforced, resolved: authResolved } = useAuth();
+  // Interface language (docs/I18N.md): adopt the signed-in user's stored choice.
+  const { t: tr, i18n } = useTranslation('common');
+  useServerLocale(i18n, useApiReady(), user?.email);
   // Access tiers (only enforced when the backend has AUTH_ENFORCE on; with it off,
   // dev shows everything):
   //   • Anonymous       → the Motors catalog ONLY (browse, can't work with a motor).
@@ -425,12 +431,12 @@ function App() {
                        display: 'flex', alignItems: 'center', gap: 0.5,
                        bgcolor: 'background.paper', border: '1px solid',
                        borderColor: 'divider', borderRadius: 1, px: 0.5, py: 0.25 }}>
-              <Tooltip title={showGrid ? 'Hide Grid' : 'Show Grid'}>
+              <Tooltip title={showGrid ? tr('viewer.hideGrid') : tr('viewer.showGrid')}>
                 <IconButton size="small" color={showGrid ? 'primary' : 'default'} onClick={toggleGrid}>
                   <GridOnIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Tooltip title={showAxes ? 'Hide Axes' : 'Show Axes'}>
+              <Tooltip title={showAxes ? tr('viewer.hideAxes') : tr('viewer.showAxes')}>
                 <IconButton size="small" color={showAxes ? 'primary' : 'default'} onClick={toggleAxes}>
                   <ThreeDRotationIcon fontSize="small" />
                 </IconButton>
@@ -443,18 +449,18 @@ function App() {
                 sx={{ mx: 0.5 }}
               >
                 <ToggleButton value="solid" sx={{ px: 1 }}>
-                  <Tooltip title="Solid Mesh"><SquareIcon fontSize="small" /></Tooltip>
+                  <Tooltip title={tr('viewer.solidMesh')}><SquareIcon fontSize="small" /></Tooltip>
                 </ToggleButton>
                 <ToggleButton value="stl" sx={{ px: 1 }}>
-                  <Tooltip title="STL (CadQuery)"><ViewInArIcon fontSize="small" /></Tooltip>
+                  <Tooltip title={tr('viewer.stl')}><ViewInArIcon fontSize="small" /></Tooltip>
                 </ToggleButton>
               </ToggleButtonGroup>
-              <Tooltip title="Generate STL from CadQuery">
+              <Tooltip title={tr('viewer.generateStl')}>
                 <IconButton size="small" onClick={() => runPipeline(geometry)}>
                   <BuildIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
-              <Tooltip title="Clear Cache & Rebuild">
+              <Tooltip title={tr('viewer.clearCache')}>
                 <IconButton size="small" onClick={async () => { await clearStlCache(); runPipeline(geometry); }}>
                   <DeleteSweepIcon fontSize="small" />
                 </IconButton>
@@ -544,7 +550,12 @@ function App() {
   const tabs = tabDefs
     .map((t) => ({
       ...t,
-      label: (t.panelId && panels[t.panelId]?.title) || t.label,
+      // English: the manifest title (web-as-module) wins, as before.  Other
+      // locales: the translated tab name; the manifest/registry text is the
+      // fallback for a tab this build has no key for.
+      label: (i18n.resolvedLanguage ?? 'en') === 'en'
+        ? ((t.panelId && panels[t.panelId]?.title) || t.label)
+        : tr(`tabs.${t.id}`, { defaultValue: (t.panelId && panels[t.panelId]?.title) || t.label }),
       // Ternary, not `&&`: the falsy branch of `t.panelId && …` keeps the string
       // type in the union, so `order` became string|number and the numeric sort
       // below failed to type-check (TS2362/2363).
@@ -574,16 +585,16 @@ function App() {
 
             {isLoading && <CircularProgress size={18} sx={{ mr: 1 }} />}
             {(connectedToApi || (!signedIn && backendUp)) ? (
-              <Chip icon={<CloudSyncIcon />} label="Connected" color="success" size="small" />
+              <Chip icon={<CloudSyncIcon />} label={tr('status.connected')} color="success" size="small" />
             ) : (
-              <Chip icon={<CloudOffIcon />} label="Local Mode" color="warning" size="small" />
+              <Chip icon={<CloudOffIcon />} label={tr('status.localMode')} color="warning" size="small" />
             )}
 
             <Box sx={{ flexGrow: 1 }} />
 
             <AuthButton />
 
-            <Tooltip title={themeMode === 'light' ? 'Dark theme' : 'Light theme'}>
+            <Tooltip title={themeMode === 'light' ? tr('theme.dark') : tr('theme.light')}>
               <IconButton size="small"
                 onClick={() => setThemeMode(m => (m === 'light' ? 'dark' : 'light'))}>
                 {themeMode === 'light'
@@ -591,7 +602,7 @@ function App() {
                   : <LightModeIcon fontSize="small" />}
               </IconButton>
             </Tooltip>
-            <Tooltip title="Reset to Defaults">
+            <Tooltip title={tr('actions.resetDefaults')}>
               <IconButton size="small" onClick={resetToDefaults}>
                 <RefreshIcon fontSize="small" />
               </IconButton>

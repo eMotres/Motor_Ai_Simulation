@@ -3,6 +3,7 @@
 // blocked store just falls back to Overview, never a broken panel).
 import React, { useEffect, useState } from 'react';
 import { Box, Typography } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 
 export type AdminSectionId =
   | 'overview' | 'users' | 'signups' | 'servers' | 'usage' | 'agents' | 'catalogs' | 'motorsAccess' | 'newsletter' | 'logs';
@@ -46,7 +47,9 @@ export const useAdminSection = (): [AdminSectionId, (s: AdminSectionId) => void]
  *  decides the layout so there is nothing to keep in sync. */
 const AdminNav: React.FC<{
   section: AdminSectionId; onSelect: (s: AdminSectionId) => void; badges?: Partial<Record<AdminSectionId, number>>;
-}> = ({ section, onSelect, badges }) => (
+}> = ({ section, onSelect, badges }) => {
+  const { t } = useTranslation('admin');
+  return (
   <Box
     sx={{
       display: 'flex',
@@ -79,7 +82,7 @@ const AdminNav: React.FC<{
           }}
         >
           <Typography sx={{ fontSize: 12.5, fontWeight: active ? 700 : 500, color: active ? 'var(--text-0)' : 'var(--text-2)' }}>
-            {s.label}
+            {t(`nav.${s.id}`, { defaultValue: s.label })}
           </Typography>
           {!!badge && (
             <Box sx={{
@@ -93,6 +96,7 @@ const AdminNav: React.FC<{
       );
     })}
   </Box>
-);
+  );
+};
 
 export default AdminNav;

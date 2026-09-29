@@ -19056,7 +19056,7 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     # number a reader should have to interpret.
     S("Time to the limit", lambda c: time_to_limit_words(_c(c)) or None)
     # ── CONTINUOUS RATING (S1) AT THE SAVED COOLING (owner 2026-09-21) ───────
-    # *«давай сделаем кнопку, или лучше добавим ещё один элемент в меню»* — a
+    # *"let's make a button, or better add one more menu item"* — a
     # third `solve_to` answer, beside the one above it: the largest current
     # this machine may hold FOR EVER at this duty's own saved cooling.  NEVER
     # COMPUTED HERE (`continuous_rating_of` only reads the stored block), so
@@ -19076,11 +19076,11 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
             return "—" if v is None else _fmt(v, d, unit)
         rows.append([label] + _col_vals(cols, _cell))
 
-    # Owner, 2026-09-21 first addendum: *«не пиши уже мощность и момент — его
-    # и так видно»* — torque and power dropped because the S1 numbers were a
+    # Owner, 2026-09-21 first addendum: *"don't write power and torque again
+    # — you can already see it"* — torque and power dropped because the S1 numbers were a
     # LINEAR ESTIMATE, and the tiles already carried the setpoint's real ones.
-    # Owner, same day, second addendum: *«почему сразу не пересчитывается
-    # электромагнитное моделирование … токи не совпадают»* — the loop now
+    # Owner, same day, second addendum: *"why doesn't the electromagnetic
+    # simulation recompute right away ... the currents don't match"* — the loop now
     # CONFIRMS the estimate with a real electromagnetic pass and the record's
     # own tiles become the S1 machine, so torque and power are real again and
     # print once more; `continuous_rating_clause` states whether they are
@@ -19452,8 +19452,8 @@ def _warnings_page(st, cols: List[Dict[str, Any]],
                    sec: Optional[Dict[str, int]] = None) -> List[Any]:
     """Every duty against every limit, with what to do about it.
 
-    User, 2026-09-09: *"нужно делать предупреждения, если что-то близко к
-    пределам, и предложения, как этого избежать"*.
+    User, 2026-09-09: *"we need to raise warnings when something is close to
+    the limits, and suggestions for how to avoid it"*.
     """
     from reportlab.platypus import KeepTogether, Spacer
 
@@ -19483,7 +19483,7 @@ def _warnings_page(st, cols: List[Dict[str, Any]],
         out.append(Spacer(1, 6))
         out.append(_para("What to do about each of them", st["h2"]))
         # …about each of the ones that are OVER a limit.  User 2026-09-10:
-        # "What to do about each of them — писать тоже только для красных".
+        # "What to do about each of them — only write it for the red ones too".
         # An amber row already says its own margin in the table; a paragraph of
         # advice for something that is still inside its limit buries the rows
         # that are not.

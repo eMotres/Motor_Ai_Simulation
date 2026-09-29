@@ -426,8 +426,8 @@ def psipm_cache_key(geo, wind, connection=None) -> str:
     groups, so 4S links four times what 4P links.  The first version of this key
     argued "I = 0, the connection cannot matter" and cached one number for all
     connections; a 4S run would then have divided its 4S-scaled ψd against a 4P
-    ψ_PM and shipped a silently wrong Ld.  (Caught by the user asking "а Winding
-    Connection ты учёл?" — reviewed, measured, fixed before it produced a
+    ψ_PM and shipped a silently wrong Ld.  (Caught by the user asking "did you
+    account for the Winding Connection?" — reviewed, measured, fixed before it produced a
     number.)
 
     It depends on the WINDING SCALE for exactly the same reason: ψ_PM is the
@@ -723,8 +723,8 @@ def noload_incremental_ldq(geo, wind, pole_pairs, daxis_deg,
     stated temperature because that is the one state every machine can be
     compared in; the inductances a control engineer sizes a loop with are
     quoted the same way, and the owner's rule (2026-09-20) is that this
-    document does too — *«Ld/Lq нужно указывать тоже для 20 градусов и без
-    тока, как для KV»*.
+    document does too — *"Ld/Lq also need to be given at 20 degrees and at
+    zero current, like KV"*.
 
     ONE cheap no-load transient (the ψ_PM calibration knobs: 6 frames on the
     calibration mesh) with the magnets and the winding at ``magnet_temp_c`` /
@@ -828,8 +828,8 @@ def _daxis_geo_fingerprint(geo) -> str:
         # distance), the liner thickness and the wire sizes (they place the
         # conductors inside the slot; the phase axis is the slot's).  Keying on
         # them re-calibrated the axis — 24 no-load frames — after the user
-        # thickened the shaft wall ("зачем её калибровать, если я только
-        # увеличил толщину вала?", 2026-09-07).
+        # thickened the shaft wall ("why recalibrate it, when I only
+        # increased the shaft thickness?", 2026-09-07).
         _g = {k: v for k, v in dict(geo or {}).items()
               if k not in _DAXIS_INERT_KEYS}
         return _hl.md5(_jl.dumps(_g, sort_keys=True,

@@ -3700,7 +3700,7 @@ def _heat_waterfall_png(res: Dict[str, Any], inner: Dict[str, Any],
         # away thinking the machine dissipates less than it does.
         _nm = heat_not_in_map_w(res, inner) or 0.0
         if _nm > 0.01 * float(p_in):
-            # NAMED, not just hatched (user 2026-09-11: "что это значит?").  A
+            # NAMED, not just hatched (user 2026-09-11: "what does this mean?").  A
             # bar standing outside the balance has to say what it is on the
             # chart, not only in the caption three lines below it.
             ax.bar(["Mechanical,\nnot in map"], [_nm], color="#fff4e5",
@@ -4064,8 +4064,8 @@ def _image(blob: Optional[bytes], width: float,
 #: The gap between the two halves of a paired figure, in points.
 PAIR_GAP = 8.0
 
-#: ONE HEIGHT CAP FOR EVERY PAIR (user 2026-09-14: *"рисунки делай побольше,
-#: раздвигай на всю ширину страницы, для всех, чтобы одинаково было"*).  Each
+#: ONE HEIGHT CAP FOR EVERY PAIR (user 2026-09-14: *"make the pictures bigger,
+#: stretch them to the full page width, for all of them, so it's consistent"*).  Each
 #: figure used to name its own cap — 0.30, 0.32, 0.42 of the page — so three
 #: figures on one page were three different sizes.  One number, and it is loose
 #: enough that no pair is ever narrowed by it: a pair ALWAYS spans the whole
@@ -4675,8 +4675,8 @@ class _Source:
                  report_fp: Optional[str] = None,
                  delta: Optional[List[str]] = None):
         self.name = name
-        # The stamp is KEPT but no longer printed (user 2026-09-10: "я думаю,
-        # что метки времени можно вообще убрать").  A reader compared two of
+        # The stamp is KEPT but no longer printed (user 2026-09-10: "I think
+        # the timestamps can just be removed entirely").  A reader compared two of
         # them and concluded the sections disagreed, when what they disagreed
         # about was which store answered first; the machine and the operating
         # point are what identify a result, and both are stated already.
@@ -4712,8 +4712,8 @@ class _Source:
 # ---------------------------------------------------------------------------
 # LIMITS AND WARNINGS
 # ---------------------------------------------------------------------------
-# User, 2026-09-09: *"нужно делать предупреждения, если что-то близко к пределам,
-# и предложения, как этого избежать"*.
+# User, 2026-09-09: *"we need to raise warnings when something is close to
+# the limits, and suggestions for how to avoid it"*.
 #
 # The engine below is a PURE FUNCTION of one flat dict per duty — no stores, no
 # imports, no solver — for two reasons.  The first is that it is the only part of
@@ -4764,7 +4764,7 @@ INSULATION_CLASS_C: Dict[str, float] = {
 }
 DEFAULT_INSULATION_CLASS = "N"
 
-#: WHAT THIS PROJECT BUILDS TO (user 2026-09-11: "обмотки везде класс 200С").
+#: WHAT THIS PROJECT BUILDS TO (user 2026-09-11: "windings are class 200C everywhere").
 #: The letters above are the IEC ladder, and 200 °C on it is class N — H is
 #: 180 °C.  The document used to call this build "class H" and print 200 °C
 #: beside it, which is a contradiction on the page (reviewer 2026-09-14); the
@@ -4779,8 +4779,8 @@ PROJECT_INSULATION_TEXT = ("class N per IEC 60085 (200 °C) — this project's "
 
 #: Current density a winding is designed to, A/mm² rms — THIS PROJECT'S limits,
 #: given by the user on 2026-09-10 ("current density in the copper limit 20
-#: A/mm²" for the jacketed machine, then "лимиты по воздушному от 10 для
-#: закрытых конструкций до 15 для открытых конструкций").
+#: A/mm²" for the jacketed machine, then "air limits from 10 for closed
+#: constructions up to 15 for open constructions").
 #:
 #: Air depends on the FRAME, which is why there are three numbers and not two: a
 #: closed machine hands its winding heat to the housing and only then to the
@@ -4792,9 +4792,9 @@ PROJECT_INSULATION_TEXT = ("class N per IEC 60085 (200 °C) — this project's "
 #: A machine with no thermal answer reads as closed air, the tightest of the
 #: three, and the warning says so in its own note.
 #:
-#: THE JACKET SPLITS BY INSULATION SYSTEM (user 2026-09-14: "исправим лимиты для
-#: плотности тока с жидкостным охлаждением: до 20 A/mm² с органической изоляцией
-#: и до 25 A/mm² с керамической").  Under a jacket the heat path out of the slot
+#: THE JACKET SPLITS BY INSULATION SYSTEM (user 2026-09-14: "let's fix the
+#: current-density limits for liquid cooling: up to 20 A/mm² with organic
+#: insulation and up to 25 A/mm² with ceramic").  Under a jacket the heat path out of the slot
 #: is short and it is the GROUND WALL that sets how hard it may be pushed: an
 #: organic liner (aramid paper, polymer film) is a 0.14 W/(m·K) blanket with an
 #: organic temperature ceiling, while an alumina liner conducts ~24 W/(m·K) and
@@ -4840,8 +4840,8 @@ def _insulator_description(card: str) -> str:
 def insulation_system(mats: Any) -> Tuple[str, str]:
     """``('ceramic' | 'organic', why)`` for the winding's insulation system.
 
-    THE SLOT INSULATION IS THE DECIDING CARD (user 2026-09-14: "с керамической
-    изоляцией" is the Al2O3 liner he assigns).  The ground wall is the whole
+    THE SLOT INSULATION IS THE DECIDING CARD (user 2026-09-14: "with ceramic
+    insulation" is the Al2O3 liner he assigns).  The ground wall is the whole
     series heat path out of the slot and the part that ages; the wire enamel is
     a 30 µm film on the strand, and a polyimide enamel inside an alumina liner
     is still a ceramic-insulated slot as far as the current density goes.  A
@@ -5080,7 +5080,7 @@ OPEN_FRACTION_LIMIT_PCT = 50.0
 #: the band, so it leaves the rotor iron under it, and the band bridges the
 #: inter-pole gaps rather than lying on the iron there.  Neither is a load path,
 #: and neither has anything to let go of.  The user, who built these rotors:
-#: *"нет никакого отслоения бандажа"*.
+#: *"there's no such thing as the band delaminating"*.
 #:
 #: So retention is judged on ONE pair: the band against the magnets when there
 #: is a band, the magnets against the rotor when there is not (then the glue or
@@ -5154,9 +5154,9 @@ def _warn(rule: str, duty: str, quantity: str, value: Optional[float],
     elif margin <= near:
         level = "amber"
     else:
-        # GREEN, and it is printed (user 2026-09-10: "помечай шрифты цветом
-        # красным превышения предела, зелёным норма; на зелёные не надо писать
-        # советов").  A check that passes used to return nothing at all, so the
+        # GREEN, and it is printed (user 2026-09-10: "mark the text in red for
+        # exceeded limits, green for normal; don't write advice for the green
+        # ones").  A check that passes used to return nothing at all, so the
         # table listed only trouble and the reader could not tell a quantity
         # that was measured and passed from one nobody looked at.  Green rows
         # carry no remedy: there is nothing to do about them.

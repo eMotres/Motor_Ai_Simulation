@@ -6461,6 +6461,11 @@ def fem_transient_sliding_band(
         log.info("P2 vdrive phasor init: Ld=%.4g Lq=%.4g H |psi_pm|=%.4g Wb "
                  "i_dq=(%.1f, %.1f) A i0=(%.1f, %.1f, %.1f)",
                  _Ldd, _Lqq, _psi_pm_d, _id0, _iq0, _iA0, _iB0, _iC0)
+        # THE CONTROLLER'S CURRENT LOOP (owner 2026-09-29): a closed-loop
+        # bridge source is tuned on the inductances just measured here.
+        if hasattr(_src, "configure_current_loop"):
+            _src.configure_current_loop(R_phase=float(R_phase),
+                                        L_d=float(_Ldd), L_q=float(_Lqq))
         # ── SETTLE ADAPTED TO THIS MACHINE'S L/R (user 2026-09-02) ──────
         # The PWM settle used to be a flat 2 periods, validated on a machine
         # whose L/R was ~0.75 electrical period.  On CILN28/G2-L40 (L/R = 4.8

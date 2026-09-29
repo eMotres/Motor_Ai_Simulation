@@ -5844,7 +5844,7 @@ def solve_thermal_field(
         "n_cut_facets": th.get("n_cut_facets"),
         # How many sectors the solved wedge is of the machine, so the map's
         # tiler (`tileFullRing`) can draw the whole motor (user 2026-09-09:
-        # "сделай тепловые поля на весь мотор, а не только на 1/4") — the
+        # "make the thermal fields cover the whole motor, not just 1/4") — the
         # mesh preview always carried it, the field did not.
         "n_sectors": int(sym), "symmetry_mult": int(sym),
         "ambient_temp": float(ambient_temp), "h_conv": round(float(h_eff), 1),

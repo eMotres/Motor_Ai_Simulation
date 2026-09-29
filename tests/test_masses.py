@@ -112,8 +112,8 @@ def m40():
 # ── per-component pins ───────────────────────────────────────────────────────
 
 # PINS MOVED 2026-09-06 — the magnet top is built on the circle, not on the
-# chord between its two top corners ("давай по умолчанию сделаем только arc и
-# уберём прямую вообще").  Every spoke magnet gains the circular segment
+# chord between its two top corners ("let's default to arc only and drop the
+# straight segment entirely").  Every spoke magnet gains the circular segment
 # r²/2·(θ − sin θ) and the rotor loses the sliver of that crescent that was iron
 # — so the magnet mass goes up, the rotor mass down, and their sum up (the
 # magnet is the denser material).  Nothing else in these fixtures moved:

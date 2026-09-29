@@ -1,0 +1,15 @@
+{
+  "admin": "Admin",
+  "nav": {
+    "overview": "Overview",
+    "users": "Users",
+    "signups": "Sign-ups",
+    "servers": "Servers",
+    "usage": "Usage & pricing",
+    "agents": "Agents",
+    "catalogs": "Catalogs",
+    "motorsAccess": "Motors access",
+    "newsletter": "Newsletter & notices",
+    "logs": "Logs / Events"
+  }
+}

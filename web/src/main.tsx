@@ -1,6 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
+// i18n before App: the first render already speaks the detected language (docs/I18N.md)
+import './i18n'
 import App from './App.tsx'
 import OAuthConsent from './components/auth/OAuthConsent'
 import { AuthProvider } from './contexts/AuthContext'

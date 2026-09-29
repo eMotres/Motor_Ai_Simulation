@@ -18,6 +18,11 @@ import { addDeviceCard } from '../catalogBrowser/catalogApi';
 import { useAuth } from '../../contexts/AuthContext';
 import { fmt, listDevices, type DeviceRow } from './controllerApi';
 import { ANY_BOARD, boardGroups, fitsBoard, boardWarning } from './footprintFilter';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/controller.json (docs/I18N.md).
+const tx = nsT('controller');
 const BLANK_CARD = `part: MY_PART
 manufacturer: ""
 package: ""
@@ -68,6 +73,7 @@ interface Props {
 
 const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged,
                                          parallel, onParallel, switchCurrent }) => {
+  useTranslation('controller'); // re-render on language change; lazy-loads the namespace
   const { isAdmin } = useAuth();
   const [adding, setAdding] = useState(false);
   const [yaml, setYaml] = useState(BLANK_CARD);
@@ -97,17 +103,17 @@ const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged
 
   const headerExtras = (
     <>
-      <TextField select size="small" label="Fits board" value={board}
+      <TextField select size="small" label={tx('fitsBoard')} value={board}
         onChange={e => setBoard(e.target.value)}
         sx={{ minWidth: 170, '& .MuiInputBase-input': { fontSize: 12, py: 0.5 } }}>
-        <MenuItem value={ANY_BOARD} sx={{ fontSize: 12 }}>any board</MenuItem>
+        <MenuItem value={ANY_BOARD} sx={{ fontSize: 12 }}>{tx('anyBoard')}</MenuItem>
         {groups.map(g => <MenuItem key={g} value={g} sx={{ fontSize: 12 }}>{g}</MenuItem>)}
       </TextField>
       <HelpTip title="Only parts sharing this land pattern (the card's footprint compatibility group). Height and top tab may still differ." />
       {isAdmin && (
         <>
           <Button size="small" variant="outlined" onClick={() => setAdding(true)}
-            sx={{ textTransform: 'none', fontSize: 11 }}>Add device</Button>
+            sx={{ textTransform: 'none', fontSize: 11 }}>{tx('addDevice')}</Button>
           <HelpTip title="Admin only: paste a card's YAML; the server validates it before writing config/devices." />
         </>
       )}
@@ -118,7 +124,7 @@ const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged
     <Box>
       <CatalogBrowser
         kinds={['device']}
-        title="Device catalogue"
+        title={tx('deviceCatalogue')}
         help="Every power device with a transcribed datasheet card (config/devices). Click a part for its card, sources and provenance; tick 2–3 to compare. Nothing is scraped; unpublished values stay empty."
         selectedId={selected}
         reloadKey={reload}
@@ -131,7 +137,7 @@ const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged
         extraColumn={{
           header: (
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
-              Parallel
+              {tx('parallel')}
               <HelpTip title={switchCurrent?.note
                 || 'Devices per switch position on the continuous current rating alone.'} />
             </Box>
@@ -161,13 +167,13 @@ const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged
 
       {/* ── add a card (admin) ── */}
       <Dialog open={adding} onClose={() => setAdding(false)} maxWidth="md" fullWidth>
-        <DialogTitle sx={{ fontSize: 15 }}>Add a device card</DialogTitle>
+        <DialogTitle sx={{ fontSize: 15 }}>{tx('addADeviceCard')}</DialogTitle>
         <DialogContent dividers>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
             <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>
-              Paste the card's YAML.
+              {tx('pasteTheCardSYaml')}
             </Typography>
-            <HelpTip title="Every block needs a source line naming the table or figure it was transcribed from. A value the datasheet does not publish stays out — the loss model says so rather than guessing." />
+            <HelpTip title={tx('everyBlockNeedsASourceLine')} />
           </Box>
           <TextField multiline minRows={18} fullWidth value={yaml}
             onChange={(e) => setYaml(e.target.value)}
@@ -175,7 +181,7 @@ const DeviceCatalog: React.FC<Props> = ({ devices, selected, onSelect, onChanged
           {err && <Typography sx={{ fontSize: 12, color: '#fca5a5', mt: 1 }}>{err}</Typography>}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setAdding(false)}>Cancel</Button>
+          <Button onClick={() => setAdding(false)}>{tx('cancel')}</Button>
           <Button variant="contained" disabled={busy} onClick={() => void save()}>
             {busy ? 'Saving…' : 'Save card'}</Button>
         </DialogActions>

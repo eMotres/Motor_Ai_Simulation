@@ -1,0 +1,10 @@
+{
+  "controller": {
+    "theInverterThatDrivesThis": "The inverter that drives this motor: which device, how many in parallel per switch, how the bridges map onto the winding's coils, and what that costs in watts and junction temperature. The PWM drive is defined HERE — carrier, DC link, dead time — and every coupled run, loss map and report reads it from here. The operating point (current, power, shaft efficiency) comes from the loaded duty's own record.",
+    "theVendorModelWasChecked": "The vendor model was checked against this part's own datasheet at the datasheet's test points (double pulse, same circuit, same integration windows). It is used as is — a vendor model is never tuned — and this line says by how much its worst switching energy differs.",
+    "windSpeedAmbientAirAnd": "Wind speed / ambient (air) and coolant / flow / inlet (liquid) inherit the Thermal tab's own settings by default, per mode — the same air or coolant the housing sits in, set once. Type a value to override just that field; the ↺ next to an overridden field resets it back to Thermal.",
+    "theVendorSpiceModelAgainst": "The vendor SPICE model against this part's own datasheet at its test points: the worst switching-energy deviation. Owner 2026-09-27: every motor runs on SPICE uniformly, so the model is used as is — never tuned — and this line says how far it is from the datasheet.",
+    "drawnFromTheChosenTopology": "Drawn from the chosen topology and the winding builder's own coils, so it cannot disagree with the numbers. ×N on a switch is the parallel device count.",
+    "oneRowPerCoilWhich": "One row per coil: which bridge and which leg drives it. Written as BRIDGE/LEG (e.g. INV1/A, HB3/P). Every coil must be assigned exactly once — the backend refuses anything else by coil number."
+  }
+}

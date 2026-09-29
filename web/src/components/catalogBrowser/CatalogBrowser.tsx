@@ -23,6 +23,11 @@ import {
   sourceHref, toggleCompare,
   type CardEnvelope, type CardSummary, type CatalogKind,
 } from './catalogLogic';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/motors.json (docs/I18N.md).
+const tx = nsT('motors');
 
 const TH = { fontSize: 11, color: 'var(--text-3)', whiteSpace: 'nowrap' } as const;
 const TD = { fontSize: 12, color: 'var(--text-1)', fontFamily: 'monospace', whiteSpace: 'nowrap' } as const;
@@ -103,6 +108,7 @@ const CatalogBrowser: React.FC<CatalogBrowserProps> = ({
   kinds, title, help, selectedId, rowAction, extraColumn, visibleIds,
   headerExtras, reloadKey = 0,
 }) => {
+  useTranslation('motors'); // re-render on language change; lazy-loads the namespace
   const [kind, setKind] = useState<CatalogKind>(kinds[0]);
   const [cards, setCards] = useState<CardSummary[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -162,25 +168,25 @@ const CatalogBrowser: React.FC<CatalogBrowserProps> = ({
       </Box>
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-        <TextField size="small" placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)}
+        <TextField size="small" placeholder={tx('search')} value={q} onChange={(e) => setQ(e.target.value)}
           sx={{ ...SMALL, minWidth: 180 }} />
-        <HelpTip title="Every word must match: id, part number, maker, description or type." />
-        <TextField select size="small" label="Maker" value={maker} onChange={(e) => setMaker(e.target.value)} sx={SMALL}>
+        <HelpTip title={tx('everyWordMustMatchIdPart')} />
+        <TextField select size="small" label={tx('maker')} value={maker} onChange={(e) => setMaker(e.target.value)} sx={SMALL}>
           <MenuItem value="" sx={{ fontSize: 12 }}>any</MenuItem>
           {facet(ok, 'manufacturer').map((m) => <MenuItem key={m} value={m} sx={{ fontSize: 12 }}>{m}</MenuItem>)}
         </TextField>
-        <TextField select size="small" label="Status" value={status} onChange={(e) => setStatus(e.target.value)} sx={SMALL}>
+        <TextField select size="small" label={tx('status')} value={status} onChange={(e) => setStatus(e.target.value)} sx={SMALL}>
           <MenuItem value="" sx={{ fontSize: 12 }}>any</MenuItem>
           {facet(ok, 'status').map((m) => <MenuItem key={m} value={m} sx={{ fontSize: 12 }}>{m}</MenuItem>)}
         </TextField>
         <HelpTip title="validated = checked against a measurement; active = in use, datasheet-based; draft = not reviewed; deprecated = kept for old machines." />
-        <TextField select size="small" label="Type" value={type} onChange={(e) => setType(e.target.value)} sx={SMALL}>
+        <TextField select size="small" label={tx('type')} value={type} onChange={(e) => setType(e.target.value)} sx={SMALL}>
           <MenuItem value="" sx={{ fontSize: 12 }}>any</MenuItem>
           {facet(ok, 'type').map((m) => <MenuItem key={m} value={m} sx={{ fontSize: 12 }}>{m}</MenuItem>)}
         </TextField>
         <Button size="small" variant="outlined" disabled={cmp.length < 2} onClick={() => void openCompare()}
           sx={{ textTransform: 'none', fontSize: 11 }}>Compare {cmp.length ? `(${cmp.length})` : ''}</Button>
-        <HelpTip title="Tick 2–3 rows, then Compare: fields side by side, differences highlighted." />
+        <HelpTip title={tx('tick23RowsThenCompare')} />
       </Box>
 
       <Box sx={{ overflowX: 'auto' }}>
@@ -188,12 +194,12 @@ const CatalogBrowser: React.FC<CatalogBrowserProps> = ({
           columnGap: 1.5, alignItems: 'center', minWidth: 720 }}>
           {rowAction && <Typography sx={TH} />}
           <Typography sx={TH} />
-          <Typography sx={TH}>Part</Typography>
-          <Typography sx={TH}>Maker</Typography>
+          <Typography sx={TH}>{tx('part')}</Typography>
+          <Typography sx={TH}>{tx('maker')}</Typography>
           {cols.map(([k, h, u, tip]) => (
             <Tooltip key={k} title={tip}><Typography sx={{ ...TH, cursor: 'help' }}>{h}{u ? ` ${u}` : ''}</Typography></Tooltip>
           ))}
-          <Typography sx={TH}>Status</Typography>
+          <Typography sx={TH}>{tx('status')}</Typography>
           {extraColumn && <Box sx={TH}>{extraColumn.header}</Box>}
           {shown.map((c) => (
             <React.Fragment key={c.id}>
@@ -220,7 +226,7 @@ const CatalogBrowser: React.FC<CatalogBrowserProps> = ({
         </Box>
       </Box>
       {shown.length === 0 && !err && (
-        <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mt: 1 }}>No card matches.</Typography>)}
+        <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mt: 1 }}>{tx('noCardMatches')}</Typography>)}
       {broken.map((b) => (
         <Typography key={b.id} sx={{ fontSize: 11.5, color: '#fca5a5', mt: 1 }}>{b.id}: {b.error}</Typography>))}
       {err && <Typography sx={{ fontSize: 12, color: '#fca5a5', mt: 1 }}>{err}</Typography>}
@@ -238,8 +244,8 @@ const CatalogBrowser: React.FC<CatalogBrowserProps> = ({
           {open?.description && (
             <Typography sx={{ fontSize: 12, color: 'var(--text-2)', mb: 1 }}>{open.description}</Typography>)}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <SectionLabel sx={{ m: 0 }}>Sources</SectionLabel>
-            <HelpTip title="Where the numbers come from. A field without its own badge note is from the first source." />
+            <SectionLabel sx={{ m: 0 }}>{tx('sources')}</SectionLabel>
+            <HelpTip title={tx('whereTheNumbersComeFromA')} />
           </Box>
           {(open?.sources ?? []).map((s) => {
             const href = sourceHref(s);
@@ -255,8 +261,8 @@ const CatalogBrowser: React.FC<CatalogBrowserProps> = ({
           {!!open?.validation?.length && (
             <>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1.5 }}>
-                <SectionLabel sx={{ m: 0 }}>Validation</SectionLabel>
-                <HelpTip title="The card checked against a measurement or another source: reference, model, delta." />
+                <SectionLabel sx={{ m: 0 }}>{tx('validation')}</SectionLabel>
+                <HelpTip title={tx('theCardCheckedAgainstAMeasurement')} />
               </Box>
               {open.validation.map((v, i) => (
                 <Typography key={i} sx={{ fontSize: 12, color: 'var(--text-1)' }}>
@@ -270,16 +276,16 @@ const CatalogBrowser: React.FC<CatalogBrowserProps> = ({
             </>
           )}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1.5 }}>
-            <SectionLabel sx={{ m: 0 }}>Used by</SectionLabel>
-            <HelpTip title="Machine configurations (die / config) that name this card." />
+            <SectionLabel sx={{ m: 0 }}>{tx('usedBy')}</SectionLabel>
+            <HelpTip title={tx('machineConfigurationsDieConfigThatName')} />
           </Box>
           <Typography sx={{ fontSize: 12, color: 'var(--text-1)' }}>
             {usedBy == null ? '…' : usedBy.length === 0 ? 'no machine'
               : usedBy.map((m) => `${m.die} / ${m.config}${m.count > 1 ? ` ×${m.count}` : ''}`).join(' · ')}
           </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1.5 }}>
-            <SectionLabel sx={{ m: 0 }}>Fields</SectionLabel>
-            <HelpTip title="D datasheet · M measured · E estimate · ∂ derived · ⚠ to verify. Hover a badge for its note." />
+            <SectionLabel sx={{ m: 0 }}>{tx('fields')}</SectionLabel>
+            <HelpTip title={tx('dDatasheetMMeasuredEEstimate')} />
           </Box>
           <Box sx={{ display: 'grid', gridTemplateColumns: 'auto auto 1fr', columnGap: 1.5, rowGap: 0.25 }}>
             {open && flattenBody(open.body).filter(([k]) => !['description'].includes(k)).map(([k, v]) => (
@@ -295,12 +301,12 @@ const CatalogBrowser: React.FC<CatalogBrowserProps> = ({
           {open?.file && (
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mt: 1.5 }}>file: {open.file}</Typography>)}
         </DialogContent>
-        <DialogActions><Button onClick={() => setOpen(null)}>Close</Button></DialogActions>
+        <DialogActions><Button onClick={() => setOpen(null)}>{tx('close')}</Button></DialogActions>
       </Dialog>
 
       {/* ── compare ── */}
       <Dialog open={!!compare} onClose={() => setCompare(null)} maxWidth="lg" fullWidth>
-        <DialogTitle sx={{ fontSize: 15 }}>Compare</DialogTitle>
+        <DialogTitle sx={{ fontSize: 15 }}>{tx('compare')}</DialogTitle>
         <DialogContent dividers>
           {compare && (
             <Box sx={{ display: 'grid', gridTemplateColumns: `auto repeat(${compare.length}, 1fr)`,
@@ -322,7 +328,7 @@ const CatalogBrowser: React.FC<CatalogBrowserProps> = ({
             </Box>
           )}
         </DialogContent>
-        <DialogActions><Button onClick={() => setCompare(null)}>Close</Button></DialogActions>
+        <DialogActions><Button onClick={() => setCompare(null)}>{tx('close')}</Button></DialogActions>
       </Dialog>
     </Paper>
   );

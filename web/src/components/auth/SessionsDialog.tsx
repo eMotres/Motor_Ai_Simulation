@@ -12,6 +12,11 @@ import {
 import {
   listMySessions, revokeMySession, type SessionRow,
 } from '../../lib/localAuth';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/common.json (docs/I18N.md).
+const tx = nsT('common');
 
 const when = (s?: number | null) =>
   (s ? new Date(s * 1000).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '—');
@@ -32,6 +37,7 @@ export function shortUA(ua: string): string {
 
 const SessionsDialog: React.FC<{ open: boolean; onClose: () => void; onSignedOut: () => void }> =
   ({ open, onClose, onSignedOut }) => {
+  useTranslation('common'); // re-render on language change; lazy-loads the namespace
     const [rows, setRows] = useState<SessionRow[]>([]);
     const [current, setCurrent] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
@@ -76,11 +82,11 @@ const SessionsDialog: React.FC<{ open: boolean; onClose: () => void; onSignedOut
           <Table size="small" sx={{ '& td, & th': { fontSize: 12 } }}>
             <TableHead>
               <TableRow>
-                <TableCell>Browser</TableCell>
-                <TableCell>Signed in</TableCell>
-                <TableCell>Last seen</TableCell>
-                <TableCell>Expires</TableCell>
-                <TableCell>How</TableCell>
+                <TableCell>{tx('browser')}</TableCell>
+                <TableCell>{tx('signedIn')}</TableCell>
+                <TableCell>{tx('lastSeen')}</TableCell>
+                <TableCell>{tx('expires')}</TableCell>
+                <TableCell>{tx('how')}</TableCell>
                 <TableCell align="right" />
               </TableRow>
             </TableHead>
@@ -92,7 +98,7 @@ const SessionsDialog: React.FC<{ open: boolean; onClose: () => void; onSignedOut
                       <span>{shortUA(r.userAgent)}</span>
                     </Tooltip>
                     {r.sid === current && (
-                      <Chip label="this one" size="small" sx={{ ml: 0.75, height: 16, fontSize: 9 }} />
+                      <Chip label={tx('thisOne')} size="small" sx={{ ml: 0.75, height: 16, fontSize: 9 }} />
                     )}
                   </TableCell>
                   <TableCell>{when(r.created)}</TableCell>
@@ -101,11 +107,11 @@ const SessionsDialog: React.FC<{ open: boolean; onClose: () => void; onSignedOut
                   <TableCell>{r.loginMethod}</TableCell>
                   <TableCell align="right">
                     {r.revoked
-                      ? <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>revoked</Typography>
+                      ? <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>{tx('revoked')}</Typography>
                       : (
                         <Button size="small" disabled={busy} onClick={() => void revoke(r.sid)}
                           sx={{ textTransform: 'none', fontSize: 11, minWidth: 0 }}>
-                          Revoke
+                          {tx('revoke')}
                         </Button>
                       )}
                   </TableCell>
@@ -114,7 +120,7 @@ const SessionsDialog: React.FC<{ open: boolean; onClose: () => void; onSignedOut
               {rows.length === 0 && !busy && (
                 <TableRow>
                   <TableCell colSpan={6} sx={{ textAlign: 'center', color: 'var(--text-4)', py: 2 }}>
-                    No sessions recorded yet.
+                    {tx('noSessionsRecordedYet')}
                   </TableCell>
                 </TableRow>
               )}
@@ -125,9 +131,9 @@ const SessionsDialog: React.FC<{ open: boolean; onClose: () => void; onSignedOut
           <Box sx={{ flex: 1 }} />
           <Button onClick={() => void signOutEverywhere()} disabled={busy}
             sx={{ textTransform: 'none', color: '#f87171' }}>
-            Sign out everywhere
+            {tx('signOutEverywhere')}
           </Button>
-          <Button onClick={onClose} sx={{ textTransform: 'none' }}>Close</Button>
+          <Button onClick={onClose} sx={{ textTransform: 'none' }}>{tx('close')}</Button>
         </DialogActions>
       </Dialog>
     );

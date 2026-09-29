@@ -29,6 +29,11 @@ import { dieKeyLabel } from '../../lib/releasedContext';
 import { openGeometryHelpWindow } from '../../lib/geometryHelpWindow';
 import { useWireStock } from '../materials/useWireStock';
 import { stockHint } from '../../lib/wireStock';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/geometry.json (docs/I18N.md).
+const tx = nsT('geometry');
 
 const numFieldSx = {
   width: '100%',   // fill the fixed-width value column → values line up vertically
@@ -130,6 +135,7 @@ const ParamValueField: React.FC<ParamValueFieldProps> = ({
 const FAMILY_API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 const ParameterVariationTable: React.FC = () => {
+  useTranslation('geometry'); // re-render on language change; lazy-loads the namespace
   const [dialogOpen, setDialogOpen] = useState(false);
 
   // Locks of the ACTIVE die/configuration: with the die locked only the
@@ -348,7 +354,7 @@ const ParameterVariationTable: React.FC = () => {
         >
           Add
         </Button>
-        <Tooltip title="Reload schema from API">
+        <Tooltip title={tx('reloadSchemaFromApi')}>
           <IconButton
             size="small"
             onClick={fetchSchemaFromApi}
@@ -497,7 +503,7 @@ const ParameterVariationTable: React.FC = () => {
                       <Typography noWrap sx={{ fontSize: '0.62rem', color: '#f59e0b' }}>
                         {wireStockNote}
                       </Typography>
-                      <HelpTip title="Compared against the flat wire physically on the shelf (Materials tab → Flat wire in stock). Not enforced yet." />
+                      <HelpTip title={tx('comparedAgainstTheFlatWirePhysically')} />
                     </Box>
                   )}
                 </Box>

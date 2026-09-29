@@ -107,14 +107,38 @@ job-queue rows get a Stop button.
 
 `GET /api/admin/load/live` also returns `nodes_now` (id, name, status,
 `cores` — threads, `cores_physical`, `cpu` now, `mem_total`), the per-server
-snapshot the "CPU % / RAM % per server" chart's legend/tooltip and the
-compact strip above it use for "eu1 (16 threads / 8 cores)" labels and
-"threads used" (`cores × CPU % / 100`); `cores_physical` is `null` for an
-older node agent or a host whose `/proc/cpuinfo` lacks physical/core ids.
-CPU and RAM are drawn as separate Lines per server (CPU solid, RAM dashed,
-one colour per server) plus `cluster_cpu`/`cluster_mem` dashed grey means —
-`nodes.<id>` history and `nodes_now` were always both there, the earlier
-panel simply never drew a RAM Line at all.
+snapshot the panel's legend/tooltips and the compact strip above the charts
+use for "eu1 (16 threads / 8 cores)" labels and "threads used"
+(`cores × CPU % / 100`); `cores_physical` is `null` for an older node agent
+or a host whose `/proc/cpuinfo` lacks physical/core ids.
+
+**Layout** (owner feedback, "too grey/dull" -> three separate charts, a
+responsive grid, three across on wide screens and stacked on narrow):
+CPU % per server and RAM % per server are now two separate gradient-filled
+area charts (one colour per server, shared between its CPU and RAM series;
+a dashed cluster-mean line in each), and CPU by user and process is its own
+stacked area chart. All three read `web/src/components/admin/LiveLoadPanel.tsx`
++ `liveLoadSeries.ts` (series shaping) + `liveLoadColors.ts` (colour).
+
+**Colour** (`liveLoadColors.ts`): built from the dataviz skill's validated
+categorical eight, re-checked with `validate_palette.js` against this app's
+own chart surfaces (`--panel-2`: `#ffffff` light / `#0b1220` dark, not the
+skill's generic ones) — all checks pass both modes. Users get 6 of the 8
+slots, hash-assigned (`hashSlot`: djb2 + a Thomas-Wang-style avalanche
+finalizer, needed because djb2's low bits alone are biased under a small
+modulo) so a user keeps the same colour across refreshes and reloads
+regardless of who else is in the current top-N. The other two slots are
+*reserved*, not hashed into: orange for the outside-app container family
+(one hue, hash-stable opacity per container — the "family is the signal,
+legend/tooltip carry the individual name" composite encoding the skill
+recommends past ~3 simultaneous series) and aqua for "host" — so a user's
+hash draw can never land on the same colour as the outside-app family. A new
+muted-warm pair (not one of the eight) is "app (idle/overhead)"; "other" (in
+either family) stays flat muted grey (`--text-4`). The panel requests
+`top=6` to match the 6-slot user palette exactly. A user with a currently
+running agent/MCP-submitted job gets a 🤖 marker in the legend/tooltip name
+(from the live queue snapshot, not per-minute history — an honest
+limitation).
 
 ## Usage accounting (machine time per client)
 

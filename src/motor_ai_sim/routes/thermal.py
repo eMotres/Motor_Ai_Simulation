@@ -3506,8 +3506,8 @@ def solve_thermal_field(
         Thermal tab no longer sends it (2026-09-26 — see THE HEAT PATH); it
         stays for the API and for reading duty records back.
 
-    THE HEAT PATH (``heat_path``, robotics only, 2026-09-26 — owner: «давай
-    упростим») replaces the tab's five mount fields with ONE choice, every
+    THE HEAT PATH (``heat_path``, robotics only, 2026-09-26 — owner: "let's
+    simplify") replaces the tab's five mount fields with ONE choice, every
     number behind it a stated default in ``cooling_models``:
 
       * ``housing`` — the stator OD sits in a housing: the outer film becomes a
@@ -3738,8 +3738,8 @@ def solve_thermal_field(
     # NEVER computed here (see `_em_loss_map`): a missing run is a 422, not a
     # solve started behind a temperature request.
     # ISOLATION from the electromagnetic solver's cross-run state (user
-    # 2026-09-07: "надо полностью разделить решатели ... чтобы они никак не
-    # пересекались").  Nothing under this call solves any more, but the
+    # 2026-09-07: "the solvers need to be fully separated ... so they never
+    # intersect in any way").  Nothing under this call solves any more, but the
     # ContextVar stays: the snapshot replay goes through the same field-view
     # machinery, and the one time this path published its state a full-ring eddy
     # field went into config/.warm_cache.npz, the next 1/2-sector sweep read it

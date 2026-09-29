@@ -106,11 +106,52 @@ empty-looking chart). The web panel never offers to stop a container — only
 job-queue rows get a Stop button.
 
 `GET /api/admin/load/live` also returns `nodes_now` (id, name, status,
-`cores` — threads, `cores_physical`, `cpu` now, `mem_total`), the per-server
-snapshot the panel's legend/tooltips and the compact strip above the charts
-use for "eu1 (16 threads / 8 cores)" labels and "threads used"
-(`cores × CPU % / 100`); `cores_physical` is `null` for an older node agent
-or a host whose `/proc/cpuinfo` lacks physical/core ids.
+`cores` — threads, `cores_physical`, `cpu` now, `mem_total`, `mem_used`), the
+per-server snapshot the panel's legend/tooltips and the compact strip above
+the charts use for "eu1 (16 threads / 8 cores)" labels, "threads used"
+(`cores × CPU % / 100`), and "23.4 / 62.7 GB (37 %)" RAM labels;
+`cores_physical` is `null` for an older node agent or a host whose
+`/proc/cpuinfo` lacks physical/core ids. `mem_used`/`mem_total` are both
+already in every sample the node agent has ever sent (`meminfo()`,
+unchanged since before this whole feature) — no node agent change or
+reinstall was needed to add `mem_used` to this response, only selecting an
+already-available field.
+
+**RAM in GB, not just %** (owner feedback): the chart tooltip derives GB
+from the node's CURRENT `mem_total` (total capacity essentially never
+changes between samples) times the stored history point's %, since only the
+percentage is kept per history point; the per-server strip uses real
+`mem_used`/`mem_total` bytes directly. Both share one format function
+(`ramLabel` in `liveLoadSeries.ts`) so the two always read identically. A
+regression from #61 — the tooltip looked servers up by the raw series key
+("eu1_cpu") instead of the parsed server id ("eu1"), so `nodeMeta` lookups
+silently always missed and every per-server tooltip fell back to a bare "%"
+with no GB/threads — is fixed and pinned by `parseServerSeriesKey`'s tests.
+
+**RAM visually distinct from CPU** (owner feedback: "memory looks the same
+colour as CPU"): investigated a genuinely separate per-server warm/cool hue
+family first; every attempt (a hand-picked cool set, a uniform hue rotation
+or blend of the master eight toward violet) failed `validate_palette.js`'s
+CVD gates once actually checked — warm hues in this palette cluster too
+tightly for even 2 members to clear the normal-vision floor, and rotation
+doesn't uniformly push hues toward "cool" (see the long comment above
+`RAM_ACCENT` in `liveLoadColors.ts`). Shipped instead, per the same
+request's own fallback: RAM keeps each server's exact identity hue (so
+still zero new categorical validation risk) but is drawn with a dashed
+stroke, a visibly hollower gradient, and a fixed violet/blue chart-chrome
+accent (grid, cluster-mean line) that carries no per-series identity — style
+plus a real hue difference in the chrome, not a second per-server palette.
+
+**Aligned x-axes**: all three charts share one `[now-range, now]` domain and
+tick set (`computeXAxis`), `type="number"` (not recharts' default
+"category", which spaces points by array index and would drift charts with
+different point counts apart even on the same domain), and identical
+margins/Y-axis width/plot-area height. Legends moved from recharts' built-in
+`<Legend>` (which lives inside the chart's SVG and shrinks the plot area by
+however many rows it wraps to) to a plain HTML `ChartLegend` rendered below
+each chart's fixed-height box — chart 3 has far more series than charts 1/2,
+so its in-SVG legend used to compress its plot shorter than the other two,
+misaligning the x-axis lines vertically.
 
 **Layout** (owner feedback, "too grey/dull" -> three separate charts, a
 responsive grid, three across on wide screens and stacked on narrow):

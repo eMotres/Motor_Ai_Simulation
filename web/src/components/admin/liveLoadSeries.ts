@@ -52,12 +52,46 @@ export function cpuTooltipValue(cpuPct: number, threads?: number): string {
   return used == null ? `${cpuPct.toFixed(1)} %` : `${cpuPct.toFixed(1)} % ≈ ${used.toFixed(1)} threads used`;
 }
 
-/** RAM % -> "9.0 % ≈ 1.4 / 16.0 GB" (tooltip value), or just the plain
- *  percentage if the node's total RAM is unknown. */
+const gbFmt = (bytes: number) => (bytes / 1024 ** 3).toFixed(1);
+
+/** "23.4 / 62.7 GB (37.0 %)" -- the shared RAM-in-GB format for both the
+ *  chart tooltip and the per-server strip's latest-value label (owner:
+ *  "Tooltip and the latest-value label show ..." -- same wording, same
+ *  format, one function). */
+function ramLabel(usedBytes: number, totalBytes: number): string {
+  const pct = totalBytes ? (100 * usedBytes) / totalBytes : 0;
+  return `${gbFmt(usedBytes)} / ${gbFmt(totalBytes)} GB (${pct.toFixed(1)} %)`;
+}
+
+/** RAM % (from history -- only the percentage is stored per point) -> the
+ *  shared GB label, using the node's CURRENT total RAM (nodes_now.mem_total;
+ *  total capacity essentially never changes between samples) to recover an
+ *  absolute GB figure -- or just the plain percentage if the node's total
+ *  RAM is unknown (no nodes_now entry yet). */
 export function memTooltipValue(memPct: number, memTotalBytes?: number): string {
   if (!memTotalBytes) return `${memPct.toFixed(1)} %`;
-  const totalGB = memTotalBytes / 1024 ** 3;
-  return `${memPct.toFixed(1)} % ≈ ${((totalGB * memPct) / 100).toFixed(1)} / ${totalGB.toFixed(1)} GB`;
+  return ramLabel((memTotalBytes * memPct) / 100, memTotalBytes);
+}
+
+/** RAM used/total (from nodes_now -- real bytes, not derived from a %) ->
+ *  the shared GB label for the per-server strip's live value, or "—" if
+ *  either figure is missing (older node agent / no sample yet). */
+export function ramNowLabel(usedBytes?: number, totalBytes?: number): string {
+  if (!usedBytes || !totalBytes) return '—';
+  return ramLabel(usedBytes, totalBytes);
+}
+
+/** `${id}_cpu` / `${id}_mem` -> `{ id, kind }`, or null for a key that isn't
+ *  a per-server series (e.g. `cluster_cpu`, a user name, a container name).
+ *  Used to look a server up in `nodeMeta` from a chart's `dataKey` -- a
+ *  regression here once silently broke every per-server tooltip/legend (the
+ *  lookup fell through to "unknown", so it quietly showed bare "%" with no
+ *  GB/threads and a raw "eu1_cpu" name instead of "eu1 (...) CPU"), which is
+ *  exactly why this parsing lives in one tested function instead of being
+ *  re-hand-rolled per chart. */
+export function parseServerSeriesKey(key: string): { id: string; kind: 'cpu' | 'mem' } | null {
+  const m = /^(.+)_(cpu|mem)$/.exec(key);
+  return m ? { id: m[1], kind: m[2] as 'cpu' | 'mem' } : null;
 }
 
 /** "cluster: 16 threads, 10.8 used" -- the cluster-total line above the
@@ -87,4 +121,30 @@ export function isCollectingHistory(seriesLength: number, monitoringSince: numbe
                                     now: number = Date.now() / 1000): boolean {
   if (seriesLength >= 3) return false;
   return monitoringSince != null && now - monitoringSince < 3600;
+}
+
+//: range label -> lookback seconds. Mirrors cluster_monitor.RANGE_LOOKBACK_S
+// (kept as a separate frontend constant, same values, since the two never
+// need to change in lock-step and importing across the Python/TS boundary
+// isn't a thing here).
+export const RANGE_LOOKBACK_S: Record<'15m' | '1h' | '24h' | '7d', number> = {
+  '15m': 900, '1h': 3600, '24h': 86400, '7d': 7 * 86400,
+};
+
+export interface XAxisSpec { domain: [number, number]; ticks: number[] }
+
+/** The ONE [now-range, now] domain + tick set shared by all three live-load
+ *  charts (owner: "the three charts... must have... the same time ticks;
+ *  the same time domain must be shared by all three"). Computed once, fed
+ *  identically to every chart's XAxis (`type="number"`, not the default
+ *  "category" -- category spacing is by array index, so charts with a
+ *  different point count would drift apart even with the same domain).
+ *  `tickCount` >= 2; interior ticks are evenly spaced, domain ends always
+ *  included exactly (so "now" and "range ago" both always land on a tick). */
+export function computeXAxis(range: keyof typeof RANGE_LOOKBACK_S, now: number,
+                             tickCount = 5): XAxisSpec {
+  const start = now - RANGE_LOOKBACK_S[range];
+  const n = Math.max(2, Math.floor(tickCount));
+  const ticks = Array.from({ length: n }, (_, i) => Math.round(start + ((now - start) * i) / (n - 1)));
+  return { domain: [start, now], ticks };
 }

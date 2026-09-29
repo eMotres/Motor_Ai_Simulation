@@ -9,21 +9,38 @@
 // validated categorical eight (dataviz skill), split so users (6 slots,
 // hash-stable) can never collide with the reserved outside-app family
 // (orange = containers, aqua = host), plus one new muted-warm pair for
-// "app (idle/overhead)". Every colour comes from that module; nothing here
-// is a hand-picked hex.
+// "app (idle/overhead)". RAM keeps each server's identity hue but is styled
+// (dashed, hollower fill) and chrome-accented (violet grid/mean-line) to
+// read as visually distinct from CPU at a glance — see liveLoadColors.ts's
+// RAM_ACCENT comment for why that's a chrome accent and not a second
+// per-server hue family. Every colour comes from liveLoadColors.ts; nothing
+// here is a hand-picked hex.
+//
+// Axis alignment: all three charts share ONE [now-range, now] domain and
+// tick set (computeXAxis), an identical margin/Y-axis width, and an
+// identical fixed plot-area height. Legends are custom HTML rendered BELOW
+// each fixed-height chart box (not recharts' built-in <Legend>, which lives
+// INSIDE the chart's SVG and would shrink the plot area by however many
+// legend rows a chart happens to have — chart 3 has far more series than
+// charts 1/2, so its recharts-managed legend used to push its plot shorter
+// than the other two, misaligning the x-axes vertically).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Paper, Typography, ToggleButton, ToggleButtonGroup, Table, TableBody,
   TableCell, TableHead, TableRow, Button, useTheme } from '@mui/material';
 import {
   ResponsiveContainer, ComposedChart, AreaChart, Area, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip as RcTooltip, Legend,
+  Tooltip as RcTooltip,
 } from 'recharts';
 import HelpTip from '../common/HelpTip';
 import {
   mergeNodeSeries, mergeLoadSeries, isCollectingHistory, serverLabel, threadsUsed,
-  cpuTooltipValue, memTooltipValue, clusterLine,
+  cpuTooltipValue, memTooltipValue, ramNowLabel, parseServerSeriesKey, clusterLine,
+  computeXAxis, type XAxisSpec,
 } from './liveLoadSeries';
-import { serverColor, userColor, containerColor, hostColor, overheadColor, type Mode } from './liveLoadColors';
+import {
+  serverColor, userColor, containerColor, hostColor, overheadColor, RAM_ACCENT, RAM_GRID,
+  type Mode,
+} from './liveLoadColors';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
@@ -37,12 +54,22 @@ const STATUS_DOT: Record<string, string> = {
 const HOST_KEY = 'host';
 const OUTSIDE_OTHER_KEY = 'outside-other';
 const MUTED = 'var(--text-4)';
+const NEUTRAL_GRID = 'var(--line-soft)';
+
+// Shared chart geometry -- identical on all three charts so their plot areas
+// (and therefore their x-axis lines and ticks) sit at the same pixel
+// position. See the file-header comment for why the legend lives outside
+// this box instead of inside the chart.
+const CHART_BOX_HEIGHT = 200;
+const CHART_MARGIN = { top: 8, right: 10, bottom: 4, left: 4 } as const;
+const Y_AXIS_WIDTH = 40;
+const X_TICK_COUNT = 5;
 
 type Range = '15m' | '1h' | '24h' | '7d';
 interface NodePoint { ts: number; cpu: number; mem: number }
 interface NodeNow {
   id: string; name: string; status: string; cores?: number; cores_physical?: number;
-  cpu?: number; mem_total?: number;
+  cpu?: number; mem_total?: number; mem_used?: number;
 }
 interface UserLoad { users: string[]; bucket_s: number; series: Record<string, number>[] }
 interface OutsideNow { node: string; name: string; cpu: number; mem: number; uptime_s: number | null }
@@ -61,6 +88,7 @@ interface LoadLive {
   user_load: UserLoad; outside_app: OutsideApp; snapshot: Snapshot;
   monitoring_since: number | null;
 }
+interface LegendItem { itemKey: string; label: string; color: string; dashed?: boolean; opacity?: number }
 
 const dur = (s?: number | null) => {
   if (!s || s <= 0) return '—';
@@ -87,13 +115,24 @@ const RANGES: { v: Range; label: string }[] = [
   { v: '24h', label: '24 h' }, { v: '7d', label: '7 d' },
 ];
 
-/** Vertical fill gradient, full-strength colour at the top fading toward the
- *  surface at the bottom -- the "filled with colour gradient" area look,
- *  shared by the CPU and RAM per-server charts. */
-const GradientDef: React.FC<{ id: string; color: string }> = ({ id, color }) => (
+/** Vertical fill gradient. CPU: full-strength colour at the top fading to
+ *  the surface at the bottom (a solid, filled look). RAM: a visibly
+ *  DIFFERENT, hollower shape -- lower peak opacity, stops pulled in from
+ *  the edges -- so the two charts don't read as the same fill style even
+ *  before a viewer clocks the dashed stroke or the violet chrome. */
+const GradientDef: React.FC<{ id: string; color: string; kind: 'cpu' | 'mem' }> = ({ id, color, kind }) => (
   <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-    <stop offset="5%" stopColor={color} stopOpacity={0.75} />
-    <stop offset="95%" stopColor={color} stopOpacity={0.06} />
+    {kind === 'cpu' ? (
+      <>
+        <stop offset="5%" stopColor={color} stopOpacity={0.75} />
+        <stop offset="95%" stopColor={color} stopOpacity={0.06} />
+      </>
+    ) : (
+      <>
+        <stop offset="15%" stopColor={color} stopOpacity={0.42} />
+        <stop offset="90%" stopColor={color} stopOpacity={0.04} />
+      </>
+    )}
   </linearGradient>
 );
 
@@ -101,6 +140,24 @@ const ChartHead: React.FC<{ title: string; help: string }> = ({ title, help }) =
   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, flexWrap: 'wrap' }}>
     <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{title}</Typography>
     <HelpTip title={help} />
+  </Box>
+);
+
+/** Custom legend, rendered BELOW the chart's fixed-height box instead of
+ *  recharts' built-in <Legend> (which lives inside the SVG and would eat
+ *  into the plot area — see the file-header comment). */
+const ChartLegend: React.FC<{ items: LegendItem[] }> = ({ items }) => (
+  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>
+    {items.map((it) => (
+      <Box key={it.itemKey} sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        {it.dashed ? (
+          <Box sx={{ width: 12, height: 0, borderTop: `2px dashed ${it.color}`, opacity: it.opacity ?? 1 }} />
+        ) : (
+          <Box sx={{ width: 9, height: 9, borderRadius: '2px', bgcolor: it.color, opacity: it.opacity ?? 1 }} />
+        )}
+        <Typography component="span" sx={{ fontSize: 10, color: 'var(--text-2)' }}>{it.label}</Typography>
+      </Box>
+    ))}
   </Box>
 );
 
@@ -148,6 +205,10 @@ const LiveLoadPanel: React.FC = () => {
     void load(range);
   };
 
+  // ONE shared time domain/tick set for all three charts (owner: "the same
+  // time domain must be shared by all three... the same time ticks").
+  const xSpec: XAxisSpec = computeXAxis(range, Date.now() / 1000, X_TICK_COUNT);
+
   const nodeIds = data ? Object.keys(data.nodes) : [];
   const cpuRam = mergeNodeSeries(data?.nodes ?? {});
   const nodesNow = data?.nodes_now ?? [];
@@ -157,18 +218,23 @@ const LiveLoadPanel: React.FC = () => {
   const serverLegendLabel = (id: string) =>
     serverLabel(id, { threads: nodeMeta[id]?.cores, cores: nodeMeta[id]?.cores_physical });
 
-  const cpuTooltip = (value: unknown, _name: unknown, entry: { dataKey?: unknown }) => {
+  // Regression note (see parseServerSeriesKey's own doc comment): a prior
+  // version looked nodeMeta up by the raw dataKey ("eu1_cpu") instead of the
+  // parsed server id ("eu1"), so this lookup was always a miss -- every
+  // per-server tooltip silently fell back to a bare "%" with no GB/threads.
+  const serverTooltip = (kind: 'cpu' | 'mem') => (value: unknown, _name: unknown, entry: { dataKey?: unknown }) => {
     const key = String(entry?.dataKey ?? '');
-    if (key === 'cluster_cpu') return [pctFmt(value), 'cluster CPU (mean)'];
-    const meta = nodeMeta[key];
-    return [cpuTooltipValue(Number(value), meta?.cores), `${serverLegendLabel(key)} CPU`];
+    if (key === `cluster_${kind}`) return [pctFmt(value), `cluster ${kind === 'cpu' ? 'CPU' : 'RAM'} (mean)`];
+    const parsed = parseServerSeriesKey(key);
+    const meta = parsed ? nodeMeta[parsed.id] : undefined;
+    const label = `${parsed ? serverLegendLabel(parsed.id) : key} ${kind === 'cpu' ? 'CPU' : 'RAM'}`;
+    const v = kind === 'cpu'
+      ? cpuTooltipValue(Number(value), meta?.cores)
+      : memTooltipValue(Number(value), meta?.mem_total);
+    return [v, label];
   };
-  const memTooltip = (value: unknown, _name: unknown, entry: { dataKey?: unknown }) => {
-    const key = String(entry?.dataKey ?? '');
-    if (key === 'cluster_mem') return [pctFmt(value), 'cluster RAM (mean)'];
-    const meta = nodeMeta[key];
-    return [memTooltipValue(Number(value), meta?.mem_total), `${serverLegendLabel(key)} RAM`];
-  };
+  const cpuTooltip = serverTooltip('cpu');
+  const memTooltip = serverTooltip('mem');
 
   const loadSeries = mergeLoadSeries(data?.user_load.series ?? [], data?.outside_app.series ?? []);
   const users = data?.user_load.users ?? [];
@@ -193,6 +259,24 @@ const LiveLoadPanel: React.FC = () => {
     return [pctFmt(value), userLegendLabel(key)];
   };
 
+  const cpuLegend: LegendItem[] = [
+    ...nodeIds.map((id) => ({ itemKey: id, label: `${serverLegendLabel(id)} CPU`, color: serverColor(id, mode) })),
+    { itemKey: 'cluster_cpu', label: 'cluster CPU (mean)', color: 'var(--text-2)', dashed: true },
+  ];
+  const ramLegend: LegendItem[] = [
+    ...nodeIds.map((id) => ({ itemKey: id, label: `${serverLegendLabel(id)} RAM`, color: serverColor(id, mode), opacity: 0.85 })),
+    { itemKey: 'cluster_mem', label: 'cluster RAM (mean)', color: RAM_ACCENT[mode], dashed: true },
+  ];
+  const loadLegend: LegendItem[] = [
+    ...users.map((u) => ({ itemKey: u, label: userLegendLabel(u), color: userColor(u, mode) })),
+    { itemKey: 'other', label: 'other', color: MUTED, opacity: 0.6 },
+    ...outsideKeys.map((k) => (k === HOST_KEY
+      ? { itemKey: k, label: outsideLabel(k, overheadKey), color: hostColor(mode) }
+      : { itemKey: k, label: outsideLabel(k, overheadKey), color: containerColor(k, mode).stroke })),
+    { itemKey: OUTSIDE_OTHER_KEY, label: 'outside app: other', color: MUTED, opacity: 0.5 },
+    ...(overheadKey ? [{ itemKey: overheadKey, label: 'app (idle/overhead)', color: overheadColor(mode), dashed: true }] : []),
+  ];
+
   return (
     <Paper elevation={0} sx={{ ...PANEL, p: 2, mt: 2 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
@@ -216,12 +300,12 @@ const LiveLoadPanel: React.FC = () => {
               <span>·</span>
               <span>{n.cores_physical ? `${n.cores_physical}c/${n.cores ?? '?'}t` : n.cores ? `${n.cores} threads` : '—'}</span>
               <span>·</span>
-              <span>{gb(n.mem_total)} GB</span>
-              <span>·</span>
               <span>{n.cpu != null ? `${n.cpu.toFixed(0)} %` : '—'}</span>
               {threadsUsed(n.cores, n.cpu ?? 0) != null && (
                 <span>({threadsUsed(n.cores, n.cpu ?? 0)!.toFixed(1)} thr used)</span>
               )}
+              <span>·</span>
+              <span>{ramNowLabel(n.mem_used, n.mem_total)}</span>
             </Box>
           ))}
           <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', ml: 'auto' }}>
@@ -234,21 +318,21 @@ const LiveLoadPanel: React.FC = () => {
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' }, gap: 2 }}>
         <Box>
           <ChartHead title="CPU % per server"
-            help="One colour per server (same colour as its dot in the strip above and its RAM chart), filled with a top-to-bottom gradient. Dashed grey = cluster mean." />
+            help="One colour per server (same colour as its dot in the strip above and its RAM chart), solid gradient fill. Dashed grey = cluster mean." />
           {collectingServers && data?.monitoring_since != null && (
             <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mb: 0.5 }}>collecting since {fmtHHMM(data.monitoring_since)}</Typography>
           )}
-          <Box sx={{ height: 220 }}>
+          <Box sx={{ height: CHART_BOX_HEIGHT }}>
             <ResponsiveContainer>
-              <ComposedChart data={cpuRam}>
+              <ComposedChart data={cpuRam} margin={CHART_MARGIN}>
                 <defs>
-                  {nodeIds.map((id) => <GradientDef key={id} id={`llp-cpu-grad-${id}`} color={serverColor(id, mode)} />)}
+                  {nodeIds.map((id) => <GradientDef key={id} id={`llp-cpu-grad-${id}`} color={serverColor(id, mode)} kind="cpu" />)}
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" />
-                <XAxis dataKey="ts" tickFormatter={fmt} tick={{ fontSize: 10 }} minTickGap={40} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" width={36} />
+                <CartesianGrid strokeDasharray="3 3" stroke={NEUTRAL_GRID} />
+                <XAxis dataKey="ts" type="number" domain={xSpec.domain} ticks={xSpec.ticks}
+                  tickFormatter={fmt} tick={{ fontSize: 10 }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" width={Y_AXIS_WIDTH} />
                 <RcTooltip labelFormatter={(v) => fmt(Number(v))} formatter={cpuTooltip} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
                 {nodeIds.map((id) => (
                   <Area key={id} type="monotone" dataKey={`${id}_cpu`} name={`${serverLegendLabel(id)} CPU`}
                     stroke={serverColor(id, mode)} fill={`url(#llp-cpu-grad-${id})`} strokeWidth={1.5}
@@ -259,35 +343,37 @@ const LiveLoadPanel: React.FC = () => {
               </ComposedChart>
             </ResponsiveContainer>
           </Box>
+          <ChartLegend items={cpuLegend} />
         </Box>
 
         <Box>
           <ChartHead title="RAM % per server"
-            help="Same server colours as the CPU chart, filled with a top-to-bottom gradient. Dashed grey = cluster mean." />
+            help="Same per-server colours as the CPU chart (so you can match a server across both), but styled differently on purpose: dashed outline, a hollower fill, and a violet grid/mean-line — so RAM never reads as 'the same chart' as CPU at a glance." />
           {collectingServers && data?.monitoring_since != null && (
             <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mb: 0.5 }}>collecting since {fmtHHMM(data.monitoring_since)}</Typography>
           )}
-          <Box sx={{ height: 220 }}>
+          <Box sx={{ height: CHART_BOX_HEIGHT }}>
             <ResponsiveContainer>
-              <ComposedChart data={cpuRam}>
+              <ComposedChart data={cpuRam} margin={CHART_MARGIN}>
                 <defs>
-                  {nodeIds.map((id) => <GradientDef key={id} id={`llp-ram-grad-${id}`} color={serverColor(id, mode)} />)}
+                  {nodeIds.map((id) => <GradientDef key={id} id={`llp-ram-grad-${id}`} color={serverColor(id, mode)} kind="mem" />)}
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" />
-                <XAxis dataKey="ts" tickFormatter={fmt} tick={{ fontSize: 10 }} minTickGap={40} />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" width={36} />
+                <CartesianGrid strokeDasharray="3 3" stroke={RAM_GRID[mode]} />
+                <XAxis dataKey="ts" type="number" domain={xSpec.domain} ticks={xSpec.ticks}
+                  tickFormatter={fmt} tick={{ fontSize: 10 }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" width={Y_AXIS_WIDTH} />
                 <RcTooltip labelFormatter={(v) => fmt(Number(v))} formatter={memTooltip} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
                 {nodeIds.map((id) => (
                   <Area key={id} type="monotone" dataKey={`${id}_mem`} name={`${serverLegendLabel(id)} RAM`}
-                    stroke={serverColor(id, mode)} fill={`url(#llp-ram-grad-${id})`} strokeWidth={1.5}
+                    stroke={serverColor(id, mode)} strokeDasharray="5 3" fill={`url(#llp-ram-grad-${id})`} strokeWidth={1.5}
                     dot={false} isAnimationActive={false} />
                 ))}
-                <Line type="monotone" dataKey="cluster_mem" name="cluster RAM (mean)" stroke="var(--text-2)"
+                <Line type="monotone" dataKey="cluster_mem" name="cluster RAM (mean)" stroke={RAM_ACCENT[mode]}
                   strokeDasharray="4 3" dot={false} isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </Box>
+          <ChartLegend items={ramLegend} />
         </Box>
 
         <Box>
@@ -301,14 +387,14 @@ const LiveLoadPanel: React.FC = () => {
           {collecting && data?.monitoring_since != null && (
             <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mb: 0.5 }}>collecting since {fmtHHMM(data.monitoring_since)}</Typography>
           )}
-          <Box sx={{ height: 220 }}>
+          <Box sx={{ height: CHART_BOX_HEIGHT }}>
             <ResponsiveContainer>
-              <AreaChart data={loadSeries}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" />
-                <XAxis dataKey="ts" tickFormatter={fmt} tick={{ fontSize: 10 }} minTickGap={40} />
-                <YAxis tick={{ fontSize: 10 }} unit="%" width={36} />
+              <AreaChart data={loadSeries} margin={CHART_MARGIN}>
+                <CartesianGrid strokeDasharray="3 3" stroke={NEUTRAL_GRID} />
+                <XAxis dataKey="ts" type="number" domain={xSpec.domain} ticks={xSpec.ticks}
+                  tickFormatter={fmt} tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} unit="%" width={Y_AXIS_WIDTH} />
                 <RcTooltip labelFormatter={(v) => fmt(Number(v))} formatter={loadTooltip} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
                 {[...users, 'other'].map((u) => {
                   const color = u === 'other' ? MUTED : userColor(u, mode);
                   return (
@@ -340,6 +426,7 @@ const LiveLoadPanel: React.FC = () => {
               </AreaChart>
             </ResponsiveContainer>
           </Box>
+          <ChartLegend items={loadLegend} />
         </Box>
       </Box>
 

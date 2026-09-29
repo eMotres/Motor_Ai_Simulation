@@ -4,8 +4,8 @@
  * Transient panel far down the page; a running solve must be visible without
  * scrolling).
  *
- * Generalised out of `simulation/SolveProgressStrip` on 2026-09-07 — "нужно
- * сделать прогресс бар в Mechanical и Thermal так же, как в Simulation".  Same
+ * Generalised out of `simulation/SolveProgressStrip` on 2026-09-07 — "we need
+ * a progress bar in Mechanical and Thermal, same as in Simulation".  Same
  * bar, same look, different endpoint: every progress route returns the same
  * shape, so the only per-tab knowledge is the URL and the words.
  *
@@ -161,8 +161,8 @@ const SolveProgressStrip: React.FC<SolveProgressStripProps> = ({
           {(() => {
             // A voltage/PWM run marches settling periods before the reported
             // one, so its total is bigger than the panel's steps/period — a
-            // bare "432 points" over a 144-step panel reads as a bug ("что за
-            // хрень", 2026-08-31).  The BACKEND now says how the total is made
+            // bare "432 points" over a 144-step panel reads as a bug ("what the
+            // hell is this", 2026-08-31).  The BACKEND now says how the total is made
             // up, because it is the only thing that knows: under the PWM
             // mixed-resolution schedule the settle marches coarse and the
             // reported window fine, so the old "total / 3" arithmetic here was

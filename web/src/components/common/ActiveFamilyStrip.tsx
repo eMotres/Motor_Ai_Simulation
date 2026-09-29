@@ -34,7 +34,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 /** The efficiency a duty is SAVED with — the one the summary card shows.
  *
- * User 2026-09-11: *"почему у нас сохраняется другая цифра?"* — the card read
+ * User 2026-09-11: *"why is a different number being saved?"* — the card read
  * 98.46 % and the catalog row 98.73 %, and the row was wrong twice over:
  *
  *   1. it saved the ELECTROMAGNETIC efficiency, while the standing rule
@@ -330,8 +330,8 @@ const ActiveFamilyStrip: React.FC = () => {
       // motor.  It used to be the rotor T·ω alone, so the catalog row printed
       // 496.8 kW beside a loss column that already included the 1.3 kW of
       // friction and a shaft efficiency — three numbers that did not agree
-      // with each other or with the card (user 2026-09-13: "почему разные
-      // значения, я только что сохранил мотор").  One efficiency, at the
+      // with each other or with the card (user 2026-09-13: "why different
+      // values, I just saved the motor").  One efficiency, at the
       // shaft (2026-09-09) — and one power to go with it.  Unknown mechanical
       // loss (no bearings named) leaves the rotor number, as the card does.
       const PmW = ((): number => {
@@ -356,19 +356,19 @@ const ActiveFamilyStrip: React.FC = () => {
         } catch { /* the signature is a staleness hint, never a blocker */ }
         dutyBody.torque_nm = Tn || undefined;
         dutyBody.power_kw = PmW / 1000 || undefined;
-        // COMPLETE computed state rides the duty (user: "это всё должно
-        // сохраняться"): the mesh the numbers were solved on + the raw
+        // COMPLETE computed state rides the duty (user: "all of this should
+        // be saved"): the mesh the numbers were solved on + the raw
         // summary (raw, not the 3D-scaled view — the display toggles
         // re-derive their corrections from it on load).
         try {
-          // EVERY panel setting (user: "сохранять всё что можно"): the full
+          // EVERY panel setting (user: "save everything that can be saved"): the full
           // mesh.* and sim.* localStorage state, keyed verbatim so restore is
           // a plain write-back.  Heavy result caches are excluded — they are
           // not settings.
           // runNonce is the RUN TRIGGER, not a setting: saving it and then
           // writing it back on load made the panel see a changed nonce and
-          // START A SOLVE BY ITSELF (user 2026-08-25: "кто опять включил
-          // расчёт?").  Result caches are excluded for the same "not a
+          // START A SOLVE BY ITSELF (user 2026-08-25: "who turned on the
+          // computation again?").  Result caches are excluded for the same "not a
           // setting" reason.
           const SKIP = new Set(['sim.lastTransient', 'sim.lastSummary',
                                 'sim.viewSummary', 'sim.runNonce',
@@ -391,7 +391,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // ── the duty's MATERIALS ────────────────────────────────────────────────
       // A separate dict on the duty entry, NOT part of the mesh/settings block:
       // it is not a panel setting, it is what this duty is made of (user
-      // 2026-09-01: "все материалы, для каждого duty"), and it must be saved
+      // 2026-09-01: "all materials, for every duty"), and it must be saved
       // even when no matching run backs the click — the settings block is
       // written only on a matching run, and a material pick would otherwise
       // never reach the yaml.  A `null` entry is this duty SAYING "the
@@ -491,8 +491,8 @@ const ActiveFamilyStrip: React.FC = () => {
       } catch { /* memory is a convenience, never a blocker */ }
       let extra = rj && rj.renamed_to ? ` · renamed to ${rj.renamed_to}` : '';
       // ── THE CONTROLLER TAB'S OWN SETTINGS ride THIS save too ───────────────
-      // Owner 2026-09-22: *"при сохранении мотора текущий контроллер тоже
-      // должен сохраняться со всеми настройками"* — not only the Controller
+      // Owner 2026-09-22: *"when saving the motor, the current controller
+      // should also be saved with all its settings"* — not only the Controller
       // tab's own "Save settings" button.  The tab mirrors its current form
       // (device, topology, mapping, N parallel per bridge, R_g, dead time,
       // carrier, DC link, cooling, couple-with-EM) to `localStorage` under
@@ -629,8 +629,8 @@ const ActiveFamilyStrip: React.FC = () => {
       setMsg(`✗ ${m}`);
       // A BUILD clash is not a dead end — it means "this is a different
       // product".  Offer the one legal way forward right here (user
-      // 2026-08-25, third time hitting the wall: "эта проблема уже была,
-      // нужно решить её"): a new configuration under the same die, built
+      // 2026-08-25, third time hitting the wall: "this problem happened before,
+      // it needs to be solved"): a new configuration under the same die, built
       // from the machine on screen.
       setBuildClash(m.includes('cannot carry its own geometry')
                     || m.includes('build differs from configuration'));

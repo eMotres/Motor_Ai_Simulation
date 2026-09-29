@@ -58,8 +58,8 @@ The current application (https://aerostator.com) already provides:
 - an **MCP server** so AI agents can drive the same workflows as people
   (see `docs/MCP_2026-09-28.md`).
 
-Results have been cross-checked against commercial FEM tools; on a 200 mm
-machine the torque agrees within 0.12 % and losses within 3 %.
+Results are validated against measurements; cross-checks against independent
+tools are kept private.
 
 ## Principles
 
@@ -69,7 +69,7 @@ machine the torque agrees within 0.12 % and losses within 3 %.
 2. **Provenance on every number.** Module and version, geometry hash, solver
    commit, mesh, source data. A result without its origin is not a result.
 3. **Validation against measurements.** Models are checked against test-bench
-   data and reference tools; the error is recorded and shown next to the result.
+   data; the error is recorded and shown next to the result.
 4. **Open contracts.** Ports, module manifests, card formats and result formats
    are public, versioned and documented.
 5. **Vendor IP is respected.** A vendor can join with a black-box module —

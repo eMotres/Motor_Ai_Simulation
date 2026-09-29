@@ -1,7 +1,7 @@
 """The EM ↔ thermal ORCHESTRATOR — /api/coupled.
 
-WHY A THIRD ROUTER (user, 2026-09-08: *"не надо всё смешивать, нужен
-оркестратор"* and *"чтобы можно было его включать и отключать"*)
+WHY A THIRD ROUTER (user, 2026-09-08: *"don't mix everything together, we
+need an orchestrator"* and *"so it can be turned on and off"*)
 =========================================================================
 The Electromagnetic solve needs two temperatures it cannot compute — the copper's
 (``coil_temp_c``, through ρ_Cu(T)) and the magnet's (``magnet_temp_c``, through
@@ -37,9 +37,9 @@ the magnet MAXIMUM is carried in the history for the demagnetisation check and i
 deliberately NOT fed back — a knee check is about the hottest element, a Br is
 about the body.
 
-THE THIRD TEMPERATURE (2026-09-08).  User: *"когда запускается каплинг, должно
-решаться всё моделирование, и все потери должны передаваться в электромагнитный
-расчёт"*.  The bearings and the rotor windage are ANALYTIC — the SKF frictional
+THE THIRD TEMPERATURE (2026-09-08).  User: *"when the coupling runs, the
+whole simulation should be solved, and all the losses should be passed into
+the electromagnetic calculation"*.  The bearings and the rotor windage are ANALYTIC — the SKF frictional
 moment and Couette/disc drag (``motor_ai_sim.bearings``) — and they are a
 temperature-dependent loss like any other: M_rr goes as ν^0.6, and grease quoted
 at 40 °C running at 90 °C is a factor of two on the rolling term.  So each pass
@@ -499,7 +499,7 @@ def _magnet_reference_temp_c() -> Optional[float]:
 # its answer and a duty re-solved on ``pwm`` gives the same numbers it always
 # did.  ``"inverter"`` used to be an ALIAS of ``"pwm"``; it now means the
 # Controller, which is the one place a PWM excitation is described from here on
-# (owner: *«всё будет задаваться в меню Controller»*).
+# (owner: *"everything will be set in the Controller menu"*).
 _DRIVE_ALIASES = {"": "current", "sine": "current", "sinusoid": "current",
                   "current": "current", "pwm": "pwm", "pwm_voltage": "pwm",
                   "ideal_pwm": "pwm",
@@ -543,9 +543,9 @@ def _coupled_drive(body: Dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 # WHAT THE LOOP IS ASKED FOR — the steady state, or the limits
 # ---------------------------------------------------------------------------
-# Owner, 2026-09-18: *«надо сделать выбор — или считать до конца стабилизации
-# температуры, или считать до лимитов и находить время работы при заданных
-# условиях»*.  So it is a CHOICE and not a rule the backend applies by itself:
+# Owner, 2026-09-18: *"we need to make a choice — either solve until the
+# temperature fully stabilizes, or solve to the limits and find the runtime
+# under the given conditions"*.  So it is a CHOICE and not a rule the backend applies by itself:
 #
 #   ``steady``      (the default, and byte-identical to every record ever
 #                   written) iterate until the winding, the magnets and the
@@ -554,8 +554,8 @@ def _coupled_drive(body: Dict[str, Any]) -> str:
 #   ``limits``      stop at the FIRST limit any part reaches and report the
 #                   machine AT THAT MOMENT, with the time it took to get there
 #                   from cold.
-#   ``continuous``  (owner 2026-09-21: *«давай сделаем кнопку, или лучше
-#                   добавим ещё один элемент в меню»*, on the same selector) —
+#   ``continuous``  (owner 2026-09-21: *"let's make a button, or better add
+#                   one more menu item"*, on the same selector) —
 #                   run the loop exactly as ``limits`` does (same stop rule, no
 #                   extra electromagnetic passes beyond what ``limits`` costs),
 #                   then, from that converged/limited pass's own loss map and

@@ -218,6 +218,9 @@ class JobRecord:
     position: int = 0
     #: Arrival order within this process — the FIFO half of the ordering.
     seq: int = 0
+    #: Where it ran: ``""`` = this platform, else a user-owned compute node id
+    #: (``compute_nodes``, docs/BYO_COMPUTE.md).
+    node: str = ""
 
     def to_json(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -233,6 +236,7 @@ class JobRecord:
         out["waited_s"] = round(
             (self.started_at or time.time()) - self.queued_at, 1
         ) if self.queued_at else 0.0
+        out["where"] = ("node:%s" % self.node) if self.node else "platform"
         return out
 
 
@@ -377,6 +381,9 @@ def new_run_id(prefix: str = "run") -> str:
 #: ``kind`` -> ``handler(body: dict) -> Any``.  A worker process that pulled a
 #: record off Redis has nothing but the record; this is how it finds the work.
 HANDLERS: "Dict[str, Callable[[Dict[str, Any]], Any]]" = {}
+#: ``compute_nodes.remote_router`` once that module is imported: called with a
+#: fresh record, returns True when the job went to one of the owner's nodes.
+REMOTE_ROUTER: "Optional[Callable[[JobRecord], bool]]" = None
 #: ``kind`` -> ``hook(run_id)``, called when a RUNNING job of that kind is
 #: cancelled.  The optimizer's subprocess killer and static3d's cancel flag hang
 #: here, so ``POST /api/jobs/{run_id}/cancel`` reaches them without this module
@@ -1061,6 +1068,11 @@ def run_job(kind: str, work: Callable[[], Any], *,
     if current_run_id() is not None:
         return work()
     rec = make_record(kind, priority=priority, run_id=run_id, body=body)
+    # BYO compute: a kind with a registered handler may go to the owner's own
+    # node instead (their routing preference decides).  Always 202 then: the
+    # answer comes back from another machine.
+    if REMOTE_ROUTER is not None and kind in HANDLERS and REMOTE_ROUTER(rec):
+        raise JobAccepted(rec)
     return queue().submit(rec, work, block=block)
 
 

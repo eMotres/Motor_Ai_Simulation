@@ -6,7 +6,7 @@
 # runs as an unprivileged user.  Outbound HTTPS only; no ports are opened.
 # Re-run to rotate the token or follow a platform upgrade.
 set -euo pipefail
-URL="" TOKEN="" REF="" REPO="https://github.com/eMotres/motor_ai_sim"
+URL="" TOKEN="" REF="" REPO="https://github.com/eMotres/Motor_Ai_Simulation"
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL="$2"; shift 2;;

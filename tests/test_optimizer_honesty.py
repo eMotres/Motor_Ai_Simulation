@@ -282,7 +282,7 @@ def test_surrogate_reads_topology_and_materials_from_the_design():
     finally:
         set_request_materials(None)
     assert src == de._ANCHOR_MAGNET
-    assert Br == pytest.approx(1.19, abs=1e-6)   # the old literal was 1.23
+    assert Br == pytest.approx(1.188, abs=1e-6)  # #51: Arnold N45SH (was 1.19; the old literal was 1.23)
     assert mu_rec == pytest.approx(1.05, abs=1e-3)
     assert sigma > 0
 

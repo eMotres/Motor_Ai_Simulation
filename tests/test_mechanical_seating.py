@@ -665,8 +665,11 @@ def test_the_g2_pocket_is_a_floor_a_wedge_and_a_tab():
 #: 2026-09-29: re-measured after the N52UH card moved to the Arnold G52UH
 #: sheet (density 7600, CTE 7 / -1): magnet 9.52 -> 9.68 MPa, open 0.919 ->
 #: 0.925, OD growth 4.07 -> 4.11 um; was rotor 19.42, sf 17.38 / 13.53, 5.84 um.
-G2_COLD = {"rotor_vm_p995": 19.51, "magnet_vm_p995": 9.68, "sf_min": 17.29,
-           "sf_min_unaveraged": 13.48,
+#: Integration 2026-09-29: the same PR then raised B15AHV950M yield 350 -> 460
+#: MPa (Baowu product sheet, 6b7852b) without re-pinning; the rotor governs, so
+#: sf_min 17.29 -> 22.74 and the unaveraged 13.48 -> 17.69 (x 460/350).
+G2_COLD = {"rotor_vm_p995": 19.51, "magnet_vm_p995": 9.68, "sf_min": 22.74,
+           "sf_min_unaveraged": 17.69,
            "open_fraction": 0.925, "od_growth_um": 4.11,
            "max_displacement_um": 5.86}
 

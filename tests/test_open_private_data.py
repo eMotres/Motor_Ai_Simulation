@@ -136,8 +136,8 @@ def api(sources, tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
-    U.create_user(ADMIN, "password-admin", tier="admin", name="Admin")
-    U.create_user(USER, "password-user", tier="free", name="User")
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
+    U.create_user(USER, "password-user", role="user", name="User")
 
     opened, closed = [], []
 

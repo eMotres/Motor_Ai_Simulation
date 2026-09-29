@@ -433,7 +433,10 @@ class TestLossHonestyReachesTheCard:
         ("PARALLEL" was the other half of this assertion until the user removed
         that wiring on 2026-09-08; the tile must not offer it any more.)"""
         src = self._summary_src()
-        i = src.index("wire_split", src.index("Stranded (copper)"))
+        # the label may be the literal or its i18n key (#53: tx('strandedCopper'))
+        anchor = ("Stranded (copper)" if "Stranded (copper)" in src
+                  else "tx('strandedCopper')")
+        i = src.index("wire_split", src.index(anchor))
         tip = src[i:i + 1600]
         assert "wire_split" in tip and "separate conductors" in tip
         assert "SERIES" in tip and "PARALLEL" not in tip

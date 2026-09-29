@@ -9798,7 +9798,7 @@ def _layers_words(wind: Dict[str, Any]) -> str:
     # The number and the word only.  The old gloss ("coils on alternate
     # teeth" / "every tooth wound") described a topology this field does not
     # select — the Ø200 winds every one of its 12 teeth and printed
-    # "alternate teeth" (user 2026-09-13: "выкинь это из отчёта").
+    # "alternate teeth" (user 2026-09-13: "throw that out of the report").
     if int(n) <= 1:
         return "1 — single-layer"
     return "%s — double-layer" % _fmt(n, 0)
@@ -9818,8 +9818,8 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
     return [
         ["Stator outer diameter", _f("stator_diameter"), "mm",
          "Slots / poles", "%d / %d" % _slots_poles(geo), ""],
-        # HOW THE SLOT IS ACTUALLY WOUND (user 2026-09-10: "не нашёл нигде, что
-        # витков 6 по 4 параллельных провода в каждом").  The turn count alone
+        # HOW THE SLOT IS ACTUALLY WOUND (user 2026-09-10: "couldn't find
+        # anywhere that it's 6 turns of 4 parallel wires each").  The turn count alone
         # does not describe the winding: each turn is `wire_parallel` strands in
         # hand, and `wire_split` cuts each strand into that many narrower strips
         # in SERIES.  All three are drawn and meshed, so they belong on the
@@ -9841,8 +9841,8 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
          else "none", "mm" if geo.get("sleeve_thickness") else "",
          "Series coils", _fmt(wind.get("n_series"), 0), ""],
         ["Rotor outer radius", _f("rotor_outer_radius", 2), "mm",
-         # coil grouping AND the terminal connection (user 2026-09-13: "нужно
-         # добавить соединение в отчёт") — "2P · Δ delta"
+         # coil grouping AND the terminal connection (user 2026-09-13: "need
+         # to add the connection to the report") — "2P · Δ delta"
          "Connection", "%s · %s" % (str(wind.get("connection") or "—"),
                                     _sd_words(wind, em)), ""],
         # THE SHAFT, from the keys this geometry actually has (2026-09-11).
@@ -9942,9 +9942,9 @@ def material_rows(mats: Dict[str, Any],
               else "hoop-wound carbon fibre" if mats.get("sleeve") else "")),
             ("Shaft", "shaft", ""),
     ):
-        # THE INSULATION IS ALWAYS ON THE PAGE (user 2026-09-11: "не нашёл ни
-        # одного слова по поводу изоляции — нужно это обязательно написать и в
-        # материалах отметить").  It used to be dropped whenever it was not
+        # THE INSULATION IS ALWAYS ON THE PAGE (user 2026-09-11: "couldn't
+        # find a single word about insulation — this absolutely needs to be
+        # written and noted in the materials").  It used to be dropped whenever it was not
         # assigned, which is every machine: the library's enamel and liner
         # entries are thermal-property cards and nobody picks one, so the two
         # rows never appeared — while the winding's whole temperature limit
@@ -9994,8 +9994,8 @@ def magnet_text(mats: Dict[str, Any], em: Dict[str, Any],
                 ctxs: Dict[str, Any]) -> str:
     """At what temperature the magnets were taken, and where that came from.
 
-    User 2026-09-11: *"надо также упомянуть, что для расчётов использовались
-    магниты при температуре 150 °C, если этого ещё нет"*.  The operating-point
+    User 2026-09-11: *"also need to mention that the magnets used for the
+    calculations were at a temperature of 150 °C, if that isn't there yet"*.  The operating-point
     table carries the number, but nothing said that the CARD is a 150 °C card
     and that the solve walks it to the run's own magnet temperature — two
     different temperatures, and the difference is a real Br.
@@ -10336,9 +10336,9 @@ MASS_TABLE_NOTE = (
 def lamination_rows(mats: Dict[str, Any], em: Dict[str, Any]) -> List[List[str]]:
     """How the iron is laminated and how the magnets are cut.  Header included.
 
-    User 2026-09-11: *"не нашёл в отчёте про ламинацию магнитов и её величину;
-    проверь ещё про ламинацию статора и ротора и что они сделаны из одного и
-    того же материала"*.  All three facts were in the solve and in none of the
+    User 2026-09-11: *"couldn't find the magnet lamination and its value in
+    the report; also check the stator and rotor lamination and that they're
+    made of the same material"*.  All three facts were in the solve and in none of the
     pages: the stacking factor scales the iron a flux path actually has, the
     sheet thickness is what sets the eddy term of the loss model, and the
     magnet slicing is a factor of ~50 on the magnet loss.

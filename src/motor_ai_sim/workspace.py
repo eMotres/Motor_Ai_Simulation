@@ -866,6 +866,9 @@ class Layer:
     #: The publishing identity — published layer only.
     owner: str = ""
     owner_id: str = ""
+    #: ``open`` / ``private`` for the two data-set layers under the shared
+    #: catalog (:mod:`motor_ai_sim.data_sources`); empty for every other layer.
+    source: str = ""
 
     @property
     def writable(self) -> bool:
@@ -912,7 +915,26 @@ def layers() -> list:
         out.append(Layer(LAYER_PUBLISHED, d, owner=_owner_email(d),
                          owner_id=d.name))
     out.append(Layer(LAYER_SHARED, Path(str(shared_root())) / "dies"))
+    out.extend(source_layers())
     return out
+
+
+def source_layers() -> list:
+    """The OPEN and PRIVATE data sets, below the shared catalog, private first.
+
+    They behave exactly like the shared catalog — read-only, copy-on-write on a
+    user's save.  Shared, open and private follow ONE precedence rule
+    (``catalog_sources``): a name in two of them is a clash that resolves to
+    none of them unless an override record picks one (``_catalog_ok``).
+
+    ON only with ``MOTOR_AI_SIM_DATA_SOURCES=1`` (set on the server): a suite
+    that builds its own layered sandbox must not see the repository's demo set.
+    """
+    from motor_ai_sim import data_sources as _ds
+    if not _ds.forced_on():
+        return []
+    _ds.scan()                    # logs any open/private clash, once
+    return [Layer(LAYER_SHARED, d, source=src) for src, d in _ds.source_dirs()]
 
 
 #: ``published/<ws_id>/.owner.json`` — who this namespace belongs to.  A file
@@ -982,6 +1004,7 @@ def iter_dies() -> list:
     seen = {}
     ws = workspace()
     tomb = _load_tombstones()          # one read, not one per shared die
+    rule = _catalog_rule()
     for lay in layers():
         try:
             entries = sorted(lay.dies_dir.iterdir())
@@ -991,6 +1014,8 @@ def iter_dies() -> list:
             if not dd.is_dir() or not (dd / "die.yaml").is_file():
                 continue
             if lay.name == LAYER_SHARED and dd.name in tomb:
+                continue
+            if not _catalog_ok(rule, lay, dd.name):
                 continue
             name = dd.name
             if lay.name == LAYER_PUBLISHED and lay.owner_id != ws.id:
@@ -1013,6 +1038,7 @@ def resolve_die_dir(die: str):
     want = str(die)
     ws = workspace()
     base, by = split_published_label(want)
+    rule = _catalog_rule()
     for lay in layers():
         if lay.name == LAYER_PUBLISHED and lay.owner_id != ws.id:
             # Another account's namespace answers to the decorated label only —
@@ -1024,9 +1050,27 @@ def resolve_die_dir(die: str):
             cand = lay.dies_dir / want
         if lay.name == LAYER_SHARED and is_tombstoned(cand.name):
             continue
-        if (cand / "die.yaml").is_file():
+        if (cand / "die.yaml").is_file() and _catalog_ok(rule, lay, cand.name):
             return cand
     return None
+
+
+def _catalog_rule():
+    """``data_sources.scan()`` when the shared catalog and the open/private
+    layers coexist (the catalog precedence rule applies), else ``None``."""
+    if not source_layers():
+        return None
+    from motor_ai_sim import data_sources as _ds
+    return _ds.scan()
+
+
+def _catalog_ok(rule, lay, name: str) -> bool:
+    """A die read from a CATALOG layer (shared / open / private) must be the
+    one the precedence rule resolves to — a clash resolves to none."""
+    if rule is None or lay.name != LAYER_SHARED:
+        return True
+    e = rule.get(name)
+    return bool(e and not e["clash"] and e["source"] == (lay.source or "shared"))
 
 
 def source_die_dir(die: str):
@@ -1040,6 +1084,7 @@ def source_die_dir(die: str):
     if not layering():
         return None
     ws = workspace()
+    rule = _catalog_rule()
     base, by = split_published_label(str(die))
     for lay in layers():
         if lay.name == LAYER_WORKSPACE:
@@ -1052,7 +1097,7 @@ def source_die_dir(die: str):
             cand = lay.dies_dir / str(die)
         if lay.name == LAYER_SHARED and is_tombstoned(cand.name):
             continue
-        if (cand / "die.yaml").is_file():
+        if (cand / "die.yaml").is_file() and _catalog_ok(rule, lay, cand.name):
             return cand
     return None
 

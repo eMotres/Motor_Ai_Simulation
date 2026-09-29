@@ -1,0 +1,26 @@
+name: L12
+role: motor
+created: '2026-09-29T12:00:00'
+geometry_overrides:
+  motor_length: 12
+  wire_width: 2
+  wire_height: 0.5
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.1
+  num_wires_per_slot: 6
+  wire_split: 1
+  insulation_thickness: 0.05
+winding: {}
+duties:
+- name: rated
+  mode: motor
+  current_arms: 30.0
+  rpm: 12000.0
+  gamma_deg: 10.0
+  note: demo duty
+  saved_at: '2026-09-29T12:00:00'
+materials:
+  magnet: N52UH_150C
+  stator_core: B15AHV950M
+  rotor_core: B15AHV950M
+die: Demo 30 · 12s-14p spindle

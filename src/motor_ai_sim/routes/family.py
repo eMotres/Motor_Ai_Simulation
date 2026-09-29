@@ -4217,8 +4217,8 @@ def set_battery(die: str, cfg: str, req: BatteryPatch,
 class ControllerCoolingSpec(BaseModel):
     """The Controller tab's MOSFET cooling row.
 
-    ``mode`` (owner 2026-09-22: *"надо добавить воздушное охлаждение и
-    скорость ветра, как в термосимуляции"*) picks which of the three
+    ``mode`` (owner 2026-09-22: *"need to add air cooling and wind speed,
+    like in the thermal simulation"*) picks which of the three
     ``inverter.losses.COOLING_MODES`` the fields below feed —
     ``None``/``"liquid"`` (the original, only-ever-existed-before coldplate:
     ``coolant``/``flow_lpm``/``t_in_c``), ``"air_forced"`` (a fan/slipstream:
@@ -4266,8 +4266,8 @@ class ControllerPatch(BaseModel):
     tier until the tab is saved with a number.  ``v_dc_V`` ``None`` means "the
     configuration's battery, nominal".
 
-    Owner 2026-09-22: *"при сохранении мотора текущий контроллер тоже должен
-    сохраняться со всеми настройками"* — saved WHOLE, the same footing as
+    Owner 2026-09-22: *"when the motor is saved the current controller should
+    also be saved with all its settings"* — saved WHOLE, the same footing as
     ``battery`` (:func:`set_battery` above): every field is sent every time
     (the tab has exactly one form, not several dialogs edited piecemeal), so
     this PATCH REPLACES the stored block rather than merging into it field by

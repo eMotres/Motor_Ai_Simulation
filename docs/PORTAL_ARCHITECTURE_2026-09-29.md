@@ -12,6 +12,8 @@ Base: `motor_ai_sim`, branch `origin/pre-migration-freeze-2026-09-15` (productio
 | New scope | Parties and organizations (section 6), manufacturing documentation (section 7), sourcing and orders (section 8): everything can be done in the portal "up to drawings and orders of finished products". Money and contracts stay outside the platform; it carries documents, statuses and communication. |
 | Decisions | D1–D23 kept (D9 restated as non-commercial, D12 was never used); new D24–D37; D46–D56 on data protection and residency (section 10A). |
 | Roadmap | New stages M8–M12 placed after the core restructure (M0–M3) and the data model (M4–M7). |
+| Physical port contract (update 2026-09-29) | New section 2.7 per the Codex review (point 6, owner agreed): acausal across/through ports, **positive = into the module** (D2 restated), SI with K and m at the boundary (D3 restated), per-module energy balance with explicit storage states, PWM fidelity levels, coolant stream semantics, consistency checks with tolerances, worked battery–controller–motor–load example, two separate validation tracks (D11 restated, D57–D61). |
+| Priority order (update 2026-09-29) | Roadmap reordered per the review: publication fix → data loading and versions → motor + controller in contracts → verify old results → simple battery–controller–motor–load system; orders, NDA and missions later (D37 restated, D62). |
 
 ## Goal
 
@@ -70,19 +72,19 @@ A port is a typed connection point. Everything is SI inside; engineering units i
 
 | Port type | Variables (SI) | Sign | Effort / flow pair |
 |---|---|---|---|
-| `mech.shaft` | T [N·m], ω [rad/s] (rpm in the UI), J [kg·m²] (property), P = T·ω | T > 0 and P > 0: power **leaves** the module through the port | T / ω |
-| `elec.dc` | V [V], I [A], R_src [Ω] (property), C_link [F] | I > 0: current **leaves** the port (source delivers) | V / I |
-| `elec.ac3` | V_ll_rms [V], I_rms [A], f_el [Hz], cos φ; optional phase currents `i_abc(t)` and `THD` | as DC; star/delta is a property | V / I |
-| `thermal.heat` | Q [W], T [°C] | Q > 0: heat **leaves** the module | T / Q |
-| `thermal.coolant` | ṁ [kg/s], T_in / T_out [°C], Δp [Pa], `fluid` (card reference) | flow along the arrow | T / ṁ |
-| `mech.linear` | F [N], v [m/s], m_eff [kg] (property): propeller thrust, wheel rim force, track, waterjet, linear actuator | F·v > 0: power leaves | F / v |
+| `mech.shaft` | τ [N·m], ω [rad/s] (rpm in the UI), P = τ·ω; inertia J is module state (2.7.5) | τ acts on the module; P > 0: power **enters** the module | ω / τ |
+| `elec.dc` | V [V], I [A], R_src [Ω] (property); C_link is state of the owning module | I > 0: current **enters** the module | V / I |
+| `elec.ac3` | phase v_abc [V], i_abc [A] (`series`) or fundamental phasors + harmonic power (`scalar`); V_ll_rms, I_rms, cos φ, THD informational only (2.7.4) | as DC; star/delta is a property | v / i |
+| `thermal.heat` | Q [W], T [K] (°C in the UI) | Q > 0: heat **enters** the module | T / Q |
+| `thermal.coolant` | ṁ [kg/s], p [Pa], h [J/kg] (T_in / T_out [K]), Δp [Pa], `fluid` (card reference) | ṁ > 0 into the module; stream enthalpy (2.7.6) | p, h / ṁ |
+| `mech.linear` | F [N], v [m/s], m_eff [kg] (property): propeller thrust, wheel rim force, track, waterjet, linear actuator | F·v > 0: power enters | F / v |
 | `body.motion` (vehicle body) | 6 DOF: force F⃗ [N] and moment M⃗ [N·m] at the mount point + body state (position, velocity, attitude, angular rate) | body frame; mount point is a link property | F⃗,M⃗ / v⃗,ω⃗ |
 | `env` (environment, non-energetic) | medium `air/water/ground`; ρ, T, p, viscosity; wind/current/waves (vector, gusts); slope, rolling coefficient, grip, surface | — | set by the Environment module, read by all |
-| `energy.store` (property + state of the source on `elec.dc`) | SoC [–], stored energy [J], H₂/fuel [kg], T [°C], SoH | — | battery, fuel cell, supercap, engine-generator deliver it on `elec.dc` |
+| `energy.store` (property + state of the source on `elec.dc`) | SoC [–], stored energy [J], H₂/fuel [kg], T [K], SoH | — | battery, fuel cell, supercap, engine-generator deliver it on `elec.dc` |
 | `envelope` | outline (OD, L, mm), mass [kg], J, centre of mass, attachment (flange/shaft: interface card) | — | non-energetic: compatibility check, not solve |
 | `signal.cmd` | setpoint (torque/speed/current), limits | — | — |
 
-**Single sign rule:** positive power on a port always means "leaves the module". Then the balance of any graph node is the sum over ports = 0, and module efficiency = output / input without "if generator" special cases.
+**Single sign rule (restated 2026-09-29, D2):** positive through variable and positive power on a port always mean "**into** the module" (Modelica convention). At every node the through variables sum to 0 and the across variables are equal; each module satisfies its own energy balance with storage (2.7.2). Efficiency = |output| / |input| of the current mode, without "if generator" special cases. The full physical contract is in 2.7.
 
 **Three value forms per port** (a port declares which forms it accepts and delivers):
 
@@ -140,8 +142,9 @@ ports:
   heat:    {type: thermal.heat, forms: [scalar]}
   coolant: {type: thermal.coolant, forms: [scalar], optional: true}
   body:    {type: envelope}
-state: [{name: T_winding, unit: degC, init: env}, {name: T_magnet, unit: degC, init: env}]
-limits: [{name: T_winding_max, unit: degC, value: 180, source: insulation_class_H}]
+state: [{name: T_winding, unit: K, init: env, energy: C_th*T}, {name: T_magnet, unit: K, init: env, energy: C_th*T},
+        {name: omega_rotor, unit: rad/s, init: 0, energy: 0.5*J*omega^2}]
+limits: [{name: T_winding_max, unit: K, value: 453.15, source: insulation_class_H}]
 calculations:
   operating_point:    {cost: "FEM 20-200 s", fidelity: fem_2d}
   efficiency_map:     {cost: "minutes", fidelity: fem_2d}
@@ -170,6 +173,137 @@ validation: [{ref: ANSYS, case: L200, torque_delta_pct: 0.12}]
 | **Propeller** | shaft, thrust, air, body | operating_point: ω, V_inflow, ρ → T_shaft, F; map C_T(J), C_P(J) | map (vendor table) |
 | **Gearbox** | shaft_in, shaft_out, heat, body | T_out = i·η·T_in, ω_out = ω_in/i; η(T, n, T_oil) | map → later FMU |
 | **Battery** | dc_out, heat, body | V = OCV(SoC, T) − I·R(SoC, T); I²R losses; SoC(t) for missions | map / equivalent circuit (`simulation/battery.py` exists) |
+
+### 2.7 Physical port contract (fixed before M0 is implemented)
+
+Owner decision 2026-09-29, after the Codex structure review (`docs/project-structure-review-2026-09-29-codex.md`, "Contracts to fix before M0 freezes"). The contract follows acausal physical connectors (Modelica): every energetic port carries one **across** (potential) and one **through** (flow) variable; at a connection node the across variables are **equal** and the through variables **sum to zero**. Connections (links) are ideal: they carry no storage and no loss. Anything that stores or dissipates energy is a module.
+
+#### 2.7.1 Sign convention and units
+
+- **Positive through variable = into the module** (Modelica convention). Port power `P_k` is positive when energy flows **into** the module. This replaces the earlier draft "positive = leaves" (D2 restated).
+- A source (battery discharging, motor shaft driving a load) therefore shows **negative** power on its delivering port. Efficiency is computed from the magnitudes of the input and output ports of the current operating mode, never from signs.
+- **Canonical units at the new boundary are pure SI:** K (not °C), m (not mm), rad/s, N·m, W, J, kg, Pa, s. °C, mm, rpm and kW stay in the UI, reports and legacy files; adapters convert explicitly at the boundary (a unit-tested `legacy_units` table per adapter). Old solver arithmetic is not changed just to rename units.
+- Every port value is a typed quantity `{value, unit, form, basis}`; the core rejects an unknown or dimensionally wrong unit (2.7.8).
+
+#### 2.7.2 Energy balance per module
+
+For every module, with `P_k` the power on port k (positive in):
+
+    sum_k P_k = dE_stored/dt + P_loss,env
+
+`E_stored` is the sum of the module's declared **storage states**. `P_loss,env` is loss leaving the modelled system without a thermal port; it is allowed only for modules without a thermal port and must be declared (`loss_sink: ambient`). For a module **with** a thermal port the balance closes completely:
+
+    sum_(energetic ports) P_k + Q_th,in = dE_stored/dt
+
+Electrical and mechanical losses are therefore not a separate term: they leave as heat on the thermal port (`Q_th,in < 0`) or raise the module's own thermal state. A loss is never counted twice (on the port and in an internal thermal mass).
+
+Storage is always **module state**, declared in the manifest with unit, initial value and energy function. Connectors carry no storage.
+
+| Module | Storage state | E_stored |
+|---|---|---|
+| Motor | winding, stator iron, magnet, rotor temperatures (thermal network nodes); rotor speed ω | Σ C_i·T_i ; ½·J·ω² |
+| Controller | junction / case / heatsink temperatures; DC-link capacitor voltage (if the capacitor belongs to the controller) | Σ C_i·T_i ; ½·C·V² |
+| Battery | SoC, cell thermal mass, optional RC polarisation voltages | Q_nom·∫OCV dSoC ; C_th·T ; ½·C_RC·V_RC² |
+| Gearbox | oil/housing temperature; optional shaft twist (compliance) | C_th·T ; ½·k·Δθ² |
+| Load / vehicle | inertia, or body kinetic + potential energy | ½·J·ω², or ½·m·v² + m·g·h |
+| DC link (explicit `dc_link` module) | capacitor voltage | ½·C·V² |
+
+Irreversible states (magnet Br ratchet, SoH) are declared as states without an energy term; they are committed only on an accepted time step, never on a trial evaluation (review point 6).
+
+#### 2.7.3 Port types: variables, units, forms
+
+| Port | Across | Through (+ into the module) | Power into the module | Notes |
+|---|---|---|---|---|
+| `elec.dc` | V [V] | I [A] | P = V·I | instantaneous in `series`; period mean in `scalar`, basis stated |
+| `elec.ac3` | phase voltages v_a, v_b, v_c [V] | phase currents i_a, i_b, i_c [A] | p(t) = Σ v_x·i_x | which power is carried: 2.7.4 |
+| `mech.shaft` | φ [rad] / ω [rad/s] | τ [N·m] acting on the module | P = τ·ω | ω positive in the shaft's declared positive direction |
+| `mech.linear` | x [m] / v [m/s] | F [N] on the module | P = F·v | |
+| `thermal.heat` | T [K] | Q [W] | Q (already W) | T·Q is **not** power |
+| `thermal.coolant` | p [Pa]; specific enthalpy h [J/kg] (T [K] via the `fluid` card) | ṁ [kg/s] | ṁ·h (+ hydraulic ṁ·p/ρ, included or declared negligible) | stream semantics, 2.7.6 |
+| `body.motion` | v⃗ [m/s], ω⃗ [rad/s] | F⃗ [N], M⃗ [N·m] on the module | F⃗·v⃗ + M⃗·ω⃗ | body frame; mount point is a link property |
+| `signal.cmd`, `env`, `envelope`, `energy.store` | non-energetic | — | — | never enter the energy balance |
+
+**Value forms and time basis.** Each port value declares a form and a basis:
+
+| Form | Basis (mandatory) | Use |
+|---|---|---|
+| `scalar` | `instant`; `mean@T` (averaged over a stated period: electrical period, PWM period, mechanical revolution); `rms@T`; `fundamental` (complex phasor of the 1st harmonic, or dq in a stated frame) | operating point |
+| `map` | basis of the tabulated value + the validated domain box | η(τ, ω, V), P_loss(τ, ω, V, T) |
+| `series` | sample times t_i [s] from the scenario start, uniform `dt` or explicit | transients, cycles |
+
+Series rules: a module states its maximum usable `dt` and whether it needs aligned samples; the core resamples only with a declared method (zero-order hold for switched quantities, linear for states) and never across an event; energies are compared by trapezoid integration of P(t) on the finer grid. Mixing bases at one node (e.g. an `rms` current into a `mean` power balance) is a validation error. Maps never extrapolate silently: a query outside the validated box returns `out_of_domain`, and the solve fails loudly or falls back to a declared higher-fidelity calculation (review point 6).
+
+#### 2.7.4 Electrical and PWM: power across the inverter
+
+The inverter is where representations change, so the contract fixes what each side carries.
+
+- **DC side:** `elec.dc`, `scalar` with basis `mean@T_pwm` or `mean@T_el`, or instantaneous `series`. With resolved ripple P_dc is the mean of the product V·I, not the product of the means.
+- **AC side:** instantaneous phase quantities (`series`) or, in `scalar`, **fundamental phasors** per phase (or dq in a stated frame) plus a declared harmonic-power term. RMS + cos φ is an informational field only; it is **not** a valid power representation for PWM or unbalanced operation.
+- **Balance across the inverter** (mean sense): P_dc = P_ac,1 + P_ac,h + P_loss,inv, where P_ac,h is harmonic power delivered to the motor, which becomes motor harmonic loss (AC copper, iron, magnet eddy) on the motor's heat port.
+- **Fidelity levels** (declared per calculation):
+
+| Level | AC representation | Ripple / harmonic losses | Today's code |
+|---|---|---|---|
+| `avg_fundamental` | fundamental phasor, ideal averaged switch | none; device losses from mean/RMS currents | `drive: sine` + `inverter/losses.py` |
+| `pwm_averaged` | fundamental + carrier-harmonic loss **maps** built from switching-resolved runs | harmonic loss as a declared term | PWM loss map in the thermal coupling |
+| `switching_resolved` | instantaneous PWM phase voltages, `series` with dt ≤ T_pwm/20 | explicit in the FEM | `drive: pwm`, `InverterVoltageSource` |
+
+- **DC bus with capacitor:** the DC-link capacitance is a storage state (½·C·V²) owned by exactly one module (the controller by default, or an explicit `dc_link` module); the battery–bus connection is an ideal node. Capacitor ripple current and ESR loss go to that module's heat port. In steady `mean` operation dE_C/dt = 0.
+
+#### 2.7.5 Mechanical
+
+- Across ω [rad/s] (angle φ in `series` when compliance is modelled), through τ [N·m] acting on the module. Each shaft port declares its positive rotation direction; a link checks that both ends agree.
+- **Motoring:** electrical port power > 0 (in), shaft power < 0 (out). **Generating:** signs flip. No "if generator" branch: the mode is the sign pattern, efficiency = |out| / |in|.
+- Inertia J [kg·m²] is module state (½·J·ω²), not a port property. Rigidly linked inertias are merged by the core (J_total) to avoid an algebraic loop.
+- **Gearbox:** ratio i (ω_out = ω_in / i), loss map to the heat port; **optional states** torsional compliance k [N·m/rad] with damping d (state Δθ, energy ½·k·Δθ²) and backlash b [rad] (dead zone on Δθ, handled as an event in `series`). Without them the gearbox is rigid and algebraic-lossy.
+
+#### 2.7.6 Thermal and coolant
+
+- `thermal.heat`: across T [K], through Q [W] into the module; connection = equal T, ΣQ = 0. Conductances and capacities live in modules, never in links.
+- `thermal.coolant`: across p [Pa] and the stream's specific enthalpy h [J/kg]; through ṁ [kg/s] into the module. Each port carries the enthalpy of the fluid **leaving** through it (stream variable); a module uses the upstream enthalpy for the actual flow direction (Modelica `inStream`), and mixing at a node is ṁ-weighted. Reverse flow is allowed only in modules that declare it; otherwise ṁ < 0 into an inlet is a validation error.
+- Each coolant module reports T_in, T_out [K], Δp = p_in − p_out [Pa] and the heat taken Q = ṁ·(h_out − h_in). Pump power (ṁ·Δp/ρ) is declared negligible or carried on the pump's own electrical port.
+
+#### 2.7.7 Worked example: battery → controller → motor → load
+
+Steady mean operating point (basis `mean@T_el`), all thermal ports to a coolant node. Numbers are illustrative (L155 class); only the balance matters.
+
+| Module | Port powers into the module [W] | Loss → heat port [W] | dE/dt [W] |
+|---|---|---|---|
+| Battery | dc −103 000; heat −2 100 | I²R 2 100 | dE_chem/dt = −105 100 (SoC falls) |
+| Controller | dc +103 000; ac3 −101 000; heat −2 000 | switching + conduction + DC-link ESR 2 000 | 0 |
+| Motor | ac3 +101 000; shaft −97 500; heat −3 500 | Cu + Fe + magnet + mechanical 3 500 (incl. P_ac,h) | 0 |
+| Load | shaft +97 500 | absorbed by the load | ½·J·ω² constant |
+
+Checks the core performs:
+
+1. **Nodes:** DC −103 000 + 103 000 = 0; AC −101 000 + 101 000 = 0; shaft −97 500 + 97 500 = 0; the coolant node receives 2 100 + 2 000 + 3 500 = 7 600 W.
+2. **Modules:** battery −103 000 − 2 100 = −105 100 = dE_chem/dt; controller 103 000 − 101 000 − 2 000 = 0; motor 101 000 − 97 500 − 3 500 = 0.
+3. **System:** −dE_chem/dt = P_load + Q_coolant: 105 100 = 97 500 + 7 600.
+
+In a transient (acceleration) the same equations hold with dE/dt ≠ 0: at the shaft τ_motor = J_total·dω/dt + τ_load, SoC and every thermal node are integrated, the DC-link ½·C·V² is included, and the check runs on energies integrated over each accepted step.
+
+#### 2.7.8 Consistency checks on every system solve
+
+| Check | Rule | Tolerance |
+|---|---|---|
+| Units | every port value has a known SI unit matching its port type; basis consistent per node | exact (error, no solve) |
+| Node conservation | Σ through = 0 per node, across equal | ≤ 1e-9·max|term| for algebraic nodes; ≤ loop tolerance for iterated nodes |
+| Module energy residual | r = Σ P_k − dE/dt − P_loss,env | steady: ≤ 1e-3·P_ref for FEM modules, ≤ 1e-6·P_ref for maps/analytic (P_ref = largest port power); transient: integrated over the step ≤ 1e-3·E_step |
+| System residual | Σ of module residuals | ≤ 2e-3·P_ref |
+| Convergence | residuals on **all** coupled quantities (V, I, τ, ω, T, Q), not voltage only | declared per loop; failure = no result |
+| Map domain | query inside the validated box | exact (`out_of_domain` = error or fidelity fallback) |
+| State commit | trial evaluation separate from committed step; irreversible states only on accept | exact |
+
+Residuals and tolerances are stored in the result provenance (2.5); a result with a failed check is not stored as valid.
+
+#### 2.7.9 Two independent validation tracks
+
+| Track | What changes | Acceptance |
+|---|---|---|
+| **A. Adapters (restructure, M0–M3)** | code moves behind the contract; same legacy call, inputs and runtime | **bit-identical** (`repr` of numerical fields) on L155 motor, L180 generator, L13; timestamps, timings and job ids excluded |
+| **B. Numerical changes** (mesher triangle → gmsh, a new solver runtime) | numbers change by design | physically justified tolerances (e.g. torque ±0.5 %, losses ±2 %, temperatures ±2 K), mesh-convergence study (≥ 3 refinements, Richardson estimate), re-check on the ANSYS cases (40, 150, 200 mm), full provenance |
+
+The tracks never share a PR: a restructure PR changes no number, a numerical PR moves no code across the contract.
 
 ---
 
@@ -942,8 +1076,8 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | # | Decision | Recommendation |
 |---|---|---|
 | D1 | Build the system/port level on top of `modules/` + `contracts/` or from scratch? | **On top**: extend `ModuleManifest`, keep the skeleton |
-| D2 | Power sign on ports | **"Positive = leaves the module"** for every port |
-| D3 | Internal units | **SI inside**, engineering units (rpm, mm, °C, kW) only in UI/reports |
+| D2 | Power sign on ports (restated 2026-09-29) | **"Positive = into the module"** for every port (Modelica convention, across/through pairs); node Σ through = 0; balance per module with storage (2.7) |
+| D3 | Internal units (restated) | **Pure SI at the new boundary (K, m, rad/s)**; engineering units only in UI/reports/legacy files; explicit, tested conversions in adapters; old solver arithmetic untouched |
 | D4 | Organizations now or at the first vendor? | **Now, minimal** (see D24) |
 | D5 | Die/cfg/duty → project/system/scenario: rename data? | **No.** New entities beside; cfg gets an implicit system; files untouched |
 | D6 | Third module for the pilot | **Propeller on maps** (C_T/C_P): first "drone" system; gearbox second |
@@ -951,7 +1085,7 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D8 | Where foreign code runs | **Only separate Linux nodes in containers** (Hetzner or opted-in BYO), never in the API, never locally |
 | D9 | Vendor model at start (restated) | **Non-commercial:** vendors publish modules/cards for free under AGPL (code) and a per-card data licence; no listing fees, no revenue share |
 | D10 | Who may view/download a vendor card | default **`view_only`** (results only); download at the vendor's choice |
-| D11 | "Migration done" criterion | **bit-identical L155 motor, L180 gen, L13** through the new path; otherwise no merge |
+| D11 | "Migration done" criterion (restated) | Track A (adapters): **bit-identical L155 motor, L180 gen, L13** through the new path, timestamps/ids excluded; otherwise no merge. Numerical changes (e.g. gmsh) are track B with their own tolerances (2.7.9, D61) |
 | D13 | Object dynamics and environment: core or modules? | **Modules** (`vehicle`, `environment`, propulsors) with the same contract; the core knows only time, state and ports |
 | D14 | State (SoC, thermal network, body) and `series` form in the contract now? | **Yes, in M0**, even if the first implementation is scalar |
 | D15 | Mission fidelity | **L0/L1** (maps + thermal networks); FEM builds and checks maps, re-check of 3–5 worst points |
@@ -981,7 +1115,7 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D34 | Revision model | **Design revision A/B/… = immutable snapshot**; only `released` revisions go to RFQs/orders; supersede flags open orders, never switches them; maps 1:1 to ERP `item_revision` for MOTRES products |
 | D35 | Supplier/manufacturer onboarding | **Verified orgs** (admin check of domain + registry no.); unverified orgs can engineer but not broadcast RFQs |
 | D36 | Customer orders of finished products | From a **released product card** only; price/payment/contract outside; order carries external refs; per-serial bench results can be shared as attachments |
-| D37 | Order of the new stages | **After M0–M3 are accepted bit-identical** and M4 (orgs) is in: M8 parties UI → M9 drawings + BOM → M10 sourcing → M11 ERP connector → M12 customer orders; engineering steps 2–4 continue in parallel |
+| D37 | Order of the new stages (restated: only after P1–P5, D62) | **After M0–M3 are accepted bit-identical** and M4 (orgs) is in: M8 parties UI → M9 drawings + BOM → M10 sourcing → M11 ERP connector → M12 customer orders; engineering steps 2–4 continue in parallel |
 | D38 | Automatic NDA signing | **Yes, in M8**: generated from org templates, signed in the portal; the platform supplies the mechanism, not legal advice; templates reviewed by counsel before use |
 | D39 | Signature level | **eIDAS SES now** (click-to-sign, account identity, re-auth/2FA, audit trail); **AdES/QES later** through an external qualified trust-service provider API, only when a party requires it |
 | D40 | Default template | **Mutual NDA** (MOTRES template, lawyer-checked) as the platform default; one-way and org-specific templates optional, versioned |
@@ -1002,7 +1136,31 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D55 | Export control | **Org-set flag per object**; platform blocks sharing/compute to disallowed countries, makes no classification itself |
 | D56 | China | **Separate `cn` deployment with a local partner**, only when there is demand; never a bucket in the EU region |
 
+**Physical contract and order (update 2026-09-29, Codex review, owner agreed):**
+
+| # | Decision | Recommendation |
+|---|---|---|
+| D57 | Port physics | **Acausal across/through ports**; links ideal (no storage, no loss); storage only as declared module state with an energy function; losses leave on the thermal port (2.7.1–2.7.2) |
+| D58 | Electrical power across the inverter | **Fundamental phasors + declared harmonic power, or instantaneous series**; RMS + cos φ informational only; fidelity levels `avg_fundamental` / `pwm_averaged` / `switching_resolved`; DC-link capacitor owned by one module (2.7.4) |
+| D59 | Time basis | Every value declares form and basis (`instant`, `mean@T`, `rms@T`, `fundamental`); mixing bases at a node is an error; maps never extrapolate silently (2.7.3) |
+| D60 | Consistency checks | Units, node conservation, module and system energy residuals, all-quantity convergence, map domain, trial/commit state, **on every system solve**, tolerances as in 2.7.8, stored in provenance |
+| D61 | Validation tracks | **Adapters = bit-identical; numerical changes (triangle → gmsh) = justified tolerances + convergence study**; never in one PR (2.7.9) |
+| D62 | Order of work | **Publication fix → data loading and versions → motor + controller in contracts → verify old results → battery–controller–motor–load system**; orders, NDA and missions later (11.3) |
+
 ### 11.3 Roadmap (rough, weeks of one engineering agent + owner review)
+
+**Priority order (2026-09-29, Codex review, owner agreed, D62).** Nothing further down starts before these five steps pass their acceptance checklist; readiness percentages and calendar estimates are planning assumptions, not measured readiness.
+
+| Step | Content | Acceptance |
+|---|---|---|
+| **P1. Fix publication** | correct and test the publication boundary, fail-closed validation, operation recovery before any Admin data move | public/private split tests pass; a failed validation publishes nothing |
+| **P2. Stabilise data loading and versions** | one integration branch and deployment source; source precedence; immutable identity/revision references; complete public demo install; runtime customer storage separate from reference repositories | code SHA + data revision recorded; the same inputs load the same objects on every node |
+| **P3. Motor + controller in contracts** | M0 port contract exactly as 2.7 (units, basis, state, checks); M1 motor adapter; M2 controller adapter, both calling existing code | contract schema and consistency checks unit-tested |
+| **P4. Verify old results** | golden captures before work; adapters vs old routes | track A: bit-identical L155 motor, L180 gen, L13 (2.7.9) |
+| **P5. Simple system** | battery → controller → motor → load through the system solver (M3), steady and one short transient | balance of 2.7.7 closes within 2.7.8 tolerances; motor point == old coupled loop |
+
+Deferred until P1–P5 and data isolation pass acceptance: RFQs and orders (M10–M12), NDA signing (NDA part of M8), vendor modules (3a–3c) and full mission families (step 4). Manufacturing revisions/BOMs and the ERP boundary stay in the design.
+
 
 | Step | Content | Effort |
 |---|---|---|
@@ -1027,7 +1185,7 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 |---|---|---|
 | **4.1 Quadcopter hover** | our L0 motor maps (from FEM, T-dependent) + controller maps + propeller map + battery model; point-mass `vehicle`; profile "hover to SoC_min" | hover time; hand calculation on the same maps ±1 %; L2 re-check of 3 points |
 | **4.2 Thermal transients along the mission** | L1 thermal networks of motor/controller/battery; limits and "which block limits" | motor S1/S3 cycle == `coupled_duty_cycle` on L155 within tolerance |
-| **4.3 Full 3-DOF flight profile** | take-off–climb–cruise–landing, wind/gusts, ISA; thrust allocation | energy balance closes (Σ over ports = 0 every step) |
+| **4.3 Full 3-DOF flight profile** | take-off–climb–cruise–landing, wind/gusts, ISA; thrust allocation | energy balance closes every step: node sums = 0, module residual Σ P − dE/dt within 2.7.8 tolerances |
 | **4.4 Ground and water** | `wheel` + WLTP/AGV route; marine propeller in water + hull drag | same engines, different modules, no core change (**contract generality check**) |
 | **4.5 Robot joint and stationary** | `joint` + trajectory, generator on S1–S9 | peak/RMS torque, winding T over the cycle |
 | **4.6 Batches and optimization** | `mission_batch`, `mission_opt` on platform + BYO nodes, per-module accounting | "best motor+propeller+battery for endurance" overnight |
@@ -1035,4 +1193,4 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | **Geometry, further** | step-by-step editor; SPM/outrunner/axial/IM/SynRM/EESM plugins; STEP import | on demand |
 | **Later** | CFD modules as coefficient sources, Newton for stiff loops, reply-by-e-mail, third-party ERP connectors | on demand |
 
-Suggested order: **NOW (data protection) → 1 → (1A, 2, M8 in parallel) → M9 → M10 → M11 → M12 → 3a → 4.1–4.3 → 3b/3c → 4.4–4.7**. Step 1 changes no number and no URL for users; it runs in parallel with ongoing motor work.
+Suggested order (restated 2026-09-29): **P1 → P2 → P3–P5 (= step 1, M0–M3) with the data-protection baseline alongside → M4–M7 → (1A, 2, M8 orgs without NDA signing) → M9 → only after acceptance: M8 NDA → M10 → M11 → M12 → 3a → 4.1–4.3 → 3b/3c → 4.4–4.7**. Step 1 changes no number and no URL for users; it runs in parallel with ongoing motor work.

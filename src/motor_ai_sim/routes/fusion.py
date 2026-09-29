@@ -100,7 +100,7 @@ def _name_map() -> Dict[str, str]:
 
 #: Primary geometry keys kept OUT of the Fusion export on purpose.
 #
-#: WHY.  `slot_hs` (user 2026-09-14: "выкинь slot_hs, мы его не используем") is
+#: WHY.  `slot_hs` (user 2026-09-14: "throw out slot_hs, we don't use it") is
 #: a primary parameter by type, but the geometry schema itself calls it hidden
 #: — "yields non-manufacturable fractional wire thicknesses, so hidden from the
 #: UI for now (kept in the file; not yet wired into the CadQuery geometry)".
@@ -113,7 +113,7 @@ FUSION_EXCLUDED_NAMES: frozenset = frozenset({"slot_hs"})
 def _rows():
     """(fusion_name, our_key, value, unit, comment) for every PRIMARY geometry
     parameter.  The derived ones (radii, counts, pitches, slot_width) are NOT
-    exported (user 2026-09-13: "выкинь DERIVED переменные из экспорта"): Fusion
+    exported (user 2026-09-13: "throw the DERIVED variables out of the export"): Fusion
     rebuilds them from the primaries the same way the geometry does, and a
     user parameter nobody may edit only clutters the list.  Same for the
     explicit exclusions in FUSION_EXCLUDED_NAMES.  The import still accepts and

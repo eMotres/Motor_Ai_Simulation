@@ -1,9 +1,9 @@
 """Mechanical (structural) solvers.
 
-Added 2026-09-05 on the user's request: "нам нужно сделать механический модуль
-расчётов — начнём с расчёта центробежных сил ротора ... чтобы оценить какой
-бандаж нужен для удержания магнитов и ротора, то есть рассчитывать все
-напряжения и деформации".  The first module is the rotor centrifugal
+Added 2026-09-05 on the user's request: "we need to build a mechanical
+calculation module — let's start with the rotor centrifugal force
+calculation ... to estimate what band is needed to retain the magnets and
+the rotor, that is, compute all the stresses and deformations".  The first module is the rotor centrifugal
 stress/deformation solve (``rotor_stress``); the package exists so the thermal
 and modal work that will follow has an obvious home.
 

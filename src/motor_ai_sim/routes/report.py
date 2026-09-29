@@ -14,8 +14,8 @@ speeds — and the SKF bearing model.  All of that is READ ONLY.  No solve is
 started here, nothing is written, and a store that is empty becomes one short
 "not solved yet" line in the document instead of a 500.
 
-FORMAT.  ``docx`` is the DEFAULT since 2026-09-09 — user: *"репорт лучше
-выдавать в формате doc"*, *"выводи всё-таки в doc формате"*.  He edits the
+FORMAT.  ``docx`` is the DEFAULT since 2026-09-09 — user: *"better to output
+the report in doc format"*, *"output it in doc format after all"*.  He edits the
 report before it goes to a client and Word exports its own PDF from it, so a
 Word file is the useful artefact and the PDF is the last step of one.
 ``?format=pdf`` still serves exactly what it always did, byte for byte.

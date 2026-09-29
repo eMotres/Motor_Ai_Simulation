@@ -33,8 +33,8 @@ the counters are keyed on "no credentials presented" and nothing else.  They are
 in-memory (one API process) and thread-safe; a restart forgives everyone, which
 is the right failure for a limit whose job is to bound a bill, not to punish.
 
-WHERE A VISITOR'S WORDS GO (2026-09-17, the owner's question: "как сообщения,
-которые они пишут боту, будут доходить до нас?").  Two things happen to an
+WHERE A VISITOR'S WORDS GO (2026-09-17, the owner's question: "how will the
+messages they write to the bot reach us?").  Two things happen to an
 ANONYMOUS turn after the provider answers, and neither to a signed-in one:
 
   * every turn is appended to the day's visitor log

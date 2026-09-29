@@ -102,8 +102,8 @@ type DriveKind = 'current' | 'voltage' | 'pwm_voltage' | 'custom_current'
                | 'bldc_current';
 
 // THE PWM DRIVE IS THE CONTROLLER'S (owner 2026-09-24, on the Controller
-// tab's greyed "Carrier 20,000 Hz": «Это значение нужно задавать в
-// контроллере; PWM нужно выкинуть из Electromagnetic»).  This tab no longer
+// tab's greyed "Carrier 20,000 Hz": «This value needs to be set in
+// the Controller; PWM needs to be dropped from Electromagnetic»).  This tab no longer
 // holds a carrier, a DC link or a controller class: the carrier picker, the
 // V_bus field and the battery→V_bus prefill that lived here are gone, and
 // every number this panel still needs about the bridge (a restored PWM run's
@@ -195,8 +195,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     });
     useEffect(() => {
       try { localStorage.setItem(`sim.${key}`, JSON.stringify(v)); } catch {}
-      // ── PER-DUTY memory (user 2026-09-01: "токи и температуры должны быть
-      //    разные для каждого duty") ──────────────────────────────────────
+      // ── PER-DUTY memory (user 2026-09-01: "currents and temperatures must
+      //    be different for every duty") ──────────────────────────────────────
       // sim.* is ONE global block, so every duty of a machine used to share
       // the same current / rpm / γ / coil temp / drive: editing S2 at 200 °C
       // left S1 sitting at 200 °C for ever.  An operating-point field written
@@ -420,9 +420,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [vPeak,   setVPeak]   = usePersisted('vPeak',  30.0);  // phase-voltage amplitude [V]
   const [vDelta,  setVDelta]  = usePersisted('vDelta',  0.0);  // voltage angle δ [°el], same frame as γ
   // ── PWM IS THE CONTROLLER'S (owner 2026-09-22, removed here 2026-09-24) ─
-  // *«как отладим каплинг с контроллером, нам не нужен будет PWM в
-  // электромагнитном моделировании — всё будет задаваться в меню Controller»*
-  // and *«PWM нужно выкинуть из Electromagnetic»*.  No PWM button, carrier,
+  // *«once we debug the coupling with the controller, we won't need PWM in
+  // the electromagnetic simulation — everything will be set in the Controller menu»*
+  // and *«PWM needs to be dropped from Electromagnetic»*.  No PWM button, carrier,
   // V_bus or controller class lives here any more.  A stored `pwm_voltage`
   // run still restores into this panel (old records stay readable and
   // re-runnable); its carrier and DC link then come from the Controller —
@@ -595,10 +595,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // solve changes.  On, it goes to POST /api/coupled/run instead — see
   // ./coupledApi and TransientCharts' `run()`.
   const [coupled,       setCoupled]       = usePersisted('coupled', false);
-  // WHICH QUESTION the loop is asked (owner 2026-09-18: *«надо сделать выбор —
-  // или считать до конца стабилизации температуры, или считать до лимитов и
-  // находить время работы при заданных условиях»*; third option 2026-09-21:
-  // *«давай сделаем кнопку, или лучше добавим ещё один элемент в меню»*).  Per
+  // WHICH QUESTION the loop is asked (owner 2026-09-18: *«we need to make a
+  // choice — either compute until temperature stabilises fully, or compute
+  // until the limits and find the time it can run under the given
+  // conditions»*; third option 2026-09-21:
+  // *«let's make a button, or better add one more item to the menu»*).  Per
   // DUTY, like the operating point (`lib/dutySettings` carries the key),
   // because a continuous duty is a steady state by definition and a peak is a
   // pull with a length.
@@ -842,8 +843,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // refreshes itself on every mat-assign event.  Two earlier versions of this
   // badge were both stale by construction — reading /api/materials alone missed
   // the overlay, and reading currentMatJson() inside an event handler raced the
-  // sync's own async refresh (user 2026-09-01, twice: "меняю магниты — в
-  // симуляции те же самые").  Depending on the hook's state closes the race:
+  // sync's own async refresh (user 2026-09-01, twice: "I change the magnets
+  // — in the simulation they're still the same").  Depending on the hook's state closes the race:
   // when the data actually lands, React re-runs this effect.
   const { assignments: liveAssign, refresh: refreshAssign } = useMotorAssignments();
   const machineMagnet = liveAssign?.magnet || '';
@@ -1147,8 +1148,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   useEffect(() => { void active; void simBusy; }, [active]);
   // Steps per electrical period (transient time resolution).  Persisted.
   // A Select over the divisors of stepsMax — the set is fixed, so free typing
-  // only produced snap surprises (user, 2026-08-01: "если фиксированные
-  // значения — давай выбор только их из списка").
+  // only produced snap surprises (user, 2026-08-01: "if fixed values —
+  // let's have a choice of only those from a list").
   // Defaults follow the user's standing practice (2026-09-03): 40 steps per
   // period minimum and demag ON on every machine — a fresh browser profile
   // must not silently solve at 24 steps without the de-rate.
@@ -1202,8 +1203,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // run's own last frame instead of launching a second transient.  Turning it
   // OFF is honest too — the run is then magnetostatic and those views solve on
   // demand, exactly as they used to (and say so in their header).
-  // ALWAYS ON (user 2026-09-05: "можно эту кнопку убрать — я всегда её
-  // использую").  The checkbox is gone; the persisted key is pinned to true
+  // ALWAYS ON (user 2026-09-05: "we can remove this button — I always
+  // use it").  The checkbox is gone; the persisted key is pinned to true
   // so every reader of `sim.eddyCoupled` (the field views' snapshot probes,
   // the duty settings block, the ETA) agrees with what the run does.
   const eddyCoupled = true;
@@ -1378,8 +1379,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         && relOk(v1Seed.iA, current, 0.01)
         && Math.abs((v1Seed.gam ?? 0) - phaseOffset) <= 0.5;
   }, [v1Seed, rpm, current, phaseOffset]);
-  // ── AUTO-apply of the seed (user 2026-08-31: "она должна ставить это
-  // значение автоматом после короткого первого прогона, и угол тоже").
+  // ── AUTO-apply of the seed (user 2026-08-31: "it should set this value
+  // automatically after a short first run, and the angle too").
   // The write happens by itself when a matching seed exists AND the fields do
   // not hold a value the user typed for THIS machine.  Ownership is a record
   // of what WE last applied ('battery.vseed': {sig, pk, dl}) — same discipline
@@ -1521,8 +1522,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   }, []);
 
   // ── load server status + physics config + geometry ────────────────────────
-  // SAME contract as the Mesh tab after the 2026-09-07 incident (user: "захожу
-  // в Mesh и опять не сохранено то, что было до этого — там точно стояло 1/2"):
+  // SAME contract as the Mesh tab after the 2026-09-07 incident (user: "I go
+  // into Mesh and again what was there before isn't saved — it was definitely set to 1/2"):
   // the SERVER config is the single source of truth, it is adopted BEFORE any
   // save is allowed, and a failed load retries with backoff instead of letting
   // constants stand in for it.
@@ -1937,8 +1938,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       {/* The live magnet is always an option, even when the
                           library list this page fetched at mount predates it
                           (a card added while the page was open showed a blank
-                          picker — user 2026-09-09: "почему тут не пишет, какие
-                          магниты"). */}
+                          picker — user 2026-09-09: "why doesn't it say here
+                          which magnets"). */}
                       <Select value={liveMagnet || ''}
                         disabled={!dutyOn} variant="standard" disableUnderline
                         IconComponent={() => null}
@@ -2075,7 +2076,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 'inverter feeds the machine that Controller’s real waveform.'} />
             </Box>
             {/* The non-ideal CURRENT sources, on their own row so the labels
-                fit.  No PWM button (2026-09-24: «PWM нужно выкинуть из
+                fit.  No PWM button (2026-09-24: «PWM needs to be dropped from
                 Electromagnetic») — the drive is the Controller's. */}
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               {([['bldc_current', 'BLDC 120°'],
@@ -2232,8 +2233,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             ) : (drive === 'voltage' || drive === 'pwm_voltage') ? (<>
             {/* PRE-FLIGHT card: one aligned row per launch criterion —
                 status left, one-click fix right.  Replaces the pile of loose
-                chips that accumulated here (user 2026-08-31: "лежит всё как
-                попало").  Full explanations live in each row's tooltip. */}
+                chips that accumulated here (user 2026-08-31: "everything is
+                lying around any old way").  Full explanations live in each row's tooltip. */}
             {(() => {
               type Row = { key: string; label: string; ok: boolean; warn?: boolean;
                            status: string; tip: string;
@@ -2266,8 +2267,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 });
                 const m = ctrlVdc > 0 && vPeak > 0 ? 2 * vPeak / ctrlVdc : 0;
                 // Only when it BLOCKS: a legal m is not a launch criterion
-                // worth a standing row (user 2026-09-01: "вот это можно
-                // выбросить" — the amber 3rd-harmonic note was daily noise;
+                // worth a standing row (user 2026-09-01: "this one can be
+                // tossed" — the amber 3rd-harmonic note was daily noise;
                 // the zone semantics stay in the V-peak tooltip).
                 if (m > 1.15) rows.push({
                   key: 'mod', label: 'Modulation',
@@ -2454,8 +2455,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 with coil temperature, and the end-turns that loop outside the
                 stack add series resistance the 2-D model can't see. */}
             {/* With the coupled switch ON these two are OUTPUTS of the loop
-                (user 2026-09-08: "когда я нажимаю каплинг, она не должна быть
-                редактируемой, она вычисляется"): read-only, showing the
+                (user 2026-09-08: "when I click coupling, it shouldn't be
+                editable, it's computed"): read-only, showing the
                 converged values — adopted from the run's answer and, on
                 mount / switch-on, from the server's last coupled run. */}
             <TextField
@@ -2610,8 +2611,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             />
           </Tooltip>
           {/* The "Coupled eddy solve" checkbox lived here until 2026-09-05;
-              the coupled σ·∂A/∂t solve is now always on (user: "я всегда её
-              использую") — see `eddyCoupled` above. */}
+              the coupled σ·∂A/∂t solve is now always on (user: "I always
+              use it") — see `eddyCoupled` above. */}
           {/* The torque band-limit checkbox that lived here was removed at the
               user's request (2026-07-29): it was a P1-era crutch — P2's raw
               ripple is mesh-convergent and honest, so the headline is ALWAYS
@@ -2734,8 +2735,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Tooltip>
           )}
           {/* ── The EM<->thermal orchestrator, on or off ────────────────────
-              User 2026-09-08: "не надо всё смешивать, нужен оркестратор" and
-              "чтобы можно было его включать и отключать".  One switch, one
+              User 2026-09-08: "don't mix everything together, we need an
+              orchestrator" and "so that it can be switched on and off".  One switch, one
               short line, everything else in the tooltip (UI rule). */}
           <Tooltip placement="right" title={
             'Run EM → Thermal → EM until the winding and magnet temperatures '
@@ -2806,11 +2807,12 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </FormControl>
           )}
           {/* ── …AND WHICH QUESTION IT ANSWERS (owner 2026-09-18) ───────────
-              "или считать до конца стабилизации температуры, или считать до
-              лимитов и находить время работы при заданных условиях".  A CHOICE,
+              "either compute until temperature stabilises fully, or compute
+              until the limits and find the time it can run under the given
+              conditions".  A CHOICE,
               not a rule the backend applies by itself — one short line, both
-              modes in the HelpTip (UI rule).  Owner 2026-09-18 again: "сделай
-              это меню поаккуратней" — the same outlined-label select as "Steps
+              modes in the HelpTip (UI rule).  Owner 2026-09-18 again: "make
+              this menu a bit neater" — the same outlined-label select as "Steps
               per electrical period" above (label in the outline, never wrapped,
               two short options; the explanation lives in the tip). */}
           {coupled && (

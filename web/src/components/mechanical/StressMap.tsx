@@ -1,14 +1,14 @@
 /** The Mechanical tab's result view — displacement, von Mises, the principal
  *  and hoop / radial stresses, and the safety factor.
  *
- * 2026-09-05 this mounted THREE static canvases side by side ("рисунок со всеми
- * деформациями и напряжениями и safety factor, то есть три рисунка, чтобы понять
- * всё"), each with its own legend and no zoom at all.
+ * 2026-09-05 this mounted THREE static canvases side by side ("a picture with
+ * all the deformations and stresses and safety factor, that is three pictures
+ * to understand everything"), each with its own legend and no zoom at all.
  *
- * 2026-09-06 the user asked for the opposite of three pictures: "сделай наш
- * интерфейс для просмотра, чтобы можно было приближать и удалять; нужно сделать
- * одну картинку и меню для переключения выводов графиков; интерфейс должен быть
- * единым для всех графиков — электромагнитных, механических и термо".  So this
+ * 2026-09-06 the user asked for the opposite of three pictures: "make our
+ * viewer interface so you can zoom in and out; we need one picture and a menu
+ * for switching between chart outputs; the interface must be the same for
+ * all charts — electromagnetic, mechanical, and thermal".  So this
  * file is now a THIN HOST: it owns the toolbar state that belongs to a
  * mechanical result (case, deformation factor, safety-factor bands, contact
  * overlay), turns the payload into `FieldOutput`s through `mechOutputs`, and
@@ -55,8 +55,8 @@ interface Props {
   onSfHigh: (v: string) => void;
   /** "result is for a previous geometry" — printed on the viewer's own header
    *  too, not only on the panel's, because the picture is the thing being
-   *  misread (user 2026-09-06: "нужно подсвечивать неактуальность текущего
-   *  расчёта") */
+   *  misread (user 2026-09-06: "need to highlight that the current result
+   *  is stale") */
   staleNote?: string | null;
   height?: number;
 }
@@ -69,7 +69,7 @@ const StressMap: React.FC<Props> = ({
   const low = Number(sfLow) || 0;
   const high = Number(sfHigh) || 0;
   /** The cases this RESULT has — one, named by its speed, in single-speed mode
-   *  (user 2026-09-06: "проще будет считать только одну величину"), the three
+   *  (user 2026-09-06: "it's simpler to compute just one value"), the three
    *  otherwise.  Read off the answer, never assumed. */
   const cases = caseKeys(res);
   const single = res.case_mode === 'single';
@@ -106,8 +106,8 @@ const StressMap: React.FC<Props> = ({
   const controls = (
     <>
       {/* One solved speed = nothing to choose: the selector only appears when
-          a result carries several cases (user 2026-09-08: "убери эту надпись,
-          она не нужна" — a one-item "23,000 rpm" dropdown). */}
+          a result carries several cases (user 2026-09-08: "remove this
+          label, it's not needed" — a one-item "23,000 rpm" dropdown). */}
       {!single && (
         <Tooltip title={'Which load case to read. Every quantity below is that case\'s field.'}>
           <Select size="small" value={caseName} onChange={(e) => onCase(e.target.value as CaseName)}
@@ -157,8 +157,8 @@ const StressMap: React.FC<Props> = ({
       onSelect={(id) => onView(id as MechView)}
       height={height}
       controls={controls}
-      /* …and how long it took: user 2026-09-06, "нужно добавить ещё индикатор
-         времени расчёта".  Backend-measured (`elapsed_s`), so it is the solve
+      /* …and how long it took: user 2026-09-06, "need to add a
+         computation-time indicator too".  Backend-measured (`elapsed_s`), so it is the solve
          and not this browser's network. */
       contextLabel={
         (single ? `single speed · ${caseName}`
@@ -179,7 +179,7 @@ const StressMap: React.FC<Props> = ({
 /**
  * The same viewer with nothing solved in it — just the rotor.
  *
- * User 2026-09-06: "если нет расчётов — рисуется просто геометрия".  Deliberately
+ * User 2026-09-06: "if there are no results — just draw the geometry".  Deliberately
  * the SAME `FieldViewer` and not a lighter preview widget: the camera, the Fit,
  * the Mesh toggle and the Part menu are the ones the user will keep using after
  * pressing Solve, so the picture must not jump when the field arrives.
@@ -208,8 +208,8 @@ export const GeometryMap: React.FC<{
           {/* Say what actually failed: the section comes from the API's mesh
               route, and the one time this showed it was a server that had not
               been restarted after the route was added — "check the geometry"
-              sent the user to the wrong place (2026-09-06: "почему нет?
-              рисуй пустую геометрию"). */}
+              sent the user to the wrong place (2026-09-06: "why not?
+              draw empty geometry"). */}
           {error
             ? `cross-section not loaded — ${error}`
             : busy ? 'building the cross-section…'

@@ -1,8 +1,8 @@
 /**
  * The report button's progress ring — the pure half.
  *
- * User, 2026-09-16: *"нужно сделать ещё минимальный прогресс-ринг генерации
- * отчёта, чтобы было видно, что работает, а не висит"*.  A Word report of a
+ * User, 2026-09-16: *"we also need a minimal progress ring for report
+ * generation, so you can see it's working and not stuck"*.  A Word report of a
  * 200 mm machine is about fifty seconds of matplotlib and the PDF half a
  * minute more; until now the row showed "… report" for all of it, which reads
  * as a server that died.

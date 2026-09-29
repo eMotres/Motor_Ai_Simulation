@@ -186,12 +186,12 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
   const numPoles  = gnum('num_poles') ?? ref0.geo.numPoles;
 
   return (
-    // Compact, left-aligned (user 2026-08-25: "подвинем влево и сделаем
-    // покомпактнее — батарея справа"): the parent row places the battery
+    // Compact, left-aligned (user 2026-08-25: "let's move it left and make
+    // it more compact — battery on the right"): the parent row places the battery
     // beside this block, so it must not claim the full viewport height.
     <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'stretch', justifyContent: 'flex-start', height: 'min(46vh, 420px)' }}>
       {/* overflow hidden + contained canvases: the images must never bleed
-          into the neighbouring panel (user: "чтобы не пересекались"). */}
+          into the neighbouring panel (user: "so they don't overlap"). */}
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
         <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
         <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(1)} mm wire · {numSlots} slots / {numPoles} poles</Typography>

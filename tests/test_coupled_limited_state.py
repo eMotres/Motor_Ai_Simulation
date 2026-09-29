@@ -1,11 +1,11 @@
 """SOLVE TO THE STEADY STATE, OR TO THE LIMITS — the coupled loop's two answers.
 
-Owner, 2026-09-18: *«при каплинге, превышающем лимиты, будем ставить максимальные
-значения этих лимитов и делать вычисление для них… то есть состояние мотора в
-работе 24 секунды при заданной мощности»*, refined the same day to *«надо сделать
-выбор — или считать до конца стабилизации температуры, или считать до лимитов и
-находить время работы при заданных условиях»* and *«при заданной мощности и
-заданном охлаждении»*.
+Owner, 2026-09-18: *«when a coupling run exceeds the limits, we'll set the maximum
+values of those limits and compute for them… that is, the state of the motor
+running for 24 seconds at the given power»*, refined the same day to *«we need to
+make a choice — either compute until temperature stabilises fully, or compute
+until the limits and find the time it can run under the given conditions»* and *«at the given power and
+given cooling»*.
 
 So there are two questions and the user picks one.  What can go wrong is the
 WIRING, and that is what this file pins:
@@ -18,8 +18,8 @@ WIRING, and that is what this file pins:
       extra pass, AT THE LIMIT, and the record says so (``mode: "limited"``)
       with the part, the limit, both times, the temperatures at the limit and
       the cooling the answer is conditional on.  "At the limit" is literal
-      (owner 2026-09-18, on the live site: *«так и расчёт тогда должен быть
-      при катушках в 200 градусов, а не 184»*): the pass is solved with each
+      (owner 2026-09-18, on the live site: *«so the computation should then be
+      with the coils at 200 degrees, not 184»*): the pass is solved with each
       part at the temperature its limit is judged on — the winding hot spot,
       the hottest magnet element — and the limiting part exactly AT its limit,
       never at the node mean the network integrates.  ``em_pass_at`` names the

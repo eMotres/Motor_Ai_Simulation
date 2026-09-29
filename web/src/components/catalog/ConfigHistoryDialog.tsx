@@ -1,7 +1,7 @@
 // Configuration history — the snapshots `_save_yaml` keeps under
 // config/dies/.history/<die>/, listed with what a restore would CHANGE, and a
-// button to put one back (user 2026-09-12: "история сохранённых параметров по
-// каждой конфигурации, чтобы в любой момент можно было откатиться").
+// button to put one back (user 2026-09-12: "a history of saved parameters per
+// configuration, so it can be rolled back at any moment").
 //
 // One short line per snapshot, the diff behind it on hover / expand — no text
 // walls (project rule).  A restore is undoable: the replaced version is

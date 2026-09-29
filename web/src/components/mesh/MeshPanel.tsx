@@ -38,7 +38,7 @@ const WIRE_CELL_KEY = 'coil_rel';
 // THE DIE'S MEMORY FOLLOWS THE SCREEN.  It used to be written only on leaving
 // a die or saving a duty, so a duty (re)load in between put the OLDER memory
 // back over the user's live edits — the wire cell went 2h → 1h by itself
-// (user 2026-09-08: "кто опять поменял это, у меня было всегда 2h").  Every
+// (user 2026-09-08: "who changed this again, I always had 2h").  Every
 // mesh.* write now refreshes the active die's memory, debounced.
 import { rememberDieSettings } from '../../lib/dieSettings';
 import { activeDuty } from '../../lib/dutySettings';
@@ -354,8 +354,8 @@ const MeshPanel: React.FC = () => {
   const [view] = useState<'fem' | 'pinn'>('fem');   // always the real FEM mesh; no view toggle
 
   // ── Load/save contract (user, 2026-09-07) ────────────────────────────────
-  // "захожу в Mesh и опять не сохранено то, что было до этого — там точно
-  //  стояло 1/2; почему параметры опять не сохраняются?"
+  // "I go into Mesh and again what was there before isn't saved — it was
+  //  definitely set to 1/2; why do the parameters keep not saving?"
   // Sequence: 09:0x config.yaml mesh.n_sectors: 2 → 09:06:45 the API restarts
   // while the app is open → 09:2x GET /api/mesh/config answers n_sectors 1 /
   // outer_air_factor 1.3, i.e. this panel's CONSTANT defaults → 09:25:41 the
@@ -646,7 +646,7 @@ const MeshPanel: React.FC = () => {
   // floor ~0.3-0.5 mm), which fell through to the 1.5-8 mm fallback range —
   // entirely ABOVE the real floor, so the backend clamped every slider
   // position to the same effective size and dragging did nothing
-  // (2026-09-25: "изменяю на моторе, а ничего не меняется").  Any positive
+  // (2026-09-25: "I change it on the motor, and nothing changes").  Any positive
   // floor is real and must bind the slider.
   const _floor = (femMesh?.feature_floor_mm && femMesh.feature_floor_mm > 0)
     ? femMesh.feature_floor_mm : null;
@@ -928,8 +928,8 @@ const MeshPanel: React.FC = () => {
                   one short ALWAYS-VISIBLE line, not just a hover tooltip.  On a
                   small motor the floor pins the whole slider into a narrow band
                   (e.g. 0.2-0.5 mm) — every position is live, but the range looks
-                  "stuck" without this line (2026-09-25 report: "меняю, а ничего
-                  не меняется" on the Ø12 CIANO14). */}
+                  "stuck" without this line (2026-09-25 report: "I change it,
+                  and nothing changes" on the Ø12 CIANO14). */}
               {_floor && (
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
                   <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
@@ -1178,7 +1178,7 @@ const MeshPanel: React.FC = () => {
                   value={nSectors} exclusive size="small" fullWidth disabled={!cfgLoaded}
                   // The one-click symmetry switch — a user action, so it is dirty
                   // and persisted IMMEDIATELY (this is the setting that was lost
-                  // on 2026-09-07: "там точно стояло 1/2").  Waiting for the
+                  // on 2026-09-07: "it was definitely set to 1/2").  Waiting for the
                   // 700 ms debounce would lose it again if the user leaves the
                   // tab straight after clicking — the panel unmounts.
                   onChange={(_, v) => {

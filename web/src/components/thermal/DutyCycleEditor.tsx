@@ -2,9 +2,9 @@
  * DutyCycleEditor — FIND the regime this machine can hold, and show how hot it
  * gets holding it.
  *
- * THE REFRAME (user 2026-09-15): «с помощью Duty cycle мы можем подобрать такой
- * режим работы мотора, чтобы он смог уложиться в температурные лимиты — то есть
- * мы сами находим это время / S3 ED, при котором всё нормально».  This editor
+ * THE REFRAME (user 2026-09-15): «with the Duty cycle we can pick a motor
+ * operating regime so it can fit within the temperature limits — that is,
+ * we ourselves find that time / S3 ED where everything is fine».  This editor
  * used to take a duty ratio and grade it.  It now ANSWERS with one: leave the
  * ED blank and the backend finds the allowable ratio, integrates the cycle AT
  * that ratio and hands back the temperatures there, the same answer over a span
@@ -88,7 +88,7 @@ import { activeDutyMaterials } from '../../lib/dutySettings';
 import { effectiveAssignment } from '../../lib/dutyMaterials';
 /* NO TOOLTIP WRAPS A CONTROL HERE.  A tooltip's popper is drawn above the menu
    a Select opens and takes the pointer, so the kind picker could not be opened
-   at all (user 2026-09-15: «всплывающее меню всё закрывает»).  Every hint hangs
+   at all (user 2026-09-15: «the popup menu covers everything»).  Every hint hangs
    on a ⓘ beside its control, one short line each; the tooltips that remain wrap
    READOUTS and carry `TIP_PROPS`, which keeps them under the menu layer. */
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
@@ -655,8 +655,8 @@ const DutyCycleEditor: React.FC = () => {
 
       {/* ALWAYS OPEN, since 2026-09-16.  It used to hide behind a Hide/Show
           button near the bottom of this tab, which made the duty cycle look
-          optional: the user asked for the opposite («Меню Duty cycle должно
-          быть всегда открыто и находиться вверху, после frame»), because
+          optional: the user asked for the opposite («The Duty cycle menu should
+          always be open and sit near the top, after frame»), because
           choosing S1 or S3 is the first decision of the run, not the last.
           There is no collapsed state left to persist. */}
       <>
@@ -664,8 +664,8 @@ const DutyCycleEditor: React.FC = () => {
           <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center',
             flexWrap: 'wrap', mt: 1 }}>
             <Box sx={CTRL_ROW}>
-              {/* TWO KINDS are offered (user 2026-09-16: «S2, я думаю, нужно
-                  выбросить, не знаю ему пока применения»).  A duty that still
+              {/* TWO KINDS are offered (user 2026-09-16: «S2, I think we
+                  should drop it, I don't know a use for it yet»).  A duty that still
                   STORES an S2 or a segment list renders it — disabled, so it
                   can be read and left but never chosen again — because the
                   yaml, the backend and the report all still understand one. */}

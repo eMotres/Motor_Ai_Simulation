@@ -1,10 +1,10 @@
 """``wire_split`` is GEOMETRY, and its strips are SERIES TURNS.
 
-The rule this file pins (user, 2026-09-08: *"сделай ширину провода 4,5 мм, слот
-станет чуть больше, я бы гап между проводами сделал 2·Wire Spacing X"*, then
-*"wire_split_series можно убрать — нам всегда будет нужно только
-последовательное подключение этих двух катушек; при параллельном подключении
-возникнут компенсационные токи между ними"*):
+The rule this file pins (user, 2026-09-08: *"make the wire width 4.5 mm, the
+slot will get a bit bigger, I'd make the gap between wires 2·Wire Spacing X"*, then
+*"wire_split_series can be removed — we will always only need
+a series connection of these two coils; a parallel connection
+would create compensating currents between them"*):
 
   * ``wire_width`` is ONE STRIP.  ``wire_split`` = N lays N of them SIDE BY SIDE
     across the slot, ``2 × wire_spacing_x`` apart, so the wire column — and the

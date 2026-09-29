@@ -1,7 +1,7 @@
 """Modal analysis — closed-form checks, then the two routes.
 
-Added 2026-09-05 for the user's request: "нам нужно сделать ещё модальный
-анализ, чтобы понять все частоты — это очень важно для 20000 rpm".
+Added 2026-09-05 for the user's request: "we also need to do a modal
+analysis, to understand all the frequencies — this is very important for 20000 rpm".
 
 The first five tests pin the two solvers to textbook answers on geometry the
 motor config knows nothing about (a thin ring, a uniform beam).  That order is

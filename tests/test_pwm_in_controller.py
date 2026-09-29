@@ -1,8 +1,8 @@
 """PWM LIVES IN THE CONTROLLER — one carrier, one resolution, every consumer.
 
 Owner, 2026-09-24 (a screenshot of the Controller tab's greyed "Carrier
-20,000 Hz" placeholder): «Это значение нужно задавать в контроллере; PWM нужно
-выкинуть из Electromagnetic.»  ``inverter.drive_source`` is the one resolution;
+20,000 Hz" placeholder): «This value needs to be set in the Controller; PWM
+needs to be dropped from Electromagnetic.»  ``inverter.drive_source`` is the one resolution;
 this file pins its order, the migration from the retired Simulation-tab
 carrier, the backward-compatible acceptance of the old request fields, the
 Electromagnetic route filling a ``pwm_voltage`` run from the Controller, and a

@@ -1,8 +1,8 @@
 """A picked Sweep point applies DIRECTLY, with its own (screening-resolution)
 result — no server re-solve.
 
-2026-09-25 (owner): "Давай не будем в Sweep пересчитывать 6× — только при
-повторном расчёте уже в Electromagnetic." Apply must not re-solve a picked
+2026-09-25 (owner): "Let's not recompute 6x in Sweep — only when
+recomputing again in Electromagnetic." Apply must not re-solve a picked
 Sweep point at standard/cogging_quality resolution before writing it into the
 machine; the standard-resolution answer comes only from the owner's next
 Electromagnetic run of the applied machine.

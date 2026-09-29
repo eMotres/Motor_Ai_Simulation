@@ -32,8 +32,8 @@ function couplingLine(c) {
     : mb.contact_fallback ? `${String(mb.contact_fallback.pair ?? 'joint').replace('_', '–')} solved ${mb.contact_fallback.to ?? 'bonded'}`
     : null;
   // The modes and the critical speeds the same run left (2026-09-13) used to
-  // print here too (f₁ …, crit … rpm) — owner, 2026-09-21: *«не надо их
-  // выводить сюда»*.  They stay everywhere else that already carries them
+  // print here too (f₁ …, crit … rpm) — owner, 2026-09-21: *«no need to
+  // print them here»*.  They stay everywhere else that already carries them
   // (Mechanical tab, this record, the catalog row, the report); only this
   // ONE dashboard line drops them.
   return [`winding ${c.coil_temp_c.toFixed(0)} °C${atLimit('winding')}`, m, mech,
@@ -150,8 +150,8 @@ test('a run that did not settle still says so after the mechanical term', () => 
 });
 
 // 2026-09-13: the same coupled run started leaving the ring modes and the
-// critical speeds on this line too (user: "чтобы к отчёту было всё готово").
-// 2026-09-21 (owner, addendum): *«не надо их выводить сюда»* — the dashboard
+// critical speeds on this line too (user: "so everything is ready for the report").
+// 2026-09-21 (owner, addendum): *«no need to print them here»* — the dashboard
 // line drops both fragments again; the modal / critical-speed answers stay in
 // `mechanical.modes` / `mechanical.critical_speeds` on the SAME record for
 // the Mechanical tab, the catalog row and the report to read.
@@ -254,7 +254,7 @@ test('only a duty that does NOT fit reaches the Run button', () => {
 });
 
 // ── THE MACHINE AT THE LIMIT (owner 2026-09-18) ─────────────────────────────
-// «так и расчёт тогда должен быть при катушках в 200 градусов, а не 184»: a
+// «so the computation should then be with the coils at 200 degrees, not 184»: a
 // `limits` run's final pass is solved with the limiting part exactly AT its
 // limit, so the record's temperature IS the limit and the line says so on that
 // term — the reader then knows the torque, the losses and R beside it are
@@ -332,7 +332,7 @@ test('the shipped source prints the same words', () => {
                        src.indexOf('export function regimeTerm'));
   assert.ok(fn.includes("' (at the limit)'"), fn);
   assert.ok(fn.includes("c.mode === 'limited'"), fn);
-  // Owner, 2026-09-21: *«не надо их выводить сюда»* — modesTerm / critTerm
+  // Owner, 2026-09-21: *«no need to print them here»* — modesTerm / critTerm
   // must not be built (or returned) by couplingLine any more; couplingTooltip
   // → mechanicalRows still prints the full sentences on hover.
   assert.ok(!fn.includes('modesTerm'), fn);

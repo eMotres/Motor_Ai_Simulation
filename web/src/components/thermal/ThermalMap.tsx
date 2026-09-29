@@ -6,8 +6,8 @@
  * arrows), turns the payload into `FieldOutput`s through `thermalOutputs`, and
  * hands them to the same `common/FieldViewer` the Electromagnetic and Mechanical tabs
  * draw through — one camera, one banded shader, one colour bar, one part tree.
- * User 2026-09-06: "интерфейс должен быть единым для всех графиков —
- * электромагнитных, механических и термо".
+ * User 2026-09-06: "the interface must be the same for all charts —
+ * electromagnetic, mechanical, and thermal".
  *
  * Nothing here computes physics.  The temperature, the flux and the component
  * maxima are the solver's; this file decides only how they are COLOURED and what
@@ -111,8 +111,8 @@ const ThermalMap: React.FC<Props> = ({
       onSelect={(id) => onView(id as ThermView)}
       height={height}
       controls={controls}
-      /* …and how long it took (user 2026-09-06: "нужно добавить ещё индикатор
-         времени расчёта").  Backend-measured, so it is the solve and not this
+      /* …and how long it took (user 2026-09-06: "need to add a
+         computation-time indicator too").  Backend-measured, so it is the solve and not this
          browser's network or the JSON of the field payload. */
       contextLabel={
         `${(res.n_triangles ?? res.triangles.length).toLocaleString()} tri`

@@ -37,8 +37,8 @@ const PART_CFG: Partial<Record<CompKey, PartCfg>> = {
   slot_insulation: { assignKey: 'slot_insulation', label: 'Insulation',  color: PART_COLORS.slotLiner },
   wire_insulation: { assignKey: 'wire_insulation', label: 'Wire Enamel', color: PART_COLORS.enamel },
   // Only selectable when the machine has one (the mesh carries a `sleeve`
-  // part exactly then), so no guard is needed here (user 2026-09-04: "сделай
-  // всё стандартно как для других частей мотора").
+  // part exactly then), so no guard is needed here (user 2026-09-04: "make
+  // everything standard, like for the other motor parts").
   sleeve:   { assignKey: 'sleeve',      label: 'Retaining Sleeve',      color: PART_COLORS.sleeve },
 };
 

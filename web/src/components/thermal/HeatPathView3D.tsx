@@ -1,9 +1,9 @@
 /**
  * THE HEAT-PATH VIEW — the machine, with the cooled surfaces glowing.
  *
- * User, 2026-09-15: *"лучше нарисовать 3D модель с катушками (end windings) и на
- * ней прямо показывать, куда и сколько тепла может отводиться, чтобы
- * пользователю было всё ясно и понятно"*.
+ * User, 2026-09-15: *"better to draw a 3D model with the coils (end windings) and
+ * show directly on it where and how much heat can be dissipated, so it's all
+ * clear and understandable to the user"*.
  *
  * Nothing here is solved, fetched or meshed: the model comes from
  * `heatPaths.buildHeatPathModel` on the payload the tab already has, and the
@@ -21,9 +21,9 @@
  * this housing" is an answer about the machine, and a blank surface would read
  * as a measurement of zero.
  *
- * …AND IT IS WHERE THE VALUES ARE SET (user, 2026-09-15: *"дай возможность
- * задавать значения прямо в нём — так намного удобнее, и определи его в это
- * окно, где всё и задаётся"*).  Clicking a surface opens a small popover
+ * …AND IT IS WHERE THE VALUES ARE SET (user, 2026-09-15: *"give the ability
+ * to set the values right in it — it's much more convenient that way, and
+ * define it in this window, where everything is set"*).  Clicking a surface opens a small popover
  * anchored to it with exactly the fields that surface owns — ε and the room on
  * the housing, W/K and the mount temperature on the flange, open/closed and how
  * many ends on the end faces, the mode in the bore, millimetres on the shaft

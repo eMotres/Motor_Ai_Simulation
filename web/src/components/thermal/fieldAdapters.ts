@@ -1,8 +1,8 @@
 /**
  * fieldAdapters — the Thermal tab's half of the shared field contract.
  *
- * User 2026-09-06: "интерфейс должен быть единым для всех графиков —
- * электромагнитных, механических и термо".  So a temperature map is turned into
+ * User 2026-09-06: "the interface must be the same for all charts —
+ * electromagnetic, mechanical, and thermal".  So a temperature map is turned into
  * exactly the same `FieldOutput` the EM and mechanical adapters produce, and
  * `common/FieldViewer` draws all of them with one camera, one banded shader, one
  * colour bar and one part tree.
@@ -239,8 +239,8 @@ const GEOM_FILL: [number, number, number] = [100, 116, 139];
 /**
  * The solids as geometry alone — no values, no colour scale.
  *
- * The same rule the Mechanical tab is built to (2026-09-06: "если нет расчётов —
- * рисуется просто геометрия"): an empty tab shows the picture Solve will colour
+ * The same rule the Mechanical tab is built to (2026-09-06: "if there are no
+ * results — just draw the geometry"): an empty tab shows the picture Solve will colour
  * in, drawn by the SAME viewer with the same camera, so pressing Solve fills the
  * picture instead of creating it.
  *

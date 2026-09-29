@@ -1,7 +1,7 @@
 """The magnet's outer edge is the ARC on r = rotor_or − magnet_up_gap.
 
-Why (user, 2026-09-06): "я убрал всё, но у нас геометрия всё равно не
-соединяется со сливом" — with ``magnet_up_gap = 0`` and ``rotor_hole = 1`` the
+Why (user, 2026-09-06): "I removed everything, but the geometry still doesn't
+connect to the drain" — with ``magnet_up_gap = 0`` and ``rotor_hole = 1`` the
 magnet STILL did not touch the retaining sleeve, because its top was the
 straight CHORD between the two top corners.  On the Ø200 machine that chord sits
 63.2 mm × (1 − cos 8.1°) ≈ 0.63 mm below the OD at the pole centre, and the only
@@ -10,7 +10,7 @@ two points that did touch — the corners — are then filleted away by
 magnets must press DIRECTLY on the carbon sleeve.
 
 The chord was briefly a `magnet_top: flat | arc` choice.  The user closed it the
-same day — "давай по умолчанию сделаем только arc и уберём прямую вообще" — so
+same day — "let's default to arc only and drop the straight segment entirely" — so
 there is one magnet top now and no knob.  What is asserted here:
 
 1. **The arc lands on the sleeve bore's own vertices.**  Not "close to the OD":
@@ -347,7 +347,7 @@ def test_fem_mesh_builds_on_the_arc_topped_magnet():
 # ───────────────────────── 5. the knob is gone ───────────────────────────────
 
 def test_the_knob_is_not_in_the_served_schema_any_more():
-    """The user removed the choice on 2026-09-06 ("уберём прямую вообще"), so
+    """The user removed the choice on 2026-09-06 ("drop the straight segment entirely"), so
     the Geometry tab must not offer it."""
     from motor_ai_sim.routes._validation import (
         SCHEMA_FALLBACK,
@@ -395,7 +395,7 @@ def test_on_sleeve_fillets_leave_the_bore_at_a_finite_angle():
     """A magnet seated on the sleeve (up_gap 0) must not meet the bore
     tangentially: the air lens between the fillet and the bore ended in a 0 deg
     cusp that Triangle filled with a fan of micro-elements (user 2026-09-07,
-    mesh view: "обрати внимание на углы магнитов, что-то тут не так").  The
+    mesh view: "pay attention to the magnet corners, something's off there").  The
     fillet now ends with a chord at >= 12 deg to the bore; a magnet with air
     above it (up_gap 0.5) keeps the tangent fillet."""
     def junction_angles(mp, r_top):

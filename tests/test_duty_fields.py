@@ -1,7 +1,7 @@
 """The per-duty FIELD store — ``motor_ai_sim.duty_fields``.
 
-Added 2026-09-09 for the user's ask: *"давай сделаем сохранение всех полей
-моделирования, как электромагнитных, так и тепловых и механических"*.  A
+Added 2026-09-09 for the user's ask: *"let's save all the simulation fields,
+electromagnetic as well as thermal and mechanical"*.  A
 configuration has several duties and the report must show each duty's own maps
 side by side; every field the product solves used to be stored ONCE PER MACHINE
 (``.last_transient_field.pkl``, ``.last_thermal.pkl``, ``.last_mechanical.pkl``)

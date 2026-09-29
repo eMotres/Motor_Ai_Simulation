@@ -2,9 +2,9 @@
  * Mesh-settings load/save contract — pure functions, no React, no fetch, so the
  * rule below can be unit-tested without a browser.
  *
- * WHY this exists (user, 2026-09-07: "захожу в Mesh и опять не сохранено то,
- * что было до этого — там точно стояло 1/2; почему параметры опять не
- * сохраняются?"):
+ * WHY this exists (user, 2026-09-07: "I go into Mesh and again what was
+ * there before isn't saved — it was definitely set to 1/2; why do the
+ * parameters keep not saving?"):
  *
  *   09:0x  config/motor_config.yaml holds mesh.n_sectors: 2 (the user's 1/2).
  *   09:06:45 the API restarts while the app is open.

@@ -54,8 +54,8 @@ map:
 # geometry_schema keys + sleeve_thickness; derived/internal names are never
 # renamed).
 #
-# CONVERSION HANDLING (revised 2026-09-25, owner: "формулы не меняй, только
-# одну: stator_up_r = stator_diameter/2"): the two rows with a `conversion`
+# CONVERSION HANDLING (revised 2026-09-25, owner: "don't change the formulas,
+# only one: stator_up_r = stator_diameter/2"): the two rows with a `conversion`
 # never rename their old parameter. stator_diameter is CREATED fresh (value =
 # stator_up_r * 2, explicit unit) and stator_up_r is turned into the ONE
 # formula this tooling ever changes ("stator_diameter / 2") -- its NAME stays,

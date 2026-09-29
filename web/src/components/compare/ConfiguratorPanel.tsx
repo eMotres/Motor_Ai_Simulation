@@ -141,7 +141,7 @@ const MetricTile: React.FC<{
   /** ABSOLUTE colouring for quantities that have a meaning of their own
    *  (current density): 'ok' | 'warn' | 'bad' overrides the vs-reference
    *  colour, because 9 A/mm² is fine whether or not it grew (user
-   *  2026-08-26: "почему ток красным подсвечивается?"). */
+   *  2026-08-26: "why is the current highlighted in red?"). */
   absLevel?: 'ok' | 'warn' | 'bad';
   /** What the number IS, when the label cannot say it (the heat split's
    *  terms).  Prepended to the vs-reference line in the hover title. */
@@ -155,7 +155,7 @@ const MetricTile: React.FC<{
   const good = goodHi === undefined ? null : goodHi ? delta > 0 : delta < 0;
   const dColor = good === null ? 'var(--text-2)' : good ? '#4ade80' : '#f87171';
   void show; void dColor;
-  // Compact (user 2026-08-25 "слишком размазано"): fixed narrow tiles in a
+  // Compact (user 2026-08-25 "too spread out"): fixed narrow tiles in a
   // dense wrap — the same visual weight as the Simulation summary cells.
   // The tile shows the VALUE; how it moved against the reference design is
   // told by the value's colour and by the tooltip (green = better, red =
@@ -188,7 +188,7 @@ const ConfiguratorPanel: React.FC = () => {
   // Retry until the catalog answers, and refetch on catalog changes — a
   // single failed fetch (server restart window) left the panel with ONLY the
   // built-in 200 mm reference forever, so no loaded motor could ever match
-  // (user 2026-08-25: "опять 200 mm").  Same illness as the Motors-tab
+  // (user 2026-08-25: "200 mm again").  Same illness as the Motors-tab
   // canWrite freeze, same cure.
   useEffect(() => {
     let dead = false;
@@ -241,7 +241,7 @@ const ConfiguratorPanel: React.FC = () => {
       // CILN28 series: 40 / 160 / 220 mm stacks on one lamination), and they
       // all match the section — picking the first one made Configure scale a
       // 220 mm passport down to a 40 mm machine and every number came out
-      // wrong (user 2026-08-26: "загружаю мотор — получаю другие данные").
+      // wrong (user 2026-08-26: "I load the motor — I get different data").
       const dist = (r: ReferenceMotor) => {
         const p0 = r.passport;
         const rel = (a: number, b: number) =>
@@ -667,7 +667,7 @@ const ConfiguratorPanel: React.FC = () => {
           {draftMsg && <Box sx={{ mt: draft ? 0.5 : 0 }}>{draftMsg}</Box>}
         </Alert>
       )}
-      {/* Header — NO reference picker (user 2026-08-25 "выкинь это меню"):
+      {/* Header — NO reference picker (user 2026-08-25 "drop this menu"):
           the Configurator always mirrors the LOADED motor; the name shown is
           the matched passport's. */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.25, borderBottom: '1px solid var(--line-soft)' }}>
@@ -822,7 +822,7 @@ const ConfiguratorPanel: React.FC = () => {
         {/* ── RESULT ── */}
         <Box sx={{ flex: '2 1 460px', minWidth: 360, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
           {/* SEVEN ROWS — the same order as the Simulation summary card
-              (user 2026-09-04: "одинаково как для simulation так и configure"):
+              (user 2026-09-04: "the same for both simulation and configure"):
               1 torque · power · mass · efficiency · ripple · densities
               2 total loss · iron · copper · magnet · stator/rotor heat · loss density
               3 voltages + current density (unchanged)
@@ -991,7 +991,7 @@ const ConfiguratorPanel: React.FC = () => {
               winding sliders stop at the slot, and an over-limit design says
               "wire outside the stator" under them. */}
 
-          {/* The wire-current banner is gone (user 2026-08-26: "мы же видим
+          {/* The wire-current banner is gone (user 2026-08-26: "we can already see
               Curr. density") — the current-density tile already says it, and
               the banner fired even when the current merely EQUALLED the cap.
               The cap still colours the current slider red. */}
@@ -1069,7 +1069,7 @@ const ConfiguratorPanel: React.FC = () => {
       </Box>
 
       {/* ── GEOMETRY (left, compact) + BATTERY (right) — one row (user
-          2026-08-25: "геометрию влево, батарею справа, покомпактнее"). ── */}
+          2026-08-25: "geometry on the left, battery on the right, more compact"). ── */}
       <Box sx={{ px: 2, pb: 1.5, display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
         <Box sx={{ flex: '0 1 auto', minWidth: 340 }}>
           <GeometryProjections ref0={ref} knobs={knobs} />

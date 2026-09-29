@@ -2,8 +2,8 @@
  * Server-side memory of a tab's input fields — the same bargain the Simulation
  * tab has with the config.
  *
- * WHY (user 2026-09-07: "запоминай все последние настройки механических и
- * термических моделирований … всё одинаково для всех моделирований"): the
+ * WHY (user 2026-09-07: "remember all the latest mechanical and thermal
+ * simulation settings … the same way for every simulation"): the
  * Mechanical and Thermal stores persisted their fields to `localStorage` only —
  * one browser's memory — and their `/last` restored just the parameters of the
  * last SOLVE.  A field set and not yet solved, or set in another browser, was

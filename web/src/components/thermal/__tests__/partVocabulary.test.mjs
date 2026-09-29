@@ -2,8 +2,8 @@
  * The Part tree's vocabulary: name → swatch, name → heading.
  *
  * User 2026-09-07, on a thermal map whose slot was white around the wire bars:
- * *"надо рисовать изоляцию и покрытие провода, а то пустое место, и воздух тоже
- * показывать — он же входит в расчёт, и в дереве отображать их тоже нужно"*.
+ * *"we need to draw the insulation and the wire coating, that empty space, and
+ * also show the air — it's part of the computation, so it also needs to be shown in the tree"*.
  * The last clause is what this file tests.  The backend now sends five more
  * domains (insulation, wire enamel, wire coating, air gap, pocket air) and the tree
  * turns each of them into a row — which means two pure string functions decide

@@ -585,8 +585,8 @@ def test_an_S2_pull_says_there_is_no_periodic_state_and_times_the_class(
 # ---------------------------------------------------------------------------
 # (c2) THE TOOL FINDS THE REGIME — the contract, on the canned map
 # ---------------------------------------------------------------------------
-# User 2026-09-15: «с помощью Duty cycle мы можем подобрать такой режим работы
-# мотора, чтобы он смог уложиться в температурные лимиты».  So `ed_pct` became
+# User 2026-09-15: «with the Duty cycle we can pick a motor operating regime
+# so it can fit within the temperature limits».  So `ed_pct` became
 # OPTIONAL on an S3 and the answer carries the regime that was FOUND: the
 # allowable ratio at this cycle length, the same over a span of cycle lengths,
 # the temperatures at that point, and how long one pull lasts from cold, from

@@ -1,10 +1,10 @@
 """The OPEN frame, part two: the ROTOR is in the wash as well (2026-09-21).
 
 User, with one thermal photograph of an open drone motor on a propeller stand
-in front of him: *«по термофотографиям катушки греются всегда значительно больше
-магнитов; конструкция полностью открыта, магниты обдуваются со всех сторон, и
-воздух ещё продувает зазор — надо это как-то учесть, когда мы задаём no
-housing»*.  The 2026-09-09 open frame put the STATOR side in the propeller
+in front of him: *«from the thermal photos, the coils always heat up
+significantly more than the magnets; the construction is fully open, the
+magnets are blown from every side, and the air blows through the gap too —
+we need to account for this somehow when we set no housing»*.  The 2026-09-09 open frame put the STATOR side in the propeller
 stream (end turns, slot channels) and left the rotor exactly where the housed
 model had it, with the mechanical clearance and the bore as its only doors — and
 on the CIANO14 50 edited / L15 record that reads the magnets at 240 °C against a

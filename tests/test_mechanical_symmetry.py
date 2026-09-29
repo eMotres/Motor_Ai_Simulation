@@ -2,8 +2,8 @@
 
 Added 2026-09-09 for the user's request:
 
-    *"нагрузка на все зубы должна быть одинакова … так используй периодичность,
-    как я во Fusion"*
+    *"the load on all teeth must be the same … so use periodicity,
+    like I do in Fusion"*
 
 He solves ONE pole sector of the rotor in Fusion with cyclic-symmetry boundary
 conditions, so every pole carries an identical load by construction.  This suite
@@ -362,8 +362,8 @@ def test_b_the_masses_are_the_machines_and_not_the_wedges(spoke_full,
 
 
 def test_b_every_pole_of_the_sector_answer_is_identical(spoke_sector):
-    """The user's actual requirement: *"нагрузка на все зубы должна быть
-    одинакова"*.
+    """The user's actual requirement: *"the load on all teeth must be
+    the same"*.
 
     The replicated field is the sector's, four times over, so the four poles
     carry the SAME von Mises to the bit — there is nothing for them to differ

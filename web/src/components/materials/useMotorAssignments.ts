@@ -72,7 +72,7 @@ export function useMotorAssignments() {
   // sleeve_thickness > 0, and the backend adds/drops the `sleeve` key of the
   // assignment accordingly — so a geometry edit must re-read it, or the
   // Materials tab keeps the old part list until something else refreshes it
-  // (user 2026-09-04: "не вижу sleeve в дереве материалов").
+  // (user 2026-09-04: "I don't see the sleeve in the materials tree").
   const sleeveT = useMotorStore(st => st.geometry?.sleeve_thickness);
   useEffect(() => { refresh(); }, [refresh, sleeveT]);
 
@@ -96,8 +96,8 @@ export function useMotorAssignments() {
 
   const assign = useCallback((part: string, material: string) => {
     // FREE-tier clients: the motor's materials are FIXED by its card (user
-    // 2026-08-25 — "менять можно только те материалы, которые есть в карточке
-    // мотора").  The library stays browsable; assignment is the vendor's.
+    // 2026-08-25 — "only materials that are in the motor's card can be
+    // changed").  The library stays browsable; assignment is the vendor's.
     // Central chokepoint on purpose: every assign entry point (panel,
     // cross-section, detail view) hits this one gate.
     if (restricted) {
@@ -111,8 +111,8 @@ export function useMotorAssignments() {
     // ── the change belongs to the ACTIVE DUTY too ────────────────────────────
     // A duty of this project is a whole thermal scenario ("peak 200C wire 120C
     // NdFeB"), so the materials it is characterised with are ITS materials
-    // (user 2026-09-01: "нужно запоминать какие магниты, и не только магниты:
-    // все материалы, для каждого duty").  This is the one chokepoint every
+    // (user 2026-09-01: "we need to remember which magnets, and not only
+    // magnets: all materials, for each duty").  This is the one chokepoint every
     // assign entry point (panel, cross-section, detail view, the Simulation
     // badge's own picker) passes through, so filing it here files it once.
     // localStorage only — the stored duty changes on an explicit Save to duty
@@ -147,8 +147,8 @@ export function useMotorAssignments() {
           setAssignments(d.assignments);
         }
         setSaving(false);
-        // NO auto-recompute (user 2026-08-25: "не надо автоматом запускать
-        // пересчёт") — it raced its own trigger and solved with the OLD
+        // NO auto-recompute (user 2026-08-25: "no need to automatically
+        // trigger a recompute") — it raced its own trigger and solved with the OLD
         // material.  Instead: broadcast the change so EVERY hook instance
         // (incl. the one feeding ?mat= to the solver) adopts it, and let the
         // summary card dim itself with "⚠ materials changed" until the user

@@ -1,9 +1,9 @@
 /**
  * THE HEAT PATHS — where the watts leave the machine, as something you can draw.
  *
- * User, 2026-09-15: *"лучше нарисовать 3D модель с катушками (end windings) и на
- * ней прямо показывать, куда и сколько тепла может отводиться, чтобы
- * пользователю было всё ясно и понятно"*.
+ * User, 2026-09-15: *"better to draw a 3D model with the coils (end windings) and
+ * show directly on it where and how much heat can be dissipated, so it's all
+ * clear and understandable to the user"*.
  *
  * Every number here is ALREADY in the payload the Thermal tab has — `cooling
  * .outer`, `.mount`, `.end_faces`, `.inner`, `.shaft_ends` and
@@ -783,8 +783,8 @@ export function sinkTooltip(sink: HeatSink): string {
 /**
  * The MECHANISM one arrow stands for, in the fewest words that still name it.
  *
- * User, 2026-09-16: *"добавить подсказки, когда наводишь курсором на стрелки:
- * что она означает и сколько тепла уходит через этот канал"*.  An arrow on the
+ * User, 2026-09-16: *"add hints when you hover the cursor over the arrows:
+ * what it means and how much heat leaves through this channel"*.  An arrow on the
  * picture is a channel, and a channel is not identified by its watts: 48.5 W
  * out of a flange is conduction into an arm and 48.5 W off a cylinder is a film
  * in the room, and the reader has to be told which one he is looking at.

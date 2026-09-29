@@ -289,8 +289,8 @@ const FamilyCatalog: React.FC<{
   //   report (.docx)     the same machine plus what every SOLVER last answered
   //                      about it — losses, temperatures, stresses, bearings and
   //                      the field maps, with each result's own timestamp.
-  //                      WORD, not PDF, since 2026-09-09 (user: "репорт лучше
-  //                      выдавать в формате doc") — he edits the document and
+  //                      WORD, not PDF, since 2026-09-09 (user: "better output
+  //                      the report in doc format") — he edits the document and
   //                      forwards it to clients, and Word exports its own PDF.
   //                      The backend serves docx by default and pdf on
   //                      `?format=pdf`, which the small PDF button asks for.
@@ -299,9 +299,9 @@ const FamilyCatalog: React.FC<{
   // grey out the other on the same row.
   const [exporting, setExporting] = useState<string | null>(null);
 
-  // THE PROGRESS RING (user 2026-09-16: "нужно сделать ещё минимальный
-  // прогресс-ринг генерации отчёта, чтобы было видно, что работает, а не
-  // висит").  A report is ~50 s of figures and the PDF half a minute more, and
+  // THE PROGRESS RING (user 2026-09-16: "we also need a minimal progress ring
+  // for report generation, so you can see it's working and not stuck").
+  // A report is ~50 s of figures and the PDF half a minute more, and
   // the download is ONE request whose body is the file — nothing on the wire
   // until it is finished.  So the click mints a run id, sends it with the
   // download, and a second request polls the stages the backend publishes into
@@ -312,8 +312,8 @@ const FamilyCatalog: React.FC<{
   const reportBusy = (die: string, cfg: string) =>
     exporting === `report:${die}/${cfg}` || exporting === `report:pdf:${die}/${cfg}`;
 
-  // WHICH DUTY'S PICTURES go into the report (user 2026-09-11: "нужно ещё
-  // сделать выбор, из какого режима мы публикуем картинки в отчёте").  The
+  // WHICH DUTY'S PICTURES go into the report (user 2026-09-11: "we also need
+  // a choice of which mode we publish the pictures from into the report").  The
   // backend's own rule is "the rated duty, then the loaded one"; this lets the
   // user override it per configuration.  Remembered per machine in
   // localStorage — a convenience, never state the report depends on: an empty
@@ -458,8 +458,8 @@ const FamilyCatalog: React.FC<{
             }
             // 409 = the die still has configurations. Name them and ask ONCE
             // more — then delete the whole subtree with force. (It used to stop
-            // here with a message the user could miss: "стираю а она не
-            // стирается", live 2026-08-20.)
+            // here with a message the user could miss: "I'm deleting it and it
+            // isn't deleting", live 2026-08-20.)
             const detail = String(data?.detail ?? '');
             setBusy(null);
             setAskConfirm({
@@ -593,8 +593,8 @@ const FamilyCatalog: React.FC<{
   /** Where the chip's word came from.  The role is READ OFF THE DUTIES since
    *  2026-09-10 — it used to be the Simulation toggle's value on the day the
    *  configuration was created, frozen in the yaml, so "L180 gen" wore a
-   *  `motor` chip over two generator duties (user: "почему здесь motor, хотя
-   *  это генератор"). */
+   *  `motor` chip over two generator duties (user: "why does it say motor here,
+   *  when this is a generator"). */
   const roleTip = (c: { role: string; role_source?: string; role_stored?: string }) => (
     c.role_source === 'duties'
       ? (c.role === 'mixed'

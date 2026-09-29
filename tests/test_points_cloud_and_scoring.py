@@ -12,8 +12,8 @@ anchor — and the auto card's scatter plotted ``st.history`` (one row per
 GENERATION, i.e. the incumbent) instead of ``st.points``, so a 62-eval run drew
 six dots and read as "found nothing".
 
-  Standing rule (Vadim): «надо выводить все точки я потом могу отфильтровать их
-  по пульсации там же есть ползунок» — publish every scored eval; the chart's
+  Standing rule (Vadim): «output all the points, I can filter them later by
+  ripple, there's a slider for that anyway» — publish every scored eval; the chart's
   ripple slider does the filtering, visually.
 
 DEFECT 2 — "best F = +0.00000 after 69 evals" while the eval log held a design

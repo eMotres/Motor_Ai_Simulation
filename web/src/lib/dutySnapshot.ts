@@ -4,8 +4,8 @@
 // ONE implementation for the two moments it happens:
 //   • ▶ on a duty (catalog/FamilyCatalog applyDuty), and
 //   • a panel that wakes up with an EMPTY browser store while the server still
-//     names an active duty (user 2026-09-03: "опять сбилось — 24 шага и
-//     демагнитизация выключена").  The settings live only in the browser; a
+//     names an active duty (user 2026-09-03: "it reset again — 24 steps and
+//     demagnetization turned off").  The settings live only in the browser; a
 //     reset profile shows the factory defaults under the duty's own name until
 //     somebody presses ▶ again.  Now the panel heals itself from the snapshot.
 import { dutyKey, setDutyCycleSnapshot } from './dutySettings';

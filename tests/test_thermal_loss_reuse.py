@@ -1,9 +1,10 @@
 """The Thermal tab TAKES the loss map from the Electromagnetic tab — or refuses.
 
-User, 2026-09-07: *"а зачем считается каждый шаг? нам нужны средние потери
-мотора за весь цикл"*, and later the same day: *"нужно как-то разделить тепловые
-расчёты и электромагнитные; если вдруг тепловому расчёту нужно электромагнитное
-моделирование, пусть оно делается во вкладке Simulation"* (the tab being renamed
+User, 2026-09-07: *"why is every step being computed? we need the average
+losses of the motor over the whole cycle"*, and later the same day: *"we need to
+somehow separate the thermal and electromagnetic computations; if the thermal
+computation happens to need an electromagnetic simulation, let it be done in
+the Simulation tab"* (the tab being renamed
 Electromagnetic).
 
 The thermal solve needs ONE number per element — the cycle-averaged loss density
@@ -360,7 +361,7 @@ def test_a_different_mesh_or_demag_or_gap_layers_is_still_reused(run_snapshot, n
     discretisation, not the physics: the map is replayed on the run's own
     elements.  Keying on them (the first cut did) meant the Thermal tab never
     matched a Simulation run — the user runs with demag and one gap layer,
-    this route solves with neither ("опять расчёт на каждого фрейма",
+    this route solves with neither ("computing per frame again",
     2026-09-07)."""
     from motor_ai_sim.routes import thermal as th
 
@@ -383,7 +384,7 @@ def test_the_route_remembers_the_map_it_was_handed(run_snapshot, monkeypatch):
     that store would start refusing an operating point it answered five minutes
     ago.  The map is therefore remembered here too, keyed on the PHYSICS identity
     alone (so another cooling is the same map) and mirrored to disk, which is
-    what makes it survive an API restart ("надо просто запоминать карту потерь",
+    what makes it survive an API restart ("we just need to remember the loss map",
     2026-09-07).
 
     It is remembered from an Electromagnetic RUN, never from a solve of its own:
@@ -435,8 +436,8 @@ def test_a_different_geometry_is_not_reused(run_snapshot, no_em_solve):
 
 def test_swapping_an_em_inert_material_keeps_the_run(run_snapshot, no_em_solve):
     """The insulation and the wire enamel are insulators the field never sees:
-    swapping Nomex for Al2O3 (user 2026-09-07: "когда меняешь изоляцию,
-    магнетизм не нужно пересчитывать, он никак не влияет") is a THERMAL change
+    swapping Nomex for Al2O3 (user 2026-09-07: "when you change the insulation,
+    the magnetism doesn't need recomputing, it has no effect on it") is a THERMAL change
     and must reuse the Electromagnetic run — while a different magnet is a
     different machine and must not (the test right below)."""
     from motor_ai_sim.material_context import set_request_materials

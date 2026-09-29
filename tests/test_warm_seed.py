@@ -1,8 +1,8 @@
 """Each sweep point continues the previous one — the seed, and its honesty.
 
-User, 2026-09-06: "мы же уже договаривались, что проход демагнитизации делается
-для каждого sweep только один раз; изменения геометрии небольшие, и каждый
-следующий расчёт берётся из предыдущего."  Sweep points had gone from 700-800 s
+User, 2026-09-06: "we already agreed that the demagnetization pass is done
+only once per sweep; the geometry changes are small, and each
+next computation is taken from the previous one."  Sweep points had gone from 700-800 s
 to 1100-1700 s because every subprocess eval started COLD: the eddy warm-up
 march from zero, plus — since the 2026-09-05 reproducibility fix — a whole extra
 electrical period of demag PRE-PASS in front of the reported window.

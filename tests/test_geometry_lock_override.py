@@ -1,6 +1,6 @@
 """A die lock must not make its own configurations unloadable.
 
-User 2026-09-11: *"откуда здесь взялось wire split 2?"* — the Ø200 die still
+User 2026-09-11: *"where did wire split 2 come from here?"* — the Ø200 die still
 carries the old 4.5 x 1 mm strip winding, every L180 configuration overrides it
 with 9 x 0.5 mm, and the die had just been locked.  Loading the configuration
 then failed key by key with 423: `geometry_lock_check` read the DIE's value as
@@ -67,8 +67,8 @@ def test_d_free_keys_move_under_a_die_lock(monkeypatch):
 def test_e_wire_parallel_is_free_under_a_die_lock(monkeypatch):
     """Strands in hand are an electrical choice, not a shape.
 
-    User 2026-09-11: *"нужно дать ещё возможность менять wire parallel
-    (strands) — это никак не затрагивает геометрию"*, and the code agrees:
+    User 2026-09-11: *"we also need the ability to change wire parallel
+    (strands) — it doesn't affect the geometry at all"*, and the code agrees:
     `wire_parallel` appears nowhere in `cadquery_geometry`, only in the winding
     maths (turns = conductors / strands).  `wire_split` is the opposite case —
     N narrower strips with spacing, and the slot grows around them — so it

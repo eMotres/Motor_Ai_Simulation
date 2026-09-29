@@ -2,8 +2,8 @@
  * LocalCompareTable — the Configure tab's "Saved configurations" stack, as a
  * component any physics tab can host.
  *
- * User 2026-09-07: *"сделай локальное сравнение по параметрам тепловой
- * симуляции, только как в Configure; так же сделай в механике"*.  The Compare
+ * User 2026-09-07: *"make a local comparison of the thermal simulation
+ * parameters, just like in Configure; do the same in mechanics"*.  The Compare
  * tab is the engineer's library — server-side, permanent, every physics in one
  * table.  What was missing is the thing the Configure tab has had since
  * 2026-08-25: press the blue button and the variant you are looking at becomes

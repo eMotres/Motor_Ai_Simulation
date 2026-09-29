@@ -1,7 +1,7 @@
 """A loose magnet TRAVELS onto its pocket tab instead of being pinned (2026-09-09).
 
 User, on the live G2-L40 generator at the coupled temperatures (iron 134 °C,
-magnet 135 °C): *"магнит должен сесть на язычок, как в Fusion"*.
+magnet 135 °C): *"the magnet must seat on the tab, like in Fusion"*.
 
 The magnet sits in an iron pocket whose lips overhang its shoulders with ZERO
 clearance in the die cross-section, so at 20 °C the separation contact holds it.
@@ -121,8 +121,8 @@ def _polys(gap_mm: float = 0.0, open_top: bool = False):
 def _solve(polys, *, rpm: float = RPM, mu: float = 0.0,
            typ: str = "separation", part_temps=None, lift_off: int = 0):
     # The thermally loosened fixtures run the solver's VERIFICATION model: in
-    # production (2026-09-09, "температура только как изменение давления на
-    # бандаж, если он есть") a sleeveless rotor is solved cold whatever map it
+    # production (2026-09-09, "temperature only as a change of pressure on
+    # the sleeve, if there is one") a sleeveless rotor is solved cold whatever map it
     # is given, so a pocket can only be opened by heat here, on purpose, to
     # exercise the seating machinery on a case with known arithmetic.  On the
     # machine the feature was written for, the G2, it is the centrifugal field
@@ -384,7 +384,7 @@ def test_the_travel_cap_is_a_runaway_by_another_name():
 
 
 def test_the_seating_constants_are_the_ones_the_docstring_argues_for():
-    """Читаются в отчёте — a silent edit of any of these moves every seated
+    """Read in the report — a silent edit of any of these moves every seated
     answer, so they are pinned next to the physics they came from."""
     assert ctc.SEAT_MIN_COS == 0.05        # excludes the pocket SIDE walls
     assert ctc.SEAT_TRAVEL_FRAC == 0.05    # 2.5 mm on a Ø100 rotor
@@ -707,8 +707,8 @@ def test_the_g2_at_20C_still_solves_the_way_it_did(g2_cold):
 
 
 def test_the_g2_at_the_coupled_temperatures_is_the_cold_answer(g2_hot_out, g2_cold_out):
-    """THE RULE ON THE MACHINE (user 2026-09-09: *"нам нужно учитывать
-    температуру только как изменение давления на бандаж, если он есть"*).
+    """THE RULE ON THE MACHINE (user 2026-09-09: *"we only need to account
+    for temperature as a change of pressure on the sleeve, if there is one"*).
 
     The G2-L40 has no band.  Its magnets sit in an epoxy bed with a 0.04 mm
     pocket clearance and the rotor is iron through, so the coupled map — iron

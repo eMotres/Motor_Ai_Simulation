@@ -1,8 +1,8 @@
 """The rotor's loss map is made periodic per pole before the thermal solve
 (2026-09-09).
 
-User, on the G2-L40 quarter after both cut-line films were fixed: *"опять та же
-картина с пятнами, ничего не поменялось"*.  The remaining spots were the INPUT:
+User, on the G2-L40 quarter after both cut-line films were fixed: *"the same
+spotty picture again, nothing has changed"*.  The remaining spots were the INPUT:
 the Electromagnetic sector solve's per-element eddy loss differed from pole to
 pole — the seven magnets of the quarter carried 4.14 / 4.30 / 3.85 / 3.98 / 4.08
 / 4.05 / 3.48 W (±5 %, the pole at the 90° cut 15 % short) and that pole was the

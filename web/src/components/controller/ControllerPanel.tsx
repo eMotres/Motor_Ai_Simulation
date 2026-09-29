@@ -2,8 +2,8 @@
  * ControllerPanel — the Controller tab.
  *
  * Owner, 2026-09-22: the inverter as its own menu — the device, how the bridges
- * are combined with the motor's coils ("один контроллер на один мотор, два
- * контроллера на один мотор … один мост на каждую катушку отдельно"), the
+ * are combined with the motor's coils ("one controller for one motor, two
+ * controllers for one motor … one bridge for each coil separately"), the
  * losses with the MOSFET cooling, and a power schematic that follows whatever
  * topology is chosen.
  *
@@ -87,8 +87,8 @@ const ControllerPanel: React.FC = () => {
   const [flow, setFlow] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.flow);
   const [tin, setTin] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.tin);
   const [rtim, setRtim] = useState<Nullable>(DEFAULT_CONTROLLER_FORM.rtim);
-  // Owner 2026-09-22 evening: "надо добавить воздушное охлаждение и скорость
-  // ветра, как в термосимуляции" — the same liquid/forced-air/still-air
+  // Owner 2026-09-22 evening: "need to add air cooling and wind
+  // speed, like in the thermal simulation" — the same liquid/forced-air/still-air
   // choice the thermal tab already offers for the housing, now for the
   // device heatsink/plate.  Defaults mirror inverter.losses' own module
   // constants (air_speed_mps 5, t_ambient_c 40, fin_efficiency 0.75,
@@ -188,16 +188,16 @@ const ControllerPanel: React.FC = () => {
   })(); }, []);
 
   // ── the tab's own settings, saved WITH the active configuration ────────
-  // Owner 2026-09-22: "при сохранении мотора текущий контроллер тоже должен
-  // сохраняться со всеми настройками". `useDieContext` is the same "which
+  // Owner 2026-09-22: "when saving the motor, the current controller should
+  // also be saved with all its settings". `useDieContext` is the same "which
   // motor is loaded" the Geometry table and the Optimize/Sweep pickers
   // already poll — no new plumbing, and it answers before the first Solve,
   // so a saved controller restores the moment the tab opens.
   const dieCtx = useDieContext();
 
   // ── COOLING INHERITS FROM THERMAL, per field, per mode (owner 2026-09-25:
-  // "Когда я ставлю air или liquid, он должен брать параметры охлаждения из
-  // Thermal... но можно изменить, чтобы сделать разными") — replaces the
+  // "When I set air or liquid, it should take the cooling parameters from
+  // Thermal... but it should be possible to change them to make them different") — replaces the
   // 2026-09-24 button.  `thermalByMode` is what EACH of the three cooling
   // modes would inherit right now (`GET /api/controller/thermal_cooling`);
   // a field left BLANK on screen shows its entry as a placeholder + "from
@@ -867,7 +867,7 @@ const ControllerPanel: React.FC = () => {
                 <Alert severity="warning" sx={{ mb: 1, fontSize: 12.5 }}>{staleLine}</Alert>
               )}
               {/* ONE LINE for the whole model, the full text behind the ⓘ.
-                  Owner 2026-09-22: «не пиши это всё, никто это не читает». */}
+                  Owner 2026-09-22: «don't write all this, nobody reads it». */}
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
                 <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
                   Basis: {String(L?.basis_label ?? 'datasheet curves')} · synchronous

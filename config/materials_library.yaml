@@ -3654,8 +3654,8 @@ insulator:
   # -------------------------------------------------------------------------
   # HIGH-MODULUS hoop-wound sleeves - added 2026-09-06.
   #
-  # User: "у нас цель сделать бандаж как можно тоньше и чтобы он смог всё
-  # выдержать".  A retaining band is a STIFFNESS problem before it is a strength
+  # User: "our goal is to make the sleeve as thin as possible and have it
+  # survive everything".  A retaining band is a STIFFNESS problem before it is a strength
   # problem: the rotor grows into the sleeve, so what keeps the magnets pressed
   # on is the hoop stiffness E1 (and the interference), not the tensile margin.
   # A higher-modulus fibre therefore buys retention per millimetre of thickness -

@@ -62,8 +62,8 @@ def test_export_is_primaries_only():
     names = [r[0] for r in list(csv.reader(io.StringIO(_csv_text())))[1:]]
     assert len(names) == len(set(names))
     assert not (set(names) & set(DERIVED_GEOMETRY_NAMES))
-    # ...and minus the explicit exclusions (user 2026-09-14: "выкинь slot_hs,
-    # мы его не используем") — a hidden parameter the model does not drive.
+    # ...and minus the explicit exclusions (user 2026-09-14: "drop slot_hs,
+    # we don't use it") — a hidden parameter the model does not drive.
     assert "slot_hs" in FUSION_EXCLUDED_NAMES
     assert not (set(names) & set(FUSION_EXCLUDED_NAMES))
     assert len(names) == len(_rows())

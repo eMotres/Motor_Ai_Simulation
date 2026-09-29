@@ -22,9 +22,9 @@ panel is now allowed to rely on:
   (f) the insulation and the air the solve actually uses are named domains with
       temperatures and stated conductivities (2026-09-07), not white space;
   (g) THE TWO SOLVERS ARE SEPARATE (2026-09-07, same day, third pass — user:
-      *"нужно как-то разделить тепловые расчёты и электромагнитные; если вдруг
-      тепловому расчёту нужно электромагнитное моделирование, пусть оно делается
-      во вкладке Simulation"*).  ``/field`` and ``/coupled`` never start an
+      *"we need to somehow separate the thermal and electromagnetic
+      computations; if the thermal computation happens to need an
+      electromagnetic simulation, let it be done in the Simulation tab"*).  ``/field`` and ``/coupled`` never start an
       electromagnetic solve of any kind: the cycle-averaged loss map comes from
       an Electromagnetic RUN the user made, and with no matching run the answer
       is a 422 naming the point to run — not a six-minute solve behind a
@@ -494,7 +494,7 @@ def test_the_deprecated_outlet_and_gap_k_are_ignored_and_said_so(client, em_runs
 # ---------------------------------------------------------------------------
 
 def test_cooling_the_bore_cools_the_rotor(client, air_first):
-    """User 2026-09-07: "Ротор придётся охлаждать в основном через вал".
+    """User 2026-09-07: "The rotor will mainly have to be cooled through the shaft".
 
     In a 2-D cross-section the rotor's only other route out is the air gap,
     whose effective conductivity is a few hundredths of a W/m·K — so blowing air
@@ -597,8 +597,8 @@ def test_the_heat_budget_closes(client, em_runs):
 # ---------------------------------------------------------------------------
 # (c2') the rotor's THIRD heat path — the shaft ends outside the housing
 # ---------------------------------------------------------------------------
-# User 2026-09-07: *"торцы и лобовые части — только для вала, всё остальное
-# вращается внутри мотора"*.  The rotor's end faces and the end windings spin
+# User 2026-09-07: *"end faces and end windings — only for the shaft, everything
+# else rotates inside the motor"*.  The rotor's end faces and the end windings spin
 # inside a CLOSED housing and have nowhere else to send their heat — so nothing
 # is modelled there, deliberately.  The SHAFT comes out through the bearings on
 # both sides and those exposed stubs lose heat to the room, as a FIN.
@@ -786,8 +786,8 @@ def test_the_gap_is_derived_and_states_what_it_was_derived_from(client,
 def test_the_sleeve_is_its_own_anisotropic_domain(client, em_runs):
     """A carbon retaining ring is a thermal blanket, and a very directional one.
 
-    User 2026-09-07: "у него теплопроводность очень плохая в радиальном
-    направлении".  Until then the thermal solve handed the ring's elements the
+    User 2026-09-07: "its thermal conductivity is very poor in the radial
+    direction".  Until then the thermal solve handed the ring's elements the
     DEFAULT element conductivity — the air-gap value — because nothing assigned
     it one: a sleeve modelled as air is a sleeve that is not there.  It now
     carries a tensor, radial ≪ hoop, from the assigned material's card.
@@ -1045,9 +1045,9 @@ def test_manual_cooling_without_an_h_is_refused(client):
 # (f) the air: kept, named, and in the tree
 # ---------------------------------------------------------------------------
 # User 2026-09-07, looking at a thermal map whose slot was white around the wire
-# bars and whose gap was white around the rotor: *"надо рисовать изоляцию и
-# покрытие провода, а то пустое место, и воздух тоже показывать — он же входит в
-# расчёт, и в дереве отображать их тоже нужно"*.
+# bars and whose gap was white around the rotor: *"we need to draw the
+# insulation and the wire coating, that empty space, and also show the air —
+# it's part of the computation, so it also needs to be shown in the tree"*.
 #
 # The EM mesh calls five different materials "air" — the insulation, the wire
 # enamel, the wire coating, the gap and the rotor's pocket air — and the thermal
@@ -1203,9 +1203,9 @@ def test_a_sleeved_rotor_keeps_both_its_sleeve_and_its_gap_air(client, em_runs):
 # ---------------------------------------------------------------------------
 # (g) the two solvers are separate
 # ---------------------------------------------------------------------------
-# User, 2026-09-07: *"нужно как-то разделить тепловые расчёты и
-# электромагнитные; если вдруг тепловому расчёту нужно электромагнитное
-# моделирование, пусть оно делается во вкладке Simulation"* (renamed
+# User, 2026-09-07: *"we need to somehow separate the thermal and
+# electromagnetic computations; if the thermal computation happens to need an
+# electromagnetic simulation, let it be done in the Simulation tab"* (renamed
 # Electromagnetic).  Until that day a /field request whose operating point no
 # run matched quietly started a 36-frame eddy transient of its own: minutes of
 # FEM behind a temperature request, on a solver the user had just asked to keep

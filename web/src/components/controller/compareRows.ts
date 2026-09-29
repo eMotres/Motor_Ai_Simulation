@@ -1,8 +1,8 @@
 /**
  * One Controller answer → the flat block a Compare row carries.
  *
- * Owner 2026-09-22: *«не забудь Compare сделать для анализа разных вариантов,
- * так же как на всех других меню»* — the Controller tab gets the Thermal and
+ * Owner 2026-09-22: *«don't forget to make Compare for analyzing different
+ * variants, the same as in all the other menus»* — the Controller tab gets the Thermal and
  * Mechanical tabs' stacked comparison, with the same look and the same row
  * contract, so two topologies (or two devices, two parallel counts, two
  * coldplates, two duties) can be read side by side without leaving the tab.

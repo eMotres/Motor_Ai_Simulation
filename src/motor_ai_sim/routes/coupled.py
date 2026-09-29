@@ -7156,8 +7156,8 @@ def _cr_consistency_guard(block: Dict[str, Any],
 def _setpoint_only_limited_line(i_duty: Optional[float],
                                 time_to_limit: Optional[Dict[str, Any]]) -> str:
     """The AT-THE-LIMIT sentence, re-worded once the record's own numbers have
-    moved to the S1 machine (owner 2026-09-21, third round: *«опять токи не
-    совпадают»* — the setpoint's own "Runs 45 s …" sentence used to end "the
+    moved to the S1 machine (owner 2026-09-21, third round: *"the currents
+    don't match again"* — the setpoint's own "Runs 45 s …" sentence used to end "the
     numbers below are the machine at that moment", which became FALSE the
     instant those numbers became the S1 pass's.  States the SETPOINT's own
     current up front and drops the now-false tail.  Only ever called after a
@@ -7187,9 +7187,9 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
     the estimate found — never trust the network alone.
 
     Owner, 2026-09-21 (screenshot: the S1 line said 34.1 A while the tiles
-    still showed the 63.64 A setpoint's numbers): *«почему сразу не
-    пересчитывается электромагнитное моделирование для найденного
-    непрерывного режима — токи не совпадают»*.  One EM pass at ``i_estimate``,
+    still showed the 63.64 A setpoint's numbers): *"why doesn't the
+    electromagnetic simulation recompute right away for the continuous rating
+    found — the currents don't match"*.  One EM pass at ``i_estimate``,
     one real 2-D thermal solve of its own loss map, and the limiting part's
     OWN hot spot / hottest element read straight off that map (never the
     network's node-mean-plus-offset estimate).  Off by more than 3 K in

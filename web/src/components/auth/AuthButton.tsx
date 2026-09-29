@@ -6,6 +6,8 @@ import DevicesIcon from '@mui/icons-material/Devices';
 import { useAuth } from '../../contexts/AuthContext';
 import SessionsDialog from './SessionsDialog';
 import AgentKeysDialog from './AgentKeysDialog';
+import AccountDataDialog from './AccountDataDialog';
+import FolderZipIcon from '@mui/icons-material/FolderZip';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import NotificationsIcon from '@mui/icons-material/NotificationsNone';
 import NotificationsDialog from './NotificationsDialog';
@@ -18,6 +20,7 @@ const AuthButton: React.FC = () => {
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
   const [agentsOpen, setAgentsOpen] = React.useState(false);
   const [notifOpen, setNotifOpen] = React.useState(false);
+  const [dataOpen, setDataOpen] = React.useState(false);
   const [noticeKey, setNoticeKey] = React.useState(0);
 
   if (!user) {
@@ -70,6 +73,11 @@ const AuthButton: React.FC = () => {
           <ListItemIcon><NotificationsIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           Notifications
         </MenuItem>
+        <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setDataOpen(true); }}>
+          <ListItemIcon><FolderZipIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          My data
+        </MenuItem>
       </Menu>
       <NotificationsDialog open={notifOpen}
         onClose={() => { setNotifOpen(false); setNoticeKey((k) => k + 1); }}
@@ -77,6 +85,7 @@ const AuthButton: React.FC = () => {
       <SessionsDialog open={sessionsOpen} onClose={() => setSessionsOpen(false)}
         onSignedOut={() => { void logout(); }} />
       <AgentKeysDialog open={agentsOpen} onClose={() => setAgentsOpen(false)} />
+      <AccountDataDialog open={dataOpen} onClose={() => setDataOpen(false)} />
     </Box>
   );
 };

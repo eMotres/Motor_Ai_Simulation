@@ -24,6 +24,8 @@ that moves.
 from __future__ import annotations
 
 import os as _os
+import zlib as _zlib
+from collections import OrderedDict as _OrderedDict
 from typing import Sequence
 
 import numpy as np
@@ -52,7 +54,8 @@ class _SymPattern:
     """What the Cholesky path needs to know about one sparsity pattern."""
 
     __slots__ = ("key", "indptr", "indices", "ok", "why", "tri", "diag",
-                 "u_indptr", "u_indices", "probe", "probe_tol", "analysed")
+                 "u_indptr", "u_indices", "probe", "probe_tol", "analysed",
+                 "digest")
 
 
 def sym_pattern(indptr, indices, n: int) -> _SymPattern:
@@ -67,6 +70,13 @@ def sym_pattern(indptr, indices, n: int) -> _SymPattern:
     p.indptr = np.array(indptr, copy=True)
     p.indices = np.array(indices, copy=True)
     p.ok, p.why, p.analysed = False, None, None
+    # the key of the ordering cache (P2Nonlinear._solve_spd): n, nnz and two
+    # checksums of the pattern.  A collision could only cost fill-in, never
+    # accuracy (any permutation is a valid ordering), and it is detected by
+    # the factor size (see there).
+    p.digest = (int(n), int(indices.size),
+                _zlib.crc32(np.ascontiguousarray(indptr).view(np.uint8)),
+                _zlib.crc32(np.ascontiguousarray(indices).view(np.uint8)))
     rows = np.repeat(np.arange(n, dtype=np.int32), np.diff(indptr))
     cols = np.asarray(indices, dtype=np.int32)
     diag = np.flatnonzero(cols == rows)
@@ -245,6 +255,21 @@ class P2Nonlinear:
         self.spd_analyses = 0       # its phase-11 calls
         self.spd_declined = 0       # spd=True solves sent to LU by the checks
         self.spd_failures = 0       # Cholesky errors (then LU for the run)
+        # ORDERING CACHE of the Cholesky path (2026-09-29): the fill-reducing
+        # permutation METIS computes in phase 11 depends on the PATTERN only,
+        # and the patterns of a run repeat — every warm-up extension, the
+        # demag pre-pass and the reported window march the same rotor angles,
+        # so the slip pairing (the only thing that moves the pattern) repeats
+        # every electrical period.  Phase 11 is then run with that permutation
+        # given (iparm[4] = 1): symbolic factorisation only, no reordering —
+        # the same ordering, so the same factorisation (bit for bit with one
+        # MKL thread; threaded MKL has its usual run-to-run noise).
+        # SB_PARDISO_ORDER_REUSE=0 re-orders every new pattern as before.
+        self._order_reuse = _os.environ.get("SB_PARDISO_ORDER_REUSE", "1") != "0"
+        self._orders = _OrderedDict()   # digest -> (1-based perm, nnz(L))
+        self.spd_orders_computed = 0     # phase 11 with METIS
+        self.spd_orders_reused = 0       # phase 11 with a cached permutation
+        self.spd_orders_mismatch = 0     # cached permutation, other fill: redone
 
     # ── linear algebra ───────────────────────────────────────────────────────
     def solve_ff(self, Mff, rhs, spd: bool = False):
@@ -326,6 +351,59 @@ class P2Nonlinear:
                 self._drop_spd()
         return _splu(Mff).solve(rhs)
 
+    #: patterns whose ordering is kept (one int32 permutation each: 0.18 MB
+    #: on the 44 k-dof L155 eddy system); a run needs one per rotor angle
+    ORDER_CACHE_MAX = 512
+
+    def _analyse_spd(self, s, U, pat):
+        """Phase 11 of the Cholesky handle, with the pattern's cached METIS
+        permutation when there is one (see the ordering cache in __init__).
+
+        iparm[0] = 0 (pypardiso's initial state) makes MKL fill its defaults
+        and ignore iparm[4], so the very first analysis of a handle is a plain
+        one; MKL leaves iparm[0] = 1 and every later call honours iparm[4]:
+        2 returns the permutation it computed, 1 uses the one given.  A
+        cached permutation that yields a different factor size (iparm[17])
+        than when it was computed means the pattern is not the one it was
+        computed for (a checksum collision): logged, and the analysis is redone
+        with METIS."""
+        n = U.shape[0]
+        z = np.zeros((n, 1))
+        use = self._order_reuse and int(s.iparm[0]) == 1
+        hit = self._orders.get(pat.digest) if use else None
+        if hit is not None:
+            s.iparm[4] = 1
+            s.perm = hit[0]
+            s.set_phase(11)
+            s._call_pardiso(U, z)
+            if int(s.iparm[17]) == hit[1]:
+                self._orders.move_to_end(pat.digest)
+                self.spd_orders_reused += 1
+                s.iparm[4] = 0
+                return
+            self.spd_orders_mismatch += 1
+            self._log.warning(
+                "PARDISO ordering cache: the permutation stored for this "
+                "pattern gives nnz(L) = %d instead of %d (n=%d) — pattern "
+                "checksum collision; re-ordering with METIS",
+                int(s.iparm[17]), hit[1], n)
+            del self._orders[pat.digest]
+        if use:
+            s.iparm[4] = 2
+            s.perm = np.zeros(n, dtype=np.int32)
+        s.set_phase(11)
+        s._call_pardiso(U, z)
+        self.spd_orders_computed += 1
+        if use:
+            self._orders[pat.digest] = (s.perm.copy(), int(s.iparm[17]))
+            if len(self._orders) > self.ORDER_CACHE_MAX:
+                self._orders.popitem(last=False)
+                if len(self._orders) == self.ORDER_CACHE_MAX:
+                    self._log.info("PARDISO ordering cache full (%d patterns): "
+                                   "oldest orderings are dropped",
+                                   self.ORDER_CACHE_MAX)
+        s.iparm[4] = 0
+
     def _drop_spd(self):
         if self._pardiso_spd is not None:
             release_pardiso(self._pardiso_spd)
@@ -396,8 +474,7 @@ class P2Nonlinear:
         s.iparm[11] = 0                     # no transposed solve (symmetric)
         try:
             if new or pat.analysed is not s:
-                s.set_phase(11)
-                s._call_pardiso(U, np.zeros((U.shape[0], 1)))
+                self._analyse_spd(s, U, pat)
                 pat.analysed = s
                 self.spd_analyses += 1
             s.set_phase(23)

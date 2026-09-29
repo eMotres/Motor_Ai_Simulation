@@ -10154,12 +10154,14 @@ def fem_transient_sliding_band(
     log.info("P2 cost: %d linear solves on %d symbolic factorizations "
              "(%.1f solves/analysis), Kpw %d assembled + %d memo hits, "
              "perturbed-pivot solves=%d; Cholesky %d solves on %d analyses "
-             "(%d declined to LU, %d failures)",
+             "(%d declined to LU, %d failures); orderings %d computed, %d "
+             "reused from the pattern cache",
              _p2.pardiso_solves, _p2.pardiso_analyses,
              _p2.pardiso_solves / max(_p2.pardiso_analyses, 1),
              _p2.kpw_calls, _p2.kpw_hits, _p2.pardiso_perturbed,
              _p2.spd_solves, _p2.spd_analyses, _p2.spd_declined,
-             _p2.spd_failures)
+             _p2.spd_failures, _p2.spd_orders_computed,
+             _p2.spd_orders_reused)
     if _pic_unconv:
         # Loud, because it means the reported window contains a frame whose
         # field never met a convergence test — the averages below are then an
@@ -10762,7 +10764,10 @@ def fem_transient_sliding_band(
                           "cholesky_solves": int(_p2.spd_solves),
                           "cholesky_analyses": int(_p2.spd_analyses),
                           "cholesky_declined": int(_p2.spd_declined),
-                          "cholesky_failures": int(_p2.spd_failures)},
+                          "cholesky_failures": int(_p2.spd_failures),
+                          "orderings_computed": int(_p2.spd_orders_computed),
+                          "orderings_reused": int(_p2.spd_orders_reused),
+                          "ordering_mismatches": int(_p2.spd_orders_mismatch)},
         "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)
                               if _pic_iters else 0.0),
         "picard_iters_max": (int(max(_pic_iters)) if _pic_iters else 0),

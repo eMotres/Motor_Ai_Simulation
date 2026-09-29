@@ -233,3 +233,50 @@ class TestGuards:
         A.eliminate_zeros()
         pat = sym_pattern(A.indptr, A.indices, 3)
         assert not pat.ok and "diagonal" in pat.why
+
+
+class TestOrderingCache:
+    """The METIS permutation is kept per pattern and given back to phase 11
+    when the pattern returns (every electrical period in a warm-up march)."""
+
+    @staticmethod
+    def _two_patterns(p, b, m, free):
+        J = _newton_jacobian(p, b, free).tocsr()
+        Mb = _bordered(p, b, m, free).tocsr()
+        return J, Mb
+
+    def test_patterns_that_return_reuse_their_ordering(self):
+        p, b, m, free, log = _fixture()
+        q, *_ = _fixture()
+        q._order_reuse = False
+        J, Mb = self._two_patterns(p, b, m, free)
+        xs_p, xs_q = [], []
+        for k in range(6):                 # J, Mb, J, Mb, ... new values each time
+            M = (J if k % 2 == 0 else Mb) * (1.0 + 0.1 * k)
+            rhs = np.ones(M.shape[0])
+            xs_p.append(p.solve_ff(M.tocsc(), rhs, spd=True))
+            xs_q.append(q.solve_ff(M.tocsc(), rhs, spd=True))
+        assert p.spd_analyses == q.spd_analyses == 6   # a new pattern each call
+        # first call plain (MKL fills its defaults), second pattern computed
+        # with its permutation returned, the first again (no permutation kept
+        # from the plain call), then only reuse
+        assert p.spd_orders_computed == 3 and p.spd_orders_reused == 3
+        assert q.spd_orders_reused == 0
+        for a, c in zip(xs_p, xs_q):
+            assert np.max(np.abs(a - c)) <= 1e-12 * np.max(np.abs(c))
+        assert not log.warnings
+
+    def test_a_wrong_cached_ordering_is_detected_and_redone(self):
+        p, b, m, free, log = _fixture()
+        J, Mb = self._two_patterns(p, b, m, free)
+        for M in (J, Mb, J):
+            p.solve_ff(M.tocsc(), np.ones(M.shape[0]), spd=True)
+        dg = next(iter(p._orders))           # tamper: claim another fill
+        perm, nnz_l = p._orders[dg]
+        p._orders[dg] = (perm, nnz_l + 1)
+        Jc = J.tocsc()
+        target = J if sym_pattern(Jc.indptr, Jc.indices, Jc.shape[0]).digest == dg else Mb
+        x = p.solve_ff(target.tocsc(), np.ones(target.shape[0]), spd=True)
+        assert p.spd_orders_mismatch == 1
+        assert any("collision" in w for w in log.warnings)
+        assert np.linalg.norm(target @ x - 1.0) <= 1e-10 * np.sqrt(target.shape[0])

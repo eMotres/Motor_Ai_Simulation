@@ -8,6 +8,11 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Changed
+- **Cholesky for the SPD P2 systems** (docs/CHOLESKY_SPD_2026-09-29.md). The secant
+  stiffness, the Newton Jacobian and the bordered eddy matrix are SPD by construction and
+  are now factorised with PARDISO mtype 2 instead of the unsymmetric LU, guarded per solve
+  (symmetry probe, positive diagonal) with a loud LU fallback; series strand paths stay on
+  LU. Numbers identical to 1e-12; `SB_PARDISO_SPD=0` restores LU.
 - **Licensing: pure AGPL-3.0-or-later, contributions under the DCO.** No
   commercial licensing and no CLA: `CLA.md` and the CLA Assistant workflow are
   replaced by `DCO.md` (Developer Certificate of Origin 1.1) and a `DCO`

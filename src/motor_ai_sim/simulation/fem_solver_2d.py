@@ -553,7 +553,7 @@ def frozen_permeability_ldq(p2, Pro, free, A2, f_mag, Pa, Pb, psi_of, th_dq,
         _red(f_mag),                            # the magnets in the LOADED iron
         _red(_iA_d * Pa + _iB_d * Pb),          # unit d-axis phase current
         _red(_iA_q * Pa + _iB_q * Pb),          # unit q-axis phase current
-    ]))
+    ]), spd=True)
     _pm = psi_of(p2.pad2(Pro, free, X[:, 0]))
     _xd = psi_of(p2.pad2(Pro, free, X[:, 1]))
     _xq = psi_of(p2.pad2(Pro, free, X[:, 2]))
@@ -606,7 +606,7 @@ def frozen_permeability_vsd(p2, Pro, free, A2, f_set, sc_psi, th_dq,
     def _red(v):
         return _np.asarray(Pro.T @ v).ravel()[free]
     X = p2.solve_ff(Kff, _np.column_stack(
-        [_red(f_set[s][ph] / _nb) for s, ph in _keys]))
+        [_red(f_set[s][ph] / _nb) for s, ph in _keys]), spd=True)
     L6 = _np.zeros((6, 6))
     for j in range(6):
         A = p2.pad2(Pro, free, X[:, j])
@@ -5645,6 +5645,23 @@ def fem_transient_sliding_band(
     except Exception as _pae:
         log.info("pypardiso unavailable (%s) — using SuperLU for P2", _pae)
         _pardiso2 = None
+    # A SECOND handle, mtype 2 (Cholesky), for the solves whose operator is
+    # SPD by construction (P2Nonlinear.solve_ff(spd=True); proofs in
+    # docs/CHOLESKY_SPD_2026-09-29.md).  Checked per matrix, LU otherwise.
+    # SB_PARDISO_SPD=0 keeps every solve on the unsymmetric LU above.
+    _pardiso2_spd = None
+    if _pardiso2 is not None and _os_sb.environ.get("SB_PARDISO_SPD", "1") != "0":
+        try:
+            _h_spd = _pypard2.PyPardisoSolver(mtype=2)
+            _need = ("_call_pardiso", "_check_b", "set_phase", "iparm")
+            if not all(hasattr(_h_spd, _a) for _a in _need):
+                raise RuntimeError("pypardiso %s lacks %s" % (
+                    getattr(_pypard2, "__version__", "?"),
+                    [_a for _a in _need if not hasattr(_h_spd, _a)]))
+            _pardiso2_spd = _own_pardiso(_h_spd)
+        except Exception as _pae:     # noqa: BLE001 — LU keeps working
+            log.info("PARDISO Cholesky handle unavailable (%s) — LU only", _pae)
+            _pardiso2_spd = None
     b2 = Basis(mesh_all, _P2E())
     b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
     N2 = b2.N
@@ -5821,7 +5838,8 @@ def fem_transient_sliding_band(
     # frame-specific (K_const2, _sat_sub2, _sat2, b2), and the voltage-drive
     # phasor initialiser below has to call them BEFORE the loop starts.
     _p2 = _P2Nonlinear(basis=b2, n_dof=N2, K_const=K_const2, sat=_sat2,
-                       sat_sub=_sat_sub2, pardiso=_pardiso2, log=log)
+                       sat_sub=_sat_sub2, pardiso=_pardiso2, log=log,
+                       pardiso_spd=_pardiso2_spd)
 
     # ── outer Dirichlet: facet-based so P2 edge midpoints are pinned too ──
     _out_fac2 = mesh_all.facets_satisfying(
@@ -6397,7 +6415,7 @@ def fem_transient_sliding_band(
             _cancel_point("phasor initialiser, sweep %d" % _it)
             _Kph = _p2.asmK(_nu_ph)
             _Kff0 = (_Pro0v.T @ _Kph @ _Pro0v).tocsr()[_free0v][:, _free0v].tocsc()
-            _X0 = _p2.solve_ff(_Kff0, _RHS0)
+            _X0 = _p2.solve_ff(_Kff0, _RHS0, spd=True)
             _A0 = _p2.pad2(_Pro0v, _free0v, _X0[:, 0])
             _xa = _p2.pad2(_Pro0v, _free0v, _X0[:, 1])
             _xb = _p2.pad2(_Pro0v, _free0v, _X0[:, 2])
@@ -7506,7 +7524,7 @@ def fem_transient_sliding_band(
                     J = (K + T).tocsr() if T is not None else K
                     Jff = (Pro.T @ J @ Pro).tocsr()[_free2][:, _free2].tocsc()
                     try:
-                        _du = _p2.solve_ff(Jff, -r_free)
+                        _du = _p2.solve_ff(Jff, -r_free, spd=True)
                     except Exception as _je:
                         log.info("P2 Newton solve failed (%s) — Picard fallback", _je)
                         _fail = True; break
@@ -9990,7 +10008,8 @@ def fem_transient_sliding_band(
                 _Xz = _p2.solve_ff(
                     _Kffz, np.column_stack([
                         np.asarray(_Pro_z.T @ _P02).ravel()[_free_z],
-                        np.asarray(_Pro_z.T @ f_coil2['A']).ravel()[_free_z]]))
+                        np.asarray(_Pro_z.T @ f_coil2['A']).ravel()[_free_z]]),
+                    spd=True)
                 _L0s.append(_psi2(_p2.pad2(_Pro_z, _free_z, _Xz[:, 0]))[0])
                 if _kz == 0:
                     # Phase A alone: psi_A = L_aa (self), psi_B/psi_C = L_ab
@@ -10140,10 +10159,13 @@ def fem_transient_sliding_band(
     # whole frame's Newton sweep and serves ~45 % of its Kpw calls from the memo.
     log.info("P2 cost: %d linear solves on %d symbolic factorizations "
              "(%.1f solves/analysis), Kpw %d assembled + %d memo hits, "
-             "perturbed-pivot solves=%d",
+             "perturbed-pivot solves=%d; Cholesky %d solves on %d analyses "
+             "(%d declined to LU, %d failures)",
              _p2.pardiso_solves, _p2.pardiso_analyses,
              _p2.pardiso_solves / max(_p2.pardiso_analyses, 1),
-             _p2.kpw_calls, _p2.kpw_hits, _p2.pardiso_perturbed)
+             _p2.kpw_calls, _p2.kpw_hits, _p2.pardiso_perturbed,
+             _p2.spd_solves, _p2.spd_analyses, _p2.spd_declined,
+             _p2.spd_failures)
     if _pic_unconv:
         # Loud, because it means the reported window contains a frame whose
         # field never met a convergence test — the averages below are then an
@@ -10736,6 +10758,17 @@ def fem_transient_sliding_band(
         # were actually solved (an explicit n_parallel wins over it) — naming it
         # then would be a lie, and no name is the honest answer.
         "connection": _conn_label_used,
+        # which factorisation did the linear solves (2026-09-29): Cholesky
+        # (PARDISO mtype 2) on the SPD-by-construction systems, the
+        # unsymmetric LU (mtype 11) for the rest and for anything the run-time
+        # checks declined.  Provenance only; no value depends on it beyond
+        # solver round-off.
+        "linear_solver": {"lu_solves": int(_p2.pardiso_solves),
+                          "lu_analyses": int(_p2.pardiso_analyses),
+                          "cholesky_solves": int(_p2.spd_solves),
+                          "cholesky_analyses": int(_p2.spd_analyses),
+                          "cholesky_declined": int(_p2.spd_declined),
+                          "cholesky_failures": int(_p2.spd_failures)},
         "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)
                               if _pic_iters else 0.0),
         "picard_iters_max": (int(max(_pic_iters)) if _pic_iters else 0),

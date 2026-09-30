@@ -220,7 +220,8 @@ class P2Drive:
             J = (K + T).tocsr() if T is not None else K
             Jff = (Pro.T @ J @ Pro).tocsr()[free][:, free].tocsc()
             try:
-                X = self.p2.solve_ff(Jff, np.column_stack([-r_free, _PtPa, _PtPb]))
+                X = self.p2.solve_ff(Jff, np.column_stack([-r_free, _PtPa, _PtPb]),
+                                     spd=True)
             except Exception as _je:
                 self.log.info("P2 vdrive Newton solve failed (%s)", _je)
                 return False, A2, iA, iB, rrel, nit, rc
@@ -269,7 +270,7 @@ class P2Drive:
             K = self.p2.asmK(nu)
             Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
             X = self.p2.solve_ff(Kff, np.column_stack(
-                [_Pt(self.f_mag), _Pt(self.Pa), _Pt(self.Pb)]))
+                [_Pt(self.f_mag), _Pt(self.Pa), _Pt(self.Pb)]), spd=True)
             A_pm = self.p2.pad2(Pro, free, X[:, 0])
             xa = self.p2.pad2(Pro, free, X[:, 1])
             xb = self.p2.pad2(Pro, free, X[:, 2])
@@ -377,7 +378,7 @@ class P2Drive:
                 if T is not None:
                     J = K + T
             Jff = (Pro.T @ J @ Pro).tocsr()[free][:, free].tocsc()
-            dA = self.p2.pad2(Pro, free, self.p2.solve_ff(Jff, -r))
+            dA = self.p2.pad2(Pro, free, self.p2.solve_ff(Jff, -r, spd=True))
             if nu_fix is not None:
                 A = A + dA
                 continue
@@ -577,7 +578,10 @@ class P2Drive:
             else:
                 Mb = _bmat([[Jff, -Bf], [-Bf.T, _diags(_Sdt)]]).tocsc()
             try:
-                sol = self.p2.solve_ff(Mb, -np.concatenate([rf, rc]))
+                # SPD unless series strand paths border it: their Kirchhoff
+                # rows have zero diagonal blocks (a saddle point) → LU.
+                sol = self.p2.solve_ff(Mb, -np.concatenate([rf, rc]),
+                                       spd=not _sp)
             except Exception as _je:
                 self.log.info("P2 eddy bordered solve failed (%s)", _je)
                 return False, Ae, Ue, rrel, nit
@@ -780,7 +784,11 @@ class P2Drive:
                 X = self.p2.solve_ff(Mb, np.column_stack([
                     -np.concatenate([rf, rc]),
                     np.concatenate([_z, dte * self.ed_ca]),
-                    np.concatenate([_z, dte * self.ed_cb])]))
+                    np.concatenate([_z, dte * self.ed_cb])]),
+                    # the same routing rule as eddy_solve; series strand
+                    # paths never reach here (refused at the top), so this
+                    # bordered matrix never carries Kirchhoff rows
+                    spd=self.pT is None)
             except Exception as _je:
                 self.log.info("P2 eddy+vdrive bordered solve failed (%s)", _je)
                 return False, Ae, Ue, iA, iB, rrel, nit, rcc

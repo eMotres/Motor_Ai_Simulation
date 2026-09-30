@@ -5,4 +5,6 @@
 # dependency of this AGPL project.  Install it only where you accept those
 # terms, e.g. on your own solve server:
 #   pip install -r requirements.txt -r requirements-pardiso.txt
-pypardiso>=0.4
+# the Cholesky/LU reuse paths call pypardiso internals (_call_pardiso,
+# _check_b, set_phase, iparm): tested on 0.4.7 (tests/test_p2_cholesky.py)
+pypardiso>=0.4.7,<0.5

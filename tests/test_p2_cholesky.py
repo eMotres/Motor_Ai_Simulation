@@ -1,0 +1,428 @@
+"""Cholesky (PARDISO mtype 2) for the SPD-by-construction P2 systems.
+
+`P2Nonlinear.solve_ff(spd=True)` factorises with Cholesky only after run-time
+checks (structure, value symmetry, positive diagonal) and falls back to the
+unsymmetric LU on any doubt or on a Cholesky error.  These tests pin:
+
+* the construction arguments of docs/CHOLESKY_SPD_2026-09-29.md on real P2
+  operators: the Newton Jacobian K + T of a saturating field and the bordered
+  eddy matrix with g_b = M_b·1, S_b = 1ᵀM_b1 are symmetric to round-off and
+  positive definite, and the bordered matrix stops being so when S_b is not
+  the Gram value (the proof depends on that identity, not on luck);
+* the solve: Cholesky equals LU to round-off (CSR, CSC, several columns);
+* the guards: an asymmetric matrix is declined (the per-pattern exact test
+  and the per-solve probe), and a symmetric INDEFINITE matrix — the
+  series-strand saddle point — fails Cholesky loudly and is solved by LU.
+"""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+import scipy.sparse as sp
+
+from skfem import Basis, BilinearForm, ElementTriP0, ElementTriP2, MeshTri, asm
+
+from motor_ai_sim.simulation.field_ops import MU0
+from motor_ai_sim.simulation.p2_nonlinear import (
+    P2Nonlinear, SPD_SYM_RTOL, stiff_nu2, sym_pattern)
+
+pypardiso = pytest.importorskip("pypardiso")
+
+CURVE = [(0.0, 0.0), (1.2 / (500 * MU0), 1.2), (1e6, 1.2 + MU0 * 1e6)]
+
+
+class _Log:
+    def __init__(self):
+        self.warnings = []
+
+    def warning(self, *a, **k):
+        self.warnings.append(a[0] % a[1:] if len(a) > 1 else a[0])
+
+    def info(self, *a, **k):
+        pass
+
+    def debug(self, *a, **k):
+        pass
+
+
+@BilinearForm
+def _mass(u, v, w):
+    return u * v
+
+
+def _fixture(spd=True):
+    m = MeshTri().refined(4)
+    b = Basis(m, ElementTriP2())
+    b0 = b.with_element(ElementTriP0())
+    n_el = m.t.shape[1]
+    ids = np.arange(0, n_el, 2)
+    nu_const = np.full(n_el, 1.0 / MU0)
+    nu_const[ids] = 0.0
+    K_const = asm(stiff_nu2, b, nu=b0.interpolate(nu_const)).tocsr()
+    sb = Basis(m, ElementTriP2(), elements=ids)
+    log = _Log()
+    p = P2Nonlinear(basis=b, n_dof=b.N, K_const=K_const, sat=[(ids, CURVE)],
+                    sat_sub=[(sb, sb.with_element(ElementTriP0()), ids, CURVE)],
+                    pardiso=pypardiso.PyPardisoSolver(), log=log,
+                    pardiso_spd=(pypardiso.PyPardisoSolver(mtype=2) if spd
+                                 else None))
+    free = np.setdiff1d(np.arange(b.N), b.get_dofs().flatten())
+    return p, b, m, free, log
+
+
+def _newton_jacobian(p, b, free):
+    # a field strong enough to saturate part of the iron (dν/dB² > 0 there)
+    x, y = b.doflocs
+    A = 2.5 * np.sin(np.pi * x) * np.sin(np.pi * y)
+    K, info = p.Kpw(A)
+    T = p.tangent2(info)
+    assert T is not None and T.nnz > 0
+    J = (K + T).tocsr()
+    return J[free][:, free].tocsc()
+
+
+def _bordered(p, b, m, free, dte=1e-4, sigma=5e6, gram=True):
+    """[[Jff + Pᵀ Msig P/dte, −Bf], [−Bfᵀ, diag(S·dte)]] exactly as eddy_solve
+    builds it, with two conducting bodies of the fixture mesh."""
+    Jff = _newton_jacobian(p, b, free)
+    cx = m.p[:, m.t].mean(axis=1)
+    bodies = [np.flatnonzero((cx[0] < 0.3) & (cx[1] < 0.5)),
+              np.flatnonzero((cx[0] > 0.6) & (cx[1] > 0.4))]
+    Msig = sp.csr_matrix((b.N, b.N))
+    g, S = [], []
+    ones = np.ones(b.N)
+    for ids in bodies:
+        Mb = (asm(_mass, Basis(m, ElementTriP2(), elements=ids)) * sigma).tocsr()
+        Msig = Msig + Mb
+        gb = Mb @ ones
+        g.append(gb)
+        S.append(float(gb.sum()) * (1.0 if gram else 0.5))
+    G = sp.csr_matrix(np.column_stack(g))
+    Jb = (Jff + (Msig / dte).tocsr()[free][:, free]).tocsr()
+    Bf = G.tocsr()[free, :]
+    return sp.bmat([[Jb, -Bf], [-Bf.T, sp.diags(np.array(S) * dte)]]).tocsc()
+
+
+def _lmin(M):
+    return float(np.linalg.eigvalsh(M.toarray()).min())
+
+
+class TestConstruction:
+    @staticmethod
+    def _pair_asym(J):
+        """max |a_ij - a_ji| / sqrt(a_ii a_jj) over all pairs (dense, small)."""
+        D = J.toarray()
+        s = 1.0 / np.sqrt(np.diag(D))
+        return float(np.max(np.abs((D - D.T) * s[:, None] * s[None, :])))
+
+    def test_newton_jacobian_is_symmetric_to_roundoff_and_spd(self):
+        p, b, m, free, _ = _fixture()
+        J = _newton_jacobian(p, b, free)
+        pat = sym_pattern(J.indptr, J.indices, J.shape[0])
+        assert pat.ok
+        assert self._pair_asym(J) < 1e-14 < SPD_SYM_RTOL
+        assert _lmin(J) > 0.0
+
+    def test_bordered_eddy_matrix_is_spd_by_the_gram_identity(self):
+        p, b, m, free, _ = _fixture()
+        Mb = _bordered(p, b, m, free)
+        assert self._pair_asym(Mb) < 1e-14
+        assert _lmin(Mb) > 0.0
+
+    def test_without_the_gram_identity_it_is_not(self):
+        # S_b = 1/2 1^T M_b 1 instead of 1^T M_b 1: the sigma block is no
+        # longer a sum of squares and the matrix goes indefinite; the proof
+        # uses the identity.
+        p, b, m, free, _ = _fixture()
+        Mb = _bordered(p, b, m, free, gram=False)
+        assert _lmin(Mb) < 0.0
+
+    def test_upper_triangle_is_the_matrix(self):
+        p, b, m, free, _ = _fixture()
+        J = _newton_jacobian(p, b, free).tocsr()
+        pat = sym_pattern(J.indptr, J.indices, J.shape[0])
+        U = sp.csr_matrix((J.data[pat.tri], pat.u_indices, pat.u_indptr),
+                          shape=J.shape)
+        assert abs(U - sp.triu(J)).max() == 0.0
+
+
+class TestSolve:
+    @pytest.mark.parametrize("fmt", ["csr", "csc"])
+    def test_cholesky_equals_lu(self, fmt):
+        p, b, m, free, log = _fixture()
+        M = _bordered(p, b, m, free).asformat(fmt)
+        rng = np.random.default_rng(7)
+        rhs = rng.standard_normal((M.shape[0], 3))
+        q, *_ = _fixture(spd=False)
+        x_lu = q.solve_ff(M.copy(), rhs, spd=True)
+        x_ch = p.solve_ff(M.copy(), rhs, spd=True)
+        assert p.spd_solves == 1 and p.spd_analyses == 1 and q.spd_solves == 0
+        assert np.max(np.abs(x_ch - x_lu)) <= 1e-9 * np.max(np.abs(x_lu))
+        # same pattern, new values: the analysis is reused, the probe checks
+        x2 = p.solve_ff((M * 1.5).asformat(fmt), rhs[:, 0], spd=True)
+        assert p.spd_solves == 2 and p.spd_analyses == 1
+        assert np.allclose(x2, x_lu[:, 0] / 1.5, rtol=1e-8, atol=0.0)
+        assert not log.warnings
+
+    def test_default_is_lu(self):
+        p, b, m, free, _ = _fixture()
+        J = _newton_jacobian(p, b, free)
+        p.solve_ff(J, np.ones(J.shape[0]))
+        assert p.spd_solves == 0 and p.pardiso_solves == 1
+
+
+class TestGuards:
+    def test_asymmetric_values_declined_on_a_new_pattern(self):
+        p, b, m, free, log = _fixture()
+        J = _newton_jacobian(p, b, free).tocsr()
+        J.data[J.indices > np.repeat(np.arange(J.shape[0]), np.diff(J.indptr))] *= 1.001
+        rhs = np.ones(J.shape[0])
+        x = p.solve_ff(J, rhs, spd=True)
+        assert p.spd_solves == 0 and p.spd_declined == 1
+        assert np.linalg.norm(J @ x - rhs) <= 1e-10 * np.linalg.norm(rhs)
+        assert any("declined" in w for w in log.warnings)
+
+    def test_asymmetric_values_on_a_known_pattern_are_declined(self):
+        p, b, m, free, log = _fixture()
+        J = _newton_jacobian(p, b, free).tocsr()
+        rhs = np.ones(J.shape[0])
+        p.solve_ff(J.copy(), rhs, spd=True)                 # analysed, symmetric
+        assert p.spd_solves == 1
+        J2 = J.copy()
+        k = int(np.flatnonzero(J2.indices > 0)[5])          # one entry, one side
+        J2.data[k] *= 1.0 + 1e-6
+        x = p.solve_ff(J2, rhs, spd=True)
+        assert p.spd_solves == 1 and p.spd_declined == 1
+        assert np.linalg.norm(J2 @ x - rhs) <= 1e-10 * np.linalg.norm(rhs)
+
+    def test_skew_part_invisible_to_any_one_probe_is_declined(self):
+        # review item: a single +-1 probe v can miss a skew component E with
+        # E v = 0.  Build exactly such an E in one row; the exact pairwise
+        # test must decline it.
+        p, b, m, free, log = _fixture()
+        J = _newton_jacobian(p, b, free).tocsr()
+        n = J.shape[0]
+        v = np.where(np.random.default_rng(20260929).random(n) < 0.5, -1.0, 1.0)
+        r = 7
+        c = J[r].indices[J[r].indices > r][:2]
+        e1 = 1e-6 * np.sqrt(J[r, r] * J[c[0], c[0]])
+        e2 = -e1 * v[c[0]] / v[c[1]]
+        E = sp.csr_matrix(([e1, -e1, e2, -e2], ([r, c[0], r, c[1]],
+                                                [c[0], r, c[1], r])), shape=J.shape)
+        assert abs((E @ v)[r]) < 1e-12 * e1               # invisible in row r
+        x = p.solve_ff((J + E).tocsr(), np.ones(n), spd=True)
+        assert p.spd_solves == 0 and p.spd_declined == 1
+        assert np.linalg.norm((J + E) @ x - 1.0) <= 1e-10 * np.sqrt(n)
+
+    def test_symmetric_indefinite_fails_cholesky_and_lu_solves_it(self):
+        # the series-strand saddle point: symmetric, zero diagonal block —
+        # with the diagonal made positive so it passes the cheap tests and
+        # only the factorisation can tell (λmin < 0).
+        p, b, m, free, log = _fixture()
+        J = _newton_jacobian(p, b, free)
+        n = J.shape[0]
+        c = sp.csr_matrix(np.eye(n, 1) * 10.0 * abs(J).max())
+        M = sp.bmat([[J, c], [c.T, sp.eye(1) * 1e-12]]).tocsc()
+        assert _lmin(M) < 0.0
+        rhs = np.ones(n + 1)
+        x = p.solve_ff(M, rhs, spd=True)
+        assert p.spd_failures == 1 and p._pardiso_spd is None
+        assert np.linalg.norm(M @ x - rhs) <= 1e-8 * np.linalg.norm(rhs)
+        assert any("Cholesky failed" in w for w in log.warnings)
+        # the rest of the run stays on LU, without complaint
+        p.solve_ff(M, rhs, spd=True)
+        assert p.spd_failures == 1
+
+    def test_entry_without_its_mirror_is_declined(self):
+        p, b, m, free, log = _fixture()
+        J = _newton_jacobian(p, b, free).tolil()
+        n = J.shape[0]
+        i, j = 3, n - 5                        # far apart: no mirror entry
+        assert J[i, j] == 0.0 and J[j, i] == 0.0
+        J[i, j] = 0.1 * np.sqrt(J[i, i] * J[j, j])
+        J = J.tocsr()
+        rhs = np.ones(n)
+        x = p.solve_ff(J, rhs, spd=True)
+        assert p.spd_solves == 0 and p.spd_declined == 1
+        assert np.linalg.norm(J @ x - rhs) <= 1e-10 * np.linalg.norm(rhs)
+
+    def test_missing_diagonal_pattern(self):
+        A = sp.csr_matrix(np.array([[2.0, 1.0, 0.0], [1.0, 0.0, 1.0],
+                                    [0.0, 1.0, 2.0]]))
+        A.eliminate_zeros()
+        pat = sym_pattern(A.indptr, A.indices, 3)
+        assert not pat.ok and "diagonal" in pat.why
+
+
+class TestCanonical:
+    """Review item B1: the upper-triangle CSR is well formed, for CSR and CSC
+    input, and non-canonical input (duplicates, unsorted) is canonicalised."""
+
+    @pytest.mark.parametrize("fmt", ["csr", "csc"])
+    def test_upper_triangle_pointers(self, fmt):
+        p, b, m, free, _ = _fixture()
+        J = _bordered(p, b, m, free).asformat(fmt)
+        J.sort_indices()
+        pat = sym_pattern(J.indptr, J.indices, J.shape[0])
+        assert pat.ok
+        up = pat.u_indptr
+        assert up[0] == 0
+        assert np.all(np.diff(up) >= 1)                  # every row has a_ii
+        assert up[-1] == pat.u_indices.size == pat.tri.size
+        U = sp.csr_matrix((J.data[pat.tri], pat.u_indices, up), shape=J.shape)
+        ref = sp.triu(J if fmt == "csr" else J.T.tocsr(), format="csr")
+        assert abs(U - ref).max() == 0.0
+
+    @pytest.mark.parametrize("fmt", ["csr", "csc"])
+    def test_duplicates_and_unsorted_input(self, fmt):
+        p, b, m, free, log = _fixture()
+        q, *_ = _fixture(spd=False)
+        J = _bordered(p, b, m, free).tocoo()
+        rng = np.random.default_rng(1)
+        o = rng.permutation(J.nnz)
+        h = 0.5 * J.data[o]
+        D = sp.coo_matrix((np.r_[h, h], (np.r_[J.row[o], J.row[o]],
+                                         np.r_[J.col[o], J.col[o]])),
+                          shape=J.shape).asformat(fmt)
+        D.has_sorted_indices = False
+        assert not D.has_canonical_format
+        rhs = rng.standard_normal(J.shape[0])
+        x = p.solve_ff(D, rhs, spd=True)
+        x_lu = q.solve_ff(J.tocsc(), rhs)
+        assert p.spd_solves == 1 and p.spd_declined == 0
+        assert np.max(np.abs(x - x_lu)) <= 1e-9 * np.max(np.abs(x_lu))
+
+
+class TestHandles:
+    """Review item: LU and Cholesky handles alternating on changing patterns,
+    and after a failed Cholesky."""
+
+    def test_alternating_handles_and_patterns(self):
+        p, b, m, free, log = _fixture()
+        q, *_ = _fixture(spd=False)
+        J = _newton_jacobian(p, b, free).tocsc()
+        Mb = _bordered(p, b, m, free).tocsc()
+        seq = [(J, True), (Mb, False), (Mb, True), (J, False), (J, True),
+               (Mb, True), (J * 2.0, True), (Mb * 0.5, False)]
+        for M, spd in seq:
+            rhs = np.linspace(1.0, 2.0, M.shape[0])
+            x = p.solve_ff(M.copy(), rhs, spd=spd)
+            y = q.solve_ff(M.copy(), rhs)
+            assert np.max(np.abs(x - y)) <= 1e-9 * np.max(np.abs(y))
+        assert p.spd_solves == 5 and p.spd_failures == 0
+        assert p.pardiso_solves == 3
+
+    def test_after_a_failed_cholesky_lu_keeps_working_on_new_patterns(self):
+        p, b, m, free, log = _fixture()
+        J = _newton_jacobian(p, b, free)
+        n = J.shape[0]
+        c = sp.csr_matrix(np.eye(n, 1) * 10.0 * abs(J).max())
+        bad = sp.bmat([[J, c], [c.T, sp.eye(1) * 1e-12]]).tocsc()
+        p.solve_ff(bad, np.ones(n + 1), spd=True)
+        assert p.spd_failures == 1 and p._pardiso_spd is None
+        for M in (_bordered(p, b, m, free).tocsc(), J, bad):
+            rhs = np.ones(M.shape[0])
+            x = p.solve_ff(M, rhs, spd=True)
+            assert np.linalg.norm(M @ x - rhs) <= 1e-8 * np.linalg.norm(rhs)
+        assert p.spd_failures == 1 and p.pardiso_solves >= 4
+
+
+class TestProjectionRank:
+    """Review item: definiteness needs P of full column rank with no free
+    constant mode.  The sliding-band projection is a SIGNED SELECTION: every
+    full dof maps to exactly one reduced column with weight +-1 (signed
+    union-find of the ring welds and the (anti-)periodic cut), so the column
+    supports are disjoint and P^T P is a positive diagonal; the outer
+    Dirichlet ring removes the constant mode.  Checked on the annular model
+    for every shift, anti-periodic, periodic and full ring."""
+
+    @staticmethod
+    def _model(full_ring, sign, segments=8):
+        import math
+        from skfem import MeshTri
+        from motor_ai_sim.simulation.p2_projection import SlipProjection
+        angle = 2 * math.pi if full_ring else math.pi / 2
+        angles = (np.linspace(0., angle, segments, endpoint=False) if full_ring
+                  else np.linspace(0., angle, segments + 1))
+        nv = len(angles)
+
+        def half(radii):
+            pts = np.array([(r * math.cos(a), r * math.sin(a))
+                            for r in radii for a in angles]).T
+            tri = []
+            for layer in range(len(radii) - 1):
+                for k in range(segments):
+                    j = (k + 1) % nv
+                    a, bb = layer * nv + k, layer * nv + j
+                    c, d = (layer + 1) * nv + k, (layer + 1) * nv + j
+                    tri.extend([(a, c, d), (a, d, bb)])
+            return pts, np.array(tri).T
+        stator, st = half((1., 1.2, 1.4))
+        rotor, rt = half((.5, .8, 1.))
+        nsn = stator.shape[1]
+        mesh = MeshTri(np.hstack([stator, rotor]), np.hstack([st, rt + nsn]))
+        basis = Basis(mesh, ElementTriP2())
+        if full_ring:
+            masters = slaves = np.array([], int)
+        else:
+            masters = np.array([nsn, nsn + nv, nsn + 2 * nv, 0, nv, 2 * nv])
+            slaves = masters + nv - 1
+        outer = np.arange(2 * nv, 3 * nv)
+        oe = np.flatnonzero(np.all(np.isin(mesh.facets, outer), axis=0))
+        bnd = np.concatenate([basis.nodal_dofs[0, outer], basis.facet_dofs[0, oe]])
+        proj = SlipProjection(
+            n_dof=basis.N, facets=mesh.facets, vdof=basis.nodal_dofs[0],
+            fdof=basis.facet_dofs[0], rring=np.arange(2 * nv, 3 * nv),
+            sring=np.arange(nv), nsn=nsn, n_ring=nv, full_ring=full_ring,
+            bc_sign=sign, Mn=masters, Sn=slaves, dirichlet_dofs=bnd)
+        K = asm(stiff_nu2, basis, nu=np.ones((mesh.t.shape[1], 1)) / MU0)
+        return proj, K.tocsr(), nv
+
+    @pytest.mark.parametrize("full_ring,sign", [(False, -1.0), (False, 1.0),
+                                                (True, 1.0)])
+    def test_signed_selection_and_positive_definite(self, full_ring, sign):
+        proj, K, nv = self._model(full_ring, sign)
+        for shift in range(-nv, 2 * nv):
+            P, out = proj.build(shift)
+            P = P.tocsr()
+            assert np.all(np.diff(P.indptr) == 1)            # one entry per row
+            assert np.all(np.abs(P.data) == 1.0)
+            PtP = (P.T @ P).tocsr()
+            assert abs(PtP - sp.diags(PtP.diagonal())).max() == 0.0
+            assert PtP.diagonal().min() >= 1.0               # full column rank
+            free = np.setdiff1d(np.arange(P.shape[1]), out)
+            Kff = (P.T @ K @ P).tocsr()[free][:, free]
+            assert _lmin(Kff) > 0.0
+
+
+def test_voltage_eddy_with_series_strands_is_refused_before_any_solve():
+    """Review item: ve_newton must not send a series-strand system to
+    Cholesky.  It cannot: series strand paths are refused on entry, before
+    any matrix is built or solved (and its bordered matrix never carries
+    Kirchhoff rows; the call passes spd=self.pT is None regardless)."""
+    from motor_ai_sim.simulation.p2_drive import P2Drive
+
+    class _Spy:
+        calls = []
+
+        def solve_ff(self, M, rhs, spd=False):
+            self.calls.append(spd)
+            raise AssertionError("no solve expected")
+    d = P2Drive.__new__(P2Drive)
+    d.pT = sp.csr_matrix((2, 1))          # series strand paths bound
+    d.p2 = _Spy()
+    with pytest.raises(RuntimeError, match="series"):
+        d.ve_newton(None, None, np.zeros(3), np.zeros(1), (0.0, 0.0),
+                    np.zeros(3), {}, 1e-5, {}, {}, None, 5)
+    assert _Spy.calls == []
+
+
+def test_pypardiso_surface_the_solver_relies_on():
+    """The LU-reuse and Cholesky paths call pypardiso internals; pinned to
+    0.4.7-0.4.x (requirements-pardiso.txt).  This fails loudly on an upgrade
+    that moves them."""
+    s = pypardiso.PyPardisoSolver(mtype=2)
+    for a in ("_call_pardiso", "_check_b", "set_phase", "iparm", "perm",
+              "free_memory"):
+        assert hasattr(s, a), a
+    assert s.iparm.size == 64

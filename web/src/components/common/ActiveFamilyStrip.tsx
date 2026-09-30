@@ -50,6 +50,15 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
  * bearings on the machine = the mechanical term is UNKNOWN, not zero), and the
  * direction taken from the run's own `op_mode`.  Two places, one formula — if
  * that ever has to move, it moves into a lib both import.
+ *
+ * `pMechW` MUST be the raw ROTOR mechanical power (T·ω, `SummaryTable`'s
+ * `pMechAbs` — i.e. `|P_mech_W|`, k3d-scaled where that applies), never the
+ * shaft power: this function derives the shaft power itself by applying
+ * `P_bearings_W`/`P_windage_W` to `pMechW` ONCE.  Passing an already
+ * shaft-corrected value here applies bearings + windage a second time and
+ * under-reports η (bug found 2026-09-30: the L155 catalog row read ~0.15 pp
+ * low because the caller had already subtracted the mechanical loss out of
+ * `PmW` before handing it to this function).
  */
 export function dutyEfficiencyPct(s: any, pMechW: number): number {
   const pm = Math.abs(Number(pMechW) || 0);
@@ -325,6 +334,12 @@ const ActiveFamilyStrip: React.FC = () => {
         } catch { return null; }
       })();
       const Tn = Math.abs(Number(s?.T_em_avg_Nm)) * (k3d ?? 1);
+      // The rotor's own T·ω (k3d-scaled), i.e. SummaryTable's `pMechAbs` —
+      // the mechanical loss has NOT been applied to this yet.  Both `PmW`
+      // below and `dutyEfficiencyPct` derive the shaft power from this same
+      // rotor figure; feeding either of them the OTHER'S already-derived
+      // shaft power double-applies bearings + windage.
+      const rotorW = Math.abs(Number(s?.P_mech_W)) * (k3d ?? 1);
       // The duty's kW is the SHAFT power — the number the card's "Mech power"
       // tile shows (SummaryTable `pShaft`): rotor T·ω plus the bearings and
       // windage a generator's prime mover must also supply, minus them on a
@@ -336,10 +351,9 @@ const ActiveFamilyStrip: React.FC = () => {
       // shaft (2026-09-09) — and one power to go with it.  Unknown mechanical
       // loss (no bearings named) leaves the rotor number, as the card does.
       const PmW = ((): number => {
-        const rotor = Math.abs(Number(s?.P_mech_W)) * (k3d ?? 1);
         const extra = Number(s?.P_mech_extra_W);
-        if (!Number.isFinite(extra)) return rotor;
-        return mode === 'generator' ? rotor + extra : Math.max(0, rotor - extra);
+        if (!Number.isFinite(extra)) return rotorW;
+        return mode === 'generator' ? rotorW + extra : Math.max(0, rotorW - extra);
       })();
       const dutyBody: any = { name: tDuty, mode, from_current: true };
       if (runMatches) {
@@ -548,7 +562,7 @@ const ActiveFamilyStrip: React.FC = () => {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
             drive, assignment_sig: dutyBody.assignment_sig,
-            result: { efficiency_pct: dutyEfficiencyPct(s, PmW),
+            result: { efficiency_pct: dutyEfficiencyPct(s, rotorW),
                       ripple_pct: s.T_ripple_pct,
                       v_ll_peak_v: Number(s.V_line_peak_V) * (k3d ?? 1),
                       loss_w: s.P_loss_total_W, mass_kg: s.mass_total_kg,

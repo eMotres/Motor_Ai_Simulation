@@ -11,6 +11,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField, Box,
 } from '@mui/material';
+import HelpTip from './HelpTip';
 
 export interface TextPromptState {
   title: string;
@@ -44,7 +45,8 @@ export const TextPromptDialog: React.FC<{
         <TextField autoFocus fullWidth size="small" label={state?.label ?? 'Name'}
           value={value} onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
-          helperText={state?.hint ?? ' '} sx={{ mt: 1 }} />
+          InputProps={{ endAdornment: state?.hint ? <HelpTip title={state.hint} /> : undefined }}
+          sx={{ mt: 1 }} />
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}

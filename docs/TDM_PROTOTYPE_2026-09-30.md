@@ -5,7 +5,41 @@ Branch `feat/tdm-prototype` from `pre-migration-freeze-2026-09-15` (f852bd2).
 Input: `GPU_TDM_STUDY_2026-09-29.md` §4 (branch `perf/profiling-gpu-tdm`),
 `EDDY_SHAFT_SETTLE_2026-09-29.md` (TP-EEC), `CHOLESKY_SPD_2026-09-29.md`.
 
-**Status: in progress** — this file is the resume point; see "Progress log" at the end.
+**Status: prototype complete, validated on the three machines; draft PR, not
+merged, not deployed.** The progress log at the end is the resume point.
+
+## Summary
+
+- **Method:** Newton on the (anti)periodic space-time system of the BDF2 eddy
+  march; each Newton system reduced exactly to the conductor "wrap" state and
+  solved by GMRES over forward sweeps of stored per-frame Cholesky factors,
+  preconditioned by a rotor-frame DC coarse correction (the 0th harmonic of a
+  multiharmonic coarse space = the TP-EEC operator). Half period where the
+  winding is half-wave symmetric (all three machines). Frame factorisation,
+  residuals and the static start run in parallel over frames.
+- **Accuracy (TDM with the full demag pre-pass vs today's march):** torque ≤ 4e-6,
+  ripple ≤ 0.0002 pp, total loss ≤ 3e-5, Br map identical to ≤ 0.0014 per
+  element, on Ø40, L13 rated/peak and L155. Against 40-period asymptotes TDM is
+  closer than the march (Ø40 shaft: 4e-6 against +4.6 %).
+- **Speed (one worker, 6 threads, same box):** L155 **3.9×** with demag (full
+  pre-pass), **6.1×** with the shortcut, **5.0×** without demag (5.7× with 3–6
+  workers); L13 peak 1.7× / 2.6× (shortcut); L13 rated 1.1× / 1.3×; Ø40 1.6×
+  without demag, ≈ 1× with demag. Where the march settles in 3 periods, the demag
+  pre-pass and the ratchet's re-solves in the reported window (identical in both
+  methods) dominate.
+- **Demag shortcut (owner's):** ⌈N/6⌉ frames around the worst (magnet, instant)
+  of the pristine orbit, that magnet's Br mapped to every pole: torque within
+  0.15 %, ripple within 0.21 pp, total loss within 1e-4, Br kept within 0.04 pp
+  on all four duties (all fractional-slot). Its per-element map differs (max
+  0.09–0.28) because it gives every magnet the same map where the one-period
+  pre-pass gives each its own history segment — and neither is the q-period
+  asymptote.
+- **Recommendation:** GO for the optimizer and passports as an opt-in
+  (`eddy_method="tdm"`) on eddy current-drive points, with the full pre-pass
+  where demag matters and the shortcut where 0.2 pp of ripple is acceptable;
+  keep "march" the default until a routine A/B on more machines. Not for voltage
+  drive / PWM (refused), series strand paths (refused), full-ring models
+  (refused). Memory: 2.5–3× the march's peak RSS (per-frame factors).
 
 ## 1. What was built
 
@@ -203,7 +237,114 @@ a 4-thread shaftloss job (load 5–11), so the walls carry ±15 % noise.
   (12 solves per frame: the ratchet trips on almost every pass) cost the same in
   both methods.
 
-### 2.3 Output path, stopping rule and torque method (coordinator, 2026-09-30)
+### 2.3 Stage 2: L13 (CIANO28 85 20SW1200 / L13), demag on (the duty's setting)
+
+24s28p, NS = 4 (7 poles per sector), 40 steps: TDM half period, 20 frames. From
+here on every TDM run stops in the owner's terms (§2.6) with the forcing 0.01.
+
+**Rated (26.1 A, 1000 rpm):**
+
+| quantity | march | TDM, full pre-pass | TDM, shortcut |
+|---|---:|---:|---:|
+| T_avg [N·m] | 5.399462 | 5.399443 (−3.5e-6) | 5.407786 (+1.5e-3) |
+| ripple [%] | 5.280835 | 5.280785 (−0.0000 pp) | 5.073569 (−0.21 pp) |
+| V_peak [V] | 15.88827 | 15.88881 (+3.4e-5) | 15.84684 (−2.6e-3) |
+| P_mag 2-D [W] | 0.440848 | 0.441547 (+1.6e-3) | 0.440348 (−1.1e-3) |
+| P_shaft [W] | 0.439172 | 0.441768 (+5.9e-3) | 0.435612 (−8.1e-3) |
+| P_cu AC [W] | 2.302353 | 2.303297 (+4.1e-4) | 2.312500 (+4.4e-3) |
+| P_fe [W] | 2.478466 | 2.479051 (+2.4e-4) | 2.484744 (+2.5e-3) |
+| total loss [W] | 198.717 | 198.722 (+2.5e-5) | 198.729 (+6.0e-5) |
+| Br kept [% vol] | 98.927 | 98.927 (0) | 98.963 (+0.036 pp) |
+| Br map vs march: max / mean abs ΔBr | – | 0.0013 / 8e-5 | 0.150 / 0.017 |
+| frames: warm-up / pre-pass / reported | 122 / 40 / 40 | 0 / 40 / 40 | 0 / 7 / 40 |
+| Newton (orbit + re-solve), GMRES, factorisations | – | 6 + 4, 29, 200 | 6 + 4, 29, 200 |
+| wall [s] | 160 | 145 | 120 |
+| of it: static, Newton, pre-pass, re-solve, reported period | – | 7.0, 8.2, 60.3, 4.8, 49.4 | 9.9, 11.1, 14.6, 6.1, 56.4 |
+| peak RSS [MB] | 433 | 1340 | 1346 |
+
+**Peak (45.96 A, 1000 rpm):**
+
+| quantity | march | TDM, full pre-pass | TDM, shortcut |
+|---|---:|---:|---:|
+| T_avg [N·m] | 9.384038 | 9.384020 (−1.8e-6) | 9.383612 (−4.5e-5) |
+| ripple [%] | 6.428616 | 6.428737 (+0.0001 pp) | 6.428133 (−0.0005 pp) |
+| V_peak [V] | 22.22790 | 22.22857 (+3.0e-5) | 22.19807 (−1.3e-3) |
+| P_mag 2-D [W] | 0.889268 | 0.889607 (+3.8e-4) | 0.889510 (+2.7e-4) |
+| P_shaft [W] | 1.806457 | 1.807053 (+3.3e-4) | 1.805266 (−6.6e-4) |
+| P_cu AC [W] | 3.101832 | 3.101584 (−8.0e-5) | 3.100902 (−3.0e-4) |
+| P_fe [W] | 2.820227 | 2.820252 (+8.7e-6) | 2.820236 (+3.0e-6) |
+| total loss [W] | 682.776 | 682.777 (+1.5e-6) | 682.774 (−2.9e-6) |
+| Br kept [% vol] | 99.764 | 99.764 (0) | 99.764 (0) |
+| Br map vs march: max / mean abs ΔBr | – | 0.0005 / 5e-5 | 0.087 / 0.007 |
+| frames: warm-up / pre-pass / reported | 282 / 40 / 40 | 0 / 40 / 40 | 0 / 7 / 40 |
+| Newton (orbit + re-solve), GMRES, factorisations | – | 8 + 3, 29, 220 | 8 + 3, 29, 220 |
+| wall [s] | 159 | 93 (1.7×) | 61 (2.6×) |
+| of it: static, Newton, pre-pass, re-solve, reported period | – | 6.1, 9.2, 43.0, 3.1, 18.2 | 6.0, 9.2, 8.2, 3.0, 20.7 |
+| peak RSS [MB] | 497 | 1335 | 1340 |
+
+### 2.5 Stage 3: L155 (CIANO10 200 opt / L155 motor, rated 1x9 mm), demag on
+
+12s10p, NS = 2 (5 poles per sector), 36 steps: TDM half period, 18 frames. The
+march is today's (image-mean start + TP-EEC DC correction, #63): 614 frames,
+settled. The 40-period asymptotes of `EDDY_SHAFT_SETTLE_2026-09-29.md` §3 are
+quoted for the slow bodies.
+
+| quantity | march | TDM, full pre-pass | TDM, shortcut | 40-period asymptote (#63) |
+|---|---:|---:|---:|---:|
+| T_avg [N·m] | 187.9337 | 187.9342 (+2.7e-6) | 187.9371 (+1.8e-5) | – |
+| ripple [%] | 1.564382 | 1.564419 (+0.0000 pp) | 1.564213 (−0.0002 pp) | – |
+| V_peak [V] | 436.6521 | 436.6516 (−1.2e-6) | 436.6589 (+1.6e-5) | – |
+| P_mag reported [W] | 92.319 | 92.334 (+1.6e-4) | 92.339 (+2.2e-4) | 92.320 |
+| P_shaft [W] | 3.9944 | 4.0703 (+1.9 %) | 4.0686 (+1.9 %) | 4.009 |
+| P_sleeve [W] | 9.93144 | 9.93231 (+8.7e-5) | 9.93255 (+1.1e-4) | 9.9315 |
+| P_cu AC [W] | 609.8097 | 609.8176 (+1.3e-5) | 609.8263 (+2.7e-5) | 609.795 |
+| P_fe [W] | 1444.685 | 1444.619 (−4.6e-5) | 1444.665 (−1.4e-5) | – |
+| total loss [W] | 3820.339 | 3820.373 (+8.9e-6) | 3820.431 (+2.4e-5) | – |
+| Br kept [% vol] | 99.213 | 99.213 (0) | 99.213 (0) | – |
+| Br map vs march: max abs ΔBr | – | < 1e-5 (identical) | see §3 | – |
+| frames: warm-up / pre-pass / reported | 578 / 36 / 36 | 0 / 36 / 36 | 0 / 7 / 36 | 1476 |
+| Newton (orbit + re-solve), GMRES, factorisations | – | 5 + 2, 32, 126 | 5 + 2, 32, 126 | – |
+| wall [s], one worker | 338 | 87 (**3.9×**) | 55 (**6.1×**) | – |
+| of it: static, Newton, pre-pass, re-solve, reported period | – | 12.9, 11.3, 18.2, 2.9, 8.5 | 8.3, 8.6, 2.8, 2.5, 9.2 | – |
+| wall [s], 3 workers × 2 MKL threads | – | – | 55 | – |
+| peak RSS [MB] | 627 | 1757 | 1732 (1859 with 3 workers) | – |
+
+**Without demag** (the pure eddy steady state; `--demag off` on both):
+
+| quantity | march (578 frames) | TDM, 1 worker | TDM, 3 × 2 | TDM, 6 × 1 |
+|---|---:|---:|---:|---:|
+| T_avg [N·m] | 188.8432 | 188.8435 (+1.2e-6) | same | same |
+| ripple [%] | 1.612974 | 1.613127 (+0.0002 pp) | same | same |
+| V_peak [V] | 438.1814 | 438.1812 (−5.4e-7) | same | same |
+| P_mag reported [W] | 91.559 | 91.577 (+2.0e-4) | same | same |
+| P_shaft [W] | 4.00782 | 4.02079 (+0.32 %) | same | same |
+| P_sleeve [W] | 9.83514 | 9.83642 (+1.3e-4) | same | same |
+| P_cu AC [W] | 613.5301 | 613.5448 (+2.4e-5) | same | same |
+| P_fe [W] | 1457.723 | 1457.723 (+1.4e-7) | 1457.718 (−3.2e-6) | 1457.718 (−3.2e-6) |
+| total loss [W] | 3836.255 | 3836.302 (+1.2e-5) | 3836.297 (+1.1e-5) | 3836.297 (+1.1e-5) |
+| wall [s] | 263 | 53 (**5.0×**) | 46 (**5.7×**) | 46 (**5.8×**) |
+| of it: static, Newton, reported period | – | 9.8, 9.7, 8.1 | 8.1, 7.3, 7.0 | 6.6, 7.8, 7.0 |
+| Newton's parts: Jacobians, residuals, sweeps (GMRES) | – | 4.2, 1.7, 3.6 | 2.0, 0.8, 4.2 | 1.6, 0.7, 5.2 |
+| peak RSS [MB] | 633 | 1727 | 1832 | 1935 |
+
+- The orbit is solved in 5 Newton iterations (0.12 → 3.8e-4 → 1.3e-4 → 4.7e-5 →
+  1.4e-5 → 4.6e-6), 28 GMRES iterations in all; the owner's terms stopped it
+  (torque moved 5e-7, ripple 0.0002 pp, eddy loss 6e-6 between the last two).
+- **Wall time outside TDM** (mesh, materials, the frozen-permeability Ld/Lq probe,
+  iron loss, the frequency-domain cross-check, …) is ≈ 25 s here and is the same
+  in both methods; the eddy part itself went from ≈ 238 s to ≈ 27 s (≈ 9×).
+- **Parallel in time pays little at this size:** the frame-parallel parts
+  (Jacobians 4.2 → 1.6 s, residuals, the static start 9.8 → 6.6 s) scale 1.5–2.7×
+  with threads (the Python assembly holds the GIL part of the time), but the
+  sequential sweeps and the reported period's march do not, and the fixed 25 s
+  does not move. 4–8 concurrent steps would need process workers (fork) to go
+  further; not worth it before the reported march is parallelised (§5).
+- **The shaft** (4 W of 3.8 kW) reads 0.3–1.9 % above the march, whose own value
+  is 0.4 % below the 40-period asymptote. The owner's stop does not wait for the
+  slowest body's DC mode; the state-residual stop (`SB_TDM_STOP=residual`) is
+  measured in §2.7.
+
+### 2.6 Output path, stopping rule and torque method (coordinator, 2026-09-30)
 
 - **One post-processing path.** TDM never reports a frame it solved itself: the
   reported period is marched by the unchanged frame loop from the orbit, so the

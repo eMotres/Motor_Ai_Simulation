@@ -1,7 +1,12 @@
-# Motor passport algorithm — specification v1 (draft for review)
+# Motor passport algorithm — specification v1.1 (revised after review)
 
-Status: **draft for independent review** (2026-09-30). Docs only; nothing here
-is implemented yet. Pilot machine: **CIANO14 40 new / L12** (Ø40, 12 slots /
+Status: **revised after the independent review of 2026-09-30** (Codex Astra,
+review of commit 5044638: direction accepted for a bounded Ø40 pilot, computation
+baseline **not approved**). Every review finding is dispositioned in §14 —
+fixed / planned / needs owner decision — and the review's gates are §15.
+Inline corrections carry the finding id in brackets, e.g. [P14]. Docs only
+except the three legacy extraction bugs, now fixed in PR #81
+(`fix/passport-loss-bugs`). Pilot machine: **CIANO14 40 new / L12** (Ø40, 12 slots /
 14 poles, star, "2S", F52SH_120C magnets, 20SW1200 steel).
 
 Evidence base: the Configure audit of 2026-09-30 (FEM of the tuned knobs vs the
@@ -12,14 +17,22 @@ image, deployed code `101aa45`), PR #49 mesher S2/S3 (`docs/MESHER_TRANSITION.md
 (independent materials). Every measured number in this document names the run
 it comes from; every number without a source is marked **estimate**.
 
-Conventions: γ is the current angle from the q-axis (γ > 0 = negative i_d,
-i.e. toward field weakening), identical to the solver's `gamma_deg` and to
-ANSYS `el_deg`. I is the phase (star) or line (delta) RMS current at the
-terminals; a delta machine is stored as its equivalent star (I = line current,
-V = winding voltage/√3, R and L = winding/3), as `passport.py` does today. N is
-wire rows per slot; electrical turns = N / wire_parallel × wire_split. "NI" =
-ampere-turns per slot. ψ values are phase flux linkage, peak. Torque is always
-the energy / flux-linkage torque (section 3.6).
+Conventions [P03]: γ is the current angle from the q-axis (γ > 0 = negative
+i_d, i.e. toward field weakening), identical to the solver's `gamma_deg` and to
+ANSYS `el_deg`. I is the terminal RMS current (phase in star, LINE in delta).
+The dq frame is **amplitude-invariant, peak**, in the MOTORING equivalent star:
+`i_d = −√2·I·sin γ`, `i_q = √2·I·cos γ`; ψd, ψq are phase peak flux linkages;
+T = (3/2)·p·(ψd·i_q − ψq·i_d); P = (3/2)(v_d·i_d + v_q·i_q). Generator
+operation keeps the same frame with γ in (90°, 270°) and negative T — never a
+sign flip of the stored map. A delta machine is stored as its equivalent star
+(I = line current, V = winding voltage/√3, R and L = winding/3, winding-to-line
+phase shift of 30° applied to angles and waveforms, power conserved); the
+delta zero-sequence (triplen) circulation is NOT in the equivalent star and is
+carried as its own loss term (the solver's `P_cu_circulating_W`). The
+convention version is stored with the passport (`convention_rev`). N is wire
+rows per slot; electrical turns = N / wire_parallel × wire_split. "NI" =
+ampere-turns per slot. Torque: see B1 — the stored mean-torque METHOD is an
+explicit field of every point.
 
 ---
 
@@ -43,12 +56,13 @@ Accuracy priorities (owner, 2026-09-30):
 
 | Quantity | Target vs the converged FEM reference |
 |---|---|
-| Mean torque (energy method) | ≤ 1 % |
+| Mean torque | ≤ 1 % physical (vs an independent reference, B1) — interpolation, mesh, time and settle errors are allocated inside it (§9) [N33] |
 | Torque ripple (peak-to-peak / mean) | ≤ max(0.5 pp, 10 % of the value) |
 | Flux linkage ψd, ψq (interpolation target, drives torque) | ≤ 0.5 % of \|ψ\| |
 | Terminal voltage / EMF (drives the voltage limit) | ≤ 1 % |
 | TOTAL loss | ≤ 5 % |
-| Individual loss groups | no own tolerance, EXCEPT groups that set a thermal limit (magnets and sleeve on high-speed machines): ≤ 10 % of the group |
+| Individual loss groups | no own tolerance, EXCEPT groups that set a thermal limit: decided by thermal sensitivity dT_limit/dP_group against the remaining thermal margin, not by watt share [P07] |
+| Near-zero quantities | absolute floors: torque 0.05 % of rated, ripple 0.05 pp, cogging 0.1 % of rated torque (N·m), losses 0.1 % of the total [N33] |
 
 ## 2. Inputs and fingerprints
 
@@ -66,17 +80,34 @@ with it:
 | Cooling | thermal settings | not in the passport's EM part; the thermal limit is recomputed live |
 | Computation baseline (section 3.0): code commit / image digest, mesher and version, mesh rule version, solver settings | the run | `baseline_sig` |
 
-**Stale rules.** A passport is *current* only when every stored signature
-equals the one recomputed from today's inputs. Otherwise:
-- geometry, winding topology or materials changed → **stale**, the tuner shows
-  the machine as "passport out of date", no numbers, and queues a regeneration
-  request (section 10);
-- only the bus changed → the static and loss grids stay valid; the PWM block
-  and the voltage-limit map are recomputed (PWM needs FEM; the voltage map is
-  analytic);
-- only the baseline changed (new solver/mesher/materials version) → the
-  passport stays usable, flagged "older baseline", and is scheduled for the
-  global recompute.
+**Three identities [P29].** (1) the BASE machine a passport was measured on
+(its signatures above); (2) the SUPPORTED KNOB DOMAIN it may be scaled into
+(the validated cells of §9); (3) the EVALUATED INSTANCE the tuner shows (base
+signatures + knob values + operating point + temperatures). Matching compares
+(1) exactly; the knobs live in (2), never in the geometry hash.
+
+**Signature construction [P28].** One immutable, canonical, resolved job
+snapshot per passport: every number normalised, schema-versioned, hashed; it
+includes the winding phase/sign map, terminal connection, mode, part states,
+end/segmentation/contact models, the calibrated d-axis, temperatures and the
+magnet state. `routes.simulation._geometry_fingerprint` is NOT that hash (it
+mixes the raw live config and returns "nofp" on failure) — the snapshot hash
+fails closed. The snapshot is handed to EVERY job of the passport (base, grid,
+PWM, checks), so no sub-solve can inherit the panel's context.
+
+**Stale rules.** A passport block is *current* only when the signatures it
+depends on equal today's. Otherwise:
+- geometry, winding topology, or any material CARD VALUE it used changed →
+  the dependent blocks are **stale**: no numbers from them, "passport out of
+  date", a regeneration request (section 10). [P29: a card-value change is
+  never "older baseline"]
+- only the bus changed → the static grid stays valid; the PWM block and the
+  voltage map are recomputed; the loss grid stays valid ONLY where its stored
+  control trajectory (id, iq, T, state) is still the one the new bus requires,
+  else those points need FEM [P10];
+- only the computation baseline changed (solver/mesher version, NOT material
+  values) → usable under an explicit compatibility policy per baseline pair,
+  flagged "older baseline", queued for the recompute.
 
 Matching a machine to a passport is by these signatures ONLY. Today four
 different name/cross-section rules coexist (ConfiguratorPanel `pick`, the
@@ -91,26 +122,38 @@ Each item: **decided**, or **needs owner decision / evidence**.
 
 | # | Item | Proposal | State |
 |---|---|---|---|
-| B1 | Torque method | Energy / flux-linkage (virtual-work) torque only; Maxwell stress only as a no-load cogging diagnostic (memory `torque-methodology-energy-vs-maxwell`; solver headline since 2026-07-23). | **decided** |
+| B1 | Torque method [P01, P02] | Policy stays energy / flux-linkage, but the v1 text overstated what ships: the loaded waveform is the replacement MEAN plus the raw Maxwell AC part (`fem_solver_2d.py:10225–10313`, `sb_postproc.py:401–576`), and the space-vector mean the eddy/demag/PWM runs use is not certified virtual work. v1.1: every stored point carries its mean- and ripple-method identifiers; a published loaded point refuses a silent raw-Maxwell fallback; independent mean-torque evidence (terminal work over an integer period, lossless demag-off current-driven case; port-work / solved-loss / storage balance for eddy runs) and mesh + angular convergence of the loaded ripple are gates. The dq check T_ψ vs T is a frame/unit check only, not an independent torque check. | **needs evidence** |
 | B2 | Mesher | Triangle CDT (non-commercial, AGPL-incompatible) vs the gmsh backend of PR #49. S3 evidence: L155 and L180 pass every limit; L13 passes at 0.61 mm; field quantities agree ≤ 0.04 % with demag off. Open: (a) L13 default 1.22 → 0.61 mm; (b) candidate c04 magnet eddy −12 %; (c) gmsh wall/RSS tails ≤ 2.08× on sub-0.05 mm fillets. Under the owner's loss rule (only the TOTAL at 5 %), (b) is **0.025 W** on a machine whose total loss is watts to tens of watts — irrelevant for the total, so it no longer blocks; torque there is within ±0.06 % and ripple is the item to check (c04 +4.5 pp ripple — **that** fails the ripple target and needs the boundary-refinement check). (c) is a cost item, not an accuracy item. | **needs owner decision**: switch the passport baseline to gmsh (recommended, licence), accepting (c); c04 ripple needs one boundary-refinement run as evidence |
 | B3 | Mesh sizing rule | One rule for every machine, from physical scales (memory `mesh-follows-physical-scales`): air gap ≥ 2 element layers across the mechanical gap (structured belt); conductive solids (magnets, sleeve, shaft) first layer h1 = δ/k with δ the skin depth at the highest harmonic that carries ≥ 1 % of the group's loss, growth 1.5, ≥ 16 cells per wavelength (the shipped `SB_SKIN_*` settings, converged on L155: ×4 finer layers move shaft +0.11 %, sleeve ≤ 0.02 %); copper: one element across a strand is the shipped setting — resolution for AC copper must be proven (section 6.3: the two AC routes still differ 1.6× on L155); iron: cell size ≤ min(tooth tip, slot opening)/3, bulk capped at the machine-class size; slip grid set by the time step. Convergence proof per machine CLASS (Ø40-class, 85 mm, 150 mm, Ø200): three levels with a geometric refinement ratio (the L13 study showed the current floor 0.12 mm² makes "0.305 mm" mesh at 0.53 mm, so Richardson is invalid there — the floor and the slip grid must be refined together). | **needs evidence**: one geometric three-level study per class (night) |
-| B4 | Time integration | Steps per electrical period: 72 with eddy (solver default, `simulation/eddy_steps.py`), ripple-grade 108 or ≥ 6 samples per cogging cycle; static grid: positions over 1/6 period (section 3.2). Settle rule (new, 3.0.1). BDF2. | **needs owner decision** on the settle rule |
+| B4 | Time integration [P05] | Steps per electrical period: 72 with eddy (solver default, `simulation/eddy_steps.py`); ripple-grade = the shipped **9 samples per cogging cycle** (6 can under-read a sinusoid's p-p by 13.4 %), then verified by a phase-shifted and an angularly refined waveform; the actual symmetry period is established per machine (paired teeth / winding symmetry can break the Ns/p assumption) and the snapped angles/steps are recorded. Settle rule 3.0.1. BDF2. | **needs evidence** (symmetry, ripple convergence) and **owner decision** (settle rule) |
 | B5 | Solver | P2, merged structured belt, Newton, nonlinear residual ≤ 1e-7, Cholesky (PARDISO mtype 2, PR #66) for SPD systems. | **decided** |
 | B6 | Eddy start and settle | Magnets: static start; shaft/sleeve: pole-pair image mean start + TP-EEC (PR #63). | **decided** (merged) |
-| B7 | Demag | Proposal 3.0.2 (one-magnet 1/6-period pre-pass + symmetry copy); until proven, today's pre-pass with the Br ratchet frozen during warm-up (memory `demag-ratchet-warmup-reproducibility`); reported figure = volume-weighted Br kept, worst element = corner diagnostic. | **needs evidence** (3.0.2) |
+| B7 | Demag [G08, P09] | **Default: today's full pre-pass** with the Br ratchet frozen during warm-up. 3.0.2 is a research proposal, enabled per topology only after qualification. Maps are fitted at a SPECIFIED fixed retention state (state hash + initialisation stored); damage is a boundary / separate passport state, never interpolated across; the current limit is an (id, iq, T) safe surface, not a scalar I. | **decided** (default); shortcut **needs evidence** |
 | B8 | Materials library | PR #51 (every value from an independent source; 14 cards `verify: true`; N52UH supplier data pending). A card change → `materials_sig` changes → every passport using that card becomes "older baseline" and is queued. | **needs owner decision**: merge #51 before the recompute; N52UH supplier data |
-| B9 | Reproducibility | Store with every passport: code commit and image digest, gmsh (4.15.2 validated) or triangle version, scikit-fem / pypardiso versions, solver thread count, mesh rule version, `materials_sig`, `geometry_sig`, the run ids. Repeat builds must be bit-identical in one environment (PR #49 test); cross-version comparison by the semantic mesh fingerprint. | **decided** (implementation step M2) |
+| B9 | Reproducibility [G30] | Store with every passport: source-tree digest incl. dirty state, immutable image digest and mounts, the complete inputs/settings/environment (`SB_*`, threads, BLAS), library versions (gmsh 4.15.2 / triangle, scikit-fem, pypardiso), actual mesh and tags hash, angle grid, initial states (Br, warm seeds), raw run ids and FAILED runs. Bitwise mesh repeatability (PR #49 test) is separate from tolerance-based output repeatability (threaded FEM is not bitwise; Cholesky round-off). Cache keys versioned; blocks promoted atomically only when complete and verified. Full-precision data everywhere — display rounds (fixed in PR #81 for the dq outputs and the passport). | **decided**; implemented **before the pilot** (M0), not after |
 | B10 | TDM / parallel-in-time | Optional later speed-up if the eddy transients still dominate after B4. Not a blocker. | **later** |
 
-#### 3.0.1 Settle rule proposal (owner priorities)
+#### 3.0.1 Settle rule proposal (owner priorities) — revised [P06, P07]
 
-Stop the eddy march when, over the last two completed periods:
-1. mean torque changes < 0.1 % and ripple < 0.2 pp;
-2. the TOTAL loss changes < 0.5 % (a tenth of its 5 % budget);
-3. every loss group that feeds a thermal limit (magnets; sleeve on machines
-   with a sleeve; shaft only if it is ≥ 2 % of the total) changes < 2 %;
-4. groups below 1 % of the total are NOT waited for; their current value is
-   reported with a "not settled (group < 1 % of total)" flag.
+v1 used adjacent-period changes; the review showed they do not bound the
+remaining transient: with a slow mode τ = 21 periods (λ = 0.9535) the
+remaining tail is 20.5× the latest change, so a 0.5 % change can hide 10 %.
+Revised rule — stop when ALL hold:
+1. the state-period residual (PR #63 gauge) or a validated slow-mode tail
+   bound (inverse-iteration λ of the operator) bounds the REMAINING change of
+   mean torque below 0.1 % and of ripple below 0.2 pp, on phase-aligned
+   waveforms (means and p-p alone can hide beats);
+2. the summed REMAINING watts of all groups (tail bound, not last change) is
+   below 0.5 % of the total loss;
+3. thermal criticality overrides watt share: every group whose sensitivity
+   dT_limit/dP_group times its remaining-watt bound exceeds 10 % of the
+   remaining thermal margin keeps the strict gauge — no blanket magnet /
+   sleeve / shaft percentages;
+4. a small group may be waived only with a bounded remaining-watt estimate and
+   a low thermal impact, and is reported "not settled, bound X W";
+5. after any accelerator jump (TP-EEC) the history is reset and ≥ 4 continuous
+   original-march periods are verified, as PR #63 requires; failed nonlinear
+   frames are never waived.
 
 Measured basis (PR #63, L155 rated 36 steps): T, ripple and V_peak within
 2e-5 of the asymptote, P_mag/P_sleeve/P_cu within 0.002 %, total 3820.34 W;
@@ -118,13 +161,22 @@ the march ran 614 frames (17 periods) because the SHAFT (4.0 W = 0.1 % of the
 total) has a slow wall mode (τ = 21 periods). Under the rule above the shaft
 no longer holds the run. **Estimate:** 614 → 150–220 frames (4–6 periods;
 −65 to −75 %), to be measured by replaying the stored per-period gauge series
-of the L155, L13 and Ø40 duties. **Not safe** where the rotor loss drives the
-magnet temperature through a small group (a high-speed machine whose shaft or
-sleeve loss is what heats a magnet that sits near its demag knee) — rule 3
-keeps those groups; and not safe for PWM runs whose carrier deltas are
-themselves the answer (they keep the strict gauge).
+of the L155, L13 and Ø40 duties — now with the tail-bound rule, so the saving
+is smaller than v1 estimated and must be measured. **Not safe** for PWM runs
+whose carrier deltas are themselves the answer (they keep the strict gauge).
 
-#### 3.0.2 Demag method proposal (one magnet, 1/6 period, symmetry copy)
+#### 3.0.2 Demag shortcut — research proposal, NOT the default [G08]
+
+Review verdict: the repair in v1 is an ALL-magnet orbit-minimum method, not a
+one-magnet solve; LCM arithmetic of ideal cogging / six-fold periods does not
+prove the actual geometry, winding phase/sign, material and magnet-state
+invariance; two passes do not prove the nonlinear fixed point. Default stays
+the full pre-pass (B7). To qualify the shortcut per topology: derive the
+actual combined space/time symmetry and magnet orbits; map LOCAL coordinates,
+magnetisation vectors and volumes (not raw element indices); iterate to a
+stable Br and re-settle the eddy state after every change; compare full
+histories at rated, peak, deep FW and hot, plus an integer-slot fixture.
+The v1 argument is kept below for the record.
 
 **Argument.** Under a steady sinusoidal current the armature MMF is
 synchronous with the rotor, so every pole sees the same field history shifted
@@ -211,7 +263,10 @@ T(15°) = 179.7 vs 184.1 N·m, **−2.4 % torque at rated current**).
 Loaded torque of a three-phase machine has its lowest ripple harmonic at 6·f_e;
 the slot/pole ripple sits at multiples of lcm(Ns, 2p)/p · f_e (12 per period
 on 12s/14p and 12s/10p). The static point therefore samples **60° electrical
-(1/6 period) at 12 positions** (5° steps) — mean torque and ψd, ψq free of
+(1/6 period) at 12 positions** (5° steps) — to be re-based on the shipped
+9-samples-per-cogging-cycle rule and the machine's PROVEN symmetry period
+[P05]; the 60° window must be compared against a full proven period before it
+is used; mean torque and ψd, ψq free of
 the 6th-harmonic bias a 30° window can carry (the audit's 30° windows gave
 0.58918 / 0.58923 N·m with 6 / 12 positions on the Ø40 — the window, not the
 count, is the open question; the 60° choice is to be confirmed on the pilot), ripple resolved at ≥ 6 samples per slotting cycle. Ripple-
@@ -288,11 +343,21 @@ T_ψ = 3/2·p·(ψd·i_q − ψq·i_d); |T_ψ − T_energy| ≤ 0.5 % is a store
 
 ## 4. Loss grid
 
-**Grid:** 5 speeds {0.25, 0.5, 1.0, 1.5, n_max}·n0 (n_max = the mechanical
-limit, section 5.5) × 3 currents {low 0.5·I0, rated I0, peak = the current
+**Grid [G11, P10]:** 5 speeds {0.25·n0, 0.5·n0, n0, 1.5·n0, n_max} (n_max in
+rpm = the mechanical limit, section 5.5; sorted and de-duplicated after the
+limits, infeasible points flagged) + a zero/low-speed anchor, × 3 currents {low 0.5·I0, rated I0, peak = the current
 limit}, each a **settled coupled-eddy transient** (strands resolved, sleeve
 and shaft in the solve) at the operating angle for that point: γ_MTPA below
-base speed, the FW angle from 3.5 above it. ≈ 15 transients.
+base speed, the FW angle from 3.5 above it. ≈ 15 transients. **This grid is
+a control TRAJECTORY, not a general loss map [P10]:** every point stores its
+actual (id, iq, T, magnet state); reuse is restricted to that trajectory
+(with validated corrections), and targeted FW / id samples are added where a
+bus, turns, length or temperature change moves the FW angle at fixed n/NI;
+off the covered trajectory the tuner requests FEM. P = a(I)·f^k(I) is only a
+local interpolant between locally comparable waveforms, never a law through
+FW and never a log fit through zero/noise; losses are stored as component
+integrals and local spectra sufficient for flux changes, and interpolated
+positively bounded [G11].
 
 **Recorded per point:** iron (stator/rotor, hysteresis/eddy/excess split from
 the core-loss surface), magnet eddy, sleeve, shaft, AC copper (coupled route)
@@ -334,12 +399,19 @@ k_T ≠ k_flux: 0.9795 vs 0.952 on the Ø40), k_L(L) (inductance, 1.065 on
 clamp outside the measured range and flag. The current tuner applies k_flux
 to torque — wrong by ~2.9 % on the Ø40.
 
-5.3 **End windings analytic:** R(L) = ρ(T)·N_turns·(2L + l_end)/A, with
-l_end from the geometric model `masses.end_winding_factor` (tooth-coil half
-loop around tooth + bundle) or a measured k_end converted ONCE to a fixed end
-length l_end = (k_end0 − 1)·L0. Never pass a fixed k_end to a solve at a
-different L (the audit found `endWindFrac = 0` on 7 of 14 passports for that
-reason: −35 % / +37 % copper DC at 0.5× / 2× L on the Ø40).
+5.3 **End windings analytic [P14 — corrected; FIXED in PR #81]:** use ONE
+convention. One-side equivalent (the solver's, `field_ops`: copper volume =
+active × k_end): `ell = (k_end0 − 1)·L0`, `R(L) = C·(L + ell)`. Or full turn:
+`l_end = 2·(k_end0 − 1)·L0`, `R(L) = C_turn·(2L + l_end)`. v1 mixed `2L + l_end`
+with `l_end = (k_end0 − 1)·L0` — a factor-two error. End share e = 1 − 1/k_end0.
+Ø40 check (k_end 2.19): e = 0.543379, ell = 14.28 mm (full turn 28.56 mm),
+R(L/2)/R0 = 0.771689, R(2L)/R0 = 1.456621 (pinned in
+`tests/test_passport_loss_fixes.py`). No FEM is needed to split a declared
+k_end. A change of the coil BUNDLE (wire width, split, tooth width) changes
+ell: the geometric model recomputes it per solve; a measured factor is
+labelled measured and must be re-measured. Never pass a fixed k_end to a solve
+at a different L (audit: `endWindFrac = 0` on 7 of 14 passports, copper
+−35.21 % / +37.30 % at 0.5× / 2× L on the Ø40).
 
 5.4 **Magnet eddy vs L:** axial segmentation factor. The deployed solver
 already applies an L-dependent factor on L155 (P_mag 87.4 → 51.6 → 162.3 W at
@@ -441,12 +513,23 @@ with N at constant NI, as stated.
 Two carriers of the controller class at the rated point + the two rpm
 neighbours at the reference carrier; resolution-matched sine baselines;
 ripple current measured as √(I_rms² − I1²) on winding currents (as
-`passport_pwm.py` today). Scaling: rr = (V_bus/V_bus0)(f_sw0/f_sw)/(fN²·fL·
-fConn²·k_L(L)/k_L(L0)); ΔP_group = Δ_measured(n) × (group size factor) ×
-rr^n_group with the exponents fitted on the two carriers; clamp and flag
-outside 1/1.5 … 1.5 × the measured ripple. Valid at pulse ratios ≥ 16. Add:
-one current row (0.5·I0) so saturation's effect on L is measured, and one FW
-point (the ripple grows where the voltage margin shrinks).
+`passport_pwm.py` today). Scaling [G18 — FIXED in PR #81 for the tuner]: the
+current-ripple ratio rr = (V_bus/V_bus0)(f_sw0/f_sw)/(L/L0) is NOT the field
+ripple when the turns change: the field-driven deltas (magnet, iron, torque
+ripple) scale with the AMPERE-TURN ripple ratio a·rr, a = fN·fConn (at fixed
+NI, 2× turns → L ×4, current ripple ×1/4, NI ripple ×1/2, quadratic field loss
+×1/4 — v1's rr² said ×1/16). Copper HF loss is a spectral conductor-impedance
+problem, not ∝ R_dc (the tuner keeps I_ripple²·R as a flagged first-order
+stand-in). L for the ripple is the DIFFERENTIAL inductance at the operating
+point [P20], not the frozen-permeability secant `ldq0`. [G19] The two carriers
+change amplitude and frequency together: the fitted slope is a local carrier
+interpolant, valid only in a validated neighbourhood, not a transferable
+amplitude exponent for bus/turns. Record effective carrier and modulation,
+the actual solved id/iq, the DC component and the harmonic spectra; match the
+sine baseline to the PWM run's SOLVED fundamental vector, temperature and
+state, and report the residual mismatch; judge samples per carrier as well as
+the pulse ratio (≥ 16); do not add p-p ripple increments without phase
+justification. Add one current row (0.5·I0) and one FW point.
 
 ## 8. Temperature
 
@@ -464,12 +547,21 @@ point (the ripple grows where the voltage margin shrinks).
   high current) and near the demag knee (retention changes with T) — hence
   measured per level, not assumed.
 
-8.2 **What the cold run is for:** max EMF/KV cold (overvoltage at n_max; the
-runaway speed per the report convention runaway = no-load KV × V_min /
-cold_k, `report.py:8142-8152`, cold factor from the 20 °C card
-`report._cold_br_factor`, `report.py:5996`); max Kt cold; short-circuit
-current; the cold voltage-limit / FW boundary (a cold machine hits the bus
-earlier — the guaranteed map uses the cold ψ at v_min).
+8.2 **What the cold run is for [P22 — corrected]:** cold magnets give the MAX
+EMF and therefore the MIN Kv. (a) The cold-magnet BUS-CROSSING speed
+= cold no-load Kv × V_min (report convention `report.py:8142–8152`, now
+labelled "cold-magnet bus-crossing speed" in PR #81) — a threshold above
+which an uncontrolled machine drives current into the pack, NOT a mechanical
+runaway; (b) credible mechanical overspeed is a separate calculation with the
+drive and prime-mover conditions (hot/damaged flux, max bus, FW, load); (c)
+cold waveform overvoltage at n_max from the resolved line-line waveform peak;
+(d) max Kt cold; (e) steady short-circuit current from BOTH dq equations with
+R (ψd = 0 is only the characteristic current), a transient peak only after a
+dynamic analysis; (f) the cold voltage-limit / FW boundary, which needs cold
+negative-id / FW check points, not only the cold MTPA line [P21]. Torque
+factors go on Kt/Km, flux factors on Kv, each exactly once (fixed in PR #81:
+`routes/coupled.py` cold block uses k_T when measured, k_flux as a declared
+stand-in otherwise).
 
 8.3 **Demag vs temperature:** the hot knee is binding for NdFeB; the static
 grid's retention column is at the hot temperature; the current limit is the
@@ -508,13 +600,17 @@ shown separately (Kt hot at the rated point). Conventions per memory
   2 in deep FW, 2 at the highest current). Pass: ψ ≤ 0.5 %, T ≤ 1 %, ripple
   per section 1.
 - Loss grid: 3 off-grid (n, I) points. Pass: total ≤ 5 %.
-- Knob envelopes: each knob's validated range is the hull of the checked
-  corners that passed. Audit baseline of TODAY's tuner (full table in the
+- Knob envelopes [P32]: NOT the hull of passed corners (interior failures
+  exist — saturation, the slot-top rows, FW). Validate local cells /
+  trajectories with interior checks and per-quantity bounds; one confirmed
+  point extends only its supported neighbourhood. Audit baseline of TODAY's tuner (full table in the
   audit report): torque ≤ 1.2 % over L 0.5–2×, N 0.71–1.5×, h ±30 %, n
   0.5–1.5×, I 0.5–1.3× (both machines); total loss within 5 % ONLY for
   n 0.5–1.5× and I 0.5–1.3× on the Ø40; nowhere on L155 (delta AC bug).
-- Outside the envelope: the tuner shows the "extrapolated — needs FEM" badge
-  on the affected quantity with the reason, and offers "Request calculation".
+- ONE outside-domain policy [P32]: no guaranteed number; optionally a
+  clearly labelled estimate with the "extrapolated — needs FEM" badge and the
+  reason, plus "Request calculation" carrying the exact immutable request
+  inputs and baseline.
 
 ## 10. User workflow without FEM rights
 
@@ -599,3 +695,104 @@ Migration steps (each with its verification):
    region is a large fraction of the stack?
 7. Whether AC copper at FW angles needs its own loss-grid points (the slot
    field changes with i_d).
+
+
+## 14. Disposition of the independent review (2026-09-30)
+
+Legend: **fixed** = in code (PR #81) or in this text with the change named;
+**planned** = specified here, implementation step named; **owner** = needs an
+owner decision; **evidence** = needs runs before it can close.
+
+| ID | Topic | Disposition |
+|---|---|---|
+| P01 | torque method claim, raw-Maxwell AC, certification | **fixed** (text, B1: method ids stored, no silent fallback) · **evidence**: independent mean-torque and loaded-ripple convergence (M1) |
+| P02 | dq self-check not independent; mean of products | **fixed** (text, B1/3.6: frame check only) · **planned**: keep angle waveforms / complex torque harmonics; average instantaneous products under ripple (M1) |
+| P03 | peak dq convention, delta mapping, triplen | **fixed** (Conventions) · **planned**: `convention_rev` field (M0) |
+| P04 | grid coverage, MTPA bracketing, fit shape | **planned** (M1): zero/low-current and axis anchors at hot AND cold; explicit quadrant bounds; bracket MTPA until T falls on both sides and confirm the fitted vertex; refine cells from withheld centres/edges; Jacobian symmetry / passivity check; no smoothing across demag boundaries |
+| P05 | angular sampling, 13.4 % p-p, symmetry | **fixed** (text, B4, 3.2) · **evidence**: symmetry and 60° vs full-period comparison (M1) |
+| P06 | settle rule does not bound the tail | **fixed** (text, 3.0.1 tail-bound rule) · **owner**: adopt the revised rule · **evidence**: replay of stored gauges |
+| P07 | thermal-critical groups vs watt share | **fixed** (text, §1 table and 3.0.1 rule 3) |
+| G08 | demag shortcut unproven | **fixed** (text: full pre-pass default; 3.0.2 = research) · **evidence** before enabling per topology |
+| P09 | demag state/history in the map | **fixed** (text, B7) · **planned** (M1): state hash, (id, iq, T) safe surface |
+| P10 | loss grid is a trajectory | **fixed** (text, §2 stale rules and §4) · **planned** (M1): store id/iq/T/state per point, targeted FW samples |
+| G11 | f-law through FW, n_max units, zero anchors | **fixed** (text, §4) · **planned** (M3) |
+| P12 | conditional 2-D scaling laws | **planned** (M3): implement ψ' = a·b·ψ0(a·i'), T' = b·T0(a·i'), L_diff' = a²·b·L_diff0(a·i'); validate conductor-distribution changes; audit's ≤ 1.2 % torque error is over the 1 % target — restrict or correct |
+| P13 | k_flux vs k_T, consistent 3-D factors | **fixed** in PR #81 for the cold constants (k_T when measured; stand-in declared) · **planned** (M5): consistent corrected co-energy / flux / differential-L; intermediate short lengths; load/FW dependence · **owner**: whether Kt keeps the k_flux stand-in until k_T is measured |
+| P14 | end-winding factor of two | **fixed** (PR #81 + §5.3) |
+| G15 | magnet segmentation factor is relative, unvalidated | **planned** (M5): store raw 2-D watts, relative factor, a separately validated absolute end-return correction; 3-D eddy evidence for thermal-critical rotor losses |
+| P16 | hybrid copper formulation incomplete | **planned** (M4): complete unit-consistent strip impedance with transport and external fields separated; fields by NI/angle with PM and armature parts, not a universal B/NI |
+| G17 | 1-D strip validity, L155 reference | **evidence** (M4): both field orientations and slot-top positions vs resolved strands; settle the L155 554 vs 897 W AC copper first |
+| G18 | PWM turns scaling 4× low | **fixed** (PR #81, tuner a·rr) and §7 |
+| G19 | two-carrier fit transfer, baseline matching | **planned** (M6): §7 text; restrict fits to validated neighbourhoods, match to the solved fundamental |
+| P20 | frozen secant L ≠ differential L | **planned** (M1): separate frozen decomposition, chord, true differential (tangent solve or symmetric perturbations with Br fixed) and terminal L; never reuse `ldq0` as differential |
+| P21 | cold FW coverage, temperature models | **fixed** (text 8.2) · **planned** (M1): cold negative-id / FW checks; sourced temperature-dependent intrinsic curves; replace the card-temperature no-load probe by the actual cold no-load solve (`routes/coupled.py:1389`) |
+| P22 | Kv/EMF wording, runaway, SC current, k_flux on Kt | **fixed** (PR #81: torque factor on Kt/Km, flux on Kv once; "bus-crossing speed" labels) and §8.2 · **planned**: mechanical overspeed and dynamic SC as separate calculations |
+| G23 | thermal loop closure, σ(T) | **planned** (M3): heat-balance residual and stable-root check, damped / bracketed solve before declaring runaway; conductivity laws/tensors; bound the neglected iron-loss temperature effect |
+| P24 | voltage margin, loss ledger | **owner**: controller margin from the actual controller/loaded pack (m = 0.95 is a placeholder) · **planned** (M3): signed loss ledger — conversion vs net torque, each loss subtracted once, motor/generator/no-load/stall accounting; unknown bearing loss → unknown shaft η |
+| G25 | mechanical-loss inputs and validity | **planned** (M3): store support/load/preload/lubrication/seal/air/clearance/flow inputs; bound omitted pumping/drag; modes with supports and attached inertia per L |
+| G26 | mesher parity is not convergence | **evidence** (B2/B3): L13 cogging/ripple convergence, c04, c10, c19 ripple outliers under the combined tolerance; c04's 0.025 W magnet eddy is not a blocker unless thermal-sensitive |
+| G27 | skin-mesh spectral rule | **planned** (B3): conservative start in the material frame, bound omitted spectral loss, full layer depth/count/growth, tangential wavelength, residual per frame |
+| P28 | fingerprint is not a pure resolved hash | **fixed** (text §2) · **planned** (M0) · partly **fixed** in PR #81 (star_delta forwarded to every passport sub-solve) |
+| P29 | material change vs older baseline; identities | **fixed** (text §2) · **planned** (M0, before the pilot) |
+| G30 | reproducibility record | **fixed** (text B9) · **planned** (M0) · full-precision storage **fixed** in PR #81 |
+| G31 | integrated baseline, nine physics-baseline failures, budget | **owner/evidence**: freeze ONE integrated baseline and disposition the nine failures without re-pinning (M2); re-budget at 72/108 steps incl. 3-D k_T/k_L, cold FW, checks, retries; measure pilot cost before assuming a 6-worker speed-up |
+| P32 | envelopes as hull | **fixed** (text §9) · **planned** (M7) |
+| N33 | counts, interpolation definition, error allocation | **fixed** (text §1 floors) · **planned**: count every solve incl. vertex checks and retries; define the current interpolation; allocate mesh/time/settle/interpolation/model error inside the 1 % |
+
+The three legacy bugs (review table): end-winding factor of two, delta AC
+normalisation + missing star_delta forwarding + separate DC/AC watts, EMF via
+the flux (ω·|ψ1|) with waveform peak and THD kept separately — **all fixed in
+PR #81**, with the before/after FEM check in its description.
+
+## 15. Gates (from the review)
+
+**Before accepting the Ø40 pilot** (diagnostic runs may precede acceptance):
+1. Freeze and hash pilot inputs and the actual baseline before any run; make
+   connection, winding, mode, temperatures and part states explicit; record
+   methods and full-precision data (P28–P29). → M0
+2. Repair all three extraction bugs incl. the factor-two end length and the
+   missing connection forwarding; keep separate fundamental / waveform
+   voltages (P14 and the bug table). → **done, PR #81**
+3. Define dq / terminal conventions and differential L; establish independent
+   mean-torque and loaded-ripple evidence; verify the static window / angular
+   sampling (P01–P05, P20).
+4. Retain the full demag pre-pass and proven state / tail settling until
+   replacements are qualified; define the fixed-retention map state and
+   thermal-sensitive rotor convergence (P06–P09).
+5. Validate hot / cold / FW / voltage / demag and loss trajectories for the
+   exact knobs exposed, incl. the audited failing top-slot wire/turn corners;
+   define shaft power accounting and local envelopes (P10, P12, P16–P17, P21,
+   P24, P32).
+6. Qualify 3-D and PWM corrections, or explicitly leave those blocks
+   unavailable and restrict every dependent pilot claim (P13, G18–G19); the
+   mandatory cold constants still need their own correct definitions.
+
+**Before the global recompute (~20 machines):**
+1. Close the applicable P findings on ONE integrated baseline; explain the nine
+   physics-baseline failures without hiding changes; pin mesher / materials /
+   settings.
+2. Establish actual mesh / time / boundary convergence over the relevant skin
+   and geometry regimes, incl. L13 cogging/ripple and c04 / c10 / c19; mesher
+   parity alone is insufficient.
+3. Qualify loss reuse across FW / bus / turns / L / T, large-strand hybrid
+   copper, absolute rotor heating and segmentation; close source-data gaps in
+   consequential magnet cards.
+4. Qualify PWM spectral / MMF scaling, matched baselines, 3-D flux / torque /
+   differential-L and thermal / mechanical constraints where material; an
+   explicitly disabled unvalidated demag shortcut need not block.
+5. Enforce immutable provenance, atomic promotion, versioned invalidation and
+   the request / envelope rules; re-estimate compute at the actual resolution
+   before scheduling the batch.
+
+**Nice to have:** periodic / time-parallel acceleration; throughput
+optimisation after the qualified baseline is measured; adaptive grids; extra
+3-D lengths where existing checks already bound the error.
+
+**Revised migration order:** M0 provenance snapshot + signatures + convention
+and reproducibility fields (before any pilot run) → M1 Ø40 pilot (hot + cold
+static map with anchors and FW, differential L, loss trajectory, independent
+torque evidence) → M2 integrated baseline frozen, nine failures dispositioned
+→ M3 tuner v1 (conditional laws, voltage map, loss ledger, thermal loop,
+mechanical losses) → M4 hybrid AC copper after the AC reference is settled →
+M5 3-D consistent factors + segmentation → M6 PWM requalification → M7
+envelopes + FEM-request workflow → global recompute.

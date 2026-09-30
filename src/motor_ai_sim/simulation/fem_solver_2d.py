@@ -7874,6 +7874,7 @@ def fem_transient_sliding_band(
             _static_seed_info = None
             if _tdm_info is not None:
                 _tdm_info["failed"] = "%s: %s" % (type(_e_tdm).__name__, _e_tdm)
+                _tdm_info.pop("t_report_start", None)
             _eddy_method = "march"
     # Cross-run warm seed (see _SB_WARM_CACHE above).  The cached frame is the
     # one at electrical angle ≡ −3 steps, i.e. EXACTLY the one-dt-old history
@@ -10042,7 +10043,7 @@ def fem_transient_sliding_band(
     # θ<0 on an eddy+demag run, solved and discarded so the Br ratchet only ever
     # sees the settled state (the user's two-identical-runs-disagree bug).
     _n_solved = int(n_total) + int(_n_warm) + int(_n_dmpre)
-    if _tdm_info is not None:
+    if _tdm_info is not None and _eddy_method == "tdm":   # a TDM that succeeded
         # VERIFICATION on the march: the reported period, marched from the
         # orbit, must end where the orbit says (a residual slow mode would
         # show here as a drift); relative, in the σ-mass norm of the

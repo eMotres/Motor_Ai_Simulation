@@ -157,3 +157,37 @@ DOM_COIL_BASE = 200
 # by up to ±1 seam DIFFERENTLY per tooth (T −23 %, forbidden h1-h3 reappeared).
 # Smaller M → finer seams → smaller geometry perturbation (more, thinner cells).
 _SG_M_TARGET = int(_os_sb.environ.get("SB_SG_M_TARGET", "14") or 14)
+
+
+# ── Air-gap mesh floor (owner 2026-09-30) ────────────────────────────────────
+# ``gap_layers`` is the number of element rows on EACH side of the slip circle
+# (the rotor half r_ro→mid and the stator half mid→r_si each get that many; the
+# mesher's structured-gap spec calls it K and builds 2K rings).  Every reported
+# sliding-band run uses at least GAP_LAYERS_MIN of them: on the Ø40 (0.2 mm
+# gap) one row per side over-read the converged torque ripple by 0.7 pp /
+# +10 % with every torque method, three rows were inside the owner's
+# max(0.5 pp, 10 %) target (docs/COULOMB_TORQUE_2026-09-30.md §3.3).  Internal
+# probes (d-axis / ψ_PM / Ld-Lq calibration, sampling_purpose "internal_probe")
+# keep what they ask for: they report no torque, and their cached answers (the
+# d-axis frame every run is solved in) must not move.
+# SB_GAP_LAYERS_MIN overrides it for mesh-convergence studies only (1 = off);
+# docs/GAP_LAYERS_CASES.md runs its gl1/gl2 cases that way.
+GAP_LAYERS_MIN = float(_os_sb.environ.get("SB_GAP_LAYERS_MIN", "3") or 3)
+
+
+def effective_gap_layers(requested, sampling_purpose: str = "standard") -> float:
+    """The gap layers a sliding-band solve actually uses for ``requested``.
+
+    ``max(requested, GAP_LAYERS_MIN)`` for every purpose except
+    ``"internal_probe"``, which is returned unchanged.  ``None`` / non-finite
+    requests get the floor.
+    """
+    try:
+        g = float(requested)
+    except (TypeError, ValueError):
+        g = float("nan")
+    if str(sampling_purpose) == "internal_probe" and g == g:
+        return g
+    if not (g == g) or g < GAP_LAYERS_MIN:      # NaN or below the floor
+        return GAP_LAYERS_MIN
+    return g

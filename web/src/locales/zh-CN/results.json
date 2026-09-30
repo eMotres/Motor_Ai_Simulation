@@ -48,5 +48,6 @@
   "busCoupling": "母线耦合",
   "maxCharge": "最大充电",
   "simulationSummaryRealFemResults": "仿真汇总——真实有限元结果",
-  "modelled": "已建模"
+  "modelled": "已建模",
+  "rippleMeshLimited": "脉动：气隙网格过粗"
 }

@@ -73,6 +73,26 @@ MU0 = 4e-7 * math.pi
 NU0 = 1.0 / MU0
 
 
+#: Reported-torque methods.  "coulomb" is the default since 2026-09-30 (owner,
+#: after docs/COULOMB_TORQUE_2026-09-30.md); "hybrid_maxwell_ac" is the earlier
+#: energy / terminal-work mean + raw Maxwell AC, still selectable.
+TORQUE_METHODS = ("coulomb", "hybrid_maxwell_ac")
+DEFAULT_TORQUE_METHOD = "coulomb"
+
+
+def resolve_torque_method(requested: Optional[str] = None,
+                          sim_cfg: Optional[Dict[str, object]] = None) -> str:
+    """The reported-torque method of a run: the request, else the config's
+    ``simulation.torque_method``, else :data:`DEFAULT_TORQUE_METHOD`.
+    Raises ``ValueError`` on an unknown name (never a silent substitute)."""
+    m = str(requested or (sim_cfg or {}).get("torque_method")
+            or DEFAULT_TORQUE_METHOD)
+    if m not in TORQUE_METHODS:
+        raise ValueError("torque_method must be one of %s; got %r"
+                         % (", ".join(repr(x) for x in TORQUE_METHODS), m))
+    return m
+
+
 class CoulombLayerError(ValueError):
     """The requested layer would deform an element that is not pure air."""
 

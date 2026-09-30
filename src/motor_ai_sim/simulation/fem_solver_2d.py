@@ -85,6 +85,7 @@ from motor_ai_sim.simulation.sb_domains import (  # noqa: F401  (re-export)
     _SB_GEO_SECTOR, _SB_IRON_RESAMPLE, _SB_IRON_TEMPLATE, _SB_POLE_COPY_ROTOR,
     _SB_POLE_COPY_STATOR, _SB_ROT_PERIODICITY, _SB_STRUCTURED_GAP,
     _SB_STRUCTURED_STRIPS, _SG_EPS_OVERRIDE, _SG_M_TARGET,
+    GAP_LAYERS_MIN as _GAP_LAYERS_MIN, effective_gap_layers as _effective_gap_layers,
 )
 
 # Physics primitives on a solved field (torque integrals, per-element B, B-H
@@ -165,6 +166,7 @@ from motor_ai_sim.simulation.sb_postproc import (
 from motor_ai_sim.simulation.moving_band import slip_ring_nodes as _slip_ring_nodes
 from motor_ai_sim.simulation.virtual_work_torque import (
     air_mask_from as _vwt_air_mask, frame_torques as _frame_torques,
+    resolve_torque_method as _resolve_torque_method,
     prepare_sliding_band_frame_torques as _prepare_sb_frame_torques,
     coulomb_series_summary as _coulomb_series_summary,
 )
@@ -3846,11 +3848,12 @@ def fem_transient_sliding_band(
                                      # torque ~35 % (its Maxwell integral is radius-inconsistent
                                      # under load) and its ripple was a mesh staircase, so every P1
                                      # number needed a correction nobody could state.
-    torque_method: Optional[str] = None,  # REPORTED torque: "hybrid_maxwell_ac" (default:
-                                     # energy / terminal-work mean + raw Maxwell AC) or
-                                     # "coulomb" (Coulomb virtual-work waveform, mean and
-                                     # ripple).  None = config simulation.torque_method, else
-                                     # the default.  Coulomb is computed and stored either way.
+    torque_method: Optional[str] = None,  # REPORTED torque: "coulomb" (DEFAULT since
+                                     # 2026-09-30: Coulomb virtual-work waveform, mean and
+                                     # ripple) or "hybrid_maxwell_ac" (energy / terminal-work
+                                     # mean + raw Maxwell AC).  None = config
+                                     # simulation.torque_method, else the default.  Both are
+                                     # computed and stored either way.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -3936,11 +3939,19 @@ def fem_transient_sliding_band(
     mesh_size_mm = float(mesh_size_mm)
     min_size_mm = float(min_size_mm)
     cfg = get_config(); sim = cfg.get("simulation", {})
-    torque_method = str(torque_method or sim.get("torque_method")
-                        or "hybrid_maxwell_ac")
-    if torque_method not in ("hybrid_maxwell_ac", "coulomb"):
-        raise ValueError("torque_method must be 'hybrid_maxwell_ac' or "
-                         "'coulomb'; got %r" % torque_method)
+    torque_method = _resolve_torque_method(torque_method, sim)
+    # Air-gap mesh floor (sb_domains.effective_gap_layers): every reported run
+    # has >= GAP_LAYERS_MIN element rows on each side of the slip circle.
+    _gap_layers_req = float(gap_layers)
+    gap_layers = _effective_gap_layers(gap_layers, sampling_purpose)
+    _gap_layers_note = None
+    if gap_layers != _gap_layers_req:
+        _gap_layers_note = (
+            "gap_layers %g requested, %g used: every reported run has at least "
+            "%g element rows on each side of the slip circle (a coarser gap "
+            "mis-reads the torque ripple)" % (_gap_layers_req, gap_layers,
+                                               _GAP_LAYERS_MIN))
+        log.warning("SB: %s", _gap_layers_note)
     geo = dict(cfg.get("geometry", {}))
     # The winding block is COPIED, never referenced: the per-request connection /
     # n_parallel overlay it below, and evaluating a catalog machine must not move
@@ -11020,6 +11031,9 @@ def fem_transient_sliding_band(
         "time_s": _tt, "rotor_angle_deg": _ang,
         "P2_transient_sample_history": _p2_transient_history,
         "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
+        "gap_layers_requested": _gap_layers_req,
+        "gap_layers_effective": float(gap_layers),
+        "gap_layers_note": _gap_layers_note,
         "T_coulomb_series": _coul2["T_coulomb_series"],
         "T_avg_coulomb_Nm": _coul2["T_avg_coulomb_Nm"],
         "T_ripple_pp_coulomb": _coul2["T_ripple_pp_coulomb"],
@@ -11540,7 +11554,7 @@ def em_transient_eval(
                                      # the transient just finished, kept instead of thrown
                                      # away, so the field views can render the run's own
                                      # field instead of re-solving it.
-    torque_method: Optional[str] = None,  # "hybrid_maxwell_ac" | "coulomb" | None (config)
+    torque_method: Optional[str] = None,  # "coulomb" (default) | "hybrid_maxwell_ac" | None
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 

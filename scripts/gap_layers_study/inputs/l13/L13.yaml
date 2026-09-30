@@ -1,0 +1,4618 @@
+name: L13
+die: CIANO28 85 20SW1200
+role: motor
+created: '2026-08-19T18:52:00'
+geometry_overrides:
+  motor_length: 13
+  wire_width: 3.5
+  wire_height: 0.3
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.07
+  num_wires_per_slot: 18
+  wire_split: 1
+  wire_parallel: 1
+  insulation_thickness: 0.05
+winding:
+  n_coils_per_phase: 4
+  connection: 4S
+  n_parallel: 1
+  n_series: 4
+  layers: 1
+  star_delta: star
+duties:
+- name: rated
+  mode: motor
+  saved_at: '2026-09-28T23:28:45'
+  current_arms: 25.88
+  rpm: 1000.0
+  gamma_deg: 2.0
+  note: migrated from the motor catalog
+  torque_nm: 0.86
+  power_kw: 0.09
+  star_delta: star
+  result:
+    efficiency_pct: 24.664
+    ripple_pct: 26.5
+    v_ll_peak_v: 20.941
+    loss_w: 274.9
+    mass_kg: 0.367
+    p_core_w: 2.1
+    p_stranded_w: 259.9
+    p_solid_w: 12.9
+    v_phase_peak_v: 10.703
+    j_coil_a_mm2: 24.6
+    end3d_k: 0.931
+    recorded_at: '2026-09-28T23:28:45'
+    build_sig: 06f5f49db6be
+  mesh:
+    sim.frequency: 233.33
+    sim.drive: current
+    sim.iBlock: 0
+    sim.apply3d: 1
+    sim.eddyCoupled: true
+    sim.opMode: motor
+    sim.endWinding: 2.027
+    sim.targetKind: 'off'
+    mesh.componentMesh: {}
+    mesh.rotorAngle: 0
+    sim.kvNoload: 1
+    sim.connection: 4S
+    sim.vDelta: 0
+    sim.excOnlyA: 0
+    sim.lastSolveCost:
+      frames: 83
+      wall_s: 208.2
+      warm: 43
+      at: 1789502223738
+    mesh.geoMesh: true
+    sim.daxisDeg: ''
+    sim.gamma: 2
+    sim.magnetTempC: '210.7'
+    sim.steps: 12
+    sim.current: 25.880108191427638
+    sim.waveform: ''
+    mesh.normalDev: 6
+    mesh.structuredGap: true
+    sim.fSwGroup: 2
+    sim.starDelta: star
+    sim.rpm: 1000
+    sim.coupledAdopted: 293.6|210.7|1|2026-09-28T23:19:05
+    mesh.poleCopy: false
+    sim.stepsPP: 120
+    sim.busCouple: true
+    sim.vPeak: 30
+    mesh.outerAir: 1.2
+    mesh.gapLayers: 1
+    mesh.meshSize: 1.22
+    mesh.slidingBand: false
+    mesh.motionBand: true
+    mesh.aspect: 10
+    sim.fSwCustom: false
+    sim.demag: true
+    sim.coilTemp: 293.6
+    mesh.ironTemplate: true
+    sim.dcLinkCableUH: ''
+    sim.dcLinkCapUF: ''
+    sim.targetValue: 850
+    sim.fSwitch: 48000
+    sim.torqueFilter: false
+    mesh.bandThickness: 0.4
+    mesh.minSize: 0.3
+    sim.r25: 1
+    mesh.nSectors: 4
+    sim.endWindingGeo: 2.027
+    sim.coupled: true
+  summary:
+    rpm: 1000.0
+    I_phase_rms_A: 25.88
+    I_terminal_rms_A: 25.88
+    I_winding_rms_A: 25.88
+    gamma_deg: 2.0
+    connection: 4S
+    n_parallel: 1
+    wire_parallel: 1
+    turns_per_coil: 18
+    n_parallel_eff: 1
+    op_mode: motor
+    op_mode_requested: motor
+    drive: current
+    R_phase_ohm: 0.129294
+    R_line_line_ohm: 0.258588
+    R_phase_eq_star_ohm: 0.129294
+    Ld_eq_star_mH: 0.2323
+    Lq_eq_star_mH: 0.1908
+    Ld_mH: 0.2323
+    Lq_mH: 0.1908
+    Ld_inc_mH: 0.2323
+    Lq_inc_mH: 0.1908
+    Ldq_inc_mH: 0.0036
+    ldq_method: frozen-permeability incremental at the point
+    Ld_chord_mH: null
+    Lq_chord_mH: 0.1753
+    psi_pm_sag_pct: 87.96
+    psi_pm_frozen_Wb: 0.000885
+    psi_pm_q_frozen_Wb: -0.000276
+    inc_ldq:
+      Ld_mH: 0.232289
+      Lq_mH: 0.190846
+      Ldq_mH: 0.003569
+      saliency_Lq_over_Ld: 0.8216
+      psi_d_pm_frozen_Wb: 0.00088479
+      psi_q_pm_frozen_Wb: -0.00027619
+      i_d_A: -1.277
+      i_q_A: 36.578
+      samples: 4
+      rotor_positions:
+      - 0
+      - 30
+      - 60
+      - 90
+      spread_pct:
+        Ld: 26.93
+        Lq: 3.32
+      reciprocity_pct: 0.0
+      superposition_pct: 6.029
+      method: 'frozen-permeability incremental: the per-element ν of the converged
+        loaded field is held fixed and a unit d- and q-axis current solved on it (dψ/di,
+        exact for a linear operator). Magnetostatic — on a coupled-eddy run the field''s
+        own ψ/i also carries the AC redistribution, which is impedance and not inductance.'
+    psi_pm_Wb: 0.007347
+    saliency_Lq_over_Ld: 0.822
+    dq_note: i_d is only 3.5% of the current at γ = 2.0° — (ψd − ψ_PM)/i_d would be
+      dominated by cross-saturation of the loaded iron, not by inductance; set γ ≥
+      ~6° and re-run to measure Ld honestly
+    psi_pm_probe_skipped: false
+    T_em_avg_Nm: 0.923
+    T_ripple_pct: 26.5
+    T_ripple_raw_pct: 26.5
+    T_ripple_filt_pct: 26.5
+    T_ripple_pp_Nm: 0.2447638648199274
+    T_ripple_raw_pp_Nm: 0.2447638648199274
+    T_ripple_pct_available: true
+    T_ripple_pct_reason: null
+    T_noise_floor_pct: null
+    torque_filter_applied: false
+    P_mech_W: 96.7
+    V_phase_peak_V: 11.5
+    V_phase_rms_V: 8.1
+    V_line_peak_V: 22.5
+    V_line_rms_V: 14.0
+    star_delta: star
+    strand_bonding: transposed
+    V_line_peak_solved_V: 22.5
+    V_line_rms_solved_V: 14.0
+    I_line_rms_A: 25.9
+    L0_mH: null
+    P_cu_circulating_W: 0.0
+    circulating_harmonics: []
+    KV_rpm_per_V_phase: 87.27
+    KV_rpm_per_V_line: 44.54
+    KV_noload_rpm_per_V_line: 53.6
+    V1_LL_V: 19.74
+    V1_phase_V: 11.39
+    THD_pct: 12.28
+    THD_LL_pct: 7.45
+    I1_A: 36.6
+    THD_I_pct: 0.0
+    V1_seed_peak_V: 11.3943
+    V1_seed_delta_deg: 57.231
+    Kt_Nm_per_Arms: 0.0357
+    Kt_Nm_per_A_line: 0.0357
+    J_coil_A_per_mm2: 24.6
+    A_phase_mm2: 1.05
+    slot_fill_pct: 57.5
+    A_slot_mm2: 789.1
+    A_copper_slotted_mm2: 453.6
+    P_loss_total_W: 274.9
+    B_gap_mean_T: 0.3513
+    P_core_W: 2.1
+    P_core_terms:
+      stator:
+        hysteresis_W: 0.965
+        eddy_W: 0.207
+        excess_W: 0.397
+        k_f: 0.95
+        model: bertotti
+        window_closed: true
+      rotor:
+        hysteresis_W: 0.296
+        eddy_W: 0.085
+        excess_W: 0.133
+        k_f: 0.95
+        model: bertotti
+        window_closed: true
+        window_electrical_periods: 7.0
+        window_method: pole_pair_image_mapping
+    P_core_stator_W: 1.6
+    P_core_rotor_W: 0.5
+    P_loss_stator_W: 261.5
+    P_loss_rotor_W: 13.4
+    P_loss_split_measured: true
+    P_stranded_W: 259.9
+    wire_split: 1
+    cu_ac_solved_ignores_wire_split: false
+    P_solid_W: 12.9
+    P_mag_W: 0.5
+    P_shaft_W: 12.4
+    P_sleeve_W: null
+    solid_loss_not_solved: false
+    magnet_segmentation:
+      slice_mm: 0.0
+      stack_mm: 13.0
+      n_bodies: 7
+      factor: 1.0
+      width_mm: 7.0328
+      width_min_mm: 7.0306
+      width_max_mm: 7.0352
+      width_source: cad_polygon
+      model: solid magnet (magnet_lamination = 0) — 2-D loss unchanged
+    eddy_warmup_frames: 362
+    demag_prepass_frames: 120
+    eddy_settled: true
+    eddy_capped: false
+    eddy_settle_residual: 0.00655
+    eddy_settle_tol: 0.02
+    eddy_settled_via_accelerator: false
+    warm_seeded: false
+    demag_seeded: false
+    efficiency: 0.2602
+    P_elec_in_solved_W: 356.6
+    P_mech_balance_W: 81.7
+    pwm_dc_residual_A: null
+    pwm_dc_residual_phase: null
+    pwm_dc_tol_A: 0.5
+    pwm_dc_unconverged: null
+    nonlinear_converged: true
+    nonlinear_resid_max: 9.64e-08
+    nonlinear_tol: 0.001
+    nonlinear_unconverged_frames: []
+    steps_snapped: false
+    n_steps_per_period: 120
+    n_steps_per_period_requested: 120
+    slip_nodes_per_period: 120
+    coil_temp_C: 293.6
+    end_winding_factor: 2.03
+    mass_total_kg: 0.367
+    mass_active_kg: 0.367
+    mass_area_source: CAD polygons
+    mass_components:
+    - name: Stator core (20SW1200)
+      material: electrical steel
+      density_kg_m3: 7650.0
+      volume_cm3: 16.5
+      mass_kg: 0.126
+      note: CAD section 1335 mm² × stack, lamination k_f=0.950
+    - name: Copper windings (Cu)
+      material: copper
+      density_kg_m3: 8933.0
+      volume_cm3: 12.0
+      mass_kg: 0.107
+      note: measured copper section 454 mm² × stack × k_end 2.027
+    - name: Magnets (F52SH_120C)
+      material: NdFeB
+      density_kg_m3: 7500.0
+      volume_cm3: 9.3
+      mass_kg: 0.07
+      note: CAD magnet polygons 713 mm² × stack
+    - name: Rotor back-iron (20SW1200)
+      material: electrical steel
+      density_kg_m3: 7650.0
+      volume_cm3: 8.4
+      mass_kg: 0.064
+      note: CAD section 681 mm² × stack, lamination k_f=0.950
+    - name: Shaft (Steel_42CrMo4_QT) — customer-supplied
+      material: shaft
+      density_kg_m3: 7850.0
+      volume_cm3: 3.9
+      mass_kg: 0.0
+      note: customer-supplied — modelled as Steel_42CrMo4_QT for the field, not included
+        in mass (0.030 kg modelled); hollow shaft tube 297 mm² × stack — NOT in active
+        mass
+      state: reference
+      counted: false
+      mass_modelled_kg: 0.03
+    part_states:
+      shaft: reference
+    rotor_inertia:
+      J_kg_m2: 0.00011066271074258431
+      J_kg_cm2: 1.107
+      rotor_iron: 5.527322533903912e-05
+      magnet: 5.5389485403545186e-05
+      shaft: 0.0
+      sleeve: 0.0
+      J_modelled:
+        rotor_iron: 5.527322533903912e-05
+        magnet: 5.5389485403545186e-05
+        shaft: 1.6883043345298404e-05
+        sleeve: 0.0
+      part_states:
+        shaft: reference
+      source: CAD polygons
+    sleeve_hoop: null
+    demag:
+      per_magnet_spread_pct: 2.936
+      bh_kept_vol_pct: 5.673
+      bh_loss_pct: 94.327
+      br_kept_vol_pct: 19.225
+      loss_pct: 80.775
+      area_derated_pct: 100.0
+      br_corner:
+        flag: corner
+        br_pct: 11.7
+        element: 2804
+        magnet_tag: 104
+        x_mm: 15.012
+        y_mm: 25.995
+        r_mm: 30.018
+        theta_deg: 59.99
+        element_area_pct: 0.2257
+        note: 'Worst single magnet element: a sharp-corner value that does not converge
+          with mesh refinement (docs/NO_FILTERS_2026-09-24.md §3). A corner diagnostic,
+          not the magnet''s figure; the magnet''s figure is the volume-weighted Br
+          kept.'
+      grade_nominal: 52.0
+      grade_effective: 2.9
+      magnet_name: F52SH_120C
+      energy_total_J: 2.83
+      energy_lost_J: 2.674
+    end3d:
+      k_flux: 0.9307007024777334
+      k_flux_self: 0.967636000466831
+      fidelity: quick (n_stack=4, 3-point L-sweep)
+      generated_utc: '2026-09-23T22:31:48Z'
+      machine: 24s/28p OD 85
+      k_flux_vs_L:
+        '9.75': 0.93137
+        '13.0': 0.9307
+        '19.5': 0.93174
+      note: 'CIANO28 85 20SW1200 / L13 ''peak'' as saved on the server 2026-09-16/15
+        (unchanged through the 2026-09-18 duty save): 24s/28p OD 85, stack 13 mm,
+        gap 0.3 mm, F52SH_120C / 20SW1200; stack sweep 9.75/13/19.5 mm — night run
+        2026-09-23/24, user: "3D coefficients are computed at night" — solve 1370 s'
+      T_corrected_Nm: 0.859
+      V_line_peak_corrected_V: 20.9
+    bench_ldq:
+      Ld_mH: 0.0841
+      Lq_mH: 0.0812
+      Lq_over_Ld: 0.966
+      psi_pm_mWb: 7.347
+      I_probe_arms: 2.0
+      daxis_deg: 60.012
+      connection: 4S
+      geo_fingerprint: f3b4728f381c5b31
+      method: small-signal probe at the I=0 iron state — bench/LCR equivalent; loaded
+        (chord) values differ under saturation
+      solve_time_s: 32.9
+    saturation:
+      T_linear_Nm: 5.641
+      droop_pct: 83.63
+      T_reluctance_Nm: -0.0029
+    Km_Nm_sqrtW: 0.0573
+    Km_per_mass_Nm_sqrtW_kg: 0.1561
+    summary_shape_v: 18
+    torque_per_mass_Nm_kg: 2.515
+    power_per_mass_W_kg: 263.4
+    loss_density_W_kg: 749.0
+    coupling:
+      drive: sine
+      em:
+        T_em_avg_Nm: 0.923
+        T_ripple_pct: 26.5
+        P_stranded_W: 259.9
+        P_core_W: 2.1
+        P_solid_W: 12.9
+        P_mag_W: 0.5
+        P_shaft_W: 12.4
+        P_loss_total_W: 274.9
+        efficiency: 0.2602
+        THD_I_pct: 0.0
+        THD_LL_pct: 7.45
+        V_line_peak_V: 22.5
+        n_steps_per_period: 120
+      coil_temp_c: 293.6
+      magnet_temp_c: 210.7
+      time_to_limit:
+        within_limits: false
+        time_to_limit_s: 52.521
+        time_to_limit_words: 53 s
+        limiting_part: housing
+        time_to_limit_from_rated_s: null
+        limits_c:
+          winding: 200.0
+          magnet: 150.0
+          housing: 70.0
+        at_point_c:
+          winding: 315.0
+          magnet: 243.4
+          housing: 244.21
+        over_by_K:
+          winding: 115.0
+          magnet: 93.4
+          housing: 174.21
+        over_parts:
+        - winding
+        - magnet
+        - housing
+        judged:
+        - winding
+        - magnet
+        - housing
+        parts:
+        - part: winding
+          quantity: the winding hot spot
+          node: winding
+          limit_c: 200.0
+          limit_source: the project's insulation class (200 °C, class N per IEC 60085)
+            — ASSUMED, no card carries a rating; the hot spot is 7.20 K above the
+            winding node's mean, frozen at this map's own shape
+          at_point_c: 315.0
+          over_by_K: 115.0
+          offset_K: 7.2
+          reaches: true
+          time_to_limit_s: 121.688
+          note: the winding hot spot reaches 200 °C after 2 m 02 s
+          state_c:
+            winding: 192.8
+            stator: 169.2
+            rotor: 86.11
+            magnet: 82.56
+        - part: magnet
+          quantity: the hottest magnet element
+          node: magnet
+          limit_c: 150.0
+          limit_source: the F52SH_120C card's own maximum working temperature; the
+            hottest element is 0.50 K above the magnet node's mean, frozen at this
+            map's own shape
+          at_point_c: 243.4
+          over_by_K: 93.4
+          offset_K: 0.5
+          reaches: true
+          time_to_limit_s: 264.625
+          note: the hottest magnet element reaches 150 °C after 4 m 25 s
+          state_c:
+            winding: 269.5
+            stator: 239.64
+            rotor: 153.03
+            magnet: 149.5
+        - part: housing
+          quantity: the housing (heat_path) — touch temperature
+          node: stator
+          limit_c: 70.0
+          limit_source: fixed touch limit, IEC 60335 (70 °C); the housing is carried
+            as a constant -31.99 K from the stator node, fitted to this map
+          at_point_c: 244.21
+          over_by_K: 174.21
+          offset_K: -31.99
+          reaches: true
+          time_to_limit_s: 52.521
+          note: the housing (heat_path) — touch temperature reaches 70 °C after 53
+            s
+          state_c:
+            winding: 119.73
+            stator: 101.99
+            rotor: 55.19
+            magnet: 52.73
+        starts:
+          cold:
+            start: cold
+            start_state_c:
+              winding: 40.0
+              stator: 40.0
+              rotor: 40.0
+              magnet: 40.0
+            start_source: every node at the ambient / coolant inlet 40.0 °C — the
+              machine was switched on just now
+            time_to_limit_s: 52.521
+            state_at_limit_c:
+              winding: 119.73
+              stator: 101.99
+              rotor: 55.19
+              magnet: 52.73
+            time_to_limit_words: 53 s
+            limiting_part: housing
+            horizon_s: 900.0
+            settled: false
+            end_state_c:
+              winding: 313.03
+              stator: 280.26
+              rotor: 242.69
+              magnet: 240.92
+            parts:
+            - part: winding
+              quantity: the winding hot spot
+              node: winding
+              limit_c: 200.0
+              limit_source: the project's insulation class (200 °C, class N per IEC
+                60085) — ASSUMED, no card carries a rating; the hot spot is 7.20 K
+                above the winding node's mean, frozen at this map's own shape
+              at_point_c: 315.0
+              over_by_K: 115.0
+              offset_K: 7.2
+              reaches: true
+              time_to_limit_s: 121.688
+              note: the winding hot spot reaches 200 °C after 2 m 02 s
+              state_c:
+                winding: 192.8
+                stator: 169.2
+                rotor: 86.11
+                magnet: 82.56
+            - part: magnet
+              quantity: the hottest magnet element
+              node: magnet
+              limit_c: 150.0
+              limit_source: the F52SH_120C card's own maximum working temperature;
+                the hottest element is 0.50 K above the magnet node's mean, frozen
+                at this map's own shape
+              at_point_c: 243.4
+              over_by_K: 93.4
+              offset_K: 0.5
+              reaches: true
+              time_to_limit_s: 264.625
+              note: the hottest magnet element reaches 150 °C after 4 m 25 s
+              state_c:
+                winding: 269.5
+                stator: 239.64
+                rotor: 153.03
+                magnet: 149.5
+            - part: housing
+              quantity: the housing (heat_path) — touch temperature
+              node: stator
+              limit_c: 70.0
+              limit_source: fixed touch limit, IEC 60335 (70 °C); the housing is carried
+                as a constant -31.99 K from the stator node, fitted to this map
+              at_point_c: 244.21
+              over_by_K: 174.21
+              offset_K: -31.99
+              reaches: true
+              time_to_limit_s: 52.521
+              note: the housing (heat_path) — touch temperature reaches 70 °C after
+                53 s
+              state_c:
+                winding: 119.73
+                stator: 101.99
+                rotor: 55.19
+                magnet: 52.73
+        rated_start_note: this configuration has no rated duty beside 'rated', so
+          there is no warm state to start a pull from
+        network:
+          available: true
+          residual_W:
+            winding: 6.9892
+            stator: 0.0051
+            rotor: 6.9365
+            magnet: -6.9255
+          worst_residual_W: 6.9892
+          worst_residual_pct_of_losses: 2.48
+          link_kinds:
+            w_s: calibrated
+            r_s: calibrated
+            m_r: physical
+          hot_spot_offset_K: 7.2
+          coil_ref_c: 293.6
+          map_winding_mean_c: 307.8
+          map_means_c:
+            winding: 307.8
+            stator: 276.2
+            rotor: 243.0
+            magnet: 242.9
+          coil_ref_drift_K: 14.2
+          note: 'at the map''s own temperatures the network is out of balance by at
+            most 6.99 W (2.48 % of the 281.9 W this point makes); the calibrated links
+            are exact by construction, so this is the cost of the links the map could
+            not fit and of the end-face films — and mostly of an UNFINISHED loop:
+            the watts are billed at 293.6 °C while the map came back at 307.8 °C,
+            so ρ_Cu(T) re-scales the copper by 1.03×'
+        model: a four-node lumped network (winding, stator, rotor, magnet) fitted
+          to THIS run's own converged thermal map, switched on at the start state
+          and integrated at this operating point; only the copper loss moves with
+          temperature, each part is judged on its node plus the map's own constant
+          offset, and the limit is the first crossing
+        calibration_duty: rated
+        note: over the housing (touch 70 °C) limit by 174 K — reaches 70 °C after
+          53 s from cold
+        reported_state: steady
+        solve_to: steady
+      solve_to: steady
+      mode: steady
+      constants_20c:
+        coil_temp_c: 20.0
+        magnet_temp_c: 20.0
+        point:
+          rpm: 1000.0
+          I_phase_rms: 25.88
+          gamma_deg: 2.0
+          drive: current
+          star_delta: star
+        k_3d: 0.9307007024777334
+        two_d:
+          psi_pm_Wb: 0.00833444
+          Kt_Nm_per_Arms: 0.219
+          Kt_Nm_per_A_line: 0.219
+          Km_Nm_sqrtW: 0.5066
+          Km_per_mass_Nm_sqrtW_kg: 1.3803
+          T_em_avg_Nm: 5.668
+          KV_noload_rpm_per_V_line: 47.249647
+          KV_rpm_per_V_line: 42.73
+          Ld_mH: 0.1398
+          Lq_mH: 0.1421
+          Ld_eq_star_mH: 0.1398
+          Lq_eq_star_mH: 0.1421
+          saliency_Lq_over_Ld: 1.016
+          R_phase_ohm: 0.062303
+          R_phase_eq_star_ohm: 0.062303
+          mass_total_kg: 0.367
+          star_delta: star
+          connection: 4S
+          I_phase_rms_A: 25.88
+        k3d:
+          psi_pm_Wb: 0.007757
+          Kt_Nm_per_Arms: 0.203823
+          Kt_Nm_per_A_line: 0.203823
+          Km_Nm_sqrtW: 0.471493
+          Km_per_mass_Nm_sqrtW_kg: 1.284646
+          T_em_avg_Nm: 5.275212
+          KV_noload_rpm_per_V_line: 50.767821
+          KV_rpm_per_V_line: 45.911645
+        kv_note: walked to 20 °C — Br walked linearly from the card's 120 °C to 20
+          °C at -0.1344 %/K
+        kv_walked: true
+        magnet_grade: F52SH_120C
+        kt_line_Nm_per_A: 0.203823
+        kv_line_rpm_per_V: 50.767821
+        km_Nm_sqrtW: 0.471493
+        km_per_mass_Nm_sqrtW_kg: 1.284646
+        R_phase_20_ohm: 0.062303
+        mass_kg: 0.367
+        computed_at: '2026-09-28T23:26:44'
+        note: solved with the winding and the magnets at 20 °C at this duty's operating
+          point — the datasheet convention every motor catalogue uses, for comparison
+          between machines. The hot values elsewhere in this document are the same
+          constants at this duty's own temperatures. Kt, Km and Km/mass carry k_3d
+          = 0.9307; KV is ÷ k_3d.
+        Ld0_mH: 0.1435
+        Lq0_mH: 0.1438
+        Ldq0_mH: -0.0
+        saliency0_Lq_over_Ld: 1.002
+        ldq0_method: frozen-permeability incremental at i=0, 20 °C
+        ldq0_spread_pct:
+          Ld: 0.0
+          Lq: 0.01
+        ldq0_reciprocity_pct: 0.0
+      magnet_temp_max_c: 243.4
+      iterations: 1
+      em_runs: 1
+      converged: false
+      runaway: false
+      tol_K: 2.0
+      damping: 1.0
+      damping_final: 1.0
+      max_iter: 6
+      residual_coil_K: 14.2
+      residual_magnet_K: 32.2
+      residual_bearing_K: null
+      tol_bearing_K: 5.0
+      history:
+      - iter: 1
+        T_coil_in: 293.6
+        T_magnet_in: 210.7
+        T_coil_out: 307.8
+        T_magnet_out: 242.9
+        T_magnet_max: 243.4
+        P_loss_W: 274.9
+        T_em_Nm: 0.923
+        bearing_temp_c: null
+        bearing_temp_source: null
+        P_mech_extra_W: null
+        T_bearing_out: 242.6
+        damping_used: 1.0
+      em_passes:
+      - phase: final
+        registered: true
+        run_id: '2026-09-28T23:19:05'
+        point:
+          I_phase_rms: 25.88
+          gamma_deg: 2.0
+          rpm: 1000.0
+          coil_temp_c: 293.6
+          magnet_temp_c: 210.7
+          n_steps_per_period: 120
+          n_periods: 1.0
+          drive: current
+          excitation: ''
+      mechanical:
+        ok: true
+        temps_c:
+          rotor_core: 243.0
+          magnet: 242.9
+          shaft: 242.6
+        rpm: 1000.0
+        case: 1,000 rpm
+        sf_min: 147.5453246929935
+        sf_min_part: rotor
+        sf_min_p05: 492.7759891714401
+        rotor_od_growth_um: 0.04329912253993416
+        od_growth:
+          max_um: 0.04329912253993416
+          mean_um: 0.03476918381179602
+          min_um: 0.02713025064246509
+          r_mm: 32.398167845392095
+          part: rotor
+          n_nodes: 532
+        air_gap:
+          clearance_um: 297.55519674213446
+          closed_um: 0.04329912253993416
+          remaining_um: 297.5118976195945
+          closed_pct: 0.014551627064157038
+          bore_r_mm: 32.697555196742144
+          rotor_r_mm: 32.40000000000001
+        interference_effective_mm: 0.0
+        elapsed_s: 45.569
+        torque_nm: 0.859
+        note: solved at the operating 1,000 rpm of this run (the Mechanical tab's
+          proof rpm box says 36,551 rpm)
+        temps_note: 'no retaining band: the rotor''s temperature is not a mechanical
+          load here — it only changes a band''s fit pressure — so the parts are solved
+          as drawn; the map (rotor_core 243 °C, magnet 243 °C, shaft 243 °C) is carried
+          for the record'
+        torque_note: 2-D mean 0.923 N·m × 3-D end-effect 0.9307
+        modes:
+          ok: true
+          body: rotor
+          support: free
+          n_modes: 12
+          rpm: 1000.0
+          f_switch_hz: 48000.0
+          f1_hz: 7630.1
+          f1_order: 2
+          n_flagged: 2
+          cached: false
+          elapsed_s: 8.177
+          tightest:
+            f_hz: 51047.9
+            order: 5
+            excitation: PWM carrier
+            excitation_hz: 48000.0
+            margin_pct: 6.3
+            flag: true
+        critical_speeds:
+          ok: true
+          rated_rpm: 1000.0
+          campbell:
+            rpm:
+            - 0.0
+            - 75.0
+            - 150.0
+            - 225.0
+            - 300.0
+            - 375.0
+            - 450.0
+            - 525.0
+            - 600.0
+            - 675.0
+            - 750.0
+            - 825.0
+            - 900.0
+            - 975.0
+            - 1050.0
+            - 1125.0
+            - 1200.0
+            - 1275.0
+            - 1350.0
+            - 1425.0
+            - 1500.0
+            - 1575.0
+            - 1650.0
+            - 1725.0
+            - 1800.0
+            - 1875.0
+            - 1950.0
+            - 2025.0
+            - 2100.0
+            - 2175.0
+            - 2250.0
+            - 2325.0
+            - 2400.0
+            - 2475.0
+            - 2550.0
+            - 2625.0
+            - 2700.0
+            - 2775.0
+            - 2850.0
+            - 2925.0
+            - 3000.0
+            forward:
+            - - 1487.1335512490368
+              - 4509.478609044844
+              - 5527.415166392037
+            - - 1487.1610545893805
+              - 4509.5411386253245
+              - 5527.495506338272
+            - - 1487.1885575093193
+              - 4509.60366423194
+              - 5527.5758427604005
+            - - 1487.2160600071659
+              - 4509.666185864209
+              - 5527.6561756568035
+            - - 1487.2435620834153
+              - 4509.728703523256
+              - 5527.736505027852
+            - - 1487.2710637384312
+              - 4509.791217208305
+              - 5527.816830873115
+            - - 1487.2985649708282
+              - 4509.853726919877
+              - 5527.897153192222
+            - - 1487.3260657826393
+              - 4509.916232657754
+              - 5527.977471985765
+            - - 1487.3535661723831
+              - 4509.978734423011
+              - 5528.057787252446
+            - - 1487.381066140131
+              - 4510.041232214526
+              - 5528.138098993398
+            - - 1487.4085656862444
+              - 4510.103726033708
+              - 5528.218407207635
+            - - 1487.4360648100628
+              - 4510.166215879886
+              - 5528.29871189511
+            - - 1487.4635635125808
+              - 4510.228701753417
+              - 5528.379013055416
+            - - 1487.4910617930116
+              - 4510.291183654132
+              - 5528.459310688669
+            - - 1487.5185596501594
+              - 4510.353661582474
+              - 5528.539604795277
+            - - 1487.5460570863506
+              - 4510.41613553929
+              - 5528.619895373537
+            - - 1487.5735540997794
+              - 4510.478605523236
+              - 5528.700182424934
+            - - 1487.6010506905257
+              - 4510.541071535536
+              - 5528.780465947779
+            - - 1487.6285468584824
+              - 4510.603533576176
+              - 5528.860745943143
+            - - 1487.6560426051449
+              - 4510.665991644894
+              - 5528.941022409748
+            - - 1487.6835379292406
+              - 4510.7284457423775
+              - 5529.021295349015
+            - - 1487.7110328307226
+              - 4510.790895868299
+              - 5529.101564759316
+            - - 1487.7385273095372
+              - 4510.85334202316
+              - 5529.181830640853
+            - - 1487.766021365181
+              - 4510.915784207002
+              - 5529.262092993619
+            - - 1487.793514998998
+              - 4510.9782224197415
+              - 5529.342351817738
+            - - 1487.8210082094954
+              - 4511.040656661734
+              - 5529.42260711205
+            - - 1487.84850099753
+              - 4511.103086933077
+              - 5529.502858877492
+            - - 1487.8759933619144
+              - 4511.165513233981
+              - 5529.583107113069
+            - - 1487.9034853041967
+              - 4511.227935564248
+              - 5529.6633518191675
+            - - 1487.930976822601
+              - 4511.290353924725
+              - 5529.743592995413
+            - - 1487.9584679193435
+              - 4511.35276831493
+              - 5529.823830641639
+            - - 1487.9859585912313
+              - 4511.415178735218
+              - 5529.90406475715
+            - - 1488.01344884083
+              - 4511.477585185923
+              - 5529.984295342923
+            - - 1488.0409386675
+              - 4511.53998766682
+              - 5530.064522397825
+            - - 1488.0684280707153
+              - 4511.602386178015
+              - 5530.144745921593
+            - - 1488.0959170504195
+              - 4511.664780720341
+              - 5530.224965914988
+            - - 1488.1234056060177
+              - 4511.727171293622
+              - 5530.305182377476
+            - - 1488.1508937393262
+              - 4511.789557897278
+              - 5530.385395308012
+            - - 1488.1783814489074
+              - 4511.851940532258
+              - 5530.465604707526
+            - - 1488.2058687339743
+              - 4511.914319198598
+              - 5530.545810575377
+            - - 1488.2333555960356
+              - 4511.976693895842
+              - 5530.62601291116
+            backward:
+            - - 1487.1335512481087
+              - 4509.4786090442185
+              - 5527.415166391704
+            - - 1487.1060474862725
+              - 4509.416075489832
+              - 5527.334822919255
+            - - 1487.0785433032397
+              - 4509.353537960689
+              - 5527.254475922693
+            - - 1487.0510386983299
+              - 4509.290996456636
+              - 5527.174125401324
+            - - 1487.0235336721737
+              - 4509.228450978404
+              - 5527.093771355282
+            - - 1486.9960282253392
+              - 4509.1659015251
+              - 5527.013413785029
+            - - 1486.9685223563915
+              - 4509.103348096856
+              - 5526.933052690511
+            - - 1486.941016067664
+              - 4509.0407906932805
+              - 5526.852688072477
+            - - 1486.913509357488
+              - 4508.978229315024
+              - 5526.772319929923
+            - - 1486.8860022263718
+              - 4508.915663960662
+              - 5526.691948264534
+            - - 1486.858494674664
+              - 4508.853094631477
+              - 5526.611573075428
+            - - 1486.8309867018954
+              - 4508.790521326318
+              - 5526.531194363205
+            - - 1486.8034783090088
+              - 4508.727944045351
+              - 5526.450812127678
+            - - 1486.7759694955294
+              - 4508.665362788149
+              - 5526.370426369383
+            - - 1486.7484602603286
+              - 4508.602777555029
+              - 5526.290037088948
+            - - 1486.720950605726
+              - 4508.5401883460545
+              - 5526.209644285088
+            - - 1486.6934405302159
+              - 4508.477595160084
+              - 5526.129247959583
+            - - 1486.6659300337528
+              - 4508.414997997814
+              - 5526.048848111338
+            - - 1486.638419116632
+              - 4508.352396859078
+              - 5525.968444741393
+            - - 1486.610907780351
+              - 4508.289791743156
+              - 5525.888037849104
+            - - 1486.5833960234872
+              - 4508.22718265057
+              - 5525.8076274361
+            - - 1486.5558838465738
+              - 4508.164569580645
+              - 5525.727213501099
+            - - 1486.5283712494825
+              - 4508.101952533586
+              - 5525.64679604493
+            - - 1486.5008582317569
+              - 4508.039331509276
+              - 5525.566375067581
+            - - 1486.473344795038
+              - 4507.976706507265
+              - 5525.485950569718
+            - - 1486.445830937616
+              - 4507.914077527567
+              - 5525.405522550338
+            - - 1486.4183166607395
+              - 4507.85144456998
+              - 5525.325091010959
+            - - 1486.3908019632481
+              - 4507.7888076345735
+              - 5525.244655950995
+            - - 1486.363286846831
+              - 4507.726166720797
+              - 5525.164217370806
+            - - 1486.3357713098105
+              - 4507.663521829129
+              - 5525.083775270898
+            - - 1486.3082553544907
+              - 4507.600872958955
+              - 5525.003329650852
+            - - 1486.2807389780378
+              - 4507.538220110058
+              - 5524.922880510843
+            - - 1486.2532221828262
+              - 4507.4755632828055
+              - 5524.842427851815
+            - - 1486.2257049684304
+              - 4507.4129024764825
+              - 5524.761971673224
+            - - 1486.198187334387
+              - 4507.350237691048
+              - 5524.68151197527
+            - - 1486.170669280957
+              - 4507.287568926889
+              - 5524.601048758573
+            - - 1486.143150807466
+              - 4507.2248961836995
+              - 5524.520582023651
+            - - 1486.115631915919
+              - 4507.1622194605825
+              - 5524.440111769294
+            - - 1486.0881126049076
+              - 4507.099538758068
+              - 5524.35963799682
+            - - 1486.0605928739708
+              - 4507.036854076052
+              - 5524.279160705956
+            - - 1486.0330727246558
+              - 4506.974165413714
+              - 5524.198679896984
+            n_points: 41
+          rpm_plot_max: 1300.0
+          f_switch_hz: 48000.0
+          first_forward_rpm: null
+          first_forward_margin_pct: null
+          n_forward_below_rated: 0
+          n_criticals: 0
+          verdict: no forward critical found in the search range
+          bearing_span_mm: 250.0
+          bearing_k_n_per_m: 200000000.0
+          cached: false
+          elapsed_s: 1.489
+      note: null
+      warning_code: last_pass_em_refused
+      warning: 'electromagnetic run 2 refused at coil 307.8 °C / magnet 242.9 °C:
+        sliding-band transient failed: magnet ''F52SH_120C'': 242.9 °C is +123 K from
+        the card''s 120 °C reference, which the linear model takes past Br = 0 or
+        Hcj = 0 (Br x0.835, Hcj x-0.229). The material is above its Curie / total-loss
+        point in this model — refuse rather than return a negative magnet. — the temperatures
+        above are the last pass that solved'
+  runs:
+    current:
+      recorded_at: '2026-09-28T23:28:46'
+      build_sig: 06f5f49db6be
+      assignment_sig: air_gap=air|in_band=air|magnet=F52SH_120C|out_band=air|rotor_core=20SW1200|shaft=Steel_42CrMo4_QT|sleeve=M40X_UD_60|slot=copper|slot_insulation=Nomex|stator_core=20SW1200|wire_insulation=polyimide
+      settings:
+        sim.frequency: 233.33
+        sim.drive: current
+        sim.iBlock: 0
+        sim.apply3d: 1
+        sim.eddyCoupled: true
+        sim.opMode: motor
+        sim.endWinding: 2.027
+        sim.targetKind: 'off'
+        mesh.componentMesh: {}
+        mesh.rotorAngle: 0
+        sim.kvNoload: 1
+        sim.connection: 4S
+        sim.vDelta: 0
+        sim.excOnlyA: 0
+        sim.lastSolveCost:
+          frames: 83
+          wall_s: 208.2
+          warm: 43
+          at: 1789502223738
+        mesh.geoMesh: true
+        sim.daxisDeg: ''
+        sim.gamma: 2
+        sim.magnetTempC: '210.7'
+        sim.steps: 12
+        sim.current: 25.880108191427638
+        sim.waveform: ''
+        mesh.normalDev: 6
+        mesh.structuredGap: true
+        sim.fSwGroup: 2
+        sim.starDelta: star
+        sim.rpm: 1000
+        sim.coupledAdopted: 293.6|210.7|1|2026-09-28T23:19:05
+        mesh.poleCopy: false
+        sim.stepsPP: 120
+        sim.busCouple: true
+        sim.vPeak: 30
+        mesh.outerAir: 1.2
+        mesh.gapLayers: 1
+        mesh.meshSize: 1.22
+        mesh.slidingBand: false
+        mesh.motionBand: true
+        mesh.aspect: 10
+        sim.fSwCustom: false
+        sim.demag: true
+        sim.coilTemp: 293.6
+        mesh.ironTemplate: true
+        sim.dcLinkCableUH: ''
+        sim.dcLinkCapUF: ''
+        sim.targetValue: 850
+        sim.fSwitch: 48000
+        sim.torqueFilter: false
+        mesh.bandThickness: 0.4
+        mesh.minSize: 0.3
+        sim.r25: 1
+        mesh.nSectors: 4
+        sim.endWindingGeo: 2.027
+        sim.coupled: true
+      summary:
+        rpm: 1000.0
+        I_phase_rms_A: 25.88
+        I_terminal_rms_A: 25.88
+        I_winding_rms_A: 25.88
+        gamma_deg: 2.0
+        connection: 4S
+        n_parallel: 1
+        wire_parallel: 1
+        turns_per_coil: 18
+        n_parallel_eff: 1
+        op_mode: motor
+        op_mode_requested: motor
+        drive: current
+        R_phase_ohm: 0.129294
+        R_line_line_ohm: 0.258588
+        R_phase_eq_star_ohm: 0.129294
+        Ld_eq_star_mH: 0.2323
+        Lq_eq_star_mH: 0.1908
+        Ld_mH: 0.2323
+        Lq_mH: 0.1908
+        Ld_inc_mH: 0.2323
+        Lq_inc_mH: 0.1908
+        Ldq_inc_mH: 0.0036
+        ldq_method: frozen-permeability incremental at the point
+        Ld_chord_mH: null
+        Lq_chord_mH: 0.1753
+        psi_pm_sag_pct: 87.96
+        psi_pm_frozen_Wb: 0.000885
+        psi_pm_q_frozen_Wb: -0.000276
+        inc_ldq:
+          Ld_mH: 0.232289
+          Lq_mH: 0.190846
+          Ldq_mH: 0.003569
+          saliency_Lq_over_Ld: 0.8216
+          psi_d_pm_frozen_Wb: 0.00088479
+          psi_q_pm_frozen_Wb: -0.00027619
+          i_d_A: -1.277
+          i_q_A: 36.578
+          samples: 4
+          rotor_positions:
+          - 0
+          - 30
+          - 60
+          - 90
+          spread_pct:
+            Ld: 26.93
+            Lq: 3.32
+          reciprocity_pct: 0.0
+          superposition_pct: 6.029
+          method: 'frozen-permeability incremental: the per-element ν of the converged
+            loaded field is held fixed and a unit d- and q-axis current solved on
+            it (dψ/di, exact for a linear operator). Magnetostatic — on a coupled-eddy
+            run the field''s own ψ/i also carries the AC redistribution, which is
+            impedance and not inductance.'
+        psi_pm_Wb: 0.007347
+        saliency_Lq_over_Ld: 0.822
+        dq_note: i_d is only 3.5% of the current at γ = 2.0° — (ψd − ψ_PM)/i_d would
+          be dominated by cross-saturation of the loaded iron, not by inductance;
+          set γ ≥ ~6° and re-run to measure Ld honestly
+        psi_pm_probe_skipped: false
+        T_em_avg_Nm: 0.923
+        T_ripple_pct: 26.5
+        T_ripple_raw_pct: 26.5
+        T_ripple_filt_pct: 26.5
+        T_ripple_pp_Nm: 0.2447638648199274
+        T_ripple_raw_pp_Nm: 0.2447638648199274
+        T_ripple_pct_available: true
+        T_ripple_pct_reason: null
+        T_noise_floor_pct: null
+        torque_filter_applied: false
+        P_mech_W: 96.7
+        V_phase_peak_V: 11.5
+        V_phase_rms_V: 8.1
+        V_line_peak_V: 22.5
+        V_line_rms_V: 14.0
+        star_delta: star
+        strand_bonding: transposed
+        V_line_peak_solved_V: 22.5
+        V_line_rms_solved_V: 14.0
+        I_line_rms_A: 25.9
+        L0_mH: null
+        P_cu_circulating_W: 0.0
+        circulating_harmonics: []
+        KV_rpm_per_V_phase: 87.27
+        KV_rpm_per_V_line: 44.54
+        KV_noload_rpm_per_V_line: 53.6
+        V1_LL_V: 19.74
+        V1_phase_V: 11.39
+        THD_pct: 12.28
+        THD_LL_pct: 7.45
+        I1_A: 36.6
+        THD_I_pct: 0.0
+        V1_seed_peak_V: 11.3943
+        V1_seed_delta_deg: 57.231
+        Kt_Nm_per_Arms: 0.0357
+        Kt_Nm_per_A_line: 0.0357
+        J_coil_A_per_mm2: 24.6
+        A_phase_mm2: 1.05
+        slot_fill_pct: 57.5
+        A_slot_mm2: 789.1
+        A_copper_slotted_mm2: 453.6
+        P_loss_total_W: 274.9
+        B_gap_mean_T: 0.3513
+        P_core_W: 2.1
+        P_core_terms:
+          stator:
+            hysteresis_W: 0.965
+            eddy_W: 0.207
+            excess_W: 0.397
+            k_f: 0.95
+            model: bertotti
+            window_closed: true
+          rotor:
+            hysteresis_W: 0.296
+            eddy_W: 0.085
+            excess_W: 0.133
+            k_f: 0.95
+            model: bertotti
+            window_closed: true
+            window_electrical_periods: 7.0
+            window_method: pole_pair_image_mapping
+        P_core_stator_W: 1.6
+        P_core_rotor_W: 0.5
+        P_loss_stator_W: 261.5
+        P_loss_rotor_W: 13.4
+        P_loss_split_measured: true
+        P_stranded_W: 259.9
+        wire_split: 1
+        cu_ac_solved_ignores_wire_split: false
+        P_solid_W: 12.9
+        P_mag_W: 0.5
+        P_shaft_W: 12.4
+        P_sleeve_W: null
+        solid_loss_not_solved: false
+        magnet_segmentation:
+          slice_mm: 0.0
+          stack_mm: 13.0
+          n_bodies: 7
+          factor: 1.0
+          width_mm: 7.0328
+          width_min_mm: 7.0306
+          width_max_mm: 7.0352
+          width_source: cad_polygon
+          model: solid magnet (magnet_lamination = 0) — 2-D loss unchanged
+        eddy_warmup_frames: 362
+        demag_prepass_frames: 120
+        eddy_settled: true
+        eddy_capped: false
+        eddy_settle_residual: 0.00655
+        eddy_settle_tol: 0.02
+        eddy_settled_via_accelerator: false
+        warm_seeded: false
+        demag_seeded: false
+        efficiency: 0.2602
+        P_elec_in_solved_W: 356.6
+        P_mech_balance_W: 81.7
+        pwm_dc_residual_A: null
+        pwm_dc_residual_phase: null
+        pwm_dc_tol_A: 0.5
+        pwm_dc_unconverged: null
+        nonlinear_converged: true
+        nonlinear_resid_max: 9.64e-08
+        nonlinear_tol: 0.001
+        nonlinear_unconverged_frames: []
+        steps_snapped: false
+        n_steps_per_period: 120
+        n_steps_per_period_requested: 120
+        slip_nodes_per_period: 120
+        coil_temp_C: 293.6
+        end_winding_factor: 2.03
+        mass_total_kg: 0.367
+        mass_active_kg: 0.367
+        mass_area_source: CAD polygons
+        mass_components:
+        - name: Stator core (20SW1200)
+          material: electrical steel
+          density_kg_m3: 7650.0
+          volume_cm3: 16.5
+          mass_kg: 0.126
+          note: CAD section 1335 mm² × stack, lamination k_f=0.950
+        - name: Copper windings (Cu)
+          material: copper
+          density_kg_m3: 8933.0
+          volume_cm3: 12.0
+          mass_kg: 0.107
+          note: measured copper section 454 mm² × stack × k_end 2.027
+        - name: Magnets (F52SH_120C)
+          material: NdFeB
+          density_kg_m3: 7500.0
+          volume_cm3: 9.3
+          mass_kg: 0.07
+          note: CAD magnet polygons 713 mm² × stack
+        - name: Rotor back-iron (20SW1200)
+          material: electrical steel
+          density_kg_m3: 7650.0
+          volume_cm3: 8.4
+          mass_kg: 0.064
+          note: CAD section 681 mm² × stack, lamination k_f=0.950
+        - name: Shaft (Steel_42CrMo4_QT) — customer-supplied
+          material: shaft
+          density_kg_m3: 7850.0
+          volume_cm3: 3.9
+          mass_kg: 0.0
+          note: customer-supplied — modelled as Steel_42CrMo4_QT for the field, not
+            included in mass (0.030 kg modelled); hollow shaft tube 297 mm² × stack
+            — NOT in active mass
+          state: reference
+          counted: false
+          mass_modelled_kg: 0.03
+        part_states:
+          shaft: reference
+        rotor_inertia:
+          J_kg_m2: 0.00011066271074258431
+          J_kg_cm2: 1.107
+          rotor_iron: 5.527322533903912e-05
+          magnet: 5.5389485403545186e-05
+          shaft: 0.0
+          sleeve: 0.0
+          J_modelled:
+            rotor_iron: 5.527322533903912e-05
+            magnet: 5.5389485403545186e-05
+            shaft: 1.6883043345298404e-05
+            sleeve: 0.0
+          part_states:
+            shaft: reference
+          source: CAD polygons
+        sleeve_hoop: null
+        demag:
+          per_magnet_spread_pct: 2.936
+          bh_kept_vol_pct: 5.673
+          bh_loss_pct: 94.327
+          br_kept_vol_pct: 19.225
+          loss_pct: 80.775
+          area_derated_pct: 100.0
+          br_corner:
+            flag: corner
+            br_pct: 11.7
+            element: 2804
+            magnet_tag: 104
+            x_mm: 15.012
+            y_mm: 25.995
+            r_mm: 30.018
+            theta_deg: 59.99
+            element_area_pct: 0.2257
+            note: 'Worst single magnet element: a sharp-corner value that does not
+              converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md §3). A
+              corner diagnostic, not the magnet''s figure; the magnet''s figure is
+              the volume-weighted Br kept.'
+          grade_nominal: 52.0
+          grade_effective: 2.9
+          magnet_name: F52SH_120C
+          energy_total_J: 2.83
+          energy_lost_J: 2.674
+        end3d:
+          k_flux: 0.9307007024777334
+          k_flux_self: 0.967636000466831
+          fidelity: quick (n_stack=4, 3-point L-sweep)
+          generated_utc: '2026-09-23T22:31:48Z'
+          machine: 24s/28p OD 85
+          k_flux_vs_L:
+            '9.75': 0.93137
+            '13.0': 0.9307
+            '19.5': 0.93174
+          note: 'CIANO28 85 20SW1200 / L13 ''peak'' as saved on the server 2026-09-16/15
+            (unchanged through the 2026-09-18 duty save): 24s/28p OD 85, stack 13
+            mm, gap 0.3 mm, F52SH_120C / 20SW1200; stack sweep 9.75/13/19.5 mm — night
+            run 2026-09-23/24, user: "3D coefficients are computed at night" — solve 1370
+            s'
+          T_corrected_Nm: 0.859
+          V_line_peak_corrected_V: 20.9
+        bench_ldq:
+          Ld_mH: 0.0841
+          Lq_mH: 0.0812
+          Lq_over_Ld: 0.966
+          psi_pm_mWb: 7.347
+          I_probe_arms: 2.0
+          daxis_deg: 60.012
+          connection: 4S
+          geo_fingerprint: f3b4728f381c5b31
+          method: small-signal probe at the I=0 iron state — bench/LCR equivalent;
+            loaded (chord) values differ under saturation
+          solve_time_s: 32.9
+        saturation:
+          T_linear_Nm: 5.641
+          droop_pct: 83.63
+          T_reluctance_Nm: -0.0029
+        Km_Nm_sqrtW: 0.0573
+        Km_per_mass_Nm_sqrtW_kg: 0.1561
+        summary_shape_v: 18
+        torque_per_mass_Nm_kg: 2.515
+        power_per_mass_W_kg: 263.4
+        loss_density_W_kg: 749.0
+        coupling:
+          drive: sine
+          em:
+            T_em_avg_Nm: 0.923
+            T_ripple_pct: 26.5
+            P_stranded_W: 259.9
+            P_core_W: 2.1
+            P_solid_W: 12.9
+            P_mag_W: 0.5
+            P_shaft_W: 12.4
+            P_loss_total_W: 274.9
+            efficiency: 0.2602
+            THD_I_pct: 0.0
+            THD_LL_pct: 7.45
+            V_line_peak_V: 22.5
+            n_steps_per_period: 120
+          coil_temp_c: 293.6
+          magnet_temp_c: 210.7
+          time_to_limit:
+            within_limits: false
+            time_to_limit_s: 52.521
+            time_to_limit_words: 53 s
+            limiting_part: housing
+            time_to_limit_from_rated_s: null
+            limits_c:
+              winding: 200.0
+              magnet: 150.0
+              housing: 70.0
+            at_point_c:
+              winding: 315.0
+              magnet: 243.4
+              housing: 244.21
+            over_by_K:
+              winding: 115.0
+              magnet: 93.4
+              housing: 174.21
+            over_parts:
+            - winding
+            - magnet
+            - housing
+            judged:
+            - winding
+            - magnet
+            - housing
+            parts:
+            - part: winding
+              quantity: the winding hot spot
+              node: winding
+              limit_c: 200.0
+              limit_source: the project's insulation class (200 °C, class N per IEC
+                60085) — ASSUMED, no card carries a rating; the hot spot is 7.20 K
+                above the winding node's mean, frozen at this map's own shape
+              at_point_c: 315.0
+              over_by_K: 115.0
+              offset_K: 7.2
+              reaches: true
+              time_to_limit_s: 121.688
+              note: the winding hot spot reaches 200 °C after 2 m 02 s
+              state_c:
+                winding: 192.8
+                stator: 169.2
+                rotor: 86.11
+                magnet: 82.56
+            - part: magnet
+              quantity: the hottest magnet element
+              node: magnet
+              limit_c: 150.0
+              limit_source: the F52SH_120C card's own maximum working temperature;
+                the hottest element is 0.50 K above the magnet node's mean, frozen
+                at this map's own shape
+              at_point_c: 243.4
+              over_by_K: 93.4
+              offset_K: 0.5
+              reaches: true
+              time_to_limit_s: 264.625
+              note: the hottest magnet element reaches 150 °C after 4 m 25 s
+              state_c:
+                winding: 269.5
+                stator: 239.64
+                rotor: 153.03
+                magnet: 149.5
+            - part: housing
+              quantity: the housing (heat_path) — touch temperature
+              node: stator
+              limit_c: 70.0
+              limit_source: fixed touch limit, IEC 60335 (70 °C); the housing is carried
+                as a constant -31.99 K from the stator node, fitted to this map
+              at_point_c: 244.21
+              over_by_K: 174.21
+              offset_K: -31.99
+              reaches: true
+              time_to_limit_s: 52.521
+              note: the housing (heat_path) — touch temperature reaches 70 °C after
+                53 s
+              state_c:
+                winding: 119.73
+                stator: 101.99
+                rotor: 55.19
+                magnet: 52.73
+            starts:
+              cold:
+                start: cold
+                start_state_c:
+                  winding: 40.0
+                  stator: 40.0
+                  rotor: 40.0
+                  magnet: 40.0
+                start_source: every node at the ambient / coolant inlet 40.0 °C —
+                  the machine was switched on just now
+                time_to_limit_s: 52.521
+                state_at_limit_c:
+                  winding: 119.73
+                  stator: 101.99
+                  rotor: 55.19
+                  magnet: 52.73
+                time_to_limit_words: 53 s
+                limiting_part: housing
+                horizon_s: 900.0
+                settled: false
+                end_state_c:
+                  winding: 313.03
+                  stator: 280.26
+                  rotor: 242.69
+                  magnet: 240.92
+                parts:
+                - part: winding
+                  quantity: the winding hot spot
+                  node: winding
+                  limit_c: 200.0
+                  limit_source: the project's insulation class (200 °C, class N per
+                    IEC 60085) — ASSUMED, no card carries a rating; the hot spot is
+                    7.20 K above the winding node's mean, frozen at this map's own
+                    shape
+                  at_point_c: 315.0
+                  over_by_K: 115.0
+                  offset_K: 7.2
+                  reaches: true
+                  time_to_limit_s: 121.688
+                  note: the winding hot spot reaches 200 °C after 2 m 02 s
+                  state_c:
+                    winding: 192.8
+                    stator: 169.2
+                    rotor: 86.11
+                    magnet: 82.56
+                - part: magnet
+                  quantity: the hottest magnet element
+                  node: magnet
+                  limit_c: 150.0
+                  limit_source: the F52SH_120C card's own maximum working temperature;
+                    the hottest element is 0.50 K above the magnet node's mean, frozen
+                    at this map's own shape
+                  at_point_c: 243.4
+                  over_by_K: 93.4
+                  offset_K: 0.5
+                  reaches: true
+                  time_to_limit_s: 264.625
+                  note: the hottest magnet element reaches 150 °C after 4 m 25 s
+                  state_c:
+                    winding: 269.5
+                    stator: 239.64
+                    rotor: 153.03
+                    magnet: 149.5
+                - part: housing
+                  quantity: the housing (heat_path) — touch temperature
+                  node: stator
+                  limit_c: 70.0
+                  limit_source: fixed touch limit, IEC 60335 (70 °C); the housing
+                    is carried as a constant -31.99 K from the stator node, fitted
+                    to this map
+                  at_point_c: 244.21
+                  over_by_K: 174.21
+                  offset_K: -31.99
+                  reaches: true
+                  time_to_limit_s: 52.521
+                  note: the housing (heat_path) — touch temperature reaches 70 °C
+                    after 53 s
+                  state_c:
+                    winding: 119.73
+                    stator: 101.99
+                    rotor: 55.19
+                    magnet: 52.73
+            rated_start_note: this configuration has no rated duty beside 'rated',
+              so there is no warm state to start a pull from
+            network:
+              available: true
+              residual_W:
+                winding: 6.9892
+                stator: 0.0051
+                rotor: 6.9365
+                magnet: -6.9255
+              worst_residual_W: 6.9892
+              worst_residual_pct_of_losses: 2.48
+              link_kinds:
+                w_s: calibrated
+                r_s: calibrated
+                m_r: physical
+              hot_spot_offset_K: 7.2
+              coil_ref_c: 293.6
+              map_winding_mean_c: 307.8
+              map_means_c:
+                winding: 307.8
+                stator: 276.2
+                rotor: 243.0
+                magnet: 242.9
+              coil_ref_drift_K: 14.2
+              note: 'at the map''s own temperatures the network is out of balance
+                by at most 6.99 W (2.48 % of the 281.9 W this point makes); the calibrated
+                links are exact by construction, so this is the cost of the links
+                the map could not fit and of the end-face films — and mostly of an
+                UNFINISHED loop: the watts are billed at 293.6 °C while the map came
+                back at 307.8 °C, so ρ_Cu(T) re-scales the copper by 1.03×'
+            model: a four-node lumped network (winding, stator, rotor, magnet) fitted
+              to THIS run's own converged thermal map, switched on at the start state
+              and integrated at this operating point; only the copper loss moves with
+              temperature, each part is judged on its node plus the map's own constant
+              offset, and the limit is the first crossing
+            calibration_duty: rated
+            note: over the housing (touch 70 °C) limit by 174 K — reaches 70 °C after
+              53 s from cold
+            reported_state: steady
+            solve_to: steady
+          solve_to: steady
+          mode: steady
+          constants_20c:
+            coil_temp_c: 20.0
+            magnet_temp_c: 20.0
+            point:
+              rpm: 1000.0
+              I_phase_rms: 25.88
+              gamma_deg: 2.0
+              drive: current
+              star_delta: star
+            k_3d: 0.9307007024777334
+            two_d:
+              psi_pm_Wb: 0.00833444
+              Kt_Nm_per_Arms: 0.219
+              Kt_Nm_per_A_line: 0.219
+              Km_Nm_sqrtW: 0.5066
+              Km_per_mass_Nm_sqrtW_kg: 1.3803
+              T_em_avg_Nm: 5.668
+              KV_noload_rpm_per_V_line: 47.249647
+              KV_rpm_per_V_line: 42.73
+              Ld_mH: 0.1398
+              Lq_mH: 0.1421
+              Ld_eq_star_mH: 0.1398
+              Lq_eq_star_mH: 0.1421
+              saliency_Lq_over_Ld: 1.016
+              R_phase_ohm: 0.062303
+              R_phase_eq_star_ohm: 0.062303
+              mass_total_kg: 0.367
+              star_delta: star
+              connection: 4S
+              I_phase_rms_A: 25.88
+            k3d:
+              psi_pm_Wb: 0.007757
+              Kt_Nm_per_Arms: 0.203823
+              Kt_Nm_per_A_line: 0.203823
+              Km_Nm_sqrtW: 0.471493
+              Km_per_mass_Nm_sqrtW_kg: 1.284646
+              T_em_avg_Nm: 5.275212
+              KV_noload_rpm_per_V_line: 50.767821
+              KV_rpm_per_V_line: 45.911645
+            kv_note: walked to 20 °C — Br walked linearly from the card's 120 °C to
+              20 °C at -0.1344 %/K
+            kv_walked: true
+            magnet_grade: F52SH_120C
+            kt_line_Nm_per_A: 0.203823
+            kv_line_rpm_per_V: 50.767821
+            km_Nm_sqrtW: 0.471493
+            km_per_mass_Nm_sqrtW_kg: 1.284646
+            R_phase_20_ohm: 0.062303
+            mass_kg: 0.367
+            computed_at: '2026-09-28T23:26:44'
+            note: solved with the winding and the magnets at 20 °C at this duty's
+              operating point — the datasheet convention every motor catalogue uses,
+              for comparison between machines. The hot values elsewhere in this document
+              are the same constants at this duty's own temperatures. Kt, Km and Km/mass
+              carry k_3d = 0.9307; KV is ÷ k_3d.
+            Ld0_mH: 0.1435
+            Lq0_mH: 0.1438
+            Ldq0_mH: -0.0
+            saliency0_Lq_over_Ld: 1.002
+            ldq0_method: frozen-permeability incremental at i=0, 20 °C
+            ldq0_spread_pct:
+              Ld: 0.0
+              Lq: 0.01
+            ldq0_reciprocity_pct: 0.0
+          magnet_temp_max_c: 243.4
+          iterations: 1
+          em_runs: 1
+          converged: false
+          runaway: false
+          tol_K: 2.0
+          damping: 1.0
+          damping_final: 1.0
+          max_iter: 6
+          residual_coil_K: 14.2
+          residual_magnet_K: 32.2
+          residual_bearing_K: null
+          tol_bearing_K: 5.0
+          history:
+          - iter: 1
+            T_coil_in: 293.6
+            T_magnet_in: 210.7
+            T_coil_out: 307.8
+            T_magnet_out: 242.9
+            T_magnet_max: 243.4
+            P_loss_W: 274.9
+            T_em_Nm: 0.923
+            bearing_temp_c: null
+            bearing_temp_source: null
+            P_mech_extra_W: null
+            T_bearing_out: 242.6
+            damping_used: 1.0
+          em_passes:
+          - phase: final
+            registered: true
+            run_id: '2026-09-28T23:19:05'
+            point:
+              I_phase_rms: 25.88
+              gamma_deg: 2.0
+              rpm: 1000.0
+              coil_temp_c: 293.6
+              magnet_temp_c: 210.7
+              n_steps_per_period: 120
+              n_periods: 1.0
+              drive: current
+              excitation: ''
+          mechanical:
+            ok: true
+            temps_c:
+              rotor_core: 243.0
+              magnet: 242.9
+              shaft: 242.6
+            rpm: 1000.0
+            case: 1,000 rpm
+            sf_min: 147.5453246929935
+            sf_min_part: rotor
+            sf_min_p05: 492.7759891714401
+            rotor_od_growth_um: 0.04329912253993416
+            od_growth:
+              max_um: 0.04329912253993416
+              mean_um: 0.03476918381179602
+              min_um: 0.02713025064246509
+              r_mm: 32.398167845392095
+              part: rotor
+              n_nodes: 532
+            air_gap:
+              clearance_um: 297.55519674213446
+              closed_um: 0.04329912253993416
+              remaining_um: 297.5118976195945
+              closed_pct: 0.014551627064157038
+              bore_r_mm: 32.697555196742144
+              rotor_r_mm: 32.40000000000001
+            interference_effective_mm: 0.0
+            elapsed_s: 45.569
+            torque_nm: 0.859
+            note: solved at the operating 1,000 rpm of this run (the Mechanical tab's
+              proof rpm box says 36,551 rpm)
+            temps_note: 'no retaining band: the rotor''s temperature is not a mechanical
+              load here — it only changes a band''s fit pressure — so the parts are
+              solved as drawn; the map (rotor_core 243 °C, magnet 243 °C, shaft 243
+              °C) is carried for the record'
+            torque_note: 2-D mean 0.923 N·m × 3-D end-effect 0.9307
+            modes:
+              ok: true
+              body: rotor
+              support: free
+              n_modes: 12
+              rpm: 1000.0
+              f_switch_hz: 48000.0
+              f1_hz: 7630.1
+              f1_order: 2
+              n_flagged: 2
+              cached: false
+              elapsed_s: 8.177
+              tightest:
+                f_hz: 51047.9
+                order: 5
+                excitation: PWM carrier
+                excitation_hz: 48000.0
+                margin_pct: 6.3
+                flag: true
+            critical_speeds:
+              ok: true
+              rated_rpm: 1000.0
+              campbell:
+                rpm:
+                - 0.0
+                - 75.0
+                - 150.0
+                - 225.0
+                - 300.0
+                - 375.0
+                - 450.0
+                - 525.0
+                - 600.0
+                - 675.0
+                - 750.0
+                - 825.0
+                - 900.0
+                - 975.0
+                - 1050.0
+                - 1125.0
+                - 1200.0
+                - 1275.0
+                - 1350.0
+                - 1425.0
+                - 1500.0
+                - 1575.0
+                - 1650.0
+                - 1725.0
+                - 1800.0
+                - 1875.0
+                - 1950.0
+                - 2025.0
+                - 2100.0
+                - 2175.0
+                - 2250.0
+                - 2325.0
+                - 2400.0
+                - 2475.0
+                - 2550.0
+                - 2625.0
+                - 2700.0
+                - 2775.0
+                - 2850.0
+                - 2925.0
+                - 3000.0
+                forward:
+                - - 1487.1335512490368
+                  - 4509.478609044844
+                  - 5527.415166392037
+                - - 1487.1610545893805
+                  - 4509.5411386253245
+                  - 5527.495506338272
+                - - 1487.1885575093193
+                  - 4509.60366423194
+                  - 5527.5758427604005
+                - - 1487.2160600071659
+                  - 4509.666185864209
+                  - 5527.6561756568035
+                - - 1487.2435620834153
+                  - 4509.728703523256
+                  - 5527.736505027852
+                - - 1487.2710637384312
+                  - 4509.791217208305
+                  - 5527.816830873115
+                - - 1487.2985649708282
+                  - 4509.853726919877
+                  - 5527.897153192222
+                - - 1487.3260657826393
+                  - 4509.916232657754
+                  - 5527.977471985765
+                - - 1487.3535661723831
+                  - 4509.978734423011
+                  - 5528.057787252446
+                - - 1487.381066140131
+                  - 4510.041232214526
+                  - 5528.138098993398
+                - - 1487.4085656862444
+                  - 4510.103726033708
+                  - 5528.218407207635
+                - - 1487.4360648100628
+                  - 4510.166215879886
+                  - 5528.29871189511
+                - - 1487.4635635125808
+                  - 4510.228701753417
+                  - 5528.379013055416
+                - - 1487.4910617930116
+                  - 4510.291183654132
+                  - 5528.459310688669
+                - - 1487.5185596501594
+                  - 4510.353661582474
+                  - 5528.539604795277
+                - - 1487.5460570863506
+                  - 4510.41613553929
+                  - 5528.619895373537
+                - - 1487.5735540997794
+                  - 4510.478605523236
+                  - 5528.700182424934
+                - - 1487.6010506905257
+                  - 4510.541071535536
+                  - 5528.780465947779
+                - - 1487.6285468584824
+                  - 4510.603533576176
+                  - 5528.860745943143
+                - - 1487.6560426051449
+                  - 4510.665991644894
+                  - 5528.941022409748
+                - - 1487.6835379292406
+                  - 4510.7284457423775
+                  - 5529.021295349015
+                - - 1487.7110328307226
+                  - 4510.790895868299
+                  - 5529.101564759316
+                - - 1487.7385273095372
+                  - 4510.85334202316
+                  - 5529.181830640853
+                - - 1487.766021365181
+                  - 4510.915784207002
+                  - 5529.262092993619
+                - - 1487.793514998998
+                  - 4510.9782224197415
+                  - 5529.342351817738
+                - - 1487.8210082094954
+                  - 4511.040656661734
+                  - 5529.42260711205
+                - - 1487.84850099753
+                  - 4511.103086933077
+                  - 5529.502858877492
+                - - 1487.8759933619144
+                  - 4511.165513233981
+                  - 5529.583107113069
+                - - 1487.9034853041967
+                  - 4511.227935564248
+                  - 5529.6633518191675
+                - - 1487.930976822601
+                  - 4511.290353924725
+                  - 5529.743592995413
+                - - 1487.9584679193435
+                  - 4511.35276831493
+                  - 5529.823830641639
+                - - 1487.9859585912313
+                  - 4511.415178735218
+                  - 5529.90406475715
+                - - 1488.01344884083
+                  - 4511.477585185923
+                  - 5529.984295342923
+                - - 1488.0409386675
+                  - 4511.53998766682
+                  - 5530.064522397825
+                - - 1488.0684280707153
+                  - 4511.602386178015
+                  - 5530.144745921593
+                - - 1488.0959170504195
+                  - 4511.664780720341
+                  - 5530.224965914988
+                - - 1488.1234056060177
+                  - 4511.727171293622
+                  - 5530.305182377476
+                - - 1488.1508937393262
+                  - 4511.789557897278
+                  - 5530.385395308012
+                - - 1488.1783814489074
+                  - 4511.851940532258
+                  - 5530.465604707526
+                - - 1488.2058687339743
+                  - 4511.914319198598
+                  - 5530.545810575377
+                - - 1488.2333555960356
+                  - 4511.976693895842
+                  - 5530.62601291116
+                backward:
+                - - 1487.1335512481087
+                  - 4509.4786090442185
+                  - 5527.415166391704
+                - - 1487.1060474862725
+                  - 4509.416075489832
+                  - 5527.334822919255
+                - - 1487.0785433032397
+                  - 4509.353537960689
+                  - 5527.254475922693
+                - - 1487.0510386983299
+                  - 4509.290996456636
+                  - 5527.174125401324
+                - - 1487.0235336721737
+                  - 4509.228450978404
+                  - 5527.093771355282
+                - - 1486.9960282253392
+                  - 4509.1659015251
+                  - 5527.013413785029
+                - - 1486.9685223563915
+                  - 4509.103348096856
+                  - 5526.933052690511
+                - - 1486.941016067664
+                  - 4509.0407906932805
+                  - 5526.852688072477
+                - - 1486.913509357488
+                  - 4508.978229315024
+                  - 5526.772319929923
+                - - 1486.8860022263718
+                  - 4508.915663960662
+                  - 5526.691948264534
+                - - 1486.858494674664
+                  - 4508.853094631477
+                  - 5526.611573075428
+                - - 1486.8309867018954
+                  - 4508.790521326318
+                  - 5526.531194363205
+                - - 1486.8034783090088
+                  - 4508.727944045351
+                  - 5526.450812127678
+                - - 1486.7759694955294
+                  - 4508.665362788149
+                  - 5526.370426369383
+                - - 1486.7484602603286
+                  - 4508.602777555029
+                  - 5526.290037088948
+                - - 1486.720950605726
+                  - 4508.5401883460545
+                  - 5526.209644285088
+                - - 1486.6934405302159
+                  - 4508.477595160084
+                  - 5526.129247959583
+                - - 1486.6659300337528
+                  - 4508.414997997814
+                  - 5526.048848111338
+                - - 1486.638419116632
+                  - 4508.352396859078
+                  - 5525.968444741393
+                - - 1486.610907780351
+                  - 4508.289791743156
+                  - 5525.888037849104
+                - - 1486.5833960234872
+                  - 4508.22718265057
+                  - 5525.8076274361
+                - - 1486.5558838465738
+                  - 4508.164569580645
+                  - 5525.727213501099
+                - - 1486.5283712494825
+                  - 4508.101952533586
+                  - 5525.64679604493
+                - - 1486.5008582317569
+                  - 4508.039331509276
+                  - 5525.566375067581
+                - - 1486.473344795038
+                  - 4507.976706507265
+                  - 5525.485950569718
+                - - 1486.445830937616
+                  - 4507.914077527567
+                  - 5525.405522550338
+                - - 1486.4183166607395
+                  - 4507.85144456998
+                  - 5525.325091010959
+                - - 1486.3908019632481
+                  - 4507.7888076345735
+                  - 5525.244655950995
+                - - 1486.363286846831
+                  - 4507.726166720797
+                  - 5525.164217370806
+                - - 1486.3357713098105
+                  - 4507.663521829129
+                  - 5525.083775270898
+                - - 1486.3082553544907
+                  - 4507.600872958955
+                  - 5525.003329650852
+                - - 1486.2807389780378
+                  - 4507.538220110058
+                  - 5524.922880510843
+                - - 1486.2532221828262
+                  - 4507.4755632828055
+                  - 5524.842427851815
+                - - 1486.2257049684304
+                  - 4507.4129024764825
+                  - 5524.761971673224
+                - - 1486.198187334387
+                  - 4507.350237691048
+                  - 5524.68151197527
+                - - 1486.170669280957
+                  - 4507.287568926889
+                  - 5524.601048758573
+                - - 1486.143150807466
+                  - 4507.2248961836995
+                  - 5524.520582023651
+                - - 1486.115631915919
+                  - 4507.1622194605825
+                  - 5524.440111769294
+                - - 1486.0881126049076
+                  - 4507.099538758068
+                  - 5524.35963799682
+                - - 1486.0605928739708
+                  - 4507.036854076052
+                  - 5524.279160705956
+                - - 1486.0330727246558
+                  - 4506.974165413714
+                  - 5524.198679896984
+                n_points: 41
+              rpm_plot_max: 1300.0
+              f_switch_hz: 48000.0
+              first_forward_rpm: null
+              first_forward_margin_pct: null
+              n_forward_below_rated: 0
+              n_criticals: 0
+              verdict: no forward critical found in the search range
+              bearing_span_mm: 250.0
+              bearing_k_n_per_m: 200000000.0
+              cached: false
+              elapsed_s: 1.489
+          note: null
+          warning_code: last_pass_em_refused
+          warning: 'electromagnetic run 2 refused at coil 307.8 °C / magnet 242.9
+            °C: sliding-band transient failed: magnet ''F52SH_120C'': 242.9 °C is
+            +123 K from the card''s 120 °C reference, which the linear model takes
+            past Br = 0 or Hcj = 0 (Br x0.835, Hcj x-0.229). The material is above
+            its Curie / total-loss point in this model — refuse rather than return
+            a negative magnet. — the temperatures above are the last pass that solved'
+      result:
+        efficiency_pct: 24.664
+        ripple_pct: 26.5
+        v_ll_peak_v: 20.941
+        loss_w: 274.9
+        mass_kg: 0.367
+        p_core_w: 2.1
+        p_stranded_w: 259.9
+        p_solid_w: 12.9
+        v_phase_peak_v: 10.703
+        j_coil_a_mm2: 24.6
+        end3d_k: 0.931
+        recorded_at: '2026-09-28T23:28:45'
+        build_sig: 06f5f49db6be
+      payload_file: runs/L13/rated-9c0f977d.current.json.gz
+- name: peak
+  mode: motor
+  saved_at: '2026-09-29T00:05:44'
+  current_arms: 45.962
+  rpm: 1000.0
+  gamma_deg: 2.0
+  note: migrated from the motor catalog
+  torque_nm: 8.69
+  power_kw: 0.91
+  star_delta: star
+  result:
+    efficiency_pct: 57.122
+    ripple_pct: 6.3
+    v_ll_peak_v: 29.782
+    loss_w: 682.9
+    mass_kg: 0.367
+    p_core_w: 2.8
+    p_stranded_w: 677.2
+    p_solid_w: 2.8
+    v_phase_peak_v: 20.662
+    j_coil_a_mm2: 43.8
+    end3d_k: 0.931
+    recorded_at: '2026-09-29T00:05:45'
+    build_sig: 06f5f49db6be
+  mesh:
+    sim.frequency: 233.33
+    sim.drive: current
+    sim.iBlock: 48.93
+    sim.apply3d: 1
+    sim.eddyCoupled: true
+    sim.opMode: motor
+    sim.endWinding: 2.027
+    sim.targetKind: 'off'
+    mesh.componentMesh: {}
+    mesh.rotorAngle: 0
+    sim.kvNoload: 1
+    sim.connection: 4S
+    sim.vDelta: 0
+    sim.excOnlyA: 0
+    sim.lastSolveCost:
+      frames: 83
+      wall_s: 218.1
+      warm: 43
+      at: 1788452582862
+    mesh.geoMesh: true
+    sim.daxisDeg: ''
+    sim.gamma: 2.0
+    sim.steps: 12
+    sim.current: 45.962
+    sim.waveform: ''
+    mesh.normalDev: 6
+    mesh.structuredGap: true
+    sim.fSwGroup: 2
+    sim.stepsPP: 120
+    sim.rpm: 1000.0
+    mesh.poleCopy: false
+    sim.busCouple: true
+    sim.vPeak: 30
+    mesh.outerAir: 1.2
+    mesh.gapLayers: 1
+    mesh.meshSize: 1.22
+    mesh.slidingBand: false
+    mesh.motionBand: true
+    mesh.aspect: 10
+    sim.fSwCustom: false
+    sim.demag: true
+    sim.coilTemp: 200.0
+    mesh.ironTemplate: true
+    sim.dcLinkCableUH: ''
+    sim.dcLinkCapUF: ''
+    sim.targetValue: 850
+    sim.fSwitch: 48000
+    sim.torqueFilter: false
+    mesh.bandThickness: 0.4
+    mesh.minSize: 0.3
+    mesh.nSectors: 4
+    sim.r25: 1
+    sim.endWindingGeo: 2.027
+    sim.magnetTempC: '45.2'
+    sim.coupled: true
+    sim.coupledAdopted: 200.0|45.2|2|2026-09-28T23:52:45
+  summary:
+    rpm: 1000.0
+    I_phase_rms_A: 45.96
+    I_terminal_rms_A: 45.96
+    I_winding_rms_A: 45.96
+    gamma_deg: 2.0
+    connection: 4S
+    n_parallel: 1
+    wire_parallel: 1
+    turns_per_coil: 18
+    n_parallel_eff: 1
+    op_mode: motor
+    op_mode_requested: motor
+    drive: current
+    R_phase_ohm: 0.106376
+    R_line_line_ohm: 0.212752
+    R_phase_eq_star_ohm: 0.106376
+    Ld_eq_star_mH: 0.1355
+    Lq_eq_star_mH: 0.1339
+    Ld_mH: 0.1355
+    Lq_mH: 0.1339
+    Ld_inc_mH: 0.1355
+    Lq_inc_mH: 0.1339
+    Ldq_inc_mH: -0.0086
+    ldq_method: frozen-permeability incremental at the point
+    Ld_chord_mH: null
+    Lq_chord_mH: 0.0794
+    psi_pm_sag_pct: -2.07
+    psi_pm_frozen_Wb: 0.007499
+    psi_pm_q_frozen_Wb: -0.003528
+    inc_ldq:
+      Ld_mH: 0.135508
+      Lq_mH: 0.133889
+      Ldq_mH: -0.008555
+      saliency_Lq_over_Ld: 0.9881
+      psi_d_pm_frozen_Wb: 0.00749921
+      psi_q_pm_frozen_Wb: -0.0035282
+      i_d_A: -2.268
+      i_q_A: 64.96
+      samples: 4
+      rotor_positions:
+      - 0
+      - 30
+      - 60
+      - 90
+      spread_pct:
+        Ld: 0.8
+        Lq: 0.89
+      reciprocity_pct: 0.0
+      superposition_pct: 0.578
+      method: 'frozen-permeability incremental: the per-element ν of the converged
+        loaded field is held fixed and a unit d- and q-axis current solved on it (dψ/di,
+        exact for a linear operator). Magnetostatic — on a coupled-eddy run the field''s
+        own ψ/i also carries the AC redistribution, which is impedance and not inductance.'
+    psi_pm_Wb: 0.007347
+    saliency_Lq_over_Ld: 0.988
+    dq_note: i_d is only 3.5% of the current at γ = 2.0° — (ψd − ψ_PM)/i_d would be
+      dominated by cross-saturation of the loaded iron, not by inductance; set γ ≥
+      ~6° and re-run to measure Ld honestly
+    psi_pm_probe_skipped: false
+    T_em_avg_Nm: 9.335
+    T_ripple_pct: 6.3
+    T_ripple_raw_pct: 6.3
+    T_ripple_filt_pct: 6.3
+    T_ripple_pp_Nm: 0.5909963102403477
+    T_ripple_raw_pp_Nm: 0.5909963102403477
+    T_ripple_pct_available: true
+    T_ripple_pct_reason: null
+    T_noise_floor_pct: null
+    torque_filter_applied: false
+    P_mech_W: 977.5
+    V_phase_peak_V: 22.2
+    V_phase_rms_V: 13.4
+    V_line_peak_V: 32.0
+    V_line_rms_V: 22.6
+    star_delta: star
+    strand_bonding: transposed
+    V_line_peak_solved_V: 32.0
+    V_line_rms_solved_V: 22.6
+    I_line_rms_A: 46.0
+    L0_mH: null
+    P_cu_circulating_W: 0.0
+    circulating_harmonics: []
+    KV_rpm_per_V_phase: 45.08
+    KV_rpm_per_V_line: 31.21
+    KV_noload_rpm_per_V_line: 53.6
+    V1_LL_V: 31.89
+    V1_phase_V: 18.41
+    THD_pct: 23.4
+    THD_LL_pct: 5.18
+    I1_A: 65.0
+    THD_I_pct: 0.0
+    V1_seed_peak_V: 18.4106
+    V1_seed_delta_deg: 25.076
+    Kt_Nm_per_Arms: 0.2031
+    Kt_Nm_per_A_line: 0.2031
+    J_coil_A_per_mm2: 43.8
+    A_phase_mm2: 1.05
+    slot_fill_pct: 57.5
+    A_slot_mm2: 789.1
+    A_copper_slotted_mm2: 453.6
+    P_loss_total_W: 682.9
+    B_gap_mean_T: 1.1713
+    P_core_W: 2.8
+    P_core_terms:
+      stator:
+        hysteresis_W: 1.591
+        eddy_W: 0.383
+        excess_W: 0.582
+        k_f: 0.95
+        model: bertotti
+        window_closed: true
+      rotor:
+        hysteresis_W: 0.146
+        eddy_W: 0.056
+        excess_W: 0.077
+        k_f: 0.95
+        model: bertotti
+        window_closed: true
+        window_electrical_periods: 7.0
+        window_method: pole_pair_image_mapping
+    P_core_stator_W: 2.6
+    P_core_rotor_W: 0.3
+    P_loss_stator_W: 679.8
+    P_loss_rotor_W: 3.1
+    P_loss_split_measured: true
+    P_stranded_W: 677.2
+    wire_split: 1
+    cu_ac_solved_ignores_wire_split: false
+    P_solid_W: 2.8
+    P_mag_W: 0.9
+    P_shaft_W: 1.9
+    P_sleeve_W: null
+    solid_loss_not_solved: false
+    magnet_segmentation:
+      slice_mm: 0.0
+      stack_mm: 13.0
+      n_bodies: 7
+      factor: 1.0
+      width_mm: 7.0328
+      width_min_mm: 7.0306
+      width_max_mm: 7.0352
+      width_source: cad_polygon
+      model: solid magnet (magnet_lamination = 0) — 2-D loss unchanged
+    eddy_warmup_frames: 482
+    demag_prepass_frames: 120
+    eddy_settled: true
+    eddy_capped: false
+    eddy_settle_residual: 4.21e-05
+    eddy_settle_tol: 0.02
+    eddy_settled_via_accelerator: false
+    warm_seeded: true
+    demag_seeded: false
+    efficiency: 0.5887
+    P_elec_in_solved_W: 1650.8
+    P_mech_balance_W: 971.9
+    pwm_dc_residual_A: null
+    pwm_dc_residual_phase: null
+    pwm_dc_tol_A: 0.5
+    pwm_dc_unconverged: null
+    nonlinear_converged: true
+    nonlinear_resid_max: 9.27e-08
+    nonlinear_tol: 0.001
+    nonlinear_unconverged_frames: []
+    steps_snapped: false
+    n_steps_per_period: 120
+    n_steps_per_period_requested: 120
+    slip_nodes_per_period: 120
+    coil_temp_C: 200.0
+    end_winding_factor: 2.03
+    mass_total_kg: 0.367
+    mass_active_kg: 0.367
+    mass_area_source: CAD polygons
+    mass_components:
+    - name: Stator core (20SW1200)
+      material: electrical steel
+      density_kg_m3: 7650.0
+      volume_cm3: 16.5
+      mass_kg: 0.126
+      note: CAD section 1335 mm² × stack, lamination k_f=0.950
+    - name: Copper windings (Cu)
+      material: copper
+      density_kg_m3: 8933.0
+      volume_cm3: 12.0
+      mass_kg: 0.107
+      note: measured copper section 454 mm² × stack × k_end 2.027
+    - name: Magnets (F52SH_120C)
+      material: NdFeB
+      density_kg_m3: 7500.0
+      volume_cm3: 9.3
+      mass_kg: 0.07
+      note: CAD magnet polygons 713 mm² × stack
+    - name: Rotor back-iron (20SW1200)
+      material: electrical steel
+      density_kg_m3: 7650.0
+      volume_cm3: 8.4
+      mass_kg: 0.064
+      note: CAD section 681 mm² × stack, lamination k_f=0.950
+    - name: Shaft (Steel_42CrMo4_QT) — customer-supplied
+      material: shaft
+      density_kg_m3: 7850.0
+      volume_cm3: 3.9
+      mass_kg: 0.0
+      note: customer-supplied — modelled as Steel_42CrMo4_QT for the field, not included
+        in mass (0.030 kg modelled); hollow shaft tube 297 mm² × stack — NOT in active
+        mass
+      state: reference
+      counted: false
+      mass_modelled_kg: 0.03
+    part_states:
+      shaft: reference
+    rotor_inertia:
+      J_kg_m2: 0.00011066271074258431
+      J_kg_cm2: 1.107
+      rotor_iron: 5.527322533903912e-05
+      magnet: 5.5389485403545186e-05
+      shaft: 0.0
+      sleeve: 0.0
+      J_modelled:
+        rotor_iron: 5.527322533903912e-05
+        magnet: 5.5389485403545186e-05
+        shaft: 1.6883043345298404e-05
+        sleeve: 0.0
+      part_states:
+        shaft: reference
+      source: CAD polygons
+    sleeve_hoop: null
+    demag:
+      per_magnet_spread_pct: 0.01
+      bh_kept_vol_pct: 99.696
+      bh_loss_pct: 0.304
+      br_kept_vol_pct: 99.827
+      loss_pct: 0.173
+      area_derated_pct: 1.2
+      br_corner:
+        flag: corner
+        br_pct: 52.9
+        element: 1875
+        magnet_tag: 103
+        x_mm: 23.211
+        y_mm: 22.094
+        r_mm: 32.046
+        theta_deg: 43.59
+        element_area_pct: 0.0074
+        note: 'Worst single magnet element: a sharp-corner value that does not converge
+          with mesh refinement (docs/NO_FILTERS_2026-09-24.md §3). A corner diagnostic,
+          not the magnet''s figure; the magnet''s figure is the volume-weighted Br
+          kept.'
+      grade_nominal: 52.0
+      grade_effective: 51.8
+      magnet_name: F52SH_120C
+      energy_total_J: 2.83
+      energy_lost_J: 0.009
+    end3d:
+      k_flux: 0.9307007024777334
+      k_flux_self: 0.967636000466831
+      fidelity: quick (n_stack=4, 3-point L-sweep)
+      generated_utc: '2026-09-23T22:31:48Z'
+      machine: 24s/28p OD 85
+      k_flux_vs_L:
+        '9.75': 0.93137
+        '13.0': 0.9307
+        '19.5': 0.93174
+      note: 'CIANO28 85 20SW1200 / L13 ''peak'' as saved on the server 2026-09-16/15
+        (unchanged through the 2026-09-18 duty save): 24s/28p OD 85, stack 13 mm,
+        gap 0.3 mm, F52SH_120C / 20SW1200; stack sweep 9.75/13/19.5 mm — night run
+        2026-09-23/24, user: "3D coefficients are computed at night" — solve 1370 s'
+      T_corrected_Nm: 8.688
+      V_line_peak_corrected_V: 29.82
+    bench_ldq:
+      Ld_mH: 0.0841
+      Lq_mH: 0.0812
+      Lq_over_Ld: 0.966
+      psi_pm_mWb: 7.347
+      I_probe_arms: 2.0
+      daxis_deg: 60.012
+      connection: 4S
+      geo_fingerprint: f3b4728f381c5b31
+      method: small-signal probe at the I=0 iron state — bench/LCR equivalent; loaded
+        (chord) values differ under saturation
+      solve_time_s: 32.9
+    saturation:
+      T_linear_Nm: 10.013
+      droop_pct: 6.78
+      T_reluctance_Nm: -0.009
+    Km_Nm_sqrtW: 0.3595
+    Km_per_mass_Nm_sqrtW_kg: 0.9796
+    summary_shape_v: 18
+    torque_per_mass_Nm_kg: 25.435
+    power_per_mass_W_kg: 2663.5
+    loss_density_W_kg: 1860.7
+    coupling:
+      drive: sine
+      em:
+        T_em_avg_Nm: 9.335
+        T_ripple_pct: 6.3
+        P_stranded_W: 677.2
+        P_core_W: 2.8
+        P_solid_W: 2.8
+        P_mag_W: 0.9
+        P_shaft_W: 1.9
+        P_loss_total_W: 682.9
+        efficiency: 0.5887
+        THD_I_pct: 0.0
+        THD_LL_pct: 5.18
+        V_line_peak_V: 32.0
+        n_steps_per_period: 120
+      coil_temp_c: 200.0
+      magnet_temp_c: 45.2
+      time_to_limit:
+        within_limits: false
+        time_to_limit_s: 22.142
+        time_to_limit_words: 22 s
+        limiting_part: winding
+        time_to_limit_from_rated_s: null
+        limits_c:
+          winding: 200.0
+          magnet: 150.0
+          housing: 70.0
+        at_point_c:
+          winding: 417.2
+          magnet: 207.9
+          housing: 247.17
+        over_by_K:
+          winding: 217.2
+          magnet: 57.9
+          housing: 177.17
+        over_parts:
+        - winding
+        - magnet
+        - housing
+        judged:
+        - winding
+        - magnet
+        - housing
+        parts:
+        - part: winding
+          quantity: the winding hot spot
+          node: winding
+          limit_c: 200.0
+          limit_source: the project's insulation class (200 °C, class N per IEC 60085)
+            — ASSUMED, no card carries a rating; the hot spot is 17.20 K above the
+            winding node's mean, frozen at this map's own shape
+          at_point_c: 417.2
+          over_by_K: 217.2
+          offset_K: 17.2
+          reaches: true
+          time_to_limit_s: 22.142
+          note: the winding hot spot reaches 200 °C after 22 s
+          state_c:
+            winding: 182.8
+            stator: 124.12
+            rotor: 44.37
+            magnet: 42.66
+        - part: magnet
+          quantity: the hottest magnet element
+          node: magnet
+          limit_c: 150.0
+          limit_source: the F52SH_120C card's own maximum working temperature; the
+            hottest element is 2.50 K above the magnet node's mean, frozen at this
+            map's own shape
+          at_point_c: 207.9
+          over_by_K: 57.9
+          offset_K: 2.5
+          reaches: true
+          time_to_limit_s: 162.325
+          note: the hottest magnet element reaches 150 °C after 2 m 42 s
+          state_c:
+            winding: 544.56
+            stator: 410.93
+            rotor: 153.78
+            magnet: 147.5
+        - part: housing
+          quantity: the housing (heat_path) — touch temperature
+          node: stator
+          limit_c: 70.0
+          limit_source: fixed touch limit, IEC 60335 (70 °C); the housing is carried
+            as a constant -75.73 K from the stator node, fitted to this map
+          at_point_c: 247.17
+          over_by_K: 177.17
+          offset_K: -75.73
+          reaches: true
+          time_to_limit_s: 26.8
+          note: the housing (heat_path) — touch temperature reaches 70 °C after 27
+            s
+          state_c:
+            winding: 209.22
+            stator: 145.73
+            rotor: 46.28
+            magnet: 44.06
+        starts:
+          cold:
+            start: cold
+            start_state_c:
+              winding: 40.0
+              stator: 40.0
+              rotor: 40.0
+              magnet: 40.0
+            start_source: every node at the ambient / coolant inlet 40.0 °C — the
+              machine was switched on just now
+            time_to_limit_s: 22.142
+            state_at_limit_c:
+              winding: 182.8
+              stator: 124.12
+              rotor: 44.37
+              magnet: 42.66
+            time_to_limit_words: 22 s
+            limiting_part: winding
+            horizon_s: 900.0
+            settled: false
+            end_state_c:
+              winding: 544.56
+              stator: 410.93
+              rotor: 153.78
+              magnet: 147.5
+            parts:
+            - part: winding
+              quantity: the winding hot spot
+              node: winding
+              limit_c: 200.0
+              limit_source: the project's insulation class (200 °C, class N per IEC
+                60085) — ASSUMED, no card carries a rating; the hot spot is 17.20
+                K above the winding node's mean, frozen at this map's own shape
+              at_point_c: 417.2
+              over_by_K: 217.2
+              offset_K: 17.2
+              reaches: true
+              time_to_limit_s: 22.142
+              note: the winding hot spot reaches 200 °C after 22 s
+              state_c:
+                winding: 182.8
+                stator: 124.12
+                rotor: 44.37
+                magnet: 42.66
+            - part: magnet
+              quantity: the hottest magnet element
+              node: magnet
+              limit_c: 150.0
+              limit_source: the F52SH_120C card's own maximum working temperature;
+                the hottest element is 2.50 K above the magnet node's mean, frozen
+                at this map's own shape
+              at_point_c: 207.9
+              over_by_K: 57.9
+              offset_K: 2.5
+              reaches: true
+              time_to_limit_s: 162.325
+              note: the hottest magnet element reaches 150 °C after 2 m 42 s
+              state_c:
+                winding: 544.56
+                stator: 410.93
+                rotor: 153.78
+                magnet: 147.5
+            - part: housing
+              quantity: the housing (heat_path) — touch temperature
+              node: stator
+              limit_c: 70.0
+              limit_source: fixed touch limit, IEC 60335 (70 °C); the housing is carried
+                as a constant -75.73 K from the stator node, fitted to this map
+              at_point_c: 247.17
+              over_by_K: 177.17
+              offset_K: -75.73
+              reaches: true
+              time_to_limit_s: 26.8
+              note: the housing (heat_path) — touch temperature reaches 70 °C after
+                27 s
+              state_c:
+                winding: 209.22
+                stator: 145.73
+                rotor: 46.28
+                magnet: 44.06
+          rated:
+            start: rated
+            start_state_c:
+              winding: 307.8
+              stator: 276.2
+              rotor: 243.0
+              magnet: 242.9
+            start_source: the rated duty 'rated''s own coupled run — the node means
+              of the map it converged on
+            time_to_limit_s: null
+            time_to_limit_words: null
+            limiting_part: null
+            horizon_s: 21600.0
+            settled: false
+            end_state_c:
+              winding: 400.0
+              stator: 303.35
+              rotor: 237.8
+              magnet: 237.26
+            parts:
+            - part: winding
+              quantity: the winding hot spot
+              node: winding
+              limit_c: 200.0
+              limit_source: the project's insulation class (200 °C, class N per IEC
+                60085) — ASSUMED, no card carries a rating; the hot spot is 17.20
+                K above the winding node's mean, frozen at this map's own shape
+              at_point_c: 417.2
+              over_by_K: 217.2
+              offset_K: 17.2
+              reaches: false
+              time_to_limit_s: null
+              asymptote_c: null
+              note: 'the winding hot spot never reaches 200 °C in this model: the
+                step response is still at 417.2 °C after 360 m 00 s and had not settled,
+                so the map is over the limit for a reason these four nodes do not
+                represent and NO time is quoted'
+            - part: magnet
+              quantity: the hottest magnet element
+              node: magnet
+              limit_c: 150.0
+              limit_source: the F52SH_120C card's own maximum working temperature;
+                the hottest element is 2.50 K above the magnet node's mean, frozen
+                at this map's own shape
+              at_point_c: 207.9
+              over_by_K: 57.9
+              offset_K: 2.5
+              reaches: false
+              time_to_limit_s: null
+              asymptote_c: null
+              note: 'the hottest magnet element never reaches 150 °C in this model:
+                the step response is still at 239.8 °C after 360 m 00 s and had not
+                settled, so the map is over the limit for a reason these four nodes
+                do not represent and NO time is quoted'
+            - part: housing
+              quantity: the housing (heat_path) — touch temperature
+              node: stator
+              limit_c: 70.0
+              limit_source: fixed touch limit, IEC 60335 (70 °C); the housing is carried
+                as a constant -75.73 K from the stator node, fitted to this map
+              at_point_c: 247.17
+              over_by_K: 177.17
+              offset_K: -75.73
+              reaches: false
+              time_to_limit_s: null
+              asymptote_c: null
+              note: 'the housing (heat_path) — touch temperature never reaches 70
+                °C in this model: the step response is still at 227.6 °C after 360
+                m 00 s and had not settled, so the map is over the limit for a reason
+                these four nodes do not represent and NO time is quoted'
+        network:
+          available: true
+          residual_W:
+            winding: 311.7681
+            stator: 0.0048
+            rotor: 10.1975
+            magnet: -10.1925
+          worst_residual_W: 311.7681
+          worst_residual_pct_of_losses: 31.345
+          link_kinds:
+            w_s: calibrated
+            r_s: calibrated
+            m_r: physical
+          hot_spot_offset_K: 17.2
+          coil_ref_c: 200.0
+          map_winding_mean_c: 400.0
+          map_means_c:
+            winding: 400.0
+            stator: 322.9
+            rotor: 205.5
+            magnet: 205.4
+          coil_ref_drift_K: 200.0
+          note: 'at the map''s own temperatures the network is out of balance by at
+            most 311.77 W (31.34 % of the 994.6 W this point makes); the calibrated
+            links are exact by construction, so this is the cost of the links the
+            map could not fit and of the end-face films — and mostly of an UNFINISHED
+            loop: the watts are billed at 200.0 °C while the map came back at 400.0
+            °C, so ρ_Cu(T) re-scales the copper by 1.46×'
+        model: a four-node lumped network (winding, stator, rotor, magnet) fitted
+          to THIS run's own converged thermal map, switched on at the start state
+          and integrated at this operating point; only the copper loss moves with
+          temperature, each part is judged on its node plus the map's own constant
+          offset, and the limit is the first crossing
+        calibration_duty: peak
+        note: over the winding limit by 217 K — reaches 200 °C after 22 s from cold
+        reported_state: limited
+        solve_to: limits
+      solve_to: limits
+      mode: limited
+      limited:
+        part: winding
+        quantity: the winding hot spot
+        limit_c: 200.0
+        limit_source: the project's insulation class (200 °C, class N per IEC 60085)
+          — ASSUMED, no card carries a rating; the hot spot is 17.20 K above the winding
+          node's mean, frozen at this map's own shape
+        t_cold_s: 22.142
+        t_cold_words: 22 s
+        t_rated_s: null
+        t_rated_words: null
+        temperatures_at_limit:
+          winding: 182.8
+          stator: 124.12
+          rotor: 44.37
+          magnet: 42.66
+        at_limit_c:
+          winding: 200.0
+          magnet: 45.16
+          housing: 48.39
+        steady_state_would_be:
+          winding: 417.2
+          magnet: 207.9
+          housing: 247.17
+        steady_state_converged: false
+        steady_state_runaway: false
+        calibration_passes: 1
+        cooling:
+          cooling_mode: robotics
+          ambient_temp: 40.0
+          bore_mode: still
+          emissivity: 0.9
+          end_faces: still
+          end_face_sides: 2
+          heat_path: housing
+        cooling_words: 'robotics: still air + radiation (ε = 0.9) at 40 °C, end faces
+          still, stator → housing (touch 70 °C), still air down the bore'
+        em_pass_at:
+          coil_c: 200.0
+          magnet_c: 45.2
+          coil_basis: the winding limit
+          magnet_basis: the hottest magnet element at that instant
+          rule: the electromagnetic pass of a limited state uses, for each part, the
+            temperature the LIMIT is judged on (hot spot / hottest element), the limiting
+            part exactly at its limit
+        bearing_seat_at_limit_c: 41.17
+        line: Runs 22 s from cold at this power and cooling, then the winding reaches
+          200 °C — the numbers below are the machine at that moment
+        note: 'Runs 22 s from cold at this power and cooling, then the winding reaches
+          200 °C — the numbers below are the machine at that moment. Every number
+          in this record is the machine at that moment: the electromagnetic run was
+          made once more with each part at the temperature its limit is judged on
+          — the winding at 200.0 °C (the winding limit), the magnets at 45.2 °C (the
+          hottest magnet element at that instant) — and the thermal map is the last
+          solved map translated onto the node temperatures of that instant (its shape
+          frozen, as the time-to-limit model states). Cooling: robotics: still air
+          + radiation (ε = 0.9) at 40 °C, end faces still, stator → housing (touch
+          70 °C), still air down the bore.'
+        drive_held: sine
+        em_run: true
+      constants_20c:
+        coil_temp_c: 20.0
+        magnet_temp_c: 20.0
+        point:
+          rpm: 1000.0
+          I_phase_rms: 45.962
+          gamma_deg: 2.0
+          drive: current
+          star_delta: star
+        k_3d: 0.9307007024777334
+        two_d:
+          psi_pm_Wb: 0.00833444
+          Kt_Nm_per_Arms: 0.2068
+          Kt_Nm_per_A_line: 0.2068
+          Km_Nm_sqrtW: 0.4783
+          Km_per_mass_Nm_sqrtW_kg: 1.3033
+          T_em_avg_Nm: 9.504
+          KV_noload_rpm_per_V_line: 47.249647
+          KV_rpm_per_V_line: 36.29
+          Ld_mH: 0.1336
+          Lq_mH: 0.133
+          Ld_eq_star_mH: 0.1336
+          Lq_eq_star_mH: 0.133
+          saliency_Lq_over_Ld: 0.995
+          R_phase_ohm: 0.062303
+          R_phase_eq_star_ohm: 0.062303
+          mass_total_kg: 0.367
+          star_delta: star
+          connection: 4S
+          I_phase_rms_A: 45.96
+        k3d:
+          psi_pm_Wb: 0.007757
+          Kt_Nm_per_Arms: 0.192469
+          Kt_Nm_per_A_line: 0.192469
+          Km_Nm_sqrtW: 0.445154
+          Km_per_mass_Nm_sqrtW_kg: 1.212982
+          T_em_avg_Nm: 8.845379
+          KV_noload_rpm_per_V_line: 50.767821
+          KV_rpm_per_V_line: 38.992127
+        kv_note: walked to 20 °C — Br walked linearly from the card's 120 °C to 20
+          °C at -0.1344 %/K
+        kv_walked: true
+        magnet_grade: F52SH_120C
+        kt_line_Nm_per_A: 0.192469
+        kv_line_rpm_per_V: 50.767821
+        km_Nm_sqrtW: 0.445154
+        km_per_mass_Nm_sqrtW_kg: 1.212982
+        R_phase_20_ohm: 0.062303
+        mass_kg: 0.367
+        computed_at: '2026-09-29T00:03:48'
+        note: solved with the winding and the magnets at 20 °C at this duty's operating
+          point — the datasheet convention every motor catalogue uses, for comparison
+          between machines. The hot values elsewhere in this document are the same
+          constants at this duty's own temperatures. Kt, Km and Km/mass carry k_3d
+          = 0.9307; KV is ÷ k_3d.
+        Ld0_mH: 0.1435
+        Lq0_mH: 0.1438
+        Ldq0_mH: -0.0
+        saliency0_Lq_over_Ld: 1.002
+        ldq0_method: frozen-permeability incremental at i=0, 20 °C
+        ldq0_spread_pct:
+          Ld: 0.0
+          Lq: 0.01
+        ldq0_reciprocity_pct: 0.0
+      magnet_temp_max_c: 45.16
+      iterations: 2
+      em_runs: 2
+      converged: false
+      runaway: false
+      tol_K: 2.0
+      damping: 1.0
+      damping_final: 1.0
+      max_iter: 6
+      residual_coil_K: null
+      residual_magnet_K: null
+      residual_bearing_K: null
+      tol_bearing_K: 5.0
+      history:
+      - iter: 1
+        T_coil_in: 200.0
+        T_magnet_in: 45.5
+        T_coil_out: 400.0
+        T_magnet_out: 205.4
+        T_magnet_max: 207.9
+        P_loss_W: 682.9
+        T_em_Nm: 9.332
+        bearing_temp_c: null
+        bearing_temp_source: null
+        P_mech_extra_W: null
+        T_bearing_out: 202.3
+      - iter: 2
+        phase: limit
+        T_coil_in: 200.0
+        T_magnet_in: 45.2
+        T_coil_out: null
+        T_magnet_out: null
+        T_magnet_max: 45.16
+        P_loss_W: 682.9
+        T_em_Nm: 9.335
+        bearing_temp_c: null
+        bearing_temp_source: null
+        P_mech_extra_W: null
+      em_passes:
+      - phase: final
+        registered: true
+        run_id: '2026-09-28T23:40:41'
+        point:
+          I_phase_rms: 45.96
+          gamma_deg: 2.0
+          rpm: 1000.0
+          coil_temp_c: 200.0
+          magnet_temp_c: 45.5
+          n_steps_per_period: 120
+          n_periods: 1.0
+          drive: current
+          excitation: ''
+      - phase: limit
+        registered: true
+        run_id: '2026-09-28T23:52:45'
+        point:
+          I_phase_rms: 45.96
+          gamma_deg: 2.0
+          rpm: 1000.0
+          coil_temp_c: 200.0
+          magnet_temp_c: 45.2
+          n_steps_per_period: 120
+          n_periods: 1.0
+          drive: current
+          excitation: ''
+      mechanical:
+        ok: true
+        temps_c:
+          rotor_core: 41.8
+          magnet: 43.2
+          shaft: 41.2
+        rpm: 1000.0
+        case: 1,000 rpm
+        sf_min: 27.544638867840938
+        sf_min_part: rotor
+        sf_min_p05: 85.3782314336459
+        rotor_od_growth_um: 0.15896384222898224
+        od_growth:
+          max_um: 0.15896384222898224
+          mean_um: 0.09895366878824699
+          min_um: 0.04917759563625717
+          r_mm: 32.398167845392095
+          part: rotor
+          n_nodes: 532
+        air_gap:
+          clearance_um: 297.55519674213446
+          closed_um: 0.15896384222898224
+          remaining_um: 297.39623289990544
+          closed_pct: 0.05342331237008863
+          bore_r_mm: 32.697555196742144
+          rotor_r_mm: 32.40000000000001
+        interference_effective_mm: 0.0
+        elapsed_s: 44.921
+        torque_nm: 8.688
+        note: solved at the operating 1,000 rpm of this run (the Mechanical tab's
+          proof rpm box says 36,551 rpm)
+        temps_note: 'no retaining band: the rotor''s temperature is not a mechanical
+          load here — it only changes a band''s fit pressure — so the parts are solved
+          as drawn; the map (rotor_core 42 °C, magnet 43 °C, shaft 41 °C) is carried
+          for the record'
+        torque_note: 2-D mean 9.335 N·m × 3-D end-effect 0.9307
+        modes:
+          ok: true
+          body: rotor
+          support: free
+          n_modes: 12
+          rpm: 1000.0
+          f_switch_hz: 48000.0
+          f1_hz: 7630.1
+          f1_order: 2
+          n_flagged: 2
+          cached: false
+          elapsed_s: 7.995
+          tightest:
+            f_hz: 51047.9
+            order: 5
+            excitation: PWM carrier
+            excitation_hz: 48000.0
+            margin_pct: 6.3
+            flag: true
+        critical_speeds:
+          ok: true
+          rated_rpm: 1000.0
+          campbell:
+            rpm:
+            - 0.0
+            - 75.0
+            - 150.0
+            - 225.0
+            - 300.0
+            - 375.0
+            - 450.0
+            - 525.0
+            - 600.0
+            - 675.0
+            - 750.0
+            - 825.0
+            - 900.0
+            - 975.0
+            - 1050.0
+            - 1125.0
+            - 1200.0
+            - 1275.0
+            - 1350.0
+            - 1425.0
+            - 1500.0
+            - 1575.0
+            - 1650.0
+            - 1725.0
+            - 1800.0
+            - 1875.0
+            - 1950.0
+            - 2025.0
+            - 2100.0
+            - 2175.0
+            - 2250.0
+            - 2325.0
+            - 2400.0
+            - 2475.0
+            - 2550.0
+            - 2625.0
+            - 2700.0
+            - 2775.0
+            - 2850.0
+            - 2925.0
+            - 3000.0
+            forward:
+            - - 1487.1335512490368
+              - 4509.478609044844
+              - 5527.415166392037
+            - - 1487.1610545893805
+              - 4509.5411386253245
+              - 5527.495506338272
+            - - 1487.1885575093193
+              - 4509.60366423194
+              - 5527.5758427604005
+            - - 1487.2160600071659
+              - 4509.666185864209
+              - 5527.6561756568035
+            - - 1487.2435620834153
+              - 4509.728703523256
+              - 5527.736505027852
+            - - 1487.2710637384312
+              - 4509.791217208305
+              - 5527.816830873115
+            - - 1487.2985649708282
+              - 4509.853726919877
+              - 5527.897153192222
+            - - 1487.3260657826393
+              - 4509.916232657754
+              - 5527.977471985765
+            - - 1487.3535661723831
+              - 4509.978734423011
+              - 5528.057787252446
+            - - 1487.381066140131
+              - 4510.041232214526
+              - 5528.138098993398
+            - - 1487.4085656862444
+              - 4510.103726033708
+              - 5528.218407207635
+            - - 1487.4360648100628
+              - 4510.166215879886
+              - 5528.29871189511
+            - - 1487.4635635125808
+              - 4510.228701753417
+              - 5528.379013055416
+            - - 1487.4910617930116
+              - 4510.291183654132
+              - 5528.459310688669
+            - - 1487.5185596501594
+              - 4510.353661582474
+              - 5528.539604795277
+            - - 1487.5460570863506
+              - 4510.41613553929
+              - 5528.619895373537
+            - - 1487.5735540997794
+              - 4510.478605523236
+              - 5528.700182424934
+            - - 1487.6010506905257
+              - 4510.541071535536
+              - 5528.780465947779
+            - - 1487.6285468584824
+              - 4510.603533576176
+              - 5528.860745943143
+            - - 1487.6560426051449
+              - 4510.665991644894
+              - 5528.941022409748
+            - - 1487.6835379292406
+              - 4510.7284457423775
+              - 5529.021295349015
+            - - 1487.7110328307226
+              - 4510.790895868299
+              - 5529.101564759316
+            - - 1487.7385273095372
+              - 4510.85334202316
+              - 5529.181830640853
+            - - 1487.766021365181
+              - 4510.915784207002
+              - 5529.262092993619
+            - - 1487.793514998998
+              - 4510.9782224197415
+              - 5529.342351817738
+            - - 1487.8210082094954
+              - 4511.040656661734
+              - 5529.42260711205
+            - - 1487.84850099753
+              - 4511.103086933077
+              - 5529.502858877492
+            - - 1487.8759933619144
+              - 4511.165513233981
+              - 5529.583107113069
+            - - 1487.9034853041967
+              - 4511.227935564248
+              - 5529.6633518191675
+            - - 1487.930976822601
+              - 4511.290353924725
+              - 5529.743592995413
+            - - 1487.9584679193435
+              - 4511.35276831493
+              - 5529.823830641639
+            - - 1487.9859585912313
+              - 4511.415178735218
+              - 5529.90406475715
+            - - 1488.01344884083
+              - 4511.477585185923
+              - 5529.984295342923
+            - - 1488.0409386675
+              - 4511.53998766682
+              - 5530.064522397825
+            - - 1488.0684280707153
+              - 4511.602386178015
+              - 5530.144745921593
+            - - 1488.0959170504195
+              - 4511.664780720341
+              - 5530.224965914988
+            - - 1488.1234056060177
+              - 4511.727171293622
+              - 5530.305182377476
+            - - 1488.1508937393262
+              - 4511.789557897278
+              - 5530.385395308012
+            - - 1488.1783814489074
+              - 4511.851940532258
+              - 5530.465604707526
+            - - 1488.2058687339743
+              - 4511.914319198598
+              - 5530.545810575377
+            - - 1488.2333555960356
+              - 4511.976693895842
+              - 5530.62601291116
+            backward:
+            - - 1487.1335512481087
+              - 4509.4786090442185
+              - 5527.415166391704
+            - - 1487.1060474862725
+              - 4509.416075489832
+              - 5527.334822919255
+            - - 1487.0785433032397
+              - 4509.353537960689
+              - 5527.254475922693
+            - - 1487.0510386983299
+              - 4509.290996456636
+              - 5527.174125401324
+            - - 1487.0235336721737
+              - 4509.228450978404
+              - 5527.093771355282
+            - - 1486.9960282253392
+              - 4509.1659015251
+              - 5527.013413785029
+            - - 1486.9685223563915
+              - 4509.103348096856
+              - 5526.933052690511
+            - - 1486.941016067664
+              - 4509.0407906932805
+              - 5526.852688072477
+            - - 1486.913509357488
+              - 4508.978229315024
+              - 5526.772319929923
+            - - 1486.8860022263718
+              - 4508.915663960662
+              - 5526.691948264534
+            - - 1486.858494674664
+              - 4508.853094631477
+              - 5526.611573075428
+            - - 1486.8309867018954
+              - 4508.790521326318
+              - 5526.531194363205
+            - - 1486.8034783090088
+              - 4508.727944045351
+              - 5526.450812127678
+            - - 1486.7759694955294
+              - 4508.665362788149
+              - 5526.370426369383
+            - - 1486.7484602603286
+              - 4508.602777555029
+              - 5526.290037088948
+            - - 1486.720950605726
+              - 4508.5401883460545
+              - 5526.209644285088
+            - - 1486.6934405302159
+              - 4508.477595160084
+              - 5526.129247959583
+            - - 1486.6659300337528
+              - 4508.414997997814
+              - 5526.048848111338
+            - - 1486.638419116632
+              - 4508.352396859078
+              - 5525.968444741393
+            - - 1486.610907780351
+              - 4508.289791743156
+              - 5525.888037849104
+            - - 1486.5833960234872
+              - 4508.22718265057
+              - 5525.8076274361
+            - - 1486.5558838465738
+              - 4508.164569580645
+              - 5525.727213501099
+            - - 1486.5283712494825
+              - 4508.101952533586
+              - 5525.64679604493
+            - - 1486.5008582317569
+              - 4508.039331509276
+              - 5525.566375067581
+            - - 1486.473344795038
+              - 4507.976706507265
+              - 5525.485950569718
+            - - 1486.445830937616
+              - 4507.914077527567
+              - 5525.405522550338
+            - - 1486.4183166607395
+              - 4507.85144456998
+              - 5525.325091010959
+            - - 1486.3908019632481
+              - 4507.7888076345735
+              - 5525.244655950995
+            - - 1486.363286846831
+              - 4507.726166720797
+              - 5525.164217370806
+            - - 1486.3357713098105
+              - 4507.663521829129
+              - 5525.083775270898
+            - - 1486.3082553544907
+              - 4507.600872958955
+              - 5525.003329650852
+            - - 1486.2807389780378
+              - 4507.538220110058
+              - 5524.922880510843
+            - - 1486.2532221828262
+              - 4507.4755632828055
+              - 5524.842427851815
+            - - 1486.2257049684304
+              - 4507.4129024764825
+              - 5524.761971673224
+            - - 1486.198187334387
+              - 4507.350237691048
+              - 5524.68151197527
+            - - 1486.170669280957
+              - 4507.287568926889
+              - 5524.601048758573
+            - - 1486.143150807466
+              - 4507.2248961836995
+              - 5524.520582023651
+            - - 1486.115631915919
+              - 4507.1622194605825
+              - 5524.440111769294
+            - - 1486.0881126049076
+              - 4507.099538758068
+              - 5524.35963799682
+            - - 1486.0605928739708
+              - 4507.036854076052
+              - 5524.279160705956
+            - - 1486.0330727246558
+              - 4506.974165413714
+              - 5524.198679896984
+            n_points: 41
+          rpm_plot_max: 1300.0
+          f_switch_hz: 48000.0
+          first_forward_rpm: null
+          first_forward_margin_pct: null
+          n_forward_below_rated: 0
+          n_criticals: 0
+          verdict: no forward critical found in the search range
+          bearing_span_mm: 250.0
+          bearing_k_n_per_m: 200000000.0
+          cached: false
+          elapsed_s: 1.293
+      note: null
+      warning_code: limited_operation
+      warning: Runs 22 s from cold at this power and cooling, then the winding reaches
+        200 °C — the numbers below are the machine at that moment
+  materials:
+    magnet: F52SH_120C
+  duty_cycle:
+    kind: S3
+    ed_pct: 25.0
+    cycle_s: 60.0
+    duty: peak
+    rest_duty: rated
+    calibration_duty: rated
+    n_cycles_max: 200
+    saved_at: '2026-09-27T20:11:34'
+  runs:
+    current:
+      recorded_at: '2026-09-29T00:05:45'
+      build_sig: 06f5f49db6be
+      assignment_sig: air_gap=air|in_band=air|magnet=F52SH_120C|out_band=air|rotor_core=20SW1200|shaft=Steel_42CrMo4_QT|sleeve=M40X_UD_60|slot=copper|slot_insulation=Nomex|stator_core=20SW1200|wire_insulation=polyimide
+      settings:
+        sim.frequency: 233.33
+        sim.drive: current
+        sim.iBlock: 48.93
+        sim.apply3d: 1
+        sim.eddyCoupled: true
+        sim.opMode: motor
+        sim.endWinding: 2.027
+        sim.targetKind: 'off'
+        mesh.componentMesh: {}
+        mesh.rotorAngle: 0
+        sim.kvNoload: 1
+        sim.connection: 4S
+        sim.vDelta: 0
+        sim.excOnlyA: 0
+        sim.lastSolveCost:
+          frames: 83
+          wall_s: 218.1
+          warm: 43
+          at: 1788452582862
+        mesh.geoMesh: true
+        sim.daxisDeg: ''
+        sim.gamma: 2.0
+        sim.steps: 12
+        sim.current: 45.962
+        sim.waveform: ''
+        mesh.normalDev: 6
+        mesh.structuredGap: true
+        sim.fSwGroup: 2
+        sim.stepsPP: 120
+        sim.rpm: 1000.0
+        mesh.poleCopy: false
+        sim.busCouple: true
+        sim.vPeak: 30
+        mesh.outerAir: 1.2
+        mesh.gapLayers: 1
+        mesh.meshSize: 1.22
+        mesh.slidingBand: false
+        mesh.motionBand: true
+        mesh.aspect: 10
+        sim.fSwCustom: false
+        sim.demag: true
+        sim.coilTemp: 200.0
+        mesh.ironTemplate: true
+        sim.dcLinkCableUH: ''
+        sim.dcLinkCapUF: ''
+        sim.targetValue: 850
+        sim.fSwitch: 48000
+        sim.torqueFilter: false
+        mesh.bandThickness: 0.4
+        mesh.minSize: 0.3
+        mesh.nSectors: 4
+        sim.r25: 1
+        sim.endWindingGeo: 2.027
+        sim.magnetTempC: '45.2'
+        sim.coupled: true
+        sim.coupledAdopted: 200.0|45.2|2|2026-09-28T23:52:45
+      summary:
+        rpm: 1000.0
+        I_phase_rms_A: 45.96
+        I_terminal_rms_A: 45.96
+        I_winding_rms_A: 45.96
+        gamma_deg: 2.0
+        connection: 4S
+        n_parallel: 1
+        wire_parallel: 1
+        turns_per_coil: 18
+        n_parallel_eff: 1
+        op_mode: motor
+        op_mode_requested: motor
+        drive: current
+        R_phase_ohm: 0.106376
+        R_line_line_ohm: 0.212752
+        R_phase_eq_star_ohm: 0.106376
+        Ld_eq_star_mH: 0.1355
+        Lq_eq_star_mH: 0.1339
+        Ld_mH: 0.1355
+        Lq_mH: 0.1339
+        Ld_inc_mH: 0.1355
+        Lq_inc_mH: 0.1339
+        Ldq_inc_mH: -0.0086
+        ldq_method: frozen-permeability incremental at the point
+        Ld_chord_mH: null
+        Lq_chord_mH: 0.0794
+        psi_pm_sag_pct: -2.07
+        psi_pm_frozen_Wb: 0.007499
+        psi_pm_q_frozen_Wb: -0.003528
+        inc_ldq:
+          Ld_mH: 0.135508
+          Lq_mH: 0.133889
+          Ldq_mH: -0.008555
+          saliency_Lq_over_Ld: 0.9881
+          psi_d_pm_frozen_Wb: 0.00749921
+          psi_q_pm_frozen_Wb: -0.0035282
+          i_d_A: -2.268
+          i_q_A: 64.96
+          samples: 4
+          rotor_positions:
+          - 0
+          - 30
+          - 60
+          - 90
+          spread_pct:
+            Ld: 0.8
+            Lq: 0.89
+          reciprocity_pct: 0.0
+          superposition_pct: 0.578
+          method: 'frozen-permeability incremental: the per-element ν of the converged
+            loaded field is held fixed and a unit d- and q-axis current solved on
+            it (dψ/di, exact for a linear operator). Magnetostatic — on a coupled-eddy
+            run the field''s own ψ/i also carries the AC redistribution, which is
+            impedance and not inductance.'
+        psi_pm_Wb: 0.007347
+        saliency_Lq_over_Ld: 0.988
+        dq_note: i_d is only 3.5% of the current at γ = 2.0° — (ψd − ψ_PM)/i_d would
+          be dominated by cross-saturation of the loaded iron, not by inductance;
+          set γ ≥ ~6° and re-run to measure Ld honestly
+        psi_pm_probe_skipped: false
+        T_em_avg_Nm: 9.335
+        T_ripple_pct: 6.3
+        T_ripple_raw_pct: 6.3
+        T_ripple_filt_pct: 6.3
+        T_ripple_pp_Nm: 0.5909963102403477
+        T_ripple_raw_pp_Nm: 0.5909963102403477
+        T_ripple_pct_available: true
+        T_ripple_pct_reason: null
+        T_noise_floor_pct: null
+        torque_filter_applied: false
+        P_mech_W: 977.5
+        V_phase_peak_V: 22.2
+        V_phase_rms_V: 13.4
+        V_line_peak_V: 32.0
+        V_line_rms_V: 22.6
+        star_delta: star
+        strand_bonding: transposed
+        V_line_peak_solved_V: 32.0
+        V_line_rms_solved_V: 22.6
+        I_line_rms_A: 46.0
+        L0_mH: null
+        P_cu_circulating_W: 0.0
+        circulating_harmonics: []
+        KV_rpm_per_V_phase: 45.08
+        KV_rpm_per_V_line: 31.21
+        KV_noload_rpm_per_V_line: 53.6
+        V1_LL_V: 31.89
+        V1_phase_V: 18.41
+        THD_pct: 23.4
+        THD_LL_pct: 5.18
+        I1_A: 65.0
+        THD_I_pct: 0.0
+        V1_seed_peak_V: 18.4106
+        V1_seed_delta_deg: 25.076
+        Kt_Nm_per_Arms: 0.2031
+        Kt_Nm_per_A_line: 0.2031
+        J_coil_A_per_mm2: 43.8
+        A_phase_mm2: 1.05
+        slot_fill_pct: 57.5
+        A_slot_mm2: 789.1
+        A_copper_slotted_mm2: 453.6
+        P_loss_total_W: 682.9
+        B_gap_mean_T: 1.1713
+        P_core_W: 2.8
+        P_core_terms:
+          stator:
+            hysteresis_W: 1.591
+            eddy_W: 0.383
+            excess_W: 0.582
+            k_f: 0.95
+            model: bertotti
+            window_closed: true
+          rotor:
+            hysteresis_W: 0.146
+            eddy_W: 0.056
+            excess_W: 0.077
+            k_f: 0.95
+            model: bertotti
+            window_closed: true
+            window_electrical_periods: 7.0
+            window_method: pole_pair_image_mapping
+        P_core_stator_W: 2.6
+        P_core_rotor_W: 0.3
+        P_loss_stator_W: 679.8
+        P_loss_rotor_W: 3.1
+        P_loss_split_measured: true
+        P_stranded_W: 677.2
+        wire_split: 1
+        cu_ac_solved_ignores_wire_split: false
+        P_solid_W: 2.8
+        P_mag_W: 0.9
+        P_shaft_W: 1.9
+        P_sleeve_W: null
+        solid_loss_not_solved: false
+        magnet_segmentation:
+          slice_mm: 0.0
+          stack_mm: 13.0
+          n_bodies: 7
+          factor: 1.0
+          width_mm: 7.0328
+          width_min_mm: 7.0306
+          width_max_mm: 7.0352
+          width_source: cad_polygon
+          model: solid magnet (magnet_lamination = 0) — 2-D loss unchanged
+        eddy_warmup_frames: 482
+        demag_prepass_frames: 120
+        eddy_settled: true
+        eddy_capped: false
+        eddy_settle_residual: 4.21e-05
+        eddy_settle_tol: 0.02
+        eddy_settled_via_accelerator: false
+        warm_seeded: true
+        demag_seeded: false
+        efficiency: 0.5887
+        P_elec_in_solved_W: 1650.8
+        P_mech_balance_W: 971.9
+        pwm_dc_residual_A: null
+        pwm_dc_residual_phase: null
+        pwm_dc_tol_A: 0.5
+        pwm_dc_unconverged: null
+        nonlinear_converged: true
+        nonlinear_resid_max: 9.27e-08
+        nonlinear_tol: 0.001
+        nonlinear_unconverged_frames: []
+        steps_snapped: false
+        n_steps_per_period: 120
+        n_steps_per_period_requested: 120
+        slip_nodes_per_period: 120
+        coil_temp_C: 200.0
+        end_winding_factor: 2.03
+        mass_total_kg: 0.367
+        mass_active_kg: 0.367
+        mass_area_source: CAD polygons
+        mass_components:
+        - name: Stator core (20SW1200)
+          material: electrical steel
+          density_kg_m3: 7650.0
+          volume_cm3: 16.5
+          mass_kg: 0.126
+          note: CAD section 1335 mm² × stack, lamination k_f=0.950
+        - name: Copper windings (Cu)
+          material: copper
+          density_kg_m3: 8933.0
+          volume_cm3: 12.0
+          mass_kg: 0.107
+          note: measured copper section 454 mm² × stack × k_end 2.027
+        - name: Magnets (F52SH_120C)
+          material: NdFeB
+          density_kg_m3: 7500.0
+          volume_cm3: 9.3
+          mass_kg: 0.07
+          note: CAD magnet polygons 713 mm² × stack
+        - name: Rotor back-iron (20SW1200)
+          material: electrical steel
+          density_kg_m3: 7650.0
+          volume_cm3: 8.4
+          mass_kg: 0.064
+          note: CAD section 681 mm² × stack, lamination k_f=0.950
+        - name: Shaft (Steel_42CrMo4_QT) — customer-supplied
+          material: shaft
+          density_kg_m3: 7850.0
+          volume_cm3: 3.9
+          mass_kg: 0.0
+          note: customer-supplied — modelled as Steel_42CrMo4_QT for the field, not
+            included in mass (0.030 kg modelled); hollow shaft tube 297 mm² × stack
+            — NOT in active mass
+          state: reference
+          counted: false
+          mass_modelled_kg: 0.03
+        part_states:
+          shaft: reference
+        rotor_inertia:
+          J_kg_m2: 0.00011066271074258431
+          J_kg_cm2: 1.107
+          rotor_iron: 5.527322533903912e-05
+          magnet: 5.5389485403545186e-05
+          shaft: 0.0
+          sleeve: 0.0
+          J_modelled:
+            rotor_iron: 5.527322533903912e-05
+            magnet: 5.5389485403545186e-05
+            shaft: 1.6883043345298404e-05
+            sleeve: 0.0
+          part_states:
+            shaft: reference
+          source: CAD polygons
+        sleeve_hoop: null
+        demag:
+          per_magnet_spread_pct: 0.01
+          bh_kept_vol_pct: 99.696
+          bh_loss_pct: 0.304
+          br_kept_vol_pct: 99.827
+          loss_pct: 0.173
+          area_derated_pct: 1.2
+          br_corner:
+            flag: corner
+            br_pct: 52.9
+            element: 1875
+            magnet_tag: 103
+            x_mm: 23.211
+            y_mm: 22.094
+            r_mm: 32.046
+            theta_deg: 43.59
+            element_area_pct: 0.0074
+            note: 'Worst single magnet element: a sharp-corner value that does not
+              converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md §3). A
+              corner diagnostic, not the magnet''s figure; the magnet''s figure is
+              the volume-weighted Br kept.'
+          grade_nominal: 52.0
+          grade_effective: 51.8
+          magnet_name: F52SH_120C
+          energy_total_J: 2.83
+          energy_lost_J: 0.009
+        end3d:
+          k_flux: 0.9307007024777334
+          k_flux_self: 0.967636000466831
+          fidelity: quick (n_stack=4, 3-point L-sweep)
+          generated_utc: '2026-09-23T22:31:48Z'
+          machine: 24s/28p OD 85
+          k_flux_vs_L:
+            '9.75': 0.93137
+            '13.0': 0.9307
+            '19.5': 0.93174
+          note: 'CIANO28 85 20SW1200 / L13 ''peak'' as saved on the server 2026-09-16/15
+            (unchanged through the 2026-09-18 duty save): 24s/28p OD 85, stack 13
+            mm, gap 0.3 mm, F52SH_120C / 20SW1200; stack sweep 9.75/13/19.5 mm — night
+            run 2026-09-23/24, user: "3D coefficients are computed at night" — solve 1370
+            s'
+          T_corrected_Nm: 8.688
+          V_line_peak_corrected_V: 29.82
+        bench_ldq:
+          Ld_mH: 0.0841
+          Lq_mH: 0.0812
+          Lq_over_Ld: 0.966
+          psi_pm_mWb: 7.347
+          I_probe_arms: 2.0
+          daxis_deg: 60.012
+          connection: 4S
+          geo_fingerprint: f3b4728f381c5b31
+          method: small-signal probe at the I=0 iron state — bench/LCR equivalent;
+            loaded (chord) values differ under saturation
+          solve_time_s: 32.9
+        saturation:
+          T_linear_Nm: 10.013
+          droop_pct: 6.78
+          T_reluctance_Nm: -0.009
+        Km_Nm_sqrtW: 0.3595
+        Km_per_mass_Nm_sqrtW_kg: 0.9796
+        summary_shape_v: 18
+        torque_per_mass_Nm_kg: 25.435
+        power_per_mass_W_kg: 2663.5
+        loss_density_W_kg: 1860.7
+        coupling:
+          drive: sine
+          em:
+            T_em_avg_Nm: 9.335
+            T_ripple_pct: 6.3
+            P_stranded_W: 677.2
+            P_core_W: 2.8
+            P_solid_W: 2.8
+            P_mag_W: 0.9
+            P_shaft_W: 1.9
+            P_loss_total_W: 682.9
+            efficiency: 0.5887
+            THD_I_pct: 0.0
+            THD_LL_pct: 5.18
+            V_line_peak_V: 32.0
+            n_steps_per_period: 120
+          coil_temp_c: 200.0
+          magnet_temp_c: 45.2
+          time_to_limit:
+            within_limits: false
+            time_to_limit_s: 22.142
+            time_to_limit_words: 22 s
+            limiting_part: winding
+            time_to_limit_from_rated_s: null
+            limits_c:
+              winding: 200.0
+              magnet: 150.0
+              housing: 70.0
+            at_point_c:
+              winding: 417.2
+              magnet: 207.9
+              housing: 247.17
+            over_by_K:
+              winding: 217.2
+              magnet: 57.9
+              housing: 177.17
+            over_parts:
+            - winding
+            - magnet
+            - housing
+            judged:
+            - winding
+            - magnet
+            - housing
+            parts:
+            - part: winding
+              quantity: the winding hot spot
+              node: winding
+              limit_c: 200.0
+              limit_source: the project's insulation class (200 °C, class N per IEC
+                60085) — ASSUMED, no card carries a rating; the hot spot is 17.20
+                K above the winding node's mean, frozen at this map's own shape
+              at_point_c: 417.2
+              over_by_K: 217.2
+              offset_K: 17.2
+              reaches: true
+              time_to_limit_s: 22.142
+              note: the winding hot spot reaches 200 °C after 22 s
+              state_c:
+                winding: 182.8
+                stator: 124.12
+                rotor: 44.37
+                magnet: 42.66
+            - part: magnet
+              quantity: the hottest magnet element
+              node: magnet
+              limit_c: 150.0
+              limit_source: the F52SH_120C card's own maximum working temperature;
+                the hottest element is 2.50 K above the magnet node's mean, frozen
+                at this map's own shape
+              at_point_c: 207.9
+              over_by_K: 57.9
+              offset_K: 2.5
+              reaches: true
+              time_to_limit_s: 162.325
+              note: the hottest magnet element reaches 150 °C after 2 m 42 s
+              state_c:
+                winding: 544.56
+                stator: 410.93
+                rotor: 153.78
+                magnet: 147.5
+            - part: housing
+              quantity: the housing (heat_path) — touch temperature
+              node: stator
+              limit_c: 70.0
+              limit_source: fixed touch limit, IEC 60335 (70 °C); the housing is carried
+                as a constant -75.73 K from the stator node, fitted to this map
+              at_point_c: 247.17
+              over_by_K: 177.17
+              offset_K: -75.73
+              reaches: true
+              time_to_limit_s: 26.8
+              note: the housing (heat_path) — touch temperature reaches 70 °C after
+                27 s
+              state_c:
+                winding: 209.22
+                stator: 145.73
+                rotor: 46.28
+                magnet: 44.06
+            starts:
+              cold:
+                start: cold
+                start_state_c:
+                  winding: 40.0
+                  stator: 40.0
+                  rotor: 40.0
+                  magnet: 40.0
+                start_source: every node at the ambient / coolant inlet 40.0 °C —
+                  the machine was switched on just now
+                time_to_limit_s: 22.142
+                state_at_limit_c:
+                  winding: 182.8
+                  stator: 124.12
+                  rotor: 44.37
+                  magnet: 42.66
+                time_to_limit_words: 22 s
+                limiting_part: winding
+                horizon_s: 900.0
+                settled: false
+                end_state_c:
+                  winding: 544.56
+                  stator: 410.93
+                  rotor: 153.78
+                  magnet: 147.5
+                parts:
+                - part: winding
+                  quantity: the winding hot spot
+                  node: winding
+                  limit_c: 200.0
+                  limit_source: the project's insulation class (200 °C, class N per
+                    IEC 60085) — ASSUMED, no card carries a rating; the hot spot is
+                    17.20 K above the winding node's mean, frozen at this map's own
+                    shape
+                  at_point_c: 417.2
+                  over_by_K: 217.2
+                  offset_K: 17.2
+                  reaches: true
+                  time_to_limit_s: 22.142
+                  note: the winding hot spot reaches 200 °C after 22 s
+                  state_c:
+                    winding: 182.8
+                    stator: 124.12
+                    rotor: 44.37
+                    magnet: 42.66
+                - part: magnet
+                  quantity: the hottest magnet element
+                  node: magnet
+                  limit_c: 150.0
+                  limit_source: the F52SH_120C card's own maximum working temperature;
+                    the hottest element is 2.50 K above the magnet node's mean, frozen
+                    at this map's own shape
+                  at_point_c: 207.9
+                  over_by_K: 57.9
+                  offset_K: 2.5
+                  reaches: true
+                  time_to_limit_s: 162.325
+                  note: the hottest magnet element reaches 150 °C after 2 m 42 s
+                  state_c:
+                    winding: 544.56
+                    stator: 410.93
+                    rotor: 153.78
+                    magnet: 147.5
+                - part: housing
+                  quantity: the housing (heat_path) — touch temperature
+                  node: stator
+                  limit_c: 70.0
+                  limit_source: fixed touch limit, IEC 60335 (70 °C); the housing
+                    is carried as a constant -75.73 K from the stator node, fitted
+                    to this map
+                  at_point_c: 247.17
+                  over_by_K: 177.17
+                  offset_K: -75.73
+                  reaches: true
+                  time_to_limit_s: 26.8
+                  note: the housing (heat_path) — touch temperature reaches 70 °C
+                    after 27 s
+                  state_c:
+                    winding: 209.22
+                    stator: 145.73
+                    rotor: 46.28
+                    magnet: 44.06
+              rated:
+                start: rated
+                start_state_c:
+                  winding: 307.8
+                  stator: 276.2
+                  rotor: 243.0
+                  magnet: 242.9
+                start_source: the rated duty 'rated''s own coupled run — the node
+                  means of the map it converged on
+                time_to_limit_s: null
+                time_to_limit_words: null
+                limiting_part: null
+                horizon_s: 21600.0
+                settled: false
+                end_state_c:
+                  winding: 400.0
+                  stator: 303.35
+                  rotor: 237.8
+                  magnet: 237.26
+                parts:
+                - part: winding
+                  quantity: the winding hot spot
+                  node: winding
+                  limit_c: 200.0
+                  limit_source: the project's insulation class (200 °C, class N per
+                    IEC 60085) — ASSUMED, no card carries a rating; the hot spot is
+                    17.20 K above the winding node's mean, frozen at this map's own
+                    shape
+                  at_point_c: 417.2
+                  over_by_K: 217.2
+                  offset_K: 17.2
+                  reaches: false
+                  time_to_limit_s: null
+                  asymptote_c: null
+                  note: 'the winding hot spot never reaches 200 °C in this model:
+                    the step response is still at 417.2 °C after 360 m 00 s and had
+                    not settled, so the map is over the limit for a reason these four
+                    nodes do not represent and NO time is quoted'
+                - part: magnet
+                  quantity: the hottest magnet element
+                  node: magnet
+                  limit_c: 150.0
+                  limit_source: the F52SH_120C card's own maximum working temperature;
+                    the hottest element is 2.50 K above the magnet node's mean, frozen
+                    at this map's own shape
+                  at_point_c: 207.9
+                  over_by_K: 57.9
+                  offset_K: 2.5
+                  reaches: false
+                  time_to_limit_s: null
+                  asymptote_c: null
+                  note: 'the hottest magnet element never reaches 150 °C in this model:
+                    the step response is still at 239.8 °C after 360 m 00 s and had
+                    not settled, so the map is over the limit for a reason these four
+                    nodes do not represent and NO time is quoted'
+                - part: housing
+                  quantity: the housing (heat_path) — touch temperature
+                  node: stator
+                  limit_c: 70.0
+                  limit_source: fixed touch limit, IEC 60335 (70 °C); the housing
+                    is carried as a constant -75.73 K from the stator node, fitted
+                    to this map
+                  at_point_c: 247.17
+                  over_by_K: 177.17
+                  offset_K: -75.73
+                  reaches: false
+                  time_to_limit_s: null
+                  asymptote_c: null
+                  note: 'the housing (heat_path) — touch temperature never reaches
+                    70 °C in this model: the step response is still at 227.6 °C after
+                    360 m 00 s and had not settled, so the map is over the limit for
+                    a reason these four nodes do not represent and NO time is quoted'
+            network:
+              available: true
+              residual_W:
+                winding: 311.7681
+                stator: 0.0048
+                rotor: 10.1975
+                magnet: -10.1925
+              worst_residual_W: 311.7681
+              worst_residual_pct_of_losses: 31.345
+              link_kinds:
+                w_s: calibrated
+                r_s: calibrated
+                m_r: physical
+              hot_spot_offset_K: 17.2
+              coil_ref_c: 200.0
+              map_winding_mean_c: 400.0
+              map_means_c:
+                winding: 400.0
+                stator: 322.9
+                rotor: 205.5
+                magnet: 205.4
+              coil_ref_drift_K: 200.0
+              note: 'at the map''s own temperatures the network is out of balance
+                by at most 311.77 W (31.34 % of the 994.6 W this point makes); the
+                calibrated links are exact by construction, so this is the cost of
+                the links the map could not fit and of the end-face films — and mostly
+                of an UNFINISHED loop: the watts are billed at 200.0 °C while the
+                map came back at 400.0 °C, so ρ_Cu(T) re-scales the copper by 1.46×'
+            model: a four-node lumped network (winding, stator, rotor, magnet) fitted
+              to THIS run's own converged thermal map, switched on at the start state
+              and integrated at this operating point; only the copper loss moves with
+              temperature, each part is judged on its node plus the map's own constant
+              offset, and the limit is the first crossing
+            calibration_duty: peak
+            note: over the winding limit by 217 K — reaches 200 °C after 22 s from
+              cold
+            reported_state: limited
+            solve_to: limits
+          solve_to: limits
+          mode: limited
+          limited:
+            part: winding
+            quantity: the winding hot spot
+            limit_c: 200.0
+            limit_source: the project's insulation class (200 °C, class N per IEC
+              60085) — ASSUMED, no card carries a rating; the hot spot is 17.20 K
+              above the winding node's mean, frozen at this map's own shape
+            t_cold_s: 22.142
+            t_cold_words: 22 s
+            t_rated_s: null
+            t_rated_words: null
+            temperatures_at_limit:
+              winding: 182.8
+              stator: 124.12
+              rotor: 44.37
+              magnet: 42.66
+            at_limit_c:
+              winding: 200.0
+              magnet: 45.16
+              housing: 48.39
+            steady_state_would_be:
+              winding: 417.2
+              magnet: 207.9
+              housing: 247.17
+            steady_state_converged: false
+            steady_state_runaway: false
+            calibration_passes: 1
+            cooling:
+              cooling_mode: robotics
+              ambient_temp: 40.0
+              bore_mode: still
+              emissivity: 0.9
+              end_faces: still
+              end_face_sides: 2
+              heat_path: housing
+            cooling_words: 'robotics: still air + radiation (ε = 0.9) at 40 °C, end
+              faces still, stator → housing (touch 70 °C), still air down the bore'
+            em_pass_at:
+              coil_c: 200.0
+              magnet_c: 45.2
+              coil_basis: the winding limit
+              magnet_basis: the hottest magnet element at that instant
+              rule: the electromagnetic pass of a limited state uses, for each part,
+                the temperature the LIMIT is judged on (hot spot / hottest element),
+                the limiting part exactly at its limit
+            bearing_seat_at_limit_c: 41.17
+            line: Runs 22 s from cold at this power and cooling, then the winding
+              reaches 200 °C — the numbers below are the machine at that moment
+            note: 'Runs 22 s from cold at this power and cooling, then the winding
+              reaches 200 °C — the numbers below are the machine at that moment. Every
+              number in this record is the machine at that moment: the electromagnetic
+              run was made once more with each part at the temperature its limit is
+              judged on — the winding at 200.0 °C (the winding limit), the magnets
+              at 45.2 °C (the hottest magnet element at that instant) — and the thermal
+              map is the last solved map translated onto the node temperatures of
+              that instant (its shape frozen, as the time-to-limit model states).
+              Cooling: robotics: still air + radiation (ε = 0.9) at 40 °C, end faces
+              still, stator → housing (touch 70 °C), still air down the bore.'
+            drive_held: sine
+            em_run: true
+          constants_20c:
+            coil_temp_c: 20.0
+            magnet_temp_c: 20.0
+            point:
+              rpm: 1000.0
+              I_phase_rms: 45.962
+              gamma_deg: 2.0
+              drive: current
+              star_delta: star
+            k_3d: 0.9307007024777334
+            two_d:
+              psi_pm_Wb: 0.00833444
+              Kt_Nm_per_Arms: 0.2068
+              Kt_Nm_per_A_line: 0.2068
+              Km_Nm_sqrtW: 0.4783
+              Km_per_mass_Nm_sqrtW_kg: 1.3033
+              T_em_avg_Nm: 9.504
+              KV_noload_rpm_per_V_line: 47.249647
+              KV_rpm_per_V_line: 36.29
+              Ld_mH: 0.1336
+              Lq_mH: 0.133
+              Ld_eq_star_mH: 0.1336
+              Lq_eq_star_mH: 0.133
+              saliency_Lq_over_Ld: 0.995
+              R_phase_ohm: 0.062303
+              R_phase_eq_star_ohm: 0.062303
+              mass_total_kg: 0.367
+              star_delta: star
+              connection: 4S
+              I_phase_rms_A: 45.96
+            k3d:
+              psi_pm_Wb: 0.007757
+              Kt_Nm_per_Arms: 0.192469
+              Kt_Nm_per_A_line: 0.192469
+              Km_Nm_sqrtW: 0.445154
+              Km_per_mass_Nm_sqrtW_kg: 1.212982
+              T_em_avg_Nm: 8.845379
+              KV_noload_rpm_per_V_line: 50.767821
+              KV_rpm_per_V_line: 38.992127
+            kv_note: walked to 20 °C — Br walked linearly from the card's 120 °C to
+              20 °C at -0.1344 %/K
+            kv_walked: true
+            magnet_grade: F52SH_120C
+            kt_line_Nm_per_A: 0.192469
+            kv_line_rpm_per_V: 50.767821
+            km_Nm_sqrtW: 0.445154
+            km_per_mass_Nm_sqrtW_kg: 1.212982
+            R_phase_20_ohm: 0.062303
+            mass_kg: 0.367
+            computed_at: '2026-09-29T00:03:48'
+            note: solved with the winding and the magnets at 20 °C at this duty's
+              operating point — the datasheet convention every motor catalogue uses,
+              for comparison between machines. The hot values elsewhere in this document
+              are the same constants at this duty's own temperatures. Kt, Km and Km/mass
+              carry k_3d = 0.9307; KV is ÷ k_3d.
+            Ld0_mH: 0.1435
+            Lq0_mH: 0.1438
+            Ldq0_mH: -0.0
+            saliency0_Lq_over_Ld: 1.002
+            ldq0_method: frozen-permeability incremental at i=0, 20 °C
+            ldq0_spread_pct:
+              Ld: 0.0
+              Lq: 0.01
+            ldq0_reciprocity_pct: 0.0
+          magnet_temp_max_c: 45.16
+          iterations: 2
+          em_runs: 2
+          converged: false
+          runaway: false
+          tol_K: 2.0
+          damping: 1.0
+          damping_final: 1.0
+          max_iter: 6
+          residual_coil_K: null
+          residual_magnet_K: null
+          residual_bearing_K: null
+          tol_bearing_K: 5.0
+          history:
+          - iter: 1
+            T_coil_in: 200.0
+            T_magnet_in: 45.5
+            T_coil_out: 400.0
+            T_magnet_out: 205.4
+            T_magnet_max: 207.9
+            P_loss_W: 682.9
+            T_em_Nm: 9.332
+            bearing_temp_c: null
+            bearing_temp_source: null
+            P_mech_extra_W: null
+            T_bearing_out: 202.3
+          - iter: 2
+            phase: limit
+            T_coil_in: 200.0
+            T_magnet_in: 45.2
+            T_coil_out: null
+            T_magnet_out: null
+            T_magnet_max: 45.16
+            P_loss_W: 682.9
+            T_em_Nm: 9.335
+            bearing_temp_c: null
+            bearing_temp_source: null
+            P_mech_extra_W: null
+          em_passes:
+          - phase: final
+            registered: true
+            run_id: '2026-09-28T23:40:41'
+            point:
+              I_phase_rms: 45.96
+              gamma_deg: 2.0
+              rpm: 1000.0
+              coil_temp_c: 200.0
+              magnet_temp_c: 45.5
+              n_steps_per_period: 120
+              n_periods: 1.0
+              drive: current
+              excitation: ''
+          - phase: limit
+            registered: true
+            run_id: '2026-09-28T23:52:45'
+            point:
+              I_phase_rms: 45.96
+              gamma_deg: 2.0
+              rpm: 1000.0
+              coil_temp_c: 200.0
+              magnet_temp_c: 45.2
+              n_steps_per_period: 120
+              n_periods: 1.0
+              drive: current
+              excitation: ''
+          mechanical:
+            ok: true
+            temps_c:
+              rotor_core: 41.8
+              magnet: 43.2
+              shaft: 41.2
+            rpm: 1000.0
+            case: 1,000 rpm
+            sf_min: 27.544638867840938
+            sf_min_part: rotor
+            sf_min_p05: 85.3782314336459
+            rotor_od_growth_um: 0.15896384222898224
+            od_growth:
+              max_um: 0.15896384222898224
+              mean_um: 0.09895366878824699
+              min_um: 0.04917759563625717
+              r_mm: 32.398167845392095
+              part: rotor
+              n_nodes: 532
+            air_gap:
+              clearance_um: 297.55519674213446
+              closed_um: 0.15896384222898224
+              remaining_um: 297.39623289990544
+              closed_pct: 0.05342331237008863
+              bore_r_mm: 32.697555196742144
+              rotor_r_mm: 32.40000000000001
+            interference_effective_mm: 0.0
+            elapsed_s: 44.921
+            torque_nm: 8.688
+            note: solved at the operating 1,000 rpm of this run (the Mechanical tab's
+              proof rpm box says 36,551 rpm)
+            temps_note: 'no retaining band: the rotor''s temperature is not a mechanical
+              load here — it only changes a band''s fit pressure — so the parts are
+              solved as drawn; the map (rotor_core 42 °C, magnet 43 °C, shaft 41 °C)
+              is carried for the record'
+            torque_note: 2-D mean 9.335 N·m × 3-D end-effect 0.9307
+            modes:
+              ok: true
+              body: rotor
+              support: free
+              n_modes: 12
+              rpm: 1000.0
+              f_switch_hz: 48000.0
+              f1_hz: 7630.1
+              f1_order: 2
+              n_flagged: 2
+              cached: false
+              elapsed_s: 7.995
+              tightest:
+                f_hz: 51047.9
+                order: 5
+                excitation: PWM carrier
+                excitation_hz: 48000.0
+                margin_pct: 6.3
+                flag: true
+            critical_speeds:
+              ok: true
+              rated_rpm: 1000.0
+              campbell:
+                rpm:
+                - 0.0
+                - 75.0
+                - 150.0
+                - 225.0
+                - 300.0
+                - 375.0
+                - 450.0
+                - 525.0
+                - 600.0
+                - 675.0
+                - 750.0
+                - 825.0
+                - 900.0
+                - 975.0
+                - 1050.0
+                - 1125.0
+                - 1200.0
+                - 1275.0
+                - 1350.0
+                - 1425.0
+                - 1500.0
+                - 1575.0
+                - 1650.0
+                - 1725.0
+                - 1800.0
+                - 1875.0
+                - 1950.0
+                - 2025.0
+                - 2100.0
+                - 2175.0
+                - 2250.0
+                - 2325.0
+                - 2400.0
+                - 2475.0
+                - 2550.0
+                - 2625.0
+                - 2700.0
+                - 2775.0
+                - 2850.0
+                - 2925.0
+                - 3000.0
+                forward:
+                - - 1487.1335512490368
+                  - 4509.478609044844
+                  - 5527.415166392037
+                - - 1487.1610545893805
+                  - 4509.5411386253245
+                  - 5527.495506338272
+                - - 1487.1885575093193
+                  - 4509.60366423194
+                  - 5527.5758427604005
+                - - 1487.2160600071659
+                  - 4509.666185864209
+                  - 5527.6561756568035
+                - - 1487.2435620834153
+                  - 4509.728703523256
+                  - 5527.736505027852
+                - - 1487.2710637384312
+                  - 4509.791217208305
+                  - 5527.816830873115
+                - - 1487.2985649708282
+                  - 4509.853726919877
+                  - 5527.897153192222
+                - - 1487.3260657826393
+                  - 4509.916232657754
+                  - 5527.977471985765
+                - - 1487.3535661723831
+                  - 4509.978734423011
+                  - 5528.057787252446
+                - - 1487.381066140131
+                  - 4510.041232214526
+                  - 5528.138098993398
+                - - 1487.4085656862444
+                  - 4510.103726033708
+                  - 5528.218407207635
+                - - 1487.4360648100628
+                  - 4510.166215879886
+                  - 5528.29871189511
+                - - 1487.4635635125808
+                  - 4510.228701753417
+                  - 5528.379013055416
+                - - 1487.4910617930116
+                  - 4510.291183654132
+                  - 5528.459310688669
+                - - 1487.5185596501594
+                  - 4510.353661582474
+                  - 5528.539604795277
+                - - 1487.5460570863506
+                  - 4510.41613553929
+                  - 5528.619895373537
+                - - 1487.5735540997794
+                  - 4510.478605523236
+                  - 5528.700182424934
+                - - 1487.6010506905257
+                  - 4510.541071535536
+                  - 5528.780465947779
+                - - 1487.6285468584824
+                  - 4510.603533576176
+                  - 5528.860745943143
+                - - 1487.6560426051449
+                  - 4510.665991644894
+                  - 5528.941022409748
+                - - 1487.6835379292406
+                  - 4510.7284457423775
+                  - 5529.021295349015
+                - - 1487.7110328307226
+                  - 4510.790895868299
+                  - 5529.101564759316
+                - - 1487.7385273095372
+                  - 4510.85334202316
+                  - 5529.181830640853
+                - - 1487.766021365181
+                  - 4510.915784207002
+                  - 5529.262092993619
+                - - 1487.793514998998
+                  - 4510.9782224197415
+                  - 5529.342351817738
+                - - 1487.8210082094954
+                  - 4511.040656661734
+                  - 5529.42260711205
+                - - 1487.84850099753
+                  - 4511.103086933077
+                  - 5529.502858877492
+                - - 1487.8759933619144
+                  - 4511.165513233981
+                  - 5529.583107113069
+                - - 1487.9034853041967
+                  - 4511.227935564248
+                  - 5529.6633518191675
+                - - 1487.930976822601
+                  - 4511.290353924725
+                  - 5529.743592995413
+                - - 1487.9584679193435
+                  - 4511.35276831493
+                  - 5529.823830641639
+                - - 1487.9859585912313
+                  - 4511.415178735218
+                  - 5529.90406475715
+                - - 1488.01344884083
+                  - 4511.477585185923
+                  - 5529.984295342923
+                - - 1488.0409386675
+                  - 4511.53998766682
+                  - 5530.064522397825
+                - - 1488.0684280707153
+                  - 4511.602386178015
+                  - 5530.144745921593
+                - - 1488.0959170504195
+                  - 4511.664780720341
+                  - 5530.224965914988
+                - - 1488.1234056060177
+                  - 4511.727171293622
+                  - 5530.305182377476
+                - - 1488.1508937393262
+                  - 4511.789557897278
+                  - 5530.385395308012
+                - - 1488.1783814489074
+                  - 4511.851940532258
+                  - 5530.465604707526
+                - - 1488.2058687339743
+                  - 4511.914319198598
+                  - 5530.545810575377
+                - - 1488.2333555960356
+                  - 4511.976693895842
+                  - 5530.62601291116
+                backward:
+                - - 1487.1335512481087
+                  - 4509.4786090442185
+                  - 5527.415166391704
+                - - 1487.1060474862725
+                  - 4509.416075489832
+                  - 5527.334822919255
+                - - 1487.0785433032397
+                  - 4509.353537960689
+                  - 5527.254475922693
+                - - 1487.0510386983299
+                  - 4509.290996456636
+                  - 5527.174125401324
+                - - 1487.0235336721737
+                  - 4509.228450978404
+                  - 5527.093771355282
+                - - 1486.9960282253392
+                  - 4509.1659015251
+                  - 5527.013413785029
+                - - 1486.9685223563915
+                  - 4509.103348096856
+                  - 5526.933052690511
+                - - 1486.941016067664
+                  - 4509.0407906932805
+                  - 5526.852688072477
+                - - 1486.913509357488
+                  - 4508.978229315024
+                  - 5526.772319929923
+                - - 1486.8860022263718
+                  - 4508.915663960662
+                  - 5526.691948264534
+                - - 1486.858494674664
+                  - 4508.853094631477
+                  - 5526.611573075428
+                - - 1486.8309867018954
+                  - 4508.790521326318
+                  - 5526.531194363205
+                - - 1486.8034783090088
+                  - 4508.727944045351
+                  - 5526.450812127678
+                - - 1486.7759694955294
+                  - 4508.665362788149
+                  - 5526.370426369383
+                - - 1486.7484602603286
+                  - 4508.602777555029
+                  - 5526.290037088948
+                - - 1486.720950605726
+                  - 4508.5401883460545
+                  - 5526.209644285088
+                - - 1486.6934405302159
+                  - 4508.477595160084
+                  - 5526.129247959583
+                - - 1486.6659300337528
+                  - 4508.414997997814
+                  - 5526.048848111338
+                - - 1486.638419116632
+                  - 4508.352396859078
+                  - 5525.968444741393
+                - - 1486.610907780351
+                  - 4508.289791743156
+                  - 5525.888037849104
+                - - 1486.5833960234872
+                  - 4508.22718265057
+                  - 5525.8076274361
+                - - 1486.5558838465738
+                  - 4508.164569580645
+                  - 5525.727213501099
+                - - 1486.5283712494825
+                  - 4508.101952533586
+                  - 5525.64679604493
+                - - 1486.5008582317569
+                  - 4508.039331509276
+                  - 5525.566375067581
+                - - 1486.473344795038
+                  - 4507.976706507265
+                  - 5525.485950569718
+                - - 1486.445830937616
+                  - 4507.914077527567
+                  - 5525.405522550338
+                - - 1486.4183166607395
+                  - 4507.85144456998
+                  - 5525.325091010959
+                - - 1486.3908019632481
+                  - 4507.7888076345735
+                  - 5525.244655950995
+                - - 1486.363286846831
+                  - 4507.726166720797
+                  - 5525.164217370806
+                - - 1486.3357713098105
+                  - 4507.663521829129
+                  - 5525.083775270898
+                - - 1486.3082553544907
+                  - 4507.600872958955
+                  - 5525.003329650852
+                - - 1486.2807389780378
+                  - 4507.538220110058
+                  - 5524.922880510843
+                - - 1486.2532221828262
+                  - 4507.4755632828055
+                  - 5524.842427851815
+                - - 1486.2257049684304
+                  - 4507.4129024764825
+                  - 5524.761971673224
+                - - 1486.198187334387
+                  - 4507.350237691048
+                  - 5524.68151197527
+                - - 1486.170669280957
+                  - 4507.287568926889
+                  - 5524.601048758573
+                - - 1486.143150807466
+                  - 4507.2248961836995
+                  - 5524.520582023651
+                - - 1486.115631915919
+                  - 4507.1622194605825
+                  - 5524.440111769294
+                - - 1486.0881126049076
+                  - 4507.099538758068
+                  - 5524.35963799682
+                - - 1486.0605928739708
+                  - 4507.036854076052
+                  - 5524.279160705956
+                - - 1486.0330727246558
+                  - 4506.974165413714
+                  - 5524.198679896984
+                n_points: 41
+              rpm_plot_max: 1300.0
+              f_switch_hz: 48000.0
+              first_forward_rpm: null
+              first_forward_margin_pct: null
+              n_forward_below_rated: 0
+              n_criticals: 0
+              verdict: no forward critical found in the search range
+              bearing_span_mm: 250.0
+              bearing_k_n_per_m: 200000000.0
+              cached: false
+              elapsed_s: 1.293
+          note: null
+          warning_code: limited_operation
+          warning: Runs 22 s from cold at this power and cooling, then the winding
+            reaches 200 °C — the numbers below are the machine at that moment
+      result:
+        efficiency_pct: 57.122
+        ripple_pct: 6.3
+        v_ll_peak_v: 29.782
+        loss_w: 682.9
+        mass_kg: 0.367
+        p_core_w: 2.8
+        p_stranded_w: 677.2
+        p_solid_w: 2.8
+        v_phase_peak_v: 20.662
+        j_coil_a_mm2: 43.8
+        end3d_k: 0.931
+        recorded_at: '2026-09-29T00:05:45'
+        build_sig: 06f5f49db6be
+      payload_file: runs/L13/peak-6a28d069.current.json.gz
+materials:
+  magnet: F52SH_120C
+  stator_core: 20SW1200
+  rotor_core: 20SW1200
+  shaft: Steel_42CrMo4_QT
+  sleeve: M40X_UD_60
+  slot: copper
+  slot_insulation: Nomex
+  wire_insulation: polyimide
+battery:
+  chemistry: NMC
+  cells: 12
+  v_cell_min: 3.0
+  v_cell_nom: 3.7
+  v_cell_max: 4.2
+  v_min: 36.0
+  v_nom: 44.4
+  v_max: 50.4

@@ -48,5 +48,6 @@
   "busCoupling": "Bus coupling",
   "maxCharge": "Max charge",
   "simulationSummaryRealFemResults": "Simulation summary — real FEM results",
-  "modelled": "modelled"
+  "modelled": "modelled",
+  "rippleMeshLimited": "Ripple: gap mesh too coarse"
 }

@@ -816,6 +816,27 @@ unsettled slowest conductor. TDM's reported period reproduces its own orbit ther
 ≤ 4e-5 (the gate). On the Ø40 without demag, TDM matched the 40-period march asymptote
 to 4e-6 where the march was +4.6 % off (§2.1).
 
+### 3.9 Tests, and the physics-regression pins
+
+- **Fast set on the server image**: 116 passed — `test_time_periodic` (15),
+  `test_tdm_default`, `test_tdm_entry_points`, `test_solve_pool`,
+  `test_virtual_work_torque`.
+- **`test_tdm_fem`**: 17 real solves. Results in the PR.
+- **March tests** `test_demag_reproducible`, `test_warm_seed`: 16 passed. The two
+  pre-pass-length assertions now read "a whole number of periods, as many as
+  `demag_settle` says". Two identical runs still agree.
+- **`test_physics_regression -k eddy` fails on the BASE branch too** (fb2c4e7, march
+  default): T_avg −0.5 to −1.2 % on p2_eddy, p2_demag_eddy, p2_voltage_eddy and
+  p2_voltage_eddy_rotor. That is the Coulomb default of #88, not this PR.
+- **What this PR moves, against the base:**
+  - p2_eddy (TDM against the march): T 2.5e-6.
+  - p2_demag_eddy with one pre-pass period (`SB_DEMAG_PREPASS_MAX=1`): TDM equals
+    the base march (T 0.399219 against 0.39922).
+  - p2_demag_eddy with the fixed point (three periods): T −0.10 %, ripple p-p
+    +7.6 %, P_mag_linear −0.5 %. That is the demag fixed point, intended.
+- **Not re-pinned here:** the pins need #88's re-pin and this one, justified line by
+  line, by the owner of the baseline.
+
 ## Progress log
 
 - 12:05 Stage 0: module, integration, synthetic tests (5 passed locally and on the
@@ -838,3 +859,18 @@ to 4e-6 where the march was +4.6 % off (§2.1).
   (T21): 5 duties × 2 methods, the severe-demag gap-layer case × 2, half against full
   on 3 machines. Before the switch to the full period, the gate caught the fixture's
   half-period asymmetry.
+- **PAUSED 2026-09-30 (weekly usage limit); resume after 2026-10-03.** Done: every
+  review fix is committed (cc4aa47… amended to 5f6c169, rebased on fb2c4e7). The
+  re-validation (§3.8) and the fast tests (116 passed) are complete. `test_tdm_fem`
+  passed 16/17 on T21; its one failure (the parallel test's mW rounding) is fixed in
+  5f6c169. The final server run of `test_tdm_fem` and of the march tests on 5f6c169
+  (T24) was killed at the pause.
+  **Next:**
+  1. Re-run `tests/test_tdm_fem.py` and `test_demag_reproducible` /
+     `test_warm_seed` / `test_eddy_settled_flag` on 5f6c169 (sandbox
+     `/opt/motres/compute/tdm-20260930c`, queue `jobs.txt` from line 35, `qpos` = 34;
+     `rm stopq` and start `tdmq_runner.sh` with setsid).
+  2. Fill FAST/FEM/MARCH/REG in the PR body (scratchpad `tdm2/pr_body.md`) and update
+     PR #87.
+  3. Log to the dataset, delete the sandbox, and report to the coordinator, who
+     re-runs Codex.

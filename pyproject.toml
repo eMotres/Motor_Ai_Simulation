@@ -24,9 +24,18 @@ classifiers = [
 ]
 
 # Runtime deps for the FEM design platform. The authoritative, pinned list the
-# Cloud Run image installs is requirements.txt; this mirrors the core for editable
+# deploy images install is requirements.txt; this mirrors the core for editable
 # installs.  NOTE: no torch / hydra / omegaconf / tensordict — the NVIDIA Modulus
 # (PINN) path was removed; the active solver is scikit-fem (CPU FEM).
+# Aligned 2026-09-30 with requirements.txt (deploy/compute-worker/Dockerfile
+# runtime-deps fix): this list used to miss sympy, meshio, scikit-learn,
+# pillow, psutil, reportlab, python-docx, openpyxl, pyjwt, pydantic, cma,
+# anthropic, mcp, cadquery-ocp and python-multipart — every one of them a
+# mandatory (non-optional) entry in requirements.txt, so an editable install
+# from this list alone could not even `import motor_ai_sim.simulation`
+# (ModuleNotFoundError: sympy). pypardiso and triangle stay out: both are
+# genuinely optional there too (requirements-pardiso.txt / -triangle.txt),
+# and that maps to the `pardiso` / `triangle` extras below.
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.11",
@@ -34,13 +43,28 @@ dependencies = [
     "pyyaml>=6.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
+    "pydantic>=2.0",
+    "python-multipart>=0.0.9",
     "shapely>=2.0",
     "scikit-fem>=10",
     "gmsh>=4.13",
     "trimesh>=4.0",
     "cadquery>=2.4",
+    "cadquery-ocp>=7.8",
     "argon2-cffi>=23.1",
     "mapbox-earcut>=1.0",
+    "pyjwt[crypto]>=2.10",
+    "anthropic>=0.40",
+    "cma>=4.0",
+    "sympy>=1.13",
+    "meshio>=5.3",
+    "scikit-learn>=1.5",
+    "pillow>=10",
+    "psutil>=5.9",
+    "reportlab>=5.0",
+    "python-docx>=1.2",
+    "openpyxl>=3.1",
+    "mcp>=2.2",
 ]
 
 [project.optional-dependencies]

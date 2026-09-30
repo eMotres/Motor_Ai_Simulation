@@ -3930,6 +3930,22 @@ def fem_transient_sliding_band(
             except Exception:           # noqa: BLE001 — not a cancel
                 return
 
+    def _phase_point(text: str) -> None:
+        """A cancel checkpoint that also NAMES the stage for the progress
+        strip (the bar keeps its frame count) — the TDM orbit solve has no
+        frames to count while it iterates."""
+        if progress_cb is None:
+            return
+        for _args in ((None, None, text, None), (None, None, text),
+                      (None, None)):
+            try:
+                progress_cb(*_args)
+                return
+            except TypeError:
+                continue
+            except Exception:           # noqa: BLE001 — not a cancel
+                return
+
     _cancel_point("start")
     sampling_purpose = _sampling_purpose(sampling_purpose)
     # Mesh density is driven ENTIRELY by the Mesh-tab sliders now (mesh_size,
@@ -7493,7 +7509,14 @@ def fem_transient_sliding_band(
             _td_wsc = float(NS) * float(p.stack_length)
             _td_zseq = bool(getattr(_src, "zero_sequence_path", False))
 
+            _td_mon_calls = [0]
+
             def _td_monitor(As, Us, ev):
+                _phase_point("eddy warm-up (time-periodic steady state, TDM): "
+                             "Newton %d, "
+                             "residual %.1e" % (_td_mon_calls[0],
+                                                max(_e[2] for _e in ev)))
+                _td_mon_calls[0] += 1
                 if torque_method == "coulomb" and _ftq2.coulomb:
                     # the REPORTED method: Coulomb virtual work of each frame
                     # (virtual_work_torque.frame_torques, the loop's own call)
@@ -7639,6 +7662,9 @@ def fem_transient_sliding_band(
                     _td_dte = _tdm.DTE_FACTOR * float(dt)
 
                     def _td_solve_frame(k, A_start, Ahist):
+                        _phase_point("eddy warm-up (TDM): demag pre-pass on "
+                                     "the periodic orbit "
+                                     "(TDM, %s): frame %d" % (_td_dmode, k))
                         _P, _fr, _Iv, _Is, _m = _td_ops(k)
                         _pd = np.asarray(_P.multiply(_P).sum(axis=0)).ravel()
                         _Ast = _P @ (np.asarray(_P.T @ A_start).ravel()

@@ -321,7 +321,9 @@ def test_guide_resource_is_public_other_methods_are_not(denv):
     assert _rpc(c, "resources/read", {"uri": "emotres://private"}).status_code == 401
     assert _rpc(c, "completion/complete", {}).status_code == 401
     assert _rpc(c, "logging/setLevel", {"level": "debug"}).status_code == 401
-    assert c.get("/mcp", headers={"Accept": ACCEPT}).status_code == 401
+    # an anonymous SSE GET: no stream here (405, not a sign-in problem);
+    # tests/test_mcp_plain_http.py covers the plain-GET service card
+    assert c.get("/mcp", headers={"Accept": ACCEPT}).status_code == 405
     # a tool that exists nowhere: refused (not a sign-in problem)
     r = _call(c, "drop_database")
     assert r.status_code == 403 and r.json()["error"]["data"]["error"] == "unknown_tool"

@@ -42,9 +42,9 @@ Design notes, in case a case starts failing for the wrong reason:
 Regenerate the baseline deliberately, never casually — a diff here is the whole
 point of the file::
 
-    UPDATE_PHYSICS_BASELINE=1 python -m pytest tests/test_physics_regression.py
+    UPDATE_PHYSICS_BASELINE=1 python -m pytest -s tests/test_physics_regression.py
 
-Then READ the printed diff and justify every line of it in the commit message.
+(``-s`` shows the per-case diff; ``-k`` re-pins a subset.)  Then READ the printed diff and justify every line of it in the commit message.
 """
 from __future__ import annotations
 
@@ -161,6 +161,12 @@ COMMON = dict(
 # section on the Ø200; tests/test_masses.py carries the mass table), so T, the
 # EMF and the losses moved by ~1 %.  The before→after table is in
 # tests/physics_baseline.before_arc.diff.txt next to the pins.
+#
+# 2026-09-29 — pins regenerated for the independent-source materials library
+# (6ed3641 / PR #51): the new F45SH_120C B-H curve (HcJ 652 -> 740 kA/m) moves
+# the two demag cases, its Br (-0.17 %) and sigma (-11.1 %) the rest.  No code
+# moved a number; the old/new table and the bisect are in
+# docs/PHYSICS_BASELINE_REPIN_2026-09-29.md.
 #
 # Regenerating OUTSIDE pytest (script mode) needs `sleeve_thickness` pinned in
 # GEO_30MM: without conftest's sandbox the fixture used to inherit the live
@@ -537,12 +543,42 @@ def baseline() -> Dict[str, Dict[str, float]]:
     return {}
 
 
+def _print_pin_diff(case: str, old: Dict[str, Any], new: Dict[str, Any]) -> None:
+    """Print one case's old -> new pins, flagging lines outside tolerance."""
+    for k, v in sorted(new.items()):
+        ov = old.get(k)
+        if v is None or ov is None:
+            print(f"    {k:22s} {ov!r} -> {v!r}")
+        elif abs(v - ov) > max(abs(ov) * RTOL, ATOL.get(k, 0.0)):
+            print(f"    {k:22s} {ov:12.6g} -> {v:12.6g}  "
+                  f"({(v - ov) / ov * 100 if ov else float('inf'):+.2f} %)")
+        else:
+            print(f"    {k:22s} {v:12.6g}")
+
+
+def _write_case_pins(case: str, got: Dict[str, Any]) -> None:
+    """UPDATE mode: replace ``case`` in the baseline file and print its diff."""
+    data = (json.loads(BASELINE.read_text(encoding="utf-8"))
+            if BASELINE.exists() else {})
+    print(f"\n{case}:")
+    _print_pin_diff(case, data.get(case, {}), got)
+    data[case] = got
+    BASELINE.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n",
+                        encoding="utf-8")
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("case", sorted(CASES))
 def test_case_matches_baseline(case: str, baseline: Dict[str, Dict[str, float]]):
     got = _run(case)
     if UPDATE:
-        pytest.skip("baseline update run — see regenerate_baseline")
+        # Write THIS case's pins into the file (read-modify-write, so a -k
+        # subset re-pins only what it ran).  Until 2026-09-29 this branch only
+        # skipped, so the command in the module docstring wrote nothing and the
+        # only working route was script mode, which runs WITHOUT conftest's
+        # sandbox (live config and materials).
+        _write_case_pins(case, got)
+        pytest.skip("baseline update run — pins written, see the printed diff")
     assert case in baseline, (
         f"case {case!r} has no baseline; regenerate with "
         f"UPDATE_PHYSICS_BASELINE=1")
@@ -769,15 +805,7 @@ def regenerate_baseline() -> None:
     for case in sorted(CASES):
         print(f"running {case} ...", flush=True)
         new[case] = _run(case)
-        for k, v in sorted(new[case].items()):
-            ov = old.get(case, {}).get(k)
-            if v is None or ov is None:
-                print(f"    {k:22s} {ov!r} -> {v!r}")
-            elif abs(v - ov) > max(abs(ov) * RTOL, ATOL.get(k, 0.0)):
-                print(f"    {k:22s} {ov:12.6g} -> {v:12.6g}  "
-                      f"({(v - ov) / ov * 100 if ov else float('inf'):+.2f} %)")
-            else:
-                print(f"    {k:22s} {v:12.6g}")
+        _print_pin_diff(case, old.get(case, {}), new[case])
     BASELINE.write_text(json.dumps(new, indent=1, sort_keys=True) + "\n",
                         encoding="utf-8")
     print(f"\nwrote {BASELINE}")

@@ -7611,8 +7611,9 @@ def fem_transient_sliding_band(
         # takes LU loudly where it is not)
         _td_tan_mode = str(_os_sb.environ.get("SB_TDM_TANGENT", "clamped")
                            or "clamped").lower()
-        _td_tangent = (_p2.tangent2 if _td_tan_mode != "exact"
-                       else (lambda _inf: _p2.tangent2(_inf, clamp=False)))
+        _td_tangent = (_tdm.analytic_tangent(_p2, MU0) if _td_tan_mode == "analytic"
+                       else (lambda _inf: _p2.tangent2(_inf, clamp=False))
+                       if _td_tan_mode == "exact" else _p2.tangent2)
         _td_solver = _tdm.TimePeriodicEddy(
             kfun=(_p2.Kpw if _sat2 else (lambda _A: (_td_K_lin, None))),
             tangent=_td_tangent, f_mag=f_mag2, G=_G2, Msig=_Msig2,

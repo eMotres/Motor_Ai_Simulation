@@ -87,6 +87,58 @@ def bdf2_msd(Msig, dt: float):
     return (Msig * (1.0 / (DTE_FACTOR * float(dt)))).tocsr()
 
 
+def analytic_tangent(p2, MU0: float):
+    """The Newton tangent of ``P2Nonlinear.Kpw`` with dν/dB² taken
+    ANALYTICALLY from the same piecewise-linear H(B) table that
+    ``field_ops._mu_r_from_bh_vec`` interpolates (ν = H/B; dν/dB =
+    (B·dH/dB − H)/B²; zero where the table is clamped), instead of
+    ``tangent2``'s one-sided difference over 1e-3·B.  Exact wherever B is not
+    on a table knot, so the space-time Newton converges quadratically where
+    the difference tangent made it linear.  TDM only (``SB_TDM_TANGENT=
+    analytic``): the march keeps its own tangent."""
+    cache: Dict[int, Any] = {}
+
+    def tangent(info):
+        T = None
+        for _k2, _ids2, _c2, gA, Bm, nuq in info:
+            if not _c2 or len(_c2) < 2:
+                continue
+            key = id(_c2)
+            if key not in cache:
+                cache[key] = _c2
+            nup = dnu_dB2(_c2, Bm, MU0)
+            Ti = p2._skel[_k2].tang(gA, 2.0 * nup)
+            T = Ti if T is None else T + Ti
+        return T
+    return tangent
+
+
+def dnu_dB2(curve, B: np.ndarray, MU0: float) -> np.ndarray:
+    """dν/d(B²) of ν(B) = 1/(μ0·max(μ_r(B), 1)), μ_r from
+    ``field_ops._mu_r_from_bh_vec`` (H(B) linear in the table, the implicit
+    origin below the first sample, μ0 slope above the last), analytically."""
+    hs = np.array([pt[0] for pt in curve], float)
+    bs = np.array([pt[1] for pt in curve], float)
+    sl = np.diff(hs) / np.maximum(np.diff(bs), 1e-300)
+    B = np.asarray(B, float)
+    H = np.interp(B, bs, hs)
+    seg = np.clip(np.searchsorted(bs, B, side="right") - 1, 0, sl.size - 1)
+    dH = np.where(B < bs[0], 0.0, sl[seg])           # np.interp clamps below
+    if bs[0] > 0.0:
+        below = B < bs[0]
+        H = np.where(below, hs[0] * B / bs[0], H)
+        dH = np.where(below, hs[0] / bs[0], dH)
+    above = B >= bs[-1]
+    H = np.where(above, hs[-1] + (B - bs[-1]) / MU0, H)
+    dH = np.where(above, 1.0 / MU0, dH)
+    clampH = H <= 1e-9
+    H = np.maximum(H, 1e-9)
+    mu = np.where(B <= 1e-12, 1.0, B / (MU0 * H))
+    live = (mu > 1.0) & (B > 1e-12) & ~clampH
+    dnu_dB = np.where(live, (dH * B - H) / np.maximum(B * B, 1e-300), 0.0)
+    return dnu_dB / (2.0 * np.maximum(B, 1e-300))
+
+
 # ════════════════════════════════════════════════════════════════════════
 #  per-frame factorisation (one PARDISO handle per frame)
 # ════════════════════════════════════════════════════════════════════════

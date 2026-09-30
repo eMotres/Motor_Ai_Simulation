@@ -233,3 +233,20 @@ def test_image_min_is_the_elementwise_minimum_over_poles():
     stack = np.array([br[d["idx"]] for d in mags])
     for d in mags:
         assert np.allclose(out[d["idx"]], stack.min(axis=0))
+
+
+def test_analytic_dnu_dB2_matches_the_curve_off_the_knots():
+    from motor_ai_sim.simulation.field_ops import MU0, _mu_r_from_bh_vec
+    curve = [(0.0, 0.0), (80.0, 0.5), (150.0, 1.0), (400.0, 1.4), (2000.0, 1.7),
+             (12000.0, 2.0), (60000.0, 2.2)]
+    rng = np.random.default_rng(7)
+    B = rng.uniform(0.05, 2.6, 400)
+    knots = np.array([p[1] for p in curve])
+    B = B[np.min(np.abs(B[:, None] - knots[None, :]), axis=1) > 2e-3]
+
+    def nu(b):
+        return 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(curve, b), 1.0))
+    h = 1e-6
+    fd = (nu(np.sqrt(B * B + h)) - nu(np.sqrt(B * B - h))) / (2 * h)
+    an = tp.dnu_dB2(curve, B, MU0)
+    assert np.allclose(an, fd, rtol=1e-4, atol=1e-6 * np.max(np.abs(fd)))

@@ -165,9 +165,17 @@ def one(cand_path, backend, out_path, budget, solve):
                     return None if v is None else float(np.mean(v))
                 except (TypeError, ValueError):
                     return None
+            t_c, pp_c = mean("T_avg_coulomb_Nm"), mean("T_ripple_pp_coulomb")
             res["solve"] = {"wall_s": time.time() - t1,
                             "T_avg_Nm": mean("T_avg_Nm"),
                             "T_ripple_pct": mean("T_ripple_pct"),
+                            # the owner's criteria (Coulomb torque, ripple, total loss)
+                            "torque_method": r.get("torque_method"),
+                            "T_avg_coulomb_Nm": t_c,
+                            "T_ripple_pct_coulomb": (100.0 * pp_c / abs(t_c)
+                                                     if pp_c is not None and t_c else None),
+                            "P_loss_total_W": mean("P_loss_total_W"),
+                            "P_cu_W": mean("P_cu_W"),
                             "P_fe_W": mean("P_fe_W"), "P_mag_W": mean("P_mag_eddy_W"),
                             "P_shaft_W": mean("P_shaft_eddy_W"),
                             "V_peak": mean("V_peak"),
@@ -263,7 +271,25 @@ def report(a):
                 a_, b_ = ts.get(k), gs.get(k)
                 return (None if a_ in (None, 0) or b_ is None
                         else 100.0 * (b_ - a_) / abs(a_))
+            # owner's criteria vs the reference backend (2026-09-30)
+            crit = {}
+            if dl("T_avg_coulomb_Nm") is not None:
+                crit["torque"] = abs(dl("T_avg_coulomb_Nm")) <= 1.0
+            r0, r1 = ts.get("T_ripple_pct_coulomb"), gs.get("T_ripple_pct_coulomb")
+            if r0 is not None and r1 is not None:
+                crit["ripple"] = abs(r1 - r0) <= max(0.5, 0.10 * abs(r0))
+            if dl("P_loss_total_W") is not None:
+                crit["total_loss"] = abs(dl("P_loss_total_W")) <= 5.0
+            qg = [g["quality"][h] for h in ("stator", "rotor")] if g.get("quality") else []
             row.update({"stage_" + be: g.get("stage"),
+                        "dTc_pct_" + be: dl("T_avg_coulomb_Nm"),
+                        "dRipc_pp_" + be: (r1 - r0 if r0 is not None and r1 is not None
+                                           else None),
+                        "dLoss_pct_" + be: dl("P_loss_total_W"),
+                        "criteria_" + be: crit,
+                        "quality_gate_" + be: (all(q["min_angle_deg"] >= 1.5
+                                                   and q["ar_p99_9"] <= 30 for q in qg)
+                                               if qg else None),
                         "dT_pct_" + be: dl("T_avg_Nm"), "dV_pct_" + be: dl("V_peak"),
                         "dFe_pct_" + be: dl("P_fe_W"), "dMag_pct_" + be: dl("P_mag_W"),
                         "ripple_" + be: gs.get("T_ripple_pct"),

@@ -1,9 +1,9 @@
-# Netgen as a CDT backend of the geometry mesher (2026-09-30, PAUSED)
+# Netgen as a CDT backend of the geometry mesher (2026-09-30)
 
-Status: **work in progress, paused at the weekly usage limit** (coordinator,
-2026-09-30 20:00). The backend and its tests are done; the three-way solve
-comparison is done for L12 and L155, half done for L13, and the campaign has
-not run. Next steps are at the end.
+Status: **evaluation complete.** The backend and its tests are done; the
+three-way solve comparison is done for L12, L155 and L13; the cusp/fillet
+campaign ran on all three backends. **Recommendation: netgen as the default
+CDT backend** (section "Recommendation" at the end).
 
 ## Why
 
@@ -95,56 +95,181 @@ max(0.5 pp, 10 %), total loss <= 5 %.
 
 | Quantity | L12 gmsh | L12 netgen | L155 gmsh | L155 netgen | L13 gmsh | L13 netgen |
 |---|---:|---:|---:|---:|---:|---:|
-| Coulomb mean torque | -0.038 % | -0.032 % | +0.017 % | +0.025 % | -0.018 % | not run |
-| Ripple p-p / mean (Triangle 6.19 / 1.63 / 4.50 %) | +0.004 pp | +0.187 pp | +0.005 pp | +0.016 pp | +0.025 pp | not run |
-| Coulomb self-check (rel. to ripple scale; Triangle 0.023 / 0.012) | 0.021 | 0.022 | 0.012 | 0.012 | | |
-| Copper loss | -0.006 % | -0.004 % | -0.036 % | -0.036 % | | |
-| Iron loss | +0.18 % | +0.56 % | +0.21 % | +0.57 % | | |
-| Magnet eddy | +0.06 % | +0.005 % | +0.17 % | +0.22 % | | |
-| Shaft eddy | +1.14 % | -1.15 % | -0.76 % | +0.43 % | | |
-| Sleeve eddy | — | — | +0.025 % | +0.014 % | | |
-| Total loss | +0.024 % | +0.075 % | +0.061 % | +0.199 % | -0.010 % | not run |
-| Mesh build, all builds of the solve [s] (Triangle 0.31 / 0.39 / 0.40) | 2.56 | 1.09 | 3.59 | 1.56 | 2.58 | |
-| Solve wall [s] (Triangle 163 / 639 / 206) | 169 (+3 %) | 175 (+7 %) | 667 (+4 %) | 603 (-6 %) | 270 (+31 %, load) | |
-| Peak RSS [MB] (Triangle 428 / 677 / 535) | 489 (+14 %) | 498 (+16 %) | 792 (+17 %) | 819 (+21 %) | 591 (+10 %) | |
-| Owner criteria | pass | pass | pass | pass | pass | not run |
+| Coulomb mean torque | -0.038 % | -0.032 % | +0.017 % | +0.025 % | -0.260 % | -0.441 % |
+| Ripple p-p / mean (Triangle 6.19 / 1.63 / 31.82 %) | +0.004 pp | +0.187 pp | +0.005 pp | +0.016 pp | -0.198 pp | -0.021 pp |
+| Coulomb self-check (rel. to ripple scale; Triangle 0.023 / 0.012 / 0.012) | 0.021 | 0.022 | 0.012 | 0.012 | 0.013 | 0.012 |
+| Copper loss | -0.006 % | -0.004 % | -0.036 % | -0.036 % | -0.000 % | -0.000 % |
+| Iron loss | +0.18 % | +0.56 % | +0.21 % | +0.57 % | -0.004 % | -0.020 % |
+| Magnet eddy | +0.06 % | +0.005 % | +0.17 % | +0.22 % | -0.058 % | -0.002 % |
+| Shaft eddy | +1.14 % | -1.15 % | -0.76 % | +0.43 % | -0.203 % | -0.012 % |
+| Sleeve eddy | — | — | +0.025 % | +0.014 % | — | — |
+| Total loss | +0.024 % | +0.075 % | +0.061 % | +0.199 % | -0.010 % | -0.001 % |
+| Mesh build, all builds of the solve [s] (Triangle 0.31 / 0.39 / 0.39) | 2.56 | 1.09 | 3.59 | 1.56 | 2.57 | 1.23 |
+| Elements, solve mesh (Triangle 9 978 / 20 248 / 17 647) | 13 938 | 14 338 | 26 206 | 26 822 | 20 013 | 20 653 |
+| Min angle / aspect p99.9, worst half (Triangle 2.49/22.0, 4.81/7.1, 6.49/5.4) | **1.15 / 47.1** | 5.71 / 6.8 | 2.13 / 6.9 | 3.16 / 8.6 | 4.67 / 7.4 | 10.06 / 3.6 |
+| Solve wall [s] (Triangle 163 / 639 / 430) | 169 (+3 %) | 175 (+7 %) | 667 (+4 %) | 603 (-6 %) | 490 (+14 %) | 513 (+19 %) |
+| Peak RSS [MB] (Triangle 428 / 677 / 645) | 489 (+14 %) | 498 (+16 %) | 792 (+17 %) | 819 (+21 %) | 728 (+13 %) | 687 (+6 %) |
+| Owner criteria | pass | pass | pass | pass | pass | pass |
 
-Absolute values: L12 0.6167 N·m, 66.07 W; L155 184.56 N·m, 3 834.9 W; L13
-5.338 N·m, 194.55 W (Triangle). Netgen's import adds about 52 MB RSS and
+Absolute values (Triangle): L12 0.6167 N·m, 66.07 W; L155 184.56 N·m,
+3 834.9 W; L13 0.7823 N·m, ripple 31.82 %, 275.20 W.
+
+**L13 run (2026-09-30 evening), all three backends re-run together.** The L13
+columns come from one local three-way run, not from the paused server run:
+the inputs are the committed copies in `scripts/gap_layers_study/inputs/l13`
+(die + L13 duty `rated`, magnets 210.7 °C with demag, the 2026-09-16 shared
+materials library) at `mesh_size_mm` 0.61, `torque_method` coulomb,
+`gap_layers` 1 per side, march warm-up (settled on all three), 120 steps per
+period, 4 sectors. The solve meshes are **identical in element count to the
+server builds** (17 647 / 20 013 / 20 653), so the meshes are the same; the
+absolute torque differs from the server's 5.338 N·m because the committed
+materials library demagnetizes the magnets much more at 210.7 °C (the same
+regime as MESHER_COMPARISON section 2, 0.92 N·m). In that regime the result
+follows the per-element demag pattern, which MESHER_COMPARISON measured at
+±0.5 % for any rotor-mesh change on either mesher; netgen's -0.44 % torque sits
+inside that band and inside the 1 % criterion. Losses agree within 0.02 %.
+Environment of this run: WSL2 Ubuntu on the owner's workstation, Python
+3.11.15, gmsh 4.15.2, netgen-mesher 6.2.2607 (netgen-occt 7.8.1), triangle
+20250106, numpy 2.4.4, scipy 1.17.1, scikit-fem 12.0.1, pypardiso 0.4.7 with
+mkl 2026.1.0 installed `--no-deps` (no intel-openmp),
+`MKL_THREADING_LAYER=SEQUENTIAL`, 4 threads, `nice 19`, one solve at a time.
+PARDISO was available (checked), so no run used the SciPy fallback. The wall
+times carry desktop load noise (about ±10 %); gmsh and netgen are within it
+of each other.
+
+**Windows note.** On the owner's Windows 11 workstation, native netgen does
+not import: Windows App Control blocks netgen's unsigned OCCT DLLs
+(`WinError 4551`), the same policy that blocks earcut/OCP `.pyd` files. The
+runs therefore used WSL2. The Linux server and containers are unaffected;
+a native Windows solve node would need the DLLs allowed by policy.
+
+Netgen's import adds about 52 MB RSS and
 0.12 s (OCCT); a fresh Python that imports and initializes gmsh costs 0.08 s,
 so an out-of-process gmsh adds little per build beyond moving the PSLG and
 the mesh across the process boundary.
 
-## Preliminary reading (not yet a recommendation)
+## Robustness mini-campaign (8 cusp/fillet candidates, three backends)
 
-- Both backends meet the owner's accuracy criteria on L12 and L155 with wide
-  margins; netgen's iron loss reads +0.56 % (gmsh +0.2 %), still far inside.
-- Mesh quality: netgen better than gmsh on L12 and L13; on L155 its worst
-  angle is better (3.2 vs 2.1 deg) and its aspect p99.9 worse (8.6 vs 6.9).
-- Speed: netgen meshes about 2x faster than gmsh; solve time and RSS are the
-  same within load noise at the same element count.
-- Robustness: the open question. Netgen fails closed where a long frozen
-  segment faces a much finer feature; gmsh meshes it with slivers. The
-  cusp/fillet campaign decides this.
-- Licence and maintenance: netgen can run in-process with MKL; gmsh needs the
-  out-of-process wrapper being built. Netgen's backend depends on two API
-  details found by experiment (normalized `Edge.partition`, face-with-holes
-  construction) that a netgen release could change; the post-mesh checks make
-  any such change fail loudly.
+`scripts/mesher_campaign.py plan --solve --threads 4 --backends
+triangle,gmsh,netgen --only c00,c04,c05,c10,c12,c15,c19,c21`: the candidates
+of MESHER_COMPARISON section 5 (same seed), optimizer budget armed (400 000
+tris), 1 mm mesh, then a 24-step transient at 10 A / 3000 rpm, each run in its
+own child process. Same environment as the L13 run above. The campaign now also
+records Coulomb torque/ripple and total loss, and its report states the owner's
+criteria and the quality gate per candidate.
 
-## Next steps (after the limit resets, 2026-10-03)
+**These candidates are outside the optimizer's envelope.** Every one has
+`rotor_fill_r` below the optimizer's 0.15 mm fillet floor (0 to 0.1 mm), and
+c04/c10/c15/c19 also have a 0.04 to 0.2 mm magnet fillet, a 0.067 mm slot
+opening or a 0.02 mm magnet recess. They are a stress test of the meshers, not
+designs the optimizer would propose.
 
-1. L13 CIANO28 85 20SW1200 / L13 / rated at 0.61 mm: the netgen solve
-   (Triangle and gmsh are done, numbers above; die from the shared tree,
-   `mesh_size_mm` 0.61, `torque_method` coulomb).
-2. The campaign subset c00, c04, c05, c10, c12, c15, c19, c21 on all three
-   backends (`scripts/mesher_campaign.py plan --solve --threads 4 --backends
-   triangle,gmsh,netgen --only ...`), counting netgen's fail-closed rejects,
-   time and RSS tails.
-3. Write the recommendation (gmsh out of process vs netgen in process) into
-   this file and the PR.
+| | Triangle | gmsh | netgen |
+|---|---:|---:|---:|
+| Meshed / solved | 8 / 8 | 8 / 7 | 8 / 8 |
+| Fail-closed rejects | 0 | **1** (c04: `GmshCDTError`, 52 zero-area triangles in the solve's mesh build) | **0** |
+| Budget rejects / crashes | 0 / 0 | 0 / 0 | 0 / 0 |
+| Quality gate (>= 1.5 deg, p99.9 <= 30), worst half | pass (4.79 deg, 8.3) | pass (4.79 deg, 8.4) | pass (3.89 deg, 9.1) |
+| Elements (min / median / max) | 13 388 / 13 668 / 14 388 | 16 988 / 24 934 / 29 472 | 19 188 / 23 760 / 26 260 |
+| Mesh build (median / max) [s] | 0.24 / 0.26 | 1.03 / 1.60 | 0.60 / 0.71 |
+| Solve wall vs Triangle (min / median / max) | 1 | 0.99 / 1.41 / **1.99** | 0.73 / 1.24 / 1.29 |
+| Peak RSS vs Triangle (min / median / max) | 1 (493-543 MB) | 1.12 / 1.32 / 1.43 (max 754 MB) | 0.97 / 1.26 / 1.34 (max 721 MB) |
+| Coulomb torque vs Triangle, worst | — | -0.17 % | +0.61 % (c04) |
+| Total loss vs Triangle, worst | — | +1.13 % | -1.75 % (c04) |
+| Ripple within max(0.5 pp, 10 %) | — | 6 / 7 (c19 +4.84 pp) | 6 / 8 (c04 +10.5 pp, c19 +4.79 pp) |
 
-Reproduction: a throwaway container from `deploy-api` with
+Per candidate (Coulomb torque / ripple / total loss vs Triangle; Triangle
+ripple in brackets):
+
+| id | gmsh | netgen |
+|---|---|---|
+| c00 (32.3 %) | -0.11 % / +1.24 pp / +0.13 % | -0.04 % / +1.26 pp / +0.38 % |
+| c04 (41.6 %) | reject (fail closed) | +0.61 % / **+10.50 pp** / -1.75 % |
+| c05 (15.7 %) | +0.05 % / -0.14 pp / +0.05 % | +0.11 % / -0.18 pp / +0.32 % |
+| c10 (24.6 %) | -0.17 % / +2.12 pp / +1.13 % | +0.06 % / +2.33 pp / +1.41 % |
+| c12 (32.0 %) | -0.07 % / +0.51 pp / +0.20 % | -0.04 % / -0.13 pp / -0.72 % |
+| c15 (24.5 %) | -0.07 % / +1.67 pp / +0.05 % | +0.09 % / +2.01 pp / +0.31 % |
+| c19 (30.7 %) | -0.16 % / **+4.84 pp** / +0.03 % | -0.08 % / **+4.79 pp** / +0.26 % |
+| c21 (16.4 %) | -0.16 % / +0.95 pp / +0.20 % | -0.02 % / +0.67 pp / +0.39 % |
+
+Torque (<= 1 %) and total loss (<= 5 %) pass on every solved candidate on both
+backends. The two ripple misses were checked at 0.5 mm (same candidates, all
+three backends, `CAMPAIGN_MESH_MM=0.5`):
+
+| id @ 0.5 mm | Triangle ripple | gmsh | netgen |
+|---|---:|---|---|
+| c19 | 34.96 % (was 30.73 % at 1 mm) | -0.05 % / +0.45 pp / -0.06 % | +0.03 % / +0.56 pp / +0.08 % |
+| c04 | 42.67 % | +0.40 % / +13.3 pp / -2.05 %, magnet eddy -13.2 % | -0.08 % / +9.79 pp / -2.16 %, magnet eddy -12.4 % |
+
+- **c19:** at 1 mm it was Triangle that was under-resolved (its ripple moves
+  +4.2 pp on refinement, gmsh/netgen move 0.2 pp). At 0.5 mm all three agree
+  within 0.6 pp: pass on both.
+- **c04:** gmsh (which meshes it at 0.5 mm) and netgen agree with each other
+  (ripple 56.0 / 52.5 %, magnet eddy -13.2 / -12.4 %) and both disagree with
+  Triangle. This is the c04 difference already open in MESHER_COMPARISON
+  (magnet eddy -12 % in the 0.067 mm slot opening, which the mesh-size knob
+  does not refine), now seen on both gmsh and netgen. It is not a netgen
+  defect; which mesher is right needs the boundary-refinement check listed
+  there.
+- **gmsh's c04 reject at 1 mm** is new on this platform (the server run of
+  2026-09-29 solved it): the campaign mesh built, the solve's own build
+  (different slip grid) produced zero-area triangles and the backend failed
+  closed as designed. It meshes at 0.5 mm.
+- **Netgen's known limitation** (a long frozen segment facing a much finer
+  feature) did not trigger on any of the 8 + 2 runs, although all of them are
+  below the optimizer's fillet floor.
+
+## Recommendation: netgen as the default CDT backend
+
+| Criterion | gmsh | netgen | Better |
+|---|---|---|---|
+| Accuracy, saved duties (owner criteria) | pass L12, L155, L13 | pass L12, L155, L13 | equal |
+| Accuracy, campaign | torque/loss pass; ripple misses only where Triangle or the geometry is under-resolved | same, same candidates | equal |
+| Mesh speed | 2.6-3.6 s per solve; campaign median 1.03 s | 1.1-1.6 s; campaign median 0.60 s | netgen (about 2x) |
+| Mesh quality gate | **fails on L12** (1.15 deg, p99.9 47.1) | passes everywhere (worst 3.16 deg / 9.1) | netgen |
+| Robustness | 1 fail-closed reject in 8 (c04 at 1 mm) | 0 in 8 (+2 at 0.5 mm) | netgen |
+| Tails (<= 2x Triangle) | solve wall max 1.99x, RSS max 1.43x | solve wall max 1.29x, RSS max 1.34x | netgen |
+| Licence | GPL-2.0+, no MKL exception: must run out of process next to PARDISO (wrapper still to build, PSLG and mesh cross a process boundary) | LGPL-2.1 (+ OCCT LGPL with exception): in process next to MKL, dynamically loaded | netgen |
+| Maintenance risk | mature API | backend relies on two API details found by experiment (normalized `Edge.partition`, face-with-holes construction); a known unmeshable configuration | gmsh |
+| Platform | pip wheel, runs on Windows | OCCT DLLs blocked by Windows App Control on the owner's PC (Linux fine) | gmsh |
+
+**Recommendation: make netgen the default (`auto` -> netgen), keep gmsh
+selectable (`MOTOR_AI_SIM_GEO_CDT=gmsh`) as the cross-check backend, and keep
+Triangle only as the optional non-commercial reference.** Netgen matches gmsh
+on accuracy everywhere measured, meshes about twice as fast, is the only one of
+the two that passes the mesh-quality gate on every saved duty, had no
+fail-closed reject on the stress candidates, has the smaller solve-time and RSS
+tails, and needs no out-of-process wrapper to live next to MKL. Its risks are
+contained: the post-mesh checks (area, unsplit boundary edges) make any netgen
+API change or the known unmeshable configuration fail loudly, never silently.
+
+Conditions for the switch:
+1. Pin `netgen-mesher==6.2.2607` (it is `NETGEN_VALIDATED`) in the solve image;
+   bump only with `tests/test_geo_mesh_netgen.py` and a re-run of this
+   campaign.
+2. No automatic fallback to gmsh on a `NetgenCDTError` (fail closed stays);
+   the optimizer counts such a candidate as a mesh reject, like a budget
+   reject.
+3. Native Windows solve nodes need the netgen OCCT DLLs allowed by App
+   Control, or run under WSL2/Linux.
+4. Still open, independent of the choice: c04's Triangle-vs-both difference
+   (boundary-refinement check, MESHER_COMPARISON section 7 item 2).
+
+Raw results of the local runs (L13 three-way, campaign, 0.5 mm check): the
+owner's Downloads, `netgen_eval_2026-09-30/netgen_eval_local_out.tgz`.
+
+Reproduction of the local runs: WSL2 Ubuntu, `uv venv -p 3.11`, `pip install
+-r requirements.txt netgen-mesher==6.2.2607 triangle==20250106`, then `pip
+install --no-deps mkl pypardiso==0.4.7` (never intel-openmp) and
+`MKL_THREADING_LAYER=SEQUENTIAL`; gmsh needs `libglu1-mesa libxcursor1 libxft2
+libxinerama1`. L13: a dies copy holding `CIANO28 85 20SW1200/{die,L13}.yaml`
+and a config copy with `materials_library_shared.yaml` as
+`materials_library.yaml`, one `compare_mesher_triangle_vs_gmsh.py run` per
+mesher with the spec keys `"mesh_size_mm": 0.61` and `"kw_override":
+{"torque_method": "coulomb", "gap_layers": 1}`, then `report --meshers
+triangle,gmsh,netgen`.
+
+Reproduction of the earlier server runs: a throwaway container from `deploy-api` with
 `python -m venv --system-site-packages` + `pip install netgen-mesher==6.2.2607`
 (use `PYTHONPATH=<venv>/lib/python3.11/site-packages` with the system Python so
 pypardiso finds MKL; `pip --target` loses the OCCT libraries), then

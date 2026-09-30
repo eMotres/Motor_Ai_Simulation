@@ -7816,9 +7816,14 @@ def fem_transient_sliding_band(
                                              "(%s) — full pre-pass" % (_td_mapinfo,))
                         log.warning("TDM demag shortcut refused (%s): full "
                                     "pre-pass instead", _td_mapinfo)
+                    # the period BEFORE the reported window, θ < 0 — the
+                    # march's own pre-pass rotor positions, so each magnet
+                    # sees the same part of its (fractional-slot, q-period)
+                    # history as there, element for element
                     _td_dm["march"] = _tdm.demag_march(
-                        list(range(0, _td_nspp)),
-                        (_td_orbit(-1, _td_As), _td_orbit(-2, _td_As)),
+                        list(range(-_td_nspp, 0)),
+                        (_td_orbit(-_td_nspp - 1, _td_As),
+                         _td_orbit(-_td_nspp - 2, _td_As)),
                         _td_orbit_start, _td_solve_frame, _td_ratchet, log=log)
                     _n_dmpre += int(_td_dm["march"]["frames"])
                     if _td_maps is not None:

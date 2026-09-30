@@ -15,6 +15,7 @@ import SignupsSection from './sections/SignupsSection';
 import ServersSection from './sections/ServersSection';
 import UsageSection from './sections/UsageSection';
 import AgentsSection from './sections/AgentsSection';
+import AgentActivitySection from './sections/AgentActivitySection';
 import CatalogsSection from './sections/CatalogsSection';
 import MotorsAccessSection from './sections/MotorsAccessSection';
 import LogsSection from './sections/LogsSection';
@@ -43,6 +44,7 @@ const AdminPanel: React.FC = () => {
       case 'servers': return <ServersSection />;
       case 'usage': return <UsageSection />;
       case 'agents': return <AgentsSection />;
+      case 'agentActivity': return <AgentActivitySection />;
       case 'catalogs': return <CatalogsSection />;
       case 'motorsAccess': return <MotorsAccessSection />;
       case 'newsletter': return <NewsletterSection />;

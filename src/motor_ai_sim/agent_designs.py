@@ -217,6 +217,81 @@ def delete_design(design_id: str, owner: str) -> bool:
     return True
 
 
+# ── ADMIN ONLY: cross-account views ─────────────────────────────────────────
+# "Agent activity" in the web Admin tab (2026-09-30, owner: drafts/runs do not
+# belong on the Motors catalog page).  These never filter by owner — every
+# caller MUST be gated by routes.admin.require_admin, same as every other
+# cross-account listing there (usage, sessions, tickets).
+
+def _all_design_roots() -> List[Path]:
+    """Every workspace's ``agent_designs`` directory, admin cross-account scan.
+
+    ``WORKSPACES_ROOT`` unset (single-user / local dev, the same condition
+    ``workspace.workspace_for_identity`` uses) -> just the one process
+    workspace, so a single-user install still shows its own drafts here."""
+    from motor_ai_sim import workspace as _ws
+    base = _ws.workspaces_root()
+    if base is not None:
+        try:
+            return [p / DESIGNS_DIR for p in sorted(base.iterdir()) if p.is_dir()]
+        except OSError:
+            return []
+    return [Path(str(_ws.process_workspace().root)) / DESIGNS_DIR]
+
+
+def list_all_designs() -> List[Dict[str, Any]]:
+    """ADMIN ONLY — every draft on this server, across every account, newest
+    first.  No owner filter: the caller is the gate."""
+    out: List[Dict[str, Any]] = []
+    for root in _all_design_roots():
+        try:
+            dirs = sorted(root.iterdir())
+        except OSError:
+            continue
+        for dd in dirs:
+            f = dd / DESIGN_FILE
+            if not f.is_file():
+                continue
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(d, dict):
+                out.append(d)
+    out.sort(key=lambda d: -(d.get("created_at") or 0))
+    return out
+
+
+def admin_view(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Admin cross-account view: ``web_view`` plus the owner e-mail — the one
+    field a normal owner's own view has no reason to carry."""
+    out = web_view(d)
+    out["owner"] = d.get("owner")
+    return out
+
+
+def admin_delete_design(design_id: str) -> str:
+    """ADMIN ONLY — delete a draft in ANY account's workspace, regardless of
+    who owns it.  Returns the owner e-mail (for the audit log).  Raises
+    DesignError("... not found") if no such draft exists anywhere."""
+    import shutil
+    did = _check_id(design_id)
+    for root in _all_design_roots():
+        dd = root / did
+        f = dd / DESIGN_FILE
+        if not f.is_file():
+            continue
+        owner = ""
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            owner = str((d or {}).get("owner") or "")
+        except (OSError, ValueError):
+            pass
+        shutil.rmtree(dd, ignore_errors=True)
+        return owner
+    raise DesignError(f"design '{design_id}' not found")
+
+
 def revert_design(design_id: str, owner: str) -> Dict[str, Any]:
     """Back to exactly what the agent created (params + estimate); run results
     of later edits are dropped because they describe a different machine."""

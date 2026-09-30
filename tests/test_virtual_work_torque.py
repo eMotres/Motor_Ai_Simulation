@@ -514,42 +514,68 @@ def test_passing_level_persists_only_for_the_live_machine(monkeypatch):
     assert written == [2.0]
 
 
-def test_coupled_probe_gap_default_matches_the_run():
+def test_coupled_probe_uses_the_runs_mesh_resolution():
     import inspect
-    import re
     from pathlib import Path
     from motor_ai_sim.routes import simulation as sim
-    run_default = inspect.signature(sim.get_fem_transient).parameters["gap_layers"].default
+    assert inspect.signature(sim.get_fem_transient).parameters["gap_layers"].default is None
     src = (Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim" / "routes"
            / "coupled.py").read_text(encoding="utf-8")
-    probe = [float(x) for x in re.findall(r'_f\(body, "gap_layers", ([0-9.]+)\)', src)]
-    assert probe and all(v == run_default for v in probe)
+    assert '_f(body, "gap_layers"' not in src and '_f(body, "mesh_size_mm"' not in src
+    assert '_resolve_gap_layers(body.get("gap_layers"))' in src
     assert "torque_method" in inspect.signature(sim.get_fem_transient).parameters
 
-
-def test_gap_layers_default_is_one_per_side_everywhere():
+def test_mesh_settings_come_only_from_the_mesh_tab():
+    """Owner 2026-09-30: every run path takes the Mesh settings from the request
+    (Mesh tab) or the machine's saved Mesh settings; 1/side is only a labelled
+    last-resort fallback."""
     import inspect
     import re
     from pathlib import Path
-    from motor_ai_sim.simulation import fem_solver_2d as fs
     from motor_ai_sim.routes import simulation as sim
     from motor_ai_sim.optimization import refine_proc
-    for fn in (fs.fem_transient_sliding_band, fs.em_transient_eval,
-               sim.get_fem_transient, sim.get_fem_field2d,
-               sim.build_fem_mesh_2d_sliding_band, refine_proc.run_one):
-        assert inspect.signature(fn).parameters["gap_layers"].default == 1.0, fn.__name__
+    from motor_ai_sim.routes import optimization as opt
+    for fn in (sim.get_fem_transient, sim.get_fem_field2d,
+               sim.build_fem_mesh_2d_sliding_band):
+        for k in ("mesh_size_mm", "min_size_mm", "outer_air_factor", "gap_layers",
+                  "n_sectors"):
+            assert inspect.signature(fn).parameters[k].default is None, (fn.__name__, k)
+    assert inspect.signature(refine_proc.run_one).parameters["gap_layers"].default is None
+    for model in ("ScanRequest", "DescentRequest", "CmaesRequest"):
+        m = getattr(opt, model, None)
+        if m is not None and "gap_layers" in m.model_fields:
+            assert m.model_fields["gap_layers"].default is None, model
     root = Path(__file__).resolve().parents[1]
-    opt = (root / "src" / "motor_ai_sim" / "routes" / "optimization.py").read_text(encoding="utf-8")
-    assert not re.search(r"gap_layers(: float)? ?= ?[23]\.0", opt)
+    for rel in ("routes/optimization.py", "routes/coupled.py", "routes/thermal.py",
+                "sweep_resume.py", "optimization/refine_proc.py"):
+        src = (root / "src" / "motor_ai_sim" / rel).read_text(encoding="utf-8")
+        assert not re.search(r"gap_layers(: float)? ?= ?[123]\.0|\"gap_layers\", [123]\.0", src), rel
     web = root / "web" / "src"
-    for rel in ("components/mesh/MeshPanel.tsx", "lib/emRunPayload.ts",
-                "components/sweep/SweepStudyPanel.tsx", "stores/motorStore.ts",
-                "components/simulation/SimulationPanel.tsx",
+    for rel in ("lib/emRunPayload.ts", "components/sweep/SweepStudyPanel.tsx",
+                "stores/motorStore.ts", "components/simulation/SimulationPanel.tsx",
                 "components/simulation/FemFieldChart.tsx",
                 "components/simulation/FemAnimationViewer.tsx"):
         src = (web / rel).read_text(encoding="utf-8")
-        assert not re.search(r"gapLayers'\s*,\s*[23]\)|mesh\.gapLayers'\) \?\? '[23]'", src), rel
+        assert not re.search(r"gapLayers'\s*,\s*[123]\)|mesh\.gapLayers'\)\s*\?\?", src), rel
 
+
+def test_mesh_settings_resolution_order():
+    from motor_ai_sim.mesh_settings import (
+        SOURCE_FALLBACK, SOURCE_MACHINE, SOURCE_REQUEST, fallback_note,
+        resolve_gap_layers, resolve_mesh_settings)
+    cfg = {"mesh": {"gap_layers": 3, "mesh_size_mm": 1.22, "n_sectors": 4}}
+    vals, src = resolve_mesh_settings({"gap_layers": None, "mesh_size_mm": 2.0}, cfg)
+    assert vals["gap_layers"] == 3.0 and src["gap_layers"] == SOURCE_MACHINE
+    assert vals["mesh_size_mm"] == 2.0 and src["mesh_size_mm"] == SOURCE_REQUEST
+    assert vals["min_size_mm"] == 0.3 and src["min_size_mm"] == SOURCE_FALLBACK
+    assert isinstance(vals["n_sectors"], int) and vals["n_sectors"] == 4
+    assert "min_size_mm" in fallback_note(src, vals) and "outer_air_factor" in fallback_note(src, vals)
+    assert resolve_gap_layers(None, {"mesh": {}}) == (1.0, SOURCE_FALLBACK)
+    assert resolve_gap_layers(2, {"mesh": {"gap_layers": 3}}) == (2.0, SOURCE_REQUEST)
+    assert resolve_gap_layers(float("nan"), {"mesh": {"gap_layers": 3}}) == (3.0, SOURCE_MACHINE)
+    full = {"mesh": {"gap_layers": 2, "mesh_size_mm": 1, "min_size_mm": 0.2,
+                     "outer_air_factor": 1.2, "n_sectors": 2}}
+    assert fallback_note(resolve_mesh_settings({}, full)[1]) is None
 
 def test_optimizer_candidate_metrics_carry_the_self_check():
     from pathlib import Path
@@ -560,3 +586,15 @@ def test_optimizer_candidate_metrics_carry_the_self_check():
         assert k in rp
     from motor_ai_sim.routes.optimization import _RES_KEYS
     assert {"ripple_self_check_rel", "ripple_mesh_limited"} <= set(_RES_KEYS)
+
+
+def test_passport_meshes_as_the_machine_mesh_settings_say():
+    import inspect
+    from pathlib import Path
+    from motor_ai_sim import passport
+    assert inspect.signature(passport.generate_passport).parameters["mesh_size_mm"].default is None
+    src = Path(passport.__file__).read_text(encoding="utf-8")
+    assert "mesh_size_mm + 1.0" not in src and "**_MESH" in src
+    assert '"mesh_settings_note": _mesh_note' in src
+    cat = (Path(passport.__file__).parent / "routes" / "catalog.py").read_text(encoding="utf-8")
+    assert '"mesh": dict(_p.get("mesh") or {})' in cat

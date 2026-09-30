@@ -30,6 +30,9 @@ from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.field_jobs import field_busy, run_field_job
 from motor_ai_sim.simulation.sb_domains import (
     effective_gap_layers as _effective_gap_layers)
+from motor_ai_sim.mesh_settings import (
+    fallback_note as _mesh_fallback_note,
+    resolve_mesh_settings as _resolve_mesh_settings)
 from motor_ai_sim.simulation.virtual_work_torque import (
     resolve_torque_method as _resolve_torque_method)
 
@@ -979,15 +982,15 @@ _fem_mesh_sb_cache = _WSP.ws_map("simulation.fem_mesh_sb",
 @router.get("/mesh/build2d_sliding_band")
 async def build_fem_mesh_2d_sliding_band(
     rotor_angle_deg:   float = 0.0,
-    mesh_size_mm:      float = 4.0,
-    min_size_mm:       float = 0.3,
+    mesh_size_mm:      Optional[float] = None,  # None = machine Mesh setting
+    min_size_mm:       Optional[float] = None,
     surface_deviation: float = 0.005,   # commercial FEM "Surface Deviation" [mm]
     normal_deviation:  float = 6.0,     # commercial FEM "Normal Deviation" [deg]
     aspect_ratio:      float = 10.0,    # commercial FEM "Aspect Ratio"
-    outer_air_factor:  float = 1.3,
+    outer_air_factor:  Optional[float] = None,
     band_thickness_mm: float = 0.4,
-    gap_layers:        float = 1.0,     # element rows PER SIDE of the slip circle (default 1)
-    n_sectors:         int   = 4,
+    gap_layers:        Optional[float] = None,  # rows PER SIDE; None = machine Mesh setting
+    n_sectors:         Optional[int]   = None,
     stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
     component_mesh:    str   = "",      # JSON {comp: size_mm} per-part mesh size
     pole_copy:         bool  = False,   # bit-identical pole/slot template-copy mesh
@@ -1014,8 +1017,15 @@ async def build_fem_mesh_2d_sliding_band(
     import numpy as _np
 
     _comp_mesh = _parse_component_mesh(component_mesh)
-    # Show the gap the solver will mesh (sb_domains.effective_gap_layers).
-    gap_layers = _effective_gap_layers(gap_layers)
+    # Mesh settings only from the Mesh tab / the machine's saved settings, and
+    # the gap the solver will mesh (sb_domains.effective_gap_layers).
+    _mv, _ = _resolve_mesh_settings(
+        {"mesh_size_mm": mesh_size_mm, "min_size_mm": min_size_mm,
+         "outer_air_factor": outer_air_factor, "gap_layers": gap_layers,
+         "n_sectors": n_sectors})
+    mesh_size_mm, min_size_mm = _mv["mesh_size_mm"], _mv["min_size_mm"]
+    outer_air_factor, n_sectors = _mv["outer_air_factor"], int(_mv["n_sectors"])
+    gap_layers = _effective_gap_layers(_mv["gap_layers"])
     _gh, _pd = _current_geom_hash_and_params(geo)   # geometry (live + optional override)
     key = (round(rotor_angle_deg, 3), round(mesh_size_mm, 2),
            round(min_size_mm, 2), round(surface_deviation, 4),
@@ -2273,12 +2283,12 @@ def _field2d_job_kind(n_steps_per_period: int, demag: bool, eddy: bool) -> str:
 def get_fem_field2d(
     rotor_angle_deg:     float = 0.0,
     gamma_deg:           float = 0.0,
-    mesh_size_mm:        float = 4.0,
-    min_size_mm:         float = 0.3,
-    outer_air_factor:    float = 1.3,
+    mesh_size_mm:        Optional[float] = None,  # None = machine Mesh setting
+    min_size_mm:         Optional[float] = None,
+    outer_air_factor:    Optional[float] = None,
     motion_band:         bool  = True,
     band_thickness_mm:   float = 0.4,
-    n_sectors:           int   = 4,
+    n_sectors:           Optional[int]   = None,
     stator_fillet_mm:    float = 0.0,
     I_phase_rms:         Optional[float] = None,
     component_mesh:      str   = "",
@@ -2288,7 +2298,7 @@ def get_fem_field2d(
     geo_mesh:            bool  = True,
     structured_gap:      bool  = True,
     airgap_macro:        bool  = False,
-    gap_layers:          float = 1.0,     # the transient run default (layers/side)
+    gap_layers:          Optional[float] = None,  # layers/side; None = machine Mesh setting
     geo:                 Optional[str] = None,
     n_steps_per_period:  int   = 0,
     n_periods:           float = 1.0,
@@ -2351,6 +2361,14 @@ def get_fem_field2d(
     saying so.  The frontend no longer starts these by itself, and this is the
     other half — the server refusing to run the same solve twice.
     """
+    # Mesh settings only from the Mesh tab / the machine's saved settings.
+    _mv, _ = _resolve_mesh_settings(
+        {"mesh_size_mm": mesh_size_mm, "min_size_mm": min_size_mm,
+         "outer_air_factor": outer_air_factor, "gap_layers": gap_layers,
+         "n_sectors": n_sectors})
+    mesh_size_mm, min_size_mm = _mv["mesh_size_mm"], _mv["min_size_mm"]
+    outer_air_factor, gap_layers = _mv["outer_air_factor"], _mv["gap_layers"]
+    n_sectors = int(_mv["n_sectors"])
     _p = dict(
         rotor_angle_deg=rotor_angle_deg, gamma_deg=gamma_deg,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
@@ -4475,14 +4493,14 @@ def get_fem_transient(
     connection:  Optional[str] = None,    # ← WINDING CONNECTION label ("4S" / "2S-2P" / "4P").
                                           #   Supplies n_parallel when that is absent and enters
                                           #   the d-axis topology key.  Unreadable label -> 400.
-    mesh_size_mm:        float = 4.0,
-    min_size_mm:         float = 0.3,
-    outer_air_factor:    float = 1.3,
+    mesh_size_mm:        Optional[float] = None,  # ┐ Mesh-tab settings: None = the
+    min_size_mm:         Optional[float] = None,  # │ machine's saved Mesh settings
+    outer_air_factor:    Optional[float] = None,  # │ (mesh_settings.py); a labelled
     motion_band:         bool  = True,
     band_thickness_mm:   float = 0.4,
-    gap_layers:          float = 1.0,     # ← element rows PER SIDE of the slip circle (Mesh
-                                          #   "layers/side"); owner 2026-09-30: 1 by default
-    n_sectors:           int   = 4,
+    gap_layers:          Optional[float] = None,  # ← element rows PER SIDE of the slip
+                                          #   circle; None = the machine's Mesh setting
+    n_sectors:           Optional[int]   = None,  # ┘ fallback only if none is saved
     stator_fillet_mm:    float = 0.0,
     include_frames:      bool  = False,   # ← if true, accumulate per-step field
     n_frames:            int   = 12,      # ← #frames sampled for the animation
@@ -4691,6 +4709,21 @@ def get_fem_transient(
             torque_method, (_get_cfg_tm() or {}).get("simulation", {}))
     except ValueError as _tme:
         raise HTTPException(status_code=422, detail=str(_tme))
+    # MESH SETTINGS come only from the Mesh tab (owner 2026-09-30): what the
+    # request carries, else the machine's saved Mesh settings, else a labelled
+    # last-resort fallback that the result reports (mesh_settings.py).
+    _mesh_vals, _mesh_src = _resolve_mesh_settings(
+        {"mesh_size_mm": mesh_size_mm, "min_size_mm": min_size_mm,
+         "outer_air_factor": outer_air_factor, "gap_layers": gap_layers,
+         "n_sectors": n_sectors})
+    mesh_size_mm = _mesh_vals["mesh_size_mm"]
+    min_size_mm = _mesh_vals["min_size_mm"]
+    outer_air_factor = _mesh_vals["outer_air_factor"]
+    gap_layers = _mesh_vals["gap_layers"]
+    n_sectors = int(_mesh_vals["n_sectors"])
+    _mesh_note = _mesh_fallback_note(_mesh_src, _mesh_vals)
+    if _mesh_note:
+        log.warning("transient: %s", _mesh_note)
     _gap_layers_eff = _effective_gap_layers(gap_layers, sampling_purpose)
     # The step count: the caller's, validated, else the eddy-aware default
     # (owner 2026-09-26: 72 with the coupled eddy solve, BDF2 reads the magnet
@@ -5615,6 +5648,8 @@ def get_fem_transient(
             # this machine's default gap layers from now on.
             _persist_gap_layers_default(_sbres, geo_ov=_geo_ov,
                                         sampling_purpose=sampling_purpose)
+            _sbres["mesh_settings_source"] = dict(_mesh_src)
+            _sbres["mesh_settings_note"] = _mesh_note
             # ── SIX PHASES: L_xy on the full ring, at THIS operating point ──
             # The circulating (x-y) mode drives the sets against each other,
             # which a sector model cannot represent unless the set pattern
@@ -7852,6 +7887,10 @@ def _build_transient_summary(
         "gap_layers_requested": sbres.get("gap_layers_requested"),
         "gap_layers_effective": sbres.get("gap_layers_effective"),
         "gap_layers_note": sbres.get("gap_layers_note"),
+        # Where each Mesh setting came from (request / machine / fallback);
+        # the note is set only when a labelled fallback was used.
+        "mesh_settings_source": sbres.get("mesh_settings_source"),
+        "mesh_settings_note": sbres.get("mesh_settings_note"),
         # Deprecated compatibility fields: raw ripple, no noise estimate.
         "T_noise_floor_pct": None, "torque_filter_applied": False,
         "P_mech_W": round(_Pmech, 1),

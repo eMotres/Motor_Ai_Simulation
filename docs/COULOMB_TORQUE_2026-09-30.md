@@ -368,8 +368,21 @@ layer per side the radial element is half the gap on every machine: Ø40 0.10 mm
 another at the same gap and the same X. What decides it is the mesh that gets built,
 and only the solved field can measure that. So:
 
-1. **Default 1 layer per side** for every run: the EM tab, the Mesh tab, coupled runs,
-   agent drafts / MCP, passports and the optimizer.
+1. **Mesh settings come only from the Mesh tab** (owner decision, final). That means gap
+   layers and the other four Mesh keys: mesh size, min size, outer air and sectors.
+   * Every run path — Simulation, coupled loop, field views, optimizer, sweeps,
+     passports, MCP / agent drafts — takes them from the request (the Mesh tab / the
+     saved duty's `mesh.*`).
+   * If the request does not carry a key, the machine's saved Mesh settings supply it
+     (`mesh_settings.py`, the `mesh:` block that duty activation and the Mesh tab
+     write). A path with no Mesh context of its own runs on the base machine's config:
+     the agent-draft sandbox copies the base machine's mesh block and its duty's
+     `mesh.*`, and passports run on the loaded machine.
+   * Only if the machine has no saved value does the labelled last-resort fallback
+     apply (gap layers 1 per side). The result says so in `mesh_settings_source` /
+     `mesh_settings_note`, and the card shows "Mesh: fallback".
+   * The browser sends only the Mesh keys it holds, never browser-side defaults.
+   * The optimizer and sweeps use the Mesh tab's gap layers for their candidates.
 2. Every run computes the Coulomb self-check ε (free: two ring integrals per frame).
    **Gate:** ε ≤ 5 % of max(p-p, 0.5 % of |mean|). The ripple error measured on Ø40
    static was 0.3–0.55 × ε (19.4 % → +10.6 % ripple, 3.0 % → +0.9 %), so the gate
@@ -392,8 +405,8 @@ and only the solved field can measure that. So:
    * The machine's next runs start at the passing level instead of failing again.
    * A run that still fails at 4/side persists nothing and keeps
      `ripple_mesh_limited = True` (badge on the card).
-5. **Optimizer:** candidates (`sampling_purpose="optimization"`) are solved at 1/side
-   and never refined. Each candidate's metrics carry `ripple_self_check_rel`,
+5. **Optimizer:** candidates (`sampling_purpose="optimization"`) are solved at the Mesh
+   tab's gap layers and never refined. Each candidate's metrics carry `ripple_self_check_rel`,
    `ripple_mesh_limited` and `gap_layers_per_side`. The winner's final re-solve
    (`cogging_quality`) uses the rule. If it refines, the passing level rides with the
    point (`gap_layers_persist`, `gap_layers_note`), and Apply makes it the applied

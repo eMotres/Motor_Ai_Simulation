@@ -3680,8 +3680,9 @@ def fem_transient_sliding_band(
     mesh_size_mm: float = 3.0,
     min_size_mm: float = 0.3,
     outer_air_factor: float = 1.3,
-    gap_layers: float = 1.0,     # element rows PER SIDE of the slip circle (Mesh-tab
-                                 # "layers/side"); owner 2026-09-30: 1 by default
+    gap_layers: float = 1.0,     # element rows PER SIDE of the slip circle.  Callers pass
+                                 # the Mesh tab's / machine's setting (mesh_settings.py);
+                                 # 1.0 is only the labelled last-resort fallback
     n_sectors: int = 4,
     stator_fillet_mm: float = 0.0,
     nonlinear_iterations: int = 100,  # CAP on the saturation Picard; the loop
@@ -11508,7 +11509,8 @@ def em_transient_eval(
     mesh_size_mm: float = 4.0,
     min_size_mm: float = 0.3,
     outer_air_factor: float = 1.3,
-    gap_layers: float = 1.0,         # rows per side of the slip circle (owner: 1 default)
+    gap_layers: float = 1.0,         # rows per side; callers pass the machine's Mesh
+                                     # setting — 1.0 is only the last-resort fallback
     n_sectors: int = -1,
     stator_fillet_mm: float = 0.0,
     coil_temp_c: float = 120.0,

@@ -55,6 +55,7 @@ function useMatOverrideReady(): boolean {
 // hand-written copies.  Nothing in this file may build a field colour of its
 // own: that is exactly how the views drifted apart.
 import { EM_MENU, emOutputs, outlinesFromMesh } from './fieldView';
+import { storedMeshQuery } from '../../lib/meshSettings';
 
 // ── helpers: read mesh params persisted by MeshPanel ──────────────────────
 function readMeshSetting<T>(key: string, def: T): T {
@@ -303,12 +304,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     const params: Record<string, string> = {
       rotor_angle_deg:   String(rotor_angle_deg),
       gamma_deg:         String(gamma_deg),
-      mesh_size_mm:      String(readMeshSetting('meshSize',    4.0)),
-      min_size_mm:       String(readMeshSetting('minSize',     0.3)),
-      outer_air_factor:  String(readMeshSetting('outerAir',    1.3)),
+      ...storedMeshQuery(),   // Mesh-tab numbers (missing = machine setting)
       motion_band:       String(readMeshSetting('motionBand',  true)),
       band_thickness_mm: String(readMeshSetting('bandThickness', 0.4)),
-      n_sectors:         String(readMeshSetting('nSectors',    1)),
       stator_fillet_mm:  '0',   // native geometry — extra smoothing removed
       component_mesh:    comp,
       // The field view now runs the sliding-band solver for one frame; pass the
@@ -323,7 +321,6 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       geo_mesh:          String(readMeshSetting('geoMesh', true)),
       structured_gap:    String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
       airgap_macro:      String(readMeshSetting('harmonicGap', false)),
-      gap_layers:        String(readMeshSetting('gapLayers', 1)),
     };
     if (I_phase_rms !== undefined) {
       params.I_phase_rms = String(I_phase_rms);
@@ -471,17 +468,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     // motor the simulation never solved and could never be served from it.
     demag:            String(demagOn),
     coil_temp_c:      String(simCoilTemp()),
-    mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
-    min_size_mm:      String(readMeshSetting('minSize',  0.3)),
-    outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
-    n_sectors:        String(readMeshSetting('nSectors', 1)),
+    ...storedMeshQuery(),   // Mesh-tab numbers (missing = machine setting)
     component_mesh:   JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
     pole_copy:        String(readMeshSetting('poleCopy', false)),
     iron_template:    String(readMeshSetting('ironTemplate', true)),
     geo_mesh:         String(readMeshSetting('geoMesh', true)),
     structured_gap:   String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
     airgap_macro:     String(readMeshSetting('harmonicGap', false)),
-    gap_layers:       String(readMeshSetting('gapLayers', 1)),
   });
 
   /** J⟳ / eddy view.

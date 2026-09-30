@@ -98,6 +98,9 @@ export interface TransientSummary {
   ripple_mesh_limited?: boolean | null;
   ripple_self_check_rel?: number | null;
   gap_layers_note?:    string | null;
+  // Set only when a Mesh setting fell back to the last-resort default
+  // because the machine has no saved Mesh setting for it.
+  mesh_settings_note?: string | null;
   // The measured gap rule re-solved this run with more layers per side.
   gap_refinement?: { applied?: boolean; gap_layers_per_side?: number;
                      persist_gap_layers?: number | null;
@@ -1109,6 +1112,13 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           <Tooltip title={torqueMethodTooltip(s.torque_method)}>
             <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>
               {torqueMethodShort(s.torque_method)}
+            </Typography>
+          </Tooltip>
+        )}
+        {s.mesh_settings_note && (
+          <Tooltip title={`${s.mesh_settings_note}. Save the Mesh tab for this machine to set it.`}>
+            <Typography sx={{ fontSize: 10, color: '#fbbf24', cursor: 'help' }}>
+              Mesh: fallback
             </Typography>
           </Tooltip>
         )}

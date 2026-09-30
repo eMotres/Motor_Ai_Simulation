@@ -215,7 +215,7 @@ def _enqueue_resume_sweep(ws_dir: str, journal) -> None:
         "pole_copy": req_body.get("pole_copy"),
         "torque_filter": req_body.get("torque_filter", False),
         "n_sectors": req_body.get("n_sectors", 1),
-        "gap_layers": req_body.get("gap_layers", 1.0),
+        "gap_layers": req_body.get("gap_layers"),   # None = machine Mesh setting
         "end_winding": req_body.get("end_winding", 0.0),
         "rotor_eddy": req_body.get("rotor_eddy", False),
         "hi_fidelity": req_body.get("hi_fidelity", False),

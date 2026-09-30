@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import math
 import os
-from typing import Dict, Any, Literal
+from typing import Dict, Any, Literal, Optional
 
 log = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
             gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
             min_size_mm: float = 0.3, n_sectors: int = -1,
             pole_copy=None, torque_filter: bool = False,
-            gap_layers: float = 1.0, end_winding_factor: float = 0.0,
+            gap_layers: Optional[float] = None, end_winding_factor: float = 0.0,
             rotor_eddy: bool = False, hi_fidelity: bool = False,
             structured_gap: bool = False, airgap_macro: bool = False,
             iron_template: bool = True, geo_mesh: bool = True,
@@ -303,7 +303,8 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         **({} if connection is None else {"connection": str(connection)}),
         "mesh_size_mm": float(mesh_size_mm),
         "min_size_mm": float(min_size_mm), "n_sectors": int(_ns),
-        "coil_temp_c": float(coil_temp_c), "gap_layers": float(gap_layers),
+        "coil_temp_c": float(coil_temp_c), # None = the machine's saved Mesh setting (the route resolves it)
+        "gap_layers": (None if gap_layers is None else float(gap_layers)),
         # MAGNET TEMPERATURE.  Omitted (None) = the assigned card exactly as the
         # library quotes it — what every study so far solved, so an omitted
         # argument changes no candidate's numbers.  Sent, every candidate is
@@ -681,7 +682,7 @@ if __name__ == "__main__":
                       n_sectors=spec.get("n_sectors", -1),
                       pole_copy=spec.get("pole_copy"),
                       torque_filter=spec.get("torque_filter", True),
-                      gap_layers=spec.get("gap_layers", 1.0),
+                      gap_layers=spec.get("gap_layers"),
                       end_winding_factor=spec.get("end_winding_factor", 0.0),
                       rotor_eddy=spec.get("rotor_eddy", False),
                       hi_fidelity=spec.get("hi_fidelity", False),

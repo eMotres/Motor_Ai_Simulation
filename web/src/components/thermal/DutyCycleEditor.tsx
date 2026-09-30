@@ -31,7 +31,7 @@
  * `ActiveFamilyStrip`).  Nothing here touches the stored duty — the standing
  * no-silent-state rule.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, Box, Button, CircularProgress, MenuItem, Paper, Select,
   TextField, Tooltip, Typography,
@@ -45,7 +45,8 @@ import {
   dutyCycleChip, dutyCycleEdited, dutyCycleFromForm, dutyKey, noteDutyCycleEdit,
   readDutyCycle, setDutyCycleSnapshot, type DutyCycleForm,
 } from '../../lib/dutySettings';
-import { thermalPanelBlock, useThermalStore } from '../../stores/thermalStore';
+import { thermalPanelBlock } from '../../stores/thermalStore';
+import { useUIStore } from '../../stores/motorStore';
 import {
   fetchDutyCycle, fetchLastDutyCycle, fmt, fmtSecs, isNoEmRun, meshParams,
   simOperatingPoint,
@@ -53,15 +54,14 @@ import {
 import type {
   DutyCycleKind, DutyCycleRequest, DutyCycleResult, DutyCycleSpec,
 } from './api';
-/* The escape hatch out of the ONE refusal this editor can answer — see
-   `dutyCycleOffer` for why the point may not come from the Electromagnetic
-   tab, and why the run is offered rather than taken. */
-import {
-  OFFER_IDLE, fetchCalibrationPoint, offerReduce, pointTooltipWords, pointWords,
-} from './dutyCycleOffer';
-import type {
-  CalibrationPoint, OfferAction, OfferState,
-} from './dutyCycleOffer';
+/* The ONE refusal this editor can answer — never by making the run (this
+   tab never launches electromagnetics, owner rule), only by naming WHICH
+   point is missing: `dutyCycleOffer.fetchCalibrationPoint` reads it out of
+   the calibration duty's stored entry, the same one the backend refused
+   against, and `pointWords` / `pointTooltipWords` say it in the one line and
+   the tooltip. */
+import { fetchCalibrationPoint, pointTooltipWords, pointWords } from './dutyCycleOffer';
+import type { CalibrationPoint } from './dutyCycleOffer';
 /* What the shaft is DELIVERING while it heats up — the duties' own torques,
    laid over the same cycle the temperatures are drawn on. */
 import {
@@ -431,115 +431,58 @@ const DutyCycleEditor: React.FC = () => {
     };
   }, [ctx, block, magnetLimit, magnetCardLimit]);
 
-  /* ── the ONE refusal this editor can answer, and never silently ───────────
+  /* ── the ONE refusal this editor can answer, and never by making the run ──
      The calibration map is solved at the CALIBRATION DUTY's own stored point,
      which is not the point on the Electromagnetic tab and may not even be this
-     duty's.  So a `no_electromagnetic_run` becomes an OFFER: one line, the
-     point spelled out, and two buttons.  The run itself goes through the
-     orchestrator — `thermalStore.emRunAtPoint`, the same chaining path the
-     Thermal tab's own Solve uses — and writes nothing into either tab.
+     duty's.  A `no_electromagnetic_run` used to become an OFFER to make that
+     run through the orchestrator; it no longer does (owner rule, 2026-09-07,
+     repeated 2026-09-30: this app never launches electromagnetics from the
+     thermal side).  All that is left is naming which point is missing, and
+     pointing at the Electromagnetic tab — `fetchCalibrationPoint` is read
+     ONLY for that sentence, never to run anything. */
+  interface EmMissing { why: string; point: CalibrationPoint | null }
+  const [emMissing, setEmMissing] = useState<EmMissing | null>(null);
+  /** WHICH duty the notice is about.  A ▶ that puts another duty on the panel
+   *  makes it stale — the point in it belongs to the previous machine. */
+  const [emMissingKey, setEmMissingKey] = useState<string | null>(null);
 
-     The state is mirrored into a ref so the async handlers below can read the
-     CURRENT phase (a `useState` value captured by a closure is the phase the
-     press started in), and `dispatch` returns the next state for the same
-     reason. */
-  const [offer, setOfferState] = useState<OfferState>(OFFER_IDLE);
-  /** WHICH duty the standing offer is about.  A ▶ that puts another duty on the
-   *  panel makes it stale, and a stale offer must not be actionable: the point
-   *  in it belongs to the previous machine.  Compared rather than reset in an
-   *  effect, so nothing here re-renders on its own. */
-  const [offerKey, setOfferKey] = useState<string | null>(null);
-  const offerRef = useRef<OfferState>(OFFER_IDLE);
-  const dispatch = useCallback((a: OfferAction): OfferState => {
-    const next = offerReduce(offerRef.current, a);
-    offerRef.current = next;
-    setOfferState(next);
-    return next;
-  }, []);
-
-  /** Send the cycle.  `fresh` = a Run press (which clears any standing offer);
-   *  the retry after an Electromagnetic run passes false, so that run counts as
-   *  the one attempt this press gets. */
+  /** Send the cycle.  `fresh` = a Run press, which clears any standing notice. */
   const ask = useCallback(async (fresh: boolean) => {
     const req = cycleRequest();
     if (!req || !ctx) return;
-    if (fresh) dispatch({ type: 'run' });
+    if (fresh) setEmMissing(null);
     setBusy(true); setErr(null);
     try {
       const r = await fetchDutyCycle(req);
       setRes(r); setRestoredAt(null);
-      dispatch({ type: 'settled' });
+      setEmMissing(null);
     } catch (e) {
       // The backend refuses a cycle it cannot answer BY NAME, and the sentence
       // beside the code is written for an engineer to act on — shown verbatim.
       const why = e instanceof Error ? e.message : String(e);
       if (!isNoEmRun(e)) { setErr(why); return; }
-      let point: CalibrationPoint;
+      // Read only for the WORDS — which point needs the run — never to make
+      // it.  Its own failure just leaves the point out of the sentence.
+      let point: CalibrationPoint | null = null;
       try {
         point = await fetchCalibrationPoint(API, ctx.die, ctx.config, calibDuty);
-      } catch (pe) {
-        // Without the point there is nothing to offer to run AT, so the
-        // refusal stands exactly as it would have before.
-        setErr(`${why} (the calibration duty could not be read, so this tab `
-          + `cannot offer to make the run: `
-          + `${pe instanceof Error ? pe.message : String(pe)})`);
-        return;
-      }
-      // Already answered once for this press — a second refusal is the answer,
-      // not a second offer of a second run.
-      setOfferKey(key);
-      if (dispatch({ type: 'refused', why, point }).phase !== 'offered') {
-        setErr(why);
-      }
+      } catch { /* the refusal alone still says to go run it */ }
+      setEmMissingKey(key);
+      setEmMissing({ why, point });
     } finally {
       setBusy(false);
     }
-  }, [cycleRequest, ctx, key, calibDuty, dispatch]);
+  }, [cycleRequest, ctx, key, calibDuty]);
 
   const run = useCallback(() => {
     if (!ctx || issue) return;
     void ask(true);
   }, [ctx, issue, ask]);
 
-  /** [Make the run] — one electromagnetic run at the CALIBRATION duty's point,
-   *  through the orchestrator, then the same cycle request again. */
-  const makeEmRun = useCallback(() => {
-    const s = offerRef.current;
-    if (s.phase !== 'offered' || !s.point) return;
-    const point = s.point;
-    const why = s.why ?? '';
-    dispatch({ type: 'accept' });
-    // The frame count and the mesh the CYCLE REQUEST sends — the loss map is
-    // looked up by both, so the run has to be made on them and not on whatever
-    // the Electromagnetic tab's own Run would have used.
-    const op = simOperatingPoint();
-    const mesh = meshParams();
-    void (async () => {
-      const failed = await useThermalStore.getState().emRunAtPoint({
-        point, n_steps_per_period: op.n_steps_per_period, mesh,
-        label: `Electromagnetic run for the calibration duty “${point.duty}” `
-          + `(${pointWords(point)}) — the duty cycle is waiting on it…`,
-      }, why);
-      dispatch({ type: 'settled' });
-      if (failed) { setErr(failed); return; }
-      await ask(false);
-    })();
-  }, [ask, dispatch]);
-
-  /** [Cancel] — the offer is declined and the refusal stands, as before. */
-  const declineEmRun = useCallback(() => {
-    const s = offerRef.current;
-    if (s.phase !== 'offered') return;
-    dispatch({ type: 'cancel' });
-    setErr(s.why);
-  }, [dispatch]);
-
-  /** [Stop] — cancels by run-id, exactly as the Thermal tab's own Stop does. */
-  const stopEmRun = useCallback(() => {
-    if (dispatch({ type: 'stop' }).stopping) {
-      useThermalStore.getState().stopEmFallback();
-    }
-  }, [dispatch]);
+  /** [Go to Electromagnetic] — switches tabs; makes nothing. */
+  const setActiveTab = useUIStore((s) => s.setActiveTab);
+  const goToElectromagnetic = useCallback(
+    () => setActiveTab('simulation'), [setActiveTab]);
 
   /* ── the chart's rows ─────────────────────────────────────────────────── */
   const rows = useMemo(() => {
@@ -608,12 +551,9 @@ const DutyCycleEditor: React.FC = () => {
   const runMode = useMemo(() => runModeLine(form.kind), [form.kind]);
   /** a stored kind this editor no longer offers (S2, an explicit segment list) */
   const retired = useMemo(() => retiredKindNote(form.kind), [form.kind]);
-  /** an offer or a run left over from ANOTHER duty — shown as nothing at all */
-  const offerStale = offer.phase !== 'idle' && offerKey !== key;
-  /** the offer line is on screen */
-  const offering = offer.phase === 'offered' && !!offer.point && !offerStale;
-  /** the orchestrator run this editor asked for is in flight */
-  const emRunning = offer.phase === 'running' && !offerStale;
+  /** a missing-run notice left over from ANOTHER duty — shown as nothing */
+  const emMissingStale = emMissing !== null && emMissingKey !== key;
+  const missing = emMissingStale ? null : emMissing;
 
   return (
     <Paper sx={{ p: 1.25, mt: 1.5, bgcolor: 'var(--panel)' }}>
@@ -826,7 +766,7 @@ const DutyCycleEditor: React.FC = () => {
 
             <Box sx={CTRL_ROW}>
               <Button variant="contained" size="small" onClick={run}
-                disabled={busy || emRunning || !!issue}
+                disabled={busy || !!issue}
                 startIcon={busy ? <CircularProgress size={13} color="inherit" /> : undefined}>
                 {busy ? 'Running' : 'Run cycle'}
               </Button>
@@ -850,48 +790,25 @@ const DutyCycleEditor: React.FC = () => {
             )}
           </Box>
 
-          {/* ── the missing Electromagnetic run, OFFERED ─────────────────────
-              One line under Run.  Never taken silently: it costs minutes, and
-              it is made at the CALIBRATION duty's point — not the one the
-              Electromagnetic tab is showing. */}
-          {offering && offer.point && (
+          {/* ── no CURRENT Electromagnetic result at the calibration point ────
+              One line under Run, tooltip for the rest.  This editor never
+              makes that run — it never did the whole machine's own point
+              either — it just says which point is missing and sends the user
+              to the Electromagnetic tab (owner rule, 2026-09-07, repeated
+              2026-09-30). */}
+          {missing && (
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center',
               flexWrap: 'wrap', mt: 1 }}>
-              <Tooltip {...TIP_PROPS} title={`The network is fitted to ONE steady map, and that map is solved at the calibration duty “${offer.point.duty}”’s own saved point (${pointTooltipWords(offer.point)}) — not at the point on the Electromagnetic tab. There is no electromagnetic run of this machine at it, so there is no loss field to heat it with. Making it here runs the EM ↔ thermal orchestrator once at THAT point, with the cooling this panel is showing; nothing is written into the Electromagnetic tab or into this panel, and the cycle is re-sent by itself when it finishes. The backend refused with: ${offer.why ?? ''}`}>
+              <Tooltip {...TIP_PROPS} title={`The network is fitted to ONE steady map, solved at the calibration duty${missing.point ? ` "${missing.point.duty}"'s own saved point (${pointTooltipWords(missing.point)})` : ''} — not the point on the Electromagnetic tab. This tab never runs electromagnetics itself. The backend refused with: ${missing.why}`}>
                 <Typography sx={{ ...warn, fontWeight: 700, whiteSpace: 'normal' }}>
-                  ⚠ No electromagnetic run at the calibration point
-                  {' '}({pointWords(offer.point)}). Make it now (~2 min)?
+                  ⚠ No Electromagnetic result for the calibration point
+                  {missing.point ? ` (${pointWords(missing.point)})` : ''} — run
+                  it in the Electromagnetic tab
                 </Typography>
               </Tooltip>
-              <Button variant="contained" size="small" onClick={makeEmRun}>
-                {tx('makeTheRun')}
+              <Button variant="outlined" size="small" onClick={goToElectromagnetic}>
+                Go to Electromagnetic
               </Button>
-              <Button variant="text" size="small" onClick={declineEmRun}>
-                {tx('cancel')}
-              </Button>
-            </Box>
-          )}
-
-          {/* ── …and while it runs.  The progress bar is the orchestrator's,
-              at the top of this tab's scroller (the thermal tracker is silent
-              through the transient, which is most of the wait). */}
-          {emRunning && (
-            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center',
-              flexWrap: 'wrap', mt: 1 }}>
-              <CircularProgress size={13} />
-              <Tooltip {...TIP_PROPS} title={tx('oneElectromagneticRunAtTheCalibration')}>
-                <Typography sx={{ ...lbl, cursor: 'help' }}>
-                  {tx('makingTheElectromagneticRunAtThe')}
-                </Typography>
-              </Tooltip>
-              <Tooltip {...TIP_PROPS} title={tx('cancelTheElectromagneticRunItStops')}>
-                <span>
-                  <Button variant="outlined" size="small" color="warning"
-                    onClick={stopEmRun} disabled={offer.stopping}>
-                    {offer.stopping ? 'Stopping' : 'Stop'}
-                  </Button>
-                </span>
-              </Tooltip>
             </Box>
           )}
 

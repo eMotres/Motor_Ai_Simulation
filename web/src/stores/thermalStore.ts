@@ -28,16 +28,12 @@ import { liveGeoSig } from '../components/common/geoSig';
 import { normalizeLocalRows } from '../components/compare/resultRows';
 import type { LocalRow } from '../components/compare/resultRows';
 import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
-// The ORCHESTRATOR — the only thing in this app allowed to chain an
-// electromagnetic run to a thermal solve.  This tab calls it when its own solve
-// is refused for want of a run; it never solves electromagnetics itself, and
-// neither does the route it calls.
-import { cancelCoupled, registerThermalPanelBlock, runCoupled } from '../components/simulation/coupledApi';
-import { buildEmRunPayload, emRunInputsFromSettings } from '../lib/emRunPayload';
-// The duty-cycle editor's point lives in the CATALOGUE, not on the
-// Electromagnetic tab — `emRunBodyAt` is what pins it onto the run.
-import { emRunBodyAt } from '../components/thermal/dutyCycleOffer';
-import type { EmRunAt } from '../components/thermal/dutyCycleOffer';
+// `registerThermalPanelBlock` — the Electromagnetic tab's OWN coupled Run
+// reads this tab's cooling through it.  Nothing here calls the orchestrator
+// any more: the thermal side of this app never launches an electromagnetic
+// run (owner rule, 2026-09-07, repeated 2026-09-30 — see `solveField` and
+// `solveCoupled` below, which refuse in place of what used to chain one).
+import { registerThermalPanelBlock } from '../components/simulation/coupledApi';
 import {
   fetchCoupled, fetchLastThermal, fetchThermalField, fetchThermalMesh,
   fetchMeshParams, isNoEmRun, readLastSecs, readTherm, simOperatingPoint,
@@ -142,25 +138,6 @@ const EMPTY: Slice<never> = {
   backendStale: null, restoredAt: null, startedAt: null,
 };
 
-/** The Electromagnetic run THIS TAB is making for itself, non-null exactly
- *  while it is in flight.  See `emRunThroughLoop`. */
-export interface EmFallback {
-  /** the run-id the loop was launched with — what Stop cancels */
-  runId: string;
-  /** the refusal's own sentence: which operating point / temperature / frame
-   *  count the stored runs did not cover.  The strip's tooltip, so the user can
-   *  see WHY a Solve turned into a transient. */
-  why: string;
-  /** Stop was pressed and the loop is winding down (it stops between phases,
-   *  and mid-transient at the next frame). */
-  stopping: boolean;
-  /** WHOSE run this is, when it is not this tab's own Solve: the duty-cycle
-   *  editor's calibration point reads differently from "the point on the
-   *  Electromagnetic tab", and the strip must not claim the wrong one.  `null`
-   *  = the field Solve's own fallback. */
-  label?: string | null;
-}
-
 export interface ThermalState {
   /** `/last` has been consulted once — a second mount must not re-ask, or a
    *  restored-then-cleared result would come back on every tab switch. */
@@ -169,9 +146,15 @@ export interface ThermalState {
   field: Slice<ThermalField>;
   coupled: Slice<CoupledResult>;
 
-  /** non-null while this tab is making the Electromagnetic run its own solve
-   *  could not find */
-  emFallback: EmFallback | null;
+  /** The refusal's own sentence, non-null exactly when the last Solve (or the
+   *  coupled loop) came back `no_electromagnetic_run` — there is no current
+   *  Electromagnetic result to heat this point with.  This tab NEVER makes
+   *  that run itself (owner rule, 2026-09-07, repeated 2026-09-30: «we agreed
+   *  not to launch electromagnetic modelling from the thermal side — we
+   *  always take the current one, and if there isn't one, we say it needs to
+   *  be run»); the panel reads this to show one line and a link to the
+   *  Electromagnetic tab, nothing more. */
+  emMissing: string | null;
 
   /** the mesh itself: the bare cross-section drawn when nothing has been
    *  solved, and what the Build mesh button produces */
@@ -291,20 +274,6 @@ export interface ThermalState {
    *  history answer and solve again, even for byte-identical inputs. */
   solveField: (fresh?: boolean) => Promise<void>;
   solveCoupled: () => Promise<void>;
-  /** Make ONE Electromagnetic run at a point that is NOT this tab's — the
-   *  duty-cycle editor's calibration duty (2026-09-14).  Through the same
-   *  orchestrator the field Solve's own fallback uses, so there is one chaining
-   *  path in this app and not two, and with the same progress strip and Stop.
-   *
-   *  It CHANGES NOTHING here: the map it produces is not adopted as this tab's
-   *  field result and no setting of any panel is written — the caller asked for
-   *  a run at another duty's point, and a picture of that point replacing the
-   *  one on screen would be the silent state mutation this project forbids.
-   *  Resolves to `null` on success, or the refusal's sentence. */
-  emRunAtPoint: (at: EmRunAt, why: string) => Promise<string | null>;
-  /** Cancel the Electromagnetic run this tab started for itself.  Does nothing
-   *  when there is none — the Stop button only exists while there is. */
-  stopEmFallback: () => void;
 }
 
 /** The small choices persist under `therm.*`.  The operating point is NOT among
@@ -492,19 +461,18 @@ function buildRequest(s: ThermalState, mesh: ThermalMeshRequest,
  *
  * The thermal ROUTE never computes electromagnetic losses — it answers 422
  * `no_electromagnetic_run` naming the run that is missing, and that refusal is a
- * standing rule of this project (2026-09-07).  What was left for the user to do
- * by hand — go to the Electromagnetic tab, press Run, come back, press Solve —
- * this tab now does for them (user 2026-09-08: *"better if it computes the
- * electromagnetics itself and understands when it needs to be done and when not"*).
+ * standing rule of this project (2026-09-07).
  *
- * NOT by solving anything here, and not by relaxing the route: through the
- * ORCHESTRATOR, `POST /api/coupled/run`, the one thing in this app allowed to
- * chain the two solvers.  With `max_iter: 1` that is exactly ONE electromagnetic
- * run at the temperatures the Electromagnetic tab is showing, followed by the
- * thermal solve with THIS tab's cooling — the two halves the user would have
- * done by hand, in that order, and nothing more.  When a matching run already
- * exists none of this happens: the plain solve answers and this file is not
- * reached.
+ * This tab used to answer that refusal itself (2026-09-08), chaining ONE
+ * electromagnetic run through the orchestrator before its own solve.  That
+ * chaining is GONE (owner, 2026-09-30: «we agreed not to launch
+ * electromagnetic modelling from the thermal side — we always take the
+ * current one, and if there isn't one, we say it needs to be run»).  What is
+ * left for the user to do by hand is exactly that: go to the Electromagnetic
+ * tab, press Run, come back, press Solve again — `solveField` and
+ * `solveCoupled` below both stop at the refusal and set `emMissing` to its
+ * sentence, and the panel reads that to show one line and a link to the
+ * Electromagnetic tab.  Nothing in this file calls the orchestrator any more.
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /** The cooling THIS panel is showing, in the field names `thermal_settings`
@@ -554,101 +522,11 @@ registerThermalPanelBlock(() => {
   return out;
 });
 
-/**
- * Make the missing Electromagnetic run, and come back with the map.
- *
- * Blocks for the whole loop — a transient plus a conduction solve, minutes — and
- * says so meanwhile through `emFallback`: the panel swaps its progress strip to
- * `/api/coupled/progress` (the thermal bar is silent through the transient,
- * which is most of the wait) and shows a Stop that cancels by run-id.
- *
- * Anything the orchestrator refuses — a single frame, an imposed-voltage drive,
- * the conducting solve off, an rpm or a winding that differs from the shared
- * config, cooling that cannot be solved — comes back as its own sentence and is
- * shown verbatim.  Those are all things the user must fix; none of them is
- * something this tab may decide on its behalf.
- *
- * `at` is the SECOND caller's difference (2026-09-14, the duty-cycle editor).
- * The field Solve asks about the point the Electromagnetic tab is showing, so it
- * passes nothing and the payload is built from that tab's own fields.  A duty
- * cycle's calibration map is solved at ANOTHER DUTY's stored point, so that
- * caller hands it over explicitly and it overrides every field the builder would
- * have read from the Electromagnetic tab (`dutyCycleOffer.emRunBodyAt`).
- */
-async function emRunThroughLoop(
-  set: (p: Partial<ThermalState>) => void,
-  get: () => ThermalState,
-  why: string,
-  at?: EmRunAt,
-): Promise<ThermalField> {
-  const runId = `therm-${Date.now().toString(36)}`;
-  set({ emFallback: { runId, why, stopping: false, label: at?.label ?? null } });
-  try {
-    // The operating point the REFUSED request named, pinned onto the run: the
-    // loss map is looked up by the current, the angle, the speed, the coil
-    // temperature and the frame count, so a run made at anything else is not the
-    // run that was missing.  Everything else — the mesh, the temperatures, the
-    // winding, the machine — is read where the Electromagnetic tab set it, by
-    // the same builder that tab's own Run uses.
-    const op = simOperatingPoint();
-    const base = buildEmRunPayload(emRunInputsFromSettings({
-      I_phase_rms: at ? at.point.I_phase_rms : op.I_phase_rms,
-      gamma_deg: at ? at.point.gamma_deg : op.gamma_deg,
-      steps: at ? at.n_steps_per_period : op.n_steps_per_period,
-      run_id: runId,
-    }));
-    // `record: false` — THE RUN IS NOT THIS MACHINE'S ANSWER (2026-09-15).
-    // Only on the `at` branch, and the difference is the whole flag: the field
-    // Solve above runs the point this tab is showing, which IS the loaded
-    // duty's, and must keep being filed under it.  A calibration run is made at
-    // ANOTHER duty's point (14.7 A, 1 000 rpm, coil 30 °C) while the editor
-    // holds this one, and the backend could not tell the two apart — measured
-    // on 2026-09-15, the L13 peak duty's `em` and `thermal` field sidecars came
-    // back as 14.7 A / 30 °C maps and `/api/thermal/last` as 59 °C instead of
-    // 409 °C.  The flag suppresses the FILING only: the run, its transient
-    // store and its field snapshot — the thing the duty-cycle route looks the
-    // loss map up in — are written exactly as before, which is the whole point
-    // of making it.  `for_duty` is the log line's, nothing reads it back.
-    const payload = at
-      ? { ...emRunBodyAt(base, at), record: false,
-          ...(at.label ? { for_duty: at.label } : {}) }
-      : base;
-    const res = await runCoupled(payload, undefined, {
-      // ONE electromagnetic run, then one thermal solve.  Iterating the two to
-      // their fixed point is the Electromagnetic tab's coupled switch — not
-      // something a Solve press here buys silently.
-      maxIter: 1,
-      // …and no rotor stress either: this Solve asked for a temperature map.
-      mechanical: false,
-      thermalSettings: panelCooling(get()),
-    });
-    // `CoupledRunResult.thermal` is deliberately loose (the orchestrator's
-    // client does not own the thermal payload's shape) — this tab does, and the
-    // `components` check below is what actually decides it is a map.
-    const map = res.thermal as unknown as ThermalField | null;
-    if (map && map.components) return map;
-    // Not seen in practice: the loop remembers its map as this tab's last
-    // `field` result, so an answer that came back without one can still be read
-    // back from where it was stored.
-    const last = (await fetchLastThermal()).field?.result;
-    if (!last) throw new Error('the coupled loop returned no temperature map');
-    return last;
-  } catch (e) {
-    // A cancel is a REQUEST, not a failure: the loop answers a cancelled run
-    // with its own 499, and "coupled run stopped" is not what the user who
-    // pressed Stop needs to read.
-    if (get().emFallback?.stopping) throw new Error('Cancelled.');
-    throw e;
-  } finally {
-    set({ emFallback: null });
-  }
-}
-
 export const useThermalStore = create<ThermalState>()((set, get) => ({
   hydrated: false,
   field: { ...EMPTY } as Slice<ThermalField>,
   coupled: { ...EMPTY } as Slice<CoupledResult>,
-  emFallback: null,
+  emMissing: null,
 
   geom: null,
   geomBusy: false,
@@ -883,9 +761,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     // verdict, and this is the second lock on the same door.
     const bad = coolingIssue(s);
     if (bad) { set({ field: { ...s.field, busy: false, err: bad } }); return; }
-    set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now() } });
-    /** the refusal's sentence, when the answer was "no Electromagnetic run" */
-    let why: string | null = null;
+    set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now() },
+          emMissing: null });
     try {
       const mesh = await fetchMeshParams();
       set({ meshCfg: mesh });
@@ -893,26 +770,17 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       set({ field: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
                      backendStale: false, restoredAt: null, startedAt: null } });
       if (!out.cached) noteSecs(set, get, 'field', out.elapsed_s ?? out.solve_time_s);
-      return;
     } catch (e) {
-      // The ONE refusal this tab can answer by itself: there is no
-      // Electromagnetic run of this machine at this point, so make it — through
-      // the orchestrator.  Every other error is the user's to read.
-      if (!isNoEmRun(e)) {
-        set({ field: { ...EMPTY, err: msg(e) } as Slice<ThermalField> });
+      // There is no Electromagnetic run of this machine at this point — this
+      // tab NEVER makes that run itself (owner rule, repeated 2026-09-30).
+      // Solve just STOPS: the panel reads `emMissing` and shows one line and
+      // a link to the Electromagnetic tab. Every other error is the user's to
+      // read as before.
+      if (isNoEmRun(e)) {
+        set({ field: { ...s.field, busy: false, err: null, startedAt: null },
+              emMissing: msg(e) });
         return;
       }
-      why = msg(e);
-    }
-    // The loop's own thermal half solved this tab's cooling at the run it just
-    // made, so its map IS the answer this Solve asked for — shown exactly as a
-    // plain Solve's, and stamped the same way, because it is just as fresh.
-    try {
-      const out = tileFullRing(await emRunThroughLoop(set, get, why));
-      set({ field: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
-                     backendStale: false, restoredAt: null, startedAt: null } });
-      if (!out.cached) noteSecs(set, get, 'field', out.elapsed_s ?? out.solve_time_s);
-    } catch (e) {
       set({ field: { ...EMPTY, err: msg(e) } as Slice<ThermalField> });
     }
   },
@@ -920,13 +788,18 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   /** The EM↔thermal fixed point: losses heat the copper, hotter copper is more
    *  resistive, more resistive copper loses more.  Each iteration is a full EM
    *  solve plus a conduction solve, which is why the cap is an input and the
-   *  run is a deliberate press. */
+   *  run is a deliberate press.
+   *
+   *  Like `solveField`, this reuses ONE loss map and never makes it: a
+   *  `no_electromagnetic_run` refusal stops the solve and is read off
+   *  `emMissing`, exactly as the field Solve's does. */
   solveCoupled: async () => {
     const s = get();
     const bad = coolingIssue(s);
     if (bad) { set({ coupled: { ...s.coupled, busy: false, err: bad } }); return; }
-    set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now() } });
-    const ask = async (): Promise<CoupledResult> => {
+    set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now() },
+          emMissing: null });
+    try {
       const mesh = await fetchMeshParams();
       set({ meshCfg: mesh });
       const raw = await fetchCoupled({
@@ -935,54 +808,17 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
         // request, so it falls back to the API's own default rather than 422.
         max_iter: Math.min(12, Math.max(1, Math.round(num(s.maxIter, 6)))),
       });
-      return { ...raw, field: tileFullRing(raw.field) };
-    };
-    try {
-      let out: CoupledResult;
-      try {
-        out = await ask();
-      } catch (e) {
-        if (!isNoEmRun(e)) throw e;
-        // This loop reuses ONE loss map and rescales the copper between passes
-        // (`em_solves: 0`), so it needs the same Electromagnetic run the field
-        // Solve does and refuses in the same words.  Make it the same way, then
-        // ask again — the button keeps its own physics, it just stops being
-        // blocked on a run the user had to go and make by hand.
-        const mapped = tileFullRing(await emRunThroughLoop(set, get, msg(e)));
-        // The loop stored that map as this tab's last `field` result, so adopt
-        // it here too: a panel whose picture disagrees with `/last` is a panel
-        // that will disagree with itself after the next reload.
-        set({ field: { data: mapped, busy: false, err: null, geoSig: liveGeoSig(),
-                       backendStale: false, restoredAt: null, startedAt: null } });
-        out = await ask();
-      }
+      const out: CoupledResult = { ...raw, field: tileFullRing(raw.field) };
       set({ coupled: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
                        backendStale: false, restoredAt: null, startedAt: null } });
       if (!out.cached) noteSecs(set, get, 'coupled', out.elapsed_s ?? out.solve_time_s);
     } catch (e) {
+      if (isNoEmRun(e)) {
+        set({ coupled: { ...s.coupled, busy: false, err: null, startedAt: null },
+              emMissing: msg(e) });
+        return;
+      }
       set({ coupled: { ...EMPTY, err: msg(e) } as Slice<CoupledResult> });
     }
-  },
-
-  emRunAtPoint: async (at, why) => {
-    // No `field` write, no `noteSecs`, no adopted temperatures: this run is not
-    // an answer to anything on this tab.  The only state it touches is
-    // `emFallback`, which is what the strip and the Stop button read.
-    try {
-      await emRunThroughLoop(set, get, why, at);
-      return null;
-    } catch (e) {
-      return msg(e);
-    }
-  },
-
-  stopEmFallback: () => {
-    const f = get().emFallback;
-    if (!f || f.stopping) return;
-    // By run-id, exactly as the Electromagnetic tab's Stop does: the cancel sets
-    // both the loop's registry and the transient's, so it is honoured by the
-    // frame march instead of waiting six minutes for it to finish.
-    cancelCoupled(f.runId);
-    set({ emFallback: { ...f, stopping: true } });
   },
 }));

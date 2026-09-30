@@ -311,6 +311,12 @@ _CAUSES: Dict[str, List[str]] = {
     "winding_does_not_fit": [
         "num_wires_per_slot", "wire_height", "wire_spacing_y", "slot_height",
         "insulation_thickness"],
+    # The NOMINAL twin of winding_does_not_fit: the REQUESTED wire_height (the
+    # one the builder's own feasibility clamp would otherwise shrink silently,
+    # before winding_does_not_fit's row count is ever measured) does not fit.
+    "winding_height_does_not_fit": [
+        "num_wires_per_slot", "wire_height", "wire_spacing_y", "slot_height",
+        "insulation_thickness"],
     # The TANGENTIAL twin of winding_does_not_fit: the wire column (copper plus
     # the wire_split gaps) is wider than the tooth pitch leaves room for.
     "winding_split_does_not_fit": [
@@ -747,7 +753,53 @@ def validate_polygons(polys: Dict[str, Any],
                         n_fit, n_req, n_req - n_fit),
             measured_mm=None, likely_params=_CAUSES["winding_does_not_fit"]))
 
-    # ── 1a. the wire COLUMN across the slot (wire_split's gaps) ──────────────
+    # ── 1a. wire_height that would not fit WITHOUT the builder's silent clamp ─
+    # `CadQueryMotor.get_2d_polygons` (and its 2-D/3-D siblings, five call sites
+    # in cadquery_geometry.py) clamp wire_height DOWN to whatever height keeps
+    # ``num_wires_per_slot`` rows inside the slot BEFORE this function ever sees
+    # the polygons — the built stack always fits, so check 1 above (``n_fit``,
+    # measured on the ALREADY-CLAMPED stack) never trips for this case. That
+    # silently narrows every conductor instead of refusing: exactly the failure
+    # class ``winding_does_not_fit`` exists to catch, just invisible to it
+    # because the clamp runs first and hides the overflow from the geometry it
+    # hands back. ``geometry_constraints.bounds`` computes the SAME limit
+    # (``geometry_constraints._wire_height_max``, written to mirror this exact
+    # builder clamp) from the NOMINAL parameters (``p`` — never mutated by the
+    # clamp, since it only rebinds a local variable) — so this refuses the
+    # request the user actually made, before the builder gets a chance to hide
+    # it, naming both numbers in mm.
+    checks.append("winding_height_fit")
+    try:
+        from motor_ai_sim.geometry_constraints import bounds as _gc_bounds
+        _wh_rec = _gc_bounds(p).get("wire_height")
+    except Exception:
+        _wh_rec = None
+    if _wh_rec is not None:
+        _nw_h = int(round(_num(p.get("num_wires_per_slot")) or 0))
+        _wh_nom = _num(p.get("wire_height"))
+        _wh_bound = _num(_wh_rec.get("bound"))
+        _slot_h = _num(p.get("slot_height")) or 0.0
+        if (_nw_h > 0 and _wh_nom and _wh_bound is not None and _slot_h > 0.0
+                and _wh_nom > _wh_bound + 1e-9):
+            _dy = _num(p.get("wire_spacing_y")) or 0.0
+            _ins2 = 2.0 * (_num(p.get("insulation_thickness")) or 0.0)
+            _needed = _nw_h * (_wh_nom + _dy) + _ins2
+            col.add(Violation(
+                code="winding_height_does_not_fit", severity=_SEV_ERROR,
+                part_a="The winding", part_b="the slot",
+                message="{:d} rows x {:g} mm wire_height + insulation need "
+                        "{:.3f} mm; slot height available {:.3f} mm. "
+                        "wire_height would have to be {:.4f} mm or less for "
+                        "{:d} rows to fit; without a refusal the builder "
+                        "shrinks it there silently and solves a machine with "
+                        "less copper than requested.".format(
+                            _nw_h, _wh_nom, _needed, _slot_h, _wh_bound,
+                            _nw_h),
+                measured_mm=float(_needed - _slot_h),
+                limit_mm=float(_wh_bound),
+                likely_params=_CAUSES["winding_height_does_not_fit"]))
+
+    # ── 1b. the wire COLUMN across the slot (wire_split's gaps) ──────────────
     # Same measurement the builder made when it cut the slot, carried out in the
     # polys dict so the two cannot drift.  ERROR, not a warning: past this bound
     # the slot cutter meets its neighbour, the mouth fillet radius goes negative
@@ -787,16 +839,20 @@ def validate_polygons(polys: Dict[str, Any],
                              if _n_split > 1 and _strip > 0.0 else "")),
             measured_mm=float(_cut_x - _cut_x_max), likely_params=_causes))
 
-    # ── 1b. conductor cross-section actually delivered ───────────────────────
+    # ── 1c. conductor cross-section actually delivered ───────────────────────
     # ``winding_does_not_fit`` only catches a stack that would CROSS THE BORE —
     # i.e. turns dropped whole.  Two other ways to lose copper leave the turn
-    # count intact and are invisible without measuring the area:
+    # count intact:
     #
     #   (a) the builder shrinks the section so the stack fits.  get_2d_polygons
     #       clamps wire_height to (slot_height − 2·insulation)/num_wires −
-    #       wire_spacing_y, silently, with no report anywhere.  Measured:
-    #       motor_40mm keeps 74.2 % of wire_width·wire_height, m200_20kw_lowripple
-    #       74.8 % — every conductor, uniformly.
+    #       wire_spacing_y.  Measured: motor_40mm keeps 74.2 % of
+    #       wire_width·wire_height, m200_20kw_lowripple 74.8 % — every conductor,
+    #       uniformly.  This is now ALSO an ERROR (``winding_height_does_not_fit``,
+    #       check 1a above) computed from the nominal, pre-clamp wire_height, so
+    #       a solve refuses instead of reaching this WARNING silently; kept here
+    #       too as the belt-and-braces area measurement in case the bound above
+    #       could not be computed (e.g. ``geometry_constraints`` import failure).
     #   (b) the conductor polygons INTERPENETRATE.  Their areas then sum to the
     #       nominal while the copper that exists is the UNION, which is less.
     #       Measured: the 37 mm 24s/28p design draws 221.760 mm² of rectangles
@@ -808,11 +864,11 @@ def validate_polygons(polys: Dict[str, Any],
     #       still uses num_wires·wire_width·wire_height.  The two disagree by
     #       exactly this factor.
     #
-    # Both are WARNINGS: the cross-section is buildable and the solve is sound
-    # for the machine that was BUILT — it is just not the machine the parameters
-    # describe.  (b) always comes with the ``coil_overlaps_coil`` ERROR, which
-    # names the individual pairs; this one carries the single number the physics
-    # depends on, which a capped list of 6 out of 96 pairs cannot show.
+    # Both stay WARNINGS here: (a) is now blocked upstream by an ERROR before
+    # this ever needs to catch it live; (b) always comes with the
+    # ``coil_overlaps_coil`` ERROR, which names the individual pairs, and this
+    # one carries the single number the physics depends on, which a capped list
+    # of 6 out of 96 pairs cannot show.
     checks.append("winding_copper_area")
     coil_union = _u(coils)
     # NOMINAL section per CONDUCTOR.  With wire_split = N a conductor is one

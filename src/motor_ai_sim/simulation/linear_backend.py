@@ -42,8 +42,10 @@ Backend selection (``SB_LINEAR_BACKEND``, default ``auto``):
 
 * ``auto``    -- PARDISO when pypardiso/MKL is importable (our server image),
   otherwise ``open``.  ``SB_NO_PARDISO=1`` makes auto ignore an installed MKL.
-* ``open``    -- SPD: CHOLMOD below ``SB_SPD_MUMPS_MIN_DOF`` unknowns, MUMPS
-  (SYM=1) at or above it; LU: MUMPS.  What auto picks without MKL.
+* ``open``    -- SPD: MUMPS SYM=1 (CHOLMOD below ``SB_SPD_MUMPS_MIN_DOF``
+  unknowns, default 0 = never: MUMPS SYM=1 with AMD/AMF ordering measured
+  faster than CHOLMOD at every production and refined size, 17-169 k);
+  LU: MUMPS.  What auto picks without MKL.
 * ``cholmod`` -- SPD: CHOLMOD at every size; LU: MUMPS.
 * ``mumps``   -- SPD: MUMPS SYM=1; LU: MUMPS.
 * ``pardiso`` -- MKL PARDISO for both (mtype 2 / 11).  Without pypardiso the
@@ -93,10 +95,20 @@ _log = logging.getLogger(__name__)
 SPD_SYM_RTOL = 1e-12
 
 #: SPD systems with at least this many unknowns go to MUMPS (SYM=1) instead of
-#: CHOLMOD in the ``open`` selection.  Calibrated on the exported production
-#: matrices (docs/OPEN_SOLVERS_2026-09-30.md): CHOLMOD-AMD is faster up to the
-#: L155 x0.5 mesh (60.8 k DOF), MUMPS from the L155 x0.3 mesh (97.4 k) up.
-SPD_MUMPS_MIN_DOF_DEFAULT = 80_000
+#: CHOLMOD in the ``open`` selection.  Calibrated on the 27 exported production
+#: SPD systems, 17-169 k unknowns (docs/OPEN_SOLVERS_2026-09-30.md): MUMPS
+#: SYM=1 with AMD ordering (AMF from 55 k) beats CHOLMOD at EVERY size, by
+#: 17-30 % per solve weighted with the measured 12 % share of new patterns
+#: (L155 eddy 44 k: 36.4 against 46.5 ms; 169 k: 232 against 312 ms).  So the
+#: default switch point is 0; CHOLMOD stays selectable (``cholmod``) and is
+#: the SPD fallback when MUMPS is not installed.
+SPD_MUMPS_MIN_DOF_DEFAULT = 0
+
+#: MUMPS ordering policy when ``SB_MUMPS_ORDERING`` is not set: MUMPS' own
+#: ``auto`` choice (SCOTCH/PORD here) costs 3-6x AMD in the analysis for a
+#: 5-15 % faster numeric factorisation, a loss at 12 % new patterns.  AMD for
+#: LU and for SPD below 55 k unknowns, AMF (approximate minimum fill) above.
+MUMPS_AMF_MIN_DOF = 55_000
 
 BACKENDS = ("auto", "open", "cholmod", "mumps", "pardiso", "superlu")
 
@@ -408,7 +420,7 @@ class MumpsFactor(Factor):
     positive-definite LDLᵀ, no pivoting, upper triangle); a negative pivot
     count (INFOG(12) > 0) is reported as :class:`NotPositiveDefinite`.
     ``spd=False``: SYM=0 unsymmetric LU with MUMPS' threshold pivoting.
-    Ordering ``SB_MUMPS_ORDERING`` (default ``auto``: MUMPS picks).
+    Ordering ``SB_MUMPS_ORDERING``, else :data:`MUMPS_AMF_MIN_DOF` policy.
     Every call, including the instance's creation and release, holds the
     process-wide :data:`_MUMPS_LOCK`: MUMPS is serialised across threads."""
 
@@ -416,8 +428,14 @@ class MumpsFactor(Factor):
         self.spd = bool(spd)
         self.kind = "cholesky" if self.spd else "lu"
         self.backend = "mumps-spd" if self.spd else "mumps-lu"
-        self.ordering = ordering or os.environ.get("SB_MUMPS_ORDERING", "auto")
+        self.ordering = ordering or os.environ.get("SB_MUMPS_ORDERING") or None
+        self.used_ordering = None
         self._ctx = None
+
+    def _ordering(self, n: int) -> str:
+        if self.ordering:
+            return self.ordering
+        return "amf" if (self.spd and n >= MUMPS_AMF_MIN_DOF) else "amd"
 
     def _set(self, A) -> None:
         ctx = self._ctx
@@ -439,7 +457,8 @@ class MumpsFactor(Factor):
             self.free()
             self._ctx = mumps.Context()
             self._set(A)
-            self._ctx.analyze(ordering=self.ordering)
+            self.used_ordering = self._ordering(int(A.shape[0]))
+            self._ctx.analyze(ordering=self.used_ordering)
 
     def factorize(self, A, sym=None) -> None:
         import mumps
@@ -482,7 +501,8 @@ class MumpsFactor(Factor):
             if self._ctx is None or self._ctx.mumps_instance is None:
                 return {}
             inf = self._ctx.mumps_instance.infog
-            return {"infog_22_peak_MB": int(inf[22]),
+            return {"ordering": self.used_ordering,
+                    "infog_22_peak_MB": int(inf[22]),
                     "infog_29_factor_entries": int(inf[29])}
 
 
@@ -987,9 +1007,9 @@ class LinearSolver:
     def spd_backend(self) -> Optional[str]:
         if not self._spd_enabled:
             return None
-        if self.backend == "open":
+        if self.backend == "open" and self.spd_min_mumps > 0:
             return "cholmod<%d<=mumps-spd" % self.spd_min_mumps
-        return self._spd_name(0)
+        return self._spd_name(max(0, self.spd_min_mumps))
 
     @property
     def lu_perturbed(self) -> int:

@@ -129,8 +129,9 @@ class TestSelection:
         ls = LinearSolver(log=_Log())
         assert ls.backend == "open" and not ls.notes
         assert ls.lu_backend == "mumps-lu"
-        assert ls._spd_name(ls.spd_min_mumps - 1) == "cholmod"
-        assert ls._spd_name(ls.spd_min_mumps) == "mumps-spd"
+        # calibrated: MUMPS SYM=1 at every size (switch point 0)
+        assert ls.spd_min_mumps == 0
+        assert ls._spd_name(1) == "mumps-spd" and ls.spd_backend == "mumps-spd"
 
     def test_env_selects_and_no_pardiso_switch_is_honoured(self, libs, monkeypatch):
         libs["pardiso"] = True
@@ -164,9 +165,15 @@ class TestSelection:
         assert ls._spd_name(999) == "cholmod" and ls._spd_name(1000) == "mumps-spd"
 
     def test_missing_libraries_degrade_once_with_a_note(self, libs):
-        libs["cholmod"] = False
+        libs["mumps"] = False
         log = _Log()
         ls = LinearSolver(log=log)
+        assert ls._spd_name(10) == "cholmod"
+        assert log.warned("mumps-spd is not installed")
+        assert ls.lu_backend == "superlu" and log.warned("MUMPS is not installed")
+        libs["mumps"] = True
+        libs["cholmod"] = False
+        ls = LinearSolver("cholmod", log=log)
         assert ls._spd_name(10) == "mumps-spd"
         assert log.warned("cholmod is not installed")
         libs["mumps"] = False
@@ -231,7 +238,7 @@ class TestFallbacks:
     def test_cholesky_failure_goes_to_lu_for_the_rest_of_the_run(self, fakes):
         fakes["cholmod"] = "factorize"
         log = _Log()
-        ls = LinearSolver(log=log)
+        ls = LinearSolver("cholmod", log=log)
         A = _laplace2d(6)
         b = np.ones(A.shape[0])
         x = ls.solve(A, b, spd=True)
@@ -272,7 +279,7 @@ class TestFallbacks:
 
 class TestReuse:
     def test_analysis_once_per_pattern(self, fakes):
-        ls = LinearSolver(log=_Log())
+        ls = LinearSolver("cholmod", log=_Log())
         A = _laplace2d(6)
         b = np.ones(A.shape[0])
         for k in range(4):
@@ -304,7 +311,7 @@ class TestReuse:
         assert ls.spd_analyses == 3
 
     def test_factor_once_solve_many(self, fakes):
-        ls = LinearSolver(log=_Log())
+        ls = LinearSolver("cholmod", log=_Log())
         A = _laplace2d(5)
         assert ls.factor(A, spd=True) == "cholmod"
         B = np.random.default_rng(0).standard_normal((A.shape[0], 3))
@@ -483,3 +490,13 @@ def test_exported_systems_match_pardiso(backend):
         x = ls.solve(A, bx["b"], spd=spd)
         rel = np.max(np.abs(x - bx["x"])) / max(np.max(np.abs(bx["x"])), 1e-300)
         assert rel < 1e-8, (os.path.basename(tag), rel)
+
+
+def test_mumps_ordering_policy(monkeypatch):
+    """AMD for LU and small SPD, AMF for large SPD (calibrated); the env wins."""
+    monkeypatch.delenv("SB_MUMPS_ORDERING", raising=False)
+    assert LB.MumpsFactor(spd=True)._ordering(40_000) == "amd"
+    assert LB.MumpsFactor(spd=True)._ordering(LB.MUMPS_AMF_MIN_DOF) == "amf"
+    assert LB.MumpsFactor(spd=False)._ordering(10 ** 6) == "amd"
+    monkeypatch.setenv("SB_MUMPS_ORDERING", "scotch")
+    assert LB.MumpsFactor(spd=True)._ordering(10) == "scotch"

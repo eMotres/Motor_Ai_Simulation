@@ -401,7 +401,7 @@ class TimePeriodicEddy:
         self.max_newton = int(max_newton)
         self.workers = max(1, int(workers))
         self.mkl_threads = mkl_threads
-        self.gmres_rtol = float(gmres_rtol)
+        self.gmres_rtol = min(float(gmres_rtol), 1e-2 * float(tol))
         self.gmres_max = int(gmres_max)
         self.log = log
         self._pool = (ThreadPoolExecutor(max_workers=self.workers)
@@ -626,10 +626,15 @@ class TimePeriodicEddy:
                 return wv - np.concatenate(tw)
             gn = float(np.linalg.norm(g))
             if gn > 0.0:
+                # inexact Newton: the wrap solved to a forcing term that
+                # follows the residual (1e-3 far away, 1e-2 of the residual
+                # near the solution, never below gmres_rtol)
+                _eta = max(self.gmres_rtol, min(1e-3, 1e-2 * worst))
+                rec["gmres_rtol"] = _eta
                 # right preconditioning: the returned x is already P·y
                 wsol, ginfo = gmres_right(
                     mv, g, prec=(self._coarse_apply if self._coarse else None),
-                    rtol=self.gmres_rtol, maxiter=self.gmres_max)
+                    rtol=_eta, maxiter=self.gmres_max)
             else:
                 wsol, ginfo = np.zeros(2 * self.nc), {"iterations": 0,
                                                      "rel_resid": 0.0}

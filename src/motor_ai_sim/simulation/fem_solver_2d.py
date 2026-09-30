@@ -7606,9 +7606,16 @@ def fem_transient_sliding_band(
             except ValueError as _e_c:
                 log.warning("TDM: no DC coarse space (%s)", _e_c)
         _td_K_lin = None if _sat2 else _p2.asmK(nu_base2)
+        # the Newton tangent: the march's clamped one (default) or the exact
+        # dH/dB (unclamped; still SPD on a monotone B-H curve, and the factor
+        # takes LU loudly where it is not)
+        _td_tan_mode = str(_os_sb.environ.get("SB_TDM_TANGENT", "clamped")
+                           or "clamped").lower()
+        _td_tangent = (_p2.tangent2 if _td_tan_mode != "exact"
+                       else (lambda _inf: _p2.tangent2(_inf, clamp=False)))
         _td_solver = _tdm.TimePeriodicEddy(
             kfun=(_p2.Kpw if _sat2 else (lambda _A: (_td_K_lin, None))),
-            tangent=_p2.tangent2, f_mag=f_mag2, G=_G2, Msig=_Msig2,
+            tangent=_td_tangent, f_mag=f_mag2, G=_G2, Msig=_Msig2,
             S_raw=_S_con, dt=dt, frames=_td_frames, wrap_back=_td_wrap,
             cond=_td_cond, coarse=_td_coarse,
             tol=float(_os_sb.environ.get("SB_TDM_TOL", "1e-7") or 1e-7),
@@ -7617,6 +7624,7 @@ def fem_transient_sliding_band(
                      "period": "half_antiperiodic" if _td_neg else "full",
                      "half_refused": _td_half_why, "frames": int(_td_N),
                      "workers": int(_td_workers), "mkl_threads": _td_mklt,
+                     "tangent": _td_tan_mode,
                      "conductor_dofs": int(_td_cond.size), "t": {}}
         try:
             # ── the start: the static (∂A/∂t = 0) field of every frame ──────
@@ -7625,6 +7633,9 @@ def fem_transient_sliding_band(
             _td_A0: List[np.ndarray] = []
             _td_U0: List[np.ndarray] = []
             _td_prev = None
+            _td_start_mode = str(_os_sb.environ.get("SB_TDM_START", "static")
+                                 or "static").lower()
+            _tdm_info["start"] = _td_start_mode
             for _j, (_P, _fr, _Iv, _Is, _m) in enumerate(_td_ops_l):
                 if _td_prev is None:
                     _f_s = (f_mag2 + _Is['A'] * f_coil2['A']
@@ -7638,15 +7649,21 @@ def fem_transient_sliding_band(
                     _pd = np.asarray(_P.multiply(_P).sum(axis=0)).ravel()
                     _As0 = _P @ (np.asarray(_P.T @ _td_prev).ravel()
                                  / np.maximum(_pd, 1.0))
-                _ok_s, _Ast = _drv.eddy_static_state(
-                    _P, _fr, _As0, _Iv, (None if _sat2 else nu_base2),
-                    max(int(nonlinear_iterations), 20))
+                if _td_prev is not None and _td_start_mode == "project":
+                    # frame 0's static field, projected: the periodic Newton
+                    # takes the rotation from there (no per-frame static solve)
+                    _ok_s, _Ast = True, _As0
+                else:
+                    _ok_s, _Ast = _drv.eddy_static_state(
+                        _P, _fr, _As0, _Iv, (None if _sat2 else nu_base2),
+                        max(int(nonlinear_iterations), 20))
                 if not _ok_s:
                     raise RuntimeError("TDM: the static start field of frame %d "
                                        "did not converge" % _j)
                 _td_A0.append(_Ast)
                 _td_U0.append(_Iv / np.maximum(_S_con, 1e-300))
-                _td_prev = _Ast
+                _td_prev = _Ast if _td_prev is None or _td_start_mode != "project" \
+                    else _td_prev
             _tdm_info["t"]["static_start"] = _t.time() - _t_s
             _cancel_point("TDM Newton")
             _t_s = _t.time()

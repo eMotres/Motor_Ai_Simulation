@@ -8297,9 +8297,17 @@ def fem_transient_sliding_band(
                                 _Mbb = _Mb_e[_bi][:, _bi].tocsr()
                                 _PtM = (Pro.T @ _Mb_e[:, _bi]).tocsr()[_free2]
 
+                                # UNSYMMETRIC LU on purpose (spd=False): the
+                                # unclamped tangent is positive definite only
+                                # where dH/dB > 0, which is checked above over
+                                # the averaged frames, not guaranteed by
+                                # construction like the Newton operators that
+                                # take the Cholesky path.  Two corrections of
+                                # <= 61 solves on one pattern: nothing to gain.
                                 def _solve_JM(v):
                                     return _p2.pad2(Pro, _free2, _p2.solve_ff(
-                                        _Jbf, np.asarray(_PtM @ v).ravel()))[_bi]
+                                        _Jbf, np.asarray(_PtM @ v).ravel(),
+                                        spd=False))[_bi]
                                 _u_b = (A2 - _eec_x0)[_bi]
                                 _corr_b, _ie = _acc_dc_eec(_u_b, _solve_JM, _Mbb,
                                                            _pm_e, _sg_e, _q_e, _s_e,

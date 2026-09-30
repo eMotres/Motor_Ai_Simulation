@@ -5754,10 +5754,13 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                      "project, so nothing is checked against it"
                      % _fmt(ctx.get("v_dc_run_v"), 1, "V"))})
     out.append(_warn(
-        "runaway_speed", duty, "Runaway speed on cold magnets",
+        "runaway_speed", duty, "Cold-magnet bus-crossing speed",
         ctx.get("runaway_rpm"), ctx.get("max_speed_rpm"), "rpm",
-        "Above it an uncontrolled machine drives its back-EMF into the pack: "
-        "fewer turns, or an active short-circuit armed below this speed.",
+        "Above it the no-load back-EMF on cold magnets exceeds the pack "
+        "minimum, so an uncontrolled machine drives current into the pack: "
+        "fewer turns, or an active short-circuit armed below this speed. "
+        "Not a mechanical runaway speed (that needs the drive and the "
+        "prime mover).",
         kind="min",
         note="V_line_peak scaled to 20 °C magnets, against the pack minimum"))
 
@@ -11103,6 +11106,11 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
     delta = str((c.get("point") or {}).get("star_delta")
                 or two.get("star_delta") or "star").lower().startswith("d")
     _tail = ("; × k_3d = %s" % _fmt(k3, 4)) if k3 else "; 2-D, no 3-D passport"
+    # Torque-proportional rows carry the TORQUE factor (review 2026-09-30,
+    # P22); a block written before the split has none and reads as before.
+    _kq = _numf(c.get("k_torque"))
+    _tail_t = (("; × %s (%s)" % (_fmt(_kq, 4), c.get("k_torque_basis")))
+               if (k3 and _kq and c.get("k_torque_basis")) else _tail)
 
     def R(label, v, d, unit, note=""):
         if v is not None:
@@ -11119,11 +11127,11 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
     R("Torque constant Kt [N·m/A rms]",
       _v("Kt_Nm_per_A_line" if delta else "Kt_Nm_per_Arms"), 4, "",
       ("per LINE amp — in delta the winding carries I_line/√3" if delta
-       else "per line amp, which in star is the winding's") + _tail)
+       else "per line amp, which in star is the winding's") + _tail_t)
     R("Motor constant Km [N·m/√W]", _v("Km_Nm_sqrtW"), 3, "",
-      "torque per root watt of copper, at 20 °C copper" + _tail)
+      "torque per root watt of copper, at 20 °C copper" + _tail_t)
     R("Km per mass [N·m/(√W·kg)]", _v("Km_per_mass_Nm_sqrtW_kg"), 4, "",
-      "the figure of merit that survives scaling" + _tail)
+      "the figure of merit that survives scaling" + _tail_t)
     R("Phase resistance R₂₀ [mΩ]",
       (lambda v: None if v is None else v * 1000.0)(
           _numf(c.get("R_phase_20_ohm"))), 3, "",
@@ -19460,10 +19468,10 @@ def limit_rules_rows(ex: Dict[str, Any]) -> List[List[str]]:
          "the line-to-line pulse amplitude = the DC link — what the insulation "
          "sees; no insulation or device voltage rating is stated on this "
          "project, so nothing is checked against it"],
-        ["Runaway speed, cold magnets", _fmt(ex.get("max_speed_rpm"), 0, "rpm"),
+        ["Cold-magnet bus-crossing speed", _fmt(ex.get("max_speed_rpm"), 0, "rpm"),
          "the fastest duty in this configuration; " +
          str(ex.get("runaway_note") or "no cold-magnet card was available, so a "
-             "factor of 1.0 was used and the true runaway speed is LOWER")],
+             "factor of 1.0 was used and the true crossing speed is LOWER")],
         ["Current density", _fmt(_j_rule[0], 1, "A/mm²"),
          J_BAND_TEXT + ("; " + _j_rule[1] if _j_rule[1] else "")],
         ["Torque ripple, low-order", _fmt(RIPPLE_LIMIT_PCT, 1, "%"),

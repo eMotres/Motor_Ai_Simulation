@@ -15,9 +15,17 @@
 //                synchronous reactance X·I, X = ωL, L ∝ turns²·L_stack·series²)
 //                is pinned at the loaded base point (Vload0−Vemf0) and rescaled,
 //                so V matches FEM at base and scales physically off it.
+//                EMF, KV and the drop are FUNDAMENTALS (passport extraction_rev
+//                ≥ 2); the voltage the bus must cover is the loaded WAVEFORM
+//                peak, i.e. that fundamental × the base point's crest factor.
 //
-// v1 is LINEAR. Deferred (see docs/MULTI_USER_PLAN.md): non-linear copper AC /
-// proximity loss vs wire thickness, and coil-to-magnet-distance loss effects.
+// Losses: iron and magnet from the measured I×rpm grid; copper = DC I²R plus a
+// proximity term reconstructed from the grid's measured AC factor and scaled
+// ∝ conductors × h³ × stack (see P_prox below) — so wire thickness and turns
+// DO move the AC copper.  Known limit (audit 2026-09-30): one global N·h³ law
+// cannot see rows that move into the strong field near the slot opening
+// (AC copper −70 % on the Ø40 at the slot's last row); a per-row field model
+// is the planned replacement (docs/PASSPORT_ALGORITHM.md §6.3).
 
 export interface Passport {
   N0: number;          // base turns (num_wires_per_slot)
@@ -46,8 +54,25 @@ export interface Passport {
    *  value; see `turnsFactor`. */
   wire_split0?: number;
   T0_Nm: number;       // base torque at (I0, rpm0)
-  Vemf0_peak_V: number;// base back-EMF peak at (N0, L0, rpm0)   (no-load terminal V)
-  Vload0_peak_V?: number; // base LOADED terminal-V peak at (I0, rpm0); enables the reactive-drop model
+  /** Base no-load back-EMF at (N0, L0, rpm0), phase, star-equivalent [V].
+   *  extraction_rev ≥ 2: the FUNDAMENTAL amplitude (`emf_basis`); older
+   *  passports stored the sampled waveform peak under this key. */
+  Vemf0_peak_V: number;
+  /** base LOADED terminal-voltage WAVEFORM peak at (I0, rpm0); enables the
+   *  reactive-drop model and is what the voltage limit compares against */
+  Vload0_peak_V?: number;
+  /** base LOADED terminal-voltage FUNDAMENTAL (extraction_rev ≥ 2) — the
+   *  drop model then works on fundamentals and the crest factor
+   *  Vload0_peak_V / Vload0_fund_V carries the waveform back to a peak. */
+  Vload0_fund_V?: number | null;
+  /** "fundamental" | "waveform peak …" — what Vemf0_peak_V holds. */
+  emf_basis?: string | null;
+  /** no-load waveform peak, for reference only (extraction_rev ≥ 2) */
+  Vemf0_wave_peak_V?: number | null;
+  /** end-winding factor of the base solve; endWindFrac = 1 − 1/k_end0 */
+  k_end0?: number | null;
+  /** passport extraction revision (absent = before the 2026-09-30 fixes) */
+  extraction_rev?: number | null;
   R0_ohm: number;      // base phase resistance
   endWindFrac: number; // 0..1 fraction of R0 that is end-winding (does NOT scale with L)
   Pfe0_W: number;      // base iron (core) loss
@@ -91,7 +116,10 @@ export interface Passport {
                 Pfe_W: number[][]; Pmag_W: number[][];
                 /** solved copper / DC I²R at each grid point — the skin and
                  *  proximity add-on the DC law cannot see (~+25 % here). */
-                cuAC?: number[][] } | null;
+                cuAC?: number[][];
+                /** extraction_rev ≥ 2: the DC and AC copper watts behind cuAC
+                 *  (3·I²·R_eqstar and solved − DC), stored separately */
+                Pcu_dc_W?: number[][]; Pcu_ac_W?: number[][] } | null;
   /** Winding window measured on the CAD polygons [mm²] and the conductor area
    *  sitting in it at the base winding.  The tuner scales the copper with turns
    *  and wire height (width is fixed by the slot) and divides by the window, so
@@ -351,10 +379,17 @@ function pwmField(pts: PwmPoint[], key: keyof PwmPoint,
  *    I_ripple ∝ V_bus / (f_sw · L_phase),  L_phase ∝ N²·L_stack·nS²
  *      → rr = (V_bus/V_bus0)·(f_sw0/f_sw) / (fN²·fL·fConn²)
  *
- *    ΔP_mag = Δ_measured(rpm) · fL · rr^n_mag        (n from the passport's fit)
- *    ΔP_fe  = Δ_measured(rpm) · fL · rr^n_fe
- *    ΔP_cu  = Δ_measured(rpm) · (R/R0) · rr^n_cu     (I_ripple²·R_ac ∝ R_dc)
- *    ripple = ripple_sine + Δripple_measured(rpm) · rr^n_ripple
+ *    The FIELD a ripple current makes is its AMPERE-TURNS, not its amps:
+ *      rrF = a·rr,  a = fN·fConn  (effective series-turns ratio)
+ *    (review 2026-09-30, G18: at fixed NI, doubling the turns makes L ×4,
+ *    the current ripple ×1/4 but the NI ripple ×1/2 — a quadratic field loss
+ *    goes ×1/4, where rr² said ×1/16.)
+ *
+ *    ΔP_mag = Δ_measured(rpm) · fL · rrF^n_mag       (n from the passport's fit)
+ *    ΔP_fe  = Δ_measured(rpm) · fL · rrF^n_fe
+ *    ΔP_cu  = Δ_measured(rpm) · (R/R0) · rr^n_cu     (I_ripple²·R_ac ∝ R_dc —
+ *             a first-order stand-in: HF copper does not generally follow R_dc)
+ *    ripple = ripple_sine + Δripple_measured(rpm) · rrF^n_ripple
  *    I_dc_ripple = Δ_measured(rpm) · rr^n_dc / (fN·fConn)   (I_dc ∝ I_phase)
  *
  *  The exponents are FITTED on the machine's own two carriers; `fit.*_source`
@@ -388,14 +423,22 @@ function pwmDeltas(p: Passport, k: Knobs, f: {
   const rawRip = ripRef * rrRaw;
   const outSpan = fSw < env.f_sw_min_Hz * 0.999 || fSw > env.f_sw_max_Hz * 1.001;
   const outRpm = k.rpm < env.rpm_min * 0.999 || k.rpm > env.rpm_max * 1.001;
-  const outRip = ripRef > 0 && (rawRip > ripMax || rawRip < ripMin);
-  const ripUsed = ripRef > 0 ? Math.min(ripMax, Math.max(ripMin, rawRip)) : rawRip;
-  const rr = ripRef > 0 ? ripUsed / ripRef : rrRaw;
+  // The measured envelope is in ripple current AT THE BASE WINDING, where
+  // current ripple and NI ripple are the same ratio; each abscissa is clamped
+  // into it on its own.
+  const aTurns = f.fN * f.fConn;
+  const rawRipF = rawRip * aTurns;
+  const outRip = ripRef > 0 && (rawRip > ripMax || rawRip < ripMin
+                                || rawRipF > ripMax || rawRipF < ripMin);
+  const clampRip = (x: number) => (ripRef > 0 ? Math.min(ripMax, Math.max(ripMin, x)) : x);
+  const ripUsed = clampRip(rawRip);
+  const rr = ripRef > 0 ? ripUsed / ripRef : rrRaw;              // current ripple
+  const rrF = ripRef > 0 ? clampRip(rawRipF) / ripRef : rrRaw * aTurns;  // NI ripple
 
   const pw = (x: number, n: number) => Math.pow(Math.max(1e-9, x), n);
   const fit = b.fit || ({} as PwmBlock['fit']);
-  const dMag = pwmField(pts, 'dP_mag_W', k.rpm, f.Ieq) * f.fL * pw(rr, Number(fit.n_mag ?? 2));
-  const dFe = pwmField(pts, 'dP_fe_W', k.rpm, f.Ieq) * f.fL * pw(rr, Number(fit.n_fe ?? 2));
+  const dMag = pwmField(pts, 'dP_mag_W', k.rpm, f.Ieq) * f.fL * pw(rrF, Number(fit.n_mag ?? 2));
+  const dFe = pwmField(pts, 'dP_fe_W', k.rpm, f.Ieq) * f.fL * pw(rrF, Number(fit.n_fe ?? 2));
   const dCu = pwmField(pts, 'dP_cu_ac_W', k.rpm, f.Ieq) * f.fR * pw(rr, Number(fit.n_cu ?? 2));
   const dDc = pwmField(pts, 'I_dc_ripple_pp_A', k.rpm, f.Ieq)
     * pw(rr, Number(fit.n_dc_ripple ?? 1))
@@ -407,7 +450,7 @@ function pwmDeltas(p: Passport, k: Knobs, f: {
     _d: (Number(q.ripple_pwm_pct ?? 0) - Number(q.ripple_sine_pct ?? 0)),
   })) as (PwmPoint & { _d: number })[];
   const dRip = pwmField(dRipRow as PwmPoint[], '_d' as keyof PwmPoint, k.rpm, f.Ieq)
-    * pw(rr, Number(fit.n_ripple ?? 1));
+    * pw(rrF, Number(fit.n_ripple ?? 1));
   const sineRip = p.ripple0_pct != null ? Number(p.ripple0_pct)
     : Number(pts[0]?.ripple_sine_pct ?? 0);
 
@@ -419,7 +462,8 @@ function pwmDeltas(p: Passport, k: Knobs, f: {
     + `${(env.f_sw_min_Hz / 1000).toFixed(0)}–${(env.f_sw_max_Hz / 1000).toFixed(0)} kHz span`);
   if (outRpm) why.push(`${k.rpm.toFixed(0)} rpm is outside the measured `
     + `${env.rpm_min.toFixed(0)}–${env.rpm_max.toFixed(0)} rpm span`);
-  if (outRip) why.push(`the ripple current (${rawRip.toFixed(2)} A) is past `
+  if (outRip) why.push(`the ripple current (${rawRip.toFixed(2)} A, `
+    + `${rawRipF.toFixed(2)} A base-turns equivalent) is past `
     + `1.5× the measured maximum — clamped to ${ripUsed.toFixed(2)} A`);
   return {
     dP_mag: dMag, dP_fe: dFe, dP_cu: dCu,
@@ -530,12 +574,19 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   // synchronous reactance X·I (X = ωL, L ∝ turns²·L_stack·series²); its value at
   // the loaded base point, (Vload0 − Vemf0), is rescaled by fI·fRpm·fN²·fL·fConn².
   // Falls back to the resistive drop R·I when no loaded base voltage is supplied.
-  const Vdrop0 = p.Vload0_peak_V && p.Vload0_peak_V > p.Vemf0_peak_V
-    ? p.Vload0_peak_V - p.Vemf0_peak_V : 0;
+  // Like with like: when the passport carries the loaded FUNDAMENTAL, the drop
+  // is fundamental − fundamental and the result is carried back to a waveform
+  // peak by the base crest factor (the voltage limit needs the peak); an
+  // older passport has peak − peak, exactly as before.
+  const vLoadFund = Number(p.Vload0_fund_V ?? 0);
+  const hasFund = vLoadFund > 0 && Number(p.Vload0_peak_V ?? 0) > 0;
+  const vLoadRef = hasFund ? vLoadFund : Number(p.Vload0_peak_V ?? 0);
+  const crest = hasFund ? Number(p.Vload0_peak_V) / vLoadFund : 1;
+  const Vdrop0 = vLoadRef > p.Vemf0_peak_V ? vLoadRef - p.Vemf0_peak_V : 0;
   const Vdrop = Vdrop0 > 0
     ? Vdrop0 * fI * fRpm * fN * fN * fL * fConn * fConn
     : R * k.I_A * Math.SQRT2;
-  const Vphase = Vemf + Vdrop;
+  const Vphase = (Vemf + Vdrop) * crest;
 
   const omega = (2 * Math.PI * k.rpm) / 60;
   const P_mech = T * omega;
@@ -558,7 +609,12 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     : hasCurve ? interp(sp!.rpm, sp!.Pfe_W, k.rpm) * fL : p.Pfe0_W * fL * Math.pow(fRpm, 1.5);
   const P_mag = hasGrid ? gridLoss(lg!.Pmag_W) * fL
     : hasCurve ? interp(sp!.rpm, sp!.Pmag_W, k.rpm) * fL : p.Pmag0_W * fL * fRpm * fRpm;
-  // Copper = DC I²R + PROXIMITY.  The two must be separated, not lumped into
+  // Copper = DC I²R + PROXIMITY.  The stored factor is solved copper over the
+  // DC loss of the SAME winding at the passport's own current axis (the LINE
+  // current in delta, R0 the equivalent-star R) — so dc·(a − 1) below is the
+  // AC watts for star and delta alike.  The floor at 0 only drops numerical
+  // noise; a delta passport of extraction_rev < 2 stored a ≈ 1/3 of the true
+  // factor and loses its whole AC copper here — regenerate it.  The two must be separated, not lumped into
   // one ratio: the measured grid shows the proximity watts are the SAME at
   // every current (2.8 / 11 / 25 / 44 / 69 / 100 W across 0.5…1.5·I0 on the
   // 85 mm) because they are driven by the rotating MAGNET field, not by the
@@ -567,11 +623,19 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   // stored factor, interpolate THOSE, and scale them by their own physics:
   // proximity ∝ conductors × h³ × stack × f²  (f² is already inside the grid).
   const P_prox = (() => {
-    if (!hasGrid || !lg!.cuAC || lg!.cuAC.length !== lg!.I_A.length) return 0;
-    const rows = lg!.cuAC.map((row, r) => {
-      const dc = 3 * lg!.I_A[r] * lg!.I_A[r] * p.R0_ohm;
-      return row.map((a) => Math.max(0, dc * (a - 1)));
-    });
+    if (!hasGrid) return 0;
+    // extraction_rev ≥ 2 stores the AC WATTS themselves (the ratio is
+    // ill-conditioned near I = 0); older passports only the ratio.
+    const acw = lg!.Pcu_ac_W;
+    const rows = (acw && acw.length === lg!.I_A.length)
+      ? acw.map((row) => row.map((w) => Math.max(0, Number(w))))
+      : (lg!.cuAC && lg!.cuAC.length === lg!.I_A.length)
+        ? lg!.cuAC.map((row, r) => {
+          const dc = 3 * lg!.I_A[r] * lg!.I_A[r] * p.R0_ohm;
+          return row.map((a) => Math.max(0, dc * (a - 1)));
+        })
+        : null;
+    if (!rows) return 0;
     const w = gridLoss(rows);                     // watts at the base winding
     return Math.max(0, w) * fN * fH * fH * fH * fL;
   })();
@@ -611,7 +675,8 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   const eff = P_mech > 0 ? P_mech / (P_mech + P_loss) : 0;
   const mass = p.mass0_kg * fL;
 
-  // No-load KV, the drone-bench convention: rpm per volt of LINE peak EMF.
+  // No-load KV, the drone-bench convention: rpm per volt of LINE peak EMF —
+  // the FUNDAMENTAL on a passport of extraction_rev ≥ 2.
   const VemfLine = Vemf * Math.sqrt(3);
   const KV = VemfLine > 1e-9 ? k.rpm / VemfLine : 0;
 

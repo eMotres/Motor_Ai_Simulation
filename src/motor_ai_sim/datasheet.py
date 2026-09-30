@@ -487,7 +487,15 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
     rpm0 = float(pp.get("rpm0") or 1)
     T0 = abs(float(pp.get("T0_Nm") or 0))
     Vemf0 = float(pp.get("Vemf0_peak_V") or 0)
-    Vload0 = float(pp.get("Vload0_peak_V") or 0)
+    # The voltage law works on like quantities: a passport of extraction_rev
+    # >= 2 stores the no-load EMF as the FUNDAMENTAL and the loaded
+    # fundamental beside the loaded peak, so the drop is fund − fund and the
+    # terminal PEAK is recovered with the base crest factor.  Older passports
+    # (peak − peak) keep crest = 1, exactly as before.
+    _vl_pk = float(pp.get("Vload0_peak_V") or 0)
+    _vl_f = float(pp.get("Vload0_fund_V") or 0)
+    Vload0 = _vl_f if (_vl_f > 0 and _vl_pk > 0) else _vl_pk
+    v_crest = (_vl_pk / _vl_f) if (_vl_f > 0 and _vl_pk > 0) else 1.0
     R0 = float(pp.get("R0_ohm") or 0)
     ewf = float(pp.get("endWindFrac") or 0)
     mass0 = float(pp.get("mass0_kg") or 0)
@@ -668,7 +676,7 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
               "this as an upper estimate and confirm the point in the simulator")
     r = line(r, "Terminal voltage, line peak",
              f"=({Vemf0}*{B(R_FN)}*{B(R_FL)}*{B(R_RPM)}/{rpm0}*{B(R_FC)}*{B(R_FE)}"
-             f"+{drop})*SQRT(3)", "V",
+             f"+{drop})*{round(v_crest, 5)}*SQRT(3)", "V",
              _vnote, OUT, "0.0")
     R_KV = r
     r = line(r, "KV (no load)",

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from motor_ai_sim import auth
 from motor_ai_sim import cluster_monitor as CM
 from motor_ai_sim import job_usage as U
+from motor_ai_sim import jobs as J
 from motor_ai_sim.api import app
 from motor_ai_sim.routes import cluster as cluster_routes
 
@@ -304,6 +305,53 @@ def test_load_live_nodes_now_carries_cores_and_ram_for_the_per_server_strip(as_a
     # frontend-only -- point_of() has always carried "mem"): a fresh
     # regression guard so this doesn't silently regress again.
     assert CM.history(nid, "24h")[0]["mem"] == pytest.approx(25.0)
+
+
+def test_load_live_job_rows_get_pct_of_server(as_admin, monkeypatch):
+    """Admin -> Overview "Now" table: a running job's CPU %/RAM % of the
+    WHOLE server -- current rate (cores in use right now) / thread count,
+    current RSS / total RAM -- not the cumulative CPU-s the table already had."""
+    U.reset()
+    cluster_routes._LOAD_CACHE.update(key=None, ts=0.0, data=None)
+    monkeypatch.setattr(U, "node_name", lambda: "eu1")
+    nid, _ = CM.create_node("eu1")
+    CM.ingest(nid, _sample(cores_physical=8, mem={"used": 4e9, "total": 16e9}))
+    # 4 per_core entries in _sample() -> 4 threads on this node
+
+    class R:
+        run_id, owner, kind, body = "live1", "alice", "em", {}
+    m = U.start(R(), sampler=False)
+    m.last_rate_cores = 2.0                        # 2 of 4 threads -> 50 %
+    m.last_rss = 8e9                                # 8 / 16 GB -> 50 %
+
+    class Q:
+        def snapshot(self):
+            return {"running": 1, "queued": 0,
+                    "items": [{"run_id": "live1", "owner": "alice", "state": "running", "body": {}}]}
+    monkeypatch.setattr(J, "queue", lambda: Q())
+
+    row = client.get("/api/admin/load/live?range=1h").json()["snapshot"]["items"][0]
+    assert row["cpu_pct_server"] == pytest.approx(50.0)
+    assert row["mem_pct_server"] == pytest.approx(50.0)
+    U.reset()
+
+
+def test_load_live_outside_app_now_gets_pct_of_server(as_admin):
+    """Same "% of the whole server" treatment for outside-app containers/host
+    (the rows the charts label "outside app: <container>") -- from the SAME
+    per-node thread count/total RAM as the job rows, keyed by that
+    container's own node (outside_app_now() looks across every node, unlike
+    job rows which always ran on job_usage.node_name())."""
+    cluster_routes._LOAD_CACHE.update(key=None, ts=0.0, data=None)
+    nid, _ = CM.create_node("eu1")
+    CM.ingest(nid, _sample(cores_physical=8, mem={"used": 4e9, "total": 16e9},
+                          containers=[{"name": "mesher_1", "cpu": 200.0, "mem": 4e9}]))
+    # 4 threads; container reads 200 % (docker CPUPerc: 2 cores) -> 50 % of server
+    # mem 4e9 / 16e9 total -> 25 %
+    r = client.get("/api/admin/load/live?range=1h").json()
+    c = next(x for x in r["outside_app"]["now"] if x["name"] == "mesher_1")
+    assert c["cpu_pct_server"] == pytest.approx(50.0)
+    assert c["mem_pct_server"] == pytest.approx(25.0)
 
 
 def test_load_live_nodes_now_cores_physical_is_none_for_an_older_agent(as_admin):

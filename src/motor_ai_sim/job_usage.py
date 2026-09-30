@@ -40,6 +40,10 @@ _ACTIVE: Dict[str, "Meter"] = {}
 _SAMPLER: Optional[threading.Thread] = None
 _ATTRIB_FLUSHER: Optional[threading.Thread] = None
 _LAST_TREE: Optional[float] = None
+#: wall-clock time.time() of the last _tick() call (fast or full) -- the true
+#: elapsed-time denominator for last_rate_cores, since ticks aren't exactly
+#: SAMPLE_S apart (a job start/finish fires an extra FAST tick in between).
+_LAST_TICK_WALL: Optional[float] = None
 _SEEN_CHILD: Dict[int, float] = {}
 #: (minute_bucket, node, user, client) -> accumulated CPU-seconds not yet flushed.
 _USER_ACC: Dict[tuple, float] = {}
@@ -166,10 +170,16 @@ class Meter:
         self.cpu_s = 0.0
         self.shared = False
         self.peak_rss = _own_rss()
+        self.last_rss = self.peak_rss
+        #: cores currently in use (ΔCPU-s / Δwall-s over the last full tick) --
+        #: NOT the cumulative cpu_s above. Admin -> Overview "Now" table divides
+        #: this by the node's thread count for "N % of server".
+        self.last_rate_cores = 0.0
 
     def live(self) -> Dict[str, Any]:
         return {"cpu_s": round(self.cpu_s, 1), "peak_rss": self.peak_rss,
-                "wall_s": round(time.time() - self.t0, 1)}
+                "wall_s": round(time.time() - self.t0, 1),
+                "cpu_rate": round(self.last_rate_cores, 3), "rss": int(self.last_rss)}
 
 
 # ── solve-pool children (motor_ai_sim.solve_pool) ────────────────────────────
@@ -250,8 +260,11 @@ def _tick(fast: bool = False, own: Optional["Meter"] = None) -> None:
     does a FAST tick on the job's own thread: process CPU only, its own thread
     time from ``time.thread_time``; the other jobs' weights fall back to an
     equal split of that (at most ``SAMPLE_S``-long) slice."""
-    global _LAST_TREE
+    global _LAST_TREE, _LAST_TICK_WALL
     with _LOCK:
+        now_wall = time.time()
+        dt_wall = SAMPLE_S if _LAST_TICK_WALL is None else max(1e-3, now_wall - _LAST_TICK_WALL)
+        _LAST_TICK_WALL = now_wall
         now_tree = tree_cpu_s(fast=fast)
         rss = _own_rss() if fast else tree_rss()
         delta = 0.0 if _LAST_TREE is None else max(0.0, now_tree - _LAST_TREE)
@@ -274,12 +287,14 @@ def _tick(fast: bool = False, own: Optional["Meter"] = None) -> None:
                 else:
                     weights.append(0.0)
                 m.peak_rss = max(m.peak_rss, rss)
+                m.last_rss = rss
                 continue
             tc = _thread_cpu(m.native_id)
             weights.append(max(0.0, tc - m.thread_cpu_last)
                            + child_by_run.get(m.run_id, 0.0))
             m.thread_cpu_last = tc
             m.peak_rss = max(m.peak_rss, rss)
+            m.last_rss = rss
         tot = sum(weights)
         if fast and len(ms) > 1:
             tot = 0.0                                   # unknown weights -> equal
@@ -292,6 +307,14 @@ def _tick(fast: bool = False, own: Optional["Meter"] = None) -> None:
             if got > 0:
                 key = (minute, m.node, m.user, m.client)
                 _USER_ACC[key] = _USER_ACC.get(key, 0.0) + got
+            # last_rate_cores: only a FULL tick has real per-job weights for
+            # every active meter (a fast tick's weights are all-0 except the
+            # one job joining/leaving) -- writing it there too would flash
+            # every OTHER running job's rate to 0 for an instant. Full ticks
+            # land every SAMPLE_S regardless, so the rate is never stale by
+            # more than that.
+            if not fast:
+                m.last_rate_cores = got / dt_wall
 
 
 def _sampler_loop() -> None:
@@ -461,10 +484,11 @@ def live(run_id: str) -> Optional[Dict[str, Any]]:
 
 
 def reset() -> None:
-    global _LAST_TREE
+    global _LAST_TREE, _LAST_TICK_WALL
     with _LOCK:
         _ACTIVE.clear()
         _LAST_TREE = None
+        _LAST_TICK_WALL = None
         _USER_ACC.clear()
         _CHILDREN.clear()
 

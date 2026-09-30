@@ -126,12 +126,43 @@ def load_live(range: str = "1h", top: int = 8, _admin: dict = Depends(require_ad
     outside_app["now"] = CM.outside_app_now()
     since = [n.get("created") for n in nodes["nodes"]
             if n.get("created") and n["status"] != "revoked"]
+    # "% of the whole server" for the Now table's process-monitor columns:
+    # CPU % = current rate (cores in use right now, NOT cumulative cpu_s) /
+    # the node's thread count; RAM % = current RSS / the node's total RAM.
+    # Jobs always ran on THIS process's own node (in-process execution, no
+    # distributed dispatch); outside-app containers/host carry their own
+    # `node` field since outside_app_now() looks across every registered node.
+    node_now_by_id = {n["id"]: n for n in nodes_now}
+    this_node = node_now_by_id.get(U.node_name())
     try:
         snapshot = CM.jobs_view()
         for row in snapshot.get("items") or []:
             row.setdefault("node", U.node_name())
+            threads = this_node.get("cores") if this_node else None
+            mem_total = this_node.get("mem_total") if this_node else None
+            rate = row.get("cpu_rate")
+            if threads and rate is not None:
+                row["cpu_pct_server"] = round(100.0 * rate / threads, 1)
+            rss = row.get("rss")
+            if mem_total and rss:
+                row["mem_pct_server"] = round(100.0 * rss / mem_total, 1)
     except Exception as e:                                # noqa: BLE001
         snapshot = {"error": CM.redact(str(e))[:200], "items": []}
+
+    for c in outside_app["now"]:
+        n = node_now_by_id.get(c.get("node"))
+        if not n:
+            continue
+        threads = n.get("cores")
+        mem_total = n.get("mem_total")
+        # docker stats CPUPerc convention (same as the node agent sends):
+        # 100 % = one core, so this is already core-equivalents, same units
+        # job_usage.cpu_rate is in -- dividing by threads gives the same
+        # "% of the whole server" as the job rows above.
+        if threads:
+            c["cpu_pct_server"] = round(c["cpu"] / threads, 1)
+        if mem_total:
+            c["mem_pct_server"] = round(100.0 * c["mem"] / mem_total, 1)
 
     data = {"range": rng, "nodes": node_series, "nodes_now": nodes_now, "cluster": nodes["cluster"],
             "user_load": user_load, "outside_app": outside_app, "snapshot": snapshot,

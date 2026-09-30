@@ -26,7 +26,7 @@
 // than the other two, misaligning the x-axes vertically).
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Paper, Typography, ToggleButton, ToggleButtonGroup, Table, TableBody,
-  TableCell, TableHead, TableRow, Button, useTheme } from '@mui/material';
+  TableCell, TableHead, TableRow, TableSortLabel, Button, useTheme } from '@mui/material';
 import {
   ResponsiveContainer, ComposedChart, AreaChart, Area, Line, XAxis, YAxis, CartesianGrid,
   Tooltip as RcTooltip,
@@ -35,7 +35,8 @@ import HelpTip from '../common/HelpTip';
 import {
   mergeNodeSeries, mergeLoadSeries, isCollectingHistory, serverLabel, threadsUsed,
   cpuTooltipValue, memTooltipValue, ramNowLabel, parseServerSeriesKey, clusterLine,
-  computeXAxis, type XAxisSpec,
+  computeXAxis, sortByField, levelColor, pctCell, computeNodeTotals,
+  type XAxisSpec, type SortDir,
 } from './liveLoadSeries';
 import {
   serverColor, userColor, containerColor, hostColor, overheadColor, RAM_ACCENT, RAM_GRID,
@@ -72,7 +73,10 @@ interface NodeNow {
   cpu?: number; mem_total?: number; mem_used?: number;
 }
 interface UserLoad { users: string[]; bucket_s: number; series: Record<string, number>[] }
-interface OutsideNow { node: string; name: string; cpu: number; mem: number; uptime_s: number | null }
+interface OutsideNow {
+  node: string; name: string; cpu: number; mem: number; uptime_s: number | null;
+  cpu_pct_server?: number; mem_pct_server?: number;
+}
 interface OutsideApp {
   items: string[]; app_overhead_key: string | null; bucket_s: number;
   series: Record<string, number>[]; now: OutsideNow[];
@@ -80,6 +84,7 @@ interface OutsideApp {
 interface JobItem {
   run_id: string; owner: string; kind: string; state: string; elapsed_s?: number;
   cpu_s?: number; node?: string; agent?: string | null;
+  cpu_rate?: number; rss?: number; cpu_pct_server?: number; mem_pct_server?: number;
 }
 interface Snapshot { running: number; queued: number; items: JobItem[] }
 interface LoadLive {
@@ -89,6 +94,51 @@ interface LoadLive {
   monitoring_since: number | null;
 }
 interface LegendItem { itemKey: string; label: string; color: string; dashed?: boolean; opacity?: number }
+
+// ── "Now" process-monitor table: one row per job OR outside-app container/
+// host, so the whole server's load is visible in one place (owner: "чтобы
+// было как у людей мониторы" -- htop / Task Manager / Grafana style). ──────
+interface ProcRow {
+  procKey: string; isJob: boolean; user: string; job: string; state: string;
+  client: string; node: string; cpuPct: number | null; memPct: number | null;
+  rss: number | null; threads: number | null; elapsedS: number | null;
+  cpuS: number | null; color: string; runId?: string;
+}
+type SortKey = 'user' | 'job' | 'state' | 'client' | 'node' | 'cpuPct' | 'memPct'
+  | 'rss' | 'threads' | 'elapsedS' | 'cpuS';
+const SORT_GETTERS: Record<SortKey, (r: ProcRow) => number | string | null | undefined> = {
+  user: (r) => r.user, job: (r) => r.job, state: (r) => r.state, client: (r) => r.client,
+  node: (r) => r.node, cpuPct: (r) => r.cpuPct, memPct: (r) => r.memPct, rss: (r) => r.rss,
+  threads: (r) => r.threads, elapsedS: (r) => r.elapsedS, cpuS: (r) => r.cpuS,
+};
+const COLUMNS: { key: SortKey; label: string; numeric?: boolean }[] = [
+  { key: 'user', label: 'user' }, { key: 'job', label: 'job' }, { key: 'state', label: 'state' },
+  { key: 'client', label: 'client' }, { key: 'node', label: 'node' },
+  { key: 'cpuPct', label: 'CPU %', numeric: true }, { key: 'memPct', label: 'MEM %', numeric: true },
+  { key: 'rss', label: 'RSS GB', numeric: true }, { key: 'threads', label: 'threads', numeric: true },
+  { key: 'elapsedS', label: 'elapsed', numeric: true }, { key: 'cpuS', label: 'CPU-s', numeric: true },
+];
+
+/** Task-Manager-style mini bar: a coloured fill inside a track, width = pct
+ *  clamped to the cell. Colour is the LEVEL (green/yellow/red), independent
+ *  of the row's identity colour (the dot next to "user"/"job"). */
+const MiniBar: React.FC<{ pct: number | null }> = ({ pct }) => (
+  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+    <Box sx={{ width: 34, height: 6, borderRadius: 1, bgcolor: 'var(--line-soft)', overflow: 'hidden', flexShrink: 0 }}>
+      {pct != null && (
+        <Box sx={{ width: `${Math.max(0, Math.min(100, pct))}%`, height: '100%', bgcolor: levelColor(pct) }} />
+      )}
+    </Box>
+    <Typography component="span" sx={{ fontSize: 10.5, color: 'var(--text-2)', minWidth: 26, textAlign: 'right' }}>
+      {pctCell(pct)}
+    </Typography>
+  </Box>
+);
+
+const ColorDot: React.FC<{ color: string }> = ({ color }) => (
+  <Box component="span" sx={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+    bgcolor: color, mr: 0.75, verticalAlign: 'middle' }} />
+);
 
 const dur = (s?: number | null) => {
   if (!s || s <= 0) return '—';
@@ -165,6 +215,13 @@ const LiveLoadPanel: React.FC = () => {
   const [range, setRange] = useState<Range>('1h');
   const [data, setData] = useState<LoadLive | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // "Now" table sort -- default CPU % descending (owner's rule).
+  const [sortKey, setSortKey] = useState<SortKey>('cpuPct');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const onSort = (key: SortKey) => {
+    if (key === sortKey) setSortDir(sortDir === 'desc' ? 'asc' : 'desc');
+    else { setSortKey(key); setSortDir('desc'); }
+  };
   const visibleRef = useRef(true);
   const mode: Mode = useTheme().palette.mode === 'dark' ? 'dark' : 'light';
 
@@ -250,6 +307,56 @@ const LiveLoadPanel: React.FC = () => {
   const agentUsers = new Set(
     (data?.snapshot.items ?? []).filter((j) => j.agent && j.state === 'running').map((j) => j.owner));
   const userLegendLabel = (u: string) => (u === 'other' ? 'other' : (agentUsers.has(u) ? `🤖 ${u}` : u));
+
+  // ── "Now" process-monitor table: jobs + outside-app containers/host, one
+  // unified sortable table, grouped by node with a totals row per node. ────
+  const jobRows: ProcRow[] = (data?.snapshot.items ?? []).map((j) => ({
+    procKey: `job:${j.run_id}`, isJob: true, user: j.owner, job: j.kind, state: j.state,
+    client: j.agent ? `🤖 ${j.agent}` : 'web', node: j.node ?? '—',
+    cpuPct: j.cpu_pct_server ?? null, memPct: j.mem_pct_server ?? null,
+    rss: j.rss ?? null, threads: j.cpu_rate ?? null,
+    elapsedS: j.elapsed_s ?? null, cpuS: j.cpu_s ?? null,
+    color: userColor(j.owner, mode), runId: j.run_id,
+  }));
+  const outsideRows: ProcRow[] = outsideNow.map((c) => ({
+    procKey: `out:${c.node}:${c.name}`, isJob: false, user: '—',
+    job: outsideLabel(c.name, overheadKey), state: 'running',
+    client: c.name === HOST_KEY ? 'host' : 'container', node: c.node,
+    cpuPct: c.cpu_pct_server ?? null, memPct: c.mem_pct_server ?? null,
+    rss: c.mem ?? null, threads: c.cpu != null ? c.cpu / 100 : null,
+    elapsedS: c.uptime_s, cpuS: null,
+    color: c.name === HOST_KEY ? hostColor(mode) : containerColor(c.name, mode).stroke,
+  }));
+  const rowsByNode = new Map<string, ProcRow[]>();
+  for (const r of [...jobRows, ...outsideRows]) {
+    const arr = rowsByNode.get(r.node) ?? [];
+    arr.push(r);
+    rowsByNode.set(r.node, arr);
+  }
+  type FlatEntry = { flatKey: string } & (
+    { kind: 'totals'; node: string; totals: ReturnType<typeof computeNodeTotals> } | { kind: 'row'; row: ProcRow });
+  const flatRows: FlatEntry[] = [];
+  for (const n of nodesNow) {
+    const rows = rowsByNode.get(n.id) ?? [];
+    rowsByNode.delete(n.id);
+    const jobPcts = rows.filter((r) => r.isJob);
+    const nodeMemPct = n.mem_total ? (100 * (n.mem_used ?? 0)) / n.mem_total : 0;
+    const totals = computeNodeTotals(n.cpu ?? 0, nodeMemPct,
+      jobPcts.map((r) => r.cpuPct ?? 0), jobPcts.map((r) => r.memPct ?? 0));
+    flatRows.push({ flatKey: `totals:${n.id}`, kind: 'totals', node: n.id, totals });
+    for (const row of sortByField(rows, SORT_GETTERS[sortKey], sortDir)) {
+      flatRows.push({ flatKey: row.procKey, kind: 'row', row });
+    }
+  }
+  // a row whose `node` matched no registered node (no node agent there yet)
+  // still shows, ungrouped, rather than silently vanishing.
+  for (const rows of rowsByNode.values()) {
+    for (const row of sortByField(rows, SORT_GETTERS[sortKey], sortDir)) {
+      flatRows.push({ flatKey: row.procKey, kind: 'row', row });
+    }
+  }
+  const hasAnyRow = flatRows.some((e) => e.kind === 'row');
+
   const loadTooltip = (value: unknown, _name: unknown, entry: { dataKey?: unknown }) => {
     const key = String(entry?.dataKey ?? '');
     if (key === 'other') return [pctFmt(value), 'other'];
@@ -430,52 +537,66 @@ const LiveLoadPanel: React.FC = () => {
         </Box>
       </Box>
 
-      <Typography sx={{ fontSize: 12, fontWeight: 600, mt: 1.5 }}>Now</Typography>
-      <Table size="small">
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1.5 }}>
+        <Typography sx={{ fontSize: 12, fontWeight: 600 }}>Now — all processes</Typography>
+        <HelpTip title={'Every running job AND everything outside the job queue (docker containers, "host" for '
+          + 'processes outside any container), one row each, one table. CPU % = job_usage’s current rate '
+          + '(ΔCPU-s / Δt over the last ≈ 2 s sample; docker CPUPerc for outside-app rows) ÷ that '
+          + 'server’s thread count. MEM % = current RSS ÷ that server’s total RAM — for a job this is '
+          + 'the WHOLE app process tree’s memory (Python doesn’t split heap between concurrent jobs), so '
+          + 'concurrent jobs show the same RSS; the totals row below takes the max of them, not the sum, for '
+          + 'exactly that reason. “threads” = cores currently in use (same number CPU % is built from), not a '
+          + 'literal OS thread count. Sort by clicking a column header.'} />
+      </Box>
+      <Table size="small" sx={{ '& td, & th': { whiteSpace: 'nowrap' } }}>
         <TableHead><TableRow>
-          {['user', 'job', 'state', 'client', 'node', 'elapsed', 'CPU-s', ''].map((h) => <TableCell key={h}>{h}</TableCell>)}
+          {COLUMNS.map((col) => (
+            <TableCell key={col.key} sortDirection={sortKey === col.key ? sortDir : false}>
+              <TableSortLabel active={sortKey === col.key} direction={sortKey === col.key ? sortDir : 'desc'}
+                onClick={() => onSort(col.key)}>{col.label}</TableSortLabel>
+            </TableCell>
+          ))}
+          <TableCell />
         </TableRow></TableHead>
         <TableBody>
-          {(data?.snapshot.items ?? []).map((j) => (
-            <TableRow key={j.run_id}>
-              <TableCell>{j.owner}</TableCell>
-              <TableCell>{j.kind}</TableCell>
-              <TableCell>{j.state}</TableCell>
-              <TableCell>{j.agent ? `🤖 ${j.agent}` : 'web'}</TableCell>
-              <TableCell>{j.node ?? '—'}</TableCell>
-              <TableCell>{dur(j.elapsed_s)}</TableCell>
-              <TableCell>{j.cpu_s?.toFixed(1) ?? '—'}</TableCell>
+          {flatRows.map((entry) => entry.kind === 'totals' ? (
+            <TableRow key={entry.flatKey} sx={{ bgcolor: 'var(--panel-3, rgba(255,255,255,0.05))' }}>
+              <TableCell colSpan={5} sx={{ fontSize: 11, fontWeight: 700 }}>{entry.node} — total</TableCell>
+              <TableCell><MiniBar pct={entry.totals.cpuTotal} /></TableCell>
+              <TableCell><MiniBar pct={entry.totals.memTotal} /></TableCell>
+              <TableCell colSpan={3} sx={{ fontSize: 10.5, color: 'var(--text-3)' }}>
+                app {Math.round(entry.totals.cpuApp)} % CPU / {Math.round(entry.totals.memApp)} % MEM
+                {' · outside '}{Math.round(entry.totals.cpuOutside)} % / {Math.round(entry.totals.memOutside)} %
+                {' · idle '}{Math.round(entry.totals.cpuIdle)} % / {Math.round(entry.totals.memIdle)} %
+              </TableCell>
+              <TableCell />
+              <TableCell />
+            </TableRow>
+          ) : (
+            <TableRow key={entry.flatKey}>
+              <TableCell><ColorDot color={entry.row.color} />{entry.row.user}</TableCell>
+              <TableCell>{entry.row.job}</TableCell>
+              <TableCell>{entry.row.state}</TableCell>
+              <TableCell>{entry.row.client}</TableCell>
+              <TableCell>{entry.row.node}</TableCell>
+              <TableCell><MiniBar pct={entry.row.cpuPct} /></TableCell>
+              <TableCell><MiniBar pct={entry.row.memPct} /></TableCell>
+              <TableCell>{entry.row.rss != null ? gb(entry.row.rss) : '—'}</TableCell>
+              <TableCell>{entry.row.threads != null ? entry.row.threads.toFixed(1) : '—'}</TableCell>
+              <TableCell>{dur(entry.row.elapsedS)}</TableCell>
+              <TableCell>{entry.row.cpuS != null ? entry.row.cpuS.toFixed(1) : '—'}</TableCell>
               <TableCell>
-                {j.state === 'running' && (
+                {entry.row.isJob && entry.row.state === 'running' && (
                   <Button size="small" color="error" sx={{ p: 0, minWidth: 0, fontSize: 11 }}
-                    onClick={() => void stop(j.run_id)}>Stop</Button>
+                    onClick={() => void stop(entry.row.runId!)}>Stop</Button>
                 )}
               </TableCell>
             </TableRow>
           ))}
-          {!data?.snapshot.items.length && (
-            <TableRow><TableCell colSpan={8} sx={{ color: 'var(--text-4)', fontSize: 12 }}>nothing running</TableCell></TableRow>
-          )}
-        </TableBody>
-      </Table>
-
-      <Typography sx={{ fontSize: 12, fontWeight: 600, mt: 1.5 }}>Outside app</Typography>
-      <Table size="small">
-        <TableHead><TableRow>
-          {['container', 'node', 'CPU %', 'RAM', 'uptime'].map((h) => <TableCell key={h}>{h}</TableCell>)}
-        </TableRow></TableHead>
-        <TableBody>
-          {outsideNow.map((c) => (
-            <TableRow key={`${c.node}:${c.name}`}>
-              <TableCell>{c.name}</TableCell>
-              <TableCell>{c.node}</TableCell>
-              <TableCell>{c.cpu.toFixed(1)}</TableCell>
-              <TableCell>{gb(c.mem)} GB</TableCell>
-              <TableCell>{dur(c.uptime_s)}</TableCell>
-            </TableRow>
-          ))}
-          {!outsideNow.length && (
-            <TableRow><TableCell colSpan={5} sx={{ color: 'var(--text-4)', fontSize: 12 }}>nothing outside the app running</TableCell></TableRow>
+          {!hasAnyRow && (
+            <TableRow><TableCell colSpan={COLUMNS.length + 1} sx={{ color: 'var(--text-4)', fontSize: 12 }}>
+              nothing running
+            </TableCell></TableRow>
           )}
         </TableBody>
       </Table>

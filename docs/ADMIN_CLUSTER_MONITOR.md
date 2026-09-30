@@ -181,6 +181,40 @@ running agent/MCP-submitted job gets a 🤖 marker in the legend/tooltip name
 (from the live queue snapshot, not per-minute history — an honest
 limitation).
 
+**"Now" table — a process monitor** (owner: "чтобы было как у людей
+мониторы" — htop / Task Manager / Grafana style). One unified, sortable
+table: every running job AND every outside-app container/host in the same
+rows (`user · job · state · client · node · CPU % · MEM % · RSS GB ·
+threads · elapsed · CPU-s · Stop`), click a header to sort (CPU % descending
+by default), a Task-Manager-style green/yellow/red mini bar in the CPU %/MEM
+% cells (thresholds 50/80, `levelColor`), and one totals row per node
+(`computeNodeTotals`) splitting that node's own measured CPU %/MEM % into
+app jobs / out-of-app / idle. Outside-app rows never get a Stop button —
+only job rows do (unchanged rule from #59).
+
+CPU % / MEM % / RSS / "threads" all come from `job_usage.Meter`'s new
+**current** figures — `cpu_rate` (cores in use over the last full
+`_tick()`, i.e. Δ CPU-seconds / Δ wall-seconds, tracked separately from the
+tree-CPU-time-based delta that already fed the cumulative `cpu_s`) and
+`rss` (this tick's process-tree RSS, tracked alongside the existing
+`peak_rss` running max) — NOT the cumulative `cpu_s`/`peak_rss` the table
+already had. `routes/cluster.py`'s `load_live()` divides `cpu_rate` by the
+row's node's thread count and `rss` by its total RAM for `cpu_pct_server`/
+`mem_pct_server` (job rows: always `job_usage.node_name()`, the node this
+process runs on; outside-app rows: their own `node` field, since
+`outside_app_now()` looks across every registered node). Outside-app
+containers reuse their already-reported `cpu` (docker CPUPerc, i.e. already
+core-equivalents) and `mem` (bytes) the same way.
+
+RSS is the WHOLE app process tree's current memory (Python doesn't split
+heap between concurrent jobs), so two jobs running at once show the
+identical RSS/MEM % — this is why the totals row's "app jobs" MEM figure
+takes the MAX of the running jobs' MEM %, not the sum (summing would count
+the app's own memory once per running job); CPU is safe to sum since
+`job_usage` already apportions the tree's measured CPU delta across
+concurrent jobs by thread-time weight, so per-job rates sum to the tree's
+own total by construction.
+
 ## Usage accounting (machine time per client)
 
 Every job the queue runs is metered (`src/motor_ai_sim/job_usage.py`, hook in

@@ -148,3 +148,83 @@ export function computeXAxis(range: keyof typeof RANGE_LOOKBACK_S, now: number,
   const ticks = Array.from({ length: n }, (_, i) => Math.round(start + ((now - start) * i) / (n - 1)));
   return { domain: [start, now], ticks };
 }
+
+// ── "Now" table: sorting, level colour, per-node totals ─────────────────────
+// A process-monitor table (htop / Task Manager style): every row -- job or
+// out-of-app container/host -- sortable by any column, CPU %/MEM % cells
+// coloured by level, one totals row per node.
+
+export type SortDir = 'asc' | 'desc';
+
+/** Stable sort by a column's value, nulls always last regardless of
+ *  direction (a missing figure isn't "the smallest possible value" -- it's
+ *  unknown, so it never gets to look like the quietest row on top). */
+export function sortByField<T>(
+  rows: T[], getValue: (row: T) => number | string | null | undefined, dir: SortDir,
+): T[] {
+  const mul = dir === 'asc' ? 1 : -1;
+  return rows
+    .map((row, i) => ({ row, i, v: getValue(row) }))
+    .sort((a, b) => {
+      if (a.v == null && b.v == null) return a.i - b.i;
+      if (a.v == null) return 1;
+      if (b.v == null) return -1;
+      if (a.v < b.v) return -mul;
+      if (a.v > b.v) return mul;
+      return a.i - b.i;                                  // stable
+    })
+    .map((x) => x.row);
+}
+
+/** green -> yellow -> red at 50 / 80 % -- Task Manager's own thresholds,
+ *  reused here so the mini bars read the same way this table's audience
+ *  already expects them to. */
+const LEVEL_OK = '#4ade80';
+const LEVEL_WARN = '#fbbf24';
+const LEVEL_HOT = '#f87171';
+export function levelColor(pct: number | null | undefined): string {
+  if (pct == null) return 'var(--text-4)';
+  if (pct >= 80) return LEVEL_HOT;
+  if (pct >= 50) return LEVEL_WARN;
+  return LEVEL_OK;
+}
+
+/** "38 %" or "—" for a possibly-unknown percentage cell. */
+export function pctCell(pct: number | null | undefined): string {
+  return pct == null ? '—' : `${Math.round(pct)} %`;
+}
+
+export interface NodeTotals {
+  cpuTotal: number; cpuApp: number; cpuOutside: number; cpuIdle: number;
+  memTotal: number; memApp: number; memOutside: number; memIdle: number;
+}
+
+/** One node's CPU/MEM split into app jobs vs out-of-app vs idle, for the
+ *  table's per-node totals row.
+ *
+ *  CPU: job rows are SUMMED -- job_usage apportions the tree's measured CPU
+ *  delta across concurrent jobs by thread-time weight, so per-job rates
+ *  already sum to the tree's own total by construction (never double-count).
+ *  Out-of-app is the residual against the node's own authoritative total
+ *  (not a second sum, which a top-N-truncated container list would
+ *  undercount); idle is whatever's left of 100 %.
+ *
+ *  MEM is different: every job row's RSS is the SAME whole-process-tree
+ *  figure (job_usage doesn't -- can't -- split heap between concurrent
+ *  Python jobs), so summing job rows would count the app's own memory once
+ *  per running job. Use the MAX instead -- correct whether 0, 1, or 5 jobs
+ *  are running, since they all report the identical shared number. */
+export function computeNodeTotals(
+  nodeCpuPct: number, nodeMemPct: number, jobCpuPcts: number[], jobMemPcts: number[],
+): NodeTotals {
+  const cpuApp = jobCpuPcts.reduce((a, b) => a + b, 0);
+  const cpuOutside = Math.max(0, nodeCpuPct - cpuApp);
+  const cpuIdle = Math.max(0, 100 - nodeCpuPct);
+  const memApp = jobMemPcts.length ? Math.max(...jobMemPcts) : 0;
+  const memOutside = Math.max(0, nodeMemPct - memApp);
+  const memIdle = Math.max(0, 100 - nodeMemPct);
+  return {
+    cpuTotal: nodeCpuPct, cpuApp, cpuOutside, cpuIdle,
+    memTotal: nodeMemPct, memApp, memOutside, memIdle,
+  };
+}

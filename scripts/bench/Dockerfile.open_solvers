@@ -1,0 +1,19 @@
+FROM condaforge/mambaforge:24.3.0-0
+
+# Open-source sparse solver stack, deliberately WITHOUT MKL.
+# blas=*=openblas pins the BLAS/LAPACK provider away from MKL for every
+# package in the env (numpy, scipy, suitesparse all link OpenBLAS).
+RUN mamba create -y -n solvers -c conda-forge \
+    python=3.11 \
+    "libblas=*=*openblas" "liblapack=*=*openblas" openblas \
+    numpy scipy \
+    suitesparse scikit-sparse \
+    mumps-seq python-mumps \
+    scikit-umfpack \
+    && mamba clean -afy
+
+SHELL ["mamba", "run", "-n", "solvers", "/bin/bash", "-c"]
+RUN python -c "import numpy, scipy; import numpy.__config__ as c; c.show()"
+
+WORKDIR /work
+ENTRYPOINT ["mamba", "run", "-n", "solvers", "python"]

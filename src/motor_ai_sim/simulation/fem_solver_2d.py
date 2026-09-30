@@ -4846,6 +4846,7 @@ def fem_transient_sliding_band(
     # percentage points, so the consumer (optimizer, cache) must be able to see
     # that this run did not get the build it requested.
     _build_prov = _mesh_build_trace()
+    from motor_ai_sim.simulation.geo_mesh import mesher_provenance as _geo_mesher_provenance
     if _build_prov["events"]:
         log.warning("mesh build DEGRADED (%d fallback(s)): %s",
                     len(_build_prov["events"]),
@@ -11028,6 +11029,8 @@ def fem_transient_sliding_band(
         # Deterministic build-path decisions (a sleeve → geometry mesher):
         # reported, never a rejection.
         "mesh_build_notes": list(_build_prov.get("notes") or []),
+        # which mesher built this run + CDT backend and gmsh/triangle versions
+        "mesher": _geo_mesher_provenance(_build_prov.get("mesher")),
         "structured_gap_effective": bool(_build_prov["structured_gap_effective"]),
         "slip_nodes_per_period": int(_nodes_per_period),
         "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,

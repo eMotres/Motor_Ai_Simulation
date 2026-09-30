@@ -66,7 +66,12 @@ def test_backend_selection(monkeypatch):
         monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "gmsh")
         assert gm.cdt_backend() == "gmsh"
         monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "auto")
-        assert gm.cdt_backend() == ("triangle" if gm.HAVE_TRIANGLE else "gmsh")
+        assert gm.cdt_backend() == "gmsh"          # S4: gmsh even with triangle
+        monkeypatch.delenv("MOTOR_AI_SIM_GEO_CDT")
+        assert gm.cdt_backend() == "gmsh"
+        prov = gm.mesher_provenance("geo_cdt/gmsh")
+        assert prov["build"] == "geo_cdt/gmsh" and prov["backend"] == "gmsh"
+        assert prov["gmsh"] == gm.GMSH_VALIDATED or "note" in prov
         monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "bogus")
         with pytest.raises(ValueError):
             gm.cdt_backend()
@@ -324,6 +329,61 @@ def test_moving_band_solve_is_refused_loudly():
                           n_sectors=2, rotor_eddy=False, iron_template=True,
                           geo_mesh=True, structured_gap=True, airgap_macro=True,
                           geo_override=dict(G40), eddy=False)
+
+
+# ── Coulomb virtual-work layers on the real stitched halves ────────────────
+def _coulomb_layers(backend):
+    from motor_ai_sim.cadquery_geometry import CadQueryMotor
+    from motor_ai_sim.simulation.mesher import (_simplify_polys,
+                                                _build_sliding_band_meshes,
+                                                build_trace)
+    from motor_ai_sim.simulation.virtual_work_torque import (sliding_band_layers,
+                                                             AIR_TAGS)
+    m = CadQueryMotor()
+    m.set_parameters(dict(G40))
+    p = m.parameters
+    raw = m.get_2d_polygons(rotor_angle_deg=0.0)
+    with _Backend(backend):
+        # exactly the solver's call (fem_transient_sliding_band): merged band,
+        # structured gap, 1 layer/side, the solver's stator_fillet_mm = 0
+        polys = _simplify_polys(raw, tol_mm=0.005, stator_fillet_mm=0.0,
+                                n_slip=1008, gap_layers=1, structured_gap=True,
+                                band_mode="merged")
+        ms, ts, _c, mr, tr, _c2 = _build_sliding_band_meshes(
+            polys, 0.0, 1.0, min_size_mm=0.3, outer_air_factor=1.2,
+            band_thickness_mm=0.4, n_sectors=2, geo_cfg=p, gap_layers=1,
+            full_ring=False, iron_template=True, geo_mesh=True)
+        trace = build_trace()
+    ns = ms.p.shape[1]
+    P = np.hstack([ms.p, mr.p])
+    T = np.hstack([ms.t, mr.t + ns])
+    tags = np.concatenate([ts, tr]).astype(int)
+    rr = np.hypot(*P)
+    r_rot = rr[ns:][np.unique(mr.t[:, ~np.isin(tr, AIR_TAGS)])].max()
+    r_sta = rr[:ns][np.unique(ms.t[:, ~np.isin(ts, AIR_TAGS)])].min()
+    layers = sliding_band_layers(P, T, ns, np.isin(tags, AIR_TAGS), r_rot,
+                                 float(polys["mid_r_mm"]) * 1e-3, r_sta)
+    return layers, trace
+
+
+def test_coulomb_layers_are_pure_air_on_both_backends():
+    """Coulomb's virtual-work torque displaces the rotor-side and stator-side
+    gap air rings (docs/COULOMB_TORQUE_2026-09-30.md); both must be pure air
+    on the geometry-driven mesh of each backend (sliding_band_layers raises
+    CoulombLayerError otherwise).  The rotor-side ring is the structured belt
+    (identical on both); the stator-side ring also takes the few CDT air
+    elements of the slot openings next to the innermost stator iron."""
+    got = {}
+    for be in BACKENDS:
+        layers, trace = _coulomb_layers(be)
+        assert not trace["events"], trace["events"]            # no fallback
+        assert trace["structured_gap_effective"]
+        got[be] = {k: len(v.elements) for k, v in layers.items()}
+        assert got[be]["rotor_side"] > 0 and got[be]["stator_side"] > 0
+    if len(got) == 2:
+        assert got["gmsh"]["rotor_side"] == got["triangle"]["rotor_side"]
+        assert got["gmsh"]["stator_side"] == pytest.approx(
+            got["triangle"]["stator_side"], rel=0.02)
 
 
 # ── skin (shaft) and sleeve layers, per backend, on a sleeved hollow shaft ───

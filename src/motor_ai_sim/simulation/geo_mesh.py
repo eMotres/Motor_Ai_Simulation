@@ -1317,9 +1317,9 @@ def _triangulate_gmsh(A: Dict, area: float, regions, rotor_bridge: bool):
 
 
 # ── CDT backend selection ────────────────────────────────────────────────────
-# MOTOR_AI_SIM_GEO_CDT = auto (default) | triangle | gmsh.  auto keeps Triangle
-# wherever the optional package is installed (every number as before) and uses
-# the gmsh backend where it is not.  `set_cdt_backend` overrides per process
+# MOTOR_AI_SIM_GEO_CDT = auto (default) | triangle | gmsh.  auto = gmsh since
+# S4 (2026-09-30), also where the optional Triangle package is installed;
+# triangle must be selected explicitly.  `set_cdt_backend` overrides per process
 # (tests, the mesher comparison).  Every other step of the geometry mesher is
 # shared, so switching the backend changes ONLY the triangulation of the PSLG.
 _CDT_OVERRIDE: Dict[str, Optional[str]] = {"v": None}
@@ -1376,6 +1376,19 @@ def cdt_provenance() -> Dict[str, Optional[str]]:
     return out
 
 
+def mesher_provenance(build_mesher: Optional[str]) -> Dict[str, Optional[str]]:
+    """The `mesher` record of a result: which mesher built the halves (the
+    build trace: geo_cdt/<backend>, iron_template or gmsh_occ) plus the CDT
+    backend and library versions.  Never raises: provenance must not break a
+    finished solve."""
+    out: Dict[str, Optional[str]] = {"build": build_mesher}
+    try:
+        out.update(cdt_provenance())
+    except Exception as e:  # noqa: BLE001
+        out["provenance_error"] = "%s: %s" % (type(e).__name__, e)
+    return out
+
+
 def cdt_backend() -> str:
     """'triangle' or 'gmsh' — the backend the next triangulation uses.
 
@@ -1395,8 +1408,9 @@ def cdt_backend() -> str:
     if want != "auto":
         raise ValueError("MOTOR_AI_SIM_GEO_CDT must be auto, triangle or gmsh, "
                          "not %r" % want)
-    if HAVE_TRIANGLE:
-        return "triangle"
+    # S4 (owner 2026-09-30): gmsh is the default backend whether or not the
+    # optional Triangle package is installed; Triangle stays selectable with
+    # MOTOR_AI_SIM_GEO_CDT=triangle for cross-checks.
     _require_gmsh()
     return "gmsh"
 

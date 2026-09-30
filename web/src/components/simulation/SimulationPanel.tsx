@@ -2588,13 +2588,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               ))}
             </Select>
           </FormControl>
-          <Typography sx={{ fontSize: 10.5, color: 'text.secondary', mt: -0.75, mb: 0.5 }}>
-            {`Default ${defaultSteps} = ${RIPPLE_SAMPLES_PER_COGGING_CYCLE} samples × ${coggingCycles} cogging cycles per period (ripple-grade; min ${EDDY_DEFAULT_STEPS}).`}
-          </Typography>
           {stepsLine && (
-            <Typography sx={{ fontSize: 10.5, color: 'text.secondary', mt: -0.75, mb: 1 }}>
-              {stepsLine}
-            </Typography>
+            <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.375, mt: -0.75, mb: 1 }}>
+              <Typography sx={{ fontSize: 10.5, color: 'text.secondary' }}>
+                {`${stepsMigratedFrom ?? steps} → ${stepsRan} (auto)`}
+              </Typography>
+              <HelpTip title={stepsLine} />
+            </Box>
           )}
           {/* Per-element irreversible demagnetisation (commercial-FEM-style).  A pre-pass
               sweeps the period at full Br, finds the worst demag field at every

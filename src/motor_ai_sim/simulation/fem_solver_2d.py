@@ -7540,18 +7540,24 @@ def fem_transient_sliding_band(
                     float(period_mech)):
                 _td_half_why = "half a period is not a whole number of slip nodes"
         _td_back = _td_fwd = None
+        _tdm_fdev = None
         if _td_half_why is None:
             _td_back, _mi_b = _td_map(0.5, -1.0)
             _td_fwd, _mi_f = _td_map(0.5, +1.0)
             if _td_back is None or _td_fwd is None:
                 _td_half_why = "rotor mesh not pole periodic (%s)" % (_mi_b,)
             else:
-                # the magnets must alternate exactly: the magnet source is
-                # invariant under "one pole back, negated"
+                # the magnets must alternate: the magnet source is invariant
+                # under "one pole back, negated".  Measured 6.3e-6 on the Ø40
+                # mesh (element-level magnetisation), where the half-period
+                # orbit matched a 40-period march to 1e-7 in torque and 6e-6
+                # in every loss; a different magnet would be O(1)
                 _fh = _td_apply(_td_back, True, f_mag2)
                 _fdev = float(np.linalg.norm(_fh - f_mag2)
                               / max(float(np.linalg.norm(f_mag2)), 1e-300))
-                if _fdev > 1e-9:
+                _tdm_fdev = _fdev
+                if _fdev > float(_os_sb.environ.get("SB_TDM_HALF_TOL", "1e-4")
+                                 or 1e-4):
                     _td_half_why = ("magnet source not pole-antisymmetric "
                                     "(%.3g)" % _fdev)
         _td_neg = _td_half_why is None
@@ -7635,6 +7641,7 @@ def fem_transient_sliding_band(
         _tdm_info = {"method": "newton_krylov_shooting_dc_coarse",
                      "period": "half_antiperiodic" if _td_neg else "full",
                      "half_refused": _td_half_why, "frames": int(_td_N),
+                     "magnet_source_half_asymmetry": _tdm_fdev,
                      "workers": int(_td_workers), "mkl_threads": _td_mklt,
                      "tangent": _td_tan_mode, "eta": _td_solver.eta,
                      "conductor_dofs": int(_td_cond.size), "t": {}}

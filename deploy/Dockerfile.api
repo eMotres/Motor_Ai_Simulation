@@ -23,13 +23,40 @@
 #     the old "the image's config/ is copied into an EMPTY volume on first
 #     start" semantics silently produced an empty catalog the second time.
 
+# ── open sparse solvers: the Python bindings, built once ────────────────────
+# SuiteSparse CHOLMOD (scikit-sparse) and MUMPS (python-mumps) ship only as
+# source on PyPI; they are compiled here against Debian's libraries and only
+# the wheels travel to the runtime stages (no compiler in the image).  They are
+# in EVERY image: the default solvers of the fully open build (WITH_PARDISO=0)
+# and the fallback of the MKL build.  simulation/linear_backend.py selects.
+FROM python:3.11-slim AS opensolvers-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libsuitesparse-dev libmumps-seq-dev \
+    && rm -rf /var/lib/apt/lists/*
+# python-mumps finds libdmumps_seq & co. by name; the sequential variant's
+# fake-MPI header lives in its own include directory.
+ENV CFLAGS="-I/usr/include/suitesparse -I/usr/include/mumps_seq"
+COPY requirements-opensolvers.txt ./
+RUN pip wheel --no-cache-dir --no-deps -w /wheels -r requirements-opensolvers.txt
+
 FROM python:3.11-slim AS base
 
 # gmsh + OCP (cadquery) native runtime libs; libgomp for MKL/OpenMP;
 # fonts-dejavu-core for the reportlab fallback path (see above).
+# Open sparse solvers (runtime only): SuiteSparse's shared libraries (every
+# module scikit-sparse links: CHOLMOD, AMD, CAMD, COLAMD, CCOLAMD, BTF, KLU,
+# SPQR, UMFPACK) and sequential MUMPS 5.7 (SCOTCH and PORD orderings).
+# libopenblas0-pthread makes OpenBLAS the provider of libblas.so.3 /
+# liblapack.so.3 for them (Debian's alternatives would otherwise pick the slow
+# reference BLAS); numpy/scipy's own wheels bundle OpenBLAS as well.  No Intel
+# MKL anywhere unless WITH_PARDISO=1 below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libglu1-mesa libgl1 libxrender1 libxcursor1 libxft2 libxinerama1 \
         libgomp1 fonts-dejavu-core curl \
+        libopenblas0-pthread \
+        libcholmod5 libamd3 libcamd3 libcolamd3 libccolamd3 libbtf2 \
+        libklu2 libspqr4 libumfpack6 libsuitesparseconfig7 \
+        libmumps-seq-5.7 \
     && rm -rf /var/lib/apt/lists/*
 
 # Non-root service account.  Fixed uid/gid so the host bind mounts under
@@ -39,12 +66,20 @@ RUN groupadd --gid 10001 motres \
  && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin motres
 
 WORKDIR /app
-COPY requirements.txt requirements-pardiso.txt requirements-triangle.txt ./
+COPY requirements.txt requirements-pardiso.txt requirements-triangle.txt \
+     requirements-opensolvers.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=opensolvers-build /wheels /tmp/opensolver-wheels
+RUN pip install --no-cache-dir --no-index /tmp/opensolver-wheels/*.whl \
+ && rm -rf /tmp/opensolver-wheels \
+ && python -c "from sksparse import cholmod; from mumps import _mumps; _mumps.dmumps"
 # Optional proprietary accelerator (Intel MKL via pypardiso), OFF by default so
-# a distributed image contains only AGPL-compatible software.  Our own solve
-# server may build with --build-arg WITH_PARDISO=1 (several times faster
-# transient); without it every solver uses SciPy SuperLU.
+# a distributed image contains only AGPL-compatible software: that image solves
+# with CHOLMOD (SPD) + MUMPS (LU, large SPD), measured slower end to end than
+# MKL PARDISO (docs/OPEN_SOLVERS_2026-09-30.md).  Our own solve server builds
+# with --build-arg WITH_PARDISO=1 (docker-compose.yml) under the AGPL
+# section 7 MKL exception; linear_backend picks PARDISO whenever it is
+# installed (SB_LINEAR_BACKEND=auto) and the open solvers otherwise.
 ARG WITH_PARDISO=0
 RUN if [ "$WITH_PARDISO" = "1" ]; then \
         pip install --no-cache-dir -r requirements-pardiso.txt; fi

@@ -45,9 +45,18 @@ dependencies = [
 
 [project.optional-dependencies]
 # OPTIONAL: Intel MKL PARDISO accelerator.  pypardiso is BSD-3-Clause but pulls
-# proprietary Intel MKL; every solver falls back to SciPy SuperLU without it.
+# proprietary Intel MKL; without it the solvers use CHOLMOD + MUMPS (extra
+# `opensolvers`), and SciPy SuperLU when those are absent too.
 pardiso = [
     "pypardiso>=0.4.7,<0.5",
+]
+# The open-source sparse direct solvers (simulation/linear_backend.py):
+# SuiteSparse CHOLMOD via scikit-sparse, MUMPS via python-mumps.  Source-only
+# on PyPI: needs libsuitesparse-dev + libmumps-seq-dev and a C compiler
+# (requirements-opensolvers.txt, deploy/Dockerfile.api).
+opensolvers = [
+    "scikit-sparse==0.5.0",
+    "python-mumps==0.0.4",
 ]
 # OPTIONAL, NON-COMMERCIAL licence (Shewchuk's Triangle): the geometry-driven
 # mesher; gmsh is used when absent.  See docs/MESHER_TRANSITION.md.

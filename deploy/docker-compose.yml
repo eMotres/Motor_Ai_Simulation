@@ -80,9 +80,13 @@ services:
       # numbers stay identical to the pre-AGPL image: `triangle` stays the
       # default mesher during the staged gmsh transition
       # (docs/MESHER_TRANSITION.md) and pypardiso/Intel MKL keeps the fast
-      # sparse solver.  The Dockerfile defaults stay 0 for the distributed
-      # AGPL image; override here only with WITH_TRIANGLE=0 / WITH_PARDISO=0
-      # in deploy/.env (e.g. for the S3 mesher comparison).
+      # sparse solver (AGPL section 7 MKL exception; SB_LINEAR_BACKEND=auto
+      # picks PARDISO when installed).  Every image also carries the open
+      # solvers (CHOLMOD + MUMPS), which a WITH_PARDISO=0 build uses instead
+      # (docs/OPEN_SOLVERS_2026-09-30.md has the measured cost).  The
+      # Dockerfile defaults stay 0 for the distributed AGPL image; override
+      # here only with WITH_TRIANGLE=0 / WITH_PARDISO=0 in deploy/.env (e.g.
+      # for the S3 mesher comparison or the fully open build).
       args:
         WITH_TRIANGLE: ${WITH_TRIANGLE:-1}
         WITH_PARDISO: ${WITH_PARDISO:-1}

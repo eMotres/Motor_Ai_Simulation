@@ -1,0 +1,13 @@
+# Open-source sparse direct solvers (2026-09-30): the default linear solvers
+# of an image built without Intel MKL (WITH_PARDISO=0), and the fallback of
+# one built with it.  simulation/linear_backend.py picks among them.
+#   scikit-sparse  BSD-2-Clause; wraps SuiteSparse (CHOLMOD: LGPL-2.1+, its
+#                  Supernodal module GPL-2.0+; AMD/CAMD/COLAMD/CCOLAMD/BTF:
+#                  BSD-3-Clause; KLU: LGPL-2.1+; UMFPACK, SPQR: GPL-2.0+)
+#   python-mumps   BSD-2-Clause; wraps MUMPS (CeCILL-C)
+# Both are source distributions on PyPI and build against the system
+# libraries: Debian/Ubuntu `libsuitesparse-dev libmumps-seq-dev` plus a C
+# compiler (deploy/Dockerfile.api does this in its `opensolvers-build` stage).
+# python-mumps 0.0.5+ requires Python >= 3.12; 0.0.4 is the last for 3.11.
+scikit-sparse==0.5.0
+python-mumps==0.0.4

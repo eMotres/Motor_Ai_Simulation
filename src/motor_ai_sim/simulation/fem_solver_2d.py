@@ -7840,6 +7840,8 @@ def fem_transient_sliding_band(
                         _br_asym = _tdm.image_min_br(_dmst.mags, _br_glob, _td_maps)
                         _mi_all = np.concatenate([np.asarray(_d["idx"], int)
                                                   for _d in _dmst.mags])
+                        _td_dm["br_map_image_min"] = [
+                            float("%.6g" % _v) for _v in _br_asym[_mi_all]]
                         _td_dm["image_min_gap"] = {
                             "max": float(np.max(_br_glob[_mi_all] - _br_asym[_mi_all])),
                             "mean_area": float(np.sum((_br_glob[_mi_all]

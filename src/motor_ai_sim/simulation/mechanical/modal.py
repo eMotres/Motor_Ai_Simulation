@@ -459,6 +459,21 @@ def build_stator_mesh(polys: dict, mesh_size_mm: float = 2.5,
                       min_size_mm: float = 0.4):
     """(skfem MeshTri in METRES, outlines in mm) of the stator core.
 
+    Runs out of process (see ``motor_ai_sim.simulation.gmsh_worker``): this
+    process never imports gmsh.
+    """
+    from motor_ai_sim.simulation import gmsh_worker
+
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.mechanical.modal:_build_stator_mesh_impl",
+        args=(polys, mesh_size_mm, min_size_mm),
+    )
+
+
+def _build_stator_mesh_impl(polys: dict, mesh_size_mm: float = 2.5,
+                            min_size_mm: float = 0.4):
+    """Worker-side implementation of ``build_stator_mesh``.
+
     The ``stator`` polygon already has the slots as holes, so nothing is
     subtracted here — the copper does not carry load and is added as mass later.
     Same gmsh settings as the rotor mesher so the two bodies are comparable.

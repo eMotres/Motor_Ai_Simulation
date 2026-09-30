@@ -431,7 +431,13 @@ class TimePeriodicEddy:
                  coarse: Optional[Dict[str, Any]] = None, tol: float = 1e-7,
                  max_newton: int = 25, workers: int = 1,
                  mkl_threads: Optional[int] = None, gmres_rtol: float = 1e-9,
-                 gmres_max: int = 200, log=None) -> None:
+                 gmres_max: int = 200, eta: Optional[float] = None,
+                 log=None) -> None:
+        # eta: a FIXED Newton forcing term for the wrap GMRES (None = adaptive,
+        # 1e-2 of the residual).  Where the Newton is linear anyway (the
+        # march's difference tangent), solving tighter than its rate buys
+        # nothing.
+        self.eta = eta
         self.kfun = kfun
         self.tangent = tangent
         self.f_mag = f_mag
@@ -737,7 +743,8 @@ class TimePeriodicEddy:
                 # inexact Newton: the wrap solved to a forcing term that
                 # follows the residual (1e-3 far away, 1e-2 of the residual
                 # near the solution, never below gmres_rtol)
-                _eta = max(self.gmres_rtol, min(1e-3, 1e-2 * worst))
+                _eta = (max(self.gmres_rtol, min(1e-3, 1e-2 * worst))
+                        if self.eta is None else float(self.eta))
                 rec["gmres_rtol"] = _eta
                 # right preconditioning: the returned x is already P·y
                 wsol, ginfo = gmres_right(

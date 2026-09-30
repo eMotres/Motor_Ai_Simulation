@@ -7629,12 +7629,14 @@ def fem_transient_sliding_band(
             S_raw=_S_con, dt=dt, frames=_td_frames, wrap_back=_td_wrap,
             cond=_td_cond, coarse=_td_coarse,
             tol=float(_os_sb.environ.get("SB_TDM_TOL", "1e-7") or 1e-7),
-            workers=_td_workers, mkl_threads=_td_mklt, log=log)
+            workers=_td_workers, mkl_threads=_td_mklt,
+            eta=(float(_os_sb.environ["SB_TDM_ETA"])
+                 if _os_sb.environ.get("SB_TDM_ETA") else None), log=log)
         _tdm_info = {"method": "newton_krylov_shooting_dc_coarse",
                      "period": "half_antiperiodic" if _td_neg else "full",
                      "half_refused": _td_half_why, "frames": int(_td_N),
                      "workers": int(_td_workers), "mkl_threads": _td_mklt,
-                     "tangent": _td_tan_mode,
+                     "tangent": _td_tan_mode, "eta": _td_solver.eta,
                      "conductor_dofs": int(_td_cond.size), "t": {}}
         try:
             # ── the start: the static (∂A/∂t = 0) field of every frame ──────

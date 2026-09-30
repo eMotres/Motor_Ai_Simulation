@@ -22,7 +22,7 @@ import {
   TextField, Tooltip, Typography,
 } from '@mui/material';
 
-import { useMotorStore } from '../../stores/motorStore';
+import { useMotorStore, useUIStore } from '../../stores/motorStore';
 import { coolingIssue, HEAT_PATHS, isStale, useThermalStore } from '../../stores/thermalStore';
 import type { HeatPath } from '../../stores/thermalStore';
 import { historyNoticeFor } from '../../lib/historyNotice';
@@ -637,13 +637,15 @@ const ThermalPanel: React.FC = () => {
   const recompute = useCallback(() => { void solveField(true); }, [solveField]);
   const buildMesh = useCallback(() => { void loadGeometry(); }, [loadGeometry]);
 
-  /* ── the Electromagnetic run this Solve had to make for itself ────────────
-     Non-null only while it is in flight (stores/thermalStore.emRunThroughLoop).
-     It is what turns a one-minute conduction solve into a several-minute wait,
-     so it gets the progress strip, a line saying why, and a Stop. */
-  const emFb = st.emFallback;
-  const stopEm = useCallback(
-    () => useThermalStore.getState().stopEmFallback(), []);
+  /* ── no current Electromagnetic result for this point ─────────────────────
+     This tab NEVER makes that run itself (owner rule, 2026-09-07, repeated
+     2026-09-30) — `st.emMissing` is the backend's refusal sentence, set by
+     `solveField` / `solveCoupled` in place of the chained run this tab used
+     to make.  One short line, and a link to the Electromagnetic tab. */
+  const emMissing = st.emMissing;
+  const setActiveTab = useUIStore((s) => s.setActiveTab);
+  const goToElectromagnetic = useCallback(
+    () => setActiveTab('simulation'), [setActiveTab]);
 
   /* ── the mesh, as a thing you can see ────────────────────────────────────
      Unlike Mechanical's, the thermal mesh has no size field of its own: it is
@@ -837,26 +839,15 @@ const ThermalPanel: React.FC = () => {
     <Box sx={{ height: '100%', overflow: 'auto', p: 1.5 }}>
       {/* Live solve progress — the same strip the Electromagnetic tab has, pinned to
           the very top of THIS scroller (sticky only works inside the element
-          that scrolls).  A coupled EM ↔ thermal run is the long one worth
-          watching.  Renders nothing while idle.
-
-          While this tab is making the Electromagnetic run its own solve was
-          missing, the bar with something to say is the ORCHESTRATOR's: the
-          thermal tracker is silent through the whole transient, which is most
-          of the wait.  Keyed, so the strip remounts instead of showing the
-          other endpoint's last reading for a poll. */}
-      {emFb ? (
-        <SolveProgressStrip key="coupled" endpoint="/api/coupled/progress"
-          unit="steps"
-          kindLabels={{ coupled: 'Electromagnetic run for this map' }} />
-      ) : (
-        <SolveProgressStrip key="thermal" endpoint="/api/thermal/progress"
-          unit="steps"
-          kindLabels={{
-            field: 'Thermal solve', coupled: 'Coupled EM ↔ thermal',
-            mesh: 'Mesh build',
-          }} />
-      )}
+          that scrolls).  Renders nothing while idle.  This tab never makes an
+          Electromagnetic run of its own any more (owner rule), so there is
+          only ever the thermal solve's own progress to show here. */}
+      <SolveProgressStrip key="thermal" endpoint="/api/thermal/progress"
+        unit="steps"
+        kindLabels={{
+          field: 'Thermal solve', coupled: 'Coupled EM ↔ thermal',
+          mesh: 'Mesh build',
+        }} />
 
       {/* ── controls ──────────────────────────────────────────────────── */}
       <Paper sx={{ p: 1.25, mb: 1.5, bgcolor: 'var(--panel)' }}>
@@ -889,30 +880,21 @@ const ThermalPanel: React.FC = () => {
           <SolveTimer busy={busy} startedAt={st.field.startedAt} est={st.est.field}
             what="thermal solve" />
 
-          {/* This Solve turned into an Electromagnetic run.  ONE short line and
-              a tooltip that says exactly which run was missing — the sentence
-              the backend refused with. */}
-          {emFb && (
+          {/* Solve found no CURRENT Electromagnetic result for this point —
+              this tab never makes that run itself (owner rule, 2026-09-07,
+              repeated 2026-09-30).  ONE short line, the reason in the
+              tooltip, and a link to where the run belongs. */}
+          {emMissing && (
             <>
-              <Tooltip {...TIP_PROPS} title={`This tab never computes electromagnetic losses — they are the Electromagnetic tab's result — so it is being made for you first, through the EM ↔ thermal orchestrator: one electromagnetic run at ${emFb.label ? 'the point that run is for' : 'the temperatures set on that tab'}, then a thermal solve with the cooling above. What was missing: ${emFb.why}`}>
+              <Tooltip {...TIP_PROPS} title={emMissing}>
                 <Typography sx={{ ...warn, fontWeight: 700, whiteSpace: 'normal' }}>
-                  {/* The duty-cycle editor borrows this same fallback for a
-                      point that is NOT the one on screen, and says so itself —
-                      its label replaces the sentence rather than letting the
-                      strip claim the wrong point. */}
-                  ⚠ {emFb.label
-                    ? emFb.label
-                    : 'no Electromagnetic run at this point — running it through the coupled loop first…'}
+                  ⚠ No Electromagnetic result for this point — run it in the
+                  Electromagnetic tab
                 </Typography>
               </Tooltip>
-              <Tooltip {...TIP_PROPS} title={tx('cancelTheElectromagneticRunItStops')}>
-                <span>
-                  <Button variant="outlined" size="small" color="warning"
-                    onClick={stopEm} disabled={emFb.stopping}>
-                    {emFb.stopping ? 'Stopping' : 'Stop'}
-                  </Button>
-                </span>
-              </Tooltip>
+              <Button variant="outlined" size="small" onClick={goToElectromagnetic}>
+                Go to Electromagnetic
+              </Button>
             </>
           )}
 

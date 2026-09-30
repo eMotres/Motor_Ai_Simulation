@@ -247,8 +247,9 @@ class TestOrderingCache:
 
     def test_patterns_that_return_reuse_their_ordering(self):
         p, b, m, free, log = _fixture()
+        p._order_reuse = True                  # opt-in (SB_PARDISO_ORDER_REUSE=1)
         q, *_ = _fixture()
-        q._order_reuse = False
+        assert q._order_reuse is False         # the default
         J, Mb = self._two_patterns(p, b, m, free)
         xs_p, xs_q = [], []
         for k in range(6):                 # J, Mb, J, Mb, ... new values each time
@@ -268,6 +269,7 @@ class TestOrderingCache:
 
     def test_a_wrong_cached_ordering_is_detected_and_redone(self):
         p, b, m, free, log = _fixture()
+        p._order_reuse = True
         J, Mb = self._two_patterns(p, b, m, free)
         for M in (J, Mb, J):
             p.solve_ff(M.tocsc(), np.ones(M.shape[0]), spd=True)

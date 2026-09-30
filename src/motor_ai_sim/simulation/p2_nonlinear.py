@@ -264,8 +264,13 @@ class P2Nonlinear:
         # given (iparm[4] = 1): symbolic factorisation only, no reordering —
         # the same ordering, so the same factorisation (bit for bit with one
         # MKL thread; threaded MKL has its usual run-to-run noise).
-        # SB_PARDISO_ORDER_REUSE=0 re-orders every new pattern as before.
-        self._order_reuse = _os.environ.get("SB_PARDISO_ORDER_REUSE", "1") != "0"
+        # OPT-IN (SB_PARDISO_ORDER_REUSE=1), measured on the server L155 eddy
+        # run at 6 threads: phase 11 falls 79 -> 41 ms per new pattern
+        # (-26 s per run), but PARDISO factorises 16-34 % slower from a
+        # user-given permutation than from its own METIS tree (same fill,
+        # the parallel schedule is lost), so the run time does not move.
+        # Default: every new pattern is re-ordered by METIS, as before.
+        self._order_reuse = _os.environ.get("SB_PARDISO_ORDER_REUSE", "0") == "1"
         self._orders = _OrderedDict()   # digest -> (1-based perm, nnz(L))
         self.spd_orders_computed = 0     # phase 11 with METIS
         self.spd_orders_reused = 0       # phase 11 with a cached permutation

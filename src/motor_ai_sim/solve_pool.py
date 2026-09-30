@@ -14,7 +14,10 @@ process, taken from a bounded pool.
 OPT-IN
 ------
 ``SOLVE_POOL=1`` turns it on; anything else (the default) keeps today's
-in-process path byte for byte.  A pool child never pools again
+in-process path — behaviourally equivalent, not literally the same code: the
+route calls this module's drop-in, which forwards to the in-process solver
+with the same arguments, and picks the old process-wide transient lock.
+A pool child never pools again
 (``SOLVE_POOL_CHILD=1`` is set in its environment).
 
 THE POOL
@@ -38,22 +41,31 @@ running and the waiting solves.  Alone -> one job x ``solo`` threads
 slower, see :data:`DEFAULT_SOLO_MAX`); pool full or a queue behind it -> N
 jobs x 1 thread.
 In between the idle cores are split evenly instead of left idle.  A running
-worker that speaks the child protocol is re-threaded at its next progress
-callback (threadpoolctl); a plain command (the optimizer's ``refine_proc``) or
-a caller that pinned its thread count keeps what it got and is counted in the
-budget by its real width, so the pool is never oversubscribed by it.
+worker that speaks the child protocol is re-threaded (threadpoolctl) at its
+next solver callback, or from its control thread after
+``SOLVE_POOL_RETHREAD_S`` (10 s) if no callback came, and CONFIRMS the new
+width; until it has, its old width stays reserved in the budget.  A plain
+command (the optimizer's ``refine_proc``) or a caller that pinned its thread
+count keeps what it got and is counted by that width, so the pool is never
+oversubscribed by it.
 
 FAIRNESS
 --------
-Waiting solves are ordered by (priority of the job they belong to, solves the
-owner has RUNNING, solves the owner has been SERVED, arrival): the queue's
-:class:`~motor_ai_sim.jobs.Priority` first, then round robin among owners.
+Waiting solves are ordered by (effective priority, solves the owner has
+RUNNING, solves the owner STARTED in the last ``SOLVE_POOL_FAIR_WINDOW_S``,
+arrival).  The effective priority is the job's
+:class:`~motor_ai_sim.jobs.Priority` minus one class per
+``SOLVE_POOL_AGING_S`` (300 s) waited, so a campaign behind a steady stream of
+interactive runs is promoted instead of starved.
 
 CANCEL, CRASH, CPU ACCOUNTING
 -----------------------------
 * The owning thread polls every :data:`POLL_S`; a cancelled job
   (``jobs.cancel_run``) or a cancelled tag (:func:`cancel_tag`) kills the
-  child's whole process tree at once.
+  child's whole process tree at once.  Only the pool kills and reaps its
+  workers: each is the leader of its own tree (a Windows Job Object with
+  kill-on-close, a POSIX session / process group), and whatever is left of
+  the tree is killed after the leader exits, normally or not.
 * A child that exits without an answer (OOM kill, segfault) raises
   :class:`SolveWorkerDied` with the exit code decoded and the stderr tail.
 * Each child's CPU time is reported to :mod:`motor_ai_sim.job_usage` under the
@@ -96,6 +108,18 @@ ENV_RSS = "SOLVE_POOL_RSS_MB"
 ENV_RESERVE = "SOLVE_POOL_RAM_RESERVE_MB"
 ENV_CHILD = "SOLVE_POOL_CHILD"
 ENV_NICE = "SOLVE_POOL_NICE"
+#: Hard floor of free RAM (MB) below which NO solve starts, the first included.
+ENV_RAM_FLOOR = "SOLVE_POOL_RAM_FLOOR_MB"
+#: ``1`` = constrained deployment: when free RAM cannot be read, run one solve
+#: at a time instead of assuming there is room.
+ENV_RAM_STRICT = "SOLVE_POOL_RAM_STRICT"
+#: Seconds a waiting solve needs to climb one priority class (aging).
+ENV_AGING = "SOLVE_POOL_AGING_S"
+#: Window (s) of the per-owner "recently served" fairness counter.
+ENV_FAIR_WINDOW = "SOLVE_POOL_FAIR_WINDOW_S"
+#: Seconds a child may take to apply a width change at a safe point before it
+#: applies it from its control thread (the reservation is kept until then).
+ENV_RETHREAD = "SOLVE_POOL_RETHREAD_S"
 
 #: Fallback per-solve RSS before any child has been measured.  A 40 mm child
 #: peaked at ~355 MB on the AX42 (docs/SOLVE_POOL_2026-09-29.md); the margin
@@ -106,6 +130,10 @@ DEFAULT_RESERVE_MB = 2048
 #: docs/SOLVE_POOL_2026-09-29.md): 1 thread 60 s, 4 threads 61 s, 6 threads
 #: 64 s, 8 threads 171 s — past four the solve only gets slower.
 DEFAULT_SOLO_MAX = 4
+DEFAULT_RAM_FLOOR_MB = 1024
+DEFAULT_AGING_S = 300.0
+DEFAULT_FAIR_WINDOW_S = 1800.0
+DEFAULT_RETHREAD_S = 10.0
 #: How often the owning thread looks at its child (cancel, liveness, CPU).
 POLL_S = 0.2
 #: CPU / RSS sampling period of a running child.
@@ -244,6 +272,12 @@ class Ticket:
     threads: int = 0
     #: The thread count the owning thread still has to send to the child.
     pending_threads: Optional[int] = None
+    #: The width the child has CONFIRMED it runs (its dispatch width until the
+    #: first ``threads_ack``).  The budget reserves max(threads, acked_threads)
+    #: so a narrowing is not counted before the child has actually narrowed.
+    acked_threads: int = 0
+    #: When the current, not yet acknowledged width change was requested.
+    rethread_at: float = 0.0
     pid: int = 0
     queued_at: float = 0.0
     started_at: float = 0.0
@@ -292,6 +326,31 @@ def _cgroup_mem_available(base: str = "/sys/fs/cgroup") -> Optional[int]:
         return None
 
 
+def _cgroup_memory_events(base: str = "/sys/fs/cgroup") -> Dict[str, int]:
+    """``memory.events`` of this cgroup (``oom_kill``, ``max``, ``high`` ...).
+
+    Read around every child, so one the kernel killed for memory is reported
+    as exactly that, and shown in :meth:`SolvePool.snapshot`.  ``{}`` outside
+    cgroup v2."""
+    out: Dict[str, int] = {}
+    try:
+        with open(os.path.join(base, "memory.events")) as fh:
+            for line in fh:
+                k, _, v = line.strip().partition(" ")
+                with contextlib.suppress(ValueError):
+                    out[k] = int(v)
+    except OSError:
+        pass
+    return out
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(str(os.environ.get(name, "")).strip() or default)
+    except (TypeError, ValueError):
+        return default
+
+
 def _mem_available() -> Optional[int]:
     avail: Optional[int] = None
     try:
@@ -316,24 +375,42 @@ def _proc_rss(pid: int) -> int:
 class SolvePool:
     """Slots, ordering, the load rule and the RAM cap.  No processes here:
     :func:`call` / :func:`run_command` own the children and ask this object
-    for admission, so the scheduling rules are testable without spawning."""
+    for admission, so the scheduling rules are testable without spawning.
+
+    ADMISSION IS NOT AN OOM GUARANTEE.  The RAM test is a point-in-time
+    estimate: it keeps the pool from starting a solve that obviously does not
+    fit, and the hard floor (``SOLVE_POOL_RAM_FLOOR_MB``) keeps even the first
+    solve from starting on an exhausted box.  A child that grows past what is
+    left can still be killed; it is then reported as such (``memory.events``).
+    """
 
     def __init__(self, procs: Optional[int] = None, solo: Optional[int] = None,
                  rss_mb: Optional[float] = None, reserve_mb: Optional[float] = None,
                  mem_available: Optional[Callable[[], Optional[int]]] = None,
-                 child_rss: Optional[Callable[[Ticket], int]] = None) -> None:
+                 child_rss: Optional[Callable[[Ticket], int]] = None,
+                 floor_mb: Optional[float] = None, strict_ram: Optional[bool] = None,
+                 aging_s: Optional[float] = None,
+                 fair_window_s: Optional[float] = None,
+                 clock: Optional[Callable[[], float]] = None) -> None:
         self._cv = threading.Condition()
         self._procs = int(procs) if procs else 0
         self._solo = int(solo) if solo else 0
         self._rss_mb = float(rss_mb) if rss_mb else 0.0
         self._reserve_mb = float(reserve_mb) if reserve_mb is not None else -1.0
+        self._floor_mb = float(floor_mb) if floor_mb is not None else -1.0
+        self._strict = strict_ram
+        self._aging_s = float(aging_s) if aging_s is not None else -1.0
+        self._fair_window_s = float(fair_window_s) if fair_window_s is not None else -1.0
         self._mem_available = mem_available or _mem_available
         self._child_rss = child_rss or (lambda t: _proc_rss(t.pid) if t.pid else 0)
+        self._clock = clock or time.time
         self._waiting: List[Ticket] = []
         self._running: List[Ticket] = []
-        self._served: Dict[str, int] = {}
+        #: owner -> start times inside the fairness window (rolling, not lifetime)
+        self._served: Dict[str, Deque[float]] = {}
         self._seq = itertools.count(1)
         self._peaks: Deque[int] = deque(maxlen=20)
+        self._floor_logged = 0.0
         self.started_total = 0
         self.finished_total = 0
 
@@ -365,15 +442,56 @@ class SolvePool:
             return int(self._reserve_mb * 2 ** 20)
         return _int_env(ENV_RESERVE, DEFAULT_RESERVE_MB) * 2 ** 20
 
+    def floor(self) -> int:
+        """Free RAM below which nothing starts, not even the first solve."""
+        if self._floor_mb >= 0:
+            return int(self._floor_mb * 2 ** 20)
+        return int(_float_env(ENV_RAM_FLOOR, DEFAULT_RAM_FLOOR_MB) * 2 ** 20)
+
+    def strict_ram(self) -> bool:
+        return bool(self._strict) if self._strict is not None \
+            else _truthy(os.environ.get(ENV_RAM_STRICT))
+
+    def aging_s(self) -> float:
+        return self._aging_s if self._aging_s > 0 else \
+            max(1.0, _float_env(ENV_AGING, DEFAULT_AGING_S))
+
+    def fair_window_s(self) -> float:
+        return self._fair_window_s if self._fair_window_s > 0 else \
+            max(1.0, _float_env(ENV_FAIR_WINDOW, DEFAULT_FAIR_WINDOW_S))
+
     # ── the rules ────────────────────────────────────────────────────────────
+    def effective_priority(self, t: Ticket, now: Optional[float] = None) -> int:
+        """Priority minus one class per ``aging_s`` waited: a campaign behind
+        a steady stream of interactive runs is promoted, never starved."""
+        now = self._clock() if now is None else now
+        waited = max(0.0, now - (t.queued_at or now))
+        return max(0, int(t.priority) - int(waited // self.aging_s()))
+
+    def _served_recent(self, owner: str, now: float) -> int:
+        """Solves ``owner`` STARTED inside the fairness window (rolling: old
+        history stops counting instead of dominating for ever)."""
+        dq = self._served.get(owner)
+        if not dq:
+            return 0
+        horizon = now - self.fair_window_s()
+        while dq and dq[0] < horizon:
+            dq.popleft()
+        return len(dq)
+
     def _order_key(self, t: Ticket):
+        now = self._clock()
         running_by_owner = sum(1 for r in self._running if r.owner == t.owner)
-        return (t.priority, running_by_owner, self._served.get(t.owner, 0), t.seq)
+        return (self.effective_priority(t, now), running_by_owner,
+                self._served_recent(t.owner, now), t.seq)
 
     def _weight(self, t: Ticket) -> int:
-        """Slots a RUNNING ticket occupies: its width if it is fixed (it will
-        keep those threads), else 1 (the load rule will narrow it)."""
-        return max(1, int(t.threads)) if t.fixed else 1
+        """Cores a RUNNING ticket holds.  A fixed-width command: its width.  A
+        re-tunable child: the wider of what it was told and what it has
+        CONFIRMED — a narrowing frees cores only once the child says so."""
+        if t.fixed:
+            return max(1, int(t.threads))
+        return max(1, int(t.threads), int(t.acked_threads or 0))
 
     def _share(self, n_active: int) -> int:
         return max(1, min(self.solo, self.procs // max(1, int(n_active))))
@@ -399,12 +517,26 @@ class SolvePool:
         used = sum(self._weight(r) for r in self._running)
         n_run = len(self._running)
         procs = self.procs
-        headroom = self._ram_headroom() if self._waiting else None
-        est = self.rss_estimate()
         out: List[Ticket] = []
+        if not self._waiting:
+            return out
+        avail = self._mem_available()
+        if avail is not None and avail < self.floor():
+            now = self._clock()
+            if now - self._floor_logged > 60.0:
+                self._floor_logged = now
+                log.warning("solve pool: %.0f MB free is below the %.0f MB floor "
+                            "(%s): no solve starts until memory is freed",
+                            avail / 2 ** 20, self.floor() / 2 ** 20, ENV_RAM_FLOOR)
+            return out
+        headroom = self._ram_headroom() if avail is not None else None
+        strict_unknown = avail is None and self.strict_ram()
+        est = self.rss_estimate()
         for t in sorted(self._waiting, key=self._order_key):
             if n_run > 0 or out:
                 if used + 1 > procs:
+                    break
+                if strict_unknown:
                     break
                 if headroom is not None and headroom < est:
                     break
@@ -419,10 +551,13 @@ class SolvePool:
         self._waiting.remove(t)
         n_active = len(self._running) + 1 + len(self._waiting)
         t.threads = self._threads_for(t, n_active)
+        t.acked_threads = t.threads          # the width it is launched with
+        t.pending_threads = None
+        t.rethread_at = 0.0
         t.state = RUNNING
-        t.started_at = time.time()
+        t.started_at = self._clock()
         self._running.append(t)
-        self._served[t.owner] = self._served.get(t.owner, 0) + 1
+        self._served.setdefault(t.owner, deque()).append(t.started_at)
         self.started_total += 1
 
     def _rebalance_locked(self) -> None:
@@ -435,13 +570,31 @@ class SolvePool:
             if want != r.threads:
                 r.threads = want
                 r.pending_threads = want
+                r.rethread_at = self._clock()
+
+    def ack_threads(self, t: Ticket, n: int) -> None:
+        """The child confirms it now runs ``n`` threads: the reservation of
+        its old width ends here, not when the change was requested."""
+        with self._cv:
+            t.acked_threads = max(1, int(n))
+            if t.acked_threads == t.threads:
+                t.rethread_at = 0.0
+            self._cv.notify_all()
+
+    def overdue_rethreads(self, timeout_s: float) -> List[Ticket]:
+        """Running children that have not confirmed a width change in time."""
+        now = self._clock()
+        with self._cv:
+            return [r for r in self._running
+                    if r.rethread_at and r.acked_threads != r.threads
+                    and now - r.rethread_at > timeout_s]
 
     # ── the interface the owning thread uses ─────────────────────────────────
     def submit(self, t: Ticket) -> Ticket:
         with self._cv:
             t.seq = next(self._seq)
             t.state = WAITING
-            t.queued_at = t.queued_at or time.time()
+            t.queued_at = t.queued_at or self._clock()
             self._waiting.append(t)
             self._rebalance_locked()
             self._cv.notify_all()
@@ -520,8 +673,10 @@ class SolvePool:
             waiting = [t.public() for t in sorted(self._waiting, key=self._order_key)]
             return {"enabled": enabled(), "procs": self.procs, "solo": self.solo,
                     "rss_estimate_mb": round(self.rss_estimate() / 2 ** 20, 1),
+                    "ram_floor_mb": round(self.floor() / 2 ** 20, 1),
+                    "memory_events": _cgroup_memory_events(),
                     "running": len(running), "waiting": len(waiting),
-                    "threads_in_use": sum(max(1, t["threads"]) for t in running),
+                    "threads_in_use": sum(self._weight(t) for t in self._running),
                     "started_total": self.started_total,
                     "finished_total": self.finished_total,
                     "items": running + waiting}
@@ -662,13 +817,161 @@ def _child_env(base: Optional[Dict[str, str]], threads: int) -> Dict[str, str]:
     return env
 
 
-def _popen(argv: List[str], env: Dict[str, str], **kw) -> subprocess.Popen:
-    """Start a child at low priority, in its own process group/session."""
+# ── Windows: every worker in its own Job Object (kill-on-close) ──────────────
+# A recursive psutil snapshot followed by kills misses a descendant created
+# after the snapshot.  A Job Object does not: every process the worker starts
+# is in the job by construction, TerminateJobObject ends all of them at once,
+# closing the last handle does the same (so an API crash takes its workers
+# with it), and the job's accounting keeps the CPU time of every process that
+# ever ran in it, exited grandchildren included.  The worker is created
+# SUSPENDED and resumed only after it is in the job, so not even its first
+# instruction can run outside it.
+
+class _WinJob:
+    """A kill-on-close Job Object holding one worker's whole tree."""
+
+    def __init__(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+        self._ct = ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._k32 = k32
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+        k32.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int,
+                                                ctypes.c_void_p, wintypes.DWORD)
+        k32.QueryInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int,
+                                                  ctypes.c_void_p, wintypes.DWORD,
+                                                  ctypes.c_void_p)
+        k32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+        k32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+
+        class _Basic(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                        ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD),
+                        ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t),
+                        ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t),
+                        ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class _Io(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in (
+                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+        class _Ext(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", _Basic), ("IoInfo", _Io),
+                        ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        class _Acct(ctypes.Structure):
+            _fields_ = [("TotalUserTime", ctypes.c_int64),
+                        ("TotalKernelTime", ctypes.c_int64),
+                        ("ThisPeriodTotalUserTime", ctypes.c_int64),
+                        ("ThisPeriodTotalKernelTime", ctypes.c_int64),
+                        ("TotalPageFaultCount", wintypes.DWORD),
+                        ("TotalProcesses", wintypes.DWORD),
+                        ("ActiveProcesses", wintypes.DWORD),
+                        ("TotalTerminatedProcesses", wintypes.DWORD)]
+        self._Ext, self._Acct = _Ext, _Acct
+        h = k32.CreateJobObjectW(None, None)
+        if not h:
+            raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+        self.handle = h
+        info = _Ext()
+        info.BasicLimitInformation.LimitFlags = 0x2000   # KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(h, 9, ctypes.byref(info),
+                                           ctypes.sizeof(info)):
+            err = ctypes.get_last_error()
+            self.close()
+            raise OSError(err, "SetInformationJobObject failed")
+
+    def assign(self, process_handle: int) -> bool:
+        return bool(self.handle) and bool(
+            self._k32.AssignProcessToJobObject(self.handle, int(process_handle)))
+
+    def terminate(self) -> None:
+        if self.handle:
+            self._k32.TerminateJobObject(self.handle, 1)
+
+    def active_processes(self) -> int:
+        a = self._query_acct()
+        return int(a.ActiveProcesses) if a is not None else 0
+
+    def cpu_seconds(self) -> Optional[float]:
+        """User + kernel CPU of every process that ever ran in the job."""
+        a = self._query_acct()
+        if a is None:
+            return None
+        return (a.TotalUserTime + a.TotalKernelTime) / 1e7
+
+    def peak_memory(self) -> int:
+        if not self.handle:
+            return 0
+        info = self._Ext()
+        ok = self._k32.QueryInformationJobObject(self.handle, 9, self._ct.byref(info),
+                                                 self._ct.sizeof(info), None)
+        return int(info.PeakJobMemoryUsed) if ok else 0
+
+    def _query_acct(self):
+        if not self.handle:
+            return None
+        a = self._Acct()
+        ok = self._k32.QueryInformationJobObject(self.handle, 1, self._ct.byref(a),
+                                                 self._ct.sizeof(a), None)
+        return a if ok else None
+
+    def close(self) -> None:
+        """Close the job; with KILL_ON_JOB_CLOSE anything still in it dies."""
+        h, self.handle = self.handle, None
+        if h:
+            self._k32.CloseHandle(h)
+
+
+def _win_resume(process_handle: int) -> None:
+    import ctypes
+    ntdll = ctypes.WinDLL("ntdll")
+    ntdll.NtResumeProcess.argtypes = (ctypes.c_void_p,)
+    ntdll.NtResumeProcess(ctypes.c_void_p(int(process_handle)))
+
+
+def _popen(argv: List[str], env: Dict[str, str], **kw):
+    """Start a child at low priority, as the leader of its own process tree.
+
+    Windows: suspended, put into a kill-on-close Job Object, then resumed.
+    POSIX: a new session (the child's pid is its process-group id, so the
+    whole tree can be signalled even after the leader has exited), through
+    ``nice`` so every thread starts at the pool's niceness.
+    Returns ``(Popen, job_or_None)``.
+    """
     if os.name == "nt":
         flags = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x4000) \
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200) \
             | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-        return subprocess.Popen(argv, env=env, creationflags=flags, **kw)
+        job = None
+        try:
+            job = _WinJob()
+        except Exception as exc:                        # noqa: BLE001
+            log.warning("solve pool: no Job Object (%s); tree kill falls back "
+                        "to process snapshots", exc)
+        if job is None:
+            return subprocess.Popen(argv, env=env, creationflags=flags, **kw), None
+        p = subprocess.Popen(argv, env=env, creationflags=flags | 0x4, **kw)
+        try:
+            if not job.assign(p._handle):
+                log.warning("solve pool: could not put pid %d in its Job Object",
+                            p.pid)
+                job.close()
+                job = None
+        finally:
+            _win_resume(p._handle)
+        return p, job
     nice = shutil.which("nice")
     lvl = _nice_level()
     if nice and lvl > 0:
@@ -677,30 +980,29 @@ def _popen(argv: List[str], env: Dict[str, str], **kw) -> subprocess.Popen:
     if not nice and lvl > 0:
         with contextlib.suppress(Exception):
             os.setpriority(os.PRIO_PROCESS, p.pid, lvl)
-    return p
+    return p, None
 
 
-def kill_tree(proc: subprocess.Popen, wait_s: float = 5.0) -> None:
-    """Kill ``proc`` and every descendant, now."""
-    if proc is None:
-        return
-    kids = []
+def _tree_cpu_rss(pid: int) -> Tuple[float, int]:
+    """CPU-seconds and RSS of ``pid`` and its live descendants.  CPU includes
+    each process's REAPED children (``children_user/system``), so a helper
+    that already exited still counts; a zombie leader is still readable."""
     try:
         import psutil
-        kids = psutil.Process(proc.pid).children(recursive=True)
+        p = psutil.Process(pid)
+        cpu = 0.0
+        rss = 0
+        for q in [p] + p.children(recursive=True):
+            try:
+                ct = q.cpu_times()
+                cpu += ct.user + ct.system + getattr(ct, "children_user", 0.0) \
+                    + getattr(ct, "children_system", 0.0)
+                rss += q.memory_info().rss
+            except Exception:                           # noqa: BLE001
+                continue
+        return cpu, rss
     except Exception:                                   # noqa: BLE001
-        kids = []
-    if os.name != "nt":
-        with contextlib.suppress(Exception):
-            import signal
-            os.killpg(proc.pid, signal.SIGKILL)
-    for k in kids:
-        with contextlib.suppress(Exception):
-            k.kill()
-    with contextlib.suppress(Exception):
-        proc.kill()
-    with contextlib.suppress(Exception):
-        proc.wait(timeout=wait_s)
+        return 0.0, 0
 
 
 def describe_exit(code: Optional[int]) -> str:
@@ -733,10 +1035,20 @@ def describe_exit(code: Optional[int]) -> str:
 
 
 class _Child:
-    """One running worker: the process, its reader threads, its samples."""
+    """One worker: its process (tree), reader threads, samples and the ONE
+    place it is killed and reaped.
 
-    def __init__(self, proc: subprocess.Popen, framed: bool) -> None:
+    Nothing else may kill or reap a worker (``_kill_live_evals`` cancels its
+    TAG in pool mode).  :meth:`finish` always runs: it takes the last CPU/RSS
+    reading while the process is still observable (POSIX: a zombie, then
+    ``wait4`` for the exact rusage of the child and its reaped descendants;
+    Windows: the Job Object's accounting), then kills whatever is left of the
+    tree (process group / Job Object) even when the leader exited normally.
+    """
+
+    def __init__(self, proc: subprocess.Popen, job, framed: bool) -> None:
         self.proc = proc
+        self.job = job
         self.framed = framed
         self.msgs: "_queue_mod.Queue" = _queue_mod.Queue()
         self.stderr_tail: Deque[str] = deque(maxlen=40)
@@ -744,6 +1056,10 @@ class _Child:
         self.stdout_all: List[str] = []
         self.keep_all_stderr = not framed
         self.cpu_s = 0.0
+        self.peak_rss = 0
+        self.finished = False
+        self.returncode: Optional[int] = None
+        self.mem_events_at_start = _cgroup_memory_events()
         self._threads: List[threading.Thread] = []
         if framed:
             self._spawn(self._read_frames)
@@ -751,6 +1067,7 @@ class _Child:
             self._spawn(self._read_stdout_text)
         self._spawn(self._read_stderr)
 
+    # ── io ───────────────────────────────────────────────────────────────────
     def _spawn(self, fn) -> None:
         th = threading.Thread(target=fn, daemon=True,
                               name="solve-pool-io-%d" % self.proc.pid)
@@ -789,27 +1106,117 @@ class _Child:
         for th in self._threads:
             th.join(timeout=timeout)
 
-    def sample(self, t: Ticket) -> None:
-        try:
-            import psutil
-            p = psutil.Process(self.proc.pid)
-            cpu = 0.0
-            rss = 0
-            for q in [p] + p.children(recursive=True):
-                try:
-                    ct = q.cpu_times()
-                    cpu += ct.user + ct.system
-                    rss += q.memory_info().rss
-                except Exception:                       # noqa: BLE001
-                    continue
-            self.cpu_s = max(self.cpu_s, cpu)
-            t.peak_rss = max(t.peak_rss, rss)
-        except Exception:                               # noqa: BLE001
-            pass
-
     def stderr_last(self) -> str:
         lines = [ln for ln in self.stderr_tail if ln.strip()]
         return " | ".join(lines[-6:])[:1200] if lines else "no stderr"
+
+    # ── liveness without reaping ─────────────────────────────────────────────
+    def exited(self) -> bool:
+        """Has the leader exited?  POSIX: asked with ``WNOWAIT``, so it stays
+        a readable zombie until :meth:`finish` has sampled it."""
+        if self.finished or self.proc.returncode is not None:
+            return True
+        if os.name == "nt":
+            return self.proc.poll() is not None
+        try:
+            info = os.waitid(os.P_PID, self.proc.pid,
+                             os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            return True
+        return info is not None
+
+    def sample(self, t: Ticket) -> None:
+        cpu, rss = _tree_cpu_rss(self.proc.pid)
+        if self.job is not None:
+            jc = self.job.cpu_seconds()
+            if jc is not None:
+                cpu = max(cpu, jc)
+        self.cpu_s = max(self.cpu_s, cpu)
+        if rss:
+            self.peak_rss = max(self.peak_rss, rss)
+            t.peak_rss = max(t.peak_rss, rss)
+
+    # ── the one kill and the one reap ────────────────────────────────────────
+    def kill(self) -> None:
+        """Kill the whole tree now (idempotent)."""
+        if self.job is not None:
+            with contextlib.suppress(Exception):
+                self.job.terminate()
+        pids = []
+        try:
+            import psutil
+            pids = psutil.Process(self.proc.pid).children(recursive=True)
+        except Exception:                               # noqa: BLE001
+            pids = []
+        if os.name != "nt":
+            with contextlib.suppress(Exception):
+                import signal
+                os.killpg(self.proc.pid, signal.SIGKILL)
+        for k in pids:
+            with contextlib.suppress(Exception):
+                k.kill()
+        if not self.exited():
+            with contextlib.suppress(Exception):
+                self.proc.kill()
+
+    def _reap_leader(self, timeout: float) -> None:
+        """Wait for the leader and collect its final accounting."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while not self.exited() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not self.exited():
+            self.kill()
+            deadline = time.monotonic() + 5.0
+            while not self.exited() and time.monotonic() < deadline:
+                time.sleep(0.02)
+        if os.name != "nt" and self.proc.returncode is None:
+            # A zombie is still observable: this is the last psutil reading.
+            cpu, _ = _tree_cpu_rss(self.proc.pid)
+            self.cpu_s = max(self.cpu_s, cpu)
+            # Leftover descendants stay in the leader's process group.  Signal
+            # the GROUP while the unreaped leader still pins its id (after the
+            # reap the id could be reused by an unrelated new session).
+            with contextlib.suppress(Exception):
+                import signal
+                os.killpg(self.proc.pid, signal.SIGKILL)
+            try:
+                _, status, ru = os.wait4(self.proc.pid, 0)
+                self.proc.returncode = os.waitstatus_to_exitcode(status)
+                self.cpu_s = max(self.cpu_s, ru.ru_utime + ru.ru_stime)
+                self.peak_rss = max(self.peak_rss, int(ru.ru_maxrss) * 1024)
+            except ChildProcessError:
+                with contextlib.suppress(Exception):
+                    self.proc.wait(timeout=5)
+        else:
+            with contextlib.suppress(Exception):
+                self.proc.wait(timeout=5)
+        self.returncode = self.proc.returncode
+
+    def finish(self, t: Ticket, graceful_s: float = 0.0) -> None:
+        """Reap the leader (after up to ``graceful_s`` of waiting; kill after),
+        take the final accounting, and make sure nothing of the tree survives."""
+        if self.finished:
+            return
+        self._reap_leader(graceful_s)
+        if self.job is not None:
+            jc = self.job.cpu_seconds()
+            if jc is not None:
+                self.cpu_s = max(self.cpu_s, jc)
+            self.peak_rss = max(self.peak_rss, self.job.peak_memory())
+            with contextlib.suppress(Exception):
+                self.job.terminate()
+            self.job.close()
+        self.finished = True
+        t.peak_rss = max(t.peak_rss, self.peak_rss)
+
+    def oom_note(self) -> str:
+        now = _cgroup_memory_events()
+        a = self.mem_events_at_start.get("oom_kill", 0)
+        b = now.get("oom_kill", 0)
+        if b > a:
+            return "; cgroup memory.events oom_kill %d -> %d: an out-of-memory " \
+                   "kill happened while it ran" % (a, b)
+        return ""
 
 
 def _usage_start(t: Ticket) -> None:
@@ -830,6 +1237,10 @@ def _usage_finish(t: Ticket, cpu_s: Optional[float]) -> None:
         _U.child_finished(t.pid, cpu_s)
 
 
+def rethread_timeout_s() -> float:
+    return max(0.5, _float_env(ENV_RETHREAD, DEFAULT_RETHREAD_S))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Context carried into a child (what a bare interpreter cannot know)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -843,6 +1254,47 @@ CARRIED_VARS: Tuple[Tuple[str, str], ...] = (
     ("motor_ai_sim.simulation.fem_solver_2d", "_NO_WARM_CACHE_CTX"),
     ("motor_ai_sim.run_recording", "_RECORD"),
 )
+
+
+def _config_data(cfg: Any) -> Any:
+    try:
+        from omegaconf import OmegaConf, DictConfig
+        if isinstance(cfg, DictConfig):
+            return OmegaConf.to_container(cfg, resolve=True)
+    except ImportError:
+        pass
+    return cfg
+
+
+def context_fingerprint() -> str:
+    """Identity of the machine a solve is ABOUT, in whatever process asks:
+    workspace (id + root), config file, the parsed config's content and the
+    request's material override.  Computed on both sides of the pipe; a
+    cache update from a child is only installed when they agree."""
+    import hashlib
+    import json
+    from motor_ai_sim import workspace as _WSP
+    from motor_ai_sim import config as _CFG
+    parts: Dict[str, Any] = {}
+    try:
+        ws = _WSP.workspace()
+        parts["ws"] = ws.id
+        parts["root"] = str(ws.root)
+    except Exception as exc:                            # noqa: BLE001
+        parts["ws"] = "error:%s" % exc
+    try:
+        parts["cfg"] = str(_CFG.config_path())
+        parts["cfg_data"] = hashlib.sha1(json.dumps(
+            _config_data(_CFG.get_config()), sort_keys=True,
+            default=str).encode("utf-8")).hexdigest()
+    except Exception as exc:                            # noqa: BLE001
+        parts["cfg_err"] = str(exc)
+    mc = sys.modules.get("motor_ai_sim.material_context")
+    if mc is not None:
+        with contextlib.suppress(Exception):
+            parts["mat"] = mc.get_request_materials()
+    return hashlib.sha1(json.dumps(parts, sort_keys=True, default=str)
+                        .encode("utf-8")).hexdigest()
 
 
 def capture_context() -> Dict[str, Any]:
@@ -877,13 +1329,7 @@ def capture_context() -> Dict[str, Any]:
         path = _CFG.config_path()
         cfg = _CFG.get_config()
         slot = _CFG._config_cache.get(str(path))
-        try:
-            from omegaconf import OmegaConf, DictConfig
-            data = (OmegaConf.to_container(cfg, resolve=True)
-                    if isinstance(cfg, DictConfig) else cfg)
-        except ImportError:
-            data = cfg
-        ctx["config"] = {"path": str(path), "data": data,
+        ctx["config"] = {"path": str(path), "data": _config_data(cfg),
                          "mtime": slot[1] if slot else None}
     except Exception as exc:                            # noqa: BLE001
         log.debug("solve pool: config not carried (%s)", exc)
@@ -915,7 +1361,7 @@ def call(target: str, payload: Any, *,
         context = capture_context()
     try:
         task_blob = pickle.dumps(("task", target, payload, context,
-                                  progress_cb is not None),
+                                  progress_cb is not None, rethread_timeout_s()),
                                  protocol=pickle.HIGHEST_PROTOCOL)
     except Exception as exc:                            # noqa: BLE001
         raise NotPoolable("payload does not pickle: %s" % exc) from exc
@@ -943,14 +1389,15 @@ def call(target: str, payload: Any, *,
 
     state = DONE
     child: Optional[_Child] = None
-    cpu_final: Optional[float] = None
+    cpu_reported: Optional[float] = None
+    warned_rethread = False
     try:
         env = _child_env(None, t.threads)
-        proc = _popen([sys.executable, "-m", CHILD_MODULE], env,
-                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                      stderr=subprocess.PIPE)
+        proc, job = _popen([sys.executable, "-m", CHILD_MODULE], env,
+                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
         t.pid = proc.pid
-        child = _Child(proc, framed=True)
+        child = _Child(proc, job, framed=True)
         _usage_start(t)
         try:
             proc.stdin.write(_HDR.pack(len(task_blob)))
@@ -963,19 +1410,19 @@ def call(target: str, payload: Any, *,
         while True:
             if t.cancel_requested:
                 state = CANCELLED
-                kill_tree(proc)
+                child.kill()
                 from motor_ai_sim import jobs as _J
                 _cancel(_J.JobCancelled(rid or tag))
             try:
                 check()
             except BaseException:
                 state = CANCELLED
-                kill_tree(proc)
+                child.kill()
                 if progress_cb is not None:
                     progress_cb(None, None)
                 raise
             want = t.pending_threads
-            if want is not None and want != sent_threads and proc.poll() is None:
+            if want is not None and want != sent_threads and not child.exited():
                 t.pending_threads = None
                 with contextlib.suppress(Exception):
                     write_frame(proc.stdin, ("threads", int(want)))
@@ -985,29 +1432,39 @@ def call(target: str, payload: Any, *,
                 child.sample(t)
                 _usage_cpu(t, child.cpu_s)
                 next_sample = now + SAMPLE_S
+                if not warned_rethread and t.rethread_at and \
+                        t.acked_threads != t.threads and \
+                        time.time() - t.rethread_at > 3 * rethread_timeout_s():
+                    warned_rethread = True
+                    log.warning("solve pool: pid %d has not confirmed its width "
+                                "change %d -> %d; its old width stays reserved",
+                                proc.pid, t.acked_threads, t.threads)
             try:
                 msg = child.msgs.get(timeout=POLL_S)
             except _queue_mod.Empty:
                 continue
             kind = msg[0]
+            if kind == "threads_ack":
+                p.ack_threads(t, int(msg[1]))
+                continue
             if kind == "progress":
                 if progress_cb is not None:
                     try:
                         progress_cb(*msg[1], **(msg[2] if len(msg) > 2 else {}))
                     except BaseException:
                         state = CANCELLED
-                        kill_tree(proc)
+                        child.kill()
                         raise
                 continue
             if kind == "result":
-                cpu_final = msg[2] if len(msg) > 2 else None
+                cpu_reported = msg[2] if len(msg) > 2 else None
                 if len(msg) > 3 and msg[3]:
                     t.peak_rss = max(t.peak_rss, int(msg[3]))
                 return msg[1]
             if kind == "error":
                 state = "failed"
                 _, type_name, text, tb, blob = msg[:5]
-                cpu_final = msg[5] if len(msg) > 5 else None
+                cpu_reported = msg[5] if len(msg) > 5 else None
                 exc_obj = None
                 if blob is not None:
                     with contextlib.suppress(Exception):
@@ -1019,34 +1476,27 @@ def call(target: str, payload: Any, *,
                 raise SolveWorkerError(type_name, text, tb)
             if kind in ("eof", "protocol_error"):
                 state = "failed"
-                with contextlib.suppress(Exception):
-                    proc.wait(timeout=10)
+                child.finish(t, graceful_s=10.0)
                 child.join_io(timeout=2)
-                why = describe_exit(proc.poll())
+                why = describe_exit(child.returncode)
                 extra = (" (protocol: %s)" % msg[1]) if kind == "protocol_error" else ""
                 raise SolveWorkerDied(
-                    "solve worker process died before returning a result: %s%s; "
-                    "last stderr: %s" % (why, extra, child.stderr_last()))
+                    "solve worker process died before returning a result: %s%s%s; "
+                    "last stderr: %s" % (why, extra, child.oom_note(),
+                                         child.stderr_last()))
     finally:
         if child is not None:
-            if child.proc.poll() is None:
-                if state == DONE:
-                    _reap(child.proc)
-                else:
-                    kill_tree(child.proc)
-            child.sample(t)
-            _usage_finish(t, cpu_final if cpu_final is not None else child.cpu_s)
+            with contextlib.suppress(Exception):
+                if not child.finished:
+                    if state != DONE:
+                        child.kill()
+                    child.finish(t, graceful_s=10.0 if state == DONE else 0.0)
+            cpu = child.cpu_s if cpu_reported is None else max(child.cpu_s,
+                                                                float(cpu_reported))
+            _usage_finish(t, cpu)
             with contextlib.suppress(Exception):
                 child.proc.stdin.close()
         p.release(t, state=state)
-
-
-def _reap(proc: subprocess.Popen) -> None:
-    """A child that answered exits on its own within a moment; make sure."""
-    try:
-        proc.wait(timeout=10)
-    except Exception:                                   # noqa: BLE001
-        kill_tree(proc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1062,6 +1512,12 @@ class CommandResult:
     waited_s: float = 0.0
     wall_s: float = 0.0
     peak_rss: int = 0
+    cpu_s: float = 0.0
+    #: True when the command was cancelled (Stop / its job's cancel) — while
+    #: it waited for a slot (it never started) or while it ran (tree killed).
+    #: A cancelled command is a STOPPED eval, not a failed one.
+    cancelled: bool = False
+    cancelled_while_waiting: bool = False
 
 
 def run_command(argv: List[str], *, input_text: str = "",
@@ -1080,10 +1536,11 @@ def run_command(argv: List[str], *, input_text: str = "",
     bit-identical evals); >1 asks for up to that many, granted only while the
     pool is otherwise idle.  The width is fixed for the command's lifetime and
     counted in the budget.  A cancel (``cancel_check()`` returning True, or
-    :func:`cancel_tag`) while it waits returns ``returncode=-15`` without
-    starting it, and while it runs kills the tree — the caller sees what it saw
-    when its own kill hook fired.  ``timeout`` counts from the start of the
-    process, not from the wait, and raises ``subprocess.TimeoutExpired``.
+    :func:`cancel_tag`) returns ``cancelled=True``: while it waits it never
+    starts, while it runs its whole tree is killed.  ``timeout`` counts from
+    the start of the process, not from the wait, and raises
+    ``subprocess.TimeoutExpired``.  Whatever happens, the tree is killed and
+    reaped by the pool — the caller never kills the process itself.
     """
     p = the_pool or pool()
     owner, ws_id, rid, prio, client = identity or _job_identity()
@@ -1100,18 +1557,19 @@ def run_command(argv: List[str], *, input_text: str = "",
     try:
         p.acquire(t, cancel_check=_check)
     except _TagCancelled:
-        return CommandResult("", "cancelled while waiting for a solve slot", -15,
-                             waited_s=time.monotonic() - t0)
+        return CommandResult("", "cancelled while waiting for a solve slot", None,
+                             waited_s=time.monotonic() - t0, cancelled=True,
+                             cancelled_while_waiting=True)
     waited = time.monotonic() - t0
     state = DONE
     child: Optional[_Child] = None
     t_run = time.monotonic()
     try:
         full_env = _child_env(env, t.threads)
-        proc = _popen(list(argv), full_env, stdin=subprocess.PIPE,
-                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc, job = _popen(list(argv), full_env, stdin=subprocess.PIPE,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         t.pid = proc.pid
-        child = _Child(proc, framed=False)
+        child = _Child(proc, job, framed=False)
         _usage_start(t)
         if on_spawn is not None:
             with contextlib.suppress(Exception):
@@ -1124,14 +1582,15 @@ def run_command(argv: List[str], *, input_text: str = "",
                 proc.stdin.close()
         threading.Thread(target=_feed, daemon=True).start()
         next_sample = 0.0
-        while proc.poll() is None:
+        while not child.exited():
             if t.cancel_requested or (cancel_check is not None and cancel_check()):
                 state = CANCELLED
-                kill_tree(proc)
+                child.kill()
                 break
             if timeout is not None and time.monotonic() - t_run > float(timeout):
                 state = CANCELLED
-                kill_tree(proc)
+                child.kill()
+                child.finish(t)
                 child.join_io(timeout=2)
                 raise subprocess.TimeoutExpired(argv, timeout)
             now = time.monotonic()
@@ -1140,16 +1599,20 @@ def run_command(argv: List[str], *, input_text: str = "",
                 _usage_cpu(t, child.cpu_s)
                 next_sample = now + SAMPLE_S
             time.sleep(POLL_S / 2)
-        with contextlib.suppress(Exception):
-            proc.wait(timeout=10)
+        if state == DONE and t.cancel_requested:
+            state = CANCELLED               # exited while the cancel landed
+        child.finish(t, graceful_s=10.0)
         child.join_io(timeout=5)
         return CommandResult("".join(child.stdout_all), "".join(child.stderr_all),
-                             proc.returncode, threads=t.threads, waited_s=waited,
-                             wall_s=time.monotonic() - t_run, peak_rss=t.peak_rss)
+                             child.returncode, threads=t.threads, waited_s=waited,
+                             wall_s=time.monotonic() - t_run, peak_rss=t.peak_rss,
+                             cpu_s=child.cpu_s, cancelled=(state == CANCELLED))
     finally:
         if child is not None:
-            if child.proc.poll() is None:
-                kill_tree(child.proc)
+            with contextlib.suppress(Exception):
+                if not child.finished:
+                    child.kill()
+                    child.finish(t)
             _usage_finish(t, child.cpu_s)
             if on_exit is not None:
                 with contextlib.suppress(Exception):
@@ -1169,11 +1632,11 @@ def em_transient_eval(**kwargs) -> Dict:
 
     Pool off (the default), or a call that cannot leave this process (an
     ``excitation`` object, an active P2 state capture, an argument that does
-    not pickle): the in-process function, unchanged.  Pool on: the same call in
-    a pool worker; progress replays through ``progress_cb`` here, and the two
-    in-memory caches the solve feeds (the eddy warm seed and the d-axis
-    calibration) are copied back so the next in-process read sees what an
-    in-process solve would have left behind.
+    not pickle): the in-process function, called with the same arguments.
+    Pool on: the same call in a pool worker; progress replays through
+    ``progress_cb`` here, and the cache updates the solve made (the eddy warm
+    seed of THIS workspace, new d-axis calibrations) are installed here only
+    when the worker proves it solved the same machine (:func:`apply_fem_echo`).
     """
     from motor_ai_sim.simulation import fem_solver_2d as _FS
     if not enabled() or kwargs.get("excitation") is not None:
@@ -1184,20 +1647,58 @@ def em_transient_eval(**kwargs) -> Dict:
             return _FS.em_transient_eval(**kwargs)
     except Exception:                                   # noqa: BLE001
         pass
+    import uuid
     progress_cb = kwargs.pop("progress_cb", None)
+    nonce = uuid.uuid4().hex
+    expected = context_fingerprint()
     try:
-        out = call(EM_TARGET, {"kwargs": kwargs}, progress_cb=progress_cb,
-                   label="em_transient_eval")
+        out = call(EM_TARGET, {"kwargs": kwargs, "nonce": nonce},
+                   progress_cb=progress_cb, label="em_transient_eval")
     except NotPoolable as exc:
         log.warning("solve pool: running in-process (%s)", exc)
         return _FS.em_transient_eval(progress_cb=progress_cb, **kwargs)
-    apply_fem_echo(out.get("echo") or {})
+    apply_fem_echo(out.get("echo") or {}, nonce=nonce, expected=expected)
     return out["result"]
 
 
-def apply_fem_echo(echo: Dict[str, Any]) -> None:
-    """Install the child's cache updates in THIS process (caller's workspace)."""
+def apply_fem_echo(echo: Dict[str, Any], *, nonce: str, expected: str) -> bool:
+    """Install a worker's cache updates in THIS process — or refuse them.
+
+    Scope, and why it is enough:
+
+    * the warm seed lives in ``fem_solver_2d._SB_WARM_CACHE``, a PER-WORKSPACE
+      map (``workspace.ws_map``): it is written here, on the job's own thread,
+      in the caller's workspace, so it cannot reach another account;
+    * the update is accepted only when it carries this call's ``nonce`` AND the
+      worker's own :func:`context_fingerprint` (workspace, config file, config
+      CONTENT, material override) equals the one taken when the call was
+      submitted AND the one of this thread now.  Anything else — a config
+      edited mid-solve, another workspace, another material override — is
+      refused, and this workspace's in-memory seed is DROPPED so the next
+      in-process read falls back to the per-workspace disk mirror the worker
+      wrote instead of an older state;
+    * d-axis calibrations are added only for keys this process does not hold
+      (an in-process solve would have hit its own entry first).  Their keys
+      are the solver's topology key (geometry fingerprint + winding); that key
+      is the solver's, and so is the fact that the dict is shared across
+      workspaces in-process too.
+
+    Returns True when installed.
+    """
     from motor_ai_sim.simulation import fem_solver_2d as _FS
+    ok = (echo.get("nonce") == nonce
+          and echo.get("fingerprint") == expected
+          and context_fingerprint() == expected)
+    if not ok:
+        if echo:
+            log.warning("solve pool: cache update from a worker refused (nonce "
+                        "%s, fingerprint %s): it does not belong to this request "
+                        "and machine", "ok" if echo.get("nonce") == nonce
+                        else "mismatch", "ok" if echo.get("fingerprint") == expected
+                        else "mismatch")
+        with contextlib.suppress(Exception):
+            _FS._SB_WARM_CACHE.pop("last", None)
+        return False
     wc = echo.get("warm_last")
     if wc is not None:
         with contextlib.suppress(Exception):
@@ -1206,4 +1707,6 @@ def apply_fem_echo(echo: Dict[str, Any]) -> None:
     if dax:
         with _FS._DAXIS_LOCK:
             for k, v in dax.items():
-                _FS._DAXIS_CACHE[k] = v
+                if k not in _FS._DAXIS_CACHE:
+                    _FS._DAXIS_CACHE[k] = v
+    return True

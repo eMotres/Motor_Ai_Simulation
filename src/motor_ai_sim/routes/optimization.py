@@ -1257,11 +1257,19 @@ def _kill_live_evals(owner: str) -> int:
         victims = [(pid, p) for pid, (p, o) in _LIVE_EVAL_PROCS.items() if o == want]
     n = 0
     try:
-        # Solve pool: the evals still WAITING for a slot are withdrawn too, and
-        # the running ones lose their whole process tree (not only the pid).
+        # SOLVE POOL: the pool alone kills and reaps its workers.  Cancelling
+        # the TAG withdraws the evals still waiting for a slot and makes each
+        # running eval's owning thread kill its whole tree (Job Object /
+        # process group) within one poll.  Never Popen.kill() here: a worker
+        # killed from outside could be reaped before its owner saw the cancel,
+        # and its grandchildren would be left behind (review 2026-09-30).
         from motor_ai_sim import solve_pool as _SP
         if _SP.enabled():
-            _SP.cancel_tag(want)
+            n = _SP.cancel_tag(want)
+            if n:
+                log.info("%s cancel: %d running eval(s) handed to the solve "
+                         "pool to kill", owner, n)
+            return n
     except Exception:   # noqa: BLE001
         pass
     for pid, p in victims:
@@ -1456,6 +1464,15 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                 tag=_tag, label="refine_proc", on_spawn=_reg, on_exit=_unreg,
                 cancel_check=(lambda: bool(_rid_eval)
                               and _JOBS.is_cancelled(_rid_eval)))
+            if _cr.cancelled:
+                # STOPPED, not failed: an eval cancelled while it waited for a
+                # slot never ran, and one killed by Stop has no answer.  Neither
+                # is a sample of what an eval costs, nor a data point for the
+                # surrogate log, nor a rejected design.
+                return {"ok": False, "cancelled": True,
+                        "error": ("cancelled before it started"
+                                  if _cr.cancelled_while_waiting
+                                  else "cancelled")}
             proc = _NS(stdout=_cr.stdout, stderr=_cr.stderr,
                        returncode=_cr.returncode)
             if _cr.wall_s > 0:

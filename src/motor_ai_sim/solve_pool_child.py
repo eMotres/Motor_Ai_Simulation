@@ -23,31 +23,58 @@ from typing import Any, Dict, Optional
 class ChildContext:
     """What a target sees of the pool: progress out, thread changes in."""
 
-    def __init__(self, out, has_progress: bool) -> None:
+    def __init__(self, out, has_progress: bool, rethread_s: float = 10.0) -> None:
         self._out = out
         self._lock = threading.Lock()
+        self._apply_lock = threading.Lock()
         self.has_progress = bool(has_progress)
+        self.rethread_s = max(0.1, float(rethread_s))
         self.threads = _env_threads()
         self.threads_history = [self.threads]
+        self.forced_rethreads = 0
         self._want: Optional[int] = None
+        self._want_seq = 0
         self._limiter = None
 
     # called from the control reader thread
     def request_threads(self, n: int) -> None:
-        self._want = max(1, int(n))
+        """A width change from the pool.  Applied at the next solver callback
+        (a safe point between frames); if none comes within ``rethread_s``, it
+        is applied from here — MKL's and OpenBLAS's thread counts are process
+        globals read at the start of their next parallel region — so a solve
+        stuck in one long native call cannot hold its old width for ever."""
+        with self._apply_lock:
+            self._want = max(1, int(n))
+            self._want_seq += 1
+            seq = self._want_seq
+        timer = threading.Timer(self.rethread_s, self._apply, args=(seq, "forced"))
+        timer.daemon = True
+        timer.start()
 
     def apply_threads(self) -> None:
         """Apply a pending width change — on the SOLVING thread, between
         frames, where no BLAS call is in flight."""
-        want = self._want
-        if want is None or want == self.threads:
-            return
-        self._want = None
+        self._apply(None, "safe_point")
+
+    def _apply(self, seq: Optional[int], how: str) -> None:
+        with self._apply_lock:
+            want = self._want
+            if want is None or (seq is not None and seq != self._want_seq):
+                return
+            self._want = None
+            if want != self.threads:
+                try:
+                    from threadpoolctl import threadpool_limits
+                    self._limiter = threadpool_limits(limits=int(want))
+                except Exception:                       # noqa: BLE001
+                    pass
+                self.threads = int(want)
+                self.threads_history.append(self.threads)
+                if how == "forced":
+                    self.forced_rethreads += 1
+        # Confirm: the pool keeps the old width reserved until this arrives.
         try:
-            from threadpoolctl import threadpool_limits
-            self._limiter = threadpool_limits(limits=int(want))
-            self.threads = int(want)
-            self.threads_history.append(self.threads)
+            send(self._out, ("threads_ack", int(want), how), self._lock)
         except Exception:                               # noqa: BLE001
             pass
 
@@ -169,8 +196,9 @@ def main() -> int:
         task = read_frame(inp)
     except EOFError:
         return 2
-    _, target, payload, ctx_data, has_progress = task
-    ctx = ChildContext(out, has_progress)
+    _, target, payload, ctx_data, has_progress = task[:5]
+    ctx = ChildContext(out, has_progress,
+                       rethread_s=(task[5] if len(task) > 5 else 10.0))
 
     def _control() -> None:
         try:
@@ -229,8 +257,12 @@ def _finish(out) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def em_transient_eval_target(payload: Dict[str, Any], ctx: ChildContext) -> Dict[str, Any]:
-    """``fem_solver_2d.em_transient_eval`` plus the cache updates it made."""
+    """``fem_solver_2d.em_transient_eval`` plus the cache updates it made,
+    stamped with the call's nonce and THIS process's view of the machine
+    (``solve_pool.context_fingerprint``) so the parent can refuse an update
+    that does not belong to the request (``solve_pool.apply_fem_echo``)."""
     from motor_ai_sim.simulation import fem_solver_2d as _FS
+    from motor_ai_sim.solve_pool import context_fingerprint
     kw = dict(payload["kwargs"])
     # Always a hook, so the load rule can re-thread the solve between frames;
     # progress only travels back when the caller asked for it.  The solver
@@ -239,7 +271,8 @@ def em_transient_eval_target(payload: Dict[str, Any], ctx: ChildContext) -> Dict
     kw["progress_cb"] = ctx.progress if ctx.has_progress else ctx.tick
     before = dict(_FS._DAXIS_CACHE)
     result = _FS.em_transient_eval(**kw)
-    echo: Dict[str, Any] = {}
+    echo: Dict[str, Any] = {"nonce": payload.get("nonce"),
+                            "fingerprint": context_fingerprint()}
     try:
         wc = _FS._SB_WARM_CACHE.get("last")
         if wc is not None:
@@ -255,6 +288,35 @@ def em_transient_eval_target(payload: Dict[str, Any], ctx: ChildContext) -> Dict
 
 # Diagnostics: the unit tests and a health check drive the pool with these,
 # so the scheduling machinery is exercised without a FEM import.
+
+def diag_fingerprint(payload: Any, ctx: ChildContext) -> Dict[str, Any]:
+    """The echo a solve would send, without the solve (isolation tests)."""
+    from motor_ai_sim.solve_pool import context_fingerprint
+    return {"nonce": (payload or {}).get("nonce"),
+            "fingerprint": context_fingerprint(),
+            "warm_last": (payload or {}).get("warm_last"),
+            "daxis": (payload or {}).get("daxis") or {}}
+
+
+def diag_spawn_and_exit(payload: Dict[str, Any], ctx: ChildContext) -> Dict[str, Any]:
+    """Start a grandchild that would live 120 s, record its pid, return at
+    once: the pool must not leave it behind (tree cleanup on normal exit)."""
+    import subprocess
+    g = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    with open(payload["pid_file"], "w") as fh:
+        fh.write("%d %d" % (os.getpid(), g.pid))
+    return {"grandchild": g.pid}
+
+
+def diag_busy_native(payload: Dict[str, Any], ctx: ChildContext) -> Dict[str, Any]:
+    """Run ``s`` seconds WITHOUT ever calling a progress hook (a long native
+    call): a width change must still be applied, by the control thread."""
+    t_end = time.time() + float(payload.get("s", 3.0))
+    while time.time() < t_end:
+        time.sleep(0.05)
+    return {"threads": list(ctx.threads_history),
+            "forced": ctx.forced_rethreads}
+
 
 def diag_echo(payload: Any, ctx: ChildContext) -> Dict[str, Any]:
     from motor_ai_sim import workspace as _WSP

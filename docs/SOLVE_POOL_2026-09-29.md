@@ -7,8 +7,16 @@ decision: `SOLVER_PROFILING_2026-09-29.md` and `GPU_TDM_STUDY_2026-09-29.md`
 processes gave 1.7-1.8x (LU) / 2.65-2.7x (Cholesky) the solve throughput of one
 six-thread process on the AX42.
 
-**Opt-in.** With `SOLVE_POOL` unset (the default) every code path is the
-in-process one, byte for byte. The owner decides the default after this bench.
+**Opt-in.** With `SOLVE_POOL` unset (the default) every solve runs in-process
+as before. This is behaviourally equivalent, not literally the same code: the
+route now calls `solve_pool.em_transient_eval`, which forwards to the
+in-process solver with the same arguments, and evaluates the lock selector,
+which returns the old process-wide lock. The owner decides the default after
+this bench.
+
+**Status after the Codex review (2026-09-30).** Findings and fixes are in
+[Review 2026-09-30](#review-2026-09-30) below; the bench numbers were taken
+before those fixes (see the note there).
 
 ## Design
 
@@ -32,7 +40,10 @@ Children run at BelowNormal priority on Windows and `nice 10` on Linux
 
 Environment: `SOLVE_POOL`, `QUEUE_PROCS`, `SOLVE_POOL_SOLO_THREADS`,
 `SOLVE_POOL_RSS_MB` (fixed estimate; default: learned, 1500 MB before the
-first sample), `SOLVE_POOL_RAM_RESERVE_MB` (2048), `SOLVE_POOL_NICE` (10).
+first sample), `SOLVE_POOL_RAM_RESERVE_MB` (2048), `SOLVE_POOL_RAM_FLOOR_MB`
+(1024, applies to the first solve too), `SOLVE_POOL_RAM_STRICT` (0),
+`SOLVE_POOL_AGING_S` (300), `SOLVE_POOL_FAIR_WINDOW_S` (1800),
+`SOLVE_POOL_RETHREAD_S` (10), `SOLVE_POOL_NICE` (10).
 
 What stays in-process: field views (`field_jobs`, short), the 3-D static
 path, a call with an `excitation` object or an active P2 state capture, and any
@@ -120,3 +131,25 @@ even with the pool off.
 - Not measured on the Cholesky branch; PARDISO Cholesky may scale better with
   threads, in which case the solo cap can be revisited with
   `SOLVE_POOL_SOLO_THREADS`.
+
+## Review 2026-09-30
+
+Codex reviewed the PR diff (not blocking with the flag off; blocking before
+`SOLVE_POOL=1` in production). Each claim was checked against the code.
+
+| # | finding | verdict | fix |
+|---|---|---|---|
+| 1 | `_kill_live_evals` calls `Popen.kill()` in pool mode; a worker that exits before its owner sees the cancel is reaped without a tree kill, so grandchildren survive (Windows: a psutil snapshot misses late descendants) | real | Only the pool kills and reaps its workers. In pool mode `_kill_live_evals` only cancels the tag. Every worker is the leader of its own tree: on Windows it is created suspended, put into a kill-on-close Job Object, then resumed; on POSIX it runs in its own session. `_Child.finish` always runs. After the leader exits, normally or not, it signals the process group while the unreaped leader still pins the group id (POSIX), or terminates and closes the Job Object (Windows). Tests: a grandchild of a normally exiting command, of a normally exiting call, and of a tag-cancelled command is dead afterwards |
+| 2 | a narrowed child keeps its old width until its next progress callback; the budget counts it narrowed at once, so the pool can be oversubscribed for an unbounded time | real | The child confirms every width change (`threads_ack`). Until it does, the budget reserves max(requested, confirmed) width. The change is applied at the next solver callback; if none comes within `SOLVE_POOL_RETHREAD_S` (10 s), the child applies it from its control thread (MKL and OpenBLAS thread counts are process globals) and confirms. The parent logs a child that has not confirmed after 3x that |
+| 3 | the warm seed and the d-axis entries are copied back globally | partly real | **Cross-user:** not reachable. `_SB_WARM_CACHE` is a per-workspace map, and the copy runs on the job's own thread in the caller's workspace. **Missing validation:** real. The echo now carries the call's nonce and the worker's own `context_fingerprint()`: workspace id and root, config path, config content hash, material override. It is installed only when both match the fingerprint taken at submit and the one of the installing thread. Otherwise it is refused and this workspace's in-memory seed is dropped, so the disk mirror the worker wrote wins. D-axis entries are only added for keys the process does not already hold. **Not changed:** `_DAXIS_CACHE` is one dict shared by all workspaces in-process too, keyed by the solver's topology key (geometry fingerprint + winding, not materials). Re-scoping it would change flag-off behaviour and lives in `fem_solver_2d`, so it is left to a separate change. Tests: two users with different configs; a foreign workspace, a wrong nonce, and a config edited mid-solve are all refused, the right request is installed, bob never sees alice's seed, and existing calibrations are not overwritten |
+| 4 | the CPU of a metered child sampled ahead of the tree is marked credited and lost | real | Metered and unmetered children are carried the same way: each tick credits only what the tree measured, the rest waits for the next tick, and a finished child is kept up to 3 ticks for its tail. Test: `test_metered_child_cpu_sampled_ahead_of_the_tree_is_carried` |
+| 5a | strict priority starves low priority; `_served` is a lifetime counter | real | Aging: one priority class per `SOLVE_POOL_AGING_S` (300 s) waited. Fairness counts starts in a rolling `SOLVE_POOL_FAIR_WINDOW_S` (1800 s) |
+| 5b | the RAM cap is a point estimate; the first solve bypasses it | real | A hard floor `SOLVE_POOL_RAM_FLOOR_MB` (1024) that blocks every start, the first included. `SOLVE_POOL_RAM_STRICT=1` runs one solve at a time when memory cannot be read. `memory.events` is shown in the snapshot, and an `oom_kill` increase is named in a dead worker's error. Admission is documented as not being an OOM guarantee |
+| 5c | final CPU/RSS is missed after exit; `process_time()` omits grandchildren | real | Liveness is checked without reaping (`waitid(WNOWAIT)`). The zombie is sampled, then reaped with `wait4`, whose rusage covers the child and its reaped descendants (CPU, `ru_maxrss`). On Windows the Job Object accounting covers every process that ever ran in the job. Unrecoverable remainder: a descendant that was orphaned and reaped by init outside the job (POSIX) |
+| 5d | a queued optimizer eval cancelled by Stop comes back as a failed eval with rc -15 | real | `CommandResult.cancelled` / `cancelled_while_waiting`. `_subprocess_eval` returns `{"ok": False, "cancelled": True}` with no exit-code error and no timing sample, and nothing goes to the surrogate log. Test: `test_queued_optimizer_eval_cancel_is_cancelled_not_failed` |
+| 6 | "byte for byte" overstates the flag-off path | real | Reworded here, in the module docstring and in the PR: behaviourally equivalent, not literally the same code |
+
+The bench above was taken before these fixes. The scheduling changes can
+only make a burst start later (the old width stays reserved until the child
+confirms). The solve path, the child protocol for results, and the equality
+are unchanged.

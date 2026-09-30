@@ -181,6 +181,8 @@ class Meter:
 # meter (a campaign admitted with ``jobs.admit``) is credited to its account
 # directly.  pid -> {run_id, user, client, cpu, credited, done}
 _CHILDREN: Dict[int, Dict[str, Any]] = {}
+#: Full ticks a finished child waits for the tree to catch up with its tail.
+_CHILD_DONE_TICKS = 3
 
 
 def child_started(pid: int, run_id: str, user: str, client: str = "web",
@@ -214,25 +216,29 @@ def _children_split(delta: float, minute: int) -> tuple:
     """(cpu per metered run id, CPU credited directly to un-metered owners)."""
     by_run: Dict[str, float] = {}
     orphan = 0.0
+    left = max(0.0, delta)
     for pid, c in list(_CHILDREN.items()):
         d = max(0.0, c["cpu"] - c["credited"])
+        # Metered or not, a child is credited only what the tree actually
+        # measured in this interval; the rest (the pool sampled the child
+        # after the tree did) is CARRIED to the next tick.  A finished child
+        # is kept for a few ticks so its tail can still land.
+        got = min(d, left)
+        c["credited"] += got
+        left -= got
         if c["done"]:
-            _CHILDREN.pop(pid, None)
+            c["done_ticks"] = c.get("done_ticks", 0) + 1
+            if d - got <= 1e-9 or c["done_ticks"] >= _CHILD_DONE_TICKS:
+                _CHILDREN.pop(pid, None)
+        if got <= 0.0:
+            continue
         rid = c["run_id"]
         if rid and rid in _ACTIVE:
-            c["credited"] = c["cpu"]
-            if d > 0.0:
-                by_run[rid] = by_run.get(rid, 0.0) + d
+            by_run[rid] = by_run.get(rid, 0.0) + got
             continue
-        # Never credit more than the tree actually measured in this interval;
-        # what does not fit yet (the pool sampled the child after the tree
-        # did) is carried to the next tick while the child lives.
-        got = min(d, max(0.0, delta - orphan))
-        c["credited"] += got
-        if got > 0.0:
-            orphan += got
-            key = (minute, node_name(), c["user"], c["client"])
-            _USER_ACC[key] = _USER_ACC.get(key, 0.0) + got
+        orphan += got
+        key = (minute, node_name(), c["user"], c["client"])
+        _USER_ACC[key] = _USER_ACC.get(key, 0.0) + got
     return by_run, orphan
 
 

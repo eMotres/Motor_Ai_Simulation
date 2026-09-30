@@ -317,7 +317,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     coil_temp_c: float, n_periods: float, gamma_deg: float,
                     mesh_size_mm: float, min_size_mm: float, n_sectors: int,
                     pole_copy, torque_filter: bool, cfg_fp: str,
-                    gap_layers: float = 3.0, end_winding_factor: float = 0.0,
+                    gap_layers: float = 1.0, end_winding_factor: float = 0.0,
                     rotor_eddy: bool = False, hi_fidelity: bool = False,
                     structured_gap: bool = False, airgap_macro: bool = False,
                     iron_template: bool = True, geo_mesh: bool = True,
@@ -345,7 +345,10 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # default and a run whose Coulomb gap self-check fails is re-solved
         # with more gap layers per side — every v4 entry holds the hybrid
         # torque on the requested gap.
-        "v": 5,
+        # v6 (2026-09-30, owner): 1 gap layer per side by default and NO gap
+        # refinement for optimization candidates — a v5 entry may hold a
+        # candidate re-solved at more layers.
+        "v": 6,
         "sampling_purpose": sampling_purpose,
         # Physics the CALLER pinned for the whole run (rpm / connection / demag
         # / eddy from a descent plan).  A pinned run solves the pinned values no
@@ -481,7 +484,10 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              "cogging_final_quality_min_required_steps_per_period",
              "cogging_raw_samples_per_cycle", "cogging_sampling_sufficient",
              "cogging_sampling_final_quality_sufficient",
-             "cogging_sampling_auto_raised", "cogging_sampling_reason")
+             "cogging_sampling_auto_raised", "cogging_sampling_reason",
+             # The candidate's Coulomb gap self-check (never refined; flagged).
+             "torque_method", "gap_layers_per_side", "ripple_self_check_rel",
+             "ripple_mesh_limited", "gap_layers_persist", "gap_layers_note")
 
 
 def _store_eval(key: str, res: Dict[str, Any]) -> None:
@@ -1293,7 +1299,7 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                      gamma_deg: float = 0.0, mesh_size_mm: float = 4.0,
                      min_size_mm: float = 0.3, n_sectors: int = -1,
                      _log: bool = True, pole_copy=None, torque_filter=False,
-                     gap_layers: float = 3.0, end_winding_factor: float = 0.0,
+                     gap_layers: float = 1.0, end_winding_factor: float = 0.0,
                      rotor_eddy: bool = False, hi_fidelity: bool = False,
                      structured_gap: bool = False, airgap_macro: bool = False,
                      iron_template: bool = True, geo_mesh: bool = True,
@@ -1760,7 +1766,7 @@ class ScanRequest(BaseModel):
     pole_copy: Optional[bool] = None       # mesh mode (Mesh tab "Periodic")
     torque_filter: bool = False            # band-limit ripple — honest default: RAW
     n_sectors: int = 1                     # FEM symmetry — SINGLE SOURCE: Mesh tab (same build as Simulation)
-    gap_layers: float = 3.0                # air-gap mesh layers — SINGLE SOURCE: Mesh tab (drives ripple/eddy; match Simulation)
+    gap_layers: float = 1.0                # air-gap mesh layers — SINGLE SOURCE: Mesh tab (drives ripple/eddy; match Simulation)
     end_winding_factor: float = 0.0        # end-winding k_end — SINGLE SOURCE: Simulation (drives copper loss / eff; 0 = auto)
     rotor_eddy: bool = False                # field-based magnet/shaft eddy — SINGLE SOURCE: Simulation (drives magnet loss / eff vs slab estimate)
     hi_fidelity: bool = False               # 2× slip nodes + finer mesh + ≥4 gap layers — SINGLE SOURCE: Mesh tab (smoother raw torque, ~3-5× slower)
@@ -1903,7 +1909,7 @@ def _scan_owns(run_id) -> bool:
 @_optimizer_job("scan")
 def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                  max_geom, seed, run_id, mesh_size_mm=4.0, min_size_mm=0.3,
-                 pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=3.0,
+                 pole_copy=None, torque_filter=False, n_sectors=1, gap_layers=1.0,
                  end_winding=0.0, rotor_eddy=False, hi_fidelity=False,
                  structured_gap=False, airgap_macro=False, iron_template=True,
                  geo_mesh=True, element_order=2, demag=False,
@@ -3315,7 +3321,7 @@ class DescentRequest(BaseModel):
     # Air-gap mesh layers — SINGLE SOURCE: the Mesh tab. The dominant driver of the
     # Arkkio torque + ripple; MUST match Simulation or a selected design won't
     # reproduce in the Simulation tab.
-    gap_layers: float = 2.0
+    gap_layers: float = 1.0
     # Belt (mapped concentric-ring) gap mesh — SINGLE SOURCE: the Mesh tab
     # "Structured" toggle.  Honest ripple (¼-sector == full disk), same build
     # as the Simulation tab.
@@ -3405,7 +3411,7 @@ class BaselineRequest(BaseModel):
     coil_temp_c: float = 120.0
     mesh_size_mm: float = 4.0
     min_size_mm: float = 0.3
-    gap_layers: float = 2.0
+    gap_layers: float = 1.0
     structured_gap: bool = False   # Mesh tab "Structured" toggle (belt gap mesh)
     airgap_macro: bool = False     # Mesh tab "Harmonic gap" (step-independent RAW ripple; full ring + sectors)
     iron_template: bool = True     # deterministic template iron mesh (fallback: gmsh)
@@ -4015,7 +4021,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     optimize_gamma=True, auto_expand=False, max_rounds=1,
                     boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
                   torque_filter=False, end_winding=0.0, rotor_eddy=True,
-                  gap_layers=2.0, objective="baseline_line",
+                  gap_layers=1.0, objective="baseline_line",
                   current_bump_pct=10.0, structured_gap=False, airgap_macro=False,
                   iron_template=True, geo_mesh=True, element_order=2) -> None:
     # NOTE: server-side box-walking (auto_expand) is implemented for CMA-ES only;
@@ -4424,7 +4430,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                   optimize_gamma=True, auto_expand=False, max_rounds=1,
                   boundary_margin=0.05, surrogate_seed=False, pole_copy=None,
                   torque_filter=False, end_winding=0.0, rotor_eddy=True,
-                  gap_layers=2.0, objective="baseline_line",
+                  gap_layers=1.0, objective="baseline_line",
                   current_bump_pct=10.0, structured_gap=False, airgap_macro=False,
                   iron_template=True, geo_mesh=True, element_order=2) -> None:
     """Covariance-Matrix-Adaptation Evolution Strategy — derivative-free,
@@ -5133,7 +5139,7 @@ def _descent_recheck_inputs(st: Dict[str, Any], req: DescentValidateRequest
             "n_sectors": int(ep.get("n_sectors", -1)),
             "pole_copy": ep.get("pole_copy"),
             "torque_filter": bool(ep.get("torque_filter", False)),
-            "gap_layers": float(ep.get("gap_layers", 2.0)),
+            "gap_layers": float(ep.get("gap_layers", 1.0)),
             "end_winding_factor": float(ep.get("end_winding_factor", 0.0)),
             "rotor_eddy": bool(ep.get("rotor_eddy", True)),
             "structured_gap": bool(ep.get("structured_gap", False)),
@@ -5960,7 +5966,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         "coil_temp_c": float(coil_temp),
         "mesh_size_mm": max(1.0, min(float(mesh.get("mesh_size_mm", 4.0) or 4.0), 12.0)),
         "min_size_mm": max(0.1, min(float(mesh.get("min_size_mm", 0.3) or 0.3), 3.0)),
-        "gap_layers": max(1.0, min(float(mesh.get("gap_layers", 2.0) or 2.0), 8.0)),
+        "gap_layers": max(1.0, min(float(mesh.get("gap_layers", 1.0) or 1.0), 8.0)),
         "n_sectors": n_sectors,
         # P2 is the only basis; refine_proc coerces the belt gap + natural
         # symmetry sector per eval, exactly as the Simulation route does.

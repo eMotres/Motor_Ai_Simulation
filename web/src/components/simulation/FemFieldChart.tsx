@@ -323,7 +323,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
       geo_mesh:          String(readMeshSetting('geoMesh', true)),
       structured_gap:    String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
       airgap_macro:      String(readMeshSetting('harmonicGap', false)),
-      gap_layers:        String(readMeshSetting('gapLayers', 2)),
+      gap_layers:        String(readMeshSetting('gapLayers', 1)),
     };
     if (I_phase_rms !== undefined) {
       params.I_phase_rms = String(I_phase_rms);
@@ -481,7 +481,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     geo_mesh:         String(readMeshSetting('geoMesh', true)),
     structured_gap:   String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),
     airgap_macro:     String(readMeshSetting('harmonicGap', false)),
-    gap_layers:       String(readMeshSetting('gapLayers', 2)),
+    gap_layers:       String(readMeshSetting('gapLayers', 1)),
   });
 
   /** J⟳ / eddy view.

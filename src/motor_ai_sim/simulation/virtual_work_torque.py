@@ -319,18 +319,10 @@ def sliding_band_layers(p: np.ndarray, t: np.ndarray, n_stator_nodes: int,
 SELF_CHECK_GATE = 0.05
 #: Absolute ripple floor of the gate's denominator, as a fraction of |mean|.
 RIPPLE_SCALE_FLOOR_REL_MEAN = 0.005
-#: Target the automatic gap refinement aims at (margin under the gate), the
-#: convergence order it assumes and the most layers per side it will choose.
-#: The order is MEASURED, not P2's nominal 2: on the Ø40 static mesh the
-#: self-check fell with order 1.39 (rated) / 1.14 (no-load) from 1 to 2 layers
-#: per side, 2.2 from 2 to 3 and 1.7 / 1.5 from 1 to 3 — 1.5 sends both
-#: 1-layer cases to 3 layers per side, where both pass (3.0 % / 2.2 %).
-SELF_CHECK_TARGET = 0.04
-SELF_CHECK_ORDER = 1.5
-#: Capped at 4/side: measured to pass on the Ø40 static mesh (0.51 %), while
-#: on the L155 (sleeve, 0.69 mm gap) more layers did NOT lower the two-ring
-#: difference (1.2 % at 1/side, 18 % unsettled at 2, 6.8 % at 3) — refinement
-#: beyond 4 would buy cost, not accuracy, on the evidence we have.
+#: The most gap layers per side the step rule (``next_gap_layers``) goes to:
+#: measured to pass on the Ø40 static mesh (0.51 %), while on the L155
+#: (sleeve, 0.69 mm gap) more layers did NOT lower the two-ring difference
+#: (1.2 % at 1/side, 18 % at 2, 6.8 % at 3) — beyond 4 buys cost, not accuracy.
 GAP_LAYERS_AUTO_MAX = 4.0
 # kept for callers of the first version
 SELF_CHECK_MAX_REL_TO_PP = SELF_CHECK_GATE
@@ -381,22 +373,17 @@ def layer_self_check(t_rotor_side: Iterable[float],
             **base}
 
 
-def gap_layers_for_self_check(gap_layers: float, rel_to_ripple_scale: Optional[float],
-                              target: float = SELF_CHECK_TARGET,
-                              order: float = SELF_CHECK_ORDER,
-                              gl_max: float = GAP_LAYERS_AUTO_MAX) -> Optional[float]:
-    """Gap layers per side predicted to bring the self-check to ``target``.
-
-    ``None`` when the check passes the gate (or is unknown) or the mesh is
-    already at ``gl_max``.  Otherwise
-    ``min(gl_max, max(gl + 1, ceil(gl · (ε / target) ** (1 / order))))``.
-    """
+def next_gap_layers(gap_layers: float, rel_to_ripple_scale: Optional[float],
+                    gl_max: float = GAP_LAYERS_AUTO_MAX) -> Optional[float]:
+    """The owner's step rule (2026-09-30): when the two rings disagree (the
+    self-check fails its gate) the next attempt is ONE more layer per side,
+    up to ``gl_max``; ``None`` when the check passes, is unknown, or the cap
+    is reached."""
     if rel_to_ripple_scale is None or not math.isfinite(rel_to_ripple_scale):
         return None
     if rel_to_ripple_scale <= SELF_CHECK_GATE or gap_layers >= gl_max:
         return None
-    want = math.ceil(float(gap_layers) * (rel_to_ripple_scale / target) ** (1.0 / order))
-    return float(min(gl_max, max(float(gap_layers) + 1.0, want)))
+    return float(min(gl_max, math.floor(float(gap_layers)) + 1.0))
 
 
 # ── shared per-frame torque post-processing ──────────────────────────────────

@@ -140,7 +140,7 @@ const FemAnimationViewer: React.FC<Props> = ({
       // mesh toggles must stay in step with TransientCharts: same params, same
       // backend cache key, one solve for both panels.
       sliding_band:       'true',
-      gap_layers:         String(readMeshSetting('gapLayers', 2)),
+      gap_layers:         String(readMeshSetting('gapLayers', 1)),
       iron_template:      String(readMeshSetting('ironTemplate', true)),
       geo_mesh:           String(readMeshSetting('geoMesh', true)),
       structured_gap:     String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),

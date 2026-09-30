@@ -588,7 +588,7 @@ const SweepStudyPanel: React.FC = () => {
           mesh_size_mm: readLS('mesh.meshSize', 4), min_size_mm: readLS('mesh.minSize', 0.3),
           pole_copy: readBool('mesh.poleCopy', false), torque_filter: readBool('sim.torqueFilter', false),
           n_sectors: Math.max(1, Math.round(readLS('mesh.nSectors', 1))),   // single source: Mesh tab (same as Simulation)
-          gap_layers: readLS('mesh.gapLayers', 2),   // single source: Mesh tab — drives ripple/eddy; must match Simulation
+          gap_layers: readLS('mesh.gapLayers', 1),   // single source: Mesh tab — drives ripple/eddy; must match Simulation
           structured_gap: readBool('mesh.structuredGap', false) || readBool('mesh.ironTemplate', true),   // single source: Mesh tab "Structured" — belt gap mesh (honest ripple, ¼ == full disk)
           airgap_macro: readBool('mesh.harmonicGap', false),   // Mesh tab "Harmonic gap" — step-independent RAW ripple (full + sectors)
           // P2 — the only basis. The sweep must rank designs on the SAME basis

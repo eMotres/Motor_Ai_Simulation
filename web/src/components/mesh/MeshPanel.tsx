@@ -427,7 +427,7 @@ const MeshPanel: React.FC = () => {
   const [nSectors,       setNSectors]       = usePersisted<number>('nSectors', 1);   // Full (full disk) by default
   // Air-gap element rows PER SIDE of the slip midline (1-3, default 2). The
   // value persists in config.yaml (loaded below, clamped to the new 1-3 range).
-  const [gapLayers,      setGapLayers]      = usePersisted<number>('gapLayers', 2);
+  const [gapLayers,      setGapLayers]      = usePersisted<number>('gapLayers', 1);
   // Bit-identical pole/slot mesh (template-copy): mesh ONE pole + ONE slot and
   // rotate-copy them so every pole/slot is identical → no pole-to-pole mesh
   // variance.  Read by the field & simulation fetches too (mesh.poleCopy).
@@ -1055,7 +1055,7 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Air-gap fidelity (layers/side)
-                  <Tooltip title="Element rows on EACH side of the sliding midline (3/side = 6 rows across the gap); also scales the slip-ring node count. Every run checks itself: if the torque on the rotor-side and stator-side gap rings differs by more than 5 % of the ripple, the run is re-solved once with more layers per side (same slip ring) and says so on the result card." placement="right">
+                  <Tooltip title="Element rows on EACH side of the sliding midline (default 1/side = 2 rows across the gap); also scales the slip-ring node count. Every run checks itself: if the torque on the rotor-side and stator-side gap rings differs by more than 5 % of the ripple, the run is re-solved with one more layer per side until they agree (max 4, same slip ring); the passing level becomes this machine's default and the result card says so. Optimizer candidates are not re-solved, only flagged." placement="right">
                     <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>

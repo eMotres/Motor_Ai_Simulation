@@ -1275,7 +1275,7 @@ def get_mesh_config():
         "mesh_size_mm":     m.get("mesh_size_mm", 4.0),
         "min_size_mm":      m.get("min_size_mm", 0.3),
         "outer_air_factor": m.get("outer_air_factor", 1.3),
-        "gap_layers":       m.get("gap_layers", 3.0),
+        "gap_layers":       m.get("gap_layers", 1.0),
         "normal_deviation": m.get("normal_deviation", 6.0),
         "n_sectors":        m.get("n_sectors", 4),
     }

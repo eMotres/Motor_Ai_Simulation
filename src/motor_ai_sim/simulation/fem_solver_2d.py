@@ -3680,7 +3680,8 @@ def fem_transient_sliding_band(
     mesh_size_mm: float = 3.0,
     min_size_mm: float = 0.3,
     outer_air_factor: float = 1.3,
-    gap_layers: float = 3.0,     # element layers across the air gap (Mesh-tab slider)
+    gap_layers: float = 1.0,     # element rows PER SIDE of the slip circle (Mesh-tab
+                                 # "layers/side"); owner 2026-09-30: 1 by default
     n_sectors: int = 4,
     stator_fillet_mm: float = 0.0,
     nonlinear_iterations: int = 100,  # CAP on the saturation Picard; the loop
@@ -11507,7 +11508,7 @@ def em_transient_eval(
     mesh_size_mm: float = 4.0,
     min_size_mm: float = 0.3,
     outer_air_factor: float = 1.3,
-    gap_layers: float = 3.0,
+    gap_layers: float = 1.0,         # rows per side of the slip circle (owner: 1 default)
     n_sectors: int = -1,
     stator_fillet_mm: float = 0.0,
     coil_temp_c: float = 120.0,
@@ -11620,18 +11621,35 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
 
     The Coulomb torque is computed on the rotor-side and on the stator-side
     gap ring; their difference, over max(p-p, 0.5 % of |mean|), is the gap
-    mesh's own error of the ripple.  Above ``SELF_CHECK_GATE`` (5 %) the run is
-    solved ONCE more with the gap layers per side predicted by
-    ``gap_layers_for_self_check`` (measured order 1.5, 4 % target, at most 4/side),
-    on the SAME slip ring (so the rotor angles and the step snap do not move)
-    — measured: the ring density does not move torque or ripple, the gap
-    layers do (docs/COULOMB_TORQUE_2026-09-30.md §3.3, §6).  The second result
-    is returned with ``gap_refinement`` describing both solves; a run that
-    still fails keeps ``ripple_mesh_limited`` set.  Internal probes, the
-    harmonic macro gap and ``SB_GAP_REFINE=0`` are never refined.
+    mesh's own error of the ripple.  While it is above ``SELF_CHECK_GATE``
+    (5 %) — the two rings do not agree — the run is solved again with ONE more
+    gap layer per side (1 → 2 → 3 → 4, capped at ``GAP_LAYERS_AUTO_MAX``), on
+    the SAME slip ring (so the rotor angles and the step snap do not move;
+    measured: the ring density does not move torque or ripple, the gap layers
+    do — docs/COULOMB_TORQUE_2026-09-30.md §3.3, §6).  The last solve is
+    returned; ``gap_refinement`` lists every attempt.  When a refined level
+    passes, ``gap_refinement.persist_gap_layers`` names it: the Simulation
+    route makes it the machine's default (the mesh config) and the browser
+    carries it into the duty's ``mesh.gapLayers`` through the normal duty
+    save, so the machine's next runs start there instead of failing again.
+    A run that still fails at the cap keeps ``ripple_mesh_limited`` set and
+    persists nothing.
+
+    Never refined: internal probes, OPTIMIZATION CANDIDATES
+    (``sampling_purpose="optimization"``; owner: 1 layer/side for
+    optimization — the candidate keeps its mesh and carries its self-check
+    and flag; the winner's final "cogging_quality" re-solve IS refined), the
+    harmonic macro gap and ``SB_GAP_REFINE=0``.
+
+    An eddy run whose warm-up did NOT settle is refined like any other
+    (changed 2026-09-30): the time-periodic (TDM) solve of L155 at 2/side,
+    fully converged, read the same 18 % self-check and +4.1 % iron loss as
+    the unsettled march — a property of that mesh, not a leftover transient.
+    ``eddy_unsettled`` records it.
     """
     from motor_ai_sim.simulation.virtual_work_torque import (
-        SELF_CHECK_GATE as _gate, gap_layers_for_self_check as _gl_for)
+        SELF_CHECK_GATE as _gate, GAP_LAYERS_AUTO_MAX as _gl_max,
+        next_gap_layers as _next_gl)
     res = fem_transient_sliding_band(**kw)
 
     def _sc(r):
@@ -11639,44 +11657,68 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
         return c.get("rel_to_ripple_scale")
     gl0 = float(res.get("gap_layers_effective") or kw.get("gap_layers") or 1.0)
     eps0 = _sc(res)
-    new = None
-    if (gap_refine and kw.get("sampling_purpose") != "internal_probe"
-            and not bool(kw.get("airgap_macro"))
-            and _os_sb.environ.get("SB_GAP_REFINE", "1") != "0"):
-        new = _gl_for(gl0, eps0)
+    purpose = kw.get("sampling_purpose")
     info = {"applied": False, "gate_rel_to_ripple_scale": _gate,
-            "gap_layers_per_side": gl0, "self_check_rel_to_ripple_scale": eps0}
-    if new is not None and res.get("eddy_settled") is False:
-        # An unsettled eddy warm-up leaves a transient in the reported window;
-        # the two rings then disagree about the transient, not about the mesh
-        # (measured: L155 at 2/side, warm-up capped at residual 21.6 %,
-        # self-check 18 %, P_fe swinging 209 W).  A finer mesh cannot fix that.
-        info["skipped_reason"] = ("eddy warm-up not settled: the self-check "
-                                  "measures the remaining transient, not the gap mesh")
-        new = None
-    if new is None:
+            "gap_layers_per_side": gl0, "self_check_rel_to_ripple_scale": eps0,
+            "eddy_unsettled": bool(res.get("eddy_settled") is False),
+            "persist_gap_layers": None}
+    nxt = _next_gl(gl0, eps0, _gl_max)
+    if nxt is not None:
+        _why = None
+        if not gap_refine:
+            _why = "refinement switched off by the caller"
+        elif purpose == "internal_probe":
+            _why = "internal probe (reports no torque)"
+        elif purpose == "optimization":
+            _why = ("optimization candidate: evaluated at its own gap layers, "
+                    "flagged, never refined (the winner's final re-solve is)")
+        elif bool(kw.get("airgap_macro")):
+            _why = "harmonic macro gap"
+        elif _os_sb.environ.get("SB_GAP_REFINE", "1") == "0":
+            _why = "SB_GAP_REFINE=0"
+        if _why is not None:
+            info["skipped_reason"] = _why
+            nxt = None
+    if nxt is None:
         res["gap_refinement"] = info
         return res
-    log.warning("SB gap rule: Coulomb self-check %.1f %% of the ripple scale at "
-                "%g gap layers/side > %.0f %% gate — re-solving once at %g/side "
-                "on the same %s-node slip ring", 100.0 * eps0, gl0,
-                100.0 * _gate, new, res.get("slip_nodes_per_period"))
-    kw2 = dict(kw, gap_layers=float(new),
-               slip_per_period=int(res.get("slip_nodes_per_period") or 0) or None)
-    res2 = fem_transient_sliding_band(**kw2)
-    res2["gap_refinement"] = dict(
-        info, applied=True, gap_layers_per_side=float(new),
-        self_check_rel_to_ripple_scale=_sc(res2),
-        first={"gap_layers_per_side": gl0, "self_check_rel_to_ripple_scale": eps0,
-               "T_avg_Nm": res.get("T_avg_Nm"),
-               "T_ripple_pp_Nm": res.get("T_ripple_pp_Nm"),
-               "solve_wall_s": res.get("solve_wall_s")})
-    res2["gap_layers_requested"] = res.get("gap_layers_requested")
-    res2["gap_layers_note"] = (
-        "gap layers raised from %g to %g per side: the Coulomb self-check was "
-        "%.1f %% of the ripple scale (gate %.0f %%)"
-        % (gl0, new, 100.0 * eps0, 100.0 * _gate))
-    return res2
+    ring = int(res.get("slip_nodes_per_period") or 0) or None
+    attempts = [{"gap_layers_per_side": gl0, "self_check_rel_to_ripple_scale": eps0,
+                 "T_avg_Nm": res.get("T_avg_Nm"),
+                 "T_ripple_pp_Nm": res.get("T_ripple_pp_Nm"),
+                 "eddy_settled": res.get("eddy_settled"),
+                 "solve_wall_s": res.get("solve_wall_s")}]
+    first_unsettled = info["eddy_unsettled"]
+    cur, gl, eps = res, gl0, eps0
+    while nxt is not None:
+        log.warning("SB gap rule: rotor- and stator-side Coulomb rings disagree "
+                    "by %.1f %% of the ripple scale at %g gap layers/side "
+                    "(gate %.0f %%) — re-solving at %g/side on the same "
+                    "%s-node slip ring", 100.0 * eps, gl, 100.0 * _gate, nxt, ring)
+        cur = fem_transient_sliding_band(**dict(kw, gap_layers=float(nxt),
+                                                slip_per_period=ring))
+        gl, eps = float(nxt), _sc(cur)
+        attempts.append({"gap_layers_per_side": gl, "self_check_rel_to_ripple_scale": eps,
+                         "T_avg_Nm": cur.get("T_avg_Nm"),
+                         "T_ripple_pp_Nm": cur.get("T_ripple_pp_Nm"),
+                         "eddy_settled": cur.get("eddy_settled"),
+                         "solve_wall_s": cur.get("solve_wall_s")})
+        nxt = _next_gl(gl, eps, _gl_max)
+    passed = eps is not None and eps <= _gate
+    note = "gap layers %g→%g after ring mismatch" % (gl0, gl)
+    if not passed:
+        note += " (still %.1f %% at the %g/side cap — ripple flagged)" % (
+            100.0 * (eps or 0.0), gl)
+    if first_unsettled:
+        note += "; the first solve's eddy warm-up had not settled"
+    cur["gap_refinement"] = dict(
+        info, applied=True, gap_layers_per_side=gl,
+        self_check_rel_to_ripple_scale=eps, passed=bool(passed),
+        persist_gap_layers=(gl if passed else None), attempts=attempts,
+        first=attempts[0])
+    cur["gap_layers_requested"] = res.get("gap_layers_requested")
+    cur["gap_layers_note"] = note
+    return cur
 
 
 def measure_six_phase_inductances(*, six_phase: dict, I_phase_rms: float,

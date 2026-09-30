@@ -28,6 +28,7 @@ import {
   defaultMaterialAssignments,
   defaultMeshSettings,
 } from '../types/motor';
+import { adoptGapLayers } from '../lib/gapLayersAdopt';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -983,7 +984,7 @@ export const useMotorStore = create<MotorState>()(
         // copper resistance EXACTLY like Simulation, else a selected design won't
         // reproduce when re-run in the Simulation tab.
         let gap_layers = 2, coil_temp_c = 120, structured_gap = false;
-        try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; } catch { /* default */ }
+        try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '1')) || 1; } catch { /* default */ }
         try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
         // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
         // Honest ripple (quarter == full disk), same build as Simulation.
@@ -1067,7 +1068,7 @@ export const useMotorStore = create<MotorState>()(
         try { rotor_eddy = JSON.parse(localStorage.getItem('sim.fieldLosses') ?? 'true') !== false; } catch { /* default */ }
         try { end_winding_factor = Number(JSON.parse(localStorage.getItem('sim.endWinding') ?? '0')) || 0; } catch { /* default */ }
         let gap_layers = 2, coil_temp_c = 120, structured_gap = false;
-        try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; } catch { /* default */ }
+        try { gap_layers  = Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '1')) || 1; } catch { /* default */ }
         try { coil_temp_c = Number(JSON.parse(localStorage.getItem('sim.coilTemp')  ?? '120')) || 120; } catch { /* default */ }
         // Belt (mapped) gap mesh — SINGLE SOURCE: the Mesh tab "Structured" toggle.
         // Honest ripple (quarter == full disk), same build as Simulation.
@@ -1212,6 +1213,9 @@ export const useMotorStore = create<MotorState>()(
             return { ok: false, error: 'Standard 6× convergence or angular-quality stamp is missing' };
           }
           await get().applyDescentPoint(v);
+          // The champion's final re-solve applies the gap rule: a level that
+          // passed the ring check becomes the applied machine's default.
+          adoptGapLayers(d?.res, { patchServer: true });
           return { ok: true, provenance: d?.provenance };
         } catch (e: any) {
           return { ok: false, error: String(e?.message ?? e) };

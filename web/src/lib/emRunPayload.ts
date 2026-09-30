@@ -165,7 +165,7 @@ export function buildEmRunPayload(inp: EmRunInputs): Record<string, unknown> {
     outer_air_factor:   readMeshSetting('outerAir',    1.3),
     motion_band:        readMeshSetting('motionBand',  true),
     band_thickness_mm:  readMeshSetting('bandThickness', 0.4),
-    gap_layers:         readMeshSetting('gapLayers',   2),
+    gap_layers:         readMeshSetting('gapLayers',   1),
     n_sectors:          readMeshSetting('nSectors',    1),
     stator_fillet_mm:   0,   // native geometry — extra smoothing removed
     // ALWAYS use the sliding band for the transient torque/back-EMF — meshes

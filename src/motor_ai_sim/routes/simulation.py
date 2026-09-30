@@ -986,7 +986,7 @@ async def build_fem_mesh_2d_sliding_band(
     aspect_ratio:      float = 10.0,    # commercial FEM "Aspect Ratio"
     outer_air_factor:  float = 1.3,
     band_thickness_mm: float = 0.4,
-    gap_layers:        float = 3.0,     # element layers across the air gap
+    gap_layers:        float = 1.0,     # element rows PER SIDE of the slip circle (default 1)
     n_sectors:         int   = 4,
     stator_fillet_mm:  float = 0.0,     # extra Shapely fillet smoothing
     component_mesh:    str   = "",      # JSON {comp: size_mm} per-part mesh size
@@ -2184,7 +2184,7 @@ def _field2d_cache_key(
     geo_mesh:            bool  = True,
     structured_gap:      bool  = True,
     airgap_macro:        bool  = False,
-    gap_layers:          float = 2.0,
+    gap_layers:          float = 1.0,     # the transient run default (layers/side)
     geo:                 Optional[str] = None,
     n_steps_per_period:  int   = 0,
     n_periods:           float = 1.0,
@@ -2288,7 +2288,7 @@ def get_fem_field2d(
     geo_mesh:            bool  = True,
     structured_gap:      bool  = True,
     airgap_macro:        bool  = False,
-    gap_layers:          float = 2.0,
+    gap_layers:          float = 1.0,     # the transient run default (layers/side)
     geo:                 Optional[str] = None,
     n_steps_per_period:  int   = 0,
     n_periods:           float = 1.0,
@@ -2398,7 +2398,7 @@ def _fem_field2d_impl(
     geo_mesh:            bool  = True,    # geometry-driven CDT mesh (Mesh-tab toggle)
     structured_gap:      bool  = True,    # commercial-FEM-style ring gap (merged band)
     airgap_macro:        bool  = False,   # harmonic gap coupling (moving band)
-    gap_layers:          float = 2.0,     # radial gap rings (K of the macro ladder)
+    gap_layers:          float = 1.0,     # layers/side (K of the macro ladder); run default
     geo:                 Optional[str] = None,  # per-request geometry override (multi-user)
     # ── Multi-frame modes (J⟳ / Loss map / thermal source) ───────────────────
     # These used to be a SECOND endpoint (/physics/fem_eddy_field2d) with its own
@@ -4480,7 +4480,8 @@ def get_fem_transient(
     outer_air_factor:    float = 1.3,
     motion_band:         bool  = True,
     band_thickness_mm:   float = 0.4,
-    gap_layers:          float = 3.0,     # ← element layers across the air gap (Mesh slider)
+    gap_layers:          float = 1.0,     # ← element rows PER SIDE of the slip circle (Mesh
+                                          #   "layers/side"); owner 2026-09-30: 1 by default
     n_sectors:           int   = 4,
     stator_fillet_mm:    float = 0.0,
     include_frames:      bool  = False,   # ← if true, accumulate per-step field
@@ -5188,7 +5189,7 @@ def get_fem_transient(
         # The measured gap rule (Coulomb self-check gate + one refined
         # re-solve, fem_solver_2d._solve_with_gap_refinement): a run solved
         # before it existed may carry a mesh-limited ripple, never served here.
-        ("gap_rule", "coulomb_selfcheck_5pct_v1"),
+        ("gap_rule", "coulomb_selfcheck_5pct_step1_v3"),
     ))
     # The pack does not change the FIELD, but it changes the summary's charging
     # block (R_pack sets the bus rise, the capacity sets the C-rate), and the
@@ -5610,6 +5611,10 @@ def get_fem_transient(
                 # Keep the last frame's field for the J⟳ / Loss views.  Free:
                 # the frame is already solved; this stops it being discarded.
                 return_field=bool(field_snapshot))
+            # Gap rule (owner 2026-09-30): a refined level that PASSED becomes
+            # this machine's default gap layers from now on.
+            _persist_gap_layers_default(_sbres, geo_ov=_geo_ov,
+                                        sampling_purpose=sampling_purpose)
             # ── SIX PHASES: L_xy on the full ring, at THIS operating point ──
             # The circulating (x-y) mode drives the sets against each other,
             # which a sector model cannot represent unless the set pattern
@@ -7015,6 +7020,42 @@ def _demag_with_grade(dsum):
     except Exception:   # noqa: BLE001 — garnish, never fatal
         pass
     return out
+
+
+def _persist_gap_layers_default(sbres: dict, *, geo_ov, sampling_purpose: str) -> None:
+    """Make a gap-layer level that PASSED the ring check the machine's default.
+
+    Owner 2026-09-30: when the rotor- and stator-side Coulomb rings disagree
+    the solver steps the gap layers up one per side until they agree
+    (``fem_solver_2d._solve_with_gap_refinement``); the passing level is then
+    written to the live machine's mesh config (``mesh.gap_layers``, the value
+    the Mesh tab and every default run read), and the browser carries it into
+    the active duty's ``mesh.gapLayers`` with the note through the normal duty
+    save.  Only for the LIVE machine (no geometry override: an optimizer
+    candidate, a champion re-check or an agent draft is not the machine the
+    config describes) and only for a reported run — never an optimization
+    candidate (those are never refined anyway).  Recorded in
+    ``gap_refinement.persisted_to`` / ``persist_skipped``; never fails the run.
+    """
+    gr = sbres.get("gap_refinement") if isinstance(sbres, dict) else None
+    if not isinstance(gr, dict) or not gr.get("persist_gap_layers"):
+        return
+    lvl = float(gr["persist_gap_layers"])
+    if geo_ov:
+        gr["persist_skipped"] = "not the live machine (geometry override)"
+        return
+    if sampling_purpose not in ("standard", "cogging_quality"):
+        gr["persist_skipped"] = "sampling purpose %s" % sampling_purpose
+        return
+    try:
+        from motor_ai_sim.api import MeshConfigPatch, update_mesh_config
+        update_mesh_config(MeshConfigPatch(gap_layers=lvl))
+        gr["persisted_to"] = ["mesh config: mesh.gap_layers = %g" % lvl]
+        log.warning("gap rule: %s — mesh.gap_layers = %g is this machine's "
+                    "default from now on", sbres.get("gap_layers_note") or "", lvl)
+    except Exception as exc:     # noqa: BLE001 — bookkeeping never fails a run
+        gr["persist_error"] = "%s: %s" % (type(exc).__name__, exc)
+        log.warning("gap rule: could not persist gap layers %g: %s", lvl, exc)
 
 
 def _ripple_self_check(sbres: dict) -> dict:

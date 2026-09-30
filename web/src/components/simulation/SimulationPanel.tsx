@@ -1019,7 +1019,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         // landed 818 Nm against a 850 Nm target).
         eddy: false, demag, rotor_eddy: false, torque_filter: false,
         mesh_size_mm: readMesh('meshSize', 4.0), min_size_mm: readMesh('minSize', 0.3),
-        outer_air_factor: readMesh('outerAir', 1.3), gap_layers: readMesh('gapLayers', 2),
+        outer_air_factor: readMesh('outerAir', 1.3), gap_layers: readMesh('gapLayers', 1),
         n_sectors: readMesh('nSectors', 1), stator_fillet_mm: 0,
         sliding_band: true, element_order: 2,
         iron_template: readMesh('ironTemplate', true), geo_mesh: readMesh('geoMesh', true),
@@ -1315,8 +1315,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // fixed 1008 ≙ gap_layers=1, so it predicted 120 while the solver used 144 at
   // gap_layers=2: the field kept 60 but the solver snapped it to 72).
   const gapLayers = (() => {
-    try { return Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; }
-    catch { return 2; }
+    try { return Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '1')) || 1; }
+    catch { return 1; }
   })();
   const _slipBase = Math.round(1008 * (Math.max(1, gapLayers) + 2) / 3);
   const SLIP_PER_PERIOD = 24 * Math.max(5, Math.ceil(_slipBase / (24 * Math.max(polePairs, 1))));

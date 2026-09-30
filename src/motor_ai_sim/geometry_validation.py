@@ -318,7 +318,7 @@ _CAUSES: Dict[str, List[str]] = {
         "tooth2_width", "insulation_thickness", "cut_width",
         "num_slots_per_segment", "num_seg"],
     "winding_clipped_by_slot": [
-        "wire_width", "wire_height", "slot_hs", "num_wires_per_slot",
+        "wire_width", "wire_height", "num_wires_per_slot",
         "slot_height", "wire_spacing_y", "insulation_thickness"],
     "winding_copper_double_counted": [
         "wire_width", "wire_spacing_x", "tooth_width", "tooth2_width",
@@ -1075,7 +1075,7 @@ def validate_polygons(polys: Dict[str, Any],
                                                  _t_sl)) if _t_sl else "",
                                             clearance),
                             measured_mm=clearance, limit_mm=nominal,
-                            likely_params=["air_gap", "cut_width", "slot_hs",
+                            likely_params=["air_gap", "cut_width",
                                            "stator_fillet_r1", "tooth_width"]
                                           + (["sleeve_thickness"] if _t_sl
                                              else [])))

@@ -237,6 +237,21 @@ def update_geometry(update: GeometryUpdateModel, request: Request = None):
                     geometry_section["angle_slot"] = 360.0 / (_ns * _sps)
         except Exception:
             pass
+        # ...and, behind the switch, EVERY derived field the block carries (the
+        # radii, slot_width, pitches), not just the counts and angles.  This is
+        # the root of the stale die files (2026-09-30): an edit of slot_height
+        # rewrote slot_height here and left stator_inner_radius at the old
+        # value, then sync_active_die_geometry copied that block into die.yaml.
+        # Off by default — it moves _geometry_fingerprint for machines whose
+        # stored copies are stale; see motor_geometry.fresh_derived_on_write.
+        try:
+            from motor_ai_sim.geometry.motor_geometry import (
+                fresh_derived_on_write, refresh_derived_geometry)
+            if fresh_derived_on_write():
+                geometry_section = refresh_derived_geometry(geometry_section)
+                config["geometry"] = geometry_section
+        except Exception:   # noqa: BLE001 — never fail the save on the refresh
+            log.exception("geometry PUT: derived refresh failed (save proceeds)")
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 

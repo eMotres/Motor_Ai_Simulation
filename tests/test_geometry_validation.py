@@ -192,8 +192,11 @@ class TestConductorAreaIsMeasured:
         assert v.overlap_area_mm2 == pytest.approx(144.0 - 106.8, rel=1e-3)
         assert v.x_mm is not None and v.y_mm is not None
         # points at the knobs that set the section and the space it must fit
-        for knob in ("wire_width", "wire_height", "slot_hs"):
+        for knob in ("wire_width", "wire_height"):
             assert knob in v.likely_params
+        # slot_hs is never read by the geometry builder (owner 2026-09-30):
+        # pointing the user at it would send them to a knob that moves nothing
+        assert "slot_hs" not in v.likely_params
 
     def test_interpenetrating_conductors_report_the_double_count(self):
         """The 37 mm design draws full rectangles that OVERLAP: their areas sum

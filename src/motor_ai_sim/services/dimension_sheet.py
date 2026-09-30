@@ -38,10 +38,15 @@ _MAIN_KEYS = {
     "stator_diameter", "core_thickness", "air_gap",
 }
 _DETAIL_KEYS = {
-    "tooth_width", "tooth2_width", "cut_width", "slot_hs", "slot_height",
+    "tooth_width", "tooth2_width", "cut_width", "slot_height",
     "magnet_height", "rotor_house_height", "wire_width", "wire_height",
     "shaft_height", "sleeve_thickness",
 }
+#: Schema keys that are neither drawn NOR listed in the legend: parameters the
+#: geometry builder never reads.  `slot_hs` (owner 2026-09-14 / 2026-09-30:
+#: "not used at all") is still in the schema and the stored files, but a sheet
+#: that dimensions it in mm tells the reader it shapes the slot, and it does not.
+_NOT_SHOWN_KEYS = {"slot_hs"}
 #: Rendered as a short text note (a count, not a length) near the drawing.
 _COUNT_KEYS = {"num_seg", "num_slots_per_segment", "num_poles_per_segment"}
 #: Rendered as a side note (axial, not visible in a cross-section).
@@ -570,10 +575,6 @@ def _draw_stator_detail(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn:
                      (minx - 2.4, (miny + maxy) / 2.0 - 0.6),
                      _label("cut_width (slot opening)", geo.get("cut_width"), "mm", "float"),
                      fontsize=7.5)
-            _leader(ax, (maxx, maxy),
-                     (maxx + 1.6, maxy + 1.6),
-                     _label("slot_hs (opening height)", geo.get("slot_hs"), "mm", "float"),
-                     fontsize=7.5)
             _leader(ax, (minx, maxy),
                      (minx - 2.2, maxy + 2.0),
                      _label("tooth_width", geo.get("tooth_width"), "mm", "float"), fontsize=7.5)
@@ -581,7 +582,7 @@ def _draw_stator_detail(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn:
                      (maxx + 2.2, miny - 2.0),
                      _label("tooth2_width", geo.get("tooth2_width"), "mm", "float"), fontsize=7.5)
             drawn.update({"wire_width", "wire_height", "slot_height", "cut_width",
-                          "slot_hs", "tooth_width", "tooth2_width"})
+                          "tooth_width", "tooth2_width"})
 
     _zoom_to(ax, xs, ys, pad_x=5.0, pad_y=5.5)
 
@@ -818,27 +819,8 @@ def _draw_sector(ax, geo: Dict[str, Any], regions: Dict[str, Any], drawn: set):
            text_side="below", color="#1f8a5f")
     drawn.add("cut_width")
 
-    # slot_hs — the opening's own (short) radial extent, right at the tip —
-    # own lane, well clear of cut_width's horizontal arrow at the same spot.
-    # Arrow anchored at the slot's own edge (not an abstract lane multiple,
-    # which is what put the LABEL under the tooth's flared shoulder at low
-    # radius); the NAME itself escapes further out, horizontal.
-    slot_hs_h = min(0.06 * (stator_span[1] - stator_span[0]), (cmaxy - cminy) * 0.18) or 0.5
-    slot_hs_x = cminx - 0.35 * max(cmaxx - cminx, 0.5)
-    slot_hs_mid = y_bore_tip + slot_hs_h / 2.0
-    slot_hs_label_y_nudge = r_max * 0.09    # air_gap's own label lands at
-                                             # almost the same height (both
-                                             # near the bore) — nudge clear.
-    # The leader is a short DIAGONAL once nudged (start and end at different
-    # y), so the escape point has to clear the real section at BOTH ends,
-    # not just where the arrow itself is — the far side (whichever needs
-    # more room) decides how far out it goes.
-    slot_hs_esc = min(_esc_x(slot_hs_mid, "left"),
-                       _esc_x(slot_hs_mid + slot_hs_label_y_nudge, "left"))
-    _dim_v(ax, y_bore_tip, y_bore_tip + slot_hs_h, x_dim=slot_hs_x,
-           label=_label("slot_hs", geo.get("slot_hs"), "mm", "float"), color="#1f8a5f",
-           label_x=slot_hs_esc, label_dy=slot_hs_label_y_nudge)
-    drawn.add("slot_hs")
+    # (slot_hs is not dimensioned: the geometry builder never reads it — see
+    # _NOT_SHOWN_KEYS.)
 
     # slot_height — the slot's own (real, envelope) radial span. Escapes
     # LEFT, same as every other name now (detaches it from tooth_width's
@@ -1593,6 +1575,8 @@ def _draw_legend(ax, geo: Dict[str, Any], schema: Dict[str, dict],
     label_of = {g.get("id"): g.get("label", g.get("id")) for g in groups}
     by_group: Dict[str, List[str]] = {}
     for key in schema:
+        if key in _NOT_SHOWN_KEYS:
+            continue
         grp = schema[key].get("group", "other")
         by_group.setdefault(grp, []).append(key)
 

@@ -53,7 +53,10 @@ def _schema_keys() -> set:
     cfg = yaml.safe_load(_CONFIG_PATH.read_text(encoding="utf-8"))
     keys = set((cfg.get("geometry_schema") or {}).keys())
     keys |= set(SCHEMA_FALLBACK.keys())
-    return keys
+    # minus what the sheet deliberately leaves out (slot_hs: never read by the
+    # geometry builder, owner 2026-09-30)
+    from motor_ai_sim.services.dimension_sheet import _NOT_SHOWN_KEYS
+    return keys - set(_NOT_SHOWN_KEYS)
 
 
 # ── the static Help picture ─────────────────────────────────────────────────

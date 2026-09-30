@@ -52,6 +52,17 @@ DERIVED_GEOMETRY_FIELDS = (
 )
 
 
+#: Primary-by-type geometry keys the builder NEVER reads.  ``slot_hs`` is in
+#: the schema and in every stored file, but ``cadquery_geometry`` does not use
+#: it (owner 2026-09-14, again 2026-09-30: "not used at all"; the Fusion export
+#: already leaves it out, ``routes.fusion.FUSION_EXCLUDED_NAMES``).  A
+#: difference in it is therefore never a different machine: the duty-load
+#: guard, the lock check and the report's same-machine test skip it.  It is
+#: deliberately still hashed by ``routes.simulation._geometry_fingerprint``
+#: (the passport / bench keys) — changing that print would orphan them.
+UNUSED_GEOMETRY_KEYS = frozenset({"slot_hs"})
+
+
 def derived_geometry(g: Dict[str, Any]) -> Dict[str, float]:
     """Every derived geometry field, computed from the PRIMARIES in ``g``.
 
@@ -140,6 +151,136 @@ def derived_geometry(g: Dict[str, Any]) -> Dict[str, float]:
         out["pole_pitch"] = 2 * np.pi / n_poles
 
     return out
+
+
+#: Relative tolerance under which a STORED derived value counts as equal to the
+#: freshly derived one.  Stored values were written by the same formulas, so a
+#: consistent file matches to the last bit; the tolerance only absorbs the
+#: ``20`` vs ``20.0`` spelling and last-ulp float noise, and it is what keeps a
+#: consistent document byte-identical after a refresh (see below).
+_DERIVED_REL_TOL = 1e-9
+
+
+def _as_num(v: Any) -> Optional[float]:
+    if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return float(v)
+
+
+def _derived_equal(a: float, b: float) -> bool:
+    return abs(a - b) <= _DERIVED_REL_TOL * max(1.0, abs(a), abs(b))
+
+
+def fresh_derived_values(g: Dict[str, Any]) -> Dict[str, Any]:
+    """Every derived field ``g``'s primaries define, INCLUDING the slot/pole
+    counts in this class's tier (segment form: ``num_seg`` x ``*_per_segment``),
+    and the angles/pitches computed on those counts.
+
+    ``derived_geometry`` itself deliberately leaves the counts to its caller;
+    a STORED geometry document (die.yaml, a configuration, motor_config.yaml)
+    is exactly the caller whose explicit counts can be stale, so they are
+    resolved here from the segment form, as ``MotorGeometryParams`` does."""
+    calc = dict(g)
+    counts: Dict[str, Any] = {}
+    ns = _as_num(g.get("num_seg"))
+    sps = _as_num(g.get("num_slots_per_segment"))
+    pps = _as_num(g.get("num_poles_per_segment"))
+    if ns and ns > 0 and sps and sps > 0:
+        counts["num_slots"] = int(round(ns * sps))
+    if ns and ns > 0 and pps and pps > 0:
+        counts["num_poles"] = int(round(ns * pps))
+    calc.update(counts)
+    out: Dict[str, Any] = dict(counts)
+    out.update(derived_geometry(calc))
+    return out
+
+
+def stale_derived_fields(g: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """``{key: {"stored": v, "fresh": v}}`` for every derived field ``g``
+    CARRIES whose stored value is not what its own primaries give.  Empty for
+    a consistent document.  Keys ``g`` does not carry are not reported."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for k, fv in fresh_derived_values(g).items():
+        if k not in g:
+            continue
+        sv = _as_num(g.get(k))
+        if sv is None or not _derived_equal(sv, float(fv)):
+            out[k] = {"stored": g.get(k), "fresh": fv}
+    return out
+
+
+def refresh_derived_geometry(g: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """A COPY of a stored geometry dict with every derived field it carries
+    recomputed from its own primaries.
+
+    THE rule for stored geometry (die.yaml, configuration yamls, the
+    motor_config.yaml ``geometry:`` block): a derived field is a function of
+    the primaries and the stored copy is never trusted — it went stale on most
+    dies (2026-09-30: CIANO14 40 new stored bore radius 12.1 for inputs that
+    give 12.0, CILN28 carried a 30 mm machine's 9.2/9/3.7 on a Ø160 die), and
+    the duty-load guard then reported a "different geometry" for a duty whose
+    inputs were identical.
+
+    Two properties the callers rely on:
+
+    * a key the dict does NOT carry is NOT added — a refresh never grows a
+      document, so a die that never stored ``slot_pitch`` keeps not storing it;
+    * a stored value that already equals the fresh one (within
+      ``_DERIVED_REL_TOL``) is kept VERBATIM — ``20`` stays ``20``, not
+      ``20.0`` — so refreshing a consistent document is byte-identical and
+      every hash taken over it (``family._build_sig``,
+      ``routes.simulation._geometry_fingerprint``) is unchanged.  Only a
+      genuinely stale value moves.
+    """
+    out = dict(g or {})
+    for k, v in stale_derived_fields(out).items():
+        out[k] = v["fresh"]
+    return out
+
+
+def is_compared_geometry_input(key: str) -> bool:
+    """True for a key that says which MACHINE this is: not derived (a function
+    of the primaries, compared through them) and not unused (``slot_hs``).
+    The one rule every "same machine?" comparison of two stored geometries
+    uses, so a stale derived copy or an unread knob can never read as a
+    different motor."""
+    if key in UNUSED_GEOMETRY_KEYS:
+        return False
+    try:
+        from motor_ai_sim.routes._validation import DERIVED_GEOMETRY_NAMES
+        derived = DERIVED_GEOMETRY_NAMES
+    except Exception:                                  # noqa: BLE001
+        derived = frozenset(DERIVED_GEOMETRY_FIELDS) | {
+            "num_slots", "num_poles", "stator_slot_radius",
+            "rotor_core_radius", "shaft_radius"}
+    return key not in derived
+
+
+#: Environment switch for the WRITE side of the fix (see
+#: ``fresh_derived_on_write``).  Off by default — deliberately.
+FRESH_DERIVED_ENV = "MOTOR_AI_SIM_FRESH_DERIVED"
+
+
+def fresh_derived_on_write() -> bool:
+    """Whether stored geometry is refreshed where it is WRITTEN or SERVED for a
+    write: the geometry PUT's ``motor_config.yaml`` block, the family
+    ``/payload`` and every die/configuration save.
+
+    Off by default because turning it on changes
+    ``routes.simulation._geometry_fingerprint`` for every machine whose die
+    still stores stale derived fields: that print hashes the raw
+    ``motor_config.yaml`` geometry block, the ▶ load copies the die's stored
+    derived values into it, so the Stage A passports (end_effect_passports.json)
+    and the bench Ld/Lq records of those machines are KEYED on the stale
+    numbers (measured 2026-09-30: the CIANO10 200 opt L155/L180 and the
+    CIANO28 85 20SW1200 L13 passports).  The order is: run
+    ``scripts/migrate_derived_geometry.py`` (dry-run, review, then --apply with
+    the passport/bench re-key), THEN set ``MOTOR_AI_SIM_FRESH_DERIVED=1``.
+    Every read-side consumer (comparisons, reports, exports) uses fresh values
+    regardless of this switch — those never feed a stored key."""
+    import os
+    return os.environ.get(FRESH_DERIVED_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 class MotorGeometryParams:

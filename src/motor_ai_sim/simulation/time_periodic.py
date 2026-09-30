@@ -553,15 +553,18 @@ class TimePeriodicEddy:
 
     # ── the start: the static field of every frame, in parallel ──────────
     def static_start(self, A0: np.ndarray, tol: float = 1e-5,
-                     maxit: int = 40) -> Tuple[List[np.ndarray], Dict[str, Any]]:
+                     maxit: int = 40, sequential: bool = False
+                     ) -> Tuple[List[np.ndarray], Dict[str, Any]]:
         """The ∂A/∂t = 0 field of every frame (U_b = I_b/S_b, uniform current
-        in every wire — ``P2Drive.eddy_static_state``'s problem), all frames
-        at once from ONE start ``A0`` (frame 0's static field), each with a
-        factor of its own (released afterwards).  A START for the periodic
-        Newton, so ``tol`` is loose: the eddy reaction the Newton adds is
-        orders of magnitude larger."""
+        in every wire — ``P2Drive.eddy_static_state``'s problem), each with a
+        factor of its own (released afterwards).  Parallel: every frame from
+        ONE start ``A0`` (frame 0's static field) at once; ``sequential``:
+        frame by frame, each from its neighbour (fewer iterations, no
+        parallelism).  A START for the periodic Newton, so ``tol`` is loose:
+        the eddy reaction the Newton adds is orders of magnitude larger."""
         t0 = time.perf_counter()
         its = [0] * self.N
+        prev = [A0]
 
         def one(j):
             fr = self.frames[j]
@@ -570,7 +573,8 @@ class TimePeriodicEddy:
                 U = fr.I_vec / np.maximum(self.S_raw, 1e-300)
                 f = self.f_mag + self.G @ U
                 pd = np.asarray(fr.Pro.multiply(fr.Pro).sum(axis=0)).ravel()
-                A = fr.Pro @ (np.asarray(fr.Pro.T @ A0).ravel() / np.maximum(pd, 1.0))
+                Ast = prev[0] if sequential else A0
+                A = fr.Pro @ (np.asarray(fr.Pro.T @ Ast).ravel() / np.maximum(pd, 1.0))
                 bn = max(float(np.linalg.norm(np.asarray(fr.Pt @ f).ravel()[fr.free])),
                          1e-30)
                 for it in range(maxit):
@@ -596,10 +600,12 @@ class TimePeriodicEddy:
                         lam *= 0.5
                     else:
                         break
+                prev[0] = A
                 return A
             finally:
                 fac.close()
-        out = self._map(one, range(self.N))
+        out = ([one(j) for j in range(self.N)] if sequential
+               else self._map(one, range(self.N)))
         self._tick("static_start", t0)
         return out, {"newton_iterations": list(its), "tol": float(tol)}
 

@@ -7663,8 +7663,8 @@ def fem_transient_sliding_band(
             # frame 0's field at once (measured on the Ø40: 8.5 s sequential,
             # 12.4 s parallel-from-frame-0 with one worker, 6.4 s with four)
             _td_start_mode = str(_os_sb.environ.get(
-                "SB_TDM_START", "static_par" if _td_workers > 1 else "static")
-                or "static").lower()
+                "SB_TDM_START", "static_par" if _td_workers > 1 else "static_seq")
+                or "static_seq").lower()
             _tdm_info["start"] = _td_start_mode
             for _j, (_P, _fr, _Iv, _Is, _m) in enumerate(_td_ops_l):
                 if _td_prev is None:
@@ -7694,10 +7694,12 @@ def fem_transient_sliding_band(
                 _td_U0.append(_Iv / np.maximum(_S_con, 1e-300))
                 _td_prev = _Ast if _td_prev is None or _td_start_mode != "project" \
                     else _td_prev
-                if _td_start_mode == "static_par":
+                if _td_start_mode in ("static_par", "static_seq"):
                     # frame 0 done (cold, as above); every other frame's
-                    # static field in parallel from it
-                    _td_A0, _ssi = _td_solver.static_start(_Ast)
+                    # static field to a loose tolerance: in parallel from
+                    # frame 0, or in sequence from its neighbour
+                    _td_A0, _ssi = _td_solver.static_start(
+                        _Ast, sequential=(_td_start_mode == "static_seq"))
                     _td_U0 = [_o[2] / np.maximum(_S_con, 1e-300)
                               for _o in _td_ops_l]
                     _tdm_info["static_start"] = _ssi

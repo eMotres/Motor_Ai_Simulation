@@ -2805,7 +2805,7 @@ def _torque_png(wf: Dict[str, Any], width_cm: float = 22.0,
         # the voltage chart beside it already does not.  Four decimals on k,
         # like every other place in the document that prints it.
         _sm = wf.get("summary") if isinstance(wf.get("summary"), dict) else {}
-        _kt3 = _numf(_g(_sm, "end3d.k_flux"))
+        _kt3 = torque_factor_3d(_sm)
         _lbl_m = "mean %s" % _fmt(mean, 1, "N·m")
         if _kt3 and 0.5 < _kt3 < 1.5 and abs(_kt3 - 1.0) > 1e-3:
             _lbl_m = "mean %s (2-D; ×%.4f 3-D → %s)" % (
@@ -7102,9 +7102,12 @@ def _pwm_end3d(out: Dict[str, Any], sine: Dict[str, Any],
     k = _numf(base.get("k_flux"))
     if not base or not k:
         return
+    # the torque carries the torque factor (measured k_T, else k_flux)
+    from motor_ai_sim.end3d_factors import torque_factor as _tq
+    kt_ = _tq(base)[0] or k
     t2 = _numf(out.get("T_em_avg_Nm"))
     if t2 is not None:
-        base["T_corrected_Nm"] = abs(t2) * float(k)
+        base["T_corrected_Nm"] = abs(t2) * float(kt_)
     v2 = _numf(out.get("V_line_peak_V"))
     if v2 is not None:
         base["V_line_peak_corrected_V"] = v2 * float(k)
@@ -9446,7 +9449,8 @@ def shaft_view(em: Dict[str, Any], brg: Optional[Dict[str, Any]],
     are None without a bearing model — an unknown friction is not a zero.
     """
     P = _numf(_g(em, "P_mech_W"))
-    k = _numf(_g(em, "end3d.k_flux"))
+    # rotor power carries the torque factor (measured k_T, else k_flux)
+    k = torque_factor_3d(em)
     loss = _numf(_g(em, "P_loss_total_W"))
     x = _numf((brg or {}).get("P_mech_extra_W")) if (brg and brg.get("has_bearings", True)) else None
     gen = str(mode or _g(em, "op_mode") or "").lower().startswith("gen")
@@ -9507,7 +9511,10 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
     friction must never wear the same label as one that includes it.
     """
     T2d = _g(em, "T_em_avg_Nm") or _g(d_duty, "torque_nm")
-    k3d = _g(em, "end3d.k_flux")
+    # the headline torque and power carry the TORQUE factor: measured k_T,
+    # else k_flux (owner 2026-09-30)
+    k3d = torque_factor_3d(em)
+    _kclause = kt_basis_note_of(em)
     P_mech = _g(em, "P_mech_W")
     if P_mech is None and T2d and _g(d_duty, "rpm"):
         P_mech = abs(float(T2d)) * 2 * math.pi * float(_g(d_duty, "rpm")) / 60.0
@@ -9553,8 +9560,8 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
         ["", "", ""],
         ["Torque at the rotor",
          _fmt(float(T2d) * float(k3d) if (T2d and k3d) else T2d, 2, "N·m"),
-         ("2-D average %s × the 3-D end-effect factor %s"
-          % (_fmt(T2d, 2, "N·m"), _fmt(k3d, 4)) if (T2d and k3d) else
+         ("2-D average %s; %s" % (_fmt(T2d, 2, "N·m"), _kclause)
+          if (T2d and k3d) else
           "2-D electromagnetic average over one electrical period; no 3-D "
           "passport, so no end-effect correction")],
         # THE SPEED THE THREE NUMBERS BELOW BELONG TO (user 2026-09-14).  The
@@ -9565,8 +9572,8 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
          "the speed every number in this table belongs to"
          + (" (duty '%s')" % d_duty.get("name") if d_duty.get("name") else "")],
         ["Shaft power", _fmt((P_shaft or 0) / 1000.0 if P_shaft else None, 2, "kW"),
-         ("2-D × the 3-D end-effect factor k = %.4f" % float(k3d)
-          if k3d else "2-D; no 3-D passport for this machine, k = 1 assumed")
+         (_kclause if k3d else
+          "2-D; no 3-D passport for this machine, k = 1 assumed")
          + ((", plus bearings and windage — what the prime mover must supply"
              if gen else ", minus bearings and windage")
             if (brg and sv["P_shaft_W"] is not None) else "")],
@@ -10684,46 +10691,63 @@ def em_k3d_note(k3d: Any) -> str:
 
 
 def torque_factor_3d(src: Any) -> Optional[float]:
-    """The MEASURED 3-D torque factor k_T of a run summary (``end3d.k_T`` or
-    ``end3d.k_torque``), or None.  Owner 2026-09-30: Kt / Km / Km per mass
-    carry k_T only when it was measured, never the flux factor k_flux as a
-    stand-in; without it they are printed plain 2-D."""
-    k = _numf(_g(src or {}, "end3d.k_T"))
-    if k is None:
-        k = _numf(_g(src or {}, "end3d.k_torque"))
-    return k if (k is not None and 0.5 < k <= 1.2) else None
+    """The 3-D factor a TORQUE-proportional number of this run carries: the
+    measured k_T, else the Stage A flux factor k_flux, else None (plain 2-D).
+    Owner 2026-09-30 («если были старые расчёты 3D — применяй пока их»):
+    torque, rotor power, torque per mass and Kt / Km all carry THIS factor, so
+    they stay consistent; KV, ψ_PM and the voltages keep k_flux.  See
+    motor_ai_sim/end3d_factors.py."""
+    from motor_ai_sim.end3d_factors import torque_factor
+    return torque_factor(_g(src or {}, "end3d"))[0]
 
 
-#: The one clause a Kt / Km row carries (owner 2026-09-30).
-KT_2D_NOTE = "2-D — no measured 3-D torque factor"
+def torque_basis_3d(src: Any) -> str:
+    """"3-D" (measured k_T), "3-D, flux factor" or "2-D"."""
+    from motor_ai_sim.end3d_factors import torque_factor
+    return torque_factor(_g(src or {}, "end3d"))[1]
 
 
-def kt_basis_note(k_t: Optional[float]) -> str:
-    return (KT_2D_NOTE if not k_t else
-            "3-D corrected, measured k_T = %s" % _fmt(k_t, 4))
+def kt_basis_note_of(src: Any) -> str:
+    """The one clause a torque / Kt / Km row carries."""
+    from motor_ai_sim.end3d_factors import basis_note, torque_factor
+    return basis_note(*torque_factor(_g(src or {}, "end3d")))
 
 
 def cold_torque_constants(c: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Kt (per line amp), Km, Km per mass of a stored 20 °C block, on the
-    owner's 2026-09-30 basis: 3-D corrected ONLY when the block carries a
-    measured torque factor (``torque_basis == "3-D corrected"``), else the
-    2-D values — which also re-reads blocks written before the rule, whose
-    ``k3d`` column carried the flux factor."""
+    """Kt (per line amp), Km, Km per mass of a stored 20 °C block on the
+    owner's 2026-09-30 basis: the 2-D values × the torque factor — the
+    measured k_T when the block has one, else the block's k_3d (flux factor),
+    else plain 2-D.  Always recomputed from ``two_d``, so a block written under
+    any earlier rule (k_flux on Kt, a declared stand-in, plain 2-D) reads the
+    same and the factor is applied exactly once."""
+    from motor_ai_sim.end3d_factors import BASIS_2D, BASIS_FLUX, BASIS_MEASURED
     c = c or {}
-    two, k3v = dict(c.get("two_d") or {}), dict(c.get("k3d") or {})
-    measured = (str(c.get("torque_basis") or "") == "3-D corrected"
-                and _numf(c.get("k_torque")) is not None)
-    src = k3v if measured else two
+    two = dict(c.get("two_d") or {})
+    kT = _numf(c.get("k_torque"))
+    measured = (kT is not None and str(c.get("torque_basis") or "")
+                in (BASIS_MEASURED, "3-D corrected"))
+    k3 = _numf(c.get("k_3d"))
+    k = kT if measured else (k3 if (k3 and 0.5 < k3 <= 1.2) else None)
+    basis = BASIS_MEASURED if measured else (BASIS_FLUX if k else BASIS_2D)
     delta = str((c.get("point") or {}).get("star_delta")
                 or two.get("star_delta") or "star").lower().startswith("d")
+
+    def _x(key):
+        v = _numf(two.get(key))
+        return (v * k) if (v is not None and k) else v
     return {
-        "kt_line_Nm_per_A": _numf(src.get("Kt_Nm_per_A_line" if delta
-                                          else "Kt_Nm_per_Arms")),
-        "km_Nm_sqrtW": _numf(src.get("Km_Nm_sqrtW")),
-        "km_per_mass_Nm_sqrtW_kg": _numf(src.get("Km_per_mass_Nm_sqrtW_kg")),
-        "k_torque": _numf(c.get("k_torque")) if measured else None,
-        "basis": "3-D corrected" if measured else "2-D",
+        "kt_line_Nm_per_A": _x("Kt_Nm_per_A_line" if delta else "Kt_Nm_per_Arms"),
+        "km_Nm_sqrtW": _x("Km_Nm_sqrtW"),
+        "km_per_mass_Nm_sqrtW_kg": _x("Km_per_mass_Nm_sqrtW_kg"),
+        "k_torque": k,
+        "basis": basis,
     }
+
+
+def kt_basis_note(k: Optional[float], basis: Optional[str] = None) -> str:
+    """One clause for a Kt / Km row given (k, basis)."""
+    from motor_ai_sim.end3d_factors import BASIS_2D, basis_note
+    return basis_note(k, basis or (BASIS_2D if not k else "3-D"))
 
 
 def em_constants_note(k3d: Any, drive: str = "sine",
@@ -10749,12 +10773,12 @@ def em_constants_note(k3d: Any, drive: str = "sine",
     if not k3d:
         return ("No 3-D passport for this geometry, so every constant above is "
                 "the 2-D value as solved." + tail)
-    return ("The two densities above carry k_3d = %.4f; Kt, Km and Km per "
-            "mass are %s; the inductances, resistances, flux linkage and mean "
-            "|B| are the 2-D values as solved."
-            % (float(k3d), ("3-D corrected with the measured k_T = %.4f"
-                            % float(k_t)) if k_t else "2-D (no measured 3-D "
-               "torque factor)") + tail)
+    from motor_ai_sim.end3d_factors import BASIS_FLUX, BASIS_MEASURED, basis_note
+    kq = float(k_t) if k_t else float(k3d)
+    _b = BASIS_MEASURED if (k_t and abs(float(k_t) - float(k3d)) > 1e-12) else BASIS_FLUX
+    return ("Kt, Km, Km per mass and the two densities above are %s; the "
+            "inductances, resistances, flux linkage and mean |B| are the 2-D "
+            "values as solved." % basis_note(kq, _b) + tail)
 
 
 def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
@@ -10883,6 +10907,9 @@ def em_torque_rows(em: Dict[str, Any],
     PWM study §1.7).
     """
     k3d = _g(em, "end3d.k_flux")
+    # torque and power carry the TORQUE factor (measured k_T, else k_flux);
+    # the voltages below keep k_flux (owner 2026-09-30)
+    _ktq = torque_factor_3d(em)
     T2d = _g(em, "T_em_avg_Nm")
     P2d = _g(em, "P_mech_W")
     _pwm_drive = str(drive or "sine") == "pwm"
@@ -10894,8 +10921,11 @@ def em_torque_rows(em: Dict[str, Any],
     # table); one label per quantity (2026-09-13).
     tp.append(["Rotor power T·ω [kW]",
                _fmt(abs(float(P2d)) / 1000.0 if P2d else None, 3),
-               _fmt(abs(float(P2d)) * float(k3d) / 1000.0 if (P2d and k3d) else None, 3)
+               _fmt(abs(float(P2d)) * float(_ktq) / 1000.0 if (P2d and _ktq) else None, 3)
                if k3d else "—"])
+    if k3d:
+        tp.append(["…3-D basis of torque and power", "",
+                   kt_basis_note_of(em)])
     # EVERY flux-proportional row carries BOTH columns (reviewer 2026-09-11:
     # a k_3d-corrected peak beside an uncorrected rms read as a crest factor
     # nobody could reproduce).  The voltages scale with the flux exactly as
@@ -10982,7 +11012,7 @@ def em_torque_rows(em: Dict[str, Any],
     # else on the page (reviewer 2026-09-11: "569.333 − 7.179 = 562.15, equal
     # to neither 553.946 nor 552.49").  Rotor power × k_3d, then the whole
     # electromagnetic loss taken off (generator) or put on (motor).
-    _pr = abs(float(P2d)) * float(k3d) if (P2d and k3d) else (abs(float(P2d)) if P2d else None)
+    _pr = abs(float(P2d)) * float(_ktq) if (P2d and _ktq) else (abs(float(P2d)) if P2d else None)
     _pl = _numf(_g(em, "P_loss_total_W"))
     _gen = str(_g(em, "op_mode") or "").lower().startswith("gen")
     if _pr is not None and _pl is not None:
@@ -11053,13 +11083,12 @@ def em_torque_rows(em: Dict[str, Any],
     _dl = str(_g(em, "star_delta") or "star").lower().startswith("d")
     _kt = _g(em, "Kt_Nm_per_A_line") if (_dl and _g(em, "Kt_Nm_per_A_line") is not None) \
         else _g(em, "Kt_Nm_per_Arms")
-    # Kt carries the MEASURED torque factor only (owner 2026-09-30).
-    _kT3 = torque_factor_3d(em)
+    # Kt carries the same factor as the torque above (owner 2026-09-30).
     tp.append(["Torque constant Kt [N·m/A rms" + (", line" if _dl else "")
                + "]" + _sine_tail,
                _fmt(_kt, 4),
-               (_fmt(_numf(_kt) * _kT3, 4) if (_kT3 and _numf(_kt) is not None)
-                else KT_2D_NOTE) if k3d else "—"])
+               (_fmt(_numf(_kt) * _ktq, 4) if (_ktq and _numf(_kt) is not None)
+                else "—") if k3d else "—"])
     return tp
 
 
@@ -11160,7 +11189,7 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
     # Kt / Km / Km per mass: the MEASURED torque factor or plain 2-D (owner
     # 2026-09-30); blocks written before the rule are re-read the same way.
     _ct = cold_torque_constants(c)
-    _tail_t = "; " + kt_basis_note(_ct["k_torque"])
+    _tail_t = "; " + kt_basis_note(_ct["k_torque"], _ct["basis"])
 
     def R(label, v, d, unit, note=""):
         if v is not None:
@@ -11258,21 +11287,17 @@ def em_constant_rows(em: Dict[str, Any],
     # printed the same quantities × k_3d, so one document carried Km 4.611 and
     # Km 4.416 under identical labels.  The torque constant follows the flux,
     # and Km = Kt / sqrt(R) follows it too.
-    _k3c = _numf(_g(em, "end3d.k_flux"))
-    # Kt / Km / Km per mass: the MEASURED torque factor or plain 2-D (owner
-    # 2026-09-30) — never k_flux.  The two torque densities below keep the
-    # flux factor, as the torque rows of section 3 do.
+    # Kt / Km / Km per mass AND the two densities: the torque factor —
+    # measured k_T, else k_flux, else 2-D (owner 2026-09-30) — the same one
+    # the torque rows of section 3 carry.
     _kTc = torque_factor_3d(em)
 
     def _km(v: Any) -> Optional[float]:
         f = _numf(v)
         return (f * float(_kTc)) if (f is not None and _kTc) else f
 
-    def _kf(v: Any) -> Optional[float]:
-        f = _numf(v)
-        return (f * float(_k3c)) if (f is not None and _k3c) else f
-
-    _kt_tail = "; " + kt_basis_note(_kTc)
+    _kf = _km
+    _kt_tail = "; " + kt_basis_note_of(em)
     # The load angle, for the inductance note below (reviewer 2026-09-14, C6).
     _gam = _numf(_g(em, "gamma_deg"))
     # WHAT THESE TWO ROWS ARE (client review 2026-09-20: *"这个电机 Ld > Lq?
@@ -11369,10 +11394,10 @@ def em_constant_rows(em: Dict[str, Any],
     _p3d = _kf(_g(em, "P_mech_W"))
     if _mtot and _t3d:
         R("Torque per mass", abs(_t3d) / _mtot, 3, "N·m/kg",
-          "torque × k_3d over the total mass %s" % _fmt(_mtot, 3, "kg"))
+          "torque × the 3-D factor over the total mass %s" % _fmt(_mtot, 3, "kg"))
     if _mtot and _p3d:
         R("Rotor power per mass", abs(_p3d) / 1000.0 / _mtot, 3, "kW/kg",
-          "rotor power × k_3d over the same mass")
+          "rotor power × the 3-D factor over the same mass")
     # THE TEMPERATURE THE RESISTANCE BELONGS TO, printed (MJ-4, audit v7).
     _rt = _numf(_g(em, "coil_temp_C"))
     _r_note = ("at this run's winding temperature%s, end windings included"
@@ -13915,7 +13940,7 @@ def pwm_coupled_rows(col: Dict[str, Any]) -> Dict[str, Any]:
     # THE TWO QUANTITIES THAT SAY WHETHER THIS IS ONE POINT (BT-4, 2026-09-16).
     # The block billed every delta to the carrier and printed neither the
     # torque nor the demagnetisation that separate the columns.
-    _k3 = _numf(_g(col.get("em") or {}, "end3d.k_flux"))
+    _k3 = torque_factor_3d(col.get("em") or {})
     _dem_sine = ((sine_em or {}).get("demag")
                  if isinstance((sine_em or {}).get("demag"), dict) else None)
     _dem_pwm = ((col.get("em") or {}).get("demag")
@@ -14843,7 +14868,7 @@ def duty_cycle_torques(cols: Optional[List[Dict[str, Any]]]
             em = c.get("em") or {}
             t2d = _numf(_g(em, "T_em_avg_Nm"))
             if t2d is not None:
-                t = t2d * (_numf(_g(em, "end3d.k_flux")) or 1.0)
+                t = t2d * (torque_factor_3d(em) or 1.0)
         if t is not None:
             out[name] = float(t)
     return out
@@ -17065,7 +17090,7 @@ def duty_overview_rows(cols: List[Dict[str, Any]],
         # 254.81 kW and the run solved 544.3 A.  One duty, one torque: the
         # cover's own, which is the 2-D average times k_3d.
         _em_c = c.get("em") or {}
-        _k_c = _numf(_g(_em_c, "end3d.k_flux"))
+        _k_c = torque_factor_3d(_em_c)
         _t_c = _numf(_g(_em_c, "end3d.T_corrected_Nm"))
         if _t_c is None:
             _t2 = _numf(_g(_em_c, "T_em_avg_Nm")) or _numf(d.get("torque_nm"))
@@ -17278,8 +17303,10 @@ def glossary_rows(em: Dict[str, Any],
          "the angle the duty was saved with."],
         ["k_3d" + (" (this machine: %s)" % _fmt(k3d, 4) if k3d else ""),
          "The 3-D end-effect factor: what the 2-D slice is multiplied by to "
-         "match a full 3-D solve of the same machine. Torque, EMF and shaft "
-         "power carry it; the losses do not."],
+         "match a full 3-D solve of the same machine. EMF, KV and the voltages "
+         "carry the flux factor k_flux; torque, power, Kt and Km carry the "
+         "measured torque factor k_T where one exists, else k_flux; the "
+         "losses carry neither."],
         ["p99.5 / p05",
          "A percentile of a field instead of its extreme, printed beside the "
          "peak as a GAUGE of how singular that peak is. Not the number a part "
@@ -17292,7 +17319,7 @@ def glossary_rows(em: Dict[str, Any],
         ["Kt / Km",
          "Kt is torque per amp (per LINE amp where the table says so); Km is "
          "torque per root watt of copper, the size-independent figure of merit. "
-         "Both are 2-D unless a measured 3-D torque factor exists."],
+         "Both carry the same 3-D factor as the torque."],
         ["THD_LL",
          "Total harmonic distortion of the LINE (terminal) voltage: everything "
          "in the line-to-line waveform that is not the fundamental, per cent of "
@@ -17477,7 +17504,7 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
         """Rotor power × k_3d, minus bearings and windage — the coupling's
         number.  None when the machine has no bearings: an unknown mechanical
         loss is not a zero."""
-        p, k = _pk(c), _e(c, "end3d.k_flux")
+        p, k = _pk(c), torque_factor_3d(c["em"])
         x = _numf((c.get("brg") or {}).get("P_mech_extra_W"))
         if p is None or x is None:
             return None
@@ -17557,8 +17584,8 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     # bearings and windage — three numbers, three rows, each saying which.
     R("Rotor power, 2-D [kW]", _pk, 3)
     R("Rotor power × k_3d [kW]",
-      lambda c: (_pk(c) * float(_e(c, "end3d.k_flux"))
-                 if (_pk(c) is not None and _e(c, "end3d.k_flux")) else None), 3)
+      lambda c: (_pk(c) * float(torque_factor_3d(c["em"]))
+                 if (_pk(c) is not None and torque_factor_3d(c["em"])) else None), 3)
     R("Shaft power [kW]",
       lambda c: (_shaft_kw(c) if _shaft_kw(c) is not None else None), 3)
     # In a delta machine the current the drive delivers is the LINE current
@@ -17719,12 +17746,13 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
                     c, "KV_noload_rpm_per_V_line"), _mag_grade(cols))))
     R("KV, loaded [rpm/V]" + _sine_tail,
       lambda c: _kdiv(c, "KV_rpm_per_V_line"), 2)
-    # Kt / Km: the MEASURED torque factor or plain 2-D (owner 2026-09-30).
+    # Kt / Km: the torque factor — measured k_T, else k_flux (owner
+    # 2026-09-30), the same one the torque row carries.
     def _ktmul(c, v):
         k = torque_factor_3d(c["em"])
         return (v * k) if (v is not None and k) else v
-    _any_kT = any(torque_factor_3d(c["em"]) for c in cols)
-    _kt_lbl = "" if _any_kT else ", 2-D"
+    _any_k = any(torque_factor_3d(c["em"]) for c in cols)
+    _kt_lbl = ", 3-D" if _any_k else ", 2-D"
     R("Kt, line current [N·m/A rms%s]" % _kt_lbl + _sine_tail,
       lambda c: _ktmul(c, _kt(c)), 4)
     R("Km [N·m/sqrt(W)%s]" % _kt_lbl + _sine_tail,

@@ -2316,16 +2316,18 @@ class TestB1MachineConstantsAgreeWithSectionThree:
         from motor_ai_sim import report as R
         return dict((r[0], r[1]) for r in R.em_constant_rows(self.EM))
 
-    def test_kt_km_and_km_per_mass_stay_2d_without_a_measured_k_T(self):
-        """Owner 2026-09-30 (review P22): the flux factor is never a stand-in
-        for the torque factor."""
+    def test_kt_km_and_km_per_mass_carry_the_flux_factor_without_k_T(self):
+        """Owner 2026-09-30 («если были старые расчёты 3D — применяй пока
+        их»): the torque factor is the measured k_T, else k_flux — the same
+        one the torque carries."""
         from motor_ai_sim import report as R
 
         rows = self._rows()
         assert rows["Torque constant Kt per line A"] == \
-            R._fmt(0.3342, 4, "N·m/A rms")
-        assert rows["Motor constant Km"] == R._fmt(4.611, 3, "N·m/√W")
-        assert rows["Km per mass"] == R._fmt(0.1673, 4, "N·m/(√W·kg)")
+            R._fmt(0.3342 * 0.9576, 4, "N·m/A rms")
+        assert rows["Motor constant Km"] == R._fmt(4.611 * 0.9576, 3, "N·m/√W")
+        assert rows["Km per mass"] == \
+            R._fmt(0.1673 * 0.9576, 4, "N·m/(√W·kg)")
 
     def test_a_measured_k_T_goes_on_kt_and_km_once(self):
         from motor_ai_sim import report as R
@@ -2343,9 +2345,9 @@ class TestB1MachineConstantsAgreeWithSectionThree:
         cmp_rows = dict((r[0], r[1]) for r in R.em_compare_rows([col], {})[1])
         rows = self._rows()
         assert rows["Motor constant Km"].split()[0] == \
-            cmp_rows["Km [N·m/sqrt(W), 2-D]"]
+            cmp_rows["Km [N·m/sqrt(W), 3-D]"]
         assert rows["Torque constant Kt per line A"].split()[0] == \
-            cmp_rows["Kt, line current [N·m/A rms, 2-D]"]
+            cmp_rows["Kt, line current [N·m/A rms, 3-D]"]
 
     def test_the_rows_say_what_they_are(self):
         from motor_ai_sim import report as R
@@ -2353,8 +2355,9 @@ class TestB1MachineConstantsAgreeWithSectionThree:
         notes = dict((r[0], r[2]) for r in R.em_constant_rows(self.EM))
         for label in ("Motor constant Km", "Torque constant Kt per line A",
                       "Km per mass"):
-            assert "2-D — no measured 3-D torque factor" in notes[label], label
-        assert "2-D (no measured 3-D torque factor)" in R.em_constants_note(0.9576)
+            assert "flux factor k_flux = 0.9576 (k_T not measured)" in notes[label], label
+        assert "k_T not measured" in R.em_constants_note(0.9576)
+        assert "measured torque factor k_T = 0.9795" in R.em_constants_note(0.9576, "sine", 0.9795)
 
     def test_the_both_columns_footnote_is_not_under_the_one_column_table(self):
         from motor_ai_sim import report as R

@@ -182,10 +182,16 @@ const MetricTile: React.FC<{
   );
 };
 
-/** Tooltip of the Kt / Km tiles (owner 2026-09-30): what they are corrected by. */
-const KT_BASIS_TIP = (basis: string) => (basis === '2-D'
-  ? '2-D: no measured 3-D torque factor exists for this machine, so Kt and Km are the 2-D values — the 3-D flux factor is not applied to them.'
-  : '3-D corrected with the measured 3-D torque factor k_T of the passport.');
+/** Tooltip of the torque / Kt / Km tiles (owner 2026-09-30): which 3-D factor
+ *  they carry — one factor for all of them, so torque and Kt agree. */
+const KT_BASIS_TIP = (basis: string) => (basis === '3-D'
+  ? '3-D corrected with the measured 3-D torque factor k_T of this machine.'
+  : basis === '3-D flux'
+    ? '3-D with the flux factor k_flux(L) — the torque factor k_T is not measured for this machine yet.'
+    : '2-D: no 3-D result exists for this machine.');
+/** Short label suffix of those tiles. */
+const KT_BASIS_LABEL = (basis: string) => (basis === '3-D' ? '3-D'
+  : basis === '3-D flux' ? '3-D flux' : '2-D');
 
 const ConfiguratorPanel: React.FC = () => {
   const { isAdmin } = useAuth();   // editing the slider ranges is admin-only
@@ -929,7 +935,8 @@ const ConfiguratorPanel: React.FC = () => {
               6 KV · Kt · Km · Km/mass
               7 demag koef · saturation koef · total koef */}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label="Torque" value={result.T_Nm} unit="N·m" d={1} base={baseRes.T_Nm} goodHi />
+            <MetricTile label={`Torque · ${KT_BASIS_LABEL(result.kt_km_basis)}`} value={result.T_Nm} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
+              tip={KT_BASIS_TIP(result.kt_km_basis)} />
             <MetricTile label="Power" value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi />
             <MetricTile label="Mass" value={result.mass_kg} unit="kg" d={2} base={baseRes.mass_kg} goodHi={false} />
             <MetricTile label="Efficiency" value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi />
@@ -1058,10 +1065,10 @@ const ConfiguratorPanel: React.FC = () => {
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label="KV (no-load)" value={result.KV_rpm_per_Vline} unit="rpm/V" d={1} base={baseRes.KV_rpm_per_Vline} />
             {result.Kt_Nm_per_A != null && (
-              <MetricTile label={`Kt · ${result.kt_km_basis === '2-D' ? '2-D' : '3-D'}`} value={result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A} goodHi
+              <MetricTile label={`Kt · ${KT_BASIS_LABEL(result.kt_km_basis)}`} value={result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A} goodHi
                 tip={KT_BASIS_TIP(result.kt_km_basis)} />
             )}
-            <MetricTile label={`Km · ${result.kt_km_basis === '2-D' ? '2-D' : '3-D'}`} value={result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
+            <MetricTile label={`Km · ${KT_BASIS_LABEL(result.kt_km_basis)}`} value={result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
               tip={KT_BASIS_TIP(result.kt_km_basis)} />
             <MetricTile label="Km / mass" value={result.Km_per_mass} unit="N·m/(√W·kg)" d={3} base={baseRes.Km_per_mass} goodHi />
           </Box>

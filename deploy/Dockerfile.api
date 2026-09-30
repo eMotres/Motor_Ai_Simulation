@@ -77,8 +77,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # the live server (2026-09-30) -- bump deliberately, re-verify with the build
 # guard below, never via an unpinned resolve.
 #
-# MKL_THREADING_LAYER=SEQUENTIAL is baked in further down (the `api` stage
-# ENV): MKL's libmkl_rt.so dlopen()s its threading backend at RUNTIME, keyed
+# MKL_THREADING_LAYER=SEQUENTIAL is baked in further down (the shared `base`
+# stage ENV, so both the `test` and `api` targets get it): MKL's
+# libmkl_rt.so dlopen()s its threading backend at RUNTIME, keyed
 # on that variable, and only the INTEL layer (the default when unset) touches
 # libiomp5.so -- which this image never installs.  Leaving it unset would not
 # merely fail to accelerate; pypardiso's first real solve would try to

@@ -16,15 +16,19 @@ WHAT IT DOES
   * computes the fresh value of every derived field the file CARRIES — a
     configuration's ``geometry_overrides`` against its die's inputs merged —
     and prints ``file: key stored -> fresh`` for each stale one;
-  * with ``--apply``: writes ``<file>.bak-<date>`` first, then rewrites ONLY
-    the stale ``key: value`` lines in place (text-level: every other byte,
-    CRLF line endings included, stays as it was), and re-parses the result to
-    prove nothing else moved.  A second run finds nothing: idempotent.
+  * with ``--apply``: writes ``<file>.bak-<date>`` first (refused when a
+    same-date backup exists and differs from the file), then replaces ONLY the
+    value token of each stale ``key: value`` line - indentation, spacing,
+    inline comments, CRLF line endings and every other line are kept - via a
+    same-directory temp file + os.replace, after re-parsing the result to prove
+    nothing else moved.  A second run finds nothing: idempotent.
 
 WHAT ELSE MOVES, AND IS REPORTED — never silently re-keyed
   * ``family._build_sig`` hashes the die geometry INCLUDING the derived copies,
-    so every duty result stamped under the stale die reads "computed on an
-    older build" afterwards.  Counted per configuration; ``--restamp-results``
+    and the configuration's overrides, so every duty result stamped under the
+    stale build reads "computed on an older build" afterwards.  Counted per
+    configuration AFTER the whole change set (die and configuration edits);
+    ``--restamp-results``
     (with ``--apply``) moves exactly those stamps to the new signature — the
     one case ``family._restamp_results`` exists for: the build did not change,
     only its description did.
@@ -151,15 +155,22 @@ def _fmt(v: Any) -> str:
     return yaml.safe_dump(v, default_flow_style=True).splitlines()[0]
 
 
-_KEY_RE = re.compile(r"^(\s+)([A-Za-z_][A-Za-z0-9_]*):(\s*)(.*)$")
+#: `  key:<space>value<suffix>` — a PLAIN scalar value (no spaces, no quotes),
+#: then optional trailing spaces and an inline comment.  The indentation, the
+#: spacing after the colon and the suffix are kept verbatim; only the value
+#: token is replaced.  A changed key whose line does not look like this
+#: (quoted, flow-style, multi-line) is refused, never guessed at.
+_KEY_RE = re.compile(r"^(\s+)([A-Za-z_][A-Za-z0-9_]*):([ \t]+)([^\s#'\"{}\[\]][^\s]*)"
+                     r"([ \t]*(?:#.*)?)$")
 
 
 def rewrite_block(text: str, block: str, new: Dict[str, Any]) -> str:
-    """Replace ``key: value`` for every key in ``new`` among the FIRST-LEVEL
-    children of the top-level ``block:`` mapping.  Line endings (LF or CRLF)
-    and every other byte are kept."""
+    """Replace the VALUE token of ``key: value`` for every key in ``new``
+    among the FIRST-LEVEL children of the top-level ``block:`` mapping.  Line
+    endings (LF or CRLF), indentation, post-colon spacing, inline comments
+    and every other line are kept byte for byte."""
     lines = text.splitlines(keepends=True)
-    head = re.compile(r"^%s:\s*$" % re.escape(block))
+    head = re.compile(r"^%s:\s*(#.*)?$" % re.escape(block))
     start = next((i for i, l in enumerate(lines)
                   if head.match(l.rstrip("\r\n"))), None)
     if start is None:
@@ -170,7 +181,7 @@ def rewrite_block(text: str, block: str, new: Dict[str, Any]) -> str:
         raw = lines[j]
         body = raw.rstrip("\r\n")
         eol = raw[len(body):]
-        if not body.strip():
+        if not body.strip() or body.lstrip().startswith("#"):
             continue
         ind = len(body) - len(body.lstrip(" "))
         if ind == 0:
@@ -181,33 +192,60 @@ def rewrite_block(text: str, block: str, new: Dict[str, Any]) -> str:
             continue
         m = _KEY_RE.match(body)
         if m and m.group(2) in new:
-            lines[j] = f"{m.group(1)}{m.group(2)}: {_fmt(new[m.group(2)])}{eol}"
+            lines[j] = (f"{m.group(1)}{m.group(2)}:{m.group(3)}"
+                        f"{_fmt(new[m.group(2)])}{m.group(5)}{eol}")
             done.add(m.group(2))
     missing = set(new) - done
     if missing:
-        raise ValueError(f"keys not found as plain lines: {sorted(missing)}")
+        raise ValueError(f"keys not found as plain `key: value` lines: {sorted(missing)}")
     return "".join(lines)
 
 
 def planned_text(p: Path, kind: str, doc: dict,
-                 ch: Dict[str, Dict[str, Any]]) -> str:
+                 ch: Dict[str, Dict[str, Any]]) -> Tuple[str, dict]:
+    """(new text, new document).  The re-parse of the new text must equal the
+    old document with exactly these values changed — proof nothing else moved."""
     text = p.read_bytes().decode("utf-8")
     new_text = rewrite_block(text, BLOCK_OF[kind],
                              {k: v["fresh"] for k, v in ch.items()})
-    # PROOF: the re-parsed document is the old one with exactly these values.
     want = copy.deepcopy(doc)
     for k, v in ch.items():
         want[BLOCK_OF[kind]][k] = v["fresh"]
-    got = yaml.safe_load(new_text)
-    if got != want:
+    if yaml.safe_load(new_text) != want:
         raise ValueError("re-parse differs from the intended change")
-    return new_text
+    return new_text, want
 
 
-def backup(p: Path, date: str) -> Path:
-    b = p.with_name(f"{p.name}.bak-{date}")
+def backup_path(p: Path, date: str) -> Path:
+    return p.with_name(f"{p.name}.bak-{date}")
+
+
+def check_backup(p: Path, date: str) -> None:
+    """A same-date backup that differs from the file as it is NOW would be
+    kept and the version about to be replaced lost: refuse."""
+    b = backup_path(p, date)
+    if b.exists() and b.read_bytes() != p.read_bytes():
+        raise ValueError(f"{b.name} exists and differs from the current file — "
+                         f"pass another --date")
+
+
+def atomic_write(p: Path, data: bytes) -> None:
+    """Same-directory temp file, fsync, os.replace: an interrupted run leaves
+    either the old file or the new one, never a truncated one."""
+    tmp = p.with_name(f".{p.name}.migrate-tmp")
+    with open(tmp, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+
+
+def write_with_backup(p: Path, data: bytes, date: str) -> Path:
+    check_backup(p, date)
+    b = backup_path(p, date)
     if not b.exists():
         shutil.copy2(p, b)
+    atomic_write(p, data)
     return b
 
 
@@ -223,19 +261,56 @@ def _result_holders(c: dict):
                 yield h
 
 
-def build_sig_impact(die_path: Path, old_die: dict, new_die: dict) -> List[dict]:
+def build_sig_impact(die_dir: Path, new_docs: Dict[Path, dict]) -> List[dict]:
+    """Every configuration of ``die_dir``: its build_sig BEFORE and AFTER the
+    whole planned change set (die AND configuration edits, from ``new_docs``),
+    and how many stored results carry the old one."""
     from motor_ai_sim.routes.family import _build_sig
+    die_p = die_dir / "die.yaml"
+    old_die = load_yaml(die_p)
+    new_die = new_docs.get(die_p, old_die)
     out = []
-    for cf in sorted(die_path.parent.glob("*.yaml")):
+    for cf in sorted(die_dir.glob("*.yaml")):
         if cf.name == "die.yaml" or ".bak" in cf.name:
             continue
-        c = load_yaml(cf)
-        old, new = _build_sig(old_die, c), _build_sig(new_die, c)
-        n_old = sum(1 for h in _result_holders(c) if h.get("build_sig") == old)
-        n_other = sum(1 for h in _result_holders(c)
+        old_c = load_yaml(cf)
+        new_c = new_docs.get(cf, old_c)
+        old, new = _build_sig(old_die, old_c), _build_sig(new_die, new_c)
+        n_old = sum(1 for h in _result_holders(old_c) if h.get("build_sig") == old)
+        n_other = sum(1 for h in _result_holders(old_c)
                       if h.get("build_sig") not in (None, old))
         out.append({"config": cf, "old": old, "new": new,
-                    "results_on_old": n_old, "results_already_other": n_other})
+                    "results_on_old": n_old if old != new else 0,
+                    "results_already_other": n_other})
+    return out
+
+
+def restamp_text(text: str, doc: dict, old: str, new: str) -> str:
+    """Move the result stamps ``build_sig: <old>`` to ``<new>`` — ONLY in the
+    result holders ``family._build_sig`` staleness reads (a duty's ``result``
+    and each ``runs.<drive>.result``).  The text edit touches only lines that
+    are exactly ``build_sig: <old>``; the re-parse must equal ``doc`` with
+    exactly those holders changed, or nothing is written."""
+    want = copy.deepcopy(doc)
+    n = 0
+    for h in _result_holders(want):
+        if h.get("build_sig") == old:
+            h["build_sig"] = new
+            n += 1
+    if not n:
+        return text
+    pat = re.compile(r"^(\s*build_sig:[ \t]+)(['\"]?)%s\2([ \t]*(?:#.*)?)$"
+                     % re.escape(old))
+    lines = text.splitlines(keepends=True)
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        m = pat.match(body)
+        if m:
+            lines[i] = (f"{m.group(1)}{m.group(2)}{new}{m.group(2)}{m.group(3)}"
+                        f"{raw[len(body):]}")
+    out = "".join(lines)
+    if yaml.safe_load(out) != want:
+        raise ValueError("restamp would touch more than the result stamps")
     return out
 
 
@@ -325,7 +400,7 @@ def main(argv=None) -> int:
                     help="suffix of the .bak-<date> copies")
     ap.add_argument("--restamp-results", action="store_true",
                     help="with --apply: move results stamped with the old "
-                         "build_sig of a migrated die to its new one")
+                         "build_sig of a migrated die/configuration to the new one")
     ap.add_argument("--fp-base", help="the workspace's motor_config.yaml to "
                     "simulate ▶ loads on (fingerprint impact)")
     ap.add_argument("--passports", help="end_effect_passports.json to check")
@@ -345,7 +420,9 @@ def main(argv=None) -> int:
     print(f"== migrate_derived_geometry {mode} ({datetime.now():%Y-%m-%d %H:%M})")
     n_files = n_fields = n_err = 0
     field_count: Dict[str, int] = {}
-    plans: List[Tuple[Path, str, dict, dict, str]] = []
+    texts: Dict[Path, str] = {}        # path -> the text the run will write
+    new_docs: Dict[Path, dict] = {}    # path -> its re-parsed document
+    die_dirs = set()
     for p, kind in iter_targets(a.roots):
         try:
             doc = load_yaml(p)
@@ -356,13 +433,15 @@ def main(argv=None) -> int:
             continue
         if nd:
             print(f"   {p}: {nd} duty geometry stamp(s) carry stale derived "
-                  f"copies — records, left as they are")
+                  f"copies - records, left as they are")
         if not ch:
             continue
         try:
-            new_text = planned_text(p, kind, doc, ch)
+            new_text, new_doc = planned_text(p, kind, doc, ch)
+            if a.apply:
+                check_backup(p, a.date)
         except Exception as e:                             # noqa: BLE001
-            print(f"!! {p}: cannot rewrite safely ({e}) — fix by hand"); n_err += 1
+            print(f"!! {p}: cannot rewrite safely ({e}) - fix by hand"); n_err += 1
             continue
         n_files += 1
         n_fields += len(ch)
@@ -371,49 +450,66 @@ def main(argv=None) -> int:
         for k, v in sorted(ch.items()):
             field_count[k] = field_count.get(k, 0) + 1
             print(f"     {k}: {v['stored']!r} -> {v['fresh']!r}")
-        plans.append((p, kind, doc, ch, new_text))
+        texts[p], new_docs[p] = new_text, new_doc
+        if kind in ("die", "configuration"):
+            die_dirs.add(p.parent)
 
-    # ── what else moves ─────────────────────────────────────────────────────
+    # ── build_sig: after the WHOLE change set (die + configuration edits) ──
     restamps: List[Tuple[Path, str, str, int]] = []
-    rekeys: Dict[str, str] = {}
-    for p, kind, doc, ch, _t in plans:
-        if kind != "die":
-            continue
-        new_doc = copy.deepcopy(doc)
-        for k, v in ch.items():
-            new_doc["geometry"][k] = v["fresh"]
+    for dd in sorted(die_dirs):
         try:
-            imp = build_sig_impact(p, doc, new_doc)
+            imp = build_sig_impact(dd, new_docs)
         except Exception as e:                             # noqa: BLE001
-            print(f"   {p.parent.name}: build_sig impact unavailable ({e})")
-            imp = []
+            print(f"   {dd.name}: build_sig impact unavailable ({e})")
+            continue
         for r in imp:
-            print(f"   build_sig {p.parent.name}/{r['config'].stem}: {r['old']} -> "
+            if r["old"] == r["new"]:
+                continue
+            print(f"   build_sig {dd.name}/{r['config'].stem}: {r['old']} -> "
                   f"{r['new']}; {r['results_on_old']} result stamp(s) on the old "
                   f"sig would read 'older build'"
                   + (f" ({r['results_already_other']} already on another sig)"
                      if r["results_already_other"] else ""))
             if r["results_on_old"]:
                 restamps.append((r["config"], r["old"], r["new"], r["results_on_old"]))
-        if fps is not None:
-            for cf in sorted(p.parent.glob("*.yaml")):
+    if a.apply and a.restamp_results:
+        for cf, old, new, _n in restamps:
+            try:
+                base_text = texts.get(cf) or cf.read_bytes().decode("utf-8")
+                base_doc = new_docs.get(cf) or load_yaml(cf)
+                t2 = restamp_text(base_text, base_doc, old, new)
+                check_backup(cf, a.date)
+            except Exception as e:                         # noqa: BLE001
+                print(f"!! {cf}: restamp refused ({e})"); n_err += 1
+                continue
+            texts[cf] = t2
+            new_docs[cf] = yaml.safe_load(t2)
+
+    # ── _geometry_fingerprint: simulated ▶ loads, before vs after ──────────
+    rekeys: Dict[str, str] = {}
+    if fps is not None:
+        for dd in sorted(die_dirs):
+            die_p = dd / "die.yaml"
+            old_die = load_yaml(die_p)
+            new_die = new_docs.get(die_p, old_die)
+            for cf in sorted(dd.glob("*.yaml")):
                 if cf.name == "die.yaml" or ".bak" in cf.name:
                     continue
-                c = load_yaml(cf)
+                old_c = load_yaml(cf)
+                new_c = new_docs.get(cf, old_c)
                 try:
-                    old = fps.load(payload_geo(doc, c), refreshed=False)
-                    new = fps.load(payload_geo(new_doc, c), refreshed=True)
+                    old = fps.load(payload_geo(old_die, old_c), refreshed=False)
+                    new = fps.load(payload_geo(new_die, new_c), refreshed=True)
                 except Exception as e:                     # noqa: BLE001
-                    print(f"   fingerprint {p.parent.name}/{cf.stem}: unavailable ({e})")
+                    print(f"   fingerprint {dd.name}/{cf.stem}: unavailable ({e})")
                     continue
                 hit_p = old in passports
                 hit_b = [k for k in bench if k.startswith(old + "_")]
-                print(f"   fingerprint {p.parent.name}/{cf.stem}: {old} -> {new}"
-                      + (f"  PASSPORT keyed on the old print" if hit_p else "")
+                print(f"   fingerprint {dd.name}/{cf.stem}: {old} -> {new}"
+                      + ("  PASSPORT keyed on the old print" if hit_p else "")
                       + (f"  BENCH x{len(hit_b)} keyed on the old print" if hit_b else ""))
                 if (hit_p or hit_b) and old != new:
                     rekeys[old] = new
-    if fps is not None:
         lo, ln = fps.live(False), fps.live(True)
         hit_p = lo in passports
         hit_b = [k for k in bench if k.startswith(lo + "_")]
@@ -423,36 +519,31 @@ def main(argv=None) -> int:
             rekeys[lo] = ln
 
     print(f"== {n_files} file(s), {n_fields} field(s) stale"
-          + (f", {n_err} file(s) need a hand" if n_err else ""))
+          + (f", {n_err} problem(s) need a hand" if n_err else ""))
     for k in sorted(field_count):
         print(f"     {k}: {field_count[k]} file(s)")
     if restamps:
         print(f"== build_sig: {sum(r[3] for r in restamps)} result stamp(s) in "
               f"{len(restamps)} configuration(s) would read 'older build' "
-              + ("— restamped (--restamp-results)" if a.apply and a.restamp_results
-                 else "— NOT restamped (needs --apply --restamp-results)"))
+              + ("- restamped (--restamp-results)" if a.apply and a.restamp_results
+                 else "- NOT restamped (needs --apply --restamp-results)"))
     if rekeys:
         print(f"== fingerprint: {len(rekeys)} passport/bench print(s) change "
-              + ("— re-keyed additively (--rekey)" if a.apply and a.rekey
-                 else "— NOT re-keyed (needs --apply --rekey)"))
+              + ("- re-keyed additively (--rekey)" if a.apply and a.rekey
+                 else "- NOT re-keyed (needs --apply --rekey)"))
 
     if not a.apply:
         print("== dry-run: nothing written")
         return 1 if n_err else 0
+    if n_err:
+        # all or nothing: a half-applied migration (radii fixed, their results
+        # not restamped, a backup refused) is worse than none
+        print(f"== APPLY ABORTED: {n_err} problem(s) above - nothing written")
+        return 1
 
-    for p, kind, doc, ch, new_text in plans:
-        b = backup(p, a.date)
-        p.write_bytes(new_text.encode("utf-8"))
+    for p, t in texts.items():
+        b = write_with_backup(p, t.encode("utf-8"), a.date)
         print(f"   wrote {p} (backup {b.name})")
-    if a.restamp_results:
-        for cf, old, new, _n in restamps:
-            t = cf.read_bytes().decode("utf-8")
-            t2 = re.sub(r"(build_sig:\s*['\"]?)%s(['\"]?)" % re.escape(old),
-                        lambda m: m.group(1) + new + m.group(2), t)
-            if t2 != t:
-                backup(cf, a.date)
-                cf.write_bytes(t2.encode("utf-8"))
-                print(f"   restamped {cf}")
     if a.rekey and rekeys:
         for path, store, bench_like in ((a.passports, passports, False),
                                         (a.bench, bench, True)):
@@ -468,10 +559,9 @@ def main(argv=None) -> int:
                         store[nk] = {**store[k], "rekeyed_from": k}
                         added += 1
             if added:
-                backup(Path(path), a.date)
-                Path(path).write_text(json.dumps(store, ensure_ascii=False, indent=1),
-                                      encoding="utf-8")
-                print(f"   re-keyed {added} entr(y/ies) in {path}")
+                write_with_backup(Path(path), json.dumps(
+                    store, ensure_ascii=False, indent=1).encode("utf-8"), a.date)
+                print(f"   re-keyed {added} entries in {path}")
     return 1 if n_err else 0
 
 

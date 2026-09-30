@@ -1390,13 +1390,19 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
     kT = None
     try:
         _e3 = s.get("end3d") or {}
-        kT = float(_e3.get("k_T") if _e3.get("k_T") is not None
-                   else _e3.get("k_torque"))
+        # the MEASURED k_T only — end3d.k_torque is the resolved factor and
+        # may be the flux factor (end3d_factors.enrich)
+        kT = float(_e3.get("k_T"))
     except (TypeError, ValueError):
         kT = None
     if kT is not None and not (kT > 0.0):
         kT = None
-    torque_basis = "3-D corrected" if kT is not None else "2-D"
+    # Owner 2026-09-30 (refining #90): an existing 3-D result is used — the
+    # measured k_T, else the flux factor k_flux — so Kt/Km follow the torque.
+    from motor_ai_sim.end3d_factors import BASIS_2D, BASIS_FLUX, BASIS_MEASURED
+    kTq = kT if kT is not None else k3
+    torque_basis = (BASIS_MEASURED if kT is not None else
+                    (BASIS_FLUX if k3 is not None else BASIS_2D))
 
     def _n(key):
         v = s.get(key)
@@ -1456,8 +1462,8 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         if v is None:
             continue
         two_d[key] = v
-        if kT is not None:
-            k3d[key] = round(v * kT, 6)
+        if kTq is not None:
+            k3d[key] = round(v * kTq, 6)
     for key in _COLD_INV_FLUX:
         v = _n(key)
         if v is None:
@@ -1485,7 +1491,7 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         "k_3d": k3,
         # the MEASURED torque factor or None, and what the torque constants
         # below therefore are
-        "k_torque": kT,
+        "k_torque": kTq,
         "torque_basis": torque_basis,
         "two_d": two_d,
         "k3d": k3d,
@@ -1497,12 +1503,12 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         "magnet_grade": (str(_grade) if _grade else None),
         # WHICH Kt A CATALOGUE WOULD PRINT: per LINE amp, which in star is the
         # winding's and in delta is the winding's ÷ √3.
-        "kt_line_Nm_per_A": ((k3d if kT is not None else two_d).get(
+        "kt_line_Nm_per_A": ((k3d if kTq is not None else two_d).get(
             "Kt_Nm_per_A_line" if delta else "Kt_Nm_per_Arms")),
         "kv_line_rpm_per_V": ((k3d if k3 is not None else two_d).get(
             "KV_noload_rpm_per_V_line")),
-        "km_Nm_sqrtW": ((k3d if kT is not None else two_d).get("Km_Nm_sqrtW")),
-        "km_per_mass_Nm_sqrtW_kg": ((k3d if kT is not None else two_d).get(
+        "km_Nm_sqrtW": ((k3d if kTq is not None else two_d).get("Km_Nm_sqrtW")),
+        "km_per_mass_Nm_sqrtW_kg": ((k3d if kTq is not None else two_d).get(
             "Km_per_mass_Nm_sqrtW_kg")),
         "R_phase_20_ohm": two_d.get("R_phase_ohm"),
         "mass_kg": two_d.get("mass_total_kg"),
@@ -1516,9 +1522,9 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
             % (COLD_CONSTANTS_C,
                ("" if k3 is None else
                 " ψ_PM carries k_3d = %.4f and KV is ÷ k_3d." % k3)
-               + (" Kt, Km and Km/mass are 3-D corrected (measured k_T = %.4f)."
-                  % kT if kT is not None else
-                  " Kt, Km and Km/mass are 2-D (no measured 3-D torque factor)."))),
+               + (" Kt, Km and Km/mass: %s."
+                  % __import__("motor_ai_sim.end3d_factors", fromlist=["x"])
+                  .basis_note(kTq, torque_basis)))),
     }
 
 

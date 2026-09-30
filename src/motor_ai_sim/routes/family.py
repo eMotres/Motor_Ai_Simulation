@@ -5057,7 +5057,9 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
                     _V = _s2.get("V_line_peak_V")
                     _s2["end3d"] = {
                         **_e3,
-                        "T_corrected_Nm": (round(float(_T) * float(_e3["k_flux"]), 3)
+                        # torque factor: measured k_T, else k_flux
+                        "T_corrected_Nm": (round(float(_T) * float(
+                            _e3.get("k_torque") or _e3["k_flux"]), 3)
                                            if _T is not None else None),
                         "V_line_peak_corrected_V": (round(float(_V) * float(_e3["k_flux"]), 2)
                                                     if _V else None),

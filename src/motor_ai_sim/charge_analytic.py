@@ -142,12 +142,20 @@ def machine_point(pp: Dict[str, Any], I: float, rpm: float, *,
     rpm0 = float(pp.get("rpm0") or 0.0)
     R0 = float(pp.get("R0_ohm") or 0.0)
     k3 = _k_end(pp)
+    # the TORQUE carries the measured k_T when the passport has one, else the
+    # flux factor (owner 2026-09-30; twin of motorScaling.ts); the EMF below
+    # keeps the flux factor.
+    try:
+        _kT = float(((pp.get("end3d") or {}).get("k_T")))
+    except (TypeError, ValueError):
+        _kT = None
+    kq = _kT if (_kT is not None and 0.5 < _kT <= 1.2) else k3
 
     if cur.get("I_A") and len(cur["I_A"]) >= 3:
         T = _interp([float(x) for x in cur["I_A"]],
-                    [abs(float(x)) for x in cur["T_Nm"]], I) * k3
+                    [abs(float(x)) for x in cur["T_Nm"]], I) * kq
     else:
-        T = abs(float(pp.get("T0_Nm") or 0.0)) * (I / I0 if I0 else 1.0) * k3
+        T = abs(float(pp.get("T0_Nm") or 0.0)) * (I / I0 if I0 else 1.0) * kq
 
     def grid(rows: List[List[float]]) -> float:
         Is = [float(x) for x in lg["I_A"]]

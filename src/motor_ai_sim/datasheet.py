@@ -1617,7 +1617,7 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         # flux factor on them prints 2-D too.
         from motor_ai_sim.report import cold_torque_constants, kt_basis_note
         _ct20 = cold_torque_constants(_c20)
-        _kb = kt_basis_note(_ct20["k_torque"])
+        _kb = kt_basis_note(_ct20["k_torque"], _ct20["basis"])
         one("Kt at 20 °C (N·m/A rms)", _ct20["kt_line_Nm_per_A"],
             "per line amp; " + _kb + "; " + _tail20, 4)
         one("Km at 20 °C (N·m/√W)", _ct20["km_Nm_sqrtW"],

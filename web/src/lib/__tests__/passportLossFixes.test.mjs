@@ -118,21 +118,23 @@ test('PWM: doubling the turns at fixed NI quarters the field-driven deltas', () 
   near(r2.pwm_ripple_pct, (p.ripple0_pct ?? 1) + 2 / 2, 1e-9, 'PWM torque ripple');
 });
 
-// Owner 2026-09-30 (review P22): Kt / Km carry a MEASURED 3-D torque factor or
-// none — the flux factor k_flux, which the torque itself carries, is taken
-// back out of them.
-test('Kt / Km: 2-D without a measured k_T, 3-D corrected with one', () => {
-  const p2 = base({ end3d: { k_flux: 0.95 } });
-  const r2 = scaleMotor(p2, K(p2));
+// Owner 2026-09-30 («если были старые расчёты 3D — применяй пока их»): the
+// torque and Kt / Km carry ONE factor — the measured k_T, else the flux
+// factor — so torque and Kt agree; the EMF keeps the flux factor.
+test('torque, Kt, Km: measured k_T, else k_flux, else 2-D — one factor', () => {
   const p0 = base();
   const r0 = scaleMotor(p0, K(p0));                     // no 3-D at all
-  near(r2.T_Nm, r0.T_Nm * 0.95, 1e-12, 'torque carries k_flux');
-  near(r2.Kt_Nm_per_A, r0.Kt_Nm_per_A, 1e-12, 'Kt stays 2-D');
-  near(r2.Km_Nm_sqrtW, r0.Km_Nm_sqrtW, 1e-12, 'Km stays 2-D');
-  assert.equal(r2.kt_km_basis, '2-D');
+  assert.equal(r0.kt_km_basis, '2-D');
+  const p2 = base({ end3d: { k_flux: 0.95 } });
+  const r2 = scaleMotor(p2, K(p2));
+  near(r2.T_Nm, r0.T_Nm * 0.95, 1e-12, 'torque × k_flux');
+  near(r2.Kt_Nm_per_A, r0.Kt_Nm_per_A * 0.95, 1e-12, 'Kt follows the torque');
+  near(r2.Km_Nm_sqrtW, r0.Km_Nm_sqrtW * 0.95, 1e-12, 'Km follows the torque');
+  assert.equal(r2.kt_km_basis, '3-D flux');
   const p3 = base({ end3d: { k_flux: 0.95, k_T: 0.98 } });
   const r3 = scaleMotor(p3, K(p3));
+  near(r3.T_Nm, r0.T_Nm * 0.98, 1e-12, 'torque × k_T');
   near(r3.Kt_Nm_per_A, r0.Kt_Nm_per_A * 0.98, 1e-12, 'Kt × k_T');
-  near(r3.Km_Nm_sqrtW, r0.Km_Nm_sqrtW * 0.98, 1e-12, 'Km × k_T');
-  assert.equal(r3.kt_km_basis, '3-D corrected');
+  near(r3.Vemf_peak_V, r0.Vemf_peak_V * 0.95, 1e-12, 'EMF keeps k_flux');
+  assert.equal(r3.kt_km_basis, '3-D');
 });

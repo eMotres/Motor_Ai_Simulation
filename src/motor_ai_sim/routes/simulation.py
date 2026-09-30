@@ -6917,9 +6917,12 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
         from motor_ai_sim.workspace import root as _ws_root
         _p = _ws_root() / "end_effect_passports.json"
         store = _json.loads(_p.read_text(encoding="utf-8")) or {}
+        from motor_ai_sim.end3d_factors import enrich as _e3_enrich
         rec = store.get(str(geo_fp))
         if isinstance(rec, dict):
-            return dict(rec)
+            # + the torque factor (measured k_T, else k_flux) — owner
+            # 2026-09-30, motor_ai_sim/end3d_factors.py
+            return _e3_enrich(dict(rec), geo_fp, geo)
         if exact:
             return None
         # No passport for THIS geometry.  User 2026-09-03: the coefficient must
@@ -6937,12 +6940,12 @@ def _end3d_lookup(geo_fp: Optional[str], geo: Optional[dict] = None,
             return None
         _when = lambda v: str(v.get("adopted_utc") or v.get("generated_utc") or "")  # noqa: E731
         k, v = max(cands, key=lambda kv: _when(kv[1]))
-        return {**v, "inherited": True, "inherited_from": k,
+        return _e3_enrich({**v, "inherited": True, "inherited_from": k,
                 "inherited_note": (
                     f"coefficient of an EARLIER geometry of this machine "
                     f"({desc}, passport {_when(v)[:10] or 'undated'}) — the "
                     f"current geometry has no Stage A passport yet; recompute "
-                    f"to confirm or replace it")}
+                    f"to confirm or replace it")}, geo_fp, geo)
     except Exception:   # noqa: BLE001 — no passport is a normal state
         return None
 
@@ -8087,12 +8090,15 @@ def _build_transient_summary(
         # geometry fingerprint), with the 2D numbers it corrects: a 13 mm stack
         # on Ø85 spills 7.3 % of its flux past the laminations, and the 2D
         # solve cannot see it.
+        # The TORQUE carries the torque factor — the measured k_T, else the
+        # flux factor (owner 2026-09-30); the voltage the flux factor.
         "end3d": (lambda _r: (None if not _r else {
             **_r,
-            "T_corrected_Nm": round(_Tavg * float(_r["k_flux"]), 3),
+            "T_corrected_Nm": round(_Tavg * float(_r.get("k_torque")
+                                                  or _r["k_flux"]), 3),
             "V_line_peak_corrected_V": (
                 round(_Vlpk * float(_r["k_flux"]), 2) if _Vlpk else None),
-        }))(_end3d_lookup(sbres.get("geo_fingerprint"))),
+        }))(_end3d_lookup(sbres.get("geo_fingerprint"), _geo_cfg)),
         # Bench Ld/Lq — the LCR-meter measurement, simulated: small-signal
         # values at the I≈0 iron state, per machine + connection.  Cache READ
         # only (this builder also runs on restore rebuilds); the live-machine

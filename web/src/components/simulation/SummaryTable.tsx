@@ -244,7 +244,9 @@ export interface TransientSummary {
             V_line_peak_corrected_V?: number | null;
             /** MEASURED 3-D torque factor (Stage B), when a passport has one —
              *  the only factor Kt / Km may carry (owner 2026-09-30) */
-            k_T?: number | null } | null;
+            k_T?: number | null;
+            /** the k_T was measured on an earlier geometry of this machine */
+            k_T_inherited?: boolean } | null;
   bench_ldq?: BenchLdq | null;
   /** Coil temperature the run was solved at [°C] — R and copper loss are
    *  quoted at it; the R@25°C view rescales the R cells from it. */
@@ -698,26 +700,31 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // (plain computation, NOT a hook — this sits below the empty-state early
   // return, where a hook would violate the rules-of-hooks)
   const k3d = summary.end3d?.k_flux ?? null;
-  // Kt / Km / Km per mass: the MEASURED 3-D torque factor or plain 2-D (owner
-  // 2026-09-30) — never k_flux, which is a flux (EMF, KV) factor.
+  // THE TORQUE FACTOR (owner 2026-09-30, «если были старые расчёты 3D —
+  // применяй пока их»): torque, rotor power, the densities, Kt and Km carry
+  // the MEASURED k_T when this machine has one, else the flux factor k_flux;
+  // voltages, KV and ψ_PM always carry k_flux.  One factor for all torque
+  // numbers, so torque and Kt stay consistent.
   const kTraw = summary.end3d?.k_T;
-  const kT = apply3d && kTraw != null && kTraw > 0.5 && kTraw <= 1.2 ? kTraw : null;
-  const ktBasis = kT != null ? '3-D' : '2-D';
-  const ktBasisTip = kT != null
-    ? `3-D corrected with the measured torque factor k_T = ${kT.toFixed(4)}. `
-    : (apply3d && k3d != null
-      ? '2-D: no measured 3-D torque factor exists for this machine, so Kt and Km are printed as solved — the 3-D flux factor is not applied to them. '
-      : '');
+  const kTmeas = kTraw != null && kTraw > 0.5 && kTraw <= 1.2 ? kTraw : null;
+  const kTq = kTmeas ?? k3d;
+  const ktBasis = kTmeas != null ? '3-D' : '3-D flux';
+  const ktBasisTip = !(apply3d && k3d != null) ? ''
+    : kTmeas != null
+      ? `3-D corrected with the measured torque factor k_T = ${kTmeas.toFixed(4)}`
+        + (summary.end3d?.k_T_inherited ? ' (measured on an earlier geometry of this machine)' : '') + '. '
+      : `3-D with the flux factor k_flux = ${(k3d ?? 1).toFixed(4)} — k_T not measured for this machine. `;
   const s = (() => {
     if (!apply3d || k3d == null) return summary;
     const k = k3d;
-    const Pm = summary.P_mech_W * k;
+    const kq = kTq ?? k;
+    const Pm = summary.P_mech_W * kq;
     return {
       ...summary,
-      T_em_avg_Nm: summary.T_em_avg_Nm * k,
+      T_em_avg_Nm: summary.T_em_avg_Nm * kq,
       P_mech_W: Pm,
-      torque_per_mass_Nm_kg: summary.torque_per_mass_Nm_kg * k,
-      power_per_mass_W_kg: summary.power_per_mass_W_kg * k,
+      torque_per_mass_Nm_kg: summary.torque_per_mass_Nm_kg * kq,
+      power_per_mass_W_kg: summary.power_per_mass_W_kg * kq,
       V_phase_peak_V: summary.V_phase_peak_V * k,
       V_phase_rms_V: summary.V_phase_rms_V * k,
       V_line_peak_V: summary.V_line_peak_V * k,
@@ -735,11 +742,11 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         ? summary.KV_noload_rpm_per_V_line / k : summary.KV_noload_rpm_per_V_line,
       psi_pm_Wb: summary.psi_pm_Wb != null ? summary.psi_pm_Wb * k : summary.psi_pm_Wb,
       // Km and Km/mass are NOT flux-scaled (owner 2026-09-30): they carry
-      // the MEASURED torque factor k_T or stay 2-D — see ktBasis below.
-      Km_Nm_sqrtW: summary.Km_Nm_sqrtW != null && kT != null
-        ? summary.Km_Nm_sqrtW * kT : summary.Km_Nm_sqrtW,
-      Km_per_mass_Nm_sqrtW_kg: summary.Km_per_mass_Nm_sqrtW_kg != null && kT != null
-        ? summary.Km_per_mass_Nm_sqrtW_kg * kT : summary.Km_per_mass_Nm_sqrtW_kg,
+      // the torque factor, like the torque (see ktBasis)
+      Km_Nm_sqrtW: summary.Km_Nm_sqrtW != null
+        ? summary.Km_Nm_sqrtW * kq : summary.Km_Nm_sqrtW,
+      Km_per_mass_Nm_sqrtW_kg: summary.Km_per_mass_Nm_sqrtW_kg != null
+        ? summary.Km_per_mass_Nm_sqrtW_kg * kq : summary.Km_per_mass_Nm_sqrtW_kg,
       efficiency: (Pm > 0 && summary.P_loss_total_W > 0)
         ? Pm / (Pm + summary.P_loss_total_W) : summary.efficiency,
       // The charging card is an energy balance on the shaft power, so it moves
@@ -750,7 +757,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       // and stay — the balance gap is restated against the corrected headline.
       battery_charge: summary.battery_charge ? (() => {
         const b = summary.battery_charge;
-        const Pin = b.P_mech_in_W * k;
+        const Pin = b.P_mech_in_W * kq;
         const Pch = Pin - b.P_loss_machine_W;
         const R = b.R_pack_ohm > 0 ? b.R_pack_ohm : 0;
         const Voc = b.V_oc_V > 0 ? b.V_oc_V : 0;
@@ -1291,10 +1298,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
 
       {/* ── Row 1 — torque, power, mass, efficiency, ripple ───────────────── */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        <Cell label="Torque T_em"
+        <Cell label={apply3d && k3d != null ? `Torque T_em · ${ktBasis}` : 'Torque T_em'}
           value={fmt(s.T_em_avg_Nm, Math.abs(s.T_em_avg_Nm) < 0.1 ? 4 : 2)}
           unit="N·m" accent="blue"
-          tooltip="Average electromagnetic torque from Maxwell stress integral over one electrical period"/>
+          tooltip={ktBasisTip + "Average electromagnetic torque over one electrical period."}/>
         <Cell label={tx('mechPower')} value={`${fmt(pShaft / 1000, 3)}`} unit="kW"
           accent="blue"
           tooltip={mechKnown
@@ -1731,7 +1738,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           // rescaled copy `s`).  No cell at I=0 — T/0 is not a constant.
           // Kt from the 2-D torque × the MEASURED k_T only (owner 2026-09-30).
           const kt = (summary.T_em_avg_Nm != null && s.I_phase_rms_A > 0)
-            ? summary.T_em_avg_Nm * (kT ?? 1) / s.I_phase_rms_A : null;
+            ? s.T_em_avg_Nm / s.I_phase_rms_A : null;
           return kt != null && Number.isFinite(kt) ? (
             <Cell label={apply3d && k3d != null ? `Kt · ${ktBasis}` : 'Kt'}
               value={fmt(kt, kt < 0.1 ? 4 : 3)} unit="N·m/A"

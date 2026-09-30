@@ -246,13 +246,12 @@ def test_cold_constants_use_k_T_when_measured():
     assert k["k3d"]["Km_Nm_sqrtW"] == pytest.approx(0.4 * 0.9795, abs=1e-9)
     assert k["k3d"]["psi_pm_Wb"] == pytest.approx(0.01 * 0.952, abs=1e-9)
     assert k["k3d"]["KV_noload_rpm_per_V_line"] == pytest.approx(50.0 / 0.952, abs=1e-6)
-    assert k["torque_basis"] == "3-D corrected"
+    assert k["torque_basis"] == "3-D"
 
 
-def test_cold_constants_stay_2d_without_a_measured_k_T():
-    """Owner 2026-09-30: no flux-factor stand-in on Kt / Km."""
+def test_cold_constants_use_k_flux_without_a_measured_k_T():
+    """Owner 2026-09-30 (refining #90): an existing 3-D result is used."""
     k = _cold({"k_flux": 0.952})
-    assert "Kt_Nm_per_Arms" not in k["k3d"] and "Km_Nm_sqrtW" not in k["k3d"]
-    assert k["kt_line_Nm_per_A"] == pytest.approx(0.1)
-    assert k["torque_basis"] == "2-D" and k["k_torque"] is None
-    assert k["k3d"]["psi_pm_Wb"] == pytest.approx(0.01 * 0.952, abs=1e-9)
+    assert k["k3d"]["Kt_Nm_per_Arms"] == pytest.approx(0.1 * 0.952, abs=1e-9)
+    assert k["torque_basis"] == "3-D, flux factor"
+    assert k["k_torque"] == pytest.approx(0.952)

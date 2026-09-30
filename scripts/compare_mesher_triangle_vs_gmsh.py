@@ -191,6 +191,8 @@ def run(spec_path, out_path):
     # study knobs (e.g. SB_SKIN_H1_FRAC, SB_SLEEVE_LAYERS) set BEFORE any import
     os.environ.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
     y, geo, duty, mats, st = _compose(spec["dies"], *spec["case"])
+    # a duty without saved mesh settings runs with the ones named here (recorded)
+    st = dict(st, **(spec.get("settings") or {}))
     sd, wnd = _write_sandbox_config(y, geo, mats, duty, st,
                                     [spec.get("live_config"), spec["dies"]])
     import importlib.util
@@ -297,6 +299,18 @@ def run(spec_path, out_path):
         "versions": _versions(),
         "P_in_W": f("P_elec_in_W"), "P_mech_W": f("P_mech_avg_W"),
         "balance_residual_rel": ((r.get("power_balance") or {}).get("residual_rel")),
+        # new defaults (#88): Coulomb virtual-work torque + measured gap rule
+        "torque_method": r.get("torque_method") or r.get("torque_mean_source"),
+        "T_avg_coulomb_Nm": f("T_avg_coulomb_Nm"),
+        "T_ripple_pp_coulomb_Nm": f("T_ripple_pp_coulomb"),
+        "T_ripple_pp_Nm": f("T_ripple_pp_Nm"),
+        "coulomb": {k: v for k, v in (r.get("coulomb_torque") or {}).items()
+                    if k in ("available", "unavailable_reason", "layer_self_check",
+                             "T_avg_coulomb_Nm", "T_ripple_pp_coulomb", "layers")},
+        "gap_refinement": r.get("gap_refinement"),
+        "gap_layers_effective": f("gap_layers_effective"),
+        "mesher": r.get("mesher"),
+        "eddy_settled": r.get("eddy_settled"),
         "kwargs": {k: v for k, v in kw.items() if k != "geo_override"},
         "mesh_build_events": r.get("mesh_build_events"),
         "mesh_build_notes": r.get("mesh_build_notes"),

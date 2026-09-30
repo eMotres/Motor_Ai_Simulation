@@ -7545,6 +7545,15 @@ def fem_transient_sliding_band(
             _td_fwd, _mi_f = _td_map(0.5, +1.0)
             if _td_back is None or _td_fwd is None:
                 _td_half_why = "rotor mesh not pole periodic (%s)" % (_mi_b,)
+            else:
+                # the magnets must alternate exactly: the magnet source is
+                # invariant under "one pole back, negated"
+                _fh = _td_apply(_td_back, True, f_mag2)
+                _fdev = float(np.linalg.norm(_fh - f_mag2)
+                              / max(float(np.linalg.norm(f_mag2)), 1e-300))
+                if _fdev > 1e-9:
+                    _td_half_why = ("magnet source not pole-antisymmetric "
+                                    "(%.3g)" % _fdev)
         _td_neg = _td_half_why is None
         if not _td_neg:
             _td_back, _mi_b = _td_map(1.0, -1.0)
@@ -7634,8 +7643,13 @@ def fem_transient_sliding_band(
             _td_A0: List[np.ndarray] = []
             _td_U0: List[np.ndarray] = []
             _td_prev = None
-            _td_start_mode = str(_os_sb.environ.get("SB_TDM_START", "static_par")
-                                 or "static_par").lower()
+            # sequential static solves (each warm-started from its neighbour)
+            # are cheaper in serial; in parallel every frame starts from
+            # frame 0's field at once (measured on the Ø40: 8.5 s sequential,
+            # 12.4 s parallel-from-frame-0 with one worker, 6.4 s with four)
+            _td_start_mode = str(_os_sb.environ.get(
+                "SB_TDM_START", "static_par" if _td_workers > 1 else "static")
+                or "static").lower()
             _tdm_info["start"] = _td_start_mode
             for _j, (_P, _fr, _Iv, _Is, _m) in enumerate(_td_ops_l):
                 if _td_prev is None:
@@ -7678,8 +7692,12 @@ def fem_transient_sliding_band(
             _t_s = _t.time()
             _st = _td_solver.solve(_td_A0, _td_U0)
             _tdm_info["t"]["newton"] = _t.time() - _t_s
-            _tdm_info["solve"] = {k_: v_ for k_, v_ in _st.items() if k_ != "t"}
+            _tdm_info["solve"] = {k_: (list(v_) if isinstance(v_, list) else v_)
+                                  for k_, v_ in _st.items() if k_ != "t"}
             _tdm_info["solve"]["t"] = dict(_st["t"])
+            _td_cnt0 = {k_: _st.get(k_) for k_ in (
+                "gmres_iterations", "jacobian_factorizations", "back_solves",
+                "residual_evals", "sweeps")}
             if not _st.get("converged"):
                 raise RuntimeError(
                     "TDM: the periodic Newton did not converge (max frame rrel "
@@ -7820,7 +7838,9 @@ def fem_transient_sliding_band(
                 _tdm_info["t"]["resolve"] = _t.time() - _t_s
                 _tdm_info["resolve"] = {k_: v_ for k_, v_ in _st2.items()
                                         if k_ in ("converged", "newton_iterations",
-                                                  "rrel_max", "gmres_iterations")}
+                                                  "rrel_max")}
+                for k_, v_ in _td_cnt0.items():
+                    _tdm_info["resolve"][k_] = int(_st2.get(k_, 0) or 0) - int(v_ or 0)
                 if not _st2.get("converged"):
                     raise RuntimeError("TDM: the orbit re-solve on the ratcheted "
                                        "magnet did not converge")

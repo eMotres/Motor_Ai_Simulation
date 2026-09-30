@@ -1025,7 +1025,8 @@ def _em_detail(doc, D: Dict[str, Any]) -> None:
     if len(_crows) > 1:
         _h(doc, "Machine constants", 2)
         _table(doc, _crows, size=10.5, widths_cm=[6.4, 3.6, 12.0])
-        _p(doc, R.em_constants_note(R._g(em, "end3d.k_flux"), _drive(D)),
+        _p(doc, R.em_constants_note(R._g(em, "end3d.k_flux"), _drive(D),
+                                    R.torque_factor_3d(em)),
            size=9.5,
            italic=True, color=NOTE)
     # …AND THE SAME CONSTANTS AT 20 °C (owner 2026-09-18) — the numbers a

@@ -205,16 +205,20 @@ export interface CouplingBlock {
   constants_20c?: ColdConstants;
 }
 
-/** The 20 °C block.  `two_d` is what the solver produced; `k3d` is the same
- *  quantities under this geometry's 3-D passport, by §4's own conventions —
- *  Kt, Km, Km/mass and Ψ_PM × k_3d, KV ÷ k_3d (rpm per volt goes as 1/flux).
- *  `k3d` is empty and `k_3d` null on a machine with no passport. */
+/** The 20 °C block.  `two_d` is what the solver produced; `k3d` holds the
+ *  3-D-corrected values: Ψ_PM × k_3d and KV ÷ k_3d (flux factor), and Kt, Km,
+ *  Km/mass × k_torque ONLY when a torque factor was MEASURED — otherwise those
+ *  stay 2-D (owner 2026-09-30).  `torque_basis` says which. */
 export interface ColdConstants {
   coil_temp_c: number;
   magnet_temp_c: number;
   point?: { rpm?: number; I_phase_rms?: number; gamma_deg?: number;
             drive?: string; star_delta?: 'star' | 'delta' };
   k_3d?: number | null;
+  /** measured 3-D torque factor, or null */
+  k_torque?: number | null;
+  /** what kt / km below are: '3-D corrected' or '2-D' */
+  torque_basis?: '3-D corrected' | '2-D' | null;
   two_d?: Record<string, number | string>;
   k3d?: Record<string, number>;
   /** the four a catalogue prints — corrected where there is a passport */

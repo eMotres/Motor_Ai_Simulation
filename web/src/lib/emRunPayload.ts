@@ -22,6 +22,7 @@
  */
 import { currentGeoJson, currentMatJson } from './apiAuth';
 import { EDDY_DEFAULT_STEPS } from './eddySteps';
+import { storedMeshFields } from './meshSettings';
 
 /** The excitation sources the transient accepts. */
 export type DriveKind =
@@ -160,13 +161,11 @@ export function buildEmRunPayload(inp: EmRunInputs): Record<string, unknown> {
     gamma_deg:          inp.gamma_deg,
     I_phase_rms:        inp.I_phase_rms,
     ...driveFields(inp),
-    mesh_size_mm:       readMeshSetting('meshSize',    4.0),
-    min_size_mm:        readMeshSetting('minSize',     0.3),
-    outer_air_factor:   readMeshSetting('outerAir',    1.3),
+    // Mesh-tab numbers: only the ones this browser holds; the backend fills
+    // the rest from the machine's saved Mesh settings (never a browser default).
+    ...storedMeshFields(),
     motion_band:        readMeshSetting('motionBand',  true),
     band_thickness_mm:  readMeshSetting('bandThickness', 0.4),
-    gap_layers:         readMeshSetting('gapLayers',   2),
-    n_sectors:          readMeshSetting('nSectors',    1),
     stator_fillet_mm:   0,   // native geometry — extra smoothing removed
     // ALWAYS use the sliding band for the transient torque/back-EMF — meshes
     // ONCE and rotates the rotor through a moving band (clean, physical T(t)),

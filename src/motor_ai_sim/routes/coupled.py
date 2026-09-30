@@ -104,6 +104,7 @@ from motor_ai_sim.simulation.eddy_steps import (
     EDDY_DEFAULT_STEPS_PER_PERIOD as _EDDY_STEPS)
 
 log = logging.getLogger(__name__)
+from motor_ai_sim.mesh_settings import resolve_gap_layers as _resolve_gap_layers  # noqa: E402
 
 
 async def _material_override_dep(mat: Optional[str] = Query(default=None)):
@@ -437,6 +438,17 @@ def _with_eddy_steps(body: Dict[str, Any]) -> Dict[str, Any]:
     except ValueError as exc:
         raise _refuse(str(exc), ["n_steps_per_period"])
     return out
+
+
+def _mesh_kw(body: Dict[str, Any], keys) -> Dict[str, Any]:
+    """The Mesh-tab settings for ``keys``: the body's, else the machine's saved
+    Mesh settings, else the labelled fallback (mesh_settings) — owner
+    2026-09-30: no path substitutes a mesh default of its own."""
+    from motor_ai_sim.mesh_settings import resolve_mesh_settings
+    vals, _ = resolve_mesh_settings({k: body.get(k) for k in
+                                     ("mesh_size_mm", "min_size_mm", "outer_air_factor",
+                                      "gap_layers", "n_sectors")})
+    return {k: vals[k] for k in keys}
 
 
 def _f(body: Dict[str, Any], key: str, default: float) -> float:
@@ -3668,14 +3680,14 @@ def _pwm_loss_map(body: Dict[str, Any], em: Dict[str, Any],
         n_periods=_f(body, "n_periods", 1.0),
         eddy=True, rotor_eddy=True,
         coil_temp_c=float(coil_temp_c), magnet_temp_c=magnet_temp_c,
-        mesh_size_mm=_f(body, "mesh_size_mm", 3.0),
-        min_size_mm=_f(body, "min_size_mm", 0.3),
-        outer_air_factor=_f(body, "outer_air_factor", 1.3),
-        n_sectors=int(body.get("n_sectors") or 1),
+        # Mesh settings only from the Mesh tab / the machine (mesh_settings).
+        **_mesh_kw(body, ("mesh_size_mm", "min_size_mm", "outer_air_factor",
+                          "n_sectors")),
         stator_fillet_mm=_f(body, "stator_fillet_mm", 0.0),
-        # The RUN's default when the body omits it (get_fem_transient: 3.0) —
-        # a 2.0 here keyed the probe to a gap the run never meshed.
-        gap_layers=_f(body, "gap_layers", 3.0),
+        # The value the RUN resolved: the body's (Mesh tab), else the
+        # machine's saved Mesh setting (mesh_settings) — never a default of
+        # this probe's own, which once keyed it to a gap the run never meshed.
+        gap_layers=_resolve_gap_layers(body.get("gap_layers"))[0],
         component_mesh=str(body.get("component_mesh") or ""),
         pole_copy=bool(body.get("pole_copy", False)),
         iron_template=bool(body.get("iron_template", True)),
@@ -3898,10 +3910,9 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
         n_steps_per_period=int(n_steps_per_period
                                or body.get("n_steps_per_period") or _EDDY_STEPS),
         n_periods=_f(body, "n_periods", 1.0),
-        mesh_size_mm=_f(body, "mesh_size_mm", 3.0),
-        min_size_mm=_f(body, "min_size_mm", 0.3),
-        outer_air_factor=_f(body, "outer_air_factor", 1.3),
-        n_sectors=int(body.get("n_sectors") or 1),
+        # Mesh settings only from the Mesh tab / the machine (mesh_settings).
+        **_mesh_kw(body, ("mesh_size_mm", "min_size_mm", "outer_air_factor",
+                          "n_sectors")),
         component_mesh=str(body.get("component_mesh") or ""),
         geo=body.get("geo"),
         coil_temp_c=float(coil_temp_c),
@@ -3995,10 +4006,9 @@ def _register_answer_pass(phase: str, body: Dict[str, Any],
             n_steps_per_period=int(n_steps_per_period
                                    or body.get("n_steps_per_period") or 12),
             n_periods=_f(body, "n_periods", 1.0),
-            mesh_size_mm=_f(body, "mesh_size_mm", 3.0),
-            min_size_mm=_f(body, "min_size_mm", 0.3),
-            outer_air_factor=_f(body, "outer_air_factor", 1.3),
-            n_sectors=int(body.get("n_sectors") or 1),
+            # Mesh settings only from the Mesh tab / the machine (mesh_settings).
+            **_mesh_kw(body, ("mesh_size_mm", "min_size_mm", "outer_air_factor",
+                              "n_sectors")),
             coil_temp_c=float(coil_temp_c),
             component_mesh=str(body.get("component_mesh") or ""),
             geo=body.get("geo"),
@@ -6937,10 +6947,9 @@ def _cr_point_kwargs(body: Dict[str, Any]) -> Dict[str, Any]:
         I_phase_rms=_f(body, "I_phase_rms", 0.0),
         n_steps_per_period=int(body.get("n_steps_per_period") or _EDDY_STEPS),
         n_periods=_f(body, "n_periods", 1.0),
-        mesh_size_mm=_f(body, "mesh_size_mm", 3.0),
-        min_size_mm=_f(body, "min_size_mm", 0.3),
-        outer_air_factor=_f(body, "outer_air_factor", 1.3),
-        n_sectors=int(body.get("n_sectors") or 1),
+        # Mesh settings only from the Mesh tab / the machine (mesh_settings).
+        **_mesh_kw(body, ("mesh_size_mm", "min_size_mm", "outer_air_factor",
+                          "n_sectors")),
         component_mesh=str(body.get("component_mesh") or ""),
         geo=body.get("geo"),
         coil_temp_c=_f(body, "coil_temp_c", 120.0),

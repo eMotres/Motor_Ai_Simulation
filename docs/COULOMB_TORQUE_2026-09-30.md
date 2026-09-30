@@ -360,46 +360,69 @@ checked, not assumed:
   constant 0.00073 N·m offset with almost no AC. On the static mesh it has
   0.0027–0.0036 N·m RMS of AC.
 
-### 6.3 The rule (implemented)
+### 6.3 The rule (implemented; owner decisions of 2026-09-30)
 
 A geometry rule of the form "radial element ≤ X·gap" cannot be fitted to this. At 1
 layer per side the radial element is half the gap on every machine: Ø40 0.10 mm, L13
 0.15 mm, L155 0.35 mm. The only machine that fails, Ø40, fails on one mesh and passes on
 another at the same gap and the same X. What decides it is the mesh that gets built,
-and only the solved field can measure that. So the rule is measured on every run:
+and only the solved field can measure that. So:
 
-1. Every run computes the Coulomb self-check ε (free: two ring integrals per frame).
-2. **Gate:** ε ≤ 5 % of max(p-p, 0.5 % of |mean|). The ripple error measured on Ø40
+1. **Mesh settings come only from the Mesh tab** (owner decision, final). That means gap
+   layers and the other four Mesh keys: mesh size, min size, outer air and sectors.
+   * Every run path — Simulation, coupled loop, field views, optimizer, sweeps,
+     passports, MCP / agent drafts — takes them from the request (the Mesh tab / the
+     saved duty's `mesh.*`).
+   * If the request does not carry a key, the machine's saved Mesh settings supply it
+     (`mesh_settings.py`, the `mesh:` block that duty activation and the Mesh tab
+     write). A path with no Mesh context of its own runs on the base machine's config:
+     the agent-draft sandbox copies the base machine's mesh block and its duty's
+     `mesh.*`, and passports run on the loaded machine.
+   * Only if the machine has no saved value does the labelled last-resort fallback
+     apply (gap layers 1 per side). The result says so in `mesh_settings_source` /
+     `mesh_settings_note`, and the card shows "Mesh: fallback".
+   * The browser sends only the Mesh keys it holds, never browser-side defaults.
+   * The optimizer and sweeps use the Mesh tab's gap layers for their candidates.
+2. Every run computes the Coulomb self-check ε (free: two ring integrals per frame).
+   **Gate:** ε ≤ 5 % of max(p-p, 0.5 % of |mean|). The ripple error measured on Ø40
    static was 0.3–0.55 × ε (19.4 % → +10.6 % ripple, 3.0 % → +0.9 %), so the gate
    keeps the ripple error near 3 %. The 0.5 %-of-mean floor is the owner's absolute
    ripple tolerance, so a nearly flat waveform is not refined for nothing.
-3. **Refine once:** if the gate fails, `em_transient_eval` solves the run again at
-   gl′ = min(4, max(gl + 1, ⌈gl·(ε/4 %)^(1/1.5)⌉)) layers per side. The target is 4 %.
-   The cap of 4 per side is measured: Ø40 static passes there (0.51 %), and on L155
-   more layers did not lower ε (§6.1).
-   The order 1.5 is measured, not P2's nominal 2: on the Ø40 static mesh ε fell with
-   order 1.39 (rated) / 1.14 (no-load) from 1 to 2 per side, 2.2 from 2 to 3, and
-   1.7 / 1.5 from 1 to 3.
-   The re-solve uses the SAME slip ring (`slip_per_period` pinned), so the rotor angles
-   and the step snap do not move; the ring density was shown not to matter (§3.3).
-   Examples: Ø40 static rated 1/side at 19.4 % → 3 (measured 3.0 %, passes); no-load
-   1/side at 11.7 % → 3 (measured 2.2 %, passes); rated 2/side at 7.4 % → 4.
-4. The result records `gap_refinement` (both solves, both ε values, the first solve's
-   T_avg, ripple and wall time) and a `gap_layers_note`. A run that still fails keeps
-   `ripple_mesh_limited = True`, and the Simulation card shows the badge. Internal probes
-   (d-axis / ψ_PM / Ld-Lq) are never refined. `SB_GAP_REFINE=0` switches the re-solve
-   off.
-5. A run whose eddy warm-up did not settle is never refined. Its self-check measures the
-   leftover transient, and a finer mesh cannot fix that (L155 at 2 per side). The
-   result says so in `gap_refinement.skipped_reason`.
-6. The flat floor the owner first approved (3 per side) is kept as a fallback switch,
-   `SB_GAP_LAYERS_MIN=3`. It is off by default. On the measured shipped duties it would
-   cost +7.5 % to +50 % wall time for ≤ 0.1 % torque and ≤ 0.01 % loss. On L155, 2 per
-   side already doubled the wall time and did not settle.
+3. **Step up while the rings disagree:** `em_transient_eval` re-solves with ONE more
+   layer per side (1 → 2 → 3 → 4, capped at 4) until the gate passes. Each re-solve uses
+   the SAME slip ring (`slip_per_period` pinned), so the rotor angles and the step snap
+   do not move; the ring density was shown not to matter (§3.3). The cap of 4 is
+   measured: Ø40 static passes there (0.51 %), and on L155 more layers did not lower ε
+   (§6.1). Ø40 static rated: 1/side 19.4 % → 2/side 7.4 % → 3/side 3.0 %, which passes.
+4. **The passing level becomes the machine's default:**
+   * The Simulation route writes it to the live machine's mesh config
+     (`mesh.gap_layers`). This happens only for a run with no geometry override and a
+     reported purpose (`_persist_gap_layers_default`).
+   * The browser writes `mesh.gapLayers`, plus the note in `mesh.gapLayersNote`. The
+     duty save carries every `mesh.*` key into the duty, so the level lands in the
+     duty's `mesh.gapLayers`.
+   * Note text: "gap layers 1→3 after ring mismatch".
+   * The machine's next runs start at the passing level instead of failing again.
+   * A run that still fails at 4/side persists nothing and keeps
+     `ripple_mesh_limited = True` (badge on the card).
+5. **Optimizer:** candidates (`sampling_purpose="optimization"`) are solved at the Mesh
+   tab's gap layers and never refined. Each candidate's metrics carry `ripple_self_check_rel`,
+   `ripple_mesh_limited` and `gap_layers_per_side`. The winner's final re-solve
+   (`cogging_quality`) uses the rule. If it refines, the passing level rides with the
+   point (`gap_layers_persist`, `gap_layers_note`), and Apply makes it the applied
+   machine's default (web `adoptGapLayers`, which also PATCHes the mesh config).
+6. **Unsettled eddy runs are refined like any other.** This corrects an earlier version
+   that skipped them. The time-periodic (TDM) solve of L155 at 2/side, fully converged,
+   read the same 18 % self-check and +4.1 % iron loss as the unsettled march, so that
+   number is a property of the mesh, not a leftover transient. The note says when the
+   first solve had not settled (`eddy_unsettled`).
+7. Never refined: internal probes (d-axis / ψ_PM / Ld-Lq), the harmonic macro gap, and
+   runs with `SB_GAP_REFINE=0`. The flat floor of 3 per side stays available as a
+   fallback switch, `SB_GAP_LAYERS_MIN=3`; it is off by default.
 
-Cost: runs that pass (every shipped duty measured) pay nothing extra. A run that fails
-pays one more solve at the refined mesh, which costs about 1.5× the first. On Ø40,
-going from 1 to 3 per side added +50 % wall time (§6.1).
+Cost: runs that pass (every shipped duty measured at 1/side) pay nothing extra. A failing
+run pays one solve per extra level, but only once per machine, because the passing level
+is kept.
 
 ### 6.4 End to end through the Simulation route (branch code, Ø40 rated, 36 steps)
 

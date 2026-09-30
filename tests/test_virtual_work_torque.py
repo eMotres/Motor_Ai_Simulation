@@ -401,17 +401,11 @@ def test_gap_floor_helper(monkeypatch):
     assert sbd.effective_gap_layers(float("nan")) == 3.0
 
 
-def test_gap_layers_for_self_check_rule():
-    from motor_ai_sim.simulation.virtual_work_torque import gap_layers_for_self_check as g
-    assert g(1.0, 0.194) == 3.0        # Ø40 static, rated: 19.4 % -> 3/side (3.0 % measured)
-    assert g(1.0, 0.117) == 3.0        # Ø40 static no-load 11.7 % -> 3 (2.2 % measured)
-    assert g(2.0, 0.074) == 4.0        # Ø40 static rated at 2/side, 7.4 %
-    assert g(1.0, 0.021) is None       # Ø40 shipped duty, 2.1 %: passes
-    assert g(1.0, 0.06) == 2.0         # just over the gate: one more layer
-    assert g(2.0, 0.30) == 4.0         # capped at 4/side
-    assert g(4.0, 0.50) is None        # already at the cap
-    assert g(3.0, 0.068) == 4.0        # L155 at 3/side (6.8 %) -> the cap
-    assert g(1.0, None) is None
+def test_next_gap_layers_steps_one_per_side_to_the_cap():
+    from motor_ai_sim.simulation.virtual_work_torque import next_gap_layers as n
+    assert [n(g, 0.194) for g in (1.0, 2.0, 3.0, 4.0)] == [2.0, 3.0, 4.0, None]
+    assert n(1.0, 0.021) is None       # Ø40 shipped duty, 2.1 %: passes
+    assert n(1.0, None) is None
 
 
 def test_self_check_uses_the_ripple_scale_floor():
@@ -429,53 +423,178 @@ def _fake_result(eps, gl, ring=144):
             "coulomb_torque": {"layer_self_check": {"rel_to_ripple_scale": eps}}}
 
 
-def test_gap_refinement_resolves_once_on_the_same_ring(monkeypatch):
+def test_gap_refinement_steps_up_until_the_rings_agree(monkeypatch):
     from motor_ai_sim.simulation import fem_solver_2d as fs
     calls = []
+    # Ø40-like: 1/side 19.4 %, 2/side 7.4 %, 3/side 3.0 % -> passes at 3
+    eps_at = {1.0: 0.194, 2.0: 0.074, 3.0: 0.030, 4.0: 0.005}
 
     def fake(**kw):
         calls.append(kw)
-        return _fake_result(0.194 if len(calls) == 1 else 0.03, kw["gap_layers"])
+        return _fake_result(eps_at[kw["gap_layers"]], kw["gap_layers"])
     monkeypatch.setattr(fs, "fem_transient_sliding_band", fake)
     monkeypatch.delenv("SB_GAP_REFINE", raising=False)
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
-    assert len(calls) == 2
-    assert calls[1]["gap_layers"] == 3.0 and calls[1]["slip_per_period"] == 144
+    assert [c["gap_layers"] for c in calls] == [1.0, 2.0, 3.0]
+    assert all(c.get("slip_per_period") == 144 for c in calls[1:])
     gr = out["gap_refinement"]
-    assert gr["applied"] and gr["gap_layers_per_side"] == 3.0
+    assert gr["applied"] and gr["passed"] and gr["persist_gap_layers"] == 3.0
+    assert [a["gap_layers_per_side"] for a in gr["attempts"]] == [1.0, 2.0, 3.0]
     assert gr["first"]["gap_layers_per_side"] == 1.0
-    assert "1 to 3 per side" in out["gap_layers_note"]
+    assert out["gap_layers_note"] == "gap layers 1→3 after ring mismatch"
+    # never passes: stops at the cap of 4, persists nothing, stays flagged
+    calls.clear()
+    monkeypatch.setattr(fs, "fem_transient_sliding_band",
+                        lambda **kw: calls.append(kw) or _fake_result(0.2, kw["gap_layers"]))
+    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
+    assert [c["gap_layers"] for c in calls] == [1.0, 2.0, 3.0, 4.0]
+    assert out["gap_refinement"]["persist_gap_layers"] is None
+    assert "cap" in out["gap_layers_note"]
     # passing run: one solve, recorded as not applied
     calls.clear()
     monkeypatch.setattr(fs, "fem_transient_sliding_band",
                         lambda **kw: calls.append(kw) or _fake_result(0.02, 1.0))
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
     assert len(calls) == 1 and out["gap_refinement"]["applied"] is False
-    # an unsettled eddy warm-up is never refined (the check measures the transient)
+    assert out["gap_refinement"]["persist_gap_layers"] is None
+    # an UNSETTLED eddy run is refined too (TDM showed the L155 2/side self-check
+    # is a mesh property), and the note says the first warm-up had not settled
     calls.clear()
-    monkeypatch.setattr(fs, "fem_transient_sliding_band",
-                        lambda **kw: calls.append(kw) or dict(_fake_result(0.18, 2.0),
-                                                              eddy_settled=False))
+
+    def fake_unsettled(**kw):
+        calls.append(kw)
+        return dict(_fake_result(0.18 if len(calls) == 1 else 0.03, kw["gap_layers"]),
+                    eddy_settled=(len(calls) != 1))
+    monkeypatch.setattr(fs, "fem_transient_sliding_band", fake_unsettled)
     out = fs._solve_with_gap_refinement({"gap_layers": 2.0, "sampling_purpose": "standard"})
-    assert len(calls) == 1 and "not settled" in out["gap_refinement"]["skipped_reason"]
-    # internal probes and the switch are never refined
+    assert [c["gap_layers"] for c in calls] == [2.0, 3.0]
+    assert out["gap_refinement"]["eddy_unsettled"] is True
+    assert "had not settled" in out["gap_layers_note"]
+    # optimization candidates, internal probes and the switch are never refined
     calls.clear()
     monkeypatch.setattr(fs, "fem_transient_sliding_band",
                         lambda **kw: calls.append(kw) or _fake_result(0.5, 1.0))
+    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "optimization"})
+    assert "optimization candidate" in out["gap_refinement"]["skipped_reason"]
+    assert out["gap_refinement"]["persist_gap_layers"] is None
     fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "internal_probe"})
     monkeypatch.setenv("SB_GAP_REFINE", "0")
     fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
-    assert len(calls) == 2
+    monkeypatch.delenv("SB_GAP_REFINE")
+    assert len(calls) == 3
+    # the winner's final re-solve ("cogging_quality") does use the rule
+    calls.clear()
+    monkeypatch.setattr(fs, "fem_transient_sliding_band", fake)
+    out = fs._solve_with_gap_refinement({"gap_layers": 1.0,
+                                         "sampling_purpose": "cogging_quality"})
+    assert out["gap_refinement"]["persist_gap_layers"] == 3.0
 
 
-def test_coupled_probe_gap_default_matches_the_run():
+def test_passing_level_persists_only_for_the_live_machine(monkeypatch):
+    from motor_ai_sim.routes import simulation as sim
+    import motor_ai_sim.api as api
+    written = []
+    monkeypatch.setattr(api, "update_mesh_config", lambda patch: written.append(patch.gap_layers))
+
+    def sb(level=2.0):
+        return {"gap_layers_note": "gap layers 1→2 after ring mismatch",
+                "gap_refinement": {"persist_gap_layers": level}}
+    r = sb()
+    sim._persist_gap_layers_default(r, geo_ov=None, sampling_purpose="standard")
+    assert written == [2.0] and r["gap_refinement"]["persisted_to"]
+    r = sb()                                   # champion re-check / candidate: override
+    sim._persist_gap_layers_default(r, geo_ov={"air_gap": 0.3},
+                                    sampling_purpose="cogging_quality")
+    assert written == [2.0] and "override" in r["gap_refinement"]["persist_skipped"]
+    r = sb()                                   # an optimization candidate
+    sim._persist_gap_layers_default(r, geo_ov=None, sampling_purpose="optimization")
+    assert written == [2.0] and "optimization" in r["gap_refinement"]["persist_skipped"]
+    r = {"gap_refinement": {"persist_gap_layers": None}}
+    sim._persist_gap_layers_default(r, geo_ov=None, sampling_purpose="standard")
+    assert written == [2.0]
+
+
+def test_coupled_probe_uses_the_runs_mesh_resolution():
+    import inspect
+    from pathlib import Path
+    from motor_ai_sim.routes import simulation as sim
+    assert inspect.signature(sim.get_fem_transient).parameters["gap_layers"].default is None
+    src = (Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim" / "routes"
+           / "coupled.py").read_text(encoding="utf-8")
+    assert '_f(body, "gap_layers"' not in src and '_f(body, "mesh_size_mm"' not in src
+    assert '_resolve_gap_layers(body.get("gap_layers"))' in src
+    assert "torque_method" in inspect.signature(sim.get_fem_transient).parameters
+
+def test_mesh_settings_come_only_from_the_mesh_tab():
+    """Owner 2026-09-30: every run path takes the Mesh settings from the request
+    (Mesh tab) or the machine's saved Mesh settings; 1/side is only a labelled
+    last-resort fallback."""
     import inspect
     import re
     from pathlib import Path
     from motor_ai_sim.routes import simulation as sim
-    run_default = inspect.signature(sim.get_fem_transient).parameters["gap_layers"].default
-    src = (Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim" / "routes"
-           / "coupled.py").read_text(encoding="utf-8")
-    probe = [float(x) for x in re.findall(r'_f\(body, "gap_layers", ([0-9.]+)\)', src)]
-    assert probe and all(v == run_default for v in probe)
-    assert "torque_method" in inspect.signature(sim.get_fem_transient).parameters
+    from motor_ai_sim.optimization import refine_proc
+    from motor_ai_sim.routes import optimization as opt
+    for fn in (sim.get_fem_transient, sim.get_fem_field2d,
+               sim.build_fem_mesh_2d_sliding_band):
+        for k in ("mesh_size_mm", "min_size_mm", "outer_air_factor", "gap_layers",
+                  "n_sectors"):
+            assert inspect.signature(fn).parameters[k].default is None, (fn.__name__, k)
+    assert inspect.signature(refine_proc.run_one).parameters["gap_layers"].default is None
+    for model in ("ScanRequest", "DescentRequest", "CmaesRequest"):
+        m = getattr(opt, model, None)
+        if m is not None and "gap_layers" in m.model_fields:
+            assert m.model_fields["gap_layers"].default is None, model
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("routes/optimization.py", "routes/coupled.py", "routes/thermal.py",
+                "sweep_resume.py", "optimization/refine_proc.py"):
+        src = (root / "src" / "motor_ai_sim" / rel).read_text(encoding="utf-8")
+        assert not re.search(r"gap_layers(: float)? ?= ?[123]\.0|\"gap_layers\", [123]\.0", src), rel
+    web = root / "web" / "src"
+    for rel in ("lib/emRunPayload.ts", "components/sweep/SweepStudyPanel.tsx",
+                "stores/motorStore.ts", "components/simulation/SimulationPanel.tsx",
+                "components/simulation/FemFieldChart.tsx",
+                "components/simulation/FemAnimationViewer.tsx"):
+        src = (web / rel).read_text(encoding="utf-8")
+        assert not re.search(r"gapLayers'\s*,\s*[123]\)|mesh\.gapLayers'\)\s*\?\?", src), rel
+
+
+def test_mesh_settings_resolution_order():
+    from motor_ai_sim.mesh_settings import (
+        SOURCE_FALLBACK, SOURCE_MACHINE, SOURCE_REQUEST, fallback_note,
+        resolve_gap_layers, resolve_mesh_settings)
+    cfg = {"mesh": {"gap_layers": 3, "mesh_size_mm": 1.22, "n_sectors": 4}}
+    vals, src = resolve_mesh_settings({"gap_layers": None, "mesh_size_mm": 2.0}, cfg)
+    assert vals["gap_layers"] == 3.0 and src["gap_layers"] == SOURCE_MACHINE
+    assert vals["mesh_size_mm"] == 2.0 and src["mesh_size_mm"] == SOURCE_REQUEST
+    assert vals["min_size_mm"] == 0.3 and src["min_size_mm"] == SOURCE_FALLBACK
+    assert isinstance(vals["n_sectors"], int) and vals["n_sectors"] == 4
+    assert "min_size_mm" in fallback_note(src, vals) and "outer_air_factor" in fallback_note(src, vals)
+    assert resolve_gap_layers(None, {"mesh": {}}) == (1.0, SOURCE_FALLBACK)
+    assert resolve_gap_layers(2, {"mesh": {"gap_layers": 3}}) == (2.0, SOURCE_REQUEST)
+    assert resolve_gap_layers(float("nan"), {"mesh": {"gap_layers": 3}}) == (3.0, SOURCE_MACHINE)
+    full = {"mesh": {"gap_layers": 2, "mesh_size_mm": 1, "min_size_mm": 0.2,
+                     "outer_air_factor": 1.2, "n_sectors": 2}}
+    assert fallback_note(resolve_mesh_settings({}, full)[1]) is None
+
+def test_optimizer_candidate_metrics_carry_the_self_check():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim"
+    rp = (root / "optimization" / "refine_proc.py").read_text(encoding="utf-8")
+    for k in ('"ripple_self_check_rel"', '"ripple_mesh_limited"', '"gap_layers_per_side"',
+              '"gap_layers_persist"', '"gap_layers_note"'):
+        assert k in rp
+    from motor_ai_sim.routes.optimization import _RES_KEYS
+    assert {"ripple_self_check_rel", "ripple_mesh_limited"} <= set(_RES_KEYS)
+
+
+def test_passport_meshes_as_the_machine_mesh_settings_say():
+    import inspect
+    from pathlib import Path
+    from motor_ai_sim import passport
+    assert inspect.signature(passport.generate_passport).parameters["mesh_size_mm"].default is None
+    src = Path(passport.__file__).read_text(encoding="utf-8")
+    assert "mesh_size_mm + 1.0" not in src and "**_MESH" in src
+    assert '"mesh_settings_note": _mesh_note' in src
+    cat = (Path(passport.__file__).parent / "routes" / "catalog.py").read_text(encoding="utf-8")
+    assert '"mesh": dict(_p.get("mesh") or {})' in cat

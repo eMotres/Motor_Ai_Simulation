@@ -415,6 +415,9 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                                 detail=f"preset '{preset_id}' has no geometry")
         _psim = _p.get("simulation") or {}
         machine = {
+            # the preset's saved Mesh settings — the base machine's (owner
+            # 2026-09-30: passports mesh only as the Mesh tab says)
+            "mesh": dict(_p.get("mesh") or {}),
             "geometry": dict(_p["geometry"]),
             "connection": str(_psim.get("connection") or "") or None,
             # Terminal connection of THIS machine (preset sim block, mirrored

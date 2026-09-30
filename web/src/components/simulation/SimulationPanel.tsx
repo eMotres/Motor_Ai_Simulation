@@ -71,6 +71,7 @@ import { useMotorAssignments } from '../materials/useMotorAssignments';
 import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import { storedGapLayers, storedMeshFields } from '../../lib/meshSettings';
 
 // UI strings: locales/<lng>/simulation.json (docs/I18N.md).
 const tx = nsT('simulation');
@@ -1018,9 +1019,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         // takes 3.7 % of the torque at 400 A (measured — a demag-free fit
         // landed 818 Nm against a 850 Nm target).
         eddy: false, demag, rotor_eddy: false, torque_filter: false,
-        mesh_size_mm: readMesh('meshSize', 4.0), min_size_mm: readMesh('minSize', 0.3),
-        outer_air_factor: readMesh('outerAir', 1.3), gap_layers: readMesh('gapLayers', 2),
-        n_sectors: readMesh('nSectors', 1), stator_fillet_mm: 0,
+        ...storedMeshFields(),   // Mesh-tab numbers (missing = machine setting)
+        stator_fillet_mm: 0,
         sliding_band: true, element_order: 2,
         iron_template: readMesh('ironTemplate', true), geo_mesh: readMesh('geoMesh', true),
         structured_gap: readMesh('structuredGap', false) || readMesh('ironTemplate', true),
@@ -1314,10 +1314,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // Mirror the SAME formula (incl. the gap_layers term — previously this used a
   // fixed 1008 ≙ gap_layers=1, so it predicted 120 while the solver used 144 at
   // gap_layers=2: the field kept 60 but the solver snapped it to 72).
-  const gapLayers = (() => {
-    try { return Number(JSON.parse(localStorage.getItem('mesh.gapLayers') ?? '2')) || 2; }
-    catch { return 2; }
-  })();
+  // Display-only ring prediction: the Mesh tab's gap layers (the tab mirrors
+  // the machine's saved setting into mesh.gapLayers); 1/side only when unset.
+  const gapLayers = storedGapLayers() ?? 1;
   const _slipBase = Math.round(1008 * (Math.max(1, gapLayers) + 2) / 3);
   const SLIP_PER_PERIOD = 24 * Math.max(5, Math.ceil(_slipBase / (24 * Math.max(polePairs, 1))));
   const stepsMax = SLIP_PER_PERIOD;         // nodes per electrical period

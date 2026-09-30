@@ -189,7 +189,7 @@ def generate_passport(
     rpms: Optional[List[float]] = None,
     base_steps: int = 12,
     sweep_steps: int = 12,
-    mesh_size_mm: float = 5.0,
+    mesh_size_mm: Optional[float] = None,   # None = the machine's saved Mesh setting
     machine: Optional[Dict[str, Any]] = None,
     rpm0: Optional[float] = None,
     daxis_deg: Optional[float] = None,
@@ -327,6 +327,25 @@ def generate_passport(
     _sym = _math.gcd(int(g.get("num_slots", 24) or 24),
                      int(g.get("num_poles", 28) or 28))
     NSECT = next((d for d in (4, 3, 2) if _sym % d == 0), 1)
+    # MESH SETTINGS (owner 2026-09-30): only the machine's Mesh settings — the
+    # base machine's saved mesh block (the preset's, when a `machine` is
+    # given, else the loaded machine's config); an explicit argument wins; a
+    # labelled last-resort fallback only when nothing is saved.  The sector
+    # count is the machine's saved one when it divides the symmetry, else the
+    # symmetry-derived NSECT above.
+    from motor_ai_sim.mesh_settings import (SOURCE_FALLBACK as _MFB_SRC,
+                                            fallback_note as _mfb,
+                                            resolve_mesh_settings as _mres)
+    _mcfg = ({"mesh": dict((machine or {}).get("mesh") or {})}
+             if (machine or {}).get("mesh") else None)
+    _mv, _msrc = _mres({"mesh_size_mm": mesh_size_mm}, _mcfg)
+    mesh_size_mm = _mv["mesh_size_mm"]
+    _MESH = {"min_size_mm": _mv["min_size_mm"],
+             "outer_air_factor": _mv["outer_air_factor"],
+             "gap_layers": _mv["gap_layers"]}
+    if _msrc["n_sectors"] != _MFB_SRC and _sym % max(1, int(_mv["n_sectors"])) == 0:
+        NSECT = int(_mv["n_sectors"])
+    _mesh_note = _mfb(_msrc, _mv)
 
     def run(I: float, length: Optional[float] = None, eddy: bool = False,
             steps: int = 12, demag: bool = False, rpm: Optional[float] = None):
@@ -341,7 +360,7 @@ def generate_passport(
             # (gcd 2) — the sector count was computed above and then unused
             # (measured overnight 2026-08-24: three 40 mm-class passports
             # failed on exactly this).
-            I_phase_rms=I, mesh_size_mm=mesh_size_mm, n_sectors=NSECT,
+            I_phase_rms=I, mesh_size_mm=mesh_size_mm, n_sectors=NSECT, **_MESH,
             sliding_band=True, rotor_eddy=eddy, demag=demag,
             geo=(json.dumps(ov) if ov else None),
             rpm=(rpm if rpm is not None else rpm0),
@@ -527,7 +546,7 @@ def generate_passport(
                     n_steps_per_period=sweep_steps, n_periods=1.0,
                     gamma_deg=gamma_deg, I_phase_rms=Ig, rpm=r,
                     mode=str(mode or "motor"),
-                    mesh_size_mm=mesh_size_mm + 1.0, n_sectors=NSECT,
+                    mesh_size_mm=mesh_size_mm, n_sectors=NSECT, **_MESH,
                     sliding_band=True, rotor_eddy=True,
                     geo=(json.dumps(_mgeo) if _mgeo else None),
                     # the terminal connection the cuAC normalisation assumes —
@@ -586,7 +605,7 @@ def generate_passport(
         caller supplies the drive."""
         kw: Dict[str, Any] = dict(
             n_periods=1.0, gamma_deg=gamma_deg, mode=str(mode or "motor"),
-            mesh_size_mm=mesh_size_mm, n_sectors=NSECT, sliding_band=True,
+            mesh_size_mm=mesh_size_mm, n_sectors=NSECT, **_MESH, sliding_band=True,
             # rotor_eddy ON for both halves of every delta: the magnet eddy
             # loss is the term the carrier moves most, and a baseline solved
             # without it would report the whole magnet loss as a PWM delta.
@@ -618,6 +637,11 @@ def generate_passport(
             skipped_out=pwm_skipped)
 
     passport = {
+        # The Mesh settings every solve of this passport used, where each came
+        # from, and a note when a labelled fallback was needed.
+        "mesh_settings": {"mesh_size_mm": mesh_size_mm, "n_sectors": NSECT, **_MESH},
+        "mesh_settings_source": dict(_msrc),
+        "mesh_settings_note": _mesh_note,
         "N0": N0, "L0_mm": L0, "wireH0_mm": wireH0,
         "I0_A": I0, "rpm0": round(rpm0), "nP0": nP0,
         # Strands in hand and strips per wire row at the measured point (1 = one

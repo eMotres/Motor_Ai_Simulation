@@ -159,18 +159,19 @@ DOM_COIL_BASE = 200
 _SG_M_TARGET = int(_os_sb.environ.get("SB_SG_M_TARGET", "14") or 14)
 
 
-# ── Air-gap mesh floor (2026-09-30) ─────────────────────────────────────────
+# ── Air-gap layers (2026-09-30) ─────────────────────────────────────────────
 # ``gap_layers`` is the number of element rows on EACH side of the slip circle
 # (the rotor half r_ro→mid and the stator half mid→r_si each get that many; the
-# mesher's structured-gap spec calls it K and builds 2K rings), i.e. 3 per side
-# = 6 rows across the gap.  The gap resolution is decided by MEASUREMENT, not by
-# a flat floor: every run's Coulomb two-ring self-check is gated at 5 % of the
-# ripple scale and em_transient_eval re-solves once with more layers per side
-# when it fails (virtual_work_torque.gap_layers_for_self_check,
-# docs/COULOMB_TORQUE_2026-09-30.md §6).  GAP_LAYERS_MIN is therefore 1 (no
-# floor).  SB_GAP_LAYERS_MIN=3 restores the flat floor the owner first approved
-# — the fallback if the measured rule is ever retired.  Internal probes
-# (sampling_purpose "internal_probe") are never lifted.
+# mesher's structured-gap spec calls it K and builds 2K rings).  Owner: the
+# default is 1 per side, and 1 for optimization.  The resolution is then
+# decided by MEASUREMENT: when the rotor- and stator-side Coulomb rings
+# disagree by more than 5 % of the ripple scale, em_transient_eval re-solves
+# with one more layer per side until they agree (cap 4), and the passing level
+# becomes the machine's default (fem_solver_2d._solve_with_gap_refinement,
+# routes.simulation._persist_gap_layers_default).  Optimization candidates are
+# never refined, only flagged.  GAP_LAYERS_MIN is therefore 1 (no floor);
+# SB_GAP_LAYERS_MIN=3 restores a flat floor as a fallback switch.  Internal
+# probes (sampling_purpose "internal_probe") are never lifted.
 GAP_LAYERS_MIN = float(_os_sb.environ.get("SB_GAP_LAYERS_MIN", "1") or 1)
 
 

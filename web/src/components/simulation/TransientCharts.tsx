@@ -36,6 +36,7 @@ import {
   type CouplingBlock, type CoupledRunResult,
 } from './coupledApi';
 import HelpTip from '../common/HelpTip';
+import { adoptGapLayers, type GapAdoptSource } from '../../lib/gapLayersAdopt';
 
 interface TransientPayload {
   // Frontend-only stamp: the geometry signature this run was computed for.
@@ -600,6 +601,10 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         setData(stamped); setBusy(false);
         setError(null);
         persistLastTransient(stamped);      // remember it (+ stamp) across reloads
+        // Gap rule: a refined level that passed the ring check is this
+        // machine's default from now on (the server wrote its mesh config;
+        // mesh.gapLayers carries it into the duty save).  Fresh runs only.
+        if (!restoreOnly) adoptGapLayers((d as { summary?: GapAdoptSource }).summary);
         // A RESTORED coupled run must leave the temperature FIELDS describing
         // what the card shows (2026-09-09) — the live path above adopts them,
         // a reload never went through it.  Once per answer: `couplingStamp`.
@@ -752,6 +757,8 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     setStale(false);
     setData(d); setBusy(false); setError(null);
     persistLastTransient(d);
+    // A coupled run can refine the gap like any Run (see the plain path).
+    if (!res.served_from_history) adoptGapLayers((d as { summary?: GapAdoptSource }).summary);
     // Same sync as the ledger load above — see its comment.
     applyLoadedOperatingPoint({
       current: d.summary?.I_terminal_rms_A ?? d.summary?.I_phase_rms_A,

@@ -24,6 +24,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import FemFieldChart from './FemFieldChart';
 import { tileFullRing } from './fem-types';
 import type { FemPayload } from './fem-types';
+import { storedMeshQuery } from '../../lib/meshSettings';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -123,12 +124,9 @@ const FemAnimationViewer: React.FC<Props> = ({
       n_periods:          '1.0',
       gamma_deg:          String(gamma_deg),
       I_phase_rms:        String(I_phase_rms),
-      mesh_size_mm:       String(readMeshSetting('meshSize',    4.0)),
-      min_size_mm:        String(readMeshSetting('minSize',     0.3)),
-      outer_air_factor:   String(readMeshSetting('outerAir',    1.3)),
+      ...storedMeshQuery(),   // Mesh-tab numbers (missing = machine setting)
       motion_band:        String(readMeshSetting('motionBand',  true)),
       band_thickness_mm:  String(readMeshSetting('bandThickness', 0.4)),
-      n_sectors:          String(readMeshSetting('nSectors',    1)),
       stator_fillet_mm:   '0',   // native geometry — extra smoothing removed
       // Same per-part mesh sizes as TransientCharts → shared backend cache key.
       component_mesh:     JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
@@ -140,7 +138,6 @@ const FemAnimationViewer: React.FC<Props> = ({
       // mesh toggles must stay in step with TransientCharts: same params, same
       // backend cache key, one solve for both panels.
       sliding_band:       'true',
-      gap_layers:         String(readMeshSetting('gapLayers', 2)),
       iron_template:      String(readMeshSetting('ironTemplate', true)),
       geo_mesh:           String(readMeshSetting('geoMesh', true)),
       structured_gap:     String(readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true)),

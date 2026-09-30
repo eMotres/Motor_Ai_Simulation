@@ -90,6 +90,13 @@ from motor_ai_sim.progress import route_progress as _route_progress
 log = logging.getLogger(__name__)
 
 
+def _machine_gap_layers() -> float:
+    """The machine's saved gap layers per side (mesh_settings; owner
+    2026-09-30: mesh settings come only from the Mesh tab)."""
+    from motor_ai_sim.mesh_settings import resolve_gap_layers
+    return resolve_gap_layers(None)[0]
+
+
 async def _material_override_dep(mat: Optional[str] = Query(default=None)):
     """Apply this request's ``?mat=`` override, same contract as the simulation
     and mechanical routers: a malformed payload is a 422 from the shared parser,
@@ -1543,7 +1550,7 @@ def _loss_snapshot_probe(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
     Every constant in here is one the thermal route hard-codes when it calls
     ``get_fem_field2d`` (``eddy``/``rotor_eddy`` on, no demag, current drive,
     P2 elements, the rotor at its CAD zero) or leaves at that function's own
-    default (``stator_fillet_mm`` 0, ``gap_layers`` 2, the four mesh-strategy
+    default (``stator_fillet_mm`` 0, ``gap_layers`` the machine's Mesh setting, the four mesh-strategy
     flags).  They are written out rather than defaulted so that a change to
     either side is a visible conflict here instead of a silent permanent miss.
 
@@ -1568,7 +1575,9 @@ def _loss_snapshot_probe(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         gamma_deg=_solved_gamma_deg(gamma_deg, op_mode), I_phase_rms=I_phase_rms,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, n_sectors=ns_eff,
-        stator_fillet_mm=0.0, gap_layers=2.0, coil_temp_c=coil_temp_c,
+        stator_fillet_mm=0.0, coil_temp_c=coil_temp_c,
+        # the machine's Mesh setting — the value the run itself resolved
+        gap_layers=_machine_gap_layers(),
         comp_mesh=_parse_component_mesh(component_mesh),
         pole_copy=False, iron_template=True, geo_mesh=True,
         structured_gap=True, airgap_macro=False,
@@ -1678,7 +1687,7 @@ def _run_key_fields(key, entry):
         from motor_ai_sim.routes import simulation as _sim
         names = list(_sim._field_snap_key_fields(
             gamma_deg=0.0, I_phase_rms=0.0, mesh_size_mm=1.0, min_size_mm=0.1,
-            outer_air_factor=1.0, n_sectors=1, stator_fillet_mm=0.0, gap_layers=1.0,
+            outer_air_factor=1.0, n_sectors=1, stator_fillet_mm=0.0, gap_layers=None,
             coil_temp_c=0.0, comp_mesh={}, pole_copy=False, iron_template=True,
             geo_mesh=True, structured_gap=True, airgap_macro=False,
             n_steps_per_period=1, n_periods=1.0, eddy=True, rotor_eddy=True,
@@ -2381,7 +2390,8 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
             outer_air_factor=float(_rf.get("outer_air_factor", outer_air_factor)),
             n_sectors=int(_rf.get("n_sectors", n_sectors)),
             stator_fillet_mm=float(_rf.get("stator_fillet_mm", 0.0)),
-            gap_layers=float(_rf.get("gap_layers", 2.0)),
+            gap_layers=(float(_rf["gap_layers"]) if _rf.get("gap_layers") is not None
+                        else _machine_gap_layers()),
             component_mesh=_cm,
             pole_copy=bool(_rf.get("pole_copy", False)),
             iron_template=bool(_rf.get("iron_template", True)),
@@ -2801,7 +2811,8 @@ def _em_map_from_run(run: Dict[str, Any], *, geo, phase_cb=None):
         outer_air_factor=float(f.get("outer_air_factor") or 1.3),
         n_sectors=int(f.get("n_sectors") or 1),
         stator_fillet_mm=float(f.get("stator_fillet_mm") or 0.0),
-        gap_layers=float(f.get("gap_layers") or 2.0),
+        gap_layers=(float(f["gap_layers"]) if f.get("gap_layers")
+                    else _machine_gap_layers()),
         component_mesh=_cm,
         pole_copy=bool(f.get("pole_copy", False)),
         iron_template=bool(f.get("iron_template", True)),
@@ -8451,7 +8462,7 @@ def mesh(
                 # structured belt, template iron and the geometry-driven mesh.  They
                 # are not exposed as query params here for exactly that reason —
                 # a preview built with different flags would be a different mesh.
-                band_thickness_mm=0.4, gap_layers=2.0, n_sectors=int(ns_eff),
+                band_thickness_mm=0.4, gap_layers=None, n_sectors=int(ns_eff),
                 stator_fillet_mm=0.0, component_mesh=cm,
                 surface_deviation=0.005, normal_deviation=8.0, aspect_ratio=10.0,
                 pole_copy=False, iron_template=True, geo_mesh=True,

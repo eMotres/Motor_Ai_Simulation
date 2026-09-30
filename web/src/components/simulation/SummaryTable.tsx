@@ -98,8 +98,12 @@ export interface TransientSummary {
   ripple_mesh_limited?: boolean | null;
   ripple_self_check_rel?: number | null;
   gap_layers_note?:    string | null;
+  // Set only when a Mesh setting fell back to the last-resort default
+  // because the machine has no saved Mesh setting for it.
+  mesh_settings_note?: string | null;
   // The measured gap rule re-solved this run with more layers per side.
   gap_refinement?: { applied?: boolean; gap_layers_per_side?: number;
+                     persist_gap_layers?: number | null;
                      first?: { gap_layers_per_side?: number } } | null;
   P_mech_W:            number;
   V_phase_peak_V:      number;
@@ -1118,8 +1122,16 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             </Typography>
           </Tooltip>
         )}
+        {s.mesh_settings_note && (
+          <Tooltip title={`${s.mesh_settings_note}. Save the Mesh tab for this machine to set it.`}>
+            <Typography sx={{ fontSize: 10, color: '#fbbf24', cursor: 'help' }}>
+              Mesh: fallback
+            </Typography>
+          </Tooltip>
+        )}
         {s.gap_refinement?.applied && (
-          <Tooltip title={s.gap_layers_note ?? 'Re-solved with more air-gap layers per side.'}>
+          <Tooltip title={(s.gap_layers_note ?? 'Re-solved with more air-gap layers per side.')
+            + (s.gap_refinement?.persist_gap_layers ? ' — now this machine's default.' : '')}>
             <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>
               {`Gap ${s.gap_refinement.first?.gap_layers_per_side ?? '?'}→${s.gap_refinement.gap_layers_per_side ?? '?'}/side`}
             </Typography>

@@ -160,7 +160,12 @@ def machine_point(pp: Dict[str, Any], I: float, rpm: float, *,
         P_fe = grid(lg["Pfe_W"])
         P_mag = grid(lg["Pmag_W"])
         prox = 0.0
-        if lg.get("cuAC"):
+        if lg.get("Pcu_ac_W"):
+            # extraction_rev >= 2: the AC watts themselves (twin of
+            # motorScaling.ts — the ratio is ill-conditioned near I = 0)
+            prox = max(0.0, grid([[max(0.0, float(w)) for w in row]
+                                  for row in lg["Pcu_ac_W"]]))
+        elif lg.get("cuAC"):
             rows = []
             for r, Ir in enumerate(lg["I_A"]):
                 dc = 3.0 * float(Ir) ** 2 * R0
@@ -183,7 +188,11 @@ def machine_point(pp: Dict[str, Any], I: float, rpm: float, *,
     fRpm = (rpm / rpm0) if rpm0 else 1.0
     fI = (I / I0) if I0 else 1.0
     Vemf = float(pp.get("Vemf0_peak_V") or 0.0) * fRpm * k3
-    vl0 = float(pp.get("Vload0_peak_V") or 0.0)
+    # Like with like: a passport of extraction_rev >= 2 stores the EMF as the
+    # FUNDAMENTAL and carries the loaded fundamental beside the loaded peak —
+    # the modulation index wants the fundamental, so the drop is fund − fund.
+    # An older passport has peak − peak, as before.
+    vl0 = float(pp.get("Vload0_fund_V") or pp.get("Vload0_peak_V") or 0.0)
     ve0 = float(pp.get("Vemf0_peak_V") or 0.0)
     drop0 = (vl0 - ve0) if vl0 > ve0 else 0.0
     Vdrop = drop0 * fI * fRpm if drop0 > 0 else R0 * I * math.sqrt(2.0)

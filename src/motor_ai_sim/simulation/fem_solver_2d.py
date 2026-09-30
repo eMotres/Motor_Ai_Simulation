@@ -10717,11 +10717,15 @@ def fem_transient_sliding_band(
         _Tdq = 1.5 * float(pole_pairs) * (_psid * _iqm - _psiq * _idm)
         _chk = (100.0 * abs(_Tdq - float(Tavg)) / abs(float(Tavg))
                 if abs(float(Tavg)) > 1e-9 else None)
+        # FULL precision (review 2026-09-30): these are DATA a passport
+        # interpolates at a 0.5 % flux target — ψ rounded to 1 µWb is 0.1 %
+        # of the Ø40's 1 mWb, and i_d rounded to 0.01 A near zero current is
+        # no bound at all.  Rounding belongs to the display.
         _dq = {
-            "psi_d_Wb": round(_psid, 6), "psi_q_Wb": round(_psiq, 6),
-            "i_d_A": round(_idm, 2), "i_q_A": round(_iqm, 2),
-            "T_dq_Nm": round(_Tdq, 3),
-            "dq_torque_check_pct": (None if _chk is None else round(_chk, 2)),
+            "psi_d_Wb": _psid, "psi_q_Wb": _psiq,
+            "i_d_A": _idm, "i_q_A": _iqm,
+            "T_dq_Nm": _Tdq,
+            "dq_torque_check_pct": _chk,
         }
     except Exception as _edq:   # noqa: BLE001
         _dq = {"dq_error": f"{type(_edq).__name__}: {_edq}"}

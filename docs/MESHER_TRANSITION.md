@@ -117,59 +117,106 @@ release for cross-checks; saved duties re-run once and the changes recorded.
 `requires_triangle` tests and the Docker build argument; update
 THIRD_PARTY_NOTICES.md.
 
-## Licensing recommendation (2026-09-30, draft for legal review)
+## Licensing recommendation (2026-09-30, draft for legal review; revised
+twice the same day -- after an independent review, then after an owner
+architecture decision)
 
-Two options for what happens to the Triangle code path, requested for the
-licensing pack alongside the Intel MKL exception (see repo root
-LICENSE-EXCEPTION):
+### Triangle's exact terms (not paraphrased)
 
-**Option A — delete the Triangle code path** (the CDT mesher in
+J. R. Shewchuk's own page (https://www.cs.cmu.edu/~quake/triangle.html)
+states: "although Triangle is freely available, it is copyrighted by
+the author and may not be sold or included in commercial products
+without a license." An earlier pass of this document paraphrased this
+as a blanket "free for non-commercial use only," which overstates it:
+the author's own wording restricts *selling Triangle or including it in
+a commercial product*, not all commercial *use* of software that merely
+calls it. The distinction matters for MOTRES (see below) and counsel
+should read the author's terms directly rather than rely on either
+paraphrase. The installed wrapper, `triangle==20250106`, wraps Triangle
+1.6 and is itself LGPL-3.0 per its own `dist-info/METADATA` -- a
+separate statement from the bundled C code's terms above, and not a
+relicensing of them.
+
+### Owner decision: Triangle is removed, not staged out
+
+Originally this section offered two options (delete the Triangle code
+path now at some future stage S5, vs. keep it as an optional,
+never-distributed plugin as a bridge). The owner decided 2026-09-30 to
+**remove Triangle outright now**: delete the CDT mesher in
 `geo_mesh.py`/`geo_mesh_proto.py`, `requirements-triangle.txt`, the
-`[triangle]` extra, the `WITH_TRIANGLE` Docker arg, the `requires_triangle`
-tests). This is already stage S5 of the plan above. Consequence: the
-licensing question disappears entirely — nothing non-commercial-only is in
-the repository or any image MOTRES builds, so no AGPL-combination analysis
-and no reliance on "MOTRES's use is non-commercial" is needed for meshing at
-all. Cost: loses the ten Triangle-only features listed above
-until stage S2 ports them to gmsh and S3 confirms the numbers on the
-reference machines; deleting before S3 passes would change published
-results with no controlled comparison.
+`[triangle]` extra, the `WITH_TRIANGLE` Docker argument and compose
+default, and the `requires_triangle` tests (this collapses stages S4-S5
+above into one immediate step rather than waiting on S2/S3 gmsh
+parity). A third option -- **obtaining a commercial licence from the
+author for continued use, so the S2/S3 comparison work could keep using
+Triangle as the reference mesher while gmsh is ported and validated** --
+was not previously considered and is recorded here for completeness;
+the owner did not choose it. Consequence of removal-now: gmsh becomes
+the mesher immediately, with the ten Triangle-only features listed above
+not yet ported (S2) and not yet validated against the reference machines
+(S3). **This document does not recommend accepting the resulting
+numerical drift as an acceptable production state.** Each configuration
+that switches to gmsh needs the S3 acceptance-limit comparison run
+against it (or an equivalent per-configuration check) before its results
+are published or relied on; a configuration that has not been checked
+should either be re-verified before its next use or have that
+calculation suspended until it is. "The Docker build flag changed" is
+not evidence that the two meshers agree for a given geometry -- S2/S3 is
+the actual verification, and it is now urgent rather than a
+background task, since Triangle is no longer available as a fallback
+once removed.
 
-**Option B — keep Triangle as an optional, user-installed plugin that MOTRES
-never distributes.** The code path stays, gated behind `requirements-triangle.txt`
-/ the `[triangle]` extra, exactly as CONTRIBUTING.md already requires for any
-non-AGPL-compatible dependency; the difference from today is that **MOTRES
-stops building it into any image it runs as a service or hands to anyone
-else** (`--build-arg WITH_TRIANGLE=1` is never used again for a server or
-distributed build) and only a developer's own local, personal, genuinely
-non-commercial workstation build may install it, at that person's own risk
-under Triangle's licence. Consequence: keeps the reference mesher available
-for the S2/S3 comparison work without redistributing it. Cost: depends
-indefinitely on a "genuinely non-commercial, never distributed" boundary
-being maintained correctly by every engineer who builds the image, which is
-an ongoing audit burden, not a one-time fix.
+### Gmsh and MKL in the same process (now scoped to the optional PARDISO backend only)
 
-**Recommendation: Option B immediately, Option A at S5.** The production
-server currently ships with `--build-arg WITH_TRIANGLE=1`
-(`triangle==20250106`, confirmed by `pip list --format=freeze` inside the
-running `deploy-api-1` container, 2026-09-30). THIRD_PARTY_NOTICES.md's
-justification for that build is "MOTRES currently uses the project
-non-commercially" — but other MOTRES material (`eMotres/AGENTS.md`) refers
-to "the aerostator.com site / shop", which is at minimum a strong signal
-that this premise needs an explicit, current yes/no from the owner and
-counsel before it is relied on any further; Triangle's non-commercial
-restriction is a real compliance risk on the live server today, independent
-of anything AGPL. Until that is confirmed either way:
+Separately from Triangle: while `pypardiso`/Intel MKL was still a
+production dependency (`WITH_PARDISO=1`, before the 2026-09-30 decision
+below), gmsh's own Python API (`import gmsh`) and pypardiso/MKL would
+have loaded into the *same process* for any calculation that meshes with
+gmsh and solves with PARDISO. Gmsh's own GPL exception
+(https://gmsh.info/LICENSE.txt) names Netgen, METIS, OpenCASCADE and
+ParaView -- not MKL -- so it does not itself authorise this combination;
+see docs/LICENSE-EXCEPTION-NOTES.md Section 3. Because the 2026-09-30
+architecture decision removes MKL/`pypardiso` from the default image and
+default hosted service, **this is no longer a concern for the default
+build** -- gmsh now runs with no MKL present. It remains relevant only
+for an operator who deliberately enables the optional PARDISO backend
+(`requirements-pardiso.txt`) alongside gmsh. For that optional
+combination, the options are (marked for counsel, not decided here):
 
-1. Stop building the production/deployed image with `WITH_TRIANGLE=1`
-   immediately (do not wait for S2/S3 gmsh parity) — fall back to gmsh in
-   production, accepting the S2 feature gaps and any numeric drift on the
-   server until they are ported and validated.
-2. Triangle may stay installed on the owner's own local workstation for the
-   S2/S3 comparison work (`scripts/compare_mesher_triangle_vs_gmsh.py`) —
-   that is the plausible non-commercial use, not the production server.
-3. Proceed with S2 (port the ten Triangle-only features to gmsh) and S3
-   (the acceptance-limit comparison already proposed above) on that
-   timeline; once S3 passes, do Option A (S4 switch default, S5 delete) as
-   already planned, closing the question for good rather than leaving a
-   permanent "optional, trust the operator" carve-out.
+1. **Run gmsh out of process from pypardiso/MKL**, exchanging mesh data
+   through files (or a subprocess boundary) rather than importing both
+   in one Python interpreter -- the "mere aggregation" argument depends
+   on the two remaining genuinely separate programs communicating through
+   an arm's-length interface, not on merely being in different function
+   calls of the same process; whether a file-exchange boundary is enough
+   for that argument is a legal question, not a technical one this
+   document resolves.
+2. **Use an MKL-free solver in that configuration** (CHOLMOD or MUMPS,
+   now the defaults anyway per the decision below) instead of PARDISO,
+   removing the question entirely for that run. Per the coordinator's
+   engineering context, CHOLMOD is reported at roughly 1.1-2.8x slower
+   per solve than PARDISO (roughly +30-40% total run time) -- a figure
+   supplied by the coordinator, not independently reproduced by this
+   review; before this is relied on for a capacity or scheduling
+   decision, re-measure it against the actual solver benchmark scripts
+   in this repository (`bench_solvers.py`, `scratch_perf/bench_pardiso.py`)
+   on the current default stack.
+3. **Obtain Intel's explicit permission** for the specific gmsh+MKL
+   same-process combination, in addition to (not instead of) the
+   MOTRES-granted exception in LICENSE-EXCEPTION, if an operator wants
+   to keep running both in one process.
+This note no longer describes MOTRES's own default deployment; it is
+retained for whoever enables the optional PARDISO backend.
+
+### Owner architecture decision, 2026-09-30
+
+Default server image and default distribution: Intel MKL/`pypardiso`
+removed entirely; CHOLMOD (via `scikit-sparse`) and MUMPS become the
+default direct-solver backends (licence character recorded in
+THIRD_PARTY_NOTICES.md's "Planned default direct-solver stack" table;
+package names/pins/implementation not yet done as of this revision).
+Gmsh becomes the default mesher once the per-configuration verification
+above passes. Triangle is removed outright (previous section).
+`pypardiso`/MKL remains available only as an operator's own opt-in
+install, covered by the narrowed, optional
+[LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT**).

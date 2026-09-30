@@ -74,14 +74,25 @@ New dependencies must have a licence compatible with AGPL-3.0-or-later
 LGPL and GPL-2.0-or-later/GPL-3.0 are compatible). Record every new runtime
 dependency in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packages with
 non-commercial, field-of-use or other restrictions beyond the AGPL are not
-accepted as dependencies. The one existing case, `triangle`, is an optional
-extra being phased out (see [docs/MESHER_TRANSITION.md](docs/MESHER_TRANSITION.md)). Proprietary accelerators are optional, with the code working
-without them (the way `pypardiso` / Intel MKL is today) *and* covered, for
-the case where an operator's build does include one, by an explicit
-additional permission under AGPL section 7 granted by MOTRES d.o.o. as
-copyright holder — see [LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT,
-pending legal review**). That permission only covers MOTRES's own
-copyright; if you contribute code that would rely on it, your `Signed-off-by`
-does not by itself extend the permission to your contribution; see
-LICENSE-EXCEPTION's "Granted by the copyright holder; contributor consent"
-section.
+accepted as dependencies; `triangle` was the one existing case and has been
+removed (see [docs/MESHER_TRANSITION.md](docs/MESHER_TRANSITION.md)).
+Proprietary accelerators are optional and never installed or enabled by
+MOTRES's own build or deploy process (the default solvers are CHOLMOD and
+MUMPS; `pypardiso` / Intel MKL is an operator's own opt-in install) *and*
+covered, for an operator who does opt in, by an explicit additional
+permission under AGPL section 7 granted by MOTRES d.o.o. as copyright
+holder — see [LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT, pending legal
+review**) and [docs/LICENSE-EXCEPTION-NOTES.md](docs/LICENSE-EXCEPTION-NOTES.md).
+
+**That permission only covers copyright MOTRES d.o.o. holds.** The DCO
+sign-off you already give certifies your right to submit your contribution
+under the project's licence; it does not, by itself, extend
+LICENSE-EXCEPTION to your contribution, because MOTRES cannot grant a
+permission over material it does not hold copyright in (see
+LICENSE-EXCEPTION Section G). If your pull request touches code that
+links or combines with the Licensed Libraries named in LICENSE-EXCEPTION,
+say so in the pull request description and confirm you agree your
+contribution may be additionally licensed under AGPL-3.0-or-later
+**plus** the terms of LICENSE-EXCEPTION as it stands at the time of your
+commit — this is asked for explicitly, at submission, rather than
+relying on a later re-clearance exercise across the whole history.

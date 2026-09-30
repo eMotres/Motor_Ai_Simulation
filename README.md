@@ -59,9 +59,13 @@ the [GNU Affero General Public License v3.0 or later](LICENSE)
 (`SPDX-License-Identifier: AGPL-3.0-or-later`). Contributions are accepted
 under the [Developer Certificate of Origin](DCO.md) (`git commit -s`); see
 [CONTRIBUTING.md](CONTRIBUTING.md) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-An additional permission under AGPL section 7 for linking with Intel MKL is
-drafted in [LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT, pending legal
-review** — not yet in force).
+The default solvers and mesher (CHOLMOD/MUMPS, gmsh) need no additional
+permission. For the optional, user-installed Intel MKL / `pypardiso`
+backend, an additional permission under AGPL section 7 is drafted in
+[LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT, pending legal review** —
+not yet in force); see
+[docs/LICENSE-EXCEPTION-NOTES.md](docs/LICENSE-EXCEPTION-NOTES.md) for the
+reasoning and evidence behind it.
 
 ## References
 

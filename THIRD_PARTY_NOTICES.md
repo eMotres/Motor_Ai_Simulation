@@ -6,6 +6,22 @@ installed package metadata (`importlib.metadata`, `node_modules/*/package.json`)
 on 2026-09-29; where the metadata was empty the licence was taken from the
 project's own licence file. Each dependency remains under its own licence.
 
+**Owner decision, 2026-09-30 (implementation pending; this file describes
+both the current `requirements.txt` state and the planned default
+below, clearly labelled):** the default server image and default
+distribution drop Intel MKL/`pypardiso` entirely; CHOLMOD (via
+`scikit-sparse`) and MUMPS become the default direct-solver backends,
+with the OpenBLAS already bundled in the numpy/scipy PyPI wheels
+underneath. Gmsh becomes the default mesher once per-configuration
+verification passes (`docs/MESHER_TRANSITION.md`); Triangle is removed
+outright. `pypardiso`/Intel MKL remains available only as an optional,
+user-installed, user-enabled backend -- see "Optional (not installed by
+default)" below and
+[LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT**). See
+[docs/LICENSE-EXCEPTION-NOTES.md](docs/LICENSE-EXCEPTION-NOTES.md)
+Section 8 for the full record, including the production snapshot from
+before this decision.
+
 ## Python (requirements.txt)
 
 | Package | Version | Licence |
@@ -51,13 +67,29 @@ here, audited from the resolved dependency closure of `requirements.txt` on
 | OpenCASCADE Technology (in cadquery-ocp) | cadquery | LGPL-2.1 with OCCT exception | compatible |
 | GEOS (in shapely) | shapely | LGPL-2.1 | compatible |
 | vtk, trame-* | cadquery-ocp | BSD-3-Clause / Apache-2.0 / MIT | compatible |
+| OpenBLAS | numpy, scipy (PyPI wheels bundle it by default) | BSD-3-Clause | compatible |
+
+### Planned default direct-solver stack (2026-09-30 decision; not yet in requirements.txt, implementation pending)
+
+| Component | Role | Licence | AGPL-3.0 verdict |
+|---|---|---|---|
+| CHOLMOD (SuiteSparse), via a Python binding such as `scikit-sparse` | Sparse Cholesky factorisation, SPD systems | CHOLMOD itself: LGPL-2.1-or-later (Core/Cholesky modules) with some SuiteSparse modules under GPL-2.0-or-later; `scikit-sparse` (the Python wrapper most likely to be used): dual GPL-2.0-or-later AND LGPL-2.1-or-later | Compatible via the "or later" route (GPL-3.0 section 13 permits AGPL-3.0 combination), same reasoning already used for gmsh (note 1) -- confirm the exact modules pulled in (Supernodal/MatrixOps solving may pull in GPL-only helpers) once the binding is chosen and pinned |
+| MUMPS | Sparse direct multifrontal solver, general (non-SPD) systems | CeCILL-C (weak copyleft, LGPL-like; France: CEA/CNRS/Inria), except AMD-ordering and some LAPACK-derived components under BSD-3-Clause, and the optional PORD ordering under its own separate licence | Believed compatible (CeCILL-C is designed to be LGPL-interoperable) but not independently confirmed against the FSF's compatibility list this pass -- flag for counsel; also confirm the licence of whichever Python binding is chosen (e.g. `python-mumps`/`PyMUMPS`) and of PORD if it is enabled |
+
+Package names, exact versions and pins above are **not yet decided or
+implemented** as of this revision; this table records the licence
+character of the underlying libraries the owner has chosen so the
+question can be settled once implementation lands, not a completed
+audit of installed artefacts (contrast with the per-artifact table in
+docs/LICENSE-EXCEPTION-NOTES.md Section 6, which *is* read from an
+actual running image).
 
 ### Optional (not installed by default)
 
 | Package | Install | Licence |
 |---|---|---|
-| triangle | `requirements-triangle.txt` or extra `[triangle]` | Python wrapper LGPL-3.0; bundled Triangle C code by J. R. Shewchuk: **free for non-commercial use only** (see note 3) |
-| pypardiso | `requirements-pardiso.txt` or extra `[pardiso]` | BSD-3-Clause; pulls **Intel MKL, intel-openmp, TBB, tcmlib, umf, intel-cmplr-lib-ur** (Intel Simplified Software License / Intel EULA, proprietary; see note 2) |
+| triangle | previously `requirements-triangle.txt` / extra `[triangle]`; **removed outright by the 2026-09-30 decision**, not merely staged out (see note 3) | Python wrapper LGPL-3.0; bundled Triangle C code by J. R. Shewchuk: see note 3 for the author's exact terms |
+| pypardiso | `requirements-pardiso.txt` or extra `[pardiso]` -- an operator's own opt-in install, never installed or enabled by MOTRES's own build or deploy process as of the 2026-09-30 decision | BSD-3-Clause wrapper; pulls in several separately-licensed Intel artefacts, not one uniform licence -- see note 2 for the per-artifact breakdown |
 
 ## Web client (web/package.json, runtime dependencies)
 
@@ -96,34 +128,57 @@ are not distributed with the software and are not listed.
    GPL-3.0 section 13 explicitly permits combination with AGPL-3.0 code, so
    distributing this project under the AGPL together with gmsh is compatible.
    gmsh is used as an unmodified Python package (`import gmsh`).
-2. **Intel MKL (via pypardiso).** Proprietary, freely redistributable, and not
-   a "System Library" under GPL/AGPL section 1, so it is not a *default*
-   dependency: every solver falls back to SciPy's SuperLU when pypardiso is
-   absent. **Correction, 2026-09-30: the production server image is in fact
-   built with `--build-arg WITH_PARDISO=1`** (`deploy/Dockerfile.api`) and
-   does contain and convey Intel MKL / intel-openmp / TBB / tcmlib / umf /
-   intel-cmplr-lib-ur to users of the hosted service, which the previous
-   wording of this note ("never shipped ... in the default container image")
-   did not reflect. That combination is covered by the additional permission
-   under AGPL section 7 in
-   [LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT, pending legal review** --
-   see that file). Operators who do not need this permission can still build
-   without `WITH_PARDISO=1` and install pypardiso separately on their own
-   machines.
-3. **Triangle (optional, being phased out).** Its licence permits only
-   non-commercial use without the author's permission, a restriction the AGPL
-   does not allow, so it is **not a dependency of and not bundled in** the AGPL
-   distribution as a matter of `requirements.txt`: it is an optional extra
-   the operator installs separately. **Flag, 2026-09-30: the production
-   server image is currently also built with `--build-arg WITH_TRIANGLE=1`**
-   and does contain `triangle==20250106`. THIRD_PARTY_NOTICES and
-   docs/MESHER_TRANSITION.md have assumed MOTRES's use of the project is
-   non-commercial, which is the only basis on which installing Triangle on
-   MOTRES's own production server is consistent with Triangle's
-   non-commercial-only licence; that assumption needs an explicit,
-   current confirmation from the owner given that other MOTRES material
-   describes an aerostator.com "shop" — see the "Licensing recommendation"
-   section added to docs/MESHER_TRANSITION.md. Without Triangle the geometry
-   mesher falls back to gmsh (one log line) and the 2-D view uses
-   mapbox-earcut with a shapely (GEOS) constrained-Delaunay fallback. It
-   will be removed at stage S5 of docs/MESHER_TRANSITION.md.
+2. **Intel MKL and friends (via the now-optional pypardiso).** Not one
+   uniform proprietary licence -- read artefact-by-artefact from the
+   package actually installed (`dist-info/LICENSE.txt` inside the
+   production container, before the 2026-09-30 decision below removed
+   this chain from the default image; full table in
+   [docs/LICENSE-EXCEPTION-NOTES.md](docs/LICENSE-EXCEPTION-NOTES.md)
+   Section 6):
+   - `mkl`, `tbb`, `tcmlib`, `onemkl-license` -- **Intel Simplified
+     Software License** (proprietary, binary redistribution permitted
+     under stated conditions). Note: the `tbb` *PyPI package* (the
+     Intel-built binary) is under this licence, **not** the Apache-2.0
+     that covers the separate github.com/uxlfoundation/oneTBB *source*
+     project -- different offered licences for different artefacts.
+   - `intel-openmp`, `intel-cmplr-lib-ur` -- **Intel End User License
+     Agreement for Developer Tools**, materially more restrictive:
+     its section 3.1 bars linking/distributing so any part "becomes
+     Reciprocal Open Source Software" and bars SaaS/service-bureau use.
+     See [LICENSE-EXCEPTION](LICENSE-EXCEPTION) Section D -- this is
+     flagged for counsel, not resolved by this pack.
+   - `umf` (oneAPI Unified Memory Framework) -- **Apache-2.0 with LLVM
+     exceptions**. Not proprietary; was previously (incorrectly) lumped
+     into "the MKL chain" as proprietary in an earlier pass of this
+     file.
+   **2026-09-30 owner decision: this entire chain leaves the default
+   server image and default distribution.** `pypardiso` becomes an
+   operator's own opt-in install (`requirements-pardiso.txt`), never
+   installed or enabled by MOTRES's own build or deploy process. The
+   default solvers are CHOLMOD/MUMPS (see the "Planned default
+   direct-solver stack" table above). The additional permission in
+   [LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT, pending legal
+   review**) is kept, narrowed to `mkl` and `tbb` only, for operators who
+   choose to self-install this optional backend.
+3. **Triangle -- removed.** J. R. Shewchuk's own page
+   (https://www.cs.cmu.edu/~quake/triangle.html) states: "although
+   Triangle is freely available, it is copyrighted by the author and may
+   not be sold or included in commercial products without a license" --
+   quoted verbatim rather than paraphrased as a blanket "non-commercial
+   use only" (that paraphrase overstated the restriction: the author's
+   own wording is about selling or including Triangle in a commercial
+   product, not about all commercial *use*). The installed wrapper is
+   `triangle==20250106`, wrapping Triangle 1.6; its own
+   `dist-info/METADATA` declares the wrapper LGPL-3.0, separately from
+   the bundled C code's terms above. Given that restriction is still not
+   compatible with the AGPL's own redistribution terms, and given other
+   MOTRES material describes an aerostator.com "shop" (raising the same
+   commercial-use question the author's wording turns on), the owner
+   decided 2026-09-30 to **remove Triangle outright** rather than keep
+   it as a staged or optional component -- see
+   docs/MESHER_TRANSITION.md for the updated plan, including a
+   commercial-licence option that was not previously considered. Without
+   Triangle the geometry mesher uses gmsh (pending the
+   per-configuration verification in docs/MESHER_TRANSITION.md) and the
+   2-D view uses mapbox-earcut with a shapely (GEOS) constrained-Delaunay
+   fallback.

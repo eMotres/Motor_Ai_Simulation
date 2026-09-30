@@ -163,6 +163,11 @@ from motor_ai_sim.simulation.sb_postproc import (
     torque_harmonics as _torque_harmonics,
 )
 from motor_ai_sim.simulation.moving_band import slip_ring_nodes as _slip_ring_nodes
+from motor_ai_sim.simulation.virtual_work_torque import (
+    air_mask_from as _vwt_air_mask, frame_torques as _frame_torques,
+    prepare_sliding_band_frame_torques as _prepare_sb_frame_torques,
+    coulomb_series_summary as _coulomb_series_summary,
+)
 from motor_ai_sim.simulation.p2_state_capture import (
     current_p2_state_capture as _current_p2_state_capture,
     emit_selected_p2_state as _emit_selected_p2_state,
@@ -3841,6 +3846,11 @@ def fem_transient_sliding_band(
                                      # torque ~35 % (its Maxwell integral is radius-inconsistent
                                      # under load) and its ripple was a mesh staircase, so every P1
                                      # number needed a correction nobody could state.
+    torque_method: Optional[str] = None,  # REPORTED torque: "hybrid_maxwell_ac" (default:
+                                     # energy / terminal-work mean + raw Maxwell AC) or
+                                     # "coulomb" (Coulomb virtual-work waveform, mean and
+                                     # ripple).  None = config simulation.torque_method, else
+                                     # the default.  Coulomb is computed and stored either way.
 ) -> dict:
     """Sliding-band transient: mesh the stator + rotor halves ONCE, then sweep
     the rotor by shifting the slip-ring node pairing (no remeshing) so the
@@ -3926,6 +3936,11 @@ def fem_transient_sliding_band(
     mesh_size_mm = float(mesh_size_mm)
     min_size_mm = float(min_size_mm)
     cfg = get_config(); sim = cfg.get("simulation", {})
+    torque_method = str(torque_method or sim.get("torque_method")
+                        or "hybrid_maxwell_ac")
+    if torque_method not in ("hybrid_maxwell_ac", "coulomb"):
+        raise ValueError("torque_method must be 'hybrid_maxwell_ac' or "
+                         "'coulomb'; got %r" % torque_method)
     geo = dict(cfg.get("geometry", {}))
     # The winding block is COPIED, never referenced: the per-request connection /
     # n_parallel overlay it below, and evaluating a catalog machine must not move
@@ -5982,6 +5997,20 @@ def fem_transient_sliding_band(
     for _ids, _c in _sat2:
         _sb2 = Basis(mesh_all, _P2E(), elements=_ids)
         _sat_sub2.append((_sb2, _sb2.with_element(ElementTriP0()), _ids, _c))
+    # Per-frame torques (simulation/virtual_work_torque.frame_torques): the
+    # Arkkio series as before, plus Coulomb virtual work on the rotor-side and
+    # stator-side gap air rings (the slip circle bounds both, never inside).
+    _tags_all2 = np.full(n_all_el, -1, int)
+    for _hn, _off in (("s", 0), ("r", nst)):
+        for tag, idx in half[_hn]["cells"].items():
+            _tags_all2[np.asarray(idx, int) + _off] = int(tag)
+    _ftq2 = _prepare_sb_frame_torques(
+        mesh_all, _P2E(), stack_length_m=p.stack_length, sector_count=NS,
+        maxwell_sector=_torque2, n_stator_nodes=nsn,
+        air_mask=_vwt_air_mask(_tags_all2, _nu_const2),
+        r_rotor_metal=_r_rot_max, r_slip=mid, r_stator_metal=_r_sta_min,
+        slip_nodes_rotor=np.asarray(rring, int) + nsn,
+        slip_nodes_stator=np.asarray(sring, int), log_warning=log.warning)
 
     # ── frame-independent solver helpers ─────────────────────────────────
     # The saturable-iron assembly, the Newton tangent and the damped-Picard
@@ -6691,7 +6720,7 @@ def fem_transient_sliding_band(
                       "MEASURED ONLY — corrections off (SB_V_DC_SOLVE=0)"))
 
     # ── frame loop ───────────────────────────────────────────────────────
-    _T2 = []; _T_vw = []; _T_vw_reason = []
+    _T2 = []; _T_vw = []; _T_vw_reason = []; _Tc2 = []; _Tc2l = []
     _psiA = []; _psiB = []; _psiC = []; _tt = []; _theta_samples = []
     _dt_steps = []          # Δt each reported frame's step was solved with
     _pre_frame = None       # (ψ, i) of the frame solved just before frame 0
@@ -8893,8 +8922,11 @@ def fem_transient_sliding_band(
             _nu_rot_sum = (_nu_r_k.copy() if _nu_rot_sum is None
                            else _nu_rot_sum + _nu_r_k)
             _nu_rot_n += 1
-        Tq = _torque2(A2) * NS
+        _ftk = _frame_torques(_ftq2, A2)
+        Tq = _ftk["maxwell_Nm"]
         _T2.append(Tq)
+        _Tc2.append(_ftk["coulomb_Nm"])
+        _Tc2l.append((_ftk["coulomb_rotor_side_Nm"], _ftk["coulomb_stator_side_Nm"]))
         _pa, _pb, _pc = _psi2(A2)
         _psiA.append(_pa); _psiB.append(_pb); _psiC.append(_pc)
         if f_set2 is not None and _six_blk.get("sets_in_model") == [1, 2]:
@@ -9408,7 +9440,7 @@ def fem_transient_sliding_band(
     # PWM eddy run P_sleeve was averaged over the settling frames too, and the
     # loss-total zip paired the trimmed copper series with the sleeve's
     # SETTLING prefix (docs/solver-guards-2026-09-23.md).
-    _v2_lists = (_T2, _T_vw, _T_vw_reason,
+    _v2_lists = (_T2, _T_vw, _T_vw_reason, _Tc2, _Tc2l,
                  _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt, _theta_samples,
                  _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
                  _histA_rot2, _pic_iters, _frame_converged, _bgap2,
@@ -9434,6 +9466,7 @@ def fem_transient_sliding_band(
         "mechanical_angle_rad": _theta_samples,
         "torque_em_Nm": _T2,
         "torque_virtual_work_diagnostic_Nm": _T_vw,
+        "torque_coulomb_Nm": _Tc2,
         "psi_A_Wb": _psiA, "psi_B_Wb": _psiB, "psi_C_Wb": _psiC,
         "current_A_A": _IA, "current_B_A": _IB, "current_C_A": _IC,
         "picard_iterations": _pic_iters,
@@ -10285,7 +10318,7 @@ def fem_transient_sliding_band(
         _torque_method_diag = _torque_method_diagnostics(
             _psiA, _psiB, _psiC, _IA, _IB, _IC, _T2raw, pole_pairs,
             n_parallel=int(n_parallel), selected_method=_torque_method,
-            **_torque_method_args)
+            t_coulomb=_Tc2, **_torque_method_args)
     except Exception as _diag_error:
         # Diagnostics are additive and must never interrupt a completed solve.
         _torque_method_diag = {
@@ -10307,6 +10340,29 @@ def fem_transient_sliding_band(
             "diagnostic_input_reason": "diagnostic evaluation failed: "
                                        + type(_diag_error).__name__,
         }
+    # Coulomb virtual work (simulation/virtual_work_torque.py), stored on every
+    # run; torque_method="coulomb" makes it the reported waveform/mean/ripple.
+    _coul2 = _coulomb_series_summary(
+        _Tc2, _Tc2l, _ftq2.unavailable_reason, n_steps_per_period=n_steps_per_period,
+        step_periods=float(_sched_dth[-1]) / period_mech)
+    _coul2["layers"] = _ftq2.layers_info
+    _coul2["torque_method_requested"] = torque_method
+    if _coul2["layer_self_check"].get("ripple_mesh_limited"):
+        log.warning("Coulomb layer self-check: rotor- and stator-side gap rings "
+                    "differ by %.3g N·m = %.1f %% of the torque p-p — the ripple "
+                    "is limited by the air-gap mesh (raise gap layers)",
+                    _coul2["layer_self_check"]["max_abs_diff_Nm"],
+                    100.0 * _coul2["layer_self_check"]["rel_to_pp"])
+    if torque_method == "coulomb":
+        if _coul2["available"]:
+            _T2 = list(_coul2["T_coulomb_series"])
+            _torque_method = _torque_mean_source = "coulomb_virtual_work"
+            T_harm_order = _coul2["T_harm_order_coulomb"]
+            T_harm_amp = _coul2["T_harm_amp_coulomb"]
+        else:
+            log.warning("torque_method='coulomb' requested but Coulomb torque "
+                        "is unavailable (%s); reporting %s",
+                        _coul2["unavailable_reason"], _torque_method)
     T_arr = np.asarray(_T2, float)
     Tavg = float(T_arr.mean()) if T_arr.size else 0.0
     _T_report, Trip_raw = torque_metrics(_T2)
@@ -10960,6 +11016,11 @@ def fem_transient_sliding_band(
         "time_s": _tt, "rotor_angle_deg": _ang,
         "P2_transient_sample_history": _p2_transient_history,
         "T_em_Nm": _T2, "T_avg_Nm": Tavg, "T_ripple_pct": Trip_raw,
+        "T_coulomb_series": _coul2["T_coulomb_series"],
+        "T_avg_coulomb_Nm": _coul2["T_avg_coulomb_Nm"],
+        "T_ripple_pp_coulomb": _coul2["T_ripple_pp_coulomb"],
+        "coulomb_torque": {_k: _v for _k, _v in _coul2.items()
+                           if _k != "T_coulomb_series"},
         "T_em_virtual_work_diagnostic_Nm": list(_T_vw),
         "T_avg_virtual_work_diagnostic_Nm": _vw_mean,
         "virtual_work_diagnostics": _vw_diagnostics,
@@ -11475,6 +11536,7 @@ def em_transient_eval(
                                      # the transient just finished, kept instead of thrown
                                      # away, so the field views can render the run's own
                                      # field instead of re-solving it.
+    torque_method: Optional[str] = None,  # "hybrid_maxwell_ac" | "coulomb" | None (config)
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 
@@ -11522,7 +11584,7 @@ def em_transient_eval(
         # field_first is NOT set: the snapshot is the LAST frame, the one whose
         # B(t) history is complete, which is what the loss map and the coupled
         # eddy J are derived from.
-        return_field=bool(return_field))
+        return_field=bool(return_field), torque_method=torque_method)
 
 
 def measure_six_phase_inductances(*, six_phase: dict, I_phase_rms: float,

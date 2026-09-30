@@ -587,13 +587,18 @@ def torque_method_diagnostics(psi_a: Sequence[float], psi_b: Sequence[float],
                               eddy: bool = False, rotor_eddy: bool = False,
                               demag: bool = False, frozen_nu: bool = False,
                               all_frames_converged: bool = False,
-                              integer_period_window: bool = False
+                              integer_period_window: bool = False,
+                              t_coulomb: Optional[Sequence[Optional[float]]] = None
                               ) -> Dict[str, object]:
     """Compare torque mean candidates without certifying either physically.
 
     This is additive diagnostic metadata only. It deliberately does not pick
     the reported torque or infer energy balance, periodicity, or dq validity.
     Invalid or unavailable inputs yield JSON-safe ``None`` values and a reason.
+
+    ``t_coulomb`` (the Coulomb virtual-work series of the same frames, see
+    simulation/virtual_work_torque.py) adds its mean and the differences of
+    every other mean against it; None entries make those values None.
     """
     result: Dict[str, object] = {
         "validation_status": "uncertified",
@@ -613,6 +618,10 @@ def torque_method_diagnostics(psi_a: Sequence[float], psi_b: Sequence[float],
         "legacy_selector_would_use_space_vector_mean": None,
         "certified_energy_balance_Nm": None,
         "diagnostic_input_reason": None,
+        "coulomb_mean_Nm": None,
+        "raw_maxwell_minus_coulomb_mean_Nm": None,
+        "space_vector_minus_coulomb_mean_Nm": None,
+        "terminal_work_minus_coulomb_mean_Nm": None,
     }
     try:
         arrays = [np.asarray(v, dtype=float) for v in
@@ -683,11 +692,33 @@ def torque_method_diagnostics(psi_a: Sequence[float], psi_b: Sequence[float],
                 result["terminal_work_eligibility_reason"] = str(exc)
         else:
             result["terminal_work_eligibility_reason"] = reason
+        _add_coulomb_mean_differences(result, t_coulomb, int(pa.size))
         return result
     except Exception as exc:
         result["diagnostic_input_reason"] = (
             "diagnostic inputs could not be evaluated: " + type(exc).__name__)
         return result
+
+
+def _add_coulomb_mean_differences(result: Dict[str, object],
+                                  t_coulomb: Optional[Sequence[Optional[float]]],
+                                  n_frames: int) -> None:
+    """Coulomb mean and (other mean − Coulomb mean), in place; None if unusable."""
+    if t_coulomb is None:
+        return
+    vals = list(t_coulomb)
+    if len(vals) != n_frames or not vals or any(
+            v is None or not math.isfinite(float(v)) for v in vals):
+        return
+    c = float(np.mean(np.asarray(vals, float)))
+    result["coulomb_mean_Nm"] = c
+    for key, src in (("raw_maxwell_minus_coulomb_mean_Nm", "raw_maxwell_mean_Nm"),
+                     ("space_vector_minus_coulomb_mean_Nm",
+                      "space_vector_mean_candidate_Nm"),
+                     ("terminal_work_minus_coulomb_mean_Nm",
+                      "terminal_work_mean_candidate_Nm")):
+        v = result.get(src)
+        result[key] = (float(v) - c) if v is not None else None
 
 
 def torque_harmonics(t_raw: Sequence[float], n_steps_per_period: int,

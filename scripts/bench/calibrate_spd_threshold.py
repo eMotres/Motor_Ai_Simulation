@@ -45,8 +45,25 @@ def rel(x, ref):
     return float(np.max(np.abs(x - ref)) / max(np.max(np.abs(ref)), 1e-300))
 
 
+def make(name):
+    """cholmod | cholmod-inplace | cholmod-copy | mumps-spd[:ordering] |
+    mumps-lu[:ordering]"""
+    base, _, opt = name.partition(":")
+    if base == "cholmod-inplace":
+        f = LB.CholmodFactor()
+        f.super_min = 10 ** 12
+        return f
+    if base == "cholmod-copy":
+        f = LB.CholmodFactor()
+        f.super_min = 0
+        return f
+    if base in ("mumps-spd", "mumps-lu"):
+        return LB.MumpsFactor(spd=(base == "mumps-spd"), ordering=opt or None)
+    return LB.make_factor(base)
+
+
 def bench(name, A1, b1, x1, A2, b2, x2, repeat):
-    s = LB.FactorStream(LB.make_factor(name))
+    s = LB.FactorStream(make(name))
     t0 = time.perf_counter()
     s.factor(A1)
     x = s.solve(b1)
@@ -72,6 +89,7 @@ def main():
     ap.add_argument("--cold-fraction", type=float, default=0.14)
     ap.add_argument("--max-n", type=int, default=200000)
     ap.add_argument("--only", default="")
+    ap.add_argument("--variants", default="cholmod,mumps-spd,mumps-lu")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     rows = []
@@ -93,7 +111,8 @@ def main():
         row = dict(tag=tag, n=int(A1.shape[0]), nnz=int(A1.nnz),
                    pardiso_first_s=(m1.get("pardiso") or {}).get("dt"),
                    pardiso_later_s=(m2.get("pardiso") or {}).get("dt"))
-        for name in ("cholmod", "mumps-spd", "mumps-lu"):
+        names = a.variants.split(",")
+        for name in names:
             try:
                 r = bench(name, A1, b1, x1, A2, b2, x2, a.repeat)
                 r["weighted_s"] = (a.cold_fraction * r["cold_s"]
@@ -102,15 +121,13 @@ def main():
                 r = dict(error=repr(e))
             row[name] = r
         rows.append(row)
-        c, m = row["cholmod"], row["mumps-spd"]
-        print("%-40s n=%7d  chol cold %7.1f warm %7.1f | mumps-spd cold %7.1f "
-              "warm %7.1f | mumps-lu warm %7.1f ms | pardiso later %s | rel %.1e %.1e"
-              % (tag, row["n"], 1e3 * c.get("cold_s", np.nan),
-                 1e3 * c.get("warm_s", np.nan), 1e3 * m.get("cold_s", np.nan),
-                 1e3 * m.get("warm_s", np.nan),
-                 1e3 * row["mumps-lu"].get("warm_s", np.nan),
-                 row["pardiso_later_s"], c.get("rel_later", np.nan),
-                 m.get("rel_later", np.nan)), flush=True)
+        print("%-44s n=%7d pardiso later %s" % (tag, row["n"], row["pardiso_later_s"]))
+        for name in names:
+            r = row[name]
+            print("    %-22s cold %8.1f  warm %8.1f  weighted %8.1f ms  rel %.1e"
+                  % (name, 1e3 * r.get("cold_s", np.nan), 1e3 * r.get("warm_s", np.nan),
+                     1e3 * r.get("weighted_s", np.nan), r.get("rel_later", np.nan)),
+                  flush=True)
     with open(a.out, "w") as f:
         json.dump(rows, f, indent=1)
 

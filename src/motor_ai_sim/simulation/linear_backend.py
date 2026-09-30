@@ -313,10 +313,20 @@ def _as_symmetric_csc(A):
 
 
 class CholmodFactor(Factor):
-    """SuiteSparse CHOLMOD (supernodal/simplicial chosen by CHOLMOD), AMD
-    ordering by default (``SB_CHOLMOD_ORDER``): the cheaper weighted choice at
-    production sizes (docs/OPEN_SOLVERS_2026-09-30.md).  The symbolic analysis
-    is kept and ``factorize`` recomputes only the numbers."""
+    """SuiteSparse CHOLMOD, AMD ordering by default (``SB_CHOLMOD_ORDER``):
+    the cheaper weighted choice at production sizes.  The symbolic analysis is
+    kept; ``factorize`` recomputes only the numbers.
+
+    HOW it refactorises matters, because scikit-sparse 0.5 converts every
+    numeric factor to a simplicial one after the factorisation
+    (``final_super = False``), so refactorising the SAME object runs the
+    simplicial algorithm from the second call on.  Measured on the exported
+    systems (docs/OPEN_SOLVERS_2026-09-30.md): that is the faster path up to
+    ~45 k unknowns (L155 eddy, 44 k: 47 ms against 56 ms) and much the slower
+    one above (97 k: 384 ms against 159 ms).  So from
+    ``SB_CHOLMOD_SUPER_MIN_DOF`` (default 50 000) unknowns up, every
+    factorisation starts from a copy of the kept symbolic (supernodal)
+    analysis (a copy costs ~0.1 ms)."""
 
     backend = "cholmod"
     kind = "cholesky"
@@ -325,26 +335,35 @@ class CholmodFactor(Factor):
                  mode: Optional[str] = None) -> None:
         self.order = order or os.environ.get("SB_CHOLMOD_ORDER", "amd")
         self.mode = mode or os.environ.get("SB_CHOLMOD_MODE", "auto")
-        self._f = None
+        try:
+            self.super_min = int(os.environ.get("SB_CHOLMOD_SUPER_MIN_DOF",
+                                                "50000"))
+        except ValueError:
+            self.super_min = 50000
+        self._sym = None          # the symbolic analysis, never factorised
+        self._f = None            # the numeric factor
         self.rcond_min = None
         self.near_singular_solves = 0
 
     def analyze(self, A, sym=None) -> None:
         from sksparse import cholmod as _cm
-        self._f = None
+        self._sym = self._f = None
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            self._f = _cm.CholeskyFactor(_as_symmetric_csc(A), lower=True,
-                                         order=self.order,
-                                         supernodal_mode=self.mode)
+            self._sym = _cm.CholeskyFactor(_as_symmetric_csc(A), lower=True,
+                                           order=self.order,
+                                           supernodal_mode=self.mode)
 
     def factorize(self, A, sym=None) -> None:
         from sksparse import cholmod as _cm
+        if self._f is None or A.shape[0] >= self.super_min:
+            self._f = self._sym.copy()
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 self._f.factorize(_as_symmetric_csc(A))
         except _cm.CholmodNotPositiveDefiniteError as e:
+            self._f = None
             raise NotPositiveDefinite(str(e)) from e
         rc = float(getattr(self._f, "rcond", -1.0))
         if rc >= 0.0:
@@ -367,7 +386,7 @@ class CholmodFactor(Factor):
         return np.asarray(x)
 
     def free(self) -> None:
-        self._f = None          # CholeskyFactor.__dealloc__ frees factor + common
+        self._f = self._sym = None   # __dealloc__ frees factor + common
 
     def stats(self) -> Dict[str, Any]:
         return {"rcond_min": self.rcond_min,

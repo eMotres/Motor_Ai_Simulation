@@ -242,8 +242,9 @@ def update_geometry(update: GeometryUpdateModel, request: Request = None):
         # the root of the stale die files (2026-09-30): an edit of slot_height
         # rewrote slot_height here and left stator_inner_radius at the old
         # value, then sync_active_die_geometry copied that block into die.yaml.
-        # Off by default — it moves _geometry_fingerprint for machines whose
-        # stored copies are stale; see motor_geometry.fresh_derived_on_write.
+        # On by default (MOTOR_AI_SIM_FRESH_DERIVED=0 disables); it moves
+        # _geometry_fingerprint for machines whose stored copies were stale —
+        # see motor_geometry.fresh_derived_on_write and the migration re-key.
         try:
             from motor_ai_sim.geometry.motor_geometry import (
                 fresh_derived_on_write, refresh_derived_geometry)

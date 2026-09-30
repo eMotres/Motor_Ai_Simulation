@@ -14,8 +14,8 @@ Pinned here:
   * the guard compares INPUTS: no false 409, a real input change still 409s,
     and slot_hs (never read by the builder) is not a difference;
   * the lock check does not refuse a derived key;
-  * the payload / save refresh is behind MOTOR_AI_SIM_FRESH_DERIVED, and with
-    it OFF (the default) nothing the fingerprints hash changes;
+  * the payload / save refresh is ON by default (MOTOR_AI_SIM_FRESH_DERIVED=0
+    turns it off, and then nothing the fingerprints hash changes);
   * build_sig and _geometry_fingerprint are unchanged for a consistent die;
   * the migration script: dry-run writes nothing, --apply fixes the file
     (CRLF kept, .bak written), a second run is a no-op.
@@ -127,7 +127,7 @@ def dies(monkeypatch, tmp_path):
     monkeypatch.setattr(fam, "_DIES_DIR", root)
     monkeypatch.setattr(fam, "_CTX_FILE", tmp_path / ".family_context.json")
     monkeypatch.setattr(fam, "_sync_mesh_config_from_duty", lambda c, n: False)
-    monkeypatch.delenv(mg.FRESH_DERIVED_ENV, raising=False)
+    monkeypatch.setenv(mg.FRESH_DERIVED_ENV, "0")
     return root
 
 
@@ -165,12 +165,13 @@ def test_lock_check_ignores_derived_keys_but_not_inputs(dies, tmp_path):
 # ── the write-side switch, and the prints ────────────────────────────────────
 
 def test_payload_is_unchanged_with_the_switch_off(dies):
-    p = fam.payload(DIE, CFG)
+    p = fam.payload(DIE, CFG)                     # fixture: switch = 0
     assert p["geometry"]["stator_inner_radius"] == 12.100000000000001
 
 
 def test_payload_and_save_refresh_with_the_switch_on(dies, monkeypatch):
-    monkeypatch.setenv(mg.FRESH_DERIVED_ENV, "1")
+    monkeypatch.delenv(mg.FRESH_DERIVED_ENV)      # unset = the default: ON
+    assert mg.fresh_derived_on_write()
     p = fam.payload(DIE, CFG)
     assert p["geometry"]["stator_inner_radius"] == pytest.approx(12.0)
     d = fam._load_yaml(fam._die_file(DIE), "die")

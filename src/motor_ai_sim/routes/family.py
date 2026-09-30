@@ -3612,7 +3612,7 @@ def sync_active_die_geometry(saved_geo: dict,
         from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
         for k, dv in _die_g.items():
             if (k in FREE_GEO_KEYS or not isinstance(dv, (int, float))
-                    or not is_compared_geometry_input(k)):
+                    or not is_compared_geometry_input(k, _die_g, prev_geo)):
                 continue
             pv = prev_geo.get(k)
             if isinstance(pv, (int, float)) and abs(float(dv) - float(pv)) > 1e-6:
@@ -3730,7 +3730,9 @@ def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
     die_keys = set((die_doc or {}).get("geometry") or {}) - set(FREE_GEO_KEYS)
     out: List[Dict[str, Any]] = []
     for k in sorted(set(saved) & set(live)):
-        if not is_compared_geometry_input(k):
+        # slot/pole totals count as derived only when BOTH sides carry the
+        # segment form (motor_geometry.count_is_derived)
+        if not is_compared_geometry_input(k, saved, live):
             continue
         lv, sv = live.get(k), saved.get(k)
         if (not isinstance(lv, (int, float)) or isinstance(lv, bool)
@@ -4658,13 +4660,15 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
     die_geo = d.get("geometry") or {}
     ov = c.get("geometry_overrides") or {}
     from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
+    _canon_geo = {**die_geo, **{k: v for k, v in ov.items() if v is not None}}
+    _after = {**_canon_geo, **update}
     bad = []
     for k, v in update.items():
         # A derived key is not an edit: the live object recomputes it from the
         # inputs whatever value arrives, so it is judged through its inputs —
         # and the die's stored copy of it may be stale (2026-09-30).  An
         # unused key (slot_hs) moves nothing.
-        if not is_compared_geometry_input(k):
+        if not is_compared_geometry_input(k, _after, _canon_geo):
             continue
         free = k in EDITABLE_UNDER_DIE_LOCK
         if free:
@@ -4942,7 +4946,7 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
             geo[_k] = _v
     # The derived fields the die STORES are copies, stale on most dies until
     # scripts/migrate_derived_geometry.py has run.  They are recomputed from
-    # the merged inputs only once the switch is on: the PUT this payload feeds
+    # the merged inputs while the switch is on (the default): the PUT this payload feeds
     # writes them into motor_config.yaml, whose raw block the passport /
     # bench-Ld/Lq key (`_geometry_fingerprint`) hashes — see
     # motor_geometry.fresh_derived_on_write for the order of operations.

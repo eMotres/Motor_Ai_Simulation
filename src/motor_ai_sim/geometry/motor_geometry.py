@@ -62,6 +62,32 @@ DERIVED_GEOMETRY_FIELDS = (
 #: (the passport / bench keys) — changing that print would orphan them.
 UNUSED_GEOMETRY_KEYS = frozenset({"slot_hs"})
 
+#: THE canonical classification of the non-primary geometry names (review of
+#: PR #75, 2026-09-30: one source, tested for equality with what the
+#: derivation returns — tests/test_die_derived_geometry.py).
+#:
+#: * ``DERIVED_GEOMETRY_FIELDS`` (above) — what ``derived_geometry`` returns.
+#: * ``DERIVED_COUNT_FIELDS`` — the slot/pole totals.  Derived from the segment
+#:   form (``num_seg`` x ``*_per_segment``) WHEN that form is present; a
+#:   document without it uses the totals as its primary topology, so they are
+#:   only skipped by a comparison when BOTH sides carry a valid segment form
+#:   (``count_is_derived``).
+#: * ``DERIVED_PROPERTY_NAMES`` — read-only ``MotorGeometryParams`` properties
+#:   that can leak into a serialised dict; never stored on purpose.
+#:
+#: ``routes._validation.DERIVED_GEOMETRY_NAMES`` and
+#: ``services.geometry_service._DERIVED_PARAMS`` must equal
+#: ``ALL_DERIVED_GEOMETRY_NAMES`` (pinned by a test).
+DERIVED_COUNT_FIELDS = ("num_slots", "num_poles")
+DERIVED_PROPERTY_NAMES = ("stator_slot_radius", "rotor_core_radius",
+                          "shaft_radius")
+ALL_DERIVED_GEOMETRY_NAMES = frozenset(DERIVED_GEOMETRY_FIELDS) | frozenset(
+    DERIVED_COUNT_FIELDS) | frozenset(DERIVED_PROPERTY_NAMES)
+
+#: count key -> the per-segment primary it is the product of (with num_seg)
+_COUNT_SEGMENT_KEY = {"num_slots": "num_slots_per_segment",
+                      "num_poles": "num_poles_per_segment"}
+
 
 def derived_geometry(g: Dict[str, Any]) -> Dict[str, float]:
     """Every derived geometry field, computed from the PRIMARIES in ``g``.
@@ -238,26 +264,45 @@ def refresh_derived_geometry(g: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
-def is_compared_geometry_input(key: str) -> bool:
+def has_segment_form(g: Optional[Dict[str, Any]], count_key: str) -> bool:
+    """Does ``g`` carry a VALID segment form for ``count_key`` (num_slots /
+    num_poles): ``num_seg`` and the matching ``*_per_segment``, both positive
+    numbers?"""
+    g = g or {}
+    ns = _as_num(g.get("num_seg"))
+    per = _as_num(g.get(_COUNT_SEGMENT_KEY[count_key]))
+    return bool(ns and ns > 0 and per and per > 0)
+
+
+def count_is_derived(count_key: str, *docs: Optional[Dict[str, Any]]) -> bool:
+    """A slot/pole TOTAL is derived — and so skipped by a comparison — only
+    when EVERY document compared carries a valid segment form for it.  A
+    count-form-only document (legacy, partial, or a stamp that never carried
+    the segment keys) states its topology through the total, and a change of
+    it must be seen (review of PR #75, 2026-09-30)."""
+    return bool(docs) and all(has_segment_form(d, count_key) for d in docs)
+
+
+def is_compared_geometry_input(key: str, *docs: Optional[Dict[str, Any]]) -> bool:
     """True for a key that says which MACHINE this is: not derived (a function
     of the primaries, compared through them) and not unused (``slot_hs``).
     The one rule every "same machine?" comparison of two stored geometries
     uses, so a stale derived copy or an unread knob can never read as a
-    different motor."""
+    different motor.
+
+    ``docs`` are the documents being compared.  They matter only for the slot/
+    pole totals, which are derived only when every one of them carries a valid
+    segment form (``count_is_derived``); called without documents a total is
+    treated as an INPUT — the safe default."""
     if key in UNUSED_GEOMETRY_KEYS:
         return False
-    try:
-        from motor_ai_sim.routes._validation import DERIVED_GEOMETRY_NAMES
-        derived = DERIVED_GEOMETRY_NAMES
-    except Exception:                                  # noqa: BLE001
-        derived = frozenset(DERIVED_GEOMETRY_FIELDS) | {
-            "num_slots", "num_poles", "stator_slot_radius",
-            "rotor_core_radius", "shaft_radius"}
-    return key not in derived
+    if key in DERIVED_COUNT_FIELDS:
+        return not count_is_derived(key, *docs)
+    return key not in ALL_DERIVED_GEOMETRY_NAMES
 
 
 #: Environment switch for the WRITE side of the fix (see
-#: ``fresh_derived_on_write``).  Off by default — deliberately.
+#: ``fresh_derived_on_write``).  On unless set to 0/false/no/off.
 FRESH_DERIVED_ENV = "MOTOR_AI_SIM_FRESH_DERIVED"
 
 
@@ -266,21 +311,23 @@ def fresh_derived_on_write() -> bool:
     write: the geometry PUT's ``motor_config.yaml`` block, the family
     ``/payload`` and every die/configuration save.
 
-    Off by default because turning it on changes
-    ``routes.simulation._geometry_fingerprint`` for every machine whose die
-    still stores stale derived fields: that print hashes the raw
-    ``motor_config.yaml`` geometry block, the ▶ load copies the die's stored
-    derived values into it, so the Stage A passports (end_effect_passports.json)
-    and the bench Ld/Lq records of those machines are KEYED on the stale
-    numbers (measured 2026-09-30: the CIANO10 200 opt L155/L180 and the
-    CIANO28 85 20SW1200 L13 passports).  The order is: run
-    ``scripts/migrate_derived_geometry.py`` (dry-run, review, then --apply with
-    the passport/bench re-key), THEN set ``MOTOR_AI_SIM_FRESH_DERIVED=1``.
-    Every read-side consumer (comparisons, reports, exports) uses fresh values
-    regardless of this switch — those never feed a stored key."""
+    ON by default (owner 2026-09-30: every motor is recomputed and gets a
+    new passport anyway — fix the bug, do not merely flag it).
+    ``MOTOR_AI_SIM_FRESH_DERIVED=0`` turns it off.
+
+    What turning it on moves: ``routes.simulation._geometry_fingerprint``
+    hashes the raw ``motor_config.yaml`` geometry block, and a ▶ load copies
+    the die's stored derived values into it, so the Stage A passports
+    (end_effect_passports.json) and bench Ld/Lq records of machines whose dies
+    still store stale copies are KEYED on the stale numbers (measured
+    2026-09-30).  ``scripts/migrate_derived_geometry.py --apply --rekey
+    --restamp-results`` rewrites the stored copies and adds those records under
+    the new prints — run it right after deploying this switch.  Every
+    read-side consumer (comparisons, reports, windage, exports) uses fresh
+    values regardless of the switch."""
     import os
-    return os.environ.get(FRESH_DERIVED_ENV, "").strip().lower() in (
-        "1", "true", "yes", "on")
+    v = os.environ.get(FRESH_DERIVED_ENV, "").strip().lower()
+    return v not in ("0", "false", "no", "off")
 
 
 class MotorGeometryParams:

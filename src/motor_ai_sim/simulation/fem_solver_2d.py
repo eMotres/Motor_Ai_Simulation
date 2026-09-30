@@ -7633,8 +7633,8 @@ def fem_transient_sliding_band(
             _td_A0: List[np.ndarray] = []
             _td_U0: List[np.ndarray] = []
             _td_prev = None
-            _td_start_mode = str(_os_sb.environ.get("SB_TDM_START", "static")
-                                 or "static").lower()
+            _td_start_mode = str(_os_sb.environ.get("SB_TDM_START", "static_par")
+                                 or "static_par").lower()
             _tdm_info["start"] = _td_start_mode
             for _j, (_P, _fr, _Iv, _Is, _m) in enumerate(_td_ops_l):
                 if _td_prev is None:
@@ -7664,6 +7664,14 @@ def fem_transient_sliding_band(
                 _td_U0.append(_Iv / np.maximum(_S_con, 1e-300))
                 _td_prev = _Ast if _td_prev is None or _td_start_mode != "project" \
                     else _td_prev
+                if _td_start_mode == "static_par":
+                    # frame 0 done (cold, as above); every other frame's
+                    # static field in parallel from it
+                    _td_A0, _ssi = _td_solver.static_start(_Ast)
+                    _td_U0 = [_o[2] / np.maximum(_S_con, 1e-300)
+                              for _o in _td_ops_l]
+                    _tdm_info["static_start"] = _ssi
+                    break
             _tdm_info["t"]["static_start"] = _t.time() - _t_s
             _cancel_point("TDM Newton")
             _t_s = _t.time()

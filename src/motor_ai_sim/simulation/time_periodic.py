@@ -94,8 +94,9 @@ def _mkl_local_threads(lib, n: Optional[int]) -> None:
     """Set the MKL thread count of the CALLING thread (mkl_set_num_threads_local).
 
     Several frames are factorised concurrently from a thread pool; each call
-    gets ``n`` MKL threads so the total stays at workers x n."""
-    if lib is None or not n:
+    gets ``n`` MKL threads so the total stays at workers x n.  ``n = 0``
+    returns the thread to the process-wide setting; None leaves it."""
+    if lib is None or n is None:
         return
     try:
         f = lib.MKL_Set_Num_Threads_Local
@@ -492,6 +493,58 @@ class TimePeriodicEddy:
         self._tick("jacobian", t0)
         return Js
 
+    # ── the start: the static field of every frame, in parallel ──────────
+    def static_start(self, A0: np.ndarray, tol: float = 1e-5,
+                     maxit: int = 40) -> Tuple[List[np.ndarray], Dict[str, Any]]:
+        """The ∂A/∂t = 0 field of every frame (U_b = I_b/S_b, uniform current
+        in every wire — ``P2Drive.eddy_static_state``'s problem), all frames
+        at once from ONE start ``A0`` (frame 0's static field), each with a
+        factor of its own (released afterwards).  A START for the periodic
+        Newton, so ``tol`` is loose: the eddy reaction the Newton adds is
+        orders of magnitude larger."""
+        t0 = time.perf_counter()
+        its = [0] * self.N
+
+        def one(j):
+            fr = self.frames[j]
+            fac = FrameFactor(own=fr.fac._own, release=fr.fac._release)
+            try:
+                U = fr.I_vec / np.maximum(self.S_raw, 1e-300)
+                f = self.f_mag + self.G @ U
+                pd = np.asarray(fr.Pro.multiply(fr.Pro).sum(axis=0)).ravel()
+                A = fr.Pro @ (np.asarray(fr.Pro.T @ A0).ravel() / np.maximum(pd, 1.0))
+                bn = max(float(np.linalg.norm(np.asarray(fr.Pt @ f).ravel()[fr.free])),
+                         1e-30)
+                for it in range(maxit):
+                    K, info = self.kfun(A)
+                    r = np.asarray(fr.Pt @ (K @ A - f)).ravel()[fr.free]
+                    r0 = float(np.linalg.norm(r))
+                    if r0 / bn < tol:
+                        break
+                    its[j] = it + 1
+                    T = (self.tangent(info)
+                         if (info is not None and len(info) > 0) else None)
+                    J = K if T is None else (K + T)
+                    fac.factor((fr.PfT @ (J @ fr.Pf)).tocsr(), self.mkl_threads)
+                    dA = fr.pad(fac.solve(-r, self.mkl_threads))
+                    lam = 1.0
+                    for _ls in range(8):
+                        At = A + lam * dA
+                        Kt, _ = self.kfun(At)
+                        if float(np.linalg.norm(np.asarray(
+                                fr.Pt @ (Kt @ At - f)).ravel()[fr.free])) < r0:
+                            A = At
+                            break
+                        lam *= 0.5
+                    else:
+                        break
+                return A
+            finally:
+                fac.close()
+        out = self._map(one, range(self.N))
+        self._tick("static_start", t0)
+        return out, {"newton_iterations": list(its), "tol": float(tol)}
+
     # ── the linear forward sweep (block forward substitution in time) ───
     def _sweep(self, rhs: Optional[List[Tuple[np.ndarray, np.ndarray]]],
                w: Tuple[np.ndarray, np.ndarray], keep_x: bool = False):
@@ -508,7 +561,9 @@ class TimePeriodicEddy:
             if rhs is not None:
                 bf = bf + rhs[j][0]
                 bc = bc + rhs[j][1]
-            x = fr.fac.solve(np.concatenate([bf, bc]), self.mkl_threads)
+            # the sweep is sequential: every MKL thread of the process
+            x = fr.fac.solve(np.concatenate([bf, bc]),
+                             0 if self.mkl_threads else None)
             xa = x[:fr.nfree]
             dc[j] = np.asarray(fr.Pc @ xa).ravel()
             if keep_x:
@@ -559,7 +614,8 @@ class TimePeriodicEddy:
         alpha = 0.5 * (3.0 * r1 - r2)
         a = _pa.pole_pair_image_mean(alpha[c["pos"]], c["perm"], c["sign"],
                                      c["q"], c["sigma"])
-        x = c["fac"].solve(np.asarray(c["PMr"] @ a).ravel(), self.mkl_threads)
+        x = c["fac"].solve(np.asarray(c["PMr"] @ a).ravel(),
+                           0 if self.mkl_threads else None)
         v = np.asarray(c["Pring"] @ x).ravel()
         v = _pa.pole_pair_image_mean(v, c["perm"], c["sign"], c["q"],
                                      c["sigma"]) / c["T"]

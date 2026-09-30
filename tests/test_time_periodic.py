@@ -190,3 +190,46 @@ def test_gmres_right_solves_a_nonsymmetric_system():
     D = np.diag(1.0 / np.diag(A))
     x2, _ = tp.gmres_right(lambda v: A @ v, b, prec=lambda v: D @ v, rtol=1e-12)
     assert np.allclose(x, x2, atol=1e-9)
+
+
+# -- demag helpers: pole image maps of the magnets, the owner's shortcut -----
+def _ring_of_magnets(n_mag=5, n_el=6, r=0.05):
+    """n_mag magnets as rings of n_el 'elements' (centroids) in a sector of
+    n_mag poles (anti-periodic, NS = 2 on a 2*n_mag-pole machine)."""
+    pitch = math.pi / n_mag                 # sector = pi, n_mag poles
+    cen = []
+    mags = []
+    for m in range(n_mag):
+        idx = []
+        for e in range(n_el):
+            a = (m + 0.15 + 0.7 * e / (n_el - 1)) * pitch
+            rr = r + 0.001 * (e % 3)
+            cen.append((rr * math.cos(a), rr * math.sin(a)))
+            idx.append(len(cen) - 1)
+        mags.append({"tag": 100 + m, "idx": np.array(idx)})
+    cen = np.array(cen).T
+    return mags, cen, np.full(cen.shape[1], 1e-6), pitch
+
+
+def test_shortcut_maps_the_reference_magnet_to_every_pole():
+    mags, cen, ar, pitch = _ring_of_magnets()
+    maps, info = tp.magnet_image_maps(mags, cen, ar, 2, -1, pitch, len(mags))
+    assert maps is not None, info
+    br = np.ones(cen.shape[1])
+    ref = 2
+    br[mags[ref]["idx"]] = np.linspace(0.8, 0.95, len(mags[ref]["idx"]))
+    new, mi = tp.map_br_from_reference(mags, ref, br, maps)
+    assert mi["complete"]
+    for d in mags:                     # every magnet carries the same map,
+        assert np.allclose(new[d["idx"]], br[mags[ref]["idx"]])   # element by element
+
+
+def test_image_min_is_the_elementwise_minimum_over_poles():
+    mags, cen, ar, pitch = _ring_of_magnets()
+    maps, _ = tp.magnet_image_maps(mags, cen, ar, 2, -1, pitch, len(mags))
+    rng = np.random.default_rng(3)
+    br = 1.0 - 0.1 * rng.random(cen.shape[1])
+    out = tp.image_min_br(mags, br, maps)
+    stack = np.array([br[d["idx"]] for d in mags])
+    for d in mags:
+        assert np.allclose(out[d["idx"]], stack.min(axis=0))

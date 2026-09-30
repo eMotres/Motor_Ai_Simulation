@@ -19,24 +19,27 @@ import {
   applyDutyLocal, fetchDutyPayload, leaveForDuty, type LocalApplyResult,
 } from './dutyLocalApply';
 import { beginDutyApply, endDutyApply } from './familyFollow';
+import { dutyGeometryCancelledMessage, type DutyGeometryDiffRow } from './dutyGeometryDiff';
+import { askDutyGeometryChoice } from './dutyGeometryDialogService';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 /**
  * Ask the owner which geometry wins when the duty's saved machine differs
- * from the die: one line + the diff, two choices.  OK = "apply duty
- * geometry" (written to die.yaml / the configuration, history-snapshotted),
- * Cancel = "keep die geometry" (nothing written).  Returns null only when no
- * dialog can be shown — the load then stops.
+ * from the die: a real modal (DutyGeometryDialog, via
+ * lib/dutyGeometryDialogService) with the rounded diff table and three
+ * explicit buttons — "load with die geometry" (nothing written), "apply duty
+ * geometry" (writes the die / configuration, history-snapshotted, disabled
+ * when the die is locked or the lamination itself differs) and Cancel.
+ * Replaces a raw `window.confirm()` (incident 2026-09-29: unrounded floats,
+ * an ambiguous OK/Cancel the owner read backwards).  Returns null only when
+ * no dialog could be shown, or it was dismissed without an answer — the load
+ * then stops exactly as a Cancel would.
  */
-export async function chooseDutyGeometry(message: string,
-                                         diff: string): Promise<'apply_duty' | 'keep_die' | null> {
+export async function chooseDutyGeometry(message: string, diffs: DutyGeometryDiffRow[],
+                                         dieLocked: boolean): Promise<'apply_duty' | 'keep_die' | null> {
   try {
-    const apply = window.confirm(
-      `${message}\n\n${diff}\n\n`
-      + 'OK = apply duty geometry (writes the die / configuration)\n'
-      + 'Cancel = keep die geometry (nothing is written)');
-    return apply ? 'apply_duty' : 'keep_die';
+    return await askDutyGeometryChoice({ message, diffs, dieLocked });
   } catch {
     return null;
   }
@@ -75,6 +78,11 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
     // magnet and the steel the PREVIOUS duty chose.  lib/dutySettings.ts.
     try { clearDutyMaterialsKeys(); } catch { /* nothing to clear */ }
     const { updateGeometryViaApi } = useMotorStore.getState();
+    // Set inside the 409 branch below when the owner picks "keep die
+    // geometry" — appended to the local half's message once the load lands,
+    // so the panel says the dashboard is stale before the owner wonders why
+    // Run gives different numbers than the catalog just showed.
+    let staleGeometryNotice = '';
     if (canWrite) {
       // ── OWNER: load the duty into the SHARED server config ─────────────
       // -1) DROP any queued geometry edits: they belong to the machine that
@@ -94,6 +102,9 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
       // 409 = the duty was saved on a different geometry than the die (+config).
       // The server wrote NOTHING; the owner chooses, explicitly (incident
       // 2026-09-27: a load silently rewrote the die's winding and stack).
+      // "keep_die" leaves the results the panel will show STALE — the
+      // dashboard was computed on the duty's own (different) geometry — so
+      // the local half's message says so once the load lands (below).
       if (ar.status === 409) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let det: any = {};
@@ -101,11 +112,13 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
         if (det?.code !== 'duty_geometry_differs') {
           throw new Error(String(det?.message ?? det ?? `HTTP ${ar.status}`));
         }
-        const lines = (det.diffs ?? []).map(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (x: any) => `  ${x.key} (${x.scope}): die ${x.live} → duty ${x.duty}`).join('\n');
-        const choice = await chooseDutyGeometry(String(det.message ?? ''), lines);
-        if (!choice) throw new Error('load cancelled — die geometry differs from the duty');
+        const choice = await chooseDutyGeometry(String(det.message ?? ''),
+          det.diffs ?? [], det.die_locked === true);
+        if (!choice) throw new Error(dutyGeometryCancelledMessage());
+        if (choice === 'keep_die') {
+          staleGeometryNotice = ` — saved results of ${duty} were computed on `
+            + 'a different geometry — re-run to refresh them';
+        }
         ar = await activate(choice);
       }
       // with apply_duty the files changed — reread what the load will PUT
@@ -115,18 +128,25 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
           if (aj?.geometry_applied) Object.assign(p, await fetchDutyPayload(die, cfg, duty));
         } catch { /* keep the payload read before */ }
       }
-      // A failed activate (expired session, 401/403) used to be SILENT and
-      // the geometry PUT below still ran — the live editor then held this
-      // machine while the server context still named the previous die, and
-      // the die sync wrote this machine into THAT die.  Nothing may be
-      // applied when the context could not follow.
+      // A failed activate used to be SILENT and the geometry PUT below still
+      // ran — the live editor then held this machine while the server
+      // context still named the previous die, and the die sync wrote this
+      // machine into THAT die.  Nothing may be applied when the context
+      // could not follow.  "sign in again and retry" is added ONLY for an
+      // auth failure (401/403): appending it to every refusal — a locked die
+      // (423), a foreign lamination (422) — told the owner to re-authenticate
+      // for a problem that had nothing to do with his session (incident
+      // 2026-09-29: "die 'CIANO14 40 new' is locked — unlock it … — sign in
+      // again and retry" on a plain lock).
       if (!ar.ok) {
         let why = `HTTP ${ar.status}`;
         try {
           const dt = (await ar.json()).detail;
           why = (dt && typeof dt === 'object' ? dt.message : dt) ?? why;
         } catch { /* no body */ }
-        throw new Error(`cannot activate ${die} / ${cfg}: ${why} — sign in again and retry`);
+        const authHint = (ar.status === 401 || ar.status === 403)
+          ? ' — sign in again and retry' : '';
+        throw new Error(`cannot activate ${die} / ${cfg}: ${why}${authHint}`);
       }
       // 1) geometry — the die's stamped section + this configuration's stack/wire
       await updateGeometryViaApi(p.geometry);
@@ -211,7 +231,9 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
     //    is the SAME function a second browser runs when it notices this
     //    load in /api/family/context (lib/dutyLocalApply, lib/familyFollow),
     //    so the two paths cannot drift apart.
-    return await applyDutyLocal(die, cfg, duty, p, prev, canWrite);
+    const result = await applyDutyLocal(die, cfg, duty, p, prev, canWrite);
+    if (staleGeometryNotice) result.message += staleGeometryNotice;
+    return result;
   } finally {
     endDutyApply();
   }

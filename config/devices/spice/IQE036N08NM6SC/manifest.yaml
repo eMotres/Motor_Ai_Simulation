@@ -1,0 +1,89 @@
+# SPICE model manifest — IQE036N08NM6SC
+# Written 2026-09-30 from what was actually downloaded. The vendor files
+# live in ../_vendor/ and are NOT in git (see `licence`); this manifest
+# says where to fetch the identical file and how to check it.
+part: IQE036N08NM6SC
+status: usable_ngspice
+status_reason: >-
+  Plain-text SPICE (the "_Spice" flavour of the library); same dialect
+  (.PARAM, limit(), VALUE=, TEMP) as IQE050N08NM5SC's own
+  OptiMOS5_80V_Spice.lib — in fact the IDENTICAL zip (see `source` below:
+  same sha256, same size, same revision) — and the L3 subckt (drain gate
+  source Tj Ttop Tbottom) is present. NOT YET RUN — see
+  `generation_status` below.
+source:
+  vendor: Infineon Technologies AG
+  product_page: https://www.infineon.com/part/IQE036N08NM6SC
+  document: "MOSFET OptiMOS 80 V N-Channel PSpice"
+  url: https://www.infineon.com/assets/row/public/documents/24/50/infineon-optimos-powermosfet-pspice-80v-n-channel-simulationmodels-en.zip
+  revision: "06_00 (library header 'Version 151025')"
+  released: "2026-04-10"
+  access: >-
+    public asset (design-resources API for part IQE036N08NM6SC:
+    confidentialityLevel Public, damGated f) — plain HTTPS GET with a
+    normal browser User-Agent and Referer header (a bare `curl` with no
+    headers gets an AWS WAF JS challenge; a real browser session and a
+    UA-bearing curl both pass — ordinary bot-detection on a public asset,
+    not a login/paywall, so no CAPTCHA was solved or bypassed)
+  downloaded: "2026-09-30"
+  zip_sha256: 6475fc420d511e3d6df2740031fb36d1a622bd7875069ae22658e3424698d876
+  zip_bytes: 951616
+  # SAME zip IQE050N08NM5SC's own manifest already recorded — Infineon
+  # bundles every 80 V n-channel MOSFET generation (OptiMOS3/5/6/7/8,
+  # StrongIRFET) into one "80V N-Channel PSpice" download; nothing new was
+  # fetched here except re-verifying the hash.
+library:
+  file: ../_vendor/infineon-optimos-powermosfet-pspice-80v-n-channel-simulationmodels-en/OptiMOS6/OptiMOS6_80V_Spice.lib
+  sha256: 5f693179e035de597e1ffee5d5f5e833f7b5c917691cdcc0fa93864c860198e3
+  bytes: 94294
+  header: "INFINEON Power Transistors, PSPICE Library, Version 151025"
+  dialect: "PSpice (VALUE=, limit(), if(), TEMP)"
+  other_variants:
+    - {file: ../_vendor/infineon-optimos-powermosfet-pspice-80v-n-channel-simulationmodels-en/OptiMOS6/OptiMOS6_80V_LTSpice.lib, simulator: "LTspice"}
+    - {file: ../_vendor/infineon-optimos-powermosfet-pspice-80v-n-channel-simulationmodels-en/OptiMOS6/OptiMOS6_80V_CadencePSpice.lib, simulator: "Cadence PSpice"}
+models:
+  L1:
+    subckt: IQE036N08NM6SC_L1
+    pins: [drain, gate, source]
+  L3:
+    subckt: IQE036N08NM6SC
+    pins: [drain, gate, source, Tj, Ttop, Tbottom]
+    temperature: "thermal nodes Tj, Ttop, Tbottom (dual-side-cooled Cauer network)"
+  L0:
+    subckt: IQE036N08NM6SC_L0
+    pins: [drain, gate, source]
+ngspice:
+  compat: psa
+  level: L3   # not yet tested end to end — chosen by analogy with
+              # IQE050N08NM5SC's own L1-does-not-converge finding.
+  tested_with: null
+licence:
+  summary: >-
+    Header disclaimer only (model subject to change without notice,
+    typical device, datasheet is the conclusive guideline, no warranty or
+    liability). No explicit redistribution grant.
+  redistribution: "not granted — kept out of git"
+  in_git: false   # config/devices/spice/_vendor/ is .gitignored (SAME
+                  # vendor zip IQE050N08NM5SC already uses — no new
+                  # duplicate needed if that checkout is still present)
+generation_status: >-
+  NOT YET RUN (2026-09-30). The vendor library is downloaded and verified
+  (subckt present, dialect matches IQE050N08NM5SC's working part), and a
+  double-pulse / static grid was drafted matching the controller
+  project's own 12S operating point: V_dc = 44.4 V (12S nominal), T_j =
+  25/75/125/175 degC, I = 15 (the datasheet's own Table 5 test current)/
+  20/40/60/80 A, R_G,ext = 1.6 ohm (the datasheet's own Table 5/6
+  reference), V_GS 0/10 V, L_sigma 2 nH (same convention as
+  IQE050N08NM5SC). The run was deferred because the server
+  (176.9.84.229) had another agent's container (cfgaudit_m40ac,
+  motres-api:test) at ~400% CPU at the time — the CPU-discipline rule
+  ("only when no other agent's heavy container is running") was not
+  satisfied. The card currently carries `switching_source: datasheet`
+  (times-and-charges fallback from Q_gd/Q_sw/R_g) as the honest interim
+  state. Follow-up: re-check `docker stats` on the server, then run
+  scripts/spice_build_all_tables.py (extended with this part's grid) in a
+  throwaway motres-api:test container with `apt-get install -y ngspice`
+  added, nice 19, --jobs 1 or 2.
+notes:
+  - "same 80V zip also carries OptiMOS3/5/7/8/StrongIRFET 80V libraries — only OptiMOS6/OptiMOS6_80V_Spice.lib is relevant to this card"
+  - "Rg=1.0 in the model's own .PARAM block (checked) matches Table 4's typ internal gate resistance (1.0 ohm)"

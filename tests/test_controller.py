@@ -1949,6 +1949,146 @@ def test_air_still_is_colder_air_is_hotter_removal(synth_dir):
     assert any("R_th(j-a)" in n for n in still["model_notes"])
 
 
+# ---------------------------------------------------------------------------
+# 2026-09-30 — the CIANO14 40/60V controller pair: IQE018N06NM6SC (60 V,
+# 6S build) and IQE036N08NM6SC (80 V, 12S build). Same PG-WHSON-8 family,
+# same times-and-charges fallback as IQE050N08NM5SC — see
+# Controller_CIANO14_40_60V/controller_24V_FOC/docs/calc_notes.md section 1
+# for where the owner's own project uses these two parts.
+# ---------------------------------------------------------------------------
+
+IQE60V = "IQE018N06NM6SC"
+IQE80V = "IQE036N08NM6SC"
+
+
+def test_iqe018n06nm6sc_loads_and_matches_datasheet_tables():
+    c = dv.get_device(IQE60V)
+    assert c.part == IQE60V
+    assert c.v_dss_V == 60
+    assert c.t_j_max_c == 175
+    assert c.switching_energy_source() == "times_and_charges"
+    # Table 3: R_thJC max 1.2 K/W (bottom) — derates on MAX.
+    assert c.r_th_jc_k_w == pytest.approx(1.2)
+    # Table 2: I_D 178 A at 25 degC case, 126 A at 100 degC (V_GS = 10 V).
+    assert c.i_d_continuous(25.0) == pytest.approx(178.0)
+    assert c.i_d_continuous(100.0) == pytest.approx(126.0)
+    # Table 4: R_DS(on) 1.5 mOhm typ at 25 degC, V_GS = 10 V (the anchor);
+    # matches Table 1's headline R_DS(on),max = 1.8 mOhm.
+    assert c.r_ds_on_ohm(25.0, 10.0) * 1e3 == pytest.approx(1.5)
+    # …and the 8 V curve (footnote 6, V_GS=8V/I_D=15A) is a different
+    # curve, not an interpolation.
+    assert c.r_ds_on_ohm(25.0, 8.0) * 1e3 == pytest.approx(1.68)
+    row = c.row()
+    assert row["package_size_mm"]["length_mm"] == pytest.approx(3.30)
+    assert row["package_size_mm"]["width_mm"] == pytest.approx(3.30)
+    assert row["package_size_mm"]["height_mm"] == pytest.approx(0.75)
+    assert row["switching_energy_source"] == "times_and_charges"
+    from motor_ai_sim.inverter import packages as pk
+    assert pk.family_for("PG-WHSON-8", None) == "pqfn"
+
+
+def test_iqe036n08nm6sc_loads_and_matches_datasheet_tables():
+    c = dv.get_device(IQE80V)
+    assert c.part == IQE80V
+    assert c.v_dss_V == 80
+    assert c.t_j_max_c == 175
+    assert c.switching_energy_source() == "times_and_charges"
+    # Table 3: R_thJC max 1.2 K/W (bottom) — MAX only published (no typ),
+    # unlike IQE018N06NM6SC's table.
+    assert c.r_th_jc_k_w == pytest.approx(1.2)
+    # Table 2: I_D 118 A at 25 degC case, 84 A at 100 degC (V_GS = 10 V).
+    assert c.i_d_continuous(25.0) == pytest.approx(118.0)
+    assert c.i_d_continuous(100.0) == pytest.approx(84.0)
+    # Table 4: R_DS(on) 3.1 mOhm typ at 25 degC, V_GS = 10 V (the anchor);
+    # matches Table 1's headline R_DS(on),max = 3.6 mOhm.
+    assert c.r_ds_on_ohm(25.0, 10.0) * 1e3 == pytest.approx(3.1)
+    assert c.r_ds_on_ohm(25.0, 8.0) * 1e3 == pytest.approx(3.8)
+    row = c.row()
+    assert row["package_size_mm"]["length_mm"] == pytest.approx(3.40)
+    assert row["package_size_mm"]["width_mm"] == pytest.approx(3.40)
+    assert row["package_size_mm"]["height_mm"] == pytest.approx(0.75)
+    # Same MAX-column package outline as IQE050N08NM5SC's own card.
+    real_tc = dv.get_device(REAL_TC)
+    assert row["package_size_mm"] == real_tc.row()["package_size_mm"]
+
+
+def test_iqe60v_80v_third_quadrant_and_reverse_recovery_are_on_the_card():
+    c60, c80 = dv.get_device(IQE60V), dv.get_device(IQE80V)
+    # Table 7: V_SD typ at I_SD = 30 A, V_GS = 0 V, T_j = 25 degC.
+    assert c60.v_sd_V(30.0, 25.0, 0.0) == pytest.approx(0.80, rel=1e-3)
+    assert c80.v_sd_V(30.0, 25.0, 0.0) == pytest.approx(0.81, rel=1e-3)
+    # The 175 degC body-diode drop is lower (negative tempco) for both.
+    assert c60.v_sd_V(30.0, 175.0, 0.0) < c60.v_sd_V(30.0, 25.0, 0.0)
+    assert c80.v_sd_V(30.0, 175.0, 0.0) < c80.v_sd_V(30.0, 25.0, 0.0)
+
+
+@pytest.mark.parametrize("part,r_mohm_100c", [(IQE60V, 2.18), (IQE80V, 4.71)])
+def test_conduction_loss_sanity_40a_100c_within_10pct_of_i2r(part, r_mohm_100c):
+    """Owner-mandated quick sanity check (2026-09-30): conduction loss at
+    40 A and T_j = 100 degC must be within +/-10% of I^2 * R_DS(on)(100 degC).
+
+    R_DS(on) at 100 degC is NOT a datasheet table value for either part —
+    only the 25 degC anchor is a table point; 100 degC comes off Diagram 9
+    (hand-digitized, `basis: figure`, tolerance_pct 10-12 on the card
+    itself), so ``r_mohm_100c`` here is that same card figure, transcribed
+    once more as an independent literal so this test does not just
+    re-read the card and compare it with itself — it is a wiring check
+    (mOhm-vs-ohm, I vs I^2, per-device vs per-leg) on
+    ``_leg_losses``, not a re-validation of the digitization.
+    """
+    c = dv.get_device(part)
+    assert c.r_ds_on_ohm(100.0, 10.0) * 1e3 == pytest.approx(r_mohm_100c)
+    i_leg = np.full(8, 40.0)
+    out = lo._leg_losses(card=c, i_leg=i_leg, n_par=1, f_sw=0.0, t_j_c=100.0,
+                         v_dc=22.2, v_gs_on=10.0, v_gs_off=0.0, r_g=1.6,
+                         dead_time_s=0.0, e_oss_policy="included_in_eon")
+    expect_W = 40.0 ** 2 * r_mohm_100c * 1e-3
+    assert out["p_conduction_W"] == pytest.approx(expect_W, rel=0.10)
+
+
+def test_iqe018n06nm6sc_solve_controller_runs_without_errors(synth_dir):
+    """The 6S build's device end to end (bus 22.2 V nominal, per
+    Controller_CIANO14_40_60V's own calc_notes.md section 1)."""
+    src = (Path(__file__).resolve().parents[1] / "config" / "devices"
+           / f"{IQE60V}.yaml")
+    (synth_dir / f"{IQE60V}.yaml").write_text(src.read_text(encoding="utf-8"),
+                                              encoding="utf-8")
+    dv._CACHE.clear()
+    out = lo.solve_controller(_synth_request(
+        device=IQE60V, devices_parallel=1, v_dc_V=22.2,
+        i_phase_rms_A=20.0, p_ac_W=400.0, star_delta="star",
+        f_elec_hz=1000.0, f_carrier_hz=48_000.0, v_gs_on_V=10.0,
+        v_gs_off_V=0.0, r_g_ext_ohm=1.6, dead_time_us=0.5,
+        cooling={"coolant": "water", "flow_lpm": 4.0, "t_in_c": 40.0,
+                 "r_override_k_w": 0.05},
+        r_tim_k_w=0.03, r_spread_k_w=0.02, switching_source="datasheet"))
+    assert out["losses"]["switching_energy_source"] == "times_and_charges"
+    by = {r["name"]: r for r in out["limits"]}
+    assert by["DC link vs V_DSS"]["limit"] == pytest.approx(60.0)
+    assert by["Junction temperature"]["limit"] == pytest.approx(175.0)
+
+
+def test_iqe036n08nm6sc_solve_controller_runs_without_errors(synth_dir):
+    """The 12S build's device end to end (bus 44.4 V nominal)."""
+    src = (Path(__file__).resolve().parents[1] / "config" / "devices"
+           / f"{IQE80V}.yaml")
+    (synth_dir / f"{IQE80V}.yaml").write_text(src.read_text(encoding="utf-8"),
+                                              encoding="utf-8")
+    dv._CACHE.clear()
+    out = lo.solve_controller(_synth_request(
+        device=IQE80V, devices_parallel=1, v_dc_V=44.4,
+        i_phase_rms_A=15.0, p_ac_W=600.0, star_delta="star",
+        f_elec_hz=1000.0, f_carrier_hz=48_000.0, v_gs_on_V=10.0,
+        v_gs_off_V=0.0, r_g_ext_ohm=1.6, dead_time_us=0.5,
+        cooling={"coolant": "water", "flow_lpm": 4.0, "t_in_c": 40.0,
+                 "r_override_k_w": 0.05},
+        r_tim_k_w=0.03, r_spread_k_w=0.02, switching_source="datasheet"))
+    assert out["losses"]["switching_energy_source"] == "times_and_charges"
+    by = {r["name"]: r for r in out["limits"]}
+    assert by["DC link vs V_DSS"]["limit"] == pytest.approx(80.0)
+    assert by["Junction temperature"]["limit"] == pytest.approx(175.0)
+
+
 def test_pqfn_part_cites_its_own_r_th_ja_in_air_modes(synth_dir):
     from motor_ai_sim.inverter import devices as dv
     card = dv.get_device(REAL_TC)

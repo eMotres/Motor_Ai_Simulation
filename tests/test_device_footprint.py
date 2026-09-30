@@ -146,8 +146,15 @@ def test_catalogue_rows_carry_group_and_warning():
     # all ten heights are 2.35 (Figure 1, A max) — the top tab is what is unknown
     assert "height" not in fp["group_warning"]
     assert "top tab not published on 10 of 10" in fp["group_warning"]
-    solo = rows["IQE050N08NM5SC"]["footprint"]
-    assert solo["group_parts"] == ["IQE050N08NM5SC"] and solo["group_warning"] is None
+    # 2026-09-30: IQE018N06NM6SC (60 V) and IQE036N08NM6SC (80 V) joined
+    # this group (both PG-WHSON-8, so `test_shipped_groups_are_the_owners`
+    # requires it) — no longer a solo. All three publish the same body
+    # height (0.75 mm) and none publishes a top tab.
+    whson = rows["IQE050N08NM5SC"]["footprint"]
+    assert sorted(whson["group_parts"]) == ["IQE018N06NM6SC", "IQE036N08NM6SC",
+                                            "IQE050N08NM5SC"]
+    assert "height" not in whson["group_warning"]
+    assert "top tab not published on 3 of 3" in whson["group_warning"]
 
 
 def test_route_rows_carry_the_footprint():

@@ -47,7 +47,7 @@ dependencies = [
 # OPTIONAL: Intel MKL PARDISO accelerator.  pypardiso is BSD-3-Clause but pulls
 # proprietary Intel MKL; every solver falls back to SciPy SuperLU without it.
 pardiso = [
-    "pypardiso>=0.4",
+    "pypardiso>=0.4.7,<0.5",
 ]
 # OPTIONAL, NON-COMMERCIAL licence (Shewchuk's Triangle): the geometry-driven
 # mesher; gmsh is used when absent.  See docs/MESHER_TRANSITION.md.

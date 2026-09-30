@@ -5652,7 +5652,13 @@ def fem_transient_sliding_band(
     _pardiso2_spd = None
     if _pardiso2 is not None and _os_sb.environ.get("SB_PARDISO_SPD", "1") != "0":
         try:
-            _pardiso2_spd = _own_pardiso(_pypard2.PyPardisoSolver(mtype=2))
+            _h_spd = _pypard2.PyPardisoSolver(mtype=2)
+            _need = ("_call_pardiso", "_check_b", "set_phase", "iparm")
+            if not all(hasattr(_h_spd, _a) for _a in _need):
+                raise RuntimeError("pypardiso %s lacks %s" % (
+                    getattr(_pypard2, "__version__", "?"),
+                    [_a for _a in _need if not hasattr(_h_spd, _a)]))
+            _pardiso2_spd = _own_pardiso(_h_spd)
         except Exception as _pae:     # noqa: BLE001 — LU keeps working
             log.info("PARDISO Cholesky handle unavailable (%s) — LU only", _pae)
             _pardiso2_spd = None

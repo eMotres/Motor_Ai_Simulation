@@ -52,37 +52,59 @@ class _SymPattern:
     """What the Cholesky path needs to know about one sparsity pattern."""
 
     __slots__ = ("key", "indptr", "indices", "ok", "why", "tri", "diag",
-                 "u_indptr", "u_indices", "probe", "probe_tol", "analysed")
+                 "u_indptr", "u_indices", "up", "lo", "up_rep", "up_c",
+                 "analysed")
 
 
 def sym_pattern(indptr, indices, n: int) -> _SymPattern:
-    """Upper triangle and diagonal of a sorted CSR pattern (for CSC arrays:
-    of the transpose), built once per pattern like the LU ordering.  ``ok``
-    is False, with ``why``, when a diagonal entry is missing: such a matrix
-    cannot be SPD as stored and goes to LU.  Structural symmetry is not
-    tested here: an entry without its mirror is an asymmetric VALUE, which the
-    per-solve probe of :meth:`P2Nonlinear._solve_spd` catches."""
+    """Everything the Cholesky path needs about one CANONICAL CSR pattern
+    (sorted, duplicate-free; for CSC arrays: the pattern of the transpose),
+    built once per pattern like the LU ordering:
+
+    * ``tri``/``u_indptr``/``u_indices``: the upper triangle incl. the
+      diagonal as a CSR matrix.  Row i of the upper triangle is the entries
+      from the diagonal to the end of row i, so its count is
+      ``indptr[i+1] − diag[i]`` (``diag[i]`` = global position of a_ii) and
+      ``u_indptr`` is the cumulative sum of those counts;
+    * ``up``/``lo``: the position of every strictly-upper entry (i, j) and of
+      its mirror (j, i) — the transpose map of the stored entries;
+    * ``up_rep``/``up_c``: row counts and column of each strictly-upper
+      entry, for the scale √(a_ii a_jj) of the exact symmetry test.
+
+    ``ok`` is False, with ``why``, when a diagonal entry is missing or an
+    entry has no mirror (not structurally symmetric): such a matrix cannot
+    be SPD as stored and goes to LU."""
     p = _SymPattern()
     p.key = (int(n), int(indices.size))
     p.indptr = np.array(indptr, copy=True)
     p.indices = np.array(indices, copy=True)
     p.ok, p.why, p.analysed = False, None, None
-    rows = np.repeat(np.arange(n, dtype=np.int32), np.diff(indptr))
+    nnz = int(indices.size)
+    counts = np.diff(indptr)
+    rows = np.repeat(np.arange(n, dtype=np.int32), counts)
     cols = np.asarray(indices, dtype=np.int32)
     diag = np.flatnonzero(cols == rows)
     if diag.size != n:
         p.why = "missing diagonal entries"
         return p
+    # the stored position of (j, i) for every stored (i, j): transpose an
+    # index-valued copy of the pattern (C-level csr->csc, O(nnz))
+    T = _csr_matrix((np.arange(nnz, dtype=np.int32), indices, indptr),
+                    shape=(n, n)).tocsc()
+    if not (np.array_equal(T.indptr, indptr)
+            and np.array_equal(T.indices, indices)):
+        p.why = "entries without a mirror (not structurally symmetric)"
+        return p
     p.diag = diag.astype(np.int32)                  # diag[i] = row i's entry
-    p.tri = np.flatnonzero(cols >= rows).astype(np.int32)   # upper incl. diag
-    p.u_indptr = np.concatenate(
-        [[0], np.cumsum(np.asarray(indptr[1:], np.int64) - diag)]).astype(np.int32)
+    upper = cols >= rows
+    p.tri = np.flatnonzero(upper).astype(np.int32)  # upper incl. diag
+    u_cnt = np.asarray(indptr[1:], np.int64) - diag  # per-row upper counts
+    p.u_indptr = np.concatenate([[0], np.cumsum(u_cnt)]).astype(np.int32)
     p.u_indices = cols[p.tri]
-    # fixed +-1 probe vector for the per-solve symmetry test (see _solve_spd)
-    p.probe = np.where(np.random.default_rng(20260929).random(n) < 0.5,
-                       -1.0, 1.0)
-    p.probe_tol = SPD_SYM_RTOL * float(np.sqrt(max(int(np.max(np.diff(indptr),
-                                                              initial=1)), 1)))
+    p.up = np.flatnonzero(cols > rows).astype(np.int32)      # strictly upper
+    p.lo = np.asarray(T.data, dtype=np.int32)[p.up]          # their (j, i)
+    p.up_rep = (u_cnt - 1).astype(np.int64)                  # per row
+    p.up_c = cols[p.up]
     p.ok = True
     return p
 
@@ -337,24 +359,24 @@ class P2Nonlinear:
         caller then takes the LU path) when the run-time checks decline it.
 
         Per PATTERN (once per analysis, like the LU ordering): the
-        upper-triangle and diagonal positions (:func:`sym_pattern`, ~5 ms on
-        the 0.5 M-nnz L155 system).  Per SOLVE: a positive diagonal and the
-        scale-free symmetry test |a_ij - a_ji| <= SPD_SYM_RTOL*sqrt(a_ii*a_jj)
-        (the natural scale of a matrix meant to be SPD, where
-        |a_ij| <= sqrt(a_ii a_jj)) through a fixed +-1 probe v:
-        ``max|D^-1/2 (A - A^T) D^-1/2 v|`` <= tol*sqrt(max row count), two
-        sparse mat-vecs, ~1 ms (the pairwise gather costs ~4 ms per solve and
-        a transpose map another ~10 ms per pattern).  An asymmetric pair
-        (i, j) shows in rows i and j unless it cancels EXACTLY against other
-        asymmetric entries of both rows; an entry without its mirror is such
-        a pair.  Then phase 23 on the upper triangle.  A CSC matrix's arrays
-        are the CSR arrays of A^T, which the test has just shown to equal A
-        to round-off.
+        upper-triangle positions and the transpose map (:func:`sym_pattern`).
+        Per SOLVE, deterministic and exact: a positive diagonal and, on EVERY
+        stored pair, |a_ij - a_ji| <= SPD_SYM_RTOL*sqrt(a_ii*a_jj) (the
+        natural scale of a matrix meant to be SPD, where
+        |a_ij| <= sqrt(a_ii a_jj)).  Measured cost: see
+        docs/CHOLESKY_SPD_2026-09-29.md.  Then phase 23 on the upper
+        triangle.  A CSC matrix's arrays are the CSR arrays of A^T, which the
+        test has just shown to equal A to round-off.  Non-canonical input
+        (unsorted, duplicates) is canonicalised on a copy first.
+        Positive definiteness itself is not tested here: the Cholesky
+        factorisation is that test (a non-positive pivot is an error, then
+        LU for the rest of the run).
         """
         if A.format not in ("csr", "csc"):
             A = A.tocsr()
-        if not A.has_sorted_indices:
-            A.sort_indices()
+        if not A.has_canonical_format:
+            A = A.copy()
+            A.sum_duplicates()               # sorts and merges duplicates
         key = (int(A.shape[0]), int(A.nnz))
         pat = self._spd_pat
         new = not (pat is not None and pat.key == key
@@ -376,12 +398,12 @@ class P2Nonlinear:
             why = "non-positive diagonal"
         else:
             sc = 1.0 / np.sqrt(dg)
-            w = sc * pat.probe
-            y = A @ w
-            y -= A.T @ w
-            y *= sc
-            asym = float(np.max(np.abs(y), initial=0.0))
-            if not asym <= pat.probe_tol:
+            dd = d[pat.up]
+            dd -= d[pat.lo]
+            dd *= np.repeat(sc, pat.up_rep)       # 1/sqrt(a_ii), row order
+            dd *= sc[pat.up_c]                    # 1/sqrt(a_jj)
+            asym = float(np.max(np.abs(dd), initial=0.0))
+            if not asym <= SPD_SYM_RTOL:
                 why = "asymmetric values (%.3g of sqrt(a_ii a_jj))" % asym
         if why is not None:
             self.spd_declined += 1

@@ -12,15 +12,13 @@ positive definite, yet every solve used the unsymmetric LU (mtype 11).
   (PARDISO mtype 2, upper triangle, second handle owned by the same run scope), with
   the symbolic analysis reused while the pattern holds, exactly like the LU path.
 - Run-time checks before every Cholesky solve; any doubt goes to the unchanged LU:
-  - per pattern (once per analysis): a full diagonal (upper-triangle and diagonal positions
-    are built there, about 5 ms at 0.5 M nnz);
-  - per solve: a_ii > 0 and the scale-free symmetry test |a_ij − a_ji| ≤ 1e-12·√(a_ii a_jj)
-    through a fixed ±1 probe, ‖D^-½(A − Aᵀ)D^-½ v‖∞ ≤ 1e-12·√(max row count) (two mat-vecs,
-    about 1 ms at 0.5 M nnz). An entry without its mirror is an asymmetric pair and is caught
-    the same way. A pairwise gather over a transpose map was the first version: 4 ms per solve
-    plus 10–40 ms per pattern, which ate a third of the gain on the eddy runs;
-  - a Cholesky error (not positive definite) is logged as a warning and the rest of
-    the run uses LU. Counters travel in the result: `linear_solver`
+  - canonical input: an unsorted or duplicated matrix is canonicalised on a copy first;
+  - per pattern (once per analysis): a full diagonal, structural symmetry, and the
+    transpose map of the stored entries (7–8 ms at 0.5 M nnz);
+  - per solve, deterministic and exact: a_ii > 0 and |a_ij − a_ji| ≤ 1e-12·√(a_ii a_jj) on
+    every stored pair (about 3 ms at 0.5 M nnz on the L155 eddy system);
+  - a Cholesky error is the positive-definiteness test: it is logged as a warning and the
+    rest of the run uses LU. Counters travel in the result: `linear_solver`
     (`cholesky_solves`, `cholesky_declined`, `cholesky_failures`, LU counts).
 - `SB_PARDISO_SPD=0` keeps every solve on LU (the previous code path, bit-identical).
 - SuperLU fallback, pattern reuse and the perturbed-pivot counter of the LU path are
@@ -28,11 +26,27 @@ positive definite, yet every solve used the unsymmetric LU (mtype 11).
 
 ## Why each system is SPD (by construction)
 
-Notation: P = the projection of the run (periodic/anti-periodic images and the
-sliding-band slip pairing, a 0/±1 incidence matrix; the rotation lives entirely in
-P), `free` = all dofs but the outer Dirichlet A = 0 ring. Every factored matrix is
-PᵀXP restricted to `free`, possibly bordered. PᵀXP is symmetric for any P when X is,
-and positive definite on `free` when X is positive definite there.
+Notation: P = the projection of the run, `free` = all reduced columns but the outer
+Dirichlet A = 0 ring. Every factored matrix is PᵀXP restricted to `free`, possibly
+bordered. PᵀXP is symmetric for any P when X is.
+
+**Full column rank, no free null mode.** `SlipProjection.build` makes P a *signed
+selection*: a signed union-find of the ring welds (vertices and edge midpoints) and of
+the (anti)periodic cut gives every full dof exactly one reduced column, with weight ±1.
+The column supports are therefore disjoint, PᵀP is a positive diagonal, and P has full
+column rank for every rotor shift. There is no interpolating moving band in this code;
+the slip is snapped to the ring grid.
+
+The only null space of K is the piecewise constants on the two meshes. The ring welds tie
+the rotor constant to the stator constant (with the cut's sign), and the outer Dirichlet
+ring, which is not in `free`, forces the stator constant to 0. So aᵀPᵀKPa > 0 for every
+a ≠ 0 on `free`.
+
+`TestProjectionRank` checks this for every shift of an annular model, anti-periodic,
+periodic and full ring: one ±1 per row, diagonal PᵀP, and λmin(PᵀKP|free) > 0. The 68
+exported production systems had λmin > 0 by Lanczos (PR #56). If a future construction
+broke it, the Cholesky factorisation is the guard: a zero or negative pivot is an error,
+and LU takes over, logged.
 
 | system (callers) | operator | symmetric because | positive definite because | path |
 |---|---|---|---|---|
@@ -46,15 +60,48 @@ The sliding band needs no separate argument: its coupling is part of P. The
 frequency-domain cross-check (`eddy_solver_2d`, complex), the mechanical and the 3-D
 solvers are not touched.
 
-Tests (`tests/test_p2_cholesky.py`) pin the construction on real P2 operators: the
-Newton Jacobian of a saturating field is symmetric to 1e-14 of √(a_ii a_jj) and PD;
-the bordered matrix built like `eddy_solve` is PD, and **stops being so when S_b is not
-the Gram value** (the proof depends on the identity); Cholesky equals LU to round-off
-(CSR, CSC, several right-hand sides); an asymmetric matrix is declined both on a new
-pattern and by the probe on a known one, an entry without its mirror is declined, and a
-symmetric indefinite matrix fails Cholesky loudly and is solved by LU.
+Tests (`tests/test_p2_cholesky.py`) pin the construction on real P2 operators:
+
+- **Symmetry and definiteness.** The Newton Jacobian of a saturating field is symmetric to
+  1e-14 of √(a_ii a_jj) and PD. The bordered matrix built like `eddy_solve` is PD, and **it
+  stops being PD when S_b is not the Gram value**, so the proof depends on that identity.
+- **The upper triangle.** Its CSR pointers are well formed (start 0, monotone, end = nnz of
+  the triangle) and equal `triu(A)`, for CSR and CSC input. Duplicated and unsorted input
+  is canonicalised.
+- **Cholesky equals LU** to round-off, for CSR, CSC and several right-hand sides.
+- **The guards.**
+  - Asymmetric values are declined, on a new pattern and on a known one.
+  - A skew pair invisible to any single ±1 probe is declined.
+  - An entry without its mirror is declined, and so is a missing diagonal.
+  - A symmetric indefinite matrix fails Cholesky loudly and is solved by LU.
+- **Handles.** LU and Cholesky alternate on changing patterns, and LU keeps working after a
+  failed Cholesky.
+- **Routing.** A voltage-drive eddy run with series strand paths is refused before any
+  solve. It never reaches Cholesky.
+- **The pypardiso surface.** pypardiso is pinned to `>=0.4.7,<0.5`, and a test fails if the
+  internals the LU-reuse and Cholesky paths call move. The run also checks for them before
+  creating the Cholesky handle, and uses LU only otherwise.
 
 ## Measured (server sandbox, 6 MKL threads, nice 19, ionice idle, one run at a time)
+
+### Final code (after the 2026-09-30 review), quiet box
+
+The final code does the exact per-pair symmetry check. The box was quiet: no other
+container and a 1-min load below 4 at the start. The LU and Cholesky runs of each pair were
+back to back.
+
+| machine, mode | frames | headlines max rel. | solve_ff LU → Chol | per-solve median (main) | wall LU → Chol | net of the d-axis calibration |
+|---|---|---:|---|---|---|---|
+| Ø40 L12, eddy | 146 = 146 | 2.4e-12 | 49.5 → 36.6 s (**1.35×**) | – | 181.6 → 177.7 s (1.02×) | 160.0 → 158.0 s |
+| **L155, eddy** | 650 = 650 | 1.6e-11 | 211.7 → 174.5 s (**1.21×**) | 17.7 → 12.3 ms | 581.3 → 545.6 s (**1.065×**) | 543.9 → 510.8 s (1.065×) |
+
+The exact check costs about 3 ms per solve at 0.5 M nnz, about 15 s on an L155 eddy run,
+which is included above. On a quiet box the gain is smaller than in the loaded table
+below. Contention hurt the LU runs there more than the Cholesky runs: the LU factor is
+twice the work and uses more memory bandwidth. The quiet numbers are the honest ones: **the
+L155 eddy run is about 6 % faster, and its linear solves 1.2× faster.**
+
+### First version (±1 probe), loaded box
 
 The box was shared with a mesher campaign and another agent's test runs, with a 1-min load
 of 5–23 during these runs. Wall and solve totals therefore carry contention noise, and the

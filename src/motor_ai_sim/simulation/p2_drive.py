@@ -784,7 +784,11 @@ class P2Drive:
                 X = self.p2.solve_ff(Mb, np.column_stack([
                     -np.concatenate([rf, rc]),
                     np.concatenate([_z, dte * self.ed_ca]),
-                    np.concatenate([_z, dte * self.ed_cb])]), spd=True)
+                    np.concatenate([_z, dte * self.ed_cb])]),
+                    # the same routing rule as eddy_solve; series strand
+                    # paths never reach here (refused at the top), so this
+                    # bordered matrix never carries Kirchhoff rows
+                    spd=self.pT is None)
             except Exception as _je:
                 self.log.info("P2 eddy+vdrive bordered solve failed (%s)", _je)
                 return False, Ae, Ue, iA, iB, rrel, nit, rcc

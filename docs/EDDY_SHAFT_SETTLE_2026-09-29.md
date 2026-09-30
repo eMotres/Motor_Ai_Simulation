@@ -234,8 +234,9 @@ Shaft period means [W]:
 
 Wall: 695 s against 668 s at HEAD. The box was shared with a mesher campaign (load 9–18),
 so these two are not a paired timing. Per frame, the correction adds the J̄ average over 72
-frames and two correction solves plus the inverse iteration, a few seconds per run. The
-quiet paired timing is in the PR description.
+frames and two correction solves plus the inverse iteration, a few seconds per run. Paired
+back to back at load ~5: HEAD 556 s against 512 s (−8 %), excluding the 37 s d-axis
+calibration that the second run had to redo (a cache miss).
 
 ## 4. Other machines
 

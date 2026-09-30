@@ -171,6 +171,7 @@ def _moved_stores():
         ("optimization._descent_disk_mtime", optimization, "_descent_disk_mtime"),
         ("optimization._descent_external", optimization, "_descent_external"),
         ("fem_solver_2d._SB_WARM_CACHE", fem_solver_2d, "_SB_WARM_CACHE"),
+        ("fem_solver_2d._DAXIS_CACHE", fem_solver_2d, "_DAXIS_CACHE"),
     ]
 
 

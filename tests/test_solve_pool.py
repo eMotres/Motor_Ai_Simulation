@@ -814,7 +814,9 @@ def test_fem_echo_is_scoped_to_its_request_user_and_machine(tmp_path, monkeypatc
     from motor_ai_sim.simulation import fem_solver_2d as FS
     ws_a, ws_b = _two_users(tmp_path, monkeypatch)
     key = ("__solve_pool_test__", 1)
-    FS._DAXIS_CACHE.pop(key, None)
+    for ws in (None, ws_a, ws_b):
+        with WS.use_workspace(ws):
+            FS._DAXIS_CACHE.pop(key, None)
     with WS.use_workspace(ws_a):
         fp_a = SP.context_fingerprint()
     echo = {"nonce": "n-a", "fingerprint": fp_a,
@@ -825,8 +827,9 @@ def test_fem_echo_is_scoped_to_its_request_user_and_machine(tmp_path, monkeypatc
             FS._SB_WARM_CACHE["last"] = {"marker": "bob"}
             assert not SP.apply_fem_echo(echo, nonce="n-a", expected=fp_a)
             assert FS._SB_WARM_CACHE.get("last") is None   # dropped: disk wins
-        assert key not in FS._DAXIS_CACHE
+            assert key not in FS._DAXIS_CACHE
         with WS.use_workspace(ws_a):
+            assert key not in FS._DAXIS_CACHE
             # a foreign request (wrong nonce) is refused too
             assert not SP.apply_fem_echo(echo, nonce="other", expected=fp_a)
             # the machine changed while it solved: refused
@@ -844,17 +847,21 @@ def test_fem_echo_is_scoped_to_its_request_user_and_machine(tmp_path, monkeypatc
             assert FS._SB_WARM_CACHE.get("last") == {"marker": "alice"}
         with WS.use_workspace(ws_b):
             assert FS._SB_WARM_CACHE.get("last") is None   # never bob's
-        assert FS._DAXIS_CACHE[key] == 12.5
-        # an existing calibration is never overwritten by an echo
+            # the d-axis cache is per workspace too: alice's angle is hers
+            assert key not in FS._DAXIS_CACHE
+        assert key not in FS._DAXIS_CACHE                  # nor the process's
         with WS.use_workspace(ws_a):
+            assert FS._DAXIS_CACHE[key] == 12.5
+            # an existing calibration is never overwritten by an echo
             assert SP.apply_fem_echo(dict(echo2, daxis={key: 99.0}),
                                      nonce="n-a", expected=fp_a2)
-        assert FS._DAXIS_CACHE[key] == 12.5
+            assert FS._DAXIS_CACHE[key] == 12.5
     finally:
-        FS._DAXIS_CACHE.pop(key, None)
-        for ws in (ws_a, ws_b):
+        for ws in (None, ws_a, ws_b):
             with WS.use_workspace(ws):
-                FS._SB_WARM_CACHE.pop("last", None)
+                FS._DAXIS_CACHE.pop(key, None)
+                if ws is not None:
+                    FS._SB_WARM_CACHE.pop("last", None)
 
 
 def test_queued_optimizer_eval_cancel_is_cancelled_not_failed(monkeypatch):

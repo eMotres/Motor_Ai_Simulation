@@ -256,7 +256,35 @@ DAXIS_SHIFT_DEG = 108.0   # LEGACY CONSTANT, and wrong for EVERY topology
 # TRUE q-axis and the γ the user enters equals the PHYSICAL current angle from the
 # q-axis (identical to commercial FEM's el_deg).  Cached per topology; θ* is invariant to
 # dimension sweeps.
-_DAXIS_CACHE: Dict[tuple, float] = {}
+#
+# PER WORKSPACE (2026-09-30, Codex review of PR #68).  This was one module-global
+# dict for the whole API process, so one account's calibration answered for
+# every other account that happened to build the same key.  It is now a
+# `workspace.ws_map`, like `_SB_WARM_CACHE`, and its disk mirror
+# (`_daxis_disk_path`) already sits in the workspace root.  With
+# `WORKSPACES_ROOT` unset there is one workspace (the process one), so a
+# single-user workstation sees the same cache it always had.
+#
+# The key carries NO material fingerprint, on purpose: θ* is a mirror-symmetry
+# property of the cross-section, and an isotropic steel or magnet card cannot
+# break that symmetry.  Measured solver-direct 2026-09-30 (production
+# `_calibrate_daxis`, 24 frames, disk off; base N52UH_150C + B10AHV900M, then
+# magnet -> F52SH_120C, then both cores -> 20SW1200):
+#     40 mm 12s/14p:  60.0228 / 60.0071 / 60.0154 deg
+#     L155  12s/10p: 120.0144 / 120.0121 / 120.0132 deg
+# i.e. mesh noise, the same spread as three cross-sections of one family, and
+# worth < 0.01 % of torque (dT/dγ at the rated γ: -0.26 %/deg on the 40 mm,
+# -0.41 %/deg on L155).  Keying on materials would re-run a 24-frame
+# calibration after every material edit and buy nothing.  ψ_PM, which DOES
+# scale with the cards (+1.3 % / +4.2 % on the 40 mm, +3.2 % / +1.3 % on L155
+# for the same two swaps), is keyed on them: see `psipm_cache_key`.
+from motor_ai_sim import workspace as _WSD
+#: Entries are one float each; the cap is a safety valve against a sweep that
+#: builds thousands of cross-sections in one account.  An evicted entry is still
+#: on disk and is read back without a solve.
+_DAXIS_CACHE_MAX = 512
+_DAXIS_CACHE = _WSD.ws_map("fem_solver_2d.daxis_cache", _DAXIS_CACHE_MAX,
+                           lru_on_read=True)
 # RECURSION GUARD — PER THREAD, and a lock so two threads cannot calibrate at
 # once.  It was a plain module global, which made it a guard against the wrong
 # thing: the no-load calibration is itself a transient, so the flag has to
@@ -273,8 +301,10 @@ _DAXIS_CACHE: Dict[tuple, float] = {}
 # Thread-local: only the thread that IS calibrating skips the lookup.  The lock:
 # a second thread that wants the same machine waits and then reads the cache
 # the first one filled, instead of starting a duplicate 39-second calibration.
+# The lock is per workspace, like the cache and the disk file it guards: a
+# calibration in one account no longer queues another account's.
 _DAXIS_TLS = threading.local()
-_DAXIS_LOCK = threading.RLock()
+_DAXIS_LOCK = _WSD.ws_lock("fem_solver_2d.daxis_lock")
 
 
 # ── Optimizer-candidate evaluation scope (owner 2026-09-24, fixes A + B) ─────
@@ -420,11 +450,15 @@ def _winding_cache_identity(geo, wind, num_poles=None) -> str:
     return "w2-" + hashlib.sha256(payload.encode("ascii")).hexdigest()
 
 
-def psipm_cache_key(geo, wind, connection=None) -> str:
+def psipm_cache_key(geo, wind, connection=None, materials=None) -> str:
     """The disk key ``noload_psi_pm`` files its answer under.
 
     Its own function so the "this cache cannot answer for another winding"
-    property is testable without solving anything.
+    property is testable without solving anything.  Like the winding identity
+    it is a pure function of its arguments: the MATERIAL identity comes in as
+    ``materials``, the string ``_noload_material_fingerprint()`` returns for
+    the call being answered (both solving callers pass it).  ``None`` files
+    under a marker no fingerprint can equal.
 
     ψ_PM DOES depend on the CONNECTION — not through the current (there is none)
     but through n_series: the phase flux linkage is the SUM of the series coil
@@ -457,9 +491,86 @@ def psipm_cache_key(geo, wind, connection=None) -> str:
                              _npe_pm((wind or {}).get("n_parallel", 1), geo))
     except Exception:       # noqa: BLE001 — a cache key may not raise
         _scale = "Tx"
-    return "psipm_v2_%s_L%s_C%s_%s_%s" % (
+    # v3: the MATERIAL CARDS ride in the key (2026-09-30).  ψ_PM is the magnet's
+    # flux through the iron, so it scales with the magnet's Br and with how hard
+    # the steel saturates; v2 keyed on geometry and winding only and served one
+    # card set's ψ_PM (and, through the "ldq0_v1_" prefix, its catalogue Ld/Lq)
+    # to the same cross-section with another.  Measured 2026-09-30, L155 at its
+    # rated point: N52UH_150C -> F52SH_120C moves ψ_PM +3.2 % and
+    # B10AHV900M -> 20SW1200 +1.3 %, and the chord Ld = (ψd − ψ_PM)/i_d
+    # divides that error by a small i_d — a stale ψ_PM put Ld 29 % and 17 %
+    # low (40 mm 12s/14p: 28 % and ~75 %).
+    # v2 entries are simply never matched again (a miss, not a wrong answer).
+    return "psipm_v3_%s_L%s_C%s_%s_%s_%s" % (
         _fp, int((wind or {}).get("layers", 1) or 1), _conn_pm or "cfg",
-        _winding_cache_identity(geo, wind), _scale)
+        _winding_cache_identity(geo, wind), _scale,
+        str(materials) if materials else "m-unspecified")
+
+
+#: The parts whose cards the NO-LOAD field sees: the magnets that drive it and
+#: every solid that can carry or shunt it.  Copper, the slot liner and the wire
+#: enamel carry no current at no load and are μ = 1, so editing them must not
+#: throw away a cached ψ_PM.
+_NOLOAD_MATERIAL_PARTS = ("stator_core", "rotor_core", "magnet", "shaft", "sleeve")
+
+
+def _noload_material_fingerprint() -> str:
+    """Identity of the material cards a no-load solve of THIS call would use.
+
+    The same precedence the solver applies (`build_materials` and the σ
+    block of `fem_transient_sliding_band`): the config's assignment, the
+    per-request override's assignment on top, and each name resolved to its
+    PROPS — the override-carried props first, else the library (which already
+    includes the admin global layer).  Props, not names: a user who edits the
+    B-H curve of a card keeps its name.  The excluded-part set is included
+    because an EXCLUDED shaft is air whatever its card says.
+
+    Never raises: an unresolvable card falls back to its name, which still
+    separates two assignments from each other.
+    """
+    import hashlib as _hl
+    import json as _jl
+    try:
+        from motor_ai_sim.config import get_material_assignments as _gma_fp
+        asg = dict(_gma_fp() or {})
+    except Exception:       # noqa: BLE001 — no config is the default machine
+        asg = {}
+    try:
+        from motor_ai_sim.material_context import get_request_materials as _grm_fp
+        ov = _grm_fp() or {}
+    except Exception:       # noqa: BLE001
+        ov = {}
+    asg.update({k: v for k, v in (ov.get("assignment") or {}).items() if v})
+    ov_props = ov.get("materials") or {}
+    cards = {}
+    for part in _NOLOAD_MATERIAL_PARTS:
+        name = asg.get(part)
+        if not name:
+            continue
+        name = str(name)
+        props = None
+        if name in ov_props:
+            props = ov_props[name]
+        else:
+            try:
+                from motor_ai_sim import materials as _ml_fp
+                obj = _ml_fp.resolve_assigned(part, name)
+                import dataclasses as _dc_fp
+                props = (_dc_fp.asdict(obj) if _dc_fp.is_dataclass(obj)
+                         else dict(vars(obj)))
+            except Exception:   # noqa: BLE001 — the name alone still separates
+                props = None
+        cards[part] = [name, props]
+    try:
+        cards["__excluded__"] = sorted(_excluded_parts())
+    except Exception:       # noqa: BLE001
+        pass
+    try:
+        blob = _jl.dumps(cards, sort_keys=True, default=str)
+    except Exception:       # noqa: BLE001
+        blob = repr(sorted((k, str(v[0]) if isinstance(v, list) else str(v))
+                           for k, v in cards.items()))
+    return "m" + _hl.md5(blob.encode()).hexdigest()[:12]
 
 
 def _calibration_sector_count(num_slots, num_poles, wind):
@@ -649,7 +760,8 @@ def noload_psi_pm(geo, wind, pole_pairs, n_sectors, daxis_deg,
     turn it into an inductance.
     """
     import math as _m, json as _j, os as _os
-    key = psipm_cache_key(geo, wind, connection)
+    key = psipm_cache_key(geo, wind, connection,
+                          materials=_noload_material_fingerprint())
     _dp = _daxis_disk_path()
     if _dp and _os.path.exists(_dp):
         try:
@@ -745,7 +857,9 @@ def noload_incremental_ldq(geo, wind, pole_pairs, daxis_deg,
     ``inc_ldq`` block of that run, or ``None`` when it could not be measured.
     """
     import json as _j, os as _os
-    key = "ldq0_v1_%s_M%g" % (psipm_cache_key(geo, wind, connection),
+    key = "ldq0_v1_%s_M%g" % (psipm_cache_key(
+                                  geo, wind, connection,
+                                  materials=_noload_material_fingerprint()),
                               float(magnet_temp_c))
     _dp = _daxis_disk_path()
     if _dp and _os.path.exists(_dp):
@@ -809,6 +923,36 @@ def _daxis_disk_path():
         from motor_ai_sim.workspace import root as _ws_root
         return os.path.join(str(_ws_root()), ".daxis_cache.json")
     except Exception:
+        return None
+
+
+def _daxis_disk_entry(path, skey):
+    """The calibrated angle filed under ``skey`` in the disk mirror, or None.
+
+    The file is PER WORKSPACE (``_daxis_disk_path`` resolves the caller's
+    workspace root), and it is read as untrusted: an entry is served only when
+    it is a finite number of degrees.  Anything else — a ψ_PM list or Ld/Lq
+    dict that shares the file, a string, NaN/inf (Python's json writes and
+    reads them), a file that is not a JSON object at all — is a miss, and the
+    caller calibrates as if the file were absent.  Never raises.
+    """
+    import json
+    import os
+    try:
+        if not path or not os.path.exists(path):
+            return None
+        with open(path) as _f:
+            disk = json.load(_f)
+        if not isinstance(disk, dict):
+            return None
+        v = disk.get(skey)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        v = float(v)
+        if not math.isfinite(v):
+            return None
+        return v % 360.0
+    except Exception:       # noqa: BLE001 — a cache miss is not an error
         return None
 
 def _daxis_geo_fingerprint(geo) -> str:
@@ -936,16 +1080,10 @@ def _calibrate_daxis(p, geo, wind, pole_pairs, geo_override, n_sectors,
     skey = "_".join(str(x) for x in key)
     _dp = _daxis_disk_path()
     if _dp:                           # shared disk cache (across sweep subprocesses)
-        try:
-            import os, json
-            if os.path.exists(_dp):
-                with open(_dp) as _f:
-                    _v = json.load(_f).get(skey)
-                if _v is not None:
-                    _DAXIS_CACHE[key] = float(_v)
-                    return float(_v)
-        except Exception:
-            pass
+        _v = _daxis_disk_entry(_dp, skey)
+        if _v is not None:
+            _DAXIS_CACHE[key] = _v
+            return _v
     daxis = None                      # None ⇒ calibration did not succeed
     _cal_err = None
     try:
@@ -1122,6 +1260,8 @@ def _calibrate_daxis(p, geo, wind, pole_pairs, geo_override, n_sectors,
                         _disk = json.load(_f) or {}
                 except Exception:
                     _disk = {}
+            if not isinstance(_disk, dict):
+                _disk = {}            # not a cache this code wrote: start over
             # Drop any PRE-FINGERPRINT entry on the way past.  Those keys have
             # 4 fields (poles_slots_layers_conn) and no geometry, i.e. they are
             # exactly the entries that answered for machines they were never
@@ -4072,10 +4212,19 @@ def fem_transient_sliding_band(
             if _dp_chk and _os_sb.path.exists(_dp_chk):
                 import json as _json_dx
                 _pref = "_".join(str(x) for x in _kp) + "_"
-                with open(_dp_chk) as _f_dx:
-                    for _k2, _v2 in (_json_dx.load(_f_dx) or {}).items():
-                        if isinstance(_k2, str) and _k2.startswith(_pref) and isinstance(_v2, (int, float)):
-                            _known.append(float(_v2))
+                # A file that cannot be read, or is not a JSON object, is no
+                # evidence; it must not also switch off the in-memory half of
+                # this guard.
+                try:
+                    with open(_dp_chk) as _f_dx:
+                        _disk_dx = _json_dx.load(_f_dx)
+                except Exception:   # noqa: BLE001
+                    _disk_dx = None
+                for _k2, _v2 in (_disk_dx.items() if isinstance(_disk_dx, dict) else ()):
+                    if (isinstance(_k2, str) and _k2.startswith(_pref)
+                            and isinstance(_v2, (int, float)) and not isinstance(_v2, bool)
+                            and math.isfinite(float(_v2))):
+                        _known.append(float(_v2))
             if _known:
                 _known.sort()
                 _cal = _known[len(_known) // 2]

@@ -1612,13 +1612,20 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                    "temperatures")
         one("KV at 20 °C (rpm/V)", _c20.get("kv_line_rpm_per_V"),
             "no load, per line volt; " + _tail20, 1)
-        one("Kt at 20 °C (N·m/A rms)", _c20.get("kt_line_Nm_per_A"),
-            "per line amp; " + _tail20, 4)
-        one("Km at 20 °C (N·m/√W)", _c20.get("km_Nm_sqrtW"),
-            "torque per root watt of copper; " + _tail20, 3)
+        # Kt / Km: the measured 3-D torque factor or plain 2-D (owner
+        # 2026-09-30) — re-read from the block, so a block written with the
+        # flux factor on them prints 2-D too.
+        from motor_ai_sim.report import cold_torque_constants, kt_basis_note
+        _ct20 = cold_torque_constants(_c20)
+        _kb = kt_basis_note(_ct20["k_torque"])
+        one("Kt at 20 °C (N·m/A rms)", _ct20["kt_line_Nm_per_A"],
+            "per line amp; " + _kb + "; " + _tail20, 4)
+        one("Km at 20 °C (N·m/√W)", _ct20["km_Nm_sqrtW"],
+            "torque per root watt of copper; " + _kb + "; " + _tail20, 3)
         one("Km per mass at 20 °C (N·m/(√W·kg))",
-            _c20.get("km_per_mass_Nm_sqrtW_kg"),
-            "the figure of merit that survives scaling; " + _tail20, 4)
+            _ct20["km_per_mass_Nm_sqrtW_kg"],
+            "the figure of merit that survives scaling; " + _kb + "; "
+            + _tail20, 4)
         # …AND THE INDUCTANCES ON THE SAME BASIS (owner 2026-09-20: *"Ld/Lq
         # also need to be given at 20 degrees and at zero current, like KV"*).  KV
         # is a no-load constant at a stated temperature; a catalogue that

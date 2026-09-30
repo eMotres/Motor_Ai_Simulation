@@ -117,3 +117,22 @@ test('PWM: doubling the turns at fixed NI quarters the field-driven deltas', () 
   // torque ripple increment follows the NI ripple: 2 pp × 1/2
   near(r2.pwm_ripple_pct, (p.ripple0_pct ?? 1) + 2 / 2, 1e-9, 'PWM torque ripple');
 });
+
+// Owner 2026-09-30 (review P22): Kt / Km carry a MEASURED 3-D torque factor or
+// none — the flux factor k_flux, which the torque itself carries, is taken
+// back out of them.
+test('Kt / Km: 2-D without a measured k_T, 3-D corrected with one', () => {
+  const p2 = base({ end3d: { k_flux: 0.95 } });
+  const r2 = scaleMotor(p2, K(p2));
+  const p0 = base();
+  const r0 = scaleMotor(p0, K(p0));                     // no 3-D at all
+  near(r2.T_Nm, r0.T_Nm * 0.95, 1e-12, 'torque carries k_flux');
+  near(r2.Kt_Nm_per_A, r0.Kt_Nm_per_A, 1e-12, 'Kt stays 2-D');
+  near(r2.Km_Nm_sqrtW, r0.Km_Nm_sqrtW, 1e-12, 'Km stays 2-D');
+  assert.equal(r2.kt_km_basis, '2-D');
+  const p3 = base({ end3d: { k_flux: 0.95, k_T: 0.98 } });
+  const r3 = scaleMotor(p3, K(p3));
+  near(r3.Kt_Nm_per_A, r0.Kt_Nm_per_A * 0.98, 1e-12, 'Kt × k_T');
+  near(r3.Km_Nm_sqrtW, r0.Km_Nm_sqrtW * 0.98, 1e-12, 'Km × k_T');
+  assert.equal(r3.kt_km_basis, '3-D corrected');
+});

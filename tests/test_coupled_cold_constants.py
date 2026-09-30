@@ -166,23 +166,36 @@ def test_a_refusal_at_20_degrees_leaves_the_key_absent(client, monkeypatch):
 # (c) the conventions — §4's, to the digit
 # ---------------------------------------------------------------------------
 
-def test_kt_km_carry_k3d_and_kv_is_divided_by_it(client, monkeypatch):
-    """The one arithmetic claim.  Kt goes as the flux and KV as 1/flux, so a
-    passport of 0.9 multiplies one and divides the other — a block that applied
-    the same correction to both would put KV 20 % out."""
+def test_kt_km_stay_2d_and_kv_takes_the_flux_factor(client, monkeypatch):
+    """Owner 2026-09-30 (review P22): Kt, Km and Km/mass carry a MEASURED 3-D
+    torque factor or nothing — never the flux factor as a stand-in.  KV and
+    ψ_PM keep the flux factor, measured by Stage A: ψ × k, KV ÷ k."""
     _fake(monkeypatch, summary=COLD_SUMMARY)
     c = _run(client)
     k = c["constants_20c"]
     assert k["k_3d"] == pytest.approx(0.9, abs=1e-9)
+    assert k["k_torque"] is None and k["torque_basis"] == "2-D"
     assert k["two_d"]["Kt_Nm_per_A_line"] == pytest.approx(0.1, abs=1e-9)
-    assert k["k3d"]["Kt_Nm_per_A_line"] == pytest.approx(0.09, abs=1e-9)
-    assert k["k3d"]["Km_Nm_sqrtW"] == pytest.approx(0.36, abs=1e-9)
-    assert k["k3d"]["Km_per_mass_Nm_sqrtW_kg"] == pytest.approx(0.72, abs=1e-9)
+    for key in ("Kt_Nm_per_A_line", "Kt_Nm_per_Arms", "Km_Nm_sqrtW",
+                "Km_per_mass_Nm_sqrtW_kg"):
+        assert key not in k["k3d"], key
     assert k["k3d"]["psi_pm_Wb"] == pytest.approx(0.009, abs=1e-9)
+    assert "2-D (no measured 3-D torque factor)" in k["note"]
     # …and KV the other way.
     assert k["two_d"]["KV_noload_rpm_per_V_line"] == pytest.approx(50.0)
     assert k["k3d"]["KV_noload_rpm_per_V_line"] == pytest.approx(50.0 / 0.9,
                                                                  abs=1e-6)
+
+
+def test_a_measured_torque_factor_goes_on_kt_and_km_once(client, monkeypatch):
+    _fake(monkeypatch, summary={**COLD_SUMMARY,
+                                "end3d": {"k_flux": 0.9, "k_T": 0.98}})
+    k = _run(client)["constants_20c"]
+    assert k["torque_basis"] == "3-D corrected"
+    assert k["k_torque"] == pytest.approx(0.98)
+    assert k["kt_line_Nm_per_A"] == pytest.approx(0.1 * 0.98, abs=1e-9)
+    assert k["km_Nm_sqrtW"] == pytest.approx(0.4 * 0.98, abs=1e-9)
+    assert k["kv_line_rpm_per_V"] == pytest.approx(50.0 / 0.9, abs=1e-6)
 
 
 def test_in_delta_the_headline_kt_is_the_one_per_line_amp(client, monkeypatch):
@@ -190,10 +203,10 @@ def test_in_delta_the_headline_kt_is_the_one_per_line_amp(client, monkeypatch):
     _fake(monkeypatch, summary=COLD_SUMMARY)
     k = _run(client)["constants_20c"]
     assert k["point"]["star_delta"] == "delta"
-    assert k["kt_line_Nm_per_A"] == pytest.approx(0.09, abs=1e-9)   # ×k_3d
+    assert k["kt_line_Nm_per_A"] == pytest.approx(0.1, abs=1e-9)    # 2-D
     assert k["kv_line_rpm_per_V"] == pytest.approx(50.0 / 0.9, abs=1e-6)
-    assert k["km_Nm_sqrtW"] == pytest.approx(0.36, abs=1e-9)
-    assert k["km_per_mass_Nm_sqrtW_kg"] == pytest.approx(0.72, abs=1e-9)
+    assert k["km_Nm_sqrtW"] == pytest.approx(0.4, abs=1e-9)
+    assert k["km_per_mass_Nm_sqrtW_kg"] == pytest.approx(0.8, abs=1e-9)
     assert k["R_phase_20_ohm"] == pytest.approx(0.05, abs=1e-9)
     assert k["mass_kg"] == pytest.approx(0.5, abs=1e-9)
 
@@ -202,7 +215,7 @@ def test_a_star_machine_takes_the_per_winding_kt(client, monkeypatch):
     _fake(monkeypatch, summary={**COLD_SUMMARY, "star_delta": "star"})
     k = _run(client)["constants_20c"]
     assert k["point"]["star_delta"] == "star"
-    assert k["kt_line_Nm_per_A"] == pytest.approx(0.2 * 0.9, abs=1e-9)
+    assert k["kt_line_Nm_per_A"] == pytest.approx(0.2, abs=1e-9)
 
 
 def test_no_passport_means_no_corrected_column_and_no_invention(
@@ -260,10 +273,20 @@ def test_the_report_prints_the_four_catalogue_constants():
                  "Phase resistance R₂₀ [mΩ]"):
         assert want in labels, (want, labels)
     cells = {r[0]: r[1] for r in rows}
-    # The 3-D-corrected values, which is what §4 prints for the hot ones too.
+    # KV carries the flux factor; Kt / Km are 2-D — this block was written
+    # BEFORE the owner's 2026-09-30 rule (k3d holds Kt × k_flux) and is
+    # re-read on the new basis, labelled so.
     assert "58.71" in cells["KV, no load [rpm/V]"]
-    assert "0.185" in cells["Torque constant Kt [N·m/A rms]"]
-    assert "0.37" in cells["Motor constant Km [N·m/√W]"]
+    assert "0.2" in cells["Torque constant Kt [N·m/A rms]"]
+    assert "0.185" not in cells["Torque constant Kt [N·m/A rms]"]
+    assert "0.4" in cells["Motor constant Km [N·m/√W]"]
+    notes = {r[0]: r[2] for r in rows}
+    assert "2-D — no measured 3-D torque factor" in notes["Torque constant Kt [N·m/A rms]"]
+    # …and a block with a MEASURED k_T prints the corrected value
+    blk = dict(BLOCK, k_torque=0.98, torque_basis="3-D corrected",
+               k3d=dict(BLOCK["k3d"], Kt_Nm_per_Arms=0.196))
+    cells2 = {r[0]: r[1] for r in cold_constant_rows({"constants_20c": blk})}
+    assert "0.196" in cells2["Torque constant Kt [N·m/A rms]"]
     # …and the point they were taken at is part of the answer.
     assert any(r[0] == "…measured at" for r in rows)
     assert cold_constants_of({"constants_20c": dict(BLOCK)}) is not None
@@ -311,10 +334,11 @@ def test_the_datasheet_carries_the_same_four_when_a_duty_has_them(tmp_path):
         die="D", cfg="L13", die_doc=die_doc, cfg_doc=cfg_doc,
         coupled={"peak": {"constants_20c": dict(BLOCK)}}))
     assert "KV at 20 °C (rpm/V)" in with_
-    assert with_["Kt at 20 °C (N·m/A rms)"] == pytest.approx(0.185, abs=1e-9)
-    assert with_["Km at 20 °C (N·m/√W)"] == pytest.approx(0.37, abs=1e-9)
+    # 2-D Kt / Km (no measured torque factor), whatever the stored block says
+    assert with_["Kt at 20 °C (N·m/A rms)"] == pytest.approx(0.2, abs=1e-9)
+    assert with_["Km at 20 °C (N·m/√W)"] == pytest.approx(0.4, abs=1e-9)
     assert with_["Km per mass at 20 °C (N·m/(√W·kg))"] == pytest.approx(
-        0.74, abs=1e-9)
+        0.8, abs=1e-9)
 
     without = _labels(build_datasheet(die="D", cfg="L13", die_doc=die_doc,
                                       cfg_doc=cfg_doc, coupled=None))
@@ -334,7 +358,7 @@ def test_the_route_makes_one_cold_pass_and_nothing_else(client, monkeypatch):
     assert d["ok"] is True
     assert seen["pairs"] == [(20.0, 20.0)]        # ONE run, and it is the cold one
     assert seen["bg"] == [True]
-    assert d["constants_20c"]["kt_line_Nm_per_A"] == pytest.approx(0.09,
+    assert d["constants_20c"]["kt_line_Nm_per_A"] == pytest.approx(0.1,
                                                                    abs=1e-9)
     # `record: false` files nothing, here as everywhere.
     assert d["written_to_last"] is False

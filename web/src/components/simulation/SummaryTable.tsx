@@ -1131,7 +1131,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         )}
         {s.gap_refinement?.applied && (
           <Tooltip title={(s.gap_layers_note ?? 'Re-solved with more air-gap layers per side.')
-            + (s.gap_refinement?.persist_gap_layers ? ' — now this machine's default.' : '')}>
+            + (s.gap_refinement?.persist_gap_layers ? " — now this machine's default." : '')}>
             <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>
               {`Gap ${s.gap_refinement.first?.gap_layers_per_side ?? '?'}→${s.gap_refinement.gap_layers_per_side ?? '?'}/side`}
             </Typography>

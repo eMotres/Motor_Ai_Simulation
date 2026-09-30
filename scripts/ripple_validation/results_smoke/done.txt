@@ -1,0 +1,5 @@
+smoke_d40 exit 0 38s
+smoke_l155 exit 0 89s
+smoke_l13 exit 0 48s
+l155_rated_R432 exit 137 692s
+d40_rated_R432 exit 137 831s

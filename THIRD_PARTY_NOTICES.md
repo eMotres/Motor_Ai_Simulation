@@ -52,6 +52,27 @@ here, audited from the resolved dependency closure of `requirements.txt` on
 | GEOS (in shapely) | shapely | LGPL-2.1 | compatible |
 | vtk, trame-* | cadquery-ocp | BSD-3-Clause / Apache-2.0 / MIT | compatible |
 
+### Open-source sparse direct solvers (every container image; `requirements-opensolvers.txt`)
+
+Added 2026-09-30 (`simulation/linear_backend.py`). The two Python bindings are
+compiled in `deploy/Dockerfile.api`'s `opensolvers-build` stage; the native
+libraries are the Debian 13 (trixie) packages of the `python:3.11-slim` base.
+All are AGPL-3.0-compatible (see note 4).
+
+| Component | Version | Licence |
+|---|---|---|
+| scikit-sparse (Python binding) | 0.5.0 | BSD-2-Clause |
+| python-mumps (Python binding) | 0.0.4 | BSD-2-Clause |
+| SuiteSparse CHOLMOD (`libcholmod5`) | 7.10.1 | LGPL-2.1-or-later (Core, Cholesky, Check, Partition modules); **GPL-2.0-or-later** (Supernodal, MatrixOps, Modify modules) |
+| SuiteSparse AMD, CAMD, COLAMD, CCOLAMD, BTF, SuiteSparse_config | 7.10.1 | BSD-3-Clause |
+| SuiteSparse KLU (linked by scikit-sparse, not used) | 7.10.1 | LGPL-2.1-or-later |
+| SuiteSparse UMFPACK, SPQR (linked by scikit-sparse, not used) | 7.10.1 | **GPL-2.0-or-later** |
+| METIS 5 (bundled inside CHOLMOD as SuiteSparse_metis) | 5.1.0 | Apache-2.0 |
+| MUMPS, sequential (`libmumps-seq-5.7`, incl. PORD and the fake-MPI `libmpiseq`) | 5.7 | CeCILL-C |
+| SCOTCH (`libscotch-7.0`, MUMPS ordering) | 7.0 | CeCILL-C |
+| OpenBLAS (`libopenblas0-pthread`, BLAS/LAPACK of CHOLMOD and MUMPS) | 0.3.29 | BSD-3-Clause |
+| libgfortran5, libgomp1 (GCC runtime of MUMPS / CHOLMOD) | GCC 14 | GPL-3.0-or-later with the GCC Runtime Library Exception 3.1 |
+
 ### Optional (not installed by default)
 
 | Package | Install | Licence |
@@ -99,10 +120,24 @@ are not distributed with the software and are not listed.
 2. **Intel MKL (via pypardiso).** Proprietary, freely redistributable, and not
    a "System Library" under GPL/AGPL section 1, so it is not a default
    dependency and is never shipped in this repository or in the default
-   container image. Every solver falls back to SciPy's SuperLU when pypardiso
-   is absent. Operators may install it on their own machines
-   (`requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for
-   `deploy/Dockerfile.api`) for a several-times-faster transient solve.
+   container image. Without pypardiso every solver uses the open-source
+   CHOLMOD + MUMPS stack above (SciPy's SuperLU as the last resort). Operators
+   may install it on their own machines (`requirements-pardiso.txt`, or
+   `--build-arg WITH_PARDISO=1` for `deploy/Dockerfile.api`); it is then the
+   default solver (`SB_LINEAR_BACKEND=auto`). The measured difference is in
+   `docs/OPEN_SOLVERS_2026-09-30.md`.
+4. **CHOLMOD, UMFPACK, SPQR (GPL-2.0-or-later), KLU and CHOLMOD Core
+   (LGPL-2.1-or-later), MUMPS and SCOTCH (CeCILL-C).** "Or later" allows the
+   GPL-2.0 parts under GPL-3.0, which section 13 lets combine with AGPL-3.0
+   code; LGPL-2.1-or-later likewise. CeCILL-C is a weak-copyleft, LGPL-like
+   licence: it covers the library itself (modifications to MUMPS/SCOTCH stay
+   CeCILL-C, with their source available), while a work that merely links it
+   ("Derived Software", article 5.3.4) may be distributed under its own
+   licence, here the AGPL. GPL-licensed solvers such as Code_Aster and Elmer
+   link MUMPS the same way. All are used unmodified, as shared libraries from
+   the Debian packages. Nothing in this stack is proprietary or
+   non-commercial. (The CeCILL-C reading is ours; the counsel reviewing the
+   section 7 exception, PR #93, should confirm it.)
 3. **Triangle (optional, being phased out).** Its licence permits only
    non-commercial use without the author's permission, a restriction the AGPL
    does not allow, so it is **not a dependency of and not bundled in** the AGPL

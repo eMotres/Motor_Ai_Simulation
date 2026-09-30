@@ -59,13 +59,19 @@ rest of the run to SuperLU.  Each writes a warning and a note.
 
 Thread safety: one ``LinearSolver`` (or ``FrameFactor``) per thread is the
 design; each also serialises its own calls with a lock, so sharing one is safe
-but not parallel.  Distinct objects are independent: every CHOLMOD factor owns
-its ``cholmod_common`` and every MUMPS instance its own structure and lock.
-python-mumps releases the GIL inside MUMPS, so MUMPS factorisations in several
-threads run in parallel; scikit-sparse 0.5 does NOT release the GIL inside
-CHOLMOD, so CHOLMOD factorisations from several threads are correct but
-serialised.  ``FrameFactor(prefer_parallel=True)`` (TDM with workers > 1)
-therefore uses MUMPS SYM=1 for the SPD frames in the open build.
+but not parallel.  Distinct objects from several threads (the API's job
+threads, TDM's frame pool) are safe on every backend, and parallel only with
+PARDISO:
+
+* PARDISO: one handle per factor, MKL is re-entrant across handles;
+* CHOLMOD: every factor owns its ``cholmod_common``; scikit-sparse 0.5 holds
+  the GIL inside CHOLMOD, so factorisations from threads are serialised;
+* MUMPS: sequential MUMPS 5.7.3 is NOT safe for concurrent instances (two
+  threads segfault the process, measured), so every MUMPS call holds one
+  process-wide lock (:data:`_MUMPS_LOCK`) and is serialised too.
+
+Parallel factorisation in the open build therefore needs processes (the solve
+pool), not threads.
 """
 from __future__ import annotations
 
@@ -368,12 +374,24 @@ class CholmodFactor(Factor):
                 "near_singular_solves": self.near_singular_solves}
 
 
+#: ONE lock around every MUMPS call in the process.  Sequential MUMPS 5.7.3
+#: (Debian) with python-mumps 0.0.4 is NOT safe for concurrent instances:
+#: two threads factorising two different instances segfault the process
+#: (measured 2026-09-30, reproducible with 1 or 4 BLAS threads).  The API
+#: runs jobs in threads (QUEUE_WORKERS, field views), so without this lock
+#: two users' MUMPS solves would take the server down.  Re-entrant, because a
+#: factor collected by refcount inside a locked section frees under it too.
+_MUMPS_LOCK = threading.RLock()
+
+
 class MumpsFactor(Factor):
     """MUMPS (sequential) through python-mumps.  ``spd=True``: SYM=1 (the
     positive-definite LDLᵀ, no pivoting, upper triangle); a negative pivot
     count (INFOG(12) > 0) is reported as :class:`NotPositiveDefinite`.
     ``spd=False``: SYM=0 unsymmetric LU with MUMPS' threshold pivoting.
-    Ordering ``SB_MUMPS_ORDERING`` (default ``auto``: MUMPS picks)."""
+    Ordering ``SB_MUMPS_ORDERING`` (default ``auto``: MUMPS picks).
+    Every call, including the instance's creation and release, holds the
+    process-wide :data:`_MUMPS_LOCK`: MUMPS is serialised across threads."""
 
     def __init__(self, spd: bool, ordering: Optional[str] = None) -> None:
         self.spd = bool(spd)
@@ -398,40 +416,55 @@ class MumpsFactor(Factor):
 
     def analyze(self, A, sym=None) -> None:
         import mumps
-        self._ctx = mumps.Context()
-        self._set(A)
-        self._ctx.analyze(ordering=self.ordering)
+        with _MUMPS_LOCK:
+            self.free()
+            self._ctx = mumps.Context()
+            self._set(A)
+            self._ctx.analyze(ordering=self.ordering)
 
     def factorize(self, A, sym=None) -> None:
         import mumps
-        self._set(A)
-        try:
-            self._ctx.factor(reuse_analysis=True)
-        except mumps.MUMPSError as e:
-            if self.spd:
-                raise NotPositiveDefinite("MUMPS SYM=1: %s" % e) from e
-            raise
-        if self.spd and int(self._ctx.mumps_instance.infog[12]) > 0:
+        with _MUMPS_LOCK:
+            self._set(A)
+            try:
+                self._ctx.factor(reuse_analysis=True)
+            except mumps.MUMPSError as e:
+                if self.spd:
+                    raise NotPositiveDefinite("MUMPS SYM=1: %s" % e) from e
+                raise
+            neg = int(self._ctx.mumps_instance.infog[12])
+        if self.spd and neg > 0:
             raise NotPositiveDefinite(
-                "MUMPS SYM=1 found %d negative pivot(s)"
-                % int(self._ctx.mumps_instance.infog[12]))
+                "MUMPS SYM=1 found %d negative pivot(s)" % neg)
 
     def solve(self, b) -> np.ndarray:
         b = np.asarray(b, dtype=float)
-        return np.asarray(self._ctx.solve(b))
+        with _MUMPS_LOCK:
+            return np.asarray(self._ctx.solve(b))
 
     def free(self) -> None:
         # Dropping the last reference runs the instance's __dealloc__, which
-        # is MUMPS' JOB=-2 (calling JOB=-2 here as well would free twice).
-        ctx, self._ctx = self._ctx, None
-        if ctx is not None:
-            ctx.mumps_instance = None
+        # is MUMPS' JOB=-2 (calling JOB=-2 here as well would free twice);
+        # done under the lock like every other MUMPS call.
+        with _MUMPS_LOCK:
+            ctx, self._ctx = self._ctx, None
+            if ctx is not None:
+                ctx.mumps_instance = None
+                del ctx
+
+    def __del__(self):
+        try:
+            self.free()
+        except Exception:                          # noqa: BLE001 — interpreter exit
+            pass
 
     def stats(self) -> Dict[str, Any]:
-        if self._ctx is None or self._ctx.mumps_instance is None:
-            return {}
-        inf = self._ctx.mumps_instance.infog
-        return {"infog_22_peak_MB": int(inf[22]), "infog_29_factor_entries": int(inf[29])}
+        with _MUMPS_LOCK:
+            if self._ctx is None or self._ctx.mumps_instance is None:
+                return {}
+            inf = self._ctx.mumps_instance.infog
+            return {"infog_22_peak_MB": int(inf[22]),
+                    "infog_29_factor_entries": int(inf[29])}
 
 
 class SuperLUFactor(Factor):
@@ -683,7 +716,6 @@ class LinearSolver:
     def __init__(self, backend: Optional[str] = None, *, log=None,
                  spd_min_mumps: Optional[int] = None,
                  reuse: Optional[bool] = None, spd: Optional[bool] = None,
-                 prefer_parallel: bool = False,
                  pardiso_lu=None, pardiso_spd=None) -> None:
         self.log = log if log is not None else _log
         self._lock = threading.RLock()
@@ -703,7 +735,6 @@ class LinearSolver:
             spd = (os.environ.get("SB_LINEAR_SPD", "1") != "0"
                    and os.environ.get("SB_PARDISO_SPD", "1") != "0")
         self._spd_enabled = bool(spd)
-        self.prefer_parallel = bool(prefer_parallel)
         self._handles = {"pardiso-lu": pardiso_lu, "pardiso-cholesky": pardiso_spd}
         self._streams: Dict[str, FactorStream] = {}
         self._current: Optional[FactorStream] = None
@@ -754,7 +785,7 @@ class LinearSolver:
         elif fam == "mumps":
             want = ["mumps-spd", "cholmod"]
         else:                                  # open
-            if self.prefer_parallel or n >= self.spd_min_mumps:
+            if n >= self.spd_min_mumps:
                 want = ["mumps-spd", "cholmod"]
             else:
                 want = ["cholmod", "mumps-spd"]
@@ -1074,17 +1105,16 @@ class FrameFactor:
     the pattern holds.  ``threads`` is accepted for compatibility and
     ignored: OpenBLAS has no per-thread count, and CHOLMOD/MUMPS gain little
     from BLAS threads at these sizes (docs/OPEN_SOLVERS_2026-09-30.md).
-    ``prefer_parallel`` (several frames factorised from a thread pool):
-    MUMPS SYM=1 for the SPD frames of the open build, because CHOLMOD holds
-    the GIL.  One object per frame; each serialises its own calls."""
+    One object per frame; each serialises its own calls; frames factorised
+    from a thread pool are correct on every backend but run in parallel only
+    with PARDISO (see the module docstring)."""
 
     def __init__(self, own: Optional[Callable] = None,
                  release: Optional[Callable] = None, *,
-                 backend: Optional[str] = None,
-                 prefer_parallel: bool = False, log=None) -> None:
+                 backend: Optional[str] = None, log=None) -> None:
         self._own = own
         self._release = release
-        self._ls = LinearSolver(backend, log=log, prefer_parallel=prefer_parallel)
+        self._ls = LinearSolver(backend, log=log)
         self.n = 0
         self.used: Optional[str] = None
 

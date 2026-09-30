@@ -174,10 +174,6 @@ class TestSelection:
         assert ls._spd_name(10) is None and ls.lu_backend == "superlu"
         assert log.warned("neither CHOLMOD nor MUMPS")
 
-    def test_parallel_frames_prefer_the_gil_free_backend(self, libs):
-        ls = LinearSolver(log=_Log(), prefer_parallel=True)
-        assert ls._spd_name(10) == "mumps-spd"
-
     def test_runtime_hint_only_for_a_pardiso_run(self):
         assert LB.pardiso_selected({})
         assert LB.pardiso_selected({"SB_LINEAR_BACKEND": "pardiso"})
@@ -370,6 +366,8 @@ class TestRealBackends:
         assert ls.describe()["cholesky_failures"] == 1
 
     def test_distinct_solvers_are_thread_safe(self, backend):
+        """The API runs jobs in threads.  Sequential MUMPS segfaults on two
+        concurrent instances (measured); linear_backend serialises it."""
         _need(backend)
         mats = [_laplace2d(28, seed=k) for k in range(6)]
         b = np.ones(mats[0].shape[0])
@@ -454,7 +452,7 @@ class TestFrameFactor:
         _need(backend)
         from concurrent.futures import ThreadPoolExecutor
         mats = [_laplace2d(24, seed=k) for k in range(8)]
-        facs = [FrameFactor(backend=backend, prefer_parallel=True) for _ in mats]
+        facs = [FrameFactor(backend=backend) for _ in mats]
         with ThreadPoolExecutor(4) as pool:
             list(pool.map(lambda k: facs[k].factor(mats[k], 1), range(len(mats))))
         b = np.ones(mats[0].shape[0])

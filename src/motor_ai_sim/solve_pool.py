@@ -34,8 +34,9 @@ THE LOAD RULE (decided at dispatch, re-decided whenever the load changes)
 ------------------------------------------------------------------------
 ``threads = clamp(procs // n_active, 1, solo)`` where ``n_active`` counts the
 running and the waiting solves.  Alone -> one job x ``solo`` threads
-(``SOLVE_POOL_SOLO_THREADS``, default = ``procs``), so a single interactive run
-is not slower than today; pool full or a queue behind it -> N jobs x 1 thread.
+(``SOLVE_POOL_SOLO_THREADS``, default ``min(procs, 4)``: wider was measured
+slower, see :data:`DEFAULT_SOLO_MAX`); pool full or a queue behind it -> N
+jobs x 1 thread.
 In between the idle cores are split evenly instead of left idle.  A running
 worker that speaks the child protocol is re-threaded at its next progress
 callback (threadpoolctl); a plain command (the optimizer's ``refine_proc``) or
@@ -101,6 +102,10 @@ ENV_NICE = "SOLVE_POOL_NICE"
 #: margin covers the P2 frame keyframes a Simulation run keeps.
 DEFAULT_RSS_MB = 1500
 DEFAULT_RESERVE_MB = 2048
+#: Widest a lone solve gets by default.  Measured on the AX42 (40 mm static,
+#: docs/SOLVE_POOL_2026-09-29.md): 1 thread 60 s, 4 threads 61 s, 6 threads
+#: 64 s, 8 threads 171 s — past four the solve only gets slower.
+DEFAULT_SOLO_MAX = 4
 #: How often the owning thread looks at its child (cancel, liveness, CPU).
 POLL_S = 0.2
 #: CPU / RSS sampling period of a running child.
@@ -342,7 +347,7 @@ class SolvePool:
         if self._solo > 0:
             return self._solo
         s = _int_env(ENV_SOLO, 0)
-        return s if s > 0 else self.procs
+        return s if s > 0 else min(self.procs, DEFAULT_SOLO_MAX)
 
     def rss_estimate(self) -> int:
         """Bytes one more solve is expected to need."""

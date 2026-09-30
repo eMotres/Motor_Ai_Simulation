@@ -51,6 +51,11 @@ class ChildContext:
         except Exception:                               # noqa: BLE001
             pass
 
+    def tick(self, *args, **kwargs) -> None:
+        """A progress hook for a caller that asked for no progress: it only
+        applies a pending width change, so a solve can still be re-threaded."""
+        self.apply_threads()
+
     def progress(self, *args, **kwargs) -> None:
         self.apply_threads()
         try:
@@ -227,8 +232,11 @@ def em_transient_eval_target(payload: Dict[str, Any], ctx: ChildContext) -> Dict
     """``fem_solver_2d.em_transient_eval`` plus the cache updates it made."""
     from motor_ai_sim.simulation import fem_solver_2d as _FS
     kw = dict(payload["kwargs"])
-    if ctx.has_progress:
-        kw["progress_cb"] = ctx.progress
+    # Always a hook, so the load rule can re-thread the solve between frames;
+    # progress only travels back when the caller asked for it.  The solver
+    # only calls the hook (and swallows its errors), so the answer is the same
+    # with or without it (docs/SOLVE_POOL_2026-09-29.md, equality check).
+    kw["progress_cb"] = ctx.progress if ctx.has_progress else ctx.tick
     before = dict(_FS._DAXIS_CACHE)
     result = _FS.em_transient_eval(**kw)
     echo: Dict[str, Any] = {}

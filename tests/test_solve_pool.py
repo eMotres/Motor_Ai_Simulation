@@ -68,13 +68,20 @@ def _start(p, t):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_alone_gets_the_solo_width():
-    p = _pool(procs=6)
+    p = _pool(procs=6, solo=6)
     a = _start(p, _t())
     assert a.threads == 6
     p.release(a)
-    q = _pool(procs=6, solo=4)
+    q = _pool(procs=6, solo=3)
     b = _start(q, _t())
-    assert b.threads == 4
+    assert b.threads == 3
+
+
+def test_default_solo_width_is_capped(monkeypatch):
+    assert _pool(procs=8).solo == SP.DEFAULT_SOLO_MAX == 4   # wider measured slower
+    assert _pool(procs=2).solo == 2
+    monkeypatch.setenv(SP.ENV_SOLO, "6")
+    assert _pool(procs=8).solo == 6
 
 
 def test_busy_pool_runs_n_jobs_times_one_thread():
@@ -95,7 +102,7 @@ def test_busy_pool_runs_n_jobs_times_one_thread():
 
 
 def test_even_split_between_alone_and_full():
-    p = _pool(procs=6)
+    p = _pool(procs=6, solo=6)
     a = _start(p, _t("a"))
     assert a.threads == 6
     b = _start(p, _t("b"))

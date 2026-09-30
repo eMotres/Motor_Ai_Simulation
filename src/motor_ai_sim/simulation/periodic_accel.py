@@ -244,6 +244,151 @@ def sector_components(x: np.ndarray, perm: np.ndarray, sign: np.ndarray,
     return out
 
 
+def pole_pair_image_mean(x: np.ndarray, perm: np.ndarray, sign: np.ndarray,
+                         q: int, sigma: float) -> np.ndarray:
+    """Mean of ``x`` over its pole-pair images, (1/Q)·Σ_{j<Q} S^j x with
+    Q = q (σ = +1) or 2q (σ = −1): the projection onto the eigenspace of the
+    image map S with eigenvalue 1 — the only part of a rotor-conductor state
+    that a rotor-frame DC (time-mean) field can have (see the start of the
+    eddy march in fem_solver_2d, 2026-09-29).  S-invariant input comes back
+    unchanged; for σ = −1 the eigenvalue 1 does not exist and the mean is 0.
+    Sector language: this is ``sector_components(...)["m0"]`` when σ = +1.
+    """
+    x = np.asarray(x, float)
+    Q = int(q) * (1 if float(sigma) > 0 else 2)
+    y = x.copy()
+    acc = x.copy()
+    for _ in range(Q - 1):
+        y = sign * y[perm]
+        acc += y
+    return acc / float(Q)
+
+
+def image_mean_start_refusal(full_ring: bool, sigma: float, n_dofs: int
+                             ) -> Optional[str]:
+    """Why the pole-pair image-mean start must NOT be applied, or None.
+
+    * no solid ring conductor (no shaft, no sleeve): nothing to do;
+    * a full-ring model: the image map is a rotation by one pole pair there
+      too, but the start was validated on sector models only (L155, Ø40, L13:
+      anti-periodic sectors) — refused rather than assumed;
+    * S^q = −I (σ = −1): the eigenvalue-1 space of S is empty, so the mean is
+      identically zero — it would erase the rotor-frame DC flux the magnets
+      put into the ring instead of removing an imprint."""
+    if int(n_dofs) <= 0:
+        return "no solid ring conductor"
+    if bool(full_ring):
+        return "full-ring model (validated on sector models only)"
+    if float(sigma) < 0.0:
+        return "S^q = -I: no pole-pair-invariant subspace"
+    return None
+
+
+def period_map_residual(u: np.ndarray, x: np.ndarray, M, lam: float) -> float:
+    """Remaining rotor-frame DC error bound of a corrected body, relative to
+    its rotor-frame DC state: ‖u‖·λ/(1−λ) / ‖x‖ in the σ-mass norm, with u the
+    pole-pair-periodic change over one MARCHED period (the original BDF2
+    period map, not the correction's model) and λ the slowest periodic mode.
+    A geometric tail bound: after a correction the error is dominated by that
+    mode, so the march still has to move the state by at most this much."""
+    u = np.asarray(u, float)
+    x = np.asarray(x, float)
+    nu = float(np.sqrt(max(float(u @ np.asarray(M @ u).ravel()), 0.0)))
+    nx = float(np.sqrt(max(float(x @ np.asarray(M @ x).ravel()), 1e-300)))
+    lam = min(max(float(lam), 0.0), 0.999)
+    return nu * lam / (1.0 - lam) / nx
+
+
+def dc_error_correction(u: np.ndarray, solve_JM, M: "np.ndarray | object",
+                        perm: np.ndarray, sign: np.ndarray, q: int, sigma: float,
+                        period_s: float, n_iter: int = 60, rtol: float = 1e-7,
+                        ) -> Tuple[np.ndarray, Dict[str, object]]:
+    """Rotor-frame DC error correction of a slow solid conductor (TP-EEC).
+
+    Model (checked on the L155 shaft, docs/EDDY_SHAFT_SETTLE_2026-09-29.md):
+    the slow part of the conductor state x relaxes by DC magnetic diffusion,
+    σM·ẋ + J̄·(x − x*) = 0, with J̄ the exact Jacobian averaged over one
+    electrical period (the fast AC content of the skin layer is averaged
+    out; the non-conducting region is eliminated, i.e. J̄⁻¹ is applied by a
+    full static solve with the right-hand side on the conductor).  One
+    period T changes the state by u = (e^{−TA} − I)(x − x*), A = (σM)⁻¹J̄, so
+
+        x* = x + (1 − e^{−TA})⁻¹ u = x + (TA)⁻¹u + u/2 + O(TA)·u
+
+    — one static solve instead of the ~3τ of marching; the O(TA) remainder
+    is (μT)/12 of a mode's correction (0.4 % for the L155 slow mode).  All the
+    slow modes (the wall's 1:4:9 diffusion ladder) are corrected at once.
+
+    ``solve_JM(v)``: a conductor vector → J̄⁻¹σM·v on the conductor dofs; the
+    caller owns the mesh, projection and factorisation.
+
+    ONLY THE ROTOR-FRAME DC OF THE ORBIT IS CORRECTED: the pole-pair-periodic
+    part (the eigenvalue-1 space of the image map S, :func:`pole_pair_image_mean`).
+    On the orbit the rotor-frame DC is S-invariant; u and the correction are
+    projected on it.  J̄ is taken at ONE stator position, so J̄⁻¹ of a periodic
+    vector is not periodic; its image mean is the correction the rotor-frame
+    average (all stator positions) would give, from one solve.  Measured on
+    the L155: correcting the non-periodic sectors too — with J̄ symmetrised
+    over the q images — injected rotating DC patterns (λ ≈ 0.96, a 5-period
+    beat of ±1 % in the shaft loss) and the run did not settle in 24 periods;
+    the periodic-only correction settled in 13.
+
+    Returns (correction, info): info["lambda"] is the per-period multiplier
+    e^{−μ₁T} of the SLOWEST periodic mode (inverse iteration to convergence),
+    the rate a later tail test must assume.  The Rayleigh quotient is
+    zᵀσM·(J̄⁻¹σM z) with ‖z‖_σM = 1, which for an eigenvector (J̄v = μσMv) is
+    exactly 1/μ (tested against dense references at several scalings).
+
+    AN ACCELERATOR, NOT AN EXACT STEP: one stator position's J̄, the
+    projection, the finite-difference tangent and the truncation after u/2
+    make it an approximation of the period map.  It moves only the discarded
+    warm-up prefix; the caller must verify the corrected state on the
+    ORIGINAL march (gauge, slow-mode tail, :func:`period_map_residual`)
+    before a run may be called settled.
+    """
+    u = pole_pair_image_mean(np.asarray(u, float), perm, sign, q, sigma)
+    Q = int(q)
+
+    def Jsym(v):
+        return pole_pair_image_mean(np.asarray(solve_JM(v), float).ravel(),
+                                    perm, sign, q, sigma)
+
+    Mv = (lambda v: np.asarray(M @ v, float).ravel())
+    d = Jsym(u) / float(period_s)
+    corr = d + 0.5 * u
+    info: Dict[str, object] = {"method": "dc_error_correction", "q": Q}
+    # inverse iteration on J⁻¹σM (self-adjoint in the σM inner product): the
+    # Rayleigh quotient only ever UNDER-reads the slowest λ, so it is run to
+    # convergence, not a fixed count
+    z = d.copy()
+    mu = None
+    info["iterations"] = 0
+    for it in range(max(1, int(n_iter))):
+        nz = float(np.sqrt(max(float(z @ Mv(z)), 1e-300)))
+        z = z / nz
+        zn = Jsym(z)
+        rq = float(zn @ Mv(z))
+        mu_new = (1.0 / rq) if rq > 0.0 else None
+        z = zn
+        info["iterations"] = it + 1
+        if mu_new is None:
+            mu = None
+            break
+        if mu is not None and abs(mu_new - mu) <= float(rtol) * mu_new:
+            mu = mu_new
+            break
+        mu = mu_new
+    if mu is None or not np.isfinite(mu):
+        info["refused"] = "the averaged operator is not positive on the body"
+        return corr, info
+    lam = float(np.exp(-mu * float(period_s)))
+    info["lambda"] = lam
+    info["tau_periods"] = float(1.0 / (mu * float(period_s)))
+    un = float(np.sqrt(max(float(u @ Mv(u)), 1e-300)))
+    info["step_over_last_change"] = float(np.sqrt(max(float(corr @ Mv(corr)), 0.0)) / un)
+    return corr, info
+
+
 def single_mode_extrapolate(states: Sequence[np.ndarray],
                             weights: Optional[np.ndarray] = None,
                             cos_min: float = ALIGN_COS_MIN,

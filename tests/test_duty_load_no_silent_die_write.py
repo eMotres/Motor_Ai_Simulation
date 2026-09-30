@@ -74,6 +74,53 @@ def test_differing_duty_is_refused_with_a_diff_and_nothing_is_written(dies, tmp_
     assert (dies / DIE / "die.yaml").read_bytes() == before
     assert not (tmp_path / ".family_context.json").exists()
     assert _hist(dies) == []
+    # unlocked die (fixture default) — the frontend may offer "apply duty
+    # geometry" straight away, nothing will refuse it downstream
+    assert det["die_locked"] is False
+
+
+def test_differing_duty_on_a_locked_die_flags_die_locked_in_the_409(dies):
+    """incident 2026-09-29: the owner picked "apply duty geometry" from the
+    raw confirm() dialog, and the SECOND activate (geometry_choice=apply_duty)
+    failed with 423 "die is locked" — a plain lock, not the auth problem the
+    generic `!ar.ok` branch appended "sign in again and retry" to.  The first
+    409 now says up front whether applying is even possible, so the dialog
+    can disable that choice instead of letting the owner hit the 423."""
+    d = yaml.safe_load((dies / DIE / "die.yaml").read_text(encoding="utf-8"))
+    d["locked"] = True
+    (dies / DIE / "die.yaml").write_text(yaml.safe_dump(d, sort_keys=False),
+                                         encoding="utf-8")
+    with pytest.raises(HTTPException) as ei:
+        fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
+    assert ei.value.status_code == 409
+    det = ei.value.detail
+    assert det["die_locked"] is True
+    # apply_duty must still be refused explicitly (423), never silently
+    with pytest.raises(HTTPException) as ei2:
+        fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated",
+                                  geometry_choice="apply_duty"), _w={})
+    assert ei2.value.status_code == 423
+    assert ei2.value.detail["code"] == "die_locked"
+
+
+def test_winding_only_diff_on_a_locked_die_is_not_die_locked(dies):
+    """A duty that differs only in winding/free keys never touches die.yaml,
+    so a locked die must not block it — die_locked stays False."""
+    d = yaml.safe_load((dies / DIE / "die.yaml").read_text(encoding="utf-8"))
+    d["locked"] = True
+    (dies / DIE / "die.yaml").write_text(yaml.safe_dump(d, sort_keys=False),
+                                         encoding="utf-8")
+    c = yaml.safe_load((dies / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    c["duties"][0]["summary"]["_geoSig"] = SIG.replace("tooth_width:1.7",
+                                                        "tooth_width:1.5")
+    (dies / DIE / f"{CFG}.yaml").write_text(yaml.safe_dump(c, sort_keys=False),
+                                            encoding="utf-8")
+    with pytest.raises(HTTPException) as ei:
+        fam.activate(fam.Activate(die=DIE, config=CFG, duty="rated"), _w={})
+    det = ei.value.detail
+    by = {x["key"]: x for x in det["diffs"]}
+    assert "tooth_width" not in by             # die scope now matches
+    assert det["die_locked"] is False
 
 
 def test_keep_die_loads_without_writing(dies):

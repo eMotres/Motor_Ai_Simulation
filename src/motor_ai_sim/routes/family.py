@@ -3807,13 +3807,23 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
             if choice is None:
                 keys = ", ".join(f"{x['key']} {x['live']}→{x['duty']}"
                                  for x in _blocking(diffs)[:6])
+                # Applying would touch die.yaml only when a "die"-scope key
+                # differs (winding/free diffs land in the configuration,
+                # which is never locked) — so the frontend can disable the
+                # "apply duty geometry" choice up front instead of letting
+                # the owner pick it and hit a second, confusing 423 (incident
+                # 2026-09-29: "die is locked ... sign in again and retry" on
+                # a plain lock, not an auth failure).
+                die_locked = bool(d.get("locked", True)) and any(
+                    x["scope"] == "die" for x in _blocking(diffs))
                 raise HTTPException(409, detail={
                     "code": "duty_geometry_differs",
                     "message": f"duty '{req.duty}' was saved on a different "
                                f"geometry ({keys}) — apply the duty geometry "
                                "or keep the die geometry?",
                     "diffs": diffs,
-                    "choices": ["apply_duty", "keep_die"]})
+                    "choices": ["apply_duty", "keep_die"],
+                    "die_locked": die_locked})
             if choice == "apply_duty":
                 geometry_applied = _apply_duty_geometry(die, cfg, d, c, diffs)
     import json

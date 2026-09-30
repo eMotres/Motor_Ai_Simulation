@@ -1743,6 +1743,94 @@ Customer-to-supplier payments for parts and orders are not handled. If ever need
 
 ---
 
+## 10E. Multi-region deployment and routing
+
+Owner-approved design (2026-09-30). This section is the deployment and routing counterpart to 10A: 10A sets the data-protection and residency **rules** (tenancy, region as a first-class attribute, region-pinned storage, the region router, the per-region legal frame); this section fixes how a request actually **finds** its region — the global/regional split, the sign-in and sign-up flow, the MCP path, and what changes on the single EU server today. It restates nothing from 10A; every rule below is one already decided there (D46–D56), applied to routing and operations.
+
+### 10E.1 Two layers
+
+| Layer | Holds | Notes |
+|---|---|---|
+| **Global** (`aerostator.com`) | DNS; sign-in / sign-up for one identity; the account/organization directory (`email` / `org_id` → home region); the source of the public motor catalog | thin by design — no engineering data, no drawings, no runs (matches 10A.2: "the global layer holds only the org directory … and public catalog data") |
+| **Regional** (`eu1.aerostator.com` today; future `us1.aerostator.com`; China separate, 10E.6) | a complete copy of the app: its own database, object store (D30), job queue, compute pool (10C, region-pinned) and backups (10A.5) | today's Hetzner FSN1 server is the entire `eu1` stack |
+
+This names the two halves 10A.2 already assumes without previously drawing the line as its own picture. Nothing here changes 10A.2's storage-boundary table; it is the same boundary, described from the routing side.
+
+### 10E.2 Routing by home region, not by location
+
+Sign-in happens once, at the global layer: `aerostator.com` authenticates the person, looks up the account's home region in the directory, and redirects the browser to that region (`eu1.…`, `us1.…`, …) with a region-scoped token. From then on traffic goes straight to the regional stack — this is the "region router" of 10A.2 applied to the browser session, not only to a mid-session store call.
+
+**GeoDNS or latency-based routing is deliberately not used for data.** A travelling EU engineer must still land on EU data, even from Singapore. The EU↔US baseline RTT (~90 ms) is a UI cost, not a data-locality cost: regions exist for data residency (D46–D48) and compute locality (10C region-pinning), not for shaving milliseconds off page loads.
+
+### 10E.3 Sign-up and region choice
+
+- Region is **suggested** from geo-IP, **chosen explicitly** by the user or organization, and the choice is recorded with a timestamp as a **legal act**, not inferred silently.
+- An organization lives in one region (D46, unchanged). The chosen region becomes the org's `region` attribute at creation and is immutable from then on (10A.2), except through the **explicit admin-run export/import migration** already named in 10A.2 — never an automatic move.
+- A personal org (D24: every user gets one) takes its owner's chosen region at sign-up; that becomes the account's home region for routing (10E.2).
+
+### 10E.4 MCP and agents
+
+OAuth 2.1 is issued at the global layer (`aerostator.com`), as today (9A: "personal keys and OAuth 2.1 … RFC 7591/8414/9728"). The access token gains a **region claim**, set at issuance from the account's home region.
+
+Two ways to get an MCP client from that token to the right regional data, both keeping 10A.8's rule that "MCP/agents act with the calling user's grants and region, never the platform's":
+
+| Option | How | Trade-off |
+|---|---|---|
+| **Proxy (recommended)** | The global `/mcp` endpoint terminates the connection and forwards each call to the region's `/mcp` by the token's region claim; the MCP client sees one endpoint forever | One more network hop and a stateful proxy to run and scale; but the client configuration (`emotres://` URIs, tool endpoints, `serverInfo`) never has to change when an account's region changes or a new region opens |
+| **Direct via protected-resource metadata** | RFC 9728 protected-resource metadata (already adopted, 9A) points the client straight at the regional `/mcp` after discovery | No proxy hop or extra service to operate; but every MCP client must re-discover on a region change, and a client caching the old metadata silently keeps talking to the wrong region until it re-discovers |
+
+**Recommendation: proxy.** It keeps the external contract (one MCP origin) stable across region moves and region launches, which matters more here than the extra hop, given how much of 9A.3 (discoverability, the versioned tool contract) is built on a client never having to guess where the server lives.
+
+### 10E.5 Data placement
+
+| Data | Lives | Notes |
+|---|---|---|
+| E-mail, auth (password hash, sessions, OAuth grants), home region | **Global**, home region only | matches 10A.1's `personal_data` overlay; no engineering content here |
+| Machines, drafts, runs, files, usage, audit | **Region** (the owning org's) | 10A.1 `customer-confidential`; never replicated to another region without a `transfer_policy` (D48) |
+| Public motor catalog | **Global is the source; replicated read-only to every region** | one direction only, global → regions; a region never writes back to the global catalog copy |
+| FEM / compute jobs | **Run only in the object's home region** | extends 10A.8's node-country rule: the scheduler already refuses a region-pinned object on a node outside the allowed countries; this states the same for the job's *region*, not only the node's declared country |
+
+### 10E.6 China
+
+A **fully separate deployment**, `aerostator.cn`, with **separate accounts** — not a `cn` row in the global directory pointing at shared identity (extends D56: "never a bucket in the EU region", read here as never a bucket in the global layer either).
+
+- **ICP filing (备案)** through a Chinese entity or partner, hosted on a local cloud (Alibaba Cloud or Tencent Cloud) — **needs legal confirmation**.
+- **PIPL:** Chinese personal data stays in China; any cross-border transfer needs a security assessment or the standard contract (elaborates 10A.3's China paragraph) — **needs legal confirmation**.
+- **Sign-in:** the Great Firewall blocks Google sign-in and Google Workspace mail, so `aerostator.cn` needs e-mail/password (already supported, `users.py`) and/or **WeChat sign-in** (not in the current identity stack, 1.1) plus its own mail service, not Google Workspace.
+- **Catalog:** only the public catalog is shared, one way, into China (10E.5) — the same rule as every other region, stated explicitly because it is the only channel this deployment gets from the rest of the platform.
+
+### 10E.7 US
+
+A second region, opened **when a US customer requires US data residency** — not on a fixed date (extends D46's "EU is the only region now"). Aerospace/defence customers on that region may add **ITAR/EAR export-control requirements** on top of the platform's existing export-control flag (D55, 10A.3) — **needs legal confirmation** before the region takes such a customer.
+
+### 10E.8 Operations
+
+- **Every region is a full kit**: server(s), restic off-site backups in the same jurisdiction (10A.5, unchanged — "per region, never across regions"), monitoring through the existing node agent (`cluster_monitor.py`, 1.1).
+- **One deploy pipeline** releases to every region, with **coordinated schema migrations** — not an independent release per region.
+- The **Admin tab** shows every node and every region (extends its current per-region node view, 1.1).
+- **Isolation:** an incident in one region must not take down another; the global layer stays small and highly available, since a global outage would strand sign-in everywhere even if every region is healthy.
+
+### 10E.9 What to lay down now (still one EU region)
+
+Nothing below needs a second server; it is the shape that makes the second region configuration, not a rewrite — the same intent 10A.2 already states for the region router.
+
+1. **`home_region` field** on accounts and organizations, default `"eu1"` (~0.5 wk) — see 10E.10 #1 on the `"eu"` vs `"eu1"` value.
+2. **Region claim in tokens** (session cookies and OAuth access/refresh tokens) (~0.5 wk).
+3. **Region-aware base URLs in config** (one env var per service pointing at its region, no literal `eu1.aerostator.com` in code) (~0.5–1 wk).
+4. **Catalog-replication boundary**: mark which objects are the public catalog (10E.5) so the one-way replication job has a defined input even before a second region exists to replicate to (~1 wk).
+5. **No hard-coded single host**: an audit of web, API and MCP client code for assumptions that there is exactly one API origin (~0.5–1 wk).
+
+### 10E.10 Open questions
+
+1. **`region` value vs host prefix.** 10A.2's no-op router checks `region == "eu"`, but also names the host `eu1.…`. This section's NOW list (10E.9 #1) defaults `home_region` to `"eu1"` per the owner's brief today, which would make the stored value and the host prefix the same string — but that renames the value 10A.2 currently checks. Keep `region: "eu"` and let `"eu1"` be only a host/pod label (with a small value→host map), or rename the stored value to `"eu1"` everywhere (touches the existing `region == "eu"` check and D46's wording)? Needs an owner decision before 10E.9 #1 is implemented.
+2. **Account home region vs org region.** 10A.2 pins `region` per **organization** (D46); a user can belong to several orgs (6.4). If a person's personal org and a second org they joined sit in different regions once a second region exists, which region does sign-in redirect to? This section assumes "the account's home region" equals the personal org's region, but that is not decided anywhere yet.
+3. **WeChat sign-in** is a new identity provider, not in the current Identity row (1.1: `users.py`, `auth.py`, `oauth.py` (Google)) or in D67's OIDC/OAuth 2.1 supply-chain decision. It needs its own decision and its own section once the China deployment is scheduled, not just a mention here.
+4. **Region-scoped redirect token.** Is this a new short-lived token minted only for the sign-in redirect, or the region claim added to the existing session/OAuth token (with the key-rotation and `kid` handling of 10A.4)? Not designed here.
+5. **Cross-region Admin view.** The Admin tab today reads one region's `cluster_monitor.py`. Showing "every node and region" (10E.8) in one screen needs either a federated query across regional APIs or a read-replica pattern at the global layer — an open design question, not just a UI change.
+6. **Roadmap slot for the region cutover itself.** 11.3 has no line for the work of actually opening a second region (DNS, the region-migration job, KMS, the SCC/TIA package) — only for the org/data-residency groundwork (M4/M8, NOW in 10A.10). Should the US or China cutover get its own roadmap entry once demand exists, ahead of M10 sourcing (where cross-org RFQs may span regions for the first time)?
+
+---
+
 ## 11. Risks, decisions, roadmap
 
 ### 11.1 Risks
@@ -1770,7 +1858,7 @@ Customer-to-supplier payments for parts and orders are not handled. If ever need
 
 ### 11.2 Decisions for the owner
 
-**Status: the owner approved D1–D90 on 2026-09-29 and accepted both reviews in full on 2026-09-29; X = €150/month (D96) and the 50 % utilisation floor (D94) are owner-approved.** v4 restates or supersedes the decisions marked below; D107–D121 are new. IDs are never reused or renumbered.
+**Status: the owner approved D1–D90 on 2026-09-29 and accepted both reviews in full on 2026-09-29; X = €150/month (D96) and the 50 % utilisation floor (D94) are owner-approved.** v4 restates or supersedes the decisions marked below; D107–D121 are new. **D122–D130 (2026-09-30) are new**, for the multi-region deployment and routing design of 10E. IDs are never reused or renumbered.
 
 D1–D23 from v2 (D9 restated; D12 was never assigned):
 
@@ -1911,6 +1999,20 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D119 | Quotation package | Immutable **`for_quotation` package (not for production)** allowed before release for quotation RFQs; production RFQs and all orders reference only released revisions (7.3, 8.9.1) |
 | D120 | Deprecation | **One policy for every API surface**: ≥ 90 days **and** ≥ 1 minor release after the replacement, plus 0 calls in 30 days; contract major versions (`portal/x`, `machine/x`) 12 months in parallel (9A.3) |
 | D121 | Data policy attributes | **Independent attributes** (publication, personal data, NDA, export control, region, retention hold) instead of one class; erasure claims follow the key-copy inventory; account deletion removes personal records, not org-owned ones (10A.1, 10A.4–10A.6) |
+
+**New decisions (2026-09-30, multi-region deployment and routing, owner-approved):**
+
+| # | Decision | Recommendation |
+|---|---|---|
+| D122 | Two-layer topology | **Thin global layer** (`aerostator.com`: DNS, sign-in/sign-up, org directory, public-catalog source) **+ full regional stacks** (`eu1` now, `us1`/China later), each with its own DB, object store, queue, nodes and backups; operationalizes D46–D48 (10E.1) |
+| D123 | Routing basis | **Route by the account's home region** via a post-sign-in redirect carrying a region-scoped token, **never by GeoDNS or visitor location**; the EU↔US ~90 ms RTT is an acceptable UI cost, not a reason to route by latency (10E.2) |
+| D124 | Sign-up region choice | Geo-IP **suggests**, the user/org **chooses explicitly**, timestamped as a legal act; the org's region is set once at creation (D46) and changed only by an explicit admin-run export/import migration, never automatically (10E.3) |
+| D125 | MCP/agent region routing | OAuth issued at the global layer; tokens carry a **region claim**. **Recommended:** the global `/mcp` proxies to the regional `/mcp` by that claim, so the client's endpoint never changes; direct routing via RFC 9728 protected-resource metadata is the documented fallback (10E.4) |
+| D126 | Data placement | Global holds only e-mail/auth/home-region; every engineering object (machines, drafts, runs, files, usage, audit) stays in the owning org's region; the public catalog replicates **read-only, one way**, into every region; FEM compute runs only in the object's home region (extends 10A.1/10A.2) (10E.5) |
+| D127 | China deployment | **Separate domain `aerostator.cn`, separate accounts**, own identity (password + WeChat sign-in) and own mail, ICP filing and a local cloud through a Chinese entity/partner; only the public catalog is shared one-way in; ICP, PIPL cross-border basis and the WeChat integration terms **need legal confirmation** before build (extends D56) (10E.6) |
+| D128 | US region trigger | A `us1` region opens **when a US customer needs US data residency**, not on a fixed date; aerospace/defence customers may add ITAR/EAR requirements, which **need legal confirmation** before that region takes such a customer (extends D46, D55) (10E.7) |
+| D129 | Operations per region | Every region is a full kit (server(s), restic off-site backups in the same jurisdiction, the existing node-monitoring agent); **one deploy pipeline** releases to all regions with coordinated schema migrations; the Admin tab shows every node and region; a regional incident must not take down another region or the (small, highly available) global layer (10E.8) |
+| D130 | NOW migration list | `home_region` field (accounts + orgs, default `"eu1"`), a region claim in tokens, region-aware base URLs in config, the catalog-replication boundary marked on objects, and an audit removing hard-coded single-host assumptions — all while there is only one region (10E.9) |
 
 ### 11.3 Roadmap (rough, weeks of one engineering agent + owner review)
 

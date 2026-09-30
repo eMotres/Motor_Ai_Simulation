@@ -172,8 +172,10 @@ class _StubSolver:
             "T_avg_Nm": 0.01 * I_w * L / self.L0, "R_phase_ohm": Rw,
             "V_peak": peak, "rpm": kw.get("rpm") or 1000.0,
             "P_cu_W": [self.AC * P_dc], "P_fe_W": [5.0], "P_mag_eddy_W": [1.0],
-            "P_shaft_eddy_W": [0.0],
-            "summary": {"end_winding_factor": k_end, "V_phase_peak_V": peak,
+            "P_shaft_eddy_W": [0.0], "end_winding_factor": k_end,
+            # the summary rounds k_end to 0.01 for display — the passport
+            # must read the unrounded solver value
+            "summary": {"end_winding_factor": round(k_end, 1), "V_phase_peak_V": peak,
                         "P_core_W": 5.0, "P_solid_W": 1.0, "mass_total_kg": 1.0,
                         "T_ripple_pct": 5.0, "demag": {"loss_pct": 0.0}},
         }

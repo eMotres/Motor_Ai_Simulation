@@ -401,9 +401,12 @@ def generate_passport(
     # needed to split it (review 2026-09-30 P14).  Only a solve that reports no
     # k_end (an older solver) falls back to measuring R at 1.5·L0 with the SAME
     # end-turn length (end_factor_at).
+    # the solver's own unrounded value first: the summary rounds it to 0.01
+    # for display (L155: 1.355 -> 1.35, a 1 % error in the end share).
     try:
-        _k_used = float((A.get("summary") or {}).get("end_winding_factor")
-                        or A.get("end_winding_factor") or 0.0)
+        _k_used = float(A.get("end_winding_factor")
+                        or (A.get("summary") or {}).get("end_winding_factor")
+                        or 0.0)
     except (TypeError, ValueError):
         _k_used = 0.0
     if _k_used >= 1.0:

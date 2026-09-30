@@ -450,6 +450,13 @@ def test_gap_refinement_resolves_once_on_the_same_ring(monkeypatch):
                         lambda **kw: calls.append(kw) or _fake_result(0.02, 1.0))
     out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
     assert len(calls) == 1 and out["gap_refinement"]["applied"] is False
+    # an unsettled eddy warm-up is never refined (the check measures the transient)
+    calls.clear()
+    monkeypatch.setattr(fs, "fem_transient_sliding_band",
+                        lambda **kw: calls.append(kw) or dict(_fake_result(0.18, 2.0),
+                                                              eddy_settled=False))
+    out = fs._solve_with_gap_refinement({"gap_layers": 2.0, "sampling_purpose": "standard"})
+    assert len(calls) == 1 and "not settled" in out["gap_refinement"]["skipped_reason"]
     # internal probes and the switch are never refined
     calls.clear()
     monkeypatch.setattr(fs, "fem_transient_sliding_band",

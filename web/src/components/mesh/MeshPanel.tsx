@@ -1055,7 +1055,7 @@ const MeshPanel: React.FC = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>
                   Air-gap fidelity (layers/side)
-                  <Tooltip title="The single air-gap fidelity control. Sets BOTH the radial element rows per side of the sliding midline (torque via Maxwell stress) AND the tangential slip-ring node count (eddy-loss accuracy — more nodes = less node-identification jitter). 2 is the sweet spot for mean torque; raise to 4+ for the cleanest eddy/solid losses (slower, ~gap=4 ≈ the retired High-fidelity mode). Drives the mesh preview and the Simulation solve identically." placement="right">
+                  <Tooltip title="Element rows on EACH side of the sliding midline (3/side = 6 rows across the gap); also scales the slip-ring node count. Every run checks itself: if the torque on the rotor-side and stator-side gap rings differs by more than 5 % of the ripple, the run is re-solved once with more layers per side (same slip ring) and says so on the result card." placement="right">
                     <span style={{ color: 'var(--text-4)', marginLeft: 4, cursor: 'help' }}>ⓘ</span>
                   </Tooltip>
                 </Typography>

@@ -11643,6 +11643,14 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
         new = _gl_for(gl0, eps0)
     info = {"applied": False, "gate_rel_to_ripple_scale": _gate,
             "gap_layers_per_side": gl0, "self_check_rel_to_ripple_scale": eps0}
+    if new is not None and res.get("eddy_settled") is False:
+        # An unsettled eddy warm-up leaves a transient in the reported window;
+        # the two rings then disagree about the transient, not about the mesh
+        # (measured: L155 at 2/side, warm-up capped at residual 21.6 %,
+        # self-check 18 %, P_fe swinging 209 W).  A finer mesh cannot fix that.
+        info["skipped_reason"] = ("eddy warm-up not settled: the self-check "
+                                  "measures the remaining transient, not the gap mesh")
+        new = None
     if new is None:
         res["gap_refinement"] = info
         return res

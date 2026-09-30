@@ -290,10 +290,34 @@ Steps per period: Ø40 48, L13 60, L155 72. These divide the ring at every level
 levels sample the same rotor angles. Self-check = max|T_rotor-ring − T_stator-ring| /
 max(p-p, 0.5 % of |mean|). Losses are the solver's solved values [W].
 
-L155_TABLE_PLACEHOLDER
+| quantity | Ø40 1/side | Ø40 2/side | Ø40 3/side | L13 1/side | L13 2/side | L13 3/side | L155 1/side | L155 2/side |
+|---|---|---|---|---|---|---|---|---|
+| slip ring (nodes/period) | 144 | 192 | 240 | 120 | 120 | 120 | 216 | 288 |
+| elements / P2 DOFs | 11 994 / 25 104 | 16 236 / 33 928 | 21 982 / 45 760 | 15 199 / 31 359 | 16 879 / 34 723 | 18 559 / 38 087 | 22 408 / 46 052 | 28 136 / 57 872 |
+| Coulomb mean torque N·m | 0.616655 | 0.616668 | 0.616729 | 0.788269 | 0.788791 | 0.788978 | 184.59255 | 184.60385 |
+| ripple p-p N·m (%) | 0.040749 (6.61) | 0.039223 (6.36) | 0.040571 (6.58) | 0.244047 (30.96) | 0.244203 (30.96) | 0.244035 (30.93) | 3.636159 (1.97) | 3.782227 (2.05) |
+| self-check (gate 5 %) | 2.13 % | 0.81 % | 0.055 % | 1.08 % | 1.88 % | 0.92 % | 1.17 % | **18.3 %** |
+| iron W | 9.232 | 9.236 | 9.232 | 2.073 | 2.073 | 2.073 | 1458.931 | **1518.116** |
+| magnet W | 3.360 | 3.362 | 3.359 | 0.508 | 0.508 | 0.508 | 106.905 | 106.862 |
+| shaft W | 0.008 | 0.008 | 0.008 | 12.186 | 12.180 | 12.180 | 3.793 | 3.674 |
+| sleeve W | 0 | 0 | 0 | 0 | 0 | 0 | 10.039 | 10.036 |
+| copper DC W | 49.109 | 49.109 | 49.109 | 259.793 | 259.793 | 259.793 | 1659.599 | 1659.599 |
+| copper AC W | 4.475 | 4.464 | 4.472 | 0.113 | 0.113 | 0.113 | 614.009 | 615.186 |
+| **total loss W** | 66.183 | 66.179 | 66.181 | 274.672 | 274.667 | 274.666 | 3853.277 | 3913.473 (+1.56 %) |
+| frames solved (warm-up) | 194 (146) | 194 (146) | 194 (146) | 242 (182) | 242 (182) | 242 (182) | 1226 (1154) | 1874 (1802), **not settled** |
+| wall time s | 171 | 198 | 257 | 285 | 288 | 306 | 748 | 1443 |
+
+L155 at 3 per side is L155_GL3_NOTE.
+
+**L155 at 2 per side does not settle.** The eddy warm-up hit its cap of 24 extension
+periods with a residual of 21.6 % (tolerance 2 %). The iron-loss series still swings by
+209 W p-p, against 38 W at 1 per side. So its +4.1 % iron and +1.6 % total loss, and its
+18 % self-check, measure an unfinished transient, not the gap mesh. The measured rule
+therefore does not refine unsettled runs (§6.3). Why the L155 warm-up fails on the
+288-node ring is a separate solver finding; it is not investigated here.
 
 **Result.** On the product's own physics, 1 layer per side already passes on all three
-machines (self-check ≤ 2.1 %). Going to 2 or 3 per side:
+machines (self-check ≤ 2.1 %). On Ø40 and L13, going to 2 or 3 per side:
 
 * moves the Coulomb mean torque by ≤ 0.09 %;
 * moves the ripple by ≤ 0.25 pp (Ø40: 6.61 / 6.36 / 6.58 %, non-monotonic, well inside
@@ -303,7 +327,8 @@ machines (self-check ≤ 2.1 %). Going to 2 or 3 per side:
   12.180 W).
 
 The frames to settle do not change. The wall time rises by +50 % on Ø40 (171 → 257 s)
-and +7.5 % on L13 (285 → 306 s).
+and +7.5 % on L13 (285 → 306 s). On L155, 1 → 2 per side nearly doubles the wall time
+(748 → 1443 s) and breaks the eddy settle.
 
 ### 6.2 Static imposed-current meshes (no eddy), Ø40 rated, every ring node
 
@@ -353,9 +378,13 @@ and only the solved field can measure that. So the rule is measured on every run
    `ripple_mesh_limited = True`, and the Simulation card shows the badge. Internal probes
    (d-axis / ψ_PM / Ld-Lq) are never refined. `SB_GAP_REFINE=0` switches the re-solve
    off.
-5. The flat floor the owner first approved (3 per side) is kept as a fallback switch,
-   `SB_GAP_LAYERS_MIN=3`. It is off by default because, on the measured shipped duties,
-   it would cost +7.5 % to +50 % wall time for ≤ 0.1 % torque and ≤ 0.01 % loss.
+5. A run whose eddy warm-up did not settle is never refined. Its self-check measures the
+   leftover transient, and a finer mesh cannot fix that (L155 at 2 per side). The
+   result says so in `gap_refinement.skipped_reason`.
+6. The flat floor the owner first approved (3 per side) is kept as a fallback switch,
+   `SB_GAP_LAYERS_MIN=3`. It is off by default. On the measured shipped duties it would
+   cost +7.5 % to +50 % wall time for ≤ 0.1 % torque and ≤ 0.01 % loss. On L155, 2 per
+   side already doubled the wall time and did not settle.
 
 Cost: runs that pass (every shipped duty measured) pay nothing extra. A run that fails
 pays one more solve at the refined mesh, which costs about 1.5× the first. On Ø40,

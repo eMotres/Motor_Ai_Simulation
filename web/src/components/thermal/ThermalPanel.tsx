@@ -49,8 +49,9 @@ import {
   ROBOTICS_HELP, ROBOTICS_SUBTITLE, SHAFT_SIDES_LABEL,
 } from './roboticsHelp';
 import {
-  fmt, fmtSecs, meshParams, outerCooling, simOperatingPoint, writeSimCoilTemp,
+  fmt, fmtSecs, meshParams, outerCooling, writeSimCoilTemp,
 } from './api';
+import { emRunLine, emRunPoint, emRunTooltip } from './emRun';
 import type {
   BoreMode, CoolMode, EndFaceMode, FrameMode, ThermView, ThermalCoolingSurface,
 } from './api';
@@ -600,25 +601,29 @@ const ThermalPanel: React.FC = () => {
   useEffect(() => { void hydrate().then(() => refreshLastThermal()); },
             [hydrate, refreshLastThermal]);
 
-  /* ── the operating point, from the Electromagnetic tab ────────────────────────
-     Read on every mount (this tab is not keepMounted, so entering it is a
-     fresh read) and refreshed on the events that mean those settings moved —
-     a duty load fires `sim-settings-restored`, a finished run re-stamps the
-     panel.  This panel NEVER writes them and never keeps a copy of its own. */
-  const [op, setOp] = useState(simOperatingPoint);
+  /* ── the Electromagnetic run the next Solve uses ──────────────────────────
+     THE LATEST run of the loaded machine (owner rule 2026-09-30, «always take
+     the current one»): the backend adopts its current, γ, speed, temperatures,
+     steps and mesh, and this panel keeps NO copy of them — it only names the
+     run.  Read on every mount (this tab is not keepMounted) and after every
+     finished run or duty load. */
+  const refreshEmRun = st.refreshEmRun;
+  const emRun = st.emRun;
   /* The "How this cooling model works" note — CLOSED by default and not
      persisted: it is a thing you read once, and a panel that reopens a wall of
      text on every visit is the wall of text this project forbids. */
   const [howOpen, setHowOpen] = useState(false);
   useEffect(() => {
-    const on = () => setOp(simOperatingPoint());
+    void refreshEmRun();
+    const on = () => { void refreshEmRun(); };
     window.addEventListener('sim-settings-restored', on);
     window.addEventListener('sim-transient-done', on);
     return () => {
       window.removeEventListener('sim-settings-restored', on);
       window.removeEventListener('sim-transient-done', on);
     };
-  }, []);
+  }, [refreshEmRun]);
+  const emLine = emRun?.ok ? emRunLine(emRun.em_run) : null;
 
   /* ── is the shown result still this machine's? ───────────────────────────
      We do NOT re-solve: an expensive solve started by a geometry edit the user
@@ -643,6 +648,7 @@ const ThermalPanel: React.FC = () => {
      `solveField` / `solveCoupled` in place of the chained run this tab used
      to make.  One short line, and a link to the Electromagnetic tab. */
   const emMissing = st.emMissing;
+  const emMissingReason = st.emMissingReason;
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const goToElectromagnetic = useCallback(
     () => setActiveTab('simulation'), [setActiveTab]);
@@ -800,10 +806,11 @@ const ThermalPanel: React.FC = () => {
     // same guard the Compare row uses.
     const coupled = s.coupled.data
       && !isStale(s.coupled.geoSig, s.coupled.backendStale) ? s.coupled.data : null;
-    // The operating point is read where it is set, at the moment of the press,
-    // exactly like the context line above (standing project rule).
-    const { inputs, results } = localThermalRow(s.field.data, coupled, s,
-                                                simOperatingPoint());
+    // The operating point is the EM run the shown map is OF — never a copy
+    // this tab kept (2026-09-30).
+    const { inputs, results } = localThermalRow(
+      s.field.data, coupled, s,
+      emRunPoint(s.field.data?.em_run ?? coupled?.em_run ?? null));
     const now = new Date();
     s.set('compareRows', [...s.compareRows, {
       id: `t${now.getTime().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
@@ -886,10 +893,9 @@ const ThermalPanel: React.FC = () => {
               tooltip, and a link to where the run belongs. */}
           {emMissing && (
             <>
-              <Tooltip {...TIP_PROPS} title={emMissing}>
+              <Tooltip {...TIP_PROPS} title={emMissingReason ?? emMissing}>
                 <Typography sx={{ ...warn, fontWeight: 700, whiteSpace: 'normal' }}>
-                  ⚠ No Electromagnetic result for this point — run it in the
-                  Electromagnetic tab
+                  ⚠ {emMissing}
                 </Typography>
               </Tooltip>
               <Button variant="outlined" size="small" onClick={goToElectromagnetic}>
@@ -1191,22 +1197,33 @@ const ThermalPanel: React.FC = () => {
             exactly as it is.  Nothing was deleted — see `lib/dutyCycleFlag`. */}
         {DUTY_CYCLE_ENABLED && <DutyCycleEditor />}
 
-        {/* ── where the physics comes from: the Electromagnetic tab, always ──── */}
-        <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
-          <Tooltip {...TIP_PROPS} title={tx('thisTabOwnsTheCoolingAnd')}>
-            <Typography sx={{ ...lbl, cursor: 'help', borderBottom: '1px dotted var(--text-4)',
-              fontFamily: 'monospace' }}>
-              from Electromagnetic: {fmt(op.I_phase_rms, 0)} A · γ {fmt(op.gamma_deg, 1)}°
-              {' · '}{Math.round(op.rpm).toLocaleString()} rpm
-              {' · coil '}{fmt(op.coil_temp_c, 0)} °C · {op.n_steps_per_period} steps
-            </Typography>
-          </Tooltip>
-          {!(op.I_phase_rms > 0) && (
-            <Tooltip {...TIP_PROPS} title="The Electromagnetic tab's current is zero, so there is no I²R at all: what this solve will show is the no-load temperature — iron loss and magnet eddy only. That is a real answer, just not the one a duty point usually asks for.">
-              <Typography sx={warn}>⚠ no current set — no-load losses only</Typography>
-            </Tooltip>
-          )}
-        </Box>
+        {/* ── where the physics comes from: the LATEST Electromagnetic run ──
+            One line naming the run the next Solve uses, every setting in the
+            tooltip (owner rule: no small print).  Read-only: the point, the
+            steps and the mesh are that run's, and change only by running EM. */}
+        {!emMissing && emRun && (
+          <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
+            {emLine ? (
+              <Tooltip {...TIP_PROPS} title={emRunTooltip(emRun.em_run)}>
+                <Typography sx={{ ...lbl, cursor: 'help', borderBottom: '1px dotted var(--text-4)',
+                  fontFamily: 'monospace' }}>
+                  {emLine}
+                </Typography>
+              </Tooltip>
+            ) : (
+              <Tooltip {...TIP_PROPS} title={emRun.reason ?? emRun.error ?? ''}>
+                <Typography sx={{ ...warn, fontWeight: 700, cursor: 'help' }}>
+                  ⚠ {emRun.error ?? 'No Electromagnetic run for this machine'}
+                </Typography>
+              </Tooltip>
+            )}
+            {emRun.ok && emRun.em_run && !(emRun.em_run.I_phase_rms > 0) && (
+              <Tooltip {...TIP_PROPS} title="The latest Electromagnetic run has no current, so there is no I²R at all: this solve shows the no-load temperature — iron loss and magnet eddy only.">
+                <Typography sx={warn}>⚠ no current — no-load losses only</Typography>
+              </Tooltip>
+            )}
+          </Box>
+        )}
 
         {/* ── the mesh, reported and built ──────────────────────────────── */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>

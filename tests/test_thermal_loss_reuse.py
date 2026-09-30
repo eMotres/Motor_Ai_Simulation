@@ -725,10 +725,17 @@ def test_the_field_route_reports_the_loss_source(run_snapshot, no_em_solve):
 
     from motor_ai_sim.api import app
 
+    from motor_ai_sim.routes import simulation as sim
+
     r = TestClient(app).get("/api/thermal/field", params=_req())
     assert r.status_code == 200, r.text[:600]
     src = r.json()["loss_source"]
-    assert src["kind"] == "simulation_run" and src["run_id"] == RUN_ID
+    # The route takes the LATEST run of this machine (2026-09-30) — the
+    # module's own, or the one a test above stored after it.
+    newest = max(str((e.get("meta") or {}).get("computed_at") or "")
+                 for e in sim._transient_field_snap.values())
+    assert src["kind"] == "simulation_run" and src["run_id"] == newest
+    assert r.json()["em_run"]["run_id"] == newest
 
 
 def test_the_module_capability_still_runs_the_same_loop(run_snapshot):

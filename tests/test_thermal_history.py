@@ -41,6 +41,10 @@ def _patch_solver(monkeypatch):
     monkeypatch.setattr(th, "_LAST_LOADED", True, raising=True)
     monkeypatch.setattr(th, "_last_store_path",
                         lambda: __import__("tempfile").mktemp())
+    # The latest Electromagnetic run the route adopts (2026-09-30) — faked
+    # like the solve, since there is no real run behind a fake solve.
+    from tests.em_run_stub import patch_latest_em_run
+    patch_latest_em_run(monkeypatch)
     yield
 
 

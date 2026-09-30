@@ -223,7 +223,25 @@ def sphere_in_box(radius: float = 0.01,
     ``h_far`` (default: a quarter of the box half-width) over ``grade_dist``
     (default: two radii).  Those defaults are deliberate — they hold the
     near-field discretisation fixed while ``box_factor`` sweeps.
+
+    Runs out of process (see ``motor_ai_sim.simulation.gmsh_worker``).
     """
+    from motor_ai_sim.simulation import gmsh_worker
+
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.static3d.meshes:_sphere_in_box_impl",
+        args=(radius, box_factor, h_magnet, h_far, grade_dist, optimize, verbose),
+    )
+
+
+def _sphere_in_box_impl(radius: float = 0.01,
+                  box_factor: float = 6.0,
+                  h_magnet: float = 0.0025,
+                  h_far: Optional[float] = None,
+                  grade_dist: Optional[float] = None,
+                  optimize: bool = True,
+                  verbose: bool = False) -> TaggedTetMesh:
+    """Worker-side implementation of ``sphere_in_box``."""
     L = box_factor * radius
     h_far = h_far if h_far is not None else max(L / 4.0, h_magnet)
     grade = grade_dist if grade_dist is not None else 2.0 * radius
@@ -267,7 +285,27 @@ def cylinder_in_box(radius: float = 0.005,
     This is the direct stand-in for the motor's axial end effect: the flat end
     faces are where the flux spills out, and the on-axis field there is known in
     closed form (see ``exact.cylinder_axis_Bz``).
+
+    Runs out of process (see ``motor_ai_sim.simulation.gmsh_worker``).
     """
+    from motor_ai_sim.simulation import gmsh_worker
+
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.static3d.meshes:_cylinder_in_box_impl",
+        args=(radius, length, box_factor, h_magnet, h_far, grade_dist,
+              optimize, verbose),
+    )
+
+
+def _cylinder_in_box_impl(radius: float = 0.005,
+                    length: float = 0.02,
+                    box_factor: float = 6.0,
+                    h_magnet: float = 0.00125,
+                    h_far: Optional[float] = None,
+                    grade_dist: Optional[float] = None,
+                    optimize: bool = True,
+                    verbose: bool = False) -> TaggedTetMesh:
+    """Worker-side implementation of ``cylinder_in_box``."""
     scale = max(radius, 0.5 * length)
     L = box_factor * scale
     h_far = h_far if h_far is not None else max(L / 4.0, h_magnet)
@@ -320,7 +358,28 @@ def sphere_with_iron_shell(radius: float = 0.01,
     ``h_magnet`` and the grading defaults are independent of ``box_factor``, so
     sweeping mu_r or the box leaves the near-field mesh identical — the same
     discipline the other builders follow.
+
+    Runs out of process (see ``motor_ai_sim.simulation.gmsh_worker``).
     """
+    from motor_ai_sim.simulation import gmsh_worker
+
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.static3d.meshes:_sphere_with_iron_shell_impl",
+        args=(radius, shell_inner, shell_outer, box_factor, h_magnet, h_far,
+              grade_dist, optimize, verbose),
+    )
+
+
+def _sphere_with_iron_shell_impl(radius: float = 0.01,
+                           shell_inner: float = 0.013,
+                           shell_outer: float = 0.016,
+                           box_factor: float = 6.0,
+                           h_magnet: float = 0.0025,
+                           h_far: Optional[float] = None,
+                           grade_dist: Optional[float] = None,
+                           optimize: bool = True,
+                           verbose: bool = False) -> TaggedTetMesh:
+    """Worker-side implementation of ``sphere_with_iron_shell``."""
     if not (0.0 < radius < shell_inner < shell_outer):
         raise ValueError("need 0 < radius < shell_inner < shell_outer")
     L = box_factor * shell_outer
@@ -382,7 +441,28 @@ def tube_in_box(r_inner: float = 0.005,
     The exact on-axis field of what is actually meshed is
     ``exact.thick_solenoid_axis_Bz``; the ideal sheet it approximates is
     ``exact.cylinder_axis_Bz``.
+
+    Runs out of process (see ``motor_ai_sim.simulation.gmsh_worker``).
     """
+    from motor_ai_sim.simulation import gmsh_worker
+
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.static3d.meshes:_tube_in_box_impl",
+        args=(r_inner, r_outer, length, box_factor, h_tube, h_far,
+              grade_dist, optimize, verbose),
+    )
+
+
+def _tube_in_box_impl(r_inner: float = 0.005,
+                r_outer: float = 0.0055,
+                length: float = 0.02,
+                box_factor: float = 4.0,
+                h_tube: float = 0.0012,
+                h_far: Optional[float] = None,
+                grade_dist: Optional[float] = None,
+                optimize: bool = True,
+                verbose: bool = False) -> TaggedTetMesh:
+    """Worker-side implementation of ``tube_in_box``."""
     if not (0.0 < r_inner < r_outer):
         raise ValueError("need 0 < r_inner < r_outer")
     scale = max(r_outer, 0.5 * length)
@@ -441,7 +521,29 @@ def cylinder_with_iron_ring(radius: float = 0.005,
     ~7000 to ~100.  The nonlinear smoke test needs the B-H curve to actually
     bite; a comfortable ring sits on its initial slope and would pass the same
     test with the nonlinearity switched off.
+
+    Runs out of process (see ``motor_ai_sim.simulation.gmsh_worker``).
     """
+    from motor_ai_sim.simulation import gmsh_worker
+
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.static3d.meshes:_cylinder_with_iron_ring_impl",
+        args=(radius, length, ring_inner, ring_outer, ring_length, box_factor,
+              h_magnet, h_far, optimize, verbose),
+    )
+
+
+def _cylinder_with_iron_ring_impl(radius: float = 0.005,
+                            length: float = 0.02,
+                            ring_inner: float = 0.0058,
+                            ring_outer: float = 0.0064,
+                            ring_length: float = 0.014,
+                            box_factor: float = 3.0,
+                            h_magnet: float = 0.0022,
+                            h_far: Optional[float] = None,
+                            optimize: bool = True,
+                            verbose: bool = False) -> TaggedTetMesh:
+    """Worker-side implementation of ``cylinder_with_iron_ring``."""
     scale = max(ring_outer, 0.5 * length)
     L = box_factor * scale
     h_far = h_far if h_far is not None else max(L / 4.0, h_magnet)

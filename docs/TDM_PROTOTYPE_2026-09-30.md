@@ -874,3 +874,13 @@ to 4e-6 where the march was +4.6 % off (§2.1).
      PR #87.
   3. Log to the dataset, delete the sandbox, and report to the coordinator, who
      re-runs Codex.
+- **2026-09-30 resume (Windows workstation, Python 3.11, pypardiso 0.4.7 + mkl 2026.1,
+  `MKL_THREADING_LAYER=SEQUENTIAL`, no intel-openmp).** On b01277c:
+  `test_time_periodic`, `test_tdm_default`, `test_demag`, `test_demag_reproducible`,
+  `test_warm_seed` passed. `test_tdm_fem` passed 17/17 and `test_tdm_entry_points`,
+  `test_eddy_settled_flag` passed (52 passed in total with the march-pinned tests) once
+  the geometry-driven mesher was on (`requirements-triangle.txt`, `SB_GEO_MESH=1`).
+  Without it, 14 of the 17 `test_tdm_fem` tests fail: on the gmsh path the 30 mm
+  fixture's rotor mesh is not pole-pair periodic, TDM refuses it (setup stage) and
+  marches with a note, as designed. No solver change and no tolerance change were
+  needed; the test module header now says which environment it needs.

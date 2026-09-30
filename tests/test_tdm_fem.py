@@ -5,7 +5,12 @@ by a clean march (transactional), what it cannot serve is marched with a note,
 parallel frames equal serial ones, the demag pre-pass iterates to a fixed
 point in both methods, and Coulomb torque works on its frames.  Real solves
 (the 12-step p2_eddy / p2_demag_eddy cases of the physics regression, a few
-seconds to a minute each)."""
+seconds to a minute each).
+
+Environment: these solves need the geometry-driven mesher (``pip install -r
+requirements-triangle.txt`` and ``SB_GEO_MESH=1``).  On the gmsh path the 30 mm
+fixture's rotor mesh is not pole-pair periodic, TDM correctly refuses it and
+marches with a note, and the tests that expect TDM fail by design."""
 from __future__ import annotations
 
 from typing import Any, Dict

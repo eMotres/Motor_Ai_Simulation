@@ -65,6 +65,11 @@ def sample_bounds(band: float) -> Dict[str, Any]:
         base = float(geo.get(v, (s_lo + s_hi) / 2))
         d = band * abs(base) if base else band * (s_hi - s_lo)
         lo, hi = max(s_lo, base - d), min(s_hi, base + d)
+        # manufacturing floor of the search (0.15 mm minimum fillet)
+        from motor_ai_sim.optimization.manufacturing import apply_floor
+        lo, hi, _excl = apply_floor(v, lo, hi, base)
+        if _excl:
+            continue
         if hi > lo:
             out[v] = (lo, hi, str(m.get("type", "float")) == "int",
                       str(m.get("unit", "")).strip().lower() == "mm")

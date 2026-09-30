@@ -17,7 +17,20 @@ Nothing here writes live data.  Each solve runs in its own child process with
   * `nice 19` (os.nice in the child), BLAS/OpenMP threads capped (default 6),
   * SB_NO_WARM_CACHE=1 (no shared warm-start cache).
 
-Server usage (Linux, tonight, one run after another, ~minutes per case):
+Since stage S2 (docs/MESHER_TRANSITION.md) the geometry mesher has a gmsh CDT
+backend next to Triangle, so ONE checkout with triangle installed runs both
+sides: omit --old-src/--old-python and each side's child gets
+MOTOR_AI_SIM_GEO_CDT=triangle|gmsh (the child refuses to run if the backend it
+resolves differs from its side):
+
+    python scripts/compare_mesher_triangle_vs_gmsh.py plan --new-src <tree>/src \
+        --new-python <venv>/bin/python --config <config copy> --dies <dies copy> \
+        --workdir <run dir> --threads 6
+
+The report adds element counts (parsed from the child log), solve wall time
+and peak RSS per side.
+
+Two-tree usage (stage S1, old code with triangle vs new code without it):
 
     # 1. two checkouts side by side (no stash, plain worktrees)
     git -C /opt/motres/app fetch origin
@@ -77,6 +90,9 @@ METRICS = (  # (key, label, unit)
     ("P_sleeve_W", "sleeve eddy loss", "W"),
     ("P_loss_total_W", "total loss", "W"),
     ("V_peak", "terminal voltage peak", "V"),
+    ("P_in_W", "electrical input power", "W"),
+    ("P_mech_W", "mechanical power", "W"),
+    ("balance_residual_rel", "field power-balance residual (rel.)", "-"),
 )
 EMF_METRICS = (
     ("E_peak_V", "no-load EMF peak (phase)", "V"),
@@ -111,7 +127,11 @@ def _compose(dies, die, cfg, dname):
         if not mats.get(k):
             mats[k] = v
     runs = duty.get("runs") or {}
-    st = dict(((runs.get("current") or {}).get("settings")) or duty.get("mesh") or {})
+    # the duty's own `mesh` block is the saved statement of how it is run (the
+    # app syncs it into the mesh config, routes/family.duty_mesh_patch); the last
+    # run's settings only fill what the block does not state
+    st = dict(((runs.get("current") or {}).get("settings")) or {})
+    st.update(duty.get("mesh") or {})
     return y, geo, duty, mats, st
 
 
@@ -150,6 +170,19 @@ def _harm(series, n):
     return [float(2 * abs(F[h])) for h in range(n // 2)]
 
 
+def _versions():
+    """Provenance: the mesher/solver library versions this solve ran on."""
+    out = {"python": sys.version.split()[0]}
+    for mod in ("gmsh", "triangle", "numpy", "scipy", "shapely", "pypardiso",
+                "skfem"):
+        try:
+            m = __import__(mod)
+            out[mod] = str(getattr(m, "__version__", "?"))
+        except Exception:  # noqa: BLE001 — absent is a valid answer
+            out[mod] = None
+    return out
+
+
 def run(spec_path, out_path):
     import logging
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
@@ -159,7 +192,11 @@ def run(spec_path, out_path):
     except (AttributeError, OSError):
         pass
     spec = json.load(open(spec_path, encoding="utf-8"))
+    # study knobs (e.g. SB_SKIN_H1_FRAC, SB_SLEEVE_LAYERS) set BEFORE any import
+    os.environ.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
     y, geo, duty, mats, st = _compose(spec["dies"], *spec["case"])
+    # a duty without saved mesh settings runs with the ones named here (recorded)
+    st = dict(st, **(spec.get("settings") or {}))
     sd, wnd = _write_sandbox_config(y, geo, mats, duty, st,
                                     [spec.get("live_config"), spec["dies"]])
     import importlib.util
@@ -168,10 +205,14 @@ def run(spec_path, out_path):
     from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
 
     have_triangle = importlib.util.find_spec("triangle") is not None
-    if spec["mesher"] == "triangle" and not have_triangle:
-        raise SystemExit("the 'triangle' side needs the old code WITH triangle installed")
-    if spec["mesher"] == "gmsh" and have_triangle:
-        raise SystemExit("the 'gmsh' side must run without triangle installed")
+    try:     # S2 tree: one checkout, the CDT backend chosen per run
+        from motor_ai_sim.simulation.geo_mesh import cdt_backend
+        backend = cdt_backend()
+    except ImportError:   # S1 tree: gmsh only where triangle is absent
+        backend = "triangle" if have_triangle else "gmsh"
+    if spec["mesher"] != backend:
+        raise SystemExit(f"side {spec['mesher']!r} resolved to the {backend!r} "
+                         "backend (MOTOR_AI_SIM_GEO_CDT / triangle install)")
 
     n_par = int(wnd.get("n_parallel") or 1)
     I_term = float(duty["current_arms"])
@@ -184,7 +225,8 @@ def run(spec_path, out_path):
         n_steps_per_period=steps, n_periods=1.0, gamma_deg=float(duty["gamma_deg"]),
         I_phase_rms=(0.0 if noload else I_wind), rpm=float(duty["rpm"]),
         n_parallel=n_par, connection=wnd.get("connection"), star_delta=sd,
-        mesh_size_mm=float(st.get("mesh.meshSize", 4)),
+        # spec "mesh_size_mm" overrides the duty's size (convergence checks)
+        mesh_size_mm=float(spec.get("mesh_size_mm") or st.get("mesh.meshSize", 4)),
         min_size_mm=float(st.get("mesh.minSize", 0.3)),
         outer_air_factor=float(st.get("mesh.outerAir", 1.2)),
         gap_layers=float(st.get("mesh.gapLayers", 1)),
@@ -200,6 +242,36 @@ def run(spec_path, out_path):
         structured_gap=bool(st.get("mesh.structuredGap", True)),
         component_mesh_mm=dict(st.get("mesh.componentMesh") or {}),
         geo_override=dict(geo), eddy=True)
+    # study overrides of the solve call (e.g. {"demag": false}), recorded in kwargs
+    kw.update(spec.get("kw_override") or {})
+    # Record every geometry-driven mesh build of this solve (hash of nodes,
+    # triangles and tags, triangle count, band-ring node counts): identical
+    # hashes between two code versions => identical numbers (the solve is
+    # deterministic), so a pre-processing change can be shown to be a no-op.
+    import hashlib
+    from motor_ai_sim.simulation import geo_mesh as _gm
+    _orig = _gm.geo_mesh_halves
+    seen = []
+
+    def _spy(p, polys, **k):
+        out = _orig(p, polys, **k)
+        ms, ts, _cs, mr, tr, _cr = out
+        rec = {"kwargs": {kk: (vv if isinstance(vv, (int, float, str)) else str(vv))
+                          for kk, vv in k.items() if kk != "skin_layers"}}
+        for nm, m_, t_ in (("stator", ms, ts), ("rotor", mr, tr)):
+            h = hashlib.sha1(np.ascontiguousarray(m_.p).tobytes()
+                             + np.ascontiguousarray(m_.t).tobytes()
+                             + np.ascontiguousarray(t_).tobytes()).hexdigest()
+            rec[nm] = {"sha1": h, "n_tri": int(m_.t.shape[1])}
+        for nm, m_, rr in (("R1", mr, k.get("r1_band")), ("R2", ms, k.get("r2_band"))):
+            if rr:
+                P = m_.p.T * 1e3
+                used = np.unique(m_.t)
+                rad = np.hypot(P[used, 0], P[used, 1])
+                rec[nm + "_nodes"] = int(np.sum(np.abs(rad - float(rr)) < 2e-3))
+        seen.append(rec)
+        return out
+    _gm.geo_mesh_halves = _spy
     t0 = time.time()
     r = em_transient_eval(**kw)
     wall = time.time() - t0
@@ -220,12 +292,33 @@ def run(spec_path, out_path):
 
     nper = r.get("n_steps_per_period") or steps
     T = np.asarray(r.get("T_em_Nm") or [], float)
+    try:
+        import resource
+        maxrss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    except ImportError:          # Windows
+        maxrss_mb = None
     res = {
         "spec": spec, "module": motor_ai_sim.__file__, "have_triangle": have_triangle,
-        "wall_s": wall,
+        "backend": backend, "wall_s": wall, "maxrss_mb": maxrss_mb,
+        "versions": _versions(),
+        "P_in_W": f("P_elec_in_W"), "P_mech_W": f("P_mech_avg_W"),
+        "balance_residual_rel": ((r.get("power_balance") or {}).get("residual_rel")),
+        # new defaults (#88): Coulomb virtual-work torque + measured gap rule
+        "torque_method": r.get("torque_method") or r.get("torque_mean_source"),
+        "T_avg_coulomb_Nm": f("T_avg_coulomb_Nm"),
+        "T_ripple_pp_coulomb_Nm": f("T_ripple_pp_coulomb"),
+        "T_ripple_pp_Nm": f("T_ripple_pp_Nm"),
+        "coulomb": {k: v for k, v in (r.get("coulomb_torque") or {}).items()
+                    if k in ("available", "unavailable_reason", "layer_self_check",
+                             "T_avg_coulomb_Nm", "T_ripple_pp_coulomb", "layers")},
+        "gap_refinement": r.get("gap_refinement"),
+        "gap_layers_effective": f("gap_layers_effective"),
+        "mesher": r.get("mesher"),
+        "eddy_settled": r.get("eddy_settled"),
         "kwargs": {k: v for k, v in kw.items() if k != "geo_override"},
         "mesh_build_events": r.get("mesh_build_events"),
         "mesh_build_notes": r.get("mesh_build_notes"),
+        "mesh_builds": seen,
         "mesh": {k: v for k, v in r.items()
                  if isinstance(v, (int, float)) and any(
                      s in k.lower() for s in ("tri", "node", "n_elem", "dof"))},
@@ -258,7 +351,12 @@ def plan(a):
         cases["L13"] = (a.l13_die, "L13", "rated")
     tags = a.cases.split(",") if a.cases else list(cases)
     prog = os.path.join(a.workdir, "progress.txt")
-    sides = (("triangle", a.old_src, a.old_python), ("gmsh", a.new_src, a.new_python))
+    # one tree (S2+): the same checkout and venv (with triangle installed),
+    # the CDT backend switched by MOTOR_AI_SIM_GEO_CDT; two trees (S1): old
+    # code with triangle vs new code without it.
+    old_src = a.old_src or a.new_src
+    old_py = a.old_python or a.new_python
+    sides = (("triangle", old_src, old_py), ("gmsh", a.new_src, a.new_python))
     for tag in tags:
         for noload in ((False,) if a.no_emf else (False, True)):
             for mesher, src, py in sides:
@@ -282,6 +380,7 @@ def plan(a):
                 env = dict(os.environ)
                 env.update({"PYTHONPATH": os.path.abspath(src),
                             "MOTOR_AI_SIM_CONFIG": os.path.join(cd, "motor_config.yaml"),
+                            "MOTOR_AI_SIM_GEO_CDT": mesher,
                             "SB_NO_WARM_CACHE": "1", "OMP_NUM_THREADS": thr,
                             "MKL_NUM_THREADS": thr, "OPENBLAS_NUM_THREADS": thr,
                             "NUMEXPR_MAX_THREADS": thr})
@@ -297,6 +396,20 @@ def plan(a):
                              f"wall={time.time() - t0:.0f}s\n")
     with open(prog, "a") as pf:
         pf.write(f"{time.strftime('%H:%M:%S')} PLAN DONE\n")
+
+
+def _elements(workdir, name):
+    """Stator + rotor triangles of the geometry-driven build, from the child's
+    log ("geo-driven halves|wedge ...: stator N tris, rotor M tris")."""
+    import re
+    try:
+        txt = open(os.path.join(workdir, name + ".err"), encoding="utf-8",
+                   errors="replace").read()
+    except OSError:
+        return None
+    m = re.search(r"geo-driven (?:halves|wedge[^:]*): stator (\d+) tris, "
+                  r"rotor (\d+) tris", txt)
+    return float(int(m.group(1)) + int(m.group(2))) if m else None
 
 
 def report(a):
@@ -327,6 +440,22 @@ def report(a):
                              f"{'' if vo is None else f'{vo:.4g}'} | "
                              f"{'' if vn is None else f'{vn:.4g}'} | "
                              f"{'' if d is None else f'{d:+.2f} %'} |")
+            for key, label, vo, vn in (
+                    ("elements", "elements stator+rotor",
+                     _elements(a.workdir, f"{tag}_{kind}_triangle"),
+                     _elements(a.workdir, f"{tag}_{kind}_gmsh")),
+                    ("wall_s", "solve wall time [s]", o.get("wall_s"), n.get("wall_s")),
+                    ("maxrss_mb", "peak RSS [MB]", o.get("maxrss_mb"), n.get("maxrss_mb"))):
+                if vo is None and vn is None:
+                    continue
+                d = (100.0 * (vn - vo) / abs(vo)
+                     if vo not in (None, 0) and vn is not None else None)
+                out.setdefault(tag, {})[f"{kind}_{key}"] = {
+                    "triangle": vo, "gmsh": vn, "delta_pct": d}
+                lines.append(f"| {tag} {kind} | {label} | "
+                             f"{'' if vo is None else f'{vo:.4g}'} | "
+                             f"{'' if vn is None else f'{vn:.4g}'} | "
+                             f"{'' if d is None else f'{d:+.1f} %'} |")
             out.setdefault(tag, {})[f"{kind}_mesh"] = {"triangle": o.get("mesh"),
                                                        "gmsh": n.get("mesh")}
             out[tag][f"{kind}_wall_s"] = {"triangle": o.get("wall_s"),
@@ -346,8 +475,11 @@ def main():
     r = sub.add_parser("run", help="(internal) one solve in this process")
     r.add_argument("spec"); r.add_argument("out")
     p = sub.add_parser("plan", help="run every case on both meshers")
-    p.add_argument("--old-src", required=True, help="src/ of a checkout WITH triangle")
-    p.add_argument("--old-python", required=True, help="python of the venv with triangle")
+    p.add_argument("--old-src", default="",
+                   help="src/ of a checkout WITH triangle (default: --new-src, "
+                        "backend switched by MOTOR_AI_SIM_GEO_CDT)")
+    p.add_argument("--old-python", default="",
+                   help="python of the venv with triangle (default: --new-python)")
     p.add_argument("--new-src", required=True, help="src/ of this branch")
     p.add_argument("--new-python", default=sys.executable)
     p.add_argument("--config", required=True, help="config/ to COPY per case (read only)")

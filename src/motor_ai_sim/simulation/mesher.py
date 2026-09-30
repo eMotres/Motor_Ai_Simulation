@@ -1324,6 +1324,7 @@ def _trace_reset() -> None:
     _BUILD_TRACE.events = []
     _BUILD_TRACE.notes = []
     _BUILD_TRACE.structured_gap_effective = False
+    _BUILD_TRACE.mesher = None
 
 
 def _trace_event(msg: str) -> None:
@@ -1362,7 +1363,10 @@ def build_trace() -> Dict[str, object]:
     return {"events": list(getattr(_BUILD_TRACE, "events", [])),
             "notes": list(getattr(_BUILD_TRACE, "notes", [])),
             "structured_gap_effective":
-                bool(getattr(_BUILD_TRACE, "structured_gap_effective", False))}
+                bool(getattr(_BUILD_TRACE, "structured_gap_effective", False)),
+            # which mesher built the halves: "geo_cdt/<triangle|gmsh>",
+            # "iron_template" or "gmsh_occ" (the plain gmsh build)
+            "mesher": getattr(_BUILD_TRACE, "mesher", None)}
 
 
 def _build_sliding_band_meshes(
@@ -1516,8 +1520,15 @@ def _build_sliding_band_meshes(
     # Did the geometry-driven mesher (the only one that builds the conductor
     # skin layer) produce the halves?  Checked before each return.
     _skin_geo = [False]
+    _built_by = [None]              # "iron_template" when the template built it
 
     def _skin_check():
+        # (runs before every return: also records which mesher built the halves)
+        if _skin_geo[0]:
+            from motor_ai_sim.simulation.geo_mesh import cdt_backend as _cb
+            _BUILD_TRACE.mesher = "geo_cdt/" + _cb()
+        else:
+            _BUILD_TRACE.mesher = _built_by[0] or "gmsh_occ"
         if (skin_layers or {}).get("shaft") and not _skin_geo[0]:
             log.warning("shaft skin layer requested but this build did not use "
                         "the geometry-driven mesher — the shaft wall is meshed "
@@ -1543,13 +1554,18 @@ def _build_sliding_band_meshes(
         _trace_note("retaining sleeve: geometry-driven mesh instead of the iron template")
         _use_geo = True
     if _use_tpl and _use_geo:
-        from motor_ai_sim.simulation.geo_mesh import HAVE_TRIANGLE
-        if not HAVE_TRIANGLE:
-            # optional non-commercial dep absent -> straight to gmsh (the
-            # template cannot carry a sleeve, so do not stop there either)
-            log.info("optional 'triangle' not installed — geometry-driven mesh "
-                     "unavailable, using the gmsh build")
-            _use_tpl = _use_geo = False
+        # The geometry-driven mesher triangulates its PSLG with Triangle where
+        # the optional package is installed and with gmsh otherwise (or when
+        # MOTOR_AI_SIM_GEO_CDT=gmsh) — docs/MESHER_TRANSITION.md, stage S2.
+        # Every other step (skin layers, wire cells, tiling, tagging, budget)
+        # is shared, so both backends build the same kind of mesh.
+        from motor_ai_sim.simulation.geo_mesh import cdt_backend, cdt_provenance
+        _cdt = cdt_backend()
+        if _cdt != "triangle":
+            _pv = cdt_provenance()
+            log.info("geometry-driven mesh: gmsh CDT backend (gmsh %s)", _pv.get("gmsh"))
+            _trace_note("geometry-driven mesh on the gmsh CDT backend (gmsh %s%s)"
+                        % (_pv.get("gmsh"), "; " + _pv["note"] if _pv.get("note") else ""))
     if full_ring:
         # TRUE 360°: each half stitched from two clean 180° builds (direct
         # closed-360 OCC double-meshes → dead field).  No sector cuts exist
@@ -1631,6 +1647,7 @@ def _build_sliding_band_meshes(
                      mesh_r, tags_r, classify_r) = template_solver_halves(
                         _p_geo, polys, outer_air_factor=outer_air_factor,
                         density=_density)
+                    _built_by[0] = "iron_template"
                     log.info("iron template halves: stator %d tris, rotor %d tris",
                              mesh_s.t.shape[1], mesh_r.t.shape[1])
             except Exception as _te:
@@ -1638,6 +1655,11 @@ def _build_sliding_band_meshes(
                 if isinstance(_te, MeshBudgetExceeded):
                     # An armed mesh budget is a verdict on the GEOMETRY — the
                     # gmsh fallback would re-pay the same pathological build.
+                    raise
+                from motor_ai_sim.simulation.geo_mesh_gmsh import GmshCDTError
+                if isinstance(_te, GmshCDTError) or "needs gmsh" in str(_te):
+                    # fail closed: a gmsh CDT failure is never answered by a
+                    # different mesher (docs/MESHER_TRANSITION.md policy)
                     raise
                 log.warning("iron template failed (%s) — gmsh build", _te)
                 _trace_event("iron template failed -> gmsh build: %s" % _te)
@@ -1755,6 +1777,7 @@ def _build_sliding_band_meshes(
                  mesh_r, tags_r, classify_r) = template_solver_halves(
                     _p_geo, polys, outer_air_factor=outer_air_factor,
                     density=_density, n_sectors=_ns_i)
+                _built_by[0] = "iron_template"
                 log.info("iron template wedge 1/%d: stator %d tris, rotor %d tris",
                          _ns_i, mesh_s.t.shape[1], mesh_r.t.shape[1])
         except Exception as _te:
@@ -1763,6 +1786,9 @@ def _build_sliding_band_meshes(
                 # Same rule as the full-ring branch: the budget verdict is
                 # about the geometry, not this particular build path.
                 raise
+            from motor_ai_sim.simulation.geo_mesh_gmsh import GmshCDTError
+            if isinstance(_te, GmshCDTError) or "needs gmsh" in str(_te):
+                raise                     # fail closed (see the full-ring branch)
             log.warning("iron template wedge failed (%s) — gmsh build", _te)
             _trace_event("iron template wedge failed -> gmsh build: %s" % _te)
             mesh_s = tags_s = classify_s = None

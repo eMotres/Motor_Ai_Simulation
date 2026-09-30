@@ -7629,7 +7629,43 @@ def fem_transient_sliding_band(
         _td_tangent = (_tdm.analytic_tangent(_p2, MU0) if _td_tan_mode == "analytic"
                        else (lambda _inf: _p2.tangent2(_inf, clamp=False))
                        if _td_tan_mode == "exact" else _p2.tangent2)
+        # THE OWNER'S TERMS for stopping (coordinator 2026-09-30): the SHIPPED
+        # torque of the iterate — the frame loop's own Maxwell series
+        # (_torque2) and flux linkage (_psi2) through the same
+        # sb_postproc.space_vector_hybrid_torque the result uses for an eddy
+        # run ("energy_mean+maxwell_ripple") — and its conductor loss.  Only
+        # to decide when to stop; the reported numbers come from the march
+        # of the reported period.
+        _td_wsc = float(NS) * float(p.stack_length)
+        _td_zseq = bool(getattr(_src, "zero_sequence_path", False))
+
+        def _td_monitor(As, Us, ev):
+            _Tm, _pa, _pb, _pc, _ia, _ib, _ic, _th = ([] for _ in range(8))
+            for _j, _A in enumerate(As):
+                _Tm.append(_torque2(_A) * NS)
+                _q = _psi2(_A)
+                _pa.append(_q[0]); _pb.append(_q[1]); _pc.append(_q[2])
+                _Is = _td_ops_l[_j][3]
+                _ia.append(_Is['A']); _ib.append(_Is['B']); _ic.append(_Is['C'])
+                _th.append(math.radians(_td_ops_l[_j][4] * spacing))
+            _wf, _meth = _space_vector_hybrid_torque(
+                _pa, _pb, _pc, _ia, _ib, _ic, _Tm, pole_pairs,
+                n_parallel=int(n_parallel), zero_sequence=_td_zseq,
+                mechanical_angle_rad=_th)
+            _wf = np.asarray(_wf, float)
+            _tmean = float(_wf.mean())
+            _tpp = float(_wf.max() - _wf.min())
+            return {"T_mean": _tmean, "T_pp": _tpp,
+                    "ripple_pct": 100.0 * _tpp / max(abs(_tmean), 1e-300),
+                    "P_joule": float(np.mean(_td_solver.joule(As, Us))) * _td_wsc,
+                    "torque_method": _meth}
+
+        _td_stop = str(_os_sb.environ.get("SB_TDM_STOP", "owner") or "owner").lower()
         _td_solver = _tdm.TimePeriodicEddy(
+            monitor=_td_monitor,
+            stop_owner=(None if _td_stop == "residual" else
+                        {"T_mean_rel": 1e-3, "ripple_pp": 0.05, "P_rel": 5e-3,
+                         "rrel_floor": 1e-5}),
             kfun=(_p2.Kpw if _sat2 else (lambda _A: (_td_K_lin, None))),
             tangent=_td_tangent, f_mag=f_mag2, G=_G2, Msig=_Msig2,
             S_raw=_S_con, dt=dt, frames=_td_frames, wrap_back=_td_wrap,
@@ -7650,6 +7686,10 @@ def fem_transient_sliding_band(
                      "magnet_source_half_asymmetry": _tdm_fdev,
                      "workers": int(_td_workers), "mkl_threads": _td_mklt,
                      "tangent": _td_tan_mode, "eta": _td_solver.eta,
+                     "stop": ("state residual < tol" if _td_stop == "residual"
+                              else "state residual < tol, or the owner's terms: "
+                                   "T_mean < 0.1 %, ripple < 0.05 pp, eddy loss "
+                                   "< 0.5 % between iterates with rrel < 1e-5"),
                      "conductor_dofs": int(_td_cond.size), "t": {}}
         try:
             # ── the start: the static (∂A/∂t = 0) field of every frame ──────

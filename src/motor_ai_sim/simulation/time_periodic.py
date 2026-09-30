@@ -432,7 +432,16 @@ class TimePeriodicEddy:
                  max_newton: int = 25, workers: int = 1,
                  mkl_threads: Optional[int] = None, gmres_rtol: float = 1e-9,
                  gmres_max: int = 200, eta: Optional[float] = None,
+                 monitor: Optional[Callable] = None,
+                 stop_owner: Optional[Dict[str, float]] = None,
                  log=None) -> None:
+        # monitor(As, Us, ev) -> {"T_mean", "ripple_pct", "P_joule", ...}: the
+        # shipped torque / loss of the current iterate (the caller's own
+        # post-processing functions); stop_owner: {"T_mean_rel", "ripple_pp",
+        # "P_rel", "rrel_floor"} — stop when two iterates differ by less
+        # (and the state residual is below the floor), or None (residual only)
+        self.monitor = monitor
+        self.stop_owner = stop_owner
         # eta: a FIXED Newton forcing term for the wrap GMRES (None = adaptive,
         # 1e-2 of the residual).  Where the Newton is linear anyway (the
         # march's difference tangent), solving tighter than its rate buys
@@ -550,6 +559,21 @@ class TimePeriodicEddy:
         self.stats["jacobian_factorizations"] += self.N
         self._tick("jacobian", t0)
         return Js
+
+    def joule(self, As: Sequence[np.ndarray], Us: Sequence[np.ndarray]) -> np.ndarray:
+        """Per-frame σE² of all conductors [W per metre of the modelled
+        sector], ∫σ(−∂A/∂t + U)² with the step's own BDF2 derivative — the
+        march's integrand (sampled at t_k, i.e. SB_EDDY_LOSS_AT=step), used
+        only to watch the loss between Newton iterates."""
+        out = np.zeros(self.N)
+        for j in range(self.N):
+            a1, a2 = self.hist(j, As)
+            dA = (As[j] - (C_M1 * a1 + C_M2 * a2)) / self.dte
+            gd = np.asarray(self.GT @ dA).ravel()
+            U = np.asarray(Us[j], float)
+            out[j] = float(dA @ (self.Msig @ dA)) + float(
+                np.sum(U * (U * self.S_raw - 2.0 * gd)))
+        return out
 
     # ── the start: the static field of every frame, in parallel ──────────
     def static_start(self, A0: np.ndarray, tol: float = 1e-5,
@@ -712,18 +736,50 @@ class TimePeriodicEddy:
                        max(float(np.linalg.norm(self.dte * _imax)), 1e-30))
         ev = self._eval_all(As, Us)
         converged = False
+        self.stats["stopped_by"] = None
+        mon_prev = None
         it = 0
         for it in range(self.max_newton + 1):
             rrel = [e[2] for e in ev]
             worst = float(max(rrel))
             rec = {"rrel_max": worst, "rrel_median": float(np.median(rrel))}
+            mon = None
+            if self.monitor is not None:
+                t0m = time.perf_counter()
+                mon = self.monitor(As, Us, ev)
+                self._tick("monitor", t0m)
+                rec["monitor"] = mon
             self.stats["newton"].append(rec)
             if self.log is not None:
-                self.log.info("TDM Newton %d: max frame rrel %.3e (median %.3e)",
-                              it, worst, rec["rrel_median"])
+                self.log.info("TDM Newton %d: max frame rrel %.3e (median %.3e)%s",
+                              it, worst, rec["rrel_median"],
+                              "" if mon is None else
+                              "; T_mean %.7g, ripple %.5f %%, P_eddy %.6g W"
+                              % (mon["T_mean"], mon["ripple_pct"], mon["P_joule"]))
             if worst < self.tol:
                 converged = True
+                self.stats["stopped_by"] = "state_residual"
                 break
+            # THE OWNER'S TERMS (coordinator 2026-09-30): the torque waveform
+            # (mean, ripple p-p) and the loss stopped moving between two
+            # iterates by a small fraction of the owner's tolerances, on an
+            # iterate whose state residual is already small
+            if (self.stop_owner is not None and mon is not None
+                    and mon_prev is not None and worst < self.stop_owner["rrel_floor"]):
+                dT = abs(mon["T_mean"] - mon_prev["T_mean"]) / max(
+                    abs(mon["T_mean"]), 1e-300)
+                dR = abs(mon["ripple_pct"] - mon_prev["ripple_pct"])
+                dP = abs(mon["P_joule"] - mon_prev["P_joule"]) / max(
+                    abs(mon["P_joule"]), 1e-300)
+                rec["owner_changes"] = {"T_mean_rel": dT, "ripple_pp": dR,
+                                        "P_eddy_rel": dP}
+                if (dT < self.stop_owner["T_mean_rel"]
+                        and dR < self.stop_owner["ripple_pp"]
+                        and dP < self.stop_owner["P_rel"]):
+                    converged = True
+                    self.stats["stopped_by"] = "owner_terms"
+                    break
+            mon_prev = mon
             if it == self.max_newton:
                 break
             for j, fr in enumerate(self.frames):

@@ -578,6 +578,12 @@ def jobs_view() -> Dict[str, Any]:
             lv = _U.live(str(it.get("run_id") or ""))
             if lv:
                 row["cpu_s"] = lv["cpu_s"]
+                # current rate (cores in use right now) and current RSS --
+                # NOT the cumulative cpu_s / peak_rss above. routes/cluster.py
+                # divides these by the node's thread count / total RAM for
+                # the "Now" table's "N % of server" columns.
+                row["cpu_rate"] = lv.get("cpu_rate")
+                row["rss"] = lv.get("rss")
         except Exception:                               # noqa: BLE001
             pass
         u = per_user.setdefault(str(it.get("owner")), {"running": 0, "queued": 0, "agent": 0})

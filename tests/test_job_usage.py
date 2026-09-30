@@ -103,6 +103,49 @@ def test_apportion_between_concurrent_jobs(monkeypatch):
     assert row["status"] == "stopped" and row["cpu_method"] == "apportioned"
 
 
+def test_live_cpu_rate_and_rss_are_the_current_tick_not_the_cumulative_total(monkeypatch):
+    """Admin -> Overview "Now" table: cpu_rate/rss are a snapshot of the LAST
+    tick (cores in use / bytes resident RIGHT NOW), distinct from the
+    cumulative cpu_s/peak_rss job_usage already tracked -- routes/cluster.py
+    divides cpu_rate by the node's thread count and rss by its total RAM for
+    the table's "N % of server" columns."""
+    cpu = {"tree": 100.0, 1: 0.0}
+    rss_val = {"v": 2_000_000_000}
+    monkeypatch.setattr(U, "tree_cpu_s", lambda fast=False: cpu["tree"])
+    monkeypatch.setattr(U, "tree_rss", lambda: rss_val["v"])
+    monkeypatch.setattr(U, "_own_rss", lambda: rss_val["v"])
+    monkeypatch.setattr(U, "_thread_cpu", lambda nid: cpu.get(nid, 0.0))
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(time, "time", lambda: clock["now"])
+
+    class R:
+        def __init__(s, rid, owner):
+            s.run_id, s.owner, s.kind, s.body = rid, owner, "em", {}
+    m1 = U.start(R("r1", "u1"), sampler=False)
+    m1.native_id, m1.thread_cpu_last = 1, 0.0
+
+    # 4 wall-seconds pass; the job burns 8 CPU-seconds in that window -> using
+    # 2 cores right now, independent of how much CPU it has used in total.
+    clock["now"] = 1004.0
+    cpu.update({"tree": 108.0, 1: 8.0})
+    rss_val["v"] = 3_000_000_000
+    U._tick()
+
+    live = U.live("r1")
+    assert live["cpu_s"] == pytest.approx(8.0)            # cumulative, unchanged behaviour
+    assert live["cpu_rate"] == pytest.approx(2.0)          # 8 CPU-s / 4 wall-s
+    assert live["rss"] == 3_000_000_000
+
+    # the job then goes idle for a tick (no more CPU burnt) -- the rate drops
+    # to 0 even though cpu_s (cumulative) and peak_rss stay where they were.
+    clock["now"] = 1006.0
+    cpu.update({"tree": 108.0, 1: 8.0})
+    U._tick()
+    live2 = U.live("r1")
+    assert live2["cpu_s"] == pytest.approx(8.0)
+    assert live2["cpu_rate"] == pytest.approx(0.0)
+
+
 # ── aggregation ──────────────────────────────────────────────────────────────
 def test_summary_per_user_client_period():
     now = 1_000_000.0
@@ -220,10 +263,17 @@ def test_jobs_view_shows_live_cpu(monkeypatch):
         run_id, owner, kind, body = "live1", "u", "em", {}
     m = U.start(R(), sampler=False)
     m.cpu_s = 42.0
+    m.last_rate_cores = 1.5
+    m.last_rss = 1_500_000_000
 
     class Q:
         def snapshot(self):
             return {"running": 1, "queued": 0,
                     "items": [{"run_id": "live1", "owner": "u", "state": "running", "body": {}}]}
     monkeypatch.setattr(J, "queue", lambda: Q())
-    assert CM.jobs_view()["items"][0]["cpu_s"] >= 42.0
+    row = CM.jobs_view()["items"][0]
+    assert row["cpu_s"] >= 42.0
+    # "Now" table's "% of server" columns need these two, distinct from the
+    # cumulative cpu_s above -- see job_usage.Meter.live().
+    assert row["cpu_rate"] == pytest.approx(1.5)
+    assert row["rss"] == 1_500_000_000

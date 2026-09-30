@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   mergeNodeSeries, mergeLoadSeries, isCollectingHistory, serverLabel, threadsUsed,
   cpuTooltipValue, memTooltipValue, ramNowLabel, parseServerSeriesKey, clusterLine,
-  computeXAxis, RANGE_LOOKBACK_S,
+  computeXAxis, RANGE_LOOKBACK_S, sortByField, levelColor, pctCell, computeNodeTotals,
 } from '../liveLoadSeries.ts';
 
 // ── mergeNodeSeries: separate CPU/RAM series per server (the "only CPU shows,
@@ -182,4 +182,90 @@ test('enough points -> never flagged as collecting, monitoringSince unknown -> n
   const now = 10_000;
   assert.equal(isCollectingHistory(5, now - 60, now), false);
   assert.equal(isCollectingHistory(0, null, now), false);
+});
+
+// ── sortByField: the "Now" process-monitor table's click-to-sort ───────────
+test('sortByField sorts numerically, descending and ascending', () => {
+  const rows = [{ id: 'a', v: 30 }, { id: 'b', v: 80 }, { id: 'c', v: 10 }];
+  assert.deepEqual(sortByField(rows, (r) => r.v, 'desc').map((r) => r.id), ['b', 'a', 'c']);
+  assert.deepEqual(sortByField(rows, (r) => r.v, 'asc').map((r) => r.id), ['c', 'a', 'b']);
+});
+
+test('sortByField sorts strings too (user/job/state/client/node columns)', () => {
+  const rows = [{ id: 1, u: 'carol' }, { id: 2, u: 'alice' }, { id: 3, u: 'bob' }];
+  assert.deepEqual(sortByField(rows, (r) => r.u, 'asc').map((r) => r.id), [2, 3, 1]);
+});
+
+test('sortByField puts null/undefined values last in BOTH directions', () => {
+  const rows = [{ id: 'a', v: 5 }, { id: 'b', v: null }, { id: 'c', v: 9 }, { id: 'd', v: undefined }];
+  assert.deepEqual(sortByField(rows, (r) => r.v, 'desc').map((r) => r.id), ['c', 'a', 'b', 'd']);
+  assert.deepEqual(sortByField(rows, (r) => r.v, 'asc').map((r) => r.id), ['a', 'c', 'b', 'd']);
+});
+
+test('sortByField is a stable sort (equal values keep their relative order)', () => {
+  const rows = [{ id: 1, v: 5 }, { id: 2, v: 5 }, { id: 3, v: 5 }];
+  assert.deepEqual(sortByField(rows, (r) => r.v, 'desc').map((r) => r.id), [1, 2, 3]);
+});
+
+test('sortByField does not mutate the input array', () => {
+  const rows = [{ id: 'a', v: 1 }, { id: 'b', v: 2 }];
+  const copy = [...rows];
+  sortByField(rows, (r) => r.v, 'desc');
+  assert.deepEqual(rows, copy);
+});
+
+// ── levelColor / pctCell: the mini bars' green/yellow/red thresholds ───────
+test('levelColor: green below 50, yellow 50-79, red 80+', () => {
+  assert.equal(levelColor(0), '#4ade80');
+  assert.equal(levelColor(49.9), '#4ade80');
+  assert.equal(levelColor(50), '#fbbf24');
+  assert.equal(levelColor(79.9), '#fbbf24');
+  assert.equal(levelColor(80), '#f87171');
+  assert.equal(levelColor(150), '#f87171');               // > 100 % possible: multi-core rate
+});
+
+test('levelColor is a muted neutral for an unknown value', () => {
+  assert.equal(levelColor(null), 'var(--text-4)');
+  assert.equal(levelColor(undefined), 'var(--text-4)');
+});
+
+test('pctCell formats or falls back to a dash', () => {
+  assert.equal(pctCell(37.6), '38 %');
+  assert.equal(pctCell(0), '0 %');
+  assert.equal(pctCell(null), '—');
+  assert.equal(pctCell(undefined), '—');
+});
+
+// ── computeNodeTotals: the "Now" table's per-node totals row ───────────────
+test('computeNodeTotals: CPU sums job rows (apportioned shares), residual is out-of-app', () => {
+  const t = computeNodeTotals(70, 40, [20, 15], [30, 30]);
+  assert.equal(t.cpuTotal, 70);
+  assert.equal(t.cpuApp, 35);                              // 20 + 15, summed
+  assert.equal(t.cpuOutside, 35);                           // 70 - 35 residual
+  assert.equal(t.cpuIdle, 30);                               // 100 - 70
+});
+
+test('computeNodeTotals: MEM takes the MAX of job rows, never the sum (shared RSS)', () => {
+  // three jobs, each reporting the SAME shared process-tree RSS (30 %) --
+  // summing would wrongly claim 90 % of RAM is "app jobs".
+  const t = computeNodeTotals(50, 30, [10, 10, 10], [30, 30, 30]);
+  assert.equal(t.memApp, 30);
+  assert.equal(t.memOutside, 0);                             // 30 - 30, clamped
+  assert.equal(t.memIdle, 70);
+});
+
+test('computeNodeTotals: no running jobs -> app is 0, all measured load is "out of app"', () => {
+  const t = computeNodeTotals(65, 20, [], []);
+  assert.equal(t.cpuApp, 0);
+  assert.equal(t.cpuOutside, 65);
+  assert.equal(t.memApp, 0);
+  assert.equal(t.memOutside, 20);
+});
+
+test('computeNodeTotals: clamps a negative residual to 0 instead of going negative', () => {
+  // pathological: job rows read MORE than the node's own reported total
+  // (sampling skew) -- outside/idle must never show as negative.
+  const t = computeNodeTotals(40, 40, [50], [60]);
+  assert.equal(t.cpuOutside, 0);
+  assert.equal(t.memOutside, 0);
 });

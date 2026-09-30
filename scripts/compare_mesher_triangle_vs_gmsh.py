@@ -127,7 +127,11 @@ def _compose(dies, die, cfg, dname):
         if not mats.get(k):
             mats[k] = v
     runs = duty.get("runs") or {}
-    st = dict(((runs.get("current") or {}).get("settings")) or duty.get("mesh") or {})
+    # the duty's own `mesh` block is the saved statement of how it is run (the
+    # app syncs it into the mesh config, routes/family.duty_mesh_patch); the last
+    # run's settings only fill what the block does not state
+    st = dict(((runs.get("current") or {}).get("settings")) or {})
+    st.update(duty.get("mesh") or {})
     return y, geo, duty, mats, st
 
 

@@ -171,32 +171,66 @@ class TestConductorAreaIsMeasured:
     def _winding_codes(self, res) -> set:
         return {v.code for v in res.violations if v.code.startswith("winding_")}
 
-    def test_shrunken_conductor_section_is_reported(self):
-        """``get_2d_polygons`` clamps wire_height to
+    def test_shrunken_conductor_section_is_refused(self):
+        """``get_2d_polygons`` WOULD clamp wire_height to
         (slot_height − 2·insulation)/num_wires − wire_spacing_y so the stack
-        fits, silently.  Here 0.6 mm is clamped to (5.0 − 0.4)/8 − 0.13 =
-        0.445 mm, i.e. every conductor keeps 74.2 % of its section."""
+        fits, silently — 0.6 mm down to (5.0 − 0.4)/8 − 0.13 = 0.445 mm, every
+        conductor keeping only 74.2 % of its requested section.  That silent
+        trim is exactly the bug: this geometry must be REFUSED before a solve
+        ever reaches the builder's clamp, not solved as a smaller machine."""
         res = validate_geometry(GEO_40MM_CLIPPED)
+        assert not res.ok, res.summary()
+        assert "winding_height_does_not_fit" in _error_codes(res)
+        hv = next(v for v in res.errors
+                  if v.code == "winding_height_does_not_fit")
+        # names both numbers: what was asked for and what the slot can hold
+        assert "8" in hv.message and "0.6" in hv.message
+        assert "0.445" in hv.message  # the bound wire_height would be clamped to
+        assert "wire_height" in hv.likely_params
+        assert "num_wires_per_slot" in hv.likely_params
+        assert "slot_hs" not in hv.likely_params
+
+        # the area WARNING still fires too — belt-and-braces, kept for a bound
+        # that could not be computed; it must not be the ONLY thing reported.
         assert "winding_clipped_by_slot" in _codes(res)
         v = next(x for x in res.violations
                  if x.code == "winding_clipped_by_slot")
-        # a WARNING: the cross-section is buildable, it is just not the one the
-        # parameters describe — it must not block a solve.
         assert v.severity == "warning"
-        assert res.ok, res.summary()
-        assert v.code not in _error_codes(res)
-        # says the phrase, and the number
         assert "winding clipped by slot" in v.message.lower()
         assert "kept 74.2% of nominal conductor area" in v.message
         # 0.445/0.6 — the exact clamp
         assert v.overlap_area_mm2 == pytest.approx(144.0 - 106.8, rel=1e-3)
         assert v.x_mm is not None and v.y_mm is not None
-        # points at the knobs that set the section and the space it must fit
         for knob in ("wire_width", "wire_height"):
             assert knob in v.likely_params
         # slot_hs is never read by the geometry builder (owner 2026-09-30):
         # pointing the user at it would send them to a knob that moves nothing
         assert "slot_hs" not in v.likely_params
+
+    def test_the_largest_fitting_winding_still_solves(self):
+        """A winding just inside the clamp bound (0.445 mm is the exact
+        analytic limit — kept a hair under it so the published bound's own
+        floor-rounding, see ``geometry_constraints._round_inside``, cannot turn
+        this into a boundary flake) must stay clean: the refusal is for
+        OVERFLOW, not for a design that already fits."""
+        geo = dict(GEO_40MM_CLIPPED, wire_height=0.44)
+        res = validate_geometry(geo)
+        assert res.ok, res.summary()
+        assert self._winding_codes(res) == set()
+
+    def test_too_many_rows_is_refused_even_at_the_original_wire_height(self):
+        """The OTHER trigger for the same bug: num_wires_per_slot pushed up
+        with wire_height left alone.  10 rows of the healthy 30 mm design's own
+        0.5 mm wire cannot sit in its 4.3 mm slot — the builder would silently
+        thin every row to make it fit instead of refusing."""
+        geo = dict(GEO_30MM, num_wires_per_slot=10)
+        res = validate_geometry(geo)
+        assert not res.ok, res.summary()
+        assert "winding_height_does_not_fit" in _error_codes(res)
+        hv = next(v for v in res.errors
+                  if v.code == "winding_height_does_not_fit")
+        assert "10" in hv.message
+        assert "0.5" in hv.message
 
     def test_interpenetrating_conductors_report_the_double_count(self):
         """The 37 mm design draws full rectangles that OVERLAP: their areas sum
@@ -444,6 +478,35 @@ class TestApiWiring:
         assert "coil_overlaps_coil" in {
             v["code"] for v in detail["geometry_validation"]["violations"]}
         assert "not buildable" in detail["error"]
+
+    def test_overflowing_geo_override_is_refused_not_silently_shrunk(self):
+        """The regression this branch fixes lives in the per-request ``geo=``
+        override — the JSON blob the passport, sweeps/optimizer candidates and
+        MCP ``simulate`` all pass to solve a machine that is not the saved one.
+        That path never goes through PUT /api/geometry's own clamp-and-report,
+        so it used to reach the builder raw, which silently thinned every
+        conductor row and solved a smaller machine with no error anywhere.  It
+        must now 422 through the SAME gate as any other invalid cross-section,
+        naming the rows and the wire_height requested."""
+        import json
+        client = self._client()
+        self._load(client, GEO_30MM)   # a clean, saved baseline
+        r = client.get(
+            "/api/simulation/physics/fem_transient",
+            params={"n_steps_per_period": 4, "n_periods": 0.25,
+                    "fresh": "true",
+                    "geo": json.dumps({"num_wires_per_slot": 10})})
+        assert r.status_code == 422, r.text[:400]
+        detail = r.json()["detail"]
+        codes = {v["code"] for v in detail["geometry_validation"]["violations"]}
+        assert "winding_height_does_not_fit" in codes
+        msg = next(v["message"] for v in detail["geometry_validation"]["violations"]
+                   if v["code"] == "winding_height_does_not_fit")
+        assert "10" in msg
+
+        # the SAVED design itself was never touched by the rejected override —
+        # it still solves cleanly through the very same gate.
+        assert client.get("/api/geometry/validation").json()["ok"] is True
 
 
 class TestResultShape:
